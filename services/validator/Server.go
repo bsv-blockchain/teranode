@@ -136,6 +136,55 @@ type Server struct {
 	// synchronous validation path for clients. This server is used to process HTTP
 	// requests and return validation results.
 	httpServer *echo.Echo
+
+	// consumerMu guards consumerCtx and consumerCancel. Start writes them and Stop
+	// reads them; the service manager sequences the two today, but relying on that is
+	// an unsynchronised cross-goroutine access that -race is right to flag, and the
+	// mutex costs nothing on a per-service-lifecycle path.
+	consumerMu sync.Mutex
+
+	// consumerCtx is a cancellable child of the Start context that the Kafka
+	// message handler passes into ValidateWithOptions. Cancelling it aborts an
+	// in-place block-assembly handoff retry (WaitForBlockAssembly) promptly at
+	// shutdown, regardless of caller ordering, so a wedged block assembly can
+	// never keep a consumer goroutine spinning past Stop. Guarded by consumerMu.
+	consumerCtx context.Context
+
+	// consumerCancel cancels consumerCtx; called first in Stop, before the
+	// consumer is closed, and also on any early Start failure so the context is
+	// never left live after Start gives up. Guarded by consumerMu.
+	consumerCancel context.CancelFunc
+}
+
+// setConsumerContext installs the consumer context and its cancel function.
+func (v *Server) setConsumerContext(ctx context.Context, cancel context.CancelFunc) {
+	v.consumerMu.Lock()
+	defer v.consumerMu.Unlock()
+
+	v.consumerCtx = ctx
+	v.consumerCancel = cancel
+}
+
+// consumerContext returns the consumer context, or nil before Start has installed one.
+func (v *Server) consumerContext() context.Context {
+	v.consumerMu.Lock()
+	defer v.consumerMu.Unlock()
+
+	return v.consumerCtx
+}
+
+// cancelConsumer cancels the consumer context if one is installed. Idempotent: the
+// cancel function is cleared under the lock, so a double Stop — or a Stop after an
+// early Start failure already cancelled it — is a no-op rather than a second call.
+func (v *Server) cancelConsumer() {
+	v.consumerMu.Lock()
+	cancel := v.consumerCancel
+	v.consumerCancel = nil
+	v.consumerMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // NewServer creates and initializes a new validator server instance with the specified components.
@@ -324,7 +373,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 // Returns:
 //   - error: Any startup errors, including FSM transition failures, Kafka setup issues,
 //     or HTTP server initialization problems
-func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
+func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) (retErr error) {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
 
@@ -338,6 +387,20 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		v.logger.Errorf("[Validator] Failed to wait for FSM transition from IDLE state: %s", err)
 		return err
 	}
+
+	// Derive a cancellable context the Kafka handler observes, so the in-place
+	// block-assembly handoff retry (WaitForBlockAssembly) aborts promptly at
+	// shutdown even if Stop is called without cancelling the Start context.
+	consumerCtx, consumerCancel := context.WithCancel(ctx)
+	v.setConsumerContext(consumerCtx, consumerCancel)
+
+	// Any failure below returns without Stop necessarily being called, so cancel here
+	// rather than leaking the context and whatever it is keeping alive.
+	defer func() {
+		if retErr != nil {
+			v.cancelConsumer()
+		}
+	}()
 
 	kafkaMessageHandler := func(msg *kafka.KafkaMessage) error {
 		var kafkaMsg kafkamessage.KafkaTxValidationTopicMessage
@@ -362,10 +425,15 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 			AddTXToBlockAssembly: kafkaMsg.Options.AddTXToBlockAssembly,
 			SkipPolicyChecks:     kafkaMsg.Options.SkipPolicyChecks,
 			CreateConflicting:    kafkaMsg.Options.CreateConflicting,
+			// A queue-full shed on the ingest path must not advance the offset
+			// past an un-handed-off tx; retry the handoff in place, bounded by
+			// validator_blockAssemblyShedRetryTimeout and then unwound and dropped
+			// (propagation has already returned success), not retried forever.
+			WaitForBlockAssembly: true,
 		}
 
 		// should not pass in a height when validating from Kafka, should just be current utxo store height
-		if _, err = v.validator.ValidateWithOptions(ctx, tx, height, options); err != nil {
+		if _, err = v.validator.ValidateWithOptions(consumerCtx, tx, height, options); err != nil {
 			prometheusInvalidTransactions.Inc()
 			v.logger.Errorf("[Validator] Invalid tx: %s", err)
 
@@ -376,8 +444,24 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	}
 
 	if v.consumerClient != nil {
-		v.consumerClient.Start(ctx, kafkaMessageHandler, kafka.WithLogErrorAndMoveOn())
+		v.consumerClient.Start(consumerCtx, kafkaMessageHandler, kafka.WithLogErrorAndMoveOn())
 	}
+
+	// Arm the queue-age-driven Kafka backpressure controller (disabled by default;
+	// safe no-op when disabled or when a client is nil). It binds itself to the
+	// consumer context, so it shares by construction the lifetime of the consumer it
+	// controls: Stop's consumerCancel is what ends the controller goroutine and runs
+	// its resume-on-exit, and a Start/Stop cycle therefore leaks no goroutine.
+	//
+	// Stop cancels before closing the consumer so the resume-on-exit has a chance to
+	// reach a live client, but nothing joins the controller goroutine, so that is an
+	// ordering preference and not a guarantee. It does not need to be one: pause state
+	// is client-local and dies with the client — franz-go's on the kgo.Client that
+	// closeClient closes, the in-memory arm's on the consumer group object built per
+	// consumer — so a resume that lands after Close changes nothing a later Start could
+	// observe. What makes the late call SAFE rather than merely pointless is the closed
+	// guard in KafkaConsumerGroup.setFetchPaused.
+	v.startKafkaBackpressure(ctx)
 
 	if err = v.startHTTPServer(ctx, v.settings.Validator.HTTPListenAddress); err != nil {
 		return err
@@ -413,6 +497,13 @@ func (v *Server) Stop(ctx context.Context) error {
 	if v.kafkaSignal != nil {
 		v.kafkaSignal <- syscall.SIGTERM
 	}
+
+	// Cancel the consumer context first so any in-flight ingest handoff retry aborts,
+	// and so the backpressure controller's resume-on-exit runs while the client is
+	// still open. Nothing joins that goroutine, so the ordering is a preference rather
+	// than a guarantee; the closed guard in the consumer is what makes a late
+	// pause/resume safe. See the note in Start.
+	v.cancelConsumer()
 
 	if v.consumerClient != nil {
 		// close the kafka consumer gracefully
@@ -855,6 +946,19 @@ func extractValidationParams(c echo.Context) (uint32, *Options) {
 	return blockHeight, options
 }
 
+// httpStatusForTxError maps a transaction-processing error to an HTTP status.
+// A block-assembly overload shed surfaces as ErrThresholdExceeded and is a
+// retryable 503 Service Unavailable, not a 500: the transaction is durably
+// stored and a resubmit re-drives the handoff once block assembly has room.
+// Every other error stays a 500.
+func httpStatusForTxError(err error) int {
+	if errors.Is(err, errors.ErrThresholdExceeded) {
+		return http.StatusServiceUnavailable
+	}
+
+	return http.StatusInternalServerError
+}
+
 // handleSingleTx handles a single transaction request on the /tx endpoint.
 // This method implements an HTTP handler for validating a single Bitcoin transaction
 // submitted via POST request. It reads the raw transaction bytes from the request body,
@@ -919,7 +1023,7 @@ func (v *Server) handleSingleTx(ctx context.Context) echo.HandlerFunc {
 		response, err := v.validateTransaction(ctx, req)
 		if err != nil {
 			errors.AttachHTTPError(c.Response().Header(), err)
-			return c.String(http.StatusInternalServerError, "[handleSingleTx] Failed to process transaction: "+err.Error())
+			return c.String(httpStatusForTxError(err), "[handleSingleTx] Failed to process transaction: "+err.Error())
 		}
 
 		if !response.Valid {
@@ -979,7 +1083,7 @@ func (v *Server) handleMultipleTx(ctx context.Context) echo.HandlerFunc {
 
 			response, err := v.validateTransaction(ctx, req)
 			if err != nil {
-				return c.String(http.StatusInternalServerError, "[handleMultipleTx] Failed to process transaction: "+err.Error())
+				return c.String(httpStatusForTxError(err), "[handleMultipleTx] Failed to process transaction: "+err.Error())
 			}
 
 			if !response.Valid {

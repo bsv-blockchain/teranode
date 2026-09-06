@@ -48,11 +48,11 @@ func TestGetCandidateBlock(t *testing.T) {
 		// Add transactions to create subtrees
 		for i := 0; i < 5; i++ {
 			txHash := chainhash.HashH([]byte{byte(i), 0xca, 0xfe})
-			server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
+			require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}}, []*subtreepkg.TxInpoints{{}})
+			}}, []*subtreepkg.TxInpoints{{}}))
 		}
 
 		time.Sleep(50 * time.Millisecond)

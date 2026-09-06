@@ -1,6 +1,11 @@
 package settings
 
-import "net/url"
+import (
+	"fmt"
+	"net/url"
+	"os"
+	"time"
+)
 
 // ValidatorSettings configures the transaction validation service.
 type ValidatorSettings struct {
@@ -27,4 +32,185 @@ type ValidatorSettings struct {
 	TxLockedMaxRetries                   int      `key:"validator_txlocked_maxRetries" desc:"Maximum retries when a parent tx is still committing (TX_LOCKED or TX_CREATING)" default:"3" category:"Validator" usage:"Retries while the parent tx is still completing its own commit" type:"int" longdesc:"### Purpose\nControls the number of retry attempts when a transaction cannot spend a parent output yet because the parent is still completing its own commit — either TX_LOCKED or TX_CREATING. Both share this one budget.\n\n### How It Works\nTX_LOCKED occurs when a parent and child transaction arrive nearly simultaneously and the parent has not yet completed its two-phase commit (unlock). TX_CREATING is the same situation for a parent large enough to be written across several records, which is still being written. Either way the condition clears on its own, or once the parent is mined. The validator retries the same transaction with exponential backoff, starting at 10ms and doubling on each retry (e.g. 10ms, 20ms, 40ms, 80ms, ...) until the configured maximum is reached or the lock clears. Values above 10 are clamped to prevent excessive backoff (2^10 * 10ms ≈ 10s max sleep).\n\n### Values\n- **3** (default) - Retries up to 3 times with 10/20/40ms backoff (70ms total)\n- **0** - Disables retry; both TX_LOCKED and TX_CREATING are returned immediately to the caller. Note BSV has no mempool, so a rejected child is not held anywhere on the client-facing intake paths — nothing will re-submit it\n\n### Recommendations\n- **3** for production deployments where parent/child tx timing races are expected\n- **0** for testing environments where these conditions should propagate to the caller\n\n### Observability\nWatch teranode_validator_parent_commit_retries and teranode_validator_parent_commit_exhausted (both labelled by condition). The exhausted counter marks a valid transaction the node lost -- nothing holds it on the client-facing or Kafka intake paths (legacy p2p relay is the exception; it parks the tx in the orphan pool) -- so a non-zero rate there means this budget is too short for the node's load."`
 	TxMetaWireFormat                     string   `key:"validator_txmeta_wireFormat" desc:"Wire format for txmeta Kafka messages" default:"v1" category:"Validator" usage:"v1 (legacy) or v2 (partition-aligned)" type:"string" longdesc:"### Purpose\nSelects the wire format used when publishing transaction metadata batches to Kafka.\n\n### Format options\n- **v1** (default) - Legacy format. One Kafka message per batch, key = first tx hash, partition picked by StickyKeyPartitioner.\n- **v2** - Partition-aligned format. Producer pre-computes xxhash(txhash), groups items by partition such that each Kafka partition's records map to a disjoint range of receiver cache buckets, and emits one message per non-empty partition. Each entry carries its xxhash on the wire so the receiver can skip xxhash on receive.\n\n### When to use v2\nEnable on producers and receivers together once the receiver build is known to support v2 parsing. The receiver in this repo auto-detects via the v2 magic byte (0xFF) so it can consume v1 and v2 simultaneously during rollout.\n\n### Operational notes\n- v2 requires the Kafka topic's partition count to match validator_txmeta_numPartitions and to divide the receiver's BucketsCount (8192 in production builds).\n- v2 switches the txmeta async producer to ManualPartitioner. Every record carries an explicit partition number — there is no fallback if Partition is unset.\n\n### Recommendations\n- Leave at **v1** until both producers and consumers are on a build that supports v2.\n- Switch one producer at a time and watch txmeta consumer lag."`
 	TxMetaNumPartitions                  int      `key:"validator_txmeta_numPartitions" desc:"Kafka partition count used when wireFormat=v2" default:"32" category:"Validator" usage:"Must match topic partition count and divide BucketsCount" type:"int" longdesc:"### Purpose\nNumber of Kafka partitions on the txmeta topic. Used only when validator_txmeta_wireFormat=v2.\n\n### Constraints\n- Must equal the Kafka topic's actual partition count.\n- Must evenly divide the receiver's BucketsCount (8192 in production builds). Valid values: 16, 32, 64, 128, 256.\n\n### How It Works\nThe producer routes each tx to partition = (xxhash(hash) %% BucketsCount) * NumPartitions / BucketsCount. Each partition therefore owns a disjoint contiguous range of BucketsCount/NumPartitions cache buckets on the receiver, eliminating cross-partition lock contention.\n\n### Recommendations\n- **32** (default) - Reasonable default for 32-core receiver pods.\n- Set to match the actual topic partition count. Verify with kafka-topics --describe."`
+
+	// BlockAssemblyShedRetryTimeout bounds the in-place retry of a queue-full
+	// block-assembly handoff on the Kafka ingest path.
+	BlockAssemblyShedRetryTimeout time.Duration `key:"validator_blockAssemblyShedRetryTimeout" desc:"How long the Kafka ingest path retries a queue-full block-assembly handoff in place" default:"2s" category:"Validator" usage:"Bounds how long an ingest goroutine parks waiting for the block-assembly queue to drain" type:"duration" longdesc:"### Purpose\nBounds the in-place retry of a block-assembly handoff that was shed because the ingest queue was full. Applies only on the Kafka ingest path (WaitForBlockAssembly); synchronous callers surface the shed immediately.\n\n### How It Works\nThe handoff is retried every 5ms until it succeeds, the request context is cancelled, or this timeout elapses. On timeout the transaction's store work is unwound and the shed is returned, so a successful unwind drops the transaction cleanly with no residue rather than leaving it stranded locked and unhanded-off.\n\nThe budget is measured from BEFORE the first handoff attempt, not after it, because the fetched Kafka record batch is pinned from that first attempt.\n\n### The submitter is never told\nPropagation has already returned success to the submitter before the validator sees the transaction, so a transaction dropped after this window is never reported to the submitter. A successful unwind drops it **cleanly** (no store residue); if the unwind's delete failed after the master record was already gone, the transaction cannot be mined and its inputs are then unspent unless the unspend itself fails (which increments **teranode_validator_shed_unwind_failures_total** too and logs the outpoints for recovery), but orphan pagination children or an external blob can remain — counted by **teranode_validator_shed_unwind_residue_total**. Either way it is **not lossless**; alert on **teranode_validator_shed_dropped_total**.\n\n### Per-attempt cap, and what it costs this window\nEach individual attempt is separately capped at blockassembly_queueFullWaitTimeout plus validator_handoffRoundTripSlack. Both terms are configurable, so every figure quoted in this section is arithmetic on the DEFAULTS (100ms + 500ms = a 600ms cap) rather than a fixed property; recompute them against the deployment's own values. That floor is not optional: block assembly waits up to its own queueFullWaitTimeout before shedding and treats caller cancellation as explicitly NOT a shed, so an attempt deadline shorter than that wait turns every shed into a local context deadline — losing the resource-exhausted classification and skipping the unwind, which strands the transaction locked.\n\nConsequences to plan for:\n- This window is reduced by that per-attempt cap, so at the defaults the retrying occupies 2s - 600ms = 1.4s. Raising validator_handoffRoundTripSlack widens the cap and narrows this window by the same amount.\n- If this setting is not greater than the cap, the handoff makes exactly one bounded attempt and does not retry. A startup warning names all three keys and the effective bound.\n- Worst-case ingest retention is this window plus the unwind cap (validator_shedUnwindTimeout), i.e. 4s at the defaults. That figure holds only because the per-attempt cap is enforced in **both** the unary and the batched block-assembly client: a batched client that waited without the caller's deadline would make it inert at the shipped blockassembly_sendBatchSize, which is the configuration everybody runs.\n\n### Batch mode abandons the handoff, it does not cancel it\nWith blockassembly_sendBatchSize > 0 (the shipped default) the transaction is already on the client's batcher when the per-attempt cap fires. Hitting the cap abandons the WAIT, not the item: the batcher may still dispatch it, so the transaction may still be delivered to block assembly.\n\nThat is why such a handoff is deliberately NOT treated as a shed and is never unwound - deleting the record of a transaction that is still in flight could remove one already in a subtree or a mining template. It is left Locked for the unmined reload instead, and counted by **teranode_validator_handoff_deadline_total**.\n\nA rising count on that metric means handoffs are exceeding the per-attempt cap. The remedies, in order: align blockassembly_queueFullWaitTimeout across the two settings contexts so this process is not under-reporting what block assembly enforces, or raise validator_handoffRoundTripSlack, which is the term that actually widens the cap.\n\n### Sizing the unwind cap\nThe unwind cap (validator_shedUnwindTimeout, default 2s) is **one budget for the whole sequence**: the complete delete (the master record, then - on a paginated transaction - up to 2 batched pagination-child passes 5ms apart, then the .tx and .outputs blob deletes), then up to 3 verify reads with a 5ms backoff between them, then the Unspend. It is not a per-phase budget.\n\nUnder a slow store the verify read can therefore get fewer than 3 attempts before the context short-circuits it, landing in the fail-closed arm having effectively tried once. Fail-closed means the transaction's outpoints are left spent and are logged for operator recovery; it is never consensus-visible, but it does need an operator.\n\n- **Sizing rule:** size against the P99 of the whole sequence - one master delete, plus (paginated transactions only) up to two batched child-delete passes 5ms apart, plus two blob deletes, plus three GetMeta verify reads 5ms apart, plus one Unspend. If that is not comfortably below the cap, raise validator_shedUnwindTimeout.\n- **What to watch:** **teranode_validator_shed_unwind_unverified_total** rising is the signal that the cap is too tight for the deployment's store latency.\n\n### Trade-off\n| Setting | Benefit | Drawback |\n|---------|---------|----------|\n| Longer | Fewer ingest transactions dropped during a transient stall | More parked consumer goroutines, each retaining its Kafka record batch |\n| Shorter | Less memory retained during a stall, parents held Locked for less time | More transactions dropped when block assembly is briefly slow |\n\n### Why a bound at all\nAn unbounded retry relocates the growth the block-assembly queue cap removed into the validator's Kafka consumer: the puller does not wait for per-partition goroutines, so during a multi-minute stall every parked goroutine keeps holding its fetched records. With a bound, retention is proportional to this window rather than to how long the stall lasts. This is a **time** bound, not a memory bound — the coefficient is the broker delivery rate times the record size, neither of which is capped here.\n\n### Recommendations\n- **2s** (default) - absorbs the common case (block assembly drains a batch per loop iteration, so a full queue usually clears in milliseconds) without parking goroutines for minutes.\n- Only relevant when blockassembly_maxQueueItems is positive, since only then can a shed occur."`
+
+	// ShedUnwindTimeout bounds the whole shed unwind (delete, verify reads,
+	// unspend) as one budget.
+	ShedUnwindTimeout time.Duration `key:"validator_shedUnwindTimeout" desc:"Bound on the whole shed unwind: delete, verify reads and unspend share this one budget" default:"2s" category:"Validator" usage:"Stops a wedged store parking an ingest goroutine on the shed cleanup path" type:"duration" longdesc:"### Purpose\nBounds the store work that reverses a queue-full shed, so a successful shed leaves no residue without letting a wedged store park an ingest goroutine on a best-effort cleanup path. The context reaching the unwind is deliberately detached from the caller, so this deadline is the only thing that can stop it.\n\n### One budget for the whole sequence\nThis is NOT a per-phase budget. The sequence is: the complete delete (the master record, then - on a paginated transaction - up to 2 batched pagination-child passes 5ms apart, then the .tx and .outputs blob deletes), then up to 3 verify reads with a 5ms backoff between them, then Unspend the inputs — all sharing this single deadline. Under a slow store the verify read can therefore get fewer than 3 attempts before the context short-circuits it, landing in the fail-closed arm having effectively tried once.\n\n### What fail-closed costs\nFailing closed means the transaction's outpoints are left spent, and the txid and the outpoints are logged for operator recovery. It is never consensus-visible — the alternative, unspending inputs whose record may have survived the delete, is what would be — but it does need an operator to act.\n\nThe other failure shape is the reverse: if the delete removed the master record and the cascade then failed, nothing mineable survives and the inputs ARE unspent unless the unspend itself fails (which increments **teranode_validator_shed_unwind_failures_total** too and logs the outpoints for recovery), but orphan pagination children or an external blob can remain. That outcome is counted by **teranode_validator_shed_unwind_residue_total**.\n\n### Sizing rule\nSize against the P99 of the whole sequence - one master delete, plus (paginated transactions only) up to two batched child-delete passes 5ms apart, plus two blob deletes, plus three GetMeta verify reads 5ms apart, plus one Unspend. If that is not comfortably below this value, raise it. The 2s default assumes a store whose healthy latency is sub-millisecond.\n\n### What to watch\n**teranode_validator_shed_unwind_unverified_total** rising is the signal that the cap is too tight for the deployment's store latency.\n\n### Relationship to the handoff budget\nThe unwind only starts once the handoff has given up, so this sits OUTSIDE validator_blockAssemblyShedRetryTimeout rather than inside it: worst-case ingest retention is that retry window plus this cap.\n\n### Values\n- **>0** - the configured duration is used.\n- **0 or negative** - meaningless for a deadline; the compiled default of 2s is used instead. This is a silent fallback, not a warning, and it is **not** a way to disable the bound: there is no no-deadline setting, by design, because an unbounded unwind on the detached post-decision context is the failure this bound exists to close."`
+
+	// HandoffRoundTripSlack is the allowance added to block assembly's own bounded
+	// queue wait when sizing the per-attempt handoff deadline.
+	HandoffRoundTripSlack time.Duration `key:"validator_handoffRoundTripSlack" desc:"Allowance added to the remote's queue wait when sizing the per-attempt block-assembly handoff deadline" default:"500ms" category:"Validator" usage:"Covers the gRPC round trip, batcher dispatch and the server's queue-full poll granularity" type:"duration" longdesc:"### Purpose\nSizes the safety margin on a SINGLE block-assembly handoff attempt. The per-attempt cap is blockassembly_queueFullWaitTimeout as seen by this process, plus this slack.\n\n### Why the margin is not optional\nBlock assembly waits up to its own queueFullWaitTimeout before shedding, and it classifies caller cancellation as explicitly NOT a shed. An attempt deadline shorter than that wait therefore turns every queue-full shed into a local context deadline: the resource-exhausted classification is lost, the shed unwind never runs, and the transaction is stranded locked for the unmined reload.\n\n### It is subtracted from the retry window\nvalidator_blockAssemblyShedRetryTimeout has this cap subtracted from it to leave room for one final in-flight attempt, so raising the slack reduces the number of retry attempts that fit in the same window. Keep it small.\n\n### When to raise it\nRaise it when **teranode_validator_handoff_deadline_total** is rising and the two settings contexts genuinely cannot be aligned — that counter means handoffs are hitting this process's cap before block assembly answers, which usually means this process's copy of blockassembly_queueFullWaitTimeout under-reports what the block-assembly process actually enforces. Aligning the two keys across both settings contexts is the better fix where it is available; raising the slack is the remedy where it is not.\n\n### Values\n- **>0** - the configured duration is used.\n- **0 or negative** - meaningless for a deadline; the compiled default of 500ms is used instead. This is a silent fallback, not a warning, and it is **not** a way to disable the bound: there is no no-deadline setting, by design, because an unbounded handoff on the detached post-decision context is the failure this bound exists to close."`
+
+	// KafkaBackpressure configures the queue-age-driven Kafka ingest backpressure
+	// controller. Disabled by default; see ValidatorKafkaBackpressureSettings.
+	KafkaBackpressure ValidatorKafkaBackpressureSettings
+}
+
+// ValidatorKafkaBackpressureSettings configures the validator's Kafka ingest
+// backpressure controller. It is disabled by default and opt-in per deployment.
+//
+// When enabled, a controller goroutine periodically reads the block-assembly
+// ingest queue's head-batch age (via the slim GetBlockAssemblyQueueStats RPC)
+// and pauses the validator's transaction Kafka consumer while that age is at or
+// above PauseQueueAge, resuming it only once the age falls back to at or below
+// ResumeQueueAge. Bursts therefore ride on Kafka's durable log instead of the
+// in-heap block-assembly queue, and fewer transactions hit the hard-shed path.
+//
+// The controller fails open: on a read error/timeout or a stale signal it
+// resumes rather than staying paused, and any single pause is capped at MaxPause
+// so a dark signal can never wedge ingest indefinitely. It never substitutes for
+// the block-assembly queue cap (blockassembly_maxQueueItems) — it reduces shed
+// churn, it does not bound memory on its own.
+type ValidatorKafkaBackpressureSettings struct {
+	Enabled        bool          `key:"validator_kafkaBackpressureEnabled" desc:"Enable queue-age-driven Kafka ingest backpressure" default:"false" category:"Validator" usage:"Pause the tx Kafka consumer when block assembly is backlogged" type:"bool" longdesc:"### Purpose\nEnables the validator-side Kafka backpressure controller that pauses transaction consumption while the block-assembly ingest queue is backlogged.\n\n### How It Works\nWhen enabled and both the Kafka consumer and block-assembly client are available, a controller goroutine polls the block-assembly queue-head age and pauses/resumes the tx consumer with hysteresis. When disabled (default) no goroutine is started and behaviour is unchanged.\n\n### Recommendations\n- Ship **false** until pause/resume watermarks are validated on a real overload trace.\n- This is not a memory guardrail: also set blockassembly_maxQueueItems to a positive value."`
+	PauseQueueAge  time.Duration `key:"validator_kafkaBackpressurePauseQueueAge" desc:"Queue-head age high-watermark that triggers a pause" default:"500ms" category:"Validator" usage:"Pause the tx consumer at or above this queue-head age" type:"duration" longdesc:"### Purpose\nHigh-watermark on the block-assembly queue-head age. When the age reaches this value the controller pauses the tx Kafka consumer.\n\n### Constraints\nMust be > 0, and strictly greater than ResumeQueueAge, or the controller is disabled/clamped at load."`
+	ResumeQueueAge time.Duration `key:"validator_kafkaBackpressureResumeQueueAge" desc:"Queue-head age low-watermark that triggers a resume" default:"100ms" category:"Validator" usage:"Resume the tx consumer at or below this queue-head age" type:"duration" longdesc:"### Purpose\nLow-watermark on the block-assembly queue-head age. Once paused, the controller resumes the tx Kafka consumer when the age falls back to this value.\n\n### Constraints\nMust be strictly less than PauseQueueAge (the hysteresis gap). If not, it is clamped to half the pause watermark at load. A negative value is clamped to 0, with a warning naming the key."`
+	PollInterval   time.Duration `key:"validator_kafkaBackpressurePollInterval" desc:"Controller poll cadence" default:"50ms" category:"Validator" usage:"How often the controller reads the queue-head age" type:"duration" longdesc:"### Purpose\nHow often the controller reads the slim queue-stats RPC and re-evaluates the pause/resume decision.\n\n### Constraints\nMust be > 0, or the controller is disabled at load."`
+	ReadTimeout    time.Duration `key:"validator_kafkaBackpressureReadTimeout" desc:"Per-poll RPC deadline for the queue-stats read" default:"100ms" category:"Validator" usage:"Bounds each queue-stats read so the controller can't inherit a downstream stall" type:"duration" longdesc:"### Purpose\nPer-poll context deadline applied to each GetBlockAssemblyQueueStats read so the controller never blocks on a downstream stall.\n\n### Constraints\nMust be > 0, or the controller is disabled at load."`
+	MaxPause       time.Duration `key:"validator_kafkaBackpressureMaxPause" desc:"Safety cap on how long a single pause may last" default:"30s" category:"Validator" usage:"Fail-open resume after this long even if still hot" type:"duration" longdesc:"### Purpose\nHard cap on the duration of any single pause. When a pause has lasted this long the controller resumes (fail-open) even if the queue is still hot, bounding Kafka retention exposure and lag-alert duration.\n\n### Constraints\nMust be > 0, or the controller is disabled at load."`
+	// MaxFailOpenCooldown is the UPPER clamp on the cooldown armed by a fail-open
+	// resume, not a floor: it is the longest backpressure will stay suppressed
+	// after the controller resumed without observing a drain.
+	MaxFailOpenCooldown time.Duration `key:"validator_kafkaBackpressureMaxFailOpenCooldown" desc:"Upper bound on how long backpressure stays suppressed after a fail-open resume" default:"1s" category:"Validator" usage:"Caps the unprotected window that follows a fail-open resume" type:"duration" longdesc:"### Purpose\nA resume that was NOT a genuine drain to the low watermark — the max-pause forced resume, or the stale-signal resume — arms a cooldown during which no new pause may start. This setting is the upper bound on that cooldown.\n\n### How It Works\nThe armed cooldown is the preceding pause divided by 4, then clamped: capped by this value, and floored (in code, not configurable) at twice the poll interval.\n\n### Both halves of the clamp matter\n- The **cap** bounds how long the block-assembly queue grows unprotected after a fail-open. Without it, suppression lasted a full max-pause window (30s by default): with a positive blockassembly_maxQueueItems that is 30s of hard shedding, and with the default unbounded queue it is 30s of growth toward the very OOM the feature exists to prevent.\n- The **floor** of 2x the poll interval bounds the paused duty cycle from the other side, so a flapping stats endpoint cannot busy-toggle pause and resume on consecutive ticks.\n\n### Constraints\nFloored at 2x pollInterval at load.\n\n### Recommendations\n- **1s** (default) - short enough that an overloaded node regains protection quickly, long enough to break a re-pause-on-the-next-tick cycle."`
+	// PauseQueueFillPercent is the fill high-watermark, as a percentage of the item
+	// cap the block-assembly process REPORTS. The resume threshold is derived in code
+	// as half of it, so the predicate adds one key and no new cross-key relationship.
+	PauseQueueFillPercent int `key:"validator_kafkaBackpressurePauseFillPercent" desc:"Queue fill high-watermark, as a percentage of the reported item cap" default:"90" category:"Validator" usage:"Pause the tx consumer when the ingest queue is at least this full" type:"int" longdesc:"### Purpose\nHigh-watermark on ingest-queue FILL, as a percentage of the item cap the block-assembly process reports. It exists because the age watermarks are blind in one regime: a burst can pin the queue at its ceiling while each batch still waits only until the next drain pass, so the head age stays an order of magnitude below pauseQueueAge while the hard shed rejects on every call.\n\n### How It Works\nEach poll reads the queue depth and the enforced (normalized) item cap from the same queue-stats RPC. The controller pauses when the effective head age reaches pauseQueueAge **or** the fill reaches this percentage. Once paused it resumes only when the age is back at or below resumeQueueAge **and** the fill has fallen to at most half this percentage - requiring both is what stops a fill-triggered pause resuming immediately on a young head.\n\n### When it does nothing\nThe predicate is inert whenever the reported cap is <= 0, i.e. whenever the block-assembly queue is unbounded (blockassembly_maxQueueItems=0, the shipped default). Fill has no meaning without a denominator, and the reported cap is used rather than this process's own setting because the two settings contexts are independent processes.\n\n### Constraints\n0 disables the fill predicate and restores age-only behaviour. A negative value is clamped to 0 and a value above 100 to 100, both with a warning naming the key.\n\n### Recommendations\n- **90** (default) - late enough that ordinary bursts ride the age watermarks, early enough to pause before the queue starts shedding."`
+	StaleErrorLimit       int `key:"validator_kafkaBackpressureStaleErrorLimit" desc:"Consecutive read errors tolerated before fail-open resume" default:"3" category:"Validator" usage:"Resume if the queue signal is unavailable this many polls in a row" type:"int" longdesc:"### Purpose\nNumber of consecutive queue-stats read errors (or timeouts) after which the controller fails open and resumes a paused consumer (the Nth consecutive failure triggers the resume). A successful read resets the counter.\n\n### Constraints\nClamped to a minimum of 1 at load: a non-positive value is meaningless. The default of 3 rides out brief transient read failures before failing open."`
+}
+
+// loadValidatorKafkaBackpressureSettings reads the backpressure keys and returns
+// a validated configuration. Relationship checks run at load: incoherent timing
+// knobs (non-positive pause watermark, poll interval, read timeout or max-pause)
+// force the controller off; a resume watermark not strictly below the pause
+// watermark is clamped to half the pause watermark; a negative resume watermark
+// is clamped to 0; the fill watermark is clamped into 0..100; the stale-error limit
+// is floored at 1. Violations warn on stderr while the process still has no logger.
+func loadValidatorKafkaBackpressureSettings(alternativeContext ...string) ValidatorKafkaBackpressureSettings {
+	s := ValidatorKafkaBackpressureSettings{
+		Enabled:               getBool("validator_kafkaBackpressureEnabled", false, alternativeContext...),
+		PauseQueueAge:         getDuration("validator_kafkaBackpressurePauseQueueAge", 500*time.Millisecond, alternativeContext...),
+		ResumeQueueAge:        getDuration("validator_kafkaBackpressureResumeQueueAge", 100*time.Millisecond, alternativeContext...),
+		PollInterval:          getDuration("validator_kafkaBackpressurePollInterval", 50*time.Millisecond, alternativeContext...),
+		ReadTimeout:           getDuration("validator_kafkaBackpressureReadTimeout", 100*time.Millisecond, alternativeContext...),
+		MaxPause:              getDuration("validator_kafkaBackpressureMaxPause", 30*time.Second, alternativeContext...),
+		MaxFailOpenCooldown:   getDuration("validator_kafkaBackpressureMaxFailOpenCooldown", time.Second, alternativeContext...),
+		PauseQueueFillPercent: getInt("validator_kafkaBackpressurePauseFillPercent", 90, alternativeContext...),
+		StaleErrorLimit:       getInt("validator_kafkaBackpressureStaleErrorLimit", 3, alternativeContext...),
+	}
+
+	cfg, warnings := s.validated()
+
+	for _, w := range warnings {
+		fmt.Fprintln(os.Stderr, "[settings] validator kafka backpressure: "+w)
+	}
+
+	return cfg
+}
+
+// validated applies the relationship rules described on
+// loadValidatorKafkaBackpressureSettings and returns the corrected config plus the
+// warnings its caller should surface.
+//
+// It returns the warnings rather than printing them so that every violation in a
+// config is reported, not just the first: each "disable the controller" check both
+// emits a warning and clears Enabled, so gating the warnings on the CURRENT value of
+// Enabled silenced every check after the first one and an operator fixing two bad
+// knobs had to restart to discover the second. The gate is therefore wasEnabled,
+// captured once up front. Returning a slice also makes this testable without
+// capturing os.Stderr.
+func (s ValidatorKafkaBackpressureSettings) validated() (ValidatorKafkaBackpressureSettings, []string) {
+	// Captured before any check can clear it, so all violations are reported in one
+	// pass. A config that was never enabled stays silent.
+	wasEnabled := s.Enabled
+
+	var warnings []string
+
+	warn := func(format string, args ...any) {
+		if wasEnabled {
+			warnings = append(warnings, fmt.Sprintf(format, args...))
+		}
+	}
+
+	if s.PauseQueueAge <= 0 {
+		warn("pauseQueueAge=%s must be > 0; disabling controller", s.PauseQueueAge)
+
+		s.Enabled = false
+	}
+
+	if s.PollInterval <= 0 {
+		warn("pollInterval=%s must be > 0; disabling controller", s.PollInterval)
+
+		s.Enabled = false
+	}
+
+	if s.ReadTimeout <= 0 {
+		warn("readTimeout=%s must be > 0; disabling controller", s.ReadTimeout)
+
+		s.Enabled = false
+	}
+
+	if s.MaxPause <= 0 {
+		warn("maxPause=%s must be > 0; disabling controller", s.MaxPause)
+
+		s.Enabled = false
+	}
+
+	// Resume must sit strictly below pause so hysteresis has a gap; otherwise
+	// clamp it to half the pause watermark and keep running.
+	if s.ResumeQueueAge >= s.PauseQueueAge {
+		clamped := s.PauseQueueAge / 2
+
+		warn("resumeQueueAge=%s must be < pauseQueueAge=%s; clamping resume to %s", s.ResumeQueueAge, s.PauseQueueAge, clamped)
+
+		s.ResumeQueueAge = clamped
+	}
+
+	// Negative is unreachable by the check above (a negative resume is always
+	// strictly below a positive pause), so this is the only place a bad value of
+	// this shape can be reported. Silence here contradicted the contract on
+	// validated(): every violation is reported, not just the first.
+	if s.ResumeQueueAge < 0 {
+		warn("resumeQueueAge=%s must be >= 0; clamping to 0", s.ResumeQueueAge)
+
+		s.ResumeQueueAge = 0
+	}
+
+	// The fail-open cooldown must be able to span at least two poll intervals,
+	// otherwise a flapping signal can re-pause on the tick straight after a
+	// fail-open resume and busy-toggle ingest. This is a floor on the CAP; the
+	// controller applies the same floor to each armed cooldown.
+	if floor := 2 * s.PollInterval; s.PollInterval > 0 && s.MaxFailOpenCooldown < floor {
+		warn("maxFailOpenCooldown=%s must be >= 2 x pollInterval=%s; clamping to %s", s.MaxFailOpenCooldown, s.PollInterval, floor)
+
+		s.MaxFailOpenCooldown = floor
+	}
+
+	// A percentage outside 0..100 cannot express a fill fraction. Negative becomes 0
+	// (predicate off, age-only behaviour) rather than being treated as "always hot".
+	if s.PauseQueueFillPercent < 0 {
+		warn("pauseFillPercent=%d must be >= 0; clamping to 0 (fill predicate disabled)", s.PauseQueueFillPercent)
+
+		s.PauseQueueFillPercent = 0
+	}
+
+	if s.PauseQueueFillPercent > 100 {
+		warn("pauseFillPercent=%d must be <= 100; clamping to 100", s.PauseQueueFillPercent)
+
+		s.PauseQueueFillPercent = 100
+	}
+
+	// A non-positive limit is meaningless (the streak is compared with >=); floor
+	// it at 1 so the smallest configured value is a single tolerated failure.
+	if s.StaleErrorLimit < 1 {
+		warn("staleErrorLimit=%d must be >= 1; clamping to 1", s.StaleErrorLimit)
+
+		s.StaleErrorLimit = 1
+	}
+
+	return s, warnings
 }

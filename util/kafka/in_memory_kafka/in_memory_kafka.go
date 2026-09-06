@@ -317,7 +317,6 @@ type InMemoryConsumerGroup struct {
 	errors        chan error
 	closeOnce     sync.Once
 	cancelConsume context.CancelFunc
-	wg            sync.WaitGroup
 	closed        chan struct{}
 	isRunning     bool
 	isPaused      bool
@@ -340,7 +339,8 @@ func (mcg *InMemoryConsumerGroup) Errors() <-chan error {
 	return mcg.errors
 }
 
-// Close stops the consumer group.
+// Close cancels the consume context and marks the group closed. It does not wait for
+// the consume goroutine to finish — see the comment inside.
 func (mcg *InMemoryConsumerGroup) Close() error {
 	mcg.mu.Lock()
 	if !mcg.isRunning {
@@ -354,7 +354,10 @@ func (mcg *InMemoryConsumerGroup) Close() error {
 		if mcg.cancelConsume != nil {
 			mcg.cancelConsume()
 		}
-		mcg.wg.Wait()
+		// Close cancels and marks the group closed; it does NOT join the consume
+		// goroutine. That goroutine is parked in `range claim.Messages()` and only
+		// unwinds once a further message arrives and its handler fails, so there is
+		// nothing here that can wait for it without risking a wait that never ends.
 		close(mcg.errors)
 		close(mcg.closed)
 		mcg.isRunning = false

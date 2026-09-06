@@ -329,12 +329,32 @@ func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint
 		}
 		s.batcher.PutCtx(ctx, item)
 
-		// group.Wait(context.Background(), 0): 0 timeout allocates no timer and
-		// a background context never cancels, so this blocks purely on the
-		// dispatcher completing the item — identical to the previous bare
-		// <-done receive (no timeout, no ctx arm). It can only return nil, so
-		// the result slot is always safe to read here.
-		_ = group.Wait(context.Background(), 0)
+		// Bounded by the CALLER's context, in batch mode as well as unary mode.
+		// The validator hands this call a deadline precisely so a wedged block
+		// assembly cannot park an ingest goroutine — and the Kafka record batch
+		// it holds — indefinitely. Waiting on context.Background() here discarded
+		// that deadline, which made it inert at the shipped default
+		// (blockassembly_sendBatchSize = 1024).
+		//
+		// An early return is ABANDONMENT, not cancellation: the item is already
+		// on the batcher and the dispatcher may still send it, so the
+		// transaction may yet reach block assembly. Two consequences, both
+		// load-bearing:
+		//
+		//   - item.result MUST NOT be read on this path. The dispatcher writes it
+		//     later from its own goroutine; not reading it is what keeps that
+		//     write race-free (no concurrent reader), and it is why the read below
+		//     is reachable only after Wait returned nil.
+		//   - the error MUST NOT be mistakable for a queue-full shed. A shed is
+		//     unwound by the caller (record deleted, inputs unspent); doing that to
+		//     a transaction that is still in flight to block assembly could delete
+		//     a record already in a subtree or a template. Wrapping ctx.Err() in a
+		//     ServiceError keeps it out of the ErrThresholdExceeded branch and
+		//     inside the caller's "ambiguous hand-off failure, leave it locked"
+		//     branch.
+		if err := group.Wait(ctx, 0); err != nil {
+			return false, errors.NewServiceError("block assembly batch handoff abandoned before dispatch completed", err)
+		}
 
 		if item.result != nil {
 			return false, item.result
@@ -743,6 +763,31 @@ func (s *Client) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.
 	}
 
 	return state, nil
+}
+
+// GetBlockAssemblyQueueStats retrieves a slim, atomic-only view of the ingest
+// queue (depth, head-batch age, and the drain floor the age is measured against)
+// for high-frequency control reads. It unwraps the protobuf response into native
+// Go types so callers never import the generated package.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns:
+//   - QueueStats: Queue depth, head-batch age, the reported double-spend window and the reported item cap
+//   - error: Any error encountered during retrieval
+func (s *Client) GetBlockAssemblyQueueStats(ctx context.Context) (QueueStats, error) {
+	stats, err := s.client.GetBlockAssemblyQueueStats(ctx, &blockassembly_api.EmptyMessage{})
+	if err != nil {
+		return QueueStats{}, errors.UnwrapGRPC(err)
+	}
+
+	return QueueStats{
+		Count:             stats.QueueCount,
+		HeadAge:           time.Duration(stats.QueueHeadAgeMillis) * time.Millisecond,
+		DoubleSpendWindow: time.Duration(stats.DoubleSpendWindowMillis) * time.Millisecond,
+		MaxItems:          stats.QueueMaxItems,
+	}, nil
 }
 
 // BlockAssemblyAPIClient returns the underlying gRPC client for block assembly API.

@@ -155,6 +155,13 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store
 	// initialize Prometheus metrics, singleton, will only happen once
 	initPrometheusMetrics()
 
+	// A negative queue-full wait is a misconfiguration, not a tiny wait; warn
+	// once and treat it as 0 (shed immediately). The item cap itself is
+	// normalized where the queue is constructed.
+	if tSettings.BlockAssembly.QueueFullWaitTimeout < 0 {
+		logger.Warnf("BlockAssembly.QueueFullWaitTimeout=%s is negative; treating as 0 (shed immediately)", tSettings.BlockAssembly.QueueFullWaitTimeout)
+	}
+
 	ba := &BlockAssembly{
 		logger:              logger,
 		stats:               gocore.NewStat("blockassembly"),
@@ -297,6 +304,13 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				return
 			case <-time.After(5 * time.Second):
 				stallState = ba.sampleBlockAssemblerMetrics(stallState, time.Now())
+
+				// Queue-head age is a standalone gauge, not an input to the stall
+				// signal, so it is sampled here rather than inside
+				// sampleBlockAssemblerMetrics - that function's contract is the
+				// stall-state computation, and its unit tests mock only the reads
+				// that computation makes.
+				prometheusBlockAssemblyQueueHeadAge.Set(ba.blockAssembler.QueueHeadAge().Seconds())
 			}
 		}
 	}()
@@ -1097,7 +1111,6 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "AddTx",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithHistogram(prometheusBlockAssemblyAddTx),
-		tracing.WithCounter(prometheusBlockAssemblyAddTxCounter),
 		tracing.WithTag("txid", util.ReverseAndHexEncodeSlice(req.Txid)),
 		tracing.WithLogMessage(ba.logger, "[AddTx][%s] add tx called", util.ReverseAndHexEncodeSlice(req.Txid)),
 	)
@@ -1125,10 +1138,18 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	}
 
 	if !ba.settings.BlockAssembly.Disabled {
-		ba.blockAssembler.AddTxBatch(
+		if err = ba.addTxBatchWithBackpressure(ctx,
 			[]subtreepkg.Node{{Hash: chainhash.Hash(req.Txid), Fee: req.Fee, SizeInBytes: req.Size}},
 			[]*subtreepkg.TxInpoints{&txInpoints},
-		)
+		); err != nil {
+			return nil, err
+		}
+
+		// Counted after the enqueue, never before: a queue-full shed returns above,
+		// and a counter that moved anyway would make the add rate irreconcilable
+		// against queue_shed_total. The handler histogram still measures the shed,
+		// which is the right thing to measure there.
+		prometheusBlockAssemblyAddTxCounter.Inc()
 	}
 
 	return &blockassembly_api.AddTxResponse{
@@ -1180,6 +1201,92 @@ func (ba *BlockAssembly) RemoveTx(ctx context.Context, req *blockassembly_api.Re
 	}
 
 	return &blockassembly_api.EmptyMessage{}, nil
+}
+
+// queueFullPollInterval is how often the bounded wait rechecks for ingest-queue
+// room. It is short relative to the default 100ms wait so a freed slot is
+// picked up promptly, and coarse enough not to busy-spin.
+const queueFullPollInterval = 5 * time.Millisecond
+
+// addTxBatchWithBackpressure enqueues a batch into block assembly under the
+// configured capacity bound. It is the shared body of all three ingest
+// handlers, called only inside the enabled branch.
+//
+// On the fast path there is room and it returns immediately — this is also the
+// always-taken path when no bound is configured, so an unbounded node pays only
+// one atomic and no added latency. When the queue is full it waits up to
+// QueueFullWaitTimeout for the dispatcher to make room, polling on a short
+// ticker. If room never appears the batch is shed with a ResourceExhausted-
+// mapped error; the validator then unwinds its UTXO-store work for the shed
+// transactions (see unwindShed) so a resubmit is an ordinary first submission.
+//
+// Caller cancellation (ctx.Done) is NOT a shed: it returns a context-cancelled
+// error without incrementing the shed counter and without the resource-exhausted
+// class, whose shed recovery semantics do not apply to a cancelled call.
+//
+// The wait is strictly bounded so it can never wedge the validator, whose
+// block-assembly client honours the caller's context (group.Wait(ctx, 0)).
+func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) error {
+	if ba.blockAssembler.AddTxBatchIfRoom(nodes, txInpoints) {
+		return nil
+	}
+
+	start := time.Now()
+
+	if ba.settings.BlockAssembly.QueueFullWaitTimeout > 0 {
+		ticker := time.NewTicker(queueFullPollInterval)
+		defer ticker.Stop()
+
+		timeout := time.After(ba.settings.BlockAssembly.QueueFullWaitTimeout)
+
+		for {
+			select {
+			case <-ctx.Done():
+				prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
+				return ba.contextCancelledDuringIngest(ctx)
+			case <-timeout:
+				return ba.shed(start)
+			case <-ticker.C:
+				if ba.blockAssembler.AddTxBatchIfRoom(nodes, txInpoints) {
+					prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
+					return nil
+				}
+			}
+		}
+	}
+
+	// No wait configured: shed immediately, but still honour an already-cancelled
+	// caller rather than mislabelling it as a shed.
+	if ctx.Err() != nil {
+		return ba.contextCancelledDuringIngest(ctx)
+	}
+
+	return ba.shed(start)
+}
+
+// shed records and returns the queue-full shed outcome: a ResourceExhausted-
+// mapped error the retry interceptor does not retry. The reported limit is the
+// enforced (normalized) cap, which can be clamped up from the raw configured
+// value, so operators see the limit actually in force.
+func (ba *BlockAssembly) shed(start time.Time) error {
+	prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
+	prometheusBlockAssemblyQueueShed.Inc()
+
+	return errors.WrapGRPC(errors.NewThresholdExceededError(
+		"block assembly queue full: %d items queued, limit %d",
+		ba.blockAssembler.QueueLength(), ba.blockAssembler.QueueMaxItems()))
+}
+
+// contextCancelledDuringIngest maps a cancelled/deadline-exceeded ingest wait to
+// the repo's context-cancelled error class. It is deliberately distinct from a
+// shed: no shed counter, no resource-exhausted class.
+func (ba *BlockAssembly) contextCancelledDuringIngest(ctx context.Context) error {
+	// Pass ctx.Err() as a string, not a trailing error: the errors constructor
+	// would otherwise extract it as a wrapped cause, and a wrapped cause changes
+	// how WrapGRPC serialises the status. The context-cancelled class is carried
+	// by the ERR_CONTEXT_CANCELED code alone.
+	return errors.WrapGRPC(errors.NewContextCanceledError(
+		"block assembly ingest cancelled while waiting for queue room: %s", ctx.Err().Error()))
 }
 
 // AddTxBatch processes a batch of transactions for block assembly.
@@ -1239,11 +1346,15 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 		txInpointsList[i] = &txInpointsArr[i]
 	}
 
-	prometheusBlockAssemblyAddTxCounter.Add(float64(len(nodes))) // gosec:nolint
-
 	// Add entire batch in one call
 	if !ba.settings.BlockAssembly.Disabled {
-		ba.blockAssembler.AddTxBatch(nodes, txInpointsList)
+		if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList); err != nil {
+			return nil, err
+		}
+
+		// Counted after the enqueue, never before: a shed returns above, so the add
+		// rate stays reconcilable against queue_shed_total.
+		prometheusBlockAssemblyAddTxCounter.Add(float64(len(nodes))) // gosec:nolint
 	}
 
 	return &blockassembly_api.AddTxBatchResponse{Ok: true}, nil
@@ -1419,9 +1530,13 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 		txInpointsList[i] = &txInpointsArr[i]
 	}
 
-	prometheusBlockAssemblyAddTxCounter.Add(float64(len(nodes))) // gosec:nolint
+	if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList); err != nil {
+		return nil, err
+	}
 
-	ba.blockAssembler.AddTxBatch(nodes, txInpointsList)
+	// Counted after the enqueue, never before, as on the other two ingest handlers.
+	// Unreachable on a disabled node, which returns early above.
+	prometheusBlockAssemblyAddTxCounter.Add(float64(len(nodes))) // gosec:nolint
 
 	return &blockassembly_api.AddTxBatchResponse{Ok: true}, nil
 }
@@ -2246,6 +2361,36 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 		CurrentHash:           currentHeader.Hash().String(),
 		RemoveMapCount:        removeMapLen32,
 		Subtrees:              subtreeHashesStrings,
+		QueueHeadAgeMillis:    ba.blockAssembler.QueueHeadAge().Milliseconds(),
+	}, nil
+}
+
+// GetBlockAssemblyQueueStats returns a slim, atomic-only view of the ingest
+// queue (depth + head-batch age) for high-frequency control reads such as the
+// validator's Kafka backpressure controller. Unlike GetBlockAssemblyState it
+// deliberately does not call GetSubtreeHashes, so it never blocks on the
+// subtree-processor main loop and always returns immediately even while that
+// loop is stalled.
+//
+// The reported double-spend window makes the signal self-describing: the head
+// age structurally includes this process's drain floor, and the reader that
+// subtracts it lives in a different process with its own settings context. It is
+// read from the same setting the drain loop applies, so the description cannot
+// drift from the behaviour it describes.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - _: Empty message request (unused)
+//
+// Returns:
+//   - *blockassembly_api.QueueStatsMessage: Queue depth, head-batch age, the applied double-spend window and the enforced item cap
+//   - error: Always nil; both queue values are atomic loads that cannot fail
+func (ba *BlockAssembly) GetBlockAssemblyQueueStats(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.QueueStatsMessage, error) {
+	return &blockassembly_api.QueueStatsMessage{
+		QueueCount:              ba.blockAssembler.QueueLength(),
+		QueueHeadAgeMillis:      ba.blockAssembler.QueueHeadAge().Milliseconds(),
+		DoubleSpendWindowMillis: ba.settings.BlockAssembly.DoubleSpendWindow.Milliseconds(),
+		QueueMaxItems:           ba.blockAssembler.QueueMaxItems(),
 	}, nil
 }
 

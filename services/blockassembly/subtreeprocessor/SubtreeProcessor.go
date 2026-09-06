@@ -528,7 +528,8 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 		return nil, errors.NewInvalidArgumentError("error adding coinbase placeholder to first subtree", err)
 	}
 
-	queue := NewLockFreeQueue()
+	maxQueueItems := normalizeMaxQueueItems(logger, tSettings.BlockAssembly.MaxQueueItems, tSettings.BlockAssembly.SendBatchSize)
+	queue := NewLockFreeQueueWithLimit(maxQueueItems)
 
 	// Calculate subtree sample size based on expected block time
 	// With ~10 min blocks, 18 samples = ~3 hours of history
@@ -1950,6 +1951,15 @@ func (stp *SubtreeProcessor) TxCount() uint64 {
 // number of batches - see LockFreeQueue.length for why that distinction
 // matters.
 //
+// For items added through the bounded reservation path (AddBatchIfRoom), this
+// counts reserved-or-published items: while a failed reservation is being rolled
+// back the value can transiently read slightly higher than the number of
+// dequeuable items, but it never reads lower than the published-outstanding
+// count — the directional guarantee the state-transition drain snapshot relies
+// on. The unbounded AddBatch path now reserves before publishing too, so it
+// upholds that same guarantee; it additionally bypasses the cap entirely and is
+// not used by the ingest handlers.
+//
 // Returns:
 //   - int64: Current queue length, in transactions
 func (stp *SubtreeProcessor) QueueLength() int64 {
@@ -2009,6 +2019,31 @@ func (stp *SubtreeProcessor) ConsumerStarted() bool {
 //   - bool: true once the consumer goroutine has exited
 func (stp *SubtreeProcessor) ConsumerExited() bool {
 	return stp.stopped.Load()
+}
+
+// QueueMaxItems returns the enforced (normalized) ingest-queue item cap, or a
+// value <= 0 when the queue is unbounded. It is the cap the reservation path
+// actually enforces, reported in the queue-full shed message.
+//
+// Returns:
+//   - int64: The enforced item cap (<= 0 when unbounded)
+func (stp *SubtreeProcessor) QueueMaxItems() int64 {
+	return stp.queue.MaxItems()
+}
+
+// QueueHeadAge returns how long the oldest batch still in the ingest queue has
+// been waiting. It is a diagnostic gauge for dispatcher-stall visibility and is
+// safe to call from a monitoring goroutine; it returns 0 when the queue is empty.
+//
+// Returns:
+//   - time.Duration: Age of the oldest queued batch, or 0 if the queue is empty
+func (stp *SubtreeProcessor) QueueHeadAge() time.Duration {
+	// Use the queue's injectable clock, the same source publish stamps batches
+	// with, so the age is a difference of two readings of one clock rather than a
+	// mix of the fake clock and wall time — deterministic under a fake clock and
+	// consistent with every other queue time comparison.
+	ageMillis := stp.queue.headAgeMillis(stp.queue.clock.Now().UnixMilli())
+	return time.Duration(ageMillis) * time.Millisecond
 }
 
 // SubtreeCount returns the total number of subtrees.
@@ -2597,13 +2632,35 @@ func (stp *SubtreeProcessor) updateChainedSubtreeCounts() {
 	stp.chainedSubtreesTotalSize.Store(totalSize)
 }
 
-// AddBatch adds a batch of transaction nodes to the processor queue.
+// AddBatch adds a batch of transaction nodes to the processor queue
+// unconditionally. This path bypasses the capacity bound but, like
+// AddBatchIfRoom, reserves its items before publishing so it upholds the
+// queueLength >= published-outstanding invariant; callers needing the bound must
+// use AddBatchIfRoom.
+//
+// Its only non-test caller is the teranodecli subtree benchmark, which drives the
+// processor directly and wants no cap. The ingest handlers must use AddBatchIfRoom:
+// this method is what the queue bound exists to keep them away from.
 //
 // Parameters:
 //   - nodes: Transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
 func (stp *SubtreeProcessor) AddBatch(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) {
 	stp.queue.enqueueBatch(nodes, txInpoints)
+}
+
+// AddBatchIfRoom adds a batch of transaction nodes to the processor queue only
+// if the configured capacity bound would not be exceeded, reporting whether it
+// did. When no bound is configured it never refuses, behaving as AddBatch.
+//
+// Parameters:
+//   - nodes: Transaction nodes to add
+//   - txInpoints: Parent transaction references for each node
+//
+// Returns:
+//   - bool: true if the batch was enqueued, false if it was refused for room
+func (stp *SubtreeProcessor) AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) bool {
+	return stp.queue.enqueueBatchIfRoom(nodes, txInpoints)
 }
 
 // AddDirectly adds a transaction node directly to the subtree processor without going through the queue.

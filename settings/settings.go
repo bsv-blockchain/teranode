@@ -314,6 +314,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SplitMapBuckets:                      getInt("blockassembly_splitMapBuckets", 16*1024, alternativeContext...),
 			StoreTxInpointsForSubtreeMeta:        getBool("blockassembly_storeTxInpointsForSubtreeMeta", true, alternativeContext...),
 			IdleSleepDuration:                    getDuration("blockassembly_idle_sleep_duration", 10*time.Millisecond, alternativeContext...),
+			MaxQueueItems:                        getInt64("blockassembly_maxQueueItems", 0, alternativeContext...),
+			QueueFullWaitTimeout:                 getDuration("blockassembly_queueFullWaitTimeout", 100*time.Millisecond, alternativeContext...),
 		},
 
 		BlockChain: BlockChainSettings{
@@ -435,6 +437,10 @@ func NewSettings(alternativeContext ...string) *Settings {
 			TxLockedMaxRetries:                   getInt("validator_txlocked_maxRetries", 3, alternativeContext...),
 			TxMetaWireFormat:                     getString("validator_txmeta_wireFormat", "v1", alternativeContext...),
 			TxMetaNumPartitions:                  getInt("validator_txmeta_numPartitions", 32, alternativeContext...),
+			BlockAssemblyShedRetryTimeout:        getDuration("validator_blockAssemblyShedRetryTimeout", 2*time.Second, alternativeContext...),
+			ShedUnwindTimeout:                    getDuration("validator_shedUnwindTimeout", 2*time.Second, alternativeContext...),
+			HandoffRoundTripSlack:                getDuration("validator_handoffRoundTripSlack", 500*time.Millisecond, alternativeContext...),
+			KafkaBackpressure:                    loadValidatorKafkaBackpressureSettings(alternativeContext...),
 		},
 		Region: RegionSettings{
 			Name: getString("regionName", "defaultRegionName", alternativeContext...),

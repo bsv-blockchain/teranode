@@ -323,6 +323,25 @@ func (b *BlockAssembler) ConsumerExited() bool {
 	return b.subtreeProcessor.ConsumerExited()
 }
 
+// QueueMaxItems returns the enforced (normalized) ingest-queue item cap, or a
+// value <= 0 when the queue is unbounded.
+//
+// Returns:
+//   - int64: The enforced item cap (<= 0 when unbounded)
+func (b *BlockAssembler) QueueMaxItems() int64 {
+	return b.subtreeProcessor.QueueMaxItems()
+}
+
+// QueueHeadAge returns how long the oldest queued batch has been waiting.
+// It is a diagnostic gauge for dispatcher-stall visibility and returns 0 when
+// the queue is empty.
+//
+// Returns:
+//   - time.Duration: Age of the oldest queued batch, or 0 if empty
+func (b *BlockAssembler) QueueHeadAge() time.Duration {
+	return b.subtreeProcessor.QueueHeadAge()
+}
+
 // SubtreeCount returns the total number of subtrees.
 //
 // Returns:
@@ -1518,13 +1537,20 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 	return info.Header, info.Height
 }
 
-// AddTxBatch adds a batch of transactions to the block assembler.
+// AddTxBatchIfRoom adds a batch of transactions to the block assembler only if
+// the configured queue bound would not be exceeded, reporting whether it did.
+// When no bound is configured it never refuses, so it is the only batch entry
+// point this type offers: an unbounded variant alongside it is a cap bypass
+// waiting for the next caller to reach for the shorter name.
 //
 // Parameters:
 //   - nodes: Transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
-func (b *BlockAssembler) AddTxBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) {
-	b.subtreeProcessor.AddBatch(nodes, txInpoints)
+//
+// Returns:
+//   - bool: true if the batch was enqueued, false if it was refused for room
+func (b *BlockAssembler) AddTxBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
+	return b.subtreeProcessor.AddBatchIfRoom(nodes, txInpoints)
 }
 
 // RemoveTx removes a transaction from the block assembler.
@@ -3121,7 +3147,7 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, validateIn
 	// unlock any locked transactions
 	if len(lockedTransactions) > 0 {
 		if err = b.utxoStore.SetLocked(ctx, lockedTransactions, false); err != nil {
-			return errors.NewProcessingError("[BlockAssembler] failed to unlock %d unmined transactions: %v", len(lockedTransactions), err)
+			return errors.NewProcessingError("[BlockAssembler] failed to unlock %d unmined transactions so block assembly cannot start on this attempt; the store error below names the transaction and the record that rejected the unlock: %v", len(lockedTransactions), err)
 		} else {
 			b.logger.Infof("[BlockAssembler] unlocked %d previously locked unmined transactions", len(lockedTransactions))
 		}
@@ -3563,7 +3589,7 @@ func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context
 	// Unlock any locked transactions
 	if len(lockedTransactions) > 0 {
 		if err = b.utxoStore.SetLocked(ctx, lockedTransactions, false); err != nil {
-			return errors.NewProcessingError("[BlockAssembler] failed to unlock %d unmined transactions: %v", len(lockedTransactions), err)
+			return errors.NewProcessingError("[BlockAssembler] failed to unlock %d unmined transactions so block assembly cannot start on this attempt; the store error below names the transaction and the record that rejected the unlock: %v", len(lockedTransactions), err)
 		}
 		b.logger.Infof("[BlockAssembler] unlocked %d previously locked unmined transactions", len(lockedTransactions))
 	}

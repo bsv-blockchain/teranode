@@ -89,6 +89,9 @@ All metrics are CounterVec type with labels: `function` (handler function name),
 | `teranode_blockassembly_add_directly_seconds`                             | Histogram    | Time taken for individual AddDirectly calls to subtree processor                |
 | `teranode_blockassembly_add_directly_total`                               | Counter      | Total number of transactions added directly to subtree processor                |
 | `teranode_blockassembly_add_directly_batch_seconds`                       | Histogram    | Time taken to add all unmined transactions to subtree processor                 |
+| `teranode_blockassembly_queue_shed_total`                                 | Counter      | Number of ingest batches shed because the queue stayed full past `blockassembly_queueFullWaitTimeout`. Only possible when `blockassembly_maxQueueItems` is positive — **alert on this** |
+| `teranode_blockassembly_queue_wait_seconds`                               | Histogram    | Time an ingest handler waited for queue room before the batch was accepted or shed |
+| `teranode_blockassembly_queue_head_age_seconds`                           | Gauge        | How long the oldest queued batch has been waiting (0 when the queue is empty). The signal the validator's Kafka backpressure controller reads |
 
 ## Blockchain Service Metrics
 
@@ -339,6 +342,19 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_validator_set_tx_meta`                   | Histogram | Histogram of validator set tx meta                            |
 | `teranode_validator_parent_commit_retries`         | Counter   | Retries spent waiting for a parent transaction to finish committing, by `condition` (`TX_LOCKED`, `TX_CREATING`) |
 | `teranode_validator_parent_commit_exhausted`       | Counter   | Transactions rejected because the parent-commit retry budget ran out, by `condition` (`TX_LOCKED`, `TX_CREATING`) |
+| `teranode_validator_shed_unwind_total`             | Counter   | Number of times a queue-full shed's store work was unwound (record deleted, then inputs unspent) |
+| `teranode_validator_shed_unwind_failures_total`    | Counter   | Number of shed unwinds whose delete or unspend returned an error; pair with `shed_unwind_residue_total`, `shed_unwind_aborted_total` and `shed_unwind_unverified_total` to see what the failure left behind |
+| `teranode_validator_shed_unwind_aborted_total`     | Counter   | Number of shed unwinds abandoned because the record was still readable after a delete the store reported as successful (a store-contract violation; fix the wiring) |
+| `teranode_validator_shed_unwind_unverified_total`  | Counter   | Number of shed unwinds abandoned because the record's deletion could not be confirmed after the bounded retry, leaving its inputs spent (reconcile the logged outpoints) |
+| `teranode_validator_shed_unwind_residue_total`     | Counter   | Number of shed unwinds where the master record was deleted but the rest of the cascade failed. Nothing mineable survives and the inputs are then unspent unless the unspend itself fails, which increments `shed_unwind_failures_total` too and logs the outpoints for recovery. What can remain is orphan pagination children — locked, unspendable, and cleared only when a create of the same transaction adopts them — and/or an external blob, which carries no UTXO semantics and is kept as-is by a later create |
+| `teranode_validator_shed_dropped_total`            | Counter   | Number of transactions dropped after the bounded block assembly handoff retry on the Kafka ingest path. Propagation already returned success to the submitter, so these drops are silent to the client — **alert on this** |
+| `teranode_validator_handoff_deadline_total`        | Counter   | Number of block assembly handoffs that hit the validator's own handoff deadline, so the shed was neither classified nor unwound. Recurring values suggest `blockassembly_queueFullWaitTimeout` differs between this process and block assembly |
+| `teranode_validator_existing_tx_locked_unmined_total` | Counter | Number of resubmits that found an existing transaction record locked, unmined and not conflicting |
+| `teranode_validator_kafka_backpressure_paused`     | Gauge     | 1 while the backpressure controller has the tx Kafka consumer paused, 0 otherwise |
+| `teranode_validator_kafka_backpressure_pause_total`  | Counter | Number of pause transitions made by the backpressure controller               |
+| `teranode_validator_kafka_backpressure_resume_total` | Counter | Number of resume transitions, including fail-open and max-pause resumes       |
+| `teranode_validator_kafka_backpressure_paused_seconds_total` | Counter | Total seconds the tx consumer has spent paused by the controller      |
+| `teranode_validator_kafka_backpressure_read_errors` | Gauge    | Current consecutive queue-stats read-error streak (resets to 0 on a good read) |
 
 ## TxMetaCache Service Metrics
 

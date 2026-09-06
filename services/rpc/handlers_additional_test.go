@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
@@ -5962,6 +5963,9 @@ func (m *mockBlockAssemblyClient) CheckBlockAssemblyValidateInputs(ctx context.C
 
 func (m *mockBlockAssemblyClient) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.StateMessage, error) {
 	return nil, nil
+}
+func (m *mockBlockAssemblyClient) GetBlockAssemblyQueueStats(ctx context.Context) (blockassembly.QueueStats, error) {
+	return blockassembly.QueueStats{}, nil
 }
 func (m *mockBlockAssemblyClient) GetBlockAssemblyBlockCandidate(ctx context.Context) (*model.Block, error) {
 	return nil, nil

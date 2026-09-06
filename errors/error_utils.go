@@ -5,6 +5,9 @@ import (
 	"context"
 	"errors"
 	"strings"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // IsRetryableError determines if an error is transient and the operation should be retried.
@@ -238,6 +241,40 @@ func IsContextError(err error) bool {
 	}
 
 	return false
+}
+
+// IsGRPCMessageTooLarge reports whether err is the TRANSPORT-level
+// ResourceExhausted that signals a message over the gRPC size limit, as opposed to
+// a block-assembly queue-full shed, which reuses the same gRPC code by way of
+// ERR_THRESHOLD_EXCEEDED.
+//
+// The distinction matters because only the former is fixable by re-sending the
+// same transaction over HTTP. Re-sending a shed drives a second full validation
+// against a node that has just reported itself saturated, and logs the overload as
+// a message-size problem.
+//
+// It lives here rather than in a service package for two reasons: it is a pure
+// error-classification predicate with no service dependencies, and it belongs next
+// to the round-trip convention it enforces — application control flow keys on the
+// reconstructed ERR code that WrapGRPC/UnwrapGRPC carry in the status detail, not
+// on the gRPC code. One helper, called from every site, is also what stops the two
+// clients' rules from drifting apart.
+//
+// A non-status error yields false, which preserves the "not a status error →
+// unwrap and return" behaviour at the call sites.
+//
+// Parameters:
+//   - err: Error to classify (typically straight off a gRPC call)
+//
+// Returns:
+//   - bool: true only for a ResourceExhausted that is not a threshold-exceeded shed
+func IsGRPCMessageTooLarge(err error) bool {
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.ResourceExhausted {
+		return false
+	}
+
+	return !Is(UnwrapGRPC(err), ErrThresholdExceeded)
 }
 
 // IsLocalError checks if an error is a local resource error (not peer-related).

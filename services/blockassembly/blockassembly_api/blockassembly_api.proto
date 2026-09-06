@@ -74,6 +74,13 @@ service BlockAssemblyAPI {
   // Provides detailed information about the assembly process status.
   rpc GetBlockAssemblyState (EmptyMessage) returns (StateMessage) {}
 
+  // GetBlockAssemblyQueueStats retrieves a slim view of the ingest queue for
+  // high-frequency control reads (e.g. a backpressure controller). It returns
+  // only the queue depth and the head-batch age, both backed by atomic loads,
+  // so it never blocks on the subtree-processor main loop the way
+  // GetBlockAssemblyState can (that call may wait up to 1s on GetSubtreeHashes).
+  rpc GetBlockAssemblyQueueStats (EmptyMessage) returns (QueueStatsMessage) {}
+
   // GenerateBlocks creates new blocks (typically for testing purposes).
   // Allows specification of block count and recipient address.
   rpc GenerateBlocks (GenerateBlocksRequest) returns (EmptyMessage) {}
@@ -251,6 +258,28 @@ message StateMessage {
   string currentHash = 8; // the hash of the chaintip
   uint32 removeMapCount = 9; // the number of transactions in the remove map
   repeated string subtrees = 10; // the hashes of the current subtrees
+  int64 queueHeadAgeMillis = 11; // how long the oldest queued batch has been waiting, in milliseconds (0 when empty)
+}
+
+// Slim, atomic-only view of the block-assembly ingest queue, intended for
+// high-frequency control reads. Unlike StateMessage this carries no
+// subtree-hash list, so the handler never touches the subtree-processor main
+// loop and always returns immediately.
+message QueueStatsMessage {
+  int64 queueCount = 1; // the current depth of the ingest queue
+  int64 queueHeadAgeMillis = 2; // how long the oldest queued batch has been waiting, in milliseconds (0 when empty)
+  // The drain floor this producer applies before a queued batch is eligible to
+  // be dequeued, in milliseconds. Under load the head age structurally includes
+  // this hold-back, so a reader that makes a control decision on the age must
+  // subtract the value reported here rather than its own setting: the two
+  // settings contexts are independent processes, and a mismatch would otherwise
+  // either pause ingest forever or disable the control entirely, silently.
+  int64 doubleSpendWindowMillis = 3;
+  // The enforced (normalized) item ceiling this producer applies, or <= 0 when
+  // the queue is unbounded. Reported rather than read from the reader's own
+  // settings for the same reason as doubleSpendWindowMillis: the two settings
+  // contexts are independent processes.
+  int64 queueMaxItems = 4;
 }
 
 // Response containing the difficulty required for the next block (not the
