@@ -1023,6 +1023,15 @@ func Test_SmokeTests(t *testing.T) {
 		tests.SpendErrorTypes(t, db)
 	})
 
+	t.Run("partial spend rollback", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.PartialSpendRollback(t, db)
+	})
+
 	t.Run("get spend not found", func(t *testing.T) {
 		db, _ := setup(ctx, t)
 

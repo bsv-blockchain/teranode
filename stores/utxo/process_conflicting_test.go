@@ -179,9 +179,25 @@ func TestProcessConflicting_UnspendError(t *testing.T) {
 	mockStore.On("Unspend", mock.Anything, mock.Anything, mock.Anything).
 		Return(errors.NewProcessingError("unspend failed"))
 
-	// step 2 failed → rollback only undoes step 1 (clear conflicting flag).
+	// A failed step 2 is treated as PARTIALLY committed, so the rollback attempts
+	// the step-2 undo as well as step 1. Unspend is best-effort-over-all: it tries
+	// every spend and returns an aggregate, so an error means "some, possibly
+	// nearly all, spends were reverted" — skipping the compensating re-spend would
+	// leave the most uncompensated state precisely when it failed. The re-spend is
+	// idempotent for the caller that owns these spends.
+	mockStore.On("Get", mock.Anything, &losingTxHash, mock.Anything).Return(&meta.Data{
+		Tx: createTestTransaction(),
+	}, nil)
+
+	mockStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil)
+
+	// rollback then clears the conflicting flag (undo of step 1)
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{losingTxHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil)
+
+	// and unlocks the parents the failed step 2 may have locked
+	mockStore.On("SetLocked", mock.Anything, mock.Anything, false).Return(nil).Maybe()
 
 	// Execute test
 	result, _, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, conflictingTxHashes, map[chainhash.Hash]struct{}{})

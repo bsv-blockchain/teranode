@@ -3225,7 +3225,27 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		// try to process one last time
 		// passing in block height 0, which will default to utxo store block height in validator
 		if _, err := sm.validationClient.Validate(sm.ctx, orphanTx.tx, 0); err != nil {
-			sm.logger.Debugf("failed to validate orphan transaction when evicting %v: %v", txHash, err)
+			// The tx is now dropped for good: it never validated and nothing will
+			// retry it. This is the event that hid the #1214 ghost-spender incident
+			// for ~40 hours, so every abandonment is counted — the metric is the
+			// dashboard signal.
+			//
+			// Only ErrTxMissingParent is demoted to Debugf: the orphan outlived its
+			// wait for a parent that never arrived, which is the normal outcome for a
+			// chunk of orphans during initial sync and carries no operator signal.
+			// ErrTxLocked stays at WARN even though the parking path treats it as an
+			// orphan class alongside ErrTxMissingParent — it means the parent's record
+			// is still two-phase-commit locked pending block-assembly ack, a window
+			// measured in milliseconds, so a lock that outlived the whole orphan TTL
+			// is anomalous rather than routine. Everything else (policy rejection,
+			// storage failure) stays at WARN for the obvious reason.
+			prometheusLegacyNetsyncOrphansAbandoned.Inc()
+
+			if errors.Is(err, errors.ErrTxMissingParent) {
+				sm.logger.Debugf("orphan transaction %v abandoned after eviction, never validated: %v", txHash, err)
+			} else {
+				sm.logger.Warnf("orphan transaction %v abandoned after eviction, never validated: %v", txHash, err)
+			}
 		} else {
 			sm.logger.Debugf("evicted orphan transaction %v", txHash)
 		}

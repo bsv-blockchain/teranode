@@ -295,11 +295,21 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 	step1Committed = true
 
 	// - 2: un-spend txa, marking the input txs as not spendable (txp & txq)
+	//
+	// step2Committed is set BEFORE the error check on purpose. Unspend is
+	// best-effort-over-all: it attempts every spend and returns an aggregate, so a
+	// failure means "some, possibly nearly all, spends were reverted" — not "none
+	// were". Gating the compensating re-spend below on full success would skip the
+	// undo in exactly the case that leaves the most uncompensated state, while the
+	// step-4 undo runs unconditionally. Treat a failed step 2 as partially
+	// committed instead: the compensating re-spend is idempotent for the caller
+	// that owns these spends (the Lua same-spender path is a no-op), so running it
+	// after a partial or even total failure is safe, whereas skipping it is not.
+	step2Committed = true
+
 	if err = s.Unspend(ctx, affectedParentSpends, true); err != nil {
 		return nil, nil, errors.NewProcessingError("error unspending affected parent spends", err)
 	}
-
-	step2Committed = true
 
 	// get the unique hashes of the transactions that were marked as not spendable
 	markedAsNotSpendableHashesUnique := make(map[chainhash.Hash]struct{})
