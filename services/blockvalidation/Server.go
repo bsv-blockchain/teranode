@@ -678,6 +678,14 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		return errors.NewConfigurationError("could not get utxostore URL", err)
 	}
 
+	// Fail startup on a misconfigured mmap dir rather than letting
+	// subtreeFromBytesWithMmap silently fall back to heap allocation on every
+	// subtree load — that would defeat the RAM-reduction feature without any
+	// visible signal to the operator.
+	if err := util.ValidateWritableDir(u.settings.BlockValidation.SubtreeMmapDir); err != nil {
+		return errors.NewConfigurationError("blockvalidation_subtreeMmapDir is not usable", err)
+	}
+
 	// Only create a new BlockValidation if one wasn't already set (for testing)
 	if u.blockValidation == nil {
 		u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient)

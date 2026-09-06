@@ -461,7 +461,7 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 			return nil, errors.NewStorageError("[catchup:fetchAndStoreSubtree] Failed to get existing subtree for %s", subtreeHash.String(), err)
 		}
 
-		subtree, err := subtreeFromBytesWithMmap(subtreeBytes, u.settings.BlockValidation.SubtreeMmapDir)
+		subtree, err := subtreeFromBytesWithMmap(u.logger, subtreeBytes, u.settings.BlockValidation.SubtreeMmapDir)
 		if err != nil {
 			return nil, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Failed to deserialize existing subtree for %s", subtreeHash.String(), err)
 		}

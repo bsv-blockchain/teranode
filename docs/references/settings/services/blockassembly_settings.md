@@ -48,6 +48,8 @@
 | CoinbaseRecoveryMaxGapBlocks         | int           | 200              | blockassembly_coinbaseRecoveryMaxGapBlocks         | Startup scan window below the tip, and the largest coinbase gap auto-repair will fix |
 | CoinbaseRecoveryConsecutiveGood      | int           | 6                | blockassembly_coinbaseRecoveryConsecutiveGood      | Consecutive present coinbases proving the gap floor during walk-back                 |
 | CoinbaseRecoveryMaxAttempts          | int           | 3                | blockassembly_coinbaseRecoveryMaxAttempts          | Automatic coinbase-recovery attempts before raising an operator alert                |
+| SubtreeMmapDir                       | string        | ""               | blockassembly_subtreeMmapDir                       | Directory for mmap-backed subtree Node storage (off-heap, RAM/disk tradeoff)          |
+| TxMapDirs                            | []string      | []               | blockassembly_txMapDirs                            | Pipe-separated directories for disk-backed transaction map storage, striped by disk   |
 
 ## Coinbase Divergence Recovery
 
@@ -157,6 +159,29 @@ divergence had already closed by the time recovery scoped it. `aborted` means th
 was shut down while a repair was still retrying — nothing is known to be wrong in that
 case, and it deliberately raises no alarm, so a node stopped mid-boot does not tell its
 operator that the UTXO state needs manual intervention.
+
+## Off-Heap Storage (SubtreeMmapDir / TxMapDirs)
+
+Both settings are off (empty) by default; production behaviour is unchanged
+unless an operator explicitly configures a directory.
+
+- `SubtreeMmapDir` moves the in-progress subtree's Node array off the Go heap
+  into a file-backed mmap region, eliminating GC pressure for that data. The
+  OS pages the mapping between RAM and disk as needed, so the effective
+  capacity is bounded by disk rather than RAM.
+- `TxMapDirs` moves the in-progress block's transaction-input-point map off
+  the heap into one BadgerDB instance per configured directory. Each entry
+  is assigned to a directory by hashing the transaction hash, so multiple
+  directories (ideally separate physical disks) stripe write I/O for
+  roughly N× throughput with N disks; a single directory is single-disk mode.
+
+Trade-off: enabling either setting reduces heap/RSS and GC pauses at the cost
+of disk I/O and the disk space each directory must have available. Both
+directories are validated at service startup (must exist and be writable) so
+a misconfiguration fails fast instead of silently running heap-only with no
+indication the feature never turned on. Set to a fast SSD/NVMe mount; do not
+point at a filesystem that can fill up during normal operation, since a full
+disk degrades throughput for the in-progress block.
 
 ## Hardcoded Settings (Not Configurable)
 

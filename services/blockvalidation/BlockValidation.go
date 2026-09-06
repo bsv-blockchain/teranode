@@ -293,13 +293,21 @@ type BlockValidation struct {
 }
 
 // subtreeFromBytesWithMmap creates a subtree from bytes, using mmap if dir is non-empty.
-// Falls back to heap allocation on mmap failure.
-func subtreeFromBytesWithMmap(b []byte, mmapDir string) (*subtreepkg.Subtree, error) {
+// Falls back to heap allocation on mmap failure. The startup path (Server.Init)
+// validates the configured directory is writable, so a failure here is expected
+// to be a transient runtime condition (e.g. disk filled up after startup) rather
+// than a persistent misconfiguration; it is logged rather than silently swallowed
+// so the degraded (heap) state stays visible to the operator.
+func subtreeFromBytesWithMmap(logger ulogger.Logger, b []byte, mmapDir string) (*subtreepkg.Subtree, error) {
 	if mmapDir != "" {
 		st, err := subtreepkg.NewSubtreeFromReaderMmap(bytes.NewReader(b), mmapDir)
 		if err != nil {
-			// mmap failed — fall back to heap. This can happen if the mmap dir is
-			// misconfigured, out of disk, or permissions are wrong.
+			// mmap failed — fall back to heap. This can happen if the mmap dir
+			// became unwritable (disk full, permissions changed) after startup.
+			if logger != nil {
+				logger.Warnf("[subtreeFromBytesWithMmap] mmap deserialization failed for dir %s, falling back to heap: %v", mmapDir, err)
+			}
+
 			return subtreepkg.NewSubtreeFromBytes(b)
 		}
 		return st, nil
@@ -309,7 +317,7 @@ func subtreeFromBytesWithMmap(b []byte, mmapDir string) (*subtreepkg.Subtree, er
 
 // newSubtreeFromBytes creates a subtree from bytes, using mmap when configured.
 func (u *BlockValidation) newSubtreeFromBytes(b []byte) (*subtreepkg.Subtree, error) {
-	return subtreeFromBytesWithMmap(b, u.mmapDir)
+	return subtreeFromBytesWithMmap(u.logger, b, u.mmapDir)
 }
 
 // subtreeStoreWrapper wraps blob.Store to implement model.SubtreeStoreWriter

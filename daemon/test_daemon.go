@@ -168,6 +168,15 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	appSettings = settings.NewSettings() // This reads gocore.Config and applies sensible defaults
 
+	// Off-heap mmap/disk-backed storage settings are opt-in and validated (must
+	// exist and be writable) at service construction/startup. A developer's
+	// local settings_local.conf may legitimately point these at real
+	// directories for manual testing of the feature; reset them here so
+	// daemon-based tests never depend on paths that only exist on one machine.
+	appSettings.BlockAssembly.SubtreeMmapDir = ""
+	appSettings.BlockAssembly.TxMapDirs = nil
+	appSettings.BlockValidation.SubtreeMmapDir = ""
+
 	// Generate a unique context for this TestDaemon to ensure util.GetListener
 	// creates unique listeners instead of returning cached ones from another TestDaemon.
 	// The counter ensures uniqueness even when tests run in quick succession.

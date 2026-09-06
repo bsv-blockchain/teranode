@@ -243,9 +243,19 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 
 	var stpOpts []subtreeprocessor.Options
 	if tSettings.BlockAssembly.SubtreeMmapDir != "" {
+		if err := util.ValidateWritableDir(tSettings.BlockAssembly.SubtreeMmapDir); err != nil {
+			return nil, errors.NewConfigurationError("blockassembly_subtreeMmapDir is not usable", err)
+		}
+
 		stpOpts = append(stpOpts, subtreeprocessor.WithMmapDir(tSettings.BlockAssembly.SubtreeMmapDir))
 	}
 	if len(tSettings.BlockAssembly.TxMapDirs) > 0 {
+		for _, dir := range tSettings.BlockAssembly.TxMapDirs {
+			if err := util.ValidateWritableDir(dir); err != nil {
+				return nil, errors.NewConfigurationError("blockassembly_txMapDirs is not usable", err)
+			}
+		}
+
 		stpOpts = append(stpOpts, subtreeprocessor.WithTxMapDirs(tSettings.BlockAssembly.TxMapDirs))
 	}
 
