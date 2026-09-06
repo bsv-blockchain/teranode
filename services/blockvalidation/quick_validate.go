@@ -226,6 +226,19 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		// This function waits for all processing to complete before returning, ensuring block.ID is set
 		_, err = u.processBlockSubtrees(ctx, block, outpointOnly)
 		if err != nil {
+			// A consensus rejection (e.g. the CVE-2012-2459 check in scanBatchForDuplicates)
+			// must keep ErrBlockInvalid as its OWN code, not merely somewhere in its chain.
+			// (*Error).Is walks the chain, so the errors.Is(err, ErrBlockInvalid) consumers
+			// would still match a re-wrapped one; what re-wrapping changes is that the
+			// rejection additionally satisfies ErrProcessing, so any consumer classifying on
+			// the top-level code, or testing ErrProcessing first, reads a consensus rejection
+			// as a transient fault. Re-wrap as BlockInvalid rather than passing through bare,
+			// so the block hash and entry point survive — the callee's message carries only a
+			// txid, which on a stalled sync gives no block, height or peer to act on.
+			if errors.Is(err, errors.ErrBlockInvalid) {
+				return errors.NewBlockInvalidError("[quickValidateBlock][%s] block rejected", block.Hash().String(), err)
+			}
+
 			return errors.NewProcessingError("[quickValidateBlock][%s] failed to process block subtrees", block.Hash().String(), err)
 		}
 
@@ -301,6 +314,17 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		}
 		_, err = u.processBlockSubtreesPipelineAsync(ctx, block, prefetchDepth, writeJobsChan, outpointOnly)
 		if err != nil {
+			// Same treatment as quickValidateBlock, for the same reason, and likewise
+			// re-wrapped as BlockInvalid so the block hash and entry point reach the log.
+			// On this (catchup) route it has no behavioural effect today — tryQuickValidation
+			// inspects only ErrBlockIncomplete; for every other error it discards the subtree
+			// files, swallows the error and falls back to normal validation, which re-checks
+			// the block properly. It is kept so both quick-path entry points classify the
+			// same rejection identically.
+			if errors.Is(err, errors.ErrBlockInvalid) {
+				return errors.NewBlockInvalidError("[quickValidateBlockAsync][%s] block rejected", block.Hash().String(), err)
+			}
+
 			return errors.NewProcessingError("[quickValidateBlockAsync][%s] failed to process block subtrees", block.Hash().String(), err)
 		}
 	}
@@ -407,6 +431,14 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 	// Track extended transactions across batches for same-block parent resolution
 	extendedTxs := make(map[chainhash.Hash]*bt.Tx)
 
+	// CVE-2012-2459 floor, accumulated across every batch of this block.
+	dedup, err := u.newDuplicateTxScanner(block)
+	if err != nil {
+		return 0, err
+	}
+
+	defer dedup.Release()
+
 	// Process subtrees in batches
 	subtreeBatchSize := u.settings.BlockValidation.SubtreeBatchSize
 	for batchStart := 0; batchStart < numSubtrees; batchStart += subtreeBatchSize {
@@ -443,6 +475,11 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 				}
 			}
 			blockIDSet = true
+		}
+
+		// Phase 4.5: CVE-2012-2459 floor — must precede every write below.
+		if err := scanBatchForDuplicates(batch, dedup); err != nil {
+			return 0, err
 		}
 
 		// Phase 5-6: Create and spend UTXOs (quick validation specific - bypasses service validation)
@@ -491,6 +528,15 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 
 	// Channel for extended batches ready for UTXO ops
 	extendedChan := make(chan *SubtreeProcessingBatch, prefetchDepth)
+
+	// CVE-2012-2459 floor, accumulated across every batch of this block. Only the
+	// single processing goroutine below touches it, one batch at a time.
+	dedup, err := u.newDuplicateTxScanner(block)
+	if err != nil {
+		return 0, err
+	}
+
+	defer dedup.Release()
 
 	g, gCtx := errgroup.WithContext(ctx)
 
@@ -574,6 +620,12 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 				blockIDSet = true
 			}
 
+			// CVE-2012-2459 floor — before the fan-out, so a duplicate is rejected with
+			// neither the UTXO writes nor the subtree files applied.
+			if err := scanBatchForDuplicates(batch, dedup); err != nil {
+				return err
+			}
+
 			// Run UTXO ops and file writes in parallel for this batch
 			start := time.Now()
 			var utxoDuration, writeDuration time.Duration
@@ -633,6 +685,15 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 
 	// Channel for extended batches ready for UTXO ops
 	extendedChan := make(chan *SubtreeProcessingBatch, prefetchDepth)
+
+	// CVE-2012-2459 floor, accumulated across every batch of this block. Only the
+	// single processing goroutine below touches it, one batch at a time.
+	dedup, err := u.newDuplicateTxScanner(block)
+	if err != nil {
+		return 0, err
+	}
+
+	defer dedup.Release()
 
 	g, gCtx := errgroup.WithContext(ctx)
 
@@ -706,6 +767,14 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 				blockIDSet = true
 			}
 
+			// CVE-2012-2459 floor — before the fan-out. On this variant that also keeps a
+			// doctored subtree out of writeJobsChan, which subtreeWriteWorker would
+			// otherwise write with WithAllowOverwrite(true) after catchup's cleanup pass.
+			if err := scanBatchForDuplicates(batch, dedup); err != nil {
+				batch.Close()
+				return err
+			}
+
 			// Run UTXO ops and subtree building in parallel
 			// Subtree building sets block.SubtreeSlices and queues write jobs
 			start := time.Now()
@@ -754,6 +823,11 @@ func (u *BlockValidation) validateSubtrees(ctx context.Context, block *model.Blo
 			return 0, errors.NewProcessingError("[validateSubtrees][%s] subtree %d size mismatch", block.Hash().String(), i)
 		}
 	}
+
+	// The CVE-2012-2459 duplicate check does NOT live here. It runs per batch, in
+	// scanBatchForDuplicates, before that batch's UTXO writes and subtree-file writes —
+	// see the comment there for why placing it at this point would be too late and would
+	// scan the wrong transaction list.
 
 	// Verify merkle root
 	if err := block.CheckMerkleRoot(ctx); err != nil {
@@ -1219,6 +1293,54 @@ func (u *BlockValidation) processSubtreeBatch(
 
 	cancelReaders()
 	return batch, nil
+}
+
+// newDuplicateTxScanner builds the per-block CVE-2012-2459 scanner, sized from the
+// block's own transaction count and honouring the same DiskMapDirs setting the full
+// validation path uses. The count is only an allocation hint — model clamps anything
+// above the largest pooled size class — so a peer-inflated count cannot turn this into
+// an unbounded allocation.
+func (u *BlockValidation) newDuplicateTxScanner(block *model.Block) (*model.DuplicateTxScanner, error) {
+	dedup, err := model.NewDuplicateTxScanner(block.TransactionCount, u.settings.Block.DiskMapDirs)
+	if err != nil {
+		return nil, errors.NewProcessingError("[quickValidate][%s] failed to create duplicate-tx scanner", block.Hash().String(), err)
+	}
+
+	return dedup, nil
+}
+
+// scanBatchForDuplicates is the CVE-2012-2459 floor for the quick-validation path.
+//
+// It MUST be called for each batch before that batch is applied — before its UTXO
+// creates and spends, and before its subtree files are written — because on the two
+// pipeline variants those two run concurrently in the same errgroup. Calling it from
+// inside createAndSpendUTXOsForBatch would therefore still race the file writes and
+// leave a doctored subtree on disk under an honest subtree hash.
+//
+// It scans batch.batchTxs, the exact transactions about to be applied, rather than
+// block.SubtreeSlices: on a retry those slices are deserialized from a local .subtree
+// file (buildSubtreeAndQueueWrite) that can be a different transaction list than the
+// peer-supplied body being written, and a check that scans a different list than the
+// one applied is not a floor. batchTxs excludes the coinbase (readSubtree nils it), so
+// no coinbase-placeholder special case is needed here.
+//
+// Rejecting before anything is applied is what keeps the rejection clean. The only
+// unlock pass on this path is commitBlock's, which a rejection never reaches, and the
+// catchup fallback re-validates through subtreevalidation with WithIgnoreLocked(true),
+// so it spends through the locked flag without ever clearing it — a duplicate caught
+// after the writes would strand those UTXOs locked and unspendable.
+//
+// The merkle root cannot substitute for this: the duplicate-last-node-when-odd rule
+// lets a doctored, duplicated tail reproduce the honest merkle root, and therefore the
+// same header and the same block hash.
+func scanBatchForDuplicates(batch *SubtreeProcessingBatch, dedup *model.DuplicateTxScanner) error {
+	for _, tx := range batch.batchTxs {
+		if err := dedup.Add(*tx.TxIDChainHash()); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // createAndSpendUTXOsForBatch creates and spends UTXOs for all transactions in a batch.
