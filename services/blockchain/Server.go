@@ -2818,14 +2818,17 @@ func (b *Blockchain) IsFullyReady(ctx context.Context) (bool, error) {
 }
 
 // SendFSMEvent sends an event to the finite state machine and returns the state
-// reached by an accepted transition.
+// reached by an accepted, persisted transition. On a persistence error, memory
+// remains in its prior state and no success notification is sent. The database
+// may nevertheless have committed before returning an error; explicitly retry
+// the failed event to reconcile it before relying on state across a restart.
 func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.SendFSMEventRequest) (*blockchain_api.GetFSMStateResponse, error) {
 	// Serialise FSM transitions. SendFSMEvent performs a read-modify-write across
 	// the FSM (prior-state checks -> Event -> stateChangeTimestamp update) that
 	// must be atomic; concurrent callers (e.g. Run and CatchUpBlocks arriving as
 	// separate gRPC requests) would otherwise race on stateChangeTimestamp and
-	// interleave transitions. The only FSM callback (enter_state -> SendNotification)
-	// does not re-enter SendFSMEvent, so holding this lock cannot deadlock.
+	// interleave transitions. The callbacks persist and notify without re-entering
+	// SendFSMEvent, so holding this lock does not cause recursive locking.
 	b.fsmMu.Lock()
 	defer b.fsmMu.Unlock()
 
@@ -2879,28 +2882,29 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 		}
 	}
 
-	err := b.finiteStateMachine.Event(ctx, eventReq.Event.String())
+	// Once admitted, complete the local transition even if the RPC is cancelled.
+	// looplab/fsm v1.0.2 leaves a pending transition behind when its context is
+	// cancelled during Event, rejecting every subsequent event until restart.
+	transitionCtx := context.WithoutCancel(ctx)
+	err := b.finiteStateMachine.Event(transitionCtx, eventReq.Event.String())
 	if err != nil {
 		b.logger.Debugf("[Blockchain Server] Error sending event to FSM, state has not changed.")
-		switch err.(type) {
-		case fsm.InvalidEventError, fsm.NoTransitionError:
+		switch eventErr := err.(type) {
+		case fsm.InvalidEventError, fsm.NoTransitionError, fsm.InTransitionError:
 			return nil, errors.WrapGRPC(errors.NewStateError("[Blockchain Server] FSM event %s rejected in state %s", eventReq.Event.String(), priorState, err))
+		case fsm.CanceledError:
+			// looplab's cancellation wrapper does not unwrap its cause. Preserve
+			// the storage error and its gRPC details for the caller.
+			if eventErr.Err != nil {
+				err = eventErr.Err
+			}
+			return nil, errors.WrapGRPC(err)
 		default:
 			return nil, errors.WrapGRPC(err)
 		}
 	}
 
 	state := b.finiteStateMachine.Current()
-
-	// set the state in persistent storage
-	err = b.store.SetFSMState(ctx, state)
-	// check if there was an error setting the state
-	if err != nil {
-		b.logger.Errorf("[Blockchain Server] Error setting the state in blockchain db: %v", err)
-	}
-
-	// Log the state immediately after storing it
-	// b.logger.Infof("[Blockchain Server] state immediately after storing: %v", state)
 
 	resp := &blockchain_api.GetFSMStateResponse{
 		State: blockchain_api.FSMStateType(blockchain_api.FSMStateType_value[state]),
@@ -2921,6 +2925,16 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 	return resp, nil
 }
 
+// fsmStoreContext bounds store operations performed while fsmMu is held.
+// Non-positive configuration falls back to the default database timeout.
+func (b *Blockchain) fsmStoreContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := time.Duration(b.settings.BlockChain.StoreDBTimeoutMillis) * time.Millisecond
+	if timeout <= 0 {
+		timeout = time.Duration(settings.DefaultBlockchainStoreDBTimeoutMillis) * time.Millisecond
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
 // guardRunBelowHighestCheckpoint blocks the RUN transition when the local
 // chain tip has not yet reached the highest hard-coded checkpoint for the
 // active network.
@@ -2938,7 +2952,9 @@ func (b *Blockchain) guardRunBelowHighestCheckpoint(ctx context.Context) error {
 		return nil
 	}
 
-	_, meta, err := b.store.GetBestBlockHeader(ctx)
+	storeCtx, cancel := b.fsmStoreContext(ctx)
+	defer cancel()
+	_, meta, err := b.store.GetBestBlockHeader(storeCtx)
 	if err != nil {
 		return errors.NewStateError("cannot read best block header to evaluate RUN gate", err)
 	}
