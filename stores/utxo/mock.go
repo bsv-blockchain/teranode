@@ -8,6 +8,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -62,12 +63,62 @@ func (m *MockUtxostore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint3
 
 // Get mocks the retrieval of transaction metadata from the UTXO store.
 // Returns the configured mock response for transaction lookup operations.
-func (m *MockUtxostore) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
-	args := m.Called(ctx, hash, fields)
+func (m *MockUtxostore) Get(ctx context.Context, hash *chainhash.Hash, fieldNames ...fields.FieldName) (*meta.Data, error) {
+	args := m.Called(ctx, hash, fieldNames)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*meta.Data), args.Error(1)
+
+	data := args.Get(0).(*meta.Data)
+
+	return withDerivedTxInpoints(data, fieldNames), args.Error(1)
+}
+
+// withDerivedTxInpoints makes the mock honour the part of the store contract that
+// matters to callers asking for outpoints: every real store populates
+// meta.Data.TxInpoints when fields.TxInpoints is requested. The SQL store builds
+// it with subtree.NewTxInpointsFromInputs after reading the inputs table; the
+// aerospike store builds it from the inputs bin, or streams it out of the
+// external record without materialising scripts.
+//
+// Test fixtures overwhelmingly supply only Tx, because until recently every
+// caller that wanted parent outpoints asked for fields.Tx and walked Tx.Inputs.
+// Deriving here keeps those fixtures meaningful rather than forcing each one to
+// restate what the store would have computed.
+//
+// The derivation is deliberately gated on the field actually being requested, so
+// a caller that forgets to ask for fields.TxInpoints still sees an empty value
+// and its test still fails. A fixture that sets TxInpoints explicitly wins.
+func withDerivedTxInpoints(data *meta.Data, fieldNames []fields.FieldName) *meta.Data {
+	if data == nil || data.Tx == nil || len(data.Tx.Inputs) == 0 {
+		return data
+	}
+
+	if len(data.TxInpoints.ParentTxHashes) > 0 {
+		return data
+	}
+
+	requested := false
+
+	for _, f := range fieldNames {
+		if f == fields.TxInpoints {
+			requested = true
+			break
+		}
+	}
+
+	if !requested {
+		return data
+	}
+
+	txInpoints, err := subtree.NewTxInpointsFromInputs(data.Tx.Inputs)
+	if err != nil {
+		return data
+	}
+
+	data.TxInpoints = txInpoints
+
+	return data
 }
 
 // Delete mocks the deletion of transaction metadata from the UTXO store.

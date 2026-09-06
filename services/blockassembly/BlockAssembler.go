@@ -1369,7 +1369,10 @@ func (b *BlockAssembler) unlockConflictParents(ctx context.Context, txHashes []c
 	for i := range txHashes {
 		h := txHashes[i]
 
-		txMeta, err := b.utxoStore.Get(ctx, &h, fields.Tx)
+		// Only the parent hashes are read below, so ask for the inpoints rather
+		// than the whole transaction: fields.Tx pulls every output and, on
+		// aerospike, the external blob of a spilled transaction.
+		txMeta, err := b.utxoStore.Get(ctx, &h, fields.TxInpoints)
 		if err != nil {
 			if errors.Is(err, errors.ErrTxNotFound) {
 				continue
@@ -1378,12 +1381,12 @@ func (b *BlockAssembler) unlockConflictParents(ctx context.Context, txHashes []c
 			return errors.NewProcessingError("[unlockConflictParents][%s] failed to load tx", h.String(), err)
 		}
 
-		if txMeta == nil || txMeta.Tx == nil {
+		if txMeta == nil {
 			continue
 		}
 
-		for _, in := range txMeta.Tx.Inputs {
-			parentSet[*in.PreviousTxIDChainHash()] = struct{}{}
+		for _, parentHash := range txMeta.TxInpoints.GetParentTxHashes() {
+			parentSet[parentHash] = struct{}{}
 		}
 	}
 
@@ -3145,7 +3148,23 @@ type sortEntry struct {
 //
 // Returns true if the transaction is valid for inclusion in block assembly.
 func (b *BlockAssembler) validateUnminedTxInputs(ctx context.Context, txHash chainhash.Hash, bestBlockIDsMap map[uint32]bool, dryRun bool) bool {
-	// Load only inputs and conflicting flag — NOT full Tx (avoids loading heavy output data)
+	// NOTE: fields.Inputs, not fields.TxInpoints, and deliberately so for now.
+	//
+	// The two stores disagree about what fields.Inputs populates. Aerospike sets
+	// Data.Tx from the inputs bin (stores/utxo/aerospike/get.go, case
+	// fields.Inputs); the SQL store assigns Data.Tx only when fields.Tx was asked
+	// for, so this request comes back with a nil Tx and the guard below returns
+	// false for every transaction. This check is therefore live on aerospike and
+	// dead on SQL today, and on SQL every unmined transaction is dropped by the
+	// caller when input validation is enabled.
+	//
+	// Switching to fields.TxInpoints makes it live on SQL, which is correct but
+	// not a mechanical change: the first transaction that fails takes the
+	// markAsConflicting branch below, which writes to the store while
+	// loadUnminedTransactions still holds the unmined iterator open, and on
+	// SQLite that deadlocks. Fixing it means restructuring who writes during the
+	// reload, so it is tracked separately rather than smuggled into a field-set
+	// trim.
 	txMeta, err := b.utxoStore.Get(ctx, &txHash, fields.Inputs, fields.Conflicting)
 	if err != nil || txMeta == nil || txMeta.Tx == nil || txMeta.Tx.Inputs == nil {
 		return false

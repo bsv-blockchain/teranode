@@ -244,7 +244,6 @@ services/blockpersister/
 ├── streaming_process_subtree.go       # Subtree processing with streaming writes
 ├── streaming_process_subtree_test.go  # Subtree processing tests
 ├── subtree_data_writer.go             # Ordered batch writer for subtree data
-├── processTxMetaUsingStore.go         # Transaction metadata processing
 └── metrics.go                         # Prometheus metrics
 ```
 

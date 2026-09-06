@@ -1218,14 +1218,6 @@ func TestServerTransactionConfirmed(t *testing.T) {
 	// Since we don't have full setup, we just test it doesn't panic
 }
 
-// TestServerGetTxFromStoreExists tests the getTxFromStore method exists
-func TestServerGetTxFromStoreExists(t *testing.T) {
-	// This method requires complex setup with stores and blockchain state
-	// We'll just verify the method exists on server
-	s := &server{}
-	assert.NotNil(t, s.getTxFromStore)
-}
-
 // TestServerUpdatePeerHeights tests the UpdatePeerHeights method
 func TestServerUpdatePeerHeights(t *testing.T) {
 	s := &server{
