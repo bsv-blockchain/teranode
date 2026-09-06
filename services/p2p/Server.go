@@ -384,7 +384,11 @@ func resolveAdvertiseAddresses(logger ulogger.Logger, tSettings *settings.Settin
 	case tSettings.P2P.ListenMode == settings.ListenModeSilent:
 		// Silent mode: no explicit announce addresses. Discoverability is
 		// removed by disabling the DHT (see NewServer), not by this branch.
-		logger.Infof("[silent mode] No advertise addresses configured")
+		if len(tSettings.P2P.AdvertiseAddresses) > 0 {
+			logger.Infof("[silent mode] p2p_advertise_addresses %v suppressed - nothing is announced in silent mode", tSettings.P2P.AdvertiseAddresses)
+		} else {
+			logger.Infof("[silent mode] no advertise addresses announced")
+		}
 		return nil
 	case len(tSettings.P2P.AdvertiseAddresses) > 0:
 		logger.Infof("Using configured advertise addresses: %v", tSettings.P2P.AdvertiseAddresses)
@@ -450,7 +454,7 @@ func NewServer(
 	// operator who narrowed the bind to one interface must not be left believing
 	// it took effect.
 	if err := settings.ValidateP2PListenAddresses(tSettings.P2P.ListenAddresses, p2pPort); err != nil {
-		return nil, errors.NewConfigurationError("invalid p2p listen configuration", err)
+		return nil, err
 	}
 
 	if tSettings.ChainCfgParams.TopicPrefix == "" {

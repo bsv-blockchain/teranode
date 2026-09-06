@@ -44,7 +44,7 @@ If you know your public IP or domain:
 
 ```conf
 # In settings_local.conf
-p2p_advertise_addresses = ["/ip4/203.0.113.1/tcp/9905"]
+p2p_advertise_addresses = /ip4/203.0.113.1/tcp/9905
 ```
 
 This is ideal for:
@@ -81,7 +81,7 @@ p2p_enable_relay = true
 p2p_share_private_addresses = true
 ```
 
-ℹ️ With the current go-p2p-message-bus this setting has no effect on what is announced: when `p2p_advertise_addresses` is empty, libp2p advertises every bound interface address, private ones included, regardless of this value. Local peers on the same network can therefore already dial each other. To publish only a public address, set `p2p_advertise_addresses` explicitly.
+ℹ️ With the current go-p2p-message-bus this setting has no effect on what is announced: when `p2p_advertise_addresses` is empty, libp2p advertises every bound interface address, private ones included, regardless of this value. What local dev on a private network does need is `p2p_allow_private_ips = true`: with the shipped default `false`, libp2p's connection gater refuses RFC1918, loopback and link-local addresses in both directions, so private peers can neither dial this node nor be dialled by it. To publish only a public address, set `p2p_advertise_addresses` explicitly.
 
 ## How the Observed Address Mechanism Works
 

@@ -41,6 +41,12 @@ func validateListenAddress(addr string, port int) error {
 	if !strings.HasPrefix(addr, "/") {
 		ip := net.ParseIP(addr)
 		if ip == nil {
+			// host:port is the legacy_listen_addresses format and the likeliest
+			// slip; point at the accepted spellings instead of at firewalls.
+			if host, p, splitErr := net.SplitHostPort(addr); splitErr == nil {
+				return errors.NewConfigurationError("host:port is not accepted; write %s or /ip4/%s/tcp/%s", host, host, p)
+			}
+
 			return errors.NewConfigurationError("not an IP address or multiaddr")
 		}
 		if !ip.IsUnspecified() {

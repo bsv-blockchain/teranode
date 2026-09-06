@@ -121,10 +121,30 @@ var settingsLineRE = regexp.MustCompile(`^([A-Za-z0-9_.]+)\s*=\s*(.*)$`)
 func readCommittedSettingsConf(t *testing.T) settingsConf {
 	t.Helper()
 
-	path := filepath.Join("..", "settings.conf")
+	return readSettingsFile(t, filepath.Join("..", "settings.conf"))
+}
+
+// layered returns a copy of c with every key from over written on top, the way
+// a mounted settings_local.conf overrides settings.conf at runtime.
+func (c settingsConf) layered(over settingsConf) settingsConf {
+	out := make(settingsConf, len(c)+len(over))
+	for k, v := range c {
+		out[k] = v
+	}
+
+	for k, v := range over {
+		out[k] = v
+	}
+
+	return out
+}
+
+// readSettingsFile parses one committed settings-format file into key -> value.
+func readSettingsFile(t *testing.T, path string) settingsConf {
+	t.Helper()
 
 	data, err := os.ReadFile(path)
-	require.NoError(t, err, "committed settings.conf must be readable at %s", path)
+	require.NoError(t, err, "committed settings file must be readable at %s", path)
 
 	conf := make(settingsConf)
 
@@ -148,7 +168,7 @@ func readCommittedSettingsConf(t *testing.T) settingsConf {
 		conf[m[1]] = strings.Trim(strings.TrimSpace(value), `"`)
 	}
 
-	require.NotEmpty(t, conf, "parsed no settings from settings.conf")
+	require.NotEmpty(t, conf, "parsed no settings from %s", path)
 
 	return conf
 }

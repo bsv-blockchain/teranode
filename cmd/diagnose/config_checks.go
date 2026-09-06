@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/util"
 )
@@ -399,6 +400,31 @@ func checkRPCConfig(s *settings.Settings) []ConfigResult {
 	return results
 }
 
+// rootCause returns the message of the innermost error in a wrap chain, so
+// operator-facing cells show the reason rather than the rendered code chain.
+func rootCause(err error) string {
+	var tErr *errors.Error
+	if !errors.As(err, &tErr) || tErr == nil {
+		return err.Error()
+	}
+
+	for {
+		// Stop on a nil unwrap before calling As: errors.As(nil, ...) does not
+		// report false for this error type.
+		wrapped := tErr.Unwrap()
+		if wrapped == nil {
+			return tErr.Message()
+		}
+
+		var inner *errors.Error
+		if !errors.As(wrapped, &inner) || inner == nil {
+			return tErr.Message()
+		}
+
+		tErr = inner
+	}
+}
+
 func checkP2PConfig(s *settings.Settings) []ConfigResult {
 	var results []ConfigResult
 
@@ -417,13 +443,17 @@ func checkP2PConfig(s *settings.Settings) []ConfigResult {
 		value := strings.Join(s.P2P.ListenAddresses, ", ")
 		if value == "" {
 			value = valueEmpty
+		} else {
+			// Keep the operator-facing cell readable: the value plus the
+			// innermost reason, without the wrapped error chain.
+			value = fmt.Sprintf("%s (%s)", value, rootCause(err))
 		}
 
 		results = append(results, ConfigResult{
 			Severity:    SeverityERROR,
 			Check:       "P2P listen addresses",
 			Value:       value,
-			Recommended: fmt.Sprintf("%v. Set p2p_listen_addresses to 0.0.0.0 or /ip4/0.0.0.0/tcp/%d", err, s.P2P.Port),
+			Recommended: fmt.Sprintf("libp2p always binds 0.0.0.0 and :: on p2p_port %d; set p2p_listen_addresses to 0.0.0.0 or /ip4/0.0.0.0/tcp/%d and restrict exposure with a firewall", s.P2P.Port, s.P2P.Port),
 		})
 	} else {
 		results = append(results, ConfigResult{

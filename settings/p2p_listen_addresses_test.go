@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -45,6 +46,7 @@ func TestValidateP2PListenAddresses(t *testing.T) {
 		{"dns multiaddr", []string{"/dns4/node.example/tcp/9905"}, "unsupported multiaddr component"},
 		{"udp", []string{"/ip4/0.0.0.0/udp/9905"}, "unsupported multiaddr component"},
 		{"garbage", []string{"not-an-address"}, "not an IP address or multiaddr"},
+		{"legacy host:port form", []string{"0.0.0.0:9905"}, "write 0.0.0.0 or /ip4/0.0.0.0/tcp/9905"},
 		{"bad multiaddr", []string{"/ip4/999.0.0.1"}, "invalid multiaddr"},
 		{"one bad among good", []string{"0.0.0.0", "192.168.1.10"}, "192.168.1.10"},
 		{"second ip hidden behind wildcard", []string{"/ip4/0.0.0.0/tcp/9905/ip4/127.0.0.1/tcp/9905"}, "specific interface"},
@@ -68,8 +70,30 @@ func TestValidateP2PListenAddresses(t *testing.T) {
 // settings_local.conf can neither fail it nor mask a regression (see
 // TestP2PGRPCBindMatchesClientAddress). A narrowed override such as the former
 // p2p_listen_addresses.dev = 127.0.0.1 would fail here.
+//
+// compose/settings_test.conf is committed too and is mounted over settings.conf
+// as settings_local.conf by the compose stacks; its docker.host contexts are the
+// only committed values that carry an explicit port, so they are checked with
+// that file layered on top rather than through settings.conf alone.
 func TestCommittedP2PListenAddressesAreValid(t *testing.T) {
-	conf := readCommittedSettingsConf(t)
+	base := readCommittedSettingsConf(t)
+
+	check := func(t *testing.T, conf settingsConf, settingsContext string) {
+		t.Helper()
+
+		portStr, ok := conf.resolve("p2p_port", settingsContext)
+		require.True(t, ok, "p2p_port must be set")
+		portStr = conf.expandPlaceholders(portStr, settingsContext)
+
+		port, err := strconv.Atoi(portStr)
+		require.NoError(t, err, "p2p_port %q must resolve to a number", portStr)
+
+		listen, ok := conf.resolve("p2p_listen_addresses", settingsContext)
+		require.True(t, ok, "p2p_listen_addresses must be set")
+		listen = conf.expandPlaceholders(listen, settingsContext)
+
+		require.NoError(t, ValidateP2PListenAddresses(strings.Split(listen, "|"), port))
+	}
 
 	for _, settingsContext := range shippedP2PContexts {
 		name := settingsContext
@@ -77,19 +101,20 @@ func TestCommittedP2PListenAddressesAreValid(t *testing.T) {
 			name = "default"
 		}
 
-		t.Run(name, func(t *testing.T) {
-			portStr, ok := conf.resolve("p2p_port", settingsContext)
-			require.True(t, ok, "p2p_port must be set in settings.conf")
-			portStr = conf.expandPlaceholders(portStr, settingsContext)
+		t.Run(name, func(t *testing.T) { check(t, base, settingsContext) })
+	}
 
-			port, err := strconv.Atoi(portStr)
-			require.NoError(t, err, "p2p_port %q must resolve to a number", portStr)
+	compose := base.layered(readSettingsFile(t, filepath.Join("..", "compose", "settings_test.conf")))
 
-			listen, ok := conf.resolve("p2p_listen_addresses", settingsContext)
-			require.True(t, ok, "p2p_listen_addresses must be set in settings.conf")
-			listen = conf.expandPlaceholders(listen, settingsContext)
+	for _, settingsContext := range []string{"docker.host.teranode1", "docker.host.teranode2", "docker.host.teranode3"} {
+		t.Run("compose/"+settingsContext, func(t *testing.T) {
+			// Pin that the layered value really is the port-bearing one, so this
+			// subtest cannot go vacuous if the compose override is ever dropped.
+			listen, ok := compose.resolve("p2p_listen_addresses", settingsContext)
+			require.True(t, ok)
+			require.Contains(t, listen, "/tcp/", "compose docker.host listen address should carry an explicit port")
 
-			require.NoError(t, ValidateP2PListenAddresses(strings.Split(listen, "|"), port))
+			check(t, compose, settingsContext)
 		})
 	}
 }

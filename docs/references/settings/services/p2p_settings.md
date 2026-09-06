@@ -13,7 +13,7 @@
 | HTTPListenAddress | string | "" | p2p_httpListenAddress | HTTP server binding |
 | ListenAddresses | []string | [] | p2p_listen_addresses | **REQUIRED** - Must describe the wildcard bind the bus performs (`0.0.0.0`, `::`, or `/ip4/0.0.0.0/tcp/<p2p_port>`); narrower values fail startup |
 | AdvertiseAddresses | []string | [] | p2p_advertise_addresses | Address advertisement to peers |
-| ListenMode | string | "full" | listen_mode | Node operation mode ("full" or "listen_only") |
+| ListenMode | string | "full" | listen_mode | Node operation mode ("full", "listen_only" or "silent"; silent still binds p2p_port) |
 | PeerID | string | "" | p2p_peer_id | Peer network identifier |
 | Port | int | 9905 | p2p_port | TCP port libp2p binds on 0.0.0.0 and :: (always, independent of AdvertiseAddresses) |
 | PrivateKey | string | "" | p2p_private_key | **CRITICAL** - Cryptographic peer identity |
@@ -105,7 +105,7 @@
 
 | Setting | Validation | Impact | When Checked |
 |---------|------------|--------|-------------|
-| ListenMode | Must be "full" or "listen_only" | Service fails to start if invalid | During server initialization |
+| ListenMode | Must be "full", "listen_only" or "silent" | Service fails to start if invalid | During server initialization |
 | GRPCListenAddress | Used for gRPC server binding | Service communication | During server start |
 | ForceSyncPeer | Overrides automatic peer selection | Sync behavior | During sync coordinator initialization |
 | EnableNAT | Triggers network scanning on shared hosting | Security alerts | During libp2p host initialization |

@@ -81,9 +81,22 @@ func TestCheckP2PConfigListenAddresses(t *testing.T) {
 
 			if tt.severity == SeverityERROR {
 				require.Contains(t, res.Recommended, "p2p_listen_addresses")
+				// Operator-facing cells carry the reason, never the rendered
+				// error-code chain.
+				require.NotContains(t, res.Value, "CONFIGURATION")
+				require.NotContains(t, res.Recommended, "CONFIGURATION")
 			}
 		})
 	}
+
+	t.Run("narrowed value names the root cause", func(t *testing.T) {
+		s := &settings.Settings{}
+		s.P2P.Port = 9905
+		s.P2P.ListenAddresses = []string{"10.0.1.5"}
+
+		res := findResult(t, checkP2PConfig(s), "P2P listen addresses")
+		require.Equal(t, "10.0.1.5 (binding a specific interface is not supported)", res.Value)
+	})
 
 	t.Run("zero port is an error", func(t *testing.T) {
 		s := &settings.Settings{}
