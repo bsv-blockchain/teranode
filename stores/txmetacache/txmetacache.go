@@ -852,6 +852,11 @@ func (t *TxMetaCache) SupportsOutpointOnlySpend() bool {
 	return t.utxoStore.SupportsOutpointOnlySpend()
 }
 
+// PoolMaxConns delegates to the wrapped store.
+func (t *TxMetaCache) PoolMaxConns() int {
+	return t.utxoStore.PoolMaxConns()
+}
+
 // Close delegates to the wrapped UTXO store so its in-flight batched writes
 // are drained on shutdown. The cache itself holds only in-memory state; no
 // extra teardown is required here beyond letting it be garbage-collected

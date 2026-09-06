@@ -812,6 +812,11 @@ func (s *Store) Close(ctx context.Context) error {
 // until then callers keep the fast path OFF on Aerospike.
 func (s *Store) SupportsOutpointOnlySpend() bool { return false }
 
+// PoolMaxConns returns 0: the Aerospike store is not backed by a connection pool
+// the block-validation budget guard reasons about, so it reports the
+// "not pool-bound — skip" sentinel.
+func (s *Store) PoolMaxConns() int { return 0 }
+
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	/* As written by one of the Aerospike developers, Go contexts are not supported:
 

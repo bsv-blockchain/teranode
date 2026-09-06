@@ -352,3 +352,15 @@ func testGrandparentChildWithParentDependency(t *testing.T, utxoStore string) {
 
 	t.Log("Successfully verified grandparent-child with parent dependency scenario")
 }
+
+func TestGrandparentMultiOutputConflictSqlPostgres(t *testing.T) {
+	t.Run("grandparent_multi_output_conflict", func(t *testing.T) {
+		testGrandparentMultiOutputConflict(t, "sqlpostgres")
+	})
+}
+
+func TestGrandparentChildWithParentDependencySqlPostgres(t *testing.T) {
+	t.Run("grandparent_child_with_parent_dependency", func(t *testing.T) {
+		testGrandparentChildWithParentDependency(t, "sqlpostgres")
+	})
+}

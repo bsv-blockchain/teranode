@@ -26,6 +26,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/pruner/pruner_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
@@ -43,6 +44,19 @@ import (
 type pruneSignal struct {
 	blockHeight uint32
 	blockHash   chainhash.Hash
+	// force marks a signal as originating from the fallback ticker rather than a
+	// blockchain notification. prunerProcessor's already-processed guard
+	// (blockHeight <= lastProcessedHeight) exists to skip stale/duplicate
+	// notifications, but it also means a plain re-send of the last known height
+	// can never reach Prune again. That matters because the underlying DAH sweep
+	// keeps stamping rows with delete_at_height <= that height even while the
+	// trigger height itself is frozen (a stalled block persister, or a missed
+	// notification) — those newly-due rows need a RE-RUN at the SAME height to
+	// be collected, not a higher one. force lets the ticker's re-send bypass
+	// only that one guard; every other check (min height, catchup, mined-set
+	// wait, block-assembly safety, the store's own cheap idle-tick EXISTS probe)
+	// still applies exactly as it does for a real notification.
+	force bool
 }
 
 // BlobDeletionObserver is an optional callback interface for testing.
@@ -69,8 +83,13 @@ type Server struct {
 	prunerService       pruner.Service
 	lastProcessedHeight atomic.Uint32
 	lastPersistedHeight atomic.Uint32
-	pruneNotify         chan pruneSignal
-	stats               *gocore.Stat
+	// lastBlockHash caches the hash of the most recently observed notification's
+	// block, so the fallback ticker (see fireFallbackTick) can reissue a matching
+	// pruneSignal without a fresh notification. nil until the first notification
+	// with a parseable hash has been seen.
+	lastBlockHash atomic.Pointer[chainhash.Hash]
+	pruneNotify   chan pruneSignal
+	stats         *gocore.Stat
 
 	// Blob deletion
 	blobStores           map[storetypes.BlobStoreType]blob.Store
@@ -145,9 +164,80 @@ func (s *Server) Init(ctx context.Context) error {
 		return errors.NewServiceError("failed to subscribe to blockchain notifications", err)
 	}
 
-	// Start a goroutine to handle blockchain notifications
-	go func() {
-		for notification := range subscriptionCh {
+	// Start a goroutine to handle blockchain notifications (and the fallback ticker)
+	go s.notificationWorker(ctx, subscriptionCh)
+
+	// Read initial persisted height from blockchain state
+	if state, err := s.blockchainClient.GetState(ctx, "BlockPersisterHeight"); err == nil && len(state) >= 4 {
+		height := binary.LittleEndian.Uint32(state)
+		s.lastPersistedHeight.Store(height)
+		s.logger.Infof("Loaded initial block persister height: %d", height)
+
+		s.seedLastBlockHash(ctx, height)
+	}
+
+	return nil
+}
+
+// seedLastBlockHash fetches the block hash at height (the same
+// GetBlockHeadersFromHeight(ctx, height, 1) call used elsewhere, e.g.
+// blockvalidation) and caches it as the initial lastBlockHash, so the
+// fallback ticker is armed immediately on startup rather than waiting for a
+// future notification.
+//
+// This closes a restart gap: if the block persister is already stalled when
+// the pruner (re)starts, no BlockPersisted notification will ever arrive to
+// populate lastBlockHash, and the Block-notification capture in
+// notificationWorker only helps once a NEW notification shows up after this
+// point -- without this seed step, the ticker would stay permanently
+// disarmed for exactly the stalled-persister incident it exists to guard
+// against.
+//
+// Best-effort: any error is logged as a single-line warning and
+// lastBlockHash is left unset (nil); a subsequent notification will still
+// re-arm it per the usual paths.
+//
+// Init starts notificationWorker before calling this, and
+// GetBlockHeadersFromHeight is a network round trip, so a live notification
+// can race ahead and Store a fresher hash while this seed is still in
+// flight. The store below is therefore a CompareAndSwap(nil, seeded), not an
+// unconditional Store: it only fills lastBlockHash if nothing has claimed it
+// yet, so the worker's live value always wins over the seed and a
+// slower-but-stale seed can never clobber a faster-but-fresh notification.
+func (s *Server) seedLastBlockHash(ctx context.Context, height uint32) {
+	headers, _, err := s.blockchainClient.GetBlockHeadersFromHeight(ctx, height, 1)
+	if err != nil || len(headers) == 0 {
+		s.logger.Warnf("[pruner] failed to seed initial block hash at height %d for fallback ticker: %v", height, err)
+		return
+	}
+
+	s.lastBlockHash.CompareAndSwap(nil, headers[0].Hash())
+}
+
+// notificationWorker consumes blockchain notifications and translates them into
+// pruneSignal messages on s.pruneNotify. It also runs an optional fallback ticker
+// (pruner_fallbackTickerSeconds) that periodically re-fires the last known signal,
+// so a transient early-exit skip in prunerProcessor, or a stalled/slow block
+// persister, cannot strand deletable rows with no notification ever arriving to
+// retry them. Returns when ctx is done or subscriptionCh is closed.
+func (s *Server) notificationWorker(ctx context.Context, subscriptionCh chan *blockchain_api.Notification) {
+	var fallbackC <-chan time.Time
+
+	if s.settings.Pruner.FallbackTickerSeconds > 0 {
+		ticker := time.NewTicker(time.Duration(s.settings.Pruner.FallbackTickerSeconds) * time.Second)
+		defer ticker.Stop()
+		fallbackC = ticker.C
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case notification, ok := <-subscriptionCh:
+			if !ok {
+				return
+			}
 			if notification == nil {
 				continue
 			}
@@ -174,14 +264,19 @@ func (s *Server) Init(ctx context.Context) error {
 								s.logger.Debugf("[pruner] updated persisted height to %d", height)
 							}
 
+							blockHash, err := chainhash.NewHash(notification.Hash)
+							if err != nil {
+								s.logger.Warnf("Failed to parse block hash from BlockPersisted notification: %v", err)
+								continue
+							}
+
+							// Cache the hash alongside lastPersistedHeight (updated together, above)
+							// so fireFallbackTick can reissue a matching pruneSignal without a
+							// fresh notification.
+							s.lastBlockHash.Store(blockHash)
+
 							// Send signal to wake worker with latest height
 							if height > s.lastProcessedHeight.Load() {
-								blockHash, err := chainhash.NewHash(notification.Hash)
-								if err != nil {
-									s.logger.Warnf("Failed to parse block hash from BlockPersisted notification: %v", err)
-									continue
-								}
-
 								sig := pruneSignal{blockHeight: height, blockHash: *blockHash}
 
 								s.logger.Infof("[pruner][%s:%d] notified from BlockPersisted notification", blockHash.String(), height)
@@ -198,13 +293,23 @@ func (s *Server) Init(ctx context.Context) error {
 				}
 
 			case model.NotificationType_Block:
-				// Skip if using OnBlockPersisted trigger mode
-				if s.settings.Pruner.BlockTrigger == settings.PrunerBlockTriggerOnBlockPersisted {
-					s.logger.Debugf("Block notification received but pruner configured for BlockPersisted trigger")
-					continue
-				}
-
-				// Extract block hash (required for mined_set wait in processor)
+				// Extract and cache the block hash BEFORE the trigger-mode filter below,
+				// for every Block notification regardless of mode. This is what re-arms
+				// the fallback ticker in OnBlockPersisted mode when the block persister
+				// itself is stalled: Block notifications come from block validation, not
+				// the persister, so they keep arriving as the chain moves even while
+				// BlockPersisted notifications have stopped. Without this, a pruner that
+				// restarts while the persister is already stalled would never observe a
+				// single BlockPersisted notification, lastBlockHash would stay nil
+				// forever, and the fallback ticker -- the exact mechanism meant to
+				// survive a stalled persister -- would be permanently disarmed.
+				//
+				// Deliberately NOT updating any height atomic here: lastPersistedHeight
+				// means "the block persister confirmed up to this height," and this
+				// notification carries no such confirmation (in OnBlockPersisted mode
+				// especially, that would be actively wrong while the persister is
+				// stalled); lastProcessedHeight is owned exclusively by prunerProcessor.
+				// So this is hash-only, on purpose.
 				if notification.Hash == nil {
 					s.logger.Debugf("Block notification missing hash, skipping")
 					continue
@@ -213,6 +318,16 @@ func (s *Server) Init(ctx context.Context) error {
 				blockHash, err := chainhash.NewHash(notification.Hash)
 				if err != nil {
 					s.logger.Debugf("Failed to parse block hash from notification: %v", err)
+					continue
+				}
+
+				s.lastBlockHash.Store(blockHash)
+
+				// Skip triggering a prune signal if using OnBlockPersisted trigger mode --
+				// the hash above is still cached to re-arm the fallback ticker, but this
+				// notification type must not itself drive pruning in that mode.
+				if s.settings.Pruner.BlockTrigger == settings.PrunerBlockTriggerOnBlockPersisted {
+					s.logger.Debugf("Block notification received but pruner configured for BlockPersisted trigger")
 					continue
 				}
 
@@ -243,17 +358,66 @@ func (s *Server) Init(ctx context.Context) error {
 					s.pruneNotify <- sig
 				}
 			}
-		}
-	}()
 
-	// Read initial persisted height from blockchain state
-	if state, err := s.blockchainClient.GetState(ctx, "BlockPersisterHeight"); err == nil && len(state) >= 4 {
-		height := binary.LittleEndian.Uint32(state)
-		s.lastPersistedHeight.Store(height)
-		s.logger.Infof("Loaded initial block persister height: %d", height)
+		case <-fallbackC:
+			s.fireFallbackTick()
+		}
+	}
+}
+
+// fireFallbackTick re-fires the last known pruneSignal on the fallback ticker
+// interval, reusing state rather than inventing new values.
+//
+// The signal is marked force: true so it bypasses prunerProcessor's
+// already-processed guard (see the pruneSignal.force doc comment). Without
+// that, resending the same height the processor already completed would
+// always be a no-op — which would defeat the whole point of the ticker for
+// the incident it exists to guard against: the DAH sweep keeps stamping rows
+// due at or below the trigger height even while that height itself is frozen
+// (stalled persister / missed notification), so recovering them requires a
+// genuine RE-RUN of Prune at the SAME height, not just a resent signal that
+// gets dropped before reaching the store.
+//
+// A real, previously-captured block hash is required in BOTH trigger modes before
+// this will fire anything: prunerProcessor's waitForBlockMinedStatus runs whenever
+// blockAssemblyClient is configured (see worker.go), and that check applies "both
+// trigger modes" per its own comment — it is not gated on pruner_block_trigger. A
+// synthetic zero hash passed to GetBlockIsMined would look up a hash matching no
+// real block, retrying for up to BlockAssemblyWaitTimeout (10 minutes by default)
+// before the cycle gives up, which would stall the pruner processor loop far
+// longer than the fallback tick interval itself. So unlike the brief's initial
+// sketch — which only gated the hash requirement in OnBlockMined mode — this
+// applies the same requirement in OnBlockPersisted mode too, since
+// blockAssemblyClient is always non-nil in production (see daemon_services.go).
+func (s *Server) fireFallbackTick() {
+	h := s.lastPersistedHeight.Load()
+	if s.settings.Pruner.BlockTrigger == settings.PrunerBlockTriggerOnBlockMined {
+		h = s.lastProcessedHeight.Load()
 	}
 
-	return nil
+	if h == 0 {
+		return // nothing known yet — never invent a height
+	}
+
+	hash := s.lastBlockHash.Load()
+	if hash == nil {
+		return // no real hash captured yet — see comment above
+	}
+
+	sig := pruneSignal{blockHeight: h, blockHash: *hash, force: true}
+
+	// Drain old signal (if any) and replace with latest — same idiom the
+	// notification path uses.
+	select {
+	case <-s.pruneNotify:
+	default:
+	}
+
+	select {
+	case s.pruneNotify <- sig:
+		s.logger.Debugf("[pruner] fallback ticker fired at height %d", h)
+	default:
+	}
 }
 
 // Start begins the pruner service operation. It starts the pruner processor goroutine,

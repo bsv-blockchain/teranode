@@ -12,6 +12,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// sqlPostgresDSN rewrites a postgres:// testcontainer DSN to the sqlpostgres://
+// scheme so the UTXO-store factory routes to the legacy SQL store (on Postgres)
+// rather than the native postgres store. Used by the *SqlPostgres test variants,
+// which otherwise pass the raw postgres:// DSN and silently exercise the native
+// store instead of the SQL store they are meant to cover.
+func sqlPostgresDSN(t *testing.T, connStr string) string {
+	t.Helper()
+	u, err := url.Parse(connStr)
+	require.NoError(t, err)
+	u.Scheme = "sqlpostgres"
+	return u.String()
+}
+
 // Critical Validation Tests for Duplicate Transaction Detection
 //
 // These tests cover critical security and correctness issues discovered during
@@ -304,4 +317,54 @@ func testRaceDetectorDuplicateDetection(t *testing.T, utxoStore string) {
 	t.Logf("✓ Race detector test completed")
 	t.Logf("IMPORTANT: This test MUST be run with: go test -race")
 	t.Logf("Race detector will report any concurrency issues in duplicate detection")
+}
+
+func TestNilSubtreeStoreBypassSqlPostgres(t *testing.T) {
+	pg, err := postgres.RunPostgresTestContainer(t.Context(), "nil_subtree_bypass_"+t.Name())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = pg.Terminate(t.Context())
+	})
+
+	t.Run("sqlpostgres", func(t *testing.T) {
+		testNilSubtreeStoreBypass(t, sqlPostgresDSN(t, pg.ConnectionString()))
+	})
+}
+
+func TestEmptySubtreeSlicesSqlPostgres(t *testing.T) {
+	pg, err := postgres.RunPostgresTestContainer(t.Context(), "empty_subtrees_"+t.Name())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = pg.Terminate(t.Context())
+	})
+
+	t.Run("sqlpostgres", func(t *testing.T) {
+		testEmptySubtreeSlices(t, sqlPostgresDSN(t, pg.ConnectionString()))
+	})
+}
+
+func TestConcurrencyConfigurationEdgeCasesSqlPostgres(t *testing.T) {
+	pg, err := postgres.RunPostgresTestContainer(t.Context(), "concurrency_config_"+t.Name())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = pg.Terminate(t.Context())
+	})
+
+	t.Run("sqlpostgres", func(t *testing.T) {
+		testConcurrencyConfigurationEdgeCases(t, sqlPostgresDSN(t, pg.ConnectionString()))
+	})
+}
+
+func TestRaceDetectorDuplicateDetectionSqlPostgres(t *testing.T) {
+	t.Skip("Skipping due to known data race in BlockValidation.setTxMinedStatus - see issue #296")
+
+	pg, err := postgres.RunPostgresTestContainer(t.Context(), "race_detector_"+t.Name())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = pg.Terminate(t.Context())
+	})
+
+	t.Run("sqlpostgres", func(t *testing.T) {
+		testRaceDetectorDuplicateDetection(t, sqlPostgresDSN(t, pg.ConnectionString()))
+	})
 }

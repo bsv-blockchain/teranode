@@ -49,6 +49,10 @@ func NewNullStore() (*NullStore, error) {
 // SupportsOutpointOnlySpend reports false: the null store performs no real UTXO work.
 func (m *NullStore) SupportsOutpointOnlySpend() bool { return false }
 
+// PoolMaxConns returns 0: the null store has no backing connection pool, so it
+// reports the "not pool-bound — skip" sentinel.
+func (m *NullStore) PoolMaxConns() int { return 0 }
+
 func (m *NullStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return http.StatusOK, "NullStore Store available", nil
 }

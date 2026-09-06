@@ -615,4 +615,13 @@ type Store interface {
 	// its writer — SetBlockState publishes both fields from one tip
 	// atomically, while the individual setters update one field at a time.
 	GetBlockState() BlockState
+
+	// PoolMaxConns reports the configured maximum size of the store's backing
+	// connection pool, or 0 when the store is not connection-pool-bound (in-memory
+	// SQLite, Aerospike, wrappers with no own pool, etc.). It surfaces the value as
+	// a native Go int so callers can enforce a concurrency-vs-pool budget without
+	// reaching into store internals. A return of 0 means "not pool-bound — skip any
+	// pool-budget check"; a positive value is the ceiling that peak concurrent
+	// in-flight demand must not exceed.
+	PoolMaxConns() int
 }

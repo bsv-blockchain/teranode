@@ -492,12 +492,26 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MaxMinedRoutines:                        getInt("utxostore_maxMinedRoutines", 128, alternativeContext...),
 			MaxMinedBatchSize:                       getInt("utxostore_maxMinedBatchSize", 1024, alternativeContext...),
 			BlockHeightRetentionAdjustment:          getInt32("utxostore_blockHeightRetentionAdjustment", 0, alternativeContext...),
+			EarlyDAHBelowCheckpoint:                 getBool("utxostore_earlyDAHBelowCheckpoint", false, alternativeContext...),
+			PruneDeleteMarginBlocks:                 getInt32("utxostore_pruneDeleteMarginBlocks", 32, alternativeContext...),
 			BatchSQLOperations:                      getBool("utxostore_batch_sql_operations", true, alternativeContext...),
 			DisableDAHCleaner:                       getBool("utxostore_disableDAHCleaner", false, alternativeContext...),
 			ReAssignedUtxoSpendableAfterBlocks:      getUint32("utxostore_reassignedUtxoSpendableAfterBlocks", 1000, alternativeContext...),
 			BatcherMaxConcurrent:                    getInt("utxostore_batcherMaxConcurrent", 64, alternativeContext...),
 			OutpointBatcherMaxConcurrent:            getInt("utxostore_outpointBatcherMaxConcurrent", 0, alternativeContext...),
 			QueryIdleTimeoutSeconds:                 getInt("utxostore_queryIdleTimeoutSeconds", 60, alternativeContext...),
+			PostgresDAHSweepLag:                     getInt("utxostore_postgresDAHSweepLag", 2, alternativeContext...),
+			PostgresDAHSweepStallAlertSeconds:       getInt("utxostore_postgresDAHSweepStallAlertSeconds", 900, alternativeContext...),
+			PostgresDAHSweepMaxWindowsPerCall:       getInt("utxostore_postgresDAHSweepMaxWindowsPerCall", 8, alternativeContext...),
+			PostgresDAHSweepIdleIntervalMillis:      getInt("utxostore_postgresDAHSweepIdleIntervalMillis", 1000, alternativeContext...),
+			PostgresDAHSweepConcurrency:             getInt("utxostore_postgresDAHSweepConcurrency", 1, alternativeContext...),
+			PostgresDAHSweepBandHeights:             getInt("utxostore_postgresDAHSweepBandHeights", 5000, alternativeContext...),
+			PostgresDAHSweepBandRows:                getInt("utxostore_postgresDAHSweepBandRows", 200000, alternativeContext...),
+			PostgresDAHReconcileSlice:               getInt("utxostore_postgresDAHReconcileSlice", 1000, alternativeContext...),
+			PostgresDAHReconcileIntervalMillis:      getInt("utxostore_postgresDAHReconcileIntervalMillis", 60000, alternativeContext...),
+			PostgresMaintenancePoolConns:            getInt("utxostore_postgresMaintenancePoolConns", 0, alternativeContext...),
+			PostgresTxsFillfactor:                   getInt("utxostore_postgresTxsFillfactor", 50, alternativeContext...),
+			PostgresCreateBatchMaxBytes:             getInt("utxostore_postgresCreateBatchMaxBytes", 536870912, alternativeContext...),
 			ConflictingChildrenMaxNodes:             getInt("utxostore_conflictingChildrenMaxNodes", 100_000, alternativeContext...),
 			StoreBatcherTickerIntervalMillis:        getInt("utxostore_storeBatcherTickerIntervalMillis", 0, alternativeContext...),
 			GetBatcherTickerIntervalMillis:          getInt("utxostore_getBatcherTickerIntervalMillis", 0, alternativeContext...),
@@ -621,6 +635,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SkipDeletions:                  getBool("pruner_skipDeletions", false, alternativeContext...),                        // Skip deletions for performance
 			MinBlockHeight:                 getUint32("pruner_min_block_height", 0, alternativeContext...),                       // Do not prune blocks at or below this height
 			UTXOPrunedSetMaxEntries:        getInt("pruner_utxoPrunedSetMaxEntries", 10_000_000, alternativeContext...),          // Soft cap on PrunedTxSet entries; 0 = use built-in 2B default (NOT unlimited)
+			FallbackTickerSeconds:          getInt("pruner_fallbackTickerSeconds", 30, alternativeContext...),                    // Re-fire the last known prune signal every 30s; 0 = disabled
 		},
 		SubtreeValidation: SubtreeValidationSettings{
 			QuorumAbsoluteTimeout:                     getDuration("subtree_quorum_absolute_timeout", 30*time.Second, alternativeContext...),

@@ -177,7 +177,16 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		return nil, errors.NewStorageError("failed to init sql db", err)
 	}
 
-	switch storeURL.Scheme {
+	// "sqlpostgres" is an alias for "postgres": the UTXO-store factory re-registered
+	// the SQL Postgres store under "sqlpostgres" so the native postgres store could
+	// claim the bare "postgres" scheme. Normalise it here so schema creation and
+	// every downstream `s.engine == "postgres"` fast-path stay enabled.
+	engine := storeURL.Scheme
+	if engine == "sqlpostgres" {
+		engine = "postgres"
+	}
+
+	switch engine {
 	case "postgres":
 		if err = createPostgresSchema(db); err != nil {
 			return nil, errors.NewStorageError("failed to create postgres schema", err)
@@ -197,7 +206,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		settings: tSettings,
 		db:       db,
 		storeURL: storeURL,
-		engine:   storeURL.Scheme,
+		engine:   engine,
 		ctx:      ctx,
 	}
 
@@ -248,7 +257,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// Batches individual Create() calls into a single pgx.SendBatch with N CTEs,
 	// reducing N network round-trips to 1. background=true because each CTE inserts
 	// a unique transaction hash — no row overlap, no deadlock risk between batches.
-	if storeURL.Scheme == "postgres" && tSettings.UtxoStore.StoreBatcherSize > 1 {
+	if s.engine == "postgres" && tSettings.UtxoStore.StoreBatcherSize > 1 {
 		storeBatchSize := tSettings.UtxoStore.StoreBatcherSize
 		storeBatchDuration := time.Duration(tSettings.UtxoStore.StoreBatcherDurationMillis) * time.Millisecond
 		s.createBatcher = batcher.NewWithPool(storeBatchSize, storeBatchDuration, s.sendCreateBatch, true, batcherOpts("sql_create")...)
@@ -261,7 +270,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	// Initialize unlock batcher for Postgres — batches single-hash SetLocked(false) calls.
-	if storeURL.Scheme == "postgres" && tSettings.UtxoStore.LockedBatcherSize > 1 {
+	if s.engine == "postgres" && tSettings.UtxoStore.LockedBatcherSize > 1 {
 		unlockBatchSize := tSettings.UtxoStore.LockedBatcherSize
 		unlockBatchDuration := time.Duration(tSettings.UtxoStore.LockedBatcherDurationMillis) * time.Millisecond
 		s.unlockBatcher = batcher.NewWithPool(unlockBatchSize, unlockBatchDuration, s.sendUnlockBatch, true, batcherOpts("sql_unlock")...)
@@ -364,6 +373,12 @@ func (s *Store) Close(ctx context.Context) error {
 // SupportsOutpointOnlySpend reports true: the SQL store honours the below-checkpoint
 // outpoint-only fast path (SkipExtendedInputs on Create, SkipUTXOHashCheck on Spend).
 func (s *Store) SupportsOutpointOnlySpend() bool { return true }
+
+// PoolMaxConns returns 0 — the pgxpool-based budget guard does not apply to the
+// SQL store. This store manages its database/sql pool internally and is not the
+// pgxpool-backed store the window-barrier-collapse budget check targets, so it
+// reports the "not pool-bound — skip" sentinel.
+func (s *Store) PoolMaxConns() int { return 0 }
 
 // Health checks the database connection and returns status information.
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {

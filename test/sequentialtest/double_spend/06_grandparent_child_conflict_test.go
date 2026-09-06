@@ -172,3 +172,9 @@ func setupExternalTxDaemon(t *testing.T, utxoStoreType string) *daemon.TestDaemo
 		SettingsOverrideFunc: externalTxSettingsFunc(),
 	})
 }
+
+func TestGrandparentChildConflictSqlPostgres(t *testing.T) {
+	t.Run("grandparent_child_conflict", func(t *testing.T) {
+		testGrandparentChildConflict(t, "sqlpostgres")
+	})
+}

@@ -1479,6 +1479,299 @@ func MinedThenSpendAllPrunes(t *testing.T, db utxostore.Store, prunerSvc pruner.
 	require.True(t, errors.Is(err, errors.ErrTxNotFound), "expected ErrTxNotFound, got %v", err)
 }
 
+// ---------------------------------------------------------------------------
+// Differential gold-standard tests.
+//
+// The following tests encode behaviour that the aerospike store (the
+// gold-standard reference) and the sql store implement correctly. The
+// PostgreSQL store originally diverged on each of these, but the divergences
+// have since been fixed in PR #684, so the tests now serve as regression/parity
+// guards. They are written against the shared utxo.Store interface so they run
+// against every backend, and must PASS on aerospike, sql and postgres alike.
+//
+// Source: review of PR #684 (PostgreSQL-native UTXO store). Each test cites the
+// exact file:line of the gold-standard behaviour and the original postgres
+// divergence it guards against.
+// ---------------------------------------------------------------------------
+
+// SetMinedUnsetOnMissingTx verifies that SetMinedMulti with UnsetMined=true is a
+// no-op (nil error) when the target transaction does not exist in the store.
+//
+// Interface contract (Interface.go:295-303):
+//
+//	"When minedBlockInfo.UnsetMined is true, missing or empty entries are
+//	 tolerated: the call may no-op for transactions that no longer exist."
+//
+// This matters during reorgs: the block validator calls SetMinedMulti(UnsetMined=true)
+// for every tx in the reorged block; any tx already pruned from the store must
+// not abort the reorg.
+//
+// Divergence (verified against source):
+//   - aerospike (set_mined.go:502-506, 524-527): LuaErrorCodeTxNotFound /
+//     KEY_NOT_FOUND + UnsetMined=true -> returns nil. Intentional no-op.
+//   - sql (sql.go:3162-3176): UnsetMined=true skips the not-found guard and
+//     commits nil when no rows match. Matches aerospike.
+//   - postgres (mined.go:244-248): pgx.ErrNoRows from the per-hash UPDATE ...
+//     RETURNING is unconditionally wrapped into a StorageError and returned,
+//     with no exemption for UnsetMined=true. FAILS here.
+func SetMinedUnsetOnMissingTx(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	// A hash that is never created in the store.
+	missingHash, err := chainhash.NewHashFromStr("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	require.NoError(t, err)
+
+	// Per Interface.go:295-303, UnsetMined=true on a non-existent tx MUST be a
+	// tolerated no-op and MUST NOT error.
+	_, err = db.SetMinedMulti(ctx, []*chainhash.Hash{missingHash}, utxostore.MinedBlockInfo{
+		BlockID:     999,
+		BlockHeight: 100,
+		UnsetMined:  true,
+	})
+	require.NoError(t, err,
+		"SetMinedMulti(UnsetMined=true) on a non-existent tx must be a no-op (nil error) per Interface.go:295-303")
+}
+
+// UnsetMinedPreservesUnminedSinceWhenNonLCBlocksRemain verifies that unsetting one
+// of several non-longest-chain block entries from a transaction preserves its
+// UnminedSince marker, because the tx was never on the longest chain and the
+// remaining block entry is also a fork block — so it is still genuinely unmined.
+//
+// Divergence (verified against source):
+//   - aerospike (teranode.lua:637-644): UnminedSince is cleared only when
+//     hasBlocks && onLongestChain. With blocks remaining but onLongestChain=false,
+//     the bin is left untouched, preserving the value set at Create
+//     (aerospike/create.go:878-881). Observable: UnminedSince == creation height.
+//   - sql (sql.go:3268-3308): unmined_since is written only when zero block_ids
+//     remain after the delete (HAVING COUNT(...) = 0). Matches aerospike.
+//   - postgres (mined.go:230-232): the unmined_since CASE uses ELSE NULL, which
+//     fires whenever ANY block_ids remain after removal, clobbering UnminedSince
+//     to 0 even though no longest-chain block ever mined the tx. FAILS here.
+//
+// Consequence of the postgres bug: the DAH-sweep guard "unmined_since IS NOT NULL"
+// no longer protects this tx, exposing it to premature pruning / fork-choice
+// misclassification.
+func UnsetMinedPreservesUnminedSinceWhenNonLCBlocksRemain(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	const creationHeight uint32 = 100
+
+	require.NoError(t, db.SetBlockHeight(creationHeight))
+
+	// Unique tx to avoid cross-test contamination.
+	tx := newTestTx(t, 3_141_592)
+	txHash := tx.TxIDChainHash()
+
+	// Create the tx as unmined at height 100 (no MinedBlockInfo option).
+	// Both backends set unmined_since = 100 here.
+	_, _, err := db.SpendAndCreate(ctx, tx, creationHeight, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+	defer func() { _ = db.Delete(ctx, txHash) }()
+
+	// Sanity: UnminedSince is set at creation. Request the field explicitly —
+	// the aerospike backend does not include UnminedSince in a default Get.
+	txMeta, err := db.Get(ctx, txHash, fields.UnminedSince)
+	require.NoError(t, err)
+	require.Equal(t, creationHeight, txMeta.UnminedSince,
+		"UnminedSince must equal creation height before any SetMined call")
+
+	// Mine into fork block 10 — NOT on the longest chain. blockIDs = [10].
+	_, err = db.SetMinedMulti(ctx, []*chainhash.Hash{txHash}, utxostore.MinedBlockInfo{
+		BlockID:        10,
+		BlockHeight:    100,
+		SubtreeIdx:     0,
+		OnLongestChain: false,
+	})
+	require.NoError(t, err)
+
+	// Mine into a second fork block 20 — also NOT on the longest chain. blockIDs = [10, 20].
+	_, err = db.SetMinedMulti(ctx, []*chainhash.Hash{txHash}, utxostore.MinedBlockInfo{
+		BlockID:        20,
+		BlockHeight:    101,
+		SubtreeIdx:     0,
+		OnLongestChain: false,
+	})
+	require.NoError(t, err)
+
+	// Reorg: unset block 10. blockIDs = [20] afterwards. Block 20 is still a fork
+	// block, so the tx is still effectively unmined and UnminedSince must survive.
+	_, err = db.SetMinedMulti(ctx, []*chainhash.Hash{txHash}, utxostore.MinedBlockInfo{
+		BlockID:    10,
+		UnsetMined: true,
+	})
+	require.NoError(t, err)
+
+	// Defining assertion: UnminedSince must be preserved (non-zero).
+	//   aerospike/sql: 100. postgres: 0 (ELSE NULL clobber). FAILS HERE on postgres.
+	txMeta, err = db.Get(ctx, txHash, fields.UnminedSince)
+	require.NoError(t, err)
+	require.Equal(t, creationHeight, txMeta.UnminedSince,
+		"UnminedSince must be preserved after UnsetMined when a non-longest-chain block entry remains")
+}
+
+// UnfreezeAndReassignNotFrozenErr verifies that UnFreezeUTXOs and ReAssignUTXO
+// on an output that is NOT frozen return an error rather than silently
+// succeeding. The gold-standard aerospike store enforces this atomically in its
+// unfreeze/reassign Lua UDFs (UTXO_NOT_FROZEN); every backend must agree, so a
+// caller is never told an unfreeze/reassign happened when it did not.
+func UnfreezeAndReassignNotFrozenErr(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	require.NoError(t, db.SetBlockHeight(200))
+
+	tx := newTestTx(t, 8_675_309)
+	txHash := tx.TxIDChainHash()
+
+	_, _, err := db.SpendAndCreate(ctx, tx, 100, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+	defer func() { _ = db.Delete(ctx, txHash) }()
+
+	utxoHash, err := util.UTXOHashFromOutput(txHash, tx.Outputs[0], 0)
+	require.NoError(t, err)
+
+	notFrozen := &utxostore.Spend{TxID: txHash, Vout: 0, UTXOHash: utxoHash}
+
+	// The output was never frozen.
+	err = db.UnFreezeUTXOs(ctx, []*utxostore.Spend{notFrozen}, tSettings)
+	require.Error(t, err, "UnFreezeUTXOs on a non-frozen output must error, not silently succeed")
+
+	newHash := chainhash.HashH([]byte("reassign-target"))
+	err = db.ReAssignUTXO(ctx, notFrozen, &utxostore.Spend{TxID: txHash, Vout: 0, UTXOHash: &newHash}, tSettings)
+	require.Error(t, err, "ReAssignUTXO on a non-frozen output must error, not silently succeed")
+}
+
+// RemoveBlockIDsKeepsParallelArraysAligned verifies that removing one block ID
+// from a transaction mined in several blocks drops the matching entry from ALL
+// THREE parallel arrays (block_ids, block_heights, subtree_idxs), keeping them
+// index-aligned.
+//
+// The sql store (the correct reference for this method) stores each block entry
+// as its own row and so removes all three values together. A backend that trims
+// only the block-ids list leaves block_heights / subtree_idxs one element too
+// long, and every subsequent Get — which zips the three arrays by position —
+// reports the wrong height/subtree for the surviving blocks.
+//
+//   - sql:      BlockIDs=[100,300], BlockHeights=[10,30], SubtreeIdxs=[1,3] (correct).
+//   - postgres: prior to the fix, only block_ids was trimmed (misaligned); fixed
+//     to re-aggregate all three arrays via UNNEST WITH ORDINALITY.
+//
+// NOTE: this test is intentionally NOT wired to the aerospike backend. Aerospike
+// has the same trim-only-block-ids behaviour (remove_block_ids.go uses
+// ListRemoveByValueListOp on the BlockIDs bin alone); fixing that is out of scope
+// for this change.
+func RemoveBlockIDsKeepsParallelArraysAligned(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	require.NoError(t, db.SetBlockHeight(101))
+
+	tx := newTestTx(t, 2_718_281)
+	txHash := tx.TxIDChainHash()
+
+	_, _, err := db.SpendAndCreate(ctx, tx, 0, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+	defer func() { _ = db.Delete(ctx, txHash) }()
+
+	// Mine into three blocks with distinct heights and subtree indexes.
+	for _, m := range []utxostore.MinedBlockInfo{
+		{BlockID: 100, BlockHeight: 10, SubtreeIdx: 1},
+		{BlockID: 200, BlockHeight: 20, SubtreeIdx: 2},
+		{BlockID: 300, BlockHeight: 30, SubtreeIdx: 3},
+	} {
+		_, err = db.SetMinedMulti(ctx, []*chainhash.Hash{txHash}, m)
+		require.NoError(t, err)
+	}
+
+	// Sanity: all three arrays are aligned before removal.
+	txMeta, err := db.Get(ctx, txHash, fields.BlockIDs)
+	require.NoError(t, err)
+	require.Equal(t, []uint32{100, 200, 300}, txMeta.BlockIDs)
+	require.Equal(t, []uint32{10, 20, 30}, txMeta.BlockHeights)
+	require.Equal(t, []int{1, 2, 3}, txMeta.SubtreeIdxs)
+
+	// Remove the middle block.
+	err = db.RemoveBlockIDs(ctx, []utxostore.BlockIDsRemoval{{TxHash: txHash, BlockIDs: []uint32{200}}})
+	require.NoError(t, err)
+
+	// All three arrays must drop the same position and remain aligned.
+	txMeta, err = db.Get(ctx, txHash, fields.BlockIDs)
+	require.NoError(t, err)
+	require.Equal(t, []uint32{100, 300}, txMeta.BlockIDs, "block_ids must drop the removed block")
+	require.Equal(t, []uint32{10, 30}, txMeta.BlockHeights, "block_heights must drop the SAME position as block_ids")
+	require.Equal(t, []int{1, 3}, txMeta.SubtreeIdxs, "subtree_idxs must drop the SAME position as block_ids")
+}
+
+// UnspendFlagAsLockedLocksParent verifies that Unspend(..., flagAsLocked=true)
+// reverses the spend AND locks the affected parent transaction in a single
+// atomic operation. This is the path used by ProcessConflicting during
+// double-spend resolution (process_conflicting.go:193), where the parent must
+// be locked so the now-unspent output cannot be re-spent until the conflict is
+// resolved.
+//
+//   - postgres (spend.go:681-687): sets locked=true on the parent within the
+//     same pgx transaction as the spend-row delete. Correct.
+//   - sql (sql.go:2937-2983): reads flagAsLocked[0] and UPDATEs locked. Correct.
+//
+// NOTE: this test is intentionally NOT wired to the aerospike backend. Aerospike
+// accepts flagAsLocked but silently discards it (un_spend.go:121 calls the Lua
+// script with no locked argument; see the comment at logger/logger_test.go:526),
+// so the parent is never locked. Fixing the gold standard is out of scope here.
+func UnspendFlagAsLockedLocksParent(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	require.NoError(t, db.SetBlockHeight(1000))
+
+	// Parent tx whose output will be spent and then unspent-with-lock.
+	parent := newTestTx(t, 7_000_001)
+	parentHash := parent.TxIDChainHash()
+
+	_, _, err := db.SpendAndCreate(ctx, parent, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+	defer func() { _ = db.Delete(ctx, parentHash) }()
+
+	utxoHash, err := util.UTXOHashFromOutput(parentHash, parent.Outputs[0], 0)
+	require.NoError(t, err)
+
+	spendObj := &utxostore.Spend{
+		TxID:     parentHash,
+		Vout:     0,
+		UTXOHash: utxoHash,
+	}
+
+	// Build and apply a tx that spends parent output 0.
+	spendingTx := bt.NewTx()
+	require.NoError(t, spendingTx.From(
+		parentHash.String(), 0,
+		parent.Outputs[0].LockingScript.String(),
+		parent.Outputs[0].Satoshis,
+	))
+	require.NoError(t, spendingTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+
+	_, _, err = db.SpendAndCreate(ctx, spendingTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
+	require.NoError(t, err)
+
+	resp, err := db.GetSpend(ctx, spendObj)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status, "output must be spent before unspend")
+
+	// Reverse the spend AND lock the parent in one atomic call. The SpendingData
+	// is the ownership token Unspend requires to delete the spend row.
+	unspendRecords := []*utxostore.Spend{{
+		TxID:         parentHash,
+		Vout:         0,
+		UTXOHash:     utxoHash,
+		SpendingData: spend.NewSpendingData(spendingTx.TxIDChainHash(), 0),
+	}}
+	err = db.Unspend(ctx, unspendRecords, true)
+	require.NoError(t, err)
+
+	// The parent must now report LOCKED (locked overrides the now-unspent output).
+	resp, err = db.GetSpend(ctx, spendObj)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_LOCKED), resp.Status,
+		"parent must be LOCKED after Unspend(flagAsLocked=true)")
+}
+
 // newSpendAndCreateTx builds an extended transaction spending output `vout` of Tx.
 // The satoshi amount makes the txid unique per test case.
 func newSpendAndCreateTx(t *testing.T, vout uint32, satoshis uint64) *bt.Tx {

@@ -1145,6 +1145,36 @@ func Test_SmokeTests(t *testing.T) {
 
 		tests.SetMinedWithSpent(t, db)
 	})
+
+	t.Run("set mined unset on missing tx", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.SetMinedUnsetOnMissingTx(t, db)
+	})
+
+	t.Run("unset mined preserves unmined since", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.UnsetMinedPreservesUnminedSinceWhenNonLCBlocksRemain(t, db)
+	})
+
+	t.Run("remove block ids keeps parallel arrays aligned", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.RemoveBlockIDsKeepsParallelArraysAligned(t, db)
+	})
+
+	t.Run("unspend flag as locked locks parent", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.UnspendFlagAsLockedLocksParent(t, db)
+	})
+
+	t.Run("unfreeze and reassign not frozen errors", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.UnfreezeAndReassignNotFrozenErr(t, db)
+	})
 }
 
 func TestSetTTL(t *testing.T) {

@@ -33,6 +33,11 @@ type MockUtxostore struct {
 	// SupportsOutpointOnlySpendResult is what SupportsOutpointOnlySpend returns.
 	// Defaults to false; set true in tests that exercise the below-checkpoint fast path.
 	SupportsOutpointOnlySpendResult bool
+
+	// PoolMaxConnsResult is what PoolMaxConns returns. Defaults to 0 (the
+	// "not pool-bound — skip any pool-budget check" sentinel); set a positive
+	// value in tests that exercise the connection-pool budget guard.
+	PoolMaxConnsResult int
 }
 
 // Health mocks the health check functionality of the UTXO store.
@@ -52,6 +57,11 @@ func (m *MockUtxostore) Close(ctx context.Context) error {
 // (default false). Reading a field rather than m.Called() keeps the mock usable in
 // tests that have not set an expectation for this capability query.
 func (m *MockUtxostore) SupportsOutpointOnlySpend() bool { return m.SupportsOutpointOnlySpendResult }
+
+// PoolMaxConns returns the configurable PoolMaxConnsResult (default 0). Reading a
+// field rather than m.Called() keeps the mock usable in tests that have not set an
+// expectation for this capability query.
+func (m *MockUtxostore) PoolMaxConns() int { return m.PoolMaxConnsResult }
 
 // Create mocks the creation of transaction metadata in the UTXO store.
 // Returns the configured mock response for transaction creation operations.

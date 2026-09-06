@@ -135,6 +135,33 @@ func (s *Store) SupportsOutpointOnlySpend() bool {
 	return s.store.SupportsOutpointOnlySpend()
 }
 
+// earlyDAHBoundarySetter mirrors the optional interface the factory's
+// early-DAH latch (stores/utxo/factory/utxo.go) type-asserts against. It is
+// redeclared here, rather than imported, to avoid a logger -> factory import
+// cycle.
+type earlyDAHBoundarySetter interface{ SetEarlyDAHBoundary(uint32) }
+
+// SetEarlyDAHBoundary forwards to the wrapped store when it supports the
+// early-DAH-below-checkpoint feature (currently only the postgres store).
+//
+// Without this method, wrapping a store with `?logging=true` made the
+// factory's `store.(earlyDAHBoundarySetter)` type assertion fail against the
+// logger wrapper itself, silently disarming an explicitly-enabled early-DAH
+// boundary even though the underlying store supports it (final review,
+// Important issue 1). When the wrapped store does not implement the optional
+// interface, this is a no-op — identical to the factory's own behavior for a
+// store that genuinely lacks the feature.
+func (s *Store) SetEarlyDAHBoundary(height uint32) {
+	if setter, ok := s.store.(earlyDAHBoundarySetter); ok {
+		setter.SetEarlyDAHBoundary(height)
+	}
+}
+
+// PoolMaxConns delegates to the wrapped store.
+func (s *Store) PoolMaxConns() int {
+	return s.store.PoolMaxConns()
+}
+
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	s.logger.Debugf("[UTXOStore][logger][Health] : %s", caller())
 	return s.store.Health(ctx, checkLiveness)

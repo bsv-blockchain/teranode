@@ -1741,6 +1741,24 @@ func TestSmokeTests(t *testing.T) {
 		tests.MinedThenSpendAllPrunes(t, store, prunerSvc)
 	})
 
+	t.Run("set mined unset on missing tx", func(t *testing.T) {
+		_ = store.Delete(ctx, tests.TXHash)
+
+		tests.SetMinedUnsetOnMissingTx(t, store)
+	})
+
+	t.Run("unset mined preserves unmined since", func(t *testing.T) {
+		_ = store.Delete(ctx, tests.TXHash)
+
+		tests.UnsetMinedPreservesUnminedSinceWhenNonLCBlocksRemain(t, store)
+	})
+
+	t.Run("unfreeze and reassign not frozen errors", func(t *testing.T) {
+		_ = store.Delete(ctx, tests.TXHash)
+
+		tests.UnfreezeAndReassignNotFrozenErr(t, store)
+	})
+
 	// Last: these cases move the shared store's block height, and cannot restore
 	// it if the store started at zero.
 	t.Run("aerospike_set_block_state", func(t *testing.T) {
