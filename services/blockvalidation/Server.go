@@ -57,6 +57,14 @@ const (
 	SourceTypeNormal  = "normal"
 	SourceTypeRetry   = "retry"
 	SourceTypeCatchup = "catchup"
+
+	// maxCatchupAlternatives bounds how many alternative sources are retained
+	// per block hash in catchupAlternatives. Each element holds a full
+	// deserialized block for up to the cache TTL, and failover only ever walks
+	// a handful of sources; the list length must not be left to the upstream
+	// per-hash announcement rate (p2p's ingest dedup admits a few per publish
+	// window, which compounds over the 10-minute entry TTL).
+	maxCatchupAlternatives = 3
 )
 
 // processBlockFound encapsulates information about a newly discovered block
@@ -171,7 +179,8 @@ type Server struct {
 	// processing of the same subtree from multiple miners
 	processBlockNotify *ttlcache.Cache[chainhash.Hash, bool]
 
-	// catchupAlternatives tracks alternative peer sources for blocks in catchup
+	// catchupAlternatives tracks alternative peer sources for blocks in
+	// catchup, at most maxCatchupAlternatives per hash.
 	catchupAlternatives *ttlcache.Cache[chainhash.Hash, []processBlockCatchup]
 
 	// blockCatchupAttempts counts catchup re-entry cycles per block hash within a
@@ -181,6 +190,23 @@ type Server struct {
 	// pinning a worker and the catchup lock. TTL window only (no touch-on-hit) so the
 	// block can be retried again later if better peers appear.
 	blockCatchupAttempts *ttlcache.Cache[chainhash.Hash, int]
+
+	// peerMaliciousCache is a short-lived cache of IsPeerMalicious verdicts.
+	// Every gossip-driven Kafka message costs two of these checks and each is
+	// a p2p gRPC that fans into a blockchain RPC, so an announcement flood
+	// would otherwise turn into an RPC storm. reportCatchupMalicious
+	// invalidates the entry for a peer this node itself flags; bans raised by
+	// other routes (invalid-block/-subtree reports via Kafka, operator bans,
+	// other nodes' scoring) surface within the TTL, which is short enough
+	// that a fresh ban takes effect within seconds. Nil-safe: Server literals
+	// in tests that don't wire it get uncached lookups.
+	peerMaliciousCache *ttlcache.Cache[string, bool]
+
+	// ttlCachesStarted records that Init reached the point where it starts the
+	// ttlcache eviction loops (processBlockNotify, catchupAlternatives,
+	// blockCatchupAttempts, peerMaliciousCache), so Stop only calls
+	// ttlcache.Stop - a blocking send to that loop - when a receiver exists.
+	ttlCachesStarted atomic.Bool
 
 	// stats tracks operational metrics for monitoring and troubleshooting
 	stats *gocore.Stat
@@ -384,13 +410,25 @@ func New(
 			// hold the suppression open past the safety-net TTL.
 			ttlcache.WithDisableTouchOnHit[chainhash.Hash, bool](),
 		),
-		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](ttlcache.WithTTL[chainhash.Hash, []processBlockCatchup](10 * time.Minute)),
+		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](
+			ttlcache.WithTTL[chainhash.Hash, []processBlockCatchup](10*time.Minute),
+			// Read on every duplicate announcement for a hash in catchup;
+			// touch-on-hit would let that stream hold the retained blocks past
+			// the TTL. Same reasoning as processBlockNotify above.
+			ttlcache.WithDisableTouchOnHit[chainhash.Hash, []processBlockCatchup](),
+		),
 		blockCatchupAttempts: ttlcache.New[chainhash.Hash, int](
 			ttlcache.WithTTL[chainhash.Hash, int](10*time.Minute),
 			// Do not extend the window on reads: the cooldown runs a fixed time from
 			// the first failed attempt, so the enqueue-gate's Get checks cannot keep a
 			// block suppressed forever.
 			ttlcache.WithDisableTouchOnHit[chainhash.Hash, int](),
+		),
+		peerMaliciousCache: ttlcache.New[string, bool](
+			ttlcache.WithTTL[string, bool](peerMaliciousCacheTTL),
+			// Do not extend the window on reads: a flood of checks for one peer
+			// must not keep serving an ever-staler verdict.
+			ttlcache.WithDisableTouchOnHit[string, bool](),
 		),
 		adaptiveFetch:       af,
 		stats:               gocore.NewStat("blockvalidation"),
@@ -645,12 +683,23 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient)
 	}
 
+	// Record that the ttlcache eviction loops start here, BEFORE the go
+	// statements: ttlcache.Stop is an unbuffered send whose only receiver
+	// lives inside Start, so Stop must skip every cache whose loop never ran
+	// (a Server whose Init never reached this point, including its early
+	// returns above) or it hangs forever.
+	u.ttlCachesStarted.Store(true)
+
 	go u.processBlockNotify.Start()
 	go u.catchupAlternatives.Start()
 	// nil-guarded: this cache is newer than some Server-literal test fixtures that
 	// call Init without initialising it (NewServer always does). Matches Stop().
 	if u.blockCatchupAttempts != nil {
 		go u.blockCatchupAttempts.Start()
+	}
+
+	if u.peerMaliciousCache != nil {
+		go u.peerMaliciousCache.Start()
 	}
 
 	// Start fork manager cleanup routine
@@ -921,8 +970,15 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 	shouldConsiderCatchup := u.settings.BlockValidation.UseCatchupWhenBehind && (queueSize > 10 || len(u.blockFoundCh) > 3)
 
 	if shouldConsiderCatchup {
-		// Fetch the block to classify it before deciding on catchup
-		block, err := u.fetchSingleBlock(ctx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
+		// Fetch the block to classify it before deciding on catchup. Bound the
+		// fetch: ctx here is the blockFoundCh worker's service-lifetime context,
+		// and this branch is reached exactly when the queue is backed up — a
+		// state an announcement flood creates — so an unbounded fetch would let
+		// a slow peer pin the worker indefinitely. Same budget as the
+		// priority-queue catchup fetch in addBlockToPriorityQueue.
+		fetchCtx, fetchCancel := context.WithTimeout(ctx, 30*time.Second)
+		block, err := u.fetchSingleBlock(fetchCtx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
+		fetchCancel()
 		if err != nil {
 			if blockFound.errCh != nil {
 				blockFound.errCh <- err
@@ -944,6 +1000,13 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		if !parentExists {
 			if u.isPeerMalicious(ctx, blockFound.peerID) {
 				u.logger.Warnf("[processBlockFoundChannel][%s] peer %s is malicious, skipping catchup for block with missing parent", blockFound.hash.String(), blockFound.peerID)
+
+				// A WaitToComplete caller blocks on an unbuffered errCh; every
+				// return path must answer it or that caller hangs forever.
+				if blockFound.errCh != nil {
+					blockFound.errCh <- errors.NewProcessingError("peer %s is marked as malicious, skipping catchup", blockFound.peerID)
+				}
+
 				return nil
 			}
 			u.logger.Infof("[processBlockFoundChannel] Parent block %s doesn't exist for block %s, using catchup",
@@ -1105,12 +1168,21 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 //
 // Returns an error if shutdown encounters issues, though typically returns nil
 func (u *Server) Stop(ctx context.Context) error {
-	u.processBlockNotify.Stop()
-	u.catchupAlternatives.Stop()
-	// nil-guarded: this cache is newer than some Server-literal test fixtures that
-	// don't initialise it (NewServer always does). Matches the nil-safe helpers.
-	if u.blockCatchupAttempts != nil {
-		u.blockCatchupAttempts.Stop()
+	// Stop the ttlcache eviction loops only if Init actually started them:
+	// ttlcache.Stop is an unbuffered send whose only receiver lives inside
+	// Start, so stopping a never-started cache (a Server from NewServer whose
+	// Init never ran or returned early) hangs forever. One flag covers all
+	// four caches — they start together in Init. Nil guards retained for
+	// Server-literal test fixtures that wire only some of them.
+	if u.ttlCachesStarted.Load() {
+		u.processBlockNotify.Stop()
+		u.catchupAlternatives.Stop()
+		if u.blockCatchupAttempts != nil {
+			u.blockCatchupAttempts.Stop()
+		}
+		if u.peerMaliciousCache != nil {
+			u.peerMaliciousCache.Stop()
+		}
 	}
 
 	// Wait for all background tasks in BlockValidation to complete, bounded by the
@@ -2216,9 +2288,11 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 			alternatives := u.catchupAlternatives.Get(*blockFound.hash)
 			if alternatives == nil || alternatives.Value() == nil {
 				u.catchupAlternatives.Set(*blockFound.hash, []processBlockCatchup{catchupBlock}, ttlcache.DefaultTTL)
-			} else {
-				// Append to existing alternatives
-				altList := alternatives.Value()
+			} else if altList := alternatives.Value(); len(altList) < maxCatchupAlternatives {
+				// Append to existing alternatives. Each element retains a full
+				// deserialized block for up to the entry TTL and failover only
+				// ever walks a handful of sources, so the list is capped rather
+				// than trusting the upstream per-hash announcement rate.
 				altList = append(altList, catchupBlock)
 				u.catchupAlternatives.Set(*blockFound.hash, altList, ttlcache.DefaultTTL)
 			}

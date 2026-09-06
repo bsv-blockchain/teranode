@@ -77,6 +77,15 @@ const (
 	// when p2p_gossip_handler_concurrency is unset.
 	defaultGossipHandlerConcurrency = 4
 
+	// gossipKafkaPublishBuffer sizes the block/subtree producers' publish
+	// channels. The gossip handlers use TryPublish, so a full channel is a
+	// DROPPED announcement rather than backpressure — the buffer must absorb
+	// ordinary producer latency (broker leader election, linger flush), not
+	// just smooth a burst. Sized alongside the TryPublish switch on purpose:
+	// the old 10-slot buffer was tuned for a blocking send that could only
+	// delay, never lose.
+	gossipKafkaPublishBuffer = 1000
+
 	// syncCoordinatorStopTimeout is the sync coordinator's drain sub-budget
 	// inside Server.Stop. Coordinator RPCs are bounded at defaultRPCTimeout
 	// (5s), so a healthy drain completes well within it; the cap only bites
@@ -164,6 +173,11 @@ type Server struct {
 	blockPeerMap                      cappedPeerMap                  // Which peer sent each block (canonical hash -> peerMapEntry); insert-capped, issue 1409
 	subtreePeerMap                    cappedPeerMap                  // Which peer ANNOUNCED each subtree via gossip, not necessarily who served its bytes (canonical hash -> peerMapEntry); insert-capped, issue 1409
 	reportedInvalidBlocks             cappedPeerMap                  // Invalid blocks already scored (canonical hash -> scoring record); dedupes at-least-once Kafka redelivery so one invalid block is scored once per TTL, not once per delivery
+	blockSeenHashes                   seenHashCache                  // Block hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
+	subtreeSeenHashes                 seenHashCache                  // Subtree hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
+	lastAnnouncedBlockHash            atomic.Pointer[chainhash.Hash] // Most recently gossiped tip; suppresses the consecutive re-announcements a blockchain-subscription reconnect replays
+	lastAnnouncedSubtreeHash          atomic.Pointer[chainhash.Hash] // Most recently gossiped subtree, same consecutive-duplicate guard as lastAnnouncedBlockHash
+	connectedPeersProbe               atomic.Pointer[peersProbe]     // Briefly cached "any peer connected" answer for the sender guards; GetPeers walks every connection and subtrees announce constantly
 	startTime                         time.Time                      // Server start time for uptime calculation
 	peerRegistry                      blockchain.PeerRegistryClientI // gRPC client for the centralized peer registry hosted by the blockchain service
 	peerSelector                      *PeerSelector                  // Stateless peer selection logic
@@ -738,6 +752,12 @@ func (s *Server) applyPeerMapLimits(tSettings *settings.Settings) {
 	s.blockPeerMap.setMaxSize(maxSize)
 	s.subtreePeerMap.setMaxSize(maxSize)
 	s.reportedInvalidBlocks.setMaxSize(maxSize)
+
+	// The seen-hash dedup caches take their limits from the same call: their
+	// zero values fall back to the package defaults, so this too costs only
+	// configurability when skipped.
+	s.blockSeenHashes.setLimits(tSettings.P2P.SeenHashMaxSize, tSettings.P2P.SeenHashMaxPublishers, tSettings.P2P.SeenHashTTL)
+	s.subtreeSeenHashes.setLimits(tSettings.P2P.SeenHashMaxSize, tSettings.P2P.SeenHashMaxPublishers, tSettings.P2P.SeenHashTTL)
 }
 
 // announcePeerMapLimits logs the two ways a configured value differs from what
@@ -933,8 +953,8 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		s.invalidSubtreeKafkaConsumerClient.Start(ctx, s.invalidSubtreeHandler(ctx), kafka.WithLogErrorAndMoveOn())
 	}
 
-	s.subtreeKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
-	s.blocksKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
+	s.subtreeKafkaProducerClient.Start(ctx, make(chan *kafka.Message, gossipKafkaPublishBuffer))
+	s.blocksKafkaProducerClient.Start(ctx, make(chan *kafka.Message, gossipKafkaPublishBuffer))
 
 	// Warm the node-status cache before the HTTP surface (and its /p2p-ws
 	// route) comes up, so websocket clients are always served the cached status
@@ -1185,7 +1205,7 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 		// publishToNetwork.
 		s.logger.Debugf("[rejectedTxHandler] publishing rejectedTxMessage to p2p network")
 
-		if err = s.publishToNetwork(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
+		if _, err = s.publishToNetwork(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
 			s.logger.Errorf("[rejectedTxHandler] publish error: %v", err)
 		}
 
@@ -1638,12 +1658,51 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	}
 }
 
+// connectedPeersProbeTTL bounds how often the sender-side duplicate guards may
+// walk the connection list: GetPeers does per-peer work (connection lookup and
+// multiaddr formatting) and handleSubtreeNotification runs once per subtree.
+// The staleness cost is one guard decision made on a peer set up to this old —
+// at worst a briefly missed suppression or a marker armed moments before the
+// last peer left, both self-healing on the next probe.
+const connectedPeersProbeTTL = 2 * time.Second
+
+// peersProbe is one cached "any peer connected" answer.
+type peersProbe struct {
+	nonEmpty  bool
+	checkedAt time.Time
+}
+
+// hasConnectedPeers reports whether any peer is currently connected, cached
+// for connectedPeersProbeTTL.
+func (s *Server) hasConnectedPeers() bool {
+	if v := s.connectedPeersProbe.Load(); v != nil && time.Since(v.checkedAt) < connectedPeersProbeTTL {
+		return v.nonEmpty
+	}
+
+	nonEmpty := s.P2PClient != nil && len(s.P2PClient.GetPeers()) > 0
+	s.connectedPeersProbe.Store(&peersProbe{nonEmpty: nonEmpty, checkedAt: time.Now()})
+
+	return nonEmpty
+}
+
 func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Hash) error {
 	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
 		return nil
 	}
 
 	ctxLogger := s.logger.WithTraceContext(ctx)
+
+	// A blockchain-subscription reconnect replays the current tip notification
+	// (sendInitialNotification / the client's lastBlockNotification replay), so
+	// a flapping blockchain stream would re-gossip the same hash with a fresh
+	// seqno — a replay to peers that suppress and spam-score repeats. Suppress
+	// consecutive duplicates only: a reorg away and back changes the announced
+	// hash in between and still gets through.
+	if last := s.lastAnnouncedBlockHash.Load(); last != nil && last.IsEqual(hash) {
+		ctxLogger.Debugf("[handleBlockNotification] suppressing repeat announcement of current tip %s", hash.String())
+		return nil
+	}
+
 	var msgBytes []byte
 
 	h, meta, err := s.blockchainClient.GetBlockHeader(ctx, hash)
@@ -1693,8 +1752,19 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		return errors.NewError("blockMessage - json marshal error", err)
 	}
 
-	if err = s.publishToNetwork(ctx, s.blockTopicName, msgBytes); err != nil {
+	sent, err := s.publishToNetwork(ctx, s.blockTopicName, msgBytes)
+	if err != nil {
 		return errors.NewError("blockMessage - publish error", err)
+	}
+
+	// Record the tip only when the publish gate actually sent it AND there was
+	// someone to reach: the gate drops block publishes in degraded FSM states
+	// (returning nil), and a GossipSub publish into an empty mesh succeeds
+	// silently — recording either would suppress the re-announcement a
+	// later-connecting or recovering peer needs. The connected-peer set is a
+	// proxy for the topic mesh.
+	if sent && s.hasConnectedPeers() {
+		s.lastAnnouncedBlockHash.Store(hash)
 	}
 
 	// Also send a node_status update when best block changes
@@ -2234,7 +2304,7 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 	s.logger.Infof("[handleNodeStatusNotification] P2P publishing node_status to topic %s (height=%d, version=%s, storage=%q)", s.nodeStatusTopicName, nodeStatusMessage.BestHeight, nodeStatusMessage.Version, nodeStatusMessage.Storage)
 	s.logger.Debugf("[handleNodeStatusNotification] JSON payload: %s", string(msgBytes))
 
-	if err = s.publishToNetwork(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
+	if _, err = s.publishToNetwork(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
 		return errors.NewError("nodeStatusMessage - publish error", err)
 	}
 
@@ -2245,6 +2315,16 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 
 func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.Hash) error {
 	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
+		return nil
+	}
+
+	// Mirror of the consecutive-duplicate guard in handleBlockNotification: a
+	// flapping notification source must not re-gossip the same subtree hash
+	// with a fresh seqno, which reads as a replay to receivers. Distinct
+	// subtrees stream constantly, so only a replayed notification can repeat
+	// the immediately preceding hash.
+	if last := s.lastAnnouncedSubtreeHash.Load(); last != nil && last.IsEqual(hash) {
+		s.logger.Debugf("[handleSubtreeNotification] suppressing repeat announcement of subtree %s", hash.String())
 		return nil
 	}
 
@@ -2282,8 +2362,15 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 		return errors.NewError("subtreeMessage - json marshal error", err)
 	}
 
-	if err := s.publishToNetwork(ctx, s.subtreeTopicName, msgBytes); err != nil {
+	sent, err := s.publishToNetwork(ctx, s.subtreeTopicName, msgBytes)
+	if err != nil {
 		return errors.NewError("subtreeMessage - publish error", err)
+	}
+
+	// Same sent-and-non-empty-mesh gate as handleBlockNotification: a publish
+	// nobody heard must not suppress the re-announcement.
+	if sent && s.hasConnectedPeers() {
+		s.lastAnnouncedSubtreeHash.Store(hash)
 	}
 
 	return nil
@@ -2527,10 +2614,12 @@ func (s *Server) Stop(ctx context.Context) error {
 	// Peer registry cleanup ticker is gone — the centralized blockchain registry
 	// drives its own TTL/LRU eviction (deferred to PR2 in any case).
 
-	// Clear the peer maps to free memory
+	// Clear the peer maps and seen-hash caches to free memory
 	s.blockPeerMap.Clear()
 	s.subtreePeerMap.Clear()
 	s.reportedInvalidBlocks.Clear()
+	s.blockSeenHashes.Clear()
+	s.subtreeSeenHashes.Clear()
 	s.logger.Infof("[Stop] cleared peer maps")
 
 	if len(errs) > 0 {
