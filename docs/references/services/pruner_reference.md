@@ -95,6 +95,8 @@ pruner_duration_seconds{operation="dah_pruner"} 5.678
 **Labels:**
 
 - `reason`: Reason for skipping
+    - `fsm_not_running` - Catchup guard enabled and blockchain FSM is CATCHINGBLOCKS, IDLE, unknown, or missing
+    - `fsm_error` - Catchup guard enabled and blockchain FSM state could not be read
     - `not_running` - Block Assembly not in RUNNING state
     - `no_new_height` - No new block height to process
     - `already_in_progress` - Pruning already running
@@ -102,12 +104,15 @@ pruner_duration_seconds{operation="dah_pruner"} 5.678
 **Example:**
 
 ```prometheus
+pruner_skipped_total{reason="fsm_not_running"} 12
 pruner_skipped_total{reason="not_running"} 42
 pruner_skipped_total{reason="already_in_progress"} 10
 pruner_skipped_total{reason="preserve_failed"} 0
 ```
 
 **Note**: When defensive mode is enabled, skipped records are logged but not tracked as a separate metric label. Monitor logs for "Defensive skip" messages.
+
+`fsm_not_running` replaces `catchup_mode` for the `pruner_skipDuringCatchup` guard. Update external dashboards or alerts that select the old reason value; the counter name is unchanged.
 
 #### pruner_updating_parents_total
 
