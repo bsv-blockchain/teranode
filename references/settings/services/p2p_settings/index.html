@@ -7428,6 +7428,27 @@
 <td>Peer map cleanup frequency</td>
 </tr>
 <tr>
+<td>SeenHashMaxSize</td>
+<td>int</td>
+<td>10000</td>
+<td>p2p_seen_hash_max_size</td>
+<td>Maximum entries in each per-topic seen-hash announcement dedup cache</td>
+</tr>
+<tr>
+<td>SeenHashTTL</td>
+<td>time.Duration</td>
+<td>2m</td>
+<td>p2p_seen_hash_ttl</td>
+<td>Accounting window for the seen-hash announcement dedup</td>
+</tr>
+<tr>
+<td>SeenHashMaxPublishers</td>
+<td>int</td>
+<td>3</td>
+<td>p2p_seen_hash_max_publishers</td>
+<td>Distinct announcers of one hash forwarded to Kafka per publish window</td>
+</tr>
+<tr>
 <td>PeerRegistryBatchInterval</td>
 <td>time.Duration</td>
 <td>1s</td>
