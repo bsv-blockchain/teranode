@@ -362,7 +362,7 @@ pruner_jobTimeout = 10m
 - Too short: Frequent timeouts logged
 - Too long: Blocks other operations unnecessarily
 
-**Metrics**: Monitor `pruner_duration_seconds` to determine appropriate timeout
+**Metrics**: Monitor `teranode_pruner_duration_seconds` to determine appropriate timeout
 
 ## UTXO Store Settings
 
@@ -843,9 +843,9 @@ export UTXOSTORE_PARENTPRESERVATIONBLOCKS=20000
 
 While not configuration settings, these Prometheus metrics should be monitored:
 
-- `pruner_duration_seconds`: Adjust `jobTimeout` if consistently near timeout
-- `pruner_skipped_total{reason="not_running"}`: Indicates Block Assembly issues
-- `pruner_errors_total`: Indicates database or connectivity issues
+- `teranode_pruner_duration_seconds`: Adjust `jobTimeout` if consistently near timeout
+- `teranode_pruner_skipped_total{reason="block_assembly_timeout"}`: Indicates Block Assembly issues
+- `teranode_pruner_errors_total`: Indicates database or connectivity issues
 - `utxo_cleanup_batch_duration_seconds`: Indicates Aerospike performance
 
 ## Troubleshooting Configuration Issues
@@ -880,7 +880,7 @@ pruner_jobTimeout = 20m  # or higher
 
 ### Slow Pruning
 
-**Symptoms**: High `pruner_duration_seconds` values
+**Symptoms**: High `teranode_pruner_duration_seconds` values
 
 **Solutions:**
 
@@ -914,13 +914,13 @@ pruner_jobTimeout = 20m  # or higher
 1. Verify pruner running:
 
     ```bash
-    curl http://localhost:8096/metrics | grep pruner_processed_total
+    curl http://localhost:8096/metrics | grep teranode_pruner_active
     ```
 
-2. Check `pruner_skipped_total` reasons:
+2. Check `teranode_pruner_skipped_total` reasons:
 
     ```bash
-    curl http://localhost:8096/metrics | grep pruner_skipped_total
+    curl http://localhost:8096/metrics | grep teranode_pruner_skipped_total
     ```
 
 3. Verify Block Assembly in RUNNING state

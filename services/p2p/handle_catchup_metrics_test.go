@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -61,6 +62,27 @@ func TestRecordCatchupAttempt_RegistersSyncAttempt(t *testing.T) {
 	require.Equal(t, int64(1), got.CatchupAttempts)
 }
 
+// TestRecordCatchupAttempt_IncrementsCounter confirms the success path
+// increments prometheusP2PCatchupAttempts, and that the early-return on an
+// invalid peer ID (before the registry call) does not.
+func TestRecordCatchupAttempt_IncrementsCounter(t *testing.T) {
+	initPrometheusMetrics()
+
+	before := testutil.ToFloat64(prometheusP2PCatchupAttempts)
+
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	resp, err := s.RecordCatchupAttempt(context.Background(), &p2p_api.RecordCatchupAttemptRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusP2PCatchupAttempts))
+
+	_, err = s.RecordCatchupAttempt(context.Background(), &p2p_api.RecordCatchupAttemptRequest{PeerId: "not-a-peer-id"})
+	require.Error(t, err)
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusP2PCatchupAttempts), "an invalid peer ID must not increment the counter")
+}
+
 func TestRecordCatchupAttempt_InvalidPeerID(t *testing.T) {
 	s, _, _ := freshTestServer(t)
 
@@ -96,6 +118,27 @@ func TestRecordCatchupFailure_UpdatesInteractionMetrics(t *testing.T) {
 	got, _ := reg.Get(pid.String())
 	require.Equal(t, int64(1), got.InteractionFailures)
 	require.Equal(t, int64(1), got.CatchupFailures)
+}
+
+// TestRecordCatchupSuccess_IncrementsCounter confirms the success path
+// increments prometheusP2PCatchupSuccesses, and that the early-return on an
+// invalid peer ID (before the registry call) does not.
+func TestRecordCatchupSuccess_IncrementsCounter(t *testing.T) {
+	initPrometheusMetrics()
+
+	before := testutil.ToFloat64(prometheusP2PCatchupSuccesses)
+
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	resp, err := s.RecordCatchupSuccess(context.Background(), &p2p_api.RecordCatchupSuccessRequest{PeerId: pid.String(), DurationMs: 100})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusP2PCatchupSuccesses))
+
+	_, err = s.RecordCatchupSuccess(context.Background(), &p2p_api.RecordCatchupSuccessRequest{PeerId: "not-a-peer"})
+	require.Error(t, err)
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusP2PCatchupSuccesses), "an invalid peer ID must not increment the counter")
 }
 
 func TestRecordCatchupFailure_BlockIncomplete_DowngradesFullPeer(t *testing.T) {
@@ -215,6 +258,35 @@ func TestRecordCatchupFailure_BlockIncomplete_DoesNotBanPeer(t *testing.T) {
 	banned, err := s.peerRegistry.IsPeerBanned(context.Background(), pid.String())
 	require.NoError(t, err)
 	require.False(t, banned)
+}
+
+// TestRecordCatchupFailure_IncrementsFailureCounter confirms both the generic
+// and block-incomplete failure paths increment the prometheusP2PCatchupFailures
+// counter, labelled by the normalized failure kind, so an operator can alert on
+// catchup failures the same way they already can for attempts/successes.
+func TestRecordCatchupFailure_IncrementsFailureCounter(t *testing.T) {
+	initPrometheusMetrics()
+
+	genericBefore := testutil.ToFloat64(prometheusP2PCatchupFailures.WithLabelValues(catchupFailureKindGeneric))
+	blockIncompleteBefore := testutil.ToFloat64(prometheusP2PCatchupFailures.WithLabelValues(catchupFailureKindBlockIncomplete))
+
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	resp, err := s.RecordCatchupFailure(context.Background(), &p2p_api.RecordCatchupFailureRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, genericBefore+1, testutil.ToFloat64(prometheusP2PCatchupFailures.WithLabelValues(catchupFailureKindGeneric)))
+
+	blockHash := chainhash.HashH([]byte("counter-block-incomplete"))
+	resp, err = s.RecordCatchupFailure(context.Background(), &p2p_api.RecordCatchupFailureRequest{
+		PeerId:      pid.String(),
+		FailureKind: catchupFailureKindBlockIncomplete,
+		BlockHash:   blockHash.String(),
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, blockIncompleteBefore+1, testutil.ToFloat64(prometheusP2PCatchupFailures.WithLabelValues(catchupFailureKindBlockIncomplete)))
 }
 
 func TestRecordCatchupFailure_UnknownFailureKind_Generic(t *testing.T) {

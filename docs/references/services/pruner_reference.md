@@ -67,7 +67,7 @@ grpcurl -plaintext localhost:8096 pruner.PrunerAPI/HealthGRPC
 
 Located in `/services/pruner/metrics.go`:
 
-#### pruner_duration_seconds
+#### teranode_pruner_duration_seconds
 
 **Type**: Histogram
 
@@ -77,16 +77,18 @@ Located in `/services/pruner/metrics.go`:
 
 - `operation`: Operation type
     - `preserve_parents` - Phase 1: Parent preservation
+    - `expire_preservations` - Phase 1b: Expiring old parent preservations
     - `dah_pruner` - Phase 2: DAH pruning
 
 **Example:**
 
 ```prometheus
-pruner_duration_seconds{operation="preserve_parents"} 1.234
-pruner_duration_seconds{operation="dah_pruner"} 5.678
+teranode_pruner_duration_seconds{operation="preserve_parents"} 1.234
+teranode_pruner_duration_seconds{operation="expire_preservations"} 0.456
+teranode_pruner_duration_seconds{operation="dah_pruner"} 5.678
 ```
 
-#### pruner_skipped_total
+#### teranode_pruner_skipped_total
 
 **Type**: Counter
 
@@ -95,21 +97,23 @@ pruner_duration_seconds{operation="dah_pruner"} 5.678
 **Labels:**
 
 - `reason`: Reason for skipping
-    - `not_running` - Block Assembly not in RUNNING state
-    - `no_new_height` - No new block height to process
-    - `already_in_progress` - Pruning already running
+    - `block_assembly_timeout` - Timed out or errored waiting for Block Assembly to be ready
+    - `below_min_height` - Block height at or below `pruner_minBlockHeight`
+    - `fsm_error` - Failed to read the blockchain FSM state
+    - `catchup_mode` - Node is in the CATCHINGBLOCKS FSM state and `pruner_skipDuringCatchup` is set
 
 **Example:**
 
 ```prometheus
-pruner_skipped_total{reason="not_running"} 42
-pruner_skipped_total{reason="already_in_progress"} 10
-pruner_skipped_total{reason="preserve_failed"} 0
+teranode_pruner_skipped_total{reason="block_assembly_timeout"} 42
+teranode_pruner_skipped_total{reason="below_min_height"} 10
+teranode_pruner_skipped_total{reason="fsm_error"} 0
+teranode_pruner_skipped_total{reason="catchup_mode"} 7
 ```
 
 **Note**: When defensive mode is enabled, skipped records are logged but not tracked as a separate metric label. Monitor logs for "Defensive skip" messages.
 
-#### pruner_updating_parents_total
+#### teranode_pruner_updating_parents_total
 
 **Type**: Counter
 
@@ -118,10 +122,10 @@ pruner_skipped_total{reason="preserve_failed"} 0
 **Example:**
 
 ```prometheus
-pruner_updating_parents_total 1000
+teranode_pruner_updating_parents_total 1000
 ```
 
-#### pruner_deleting_children_total
+#### teranode_pruner_deleting_children_total
 
 **Type**: Counter
 
@@ -130,10 +134,10 @@ pruner_updating_parents_total 1000
 **Example:**
 
 ```prometheus
-pruner_deleting_children_total 500
+teranode_pruner_deleting_children_total 500
 ```
 
-#### pruner_current_height
+#### teranode_pruner_current_height
 
 **Type**: Gauge
 
@@ -142,10 +146,10 @@ pruner_deleting_children_total 500
 **Example:**
 
 ```prometheus
-pruner_current_height 850000
+teranode_pruner_current_height 850000
 ```
 
-#### pruner_active
+#### teranode_pruner_active
 
 **Type**: Gauge
 
@@ -154,10 +158,10 @@ pruner_current_height 850000
 **Example:**
 
 ```prometheus
-pruner_active 1
+teranode_pruner_active 1
 ```
 
-#### pruner_errors_total
+#### teranode_pruner_errors_total
 
 **Type**: Counter
 
@@ -166,16 +170,16 @@ pruner_active 1
 **Labels:**
 
 - `operation`: Operation where error occurred
-    - `preserve_parents` - Error during parent preservation
-    - `dah_pruner` - Error during DAH pruning
-    - `state_check` - Error checking Block Assembly state
+    - `preserve_parents` - Error during Phase 1 parent preservation
+    - `expire_preservations` - Error during Phase 1b preservation expiry
+    - `dah_pruner` - Error during Phase 2 DAH pruning
 
 **Example:**
 
 ```prometheus
-pruner_errors_total{operation="preserve_parents"} 0
-pruner_errors_total{operation="dah_pruner"} 2
-pruner_errors_total{operation="state_check"} 0
+teranode_pruner_errors_total{operation="preserve_parents"} 0
+teranode_pruner_errors_total{operation="expire_preservations"} 0
+teranode_pruner_errors_total{operation="dah_pruner"} 2
 ```
 
 ### Store-Level Metrics
@@ -437,16 +441,17 @@ ERROR [PreserveParents] Failed to preserve parent transaction: CRITICAL - aborti
 4. Check metrics:
 
     ```bash
-    curl http://localhost:8096/metrics | grep pruner_skipped_total
+    curl http://localhost:8096/metrics | grep teranode_pruner_skipped_total
     ```
 
 ### High Error Rate
 
-1. Check `pruner_errors_total` by operation:
+1. Check `teranode_pruner_errors_total` by operation:
 
     ```prometheus
-    pruner_errors_total{operation="preserve_parents"}
-    pruner_errors_total{operation="dah_pruner"}
+    teranode_pruner_errors_total{operation="preserve_parents"}
+    teranode_pruner_errors_total{operation="expire_preservations"}
+    teranode_pruner_errors_total{operation="dah_pruner"}
     ```
 
 2. Review error logs:
@@ -462,10 +467,10 @@ ERROR [PreserveParents] Failed to preserve parent transaction: CRITICAL - aborti
 
 ### Slow Pruning
 
-1. Check `pruner_duration_seconds` histogram:
+1. Check `teranode_pruner_duration_seconds` histogram:
 
     ```bash
-    curl http://localhost:8096/metrics | grep pruner_duration_seconds
+    curl http://localhost:8096/metrics | grep teranode_pruner_duration_seconds
     ```
 
 2. Increase parallel chunk processing:

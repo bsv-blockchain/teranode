@@ -211,7 +211,7 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 					ctx, s.utxoStore, blockHeight, blockHashStr, s.settings, s.logger,
 				); err != nil {
 					s.logger.Warnf("[pruner][%s:%d] phase 1: failed to preserve parents: %v", blockHashStr, blockHeight, err)
-					prunerErrors.WithLabelValues("parent_preservation").Inc()
+					prunerErrors.WithLabelValues("preserve_parents").Inc()
 				} else {
 					prunerDuration.WithLabelValues("preserve_parents").Observe(time.Since(startTime).Seconds())
 					if recordsProcessed > 0 {

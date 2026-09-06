@@ -59,7 +59,7 @@ else Job Completed
     JobManager --> Pruner: Success
 end
 
-Pruner -> Pruner: Record Metrics:\npruner_duration_seconds\npruner_processed_total
+Pruner -> Pruner: Record Metrics:\nteranode_pruner_duration_seconds\nteranode_pruner_deleting_children_total
 
 left footer Last Modified On: %date("dd-MMM-yyyy")
 @enduml
