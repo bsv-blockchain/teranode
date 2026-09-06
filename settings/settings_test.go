@@ -190,3 +190,36 @@ func TestP2PSyncPeerNoProgressTimeout_EnvOverride(t *testing.T) {
 	require.NotNil(t, tSettings)
 	require.Equal(t, 12*time.Minute, tSettings.P2P.SyncPeerNoProgressTimeout)
 }
+
+// Pin the Postgres circuit breaker defaults. CircuitBreakerEnabled must stay
+// false so the breaker remains an opt-in feature - a default-only assertion
+// can't tell "wired to false" from "never read", so the accompanying env
+// override tests below are what actually prove the five keys reach
+// NewSettings().
+func TestPostgresCircuitBreakerDefaults(t *testing.T) {
+	tSettings := NewSettings()
+	require.NotNil(t, tSettings.Postgres.CircuitBreakerEnabled, "global setting must always be a concrete value, never nil")
+	require.False(t, *tSettings.Postgres.CircuitBreakerEnabled)
+	require.Equal(t, 5, tSettings.Postgres.CircuitBreakerFailureThreshold)
+	require.Equal(t, 3, tSettings.Postgres.CircuitBreakerHalfOpenMax)
+	require.Equal(t, 30*time.Second, tSettings.Postgres.CircuitBreakerCooldown)
+	require.Equal(t, 10*time.Second, tSettings.Postgres.CircuitBreakerFailureWindow)
+}
+
+// Each of the five keys must independently reach its NewSettings() field.
+func TestPostgresCircuitBreaker_EnvOverride(t *testing.T) {
+	t.Setenv("postgres_circuitBreakerEnabled", "true")
+	t.Setenv("postgres_circuitBreakerFailureThreshold", "7")
+	t.Setenv("postgres_circuitBreakerHalfOpenMax", "4")
+	t.Setenv("postgres_circuitBreakerCooldown", "45s")
+	t.Setenv("postgres_circuitBreakerFailureWindow", "20s")
+
+	tSettings := NewSettings()
+
+	require.NotNil(t, tSettings.Postgres.CircuitBreakerEnabled)
+	require.True(t, *tSettings.Postgres.CircuitBreakerEnabled)
+	require.Equal(t, 7, tSettings.Postgres.CircuitBreakerFailureThreshold)
+	require.Equal(t, 4, tSettings.Postgres.CircuitBreakerHalfOpenMax)
+	require.Equal(t, 45*time.Second, tSettings.Postgres.CircuitBreakerCooldown)
+	require.Equal(t, 20*time.Second, tSettings.Postgres.CircuitBreakerFailureWindow)
+}

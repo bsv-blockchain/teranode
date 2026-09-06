@@ -127,10 +127,12 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 		if poolSettings.RetryBaseDelay == 0 {
 			poolSettings.RetryBaseDelay = tSettings.Postgres.RetryBaseDelay
 		}
-		// Circuit breaker settings: use global defaults for zero values
-		// Note: CircuitBreakerEnabled is explicit - if service sets false, it stays false
-		if !poolSettings.CircuitBreakerEnabled && tSettings.Postgres.CircuitBreakerEnabled {
-			poolSettings.CircuitBreakerEnabled = true
+		// Circuit breaker enablement: nil means "inherit global", non-nil is the
+		// service's explicit choice and always wins - including an explicit
+		// false, which must be able to opt a service out of a globally-enabled
+		// breaker.
+		if poolSettings.CircuitBreakerEnabled == nil {
+			poolSettings.CircuitBreakerEnabled = tSettings.Postgres.CircuitBreakerEnabled
 		}
 		if poolSettings.CircuitBreakerFailureThreshold == 0 {
 			poolSettings.CircuitBreakerFailureThreshold = tSettings.Postgres.CircuitBreakerFailureThreshold
@@ -160,13 +162,13 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 	})
 
 	// Configure circuit breaker if enabled (requires all settings to be explicitly set)
-	if poolSettings.CircuitBreakerEnabled {
+	if poolSettings.CircuitBreakerEnabled != nil && *poolSettings.CircuitBreakerEnabled {
 		cbConfig := usql.CircuitBreakerConfig{
 			FailureThreshold: poolSettings.CircuitBreakerFailureThreshold,
 			HalfOpenMax:      poolSettings.CircuitBreakerHalfOpenMax,
 			Cooldown:         poolSettings.CircuitBreakerCooldown,
 			FailureWindow:    poolSettings.CircuitBreakerFailureWindow,
-			Enabled:          poolSettings.CircuitBreakerEnabled,
+			Enabled:          true,
 			OnStateChange: func(from, to usql.CircuitState, reason string) {
 				logger.Warnf("PostgreSQL circuit breaker state changed: %s -> %s (%s)", from.String(), to.String(), reason)
 			},
