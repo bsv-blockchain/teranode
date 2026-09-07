@@ -1717,8 +1717,9 @@ func (u *Server) checkSecretMiningFromCommonAncestor(ctx context.Context, blockU
 	// Record the malicious attempt for this peer
 	u.reportCatchupMalicious(ctx, peerID, "secret_mining")
 
-	// Log ban request - actual banning should be handled by the P2P service
-	u.logger.Errorf("[catchup][%s] SECURITY: Peer %s attempted secret mining - should be banned (banning not yet implemented)", blockUpTo.Hash().String(), baseURL)
+	// Banning is handled by the P2P service: the malicious report above raises
+	// the peer's ban score, and repeated offenses cross the ban threshold.
+	u.logger.Errorf("[catchup][%s] SECURITY: Peer %s attempted secret mining - reported as malicious for ban scoring", blockUpTo.Hash().String(), baseURL)
 
 	return errors.NewServiceError("[catchup][%s] is potentially a secretly mined chain from common ancestor at height %d, ignoring", blockUpTo.Hash().String(), commonAncestorMeta.Height)
 }
