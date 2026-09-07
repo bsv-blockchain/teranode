@@ -7416,9 +7416,9 @@
 <tr>
 <td>SubtreeMetaPeerFetchTimeout</td>
 <td>time.Duration</td>
-<td>30s</td>
+<td>10m</td>
 <td>blockvalidation_subtree_meta_peer_fetch_timeout</td>
-<td>Whole-peer budget for one subtree meta regeneration fetch (all 503 retries + body stream)</td>
+<td>Per-fetch budget for a subtree meta regeneration subtree_data fetch (all 503 retries + body stream); a cache-busting retry gets a fresh budget</td>
 </tr>
 <tr>
 <td>CheckSubtreeFromBlockRetries</td>
