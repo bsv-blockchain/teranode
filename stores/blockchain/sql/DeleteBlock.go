@@ -41,6 +41,20 @@ func (s *SQL) DeleteBlock(ctx context.Context, blockHash *chainhash.Hash) error 
 
 	s.logger.Debugf("DeleteBlock %s", blockHash.String())
 
+	// Hold the guard across the DELETE and the rebuild, the same as every other caller that
+	// changes which blocks are on the main chain. rebuildOffChainSet's contract note asks
+	// for it and this was the one mutator not honouring it.
+	//
+	// Note what the guard cannot fix. updateMaxBlockID only ever moves the bound up, so a
+	// deleted id stays at or below maxBlockID for the life of the process while its row is
+	// gone, which is a gap id the in-memory route answers true for until restart. That is
+	// safe today only because cmd/rewindblockchain is the sole non-test caller, it is a
+	// separate binary that never serves CheckBlockIsInCurrentChain, and it deletes in
+	// descending height order so the node restarts with maxBlockID back at the surviving
+	// MAX(id). An in-process caller would need maxBlockID recomputed rather than advanced.
+	s.mainChainRebuilding.Add(1)
+	defer s.mainChainRebuilding.Add(-1)
+
 	res, err := s.db.ExecContext(ctx, `DELETE FROM blocks WHERE hash = $1`, blockHash.CloneBytes())
 	if err != nil {
 		return errors.NewStorageError("error deleting block", err)
@@ -58,7 +72,7 @@ func (s *SQL) DeleteBlock(ctx context.Context, blockHash *chainhash.Hash) error 
 		s.resetChainWalkCache()
 		rebuildCtx, rebuildCancel := context.WithTimeout(ctx, rebuildOffChainSetTimeout)
 		defer rebuildCancel()
-		if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+		if rebuildErr := s.triggerRebuildOffChainSetAfterWrite(rebuildCtx); rebuildErr != nil {
 			s.logger.Errorf("DeleteBlock: %v", rebuildErr)
 		} else {
 			s.lastSuccessfulRebuild.Store(time.Now().Unix())

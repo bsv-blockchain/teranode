@@ -153,6 +153,39 @@ type SQL struct {
 	// in-memory off-chain set (true) or the original SQL recursive CTE (false).
 	// Read once at construction from settings; not changed at runtime.
 	useInMemoryChainCheck bool
+	// chainCheckShadowCompare makes CheckBlockIsInCurrentChain compute the
+	// authoritative SQL answer alongside the in-memory one and compare them. Read
+	// once at construction from settings; not changed at runtime. Only consulted
+	// when useInMemoryChainCheck is true.
+	chainCheckShadowCompare bool
+	// chainCheckShadowChecks counts how many in-memory answers have been compared
+	// against the authoritative answer since startup. A soak needs this next to the
+	// mismatch count: zero mismatches is only good news if the comparison ran.
+	chainCheckShadowChecks atomic.Uint64
+	// chainCheckShadowMismatches counts how many times the in-memory answer and the
+	// authoritative answer have differed since startup. Exposed for the soak; a
+	// non-zero value means the forked-set route is not safe to run on its own yet.
+	chainCheckShadowMismatches atomic.Uint64
+	// chainCheckShadowRejectChecks counts maxBlockID rejects seen, whether or not each one
+	// was sampled for comparison. It is the denominator that says how much traffic the
+	// sampled population represents.
+	chainCheckShadowRejectChecks atomic.Uint64
+	// chainStateEpoch counts writes to the main-chain classification. Every caller that
+	// has just changed on_main_chain bumps it, and a rebuild records the value it read
+	// when its own read BEGAN. Comparing the two is the only way a caller can tell that
+	// the set now installed observed its write. singleflight's `shared` flag cannot: it
+	// is c.dups > 0, so it is true for the LEADER too whenever anyone joined, and false
+	// for a joiner nobody else joined.
+	chainStateEpoch atomic.Uint64
+	// offChainSetEpoch is the chainStateEpoch value read at the START of whichever
+	// rebuild produced the currently installed forked set. A value below a caller's
+	// epoch means the installed set predates that caller's write.
+	offChainSetEpoch atomic.Uint64
+	// chainCheckShadowFailures counts comparisons that could not run because the
+	// authoritative query errored. Without it, a node whose shadow query always fails
+	// reports the same "nothing" as a node that never reached the route, and a soak
+	// cannot tell "zero mismatches" from "zero comparisons".
+	chainCheckShadowFailures atomic.Uint64
 	// mainChainRebuilding is a reference counter: each caller that is about to (or
 	// currently is) mutating the on_main_chain column Adds 1 on entry and Adds -1 on
 	// exit. While the counter is > 0, all queries that use on_main_chain fall back to
@@ -262,15 +295,16 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 	useInMemory := tSettings.BlockChain.UseInMemoryChainCheck
 
 	s := &SQL{
-		db:                    db,
-		engine:                util.SQLEngine(storeURL.Scheme),
-		logger:                logger,
-		responseCache:         NewGenerationalCache(),
-		cacheTTL:              2 * time.Minute,
-		chainParams:           tSettings.ChainCfgParams,
-		rawMinerTag:           tSettings.BlockChain.RawMinerTag,
-		useInMemoryChainCheck: useInMemory,
-		blockTimestampCache:   newBlockTimestampCache(),
+		db:                      db,
+		engine:                  util.SQLEngine(storeURL.Scheme),
+		logger:                  logger,
+		responseCache:           NewGenerationalCache(),
+		cacheTTL:                2 * time.Minute,
+		chainParams:             tSettings.ChainCfgParams,
+		rawMinerTag:             tSettings.BlockChain.RawMinerTag,
+		useInMemoryChainCheck:   useInMemory,
+		chainCheckShadowCompare: tSettings.BlockChain.ChainCheckShadowCompare,
+		blockTimestampCache:     newBlockTimestampCache(),
 	}
 
 	s.backgroundDone = make(chan struct{})
@@ -368,7 +402,9 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 		if useInMemory {
 			offChainCtx, offChainCancel := s.shutdownAwareContext(rebuildOffChainSetTimeout)
 			defer offChainCancel()
-			if rebuildErr := s.rebuildOffChainSet(offChainCtx); rebuildErr != nil {
+			// Through the group, not straight to rebuildOffChainSet: startup must be
+			// serialized against a mutator's rebuild like every other caller.
+			if rebuildErr := s.triggerRebuildOffChainSet(offChainCtx); rebuildErr != nil {
 				s.logger.Errorf("startup: rebuildOffChainSet: %v", rebuildErr)
 			} else {
 				s.lastSuccessfulRebuild.Store(time.Now().Unix())
@@ -1276,16 +1312,116 @@ func (s *SQL) resetChainWalkCache() {
 	}
 }
 
-// triggerRebuildOffChainSet deduplicates concurrent rebuild requests using singleflight.
-// When multiple goroutines (e.g. concurrent StoreBlock calls detecting forks) trigger
-// a rebuild simultaneously, only one actually executes and the others wait for its result.
-// This prevents race conditions where concurrent rebuilds could see different DB states.
+// triggerRebuildOffChainSet asks for a rebuild and is happy to share one already running.
+// Concurrent callers collapse into a single read of the blocks table, which is what the
+// two-minute background refresh and the startup rebuild want: a set a few seconds out of
+// date costs nothing there, and the rebuild is a full-chain recursive walk whenever
+// mainChainRebuilding is raised.
+//
+// Do NOT use this after changing on_main_chain. See triggerRebuildOffChainSetAfterWrite.
 func (s *SQL) triggerRebuildOffChainSet(ctx context.Context) error {
-	_, err, _ := s.rebuildGroup.Do("rebuild", func() (interface{}, error) {
-		return nil, s.rebuildOffChainSet(ctx)
+	return s.runRebuild(ctx, s.rebuildOffChainSet)
+}
+
+// triggerRebuildOffChainSetAfterWrite gets a forked set that observed the caller's write,
+// or reports failure and de-trusts the set so the route falls back to SQL. Every caller
+// that has just moved a block on or off the main chain must use it.
+//
+// Sharing is wrong for those callers. singleflight hands a joiner the in-flight leader's
+// result without running the work again, and that leader began reading before the caller's
+// UPDATE committed, so the set it installs does not contain the block the caller just
+// moved. CheckBlockIsInCurrentChain reads absence from that set as proof of main-chain
+// membership, so an operator's freshly invalidated block would answer "on the main chain"
+// until the next background refresh, up to two minutes later.
+//
+// The test for "did the installed set observe my write" is an epoch, not singleflight's
+// `shared` flag. `shared` is c.dups > 0, which is true for the LEADER whenever anyone
+// joined it, so keying off it made a mutator that had provably read after its own write
+// pay a second full-chain walk, and still said nothing about whether the set was fresh.
+func (s *SQL) triggerRebuildOffChainSetAfterWrite(ctx context.Context) error {
+	epoch := s.chainStateEpoch.Add(1)
+
+	return s.runRebuildObservingWrite(ctx, epoch, s.rebuildOffChainSet)
+}
+
+// runRebuild is the deduplicating half, split out so the ordering these two differ on can
+// be driven deterministically in a test.
+func (s *SQL) runRebuild(ctx context.Context, work func(context.Context) error) error {
+	_, err, _ := s.rebuildGroup.Do(rebuildGroupKey, func() (interface{}, error) {
+		return nil, work(ctx)
 	})
+
 	return err
 }
+
+// runRebuildObservingWrite runs at most two rebuilds and then tells the truth about what is
+// installed. See triggerRebuildOffChainSetAfterWrite for why the epoch decides this.
+//
+// The retry gets its own deadline rather than the caller's. StoreBlock gives both walks one
+// 30s budget, so a first walk that used most of it left the retry dead on arrival, and a
+// retry that cannot run is exactly the case that must not be reported as success.
+//
+// On failure the set is de-trusted by clearing lastSuccessfulRebuild. Without that the
+// leader's stale set stays installed AND stays trusted, because rebuildOffChainSet stamps
+// lastSuccessfulRebuild itself: the caller's own error return is not enough, since the
+// stamp has already happened on another goroutine. Clearing sends CheckBlockIsInCurrentChain
+// to SQL until some rebuild succeeds, which the background loop retries every two minutes.
+func (s *SQL) runRebuildObservingWrite(ctx context.Context, epoch uint64, work func(context.Context) error) error {
+	fn := func(c context.Context) func() (interface{}, error) {
+		return func() (interface{}, error) { return nil, work(c) }
+	}
+
+	_, err, _ := s.rebuildGroup.Do(rebuildGroupKey, fn(ctx))
+	if err == nil && s.offChainSetEpoch.Load() >= epoch {
+		return nil
+	}
+
+	// Either the rebuild errored, or we were handed a set read before our write. Detach
+	// from the caller's deadline so a budget the first attempt exhausted cannot decide this.
+	retryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rebuildOffChainSetTimeout)
+	defer cancel()
+
+	_, retryErr, _ := s.rebuildGroup.Do(rebuildGroupKey, fn(retryCtx))
+	if retryErr == nil && s.offChainSetEpoch.Load() >= epoch {
+		return nil
+	}
+
+	s.lastSuccessfulRebuild.Store(0)
+
+	if retryErr != nil {
+		return errors.NewStorageError("off-chain set rebuild did not observe this write; set de-trusted", retryErr)
+	}
+
+	return errors.NewProcessingError("off-chain set rebuild did not observe this write; set de-trusted")
+}
+
+// installOffChainSet publishes a freshly read forked set, unless a rebuild that read LATER
+// has already published one. startEpoch is the chainStateEpoch the caller read before it
+// began reading.
+//
+// Ordering by completion is not ordering by what was read. The startup rebuild takes the
+// full-chain recursive branch while the guard is held, which is seconds on a 900k-block
+// chain, and a fork arriving in the middle of it produces a mutator rebuild that reads and
+// publishes first. Without this check startup then writes its older snapshot over the
+// newer one and stamps it as a success, and the route trusts a set missing exactly the
+// block that moved. Returns whether the set was installed.
+func (s *SQL) installOffChainSet(startEpoch uint64, offChain map[uint32]struct{}) bool {
+	s.offChainBlockIDsMu.Lock()
+	defer s.offChainBlockIDsMu.Unlock()
+
+	if s.offChainBlockIDs != nil && startEpoch < s.offChainSetEpoch.Load() {
+		return false
+	}
+
+	s.offChainBlockIDs = offChain
+	s.offChainSetEpoch.Store(startEpoch)
+
+	return true
+}
+
+// rebuildGroupKey is the single singleflight key every off-chain-set rebuild shares. One
+// key is deliberate: two rebuilds reading the same table concurrently is pure waste.
+const rebuildGroupKey = "rebuild"
 
 // shutdownAwareContext returns a context that is cancelled either when the timeout
 // expires or when Close() is called (s.backgroundDone is closed). Callers must call
@@ -1673,6 +1809,68 @@ func (s *SQL) rebuildOnMainChainFlagTx(ctx context.Context, full bool) (err erro
 // The off-chain set is typically tiny (a few hundred blocks on all of mainnet history)
 // so this operation is fast even when it runs. The CTE walks the full main chain once
 // (O(chain_depth)), which is acceptable since rebuilds are infrequent.
+//
+// # Contract relied on by CheckBlockIsInCurrentChain
+//
+// The in-memory route in checkBlockIsInCurrentChainInMemory reads absence from this
+// set as positive proof of main-chain membership: an id at or below maxBlockID that is
+// not in here is answered "on the main chain" with no query at all. Three conditions have
+// to hold for that to be sound, and every caller of this function owes them. The two
+// paragraphs after them elaborate on the second.
+//
+// Every committed block is classified. The queries above enumerate the complement of
+// the main chain over the whole blocks table, so after a rebuild every committed id is
+// either on the main chain or in this set. Neither query has a height or window bound.
+//
+// No id at or below maxBlockID is missing a committed row. AssignBlockID resolves the
+// same block hash to the same id (committed row, then in-memory reservation, then the
+// durable block_id_reservations table, then a fresh nextval), and both stamping paths
+// recover that id from the stamps on retry, so a block that is retried commits at the
+// id already written onto its transactions rather than leaving a hole. An id that does
+// have a hole under it is a gap id, and it is the one input on which the two routes
+// disagree. TestCheckBlockIsInCurrentChain_GapIDDivergesBetweenRoutes writes that
+// divergence down, and blockchain_chain_check_shadow_compare is what would catch it on
+// a live node.
+//
+// A block moving off the main chain is invisible to readers until this set has caught
+// up. maxBlockID is advanced before the rebuild runs, so between the two a freshly
+// forked or invalidated block is inside the id<=maxBlockID range but not yet in this
+// set, and the in-memory route would answer true for it. Callers close that window by
+// holding mainChainRebuilding across BOTH the flag change and the rebuild, which sends
+// readers to the flag-free CTE for the whole of it. StoreBlock, InvalidateBlock and
+// RevalidateBlock all do; a new caller that mutates on_main_chain must too.
+//
+// The extreme case of that third condition is a set that was never built at all. The
+// startup rebuild is asynchronous and its guard is released whether it succeeded or
+// failed, while maxBlockID survives a failure because refreshMaxBlockID runs first and
+// is cheap, so a rebuild that times out on a cold cache leaves both of the other
+// escapes satisfied and the set empty. Empty means absent means on-chain for every id
+// the node holds. CheckBlockIsInCurrentChain therefore also gates on
+// lastSuccessfulRebuild being non-zero, which this function stamps itself rather than
+// leaving to its callers.
+//
+// Block validation is not the only asker, so a gap id would not stay inside consensus.
+// The asset server's GetTransactionMeta and merkle-proof handlers call this with the
+// BlockIDs stamped on a transaction's UTXO metadata, to pick which of a transaction's
+// blocks is the main-chain one. checkOldBlockIDs is only reached when something at the
+// tip spends an output, but a client can ask about any transaction it likes, so an id
+// that nothing spends is still reachable through the asset server. That widens the
+// blast radius of a gap id from a block invalidation to a merkle proof served against
+// a block that is not on the chain, which is the reason the shadow comparison defaults
+// on rather than being a debug-only switch.
+//
+// Deleting a committed row is the other way to open a hole, and it stays open because
+// updateMaxBlockID only ever moves the bound up: after a DELETE, maxBlockID keeps the
+// pre-delete high-water mark for the life of the process while the row is gone. Today
+// the only caller of DeleteBlock is cmd/rewindblockchain, a separate binary that never
+// serves CheckBlockIsInCurrentChain and whose rewind deletes in descending height order,
+// so the node restarts with maxBlockID back at the surviving MAX(id) and the deleted ids
+// land above the bound where they are dropped. An in-process caller of DeleteBlock would
+// break that, and would need maxBlockID recomputed rather than advanced.
+//
+// The set itself is replaced wholesale under offChainBlockIDsMu and never mutated in
+// place, so a reader may snapshot the map pointer under RLock and then read it without
+// the lock.
 func (s *SQL) rebuildOffChainSet(ctx context.Context) error {
 	var (
 		rows *sql.Rows
@@ -1685,6 +1883,11 @@ func (s *SQL) rebuildOffChainSet(ctx context.Context) error {
 	// Doing the cheap MAX(id) query up front guarantees maxBlockID is still refreshed
 	// rather than left at a stale/zero value. See refreshMaxBlockID for why a zero
 	// bound is dangerous.
+	// Read the write epoch BEFORE anything else, so it describes the state this rebuild is
+	// about to read rather than the state when it finished. installOffChainSet uses it to
+	// refuse to overwrite a set produced by a read that started later than this one.
+	startEpoch := s.chainStateEpoch.Load()
+
 	if err = s.refreshMaxBlockID(ctx); err != nil {
 		return errors.NewStorageError("rebuildOffChainSet: failed to refresh max block ID", err)
 	}
@@ -1731,11 +1934,22 @@ func (s *SQL) rebuildOffChainSet(ctx context.Context) error {
 		return errors.NewStorageError("rebuildOffChainSet: error iterating off-chain blocks", err)
 	}
 
-	s.offChainBlockIDsMu.Lock()
-	s.offChainBlockIDs = offChain
-	s.offChainBlockIDsMu.Unlock()
+	installed := s.installOffChainSet(startEpoch, offChain)
 
-	if len(offChain) > 0 {
+	// Stamp the success here rather than only at the call sites. Every caller already
+	// does it on its own happy path, but CheckBlockIsInCurrentChain now gates the
+	// forked-set route on this being non-zero, so "the set has been built" has to be
+	// recorded by the thing that builds it and not by seven callers remembering to.
+	s.lastSuccessfulRebuild.Store(time.Now().Unix())
+
+	if !installed {
+		// A rebuild that read later has already published. Our read is stale, but the
+		// installed set is newer than ours, so the store's state is correct and this is
+		// still a success for the caller.
+		s.logger.Debugf("rebuildOffChainSet: discarded a read that started before the installed set's")
+	}
+
+	if installed && len(offChain) > 0 {
 		s.logger.Infof("rebuildOffChainSet: %d off-chain block IDs, maxBlockID=%d", len(offChain), s.maxBlockID.Load())
 	}
 
@@ -1794,8 +2008,43 @@ func (s *SQL) backgroundRefreshLoop() {
 				s.lastSuccessfulRebuild.Store(time.Now().Unix())
 			}
 			cancel()
+
+			s.logShadowCompareTotals()
 		}
 	}
+}
+
+// logShadowCompareTotals prints the running totals of the forked-set shadow
+// comparison, so a soak can be read off the log without a debugger. Silent when the
+// comparison is off or has not run, because a line saying "0 of 0" every two minutes
+// is noise on the many nodes that never enable this.
+func (s *SQL) logShadowCompareTotals() {
+	if !s.useInMemoryChainCheck || !s.chainCheckShadowCompare {
+		return
+	}
+
+	checks := s.chainCheckShadowChecks.Load()
+	failures := s.chainCheckShadowFailures.Load()
+
+	if s.chainCheckShadowRejectChecks.Load() > 0 && checks == 0 && failures == 0 {
+		// Reached the route but nothing has been compared yet, which the silence below
+		// would otherwise present as "nothing happened".
+		s.logger.Infof("[CheckBlockIsInCurrentChain] shadow comparison totals: 0 comparisons run so far, %d maxBlockID rejects seen (sampled 1 in %d)", s.chainCheckShadowRejectChecks.Load(), shadowRejectSampleRate)
+		return
+	}
+
+	// Stay silent only when nothing has happened at all. A node that reached the route but
+	// could not run a single comparison must still say so, because that is the case a
+	// reader would otherwise mistake for a clean soak.
+	if checks == 0 && failures == 0 {
+		return
+	}
+
+	// Say what was compared, not just how much. Every forked-set accept is compared; the
+	// maxBlockID rejects are sampled, so quoting one number for both would read as full
+	// coverage of a population that is mostly unmeasured.
+	s.logger.Infof("[CheckBlockIsInCurrentChain] shadow comparison totals: %d comparisons run (every forked-set accept, plus 1 in %d of %d maxBlockID rejects), %d mismatches, %d comparisons could not run",
+		checks, shadowRejectSampleRate, s.chainCheckShadowRejectChecks.Load(), s.chainCheckShadowMismatches.Load(), failures)
 }
 
 // reservationSweepInterval is how often reservationSweepLoop reclaims abandoned

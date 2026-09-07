@@ -154,14 +154,26 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		block.Header.HashPrevBlock != nil &&
 		*block.Header.HashPrevBlock == *preBestHash
 
-	// mainChainRebuilding only needs to cover the window where on_main_chain
-	// is in flux — i.e. when the INSERT writes false but the row may turn out
-	// to be the new best (reorg / fork). The common extend (onMainChain=true)
-	// is written atomically with on_main_chain=true and needs no guard.
-	if !onMainChain {
-		s.mainChainRebuilding.Add(1)
-		defer s.mainChainRebuilding.Add(-1)
-	}
+	// Raise the guard before the INSERT, unconditionally, and hold it for the whole call.
+	//
+	// It used to be raised only when onMainChain was false, on the reasoning that a common
+	// extend writes on_main_chain = true atomically and is never in flux. That is true of
+	// the row, and false of the classification. The INSERT can write true for a block that
+	// the chain_work tiebreak below then places on a fork, and a concurrent StoreBlock can
+	// advance maxBlockID past this id while that is being decided. In that window the row
+	// exists, says true, sits at or below maxBlockID, and is absent from the forked set, so
+	// the in-memory route answers "on the main chain" for a fork block with no query. The
+	// old conditional left exactly that window open, from the INSERT to the guard the slow
+	// path raised much later.
+	//
+	// The cost is that readers fall back to SQL for the duration of a StoreBlock rather
+	// than only during a fork or reorg. That is the trade this route asks for: absence from
+	// the forked set is now positive proof, so every gap in the guard becomes a false
+	// positive rather than a wasted query. Case 2 below already documented the guard as
+	// covering "the full window from before the INSERT through reconcile"; this makes every
+	// path match that description instead of one of them.
+	s.mainChainRebuilding.Add(1)
+	defer s.mainChainRebuilding.Add(-1)
 
 	newBlockID, height, _, _, err := s.storeBlock(ctx, block, peerID, storeBlockOptions, onMainChain)
 	if err != nil {
@@ -233,19 +245,20 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		// the row is now flagged true on a fork. Clear it defensively, with
 		// mainChainRebuilding bracketing so concurrent readers fall back to
 		// the CTE for the brief inconsistency window.
+		//
+		// No guard to raise here any more: it went up before the INSERT and is held for
+		// the whole call, which is what this clear and the rebuild below both need.
 		if onMainChain {
-			s.mainChainRebuilding.Add(1)
 			if _, clearErr := s.db.ExecContext(postBestCtx, `UPDATE blocks SET on_main_chain = false WHERE id = $1`, newBlockID); clearErr != nil {
 				s.logger.Errorf("StoreBlock: clear sibling-fork on_main_chain: %v", clearErr)
 			}
-			s.mainChainRebuilding.Add(-1)
 		}
 		if s.useInMemoryChainCheck {
 			s.blockTimestampCache.Clear()
 			s.updateMaxBlockID(newBlockID)
 			rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
 			defer rebuildCancel()
-			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+			if rebuildErr := s.triggerRebuildOffChainSetAfterWrite(rebuildCtx); rebuildErr != nil {
 				s.logger.Errorf("StoreBlock: %v", rebuildErr)
 			} else {
 				s.lastSuccessfulRebuild.Store(time.Now().Unix())
@@ -271,7 +284,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 			s.logger.Errorf("StoreBlock: reconcileOnMainChain: %v", reconcileErr)
 		}
 		if s.useInMemoryChainCheck {
-			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+			if rebuildErr := s.triggerRebuildOffChainSetAfterWrite(rebuildCtx); rebuildErr != nil {
 				s.logger.Errorf("StoreBlock: %v", rebuildErr)
 			} else {
 				s.lastSuccessfulRebuild.Store(time.Now().Unix())
