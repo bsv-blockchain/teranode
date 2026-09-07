@@ -3722,10 +3722,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#peer-banning-future-feature" class="md-nav__link">
+  <a href="#peer-banning" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Peer Banning (Future Feature)
+        Peer Banning
       
     </span>
   </a>
@@ -7940,10 +7940,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#peer-banning-future-feature" class="md-nav__link">
+  <a href="#peer-banning" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Peer Banning (Future Feature)
+        Peer Banning
       
     </span>
   </a>
@@ -8573,11 +8573,10 @@ unaffected as long as ranges continue to span checkpoints.</p>
 <li>Network timeouts or temporary storage failures</li>
 <li>Processing errors that may succeed on retry</li>
 </ul>
-<p><strong>Peer Banning (Logged, Not Implemented):</strong></p>
-<p>When malicious behavior is detected, the system logs:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>SECURITY: Peer &lt;peerID&gt; attempted secret mining - should be banned (banning not yet implemented)
+<p><strong>Peer Banning:</strong></p>
+<p>When malicious behavior is detected, the system logs it and reports the peer to the P2P service, which records a malicious flag (making the peer immediately ineligible for catchup) and raises its ban score toward an automatic ban:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>SECURITY: Peer &lt;peerID&gt; attempted secret mining - reported as malicious for ban scoring
 </span></code></pre></div>
-<p>This provides an audit trail for operators and prepares for future automatic banning.</p>
 <h5 id="concurrent-fetch-sequential-validation">Concurrent Fetch + Sequential Validation<a class="headerlink" href="#concurrent-fetch-sequential-validation" title="Permanent link">&para;</a></h5>
 <p>The catchup process optimizes performance by fetching blocks concurrently while validating them sequentially:</p>
 <p><strong>Coordination Pattern:</strong></p>
@@ -9013,11 +9012,11 @@ unaffected as long as ranges continue to span checkpoints.</p>
 <li><strong>Circuit Half-Open</strong>: After delay, allows limited test requests</li>
 <li><strong>Circuit Closes</strong>: If peer recovers, full access restored</li>
 </ol>
-<h5 id="peer-banning-future-feature">Peer Banning (Future Feature)<a class="headerlink" href="#peer-banning-future-feature" title="Permanent link">&para;</a></h5>
-<p>The system logs when peers should be banned but doesn't yet implement automatic banning:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>SECURITY: Peer &lt;ID&gt; attempted secret mining - should be banned (banning not yet implemented)
+<h5 id="peer-banning">Peer Banning<a class="headerlink" href="#peer-banning" title="Permanent link">&para;</a></h5>
+<p>When catchup detects malicious behavior it reports the peer to the P2P service. The report records a malicious flag in the centralized peer registry (which makes the peer immediately ineligible for catchup via <code>IsPeerMalicious</code>) and raises the peer's ban score, so repeated offenses cross the ban threshold and trigger an automatic ban:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>SECURITY: Peer &lt;ID&gt; attempted secret mining - reported as malicious for ban scoring
 </span></code></pre></div>
-<p>This provides an audit trail for operators to manually ban malicious peers and prepares for future automatic banning implementation.</p>
+<p>The log lines remain an audit trail for operators, who can also ban peers manually.</p>
 <p>For implementation details, see <code>malicious_peer_handling_test.go</code> and peer tracking code in <code>catchup.go</code>.</p>
 <h4 id="2210-invalid-block-tracking-and-notifications">2.2.10. Invalid Block Tracking and Notifications<a class="headerlink" href="#2210-invalid-block-tracking-and-notifications" title="Permanent link">&para;</a></h4>
 <p>The Block Validation service provides comprehensive tracking and notification when blocks fail validation, distinguishing between consensus violations and recoverable errors.</p>
