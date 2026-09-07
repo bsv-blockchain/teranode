@@ -202,7 +202,7 @@ require (
 	github.com/bsv-blockchain/go-p2p-message-bus v0.1.23
 	github.com/bsv-blockchain/go-safe-conversion v1.2.0
 	github.com/bsv-blockchain/go-tx-map v1.4.1
-	github.com/bsv-blockchain/go-wire v1.2.11
+	github.com/bsv-blockchain/go-wire v1.2.13
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0

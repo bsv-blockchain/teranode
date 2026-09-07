@@ -180,3 +180,42 @@ func getPostgresPoolSettings(servicePrefix string, alternativeContext ...string)
 		RetryEnabled:     retryEnabled,
 	}
 }
+
+// warnDeprecatedKey is the one deprecation line settings emits, so every
+// renamed key reads the same way in a startup log.
+func warnDeprecatedKey(oldKey, newKey string) {
+	fmt.Fprintf(os.Stderr, "WARN: setting %s is deprecated and will be removed with the legacy service — set %s instead\n", oldKey, newKey)
+}
+
+// getBoolWithFallback reads newKey; when it is unset it honours oldKey, the
+// spelling the legacy service used, and says so. An explicit newKey wins.
+// An empty value counts as unset, which is also what gocore leaves behind
+// when a key is cleared with Set(key, "").
+func getBoolWithFallback(newKey, oldKey string, defaultValue bool, alternativeContext ...string) bool {
+	if v, ok := gocore.Config(alternativeContext...).Get(newKey); ok && v != "" {
+		return getBool(newKey, defaultValue, alternativeContext...)
+	}
+
+	if v, ok := gocore.Config(alternativeContext...).Get(oldKey); ok && v != "" {
+		warnDeprecatedKey(oldKey, newKey)
+
+		return getBool(oldKey, defaultValue, alternativeContext...)
+	}
+
+	return defaultValue
+}
+
+// getUint64WithFallback is getBoolWithFallback for a uint64 key.
+func getUint64WithFallback(newKey, oldKey string, defaultValue uint64, alternativeContext ...string) uint64 {
+	if v, ok := gocore.Config(alternativeContext...).Get(newKey); ok && v != "" {
+		return getUint64(newKey, defaultValue, alternativeContext...)
+	}
+
+	if v, ok := gocore.Config(alternativeContext...).Get(oldKey); ok && v != "" {
+		warnDeprecatedKey(oldKey, newKey)
+
+		return getUint64(oldKey, defaultValue, alternativeContext...)
+	}
+
+	return defaultValue
+}

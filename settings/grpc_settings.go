@@ -42,9 +42,10 @@ type GRPCSettings struct {
 	KeepaliveTimeout int `key:"grpc_keepalive_timeout_seconds" desc:"Keepalive ping acknowledgment timeout in seconds" default:"20" category:"GRPC" usage:"Timeout before considering connection dead" type:"int"`
 
 	// ServerMinPingTime is the minimum allowed interval between client pings (server-side enforcement).
-	// Clients sending pings more frequently will receive ENHANCE_YOUR_CALM.
-	// Default: 30 seconds.
-	ServerMinPingTime int `key:"grpc_server_min_ping_time_seconds" desc:"Minimum interval between client pings in seconds" default:"30" category:"GRPC" usage:"Server enforcement policy for client pings" type:"int"`
+	// Clients sending pings more frequently will receive ENHANCE_YOUR_CALM. It must stay strictly
+	// below KeepaliveTime: equal values race at the boundary on idle connections.
+	// Default: 20 seconds.
+	ServerMinPingTime int `key:"grpc_server_min_ping_time_seconds" desc:"Minimum interval between client pings in seconds" default:"20" category:"GRPC" usage:"Server enforcement policy for client pings" type:"int"`
 
 	// PermitWithoutStream allows keepalive pings even when there are no active streams.
 	// Default: true (pings allowed on idle connections).

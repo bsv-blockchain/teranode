@@ -1580,3 +1580,44 @@ func TestSharedAndSafeClientsShareRedirectRule(t *testing.T) {
 		})
 	}
 }
+
+// TestDoTrustedHTTPRequestBodyReader_AllowsConfiguredLoopback pins the fix for
+// the single-process node: asset_httpAddress defaults to http://localhost, an
+// address the operator configured, not one a peer supplied. The peer-facing
+// reader must keep refusing loopback; the trusted reader must fetch it.
+func TestDoTrustedHTTPRequestBodyReader_AllowsConfiguredLoopback(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write([]byte("block-bytes"))
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+
+	_, err := DoHTTPRequestBodyReader(ctx, srv.URL+"/block_legacy/abc?wire=1")
+	require.Error(t, err, "the peer-facing reader must still refuse loopback")
+	require.Contains(t, err.Error(), "loopback address")
+
+	body, err := DoTrustedHTTPRequestBodyReader(ctx, srv.URL+"/block_legacy/abc?wire=1")
+	require.NoError(t, err)
+
+	defer body.Close()
+
+	got, err := io.ReadAll(body)
+	require.NoError(t, err)
+	require.Equal(t, "block-bytes", string(got))
+}
+
+// TestDoTrustedHTTPRequestBodyReader_StillValidatesURL: trusted means the
+// dial policy is skipped for an operator-configured address, not that the URL
+// is unchecked — a non-http scheme is still refused.
+func TestDoTrustedHTTPRequestBodyReader_StillValidatesURL(t *testing.T) {
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(false)
+
+	_, err := DoTrustedHTTPRequestBodyReader(context.Background(), "file:///etc/passwd")
+	require.Error(t, err)
+}

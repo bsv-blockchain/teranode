@@ -141,6 +141,7 @@ nav:
           - P2P NAT Traversal: P2P_NAT_TRAVERSAL.md
           - Pruner: topics/services/pruner.md
           - Legacy: topics/services/legacy.md
+          - svp2p Compact Blocks: topics/services/svp2p_compact_blocks.md
           - RPC: topics/services/rpc.md
           - UTXO Persister: topics/services/utxoPersister.md
       - Stores:
