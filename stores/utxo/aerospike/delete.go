@@ -206,7 +206,13 @@ const (
 // utxostore_utxoBatchSize, with nothing in the node to recreate a pagination
 // child. Unreachable residue is preferred over wrongly reachable residue.
 func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
-	policy := aerospike.NewPolicy()
+	// The operator's reader policy, as every other record read in this store uses
+	// (get.go) and as the child pass below already does for its batch policy. The Go
+	// client does not observe ctx on this call, so the policy's timeout is the only
+	// bound there is — pinning the library default would give up at 1s on a cluster
+	// tuned for longer reads and send the shed unwind down the "master still present"
+	// arm, leaving the transaction locked with its inputs spent.
+	policy := util.GetAerospikeReadPolicy(s.settings)
 
 	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
 	if err != nil {

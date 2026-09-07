@@ -798,30 +798,30 @@ func (t *TxMetaCache) Delete(_ context.Context, hash *chainhash.Hash) error {
 // reaches the underlying store, so a caller that needs the whole record gone
 // gets it.
 //
-// The durable delete runs first and a failure returns early, leaving the cache
-// entry in place. That is safe only for a caller that reads this cache for
-// presence and nothing more, because the backing cascade deletes the MASTER
-// record first: a failure after that point means the record is already gone from
-// the store while the early return keeps its cache entry alive.
+// The eviction is UNCONDITIONAL: it happens whether the durable delete succeeded
+// or failed, so this method carries no precondition on which store it may wrap.
+// A caller that reads this cache for presence — the validator's shed unwind reads
+// the record back after the delete to decide whether it may unspend the inputs —
+// therefore cannot be answered "still present" for a transaction whose master is
+// already gone, which is the answer that would send the unwind down the
+// record-still-present arm and leave the inputs spent.
 //
-// CONSTRAINT: this decorator must not wrap the store the validator's shed unwind
-// holds. That unwind reads the record back after the delete to decide whether it
-// may unspend the inputs, and a stale cache entry would answer "still present"
-// for a transaction whose master is gone — sending it down the
-// record-still-present arm, which leaves the inputs spent. That is the outcome
-// the master-first cascade exists to remove. NewTxMetaCache has one production
-// call site (services/subtreevalidation/Server.go), which does not reach that
-// path; keep it that way, or make this method evict on a master-gone failure
-// before wrapping the validator's store.
+// The separate, larger gap is Delete, which is cache-only and reaches no record
+// at all; that is a different method with its own callers and is documented by
+// TestTxMetaCache_DeleteIsCacheOnly_KnownContractGap.
 func (t *TxMetaCache) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
-	if err := t.utxoStore.DeleteComplete(ctx, hash); err != nil {
-		return err
-	}
+	// Evict BEFORE inspecting the error. The backing cascade removes the master
+	// record first, so a failure can mean the record is already gone — and a
+	// surviving cache entry would then answer "present" for a transaction that is
+	// not. A miss is never less correct than a stale hit: GetMeta falls through to
+	// the underlying store on a miss, so the worst cost of evicting early is one
+	// read-through.
+	err := t.utxoStore.DeleteComplete(ctx, hash)
 
 	t.cache.Del(hash[:])
 	t.metrics.evictions.Add(1)
 
-	return nil
+	return err
 }
 
 // appendHeightToValue appends the current block height to the end of the

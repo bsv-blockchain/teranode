@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -96,4 +97,64 @@ func TestTxMetaCache_DeleteIsCacheOnly_KnownContractGap(t *testing.T) {
 	require.NoError(t, underlying.Delete(ctx, txHash))
 	require.ErrorIs(t, underlying.GetMeta(ctx, txHash, &meta.Data{}), errors.ErrTxNotFound,
 		"the real store's Delete does remove the record - the divergence is the decorator's")
+}
+
+// deleteCompleteFailingStore decorates a REAL utxo.Store and overrides exactly one
+// method: DeleteComplete always fails. It models the half-completed cascade — the
+// backing store removes the master record first, so a failure can mean the record is
+// already gone — which is the state a surviving cache entry would misreport.
+type deleteCompleteFailingStore struct {
+	utxo.Store
+
+	err error
+}
+
+func (s *deleteCompleteFailingStore) DeleteComplete(_ context.Context, _ *chainhash.Hash) error {
+	return s.err
+}
+
+// TestTxMetaCache_DeleteComplete_EvictsEvenWhenTheDurableDeleteFails pins the
+// eviction as unconditional.
+//
+// DeleteComplete used to return early on a durable failure, keeping the cache entry.
+// Because the backing cascade removes the master record first, that failure can mean
+// the record is already gone while the decorator still answers "present" — and a
+// caller that reads this cache for presence to decide whether it may free a
+// transaction's inputs (the validator's shed unwind does exactly that) would then be
+// sent down the record-still-present arm, leaving the inputs spent for a record that
+// no longer exists. A miss is never less correct than a stale hit: GetMeta falls
+// through to the underlying store, so the only cost of evicting early is one
+// read-through.
+func TestTxMetaCache_DeleteComplete_EvictsEvenWhenTheDurableDeleteFails(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///txmetacache_delete_complete_evicts")
+	require.NoError(t, err)
+
+	underlying, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	failing := &deleteCompleteFailingStore{
+		Store: underlying,
+		err:   errors.NewStorageError("complete delete failed after the master record was removed"),
+	}
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, failing, Unallocated)
+	require.NoError(t, err)
+
+	cache, ok := c.(*TxMetaCache)
+	require.True(t, ok)
+
+	hash := testHash(17)
+	require.NoError(t, cache.SetCache(&hash, testMeta()))
+
+	_, found := cache.GetMetaCached(ctx, hash)
+	require.True(t, found, "precondition: the entry is in the cache")
+
+	require.Error(t, cache.DeleteComplete(ctx, &hash), "the durable failure is still propagated to the caller")
+
+	_, found = cache.GetMetaCached(ctx, hash)
+	require.False(t, found, "the entry must be evicted even though the durable delete failed")
 }

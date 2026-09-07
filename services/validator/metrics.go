@@ -204,6 +204,15 @@ var (
 	// concurrent same-txid submissions are real in this deployment.
 	prometheusValidatorShedUnwindReappeared prometheus.Counter
 
+	// prometheusValidatorShedUnwindUnownedRecord counts shed unwinds aborted on the
+	// spend-only (SkipUtxoCreation) shape because a record this call did not create is
+	// present, so its inputs must not be freed. Kept apart from the reappearance
+	// counter deliberately: that one means a record came back after this call deleted
+	// it, while this one means a record was there all along — a different operator
+	// problem, and folding them would destroy the reappearance counter as the signal
+	// that per-txid serialisation is needed.
+	prometheusValidatorShedUnwindUnownedRecord prometheus.Counter
+
 	// prometheusValidatorHandoffDeadlineTotal counts block-assembly handoffs that hit
 	// the validator's own handoff deadline instead of returning a shed or a success. A
 	// recurring non-zero value points at a settings skew between this process's copy of
@@ -543,6 +552,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "validator",
 			Name:      "shed_unwind_reappeared_total",
 			Help:      "Number of shed unwinds aborted because the record was present again immediately before the unspend, so another submission owns those spends",
+		},
+	)
+
+	prometheusValidatorShedUnwindUnownedRecord = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_unwind_unowned_record_total",
+			Help:      "Number of shed unwinds aborted on the spend-only (SkipUtxoCreation) shape because a record this call did not create is present, so its inputs must not be freed",
 		},
 	)
 

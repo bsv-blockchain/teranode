@@ -161,13 +161,13 @@ func (c *kafkaBackpressureController) run(ctx context.Context) {
 	c.logger.Infof("[Validator] kafka backpressure controller started (pause>=%s, resume<=%s, poll=%s, maxPause=%s, maxFailOpenCooldown=%s)",
 		c.cfg.PauseQueueAge, c.cfg.ResumeQueueAge, c.cfg.PollInterval, c.cfg.MaxPause, c.cfg.MaxFailOpenCooldown)
 
-	pollInterval := c.cfg.PollInterval
-	if pollInterval <= 0 {
+	pollInterval := c.pollInterval()
+	if c.cfg.PollInterval <= 0 {
 		// A non-positive interval would panic time.NewTicker. The settings loader
 		// disables the controller in that case, but a hand-built Settings can
-		// still reach here, so clamp to the documented default.
+		// still reach here, so the fallback applies — pollInterval() has already
+		// substituted the documented default; this is the operator-facing half.
 		c.logger.Warnf("[Validator] kafka backpressure: pollInterval=%s must be > 0; using %s", c.cfg.PollInterval, defaultKafkaBackpressurePollInterval)
-		pollInterval = defaultKafkaBackpressurePollInterval
 	}
 
 	if c.cfg.ReadTimeout <= 0 {
@@ -189,6 +189,18 @@ func (c *kafkaBackpressureController) run(ctx context.Context) {
 			c.tick(ctx)
 		}
 	}
+}
+
+// pollInterval returns the effective poll cadence, falling back to the documented
+// default when the configured value is non-positive. Applied here rather than only
+// in run so every derived quantity — the ticker AND the fail-open cooldown floor —
+// sees the same value.
+func (c *kafkaBackpressureController) pollInterval() time.Duration {
+	if c.cfg.PollInterval > 0 {
+		return c.cfg.PollInterval
+	}
+
+	return defaultKafkaBackpressurePollInterval
 }
 
 // readTimeout returns the per-poll read deadline, falling back to the documented
@@ -306,7 +318,9 @@ func (c *kafkaBackpressureController) onReadError(err error) {
 //
 // The floor is applied last: the settings loader already guarantees
 // MaxFailOpenCooldown >= 2*PollInterval, and if a hand-built config violates that
-// the anti-busy-toggle floor is the property worth keeping.
+// the anti-busy-toggle floor is the property worth keeping. The floor is derived
+// from pollInterval(), not from the raw config field, so a hand-built config
+// carrying a non-positive interval cannot reduce it to no floor at all.
 //
 // It must be called BEFORE resume, which is what consumes pauseStart.
 func (c *kafkaBackpressureController) armFailOpenCooldown() {
@@ -316,7 +330,7 @@ func (c *kafkaBackpressureController) armFailOpenCooldown() {
 		cooldown = c.cfg.MaxFailOpenCooldown
 	}
 
-	if floor := 2 * c.cfg.PollInterval; cooldown < floor {
+	if floor := 2 * c.pollInterval(); cooldown < floor {
 		cooldown = floor
 	}
 

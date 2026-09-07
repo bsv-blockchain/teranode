@@ -2156,16 +2156,21 @@ func (v *Validator) handoffFloor() time.Duration {
 // anything other than "genuinely gone" aborts before unspending — a generic guard
 // that holds for every decorator in the stack, including ones not yet written.
 //
-// The read-back runs TWICE, and the second one answers a different question. The
-// first establishes that the delete reached the record. The second, immediately
-// before the unspend, establishes that the record has not come BACK: the delete
-// writes no tombstone, so a concurrent submission of the same txid recreates it and
-// its spends are indistinguishable from this call's own. Everything between the two
-// reads — the cascade's child passes, the blob deletes, the bounded verify retries —
-// is time during which that can happen, so a single read taken before all of it is
-// not a basis for freeing the inputs. A residual window remains between the second
-// read and the unspend completing; closing that needs per-txid serialisation of
-// create, hand-off and unwind, which this does not have.
+// On the created-record shape the read-back runs TWICE, and the second one answers a
+// different question. The first establishes that the delete reached the record. The
+// second, immediately before the unspend, establishes that the record has not come
+// BACK: the delete writes no tombstone, so a concurrent submission of the same txid
+// recreates it and its spends are indistinguishable from this call's own. Everything
+// between the two reads — the cascade's child passes, the blob deletes, the bounded
+// verify retries — is time during which that can happen, so a single read taken
+// before all of it is not a basis for freeing the inputs. A residual window remains
+// between the second read and the unspend completing; closing that needs per-txid
+// serialisation of create, hand-off and unwind, which this does not have.
+//
+// On the spend-only shape (SkipUtxoCreation) there is no delete to confirm, so only
+// the second read runs, and it answers the question that shape poses instead: this
+// call created nothing, so any record present for this txid belongs to a submission
+// this call does not own, and its inputs must not be freed.
 //
 // # The same rule applies inside the cascade
 //
@@ -2213,32 +2218,38 @@ func (v *Validator) handoffFloor() time.Duration {
 // stack, including ones not yet written, at the cost of one GetMeta on a path that
 // only runs when the node is already shedding.
 //
-// # Preconditions (all hold by construction on this path)
+// # Preconditions, each naming the code that enforces it
 //
-//   - Only this call's own work is ever undone: the already-exists branch returns
-//     before the hand-off, so an existing record from another submitter is
-//     unreachable from here.
+//   - Only this call's own work is ever undone: on the created-record shape the
+//     already-exists branch returns before the hand-off, so an existing record
+//     from another submitter is unreachable from here; on the spend-only shape
+//     the record gate immediately before the unspend is what enforces it.
 //   - No descendant can have spent T's outputs, because no block-context
-//     validation reaches here. Locked is NOT what gives that: spends carrying
-//     utxo.WithIgnoreLocked(true) do exist, on exactly the block-context paths
-//     (subtree validation's per-subtree and levelled pipelines, and both
-//     CheckSubtree branches), so a descendant arriving in a peer subtree can and
-//     does spend a Locked parent's outputs.
+//     validation reaches here: a shed whose options carry InBlock returns at the
+//     block-context arm in Validate instead of unwinding. Locked is NOT what
+//     gives that: spends carrying utxo.WithIgnoreLocked(true) do exist, on exactly
+//     the block-context paths (subtree validation's per-subtree and levelled
+//     pipelines, and both CheckSubtree branches), so a descendant arriving in a
+//     peer subtree can and does spend a Locked parent's outputs.
 //   - Only the addToBlockAssembly branch reaches this, which is the only path
-//     that can produce a shed, and a shed whose options carry InBlock returns at
-//     the block-context arm in Validate instead of unwinding. Setting
-//     AddTXToBlockAssembly=false is one way a caller avoids the hand-off
-//     altogether, not the guarantee — several block-context callers leave it at
-//     its true default.
+//     that can produce a shed. Setting AddTXToBlockAssembly=false is one way a
+//     caller avoids the hand-off altogether, not the guarantee — several
+//     block-context callers leave it at its true default.
+//   - The unspend runs only once the store has been proved to hold no record for
+//     this txid, on BOTH shapes. On the created-record shape that proves the
+//     record has not come back after the delete; on the spend-only shape
+//     (SkipUtxoCreation) it proves no record this call did not create owns these
+//     spends — SpendingData is {txid, vin}, so the store's ownership check cannot
+//     tell two submissions of the same txid apart. The spend set is never empty on
+//     the spend-only shape (SpendOnly returns the spends and nil metadata), so "an
+//     empty spend set is a no-op" is not the argument and never was.
 //   - The unwind is NOT serialised against a concurrent submission of the same
 //     txid: there is no per-txid lock and the delete leaves no tombstone, so a
 //     resubmission can recreate the record and take ownership of spends that are
-//     byte-identical to ours (SpendingData is {txid, vin}). The re-check
-//     immediately before the unspend narrows that window to one store round trip;
-//     it does not eliminate it, and shed_unwind_reappeared_total is what makes the
-//     remainder observable.
-//   - createdRecord is false on the spend-only shape (SkipUtxoCreation), where
-//     there is no record to delete; Unspend of an empty spend set is a no-op.
+//     byte-identical to ours. The gate immediately before the unspend narrows that
+//     window to one store round trip; it does not eliminate it, and
+//     shed_unwind_reappeared_total is what makes the remainder observable. This is
+//     stated as a residual, not claimed as safe.
 //
 // Failure is best-effort and never fatal: every arm logs the txid AND the outpoints
 // and meters. What it falls back to depends on where the delete failed: while the
@@ -2310,35 +2321,56 @@ func (v *Validator) unwindShed(ctx context.Context, tx *bt.Tx, txID string, spen
 		return pendingErr
 	}
 
-	if createdRecord {
-		// The record can REAPPEAR between the delete and here: no tombstone, so a
-		// concurrent submission of the same txid recreates it and its spends are
-		// indistinguishable from ours (SpendingData is {txid, vin}). Unspending would
-		// then free inputs a live transaction owns, which is consensus-visible; leaving
-		// them spent is node-local and recoverable, so both abort arms fail closed.
-		//
-		// The two abort arms are kept apart because they are different operator
-		// problems and only one of them is a competing submission: a readable record
-		// means another submission owns those spends, while a read that kept failing
-		// establishes nothing at all. Counting an unreliable store as a reappearance
-		// would make shed_unwind_reappeared_total unusable as the signal that per-txid
-		// serialisation is actually needed.
-		gone, verifyErr := v.verifyRecordDeleted(ctx, txHash)
+	// BOTH shapes must prove no record owns these spends before freeing them, so this
+	// gate is deliberately NOT conditioned on createdRecord:
+	//
+	//   - created-record shape: the record can REAPPEAR between the delete and here.
+	//     There is no tombstone, so a concurrent submission of the same txid recreates
+	//     it and its spends are indistinguishable from ours (SpendingData is
+	//     {txid, vin}).
+	//   - spend-only shape (SkipUtxoCreation): this call created nothing, so it never
+	//     took the already-exists early return and a record for this txid can have
+	//     pre-existed the whole call. The store's spend is idempotent for the same
+	//     spender, so the spend succeeded against it and the ownership check cannot
+	//     tell the two submissions apart. Any record present is therefore one this
+	//     call does not own.
+	//
+	// Unspending in either case would free inputs a live transaction owns, which is
+	// consensus-visible; leaving them spent is node-local and recoverable, so every
+	// abort arm fails closed.
+	//
+	// The abort arms are kept apart because they are different operator problems: a
+	// readable record after a delete this call performed means a competing submission
+	// recreated it, a readable record on the spend-only shape means one was there all
+	// along, and a read that kept failing establishes nothing at all. Folding them
+	// would make shed_unwind_reappeared_total unusable as the signal that per-txid
+	// serialisation is actually needed.
+	//
+	// Residual, not closed here: a record DAH-evicted while still mined reads as
+	// absent, so the gate allows the unspend. That is a pre-existing property of the
+	// whole unwind — the created-record shape has the same hole via a resubmission
+	// whose record has been evicted — and closing it needs a mined-outpoint proof the
+	// unwind has no cheap way to obtain.
+	gone, verifyErr := v.verifyRecordDeleted(ctx, txHash)
 
-		switch {
-		case gone:
-			// Still provably gone; fall through to the unspend.
-		case verifyErr == nil:
-			prometheusValidatorShedUnwindReappeared.Inc()
-			v.logger.Errorf("[unwindShed][%s] record present again before unspend; aborting, outpoints %s stay spent so the submission that owns them keeps its inputs", txID, unwindOutpoints(spentUtxos))
+	switch {
+	case gone:
+		// Provably nothing to protect; fall through to the unspend.
+	case verifyErr == nil && createdRecord:
+		prometheusValidatorShedUnwindReappeared.Inc()
+		v.logger.Errorf("[unwindShed][%s] record present again before unspend; aborting, outpoints %s stay spent so the submission that owns them keeps its inputs", txID, unwindOutpoints(spentUtxos))
 
-			return errors.NewProcessingError("[unwindShed][%s] record reappeared before unspend", txID)
-		default:
-			prometheusValidatorShedUnwindUnverified.Inc()
-			v.logger.Errorf("[unwindShed][%s] could not re-confirm the record was still deleted after %d attempts; aborting before unspend (fail closed), outpoints %s may be unspendable and need operator recovery: %v", txID, shedUnwindVerifyAttempts, unwindOutpoints(spentUtxos), verifyErr)
+		return errors.NewProcessingError("[unwindShed][%s] record reappeared before unspend", txID)
+	case verifyErr == nil:
+		prometheusValidatorShedUnwindUnownedRecord.Inc()
+		v.logger.Errorf("[unwindShed][%s] spend-only shed found a record this call did not create; aborting before unspend, outpoints %s stay spent so the submission that owns them keeps its inputs", txID, unwindOutpoints(spentUtxos))
 
-			return verifyErr
-		}
+		return errors.NewProcessingError("[unwindShed][%s] record present on the spend-only shed shape", txID)
+	default:
+		prometheusValidatorShedUnwindUnverified.Inc()
+		v.logger.Errorf("[unwindShed][%s] could not confirm the store holds no record for this transaction after %d attempts; aborting before unspend (fail closed), outpoints %s may be unspendable and need operator recovery: %v", txID, shedUnwindVerifyAttempts, unwindOutpoints(spentUtxos), verifyErr)
+
+		return verifyErr
 	}
 
 	if err := v.utxoStore.Unspend(ctx, spentUtxos); err != nil {

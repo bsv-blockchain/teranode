@@ -67,6 +67,13 @@ type unlockSpy struct {
 	// GetMeta calls earlier in validation.
 	deletedHash *chainhash.Hash
 
+	// verifyHashOverride names the hash the verify knobs are scoped to, instead of
+	// deriving it from deletedHash. The spend-only shed shape (SkipUtxoCreation) runs
+	// no Delete at all, so deletedHash stays nil there and the knobs would be dead;
+	// naming the hash explicitly keeps the scoping exactly as narrow as it is on the
+	// created-record path, rather than widening it to every GetMeta.
+	verifyHashOverride *chainhash.Hash
+
 	// verifyErr and verifyFailures make the first verifyFailures read-backs of
 	// deletedHash fail with verifyErr; later ones delegate. verifyReadCalls counts the
 	// read-backs actually attempted, which is how the bounded retry and the number of
@@ -154,7 +161,12 @@ func (s *unlockSpy) DeleteComplete(ctx context.Context, hash *chainhash.Hash) er
 }
 
 func (s *unlockSpy) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
-	if s.deletedHash == nil || !hash.IsEqual(s.deletedHash) {
+	scoped := s.deletedHash
+	if s.verifyHashOverride != nil {
+		scoped = s.verifyHashOverride
+	}
+
+	if scoped == nil || !hash.IsEqual(scoped) {
 		return s.Store.GetMeta(ctx, hash, data)
 	}
 
@@ -1924,6 +1936,115 @@ func TestValidate_ShedUnwindStillUnspendsWhenRecordStaysGone(t *testing.T) {
 	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
 
 	require.Equal(t, reappearedBefore, testutil.ToFloat64(prometheusValidatorShedUnwindReappeared))
+}
+
+// The spend-only shed shape must not free the inputs of a record it did not create.
+//
+// SkipUtxoCreation takes the store's spend-only branch, so this call creates nothing:
+// ErrTxExists cannot fire, the already-exists early return is unreachable, and a
+// record for that txid can have pre-existed the whole call. The spend still succeeds
+// against it — the store's spend is idempotent for the same spender and SpendingData
+// is {txid, vin}, so the ownership check cannot tell two submissions of the same txid
+// apart — and an ungated unspend then reverses a spend the pre-existing submission
+// owns while its record stays readable and mineable by the unmined reload.
+func TestValidate_SpendOnlyShedDoesNotFreeInputsOfAnExistingRecord(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx, logger := recoverySetupWithLogger(t, "queue_shed_spend_only_existing", 1)
+
+	// The record that pre-exists this submission: unmined and unlocked, so nothing
+	// other than the new gate stands between the unwind and the unspend.
+	_, err := realStore.Create(ctx, childTx, 100)
+	require.NoError(t, err)
+
+	md := metaLocked(t, realStore, childTx.TxIDChainHash())
+	require.False(t, md.Locked, "precondition: the pre-existing record is unlocked")
+	require.Empty(t, md.BlockIDs, "precondition: the pre-existing record is unmined")
+
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	initPrometheusMetrics()
+
+	unownedBefore := testutil.ToFloat64(prometheusValidatorShedUnwindUnownedRecord)
+	reappearedBefore := testutil.ToFloat64(prometheusValidatorShedUnwindReappeared)
+
+	_, err = v.Validate(ctx, childTx, 100, WithSkipUtxoCreation(true), WithSkipPolicyChecks(true))
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "the caller still sees the shed")
+
+	require.Equal(t, 0, spy.unspendCalls, "fail closed: the inputs belong to the submission that owns the record")
+	require.True(t, parentOutpointSpent(t, realStore, parentTx), "the parent's output stays spent")
+	require.NoError(t, realStore.GetMeta(ctx, childTx.TxIDChainHash(), &meta.Data{}),
+		"the pre-existing record is untouched: this shape deletes nothing")
+	require.Equal(t, 0, spy.unlockCalls)
+
+	require.Equal(t, unownedBefore+1, testutil.ToFloat64(prometheusValidatorShedUnwindUnownedRecord))
+	require.Equal(t, reappearedBefore, testutil.ToFloat64(prometheusValidatorShedUnwindReappeared),
+		"a record that was there all along is not a reappearance, or the reappearance counter stops meaning anything")
+
+	logged := logger.joined()
+	require.Contains(t, logged, childTx.TxID(), "the abort names the transaction")
+	require.Contains(t, logged, outpointOf(parentTx, 0), "and the outpoints left spent")
+}
+
+// The negative: the gate must not become an unconditional refusal on the spend-only
+// shape. With no record for that txid the inputs are provably free to return, and
+// leaving them spent would make those outpoints unspendable until operator recovery
+// for nothing.
+func TestValidate_SpendOnlyShedStillUnspendsWhenNoRecordExists(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "queue_shed_spend_only_no_record")
+
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	initPrometheusMetrics()
+
+	unownedBefore := testutil.ToFloat64(prometheusValidatorShedUnwindUnownedRecord)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipUtxoCreation(true), WithSkipPolicyChecks(true))
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "the caller still sees the shed")
+
+	require.Equal(t, 1, spy.unspendCalls, "the unwind completed: nothing owns these spends")
+	require.False(t, parentOutpointSpent(t, realStore, parentTx), "the inputs were freed as intended")
+	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
+	require.Equal(t, 0, spy.unlockCalls)
+
+	require.Equal(t, unownedBefore, testutil.ToFloat64(prometheusValidatorShedUnwindUnownedRecord),
+		"no record was present, so the gate must not have aborted")
+}
+
+// The fail-closed arm on the new shape: a read that keeps failing establishes neither
+// that a record is present nor that none is, and an inconclusive answer is no basis
+// for freeing the inputs. The verify knobs are scoped by hash here because the
+// spend-only shape runs no Delete, so deletedHash never gets set.
+func TestValidate_SpendOnlyShedFailsClosedWhenVerifyReadFails(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx, logger := recoverySetupWithLogger(t, "queue_shed_spend_only_unverified", 1)
+
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	spy.verifyHashOverride = childTx.TxIDChainHash()
+	spy.verifyErr = errors.NewStorageError("utxo store read unavailable")
+	spy.verifyFailures = shedUnwindVerifyAttempts + 5
+
+	initPrometheusMetrics()
+
+	unverifiedBefore := testutil.ToFloat64(prometheusValidatorShedUnwindUnverified)
+	unownedBefore := testutil.ToFloat64(prometheusValidatorShedUnwindUnownedRecord)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipUtxoCreation(true), WithSkipPolicyChecks(true))
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "the caller still sees the shed")
+
+	require.Equal(t, shedUnwindVerifyAttempts, spy.verifyReadCalls,
+		"one verify round only on this shape: there is no delete to confirm, just the pre-unspend gate")
+
+	require.Equal(t, unverifiedBefore+1, testutil.ToFloat64(prometheusValidatorShedUnwindUnverified))
+	require.Equal(t, unownedBefore, testutil.ToFloat64(prometheusValidatorShedUnwindUnownedRecord),
+		"a failing read establishes nothing, so it is not the unowned-record condition")
+
+	require.Equal(t, 0, spy.unspendCalls, "fail closed: no Unspend on an unconfirmed absence")
+	require.True(t, parentOutpointSpent(t, realStore, parentTx), "the inputs stay spent")
+
+	require.Contains(t, logger.joined(), outpointOf(parentTx, 0),
+		"the inconclusive arm must name the outpoints an operator has to reconcile")
 }
 
 // newForStartupCheck builds a validator purely to exercise New's startup checks,

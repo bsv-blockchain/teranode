@@ -425,6 +425,74 @@ func TestBackpressure_CooldownFlooredAtTwicePollInterval(t *testing.T) {
 		"a tiny pause must still arm the anti-busy-toggle floor")
 }
 
+// TestBackpressure_CooldownFloorSurvivesAZeroPollInterval is the other end of the
+// same clamp: the floor must hold for a config the settings loader never produced.
+//
+// A hand-built Settings carrying PollInterval == 0 made 2*PollInterval zero, so the
+// clamp was a no-op and a short preceding pause armed a near-zero cooldown — the
+// anti-busy-toggle property gone, while the method's own docstring claimed it was
+// the property worth keeping. The floor now derives from the effective interval, the
+// same fallback run and readTimeout already apply.
+func TestBackpressure_CooldownFloorSurvivesAZeroPollInterval(t *testing.T) {
+	consumer := &fakeConsumer{}
+	c := newTestController(&fakeReader{}, consumer)
+
+	// The shape the settings loader cannot produce (it disables the controller for a
+	// non-positive interval) but direct construction can.
+	c.cfg.PollInterval = 0
+
+	base := time.Unix(6000, 0)
+	now := base
+	c.now = func() time.Time { return now }
+
+	c.pauseStart = base
+	c.paused.Store(true)
+
+	// 4ms of pause is 1ms on the raw formula; with a zero interval the floor could not
+	// raise it.
+	now = base.Add(4 * time.Millisecond)
+	c.armFailOpenCooldown()
+
+	require.Equal(t, 2*defaultKafkaBackpressurePollInterval, c.failOpenCooldown,
+		"the floor must fall back to the documented default interval, not collapse to zero")
+
+	// Arm-then-resume is the shipped sequence — armFailOpenCooldown consumes pauseStart
+	// and resume then clears the paused flag — so the suppression is exercised as it runs.
+	c.resume("fail open for test")
+	require.False(t, c.paused.Load())
+	require.Equal(t, 0, consumer.pauseCount())
+
+	// One effective poll interval later, still inside the armed cooldown, the signal is
+	// hot again. With the collapsed floor the cooldown was 1ms and had already elapsed,
+	// so this re-paused on the very next tick.
+	now = now.Add(defaultKafkaBackpressurePollInterval)
+	c.evaluate(600 * time.Millisecond)
+
+	require.False(t, c.paused.Load(), "a hot read inside the armed cooldown must not re-pause")
+	require.Equal(t, 0, consumer.pauseCount())
+
+	// Past the cooldown, protection returns — the floor suppresses, it does not disable.
+	now = now.Add(2 * defaultKafkaBackpressurePollInterval)
+	c.evaluate(600 * time.Millisecond)
+
+	require.True(t, c.paused.Load(), "protection must return once the floored cooldown elapses")
+	require.Equal(t, 1, consumer.pauseCount())
+}
+
+// TestBackpressure_PollInterval covers the accessor's two arms directly, including
+// the loaded-config case where it must return the configured value unchanged.
+func TestBackpressure_PollInterval(t *testing.T) {
+	c := newTestController(&fakeReader{}, &fakeConsumer{})
+
+	require.Equal(t, 5*time.Millisecond, c.pollInterval(), "a positive configured interval is used as-is")
+
+	c.cfg.PollInterval = 0
+	require.Equal(t, defaultKafkaBackpressurePollInterval, c.pollInterval())
+
+	c.cfg.PollInterval = -time.Second
+	require.Equal(t, defaultKafkaBackpressurePollInterval, c.pollInterval())
+}
+
 // TestBackpressure_MaxPauseCooldownClearedByDrain verifies a genuine drain to
 // the resume watermark clears the cooldown latch immediately, re-arming normal
 // pause behaviour without waiting out the full cooldown.
