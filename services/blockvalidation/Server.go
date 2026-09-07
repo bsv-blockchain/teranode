@@ -1617,10 +1617,19 @@ func deriveBlockHeight(claimed, parentHeight uint32) (uint32, error) {
 // Written explicitly at the gate rather than relying on the downstream useOptimisticMining seed
 // (belt-and-suspenders). Revalidation of an already-stored block (RevalidateBlock) is never
 // optimistic and does not use this gate.
-func optimisticMiningDisabledForPeerPath(s *settings.Settings) bool {
+//
+// Blocks arriving over the legacy sync route (baseURL == "legacy") are unconditionally
+// non-optimistic, whatever the two flags say, as they were before this gate existed. That
+// exclusion predates and is independent of the corrupt-body work: it is kept here so the rule is
+// visible from the helper and cannot be dropped by a new call site.
+func optimisticMiningDisabledForPeerPath(s *settings.Settings, baseURL string) bool {
 	// Nil-safe like the sibling gate helpers: a nil settings reports "disabled" — the fail-safe
 	// direction (never optimistically accept a peer body under a missing config).
 	if s == nil {
+		return true
+	}
+
+	if baseURL == "legacy" {
 		return true
 	}
 
@@ -1814,7 +1823,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	// invalidate route (see the block.Valid background handler). This gate is removed once
 	// block.Valid is split so its integrity floor runs before the optimistic AddBlock.
 	opts := &ValidateBlockOptions{
-		DisableOptimisticMining: optimisticMiningDisabledForPeerPath(u.settings),
+		DisableOptimisticMining: optimisticMiningDisabledForPeerPath(u.settings, baseURL),
 		IsRevalidation:          false, // processBlockFound is for new blocks, not revalidation
 		PeerID:                  peerID,
 	}

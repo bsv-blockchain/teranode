@@ -111,6 +111,44 @@ func TestReportCatchupFailureForError_SkipsAlreadyReported(t *testing.T) {
 	})
 }
 
+// TestReportCatchupFailureForError_SkipsCorrupt pins the corrupt-body exemption
+// (bitcoin-sv/teranode#4692): releaseCatchupLock already charges the primary once for the corrupt
+// cycle, and the corrupt error reaches processCatchupChItem's generic tail unwrapped, so charging
+// again here would be the third charge for one body. A generic error must still be charged, so the
+// exemption is specific to the corrupt sentinel rather than a blanket suppression.
+func TestReportCatchupFailureForError_SkipsCorrupt(t *testing.T) {
+	newServer := func() (*Server, *failureCountingP2PClient) {
+		client := &failureCountingP2PClient{}
+		return &Server{p2pClient: client, logger: ulogger.TestLogger{}}, client
+	}
+
+	t.Run("corrupt block body is skipped", func(t *testing.T) {
+		u, client := newServer()
+		u.reportCatchupFailureForError(context.Background(), "peer-1", errors.NewBlockCorruptError("[BLOCK] body is corrupt"))
+		require.Equal(t, 0, client.failures)
+	})
+
+	t.Run("wrapped corrupt block body is skipped", func(t *testing.T) {
+		u, client := newServer()
+		err := errors.NewProcessingError("catchup failed",
+			errors.NewBlockCorruptError("[BLOCK] body is corrupt"))
+		u.reportCatchupFailureForError(context.Background(), "peer-1", err)
+		require.Equal(t, 0, client.failures)
+	})
+
+	t.Run("generic processing error is still charged", func(t *testing.T) {
+		u, client := newServer()
+		u.reportCatchupFailureForError(context.Background(), "peer-1", errors.NewProcessingError("something else failed"))
+		require.Equal(t, 1, client.failures)
+	})
+
+	t.Run("block incomplete is still skipped", func(t *testing.T) {
+		u, client := newServer()
+		u.reportCatchupFailureForError(context.Background(), "peer-1", errors.ErrBlockIncomplete)
+		require.Equal(t, 0, client.failures)
+	})
+}
+
 // TestMarkCatchupFailureReported_TransparentToErrorCodes proves the marker does
 // not break teranode error-code matching, which the top-level catchup dispatch
 // in Server.go relies on (ErrServiceError, malicious classification, etc.).

@@ -497,10 +497,17 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			// twice. Must precede the ErrBlockInvalid case (corrupt uses a dedicated sentinel,
 			// so it would not match it anyway).
 			//
-			// Peer selection still needs a genuine signal, distinct from the cosmetic UI string
-			// isPeerError=false leaves this with: report the dedicated corrupt_block_body failure
-			// kind below, mirroring the incomplete-block case, so catch-up peer selection can stop
-			// re-picking a peer that keeps serving corrupt bodies (bitcoin-sv/teranode#4692).
+			// What the peer does carry from here is one generic catch-up failure charge below,
+			// which feeds the reputation counters (services/blockchain/peer_registry.go's
+			// RecordCatchupFailure path) — the only selection input this route takes — plus a
+			// display-only diagnostic in LastCatchupError. No penalty window is opened, and that
+			// is deliberate: the selection gates key on FullStoragePenaltyUntil, which belongs to
+			// the block-incomplete fault and also demotes a "full" storage claim, so reusing it
+			// for a peer that did deliver a body would record a storage contradiction that never
+			// happened. Excluding a possibly-sole-source peer for a body an honest relay could
+			// have corrupted also risks the self-isolation this work exists to prevent; the DoS
+			// bound is the decaying +10 corrupt-body ban score already applied at the corrupt
+			// site (bitcoin-sv/teranode#4692).
 			errorType = "corrupt_block_body"
 			isPeerError = false
 			reportCorruptBlock = true
@@ -658,19 +665,24 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 		// than an over-charge that is at least directionally accurate. Both
 		// increments feed InteractionAttempts/InteractionFailures consistently
 		// (see the peer registry), so the occasional double-charge is a
-		// telemetry precision cost, not a reputation-math break. The one
-		// exception is reportIncompleteBlock, guarded below, where both charges
-		// live in this same function and the skip carries no such cross-file risk.
+		// telemetry precision cost, not a reputation-math break. The two
+		// exceptions are reportIncompleteBlock and reportCorruptBlock, guarded
+		// below, where both charges live in this same function and the skip
+		// carries no such cross-file risk.
 		for failedPeerID, failedMsg := range failedPeers {
-			if reportIncompleteBlock && failedPeerID == peerID {
-				// reportIncompleteBlock already charges the primary below via
-				// reportCatchupFailureWithKind, with the more specific
-				// catchupFailureKindBlockIncomplete (which drives a documented
-				// incomplete-block penalty window a generic charge would not).
-				// Both calls are local to this function, so — unlike the
-				// cross-file assumption described above — this skip is safe.
-				// Still store the subtree-level error text so it isn't lost;
-				// only the generic failure counter is skipped.
+			if (reportIncompleteBlock || reportCorruptBlock) && failedPeerID == peerID {
+				// The terminal verdict already charges the primary below: the
+				// incomplete case via reportCatchupFailureWithKind with the more
+				// specific catchupFailureKindBlockIncomplete (which drives a
+				// documented incomplete-block penalty window a generic charge would
+				// not), and the corrupt case via the single generic charge that
+				// replaces the kinded one. Both calls are local to this function,
+				// so — unlike the cross-file assumption described above — the skip
+				// is safe. Still store the subtree-level error text so it isn't
+				// lost; only the generic failure counter is skipped. On a corrupt
+				// cycle the terminal corrupt message is written after this loop, so
+				// it is the later write and wins in LastCatchupError — correct, the
+				// terminal verdict is the more informative one.
 				u.reportCatchupError(rpcCtx, failedPeerID, failedMsg)
 				continue
 			}
@@ -692,7 +704,19 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 		}
 
 		if reportCorruptBlock {
-			u.reportCatchupFailureWithKind(rpcCtx, peerID, catchupFailureKindCorruptBlockBody, corruptBlockHash)
+			// Exactly one reputation charge, of the same magnitude a kinded report would have
+			// carried (the p2p side resolves every kind other than block_incomplete to a plain
+			// RecordCatchupFailure), plus the peer-visible diagnostic written to LastCatchupError
+			// and surfaced by the dashboard. No penalty window — see the corrupt case in the
+			// classification switch above for why (bitcoin-sv/teranode#4692).
+			u.reportCatchupFailure(rpcCtx, peerID)
+
+			corruptMsg := "corrupt block body during catchup"
+			if corruptBlockHash != "" {
+				corruptMsg = "corrupt block body during catchup: " + corruptBlockHash
+			}
+
+			u.reportCatchupError(rpcCtx, peerID, corruptMsg)
 		}
 	}
 
@@ -1612,7 +1636,7 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 					IsCatchupMode: true,
 					// bitcoin-sv/teranode#4692: non-optimistic unless the operator opts in via BOTH
 					// blockvalidation_optimistic_mining and blockvalidation_optimistic_mining_peer_blocks.
-					DisableOptimisticMining: optimisticMiningDisabledForPeerPath(u.settings),
+					DisableOptimisticMining: optimisticMiningDisabledForPeerPath(u.settings, catchupCtx.baseURL),
 					PeerID:                  peerID,
 				}
 
@@ -1635,8 +1659,9 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 						// another peer (releaseCatchupLock classifies it as corrupt_block_body).
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s has a corrupt body, aborting for re-download", blockUpTo.Hash().String(), block.Hash().String(), peerID)
 
-						// Capture the hash so releaseCatchupLock can feed catch-up peer selection with
-						// a dedicated corrupt_block_body failure kind (bitcoin-sv/teranode#4692).
+						// Capture the hash so releaseCatchupLock can name it in the peer-visible
+						// catch-up diagnostic (LastCatchupError) and in the dashboard's
+						// PreviousAttempt (bitcoin-sv/teranode#4692).
 						catchupCtx.corruptBlockHash = block.Hash().String()
 
 						// Delete the peer-supplied .subtree blobs that just failed their integrity check.
@@ -1774,8 +1799,9 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s from peer %s has a corrupt body, aborting for re-download",
 				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), peerID)
 
-			// Capture the hash so releaseCatchupLock can feed catch-up peer selection with a
-			// dedicated corrupt_block_body failure kind (bitcoin-sv/teranode#4692).
+			// Capture the hash so releaseCatchupLock can name it in the peer-visible catch-up
+			// diagnostic (LastCatchupError) and in the dashboard's PreviousAttempt
+			// (bitcoin-sv/teranode#4692).
 			catchupCtx.corruptBlockHash = block.Hash().String()
 
 			select {
@@ -1946,8 +1972,14 @@ func mergeFreshlyWritten(sets ...map[chainhash.Hash]map[fileformat.FileType]stru
 // fresh, is handled correctly by this per-type check with no special-casing needed. A doctored
 // body naming a hash that was ALREADY on disk when this attempt started therefore can never
 // trigger deletion of any of that hash's promoted blobs, even when a sibling type for the same
-// hash happens to be freshly written for an unrelated reason: both producers mark a pair fresh
-// only after their own Set succeeds, on the branch that ran because the blob was not present.
+// hash happens to be freshly written for an unrelated reason: every producer marks a pair fresh
+// only on the branch that ran BECAUSE the blob was not present, so an already-present (possibly
+// promoted) blob is never marked. The two fetch producers mark after their own Set succeeds
+// (fetchAndStoreSubtree / fetchAndStoreSubtreeData in get_blocks.go); quick validation's
+// FileTypeSubtree producer marks at enqueue time instead, from the fullSubtreeExists flags
+// computed synchronously during prefetch, because its write is handed to an asynchronous worker
+// (quick_validate.go). Marking before the write lands is harmless here: a pair whose write never
+// lands is simply not on disk, and Del tolerates ErrNotFound.
 //
 // KNOWN LIMITATION, deliberately not closed here: freshness is scoped to ONE attempt, and the
 // catch-up fetch pool runs blockvalidation_fetch_num_workers blocks concurrently. Two in-flight

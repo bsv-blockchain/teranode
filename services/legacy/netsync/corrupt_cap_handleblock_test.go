@@ -101,6 +101,9 @@ func TestHandleBlockMsg_CorruptCapRefillsHeaderPipeline(t *testing.T) {
 	require.Equal(t, 2, sm.recordCorruptBlockAttempt(blockHash, p.Addr()))
 	require.True(t, sm.corruptBlockAttemptsExhausted(blockHash, p.Addr()), "cap reached")
 
+	state, ok := sm.peerStates.Get(p)
+	require.True(t, ok)
+
 	err := sm.handleBlockMsg(&blockQueueMsg{
 		block:       msgBlock,
 		blockHash:   blockHash,
@@ -116,4 +119,14 @@ func TestHandleBlockMsg_CorruptCapRefillsHeaderPipeline(t *testing.T) {
 	// Pipeline maintenance ONLY: a dropped delivery must not run accepted-block bookkeeping.
 	_, failed := sm.recentlyFailedBlocks.Get(blockHash)
 	require.False(t, failed, "the cap drop must not mark the block failed")
+
+	// The opposite of the sibling corrupt branch, deliberately: the cap-drop path must NOT re-arm
+	// the request maps. Re-arming means a getdata to the very peer that is capped, whose delivery
+	// this gate drops again after the full body has crossed the wire — one full block download per
+	// iteration for the whole cooldown window. Recovery here is sync-peer rotation on the
+	// unrefreshed stall timer, not a re-request (bitcoin-sv/teranode#4692).
+	_, inGlobal := sm.requestedBlocks.Get(blockHash)
+	require.False(t, inGlobal, "the cap drop must not re-arm sm.requestedBlocks — no getdata loop against a capped peer")
+	_, inPeer := state.requestedBlocks.Get(blockHash)
+	require.False(t, inPeer, "the cap drop must not re-arm state.requestedBlocks — no getdata loop against a capped peer")
 }

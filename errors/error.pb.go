@@ -37,7 +37,9 @@ const (
 	ERR_ERROR              ERR = 9
 	// Block errors 10-19 (FULL: 10-19 are all assigned; 19 is the range terminator.
 	// Further block errors continue at 120-129 below, and errorCodeCategory maps that
-	// range to "block" as well.)
+	// range to "block" as well.) A new block error code must widen this range and the
+	// matching bound in errorCodeCategory in error_utils.go before it can be added
+	// here; otherwise it falls outside 10-19 and is mis-bucketed.
 	ERR_BLOCK_NOT_FOUND               ERR = 10
 	ERR_BLOCK_INVALID                 ERR = 11
 	ERR_BLOCK_EXISTS                  ERR = 12

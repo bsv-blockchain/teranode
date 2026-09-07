@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -16,10 +17,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestBlockValid_CorruptWhenFirstTxNotCoinbase covers the body-integrity classification at
-// model/Block.go step 4 (bitcoin-sv/teranode#4692): a first transaction that is not a valid coinbase
-// is an unbound-body defect, so block.Valid returns ERR_BLOCK_CORRUPT (re-download + strike), never
-// a header verdict. Asserts the classification, not just that validation fails.
+// newNotACoinbaseTx builds a transaction that spends a real (non-zero) previous outpoint and is
+// therefore not a coinbase.
+func newNotACoinbaseTx(t *testing.T) *bt.Tx {
+	t.Helper()
+
+	notCoinbase := bt.NewTx()
+	require.NoError(t, notCoinbase.From(
+		"1111111111111111111111111111111111111111111111111111111111111111", 0,
+		"76a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac", 1000))
+	require.False(t, notCoinbase.IsCoinbase(), "test fixture must not be a coinbase")
+
+	return notCoinbase
+}
+
+// TestBlockValid_CorruptWhenFirstTxNotCoinbase covers the UNBOUND direction of the coinbase-shape
+// check in block.Valid (bitcoin-sv/teranode#4692): on a body that was never bound to its header, a
+// first transaction that is not a valid coinbase is indistinguishable from transport corruption or
+// attacker junk, so block.Valid returns ERR_BLOCK_CORRUPT (re-download + strike), never a header
+// verdict. The fixture carries subtrees with a nil subtree store, so neither binding runs and
+// merkleRootChecked stays false. Asserts the classification, not just that validation fails.
 func TestBlockValid_CorruptWhenFirstTxNotCoinbase(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -29,28 +46,86 @@ func TestBlockValid_CorruptWhenFirstTxNotCoinbase(t *testing.T) {
 	blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
 	require.NoError(t, err)
 
-	// A transaction spending a real (non-zero) previous outpoint is NOT a coinbase.
-	notCoinbase := bt.NewTx()
-	require.NoError(t, notCoinbase.From(
-		"1111111111111111111111111111111111111111111111111111111111111111", 0,
-		"76a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac", 1000))
-	require.False(t, notCoinbase.IsCoinbase(), "test fixture must not be a coinbase")
+	notCoinbase := newNotACoinbaseTx(t)
 
+	subtreeHash := chainhash.Hash{0x02}
+	block := &Block{
+		Header:           blockHeader,
+		CoinbaseTx:       notCoinbase,
+		TransactionCount: 1,
+		SizeInBytes:      123,
+		Subtrees:         []*chainhash.Hash{&subtreeHash},
+	}
+
+	// nil subtreeStore: the subtree branch of the binding block is skipped entirely, so the body
+	// stays unbound and the check classifies corrupt.
+	valid, err := block.Valid(context.Background(), ulogger.TestLogger{}, nil, createTestUTXOStore(t),
+		txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockHeader{}, []uint32{}, tSettings, nil)
+
+	require.False(t, valid)
+	require.Error(t, err)
+	require.True(t, errors.IsBlockCorrupt(err), "a non-coinbase first tx on an unbound body is corrupt, got: %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "a corrupt body must not be classified invalid")
+	require.Contains(t, err.Error(), "not a valid coinbase")
+}
+
+// TestBlockValid_InvalidWhenBoundCoinbaseIsNotACoinbase covers the BOUND direction, which is the
+// point of moving the coinbase-shape check below the merkle binding (bitcoin-sv/teranode#4692). The
+// coinbase-only binding compares the header merkle root to the coinbase txid, so a body whose root
+// correctly commits a first transaction that is not a coinbase is constructible: it IS the body the
+// miner committed to, so the failure is genuine consensus invalidity and the hash must be
+// condemnable once. Above the binding this returned corrupt forever and the hash could never be
+// condemned.
+func TestBlockValid_InvalidWhenBoundCoinbaseIsNotACoinbase(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+
+	notCoinbase := newNotACoinbaseTx(t)
+
+	// An easy target so HasMetTargetDifficulty passes, and a merkle root that IS the first
+	// transaction's txid so the coinbase-only binding succeeds.
+	nBits, err := NewNBitFromString("2000ffff")
+	require.NoError(t, err)
+
+	blockHeader := &BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: notCoinbase.TxIDChainHash(),
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           *nBits,
+	}
+
+	// Grind the nonce so the header meets that target; the nonce does not enter the merkle root,
+	// so the binding is unaffected.
+	met := false
+
+	for nonce := uint32(0); nonce < 1_000_000; nonce++ {
+		blockHeader.Nonce = nonce
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			met = true
+			break
+		}
+	}
+
+	require.True(t, met, "test fixture must find a header meeting the easy target")
+
+	// Height 0 skips the BIP34 branch and the reward arithmetic; an empty currentChain skips the
+	// median-time-past window.
 	block := &Block{
 		Header:           blockHeader,
 		CoinbaseTx:       notCoinbase,
 		TransactionCount: 1,
 		SizeInBytes:      123,
 		Subtrees:         []*chainhash.Hash{},
+		Height:           0,
 	}
 
-	valid, err := block.Valid(context.Background(), ulogger.TestLogger{}, nil, createTestUTXOStore(t),
+	valid, err := block.Valid(context.Background(), ulogger.TestLogger{}, blobmemory.New(), createTestUTXOStore(t),
 		txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockHeader{}, []uint32{}, tSettings, nil)
 
 	require.False(t, valid)
 	require.Error(t, err)
-	require.True(t, errors.IsBlockCorrupt(err), "a non-coinbase first tx is a corrupt body, got: %v", err)
-	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "a corrupt body must not be classified invalid")
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "a merkle-bound non-coinbase first tx is genuine invalidity, got: %v", err)
+	require.False(t, errors.IsBlockCorrupt(err), "a bound body must not be classified corrupt — the hash must be condemnable")
 	require.Contains(t, err.Error(), "not a valid coinbase")
 }
 
