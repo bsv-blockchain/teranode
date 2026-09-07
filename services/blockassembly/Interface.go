@@ -49,6 +49,13 @@ type ClientI interface {
 	//   - error: Any error encountered during storage
 	Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints) (bool, error)
 
+	// StoreBatch submits a slice of tx items directly to block assembly as a
+	// single gRPC batch call, bypassing the client's internal go-batcher.
+	// Use this when the caller already has a full batch in hand and does not
+	// want the additional coalescing latency. A non-nil error return indicates
+	// a whole-call transport failure.
+	StoreBatch(ctx context.Context, items []BatchItem) error
+
 	// RemoveTx removes a transaction from block assembly.
 	//
 	// Parameters:
@@ -188,6 +195,13 @@ type Store interface {
 	//   - bool: True if storage was successful
 	//   - error: Any error encountered during storage
 	Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints) (bool, error)
+
+	// StoreBatch submits a slice of tx items directly to block assembly as a
+	// single gRPC batch call, bypassing the client's internal go-batcher.
+	// Use this when the caller already has a full batch in hand and does not
+	// want the additional coalescing latency. A non-nil error return indicates
+	// a whole-call transport failure.
+	StoreBatch(ctx context.Context, items []BatchItem) error
 
 	// RemoveTx removes a transaction from storage.
 	//

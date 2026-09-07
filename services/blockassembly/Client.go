@@ -466,6 +466,90 @@ func (s *Client) GetCandidateBlock(ctx context.Context, candidateID []byte) (*bl
 	return res, nil
 }
 
+// BatchItem is the public representation of a single transaction to submit to
+// block assembly. Callers that already hold a complete batch construct a
+// []BatchItem and pass it to StoreBatch, which dispatches the gRPC call
+// directly without routing through the Client's internal go-batcher.
+type BatchItem struct {
+	// Hash is the transaction ID.
+	Hash *chainhash.Hash
+
+	// Fee is the transaction fee in satoshis.
+	Fee uint64
+
+	// SizeBytes is the serialised transaction size in bytes.
+	SizeBytes uint64
+
+	// TxInpoints carries the parent-tx inpoint data required by block assembly.
+	TxInpoints subtree.TxInpoints
+}
+
+// StoreBatch submits a slice of tx items directly to block assembly as a single
+// gRPC batch call, bypassing the Client's internal go-batcher (which would
+// otherwise impose its own gather-timeout delay before issuing the call).
+//
+// Use this when the caller already has a full batch in hand and does not want
+// the additional coalescing latency. A non-nil error return indicates a
+// whole-call transport failure; per-tx errors are not possible for the batch
+// path (the BA server accepts or rejects the whole batch at once).
+func (s *Client) StoreBatch(ctx context.Context, items []BatchItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+
+	internal, err := batchItemsFromPublic(items)
+	if err != nil {
+		return err
+	}
+
+	// Attach one shared completion group covering the whole batch; the send
+	// path calls complete exactly once per item (CAS-guarded), writing each
+	// item's terminal error into its result slot and signalling the group.
+	group := completion.NewGroup(int32(len(internal)))
+	for _, it := range internal {
+		it.group = group
+	}
+
+	s.sendBatchToBlockAssembly(ctx, internal)
+
+	// group.Wait(context.Background(), 0): 0 timeout allocates no timer and a
+	// background context never cancels, so this blocks purely on the send path
+	// completing every item (same pattern as Store). It can only return nil,
+	// so the result slots are safe to read afterwards.
+	_ = group.Wait(context.Background(), 0)
+
+	// Collect the first non-nil error (whole-batch failure propagated to all items).
+	for _, it := range internal {
+		if it.result != nil {
+			return it.result
+		}
+	}
+	return nil
+}
+
+// batchItemsFromPublic converts a []BatchItem into the internal []*batchItem
+// slice, serialising TxInpoints as required by the gRPC request. The
+// completion groups are left nil; callers must set them before invoking
+// sendBatchToBlockAssembly.
+func batchItemsFromPublic(items []BatchItem) ([]*batchItem, error) {
+	out := make([]*batchItem, len(items))
+	for i, it := range items {
+		txInpointsBytes, err := it.TxInpoints.Serialize()
+		if err != nil {
+			return nil, errors.NewInvalidArgumentError("failed to serialize TxInpoints at index %d: %v", i, err)
+		}
+		out[i] = &batchItem{
+			req: &blockassembly_api.AddTxRequest{
+				Txid:       it.Hash[:],
+				Fee:        it.Fee,
+				Size:       it.SizeBytes,
+				TxInpoints: txInpointsBytes,
+			},
+		}
+	}
+	return out, nil
+}
+
 // sendBatchToBlockAssembly sends a batch of transactions to block assembly.
 // Uses columnar format if enabled in settings, otherwise uses traditional row format.
 //

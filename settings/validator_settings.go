@@ -1,6 +1,9 @@
 package settings
 
-import "net/url"
+import (
+	"net/url"
+	"time"
+)
 
 // ValidatorSettings configures the transaction validation service.
 type ValidatorSettings struct {
@@ -27,4 +30,28 @@ type ValidatorSettings struct {
 	TxLockedMaxRetries                   int      `key:"validator_txlocked_maxRetries" desc:"Maximum retries when a parent tx is still committing (TX_LOCKED or TX_CREATING)" default:"3" category:"Validator" usage:"Retries while the parent tx is still completing its own commit" type:"int" longdesc:"### Purpose\nControls the number of retry attempts when a transaction cannot spend a parent output yet because the parent is still completing its own commit — either TX_LOCKED or TX_CREATING. Both share this one budget.\n\n### How It Works\nTX_LOCKED occurs when a parent and child transaction arrive nearly simultaneously and the parent has not yet completed its two-phase commit (unlock). TX_CREATING is the same situation for a parent large enough to be written across several records, which is still being written. Either way the condition clears on its own, or once the parent is mined. The validator retries the same transaction with exponential backoff, starting at 10ms and doubling on each retry (e.g. 10ms, 20ms, 40ms, 80ms, ...) until the configured maximum is reached or the lock clears. Values above 10 are clamped to prevent excessive backoff (2^10 * 10ms ≈ 10s max sleep).\n\n### Values\n- **3** (default) - Retries up to 3 times with 10/20/40ms backoff (70ms total)\n- **0** - Disables retry; both TX_LOCKED and TX_CREATING are returned immediately to the caller. Note BSV has no mempool, so a rejected child is not held anywhere on the client-facing intake paths — nothing will re-submit it\n\n### Recommendations\n- **3** for production deployments where parent/child tx timing races are expected\n- **0** for testing environments where these conditions should propagate to the caller\n\n### Observability\nWatch teranode_validator_parent_commit_retries and teranode_validator_parent_commit_exhausted (both labelled by condition). The exhausted counter marks a valid transaction the node lost -- nothing holds it on the client-facing or Kafka intake paths (legacy p2p relay is the exception; it parks the tx in the orphan pool) -- so a non-zero rate there means this budget is too short for the node's load."`
 	TxMetaWireFormat                     string   `key:"validator_txmeta_wireFormat" desc:"Wire format for txmeta Kafka messages" default:"v1" category:"Validator" usage:"v1 (legacy) or v2 (partition-aligned)" type:"string" longdesc:"### Purpose\nSelects the wire format used when publishing transaction metadata batches to Kafka.\n\n### Format options\n- **v1** (default) - Legacy format. One Kafka message per batch, key = first tx hash, partition picked by StickyKeyPartitioner.\n- **v2** - Partition-aligned format. Producer pre-computes xxhash(txhash), groups items by partition such that each Kafka partition's records map to a disjoint range of receiver cache buckets, and emits one message per non-empty partition. Each entry carries its xxhash on the wire so the receiver can skip xxhash on receive.\n\n### When to use v2\nEnable on producers and receivers together once the receiver build is known to support v2 parsing. The receiver in this repo auto-detects via the v2 magic byte (0xFF) so it can consume v1 and v2 simultaneously during rollout.\n\n### Operational notes\n- v2 requires the Kafka topic's partition count to match validator_txmeta_numPartitions and to divide the receiver's BucketsCount (8192 in production builds).\n- v2 switches the txmeta async producer to ManualPartitioner. Every record carries an explicit partition number — there is no fallback if Partition is unset.\n\n### Recommendations\n- Leave at **v1** until both producers and consumers are on a build that supports v2.\n- Switch one producer at a time and watch txmeta consumer lag."`
 	TxMetaNumPartitions                  int      `key:"validator_txmeta_numPartitions" desc:"Kafka partition count used when wireFormat=v2" default:"32" category:"Validator" usage:"Must match topic partition count and divide BucketsCount" type:"int" longdesc:"### Purpose\nNumber of Kafka partitions on the txmeta topic. Used only when validator_txmeta_wireFormat=v2.\n\n### Constraints\n- Must equal the Kafka topic's actual partition count.\n- Must evenly divide the receiver's BucketsCount (8192 in production builds). Valid values: 16, 32, 64, 128, 256.\n\n### How It Works\nThe producer routes each tx to partition = (xxhash(hash) %% BucketsCount) * NumPartitions / BucketsCount. Each partition therefore owns a disjoint contiguous range of BucketsCount/NumPartitions cache buckets on the receiver, eliminating cross-partition lock contention.\n\n### Recommendations\n- **32** (default) - Reasonable default for 32-core receiver pods.\n- Set to match the actual topic partition count. Verify with kafka-topics --describe."`
+
+	// UseBatchValidation routes ProcessTransactionBatch through the new
+	// validator.ValidateBatch path that issues one Aerospike BatchOperate
+	// per phase per batch. When false (default), the new path falls back
+	// to a fan-out over the existing ValidateWithOptions per tx.
+	UseBatchValidation bool
+	// BatchMaxSize is the hard cap on the size of a single ValidateBatch
+	// call. Propagation splits larger inbound batches into multiple
+	// ValidateBatch calls.
+	BatchMaxSize int
+	// BatchMaxWait is the maximum time the propagation TxCoalescer will
+	// gather concurrent single-tx submissions before dispatching a partial
+	// batch. Acts as the fallback timer when drain mode is enabled.
+	BatchMaxWait time.Duration
+	// BatchMaxConcurrent caps the number of concurrent in-flight
+	// ValidateBatch flushes spawned by the propagation TxCoalescer.
+	// 0 = unbounded (every full batch spawns its own goroutine).
+	// Mirrors the convention from utxostore_batcherMaxConcurrent.
+	BatchMaxConcurrent int
+	// BatchCoalescerDrainMode enables drain mode on the TxCoalescer's batcher.
+	// When true (default), the coalescer fires immediately on first arrival and
+	// accumulates during in-flight time. When false, it waits for BatchMaxSize
+	// or BatchMaxWait. Default true matches the post-#871-improvements behaviour.
+	BatchCoalescerDrainMode bool
 }

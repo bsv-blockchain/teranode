@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -125,6 +126,7 @@ type PropagationServer struct {
 	validator                    validator.Interface
 	blockchainClient             blockchain.ClientI
 	validatorKafkaProducerClient kafka.KafkaAsyncProducerI
+	coalescer                    *TxCoalescer // non-nil only when Kafka is NOT configured AND validator_useBatchValidation=true
 	httpServer                   *echo.Echo
 	validatorHTTPAddr            *url.URL
 	banList                      banlist.Interface
@@ -342,6 +344,27 @@ func (ps *PropagationServer) Start(ctx context.Context, readyCh chan<- struct{})
 
 	if ps.validatorKafkaProducerClient != nil {
 		ps.validatorKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10_000))
+	}
+
+	// Single-tx coalescer: enabled only when Kafka is NOT configured
+	// AND the batch-validation flag is on. Bypassed otherwise so
+	// behaviour is identical to today.
+	if ps.validatorKafkaProducerClient == nil && ps.settings.Validator.UseBatchValidation {
+		ps.coalescer = NewTxCoalescer(
+			ctx,
+			ps.logger,
+			ps.validator,
+			ps.settings.Validator.BatchMaxSize,
+			ps.settings.Validator.BatchMaxWait,
+			ps.settings.Validator.BatchMaxConcurrent,
+			ps.settings.Validator.BatchCoalescerDrainMode,
+		)
+		ps.logger.Infof("[Propagation] TxCoalescer enabled: maxSize=%d maxWait=%s maxConcurrent=%d drainMode=%t",
+			ps.settings.Validator.BatchMaxSize,
+			ps.settings.Validator.BatchMaxWait,
+			ps.settings.Validator.BatchMaxConcurrent,
+			ps.settings.Validator.BatchCoalescerDrainMode,
+		)
 	}
 
 	// start the http listener for incoming transactions
@@ -585,6 +608,16 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 //   - error: ctx.Err() — nil on a clean stop, the ctx error if the budget was hit
 //     (cleanup is still attempted on a best-effort, bounded basis before returning).
 func (ps *PropagationServer) Stop(ctx context.Context) error {
+	// Close the TxCoalescer first so any queued transactions drain into
+	// ProcessTransaction (and thus the validator producer) before the producer is
+	// stopped below. Guarded and non-fatal.
+	if ps.coalescer != nil {
+		if err := ps.coalescer.Close(ctx); err != nil {
+			ps.logger.Warnf("[Propagation] TxCoalescer close error: %v", err)
+		}
+		ps.coalescer = nil
+	}
+
 	// Ordering: the validator Kafka producer is stopped LAST, after every
 	// transaction-ingress path that can call ProcessTransaction (which publishes to
 	// the producer) is quiesced. A late publish during the producer stop drops
@@ -654,6 +687,22 @@ func (ps *PropagationServer) Stop(ctx context.Context) error {
 	}
 
 	return ctx.Err()
+}
+
+// SetCoalescerForBench installs a TxCoalescer on the server for
+// load-testing / benchmarking. Production code MUST NOT use this.
+// The coalescer is owned by the server after the call.
+func (ps *PropagationServer) SetCoalescerForBench(c *TxCoalescer) {
+	ps.coalescer = c
+}
+
+// CloseCoalescerForBench drains and stops the installed coalescer,
+// if any. Safe to call multiple times.
+func (ps *PropagationServer) CloseCoalescerForBench(ctx context.Context) {
+	if ps.coalescer != nil {
+		_ = ps.coalescer.Close(ctx)
+		ps.coalescer = nil
+	}
 }
 
 // handleSingleTx handles a single transaction request on the /tx endpoint.
@@ -1214,6 +1263,18 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 	)
 	defer endSpan()
 
+	if ps.settings != nil && ps.settings.Validator.UseBatchValidation {
+		return ps.processTransactionBatchNative(ctx, req)
+	}
+
+	return ps.processTransactionBatchLegacy(ctx, req)
+}
+
+// processTransactionBatchLegacy is the pre-4c029d88a implementation of ProcessTransactionBatch.
+// It preserves the original per-tx errgroup fan-out, Kafka routing via processTransaction,
+// per-tx OTEL trace context extraction, and batchWorkerPool admission semaphore.
+// This path is active when settings.Validator.UseBatchValidation is false (the default).
+func (ps *PropagationServer) processTransactionBatchLegacy(ctx context.Context, req *propagation_api.ProcessTransactionBatchRequest) (*propagation_api.ProcessTransactionBatchResponse, error) {
 	response := &propagation_api.ProcessTransactionBatchResponse{
 		Errors: make([]*errors.TError, len(req.Items)),
 	}
@@ -1271,6 +1332,146 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 		ps.logger.WithTraceContext(ctx).Errorf("[ProcessTransactionBatch] failed to process transaction batch: %v", err)
 
 		return nil, errors.WrapGRPCPublic(err)
+	}
+
+	return response, nil
+}
+
+// processTransactionBatchNative is the post-4c029d88a implementation introduced for flag-on callers.
+// It decodes all transactions upfront, stores them in parallel, then calls ps.validator.ValidateBatch
+// for all successfully stored transactions in a single call.
+// This path is active when settings.Validator.UseBatchValidation is true.
+func (ps *PropagationServer) processTransactionBatchNative(ctx context.Context, req *propagation_api.ProcessTransactionBatchRequest) (*propagation_api.ProcessTransactionBatchResponse, error) {
+	response := &propagation_api.ProcessTransactionBatchResponse{
+		Errors: make([]*errors.TError, len(req.Items)),
+	}
+
+	if len(req.Items) == 0 {
+		return response, nil
+	}
+
+	// Phase 1: decode all transactions upfront, applying per-tx size and sanity checks.
+	// Transactions that fail decode/sanity are attributed to their slot in response.Errors
+	// and excluded from further processing.
+	type decodedTx struct {
+		tx          *bt.Tx
+		txBytes     []byte
+		originalIdx int
+	}
+
+	decoded := make([]decodedTx, 0, len(req.Items))
+
+	for i, item := range req.Items {
+		// Check transaction size BEFORE parsing to avoid wasting CPU on oversized transactions
+		txSize := len(item.Tx)
+		if ps.settings != nil && ps.settings.Policy != nil {
+			maxTxSize := ps.settings.Policy.GetMaxTxSizePolicy()
+			if maxTxSize > 0 && txSize > maxTxSize {
+				prometheusInvalidTransactions.Inc()
+				err := errors.NewTxInvalidError("[ProcessTransactionBatch] transaction size %d exceeds maximum allowed size %d", txSize, maxTxSize)
+				response.Errors[i] = errors.WrapPublic(err)
+				continue
+			}
+		}
+
+		// Parse the raw bytes with panic recovery, matching processTransaction behaviour.
+		var (
+			btTx     *bt.Tx
+			parseErr error
+		)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					parseErr = errors.NewProcessingError("transaction parsing panic: %v", r)
+					ps.logger.WithTraceContext(ctx).Errorf("[ProcessTransactionBatch] recovered from panic in bt.NewTxFromBytes: %v", r)
+				}
+			}()
+			btTx, parseErr = bt.NewTxFromBytes(item.Tx)
+		}()
+
+		if parseErr != nil {
+			prometheusInvalidTransactions.Inc()
+			response.Errors[i] = errors.WrapPublic(errors.NewProcessingError("[ProcessTransactionBatch] failed to parse transaction from bytes", parseErr))
+			continue
+		}
+
+		// Propagation-layer sanity checks (mirrors processTransactionInternal).
+		if btTx.IsCoinbase() {
+			prometheusInvalidTransactions.Inc()
+			err := errors.NewTxInvalidError("[ProcessTransactionBatch][%s] received coinbase transaction", btTx.TxID())
+			response.Errors[i] = errors.WrapPublic(err)
+			continue
+		}
+
+		if err := ps.txSanityChecks(btTx); err != nil {
+			response.Errors[i] = errors.WrapPublic(err)
+			continue
+		}
+
+		decoded = append(decoded, decodedTx{
+			tx:          btTx,
+			txBytes:     btTx.SerializeBytes(),
+			originalIdx: i,
+		})
+	}
+
+	if len(decoded) == 0 {
+		return response, nil
+	}
+
+	// Phase 2: persist raw bytes with bounded parallelism.
+	// Storage failures are attributed per-tx and exclude that tx from validation.
+	storeG, storeCtx := errgroup.WithContext(ctx)
+	storeG.SetLimit(runtime.NumCPU())
+
+	storeErrs := make([]error, len(decoded))
+
+	for j := range decoded {
+		j := j
+		storeG.Go(func() error {
+			storeErrs[j] = ps.storeTransaction(storeCtx, decoded[j].tx, decoded[j].txBytes)
+			return nil // never propagate as group error; handle per-tx below
+		})
+	}
+	_ = storeG.Wait()
+
+	// Partition decoded into valid (stored ok) and failed (store error).
+	validTxs := make([]*bt.Tx, 0, len(decoded))
+	validOrigIdx := make([]int, 0, len(decoded))
+
+	for j, d := range decoded {
+		if storeErrs[j] != nil {
+			response.Errors[d.originalIdx] = errors.WrapPublic(
+				errors.NewStorageError("[ProcessTransactionBatch][%s] failed to save transaction", d.tx.TxIDChainHash(), storeErrs[j]),
+			)
+			continue
+		}
+		validTxs = append(validTxs, d.tx)
+		validOrigIdx = append(validOrigIdx, d.originalIdx)
+	}
+
+	if len(validTxs) == 0 {
+		return response, nil
+	}
+
+	// Phase 3: single ValidateBatch call for all successfully stored transactions.
+	results, err := ps.validator.ValidateBatch(ctx, validTxs, 0)
+	if err != nil {
+		// Whole-batch failure (e.g. context cancelled): attribute to all surviving slots.
+		ps.logger.WithTraceContext(ctx).Errorf("[ProcessTransactionBatch] ValidateBatch whole-batch error: %v", err)
+		for _, origIdx := range validOrigIdx {
+			if response.Errors[origIdx] == nil {
+				response.Errors[origIdx] = errors.WrapPublic(err)
+			}
+		}
+		return response, nil
+	}
+
+	for j, r := range results {
+		if r.Err != nil {
+			ps.logger.WithTraceContext(ctx).Errorf("[ProcessTransactionBatch] failed to process transaction %d: %v", validOrigIdx[j], r.Err)
+			response.Errors[validOrigIdx[j]] = errors.WrapPublic(r.Err)
+		}
 	}
 
 	return response, nil
@@ -1418,6 +1619,17 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 		return ps.validateTransactionViaKafka(btTx, txBytes)
 	} else {
 		ps.logger.WithTraceContext(ctx).Debugf("[ProcessTransaction][%s] Calling validate function", btTx.TxID())
+
+		if ps.coalescer != nil {
+			result, sErr := ps.coalescer.Submit(ctx, btTx, 0)
+			if sErr != nil {
+				return errors.NewProcessingError("[ProcessTransaction][%s] coalescer submit failed", btTx.TxID(), sErr)
+			}
+			if result.Err != nil {
+				return errors.NewProcessingError("[ProcessTransaction][%s] failed to validate transaction", btTx.TxID(), result.Err)
+			}
+			return nil
+		}
 
 		// All transactions entering Teranode can be assumed to be after Genesis activation height
 		// but we pass in no block height, and just use the block height set in the utxo store

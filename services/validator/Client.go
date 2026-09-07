@@ -26,6 +26,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"runtime"
 	"sync/atomic"
 	"time"
 
@@ -40,6 +41,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/batchermetrics"
 	"github.com/bsv-blockchain/teranode/util/tracing"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -248,6 +250,44 @@ func (c *Client) TriggerBatcher() {
 // per-transaction goroutines start.
 func (c *Client) EnsureMTPLoaded(_ context.Context, _ uint32) error {
 	return nil
+}
+
+// ValidateBatch sends each transaction to the remote validator via a bounded
+// fan-out over ValidateWithOptions. The returned slice is positionally aligned
+// with txs; per-tx errors are surfaced in results[i].Err rather than as a
+// whole-batch error.
+func (c *Client) ValidateBatch(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...Option) ([]ValidationResult, error) {
+	if len(txs) == 0 {
+		return []ValidationResult{}, nil
+	}
+
+	results := make([]ValidationResult, len(txs))
+	for i, tx := range txs {
+		results[i].TxHash = *tx.TxIDChainHash()
+	}
+
+	processedOpts := ProcessOptions(opts...)
+
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(runtime.NumCPU())
+
+	for i, tx := range txs {
+		i, tx := i, tx
+		g.Go(func() error {
+			m, err := c.ValidateWithOptions(gCtx, tx, blockHeight, processedOpts)
+			// Distinct indices in a pre-sized slice — no synchronisation needed.
+			results[i].Meta = m
+			results[i].Err = err
+			return nil
+		})
+	}
+
+	_ = g.Wait()
+
+	if err := ctx.Err(); err != nil {
+		return results, err
+	}
+	return results, nil
 }
 
 // candidateBlockTimePtr returns a pointer to opts.CandidateBlockTime when the

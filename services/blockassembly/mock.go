@@ -62,6 +62,11 @@ func (m *Mock) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64
 	return args.Bool(0), nil
 }
 
+func (m *Mock) StoreBatch(ctx context.Context, items []BatchItem) error {
+	args := m.Called(ctx, items)
+	return args.Error(0)
+}
+
 func (m *Mock) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
 	args := m.Called(ctx, hash)
 

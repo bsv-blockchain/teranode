@@ -926,6 +926,27 @@ func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, 
 	return true, nil
 }
 
+func (s *MockBlockAssemblyStore) StoreBatch(_ context.Context, items []blockassembly.BatchItem) error {
+	if s.returnError != nil {
+		return s.returnError
+	}
+
+	if s.storedTxs == nil {
+		s.storedTxs = make([]txFeeSize, 0)
+	}
+
+	for _, it := range items {
+		s.storedTxs = append(s.storedTxs, txFeeSize{
+			txHash:     it.Hash,
+			fee:        it.Fee,
+			size:       it.SizeBytes,
+			txInpoints: it.TxInpoints,
+		})
+	}
+
+	return nil
+}
+
 func (s *MockBlockAssemblyStore) RemoveTx(_ context.Context, hash *chainhash.Hash) error {
 	if s.returnError != nil {
 		return s.returnError
