@@ -2219,10 +2219,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#fsm-state" class="md-nav__link">
+  <a href="#verify-a-seed-before-catch-up" class="md-nav__link">
     <span class="md-ellipsis">
       
-        FSM State
+        Verify a Seed Before Catch-up
       
     </span>
   </a>
@@ -6878,10 +6878,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#fsm-state" class="md-nav__link">
+  <a href="#verify-a-seed-before-catch-up" class="md-nav__link">
     <span class="md-ellipsis">
       
-        FSM State
+        Verify a Seed Before Catch-up
       
     </span>
   </a>
@@ -7072,34 +7072,38 @@ block data for an explorer, indexer, or archive.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>./setup.sh
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>./start.sh
 </span></code></pre></div>
+<p>A fresh <code>docker.m</code> deployment starts in <code>IDLE</code>. For network sync without a seed
+inspection window, start catchup explicitly:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>./cli.sh<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>catchingblocks
+</span></code></pre></div>
 <p>Monitor progress:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>./status.sh
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>./logs.sh<span class="w"> </span>blockchain
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>./rpc.sh<span class="w"> </span>getblockchaininfo
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>./status.sh
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>./logs.sh<span class="w"> </span>blockchain
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>./rpc.sh<span class="w"> </span>getblockchaininfo
 </span></code></pre></div>
 <p>Mainnet network sync can take days and depends on hardware, bandwidth, peer
 quality, and current chain activity.</p>
 <h2 id="seed-from-a-snapshot">Seed from a Snapshot<a class="headerlink" href="#seed-from-a-snapshot" title="Permanent link">&para;</a></h2>
 <p>Seeding writes UTXO state before the full stack starts. Start from a clean data
 volume:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>./stop.sh
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>./clean.sh<span class="w"> </span>--data-only
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>./stop.sh
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>./clean.sh<span class="w"> </span>--data-only
 </span></code></pre></div>
 <h3 id="teratestnet">Teratestnet<a class="headerlink" href="#teratestnet" title="Permanent link">&para;</a></h3>
 <p>Teratestnet has a canonical snapshot. Quickstart derives the URL from the block
 hash:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>./seed.sh<span class="w"> </span>000000002ea94a515ad9fd40d710fd249fe8610acef7b74f459446812d565187
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>./start.sh
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>./seed.sh<span class="w"> </span>000000002ea94a515ad9fd40d710fd249fe8610acef7b74f459446812d565187
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>./start.sh
 </span></code></pre></div>
 <h3 id="mainnet-and-testnet">Mainnet and Testnet<a class="headerlink" href="#mainnet-and-testnet" title="Permanent link">&para;</a></h3>
 <p>Mainnet and standard testnet do not have a canonical public snapshot URL. Bring
 your own compatible seed directory or URL:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>./seed.sh<span class="w"> </span>&lt;block-hash&gt;<span class="w"> </span>/path/to/seed-dir
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>./start.sh
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>./seed.sh<span class="w"> </span>&lt;block-hash&gt;<span class="w"> </span>/path/to/seed-dir
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>./start.sh
 </span></code></pre></div>
 <p>or:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>./seed.sh<span class="w"> </span>&lt;block-hash&gt;<span class="w"> </span>https://example.com/path/to/snapshot.zip
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>./start.sh
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>./seed.sh<span class="w"> </span>&lt;block-hash&gt;<span class="w"> </span>https://example.com/path/to/snapshot.zip
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>./start.sh
 </span></code></pre></div>
 <p>The block hash must match the snapshot. The snapshot network must match the
 configured <code>.env</code> network.</p>
@@ -7107,52 +7111,85 @@ configured <code>.env</code> network.</p>
 <p>If your seed source is an existing SV Node data directory, export it to
 quickstart-compatible seed files with the Teranode image. Stop SV Node
 gracefully before reading its <code>blocks</code> and <code>chainstate</code> directories:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>bitcoin-cli<span class="w"> </span>stop
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>bitcoin-cli<span class="w"> </span>stop
 </span></code></pre></div>
 <p>From the quickstart repository root, load the pinned Teranode version and write
 the export to a local seed directory:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nb">set</span><span class="w"> </span>-a
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>.<span class="w"> </span>./.env
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="nb">set</span><span class="w"> </span>+a
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>/path/to/teranode-seed
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span>--entrypoint<span class="w"> </span>/app/teranode-cli<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">  </span>-v<span class="w"> </span>/path/to/svnode-data:/svnode:ro<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">  </span>-v<span class="w"> </span>/path/to/teranode-seed:/seed<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">  </span>ghcr.io/bsv-blockchain/teranode:<span class="s2">"</span><span class="nv">$TERANODE_VERSION</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">  </span>bitcointoutxoset<span class="w"> </span>--bitcoinDir<span class="o">=</span>/svnode<span class="w"> </span>--outputDir<span class="o">=</span>/seed
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nb">set</span><span class="w"> </span>-a
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>.<span class="w"> </span>./.env
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="nb">set</span><span class="w"> </span>+a
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>/path/to/teranode-seed
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">  </span>--entrypoint<span class="w"> </span>/app/teranode-cli<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">  </span>-v<span class="w"> </span>/path/to/svnode-data:/svnode:ro<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">  </span>-v<span class="w"> </span>/path/to/teranode-seed:/seed<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">  </span>ghcr.io/bsv-blockchain/teranode:<span class="s2">"</span><span class="nv">$TERANODE_VERSION</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="w">  </span>bitcointoutxoset<span class="w"> </span>--bitcoinDir<span class="o">=</span>/svnode<span class="w"> </span>--outputDir<span class="o">=</span>/seed
 </span></code></pre></div>
 <p>Use the block hash from the generated seed filenames when loading quickstart:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>./seed.sh<span class="w"> </span>&lt;block-hash&gt;<span class="w"> </span>/path/to/teranode-seed
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>./start.sh
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>./seed.sh<span class="w"> </span>&lt;block-hash&gt;<span class="w"> </span>/path/to/teranode-seed
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>./start.sh
 </span></code></pre></div>
 <h2 id="seed-from-env">Seed from <code>.env</code><a class="headerlink" href="#seed-from-env" title="Permanent link">&para;</a></h2>
 <p>You can also configure seed values in <code>.env</code>:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>SEED_HASH=&lt;block-hash&gt;
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>SEED_DIR=/path/to/seed-dir
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>SEED_HASH=&lt;block-hash&gt;
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>SEED_DIR=/path/to/seed-dir
 </span></code></pre></div>
 <p>Then run:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>./seed.sh
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>./start.sh
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>./seed.sh
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>./start.sh
 </span></code></pre></div>
 <p>Use <code>SEED_URL</code> instead of <code>SEED_DIR</code> when the seed is a downloadable ZIP file.</p>
 <h2 id="restore-existing-data">Restore Existing Data<a class="headerlink" href="#restore-existing-data" title="Permanent link">&para;</a></h2>
 <p>If you maintain backups of the quickstart Docker volumes, restore them while the
 stack is stopped, keep <code>.env</code> aligned with the restored network and version,
 then start normally:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>./start.sh
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>./status.sh
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>./start.sh
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>./status.sh
 </span></code></pre></div>
 <p>Do not restore data from one network into a configuration for another network.</p>
-<h2 id="fsm-state">FSM State<a class="headerlink" href="#fsm-state" title="Permanent link">&para;</a></h2>
-<p><code>./start.sh</code> performs the normal FSM transition. If a startup race leaves the
-node in <code>INIT</code>, set the state manually:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>./cli.sh<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>RUNNING
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>./cli.sh<span class="w"> </span>getfsmstate
+<h2 id="verify-a-seed-before-catch-up">Verify a Seed Before Catch-up<a class="headerlink" href="#verify-a-seed-before-catch-up" title="Permanent link">&para;</a></h2>
+<p>The quickstart stack uses the <code>docker.m</code> settings context. A fresh blockchain
+store therefore starts in <code>IDLE</code>, including the first start after <code>./seed.sh</code>:
+the seeder writes chain data and the Block Assembler checkpoint, but no FSM
+state. While the node is parked, confirm that the seeded tip and network match
+the snapshot you intended to load and that every service can reach its store.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>./start.sh
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>./status.sh
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>./cli.sh<span class="w"> </span>getfsmstate<span class="w">                        </span><span class="c1"># expect IDLE</span>
 </span></code></pre></div>
+<p>During this IDLE inspection window, <code>subtreevalidation</code> and <code>pruner</code> have not
+bound their gRPC listeners yet. With the port-listen healthchecks in the bundled
+Docker definitions, their health status may remain <strong>starting</strong> or become
+<strong>unhealthy</strong> while parked: those gRPC ports are not listening. That status
+alone does not indicate a bad seed. Inspect the blockchain FSM, seeded tip and
+logs; the blockchain listener remains available for the CLI command below.
+Other enabled services with the same startup wait and port probes can behave
+similarly.</p>
+<p>After verification, start synchronization explicitly:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>./cli.sh<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>catchingblocks
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>./cli.sh<span class="w"> </span>getfsmstate<span class="w">                        </span><span class="c1"># expect CATCHINGBLOCKS</span>
+</span></code></pre></div>
+<p>After allowing the services time to initialize, run <code>./status.sh</code> again. If
+subtreevalidation or pruner remains unhealthy after leaving IDLE, inspect its
+logs and store connectivity; do not dismiss a continuing failure as expected.</p>
+<p>Catch-up promotes the node to <code>RUNNING</code> after it reaches the active network's
+highest checkpoint. There is no transition from <code>CATCHINGBLOCKS</code> back to
+<code>IDLE</code>, so verify the seed first. To skip this window on an unattended node,
+set <code>blockchain_initializeNodeInState.docker.m = CATCHINGBLOCKS</code> in
+<code>settings_local.conf</code> before the first start.</p>
 <h2 id="troubleshooting-sync">Troubleshooting Sync<a class="headerlink" href="#troubleshooting-sync" title="Permanent link">&para;</a></h2>
+<p>An unrecognized persisted FSM state aborts blockchain startup with an error
+naming the stored value. The node preserves that value rather than guessing
+whether catchup or mining was intended. <code>LEGACYSYNCING</code> is the one supported
+legacy migration and resumes as <code>CATCHINGBLOCKS</code>.</p>
+<p>For an unknown value, stop the stack and verify that the data and Teranode
+version are compatible. Restore a compatible backup or repair the FSM record
+through your datastore maintenance procedure before restarting. The CLI cannot
+repair this while blockchain startup is failing. Preserve a backup before any
+store repair; a reset and resync is a separate recovery choice.</p>
 <ul>
 <li>Check container health with <code>./status.sh</code>.</li>
 <li>Check service logs with <code>./logs.sh blockchain</code>, <code>./logs.sh legacy</code>, or

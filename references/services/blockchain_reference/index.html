@@ -9007,7 +9007,17 @@
 <h3 id="init">Init<a class="headerlink" href="#init" title="Permanent link">&para;</a></h3>
 <div class="language-go highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">b</span><span class="w"> </span><span class="o">*</span><span class="nx">Blockchain</span><span class="p">)</span><span class="w"> </span><span class="nx">Init</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 </span></code></pre></div>
-<p>Initializes the blockchain service, setting up the finite state machine (FSM) that governs the service's operational states. It handles three initialization scenarios: test mode, new deployment, and normal operation where it restores the previously persisted state from storage.</p>
+<p>Initializes the blockchain service and its finite state machine (FSM). The
+test-only local override takes precedence; a fresh store uses
+<code>blockchain_initializeNodeInState</code> (empty means <code>CATCHINGBLOCKS</code>); and a restart
+normally restores its persisted state without validating unused boot configuration.
+Invalid configured states abort fresh-node startup; storage failures abort startup.
+Fresh or persisted <code>RUNNING</code> is checked against the active network's highest
+checkpoint. Below-checkpoint configured <code>RUNNING</code> fails without fallback;
+persisted <code>RUNNING</code> with a successfully read tip below the checkpoint is durably
+migrated to <code>CATCHINGBLOCKS</code>. Tip-read failures or missing metadata abort startup
+without changing the persisted state. Unrecognized persisted state names also
+abort startup without writes; <code>LEGACYSYNCING</code> retains its explicit migration.</p>
 <h3 id="start">Start<a class="headerlink" href="#start" title="Permanent link">&para;</a></h3>
 <div class="language-go highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">b</span><span class="w"> </span><span class="o">*</span><span class="nx">Blockchain</span><span class="p">)</span><span class="w"> </span><span class="nx">Start</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">readyCh</span><span class="w"> </span><span class="kt">chan</span><span class="o">&lt;-</span><span class="w"> </span><span class="kd">struct</span><span class="p">{})</span><span class="w"> </span><span class="kt">error</span>
 </span></code></pre></div>

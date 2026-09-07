@@ -7325,7 +7325,20 @@
 <p>Teranode provides a visualizer tool to generate and visualize the state machine diagram. To run the visualizer, use the command <code>go run services/blockchain/fsm_visualizer/main.go</code>. The generated <code>docs/state-machine.diagram.md</code> can be visualized using <a href="https://mermaid.live/">https://mermaid.live/</a>.</p>
 <h2 id="3-functionality">3. Functionality<a class="headerlink" href="#3-functionality" title="Permanent link">&para;</a></h2>
 <h3 id="31-state-machine-initialization">3.1. State Machine Initialization<a class="headerlink" href="#31-state-machine-initialization" title="Permanent link">&para;</a></h3>
-<p>As part of its own initialization, the Blockchain service restores the FSM to the state it last persisted. A node with no persisted state (a fresh node) starts in <strong>CatchingBlocks</strong> so that it begins downloading blocks immediately rather than waiting to be moved out of <strong>Idle</strong>; it is promoted to <strong>Running</strong> only once catch-up completes above the network's highest checkpoint.</p>
+<p>As part of initialization, the Blockchain service normally restores the FSM
+state it last persisted. A node with no persisted state uses
+<code>blockchain_initializeNodeInState</code>: an empty value means <strong>CatchingBlocks</strong>,
+while production <code>operator</code> and <code>docker.m</code> contexts default it to <strong>Idle</strong> so a
+seed can be inspected before catch-up. Uppercase values are required. Validation
+applies only when no FSM state is persisted; invalid values then abort startup.</p>
+<p>The test-only local start-state override takes precedence. Otherwise, a
+configured fresh-node <strong>Running</strong> state must pass the active network's checkpoint
+gate; below-checkpoint configured <strong>Running</strong> aborts startup without fallback.
+A persisted <strong>Running</strong> state with a successfully read tip below the checkpoint
+is persisted and resumed as <strong>CatchingBlocks</strong> instead. A tip-read failure or
+missing tip metadata aborts startup and leaves the persisted state unchanged.
+Unrecognized persisted state names likewise abort without writes; only the
+known retired <code>LEGACYSYNCING</code> name is migrated automatically.</p>
 <h3 id="32-accessing-the-state-machine">3.2. Accessing the State Machine<a class="headerlink" href="#32-accessing-the-state-machine" title="Permanent link">&para;</a></h3>
 <h4 id="321-access-via-command-line-interface-recommended">3.2.1. Access via Command-Line Interface (Recommended)<a class="headerlink" href="#321-access-via-command-line-interface-recommended" title="Permanent link">&para;</a></h4>
 <p>The Teranode Command-Line Interface (teranode-cli) provides the most direct and recommended approach for interacting with the State Machine. The CLI abstracts the underlying API calls and offers a straightforward interface for both operators and developers.</p>
@@ -7356,9 +7369,9 @@
 </ul>
 <h3 id="33-state-machine-states">3.3. State Machine States<a class="headerlink" href="#33-state-machine-states" title="Permanent link">&para;</a></h3>
 <h4 id="331-fsm-idle-state">3.3.1. FSM: Idle State<a class="headerlink" href="#331-fsm-idle-state" title="Permanent link">&para;</a></h4>
-<p>A node reaches <code>Idle</code> either by being stopped from <code>Running</code>, or by having
-persisted <code>Idle</code> before a restart. A fresh node no longer starts here — it starts
-in <code>CatchingBlocks</code> (see section 3.1). In this state:</p>
+<p>A node reaches <code>Idle</code> by being stopped from <code>Running</code>, by restoring persisted
+<code>Idle</code>, or by starting fresh under a context configured to park there (production
+deployments do; see section 3.1). In this state:</p>
 <ul>
 <li>No operations are permitted</li>
 <li>All services are inactive</li>
@@ -7402,8 +7415,9 @@ such, the node should see no activity for as long as the FSM stays in <code>Idle
 <h4 id="333-fsm-catching-blocks-state">3.3.3. FSM: Catching Blocks State<a class="headerlink" href="#333-fsm-catching-blocks-state" title="Permanent link">&para;</a></h4>
 <p>The <code>CatchingBlocks</code> state represents the node catching up on blocks. It is entered
 by BlockValidation when a running node finds it has fallen behind the network; at
-startup, because a fresh node with no persisted state boots straight into it (see
-section 3.1); or through an explicit CATCHUPBLOCKS event from <code>Idle</code>. In this state:</p>
+startup when selected as the fresh-node boot state (see section 3.1); when an
+unsafe persisted <code>Running</code> state is recovered; or through an explicit
+CATCHUPBLOCKS event from <code>Idle</code>. In this state:</p>
 <p>Allowed Operations in Catching Blocks State:</p>
 <ul>
 <li>✅ Process external transactions</li>

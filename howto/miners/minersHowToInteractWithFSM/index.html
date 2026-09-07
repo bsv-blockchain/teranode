@@ -7267,7 +7267,24 @@
 
 
 <h1 id="how-to-manage-teranode-states">How to Manage Teranode States<a class="headerlink" href="#how-to-manage-teranode-states" title="Permanent link">&para;</a></h1>
-<p>This guide explains how to change and monitor Teranode's state. Note that a fresh Teranode instance starts in CATCHINGBLOCKS state and begins catching up on its own; it reaches RUNNING once catch-up completes above the network's highest checkpoint. A restarted instance resumes whatever state it last persisted.</p>
+<p>This guide explains how to change and monitor Teranode's state. Fresh production
+deployments (<code>operator</code> and <code>docker.m</code> settings contexts) start in <code>IDLE</code>, giving
+an operator a safe inspection window. Other contexts keep the automatic
+<code>CATCHINGBLOCKS</code> default. Configure this with
+<code>blockchain_initializeNodeInState</code>; it accepts <code>IDLE</code>, <code>CATCHINGBLOCKS</code>, or
+<code>RUNNING</code> (uppercase). Invalid values fail startup only when no FSM state is
+persisted. On a checkpointed network, configured <code>RUNNING</code> requires a pre-seeded
+tip at or above the highest checkpoint; otherwise startup fails without fallback.
+Use <code>CATCHINGBLOCKS</code> to synchronize a fresh node.</p>
+<p>After inspecting a fresh production deployment, start synchronization from
+<code>IDLE</code> with <code>teranode-cli setfsmstate --fsmstate catchingblocks</code>. A direct
+<code>RUNNING</code> request is refused below the highest checkpoint; catch-up promotes the
+node automatically once it reaches that checkpoint.</p>
+<p>The setting applies only when no FSM state is persisted. Restarts normally
+restore the persisted state without validating unused boot configuration. A
+persisted <code>RUNNING</code> state with a successfully read tip below the active network's
+highest checkpoint is durably migrated to <code>CATCHINGBLOCKS</code>. Tip-read failures or
+missing metadata abort startup and leave the persisted state unchanged.</p>
 <h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Access to a running Teranode instance</li>
@@ -7404,10 +7421,10 @@ a node is catching up, the only way out is RUN.</p>
 <p><strong>Check Current State:</strong></p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>localhost:18087<span class="w"> </span>blockchain_api.BlockchainAPI.GetFSMCurrentState
 </span></code></pre></div>
-<p>Expected output (a fresh node reports <code>CATCHINGBLOCKS</code>; a restarted node reports
-whatever state it last persisted):</p>
+<p>Expected output for a fresh Kubernetes operator deployment (a restarted node
+normally reports its persisted state):</p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">"state"</span><span class="p">:</span><span class="w"> </span><span class="s2">"CATCHINGBLOCKS"</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">"state"</span><span class="p">:</span><span class="w"> </span><span class="s2">"IDLE"</span>
 </span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="p">}</span>
 </span></code></pre></div>
 <p><strong>Trigger State Transitions:</strong></p>

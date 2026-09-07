@@ -7172,9 +7172,9 @@
 <tr>
 <td>InitializeNodeInState</td>
 <td>string</td>
-<td>""</td>
+<td>"" (<code>IDLE</code> for <code>operator</code>/<code>docker.m</code>)</td>
 <td>blockchain_initializeNodeInState</td>
-<td><strong>UNUSED</strong> - Defined but not referenced in code</td>
+<td>Fresh-node FSM state: IDLE, CATCHINGBLOCKS, or RUNNING. Empty means CATCHINGBLOCKS; persisted state takes precedence and bypasses this setting’s validation; invalid values fail fresh-node startup</td>
 </tr>
 <tr>
 <td>PostgresPool</td>
@@ -7185,6 +7185,11 @@
 </tr>
 </tbody>
 </table>
+<p><strong>Configured RUNNING:</strong> on a checkpointed network, use only with a pre-seeded
+store whose tip is at or above the highest checkpoint. A lower tip or a tip-read
+failure aborts startup without falling back to CATCHINGBLOCKS. Choose
+<code>CATCHINGBLOCKS</code> to synchronize a fresh node. Networks without checkpoints allow
+configured RUNNING directly.</p>
 <h3 id="postgresql-connection-pool-postgrespool">PostgreSQL Connection Pool (PostgresPool)<a class="headerlink" href="#postgresql-connection-pool-postgrespool" title="Permanent link">&para;</a></h3>
 <p>When using PostgreSQL as the blockchain store, these nested settings configure connection pooling and resilience. All settings are prefixed with <code>blockchain_postgres_pool_</code>.</p>
 <table>
