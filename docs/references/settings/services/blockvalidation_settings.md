@@ -69,6 +69,28 @@
 | CatchupMinThroughputKBps | int | 100 | blockvalidation_catchup_min_throughput_kbps | Minimum throughput (KB/s) before switching peers |
 | CatchupParallelFetchEnabled | bool | true | blockvalidation_catchup_parallel_fetch_enabled | Enable parallel fetching from multiple peers |
 | CatchupParallelFetchWorkers | int | 3 | blockvalidation_catchup_parallel_fetch_workers | Number of parallel fetch workers |
+| SubtreeMmapDir | string | "" | blockvalidation_subtreeMmapDir | Directory for mmap-backed subtree Node loading (off-heap, RAM/disk tradeoff) |
+
+## Off-Heap Subtree Loading (SubtreeMmapDir)
+
+Off (empty) by default; production behaviour is unchanged unless an operator
+explicitly configures a directory. When set, subtrees loaded during block
+validation (including catchup's `fetchAndStoreSubtree` and quick validation's
+`readSubtree`) allocate their Node array as a file-backed mmap region instead
+of on the Go heap, reducing heap/RSS and GC pressure at the cost of disk I/O
+and the disk space the directory must have available.
+
+The directory is validated at service startup (`Server.Init`): it must exist
+and be writable, or the service fails to start. This is deliberate — this
+setting is read on every subtree load once configured (not just once at
+startup, unlike `blockassembly_subtreeMmapDir`/`blockassembly_txMapDirs`,
+which are only consulted when the subtree processor is constructed), so a
+silent fallback to heap allocation here would be much harder to notice and
+would defeat the RAM-reduction purpose of the setting entirely. A later,
+transient mmap failure (e.g. the disk fills up after startup) still falls
+back to heap allocation for that one subtree, but logs a warning so the
+degraded state stays visible. Set to a fast SSD/NVMe mount; do not point at a
+filesystem that can fill up during normal operation.
 
 ## Configuration Dependencies
 
@@ -76,6 +98,8 @@
 
 - Service skipped (not added to ServiceManager) if `GRPCListenAddress` is empty
 - Kafka consumer created for block processing
+- `SubtreeMmapDir`, when configured, must be an existing, writable directory
+  or `Init` returns a configuration error and the service does not start
 
 ### Catchup Mode
 

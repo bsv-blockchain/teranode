@@ -36,6 +36,16 @@ func CreateBaseTestSettings(t TestingT) *settings.Settings {
 	// outcomes are unchanged; 16 is the value the subtreeprocessor unit tests already use.
 	tSettings.BlockAssembly.SplitMapBuckets = 16
 
+	// Off-heap mmap/disk-backed storage (SubtreeMmapDir, TxMapDirs,
+	// BlockValidation.SubtreeMmapDir) is opt-in and validated (must exist and
+	// be writable) at service construction/startup. A developer's local
+	// settings_local.conf may legitimately point these at real directories for
+	// manual testing of the feature; reset them here so the shared test suite
+	// never depends on paths that only exist on one machine.
+	tSettings.BlockAssembly.SubtreeMmapDir = ""
+	tSettings.BlockAssembly.TxMapDirs = nil
+	tSettings.BlockValidation.SubtreeMmapDir = ""
+
 	// We sometimes get 'hot key' errors while running the test
 	// To mitigate this, we use more aggressive retry settings with exponential backoff
 	tSettings.Aerospike.WritePolicyURL = &url.URL{
