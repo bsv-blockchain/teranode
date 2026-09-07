@@ -17,17 +17,21 @@ import (
 // TestOptimisticMiningDisabledForPeerPath pins the item-1 operator gate truth table
 // (bitcoin-sv/teranode#4692): optimistic mining is enabled on the peer/catch-up paths ONLY when BOTH
 // OptimisticMining AND OptimisticMiningPeerBlocks are set, so the global opt-out always wins and the
-// new peer-blocks flag can never bypass it. In particular (false, true) must stay disabled.
+// new peer-blocks flag can never bypass it. In particular (false, true) must stay disabled. It also
+// pins the legacy-route hard-disable: a "legacy" baseURL is non-optimistic whatever the flags say.
 func TestOptimisticMiningDisabledForPeerPath(t *testing.T) {
 	cases := []struct {
 		global   bool
 		peer     bool
+		baseURL  string
 		disabled bool
 	}{
-		{global: false, peer: false, disabled: true}, // off
-		{global: false, peer: true, disabled: true},  // off — global opt-out wins, no bypass
-		{global: true, peer: false, disabled: true},  // off — today's default; peer opt-in not set
-		{global: true, peer: true, disabled: false},  // on — both enabled = deliberate opt-in
+		{global: false, peer: false, baseURL: "http://peer:8000", disabled: true}, // off
+		{global: false, peer: true, baseURL: "http://peer:8000", disabled: true},  // off — global opt-out wins, no bypass
+		{global: true, peer: false, baseURL: "http://peer:8000", disabled: true},  // off — today's default; peer opt-in not set
+		{global: true, peer: true, baseURL: "http://peer:8000", disabled: false},  // on — both enabled = deliberate opt-in
+		{global: true, peer: true, baseURL: "legacy", disabled: true},             // off — legacy sync is never optimistic
+		{global: false, peer: false, baseURL: "legacy", disabled: true},           // off — legacy sync is never optimistic
 	}
 
 	for _, c := range cases {
@@ -35,9 +39,13 @@ func TestOptimisticMiningDisabledForPeerPath(t *testing.T) {
 		tSettings.BlockValidation.OptimisticMining = c.global
 		tSettings.BlockValidation.OptimisticMiningPeerBlocks = c.peer
 
-		require.Equal(t, c.disabled, optimisticMiningDisabledForPeerPath(tSettings),
-			"OptimisticMining=%v OptimisticMiningPeerBlocks=%v -> disabled should be %v", c.global, c.peer, c.disabled)
+		require.Equal(t, c.disabled, optimisticMiningDisabledForPeerPath(tSettings, c.baseURL),
+			"OptimisticMining=%v OptimisticMiningPeerBlocks=%v baseURL=%s -> disabled should be %v", c.global, c.peer, c.baseURL, c.disabled)
 	}
+
+	// Nil settings report "disabled" — the fail-safe direction.
+	require.True(t, optimisticMiningDisabledForPeerPath(nil, "http://peer:8000"),
+		"nil settings must report disabled")
 }
 
 // newCorruptCapServer builds a Server with just the corrupt-cap machinery wired, mirroring the

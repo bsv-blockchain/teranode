@@ -1835,7 +1835,23 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// mark it failed (recentlyFailedBlocks) — preserving the recentlyFailedBlocks no-NOT_FOUND-cascade
 	// property — and do NOT poison. The peer's stall timer is deliberately NOT refreshed, so if a peer
 	// keeps serving the same corrupt hash the stall detector can rotate to one with an honest body.
-	// Once the fixed window lapses the counter resets and the honest body is admitted.
+	//
+	// Recovery, precisely. In headers-first mode this hash is NOT re-requested on this path, by
+	// design: the headerList entry and both request-map slots were consumed above this gate, and
+	// refillHeaderBlockPipeline only walks forward from sm.startHeader (fetchHeaderBlocks), so it
+	// cannot re-add the dropped hash. requestBlockDirect is deliberately not called either — it
+	// would getdata the same capped peer, whose delivery this gate drops again after the full
+	// block body has crossed the wire but before HandleBlockDirect, i.e. one full block download
+	// per iteration for the whole cooldown window (blockvalidation_corrupt_attempt_cooldown,
+	// default 10m). Recovery is sync-peer rotation instead: with the stall timer not refreshed,
+	// CheckSyncPeer rotates after maxLastBlockTime (180 s) via updateSyncPeer, which calls
+	// resetHeaderState and startSync, and the dropped hash is re-requested from the new sync peer.
+	// So the cost of a capped hash here is bounded latency, not a lost block.
+	//
+	// The fixed window still self-heals directly in the two cases that do not depend on rotation:
+	// a peer below the cap is never dropped here at all, and outside headers-first mode a later
+	// block arriving as an orphan of this un-stored one triggers a getblocks that re-requests it.
+	// Once the window lapses the counter resets and the same peer's honest body is admitted.
 	if sm.corruptBlockAttemptsExhausted(bmsg.blockHash, bmsg.peer.Addr()) {
 		sm.logger.Warnf("[handleBlockMsg][%s] corrupt re-download cap reached for peer %s; dropping delivery until the cooldown window expires (not rejected, not stored invalid)", bmsg.blockHash, bmsg.peer)
 

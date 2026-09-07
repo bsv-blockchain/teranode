@@ -2430,6 +2430,17 @@ func (u *BlockValidation) penalizeCorruptBlockPeer(ctx context.Context, peerID s
 // data of an already-persisted block or data being served. This is why it is narrower than the
 // catchup helper, where a fresh re-download re-creates everything.
 //
+// Deletion is per-hash and unconditional: unlike the catch-up helper (removeCatchupSubtreeFiles),
+// this one tracks no freshness, so a sibling block validating concurrently and naming the same
+// subtree hash can lose an in-flight SubtreeToCheck blob it was about to read. The cost is bounded
+// to a re-fetch or a retryable StorageError, because FileTypeSubtree is the primary lookup and
+// SubtreeToCheck is only the fallback (model.Block's subtree read path) — never a corrupt or
+// invalid verdict, and never a peer strike, so no hash is poisoned by it. It is the same shape as
+// the KNOWN LIMITATION documented on removeCatchupSubtreeFiles, and closing both needs the one
+// run-scoped set of no-longer-deletable pairs described there; a second, divergent freshness
+// mechanism here would be worse than the documented limitation. Tracked as follow-up in the pull
+// request rather than bundled here.
+//
 // A missing file is not an error.
 func (u *BlockValidation) removePeerSuppliedSubtreeToCheck(ctx context.Context, block *model.Block) error {
 	for _, subtreeHash := range block.Subtrees {
@@ -2614,6 +2625,20 @@ func (u *BlockValidation) kafkaNotifyBlockInvalid(block *model.Block, reason str
 	// sentinel could never match and would only pollute the field.
 	if peerURL == "legacy" {
 		peerURL = ""
+	}
+
+	// A legacy-namespaced peerID is a legacy TCP address, not a libp2p identity, so it can never
+	// resolve to a p2p peer — yet the consumer takes the message peerID as its strongest
+	// attribution source (services/p2p/server_helpers.go's processInvalidBlockMessage), and
+	// AddBanScore creates a registry entry for any string (services/blockchain/peer_registry.go).
+	// The hash-keyed dedupe in the consumer would then suppress scoring the real p2p announcer of
+	// the same hash. Legacy peers are handled by the legacy service itself, by fault: a corrupt
+	// body is struck there (strikeIfCorruptBlockBody in services/legacy/peer_server.go), while a
+	// consensus-invalid block rotates the sync peer via shouldDisconnectOnBlockErr and takes no
+	// legacy ban-score strike. Sending an empty peerID is what this path did before provenance was
+	// threaded through, so nothing is lost (bitcoin-sv/teranode#4692).
+	if isLegacyPeerID(peerID) {
+		peerID = ""
 	}
 
 	if u.invalidBlockKafkaProducer != nil {

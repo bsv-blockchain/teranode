@@ -46,9 +46,10 @@ func (m *catchupReportRecorder) UpdateCatchupError(_ context.Context, peerID, _ 
 	return nil
 }
 
-// RecordCatchupFailureWithKind records the dedicated failure-kind calls releaseCatchupLock makes
-// (bitcoin-sv/teranode#4692) — the incomplete-block and corrupt-body reputation signals both route
-// through here, distinct from the generic malicious/peer-error reports above.
+// RecordCatchupFailureWithKind records the catch-up failure charges releaseCatchupLock makes — the
+// generic charge (kind "generic", no hash) as well as the incomplete-block one, which is the only
+// kind that carries a penalty window (bitcoin-sv/teranode#4692). Distinct from the malicious and
+// error-diagnostic reports above.
 func (m *catchupReportRecorder) RecordCatchupFailureWithKind(_ context.Context, peerID, failureKind, blockHash string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -120,18 +121,18 @@ func newReleaseCatchupBlock(t *testing.T) *model.Block {
 // (bitcoin-sv/teranode#4692). A corrupt terminal error must classify as "corrupt_block_body",
 // which is NOT a generic peer error: the serving peer was already struck at the corrupt site and
 // an honest relay can forward a corrupted body, so releaseCatchupLock must neither report it
-// malicious nor open a generic peer-error window. It still feeds catch-up peer selection a
-// genuine, correctly-labelled signal via the dedicated corrupt_block_body failure kind — the
-// generic-peer-error suppression above would otherwise leave selection with zero signal at all.
-// The positive control confirms a genuine ErrBlockInvalid does the opposite (classified
-// "validation_failure", peer reported malicious), so the corrupt case is a real, distinct
-// decision — not a branch that can never fire.
+// malicious nor open the isPeerError/reportPeerErr window. What it does carry is exactly one
+// generic catch-up failure charge — the reputation counters are the only selection input this
+// route takes, and no penalty window is opened — plus a display-only diagnostic naming the
+// corrupt block hash. The positive control confirms a genuine ErrBlockInvalid does the opposite
+// (classified "validation_failure", peer reported malicious), so the corrupt case is a real,
+// distinct decision — not a branch that can never fire.
 //
 // Mutation proof: deleting `case errors.IsBlockCorrupt(*err)` from the classification switch drops a
 // corrupt error to the switch defaults (errorType "unknown_error", isPeerError true), which reddens
-// both the ErrorType assertion and the "no generic peer-error report" assertion below.
+// both the ErrorType assertion and the one-generic-failure-charge assertion below.
 func TestReleaseCatchupLock_CorruptBodyClassifiedNonPeer(t *testing.T) {
-	t.Run("corrupt body is non-peer, not malicious, but feeds peer selection", func(t *testing.T) {
+	t.Run("corrupt body is non-peer, not malicious, charged exactly once", func(t *testing.T) {
 		rec := &catchupReportRecorder{}
 		u := &Server{logger: ulogger.TestLogger{}, p2pClient: rec}
 
@@ -152,14 +153,17 @@ func TestReleaseCatchupLock_CorruptBodyClassifiedNonPeer(t *testing.T) {
 			"a corrupt body must classify as corrupt_block_body, not the generic peer-error default")
 		require.Empty(t, rec.maliciousReported(),
 			"a corrupt body must NOT flag the serving peer malicious (bitcoin-sv/teranode#4692)")
-		require.Empty(t, rec.genericErrorReported(),
-			"a corrupt body must NOT open a generic peer-error window (isPeerError=false)")
+		// UpdateCatchupError is a display-only write (it lands in LastCatchupError), so the
+		// corrupt diagnostic for this peer is expected here. What must NOT happen is the
+		// isPeerError/reportPeerErr window and the malicious report, both asserted above.
+		require.Equal(t, []string{"peer-corrupt"}, rec.genericErrorReported(),
+			"the corrupt diagnostic is recorded for the serving peer, and only for it")
 
 		peerIDs, kinds, hashes := rec.failuresWithKindReported()
 		require.Equal(t, []string{"peer-corrupt"}, peerIDs,
-			"a corrupt body must feed catch-up peer selection via RecordCatchupFailureWithKind")
-		require.Equal(t, []string{catchupFailureKindCorruptBlockBody}, kinds)
-		require.Equal(t, []string{block.Hash().String()}, hashes)
+			"a corrupt body must be charged exactly one generic catch-up failure")
+		require.Equal(t, []string{catchupFailureKindGeneric}, kinds)
+		require.Equal(t, []string{""}, hashes)
 	})
 
 	t.Run("consensus-invalid body is malicious (positive control)", func(t *testing.T) {

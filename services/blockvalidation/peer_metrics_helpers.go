@@ -13,14 +13,6 @@ const (
 	catchupFailureKindGeneric         = "generic"
 	catchupFailureKindBlockIncomplete = "block_incomplete"
 
-	// catchupFailureKindCorruptBlockBody feeds catch-up peer selection a genuine reputation
-	// signal for a corrupt body, mirroring catchupFailureKindBlockIncomplete: without a
-	// dedicated kind, a corrupt-serving peer left isPeerError=false (the cosmetic UI-string
-	// suppression is still correct — it is not the malicious/AddBanScore path, which already
-	// strikes separately) got zero signal toward future peer selection, so selection could
-	// keep re-picking the same peer (bitcoin-sv/teranode#4692).
-	catchupFailureKindCorruptBlockBody = "corrupt_block_body"
-
 	// LegacyPeerIDPrefix marks a peerID as originating from the legacy netsync path, rather than a
 	// libp2p peer ID. The prefix guarantees the value can never collide with or be mistaken for a
 	// real libp2p peer ID anywhere downstream (logs, caches, metrics) — defence in depth alongside
@@ -133,6 +125,19 @@ func (u *Server) reportCatchupFailure(ctx context.Context, peerID string) {
 }
 
 func (u *Server) reportCatchupFailureForError(ctx context.Context, peerID string, err error) {
+	if errors.IsBlockCorrupt(err) {
+		// releaseCatchupLock already charged this cycle for the corrupt body, once, at the site
+		// that classified it. A corrupt verdict is deliberately not "unvalidatable" and is not
+		// wrapped as ErrExternal, so it reaches processCatchupChItem's generic tail and would be
+		// charged a second time here — re-creating the CatchupFailures > CatchupAttempts skew the
+		// other exemptions in this helper exist to prevent (bitcoin-sv/teranode#4692).
+		//
+		// Only the reputation charge is suppressed. The ReportPeerFailure call that follows in
+		// processCatchupChItem is NOT gated: it is the sync-peer rotation signal, not a reputation
+		// call, and rotating away from a peer that served a corrupt body is the desired response.
+		return
+	}
+
 	if errors.Is(err, errors.ErrBlockIncomplete) {
 		return
 	}

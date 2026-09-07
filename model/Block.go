@@ -773,14 +773,12 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		return false, errors.NewBlockCorruptError("[BLOCK][%s] block has no coinbase tx", b.String())
 	}
 
-	// From here the coinbase/subtree/merkle checks are body-derived: on an unbound body
-	// they cannot distinguish an honest block corrupted in transit from an attacker's
-	// junk, so they classify corrupt (re-download + strike), never invalid=true. See
-	// bitcoin-sv/teranode#4692 and svnode's CorruptionOrDoS stance (bitcoin-sv/src/validation.cpp).
-	if !b.CoinbaseTx.IsCoinbase() {
-		return false, errors.NewBlockCorruptError("[BLOCK][%s] block coinbase tx is not a valid coinbase tx", b.String())
-	}
-
+	// From here the subtree/merkle checks are body-derived: on an unbound body they cannot
+	// distinguish an honest block corrupted in transit from an attacker's junk, so they classify
+	// corrupt (re-download + strike), never invalid=true. See bitcoin-sv/teranode#4692 and
+	// svnode's CorruptionOrDoS stance (bitcoin-sv/src/validation.cpp). The coinbase-shape check
+	// itself now runs below the binding, with the other coinbase checks.
+	//
 	// merkleRootChecked records that the block body was bound to the header — either by
 	// CheckMerkleRoot (step 8) over the loaded subtrees, or by the coinbase-only binding
 	// below. Block.Valid enforces this as a precondition for skipping validOrderAndBlessed
@@ -907,6 +905,22 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	// still written-then-read in that order.
 	if b.txMap != nil {
 		b.txMap.Freeze()
+	}
+
+	// 4a. Check that the first transaction really is a coinbase.
+	// Deliberately AFTER the merkle binding (bitcoin-sv/teranode#4692), for the same reason as the
+	// scriptSig-length and BIP34 checks below: a bound body's first transaction IS the one the
+	// miner committed to, so a non-coinbase there is genuine consensus invalidity and the hash can
+	// be condemned once. The coinbase-only binding compares the header merkle root to the coinbase
+	// txid, so a body whose root correctly commits a first transaction that is not a coinbase is
+	// constructible — above the binding it returned corrupt forever and the hash could never be
+	// condemned. On an unbound body the failure still stays corrupt, so it is re-downloaded and
+	// never poisoned.
+	//
+	// Ordering constraint: this must stay ABOVE CoinbaseScriptSigLengthInBounds, which indexes
+	// Inputs[0] unconditionally and documents IsCoinbase() as its "at least one input" guarantee.
+	if !b.CoinbaseTx.IsCoinbase() {
+		return false, bindErr("[BLOCK][%s] block coinbase tx is not a valid coinbase tx", b.String())
 	}
 
 	// 4b. Check that the coinbase scriptSig (unlocking script) length is within consensus bounds.
@@ -2145,7 +2159,17 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 			// Use b.Hash() rather than b.String(): String() takes subtreeSlicesMu, which is
 			// already held for the whole of this function, and sync.RWMutex is not reentrant
 			// (a second Lock on an already-held RWMutex deadlocks).
-			return errors.NewBlockCorruptError("[BLOCK][%s][ID %d] subtree %d of %d was loaded but is nil", b.Hash().String(), b.ID, sIdx, nrOfSubtrees)
+			//
+			// A processing error, NOT a corrupt-body verdict: a nil survivor here can never be
+			// peer data. SubtreeSlices is reallocated all-nil above, so every index gets a
+			// goroutine; each goroutine either assigns its slice or returns an error, and the
+			// errgroup Wait above returns before this loop on any error. subtreeSlicesMu is held
+			// for the whole function, so nothing can nil an entry mid-flight either. A nil left
+			// here is therefore a local invariant break, and classifying it corrupt would strike
+			// the serving peer for our own bug. Matches how Valid and CheckMerkleRoot classify the
+			// identical phenomenon (bitcoin-sv/teranode#4692). The length mismatch below stays
+			// corrupt — that one IS body-derived.
+			return errors.NewProcessingError("[BLOCK][%s][ID %d] subtree %d of %d was loaded but is nil", b.Hash().String(), b.ID, sIdx, nrOfSubtrees)
 		}
 		if sIdx == 0 {
 			subtreeSize = subtree.Length()
