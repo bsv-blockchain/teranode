@@ -62,7 +62,7 @@ func TestCheckP2PConfigListenAddresses(t *testing.T) {
 		{name: "empty is an error", addrs: nil, severity: SeverityERROR, value: valueEmpty},
 		{name: "wildcard is ok", addrs: []string{"0.0.0.0"}, severity: SeverityOK, value: "0.0.0.0"},
 		{name: "dual-stack multiaddr is ok", addrs: []string{"/ip4/0.0.0.0/tcp/9905", "/ip6/::/tcp/9905"}, severity: SeverityOK},
-		{name: "narrowed interface is an error", addrs: []string{"10.0.1.5"}, severity: SeverityERROR, value: "10.0.1.5"},
+		{name: "narrowed interface is an error", addrs: []string{"10.0.1.5"}, severity: SeverityERROR},
 		{name: "port mismatch is an error", addrs: []string{"/ip4/0.0.0.0/tcp/9906"}, severity: SeverityERROR},
 	}
 

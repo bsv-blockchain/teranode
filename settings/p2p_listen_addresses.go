@@ -42,9 +42,21 @@ func validateListenAddress(addr string, port int) error {
 		ip := net.ParseIP(addr)
 		if ip == nil {
 			// host:port is the legacy_listen_addresses format and the likeliest
-			// slip; point at the accepted spellings instead of at firewalls.
-			if host, p, splitErr := net.SplitHostPort(addr); splitErr == nil {
-				return errors.NewConfigurationError("host:port is not accepted; write %s or /ip4/%s/tcp/%s", host, host, p)
+			// slip; point at the accepted spellings instead of at firewalls. Only
+			// echo the host back when it is the wildcard, and always name
+			// p2p_port rather than whatever port was typed, so the hint never
+			// recommends a value this same function would refuse.
+			if host, _, splitErr := net.SplitHostPort(addr); splitErr == nil {
+				if hostIP := net.ParseIP(host); hostIP != nil && hostIP.IsUnspecified() {
+					proto := "ip4"
+					if hostIP.To4() == nil {
+						proto = "ip6"
+					}
+
+					return errors.NewConfigurationError("host:port is not accepted; write %s or /%s/%s/tcp/%d", host, proto, host, port)
+				}
+
+				return errors.NewConfigurationError("host:port is not accepted, and %q is not the wildcard bind; write 0.0.0.0 or /ip4/0.0.0.0/tcp/%d", host, port)
 			}
 
 			return errors.NewConfigurationError("not an IP address or multiaddr")
