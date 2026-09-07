@@ -16,6 +16,7 @@ services:
     user: "0:0"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ../base/blockassembly.rules.yml:/etc/prometheus/blockassembly.rules.yml
       - ${DATA_PATH}/prometheus:/prometheus
 
   aerospike-exporter:
