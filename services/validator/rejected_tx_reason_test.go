@@ -24,17 +24,17 @@ func TestRejectedTxReason(t *testing.T) {
 		{
 			name: "single code drops the message text",
 			err:  errors.NewTxInvalidError(inputShaped),
-			want: "ERR_TX_INVALID",
+			want: "TX_INVALID",
 		},
 		{
 			name: "chain joined outermost first",
 			err:  errors.NewTxInvalidError("outer", errors.NewProcessingError("inner")),
-			want: "ERR_TX_INVALID/ERR_PROCESSING",
+			want: "TX_INVALID/PROCESSING",
 		},
 		{
 			name: "no teranode code falls back to the rejection condition",
 			err:  io.EOF,
-			want: "ERR_TX_INVALID",
+			want: "TX_INVALID",
 		},
 	}
 

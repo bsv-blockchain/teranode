@@ -17,7 +17,8 @@ const maxRejectedTxReasonCodes = 4
 // embed script and transaction details from the rejected input), so the
 // network copy carries only the error codes along the chain (errors.CodeChain:
 // outermost first, deduplicated, at most maxRejectedTxReasonCodes) joined by
-// "/". An error carrying no teranode code at all reports ERR_TX_INVALID, the
+// "/", e.g. "TX_INVALID/PROCESSING" (the enum names print without the ERR_
+// prefix). An error carrying no teranode code at all reports TX_INVALID, the
 // condition that led here.
 func rejectedTxReason(err error) string {
 	codes := errors.CodeChain(err, maxRejectedTxReasonCodes)

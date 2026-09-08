@@ -51,7 +51,7 @@ func internalRejection(t *testing.T, txID string) *kafka.KafkaMessage {
 	value, err := proto.Marshal(&kafkamessage.KafkaRejectedTxTopicMessage{
 		TxHash: txID,
 		PeerId: "",
-		Reason: "ERR_TX_INVALID",
+		Reason: "TX_INVALID",
 	})
 	require.NoError(t, err)
 
@@ -200,7 +200,7 @@ func TestRejectedTxEgressGate_NonPositiveLimitsSelectDefaults(t *testing.T) {
 func TestRejectedTxMessage_CodeReasonPassesIngressBounds(t *testing.T) {
 	msg := RejectedTxMessage{
 		TxID:   testBlockHashHex,
-		Reason: strings.Repeat("ERR_TX_INVALID/", 3) + "ERR_PROCESSING",
+		Reason: strings.Repeat("TX_INVALID/", 3) + "PROCESSING",
 		PeerID: mustNewPeerID(t).String(),
 	}
 
