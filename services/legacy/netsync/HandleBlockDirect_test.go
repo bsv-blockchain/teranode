@@ -120,13 +120,15 @@ func Test_HandleBlockDirect(t *testing.T) {
 		ctx,
 		logger,
 		tSettings,
-		blockchainClient,
-		validatorClient,
-		utxoStore,
-		subtreeStore,
-		subtreeValidation,
-		blockValidation,
-		blockAssemblyClient,
+		Dependencies{
+			BlockchainClient:  blockchainClient,
+			ValidationClient:  validatorClient,
+			UtxoStore:         utxoStore,
+			SubtreeStore:      subtreeStore,
+			SubtreeValidation: subtreeValidation,
+			BlockValidation:   blockValidation,
+			BlockAssembly:     blockAssemblyClient,
+		},
 		config,
 	)
 	require.NoError(t, err)
