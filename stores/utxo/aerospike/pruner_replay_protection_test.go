@@ -65,7 +65,10 @@ func TestPrunerReplayProtection(t *testing.T) {
 
 	svc, err := store.GetPrunerService()
 	require.NoError(t, err)
-	n, err := svc.(*apruner.Service).PruneWithPartitions(ctx, 1300, "replay-protection", 1)
+	require.NotNil(t, svc)
+	prunerSvc, ok := svc.(*apruner.Service)
+	require.True(t, ok)
+	n, err := prunerSvc.PruneWithPartitions(ctx, 1300, "replay-protection", 1)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), n)
 
@@ -75,7 +78,7 @@ func TestPrunerReplayProtection(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, exists)
 
-	_, _, err = store.SpendAndCreate(ctx, child, 1200)
+	_, _, err = store.SpendAndCreate(ctx, child, 1400)
 	require.ErrorIs(t, err, errors.ErrUtxoError)
 
 	parentKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), parent.TxIDChainHash().CloneBytes())
