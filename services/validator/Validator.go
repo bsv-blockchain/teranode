@@ -69,12 +69,17 @@ const (
 	// a bounded retry rather than none at all.
 	defaultBlockAssemblyShedRetryTimeout = 2 * time.Second
 
-	// shedUnwindVerifyAttempts and shedUnwindVerifyBackoff bound the read-back that
-	// confirms Delete actually deleted. A single read conflates "the record
-	// survived" with "the read failed", and only the first justifies aborting;
-	// retrying converts most transient store errors into a definitive answer before
-	// the unwind gives up. Small on purpose: this runs on a path that only executes
-	// when the node is already shedding.
+	// shedUnwindVerifyAttempts and shedUnwindVerifyBackoff bound ONE verify pass, and
+	// the unwind runs two of them on the created-record shape — one confirming Delete
+	// actually deleted, one immediately before the unspend confirming the record has
+	// not come back (see unwindShed). So the worst case across an unwind is twice
+	// these numbers, which is what the sizing rule in the longdescs is keyed on.
+	//
+	// Within a pass, a single read conflates "the record survived" with "the read
+	// failed", and only the first justifies aborting; retrying converts most transient
+	// store errors into a definitive answer before the unwind gives up. Small on
+	// purpose: this runs on a path that only executes when the node is already
+	// shedding.
 	shedUnwindVerifyAttempts = 3
 	shedUnwindVerifyBackoff  = 5 * time.Millisecond
 
@@ -95,16 +100,25 @@ const (
 	// the unwind only starts once the hand-off has given up — so an ingest goroutine's
 	// total retention is BlockAssemblyShedRetryTimeout + ShedUnwindTimeout.
 	//
-	// It is ONE budget for the whole sequence, not a per-phase one: the Delete, up to
-	// shedUnwindVerifyAttempts verify reads with shedUnwindVerifyBackoff between them,
-	// and the Unspend all share it. Under a slow store the verify read therefore gets
-	// fewer attempts than shedUnwindVerifyAttempts before the context short-circuits
-	// it, and the unwind fails closed having effectively tried once — which is why the
-	// setting's longdesc carries a sizing rule keyed on the store's P99 rather than
-	// just a default.
+	// It is ONE budget for the whole sequence, not a per-phase one, and the sequence has
+	// more in it than the name suggests: the complete delete (a master read, the master
+	// delete, then on a paginated transaction the batched pagination-child passes and
+	// the blob deletes), then TWO verify passes of up to shedUnwindVerifyAttempts reads
+	// each with shedUnwindVerifyBackoff between them, then the Unspend — all sharing
+	// this one deadline. Under a slow store each pass therefore gets fewer attempts than
+	// shedUnwindVerifyAttempts before the context short-circuits it, and the second pass
+	// can be cut short entirely by a budget the cascade and the first pass already
+	// spent, leaving the unwind failing closed having effectively tried once — which is
+	// why the setting's longdesc carries a sizing rule keyed on the store's P99 rather
+	// than just a default.
 	//
-	// 2s covers one Delete, up to shedUnwindVerifyAttempts verify reads and one Unspend
-	// against a store whose healthy latency is sub-millisecond.
+	// The master read is the one step this deadline cannot cut short: the Aerospike Go
+	// client does not observe the context on it, so it is bounded by
+	// aerospike_readPolicy instead. It counts toward the P99 the sizing rule asks for,
+	// but not toward what this bound can interrupt.
+	//
+	// 2s covers that whole sequence — including both verify passes — against a store
+	// whose healthy latency is sub-millisecond.
 	defaultShedUnwindTimeout = 2 * time.Second
 
 	// defaultTwoPhaseCommitTimeout is the fallback for validator_twoPhaseCommitTimeout,
@@ -2360,9 +2374,12 @@ func (v *Validator) handoffFloor() time.Duration {
 // The context is bounded by shedUnwindTimeout (validator_shedUnwindTimeout), because
 // the one it inherits is detached from the caller and a wedged store would otherwise
 // park an ingest goroutine on a best-effort cleanup path. That bound is ONE budget for
-// the delete, the verify reads and the unspend together, so a slow store spends it on
-// the earlier phases and the verify read can get fewer attempts than
-// shedUnwindVerifyAttempts before failing closed.
+// the whole sequence — the cascade, BOTH verify passes and the unspend together — so a
+// slow store spends it on the earlier phases and each pass can get fewer attempts than
+// shedUnwindVerifyAttempts before failing closed. The second pass is the one that goes
+// first: the cascade and the first pass can consume the budget between them, cutting it
+// short entirely. The cascade's opening master read is bounded by aerospike_readPolicy
+// rather than by this deadline, because the client ignores the context on that call.
 func (v *Validator) unwindShed(ctx context.Context, tx *bt.Tx, txID string, spentUtxos []*utxo.Spend, createdRecord bool) error {
 	prometheusValidatorShedUnwindTotal.Inc()
 
@@ -2375,10 +2392,17 @@ func (v *Validator) unwindShed(ctx context.Context, tx *bt.Tx, txID string, spen
 	// unspend, so a caller observing the outcome still sees the failure.
 	var pendingErr error
 
+	// failureCounted keeps shed_unwind_failures_total per-unwind. The residue arm
+	// below counts a delete failure and then falls through to the unspend, so without
+	// this a single unwind that failed twice would move the counter twice.
+	failureCounted := false
+
 	if createdRecord {
 		deleteErr := v.utxoStore.DeleteComplete(ctx, txHash)
 		if deleteErr != nil {
 			prometheusValidatorShedUnwindFailures.Inc()
+
+			failureCounted = true
 		}
 
 		// Verify-after-delete: only unspend once the record is provably gone. The
@@ -2469,7 +2493,14 @@ func (v *Validator) unwindShed(ctx context.Context, tx *bt.Tx, txID string, spen
 	}
 
 	if err := v.utxoStore.Unspend(ctx, spentUtxos); err != nil {
-		prometheusValidatorShedUnwindFailures.Inc()
+		// One unwind, one failure. The residue arm above falls through to here with a
+		// delete failure already counted, and the metrics reference asks operators to
+		// pair this counter with the residue and aborted counters — arithmetic that
+		// only works if it counts unwinds rather than failing operations.
+		if !failureCounted {
+			prometheusValidatorShedUnwindFailures.Inc()
+		}
+
 		v.logger.Errorf("[unwindShed][%s] failed to unspend %d input(s) of a shed transaction; outpoints %s are temporarily unspendable and need operator recovery: %v", txID, len(spentUtxos), unwindOutpoints(spentUtxos), err)
 
 		return err

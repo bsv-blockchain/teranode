@@ -157,6 +157,12 @@ var (
 	// guarantees is an error log carrying the txid and the outpoints; what it no
 	// longer implies on its own is that the transaction was left locked or its
 	// inputs left spent.
+	//
+	// It counts UNWINDS, not failing operations: one unwind moves it by at most one,
+	// including on the residue arm where the delete failed and the unspend then
+	// failed too. That is what keeps it comparable against shed_unwind_total and
+	// pairable with the residue, aborted and unverified counters — the arithmetic
+	// the metrics reference asks operators to do.
 	prometheusValidatorShedUnwindFailures prometheus.Counter
 
 	// prometheusValidatorShedUnwindAborted counts unwinds abandoned by the

@@ -98,6 +98,12 @@ type unlockSpy struct {
 	// then return this error — a partial failure on a multi-input transaction.
 	unspendPartialErr error
 
+	// unspendErr, when set, fails the whole unspend without delegating — the shape the
+	// residue arm needs, where the delete already failed and the unspend then fails
+	// too. Distinct from unspendPartialErr, which restores part of the spend set
+	// first and only fires on a multi-input transaction.
+	unspendErr error
+
 	// setLockedBlocks makes the two-phase-commit unlock park until the context it was
 	// handed expires, modelling a wedged store on the post-acceptance bookkeeping path.
 	// It returns ctx.Err() rather than an error of its own, because that is the error
@@ -209,6 +215,11 @@ func (s *unlockSpy) GetMeta(ctx context.Context, hash *chainhash.Hash, data *met
 
 func (s *unlockSpy) Unspend(ctx context.Context, spends []*utxostore.Spend, flagAsLocked ...bool) error {
 	s.unspendCalls++
+
+	// Checked before unspendPartialErr so the two hooks cannot interact.
+	if s.unspendErr != nil {
+		return s.unspendErr
+	}
 
 	if s.unspendPartialErr != nil && len(spends) > 1 {
 		// Restore the first input, then fail: the operator-visible state is a spend set
@@ -710,6 +721,51 @@ func TestValidate_ShedUnwindUnspendsWhenDeleteFailedButRecordIsGone(t *testing.T
 	logged := logger.joined()
 	require.Contains(t, logged, outpointOf(parentTx, 0), "the residue arm names the outpoints it unspent")
 	require.Contains(t, logged, "orphan pagination children", "an arm is only actionable if it says what is left behind")
+}
+
+// Test 11b3 — one unwind, one failure, even when two operations in it fail.
+//
+// The residue arm counts the delete failure and then FALLS THROUGH to the unspend. If
+// that unspend also fails, the same unwind used to move
+// shed_unwind_failures_total twice. The metrics reference asks operators to pair that
+// counter with the residue, aborted and unverified counters to see what a failure left
+// behind, which is arithmetic that only works while it counts unwinds rather than
+// failing operations.
+//
+// The pairing is asserted, not just the single number: residue advances by 1 and
+// failures advances by 1, which is the shape an operator's dashboard reads.
+func TestValidate_ShedUnwindCountsOneFailurePerUnwind(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx, logger := recoverySetupWithLogger(t, "queue_shed_unwind_one_failure", 1)
+
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	// The residue shape: the master really goes, the cascade then reports a failure.
+	spy.deleteErr = errors.NewStorageError("pagination child delete failed after the master record was removed")
+	spy.deleteErrAfterRemoving = true
+
+	// And the unspend that the residue arm falls through to fails too.
+	spy.unspendErr = errors.NewStorageError("utxo store unspend unavailable")
+
+	initPrometheusMetrics()
+
+	failuresBefore := testutil.ToFloat64(prometheusValidatorShedUnwindFailures)
+	residueBefore := testutil.ToFloat64(prometheusValidatorShedUnwindResidue)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "the caller still sees the shed")
+
+	require.Equal(t, 1, spy.unspendCalls, "the residue arm falls through to the unspend, which is what makes the double count reachable")
+
+	require.Equal(t, failuresBefore+1, testutil.ToFloat64(prometheusValidatorShedUnwindFailures),
+		"two failed operations in one unwind must still be one counted unwind")
+	require.Equal(t, residueBefore+1, testutil.ToFloat64(prometheusValidatorShedUnwindResidue),
+		"the residue outcome is still counted, so the pairing the metrics reference asks for holds")
+
+	// The inputs stayed spent because the unspend failed, and an operator needs the
+	// outpoints to reconcile from.
+	require.True(t, parentOutpointSpent(t, realStore, parentTx), "a failed unspend leaves the inputs spent")
+	require.Contains(t, logger.joined(), outpointOf(parentTx, 0), "the failed unspend names the outpoints to recover")
 }
 
 // Test 11c — the verify-after-delete guard. A store whose Delete returns nil while
