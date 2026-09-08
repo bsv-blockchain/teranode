@@ -323,15 +323,15 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		})
 		prometheusUtxoParentsSkippedPruned = promauto.NewCounter(prometheus.CounterOpts{
 			Name: "utxo_pruner_parents_skipped_pruned_total",
-			Help: "Number of parent updates skipped because parent was already pruned (in this or a prior session)",
+			Help: "Always 0: the PrunedTxSet parent-update skip is disabled (see #1701). Number of parent updates skipped because parent was already pruned (in this or a prior session)",
 		})
 		prometheusUtxoPrunedSetSize = promauto.NewGauge(prometheus.GaugeOpts{
 			Name: "utxo_pruner_pruned_set_size",
-			Help: "Approximate number of TXIDs tracked in the in-memory PrunedTxSet across prune sessions",
+			Help: "Always 0: PrunedTxSet is never constructed (see #1701). Approximate number of TXIDs tracked in the in-memory PrunedTxSet across prune sessions",
 		})
 		prometheusUtxoPrunedSetSaturated = promauto.NewGauge(prometheus.GaugeOpts{
 			Name: "utxo_pruner_pruned_set_saturated",
-			Help: "1 if any PrunedTxSet Insert has failed since construction without rotation recovering it (extreme CAS contention without saturation, or insertion into a freshly-rotated generation also failing — both are error/backstop signals; should be 0 in normal operation. Use utxo_pruner_pruned_set_rotations for routine cap pressure.)",
+			Help: "Always 0 because PrunedTxSet is never constructed (see #1701) — do NOT read 0 here as healthy. 1 if any PrunedTxSet Insert has failed since construction without rotation recovering it (extreme CAS contention without saturation, or insertion into a freshly-rotated generation also failing — both are error/backstop signals; should be 0 in normal operation. Use utxo_pruner_pruned_set_rotations for routine cap pressure.)",
 		})
 		// Tracked as a Gauge (not a Counter) because the value is sampled
 		// from PrunedTxSet.Rotations() at the end of each prune session
@@ -340,7 +340,7 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		// reserved for Counter metrics.
 		prometheusUtxoPrunedSetRotations = promauto.NewGauge(prometheus.GaugeOpts{
 			Name: "utxo_pruner_pruned_set_rotations",
-			Help: "Cumulative number of generation rotations across all PrunedTxSet shards (each rotation drops the previous-gen entries; high rate suggests pruner_utxoPrunedSetMaxEntries is too small)",
+			Help: "Always 0: PrunedTxSet is never constructed (see #1701). Cumulative number of generation rotations across all PrunedTxSet shards (each rotation drops the previous-gen entries; high rate suggests pruner_utxoPrunedSetMaxEntries is too small)",
 		})
 	})
 
@@ -1575,8 +1575,12 @@ func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[str
 	// parent's deletedChildren bin and assumes the update has landed
 	// before the child record is gone.
 	//
-	// When defensive mode is off (the dev-scale-1 default), order
-	// doesn't matter because the deletedChildren bin is never read.
+	// When defensive mode is off the two go out together. Note that the
+	// deletedChildren bin IS still read on the spend path regardless of
+	// mode (teranode.lua checks it on an idempotent re-spend), so a parent
+	// update that fails inside the combined batch leaves the child deleted
+	// with no replay marker. See #1701; ordering this path like the
+	// defensive one is open follow-up work.
 	if s.defensiveEnabled {
 		if len(parentUpdates) > 0 {
 			if err := s.executeBatchParentUpdates(ctx, parentUpdates); err != nil {

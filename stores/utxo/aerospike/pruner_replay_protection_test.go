@@ -80,6 +80,15 @@ func TestPrunerReplayProtection(t *testing.T) {
 
 	_, _, err = store.SpendAndCreate(ctx, child, 1400)
 	require.ErrorIs(t, err, errors.ErrUtxoError)
+	// ErrUtxoError is a broad class — pin the rejection to the deletedChildren
+	// check in teranode.lua rather than any spend failure.
+	require.Contains(t, err.Error(), "invalid spend")
+
+	// The symptom in #1701 is the child being recreated as unmined with empty
+	// blockIDs, so a rejected replay that still wrote the record must fail here.
+	exists, err = client.Exists(nil, childKey)
+	require.NoError(t, err)
+	require.False(t, exists, "rejected replay must not recreate the pruned child")
 
 	parentKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), parent.TxIDChainHash().CloneBytes())
 	require.NoError(t, err)
