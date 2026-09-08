@@ -313,14 +313,11 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		fieldBlockHeights:              fields.BlockHeights.String(),
 	}
 
-	// PrunedTxSet is persistent across prune sessions so children whose parents were pruned
-	// in earlier sessions can still skip the parent-update round-trip. Defensive mode is
-	// incompatible with the optimisation because records may be skipped after the reader
-	// registers them.
-	if !service.defensiveEnabled {
-		service.prunedSet = NewPrunedTxSet(256, settings.Pruner.UTXOPrunedSetMaxEntries)
-	}
-
+	// Do not construct PrunedTxSet. It is a cuckoo filter used to skip
+	// parent deletedChildren writes; a false positive drops the replay
+	// marker on a live parent. prunedSet stays nil so every parent is
+	// updated. Missing parents already return TX_NOT_FOUND / KEY_NOT_FOUND
+	// and are counted as skipped.
 	service.partitionWorkerFn = service.partitionWorker
 
 	return service, nil
