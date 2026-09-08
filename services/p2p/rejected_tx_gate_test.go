@@ -100,9 +100,12 @@ func TestRejectedTxHandler_RepeatedTxIDPublishedOnce(t *testing.T) {
 }
 
 // A re-broadcast the network refused must not leave the txid marked as
-// announced: the next rejection of the same txid retries.
+// announced, and must not keep the rate token: the next rejection of the same
+// txid retries, and with a burst of one it can only do so if the failed
+// attempt's token came back.
 func TestRejectedTxHandler_PublishFailureAllowsRetry(t *testing.T) {
 	s, published := countingPublishServer(t, errors.NewServiceError("mesh unavailable"), 1)
+	s.rejectedTxEgress.setLimits(1, 1, 0, 0)
 
 	handler := s.rejectedTxHandler(context.Background())
 
@@ -110,7 +113,7 @@ func TestRejectedTxHandler_PublishFailureAllowsRetry(t *testing.T) {
 	require.Equal(t, 0, *published, "first publish fails")
 
 	require.NoError(t, handler(internalRejection(t, testBlockHashHex)))
-	require.Equal(t, 1, *published, "the retry must not be suppressed as a duplicate")
+	require.Equal(t, 1, *published, "the retry must not be suppressed as a duplicate or rate limited")
 
 	require.NoError(t, handler(internalRejection(t, testBlockHashHex)))
 	require.Equal(t, 1, *published, "once published the txid is deduplicated")
@@ -124,18 +127,18 @@ func TestRejectedTxHandler_GateDropReturnsDedupGrant(t *testing.T) {
 	// Silent mode at the handler pre-check returns before the gate, so drive
 	// the chokepoint directly with a message the gate will refuse: unknown topic.
 	selfID := s.P2PClient.GetID()
-	ok, _ := s.rejectedTxEgress.allow(testBlockHashHex, selfID, time.Now())
-	require.True(t, ok)
+	grant, _ := s.rejectedTxEgress.allow(testBlockHashHex, selfID, time.Now())
+	require.NotNil(t, grant)
 
 	sent, err := s.publishToNetwork(context.Background(), "not-a-known-topic", []byte("{}"))
 	require.NoError(t, err)
 	require.False(t, sent)
 	require.Equal(t, 0, *published)
 
-	s.rejectedTxEgress.publishFailed(testBlockHashHex, selfID)
+	grant.publishFailed()
 
-	ok, _ = s.rejectedTxEgress.allow(testBlockHashHex, selfID, time.Now())
-	require.True(t, ok, "a returned grant must allow the txid to retry")
+	grant, _ = s.rejectedTxEgress.allow(testBlockHashHex, selfID, time.Now())
+	require.NotNil(t, grant, "a returned grant must allow the txid to retry")
 }
 
 // There is no unbounded mode: a Server constructed without applyPeerMapLimits
@@ -147,7 +150,7 @@ func TestRejectedTxEgressGate_ZeroValueUsesDefaults(t *testing.T) {
 	now := time.Now()
 	allowed := 0
 	for i := 0; i < defaultRejectedTxPublishBurst*3; i++ {
-		if ok, _ := g.allow(distinctTxID(i), "self", now); ok {
+		if grant, _ := g.allow(distinctTxID(i), "self", now); grant != nil {
 			allowed++
 		}
 	}
@@ -155,8 +158,8 @@ func TestRejectedTxEgressGate_ZeroValueUsesDefaults(t *testing.T) {
 	require.Equal(t, defaultRejectedTxPublishBurst, allowed, "an unconfigured gate must apply the default burst")
 
 	// The bucket refills at the default rate.
-	ok, why := g.allow(distinctTxID(10_000), "self", now.Add(time.Second))
-	require.True(t, ok, "tokens must refill over time: %s", why)
+	grant, why := g.allow(distinctTxID(10_000), "self", now.Add(time.Second))
+	require.NotNil(t, grant, "tokens must refill over time: %s", why)
 }
 
 // Suppression reasons are distinguishable so operators can tell a duplicate
@@ -167,22 +170,93 @@ func TestRejectedTxEgressGate_Reasons(t *testing.T) {
 
 	now := time.Now()
 
-	ok, why := g.allow("a", "self", now)
-	require.True(t, ok)
+	grant, why := g.allow("a", "self", now)
+	require.NotNil(t, grant)
 	require.Empty(t, why)
 
-	ok, why = g.allow("a", "self", now)
-	require.False(t, ok)
+	grant, why = g.allow("a", "self", now)
+	require.Nil(t, grant)
 	require.Equal(t, rejectedTxSuppressedDuplicate, why)
 
-	ok, why = g.allow("b", "self", now)
-	require.False(t, ok)
+	grant, why = g.allow("b", "self", now)
+	require.Nil(t, grant)
 	require.Equal(t, rejectedTxSuppressedRateLimited, why)
 
 	// A rate-limited txid was not marked announced: once a token is back it
 	// goes out.
-	ok, why = g.allow("b", "self", now.Add(2*time.Second))
-	require.True(t, ok, why)
+	grant, why = g.allow("b", "self", now.Add(2*time.Second))
+	require.NotNil(t, grant, why)
+}
+
+// A refused reservation must not debit the bucket: refusing txids while the
+// bucket is empty does not push the refill further out.
+func TestRejectedTxEgressGate_RefusalDoesNotDebitBucket(t *testing.T) {
+	var g rejectedTxEgressGate
+	g.setLimits(1, 1, 0, 0)
+
+	now := time.Now()
+
+	grant, _ := g.allow("a", "self", now)
+	require.NotNil(t, grant)
+
+	for i := 0; i < 100; i++ {
+		grant, why := g.allow(distinctTxID(i), "self", now)
+		require.Nil(t, grant)
+		require.Equal(t, rejectedTxSuppressedRateLimited, why)
+	}
+
+	grant, why := g.allow("b", "self", now.Add(time.Second))
+	require.NotNil(t, grant, "one refill later exactly one token must be back: %s", why)
+}
+
+// Both charges come back when the publish did not happen: the dedup slot and
+// the rate token. With a burst of one, the second txid can only be granted if
+// the first grant's token was refunded.
+func TestRejectedTxEgressGate_PublishFailedReturnsToken(t *testing.T) {
+	var g rejectedTxEgressGate
+	g.setLimits(1, 1, 0, 0)
+
+	now := time.Now()
+
+	grant, _ := g.allow("a", "self", now)
+	require.NotNil(t, grant)
+
+	refused, why := g.allow("b", "self", now)
+	require.Nil(t, refused)
+	require.Equal(t, rejectedTxSuppressedRateLimited, why)
+
+	grant.publishFailed()
+
+	granted, why := g.allow("b", "self", now)
+	require.NotNil(t, granted, "the failed publish's token must be back: %s", why)
+}
+
+// Pins the dedup period the gate documents: with this node as the single
+// announcer a repeated txid is refused inside the publish window and again on
+// the first rollover (last window's grantee is withheld the retry grant), and
+// granted only after the second rollover, about every two windows.
+func TestRejectedTxEgressGate_RepeatPeriodIsTwoPublishWindows(t *testing.T) {
+	var g rejectedTxEgressGate
+	g.setLimits(100, 100, 0, 10*time.Minute)
+
+	start := time.Now()
+
+	grant, _ := g.allow("a", "self", start)
+	require.NotNil(t, grant, "first rejection is re-broadcast")
+
+	grant, why := g.allow("a", "self", start.Add(seenHashPublishWindow/2))
+	require.Nil(t, grant, "repeat inside the window is a duplicate")
+	require.Equal(t, rejectedTxSuppressedDuplicate, why)
+
+	grant, why = g.allow("a", "self", start.Add(seenHashPublishWindow))
+	require.Nil(t, grant, "first rollover withholds the retry grant from last window's grantee")
+	require.Equal(t, rejectedTxSuppressedDuplicate, why)
+
+	grant, _ = g.allow("a", "self", start.Add(2*seenHashPublishWindow))
+	require.NotNil(t, grant, "second rollover re-broadcasts the repeat")
+
+	grant, _ = g.allow("a", "self", start.Add(3*seenHashPublishWindow))
+	require.Nil(t, grant, "and the cycle repeats")
 }
 
 // Non-positive limits select the defaults rather than disabling the gate.
@@ -190,8 +264,8 @@ func TestRejectedTxEgressGate_NonPositiveLimitsSelectDefaults(t *testing.T) {
 	var g rejectedTxEgressGate
 	g.setLimits(0, -1, 0, 0)
 
-	require.Equal(t, float64(defaultRejectedTxPublishRate), float64(g.limiter.Limit()))
-	require.Equal(t, defaultRejectedTxPublishBurst, g.limiter.Burst())
+	require.Equal(t, float64(defaultRejectedTxPublishRate), g.bucket.perSecond)
+	require.Equal(t, float64(defaultRejectedTxPublishBurst), g.bucket.burst)
 }
 
 // The reason the validator now sends is a bounded code list; make sure it is
@@ -208,4 +282,23 @@ func TestRejectedTxMessage_CodeReasonPassesIngressBounds(t *testing.T) {
 	msg.sanitizeFields()
 	require.Equal(t, before, msg.Reason, "a code list must not need truncation")
 	require.NoError(t, msg.validateFields())
+}
+
+// A refund never lifts the bucket above burst and time never runs backwards:
+// a full bucket refunded stays at burst, and an earlier now neither refills
+// nor rewinds.
+func TestTokenBucket_RefundCapsAtBurstAndTimeIsMonotonic(t *testing.T) {
+	b := newTokenBucket(1, 2)
+	now := time.Now()
+
+	b.refund(now)
+	require.Equal(t, float64(2), b.tokens, "refund into a full bucket is lost")
+
+	require.True(t, b.take(now))
+	require.True(t, b.take(now))
+	require.False(t, b.take(now), "bucket empty")
+
+	require.False(t, b.take(now.Add(-time.Hour)), "an earlier now must not mint tokens")
+	require.True(t, b.take(now.Add(time.Second)), "one second refills one token")
+	require.False(t, b.take(now.Add(time.Second)))
 }

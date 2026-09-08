@@ -1220,7 +1220,8 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 		// invalid transaction, and each re-broadcast is fanned out to the whole
 		// mesh, so the egress is deduplicated per txid and rate limited before
 		// any publish work. Suppression is counted, not logged per message.
-		if ok, why := s.rejectedTxEgress.allow(txID, selfID, time.Now()); !ok {
+		grant, why := s.rejectedTxEgress.allow(txID, selfID, time.Now())
+		if grant == nil {
 			rejectedTxPublishSuppressed(why)
 			s.logger.Debugf("[rejectedTxHandler] not re-broadcasting rejected tx %s: %s", txID, why)
 
@@ -1238,14 +1239,14 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 		rejectedTxMessage.sanitizeFields()
 
 		if err := rejectedTxMessage.validateFields(); err != nil {
-			s.rejectedTxEgress.publishFailed(txID, selfID)
+			grant.publishFailed()
 			s.logger.Errorf("[rejectedTxHandler] rejectedTxMessage failed gossip field validation, not publishing: %v", err)
 			return nil
 		}
 
 		msgBytes, err := json.Marshal(rejectedTxMessage)
 		if err != nil {
-			s.rejectedTxEgress.publishFailed(txID, selfID)
+			grant.publishFailed()
 			s.logger.Errorf("[rejectedTxHandler] json marshal error: %v", err)
 
 			return err
@@ -1261,9 +1262,9 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 		}
 
 		// A re-broadcast the gate dropped or the network refused must not leave
-		// the txid marked as announced.
+		// the txid marked as announced, nor keep the rate token it did not use.
 		if !sent {
-			s.rejectedTxEgress.publishFailed(txID, selfID)
+			grant.publishFailed()
 		}
 
 		return nil

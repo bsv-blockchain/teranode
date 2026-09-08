@@ -93,3 +93,46 @@ func TestCodeChain(t *testing.T) {
 		})
 	}
 }
+
+// The walk is bounded by links visited, not codes kept, so a chain whose links
+// are all skipped (same code everywhere) still terminates at maxChainWalkDepth
+// rather than being walked to its end.
+func TestCodeChain_SameCodedChainIsBoundedByDepth(t *testing.T) {
+	// Deepest link carries a distinct code, placed past the walk bound so the
+	// test also pins what the bound costs: a code that far down is not reported.
+	var chain *Error = &Error{code: ERR_UTXO_FROZEN, message: "deepest"}
+	for i := 0; i < 50_000; i++ {
+		chain = &Error{code: ERR_TX_INVALID, message: "same", wrappedErr: chain}
+	}
+
+	visited := 0
+	Walk(chain, func(*Error) bool {
+		visited++
+		return true
+	})
+	require.Equal(t, maxChainWalkDepth, visited)
+
+	require.Equal(t, []ERR{ERR_TX_INVALID}, CodeChain(chain, 0))
+}
+
+// A cycle that got past SetWrappedErr's guards must not hang the caller.
+func TestCodeChain_CycleTerminates(t *testing.T) {
+	a := &Error{code: ERR_TX_INVALID, message: "a"}
+	b := &Error{code: ERR_PROCESSING, message: "b", wrappedErr: a}
+	a.wrappedErr = b
+
+	require.Equal(t, []ERR{ERR_TX_INVALID, ERR_PROCESSING}, CodeChain(a, 0))
+}
+
+// Walk steps over foreign links and stops when the visitor asks it to.
+func TestWalk_SkipsForeignLinksAndStopsOnRequest(t *testing.T) {
+	err := fmt.Errorf("plain %w", NewTxInvalidError("x", NewProcessingError("deep", NewUtxoFrozenError("deeper"))))
+
+	var codes []ERR
+	Walk(err, func(te *Error) bool {
+		codes = append(codes, te.code)
+		return te.code != ERR_PROCESSING
+	})
+
+	require.Equal(t, []ERR{ERR_TX_INVALID, ERR_PROCESSING}, codes)
+}
