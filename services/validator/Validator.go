@@ -733,9 +733,12 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 
 				txID := tx.TxIDChainHash().String()
 
+				// The reason is re-broadcast network-wide by p2p, so it carries
+				// the error codes rather than the raw (unbounded, input-shaped)
+				// error text. The full error is still returned to the caller.
 				m := &kafkamessage.KafkaRejectedTxTopicMessage{
 					TxHash: txID,
-					Reason: err.Error(),
+					Reason: rejectedTxReason(err),
 					PeerId: "", // Empty peer_id indicates internal rejection
 				}
 

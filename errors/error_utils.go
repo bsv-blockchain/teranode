@@ -371,3 +371,37 @@ func errorCodeCategory(code ERR) string {
 		return ""
 	}
 }
+
+// CodeChain returns the codes of the teranode errors along err's unwrap
+// chain, outermost first, with repeated codes dropped and at most max entries
+// (a non-positive max means no cap). Links that carry no information are
+// skipped without stopping the walk: foreign (non-teranode) errors, and
+// ERR_UNKNOWN links, which is also what New produces when it flattens a
+// foreign error passed as the wrapped error. It is the bounded, input-free
+// summary of an error for places where the full text must not travel, such as
+// messages re-broadcast to other nodes.
+func CodeChain(err error, max int) []ERR {
+	var codes []ERR
+
+	seen := make(map[ERR]struct{})
+
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		if max > 0 && len(codes) >= max {
+			break
+		}
+
+		te, ok := e.(*Error)
+		if !ok || te == nil || te.code == ERR_UNKNOWN {
+			continue
+		}
+
+		if _, dup := seen[te.code]; dup {
+			continue
+		}
+
+		seen[te.code] = struct{}{}
+		codes = append(codes, te.code)
+	}
+
+	return codes
+}
