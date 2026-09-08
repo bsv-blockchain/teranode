@@ -491,6 +491,18 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 		return nil, errors.NewServiceError("[catchup:fetchAndStoreSubtree] Failed to fetch subtree for %s", subtreeHash.String(), subtreeErr)
 	}
 
+	// The response must be a whole number of node hashes. The integer division below silently
+	// discards a trailing partial hash, which would make a TRUNCATED or length-inconsistent response
+	// indistinguishable from doctored bytes at the root check further down — and that check strikes
+	// the serving peer for a corrupt block body. Reject the malformed shape here instead, with no
+	// strike, so the strike is reserved for a well-formed node list that hashes to the wrong root
+	// (bitcoin-sv/teranode#4692). subtreevalidation guards the same case on its own fetch branch via
+	// validateSubtreeLeafCount.
+	if len(subtreeNodeBytes)%chainhash.HashSize != 0 {
+		return nil, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] peer %s served %d bytes for subtree %s, not a whole number of %d-byte node hashes",
+			peerID, len(subtreeNodeBytes), subtreeHash.String(), chainhash.HashSize)
+	}
+
 	// in the subtree validation, we only use the hashes of the FileTypeSubtreeToCheck, which is what is returned from the peer
 	numberOfNodes := len(subtreeNodeBytes) / chainhash.HashSize
 	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(numberOfNodes)
@@ -523,6 +535,43 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 		if err = subtree.AddNode(*nodeHash, 0, 0); err != nil {
 			return nil, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Failed to add node %s to subtree %s at index %d", nodeHash.String(), subtreeHash.String(), i, err)
 		}
+	}
+
+	// The peer's node bytes must hash to the subtree we asked for. Without this the blob is stored
+	// under a filename it does not match, findLocalSubtreeFile short-circuits to it on retry, and the
+	// resulting block-level merkle mismatch is charged to the catch-up primary instead of to the peer
+	// that served the bytes (bitcoin-sv/teranode#4692). Mirrors subtreevalidation.CheckBlockSubtrees'
+	// identical check on the RUNNING fetch branch.
+	//
+	// Deliberately a ProcessingError and NOT a BlockCorruptError, matching that precedent's class:
+	// this error travels the fetch path, and a corrupt code anywhere in the chain would hit
+	// reportCatchupFailureForError's corrupt exemption and suppress the legitimate all-peers-failed
+	// charge. It is also not IsLocalError, so tryPeerForSubtree's recordCatchupPeerFailure charge
+	// against the serving peer still lands and fetchAndStoreSubtreeAndSubtreeData can still try an
+	// honest alternative.
+	// The root == nil arm is unreachable today — RootHash's contract permits nil, but all three of
+	// its nil paths are excluded here: the receiver is non-nil, the zero-node guard above rules out
+	// Length()==0, and its BuildMerkleTreeStoreFromBytes path cannot fail (every return in that
+	// function returns a nil error). Kept anyway, because it is free and it is the dependency's
+	// declared error path: if a future version starts failing there, this treats it as a mismatch
+	// rather than binding unverified bytes to the requested hash.
+	if root := subtree.RootHash(); root == nil || !subtreeHash.IsEqual(root) {
+		computed := "<nil>"
+		if root != nil {
+			computed = root.String()
+		}
+
+		// The one place the attribution is unambiguous: these bytes came from this peer, under this
+		// hash, and they do not match it. Strike here rather than letting the whole-body merkle
+		// mismatch land on the primary later. penalizeCorruptBlockPeer already returns early for a
+		// nil p2pClient, an empty peerID and a legacy-namespaced peerID, so no further guard is
+		// needed; the u.blockValidation nil check is, because several get_blocks tests construct a
+		// bare Server.
+		if u.blockValidation != nil {
+			u.blockValidation.penalizeCorruptBlockPeer(ctx, peerID, block, "subtree root hash mismatch on catchup fetch")
+		}
+
+		return nil, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] peer %s served subtree bytes for %s that hash to %s", peerID, subtreeHash.String(), computed)
 	}
 
 	subtreeBytes, err := subtree.Serialize()

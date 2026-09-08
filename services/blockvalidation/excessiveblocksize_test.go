@@ -87,9 +87,15 @@ func TestProcessBlockFound_ExcessiveBlockSize_DeclineIsBounded(t *testing.T) {
 		err := s.processBlockFound(ctx, block.Hash(), peerA, "legacy", block)
 		require.Error(t, err, "delivery %d must be declined on policy", i+1)
 		require.Contains(t, err.Error(), "excessiveblocksize")
-		require.True(t, errors.Is(err, errors.ErrBlockError), "a policy decline is classified ERR_BLOCK_ERROR")
+		require.True(t, errors.Is(err, errors.ErrBlockPolicyDeclined), "a policy decline is classified ERR_BLOCK_POLICY_DECLINED")
 		require.False(t, errors.IsBlockCorrupt(err), "a policy decline must never be corrupt")
 		require.False(t, errors.Is(err, errors.ErrBlockInvalid), "a policy decline must never poison the hash")
+		// Negative control on the class the decline moved OFF (bitcoin-sv/teranode#4692). The decline
+		// must be separable from ERR_BLOCK_ERROR, which now solely carries the retryable "given up
+		// waiting on previous blocks" timeout: if the two classes merged back together,
+		// releaseCatchupLock's narrowed wait-timeout case would shadow the decline case and
+		// processCatchupChItem's terminal branch would end the cycle on a retryable timeout.
+		require.False(t, errors.Is(err, errors.ErrBlockError), "the decline must NOT match the wait-timeout class it moved off")
 		uncappedDecline = err
 	}
 
@@ -98,24 +104,26 @@ func TestProcessBlockFound_ExcessiveBlockSize_DeclineIsBounded(t *testing.T) {
 	// The next delivery from the same peer is suppressed at the gate, before any fetch. The cap is a
 	// RATE LIMIT on re-fetching a block we already declined, NOT a different verdict — so the drop is
 	// INDISTINGUISHABLE in classification from the uncapped decline it rate-limits (bitcoin-sv/teranode#4692):
-	// same ERR_BLOCK_ERROR sentinel, NOT corrupt (so no corrupt-body strike lands for our local policy
-	// choice), never ErrBlockInvalid, and never nil (no false accept).
+	// same ERR_BLOCK_POLICY_DECLINED sentinel, NOT corrupt (so no corrupt-body strike lands for our
+	// local policy choice), never ErrBlockInvalid, and never nil (no false accept).
 	capErr := s.processBlockFound(ctx, block.Hash(), peerA, "legacy", block)
 	require.Error(t, capErr, "a capped delivery must be suppressed with an error, never reported as accepted")
 	require.Equal(t, errors.IsBlockCorrupt(uncappedDecline), errors.IsBlockCorrupt(capErr),
 		"capped and uncapped declines must share the corrupt-classification (both false)")
-	require.True(t, errors.Is(capErr, errors.ErrBlockError), "the cap suppression carries the SAME class as the decline it rate-limits")
+	require.True(t, errors.Is(capErr, errors.ErrBlockPolicyDeclined), "the cap suppression carries the SAME class as the decline it rate-limits")
 	require.False(t, errors.IsBlockCorrupt(capErr), "the cap suppression must NOT be corrupt (no corrupt-body strike for a policy decline)")
 	require.False(t, errors.Is(capErr, errors.ErrBlockInvalid), "the cap suppression must never poison the hash")
+	require.False(t, errors.Is(capErr, errors.ErrBlockError), "the cap suppression must NOT match the wait-timeout class either")
 	require.Contains(t, capErr.Error(), "suppressed", "the message must identify a cap suppression")
 
 	// Same suppression on the REAL route, with no pre-loaded block. This pins the gate ABOVE the
 	// fetch: without useBlock, processBlockFound would otherwise call fetchSingleBlock, whose HTTP
-	// request against the "legacy" base URL fails and surfaces a ProcessingError. An ERR_BLOCK_ERROR
-	// cap-suppression (not a ProcessingError fetch failure) is only possible if the gate ran first.
+	// request against the "legacy" base URL fails and surfaces a ProcessingError. An
+	// ERR_BLOCK_POLICY_DECLINED cap-suppression (not a ProcessingError fetch failure) is only possible
+	// if the gate ran first.
 	capErr = s.processBlockFound(ctx, block.Hash(), peerA, "legacy")
 	require.Error(t, capErr, "a capped delivery must be suppressed before fetchSingleBlock is ever reached")
-	require.True(t, errors.Is(capErr, errors.ErrBlockError), "the pre-fetch suppression is the policy-decline class, got: %v", capErr)
+	require.True(t, errors.Is(capErr, errors.ErrBlockPolicyDeclined), "the pre-fetch suppression is the policy-decline class, got: %v", capErr)
 	require.False(t, errors.Is(capErr, errors.ErrProcessing), "must be the cap suppression, not a fetch ProcessingError")
 	require.Contains(t, capErr.Error(), "suppressed", "must be the cap suppression, not a fetch error")
 

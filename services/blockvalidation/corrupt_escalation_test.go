@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
+	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -621,4 +622,235 @@ func TestValidateBlock_SubtreeCorrupt_StrikeGatedOnRevalidation(t *testing.T) {
 
 	// Revalidation: the stale announcing peer must NOT be struck.
 	require.Empty(t, run(true), "revalidation must NOT strike the stale announcing peer (bitcoin-sv/teranode#4692)")
+}
+
+// addBlockTolerantInvalidateRecordingClient wraps a REAL blockchain client. It absorbs the
+// ErrBlockExists an AddBlock of an already-stored block returns, and signals each InvalidateBlock
+// call on a channel. Every other method, and every read, goes to the real client.
+//
+// The tolerance is what makes the optimistic-background REVALIDATION path reachable at all, and is
+// itself evidence for the unreachability argument recorded at the gate: a revalidation only happens
+// for a block that is already stored, so the optimistic branch's AddBlock would return
+// ErrBlockExists and ValidateBlockWithOptions would bail with a ServiceError long before the
+// background block.Valid ran. Production never builds this option combination (the only
+// IsRevalidation:true producer sets DisableOptimisticMining:true in the same literal); the gate
+// exists so a future call site cannot introduce the divergence, and a test is the only way to
+// exercise it.
+type addBlockTolerantInvalidateRecordingClient struct {
+	blockchain.ClientI
+
+	// invalidateDone carries the real InvalidateBlock's error and is signalled AFTER that call
+	// returns, never before it. A test receiving from it therefore knows the invalidation has
+	// COMPLETED — and, since the corrupt branch takes its strike decision strictly earlier
+	// (penalizeCorruptBlockPeer sits immediately above the InvalidateBlock call), that the strike
+	// decision is final too. Signalling on entry instead would let the test assert "no strike"
+	// while the branch had not yet reached the strike, which is a vacuous green.
+	invalidateDone chan error
+}
+
+func (c *addBlockTolerantInvalidateRecordingClient) AddBlock(ctx context.Context, block *model.Block, peerID string, opts ...blockchainoptions.StoreBlockOption) error {
+	err := c.ClientI.AddBlock(ctx, block, peerID, opts...)
+	if err != nil && errors.Is(err, errors.ErrBlockExists) {
+		return nil
+	}
+
+	return err
+}
+
+func (c *addBlockTolerantInvalidateRecordingClient) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
+	hashes, err := c.ClientI.InvalidateBlock(ctx, blockHash)
+
+	select {
+	case c.invalidateDone <- err:
+	default:
+	}
+
+	return hashes, err
+}
+
+// TestOptimisticCorrupt_StrikeGatedOnRevalidation pins the M3 gate (bitcoin-sv/teranode#4692): the
+// optimistic-BACKGROUND corrupt branch must skip the serving-peer strike on operator revalidation,
+// exactly like its two sibling corrupt sites (the subtree-validation verdict and the non-optimistic
+// block.Valid verdict). The peerID carried on a revalidation is the original announcing peer's stale
+// ID: it neither served this read nor is necessarily still connected.
+//
+// The invalidate route stays UNGATED, and that is asserted here too: a corrupt body that is already
+// on-chain must still be taken down whatever triggered the revalidation.
+//
+// Both runs use a real sqlitememory blockchain store and a real local client, so the corrupt verdict
+// and the invalidation are produced by real code rather than by a mock's return value. The
+// revalidation run additionally pre-stores the block and marks it invalid, because that is what the
+// revalidation precheck requires.
+//
+// Both runs WAIT for the background branch before asserting, and fail loudly if it never arrives:
+// the "zero strikes" assertion would otherwise be satisfiable by a branch that had not yet reached
+// the strike, which is a vacuous green for the exact property this test exists to pin. See the
+// two-stage wait in run for what each stage guarantees.
+//
+// Mutation proof: remove the !opts.IsRevalidation gate and the revalidation run records a strike
+// against the stale announcing peer, reddening the "no strike" assertion.
+func TestOptimisticCorrupt_StrikeGatedOnRevalidation(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.NewErrorTestLogger(t)
+	// On the SUCCESSFUL-invalidate ending the branch logs once more after the invalidate returns
+	// (BlockValidation.go's "invalidated (invalidate route…)" line), which is past the last point a
+	// test can observe from outside. ErrorTestLogger routes Errorf to t.Logf, and t.Logf after the
+	// test completes races with tRunner's teardown, so detach the logger from t before this test
+	// returns. Shutdown is the logger's own guard for exactly this (an atomic flag checked inside
+	// Errorf), not a timing workaround; it suppresses only log output, since Errorf here does not
+	// fail the test. Deferred first, so it runs last.
+	defer logger.Shutdown()
+
+	const announcingPeer = "announcing-peer"
+
+	// run drives ValidateBlockWithOptions down the OPTIMISTIC path (OptimisticMining on,
+	// DisableOptimisticMining off) with a body that fails the block-level merkle check in the
+	// background, and returns the strikes recorded plus whether the invalidate route ran.
+	run := func(isRevalidation bool) ([]corruptBanScoreCall, bool) {
+		tSettings := test.CreateBaseTestSettings(t)
+		// Opt in so the body is AddBlock'd BEFORE block.Valid runs — the branch under test.
+		tSettings.BlockValidation.OptimisticMining = true
+		tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
+
+		blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+		require.NoError(t, err)
+
+		realClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
+		require.NoError(t, err)
+
+		// waitForPreviousBlocksToBeProcessed gates on the parent being mined, and the store writes
+		// genesis unmined; without this the optimistic AddBlock is never reached.
+		require.NoError(t, realClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash))
+
+		// Height 1, so the model height, the store-derived height and the BIP34 coinbase-encoded
+		// height all agree (StoreBlock re-derives the height from the parent chain).
+		const blockHeight = uint32(1)
+
+		coinbaseTx := coinbaseAtHeight(t, blockHeight)
+
+		// A real, stored subtree but a ZEROED header merkle root: the body loads and binds far enough
+		// to reach CheckMerkleRoot, which then fails -> ERR_BLOCK_CORRUPT in the background.
+		subtree, err := subtreepkg.NewTreeByLeafCount(2)
+		require.NoError(t, err)
+		require.NoError(t, subtree.AddCoinbaseNode())
+
+		subtreeStore := blobmemory.New()
+		subtreeBytes, err := subtree.Serialize()
+		require.NoError(t, err)
+		require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+		hdr := minedBIP34Header(t, 4, tSettings.ChainCfgParams.GenesisHash, &chainhash.Hash{})
+
+		block, err := model.NewBlock(hdr, coinbaseTx, []*chainhash.Hash{subtree.RootHash()},
+			uint64(subtree.Length()), uint64(coinbaseTx.Size()), blockHeight, 0) //nolint:gosec
+		require.NoError(t, err)
+
+		if isRevalidation {
+			// The revalidation precheck requires the block to be stored AND currently invalid.
+			require.NoError(t, realClient.AddBlock(ctx, block, announcingPeer))
+			_, err = realClient.InvalidateBlock(ctx, block.Header.Hash())
+			require.NoError(t, err)
+
+			_, meta, metaErr := realClient.GetBlockHeader(ctx, block.Header.Hash())
+			require.NoError(t, metaErr)
+			require.True(t, meta.Invalid, "the fixture must present an invalid block, or the revalidation precheck bails")
+		}
+
+		invalidateDone := make(chan error, 1)
+		blockchainClient := &addBlockTolerantInvalidateRecordingClient{ClientI: realClient, invalidateDone: invalidateDone}
+
+		// Buffered, and drained below when the invalidate fails: that enqueue is the background
+		// goroutine's LAST action on this branch (enqueueRevalidation logs before its send), so
+		// receiving it means the goroutine has finished.
+		revalidateChan := make(chan revalidateBlockData, 2)
+
+		subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
+		subtreeValidationClient.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
+		fake := &corruptStrikeP2PClient{}
+
+		bv := &BlockValidation{
+			logger:                        logger,
+			settings:                      tSettings,
+			blockchainClient:              blockchainClient,
+			subtreeStore:                  subtreeStore,
+			txStore:                       blobmemory.New(),
+			utxoStore:                     utxoStore,
+			subtreeValidationClient:       subtreeValidationClient,
+			p2pClient:                     fake,
+			lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
+			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			subtreeExistsCache:            expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
+			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
+			setMinedChan:                  make(chan *chainhash.Hash, 1),
+			revalidateBlockChan:           revalidateChan,
+			stats:                         gocore.NewStat("blockvalidation"),
+		}
+		defer bv.StopCaches()
+
+		// The optimistic path returns once the block is added; the corrupt verdict, the (gated)
+		// strike and the invalidate all happen in the background goroutine.
+		require.NoError(t, bv.ValidateBlockWithOptions(ctx, block, "http://peer", &ValidateBlockOptions{
+			IsRevalidation:          isRevalidation,
+			DisableOptimisticMining: false,
+			PeerID:                  announcingPeer,
+		}))
+
+		// WAIT FOR THE BACKGROUND BRANCH, bounded, before asserting anything about it. Two stages,
+		// because the branch has two possible endings:
+		//
+		//  1. invalidateDone is signalled after the real InvalidateBlock RETURNS. Since the corrupt
+		//     branch takes its strike decision immediately above that call, receiving here means the
+		//     strike decision is final — the "zero strikes" assertion cannot pass merely because the
+		//     strike had not happened yet.
+		//  2. If the invalidate failed, the branch re-queues revalidation, and that enqueue is its
+		//     last action. Draining it means the goroutine is done.
+		//
+		// Failing loudly on timeout rather than returning a quiet false: a fixture that never
+		// reaches the branch must not read as "gated".
+		invalidated := false
+
+		var invErr error
+
+		select {
+		case invErr = <-invalidateDone:
+			invalidated = true
+		case <-time.After(10 * time.Second):
+			require.Fail(t, "the optimistic-background corrupt branch never completed InvalidateBlock")
+		}
+
+		if invErr != nil {
+			select {
+			case <-revalidateChan:
+			case <-time.After(10 * time.Second):
+				require.Fail(t, "a failed invalidate must re-queue revalidation; the background goroutine never finished")
+			}
+		}
+
+		return fake.recorded(), invalidated
+	}
+
+	// Normal serving delivery: the serving peer IS struck, and the block is invalidated.
+	serving, servingInvalidated := run(false)
+	require.True(t, servingInvalidated, "the optimistic-background corrupt branch must take the invalidate route")
+	require.Len(t, serving, 1, "a non-revalidation optimistic-background corrupt body must strike the serving peer once")
+	require.Equal(t, announcingPeer, serving[0].peerID)
+
+	// Revalidation: the stale announcing peer must NOT be struck — but the corrupt body that is
+	// already on-chain must STILL be taken down.
+	revalidation, revalidationInvalidated := run(true)
+	require.True(t, revalidationInvalidated,
+		"the invalidate route stays ungated: an on-chain corrupt body must be taken down whatever triggered the revalidation")
+	require.Empty(t, revalidation,
+		"revalidation must NOT strike the stale announcing peer on the optimistic-background branch (bitcoin-sv/teranode#4692)")
 }

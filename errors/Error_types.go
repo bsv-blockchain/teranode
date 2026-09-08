@@ -14,6 +14,7 @@ var (
 	ErrBlockAssemblyReset         = New(ERR_BLOCK_ASSEMBLY_RESET, "block assembly reset")
 	ErrBlockCoinbaseMissingHeight = New(ERR_BLOCK_COINBASE_MISSING_HEIGHT, "the coinbase signature script doesn't have the block height")
 	ErrBlockCorrupt               = New(ERR_BLOCK_CORRUPT, "block corrupt")
+	ErrBlockPolicyDeclined        = New(ERR_BLOCK_POLICY_DECLINED, "block declined by local policy")
 	ErrBlockError                 = New(ERR_BLOCK_ERROR, "block error")
 	ErrBlockExists                = New(ERR_BLOCK_EXISTS, "block exists")
 	ErrBlockHeaderContext         = New(ERR_BLOCK_HEADER_CONTEXT, "block header context invalid")
@@ -262,6 +263,26 @@ func sanitizeCorruptParams(params []interface{}) []interface{} {
 	}
 
 	return params
+}
+
+// NewBlockPolicyDeclinedError creates a new error for a block this node declined under its own
+// local policy — an excessiveblocksize above the configured limit, say. It is a statement about
+// this node's configuration, not about the block and not about the peer that served it: the rest
+// of the network may well accept the block, so unlike NewBlockInvalidError it must NOT persist
+// invalid=true (that would cascade to every descendant and fork this node off the chain), and
+// unlike NewBlockCorruptError it must not charge the peer or spend the corrupt budget. A
+// dedicated code, not ERR_BLOCK_ERROR, so callers can end the catch-up cycle on it without also
+// ending it on the retryable "given up waiting on previous blocks" timeout, which keeps
+// ERR_BLOCK_ERROR (bitcoin-sv/teranode#4692).
+//
+// No sanitizing wrapper is needed here: unlike NewBlockCorruptError this code carries no
+// mutual-exclusion obligation against ERR_BLOCK_INVALID, it simply never matches it. And the
+// rendered name "BLOCK_POLICY_DECLINED" contains none of IsMaliciousResponseError's substrings
+// (invalid header, malformed, corrupt, attack, malicious, invalid format, protocol violation),
+// so the substring fallback over the rendered text cannot mis-classify a decline as malicious —
+// the trap ERR_BLOCK_CORRUPT fell into and needed an early-out for.
+func NewBlockPolicyDeclinedError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOCK_POLICY_DECLINED, message, params...)
 }
 
 // IsBlockCorrupt reports whether err (or anything it wraps, including across a gRPC

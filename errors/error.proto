@@ -104,4 +104,6 @@ enum ERR {
   // Block errors continued 120-129. The original 10-19 decade is full (see above);
   // errorCodeCategory maps this range to "block" too, so the category stays correct.
   BLOCK_CORRUPT=120;
+  // A block this node declined under its own local policy: never a verdict on the block or the peer.
+  BLOCK_POLICY_DECLINED=121;
 }
