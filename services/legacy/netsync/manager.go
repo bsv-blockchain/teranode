@@ -3157,12 +3157,36 @@ func (sm *SyncManager) Pause() chan<- struct{} {
 	return c
 }
 
+// Dependencies holds the service clients and stores the sync manager needs.
+// It exists so New keeps a manageable parameter list as the sync manager grows.
+//
+// Every field is required unless its own comment says otherwise.
+type Dependencies struct {
+	// BlockchainClient queries blockchain state and submits blocks.
+	BlockchainClient teranodeblockchain.ClientI
+
+	// ValidationClient validates incoming transactions before relay.
+	ValidationClient validator.Interface
+
+	// UtxoStore is the UTXO set, used for validation and outpoint lookups.
+	UtxoStore utxostore.Store
+
+	// SubtreeStore holds merkle subtree blob data.
+	SubtreeStore blob.Store
+
+	// SubtreeValidation verifies merkle proofs and block structure.
+	SubtreeValidation subtreevalidation.Interface
+
+	// BlockValidation validates incoming blocks before acceptance.
+	BlockValidation blockvalidation.Interface
+
+	// BlockAssembly serves mining and block template generation. It may be nil.
+	BlockAssembly blockassembly.ClientI
+}
+
 // New constructs a new SyncManager. Use Start to begin processing asynchronous
 // block, tx, and inv updates.
-func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient teranodeblockchain.ClientI,
-	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store,
-	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
-	blockAssembly blockassembly.ClientI, config *Config) (*SyncManager, error) {
+func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, deps Dependencies, config *Config) (*SyncManager, error) {
 	initPrometheusMetrics()
 
 	sm := SyncManager{
@@ -3186,13 +3210,13 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		handlerDone:             make(chan struct{}),
 		// teranode stores etc.
 		logger:            logger,
-		blockchainClient:  blockchainClient,
-		validationClient:  validationClient,
-		utxoStore:         utxoStore,
-		subtreeStore:      subtreeStore,
-		subtreeValidation: subtreeValidation,
-		blockValidation:   blockValidation,
-		blockAssembly:     blockAssembly,
+		blockchainClient:  deps.BlockchainClient,
+		validationClient:  deps.ValidationClient,
+		utxoStore:         deps.UtxoStore,
+		subtreeStore:      deps.SubtreeStore,
+		subtreeValidation: deps.SubtreeValidation,
+		blockValidation:   deps.BlockValidation,
+		blockAssembly:     deps.BlockAssembly,
 	}
 
 	// Bounded async block prefetch: with a positive budget OnBlock admits a
