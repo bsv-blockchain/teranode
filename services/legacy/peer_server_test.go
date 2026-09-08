@@ -550,12 +550,23 @@ func TestServerNetTotals(t *testing.T) {
 // behaviour for a corrupt block body (bitcoin-sv/teranode#4692): the serving peer must NOT be
 // disconnected (a body can be corrupted in transit by an honest relay), so the block
 // is dropped and re-requested without churning an otherwise-healthy sync peer.
-// Genuine consensus failures still disconnect; transient local infra errors do not.
+// Genuine consensus failures still disconnect; transient local infra errors, and a
+// local-policy decline, do not.
 func TestShouldDisconnectOnBlockErr_CorruptDoesNotDisconnect(t *testing.T) {
 	// Corrupt body — must NOT disconnect.
 	require.False(t, shouldDisconnectOnBlockErr(errors.NewBlockCorruptError("corrupt body")))
 	// Even wrapped, the corrupt cause must be detected and not disconnect.
 	require.False(t, shouldDisconnectOnBlockErr(errors.NewProcessingError("outer", errors.NewBlockCorruptError("corrupt body"))))
+
+	// Local policy decline (excessiveblocksize) — must NOT disconnect
+	// (bitcoin-sv/teranode#4692). It is our own configuration, not the peer's conduct: every peer
+	// serves the same block, so rotating only churns the fleet while the replacement is declined
+	// identically. It is not transient-local either, so it needs its own exemption rather than
+	// falling under IsTransientLocalError.
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewBlockPolicyDeclinedError("block size 5 exceeds excessiveblocksize 4 (local policy)")))
+	// And behind a generic wrapper, since errors.Is walks the chain (the gRPC round trip itself is
+	// pinned by errors/block_policy_declined_test.go's WrapGRPC/UnwrapGRPC coverage).
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewProcessingError("outer", errors.NewBlockPolicyDeclinedError("declined"))))
 
 	// Genuine consensus failure — must disconnect (rotate the peer).
 	require.True(t, shouldDisconnectOnBlockErr(errors.NewBlockInvalidError("invalid")))

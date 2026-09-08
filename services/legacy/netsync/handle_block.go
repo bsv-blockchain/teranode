@@ -276,9 +276,10 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	// identical peer.Addr() call, so they still bound the same serving connection. The
 	// divergence exists solely so nothing downstream of blockvalidation can mistake this value
 	// for a libp2p peer ID: isLegacyPeerID (services/blockvalidation/peer_metrics_helpers.go)
-	// makes isPeerMalicious and penalizeCorruptBlockPeer treat any LegacyPeerIDPrefix-prefixed value
-	// the same as an empty peerID, so it never reaches p2pClient.AddBanScore/IsPeerMalicious and
-	// therefore never reaches the centralized peer registry at all (bitcoin-sv/teranode#4692).
+	// makes isPeerMalicious, penalizeCorruptBlockPeer and the invalid-block Kafka producer treat any
+	// LegacyPeerIDPrefix-prefixed value the same as an empty peerID, so it never reaches
+	// p2pClient.AddBanScore/IsPeerMalicious. See isLegacyPeerID's doc for why that gate exists
+	// (bitcoin-sv/teranode#4692).
 	// Peer.Addr() dereferences the peer with no nil-receiver guard, so guard here: a nil peer
 	// degrades to the empty-peerID no-cap defence rather than panicking.
 	peerID := ""

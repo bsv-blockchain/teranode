@@ -1665,7 +1665,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// processBlockFound, where it owns an attempt counter that bounds repeat deliveries; both
 		// sites read the same predicate so they cannot drift.
 		if excessiveBlockSizeDeclined(u.settings, block) {
-			return errors.NewBlockError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d (local policy)", block.Header.Hash().String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
+			return errors.NewBlockPolicyDeclinedError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d (local policy)", block.Header.Hash().String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
 		}
 
 		// NOTE on block-version (BIP34/66/65) enforcement and error ordering:
@@ -1870,6 +1870,14 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// validate all the subtrees in the block
 		ctxLogger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
 
+		// Snapshot which SubtreeToCheck/Subtree blobs already exist, BEFORE the body is handed to
+		// CheckBlockSubtrees. This bounds the corrupt-verdict cleanup below to the blobs this attempt
+		// can have written, so an untrusted body cannot name another block's subtree hashes and have
+		// them deleted (bitcoin-sv/teranode#4692). Taken once here and used by BOTH corrupt-cleanup
+		// sites in this closure (the subtree-validation verdict just below and the block.Valid merkle
+		// verdict on the non-optimistic path further down).
+		subtreeToCheckPresentBefore := u.subtreeToCheckPresentBefore(ctx, block)
+
 		if err = u.validateBlockSubtrees(ctx, block, opts.PeerID, baseURL); err != nil {
 			// Corrupt subtree body (bitcoin-sv/teranode#4692): a body-derived failure surfaced during subtree
 			// validation (e.g. a CVE-2012-2459 duplicate tx in the received subtree, subtreevalidation
@@ -1885,9 +1893,11 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				}
 				// Drop the unvalidated peer-supplied subtree blobs this attempt left behind so a retry
 				// re-fetches instead of re-reading the body that just failed subtree validation
-				// (bitcoin-sv/teranode#4692). A delete failure only logs — it must not downgrade the
-				// corrupt classification (mirrors the block.Valid corrupt branch below and the catchup path).
-				if delErr := u.removePeerSuppliedSubtreeToCheck(ctx, block); delErr != nil {
+				// (bitcoin-sv/teranode#4692). Bounded to the hashes that had no local copy when this
+				// attempt started, so a doctored body cannot delete a concurrent block's blobs. A delete
+				// failure only logs — it must not downgrade the corrupt classification (mirrors the
+				// block.Valid corrupt branch below and the catchup path).
+				if delErr := u.removePeerSuppliedSubtreeToCheck(ctx, block, subtreeToCheckPresentBefore); delErr != nil {
 					u.logger.Warnf("[ValidateBlock][%s] failed to clear failed subtree blobs: %v", block.Hash().String(), delErr)
 				}
 				return err
@@ -2032,7 +2042,18 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					// mis-attributed Kafka strike lands on the announcing peer — the serving peer is
 					// already struck above by penalizeCorruptBlockPeer.
 					if errors.IsBlockCorrupt(err) {
-						u.penalizeCorruptBlockPeer(decoupledCtx, opts.PeerID, block, err.Error())
+						// Skip the strike on revalidation (stale announcing-peer ID, bitcoin-sv/teranode#4692);
+						// mirrors the two sibling corrupt sites (the subtree-validation verdict and the
+						// non-optimistic block.Valid verdict), which gate identically. The invalidate route
+						// below stays UNGATED: a corrupt body already on-chain must be taken down whatever
+						// triggered the revalidation. The combination is unreachable from the only
+						// IsRevalidation:true producer, which sets DisableOptimisticMining:true in the same
+						// options literal — the gate exists so a future call site cannot reintroduce the
+						// divergence, the same reasoning optimisticMiningDisabledForPeerPath's helper-level
+						// hard-disable carries.
+						if !opts.IsRevalidation {
+							u.penalizeCorruptBlockPeer(decoupledCtx, opts.PeerID, block, err.Error())
+						}
 
 						if _, invErr := u.blockchainClient.InvalidateBlock(decoupledCtx, block.Header.Hash()); invErr != nil {
 							// Invalidation failed → the block is still on-chain. Do NOT return silently.
@@ -2168,9 +2189,11 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					}
 					// Drop the unvalidated peer-supplied subtree blobs this attempt left behind so a
 					// retry re-fetches instead of re-reading the body that just failed the block-level
-					// merkle check (bitcoin-sv/teranode#4692). A delete failure only logs — it must not
-					// downgrade the corrupt classification (mirrors the catchup corrupt path).
-					if delErr := u.removePeerSuppliedSubtreeToCheck(ctx, block); delErr != nil {
+					// merkle check (bitcoin-sv/teranode#4692). Bounded to the hashes that had no local
+					// copy when this attempt started, so a doctored body cannot delete a concurrent
+					// block's blobs. A delete failure only logs — it must not downgrade the corrupt
+					// classification (mirrors the catchup corrupt path).
+					if delErr := u.removePeerSuppliedSubtreeToCheck(ctx, block, subtreeToCheckPresentBefore); delErr != nil {
 						u.logger.Warnf("[ValidateBlock][%s] failed to clear failed subtree blobs: %v", block.Hash().String(), delErr)
 					}
 					return err
@@ -2400,11 +2423,9 @@ func (u *BlockValidation) storeInvalidBlock(ctx context.Context, block *model.Bl
 func (u *BlockValidation) penalizeCorruptBlockPeer(ctx context.Context, peerID string, block *model.Block, reason string) {
 	u.logger.Warnf("[ValidateBlock][%s] corrupt block body from peer %s: %s", block.Hash().String(), peerID, reason)
 
-	// A "legacy:"-namespaced peerID is gated the same as an empty one (bitcoin-sv/teranode#4692):
-	// the legacy netsync path already strikes the serving connection directly in
-	// services/legacy/peer_server.go (strikeIfCorruptBlockBody's own +10), so routing it into
-	// AddBanScore here as well would create a phantom centralized-registry entry (no p2p code
-	// path can see or clear it on disconnect) and double-charge the peer for one corrupt body.
+	// A "legacy:"-namespaced peerID is gated the same as an empty one: legacy fault attribution is
+	// the legacy service's own, because only it can enforce. See isLegacyPeerID for why
+	// (bitcoin-sv/teranode#4692).
 	if u.p2pClient == nil || peerID == "" || isLegacyPeerID(peerID) {
 		return
 	}
@@ -2430,20 +2451,43 @@ func (u *BlockValidation) penalizeCorruptBlockPeer(ctx context.Context, peerID s
 // data of an already-persisted block or data being served. This is why it is narrower than the
 // catchup helper, where a fresh re-download re-creates everything.
 //
-// Deletion is per-hash and unconditional: unlike the catch-up helper (removeCatchupSubtreeFiles),
-// this one tracks no freshness, so a sibling block validating concurrently and naming the same
-// subtree hash can lose an in-flight SubtreeToCheck blob it was about to read. The cost is bounded
-// to a re-fetch or a retryable StorageError, because FileTypeSubtree is the primary lookup and
-// SubtreeToCheck is only the fallback (model.Block's subtree read path) — never a corrupt or
-// invalid verdict, and never a peer strike, so no hash is poisoned by it. It is the same shape as
-// the KNOWN LIMITATION documented on removeCatchupSubtreeFiles, and closing both needs the one
-// run-scoped set of no-longer-deletable pairs described there; a second, divergent freshness
-// mechanism here would be worse than the documented limitation. Tracked as follow-up in the pull
-// request rather than bundled here.
+// DELETION IS BOUNDED BY PRE-EXISTENCE. presentBefore is the snapshot subtreeToCheckPresentBefore
+// took before this attempt handed the body to CheckBlockSubtrees; every hash in it is skipped. That
+// is the same freshness rule the catch-up twin (removeCatchupSubtreeFiles) applies, reached by an
+// equivalence rather than by tracking writes: CheckBlockSubtrees' own fetch gate is the identical
+// local-file lookup (findLocalSubtreeFile), so if either FileTypeSubtreeToCheck or FileTypeSubtree
+// already existed for a hash it takes the local branch and writes nothing. "Absent locally when this
+// attempt started" is therefore exactly "possibly written by this attempt".
+//
+// This closes the attack the deletion previously allowed: a doctored body replaying an honest header
+// could name the subtree hashes of a block being validated concurrently and delete its blobs, and on
+// the legacy route the victim could not re-fetch them (the synthetic baseURL="legacy" has no scheme,
+// so the HTTP fetch fails outright — see findLocalSubtreeFile) and failed rather than recovering. Any
+// hash CheckBlockSubtrees could LOAD locally was by definition present at snapshot time, so it is
+// now skipped.
+//
+// RESIDUAL: a sibling block that writes the same hash BETWEEN the snapshot and this delete is still
+// exposed. That is the same cross-block window as the KNOWN LIMITATION documented on
+// removeCatchupSubtreeFiles, and closing it needs the one run-scoped set of no-longer-deletable
+// pairs described there; a second, divergent freshness mechanism here would be worse than the
+// documented limitation. Tracked as follow-up in the pull request rather than bundled here. The cost
+// of that residual is bounded to a re-fetch or a retryable StorageError, because FileTypeSubtree is
+// the primary lookup and SubtreeToCheck is only the fallback (model.Block's subtree read path) —
+// never a corrupt or invalid verdict, and never a peer strike, so no hash is poisoned by it.
+//
+// A nil presentBefore means "nothing was pre-existing", which is what nil-map lookups already give,
+// so a caller with no snapshot to offer gets the previous unconditional behaviour rather than a
+// silent no-op.
 //
 // A missing file is not an error.
-func (u *BlockValidation) removePeerSuppliedSubtreeToCheck(ctx context.Context, block *model.Block) error {
+func (u *BlockValidation) removePeerSuppliedSubtreeToCheck(ctx context.Context, block *model.Block, presentBefore map[chainhash.Hash]struct{}) error {
 	for _, subtreeHash := range block.Subtrees {
+		if _, existed := presentBefore[*subtreeHash]; existed {
+			// Not ours to delete: it was on disk before this attempt started, so CheckBlockSubtrees
+			// read it rather than writing it, and some other block may still need it.
+			continue
+		}
+
 		if err := u.subtreeStore.Del(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck); err != nil {
 			if !errors.Is(err, errors.ErrNotFound) {
 				return errors.NewProcessingError("[ValidateBlock] failed to remove %s file %s", fileformat.FileTypeSubtreeToCheck, subtreeHash.String(), err)
@@ -2452,6 +2496,66 @@ func (u *BlockValidation) removePeerSuppliedSubtreeToCheck(ctx context.Context, 
 	}
 
 	return nil
+}
+
+// subtreeToCheckPresentBefore snapshots which of the block's subtree hashes already had a local copy
+// before this attempt handed the body to CheckBlockSubtrees. Only hashes ABSENT here can have been
+// written by this attempt, which is the same freshness rule removeCatchupSubtreeFiles applies on the
+// catch-up path (bitcoin-sv/teranode#4692).
+//
+// Fails SAFE: a probe error records the hash as present, so a store hiccup can only fail to delete
+// something, never delete the wrong thing. Returns nil for a block with no subtrees, which nil-map
+// lookups then treat as "nothing was pre-existing" — correct, because there is nothing to skip.
+//
+// Probed CONCURRENTLY, bounded by SubtreeFetchConcurrency. This runs on EVERY validation but its
+// result is only ever read on the corrupt branch, and each probe is one or two blob-store Exists
+// calls — potentially remote. A block at scale carries thousands of subtrees, so serially this
+// would add thousands of sequential round-trips to the happy path of every block. Probe errors are
+// folded into the result as "present" rather than propagated, so there is nothing for the group to
+// return and the fail-safe direction is preserved.
+func (u *BlockValidation) subtreeToCheckPresentBefore(ctx context.Context, block *model.Block) map[chainhash.Hash]struct{} {
+	if len(block.Subtrees) == 0 {
+		return nil
+	}
+
+	// Written by index, one writer per element, so no synchronisation is needed on the slice.
+	present := make([]bool, len(block.Subtrees))
+
+	// A plain group, not errgroup.WithContext: no probe ever returns an error, so there is nothing
+	// to cancel siblings for. Nil-tolerant on settings, which several BlockValidation literals in
+	// tests leave unset.
+	concurrency := 8
+	if u.settings != nil && u.settings.BlockValidation.SubtreeFetchConcurrency > 0 {
+		concurrency = u.settings.BlockValidation.SubtreeFetchConcurrency
+	}
+
+	var g errgroup.Group
+
+	g.SetLimit(concurrency)
+
+	for i, subtreeHash := range block.Subtrees {
+		idx, hash := i, *subtreeHash
+
+		g.Go(func() error {
+			_, exists, err := findLocalSubtreeFile(ctx, u.subtreeStore, hash)
+			present[idx] = exists || err != nil
+
+			return nil
+		})
+	}
+
+	// Never returns an error: every probe swallows its own (fail-safe above).
+	_ = g.Wait()
+
+	presentBefore := make(map[chainhash.Hash]struct{}, len(block.Subtrees))
+
+	for i, subtreeHash := range block.Subtrees {
+		if present[i] {
+			presentBefore[*subtreeHash] = struct{}{}
+		}
+	}
+
+	return presentBefore
 }
 
 // checkParentInvalid checks if the parent block is invalid. This is an optimization
@@ -2627,15 +2731,11 @@ func (u *BlockValidation) kafkaNotifyBlockInvalid(block *model.Block, reason str
 		peerURL = ""
 	}
 
-	// A legacy-namespaced peerID is a legacy TCP address, not a libp2p identity, so it can never
-	// resolve to a p2p peer — yet the consumer takes the message peerID as its strongest
-	// attribution source (services/p2p/server_helpers.go's processInvalidBlockMessage), and
-	// AddBanScore creates a registry entry for any string (services/blockchain/peer_registry.go).
-	// The hash-keyed dedupe in the consumer would then suppress scoring the real p2p announcer of
-	// the same hash. Legacy peers are handled by the legacy service itself, by fault: a corrupt
-	// body is struck there (strikeIfCorruptBlockBody in services/legacy/peer_server.go), while a
-	// consensus-invalid block rotates the sync peer via shouldDisconnectOnBlockErr and takes no
-	// legacy ban-score strike. Sending an empty peerID is what this path did before provenance was
+	// A legacy-namespaced peerID is cleared here: this producer drives p2p's ban scoring, and the
+	// consumer takes the message peerID as its strongest attribution source
+	// (services/p2p/server_helpers.go's processInvalidBlockMessage). See isLegacyPeerID for why such
+	// an id must not reach it, including the hash-keyed dedupe that would then suppress scoring the
+	// real p2p announcer. Sending an empty peerID is what this path did before provenance was
 	// threaded through, so nothing is lost (bitcoin-sv/teranode#4692).
 	if isLegacyPeerID(peerID) {
 		peerID = ""

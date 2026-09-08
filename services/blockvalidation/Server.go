@@ -1700,15 +1700,16 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	// "accepted" for a block that was never stored (bitcoin-sv/teranode#4692). This gate is a RATE
 	// LIMIT on re-fetching a block we have ALREADY declined on local policy — not a different verdict
 	// — so it returns the SAME classification the uncapped excessiveblocksize decline returns a few
-	// lines below (errors.NewBlockError, ERR_BLOCK_ERROR; twin in ValidateBlockWithOptions). A capped
-	// drop must be INDISTINGUISHABLE to every caller from the decline it rate-limits: it must NOT be
-	// classified corrupt (a local policy choice is not the peer's corruption, so no corrupt-body ban
-	// score is earned on the legacy strike path), and it must not poison (ERR_BLOCK_ERROR is not
-	// ErrBlockInvalid, so it never reaches storeInvalidBlock / InvalidateBlock — same as the decline
-	// it mirrors, which already flows out of this function today).
+	// lines below (errors.NewBlockPolicyDeclinedError, ERR_BLOCK_POLICY_DECLINED; twin in
+	// ValidateBlockWithOptions). A capped drop must be INDISTINGUISHABLE to every caller from the
+	// decline it rate-limits: it must NOT be classified corrupt (a local policy choice is not the
+	// peer's corruption, so no corrupt-body ban score is earned on the legacy strike path), and it
+	// must not poison (ERR_BLOCK_POLICY_DECLINED is not ErrBlockInvalid, so it never reaches
+	// storeInvalidBlock / InvalidateBlock — same as the decline it mirrors, which already flows out
+	// of this function today).
 	if u.policyDeclineAttemptsExhausted(hash, peerID) {
 		u.logger.Warnf("[processBlockFound][%s] local policy decline cap reached for peer %s; suppressing this re-fetch until the cooldown window expires", hash.String(), peerID)
-		return errors.NewBlockError("[processBlockFound][%s] block declined on local policy (excessiveblocksize); re-fetch suppressed until the cooldown window expires (block not stored, not invalid)", hash.String())
+		return errors.NewBlockPolicyDeclinedError("[processBlockFound][%s] block declined on local policy (excessiveblocksize); re-fetch suppressed until the cooldown window expires (block not stored, not invalid)", hash.String())
 	}
 
 	var block *model.Block
@@ -1733,7 +1734,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	if excessiveBlockSizeDeclined(u.settings, block) {
 		u.recordPolicyDeclineAttempt(hash, peerID)
 
-		return errors.NewBlockError("[processBlockFound][%s] block size %d exceeds excessiveblocksize %d (local policy)", hash.String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
+		return errors.NewBlockPolicyDeclinedError("[processBlockFound][%s] block size %d exceeds excessiveblocksize %d (local policy)", hash.String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
 	}
 
 	u.checkParentProcessingComplete(ctx, block, baseURL)
@@ -2112,6 +2113,25 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 		return
 	}
 
+	// Local-policy decline cooldown, keyed per (hash, peerID) (bitcoin-sv/teranode#4692). THIS PEER
+	// has spent its decline budget for this hash; the hash itself is not in cooldown, because the
+	// size that produced those declines is peer-declared — see excessiveBlockSizeDeclined for why
+	// that must never spend a per-hash budget. So this is a PEER-scoped skip, and it takes the same
+	// shape as the bad/malicious skip below: try the other peers first, and clear the shared caches
+	// only if none of them can serve the hash. Fail-open on an empty peerID, like every sibling cap.
+	if u.policyDeclineAttemptsExhausted(c.block.Hash(), c.peerID) {
+		u.logger.Warnf("[catchup] Block %s from peer %s in cooldown after exhausting local-policy declines (cap %d); trying alternative peers", c.block.Hash().String(), c.peerID, u.settings.BlockValidation.MaxCorruptAttemptsPerBlock)
+
+		if !u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID) {
+			blockHash := c.block.Hash()
+			u.logger.Warnf("[catchup] All alternative peers failed for block %s, clearing processing marker for retry", blockHash.String())
+			u.processBlockNotify.Delete(*blockHash)
+			u.catchupAlternatives.Delete(*blockHash)
+		}
+
+		return
+	}
+
 	// Check if peer is bad or malicious before attempting catchup
 	if u.isPeerBad(c.peerID) || u.isPeerMalicious(ctx, c.peerID) {
 		u.logger.Warnf("[catchup][%s] peer %s (%s) is marked as bad or malicious, trying alternative peers", c.block.Hash().String(), c.peerID, c.baseURL)
@@ -2235,6 +2255,41 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 			u.logger.Warnf("[catchup] Local service/storage error during catchup for block %s (attempt %d/%d), clearing markers to allow retry: %v", c.block.Hash().String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock, err)
 			u.processBlockNotify.Delete(*c.block.Hash())
 			u.catchupAlternatives.Delete(*c.block.Hash())
+			return
+		}
+
+		// This node declined a block under its own local policy (excessiveblocksize). Terminal for
+		// THIS peer but unpersisted (bitcoin-sv/teranode#4692): nothing is stored, nothing is
+		// poisoned, no peer is charged and no rotation is signalled. Walking the alternative sources
+		// in the same cycle is pointless work — this node's limit is the same for whoever serves it —
+		// so the cycle ends here rather than re-downloading from every peer in turn.
+		//
+		// SCOPED PER SERVING IDENTITY, and that is load-bearing: the verdict rests on a peer-declared
+		// size, so it spends only that peer's decline budget and never the per-hash catch-up budget.
+		// See excessiveBlockSizeDeclined for the field it reads and why. The progress exemption of
+		// the sibling branches is preserved by recordPolicyDeclineAttemptUnlessProgress.
+		//
+		// The processing marker is cleared so the hash can be re-entered, but catchupAlternatives is
+		// deliberately LEFT INTACT. It is the only record of the other peers that announced this
+		// hash: addBlockToPriorityQueue absorbs an announcement for a hash already in
+		// processBlockNotify into that list instead of enqueueing it, and those peers do not announce
+		// again. Since the verdict is about this peer's declared size, their copies are exactly the
+		// recovery route — deleting them would discard it and leave nothing pending for the hash.
+		//
+		// Residual, deliberately inherited from the sibling caps: an EMPTY peerID records nothing and
+		// is never gated (fail-open), so an unidentified declined delivery is bounded only by the
+		// announcement rate. That is the same trade recordCorruptAttempt and
+		// policyDeclineAttemptsExhausted already make — a delivery under no identity must never be
+		// able to gate an honest tip — and catch-up items carry a peer identity in production.
+		//
+		// Placed here, before reportCatchupFailureForError and ReportPeerFailure below, so it
+		// pre-empts both the reputation charge and the sync-peer rotation signal, and never reaches
+		// isUnvalidatablePeerError or the alternative-source walk.
+		if errors.Is(err, errors.ErrBlockPolicyDeclined) {
+			declines := u.recordPolicyDeclineAttemptUnlessProgress(c.block.Hash(), c.peerID)
+			u.logger.Warnf("[catchup] Local policy declined a block during catchup toward block %s from peer %s (decline %d/%d for this peer); ending this catchup cycle without charging any peer: %v", c.block.Hash().String(), c.peerID, declines, u.settings.BlockValidation.MaxCorruptAttemptsPerBlock, err)
+			u.processBlockNotify.Delete(*c.block.Hash())
+
 			return
 		}
 
@@ -2562,9 +2617,24 @@ func (u *Server) corruptAttemptsExhausted(blockHash *chainhash.Hash, peerID stri
 // excessiveBlockSizeDeclined reports whether a block exceeds this node's local excessiveblocksize
 // policy limit (0 means unlimited). Shared by the RUNNING pre-validation gate in processBlockFound
 // and the authoritative decline in ValidateBlockWithOptions so the two cannot drift apart
-// (bitcoin-sv/teranode#4692). The size read here is the peer-supplied
-// block.SizeInBytes varint, which is not committed by the header — see the decline sites for what
-// that permits and why it is never grounds for poisoning the hash. A configured limit is positive,
+// (bitcoin-sv/teranode#4692).
+//
+// THE FIELD THIS READS IS PEER-DECLARED, and every consequence of a decline follows from that. It
+// is block.SizeInBytes, which model.readBlockFromReader reads straight off the wire and no header
+// commits to; the authoritative size is only recomputed from real subtree data post-load, inside
+// block.Valid. So at every site that consults this predicate, "over the limit" is uncorroborated: a
+// peer can announce the honest tip and declare an inflated size for the price of a block message —
+// header, counts, 32 bytes per subtree hash, no body. Two rules follow, and every decline site
+// keeps them:
+//   - never poison the hash (no invalid=true), because a node with a larger limit accepts the same
+//     block and an inflated varint must not condemn an honest one; and
+//   - never spend a budget keyed by hash alone. Declines spend the per-(hash, peerID)
+//     blockPolicyDeclineAttempts budget, so one peer's inflated varint cools only that peer down
+//     and the hash stays reachable through the honest peers whose copy carries the true varint.
+//     Charging blockCatchupAttempts (hash-keyed) instead would cool the hash for EVERY peer, which
+//     is the self-isolation this work exists to remove.
+//
+// A configured limit is positive,
 // so the width conversion cannot fail; if it somehow did, reporting "not declined" is the fail-open
 // direction that can never drop an honest block.
 func excessiveBlockSizeDeclined(tSettings *settings.Settings, block *model.Block) bool {
@@ -2615,6 +2685,28 @@ func (u *Server) recordPolicyDeclineAttempt(blockHash *chainhash.Hash, peerID st
 	u.blockPolicyDeclineAttempts.Set(key, 1, ttlcache.DefaultTTL)
 
 	return 1
+}
+
+// recordPolicyDeclineAttemptUnlessProgress is recordPolicyDeclineAttempt carrying the same progress
+// exemption recordCatchupAttemptUnlessProgress applies, for the catch-up terminal decline branch
+// (bitcoin-sv/teranode#4692). A cycle that actually advanced the chain before reaching a declined
+// block must not spend the peer's decline budget — otherwise a peer feeding us hundreds of blocks
+// per cycle would be cooled off the target hash precisely for making progress — and on progress the
+// counter is cleared, so a recovering peer never carries stale declines. blocksValidated is reset at
+// the start of every catch-up, so a non-zero value means THIS cycle made progress.
+//
+// It is deliberately keyed on (hash, peerID) rather than on the hash alone: see
+// excessiveBlockSizeDeclined for why a peer-declared size must never spend a per-hash budget.
+func (u *Server) recordPolicyDeclineAttemptUnlessProgress(blockHash *chainhash.Hash, peerID string) int {
+	if u.blocksValidated.Load() > 0 {
+		if u.blockPolicyDeclineAttempts != nil && peerID != "" {
+			u.blockPolicyDeclineAttempts.Delete(blockAttemptKey{hash: *blockHash, peerID: peerID})
+		}
+
+		return 0
+	}
+
+	return u.recordPolicyDeclineAttempt(blockHash, peerID)
 }
 
 // policyDeclineAttemptsExhausted reports whether a (hash, peerID) has reached the local-policy

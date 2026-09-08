@@ -524,15 +524,26 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			errorType = "validation_failure"
 			// Mark peer as malicious for validation failure (reported after unlock)
 			reportMalicious = true
+		case errors.Is(*err, errors.ErrBlockPolicyDeclined):
+			// This node declined the block under its own local policy (excessiveblocksize). Entirely
+			// our decision: the serving peer delivered the honest chain, so do not charge it — it may
+			// be the sole source ahead (bitcoin-sv/teranode#4692). Its own code, so it is separable
+			// from the retryable wait timeout in the case below, which processCatchupChItem must keep
+			// retrying while it ends the cycle on this one. Must precede the ErrBlockError case: were
+			// the decline ever to be re-wrapped in an ERR_BLOCK_ERROR chain, errors.Is walks the whole
+			// chain and the wait-timeout label would otherwise shadow this one.
+			errorType = "local_block_policy_decline"
+			isPeerError = false
 		case errors.Is(*err, errors.ErrBlockError):
-			// A bare ERR_BLOCK_ERROR on the catchup path is a LOCAL block-level decision, not the
-			// serving peer's fault: an oversized-block policy decline (excessiveblocksize) or the
-			// "given up waiting on previous blocks" ordering timeout. Peer-attributable failures use
-			// dedicated sentinels (corrupt / invalid / incomplete) handled above, so the generic
-			// ERR_BLOCK_ERROR code that survives to here cannot be one of them. Do not charge the
-			// peer — it may be the sole source ahead (bitcoin-sv/teranode#4692). Must follow the
-			// corrupt and invalid cases so it never shadows a peer-attributable verdict.
-			errorType = "local_block_policy_or_wait"
+			// A bare ERR_BLOCK_ERROR on the catchup path is now exactly one thing: the "given up
+			// waiting on previous blocks" ordering timeout (BlockValidation.go's wait loop). It is a
+			// LOCAL timing decision, not the serving peer's fault. The excessiveblocksize decline that
+			// used to share this code moved to ERR_BLOCK_POLICY_DECLINED and is handled in the case
+			// above; peer-attributable failures use dedicated sentinels (corrupt / invalid /
+			// incomplete) handled further above. Do not charge the peer — it may be the sole source
+			// ahead (bitcoin-sv/teranode#4692). Must follow the corrupt and invalid cases so it never
+			// shadows a peer-attributable verdict.
+			errorType = "local_block_wait_timeout"
 			isPeerError = false
 		case errors.Is(*err, errors.ErrExternal):
 			// Every peer attempt failed to fetch subtree data. The individual failures
@@ -1637,7 +1648,13 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 					// bitcoin-sv/teranode#4692: non-optimistic unless the operator opts in via BOTH
 					// blockvalidation_optimistic_mining and blockvalidation_optimistic_mining_peer_blocks.
 					DisableOptimisticMining: optimisticMiningDisabledForPeerPath(u.settings, catchupCtx.baseURL),
-					PeerID:                  peerID,
+					// The catch-up primary, which is the right party for any corrupt verdict that
+					// reaches ValidateBlockWithOptions from here: per-subtree bytes were hash-verified
+					// against the requested hash at fetch time and any mismatch was already struck
+					// against the serving peer there (fetchAndStoreSubtree), so a surviving whole-body
+					// merkle mismatch is a property of the primary's own subtree list, not of whichever
+					// peer parallel fetch happened to assign a subtree to (bitcoin-sv/teranode#4692).
+					PeerID: peerID,
 				}
 
 				// Validate the block using standard validation
@@ -1724,6 +1741,15 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 // fetchSubtreeDataForBlock call itself wrote for FileTypeSubtreeToCheck/FileTypeSubtreeData,
 // before this block ever reached quick validation. It is merged into the corrupt-cleanup set
 // below but never mutated here (bitcoin-sv/teranode#4692).
+//
+// ATTRIBUTION INVARIANT relied on by the corrupt strike below. Both peer-supplied blobs for a
+// subtree are bound to the hash the catch-up primary named in its block message: fetchAndStoreSubtree
+// verifies the node bytes hash to the requested subtree before storing FileTypeSubtreeToCheck, and
+// fetchAndStoreSubtreeData validates the data against that subtree's own nodes
+// (subtreepkg.NewSubtreeDataFromReader plus model.MissingSubtreeDataTxs). A per-subtree fault is
+// therefore struck at the fetch site, against the peer that served the bytes. What can still reach
+// here is a WHOLE-BODY merkle mismatch, and that is a property of the primary's own subtree list —
+// so catchupCtx.peerID / peerID is the correct party by argument, not by default.
 // Returns true if normal validation should be tried, false if quick validation succeeded
 func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, catchupCtx *CatchupContext, peerID, baseURL string, writeJobsChan chan<- *SubtreeWriteJob, fetchFreshlyWritten map[chainhash.Hash]map[fileformat.FileType]struct{}) (bool, error) {
 	// Determine if this specific block can use quick validation
@@ -1795,6 +1821,11 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 			// ValidateBlockWithOptions, so strike the serving peer here, then abort for a
 			// FRESH re-download from another peer — do NOT re-run normal validation on the SAME
 			// corrupt body (it would just re-fail).
+			//
+			// peerID is the catch-up primary, and under parallel fetch it may not be the peer that
+			// served every subtree. That is correct here rather than approximate: per-subtree bytes
+			// are hash-verified at fetch and struck there (see this function's ATTRIBUTION INVARIANT),
+			// so what survives to a whole-body merkle mismatch is the primary's own subtree list.
 			u.blockValidation.penalizeCorruptBlockPeer(ctx, peerID, block, "quick validation: corrupt block body")
 			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s from peer %s has a corrupt body, aborting for re-download",
 				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), peerID)

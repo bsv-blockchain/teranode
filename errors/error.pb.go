@@ -113,6 +113,8 @@ const (
 	// Block errors continued 120-129. The original 10-19 decade is full (see above);
 	// errorCodeCategory maps this range to "block" too, so the category stays correct.
 	ERR_BLOCK_CORRUPT ERR = 120
+	// A block this node declined under its own local policy: never a verdict on the block or the peer.
+	ERR_BLOCK_POLICY_DECLINED ERR = 121
 )
 
 // Enum value maps for ERR.
@@ -190,6 +192,7 @@ var (
 		115: "NETWORK_INVALID_RESPONSE",
 		116: "NETWORK_PEER_MALICIOUS",
 		120: "BLOCK_CORRUPT",
+		121: "BLOCK_POLICY_DECLINED",
 	}
 	ERR_value = map[string]int32{
 		"UNKNOWN":                       0,
@@ -264,6 +267,7 @@ var (
 		"NETWORK_INVALID_RESPONSE":      115,
 		"NETWORK_PEER_MALICIOUS":        116,
 		"BLOCK_CORRUPT":                 120,
+		"BLOCK_POLICY_DECLINED":         121,
 	}
 )
 
@@ -398,7 +402,7 @@ const file_errors_error_proto_rawDesc = "" +
 	"\fwrappedError\x18\x04 \x01(\v2\x0e.errors.TErrorR\fwrappedError\x12\x12\n" +
 	"\x04file\x18\x05 \x01(\tR\x04file\x12\x12\n" +
 	"\x04line\x18\x06 \x01(\x05R\x04line\x12\x1a\n" +
-	"\bfunction\x18\a \x01(\tR\bfunction*\xf2\v\n" +
+	"\bfunction\x18\a \x01(\tR\bfunction*\x8d\f\n" +
 	"\x03ERR\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x14\n" +
 	"\x10INVALID_ARGUMENT\x10\x01\x12\x16\n" +
@@ -478,7 +482,8 @@ const file_errors_error_proto_rawDesc = "" +
 	"\x1aNETWORK_CONNECTION_REFUSED\x10r\x12\x1c\n" +
 	"\x18NETWORK_INVALID_RESPONSE\x10s\x12\x1a\n" +
 	"\x16NETWORK_PEER_MALICIOUS\x10t\x12\x11\n" +
-	"\rBLOCK_CORRUPT\x10xB+Z)github.com/bsv-blockchain/teranode/errorsb\x06proto3"
+	"\rBLOCK_CORRUPT\x10x\x12\x19\n" +
+	"\x15BLOCK_POLICY_DECLINED\x10yB+Z)github.com/bsv-blockchain/teranode/errorsb\x06proto3"
 
 var (
 	file_errors_error_proto_rawDescOnce sync.Once

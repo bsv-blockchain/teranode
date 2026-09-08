@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
+	p2pconstants "github.com/bsv-blockchain/teranode/interfaces/p2p"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
@@ -1797,7 +1798,10 @@ func TestSubtreeFunctions(t *testing.T) {
 
 		suite.Server.subtreeStore = memory.New()
 
-		subtreeHash := &chainhash.Hash{0x01, 0x02, 0x03}
+		// The outer subtreeHash is the real root of the node bytes served below. It has to be: the
+		// subtree fetch must SUCCEED here (the fetch-side root check would otherwise reject the bytes
+		// and this test would never reach the subtree_data failure it exists to cover) —
+		// bitcoin-sv/teranode#4692.
 
 		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
@@ -1991,7 +1995,11 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 	baseURL := "http://test-peer:8080"
 	ctx := context.Background()
 
-	txs := transactions.CreateTestTransactionChainWithCount(t, 5)
+	// CreateTestTransactionChainWithCount returns count-1 transactions, so 13 yields txs[0..11]:
+	// txs[0..3] for the shared single-subtree fixture below (identical for any count — the chain is
+	// derived from a fixed key in a fixed order) plus nine more for MultipleSubtrees' three
+	// genuinely distinct subtrees.
+	txs := transactions.CreateTestTransactionChainWithCount(t, 13)
 
 	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
 	assert.NoError(t, err)
@@ -2054,36 +2062,48 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 	})
 
 	t.Run("MultipleSubtrees", func(t *testing.T) {
-		subtreeHash1 := createTestHash("subtree1")
-		subtreeHash2 := createTestHash("subtree2")
-		subtreeHash3 := createTestHash("subtree3")
+		// THREE genuinely distinct subtrees, each requested under the root its own served node bytes
+		// hash to — which the fetch-side root check requires (bitcoin-sv/teranode#4692).
+		//
+		// Naming one hash three times would not do, and neither would reusing the enclosing
+		// fixture's subtree: fetchAndStoreSubtree starts with findLocalSubtreeFile, so a hash already
+		// in the store (SingleSubtree above fetched AND STORED that one into this function's shared
+		// store) or one a sibling goroutine has just written takes the local-load branch and never
+		// fetches. Either way the fan-out this sub-test exists for would collapse, timing-dependently,
+		// into a duplicate of SingleSubtree. Leaf offsets 3/6/9 keep all three clear of it.
+		one := distinctFetchSubtree(t, txs, 3)
+		two := distinctFetchSubtree(t, txs, 6)
+		three := distinctFetchSubtree(t, txs, 9)
 
 		block := &model.Block{
-			Subtrees: []*chainhash.Hash{subtreeHash1, subtreeHash2, subtreeHash3},
+			Subtrees: []*chainhash.Hash{one.hash, two.hash, three.hash},
 		}
+		require.False(t, one.hash.IsEqual(two.hash) || two.hash.IsEqual(three.hash) || one.hash.IsEqual(three.hash),
+			"the three subtrees must be distinct, or the fan-out is not exercised")
+		require.False(t, one.hash.IsEqual(subtreeHash) || two.hash.IsEqual(subtreeHash) || three.hash.IsEqual(subtreeHash),
+			"none may be the already-stored subtree, or it is served from the store and never fetched")
 
-		// Create node hashes for the subtree endpoint (raw hashes, not serialized subtree)
-		var nodeHashes []byte
-		// First is coinbase placeholder
-		nodeHashes = append(nodeHashes, subtreepkg.CoinbasePlaceholderHashValue[:]...)
-		// Then the transaction hashes - just use the first 3 for simplicity
-		nodeHashes = append(nodeHashes, txs[1].TxIDChainHash()[:]...)
-		nodeHashes = append(nodeHashes, txs[2].TxIDChainHash()[:]...)
-		nodeHashes = append(nodeHashes, txs[3].TxIDChainHash()[:]...)
+		// Zero the counters (not Reset, which would drop the sibling sub-tests' responders) so the
+		// call-count assertions below measure only this sub-test.
+		httpmock.ZeroCallCounters()
 
-		// Mock HTTP responses for all subtrees
-		for _, hash := range block.Subtrees {
-			subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, hash.String())
-			subtreeDataURL := fmt.Sprintf("%s/subtree_data/%s", baseURL, hash.String())
-
-			httpmock.RegisterResponder("GET", subtreeURL,
-				httpmock.NewBytesResponder(200, nodeHashes))
-			httpmock.RegisterResponder("GET", subtreeDataURL,
-				httpmock.NewBytesResponder(200, subtreeDataBytes))
+		for _, s := range []fetchSubtreeFixture{one, two, three} {
+			httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree/%s", baseURL, s.hash.String()),
+				httpmock.NewBytesResponder(200, s.nodeBytes))
+			httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree_data/%s", baseURL, s.hash.String()),
+				httpmock.NewBytesResponder(200, s.dataBytes))
 		}
 
 		_, _, err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.NoError(t, err)
+
+		// State what this actually exercised: all three were fetched from the peer, so the fan-out
+		// really did run three times rather than collapsing onto one local load.
+		counts := httpmock.GetCallCountInfo()
+		for _, s := range []fetchSubtreeFixture{one, two, three} {
+			require.Equal(t, 1, counts["GET "+fmt.Sprintf("%s/subtree/%s", baseURL, s.hash.String())],
+				"each distinct subtree must be fetched exactly once")
+		}
 	})
 
 	t.Run("SubtreeFetchError", func(t *testing.T) {
@@ -2831,60 +2851,32 @@ func TestBlockWorker(t *testing.T) {
 	baseURL := "http://test-peer:8080"
 	ctx := context.Background()
 
-	txs := transactions.CreateTestTransactionChainWithCount(t, 5)
-
-	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
-	assert.NoError(t, err)
-
-	require.NoError(t, subtree.AddCoinbaseNode())
-	require.NoError(t, subtree.AddNode(*txs[1].TxIDChainHash(), 1, 11))
-	require.NoError(t, subtree.AddNode(*txs[2].TxIDChainHash(), 2, 12))
-	require.NoError(t, subtree.AddNode(*txs[3].TxIDChainHash(), 3, 13))
-
-	subtreeHash := subtree.RootHash()
-
-	// subtreeBytes not needed - we use raw node hashes instead
-	// subtreeBytes, err := subtree.Serialize()
-	// require.NoError(t, err)
-
-	subtreeData := subtreepkg.NewSubtreeData(subtree)
-	require.NoError(t, subtreeData.AddTx(txs[0], 0))
-	require.NoError(t, subtreeData.AddTx(txs[1], 1))
-	require.NoError(t, subtreeData.AddTx(txs[2], 2))
-	require.NoError(t, subtreeData.AddTx(txs[3], 3))
-
-	subtreeDataBytes, err := subtreeData.Serialize()
-	require.NoError(t, err)
+	// 8 yields txs[0..6]: two disjoint sets of three leaves so WorkerProcessesBlocksWithSubtrees can
+	// give its two blocks genuinely different subtrees. The per-subtree fixtures are built by
+	// distinctFetchSubtree at the point of use.
+	txs := transactions.CreateTestTransactionChainWithCount(t, 8)
 
 	t.Run("WorkerProcessesBlocksWithSubtrees", func(t *testing.T) {
-		// Create test blocks with subtrees
-		subtreeHash2 := createTestHash("subtree2")
+		// The two blocks name DIFFERENT subtrees, as two real blocks would. Each is requested under
+		// the root its own served node bytes hash to, which the fetch-side root check requires
+		// (bitcoin-sv/teranode#4692); collapsing both onto one hash would make the second block a
+		// local load rather than a fetch.
+		first := distinctFetchSubtree(t, txs, 1)
+		second := distinctFetchSubtree(t, txs, 4)
+		require.False(t, first.hash.IsEqual(second.hash), "the two blocks must name different subtrees")
 
 		block1 := &model.Block{
-			Subtrees: []*chainhash.Hash{subtreeHash},
+			Subtrees: []*chainhash.Hash{first.hash},
 		}
 		block2 := &model.Block{
-			Subtrees: []*chainhash.Hash{subtreeHash2},
+			Subtrees: []*chainhash.Hash{second.hash},
 		}
 
-		// Create node hashes for the subtree endpoint (raw hashes, not serialized subtree)
-		var nodeHashes []byte
-		// First is coinbase placeholder
-		nodeHashes = append(nodeHashes, subtreepkg.CoinbasePlaceholderHashValue[:]...)
-		// Then the transaction hashes
-		nodeHashes = append(nodeHashes, txs[1].TxIDChainHash()[:]...)
-		nodeHashes = append(nodeHashes, txs[2].TxIDChainHash()[:]...)
-		nodeHashes = append(nodeHashes, txs[3].TxIDChainHash()[:]...)
-
-		// Mock HTTP responses for all subtrees
-		for _, hash := range []*chainhash.Hash{subtreeHash, subtreeHash2} {
-			subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, hash.String())
-			subtreeDataURL := fmt.Sprintf("%s/subtree_data/%s", baseURL, hash.String())
-
-			httpmock.RegisterResponder("GET", subtreeURL,
-				httpmock.NewBytesResponder(200, nodeHashes))
-			httpmock.RegisterResponder("GET", subtreeDataURL,
-				httpmock.NewBytesResponder(200, subtreeDataBytes))
+		for _, s := range []fetchSubtreeFixture{first, second} {
+			httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree/%s", baseURL, s.hash.String()),
+				httpmock.NewBytesResponder(200, s.nodeBytes))
+			httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree_data/%s", baseURL, s.hash.String()),
+				httpmock.NewBytesResponder(200, s.dataBytes))
 		}
 
 		// Create channels
@@ -3250,6 +3242,53 @@ func createTestHash(input string) *chainhash.Hash {
 	return &hash
 }
 
+// fetchSubtreeFixture is a subtree plus the two peer responses that satisfy a full
+// fetchAndStoreSubtreeAndSubtreeData: the raw node hashes /subtree serves, and the serialized
+// subtree data /subtree_data serves. hash is the root those node bytes actually hash to, which
+// since bitcoin-sv/teranode#4692 is the only hash the subtree may be requested under.
+type fetchSubtreeFixture struct {
+	hash      *chainhash.Hash
+	nodeBytes []byte
+	dataBytes []byte
+}
+
+// distinctFetchSubtree builds a coinbase-led four-leaf subtree from the three transactions of the
+// chain starting at leafOffset. It mirrors the shape fetchAndStoreSubtree reconstructs from the
+// wire — NewIncompleteTreeByLeafCount(len(nodes)), AddCoinbaseNode for the placeholder, AddNode for
+// the rest — so the root it computes matches the root here. Different offsets give different roots,
+// which is what lets a caller build several subtrees a block can plausibly name.
+func distinctFetchSubtree(t *testing.T, txs []*bt.Tx, leafOffset int) fetchSubtreeFixture {
+	t.Helper()
+
+	leaves := txs[leafOffset : leafOffset+3]
+
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+
+	nodeBytes := make([]byte, 0, 4*chainhash.HashSize)
+	nodeBytes = append(nodeBytes, subtreepkg.CoinbasePlaceholderHashValue[:]...)
+
+	for i, tx := range leaves {
+		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), uint64(i+1), uint64(i+11))) //nolint:gosec
+		nodeBytes = append(nodeBytes, tx.TxIDChainHash()[:]...)
+	}
+
+	// Built only once the subtree is complete: NewSubtreeData sizes its Txs from the subtree's
+	// length, so an earlier construction would have no slot for the leaves added above.
+	data := subtreepkg.NewSubtreeData(subtree)
+	require.NoError(t, data.AddTx(txs[0], 0))
+
+	for i, tx := range leaves {
+		require.NoError(t, data.AddTx(tx, i+1))
+	}
+
+	dataBytes, err := data.Serialize()
+	require.NoError(t, err)
+
+	return fetchSubtreeFixture{hash: subtree.RootHash(), nodeBytes: nodeBytes, dataBytes: dataBytes}
+}
+
 // TestFetchAndStoreSubtree tests the fetchAndStoreSubtree function comprehensively
 func TestFetchAndStoreSubtree(t *testing.T) {
 	t.Run("SubtreeAlreadyExists", func(t *testing.T) {
@@ -3339,9 +3378,11 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
-		subtreeHash := createTestHash("subtree1")
-
-		// Create subtree node bytes (4 hashes)
+		// Create subtree node bytes (4 hashes). The hash the subtree is REQUESTED under must be the
+		// root those nodes actually hash to, or the fetch-side root check rejects the bytes
+		// (bitcoin-sv/teranode#4692) — so derive it rather than inventing one. The tree is built the
+		// same way fetchAndStoreSubtree builds it (NewIncompleteTreeByLeafCount(len), AddNode with
+		// zero fee/size), so the roots agree.
 		nodeBytes := make([]byte, 0)
 		hash1 := chainhash.DoubleHashH([]byte("tx1"))
 		hash2 := chainhash.DoubleHashH([]byte("tx2"))
@@ -3352,6 +3393,14 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		nodeBytes = append(nodeBytes, hash2[:]...)
 		nodeBytes = append(nodeBytes, hash3[:]...)
 		nodeBytes = append(nodeBytes, hash4[:]...)
+
+		servedSubtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
+		require.NoError(t, err)
+		require.NoError(t, servedSubtree.AddNode(hash1, 0, 0))
+		require.NoError(t, servedSubtree.AddNode(hash2, 0, 0))
+		require.NoError(t, servedSubtree.AddNode(hash3, 0, 0))
+		require.NoError(t, servedSubtree.AddNode(hash4, 0, 0))
+		subtreeHash := servedSubtree.RootHash()
 
 		httpmock.RegisterResponder(
 			"GET",
@@ -3381,9 +3430,9 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
-		subtreeHash := createTestHash("subtree-coinbase")
-
-		// Create subtree node bytes with coinbase placeholder as first node
+		// Create subtree node bytes with coinbase placeholder as first node, and request the subtree
+		// under the root those nodes actually hash to — the fetch-side root check requires it
+		// (bitcoin-sv/teranode#4692).
 		nodeBytes := make([]byte, 0)
 		nodeBytes = append(nodeBytes, subtreepkg.CoinbasePlaceholderHashValue[:]...)
 
@@ -3394,6 +3443,14 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		nodeBytes = append(nodeBytes, hash2[:]...)
 		nodeBytes = append(nodeBytes, hash3[:]...)
 		nodeBytes = append(nodeBytes, hash4[:]...)
+
+		servedSubtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
+		require.NoError(t, err)
+		require.NoError(t, servedSubtree.AddCoinbaseNode())
+		require.NoError(t, servedSubtree.AddNode(hash2, 0, 0))
+		require.NoError(t, servedSubtree.AddNode(hash3, 0, 0))
+		require.NoError(t, servedSubtree.AddNode(hash4, 0, 0))
+		subtreeHash := servedSubtree.RootHash()
 
 		httpmock.RegisterResponder(
 			"GET",
@@ -3484,6 +3541,153 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "Failed to deserialize existing subtree")
+	})
+
+	// RejectsMismatchedRoot pins the fetch-side root check (bitcoin-sv/teranode#4692): a peer's node
+	// bytes must hash to the subtree they were REQUESTED under. Without it the blob is stored under a
+	// filename it does not match, findLocalSubtreeFile short-circuits to it on retry, and the
+	// resulting block-level merkle mismatch is charged to the catch-up primary rather than to the
+	// peer that served the bytes.
+	//
+	// Mutation proof: delete the root check and the mismatched bytes are stored, the call succeeds,
+	// the freshness tracker records the pair, and no strike lands — reddening all four assertions.
+	t.Run("RejectsMismatchedRoot", func(t *testing.T) {
+		const servingPeer = "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
+
+		hash1 := chainhash.DoubleHashH([]byte("mismatch-tx1"))
+		hash2 := chainhash.DoubleHashH([]byte("mismatch-tx2"))
+
+		nodeBytes := make([]byte, 0, 2*chainhash.HashSize)
+		nodeBytes = append(nodeBytes, hash1[:]...)
+		nodeBytes = append(nodeBytes, hash2[:]...)
+
+		honestSubtree, err := subtreepkg.NewIncompleteTreeByLeafCount(2)
+		require.NoError(t, err)
+		require.NoError(t, honestSubtree.AddNode(hash1, 0, 0))
+		require.NoError(t, honestSubtree.AddNode(hash2, 0, 0))
+		honestHash := honestSubtree.RootHash()
+
+		t.Run("mismatched bytes are rejected and the serving peer is struck", func(t *testing.T) {
+			suite := NewCatchupTestSuite(t)
+			defer suite.Cleanup()
+
+			rec := &subtreeAttributionP2PClient{}
+			suite.Server.blockValidation.p2pClient = rec
+
+			httpmock.ActivateNonDefault(util.HTTPClient())
+			defer httpmock.DeactivateAndReset()
+
+			// Request the honest bytes under a hash they do NOT hash to — the doctored case.
+			requestedHash := createTestHash("not-the-root-of-these-nodes")
+			require.False(t, requestedHash.IsEqual(honestHash))
+
+			httpmock.RegisterResponder(
+				"GET",
+				fmt.Sprintf("http://test-peer/subtree/%s", requestedHash.String()),
+				httpmock.NewBytesResponder(200, nodeBytes),
+			)
+
+			freshness := newSubtreeFreshness()
+
+			result, fetchErr := suite.Server.fetchAndStoreSubtree(suite.Ctx, &model.Block{Height: 100},
+				requestedHash, servingPeer, "http://test-peer", false, freshness)
+
+			require.Error(t, fetchErr)
+			require.Nil(t, result)
+			require.Contains(t, fetchErr.Error(), requestedHash.String(), "the error must name the hash that was requested")
+			require.Contains(t, fetchErr.Error(), honestHash.String(), "the error must name the root the bytes actually hash to")
+
+			stored, existsErr := suite.Server.subtreeStore.Exists(suite.Ctx, requestedHash[:], fileformat.FileTypeSubtreeToCheck)
+			require.NoError(t, existsErr)
+			require.False(t, stored, "the blob must never land under a filename it does not match")
+
+			require.Empty(t, freshness.snapshot(), "a rejected fetch must record no freshness")
+
+			strikes := rec.struck()
+			require.Len(t, strikes, 1, "the serving peer must be struck exactly once")
+			require.Equal(t, servingPeer, strikes[0].peerID)
+			require.Equal(t, p2pconstants.ReasonCorruptBlockBody.String(), strikes[0].reason)
+		})
+
+		// Positive control: the check must not reject an honest fetch. Same bytes, requested under
+		// the hash they really do hash to.
+		t.Run("matching bytes are stored, marked fresh, and earn no strike", func(t *testing.T) {
+			suite := NewCatchupTestSuite(t)
+			defer suite.Cleanup()
+
+			rec := &subtreeAttributionP2PClient{}
+			suite.Server.blockValidation.p2pClient = rec
+
+			httpmock.ActivateNonDefault(util.HTTPClient())
+			defer httpmock.DeactivateAndReset()
+
+			httpmock.RegisterResponder(
+				"GET",
+				fmt.Sprintf("http://test-peer/subtree/%s", honestHash.String()),
+				httpmock.NewBytesResponder(200, nodeBytes),
+			)
+
+			freshness := newSubtreeFreshness()
+
+			result, fetchErr := suite.Server.fetchAndStoreSubtree(suite.Ctx, &model.Block{Height: 100},
+				honestHash, servingPeer, "http://test-peer", false, freshness)
+
+			require.NoError(t, fetchErr)
+			require.NotNil(t, result)
+
+			stored, existsErr := suite.Server.subtreeStore.Exists(suite.Ctx, honestHash[:], fileformat.FileTypeSubtreeToCheck)
+			require.NoError(t, existsErr)
+			require.True(t, stored, "an honest fetch must still be stored")
+
+			require.Contains(t, freshness.snapshot()[*honestHash], fileformat.FileTypeSubtreeToCheck,
+				"an honest fetch must still be marked fresh")
+			require.Empty(t, rec.struck(), "an honest fetch must earn no strike")
+		})
+
+		// Strike hygiene (bitcoin-sv/teranode#4692): a response that is not a whole number of node
+		// hashes is MALFORMED, not doctored. The integer division that derives numberOfNodes would
+		// silently drop the trailing partial hash, and the surviving prefix would then hash to some
+		// other root — earning the serving peer a corrupt-body strike for what may be a truncated
+		// transfer. The explicit length guard must reject it first, with no strike.
+		//
+		// Mutation proof: delete the length guard and this sub-test reddens on the strike count.
+		t.Run("malformed node length is rejected without striking the peer", func(t *testing.T) {
+			suite := NewCatchupTestSuite(t)
+			defer suite.Cleanup()
+
+			rec := &subtreeAttributionP2PClient{}
+			suite.Server.blockValidation.p2pClient = rec
+
+			httpmock.ActivateNonDefault(util.HTTPClient())
+			defer httpmock.DeactivateAndReset()
+
+			// The honest bytes with the last hash truncated by one byte.
+			truncated := nodeBytes[:len(nodeBytes)-1]
+			require.NotZero(t, len(truncated)%chainhash.HashSize, "the fixture must be a partial-hash length")
+
+			httpmock.RegisterResponder(
+				"GET",
+				fmt.Sprintf("http://test-peer/subtree/%s", honestHash.String()),
+				httpmock.NewBytesResponder(200, truncated),
+			)
+
+			freshness := newSubtreeFreshness()
+
+			result, fetchErr := suite.Server.fetchAndStoreSubtree(suite.Ctx, &model.Block{Height: 100},
+				honestHash, servingPeer, "http://test-peer", false, freshness)
+
+			require.Error(t, fetchErr)
+			require.Nil(t, result)
+			require.Contains(t, fetchErr.Error(), "not a whole number", "the error must identify the malformed length")
+
+			stored, existsErr := suite.Server.subtreeStore.Exists(suite.Ctx, honestHash[:], fileformat.FileTypeSubtreeToCheck)
+			require.NoError(t, existsErr)
+			require.False(t, stored)
+			require.Empty(t, freshness.snapshot())
+
+			require.Empty(t, rec.struck(),
+				"a malformed length may be a truncated transfer, so it must NOT earn a corrupt-body strike")
+		})
 	})
 }
 

@@ -1412,9 +1412,10 @@ const banScoreCorruptBlockBody = 10
 // always lands on a real serving peer, independently of the "legacy:"-namespaced peerID
 // also threaded through the netsync ProcessBlock path — blockvalidation's own
 // isLegacyPeerID gate keeps that value out of its strike/malicious-check, so this remains
-// the only place a legacy corrupt body is attributed. A single strike stays below the ban
-// threshold (addBanScore only disconnects past it), so an honest one-off transport
-// corruption does not rotate the sync peer.
+// the only place a legacy corrupt body is attributed ENFORCEABLY (see that gate's doc in
+// services/blockvalidation/peer_metrics_helpers.go for why). A single strike stays below the ban
+// threshold (addBanScore only disconnects past it), so an honest one-off transport corruption
+// does not rotate the sync peer.
 func (sp *serverPeer) strikeIfCorruptBlockBody(err error) bool {
 	if !errors.IsBlockCorrupt(err) {
 		return false
@@ -1446,6 +1447,18 @@ func shouldDisconnectOnBlockErr(err error) bool {
 	// dropped and re-requested. Kept in lock-step with the netsync reject/suppress skip in
 	// handleBlockMsg.
 	if errors.IsBlockCorrupt(err) {
+		return false
+	}
+
+	// A local policy decline (excessiveblocksize) is OUR configuration, not the peer's conduct
+	// (bitcoin-sv/teranode#4692). Disconnecting here would label the peer "misbehaving" and rotate
+	// the sync peer for a decision no peer can influence: every peer serves the same block, so the
+	// replacement is declined identically and the only effect is churning through the fleet. It is
+	// not transient-local either — the decline clears only when the operator raises the knob — so
+	// IsTransientLocalError below does not cover it and it needs its own exemption. This is the same
+	// invariant the catch-up terminal branch and the blockvalidation strike gates enforce: a policy
+	// decline charges no peer and signals no rotation.
+	if errors.Is(err, errors.ErrBlockPolicyDeclined) {
 		return false
 	}
 

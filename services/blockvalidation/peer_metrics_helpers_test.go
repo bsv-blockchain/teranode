@@ -111,11 +111,15 @@ func TestReportCatchupFailureForError_SkipsAlreadyReported(t *testing.T) {
 	})
 }
 
-// TestReportCatchupFailureForError_SkipsCorrupt pins the corrupt-body exemption
-// (bitcoin-sv/teranode#4692): releaseCatchupLock already charges the primary once for the corrupt
-// cycle, and the corrupt error reaches processCatchupChItem's generic tail unwrapped, so charging
-// again here would be the third charge for one body. A generic error must still be charged, so the
-// exemption is specific to the corrupt sentinel rather than a blanket suppression.
+// TestReportCatchupFailureForError_SkipsCorrupt pins this helper's exemptions
+// (bitcoin-sv/teranode#4692). The corrupt-body one is about DOUBLE charging: releaseCatchupLock
+// already charges the primary once for the corrupt cycle, and the corrupt error reaches
+// processCatchupChItem's generic tail unwrapped, so charging again here would be the third charge
+// for one body. The local-policy-decline one is about charging AT ALL: the limit is this node's, so
+// no peer earns a reputation failure for it on any path.
+//
+// A generic error must still be charged, so both exemptions are specific to their sentinels rather
+// than a blanket suppression — that positive control is what keeps the "0 failures" rows meaningful.
 func TestReportCatchupFailureForError_SkipsCorrupt(t *testing.T) {
 	newServer := func() (*Server, *failureCountingP2PClient) {
 		client := &failureCountingP2PClient{}
@@ -132,6 +136,29 @@ func TestReportCatchupFailureForError_SkipsCorrupt(t *testing.T) {
 		u, client := newServer()
 		err := errors.NewProcessingError("catchup failed",
 			errors.NewBlockCorruptError("[BLOCK] body is corrupt"))
+		u.reportCatchupFailureForError(context.Background(), "peer-1", err)
+		require.Equal(t, 0, client.failures)
+	})
+
+	// A local policy decline (excessiveblocksize) is OUR configuration, so no peer may be charged for
+	// it (bitcoin-sv/teranode#4692). The exemption lives HERE, at the shared chokepoint, rather than
+	// only at the terminal branch in processCatchupChItem — which is what makes the invariant hold on
+	// the ALTERNATIVE paths: tryAlternativePeersForCatchup (reached from both the per-(hash, peerID)
+	// decline pre-empt and the bad/malicious branch) and the generic tail's cached-alternatives loop
+	// all route their per-candidate failures through this helper. On a genuinely over-limit block
+	// every candidate declines identically, so without this each honest peer would be charged and
+	// pushed toward the reputation floor that GetPeersAtMaxHeight filters on.
+	t.Run("local policy decline is skipped", func(t *testing.T) {
+		u, client := newServer()
+		u.reportCatchupFailureForError(context.Background(), "peer-1",
+			errors.NewBlockPolicyDeclinedError("[ValidateBlock] block size 5 exceeds excessiveblocksize 4 (local policy)"))
+		require.Equal(t, 0, client.failures)
+	})
+
+	t.Run("wrapped local policy decline is skipped", func(t *testing.T) {
+		u, client := newServer()
+		err := errors.NewProcessingError("catchup failed",
+			errors.NewBlockPolicyDeclinedError("block size exceeds excessiveblocksize"))
 		u.reportCatchupFailureForError(context.Background(), "peer-1", err)
 		require.Equal(t, 0, client.failures)
 	})

@@ -15,9 +15,14 @@ const (
 
 	// LegacyPeerIDPrefix marks a peerID as originating from the legacy netsync path, rather than a
 	// libp2p peer ID. The prefix guarantees the value can never collide with or be mistaken for a
-	// real libp2p peer ID anywhere downstream (logs, caches, metrics) — defence in depth alongside
-	// the isLegacyPeerID gates below, which are what actually stop it reaching the centralized peer
-	// registry (bitcoin-sv/teranode#4692).
+	// real libp2p peer ID anywhere downstream (logs, caches, metrics), and it is what the
+	// isLegacyPeerID gates below match on to keep such a value out of this service's ban-scoring
+	// and malicious-check paths (bitcoin-sv/teranode#4692).
+	//
+	// Note the prefix does NOT mean "absent from the centralized peer registry": a legacy peer has a
+	// real registry entry, created and reaped under a byte-identical prefix by
+	// services/legacy/peer_registry_sync.go. See isLegacyPeerID for the reason the gates exist
+	// anyway.
 	//
 	// Exported deliberately: the value that has to match it is BUILT in another package
 	// (services/legacy/netsync/handle_block.go), so a second literal there could drift from this one
@@ -34,11 +39,27 @@ const (
 )
 
 // isLegacyPeerID reports whether peerID was namespaced by the legacy netsync path rather than
-// being a real p2p identity. isPeerMalicious and penalizeCorruptBlockPeer treat it the same as an
-// empty peerID (bitcoin-sv/teranode#4692): legacy attribution already happens exclusively in
-// services/legacy/peer_server.go's own +10 strike, so routing this value into the centralized
-// peer registry as well would add an extra gRPC round-trip, create a phantom registry entry no
-// p2p code path can see or clear on disconnect, and double-charge the peer for one corrupt body.
+// being a real p2p identity.
+//
+// THE POLICY, stated once here because three sites implement it: a legacy:-prefixed peerID never
+// enters a blockvalidation path that ban-scores or malicious-checks through the p2p service; legacy
+// fault attribution belongs to the legacy service, because only it can enforce
+// (bitcoin-sv/teranode#4692).
+//
+// The reason is enforceability, NOT invisibility. A legacy peer does have a centralized-registry
+// entry: services/legacy/peer_registry_sync.go registers it under a byte-identical "legacy:" prefix
+// on its reconcile tick and clears it on disconnect, so the entry is real and dashboard-visible.
+// What cannot be done with it is a ban. p2p.Server.onPeerBanned decodes the peerID with
+// peer.Decode, which cannot parse "legacy:1.2.3.4:8333"; it logs and returns before touching the
+// ban list or disconnecting anything, so a ban recorded against such an id is unenforceable. Worse,
+// the invalid-block consumer's hash-keyed reportedInvalidBlocks dedupe would then suppress scoring
+// the real p2p announcer of the same hash. It would also add a gRPC round-trip and double-charge
+// the peer for one corrupt body.
+//
+// Legacy misbehaviour is attributed where it IS enforceable: strikeIfCorruptBlockBody's transient
+// ban score on the serving connection (services/legacy/peer_server.go) and sync-peer rotation via
+// shouldDisconnectOnBlockErr. The three sites implementing the policy are penalizeCorruptBlockPeer,
+// isPeerMalicious and kafkaNotifyBlockInvalid's peerID clearing.
 func isLegacyPeerID(peerID string) bool {
 	return strings.HasPrefix(peerID, LegacyPeerIDPrefix)
 }
@@ -141,6 +162,20 @@ func (u *Server) reportCatchupFailureForError(ctx context.Context, peerID string
 	if errors.Is(err, errors.ErrBlockIncomplete) {
 		return
 	}
+
+	if errors.Is(err, errors.ErrBlockPolicyDeclined) {
+		// A local policy decline (excessiveblocksize) is OUR configuration, so no peer may be charged
+		// for it (bitcoin-sv/teranode#4692). Exempting HERE rather than only at the terminal branch in
+		// processCatchupChItem is what makes that invariant hold on the ALTERNATIVE paths too: the
+		// per-(hash, peerID) decline pre-empt and the bad/malicious branch both offer the hash to the
+		// best peers via tryAlternativePeersForCatchup, and the generic tail walks the cached
+		// alternatives — and on a genuinely over-limit block every one of those candidates declines
+		// identically, because the limit is ours and not theirs. Charging each of them would push
+		// honest peers toward the reputation floor that GetPeersAtMaxHeight/SelectAlternativePeer
+		// filter on, which is the self-isolation this work exists to remove.
+		return
+	}
+
 	if catchupFailureAlreadyReported(err) {
 		// The layer where the failure occurred (e.g. the header-fetch stage)
 		// already recorded it; reporting again would let CatchupFailures exceed
