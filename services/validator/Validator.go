@@ -107,6 +107,19 @@ const (
 	// against a store whose healthy latency is sub-millisecond.
 	defaultShedUnwindTimeout = 2 * time.Second
 
+	// defaultTwoPhaseCommitTimeout is the fallback for validator_twoPhaseCommitTimeout,
+	// which bounds the 2PC unlock. The context reaching it is detached from the caller
+	// by design, so this is what stops a wedged store from parking an ingest goroutine
+	// on post-acceptance bookkeeping. It does NOT widen the retention figure the
+	// validator_blockAssemblyShedRetryTimeout longdesc quotes: the shed unwind and the
+	// 2PC unlock are mutually exclusive (a shed returns at Validate's send-failure arm
+	// and never reaches the commit), so the worst case is
+	// max(ShedUnwindTimeout, TwoPhaseCommitTimeout), not their sum.
+	//
+	// It applies to EVERY caller whose record was created Locked, not only the shed
+	// path, which is why it is operator-tunable rather than compiled in.
+	defaultTwoPhaseCommitTimeout = 2 * time.Second
+
 	// txLockedBaseBackoff and txLockedMaxSafeRetries shape the TX_LOCKED/TX_CREATING
 	// retry a child performs while its parent is still committing. They are
 	// package-level because childLockBudget derives the child's total budget from
@@ -134,17 +147,6 @@ func childLockBudget(maxRetries int) time.Duration {
 
 	return txLockedBaseBackoff * time.Duration((int64(1)<<maxRetries)-1)
 }
-
-// twoPhaseCommitTimeout bounds the 2PC unlock. The context reaching it is detached
-// from the caller by design, so this is what stops a wedged store from parking an
-// ingest goroutine on post-acceptance bookkeeping. It does NOT widen the retention
-// figure the validator_blockAssemblyShedRetryTimeout longdesc quotes: the shed
-// unwind and the 2PC unlock are mutually exclusive (a shed returns at Validate's
-// send-failure arm and never reaches the commit), so the worst case is
-// max(ShedUnwindTimeout, twoPhaseCommitTimeout), not their sum.
-//
-// A var only so tests can shrink it.
-var twoPhaseCommitTimeout = 2 * time.Second
 
 const (
 
@@ -329,9 +331,19 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// first-item flush wait. At the shipped default that wait is a few milliseconds,
 	// comfortably inside the floor, but an operator who sets it large makes every
 	// hand-off exceed the floor and land in the ambiguous-hand-off-failure branch,
-	// which deliberately does not unwind — stranding a mined transaction with
-	// locked UTXOs whose children all fail TX_LOCKED and which the unmined reload
-	// cannot recover. The effective wait depends on the active batcher mode (see
+	// which deliberately does not unwind — leaving the transaction UNMINED AND
+	// LOCKED.
+	//
+	// Both exits from that state are recoveries, so what the trap costs is the
+	// window rather than permanent strandedness: the batcher may still dispatch the
+	// item and the transaction be mined, at which point setMined clears the locked
+	// bin, or it is not, at which point the next block-assembly start's unmined
+	// reload clears it. For the duration of that window, though, descendants
+	// spending its outputs are answered TX_LOCKED, burn
+	// validator_txlocked_maxRetries and are lost, with no mempool holding them —
+	// which is what the warning is for.
+	//
+	// The effective wait depends on the active batcher mode (see
 	// effectiveBatcherFlushWait), so the guard compares against that rather than a
 	// single key.
 	if flush, key, bounded := v.effectiveBatcherFlushWait(); bounded && flush >= v.handoffFloor() {
@@ -984,7 +996,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	//   - the block-assembly hand-off (see handoffFloor), in both the unary and the
 	//     batched block-assembly client;
 	//   - the shed unwind (see shedUnwindTimeout);
-	//   - the two-phase-commit unlock (see twoPhaseCommitTimeout).
+	//   - the two-phase-commit unlock (see validator_twoPhaseCommitTimeout).
 	//
 	// NOT bounded here, deliberately, and therefore reliant on the store's own
 	// client-level timeouts: the primary SpendAndCreate below, and the store reads and
@@ -1004,6 +1016,27 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// would fire mid-operation into the store's own spend-rollback-on-create-failure
 	// path. Sizing that deadline needs a load trace, so it is recorded here as a known
 	// gap rather than guessed at.
+	//
+	// Read the list above as a REGRESSION relative to the pre-detach behaviour on the
+	// default (tracing-disabled) configuration, not merely as a pre-existing gap:
+	// before the detach, process shutdown could eventually interrupt those calls, and
+	// now nothing outside the store can. Two remedies are candidates, and both are
+	// DEFERRED rather than guessed at here, each blocked on something this change does
+	// not have:
+	//
+	//   - A deadline on SpendAndCreate. Blocked on sizing, for the reason above: it is
+	//     the acceptance operation, so a deadline changes acceptance semantics under
+	//     load, and sizing it needs a load trace.
+	//   - Narrowing the WithoutCancel scope to begin after SpendAndCreate returns.
+	//     Blocked on semantics: the conflicting path lives inside SpendAndCreate's
+	//     error handling, so that puts MarkConflictingRecursively back on a cancellable
+	//     context, where a mid-walk cancellation leaves a partially-marked descendant
+	//     set. Whether an interrupted walk is better than a slow one needs data this
+	//     change does not have either.
+	//
+	// Neither is tracked by anything this comment can point at, so it does not claim
+	// one is: the exposure is stated here so the next reader inherits the reasoning
+	// rather than re-deriving it.
 	//
 	// The Kafka retry loop below still honours caller cancellation, deliberately and
 	// explicitly, through its own select on ctx.
@@ -1048,6 +1081,11 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			//
 			// A queue-full shed no longer leaves a record behind (see unwindShed),
 			// so reaching here means a genuine duplicate rather than shed residue.
+			// True but incomplete: reaching here DURING another submission's shed
+			// window means the success returned below can later be undone by that
+			// shed's unwind, which deletes the very record this call just read. That
+			// is the residual named in unwindShed's preconditions; it needs per-txid
+			// serialisation to close and is measured by the counter incremented below.
 			// A record that IS locked and unmined here belongs to something a
 			// resubmit must not touch: an in-flight conflict resolution, which
 			// locks honest losing parents without marking them conflicting; or a
@@ -1427,18 +1465,21 @@ func (v *Validator) getTransactionInputBlockHeightsAndExtendTx(ctx context.Conte
 
 // twoPhaseCommitTransaction marks the transaction as spendable.
 //
-// Bounded by twoPhaseCommitTimeout: the context arriving here is detached from the
-// caller (see Validate), so without a deadline of its own a wedged store would park
-// this goroutine on what is post-acceptance bookkeeping. A timeout costs nothing the
-// code does not already handle — the failure arm below is explicit that the unlock is
-// recovered by the next block the transaction is mined into.
+// Bounded by validator_twoPhaseCommitTimeout: the context arriving here is detached
+// from the caller (see Validate), so without a deadline of its own a wedged store
+// would park this goroutine on what is post-acceptance bookkeeping. A timeout costs
+// nothing the code does not already handle — the failure arm below is explicit that
+// the unlock is recovered by the next block the transaction is mined into.
+//
+// The bound applies to every caller whose record was created Locked, not only the
+// shed path, which is why it is a setting rather than a compiled-in constant.
 func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, txID string) error {
 	ctx, span, endSpan := tracing.Tracer("validator").Start(ctx, "twoPhaseCommitTransaction",
 		tracing.WithHistogram(prometheusTransaction2PhaseCommit),
 	)
 	defer endSpan()
 
-	ctx, cancel := context.WithTimeout(ctx, twoPhaseCommitTimeout)
+	ctx, cancel := context.WithTimeout(ctx, v.twoPhaseCommitTimeout())
 	defer cancel()
 
 	// the tx was marked as locked on creation, we have added it successfully to block assembly
@@ -1975,6 +2016,22 @@ func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, bl
 // the record batch it holds — indefinitely. Applying it here rather than at each call
 // site covers the first hand-off and every retry from one place.
 //
+// The deadline is UNCONDITIONAL by design, including when
+// blockassembly_maxQueueItems = 0 (the shipped default) where no shed can occur and
+// it therefore buys no shed classification. Gating it on a positive cap looks like
+// the proportionate thing to do and is not: because the context arriving here is
+// detached, this deadline is the ONLY bound in existence on the hand-off. Gating it
+// would leave a default deployment with a hand-off that is both unbounded AND
+// uncancellable, so a wedged block-assembly server would park the ingest goroutine
+// and its pinned Kafka record batch forever — strictly worse than the pre-detach
+// state and than the current one.
+//
+// What it costs on a default deployment is real and is not closed here: a
+// healthy-but-slow batcher can exceed the floor, the transaction is left Locked, its
+// descendants burn validator_txlocked_maxRetries and are lost, and a synchronous
+// submitter gets a 500. The operator lever is validator_handoffRoundTripSlack, which
+// widens the floor without limit; its longdesc names this case.
+//
 // The two modes are bounded, but they are not semantically identical:
 //
 //   - Unary mode: the deadline cancels the in-flight gRPC call, so the transaction was
@@ -2044,6 +2101,18 @@ func (v *Validator) shedUnwindTimeout() time.Duration {
 	}
 
 	return defaultShedUnwindTimeout
+}
+
+// twoPhaseCommitTimeout returns the bound on the 2PC unlock, falling back to the
+// documented default when the setting is unset or nonsensical. Same reason as
+// shedUnwindTimeout: tests build Settings structs directly, and a zero value here
+// would hand the unlock an already-expired context rather than an unbounded one.
+func (v *Validator) twoPhaseCommitTimeout() time.Duration {
+	if t := v.settings.Validator.TwoPhaseCommitTimeout; t > 0 {
+		return t
+	}
+
+	return defaultTwoPhaseCommitTimeout
 }
 
 // handoffRoundTripSlack returns the allowance added to block assembly's own queue
@@ -2224,6 +2293,14 @@ func (v *Validator) handoffFloor() time.Duration {
 //     already-exists branch returns before the hand-off, so an existing record
 //     from another submitter is unreachable from here; on the spend-only shape
 //     the record gate immediately before the unspend is what enforces it.
+//
+//     Read that in one direction only. It means this call never undoes another
+//     submitter's STORE WORK. The converse is NOT claimed: a concurrent duplicate
+//     of the same txid that took the already-exists early return in Validate was
+//     told the transaction was accepted without performing a hand-off of its own,
+//     and this unwind then removes the record it was told about. See the residual
+//     bullet below, which is the same root cause.
+//
 //   - No descendant can have spent T's outputs, because no block-context
 //     validation reaches here: a shed whose options carry InBlock returns at the
 //     block-context arm in Validate instead of unwinding. Locked is NOT what
@@ -2231,10 +2308,12 @@ func (v *Validator) handoffFloor() time.Duration {
 //     the block-context paths (subtree validation's per-subtree and levelled
 //     pipelines, and both CheckSubtree branches), so a descendant arriving in a
 //     peer subtree can and does spend a Locked parent's outputs.
+//
 //   - Only the addToBlockAssembly branch reaches this, which is the only path
 //     that can produce a shed. Setting AddTXToBlockAssembly=false is one way a
 //     caller avoids the hand-off altogether, not the guarantee — several
 //     block-context callers leave it at its true default.
+//
 //   - The unspend runs only once the store has been proved to hold no record for
 //     this txid, on BOTH shapes. On the created-record shape that proves the
 //     record has not come back after the delete; on the spend-only shape
@@ -2243,6 +2322,7 @@ func (v *Validator) handoffFloor() time.Duration {
 //     tell two submissions of the same txid apart. The spend set is never empty on
 //     the spend-only shape (SpendOnly returns the spends and nil metadata), so "an
 //     empty spend set is a no-op" is not the argument and never was.
+//
 //   - The unwind is NOT serialised against a concurrent submission of the same
 //     txid: there is no per-txid lock and the delete leaves no tombstone, so a
 //     resubmission can recreate the record and take ownership of spends that are
@@ -2250,6 +2330,21 @@ func (v *Validator) handoffFloor() time.Duration {
 //     window to one store round trip; it does not eliminate it, and
 //     shed_unwind_reappeared_total is what makes the remainder observable. This is
 //     stated as a residual, not claimed as safe.
+//
+//     The inverse of the same missing serialisation, and the more consequential
+//     half: a duplicate submitted while this call sits between SpendAndCreate and
+//     its hand-off takes the already-exists early return, is answered SUCCESS with
+//     no hand-off of its own, and then has its transaction deleted by this unwind.
+//     Nothing resubmits it. It is bounded — a shed requires
+//     blockassembly_maxQueueItems > 0 — and it is not silent: this call's record is
+//     Locked and unmined when the duplicate reads it, so the duplicate takes the
+//     locked-unmined arm in Validate, which increments
+//     teranode_validator_existing_tx_locked_unmined_total and logs the txid. That
+//     counter is the field measure of how often this shape occurs. The remedy is
+//     the same per-txid serialisation of create, hand-off and unwind named above;
+//     refusing the duplicate instead is the wrong trade, because a locked-unmined
+//     record has causes an honest resubmit must not be failed on (see the
+//     ErrTxExists comment in Validate).
 //
 // Failure is best-effort and never fatal: every arm logs the txid AND the outpoints
 // and meters. What it falls back to depends on where the delete failed: while the

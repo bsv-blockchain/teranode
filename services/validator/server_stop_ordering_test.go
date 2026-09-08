@@ -178,6 +178,66 @@ func TestValidatorServer_StartEarlyReturnCancelsConsumerContext(t *testing.T) {
 	require.NotPanics(t, func() { server.cancelConsumer() })
 }
 
+// TestValidatorServer_SetConsumerContextCancelsThePreviousPair pins the invariant that
+// an installed consumer context always has a reachable cancel function.
+//
+// Start derives a fresh cancellable context on every invocation and installs it. The
+// install used to overwrite both fields, so a second Start dropped the only handle on
+// the first context: cancelConsumer could then only ever reach the second one, and
+// whatever was bound to the first — the Kafka handler closure, the backpressure
+// controller goroutine started on v.consumerContext() — ran until the parent context
+// died.
+//
+// The assertion is on the first context's Done channel rather than on a goroutine
+// count: a require.Eventually condition runs in a spawned goroutine, which cancels out
+// a single-goroutine exit and makes the count a useless oracle at this scale.
+func TestValidatorServer_SetConsumerContextCancelsThePreviousPair(t *testing.T) {
+	server := &Server{
+		logger:   ulogger.TestLogger{},
+		settings: settings.NewSettings(),
+	}
+
+	firstCtx, firstCancel := context.WithCancel(context.Background())
+	defer firstCancel()
+
+	server.setConsumerContext(firstCtx, firstCancel)
+	require.Equal(t, firstCtx, server.consumerContext())
+
+	select {
+	case <-firstCtx.Done():
+		require.Fail(t, "installing the first context must not cancel it")
+	default:
+	}
+
+	secondCtx, secondCancel := context.WithCancel(context.Background())
+	defer secondCancel()
+
+	server.setConsumerContext(secondCtx, secondCancel)
+
+	select {
+	case <-firstCtx.Done():
+	default:
+		require.Fail(t, "the replaced context must be cancelled, or nothing can ever stop what is bound to it")
+	}
+
+	require.Equal(t, secondCtx, server.consumerContext(), "the newly installed context is the live one")
+
+	select {
+	case <-secondCtx.Done():
+		require.Fail(t, "the context just installed must still be live")
+	default:
+	}
+
+	// The installed cancel is still the reachable one, so Stop cancels the second pair.
+	server.cancelConsumer()
+
+	select {
+	case <-secondCtx.Done():
+	default:
+		require.Fail(t, "cancelConsumer must reach the context installed last")
+	}
+}
+
 // spyPausableConsumer wraps a real KafkaConsumerGroup so pause/resume calls made by
 // the controller are observable, while the calls still land on the real
 // implementation (including its closed-consumer guard).

@@ -103,6 +103,13 @@ type unlockSpy struct {
 	// It returns ctx.Err() rather than an error of its own, because that is the error
 	// the caller wraps and the one the assertions key on.
 	setLockedBlocks bool
+
+	// beforeDeleteComplete runs at the very top of DeleteComplete, before any of the
+	// knobs above and before deletedHash is recorded, so a test can interleave another
+	// submission of the same txid at the one instant the record still exists and the
+	// unwind is already committed to removing it. Deterministic, where racing a real
+	// concurrent submitter would not be.
+	beforeDeleteComplete func()
 }
 
 func (s *unlockSpy) SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error {
@@ -139,6 +146,10 @@ func (s *unlockSpy) Delete(ctx context.Context, hash *chainhash.Hash) error {
 // embedded real store and the failure-path and verify-after-delete tests would
 // silently stop testing what they claim.
 func (s *unlockSpy) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
+	if s.beforeDeleteComplete != nil {
+		s.beforeDeleteComplete()
+	}
+
 	s.deletedHash = hash
 
 	if s.deleteErr != nil {
@@ -279,16 +290,12 @@ func shrinkHandoffFloor(t *testing.T, v *Validator, queueWait, slack time.Durati
 // shrinkTwoPhaseCommitTimeout scales the 2PC unlock bound down for tests, so a wedged
 // SetLocked surfaces in milliseconds rather than after the shipped 2s.
 //
-// Unlike the handoff slack this bound is package state, not a setting — it is
-// post-acceptance bookkeeping and appears in no operator-facing arithmetic — so the
-// helper has to restore it.
-func shrinkTwoPhaseCommitTimeout(t *testing.T, d time.Duration) {
+// Set on this validator's own settings rather than on package state, so concurrently
+// running tests cannot observe each other's shrink and nothing has to be restored.
+func shrinkTwoPhaseCommitTimeout(t *testing.T, v *Validator, d time.Duration) {
 	t.Helper()
 
-	original := twoPhaseCommitTimeout
-	twoPhaseCommitTimeout = d
-
-	t.Cleanup(func() { twoPhaseCommitTimeout = original })
+	v.settings.Validator.TwoPhaseCommitTimeout = d
 }
 
 // parentOutpointSpent reports whether output 0 of parentTx reads as spent — the
@@ -1089,6 +1096,13 @@ func TestValidate_KafkaIngestCtxCancelLeavesTxLocked(t *testing.T) {
 // ctx-honouring client blocking to the deadline (unary mode); the second returns the
 // exact error the batched client now returns when it abandons a wait, which is the
 // shipped default and is NOT a ctx.Err() of its own.
+//
+// Both run with blockassembly_maxQueueItems at its zero default, asserted explicitly
+// below. That is the case where no shed can occur and the deadline therefore buys no
+// shed classification — and it is exactly where the bound must still hold, because the
+// detached context leaves it as the only bound in existence. A future change that gated
+// the deadline on a positive queue cap would fail here rather than silently reinstating
+// an unbounded, uncancellable handoff on the default configuration.
 func TestValidate_StalledBlockAssemblyHandoffIsBounded(t *testing.T) {
 	// requireAmbiguousHandoffDisposition asserts the four properties that define the
 	// validator's answer to an ambiguous hand-off failure, whichever mode produced it.
@@ -1117,6 +1131,9 @@ func TestValidate_StalledBlockAssemblyHandoffIsBounded(t *testing.T) {
 		// expires. No sleeps, no store I/O — the smallest possible blocking path, so
 		// scheduling noise has minimal surface.
 		baStore.blockUntilCtxDone = true
+
+		require.Zero(t, v.settings.BlockAssembly.MaxQueueItems,
+			"the bound is exercised on the default deployment, where no shed is possible and this deadline is the only bound there is")
 
 		floor := shrinkHandoffFloor(t, v, 20*time.Millisecond, 20*time.Millisecond)
 		require.Equal(t, 40*time.Millisecond, floor)
@@ -1248,7 +1265,7 @@ func TestValidate_TwoPhaseCommitIsBounded(t *testing.T) {
 	ctx := context.Background()
 	v, spy, _, realStore, childTx, _ := recoverySetup(t, "queue_shed_2pc_bounded")
 
-	shrinkTwoPhaseCommitTimeout(t, bound)
+	shrinkTwoPhaseCommitTimeout(t, v, bound)
 
 	// A wedged store on the unlock: it parks until the context it was handed expires,
 	// which with the bound in place is the 2PC deadline and nothing else. The
@@ -1622,20 +1639,22 @@ func TestEffectiveBatcherFlushWait(t *testing.T) {
 	}
 }
 
-// TestValidatorSettings_UnwindTimeoutFallback pins the defensive arm of the two
+// TestValidatorSettings_UnwindTimeoutFallback pins the defensive arm of the three
 // duration accessors promoted to settings in this change.
 //
-// The loader can never produce a non-positive value for either key — it substitutes the
-// default before the struct is built — so nothing but this test exercises the fallback.
+// The loader can never produce a non-positive value for any of the keys — it
+// substitutes the default before the struct is built — so nothing but this test
+// exercises the fallback.
+//
 // It matters because tests, and any other code that builds a Settings struct directly,
 // bypass the loader entirely: without the fallback a zero-valued struct would give the
-// unwind an already-expired context and the handoff a deadline with no margin at all,
-// which is the exact failure mode (a shed misclassified as a local context deadline)
-// these bounds exist to avoid.
+// unwind and the 2PC unlock an already-expired context, and the handoff a deadline with
+// no margin at all, which is the exact failure mode (a shed misclassified as a local
+// context deadline) these bounds exist to avoid.
 //
-// This is the executable counterpart of the "### Values" section in both longdescs. If
-// the fallback behaviour is ever changed, this test and that documentation both have to
-// move.
+// This is the executable counterpart of the "### Values" section in all three longdescs.
+// If the fallback behaviour is ever changed, this test and that documentation both have
+// to move.
 func TestValidatorSettings_UnwindTimeoutFallback(t *testing.T) {
 	nonPositive := []struct {
 		name  string
@@ -1688,6 +1707,29 @@ func TestValidatorSettings_UnwindTimeoutFallback(t *testing.T) {
 			v := &Validator{settings: tSettings}
 
 			require.Equal(t, 250*time.Millisecond, v.handoffRoundTripSlack())
+		})
+	})
+
+	t.Run("twoPhaseCommitTimeout", func(t *testing.T) {
+		for _, tc := range nonPositive {
+			t.Run(tc.name, func(t *testing.T) {
+				tSettings := test.CreateBaseTestSettings(t)
+				tSettings.Validator.TwoPhaseCommitTimeout = tc.value
+
+				v := &Validator{settings: tSettings}
+
+				require.Equal(t, defaultTwoPhaseCommitTimeout, v.twoPhaseCommitTimeout())
+				require.Equal(t, 2*time.Second, v.twoPhaseCommitTimeout(), "the default must stay the documented 2s")
+			})
+		}
+
+		t.Run("a positive value is used as configured", func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.Validator.TwoPhaseCommitTimeout = 900 * time.Millisecond
+
+			v := &Validator{settings: tSettings}
+
+			require.Equal(t, 900*time.Millisecond, v.twoPhaseCommitTimeout())
 		})
 	})
 }
@@ -1912,6 +1954,72 @@ func TestValidate_ShedUnwindAbortsWhenRecordReappearedBeforeUnspend(t *testing.T
 
 	require.Contains(t, logger.joined(), childTx.TxID(), "the abort names the transaction")
 	require.Contains(t, logger.joined(), outpointOf(parentTx, 0), "and the outpoints left spent")
+}
+
+// This test PINS CURRENT BEHAVIOUR, NOT DESIRED BEHAVIOUR.
+//
+// A submits a transaction; while A sits between its SpendAndCreate and its hand-off, B
+// submits the same txid. B finds the record present, takes the already-exists early
+// return in Validate and is answered SUCCESS without performing a hand-off of its own.
+// A's hand-off is then shed and its unwind deletes the record B was told about. Nothing
+// resubmits it.
+//
+// Both halves of that residual are asserted, because either one alone reads as benign:
+// B got a nil error, AND the record is gone from the store afterwards.
+//
+// It stays open deliberately. Refusing B's resubmit is the wrong trade — a locked,
+// unmined record has causes indistinguishable from this one, including an in-flight
+// conflict resolution locking an honest losing parent, so failing on it would turn
+// ordinary resubmits into errors during every conflict resolution. Closing it properly
+// needs per-txid serialisation of create, hand-off and unwind. An in-process marker
+// would close only the single-pod case on a horizontally scaled service, which is worse
+// than nothing because it hides the rest.
+//
+// The deferral is instrumented rather than blind, which the counter assertion pins:
+// A's record is Locked and unmined when B reads it, so B increments
+// teranode_validator_existing_tx_locked_unmined_total. That is the field signal for how
+// often this shape actually occurs. A shed is also required, so it needs
+// blockassembly_maxQueueItems > 0 and the default deployment is not exposed.
+func TestValidate_ShedUnwindRemovesARecordAConcurrentDuplicateWasToldAbout(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, _ := recoverySetup(t, "queue_shed_unwind_duplicate_race")
+
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	initPrometheusMetrics()
+
+	lockedUnminedBefore := testutil.ToFloat64(prometheusValidatorExistingTxLockedUnmined)
+
+	var (
+		duplicateRan  bool
+		duplicateMeta *meta.Data
+		duplicateErr  error
+	)
+
+	// Driving B from the unwind's own delete is what makes the interleaving
+	// deterministic: at that instant A's record still exists, is Locked and unmined,
+	// and the unwind is already committed to removing it.
+	spy.beforeDeleteComplete = func() {
+		if duplicateRan {
+			return
+		}
+
+		duplicateRan = true
+		duplicateMeta, duplicateErr = v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+	}
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "the submitter that was shed still sees the shed")
+
+	require.True(t, duplicateRan, "precondition: the duplicate has to run inside the shed's window for this to test anything")
+
+	require.NoError(t, duplicateErr, "the duplicate was told the transaction was accepted")
+	require.NotNil(t, duplicateMeta, "and was given its metadata")
+
+	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
+
+	require.Equal(t, lockedUnminedBefore+1, testutil.ToFloat64(prometheusValidatorExistingTxLockedUnmined),
+		"the duplicate's read of a locked, unmined record is the field signal for this shape; the deferral is instrumented, not blind")
 }
 
 // The negative: with no reappearance the re-check must not become an

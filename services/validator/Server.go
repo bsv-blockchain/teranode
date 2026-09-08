@@ -153,16 +153,29 @@ type Server struct {
 	// consumerCancel cancels consumerCtx; called first in Stop, before the
 	// consumer is closed, and also on any early Start failure so the context is
 	// never left live after Start gives up. Guarded by consumerMu.
+	//
+	// It is the ONLY handle on consumerCtx, which is why setConsumerContext
+	// cancels the pair it replaces rather than overwriting both fields.
 	consumerCancel context.CancelFunc
 }
 
-// setConsumerContext installs the consumer context and its cancel function.
+// setConsumerContext installs the consumer context and its cancel function,
+// cancelling the pair it replaces.
 func (v *Server) setConsumerContext(ctx context.Context, cancel context.CancelFunc) {
 	v.consumerMu.Lock()
-	defer v.consumerMu.Unlock()
-
+	previous := v.consumerCancel
 	v.consumerCtx = ctx
 	v.consumerCancel = cancel
+	v.consumerMu.Unlock()
+
+	// Installing a second context must not orphan the first: its cancel function is
+	// the only handle on it, so overwriting the field would leave whatever is bound
+	// to it — the Kafka handler, the backpressure controller goroutine — running with
+	// nothing able to stop it short of the parent context dying. Called outside the
+	// lock because cancelConsumer takes the same mutex.
+	if previous != nil {
+		previous()
+	}
 }
 
 // consumerContext returns the consumer context, or nil before Start has installed one.

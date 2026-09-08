@@ -32,6 +32,13 @@ const defaultKafkaBackpressurePollInterval = 50 * time.Millisecond
 // and the controller silently never pauses anything.
 const defaultKafkaBackpressureReadTimeout = 100 * time.Millisecond
 
+// defaultKafkaBackpressureStaleErrorLimit mirrors the settings loader's default and
+// is the fallback onReadError uses when handed a non-positive limit. The loader
+// floors the value at 1, but a hand-built Settings can still reach the controller,
+// where a non-positive limit makes the very first failed read fail open — a third
+// of the transient error the shipped configuration rides out.
+const defaultKafkaBackpressureStaleErrorLimit = 3
+
 // queueStatsReader is the slim signal source the controller reads each tick. It
 // is satisfied by blockassembly.ClientI and deliberately narrow so the read can
 // never touch the subtree-processor main loop (GetBlockAssemblyQueueStats is
@@ -214,6 +221,19 @@ func (c *kafkaBackpressureController) readTimeout() time.Duration {
 	return defaultKafkaBackpressureReadTimeout
 }
 
+// staleErrorLimit returns the effective fail-open error budget, falling back to the
+// documented default when the configured value is non-positive. Same reason as
+// pollInterval and readTimeout: a hand-built config bypasses the loader's clamp, and
+// a non-positive value here makes the very first failed read fail open — the streak
+// is incremented before the comparison, so flooring at 1 would not change that.
+func (c *kafkaBackpressureController) staleErrorLimit() int {
+	if c.cfg.StaleErrorLimit > 0 {
+		return c.cfg.StaleErrorLimit
+	}
+
+	return defaultKafkaBackpressureStaleErrorLimit
+}
+
 // tick performs one poll-and-decide cycle. The read is bounded by a per-poll
 // deadline so the controller can never inherit a downstream stall.
 func (c *kafkaBackpressureController) tick(ctx context.Context) {
@@ -282,9 +302,9 @@ func (c *kafkaBackpressureController) onReadError(err error) {
 	prometheusKafkaBackpressureReadErrors.Set(float64(c.consecutiveErrors))
 
 	c.logger.Debugf("[Validator] kafka backpressure: queue-stats read failed (%d/%d): %v",
-		c.consecutiveErrors, c.cfg.StaleErrorLimit, err)
+		c.consecutiveErrors, c.staleErrorLimit(), err)
 
-	if c.consecutiveErrors >= c.cfg.StaleErrorLimit && c.paused.Load() {
+	if c.consecutiveErrors >= c.staleErrorLimit() && c.paused.Load() {
 		c.armFailOpenCooldown()
 		c.resume(fmt.Sprintf("stale signal: %d consecutive read errors", c.consecutiveErrors))
 
@@ -298,7 +318,7 @@ func (c *kafkaBackpressureController) onReadError(err error) {
 	// With the consumer RUNNING there is no pause to fail open from, so the streak
 	// keeps climbing by design and nothing above Debugf would say the signal has
 	// gone dark. Emit exactly one warning per dark stretch.
-	if c.consecutiveErrors >= c.cfg.StaleErrorLimit && !c.paused.Load() && !c.darkSignalLogged {
+	if c.consecutiveErrors >= c.staleErrorLimit() && !c.paused.Load() && !c.darkSignalLogged {
 		c.darkSignalLogged = true
 
 		c.logger.Warnf("[Validator] kafka backpressure: queue-stats signal dark after %d consecutive read errors with the consumer running; no pause can be applied until it returns: %v", c.consecutiveErrors, err)

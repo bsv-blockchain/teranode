@@ -440,6 +440,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BlockAssemblyShedRetryTimeout:        getDuration("validator_blockAssemblyShedRetryTimeout", 2*time.Second, alternativeContext...),
 			ShedUnwindTimeout:                    getDuration("validator_shedUnwindTimeout", 2*time.Second, alternativeContext...),
 			HandoffRoundTripSlack:                getDuration("validator_handoffRoundTripSlack", 500*time.Millisecond, alternativeContext...),
+			TwoPhaseCommitTimeout:                getDuration("validator_twoPhaseCommitTimeout", 2*time.Second, alternativeContext...),
 			KafkaBackpressure:                    loadValidatorKafkaBackpressureSettings(alternativeContext...),
 		},
 		Region: RegionSettings{

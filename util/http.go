@@ -631,6 +631,15 @@ const maxHTTPErrorBodyDrainBytes = 64 * 1024
 // remainder is already buffered — the common case for a verbose error page — drains in
 // microseconds and its connection is reused; a dribbler costs the caller this much and
 // no more.
+//
+// Across a retry ladder that budget multiplies: DoHTTPRequestBodyReaderWithRetry makes
+// up to defaultRetryConfig.maxAttempts attempts, so its worst case is
+// maxAttempts x this budget — 6 x 250ms = 1.5s — reached only against a peer that
+// dribbles its error body on every one of the six attempts. Set that against the
+// ~7.75s of exponential backoff the same ladder already spends between those attempts
+// (250ms doubling, capped at 5s), and the added share is bounded enough that the
+// budget is deliberately not shortened: cutting it would trade away the connection
+// reuse the synchronous drain exists to buy.
 const maxHTTPErrorBodyDrainWait = 250 * time.Millisecond
 
 // drainAndCloseErrorBody drains the remainder of an error body and closes it so the

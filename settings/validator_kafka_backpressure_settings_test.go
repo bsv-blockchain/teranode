@@ -176,6 +176,23 @@ func TestValidatorSettings_HandoffRoundTripSlack(t *testing.T) {
 	})
 }
 
+// TestValidatorSettings_TwoPhaseCommitTimeout pins the default and the loader for the
+// bound on the two-phase-commit unlock. It applies to every caller whose record was
+// created locked, not only the shed path, so an operator whose SetLocked exceeds 2s
+// under rw_in_progress pressure had no remedy short of a rebuild while it was a
+// compiled-in constant.
+func TestValidatorSettings_TwoPhaseCommitTimeout(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		require.Equal(t, 2*time.Second, NewSettings().Validator.TwoPhaseCommitTimeout)
+	})
+
+	t.Run("loader reads the key", func(t *testing.T) {
+		t.Setenv("validator_twoPhaseCommitTimeout", "750ms")
+
+		require.Equal(t, 750*time.Millisecond, NewSettings().Validator.TwoPhaseCommitTimeout)
+	})
+}
+
 // TestValidatorKafkaBackpressureSettings_ResumeClamp verifies a resume watermark
 // that is not strictly below the pause watermark is clamped to half the pause
 // watermark, while the controller stays enabled.

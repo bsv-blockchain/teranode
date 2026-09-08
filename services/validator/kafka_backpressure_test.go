@@ -493,6 +493,67 @@ func TestBackpressure_PollInterval(t *testing.T) {
 	require.Equal(t, defaultKafkaBackpressurePollInterval, c.pollInterval())
 }
 
+// TestBackpressure_StaleErrorLimit covers the accessor's two arms directly, the way
+// TestBackpressure_PollInterval does for the poll cadence.
+//
+// The read was raw before, so a hand-built config with 0 — which bypasses the loader's
+// floor — made the FIRST failed read fail open, because the streak is incremented
+// before the comparison. Everything shipped rides out three, so the two differed by
+// three-fold in how much transient error the controller tolerates.
+func TestBackpressure_StaleErrorLimit(t *testing.T) {
+	c := newTestController(&fakeReader{}, &fakeConsumer{})
+
+	require.Equal(t, 3, c.staleErrorLimit(), "a positive configured limit is used as-is")
+
+	c.cfg.StaleErrorLimit = 7
+	require.Equal(t, 7, c.staleErrorLimit())
+
+	c.cfg.StaleErrorLimit = 0
+	require.Equal(t, defaultKafkaBackpressureStaleErrorLimit, c.staleErrorLimit())
+
+	c.cfg.StaleErrorLimit = -2
+	require.Equal(t, defaultKafkaBackpressureStaleErrorLimit, c.staleErrorLimit())
+}
+
+// TestBackpressure_ZeroStaleErrorLimitStillRidesOutTwoErrors is the controller-level
+// half of the same fix: a paused consumer under a hand-built StaleErrorLimit of 0 must
+// behave like the shipped default of 3, not fail open on the first failed read.
+//
+// Flooring at 1 — the literal remedy that was suggested — would not have changed this:
+// the streak is incremented before the comparison, so 1 >= 1 fires on the first error
+// exactly as 1 >= 0 did. Falling back to the documented default is what closes it.
+func TestBackpressure_ZeroStaleErrorLimitStillRidesOutTwoErrors(t *testing.T) {
+	initPrometheusMetrics()
+
+	cfg := testBackpressureConfig()
+	cfg.StaleErrorLimit = 0
+
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newKafkaBackpressureController(ulogger.TestLogger{}, cfg, 0, reader, consumer)
+
+	ctx := context.Background()
+
+	// A hot read pauses the consumer, so there is a pause to fail open from.
+	reader.set(600, nil)
+	c.tick(ctx)
+	require.True(t, c.paused.Load())
+
+	reader.set(0, errors.NewProcessingError("queue stats unavailable"))
+
+	c.tick(ctx)
+	require.Equal(t, 0, consumer.resumeCount(), "one transient error must not fail open")
+	require.True(t, c.paused.Load())
+
+	c.tick(ctx)
+	require.Equal(t, 0, consumer.resumeCount(), "nor must two")
+	require.True(t, c.paused.Load())
+
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.resumeCount(), "the third consecutive error fails open, as the shipped default does")
+	require.False(t, c.paused.Load())
+}
+
 // TestBackpressure_MaxPauseCooldownClearedByDrain verifies a genuine drain to
 // the resume watermark clears the cooldown latch immediately, re-arming normal
 // pause behaviour without waiting out the full cooldown.
