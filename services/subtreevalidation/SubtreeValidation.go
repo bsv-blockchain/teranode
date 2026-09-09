@@ -62,6 +62,19 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// conflictingConeWarnThreshold is the counter-conflicting set size above which the
+// cone is worth a log line. The set is the loser's full descendant closure, which
+// keeps growing for as long as the node cannot advance past the block that would
+// demote it (#1391), so its size is the leading indicator of that condition.
+const conflictingConeWarnThreshold = 1000
+
+// conflictingWalkWarnDuration is the wall-clock spent in the whole
+// counter-conflicting check above which it is worth a log line, whatever the
+// outcome. The cone-size check above cannot fire once the work is slow enough to
+// be cancelled, which is exactly the #1391 regime, so duration is the signal
+// that survives it.
+const conflictingWalkWarnDuration = 10 * time.Second
+
 // missingTx represents a transaction that needs to be retrieved and its position in the subtree.
 //
 // This structure pairs a transaction with its index in the original subtree transaction list,
@@ -467,13 +480,32 @@ func (u *Server) blessMissingTransaction(ctx context.Context, blockHash chainhas
 func (u *Server) checkCounterConflictingOnCurrentChain(ctx context.Context, txHash chainhash.Hash, blockIds map[uint32]bool) error {
 	// the tx is conflicting, check whether the counter-conflicting transactions have already been mined on our chain
 	// first get the parent transactions and check if they were spent
+	// Warn on elapsed time across the whole check, on every return path. A
+	// set-size check alone is unreachable in the regime it exists for: in the
+	// wedge the work is cancelled rather than returning, so an error path fires
+	// and the size is never known (#1391). Duration is the signal that survives
+	// cancellation, and it has to span all three phases — the counter walk, the
+	// GetMeta fan-out over the counter set, and the descendant walk below — since
+	// a deadline can fire in any of them.
+	checkStart := time.Now()
+
+	defer func() {
+		if elapsed := time.Since(checkStart); elapsed > conflictingWalkWarnDuration {
+			u.logger.Warnf("[checkCounterConflictingOnCurrentChain][%s] counter-conflicting check took %s", txHash.String(), elapsed)
+		}
+	}()
+
 	counterConflictingTxHashes, err := utxo.GetCounterConflictingTxHashes(ctx, u.utxoStore, txHash)
 	if err != nil {
 		return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] failed to get counter conflicting tx hashes", txHash.String(), err)
 	}
 
+	if len(counterConflictingTxHashes) > conflictingConeWarnThreshold {
+		u.logger.Warnf("[checkCounterConflictingOnCurrentChain][%s] counter-conflicting set is %d transactions", txHash.String(), len(counterConflictingTxHashes))
+	}
+
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(128)
+	util.SafeSetLimit(g, utxo.ConflictingWalkFanOut)
 
 	counterConflictingTxMetas := make([]*meta.Data, len(counterConflictingTxHashes))
 
@@ -499,17 +531,22 @@ func (u *Server) checkCounterConflictingOnCurrentChain(ctx context.Context, txHa
 		return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] failed to get counter conflicting tx meta", txHash.String(), err)
 	}
 
-	// check whether the child transactions of the counter-conflicting transactions are frozen
-	for _, counterConflictingTxHash := range counterConflictingTxHashes {
-		childTransactionHashes, err := utxo.GetConflictingChildren(ctx, u.utxoStore, counterConflictingTxHash)
-		if err != nil {
-			return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] failed to get child transactions", txHash.String(), err)
-		}
+	// check whether any child transaction of txHash itself is frozen. This is the
+	// only walk the counter-conflicting set does not already cover: every
+	// counter-spender's descendant cone was walked (and frozen-checked against the
+	// same 32x0xFF sentinel) inside GetCounterConflictingTxHashes above, and any
+	// sentinel found there already failed the call. Re-walking each member of the
+	// set re-derived subsets of those same cones — O(N^2) store reads that wedged
+	// the mainnet fleet at height 960,827 (issue 1391) — so only the single
+	// txHash-cone walk remains.
+	childTransactionHashes, err := utxo.GetConflictingChildren(ctx, u.utxoStore, txHash)
+	if err != nil {
+		return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] failed to get child transactions", txHash.String(), err)
+	}
 
-		for _, childTransactionHash := range childTransactionHashes {
-			if childTransactionHash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-				return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] child transaction is frozen", txHash.String())
-			}
+	for _, childTransactionHash := range childTransactionHashes {
+		if childTransactionHash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] child transaction is frozen", txHash.String())
 		}
 	}
 
