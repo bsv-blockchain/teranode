@@ -517,6 +517,65 @@ func TestReValidateBlock_CorruptConvergesOnlyWhenOptimisticallyAdded(t *testing.
 	})
 }
 
+// TestReValidateBlock_WrongFileUnderRightKeyIsStorageNotCorrupt pins the READ-SIDE leg of the
+// invariant that licenses the optimisticallyAdded flag (bitcoin-sv/teranode#4692): a corrupt verdict on
+// a flagged retry is attributable to the received body, because local state cannot produce one. The
+// load path re-binds every subtree file to the key it was read under (ValidateSubtreeMatchesKey in
+// model.Block.GetAndValidateSubtrees) and reports a mismatch as a STORAGE error, which is not
+// IsBlockCorrupt and therefore cannot satisfy the invalidate gate.
+//
+// The fault injected here is precisely the one the flag was read as exposing: a stale or foreign
+// blob — a different but internally valid subtree file — sitting under the hash the block names. The
+// verdict must be a retryable storage error and the block must NOT be invalidated, even though this
+// block's header merkle root is bogus and would produce a corrupt verdict if the file loaded.
+//
+// The write-side leg (every producer binds content to key — the two peer-keyed writers by verifying
+// the bytes hash to the requested hash, the legacy writer by keying on the root it computes from the
+// object it serialises) is a property of those call sites and is covered where they live, not here.
+//
+// Mutation proof: removing the ValidateSubtreeMatchesKey call from GetAndValidateSubtrees turns this
+// red — the verdict becomes corrupt and the block is invalidated. The positive control is
+// TestReValidateBlock_CorruptConvergesOnlyWhenOptimisticallyAdded's first case, where a genuinely
+// body-derived corrupt verdict on a flagged retry DOES invalidate, so this test cannot pass by
+// disabling the route.
+func TestReValidateBlock_WrongFileUnderRightKeyIsStorageNotCorrupt(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	bv, block, invalidateCalled := newCorruptRevalidationHarness(ctx, t, true)
+	defer bv.StopCaches()
+
+	namedHash := block.Subtrees[0]
+
+	// A DIFFERENT, internally valid subtree: it deserializes cleanly and its own header root claim
+	// matches its own content — it simply is not the subtree the block named.
+	foreign, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, foreign.AddCoinbaseNode())
+	require.NoError(t, foreign.AddNode(chainhash.HashH([]byte("foreign-subtree-node")), 1, 1))
+	require.False(t, foreign.RootHash().IsEqual(namedHash), "the substituted file must belong to a different hash")
+
+	foreignBytes, err := foreign.Serialize()
+	require.NoError(t, err)
+
+	require.NoError(t, bv.subtreeStore.Del(ctx, namedHash[:], fileformat.FileTypeSubtree))
+	require.NoError(t, bv.subtreeStore.Set(ctx, namedHash[:], fileformat.FileTypeSubtree, foreignBytes))
+
+	err = bv.reValidateBlock(revalidateBlockData{block: block, baseURL: "test", optimisticallyAdded: true})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrStorageError), "a wrong file under the right key is a storage fault, got: %v", err)
+	require.False(t, errors.IsBlockCorrupt(err), "local state must never produce a corrupt verdict, got: %v", err)
+
+	select {
+	case <-invalidateCalled:
+		t.Fatal("a storage fault must never invalidate: that is what keeps a flagged retry from poisoning an honest hash on a bad local read")
+	default:
+		// good: the verdict is transient, so the block stays on chain and the read is re-driven
+	}
+}
+
 // TestValidateBlock_SubtreeCorrupt_StrikeGatedOnRevalidation covers the fourth corrupt-strike gate
 // (bitcoin-sv/teranode#4692): when subtree validation returns a corrupt-body verdict, the serving
 // peer is struck on a normal (serving) delivery but NOT on the revalidation path — RevalidateBlock

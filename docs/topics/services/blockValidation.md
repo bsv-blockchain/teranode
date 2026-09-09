@@ -94,7 +94,7 @@ Block validation receives new blocks through two distinct paths:
 
 ##### Optimistic Mining Mode
 
-The `optimisticMining` setting provides a validation strategy that prioritizes block propagation speed over immediate validation completion, reversing the normal validate-then-add sequence. On the peer-served and catch-up validation paths it is **off unless the operator opts in** by setting BOTH `blockvalidation_optimistic_mining` (default `true`) AND `blockvalidation_optimistic_mining_peer_blocks` (default `false`); the global flag being false always wins, so the peer-blocks flag can never bypass it (bitcoin-sv/teranode#4692). The shipped default `(true, false)` therefore keeps the peer/catch-up paths non-optimistic. Revalidation of an already-stored block is always non-optimistic regardless of these flags.
+The `optimisticMining` setting provides a validation strategy that prioritizes block propagation speed over immediate validation completion, reversing the normal validate-then-add sequence. On the peer-served validation path it is **off unless the operator opts in** by setting BOTH `blockvalidation_optimistic_mining` (default `true`) AND `blockvalidation_optimistic_mining_peer_blocks` (default `false`); the global flag being false always wins, so the peer-blocks flag can never bypass it (bitcoin-sv/teranode#4692). The shipped default `(true, false)` therefore keeps the peer-served path non-optimistic. The catch-up path is **always** non-optimistic regardless of both flags: it validates against a cached header run holding only the block's in-batch predecessors, which cannot carry the median-time-past window the optimistic branch checks synchronously (issue 1499). Revalidation of an already-stored block is always non-optimistic regardless of these flags.
 
 **Normal Mode (validate-then-add):**
 
@@ -105,7 +105,7 @@ The `optimisticMining` setting provides a validation strategy that prioritizes b
 4. Notify other services
 ```
 
-**Optimistic Mining Mode (opt-in on peer/catch-up paths):**
+**Optimistic Mining Mode (opt-in on the peer-served path):**
 
 ```text
 1. Add block to blockchain immediately (before full validation)
@@ -130,9 +130,11 @@ The optimistic path is implemented in `ValidateBlock()` (services/blockvalidatio
 
 **Configuration:**
 
-- **Settings**: `blockvalidation_optimistic_mining` (default: `true`) AND, on the peer-served and
-  catch-up paths, `blockvalidation_optimistic_mining_peer_blocks` (default: `false`) — BOTH must be
-  set for optimistic mining to engage on those paths (bitcoin-sv/teranode#4692)
+- **Settings**: `blockvalidation_optimistic_mining` (default: `true`) AND, on the peer-served
+  path, `blockvalidation_optimistic_mining_peer_blocks` (default: `false`) — BOTH must be
+  set for optimistic mining to engage on that path (bitcoin-sv/teranode#4692)
+- **Catch-up**: never optimistic, whatever the two settings are — the cached header run it
+  validates against cannot carry the median-time-past window (issue 1499)
 - **Runtime Override**: Can be disabled per-block via `ValidateBlockOptions.DisableOptimisticMining`
 - **Revalidation**: Revalidation of an already-stored block is always non-optimistic regardless of
   the settings above
@@ -175,10 +177,11 @@ The optimistic path is implemented in `ValidateBlock()` (services/blockvalidatio
 
 **Enabling / disabling Optimistic Mining:**
 
-On the peer-served and catch-up paths optimistic mining is off by default and must be opted into. Where the risk tradeoffs above are acceptable and low peer-block latency is required:
+On the peer-served path optimistic mining is off by default and must be opted into. Where the risk tradeoffs above are acceptable and low peer-block latency is required:
 
-- **Enable on peer/catch-up paths**: set BOTH `blockvalidation_optimistic_mining` (default `true`)
-  and `blockvalidation_optimistic_mining_peer_blocks` (default `false`) to `true`
+- **Enable on the peer-served path**: set BOTH `blockvalidation_optimistic_mining` (default `true`)
+  and `blockvalidation_optimistic_mining_peer_blocks` (default `false`) to `true`. This does not
+  enable it during catch-up, which is always non-optimistic
 - **Disable globally**: set `blockvalidation_optimistic_mining` to `false` (the global opt-out
   always wins over the peer-blocks flag)
 - **Per-block**: via `ValidateBlockOptions.DisableOptimisticMining`

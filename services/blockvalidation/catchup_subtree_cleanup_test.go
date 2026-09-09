@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -46,7 +47,7 @@ func TestRemoveCatchupSubtreeFiles(t *testing.T) {
 		}
 
 		u := &Server{logger: ulogger.TestLogger{}, subtreeStore: store}
-		require.NoError(t, u.removeCatchupSubtreeFiles(ctx, freshlyWritten))
+		require.NoError(t, u.removeCatchupSubtreeFiles(ctx, nil, freshlyWritten))
 
 		for _, fileType := range deletableSubtreeTypes {
 			exists, err := store.Exists(ctx, subtreeHash[:], fileType)
@@ -66,7 +67,7 @@ func TestRemoveCatchupSubtreeFiles(t *testing.T) {
 		}
 
 		u := &Server{logger: ulogger.TestLogger{}, subtreeStore: store}
-		require.NoError(t, u.removeCatchupSubtreeFiles(ctx, map[chainhash.Hash]map[fileformat.FileType]struct{}{}))
+		require.NoError(t, u.removeCatchupSubtreeFiles(ctx, nil, map[chainhash.Hash]map[fileformat.FileType]struct{}{}))
 
 		for _, fileType := range retryReadableSubtreeTypes {
 			exists, err := store.Exists(ctx, subtreeHash[:], fileType)
@@ -90,7 +91,7 @@ func TestRemoveCatchupSubtreeFiles(t *testing.T) {
 		}
 
 		u := &Server{logger: ulogger.TestLogger{}, subtreeStore: store}
-		require.NoError(t, u.removeCatchupSubtreeFiles(ctx, freshlyWritten))
+		require.NoError(t, u.removeCatchupSubtreeFiles(ctx, nil, freshlyWritten))
 
 		exists, err := store.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
 		require.NoError(t, err)
@@ -115,7 +116,7 @@ func TestRemoveCatchupSubtreeFiles(t *testing.T) {
 		}
 
 		u := &Server{logger: ulogger.TestLogger{}, subtreeStore: store}
-		require.NoError(t, u.removeCatchupSubtreeFiles(ctx, freshlyWritten))
+		require.NoError(t, u.removeCatchupSubtreeFiles(ctx, nil, freshlyWritten))
 
 		exists, err := store.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 		require.NoError(t, err)
@@ -143,7 +144,7 @@ func TestRemoveCatchupSubtreeFiles(t *testing.T) {
 		}
 
 		u := &Server{logger: ulogger.TestLogger{}, subtreeStore: store}
-		require.NoError(t, u.removeCatchupSubtreeFiles(ctx, freshlyWritten))
+		require.NoError(t, u.removeCatchupSubtreeFiles(ctx, nil, freshlyWritten))
 
 		exists, err := store.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeMeta)
 		require.NoError(t, err)
@@ -152,6 +153,43 @@ func TestRemoveCatchupSubtreeFiles(t *testing.T) {
 		exists, err = store.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 		require.NoError(t, err)
 		require.False(t, exists, "the freshly-written FileTypeSubtree must still be deleted")
+	})
+
+	t.Run("a hash a committed block in this run depends on is skipped, its sibling still deleted", func(t *testing.T) {
+		// The run-scoped guard (bitcoin-sv/teranode#4692): per-attempt freshness cannot see that a
+		// hash it wrote fresh has since become an already-committed block's dependency, because the
+		// fetch pool runs several blocks concurrently and quick validation's FileTypeSubtree write
+		// is asynchronous. Both hashes below are marked fresh; only the unregistered one may go.
+		for _, fileType := range deletableSubtreeTypes {
+			t.Run(fileType.String(), func(t *testing.T) {
+				store := blobmemory.New()
+
+				committedHash := chainhash.HashH([]byte("catchup-blob-cleanup-committed-" + fileType.String()))
+				ownHash := chainhash.HashH([]byte("catchup-blob-cleanup-own-" + fileType.String()))
+
+				require.NoError(t, store.Set(ctx, committedHash[:], fileType, []byte{0x01}))
+				require.NoError(t, store.Set(ctx, ownHash[:], fileType, []byte{0x01}))
+
+				freshlyWritten := map[chainhash.Hash]map[fileformat.FileType]struct{}{
+					committedHash: {fileType: {}},
+					ownHash:       {fileType: {}},
+				}
+
+				catchupCtx := &CatchupContext{}
+				catchupCtx.markSubtreesCommitted(&model.Block{Subtrees: []*chainhash.Hash{&committedHash}})
+
+				u := &Server{logger: ulogger.TestLogger{}, subtreeStore: store}
+				require.NoError(t, u.removeCatchupSubtreeFiles(ctx, catchupCtx, freshlyWritten))
+
+				exists, err := store.Exists(ctx, committedHash[:], fileType)
+				require.NoError(t, err)
+				require.True(t, exists, "%s must survive: a block already committed in this run depends on it", fileType)
+
+				exists, err = store.Exists(ctx, ownHash[:], fileType)
+				require.NoError(t, err)
+				require.False(t, exists, "%s for a hash no committed block depends on must still be deleted", fileType)
+			})
+		}
 	})
 
 	t.Run("a missing file is not an error", func(t *testing.T) {
@@ -167,7 +205,42 @@ func TestRemoveCatchupSubtreeFiles(t *testing.T) {
 		}
 
 		u := &Server{logger: ulogger.TestLogger{}, subtreeStore: store}
-		require.NoError(t, u.removeCatchupSubtreeFiles(ctx, freshlyWritten), "a missing file must be tolerated, not returned as an error")
+		require.NoError(t, u.removeCatchupSubtreeFiles(ctx, nil, freshlyWritten), "a missing file must be tolerated, not returned as an error")
+	})
+}
+
+// TestCatchupContextCommittedSubtrees pins the tolerance the two run-scoped accessors promise
+// (bitcoin-sv/teranode#4692): a nil receiver and an uninitialised map must both behave, so a test or
+// a future caller building a bare CatchupContext keeps working — protecting nothing rather than
+// panicking.
+func TestCatchupContextCommittedSubtrees(t *testing.T) {
+	hash := chainhash.HashH([]byte("catchup-committed-accessors"))
+	block := &model.Block{Subtrees: []*chainhash.Hash{&hash}}
+
+	t.Run("nil receiver", func(t *testing.T) {
+		var catchupCtx *CatchupContext
+
+		require.NotPanics(t, func() { catchupCtx.markSubtreesCommitted(block) })
+		require.False(t, catchupCtx.subtreeCommitted(hash))
+	})
+
+	t.Run("uninitialised map", func(t *testing.T) {
+		catchupCtx := &CatchupContext{}
+
+		require.False(t, catchupCtx.subtreeCommitted(hash), "nothing is committed before registration")
+
+		catchupCtx.markSubtreesCommitted(block)
+		require.True(t, catchupCtx.subtreeCommitted(hash), "registration must lazily create the map")
+	})
+
+	t.Run("nil block and nil subtree entries are ignored", func(t *testing.T) {
+		catchupCtx := &CatchupContext{}
+
+		require.NotPanics(t, func() { catchupCtx.markSubtreesCommitted(nil) })
+		require.NotPanics(t, func() {
+			catchupCtx.markSubtreesCommitted(&model.Block{Subtrees: []*chainhash.Hash{nil, &hash}})
+		})
+		require.True(t, catchupCtx.subtreeCommitted(hash))
 	})
 }
 

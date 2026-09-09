@@ -16,9 +16,12 @@ import (
 )
 
 // TestRefillHeaderBlockPipeline_NoAcceptanceBookkeeping guards that the headers-first pipeline
-// refill (bitcoin-sv/teranode#4692), extracted from the accepted-block footer so the corrupt-body
-// drop can refill the download pipeline WITHOUT running any accepted-block bookkeeping (rejected-tx
-// clear, peer-height update, FSM RUN, fee-filter reset), carries none of that bookkeeping. What this
+// refill (bitcoin-sv/teranode#4692), extracted from the accepted-block footer so the corrupt branch —
+// which re-arms the failing hash in the same breath — can refill the download pipeline WITHOUT
+// running any accepted-block bookkeeping (rejected-tx clear, peer-height update, FSM RUN, fee-filter
+// reset), carries none of that bookkeeping. The per-(hash, peer) corrupt-cap gate re-arms nothing and
+// therefore does not call this at all; see TestHandleBlockMsg_CorruptCapDoesNotRefillHeaderPipeline.
+// What this
 // test actually asserts is narrow: the helper runs without error and leaves rejectedTxns — which the
 // acceptance footer would clear — untouched. With no sync peer the fetchHeaderBlocks branch is a
 // safe no-op, so the pipeline is not actually topped up here; the point proven is the ABSENCE of

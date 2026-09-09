@@ -176,6 +176,19 @@ type revalidateBlockData struct {
 	// invalidate the block, so it is NEVER set after block.Valid has already succeeded (a later bad local
 	// read must not poison an already-validated block) nor on any ordinary retry/worker path — both
 	// default it false.
+	//
+	// LICENSING INVARIANT — why a corrupt verdict on a flagged retry is attributable to the received
+	// body rather than to local state. Every producer of FileTypeSubtreeToCheck binds content to key:
+	// the two peer-keyed writers by verifying the bytes hash to the requested hash before storing
+	// (get_blocks.go's fetchAndStoreSubtree, subtreevalidation/check_block_subtrees.go), and the legacy
+	// writer by keying on the root it computes from the object it serialises
+	// (legacy/netsync/handle_block.go — it has no requested hash to verify against, so no such check is
+	// missing there). On the read side model.Block.GetAndValidateSubtrees re-binds every loaded file to
+	// the key it was read under via ValidateSubtreeMatchesKey, and reports a mismatch as a STORAGE
+	// error, not as corrupt. Consequence: a wrong or stale local blob yields a transient storage error
+	// and a re-fetch, never a corrupt verdict — so a flagged retry cannot invalidate on local state,
+	// and the merkle inputs that can produce corrupt are a function of the received body (header,
+	// coinbase, subtree list) plus the canonical content of the hashes that body names.
 	optimisticallyAdded bool
 }
 
@@ -1723,15 +1736,20 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 		// Use cached headers if available (during catchup), otherwise fetch from blockchain.
 		//
-		// NOTE: the cached run must not be used for the median-time-past window.
+		// PRECONDITION: a caller passing CachedHeaders MUST also set DisableOptimisticMining.
+		// The cached run must not be used for the median-time-past window:
 		// HeaderChainCache.collectPreviousHeaders returns only the headers preceding the block
 		// WITHIN the batch, so blocks 2..11 of a batch get a 1..10-header run whose oldest entry
 		// is the common ancestor rather than genesis — too short to evaluate the rule against,
-		// and CheckHeaderContextual rejects it as such (issue #1467). Today that never happens
-		// because every caller passing CachedHeaders also sets DisableOptimisticMining, and the
-		// non-optimistic branch below re-fetches a full run from the store. Anything that changes
-		// either of those must first make the cache top up short windows from the store — see
-		// issue #1499.
+		// and CheckHeaderContextual rejects it as such (issue #1467). Only the OPTIMISTIC branch
+		// runs CheckHeaderContextual against this run; the non-optimistic branch below re-fetches a
+		// full run from the store, which is why forcing the mode off is what keeps the short run
+		// harmless. One caller passes CachedHeaders — catchup's validateBlocksOnChannel — and it
+		// sets DisableOptimisticMining: true unconditionally, not from the operator opt-in, so the
+		// precondition holds by construction rather than by coincidence. The one requeue path that
+		// re-enters after a header-context failure (ReValidateBlockFromScratch) deliberately drops
+		// CachedHeaders instead. A new caller must do one or the other, or first make the cache top
+		// up short windows from the store — see issue #1499.
 		var blockHeaders []*model.BlockHeader
 		if opts.CachedHeaders != nil && len(opts.CachedHeaders) > 0 {
 			// Use provided cached headers
@@ -2093,7 +2111,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 						}
 					} else {
 						// storage or processing error, or transient incomplete state during catchup;
-						// block is not really invalid, but we need to re-validate
+						// block is not really invalid, but we need to re-validate.
+						// Flagged like the sibling pre-completion requeues: a corrupt verdict on the
+						// retry from here is body-derived (see the LICENSING INVARIANT on
+						// revalidateBlockData.optimisticallyAdded), and the alternative — leaving the
+						// flag false — silently accepts an unvalidated on-chain body, because
+						// block.Valid has not succeeded for this block at any point.
 						u.reValidateOptimisticallyAddedBlock(block, baseURL)
 					}
 
@@ -2467,10 +2490,11 @@ func (u *BlockValidation) penalizeCorruptBlockPeer(ctx context.Context, peerID s
 // now skipped.
 //
 // RESIDUAL: a sibling block that writes the same hash BETWEEN the snapshot and this delete is still
-// exposed. That is the same cross-block window as the KNOWN LIMITATION documented on
-// removeCatchupSubtreeFiles, and closing it needs the one run-scoped set of no-longer-deletable
-// pairs described there; a second, divergent freshness mechanism here would be worse than the
-// documented limitation. Tracked as follow-up in the pull request rather than bundled here. The cost
+// exposed. The catch-up twin (removeCatchupSubtreeFiles) closes the committed-dependency half of
+// that window with a run-scoped set of hashes an already-committed block depends on; the RUNNING
+// path has no run scope to hang such a set on, so it keeps the full window, and a second, divergent
+// freshness mechanism here would be worse than the documented residual. Tracked as follow-up in the
+// pull request rather than bundled here. The cost
 // of that residual is bounded to a re-fetch or a retryable StorageError, because FileTypeSubtree is
 // the primary lookup and SubtreeToCheck is only the fallback (model.Block's subtree read path) —
 // never a corrupt or invalid verdict, and never a peer strike, so no hash is poisoned by it.
@@ -3051,9 +3075,13 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 		// here with optimisticallyAdded set: there the block IS on-chain, so returning without
 		// invalidating leaves a silently accepted corrupt tip, which is what the re-queue exists to
 		// prevent. Gate on that explicit requeue flag — NOT on GetBlockExists, which any already-accepted
-		// block re-validated to a corrupt verdict (e.g. a bad local subtree read) would satisfy and be
-		// wrongly poisoned (bitcoin-sv/teranode#4692). When the flag is false a corrupt verdict returns
-		// unwrapped without invalidating: the direction that never poisons an honest hash.
+		// block that has ALREADY PASSED block.Valid and is later re-validated to a corrupt verdict would
+		// satisfy and be wrongly poisoned (bitcoin-sv/teranode#4692). That is exactly what the flag keeps
+		// out: it is never set once block.Valid has succeeded. For a flagged block, whose block.Valid
+		// failed or never ran, the corrupt verdict is the body's — see the LICENSING INVARIANT on
+		// revalidateBlockData.optimisticallyAdded for why local state cannot produce one. When the flag
+		// is false a corrupt verdict returns unwrapped without invalidating: the direction that never
+		// poisons an honest hash.
 		invalidateCorruptOnChain := errors.IsBlockCorrupt(err) && blockData.optimisticallyAdded
 
 		// ErrBlockIncomplete in a caught-up state is a floater (see isCaughtUp /
