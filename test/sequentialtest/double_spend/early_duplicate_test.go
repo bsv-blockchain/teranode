@@ -189,3 +189,27 @@ func TestEarlyDuplicateAcrossSubtrees(t *testing.T) {
 func TestValidBlockWithSpentAndUnrelated(t *testing.T) {
 	t.Skip("Skipped: SQLite locking issues with spending chains. Covered by existing double_spend tests.")
 }
+
+func TestEarlyDuplicatePartiallySpentAndPrunedSqlPostgres(t *testing.T) {
+	pg, err := postgres.RunPostgresTestContainer(t.Context(), "early_dup_partial_"+t.Name())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = pg.Terminate(t.Context())
+	})
+
+	t.Run("sqlpostgres", func(t *testing.T) {
+		testEarlyDuplicatePartiallySpentAndPruned(t, sqlPostgresDSN(t, pg.ConnectionString()))
+	})
+}
+
+func TestEarlyDuplicateNotSpentSqlPostgres(t *testing.T) {
+	pg, err := postgres.RunPostgresTestContainer(t.Context(), "early_dup_notspent_"+t.Name())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = pg.Terminate(t.Context())
+	})
+
+	t.Run("sqlpostgres", func(t *testing.T) {
+		testEarlyDuplicateNotSpent(t, sqlPostgresDSN(t, pg.ConnectionString()))
+	})
+}
