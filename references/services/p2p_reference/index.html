@@ -8056,9 +8056,9 @@
 </ul>
 <h3 id="network-configuration">Network Configuration<a class="headerlink" href="#network-configuration" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>p2p_listen_addresses</code>: Specifies the IP addresses for the P2P service to bind to.</li>
-<li><code>p2p_advertise_addresses</code>: Addresses to advertise to other peers in the network. Each address can be specified with or without a port (e.g., <code>192.168.1.1</code> or <code>example.com:9906</code>). When a port is not specified, the system will use the value from <code>p2p_port</code> as the default. Both IP addresses and domain names are supported. Format examples: <code>192.168.1.1</code>, <code>example.com:9906</code>, <code>node.local:8001</code>.</li>
-<li><code>p2p_port</code>: <strong>REQUIRED</strong> - Defines the port number on which the P2P service listens.</li>
+<li><code>p2p_listen_addresses</code>: <strong>REQUIRED</strong> - Declares the libp2p bind. The message bus always binds <code>0.0.0.0</code> and <code>::</code> on <code>p2p_port</code>, so only the wildcard forms (<code>0.0.0.0</code>, <code>::</code>, <code>/ip4/0.0.0.0/tcp/&lt;p2p_port&gt;</code>, <code>/ip6/::/tcp/&lt;p2p_port&gt;</code>) are accepted; a narrower value fails startup instead of being silently ignored. Restrict exposure with a firewall on <code>p2p_port</code>.</li>
+<li><code>p2p_advertise_addresses</code>: Multiaddrs to advertise to other peers, pipe-separated (e.g. <code>/ip4/203.0.113.5/tcp/9905</code> or <code>/dns4/node.example.com/tcp/9905</code>). They are passed to libp2p verbatim, so each entry must be a complete multiaddr including the port; a bare <code>host:port</code> is rejected and the P2P service fails to start. When empty, libp2p advertises the interface addresses it bound and the public address peers observe via the Identify protocol.</li>
+<li><code>p2p_port</code>: <strong>REQUIRED</strong> - Defines the port number on which libp2p listens. It is always bound, whether or not <code>p2p_advertise_addresses</code> is set, so firewall rules and port mappings can rely on it.</li>
 <li><code>p2p_block_topic</code>: <strong>REQUIRED</strong> - The topic name used for block-related messages in the P2P network.</li>
 <li><code>p2p_subtree_topic</code>: <strong>REQUIRED</strong> - Specifies the topic for subtree-related messages within the P2P network.</li>
 <li><code>p2p_rejected_tx_topic</code>: <strong>REQUIRED</strong> - Specifies the topic for broadcasting information about rejected transactions.</li>

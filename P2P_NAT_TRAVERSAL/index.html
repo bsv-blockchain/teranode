@@ -7149,7 +7149,7 @@
 <h3 id="option-2-explicitly-set-advertise-address">Option 2: Explicitly Set Advertise Address<a class="headerlink" href="#option-2-explicitly-set-advertise-address" title="Permanent link">&para;</a></h3>
 <p>If you know your public IP or domain:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a># In settings_local.conf
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>p2p_advertise_addresses = ["/ip4/203.0.113.1/tcp/9905"]
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>p2p_advertise_addresses = /ip4/203.0.113.1/tcp/9905
 </span></code></pre></div>
 <p>This is ideal for:</p>
 <ul>
@@ -7171,11 +7171,10 @@
 </span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>p2p_enable_relay = true
 </span></code></pre></div>
 <h3 id="option-5-share-private-addresses-development-only">Option 5: Share Private Addresses (Development Only)<a class="headerlink" href="#option-5-share-private-addresses-development-only" title="Permanent link">&para;</a></h3>
-<p>For local development or private networks:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a># In settings_local.conf
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>p2p_share_private_addresses = true
 </span></code></pre></div>
-<p>⚠️ <strong>Warning</strong>: Only use this in controlled environments where peers can actually reach private IPs.</p>
+<p>ℹ️ With the current go-p2p-message-bus this setting has no effect on what is announced: when <code>p2p_advertise_addresses</code> is empty, libp2p advertises every bound interface address, private ones included, regardless of this value. What local dev on a private network does need is <code>p2p_allow_private_ips = true</code>: with the shipped default <code>false</code>, libp2p's connection gater refuses RFC1918, loopback and link-local addresses in both directions, so private peers can neither dial this node nor be dialled by it. To publish only a public address, set <code>p2p_advertise_addresses</code> explicitly.</p>
 <h2 id="how-the-observed-address-mechanism-works">How the Observed Address Mechanism Works<a class="headerlink" href="#how-the-observed-address-mechanism-works" title="Permanent link">&para;</a></h2>
 <ol>
 <li>Node A (behind NAT) connects outbound to Node B</li>

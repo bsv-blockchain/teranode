@@ -7222,7 +7222,7 @@
 <td>[]string</td>
 <td>[]</td>
 <td>p2p_listen_addresses</td>
-<td>P2P network interfaces</td>
+<td><strong>REQUIRED</strong> - Must describe the wildcard bind the bus performs (<code>0.0.0.0</code>, <code>::</code>, or <code>/ip4/0.0.0.0/tcp/&lt;p2p_port&gt;</code>); narrower values fail startup</td>
 </tr>
 <tr>
 <td>AdvertiseAddresses</td>
@@ -7236,7 +7236,7 @@
 <td>string</td>
 <td>"full"</td>
 <td>listen_mode</td>
-<td>Node operation mode ("full" or "listen_only")</td>
+<td>Node operation mode ("full", "listen_only" or "silent"; silent still binds p2p_port)</td>
 </tr>
 <tr>
 <td>PeerID</td>
@@ -7250,7 +7250,7 @@
 <td>int</td>
 <td>9905</td>
 <td>p2p_port</td>
-<td>Default P2P communication port (multiaddrs in ListenAddresses/AdvertiseAddresses are the source of truth)</td>
+<td>TCP port libp2p binds on 0.0.0.0 and :: (always, independent of AdvertiseAddresses)</td>
 </tr>
 <tr>
 <td>PrivateKey</td>
@@ -7327,7 +7327,7 @@
 <td>bool</td>
 <td>true</td>
 <td>p2p_share_private_addresses</td>
-<td>Private address advertisement</td>
+<td>Currently no effect: libp2p advertises bound interface addresses (private included) whenever AdvertiseAddresses is empty</td>
 </tr>
 <tr>
 <td>AllowPrunedNodeFallback</td>
@@ -7500,9 +7500,10 @@
 </ul>
 <h3 id="network-address-management">Network Address Management<a class="headerlink" href="#network-address-management" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>ListenAddresses</code> and <code>AdvertiseAddresses</code> control network presence</li>
-<li><code>Port</code> used as fallback when addresses don't specify port</li>
-<li><code>SharePrivateAddresses</code> controls address advertisement behavior</li>
+<li><code>Port</code> is the libp2p listen port; it is always bound on all interfaces</li>
+<li><code>ListenAddresses</code> can only confirm that wildcard bind (the message bus has no listen-address option); anything narrower is rejected at startup</li>
+<li><code>AdvertiseAddresses</code> overrides what libp2p announces to peers; when empty libp2p announces its bound interface addresses and the public address observed via Identify</li>
+<li><code>SharePrivateAddresses</code> no longer feeds <code>ListenAddresses</code> into the announce set (a wildcard is not dialable); announcement is left to libp2p either way</li>
 </ul>
 <h3 id="peer-connection-management">Peer Connection Management<a class="headerlink" href="#peer-connection-management" title="Permanent link">&para;</a></h3>
 <ul>
@@ -7591,7 +7592,7 @@
 <tbody>
 <tr>
 <td>ListenMode</td>
-<td>Must be "full" or "listen_only"</td>
+<td>Must be "full", "listen_only" or "silent"</td>
 <td>Service fails to start if invalid</td>
 <td>During server initialization</td>
 </tr>

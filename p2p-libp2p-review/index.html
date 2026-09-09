@@ -7003,7 +7003,7 @@
 <h3 id="seen-message-dedup">Seen-message dedup<a class="headerlink" href="#seen-message-dedup" title="Permanent link">&para;</a></h3>
 <ul>
 <li>libp2p's pubsub maintains a <code>seenMessages</code> time-cache keyed by message ID (<code>go-libp2p-pubsub/pubsub.go:536, 1399, 1416</code>). Duplicate messages by ID are dropped before being forwarded. Default TTL is 2 minutes.</li>
-<li>Teranode adds an application-layer 10MB size guard (<code>Server.go:66, 913-914</code>) before JSON unmarshal.</li>
+<li>Teranode adds application-layer per-topic size guards (10KB ceiling, <code>maxGossipMessageSize</code> in <code>services/p2p/Server.go</code>) in the topic handlers before JSON unmarshal. The former 10MB <code>maxP2PMessageSize</code> constant was never wired to anything and has been removed.</li>
 <li>A peer publishing many <em>different</em> malformed messages would still propagate them, since the dedup is by message ID, not by content. See "Validators" below.</li>
 </ul>
 <h3 id="validators-rate-limiting">Validators / rate limiting<a class="headerlink" href="#validators-rate-limiting" title="Permanent link">&para;</a></h3>
@@ -7047,7 +7047,7 @@
 <p>Already covered above:</p>
 <ul>
 <li><strong>No validators at gossipsub layer</strong> — schema and rate are not enforced before relay. <strong>Application-layer parsing happens after the message has been forwarded to the mesh</strong>, so garbage propagates one hop further than it needs to. Closing this gap requires the library to expose <code>RegisterTopicValidator</code>; teranode can't reach the underlying <code>pubsub.PubSub</code> directly today.</li>
-<li>Per-topic size limits are now enforced (see "Validators / rate limiting" above). The global 10 MB safety net remains, with tighter caps per topic so a 5 MB blob on <code>node_status</code> is rejected before JSON parsing.</li>
+<li>Per-topic size limits are now enforced (see "Validators / rate limiting" above), all at or under a 10KB ceiling, so a 5 MB blob on <code>node_status</code> is rejected before JSON parsing. There is no wider Teranode-side safety net: the only pre-relay size check is libp2p's 1MiB default, because <code>go-p2p-message-bus</code> does not expose <code>pubsub.WithMaxMessageSize</code>.</li>
 <li>No message signing / origin authentication. Today the network trusts <code>peer.FromID</code>. Acceptable while bootstrap peers are curated; risky once the network is open.</li>
 </ul>
 <h2 id="4-reputation-ban-management-peer-map">4. Reputation, ban management, peer-map<a class="headerlink" href="#4-reputation-ban-management-peer-map" title="Permanent link">&para;</a></h2>
@@ -7111,7 +7111,7 @@
 </ol>
 <h3 id="nice-to-have">Nice-to-have<a class="headerlink" href="#nice-to-have" title="Permanent link">&para;</a></h3>
 <ol>
-<li><del>Tighter per-topic size limits (<code>node_status</code> does not need 10MB).</del> Done (<code>services/p2p/Server.go</code> constants).</li>
+<li><del>Tighter per-topic size limits (<code>node_status</code> does not need more than a few KB).</del> Done (<code>services/p2p/Server.go</code> constants, all at or under the 10KB <code>maxGossipMessageSize</code> ceiling).</li>
 <li>Per-message origin signature so we can stop trusting <code>peer.FromID</code> once the network is open.</li>
 <li>Re-enable the disabled malicious-peer detection in <code>sync_coordinator.go:390-405</code>.</li>
 <li>Optional parallel sync from multiple peers, with the existing single-peer mode kept as the default.</li>
