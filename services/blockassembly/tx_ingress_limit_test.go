@@ -2,12 +2,16 @@
 package blockassembly
 
 import (
+	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/stretchr/testify/require"
 )
 
@@ -210,11 +214,11 @@ func TestPublishTxIngressFullReachesBlockchainClient(t *testing.T) {
 	require.False(t, testItems.blockchainClient.IsBlockAssemblyFull(),
 		"a client must default to accepting transactions before it hears anything")
 
-	ba.publishTxIngressFull(ctx, true)
+	require.NoError(t, ba.publishTxIngressFull(ctx, true))
 	require.True(t, testItems.blockchainClient.IsBlockAssemblyFull(),
 		"the client must see block assembly report full")
 
-	ba.publishTxIngressFull(ctx, false)
+	require.NoError(t, ba.publishTxIngressFull(ctx, false))
 	require.False(t, testItems.blockchainClient.IsBlockAssemblyFull(),
 		"the client must see block assembly report it has room again")
 }
@@ -232,7 +236,7 @@ func TestBlockAssemblyFullNotificationCarriesFlag(t *testing.T) {
 	subCh, err := testItems.blockchainClient.Subscribe(ctx, "tx-ingress-test")
 	require.NoError(t, err)
 
-	testItems.blockAssembler.publishTxIngressFull(ctx, true)
+	require.NoError(t, testItems.blockAssembler.publishTxIngressFull(ctx, true))
 
 	// The subscription carries every notification type, so skip past any unrelated traffic
 	// (block notifications from the store, for example) rather than assuming ours arrives first.
@@ -328,7 +332,7 @@ func TestTxIngressLimitMonitorClearsTheFlag(t *testing.T) {
 	require.True(t, full)
 	require.True(t, changed)
 
-	ba.publishTxIngressFull(ctx, true)
+	require.NoError(t, ba.publishTxIngressFull(ctx, true))
 	require.True(t, testItems.blockchainClient.IsBlockAssemblyFull(),
 		"the ingress points must start this test refusing transactions")
 
@@ -734,3 +738,80 @@ func TestTxIngressStartupHoldIsInertWithoutALimit(t *testing.T) {
 // blockchainClientIsFull is a compile-time check that the ingress points can read the flag through
 // the interface they hold, rather than through a concrete client type.
 var _ = func(c blockchain.ClientI) bool { return c.IsBlockAssemblyFull() }
+
+// flakyNotificationClient wraps a blockchain client and fails a set number of SendNotification
+// calls before letting them through, so a test can lose a specific announcement.
+type flakyNotificationClient struct {
+	blockchain.ClientI
+
+	remainingFailures atomic.Int64
+}
+
+func (c *flakyNotificationClient) SendNotification(ctx context.Context, notification *blockchain_api.Notification) error {
+	if c.remainingFailures.Load() > 0 {
+		c.remainingFailures.Add(-1)
+
+		return errors.NewServiceError("[test] notification bus unavailable")
+	}
+
+	return c.ClientI.SendNotification(ctx, notification)
+}
+
+// TestTxIngressLimitMonitorRetriesALostClearingPublish pins the recovery of a transition whose
+// publish failed.
+//
+// The heartbeat re-announces a refusal, so a lost full=true fixes itself. A lost full=false has
+// nothing behind it: not-full is deliberately never repeated, and the monitor reports a transition
+// only once, so without a retry the announcement is simply gone. Every ingress point would then
+// keep refusing until its cached refusal aged out — up to blockAssemblyFullTTL of a node turning
+// away transactions it has room for.
+//
+// The heartbeat here is far longer than the test, and blockAssemblyFullTTL is a minute, so neither
+// can be what reopens ingress. Only the retry can.
+func TestTxIngressLimitMonitorRetriesALostClearingPublish(t *testing.T) {
+	initPrometheusMetrics()
+
+	testItems := setupBlockAssemblyTest(t)
+	require.NotNil(t, testItems)
+
+	ba := testItems.blockAssembler
+
+	const limit = 100
+
+	ba.txIngressLimit = limit
+	ba.txIngressResume = 90
+	ba.txIngressEvaluateInterval = 10 * time.Millisecond
+	ba.txIngressHeartbeatInterval = 10 * time.Minute
+
+	ctx := t.Context()
+
+	// Block assembly filled and told the ingress points to stop. This announcement gets through.
+	full, changed := ba.applyTxIngressCount(limit)
+	require.True(t, full)
+	require.True(t, changed)
+
+	require.NoError(t, ba.publishTxIngressFull(ctx, true))
+	require.True(t, testItems.blockchainClient.IsBlockAssemblyFull(),
+		"arrange: the ingress points must start this test refusing")
+
+	// From here the bus rejects the next few sends, which will swallow the clearing transition and
+	// the first retries of it.
+	flaky := &flakyNotificationClient{ClientI: ba.blockchainClient}
+	flaky.remainingFailures.Store(3)
+	ba.blockchainClient = flaky
+
+	// The assembler now holds far less than the resume watermark, as it would after a block drained
+	// it, so the monitor decides to clear.
+	require.LessOrEqual(t, ba.TransactionsInMemory(), ba.txIngressResume)
+
+	ba.startTxIngressLimitMonitor(ctx)
+
+	require.Eventually(t, func() bool {
+		return !testItems.blockchainClient.IsBlockAssemblyFull()
+	}, 5*time.Second, 10*time.Millisecond,
+		"the clearing transition was lost, so the monitor must retry it; otherwise ingress stays refused until the cached refusal expires")
+
+	require.Zero(t, flaky.remainingFailures.Load(),
+		"the test must actually have exercised the failures it arranged")
+	require.False(t, ba.IsTxIngressFull())
+}

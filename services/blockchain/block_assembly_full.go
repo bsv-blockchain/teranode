@@ -68,9 +68,16 @@ func blockAssemblyFullFromNotification(notification *Notification) bool {
 //
 // Both ClientI implementations that cache the flag embed this, so they age it identically. The zero
 // value reports not-full, which is the safe default for a client that has heard nothing.
+//
+// The flag and its timestamp are one atomic rather than two, because a reader has to see them
+// agree. As two fields, a reader that had already loaded a stale timestamp could win the expiry
+// CompareAndSwap after a concurrent heartbeat had refreshed it, and clear a refusal that was just
+// renewed. Packed, the CompareAndSwap is against the exact instant the reader judged, so a refresh
+// makes it fail and the refusal survives. It also makes "full with no timestamp" unrepresentable.
 type blockAssemblyFullState struct {
-	full        atomic.Bool
-	lastHeardAt atomic.Int64 // unix nanoseconds of the last notification, 0 if none
+	// lastHeardAt is 0 when block assembly is not refusing ingress, and otherwise the unix
+	// nanosecond instant of the announcement that most recently said it is.
+	lastHeardAt atomic.Int64
 }
 
 // set records what block assembly just announced, and reports whether the value changed.
@@ -78,9 +85,17 @@ type blockAssemblyFullState struct {
 // The timestamp is refreshed on every announcement, including a repeated full=true from the
 // heartbeat, because it is the liveness signal that keeps the refusal from expiring.
 func (s *blockAssemblyFullState) set(full bool, now time.Time) (changed bool) {
-	s.lastHeardAt.Store(now.UnixNano())
+	var next int64
 
-	return s.full.Swap(full) != full
+	if full {
+		// A non-zero value is what marks the state full, so the single instant that would encode
+		// as the not-full sentinel is nudged by one nanosecond.
+		if next = now.UnixNano(); next == 0 {
+			next = 1
+		}
+	}
+
+	return (s.lastHeardAt.Swap(next) != 0) != full
 }
 
 // isFull reports whether transaction ingress should be refused.
@@ -96,20 +111,19 @@ func (s *blockAssemblyFullState) set(full bool, now time.Time) (changed bool) {
 // default, but it must not be invisible, so the caller gets one chance to say so. It is reported
 // exactly once because the expiry also clears the cached flag: whoever wins the CompareAndSwap owns
 // reporting it, and every later call takes the cheap not-full path above.
+//
+// The CompareAndSwap is against the exact instant this call judged, not merely against "full", so
+// an announcement that lands between the load and the swap makes it fail. A refusal that block
+// assembly has just renewed is therefore never expired by a reader holding a stale reading.
 func (s *blockAssemblyFullState) isFull(now time.Time) (full bool, expired bool) {
-	if !s.full.Load() {
-		return false, false
-	}
-
 	lastHeardAt := s.lastHeardAt.Load()
 	if lastHeardAt == 0 {
-		// full was set without a timestamp, so treat it as fresh rather than silently ignoring it
-		return true, false
+		return false, false
 	}
 
 	if now.Sub(time.Unix(0, lastHeardAt)) <= blockAssemblyFullTTL {
 		return true, false
 	}
 
-	return false, s.full.CompareAndSwap(true, false)
+	return false, s.lastHeardAt.CompareAndSwap(lastHeardAt, 0)
 }

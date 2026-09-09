@@ -171,7 +171,7 @@ func (u *Server) subtreesHandler(ctx context.Context, hash *chainhash.Hash, base
 	// aware of is that a transaction announced only during the full window, whose subtree is never
 	// mined by anyone, stays out of this node's template for the life of the process.
 	if u.blockchainClient != nil && u.blockchainClient.IsBlockAssemblyFull() {
-		prometheusSubtreeValidationTxsNotAddedToBlockAssemblyFull.Inc()
+		prometheusSubtreeValidationSubtreesNotAddedToBlockAssemblyFull.Inc()
 
 		validationOptions = append(validationOptions, validator.WithAddTXToBlockAssembly(false))
 	}

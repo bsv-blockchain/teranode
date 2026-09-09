@@ -876,7 +876,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	// rather than resubmitting, which is the opposite of what the HTTP surface is told, where the
 	// same refusal maps to 503 precisely so the client backs off and retries.
 	//
-	// ErrRPCOutOfMemory (-7) is Bitcoin Core's code for a node that ran out of room during an
+	// ErrRPCOutOfMemory (-7) is SVNode's code for a node that ran out of room during an
 	// operation. It is a node-resource condition rather than a transaction verdict, which is exactly
 	// what this is, and it is already in the set of codes existing clients understand.
 	if s.blockchainClient != nil && s.blockchainClient.IsBlockAssemblyFull() {

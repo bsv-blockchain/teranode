@@ -481,14 +481,20 @@ func (b *BlockAssembler) applyTxIngressCount(count uint64) (full bool, changed b
 // It goes over the blockchain notification bus rather than the FSM, because fullness is orthogonal
 // to the node lifecycle: a full node must stay RUNNING so that p2p sync, catchup and legacy sync
 // keep working. Ingress points cache the value and read it per transaction.
-func (b *BlockAssembler) publishTxIngressFull(ctx context.Context, full bool) {
+// Returns:
+//   - error: nil once the notification is away, or when there is no blockchain client to send it to
+func (b *BlockAssembler) publishTxIngressFull(ctx context.Context, full bool) error {
 	if b.blockchainClient == nil {
-		return
+		return nil
 	}
 
 	if err := b.blockchainClient.SendNotification(ctx, blockchain.NewBlockAssemblyFullNotification(full)); err != nil {
 		b.logger.Errorf("[BlockAssembler] error publishing transaction ingress full=%t: %v", full, err)
+
+		return err
 	}
+
+	return nil
 }
 
 // startTxIngressLimitMonitor watches how many transactions block assembly holds in memory and keeps
@@ -532,6 +538,10 @@ func (b *BlockAssembler) startTxIngressLimitMonitor(ctx context.Context) {
 		// longer refusing anything, and any alert built on it would never clear.
 		defer prometheusBlockAssemblerTxIngressFull.Set(0)
 
+		// Set while a transition has been decided but not yet successfully announced. Owned by
+		// this goroutine alone, so it needs no synchronisation.
+		publishPending := false
+
 		evaluateTicker := time.NewTicker(b.txIngressEvaluateInterval)
 		defer evaluateTicker.Stop()
 
@@ -547,8 +557,26 @@ func (b *BlockAssembler) startTxIngressLimitMonitor(ctx context.Context) {
 			case <-evaluateTicker.C:
 				full, changed := b.evaluateTxIngressFull()
 				if changed {
-					b.publishTxIngressFull(ctx, full)
+					publishPending = true
+
 					prometheusBlockAssemblerTxIngressFull.Set(boolToFloat64(full))
+				}
+
+				// Retry a transition whose publish failed, and keep retrying until one lands.
+				//
+				// A lost full=true recovers on its own, because the heartbeat below re-announces
+				// it. A lost full=false does not: not-full is deliberately never repeated, so
+				// nothing else would ever carry it. Without this retry the ingress points would go
+				// on refusing until their cached refusal expired, which is up to
+				// blockAssemblyFullTTL of a node turning away transactions it has room for.
+				//
+				// The value published is the current one rather than the one that failed. A
+				// further transition in the meantime supersedes it, and the ingress points only
+				// ever want the latest.
+				if publishPending {
+					if err := b.publishTxIngressFull(ctx, full); err == nil {
+						publishPending = false
+					}
 				}
 
 			case <-heartbeatTicker.C:
@@ -559,7 +587,7 @@ func (b *BlockAssembler) startTxIngressLimitMonitor(ctx context.Context) {
 				// converges through the same expiry. Repeating it would also clear a refusal this
 				// process has not yet re-established, while it is still reloading its unmined set.
 				if b.txIngressFull.Load() {
-					b.publishTxIngressFull(ctx, true)
+					_ = b.publishTxIngressFull(ctx, true)
 				}
 			}
 		}

@@ -1,6 +1,7 @@
 package blockchain
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -172,6 +173,84 @@ func TestBlockAssemblyFullStateExpiry(t *testing.T) {
 
 		require.True(t, fullAt(&s, base.Add(2*time.Second+blockAssemblyFullTTL)))
 		require.False(t, fullAt(&s, base.Add(2*time.Second+blockAssemblyFullTTL+time.Nanosecond)))
+	})
+
+	t.Run("a refusal renewed during the expiry check survives it", func(t *testing.T) {
+		// The flag and its timestamp are one atomic so that a reader cannot expire a refusal that
+		// block assembly renewed while the reader was deciding. Held as two fields, a reader that
+		// had already loaded the stale timestamp could still win the clearing CompareAndSwap after
+		// the heartbeat had refreshed it, and reopen ingress against a block assembly that is
+		// genuinely full.
+		//
+		// The renewal here stands in for that heartbeat landing mid-decision.
+		var s blockAssemblyFullState
+
+		s.set(true, base)
+
+		stale := base.Add(blockAssemblyFullTTL + time.Nanosecond)
+
+		// Block assembly re-announces before the reader commits its verdict.
+		s.set(true, stale)
+
+		full, expired := s.isFull(stale)
+		require.True(t, full, "a refusal renewed at this instant must be honoured, not expired")
+		require.False(t, expired)
+	})
+
+	t.Run("a heartbeat racing the expiry never loses the refusal", func(t *testing.T) {
+		// The interleaving the packing exists to prevent: a reader loads a timestamp that is past
+		// the TTL, block assembly's heartbeat renews the refusal, and only then does the reader
+		// commit its clearing swap. Held as two fields that swap wins, because it only checks that
+		// the flag is still "full" and not that the reading it judged is still current. Ingress
+		// then reopens against a block assembly that never stopped being full, and stays open
+		// until the next heartbeat.
+		//
+		// Packed, the swap is against the exact instant the reader judged, so the renewal makes it
+		// fail.
+		//
+		// The window is only the few nanoseconds a reader spends between loading the timestamp and
+		// committing its swap, so this hunts for it rather than arranging it. Measured against the
+		// two-field version, one reader in roughly 370 lands inside it; at this iteration count the
+		// old code loses a refusal many times over, and missing every one of them is not a
+		// probability worth writing down.
+		const (
+			iterations = 20_000
+			readers    = 3
+		)
+
+		fresh := base.Add(blockAssemblyFullTTL + time.Nanosecond)
+
+		for range iterations {
+			var s blockAssemblyFullState
+
+			// A refusal that is stale by exactly one nanosecond, so every reader below decides to
+			// expire it.
+			s.set(true, base)
+
+			var wg sync.WaitGroup
+
+			wg.Add(1 + readers)
+
+			// Block assembly's heartbeat.
+			go func() {
+				defer wg.Done()
+				s.set(true, fresh)
+			}()
+
+			// Ingress points deciding whether to accept a transaction.
+			for range readers {
+				go func() {
+					defer wg.Done()
+					s.isFull(fresh)
+				}()
+			}
+
+			wg.Wait()
+
+			full, _ := s.isFull(fresh)
+			require.True(t, full,
+				"the heartbeat renewed the refusal, so no reader may have cleared it")
+		}
 	})
 
 	t.Run("the TTL leaves room for the publisher heartbeat", func(t *testing.T) {

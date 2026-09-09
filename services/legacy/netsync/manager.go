@@ -1238,8 +1238,16 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	// ingress point that needs the same gate.
 	//
 	// The transaction is NOT added to rejectedTxns, because this is a transient condition rather
-	// than a fault in the transaction. Clearing the requested-transaction bookkeeping lets us fetch
-	// it again from a later inv message, once block assembly has room.
+	// than a fault in the transaction. Clearing the requested-transaction bookkeeping means a later
+	// inv for it is not suppressed as already-requested once block assembly has room.
+	//
+	// That is the bookkeeping, not a promise of recovery. A peer sends an inv for a given
+	// transaction once, so unless some peer announces it again this node does not see it until a
+	// block carries it. Within this process the transaction is therefore absent from the mining
+	// template for the rest of the full window, exactly as for the subtree gate in
+	// subtreevalidation. The cost is a lost fee opportunity on this node, never a consensus or
+	// durability failure: the transaction is valid, other nodes hold it, and the block that mines
+	// it validates here normally.
 	if sm.blockchainClient != nil && sm.blockchainClient.IsBlockAssemblyFull() {
 		sm.logger.Debugf("Dropping transaction %v from %s, block assembly is full", txHash, peer)
 
@@ -2450,6 +2458,12 @@ func (sm *SyncManager) processInvMsg(i int, iv *wire.InvVect, processInvs bool, 
 			// transaction, would re-issue getdata and re-download it in full, for as long as
 			// block assembly stays full — paying inbound bandwidth and deserialization for
 			// traffic we throw away, exactly while the node is short of memory.
+			//
+			// Skipping the announcement costs nothing beyond what handleTxMsg would have dropped
+			// anyway. Neither path revisits the transaction when the flag clears — a peer does not
+			// re-announce what it has already announced — so it enters this node's mining template
+			// only when a block carrying it arrives, or on the next restart via the unmined reload.
+			// See the note in handleTxMsg.
 			if sm.blockchainClient != nil && sm.blockchainClient.IsBlockAssemblyFull() {
 				prometheusLegacyNetsyncTxInvsSkippedBlockAssemblyFull.Inc()
 
