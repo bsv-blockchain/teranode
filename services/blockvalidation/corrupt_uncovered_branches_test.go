@@ -399,6 +399,125 @@ func TestValidateBlocksOnChannel_CorruptBody_CleansUpAndPreservesClassification(
 	}
 }
 
+// TestValidateBlocksOnChannel_CommittedSubtreeSurvivesLaterCorruptCleanup pins the run-scoped
+// committed-dependency guard end to end (bitcoin-sv/teranode#4692). Two blocks arrive in one catchup
+// run naming the SAME subtree hash — the shape a doctored body gets for free, since it only has to
+// name another in-run block's subtree hashes against a real header from the primary's own chain.
+// The first block validates and commits; the second is corrupt, and its attempt-scoped freshness
+// names both the shared hash and a hash of its own. Cleanup must skip the shared hash, because the
+// chain now depends on it and nothing in this package would ever regenerate those blobs for a block
+// that is already committed, while still deleting the corrupt attempt's own.
+//
+// Mutation proof: removing the catchupCtx.markSubtreesCommitted call at validateBlocksOnChannel's
+// success tail (or the subtreeCommitted skip inside removeCatchupSubtreeFiles) deletes the shared
+// hash's blobs and reddens the survival assertions.
+func TestValidateBlocksOnChannel_CommittedSubtreeSurvivesLaterCorruptCleanup(t *testing.T) {
+	suite := NewCatchupTestSuite(t)
+	defer suite.Cleanup()
+	setupQuickValidateMocks(suite)
+
+	suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
+	suite.MockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
+		Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil).Maybe()
+	suite.MockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).
+		Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100, MinedSet: true}, nil).Maybe()
+	suite.MockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	easyNBits, _ := model.NewNBitFromString("207fffff")
+	suite.MockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(easyNBits, nil).Maybe()
+
+	// The second block's corrupt verdict comes from subtree validation on the FULL path. The first
+	// block is below the run's highest verified checkpoint, so it never reaches this client.
+	subtreeVal := &subtreevalidation.MockSubtreeValidation{}
+	subtreeVal.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(errors.NewBlockCorruptError("[CheckBlockSubtrees] duplicate transaction in received subtree (CVE-2012-2459)"))
+	suite.Server.blockValidation.subtreeValidationClient = subtreeVal
+
+	committedBlock := buildOneSubtreeBlock(t, suite, 100)
+	sharedHash := *committedBlock.Subtrees[0]
+
+	// The second block NAMES the same subtree hash — which is the whole point here, and is what a
+	// doctored body gets for free. Built as a distinct block over the first block's header (moved
+	// off it by the nonce, then re-mined to the easy target the full path checks before subtree
+	// validation) rather than through the builder again, since the blobs for that hash are already
+	// in the store.
+	//
+	// It names TWO subtrees: the shared one, and one of its own. The second is the control that
+	// makes this test pin "registered only AFTER success" on its own — registering at the wrong
+	// point (above the error handling, or inside tryQuickValidation) would protect the corrupt
+	// block's own subtrees too and silently disable the cleanup entirely.
+	ownHash := chainhash.HashH([]byte("corrupt-attempt-own-subtree"))
+	corruptHeader := *committedBlock.Header
+	corruptBlock := &model.Block{
+		Header:           &corruptHeader,
+		CoinbaseTx:       committedBlock.CoinbaseTx,
+		Subtrees:         []*chainhash.Hash{&sharedHash, &ownHash},
+		TransactionCount: committedBlock.TransactionCount,
+		Height:           101,
+	}
+
+	corruptBlock.Header.Nonce += 1_000_000
+	for {
+		if ok, _, _ := corruptBlock.Header.HasMetTargetDifficulty(); ok {
+			break
+		}
+
+		corruptBlock.Header.Nonce++
+	}
+
+	require.NotEqual(t, committedBlock.Hash().String(), corruptBlock.Hash().String())
+
+	// The corrupt attempt's own subtree blobs: freshly written by it, depended on by nothing that
+	// committed, so they must still be deleted — the guard narrows deletion, it does not disable it.
+	peerSuppliedTypes := []fileformat.FileType{fileformat.FileTypeSubtreeToCheck, fileformat.FileTypeSubtreeData}
+	for _, ft := range peerSuppliedTypes {
+		require.NoError(t, suite.Server.subtreeStore.Set(suite.Ctx, ownHash[:], ft, []byte{0x01}))
+	}
+
+	catchupCtx := &CatchupContext{
+		blockUpTo:               corruptBlock,
+		baseURL:                 "http://peer",
+		peerID:                  "peer-corrupt",
+		startTime:               time.Now(),
+		useQuickValidation:      true,
+		highestCheckpointHeight: 100, // block 100 takes the quick path, block 101 the full one
+	}
+
+	writeJobsChan := make(chan *SubtreeWriteJob, 16)
+	go func() { _ = suite.Server.blockValidation.subtreeWriteWorker(suite.Ctx, writeJobsChan) }()
+
+	// The corrupt attempt's own fetch-phase freshness names both hashes, exactly as it would if the
+	// doctored body listed a subtree an earlier in-run block also used.
+	corruptFreshlyWritten := map[chainhash.Hash]map[fileformat.FileType]struct{}{
+		sharedHash: {fileformat.FileTypeSubtreeToCheck: {}, fileformat.FileTypeSubtreeData: {}},
+		ownHash:    {fileformat.FileTypeSubtreeToCheck: {}, fileformat.FileTypeSubtreeData: {}},
+	}
+
+	validateBlocksChan := make(chan blockForValidation, 2)
+	validateBlocksChan <- blockForValidation{block: committedBlock}
+	validateBlocksChan <- blockForValidation{block: corruptBlock, freshlyWritten: corruptFreshlyWritten}
+	close(validateBlocksChan)
+
+	var size atomic.Int64
+	size.Store(2)
+
+	err := suite.Server.validateBlocksOnChannel(validateBlocksChan, suite.Ctx, catchupCtx, &size, writeJobsChan)
+	require.Error(t, err)
+	require.True(t, errors.IsBlockCorrupt(err), "the corrupt verdict must propagate, got: %v", err)
+	require.True(t, catchupCtx.subtreeCommitted(sharedHash), "the first block committed, so its subtree must be registered")
+	require.False(t, catchupCtx.subtreeCommitted(ownHash),
+		"the corrupt block never committed, so the subtrees it names must NOT be registered — registration belongs after the error handling, not before it")
+
+	for _, ft := range peerSuppliedTypes {
+		exists, existsErr := suite.Server.subtreeStore.Exists(suite.Ctx, sharedHash[:], ft)
+		require.NoError(t, existsErr)
+		require.True(t, exists, "%s must survive: a block already committed in this run depends on this subtree", ft)
+
+		exists, existsErr = suite.Server.subtreeStore.Exists(suite.Ctx, ownHash[:], ft)
+		require.NoError(t, existsErr)
+		require.False(t, exists, "%s belongs only to the corrupt attempt and must still be deleted", ft)
+	}
+}
+
 // warnCaptureLogger records Warnf messages so a test can assert what was logged, delegating every
 // other method to an embedded real test logger.
 type warnCaptureLogger struct {

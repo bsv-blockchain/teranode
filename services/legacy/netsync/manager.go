@@ -1698,15 +1698,20 @@ func (sm *SyncManager) requestMissingBlocks(peer *peerpkg.Peer, blockHash chainh
 // Setting sm.requestedBlocks also de-duplicates against the inv route: that loop skips a hash
 // already present there, so a getblocks issued alongside this call cannot request the same block a
 // second time.
-func (sm *SyncManager) requestBlockDirect(peer *peerpkg.Peer, state *peerSyncState, blockHash chainhash.Hash) {
+//
+// origin is the provenance the dropped delivery carried, re-armed unchanged. This re-request is the
+// same hash from the same header run, so its ancestry proof is the one blockOrigin already read
+// before the corrupt branch cleared the maps — restoring it grants nothing the entry did not already
+// have, and a delivery that was never header-proven stays unproven and takes full validation.
+func (sm *SyncManager) requestBlockDirect(peer *peerpkg.Peer, state *peerSyncState, blockHash chainhash.Hash, origin blockRequestOrigin) {
 	getDataMessage := wire.NewMsgGetDataSizeHint(1)
 	if err := getDataMessage.AddInvVect(wire.NewInvVect(wire.InvTypeBlock, &blockHash)); err != nil {
 		sm.logger.Warnf(unexpectedFailureAddingInventoryMsg, err)
 		return
 	}
 
-	sm.requestedBlocks.Set(blockHash, struct{}{})
-	state.requestedBlocks.Set(blockHash, struct{}{})
+	sm.requestedBlocks.Set(blockHash, origin)
+	state.requestedBlocks.Set(blockHash, origin)
 
 	sm.logger.Debugf("[requestBlockDirect][%s] re-requesting dropped block from %s", blockHash, peer)
 
@@ -1886,10 +1891,29 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// would getdata the same capped peer, whose delivery this gate drops again after the full
 	// block body has crossed the wire but before HandleBlockDirect, i.e. one full block download
 	// per iteration for the whole cooldown window (blockvalidation_corrupt_attempt_cooldown,
-	// default 10m). Recovery is sync-peer rotation instead: with the stall timer not refreshed,
-	// CheckSyncPeer rotates after maxLastBlockTime (180 s) via updateSyncPeer, which calls
-	// resetHeaderState and startSync, and the dropped hash is re-requested from the new sync peer.
-	// So the cost of a capped hash here is bounded latency, not a lost block.
+	// default 10m). Recovery is sync-peer rotation instead.
+	//
+	// The pipeline is deliberately NOT refilled here either, unlike the corrupt branch below.
+	// In headers-first mode the header list is a linear chain, so every block a refill would
+	// request descends from the hash just dropped: each of those bodies crosses the wire in full,
+	// refreshes the sync peer's stall timer at RECEIPT inside HandleBlockDirect, and then fails its
+	// parent lookup — and because this gate deliberately does not mark the hash failed, the
+	// descendant short-circuit does not stop them either. Refilling from here would therefore
+	// download and discard bodies that cannot be accepted while postponing the only recovery this
+	// path has.
+	//
+	// It narrows the waste rather than eliminating it, and the comment should not claim more: any
+	// block still in flight at a LOWER height that arrives and validates runs the acceptance
+	// footer, which refills unconditionally in headers-first mode, advances sm.startHeader and so
+	// requests descendants of the dropped hash anyway. What this gate no longer does is CONTRIBUTE
+	// to that; the residual is bounded by the in-flight window, which then drains.
+	//
+	// When rotation begins, precisely: this delivery does not refresh the stall timer, but bodies
+	// already in flight still do at receipt, so the clock starts once the in-flight window (bounded
+	// by calculateMaxInFlightBlocks) has drained. maxLastBlockTime (180 s) then elapses with no
+	// delivery, CheckSyncPeer rotates via updateSyncPeer, which calls resetHeaderState and
+	// startSync, and the dropped hash is re-requested from the new sync peer. So the cost of a
+	// capped hash here is bounded latency, not a lost block.
 	//
 	// The fixed window still self-heals directly in the two cases that do not depend on rotation:
 	// a peer below the cap is never dropped here at all, and outside headers-first mode a later
@@ -1897,17 +1921,6 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// Once the window lapses the counter resets and the same peer's honest body is admitted.
 	if sm.corruptBlockAttemptsExhausted(bmsg.blockHash, bmsg.peer.Addr()) {
 		sm.logger.Warnf("[handleBlockMsg][%s] corrupt re-download cap reached for peer %s; dropping delivery until the cooldown window expires (not rejected, not stored invalid)", bmsg.blockHash, bmsg.peer)
-
-		// Headers-first: refill before returning, for the same reason the corrupt branch below does
-		// (see refillHeaderBlockPipeline) — this gate has already consumed the headerList entry and
-		// the requestedBlocks slot above, so without a refill every capped delivery drains one
-		// in-flight slot and recovery waits on the stall timer (bitcoin-sv/teranode#4692). Pipeline maintenance only: no accepted-block bookkeeping runs on
-		// a dropped delivery.
-		if sm.headersFirstMode.Load() {
-			if refillErr := sm.refillHeaderBlockPipeline(peer, state); refillErr != nil {
-				sm.logger.Warnf("[handleBlockMsg][%s] header-block pipeline refill after corrupt-cap drop failed: %v", bmsg.blockHash, refillErr)
-			}
-		}
 
 		return nil
 	}
@@ -2035,7 +2048,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 				// deliberate — a body can be corrupted in transit by an honest relay — and is bounded
 				// by the per-(hash, peerID) corrupt cap above, after which that peer's deliveries are
 				// dropped for the cooldown window and recovery falls back to sync-peer rotation.
-				sm.requestBlockDirect(peer, state, bmsg.blockHash)
+				sm.requestBlockDirect(peer, state, bmsg.blockHash, blockOrigin)
 
 				// Keep the getblocks as well: in the legacy sync protocol it doubles as the
 				// batch-continuation signal (see requestMissingBlocks), which a getdata does not carry.
@@ -2280,10 +2293,16 @@ func (sm *SyncManager) blockOrigin(state *peerSyncState, blockHash chainhash.Has
 // refillHeaderBlockPipeline tops up the headers-first download pipeline so it stays at the dynamic
 // in-flight limit, requesting the next batch of block downloads (bitcoin-sv/teranode#4692). It does
 // ONLY pipeline maintenance — no accepted-block bookkeeping (no rejected-tx clear, no peer-height
-// update, no FSM RUN, no fee-filter reset) — so it is safe to call on a FAILED delivery too. On the
-// corrupt-body drop it is called before returning: without it a headers-first corrupt drop never
-// refills, the in-flight blocks drain each failing on their missing parent, and recovery waits ~180s
-// for the stall timer (bitcoin-sv/teranode#4692). Returns an error only if the getblocks fallback fails.
+// update, no FSM RUN, no fee-filter reset) — so it is safe to call on a FAILED delivery too.
+//
+// Safe to call is not the same as correct to call, and the two corrupt-body sites differ. On the
+// corrupt branch a refill is right, because that branch re-arms the failing hash itself in the same
+// breath (requestBlockDirect plus requestMissingBlocks), so the descendants it requests have a
+// parent on the way. On the per-(hash, peer) corrupt-cap gate it is wrong and is deliberately not
+// called: that gate re-arms nothing, so in headers-first mode every block a refill would request
+// descends from a hash that will never arrive, and each such body resets the stall timer at receipt
+// before failing its parent lookup — deferring the rotation that is that gate's only recovery.
+// Returns an error only if the getblocks fallback fails.
 //
 // This is the locking entry point, for the corrupt-body drop, which returns long before
 // handleBlockMsg's acceptance footer takes headerMu. The footer itself already holds the mutex and

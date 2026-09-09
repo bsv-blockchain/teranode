@@ -2,13 +2,17 @@ package netsync
 
 import (
 	"container/list"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
 	blockchain2 "github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -59,21 +63,37 @@ func TestHandleBlockMsg_CorruptCapDropsBeforeHandleBlockDirect(t *testing.T) {
 	_, failed := sm.recentlyFailedBlocks.Get(blockHash)
 	require.False(t, failed, "the cap drop must not mark the block failed (preserves the no-NOT_FOUND-cascade property)")
 
-	// This is also the NON-headers-first half of the mode gate added for bitcoin-sv/teranode#4692: the
-	// pipeline refill must fire only in headers-first mode. refillHeaderBlockPipeline's only route to
-	// the blockchain client is GetBestBlockHeader (via current() and its own fallback), so its absence
-	// proves the refill did not run here.
+	// The gate does no pipeline maintenance either (bitcoin-sv/teranode#4692).
+	// refillHeaderBlockPipeline's only route to the blockchain client is GetBestBlockHeader (via
+	// current() and its own fallback), so its absence proves the refill did not run here.
 	blockchainClient.AssertNotCalled(t, "GetBestBlockHeader", mock.Anything)
 }
 
-// TestHandleBlockMsg_CorruptCapRefillsHeaderPipeline covers bitcoin-sv/teranode#4692
-// (bitcoin-sv/teranode#4692): the cap gate runs AFTER the headerList entry and the requestedBlocks
-// slot have already been consumed, so in headers-first mode a capped delivery drains one in-flight
-// slot. Without a refill the remaining in-flight blocks each fail on their missing parent and
-// recovery waits on the ~180s stall timer — exactly the reason the sibling corrupt branch refills.
-// The refill is proven by GetBestBlockHeader being reached, which only refillHeaderBlockPipeline can
-// do on this path; HandleBlockDirect must still never run.
-func TestHandleBlockMsg_CorruptCapRefillsHeaderPipeline(t *testing.T) {
+// TestHandleBlockMsg_CorruptCapDoesNotRefillHeaderPipeline pins the headers-first half of the
+// corrupt-cap gate (bitcoin-sv/teranode#4692): the gate drops the delivery and refills NOTHING, so no
+// getdata reaches the peer as a result of the drop, and the function still returns nil.
+//
+// The refill this replaces was counter-productive, not merely useless. In headers-first mode the
+// header list is a linear chain, so every block a refill requests descends from the hash just
+// dropped: each body crosses the wire in full, refreshes the sync peer's stall timer at receipt
+// inside HandleBlockDirect, and then fails its parent lookup — and because the gate deliberately
+// does not mark the hash failed, the descendant short-circuit does not stop them either. So the
+// refill downloaded and discarded the remaining header window while postponing the sync-peer
+// rotation that is this path's only recovery.
+//
+// The assertion is the outcome on the wire, not a blockchain-read count: a connected peer pair whose
+// remote end records any block getdata that arrives. The fixture is deliberately arranged so a
+// refill WOULD send one — a sync peer is stored, headerList holds pending nodes, startHeader points
+// at the first of them, and the gate's own deletions leave requestedBlocks below the dynamic
+// in-flight limit — which is exactly the fetchHeaderBlocks branch refillHeaderBlockPipeline takes.
+//
+// Mutation proof: restoring the headersFirstMode refill block on this gate puts a getdata on the
+// wire and reddens the assertion. The positive control against over-applying the removal is
+// TestHandleBlockMsg_CorruptBody_HeadersFirst_ReRequestsBlock, which drives the SIBLING corrupt
+// branch over the same pipeline fixture and asserts a getdata for a pending header hash — so
+// deleting the refill from that branch too reddens it, and this test cannot pass by breaking refill
+// everywhere.
+func TestHandleBlockMsg_CorruptCapDoesNotRefillHeaderPipeline(t *testing.T) {
 	prevHash := chainhash.Hash{0x02}
 	msgBlock := wire.NewMsgBlock(wire.NewBlockHeader(1, &prevHash, &chainhash.Hash{}, 0, 0))
 	blockHash := msgBlock.Header.BlockHash()
@@ -81,21 +101,54 @@ func TestHandleBlockMsg_CorruptCapRefillsHeaderPipeline(t *testing.T) {
 	catchingBlocks := blockchain2.FSMStateCATCHINGBLOCKS
 	blockchainClient := &blockchain2.Mock{}
 	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&catchingBlocks, nil)
-	// The refill's fallback branch reads the best header. Returning an error keeps this test off the
-	// network (the refill logs and returns) while still recording that the call was made.
+	// What a refill would need on its way to the wire: haveInventory reports "not held" for every
+	// pending header, which is the branch that requests it.
+	blockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
+		Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil), errors.NewNotFoundError("not found")).Maybe()
 	blockchainClient.On("GetBestBlockHeader", mock.Anything).
-		Return(nil, nil, errors.NewServiceError("no best block header in this fixture"))
+		Return(nil, nil, errors.NewServiceError("no best block header in this fixture")).Maybe()
 
-	sm, p := newBackoffTestManager(t, blockchainClient, blockHash)
+	var gotGetData atomic.Bool
+	remoteCfg := peer.Config{
+		Listeners: peer.MessageListeners{
+			OnGetData: func(_ *peer.Peer, msg *wire.MsgGetData) {
+				for _, iv := range msg.InvList {
+					if iv.Type == wire.InvTypeBlock {
+						gotGetData.Store(true)
+					}
+				}
+			},
+		},
+		UserAgentName:    "btcdtest",
+		UserAgentVersion: "1.0",
+		ChainParams:      &chaincfg.MainNetParams,
+	}
+	localCfg := peer.Config{
+		Listeners:        peer.MessageListeners{},
+		UserAgentName:    "btcdtest",
+		UserAgentVersion: "1.0",
+		ChainParams:      &chaincfg.MainNetParams,
+	}
+
+	remote, p, err := MakeConnectedPeers(t, remoteCfg, localCfg, 120)
+	require.NoError(t, err)
+	require.True(t, remote.Connected())
+
+	sm := newBackoffTestManagerForPeer(t, blockchainClient, blockHash, p)
 	sm.settings.BlockValidation.MaxCorruptAttemptsPerBlock = 2
 	sm.blockCorruptAttempts = expiringmap.New[legacyCorruptAttemptKey, *corruptAttemptState](10 * time.Minute)
 	t.Cleanup(func() { sm.blockCorruptAttempts.Stop() })
 
-	// Headers-first with an empty header list and no start header: the refill takes its fallback
-	// branch, which is enough to observe that it ran at all.
+	// Headers-first, with a pipeline a refill could genuinely top up: pending header nodes, a
+	// startHeader pointing at them, and this peer stored as the sync peer.
 	sm.headersFirstMode.Store(true)
 	sm.headerList = list.New()
+	for i := byte(1); i <= 2; i++ {
+		sm.headerList.PushBack(&headerNode{height: int32(100 + i), hash: &chainhash.Hash{i}})
+	}
+	sm.startHeader = sm.headerList.Front()
 	sm.blockSizeTracker = newBlockSizeTracker(10)
+	sm.storeSyncPeer(p, &syncPeerState{})
 
 	require.Equal(t, 1, sm.recordCorruptBlockAttempt(blockHash, p.Addr()))
 	require.Equal(t, 2, sm.recordCorruptBlockAttempt(blockHash, p.Addr()))
@@ -104,7 +157,7 @@ func TestHandleBlockMsg_CorruptCapRefillsHeaderPipeline(t *testing.T) {
 	state, ok := sm.peerStates.Get(p)
 	require.True(t, ok)
 
-	err := sm.handleBlockMsg(&blockQueueMsg{
+	err = sm.handleBlockMsg(&blockQueueMsg{
 		block:       msgBlock,
 		blockHash:   blockHash,
 		blockHeight: 101,
@@ -113,7 +166,9 @@ func TestHandleBlockMsg_CorruptCapRefillsHeaderPipeline(t *testing.T) {
 
 	require.NoError(t, err, "a capped corrupt hash is still dropped quietly")
 
-	blockchainClient.AssertCalled(t, "GetBestBlockHeader", mock.Anything)
+	require.False(t, WaitUntil(func() bool { return gotGetData.Load() }, 750*time.Millisecond),
+		"the cap drop must not put any block getdata on the wire — every block a refill would request descends from the dropped hash")
+
 	blockchainClient.AssertNotCalled(t, "GetBlockExists", mock.Anything, mock.Anything)
 
 	// Pipeline maintenance ONLY: a dropped delivery must not run accepted-block bookkeeping.

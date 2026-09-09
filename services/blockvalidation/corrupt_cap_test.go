@@ -15,10 +15,12 @@ import (
 )
 
 // TestOptimisticMiningDisabledForPeerPath pins the item-1 operator gate truth table
-// (bitcoin-sv/teranode#4692): optimistic mining is enabled on the peer/catch-up paths ONLY when BOTH
-// OptimisticMining AND OptimisticMiningPeerBlocks are set, so the global opt-out always wins and the
-// new peer-blocks flag can never bypass it. In particular (false, true) must stay disabled. It also
+// (bitcoin-sv/teranode#4692): optimistic mining is enabled on the peer-served new-block path ONLY when
+// BOTH OptimisticMining AND OptimisticMiningPeerBlocks are set, so the global opt-out always wins and
+// the new peer-blocks flag can never bypass it. In particular (false, true) must stay disabled. It also
 // pins the legacy-route hard-disable: a "legacy" baseURL is non-optimistic whatever the flags say.
+// The catch-up path does not consult this helper at all — it is unconditionally non-optimistic, which
+// TestValidateBlocksOnChannel_CatchupIsNeverOptimistic pins separately.
 func TestOptimisticMiningDisabledForPeerPath(t *testing.T) {
 	cases := []struct {
 		global   bool

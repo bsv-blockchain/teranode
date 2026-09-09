@@ -26,8 +26,8 @@
 | ValidateBlockSubtreesConcurrency | int | max(4, CPU/2) | blockvalidation_validateBlockSubtreesConcurrency | Block subtree validation concurrency |
 | ValidationMaxRetries | int | 3 | blockvalidation_validation_max_retries | Validation retry attempts |
 | ValidationRetrySleep | time.Duration | 5s | blockvalidation_validation_retry_sleep | Validation retry delay |
-| OptimisticMining | bool | true | blockvalidation_optimistic_mining | Optimistic mining behavior (global; peer/catch-up paths also require OptimisticMiningPeerBlocks) |
-| OptimisticMiningPeerBlocks | bool | false | blockvalidation_optimistic_mining_peer_blocks | Opt in to optimistic mining on peer-served and catch-up paths (accepts the invalidate-route tradeoff) |
+| OptimisticMining | bool | true | blockvalidation_optimistic_mining | Optimistic mining behavior (global; the peer-served path also requires OptimisticMiningPeerBlocks, and catch-up is never optimistic) |
+| OptimisticMiningPeerBlocks | bool | false | blockvalidation_optimistic_mining_peer_blocks | Opt in to optimistic mining on the peer-served path (accepts the invalidate-route tradeoff) |
 | MaxCorruptAttemptsPerBlock | int | 3 | blockvalidation_max_corrupt_attempts_per_block | Ban-score-independent per-(block hash, serving peerID) cap on corrupt re-downloads; also sizes the separate local-policy decline cap (0 disables, re-opening the DoS) |
 | CorruptAttemptCooldown | time.Duration | 10m | blockvalidation_corrupt_attempt_cooldown | Fixed cooldown window after which a capped (hash, peerID) is admitted again, for both caps |
 | IsParentMinedRetryMaxRetry | int | 45 | blockvalidation_isParentMined_retry_max_retry | Parent mining check retries |
@@ -92,11 +92,15 @@
 - `OptimisticMining = true`: enables background validation for performance on paths that opt in
 - Block validation proceeds while subtree validation runs in the background
 - Can be overridden per-validation via the `DisableOptimisticMining` option
-- **On the peer-served and catch-up validation paths optimistic mining is OFF unless BOTH
+- **On the peer-served validation path optimistic mining is OFF unless BOTH
   `blockvalidation_optimistic_mining` AND `blockvalidation_optimistic_mining_peer_blocks` are set**
   (default `(true, false)` = off). The global flag being false always wins, so the peer-blocks flag
   can never bypass it (bitcoin-sv/teranode#4692). Revalidation of an already-stored block is always
   non-optimistic regardless of these flags.
+- **The catch-up path is always non-optimistic**, whatever these two flags are set to. It validates
+  against a cached header run holding only the block's in-batch predecessors, which cannot carry the
+  median-time-past window the optimistic branch checks synchronously; lifting this requires the
+  header cache to top up short windows from the store first (issue 1499).
 - **Opt-in tradeoff:** with both flags set, a corrupt body on the optimistic-background path is
   already added before background validation runs, so it takes the *invalidate route* (it is
   invalidated/poisoned rather than re-downloaded) until the `block.Valid` integrity-floor split lands
