@@ -4,7 +4,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -80,4 +82,26 @@ func TestNodeAllocFromPool_IsAdapter(t *testing.T) {
 	var alloc subtreepkg.NodeAllocator = NodeAllocFromPool
 	s := alloc(800)
 	require.GreaterOrEqual(t, cap(s), 800)
+}
+
+// TestReleaseBlockNodes_NilsSubtreeSliceEntries pins the fix for the
+// release-then-requeue poisoning (2026-08-11 scale-2 freeze): after
+// releaseBlockNodes, the block's SubtreeSlices entries must be nil so that any
+// later revalidation of the same *Block sees them as not loaded and reloads
+// from the store, instead of failing "first subtree has no nodes" on subtrees
+// whose Nodes were stripped back into the pool.
+func TestReleaseBlockNodes_NilsSubtreeSliceEntries(t *testing.T) {
+	st, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, st.AddCoinbaseNode())
+
+	hash := chainhash.HashH([]byte("tx"))
+	require.NoError(t, st.AddNode(hash, 1, 0))
+
+	b := &model.Block{SubtreeSlices: []*subtreepkg.Subtree{st, nil}}
+
+	releaseBlockNodes(b)
+
+	require.Nil(t, b.SubtreeSlices[0], "released entry must be nil so already-loaded checks treat it as missing")
+	require.Nil(t, b.SubtreeSlices[1])
 }

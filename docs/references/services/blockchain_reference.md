@@ -77,7 +77,17 @@ Provides health check information via gRPC, exposing the readiness health check 
 func (b *Blockchain) Init(ctx context.Context) error
 ```
 
-Initializes the blockchain service, setting up the finite state machine (FSM) that governs the service's operational states. It handles three initialization scenarios: test mode, new deployment, and normal operation where it restores the previously persisted state from storage.
+Initializes the blockchain service and its finite state machine (FSM). The
+test-only local override takes precedence; a fresh store uses
+`blockchain_initializeNodeInState` (empty means `CATCHINGBLOCKS`); and a restart
+normally restores its persisted state without validating unused boot configuration.
+Invalid configured states abort fresh-node startup; storage failures abort startup.
+Fresh or persisted `RUNNING` is checked against the active network's highest
+checkpoint. Below-checkpoint configured `RUNNING` fails without fallback;
+persisted `RUNNING` with a successfully read tip below the checkpoint is durably
+migrated to `CATCHINGBLOCKS`. Tip-read failures or missing metadata abort startup
+without changing the persisted state. Unrecognized persisted state names also
+abort startup without writes; `LEGACYSYNCING` retains its explicit migration.
 
 ### Start
 
@@ -532,7 +542,7 @@ Sends an event to the finite state machine.
 func (b *Blockchain) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
 ```
 
-Transitions the FSM to the RUNNING state.
+Transitions the FSM to the RUNNING state. On a network with checkpoints, a node whose chain tip is below the highest checkpoint receives an error and remains in its current state. An operator in `IDLE` can explicitly enter `CATCHINGBLOCKS` to start synchronization.
 
 ### CatchUpBlocks
 

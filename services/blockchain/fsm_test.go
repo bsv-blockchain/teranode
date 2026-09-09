@@ -68,12 +68,12 @@ func Test_GetSetFSMStateFromStore(t *testing.T) {
 
 	resp, err := blockchainClient.GetFSMCurrentState(ctx, &emptypb.Empty{})
 	require.NoError(t, err)
-	require.Equal(t, "IDLE", resp.State.String())
+	require.Equal(t, "CATCHINGBLOCKS", resp.State.String())
 
 	t.Run("Get Initial FSM State", func(t *testing.T) {
 		state, err := blockchainClient.GetStoreFSMState(ctx)
 		require.NoError(t, err)
-		require.Equal(t, "IDLE", state)
+		require.Equal(t, "CATCHINGBLOCKS", state)
 	})
 
 	t.Run("Alter current state to Running", func(t *testing.T) {

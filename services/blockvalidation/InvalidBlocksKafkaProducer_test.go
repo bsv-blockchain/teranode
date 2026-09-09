@@ -15,8 +15,8 @@ type MockInvalidBlockHandler struct {
 	mock.Mock
 }
 
-func (m *MockInvalidBlockHandler) ReportInvalidBlock(ctx context.Context, blockHash string, reason string) error {
-	args := m.Called(ctx, blockHash, reason)
+func (m *MockInvalidBlockHandler) ReportInvalidBlock(ctx context.Context, blockHash string, peerURL string, reason string) error {
+	args := m.Called(ctx, blockHash, peerURL, reason)
 	return args.Error(0)
 }
 

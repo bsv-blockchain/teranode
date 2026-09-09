@@ -14,6 +14,7 @@ package subtreeprocessor
 
 import (
 	"context"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
@@ -40,12 +41,26 @@ import (
 type Interface interface {
 	// AddBatch adds a batch of transaction nodes to the subtree processor for processing.
 	// The transactions will be organized into appropriate subtrees based on
-	// their dependencies and relationships with other transactions.
+	// their dependencies and relationships with other transactions. This path is
+	// unconditional: it bypasses any configured capacity bound and does not
+	// uphold the queueLength >= published-outstanding invariant.
 	//
 	// Parameters:
 	//   - nodes: The transaction nodes to add to processing
 	//   - txInpoints: Transaction input points for each node for dependency tracking
 	AddBatch(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints)
+
+	// AddBatchIfRoom adds a batch only if the configured capacity bound would not
+	// be exceeded, reporting whether it did. When no bound is configured it never
+	// refuses and behaves identically to AddBatch.
+	//
+	// Parameters:
+	//   - nodes: The transaction nodes to add to processing
+	//   - txInpoints: Transaction input points for each node for dependency tracking
+	//
+	// Returns:
+	//   - bool: true if the batch was enqueued, false if it was refused for room
+	AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) bool
 
 	// Start starts the main processing goroutine for the SubtreeProcessor.
 	// This should be called after loading unmined transactions at startup to avoid race conditions.
@@ -291,12 +306,61 @@ type Interface interface {
 	//   - uint64: Total transaction count
 	TxCount() uint64
 
-	// QueueLength returns the current length of the processing queue.
-	// This indicates the processor's current workload.
+	// QueueLength returns the number of transactions currently queued, not
+	// the number of batches. This indicates the processor's current workload.
+	// For items added through the bounded AddBatchIfRoom path it counts
+	// reserved-or-published items and never reads below the published-outstanding
+	// count; the unbounded AddBatch path now reserves before publishing too, so it
+	// upholds that same guarantee and additionally does not participate in the cap.
 	//
 	// Returns:
-	//   - int64: Current queue length
+	//   - int64: Current queue length, in transactions
 	QueueLength() int64
+
+	// QueueMaxItems returns the enforced (normalized) ingest-queue item cap, or
+	// a value <= 0 when the queue is unbounded. It is the cap the reservation
+	// path actually enforces, reported in the queue-full shed message.
+	//
+	// Returns:
+	//   - int64: The enforced item cap (<= 0 when unbounded)
+	QueueMaxItems() int64
+
+	// QueueHeadAge returns how long the oldest queued batch has been waiting.
+	// It is a diagnostic gauge for dispatcher-stall visibility and returns 0
+	// when the queue is empty.
+	//
+	// Returns:
+	//   - time.Duration: Age of the oldest queued batch, or 0 if empty
+	QueueHeadAge() time.Duration
+
+	// LastDequeueTime returns the wall-clock time the consumer goroutine last
+	// passed through the queue's dequeue branch. Combined with QueueLength,
+	// this reveals a stalled consumer sitting on a non-empty queue, which a
+	// depth reading alone cannot distinguish from a queue that is merely
+	// growing under normal load.
+	//
+	// Returns:
+	//   - time.Time: last time the dequeue branch ran
+	LastDequeueTime() time.Time
+
+	// ConsumerStarted reports whether the consumer goroutine has been started.
+	// A stale LastDequeueTime means a wedged consumer only once this is true;
+	// before then it simply means Start has not reached the consumer yet, which
+	// is the ordinary state while BlockAssembler.Start loads unmined
+	// transactions with ingest already running.
+	//
+	// Returns:
+	//   - bool: true once the consumer goroutine has been started
+	ConsumerStarted() bool
+
+	// ConsumerExited reports whether the consumer goroutine has exited. A
+	// stale LastDequeueTime means a wedged consumer only while one still
+	// exists; once this is true the queue will never drain again, which is a
+	// different fault with a different remedy.
+	//
+	// Returns:
+	//   - bool: true once the consumer goroutine has exited
+	ConsumerExited() bool
 
 	// SubtreeCount returns the total number of subtrees managed by the processor.
 	// This metric provides visibility into the processor's organizational state.

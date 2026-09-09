@@ -401,6 +401,12 @@ func TestPeerSelector_HealthChecks_BudgetExpiryNotCached(t *testing.T) {
 }
 
 func TestPeerSelector_HealthChecks_RealHTTPEndpoints(t *testing.T) {
+	// This is the only health test that exercises the real probe client rather than a
+	// stubbed checkHealth. That client refuses loopback targets, since a peer-supplied URL
+	// must never resolve internally, and httptest only ever listens on 127.0.0.1 - so the
+	// guard is disabled here exactly as the test daemons do it.
+	allowLoopbackProbes(t)
+
 	healthyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/bestblockheader" {
 			w.WriteHeader(http.StatusOK)

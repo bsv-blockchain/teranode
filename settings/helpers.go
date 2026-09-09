@@ -1,7 +1,9 @@
 package settings
 
 import (
+	"fmt"
 	"net/url"
+	"os"
 	"strconv"
 	"time"
 
@@ -60,6 +62,22 @@ func getUint64(key string, defaultValue uint64, alternativeContext ...string) ui
 	value, _ := gocore.Config(alternativeContext...).GetUint64(key, defaultValue)
 
 	return value
+}
+
+// getUint64AtLeast reads a uint64 setting and raises it to floor when the configured value is
+// lower. For settings where too small a value is unsafe rather than merely slow, so that a
+// misconfiguration degrades into the safe minimum instead of taking effect. The override is
+// reported on stderr rather than applied silently: an operator who set the value needs to know
+// it did not take, or they lose an hour to it during an incident.
+func getUint64AtLeast(key string, defaultValue, floor uint64, alternativeContext ...string) uint64 {
+	value := getUint64(key, defaultValue, alternativeContext...)
+	if value >= floor {
+		return value
+	}
+
+	fmt.Fprintf(os.Stderr, "WARN: setting %s is %d, below the safe minimum %d — using %d\n", key, value, floor, floor)
+
+	return floor
 }
 
 func getURL(key string, defaultValue string, alternativeContext ...string) *url.URL {

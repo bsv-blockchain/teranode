@@ -393,21 +393,52 @@ func newProcessBlockFoundHarness(ctx context.Context, t *testing.T) (*Server, *b
 	blockBytes, err := hex.DecodeString(processBlockFoundBlockHex)
 	require.NoError(t, err)
 
-	block, err := model.NewBlockFromBytes(blockBytes)
+	parsedBlock, err := model.NewBlockFromBytes(blockBytes)
+	require.NoError(t, err)
+
+	// CheckHeaderContextual verifies the parent chain returned by GetBlockHeaders is
+	// anchored at the block's parent by hash (issue 1467), so the parent stored on-chain
+	// must genuinely hash to the block's HashPrevBlock. The fixture hex's parent hash has
+	// no known preimage, so craft a real parent header first and re-anchor the fixture
+	// block on it, re-grinding the (easy-target) nonce.
+	parentHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      parsedBlock.Header.Timestamp - 600,
+		Bits:           parsedBlock.Header.Bits,
+		Nonce:          0,
+	}
+
+	blockHeader := &model.BlockHeader{
+		Version:        parsedBlock.Header.Version,
+		HashPrevBlock:  parentHeader.Hash(),
+		HashMerkleRoot: parsedBlock.Header.HashMerkleRoot,
+		Timestamp:      parsedBlock.Header.Timestamp,
+		Bits:           parsedBlock.Header.Bits,
+		Nonce:          0,
+	}
+
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+
+		require.Less(t, blockHeader.Nonce, uint32(10_000_000), "could not grind a nonce meeting the easy target")
+		blockHeader.Nonce++
+	}
+
+	block, err := model.NewBlock(blockHeader, parsedBlock.CoinbaseTx, parsedBlock.Subtrees, parsedBlock.TransactionCount, parsedBlock.SizeInBytes, parsedBlock.Height, 0)
 	require.NoError(t, err)
 
 	blockchainStore := blockchain_store.NewMockStore()
 	blockchainStore.BlockExists[*block.Header.HashPrevBlock] = true
-	// processBlockFound now settles block.Height against the parent header, so the parent must
-	// be resolvable at parent height = block.Height - 1 (deriveBlockHeight). Give it a header
-	// with non-nil hashes so the MockStore's GetBlockHeaders walk terminates cleanly (it chases
-	// HashPrevBlock until a hash is absent from the Blocks map).
+	// processBlockFound settles block.Height against the parent header, so the parent must
+	// be resolvable at parent height = block.Height - 1 (deriveBlockHeight). The MockStore's
+	// GetBlockHeaders walk chases HashPrevBlock until a hash is absent from the Blocks map,
+	// so it terminates at the parent (its own parent, the zero hash, is absent).
 	blockchainStore.Blocks[*block.Header.HashPrevBlock] = &model.Block{
-		Header: &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
-		},
+		Header: parentHeader,
 		Height: block.Height - 1,
 	}
 
@@ -1704,10 +1735,18 @@ func Test_ValidateBlock(t *testing.T) {
 		mockBlockchainClient.On("GetBlock", mock.Anything, mock.Anything).Return(nil, errors.New(errors.ERR_BLOCK_NOT_FOUND, "block not found"))
 		mockBlockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
 
-		// Mock GetBlockHeaders
+		// Mock GetBlockHeaders. This run is the block's own header, so it is not anchored on the
+		// block's parent and cannot carry the median-time-past window — which is what sends
+		// ValidateBlock's parentHeaderRun down its hash-walk repair path.
 		blockHeaders := []*model.BlockHeader{block.Header}
 		blockMetas := []*model.BlockHeaderMeta{{Height: 99}}
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(blockHeaders, blockMetas, nil)
+
+		// The parent is absent from this fixture's store, so the hash walk cannot repair the run
+		// either and parentHeaderRun keeps the batched one — leaving the subtest exercising the
+		// generic validation-failure path it was written for.
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
+			Return(nil, nil, errors.New(errors.ERR_BLOCK_NOT_FOUND, "block not found"))
 
 		req := &blockvalidation_api.ValidateBlockRequest{
 			Block:  blockBytes,

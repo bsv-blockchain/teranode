@@ -426,13 +426,13 @@ getpeerinfo, invalidateblock, reconsiderblock, setban, isbanned, listbanned, cle
 
 For GRPC services, certain administrative operations require additional API key authentication:
 
-- **Protected Methods**: `BanPeer` and `UnbanPeer` operations in both P2P and Legacy GRPC services require API key authentication
-- **Configuration**: Set via `grpc_admin_api_key` setting in the configuration file
-- **Auto-generation**: If no API key is configured, the system generates a random 32-byte key at startup
-- **Usage**: API key must be included in GRPC requests as metadata with the key `x-api-key`
+- **Protected Methods**: state-mutating admin operations require API key authentication. On the P2P service these are `BanPeer`, `UnbanPeer`, `ClearBanned`, `AddBanScore`, `ResetReputation`, `ConnectPeer` and `DisconnectPeer`; on the Legacy service, `BanPeer` and `UnbanPeer`.
+- **Configuration**: Set via the `grpc_admin_api_key` setting. Source it from an environment variable or secret store, not committed configuration; well-known placeholders (e.g. `testkey`, `changeme`) are ignored at startup (logged and treated as unset).
+- **Fail-closed default**: if no API key is configured (or a placeholder is ignored), the server generates a random key at startup. This *generated* key is never logged, and it leaves the protected admin RPCs unreachable until an operator sets a shared key that both the server and its internal clients read.
+- **Usage**: API key must be included in GRPC requests as metadata with the key `x-api-key`.
 
 !!! warning "Security Note"
-    The API key provides administrative access to ban/unban operations. Ensure it is properly secured and not exposed in logs or configuration files in production environments.
+    The API key provides administrative access to peer-policy operations. Keep it secret, never commit it, and prefer `securityLevelGRPC >= 2` (verified TLS) when the gRPC listener is not loopback-bound so the key is not exposed in transit. Note that a *configured* key is currently echoed in the node's startup settings dump, so treat startup logs as sensitive and prefer supplying the key via the environment or a secret store.
 
 ## General Format
 

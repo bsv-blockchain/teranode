@@ -531,3 +531,76 @@ func TestNewBlobFooterSizeMismatchError(t *testing.T) {
 	assert.Equal(t, "test blob footer size mismatch error param1 42", err.Message(), "error message should match")
 	assert.Nil(t, err.Data(), "error data should be nil when params are provided")
 }
+
+// TestNewBlockHeaderContextError pins the two properties that make this constructor work, both
+// of which are invisible at the call site and both of which were wrong once already.
+//
+// It must satisfy TWO predicates at the same time: Is(err, ErrBlockHeaderContext), which the
+// catchup classifier and the gRPC handler use to tell a local context failure from a peer or
+// consensus one, and Is(err, ErrProcessing), which the pre-existing transient handling uses to
+// keep it retryable. And the caller's cause has to survive: New() takes the LAST param as the
+// wrapped error, so appending the ERR_PROCESSING tail to params — the obvious "simplification" —
+// displaces the caller's error into a format argument and renders it as %!(EXTRA ...).
+func TestNewBlockHeaderContextError(t *testing.T) {
+	cause := NewProcessingError("header X does not follow Y")
+	err := NewBlockHeaderContextError("[BLOCK][%s] window is not a linked chain", "abc", cause)
+
+	require.Equal(t, ERR_BLOCK_HEADER_CONTEXT, err.Code())
+	require.True(t, Is(err, ErrBlockHeaderContext), "the catchup classifier and gRPC handler match on this")
+	require.True(t, Is(err, ErrProcessing), "existing retryable handling matches on this")
+	require.False(t, Is(err, ErrBlockInvalid), "a bad header context is never a verdict on the block")
+
+	// The caller's cause is wrapped, not formatted away.
+	require.Contains(t, err.Error(), "does not follow", "the cause must survive as the wrapped error")
+	require.NotContains(t, err.Error(), "%!", "a displaced cause renders as %!(EXTRA ...)")
+	require.Contains(t, err.Error(), "abc", "the format argument is still applied")
+
+	// The ERR_PROCESSING tail must be a fresh instance. SetWrappedErr and Join walk to the tail
+	// and assign, so sharing the package-level singleton would let a later Join mutate it
+	// process-wide. Assert it after a Join rather than at construction: at construction the
+	// singleton's own wrappedErr is still nil either way, so the check passes even when the
+	// constructor shares the global — it is the later append that does the damage.
+	_ = Join(err, NewStorageError("later"))
+	require.Nil(t, ErrProcessing.WrappedErr(), "the ErrProcessing global must never be mutated")
+
+	// Works with no cause supplied at all.
+	bare := NewBlockHeaderContextError("no cause here")
+	require.True(t, Is(bare, ErrBlockHeaderContext))
+	require.True(t, Is(bare, ErrProcessing))
+	require.NotContains(t, bare.Error(), "%!")
+}
+
+// TestNewBlockHeaderContextError_DoesNotMutateACallerSuppliedSingleton pins the other half of the
+// tail-attachment hazard, and the half that is easy to miss.
+//
+// SetWrappedErr assigns to the LAST *Error in the chain. When the caller supplies a cause, that
+// last link is the caller's object — and every Err* in this package is a process-wide singleton,
+// so NewBlockHeaderContextError("...", ErrServiceError) would write the ERR_PROCESSING tail into
+// the global ErrServiceError itself, permanently. From then on Is(ErrServiceError, ErrProcessing)
+// is true for every caller in the process, which silently widens the Is(err, ErrProcessing) gates
+// this error kind exists to keep narrow.
+//
+// No current call site passes a singleton, so this is latent — which is exactly why it needs a
+// test rather than a comment.
+//
+// Scope note: a LATER append reaching a caller-supplied singleton is a separate, pre-existing
+// property of this package, not something this constructor introduced — Join(NewProcessingError(
+// "x", ErrConfiguration), ...) writes into ErrConfiguration just the same, because New() puts the
+// caller's object in the chain and Join assigns to whatever sits at the tail. That is worth its
+// own issue and its own fix; what is pinned here is the part this error kind is responsible for,
+// which is not doing the mutation itself at construction time.
+func TestNewBlockHeaderContextError_DoesNotMutateACallerSuppliedSingleton(t *testing.T) {
+	require.Nil(t, ErrServiceError.WrappedErr(), "precondition: the singleton starts clean")
+	require.False(t, Is(ErrServiceError, ErrProcessing), "precondition: and unrelated to processing")
+
+	err := NewBlockHeaderContextError("[BLOCK][%s] window is not anchored", "abc", ErrServiceError)
+
+	require.Nil(t, ErrServiceError.WrappedErr(), "the caller's singleton must not gain a tail")
+	require.False(t, Is(ErrServiceError, ErrProcessing), "and must not start matching ErrProcessing")
+
+	// The error itself still has to satisfy both predicates and keep the caller's cause reachable.
+	require.True(t, Is(err, ErrBlockHeaderContext))
+	require.True(t, Is(err, ErrProcessing), "existing retryable handling matches on this")
+	require.True(t, Is(err, ErrServiceError), "the caller's cause must stay reachable")
+	require.NotContains(t, err.Error(), "%!")
+}

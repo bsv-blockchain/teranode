@@ -198,6 +198,26 @@ func TestCentralizedPeerRegistry_Persistence(t *testing.T) {
 	require.Equal(t, blockchain_api.TransportType_TRANSPORT_WIRE_PROTOCOL, p1.TransportType)
 }
 
+func TestCentralizedPeerRegistry_Persistence_LoadResetsIsConnected(t *testing.T) {
+	store := newTestBlobStore(t)
+	ctx := context.Background()
+
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	r.Register(&PeerInfo{ID: "peer-1"})
+	r.UpdateConnectionState("peer-1", true)
+	require.NoError(t, r.Save(ctx, store))
+
+	// A connection cannot survive a restart; a restored flag would report a
+	// phantom connection and exempt the entry from cleanup until the p2p
+	// reconciliation sweep first runs.
+	r2 := NewCentralizedPeerRegistry(DefaultBanConfig())
+	require.NoError(t, r2.Load(ctx, store, 24*time.Hour))
+
+	got, ok := r2.Get("peer-1")
+	require.True(t, ok)
+	require.False(t, got.IsConnected)
+}
+
 func TestCentralizedPeerRegistry_Persistence_MissingKey(t *testing.T) {
 	store := newTestBlobStore(t)
 	r := NewCentralizedPeerRegistry(DefaultBanConfig())
@@ -825,6 +845,43 @@ func TestCentralizedPeerRegistry_Cleanup_LRUExemptsConnectedAndBanned(t *testing
 	require.Equal(t, 0, expired)
 	require.Equal(t, 4, lru)
 	require.Equal(t, 2, r.Count())
+}
+
+func TestCentralizedPeerRegistry_Cleanup_EvictsStaleConnected(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	// A peer whose IsConnected flag went stale (no disconnect signal ever
+	// clears it) must not be pinned forever: once its activity exceeds the
+	// TTL it is evicted like any other idle peer.
+	r.Register(&PeerInfo{ID: "staleConnected"})
+	r.UpdateConnectionState("staleConnected", true)
+
+	r.Register(&PeerInfo{ID: "freshConnected"})
+	r.UpdateConnectionState("freshConnected", true)
+
+	// spam = 50 in DefaultBanConfig; threshold = 100. Two strikes triggers a ban.
+	r.Register(&PeerInfo{ID: "staleBanned"})
+	r.AddBanScore("staleBanned", "spam", 0)
+	r.AddBanScore("staleBanned", "spam", 0)
+	require.True(t, r.IsBannedPeer("staleBanned"))
+
+	r.mu.Lock()
+	for _, id := range []string{"staleConnected", "staleBanned"} {
+		r.peers[id].LastSeen = time.Now().Add(-2 * time.Hour)
+		r.peers[id].LastMessageTime = time.Now().Add(-2 * time.Hour)
+	}
+	r.mu.Unlock()
+
+	expired, lru := r.Cleanup(0, time.Hour)
+	require.Equal(t, 1, expired)
+	require.Equal(t, 0, lru)
+
+	_, ok := r.Get("staleConnected")
+	require.False(t, ok, "stale connected peer must be TTL-evicted")
+	_, ok = r.Get("freshConnected")
+	require.True(t, ok, "recently active connected peer stays exempt")
+	_, ok = r.Get("staleBanned")
+	require.True(t, ok, "banned peers stay exempt regardless of activity")
 }
 
 func TestCentralizedPeerRegistry_List_ExcludeBannedAppliesExpiry(t *testing.T) {

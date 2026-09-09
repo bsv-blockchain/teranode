@@ -209,6 +209,10 @@ func (m *NullStore) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
+func (m *NullStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
+	return nil
+}
+
 func (m *NullStore) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	return nil
 }

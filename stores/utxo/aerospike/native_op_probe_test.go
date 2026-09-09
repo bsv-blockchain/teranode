@@ -32,7 +32,7 @@ func TestNativeTeranodeOpProbe_Container(t *testing.T) {
 	tSettings.Aerospike.UseNativeTeranodeOps = true
 
 	container, err := runAerospikeTestContainer(ctx)
-	require.NoError(t, err)
+	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
 		_ = container.Terminate(ctx)

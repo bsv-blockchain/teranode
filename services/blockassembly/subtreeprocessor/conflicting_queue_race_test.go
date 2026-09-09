@@ -110,7 +110,7 @@ func TestDequeueDuringBlockMovement_RejectsChildOfConflictingParent(t *testing.T
 //
 // The drain's validFromMillis is always set (clock.Now() when
 // DoubleSpendWindow=0, clock.Now()-DoubleSpendWindow otherwise) so the
-// queue filter at queue.go:96 (`batch.time >= validFromMillis -> hold`)
+// queue filter in LockFreeQueue.dequeueBatch (`batch.time >= validFromMillis -> hold`)
 // uses the drain clock as the cutoff. This bounds the drain to batches
 // that already existed before the drain started, preventing the loop
 // from chasing fresh ingest produced by AddTxBatchColumnar — the
@@ -118,7 +118,8 @@ func TestDequeueDuringBlockMovement_RejectsChildOfConflictingParent(t *testing.T
 // moveForwardBlock.
 //
 // The Start-loop default-case dequeue still uses its own zero-guard
-// (SubtreeProcessor.go:807-813) and is NOT affected by this test.
+// (the default: branch of SubtreeProcessor.Start) and is NOT affected by
+// this test.
 //
 // The "+1ms" subtest exercises the complementary case where the
 // SubtreeProcessor clock has advanced past the enqueue clock; the

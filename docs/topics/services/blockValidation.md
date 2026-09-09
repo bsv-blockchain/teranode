@@ -267,6 +267,19 @@ Before fetching full block data, the catchup process verifies checkpoints to ens
 - Approximately 10x faster than full validation for historical blocks
 - Currently disabled pending additional testing (`useQuickValidation = false`)
 
+**Behaviour change — quick-validation window is bound to what this run verified:**
+
+The eligibility bound is the highest checkpoint whose hash was actually **matched against a
+header in the current catchup range**, not the highest checkpoint present in
+`ChainCfgParams.Checkpoints`. A checkpoint that is configured but sits outside the range being
+processed proves nothing about this session, so it no longer widens the window.
+
+Operational consequence: in each catchup range, the blocks above the last in-range checkpoint —
+the tail up to the peer's tip — fall back to full validation instead of quick validation. On a
+node syncing far below the highest checkpoint this is one tail per catchup range and only
+affects sync throughput, never which blocks are accepted. Sync of the checkpointed prefix is
+unaffected as long as ranges continue to span checkpoints.
+
 **Safety Guarantees:**
 
 Checkpoint verification ensures:
@@ -323,15 +336,13 @@ Blocks are NOT marked invalid for:
 - Network timeouts or temporary storage failures
 - Processing errors that may succeed on retry
 
-**Peer Banning (Logged, Not Implemented):**
+**Peer Banning:**
 
-When malicious behavior is detected, the system logs:
+When malicious behavior is detected, the system logs it and reports the peer to the P2P service, which records a malicious flag (making the peer immediately ineligible for catchup) and raises its ban score toward an automatic ban:
 
 ```text
-SECURITY: Peer <peerID> attempted secret mining - should be banned (banning not yet implemented)
+SECURITY: Peer <peerID> attempted secret mining - reported as malicious for ban scoring
 ```
-
-This provides an audit trail for operators and prepares for future automatic banning.
 
 ##### Concurrent Fetch + Sequential Validation
 
@@ -450,7 +461,7 @@ Validates transactions by spending their inputs in parallel:
 The quick validation path is only applied to blocks below verified checkpoints:
 
 - **Checkpoint Verification**: During catchup, checkpoints are verified in header chain (see Section 2.2.2)
-- **Eligibility Check**: `block.Height <= highestCheckpointHeight` determines if quick validation can be used
+- **Eligibility Check**: `block.Height <= highestCheckpointHeight` determines if quick validation can be used, where `highestCheckpointHeight` is the highest checkpoint **hash-verified in the current catchup run** — blocks above it fall back to full validation (see Section 2.2.2)
 - **Trust Assumption**: Blocks below checkpoints are known to be valid, allowing optimized processing
 - **Current Status**: Quick validation currently disabled (`useQuickValidation = false`) pending additional testing
 
@@ -794,15 +805,15 @@ When a peer's quality score falls below threshold:
 4. **Circuit Half-Open**: After delay, allows limited test requests
 5. **Circuit Closes**: If peer recovers, full access restored
 
-##### Peer Banning (Future Feature)
+##### Peer Banning
 
-The system logs when peers should be banned but doesn't yet implement automatic banning:
+When catchup detects malicious behavior it reports the peer to the P2P service. The report records a malicious flag in the centralized peer registry (which makes the peer immediately ineligible for catchup via `IsPeerMalicious`) and raises the peer's ban score, so repeated offenses cross the ban threshold and trigger an automatic ban:
 
 ```text
-SECURITY: Peer <ID> attempted secret mining - should be banned (banning not yet implemented)
+SECURITY: Peer <ID> attempted secret mining - reported as malicious for ban scoring
 ```
 
-This provides an audit trail for operators to manually ban malicious peers and prepares for future automatic banning implementation.
+The log lines remain an audit trail for operators, who can also ban peers manually.
 
 For implementation details, see `malicious_peer_handling_test.go` and peer tracking code in `catchup.go`.
 

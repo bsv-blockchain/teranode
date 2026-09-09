@@ -9,6 +9,8 @@ import "context"
 type InvalidBlockHandler interface {
 	// ReportInvalidBlock is called when a block fails validation
 	// blockHash is the hash of the invalid block
+	// peerURL is the DataHub URL the block was fetched from (may be empty);
+	// it serves as attribution fallback when the announcement record is gone
 	// reason describes why the block is invalid
-	ReportInvalidBlock(ctx context.Context, blockHash string, reason string) error
+	ReportInvalidBlock(ctx context.Context, blockHash string, peerURL string, reason string) error
 }

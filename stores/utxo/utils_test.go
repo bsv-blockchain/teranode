@@ -132,6 +132,9 @@ func TestShouldStoreOutputAsUTXO_EraAware(t *testing.T) {
 		mainnetGenesis = uint32(620538)
 		ttnGenesis     = uint32(1)   // teratestnet / tstn
 		stnGenesis     = uint32(100) // stn
+		// Not the live regtest height (which has moved); these cases pass
+		// genesisActivation to ShouldStoreOutputAsUTXO explicitly, so the value
+		// only has to be consistent with the heights used in the table below.
 		regtestGenesis = uint32(10000)
 	)
 
@@ -196,7 +199,7 @@ func TestShouldStoreOutputAsUTXO_EraAware(t *testing.T) {
 		// stn activation=100: height 50 is genuinely pre-Genesis => dropped.
 		{"stn_bare_opreturn_zero_pregenesis", 0, bareOpReturn, 50, stnGenesis, false},
 		{"stn_bare_opreturn_zero_postgenesis_STORED", 0, bareOpReturn, 150, stnGenesis, true},
-		// regtest activation=10000: height 15000 is post-Genesis => stored.
+		// regtestGenesis (above): height 15000 is post-Genesis => stored.
 		{"regtest_bare_opreturn_zero_postgenesis_STORED", 0, bareOpReturn, 15000, regtestGenesis, true},
 		{"regtest_oversized_zero_pregenesis", 0, oversized, 5000, regtestGenesis, false},
 	}

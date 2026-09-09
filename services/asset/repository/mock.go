@@ -401,3 +401,16 @@ func (m *Mock) GetP2PClient() p2p.ClientI {
 	args := m.Called()
 	return args.Get(0).(p2p.ClientI)
 }
+
+// GetPeerRegistryClient returns the peer registry client interface used by the repository.
+//
+// Returns:
+//   - blockchain.PeerRegistryClientI: peer registry client interface
+func (m *Mock) GetPeerRegistryClient() blockchain.PeerRegistryClientI {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil
+	}
+
+	return args.Get(0).(blockchain.PeerRegistryClientI)
+}

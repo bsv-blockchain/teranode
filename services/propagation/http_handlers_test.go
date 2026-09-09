@@ -292,6 +292,28 @@ func TestHandleSingleTx(t *testing.T) {
 			mockValidationError: errors.NewTxConflictingError("test conflicting"),
 		},
 		{
+			// Parent still finishing its own two-phase commit (normal path,
+			// ~70ms tolerance in the validator's retry loop). Pinned here so
+			// the whole TX_LOCKED/TX_CREATING/frozen classification is
+			// covered in one table, not just the newly-added part.
+			name:                "TX_LOCKED (parent still committing)",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusConflict,
+			expectedResponse:    "Failed to process transaction",
+			mockValidationError: errors.NewTxLockedError("test tx locked"),
+		},
+		{
+			// Large, multi-record parent still being written (Aerospike
+			// LuaErrorCodeCreating). Before the fix this fell through to the
+			// default case and returned 500; it must be 409 like TX_LOCKED,
+			// since both are the parent's own commit still in flight.
+			name:                "TX_CREATING (large parent still being written)",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusConflict,
+			expectedResponse:    "Failed to process transaction",
+			mockValidationError: errors.NewTxCreatingError("test tx creating"),
+		},
+		{
 			name:                "Frozen utxo",
 			requestBody:         txBytes,
 			expectedStatusCode:  http.StatusForbidden,
@@ -464,11 +486,15 @@ func TestHandleMultipleTx(t *testing.T) {
 			assert.Contains(t, rec.Body.String(), tc.expectedResponse)
 
 			// The batch must surface the per-tx public reason, not collapse to a
-			// generic PROCESSING message: assert the derived UserMessage for the
-			// tx-rejection case is present in the aggregated body.
+			// generic PROCESSING message — and must name the transaction the
+			// reason belongs to, since the allowlisted cause shadows the
+			// "[ProcessTransaction][<txid>]" wrapper that would carry it. In a
+			// batch that id is the difference between an actionable verdict and
+			// "one of these failed".
 			if tc.name == "Transaction validation error" {
 				require.Contains(t, rec.Body.String(),
-					fmt.Sprintf("%s (%d): %s", errors.ERR_TX_INVALID.String(), errors.ERR_TX_INVALID, "test validation error"))
+					fmt.Sprintf("%s (%d): [ProcessTransaction][%s] %s",
+						errors.ERR_TX_INVALID.String(), errors.ERR_TX_INVALID, tx1.TxID(), "test validation error"))
 			}
 
 			// Verify validation and storage behaviors for non-error cases

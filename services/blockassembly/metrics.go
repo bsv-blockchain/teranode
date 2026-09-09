@@ -75,6 +75,16 @@ var (
 	prometheusBlockAssemblerSubtreeStoredHist           prometheus.Histogram
 	prometheusBlockAssemblerConflictIntentsPending      prometheus.Gauge
 	prometheusBlockAssemblerConflictIntentReplay        *prometheus.CounterVec
+	prometheusBlockAssemblerDequeueStalenessSeconds     prometheus.Gauge
+
+	// prometheusBlockAssemblyQueueShed counts transactions shed because the ingest queue was full past the bounded wait
+	prometheusBlockAssemblyQueueShed prometheus.Counter
+
+	// prometheusBlockAssemblyQueueWait measures how long an ingest handler waited for queue room before succeeding or shedding
+	prometheusBlockAssemblyQueueWait prometheus.Histogram
+
+	// prometheusBlockAssemblyQueueHeadAge tracks how long the oldest queued batch has been waiting
+	prometheusBlockAssemblyQueueHeadAge prometheus.Gauge
 )
 
 var (
@@ -238,6 +248,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockassembly",
 			Name:      "subtrees",
 			Help:      "Number of subtrees currently in the block assembler subtree processor",
+		},
+	)
+
+	prometheusBlockAssemblerDequeueStalenessSeconds = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "dequeue_staleness_seconds",
+			Help:      "Seconds since the subtree processor's consumer goroutine last passed through its dequeue branch. A value growing alongside a non-zero queued_transactions means intake is queuing unboundedly because the consumer is stuck elsewhere (reorg/move-forward-block/reset/etc), not that ingest has merely slowed (issue #1429).",
 		},
 	)
 
@@ -524,6 +543,34 @@ func _initPrometheusMetrics() {
 			Name:      "add_directly_batch_seconds",
 			Help:      "Time taken to add all unmined transactions to subtree processor",
 			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockAssemblyQueueShed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "queue_shed_total",
+			Help:      "Total transactions shed because the ingest queue was full past the bounded wait. Any non-zero value should be alerted on alongside processing_stuck_total and tip_lag_blocks; a shed on a healthy node means the cap is too tight.",
+		},
+	)
+
+	prometheusBlockAssemblyQueueWait = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "queue_wait_seconds",
+			Help:      "Time an ingest handler waited for ingest-queue room before succeeding or shedding",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockAssemblyQueueHeadAge = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "queue_head_age_seconds",
+			Help:      "Age in seconds of the oldest batch still in the ingest queue (0 when empty). A rising value indicates the dispatcher has stopped draining.",
 		},
 	)
 }

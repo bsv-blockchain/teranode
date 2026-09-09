@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/testcontainers/testcontainers-go"
@@ -41,8 +42,10 @@ type Env struct {
 	mu         sync.Mutex
 }
 
-// MustStartEnv starts a single-node Redpanda container. It calls t.Fatal on
-// error and registers a cleanup function so callers don't need to defer Close.
+// MustStartEnv starts a single-node Redpanda container. It skips the test if
+// the container runtime itself is unavailable, calls t.Fatal on any other
+// startup error, and registers a cleanup function so callers don't need to
+// defer Close.
 func MustStartEnv(t testing.TB, ctx context.Context) *Env {
 	t.Helper()
 
@@ -76,9 +79,7 @@ func MustStartEnv(t testing.TB, ctx context.Context) *Env {
 		ContainerRequest: req,
 		Started:          true,
 	})
-	if err != nil {
-		t.Fatalf("kafkatest: start redpanda: %v", err)
-	}
+	test.SkipIfContainerUnavailable(t, err)
 
 	env := &Env{
 		Container:  container,

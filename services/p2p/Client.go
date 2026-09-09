@@ -59,8 +59,13 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address string, tSettings *settings.Settings) (ClientI, error) {
 	// Include the admin API key in the connection options
 	apiKey := tSettings.GRPCAdminAPIKey
-	if apiKey != "" {
-		logger.Infof("[Legacy Client] Using API key for authentication")
+	if apiKey == "" || util.IsPlaceholderAdminAPIKey(apiKey) {
+		// A placeholder is ignored by the server (which uses a random key), so a
+		// client that sent it would still be rejected; warn instead of logging a
+		// reassuring "using API key" line that contradicts the server.
+		logger.Warnf("[P2P Client] grpc_admin_api_key is unset or a well-known placeholder; admin RPCs (ban, unban, connect/disconnect peer) will fail with Unauthenticated because the server ignores placeholders and uses a random key")
+	} else {
+		logger.Infof("[P2P Client] Using API key for authentication")
 	}
 
 	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
@@ -363,6 +368,11 @@ func (c *Client) RecordCatchupSuccess(ctx context.Context, peerID string, durati
 	req := &p2p_api.RecordCatchupSuccessRequest{
 		PeerId:     peerID,
 		DurationMs: durationMs,
+		// Every current caller reports a whole completed catchup operation
+		// (header batches moved to ReportValidBlockHeaders), so the receiver may
+		// settle the sync slot. Older senders leave this false, and their
+		// header-batch credits must not settle the sync.
+		CatchupCompleted: true,
 	}
 
 	resp, err := c.client.RecordCatchupSuccess(ctx, req)
@@ -461,32 +471,6 @@ func (c *Client) UpdateCatchupError(ctx context.Context, peerID string, errorMsg
 
 	if resp != nil && !resp.Ok {
 		return errors.NewServiceError("failed to update catchup error")
-	}
-
-	return nil
-}
-
-// UpdateCatchupReputation updates the reputation score for a peer.
-// Parameters:
-//   - ctx: Context for the operation
-//   - peerID: The peer ID to update reputation for
-//   - score: Reputation score between 0 and 100
-//
-// Returns:
-//   - error: Any error encountered during the operation
-func (c *Client) UpdateCatchupReputation(ctx context.Context, peerID string, score float64) error {
-	req := &p2p_api.UpdateCatchupReputationRequest{
-		PeerId: peerID,
-		Score:  score,
-	}
-
-	resp, err := c.client.UpdateCatchupReputation(ctx, req)
-	if err != nil {
-		return err
-	}
-
-	if resp != nil && !resp.Ok {
-		return errors.NewServiceError("failed to update catchup reputation")
 	}
 
 	return nil

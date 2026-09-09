@@ -33,7 +33,7 @@ func startPostgres(t *testing.T) *url.URL {
 				WithStartupTimeout(5*time.Minute),
 		),
 	)
-	require.NoError(t, err)
+	test.SkipIfContainerUnavailable(t, err)
 	t.Cleanup(func() { assert.NoError(t, pgContainer.Terminate(ctx)) })
 
 	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")

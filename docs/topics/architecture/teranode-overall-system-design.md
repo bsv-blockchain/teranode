@@ -123,9 +123,9 @@ Key components of the Teranode architecture include:
     - Block Persister Service
     - UTXO Persister Service
     - P2P Service
-    - P2P Bootstrap Service
     - Legacy Service
     - RPC Service
+    - Pruner Service
 
 3. Stores:
 

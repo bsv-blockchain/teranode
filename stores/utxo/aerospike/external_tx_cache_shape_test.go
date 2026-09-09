@@ -27,7 +27,7 @@ import (
 func newCachedExternalStore(t *testing.T) (*Store, *bt.Tx, uint32) {
 	t.Helper()
 
-	chainParams := chaincfg.RegressionNetParams // GenesisActivationHeight = 10000
+	chainParams := chaincfg.RegressionNetParams
 	tSettings := &settings.Settings{}
 	tSettings.ChainCfgParams = &chainParams
 

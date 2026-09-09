@@ -54,6 +54,7 @@ func TestSemaphoreUnlimitedByDefault(t *testing.T) {
 		txStore,
 		txStore,
 		nil,
+		nil,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, repo)
@@ -111,6 +112,7 @@ func TestSemaphoreLimitsEnforced(t *testing.T) {
 		nil,
 		txStore,
 		txStore,
+		nil,
 		nil,
 	)
 	require.NoError(t, err)
@@ -171,6 +173,7 @@ func TestSemaphoreContextCancellation(t *testing.T) {
 		txStore,
 		txStore,
 		nil,
+		nil,
 	)
 	require.NoError(t, err)
 
@@ -221,6 +224,7 @@ func TestSemaphorePerMethodIndependence(t *testing.T) {
 		nil,
 		txStore,
 		txStore,
+		nil,
 		nil,
 	)
 	require.NoError(t, err)
@@ -280,6 +284,7 @@ func TestSemaphoreNumCPU(t *testing.T) {
 		nil,
 		txStore,
 		txStore,
+		nil,
 		nil,
 	)
 	require.NoError(t, err)

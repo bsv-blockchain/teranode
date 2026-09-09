@@ -19,7 +19,7 @@ Policy settings control BSV Blockchain consensus rules and transaction validatio
 | --------- | ------ | --------- | --------------------- | ------- |
 | MaxTxSizePolicy | int | 10485760 (10MB) | maxtxsizepolicy | **CRITICAL** - Maximum transaction size policy |
 | MaxOrphanTxSize | int | 1000000 (1MB) | maxorphantxsize | Maximum orphan transaction size |
-| MaxScriptSizePolicy | int | 500000 (500KB) | maxscriptsizepolicy | **CRITICAL** - Maximum script size policy |
+| MaxScriptSizePolicy | int | 100000000 (100MB) | maxscriptsizepolicy | **CRITICAL** - Maximum script size policy |
 | MaxScriptNumLengthPolicy | int | 10000 | maxscriptnumlengthpolicy | Maximum script number length |
 | MaxOpsPerScriptPolicy | int64 | 1000000 | maxopsperscriptpolicy | Maximum operations per script |
 
@@ -153,7 +153,7 @@ The settings allow operators to configure policy rules while maintaining consens
 blockmaxsize = 0
 excessiveblocksize = 4294967296
 maxtxsizepolicy = 10485760
-maxscriptsizepolicy = 500000
+maxscriptsizepolicy = 100000000
 maxpubkeyspermultisigpolicy = 0
 maxtxsigopscountspolicy = 0
 maxstackmemoryusagepolicy = 104857600

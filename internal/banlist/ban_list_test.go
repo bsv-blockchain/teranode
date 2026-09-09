@@ -33,6 +33,23 @@ func newTestBanList(t *testing.T) *BanList {
 	store, err := blockchain.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 
+	// The blockchain store owns a set of background goroutines — a reservation
+	// sweep, the ttl-cache janitors (blockIDReservations and responseCache
+	// always, chainWalkCache only when blockchain_use_in_memory_chain_check is
+	// on), the database/sql connection opener, and — again only with the
+	// in-memory chain check — an off-chain-set refresh loop. Every one of them
+	// stops only when the store is closed. Without this the package leaks all
+	// of them per test, which is what the goroutine-leak check in TestMain
+	// caught: 4 leaked goroutines per store on the committed defaults, or 6
+	// with the in-memory chain check enabled — across 28 tests, around 111 and
+	// 167 respectively. The totals move by one or two between runs, because a
+	// connection opener or a cache janitor can be caught mid-lifecycle; the
+	// per-store figures are the exact ones. All of it purely from stores nobody
+	// closed. Close() exists and works — the tests simply were not calling it.
+	t.Cleanup(func() {
+		_ = store.Close(context.Background())
+	})
+
 	bl := New(store.GetDB(), util.SqliteMemory, ulogger.TestLogger{})
 
 	err = bl.Init(context.Background())

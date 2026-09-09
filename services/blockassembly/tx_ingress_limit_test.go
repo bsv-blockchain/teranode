@@ -12,7 +12,14 @@ import (
 )
 
 // addTestTxs enqueues n distinct transactions into block assembly.
-func addTestTxs(ba *BlockAssembler, n int) {
+//
+// These tests size nothing against blockassembly_maxQueueItems, which is 0 (unbounded) here, so the
+// enqueue cannot be refused for queue room and the return value carries no information. That is the
+// point of the separation being tested: the queue bound and the resident-set bound are independent,
+// and this file exercises the latter with the former disabled.
+func addTestTxs(t *testing.T, ba *BlockAssembler, n int) {
+	t.Helper()
+
 	nodes := make([]subtreepkg.Node, 0, n)
 	inpoints := make([]*subtreepkg.TxInpoints, 0, n)
 
@@ -25,7 +32,8 @@ func addTestTxs(ba *BlockAssembler, n int) {
 		inpoints = append(inpoints, &subtreepkg.TxInpoints{})
 	}
 
-	ba.AddTxBatch(nodes, inpoints)
+	require.True(t, ba.AddTxBatchIfRoom(nodes, inpoints),
+		"the ingest queue is unbounded in these tests, so the batch must always be enqueued")
 }
 
 // TestResumeWatermark checks how the low watermark is derived from the configured limit.
@@ -177,7 +185,7 @@ func TestTransactionsInMemoryCountsQueuedTransactions(t *testing.T) {
 
 	const txCount = 8
 
-	addTestTxs(ba, txCount)
+	addTestTxs(t, ba, txCount)
 
 	require.Equal(t, int64(txCount), ba.QueueLength(),
 		"the transactions should be sitting in the queue, since the processor is not draining it")
@@ -272,7 +280,7 @@ func TestTxIngressLimitMonitorFlipsTheFlag(t *testing.T) {
 	require.False(t, testItems.blockchainClient.IsBlockAssemblyFull(),
 		"ingress must be open before the limit is reached")
 
-	addTestTxs(ba, limit)
+	addTestTxs(t, ba, limit)
 
 	require.Eventually(t, func() bool {
 		return testItems.blockchainClient.IsBlockAssemblyFull()
@@ -362,7 +370,7 @@ func TestTxIngressLimitMonitorHeartbeatReAnnounces(t *testing.T) {
 	subCh, err := testItems.blockchainClient.Subscribe(ctx, "tx-ingress-heartbeat-test")
 	require.NoError(t, err)
 
-	addTestTxs(ba, 5)
+	addTestTxs(t, ba, 5)
 
 	ba.startTxIngressLimitMonitor(ctx)
 
@@ -411,7 +419,7 @@ func TestTxIngressLimitMonitorDoesNothingWhenDisabled(t *testing.T) {
 
 	ba.startTxIngressLimitMonitor(ctx)
 
-	addTestTxs(ba, 20)
+	addTestTxs(t, ba, 20)
 
 	// Wait past both the evaluate and heartbeat intervals, so a running monitor would have spoken.
 	deadline := time.After(ba.txIngressHeartbeatInterval*10 + 200*time.Millisecond)
@@ -482,7 +490,7 @@ func TestTxIngressEvaluateHoldsRefusalWhileUnminedTransactionsLoad(t *testing.T)
 		ba.unminedTransactionsLoading.Store(true)
 		defer ba.unminedTransactionsLoading.Store(false)
 
-		addTestTxs(ba, limit)
+		addTestTxs(t, ba, limit)
 
 		require.Eventually(t, func() bool {
 			full, _ := ba.evaluateTxIngressFull()
@@ -522,7 +530,7 @@ func TestTxIngressLimitMonitorHeartbeatDoesNotAnnounceRoom(t *testing.T) {
 
 	ba.startTxIngressLimitMonitor(ctx)
 
-	addTestTxs(ba, 20)
+	addTestTxs(t, ba, 20)
 
 	deadline := time.After(ba.txIngressHeartbeatInterval*10 + 200*time.Millisecond)
 

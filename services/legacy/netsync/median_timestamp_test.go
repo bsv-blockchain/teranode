@@ -293,3 +293,71 @@ func TestCandidateParentMedianTimeForBlock_WalkFallbackRecoversFromBadBatchedFet
 	require.NoError(t, err, "fallback walk must recover when the batched path returns wrong-head headers")
 	require.Equal(t, uint32(100), got, "MTP must come from the correct chain, not from the racy batched fetch")
 }
+
+// TestCandidateParentMedianTimeFromHeaders_AcceptsShortRunAtGenesis is the other side of the
+// rule, and the half netsync was missing while its subtreevalidation twin had both: a chain that
+// genuinely ends at genesis is shorter than 11 legitimately, exactly as in svnode, and must still
+// produce a median. Without it the short-run test alone is satisfied by a helper that rejects
+// every short run, which would break the early chain on teratestnet, tstn and stn — the networks
+// where CSVHeight is 0 and a candidate can legitimately sit below the first 11 blocks.
+func TestCandidateParentMedianTimeFromHeaders_AcceptsShortRunAtGenesis(t *testing.T) {
+	headers := makeChain(t, 3, []uint32{130, 120, 110})
+	parent := headers[0].Hash()
+
+	require.True(t, headers[len(headers)-1].HashPrevBlock.IsEqual(&chainhash.Hash{}),
+		"fixture's oldest header must be genesis-rooted, or this tests the wrong rule")
+
+	got, err := candidateParentMedianTimeFromHeaders(parent, headers)
+	require.NoError(t, err)
+	require.Equal(t, uint32(120), got)
+}
+
+// TestCandidateParentMedianTimeFromHeaders_ErrorsOnShortRunNotAtGenesis pins the
+// run-length half of the window contract. Truncating the run at its OLDEST end
+// leaves it anchored at the parent and correctly linked, so neither of those
+// guards can see it — but the median is then taken over a narrower window and
+// stops being the consensus one. svnode cannot express this state at all: it
+// walks pprev pointers, so a window is shorter than 11 only when the chain
+// itself ends at genesis. Before the length check the truncated run yielded 140
+// instead of 100.
+func TestCandidateParentMedianTimeFromHeaders_ErrorsOnShortRunNotAtGenesis(t *testing.T) {
+	full := makeChain(t, 11, []uint32{150, 140, 130, 120, 110, 100, 90, 80, 70, 60, 50})
+	parent := full[0].Hash()
+
+	// Sanity: the full run is the consensus window and yields 100.
+	got, err := candidateParentMedianTimeFromHeaders(parent, full)
+	require.NoError(t, err)
+	require.Equal(t, uint32(100), got)
+
+	// Truncated at the oldest end: still anchored, still linked, still short.
+	short := full[:4]
+	require.NotNil(t, short[len(short)-1].HashPrevBlock)
+	require.False(t, short[len(short)-1].HashPrevBlock.IsEqual(&chainhash.Hash{}), "fixture's oldest header must not look like genesis")
+
+	_, err = candidateParentMedianTimeFromHeaders(parent, short)
+	require.Error(t, err, "a short run that does not reach genesis must be refused, not measured")
+}
+
+// TestCandidateParentMedianTimeFromHeaders_ErrorsOnOverLongRun pins the guard block assembly's
+// copy of this logic already has (verifyParentChainRun in services/blockassembly/candidate_time.go).
+//
+// A run LONGER than the window is as wrong as one shorter than it: the median would be taken over
+// blocks the consensus rule does not include, and the anchor and linkage checks cannot see it —
+// an over-long run is still anchored at the parent and still correctly linked. Unreachable today,
+// because the only caller requests exactly MedianTimeBlocks headers and the store cannot return
+// more than asked; the point is that the three copies of this helper agree, so a later change to
+// the request size fails loudly in all of them rather than silently widening the window in two.
+func TestCandidateParentMedianTimeFromHeaders_ErrorsOnOverLongRun(t *testing.T) {
+	n := int(blockchain.MedianTimeBlocks) + 1
+
+	timestamps := make([]uint32, n)
+	for i := range timestamps {
+		timestamps[i] = uint32(1_700_000_000 + i)
+	}
+
+	headers := makeChain(t, n, timestamps)
+
+	_, err := candidateParentMedianTimeFromHeaders(headers[0].Hash(), headers)
+	require.Error(t, err, "a run longer than the median window must be refused")
+	require.Contains(t, err.Error(), "more than")
+}

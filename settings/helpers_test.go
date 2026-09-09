@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ordishs/gocore"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetString(t *testing.T) {
@@ -233,4 +234,42 @@ func TestGetIntSlice_MissingKey(t *testing.T) {
 			t.Errorf("Expected default value %d at index %d, got %d", defaultValue[i], i, v)
 		}
 	}
+}
+
+func TestGetUint64AtLeast(t *testing.T) {
+	t.Run("value above the floor is used as configured", func(t *testing.T) {
+		gocore.Config().Set("test_at_least", "50")
+		defer gocore.Config().Unset("test_at_least")
+
+		require.Equal(t, uint64(50), getUint64AtLeast("test_at_least", 100, 11))
+	})
+
+	t.Run("value below the floor is raised to it", func(t *testing.T) {
+		gocore.Config().Set("test_at_least", "5")
+		defer gocore.Config().Unset("test_at_least")
+
+		require.Equal(t, uint64(11), getUint64AtLeast("test_at_least", 100, 11))
+	})
+
+	t.Run("zero is raised to the floor", func(t *testing.T) {
+		gocore.Config().Set("test_at_least", "0")
+		defer gocore.Config().Unset("test_at_least")
+
+		require.Equal(t, uint64(11), getUint64AtLeast("test_at_least", 100, 11))
+	})
+
+	t.Run("missing key falls back to the default", func(t *testing.T) {
+		require.Equal(t, uint64(100), getUint64AtLeast("missing_at_least_key", 100, 11))
+	})
+}
+
+// TestPreviousBlockHeaderCountFloor pins the consensus floor on the header run that
+// CheckHeaderContextual evaluates median time past over. svnode's window
+// (CBlockIndex::nMedianTimeSpan) is a hard constant; configuring fewer than 11 here would
+// silently compute the median over fewer blocks and accept blocks the network rejects.
+func TestPreviousBlockHeaderCountFloor(t *testing.T) {
+	gocore.Config().Set("blockvalidation_previous_block_header_count", "5")
+	defer gocore.Config().Unset("blockvalidation_previous_block_header_count")
+
+	require.GreaterOrEqual(t, NewSettings().BlockValidation.PreviousBlockHeaderCount, uint64(11))
 }

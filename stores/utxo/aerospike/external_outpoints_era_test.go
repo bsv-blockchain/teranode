@@ -33,7 +33,7 @@ func TestCreationHeightFromBlockHeights(t *testing.T) {
 // value-agnostic) so the reconstructed set agrees with what create stored.
 func TestGetExternalOutpoints_EraAware(t *testing.T) {
 	ctx := context.Background()
-	chainParams := chaincfg.RegressionNetParams // GenesisActivationHeight = 10000
+	chainParams := chaincfg.RegressionNetParams
 	tSettings := &settings.Settings{}
 	tSettings.ChainCfgParams = &chainParams
 
@@ -64,10 +64,13 @@ func TestGetExternalOutpoints_EraAware(t *testing.T) {
 	txHash := *tx.TxIDChainHash()
 	require.NoError(t, mem.Set(ctx, txHash[:], fileformat.FileTypeTx, tx.Bytes()))
 
-	const (
-		preGenesis  = uint32(5000)  // < 10000
-		postGenesis = uint32(15000) // >= 10000
-	)
+	// Derive the two probe heights from the params rather than hardcoding them:
+	// the regtest activation height has moved before (10000 -> 100) and a fixed
+	// literal silently flips this test's era instead of failing.
+	genesis := chainParams.GenesisActivationHeight
+	require.Positive(t, genesis, "params must leave room for a pre-Genesis height")
+
+	preGenesis, postGenesis := genesis-1, genesis+1
 
 	t.Run("post-genesis", func(t *testing.T) {
 		got, n, err := s.getExternalOutpoints(ctx, txHash, postGenesis)

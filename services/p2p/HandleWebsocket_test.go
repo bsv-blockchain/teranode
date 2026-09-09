@@ -2,17 +2,23 @@
 package p2p
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
@@ -23,6 +29,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -30,111 +37,84 @@ import (
 
 const (
 	baseURL           = "http://test.com"
-	shortTimeout      = 50 * time.Millisecond
 	errClientNotAdded = "Client channel not added to clientChannels"
 )
 
 func TestBroadcastMessage(t *testing.T) {
 	tests := []struct {
-		name           string
-		clientCount    int
-		blockingCount  int
-		expectedErrors int
+		name            string
+		clientCount     int
+		backedUpCount   int
+		expectedEvicted int
 	}{
 		{
-			name:           "No clients",
-			clientCount:    0,
-			blockingCount:  0,
-			expectedErrors: 0,
+			name:            "No clients",
+			clientCount:     0,
+			backedUpCount:   0,
+			expectedEvicted: 0,
 		},
 		{
-			name:           "Single responsive client",
-			clientCount:    1,
-			blockingCount:  0,
-			expectedErrors: 0,
+			name:            "Single responsive client",
+			clientCount:     1,
+			backedUpCount:   0,
+			expectedEvicted: 0,
 		},
 		{
-			name:           "Multiple responsive clients",
-			clientCount:    3,
-			blockingCount:  0,
-			expectedErrors: 0,
+			name:            "Multiple responsive clients",
+			clientCount:     3,
+			backedUpCount:   0,
+			expectedEvicted: 0,
 		},
 		{
-			name:           "Some blocking clients",
-			clientCount:    3,
-			blockingCount:  2,
-			expectedErrors: 2,
+			name:            "Some backed-up clients",
+			clientCount:     3,
+			backedUpCount:   2,
+			expectedEvicted: 2,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// We'll manually track the timeouts in our test function
-			timeoutChan := make(chan struct{}, tt.blockingCount) // Buffer to collect all timeouts
+			cm := newClientChannelMap()
 
-			// Create unbuffered channels that will block
-			blockingChannels := make([]chan []byte, tt.blockingCount)
-			for i := 0; i < tt.blockingCount; i++ {
-				blockingChannels[i] = make(chan []byte) // Unbuffered channel with no reader
+			// Backed-up clients: unbuffered channels with no reader, so the
+			// non-blocking send finds the buffer full and must evict, calling
+			// the registered cancel func to close the connection.
+			var cancelled atomic.Int64
+
+			backedUpChannels := make([]chan []byte, tt.backedUpCount)
+			for i := 0; i < tt.backedUpCount; i++ {
+				backedUpChannels[i] = make(chan []byte)
+				cm.add(backedUpChannels[i], func() { cancelled.Add(1) })
 			}
 
-			// Create buffered channels that won't block
-			nonBlockingChannels := make([]chan []byte, tt.clientCount-tt.blockingCount)
-			for i := 0; i < tt.clientCount-tt.blockingCount; i++ {
-				nonBlockingChannels[i] = make(chan []byte, 1) // Buffered channel
+			// Responsive clients: buffered channels with free capacity.
+			responsiveChannels := make([]chan []byte, tt.clientCount-tt.backedUpCount)
+			for i := range responsiveChannels {
+				responsiveChannels[i] = make(chan []byte, 1)
+				cm.add(responsiveChannels[i], nil)
 			}
 
-			// Combine channels into the map expected by broadcastMessage
-			clientChannels := make(map[chan []byte]struct{})
-			for _, ch := range blockingChannels {
-				clientChannels[ch] = struct{}{}
-			}
-
-			for _, ch := range nonBlockingChannels {
-				clientChannels[ch] = struct{}{}
-			}
-
-			// Set up readers for non-blocking channels
-			var wg sync.WaitGroup
-			for _, ch := range nonBlockingChannels {
-				wg.Add(1)
-
-				go func(ch chan []byte) {
-					defer wg.Done()
-					<-ch // Read the message
-				}(ch)
-			}
-
-			// Create a test message
 			testData := []byte("test message")
+			cm.broadcast(testData, &ulogger.TestLogger{})
 
-			// Our test version of broadcastMessage that tracks timeouts
-			broadcastTest := func() {
-				for ch := range clientChannels {
-					select {
-					case ch <- testData:
-						// Message sent successfully
-					case <-time.After(shortTimeout):
-						// Timed out - record this timeout
-						timeoutChan <- struct{}{}
-					}
+			for _, ch := range responsiveChannels {
+				select {
+				case got := <-ch:
+					require.Equal(t, testData, got)
+				default:
+					t.Fatal("Responsive client did not receive the broadcast")
 				}
+
+				require.True(t, cm.contains(ch), "Responsive client must stay registered")
 			}
 
-			// Run the broadcast
-			broadcastTest()
+			for _, ch := range backedUpChannels {
+				require.False(t, cm.contains(ch), "Backed-up client must be evicted")
+			}
 
-			// Wait for all readers to finish
-			wg.Wait()
-
-			// Count how many timeouts occurred
-			timeoutCount := len(timeoutChan)
-			close(timeoutChan)
-
-			// Verify we got the expected number of timeouts
-			assert.Equal(t, tt.expectedErrors, timeoutCount,
-				"Expected %d timeouts but got %d in test '%s'",
-				tt.expectedErrors, timeoutCount, tt.name)
+			require.Equal(t, int64(tt.expectedEvicted), cancelled.Load(),
+				"Eviction must cancel each backed-up client's connection")
 		})
 	}
 }
@@ -147,14 +127,13 @@ func TestHandleClientMessages(t *testing.T) {
 		}
 
 		ch := make(chan []byte, 1)
-		deadClientCh := make(chan chan []byte, 1)
 		ws := &testWebSocketConn{
 			t: t,
 		}
 
 		done := make(chan struct{})
 		go func() {
-			s.handleClientMessages(ws, ch, deadClientCh)
+			s.handleClientMessages(t.Context(), ws, ch)
 			close(done)
 		}()
 
@@ -168,6 +147,9 @@ func TestHandleClientMessages(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("Timeout waiting for handler to complete")
 		}
+
+		require.Equal(t, 0, ws.writesWithoutDeadline(),
+			"Every write must be preceded by a fresh write deadline")
 	})
 
 	t.Run("Write error", func(t *testing.T) {
@@ -177,26 +159,19 @@ func TestHandleClientMessages(t *testing.T) {
 		}
 
 		ch := make(chan []byte, 1)
-		deadClientCh := make(chan chan []byte, 1)
 		ws := &testWebSocketConn{t: t, writeError: assert.AnError}
 
 		done := make(chan struct{})
 		go func() {
-			s.handleClientMessages(ws, ch, deadClientCh)
+			s.handleClientMessages(t.Context(), ws, ch)
 			close(done)
 		}()
 
 		// Send a test message
 		ch <- []byte("test")
 
-		// Verify that the channel is reported as dead
-		select {
-		case deadCh := <-deadClientCh:
-			assert.Equal(t, ch, deadCh)
-		case <-time.After(time.Second):
-			t.Fatal("Timeout waiting for dead client channel")
-		}
-
+		// The writer must exit on the write error; the connection handler
+		// joins this goroutine and deregisters the client synchronously.
 		select {
 		case <-done:
 			// Handler completed normally
@@ -208,16 +183,51 @@ func TestHandleClientMessages(t *testing.T) {
 
 // testWebSocketConn implements the minimal websocket.Conn interface needed for testing
 type testWebSocketConn struct {
-	t          *testing.T
-	writeCount int
-	writeError error
+	t                *testing.T
+	mu               sync.Mutex
+	writtenTypes     []int
+	deadlineArmed    bool
+	missingDeadlines int
+	writeError       error
 }
 
 func (c *testWebSocketConn) WriteMessage(messageType int, data []byte) error {
-	c.writeCount++
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.writtenTypes = append(c.writtenTypes, messageType)
+
+	if !c.deadlineArmed {
+		c.missingDeadlines++
+	}
+
+	c.deadlineArmed = false
 	c.t.Logf("WriteMessage called with message type %d, data: %s", messageType, string(data))
 
 	return c.writeError
+}
+
+func (c *testWebSocketConn) SetWriteDeadline(_ time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.deadlineArmed = true
+
+	return nil
+}
+
+// writesWithoutDeadline reports how many writes were issued without a fresh
+// SetWriteDeadline call since the previous write.
+func (c *testWebSocketConn) writesWithoutDeadline() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.missingDeadlines
+}
+
+func (c *testWebSocketConn) wroteMessageType(messageType int) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return slices.Contains(c.writtenTypes, messageType)
 }
 
 func (c *testWebSocketConn) Close() error {
@@ -241,8 +251,6 @@ func TestStartNotificationProcessor(t *testing.T) {
 	}
 
 	clientChannels := newClientChannelMap()
-	newClientCh := make(chan chan []byte, 1)
-	deadClientCh := make(chan chan []byte, 1)
 	notificationCh := make(chan *notificationMsg, 1)
 
 	// Create context with cancel for cleanup
@@ -255,7 +263,7 @@ func TestStartNotificationProcessor(t *testing.T) {
 
 	go func() {
 		close(processorStarted)
-		s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, ctx)
+		s.startNotificationProcessor(clientChannels, notificationCh, ctx)
 		close(processorDone)
 	}()
 
@@ -267,34 +275,10 @@ func TestStartNotificationProcessor(t *testing.T) {
 		t.Fatal("Timeout waiting for processor to start")
 	}
 
-	t.Run("Add new client", func(t *testing.T) {
-		clientCh := make(chan []byte, 10)
-		newClientCh <- clientCh
-
-		// Wait for client to be added
-		time.Sleep(50 * time.Millisecond)
-		assert.True(t, clientChannels.contains(clientCh), errClientNotAdded)
-		assert.Equal(t, 1, clientChannels.count(), "Expected exactly one client")
-	})
-
 	t.Run("Send notification", func(t *testing.T) {
 		clientCh := make(chan []byte, 10)
-		newClientCh <- clientCh
-
-		// Wait for client to be added
-		time.Sleep(50 * time.Millisecond)
+		clientChannels.add(clientCh, nil)
 		require.True(t, clientChannels.contains(clientCh), errClientNotAdded)
-
-		// First, drain the initial node_status message
-		select {
-		case msg := <-clientCh:
-			var initialMsg notificationMsg
-			err := json.Unmarshal(msg, &initialMsg)
-			require.NoError(t, err)
-			assert.Equal(t, "node_status", initialMsg.Type, "First message should be node_status")
-		case <-time.After(100 * time.Millisecond):
-			// No initial message is OK too if the server doesn't have a P2PClient
-		}
 
 		// Send our test notification
 		testNotification := &notificationMsg{
@@ -314,45 +298,27 @@ func TestStartNotificationProcessor(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("Timeout waiting for test notification")
 		}
+
+		clientChannels.remove(clientCh)
 	})
 
-	t.Run("Remove client", func(t *testing.T) {
-		clientCh := make(chan []byte, 10)
-		newClientCh <- clientCh
-
-		// Wait for client to be added
-		time.Sleep(50 * time.Millisecond)
-		require.True(t, clientChannels.contains(clientCh), errClientNotAdded)
-		initialCount := clientChannels.count()
-
-		deadClientCh <- clientCh
-
-		// Wait for client to be removed
-		time.Sleep(50 * time.Millisecond)
-		assert.False(t, clientChannels.contains(clientCh), "Client channel not removed from clientChannels")
-		assert.Equal(t, initialCount-1, clientChannels.count(), "Client count not decremented")
-	})
-
-	t.Run("Broadcast timeout handling", func(t *testing.T) {
+	t.Run("Backed-up client evicted", func(t *testing.T) {
 		slowCh := make(chan []byte) // Unbuffered channel that will block
-		newClientCh <- slowCh
-
-		// Wait for client to be added
-		time.Sleep(50 * time.Millisecond)
+		clientChannels.add(slowCh, nil)
 		require.True(t, clientChannels.contains(slowCh), errClientNotAdded)
 		initialCount := clientChannels.count()
 
-		// Send a notification - this should timeout for the slow client
+		// Send a notification - the full buffer must evict the slow client
 		testNotification := &notificationMsg{
 			Type:    "test",
 			BaseURL: baseURL,
 		}
 		notificationCh <- testNotification
 
-		// Wait for timeout and automatic removal
-		time.Sleep(1500 * time.Millisecond) // Wait longer than the timeout
-		assert.False(t, clientChannels.contains(slowCh), "Slow client channel not removed after timeout")
-		assert.Equal(t, initialCount-1, clientChannels.count(), "Client count not decremented after timeout")
+		require.Eventually(t, func() bool {
+			return !clientChannels.contains(slowCh)
+		}, time.Second, 10*time.Millisecond, "Backed-up client channel not evicted")
+		assert.Equal(t, initialCount-1, clientChannels.count(), "Client count not decremented after eviction")
 	})
 
 	// Cancel context to stop the processor
@@ -503,8 +469,6 @@ func TestBroadcast_SequentialTimeoutDoS(t *testing.T) {
 	}
 
 	clientChannels := newClientChannelMap()
-	newClientCh := make(chan chan []byte, 100)
-	deadClientCh := make(chan chan []byte, 100)
 	notificationCh := make(chan *notificationMsg, 100)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -512,7 +476,7 @@ func TestBroadcast_SequentialTimeoutDoS(t *testing.T) {
 
 	processorDone := make(chan struct{})
 	go func() {
-		s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, ctx)
+		s.startNotificationProcessor(clientChannels, notificationCh, ctx)
 		close(processorDone)
 	}()
 
@@ -522,25 +486,22 @@ func TestBroadcast_SequentialTimeoutDoS(t *testing.T) {
 	// Number of malicious clients (channels that won't be read)
 	numMaliciousClients := 5
 
-	// Create malicious clients - unbuffered channels that will block
-	// This simulates clients that stop reading: when broadcast tries to send,
-	// it will block for 1 second per client before timing out
+	// Create malicious clients - unbuffered channels that will block.
+	// This simulates clients that stop reading: the non-blocking broadcast
+	// must evict each of them immediately instead of waiting on them.
 	maliciousChannels := make([]chan []byte, numMaliciousClients)
 	for i := 0; i < numMaliciousClients; i++ {
 		// Create unbuffered channel that will block when trying to send
 		maliciousChannels[i] = make(chan []byte)
-		newClientCh <- maliciousChannels[i]
+		clientChannels.add(maliciousChannels[i], nil)
 	}
 
-	// Wait for all clients to be added
-	time.Sleep(100 * time.Millisecond)
 	require.Equal(t, numMaliciousClients, clientChannels.count(), "All malicious clients should be added")
 
 	// Add one legitimate client that will read messages
 	// Add it AFTER malicious clients to ensure it's processed last in the broadcast loop
 	legitimateCh := make(chan []byte, 100)
-	newClientCh <- legitimateCh
-	time.Sleep(50 * time.Millisecond)
+	clientChannels.add(legitimateCh, nil)
 
 	// Start reading from legitimate client in background
 	legitimateReceived := make(chan []byte, 1)
@@ -553,9 +514,9 @@ func TestBroadcast_SequentialTimeoutDoS(t *testing.T) {
 		}
 	}()
 
-	// Send a notification and measure the time it takes for broadcast to complete
-	// With parallel processing, broadcast should complete in ~1 second (all timeouts happen concurrently)
-	// instead of N seconds (sequential timeouts)
+	// Send a notification and measure the time it takes for broadcast to
+	// complete: with non-blocking sends it must finish near-instantly instead
+	// of N seconds (sequential timeouts)
 	testNotification := &notificationMsg{
 		Type:    "test_dos",
 		BaseURL: baseURL,
@@ -572,9 +533,8 @@ func TestBroadcast_SequentialTimeoutDoS(t *testing.T) {
 		t.Fatal("Timeout waiting for legitimate client to receive message")
 	}
 
-	// Now wait for ALL malicious clients to be processed and removed
-	// With parallel processing, this should take ~1 second (all timeouts happen concurrently)
-	// instead of N seconds (sequential timeouts)
+	// Now wait for ALL malicious clients to be evicted; the non-blocking
+	// broadcast removes each backed-up client on the first send attempt
 	timeout := time.After(time.Duration(numMaliciousClients+2) * time.Second)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -603,21 +563,21 @@ func TestBroadcast_SequentialTimeoutDoS(t *testing.T) {
 	}
 
 broadcastComplete:
-	// Verify the broadcast completed quickly due to parallel processing
-	// With parallel processing, all timeouts happen concurrently, so total time should be ~1 second
-	// instead of N seconds (sequential timeouts)
+	// Verify the broadcast completed quickly: non-blocking sends evict every
+	// backed-up client immediately, so total time is bounded by scheduling
+	// overhead, not by N sequential (or even one parallel) 1s timeouts
 	expectedMaxDelay := 2 * time.Second // Allow some overhead for goroutine scheduling
 
 	if broadcastCompleteTime > expectedMaxDelay {
-		t.Errorf("Broadcast took too long (%v). Expected at most %v with parallel processing. Sequential processing would take ~%d seconds",
+		t.Errorf("Broadcast took too long (%v). Expected at most %v with non-blocking sends. Sequential timeout processing would take ~%d seconds",
 			broadcastCompleteTime, expectedMaxDelay, numMaliciousClients)
 	} else {
-		t.Logf("Broadcast completed in %v (parallel processing working correctly)", broadcastCompleteTime)
+		t.Logf("Broadcast completed in %v (non-blocking fan-out working correctly)", broadcastCompleteTime)
 	}
 
 	// Verify all malicious clients were removed
 	assert.Equal(t, numMaliciousClients, removedCount,
-		"All malicious client channels should be removed after timeout")
+		"All malicious client channels should be evicted")
 
 	// Verify the notification processor can process new notifications after broadcast completes
 	// Drain any remaining messages from legitimate client first
@@ -722,80 +682,793 @@ func TestHandleWebSocket_PerConnectionContext(t *testing.T) {
 	require.Equal(t, baseURL, received.BaseURL)
 }
 
-// TestBroadcast_BoundedPool verifies the broadcast goroutine pool caps in-flight goroutines.
-// It overrides maxConcurrentBroadcasts to a small value, then submits 4x that many unresponsive
-// (unbuffered, unread) channels. Every channel hits the 1s send-timeout. With the cap, total
-// wall-clock time is ceil(channels/poolSize) * 1s; without it, all timeouts run concurrently
-// and total wall-clock is ~1s. The lower bound asserts the semaphore actually serialises work.
-func TestBroadcast_BoundedPool(t *testing.T) {
-	originalPoolSize := maxConcurrentBroadcasts
-	defer func() { maxConcurrentBroadcasts = originalPoolSize }()
-	maxConcurrentBroadcasts = 2
-
+// TestBroadcast_NonBlockingFanout verifies broadcast never waits on a slow
+// consumer: it runs inline on the single notification processor goroutine, so
+// with the old 1s send-timeout a pool of clients keeping their buffers full
+// stalled every notification. Backed-up channels must be evicted immediately
+// (cancel invoked) and the whole fan-out must complete far below the old
+// one-second-per-broadcast floor, while responsive clients still receive.
+func TestBroadcast_NonBlockingFanout(t *testing.T) {
 	cm := newClientChannelMap()
 
-	const numChannels = 8
-	channels := make([]chan []byte, numChannels)
+	const numBackedUp = 64
 
-	for i := 0; i < numChannels; i++ {
-		channels[i] = make(chan []byte)
-		cm.add(channels[i])
+	var cancelled atomic.Int64
+
+	for i := 0; i < numBackedUp; i++ {
+		cm.add(make(chan []byte), func() { cancelled.Add(1) }) // unbuffered: always full
 	}
 
-	require.Equal(t, numChannels, cm.count(), "All channels should be registered")
+	responsiveCh := make(chan []byte, 1)
+	cm.add(responsiveCh, nil)
 
-	logger := &ulogger.TestLogger{}
+	initPrometheusMetrics()
+	evictedBefore := testutil.ToFloat64(prometheusP2PWebsocketClientsEvicted)
 
 	startTime := time.Now()
-	cm.broadcast([]byte("test"), logger)
+	cm.broadcast([]byte("test"), &ulogger.TestLogger{})
 	elapsed := time.Since(startTime)
 
-	expectedMin := time.Duration(numChannels/maxConcurrentBroadcasts) * time.Second
-	expectedMax := expectedMin + 2*time.Second
+	// The old implementation parked at least one full second on the timeout
+	// timers; a non-blocking fan-out over in-memory channels is microseconds.
+	// 500ms leaves generous headroom for a loaded CI machine.
+	require.Less(t, elapsed, 500*time.Millisecond,
+		"Broadcast must not wait on backed-up clients (took %v)", elapsed)
 
-	require.GreaterOrEqual(t, elapsed, expectedMin,
-		"Broadcast finished too quickly (%v); pool of %d should have serialised %d unresponsive channels into batches taking ~%v",
-		elapsed, maxConcurrentBroadcasts, numChannels, expectedMin)
-	require.LessOrEqual(t, elapsed, expectedMax,
-		"Broadcast took too long (%v); expected at most %v", elapsed, expectedMax)
+	require.Equal(t, 1, cm.count(), "Only the responsive client should remain registered")
+	require.Equal(t, int64(numBackedUp), cancelled.Load(), "Every backed-up client's connection must be cancelled")
+	require.Equal(t, float64(numBackedUp), testutil.ToFloat64(prometheusP2PWebsocketClientsEvicted)-evictedBefore,
+		"Every eviction must be counted in the metric")
 
-	require.Equal(t, 0, cm.count(), "All timed-out channels should be removed")
-
-	t.Logf("Broadcast of %d unresponsive channels with pool=%d completed in %v (expected %v..%v)",
-		numChannels, maxConcurrentBroadcasts, elapsed, expectedMin, expectedMax)
+	select {
+	case <-responsiveCh:
+	default:
+		t.Fatal("Responsive client did not receive the broadcast")
+	}
 }
 
-// TestBroadcast_NonPositivePoolSizeDoesNotDeadlock verifies that a misconfigured
-// (zero or negative) maxConcurrentBroadcasts is clamped to a usable value rather
-// than deadlocking the broadcast loop. With cap=0, sem <- struct{}{} on an
-// unbuffered channel would block forever because the receiver runs only after
-// the send returns.
-func TestBroadcast_NonPositivePoolSizeDoesNotDeadlock(t *testing.T) {
-	originalPoolSize := maxConcurrentBroadcasts
-	defer func() { maxConcurrentBroadcasts = originalPoolSize }()
-	maxConcurrentBroadcasts = 0
-
-	cm := newClientChannelMap()
-
-	const numChannels = 3
-	for i := 0; i < numChannels; i++ {
-		cm.add(make(chan []byte, 1)) // buffered so sends succeed immediately
+func TestOriginAllowed(t *testing.T) {
+	tests := []struct {
+		name    string
+		origin  string
+		allowed []string
+		want    bool
+	}{
+		{"empty list allows all", "http://evil.example", nil, true},
+		{"wildcard allows all", "http://evil.example", []string{"*"}, true},
+		{"exact match", "https://dash.example.com", []string{"https://dash.example.com"}, true},
+		{"case-insensitive match", "https://DASH.example.com", []string{"https://dash.example.com"}, true},
+		{"mismatch rejected", "http://evil.example", []string{"https://dash.example.com"}, false},
+		{"one of several", "https://ops.example.com", []string{"https://dash.example.com", "https://ops.example.com"}, true},
 	}
 
-	done := make(chan struct{})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, originAllowed(tt.origin, tt.allowed))
+		})
+	}
+}
 
+// TestHandleClientMessages_Ping verifies the writer periodically pings the
+// client (with a write deadline) so healthy clients keep refreshing their
+// read deadline and dead ones are detected.
+func TestHandleClientMessages_Ping(t *testing.T) {
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		wsTimeouts: &wsTimeouts{
+			writeTimeout: 50 * time.Millisecond,
+			pongWait:     100 * time.Millisecond,
+			pingPeriod:   20 * time.Millisecond,
+		},
+	}
+
+	ch := make(chan []byte, 1)
+	ws := &testWebSocketConn{t: t}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan struct{})
 	go func() {
-		cm.broadcast([]byte("test"), &ulogger.TestLogger{})
+		s.handleClientMessages(ctx, ws, ch)
 		close(done)
 	}()
 
+	require.Eventually(t, func() bool {
+		return ws.wroteMessageType(websocket.PingMessage)
+	}, time.Second, 5*time.Millisecond, "Writer should send periodic pings")
+
+	cancel()
+
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("broadcast deadlocked with maxConcurrentBroadcasts <= 0")
+	case <-time.After(time.Second):
+		t.Fatal("Timeout waiting for handler to exit on context cancellation")
 	}
 
-	require.Equal(t, numChannels, cm.count(), "responsive channels should still be registered")
+	require.Equal(t, 0, ws.writesWithoutDeadline(),
+		"Every write (including pings) must be preceded by a fresh write deadline")
+}
+
+// TestWebsocketTimeouts_PingPeriodClamped verifies a misconfigured override
+// (pingPeriod >= pongWait) is clamped so healthy connections aren't evicted
+// every ping cycle.
+func TestWebsocketTimeouts_PingPeriodClamped(t *testing.T) {
+	s := &Server{
+		wsTimeouts: &wsTimeouts{
+			writeTimeout: time.Second,
+			pongWait:     time.Second,
+			pingPeriod:   2 * time.Second,
+		},
+	}
+
+	to := s.websocketTimeouts()
+	require.Less(t, to.pingPeriod, to.pongWait, "pingPeriod must be clamped below pongWait")
+
+	defaults := (&Server{}).websocketTimeouts()
+	require.Equal(t, defaultWSTimeouts(), defaults, "nil override must yield defaults")
+	require.Less(t, defaults.pingPeriod, defaults.pongWait)
+
+	// Non-positive overrides must be floored: a zero pingPeriod would make
+	// time.NewTicker panic in the writer goroutine and take the process down.
+	for _, override := range []wsTimeouts{
+		{},
+		{writeTimeout: -time.Second, pongWait: -time.Second, pingPeriod: -time.Second},
+		{writeTimeout: time.Second}, // pongWait/pingPeriod zero
+		{pongWait: time.Nanosecond}, // derived pingPeriod would floor to zero
+	} {
+		to := (&Server{wsTimeouts: &override}).websocketTimeouts()
+		require.Positive(t, to.writeTimeout, "writeTimeout must be positive for %+v", override)
+		require.Positive(t, to.pongWait, "pongWait must be positive for %+v", override)
+		require.Positive(t, to.pingPeriod, "pingPeriod must be positive for %+v (ticker would panic)", override)
+	}
+}
+
+// newWebSocketTestServer registers the handler on a real echo instance so
+// echo's error handling (e.g. 503 on connection-cap rejection) applies.
+func newWebSocketTestServer(t *testing.T, s *Server) (string, chan *notificationMsg) {
+	t.Helper()
+
+	notificationCh := make(chan *notificationMsg, 256)
+	handler := s.HandleWebSocket(notificationCh)
+
+	e := echo.New()
+	e.HideBanner = true
+	e.GET("/p2p-ws", handler)
+
+	srv := httptest.NewServer(e)
+	t.Cleanup(srv.Close)
+
+	return "ws" + strings.TrimPrefix(srv.URL, "http") + "/p2p-ws", notificationCh
+}
+
+// TestHandleWebSocket_ConnectionCap verifies upgrades beyond the configured
+// connection cap are rejected with 503 and that slots are released when a
+// connection tears down.
+func TestHandleWebSocket_ConnectionCap(t *testing.T) {
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode:              settings.ListenModeFull,
+				WebSocketMaxConnections: 1,
+			},
+		},
+	}
+
+	wsURL, _ := newWebSocketTestServer(t, s)
+
+	ws1, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err, "First connection should be accepted")
+
+	// Second connection must be rejected before the upgrade with 503.
+	ws2, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.Error(t, err, "Second connection should be rejected by the cap")
+	require.NotNil(t, resp)
+	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+
+	if ws2 != nil {
+		_ = ws2.Close()
+	}
+
+	// Closing the first connection must release its slot.
+	require.NoError(t, ws1.Close())
+
+	require.Eventually(t, func() bool {
+		ws3, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			return false
+		}
+		defer ws3.Close()
+
+		return true
+	}, 3*time.Second, 50*time.Millisecond, "Slot should be released after the first connection closes")
+}
+
+// TestHandleWebSocket_ConnectionCapDisabled verifies a non-positive cap
+// disables the limit entirely.
+func TestHandleWebSocket_ConnectionCapDisabled(t *testing.T) {
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode:              settings.ListenModeFull,
+				WebSocketMaxConnections: 0,
+			},
+		},
+	}
+
+	wsURL, _ := newWebSocketTestServer(t, s)
+
+	conns := make([]*websocket.Conn, 0, 5)
+
+	defer func() {
+		for _, ws := range conns {
+			_ = ws.Close()
+		}
+	}()
+
+	for range 5 {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, err, "All connections should be accepted with the cap disabled")
+		conns = append(conns, ws)
+	}
+}
+
+// TestHandleWebSocket_OriginRestriction verifies the upgrade-time Origin check
+// against the configured allow-list.
+func TestHandleWebSocket_OriginRestriction(t *testing.T) {
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode:              settings.ListenModeFull,
+				WebSocketAllowedOrigins: []string{"https://dash.example.com"},
+			},
+		},
+	}
+
+	wsURL, _ := newWebSocketTestServer(t, s)
+
+	t.Run("Disallowed origin rejected", func(t *testing.T) {
+		ws, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": []string{"http://evil.example"}})
+		require.Error(t, err)
+		require.NotNil(t, resp)
+		require.Equal(t, http.StatusForbidden, resp.StatusCode)
+
+		if ws != nil {
+			_ = ws.Close()
+		}
+	})
+
+	t.Run("Allowed origin accepted", func(t *testing.T) {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": []string{"https://dash.example.com"}})
+		require.NoError(t, err)
+		require.NoError(t, ws.Close())
+	})
+
+	t.Run("No origin header accepted", func(t *testing.T) {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, err)
+		require.NoError(t, ws.Close())
+	})
+}
+
+// TestHandleWebSocket_SlowClientEvicted verifies a client that never reads
+// (so never answers pings) is torn down by the read deadline and releases its
+// resources, while a client that keeps reading (pong replies handled by the
+// gorilla default ping handler) stays connected past the pong deadline.
+func TestHandleWebSocket_SlowClientEvicted(t *testing.T) {
+	// Timeouts are shrunk per-Server (not via globals) so lingering pumps
+	// from other tests can never race on them.
+	pongWait := 500 * time.Millisecond
+
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode:              settings.ListenModeFull,
+				WebSocketMaxConnections: 1,
+			},
+		},
+		wsTimeouts: &wsTimeouts{
+			writeTimeout: 250 * time.Millisecond,
+			pongWait:     pongWait,
+			pingPeriod:   125 * time.Millisecond,
+		},
+	}
+
+	wsURL, _ := newWebSocketTestServer(t, s)
+
+	t.Run("Silent client evicted and slot released", func(t *testing.T) {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, err)
+
+		defer ws.Close()
+
+		// Never read from ws: no pong replies, so the server's read deadline
+		// must fire and tear the connection down, releasing the only slot.
+		require.Eventually(t, func() bool {
+			ws2, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+			if err != nil {
+				return false
+			}
+			defer ws2.Close()
+
+			return true
+		}, 5*time.Second, 100*time.Millisecond, "Silent client should be evicted, freeing its connection slot")
+	})
+
+	t.Run("Reading client survives past pong deadline", func(t *testing.T) {
+		// Retry the dial: with a cap of 1, the previous subtest's probe
+		// connection releases its slot asynchronously (server-side teardown
+		// runs after the client-side Close returns), so a single immediate
+		// dial can race it and get a 503.
+		var ws *websocket.Conn
+
+		require.Eventually(t, func() bool {
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+			if err != nil {
+				return false
+			}
+			ws = conn
+
+			return true
+		}, 5*time.Second, 100*time.Millisecond, "Connection slot should free up once the previous subtest's teardown completes")
+
+		defer ws.Close()
+
+		readErr := make(chan error, 1)
+		go func() {
+			for {
+				// Reading processes server pings; the default ping handler
+				// replies with pongs, keeping the connection alive.
+				if _, _, err := ws.ReadMessage(); err != nil {
+					readErr <- err
+					return
+				}
+			}
+		}()
+
+		select {
+		case err := <-readErr:
+			t.Fatalf("Reading client was disconnected: %v", err)
+		case <-time.After(3 * pongWait):
+			// Still connected well past the pong deadline.
+		}
+	})
+}
+
+// TestWSConnLimiter unit-tests the admission logic directly.
+func TestWSConnLimiter(t *testing.T) {
+	logger := &ulogger.TestLogger{}
+
+	t.Run("Per-source cap", func(t *testing.T) {
+		l := newWSConnLimiter(100, 0, nil, logger) // per-source cap = max(4, 100/20) = 5
+
+		releases := make([]func(), 0, 5)
+
+		for i := 0; i < 5; i++ {
+			release, ok := l.acquire("10.0.0.1:1000")
+			require.True(t, ok)
+			releases = append(releases, release)
+		}
+
+		_, ok := l.acquire("10.0.0.1:1006")
+		require.False(t, ok, "6th connection from the same source must be rejected")
+
+		release, ok := l.acquire("10.0.0.2:1000")
+		require.True(t, ok, "other sources must be unaffected by one source's cap")
+		release()
+
+		releases[0]()
+
+		release, ok = l.acquire("10.0.0.1:1007")
+		require.True(t, ok, "releasing a connection must free its per-source slot")
+		release()
+	})
+
+	t.Run("Total cap", func(t *testing.T) {
+		l := newWSConnLimiter(4, 0, nil, logger)
+
+		for i := 0; i < 4; i++ {
+			_, ok := l.acquire(fmt.Sprintf("10.0.0.%d:1000", i))
+			require.True(t, ok)
+		}
+
+		_, ok := l.acquire("10.0.9.9:1000")
+		require.False(t, ok, "connections beyond the total cap must be rejected")
+	})
+
+	t.Run("Trusted bypass", func(t *testing.T) {
+		l := newWSConnLimiter(1, 0, []string{"127.0.0.0/8", "::1/128", "not-a-cidr", ""}, logger)
+
+		_, ok := l.acquire("10.0.0.1:1000")
+		require.True(t, ok)
+
+		_, ok = l.acquire("10.0.0.2:1000")
+		require.False(t, ok, "untrusted sources must stay capped")
+
+		for i := 0; i < 10; i++ {
+			release, ok := l.acquire("127.0.0.1:9000")
+			require.True(t, ok, "trusted IPv4 sources must bypass a saturated cap")
+			release()
+		}
+
+		release, ok := l.acquire("[::1]:9000")
+		require.True(t, ok, "trusted IPv6 sources must bypass a saturated cap")
+		release()
+	})
+
+	t.Run("Cap disabled", func(t *testing.T) {
+		l := newWSConnLimiter(0, 0, nil, logger)
+
+		for i := 0; i < 50; i++ {
+			_, ok := l.acquire("10.0.0.1:1000")
+			require.True(t, ok, "non-positive cap must disable both limits")
+		}
+	})
+
+	t.Run("Per-source cap fixed override", func(t *testing.T) {
+		l := newWSConnLimiter(100, 2, nil, logger)
+
+		_, ok := l.acquire("10.0.0.1:1000")
+		require.True(t, ok)
+		_, ok = l.acquire("10.0.0.1:1001")
+		require.True(t, ok)
+		_, ok = l.acquire("10.0.0.1:1002")
+		require.False(t, ok, "a positive override must replace the derived per-source cap")
+	})
+
+	t.Run("Per-source cap disabled by negative override", func(t *testing.T) {
+		l := newWSConnLimiter(100, -1, nil, logger)
+
+		// Far beyond the derived cap of 5: one source may take slots up to the
+		// global cap when a proxy/NAT legitimately concentrates clients.
+		for i := 0; i < 50; i++ {
+			_, ok := l.acquire("10.0.0.1:1000")
+			require.True(t, ok, "negative override must disable the per-source cap")
+		}
+
+		require.Zero(t, l.maxPerSource)
+	})
+
+	t.Run("Trusted bypass overload warns once", func(t *testing.T) {
+		l := newWSConnLimiter(2, 0, []string{"127.0.0.0/8"}, logger)
+
+		releases := make([]func(), 0, 4)
+
+		for i := 0; i < 4; i++ {
+			release, ok := l.acquire("127.0.0.1:9000")
+			require.True(t, ok)
+			releases = append(releases, release)
+		}
+
+		require.False(t, l.lastBypassWarn.IsZero(),
+			"live trusted-bypass connections above the warn threshold must warn that the caps are non-binding")
+
+		for _, release := range releases {
+			release()
+		}
+
+		require.Zero(t, l.trustedLive, "trusted releases must decrement the live bypass count")
+	})
+
+	t.Run("Trusted bypass below threshold does not warn", func(t *testing.T) {
+		// Default-shaped config: threshold is the per-source budget (50), so a
+		// legitimate same-host bridge holding a handful of connections never
+		// triggers the proxy warning.
+		l := newWSConnLimiter(1000, 0, []string{"127.0.0.0/8"}, logger)
+
+		for i := 0; i < 5; i++ {
+			_, ok := l.acquire("127.0.0.1:9000")
+			require.True(t, ok)
+		}
+
+		require.True(t, l.lastBypassWarn.IsZero(),
+			"a bridge-sized trusted population must not trigger the proxy warning")
+	})
+
+	t.Run("Sentinel none disables the bypass", func(t *testing.T) {
+		l := newWSConnLimiter(1, 0, []string{"127.0.0.1/32", "none"}, logger)
+
+		require.Empty(t, l.trusted, "the none sentinel must clear the trust list entirely")
+
+		_, ok := l.acquire("127.0.0.1:9000")
+		require.True(t, ok, "loopback counts against the caps, not the bypass")
+
+		_, ok = l.acquire("127.0.0.1:9001")
+		require.False(t, ok, "with trust disabled, loopback must be subject to the global cap")
+	})
+}
+
+// TestHandleWebSocket_PerSourceCap verifies a single source host cannot take
+// the whole connection pool.
+func TestHandleWebSocket_PerSourceCap(t *testing.T) {
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode:              settings.ListenModeFull,
+				WebSocketMaxConnections: 100, // per-source cap = max(4, 100/20) = 5
+			},
+		},
+	}
+
+	wsURL, _ := newWebSocketTestServer(t, s)
+
+	conns := make([]*websocket.Conn, 0, 5)
+
+	defer func() {
+		for _, ws := range conns {
+			_ = ws.Close()
+		}
+	}()
+
+	for i := 0; i < 5; i++ {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, err)
+		conns = append(conns, ws)
+	}
+
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.Error(t, err, "6th connection from the same source must be rejected")
+	require.NotNil(t, resp)
+	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+}
+
+// TestHandleWebSocket_TrustedSourceBypassesCap verifies sources in the
+// trusted-CIDR list (e.g. the asset-service bridge) can always connect, even
+// when an attacker holds every public slot.
+func TestHandleWebSocket_TrustedSourceBypassesCap(t *testing.T) {
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode:                  settings.ListenModeFull,
+				WebSocketMaxConnections:     1,
+				WebSocketTrustedSourceCIDRs: []string{"127.0.0.1/32", "::1/128"},
+			},
+		},
+	}
+
+	wsURL, _ := newWebSocketTestServer(t, s)
+
+	conns := make([]*websocket.Conn, 0, 3)
+
+	defer func() {
+		for _, ws := range conns {
+			_ = ws.Close()
+		}
+	}()
+
+	for i := 0; i < 3; i++ {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, err, "trusted source must bypass the saturated cap")
+		conns = append(conns, ws)
+	}
+}
+
+// TestHandleWebSocket_BroadcastEvictionClosesConnection is the regression
+// test for the eviction path: a protocol-healthy client (socket draining,
+// pings answered) whose notification channel overflows must have its
+// connection closed and its slot released - not linger muted forever. Both
+// deadlines are set to 30s so nothing but the eviction path can free the
+// single slot within the assertion window.
+func TestHandleWebSocket_BroadcastEvictionClosesConnection(t *testing.T) {
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode:              settings.ListenModeFull,
+				WebSocketMaxConnections: 1,
+			},
+		},
+		wsTimeouts: &wsTimeouts{
+			writeTimeout: 30 * time.Second,
+			pongWait:     30 * time.Second,
+			pingPeriod:   27 * time.Second,
+		},
+	}
+
+	wsURL, notificationCh := newWebSocketTestServer(t, s)
+
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+
+	defer ws.Close()
+
+	// Flood large notifications the client never drains: the writer blocks on
+	// the full socket, the 100-slot channel overflows, and the broadcast's
+	// non-blocking send must evict AND close the connection.
+	payload := strings.Repeat("x", 256*1024)
+
+	go func() {
+		for i := 0; i < 300; i++ {
+			select {
+			case notificationCh <- &notificationMsg{Type: "flood", BaseURL: payload}:
+			case <-t.Context().Done():
+				return
+			}
+		}
+	}()
+
+	require.Eventually(t, func() bool {
+		ws2, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			return false
+		}
+		defer ws2.Close()
+
+		return true
+	}, 10*time.Second, 100*time.Millisecond,
+		"broadcast eviction must close the connection and release its slot")
+}
+
+// TestHandleWebSocket_InboundFrameLimits verifies the read-side protocol
+// contract: an oversized message or an exhausted per-window frame budget
+// closes the connection.
+func TestHandleWebSocket_InboundFrameLimits(t *testing.T) {
+	s := &Server{
+		gCtx:   t.Context(),
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{ListenMode: settings.ListenModeFull},
+		},
+	}
+
+	wsURL, _ := newWebSocketTestServer(t, s)
+
+	// requireServerClosed reads until an error and asserts it is a real
+	// close/reset from the server, not the client's own read deadline (a
+	// timeout here would mean the server never closed - a false pass).
+	requireServerClosed := func(t *testing.T, ws *websocket.Conn) {
+		t.Helper()
+		require.NoError(t, ws.SetReadDeadline(time.Now().Add(5*time.Second)))
+
+		for {
+			if _, _, err := ws.ReadMessage(); err != nil {
+				var netErr net.Error
+				require.False(t, errors.As(err, &netErr) && netErr.Timeout(),
+					"server did not close the connection: %v", err)
+
+				return
+			}
+		}
+	}
+
+	t.Run("Oversized message disconnects", func(t *testing.T) {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, err)
+
+		defer ws.Close()
+
+		require.NoError(t, ws.WriteMessage(websocket.TextMessage, bytes.Repeat([]byte("a"), 2048)))
+		requireServerClosed(t, ws)
+	})
+
+	t.Run("Frame budget exhaustion disconnects", func(t *testing.T) {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, err)
+
+		defer ws.Close()
+
+		for i := 0; i < wsMaxInboundFrames+50; i++ {
+			if err := ws.WriteMessage(websocket.TextMessage, []byte("spam")); err != nil {
+				break // server already closed on us mid-flood, which is the point
+			}
+		}
+
+		requireServerClosed(t, ws)
+	})
+
+	// Control frames are handled inside gorilla's ReadMessage and never
+	// surface to the read loop, so the budget must be enforced in the
+	// ping/pong handlers or a control-frame flood spends read-path budget
+	// (and, for pongs, refreshes the idle deadline) unmetered.
+	t.Run("Ping flood disconnects", func(t *testing.T) {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, err)
+
+		defer ws.Close()
+
+		for i := 0; i < wsMaxInboundFrames+50; i++ {
+			if err := ws.WriteControl(websocket.PingMessage, []byte("p"), time.Now().Add(time.Second)); err != nil {
+				break // server already closed on us mid-flood, which is the point
+			}
+		}
+
+		requireServerClosed(t, ws)
+	})
+
+	t.Run("Pong flood disconnects", func(t *testing.T) {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, err)
+
+		defer ws.Close()
+
+		for i := 0; i < wsMaxInboundFrames+50; i++ {
+			if err := ws.WriteControl(websocket.PongMessage, []byte("p"), time.Now().Add(time.Second)); err != nil {
+				break // server already closed on us mid-flood, which is the point
+			}
+		}
+
+		requireServerClosed(t, ws)
+	})
+}
+
+// TestSetupHTTPServer_Hardening pins the slow-loris protections and verifies
+// the CORS middleware shares the websocket upgrade's strict origin matcher:
+// exact and case-insensitive, no glob or subdomain expansion.
+func TestSetupHTTPServer_Hardening(t *testing.T) {
+	s := &Server{
+		gCtx:           t.Context(),
+		logger:         &ulogger.TestLogger{},
+		notificationCh: make(chan *notificationMsg, 1),
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode:              settings.ListenModeFull,
+				WebSocketAllowedOrigins: []string{"https://dash.example.com"},
+			},
+		},
+	}
+
+	e := s.setupHTTPServer()
+
+	t.Run("HTTP server timeouts set", func(t *testing.T) {
+		require.Positive(t, e.Server.ReadHeaderTimeout,
+			"ReadHeaderTimeout must be set or slow-header clients bypass the connection cap")
+		require.Positive(t, e.Server.ReadTimeout,
+			"ReadTimeout must be set or a withheld request body parks the post-handler drain forever")
+		require.Positive(t, e.Server.WriteTimeout,
+			"WriteTimeout must bound non-hijacked response writes")
+		require.Positive(t, e.Server.IdleTimeout,
+			"IdleTimeout must bound idle keep-alive connections")
+	})
+
+	srv := httptest.NewServer(e)
+	defer srv.Close()
+
+	get := func(t *testing.T, origin string) *http.Response {
+		t.Helper()
+
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/health", nil)
+		require.NoError(t, err)
+
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = resp.Body.Close() })
+
+		return resp
+	}
+
+	t.Run("Allowed origin echoed", func(t *testing.T) {
+		resp := get(t, "https://dash.example.com")
+		require.Equal(t, "https://dash.example.com", resp.Header.Get("Access-Control-Allow-Origin"))
+	})
+
+	t.Run("Disallowed origin gets no CORS header", func(t *testing.T) {
+		resp := get(t, "https://evil.example")
+		require.Empty(t, resp.Header.Get("Access-Control-Allow-Origin"))
+	})
+
+	t.Run("Subdomain is not expanded", func(t *testing.T) {
+		resp := get(t, "https://sub.dash.example.com")
+		require.Empty(t, resp.Header.Get("Access-Control-Allow-Origin"),
+			"strict matcher must not glob/subdomain-expand entries, unlike echo's AllowOrigins")
+	})
 }
 
 // TestSendInitialNodeStatuses_SendsCachedStatusSynchronously verifies that when a
@@ -842,18 +1515,19 @@ func TestGetNodeStatusMessage_PopulatesCache(t *testing.T) {
 	require.Same(t, msg, s.latestNodeStatus.Load())
 }
 
-// TestStartNotificationProcessor_SlowBlockchainDoesNotStallProcessor is a
-// regression test for the issue where sendInitialNodeStatuses ran a blockchain
-// gRPC round-trip inline on the single notification-processor goroutine: one slow
-// blockchain call (or a burst of new clients) froze all broadcasts and dead-client
-// reaping. The initial status fetch must not block the processor loop.
-func TestStartNotificationProcessor_SlowBlockchainDoesNotStallProcessor(t *testing.T) {
+// TestSendInitialNodeStatuses_SlowBlockchainDoesNotBlockCaller is a regression
+// test for the issue where sendInitialNodeStatuses ran a blockchain gRPC
+// round-trip inline on its caller: one slow blockchain call froze the caller
+// (historically the shared notification processor; now the connection handler).
+// With a cold cache the fetch must run off the calling goroutine, and the
+// status must still be delivered once the blockchain call completes.
+func TestSendInitialNodeStatuses_SlowBlockchainDoesNotBlockCaller(t *testing.T) {
 	release := make(chan struct{})
 
 	// blockchain.Mock is used deliberately here despite the prefer-sqlitememory
 	// rule: the test needs a GetBestBlockHeader call that blocks on demand to
-	// prove the processor loop is not stalled behind it, which a real store
-	// cannot simulate.
+	// prove the caller is not stalled behind it, which a real store cannot
+	// simulate.
 	mockBlockchain := &blockchain.Mock{}
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Run(func(mock.Arguments) {
 		<-release
@@ -875,31 +1549,21 @@ func TestStartNotificationProcessor_SlowBlockchainDoesNotStallProcessor(t *testi
 		gCtx:             ctx,
 	}
 
-	clientChannels := newClientChannelMap()
-	newClientCh := make(chan chan []byte, 10)
-	deadClientCh := make(chan chan []byte, 10)
-	notificationCh := make(chan *notificationMsg, 10)
-
-	go s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, ctx)
-
-	// Connect a client while the blockchain call cannot complete.
 	clientCh := make(chan []byte, 10)
-	newClientCh <- clientCh
 
-	require.Eventually(t, func() bool { return clientChannels.contains(clientCh) },
-		time.Second, 5*time.Millisecond, errClientNotAdded)
-
-	// The processor must keep broadcasting while the initial node-status fetch
-	// is still blocked on the blockchain service.
-	notificationCh <- &notificationMsg{Type: "test", BaseURL: baseURL}
+	// The cache is cold and the blockchain call cannot complete, yet the call
+	// must return promptly (the fetch runs on a separate goroutine).
+	callReturned := make(chan struct{})
+	go func() {
+		defer close(callReturned)
+		s.sendInitialNodeStatuses(ctx, clientCh)
+	}()
 
 	select {
-	case data := <-clientCh:
-		var msg notificationMsg
-		require.NoError(t, json.Unmarshal(data, &msg))
-		require.Equal(t, "test", msg.Type, "broadcast should arrive before the blocked initial node_status")
+	case <-callReturned:
+		// Caller not blocked behind the blockchain call.
 	case <-time.After(2 * time.Second):
-		t.Fatal("notification broadcast stalled behind the initial node-status fetch")
+		t.Fatal("sendInitialNodeStatuses blocked its caller on the blockchain fetch")
 	}
 
 	// Unblock the blockchain call; the initial node_status must still be delivered.
@@ -915,14 +1579,16 @@ func TestStartNotificationProcessor_SlowBlockchainDoesNotStallProcessor(t *testi
 	}
 }
 
-// TestStartNotificationProcessor_InitialStatusPrecedesBroadcasts encodes the
-// contract that consumers (the asset service's centrifuge listener and the
-// dashboard) rely on: the first node_status a new client receives identifies our
-// own node. With the cache warmed (as Start does before exposing the websocket
-// route), the initial status is sent synchronously during client registration,
-// so a concurrently broadcast remote node_status can never precede it.
-func TestStartNotificationProcessor_InitialStatusPrecedesBroadcasts(t *testing.T) {
+// TestHandleWebSocket_InitialStatusPrecedesBroadcasts encodes the contract that
+// consumers (the asset service's centrifuge listener and the dashboard) rely
+// on: the first node_status a new client receives identifies our own node.
+// With the cache warmed (as Start does before exposing the websocket route),
+// the connection handler queues the initial status into the client's buffer
+// synchronously BEFORE registering it for broadcasts, so a concurrently
+// broadcast remote node_status can never precede it.
+func TestHandleWebSocket_InitialStatusPrecedesBroadcasts(t *testing.T) {
 	s := &Server{
+		gCtx:   t.Context(),
 		logger: &ulogger.TestLogger{},
 		settings: &settings.Settings{
 			P2P: settings.P2PSettings{
@@ -934,32 +1600,37 @@ func TestStartNotificationProcessor_InitialStatusPrecedesBroadcasts(t *testing.T
 	ourStatus := &notificationMsg{Type: "node_status", PeerID: "our-node"}
 	s.latestNodeStatus.Store(ourStatus)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	wsURL, notificationCh := newWebSocketTestServer(t, s)
 
-	clientChannels := newClientChannelMap()
-	newClientCh := make(chan chan []byte, 10)
-	deadClientCh := make(chan chan []byte, 10)
-	notificationCh := make(chan *notificationMsg, 10)
+	// Broadcast remote node_status messages continuously while the client
+	// connects; the first message it reads must still be our own node's.
+	stopFlood := make(chan struct{})
+	defer close(stopFlood)
 
-	go s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, ctx)
+	go func() {
+		for {
+			select {
+			case <-stopFlood:
+				return
+			case notificationCh <- &notificationMsg{Type: "node_status", PeerID: "remote-node"}:
+			}
+		}
+	}()
 
-	// Register a client and broadcast a remote peer's node_status at the same
-	// time. The client must either see our own status first or miss the remote
-	// broadcast entirely (if it was processed before registration).
-	clientCh := make(chan []byte, 10)
-	newClientCh <- clientCh
-	notificationCh <- &notificationMsg{Type: "node_status", PeerID: "remote-node"}
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
 
-	select {
-	case data := <-clientCh:
-		var msg notificationMsg
-		require.NoError(t, json.Unmarshal(data, &msg))
-		require.Equal(t, "node_status", msg.Type)
-		require.Equal(t, "our-node", msg.PeerID, "first node_status must identify our own node")
-	case <-time.After(2 * time.Second):
-		t.Fatal("initial node_status never delivered")
-	}
+	defer ws.Close()
+
+	require.NoError(t, ws.SetReadDeadline(time.Now().Add(2*time.Second)))
+
+	_, data, err := ws.ReadMessage()
+	require.NoError(t, err)
+
+	var msg notificationMsg
+	require.NoError(t, json.Unmarshal(data, &msg))
+	require.Equal(t, "node_status", msg.Type)
+	require.Equal(t, "our-node", msg.PeerID, "first node_status must identify our own node")
 }
 
 // flakyPeerRegistry satisfies PeerRegistryClientI via the embedded interface;

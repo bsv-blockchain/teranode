@@ -14,6 +14,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/stretchr/testify/require"
@@ -58,7 +59,7 @@ func startRedpanda(t *testing.T, ctx context.Context) (brokerAddr string, cleanu
 		ContainerRequest: req,
 		Started:          true,
 	})
-	require.NoError(t, err)
+	test.SkipIfContainerUnavailable(t, err)
 
 	return fmt.Sprintf("localhost:%d", port), func() {
 		_ = container.Terminate(context.Background())

@@ -68,7 +68,7 @@ dev-dashboard:
 	npm install --prefix ./ui/dashboard && npm run dev --prefix ./ui/dashboard
 
 .PHONY: build
-# build-blockchainstatus build-tx-blaster build-propagation-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster build-s3-blaster build-chainintegrity
+# build-propagation-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster build-s3-blaster build-chainintegrity
 build: update_config build-teranode-with-dashboard build-teranode-cli clean_backup
 
 .PHONY: update_config
@@ -117,10 +117,6 @@ build-teranode-ci: set_debug_flags set_txmetacache_flag
 build-chainintegrity: set_debug_flags
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -o chainintegrity.run ./compose/cmd/chainintegrity/
 
-.PHONY: build-tx-blaster
-build-tx-blaster: set_debug_flags
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o blaster.run ./cmd/txblaster/
-
 .PHONY: build-teranode-cli
 build-teranode-cli:
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -o teranode-cli ./cmd/teranodecli
@@ -144,10 +140,6 @@ build-teranode-dev:
 # .PHONY: build-blockassembly-blaster
 # build-blockassembly-blaster: set_debug_flags
 # 	go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o blockassemblyblaster.run ./cmd/blockassembly_blaster/main.go
-
-.PHONY: build-blockchainstatus
-build-blockchainstatus:
-	go build -o blockchainstatus.run ./cmd/blockchainstatus/
 
 # .PHONY: build-aerospiketest
 # build-aerospiketest:
@@ -185,7 +177,7 @@ install-tools:
 .PHONY: test
 test:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
-	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
+	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
 
 # run tests in the test/longtest directory
 .PHONY: longtest
@@ -498,8 +490,6 @@ clean_gen:
 .PHONY: clean
 clean:
 	rm -f ./teranode_*.tar.gz
-	rm -f blaster.run
-	rm -f blockchainstatus.run
 	rm -rf build/
 	rm -f coverage.out
 

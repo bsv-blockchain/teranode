@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -31,11 +32,13 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -46,6 +49,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/grpc"
@@ -73,6 +77,15 @@ const (
 	// when p2p_gossip_handler_concurrency is unset.
 	defaultGossipHandlerConcurrency = 4
 
+	// gossipKafkaPublishBuffer sizes the block/subtree producers' publish
+	// channels. The gossip handlers use TryPublish, so a full channel is a
+	// DROPPED announcement rather than backpressure — the buffer must absorb
+	// ordinary producer latency (broker leader election, linger flush), not
+	// just smooth a burst. Sized alongside the TryPublish switch on purpose:
+	// the old 10-slot buffer was tuned for a blocking send that could only
+	// delay, never lose.
+	gossipKafkaPublishBuffer = 1000
+
 	// syncCoordinatorStopTimeout is the sync coordinator's drain sub-budget
 	// inside Server.Stop. Coordinator RPCs are bounded at defaultRPCTimeout
 	// (5s), so a healthy drain completes well within it; the cap only bites
@@ -92,13 +105,24 @@ const (
 	//
 	// Block / subtree messages carry: hash (64 chars), height, DataHub URL,
 	// peer ID, 80B block header, client name. Realistic size is < 1KB.
+	// Block keeps extra headroom for the optional hex-encoded coinbase tx.
 	maxBlockMessageSize   = 32 * 1024 // 32KB
-	maxSubtreeMessageSize = 32 * 1024 // 32KB
-	// node_status messages are NodeStatusMessage JSON (~846B) plus connected
-	// peers list. Allow generous headroom for very large meshes.
-	maxNodeStatusMessageSize = 64 * 1024 // 64KB
-	// rejected_tx messages carry: tx hash, short reason string, peer ID.
-	maxRejectedTxMessageSize = 16 * 1024 // 16KB
+	maxSubtreeMessageSize = 8 * 1024  // 8KB
+	// node_status messages are NodeStatusMessage JSON, realistically ~1KB.
+	// (The old 64KB cap was headroom for a connected-peers list that never
+	// existed — ConnectedPeersCount has always been an int.) The per-field
+	// bounds cap the raw string bytes at ~5KB, but json.Marshal HTML-escapes
+	// some printable characters to six bytes each, so the marshalled form of a
+	// pathological-yet-valid message can exceed the raw sum; publishToNetwork
+	// therefore enforces these caps on every outbound payload (topicKindCaps),
+	// so a local config that would be dropped by peers fails loudly here
+	// instead.
+	maxNodeStatusMessageSize = 16 * 1024 // 16KB
+	// rejected_tx messages carry: tx hash, reason string, peer ID. Our egress
+	// truncates the reason to maxGossipReasonLen, but un-upgraded peers publish
+	// the untruncated validator error chain, so keep headroom for those during
+	// mixed-version operation.
+	maxRejectedTxMessageSize = 8 * 1024 // 8KB
 )
 
 // peerMapEntry stores peer information with timestamp for TTL tracking
@@ -147,7 +171,13 @@ type Server struct {
 	nodeStatusTopicName               string                         // pubsub topic for node status messages
 	topicPrefix                       string                         // Chain identifier prefix for topic validation
 	blockPeerMap                      cappedPeerMap                  // Which peer sent each block (canonical hash -> peerMapEntry); insert-capped, issue 1409
-	subtreePeerMap                    cappedPeerMap                  // Which peer sent each subtree (canonical hash -> peerMapEntry); insert-capped, issue 1409
+	subtreePeerMap                    cappedPeerMap                  // Which peer ANNOUNCED each subtree via gossip, not necessarily who served its bytes (canonical hash -> peerMapEntry); insert-capped, issue 1409
+	reportedInvalidBlocks             cappedPeerMap                  // Invalid blocks already scored (canonical hash -> scoring record); dedupes at-least-once Kafka redelivery so one invalid block is scored once per TTL, not once per delivery
+	blockSeenHashes                   seenHashCache                  // Block hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
+	subtreeSeenHashes                 seenHashCache                  // Subtree hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
+	lastAnnouncedBlockHash            atomic.Pointer[chainhash.Hash] // Most recently gossiped tip; suppresses the consecutive re-announcements a blockchain-subscription reconnect replays
+	lastAnnouncedSubtreeHash          atomic.Pointer[chainhash.Hash] // Most recently gossiped subtree, same consecutive-duplicate guard as lastAnnouncedBlockHash
+	connectedPeersProbe               atomic.Pointer[peersProbe]     // Briefly cached "any peer connected" answer for the sender guards; GetPeers walks every connection and subtrees announce constantly
 	startTime                         time.Time                      // Server start time for uptime calculation
 	peerRegistry                      blockchain.PeerRegistryClientI // gRPC client for the centralized peer registry hosted by the blockchain service
 	peerSelector                      *PeerSelector                  // Stateless peer selection logic
@@ -158,7 +188,31 @@ type Server struct {
 	peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
 	peerMapTTL           time.Duration // Time-to-live for peer map entries; the size cap lives in cappedPeerMap.maxSize
 
+	// liveConnCache caches, per peer ID, whether the peer had an open libp2p
+	// connection when last checked (liveConnCacheEntry, expires after
+	// reputationCacheTTL). Written by isPeerIPBanned's existing GetPeers walk
+	// and by hasLiveConnection on a miss; updatePeerLastMessageTime consults
+	// it so gossip-relayed publishers are never marked IsConnected while a
+	// freshly connected neighbour is flagged on its first message.
+	// reconcileInFlight keeps ticker-driven reconcile passes from piling up
+	// when the registry is slow.
+	liveConnCache     sync.Map
+	reconcileInFlight atomic.Bool
+
 	invalidPolicyWarnOnce sync.Once // Emits the invalid-fee-policy warning at most once per process to avoid log spam
+
+	wsTimeouts *wsTimeouts // Test-only override of the /p2p-ws keepalive parameters (nil = defaults)
+
+	// staticURLCheckOnce evaluates the once-assigned outbound URL config
+	// (AssetHTTPAddressURL, PropagationURL) against the gossip bounds and SSRF
+	// rules a single time, caching the verdicts below. The publishers run every
+	// ~10s (node_status) and per announcement (block/subtree), so re-validating
+	// — and re-logging — a value that cannot change without a restart would
+	// spam the logs on the committed defaults (localhost asset_httpAddress)
+	// and bury real signals; same rationale as invalidPolicyWarnOnce.
+	staticURLCheckOnce sync.Once
+	assetURLErr        error // non-nil: AssetHTTPAddressURL breaches gossip bounds or receivers' SSRF checks
+	propagationURLErr  error // non-nil: PropagationURL breaches gossip bounds
 
 	// latestNodeStatus caches the most recent node status computed by
 	// getNodeStatusMessage (refreshed every publish tick and on best-block
@@ -188,6 +242,151 @@ type Server struct {
 	// localHeightCache is a short-lived cache of the local best height used by
 	// getLocalHeight, avoiding a blockchain gRPC round-trip per gossip message.
 	localHeightCache atomic.Pointer[localHeightCacheEntry]
+	// catchupMaliciousLastCharge throttles the ban-score charge applied by
+	// RecordCatchupMalicious to one per peer per catchupMaliciousChargeWindow.
+	// A single misbehaving block is reported through several catchup paths in
+	// the same cycle; without the throttle one offense would accumulate points
+	// from each path and cross the ban threshold on its own. Guarded by
+	// catchupMaliciousChargeMu; lazily initialized so tests that construct
+	// Server directly work.
+	catchupMaliciousChargeMu   sync.Mutex
+	catchupMaliciousLastCharge map[string]time.Time
+}
+
+// privateIPColocationWhitelist returns local-network ranges for exemption from the
+// GossipSub IP-colocation penalty. Deployments that deliberately allow private IPs
+// (local/test clusters) run many nodes behind one IP; without the exemption the
+// peers above the colocation threshold on that IP would be permanently
+// mesh-ineligible.
+func privateIPColocationWhitelist() []*net.IPNet {
+	// Loopback, RFC1918, RFC6598 shared space, IPv4 link-local, IPv6 ULA and
+	// IPv6 link-local: the ranges a local/test cluster can legitimately share.
+	cidrs := []string{
+		"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+		"100.64.0.0/10", "169.254.0.0/16",
+		"::1/128", "fc00::/7", "fe80::/10",
+	}
+
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		_, n, err := net.ParseCIDR(cidr)
+		if err != nil {
+			// The list is constant: a parse failure is a programming error, and
+			// silently skipping it would reintroduce the penalty this exists to prevent.
+			panic(fmt.Sprintf("privateIPColocationWhitelist: bad constant CIDR %q: %v", cidr, err))
+		}
+		nets = append(nets, n)
+	}
+
+	return nets
+}
+
+// buildP2PMessageBusConfig maps Teranode P2P settings onto the message bus config.
+//
+// GossipSub mesh protection: peer scoring penalizes IP-colocated Sybil swarms and
+// protocol misbehaviour (GRAFT flooding, broken IWANT promises). Static and bootstrap
+// peers are exempt: the bus registers them as GossipSub direct peers. Peer exchange is
+// inverted here because the settings key is expressed as an enable flag while the bus
+// config expresses it as a disable flag. PX enabled without scoring is the
+// spec-violating state this wiring exists to eliminate, so it is a configuration error.
+func buildP2PMessageBusConfig(logger ulogger.Logger, tSettings *settings.Settings, privKey crypto.PrivKey, protocolVersion, dhtMode string, advertiseAddresses []string) (p2pMessageBus.Config, error) {
+	if tSettings.P2P.EnablePeerExchange && !tSettings.P2P.EnablePeerScoring {
+		return p2pMessageBus.Config{}, errors.NewConfigurationError("p2p_enable_peer_exchange requires p2p_enable_peer_scoring (gossipsub v1.1 pairs PX with scoring); disable peer exchange or enable scoring")
+	}
+
+	conf := p2pMessageBus.Config{
+		PrivateKey:          privKey,
+		Name:                tSettings.ClientName,
+		Logger:              logger,
+		PeerCacheFile:       p2pCacheFilePath(tSettings.P2P.PeerCacheDir),
+		BootstrapPeers:      tSettings.P2P.BootstrapPeers,
+		StaticPeers:         tSettings.P2P.StaticPeers,
+		ProtocolVersion:     protocolVersion,
+		DHTMode:             dhtMode,
+		DHTCleanupInterval:  tSettings.P2P.DHTCleanupInterval,
+		EnableNAT:           tSettings.P2P.EnableNAT,
+		EnableMDNS:          tSettings.P2P.EnableMDNS,
+		AllowPrivateIPs:     tSettings.P2P.AllowPrivateIPs,
+		EnablePeerScoring:   tSettings.P2P.EnablePeerScoring,
+		DisablePeerExchange: !tSettings.P2P.EnablePeerExchange,
+	}
+
+	if tSettings.P2P.EnablePeerScoring {
+		params := p2pMessageBus.DefaultPeerScoreParams()
+		if t := tSettings.P2P.PeerScoreIPColocationThreshold; t > 0 {
+			params.IPColocationFactorThreshold = t
+		}
+		// When private IPs are deliberately allowed, exempt local-network ranges from
+		// the IP-colocation penalty so multi-node local/test clusters behind one IP
+		// stay mesh-eligible.
+		if tSettings.P2P.AllowPrivateIPs {
+			params.IPColocationFactorWhitelist = privateIPColocationWhitelist()
+		}
+
+		thresholds := p2pMessageBus.DefaultPeerScoreThresholds()
+		// Penalty-only params cap every score at 0, so a positive threshold means
+		// "never accept PX". Until per-topic delivery scoring can lift honest peers
+		// above 0, refuse attacker-supplied peer records outright: pxConnect dials
+		// mark those peers outbound, which bypasses gossipsub's Dhi graft refusal
+		// and satisfies the Dout quota - the strongest half of the Sybil attack.
+		thresholds.AcceptPXThreshold = 1
+
+		conf.PeerScoreParams = params
+		conf.PeerScoreThresholds = thresholds
+
+		// Observability: scoring failure modes are silent (a peer below 0 is never
+		// grafted; below the graylist threshold its gossip is ignored), so log any
+		// negatively-scored peers with the worst offender for attribution. Warn only
+		// on transition or material change - a persistent graylisted swarm must not
+		// produce a warn line on every inspection tick.
+		graylistThreshold := thresholds.GraylistThreshold
+		var inspectMu sync.Mutex
+		var lastGraylisted int
+		var lastWorstPeer peer.ID
+		conf.PeerScoreInspect = func(snapshots map[peer.ID]*pubsub.PeerScoreSnapshot) {
+			var negative, graylisted int
+			var worst float64
+			var worstPeer peer.ID
+			for pid, snap := range snapshots {
+				if snap == nil || snap.Score >= 0 {
+					continue
+				}
+				negative++
+				if snap.Score <= worst {
+					worst = snap.Score
+					worstPeer = pid
+				}
+				if snap.Score < graylistThreshold {
+					graylisted++
+				}
+			}
+
+			inspectMu.Lock()
+			changed := graylisted != lastGraylisted || worstPeer != lastWorstPeer
+			lastGraylisted, lastWorstPeer = graylisted, worstPeer
+			inspectMu.Unlock()
+
+			if graylisted > 0 && changed {
+				logger.Warnf("[p2p] gossipsub peer scores: %d negative, %d graylisted, worst %s score %.0f", negative, graylisted, worstPeer, worst)
+			} else if negative > 0 {
+				logger.Debugf("[p2p] gossipsub peer scores: %d negative, %d graylisted, worst %s score %.0f", negative, graylisted, worstPeer, worst)
+			}
+		}
+
+		logger.Infof("[p2p] gossipsub peer scoring enabled: ip-colocation weight %.0f threshold %d (whitelisted ranges %d), graylist %.0f, acceptPX %.0f, peer exchange %v",
+			params.IPColocationFactorWeight, params.IPColocationFactorThreshold,
+			len(params.IPColocationFactorWhitelist), thresholds.GraylistThreshold,
+			thresholds.AcceptPXThreshold, tSettings.P2P.EnablePeerExchange)
+	} else {
+		logger.Warnf("[p2p] gossipsub peer scoring DISABLED (p2p_enable_peer_scoring=false), peer exchange %v", tSettings.P2P.EnablePeerExchange)
+	}
+
+	if len(advertiseAddresses) > 0 {
+		conf.AnnounceAddrs = advertiseAddresses
+		conf.Port = tSettings.P2P.Port
+	}
+
+	return conf, nil
 }
 
 // NewServer creates a new P2P server instance with the provided configuration and dependencies.
@@ -398,24 +597,9 @@ func NewServer(
 		logger.Infof("[silent mode] DHT disabled - node will not participate in peer discovery")
 	}
 
-	conf := p2pMessageBus.Config{
-		PrivateKey:         privKey,
-		Name:               tSettings.ClientName,
-		Logger:             logger,
-		PeerCacheFile:      p2pCacheFilePath(tSettings.P2P.PeerCacheDir),
-		BootstrapPeers:     tSettings.P2P.BootstrapPeers,
-		StaticPeers:        tSettings.P2P.StaticPeers,
-		ProtocolVersion:    bitcoinProtocolVersion,
-		DHTMode:            dhtMode,
-		DHTCleanupInterval: tSettings.P2P.DHTCleanupInterval,
-		EnableNAT:          tSettings.P2P.EnableNAT,
-		EnableMDNS:         tSettings.P2P.EnableMDNS,
-		AllowPrivateIPs:    tSettings.P2P.AllowPrivateIPs,
-	}
-
-	if len(advertiseAddresses) > 0 {
-		conf.AnnounceAddrs = advertiseAddresses
-		conf.Port = tSettings.P2P.Port
+	conf, err := buildP2PMessageBusConfig(logger, tSettings, privKey, bitcoinProtocolVersion, dhtMode, advertiseAddresses)
+	if err != nil {
+		return nil, err
 	}
 
 	p2pClient, err := p2pMessageBus.NewClient(conf)
@@ -576,6 +760,13 @@ func (s *Server) applyPeerMapLimits(tSettings *settings.Settings) {
 
 	s.blockPeerMap.setMaxSize(maxSize)
 	s.subtreePeerMap.setMaxSize(maxSize)
+	s.reportedInvalidBlocks.setMaxSize(maxSize)
+
+	// The seen-hash dedup caches take their limits from the same call: their
+	// zero values fall back to the package defaults, so this too costs only
+	// configurability when skipped.
+	s.blockSeenHashes.setLimits(tSettings.P2P.SeenHashMaxSize, tSettings.P2P.SeenHashMaxPublishers, tSettings.P2P.SeenHashTTL)
+	s.subtreeSeenHashes.setLimits(tSettings.P2P.SeenHashMaxSize, tSettings.P2P.SeenHashMaxPublishers, tSettings.P2P.SeenHashTTL)
 }
 
 // announcePeerMapLimits logs the two ways a configured value differs from what
@@ -654,10 +845,14 @@ func (s *Server) Init(ctx context.Context) (err error) {
 		AssetHTTPAddressURLString = s.settings.Asset.HTTPAddress
 	}
 
-	s.AssetHTTPAddressURL = AssetHTTPAddressURLString
+	// Trim surrounding whitespace: a trailing newline picked up from a .env
+	// file, ConfigMap value, or shell substitution would otherwise make every
+	// patched peer score our announcements as a protocol violation
+	// (checkGossipString rejects non-printable runes).
+	s.AssetHTTPAddressURL = strings.TrimSpace(AssetHTTPAddressURLString)
 
 	// Set propagation URL - defaults to AssetHTTPAddressURL if not configured
-	propagationURL := s.settings.Asset.PropagationPublicURL
+	propagationURL := strings.TrimSpace(s.settings.Asset.PropagationPublicURL)
 	if propagationURL == "" {
 		propagationURL = s.AssetHTTPAddressURL
 	}
@@ -708,8 +903,20 @@ func (s *Server) setupHTTPServer() *echo.Echo {
 
 	e.Use(middleware.Recover())
 
+	// Restrict CORS to the configured websocket origins; an empty list keeps
+	// the historical allow-all behaviour. AllowOriginFunc reuses the same
+	// matcher as the websocket upgrade's CheckOrigin so both surfaces share
+	// one strict semantic (exact, case-insensitive; bare "*" wildcard) rather
+	// than echo's looser glob/subdomain matching.
+	var allowedOrigins []string
+	if s.settings != nil {
+		allowedOrigins = s.settings.P2P.WebSocketAllowedOrigins
+	}
+
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"*"},
+		AllowOriginFunc: func(origin string) (bool, error) {
+			return originAllowed(origin, allowedOrigins), nil
+		},
 		AllowMethods: []string{echo.GET},
 	}))
 
@@ -755,8 +962,8 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		s.invalidSubtreeKafkaConsumerClient.Start(ctx, s.invalidSubtreeHandler(ctx), kafka.WithLogErrorAndMoveOn())
 	}
 
-	s.subtreeKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
-	s.blocksKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
+	s.subtreeKafkaProducerClient.Start(ctx, make(chan *kafka.Message, gossipKafkaPublishBuffer))
+	s.blocksKafkaProducerClient.Start(ctx, make(chan *kafka.Message, gossipKafkaPublishBuffer))
 
 	// Warm the node-status cache before the HTTP surface (and its /p2p-ws
 	// route) comes up, so websocket clients are always served the cached status
@@ -854,21 +1061,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Start node status publisher
 	go s.publishNodeStatus(ctx)
 
-	apiKey := s.settings.GRPCAdminAPIKey
-	if apiKey == "" {
-		// Generate a random API key if not provided
-		apiKey, err = generateRandomKey()
-		if err != nil {
-			return errors.NewServiceError("error generating random API key", err)
-		}
-
-		s.logger.Warnf("[P2P] grpc_admin_api_key is not set; a random key was generated so admin RPCs (ban, unban, clear bans, ban score, reputation reset, connect/disconnect peer) are unreachable until a key is configured")
-	}
-
-	// Create auth options
-	authOptions := &util.AuthOptions{
-		APIKey:           apiKey,
-		ProtectedMethods: adminProtectedMethods(),
+	authOptions, err := s.grpcAuthOptions()
+	if err != nil {
+		return err
 	}
 
 	// this will block
@@ -946,10 +1141,10 @@ func (s *Server) invalidSubtreeHandler(ctx context.Context) func(msg *kafka.Kafk
 			return err
 		}
 
-		s.logger.Infof("[invalidSubtreeHandler] Received invalid subtree notification via Kafka: hash=%s, peerUrl=%s, reason=%s", m.SubtreeHash, m.PeerUrl, m.Reason)
+		s.logger.Infof("[invalidSubtreeHandler] Received invalid subtree notification via Kafka: hash=%s, peerUrl=%s, peerId=%s, reason=%s", m.SubtreeHash, m.PeerUrl, m.PeerId, m.Reason)
 
 		// Use the existing ReportInvalidSubtree method to handle the invalid subtree
-		err = s.ReportInvalidSubtree(ctx, m.SubtreeHash, m.PeerUrl, m.Reason)
+		err = s.ReportInvalidSubtree(ctx, m.SubtreeHash, m.PeerUrl, m.PeerId, m.Reason)
 		if err != nil {
 			// Don't return error here, as we want to continue processing messages
 			s.logger.Errorf("[invalidSubtreeHandler] Failed to report invalid subtree from Kafka: %v", err)
@@ -999,6 +1194,15 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 			PeerID: s.P2PClient.GetID(),
 		}
 
+		// Self-check against the bounds we enforce on ingress: truncates the
+		// validator's reason text so it always passes remote validation.
+		rejectedTxMessage.sanitizeFields()
+
+		if err := rejectedTxMessage.validateFields(); err != nil {
+			s.logger.Errorf("[rejectedTxHandler] rejectedTxMessage failed gossip field validation, not publishing: %v", err)
+			return nil
+		}
+
 		msgBytes, err := json.Marshal(rejectedTxMessage)
 		if err != nil {
 			s.logger.Errorf("[rejectedTxHandler] json marshal error: %v", err)
@@ -1006,9 +1210,11 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 			return err
 		}
 
+		// The topic size cap on the marshalled bytes is enforced centrally in
+		// publishToNetwork.
 		s.logger.Debugf("[rejectedTxHandler] publishing rejectedTxMessage to p2p network")
 
-		if err = s.publishToNetwork(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
+		if _, err = s.publishToNetwork(ctx, s.rejectedTxTopicName, msgBytes); err != nil {
 			s.logger.Errorf("[rejectedTxHandler] publish error: %v", err)
 		}
 
@@ -1024,15 +1230,140 @@ func (s *Server) disconnectPreExistingBannedPeers(ctx context.Context) {
 	s.disconnectPeersOnBanList(ctx, "banned before startup")
 }
 
-// adminProtectedMethods returns the full gRPC method paths of every
-// state-mutating admin RPC on the PeerService; the auth interceptor requires
-// the admin API key for these. Read-only queries and internal data-plane
-// reporting RPCs (catchup metrics, valid block/subtree reports, bytes
-// downloaded) stay unauthenticated because other services call them without
-// admin credentials. Any new mutating admin RPC must be added here; the
-// classification is enforced by TestAdminProtectedMethodsCoverAllRPCs.
-func adminProtectedMethods() map[string]bool {
+// grpcAuthOptions builds the auth configuration for the PeerService listener.
+// Placeholder handling lives in util.ValidateAdminAPIKey, shared with the legacy
+// service: a placeholder is ignored so the random-key path below applies.
+//
+// Two policies are layered on top of that shared behaviour, because on this
+// service the key does more than guard admin RPCs - it also gates the ten
+// data-plane reporters that block and subtree validation call, and those set the
+// validated-work and delivery signals sync-peer selection runs on:
+//
+//   - A weak-but-real key is fatal on a network-reachable listener. The shared
+//     helper only warns, but a short key is accepted as genuine, so guessing it
+//     yields exactly the capability this authentication exists to deny.
+//   - No usable key at all is logged at Error, not Warn. It is fail-closed and
+//     therefore safe, but it silently strands sync-peer selection, so it must not
+//     look like routine startup noise.
+func (s *Server) grpcAuthOptions() (*util.AuthOptions, error) {
+	listenAddress := s.settings.P2P.GRPCListenAddress
+
+	apiKey := s.settings.GRPCAdminAPIKey
+	if err := s.rejectWeakAdminAPIKey(listenAddress, apiKey); err != nil {
+		return nil, err
+	}
+
+	if util.ValidateAdminAPIKey(s.logger, "P2P", apiKey, listenAddress, s.settings.SecurityLevelGRPC) {
+		// Configured key is a well-known placeholder; ignore it and fall back to
+		// the random-key path below rather than trusting a world-readable value.
+		apiKey = ""
+	}
+
+	s.warnIfUnreachableBind(listenAddress, s.settings.P2P.GRPCAddress)
+
+	if apiKey == "" {
+		var err error
+
+		apiKey, err = generateRandomKey()
+		if err != nil {
+			return nil, errors.NewServiceError("error generating random API key", err)
+		}
+
+		s.logger.Errorf("[P2P] grpc_admin_api_key is not set or is a placeholder, so a random key was generated and every state-mutating PeerService RPC will reject callers: block and subtree validation cannot report validated chain progress or block delivery, so no peer ever becomes a proven sync candidate and catchup stays in the budget-gated probe tier - set a strong key (%d+ chars) on every service in this deployment", util.MinAdminAPIKeyLength())
+	}
+
+	return &util.AuthOptions{
+		APIKey:           apiKey,
+		ProtectedMethods: authProtectedMethods(),
+	}, nil
+}
+
+// rejectWeakAdminAPIKey refuses to start when a real but short key guards a
+// listener something other than this host can reach without verified transport
+// security. A placeholder is handled elsewhere (ignored, so it fails closed); a
+// short key is worse, because it is accepted as the real key, so brute-forcing it
+// grants the ability to forge validated chain progress for a Sybil peer and flag
+// honest peers malicious.
+//
+// regtest is exempt so local, CI and docker development stacks keep working.
+func (s *Server) rejectWeakAdminAPIKey(listenAddress, apiKey string) error {
+	if !util.IsWeakAdminAPIKey(apiKey) || addressIsLoopbackOnly(listenAddress) {
+		return nil
+	}
+
+	// Only regtest is exempt, and only when the network is positively identified:
+	// an unset ChainCfgParams is an unknown network, and a security guard that
+	// treats "unknown" as "development" fails open. Verified TLS would keep the
+	// key off the wire, but it would still be guessable, so it earns no exemption
+	// either.
+	network := "unknown network (chain parameters unset)"
+	if s.settings.ChainCfgParams != nil {
+		if s.settings.ChainCfgParams.Name == chaincfg.RegressionNetParams.Name {
+			s.logger.Warnf("[P2P] grpc_admin_api_key is shorter than %d characters on a non-loopback listener (%s); this is tolerated on regtest only", util.MinAdminAPIKeyLength(), listenAddress)
+
+			return nil
+		}
+
+		network = s.settings.ChainCfgParams.Name
+	}
+
+	return errors.NewConfigurationError("[P2P] refusing to start on %s: grpc_admin_api_key is shorter than %d characters while the gRPC listener (%s) is reachable beyond loopback, so it can be brute-forced to forge peer reputation and validated chain progress - use a strong random secret (32+ chars), or bind p2p_grpcListenAddress to loopback", network, util.MinAdminAPIKeyLength(), listenAddress)
+}
+
+// warnIfUnreachableBind flags the mirror-image misconfiguration: other services
+// are told to dial a routable address while the listener only accepts loopback,
+// so every call fails with connection-refused. That matters because the failure
+// is otherwise silent - selectBestPeersForCatchup and the reporters only warn,
+// and no health check covers the p2p client, so the node simply stops finding
+// catchup peers while its port healthcheck stays green.
+//
+// This one warns rather than refusing to start: a sidecar-mesh topology can
+// legitimately present a routable service address while the app itself listens
+// on loopback, so a hard failure here could break a valid deployment.
+func (s *Server) warnIfUnreachableBind(listenAddress, clientAddress string) {
+	if clientAddress == "" || !addressIsLoopbackOnly(listenAddress) || addressIsLoopbackOnly(clientAddress) {
+		return
+	}
+
+	s.logger.Errorf("[P2P] p2p_grpcAddress (%s) is routable but p2p_grpcListenAddress (%s) only accepts loopback, so block and subtree validation cannot reach this service: widen the bind, or point the client address at loopback", clientAddress, listenAddress)
+}
+
+// addressIsLoopbackOnly reports whether an address can only be reached from the
+// local host. Anything it cannot parse as host:port is treated as routable, so
+// the check never fires on an address shape it does not understand.
+func addressIsLoopbackOnly(address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return false
+	}
+
+	if host == "localhost" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+
+	return ip != nil && ip.IsLoopback()
+}
+
+// authProtectedMethods returns the full gRPC method paths of every
+// state-mutating RPC on the PeerService; the auth interceptor requires the API
+// key for these. Only read-only queries stay unauthenticated.
+//
+// The data-plane reporters are in here too, not just the operator-facing admin
+// RPCs. They mutate peer reputation and validated-chain-progress state from a
+// caller-supplied peer ID, and a peer ID is cheap to mint offline, so leaving
+// them open let anyone who could reach the gRPC port forge chain progress for a
+// Sybil and flag every honest peer malicious - which decides sync-peer
+// selection. They are called by block/subtree validation inside the deployment,
+// which already presents grpc_admin_api_key via p2p.NewClient, so protecting
+// them costs those callers nothing.
+//
+// Any new mutating RPC must be added here; the classification is enforced by
+// TestAuthProtectedMethodsCoverAllRPCs and TestPublicRPCsDoNotMutateRegistry.
+func authProtectedMethods() map[string]bool {
 	return map[string]bool{
+		// Operator-facing admin RPCs.
 		"/p2p_api.PeerService/BanPeer":         true,
 		"/p2p_api.PeerService/UnbanPeer":       true,
 		"/p2p_api.PeerService/ClearBanned":     true,
@@ -1040,6 +1371,18 @@ func adminProtectedMethods() map[string]bool {
 		"/p2p_api.PeerService/ResetReputation": true,
 		"/p2p_api.PeerService/ConnectPeer":     true,
 		"/p2p_api.PeerService/DisconnectPeer":  true,
+
+		// Internal data-plane reporters (block/subtree validation).
+		"/p2p_api.PeerService/RecordCatchupAttempt":         true,
+		"/p2p_api.PeerService/RecordCatchupSuccess":         true,
+		"/p2p_api.PeerService/RecordCatchupFailure":         true,
+		"/p2p_api.PeerService/RecordCatchupMalicious":       true,
+		"/p2p_api.PeerService/UpdateCatchupError":           true,
+		"/p2p_api.PeerService/ReportValidSubtree":           true,
+		"/p2p_api.PeerService/ReportValidBlock":             true,
+		"/p2p_api.PeerService/ReportValidBlockHeaders":      true,
+		"/p2p_api.PeerService/ReportValidatedChainProgress": true,
+		"/p2p_api.PeerService/RecordBytesDownloaded":        true,
 	}
 }
 
@@ -1064,8 +1407,6 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 		return
 	}
 
-	// Mark sender as connected and update last message time
-	// The sender is the peer we're directly connected to
 	// Note: We don't have the sender's client name here, only the originator's
 	senderID, err := peer.Decode(from)
 	if err != nil {
@@ -1073,7 +1414,16 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 		return
 	}
 
-	s.addConnectedPeer(senderID, "", 0, nil, "")
+	// Only mark the sender connected when it has a live libp2p connection.
+	// FromID is the pubsub author, not the immediate hop, so gossip-relayed
+	// messages arrive "from" peers we never dialled; flagging those connected
+	// would exempt them from registry cleanup and let a flood of self-signed
+	// messages under fresh peer IDs grow the registry without bound.
+	if s.hasLiveConnection(from) {
+		s.addConnectedPeer(senderID, "", 0, nil, "")
+	} else {
+		s.addPeer(senderID, "", 0, nil, "")
+	}
 	s.touchLastMessageTime(senderID)
 
 	// Also update for the originator if different (gossiped message)
@@ -1154,13 +1504,31 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 		return
 	}
 
-	// Bound the peer-controlled display strings before they reach WebSocket
-	// clients or the peer registry. Everything below this point works with the
-	// sanitized values.
-	sanitizeNodeStatusMessage(&nodeStatusMessage)
-
 	// Check if this is our own message
 	isSelf := peerID == s.P2PClient.GetID()
+
+	// Drop messages from banned peers before any registration, WebSocket
+	// forwarding, or further processing. This runs before field validation so
+	// a banned peer cannot keep triggering uncached AddBanScore RPCs.
+	if !isSelf && s.shouldSkipBannedPeer(peerID, "handleNodeStatusTopic") {
+		return
+	}
+
+	// Bound every peer-controlled string field before any side effect (logging
+	// — including the spoof log below — registry write, WebSocket fan-out).
+	// Display strings are sanitized in place; a malformed protocol-format
+	// field (peer ID, URL) is a protocol violation, same as a spoofed peer ID
+	// — except for our own loopback message, which is dropped without
+	// self-penalising.
+	sanitizeNodeStatusMessage(&nodeStatusMessage)
+
+	if err := nodeStatusMessage.validateFields(); err != nil {
+		s.logger.Errorf("[handleNodeStatusTopic] invalid node_status field from peer %s: %v", peerID, err)
+		if !isSelf {
+			_ = s.applyBanScore(peerID, ReasonProtocolViolation)
+		}
+		return
+	}
 
 	notificationBestHeight := nodeStatusMessage.BestHeight
 	// sanitizeAdvertisedTip below replaces this with a parsed hash, but only
@@ -1175,13 +1543,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	// Check that sender ID matches the claimed peer ID
 	if peerID != nodeStatusMessage.PeerID {
 		s.logger.Errorf("[handleNodeStatusTopic] peer ID spoofing detected: from=%s claimed=%s", peerID, nodeStatusMessage.PeerID)
-		s.applyBanScore(peerID, ReasonProtocolViolation)
-		return
-	}
-
-	// Drop messages from banned peers before any registration, WebSocket
-	// forwarding, or further processing.
-	if !isSelf && s.shouldSkipBannedPeer(peerID, "handleNodeStatusTopic") {
+		_ = s.applyBanScore(peerID, ReasonProtocolViolation)
 		return
 	}
 
@@ -1189,7 +1551,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 		// Validate BaseURL to prevent SSRF attacks
 		if err := s.validateDataHubURL(nodeStatusMessage.BaseURL); err != nil {
 			s.logger.Errorf("[handleNodeStatusTopic] invalid BaseURL from peer %s: %v", peerID, err)
-			s.applyBanScore(peerID, ReasonProtocolViolation)
+			_ = s.applyBanScore(peerID, ReasonProtocolViolation)
 			return
 		}
 
@@ -1242,33 +1604,35 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	// Send to notification channel for WebSocket clients
 	select {
 	case s.notificationCh <- &notificationMsg{
-		Timestamp:           time.Now().UTC().Format(isoFormat),
-		Type:                "node_status",
-		BaseURL:             nodeStatusMessage.BaseURL,
-		PeerID:              nodeStatusMessage.PeerID,
-		Version:             nodeStatusMessage.Version,
-		CommitHash:          nodeStatusMessage.CommitHash,
-		BestBlockHash:       notificationBestBlockHash,
-		BestHeight:          notificationBestHeight,
-		TxCount:             nodeStatusMessage.TxCount,
-		SubtreeCount:        nodeStatusMessage.SubtreeCount,
-		FSMState:            nodeStatusMessage.FSMState,
-		StartTime:           nodeStatusMessage.StartTime,
-		Uptime:              nodeStatusMessage.Uptime,
-		ClientName:          nodeStatusMessage.ClientName,
-		MinerName:           nodeStatusMessage.MinerName,
-		ListenMode:          nodeStatusMessage.ListenMode,
-		ChainWork:           nodeStatusMessage.ChainWork,
-		SyncPeerID:          nodeStatusMessage.SyncPeerID,
-		SyncPeerHeight:      nodeStatusMessage.SyncPeerHeight,
-		SyncPeerBlockHash:   nodeStatusMessage.SyncPeerBlockHash,
-		SyncConnectedAt:     nodeStatusMessage.SyncConnectedAt,
-		MinMiningTxFee:      nodeStatusMessage.MinMiningTxFee,
-		FeePolicy:           nodeStatusMessage.FeePolicy,
-		ConnectedPeersCount: nodeStatusMessage.ConnectedPeersCount,
-		Storage:             nodeStatusMessage.Storage,
+		Timestamp:                 time.Now().UTC().Format(isoFormat),
+		Type:                      "node_status",
+		BaseURL:                   nodeStatusMessage.BaseURL,
+		PeerID:                    nodeStatusMessage.PeerID,
+		Version:                   nodeStatusMessage.Version,
+		CommitHash:                nodeStatusMessage.CommitHash,
+		BestBlockHash:             notificationBestBlockHash,
+		BestHeight:                notificationBestHeight,
+		TxCount:                   nodeStatusMessage.TxCount,
+		SubtreeCount:              nodeStatusMessage.SubtreeCount,
+		FSMState:                  nodeStatusMessage.FSMState,
+		StartTime:                 nodeStatusMessage.StartTime,
+		Uptime:                    nodeStatusMessage.Uptime,
+		ClientName:                nodeStatusMessage.ClientName,
+		MinerName:                 nodeStatusMessage.MinerName,
+		ListenMode:                nodeStatusMessage.ListenMode,
+		ChainWork:                 nodeStatusMessage.ChainWork,
+		SyncPeerID:                nodeStatusMessage.SyncPeerID,
+		SyncPeerHeight:            nodeStatusMessage.SyncPeerHeight,
+		SyncPeerBlockHash:         nodeStatusMessage.SyncPeerBlockHash,
+		SyncConnectedAt:           nodeStatusMessage.SyncConnectedAt,
+		MinMiningTxFee:            nodeStatusMessage.MinMiningTxFee,
+		FeePolicy:                 nodeStatusMessage.FeePolicy,
+		ConnectedPeersCount:       nodeStatusMessage.ConnectedPeersCount,
+		LegacyConnectedPeersCount: nodeStatusMessage.LegacyConnectedPeersCount,
+		Storage:                   nodeStatusMessage.Storage,
 	}:
 	default:
+		notificationDropped("node_status")
 		s.logger.Warnf("[handleNodeStatusTopic] notification channel full, dropped node_status notification for %s", nodeStatusMessage.PeerID)
 	}
 
@@ -1303,12 +1667,51 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	}
 }
 
+// connectedPeersProbeTTL bounds how often the sender-side duplicate guards may
+// walk the connection list: GetPeers does per-peer work (connection lookup and
+// multiaddr formatting) and handleSubtreeNotification runs once per subtree.
+// The staleness cost is one guard decision made on a peer set up to this old —
+// at worst a briefly missed suppression or a marker armed moments before the
+// last peer left, both self-healing on the next probe.
+const connectedPeersProbeTTL = 2 * time.Second
+
+// peersProbe is one cached "any peer connected" answer.
+type peersProbe struct {
+	nonEmpty  bool
+	checkedAt time.Time
+}
+
+// hasConnectedPeers reports whether any peer is currently connected, cached
+// for connectedPeersProbeTTL.
+func (s *Server) hasConnectedPeers() bool {
+	if v := s.connectedPeersProbe.Load(); v != nil && time.Since(v.checkedAt) < connectedPeersProbeTTL {
+		return v.nonEmpty
+	}
+
+	nonEmpty := s.P2PClient != nil && len(s.P2PClient.GetPeers()) > 0
+	s.connectedPeersProbe.Store(&peersProbe{nonEmpty: nonEmpty, checkedAt: time.Now()})
+
+	return nonEmpty
+}
+
 func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Hash) error {
 	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly || s.settings.P2P.ListenMode == settings.ListenModeSilent {
 		return nil
 	}
 
 	ctxLogger := s.logger.WithTraceContext(ctx)
+
+	// A blockchain-subscription reconnect replays the current tip notification
+	// (sendInitialNotification / the client's lastBlockNotification replay), so
+	// a flapping blockchain stream would re-gossip the same hash with a fresh
+	// seqno — a replay to peers that suppress and spam-score repeats. Suppress
+	// consecutive duplicates only: a reorg away and back changes the announced
+	// hash in between and still gets through.
+	if last := s.lastAnnouncedBlockHash.Load(); last != nil && last.IsEqual(hash) {
+		ctxLogger.Debugf("[handleBlockNotification] suppressing repeat announcement of current tip %s", hash.String())
+		return nil
+	}
+
 	var msgBytes []byte
 
 	h, meta, err := s.blockchainClient.GetBlockHeader(ctx, hash)
@@ -1331,13 +1734,46 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		ClientName: s.settings.ClientName,
 	}
 
+	// Self-check against the bounds we enforce on ingress, so a local
+	// misconfiguration surfaces here as a loud error instead of getting this
+	// node scored and banned by every peer. Unlike node_status, a violation
+	// hard-fails rather than degrading: every field here is structurally
+	// required — hash and header are machine-generated, and receivers score an
+	// empty DataHubURL just like a malformed one — so there is no safe reduced
+	// form of a block announcement to publish.
+	blockMessage.sanitizeFields()
+
+	if err := blockMessage.validateFields(); err != nil {
+		return errors.NewError("blockMessage failed gossip field validation, not publishing", err)
+	}
+
+	// An empty or unroutable DataHubURL is scored as a protocol violation by
+	// every receiver (checkDataHubURL); the once-per-process check below warns
+	// loudly but keeps publishing, since suppressing would also silence dev
+	// setups that legitimately advertise private addresses to peers configured
+	// to accept them.
+	s.checkStaticGossipURLs()
+
+	// The topic size cap on the marshalled bytes is enforced centrally in
+	// publishToNetwork.
 	msgBytes, err = json.Marshal(blockMessage)
 	if err != nil {
 		return errors.NewError("blockMessage - json marshal error", err)
 	}
 
-	if err = s.publishToNetwork(ctx, s.blockTopicName, msgBytes); err != nil {
+	sent, err := s.publishToNetwork(ctx, s.blockTopicName, msgBytes)
+	if err != nil {
 		return errors.NewError("blockMessage - publish error", err)
+	}
+
+	// Record the tip only when the publish gate actually sent it AND there was
+	// someone to reach: the gate drops block publishes in degraded FSM states
+	// (returning nil), and a GossipSub publish into an empty mesh succeeds
+	// silently — recording either would suppress the re-announcement a
+	// later-connecting or recovering peer needs. The connected-peer set is a
+	// proxy for the topic mesh.
+	if sent && s.hasConnectedPeers() {
+		s.lastAnnouncedBlockHash.Store(hash)
 	}
 
 	// Also send a node_status update when best block changes
@@ -1439,10 +1875,11 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		}
 	}
 
-	// Get client name from settings
+	// Get client name from settings. Sanitized so a locally misconfigured
+	// value cannot make remote peers score us for a protocol violation.
 	clientName := ""
 	if s.settings != nil {
-		clientName = s.settings.ClientName
+		clientName = sanitizePeerDisplayString(s.settings.ClientName, maxPeerDisplayStringLen)
 	}
 
 	// Get miner name from the best block metadata. This is extracted from the
@@ -1602,7 +2039,18 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 
 	// Get connected peers count from the registry. The registry also holds
 	// gossiped/disconnected peers, so count only directly connected ones.
+	// Precisely: peers with an open libp2p connection that have authored at
+	// least one gossip message since process start — liveness derives from
+	// the message bus's topic-peer set, so a connected-but-silent peer is
+	// invisible until its first message. A flag can lag reality by up to
+	// reputationCacheTTL after a connect and by up to one cleanup interval
+	// after a disconnect.
+	// The two transports are counted separately: ConnectedPeersCount keeps
+	// its established libp2p-only meaning for every node already consuming
+	// this gossip message, and legacy peers get their own figure.
 	connectedPeersCount := 0
+	legacyConnectedPeersCount := 0
+
 	if s.peerRegistry != nil {
 		allPeers, listErr := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
 		if listErr != nil {
@@ -1610,12 +2058,20 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 
 			if cached != nil {
 				connectedPeersCount = cached.ConnectedPeersCount
+				legacyConnectedPeersCount = cached.LegacyConnectedPeersCount
 			}
 		} else {
 			for _, p := range allPeers {
-				if p.IsConnected {
-					connectedPeersCount++
+				if !p.IsConnected {
+					continue
 				}
+
+				if p.TransportType == blockchain_api.TransportType_TRANSPORT_WIRE_PROTOCOL {
+					legacyConnectedPeersCount++
+					continue
+				}
+
+				connectedPeersCount++
 			}
 		}
 	}
@@ -1672,32 +2128,33 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		storage, blockPersisterHeight, height, retentionWindow, prunerBlockTrigger)
 
 	msg := &notificationMsg{
-		Timestamp:           time.Now().UTC().Format(isoFormat),
-		Type:                "node_status",
-		BaseURL:             baseURL,
-		PropagationURL:      propagationURL,
-		PeerID:              peerID,
-		Version:             version,
-		CommitHash:          commit,
-		BestBlockHash:       blockHashStr,
-		BestHeight:          height,
-		TxCount:             txCount,
-		SubtreeCount:        subtreeCount,
-		FSMState:            fsmState,
-		StartTime:           startTime,
-		Uptime:              uptime,
-		ClientName:          clientName,
-		MinerName:           minerName,
-		ListenMode:          listenMode,
-		ChainWork:           chainWorkStr,
-		SyncPeerID:          syncPeerID,
-		SyncPeerHeight:      syncPeerHeight,
-		SyncPeerBlockHash:   syncPeerBlockHash,
-		SyncConnectedAt:     syncConnectedAt,
-		MinMiningTxFee:      minMiningTxFee,
-		FeePolicy:           feePolicy,
-		ConnectedPeersCount: connectedPeersCount,
-		Storage:             storage,
+		Timestamp:                 time.Now().UTC().Format(isoFormat),
+		Type:                      "node_status",
+		BaseURL:                   baseURL,
+		PropagationURL:            propagationURL,
+		PeerID:                    peerID,
+		Version:                   version,
+		CommitHash:                commit,
+		BestBlockHash:             blockHashStr,
+		BestHeight:                height,
+		TxCount:                   txCount,
+		SubtreeCount:              subtreeCount,
+		FSMState:                  fsmState,
+		StartTime:                 startTime,
+		Uptime:                    uptime,
+		ClientName:                clientName,
+		MinerName:                 minerName,
+		ListenMode:                listenMode,
+		ChainWork:                 chainWorkStr,
+		SyncPeerID:                syncPeerID,
+		SyncPeerHeight:            syncPeerHeight,
+		SyncPeerBlockHash:         syncPeerBlockHash,
+		SyncConnectedAt:           syncConnectedAt,
+		MinMiningTxFee:            minMiningTxFee,
+		FeePolicy:                 feePolicy,
+		ConnectedPeersCount:       connectedPeersCount,
+		LegacyConnectedPeersCount: legacyConnectedPeersCount,
+		Storage:                   storage,
 	}
 
 	// Cache the status so sendInitialNodeStatuses can serve new websocket
@@ -1707,6 +2164,43 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	s.latestNodeStatus.Store(msg)
 
 	return msg
+}
+
+// checkStaticGossipURLs evaluates the static outbound URL config once,
+// logging each problem a single time per process. AssetHTTPAddressURL is
+// checked against both the gossip length/charset bound and the SSRF rules
+// receivers score on (validateDataHubURL), so the committed default —
+// localhost asset_httpAddress with asset_httpPublicAddress unset — produces
+// exactly one loud warning instead of an error per publish tick.
+//
+// The SSRF half is a heuristic, not a security property: validateDataHubURL
+// reads OUR AllowPrivateIPs, which governs what this node accepts from peers,
+// not what peers accept from us. A publisher at the default false whose peers
+// all run true withholds a private BaseURL those peers would have used —
+// judged the safer default, since the reverse mismatch gets the node scored.
+//
+// Only node_status degrades on a bad verdict (BaseURL blanked, message still
+// published): an empty BaseURL is legal there on ingress. Block and subtree
+// announcements are useless without a fetchable URL and receivers score an
+// empty DataHubURL just like a malformed one, so those publish unchanged and
+// the warning below is the operator's signal that peers will score them.
+func (s *Server) checkStaticGossipURLs() {
+	s.staticURLCheckOnce.Do(func() {
+		if err := checkGossipString("base_url", s.AssetHTTPAddressURL, maxGossipURLLen); err != nil {
+			s.assetURLErr = err
+		} else if err := s.validateDataHubURL(s.AssetHTTPAddressURL); err != nil {
+			s.assetURLErr = err
+		}
+
+		if s.assetURLErr != nil {
+			s.logger.Warnf("[checkStaticGossipURLs] DataHubURL %q will be scored as a protocol violation by peers (set asset_httpPublicAddress): %v", s.AssetHTTPAddressURL, s.assetURLErr)
+		}
+
+		if err := checkGossipString("propagation_url", s.PropagationURL, maxGossipURLLen); err != nil {
+			s.propagationURLErr = err
+			s.logger.Warnf("[checkStaticGossipURLs] PropagationURL breaches the gossip field bounds and will be omitted from node_status: %v", err)
+		}
+	})
 }
 
 func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
@@ -1729,6 +2223,7 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 	select {
 	case s.notificationCh <- msg:
 	default:
+		notificationDropped("node_status")
 		s.logger.Warnf("[handleNodeStatusNotification] notification channel full, dropped node_status notification for %s", msg.PeerID)
 	}
 
@@ -1740,31 +2235,59 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 
 	// Create the NodeStatusMessage for P2P publishing
 	nodeStatusMessage := NodeStatusMessage{
-		Type:                "node_status",
-		BaseURL:             msg.BaseURL,
-		PropagationURL:      msg.PropagationURL,
-		PeerID:              msg.PeerID,
-		Version:             msg.Version,
-		CommitHash:          msg.CommitHash,
-		BestBlockHash:       msg.BestBlockHash,
-		BestHeight:          msg.BestHeight,
-		TxCount:             msg.TxCount,
-		SubtreeCount:        msg.SubtreeCount,
-		FSMState:            msg.FSMState,
-		StartTime:           msg.StartTime,
-		Uptime:              msg.Uptime,
-		ClientName:          msg.ClientName,
-		MinerName:           msg.MinerName,
-		ListenMode:          msg.ListenMode,
-		ChainWork:           msg.ChainWork,
-		SyncPeerID:          msg.SyncPeerID,
-		SyncPeerHeight:      msg.SyncPeerHeight,
-		SyncPeerBlockHash:   msg.SyncPeerBlockHash,
-		SyncConnectedAt:     msg.SyncConnectedAt,
-		MinMiningTxFee:      msg.MinMiningTxFee,
-		FeePolicy:           msg.FeePolicy,
-		ConnectedPeersCount: msg.ConnectedPeersCount,
-		Storage:             msg.Storage,
+		Type:                      "node_status",
+		BaseURL:                   msg.BaseURL,
+		PropagationURL:            msg.PropagationURL,
+		PeerID:                    msg.PeerID,
+		Version:                   msg.Version,
+		CommitHash:                msg.CommitHash,
+		BestBlockHash:             msg.BestBlockHash,
+		BestHeight:                msg.BestHeight,
+		TxCount:                   msg.TxCount,
+		SubtreeCount:              msg.SubtreeCount,
+		FSMState:                  msg.FSMState,
+		StartTime:                 msg.StartTime,
+		Uptime:                    msg.Uptime,
+		ClientName:                msg.ClientName,
+		MinerName:                 msg.MinerName,
+		ListenMode:                msg.ListenMode,
+		ChainWork:                 msg.ChainWork,
+		SyncPeerID:                msg.SyncPeerID,
+		SyncPeerHeight:            msg.SyncPeerHeight,
+		SyncPeerBlockHash:         msg.SyncPeerBlockHash,
+		SyncConnectedAt:           msg.SyncConnectedAt,
+		MinMiningTxFee:            msg.MinMiningTxFee,
+		FeePolicy:                 msg.FeePolicy,
+		ConnectedPeersCount:       msg.ConnectedPeersCount,
+		LegacyConnectedPeersCount: msg.LegacyConnectedPeersCount,
+		Storage:                   msg.Storage,
+	}
+
+	// Self-check against the bounds we enforce on ingress, so a local
+	// misconfiguration surfaces here instead of getting this node scored and
+	// banned by every peer. Local WebSocket clients already received the
+	// status above, so monitoring does not depend on this publish.
+	sanitizeNodeStatusMessage(&nodeStatusMessage)
+
+	// The URLs are optional in a node_status: a violation (oversized or
+	// non-printable operator config, or a BaseURL peers would score under
+	// their SSRF check) blanks the field and keeps publishing — mirroring the
+	// blacklisted-BaseURL handling on ingress — so a pathological URL degrades
+	// sync-source discovery instead of taking the node off gossip entirely.
+	// Only PeerID (machine-generated) remains a hard failure. The verdicts are
+	// computed (and logged) once: the URLs are static config.
+	s.checkStaticGossipURLs()
+
+	if s.assetURLErr != nil {
+		nodeStatusMessage.BaseURL = ""
+	}
+
+	if s.propagationURLErr != nil {
+		nodeStatusMessage.PropagationURL = ""
+	}
+
+	if err := nodeStatusMessage.validateFields(); err != nil {
+		return errors.NewError("nodeStatusMessage failed gossip field validation, not publishing", err)
 	}
 
 	msgBytes, err := json.Marshal(nodeStatusMessage)
@@ -1772,10 +2295,25 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		return errors.NewError("nodeStatusMessage - json marshal error", err)
 	}
 
+	// JSON escaping can expand the in-bounds URLs enough to breach the topic
+	// cap peers enforce on the marshalled bytes. Degrade the same way as an
+	// invalid URL above — drop the optional URLs and re-marshal once — instead
+	// of hard-failing on config that every tick would resubmit;
+	// publishToNetwork still enforces the cap as the final backstop.
+	if len(msgBytes) > maxNodeStatusMessageSize && (nodeStatusMessage.BaseURL != "" || nodeStatusMessage.PropagationURL != "") {
+		s.logger.Errorf("[handleNodeStatusNotification] marshalled size %d exceeds cap %d, publishing node_status without the optional URLs", len(msgBytes), maxNodeStatusMessageSize)
+		nodeStatusMessage.BaseURL = ""
+		nodeStatusMessage.PropagationURL = ""
+
+		if msgBytes, err = json.Marshal(nodeStatusMessage); err != nil {
+			return errors.NewError("nodeStatusMessage - json marshal error", err)
+		}
+	}
+
 	s.logger.Infof("[handleNodeStatusNotification] P2P publishing node_status to topic %s (height=%d, version=%s, storage=%q)", s.nodeStatusTopicName, nodeStatusMessage.BestHeight, nodeStatusMessage.Version, nodeStatusMessage.Storage)
 	s.logger.Debugf("[handleNodeStatusNotification] JSON payload: %s", string(msgBytes))
 
-	if err = s.publishToNetwork(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
+	if _, err = s.publishToNetwork(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
 		return errors.NewError("nodeStatusMessage - publish error", err)
 	}
 
@@ -1789,6 +2327,16 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 		return nil
 	}
 
+	// Mirror of the consecutive-duplicate guard in handleBlockNotification: a
+	// flapping notification source must not re-gossip the same subtree hash
+	// with a fresh seqno, which reads as a replay to receivers. Distinct
+	// subtrees stream constantly, so only a replayed notification can repeat
+	// the immediately preceding hash.
+	if last := s.lastAnnouncedSubtreeHash.Load(); last != nil && last.IsEqual(hash) {
+		s.logger.Debugf("[handleSubtreeNotification] suppressing repeat announcement of subtree %s", hash.String())
+		return nil
+	}
+
 	var msgBytes []byte
 
 	subtreeMessage := SubtreeMessage{
@@ -1798,13 +2346,40 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 		ClientName: s.settings.ClientName,
 	}
 
+	// Self-check against the bounds we enforce on ingress, so a local
+	// misconfiguration surfaces here as a loud error instead of getting this
+	// node scored and banned by every peer. Hard-fail rather than degrade:
+	// hash is machine-generated and receivers score an empty DataHubURL just
+	// like a malformed one, so there is no safe reduced form to publish.
+	subtreeMessage.sanitizeFields()
+
+	if err := subtreeMessage.validateFields(); err != nil {
+		return errors.NewError("subtreeMessage failed gossip field validation, not publishing", err)
+	}
+
+	// An empty or unroutable DataHubURL is scored as a protocol violation by
+	// every receiver (checkDataHubURL); the once-per-process check below warns
+	// loudly but keeps publishing, since suppressing would also silence dev
+	// setups that legitimately advertise private addresses to peers configured
+	// to accept them.
+	s.checkStaticGossipURLs()
+
+	// The topic size cap on the marshalled bytes is enforced centrally in
+	// publishToNetwork.
 	msgBytes, err := json.Marshal(subtreeMessage)
 	if err != nil {
 		return errors.NewError("subtreeMessage - json marshal error", err)
 	}
 
-	if err := s.publishToNetwork(ctx, s.subtreeTopicName, msgBytes); err != nil {
+	sent, err := s.publishToNetwork(ctx, s.subtreeTopicName, msgBytes)
+	if err != nil {
 		return errors.NewError("subtreeMessage - publish error", err)
+	}
+
+	// Same sent-and-non-empty-mesh gate as handleBlockNotification: a publish
+	// nobody heard must not suppress the re-announcement.
+	if sent && s.hasConnectedPeers() {
+		s.lastAnnouncedSubtreeHash.Store(hash)
 	}
 
 	return nil
@@ -1996,6 +2571,18 @@ func (s *Server) Stop(ctx context.Context) error {
 		coordCancel()
 	}
 
+	// Stop the peer map cleanup ticker before closing the P2P client: a
+	// reconcile tick against a closed client sees zero live connections and
+	// would clear IsConnected on every registry peer during shutdown. This is
+	// best-effort — Stop() only prevents future ticks, it does not cancel a
+	// pass the last tick already launched, and nothing waits on
+	// reconcileInFlight. A shutdown mass-clear is harmless regardless: Load
+	// resets IsConnected on restore, so it has no persistent consequence.
+	if s.peerMapCleanupTicker != nil {
+		s.peerMapCleanupTicker.Stop()
+		s.logger.Infof("[Stop] stopped peer map cleanup ticker")
+	}
+
 	// Stop the underlying P2P node
 	if s.P2PClient != nil {
 		collect("stop P2P node", s.P2PClient.Close())
@@ -2027,12 +2614,6 @@ func (s *Server) Stop(ctx context.Context) error {
 		collect("shutdown Echo server", s.e.Shutdown(ctx))
 	}
 
-	// Stop the peer map cleanup ticker
-	if s.peerMapCleanupTicker != nil {
-		s.peerMapCleanupTicker.Stop()
-		s.logger.Infof("[Stop] stopped peer map cleanup ticker")
-	}
-
 	// Stop the registry batcher (performs a final flush of pending updates,
 	// bounded by the service manager's stop budget carried in ctx)
 	if s.registryBatcher != nil {
@@ -2042,9 +2623,12 @@ func (s *Server) Stop(ctx context.Context) error {
 	// Peer registry cleanup ticker is gone — the centralized blockchain registry
 	// drives its own TTL/LRU eviction (deferred to PR2 in any case).
 
-	// Clear the peer maps to free memory
+	// Clear the peer maps and seen-hash caches to free memory
 	s.blockPeerMap.Clear()
 	s.subtreePeerMap.Clear()
+	s.reportedInvalidBlocks.Clear()
+	s.blockSeenHashes.Clear()
+	s.subtreeSeenHashes.Clear()
 	s.logger.Infof("[Stop] cleared peer maps")
 
 	if len(errs) > 0 {
@@ -2062,7 +2646,7 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 
 	// If the centralized peer registry is available, use it as it has richer data.
 	if s.peerRegistry != nil {
-		allPeers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
+		allPeers, err := s.peerRegistry.ListPeers(ctx, transportHTTPFilter(), 0, 0, false, false)
 		if err != nil {
 			return nil, errors.WrapGRPCPublic(errors.NewServiceError("list peers", err))
 		}
@@ -2220,7 +2804,7 @@ func (s *Server) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.Cl
 func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreRequest) (*p2p_api.AddBanScoreResponse, error) {
 	reason := req.Reason
 	switch reason {
-	case "invalid_subtree", "protocol_violation", "spam", "invalid_block":
+	case "invalid_subtree", "protocol_violation", "spam", "invalid_block", "catchup_malicious":
 		// known reason; pass through to the registry which has matching weights
 	default:
 		if reason == "" {
@@ -2244,19 +2828,24 @@ func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreReques
 }
 
 // applyBanScore is a fire-and-forget helper used from internal codepaths that
-// can't usefully propagate an error (libp2p notifiees, gossip handlers).
-func (s *Server) applyBanScore(peerID, reason string) {
+// can't usefully propagate an error (libp2p notifiees, gossip handlers). It
+// returns the AddBanScore error (nil on success, or when no registry is wired)
+// for the rare caller that needs to know whether the charge actually landed;
+// statement-context callers ignore it and keep their fire-and-forget shape.
+func (s *Server) applyBanScore(peerID, reason string) error {
 	if s.peerRegistry == nil {
-		return
+		return nil
 	}
-	_, banned, err := s.peerRegistry.AddBanScore(s.gCtx, peerID, reason, 0)
+	score, banned, err := s.peerRegistry.AddBanScore(s.gCtx, peerID, reason, 0)
 	if err != nil {
 		s.logger.Warnf("[applyBanScore] AddBanScore %s/%s failed: %v", peerID, reason, err)
-		return
+		return err
 	}
+	s.logger.Infof("[applyBanScore] Added score to peer %s for reason %s. New score: %d, Banned: %t", peerID, reason, score, banned)
 	if banned {
 		s.onPeerBanned(peerID, reason)
 	}
+	return nil
 }
 
 // onPeerBanned reacts to a NEW ban transition (score crossed threshold this
@@ -2366,14 +2955,24 @@ func (s *Server) ResetReputation(ctx context.Context, req *p2p_api.ResetReputati
 // Parameters:
 //   - ctx: Context for the operation
 //   - blockHash: Hash of the invalid block
+//   - peerURL: DataHub URL the block was fetched from, used as attribution
+//     fallback when the peer map entry has been evicted; may be empty
 //   - reason: Reason for the block being invalid
 //
 // Returns an error if the peer cannot be found or the ban score cannot be added.
-func (s *Server) ReportInvalidBlock(ctx context.Context, blockHash string, reason string) error {
-	// Look up the peer ID that sent this block
+func (s *Server) ReportInvalidBlock(ctx context.Context, blockHash string, peerURL string, reason string) error {
+	// Look up the peer ID that sent this block. The map is bounded and its
+	// entries evictable under announcement pressure, so fall back to resolving
+	// the DataHub URL, mirroring ReportInvalidSubtree — without it a washed-out
+	// entry silently voids the ban.
 	peerID, err := s.getPeerFromMap(&s.blockPeerMap, blockHash, "block")
 	if err != nil {
-		return err
+		if peerURL != "" {
+			peerID = s.getPeerIDFromDataHubURL(peerURL)
+		}
+		if peerID == "" {
+			return err
+		}
 	}
 
 	// Add ban score to the peer
@@ -2403,28 +3002,59 @@ func (s *Server) ReportInvalidBlock(ctx context.Context, blockHash string, reaso
 	return nil
 }
 
-// ReportInvalidSubtree handles invalid subtree reports with explicit peer URL
-func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, peerURL string, reason string) error {
-	var peerID string
+// ReportInvalidSubtree handles invalid subtree reports, charging the peer that
+// served the invalid bytes. Attribution order: the reporter's explicit peer ID
+// (the peer whose DataHub URL was fetched), then the registry owner of peerURL,
+// and the gossip announcer recorded in subtreePeerMap only when no URL was
+// supplied at all — with a URL present, an unresolvable URL means no charge.
+// The map holds whoever ANNOUNCED the hash, which routinely differs from the
+// host the bytes were fetched from, so it must never override the URL-derived
+// identity.
+func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, peerURL string, servingPeerID string, reason string) error {
+	// Single snapshot of the announcer entry: reused for the no-URL fallback and
+	// the discrepancy log below, then consumed regardless of outcome — a leftover
+	// entry would only misattribute a later report and count against the map cap.
+	announcer, announcerFound := s.subtreePeerMap.Load(subtreeHash)
+	s.subtreePeerMap.Delete(subtreeHash)
 
-	// First try to get peer ID from the subtreePeerMap (for subtrees received via P2P)
-	peerID, err := s.getPeerFromMap(&s.subtreePeerMap, subtreeHash, "subtree")
-	if err != nil && peerURL != "" {
-		// If not found in map and we have a peer URL, look up the peer ID from the URL
+	peerID := servingPeerID
+
+	if peerID == "" && peerURL != "" {
+		// No explicit peer ID from the reporter — resolve the owner of the URL
+		// the bytes were actually fetched from.
 		peerID = s.getPeerIDFromDataHubURL(peerURL)
-		if peerID == "" {
-			s.logger.Warnf("[ReportInvalidSubtree] could not find peer ID for URL %s, subtree %s, reason: %s",
-				peerURL, subtreeHash, reason)
-			return nil // Don't return error, just log and continue
+		if peerID != "" {
+			s.logger.Debugf("[ReportInvalidSubtree] found peer %s from URL %s for subtree %s",
+				peerID, peerURL, subtreeHash)
 		}
-		s.logger.Debugf("[ReportInvalidSubtree] found peer %s from URL %s for subtree %s",
-			peerID, peerURL, subtreeHash)
+	} else if peerID != "" && peerURL != "" {
+		// Producers pair the peer ID with the DataHub URL it owns; make that
+		// invariant self-enforcing by surfacing any drift.
+		if urlOwner := s.getPeerIDFromDataHubURL(peerURL); urlOwner != "" && urlOwner != peerID {
+			s.logger.Warnf("[ReportInvalidSubtree] reported peer %s does not own URL %s (registry owner %s) for subtree %s",
+				peerID, peerURL, urlOwner, subtreeHash)
+		}
+	}
+
+	// Fall back to the gossip announcer only when no URL was supplied at all.
+	// With a URL present, an unresolvable URL means no charge rather than
+	// charging a peer that merely announced the hash.
+	if peerID == "" && peerURL == "" && announcerFound {
+		peerID = announcer.peerID
 	}
 
 	if peerID == "" {
-		s.logger.Warnf("[ReportInvalidSubtree] could not determine peer for subtree %s, reason: %s",
-			subtreeHash, reason)
-		return nil
+		s.logger.Warnf("[ReportInvalidSubtree] could not determine serving peer for subtree %s, url %s, reason: %s",
+			subtreeHash, peerURL, reason)
+		return nil // Don't return error, just log and continue
+	}
+
+	// The announcer and the serving peer are routinely different (subtrees are
+	// announced by the miner that built them but fetched from whichever peer's
+	// DataHub the block came from); surface the discrepancy for observability.
+	if announcerFound && announcer.peerID != peerID {
+		s.logger.Infof("[ReportInvalidSubtree] subtree %s was announced by peer %s but served invalid by peer %s (url %s)",
+			subtreeHash, announcer.peerID, peerID, peerURL)
 	}
 
 	s.logger.Infof("[ReportInvalidSubtree] invalid subtree report for peer %s, subtree %s: %s",
@@ -2440,9 +3070,6 @@ func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, p
 			s.logger.Warnf("[ReportInvalidSubtree] UpdatePeerMetrics %s failed: %v", peerID, err)
 		}
 	}
-
-	// Remove the subtree from the map to avoid memory leaks
-	s.subtreePeerMap.Delete(subtreeHash)
 
 	return nil
 }
@@ -2505,7 +3132,7 @@ func (s *Server) GetPeerRegistry(ctx context.Context, _ *emptypb.Empty) (*p2p_ap
 		}, nil
 	}
 
-	allPeers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
+	allPeers, err := s.peerRegistry.ListPeers(ctx, transportHTTPFilter(), 0, 0, false, false)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewServiceError("list peers", err))
 	}

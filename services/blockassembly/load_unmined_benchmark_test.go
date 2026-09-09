@@ -63,7 +63,7 @@ func benchmarkLoadUnminedTransactions(b *testing.B, txCount int) {
 	// Initialize Aerospike container
 	b.Logf("Initializing Aerospike container...")
 	aerospikeURL, teardownAerospike, err := testAerospike.InitAerospikeContainer()
-	require.NoError(b, err)
+	test.SkipIfContainerUnavailable(b, err)
 
 	b.Cleanup(func() {
 		_ = teardownAerospike()
@@ -72,7 +72,7 @@ func benchmarkLoadUnminedTransactions(b *testing.B, txCount int) {
 	b.Logf("Aerospike container initialized at: %s", aerospikeURL)
 
 	postgresURL, teardownPostgres, err := postgres.SetupTestPostgresContainer()
-	require.NoError(b, err)
+	test.SkipIfContainerUnavailable(b, err)
 
 	b.Cleanup(func() {
 		_ = teardownPostgres()
@@ -261,7 +261,7 @@ func BenchmarkLoadUnminedTransactions_MixedStates(b *testing.B) {
 	// Initialize Aerospike container
 	b.Logf("Initializing Aerospike container...")
 	aerospikeURL, teardown, err := testAerospike.InitAerospikeContainer()
-	require.NoError(b, err)
+	test.SkipIfContainerUnavailable(b, err)
 
 	b.Cleanup(func() {
 		_ = teardown()

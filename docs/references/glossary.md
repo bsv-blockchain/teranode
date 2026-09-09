@@ -52,7 +52,7 @@
 
 **Legacy Service**: Bridges the gap between traditional BSV nodes and advanced Teranode-BSV nodes, ensuring seamless communication and data translation.
 
-**libp2p**: A modular peer-to-peer networking framework used by Teranode's P2P Bootstrap Service for peer discovery and network communication, providing features like NAT traversal and multiple transport protocols.
+**libp2p**: A modular peer-to-peer networking framework used by Teranode's P2P Service for peer discovery and network communication, providing features like NAT traversal and multiple transport protocols.
 
 **Lustre Fs**: A parallel distributed file system used for high-performance, large-scale data storage and workloads in Teranode.
 
@@ -66,7 +66,7 @@
 
 **Orphan Block**: A valid block that is not part of the main blockchain because its parent block is unknown or not yet received. Orphan blocks are temporarily stored until their parent arrives or they are discarded if they don't connect to the main chain.
 
-**P2P Bootstrap Service**: Helps new nodes discover peers and join the network, using libp2p and Kademlia.
+**Bootstrap peers**: Initial DHT/relay entry points, configured via `p2p_bootstrap_peers` and dialled by the P2P Service at startup (libp2p/Kademlia).
 
 **P2P Service**: Allows peers to subscribe and receive blockchain notifications about new blocks and subtrees in the network.
 

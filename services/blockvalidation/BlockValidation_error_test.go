@@ -122,7 +122,7 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic_UOM(t *test
 	setMinedChan := make(chan *chainhash.Hash, 1)
 
 	mockHandler := new(MockInvalidBlockHandler)
-	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything).Return(nil).Once()
+	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything, mock.Anything).Return(nil).Once()
 
 	tSettings.BlockValidation.OptimisticMining = true
 	bv := &testBlockValidation{
@@ -387,7 +387,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	defer deferFunc()
 
 	mockHandler := new(MockInvalidBlockHandler)
-	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything).Return(nil).Once()
+	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything, mock.Anything).Return(nil).Once()
 
 	// Use our thread-safe mock Kafka producer
 	mockKafka := &SafeMockKafkaProducer{}
@@ -517,7 +517,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
 	// bv := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, subtreeValidationClient)
 
 	mockHandler := new(MockInvalidBlockHandler)
-	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything).Return(nil).Once()
+	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything, mock.Anything).Return(nil).Once()
 
 	// Use our thread-safe mock Kafka producer
 	mockKafka := &SafeMockKafkaProducer{}

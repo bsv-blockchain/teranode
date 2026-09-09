@@ -22,6 +22,7 @@ package validator
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	bdkscript "github.com/bitcoin-sv/bdk/module/gobdk/script"
@@ -233,6 +234,80 @@ func TestScriptVerifierGoBDKMapDoSErrors(t *testing.T) {
 	// (e.g. RPC reject-reason mapping) can identify the policy-floor rejection.
 	feeErr := verifier.mapBDKValidationError(bdkscript.NewDoSError(bdkscript.DOS_ERR_INSUFFICIENT_FEE), false)
 	assert.Contains(t, feeErr.Error(), "transaction fee is too low")
+}
+
+// TestScriptVerifierGoBDKSurfacesTheCauseOnce pins how the engine's own verdict
+// reaches a submitter.
+//
+// It has to reach one at all: errVerify is a bdkscript error, so errors.New
+// demotes it to a code-0 link that DeepestPublicCause can never select, and
+// every script and standardness rejection used to leave this node as the bare
+// constant "GoBDK fail to ValidateTransaction". And it has to reach one once:
+// folding the cause into the message while also wrapping it printed it twice on
+// every surface that renders the whole chain — services/rpc/handlers.go sends
+// err.Error() straight to an RPC client, and every log line on the path carries
+// it too.
+func TestScriptVerifierGoBDKSurfacesTheCauseOnce(t *testing.T) {
+	verifier := &scriptVerifierGoBDK{logger: ulogger.TestLogger{}}
+
+	tests := []struct {
+		name     string
+		err      error
+		wantCode errors.ERR
+	}{
+		{
+			name:     "consensus DoS rejection",
+			err:      bdkscript.NewDoSError(bdkscript.DOS_ERR_INPUTS_BELOW_OUTPUTS),
+			wantCode: errors.ERR_TX_INVALID,
+		},
+		{
+			name:     "policy DoS rejection",
+			err:      bdkscript.NewDoSError(bdkscript.DOS_ERR_NOT_STANDARD),
+			wantCode: errors.ERR_TX_POLICY,
+		},
+		{
+			name:     "fee floor",
+			err:      bdkscript.NewDoSError(bdkscript.DOS_ERR_INSUFFICIENT_FEE),
+			wantCode: errors.ERR_TX_POLICY,
+		},
+		{
+			name:     "script evaluation",
+			err:      bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_EVAL_FALSE),
+			wantCode: errors.ERR_TX_INVALID,
+		},
+		{
+			name:     "policy script error",
+			err:      bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_SCRIPT_SIZE),
+			wantCode: errors.ERR_TX_POLICY,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cause := tt.err.Error()
+			require.NotEmpty(t, cause)
+
+			got := verifier.mapBDKValidationError(tt.err, false)
+
+			require.Equal(t, fmt.Sprintf("%s (%d): %s", tt.wantCode.String(), tt.wantCode, cause),
+				errors.UserMessage(got), "the engine's own verdict must be what the submitter is told")
+			require.Equal(t, 1, strings.Count(got.Error(), cause),
+				"the cause must appear exactly once in the rendered chain: %s", got.Error())
+		})
+	}
+}
+
+// TestScriptVerifierGoBDKKeepsCGOExceptionOpaque is the other half: a CGO
+// exception is a fault in this node, not a verdict about the bytes, so nothing
+// about it may be surfaced. A caller that could not tell it apart from a
+// rejection would terminalize a transaction on an outage.
+func TestScriptVerifierGoBDKKeepsCGOExceptionOpaque(t *testing.T) {
+	verifier := &scriptVerifierGoBDK{logger: ulogger.TestLogger{}}
+
+	got := verifier.mapBDKValidationError(bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_CGO_EXCEPTION), false)
+
+	require.ErrorIs(t, got, errors.ErrProcessing)
+	require.Equal(t, "PROCESSING (4): "+errMsgInvalidTx, errors.UserMessage(got))
 }
 
 func TestScriptVerifierGoBDKMapScriptErrors(t *testing.T) {

@@ -23,62 +23,47 @@ skinparam participant {
 
 
 actor Client
-control "Server" as Server
+control "Connection Handler" as Handler
 database "Client Channels" as Channels
-queue "newClientCh" as NewClientCh
-queue "deadClientCh" as DeadClientCh
-control "Notification Channel" as NotificationChannel
+control "Notification Processor" as Processor
 
-=== New Client ==
+== New Client ==
 
-Client -> Server: Request WebSocket connection
-activate Server
+Client -> Handler: Request WebSocket connection
+activate Handler
+Handler -> Handler: Check origin allow-list\nand connection caps
+alt Cap reached or origin not allowed
+    Handler --> Client: Reject (403 / 503)
+else Admitted
+    Handler -> Client: Upgrade to WebSocket,\nstart read and write pumps
+    Handler -> Client: Queue initial node_status
+    Handler -> Channels: Register client channel\n(with connection cancel)
+end
+deactivate Handler
 
-
-Server -> NewClientCh: Add new client
-activate NewClientCh
-NewClientCh -> Channels: Add to client channels
-deactivate NewClientCh
-deactivate Server
-
-=== New Notification ==
+== Notifications and Keepalive ==
 loop WebSocket communication
-    NotificationChannel -> Server: Receive WebSocket data
-    activate Server
-    alt Data is a new notification
-        Server -> Channels: Dispatch notification
-        loop Each client channel
-            Channels --> Client: Send notification
-        end
-    else Data is a ping
-        Server -> Channels: Dispatch ping
-        loop Each client channel
-            Channels --> Client: Send ping
-        end
+    Processor -> Channels: Dispatch notification
+    activate Processor
+    loop Each client channel
+        Channels --> Client: Send notification\n(write deadline per write)
     end
-    deactivate Server
+    deactivate Processor
+    Handler --> Client: Keepalive ping (periodic)
+    Client --> Handler: Pong (refreshes read deadline)
 end
 
-=== Error ==
-alt WebSocket Error
-    NotificationChannel -> Server: Report error
-    activate Server
-    Server -> DeadClientCh: Add to dead clients
-    activate DeadClientCh
-    DeadClientCh -> Channels: Remove from client channels
-    deactivate DeadClientCh
-    deactivate Server
-else Client Disconnects
-    Client -> Server: Close connection
-    activate Server
-    Server -> DeadClientCh: Add to dead clients
-    activate DeadClientCh
-    DeadClientCh -> Channels: Remove from client channels
-    deactivate DeadClientCh
-    deactivate Server
+== Disconnect / Teardown ==
+alt Client too slow to consume broadcasts
+    Processor -> Channels: Broadcast send times out
+    Channels -> Handler: Evict and cancel connection
+else Read/write deadline missed or WebSocket error
+    Handler -> Handler: Pump exits
+else Client disconnects
+    Client -> Handler: Close connection
 end
-
-deactivate NotificationChannel
+Handler -> Channels: Remove client channel
+Handler -> Handler: Close socket, join pumps,\nrelease connection slot
 
 left footer Last Modified On: %date("dd-MMM-yyyy")
 

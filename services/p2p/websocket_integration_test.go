@@ -2,7 +2,6 @@
 package p2p
 
 import (
-	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
@@ -203,7 +202,7 @@ func TestP2PWebSocketCurrentNodeFirst(t *testing.T) {
 		clientCh := make(chan []byte, 10)
 
 		// Call the function
-		server.sendInitialNodeStatuses(context.Background(), clientCh)
+		server.sendInitialNodeStatuses(t.Context(), clientCh)
 
 		// Read all messages from the channel
 		var messages []notificationMsg
@@ -283,7 +282,7 @@ func TestP2PWebSocketMessageStructure(t *testing.T) {
 		clientCh := make(chan []byte, 5)
 
 		// Call sendInitialNodeStatuses
-		server.sendInitialNodeStatuses(context.Background(), clientCh)
+		server.sendInitialNodeStatuses(t.Context(), clientCh)
 
 		// Debug: check how many messages we have
 		t.Logf("Channel has %d messages queued", len(clientCh))

@@ -570,7 +570,7 @@ func TestPublishInvalidSubtree(t *testing.T) {
 		}
 
 		// Should return early without error
-		server.publishInvalidSubtree(context.Background(), "hash", "peer", "reason")
+		server.publishInvalidSubtree(context.Background(), "hash", "peer", "", "reason")
 	})
 
 	t.Run("FSM state catching blocks", func(t *testing.T) {
@@ -587,7 +587,7 @@ func TestPublishInvalidSubtree(t *testing.T) {
 		}
 		defer server.invalidSubtreeDeDuplicateMap.Stop()
 
-		server.publishInvalidSubtree(context.Background(), "hash", "peer", "reason")
+		server.publishInvalidSubtree(context.Background(), "hash", "peer", "", "reason")
 		require.True(t, publishCalled) // With nil blockchain client, message should be published
 	})
 
@@ -605,7 +605,7 @@ func TestPublishInvalidSubtree(t *testing.T) {
 		}
 		defer server.invalidSubtreeDeDuplicateMap.Stop()
 
-		server.publishInvalidSubtree(context.Background(), "hash123", "peer456", "test reason")
+		server.publishInvalidSubtree(context.Background(), "hash123", "peer456", "peerid789", "test reason")
 		require.NotNil(t, publishedMsg)
 		require.Equal(t, []byte("hash123"), publishedMsg.Key)
 
@@ -615,6 +615,7 @@ func TestPublishInvalidSubtree(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "hash123", msg.SubtreeHash)
 		require.Equal(t, "peer456", msg.PeerUrl)
+		require.Equal(t, "peerid789", msg.PeerId)
 		require.Equal(t, "test reason", msg.Reason)
 	})
 
@@ -634,11 +635,11 @@ func TestPublishInvalidSubtree(t *testing.T) {
 		defer server.invalidSubtreeDeDuplicateMap.Stop()
 
 		// First publish
-		server.publishInvalidSubtree(context.Background(), "hash123", "peer", "reason")
+		server.publishInvalidSubtree(context.Background(), "hash123", "peer", "", "reason")
 		require.Equal(t, 1, publishCount)
 
 		// Second publish with same hash should be deduplicated
-		server.publishInvalidSubtree(context.Background(), "hash123", "peer", "reason")
+		server.publishInvalidSubtree(context.Background(), "hash123", "peer", "", "reason")
 		require.Equal(t, 1, publishCount)
 	})
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -87,4 +88,119 @@ func TestWriteAll_RendersCompleteBundle(t *testing.T) {
 		require.True(t, ok, "compose missing service %q", want)
 	}
 	require.Len(t, doc.Services, 1+3+4+4, "unexpected service count")
+}
+
+func TestWriteAll_MinerRolesAreNotSuperuser(t *testing.T) {
+	keys, err := loadKeys(4)
+	require.NoError(t, err)
+	s := buildSpec(keys)
+
+	dir := t.TempDir()
+	require.NoError(t, writeAll(dir, s))
+
+	sqlBytes, err := os.ReadFile(filepath.Join(dir, "postgres", "init-multinode.sql"))
+	require.NoError(t, err)
+	sql := string(sqlBytes)
+
+	// No bare SUPERUSER attribute anywhere - NOSUPERUSER embeds the substring,
+	// so match on a word boundary before it.
+	bareSuperuser := regexp.MustCompile(`(?:^|[^A-Z])SUPERUSER`)
+	require.NotRegexp(t, bareSuperuser, sql, "init-multinode.sql grants SUPERUSER")
+
+	// Every miner role must be provisioned with the NOSUPERUSER attribute clause.
+	require.Equal(t, 4, strings.Count(sql, "NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;"),
+		"expected one NOSUPERUSER attribute clause per miner role")
+	for i := 1; i <= 4; i++ {
+		require.Contains(t, sql, "CREATE ROLE miner"+strconv.Itoa(i)+" LOGIN")
+	}
+}
+
+// TestProvisioningFilesAreNotSuperuser sweeps every hand-maintained Postgres
+// provisioning file - not just the generated template covered above - since
+// these are the files that actually drifted and triggered the original audit
+// finding. A new provisioning file added later without being added to this
+// list gets no coverage, but an existing one silently regressing to
+// SUPERUSER will fail here.
+func TestProvisioningFilesAreNotSuperuser(t *testing.T) {
+	// Test binaries run in their own package dir; compose/cmd/gennodes -> repo root.
+	repoRoot := filepath.Join("..", "..", "..")
+
+	// (?i) + \b: "superuser" is a keyword and may be written in any case;
+	// \b will not match inside "NOSUPERUSER" since O and S are both word chars.
+	bareSuperuser := regexp.MustCompile(`(?i)\bsuperuser\b`)
+
+	hardcoded := []string{
+		"compose/postgres/init.sql",
+		"test/postgres/init.sql",
+		"deploy/docker/base/docker-services.yml",
+		"deploy/kubernetes/postgres/postgres-configmap.yaml",
+		"compose/cmd/gennodes/templates/init.sql.tmpl",
+	}
+
+	matches, err := filepath.Glob(filepath.Join(repoRoot, "scripts", "postgres", "init-*.sql"))
+	require.NoError(t, err)
+	require.NotEmpty(t, matches, "expected at least one scripts/postgres/init-*.sql file")
+
+	files := make([]string, 0, len(hardcoded)+len(matches))
+	files = append(files, hardcoded...)
+	for _, m := range matches {
+		rel, err := filepath.Rel(repoRoot, m)
+		require.NoError(t, err)
+		files = append(files, rel)
+	}
+
+	for _, f := range files {
+		b, err := os.ReadFile(filepath.Join(repoRoot, f))
+		require.NoError(t, err, "%s", f)
+
+		// Comments legitimately talk about "superuser" in prose (e.g. "needs no
+		// superuser rights", "as the postgres superuser"); only the executable
+		// content matters here, so strip comment lines before matching.
+		code := stripComments(string(b), filepath.Ext(f))
+		require.NotRegexp(t, bareSuperuser, code, "%s grants SUPERUSER", f)
+	}
+}
+
+// stripComments drops full-line comments (SQL "--", YAML "#") so provisioning
+// checks only see executable content, not prose that happens to mention the
+// word being checked for.
+func stripComments(content, ext string) string {
+	var prefix string
+
+	switch ext {
+	case ".sql", ".tmpl":
+		prefix = "--"
+	case ".yml", ".yaml":
+		prefix = "#"
+	default:
+		return content
+	}
+
+	lines := strings.Split(content, "\n")
+	kept := make([]string, 0, len(lines))
+
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), prefix) {
+			continue
+		}
+
+		kept = append(kept, line)
+	}
+
+	return strings.Join(kept, "\n")
+}
+
+// TestDevAndTestPostgresInitAreIdentical guards against compose/postgres/init.sql
+// and test/postgres/init.sql drifting apart - they are hand-maintained copies of
+// the same provisioning script and drift between them is exactly the class of bug
+// that triggered the original audit finding.
+func TestDevAndTestPostgresInitAreIdentical(t *testing.T) {
+	repoRoot := filepath.Join("..", "..", "..")
+
+	a, err := os.ReadFile(filepath.Join(repoRoot, "compose", "postgres", "init.sql"))
+	require.NoError(t, err)
+	b, err := os.ReadFile(filepath.Join(repoRoot, "test", "postgres", "init.sql"))
+	require.NoError(t, err)
+
+	require.Equal(t, string(a), string(b), "compose/postgres/init.sql and test/postgres/init.sql have drifted apart")
 }

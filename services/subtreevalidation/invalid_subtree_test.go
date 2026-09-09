@@ -97,7 +97,7 @@ func TestInvalidSubtreeReporting_MalformedTransactionData(t *testing.T) {
 		{Hash: chainhash.HashH([]byte("tx1")), Idx: 0},
 	}
 
-	_, err := server.getMissingTransactionsBatch(ctx, subtreeHash, missingTxHashes, baseURL)
+	_, err := server.getMissingTransactionsBatch(ctx, subtreeHash, missingTxHashes, baseURL, "")
 
 	// verify error is returned
 	assert.Error(t, err)
@@ -160,7 +160,7 @@ func TestInvalidSubtreeReporting_TransactionCountMismatch(t *testing.T) {
 		{Hash: chainhash.HashH([]byte("tx2")), Idx: 1},
 	}
 
-	_, err2 := server.getMissingTransactionsBatch(ctx, subtreeHash, missingTxHashes, baseURL)
+	_, err2 := server.getMissingTransactionsBatch(ctx, subtreeHash, missingTxHashes, baseURL, "")
 
 	// verify error is returned
 	assert.Error(t, err2)
@@ -211,7 +211,7 @@ func TestInvalidSubtreeReporting_PeerCannotProvideData(t *testing.T) {
 		{Hash: chainhash.HashH([]byte("tx1")), Idx: 0},
 	}
 
-	_, err := server.getMissingTransactionsBatch(ctx, subtreeHash, missingTxHashes, baseURL)
+	_, err := server.getMissingTransactionsBatch(ctx, subtreeHash, missingTxHashes, baseURL, "")
 
 	// verify error is returned
 	assert.Error(t, err)
@@ -239,7 +239,7 @@ func TestInvalidSubtreeReporting_PeerCannotProvideData(t *testing.T) {
 		httpmock.NewBytesResponder(http.StatusNotFound, []byte(errors.New(errors.ERR_NOT_FOUND, "not found").Error())))
 
 	stat := gocore.NewStat("test")
-	_, err = server.getSubtreeTxHashes(ctx, stat, &subtreeHash, baseURL)
+	_, err = server.getSubtreeTxHashes(ctx, stat, &subtreeHash, baseURL, "")
 
 	// verify error is returned
 	assert.Error(t, err)
@@ -276,7 +276,7 @@ func TestInvalidSubtreeReporting_NilKafkaProducer(t *testing.T) {
 	// call publishInvalidSubtree directly
 	// should not panic even with nil producer
 	assert.NotPanics(t, func() {
-		server.publishInvalidSubtree(context.Background(), subtreeHash.String(), baseURL, "test_reason")
+		server.publishInvalidSubtree(context.Background(), subtreeHash.String(), baseURL, "", "test_reason")
 	})
 }
 
@@ -310,7 +310,7 @@ func TestInvalidSubtreeReporting_HTTPErrorResponse(t *testing.T) {
 		{Hash: chainhash.HashH([]byte("tx1")), Idx: 0},
 	}
 
-	_, err := server.getMissingTransactionsBatch(ctx, subtreeHash, missingTxHashes, baseURL)
+	_, err := server.getMissingTransactionsBatch(ctx, subtreeHash, missingTxHashes, baseURL, "")
 
 	// verify error is returned
 	assert.Error(t, err)
@@ -376,7 +376,7 @@ func TestGetSubtreeTxHashes_OversizedBody(t *testing.T) {
 		httpmock.NewBytesResponder(http.StatusOK, oversized))
 
 	stat := gocore.NewStat("test")
-	_, err := server.getSubtreeTxHashes(context.Background(), stat, &subtreeHash, baseURL)
+	_, err := server.getSubtreeTxHashes(context.Background(), stat, &subtreeHash, baseURL, "")
 
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrExternal), "expected ErrExternal, got %v", err)
@@ -421,7 +421,7 @@ func TestGetSubtreeTxHashes_LocalAssemblyPolicyIgnored(t *testing.T) {
 		httpmock.NewBytesResponder(http.StatusOK, payload))
 
 	stat := gocore.NewStat("test")
-	hashes, err := server.getSubtreeTxHashes(context.Background(), stat, &subtreeHash, baseURL)
+	hashes, err := server.getSubtreeTxHashes(context.Background(), stat, &subtreeHash, baseURL, "")
 
 	require.NoError(t, err)
 	require.Len(t, hashes, leafCount)
@@ -486,7 +486,7 @@ func TestGetSubtreeTxHashes_LocalFile(t *testing.T) {
 			defer cancel()
 
 			stat := gocore.NewStat("test")
-			hashes, err := server.getSubtreeTxHashes(ctx, stat, &subtreeHash, testPeerURL)
+			hashes, err := server.getSubtreeTxHashes(ctx, stat, &subtreeHash, testPeerURL, "")
 
 			require.NoError(t, err)
 			require.Equal(t, []chainhash.Hash{h1, h2, h3, h4}, hashes)
@@ -515,7 +515,7 @@ func TestPublishInvalidSubtree_DirectCall(t *testing.T) {
 	defer server.invalidSubtreeDeDuplicateMap.Stop()
 
 	// call publishInvalidSubtree directly
-	server.publishInvalidSubtree(context.Background(), subtreeHash, peerURL, reason)
+	server.publishInvalidSubtree(context.Background(), subtreeHash, peerURL, "", reason)
 
 	// verify invalid subtree message was published
 	require.Len(t, kafkaProducer.messages, 1)
@@ -578,7 +578,7 @@ func TestPublishInvalidSubtree_EndToEndMemoryKafka(t *testing.T) {
 	}
 	defer server.invalidSubtreeDeDuplicateMap.Stop()
 
-	server.publishInvalidSubtree(ctx, "subtree-hash-e2e", testPeerURL, "e2e_reason")
+	server.publishInvalidSubtree(ctx, "subtree-hash-e2e", testPeerURL, "", "e2e_reason")
 
 	select {
 	case msg := <-delivered:

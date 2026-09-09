@@ -8,6 +8,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -190,6 +191,146 @@ type mockServerPeer struct {
 
 func (m *mockServerPeer) QueueInventory(invVect *wire.InvVect) {
 	m.Called(invVect)
+}
+
+// TestHandleRelayBlockInvMsg verifies that a newly-relayed block is announced
+// via a plain inventory message to peers that have NOT negotiated sendheaders.
+// handleRelayInvMsg only special-cases InvTypeBlock when sp.WantsHeaders() is
+// true (sending a headers message via handleRelayBlockMsg); peers that never
+// sent "sendheaders" must still get the block via QueueInventory, or they get
+// no announcement for the block at all.
+func TestHandleRelayBlockInvMsg(t *testing.T) {
+	sp := &mockServerPeer{}
+
+	blockHash := chainhash.Hash{0x0a, 0x0b, 0x0c}
+	invVect := wire.NewInvVect(wire.InvTypeBlock, &blockHash)
+
+	msg := relayMsg{invVect: invVect}
+
+	s := &server{}
+
+	sp.Mock.On("QueueInventory", invVect).Return()
+
+	s.handleRelayBlockInvMsg(sp, msg)
+
+	sp.AssertCalled(t, "QueueInventory", invVect)
+}
+
+// tcpAddrConn wraps a net.Pipe end so both sides report a *net.TCPAddr. peer.Peer
+// builds a wire.NetAddress from the connection's remote address, which only works
+// for TCP (or socks) addresses, and net.Pipe reports a "pipe" address.
+type tcpAddrConn struct {
+	net.Conn
+
+	local  *net.TCPAddr
+	remote *net.TCPAddr
+}
+
+func (c *tcpAddrConn) LocalAddr() net.Addr  { return c.local }
+func (c *tcpAddrConn) RemoteAddr() net.Addr { return c.remote }
+
+// TestHandleRelayInvMsgBlockToNonSendHeadersPeer drives handleRelayInvMsg itself -
+// not just the extracted helper - over a real, fully handshaked peer that never
+// sent "sendheaders", and asserts the block reaches the wire as a plain inv
+// message. This pins the dispatch in handleRelayInvMsg: without the InvTypeBlock
+// fallback branch, a non-sendheaders peer gets no announcement for the block at
+// all and no inv is ever written.
+func TestHandleRelayInvMsgBlockToNonSendHeadersPeer(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	logger := ulogger.TestLogger{}
+
+	invReceived := make(chan *wire.MsgInv, 1)
+
+	// The remote end records the inv messages it receives. Neither side sends
+	// "sendheaders", so WantsHeaders() stays false on both peers.
+	remoteCfg := &peer.Config{
+		Listeners: peer.MessageListeners{
+			OnInv: func(_ *peer.Peer, msg *wire.MsgInv) {
+				select {
+				case invReceived <- msg:
+				default:
+				}
+			},
+		},
+		UserAgentName:          "remote",
+		UserAgentVersion:       "1.0",
+		ChainParams:            &chaincfg.MainNetParams,
+		Services:               wire.SFNodeNetwork,
+		TrickleInterval:        10 * time.Millisecond,
+		TstAllowSelfConnection: true,
+	}
+
+	localCfg := &peer.Config{
+		UserAgentName:          "local",
+		UserAgentVersion:       "1.0",
+		ChainParams:            &chaincfg.MainNetParams,
+		Services:               wire.SFNodeNetwork,
+		TrickleInterval:        10 * time.Millisecond,
+		TstAllowSelfConnection: true,
+	}
+
+	remoteEnd, localEnd := net.Pipe()
+
+	remoteAddr := &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 8333}
+	localAddr := &net.TCPAddr{IP: net.ParseIP("10.0.0.2"), Port: 8333}
+
+	remotePeer := peer.NewInboundPeer(logger, tSettings, remoteCfg)
+	remotePeer.AssociateConnection(&tcpAddrConn{Conn: remoteEnd, local: remoteAddr, remote: localAddr})
+
+	localPeer, err := peer.NewOutboundPeer(logger, tSettings, localCfg, remoteAddr.String())
+	require.NoError(t, err)
+
+	localPeer.AssociateConnection(&tcpAddrConn{Conn: localEnd, local: localAddr, remote: remoteAddr})
+
+	t.Cleanup(func() {
+		localPeer.DisconnectWithInfo("test cleanup")
+		remotePeer.DisconnectWithInfo("test cleanup")
+	})
+
+	// The inv is dropped by the peer's queue handler until the version handshake
+	// has completed, so wait for both sides to finish negotiating.
+	require.Eventually(t, func() bool {
+		return localPeer.VersionKnown() && localPeer.VerAckReceived() &&
+			remotePeer.VersionKnown() && remotePeer.VerAckReceived()
+	}, 10*time.Second, 10*time.Millisecond, "peers did not complete the version handshake")
+
+	s := &server{logger: logger}
+
+	sp := &serverPeer{
+		Peer:   localPeer,
+		server: s,
+		quit:   make(chan struct{}),
+	}
+
+	// Precondition for the fallback: this peer did not negotiate sendheaders.
+	require.False(t, sp.WantsHeaders())
+	require.True(t, sp.Connected())
+
+	state := &peerState{
+		inboundPeers:    txmap.NewSyncedMap[int32, *serverPeer](),
+		outboundPeers:   txmap.NewSyncedMap[int32, *serverPeer](),
+		persistentPeers: txmap.NewSyncedMap[int32, *serverPeer](),
+		banned:          txmap.NewSyncedMap[string, time.Time](),
+	}
+	state.inboundPeers.Set(1, sp)
+
+	blockHash := chainhash.Hash{0x0a, 0x0b, 0x0c}
+	invVect := wire.NewInvVect(wire.InvTypeBlock, &blockHash)
+
+	// No msg.data: a non-sendheaders peer must be announced the block by
+	// inventory, which needs nothing but the inv vector. If the dispatch ever
+	// routes this peer to handleRelayBlockMsg instead, that path bails out on the
+	// missing block header and nothing is sent.
+	s.handleRelayInvMsg(state, relayMsg{invVect: invVect})
+
+	select {
+	case msg := <-invReceived:
+		require.Len(t, msg.InvList, 1)
+		require.Equal(t, wire.InvTypeBlock, msg.InvList[0].Type)
+		require.Equal(t, blockHash, msg.InvList[0].Hash)
+	case <-time.After(10 * time.Second):
+		t.Fatal("no inv message relayed to the non-sendheaders peer")
+	}
 }
 
 // TestHandleRelayTxMsg tests the handleRelayTxMsg function's behavior with various fee filter scenarios
@@ -891,12 +1032,131 @@ func TestServerPeerAddBanScoreExists(t *testing.T) {
 	assert.NotNil(t, sp.addBanScore)
 }
 
-// TestServerOutboundGroupCountExists tests the OutboundGroupCount method exists
-func TestServerOutboundGroupCountExists(t *testing.T) {
+// TestServerPeerAddBanScoreRespectsDisableBanning verifies that addBanScore
+// honours cfg.DisableBanning by leaving the ban score untouched when banning is
+// disabled, and that it still accumulates normally when banning is enabled.
+// cfg.DisableBanning is set from the `legacy_config_DisableBanning` setting via
+// setConfigValuesFromSettings; the `nobanning` struct tag is inert because the
+// legacy command line parser is commented out.
+func TestServerPeerAddBanScoreRespectsDisableBanning(t *testing.T) {
+	// cfg is a package-level variable read by addBanScore; save/restore it so
+	// this test doesn't leak state into other tests in the package.
+	origCfg := cfg
+	defer func() { cfg = origCfg }()
+
+	tests := []struct {
+		name            string
+		disableBanning  bool
+		expectIncreased bool
+	}{
+		{
+			name:            "banning enabled: score accumulates",
+			disableBanning:  false,
+			expectIncreased: true,
+		},
+		{
+			name:            "banning disabled: score does not accumulate",
+			disableBanning:  true,
+			expectIncreased: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg = &config{
+				DisableBanning: tt.disableBanning,
+				BanThreshold:   100,
+			}
+
+			sp := &serverPeer{}
+
+			sp.addBanScore(1, 0, "test")
+
+			if tt.expectIncreased {
+				require.NotZero(t, sp.banScore.Int())
+			} else {
+				require.Zero(t, sp.banScore.Int())
+			}
+		})
+	}
+}
+
+// TestServerPeerOnVersionRespectsDisableBanning verifies that the non-BSV user
+// agent check in OnVersion honours cfg.DisableBanning: the peer is rejected
+// either way, but it is only added to the ban list when banning is enabled.
+func TestServerPeerOnVersionRespectsDisableBanning(t *testing.T) {
+	// cfg is a package-level variable read by OnVersion; save/restore it so
+	// this test doesn't leak state into other tests in the package.
+	origCfg := cfg
+	defer func() { cfg = origCfg }()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	tests := []struct {
+		name           string
+		disableBanning bool
+		expectBanned   bool
+	}{
+		{
+			name:           "banning enabled: peer is banned",
+			disableBanning: false,
+			expectBanned:   true,
+		},
+		{
+			name:           "banning disabled: peer is rejected but not banned",
+			disableBanning: true,
+			expectBanned:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg = &config{
+				DisableBanning: tt.disableBanning,
+				BanThreshold:   100,
+			}
+
+			// banPeers is buffered so BanPeer does not block without the
+			// peer handler running.
+			s := &server{
+				logger:   ulogger.TestLogger{},
+				settings: tSettings,
+				banPeers: make(chan *serverPeer, 1),
+			}
+
+			sp := &serverPeer{
+				ctx:    context.Background(),
+				server: s,
+				Peer:   peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{}),
+			}
+
+			msg := &wire.MsgVersion{
+				ProtocolVersion: int32(wire.ProtocolVersion),
+				UserAgent:       "/Bitcoin Cash Node:27.0.0/",
+			}
+
+			reject := sp.OnVersion(sp.Peer, msg)
+
+			// The peer is rejected regardless: disabling banning only
+			// suppresses the ban, not the fork-client rejection.
+			require.NotNil(t, reject)
+			require.Equal(t, wire.RejectNonstandard, reject.Code)
+
+			if tt.expectBanned {
+				require.Len(t, s.banPeers, 1)
+			} else {
+				require.Empty(t, s.banPeers)
+			}
+		})
+	}
+}
+
+// TestServerOutboundGroupsExists tests the OutboundGroups method exists
+func TestServerOutboundGroupsExists(t *testing.T) {
 	// This method requires complex channel setup and peer state management
 	// We'll just verify the method exists on server
 	s := &server{}
-	assert.NotNil(t, s.OutboundGroupCount)
+	assert.NotNil(t, s.OutboundGroups)
 }
 
 // TestServerPeerPushAddrMsgExists tests the pushAddrMsg method exists

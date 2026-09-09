@@ -155,7 +155,7 @@ One record per **transaction**, holding all its outputs as a `utxos` array. Aero
 | `tx`, `fee`, `sizeInBytes`, `isCoinbase`, `txInpoints` | Raw tx + metadata. |
 | `utxoSpendableIn` (map offset→height) | Conditional/time-locked spendability; reassigned UTXOs spendable only after +1,000 blocks. |
 
-- **Pagination:** >20,000 outputs (`utxoBatchSize`) → master record (index 0) + child records keyed `hash(txID+i)`. Multi-record creation uses a **lock record** (index `0xFFFFFFFF`, TTL 30–300s) + `creating=true` flag for atomicity.
+- **Pagination:** outputs > `utxostore_utxoBatchSize` (default 128) → master record (index 0) + child records keyed `hash(txID+i)`. Multi-record creation uses a **lock record** (index `0xFFFFFFFF`, TTL 30–300s) + `creating=true` flag for atomicity.
 - **UTXO Meta Data** (`stores/utxo/meta/data.go`): convenience struct `{Tx, ParentTxHashes, BlockIDs, Fee, SizeInBytes, IsCoinbase, LockTime}` returned by `GetMeta`.
 - **TxInpoints** (`go-subtree`): `{ParentTxHashes []hash, Idxs [][]uint32}` — which parent outputs a tx consumes.
 

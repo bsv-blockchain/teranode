@@ -135,6 +135,8 @@ func TestCheckBlockAssembly(t *testing.T) {
 		mockSubtreeProcessor.On("TxCount").Return(uint64(0)).Maybe()
 		mockSubtreeProcessor.On("QueueLength").Return(int64(0)).Maybe()
 		mockSubtreeProcessor.On("SubtreeCount").Return(0).Maybe()
+		mockSubtreeProcessor.On("LastDequeueTime").Return(time.Now()).Maybe()
+		mockSubtreeProcessor.On("ConsumerStarted").Return(true).Maybe()
 
 		server.blockAssembler.subtreeProcessor = mockSubtreeProcessor
 
@@ -242,11 +244,11 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		genesisHash := chainhash.HashH([]byte("genesis"))
 		for i := uint64(0); i < 10; i++ {
 			// Different output index for each tx
-			server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
+			require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
 				Hash:        chainhash.HashH([]byte(fmt.Sprintf("%d", i))),
 				Fee:         i,
 				SizeInBytes: i,
-			}}, []*subtreepkg.TxInpoints{singleParentInpointsPtr(genesisHash, uint32(i))})
+			}}, []*subtreepkg.TxInpoints{singleParentInpointsPtr(genesisHash, uint32(i))}))
 		}
 
 		require.Eventually(t, func() bool {
@@ -552,11 +554,11 @@ func TestTxCount(t *testing.T) {
 		// to avoid TxInpoints serialization issues
 		for i := 0; i < 3; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("tx-%d", i)))
-			server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
+			require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}}, []*subtreepkg.TxInpoints{{}})
+			}}, []*subtreepkg.TxInpoints{{}}))
 		}
 
 		// Wait for processing - expect initial count + 3 added transactions
@@ -575,11 +577,11 @@ func TestSubmitMiningSolution_InvalidBlock_HandlesReset(t *testing.T) {
 		// Add some transactions to create a mining candidate
 		for i := 0; i < 5; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("tx%d", i)))
-			server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
+			require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}}, []*subtreepkg.TxInpoints{{}})
+			}}, []*subtreepkg.TxInpoints{{}}))
 		}
 
 		// Wait for transactions to be processed
@@ -800,26 +802,36 @@ func TestGenerateBlocks_ErrorMessages(t *testing.T) {
 		utxoStore := testutil.NewSQLiteMemoryUTXOStore(common.Ctx, common.Logger, common.Settings, t)
 		_ = utxoStore.SetBlockHeight(0)
 
-		// Create server without mining service - this will cause GenerateBlocks to fail
-		// but will still exercise the error message formatting code
+		// The mining service is nil, but that is not what fails here: the
+		// assembler below is Init'd and never Started, so it stays in Starting
+		// and the readiness wait runs to its bound first. Same diagnosis as
+		// TestGenerateBlock_ErrorPaths further down. What this exercises is the
+		// per-block error formatting, which is what the assertions pin.
 		server := New(common.Logger, common.Settings, nil, utxoStore, subtreeStore, blockchainClient)
 		server.SetSkipWaitForPendingBlocks(true)
 		require.NoError(t, server.Init(common.Ctx))
+
+		// Never Started, so the readiness wait in generateBlock runs to its
+		// bound; shorten it so the test does not pay the production default.
+		server.blockAssembler.settings.BlockAssembly.GenerateTipWaitTimeout = 100 * time.Millisecond
 
 		req := &blockassembly_api.GenerateBlocksRequest{
 			Count: 3,
 		}
 
-		// This will fail due to missing mining service, but the error message
-		// will include "error generating block 1 of 3" which demonstrates
-		// the enhanced error formatting is working
+		// Fails in the readiness wait, and the error message carries
+		// "error generating block 1 of 3", which is the formatting under test.
 		_, err := server.GenerateBlocks(context.Background(), req)
 
-		// Verify we get an error (expected due to missing mining service)
-		assert.Error(t, err)
-		// The error message should contain the block number format
-		assert.Contains(t, err.Error(), "error generating block")
-		assert.Contains(t, err.Error(), "of 3")
+		require.Error(t, err)
+		// The cause cannot be pinned here the way TestGenerateBlock_ErrorPaths
+		// pins it: that test calls generateBlock directly, while GenerateBlocks
+		// returns through errors.WrapGRPC, which renders as
+		// "rpc error: code = Internal desc = error generating block 1 of 3" and
+		// drops the wrapped chain. So this asserts the formatting it is named
+		// for, and the comment above carries the cause instead.
+		require.Contains(t, err.Error(), "error generating block")
+		require.Contains(t, err.Error(), "of 3")
 	})
 }
 
@@ -848,7 +860,7 @@ func TestGenerateBlocks_ZeroBlocks(t *testing.T) {
 
 // TestGenerateBlock_ErrorPaths tests error handling in generateBlock method
 func TestGenerateBlock_ErrorPaths(t *testing.T) {
-	t.Run("should handle mining error in generateBlock", func(t *testing.T) {
+	t.Run("should fail generate when the assembler never becomes ready", func(t *testing.T) {
 		common := testutil.NewCommonTestSetup(t)
 		subtreeStore := testutil.NewMemoryBlobStore()
 		blockchainClient := testutil.NewMemorySQLiteBlockchainClient(common.Logger, common.Settings, t)
@@ -860,10 +872,19 @@ func TestGenerateBlock_ErrorPaths(t *testing.T) {
 		server.SetSkipWaitForPendingBlocks(true)
 		require.NoError(t, server.Init(common.Ctx))
 
-		// Try to generate a block - this will fail in generateBlock method
+		// The assembler has been Init'd but never Started, so it never leaves
+		// Starting and generateBlock's readiness wait runs to its bound. Shorten
+		// the bound so the test does not pay the production default.
+		server.blockAssembler.settings.BlockAssembly.GenerateTipWaitTimeout = 100 * time.Millisecond
+
+		// This assertion used to be Contains(err, "error"), which passed on the
+		// incidental wording of whatever came back. Worth being explicit that
+		// the mining path is NOT what fails here: with the assembler level and
+		// Running, this same setup generates a block successfully — the error
+		// was always the readiness race this PR fixes.
 		err := server.generateBlock(context.Background(), nil)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "error")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "did not reach the chain tip")
 	})
 }
 
@@ -1379,11 +1400,11 @@ func TestRemoveTxIntensive(t *testing.T) {
 
 		// First add a transaction
 		txHash := chainhash.HashH([]byte("test-tx-to-remove"))
-		server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
+		require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
 			Hash:        txHash,
 			Fee:         100,
 			SizeInBytes: 250,
-		}}, []*subtreepkg.TxInpoints{{}})
+		}}, []*subtreepkg.TxInpoints{{}}))
 
 		// Wait for it to be added
 		time.Sleep(10 * time.Millisecond)
@@ -1527,11 +1548,11 @@ func TestGetMiningCandidateIntensive(t *testing.T) {
 		// Add some transactions to create subtrees
 		for i := 0; i < 5; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("mining-tx-%d", i)))
-			server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
+			require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}}, []*subtreepkg.TxInpoints{{}})
+			}}, []*subtreepkg.TxInpoints{{}}))
 		}
 
 		time.Sleep(50 * time.Millisecond) // Allow processing
@@ -2036,11 +2057,11 @@ func TestRemoveTxEdgeCases(t *testing.T) {
 
 		// Add a transaction first
 		txHash := chainhash.HashH([]byte("test-tx-remove"))
-		server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
+		require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
 			Hash:        txHash,
 			Fee:         100,
 			SizeInBytes: 250,
-		}}, []*subtreepkg.TxInpoints{{}})
+		}}, []*subtreepkg.TxInpoints{{}}))
 
 		// Now remove it to cover the success path
 		req := &blockassembly_api.RemoveTxRequest{

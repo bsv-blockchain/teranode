@@ -74,6 +74,7 @@ type Interface interface {
 	GetBlockchainClient() blockchain.ClientI
 	GetBlockvalidationClient() blockvalidation.Interface
 	GetP2PClient() p2p.ClientI
+	GetPeerRegistryClient() blockchain.PeerRegistryClientI
 }
 
 // Repository implements blockchain data access across multiple storage backends.
@@ -91,6 +92,7 @@ type Repository struct {
 	BlockchainClient      blockchain.ClientI
 	BlockvalidationClient blockvalidation.Interface
 	P2PClient             p2p.ClientI
+	PeerRegistryClient    blockchain.PeerRegistryClientI
 
 	// Per-method concurrency semaphores (nil = unlimited)
 	semGetTransaction         *semaphore.Weighted
@@ -122,7 +124,8 @@ type Repository struct {
 //   - error: Any error encountered during creation
 func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store,
 	blockchainClient blockchain.ClientI, blockvalidationClient blockvalidation.Interface, subtreeStore blob.Store,
-	blockPersisterStore blob.Store, p2pClient p2p.ClientI) (*Repository, error) {
+	blockPersisterStore blob.Store, p2pClient p2p.ClientI,
+	peerRegistryClient blockchain.PeerRegistryClientI) (*Repository, error) {
 
 	repo := &Repository{
 		logger:                logger,
@@ -134,6 +137,7 @@ func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStor
 		SubtreeStore:          subtreeStore,
 		BlockPersisterStore:   blockPersisterStore,
 		P2PClient:             p2pClient,
+		PeerRegistryClient:    peerRegistryClient,
 	}
 
 	// Initialize per-method semaphores
@@ -1067,4 +1071,10 @@ func (repo *Repository) GetBlockvalidationClient() blockvalidation.Interface {
 //   - p2p.ClientI: P2P client interface
 func (repo *Repository) GetP2PClient() p2p.ClientI {
 	return repo.P2PClient
+}
+
+// GetPeerRegistryClient returns the centralized peer registry client used by
+// the repository. It may be nil when the registry is unavailable.
+func (repo *Repository) GetPeerRegistryClient() blockchain.PeerRegistryClientI {
+	return repo.PeerRegistryClient
 }

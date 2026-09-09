@@ -1,6 +1,17 @@
+-- Postgres roles and databases for the local compose/test stacks.
+-- Roles are deliberately NOSUPERUSER; Teranode owns its databases and needs no
+-- superuser rights.
+--
+-- This file runs only when the postgres data directory is empty. A stack brought
+-- up before the NOSUPERUSER change keeps its superuser roles on the existing
+-- volume. Recreate the storage ('docker compose down -v' for named volumes, or
+-- delete the bind-mounted host directory, e.g. 'data/postgres', for stacks that
+-- bind-mount instead), or, as the postgres superuser, run
+-- 'ALTER ROLE <role> NOSUPERUSER;' for each role below.
+
 CREATE ROLE miner1 LOGIN
   PASSWORD 'miner1'
-  SUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
+  NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
 grant miner1 to postgres;
 CREATE
 DATABASE teranode1
@@ -10,7 +21,7 @@ DATABASE teranode1
 
 CREATE ROLE miner2 LOGIN
   PASSWORD 'miner2'
-  SUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
+  NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
 grant miner2 to postgres;
 CREATE
 DATABASE teranode2
@@ -20,7 +31,7 @@ DATABASE teranode2
 
 CREATE ROLE miner3 LOGIN
   PASSWORD 'miner3'
-  SUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
+  NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
 grant miner3 to postgres;
 CREATE
 DATABASE teranode3
@@ -67,6 +78,3 @@ DATABASE coinbase3
   WITH OWNER = coinbase3
   ENCODING = 'UTF8'
   CONNECTION LIMIT = -1;
-
-
-

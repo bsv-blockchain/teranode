@@ -965,7 +965,7 @@ func TestStoreBlock_WithPersistedAt_Postgres(t *testing.T) {
 				WithStartupTimeout(5*time.Minute),
 		),
 	)
-	require.NoError(t, err)
+	test.SkipIfContainerUnavailable(t, err)
 	defer func() {
 		assert.NoError(t, pgContainer.Terminate(ctx))
 	}()

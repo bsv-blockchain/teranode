@@ -450,3 +450,49 @@ func TestServer_Start_FSMContextCancellation(t *testing.T) {
 	require.True(t, errors.IsContextError(err), "expected context error, got %v", err)
 	mockBlockchainClient.AssertExpectations(t)
 }
+
+// TestHandleSingleTxAttachesVerdictHeader pins the server half of the contract
+// that lets an HTTP caller classify a rejection.
+//
+// The response body is a rendered error string, so a caller can print it but
+// cannot act on it. Propagation's large-transaction fallback — the only path on
+// which a Kafka-wired node answers a submitter synchronously — therefore wrapped
+// the whole response as SERVICE_ERROR and reported a permanently invalid
+// transaction as a retryable 500. The header carries the public code and message
+// across so the caller can tell a verdict from a fault.
+func TestHandleSingleTxAttachesVerdictHeader(t *testing.T) {
+	ctx := context.Background()
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockAssembly.Disabled = true
+
+	server := NewServer(ulogger.TestLogger{}, tSettings, &utxo.MockUtxostore{}, &blockchain.Mock{}, nil, nil, nil, nil, nil)
+	server.validator = &MockValidator{
+		ValidateFunc: func(_ context.Context, _ *bt.Tx) (*meta.Data, error) {
+			// A verdict as the validator produces it: the client-safe reason
+			// under a wrapper that names node-internal state.
+			return nil, errors.NewProcessingError("[Validate] error validating transaction",
+				errors.NewTxPolicyError("insufficient-fee"))
+		},
+	}
+
+	tx, err := bt.NewTxFromBytes(sampleTx)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/tx", bytes.NewReader(tx.ExtendedBytes()))
+	req.Header.Set(echo.HeaderContentType, echo.MIMETextPlain)
+	rec := httptest.NewRecorder()
+
+	require.NoError(t, server.handleSingleTx(ctx)(echo.New().NewContext(req, rec)))
+
+	verdict := errors.HTTPErrorFrom(rec.Header())
+	require.NotNil(t, verdict, "a rejection must carry a machine-readable verdict")
+	require.Equal(t, errors.ERR_TX_POLICY, verdict.Code())
+	require.Equal(t, "insufficient-fee", verdict.Message())
+	require.NotContains(t, verdict.Message(), "error validating transaction",
+		"only the public cause crosses, not the wrapper around it")
+
+	// The body and status are unchanged, so a caller that predates the header
+	// behaves exactly as before.
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	require.Contains(t, rec.Body.String(), "[handleSingleTx] Failed to process transaction: ")
+}

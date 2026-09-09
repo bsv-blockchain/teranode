@@ -21,7 +21,6 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  id-token: write
 
 # Cancel any in-flight CCR run for the same PR when a new one starts.
 # Prevents zombie "In Progress" sticky comments when two reviews race on the same PR.

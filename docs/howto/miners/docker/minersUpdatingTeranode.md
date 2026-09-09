@@ -1,6 +1,6 @@
 # Update Docker Teranode
 
-Last modified: 28-April-2026
+Last modified: 11-August-2026
 
 Docker updates are managed from the
 [teranode-quickstart](https://github.com/bsv-blockchain/teranode-quickstart)
@@ -68,6 +68,10 @@ Then review `.env.example` for new settings that may be relevant to your local
   notes should call that out.
 - Keep a copy of `.env` and any external reverse-proxy configuration before
   major changes.
+- Changes to the PostgreSQL `init.sql` do not apply to an existing data
+  directory. If you provisioned the node before Teranode dropped superuser from
+  the `teranode` PostgreSQL role, apply the one-off `ALTER ROLE` in
+  [PostgreSQL Role Privileges](./minersSecurityBestPractices.md#postgresql-role-privileges).
 
 ## Related Documentation
 

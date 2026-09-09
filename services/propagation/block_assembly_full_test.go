@@ -188,6 +188,24 @@ func TestIsTransientBackpressure(t *testing.T) {
 			expected:          false,
 		},
 		{
+			// Block assembly's other limit. maxQueueItems bounds the queue alone and sheds with
+			// ErrThresholdExceeded; this limit bounds queued plus subtree-held. Both are retryable
+			// overload that the HTTP mapper answers with 503, and both fire once per submission at
+			// full inbound rate, so a shed logged at error level is the same flood arriving through
+			// the other gate. The validator returns it unwrapped to keep its resource-exhausted
+			// class, so it is matched at the top level exactly like the refusal.
+			name:              "a queue-full shed is backpressure, not a fault",
+			err:               errors.NewThresholdExceededError("block assembly queue full: 100 items queued, limit 100"),
+			blockAssemblyFull: false,
+			expected:          true,
+		},
+		{
+			name:              "a queue-full shed survives the gRPC round trip as backpressure",
+			err:               errors.WrapGRPC(errors.NewThresholdExceededError("block assembly queue full: 100 items queued, limit 100")),
+			blockAssemblyFull: false,
+			expected:          true,
+		},
+		{
 			// The other direction: the flag can clear between the gate refusing and the caller
 			// logging. The refusal is still a refusal, so it must stay at debug.
 			name:              "the refusal is still recognised once the flag has cleared",

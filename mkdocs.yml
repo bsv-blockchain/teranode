@@ -101,6 +101,7 @@ nav:
           - Sync the Node:
               - Docker: howto/miners/docker/minersHowToSyncTheNode.md
               - Kubernetes: howto/miners/kubernetes/minersHowToSyncTheNode.md
+          - Monitoring: howto/miners/minersHowToMonitoring.md
           - Additional:
               - Backup Teranode: howto/miners/minersHowToBackup.md
               - CPU Mining Setup: howto/miners/minersHowToCPUMiner.md

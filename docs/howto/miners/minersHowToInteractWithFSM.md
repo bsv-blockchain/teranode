@@ -1,6 +1,25 @@
 # How to Manage Teranode States
 
-This guide explains how to change and monitor Teranode's state. Note that Teranode instances start in IDLE state and require manual state transitions.
+This guide explains how to change and monitor Teranode's state. Fresh production
+deployments (`operator` and `docker.m` settings contexts) start in `IDLE`, giving
+an operator a safe inspection window. Other contexts keep the automatic
+`CATCHINGBLOCKS` default. Configure this with
+`blockchain_initializeNodeInState`; it accepts `IDLE`, `CATCHINGBLOCKS`, or
+`RUNNING` (uppercase). Invalid values fail startup only when no FSM state is
+persisted. On a checkpointed network, configured `RUNNING` requires a pre-seeded
+tip at or above the highest checkpoint; otherwise startup fails without fallback.
+Use `CATCHINGBLOCKS` to synchronize a fresh node.
+
+After inspecting a fresh production deployment, start synchronization from
+`IDLE` with `teranode-cli setfsmstate --fsmstate catchingblocks`. A direct
+`RUNNING` request is refused below the highest checkpoint; catch-up promotes the
+node automatically once it reaches that checkpoint.
+
+The setting applies only when no FSM state is persisted. Restarts normally
+restore the persisted state without validating unused boot configuration. A
+persisted `RUNNING` state with a successfully read tip below the active network's
+highest checkpoint is durably migrated to `CATCHINGBLOCKS`. Tip-read failures or
+missing metadata abort startup and leave the persisted state unchanged.
 
 ## Prerequisites
 
@@ -91,6 +110,46 @@ The following states are valid for all environments:
 - RUNNING
 - CATCHINGBLOCKS
 
+### When a transition is refused
+
+Two rules constrain which transitions are accepted, and both surface as errors
+rather than silent no-ops:
+
+- **Only RUN may leave CATCHINGBLOCKS.** A node that is catching up cannot be
+  moved to IDLE; it must finish catching up first.
+- **RUN is refused while the chain tip is below the network's highest hard-coded
+  checkpoint.** Mainnet and testnet both have checkpoints; regtest has none. The
+  error names both your tip height and the checkpoint it must reach. From IDLE,
+  the node remains parked so you can inspect or rewind it; use
+  `setfsmstate --fsmstate catchingblocks` when you deliberately want to start
+  synchronization.
+  A node already in CATCHINGBLOCKS remains there and will move to RUNNING once it
+  catches up.
+
+Why the rule exists: going to RUNNING mid-initial-sync lets the mempool and
+validator operate under pre-Genesis output rules, and lets the legacy service
+relay tx invs that post-Genesis peers ban on sight
+(`bad-txns-vout-p2sh BAN THRESHOLD EXCEEDED`).
+
+> **Behaviour change:** the checkpoint rule used to exempt `IDLE -> RUNNING`
+> entirely, on the reasoning that a fresh node boots into CATCHINGBLOCKS and so
+> could never be in IDLE below the checkpoint. That is not exhaustive — a node
+> stopped from RUNNING, or one whose store was persisted in IDLE by an older
+> version, both land there — so the rule now applies to every RUN and the IDLE
+> case is refused as described above. Out-of-tree boot tooling that forces
+> RUNNING on a below-checkpoint mainnet or testnet node will now receive an error
+> and leave the FSM unchanged. Regtest has no checkpoints and is unaffected —
+> `setfsmstate --fsmstate running` still goes straight to RUNNING there.
+>
+> **There is no longer a manual route to RUNNING below the checkpoint.** From
+> IDLE, explicitly enter CATCHINGBLOCKS to start synchronization. From
+> CATCHINGBLOCKS, RUN is refused until catchup completes. If you are looking for
+> an override to force a below-checkpoint node into RUNNING, it no longer exists
+> — that was the hole this rule closes. Let the node catch up.
+>
+> **Getting back to IDLE:** there is no `CATCHINGBLOCKS -> IDLE` transition. Once
+> a node is catching up, the only way out is RUN.
+
 ## Validation
 
 After each state change, verify the new state:
@@ -143,11 +202,12 @@ kubectl port-forward -n teranode-operator service/blockchain 18087:18087
 grpcurl -plaintext localhost:18087 blockchain_api.BlockchainAPI.GetFSMCurrentState
 ```
 
-Expected output:
+Expected output for a fresh Kubernetes operator deployment (a restarted node
+normally reports its persisted state):
 
 ```json
 {
-  "state": "Idle"
+  "state": "IDLE"
 }
 ```
 

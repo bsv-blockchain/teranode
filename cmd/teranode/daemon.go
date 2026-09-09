@@ -4,9 +4,6 @@ import (
 	"fmt"
 	_ "net/http/pprof" //nolint:gosec // Import for pprof, only enabled via CLI flag
 	"os"
-	"os/exec"
-	"strconv"
-	"strings"
 
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -43,40 +40,41 @@ func RunDaemon(progname, version, commit string) {
 		UTXOStore: tSettings.Debug.UTXOStore,
 	})
 
+	logger := ulogger.InitLogger(progname, tSettings)
+
 	readLimit := tSettings.Block.FileStoreReadConcurrency
 	writeLimit := tSettings.Block.FileStoreWriteConcurrency
-
-	if tSettings.Block.FileStoreUseSystemLimits {
-		out, err := exec.Command("/bin/sh", "-c", "ulimit -u").Output()
-		if err != nil {
-			fmt.Printf("Warning: Failed to get ulimit: %v, using configured limits\n", err)
-		} else {
-			limit, err := strconv.Atoi(strings.TrimSpace(string(out)))
-			if err != nil {
-				fmt.Printf("Warning: Failed to parse ulimit: %v, using configured limits\n", err)
-			} else if limit > 0 {
-				if limit > file.MaxSemaphoreLimit {
-					limit = file.MaxSemaphoreLimit
-				}
-
-				readLimit = limit * 3 / 4
-				writeLimit = limit / 4
-			}
-		}
-	}
 
 	// CRITICAL: Initialize file store semaphores BEFORE any file operations begin.
 	// This MUST happen before daemon.Start() creates any file stores or starts any
 	// services that use file stores. The InitSemaphores function replaces global
 	// channel variables and is not safe to call after file operations have started.
 	// See file.go for detailed documentation on the race condition risk.
-	if err := file.InitSemaphores(readLimit, writeLimit); err != nil {
+	//
+	// It runs after the logger exists so that a reduced concurrency reaches the
+	// operator's log rather than only stdout. Nothing between here and
+	// daemon.Start() opens a file store.
+	//
+	// Note for anyone tempted to reinstate a shell-out here: the previous version
+	// read "ulimit -u", which is the max-user-processes limit rather than the
+	// open-file limit, and scaled concurrency UP from it. The open-file limit is
+	// now read directly, in util/fdlimit.
+	applied, err := file.InitSemaphores(readLimit, writeLimit, tSettings.Block.FileStoreUseSystemLimits)
+	if err != nil {
 		panic(fmt.Sprintf("Failed to initialize file store semaphores: %v", err))
 	}
 
-	fmt.Printf("File store semaphores initialized: read=%d, write=%d\n", readLimit, writeLimit)
-
-	logger := ulogger.InitLogger(progname, tSettings)
+	if applied.Clamped {
+		// Deliberately a warning and not fatal. The semaphores are a ceiling on
+		// concurrent operations, not a reservation of descriptors, so the node runs
+		// correctly here — just with less file concurrency than was configured.
+		// Refusing to start would turn a bounded, already-handled condition into
+		// total unavailability from boot (issue 1431).
+		logger.Warnf("File store concurrency reduced to fit the open-file limit: read=%d, write=%d (configured read=%d, write=%d). Raise the hard limit (ulimit -Hn, systemd LimitNOFILE, or macOS kern.maxfilesperproc) to use the configured concurrency.",
+			applied.Read, applied.Write, readLimit, writeLimit)
+	} else {
+		logger.Infof("File store semaphores initialized: read=%d, write=%d", applied.Read, applied.Write)
+	}
 
 	util.InitGRPCResolver(logger, tSettings.GRPCResolver)
 

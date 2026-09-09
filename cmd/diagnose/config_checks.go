@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 const (
@@ -248,6 +249,13 @@ func checkSecurity(s *settings.Settings) []ConfigResult {
 			Check:       labelGRPCAdminAPIKey,
 			Value:       valueEmpty,
 			Recommended: "Set grpc_admin_api_key (32+ chars)",
+		})
+	} else if util.IsPlaceholderAdminAPIKey(s.GRPCAdminAPIKey) {
+		results = append(results, ConfigResult{
+			Severity:    SeverityERROR,
+			Check:       labelGRPCAdminAPIKey,
+			Value:       "well-known placeholder",
+			Recommended: "Replace the placeholder; P2P/Legacy servers ignore it and admin RPCs stay disabled until a real secret is set",
 		})
 	} else if len(s.GRPCAdminAPIKey) < 16 {
 		results = append(results, ConfigResult{

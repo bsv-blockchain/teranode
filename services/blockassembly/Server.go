@@ -16,6 +16,7 @@ package blockassembly
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -154,6 +155,13 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store
 	// initialize Prometheus metrics, singleton, will only happen once
 	initPrometheusMetrics()
 
+	// A negative queue-full wait is a misconfiguration, not a tiny wait; warn
+	// once and treat it as 0 (shed immediately). The item cap itself is
+	// normalized where the queue is constructed.
+	if tSettings.BlockAssembly.QueueFullWaitTimeout < 0 {
+		logger.Warnf("BlockAssembly.QueueFullWaitTimeout=%s is negative; treating as 0 (shed immediately)", tSettings.BlockAssembly.QueueFullWaitTimeout)
+	}
+
 	ba := &BlockAssembly{
 		logger:              logger,
 		stats:               gocore.NewStat("blockassembly"),
@@ -285,20 +293,192 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	go ba.runBlockSubmissionListener(ctx, listenerDone)
 
 	go func() {
+		// Stall bookkeeping lives in observeDequeueStall (dequeue_stall.go) so
+		// the decision is testable without driving this goroutine's 5s tick.
+		var stallState dequeueStallState
+
 		for {
 			select {
 			case <-ctx.Done():
 				ba.logger.Infof("Stopping block assembler metrics updater")
 				return
 			case <-time.After(5 * time.Second):
-				prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
-				prometheusBlockAssemblerQueuedTransactions.Set(float64(ba.blockAssembler.QueueLength()))
-				prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
+				stallState = ba.sampleBlockAssemblerMetrics(stallState, time.Now())
+
+				// Queue-head age is a standalone gauge, not an input to the stall
+				// signal, so it is sampled here rather than inside
+				// sampleBlockAssemblerMetrics - that function's contract is the
+				// stall-state computation, and its unit tests mock only the reads
+				// that computation makes.
+				prometheusBlockAssemblyQueueHeadAge.Set(ba.blockAssembler.QueueHeadAge().Seconds())
 			}
 		}
 	}()
 
 	return nil
+}
+
+// sampleBlockAssemblerMetrics performs one tick of the metrics updater:
+// publishes the block assembler gauges, folds the intake-queue observation into
+// the stall state, and logs whatever that observation calls for. It returns the
+// next stall state.
+//
+// It is a method rather than inline in the updater goroutine so the tick can be
+// driven directly in tests. The goroutine waits on a hard-coded
+// time.After(5 * time.Second), so anything left inline is only reachable by a
+// test willing to wait out real tick intervals - which is why the reduced
+// repeat cadence and the recovery arithmetic went unexercised for so long.
+// Taking now as a parameter keeps the whole tick deterministic.
+func (ba *BlockAssembly) sampleBlockAssemblerMetrics(stallState dequeueStallState, now time.Time) dequeueStallState {
+	prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
+
+	queueLength := ba.blockAssembler.QueueLength()
+	prometheusBlockAssemblerQueuedTransactions.Set(float64(queueLength))
+
+	prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
+
+	// Sampled with the rest of the tick so the report can name the cause rather
+	// than list candidates: a stale timestamp means a wedged consumer only once
+	// the consumer exists. Like the other three, a plain atomic load, so it
+	// stays answerable while the consumer's select loop is blocked.
+	//
+	// Read BEFORE the dequeue timestamp, and the order is load-bearing.
+	// SubtreeProcessor.Start stores the re-seeded timestamp and then sets this
+	// flag, in that order. Go's atomics are sequentially consistent, so reading
+	// the flag first means a true reading guarantees the following load observes
+	// the re-seed - small staleness, no incident. Reading the timestamp first
+	// admits the one interleaving that lies: a pre-Start timestamp paired with a
+	// post-Start flag, which classifies a routine restart as a wedged consumer
+	// and warns "intake is growing unbounded" - the exact false alarm this
+	// classification exists to prevent. A false reading is honest either way,
+	// since the tick is then reported as startup regardless of staleness.
+	consumerStarted := ba.blockAssembler.ConsumerStarted()
+
+	// now is sampled before the timestamp is read, so a consumer that stamps in
+	// that window leaves staleness fractionally negative. Floor it: a gauge
+	// claiming the consumer last ran in the future is nonsense on a dashboard,
+	// and zero is the honest reading for "it just ran".
+	staleness := now.Sub(ba.blockAssembler.LastDequeueTime())
+	if staleness < 0 {
+		staleness = 0
+	}
+
+	prometheusBlockAssemblerDequeueStalenessSeconds.Set(staleness.Seconds())
+
+	// Captured before the fold, which resets the state on the closing edge.
+	stallBeganBeforeConsumerStarted := stallState.beforeConsumerStarted
+
+	stallState, stallEvent, stalledFor := observeDequeueStall(stallState, now, queueLength, staleness, consumerStarted)
+
+	switch stallEvent {
+	case dequeueStallBegan, dequeueStallContinues:
+		ba.reportDequeueStall(stallEvent, queueLength, staleness, consumerStarted, stallState.sawQueuedWork)
+	case dequeueStallEnded:
+		// Only the closing edge needs the latch: by here the consumer has
+		// necessarily started, so the live reading cannot distinguish a startup
+		// gap from a wedge that recovered.
+		if stallBeganBeforeConsumerStarted {
+			ba.logger.Infof("block assembler intake queue consumer started after %s and is now dequeuing", stalledFor.Round(time.Second))
+		} else {
+			ba.logger.Infof("block assembler intake queue consumer recovered, was stalled for %s", stalledFor.Round(time.Second))
+		}
+	case dequeueStallNone:
+	}
+
+	return stallState
+}
+
+// reportDequeueStall logs the opening or a repeat of a dequeue stall.
+//
+// Which of the three consumer lifecycle states explains the incident decides
+// the message. The two lifecycle faults also fix their own level, because
+// there the answer does not depend on depth: a consumer that has not started
+// yet is routine startup and reports at info however much is queued behind it,
+// and one that has exited is a dead service and reports at error even on an
+// empty queue. Only for a consumer that exists and is merely not dequeuing
+// does the level follow whether the queue has held work at any point during
+// the incident - and there it must, because a consumer that has not reached
+// its dequeue branch for the threshold is always worth a record, but only work
+// stacking up behind it means anything is at risk. A large moveForwardBlock on
+// a quiet node trips the threshold legitimately and reports at info; the same
+// staleness with transactions queued is issue #1429 and warns.
+//
+// The level comes from the incident-wide latch, not from this tick's depth.
+// Depth is a single sample of a number the blocking handler is itself draining,
+// so keying the level on it directly would let a live incident report at info
+// on the ticks that land just after a drain.
+//
+// consumerStarted is read live by the caller rather than taken from the
+// incident's latch, because a startup gap always closes the moment the
+// consumer starts - SubtreeProcessor.Start re-seeds the dequeue timestamp - so
+// a repeat while it is still false is still startup, and a repeat once it is
+// true is a genuine wedge. Only the closing edge needs the latch.
+func (ba *BlockAssembly) reportDequeueStall(event dequeueStallEvent, queueLength int64, staleness time.Duration, consumerStarted, sawQueuedWork bool) {
+	stale := staleness.Round(time.Second)
+
+	switch {
+	case !consumerStarted:
+		// Expected on any node whose unmined reload outlasts the threshold, so
+		// this is not a warning: gRPC ingest comes up in BlockAssembly.Start,
+		// while BlockAssembler.Start only reaches subtreeProcessor.Start after
+		// loadUnminedTransactions, which takes minutes on a busy node. Still
+		// reported, because a reload that never returns looks exactly like this
+		// and would otherwise be silent.
+		//
+		// The duration is time since the subtree processor was constructed, not
+		// how long anything has been queued - on this path nothing has stamped
+		// the timestamp since the constructor seeded it. Saying "queued for"
+		// would overstate by minutes on a node that starts ingesting late in
+		// the reload window.
+		if event == dequeueStallBegan {
+			ba.logger.Infof("block assembler intake queue has %d transactions queued and the consumer has not started yet - normal during startup while BlockAssembler.Start loads unmined transactions with ingest already accepting; the subtree processor was created %s ago and the queue drains as soon as the consumer starts", queueLength, stale)
+		} else {
+			ba.logger.Infof("block assembler intake queue consumer still has not started %s after the subtree processor was created, %d transactions queued - if this persists, the unmined transaction reload in BlockAssembler.Start is stuck", stale, queueLength)
+		}
+
+	case ba.blockAssembler.ConsumerExited():
+		// A different fault with a different remedy, and the reason it has to
+		// be told apart: the wedge message sends the operator to find which
+		// select branch owns the loop, and here there is no loop. Nothing will
+		// drain the queue again for the lifetime of the process, while the
+		// service carries on reporting itself healthy.
+		ba.logger.Errorf("block assembler intake queue consumer has exited and will not restart - it last reached its dequeue branch %s ago and %d transactions are queued behind it, so block assembly is dead while the service stays up; look for a recovered panic from the subtree processor above, which the dequeue branch is not otherwise protected against", stale, queueLength)
+
+	case sawQueuedWork:
+		// Issue #1429 proper: the consumer exists, is not dequeuing, and work
+		// is accumulating behind it. Keyed on the latch rather than on this
+		// tick's depth, so a blocking handler that drains the queue from inside
+		// its own branch cannot quietly downgrade a live incident.
+		if event == dequeueStallBegan {
+			ba.logger.Warnf("block assembler intake queue has %d transactions queued but the consumer has not dequeued for %s - intake is growing unbounded; the subtree processor's select loop is currently in state %q (reorg/moveForwardBlock/resetBlocks/get* all suppress dequeue, and a state of \"dequeue\" means the branch itself is blocked storing or announcing a subtree)", queueLength, stale, ba.subtreeProcessorStateName())
+		} else {
+			ba.logger.Warnf("block assembler intake queue still stalled: consumer has not dequeued for %s, %d transactions queued, subtree processor select loop currently in state %q", stale, queueLength, ba.subtreeProcessorStateName())
+		}
+
+	default:
+		// Stale consumer, and no work has been seen queued at any point in this
+		// incident. Nothing is at risk, so this does not page anyone - but the
+		// consumer has still been away from its branch for longer than any
+		// handler should hold it, which is worth a record on its own. If work
+		// does arrive while it is still away, the latch escalates the next
+		// report to a warning.
+		ba.logger.Infof("block assembler intake queue consumer has not dequeued for %s but no work has queued up behind it, so nothing is at risk - the subtree processor's select loop is currently in state %q", stale, ba.subtreeProcessorStateName())
+	}
+}
+
+// subtreeProcessorStateName is the human-readable name of the select-loop
+// branch the subtree processor is currently in, for the stall messages above.
+// A plain atomic load, so it stays answerable while the loop is blocked, which
+// is precisely when it is asked for. Unknown values are rendered rather than
+// dropped, so a State added without a StateStrings entry degrades to a number
+// instead of an empty string in the middle of a diagnostic line.
+func (ba *BlockAssembly) subtreeProcessorStateName() string {
+	state := ba.blockAssembler.subtreeProcessor.GetCurrentRunningState()
+	if name, ok := subtreeprocessor.StateStrings[state]; ok {
+		return name
+	}
+
+	return fmt.Sprintf("unknown(%d)", state)
 }
 
 // GetBlockAssembler returns the BlockAssembler instance.
@@ -931,7 +1111,6 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "AddTx",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithHistogram(prometheusBlockAssemblyAddTx),
-		tracing.WithCounter(prometheusBlockAssemblyAddTxCounter),
 		tracing.WithTag("txid", util.ReverseAndHexEncodeSlice(req.Txid)),
 		tracing.WithLogMessage(ba.logger, "[AddTx][%s] add tx called", util.ReverseAndHexEncodeSlice(req.Txid)),
 	)
@@ -959,10 +1138,18 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	}
 
 	if !ba.settings.BlockAssembly.Disabled {
-		ba.blockAssembler.AddTxBatch(
+		if err = ba.addTxBatchWithBackpressure(ctx,
 			[]subtreepkg.Node{{Hash: chainhash.Hash(req.Txid), Fee: req.Fee, SizeInBytes: req.Size}},
 			[]*subtreepkg.TxInpoints{&txInpoints},
-		)
+		); err != nil {
+			return nil, err
+		}
+
+		// Counted after the enqueue, never before: a queue-full shed returns above,
+		// and a counter that moved anyway would make the add rate irreconcilable
+		// against queue_shed_total. The handler histogram still measures the shed,
+		// which is the right thing to measure there.
+		prometheusBlockAssemblyAddTxCounter.Inc()
 	}
 
 	return &blockassembly_api.AddTxResponse{
@@ -1014,6 +1201,92 @@ func (ba *BlockAssembly) RemoveTx(ctx context.Context, req *blockassembly_api.Re
 	}
 
 	return &blockassembly_api.EmptyMessage{}, nil
+}
+
+// queueFullPollInterval is how often the bounded wait rechecks for ingest-queue
+// room. It is short relative to the default 100ms wait so a freed slot is
+// picked up promptly, and coarse enough not to busy-spin.
+const queueFullPollInterval = 5 * time.Millisecond
+
+// addTxBatchWithBackpressure enqueues a batch into block assembly under the
+// configured capacity bound. It is the shared body of all three ingest
+// handlers, called only inside the enabled branch.
+//
+// On the fast path there is room and it returns immediately — this is also the
+// always-taken path when no bound is configured, so an unbounded node pays only
+// one atomic and no added latency. When the queue is full it waits up to
+// QueueFullWaitTimeout for the dispatcher to make room, polling on a short
+// ticker. If room never appears the batch is shed with a ResourceExhausted-
+// mapped error; the validator then unwinds its UTXO-store work for the shed
+// transactions (see unwindShed) so a resubmit is an ordinary first submission.
+//
+// Caller cancellation (ctx.Done) is NOT a shed: it returns a context-cancelled
+// error without incrementing the shed counter and without the resource-exhausted
+// class, whose shed recovery semantics do not apply to a cancelled call.
+//
+// The wait is strictly bounded so it can never wedge the validator, whose
+// block-assembly client honours the caller's context (group.Wait(ctx, 0)).
+func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) error {
+	if ba.blockAssembler.AddTxBatchIfRoom(nodes, txInpoints) {
+		return nil
+	}
+
+	start := time.Now()
+
+	if ba.settings.BlockAssembly.QueueFullWaitTimeout > 0 {
+		ticker := time.NewTicker(queueFullPollInterval)
+		defer ticker.Stop()
+
+		timeout := time.After(ba.settings.BlockAssembly.QueueFullWaitTimeout)
+
+		for {
+			select {
+			case <-ctx.Done():
+				prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
+				return ba.contextCancelledDuringIngest(ctx)
+			case <-timeout:
+				return ba.shed(start)
+			case <-ticker.C:
+				if ba.blockAssembler.AddTxBatchIfRoom(nodes, txInpoints) {
+					prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
+					return nil
+				}
+			}
+		}
+	}
+
+	// No wait configured: shed immediately, but still honour an already-cancelled
+	// caller rather than mislabelling it as a shed.
+	if ctx.Err() != nil {
+		return ba.contextCancelledDuringIngest(ctx)
+	}
+
+	return ba.shed(start)
+}
+
+// shed records and returns the queue-full shed outcome: a ResourceExhausted-
+// mapped error the retry interceptor does not retry. The reported limit is the
+// enforced (normalized) cap, which can be clamped up from the raw configured
+// value, so operators see the limit actually in force.
+func (ba *BlockAssembly) shed(start time.Time) error {
+	prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
+	prometheusBlockAssemblyQueueShed.Inc()
+
+	return errors.WrapGRPC(errors.NewThresholdExceededError(
+		"block assembly queue full: %d items queued, limit %d",
+		ba.blockAssembler.QueueLength(), ba.blockAssembler.QueueMaxItems()))
+}
+
+// contextCancelledDuringIngest maps a cancelled/deadline-exceeded ingest wait to
+// the repo's context-cancelled error class. It is deliberately distinct from a
+// shed: no shed counter, no resource-exhausted class.
+func (ba *BlockAssembly) contextCancelledDuringIngest(ctx context.Context) error {
+	// Pass ctx.Err() as a string, not a trailing error: the errors constructor
+	// would otherwise extract it as a wrapped cause, and a wrapped cause changes
+	// how WrapGRPC serialises the status. The context-cancelled class is carried
+	// by the ERR_CONTEXT_CANCELED code alone.
+	return errors.WrapGRPC(errors.NewContextCanceledError(
+		"block assembly ingest cancelled while waiting for queue room: %s", ctx.Err().Error()))
 }
 
 // AddTxBatch processes a batch of transactions for block assembly.
@@ -1073,11 +1346,15 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 		txInpointsList[i] = &txInpointsArr[i]
 	}
 
-	prometheusBlockAssemblyAddTxCounter.Add(float64(len(nodes))) // gosec:nolint
-
 	// Add entire batch in one call
 	if !ba.settings.BlockAssembly.Disabled {
-		ba.blockAssembler.AddTxBatch(nodes, txInpointsList)
+		if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList); err != nil {
+			return nil, err
+		}
+
+		// Counted after the enqueue, never before: a shed returns above, so the add
+		// rate stays reconcilable against queue_shed_total.
+		prometheusBlockAssemblyAddTxCounter.Add(float64(len(nodes))) // gosec:nolint
 	}
 
 	return &blockassembly_api.AddTxBatchResponse{Ok: true}, nil
@@ -1253,9 +1530,13 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 		txInpointsList[i] = &txInpointsArr[i]
 	}
 
-	prometheusBlockAssemblyAddTxCounter.Add(float64(len(nodes))) // gosec:nolint
+	if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList); err != nil {
+		return nil, err
+	}
 
-	ba.blockAssembler.AddTxBatch(nodes, txInpointsList)
+	// Counted after the enqueue, never before, as on the other two ingest handlers.
+	// Unreachable on a disabled node, which returns early above.
+	prometheusBlockAssemblyAddTxCounter.Add(float64(len(nodes))) // gosec:nolint
 
 	return &blockassembly_api.AddTxBatchResponse{Ok: true}, nil
 }
@@ -1660,8 +1941,32 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		TransactionCount: transactionCount,
 		SizeInBytes:      blockSize,
 		Subtrees:         jobSubtreeHashes, // we need to store the hashes of the subtrees in the block, without the coinbase
-		SubtreeSlices:    job.Subtrees,
-		CoinbaseBUMP:     coinbaseBUMP,
+		// Aliases the subtree processor's live slice rather than copying it, so
+		// this block shares both the backing array and the *Subtree values with
+		// whatever else holds the job. Block.Valid must therefore not mutate
+		// either: model.Block.closeMmapSubtreesLocked is the release on that
+		// path, and it never writes to the array — a cross-package dependency
+		// worth naming, because a release that reached further would corrupt the
+		// processor's state from inside block validation.
+		//
+		// It does Close mmap-backed entries, and these CAN be mmap-backed: with
+		// blockassembly_subtreeMmapDir set, the processor builds its chained
+		// subtrees with SubtreeProcessor.newSubtree, which returns
+		// NewTreeByLeafCountMmap. What keeps that harmless is only that the
+		// release never runs on this path — GetAndValidateSubtrees takes its
+		// "already loaded" early exit, because len(jobSubtreeHashes) always
+		// equals len(job.Subtrees) and every job subtree carries nodes. Tighten
+		// that loaded-check, or hand this block a subtree it cannot account for,
+		// and block validation would unmap and delete the live processor's
+		// backing files.
+		//
+		// Copying the slice would not buy anything either, because Close acts on
+		// the *Subtree and not on the array: a clone holds the same pointers.
+		// Anything that stops relying on the early exit has to give the block
+		// subtrees of its own, or tell the release the entries are not its to
+		// close.
+		SubtreeSlices: job.Subtrees,
+		CoinbaseBUMP:  coinbaseBUMP,
 	}
 
 	// check fully valid, including whether difficulty in header is low enough
@@ -2080,7 +2385,37 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 		CurrentHash:           currentHeader.Hash().String(),
 		RemoveMapCount:        removeMapLen32,
 		Subtrees:              subtreeHashesStrings,
+		QueueHeadAgeMillis:    ba.blockAssembler.QueueHeadAge().Milliseconds(),
 		TxIngressFull:         ba.blockAssembler.IsTxIngressFull(),
+	}, nil
+}
+
+// GetBlockAssemblyQueueStats returns a slim, atomic-only view of the ingest
+// queue (depth + head-batch age) for high-frequency control reads such as the
+// validator's Kafka backpressure controller. Unlike GetBlockAssemblyState it
+// deliberately does not call GetSubtreeHashes, so it never blocks on the
+// subtree-processor main loop and always returns immediately even while that
+// loop is stalled.
+//
+// The reported double-spend window makes the signal self-describing: the head
+// age structurally includes this process's drain floor, and the reader that
+// subtracts it lives in a different process with its own settings context. It is
+// read from the same setting the drain loop applies, so the description cannot
+// drift from the behaviour it describes.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - _: Empty message request (unused)
+//
+// Returns:
+//   - *blockassembly_api.QueueStatsMessage: Queue depth, head-batch age, the applied double-spend window and the enforced item cap
+//   - error: Always nil; both queue values are atomic loads that cannot fail
+func (ba *BlockAssembly) GetBlockAssemblyQueueStats(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.QueueStatsMessage, error) {
+	return &blockassembly_api.QueueStatsMessage{
+		QueueCount:              ba.blockAssembler.QueueLength(),
+		QueueHeadAgeMillis:      ba.blockAssembler.QueueHeadAge().Milliseconds(),
+		DoubleSpendWindowMillis: ba.settings.BlockAssembly.DoubleSpendWindow.Milliseconds(),
+		QueueMaxItems:           ba.blockAssembler.QueueMaxItems(),
 	}, nil
 }
 
@@ -2318,6 +2653,13 @@ func (ba *BlockAssembly) GetBlockAssemblyBlockCandidate(ctx context.Context, _ *
 // Returns:
 //   - error: Any error encountered during block generation
 func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) error {
+	// Block assembly learns about a new tip from an asynchronous notification, so
+	// wait for its view to catch up — and for the transition that moved it to
+	// finish — before building a candidate (issue 764).
+	if err := ba.waitForAssemblerTip(ctx); err != nil {
+		return err
+	}
+
 	// get a mining candidate
 	miningCandidate, err := ba.GetMiningCandidate(ctx, &blockassembly_api.GetMiningCandidateRequest{})
 	if err != nil {
@@ -2369,6 +2711,161 @@ func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) err
 	// Wait for the best block header to be updated after successful submission
 	// This prevents the "already mining on top of the same block" error when generating multiple blocks
 	return ba.waitForBestBlockHeaderUpdate(ctx, previousBestHash)
+}
+
+// tipWaitReconcileGrace is how long the wait tolerates a mismatch before asking
+// the assembler to reconcile. A transition already in flight resolves on its own
+// in milliseconds, and nudging then would add work to the very path being waited
+// on; a mismatch still present after this long is the shape that never converges.
+const tipWaitReconcileGrace = time.Second
+
+// Tip-poll interval bounds. The wait starts fine and backs off - see the comment
+// in waitForAssemblerTip for why each end is where it is.
+const (
+	minTipPollInterval = 5 * time.Millisecond
+	maxTipPollInterval = 250 * time.Millisecond
+)
+
+// waitForAssemblerTip waits, bounded, for block assembly to become level with the
+// chain tip AND return to its Running state.
+//
+// Two conditions, not one. Level-with-the-tip alone is satisfied too early on the
+// very path this exists for: reset() publishes the new tip optimistically before
+// SubtreeProcessor.Reset runs (see the "Update the internal best block reference
+// before SubtreeProcessor.Reset" comment in BlockAssembler.reset), so a wait keyed
+// on the tip alone returns while the subtree processor is still being torn down and
+// the unmined set reloaded. The running state is the reliable done signal:
+// processNewBlockAnnouncement only transitions back to Running in its deferred exit,
+// after handleReorg and reset have returned. Requiring it also means a call cannot
+// start while the assembler is in MovingUp; that is a consequence of waiting for
+// Running, not a guarantee this wait offers - nothing here stops the assembler
+// entering MovingUp again once the wait has returned.
+//
+// No state is treated as unwaitable. Starting looks like one — an assembler that
+// was never started never leaves it — but Start sets Running from a goroutine, so
+// a generate arriving just after startup is legitimately in Starting and would be
+// failed spuriously by a fail-fast rule. The state alone cannot separate the two,
+// so the bound is what distinguishes them.
+//
+// The chain tip is re-read each pass so a chain that advances while waiting is not
+// waited out in full. A failed read is logged and retried rather than abandoning the
+// guard: the wait is cheap and already bounded, so a transient blockchain-service
+// blip should cost one poll, not the whole protection.
+//
+// Exceeding the bound is an error rather than a silent proceed, and costs nothing:
+// while the assembler is still inside reset() its CurrentBlock is the invalidated
+// pre-reorg tip, so a call that proceeded would build on that parent and be rejected
+// as stale anyway. The error changes the text, not the outcome — but "did not reach
+// the chain tip, state resetting" tells an operator what to retry, where "candidate
+// is stale" does not.
+//
+// The bound cannot cover the whole awaited path and does not claim to.
+// subtreeProcessor.WaitForPendingBlocks runs ahead of the tip publish under
+// retry.WithInfiniteRetry, so it ends when the pending set drains or the assembler's
+// own context dies — never on this deadline. What the default is sized against is the
+// bounded component, waitForBlockMinedSet: 45 retries at 20ms base, factor 2, capped
+// at 2s, is ~78s worst case per invalid moveBack block.
+func (ba *BlockAssembly) waitForAssemblerTip(ctx context.Context) error {
+	timeout := ba.settings.BlockAssembly.GenerateTipWaitTimeout
+	if timeout <= 0 {
+		timeout = settings.DefaultGenerateTipWaitTimeout
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// Start fine because of what runs immediately before this on a multi-block
+	// generate: waitForBestBlockHeaderUpdate returns as soon as the assembler's
+	// tip changes, which happens at setBestBlockHeader, before the deferred
+	// return to StateRunning. So the next block's readiness check can arrive a
+	// few instructions early and pay a tick for it.
+	//
+	// Then back off, because that window closes within tens of milliseconds and
+	// past it the fine tick buys nothing. Each pass costs a GetBestBlockHeader
+	// round trip aimed at the blockchain service - the same dependency whose
+	// latency is the reason for waiting, and which is concurrently serving the
+	// GetBlockIsMined polls waitForBlockMinedSet is issuing for the very work
+	// being awaited. Holding 200 reads/second for the rest of the bound would aim
+	// load at exactly the wrong place; backing off also means tick and bound no
+	// longer have to be weighed against each other whenever either moves.
+	interval := minTipPollInterval
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	// The assembler learns of a new tip from an asynchronous notification, and
+	// the blockchain client drops notifications to a subscriber it cannot feed
+	// fast enough. If that has happened, nothing in this loop converges on its
+	// own and "retry once it has caught up" would advise an action that fails
+	// identically every time - on regtest especially, where generate is the only
+	// source of new blocks and no later arrival re-triggers anything. Asking for
+	// a reconcile is a non-blocking send that coalesces by construction, so the
+	// cost of being wrong is nil.
+	start := time.Now()
+	nudged := false
+
+	for {
+		bestHeader, _, err := ba.blockchainClient.GetBestBlockHeader(waitCtx)
+
+		switch {
+		case err != nil:
+			// Do not misreport an expired deadline as a read failure: the ticker
+			// and waitCtx.Done() can become ready in the same instant and select
+			// may take the tick, leaving this call to fail on the dead context.
+			if waitCtx.Err() == nil {
+				ba.logger.Warnf("[generateBlock] could not read the chain tip to sync against, retrying: %v", err)
+			}
+		case ba.assemblerReady(bestHeader):
+			return nil
+		case !nudged && time.Since(start) > tipWaitReconcileGrace:
+			nudged = true
+
+			ba.logger.Warnf("[generateBlock] block assembly still behind the chain tip after %s, asking it to reconcile", tipWaitReconcileGrace)
+			ba.blockAssembler.triggerReconcile()
+		}
+
+		select {
+		case <-waitCtx.Done():
+			return ba.tipWaitExpiredError(ctx, timeout)
+		case <-ticker.C:
+			if interval < maxTipPollInterval {
+				interval *= 2
+				ticker.Reset(interval)
+			}
+		}
+	}
+}
+
+// tipWaitExpiredError distinguishes the two ways the bounded wait ends, because
+// they call for opposite actions and the effective bound is the smaller of the
+// two. On the generate RPC the caller's deadline is rpc_timeout, which defaults
+// to 30s and so sits below the configured bound: on that path the caller giving
+// up first is the ordinary expiry, not the rare one, and reporting it as "block
+// assembly did not catch up in 90s" would name a budget that was never spent.
+func (ba *BlockAssembly) tipWaitExpiredError(ctx context.Context, timeout time.Duration) error {
+	state := StateStrings[ba.blockAssembler.GetCurrentRunningState()]
+
+	if ctx.Err() != nil {
+		return errors.NewProcessingError(
+			"[generateBlock] caller gave up before block assembly reached the chain tip (state %s) - the effective bound is the smaller of blockassembly_generateTipWaitTimeout (%s) and the caller's own deadline, which on the generate RPC is rpc_timeout; raise both together",
+			state, timeout)
+	}
+
+	return errors.NewProcessingError(
+		"[generateBlock] block assembly did not reach the chain tip within %s (state %s) - retry once it has caught up",
+		timeout, state)
+}
+
+// assemblerReady reports whether block assembly is level with bestHeader and has
+// finished whatever transition brought it there. A nil current header means the
+// assembler has not loaded its best block yet, which is a wait condition rather
+// than a failure.
+func (ba *BlockAssembly) assemblerReady(bestHeader *model.BlockHeader) bool {
+	currentHeader, _ := ba.blockAssembler.CurrentBlock()
+	if currentHeader == nil || !currentHeader.Hash().IsEqual(bestHeader.Hash()) {
+		return false
+	}
+
+	return ba.blockAssembler.GetCurrentRunningState() == StateRunning
 }
 
 // waitForBestBlockHeaderUpdate waits for the best block header to be updated after block submission

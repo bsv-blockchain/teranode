@@ -120,10 +120,10 @@ func TestSubtreesPersistedBeforeBlockAnnounced(t *testing.T) {
 	parentHash := chainhash.HashH([]byte("persist-before-announce-parent"))
 	for i := range subtreeSize - 1 {
 		txHash := chainhash.HashH(fmt.Appendf(nil, "persist-before-announce-tx-%d", i))
-		server.blockAssembler.AddTxBatch(
+		require.True(t, server.blockAssembler.AddTxBatchIfRoom(
 			[]subtreepkg.Node{{Hash: txHash, Fee: uint64(1000 + i), SizeInBytes: 250}},
 			[]*subtreepkg.TxInpoints{singleParentInpointsPtr(parentHash, uint32(i))},
-		)
+		))
 	}
 
 	// Wait for the completed subtree to be both reflected in a mining candidate

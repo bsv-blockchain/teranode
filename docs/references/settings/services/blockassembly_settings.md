@@ -7,6 +7,7 @@
 | Setting                              | Type          | Default          | Environment Variable                               | Usage                                                                                |
 |--------------------------------------|---------------|------------------|----------------------------------------------------|--------------------------------------------------------------------------------------|
 | Disabled                             | bool          | false            | blockassembly_disabled                             | Service-level kill switch, all operations return early                               |
+| GenerateTipWaitTimeout               | time.Duration | 90s              | blockassembly_generateTipWaitTimeout               | Bounds the generate readiness wait; effective bound is min(this, caller deadline)     |
 | GRPCAddress                          | string        | "localhost:8085" | blockassembly_grpcAddress                          | Client connection address                                                            |
 | GRPCListenAddress                    | string        | ":8085"          | blockassembly_grpcListenAddress                    | **CRITICAL** - gRPC server binding (service skipped if empty)                        |
 | GRPCMaxRetries                       | int           | 3                | blockassembly_grpcMaxRetries                       | gRPC client retry attempts                                                           |

@@ -807,6 +807,9 @@ message PeerRegistryInfo {
   int64 catchup_attempts = 43;
   int64 catchup_successes = 44;
   int64 catchup_failures = 45;
+
+  // Wire-protocol-only fields. Absent (nil) for libp2p peers.
+  LegacyPeerInfo legacy = 46;
 }
 
 // RegisterPeerRequest registers or updates a peer in the centralized registry.
@@ -1147,4 +1150,17 @@ message BatchTokenInfo {
   int64 acquired_at = 2;  // Unix timestamp
   int32 deletion_count = 3;
   repeated int64 deletion_ids = 4;
+}
+
+// LegacyPeerInfo holds fields that only a Bitcoin wire-protocol (legacy) peer
+// supplies. It is absent for libp2p peers.
+message LegacyPeerInfo {
+  bool inbound = 1;                             // The peer dialled us
+  uint32 protocol_version = 2;                  // Wire protocol version, e.g. 70016
+  uint64 service_flags = 3;                     // wire.ServiceFlag bits
+  int64 ping_micros = 4;                        // Last ping round trip, microseconds
+  int64 time_offset_secs = 5;                   // Peer clock offset from ours, seconds
+  int32 starting_height = 6;                    // Peer height at handshake
+  bool is_sync_peer = 7;                        // The legacy sync manager selected this peer
+  google.protobuf.Timestamp time_connected = 8; // When the wire connection opened
 }

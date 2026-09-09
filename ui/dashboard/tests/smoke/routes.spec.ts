@@ -36,7 +36,10 @@ for (const route of ROUTES) {
       expect(response?.ok(), `${route.path} should respond 2xx`).toBe(true)
       await expect(smokePage.locator(route.selector)).toBeVisible()
       await smokePage.waitForTimeout(1000)
-      expect(consoleErrors, `console errors on ${route.path}:\n${consoleErrors.join('\n')}`).toHaveLength(0)
+      expect(
+        consoleErrors,
+        `console errors on ${route.path}:\n${consoleErrors.join('\n')}`,
+      ).toHaveLength(0)
     })
   })
 }
@@ -50,7 +53,10 @@ for (const route of ROUTES) {
 const FIRST_BLOCK_HASH = '0000000000000000000004aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 
 test.describe('smoke: /viewer click-through to block detail', () => {
-  test('opens block detail when first block hash is clicked', async ({ smokePage, consoleErrors }) => {
+  test('opens block detail when first block hash is clicked', async ({
+    smokePage,
+    consoleErrors,
+  }) => {
     await smokePage.goto('/viewer')
     await expect(smokePage.locator(PAGE_ROOT)).toBeVisible()
 
@@ -69,7 +75,10 @@ test.describe('smoke: /viewer click-through to block detail', () => {
     await expect(smokePage.getByText(FIRST_BLOCK_HASH, { exact: false })).toBeVisible()
 
     await smokePage.waitForTimeout(1000)
-    expect(consoleErrors, `console errors on /viewer click-through:\n${consoleErrors.join('\n')}`).toHaveLength(0)
+    expect(
+      consoleErrors,
+      `console errors on /viewer click-through:\n${consoleErrors.join('\n')}`,
+    ).toHaveLength(0)
   })
 })
 
@@ -95,3 +104,58 @@ for (const type of DETAIL_TYPES) {
     })
   })
 }
+
+// The /peers page renders two tables from one payload: libp2p peers in the
+// Teranode table, and wire-protocol peers in the Legacy Peers card. This
+// asserts the transport split actually happened, which "no console errors"
+// cannot show.
+test.describe('smoke: /peers legacy card', () => {
+  test('renders wire-protocol peers separately from libp2p peers', async ({
+    smokePage,
+    consoleErrors,
+  }) => {
+    const response = await smokePage.goto('/peers')
+    expect(response?.ok(), '/peers should respond 2xx').toBe(true)
+    await expect(smokePage.locator(PAGE_ROOT)).toBeVisible()
+
+    const legacyTable = smokePage.locator('.legacy-table')
+    await expect(legacyTable).toBeVisible()
+
+    // The connected peer and the recently disconnected one appear. The libp2p
+    // peer does not: it belongs to the Teranode table.
+    const rows = legacyTable.locator('tbody tr')
+    await expect(rows).toHaveCount(2)
+    await expect(legacyTable).toContainText('203.0.113.7:8333')
+    await expect(legacyTable).toContainText('198.51.100.9:8333')
+    await expect(legacyTable).not.toContainText('12D3KooW')
+
+    // The recency bound drops a peer that is both disconnected and stale, so a
+    // flapping inbound peer cannot accumulate rows indefinitely. The fixture
+    // serves this one two hours old.
+    await expect(legacyTable).not.toContainText('198.51.100.55:8333')
+
+    // The libp2p peer still reaches the Teranode table, which shares the same
+    // payload. This guards the transport split from the other side. Match on
+    // its client name, not its ID: that table's cell renderer shows
+    // client_name when present and keeps the ID in the tooltip.
+    await expect(smokePage.locator(PAGE_ROOT)).toContainText('teranode/1.0')
+    await expect(legacyTable).not.toContainText('teranode/1.0')
+
+    // The sync peer is badged, and the disconnected peer's cells are dimmed.
+    await expect(legacyTable.locator('.badge.sync')).toHaveCount(1)
+    await expect(
+      legacyTable.locator('tbody tr', { has: smokePage.locator('.dimmed') }),
+    ).toHaveCount(1)
+
+    // Wire-protocol-only fields are surfaced.
+    await expect(legacyTable).toContainText('70016')
+    await expect(legacyTable).toContainText('42.0 ms')
+    await expect(legacyTable).toContainText('-3s')
+
+    await smokePage.waitForTimeout(1000)
+    expect(
+      consoleErrors,
+      `console errors on /peers legacy card:\n${consoleErrors.join('\n')}`,
+    ).toHaveLength(0)
+  })
+})

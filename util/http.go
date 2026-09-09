@@ -16,15 +16,11 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-// ssrfSafeDialer wraps the default dialer and rejects connections to link-local/loopback
-// IPs after DNS resolution. This closes the DNS-rebinding gap that the static IP-literal
-// check in ValidateURL cannot cover: a peer could pass http://internal.cluster.local/ whose
-// hostname resolves to 169.254.169.254 (the cloud metadata endpoint) only at dial time.
-//
-// Only link-local and loopback are blocked — see isBlockedDialIP for the rationale. RFC1918
-// ranges are deliberately allowed because teranode peers, k8s pods, and private miner
-// interconnects all communicate over private networks in real deployments; this matches the
-// static ValidateURL/isBlockedIP policy.
+// ssrfSafeDialer holds the connection settings used by the dialers built by
+// NewSSRFSafeDialContext, which reject connections to unsafe IPs after DNS resolution.
+// That closes the DNS-rebinding gap the static IP-literal check in ValidateURL cannot
+// cover: a peer could pass http://internal.cluster.local/ whose hostname resolves to
+// 169.254.169.254 (the cloud metadata endpoint) only at dial time.
 var ssrfSafeDialer = &net.Dialer{
 	Timeout:   30 * time.Second,
 	KeepAlive: 30 * time.Second,
@@ -35,10 +31,18 @@ var ssrfSafeDialer = &net.Dialer{
 // address for a name that "looks" public).
 var ssrfLookupHost = net.DefaultResolver.LookupHost
 
-// ssrfDialContext wraps ssrfSafeDialer.DialContext and rejects resolved addresses that
-// fall into link-local or loopback ranges (see isBlockedDialIP). It is installed as the
-// Transport.DialContext for httpClient so that every outgoing connection is checked,
-// including those that follow HTTP redirects.
+// SSRFDialPolicy reports why an IP resolved from a peer-supplied hostname is unsafe to
+// connect to, or "" when it is safe. It is a parameter rather than a fixed rule so a caller
+// can reuse the resolve-then-dial machinery below with its own address rules; callers
+// fetching peer-supplied URLs should pass DefaultSSRFDialPolicy so every such path enforces
+// one policy. Note that a policy stricter than the fetch path's is usually a mistake: it
+// makes a peer unusable that block and subtree fetches would have talked to happily.
+type SSRFDialPolicy func(net.IP) string
+
+// NewSSRFSafeDialContext returns a DialContext that resolves the target hostname, rejects
+// the dial if policy flags any resolved address, and otherwise connects to a validated IP.
+// Install it as http.Transport.DialContext so every outgoing connection is checked,
+// including connections made while following HTTP redirects.
 //
 // Critically, after validating the resolved addresses we dial those exact IPs rather than
 // the hostname. Dialing by hostname would let net.Dialer perform a SECOND, independent DNS
@@ -47,57 +51,111 @@ var ssrfLookupHost = net.DefaultResolver.LookupHost
 // 169.254.169.254 / 127.0.0.1 for the dialer's lookup. Connecting to the already-validated
 // IP closes that window. (The Transport still derives the TLS ServerName and Host header
 // from the original URL, so dialing by IP does not break virtual hosting or HTTPS.)
-func ssrfDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	if !ssrfProtectionEnabled.Load() {
-		return ssrfSafeDialer.DialContext(ctx, network, addr)
-	}
-
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, errors.NewInvalidArgumentError("SSRF dial check: cannot split host/port from %q: %v", addr, err)
-	}
-
-	ips, err := ssrfLookupHost(ctx, host)
-	if err != nil {
-		return nil, errors.NewServiceError("SSRF dial check: failed to resolve %q", host, err)
-	}
-
-	// Validate every resolved address first; reject outright if any is blocked so a
-	// mixed public/private answer cannot smuggle an internal target through failover.
-	validated := make([]net.IP, 0, len(ips))
-	for _, ipStr := range ips {
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
-			continue
+//
+// The returned dialer is a no-op passthrough when SSRF protection is disabled via
+// SetSSRFProtection(false), which test daemons use to talk to localhost nodes.
+func NewSSRFSafeDialContext(policy SSRFDialPolicy) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if !ssrfProtectionEnabled.Load() {
+			return ssrfSafeDialer.DialContext(ctx, network, addr)
 		}
-		if isBlockedDialIP(ip) {
-			return nil, errors.NewInvalidArgumentError("SSRF dial check: resolved address %s for host %q is a blocked IP", ipStr, host)
+
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, errors.NewInvalidArgumentError("SSRF dial check: cannot split host/port from %q: %v", addr, err)
 		}
-		validated = append(validated, ip)
-	}
 
-	if len(validated) == 0 {
-		return nil, errors.NewServiceError("SSRF dial check: no usable addresses resolved for host %q", host)
-	}
-
-	// Dial the validated IPs directly (no re-resolution), trying each to preserve
-	// multi-A-record failover.
-	var lastErr error
-	for _, ip := range validated {
-		conn, dialErr := ssrfSafeDialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-		if dialErr != nil {
-			lastErr = dialErr
-			continue
+		ips, err := ssrfLookupHost(ctx, host)
+		if err != nil {
+			return nil, errors.NewServiceError("SSRF dial check: failed to resolve %q", host, err)
 		}
-		return conn, nil
-	}
 
-	return nil, lastErr
+		// Validate every resolved address first; reject outright if any is blocked so a
+		// mixed public/private answer cannot smuggle an internal target through failover.
+		validated := make([]net.IP, 0, len(ips))
+
+		for _, ipStr := range ips {
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				continue
+			}
+
+			if reason := policy(ip); reason != "" {
+				return nil, errors.NewInvalidArgumentError("SSRF dial check: resolved address %s for host %q is a %s", ipStr, host, reason)
+			}
+
+			validated = append(validated, ip)
+		}
+
+		if len(validated) == 0 {
+			return nil, errors.NewServiceError("SSRF dial check: no usable addresses resolved for host %q", host)
+		}
+
+		// Dial the validated IPs directly (no re-resolution), trying each to preserve
+		// multi-A-record failover. Dialing by IP loses net.Dialer's dual-stack fast
+		// fallback, so each attempt gets a slice of the remaining budget: without that, a
+		// blackholed first address would consume the caller's whole deadline and a
+		// reachable second address would never be tried. That matters most for short
+		// budgets such as the p2p peer health probe.
+		var lastErr error
+
+		for i, ip := range validated {
+			attemptCtx, cancelAttempt := dialAttemptContext(ctx, len(validated)-i)
+
+			conn, dialErr := ssrfSafeDialer.DialContext(attemptCtx, network, net.JoinHostPort(ip.String(), port))
+
+			cancelAttempt() // established connections are unaffected by cancelling the dial context
+
+			if dialErr != nil {
+				lastErr = dialErr
+				continue
+			}
+
+			return conn, nil
+		}
+
+		return nil, lastErr
+	}
 }
 
-// isBlockedDialIP returns true for IPs that are unsafe to connect to when the hostname
-// came from a peer-controlled URL, evaluated after DNS resolution to close the
-// DNS-rebinding gap that the static ValidateURL pre-check cannot cover.
+// minDialAttemptBudget floors the per-address share of the deadline. An even split alone
+// punishes well-behaved multi-address peers: under the 2s peer probe timeout, a hostname with
+// four A records would give the first (usually working) address only 500ms, where a plain
+// sequential dial would have let it use the whole remaining budget. The floor keeps the
+// failover intent - a blackholed address cannot eat the entire deadline - without failing a
+// reachable address that merely has an unremarkable RTT.
+const minDialAttemptBudget = 500 * time.Millisecond
+
+// dialAttemptContext bounds one dial attempt: each address gets its even share of the
+// remaining deadline, floored at minDialAttemptBudget and never more than what remains. With
+// no deadline set it returns the context unchanged.
+func dialAttemptContext(ctx context.Context, remainingCandidates int) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok || remainingCandidates <= 1 {
+		return context.WithCancel(ctx)
+	}
+
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return context.WithCancel(ctx)
+	}
+
+	budget := remaining / time.Duration(remainingCandidates)
+	if budget < minDialAttemptBudget {
+		budget = minDialAttemptBudget
+	}
+
+	if budget >= remaining {
+		// The share (or the floor) covers everything left; no sub-deadline to impose.
+		return context.WithCancel(ctx)
+	}
+
+	return context.WithTimeout(ctx, budget)
+}
+
+// DefaultSSRFDialPolicy is the dial policy applied to peer-supplied URLs by this package's
+// shared client, returning the reason an address is unsafe or "" when it is safe. Services
+// fetching peer-supplied URLs should reuse it so every such path enforces the same rules.
 //
 // It blocks only:
 //   - link-local (169.254.0.0/16, fe80::/10) — the real SSRF target, since the cloud
@@ -111,8 +169,84 @@ func ssrfDialContext(ctx context.Context, network, addr string) (net.Conn, error
 // communicate over private networks in real deployments. Blocking them here would reject
 // legitimate peer traffic and contradicts isBlockedIP, which allows the same ranges for
 // the static ValidateURL check.
-func isBlockedDialIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+func DefaultSSRFDialPolicy(ip net.IP) string {
+	switch {
+	case ip.IsLoopback():
+		return "loopback address"
+	case ip.IsLinkLocalUnicast(), ip.IsLinkLocalMulticast():
+		return "link-local address"
+	case ip.IsUnspecified():
+		return "unspecified address"
+	default:
+		return ""
+	}
+}
+
+// ssrfDialContext is the DialContext installed on httpClient, enforcing
+// DefaultSSRFDialPolicy on every connection made for peer-supplied URLs.
+var ssrfDialContext = NewSSRFSafeDialContext(DefaultSSRFDialPolicy)
+
+// maxSSRFRedirects bounds redirect chains followed while fetching peer-supplied URLs.
+const maxSSRFRedirects = 10
+
+// ssrfCheckRedirect builds the CheckRedirect used for peer-supplied URLs: it bounds the hop
+// count, then rejects a redirect target that leaves http/https, carries credentials, or names
+// a blocked IP literal. Targets naming a hostname are caught by the dialer instead, so this
+// is a cheap pre-check that avoids attempting the connection at all.
+//
+// Both the shared httpClient and every client from NewSSRFSafeHTTPClient use this, so there is
+// one redirect rule for the threat rather than two that can drift apart.
+func ssrfCheckRedirect(policy SSRFDialPolicy) func(req *http.Request, via []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) >= maxSSRFRedirects {
+			return errors.NewInvalidArgumentError("stopped after %d redirects", maxSSRFRedirects)
+		}
+
+		if !ssrfProtectionEnabled.Load() {
+			return nil
+		}
+
+		scheme := strings.ToLower(req.URL.Scheme)
+		if scheme != "http" && scheme != "https" {
+			return errors.NewInvalidArgumentError("SSRF redirect check: invalid scheme %q", scheme)
+		}
+
+		// Userinfo has no legitimate use here and can be used to confuse logging or
+		// smuggle credentials; ValidateURL rejects it on the initial request too.
+		if req.URL.User != nil {
+			return errors.NewInvalidArgumentError("SSRF redirect check: target must not contain userinfo (credentials)")
+		}
+
+		if ip := net.ParseIP(req.URL.Hostname()); ip != nil {
+			if reason := policy(ip); reason != "" {
+				return errors.NewInvalidArgumentError("SSRF redirect check: target %s is a %s", ip.String(), reason)
+			}
+		}
+
+		return nil
+	}
+}
+
+// NewSSRFSafeHTTPClient returns an HTTP client for fetching peer-supplied URLs. Every
+// connection it makes - including connections for redirect hops - is checked against
+// policy after DNS resolution, and redirect targets are additionally rejected if they
+// leave http/https or name a blocked IP literal.
+//
+// timeout bounds the whole request; pass 0 to rely on the request context instead.
+//
+// Caveat: the transport keeps http.DefaultTransport's ProxyFromEnvironment, matching the
+// shared httpClient below. With HTTP_PROXY/HTTPS_PROXY set, connections are made to the
+// proxy - so policy validates the proxy's address and the proxy fetches the peer-supplied
+// target on our behalf, outside the reach of this check.
+func NewSSRFSafeHTTPClient(timeout time.Duration, policy SSRFDialPolicy) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = NewSSRFSafeDialContext(policy)
+
+	return &http.Client{
+		Timeout:       timeout,
+		Transport:     transport,
+		CheckRedirect: ssrfCheckRedirect(policy),
+	}
 }
 
 var (
@@ -131,8 +265,8 @@ var (
 	//
 	// The transport uses ssrfDialContext so that DNS-resolved private/loopback IPs are
 	// rejected at dial time, closing the SSRF-via-hostname gap. CheckRedirect applies the
-	// same validation to redirect targets so a peer-controlled server cannot bounce us to
-	// an internal address.
+	// same policy to redirect targets - the identical check NewSSRFSafeHTTPClient installs -
+	// so a peer-controlled server cannot bounce us to an internal address.
 	httpClient = &http.Client{
 		Transport: func() *http.Transport {
 			t := http.DefaultTransport.(*http.Transport).Clone()
@@ -142,15 +276,7 @@ var (
 			t.DialContext = ssrfDialContext
 			return t
 		}(),
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return errors.NewInvalidArgumentError("stopped after 10 redirects")
-			}
-			if err := ValidateURL(req.URL.String()); err != nil {
-				return errors.NewInvalidArgumentError("SSRF redirect check: %v", err)
-			}
-			return nil
-		},
+		CheckRedirect: ssrfCheckRedirect(DefaultSSRFDialPolicy),
 	}
 )
 
@@ -320,6 +446,14 @@ func SetSSRFProtection(enabled bool) {
 	ssrfProtectionEnabled.Store(enabled)
 }
 
+// SSRFProtectionEnabled reports whether SSRF URL validation is currently active.
+// Tests that disable it should restore this value rather than assuming the
+// default, so a nested or subsequent test cannot be silently left unprotected —
+// or protected when its caller had deliberately turned it off.
+func SSRFProtectionEnabled() bool {
+	return ssrfProtectionEnabled.Load()
+}
+
 // ValidateURL checks that the given URL is safe to request, rejecting non-HTTP schemes
 // and URLs containing link-local IP addresses to prevent SSRF attacks against cloud
 // metadata endpoints (e.g. AWS 169.254.169.254).
@@ -434,6 +568,12 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 	ct := strings.ToLower(resp.Header.Get("content-type"))
 	isHTML := strings.HasPrefix(ct, "text/html")
 	if isHTML {
+		// The body is never returned on this path, so it has to be closed here or the
+		// connection leaks outright — which defeats the point of draining error bodies
+		// a few lines up. A 2xx with an unexpected content type is worth draining for
+		// reuse rather than tearing down, so the same bounded helper applies.
+		drainAndCloseErrorBody(resp.Body)
+
 		return nil, cancelFn, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", rawURL)
 	}
 
@@ -451,6 +591,106 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 // not on the length of the resulting message.
 const maxHTTPErrorBodyBytes = 2 * 1024
 
+// maxHTTPErrorBodyDrainBytes bounds how much of the REMAINDER of an error body is
+// drained, after the snippet above has been read, purely so the connection can go
+// back into http.Transport's idle pool.
+//
+// The trade-off is deliberate. A body must be read to EOF for the connection to be
+// reusable, so capping the read at maxHTTPErrorBodyBytes and closing turned every
+// error larger than 2 KiB into a fresh TCP (+TLS) handshake — on the high-rate
+// failure path, which is exactly when handshakes hurt most. An unbounded
+// io.Copy(io.Discard, ...) would restore reuse but reopen the hole the snippet cap
+// was added to close: a hostile peer answering with an error status and streaming
+// forever. So the drain is itself bounded. A body whose remainder fits is drained
+// and its connection reused; anything larger is abandoned and Close tears the
+// connection down, which is the correct outcome for a peer that streams
+// unboundedly on an error status.
+//
+// The budget is measured from wherever the snippet read stopped, so bodies just
+// over the snippet cap — the common case for a verbose error page — are fully
+// drained.
+const maxHTTPErrorBodyDrainBytes = 64 * 1024
+
+// maxHTTPErrorBodyDrainWait bounds how long the CALLER waits for the remainder drain
+// before abandoning it to the background.
+//
+// It exists because the drain's two requirements pull in opposite directions:
+//
+//   - Connection reuse needs the body read to EOF and CLOSED *before the caller
+//     returns*. Every caller of buildHTTPError cancels its request context immediately
+//     afterwards — DoHTTPRequest defers cancelFn, doHTTPRequestForStreamingWithRetryAfter
+//     calls it outright — and response-body reads honour that context. So a drain that
+//     has not finished by then is killed and the connection is discarded: a purely
+//     asynchronous drain delivers no reuse at all, which is the entire point of
+//     draining.
+//   - A peer that dribbles must not hold the caller. Body reads are otherwise bounded
+//     only by the request context, up to the 5-minute streaming timeout, compounded by
+//     up to six 503 retries.
+//
+// So the drain is synchronous up to this budget and abandoned past it. A peer whose
+// remainder is already buffered — the common case for a verbose error page — drains in
+// microseconds and its connection is reused; a dribbler costs the caller this much and
+// no more.
+//
+// Across a retry ladder that budget multiplies: DoHTTPRequestBodyReaderWithRetry makes
+// up to defaultRetryConfig.maxAttempts attempts, so its worst case is
+// maxAttempts x this budget — 6 x 250ms = 1.5s — reached only against a peer that
+// dribbles its error body on every one of the six attempts. Set that against the
+// ~7.75s of exponential backoff the same ladder already spends between those attempts
+// (250ms doubling, capped at 5s), and the added share is bounded enough that the
+// budget is deliberately not shortened: cutting it would trade away the connection
+// reuse the synchronous drain exists to buy.
+const maxHTTPErrorBodyDrainWait = 250 * time.Millisecond
+
+// drainAndCloseErrorBody drains the remainder of an error body and closes it so the
+// connection can return to http.Transport's idle pool, while bounding what that costs
+// the caller.
+//
+// Bounded three ways: in BYTES by maxHTTPErrorBodyDrainBytes, against a peer that
+// streams forever; in the CALLER'S TIME by maxHTTPErrorBodyDrainWait; and, once
+// abandoned, by the request context its caller is about to cancel anyway.
+//
+// The goroutine takes sole ownership of the body and closes it exactly once, whether it
+// finished or was abandoned — callers must not touch the body afterwards.
+//
+// Note what this does NOT bound: a caller can still block on the snippet read in
+// buildHTTPError, which is synchronous and capped in bytes (2 KiB) but not in time.
+// That exposure is pre-existing and strictly smaller than the unbounded io.ReadAll it
+// replaced; bounding it in time needs a bounded-time reader and would trade away the
+// body of a legitimately slow error response.
+func drainAndCloseErrorBody(body io.ReadCloser) {
+	if body == nil {
+		return
+	}
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		drainErrorBody(body)
+	}()
+
+	timer := time.NewTimer(maxHTTPErrorBodyDrainWait)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		// Drained and closed before the caller returns, so the connection is reusable.
+	case <-timer.C:
+		// Abandoned. The goroutine keeps sole ownership and closes the body when it
+		// stops, at the byte cap or when the request context dies.
+	}
+}
+
+// drainErrorBody is the byte-bounded drain-then-close that drainAndCloseErrorBody waits
+// on. Split out so the byte bound and the close can be asserted directly, without a
+// test having to race a goroutine.
+func drainErrorBody(body io.ReadCloser) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, maxHTTPErrorBodyDrainBytes))
+	_ = body.Close()
+}
+
 // buildHTTPError constructs an appropriate error from a non-OK HTTP response.
 //
 // The error type is chosen to let callers branch with errors.Is:
@@ -459,10 +699,15 @@ const maxHTTPErrorBodyBytes = 2 * 1024
 //   - other → generic ServiceError
 //
 // The body is read up to maxHTTPErrorBodyBytes; anything beyond that is discarded
-// rather than retained in the error string. The snippet is %q-escaped because this
-// message is logged verbatim and forwarded to the peer registry: raw peer bytes would
-// otherwise let a peer embed newlines to forge log lines, or terminal escapes, and
-// would break the single-line log convention.
+// rather than retained in the error string, and the message says so. The snippet is
+// %q-escaped because this message is logged verbatim and forwarded to the peer
+// registry: raw peer bytes would otherwise let a peer embed newlines to forge log
+// lines, or terminal escapes, and would break the single-line log convention.
+//
+// The remainder of the body is then drained and closed by drainAndCloseErrorBody,
+// bounded in bytes and in how long it may hold this function, so the connection can be
+// reused without a dribbling peer stalling the caller. The call is deferred so it also
+// covers the early return on a read error and any future early return added here.
 func buildHTTPError(resp *http.Response, rawURL string) error {
 	errFn := errors.NewServiceError
 	switch resp.StatusCode {
@@ -473,16 +718,34 @@ func buildHTTPError(resp *http.Response, rawURL string) error {
 	}
 
 	if resp.Body != nil {
-		defer func() {
-			_ = resp.Body.Close()
-		}()
+		// Ownership of the body transfers to the drain once this returns; the snippet
+		// read below completes first, because the deferred call runs last.
+		defer drainAndCloseErrorBody(resp.Body)
 
-		b, readErr := io.ReadAll(io.LimitReader(resp.Body, maxHTTPErrorBodyBytes))
+		// Read one byte past the cap so truncation is detected by arrival of that
+		// byte, not by a length equality: io.LimitReader(body, max) returns exactly
+		// max bytes both for a body of exactly max and for a longer one, so
+		// len(b) == max would report complete peer errors as cut short — a false
+		// diagnostic in the very place an operator is trying to diagnose something.
+		// The extra byte is never rendered, so the %q-expansion bound documented on
+		// maxHTTPErrorBodyBytes is unchanged.
+		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxHTTPErrorBodyBytes+1))
 		if readErr != nil {
 			return errFn("http request [%s] returned status code [%d]", rawURL, resp.StatusCode, readErr)
 		}
 
+		b := raw
+		truncated := len(raw) > maxHTTPErrorBodyBytes
+
+		if truncated {
+			b = raw[:maxHTTPErrorBodyBytes]
+		}
+
 		if b != nil {
+			if truncated {
+				return errFn("http request [%s] returned status code [%d] with body %q (truncated)", rawURL, resp.StatusCode, string(b))
+			}
+
 			return errFn("http request [%s] returned status code [%d] with body %q", rawURL, resp.StatusCode, string(b))
 		}
 	}
@@ -618,7 +881,16 @@ func doHTTPRequestForStreamingWithRetryAfter(ctx context.Context, rawURL string,
 
 	ct := strings.ToLower(resp.Header.Get("content-type"))
 	if strings.HasPrefix(ct, "text/html") {
+		// The body is not handed to the caller on this path, so it must be closed here
+		// or the connection leaks outright. Closed rather than drained: cancelFn below
+		// cancels the request context, which makes the connection unusable anyway, so a
+		// drain for reuse would be spending a goroutine on nothing.
+		if resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+
 		cancelFn()
+
 		return nil, 0, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", rawURL)
 	}
 

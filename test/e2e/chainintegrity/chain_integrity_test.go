@@ -33,7 +33,12 @@ const (
 )
 
 // TestChainIntegrity3Nodes tests chain integrity across 3 nodes with transaction load
-// This test replaces the docker-compose-3blasters.yml approach with a pure Go implementation
+// This is the in-process Go counterpart to the compose/docker-compose-3blasters.yml harness
+// (still run nightly): the two overlap but are complementary, not one superseding the other.
+// This test trades scale and real container-level P2P for fast, deep structural verification
+// (per-node block hashes, UTXO store, subtree fees, topological order, persister files); the
+// compose harness runs a much longer chain with an SV node in the network and establishes
+// node agreement by log hashing instead.
 func TestChainIntegrity3Nodes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping chain integrity test in short mode")

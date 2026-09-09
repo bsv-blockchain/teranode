@@ -37,7 +37,7 @@ func newSchemaTestDB(t *testing.T) (*url.URL, *usql.DB) {
 				WithStartupTimeout(5*time.Minute),
 		),
 	)
-	require.NoError(t, err)
+	test.SkipIfContainerUnavailable(t, err)
 	t.Cleanup(func() { _ = pgContainer.Terminate(context.Background()) })
 
 	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")

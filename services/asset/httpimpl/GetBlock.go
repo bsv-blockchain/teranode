@@ -131,14 +131,14 @@ type BlockExtended struct {
 //
 // Example Usage:
 //
-//	// Get block in JSON format
-//	GET /block/height/0
-//
 //	// Get block in raw binary format
-//	GET /block/height/0/raw
+//	GET /api/v1/block/height/0
 //
 //	// Get block in hex format
-//	GET /block/height/0/hex
+//	GET /api/v1/block/height/0/hex
+//
+//	// Get block in JSON format
+//	GET /api/v1/block/height/0/json
 func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetBlockByHeight_http",
@@ -280,14 +280,14 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 //
 // Example Usage:
 //
-//	// Get block in JSON format
-//	GET /block/hash/000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f
-//
 //	// Get block in raw binary format
-//	GET /block/hash/000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f/raw
+//	GET /api/v1/block/000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f
 //
 //	// Get block in hex format
-//	GET /block/hash/000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f/hex
+//	GET /api/v1/block/000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f/hex
+//
+//	// Get block in JSON format
+//	GET /api/v1/block/000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f/json
 func (h *HTTP) GetBlockByHash(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		return h.getBlockByHash(c, mode)

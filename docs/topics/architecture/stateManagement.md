@@ -54,7 +54,7 @@ The diagram below represents the relationships between the states and events in 
 The FSM handles the following state **transitions**:
 
 - **Run**: Transitions to _Running_ from _Idle_ or _CatchingBlocks_
-- **CatchupBlocks**: Transitions to _CatchingBlocks_ from _Running_
+- **CatchupBlocks**: Transitions to _CatchingBlocks_ from _Running_ or _Idle_
 - **Stop**: Transitions to _Idle_ from _Running_
 
 Teranode provides a visualizer tool to generate and visualize the state machine diagram. To run the visualizer, use the command `go run services/blockchain/fsm_visualizer/main.go`. The generated `docs/state-machine.diagram.md` can be visualized using <https://mermaid.live/>.
@@ -63,7 +63,21 @@ Teranode provides a visualizer tool to generate and visualize the state machine 
 
 ### 3.1. State Machine Initialization
 
-As part of its own initialization, the Blockchain service initializes the FSM in the **Idle** state, before it transitions to a Running state.
+As part of initialization, the Blockchain service normally restores the FSM
+state it last persisted. A node with no persisted state uses
+`blockchain_initializeNodeInState`: an empty value means **CatchingBlocks**,
+while production `operator` and `docker.m` contexts default it to **Idle** so a
+seed can be inspected before catch-up. Uppercase values are required. Validation
+applies only when no FSM state is persisted; invalid values then abort startup.
+
+The test-only local start-state override takes precedence. Otherwise, a
+configured fresh-node **Running** state must pass the active network's checkpoint
+gate; below-checkpoint configured **Running** aborts startup without fallback.
+A persisted **Running** state with a successfully read tip below the checkpoint
+is persisted and resumed as **CatchingBlocks** instead. A tip-read failure or
+missing tip metadata aborts startup and leaves the persisted state unchanged.
+Unrecognized persisted state names likewise abort without writes; only the
+known retired `LEGACYSYNCING` name is migrated automatically.
 
 ### 3.2. Accessing the State Machine
 
@@ -105,7 +119,9 @@ The Blockchain service also exposes the following gRPC methods to interact with 
 
 #### 3.3.1. FSM: Idle State
 
-The Blockchain service always starts in an `Idle` state. In this state:
+A node reaches `Idle` by being stopped from `Running`, by restoring persisted
+`Idle`, or by starting fresh under a context configured to park there (production
+deployments do; see section 3.1). In this state:
 
 - No operations are permitted
 - All services are inactive
@@ -125,7 +141,9 @@ Allowed Operations in Idle State:
 - ❌ Create subtrees (or propagate them)
 - ❌ Create blocks (mine candidates)
 
-All services will wait for the FSM to transition to the `Running` state before starting their operations. As such, the node should see no activity until the FSM transitions to the `Running` state.
+Services wait for the FSM to leave `Idle` before starting their operations — any
+non-Idle state, including `CatchingBlocks`, releases them (see section 3.5). As
+such, the node should see no activity for as long as the FSM stays in `Idle`.
 
 The node can also return back to the `Idle` state from `Running`, however this can only be triggered by a manual / external request.
 
@@ -152,7 +170,11 @@ The Block Assembler will only mine blocks when the node is in the `Running` stat
 
 #### 3.3.3. FSM: Catching Blocks State
 
-The `CatchingBlocks` state represents the node catching up on blocks. This state is triggered by BlockValidation when the node needs to catch up with the network. In this state:
+The `CatchingBlocks` state represents the node catching up on blocks. It is entered
+by BlockValidation when a running node finds it has fallen behind the network; at
+startup when selected as the fresh-node boot state (see section 3.1); when an
+unsafe persisted `Running` state is recovered; or through an explicit
+CATCHUPBLOCKS event from `Idle`. In this state:
 
 Allowed Operations in Catching Blocks State:
 

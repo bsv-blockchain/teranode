@@ -3509,11 +3509,17 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 		100, 0,
 	)
 
-	// Update the GetBlockHeaders mock to return the actual block header
-	// This ensures the bloom filter hash matches between storage and retrieval
+	// Update the GetBlockHeaders mock to return the block's actual parent chain — the
+	// regtest genesis header, since the block is anchored on the regtest genesis hash.
+	// CheckHeaderContextual verifies the chain is anchored at the block's parent (issue
+	// 1467), so returning the block's own header no longer passes. The meta ID is kept
+	// so the bloom filter hash still matches between storage and retrieval.
+	genesisHeader := regtestGenesisHeader(t)
+	require.True(t, genesisHeader.Hash().IsEqual(blockHeader.HashPrevBlock), "fixture block must be anchored on the regtest genesis")
+
 	for _, call := range mockBlockchain.ExpectedCalls {
 		if call.Method == "GetBlockHeaders" {
-			call.ReturnArguments = mock.Arguments{[]*model.BlockHeader{blockHeader}, []*model.BlockHeaderMeta{{ID: 100}}, nil}
+			call.ReturnArguments = mock.Arguments{[]*model.BlockHeader{genesisHeader}, []*model.BlockHeaderMeta{{ID: 100}}, nil}
 			break
 		}
 	}

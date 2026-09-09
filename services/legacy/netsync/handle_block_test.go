@@ -27,6 +27,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/services/legacy/testdata"
+	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -367,41 +368,69 @@ func Benchmark_createSubtrees(b *testing.B) {
 
 // Test extendTransactions to increase coverage
 func TestSyncManager_extendTransactions(t *testing.T) {
-	t.Skip("Skipping test due to nil pointer issue")
+	initPrometheusMetrics()
+
 	block, err := testdata.ReadBlockFromFile("../testdata/000000000000000009631dd3dd7357675d8a1f8925be5e7851c68255531ac5fb.bin")
 	require.NoError(t, err)
 
 	sm := &SyncManager{
-		settings: test.CreateBaseTestSettings(t),
-		logger:   ulogger.TestLogger{},
+		settings:  test.CreateBaseTestSettings(t),
+		logger:    ulogger.TestLogger{},
+		utxoStore: &nullstore.NullStore{},
 	}
 
 	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
 	txOrder, err := sm.createTxMap(context.Background(), block, txMap)
 	require.NoError(t, err)
 
-	// Test extending transactions
+	// Test extending transactions: with a real block, non-coinbase txs whose
+	// inputs reference same-block parents get extended via phase 1 (txMap
+	// lookup); the rest fall through to phase 2's BatchPreviousOutputsDecorate.
 	err = sm.extendTransactions(context.Background(), testBlockIdent(block), txOrder, txMap, false)
-	assert.NoError(t, err)
+	require.NoError(t, err)
+
+	// Assert on SomeParentsInBlock rather than on PreviousTxScript: it is set
+	// only by phase 1 (extendFromTxMap) when a parent is found in the same
+	// block via txMap, and phase 2 never touches it. PreviousTxScript is not a
+	// valid signal here because NullStore.PreviousOutputsDecorate (invoked by
+	// phase 2's BatchPreviousOutputsDecorate) unconditionally overwrites it on
+	// every input regardless of what phase 1 did, so checking it would pass
+	// even if phase 1 were completely broken.
+	sawInBlockParent := false
+
+	for _, txHash := range txOrder[1:] {
+		wrapper, found := txMap.Get(txHash)
+		require.True(t, found)
+
+		if wrapper.SomeParentsInBlock {
+			sawInBlockParent = true
+		}
+	}
+
+	assert.True(t, sawInBlockParent, "at least one transaction should have had an in-block parent resolved via phase 1 (extendFromTxMap)")
 }
 
 // Test createUtxos to increase coverage
 func TestSyncManager_createUtxos(t *testing.T) {
-	t.Skip("Skipping test due to nil pointer issue")
 	sm := &SyncManager{
-		settings: test.CreateBaseTestSettings(t),
-		logger:   ulogger.TestLogger{},
+		settings:  test.CreateBaseTestSettings(t),
+		logger:    ulogger.TestLogger{},
+		utxoStore: &nullstore.NullStore{},
 	}
 
-	// Create a simple coinbase transaction
+	// Create a simple coinbase transaction. IsCoinbase() (called by
+	// util.GetFees via NullStore.Create) requires a zeroed PreviousTxID, so it
+	// must be set explicitly rather than left as the input's nil default.
+	coinbaseInput := &bt.Input{
+		PreviousTxSatoshis: 0,
+		PreviousTxOutIndex: 0xffffffff,
+		SequenceNumber:     0xffffffff,
+	}
+	require.NoError(t, coinbaseInput.PreviousTxIDAdd(&chainhash.Hash{}))
+
 	coinbaseTx := &bt.Tx{
 		Version: 1,
-		Inputs: []*bt.Input{
-			{
-				PreviousTxSatoshis: 0,
-				PreviousTxOutIndex: 0xffffffff,
-			},
-		},
+		Inputs:  []*bt.Input{coinbaseInput},
 		Outputs: []*bt.Output{
 			{
 				Satoshis:      50 * 100000000,
@@ -427,13 +456,12 @@ func TestSyncManager_createUtxos(t *testing.T) {
 	block.SetHeight(100)
 
 	// Test createUtxos
-	utxos := sm.createUtxos(context.Background(), txMap, testBlockIdent(block), 0, false)
-	assert.NotNil(t, utxos)
+	err := sm.createUtxos(context.Background(), txMap, testBlockIdent(block), 0, false)
+	assert.NoError(t, err)
 }
 
 // Test validateTransactions to increase coverage
 func TestSyncManager_validateTransactions(t *testing.T) {
-	t.Skip("Skipping test due to nil pointer issue")
 	initPrometheusMetrics()
 
 	validationClient := &validator.MockValidator{}
@@ -442,6 +470,7 @@ func TestSyncManager_validateTransactions(t *testing.T) {
 		settings:         test.CreateBaseTestSettings(t),
 		logger:           ulogger.TestLogger{},
 		validationClient: validationClient,
+		chainParams:      &chaincfg.RegressionNetParams,
 	}
 
 	// Create transaction levels map
@@ -457,11 +486,19 @@ func TestSyncManager_validateTransactions(t *testing.T) {
 	}
 	txsPerLevel[0] = []*bt.Tx{tx}
 
-	// Create a block
+	// Create a block. Timestamp must be non-zero: candidateFinalityTimesForBlock
+	// converts it to a uint32 Unix time, which fails closed on the zero-value
+	// time.Time's large-negative Unix seconds.
 	msgBlock := &wire.MsgBlock{
+		Header: wire.BlockHeader{
+			Timestamp: time.Now(),
+		},
 		Transactions: []*wire.MsgTx{},
 	}
 	block := bsvutil.NewBlock(msgBlock)
+	// Below chainParams.CSVHeight (576 on regtest) so candidateFinalityTimesForBlock
+	// takes the pre-CSV branch and doesn't need a blockchainClient to resolve MTP.
+	block.SetHeight(100)
 
 	// Test validateTransactions - it should handle validation gracefully even without mocks
 	err := sm.validateTransactions(context.Background(), 1, txsPerLevel, testBlockIdent(block))
@@ -471,12 +508,11 @@ func TestSyncManager_validateTransactions(t *testing.T) {
 
 // Test prepareSubtrees with simple block
 func TestSyncManager_prepareSubtrees(t *testing.T) {
-	t.Skip("Skipping test due to nil pointer issue")
 	initPrometheusMetrics()
 
-	// Create a simple block with one transaction
-	msgTx := wire.NewMsgTx(1)
-	msgTx.AddTxIn(&wire.TxIn{
+	// Coinbase transaction (index 0).
+	coinbaseMsgTx := wire.NewMsgTx(1)
+	coinbaseMsgTx.AddTxIn(&wire.TxIn{
 		PreviousOutPoint: wire.OutPoint{
 			Hash:  chainhash.Hash{},
 			Index: 0xffffffff,
@@ -484,8 +520,23 @@ func TestSyncManager_prepareSubtrees(t *testing.T) {
 		SignatureScript: []byte{0x00},
 		Sequence:        0xffffffff,
 	})
-	msgTx.AddTxOut(&wire.TxOut{
+	coinbaseMsgTx.AddTxOut(&wire.TxOut{
 		Value:    50 * 100000000,
+		PkScript: []byte{0x76, 0xa9, 0x14},
+	})
+
+	// A second, regular transaction so the block has more than one tx: a
+	// single-tx block exits prepareSubtrees early (txCount <= 1) without
+	// touching chainParams/quickValidationAllowed/subtreeValidation at all,
+	// which is what hid the nil-pointer bugs this test exists to catch.
+	regularMsgTx := wire.NewMsgTx(1)
+	regularMsgTx.AddTxIn(&wire.TxIn{
+		PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{0x01}, Index: 0},
+		SignatureScript:  []byte{0x00},
+		Sequence:         0xffffffff,
+	})
+	regularMsgTx.AddTxOut(&wire.TxOut{
+		Value:    1000,
 		PkScript: []byte{0x76, 0xa9, 0x14},
 	})
 
@@ -497,33 +548,39 @@ func TestSyncManager_prepareSubtrees(t *testing.T) {
 			Bits:      0x1d00ffff,
 			Nonce:     0,
 		},
-		Transactions: []*wire.MsgTx{msgTx},
+		Transactions: []*wire.MsgTx{coinbaseMsgTx, regularMsgTx},
 	}
 
 	block := bsvutil.NewBlock(msgBlock)
 	block.SetHeight(100)
 
-	blockchainClient := &blockchain.Mock{}
-	blockchainClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(false, nil)
-
 	validationClient := &validator.MockValidator{}
 
+	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
+	subtreeValidationClient.On("CheckSubtreeFromBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
 	sm := &SyncManager{
-		settings:         test.CreateBaseTestSettings(t),
-		logger:           ulogger.TestLogger{},
-		blockchainClient: blockchainClient,
-		validationClient: validationClient,
-		subtreeStore:     memory.New(),
-		ctx:              context.Background(),
+		settings: test.CreateBaseTestSettings(t),
+		logger:   ulogger.TestLogger{},
+		// Regtest has no checkpoints, so quickValidationAllowed is false and
+		// prepareSubtrees is forced down the non-quick path, which is what
+		// exercises checkSubtreeFromBlock / sm.subtreeValidation below.
+		chainParams:       &chaincfg.RegressionNetParams,
+		validationClient:  validationClient,
+		utxoStore:         &nullstore.NullStore{},
+		subtreeStore:      memory.New(),
+		subtreeValidation: subtreeValidationClient,
+		ctx:               context.Background(),
 	}
 
-	// For single transaction blocks, prepareSubtrees returns empty
-	subtrees, _, blockID, err := sm.prepareSubtrees(context.Background(), block)
-	assert.NoError(t, err)
-	assert.NotNil(t, subtrees)
-	assert.Equal(t, uint32(0), blockID) // single-tx block exits early, IsFSMCurrentState=false → blockID stays 0
+	subtrees, subtreeSlices, blockID, err := sm.prepareSubtrees(context.Background(), block)
+	require.NoError(t, err)
+	assert.Len(t, subtrees, 1, "2 txs fit in a single subtree")
+	assert.Equal(t, uint32(0), blockID, "non-quick-validation path never assigns a block ID")
+	// legacyUnified is off by default, so the in-memory slices aren't returned.
+	assert.Nil(t, subtreeSlices)
 
-	blockchainClient.AssertExpectations(t)
+	subtreeValidationClient.AssertExpectations(t)
 }
 
 // buildOOBFixture constructs a parent (2 outputs) and a child whose only input

@@ -41,7 +41,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util/batchermetrics"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
@@ -447,17 +446,29 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 	return result, nil
 }
 
-// handleValidationError processes validation errors and attempts HTTP fallback if appropriate
+// handleValidationError processes validation errors and attempts HTTP fallback
+// when the gRPC call failed because the message was too large. A successful
+// fallback returns nil; a failed fallback returns the HTTP verdict, not the
+// original ResourceExhausted error.
 func (c *Client) handleValidationError(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options, err error) error {
-	// Check if the error is related to message size (ResourceExhausted)
-	st, ok := status.FromError(err)
-	if !ok || st.Code() != codes.ResourceExhausted || c.validatorHTTPAddr == nil {
+	// Only an oversized gRPC message is fixable by re-sending over HTTP. A
+	// block-assembly queue-full shed arrives with the same ResourceExhausted code
+	// (via ERR_THRESHOLD_EXCEEDED) but must be surfaced to the caller instead: the
+	// node has just reported itself saturated, and re-sending would drive a second
+	// full validation against it. A non-status error also lands here, preserving the
+	// original "not a status error → unwrap and return" behaviour.
+	if !errors.IsGRPCMessageTooLarge(err) || c.validatorHTTPAddr == nil {
+		if errors.Is(errors.UnwrapGRPC(err), errors.ErrThresholdExceeded) {
+			c.logger.Warnf("[ValidateWithOptions][%s] block assembly shed the transaction (queue full); not retrying over HTTP", tx.TxID())
+		}
+
 		return errors.UnwrapGRPC(err)
 	}
 
-	// Try HTTP fallback
+	// Try HTTP fallback. The gate above guarantees this really is a size problem,
+	// so the message wording is now accurate rather than assumed.
 	c.logger.Warnf("[ValidateWithOptions][%s] Transaction exceeds gRPC message limit, falling back to validator /tx endpoint: %s",
-		tx.TxID(), st.Message())
+		tx.TxID(), status.Convert(err).Message())
 
 	httpErr := c.validateTransactionViaHTTP(ctx, tx, blockHeight, validationOptions)
 	if httpErr == nil {
@@ -468,7 +479,11 @@ func (c *Client) handleValidationError(ctx context.Context, tx *bt.Tx, blockHeig
 
 	c.logger.Errorf("[ValidateWithOptions][%s] HTTP fallback also failed: %v", tx.TxID(), httpErr)
 
-	return errors.UnwrapGRPC(err)
+	// The HTTP response is the actual verdict (or the old wrapping, when the
+	// header is absent). Returning the original ResourceExhausted would tell
+	// the caller the transaction was too large for gRPC, which is no longer
+	// the failure — it was submitted, and rejected.
+	return httpErr
 }
 
 // sendBatchToValidator sends a batch of transactions to the validator via gRPC.
@@ -521,10 +536,13 @@ func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
 	c.processBatchResponse(batch, resp)
 }
 
-// shouldAttemptHTTPFallback determines if HTTP fallback should be attempted based on the error
+// shouldAttemptHTTPFallback determines if HTTP fallback should be attempted based
+// on the error. Kept as the named seam its call site reads through; it is now a
+// one-line wrapper over the shared predicate so a batch-level queue-full shed
+// cannot be mistaken for an oversized message and amplified into one HTTP
+// validation per transaction in the batch.
 func (c *Client) shouldAttemptHTTPFallback(err error) bool {
-	st, ok := status.FromError(err)
-	return ok && st.Code() == codes.ResourceExhausted && c.validatorHTTPAddr != nil
+	return errors.IsGRPCMessageTooLarge(err) && c.validatorHTTPAddr != nil
 }
 
 // handleBatchHTTPFallback attempts to validate each transaction individually via HTTP
@@ -662,11 +680,27 @@ func (c *Client) validateTransactionViaHTTP(ctx context.Context, tx *bt.Tx, bloc
 	}
 	defer resp.Body.Close()
 
-	// Check response status
+	// Check response status.
+	//
+	// Same contract as propagation's fallback: prefer the verdict the server
+	// attached as a header over wrapping the whole response as a SERVICE_ERROR.
+	// Without it a rejection reaches an RPC client through
+	// services/rpc/handlers.go as an opaque service failure carrying the
+	// validator's internal error chain verbatim, and callers that classify on the
+	// error code read a permanent rejection as something worth retrying.
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return errors.NewServiceError("[ValidateWithOptions][%s] validator /tx endpoint returned non-OK status: %d, body: %s",
+
+		verdict := errors.HTTPErrorFrom(resp.Header)
+		if verdict == nil {
+			return errors.NewServiceError("[ValidateWithOptions][%s] validator /tx endpoint returned non-OK status: %d, body: %s",
+				tx.TxID(), resp.StatusCode, string(body))
+		}
+
+		c.logger.Warnf("[ValidateWithOptions][%s] validator /tx endpoint rejected transaction: status=%d body=%s",
 			tx.TxID(), resp.StatusCode, string(body))
+
+		return errors.New(verdict.Code(), "[ValidateWithOptions][%s] %s", tx.TxID(), verdict.Message())
 	}
 
 	c.logger.Debugf("[ValidateWithOptions][%s] successfully validated using validator /tx endpoint", tx.TxID())

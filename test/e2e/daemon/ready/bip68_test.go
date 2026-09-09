@@ -29,10 +29,36 @@ const (
 	SequenceLockTimeMask        = validator.SequenceLockTimeMask        // 0x0000ffff
 )
 
+// Genesis and Chronicle activation heights pinned for every test in this file.
+//
+// sequenceLocks() enforces BIP68 only inside [CSVHeight, GenesisActivationHeight)
+// and returns nil past Genesis, so a regtest Genesis height at or below the heights
+// these tests operate at silently turns all of them into no-ops. Pinning here makes
+// the window a property of the test rather than of the chain params, which have moved
+// before (regtest Genesis went 10000 -> 100 in go-chaincfg v1.6.2).
+//
+// These are the historical regtest values, chosen so the BDK script engine — fed both
+// heights at services/validator/ScriptVerifierGoBDK.go:158,163 — sees exactly what it
+// saw when these tests were written. Mirrors bip68TestSettings in
+// services/validator/TxValidator_bip68_test.go.
+const (
+	bip68GenesisHeight   = uint32(10000)
+	bip68ChronicleHeight = uint32(15000)
+)
+
 // setupBIP68Test initializes both nodes with CSV height override
 // Generates initialHeight blocks on SV Node BEFORE starting Teranode for reliable IBD sync
 func setupBIP68Test(t *testing.T, csvHeight uint32, initialHeight int) (*daemon.TestDaemon, svnode.SVNodeI, *svnode.TxCreator) {
 	ctx := t.Context()
+
+	// Tests build a short chain on top of initialHeight — funding at +1 and asserting
+	// on blocks a handful further up (the widest span in this file is +15). 100 is a
+	// generous ceiling on that. Fail loudly here if those heights could ever reach
+	// Genesis, instead of letting the assertions pass vacuously.
+	require.Less(t, uint32(initialHeight)+100, bip68GenesisHeight,
+		"test heights must stay inside the BIP68 enforcement window [CSVHeight, Genesis)")
+	require.Less(t, csvHeight, bip68GenesisHeight,
+		"CSVHeight must sit below Genesis for the enforcement window to be non-empty")
 
 	// Start SV Node
 	sv := newSVNode()
@@ -57,6 +83,8 @@ func setupBIP68Test(t *testing.T, csvHeight uint32, initialHeight int) (*daemon.
 			test.SystemTestSettings(),
 			func(s *settings.Settings) {
 				s.ChainCfgParams.CSVHeight = csvHeight
+				s.ChainCfgParams.GenesisActivationHeight = bip68GenesisHeight
+				s.ChainCfgParams.ChronicleActivationHeight = bip68ChronicleHeight
 				s.Legacy.ConnectPeers = []string{sv.P2PHost()}
 				s.P2P.StaticPeers = []string{}
 			},
@@ -230,9 +258,9 @@ func TestBIP68_HeightBased_Reject(t *testing.T) {
 	// Setup: CSV active at height 10, start with 110 initial blocks.
 	// This test only proves enforcement while the block height sits in the window
 	// CSVHeight <= height < GenesisActivationHeight; past Genesis, relative-locktime
-	// enforcement is dropped and this check becomes a no-op. If a future regtest config
-	// lowers GenesisActivationHeight below the heights here, this test would silently
-	// stop proving anything — keep the window in mind when changing those heights.
+	// enforcement is dropped and this check becomes a no-op. setupBIP68Test pins
+	// Genesis to bip68GenesisHeight and asserts the heights used here stay inside that
+	// window, so the chain params can no longer silently gut this test.
 	td, sv, txCreator := setupBIP68Test(t, 10, 110)
 	defer func() {
 		td.Stop(t)
@@ -400,9 +428,9 @@ func TestBIP68_TimeBased_Reject(t *testing.T) {
 	// Setup: CSV active at height 10, start with 110 initial blocks.
 	// This test only proves enforcement while the block height sits in the window
 	// CSVHeight <= height < GenesisActivationHeight; past Genesis, relative-locktime
-	// enforcement is dropped and this check becomes a no-op. If a future regtest config
-	// lowers GenesisActivationHeight below the heights here, this test would silently
-	// stop proving anything — keep the window in mind when changing those heights.
+	// enforcement is dropped and this check becomes a no-op. setupBIP68Test pins
+	// Genesis to bip68GenesisHeight and asserts the heights used here stay inside that
+	// window, so the chain params can no longer silently gut this test.
 	td, sv, txCreator := setupBIP68Test(t, 10, 110)
 	defer func() {
 		td.Stop(t)
