@@ -445,8 +445,12 @@ func TestTxIngressLimitMonitorDoesNothingWhenDisabled(t *testing.T) {
 // A block assembly that restarts while full comes up holding nothing and then spends the whole of
 // loadUnminedTransactions refilling. Measured naively it looks empty for that entire period, so the
 // evaluate tick would announce room to every ingress point moments before the reload takes that room
-// back. Only the clearing direction is suppressed — an assembler that fills past the limit during a
-// reload must still refuse.
+// back.
+//
+// The rule therefore has to ESTABLISH the refusal, not merely hold one that is already in force. A
+// restarted process has txIngressFull at its zero value — nothing carries the flag across a process
+// boundary — so a guard predicated on the flag already being set would be inert in exactly the case
+// it is named for. The first subtest is the one that fails if that predicate comes back.
 func TestTxIngressEvaluateHoldsRefusalWhileUnminedTransactionsLoad(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -460,8 +464,9 @@ func TestTxIngressEvaluateHoldsRefusalWhileUnminedTransactionsLoad(t *testing.T)
 	ba.txIngressLimit = limit
 	ba.txIngressResume = resumeWatermark(limit, 0)
 
-	t.Run("a standing refusal survives the reload", func(t *testing.T) {
-		require.True(t, ba.txIngressFull.CompareAndSwap(false, true), "arrange: start this case full")
+	t.Run("a reloading process with no flag of its own still refuses", func(t *testing.T) {
+		require.False(t, ba.IsTxIngressFull(),
+			"arrange: a restarted process starts not-full, whatever it was doing when it died")
 
 		ba.unminedTransactionsLoading.Store(true)
 		defer ba.unminedTransactionsLoading.Store(false)
@@ -471,8 +476,19 @@ func TestTxIngressEvaluateHoldsRefusalWhileUnminedTransactionsLoad(t *testing.T)
 
 		full, changed := ba.evaluateTxIngressFull()
 		require.True(t, full, "a near-empty assembler mid-reload must not report room")
-		require.False(t, changed, "and must not publish a clearing transition")
+		require.True(t, changed, "and must publish the refusal, since nothing else will")
 		require.True(t, ba.IsTxIngressFull())
+	})
+
+	t.Run("the refusal is not re-published on every tick", func(t *testing.T) {
+		require.True(t, ba.IsTxIngressFull(), "arrange: carried over from the previous case")
+
+		ba.unminedTransactionsLoading.Store(true)
+		defer ba.unminedTransactionsLoading.Store(false)
+
+		full, changed := ba.evaluateTxIngressFull()
+		require.True(t, full)
+		require.False(t, changed, "the refusal is already in force, so this is not a transition")
 	})
 
 	t.Run("the refusal clears once the reload finishes", func(t *testing.T) {
@@ -484,20 +500,38 @@ func TestTxIngressEvaluateHoldsRefusalWhileUnminedTransactionsLoad(t *testing.T)
 		require.True(t, changed, "so the clearing transition must be published")
 	})
 
-	t.Run("filling past the limit during a reload still refuses", func(t *testing.T) {
+	t.Run("startup before the reload begins also refuses", func(t *testing.T) {
 		require.False(t, ba.IsTxIngressFull(), "arrange: carried over from the previous case")
+		require.False(t, ba.unminedTransactionsLoading.Load(),
+			"arrange: the reload has not started yet, as during WaitForPendingBlocks")
 
+		ba.txIngressStartupPending.Store(true)
+		defer ba.txIngressStartupPending.Store(false)
+
+		full, changed := ba.evaluateTxIngressFull()
+		require.True(t, full,
+			"WaitForPendingBlocks and the conflict intent replay run before the reload, and the "+
+				"cached refusal at the ingress points can expire during them")
+		require.True(t, changed)
+	})
+
+	t.Run("a disabled limit is never held full by startup", func(t *testing.T) {
+		ba.txIngressFull.Store(false)
+
+		ba.txIngressLimit = 0
+		defer func() { ba.txIngressLimit = limit }()
+
+		ba.txIngressStartupPending.Store(true)
 		ba.unminedTransactionsLoading.Store(true)
-		defer ba.unminedTransactionsLoading.Store(false)
 
-		addTestTxs(t, ba, limit)
+		defer func() {
+			ba.txIngressStartupPending.Store(false)
+			ba.unminedTransactionsLoading.Store(false)
+		}()
 
-		require.Eventually(t, func() bool {
-			full, _ := ba.evaluateTxIngressFull()
-			return full
-		}, 5*time.Second, 10*time.Millisecond,
-			"the guard must suppress clearing only, never setting (in memory %d, limit %d)",
-			ba.TransactionsInMemory(), limit)
+		full, changed := ba.evaluateTxIngressFull()
+		require.False(t, full, "the default configuration must never refuse, startup included")
+		require.False(t, changed)
 	})
 }
 
@@ -552,13 +586,19 @@ func TestTxIngressLimitMonitorHeartbeatDoesNotAnnounceRoom(t *testing.T) {
 
 // TestTxIngressLimitMonitorKeepsIngressRefusedDuringReload is the restart case end to end.
 //
-// It stands in for a block assembly that was killed while full and has come back: the ingress points
-// still hold their cached refusal, this process holds nothing yet, and loadUnminedTransactions is
-// running. Nothing this process does may release those ingress points before the reload finishes.
+// It stands in for a block assembly that was killed while full and has come back. Everything this
+// process inherits is on the other side of a process boundary: the ingress points elsewhere still
+// hold a cached refusal, but this assembler holds nothing and its own flag is at its zero value.
+// Nothing carries txIngressFull across a restart.
 //
-// This is killed by removing the evaluate guard, which is what lets the flag survive the reload. The
-// heartbeat guard has its own test: with the evaluate guard in place the flag stays true here, so an
-// unconditional heartbeat would re-announce true and this case would not notice.
+// So the monitor has to re-establish the refusal from that blank state, and do it before the cached
+// refusal at the ingress points expires. Measuring alone cannot: for most of a large reload the
+// count sits below the limit, so a monitor that only measured would publish nothing and let every
+// ingress point reopen mid-reload — piling new work on a backlog this process already cannot fit.
+//
+// The arrange below deliberately does NOT pre-set ba.txIngressFull. Setting it would model a state a
+// restarted process cannot be in, and would let a monitor that merely holds an existing refusal pass
+// this test while the real restart case stayed broken.
 func TestTxIngressLimitMonitorKeepsIngressRefusedDuringReload(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -576,18 +616,22 @@ func TestTxIngressLimitMonitorKeepsIngressRefusedDuringReload(t *testing.T) {
 
 	ctx := t.Context()
 
-	// The state a restarted process inherits: the ingress points refuse, this assembler is empty.
-	ba.publishTxIngressFull(ctx, true)
-	require.True(t, testItems.blockchainClient.IsBlockAssemblyFull(),
-		"arrange: the ingress points must start this test refusing")
-
-	require.True(t, ba.txIngressFull.CompareAndSwap(false, true), "arrange: this process knows it was full")
+	// The state a restarted process is actually in: empty, and knowing nothing.
+	require.False(t, ba.IsTxIngressFull(), "arrange: a restarted process starts not-full")
+	require.False(t, testItems.blockchainClient.IsBlockAssemblyFull())
+	require.Less(t, ba.TransactionsInMemory(), ba.txIngressResume,
+		"arrange: the reload has not refilled it, so measuring alone would report room")
 
 	ba.unminedTransactionsLoading.Store(true)
 
 	ba.startTxIngressLimitMonitor(ctx)
 
-	// Long enough for many evaluate ticks and many heartbeats to have run.
+	require.Eventually(t, func() bool {
+		return testItems.blockchainClient.IsBlockAssemblyFull()
+	}, 5*time.Second, 10*time.Millisecond,
+		"the monitor must re-establish the refusal from nothing, or the ingress points expire theirs mid-reload")
+
+	// And it must hold for the whole reload. Long enough for many evaluate ticks and many heartbeats.
 	time.Sleep(ba.txIngressHeartbeatInterval*10 + 200*time.Millisecond)
 
 	require.True(t, testItems.blockchainClient.IsBlockAssemblyFull(),
@@ -601,6 +645,90 @@ func TestTxIngressLimitMonitorKeepsIngressRefusedDuringReload(t *testing.T) {
 		return !testItems.blockchainClient.IsBlockAssemblyFull()
 	}, 5*time.Second, 10*time.Millisecond,
 		"once the reload is done the assembler has room, so ingress must reopen")
+}
+
+// TestTxIngressLimitMonitorRefusesBeforeTheReloadBegins covers the rest of the startup window.
+//
+// Start runs WaitForPendingBlocks and the conflict intent replay before loadUnminedTransactions, and
+// both can take longer than blockAssemblyFullTTL. unminedTransactionsLoading is false throughout, so
+// a rule keyed only on the reload would let the ingress points expire their cached refusal before
+// this process had loaded anything at all.
+func TestTxIngressLimitMonitorRefusesBeforeTheReloadBegins(t *testing.T) {
+	initPrometheusMetrics()
+
+	testItems := setupBlockAssemblyTest(t)
+	require.NotNil(t, testItems)
+
+	ba := testItems.blockAssembler
+
+	ba.txIngressLimit = 100
+	ba.txIngressResume = resumeWatermark(ba.txIngressLimit, 0)
+	ba.txIngressEvaluateInterval = 10 * time.Millisecond
+	ba.txIngressHeartbeatInterval = 20 * time.Millisecond
+
+	ctx := t.Context()
+
+	require.False(t, ba.IsTxIngressFull(), "arrange: a restarted process starts not-full")
+
+	// Start has begun, but the reload has not.
+	ba.txIngressStartupPending.Store(true)
+	require.False(t, ba.unminedTransactionsLoading.Load())
+
+	ba.startTxIngressLimitMonitor(ctx)
+
+	require.Eventually(t, func() bool {
+		return testItems.blockchainClient.IsBlockAssemblyFull()
+	}, 5*time.Second, 10*time.Millisecond,
+		"a block assembly that has not finished starting must refuse, not announce the room it has not filled yet")
+
+	// Startup completes with the assembler below the resume watermark, so ingress reopens.
+	ba.txIngressStartupPending.Store(false)
+
+	require.Eventually(t, func() bool {
+		return !testItems.blockchainClient.IsBlockAssemblyFull()
+	}, 5*time.Second, 10*time.Millisecond,
+		"a started assembler with room must release the ingress points")
+}
+
+// TestTxIngressStartupHoldIsInertWithoutALimit checks that the default configuration is untouched by
+// the startup hold: a node with no limit must never refuse, at startup or anywhere else.
+func TestTxIngressStartupHoldIsInertWithoutALimit(t *testing.T) {
+	initPrometheusMetrics()
+
+	testItems := setupBlockAssemblyTest(t)
+	require.NotNil(t, testItems)
+
+	ba := testItems.blockAssembler
+	require.Zero(t, ba.txIngressLimit, "the limit must default to disabled")
+
+	ba.txIngressEvaluateInterval = 10 * time.Millisecond
+	ba.txIngressHeartbeatInterval = 20 * time.Millisecond
+
+	ctx := t.Context()
+
+	ba.txIngressStartupPending.Store(true)
+	ba.unminedTransactionsLoading.Store(true)
+
+	subCh, err := testItems.blockchainClient.Subscribe(ctx, "tx-ingress-startup-disabled-test")
+	require.NoError(t, err)
+
+	ba.startTxIngressLimitMonitor(ctx)
+
+	deadline := time.After(ba.txIngressHeartbeatInterval*10 + 200*time.Millisecond)
+
+	for {
+		select {
+		case notification := <-subCh:
+			if notification != nil && notification.Type == model.NotificationType_BlockAssemblyFull {
+				t.Fatal("a disabled limit must not refuse ingress during startup")
+			}
+		case <-deadline:
+			require.False(t, ba.IsTxIngressFull())
+			require.False(t, testItems.blockchainClient.IsBlockAssemblyFull())
+
+			return
+		}
+	}
 }
 
 // blockchainClientIsFull is a compile-time check that the ingress points can read the flag through

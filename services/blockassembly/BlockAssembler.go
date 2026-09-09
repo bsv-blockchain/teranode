@@ -204,6 +204,14 @@ type BlockAssembler struct {
 	// and that the ingress points should stop accepting new transactions
 	txIngressFull atomic.Bool
 
+	// txIngressStartupPending indicates Start has begun but has not yet finished reloading the
+	// unmined set, so what this assembler holds does not yet describe what it is about to hold.
+	//
+	// The zero value is false, so an assembler that is driven directly rather than through Start
+	// measures normally. Start sets it before it starts the monitor and clears it once the reload
+	// returns, on the error paths too.
+	txIngressStartupPending atomic.Bool
+
 	// txIngressLimit is the high watermark at which txIngressFull is set. 0 disables the limit.
 	txIngressLimit uint64
 
@@ -398,13 +406,30 @@ func (b *BlockAssembler) IsTxIngressFull() bool {
 //   - bool: the flag value after evaluation
 //   - bool: whether the flag changed
 func (b *BlockAssembler) evaluateTxIngressFull() (full bool, changed bool) {
-	// While the unmined set is reloading, what we hold does not yet describe what we are about to
-	// hold, so a refusal already in force must stand. Clearing it here would tell every ingress
-	// point there is room, moments before the reload takes that room back. Only the clearing
-	// direction is suppressed: applyTxIngressCount can set the flag but never clears it unless it
-	// is already set, so an assembler filling up during a reload still refuses at the limit.
-	if b.txIngressFull.Load() && b.unminedTransactionsLoading.Load() {
-		return true, false
+	// An assembler that is still starting, or that is reloading its unmined set, measures near
+	// empty and then refills to whatever made it full in the first place. What it holds does not
+	// describe what it is about to hold, so refuse for the whole of that window rather than
+	// announce room we are about to take back.
+	//
+	// This must not depend on the flag already being set. A process that restarted while full
+	// comes up with txIngressFull at its zero value, so a guard that only suppressed clearing
+	// would be inert exactly when it is needed: every ingress point would expire its cached
+	// refusal after blockAssemblyFullTTL and reopen partway through a reload that can run for
+	// minutes, and this process would publish nothing to stop it, because it measures below the
+	// limit for most of that reload. So the refusal is established here rather than merely held.
+	//
+	// The cost is that a node with a limit configured refuses ingress for the length of its block
+	// assembly startup even when the unmined set is small. That is the conservative direction, it
+	// is bounded by the reload, and the ingress points answer it with a retryable 503.
+	if b.txIngressLimit > 0 && (b.txIngressStartupPending.Load() || b.unminedTransactionsLoading.Load()) {
+		if b.txIngressFull.Swap(true) {
+			return true, false
+		}
+
+		b.logger.Warnf("[BlockAssembler] transaction ingress full=true while the unmined set loads, holding %d transactions in memory (limit %d, resume %d)",
+			b.TransactionsInMemory(), b.txIngressLimit, b.txIngressResume)
+
+		return true, true
 	}
 
 	return b.applyTxIngressCount(b.TransactionsInMemory())
@@ -1369,15 +1394,24 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 		return errors.NewProcessingError("[BlockAssembler] failed to initialize state: %v", err)
 	}
 
-	// Start watching how many transactions we hold in memory before the slow parts of startup, not
-	// after them. AddTx is already enqueueing on the gRPC side by the time Start runs, and the
-	// ingress points expire a cached refusal once block assembly stops re-announcing it. If the
-	// monitor only started at the end of Start, a process that restarted while full would let every
-	// ingress point reopen partway through loadUnminedTransactions — which can run for minutes on a
-	// large backlog — and would take unlimited new work on top of a reload it already cannot fit.
+	// Refuse ingress for the whole of startup, and start watching how many transactions we hold in
+	// memory before the slow parts of it rather than after them.
 	//
-	// Starting here is safe: the flag begins false in a fresh process, and applyTxIngressCount only
-	// publishes on a transition, so an assembler that is still empty announces nothing.
+	// AddTx is already enqueueing on the gRPC side by the time Start runs, and the ingress points
+	// expire a cached refusal once block assembly stops re-announcing it. A process that restarted
+	// while full comes up holding nothing, so measuring it says there is room right up until the
+	// reload has refilled past the limit. Between the cached refusal expiring at
+	// blockAssemblyFullTTL and that moment, every ingress point would reopen and pile new work on
+	// top of a backlog this process already cannot fit — and WaitForPendingBlocks and the conflict
+	// intent replay below run before the reload even begins.
+	//
+	// The pending flag makes evaluateTxIngressFull report full for that whole window, so the first
+	// evaluate tick re-establishes the refusal instead of waiting for the count to climb. It is
+	// cleared once the reload returns, on the error paths too, so a failed start cannot leave
+	// ingress refused. It does nothing unless a limit is configured.
+	b.txIngressStartupPending.Store(true)
+	defer b.txIngressStartupPending.Store(false)
+
 	b.startTxIngressLimitMonitor(ctx)
 
 	// Wait for any pending blocks to be processed before loading unmined transactions
@@ -1400,6 +1434,11 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 		// we cannot start block assembly if we have not loaded unmined transactions successfully
 		return errors.NewStorageError("[BlockAssembler] failed to load un-mined transactions: %v", err)
 	}
+
+	// The reload is the last thing that makes the in-memory count misleading, so from here the
+	// monitor can measure normally and release the ingress points if there is room. The deferred
+	// clear above stays as the backstop for the error paths.
+	b.txIngressStartupPending.Store(false)
 
 	// AddTx is already enqueueing on the gRPC side. If loadUnminedTransactions
 	// flagged any tx as conflicting (and cascaded its descendants), drain the
