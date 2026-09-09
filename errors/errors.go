@@ -873,6 +873,19 @@ func DeepestPublicCause(err error) *Error {
 	return deepest
 }
 
+// IsPublicCause reports whether code is on the shared public-cause allowlist.
+//
+// Exported so a surface that needs per-link membership rather than
+// DeepestPublicCause's whole-chain answer still asks publicCauseCodes instead of
+// keeping its own copy. A second list is how the closed-membership test in
+// public_cause_allowlist_test.go gets bypassed: the widening happens somewhere
+// the test does not look.
+func IsPublicCause(code ERR) bool {
+	_, ok := publicCauseCodes[code]
+
+	return ok
+}
+
 // UserMessage returns a concise, user-facing error message without wrapped error chains or data.
 // It is intended for external surfaces (HTTP/gRPC) where internal details should not be exposed.
 func UserMessage(err error) string {
