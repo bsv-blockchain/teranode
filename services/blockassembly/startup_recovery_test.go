@@ -308,7 +308,8 @@ func TestBlockAssembly_ValidateUnminedTxInputs_CaseA_SpentByDifferentTxCascades(
 		subtreeProcessor: mockStp,
 	}
 
-	ok := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{0: true}, false)
+	ok, err := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{0: true}, false)
+	require.NoError(t, err)
 	assert.False(t, ok, "BA-STARTUP-007(a): tx whose input is spent by another tx must be invalid")
 
 	mockStore.AssertExpectations(t)
@@ -354,7 +355,8 @@ func TestBlockAssembly_ValidateUnminedTxInputs_CaseB_CounterConflictingOnChain(t
 		subtreeProcessor: mockStp,
 	}
 
-	ok := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{confirmedBlockID: true}, false)
+	ok, err := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{confirmedBlockID: true}, false)
+	require.NoError(t, err)
 	assert.False(t, ok, "BA-STARTUP-007(b): tx must be invalid when a counter-conflicting tx is confirmed on chain")
 
 	mockStore.AssertExpectations(t)

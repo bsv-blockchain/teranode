@@ -151,3 +151,32 @@ func Test_getUtxoBlockHeightAndExtendForParentTx_VoutOutOfRange(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "has no output for index")
 }
+
+// Test_getUtxoBlockHeightAndExtendForParentTx_BodylessParent pins the distinct
+// error for a parent record that exists but carries no serialized body — the
+// steady state once a body window has aged out, and for every transaction mined
+// at or below the checkpoint when utxostore_skipTxBodyBelowCheckpoint is on.
+// Extension genuinely needs that parent's output script, so this is still a
+// failure; it must not be reported as "has no output for index", which sends an
+// operator hunting a malformed transaction that does not exist.
+func Test_getUtxoBlockHeightAndExtendForParentTx_BodylessParent(t *testing.T) {
+	ctx := context.Background()
+
+	childTx := &bt.Tx{Inputs: []*bt.Input{{PreviousTxOutIndex: 0}}}
+	utxoHeights := make([]uint32, len(childTx.Inputs))
+	parentHash := chainhash.Hash{}
+
+	store := &utxostore.MockUtxostore{}
+	store.On("Get", mock.Anything, &parentHash, mock.Anything).
+		Return(&meta.Data{BlockHeights: []uint32{100}, Tx: nil}, nil)
+
+	v := &Validator{utxoStore: store}
+
+	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentHash, []int{0}, utxoHeights, childTx, true, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "its body is not retained by this node")
+	require.Contains(t, err.Error(), "utxostore_skipTxBodyBelowCheckpoint")
+	// The vout reported is the child input's PreviousTxOutIndex, the same
+	// coordinate the neighbouring out-of-range error names.
+	require.Contains(t, err.Error(), "index 0 can be read")
+}

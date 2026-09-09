@@ -113,10 +113,24 @@ func (b *BlockAssembler) chainStopsBelow(ctx context.Context, height uint32) boo
 	return height > meta.Height
 }
 
-// canonicalCoinbaseAt reports whether block assembly's UTXO store holds the
-// canonical coinbase transaction for the given height. It returns the
+// canonicalCoinbaseAt reports whether block assembly's UTXO store holds a RECORD
+// for the canonical coinbase transaction at the given height. It returns the
 // canonical block itself so the repair path can reuse its CoinbaseTx without
 // re-fetching from the blockchain client.
+//
+// "Present" means the store answered with a record. It deliberately does NOT mean
+// the record carries a serialized transaction body, because a body is not what
+// this is asking about: the question is whether the coinbase's coins exist, and a
+// body-less record's coins are as live as any other's.
+//
+// Reading it the other way was a real outage. A UTXO store may legitimately hold
+// a transaction with Tx nil -- once the body window has aged out, and, with
+// utxostore_skipTxBodyBelowCheckpoint on, for every transaction mined at or below
+// the hardcoded checkpoint, whose bytes are never written at all. Both return the
+// metadata with Tx nil and NO error (see stores/utxo/utxoset.Store.Get). While
+// this decided presence on txMeta.Tx, every coinbase created below the checkpoint
+// read as missing, the walk-back never found a good floor, and startup raised
+// MANUAL INTERVENTION REQUIRED against a UTXO set that was entirely intact.
 func (b *BlockAssembler) canonicalCoinbaseAt(ctx context.Context, height uint32) (present bool, canonicalBlock *model.Block, err error) {
 	blk, err := b.canonicalBlockAt(ctx, height)
 	if err != nil {
@@ -127,7 +141,15 @@ func (b *BlockAssembler) canonicalCoinbaseAt(ctx context.Context, height uint32)
 		return false, nil, errors.NewProcessingError("[coinbaseRecovery] canonical block at height %d has no coinbase", height)
 	}
 
-	txMeta, err := b.utxoStore.Get(ctx, blk.CoinbaseTx.TxIDChainHash(), fields.Tx)
+	// fields.BlockIDs is the field asked for, and nothing here reads its value.
+	// It is the cheapest field every backend fills from the record itself rather
+	// than from the body, and the only shape any of them turns into an error is a
+	// record that is not there: sql runs its identity-row query whatever the field
+	// list says and reports a missing row as ErrTxNotFound, aerospike reports a
+	// missing key the same way and tolerates a missing bin, and utxoset returns
+	// whichever of its tables holds the transaction. Asking for fields.Tx instead
+	// would answer a different question -- see the note above.
+	txMeta, err := b.utxoStore.Get(ctx, blk.CoinbaseTx.TxIDChainHash(), fields.BlockIDs)
 	if err != nil {
 		// Either code means the same thing here -- the coinbase is not in the
 		// store -- and which one comes back depends on the store backend.
@@ -138,7 +160,10 @@ func (b *BlockAssembler) canonicalCoinbaseAt(ctx context.Context, height uint32)
 		return false, blk, errors.NewProcessingError("[coinbaseRecovery] error checking coinbase at height %d", height, err)
 	}
 
-	if txMeta == nil || txMeta.Tx == nil {
+	if txMeta == nil {
+		// No backend documents a nil record with a nil error, but treating that as
+		// absent is the safe reading of it: the alternative is handing a caller a
+		// record it will dereference.
 		return false, blk, nil
 	}
 

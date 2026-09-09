@@ -4328,15 +4328,46 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		utxoHash      *chainhash.Hash
 	)
 
-	// Create a database transaction
-	txn, err := s.db.Begin()
-	if err != nil {
-		return nil, nil, err
+	// Every read this function needs is taken BEFORE the write transaction opens,
+	// and none of them is taken through it.
+	//
+	// s.Get and s.GetSpend go to the POOL, i.e. to a different connection from the
+	// one the transaction holds. Once the UPDATE below has run, that connection is
+	// a writer, and on SQLite -- where the shared-cache write lock blocks every
+	// other connection's reads -- a read issued from inside the transaction waits
+	// for a writer that is waiting for it. That is a permanent deadlock, not a slow
+	// query: it wedged block assembly's unmined reload for the full test timeout.
+	// It was reachable only once validateUnminedTxInputs started resolving parents
+	// from the stored inpoints, because until then it never reached this path on a
+	// SQL store at all. Postgres did not deadlock, but it did spend two pool
+	// connections per call for the duration of the transaction.
+	//
+	// What hoisting does NOT rest on is the reads being independent of the UPDATE.
+	// They are not: GetSpend selects t.conflicting and t.locked and maps
+	// conflicting to Status_CONFLICTING, which is exactly the column the UPDATE
+	// writes. What makes the move safe is that those reads never saw the UPDATE in
+	// either version. They run on a pool connection, outside the transaction's
+	// snapshot, so they read the last COMMITTED value -- and this transaction has
+	// not committed while the loop runs. Before the hoist and after it, GetSpend
+	// answers from the pre-call state.
+	//
+	// The delete-at-height decision is not read back here either; it is made in SQL
+	// inside the UPDATE itself, by the preserve_until guard in qUpdate above.
+	//
+	// What the hoist does change is the width of an already non-atomic window: the
+	// gap between reading a spend status and committing the flag now also spans the
+	// UPDATE loop. A concurrent writer could spend one of these outputs inside that
+	// wider gap and its txid would be missing from spendingTxHashes. That race
+	// existed before at loop-iteration width; this widens it to loop width, which is
+	// the price of removing a read-inside-write-transaction shape that deadlocks
+	// outright on SQLite.
+	type conflictingRead struct {
+		hash             chainhash.Hash
+		txMeta           *meta.Data
+		spendingTxHashes []chainhash.Hash
 	}
 
-	defer func() {
-		_ = txn.Rollback()
-	}()
+	reads := make([]conflictingRead, 0, len(txHashes))
 
 	for _, conflictingTxHash := range txHashes {
 		// get the extended tx
@@ -4345,29 +4376,11 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 			return nil, nil, err
 		}
 
-		if err = txn.QueryRowContext(ctx, qUpdate, conflictingTxHash[:], setValue, deleteAtHeight).Scan(&transactionID); err != nil {
-			return nil, nil, errors.NewStorageError("failed to set conflicting flag for %s", conflictingTxHash, err)
+		if txMeta == nil || txMeta.Tx == nil {
+			return nil, nil, errors.NewProcessingError("[SetConflicting][%s] record carries no transaction body, so its inputs and outputs cannot be resolved", conflictingTxHash.String())
 		}
 
-		if err = s.updateParentConflictingChildren(ctx, transactionID, txMeta.Tx, txn); err != nil {
-			return nil, nil, err
-		}
-
-		for i, input := range txMeta.Tx.Inputs {
-			utxoHash, err = util.UTXOHashFromInput(input)
-			if err != nil {
-				return nil, nil, err
-			}
-
-			spend := &utxo.Spend{
-				TxID:         input.PreviousTxIDChainHash(),
-				Vout:         input.PreviousTxOutIndex,
-				UTXOHash:     utxoHash,
-				SpendingData: spendpkg.NewSpendingData(&conflictingTxHash, i),
-			}
-
-			affectedParentSpends = append(affectedParentSpends, spend)
-		}
+		read := conflictingRead{hash: conflictingTxHash, txMeta: txMeta}
 
 		for vOut, output := range txMeta.Tx.Outputs {
 			vOutUint32, err := safeconversion.IntToUint32(vOut)
@@ -4393,9 +4406,51 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 			}
 
 			if spendResponse.Status == int(utxo.Status_SPENT) && spendResponse.SpendingData != nil && spendResponse.SpendingData.TxID != nil {
-				spendingTxHashes = append(spendingTxHashes, *spendResponse.SpendingData.TxID)
+				read.spendingTxHashes = append(read.spendingTxHashes, *spendResponse.SpendingData.TxID)
 			}
 		}
+
+		reads = append(reads, read)
+	}
+
+	// Create a database transaction
+	txn, err := s.db.Begin()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	defer func() {
+		_ = txn.Rollback()
+	}()
+
+	for _, read := range reads {
+		conflictingTxHash := read.hash
+
+		if err = txn.QueryRowContext(ctx, qUpdate, conflictingTxHash[:], setValue, deleteAtHeight).Scan(&transactionID); err != nil {
+			return nil, nil, errors.NewStorageError("failed to set conflicting flag for %s", conflictingTxHash, err)
+		}
+
+		if err = s.updateParentConflictingChildren(ctx, transactionID, read.txMeta.Tx, txn); err != nil {
+			return nil, nil, err
+		}
+
+		for i, input := range read.txMeta.Tx.Inputs {
+			utxoHash, err = util.UTXOHashFromInput(input)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			spend := &utxo.Spend{
+				TxID:         input.PreviousTxIDChainHash(),
+				Vout:         input.PreviousTxOutIndex,
+				UTXOHash:     utxoHash,
+				SpendingData: spendpkg.NewSpendingData(&conflictingTxHash, i),
+			}
+
+			affectedParentSpends = append(affectedParentSpends, spend)
+		}
+
+		spendingTxHashes = append(spendingTxHashes, read.spendingTxHashes...)
 	}
 
 	if err = txn.Commit(); err != nil {
@@ -5671,4 +5726,24 @@ func (s *Store) sendUnlockBatch(batch []*batchUnlockItem) {
 	for _, item := range batch {
 		item.done <- err
 	}
+}
+
+// SpendsMadeBy returns the coins this transaction consumed, as records Unspend can restore.
+//
+// This store keeps transactions in extended form, meaning each input carries the amount and
+// locking script of the output it spends, so the answer comes straight off the transaction
+// through the shared helper. That helper is the same loop this store's SetConflicting runs, and
+// the same one the conflict undo used to run inline, so the records are identical to what the
+// undo built for itself before it started asking the store.
+func (s *Store) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	txMeta, err := s.Get(ctx, &txHash, fields.Tx)
+	if err != nil {
+		return nil, err
+	}
+
+	if txMeta == nil || txMeta.Tx == nil {
+		return nil, errors.NewTxNotFoundError("[SpendsMadeBy][%s] no transaction", txHash.String())
+	}
+
+	return utxo.SpendsForTx(txMeta.Tx)
 }

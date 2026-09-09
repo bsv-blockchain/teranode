@@ -2192,8 +2192,14 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 		return err
 	}
 
+	// A record with no serialized body is a legal answer from the UTXO store — the
+	// body window has aged out, or utxostore_skipTxBodyBelowCheckpoint meant the
+	// bytes below the checkpoint were never written — and the peer asked for the
+	// transaction itself, which this node cannot produce. Refuse, and say why:
+	// "nil from transaction pool" reads like a store fault for something that is
+	// the store's ordinary steady state.
 	if txMeta == nil || txMeta.Tx == nil {
-		err = fmt.Errorf("[pushTxMsg] tx %v is nil from transaction pool", hash)
+		err = fmt.Errorf("[pushTxMsg] tx %v is in the store but its body is not retained by this node (aged out, or below the utxostore_skipTxBodyBelowCheckpoint boundary)", hash)
 
 		sp.server.logger.Warnf("%s", err.Error())
 
