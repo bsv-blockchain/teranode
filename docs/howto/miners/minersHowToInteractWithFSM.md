@@ -21,6 +21,17 @@ persisted `RUNNING` state with a successfully read tip below the active network'
 highest checkpoint is durably migrated to `CATCHINGBLOCKS`. Tip-read failures or
 missing metadata abort startup and leave the persisted state unchanged.
 
+Automatic `Run` and `CatchUpBlocks` requests cannot leave operator `IDLE`.
+This also prevents automatic catchup from bypassing STOP by first entering
+CATCHINGBLOCKS and then requesting RUN. Legacy synchronization reaching the tip
+cannot reverse an operator STOP. To leave IDLE deliberately, use
+`teranode-cli setfsmstate --fsmstate catchingblocks` to start synchronization, or
+explicitly request `running` when checkpoint-safe. IDLE does
+not prove that already admitted work has drained; rewind still requires service
+shutdown. When catchup entry is refused, block validation clears its processing
+markers without penalizing the peer. Explicit resume permits a later block
+notification to retry; this does not guarantee immediate replay of queued work.
+
 ## Prerequisites
 
 - Access to a running Teranode instance
@@ -178,10 +189,10 @@ grpcurl -plaintext blockchain:18087 blockchain_api.BlockchainAPI.GetFSMCurrentSt
 
 ```bash
 # Transition to RUNNING state
-grpcurl -plaintext blockchain:18087 blockchain_api.BlockchainAPI.Run
+grpcurl -plaintext -d '{"event":"RUN"}' blockchain:18087 blockchain_api.BlockchainAPI.SendFSMEvent
 
 # Transition to CATCHINGBLOCKS state
-grpcurl -plaintext blockchain:18087 blockchain_api.BlockchainAPI.CatchUpBlocks
+grpcurl -plaintext -d '{"event":"CATCHUPBLOCKS"}' blockchain:18087 blockchain_api.BlockchainAPI.SendFSMEvent
 
 # Transition to IDLE state
 grpcurl -plaintext blockchain:18087 blockchain_api.BlockchainAPI.Idle
@@ -215,10 +226,10 @@ normally reports its persisted state):
 
 ```bash
 # Transition to RUNNING state
-grpcurl -plaintext localhost:18087 blockchain_api.BlockchainAPI.Run
+grpcurl -plaintext -d '{"event":"RUN"}' localhost:18087 blockchain_api.BlockchainAPI.SendFSMEvent
 
 # Transition to CATCHINGBLOCKS state
-grpcurl -plaintext localhost:18087 blockchain_api.BlockchainAPI.CatchUpBlocks
+grpcurl -plaintext -d '{"event":"CATCHUPBLOCKS"}' localhost:18087 blockchain_api.BlockchainAPI.SendFSMEvent
 
 # Transition to IDLE state
 grpcurl -plaintext localhost:18087 blockchain_api.BlockchainAPI.Idle

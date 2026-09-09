@@ -919,7 +919,8 @@ type ClientI interface {
 	// - Error if the service fails to start or encounters a critical issue
 	Run(ctx context.Context, source string) error
 
-	// CatchUpBlocks synchronizes the blockchain with peer nodes.
+	// CatchUpBlocks requests automatic synchronization with peer nodes.
+	// It refuses operator IDLE; explicit resume uses SendFSMEvent(CATCHUPBLOCKS).
 	//
 	// This method initiates a process to catch up with the latest blocks from the network,
 	// downloading and validating any blocks that are missing from the local blockchain.

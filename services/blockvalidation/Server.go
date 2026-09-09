@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1872,6 +1873,16 @@ func (u *Server) blockProcessingWorker(ctx context.Context, workerID int) {
 	}
 }
 
+// logCatchupFSMRefusal selects severity only; the caller uses typed StateError
+// for handling. Do not infer authoritative state from the client's cache.
+func (u *Server) logCatchupFSMRefusal(blockHash string, err error) {
+	if strings.Contains(err.Error(), "automatic CATCHUPBLOCKS refused from IDLE") {
+		u.logger.Infof("[catchup] Catchup not started for block %s while operator IDLE; explicit operator resume is required, clearing markers for a later notification: %v", blockHash, err)
+	} else {
+		u.logger.Warnf("[catchup] FSM rejected catchup for block %s, clearing markers: %v", blockHash, err)
+	}
+}
+
 // processCatchupChItem handles one catchupCh item: it runs catchup for the block
 // and applies the #1057 per-block attempt cap (skip-when-exhausted at the top,
 // count-or-reset on failure, clear on success) plus the existing alternative-peer
@@ -1917,7 +1928,7 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 
 		// FSM rejected the transition — not a peer issue
 		if errors.Is(err, errors.ErrStateError) {
-			u.logger.Warnf("[catchup] FSM rejected catchup for block %s (node not in RUNNING state), clearing markers", c.block.Hash().String())
+			u.logCatchupFSMRefusal(c.block.Hash().String(), err)
 			u.processBlockNotify.Delete(*c.block.Hash())
 			u.catchupAlternatives.Delete(*c.block.Hash())
 			return

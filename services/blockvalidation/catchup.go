@@ -16,13 +16,14 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
-	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/util/blockassemblyutil"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -37,6 +38,11 @@ const (
 	// made when releasing the catchup lock, so a slow or hung P2P service cannot stall
 	// catchup teardown or detach the calls from shutdown.
 	catchupReputationReportTimeout = 5 * time.Second
+
+	// Bound recovery from transient FSM persistence or transport failures at the
+	// catchup completion boundary. Do not leave an untracked retry goroutine.
+	catchupPromotionAttempts   = 3
+	catchupPromotionRetryDelay = time.Second
 )
 
 // CatchupContext holds all the state needed during a catchup operation
@@ -473,6 +479,12 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			// NewProcessingError as its example of a generic PEER error, so suppressing all
 			// processing errors here would stop charging peers that deserve it.
 			errorType = "local_header_context_error"
+			isPeerError = false
+		case errors.Is(*err, errors.ErrStateError):
+			// An authoritative FSM refusal (including operator IDLE) is local,
+			// not an error to store against the peer. Earlier data-serving failures
+			// remain attributable through the failedPeers drain below.
+			errorType = "local_fsm_refusal"
 			isPeerError = false
 		case !isLocalCatchupFault(*err) && (errors.Is(*err, errors.ErrBlockInvalid) || errors.Is(*err, errors.ErrTxInvalid)):
 			// Gated on the same predicate validateBlocksOnChannel and
@@ -1413,25 +1425,68 @@ func (u *Server) setFSMCatchingBlocks(ctx context.Context, catchupCtx *CatchupCo
 }
 
 // restoreFSMState restores the FSM state after catchup.
-// Returns the node to RUN state if it was in CATCHINGBLOCKS state.
+// Requests RUN from the blockchain authority, which serializes promotion with
+// operator STOP and refuses automatic promotion from IDLE. Transient failures
+// receive bounded retries because a caught-up node may not run catchup again.
 //
 // Parameters:
 //   - ctx: Context for cancellation
 //   - catchupCtx: Catchup context for logging
 func (u *Server) restoreFSMState(ctx context.Context, catchupCtx *CatchupContext) {
-	state, err := u.blockchainClient.GetFSMCurrentState(ctx)
-	if err != nil {
-		u.logger.Errorf("[catchup] failed to get FSM current state: %v", err)
-		return
+	if ctx.Err() != nil {
+		return // Normal shutdown has no promotion to attempt.
 	}
-
-	if state != nil && *state == blockchain.FSMStateCATCHINGBLOCKS {
-		u.logger.Infof("[catchup][%s] Restoring FSM to RUN state", catchupCtx.blockUpTo.Hash().String())
-
-		if err = u.blockchainClient.Run(ctx, "blockvalidation/Server"); err != nil {
-			u.logger.Errorf("[catchup][%s] failed to send RUN event: %v", catchupCtx.blockUpTo.Hash().String(), err)
+	var err error
+	attempts := 0
+	for attempts < catchupPromotionAttempts {
+		if err = ctx.Err(); err != nil {
+			break
+		}
+		attempts++
+		// Never use a cached state read as admission. Only the authority can
+		// decide atomically whether RUN is still permitted after operator STOP.
+		err = u.blockchainClient.Run(ctx, "blockvalidation/Server")
+		if err == nil {
+			return
+		}
+		if ctx.Err() != nil || !retryableFSMPromotionError(err) || attempts == catchupPromotionAttempts {
+			break
+		}
+		u.logger.Warnf("[catchup][%s] RUN promotion attempt %d failed; retrying in %s: %v", catchupCtx.blockUpTo.Hash().String(), attempts, catchupPromotionRetryDelay, err)
+		timer := time.NewTimer(catchupPromotionRetryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			err = ctx.Err()
+		case <-timer.C:
+		}
+		if ctx.Err() != nil {
+			break
 		}
 	}
+	if ctx.Err() != nil {
+		return // Cancellation during backoff is also normal shutdown.
+	}
+	// This message match only selects log severity. State admission and retry
+	// classification remain controlled by the authority and typed errors.
+	if errors.Is(err, errors.ErrStateError) && strings.Contains(err.Error(), "automatic RUN refused from IDLE") {
+		u.logger.Infof("[catchup][%s] Automatic RUN declined while operator IDLE after %d attempts; explicit operator action is required: %v", catchupCtx.blockUpTo.Hash().String(), attempts, err)
+		return
+	}
+	u.logger.Warnf("[catchup][%s] RUNNING not durably confirmed after %d attempts; inspect FSM state, mining readiness and store health before retrying RUN: %v", catchupCtx.blockUpTo.Hash().String(), attempts, err)
+}
+
+func retryableFSMPromotionError(err error) bool {
+	if errors.Is(err, context.Canceled) || status.Code(err) == codes.Canceled {
+		return false
+	}
+	// A failed checkpoint read is a StateError wrapping a deadline or storage
+	// cause. Retry those causes; plain below-checkpoint/IDLE refusals have none.
+	if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
+		return true
+	}
+	return errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrStorageUnavailable) ||
+		errors.Is(err, errors.ErrServiceUnavailable) || status.Code(err) == codes.Unavailable
 }
 
 // validateBlocksOnChannel processes and validates blocks received from the channel.

@@ -771,7 +771,7 @@ func (sm *SyncManager) startSync() {
 	if bestPeer.LastBlock() == bestBlockHeightInt32 {
 		sm.logger.Debugf("[startSync] peer %v is at the same height %d as us, sending RUNNING", bestPeer.String(), bestPeer.LastBlock())
 
-		if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/startSync"); err != nil {
+		if err = sm.runIfCatchingBlocks("legacy/netsync/manager/startSync"); err != nil {
 			sm.logger.Errorf("[startSync] failed to set blockchain state to running: %v", err)
 		}
 
@@ -845,6 +845,22 @@ func (sm *SyncManager) startSync() {
 		recvBytes:         bestPeer.BytesReceived(),
 		recvBytesLastTick: uint64(0),
 	})
+}
+
+// runIfCatchingBlocks uses the cached observation only to avoid redundant
+// automatic RUN requests from recurring legacy events. It is not admission:
+// the server still checks authoritative state under its transition lock. A
+// temporary synthetic IDLE is rechecked on later events, without latching a
+// pause or changing message/queue ownership.
+func (sm *SyncManager) runIfCatchingBlocks(source string) error {
+	state, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
+	if err != nil {
+		return err
+	}
+	if state == nil || *state != teranodeblockchain.FSMStateCATCHINGBLOCKS {
+		return nil
+	}
+	return sm.blockchainClient.Run(sm.ctx, source)
 }
 
 func (sm *SyncManager) resetFeeFilterToDefault() {
@@ -1882,7 +1898,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 
 			// Since we are current, we can tell FSM to transition to RUN
 			// Blockchain client will check if miner is registered, if so it will send Mine event, and FSM will transition to Mine
-			if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/handleBlockMsg"); err != nil {
+			if err = sm.runIfCatchingBlocks("legacy/netsync/manager/handleBlockMsg"); err != nil {
 				sm.logger.Errorf("[Sync Manager] failed to send FSM RUN event %v", err)
 			}
 
@@ -2572,11 +2588,12 @@ out:
 				sm.logger.Errorf("[SyncManager] failed to get fsm current state")
 			}
 
-			// we reached current in legacy, and current FSM state is not Running, send RUN event
-			if currentState != nil && *currentState != teranodeblockchain.FSMStateRUNNING {
+			// Only observed catchup needs automatic promotion. This cached
+			// prefilter also avoids the expensive current() check while parked.
+			if err == nil && currentState != nil && *currentState == teranodeblockchain.FSMStateCATCHINGBLOCKS {
 				if sm.current() { // only call this when we are not in the running state, it's an expensive call
 					sm.logger.Infof("[SyncManager] Legacy reached current, sending RUN event to FSM")
-					if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/blockHandler"); err != nil {
+					if err = sm.runIfCatchingBlocks("legacy/netsync/manager/blockHandler"); err != nil {
 						sm.logger.Infof("[Sync Manager] failed to send FSM RUN event %v", err)
 					}
 
