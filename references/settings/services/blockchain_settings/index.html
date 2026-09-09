@@ -7167,7 +7167,7 @@
 <td>int</td>
 <td>5000</td>
 <td>blockchain_store_dbTimeoutMillis</td>
-<td>Database operation timeout (store-level)</td>
+<td>Per-operation FSM checkpoint-read and persistence timeout; non-positive uses 5000 ms</td>
 </tr>
 <tr>
 <td>InitializeNodeInState</td>
@@ -7313,7 +7313,19 @@ configured RUNNING directly.</p>
 <ul>
 <li><code>StoreURL</code> determines database backend</li>
 <li>Service fails during daemon startup if null</li>
-<li><code>StoreDBTimeoutMillis</code> passed to blockchain store for database timeout configuration</li>
+<li><code>StoreDBTimeoutMillis</code> bounds FSM checkpoint reads and persistence writes in the
+  blockchain service; it is not a general store query timeout.</li>
+<li>Zero or negative values use the 5000 ms default, rather than disabling timeouts.</li>
+<li>Checkpoint reads respect an earlier caller deadline. Admitted writes run with
+  their own bounded context even after the caller disconnects.</li>
+<li>A RUN transition can consume two independent store budgets while holding the
+  transition lock. Notification delivery and the complete RPC are not bounded
+  by this setting. Large values can delay other transitions after a caller exits.</li>
+<li>The store helper does not retry. Automatic catchup promotion retries transient
+  failures at most three times with cancellable backoff and warns on exhaustion.
+  Explicit operator requests can be retried after store recovery.</li>
+<li>Tune using observed store latency under load; the five-second default is not
+  a measured production p99 guarantee.</li>
 </ul>
 <h2 id="service-dependencies">Service Dependencies<a class="headerlink" href="#service-dependencies" title="Permanent link">&para;</a></h2>
 <table>

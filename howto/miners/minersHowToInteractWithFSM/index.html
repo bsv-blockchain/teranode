@@ -7285,6 +7285,16 @@ restore the persisted state without validating unused boot configuration. A
 persisted <code>RUNNING</code> state with a successfully read tip below the active network's
 highest checkpoint is durably migrated to <code>CATCHINGBLOCKS</code>. Tip-read failures or
 missing metadata abort startup and leave the persisted state unchanged.</p>
+<p>Automatic <code>Run</code> and <code>CatchUpBlocks</code> requests cannot leave operator <code>IDLE</code>.
+This also prevents automatic catchup from bypassing STOP by first entering
+CATCHINGBLOCKS and then requesting RUN. Legacy synchronization reaching the tip
+cannot reverse an operator STOP. To leave IDLE deliberately, use
+<code>teranode-cli setfsmstate --fsmstate catchingblocks</code> to start synchronization, or
+explicitly request <code>running</code> when checkpoint-safe. IDLE does
+not prove that already admitted work has drained; rewind still requires service
+shutdown. When catchup entry is refused, block validation clears its processing
+markers without penalizing the peer. Explicit resume permits a later block
+notification to retry; this does not guarantee immediate replay of queued work.</p>
 <h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Access to a running Teranode instance</li>
@@ -7405,10 +7415,10 @@ a node is catching up, the only way out is RUN.</p>
 </span></code></pre></div>
 <p><strong>Trigger State Transitions:</strong></p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Transition to RUNNING state</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>blockchain:18087<span class="w"> </span>blockchain_api.BlockchainAPI.Run
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>-d<span class="w"> </span><span class="s1">'{"event":"RUN"}'</span><span class="w"> </span>blockchain:18087<span class="w"> </span>blockchain_api.BlockchainAPI.SendFSMEvent
 </span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
 </span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># Transition to CATCHINGBLOCKS state</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>blockchain:18087<span class="w"> </span>blockchain_api.BlockchainAPI.CatchUpBlocks
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>-d<span class="w"> </span><span class="s1">'{"event":"CATCHUPBLOCKS"}'</span><span class="w"> </span>blockchain:18087<span class="w"> </span>blockchain_api.BlockchainAPI.SendFSMEvent
 </span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>
 </span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="c1"># Transition to IDLE state</span>
 </span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>blockchain:18087<span class="w"> </span>blockchain_api.BlockchainAPI.Idle
@@ -7429,10 +7439,10 @@ normally reports its persisted state):</p>
 </span></code></pre></div>
 <p><strong>Trigger State Transitions:</strong></p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># Transition to RUNNING state</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>localhost:18087<span class="w"> </span>blockchain_api.BlockchainAPI.Run
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>-d<span class="w"> </span><span class="s1">'{"event":"RUN"}'</span><span class="w"> </span>localhost:18087<span class="w"> </span>blockchain_api.BlockchainAPI.SendFSMEvent
 </span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>
 </span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="c1"># Transition to CATCHINGBLOCKS state</span>
-</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>localhost:18087<span class="w"> </span>blockchain_api.BlockchainAPI.CatchUpBlocks
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>-d<span class="w"> </span><span class="s1">'{"event":"CATCHUPBLOCKS"}'</span><span class="w"> </span>localhost:18087<span class="w"> </span>blockchain_api.BlockchainAPI.SendFSMEvent
 </span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>
 </span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="c1"># Transition to IDLE state</span>
 </span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>localhost:18087<span class="w"> </span>blockchain_api.BlockchainAPI.Idle
