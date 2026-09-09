@@ -148,7 +148,7 @@ func TestLegacyFailClosed_SameBlockParentChain_NoConflictingNodes(t *testing.T) 
 	// failClosed is true on this path.
 	require.True(t, sm.legacyFailClosed(500))
 
-	err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 500, 0, 0, true, true)
+	_, err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 500, 0, 0, true, true, nil)
 	require.NoError(t, err, "same-block parent chain must validate under fail-closed with no spurious ErrTxNotFound")
 
 	with, without := cv.createConflictCounts()
@@ -174,7 +174,7 @@ func TestLegacyFailClosed_GenuineConflict_HardFails(t *testing.T) {
 
 	require.True(t, sm.legacyFailClosed(500))
 
-	err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 500, 0, 0, true, true)
+	_, err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 500, 0, 0, true, true, nil)
 	require.Error(t, err, "genuine conflict must hard-fail under fail-closed")
 	require.Contains(t, err.Error(), "non-retryable", "conflict must surface via the non-retryable hardFail branch")
 	require.False(t, errors.IsRetryableError(err), "the surfaced error must be non-retryable")
@@ -202,7 +202,7 @@ func TestLegacyFailClosed_FlagOff_ByteIdentical(t *testing.T) {
 
 	// failClosed=false is what ValidateTransactionsLegacyMode threads through when
 	// legacyFailClosed is false.
-	err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 500, 0, 0, true, false)
+	_, err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 500, 0, 0, true, false, nil)
 	require.NoError(t, err, "flag-off path must still swallow ErrTxConflicting and proceed")
 
 	with, without := cv.createConflictCounts()

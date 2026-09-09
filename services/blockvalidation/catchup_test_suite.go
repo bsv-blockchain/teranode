@@ -74,6 +74,9 @@ func NewCatchupTestSuiteWithConfig(t *testing.T, config *testhelpers.CatchupServ
 func (s *CatchupTestSuite) setupMocks() {
 	s.MockBlockchain = &blockchain.Mock{}
 	s.MockUTXOStore = &utxo.MockUtxostore{}
+	// The create-first block path classifies every ErrTxExists record through
+	// BatchDecorate (utxo.LeftoversAmong); a mock with no locked records answers nil.
+	s.MockUTXOStore.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	s.MockValidator = &validator.MockValidator{UtxoStore: s.MockUTXOStore}
 	s.HttpMock = testhelpers.NewHTTPMockSetup(s.T)
 

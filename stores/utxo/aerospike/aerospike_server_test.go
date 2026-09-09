@@ -2234,7 +2234,10 @@ func TestRespendExpiredChild(t *testing.T) {
 	spend, err := store.Spend(ctx, spendingTx1, 1)
 	require.Error(t, err)
 	assert.Error(t, spend[0].Err)
-	assert.ErrorIs(t, spend[0].Err, errors.ErrUtxoError)
+	// The dedicated code, not the generic ErrUtxoError: needsSpendRollback keys
+	// on it to roll back the sibling spends of the same transaction.
+	assert.ErrorIs(t, spend[0].Err, errors.ErrUtxoSpendingTxPruned)
+	assert.Contains(t, spend[0].Err.Error(), "spending transaction was pruned")
 }
 
 func TestStore_AerospikeTwoPhaseCommit(t *testing.T) {

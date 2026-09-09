@@ -1212,8 +1212,17 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			//   - tx is NOT locked
 			// Otherwise, surface the original ErrTxNotFound — a "tx exists in store" alone is not proof of validation
 			// (a re-org or DAH window could expose a stale or mid-flight record).
+			//
+			// Never when the caller wrote this transaction's record itself in this
+			// pass (WithSpenderCreatedByCaller): the legacy block path creates every
+			// transaction, mined and unlocked, before it validates, so that record
+			// satisfies every condition below and proves nothing. With the SQL and
+			// Aerospike stores this branch is shadowed, since both return an
+			// aggregate ErrUtxoError that the branch above handles first; the gate
+			// is kept so a store that returns a bare ErrTxNotFound gets the same
+			// answer.
 			txMetaData = &meta.Data{}
-			if metaErr := v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); metaErr == nil {
+			if metaErr := v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); metaErr == nil && !validationOptions.SpenderCreatedByCaller {
 				if len(txMetaData.BlockIDs) > 0 && !txMetaData.Conflicting && !txMetaData.Locked {
 					v.logger.Warnf("[Validate][%s] parent tx DAH-evicted, child already mined and not conflicting/locked, assuming blessed (BlockIDs=%v)", txID, txMetaData.BlockIDs)
 
@@ -1997,6 +2006,7 @@ func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, bl
 
 	opts := []utxo.CreateOption{
 		utxo.WithIgnoreLocked(validationOptions.IgnoreLocked),
+		utxo.WithSpenderCreatedByCaller(validationOptions.SpenderCreatedByCaller),
 	}
 
 	if validationOptions.OutpointOnlySpend {

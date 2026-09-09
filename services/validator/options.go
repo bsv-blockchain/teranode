@@ -36,6 +36,9 @@ type Options struct {
 	// IgnoreLocked determines whether to ignore transactions marked as locked when spending
 	IgnoreLocked bool
 
+	// SpenderCreatedByCaller: see WithSpenderCreatedByCaller.
+	SpenderCreatedByCaller bool
+
 	// SkipTxMetaPublishing determines whether txmeta should be published to Kafka
 	// When true, the validator won't publish transaction metadata to the txmeta Kafka topic
 	// Used during legacy catchup (quickValidationMode) where no consumer needs the data
@@ -312,6 +315,18 @@ func WithIgnoreConflicting(ignore bool) Option {
 func WithIgnoreLocked(ignoreLocked bool) Option {
 	return func(o *Options) {
 		o.IgnoreLocked = ignoreLocked
+	}
+}
+
+// WithSpenderCreatedByCaller says the caller wrote this transaction's UTXO record
+// itself, in this same pass, before asking for validation. The validator and
+// both stores otherwise treat "parent not found, but the transaction's record
+// exists" as a transaction validated and blessed before its parent was pruned;
+// a record the caller just wrote is no such proof. Set by the create-first
+// legacy block path for the transactions its create phase wrote.
+func WithSpenderCreatedByCaller(b bool) Option {
+	return func(o *Options) {
+		o.SpenderCreatedByCaller = b
 	}
 }
 

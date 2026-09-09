@@ -42,6 +42,7 @@ var (
 	ErrUtxoInvalidSize            = New(ERR_UTXO_INVALID_SIZE, "utxo invalid size")
 	ErrUtxoUnspent                = New(ERR_UTXO_UNSPENT, "utxo is unspent")
 	ErrUtxoWalkLimitExceeded      = New(ERR_UTXO_WALK_LIMIT_EXCEEDED, "utxo walk limit exceeded")
+	ErrUtxoSpendingTxPruned       = New(ERR_UTXO_SPENDING_TX_PRUNED, "spending transaction was pruned")
 	ErrUtxoError                  = New(ERR_UTXO_ERROR, "utxo error")
 	ErrStateError                 = New(ERR_STATE_ERROR, "error in state")
 	ErrStateInitialization        = New(ERR_STATE_INITIALIZATION, "error initializing state")
@@ -376,6 +377,20 @@ func NewUtxoUnspentError(message string, params ...interface{}) *Error {
 // matched by ErrTxInvalid/ErrTxNotFound classification.
 func NewUtxoWalkLimitExceededError(message string, params ...interface{}) *Error {
 	return New(ERR_UTXO_WALK_LIMIT_EXCEEDED, message, params...)
+}
+
+// NewUtxoSpendingTxPrunedError creates a new error indicating that the
+// transaction attempting to spend an output is one the pruner has already
+// removed. The store keeps a marker for every child it prunes, so a replay of
+// that child is rejected here instead of silently succeeding as an idempotent
+// re-spend and letting the caller recreate the pruned transaction.
+//
+// It carries its own code rather than ERR_UTXO_ERROR because callers have to
+// tell it apart from the generic utxo error: it is one of the rejections that
+// must roll back the sibling spends of the same transaction (see
+// needsSpendRollback / isSpendRollbackError in the SQL and Aerospike stores).
+func NewUtxoSpendingTxPrunedError(message string, params ...interface{}) *Error {
+	return New(ERR_UTXO_SPENDING_TX_PRUNED, message, params...)
 }
 
 // NewUtxoError creates a new generic utxo error.

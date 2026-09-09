@@ -191,6 +191,15 @@ type IgnoreFlags struct {
 	// Set ONLY on the gated below-checkpoint outpoint-only path (spec §3.2 Seam 1). Default
 	// false — above-checkpoint and steady-state spends always enforce the hash.
 	SkipUTXOHashCheck bool
+	// SpenderCreatedByCaller says the caller wrote the spending transaction's own
+	// record in this same pass, so its presence in the store proves nothing about
+	// prior validation. Both stores otherwise treat "parent not found, but the
+	// spending transaction exists" as a transaction that was validated and
+	// blessed before its parent was pruned, and clear the error. The
+	// create-first block paths write the record before they spend, so without
+	// this flag a replay of a transaction whose parent was pruned too is blessed
+	// on the strength of the record the replay itself just created.
+	SpenderCreatedByCaller bool
 }
 
 // ConflictingChildRemoval identifies one (parent, child) pair that should be
@@ -334,6 +343,16 @@ func WithIgnoreLocked(b bool) CreateOption {
 func WithSkipUTXOHashCheck(b bool) CreateOption {
 	return func(o *CreateOptions) {
 		o.IgnoreFlags.SkipUTXOHashCheck = b
+	}
+}
+
+// WithSpenderCreatedByCaller marks the spending transaction's record as written
+// by the caller in this pass (see IgnoreFlags.SpenderCreatedByCaller). Set it on
+// the spend phase of a create-first block path for every transaction that phase
+// 1 created, and only those.
+func WithSpenderCreatedByCaller(b bool) CreateOption {
+	return func(o *CreateOptions) {
+		o.IgnoreFlags.SpenderCreatedByCaller = b
 	}
 }
 
