@@ -3603,8 +3603,44 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 
 			require.Empty(t, freshness.snapshot(), "a rejected fetch must record no freshness")
 
+			// NO strike on this attempt: bypassCache is false, so a caching layer replaying a poisoned
+			// generation is still a live explanation for the mismatch and charging the peer would
+			// charge every peer behind that cache (bitcoin-sv/teranode#4692). The error is marked
+			// cache-bypass retryable instead, which buys the one cache-busted retry that rules the
+			// cache out — the sibling case below.
+			require.Empty(t, rec.struck(),
+				"the mismatch must not be charged to the peer until the cache explanation has been eliminated")
+			require.True(t, isCacheBypassRetryable(fetchErr),
+				"the rejection must be retryable, or the cache-busted attempt that CAN strike is never made")
+		})
+
+		// The other half of the gate: the same mismatch on the cache-busted attempt, where the cache
+		// can no longer explain it, DOES strike (bitcoin-sv/teranode#4692).
+		t.Run("mismatched bytes on the cache-busted attempt strike the serving peer", func(t *testing.T) {
+			suite := NewCatchupTestSuite(t)
+			defer suite.Cleanup()
+
+			rec := &subtreeAttributionP2PClient{}
+			suite.Server.blockValidation.p2pClient = rec
+
+			httpmock.ActivateNonDefault(util.HTTPClient())
+			defer httpmock.DeactivateAndReset()
+
+			requestedHash := createTestHash("not-the-root-of-these-nodes")
+			require.False(t, requestedHash.IsEqual(honestHash))
+
+			httpmock.RegisterResponder(
+				"GET",
+				fmt.Sprintf("http://test-peer/subtree/%s", requestedHash.String()),
+				httpmock.NewBytesResponder(200, nodeBytes),
+			)
+
+			_, fetchErr := suite.Server.fetchAndStoreSubtree(suite.Ctx, &model.Block{Height: 100},
+				requestedHash, servingPeer, "http://test-peer", true, newSubtreeFreshness())
+			require.Error(t, fetchErr)
+
 			strikes := rec.struck()
-			require.Len(t, strikes, 1, "the serving peer must be struck exactly once")
+			require.Len(t, strikes, 1, "the serving peer must be struck exactly once once the cache is ruled out")
 			require.Equal(t, servingPeer, strikes[0].peerID)
 			require.Equal(t, p2pconstants.ReasonCorruptBlockBody.String(), strikes[0].reason)
 		})
@@ -4126,4 +4162,272 @@ func TestFormatSubtreeFetchAttempts(t *testing.T) {
 	require.Contains(t, got, "empty body from b")
 	require.Contains(t, got, "; ", "attempts must be separated so each is readable in one log line")
 	require.Empty(t, formatSubtreeFetchAttempts(nil))
+}
+
+// r2SubtreeFixture builds a 4-leaf subtree plus the honest wire bytes a peer would serve for
+// /subtree (the node hashes) and /subtree_data (the serialized txs), for the R2 cache-bypass tests
+// (bitcoin-sv/teranode#4692).
+type r2SubtreeFixture struct {
+	subtree       *subtreepkg.Subtree
+	hash          *chainhash.Hash
+	honestNodes   []byte
+	honestData    []byte
+	subtreeURL    string
+	subtreeDatURL string
+}
+
+func newR2SubtreeFixture(t *testing.T, baseURL string) r2SubtreeFixture {
+	t.Helper()
+
+	txs := transactions.CreateTestTransactionChainWithCount(t, 5)
+
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.NoError(t, subtree.AddNode(*txs[1].TxIDChainHash(), 1, 11))
+	require.NoError(t, subtree.AddNode(*txs[2].TxIDChainHash(), 2, 12))
+	require.NoError(t, subtree.AddNode(*txs[3].TxIDChainHash(), 3, 13))
+
+	// The /subtree wire format is the bare concatenation of node hashes, which is what
+	// fetchAndStoreSubtree parses.
+	honestNodes := make([]byte, 0, subtree.Length()*chainhash.HashSize)
+	for _, n := range subtree.Nodes {
+		honestNodes = append(honestNodes, n.Hash[:]...)
+	}
+
+	subtreeData := subtreepkg.NewSubtreeData(subtree)
+	require.NoError(t, subtreeData.AddTx(txs[0], 0))
+	require.NoError(t, subtreeData.AddTx(txs[1], 1))
+	require.NoError(t, subtreeData.AddTx(txs[2], 2))
+	require.NoError(t, subtreeData.AddTx(txs[3], 3))
+	honestData, err := subtreeData.Serialize()
+	require.NoError(t, err)
+
+	hash := subtree.RootHash()
+
+	return r2SubtreeFixture{
+		subtree:       subtree,
+		hash:          hash,
+		honestNodes:   honestNodes,
+		honestData:    honestData,
+		subtreeURL:    fmt.Sprintf("%s/subtree/%s", baseURL, hash.String()),
+		subtreeDatURL: fmt.Sprintf("%s/subtree_data/%s", baseURL, hash.String()),
+	}
+}
+
+// wrongRootNodes returns a well-formed node list (a whole number of hashes) that does NOT hash to
+// the requested subtree root — the "doctored but well-shaped" case, distinct from a truncated body.
+func (f r2SubtreeFixture) wrongRootNodes() []byte {
+	out := make([]byte, len(f.honestNodes))
+	copy(out, f.honestNodes)
+	// Flip a byte in the LAST node, which changes the computed root while keeping the length legal.
+	out[len(out)-1] ^= 0xFF
+
+	return out
+}
+
+// TestFetchAndStoreSubtree_PoisonedResponses pins the marker at the two /subtree rejection sites
+// (bitcoin-sv/teranode#4692), independently of the retry harness below. Both were plain
+// ProcessingErrors with no cache-bypass marker, so isCacheBypassRetryable was false and
+// tryPeerForSubtree never cache-busted: a caching layer replaying one poisoned generation stalled
+// every peer behind it for the whole TTL, which is the issue-1368 failure on a new error class.
+//
+// The marker must not disturb the error CLASS at either site: ProcessingError is deliberate (a
+// corrupt code here would hit reportCatchupFailureForError's corrupt exemption) and it must stay
+// non-IsLocalError so the alternative-peer walk still runs.
+func TestFetchAndStoreSubtree_PoisonedResponses(t *testing.T) {
+	baseURL := "http://poisoned-peer:8000"
+	peerID := "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
+	ctx := context.Background()
+	testBlock := &model.Block{Height: 100}
+
+	newServer := func() *Server {
+		return &Server{
+			logger:       ulogger.TestLogger{},
+			subtreeStore: memory.New(),
+			settings:     test.CreateBaseTestSettings(t),
+		}
+	}
+
+	t.Run("TruncatedBodyIsCacheBypassRetryable", func(t *testing.T) {
+		f := newR2SubtreeFixture(t, baseURL)
+		server := newServer()
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		// One byte short of a whole number of node hashes.
+		httpmock.RegisterResponder("GET", f.subtreeURL,
+			httpmock.NewBytesResponder(200, f.honestNodes[:len(f.honestNodes)-1]))
+
+		_, err := server.fetchAndStoreSubtree(ctx, testBlock, f.hash, peerID, baseURL, false, nil)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "not a whole number")
+		require.True(t, errors.Is(err, errors.ErrProcessing), "the class must stay ProcessingError")
+		require.False(t, errors.IsLocalError(err), "must not short-circuit the alternative-peer loop")
+		require.True(t, isCacheBypassRetryable(err), "a truncated body is the issue-1368 signature and must be retryable")
+	})
+
+	t.Run("WrongRootBodyIsCacheBypassRetryable", func(t *testing.T) {
+		f := newR2SubtreeFixture(t, baseURL)
+		server := newServer()
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder("GET", f.subtreeURL, httpmock.NewBytesResponder(200, f.wrongRootNodes()))
+
+		_, err := server.fetchAndStoreSubtree(ctx, testBlock, f.hash, peerID, baseURL, false, nil)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "that hash to")
+		require.True(t, errors.Is(err, errors.ErrProcessing), "the class must stay ProcessingError")
+		require.False(t, errors.IsLocalError(err))
+		require.True(t, isCacheBypassRetryable(err))
+	})
+}
+
+// TestTryPeerForSubtree_MalformedSubtreeRecoversViaCacheBypass is icellan's reported failure driven
+// end to end (bitcoin-sv/teranode#4692): the gap was that tryPeerForSubtree never cache-busted for a
+// malformed /subtree, so the unit-level marker assertions above are necessary but not sufficient.
+//
+// The /subtree case differs from the existing subtree_data case in a way that matters: a failed
+// /subtree attempt stores NOTHING — both rejection sites return before the Set — and the local
+// short-circuit at the top of fetchAndStoreSubtree does not consult bypassCache, so the retry must
+// genuinely re-issue /subtree/<hash>?cachebust=… rather than reading a local file.
+func TestTryPeerForSubtree_MalformedSubtreeRecoversViaCacheBypass(t *testing.T) {
+	baseURL := "http://poisoned-peer:8000"
+	peerID := "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
+	ctx := context.Background()
+	testBlock := &model.Block{Height: 100}
+
+	f := newR2SubtreeFixture(t, baseURL)
+
+	server := &Server{
+		logger:       ulogger.TestLogger{},
+		subtreeStore: memory.New(),
+		settings:     test.CreateBaseTestSettings(t),
+	}
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	var (
+		mu          sync.Mutex
+		subtreeReqs []string // RawQuery of each /subtree request, in order
+	)
+
+	httpmock.RegisterResponder("GET", f.subtreeURL, func(req *http.Request) (*http.Response, error) {
+		mu.Lock()
+		n := len(subtreeReqs)
+		subtreeReqs = append(subtreeReqs, req.URL.RawQuery)
+		mu.Unlock()
+
+		// First request: a truncated body, as a cache replaying a failed generation would serve.
+		// Cache-busted request: the honest bytes the peer can still produce on demand.
+		if n == 0 {
+			return httpmock.NewBytesResponse(200, f.honestNodes[:len(f.honestNodes)-1]), nil
+		}
+
+		return httpmock.NewBytesResponse(200, f.honestNodes), nil
+	})
+	httpmock.RegisterResponder("GET", f.subtreeDatURL, httpmock.NewBytesResponder(200, f.honestData))
+
+	require.NoError(t, server.tryPeerForSubtree(ctx, testBlock, f.hash, peerID, baseURL, nil),
+		"the cache-busted retry must recover the subtree")
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, subtreeReqs, 2, "exactly one retry: the first attempt plus the cache-busted one")
+	require.Empty(t, subtreeReqs[0], "the first attempt must not carry a cachebust parameter")
+	require.Contains(t, subtreeReqs[1], "cachebust=", "the retry must bust the cache, or a poisoned entry is replayed for the whole TTL")
+
+	stored, err := server.subtreeStore.Exists(ctx, f.hash[:], fileformat.FileTypeSubtreeToCheck)
+	require.NoError(t, err)
+	require.True(t, stored, "the recovered subtree must be stored")
+}
+
+// TestTryPeerForSubtree_WrongRootSubtreeStrikesOnlyAfterCacheBypass pins the strike gating
+// (bitcoin-sv/teranode#4692). With a caching layer interposed, "these bytes do not match this hash"
+// is a claim about the cache, not the peer — so a poisoned wrong-root generation replayed for the
+// whole TTL would otherwise charge every peer behind that cache. The strike now requires the
+// cache-busted attempt to fail too, which can only under-strike, never over-strike.
+func TestTryPeerForSubtree_WrongRootSubtreeStrikesOnlyAfterCacheBypass(t *testing.T) {
+	baseURL := "http://poisoned-peer:8000"
+	peerID := "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
+	ctx := context.Background()
+	testBlock := &model.Block{Height: 100}
+
+	newServer := func(t *testing.T) (*Server, *banScoreRecorder) {
+		t.Helper()
+
+		rec := &banScoreRecorder{}
+		bv := &BlockValidation{
+			logger:    ulogger.TestLogger{},
+			settings:  test.CreateBaseTestSettings(t),
+			p2pClient: rec,
+		}
+
+		return &Server{
+			logger:          ulogger.TestLogger{},
+			subtreeStore:    memory.New(),
+			settings:        test.CreateBaseTestSettings(t),
+			blockValidation: bv,
+		}, rec
+	}
+
+	t.Run("still wrong after the bypass: struck exactly once", func(t *testing.T) {
+		f := newR2SubtreeFixture(t, baseURL)
+		server, rec := newServer(t)
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		var (
+			mu      sync.Mutex
+			queries []string
+		)
+
+		httpmock.RegisterResponder("GET", f.subtreeURL, func(req *http.Request) (*http.Response, error) {
+			mu.Lock()
+			queries = append(queries, req.URL.RawQuery)
+			mu.Unlock()
+
+			return httpmock.NewBytesResponse(200, f.wrongRootNodes()), nil
+		})
+
+		err := server.tryPeerForSubtree(ctx, testBlock, f.hash, peerID, baseURL, nil)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrProcessing))
+		require.True(t, isCacheBypassRetryable(err))
+
+		mu.Lock()
+		defer mu.Unlock()
+		require.Len(t, queries, 2, "the marker must buy exactly one cache-busted retry")
+		require.Contains(t, queries[1], "cachebust=")
+
+		require.Equal(t, []string{peerID}, rec.struck(),
+			"the peer must be struck once, and only on the attempt that ruled the cache out")
+	})
+
+	t.Run("honest after the bypass: recovered with no strike at all", func(t *testing.T) {
+		f := newR2SubtreeFixture(t, baseURL)
+		server, rec := newServer(t)
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		var callCount atomic.Int32
+
+		httpmock.RegisterResponder("GET", f.subtreeURL, func(_ *http.Request) (*http.Response, error) {
+			if callCount.Add(1) == 1 {
+				return httpmock.NewBytesResponse(200, f.wrongRootNodes()), nil
+			}
+
+			return httpmock.NewBytesResponse(200, f.honestNodes), nil
+		})
+		httpmock.RegisterResponder("GET", f.subtreeDatURL, httpmock.NewBytesResponder(200, f.honestData))
+
+		require.NoError(t, server.tryPeerForSubtree(ctx, testBlock, f.hash, peerID, baseURL, nil))
+
+		require.Empty(t, rec.struck(),
+			"a peer whose cache-busted response is honest was never at fault: the cache was, so it must not be charged")
+	})
 }
