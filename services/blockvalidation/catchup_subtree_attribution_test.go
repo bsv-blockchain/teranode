@@ -322,7 +322,13 @@ func TestFetchSubtreeDataForBlock_StrikesTheServingPeerNotThePrimary(t *testing.
 	// strike assertions below would be vacuous.
 	counts := httpmock.GetCallCountInfo()
 	require.Equal(t, 1, counts["GET "+subtreeURLA], "subtree 0 must be fetched from the primary exactly once")
-	require.Equal(t, 1, counts["GET "+subtreeURLB], "subtree 1 must be fetched from the non-primary peer exactly once")
+	// Twice for B: the wrong-root rejection is cache-bypass retryable, so tryPeerForSubtree spends
+	// exactly one cache-busted retry against the same peer before giving up
+	// (bitcoin-sv/teranode#4692). Both requests hit the same responder — httpmock counts the
+	// cache-busted URL under the same key — and the retry serves the same doctored bytes, so the
+	// verdict and the single strike below are unchanged.
+	require.Equal(t, 2, counts["GET "+subtreeURLB],
+		"subtree 1 must be fetched from the non-primary peer twice: the initial attempt plus one cache-busted retry")
 
 	// THE FIX: exactly one strike, and it lands on B, for serving a corrupt block body.
 	strikes := fake.struck()

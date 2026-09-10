@@ -1891,9 +1891,13 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// Snapshot which SubtreeToCheck/Subtree blobs already exist, BEFORE the body is handed to
 		// CheckBlockSubtrees. This bounds the corrupt-verdict cleanup below to the blobs this attempt
 		// can have written, so an untrusted body cannot name another block's subtree hashes and have
-		// them deleted (bitcoin-sv/teranode#4692). Taken once here and used by BOTH corrupt-cleanup
-		// sites in this closure (the subtree-validation verdict just below and the block.Valid merkle
-		// verdict on the non-optimistic path further down).
+		// them deleted (bitcoin-sv/teranode#4692). Read by ONE site: the subtree-validation corrupt
+		// verdict just below. The block.Valid merkle verdict further down deliberately performs no
+		// cleanup — see the comment on that branch — so nothing else consumes this snapshot.
+		//
+		// Both file types are probed because CheckBlockSubtrees' own missing-subtree gate keys on
+		// FileTypeSubtree alone (subtreevalidation/check_block_subtrees.go), so a hash carrying only
+		// that type is never handed to the fetch branch and this attempt writes nothing for it.
 		subtreeToCheckPresentBefore := u.subtreeToCheckPresentBefore(ctx, block)
 
 		if err = u.validateBlockSubtrees(ctx, block, opts.PeerID, baseURL); err != nil {
@@ -1909,12 +1913,16 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				if !opts.IsRevalidation {
 					u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, "corrupt subtree body during subtree validation")
 				}
-				// Drop the unvalidated peer-supplied subtree blobs this attempt left behind so a retry
-				// re-fetches instead of re-reading the body that just failed subtree validation
-				// (bitcoin-sv/teranode#4692). Bounded to the hashes that had no local copy when this
-				// attempt started, so a doctored body cannot delete a concurrent block's blobs. A delete
-				// failure only logs — it must not downgrade the corrupt classification (mirrors the
-				// block.Valid corrupt branch below and the catchup path).
+				// A peer-supplied FileTypeSubtreeToCheck is bound to its key but has NOT been
+				// duplicate-scanned, and a CVE-2012-2459 duplicate-last mutation preserves the subtree
+				// root — so this blob can hold a mutated node list under an honest hash. The duplicate is
+				// caught in ValidateSubtreeInternal before storeSubtreeFiles writes the scanned
+				// FileTypeSubtree, so the mutated fallback is the only local copy and every retry re-reads
+				// it until its own delete-at height lapses. Dropping it is what lets an honest re-delivery
+				// recover promptly rather than after the retention window (bitcoin-sv/teranode#4692).
+				// Bounded to the hashes that had no local copy when this attempt started, so a doctored
+				// body cannot delete a concurrent block's blobs. A delete failure only logs — it must not
+				// downgrade the corrupt classification (mirrors the catchup path).
 				if delErr := u.removePeerSuppliedSubtreeToCheck(ctx, block, subtreeToCheckPresentBefore); delErr != nil {
 					u.logger.Warnf("[ValidateBlock][%s] failed to clear failed subtree blobs: %v", block.Hash().String(), delErr)
 				}
@@ -2210,15 +2218,23 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					if !opts.IsRevalidation {
 						u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, reason)
 					}
-					// Drop the unvalidated peer-supplied subtree blobs this attempt left behind so a
-					// retry re-fetches instead of re-reading the body that just failed the block-level
-					// merkle check (bitcoin-sv/teranode#4692). Bounded to the hashes that had no local
-					// copy when this attempt started, so a doctored body cannot delete a concurrent
-					// block's blobs. A delete failure only logs — it must not downgrade the corrupt
-					// classification (mirrors the catchup corrupt path).
-					if delErr := u.removePeerSuppliedSubtreeToCheck(ctx, block, subtreeToCheckPresentBefore); delErr != nil {
-						u.logger.Warnf("[ValidateBlock][%s] failed to clear failed subtree blobs: %v", block.Hash().String(), delErr)
-					}
+					// NO blob cleanup on this branch, and the reason is presence and lookup order —
+					// not blob contents (bitcoin-sv/teranode#4692). validateBlockSubtrees succeeded to
+					// reach here, so every subtree of this block has a FileTypeSubtree: either the
+					// missing-subtree gate observed it, or the hash was missing and storeSubtreeFiles
+					// wrote it (a failure there returns from CheckBlockSubtrees and lands on the
+					// subtree-validation branch above, not here). A retry therefore finds nothing
+					// missing — so long as those FileTypeSubtree files are still present — and
+					// CheckBlockSubtrees returns early without ever consulting the SubtreeToCheck
+					// fallback, while model.Block.GetAndValidateSubtrees reads FileTypeSubtree first.
+					// Deleting the FileTypeSubtreeToCheck fallback here therefore changes no byte any
+					// reader of this block sees while that holds.
+					//
+					// It does not hold forever: FileTypeSubtree is written with a finite delete-at
+					// height and can also be removed by the catch-up cleanup, and once it lapses the
+					// hash is missing again and the fallback IS consulted — so a delete performed here
+					// would cost a later attempt a local read it could have had. Block assembly, the
+					// block persister and the asset service also read SubtreeToCheck directly.
 					return err
 				}
 
@@ -2459,28 +2475,49 @@ func (u *BlockValidation) penalizeCorruptBlockPeer(ctx context.Context, peerID s
 }
 
 // removePeerSuppliedSubtreeToCheck deletes ONLY the unvalidated FileTypeSubtreeToCheck blobs for the
-// block's subtrees after a corrupt-body verdict on the RUNNING validation path
-// (bitcoin-sv/teranode#4692). CheckBlockSubtrees writes each peer-supplied subtree under
-// FileTypeSubtreeToCheck before block.Valid runs the block-level merkle check; a body whose subtrees
-// each hash correctly but whose roots do not combine to the header merkle root leaves those blobs on
-// disk, and findLocalSubtreeFile short-circuits to them on every retry. Deleting them forces a
-// re-fetch instead.
+// block's subtrees after a corrupt-body verdict raised INSIDE SUBTREE VALIDATION on the RUNNING
+// validation path (bitcoin-sv/teranode#4692). That is its whole scope: the block.Valid merkle branch
+// deliberately performs no cleanup, because by the time it runs every subtree already has a
+// FileTypeSubtree that every reader prefers — see the comment on that branch.
 //
-// It deliberately does NOT touch FileTypeSubtreeData, FileTypeSubtree or FileTypeSubtreeMeta. Unlike
-// the peer-supplied SubtreeToCheck marker (only ever written WithDeleteAt, never promoted), those
-// three can hold live, promoted-permanent data: block persistence promotes FileTypeSubtreeData with
-// SetDAH(…, 0) and the asset service serves it, and FileTypeSubtree/FileTypeSubtreeMeta are validated
-// content. Deleting any of them by subtree hash on a RUNNING corrupt verdict could destroy permanent
-// data of an already-persisted block or data being served. This is why it is narrower than the
-// catchup helper, where a fresh re-download re-creates everything.
+// WHY THIS BRANCH NEEDS IT — the duplicate-scan asymmetry. CheckBlockSubtrees stores each
+// peer-supplied subtree under FileTypeSubtreeToCheck after checking only that the bytes hash to the
+// requested subtree root. A root check is not a content check: a CVE-2012-2459 duplicate-last
+// mutation PRESERVES the merkle root (see model.CheckSubtreeSlicesForDuplicateTxs), so this blob can
+// hold a mutated node list under an honest hash. The duplicate is caught later, by
+// ValidateSubtreeInternal's own scan, which returns BEFORE storeSubtreeFiles writes the scanned
+// FileTypeSubtree — so on this branch the mutated fallback is the ONLY local copy, and every retry
+// re-reads it until its own delete-at height lapses. Deleting it is what lets an honest re-delivery
+// recover promptly rather than after the retention window.
+//
+// It deliberately does NOT touch FileTypeSubtreeData, FileTypeSubtree or FileTypeSubtreeMeta, for two
+// independent reasons.
+//
+// First, data loss. Unlike the peer-supplied SubtreeToCheck marker (only ever written WithDeleteAt,
+// never promoted), those three can hold live, promoted-permanent data: the block persister promotes
+// FileTypeSubtreeData and FileTypeSubtree with SetDAH(…, 0) and the asset service serves them, and
+// block assembly and the block persister read them too. Deleting any of them by a PEER-SUPPLIED
+// subtree hash on a RUNNING corrupt verdict could destroy permanent data of an already-persisted
+// block or data being served.
+//
+// Second, a widened delete would not reach the blobs that could motivate it. Deletion is bounded by
+// presentBefore (below), so it can only fire on blobs this attempt is LICENSED to have written —
+// modulo the sibling-write residual documented below — and this attempt's
+// FileTypeSubtree comes from storeSubtreeFiles, which both root-checks and duplicate-scans before
+// writing. A poisoned FileTypeSubtree left behind by some earlier, already-committed attempt is by
+// definition pre-existing, so it lands in presentBefore and is skipped. Removing such a blob safely
+// needs write tracking, which is what the catchup helper (removeCatchupSubtreeFiles) has and this
+// path does not.
 //
 // DELETION IS BOUNDED BY PRE-EXISTENCE. presentBefore is the snapshot subtreeToCheckPresentBefore
 // took before this attempt handed the body to CheckBlockSubtrees; every hash in it is skipped. That
 // is the same freshness rule the catch-up twin (removeCatchupSubtreeFiles) applies, reached by an
-// equivalence rather than by tracking writes: CheckBlockSubtrees' own fetch gate is the identical
-// local-file lookup (findLocalSubtreeFile), so if either FileTypeSubtreeToCheck or FileTypeSubtree
-// already existed for a hash it takes the local branch and writes nothing. "Absent locally when this
-// attempt started" is therefore exactly "possibly written by this attempt".
+// equivalence rather than by tracking writes. CheckBlockSubtrees' missing-subtree gate keys on
+// Exists(FileTypeSubtree) alone; a hash it reports present is never handed to the fetch branch, so
+// nothing is written for it. The snapshot probes BOTH file types, which is strictly the more
+// conservative side of that gate: a hash carrying only FileTypeSubtree is recorded as pre-existing
+// and skipped even though the gate would also have written nothing for it. "Absent under both when
+// this attempt started" is therefore a subset of "possibly written by this attempt".
 //
 // This closes the attack the deletion previously allowed: a doctored body replaying an honest header
 // could name the subtree hashes of a block being validated concurrently and delete its blobs, and on
@@ -3056,6 +3093,20 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	u.logger.Infof("[ReValidateBlock][%s] validating %d subtrees", blockData.block.Hash().String(), len(blockData.block.Subtrees))
 
 	if err = u.validateBlockSubtrees(ctx, blockData.block, "", blockData.baseURL); err != nil {
+		// A corrupt verdict raised INSIDE subtree validation must still reach the invalidate decision
+		// (bitcoin-sv/teranode#4692). This early return previously skipped it, so an optimistically-added
+		// block whose retry failed corrupt here stayed on-chain unvalidated once the bounded retries
+		// exhausted — the silently-accepted corrupt tip the flag exists to prevent. The condition is
+		// IDENTICAL BY CONSTRUCTION to invalidateCorruptOnChain on the block.Valid branch below; see the
+		// reasoning there for why optimisticallyAdded is the only licence to invalidate on a corrupt
+		// verdict, and why it can never be set once block.Valid has already succeeded. When the flag is
+		// false, behaviour is unchanged: the corrupt verdict returns unwrapped and no hash is poisoned.
+		if errors.IsBlockCorrupt(err) && blockData.optimisticallyAdded {
+			if _, invalidateBlockErr := u.blockchainClient.InvalidateBlock(ctx, blockData.block.Header.Hash()); invalidateBlockErr != nil {
+				u.logger.Errorf("[ReValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", blockData.block.Hash().String(), invalidateBlockErr)
+			}
+		}
+
 		return err
 	}
 

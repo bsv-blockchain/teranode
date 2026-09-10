@@ -498,9 +498,21 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 	// strike, so the strike is reserved for a well-formed node list that hashes to the wrong root
 	// (bitcoin-sv/teranode#4692). subtreevalidation guards the same case on its own fetch branch via
 	// validateSubtreeLeafCount.
+	//
+	// Marked cache-bypass retryable: a truncated body is the issue-1368 signature — a caching layer in
+	// front of the peer replaying a failed or aborted on-demand generation as a 200. Without the marker
+	// no peer behind that cache can serve this subtree for the whole TTL. The marker only sets data, so
+	// the ProcessingError class and the no-strike decision above are untouched.
+	//
+	// It does two things, not one. It buys one retry of this same peer with a cache-busting URL, and it
+	// DEFERS the peer-failure charge to that retry: tryPeerForSubtree takes the retryable branch, so the
+	// first attempt's recordCatchupPeerFailure is skipped and only a failing bypass records one. A peer
+	// that stays broken is therefore still charged, exactly once; a peer whose cache-busted response is
+	// honest is not charged at all, which is the correct attribution because the fault was the cache's.
+	// The error the caller sees is the bypass attempt's, not this one.
 	if len(subtreeNodeBytes)%chainhash.HashSize != 0 {
-		return nil, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] peer %s served %d bytes for subtree %s, not a whole number of %d-byte node hashes",
-			peerID, len(subtreeNodeBytes), subtreeHash.String(), chainhash.HashSize)
+		return nil, markCacheBypassRetryable(errors.NewProcessingError("[catchup:fetchAndStoreSubtree] peer %s served %d bytes for subtree %s, not a whole number of %d-byte node hashes",
+			peerID, len(subtreeNodeBytes), subtreeHash.String(), chainhash.HashSize))
 	}
 
 	// in the subtree validation, we only use the hashes of the FileTypeSubtreeToCheck, which is what is returned from the peer
@@ -561,17 +573,28 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 			computed = root.String()
 		}
 
-		// The one place the attribution is unambiguous: these bytes came from this peer, under this
-		// hash, and they do not match it. Strike here rather than letting the whole-body merkle
-		// mismatch land on the primary later. penalizeCorruptBlockPeer already returns early for a
-		// nil p2pClient, an empty peerID and a legacy-namespaced peerID, so no further guard is
-		// needed; the u.blockValidation nil check is, because several get_blocks tests construct a
-		// bare Server.
-		if u.blockValidation != nil {
+		// Strike ONLY once the cache explanation has been eliminated (bitcoin-sv/teranode#4692). With a
+		// caching layer interposed, "these bytes do not match this hash" is a claim about the cache, not
+		// about the peer: a poisoned non-empty wrong-root generation replayed for the whole TTL would
+		// otherwise charge every peer behind that cache. bypassCache is true only on the cache-busted
+		// retry tryPeerForSubtree issues after the marker below, so the sequence is: attempt 1 mismatch,
+		// no strike, marker set -> retry with cache bypass -> attempt 2 mismatch, strike. This can only
+		// under-strike, never over-strike, which is the safe direction here — excluding a
+		// possibly-sole-source honest peer is the self-isolation this work exists to prevent. A
+		// genuinely malicious peer is still struck, one request later.
+		//
+		// penalizeCorruptBlockPeer already returns early for a nil p2pClient, an empty peerID and a
+		// legacy-namespaced peerID, so no further guard is needed; the u.blockValidation nil check is,
+		// because several get_blocks tests construct a bare Server.
+		if bypassCache && u.blockValidation != nil {
 			u.blockValidation.penalizeCorruptBlockPeer(ctx, peerID, block, "subtree root hash mismatch on catchup fetch")
 		}
 
-		return nil, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] peer %s served subtree bytes for %s that hash to %s", peerID, subtreeHash.String(), computed)
+		// Marked cache-bypass retryable so the bypass above is actually reached. The marker only sets
+		// data: the ProcessingError class is deliberate (a corrupt code here would hit
+		// reportCatchupFailureForError's corrupt exemption) and is preserved, as is non-IsLocalError so
+		// tryPeerForSubtree's peer-failure charge still lands.
+		return nil, markCacheBypassRetryable(errors.NewProcessingError("[catchup:fetchAndStoreSubtree] peer %s served subtree bytes for %s that hash to %s", peerID, subtreeHash.String(), computed))
 	}
 
 	subtreeBytes, err := subtree.Serialize()
@@ -779,10 +802,18 @@ func (u *Server) fetchSubtreeAndDataFromPeer(ctx context.Context, block *model.B
 
 // tryPeerForSubtree fetches subtree + subtreeData from one peer, retrying that same
 // peer exactly once with a cache-busting URL when its response looked poisoned.
-// "Poisoned" is what carries the cache-bypass marker, and that is narrower than "any
-// 200 with a short body": a subtree_data body that is empty or cannot satisfy the
-// subtree, or a strictly empty /subtree body. A truncated-but-nonzero /subtree body
-// is not covered — it fails in the subtree parser on a different, unmarked path.
+// "Poisoned" is what carries the cache-bypass marker: a subtree_data body that is
+// empty or cannot satisfy the subtree, and on the /subtree side an empty body, a
+// truncated-but-nonzero body (not a whole number of node hashes) or a well-formed
+// node list that hashes to the wrong root — all three of the last group marked at
+// their rejection sites in fetchAndStoreSubtree (bitcoin-sv/teranode#4692).
+//
+// The two resources differ in what the retry actually does. A failed subtree_data
+// attempt leaves the already-stored subtree file in place, so the retry's /subtree
+// fetch is a local load and only subtree_data crosses the wire. A failed /subtree
+// attempt stores NOTHING — both rejection sites return before the Set, and the
+// local short-circuit at the top of fetchAndStoreSubtree does not consult
+// bypassCache — so the retry genuinely re-issues /subtree/<hash>?cachebust=… .
 //
 // A peer whose proxy cache is replaying a failed generation is the issue-1368 stall:
 // without the bypass no peer behind that cache can serve the subtree for the whole

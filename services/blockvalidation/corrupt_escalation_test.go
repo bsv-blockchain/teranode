@@ -517,6 +517,90 @@ func TestReValidateBlock_CorruptConvergesOnlyWhenOptimisticallyAdded(t *testing.
 	})
 }
 
+// corruptSubtreeValidationClient replaces the harness's pass-through CheckBlockSubtrees stub with one
+// that returns ERR_BLOCK_CORRUPT, so subtree validation — not the later block.Valid merkle check — is
+// the first detector. That is the only way to exercise reValidateBlock's EARLY RETURN from
+// validateBlockSubtrees (bitcoin-sv/teranode#4692).
+func corruptSubtreeValidationClient(t *testing.T, bv *BlockValidation) {
+	t.Helper()
+
+	corruptClient := &subtreevalidation.MockSubtreeValidation{}
+	corruptClient.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(errors.NewBlockCorruptError("[ValidateSubtreeInternal] duplicate transaction in subtree at index 1"))
+	bv.subtreeValidationClient = corruptClient
+}
+
+// TestReValidateBlock_CorruptInSubtreeValidationConvergesWhenOptimisticallyAdded covers the second
+// half of the corrupt→invalidate convergence (bitcoin-sv/teranode#4692).
+//
+// reValidateBlock returned the validateBlockSubtrees error immediately, BEFORE the
+// invalidateCorruptOnChain gate that sits in the block.Valid failure branch below it. So an
+// optimistically-added block whose retry failed corrupt INSIDE subtree validation — the
+// CVE-2012-2459 duplicate case, which ValidateSubtreeInternal detects and which never reaches
+// block.Valid at all — never reached InvalidateBlock and stayed on-chain unvalidated once the bounded
+// retries exhausted. That is the silently-accepted corrupt tip the flag exists to prevent.
+//
+// This is the sibling of TestReValidateBlock_CorruptConvergesOnlyWhenOptimisticallyAdded, which
+// covers the same convergence when block.Valid is the detector. Both halves matter because the two
+// corrupt sources are reached on different branches of the same function.
+//
+// Only reachable in production under the peer-blocks opt-in (OptimisticMiningPeerBlocks, default
+// false), which is why this was a latent hole rather than a live one.
+func TestReValidateBlock_CorruptInSubtreeValidationConvergesWhenOptimisticallyAdded(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	bv, block, invalidateCalled := newCorruptRevalidationHarness(ctx, t, true)
+	defer bv.StopCaches()
+
+	corruptSubtreeValidationClient(t, bv)
+
+	err := bv.reValidateBlock(revalidateBlockData{block: block, baseURL: "test", optimisticallyAdded: true})
+	require.Error(t, err)
+	require.True(t, errors.IsBlockCorrupt(err), "the retry must still see a corrupt body, got: %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "a corrupt verdict must never be returned as invalid")
+
+	select {
+	case <-invalidateCalled:
+		// good: the early return no longer skips the invalidate decision
+	default:
+		t.Fatal("an optimistically-added block whose retry fails corrupt inside subtree validation must be invalidated, otherwise it stays on-chain unvalidated")
+	}
+}
+
+// TestReValidateBlock_CorruptInSubtreeValidationNotInvalidatedWhenNotOptimisticallyAdded is the
+// never-poison direction of the gate added above (bitcoin-sv/teranode#4692). The new invalidate is
+// conditioned on optimisticallyAdded exactly as the block.Valid gate below it is, so with the flag
+// false — every ordinary path, every retry, every already-validated block — a corrupt verdict from
+// subtree validation must still return unwrapped and leave the hash untouched. Poisoning here would
+// condemn a hash on the strength of a body we hold no bound evidence against.
+func TestReValidateBlock_CorruptInSubtreeValidationNotInvalidatedWhenNotOptimisticallyAdded(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// The block IS in the store, so this also pins that the gate keys on the flag rather than on
+	// GetBlockExists.
+	bv, block, invalidateCalled := newCorruptRevalidationHarness(ctx, t, true)
+	defer bv.StopCaches()
+
+	corruptSubtreeValidationClient(t, bv)
+
+	err := bv.reValidateBlock(revalidateBlockData{block: block, baseURL: "test", optimisticallyAdded: false})
+	require.Error(t, err)
+	require.True(t, errors.IsBlockCorrupt(err), "got: %v", err)
+
+	select {
+	case <-invalidateCalled:
+		t.Fatal("a corrupt subtree body that was not optimistically added must NOT be invalidated — that would poison a hash we hold no bound evidence against")
+	default:
+		// good: the flag gate held even though the block is on chain
+	}
+}
+
 // TestReValidateBlock_WrongFileUnderRightKeyIsStorageNotCorrupt pins the READ-SIDE leg of the
 // invariant that licenses the optimisticallyAdded flag (bitcoin-sv/teranode#4692): a corrupt verdict on
 // a flagged retry is attributable to the received body, because local state cannot produce one. The

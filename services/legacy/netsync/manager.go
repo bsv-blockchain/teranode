@@ -1994,13 +1994,32 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 				// peer. requestBlockDirect also puts the hash back into both request maps, which this
 				// branch cleared above and which handleBlockMsg's unrequested-block guard reads.
 				//
-				// Issued in both modes: outside headers-first it is redundant with the getblocks below
-				// but harmless, because the inv route's getdata loop skips a hash already present in
-				// sm.requestedBlocks, which this has just set. Re-requesting from the SAME peer is
-				// deliberate — a body can be corrupted in transit by an honest relay — and is bounded
-				// by the per-(hash, peerID) corrupt cap above, after which that peer's deliveries are
-				// dropped for the cooldown window and recovery falls back to sync-peer rotation.
-				sm.requestBlockDirect(peer, state, bmsg.blockHash)
+				// SKIPPED once this peer has reached the cap for this hash (bitcoin-sv/teranode#4692).
+				// The gate above would drop that peer's next delivery of this hash anyway, but only
+				// AFTER the full block body had crossed the wire — the exact waste that gate's own
+				// comment says it avoids by not re-requesting. Gated on corruptBlockAttemptsExhausted
+				// rather than on a re-derived "attempts < MaxCorruptAttemptsPerBlock", so this decision
+				// and that gate agree BY CONSTRUCTION: the predicate reads the counter
+				// recordCorruptBlockAttempt just wrote, and it already handles the cases the arithmetic
+				// gets wrong — a cap of <= 0 means DISABLED, where "attempts < 0" would wrongly suppress
+				// the re-request on every corrupt body, and a nil map/settings fixture. Both fall
+				// through to "re-request", which is the pre-existing behaviour.
+				//
+				// Below the cap, re-requesting from the SAME peer is deliberate — a body can be
+				// corrupted in transit by an honest relay — and the de-duplication argument holds:
+				// outside headers-first this getdata is redundant with the getblocks below but
+				// harmless, because the inv route's getdata loop skips a hash already present in
+				// sm.requestedBlocks, which requestBlockDirect has just set.
+				//
+				// AT the cap that argument no longer applies, and the residual is stated rather than
+				// glossed: the hash is NOT in sm.requestedBlocks, so outside headers-first mode the inv
+				// route will not skip it and may still pull one body, which the gate above then drops.
+				// In headers-first mode the waste is eliminated, because processInvMsg discards invs
+				// while headersFirstMode is set so the getblocks can never become a getdata. Recovery
+				// at the cap is the cooldown window lapsing or sync-peer rotation.
+				if !sm.corruptBlockAttemptsExhausted(bmsg.blockHash, bmsg.peer.Addr()) {
+					sm.requestBlockDirect(peer, state, bmsg.blockHash)
+				}
 
 				// Keep the getblocks as well: in the legacy sync protocol it doubles as the
 				// batch-continuation signal (see requestMissingBlocks), which a getdata does not carry.

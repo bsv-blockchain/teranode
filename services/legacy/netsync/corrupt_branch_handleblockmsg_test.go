@@ -123,35 +123,24 @@ func TestHandleBlockMsg_CorruptBody_NotMarkedFailed(t *testing.T) {
 	blockchainClient.AssertCalled(t, "GetBlockLocator", mock.Anything, mock.Anything, mock.Anything)
 }
 
-// TestHandleBlockMsg_CorruptBody_HeadersFirst_ReRequestsBlock pins the recovery half of the corrupt
-// branch in the mode that actually needs it (bitcoin-sv/teranode#4692). In headers-first mode the
-// getblocks re-request is inert: the peer answers with an inv, and processInvMsg discards invs while
-// headersFirstMode is set, so the hash never reaches state.requestQueue and no getdata is ever
-// issued. The header-block pipeline cannot recover it either — fetchHeaderBlocks walks forward from
-// sm.startHeader, and this block's header node was removed from headerList before validation ran.
-//
-// So the branch must issue a DIRECT getdata, and must put the hash back into both request maps: the
-// branch cleared them before validation, handleBlockMsg disconnects a peer that delivers a block it
-// has no record of requesting, and BlockRequested reads the per-peer map.
-//
-// This is ALSO the control for the refill on this branch — the one thing the sibling corrupt-cap
-// gate must NOT do (bitcoin-sv/teranode#4692). Refilling is correct here precisely because this branch
-// re-arms the failing hash in the same breath, so the descendants the refill requests have a parent
-// on the way; the cap gate re-arms nothing, which is why its refill was removed. The fixture
-// therefore carries a pipeline the refill can genuinely top up: pending headerNode entries, a
-// startHeader pointing at them, this peer stored as the sync peer, and a header lookup that reports
-// those pending hashes as not held.
-//
-// The assertion is the outcome, not the call: a connected peer pair, and the remote end's OnGetData
-// listener records every block hash that actually arrived on the wire, so the two legs are pinned
-// independently — the dropped hash comes only from requestBlockDirect, a PENDING header hash only
-// from the refill's fetchHeaderBlocks.
-//
-// Mutation proof, two of them: replacing sm.requestBlockDirect with the bare sm.requestMissingBlocks
-// that preceded it leaves no getdata for the dropped hash and both maps empty; deleting this
-// branch's refillHeaderBlockPipeline call leaves no getdata for the pending header hash.
-func TestHandleBlockMsg_CorruptBody_HeadersFirst_ReRequestsBlock(t *testing.T) {
-	initPrometheusMetrics()
+// corruptReRequestScenario is the shared fixture for the three headers-first corrupt-drop cases that
+// differ ONLY in the corrupt cap (bitcoin-sv/teranode#4692): below the cap the dropped hash is
+// re-requested directly, at the cap it is not, and with the cap disabled it is. Extracted rather than
+// copied so the three cannot drift apart.
+type corruptReRequestScenario struct {
+	sm            *SyncManager
+	state         *peerSyncState
+	blockHash     chainhash.Hash
+	pendingHashes [2]chainhash.Hash
+	peerAddr      string
+	err           error
+	sawGetData    func(chainhash.Hash) bool
+}
+
+// runCorruptReRequestScenario drives one corrupt delivery through handleBlockMsg in headers-first
+// mode with maxCorruptAttempts as the cap, and returns what the wire and the request maps saw.
+func runCorruptReRequestScenario(t *testing.T, maxCorruptAttempts int) corruptReRequestScenario {
+	t.Helper()
 
 	const height = int32(500)
 
@@ -243,7 +232,7 @@ func TestHandleBlockMsg_CorruptBody_HeadersFirst_ReRequestsBlock(t *testing.T) {
 	// and reaches CheckMerkleRoot.
 	tSettings, params := newOutpointOnlySettings(t, true, true, 1000)
 	tSettings.BlockValidation.LegacyUnifiedBelowCheckpoint = true
-	tSettings.BlockValidation.MaxCorruptAttemptsPerBlock = 1 // one corrupt record reaches the cap
+	tSettings.BlockValidation.MaxCorruptAttemptsPerBlock = maxCorruptAttempts
 	sm.settings = tSettings
 	sm.chainParams = params
 	sm.subtreeStore = memory.New()
@@ -254,9 +243,9 @@ func TestHandleBlockMsg_CorruptBody_HeadersFirst_ReRequestsBlock(t *testing.T) {
 
 	require.True(t, sm.legacyUnified(uint32(height)), "unified route must be ON for this fixture")
 
-	// Headers-first is the whole point of this test. The header list carries PENDING nodes and
+	// Headers-first is the whole point of these cases. The header list carries PENDING nodes and
 	// startHeader points at the first of them, so the refill can genuinely reach fetchHeaderBlocks —
-	// without that the refill is a no-op and this test would prove nothing about it.
+	// without that the refill is a no-op and the refill leg would prove nothing.
 	sm.headersFirstMode.Store(true)
 	sm.headerList = list.New()
 	for i := range pendingHashes {
@@ -270,18 +259,129 @@ func TestHandleBlockMsg_CorruptBody_HeadersFirst_ReRequestsBlock(t *testing.T) {
 	require.True(t, ok)
 
 	err = sm.handleBlockMsg(&blockQueueMsg{block: msgBlock, blockHash: blockHash, blockHeight: height, peer: p})
-	require.Error(t, err)
-	require.True(t, errors.IsBlockCorrupt(err))
 
-	require.True(t, WaitUntil(func() bool { return sawGetData(blockHash) }, 2*time.Second),
+	return corruptReRequestScenario{
+		sm:            sm,
+		state:         state,
+		blockHash:     blockHash,
+		pendingHashes: pendingHashes,
+		peerAddr:      p.Addr(),
+		err:           err,
+		sawGetData:    sawGetData,
+	}
+}
+
+// TestHandleBlockMsg_CorruptBody_HeadersFirst_ReRequestsBlock pins the recovery half of the corrupt
+// branch in the mode that actually needs it (bitcoin-sv/teranode#4692). In headers-first mode the
+// getblocks re-request is inert: the peer answers with an inv, and processInvMsg discards invs while
+// headersFirstMode is set, so the hash never reaches state.requestQueue and no getdata is ever
+// issued. The header-block pipeline cannot recover it either — fetchHeaderBlocks walks forward from
+// sm.startHeader, and this block's header node was removed from headerList before validation ran.
+//
+// So the branch must issue a DIRECT getdata, and must put the hash back into both request maps: the
+// branch cleared them before validation, handleBlockMsg disconnects a peer that delivers a block it
+// has no record of requesting, and BlockRequested reads the per-peer map.
+//
+// This is ALSO the control for the refill on this branch — the one thing the sibling corrupt-cap
+// gate must NOT do (bitcoin-sv/teranode#4692). Refilling is correct here precisely because this branch
+// re-arms the failing hash in the same breath, so the descendants the refill requests have a parent
+// on the way; the cap gate re-arms nothing, which is why its refill was removed. The fixture
+// therefore carries a pipeline the refill can genuinely top up: pending headerNode entries, a
+// startHeader pointing at them, this peer stored as the sync peer, and a header lookup that reports
+// those pending hashes as not held.
+//
+// The assertion is the outcome, not the call: a connected peer pair, and the remote end's OnGetData
+// listener records every block hash that actually arrived on the wire, so the two legs are pinned
+// independently — the dropped hash comes only from requestBlockDirect, a PENDING header hash only
+// from the refill's fetchHeaderBlocks.
+//
+// Mutation proof, two of them: replacing sm.requestBlockDirect with the bare sm.requestMissingBlocks
+// that preceded it leaves no getdata for the dropped hash and both maps empty; deleting this
+// branch's refillHeaderBlockPipeline call leaves no getdata for the pending header hash.
+func TestHandleBlockMsg_CorruptBody_HeadersFirst_ReRequestsBlock(t *testing.T) {
+	initPrometheusMetrics()
+
+	// Cap of 2, so this single corrupt delivery stays BELOW it and the direct re-request is expected.
+	// At the cap the re-request is deliberately suppressed — pinned by the sibling test below — so a
+	// cap of 1 here would exercise that gate instead of the re-request this test is about.
+	sc := runCorruptReRequestScenario(t, 2)
+
+	require.Error(t, sc.err)
+	require.True(t, errors.IsBlockCorrupt(sc.err))
+
+	require.True(t, WaitUntil(func() bool { return sc.sawGetData(sc.blockHash) }, 2*time.Second),
 		"a corrupt drop in headers-first mode must put a getdata for the same hash on the wire")
 
 	// The refill leg: a PENDING header hash, which only fetchHeaderBlocks can have requested.
-	require.True(t, WaitUntil(func() bool { return sawGetData(pendingHashes[0]) }, 2*time.Second),
+	require.True(t, WaitUntil(func() bool { return sc.sawGetData(sc.pendingHashes[0]) }, 2*time.Second),
 		"the corrupt branch must ALSO refill the header-block pipeline — it re-arms the dropped hash in the same breath, so its descendants have a parent on the way")
 
-	_, inGlobal := sm.requestedBlocks.Get(blockHash)
+	_, inGlobal := sc.sm.requestedBlocks.Get(sc.blockHash)
 	require.True(t, inGlobal, "sm.requestedBlocks must be re-armed, or the inv route would request the block twice")
-	_, inPeer := state.requestedBlocks.Get(blockHash)
+	_, inPeer := sc.state.requestedBlocks.Get(sc.blockHash)
 	require.True(t, inPeer, "state.requestedBlocks must be re-armed, or handleBlockMsg disconnects the peer that answers")
+}
+
+// TestHandleBlockMsg_CorruptBody_AtCap_DoesNotReRequestBlock pins the wasted-re-request fix
+// (bitcoin-sv/teranode#4692). On the corrupt attempt that REACHES the per-(hash, peerID) cap, the
+// direct re-request must be skipped: the gate at the top of handleBlockMsg would drop that peer's
+// next delivery of this hash anyway, but only after the whole block body had crossed the wire — the
+// exact waste that gate's own comment says it avoids by not re-requesting.
+//
+// The refill assertion is the control that makes the negative meaningful: the pipeline refill still
+// runs on this branch, so a PENDING header hash DOES reach the wire. Observing that first proves the
+// connection is live and the wait was long enough, so the absence of a getdata for the dropped hash
+// is a real absence rather than a race.
+//
+// Mutation proof: remove the corruptBlockAttemptsExhausted guard around requestBlockDirect and the
+// dropped hash appears on the wire, reddening the negative assertion.
+func TestHandleBlockMsg_CorruptBody_AtCap_DoesNotReRequestBlock(t *testing.T) {
+	initPrometheusMetrics()
+
+	// Cap of 1: this single corrupt delivery reaches it.
+	sc := runCorruptReRequestScenario(t, 1)
+
+	require.Error(t, sc.err)
+	require.True(t, errors.IsBlockCorrupt(sc.err), "the corrupt verdict must still propagate, got: %v", sc.err)
+	require.True(t, sc.sm.corruptBlockAttemptsExhausted(sc.blockHash, sc.peerAddr),
+		"the fixture must actually reach the cap, or this test proves nothing")
+
+	// Control: the refill still fires, so the wire is live and the wait below is long enough.
+	require.True(t, WaitUntil(func() bool { return sc.sawGetData(sc.pendingHashes[0]) }, 2*time.Second),
+		"the pipeline refill must still run at the cap — only the direct re-request of the dropped hash is suppressed")
+
+	require.False(t, sc.sawGetData(sc.blockHash),
+		"at the cap the dropped hash must NOT be re-requested: the gate would discard that delivery only after the full body crossed the wire")
+
+	// The request maps are left clear, which is the corollary: nothing is expected from this peer for
+	// this hash until the cooldown window lapses or the sync peer rotates.
+	_, inGlobal := sc.sm.requestedBlocks.Get(sc.blockHash)
+	require.False(t, inGlobal, "sm.requestedBlocks must not be re-armed for a hash we deliberately did not request")
+	_, inPeer := sc.state.requestedBlocks.Get(sc.blockHash)
+	require.False(t, inPeer, "state.requestedBlocks must not be re-armed for a hash we deliberately did not request")
+
+	// Unchanged by the gate: a corrupt body is still never marked failed, so its descendants are not
+	// suppressed as a NOT_FOUND cascade.
+	_, failed := sc.sm.recentlyFailedBlocks.Get(sc.blockHash)
+	require.False(t, failed, "a corrupt body must NOT be marked recentlyFailed even at the cap")
+}
+
+// TestHandleBlockMsg_CorruptBody_CapDisabled_StillReRequestsBlock is the mutation-proof against
+// implementing the gate as `attempts < MaxCorruptAttemptsPerBlock` (bitcoin-sv/teranode#4692). A cap
+// of <= 0 means DISABLED, so with maxAttempts 0 that arithmetic reads `1 < 0` — false — and would
+// suppress the re-request on EVERY corrupt body on a node that deliberately turned the cap off.
+// Gating on corruptBlockAttemptsExhausted instead returns false when the cap is disabled, so the
+// re-request still fires, which is the pre-existing behaviour.
+func TestHandleBlockMsg_CorruptBody_CapDisabled_StillReRequestsBlock(t *testing.T) {
+	initPrometheusMetrics()
+
+	sc := runCorruptReRequestScenario(t, 0)
+
+	require.Error(t, sc.err)
+	require.True(t, errors.IsBlockCorrupt(sc.err))
+	require.False(t, sc.sm.corruptBlockAttemptsExhausted(sc.blockHash, sc.peerAddr),
+		"a cap of 0 disables the bound, so no (hash, peer) can ever be exhausted")
+
+	require.True(t, WaitUntil(func() bool { return sc.sawGetData(sc.blockHash) }, 2*time.Second),
+		"with the cap disabled the dropped hash must still be re-requested")
 }
