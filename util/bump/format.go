@@ -81,18 +81,17 @@ func hashToDisplayHex(h chainhash.Hash) string {
 // This function takes the existing Teranode merkle proof structure and converts
 // it to the standardized BUMP format for compatibility with BSV ecosystem tools.
 //
-// Transaction proofs (from ConstructMerkleProof) convert to a complete BUMP. Subtree
-// proofs (from ConstructSubtreeMerkleProof, carrying the TxIndexInSubtree == -1
-// sentinel) do not: their offsets are correct, but the BUMP is sibling-only and a
-// BRC-74 verifier cannot fold it. Two things are missing, and callers should not
-// expect either from this function. The proof leaves TxID as the zero hash, so no
-// level-0 leaf node is emitted and go-bc's CalculateRootGivenTxid reports that the
-// BUMP does not contain the txid; and its block path is built over raw stored subtree
-// roots with no coinbase-placeholder substitution, so it would not reconcile to the
-// header's merkle root even with a leaf present. See issue 1500.
+// Only transaction proofs can be converted: BRC-74 leaves are transaction IDs.
+// Subtree-only proofs are rejected because an interior subtree root cannot be
+// represented as a transaction leaf, and its stored root may contain the coinbase
+// placeholder rather than the real coinbase hash.
 func ConvertToBUMP(proof *merkleproof.MerkleProof) (*Format, error) {
 	if proof == nil {
 		return nil, errors.NewInvalidArgumentError("proof cannot be nil")
+	}
+
+	if proof.TxIndexInSubtree == -1 {
+		return nil, errors.NewInvalidArgumentError("BUMP proofs require a transaction ID; subtree-only proofs are unsupported")
 	}
 
 	bump := &Format{
@@ -118,15 +117,7 @@ func ConvertToBUMP(proof *merkleproof.MerkleProof) (*Format, error) {
 		return nil, errors.NewInvalidArgumentError("proof has %d levels, beyond the %d a leaf offset can address", totalLevels, maxProofLevels)
 	}
 
-	// A subtree proof — a proof of a subtree root rather than of a transaction — carries the
-	// sentinel TxIndexInSubtree == -1 with an empty SubtreeProof (see ConstructSubtreeMerkleProof).
-	// The leaf being proven is then the subtree root itself: index 0 of its zero-level segment.
-	// The old 32-bit code folded the sentinel to 0xFFFFFFFF and served garbage offsets for every
-	// subtree-proof BUMP.
 	txIndex := proof.TxIndexInSubtree
-	if txIndex == -1 && subtreeLevels == 0 {
-		txIndex = 0
-	}
 
 	// The tx index addresses a leaf within its subtree and the subtree index addresses a
 	// subtree within the block, so each must fit in its segment's bit width — otherwise the
