@@ -1041,7 +1041,12 @@ The `isbanned` command checks if a specific network address is currently banned 
 
 ### 3.19. Command: Reassign
 
-The `reassign` command allows administrators to change the ownership of a specific UTXO by reassigning it to a new Bitcoin address.
+The `reassign` command updates a frozen UTXO's commitment for a destination address.
+
+**Known regression:** do not reassign to a different owner. The RPC can return
+`true` while leaving the output unspendable by both owners, even after maturity.
+See the [reassignment limitation](alert.md#24-utxo-reassignment) and
+[issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).
 
 #### Function Overview
 

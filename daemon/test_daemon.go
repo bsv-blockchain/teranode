@@ -110,7 +110,7 @@ type TestOptions struct {
 	StartDaemonDependencies bool
 	FSMState                blockchain.FSMStateType
 	// UTXOStoreType specifies which UTXO store backend to use ("aerospike", "postgres")
-	// If empty, defaults to "aerospike"
+	// If empty, keeps the configured store (SQLite with SystemTestSettings).
 	UTXOStoreType string
 	// ContainerManager allows reusing an existing container manager from a previous TestDaemon.
 	// When set, the daemon will use the existing container instead of creating a new one.
