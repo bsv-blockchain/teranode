@@ -627,6 +627,20 @@ func (c *Client) notifyAllBatchItems(batch []*batchItem, metadata []byte, err er
 	}
 }
 
+// maxHTTPFallbackErrorBodyBytes bounds the raw prefix retained for diagnostics.
+const maxHTTPFallbackErrorBodyBytes = 2 * 1024
+
+// readHTTPFallbackErrorBody leaves body ownership with the caller. One extra
+// byte distinguishes a complete prefix from a truncated response.
+func readHTTPFallbackErrorBody(body io.Reader) ([]byte, bool) {
+	bodyBytes, _ := io.ReadAll(io.LimitReader(body, maxHTTPFallbackErrorBodyBytes+1))
+	if len(bodyBytes) > maxHTTPFallbackErrorBodyBytes {
+		return bodyBytes[:maxHTTPFallbackErrorBodyBytes], true
+	}
+
+	return bodyBytes, false
+}
+
 // validateTransactionViaHTTP sends a transaction to the validator's HTTP endpoint
 // This is used as a fallback when gRPC message size limits are exceeded.
 //
@@ -689,16 +703,25 @@ func (c *Client) validateTransactionViaHTTP(ctx context.Context, tx *bt.Tx, bloc
 	// validator's internal error chain verbatim, and callers that classify on the
 	// error code read a permanent rejection as something worth retrying.
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-
 		verdict := errors.HTTPErrorFrom(resp.Header)
+
+		// The body is an opaque diagnostic: keep a bounded prefix so a large error
+		// response is never buffered or formatted in full, and quote it so control
+		// bytes cannot forge extra log lines.
+		body, truncated := readHTTPFallbackErrorBody(resp.Body)
+
+		diagnostic := fmt.Sprintf("%q", string(body))
+		if truncated {
+			diagnostic += " (truncated)"
+		}
+
 		if verdict == nil {
 			return errors.NewServiceError("[ValidateWithOptions][%s] validator /tx endpoint returned non-OK status: %d, body: %s",
-				tx.TxID(), resp.StatusCode, string(body))
+				tx.TxID(), resp.StatusCode, diagnostic)
 		}
 
 		c.logger.Warnf("[ValidateWithOptions][%s] validator /tx endpoint rejected transaction: status=%d body=%s",
-			tx.TxID(), resp.StatusCode, string(body))
+			tx.TxID(), resp.StatusCode, diagnostic)
 
 		return errors.New(verdict.Code(), "[ValidateWithOptions][%s] %s", tx.TxID(), verdict.Message())
 	}
