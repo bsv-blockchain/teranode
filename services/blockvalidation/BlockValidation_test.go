@@ -1789,7 +1789,15 @@ func Test_validateBlockSubtrees(t *testing.T) {
 	})
 }
 
-func TestBlockValidation_InvalidCoinbaseScriptLength(t *testing.T) {
+// TestBlockValidation_UnboundCoinbaseLengthTamperBreaksMerkleBinding tampers the coinbase's
+// unlocking script AFTER the block was built around the original coinbase txid, which changes the
+// coinbase txid and so breaks the merkle binding the header already committed to. The body never
+// reaches the merkle-bound branch of block.Valid's coinbase-length check (step 4b): CheckMerkleRoot
+// (step 8) fails first, on the same unbound-body principle, and the block stays corrupt with
+// nothing persisted (bitcoin-sv/teranode#4692). The bound case — a genuinely merkle-matching body
+// whose coinbase length is bad — is covered separately at the service level in
+// TestValidateBlock_CoinbaseLengthBinding_Service, where it is condemned invalid.
+func TestBlockValidation_UnboundCoinbaseLengthTamperBreaksMerkleBinding(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1804,13 +1812,20 @@ func TestBlockValidation_InvalidCoinbaseScriptLength(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
-	// Create a valid block, then tamper with coinbase script length
+	// Create a valid block, then tamper with coinbase script length after the fact — this changes
+	// the coinbase txid, which the header's merkle root no longer commits to.
 	block := createValidBlock(t, tSettings, txMetaStore, subtreeValidationClient, blockchainClient, txStore, subtreeStore)
 	block.CoinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x01}) // Too short
 
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 	err = blockValidation.ValidateBlock(context.Background(), block, "test")
-	require.ErrorContains(t, err, "BLOCK_INVALID")
+	require.ErrorContains(t, err, "BLOCK_CORRUPT")
+	require.True(t, errors.IsBlockCorrupt(err))
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
+
+	exists, existsErr := blockchainClient.GetBlockExists(context.Background(), block.Header.Hash())
+	require.NoError(t, existsErr)
+	require.False(t, exists, "a corrupt (unbound) block must never be persisted")
 }
 
 func createValidBlock(t *testing.T, tSettings *settings.Settings, txMetaStore utxostore.Store, subtreeValidationClient subtreevalidation.Interface, blockchainClient blockchain.ClientI, txStore blob.Store, subtreeStore blob.Store) *model.Block {
@@ -3702,13 +3717,21 @@ func TestBlockValidation_RevalidateBlockChan_Retries(t *testing.T) {
 	mu.Unlock()
 }
 
-func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
+// TestBlockValidation_OptimisticMining_CorruptBody_InvalidateRoute proves the invalidate-route
+// tradeoff on the opt-in optimistic-background path (bitcoin-sv/teranode#4692): a corrupt body that
+// was already AddBlock'd BEFORE block.Valid ran must NOT be left silently accepted. On this one
+// opt-in path (both optimistic flags set) it takes the invalidate route — InvalidateBlock is
+// called directly (poison-loudly, never silently accept) until the block.Valid integrity-floor
+// split lands and removes this path.
+func TestBlockValidation_OptimisticMining_CorruptBody_InvalidateRoute(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	tSettings := test.CreateBaseTestSettings(t)
+	// Opt in to optimistic mining on peer paths so the add-before-validate path runs.
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
@@ -3786,12 +3809,15 @@ func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
 	err = bv.ValidateBlock(ctx, block, "test", false)
 	require.NoError(t, err)
 
-	// Wait for the goroutine to call InvalidateBlock
+	// bitcoin-sv/teranode#4692: this block fails CheckMerkleRoot (its merkle root was zeroed), a
+	// tier-2 CORRUPT body. On the opt-in optimistic-background path the body was already AddBlock'd
+	// before block.Valid ran, so leaving it accepted would be a silently-accepted corrupt tip. The
+	// guard therefore takes the invalidate route: InvalidateBlock is called.
 	select {
 	case <-invalidateBlockCalled:
-		// Successfully received signal that InvalidateBlock was called
+		// correct: the optimistic-background corrupt body takes the invalidate route
 	case <-time.After(2 * time.Second):
-		t.Fatal("InvalidateBlock should be called in background goroutine")
+		t.Fatal("corrupt body on the opt-in optimistic-background path must take the invalidate route (bitcoin-sv/teranode#4692): InvalidateBlock was not called")
 	}
 }
 

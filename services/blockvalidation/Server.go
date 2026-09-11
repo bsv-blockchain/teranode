@@ -25,10 +25,12 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/blockvalidation_api"
@@ -205,9 +207,40 @@ type Server struct {
 
 	// ttlCachesStarted records that Init reached the point where it starts the
 	// ttlcache eviction loops (processBlockNotify, catchupAlternatives,
-	// blockCatchupAttempts, peerMaliciousCache), so Stop only calls
+	// blockCatchupAttempts, peerMaliciousCache, blockCorruptAttempts,
+	// blockPolicyDeclineAttempts), so Stop only calls
 	// ttlcache.Stop - a blocking send to that loop - when a receiver exists.
 	ttlCachesStarted atomic.Bool
+
+	// blockCorruptAttempts counts corrupt-body failures per (block hash, serving peerID)
+	// within a fixed cooldown window (bitcoin-sv/teranode#4692). Once a (hash, peerID)
+	// reaches MaxCorruptAttemptsPerBlock that peer's next RUNNING delivery of the hash is
+	// dropped before the expensive download/subtree-prepare/merkle work until the window
+	// expires. It is ban-score-INDEPENDENT PER IDENTITY (holds even when p2pClient
+	// is nil or a single peer serves everything — an empty peerID degrades to one shared
+	// (hash, "") bucket, i.e. the hard per-hash bound for that deployment). Residual
+	// aggregate bound: worst-case per-hash corrupt re-downloads <= (concurrent distinct
+	// serving peers) x MaxCorruptAttemptsPerBlock per window; the distinct-peer count is
+	// bounded by legacy's connection controls (MaxPeers default 125, MaxPeersPerIP
+	// default 5), and a peer spreading corruption across hashes is banned by ban score. The
+	// corrupt path persists nothing (no invalid=true, no SetBlockExists, no AddBlock), so the
+	// (hash, peerID) is only rate-limited, never condemned; once the window lapses an honest
+	// body flows through and is accepted. Same fixed-window/no-touch-on-hit shape as
+	// blockCatchupAttempts so gate reads can never extend the window (no wedge). Bounded by
+	// corruptAttemptsMaxTracked so a pathological stream of distinct pairs cannot grow it
+	// without limit.
+	blockCorruptAttempts *ttlcache.Cache[blockAttemptKey, int]
+
+	// blockPolicyDeclineAttempts bounds repeat deliveries of a block this node declines on LOCAL
+	// POLICY (excessiveblocksize) rather than on evidence about the block
+	// (bitcoin-sv/teranode#4692). Deliberately separate from
+	// blockCorruptAttempts: a policy decline is not a corrupt body, it earns no ban score, and
+	// conflating the two would make every "corrupt" name, log line and metric on that path false.
+	// It reuses the corrupt cap's CONFIGURED VALUES (MaxCorruptAttemptsPerBlock /
+	// CorruptAttemptCooldown) so operators get no new knobs; the two mechanisms are independent
+	// budgets that happen to be sized the same. Same key type, fixed window and no-touch-on-hit
+	// semantics as the corrupt cap, for the same anti-wedge reason.
+	blockPolicyDeclineAttempts *ttlcache.Cache[blockAttemptKey, int]
 
 	// stats tracks operational metrics for monitoring and troubleshooting
 	stats *gocore.Stat
@@ -219,7 +252,7 @@ type Server struct {
 	// fetchSubtreeDataForBlockFn is the function used by blockWorker to fetch
 	// subtree data for a block. Production code always uses the real method;
 	// tests override this field before dispatching work to blockWorker.
-	fetchSubtreeDataForBlockFn func(ctx context.Context, block *model.Block, peerID, baseURL string) (map[string]struct{}, error)
+	fetchSubtreeDataForBlockFn func(ctx context.Context, block *model.Block, peerID, baseURL string) (map[string]struct{}, map[chainhash.Hash]map[fileformat.FileType]struct{}, error)
 
 	// peerCircuitBreakers manages circuit breakers for each peer to prevent
 	// cascading failures and protect against misbehaving peers
@@ -430,6 +463,19 @@ func New(
 			// Do not extend the window on reads: a flood of checks for one peer
 			// must not keep serving an ever-staler verdict.
 			ttlcache.WithDisableTouchOnHit[string, bool](),
+		),
+		blockCorruptAttempts: ttlcache.New[blockAttemptKey, int](
+			ttlcache.WithTTL[blockAttemptKey, int](corruptAttemptCooldown(tSettings)),
+			// Fixed window from the first corrupt failure; gate Get checks must never
+			// extend it, so a persistent attacker cannot suppress an honest body forever
+			// (bitcoin-sv/teranode#4692).
+			ttlcache.WithDisableTouchOnHit[blockAttemptKey, int](),
+			ttlcache.WithCapacity[blockAttemptKey, int](corruptAttemptsMaxTracked),
+		),
+		blockPolicyDeclineAttempts: ttlcache.New[blockAttemptKey, int](
+			ttlcache.WithTTL[blockAttemptKey, int](corruptAttemptCooldown(tSettings)),
+			ttlcache.WithDisableTouchOnHit[blockAttemptKey, int](),
+			ttlcache.WithCapacity[blockAttemptKey, int](corruptAttemptsMaxTracked),
 		),
 		adaptiveFetch:       af,
 		stats:               gocore.NewStat("blockvalidation"),
@@ -642,6 +688,15 @@ func (u *Server) GetCatchupStatus(ctx context.Context, _ *blockvalidation_api.Em
 // hasn't caught up yet, not that the peer is faulty, so they must fall through to
 // alternative-peer retry. See issue #1031.
 func isUnvalidatablePeerError(err error) bool {
+	// A corrupt block body (bitcoin-sv/teranode#4692) is explicitly NOT unvalidatable: the received
+	// body is not bound to the header, so we must not give up on alternative sources —
+	// re-download from another peer instead. It already fails the ErrBlockInvalid check
+	// below (dedicated ERR_BLOCK_CORRUPT sentinel, no match), but guard explicitly so the
+	// don't-give-up intent survives future edits to this predicate.
+	if errors.IsBlockCorrupt(err) {
+		return false
+	}
+
 	return errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid)
 }
 
@@ -679,9 +734,12 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		return errors.NewConfigurationError("could not get utxostore URL", err)
 	}
 
-	// Only create a new BlockValidation if one wasn't already set (for testing)
+	// Only create a new BlockValidation if one wasn't already set (for testing).
+	// Pass the P2P client through the variadic opts so block-validation can strike the peer
+	// that served a corrupt block body (bitcoin-sv/teranode#4692) with correct attribution to
+	// the serving peer — wired inside the constructor before any worker goroutine starts.
 	if u.blockValidation == nil {
-		u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient)
+		u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient, u.p2pClient)
 	}
 
 	// Record that the ttlcache eviction loops start here, BEFORE the go
@@ -701,6 +759,14 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 	if u.peerMaliciousCache != nil {
 		go u.peerMaliciousCache.Start()
+	}
+
+	if u.blockCorruptAttempts != nil {
+		go u.blockCorruptAttempts.Start()
+	}
+
+	if u.blockPolicyDeclineAttempts != nil {
+		go u.blockPolicyDeclineAttempts.Start()
 	}
 
 	// Start fork manager cleanup routine
@@ -1173,7 +1239,7 @@ func (u *Server) Stop(ctx context.Context) error {
 	// ttlcache.Stop is an unbuffered send whose only receiver lives inside
 	// Start, so stopping a never-started cache (a Server from NewServer whose
 	// Init never ran or returned early) hangs forever. One flag covers all
-	// four caches — they start together in Init. Nil guards retained for
+	// six caches — they start together in Init. Nil guards retained for
 	// Server-literal test fixtures that wire only some of them.
 	if u.ttlCachesStarted.Load() {
 		u.processBlockNotify.Stop()
@@ -1183,6 +1249,14 @@ func (u *Server) Stop(ctx context.Context) error {
 		}
 		if u.peerMaliciousCache != nil {
 			u.peerMaliciousCache.Stop()
+		}
+
+		if u.blockCorruptAttempts != nil {
+			u.blockCorruptAttempts.Stop()
+		}
+
+		if u.blockPolicyDeclineAttempts != nil {
+			u.blockPolicyDeclineAttempts.Stop()
 		}
 	}
 
@@ -1324,7 +1398,7 @@ func (u *Server) RevalidateBlock(ctx context.Context, request *blockvalidation_a
 		} else if peer != nil {
 			baseURL = peer.DataHubURL
 		}
-		if _, err := u.fetchSubtreeDataForBlock(ctx, block, blockHeaderMeta.PeerID, baseURL); err != nil {
+		if _, _, err := u.fetchSubtreeDataForBlock(ctx, block, blockHeaderMeta.PeerID, baseURL); err != nil {
 			return nil, errors.WrapGRPC(errors.NewServiceError("[RevalidateBlock][%s] failed to fetch missing subtree data", block.String(), err))
 		}
 	}
@@ -1482,6 +1556,14 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 		if errors.Is(err, errors.ErrBlockIncomplete) {
 			return nil, errors.WrapGRPC(errors.NewBlockIncompleteError("[ValidateBlock][%s] block validation hit transient missing-data state: %s", block.Hash().String(), err))
 		}
+		// A corrupt block body (bitcoin-sv/teranode#4692) must NOT be surfaced as ERR_BLOCK_INVALID:
+		// wrapping it in NewBlockInvalidError would make errors.Is(err, ErrBlockInvalid) true
+		// across this stateless RPC boundary, defeating the dedicated sentinel. Preserve the
+		// corrupt classification (WrapGRPC keeps the chain; the caller's UnwrapGRPC/IsBlockCorrupt
+		// recovers it).
+		if errors.IsBlockCorrupt(err) {
+			return nil, errors.WrapGRPC(errors.NewBlockCorruptError("[ValidateBlock][%s] block body is corrupt", block.String(), err))
+		}
 
 		// Infrastructure failures are not verdicts on the block: a storage/service outage, or a
 		// parent-header run from our own store that was unanchored or unlinked (issue #1467),
@@ -1495,7 +1577,6 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 		if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrBlockHeaderContext) {
 			return nil, errors.WrapGRPC(err)
 		}
-
 		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err))
 	}
 
@@ -1526,6 +1607,33 @@ func deriveBlockHeight(claimed, parentHeight uint32) (uint32, error) {
 	}
 
 	return derived, nil
+}
+
+// optimisticMiningDisabledForPeerPath reports whether optimistic mining must be disabled on the
+// peer-served new-block path (processBlockFound) and the catch-up path (validateBlocksOnChannel)
+// for this block (bitcoin-sv/teranode#4692). Optimistic mining is permitted on those paths ONLY
+// when BOTH the global OptimisticMining flag AND the dedicated OptimisticMiningPeerBlocks opt-in
+// are set, so the global opt-out always wins and the new peer-blocks flag can never bypass it.
+// Written explicitly at the gate rather than relying on the downstream useOptimisticMining seed
+// (belt-and-suspenders). Revalidation of an already-stored block (RevalidateBlock) is never
+// optimistic and does not use this gate.
+//
+// Blocks arriving over the legacy sync route (baseURL == "legacy") are unconditionally
+// non-optimistic, whatever the two flags say, as they were before this gate existed. That
+// exclusion predates and is independent of the corrupt-body work: it is kept here so the rule is
+// visible from the helper and cannot be dropped by a new call site.
+func optimisticMiningDisabledForPeerPath(s *settings.Settings, baseURL string) bool {
+	// Nil-safe like the sibling gate helpers: a nil settings reports "disabled" — the fail-safe
+	// direction (never optimistically accept a peer body under a missing config).
+	if s == nil {
+		return true
+	}
+
+	if baseURL == "legacy" {
+		return true
+	}
+
+	return !(s.BlockValidation.OptimisticMining && s.BlockValidation.OptimisticMiningPeerBlocks)
 }
 
 // processBlockFound processes a newly discovered block by validating it and managing
@@ -1564,6 +1672,46 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		return nil
 	}
 
+	// Per-(hash, peerID) corrupt re-download cap (bitcoin-sv/teranode#4692): once this serving peer
+	// has hit MaxCorruptAttemptsPerBlock corrupt-body failures for this hash within the cooldown
+	// window, skip the expensive download/subtree-prepare/merkle work until the fixed window lapses.
+	// This is the universal RUNNING chokepoint (worker, direct ProcessBlock RPC, retries all funnel
+	// here), so the drop happens before fetchSingleBlock below. Keying on (hash, peerID) means an
+	// honest peer keeps a fresh budget for the same hash, so a bad peer can never wedge the honest
+	// tip. The corrupt path persisted nothing, so this only rate-limits the pair — it never poisons
+	// the hash, and once the window expires an honest body flows through. GetBlockExists returned
+	// false just above, so the block is NOT stored: returning nil here would be read by a caller as
+	// "accepted" for a block that was never stored (bitcoin-sv/teranode#4692). Return a
+	// CORRUPT-CLASSIFIED, non-poisoning error instead. Corrupt routes through the already-safe path:
+	// it is not ErrBlockInvalid (never poisons), it does not disconnect the peer
+	// (shouldDisconnectOnBlockErr is false for corrupt) and the legacy netsync corrupt branch returns
+	// before recentlyFailedBlocks.Set, so it cannot suppress descendants — and no caller can mistake
+	// it for acceptance.
+	if u.corruptAttemptsExhausted(hash, peerID) {
+		u.logger.Warnf("[processBlockFound][%s] corrupt re-download cap reached for peer %s; suppressing this re-download until the cooldown window expires", hash.String(), peerID)
+		return errors.NewBlockCorruptError("[processBlockFound][%s] corrupt re-download cap reached for peer %s; re-download suppressed until the cooldown window expires (block not stored, not invalid)", hash.String(), peerID)
+	}
+
+	// Per-(hash, peerID) LOCAL POLICY decline cap (bitcoin-sv/teranode#4692).
+	// An oversized block is declined but never remembered anywhere else, so without this the same
+	// peer's re-announcements cost a fresh block-message fetch every time. Its own counter, not the
+	// corrupt one: a policy decline is not evidence about the block, so it must not spend the
+	// corrupt budget. GetBlockExists returned false just above, so returning nil would be read as
+	// "accepted" for a block that was never stored (bitcoin-sv/teranode#4692). This gate is a RATE
+	// LIMIT on re-fetching a block we have ALREADY declined on local policy — not a different verdict
+	// — so it returns the SAME classification the uncapped excessiveblocksize decline returns a few
+	// lines below (errors.NewBlockPolicyDeclinedError, ERR_BLOCK_POLICY_DECLINED; twin in
+	// ValidateBlockWithOptions). A capped drop must be INDISTINGUISHABLE to every caller from the
+	// decline it rate-limits: it must NOT be classified corrupt (a local policy choice is not the
+	// peer's corruption, so no corrupt-body ban score is earned on the legacy strike path), and it
+	// must not poison (ERR_BLOCK_POLICY_DECLINED is not ErrBlockInvalid, so it never reaches
+	// storeInvalidBlock / InvalidateBlock — same as the decline it mirrors, which already flows out
+	// of this function today).
+	if u.policyDeclineAttemptsExhausted(hash, peerID) {
+		u.logger.Warnf("[processBlockFound][%s] local policy decline cap reached for peer %s; suppressing this re-fetch until the cooldown window expires", hash.String(), peerID)
+		return errors.NewBlockPolicyDeclinedError("[processBlockFound][%s] block declined on local policy (excessiveblocksize); re-fetch suppressed until the cooldown window expires (block not stored, not invalid)", hash.String())
+	}
+
 	var block *model.Block
 	if len(useBlock) > 0 {
 		block = useBlock[0]
@@ -1572,6 +1720,21 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		if err != nil {
 			return err
 		}
+	}
+
+	// Local policy decline, remembered per serving identity (bitcoin-sv/teranode#4692). The size
+	// judged here is the peer-supplied SizeInBytes varint, so a per-HASH suppression would let one
+	// peer inflate that varint and suppress the honest tip for the whole window — the same
+	// honest-tip wedge the corrupt cap is keyed on (hash, peerID) to avoid. Keyed on the pair, an
+	// inflated varint only spends that peer's own budget. No peer strike (a legitimately oversized
+	// block from an honest miner is not misbehaviour) and no invalid=true (never poison a hash we
+	// merely decline on local policy); this only stops us re-fetching the same block message from
+	// the same peer, and lapses with the fixed cooldown window. The authoritative decline for every
+	// other caller stays in ValidateBlockWithOptions.
+	if excessiveBlockSizeDeclined(u.settings, block) {
+		u.recordPolicyDeclineAttempt(hash, peerID)
+
+		return errors.NewBlockPolicyDeclinedError("[processBlockFound][%s] block size %d exceeds excessiveblocksize %d (local policy)", hash.String(), block.SizeInBytes, u.settings.Policy.ExcessiveBlockSize)
 	}
 
 	u.checkParentProcessingComplete(ctx, block, baseURL)
@@ -1634,20 +1797,41 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	// quick-validation machinery as native catchup (default off).
 	if u.legacyUnifiedRoute(block, baseURL) {
 		u.logger.Debugf("[processBlockFound][%s] unified route: quick-validating legacy block at height %d", block.Hash().String(), block.Height)
-		return u.blockValidation.quickValidateBlock(ctx, block, peerID, baseURL)
+
+		// A corrupt result here (bitcoin-sv/teranode#4692) is returned to the legacy caller and struck at
+		// the legacy peer layer (peer_server.addBanScore via sp.blockProcessed), which owns the
+		// serving peer identity — the netsync ProcessBlock path carries no usable peerID here, so
+		// attributing the strike at that layer is the only correct attribution.
+		qErr := u.blockValidation.quickValidateBlock(ctx, block, peerID, baseURL)
+		u.accountCorruptAttempt(hash, peerID, qErr)
+
+		return qErr
 	}
 
 	// validate the block
 	u.logger.Infof("[processBlockFound][%s] validate block from %s", hash.String(), baseURL)
 
-	// Create validation options
+	// Create validation options.
+	//
+	// bitcoin-sv/teranode#4692: this peer-serving (corruption-reachable) path is non-optimistic
+	// UNLESS the operator opts in via BOTH blockvalidation_optimistic_mining and
+	// blockvalidation_optimistic_mining_peer_blocks (see optimisticMiningDisabledForPeerPath).
+	// Optimistic mining AddBlocks the body BEFORE block.Valid runs in the background, so a
+	// corrupt body would be accepted first and then require rollback — but there is no
+	// non-poisoning removal primitive (only InvalidateBlock, which poisons). With the default
+	// (opt-out) gate, block.Valid runs monolithically before AddBlock, so no corrupt body is
+	// ever added. When opted in, a corrupt body on the optimistic-background path takes the
+	// invalidate route (see the block.Valid background handler). This gate is removed once
+	// block.Valid is split so its integrity floor runs before the optimistic AddBlock.
 	opts := &ValidateBlockOptions{
-		DisableOptimisticMining: baseURL == "legacy",
+		DisableOptimisticMining: optimisticMiningDisabledForPeerPath(u.settings, baseURL),
 		IsRevalidation:          false, // processBlockFound is for new blocks, not revalidation
 		PeerID:                  peerID,
 	}
 
 	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, baseURL, opts)
+	u.accountCorruptAttempt(hash, peerID, err)
+
 	if err != nil {
 		return errors.NewServiceError("failed block validation BlockFound [%s]", block.String(), err)
 	}
@@ -1838,13 +2022,33 @@ func (u *Server) blockProcessingWorker(ctx context.Context, workerID int) {
 					prometheusBlockPriorityQueueProcessed.WithLabelValues("unknown", "failure").Inc()
 				}
 
-				// If the error indicates the block couldn't be fetched (network error, malicious node, etc),
-				// we should retry the block later rather than dropping it completely
-				// TODO: We might want to limit the number of retries per block to avoid infinite loops
-				// For now, we'll just re-queue it with deepFork priority to ensure it gets retried eventually
-				// Note: This could lead to blocks being retried indefinitely if they are always failing to fetch
-				// A more robust solution would involve tracking retry counts and eventually giving up after a threshold
-				if errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err) {
+				// IsBlockCorrupt is tested BEFORE the network/malicious pair (bitcoin-sv/teranode#4692):
+				// IsMaliciousResponseError substring-matches the word "corrupt" in the rendered error
+				// text, so an ERR_BLOCK_CORRUPT error would otherwise always match the malicious branch
+				// and this dedicated corrupt-recovery branch would be dead code.
+				if errors.IsBlockCorrupt(err) {
+					// RUNNING corrupt body (bitcoin-sv/teranode#4692): the serving peer was already struck
+					// inside ValidateBlockWithOptions and nothing was persisted — no invalid=true,
+					// SetBlockExists never set, block never AddBlock'd. Clear the in-flight dedup
+					// marker so the same hash re-announced by an honest peer re-enters validation
+					// instead of being dropped as already-in-progress. Recovery is the natural
+					// re-announcement (many peers hold the honest block in RUNNING); the
+					// already-exists-as-invalid short-circuit never fires because we did not poison.
+					// If the corrupt peer was the sole announcer, no honest peer holds the hash and
+					// it correctly never connects.
+					u.logger.Warnf("[BlockProcessing] Block %s had a corrupt body, cleared for re-download from another peer", blockFound.hash.String())
+					u.processBlockNotify.Delete(*blockFound.hash)
+					// The per-(hash, peerID) corrupt cap (bitcoin-sv/teranode#4692) is accounted inside
+					// processBlockFound (accountCorruptAttempt), which both this worker route and the
+					// direct ProcessBlock route funnel through — so it is counted there exactly once,
+					// not here (which would double-count the worker route and miss the direct route).
+				} else if errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err) {
+					// If the error indicates the block couldn't be fetched (network error, malicious node, etc),
+					// we should retry the block later rather than dropping it completely
+					// TODO: We might want to limit the number of retries per block to avoid infinite loops
+					// For now, we'll just re-queue it with deepFork priority to ensure it gets retried eventually
+					// Note: This could lead to blocks being retried indefinitely if they are always failing to fetch
+					// A more robust solution would involve tracking retry counts and eventually giving up after a threshold
 					u.logger.Warnf("[BlockProcessing] Block %s fetch failed, will retry later", blockFound.hash.String())
 					// Re-add the block to the queue for retry
 					// We need to get the block metadata (height and priority) for re-queuing
@@ -1868,6 +2072,12 @@ func (u *Server) blockProcessingWorker(ctx context.Context, workerID int) {
 				if prometheusBlockPriorityQueueProcessed != nil {
 					prometheusBlockPriorityQueueProcessed.WithLabelValues("unknown", "success").Inc()
 				}
+
+				// The per-(hash, peerID) corrupt counter (bitcoin-sv/teranode#4692) is cleared on a
+				// genuine validation success inside processBlockFound (accountCorruptAttempt). It is NOT
+				// cleared here: a worker "success" also covers the exists / catchup / cap-exhausted
+				// early returns (which return nil), and clearing on a cap-exhausted skip would reset
+				// the very cooldown the cap just enforced.
 			}
 		}
 	}
@@ -1900,6 +2110,25 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 		u.logger.Warnf("[catchup] Block %s in cooldown after exhausting catchup attempts (cap %d); skipping until window expires", c.block.Hash().String(), u.settings.BlockValidation.CatchupMaxAttemptsPerBlock)
 		u.processBlockNotify.Delete(*c.block.Hash())
 		u.catchupAlternatives.Delete(*c.block.Hash())
+		return
+	}
+
+	// Local-policy decline cooldown, keyed per (hash, peerID) (bitcoin-sv/teranode#4692). THIS PEER
+	// has spent its decline budget for this hash; the hash itself is not in cooldown, because the
+	// size that produced those declines is peer-declared — see excessiveBlockSizeDeclined for why
+	// that must never spend a per-hash budget. So this is a PEER-scoped skip, and it takes the same
+	// shape as the bad/malicious skip below: try the other peers first, and clear the shared caches
+	// only if none of them can serve the hash. Fail-open on an empty peerID, like every sibling cap.
+	if u.policyDeclineAttemptsExhausted(c.block.Hash(), c.peerID) {
+		u.logger.Warnf("[catchup] Block %s from peer %s in cooldown after exhausting local-policy declines (cap %d); trying alternative peers", c.block.Hash().String(), c.peerID, u.settings.BlockValidation.MaxCorruptAttemptsPerBlock)
+
+		if !u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID) {
+			blockHash := c.block.Hash()
+			u.logger.Warnf("[catchup] All alternative peers failed for block %s, clearing processing marker for retry", blockHash.String())
+			u.processBlockNotify.Delete(*blockHash)
+			u.catchupAlternatives.Delete(*blockHash)
+		}
+
 		return
 	}
 
@@ -2026,6 +2255,41 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 			u.logger.Warnf("[catchup] Local service/storage error during catchup for block %s (attempt %d/%d), clearing markers to allow retry: %v", c.block.Hash().String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock, err)
 			u.processBlockNotify.Delete(*c.block.Hash())
 			u.catchupAlternatives.Delete(*c.block.Hash())
+			return
+		}
+
+		// This node declined a block under its own local policy (excessiveblocksize). Terminal for
+		// THIS peer but unpersisted (bitcoin-sv/teranode#4692): nothing is stored, nothing is
+		// poisoned, no peer is charged and no rotation is signalled. Walking the alternative sources
+		// in the same cycle is pointless work — this node's limit is the same for whoever serves it —
+		// so the cycle ends here rather than re-downloading from every peer in turn.
+		//
+		// SCOPED PER SERVING IDENTITY, and that is load-bearing: the verdict rests on a peer-declared
+		// size, so it spends only that peer's decline budget and never the per-hash catch-up budget.
+		// See excessiveBlockSizeDeclined for the field it reads and why. The progress exemption of
+		// the sibling branches is preserved by recordPolicyDeclineAttemptUnlessProgress.
+		//
+		// The processing marker is cleared so the hash can be re-entered, but catchupAlternatives is
+		// deliberately LEFT INTACT. It is the only record of the other peers that announced this
+		// hash: addBlockToPriorityQueue absorbs an announcement for a hash already in
+		// processBlockNotify into that list instead of enqueueing it, and those peers do not announce
+		// again. Since the verdict is about this peer's declared size, their copies are exactly the
+		// recovery route — deleting them would discard it and leave nothing pending for the hash.
+		//
+		// Residual, deliberately inherited from the sibling caps: an EMPTY peerID records nothing and
+		// is never gated (fail-open), so an unidentified declined delivery is bounded only by the
+		// announcement rate. That is the same trade recordCorruptAttempt and
+		// policyDeclineAttemptsExhausted already make — a delivery under no identity must never be
+		// able to gate an honest tip — and catch-up items carry a peer identity in production.
+		//
+		// Placed here, before reportCatchupFailureForError and ReportPeerFailure below, so it
+		// pre-empts both the reputation charge and the sync-peer rotation signal, and never reaches
+		// isUnvalidatablePeerError or the alternative-source walk.
+		if errors.Is(err, errors.ErrBlockPolicyDeclined) {
+			declines := u.recordPolicyDeclineAttemptUnlessProgress(c.block.Hash(), c.peerID)
+			u.logger.Warnf("[catchup] Local policy declined a block during catchup toward block %s from peer %s (decline %d/%d for this peer); ending this catchup cycle without charging any peer: %v", c.block.Hash().String(), c.peerID, declines, u.settings.BlockValidation.MaxCorruptAttemptsPerBlock, err)
+			u.processBlockNotify.Delete(*c.block.Hash())
+
 			return
 		}
 
@@ -2206,6 +2470,267 @@ func (u *Server) catchupAttemptsExhausted(blockHash *chainhash.Hash) bool {
 	}
 
 	item := u.blockCatchupAttempts.Get(*blockHash)
+
+	return item != nil && item.Value() >= maxAttempts
+}
+
+// corruptAttemptCooldown returns the fixed cooldown window for the per-block corrupt
+// re-download cap (bitcoin-sv/teranode#4692), falling back to settings.DefaultCorruptAttemptCooldown
+// when settings are nil or the setting is unset or non-positive so the ttlcache always has a valid
+// finite window. Mirrors legacyCorruptAttemptCooldown in services/legacy/netsync; both share the one
+// fallback constant so the two caches can never drift apart.
+func corruptAttemptCooldown(s *settings.Settings) time.Duration {
+	if s != nil {
+		if d := s.BlockValidation.CorruptAttemptCooldown; d > 0 {
+			return d
+		}
+	}
+
+	return settings.DefaultCorruptAttemptCooldown
+}
+
+// corruptAttemptsMaxTracked bounds the per-(hash, peerID) attempt maps. Matches the legacy twin's
+// blockFailureBackoffMaxTracked (bitcoin-sv/teranode#4692). Entries only appear
+// on real corrupt failures or real policy declines, so this is a pathological-stream backstop rather
+// than a hot limit. Eviction can only LOOSEN a cap — an evicted pair starts a fresh window — which is
+// the same fail-open direction the cap already takes on misconfiguration
+// (MaxCorruptAttemptsPerBlock <= 0 / nil cache), and the direction that can never make a node drop an
+// honest block.
+const corruptAttemptsMaxTracked = 1024
+
+// blockAttemptKey keys the RUNNING per-block attempt caps on (block hash, serving peerID)
+// (bitcoin-sv/teranode#4692). Keying on the pair — not the hash alone — is what stops one peer's
+// behaviour consuming the budget for a hash an honest peer can still serve: each serving identity
+// is capped independently, so the honest tip is never wedged. The legacy route supplies a real
+// per-peer identity (peer.Addr()), so it is genuinely capped per serving peer. An empty peerID
+// (p2pClient nil, or a caller that supplied no identity) is NOT capped at all — the gate helpers
+// fail open on it — so an unidentified delivery can never make the gate drop an honest block.
+// Comparable (chainhash.Hash is [32]byte), so usable directly as a ttlcache key. Shared by
+// blockCorruptAttempts and blockPolicyDeclineAttempts, which are independent budgets keyed the same
+// way.
+type blockAttemptKey struct {
+	hash   chainhash.Hash
+	peerID string
+}
+
+// recordCorruptAttempt increments and returns the corrupt-body failure count for a
+// (block hash, serving peerID) within the current fixed cooldown window
+// (bitcoin-sv/teranode#4692). Mirrors recordCatchupAttempt: the window starts at the FIRST corrupt
+// failure and is not extended by subsequent failures or by gate reads, so once it lapses an honest
+// body is admitted again. Called ONLY on an actual IsBlockCorrupt failure, never on every
+// announcement. A nil cache (Server literals in tests that don't wire it) degrades to no tracking.
+// Never records under an empty peerID: an unidentified delivery is uncapped (fail-open), so it must
+// not accumulate a count under the shared (hash, "") key — matching recordPolicyDeclineAttempt and
+// the empty-peerID guards on the gate/accounting helpers (bitcoin-sv/teranode#4692).
+func (u *Server) recordCorruptAttempt(blockHash *chainhash.Hash, peerID string) int {
+	if u.blockCorruptAttempts == nil || peerID == "" {
+		return 0
+	}
+
+	key := blockAttemptKey{hash: *blockHash, peerID: peerID}
+
+	// Preserve the ORIGINAL expiry: re-Set with the time REMAINING to the original expiry,
+	// not a fresh full window (see recordCatchupAttempt for the ttlcache semantics).
+	if item := u.blockCorruptAttempts.Get(key); item != nil {
+		remaining := time.Until(item.ExpiresAt())
+		if remaining <= 0 {
+			remaining = ttlcache.DefaultTTL
+		}
+
+		n := item.Value() + 1
+		u.blockCorruptAttempts.Set(key, n, remaining)
+
+		return n
+	}
+
+	u.blockCorruptAttempts.Set(key, 1, ttlcache.DefaultTTL)
+
+	return 1
+}
+
+// accountCorruptAttempt records or clears the per-(hash, peerID) corrupt re-download counter from a
+// block-validation OUTCOME in processBlockFound (bitcoin-sv/teranode#4692). This is the SINGLE
+// accounting point for every RUNNING delivery route: both the block-processing worker
+// (processBlockWithPriority) and the direct ProcessBlock gRPC handler funnel through
+// processBlockFound, so a corrupt delivery is counted exactly once regardless of route and the cap
+// cannot be bypassed by hammering ProcessBlock directly. A corrupt result records toward the cap; a
+// genuine success clears it (so an honest body resets the count). Only true validation outcomes
+// reach here — the exists / catchup / cap-exhausted early returns never call this. The cap-exhausted
+// return is itself a corrupt-classified error, not nil, so it plays no part in this accounting;
+// this function's own peerID=="" fail-open guard is what actually keeps it from recording under an
+// unidentified delivery. Non-corrupt errors (transient / service / invalid) leave the counter
+// untouched.
+func (u *Server) accountCorruptAttempt(blockHash *chainhash.Hash, peerID string, validationErr error) {
+	if validationErr == nil {
+		u.clearCorruptAttempts(blockHash, peerID)
+		return
+	}
+
+	// Never record under an empty key: an unidentified delivery is uncapped (fail-open), so
+	// it must not accumulate a count that could later read as exhausted.
+	if peerID == "" {
+		return
+	}
+
+	if errors.IsBlockCorrupt(validationErr) {
+		u.recordCorruptAttempt(blockHash, peerID)
+	}
+}
+
+// clearCorruptAttempts resets a (hash, peerID)'s corrupt-attempt counter (and its cooldown
+// window). Called on the RUNNING success path so an honest re-try never drives the counter and a
+// later corruption starts fresh (bitcoin-sv/teranode#4692). Nil-safe.
+func (u *Server) clearCorruptAttempts(blockHash *chainhash.Hash, peerID string) {
+	if u.blockCorruptAttempts != nil {
+		u.blockCorruptAttempts.Delete(blockAttemptKey{hash: *blockHash, peerID: peerID})
+	}
+}
+
+// corruptAttemptsExhausted reports whether a (hash, peerID) has reached the corrupt re-download cap
+// and is therefore in its cooldown window (bitcoin-sv/teranode#4692). A cap of <= 0 disables the
+// bound (re-opens the corrupt-body bandwidth DoS). Nil-safe: a nil settings or nil cache (Server
+// literals in tests that don't wire them) behaves as CAP DISABLED — it returns false (never
+// "exhausted"), so a missing config can never silently drop honest blocks. Returns a bool — never
+// an error — so the gate can never emit a poisoning result.
+func (u *Server) corruptAttemptsExhausted(blockHash *chainhash.Hash, peerID string) bool {
+	if u.settings == nil || u.blockCorruptAttempts == nil {
+		return false
+	}
+
+	// An empty peerID is never capped (fail-open). The gate must never return true — and
+	// thus never make processBlockFound return nil-as-accept — for a block delivered under
+	// no identity, or an honest tip could be wedged by an unidentified delivery.
+	if peerID == "" {
+		return false
+	}
+
+	maxAttempts := u.settings.BlockValidation.MaxCorruptAttemptsPerBlock
+	if maxAttempts <= 0 {
+		return false
+	}
+
+	item := u.blockCorruptAttempts.Get(blockAttemptKey{hash: *blockHash, peerID: peerID})
+
+	return item != nil && item.Value() >= maxAttempts
+}
+
+// excessiveBlockSizeDeclined reports whether a block exceeds this node's local excessiveblocksize
+// policy limit (0 means unlimited). Shared by the RUNNING pre-validation gate in processBlockFound
+// and the authoritative decline in ValidateBlockWithOptions so the two cannot drift apart
+// (bitcoin-sv/teranode#4692).
+//
+// THE FIELD THIS READS IS PEER-DECLARED, and every consequence of a decline follows from that. It
+// is block.SizeInBytes, which model.readBlockFromReader reads straight off the wire and no header
+// commits to; the authoritative size is only recomputed from real subtree data post-load, inside
+// block.Valid. So at every site that consults this predicate, "over the limit" is uncorroborated: a
+// peer can announce the honest tip and declare an inflated size for the price of a block message —
+// header, counts, 32 bytes per subtree hash, no body. Two rules follow, and every decline site
+// keeps them:
+//   - never poison the hash (no invalid=true), because a node with a larger limit accepts the same
+//     block and an inflated varint must not condemn an honest one; and
+//   - never spend a budget keyed by hash alone. Declines spend the per-(hash, peerID)
+//     blockPolicyDeclineAttempts budget, so one peer's inflated varint cools only that peer down
+//     and the hash stays reachable through the honest peers whose copy carries the true varint.
+//     Charging blockCatchupAttempts (hash-keyed) instead would cool the hash for EVERY peer, which
+//     is the self-isolation this work exists to remove.
+//
+// A configured limit is positive,
+// so the width conversion cannot fail; if it somehow did, reporting "not declined" is the fail-open
+// direction that can never drop an honest block.
+func excessiveBlockSizeDeclined(tSettings *settings.Settings, block *model.Block) bool {
+	if tSettings == nil || block == nil || tSettings.Policy.ExcessiveBlockSize <= 0 {
+		return false
+	}
+
+	limit, err := safeconversion.IntToUint64(tSettings.Policy.ExcessiveBlockSize)
+	if err != nil {
+		return false
+	}
+
+	return block.SizeInBytes > limit
+}
+
+// recordPolicyDeclineAttempt increments and returns the local-policy decline count for a
+// (block hash, serving peerID) within the current fixed cooldown window
+// (bitcoin-sv/teranode#4692). Same fixed-window semantics as recordCorruptAttempt: the window
+// starts at the FIRST decline and is not extended by later declines or by gate reads, so once it
+// lapses the pair is admitted again. This is a SEPARATE budget from the corrupt cap — a policy
+// decline never spends the corrupt budget and vice versa. A nil cache degrades to no tracking.
+func (u *Server) recordPolicyDeclineAttempt(blockHash *chainhash.Hash, peerID string) int {
+	if u.blockPolicyDeclineAttempts == nil {
+		return 0
+	}
+
+	// Never record under an empty key: an unidentified delivery is uncapped (fail-open).
+	if peerID == "" {
+		return 0
+	}
+
+	key := blockAttemptKey{hash: *blockHash, peerID: peerID}
+
+	// Preserve the ORIGINAL expiry: re-Set with the time REMAINING to the original expiry,
+	// not a fresh full window (see recordCatchupAttempt for the ttlcache semantics).
+	if item := u.blockPolicyDeclineAttempts.Get(key); item != nil {
+		remaining := time.Until(item.ExpiresAt())
+		if remaining <= 0 {
+			remaining = ttlcache.DefaultTTL
+		}
+
+		n := item.Value() + 1
+		u.blockPolicyDeclineAttempts.Set(key, n, remaining)
+
+		return n
+	}
+
+	u.blockPolicyDeclineAttempts.Set(key, 1, ttlcache.DefaultTTL)
+
+	return 1
+}
+
+// recordPolicyDeclineAttemptUnlessProgress is recordPolicyDeclineAttempt carrying the same progress
+// exemption recordCatchupAttemptUnlessProgress applies, for the catch-up terminal decline branch
+// (bitcoin-sv/teranode#4692). A cycle that actually advanced the chain before reaching a declined
+// block must not spend the peer's decline budget — otherwise a peer feeding us hundreds of blocks
+// per cycle would be cooled off the target hash precisely for making progress — and on progress the
+// counter is cleared, so a recovering peer never carries stale declines. blocksValidated is reset at
+// the start of every catch-up, so a non-zero value means THIS cycle made progress.
+//
+// It is deliberately keyed on (hash, peerID) rather than on the hash alone: see
+// excessiveBlockSizeDeclined for why a peer-declared size must never spend a per-hash budget.
+func (u *Server) recordPolicyDeclineAttemptUnlessProgress(blockHash *chainhash.Hash, peerID string) int {
+	if u.blocksValidated.Load() > 0 {
+		if u.blockPolicyDeclineAttempts != nil && peerID != "" {
+			u.blockPolicyDeclineAttempts.Delete(blockAttemptKey{hash: *blockHash, peerID: peerID})
+		}
+
+		return 0
+	}
+
+	return u.recordPolicyDeclineAttempt(blockHash, peerID)
+}
+
+// policyDeclineAttemptsExhausted reports whether a (hash, peerID) has reached the local-policy
+// decline cap and is therefore in its cooldown window (bitcoin-sv/teranode#4692). Sized by
+// MaxCorruptAttemptsPerBlock, which is a separate budget from the corrupt cap that happens to share
+// the operator's knob. A cap of <= 0 disables the bound. Nil-safe and fail-open for the same reason
+// as corruptAttemptsExhausted: a missing config must never silently drop an honest block.
+func (u *Server) policyDeclineAttemptsExhausted(blockHash *chainhash.Hash, peerID string) bool {
+	if u.settings == nil || u.blockPolicyDeclineAttempts == nil {
+		return false
+	}
+
+	// An empty peerID is never capped (fail-open) — same reason as corruptAttemptsExhausted:
+	// a delivery under no identity must never gate an honest tip.
+	if peerID == "" {
+		return false
+	}
+
+	maxAttempts := u.settings.BlockValidation.MaxCorruptAttemptsPerBlock
+	if maxAttempts <= 0 {
+		return false
+	}
+
+	item := u.blockPolicyDeclineAttempts.Get(blockAttemptKey{hash: *blockHash, peerID: peerID})
 
 	return item != nil && item.Value() >= maxAttempts
 }
@@ -2395,6 +2920,15 @@ func (u *Server) processBlockWithPriority(ctx context.Context, blockFound proces
 
 	// Try to process with the primary source
 	err := u.processBlockFound(ctx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
+
+	// A corrupt body (bitcoin-sv/teranode#4692) is NOT a fetch failure: the peer served bytes that
+	// failed a body-integrity check. Do not walk alternative sources here (that loop is for
+	// network/malicious fetch failures) — return so the worker's corrupt-recovery branch clears the
+	// dedup marker and the per-(hash, peerID) cap bounds re-download. Tested BEFORE the
+	// network/malicious pair because IsMaliciousResponseError substring-matches "corrupt".
+	if err != nil && errors.IsBlockCorrupt(err) {
+		return err
+	}
 
 	// If fetch failed and it's not a validation error, try alternative sources
 	if err != nil && (errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err)) {

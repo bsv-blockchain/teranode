@@ -2858,7 +2858,13 @@ func TestValidateSubtreeLeafCount(t *testing.T) {
 	})
 
 	t.Run("ZeroLeaves", func(t *testing.T) {
-		require.NoError(t, validateSubtreeLeafCount(subtreeHash, 0, 4))
+		// A subtree always carries at least one node; a zero leaf count is now rejected explicitly
+		// (bitcoin-sv/teranode#4692) rather than left to the downstream constructor's incidental error.
+		err := validateSubtreeLeafCount(subtreeHash, 0, 4)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrProcessing))
+		require.Contains(t, err.Error(), subtreeHash.String())
+		require.Contains(t, err.Error(), "subtree has zero nodes")
 	})
 
 	t.Run("LargeOverflow", func(t *testing.T) {

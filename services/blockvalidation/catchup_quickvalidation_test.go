@@ -29,10 +29,10 @@ func TestTryQuickValidation(t *testing.T) {
 		}
 
 		// Pass nil channel - not needed when quick validation is disabled
-		shouldTryNormal, err := suite.Server.tryQuickValidation(context.Background(), block, catchupCtx, "", "http://test", nil)
+		shouldTryNormal, err := suite.Server.tryQuickValidation(context.Background(), block, catchupCtx, "", "http://test", nil, nil)
 
-		assert.NoError(t, err)
-		assert.True(t, shouldTryNormal, "should return true to use normal validation when quick validation is disabled")
+		require.NoError(t, err)
+		require.True(t, shouldTryNormal, "should return true to use normal validation when quick validation is disabled")
 	})
 
 	t.Run("should use normal validation when block is above checkpoint height", func(t *testing.T) {
@@ -48,13 +48,13 @@ func TestTryQuickValidation(t *testing.T) {
 		}
 
 		// Pass nil channel - not needed when block is above checkpoint
-		shouldTryNormal, err := suite.Server.tryQuickValidation(context.Background(), block, catchupCtx, "", "http://test", nil)
+		shouldTryNormal, err := suite.Server.tryQuickValidation(context.Background(), block, catchupCtx, "", "http://test", nil, nil)
 
-		assert.NoError(t, err)
-		assert.True(t, shouldTryNormal, "should return true to use normal validation when block is above checkpoint height")
+		require.NoError(t, err)
+		require.True(t, shouldTryNormal, "should return true to use normal validation when block is above checkpoint height")
 	})
 
-	t.Run("should handle subtree deletion when quick validation fails", func(t *testing.T) {
+	t.Run("should NOT delete pre-existing subtree files when quick validation fails", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
 		defer suite.Cleanup()
 
@@ -64,7 +64,12 @@ func TestTryQuickValidation(t *testing.T) {
 		subtreeHash1, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
 		subtreeHash2, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000002")
 
-		// Store some dummy subtree data
+		// Store some dummy subtree data, simulating blobs that already existed before this
+		// attempt ran (e.g. promoted, permanent data belonging to an already-persisted block a
+		// doctored body could name). Neither hash is ever fetched by this attempt — the pipeline
+		// fails before reaching the build/prefetch stage that would establish freshness for
+		// either — so cleanup, which only ever deletes a (hash, fileType) pair this attempt
+		// itself proved fresh, must leave both alone (bitcoin-sv/teranode#4692).
 		err := suite.Server.subtreeStore.Set(ctx, subtreeHash1[:], fileformat.FileTypeSubtree, []byte("subtree1"))
 		require.NoError(t, err)
 		err = suite.Server.subtreeStore.Set(ctx, subtreeHash2[:], fileformat.FileTypeSubtree, []byte("subtree2"))
@@ -84,20 +89,19 @@ func TestTryQuickValidation(t *testing.T) {
 		writeJobsChan := make(chan *SubtreeWriteJob, 10)
 
 		// The quick validation will fail because we didn't set up all the necessary mocks
-		// This should trigger the subtree cleanup logic
-		shouldTryNormal, err := suite.Server.tryQuickValidation(ctx, block, catchupCtx, "", "http://test", writeJobsChan)
+		// (the malformed dummy bytes above cannot be prefetched as real subtree structures),
+		// well before this attempt's own build/prefetch phase ever runs for either hash.
+		shouldTryNormal, err := suite.Server.tryQuickValidation(ctx, block, catchupCtx, "", "http://test", writeJobsChan, nil)
 
-		assert.NoError(t, err, "should not return error even when quick validation fails")
-		assert.True(t, shouldTryNormal, "should return true to fallback to normal validation")
+		require.NoError(t, err, "should not return error even when quick validation fails")
+		require.True(t, shouldTryNormal, "should return true to fallback to normal validation")
 
-		// Verify subtrees were deleted
+		// Neither blob was freshly written by THIS failed attempt, so cleanup must leave them be.
 		_, err = suite.Server.subtreeStore.Get(ctx, subtreeHash1[:], fileformat.FileTypeSubtree)
-		assert.Error(t, err, "subtree1 should have been deleted")
-		assert.True(t, errors.Is(err, errors.ErrNotFound))
+		require.NoError(t, err, "pre-existing subtree1 must survive an attempt that never freshly wrote it")
 
 		_, err = suite.Server.subtreeStore.Get(ctx, subtreeHash2[:], fileformat.FileTypeSubtree)
-		assert.Error(t, err, "subtree2 should have been deleted")
-		assert.True(t, errors.Is(err, errors.ErrNotFound))
+		require.NoError(t, err, "pre-existing subtree2 must survive an attempt that never freshly wrote it")
 	})
 
 	t.Run("should return false when quick validation succeeds", func(t *testing.T) {
@@ -124,10 +128,10 @@ func TestTryQuickValidation(t *testing.T) {
 		writeJobsChan := make(chan *SubtreeWriteJob, 10)
 
 		// This should succeed and return false (no need for normal validation)
-		shouldTryNormal, err := suite.Server.tryQuickValidation(ctx, block, catchupCtx, "", "http://test", writeJobsChan)
+		shouldTryNormal, err := suite.Server.tryQuickValidation(ctx, block, catchupCtx, "", "http://test", writeJobsChan, nil)
 
-		assert.NoError(t, err)
-		assert.False(t, shouldTryNormal, "should return false when quick validation succeeds")
+		require.NoError(t, err)
+		require.False(t, shouldTryNormal, "should return false when quick validation succeeds")
 	})
 
 	t.Run("should handle subtree not found errors gracefully", func(t *testing.T) {
@@ -153,10 +157,10 @@ func TestTryQuickValidation(t *testing.T) {
 		writeJobsChan := make(chan *SubtreeWriteJob, 10)
 
 		// The quick validation will fail and try to delete non-existent subtrees
-		shouldTryNormal, err := suite.Server.tryQuickValidation(ctx, block, catchupCtx, "", "http://test", writeJobsChan)
+		shouldTryNormal, err := suite.Server.tryQuickValidation(ctx, block, catchupCtx, "", "http://test", writeJobsChan, nil)
 
-		assert.NoError(t, err, "should handle not found error gracefully")
-		assert.True(t, shouldTryNormal, "should return true to fallback to normal validation")
+		require.NoError(t, err, "should handle not found error gracefully")
+		require.True(t, shouldTryNormal, "should return true to fallback to normal validation")
 	})
 }
 

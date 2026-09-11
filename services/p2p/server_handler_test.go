@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	p2pconstants "github.com/bsv-blockchain/teranode/interfaces/p2p"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -100,6 +101,38 @@ func TestServer_AddBanScore_CrossesThresholdBans(t *testing.T) {
 	bResp, err := s.IsBanned(context.Background(), &p2p_api.IsBannedRequest{IpOrSubnet: pid.String()})
 	require.NoError(t, err)
 	require.True(t, bResp.IsBanned)
+}
+
+// TestServer_AddBanScore_CorruptBlockBodyBoundToSharedConstant pins the corrupt-block-body reason
+// key to the one shared definition (bitcoin-sv/teranode#4692). The services/p2p constant is derived
+// from interfaces/p2p rather than re-typed, so the equality below is a compile-time truth this test
+// makes a test-time failure instead: a rename on either side must fail here rather than leave the
+// AddBanScore switch matching a string nothing else uses, where the strike would silently score the
+// caller's default (0) instead of the configured penalty.
+func TestServer_AddBanScore_CorruptBlockBodyBoundToSharedConstant(t *testing.T) {
+	require.Equal(t, p2pconstants.ReasonCorruptBlockBody.String(), ReasonCorruptBlockBody,
+		"the services/p2p reason key must stay identical to the shared interfaces/p2p constant the penalty table and every other caller use")
+
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	resp, err := s.AddBanScore(context.Background(), &p2p_api.AddBanScoreRequest{
+		PeerId: pid.String(),
+		Reason: ReasonCorruptBlockBody,
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+
+	// Read the expected weight from the penalty table itself rather than restating the number:
+	// this test is about the reason KEY resolving, and retuning the weight must not redden it.
+	wantPoints, keyed := blockchain.DefaultBanConfig().ReasonPoints[ReasonCorruptBlockBody]
+	require.True(t, keyed, "the penalty table must have a row under this exact reason key")
+	require.NotZero(t, wantPoints, "a keyed row with zero points would make the assertion below vacuous")
+
+	info, ok := reg.Get(pid.String())
+	require.True(t, ok)
+	require.Equal(t, wantPoints, info.BanScore,
+		"the reason must resolve in the penalty table, not fall through to the caller-supplied 0 points")
 }
 
 func TestServer_AddBanScore_UnknownReasonStillRecorded(t *testing.T) {

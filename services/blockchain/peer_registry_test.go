@@ -21,6 +21,25 @@ func mustPeerRegistryHash(seed string) *chainhash.Hash {
 	return &hash
 }
 
+// TestCentralizedPeerRegistry_CorruptBlockBodyScores is the assertion that would
+// have caught the zero-points bug (bitcoin-sv/teranode#4692): a peer struck for serving a
+// corrupt block body must actually accrue the configured penalty. An unmapped
+// reason increments the score by zero, so the reason MUST be present in
+// DefaultBanConfig().ReasonPoints.
+func TestCentralizedPeerRegistry_CorruptBlockBodyScores(t *testing.T) {
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	// corrupt_block_body is scored like invalid_block (10), not zero. Pass 0 as the
+	// caller-supplied default to prove the configured points win, not the fallback.
+	score, banned := r.AddBanScore("peer-corrupt", "corrupt_block_body", 0)
+	require.Equal(t, int32(10), score, "corrupt_block_body must score its configured points, not zero")
+	require.False(t, banned)
+
+	// Repeated corruption accumulates (no decay within the same second).
+	score, _ = r.AddBanScore("peer-corrupt", "corrupt_block_body", 0)
+	require.Equal(t, int32(20), score)
+}
+
 func TestCentralizedPeerRegistry_RegisterAndGet(t *testing.T) {
 	r := NewCentralizedPeerRegistry(DefaultBanConfig())
 
