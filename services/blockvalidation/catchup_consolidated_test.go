@@ -555,7 +555,7 @@ func TestCatchup_ContextStateConsistency(t *testing.T) {
 			currentHeight:      1000,
 			blockHeaders:       testHeaders[1:],
 			headersFetchResult: &catchup.Result{
-				Headers: testHeaders[1:], // Headers to be filtered
+				Headers: testHeaders, // Include the common ancestor at index zero
 			},
 		}
 

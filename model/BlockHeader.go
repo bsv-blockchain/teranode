@@ -11,6 +11,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/util"
@@ -317,4 +318,64 @@ func (bh *BlockHeader) Bytes() []byte {
 	blockHeaderBytes = append(blockHeaderBytes, uint32Bytes...)
 
 	return blockHeaderBytes
+}
+
+// HasMetPowLimit checks the target the header DECLARES against the network's
+// proof-of-work limit. It is the necessary companion to HasMetTargetDifficulty,
+// which only asks whether the hash meets the target the header chose for itself
+// — a question a fabricated header answers trivially by choosing an easy target.
+//
+// Without this floor, nBits=0x207fffff yields a target of roughly 2^255, met by
+// about every second nonce, so a header costs two hashes. That is the free
+// proof-of-work step of GHSA-gggq-8f59-4jm9. The expected-nBits (DAA) rule is
+// the check that truly binds a block's difficulty to the chain it claims to
+// extend, but it is skipped over the checkpoint-certified prefix and is not run
+// by legacy ingestion at all, so this cheap bound is what makes a hoisted
+// proof-of-work check meaningful before any expensive or state-mutating work.
+//
+// The ceiling is the LOOSER of PowLimit and the target PowLimitBits encodes.
+// Mainnet uses a roughly 2^224 limit. STN pairs a similar PowLimit with
+// PowLimitBits of 0x207fffff (regtest instead uses a roughly 2^255 PowLimit), and
+// rejecting a block that declares the network's own minimum difficulty would be
+// wrong. Taking the looser of the two keeps the bound meaningful wherever the
+// params are self-consistent without inventing a rule where they are not.
+//
+// Absent params or an absent limit cannot be enforced, so they pass: this is a
+// bound on an attacker-chosen value, not a substitute for the caller's own
+// validation.
+func (bh *BlockHeader) HasMetPowLimit(params *chaincfg.Params) error {
+	if bh == nil || params == nil || params.PowLimit == nil {
+		return nil
+	}
+
+	target := bh.Bits.CalculateTarget()
+
+	// CalculateTarget returns 0 for malformed nBits (negative-encoded or
+	// overflowing 256 bits). A zero target is not a limit violation — no positive
+	// hash can satisfy it — so HasMetTargetDifficulty rejects it with a clearer
+	// error and this check stays out of the way.
+	if target.Sign() == 0 {
+		return nil
+	}
+
+	ceiling := params.PowLimit
+
+	if params.PowLimitBits != 0 {
+		limitBits := make([]byte, 4)
+		binary.LittleEndian.PutUint32(limitBits, params.PowLimitBits)
+
+		if nBit, err := NewNBitFromSlice(limitBits); err == nil {
+			if bitsTarget := nBit.CalculateTarget(); bitsTarget.Cmp(ceiling) > 0 {
+				ceiling = bitsTarget
+			}
+		}
+	}
+
+	if target.Cmp(ceiling) > 0 {
+		return errors.NewBlockInvalidError(
+			"block nBits %s declares target %x, which is easier than the network proof-of-work limit %x",
+			bh.Bits.String(), target, ceiling)
+	}
+
+	return nil
 }

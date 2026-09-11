@@ -103,7 +103,7 @@ func TestSyncManager_HandleBlockDirect(t *testing.T) {
 	err = msgBlock.Deserialize(bytes.NewReader(blockBytes))
 	require.NoError(t, err)
 
-	err = sm.HandleBlockDirect(t.Context(), &peer.Peer{}, *blockHash, msgBlock)
+	err = sm.HandleBlockDirect(t.Context(), &peer.Peer{}, *blockHash, msgBlock, blockRequestOrigin{})
 	require.NoError(t, err)
 }
 
@@ -572,7 +572,7 @@ func TestSyncManager_prepareSubtrees(t *testing.T) {
 	}
 
 	// For single transaction blocks, prepareSubtrees returns empty
-	subtrees, blockID, err := sm.prepareSubtrees(context.Background(), block)
+	subtrees, blockID, err := sm.prepareSubtrees(context.Background(), block, blockRequestOrigin{}, bodyCommitment(t, block))
 	assert.NoError(t, err)
 	assert.NotNil(t, subtrees)
 	assert.Equal(t, uint32(0), blockID) // single-tx block exits early, IsFSMCurrentState=false → blockID stays 0
@@ -1510,10 +1510,10 @@ func TestSyncManager_quickValidationAllowed(t *testing.T) {
 			want:        false,
 		},
 		{
-			name:        "mainnet height 0 is covered",
+			name:        "mainnet height 0 is excluded",
 			chainParams: &chaincfg.MainNetParams,
 			height:      0,
-			want:        true,
+			want:        false,
 		},
 		{
 			name:        "mainnet height equal to highest checkpoint is covered",
@@ -1532,7 +1532,7 @@ func TestSyncManager_quickValidationAllowed(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sm := &SyncManager{chainParams: tt.chainParams}
-			require.Equal(t, tt.want, sm.quickValidationAllowed(tt.height))
+			require.Equal(t, tt.want, sm.quickValidationAllowed(headerProven, tt.height))
 		})
 	}
 }

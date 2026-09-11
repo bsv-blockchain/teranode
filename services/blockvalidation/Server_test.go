@@ -32,6 +32,7 @@ import (
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
+	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
@@ -402,49 +403,41 @@ func TestBlockHeadersN(t *testing.T) {
 func Test_Server_processBlockFound(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	tSettings := test.CreateBaseTestSettings(t)
-	// regtest SubsidyReductionInterval is 150
-	// so use mainnet params
-	tSettings.ChainCfgParams = &chaincfg.MainNetParams
-
-	blockHex := "010000000edfb8ccf30a17b7deae9c1f1a3dbbaeb1741ff5906192b921cbe7ece5ab380081caee50ec9ca9b5686bb6f71693a1c4284a269ab5f90d8662343a18e1a7200f52a83b66ffff00202601000001fdb1010001000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17033501002f6d322d75732fc1eaad86485d9cc712818b47ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a9141e7ee30c5c564b78533a44aae23bec1be188281d88ac00000000fd3501"
-	blockBytes, err := hex.DecodeString(blockHex)
+	storeURL := &url.URL{Scheme: "sqlitememory"}
+	blockchainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-
-	block, err := model.NewBlockFromBytes(blockBytes)
+	utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, tSettings, storeURL)
 	require.NoError(t, err)
-
-	blockchainStore := blockchain_store.NewMockStore()
-	blockchainStore.BlockExists[*block.Header.HashPrevBlock] = true
-
-	logger := ulogger.NewErrorTestLogger(t)
-
-	utxoStoreURL, err := url.Parse("sqlitememory:///test")
-	if err != nil {
-		panic(err)
-	}
-
-	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
-	if err != nil {
-		panic(err)
-	}
-
-	txStore := memory.New()
-
+	t.Cleanup(func() { require.NoError(t, utxoStore.Close(context.Background())) })
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockchainStore, nil, utxoStore)
 	require.NoError(t, err)
-
-	kafkaConsumerClient := &kafka.KafkaConsumerGroup{}
-
-	subtreeStore := memory.New()
-	tSettings.GlobalBlockHeightRetention = uint32(1)
-
-	s := New(ulogger.TestLogger{}, tSettings, nil, txStore, utxoStore, nil, blockchainClient, kafkaConsumerClient, nil, nil)
-	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, nil)
-
-	err = s.processBlockFound(context.Background(), block.Hash(), "", "legacy", block)
+	// A real parent in SQL is required now that supplied heights are verified.
+	header := tSettings.ChainCfgParams.GenesisBlock.Header
+	header.PrevBlock = *tSettings.ChainCfgParams.GenesisHash
+	header.Timestamp = header.Timestamp.Add(10 * time.Minute)
+	coinbase := wire.NewMsgTx(1)
+	coinbase.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Index: 0xffffffff}, SignatureScript: []byte{1, 1}, Sequence: 0xffffffff})
+	coinbase.AddTxOut(&wire.TxOut{Value: 50 * 100_000_000, PkScript: []byte{0x51}})
+	header.MerkleRoot = coinbase.TxHash()
+	block, err := model.NewBlockFromMsgBlock(&wire.MsgBlock{Header: header, Transactions: []*wire.MsgTx{coinbase}}, nil)
 	require.NoError(t, err)
+	for {
+		met, _, _ := block.Header.HasMetTargetDifficulty()
+		if met {
+			break
+		}
+		block.Header.Nonce++
+	}
+	txStore, subtreeStore := memory.New(), memory.New()
+	s := New(ulogger.TestLogger{}, tSettings, nil, txStore, utxoStore, nil, blockchainClient, nil, nil, nil)
+	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, nil)
+	t.Cleanup(s.blockValidation.StopCaches)
+	require.NoError(t, s.processBlockFound(ctx, block.Hash(), "", "legacy", block))
+	require.Equal(t, uint32(1), block.Height)
+	exists, err := blockchainClient.GetBlockExists(ctx, block.Hash())
+	require.NoError(t, err)
+	require.True(t, exists)
 }
 
 func TestServer_processBlockFoundChannel(t *testing.T) {

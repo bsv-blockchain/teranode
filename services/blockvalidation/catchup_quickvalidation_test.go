@@ -7,6 +7,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
 	"github.com/stretchr/testify/assert"
@@ -22,6 +23,7 @@ func TestTryQuickValidation(t *testing.T) {
 
 		block := testhelpers.CreateTestBlocks(t, 1)[0]
 		block.Height = 100
+		block.Header.HashMerkleRoot = block.CoinbaseTx.TxIDChainHash()
 
 		catchupCtx := &CatchupContext{
 			useQuickValidation:      false,
@@ -72,12 +74,15 @@ func TestTryQuickValidation(t *testing.T) {
 
 		block := testhelpers.CreateTestBlocks(t, 1)[0]
 		block.Height = 100
+		block.Header.HashMerkleRoot = block.CoinbaseTx.TxIDChainHash()
 		block.Subtrees = []*chainhash.Hash{subtreeHash1, subtreeHash2}
 
 		catchupCtx := &CatchupContext{
 			useQuickValidation:      true,
 			highestCheckpointHeight: 200,
 			blockUpTo:               block,
+			commonAncestorMeta:      &model.BlockHeaderMeta{Height: block.Height - 1},
+			blockHeaders:            []*model.BlockHeader{block.Header},
 		}
 
 		// Create a buffered channel for async writes
@@ -113,11 +118,14 @@ func TestTryQuickValidation(t *testing.T) {
 
 		block := testhelpers.CreateTestBlocks(t, 1)[0]
 		block.Height = 100
+		block.Header.HashMerkleRoot = block.CoinbaseTx.TxIDChainHash()
 
 		catchupCtx := &CatchupContext{
 			useQuickValidation:      true,
 			highestCheckpointHeight: 200,
 			blockUpTo:               block,
+			commonAncestorMeta:      &model.BlockHeaderMeta{Height: block.Height - 1},
+			blockHeaders:            []*model.BlockHeader{block.Header},
 		}
 
 		// Create a buffered channel for async writes
@@ -141,12 +149,15 @@ func TestTryQuickValidation(t *testing.T) {
 
 		block := testhelpers.CreateTestBlocks(t, 1)[0]
 		block.Height = 100
+		block.Header.HashMerkleRoot = block.CoinbaseTx.TxIDChainHash()
 		block.Subtrees = []*chainhash.Hash{subtreeHash}
 
 		catchupCtx := &CatchupContext{
 			useQuickValidation:      true,
 			highestCheckpointHeight: 200,
 			blockUpTo:               block,
+			commonAncestorMeta:      &model.BlockHeaderMeta{Height: block.Height - 1},
+			blockHeaders:            []*model.BlockHeader{block.Header},
 		}
 
 		// Create a buffered channel for async writes
