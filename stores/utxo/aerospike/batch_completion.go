@@ -2,7 +2,6 @@ package aerospike
 
 import (
 	"context"
-	"runtime/debug"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -11,48 +10,17 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 )
 
-// signalBatchPanic is the panic safety net for the batcher dispatch functions
-// (sendGetBatch, sendStoreBatch, sendSpendBatchLua, sendOutpointBatch,
-// sendIncrementBatch, sendSetDAHBatch, setLockedBatch).
-//
-// go-batcher recovers panics raised inside the batch fn (see
-// dispatchAndRecord in go-batcher/v2: it wraps b.fn(batch) in a deferred
-// recover). Without our own guard, a panic part-way through a dispatch fn
-// leaves the not-yet-completed items un-signalled: the worker survives, but the
-// submitter goroutines waiting on the shared completion.Group park forever
-// (group.Wait, and the contexts threaded down from legacy sync / validation
-// have no deadline). That is the mechanism behind the production goroutine leak
-// (thousands parked in (*Store).get's wait).
-//
-// Install it as the FIRST statement of each dispatch fn:
-//
-//	defer func() {
-//	    signalBatchPanic(recover(), batch, "sendGetBatch", s.logger, func(it *batchGetItem, err error) {
-//	        it.complete(err)
-//	    })
-//	}()
-//
-// signal MUST be non-blocking and idempotent. Production passes it.complete,
-// which is CAS-guarded, so signalling an item an earlier stage already completed
-// is a safe no-op (no double-signal, no block). Returns true if a panic was
-// actually handled (recovered != nil).
+// signalBatchPanic wraps util.SignalBatchPanic, adding the store's own
+// PanicRecovered counter, which is package-private here. See
+// util.SignalBatchPanic for the mechanism and the signal-fn contract.
 func signalBatchPanic[T any](recovered any, batch []T, fnName string, logger ulogger.Logger, signal func(item T, err error)) bool {
-	if recovered == nil {
-		return false
-	}
+	handled := util.SignalBatchPanic(recovered, batch, fnName, logger, signal)
 
-	if prometheusUtxoMapErrors != nil {
+	if handled && prometheusUtxoMapErrors != nil {
 		prometheusUtxoMapErrors.WithLabelValues("Batch", "PanicRecovered").Inc()
 	}
 
-	logger.Errorf("[%s] recovered panic, failing %d batch item(s): %v\n%s", fnName, len(batch), recovered, debug.Stack())
-
-	err := errors.NewProcessingError("panic in %s: %v", fnName, recovered)
-	for _, item := range batch {
-		signal(item, err)
-	}
-
-	return true
+	return handled
 }
 
 // isContextWaitErr reports whether a completion.Group.Wait error came from the context arm

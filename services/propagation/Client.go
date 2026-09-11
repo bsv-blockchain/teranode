@@ -601,14 +601,9 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 	// (unbuffered handoff, no timeout). complete is CAS-guarded, so
 	// re-completing an item an earlier stage already completed is a no-op.
 	defer func() {
-		if r := recover(); r != nil {
-			c.logger.Errorf("[ProcessTransactionBatch] recovered panic, failing %d batch item(s): %v", len(batch), r)
-
-			err := errors.NewProcessingError("panic in ProcessTransactionBatch: %v", r)
-			for _, item := range batch {
-				item.complete(err)
-			}
-		}
+		util.SignalBatchPanic(recover(), batch, "ProcessTransactionBatch", c.logger, func(it *batchItem, err error) {
+			it.complete(err)
+		})
 	}()
 
 	// Create a slice of raw transaction bytes for the gRPC request
