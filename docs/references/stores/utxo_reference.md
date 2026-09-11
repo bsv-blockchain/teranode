@@ -237,8 +237,11 @@ type Store interface {
     // UnFreezeUTXOs removes the frozen status from UTXOs, allowing them to be spent again.
     UnFreezeUTXOs(ctx context.Context, spends []*Spend, tSettings *settings.Settings) error
 
-    // ReAssignUTXO reassigns a UTXO to a new transaction output.
-    // The UTXO will become spendable after ReAssignedUtxoSpendableAfterBlocks blocks.
+    // ReAssignUTXO updates a frozen UTXO's commitment and maturity gate.
+    // It does not persist a replacement locking script. Changing the owner
+    // currently strands the output for both owners even after maturity; see
+    // https://github.com/bsv-blockchain/teranode/issues/1725.
+    // SQL honors the configured delay; Aerospike currently uses the fixed constant.
     ReAssignUTXO(ctx context.Context, utxo *Spend, newUtxo *Spend, tSettings *settings.Settings) error
 
     // GetCounterConflicting returns the counter conflicting transactions for a given transaction hash.
@@ -323,7 +326,7 @@ type Store interface {
 - `GetMeta`: Retrieves transaction metadata for a single transaction.
 - `SetMinedMulti`: Updates block information for multiple mined transactions and returns a map of transaction hashes to block IDs.
 - `PreviousOutputsDecorate`: Fetches information about transaction inputs' previous outputs from a transaction.
-- `ReAssignUTXO`: Reassigns a UTXO to a new transaction output with safety measures.
+- `ReAssignUTXO`: Updates a frozen output's commitment and maturity gate without storing a replacement script. Changing the owner currently strands the output for both owners even after maturity; see the [reassignment limitation](../../topics/services/alert.md#24-utxo-reassignment) and [issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).
 - `GetCounterConflicting`/`GetConflictingChildren`: Manages conflict relationships between transactions.
 - `SetBlockHeight`/`GetBlockHeight`/`SetMedianBlockTime`/`GetMedianBlockTime`: Manages blockchain state.
 - `GetBlockState`: Returns an atomic snapshot of block height and median block time.

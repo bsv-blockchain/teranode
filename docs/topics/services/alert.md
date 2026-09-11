@@ -32,7 +32,7 @@ The Service features are:
 
 ### UTXO Reassignment
 
-- Ability to reassign UTXOs to another specified address at a given block height.
+- Updates frozen UTXO commitments and maturity state. Ownership-changing reassignment currently strands the output for both owners and must not be used; see the [reassignment limitation](#24-utxo-reassignment).
 
 ### Peer Management
 
