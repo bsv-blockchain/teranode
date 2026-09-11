@@ -28,7 +28,8 @@
 8. [Running the Store Locally](#8-running-the-store-locally)
     - [How to run](#8-running-the-store-locally)
 9. [Configuration and Settings](#9-configuration-and-settings)
-10. [Other Resources](#10-other-resources)
+10. [UTXO Store Write-Access Surface](#10-utxo-store-write-access-surface)
+11. [Other Resources](#11-other-resources)
 
 ## 1. Description
 
@@ -312,7 +313,7 @@ The Transaction Validator uses the UTXO Store to perform a number of UTXO relate
 
 1. Obtain the current block height from the **UTXO Store**.
 2. Mark a UTXO as spent. If needed, it can also request to unspend (revert) a UTXO.
-3. Store and delete new UTXOs.
+3. Store new UTXOs (the Validator never deletes UTXOs — see §10).
 4. Retrieve previous outputs UTXO data.
 
 When marking a UTXO as spent, the store will check if the UTXO is known (by its hash), and whether it is spent or not. If it is spent, we will return one response message or another depending on whether the spending tx_id matches. See here:
@@ -615,6 +616,40 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 
 For comprehensive configuration documentation including all settings, defaults, and interactions, see the [UTXO Store Settings Reference](../../references/settings/stores/utxo_settings.md).
 
-## 10. Other Resources
+## 10. UTXO Store Write-Access Surface
+
+The UTXO Store's `Store` interface (`stores/utxo/Interface.go`) is shared by every service and CLI tool that links against `stores/utxo`, but only some of them ever call a mutating method (`SpendAndCreate`, `Unspend`, `Delete`, `SetMinedMulti`, `FreezeUTXOs`, `UnFreezeUTXOs`, `ReAssignUTXO`, `SetLocked`, `SetConflicting`/`ProcessConflicting`/`ReverseProcessConflicting`, `BeginConflictIntent`/`CompleteConflictIntent`, `MarkTransactionsOnLongestChain`, `RemoveBlockIDs`, `RemoveFromConflictingChildren`, `PreserveTransactions`/`ProcessExpiredPreservations`). Everything else (Asset Server, Block Persister, the Blockchain service's health check) only reads (`Get`, `GetMeta`, `BatchDecorate`, `GetBlockHeight`, `Health`, …) through its own code and calls no mutating method itself.
+
+**Write access follows the process, not the service.** `useLocalValidator = true` is the committed default (`settings.conf:1302`). With that default, `daemon/daemon_stores.go`'s `GetValidatorClient` hands every consumer an in-process `*Validator` wired directly to the shared UTXO store, instead of a gRPC stub — see the call sites in `daemon/daemon_services.go` for Propagation, the shared Subtree-Validation/Block-Validation startup path, and Legacy. Concretely: Subtree Validation's own code (`services/subtreevalidation/SubtreeValidation.go:431`, `validatorClient.ValidateWithOptions`) only ever calls into that embedded Validator, but the Validator it is calling issues `SpendAndCreate` and `SetLocked` against the store. So under the default configuration, Subtree Validation _is_ a writer — via the process it runs in, not via any store call in its own package. Do not scope a store role, DB credential, or network policy to "Subtree Validation reads, so give it read-only access": on a default-configured node that breaks transaction validation at startup, not gracefully. The same applies to Propagation and Legacy, which get the same embedded Validator.
+
+`SetBlockHeight`/`SetMedianBlockTime`/`SetBlockState` are deliberately left out of the mutating-method list above. They publish the process's local chain-tip snapshot (`stores/utxo/block_state.go`) — the Aerospike store additionally mirrors it into its external blob store for delete-at-height bookkeeping — but they do not touch the UTXO set itself. Every store built through `stores/utxo/factory.NewStore` calls `SetBlockState` on construction and again on every subsequent block via its blockchain subscription (`factory/utxo.go:153`, `:182`), so counting them as writes would make every "reader" below a writer by this document's own definition.
+
+The current writers, re-derived directly from the code (not from the settings/deployment topology), are:
+
+### Services
+
+| Service | File(s) | Writes | Why |
+|---|---|---|---|
+| **Validator** | `services/validator/Validator.go` | `SpendAndCreate` (creates the tx's outputs, spends its inputs), `SetLocked` | Core transaction validation: on accepting a new transaction it atomically creates its UTXOs and spends the ones it consumes. `SetLocked` completes a two-phase commit on the tx's own hash: when the tx is queued for block assembly its outputs are created locked (`WithLocked(true)`), and unlocked only once it has been added successfully (`twoPhaseCommitTransaction`) — a crash in between leaves them unspendable rather than spendable. |
+| **Block Validation** | `services/blockvalidation/BlockValidation.go`, `services/blockvalidation/quick_validate.go` | `SpendAndCreate` (`WithCreateOnly`/`WithSpendOnly`, quick-validate replay), `SetMinedMulti` (steady state, via `model.UpdateTxMinedStatus` in `setTxMined`), `utxo.SetMinedMultiChunked` (→ `SetMinedMulti`, quick-validate replay), `SetLocked` | Validates incoming blocks: creates/spends UTXOs for transactions not already known, marks the block's transactions as mined (records `BlockID`/`SubtreeIdx`), then — unless `quickValidateSkipsUtxoLock` applies to this block — unlocks the block's own subtree transactions at the end of quick-validate (`unlockSubtreeTransactions`). |
+| **Block Assembly** | `services/blockassembly/BlockAssembler.go`, `services/blockassembly/subtreeprocessor/SubtreeProcessor.go` | `SpendAndCreate` (coinbase creation, `storeCoinbaseTx`), `Delete` (coinbase and its child spends on reorg, `removeCoinbaseUtxos` — Block Assembly is the only service that calls `Delete` directly), `MarkTransactionsOnLongestChain`, `SetLocked` (unlocks unmined transactions reloaded at startup; unlocks conflict-locked parents when healing a stale conflict intent), `utxo.ProcessConflicting` / `utxo.ReverseProcessConflicting` (→ `SetConflicting`, `Unspend`, `SpendAndCreate`, `BeginConflictIntent`/`CompleteConflictIntent`) | Owns chain-tip bookkeeping during block building and reorgs: creates the coinbase UTXO and deletes it (with its child spends) on reorg, flags which transactions sit on the currently-longest chain, unlocks unmined transactions reloaded at startup and conflict-locked parents when healing a stale intent, and drives the conflicting-transaction state machine (marking/unmarking double-spends and reversing that on reorg). |
+| **Legacy (p2p sync)** | `services/legacy/netsync/handle_block.go` | `SpendAndCreate`, `utxo.SetMinedMultiChunked` (→ `SetMinedMulti`) | The legacy Bitcoin-protocol block-sync path validates and applies blocks received from legacy peers the same way Block Validation does for the native protocol — same create/spend/set-mined writes, different ingestion path. |
+| **Alert System** | `services/alert/node.go` | `FreezeUTXOs`, `UnFreezeUTXOs`, `ReAssignUTXO` | Executes alert-network directives (court orders / network alerts) to freeze, unfreeze, or reassign specific UTXOs. |
+| **RPC** | `services/rpc/handlers.go` | `FreezeUTXOs`, `UnFreezeUTXOs`, `ReAssignUTXO` | Exposes the same freeze/unfreeze/reassign operations as operator-facing RPC calls (e.g. for manual intervention), independent of the Alert System's automated path. |
+| **Pruner** | `services/pruner/worker.go`, `services/pruner/server.go` | `PreserveTransactions` (phase 1, via `utxo.PreserveParentsOfOldUnminedTransactions`), `ProcessExpiredPreservations` (phase 1b), plus record deletion via the store-provided `pruner.Service.Prune` (obtained through `PrunerServiceProvider.GetPrunerService()`) | Background cleanup: protects parent transactions of old unmined transactions from premature deletion, expires now-unneeded preservation holds, and deletes UTXO records once their `DeleteAtHeight` has passed. |
+
+### CLI tools
+
+| Tool | File(s) | Writes | Why |
+|---|---|---|---|
+| **`seeder`** | `cmd/seeder/seeder.go` | `SpendAndCreate` | Bulk-loads a UTXO set from an external source (e.g. a snapshot) directly into the store to bootstrap a node. |
+| **`seedimport`** | `cmd/seedimport/seedimport/seedimport.go` | `SpendAndCreate` (`WithCreateOnly` — creates only, never spends), `Delete` (rollback of the current run only, `rollback()`) | Imports a UTXO set dump; on failure it rolls back by deleting only the records it created during that run. |
+| **`rewindblockchain`** | `cmd/rewindblockchain/rewindblockchain/rewind.go`, `phase2_blocks.go`, `tx_delete.go`, `phase1_unmined.go` | `SetBlockHeight`, `Delete`, `Unspend`, `RemoveBlockIDs`, `RemoveFromConflictingChildren` | Rewinds a node's chain state to an earlier block height for recovery/operational purposes: unwinds block-height/state, deletes transactions that no longer exist at the target height, un-spends UTXOs consumed by rewound transactions, and trims block-ID/conflicting-children bookkeeping that referenced rewound blocks. |
+
+**Note on `teranodecli loadunminedbench`:** `cmd/teranodecli/teranodecli/loadunminedbench.go` also calls `SpendAndCreate`, but it is a benchmarking subcommand that by default spins up its own ephemeral Aerospike TestContainer; it only writes to a real, shared UTXO store if explicitly pointed at one via its `-aerospike-url` flag. It is listed here for completeness but is not part of the normal production write path.
+
+This list reflects the write-access surface as implemented today. It is descriptive, not prescriptive — it does not assign ownership of the store to any single team or service.
+
+## 11. Other Resources
 
 [UTXO Store Reference](../../references/stores/utxo_reference.md)
