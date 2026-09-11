@@ -2246,25 +2246,6 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 	return nil
 }
 
-func (s *server) getTxFromStore(hash *chainhash.Hash) (*bsvutil.Tx, int64, error) {
-	txMeta, err := s.utxoStore.Get(s.ctx, hash, fields.Tx)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	fee, err := util.GetFees(txMeta.Tx)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	tx, err := bsvutil.NewTxFromBytes(txMeta.Tx.Bytes())
-	if err != nil {
-		return nil, 0, err
-	}
-
-	return tx, int64(fee), nil // nolint:gosec
-}
-
 // pushBlockMsg sends a block message for the provided block hash to the
 // connected peer.  An error is returned if the block hash is not known.
 func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<- struct{},

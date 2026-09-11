@@ -127,7 +127,10 @@ func (b *BlockAssembler) canonicalCoinbaseAt(ctx context.Context, height uint32)
 		return false, nil, errors.NewProcessingError("[coinbaseRecovery] canonical block at height %d has no coinbase", height)
 	}
 
-	txMeta, err := b.utxoStore.Get(ctx, blk.CoinbaseTx.TxIDChainHash(), fields.Tx)
+	// An existence probe, so ask for a scalar the transactions record always
+	// carries rather than fields.Tx, which reassembles the whole transaction just
+	// to be discarded.
+	txMeta, err := b.utxoStore.Get(ctx, blk.CoinbaseTx.TxIDChainHash(), fields.Fee)
 	if err != nil {
 		// Either code means the same thing here -- the coinbase is not in the
 		// store -- and which one comes back depends on the store backend.
@@ -138,7 +141,9 @@ func (b *BlockAssembler) canonicalCoinbaseAt(ctx context.Context, height uint32)
 		return false, blk, errors.NewProcessingError("[coinbaseRecovery] error checking coinbase at height %d", height, err)
 	}
 
-	if txMeta == nil || txMeta.Tx == nil {
+	// A missing record surfaces as (nil, nil) on some backends, so the nil check
+	// stays; there is no Tx to test any more because none was asked for.
+	if txMeta == nil {
 		return false, blk, nil
 	}
 
