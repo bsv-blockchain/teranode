@@ -374,6 +374,12 @@ Represents comprehensive peer information with all registry metadata.
 | client_name | [string](#string) |  | Human-readable name of the client software |
 | last_catchup_error | [string](#string) |  | Last error message from catchup attempt |
 | last_catchup_error_time | [int64](#int64) |  | Time of last catchup error (Unix timestamp) |
+| catchup_attempts | [int64](#int64) |  | Number of catchup attempts with this peer |
+| catchup_successes | [int64](#int64) |  | Number of successful catchup operations |
+| catchup_failures | [int64](#int64) |  | Number of failed catchup operations |
+| blocks_received | [int64](#int64) |  | Number of blocks received from this peer |
+| subtrees_received | [int64](#int64) |  | Number of subtrees received from this peer |
+| transactions_received | [int64](#int64) |  | Number of transactions received from this peer |
 
 <a name="RecordBytesDownloadedRequest"></a>
 
