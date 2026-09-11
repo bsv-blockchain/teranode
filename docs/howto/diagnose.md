@@ -71,7 +71,7 @@ Checks connectivity to each gRPC service by creating a client and calling its `H
 
 If a service address is empty, the check is skipped. If the service is disabled in settings (e.g. `startValidator=false` for the current context), the skip message says so explicitly:
 
-```
+```text
 Validator gRPC  -  SKIP  -  disabled (startValidator=false)
 ```
 
@@ -123,7 +123,7 @@ These catch subtle problems where services silently fall out of sync:
 
 ### Example Output
 
-```
+```text
 Service Health Checks
 =====================
 SERVICE                  ADDRESS                STATUS  LATENCY  MESSAGE
@@ -175,7 +175,7 @@ Listen addresses checked: Blockchain gRPC/HTTP, Block Assembly gRPC, Block Valid
 
 | Check | Condition | Severity |
 |-------|-----------|----------|
-| gRPC TLS | `securityLevelGRPC = 0` | WARN in prod, INFO in dev |
+| gRPC TLS | `security_level_grpc = 0` | WARN in prod, INFO in dev |
 | HTTP TLS | `securityLevelHTTP = 0` | WARN in prod, INFO in dev |
 | TLS cert files | TLS enabled but `server_certFile` or `server_keyFile` empty | ERROR |
 | gRPC admin API key | Empty or < 16 chars | WARN in prod |
@@ -232,14 +232,14 @@ Checks that the data folder exists, is a directory, and is writable. Catches per
 
 ### Example Output
 
-```
+```text
 Configuration Checks
 ====================
 SEVERITY  CHECK                       VALUE                                       RECOMMENDED
 INFO      Configuration context       dev
 INFO      Network                     mainnet
 OK        Port conflicts              none (16 listen addresses checked)
-INFO      gRPC TLS                    disabled (level 0)                          Set securityLevelGRPC >= 1 for production
+INFO      gRPC TLS                    disabled (level 0)                          Set security_level_grpc >= 1 for production
 INFO      HTTP TLS                    disabled (level 0)                          Set securityLevelHTTP >= 1 for production
 OK        gRPC admin API key          32 chars
 OK        Kafka hosts                 localhost:9092
