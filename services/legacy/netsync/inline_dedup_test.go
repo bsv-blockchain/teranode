@@ -3,22 +3,9 @@ package netsync
 // CVE-2012-2459 duplicate-transaction dedup floor on the INLINE (non-unified)
 // below-checkpoint path.
 //
-// Background: CheckSubtreeSlicesForDuplicateTxs is the explicit dedup guard for
-// any path that holds the block's subtree slices in memory without running the
-// full Block.Valid duplicate-tx scan. Before this task it ran only inside the
-// `if preparedSubtreeSlices != nil` block in HandleBlockDirect  — and prepareSubtrees only returns non-nil
-// preparedSubtreeSlices on the UNIFIED route (see the `if sm.legacyUnified(...)`
-// guard at the bottom of prepareSubtrees). On the inline route the returned
-// slices are nil, so HandleBlockDirect's guard is skipped and the CVE check
-// never ran on that path.
-//
-// createTxMap uses txMap.Set, which SILENTLY OVERWRITES a duplicate txid, so the
-// map itself cannot catch the duplicate. But createSubtrees iterates the
-// block-order txOrder (which retains both copies of the duplicated hash) and
-// AddNodes the duplicate twice into the locally-built slices. The fix runs
-// CheckSubtreeSlicesForDuplicateTxs on those locally-built slices inside
-// prepareSubtrees, unconditionally, right after createSubtrees — so every path
-// (inline, unified, non-quick) gets the floor from one place.
+// prepareSubtrees checks both duplicates and the body commitment before writes.
+// createTxMap also rejects duplicate keys before parallel extension can touch
+// the same transaction wrapper from two goroutines.
 
 import (
 	"context"
@@ -117,12 +104,12 @@ func TestLegacyInline_DuplicateTxid_Rejected(t *testing.T) {
 	}
 
 	// Sanity: the below-checkpoint inline gate engages for this block.
-	require.True(t, sm.legacyOutpointOnly(uint32(height)), "below-checkpoint outpoint-only gate must engage for the test block")
-	require.False(t, sm.legacyUnified(uint32(height)), "test must exercise the inline (non-unified) route")
+	require.True(t, sm.legacyOutpointOnly(headerProven, uint32(height)), "below-checkpoint outpoint-only gate must engage for the test block")
+	require.False(t, sm.legacyUnified(headerProven, uint32(height)), "test must exercise the inline (non-unified) route")
 
 	block := makeDuplicateTxidBlock(height)
 
-	_, _, _, prepErr := sm.prepareSubtrees(ctx, block)
+	_, _, _, prepErr := sm.prepareSubtrees(ctx, block, headerProven, bodyCommitment(t, block))
 	require.Error(t, prepErr, "a duplicated txid must be rejected on the inline path")
 	require.True(t, errors.Is(prepErr, errors.ErrBlockInvalid),
 		"duplicate-txid rejection must be a BlockInvalidError (CVE-2012-2459), got: %v", prepErr)

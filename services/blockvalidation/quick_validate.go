@@ -1071,6 +1071,15 @@ func (b *SubtreeProcessingBatch) Close() {
 // mirrors the guard in services/validator/Validator.go extendTransaction.
 func extendTxFromSameBlockParents(tx *bt.Tx, parents map[chainhash.Hash]*bt.Tx) (needsExternalLookup bool, err error) {
 	for j, input := range tx.Inputs {
+		// Skip a nil input rather than dereferencing it. The inline loop this
+		// replaced had no check, so nothing regresses, but
+		// discardSuppliedPreviousOutputs walks the same slice a few lines earlier
+		// and does guard it — one of the two asserting the hazard while the other
+		// panics on it is worse than either choice made consistently.
+		if input == nil {
+			continue
+		}
+
 		parentHash := input.PreviousTxIDChainHash()
 
 		parentTx, ok := parents[*parentHash]
@@ -1080,7 +1089,7 @@ func extendTxFromSameBlockParents(tx *bt.Tx, parents map[chainhash.Hash]*bt.Tx) 
 		}
 
 		vout := input.PreviousTxOutIndex
-		if parentTx.Outputs == nil || int(vout) >= len(parentTx.Outputs) {
+		if parentTx.Outputs == nil || int(vout) >= len(parentTx.Outputs) || parentTx.Outputs[vout] == nil {
 			return false, errors.NewProcessingError("tx %s input %d references non-existent output %d of same-block parent %s",
 				tx.TxIDChainHash().String(), j, vout, parentHash.String())
 		}
@@ -1090,6 +1099,36 @@ func extendTxFromSameBlockParents(tx *bt.Tx, parents map[chainhash.Hash]*bt.Tx) 
 	}
 
 	return needsExternalLookup, nil
+}
+
+// discardSuppliedPreviousOutputs clears the previous-output metadata a
+// transaction arrived with, so the extension paths below repopulate it from the
+// block's own parents or from the local UTXO store.
+//
+// Subtree data is fetched from the peer that announced the block and arrives in
+// extended format, which means the peer — not this node — would otherwise choose
+// the locking script and value used for script execution and value conservation.
+// That is exploitable because the UTXO commitment (util.UTXOHashInto) hashes
+// `lockingScript || VarInt(satoshis)` without a script-length prefix: the
+// script/value boundary is not pinned, so a shorter spendable script paired with
+// a larger value reproduces a genuine output's commitment and passes the store's
+// utxoHash check (GHSA-v76m-6vc7-g7c7).
+//
+// An in-block parent's outputs are committed to by its txid, so resolving
+// against them is as authoritative as the store.
+func discardSuppliedPreviousOutputs(tx *bt.Tx) {
+	for _, input := range tx.Inputs {
+		if input == nil {
+			continue
+		}
+
+		input.PreviousTxScript = nil
+		input.PreviousTxSatoshis = 0
+	}
+
+	// IsExtended() also reports true from this flag alone, so clearing the
+	// per-input fields is not enough on its own.
+	tx.SetExtended(false)
 }
 
 // processSubtreeBatch reads and extends a batch of subtrees.
@@ -1185,6 +1224,13 @@ func (u *BlockValidation) processSubtreeBatch(
 		for _, tx := range result.subtreeData.Txs {
 			if tx == nil {
 				continue // skip coinbase
+			}
+
+			// Never trust previous-output metadata supplied by the announcing
+			// peer; re-resolve it locally. Skipped on the outpoint-only fast
+			// path, which does no script or value checks at all (see Phase 3).
+			if !outpointOnly {
+				discardSuppliedPreviousOutputs(tx)
 			}
 
 			// Try to extend from same-block parents first
@@ -1633,6 +1679,13 @@ func (u *BlockValidation) extendBatch(
 		for _, tx := range batch.subtreeData[i].Txs {
 			if tx == nil {
 				continue // skip coinbase
+			}
+
+			// Never trust previous-output metadata supplied by the announcing
+			// peer; re-resolve it locally. Skipped on the outpoint-only fast
+			// path, which does no script or value checks at all.
+			if !batch.outpointOnly {
+				discardSuppliedPreviousOutputs(tx)
 			}
 
 			// Try to extend from same-block parents first

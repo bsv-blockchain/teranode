@@ -1276,9 +1276,8 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 
 // prefetchParentBaseFields are the metadata fields a bulk parent read always
 // fetches to stand in for the validator's per-parent Get: block IDs/heights, for
-// the unconfirmed-parent sentinel + height resolution. The parent tx outputs
-// (fields.Tx) are appended only when the level has a non-extended tx — see
-// prefetchLevelParents.
+// the unconfirmed-parent sentinel + height resolution. The parent outputs
+// (fields.Outputs) are appended unconditionally — see prefetchLevelParents.
 var prefetchParentBaseFields = []fields.FieldName{fields.BlockIDs, fields.BlockHeights}
 
 // prefetchLevelParents bulk-reads the distinct parent transactions referenced by
@@ -1296,21 +1295,20 @@ var prefetchParentBaseFields = []fields.FieldName{fields.BlockIDs, fields.BlockH
 func (u *Server) prefetchLevelParents(ctx context.Context, levelTxs []missingTx) (map[chainhash.Hash]*meta.Data, error) {
 	distinct := make(map[chainhash.Hash]struct{})
 
-	// Mirror the validator's per-tx `extend := !tx.IsExtended()` decision at the
-	// level grain: only fetch the parent tx outputs (fields.Tx) if at least one tx
-	// in this level still needs extending. A fully-extended level (e.g. all inputs
-	// extended via extendTxWithInBlockParents) resolves heights from
-	// BlockIDs/BlockHeights alone, so fetching Tx would force a needless
-	// external-store round-trip per distinct parent.
-	needTx := false
-
+	// Parent outputs are always fetched. This used to mirror the validator's
+	// per-tx `extend := !tx.IsExtended()` decision and skip them for a
+	// fully-extended level, but the validator now re-extends every transaction
+	// from the store regardless (GHSA-v76m-6vc7-g7c7). Skipping them would leave
+	// every parent on such a level failing the validator's prefetch guard, which
+	// requires Data.Tx, and falling back to an individual per-parent Get.
+	//
+	// fields.Outputs skips the inputs bin for inline Aerospike parents. An
+	// external parent has no outputs bin, so this still reads its full body.
+	// SQL adds an outputs query. The prefetch retains every distinct parent's
+	// outputs for the level, including outputs no transaction in it references.
 	for _, mTx := range levelTxs {
 		if mTx.tx == nil {
 			continue
-		}
-
-		if !mTx.tx.IsExtended() {
-			needTx = true
 		}
 
 		for _, in := range mTx.tx.Inputs {
@@ -1327,10 +1325,7 @@ func (u *Server) prefetchLevelParents(ctx context.Context, levelTxs []missingTx)
 		return nil, nil
 	}
 
-	prefetchFields := prefetchParentBaseFields
-	if needTx {
-		prefetchFields = append(append([]fields.FieldName(nil), prefetchParentBaseFields...), fields.Tx)
-	}
+	prefetchFields := append(append([]fields.FieldName(nil), prefetchParentBaseFields...), fields.Outputs)
 
 	items := make([]*utxostore.UnresolvedMetaData, 0, len(distinct))
 	for parentHash := range distinct {

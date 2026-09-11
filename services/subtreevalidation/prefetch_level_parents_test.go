@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
@@ -141,12 +142,16 @@ func mkNonExtendedTx(t *testing.T, parentHex string, vout uint32) *bt.Tx {
 	return tx
 }
 
-// Test_prefetchLevelParents_OmitsTxWhenAllExtended proves the fields-gating fix:
-// when every tx in the level is already extended (e.g. extended via in-block
-// parents), the validator never requests fields.Tx for any parent, so the bulk
-// prefetch must not fetch it either — fetching Tx would trigger a needless
-// external-store round-trip per distinct parent.
-func Test_prefetchLevelParents_OmitsTxWhenAllExtended(t *testing.T) {
+// Test_prefetchLevelParents_FetchesOutputsWhenAllExtended proves the projection
+// does not depend on the level already being extended: the validator re-extends
+// every transaction from the store (GHSA-v76m-6vc7-g7c7), so parent outputs are
+// fetched even when every tx in the level arrives extended.
+//
+// fields.Tx is never requested. That is a narrowing rather than a saved round
+// trip — fields.Outputs is itself in the needsFullExternalTx trigger, so a large
+// parent still costs an external read — but it avoids fetching the parent's
+// inputs, which the extend path never reads.
+func Test_prefetchLevelParents_FetchesOutputsWhenAllExtended(t *testing.T) {
 	ctx := context.Background()
 
 	server, cleanup := setupTestServer(t)
@@ -172,14 +177,22 @@ func Test_prefetchLevelParents_OmitsTxWhenAllExtended(t *testing.T) {
 
 	require.True(t, store.hasField(fields.BlockIDs), "BlockIDs is always needed")
 	require.True(t, store.hasField(fields.BlockHeights), "BlockHeights is always needed")
+	require.True(t, store.hasField(fields.Outputs),
+		"parent outputs are needed even for a fully extended level: the validator re-extends every tx")
 	require.False(t, store.hasField(fields.Tx),
-		"fields.Tx must be omitted when every tx in the level is already extended")
+		"fields.Tx is never needed — the extend path reads only Outputs[vout]")
 }
 
-// Test_prefetchLevelParents_IncludesTxWhenAnyNonExtended proves the other side
-// of the gate: a single non-extended tx in the level means the validator will
-// extend it from the parent outputs, so the prefetch must carry fields.Tx.
-func Test_prefetchLevelParents_IncludesTxWhenAnyNonExtended(t *testing.T) {
+// Test_prefetchLevelParents_FetchesOutputsWhenAnyNonExtended proves the other side
+// side: the projection does not depend on whether the level happens to be
+// extended. The validator re-extends every transaction from the store
+// (GHSA-v76m-6vc7-g7c7), so parent outputs are fetched either way.
+//
+// The gate these two tests originally pinned — fields.Tx only when the level
+// held a non-extended tx — mirrored the validator's old
+// `extend := !tx.IsExtended()` decision and is gone with it. Keeping the pair
+// preserves the level-shape polarity coverage they gave.
+func Test_prefetchLevelParents_FetchesOutputsWhenAnyNonExtended(t *testing.T) {
 	ctx := context.Background()
 
 	server, cleanup := setupTestServer(t)
@@ -187,7 +200,7 @@ func Test_prefetchLevelParents_IncludesTxWhenAnyNonExtended(t *testing.T) {
 
 	parentHex := "0000000000000000000000000000000000000000000000000000000000000001"
 
-	// One extended, one non-extended — the level still needs Tx for the latter.
+	// One extended, one non-extended: the projection must not depend on which.
 	levelTxs := []missingTx{
 		{tx: mkExtendedTx(t, parentHex, 0), idx: 0},
 		{tx: mkNonExtendedTx(t, parentHex, 1), idx: 1},
@@ -195,17 +208,40 @@ func Test_prefetchLevelParents_IncludesTxWhenAnyNonExtended(t *testing.T) {
 
 	parent := *levelTxs[0].tx.Inputs[0].PreviousTxIDChainHash()
 
+	// The resolved parent carries outputs, as a real store asked for
+	// fields.Outputs does. Without them the prefetched entry fails the
+	// validator's Data.Tx guard and every parent falls back to a per-parent Get,
+	// which is the regression the assertions below exist to catch.
 	store := &recordingParentStore{
 		MockUtxostore: &utxostore.MockUtxostore{},
-		resolve:       map[chainhash.Hash]*meta.Data{parent: {BlockHeights: []uint32{100}}},
+		resolve: map[chainhash.Hash]*meta.Data{parent: {
+			BlockHeights: []uint32{100},
+			Tx: &bt.Tx{
+				Outputs: []*bt.Output{
+					{Satoshis: 1000, LockingScript: &bscript.Script{}},
+					{Satoshis: 2000, LockingScript: &bscript.Script{}},
+				},
+			},
+		}},
 	}
 	server.utxoStore = store
 
-	_, err := server.prefetchLevelParents(ctx, levelTxs)
+	prefetched, err := server.prefetchLevelParents(ctx, levelTxs)
 	require.NoError(t, err)
 
-	require.True(t, store.hasField(fields.Tx),
-		"fields.Tx must be fetched when any tx in the level is non-extended")
+	require.True(t, store.hasField(fields.BlockIDs), "BlockIDs is always needed")
+	require.True(t, store.hasField(fields.BlockHeights), "BlockHeights is always needed")
+	require.True(t, store.hasField(fields.Outputs),
+		"parent outputs are needed for a level containing a non-extended tx")
+	require.False(t, store.hasField(fields.Tx),
+		"fields.Tx is never needed — the extend path reads only Outputs[vout]")
+
+	// The prefetch is only useful if the validator's guard accepts it, and that
+	// guard requires a non-nil Data.Tx, not merely a map entry. A prefetched
+	// parent without one falls back to an individual per-parent Get.
+	require.NotNil(t, prefetched[parent], "parent must be prefetched")
+	require.NotNil(t, prefetched[parent].Tx,
+		"prefetched parent must carry Data.Tx, or the validator's guard rejects it and re-reads per parent")
 }
 
 // Test_prefetchLevelParents_OmitsNotFoundParent proves a genuine not-found

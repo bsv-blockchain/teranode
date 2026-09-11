@@ -5,11 +5,18 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/jellydator/ttlcache/v3"
 )
 
 const (
 	catchupFailureKindGeneric         = "generic"
 	catchupFailureKindBlockIncomplete = "block_incomplete"
+
+	// peerMaliciousCacheTTL bounds how stale a cached IsPeerMalicious verdict
+	// may be served. Long enough to shed the per-message RPC fan-out under an
+	// announcement flood, short enough that a freshly banned peer is refused
+	// within seconds.
+	peerMaliciousCacheTTL = 5 * time.Second
 )
 
 // reportCatchupAttempt reports a catchup attempt to the P2P service.
@@ -277,6 +284,14 @@ func (u *Server) reportCatchupMalicious(ctx context.Context, peerID string, reas
 
 	u.logger.Warnf("[peer_metrics] Recording malicious attempt from peer %s: %s", peerID, reason)
 
+	// Drop the cached verdict up front, whether or not the report RPC below
+	// succeeds: this node has evidence against the peer NOW, and a stale
+	// not-malicious entry must not be served for up to the cache TTL
+	// mid-catchup while the report is retried or lost.
+	if u.peerMaliciousCache != nil {
+		u.peerMaliciousCache.Delete(peerID)
+	}
+
 	// Report to P2P service if client is available
 	if u.p2pClient != nil {
 		if err := u.p2pClient.RecordCatchupMalicious(ctx, peerID); err != nil {
@@ -300,25 +315,44 @@ func (u *Server) reportCatchupMalicious(ctx context.Context, peerID string, reas
 // Returns:
 //   - bool: True if peer is malicious
 func (u *Server) isPeerMalicious(ctx context.Context, peerID string) bool {
-	if peerID == "" {
+	if peerID == "" || u.p2pClient == nil {
 		return false
 	}
 
-	// Query P2P service for peer status
-	if u.p2pClient != nil {
-		isMalicious, reason, err := u.p2pClient.IsPeerMalicious(ctx, peerID)
-		if err != nil {
-			u.logger.Warnf("[isPeerMalicious] Failed to check if peer %s is malicious: %v", peerID, err)
-			// On error, assume peer is not malicious to avoid false positives
-			return false
+	// Serve from the short-lived cache when possible: every gossip-driven
+	// Kafka message costs two of these checks (consumer gate + worker gate)
+	// and each is a p2p gRPC that fans into a blockchain RPC, so an
+	// announcement flood would otherwise become an RPC storm. A nil cache
+	// (Server literals in tests) degrades to uncached lookups.
+	if u.peerMaliciousCache != nil {
+		if item := u.peerMaliciousCache.Get(peerID); item != nil {
+			return item.Value()
 		}
-		if isMalicious {
-			u.logger.Debugf("[isPeerMalicious] Peer %s is malicious: %s", peerID, reason)
-		}
-		return isMalicious
 	}
 
-	return false
+	// Query P2P service for peer status
+	isMalicious, reason, err := u.p2pClient.IsPeerMalicious(ctx, peerID)
+	if err != nil {
+		u.logger.Warnf("[isPeerMalicious] Failed to check if peer %s is malicious: %v", peerID, err)
+		// On error, assume peer is not malicious to avoid false positives.
+		// Cache the fallback verdict too, so a degraded p2p service is asked
+		// (and logged) once per TTL per peer instead of once per message.
+		if u.peerMaliciousCache != nil {
+			u.peerMaliciousCache.Set(peerID, false, ttlcache.DefaultTTL)
+		}
+
+		return false
+	}
+
+	if isMalicious {
+		u.logger.Debugf("[isPeerMalicious] Peer %s is malicious: %s", peerID, reason)
+	}
+
+	if u.peerMaliciousCache != nil {
+		u.peerMaliciousCache.Set(peerID, isMalicious, ttlcache.DefaultTTL)
+	}
+
+	return isMalicious
 }
 
 // isPeerBad checks if a peer has a bad reputation.

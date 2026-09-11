@@ -100,6 +100,7 @@ func buildParityCorpus(t *testing.T) *parityCorpus {
 		Header:       wire.BlockHeader{Version: 1, Timestamp: time.Now(), Bits: 0x1d00ffff},
 		Transactions: []*wire.MsgTx{makeCoinbase(500), txA, txB},
 	}
+	setBodyMerkleRoot(msgBlock1)
 	block1 := bsvutil.NewBlock(msgBlock1)
 	block1.SetHeight(500)
 
@@ -112,6 +113,7 @@ func buildParityCorpus(t *testing.T) *parityCorpus {
 		Header:       wire.BlockHeader{Version: 1, Timestamp: time.Now().Add(time.Minute), Bits: 0x1d00ffff},
 		Transactions: []*wire.MsgTx{makeCoinbase(501), txC, txD},
 	}
+	setBodyMerkleRoot(msgBlock2)
 	block2 := bsvutil.NewBlock(msgBlock2)
 	block2.SetHeight(501)
 
@@ -122,6 +124,7 @@ func buildParityCorpus(t *testing.T) *parityCorpus {
 		Header:       wire.BlockHeader{Version: 1, Timestamp: time.Now().Add(2 * time.Minute), Bits: 0x1d00ffff},
 		Transactions: []*wire.MsgTx{makeCoinbase(502), txE},
 	}
+	setBodyMerkleRoot(msgBlock3)
 	block3 := bsvutil.NewBlock(msgBlock3)
 	block3.SetHeight(502)
 
@@ -198,7 +201,7 @@ func runInlinePipeline(t *testing.T, ctx context.Context, corpus *parityCorpus, 
 	}
 
 	for _, block := range corpus.blocks {
-		_, _, _, prepErr := sm.prepareSubtrees(ctx, block)
+		_, _, _, prepErr := sm.prepareSubtrees(ctx, block, headerProven, bodyCommitment(t, block))
 		require.NoError(t, prepErr, "Run A prepareSubtrees failed at height %d", block.Height())
 	}
 }

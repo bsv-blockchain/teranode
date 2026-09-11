@@ -93,3 +93,34 @@ func HighestCheckpointHash(checkpoints []chaincfg.Checkpoint) *chainhash.Hash {
 
 	return hash
 }
+
+// SkipExpectedDifficulty reports whether a block may skip the expected-nBits
+// (DAA) check because the pinned checkpoint hashes already certify the
+// difficulty schedule over its part of the chain.
+//
+// It requires the height to be inside the certified prefix AND the node to still
+// be building that prefix (bestHeight below the highest checkpoint). The second
+// conjunct is the fix: BelowCheckpoint alone is true for EVERY height in
+// 1..highest, so on a fully synced node it granted the skip to a NEWLY supplied
+// fork at a low height — and the DAA rule is the only check that binds a block's
+// declared difficulty to the chain it claims to extend. A block's own
+// proof-of-work floor is not a substitute: it bounds how easy a declared target
+// may be, not whether it is the correct one for that chain position
+// (GHSA-gggq-8f59-4jm9).
+//
+// A node that already holds the whole prefix has no legitimate reason to accept a
+// new block inside it, so demanding the real rule there costs nothing. A node
+// still syncing keeps the skip, which it must: re-deriving the historical
+// schedule would mean reproducing every retarget rule the chain has ever used,
+// which is exactly what the checkpoints stand in for. Tightening this during
+// initial block download would reject canonical blocks.
+//
+// Callers that cannot establish bestHeight must not skip. See BelowCheckpoint for
+// the boundary, including the mandatory height > 0 guard.
+func SkipExpectedDifficulty(checkpoints []chaincfg.Checkpoint, blockHeight, bestHeight uint32) bool {
+	if !BelowCheckpoint(checkpoints, blockHeight) {
+		return false
+	}
+
+	return bestHeight < HighestCheckpointHeight(checkpoints)
+}

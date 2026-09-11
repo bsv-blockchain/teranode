@@ -17,9 +17,7 @@ import (
 
 func Test_NewFiniteStateMachine(t *testing.T) {
 	ctx := context.Background()
-	logger := mocklogger.NewTestLogger()
-	blockchainClient, err := New(ctx, logger, getTestSettings(), nil, nil)
-	require.NoError(t, err)
+	blockchainClient, _ := newFSMPersistenceTestBlockchain(t, blockchain_api.FSMStateType_IDLE)
 
 	fsm := blockchainClient.NewFiniteStateMachine()
 	require.NotNil(t, fsm)
@@ -36,7 +34,7 @@ func Test_NewFiniteStateMachine(t *testing.T) {
 	})
 
 	t.Run("Transition from Running to Catch up Blocks", func(t *testing.T) {
-		err = fsm.Event(ctx, blockchain_api.FSMEventType_CATCHUPBLOCKS.String())
+		err := fsm.Event(ctx, blockchain_api.FSMEventType_CATCHUPBLOCKS.String())
 		require.NoError(t, err)
 		require.Equal(t, "CATCHINGBLOCKS", fsm.Current())
 		require.False(t, fsm.Can(blockchain_api.FSMEventType_STOP.String()))

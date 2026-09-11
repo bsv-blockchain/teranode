@@ -15,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
@@ -1497,6 +1498,33 @@ func newSpendAndCreateTx(t *testing.T, vout uint32, satoshis uint64) *bt.Tx {
 	return tx
 }
 
+// newSpendAndCreateTxWithOutputs builds an extended transaction spending output
+// `vout` of Tx and paying to `numOutputs` addresses. The satoshi amount on the
+// first output makes the txid unique per test case; the remaining outputs each
+// carry one satoshi. A transaction with more outputs than utxostore_utxoBatchSize
+// paginates on the Aerospike backend, which is what the paginated store-contract
+// case exercises.
+func newSpendAndCreateTxWithOutputs(t *testing.T, vout uint32, satoshis uint64, numOutputs int) *bt.Tx {
+	t.Helper()
+
+	tx := bt.NewTx()
+	require.NoError(t, tx.FromUTXOs(&bt.UTXO{
+		TxIDHash:      Tx.TxIDChainHash(),
+		Vout:          vout,
+		LockingScript: Tx.Outputs[vout].LockingScript,
+		Satoshis:      Tx.Outputs[vout].Satoshis,
+	}))
+	tx.Inputs[0].UnlockingScript = dummyUnlockingScript
+
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", satoshis))
+
+	for i := 1; i < numOutputs; i++ {
+		require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1))
+	}
+
+	return tx
+}
+
 // SpendAndCreate proves the combined call spends the tx's inputs and creates its
 // outputs in one operation.
 func SpendAndCreate(t *testing.T, db utxostore.Store) {
@@ -1636,4 +1664,273 @@ func SpendAndCreateSpendErrorSurfacesPerInput(t *testing.T, db utxostore.Store) 
 func SpendAndCreateInvalidOptions(t *testing.T, db utxostore.Store) {
 	_, _, err := db.SpendAndCreate(context.Background(), Tx, 1000, utxostore.WithCreateOnly(), utxostore.WithSpendOnly())
 	require.ErrorIs(t, err, errors.ErrInvalidArgument)
+}
+
+// DeleteThenUnspendRestoresParent proves the store-level contract the validator's
+// shed unwind depends on, in the exact order the unwind performs it.
+//
+// The unwind's correctness is a STORE property, not a validator one, so it is
+// proved here — once per backend — rather than only through validator spies. The
+// ordering (Delete the record first, THEN Unspend its inputs) is deliberate: the
+// reverse order has an intermediate state in which the inputs are free while the
+// record still exists and is Locked, so a partial failure lets a competing spend
+// take those inputs while the surviving record can still be lifted into a mining
+// template by the unmined reload. The order proved here has an intermediate state
+// that is merely inconvenient — inputs temporarily unspendable, no record able to
+// re-enter a template.
+//
+// Asserted, in order:
+//   - SpendAndCreate: parent outpoint reads spent, child record present and Locked;
+//   - while the child is Locked its OWN outputs cannot be spent — the precondition the
+//     whole safety argument rests on (see below);
+//   - Delete(child): child GetMeta returns ErrTxNotFound while the parent outpoint
+//     STILL reads spent — the safe intermediate state;
+//   - Unspend: the parent outpoint is spendable again and a different spender wins;
+//   - a second Unspend is a no-op and a second Delete does not error — both are
+//     relied on by the best-effort retry semantics of the unwind;
+//   - Unspend(nil) is a no-op — the SkipUtxoCreation / spend-only shape.
+//
+// Intended for REAL store backends. Cache decorators whose Delete is documented as
+// cache-only cannot satisfy it by design; the validator guards against those with
+// a read-back after Delete rather than by trusting the returned nil.
+func DeleteThenUnspendRestoresParent(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	// The parent whose output the child will spend.
+	_, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	child := newSpendAndCreateTx(t, 4, 5001)
+	_ = db.Delete(ctx, child.TxIDChainHash())
+
+	utxoHash4, err := util.UTXOHashFromOutput(Tx.TxIDChainHash(), Tx.Outputs[4], 4)
+	require.NoError(t, err)
+
+	parentOutpoint := &utxostore.Spend{TxID: Tx.TxIDChainHash(), Vout: 4, UTXOHash: utxoHash4}
+
+	// Step 0 — the shape the validator creates on the block-assembly path: spend
+	// the inputs, create the record, marked Locked.
+	md, spends, err := db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1, utxostore.WithLocked(true))
+	require.NoError(t, err)
+	require.NotNil(t, md)
+	require.Len(t, spends, 1)
+
+	resp, err := db.GetSpend(ctx, parentOutpoint)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status, "precondition: the parent output is spent by the child")
+
+	childMeta := &meta.Data{}
+	require.NoError(t, db.GetMeta(ctx, child.TxIDChainHash(), childMeta))
+	require.True(t, childMeta.Locked, "precondition: the child record is created Locked")
+
+	// Step 0b — the precondition the whole unwind safety argument rests on: while the
+	// child record is Locked, its OWN outputs cannot be spent. The unwind is only safe
+	// to delete the child because no descendant can have spent its outputs, and that
+	// claim is a STORE property rather than validator logic. Asserting it here turns
+	// the assumption into a proof, once per backend.
+	grandchild := bt.NewTx()
+	require.NoError(t, grandchild.FromUTXOs(&bt.UTXO{
+		TxIDHash:      child.TxIDChainHash(),
+		Vout:          0,
+		LockingScript: child.Outputs[0].LockingScript,
+		Satoshis:      child.Outputs[0].Satoshis,
+	}))
+	grandchild.Inputs[0].UnlockingScript = dummyUnlockingScript
+	require.NoError(t, grandchild.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+
+	_ = db.Delete(ctx, grandchild.TxIDChainHash())
+
+	_, lockedSpends, err := db.SpendAndCreate(ctx, grandchild, db.GetBlockHeight()+1)
+	require.Error(t, err,
+		"a Locked transaction's outputs must not be spendable - this is what makes deleting the child in the unwind safe")
+
+	// The rejection may be reported on the returned spend rather than only on the
+	// aggregate error, and that differs between backends, so accept either. What must
+	// not happen is a rejection for some unrelated reason.
+	lockedReported := errors.Is(err, errors.ErrTxLocked)
+
+	for _, s := range lockedSpends {
+		if s != nil && s.Err != nil && errors.Is(s.Err, errors.ErrTxLocked) {
+			lockedReported = true
+		}
+	}
+
+	require.True(t, lockedReported, "spending a Locked transaction's output must be refused as TX_LOCKED, got: %v", err)
+
+	// Leave no residue from the rejected attempt, so the unwind steps below start from
+	// the state step 0 established.
+	_ = db.Delete(ctx, grandchild.TxIDChainHash())
+
+	// The failed spend must leave the child's output untouched, so the unwind's
+	// starting state is unchanged by having asserted this.
+	childOutHash, err := util.UTXOHashFromOutput(child.TxIDChainHash(), child.Outputs[0], 0)
+	require.NoError(t, err)
+
+	childOutResp, err := db.GetSpend(ctx, &utxostore.Spend{TxID: child.TxIDChainHash(), Vout: 0, UTXOHash: childOutHash})
+	require.NoError(t, err)
+	require.NotEqual(t, int(utxostore.Status_SPENT), childOutResp.Status,
+		"a rejected spend of a locked output must not have marked it spent")
+
+	// Step 1 — Delete the record. The parent output must STILL read spent: that is
+	// the safe intermediate state the ordering exists to guarantee.
+	require.NoError(t, db.Delete(ctx, child.TxIDChainHash()))
+
+	require.ErrorIs(t, db.GetMeta(ctx, child.TxIDChainHash(), &meta.Data{}), errors.ErrTxNotFound,
+		"after Delete the child record must be gone")
+
+	resp, err = db.GetSpend(ctx, parentOutpoint)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status,
+		"between Delete and Unspend the parent output must still read spent - no record may re-enter a template while its inputs are free")
+
+	// Step 2 — Unspend restores the parent output.
+	require.NoError(t, db.Unspend(ctx, spends))
+
+	resp, err = db.GetSpend(ctx, parentOutpoint)
+	require.NoError(t, err)
+	require.NotEqual(t, int(utxostore.Status_SPENT), resp.Status, "after Unspend the parent output is spendable again")
+
+	// Step 3 — idempotency of both primitives, relied on by the best-effort retry.
+	require.NoError(t, db.Unspend(ctx, spends), "re-unspending an already-unspent output must be a no-op")
+	require.NoError(t, db.Delete(ctx, child.TxIDChainHash()), "deleting an already-deleted record must not error")
+
+	// Step 4 — Unspend(nil) is a no-op: the spend-only / coinbase unwind shape
+	// passes no spends at all.
+	require.NoError(t, db.Unspend(ctx, nil))
+
+	// Step 5 — the restored output is genuinely reusable: a different spender wins
+	// it, which is what makes a resubmit an ordinary first submission.
+	other := newSpendAndCreateTx(t, 4, 5002)
+	_ = db.Delete(ctx, other.TxIDChainHash())
+
+	_, otherSpends, err := db.SpendAndCreate(ctx, other, db.GetBlockHeight()+1)
+	require.NoError(t, err, "a fresh spender must be able to take the restored output")
+	require.Len(t, otherSpends, 1)
+
+	resp, err = db.GetSpend(ctx, parentOutpoint)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status)
+	require.NotNil(t, resp.SpendingData)
+	require.Equal(t, other.TxIDChainHash().String(), resp.SpendingData.TxID.String())
+}
+
+// spendChildOutputReportsLocked attempts to spend output `vout` of `child` and
+// reports whether the store refused it as TX_LOCKED. Backends surface the refusal
+// differently — on the aggregate error or on a per-spend Err — so both are
+// checked. It leaves no residue whether the spend was refused or accepted.
+func spendChildOutputReportsLocked(t *testing.T, ctx context.Context, db utxostore.Store, child *bt.Tx, vout uint32) bool {
+	t.Helper()
+
+	gc := bt.NewTx()
+	require.NoError(t, gc.FromUTXOs(&bt.UTXO{
+		TxIDHash:      child.TxIDChainHash(),
+		Vout:          vout,
+		LockingScript: child.Outputs[vout].LockingScript,
+		Satoshis:      child.Outputs[vout].Satoshis,
+	}))
+	gc.Inputs[0].UnlockingScript = dummyUnlockingScript
+	require.NoError(t, gc.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", child.Outputs[vout].Satoshis))
+
+	_ = db.DeleteComplete(ctx, gc.TxIDChainHash())
+
+	_, spends, err := db.SpendAndCreate(ctx, gc, db.GetBlockHeight()+1)
+
+	locked := errors.Is(err, errors.ErrTxLocked)
+
+	for _, s := range spends {
+		if s != nil && s.Err != nil && errors.Is(s.Err, errors.ErrTxLocked) {
+			locked = true
+		}
+	}
+
+	_ = db.DeleteComplete(ctx, gc.TxIDChainHash())
+
+	return locked
+}
+
+// DeleteThenUnspendRestoresParentPaginated is the paginated sibling of
+// DeleteThenUnspendRestoresParent. It proves the store contract the shed unwind
+// depends on for a transaction whose record spans more than one pagination
+// record — the case a one-output child cannot exercise.
+//
+// The regression it gates (issue 4694 / PR 1502): on a paginated backend a plain
+// Delete removes only the master record, leaving the pagination children with
+// locked=true, so a descendant spending a high-numbered output still gets
+// TX_LOCKED. DeleteComplete removes the children (and any external blob) too, so
+// that spend reaches the missing-parent path instead. Because the store interface
+// does not expose the configured batch size, the caller supplies utxoBatchSize:
+// the child is built with utxoBatchSize + margin outputs so at least one
+// pagination child exists, and the probed vout is chosen to land on one. SQL
+// never paginates, so it satisfies the gate trivially and the case doubles as a
+// plain contract there.
+func DeleteThenUnspendRestoresParentPaginated(t *testing.T, db utxostore.Store, utxoBatchSize int) {
+	ctx := context.Background()
+
+	require.Positive(t, utxoBatchSize, "utxoBatchSize must be positive")
+
+	numOutputs := utxoBatchSize + 72       // ceil(numOutputs/utxoBatchSize) >= 2, so at least one pagination child
+	highVout := uint32(utxoBatchSize + 20) // guaranteed to land on a pagination child
+
+	// The parent whose output the child will spend.
+	_, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	child := newSpendAndCreateTxWithOutputs(t, 4, 6001, numOutputs)
+	_ = db.DeleteComplete(ctx, child.TxIDChainHash())
+
+	utxoHash4, err := util.UTXOHashFromOutput(Tx.TxIDChainHash(), Tx.Outputs[4], 4)
+	require.NoError(t, err)
+
+	parentOutpoint := &utxostore.Spend{TxID: Tx.TxIDChainHash(), Vout: 4, UTXOHash: utxoHash4}
+
+	// Step 0 — the block-assembly shape: spend the input, create the paginated
+	// record, marked Locked.
+	md, spends, err := db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1, utxostore.WithLocked(true))
+	require.NoError(t, err)
+	require.NotNil(t, md)
+	require.Len(t, spends, 1)
+
+	resp, err := db.GetSpend(ctx, parentOutpoint)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status, "precondition: the parent output is spent by the child")
+
+	childMeta := &meta.Data{}
+	require.NoError(t, db.GetMeta(ctx, child.TxIDChainHash(), childMeta))
+	require.True(t, childMeta.Locked, "precondition: the child record is created Locked")
+
+	// Step 1 — precondition on a HIGH-numbered output (one that lives on a
+	// pagination record): while the child is Locked, spending it is refused
+	// TX_LOCKED. This is the assertion the one-output sibling cannot make.
+	require.True(t, spendChildOutputReportsLocked(t, ctx, db, child, highVout),
+		"precondition: spending a high-numbered output of a Locked paginated child must be refused as TX_LOCKED")
+
+	// Step 2 — the complete delete. On a paginated backend this must remove the
+	// pagination children too, not just the master record.
+	require.NoError(t, db.DeleteComplete(ctx, child.TxIDChainHash()))
+
+	require.ErrorIs(t, db.GetMeta(ctx, child.TxIDChainHash(), &meta.Data{}), errors.ErrTxNotFound,
+		"after DeleteComplete the child master record must be gone")
+
+	// Step 3 — the gate assertion: a spend of the SAME high-numbered output must no
+	// longer answer TX_LOCKED. Before the cascade fix the surviving locked
+	// pagination record kept answering TX_LOCKED here on Aerospike.
+	require.False(t, spendChildOutputReportsLocked(t, ctx, db, child, highVout),
+		"after DeleteComplete a spend of a high-numbered output must not answer TX_LOCKED")
+
+	// Step 4 — the parent-restore tail, as in the one-output case: the parent
+	// output must still read spent between delete and unspend, then be restored.
+	resp, err = db.GetSpend(ctx, parentOutpoint)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status,
+		"between DeleteComplete and Unspend the parent output must still read spent")
+
+	require.NoError(t, db.Unspend(ctx, spends))
+
+	resp, err = db.GetSpend(ctx, parentOutpoint)
+	require.NoError(t, err)
+	require.NotEqual(t, int(utxostore.Status_SPENT), resp.Status, "after Unspend the parent output is spendable again")
+
+	// Step 5 — idempotency of both primitives, relied on by the best-effort retry.
+	require.NoError(t, db.Unspend(ctx, spends), "re-unspending an already-unspent output must be a no-op")
+	require.NoError(t, db.DeleteComplete(ctx, child.TxIDChainHash()), "re-completing an already-deleted record must not error")
 }

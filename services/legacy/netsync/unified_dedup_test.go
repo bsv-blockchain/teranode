@@ -3,25 +3,11 @@ package netsync
 // Tests for the CVE-2012-2459 duplicate-transaction check on the unified
 // below-checkpoint route.
 //
-// Background: CheckMerkleRoot alone cannot detect CVE-2012-2459 mutations
-// because the Bitcoin merkle tree applies a "duplicate-last-when-odd" rule
-// that makes the mutated tree's root equal to the original root. The explicit
-// dedup guard — model.CheckSubtreeSlicesForDuplicateTxs — was added to
-// HandleBlockDirect right after CheckMerkleRoot to close this gap.
-//
-// These tests verify:
-//  1. A block whose subtree slices are clean passes the guard.
-//  2. A block whose slices contain a duplicated hash (the CVE pattern) is
-//     rejected BEFORE it reaches ProcessBlock. Because constructing a real
-//     CVE-mutation block that still satisfies PoW is impractical in a unit
-//     test, the tests drive the guard directly via model.CheckSubtreeSlicesForDuplicateTxs
-//     with the same subtree-slice type that HandleBlockDirect receives from
-//     prepareSubtrees, asserting the correct rejection semantics. The integration
-//     of the guard into HandleBlockDirect is confirmed by the comment-test
-//     TestHandleBlockDirect_UnifiedRoute_DeduplicatesViaPreparedSlices.
+// CheckMerkleRoot cannot detect duplicate-last-when-odd mutations. These
+// tests exercise the separate subtree dedup predicate; the real delivery path
+// is covered by TestHandleBlockMsg_VerifiedHeaderBodyCommitment.
 
 import (
-	"context"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -127,36 +113,4 @@ func TestUnifiedRouteDedup_CVE2012_DuplicateLastWhenOdd(t *testing.T) {
 	err := model.CheckSubtreeSlicesForDuplicateTxs(slices)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrBlockInvalid))
-}
-
-// TestHandleBlockDirect_UnifiedRoute_DeduplicatesViaPreparedSlices is a
-// structural confirmation that HandleBlockDirect wires the dedup guard into the
-// unified route's preparedSubtreeSlices guard block. It does NOT run the full
-// HandleBlockDirect (which requires a live blockchain/UTXO stack); instead it
-// asserts the semantics of the exact call that was added to handle_block.go,
-// using the same function and argument types as the production code.
-//
-// This test would have FAILED before the fix: the call to
-// model.CheckSubtreeSlicesForDuplicateTxs did not exist, so a duplicate would
-// have passed straight through to ProcessBlock.
-func TestHandleBlockDirect_UnifiedRoute_DeduplicatesViaPreparedSlices(t *testing.T) {
-	// Simulate the state inside the `if preparedSubtreeSlices != nil` block in
-	// HandleBlockDirect, after a successful CheckMerkleRoot, with slices that
-	// contain a CVE-2012-2459 duplicate.
-	dupHash := makeUniqueHash(0xCE)
-
-	preparedSubtreeSlices := []*subtreepkg.Subtree{
-		makeTestSubtree(subtreepkg.CoinbasePlaceholderHashValue, dupHash),
-		makeTestSubtree(dupHash), // duplicate
-	}
-
-	// This is the guard now present in HandleBlockDirect:
-	err := model.CheckSubtreeSlicesForDuplicateTxs(preparedSubtreeSlices)
-	require.Error(t, err, "HandleBlockDirect must reject the block at the dedup guard, before ProcessBlock")
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid))
-
-	// If the guard did not exist, `preparedSubtreeSlices` would have been
-	// forwarded to ProcessBlock and eventually to createAndSpendUTXOsForBatch,
-	// causing double-processing of dupHash. The test confirms the guard fires.
-	_ = context.Background() // keeps the import for future HandleBlockDirect integration
 }

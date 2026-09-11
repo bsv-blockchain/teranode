@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -46,6 +47,30 @@ type SubtreeMetaRegenerator struct {
 	peerFetchTimeout     time.Duration
 }
 
+// cacheBustCounter produces the token appended to a peer request URL when a
+// first attempt came back with an unusable body, so the retry cannot be served
+// from that peer's cache.
+//
+// Process-wide and clock-seeded, deliberately, because it has to be unique
+// across regenerators and not merely within one. blockvalidation builds a fresh
+// SubtreeMetaRegenerator for every validation attempt (createMetaRegenerator is
+// called per ValidateBlock and per ReValidateBlock), so a per-instance counter
+// would restart at zero each time and every retry would request the identical
+// "?cachebust=1" URL. nginx caches that URL under its own key like any other, so
+// a busted request whose generation also aborted would leave the block wedged
+// for the whole upstream TTL, exactly the failure this retry exists to break.
+// blockvalidation's sibling counter gets process-lifetime uniqueness by living
+// on the long-lived Server; this is the model-package equivalent, with a clock
+// seed so a node restart mid-poison does not replay a token either.
+var cacheBustCounter = newCacheBustCounter()
+
+func newCacheBustCounter() *atomic.Uint64 {
+	c := &atomic.Uint64{}
+	c.Store(uint64(time.Now().UnixNano()))
+
+	return c
+}
+
 // NewSubtreeMetaRegenerator creates a new SubtreeMetaRegenerator instance.
 // peerURLs are the announcing peers' DataHub base URLs, which already include
 // the peer's API prefix (e.g. http://peer:9090/api/v1) — the same base every
@@ -70,17 +95,25 @@ func NewSubtreeMetaRegenerator(logger ulogger.Logger, subtreeStore SubtreeStoreW
 }
 
 // RegenerateMeta attempts to rebuild meta from subtreedata (local store or peers)
-// Returns the regenerated meta or an error if regeneration fails
+// Returns the regenerated meta or an error if regeneration fails.
+//
+// Two things happen here beyond walking the sources in order. A peer that
+// answered with a body too short for the subtree is asked once more on a
+// cache-busting URL, because the likeliest cause is a proxy cache replaying an
+// aborted generation. And a local subtree_data file that exists but cannot
+// satisfy the subtree is overwritten with the first complete peer body, because
+// this node serves that file outward whether or not it can use it itself.
 func (r *SubtreeMetaRegenerator) RegenerateMeta(ctx context.Context, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree, isFirstSubtree bool) (*subtreepkg.Meta, error) {
 	r.logger.Warnf("[RegenerateMeta][%s] attempting to regenerate subtree meta", subtreeHash.String())
 
 	// A successful read is not a successful rebuild: go-subtree's data
 	// deserializer stops at io.EOF without reporting that it filled fewer nodes
 	// than the subtree has, so a truncated .subtreeData comes back with a nil
-	// error and only fails buildAndStoreMeta's completeness check. Treating that
-	// like a read failure — rather than returning it — is what keeps the peer
-	// fallback reachable; otherwise a truncated local file strands a block that
-	// any peer could repair.
+	// error and is rejected only by a completeness check — getLocalSubtreeData's
+	// for the local file, buildAndStoreMeta's for a peer body. Treating that like
+	// a read failure — rather than returning it — is what keeps the peer fallback
+	// reachable; otherwise a truncated local file strands a block that any peer
+	// could repair.
 	var lastErr error
 
 	tryBuild := func(source string, data *subtreepkg.Data, readErr error) (*subtreepkg.Meta, bool) {
@@ -104,14 +137,62 @@ func (r *SubtreeMetaRegenerator) RegenerateMeta(ctx context.Context, subtreeHash
 		return meta, true
 	}
 
-	data, err := r.getLocalSubtreeData(ctx, subtreeHash, subtree)
+	// localPoisoned says a subtree_data file is present locally and cannot satisfy
+	// this subtree. That is worse than a source we simply cannot use: the asset
+	// service serves that same file verbatim to any peer that asks for
+	// GET /api/v1/subtree_data/<hash>, checking only that it Exists. Falling
+	// through to a peer would leave this node validating happily while still
+	// handing the bad body outward, so a peer body that turns out complete is
+	// written back over it below.
+	data, localPoisoned, err := r.getLocalSubtreeData(ctx, subtreeHash, subtree, isFirstSubtree)
 	if meta, ok := tryBuild("local", data, err); ok {
 		return meta, nil
 	}
 
+	if localPoisoned {
+		r.logger.Warnf("[RegenerateMeta][%s] the local subtree_data cannot satisfy this subtree, so this node is serving a bad body to every peer that asks for it; a complete peer body will be written back over it", subtreeHash.String())
+	}
+
 	for _, peerURL := range r.peerURLs {
-		data, err = r.getSubtreeDataFromPeer(ctx, subtreeHash, subtree, peerURL)
-		if meta, ok := tryBuild(peerURL, data, err); ok {
+		peerData, answered, peerErr := r.getSubtreeDataFromPeer(ctx, subtreeHash, subtree, peerURL, false)
+
+		meta, ok := tryBuild(peerURL, peerData, peerErr)
+
+		// A peer that answered with a body we could not use gets one more fetch,
+		// past its cache and on a budget of its own. Peers front the asset service
+		// with an nginx proxy_cache that stores any 200 for its TTL, so an aborted
+		// on-demand generation that reached the client as "200 + empty body" is
+		// replayed to every byte-identical request (issue 1368). The cache key
+		// includes the query string while nginx location matching ignores it, so the
+		// busted URL reaches the same handler and misses the cache, which is the only
+		// lever available against a fleet we cannot update.
+		//
+		// Only when the peer answered. A refused connection or an expired budget left
+		// no body for the cache to be blamed for, and a second request would just
+		// spend the budget again before moving on.
+		if !ok && answered {
+			peerData, _, peerErr = r.getSubtreeDataFromPeer(ctx, subtreeHash, subtree, peerURL, true)
+			meta, ok = tryBuild(peerURL+" (cache-busted)", peerData, peerErr)
+		}
+
+		if ok {
+			// The stored meta spares our own future validations the regenerator
+			// entirely, but the file the asset service serves is subtree_data, not the
+			// meta, and nothing on this path rewrites it before its DAH expires.
+			//
+			// Three other writers exist and none of them is a reason to skip this.
+			// blockvalidation's catchup fetchAndStoreSubtreeData would have to fetch
+			// this subtree again to get there. blockpersister's
+			// streaming_process_subtree deletes an unreadable file and writes a fresh
+			// one, but only when the block reaches persistence, and it judges the file
+			// by whether it deserializes rather than by whether it filled every node,
+			// so a short-but-parseable body survives it. The asset service regenerates
+			// a MISSING file on demand and does nothing about a present bad one, which
+			// is the whole reason this repair exists.
+			if localPoisoned {
+				r.repairLocalSubtreeData(ctx, subtreeHash, peerData)
+			}
+
 			return meta, nil
 		}
 	}
@@ -119,56 +200,157 @@ func (r *SubtreeMetaRegenerator) RegenerateMeta(ctx context.Context, subtreeHash
 	return nil, errors.NewProcessingError("[RegenerateMeta][%s] subtreedata not available locally or from peers", subtreeHash.String(), lastErr)
 }
 
-// getLocalSubtreeData reads subtree data from local store
-func (r *SubtreeMetaRegenerator) getLocalSubtreeData(ctx context.Context, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree) (*subtreepkg.Data, error) {
+// repairLocalSubtreeData overwrites a poisoned local subtree_data file with a
+// peer body already verified to satisfy the subtree.
+//
+// Best effort throughout, deliberately: the regeneration this is called from has
+// already succeeded, and failing it because the repair failed would turn a
+// recovered block back into a stalled one. Every failure is a Warn, because a
+// node that stays a poisoned source is worth reporting even when its own
+// validation is fine.
+//
+// The DAH matches storeRegeneratedMeta's, so the repaired body expires with the
+// meta built from it rather than outliving it.
+func (r *SubtreeMetaRegenerator) repairLocalSubtreeData(ctx context.Context, subtreeHash *chainhash.Hash, data *subtreepkg.Data) {
 	if r.subtreeStore == nil {
-		return nil, errors.NewNotFoundError("subtree store not available")
+		return
+	}
+
+	// Data.Serialize indexes Subtree.Nodes[0] before it validates anything, so a
+	// data carrying no subtree, or one with no nodes, panics rather than
+	// returning an error. This runs in a validOrderAndBlessed errgroup goroutine
+	// that no recover() covers, and neither shape is repairable anyway.
+	if data == nil || data.Subtree == nil || len(data.Subtree.Nodes) == 0 {
+		return
+	}
+
+	serialized, err := data.Serialize()
+	if err != nil {
+		r.logger.Warnf("[repairLocalSubtreeData][%s] peer body will not serialize, the poisoned local subtree_data stays in place and is still served to peers: %v", subtreeHash.String(), err)
+
+		return
+	}
+
+	dah := r.getBlockHeight() + r.blockHeightRetention
+	if err := r.subtreeStore.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData, serialized,
+		options.WithAllowOverwrite(true), options.WithDeleteAt(dah)); err != nil {
+		r.logger.Warnf("[repairLocalSubtreeData][%s] failed to overwrite the poisoned local subtree_data, it is still served to peers: %v", subtreeHash.String(), err)
+
+		return
+	}
+
+	r.logger.Warnf("[repairLocalSubtreeData][%s] replaced the poisoned local subtree_data with the complete peer body", subtreeHash.String())
+}
+
+// getLocalSubtreeData reads subtree data from local store.
+//
+// The second return value reports that a subtree_data file exists in the store
+// and cannot satisfy the subtree, which is a strictly worse condition than the
+// file being absent and is why it is reported separately from the error. The
+// asset service's GetSubtreeDataReader checks only Exists before streaming the
+// file back on GET /api/v1/subtree_data/<hash>, with no validation of the body,
+// so while such a file sits on disk this node is a poisoned source for every
+// peer that asks. A missing file has no such consequence: the asset service
+// regenerates it on demand from the subtree instead.
+//
+// Both unusable shapes count. A body that stops at a clean io.EOF short of the
+// subtree's length deserializes "successfully" and is caught by
+// MissingSubtreeDataTxs; a body truncated mid-transaction fails inside
+// NewSubtreeDataFromReader instead. The file is on disk either way, so it is
+// served outward either way.
+func (r *SubtreeMetaRegenerator) getLocalSubtreeData(ctx context.Context, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree, isFirstSubtree bool) (*subtreepkg.Data, bool, error) {
+	if r.subtreeStore == nil {
+		return nil, false, errors.NewNotFoundError("subtree store not available")
 	}
 
 	reader, err := r.subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 	if err != nil {
-		return nil, err
+		// No file, or none we can open. Nothing is being served outward.
+		return nil, false, err
 	}
 	defer func() {
 		_ = reader.Close()
 	}()
 
-	return subtreepkg.NewSubtreeDataFromReader(subtree, reader)
+	data, err := subtreepkg.NewSubtreeDataFromReader(subtree, reader)
+	if err != nil {
+		return nil, true, err
+	}
+
+	if missing := MissingSubtreeDataTxs(subtree, data, isFirstSubtree); missing > 0 {
+		return nil, true, errors.NewProcessingError("[RegenerateMeta][%s] local subtree_data is incomplete (%d of %d txs missing)", subtreeHash.String(), missing, subtree.Length())
+	}
+
+	return data, false, nil
 }
 
-// DefaultPeerFetchTimeout is the fallback bound on one peer's fetch (all 503
-// retries plus the body stream) when the caller supplies no timeout. This fetch
-// runs inline in Block.Valid on a context with no deadline, where the shared
-// client would otherwise allow a hung peer the full http_streaming_timeout
-// (10 minutes as shipped in settings.conf) per attempt. Note this is a
-// whole-peer budget, not a per-attempt one: the previous bare http.Client gave
-// 30s to a single attempt with no retries, so under sustained 503 backoff the
-// last attempt here gets considerably less than 30s.
+// DefaultPeerFetchTimeout is the fallback bound on one fetch (all 503 retries
+// plus the body stream) when the caller supplies no timeout. This fetch runs
+// inline in Block.Valid on a context with no deadline, where the shared client
+// would otherwise allow a hung peer the full http_streaming_timeout per attempt,
+// retries multiplied by that window.
+//
+// It bounds one fetch, covering all of that fetch's 503 retries and its body
+// stream rather than any single attempt: under sustained 503 backoff the later
+// attempts get progressively less of it. It is NOT a whole-peer bound, because
+// RegenerateMeta can make a second, cache-busting fetch to the same peer, and
+// each fetch starts this budget afresh. Worst case per peer is therefore twice
+// this value, and worst case for one RegenerateMeta call is that again per
+// configured peer, which matters because the call runs in a validOrderAndBlessed
+// errgroup goroutine that holds a pooled parent-spends map for its whole
+// duration.
+//
+// Sized to match settings.DefaultSubtreeDataFetchTimeout, which bounds the same
+// subtree_data payload fetched from the same peer endpoint by
+// check_block_subtrees.go. The budget has to cover streaming the body, so it is
+// set by how long the payload takes rather than by how long a validation ought
+// to take: a mainnet-size subtree_data cannot be streamed in seconds, and a
+// budget too small to finish makes the fetch fail every time on exactly the
+// blocks that need it most.
 //
 // Operators configure this via blockvalidation_subtree_meta_peer_fetch_timeout;
-// settings.DefaultSubtreeMetaPeerFetchTimeout carries the same value. The two
-// are separate constants only because model must not import settings.
-const DefaultPeerFetchTimeout = 30 * time.Second
+// settings.DefaultSubtreeMetaPeerFetchTimeout carries the same value, held to it
+// by TestSubtreeMetaPeerFetchTimeout_ConstantsDoNotDrift. The two are separate
+// constants only because model must not import settings.
+const DefaultPeerFetchTimeout = 10 * time.Minute
 
 // getSubtreeDataFromPeer fetches subtree data from a peer via HTTP. The peer's
 // base URL already carries its API prefix, so only the resource path is
 // appended. Retries on 503 — the peer's asset service may reject under
 // admission control while it generates the file on-demand.
-func (r *SubtreeMetaRegenerator) getSubtreeDataFromPeer(ctx context.Context, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree, peerURL string) (*subtreepkg.Data, error) {
+//
+// With bypassCache set the URL carries a cache-busting query parameter, so a
+// proxy cache in front of the peer cannot replay the answer the first attempt
+// already rejected.
+//
+// The second return value says the peer answered with a body, whether or not
+// that body deserialized. It is what tells the caller a cache-busting retry is
+// worth making: a body we could not use may be a poisoned cache entry, while a
+// refused connection or an expired budget produced no body for a cache to be
+// blamed for.
+func (r *SubtreeMetaRegenerator) getSubtreeDataFromPeer(ctx context.Context, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree, peerURL string, bypassCache bool) (*subtreepkg.Data, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.peerFetchTimeout)
 	defer cancel()
 
 	url := fmt.Sprintf("%s/subtree_data/%s", peerURL, subtreeHash.String())
+	if bypassCache {
+		url = fmt.Sprintf("%s?cachebust=%d", url, cacheBustCounter.Add(1))
+	}
 
 	body, err := util.DoHTTPRequestBodyReaderWithRetry(ctx, url)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer func() {
 		_ = body.Close()
 	}()
 
-	return subtreepkg.NewSubtreeDataFromReader(subtree, body)
+	data, err := subtreepkg.NewSubtreeDataFromReader(subtree, body)
+	if err != nil {
+		return nil, true, err
+	}
+
+	return data, true, nil
 }
 
 // buildAndStoreMeta creates meta from subtree data and stores it for future use
@@ -208,7 +390,17 @@ func (r *SubtreeMetaRegenerator) buildMetaFromSubtreeData(subtree *subtreepkg.Su
 	// carry a placeholder would leave TxInpoints[0] unset on a later subtree that
 	// validateSubtree does not skip, and GetParentTxHashes returning nil there is
 	// a BlockInvalidError on a valid block.
-	hasCoinbasePlaceholder := isFirstSubtree && subtree.Length() > 0 && subtree.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue)
+	//
+	// One read of the slice header, with both the guard and the index derived from
+	// it, for the reason MissingSubtreeDataTxs spells out: Length() takes the
+	// subtree's RWMutex and the direct index does not, while ReleaseNodes sets
+	// Nodes to nil without taking that mutex, so a release landing between the two
+	// reads turns the index into an out-of-range panic in an errgroup goroutine
+	// nothing recovers. Snapshotting removes the panic; it does not make the read
+	// synchronised, and cannot from here.
+	nodesSlice := subtree.Nodes
+	nodes := len(nodesSlice)
+	hasCoinbasePlaceholder := isFirstSubtree && nodes > 0 && nodesSlice[0].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue)
 
 	for i, tx := range data.Txs {
 		if tx == nil {
@@ -250,17 +442,17 @@ func (r *SubtreeMetaRegenerator) buildMetaFromSubtreeData(subtree *subtreepkg.Su
 	// Node 0 is exempt only where it holds the coinbase placeholder — the same
 	// condition validateSubtree uses to skip it, so the two agree rather than one
 	// leaving a hole the other then condemns the block for.
-	for i := 0; i < subtree.Length(); i++ {
+	for i := 0; i < nodes; i++ {
 		if i == 0 && hasCoinbasePlaceholder {
 			continue
 		}
 
-		if data.Txs[i] == nil {
-			return nil, errors.NewProcessingError("[buildMetaFromSubtreeData] incomplete subtree data: no transaction for node %d of %d", i, subtree.Length())
+		if i >= len(data.Txs) || data.Txs[i] == nil {
+			return nil, errors.NewProcessingError("[buildMetaFromSubtreeData] incomplete subtree data: no transaction for node %d of %d", i, nodes)
 		}
 
 		if meta.TxInpoints[i].ParentTxHashes == nil {
-			return nil, errors.NewProcessingError("[buildMetaFromSubtreeData] unserializable subtree meta: no parent inpoints for node %d of %d", i, subtree.Length())
+			return nil, errors.NewProcessingError("[buildMetaFromSubtreeData] unserializable subtree meta: no parent inpoints for node %d of %d", i, nodes)
 		}
 	}
 

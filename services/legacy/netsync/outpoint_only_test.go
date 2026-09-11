@@ -129,7 +129,7 @@ func TestSyncManager_legacyOutpointOnly(t *testing.T) {
 				sm.settings.ChainCfgParams = &noCp
 			}
 
-			require.Equal(t, tt.want, sm.legacyOutpointOnly(tt.height),
+			require.Equal(t, tt.want, sm.legacyOutpointOnly(headerProven, tt.height),
 				"legacyOutpointOnly(%d) enabled=%v sql=%v", tt.height, tt.enabled, tt.sqlStore)
 		})
 	}
@@ -166,6 +166,7 @@ func buildExtendedSubtreeBlock(t *testing.T, height int32, n int) (*bsvutil.Bloc
 		msgBlock.Transactions = append(msgBlock.Transactions, reg)
 	}
 
+	setBodyMerkleRoot(msgBlock)
 	block := bsvutil.NewBlock(msgBlock)
 	block.SetHeight(height)
 
@@ -233,7 +234,7 @@ func TestSyncManager_createSubtrees_OutpointOnlyZeroFees(t *testing.T) {
 
 		sm := &SyncManager{settings: tSettings, chainParams: params, logger: ulogger.TestLogger{},
 			utxoStore: &outpointOnlySpyStore{NullStore: &nullstore.NullStore{}}}
-		require.True(t, sm.legacyOutpointOnly(uint32(blockHeight)), "gate must be ON for this case")
+		require.True(t, sm.legacyOutpointOnly(headerProven, uint32(blockHeight)), "gate must be ON for this case")
 
 		slices, datas, metas := makeSubtreeSlices(t, len(block.Transactions()))
 		require.NoError(t, sm.createSubtrees(context.Background(), testBlockIdent(block), txOrder, txMap, slices, datas, metas, true))
@@ -251,7 +252,7 @@ func TestSyncManager_createSubtrees_OutpointOnlyZeroFees(t *testing.T) {
 		block, txMap, txOrder := buildExtendedSubtreeBlock(t, blockHeight, 5)
 
 		sm := &SyncManager{settings: tSettings, chainParams: params, logger: ulogger.TestLogger{}}
-		require.False(t, sm.legacyOutpointOnly(uint32(blockHeight)), "gate must be OFF for this case")
+		require.False(t, sm.legacyOutpointOnly(headerProven, uint32(blockHeight)), "gate must be OFF for this case")
 
 		slices, datas, metas := makeSubtreeSlices(t, len(block.Transactions()))
 		require.NoError(t, sm.createSubtrees(context.Background(), testBlockIdent(block), txOrder, txMap, slices, datas, metas, false))
@@ -290,7 +291,7 @@ func TestSyncManager_extendTransactions_OutpointOnlySkipsDecorate(t *testing.T) 
 		}
 
 		block, txMap, txOrder := buildExtendedSubtreeBlock(t, blockHeight, 5)
-		require.Equal(t, enabled, sm.legacyOutpointOnly(uint32(blockHeight)))
+		require.Equal(t, enabled, sm.legacyOutpointOnly(headerProven, uint32(blockHeight)))
 
 		err := sm.extendTransactions(context.Background(), testBlockIdent(block), txOrder, txMap, enabled)
 		require.NoError(t, err)
@@ -346,7 +347,7 @@ func TestSyncManager_needsParentMinedWait(t *testing.T) {
 				sm.utxoStore = &nullstore.NullStore{}
 			}
 
-			require.Equal(t, tt.want, sm.needsParentMinedWait(tt.height),
+			require.Equal(t, tt.want, sm.needsParentMinedWait(headerProven, tt.height),
 				"needsParentMinedWait(%d) enabled=%v store=%v", tt.height, tt.enabled, tt.sqlStore)
 		})
 	}

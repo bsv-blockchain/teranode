@@ -152,6 +152,17 @@ func (m *MockSubtreeProcessor) ConsumerExited() bool {
 	return args.Bool(0)
 }
 
+func (m *MockSubtreeProcessor) QueueMaxItems() int64 {
+	args := m.Called()
+	return args.Get(0).(int64)
+}
+
+// QueueHeadAge implements Interface.QueueHeadAge
+func (m *MockSubtreeProcessor) QueueHeadAge() time.Duration {
+	args := m.Called()
+	return args.Get(0).(time.Duration)
+}
+
 func (m *MockSubtreeProcessor) SubtreeCount() int {
 	args := m.Called()
 	return args.Int(0)
@@ -183,6 +194,12 @@ func (m *MockSubtreeProcessor) GetIncompleteSubtreeMiningData(_ context.Context)
 // AddBatch implements Interface.AddBatch
 func (m *MockSubtreeProcessor) AddBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) {
 	m.Called(nodes, txInpoints)
+}
+
+// AddBatchIfRoom implements Interface.AddBatchIfRoom
+func (m *MockSubtreeProcessor) AddBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
+	args := m.Called(nodes, txInpoints)
+	return args.Bool(0)
 }
 
 func (m *MockSubtreeProcessor) AddDirectly(node *subtree.Node, txInpoints *subtree.TxInpoints, skipNotification bool) error {

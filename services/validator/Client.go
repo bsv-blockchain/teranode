@@ -41,7 +41,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util/batchermetrics"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
@@ -452,15 +451,24 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 // fallback returns nil; a failed fallback returns the HTTP verdict, not the
 // original ResourceExhausted error.
 func (c *Client) handleValidationError(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options, err error) error {
-	// Check if the error is related to message size (ResourceExhausted)
-	st, ok := status.FromError(err)
-	if !ok || st.Code() != codes.ResourceExhausted || c.validatorHTTPAddr == nil {
+	// Only an oversized gRPC message is fixable by re-sending over HTTP. A
+	// block-assembly queue-full shed arrives with the same ResourceExhausted code
+	// (via ERR_THRESHOLD_EXCEEDED) but must be surfaced to the caller instead: the
+	// node has just reported itself saturated, and re-sending would drive a second
+	// full validation against it. A non-status error also lands here, preserving the
+	// original "not a status error → unwrap and return" behaviour.
+	if !errors.IsGRPCMessageTooLarge(err) || c.validatorHTTPAddr == nil {
+		if errors.Is(errors.UnwrapGRPC(err), errors.ErrThresholdExceeded) {
+			c.logger.Warnf("[ValidateWithOptions][%s] block assembly shed the transaction (queue full); not retrying over HTTP", tx.TxID())
+		}
+
 		return errors.UnwrapGRPC(err)
 	}
 
-	// Try HTTP fallback
+	// Try HTTP fallback. The gate above guarantees this really is a size problem,
+	// so the message wording is now accurate rather than assumed.
 	c.logger.Warnf("[ValidateWithOptions][%s] Transaction exceeds gRPC message limit, falling back to validator /tx endpoint: %s",
-		tx.TxID(), st.Message())
+		tx.TxID(), status.Convert(err).Message())
 
 	httpErr := c.validateTransactionViaHTTP(ctx, tx, blockHeight, validationOptions)
 	if httpErr == nil {
@@ -528,10 +536,13 @@ func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
 	c.processBatchResponse(batch, resp)
 }
 
-// shouldAttemptHTTPFallback determines if HTTP fallback should be attempted based on the error
+// shouldAttemptHTTPFallback determines if HTTP fallback should be attempted based
+// on the error. Kept as the named seam its call site reads through; it is now a
+// one-line wrapper over the shared predicate so a batch-level queue-full shed
+// cannot be mistaken for an oversized message and amplified into one HTTP
+// validation per transaction in the batch.
 func (c *Client) shouldAttemptHTTPFallback(err error) bool {
-	st, ok := status.FromError(err)
-	return ok && st.Code() == codes.ResourceExhausted && c.validatorHTTPAddr != nil
+	return errors.IsGRPCMessageTooLarge(err) && c.validatorHTTPAddr != nil
 }
 
 // handleBatchHTTPFallback attempts to validate each transaction individually via HTTP

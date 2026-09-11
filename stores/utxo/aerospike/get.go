@@ -91,6 +91,7 @@ var (
 )
 
 const errCouldNotReadInput = "could not read input"
+const errCouldNotReadOutput = "could not read output"
 
 // classifyRecordError picks the error class for a failure to assemble a
 // transaction's metadata out of its Aerospike bins.
@@ -642,7 +643,7 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 
 			_, err = tx.Outputs[i].ReadFrom(bytes.NewReader(outputInterface.([]byte)))
 			if err != nil {
-				return nil, errors.NewStorageError("could not read output", err)
+				return nil, errors.NewStorageError(errCouldNotReadOutput, err)
 			}
 		}
 	}
@@ -696,6 +697,12 @@ func (s *Store) addAbstractedBins(bins []fields.FieldName) []fields.FieldName {
 			newBins = append(newBins, fields.LockTime)
 		}
 
+		if !slices.Contains(newBins, fields.External) {
+			newBins = append(newBins, fields.External)
+		}
+	}
+
+	if slices.Contains(newBins, fields.Outputs) {
 		if !slices.Contains(newBins, fields.External) {
 			newBins = append(newBins, fields.External)
 		}
@@ -846,7 +853,7 @@ NEXT_BATCH_RECORD:
 		// TxInpoints can be computed without scripts using optimized parser
 		needsFullExternalTx := false
 		for _, field := range items[idx].Fields {
-			if field == fields.Tx || field == fields.Inputs {
+			if field == fields.Tx || field == fields.Inputs || field == fields.Outputs {
 				needsFullExternalTx = true
 				break
 			}
@@ -893,7 +900,14 @@ NEXT_BATCH_RECORD:
 				if external {
 					items[idx].Data.Tx = externalTx
 				} else {
-					tx := &bt.Tx{}
+					// Merge into whatever a sibling case already built, for the same
+					// reason the fields.Outputs case below does: each case assigns
+					// Data.Tx, so a caller asking for both without fields.Tx would
+					// otherwise keep only whichever ran last.
+					tx := items[idx].Data.Tx
+					if tx == nil {
+						tx = &bt.Tx{}
+					}
 
 					if inputInterfaces, ok := bins[fields.Inputs.String()].([]interface{}); ok {
 						tx.Inputs = make([]*bt.Input, len(inputInterfaces))
@@ -909,6 +923,76 @@ NEXT_BATCH_RECORD:
 						}
 					}
 
+					items[idx].Data.Tx = tx
+				}
+
+			case fields.Outputs:
+				// check that we are not also getting the tx, as this will be handled above
+				if slices.Contains(items[idx].Fields, fields.Tx) {
+					continue
+				}
+
+				// If the tx is external, we already have it, otherwise we need to build it from the bins.
+				if external {
+					items[idx].Data.Tx = externalTx
+				} else {
+					// Merge into whatever a sibling case already built rather than
+					// replacing it. A caller asking for both fields.Inputs and
+					// fields.Outputs without fields.Tx would otherwise get only
+					// whichever case ran last, since each assigns Data.Tx. The
+					// fields.Inputs case above merges for the same reason, so
+					// neither order loses the other's work. No caller asks for both
+					// today; this keeps it from being a trap.
+					tx := items[idx].Data.Tx
+					if tx == nil {
+						tx = &bt.Tx{}
+					}
+
+					if outputInterfaces, ok := bins[fields.Outputs.String()].([]interface{}); ok {
+						tx.Outputs = make([]*bt.Output, len(outputInterfaces))
+
+						for i, outputInterface := range outputInterfaces {
+							if outputInterface == nil {
+								continue
+							}
+
+							// Record the failure against this item and move on, rather
+							// than returning a function-level error. sendGetBatch fails
+							// every waiter on a function-level error, so one corrupt
+							// outputs bin would reject every unrelated parent in the
+							// batch. This projection is read once per parent per input
+							// of every transaction, so that blast radius is live.
+							//
+							// The fields.Inputs case above still aborts the batch. Left
+							// alone deliberately: widening the blast-radius fix to a
+							// pre-existing path is not this change's business, but it is
+							// the same shape and worth a follow-up.
+							outputBytes, isBytes := outputInterface.([]byte)
+							if !isBytes {
+								items[idx].Err = classifyRecordError(errCouldNotReadOutput,
+									errors.NewProcessingError("output %d has type %T, want []byte", i, outputInterface))
+
+								continue NEXT_BATCH_RECORD // because the stored outputs bin is malformed.
+							}
+
+							tx.Outputs[i] = &bt.Output{}
+
+							if _, err = tx.Outputs[i].ReadFrom(bytes.NewReader(outputBytes)); err != nil {
+								// A decode failure concerns our stored bytes, not consensus.
+								// Preserve that class before classifyRecordError sees it.
+								items[idx].Err = classifyRecordError(errCouldNotReadOutput,
+									errors.NewStorageError(errCouldNotReadOutput, err))
+
+								continue NEXT_BATCH_RECORD // because there was an error reading an output from the store.
+							}
+						}
+					}
+
+					// Version and LockTime are deliberately not set: this store's
+					// fields.Outputs projection returns outputs only, where SQL's
+					// also carries them. Nothing reads either off a prefetched
+					// parent, and requesting the extra bins would defeat the point
+					// of the narrow projection.
 					items[idx].Data.Tx = tx
 				}
 
@@ -1980,11 +2064,19 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 		// validation reads here — this parent's own outputs — is covered. The
 		// uncovered fields are consumed only by legacy netsync's
 		// extendPerTxFallback, which reads a transaction back by its own txid and
-		// copies them onto the in-block transaction; that transaction is then
-		// IsExtended(), so the validator's extend := !tx.IsExtended() skips
-		// re-fetching the real parent output and both the script and fee checks run
-		// against them. Closing that needs a digest over the stored form, which is a
-		// storage-format change rather than a check, so it is out of scope here.
+		// copies them onto the in-block transaction.
+		//
+		// That used to be exploitable: the transaction was then IsExtended(), and
+		// the validator's `extend := !tx.IsExtended()` skipped re-fetching the real
+		// parent output, so both the script and fee checks ran against the
+		// uncovered bytes. The validator now re-extends every transaction from the
+		// store unconditionally, and block validation discards supplied
+		// previous-output metadata before extending (GHSA-v76m-6vc7-g7c7), so
+		// corruption confined to those fields no longer reaches either check — it
+		// is overwritten before use. A digest over the stored form would still be
+		// the complete answer, and remains a storage-format change out of scope
+		// here. Legacy netsync still uses those fields to stamp subtree fees before
+		// validation; that stamp is not a consensus check and may reflect corruption.
 		//
 		// A storage fault, never a transaction fault. The blob is written from our
 		// own bytes under our own computed hash, so a mismatch can only mean this

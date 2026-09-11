@@ -196,6 +196,7 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 	var (
 		childRecords []aerospike.BatchRecordIfc
 		childOwner   []int // childRecords[k] belongs to batch[childOwner[k]]
+		childIndex   []int // childRecords[k] is pagination record childIndex[k] of that tx
 	)
 
 	for idx, batchRecord := range batchRecords {
@@ -279,6 +280,7 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 				batch[idx].setValue,
 			))
 			childOwner = append(childOwner, idx)
+			childIndex = append(childIndex, i)
 		}
 	}
 
@@ -301,7 +303,7 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 
 				if childRecord.BatchRec().Err != nil {
 					s.demoteNativeOnUnsupported(childRecord.BatchRec().Err)
-					childErr[idx] = errors.NewProcessingError("could not write locked child record", childRecord.BatchRec().Err)
+					childErr[idx] = errors.NewProcessingError("[setLocked][%s] could not write pagination child record %d", describeLockedBatchItem(batch[idx]), childIndex[k], childRecord.BatchRec().Err)
 					continue
 				}
 
@@ -314,7 +316,7 @@ func (s *Store) setLockedBatch(batch []*batchLocked) {
 				if perr != nil {
 					childErr[idx] = errors.NewProcessingError("could not parse child response", perr)
 				} else if cres.Status != LuaStatusOK {
-					childErr[idx] = errors.NewProcessingError("error from setLocked child: %s", cres.Message)
+					childErr[idx] = errors.NewProcessingError("[setLocked][%s] pagination child record %d rejected, so the record cannot be unlocked; if it is missing the record is incomplete and needs a complete delete: %s", describeLockedBatchItem(batch[idx]), childIndex[k], cres.Message)
 				}
 			}
 		}

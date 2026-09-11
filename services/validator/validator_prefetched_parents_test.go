@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/settings"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
@@ -36,10 +37,14 @@ func Test_getUtxoBlockHeightsAndExtendTx_Prefetched(t *testing.T) {
 
 	// Identical data to the "mined parent txs" subtest of Test_getUtxoBlockHeights:
 	// parent1 has empty BlockHeights (unconfirmed → sentinel).
+	//
+	// Every parent carries outputs: the validator re-extends unconditionally
+	// (GHSA-v76m-6vc7-g7c7), so a prefetched entry without them fails the
+	// prefetch guard and falls back to a per-parent store Get.
 	prefetched := map[chainhash.Hash]*meta.Data{
-		*parent0: {BlockHeights: []uint32{125, 126}},
-		*parent1: {BlockHeights: []uint32{}},
-		*parent2: {BlockHeights: []uint32{768, 769}},
+		*parent0: {BlockHeights: []uint32{125, 126}, Tx: prefetchParentTx(1000000)},
+		*parent1: {BlockHeights: []uint32{}, Tx: prefetchParentTx(2000000)},
+		*parent2: {BlockHeights: []uint32{768, 769}, Tx: prefetchParentTx(3000000)},
 	}
 
 	mockUtxoStore := &utxostore.MockUtxostore{}
@@ -73,8 +78,8 @@ func Test_getUtxoBlockHeightsAndExtendTx_PartialPrefetchFallsBackToStore(t *test
 
 	// Prefetch covers only parent0 and parent2; parent1 must fall back to the store.
 	prefetched := map[chainhash.Hash]*meta.Data{
-		*parent0: {BlockHeights: []uint32{125, 126}},
-		*parent2: {BlockHeights: []uint32{768, 769}},
+		*parent0: {BlockHeights: []uint32{125, 126}, Tx: prefetchParentTx(1000000)},
+		*parent2: {BlockHeights: []uint32{768, 769}, Tx: prefetchParentTx(3000000)},
 	}
 
 	mockUtxoStore := &utxostore.MockUtxostore{}
@@ -83,7 +88,7 @@ func Test_getUtxoBlockHeightsAndExtendTx_PartialPrefetchFallsBackToStore(t *test
 	// Only parent1 should ever be read from the store.
 	mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
 		return hash.IsEqual(parent1)
-	}), mock.Anything).Return(&meta.Data{BlockHeights: []uint32{}}, nil).Once()
+	}), mock.Anything).Return(&meta.Data{BlockHeights: []uint32{}, Tx: prefetchParentTx(2000000)}, nil).Once()
 
 	utxoHeights, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), prefetched)
 	require.NoError(t, err)
@@ -121,7 +126,7 @@ func Test_getUtxoBlockHeightAndExtendForParentTx_InputIndexOutOfBounds(t *testin
 
 	// idx == len(childTx.Inputs) would panic in the height-write loop
 	// (utxoHeights[idx]) without the up-front guard.
-	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentHash, []int{1}, utxoHeights, childTx, true, prefetched)
+	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentHash, []int{1}, utxoHeights, childTx, prefetched)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "out of bounds")
 }
@@ -147,7 +152,15 @@ func Test_getUtxoBlockHeightAndExtendForParentTx_VoutOutOfRange(t *testing.T) {
 
 	v := &Validator{}
 
-	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentHash, []int{0}, utxoHeights, childTx, true, prefetched)
+	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentHash, []int{0}, utxoHeights, childTx, prefetched)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "has no output for index")
+}
+
+// prefetchParentTx builds the minimal parent metadata the unconditional
+// re-extension path needs: a single spendable output at vout 0.
+func prefetchParentTx(satoshis uint64) *bt.Tx {
+	return &bt.Tx{
+		Outputs: []*bt.Output{{Satoshis: satoshis, LockingScript: bscript.NewFromBytes([]byte{0x51})}},
+	}
 }

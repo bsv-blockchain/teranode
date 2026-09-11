@@ -107,3 +107,30 @@ func SkipIfContainerUnavailable(t skipT, err error) {
 
 	t.Fatalf("container setup failed for a reason other than runtime unavailability: %v", err)
 }
+
+// MainNetParamsForSyntheticPoW returns a COPY of the mainnet parameters whose
+// proof-of-work limit is relaxed to admit the trivially-easy nBits (0x207fffff)
+// that tests grind to produce a block header quickly.
+//
+// Two reasons this exists rather than tests using &chaincfg.MainNetParams:
+//
+//  1. Mainnet's PowLimit and PowLimitBits both encode a target of about 2^224, so
+//     model.BlockHeader.HasMetPowLimit correctly rejects a 0x207fffff header
+//     (target about 2^255) against them. Tests that mine synthetic PoW are not
+//     asserting anything about the difficulty schedule, so they need params whose
+//     limit admits their shortcut; a test that IS about the limit should use the
+//     real mainnet params.
+//  2. Taking the address of the chaincfg.MainNetParams package global and then
+//     mutating a field through it (CoinbaseMaturity, and so on) leaks that
+//     mutation into every other test in the binary. Returning a copy removes that
+//     latent cross-test coupling.
+func MainNetParamsForSyntheticPoW() *chaincfg.Params {
+	params := chaincfg.MainNetParams
+
+	// Widen both declarations of the limit consistently, so the looser-of-the-two
+	// rule in HasMetPowLimit lands on the same relaxed ceiling either way.
+	params.PowLimit = chaincfg.RegressionNetParams.PowLimit
+	params.PowLimitBits = 0x207fffff
+
+	return &params
+}

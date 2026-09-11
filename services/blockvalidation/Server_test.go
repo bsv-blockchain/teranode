@@ -386,9 +386,10 @@ func newProcessBlockFoundHarness(ctx context.Context, t *testing.T) (*Server, *b
 	t.Helper()
 
 	tSettings := test.CreateBaseTestSettings(t)
-	// regtest SubsidyReductionInterval is 150
-	// so use mainnet params
-	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	// regtest SubsidyReductionInterval is 150, so use mainnet params — but with the
+	// proof-of-work limit relaxed, because the fixture and the re-grind below use an
+	// easy target that real mainnet params correctly reject (HasMetPowLimit).
+	tSettings.ChainCfgParams = test.MainNetParamsForSyntheticPoW()
 
 	blockBytes, err := hex.DecodeString(processBlockFoundBlockHex)
 	require.NoError(t, err)
@@ -437,10 +438,18 @@ func newProcessBlockFoundHarness(ctx context.Context, t *testing.T) (*Server, *b
 	// be resolvable at parent height = block.Height - 1 (deriveBlockHeight). The MockStore's
 	// GetBlockHeaders walk chases HashPrevBlock until a hash is absent from the Blocks map,
 	// so it terminates at the parent (its own parent, the zero hash, is absent).
-	blockchainStore.Blocks[*block.Header.HashPrevBlock] = &model.Block{
+	parentOnChain := &model.Block{
 		Header: parentHeader,
 		Height: block.Height - 1,
 	}
+	blockchainStore.Blocks[*block.Header.HashPrevBlock] = parentOnChain
+
+	// A node ingesting this block has the parent as its tip. Without a best block the
+	// store reports "no best block set", and the below-checkpoint difficulty skip
+	// fails closed (correctly — it cannot show the node is still building the
+	// certified prefix), which sends the test down the expected-nBits path the mock
+	// cannot serve 144-deep ancestors for.
+	blockchainStore.BestBlock = parentOnChain
 
 	logger := ulogger.NewErrorTestLogger(t)
 

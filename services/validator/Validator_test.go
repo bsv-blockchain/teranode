@@ -1046,8 +1046,13 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 
 		mockUtxoStore.On("GetBlockState").Return(utxostore.BlockState{Height: 1000, MedianTime: 1000000000})
 
+		// Extended transactions are re-extended from the store too
+		// (GHSA-v76m-6vc7-g7c7), so the parent read must carry outputs.
 		mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{
 			BlockHeights: make([]uint32, 0),
+			Tx: &bt.Tx{
+				Outputs: []*bt.Output{{LockingScript: bscript.NewFromBytes([]byte{0x51}), Satoshis: 1000000}},
+			},
 		}, nil)
 
 		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), nil)
@@ -1077,18 +1082,27 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 			return hash.String() == "10031ea0997a461d4e09157c6f9d15ff09e61f73aebd9e7f821e4c77c8251afe"
 		}), mock.Anything).Return(&meta.Data{
 			BlockHeights: []uint32{125, 126},
+			Tx: &bt.Tx{
+				Outputs: []*bt.Output{{LockingScript: bscript.NewFromBytes([]byte{0x51}), Satoshis: 1000000}},
+			},
 		}, nil).Once()
 
 		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
 			return hash.String() == "9c1599ff3e2ba140c9df526fdb239db236227840093916e90244835d0780a053"
 		}), mock.Anything).Return(&meta.Data{
 			BlockHeights: []uint32{},
+			Tx: &bt.Tx{
+				Outputs: []*bt.Output{{LockingScript: bscript.NewFromBytes([]byte{0x51}), Satoshis: 2000000}},
+			},
 		}, nil).Once()
 
 		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
 			return hash.String() == "928ed84cd4c48beb0d3494ccc17cc1e06b1473f9dc118db9bb56972395ede461"
 		}), mock.Anything).Return(&meta.Data{
 			BlockHeights: []uint32{768, 769},
+			Tx: &bt.Tx{
+				Outputs: []*bt.Output{{LockingScript: bscript.NewFromBytes([]byte{0x51}), Satoshis: 3000000}},
+			},
 		}, nil).Once()
 
 		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), nil)
@@ -1457,9 +1471,6 @@ func TestValidator_LockedFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T
 		stats:          gocore.NewStat("validator"),
 	}
 
-	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(false, errors.New(errors.ERR_PROCESSING, "tx rejected")).Once()
-
 	opts := &Options{AddTXToBlockAssembly: true}
 
 	err = utxoStore.SetBlockHeight(2) // We need to set this for the SQL implementation
@@ -1467,13 +1478,22 @@ func TestValidator_LockedFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T
 	err = utxoStore.SetMedianBlockTime(1700000000)
 	require.NoError(t, err)
 
+	// Idempotent-resubmit contract: a resubmit of an already-existing (Locked,
+	// unmined, non-conflicting) transaction returns success without re-driving
+	// the block-assembly handoff or mutating lock state. Propagation maps
+	// ErrTxExists to HTTP 200, so a resubmit must not surface as a failure for a
+	// transaction that is already durably accepted; a first-submission shed
+	// self-recovers via the in-place Kafka-ingest retry, not on resubmit. The
+	// titular invariant still holds: the tx stays Locked (its 2PC never re-ran).
 	_, err = v.ValidateWithOptions(ctx, txs[1], 2, opts)
-	require.NoError(t, err)
+	require.NoError(t, err, "an idempotent resubmit of an existing tx returns success")
+
+	blockAsmMock.AssertNotCalled(t, "Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	metaData := &meta.Data{}
 	err = utxoStore.GetMeta(ctx, txs[1].TxIDChainHash(), metaData)
 	require.NoError(t, err)
-	assert.True(t, metaData.Locked, "Flag should be set if block assembly did not store tx")
+	assert.True(t, metaData.Locked, "Flag should remain set if block assembly did not store tx")
 }
 
 func Test_serializeTxMetaBatch(t *testing.T) {
@@ -1784,6 +1804,17 @@ func (f *fakeAsyncProducer) Publish(m *kafka.Message) { f.publish(m) }
 
 func (f *fakeAsyncProducer) TryPublish(m *kafka.Message) bool { f.publish(m); return true }
 
+// parentLockingScript is the P2PKH script the height-lookup fixtures below fund
+// their input from.
+var parentLockingScript = func() []byte {
+	b, err := hex.DecodeString("76a914000000000000000000000000000000000000000088ac")
+	if err != nil {
+		panic(err)
+	}
+
+	return b
+}()
+
 func TestGetUtxoBlockHeightAndExtendForParentTx_RecordedHeightFromStore(t *testing.T) {
 	ctx := context.Background()
 
@@ -1799,6 +1830,12 @@ func TestGetUtxoBlockHeightAndExtendForParentTx_RecordedHeightFromStore(t *testi
 	mockUtxoStore.On("GetBlockState").Return(utxostore.BlockState{Height: 1000, MedianTime: 1000000000})
 	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{
 		BlockHeights: []uint32{999},
+		// The parent read carries outputs because re-extension is unconditional
+		// (GHSA-v76m-6vc7-g7c7); this mirrors the fixture's own input.
+		Tx: &bt.Tx{Outputs: []*bt.Output{{
+			Satoshis:      1000,
+			LockingScript: bscript.NewFromBytes(parentLockingScript),
+		}}},
 	}, nil)
 
 	v := &Validator{
@@ -1808,7 +1845,7 @@ func TestGetUtxoBlockHeightAndExtendForParentTx_RecordedHeightFromStore(t *testi
 	utxoHeights := make([]uint32, 1)
 
 	// A parent with recorded BlockHeights resolves to its real stored height.
-	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, false, nil)
+	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, uint32(999), utxoHeights[0])
@@ -1835,6 +1872,12 @@ func TestGetUtxoBlockHeightAndExtendForParentTx_FallbackWritesUnconfirmedSentine
 	mockUtxoStore := utxostore.MockUtxostore{}
 	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{
 		BlockHeights: []uint32{},
+		// The parent read carries outputs because re-extension is unconditional
+		// (GHSA-v76m-6vc7-g7c7); this mirrors the fixture's own input.
+		Tx: &bt.Tx{Outputs: []*bt.Output{{
+			Satoshis:      1000,
+			LockingScript: bscript.NewFromBytes(parentLockingScript),
+		}}},
 	}, nil)
 
 	v := &Validator{
@@ -1842,7 +1885,7 @@ func TestGetUtxoBlockHeightAndExtendForParentTx_FallbackWritesUnconfirmedSentine
 	}
 
 	utxoHeights := make([]uint32, 1)
-	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, false, nil)
+	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, nil)
 	require.NoError(t, err)
 	require.Equal(t, unconfirmedParentHeight, utxoHeights[0],
 		"fallback must write the teranode-internal sentinel, not blockState.Height+1")

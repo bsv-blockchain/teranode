@@ -65,8 +65,47 @@ func (m *NullStore) Get(ctx context.Context, hash *chainhash.Hash, fields ...fie
 	// purpose is "everything succeeds with default data"; an empty BlockHeights
 	// would force the consensus-mode rejection (bad-txns-unconfirmed-input-in-block)
 	// on any test that uses NullStore as a parent-tx source.
-	return &meta.Data{BlockHeights: []uint32{1}}, nil
+	//
+	// Tx carries outputs for the same reason: the validator re-extends every
+	// transaction from the store instead of trusting the submitter's
+	// previous-output fields (GHSA-v76m-6vc7-g7c7), so a parent with no outputs
+	// now fails extension outright. The slice is built once and shared; nothing
+	// on the extend path mutates it.
+	return &meta.Data{BlockHeights: []uint32{1}, Tx: &bt.Tx{Outputs: nullStoreOutputs}}, nil
 }
+
+const (
+	// nullStoreOutputCount sizes the default output vector. NullStore has no way
+	// to know a caller's real output count, so it is large enough that fixtures
+	// referencing a non-zero vout resolve.
+	nullStoreOutputCount = 256
+
+	// nullStoreOutputSatoshis is 1000 BSV per output — high enough that a
+	// fixture's outputs never exceed its inputs and trip a value check. It
+	// matches the value PreviousOutputsDecorate reports for the same reason.
+	nullStoreOutputSatoshis = 100_000_000_000
+)
+
+// nullStoreOutputs is the default output vector every NullStore parent reports.
+//
+// Shared, not copied per call: NullStore's documented purpose includes
+// performance testing, and Get is called once per parent, so allocating 256
+// outputs per call would show up in exactly the measurements it exists to serve.
+// The consumers are the extension paths, which copy the satoshi value and the
+// script pointer onto transaction inputs and never mutate either. A future
+// caller that mutates an output or a script in place would corrupt it for every
+// other caller in the process; treat these as immutable.
+var nullStoreOutputs = func() []*bt.Output {
+	outputs := make([]*bt.Output, nullStoreOutputCount)
+	for i := range outputs {
+		outputs[i] = &bt.Output{
+			Satoshis:      nullStoreOutputSatoshis,
+			LockingScript: bscript.NewFromBytes([]byte{0x51}),
+		}
+	}
+
+	return outputs
+}()
 
 func (m *NullStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	return nil, nil
@@ -206,6 +245,10 @@ func (m *NullStore) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockIDs
 }
 
 func (m *NullStore) Delete(ctx context.Context, hash *chainhash.Hash) error {
+	return nil
+}
+
+func (m *NullStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 

@@ -136,7 +136,7 @@ The startup process of the node involves the `main.go` file calling the `p2p.New
 
 3. **P2P Node Initialization**:
 
-    - Initializes a libp2p node (host) using the specified IP, port, and private key, which manages node communications and connections.
+    - Initializes a libp2p node (host) bound to all interfaces on `p2p_port` with the configured private key, which manages node communications and connections.
 
 ### 2.1.2. Initializing the P2P Server
 

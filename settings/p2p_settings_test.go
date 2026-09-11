@@ -49,6 +49,30 @@ func TestP2PPeerMapSettings_LoaderReadsAllKeys(t *testing.T) {
 					"loader must read p2p_peer_map_cleanup_interval; otherwise the sweep interval is unconfigurable")
 			},
 		},
+		{
+			key:      "p2p_seen_hash_max_size",
+			override: "1717",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 1717, s.P2P.SeenHashMaxSize,
+					"loader must read p2p_seen_hash_max_size; otherwise the dedup cache cap is unconfigurable")
+			},
+		},
+		{
+			key:      "p2p_seen_hash_ttl",
+			override: "5m",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 5*time.Minute, s.P2P.SeenHashTTL,
+					"loader must read p2p_seen_hash_ttl; otherwise the dedup accounting window is unconfigurable")
+			},
+		},
+		{
+			key:      "p2p_seen_hash_max_publishers",
+			override: "7",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 7, s.P2P.SeenHashMaxPublishers,
+					"loader must read p2p_seen_hash_max_publishers; otherwise the publisher budget is unconfigurable")
+			},
+		},
 	}
 
 	for _, tc := range cases {

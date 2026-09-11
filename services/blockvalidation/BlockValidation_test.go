@@ -467,7 +467,7 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 
-	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	tSettings.ChainCfgParams = test.MainNetParamsForSyntheticPoW()
 
 	blockHeader := &model.BlockHeader{
 		Version:        1,

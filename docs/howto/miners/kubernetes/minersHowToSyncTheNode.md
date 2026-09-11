@@ -56,12 +56,17 @@ This is the standard synchronization method where Teranode downloads the complet
 
 ### Step 1: Initialize Sync Process
 
-Upon startup, Teranode begins in IDLE state. You must explicitly set the state to `running` to begin synchronization.
+The operator settings context starts a fresh blockchain store in `IDLE`. Start
+synchronization explicitly after checking the deployment:
 
 ```bash
 # Set FSM state to begin syncing
-kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate running
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate catchingblocks
 ```
+
+The node moves to `RUNNING` automatically after catch-up reaches the active
+network's highest checkpoint. A direct request for `RUNNING` below that
+checkpoint is refused and leaves an IDLE node parked.
 
 ### Step 2: Peer Discovery and Block Download
 
@@ -362,6 +367,28 @@ kubectl wait --for=condition=ready pod -l app=blockchain -n teranode-operator --
 kubectl get pods -n teranode-operator
 ```
 
+#### Step 6: Verify the Seed Before Catch-up
+
+The seeder writes chain data and the Block Assembler checkpoint, but no FSM
+state. Under the `operator` context, the first start therefore parks the node in
+`IDLE` and gives you a verification window:
+
+```bash
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli getfsmstate
+```
+
+Confirm that the seeded tip height/hash and configured network match the
+snapshot, and that all services can reach their stores. Then start catch-up:
+
+```bash
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate catchingblocks
+```
+
+There is no transition from `CATCHINGBLOCKS` back to `IDLE`, so perform these
+checks before issuing the command. To skip the verification window on an
+unattended node, set `blockchain_initializeNodeInState: "CATCHINGBLOCKS"` in
+the operator configmap before the first start.
+
 ### Expected Timeline
 
 | Phase | Duration | Description |
@@ -559,8 +586,8 @@ kubectl port-forward -n teranode-operator service/asset 8090:8090
 ##### Option 1: Force Catch-up
 
 ```bash
-# Reset FSM state and restart sync
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmstate --fsmstate running
+# From IDLE, restart catch-up
+kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmstate --fsmstate catchingblocks
 
 # Monitor progress closely
 kubectl logs -n teranode-operator -l app=blockchain -f
@@ -589,8 +616,8 @@ kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getpeerin
 # Restart peer service
 kubectl delete pod -n teranode-operator -l app=peer
 
-# Reset FSM state
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmstate --fsmstate running
+# If the node is IDLE, restart catch-up
+kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmstate --fsmstate catchingblocks
 ```
 
 #### Issue: Database Connection Errors
