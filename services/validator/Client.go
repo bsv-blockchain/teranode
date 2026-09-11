@@ -45,6 +45,25 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// batchHandoffTimeout backstops the batch hand-off wait so a dispatcher that never signals
+// (panic, missed code path, wedged transport) releases the submitter instead of parking it for
+// the life of the process. It must OUTLAST the deepest downstream wait this client fronts, or
+// it aborts work the lower layers would still have completed — see the settings.conf note on
+// aerospike_batchPolicy.docker.m for that exact bug happening one layer down.
+//
+// Sized against the committed default configuration:
+//
+//   - the utxo store's own submitter guard, which the downstream service waits on:
+//     batch TotalTimeout (settings.conf: 5m) plus aerospike_overload_retry_max_elapsed (2m)
+//     plus 30s grace, i.e. 7m30s
+//   - the store's spend wait, a separate sequential stage: utxostore_spendWaitTimeout (30s)
+//
+// 8m floor, rounded to 10m. Client-side queueing is deliberately NOT modelled: the flush
+// interval (validator_sendBatchTimeout) is a batching trigger, not an end-to-end bound, and
+// worker saturation or the batcher's max-concurrency limiter can hold an item longer than it.
+// A var, not a const, purely so tests can shorten it; production never reassigns it.
+var batchHandoffTimeout = 10 * time.Minute
+
 // batchItem represents a single item in a validation batch request
 type batchItem struct {
 	// req contains the validation request for a single transaction
@@ -422,12 +441,31 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 	}
 	c.batcher.PutCtx(ctx, item)
 
-	// group.Wait(context.Background(), 0): 0 timeout allocates no timer and a
-	// background context never cancels, so this blocks purely on the dispatcher
-	// completing the item — identical to the previous bare <-doneCh receive (no
-	// timeout, no ctx arm). It can only return nil, so the result slot is always
-	// safe to read here.
-	_ = group.Wait(context.Background(), 0)
+	// Bounded by the CALLER's context AND a finite backstop. Every resolved
+	// production caller is either shutdown-only — legacy netsync tx ingest, whose
+	// ctx is the one handed to netsync.New and carries no deadline — or has no
+	// guaranteed deadline at all: the JSON-RPC handler passes the request ctx,
+	// which cancels on client disconnect only, and nothing in that chain sets a
+	// timeout. So nothing bounds this wait during normal operation, and the ctx
+	// arm alone would let a wedged dispatcher park this goroutine;
+	// batchHandoffTimeout is what makes the wait finite.
+	//
+	// An early return is ABANDONMENT, not cancellation: the item is already on the
+	// batcher and the dispatcher may still send it, so the transaction may yet
+	// reach the validator. Two consequences, both load-bearing:
+	//
+	//   - item.result MUST NOT be read on this path. It is a struct value the
+	//     dispatcher writes later from its own goroutine; not reading it is what
+	//     keeps that write race-free (no concurrent reader), and it is why the read
+	//     below is reachable only after Wait returned nil.
+	//   - the error MUST NOT be mistakable for a queue-full shed. A shed is unwound
+	//     by the caller (record deleted, inputs unspent); doing that to a
+	//     transaction still in flight could delete a record already absorbed
+	//     downstream. A ServiceError keeps it out of the ErrThresholdExceeded
+	//     branch and inside the caller's "ambiguous hand-off failure" branch.
+	if waitErr := group.Wait(ctx, batchHandoffTimeout); waitErr != nil {
+		return nil, errors.NewServiceError("validator batch handoff abandoned before dispatch completed", waitErr)
+	}
 
 	r := item.result
 
