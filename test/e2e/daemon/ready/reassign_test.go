@@ -71,7 +71,7 @@ func TestShouldAllowReassign(t *testing.T) {
 
 	aliceToBobTx := td.CreateTransactionWithOptions(t,
 		transactions.WithInput(parentTx, 0, alicePrivateKey),
-		transactions.WithP2PKHOutputs(1, 10000, bob),
+		transactions.WithP2PKHOutputs(2, 10000, bob),
 	)
 
 	// Send Alice to Bob transaction
@@ -100,7 +100,13 @@ func TestShouldAllowReassign(t *testing.T) {
 		UTXOHash: aliceBobUtxoHash,
 	}
 
-	err = td.UtxoStore.FreezeUTXOs(td.Ctx, []*utxo.Spend{spend}, td.Settings)
+	// Keep a second output assigned to its stored owner to test the maturity
+	// gate independently of changing the locking script.
+	sameOwnerHash, err := util.UTXOHashFromOutput(aliceToBobTx.TxIDChainHash(), aliceToBobTx.Outputs[1], 1)
+	require.NoError(t, err)
+	sameOwnerSpend := &utxo.Spend{TxID: aliceToBobTx.TxIDChainHash(), Vout: 1, UTXOHash: sameOwnerHash}
+
+	err = td.UtxoStore.FreezeUTXOs(td.Ctx, []*utxo.Spend{spend, sameOwnerSpend}, td.Settings)
 	require.NoError(t, err)
 
 	amendedOutputScript := &bt.Output{
@@ -121,7 +127,20 @@ func TestShouldAllowReassign(t *testing.T) {
 	err = td.UtxoStore.ReAssignUTXO(td.Ctx, spend, newSpend, td.Settings)
 	require.NoError(t, err)
 
-	// Try to spend the reassigned UTXO before reassignment height - should fail
+	require.NoError(t, td.UtxoStore.ReAssignUTXO(td.Ctx, sameOwnerSpend, sameOwnerSpend, td.Settings))
+	bobSpendingTx := td.CreateTransactionWithOptions(t,
+		transactions.WithInput(aliceToBobTx, 1, bobPrivateKey),
+		transactions.WithP2PKHOutputs(1, 100, charles),
+	)
+	status, err := td.UtxoStore.GetSpend(td.Ctx, sameOwnerSpend)
+	require.NoError(t, err)
+	require.Equal(t, int(utxo.Status_IMMATURE), status.Status)
+	require.Error(t, td.PropagationClient.ProcessTransaction(td.Ctx, bobSpendingTx),
+		"a valid signature must not bypass the reassignment maturity gate")
+
+	// ReAssignUTXO changes the commitment, not the stored locking script.
+	// The validator must not accept Charles's replacement script supplied in
+	// extended transaction bytes, before or after the maturity height.
 	charlesSpendingTx := bt.NewTx()
 	charlesUtxo := &bt.UTXO{
 		TxIDHash:      aliceToBobTx.TxIDChainHash(),
@@ -140,12 +159,23 @@ func TestShouldAllowReassign(t *testing.T) {
 	require.NoError(t, err)
 
 	err = td.PropagationClient.ProcessTransaction(td.Ctx, charlesSpendingTx)
-	require.Error(t, err, "Transaction should be rejected since UTXO is not spendable until reassignment height")
+	require.Error(t, err, "an unstored replacement script must not be accepted")
 
 	// Generate blocks to reach reassignment height
 	td.MineAndWait(t, testReassignedUtxoSpendableAfter)
 
-	// Now try spending the reassigned UTXO - should succeed
-	err = td.PropagationClient.ProcessTransaction(td.Ctx, charlesSpendingTx)
+	// The changed commitment has matured, but it does not authorize trusting
+	// the submitter's replacement script. Ownership-changing reassignment
+	// needs an authoritative script source in addition to ReAssignUTXO.
+	status, err = td.UtxoStore.GetSpend(td.Ctx, newSpend)
 	require.NoError(t, err)
+	require.Equal(t, int(utxo.Status_OK), status.Status)
+	require.Error(t, td.PropagationClient.ProcessTransaction(td.Ctx, charlesSpendingTx),
+		"maturity must not make an unstored replacement script authoritative")
+	status, err = td.UtxoStore.GetSpend(td.Ctx, newSpend)
+	require.NoError(t, err)
+	require.Nil(t, status.SpendingData, "the rejected transaction must leave the output unspent")
+
+	// The same-owner output now passes both script validation and the height gate.
+	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, bobSpendingTx))
 }
