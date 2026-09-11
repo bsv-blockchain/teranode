@@ -641,7 +641,17 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	}
 
 	s.logger.Infof("[Legacy Server] Starting internal server...")
-	go s.server.Start()
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		s.server.Start()
+	}()
+	defer func() {
+		_ = s.server.Stop()
+		// The daemon closes stores after service Start methods return. Keep
+		// those stores alive until the peer handler and sync manager exit.
+		<-serverDone
+	}()
 	s.logger.Infof("[Legacy Server] Internal server started on port %s", s.settings.Legacy.GRPCListenAddress)
 
 	// Start periodic peer statistics logging

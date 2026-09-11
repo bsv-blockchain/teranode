@@ -385,6 +385,12 @@ type SyncManager struct {
 	msgChan      chan interface{}
 	handlerDone  chan struct{}
 	quit         chan struct{}
+	stopOnce     sync.Once
+
+	// Inventory handlers run outside the message loop, including Kafka callers.
+	// Serialize admission with shutdown so no read can outlive Stop.
+	inventoryMu sync.Mutex
+	inventoryWG sync.WaitGroup
 
 	// TERANODE services
 	blockchainClient  teranodeblockchain.ClientI
@@ -1830,6 +1836,15 @@ func (sm *SyncManager) haveInventory(invVect *wire.InvVect) (bool, error) {
 // handleInvMsg handles inv messages from all peers.
 // We examine the inventory advertised by the remote peer and act accordingly.
 func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
+	sm.inventoryMu.Lock()
+	if atomic.LoadInt32(&sm.shutdown) != 0 {
+		sm.inventoryMu.Unlock()
+		return
+	}
+	sm.inventoryWG.Add(1)
+	sm.inventoryMu.Unlock()
+	defer sm.inventoryWG.Done()
+
 	sm.logger.Debugf("[handleInvMsg] received inv message with %d inv vectors from %s", len(imsg.inv.InvList), imsg.peer)
 	peer := imsg.peer
 
@@ -2355,19 +2370,22 @@ func (sm *SyncManager) Start() {
 // Stop gracefully shuts down the sync manager by stopping all asynchronous
 // handlers and waiting for them to finish.
 func (sm *SyncManager) Stop() error {
-	if atomic.AddInt32(&sm.shutdown, 1) != 1 {
-		sm.logger.Warnf("Sync manager is already in the process of " +
-			"shutting down")
-		return nil
-	}
+	// Once also blocks concurrent Stop callers until the same drain completes.
+	// The peer handler and the context cancellation hook can both call Stop.
+	sm.stopOnce.Do(func() {
+		sm.inventoryMu.Lock()
+		atomic.StoreInt32(&sm.shutdown, 1)
+		sm.inventoryMu.Unlock()
 
-	sm.logger.Infof("Sync manager shutting down")
-	close(sm.quit)
-	<-sm.handlerDone
+		sm.logger.Infof("Sync manager shutting down")
+		close(sm.quit)
+		<-sm.handlerDone
+		sm.inventoryWG.Wait()
 
-	sm.orphanTxs.Stop()
-	sm.requestedTxns.Stop()
-	sm.requestedBlocks.Stop()
+		sm.orphanTxs.Stop()
+		sm.requestedTxns.Stop()
+		sm.requestedBlocks.Stop()
+	})
 
 	return nil
 }
