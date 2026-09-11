@@ -22,6 +22,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/cohort"
 )
 
 // maxVoutIndex bounds the highest vout index a seed wrapper may carry. The UTXO
@@ -70,7 +71,9 @@ func wrapperToTx(w *utxopersister.UTXOWrapper) (*bt.Tx, error) {
 
 // loadWrapper stores a wrapper's surviving outputs as UTXOs mined in block
 // blockID, keyed by the wrapper's real txid.
-func loadWrapper(ctx context.Context, store utxo.Store, w *utxopersister.UTXOWrapper, blockID uint32) error {
+// cohortStamping carries UtxoStore.CohortStamping: when false no cohort label is
+// stamped at all, so the stored label stays at cohort.Unset.
+func loadWrapper(ctx context.Context, store utxo.Store, w *utxopersister.UTXOWrapper, blockID uint32, cohortStamping bool) error {
 	tx, err := wrapperToTx(w)
 	if err != nil {
 		return err
@@ -78,7 +81,7 @@ func loadWrapper(ctx context.Context, store utxo.Store, w *utxopersister.UTXOWra
 
 	txid := w.TxID
 
-	_, _, err = store.SpendAndCreate(ctx, tx, w.Height,
+	createOpts := []utxo.CreateOption{
 		utxo.WithCreateOnly(),
 		utxo.WithTXID(&txid),
 		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
@@ -88,7 +91,15 @@ func loadWrapper(ctx context.Context, store utxo.Store, w *utxopersister.UTXOWra
 			OnLongestChain: true,
 		}),
 		utxo.WithSetCoinbase(w.Coinbase),
-	)
+	}
+
+	// Snapshot imports are born mined and their real creation time is unknown, so
+	// they carry the historical sentinel rather than a wall-clock label. (issue 556)
+	if cohortStamping {
+		createOpts = append(createOpts, utxo.WithCohort(cohort.Historical))
+	}
+
+	_, _, err = store.SpendAndCreate(ctx, tx, w.Height, createOpts...)
 
 	return err
 }
@@ -175,6 +186,10 @@ type Config struct {
 	// It is mixed into the checkpoint signature digest so a checkpoint signed for
 	// another network cannot verify here.
 	NetworkMagic uint32
+
+	// CohortStamping carries UtxoStore.CohortStamping. When false, imported
+	// transactions are created with no cohort label at all (cohort.Unset).
+	CohortStamping bool
 }
 
 // Run verifies and loads the seed identified by cfg.BlockHash.
@@ -316,7 +331,7 @@ func streamLoad(ctx context.Context, cfg Config, blockID uint32) (created []chai
 			utxoCount++
 		}
 
-		if err := loadWrapper(ctx, cfg.UTXOStore, w, blockID); err != nil {
+		if err := loadWrapper(ctx, cfg.UTXOStore, w, blockID, cfg.CohortStamping); err != nil {
 			return created, [32]byte{}, err
 		}
 

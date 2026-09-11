@@ -41,6 +41,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/bsv-blockchain/teranode/util/cohort"
 )
 
 // ReAssignedUtxoSpendableAfterBlocks is the number of blocks that must pass
@@ -247,6 +248,7 @@ type CreateOptions struct {
 	Conflicting        bool
 	Locked             bool
 	SkipExtendedInputs bool
+	Cohort             cohort.ID
 
 	// SpendAndCreate-specific options.
 	IgnoreFlags IgnoreFlags // spend-phase flags (ignored with CreateOnly)
@@ -263,6 +265,17 @@ func WithMinedBlockInfo(minedBlockInfos ...MinedBlockInfo) CreateOption {
 		}
 
 		o.MinedBlockInfos = append(o.MinedBlockInfos, minedBlockInfos...)
+	}
+}
+
+// WithCohort returns a CreateOption that stamps the transaction record with a
+// cohort label, the 4-byte value the cohort-based mined-state design (issue 556)
+// uses in place of per-transaction mined-state writes. Without this option the
+// record is created with cohort.Unset, which is what every caller does while the
+// feature flag is off.
+func WithCohort(id cohort.ID) CreateOption {
+	return func(o *CreateOptions) {
+		o.Cohort = id
 	}
 }
 

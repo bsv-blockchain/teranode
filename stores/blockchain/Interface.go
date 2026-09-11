@@ -37,6 +37,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/file"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/cohort"
 	"github.com/bsv-blockchain/teranode/util/usql"
 )
 
@@ -484,4 +485,44 @@ type Store interface {
 	//   - limit: Maximum number of blocks to return
 	// Returns: Slice of unpersisted blocks and any error encountered
 	GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error)
+
+	// RecordCohortMap inserts cohort->block rows. The map is insert-only: an
+	// existing row is left exactly as it is, which is what makes replay after a
+	// crash a no-op.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - rows: Cohort/block pairs to record
+	// Returns: Any error encountered
+	RecordCohortMap(ctx context.Context, rows []CohortMapRow) error
+
+	// CohortBlocks returns, for each requested cohort, the blocks it maps to
+	// together with their chain state. A cohort with no rows is simply absent
+	// from the result; that is not an error.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - cohorts: Cohorts to look up
+	// Returns: Map of cohort to its blocks, and any error encountered
+	CohortBlocks(ctx context.Context, cohorts []cohort.ID) (map[cohort.ID][]CohortBlock, error)
+
+	// AllocateSplitCohort returns the synthetic cohort number reserved for
+	// splitting sourceCohort against blockHash, allocating one on first call and
+	// returning the same number on every subsequent call for the same pair.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - sourceCohort: The straddling cohort being split
+	//   - blockHash: Hash of the block the split is being made against
+	// Returns: The synthetic cohort number and any error encountered
+	AllocateSplitCohort(ctx context.Context, sourceCohort cohort.ID, blockHash *chainhash.Hash) (cohort.ID, error)
 }
+
+// CohortMapRow records that a block contains members of a cohort. It is an
+// alias for model.CohortMapRow: the struct itself has to live in model because
+// this package imports the SQL store that implements the interface, so the SQL
+// store cannot import this one back.
+type CohortMapRow = model.CohortMapRow
+
+// CohortBlock is a block a cohort maps to, with the chain state needed to
+// interpret it. Alias for model.CohortBlock, for the same reason as
+// CohortMapRow. Note that its OnMainChain field is data rather than a verdict;
+// see model.CohortBlock and CheckBlockIsInCurrentChain.
+type CohortBlock = model.CohortBlock

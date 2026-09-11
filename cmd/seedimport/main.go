@@ -126,6 +126,8 @@ func run(ctx context.Context, logger ulogger.Logger, s *settings.Settings, block
 		TrustedKeys:  trustedKeys,
 		BlockHash:    *blockHash,
 		NetworkMagic: uint32(s.ChainCfgParams.Net),
+
+		CohortStamping: s.UtxoStore.CohortStamping,
 	}
 
 	return seedimport.Run(ctx, logger, cfg)

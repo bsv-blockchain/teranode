@@ -20,6 +20,7 @@ import (
 	testutil "github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/cohort"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,7 +35,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 
 	t.Run("TestStore_GetBinsToStore empty", func(t *testing.T) {
 		tx := &bt.Tx{}
-		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, nil)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, cohort.Unset, nil)
 		require.Error(t, err)
 		require.Nil(t, bins)
 	})
@@ -49,7 +50,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		tx, err := bt.NewTxFromString(string(txHex))
 		require.NoError(t, err)
 
-		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, nil)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, cohort.Unset, nil)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
 
@@ -130,7 +131,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		// external should be set by the aerospike create function for huge txs
 		external := len(tx.ExtendedBytes()) > teranodeaerospike.MaxTxSizeInStoreInBytes
 
-		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), false, false, false, nil)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), false, false, false, cohort.Unset, nil)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
 	})
@@ -148,7 +149,7 @@ func TestStore_GetBinsToStore(t *testing.T) {
 		// external should be set by the aerospike create function for huge txs
 		external := len(tx.ExtendedBytes()) > teranodeaerospike.MaxTxSizeInStoreInBytes
 
-		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), true, true, true, nil)
+		bins, err := s.GetBinsToStore(tx, 0, nil, nil, nil, external, tx.TxIDChainHash(), true, true, true, cohort.Unset, nil)
 		require.NoError(t, err)
 		require.NotNil(t, bins)
 
@@ -240,7 +241,7 @@ func TestStore_GetBinsToStore_UnspendableTransactionExpires(t *testing.T) {
 
 		bins, err := s.GetBinsToStore(tx, minedHeight,
 			[]uint32{1}, []uint32{minedHeight}, []int{0},
-			false, tx.TxIDChainHash(), false, false, false, nil)
+			false, tx.TxIDChainHash(), false, false, false, cohort.Unset, nil)
 		require.NoError(t, err)
 
 		dah, ok := findBin(t, bins, fields.DeleteAtHeight.String())
@@ -256,7 +257,7 @@ func TestStore_GetBinsToStore_UnspendableTransactionExpires(t *testing.T) {
 
 		bins, err := s.GetBinsToStore(tx, minedHeight,
 			nil, nil, nil,
-			false, tx.TxIDChainHash(), false, false, false, nil)
+			false, tx.TxIDChainHash(), false, false, false, cohort.Unset, nil)
 		require.NoError(t, err)
 
 		_, ok := findBin(t, bins, fields.DeleteAtHeight.String())
@@ -274,7 +275,7 @@ func TestStore_GetBinsToStore_UnspendableTransactionExpires(t *testing.T) {
 
 		bins, err := s.GetBinsToStore(tx, minedHeight,
 			[]uint32{1}, []uint32{minedHeight}, []int{0},
-			false, tx.TxIDChainHash(), false, false, false, nil)
+			false, tx.TxIDChainHash(), false, false, false, cohort.Unset, nil)
 		require.NoError(t, err)
 
 		_, ok := findBin(t, bins, fields.DeleteAtHeight.String())

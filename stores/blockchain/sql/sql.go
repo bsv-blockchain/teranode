@@ -479,6 +479,21 @@ var blockchainSchemaExpectedColumns = []string{
 	"on_main_chain",
 }
 
+// blockchainSchemaExpectedTables is the list of tables, other than blocks and
+// block_id_reservations, that createPostgresSchemaUnlocked guarantees exist
+// after a successful run. They are probed for exactly the reason
+// block_id_reservations is: when isBlockchainSchemaCurrent returns true the
+// caller runs no DDL at all, so a table left out of this list is never created
+// on any deployment whose blocks table already looks current, and every query
+// against it fails at runtime. Keep it in sync with the CREATE TABLE statements
+// below.
+var blockchainSchemaExpectedTables = []string{
+	"state",
+	"scheduled_blob_deletions",
+	"cohort_map",
+	"cohort_split_allocations",
+}
+
 // blockchainSchemaExpectedIndexes is the list of indexes on blocks that the
 // withIndexes branch guarantees. Kept in sync with the CREATE INDEX statements
 // below. ux_blocks_hash is always created, so it lives in the base set.
@@ -531,6 +546,21 @@ func isBlockchainSchemaCurrent(db *usql.DB, withIndexes bool) (bool, error) {
 	}
 	if !hasReservations {
 		return false, nil
+	}
+
+	// Every other table the DDL creates must be present too, for the same
+	// reason: absence means the DDL sequence still has work to do.
+	for _, table := range blockchainSchemaExpectedTables {
+		var exists bool
+		if err := db.QueryRow(
+			`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)`,
+			table,
+		).Scan(&exists); err != nil {
+			return false, err
+		}
+		if !exists {
+			return false, nil
+		}
 	}
 
 	// peer_id must exist and already be TEXT — otherwise we still need the
@@ -898,6 +928,52 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 		return errors.NewStorageError("could not create idx_scheduled_blob_deletions_height index", err)
 	}
 
+	// cohort_map records that a block contains members of a cohort (issue 556).
+	// member_count is per (cohort, block): how many of that cohort's transactions
+	// are in that block. The table is written insert-only by RecordCohortMap, and
+	// rows go away only with their block, through the ON DELETE CASCADE.
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS cohort_map (
+			cohort       BIGINT  NOT NULL,
+			block_id     BIGINT  NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+			member_count BIGINT  NOT NULL DEFAULT 0,
+			verified     BOOLEAN NOT NULL DEFAULT FALSE,
+			inserted_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (cohort, block_id)
+		);
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create cohort_map table", err)
+	}
+
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_cohort_map_block_id ON cohort_map (block_id);`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_cohort_map_block_id index", err)
+	}
+
+	// cohort_split_allocations holds the synthetic cohort number reserved for one
+	// (source cohort, block) split, so that a retry after a crash reuses the
+	// number the first attempt took instead of minting a second one. The unique
+	// index on new_cohort is what stops two concurrent allocations handing out
+	// the same number.
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS cohort_split_allocations (
+			source_cohort BIGINT NOT NULL,
+			block_hash    BYTEA  NOT NULL,
+			new_cohort    BIGINT NOT NULL,
+			inserted_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (source_cohort, block_hash)
+		);
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create cohort_split_allocations table", err)
+	}
+
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_cohort_split_allocations_new ON cohort_split_allocations (new_cohort);`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create ux_cohort_split_allocations_new index", err)
+	}
+
 	return nil
 }
 
@@ -1178,6 +1254,45 @@ func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_scheduled_blob_deletions_height ON scheduled_blob_deletions(delete_at_height ASC, id ASC);`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create idx_scheduled_blob_deletions_height index", err)
+	}
+
+	// cohort_map: see the Postgres schema for rationale.
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS cohort_map (
+			cohort       BIGINT  NOT NULL,
+			block_id     INTEGER NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+			member_count BIGINT  NOT NULL DEFAULT 0,
+			verified     BOOLEAN NOT NULL DEFAULT FALSE,
+			inserted_at  TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (cohort, block_id)
+		);
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create cohort_map table", err)
+	}
+
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_cohort_map_block_id ON cohort_map (block_id);`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_cohort_map_block_id index", err)
+	}
+
+	// cohort_split_allocations: see the Postgres schema for rationale.
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS cohort_split_allocations (
+			source_cohort BIGINT NOT NULL,
+			block_hash    BLOB   NOT NULL,
+			new_cohort    BIGINT NOT NULL,
+			inserted_at   TEXT   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (source_cohort, block_hash)
+		);
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create cohort_split_allocations table", err)
+	}
+
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_cohort_split_allocations_new ON cohort_split_allocations (new_cohort);`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create ux_cohort_split_allocations_new index", err)
 	}
 
 	return nil

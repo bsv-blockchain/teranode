@@ -9,7 +9,9 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
+	"github.com/bsv-blockchain/teranode/util/cohort"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNullStoreImplementsInterface(t *testing.T) {
@@ -64,5 +66,33 @@ func TestNullStoreBlockState(t *testing.T) {
 
 	t.Run("set block state snapshot under concurrency", func(t *testing.T) {
 		tests.SetBlockStateSnapshotUnderConcurrency(t, &NullStore{})
+	})
+}
+
+// TestNullStoreCreateCohort checks the null store carries the cohort label from
+// the create options onto the returned metadata, the same way it carries the
+// other simple scalar options, so it stays faithful to the Store contract.
+func TestNullStoreCreateCohort(t *testing.T) {
+	store := &NullStore{}
+	tx := &bt.Tx{}
+	_ = tx.FromUTXOs(&bt.UTXO{
+		TxIDHash:      &chainhash.Hash{},
+		Vout:          0,
+		LockingScript: &bscript.Script{},
+		Satoshis:      100,
+	})
+
+	ctx := context.Background()
+
+	t.Run("stamped", func(t *testing.T) {
+		data, err := store.Create(ctx, tx, 0, utxo.WithCohort(cohort.ID(1_700_000_000)))
+		require.NoError(t, err)
+		require.Equal(t, uint32(1_700_000_000), data.Cohort)
+	})
+
+	t.Run("default is unset", func(t *testing.T) {
+		data, err := store.Create(ctx, tx, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint32(cohort.Unset), data.Cohort)
 	})
 }

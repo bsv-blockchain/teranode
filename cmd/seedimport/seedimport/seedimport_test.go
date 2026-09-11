@@ -63,7 +63,7 @@ func TestLoadWrapperMakesOutputsSpendable(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, loadWrapper(ctx, store, w, 42))
+	require.NoError(t, loadWrapper(ctx, store, w, 42, false))
 
 	for _, vout := range []uint32{0, 2} {
 		resp, err := store.GetSpend(ctx, &utxo.Spend{TxID: &txid, Vout: vout})
