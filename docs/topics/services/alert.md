@@ -138,6 +138,16 @@ The Alert Service initializes the necessary components and services to start pro
 
 ### 2.4. UTXO Reassignment
 
+**Current limitation:** `ReAssignUTXO` updates the UTXO commitment, clears the freeze,
+and sets a maturity height, but does not persist the replacement locking script.
+Mandatory transaction re-extension therefore still retrieves the original script
+from the UTXO store. A spend signed only for the replacement owner is rejected even
+after maturity; supplying the replacement script in extended transaction bytes
+cannot authorize it. Supporting a different owner requires an authoritative source
+for the replacement script and corresponding validation support. Reassignment to
+the stored owner still enforces the maturity delay and permits a valid spend after
+that delay. The reassignment smoke test covers both behaviors.
+
 ![alert_reassign_utxo.svg](img/plantuml/alert/alert_reassign_utxo.svg)
 
 1. The P2P Alert library initiates the process by calling `AddToConfiscationTransactionWhitelist` with a list of transactions.
