@@ -23,6 +23,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
 	"github.com/bsv-blockchain/teranode/services/validator"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -38,9 +39,13 @@ const (
 	// txNotFoundInTxMapMsg is the error message used when a transaction hash
 	// cannot be located in the block's txMap.
 	txNotFoundInTxMapMsg = "transaction %s not found in txMap"
+
+	// blockHeightConversionMsg is the processing error returned when a block
+	// height cannot be safely narrowed to an int32.
+	blockHeightConversionMsg = "failed to convert block height to int32"
 )
 
-func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, blockHash chainhash.Hash, msgBlock *wire.MsgBlock) (err error) {
+func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, blockHash chainhash.Hash, msgBlock *wire.MsgBlock, parent *inflightParent) (err error) {
 	sm.logger.Debugf("[HandleBlockDirect][%s] starting handling block", blockHash.String())
 
 	// Make sure we have the correct height for this block before continuing
@@ -73,49 +78,77 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 
 	block := bsvutil.NewBlock(msgBlock)
 
-	// Lookup previous block height from blockchain
-	_, previousBlockHeaderMeta, err = sm.blockchainClient.GetBlockHeader(ctx, &block.MsgBlock().Header.PrevBlock)
-	if err != nil {
-		// A missing parent is an expected, recoverable condition: a normal orphan /
-		// out-of-order tip announce, or a descendant of a block that was rejected
-		// upstream. The caller (handleBlockMsg) answers with a getblocks and, for a
-		// known-failed ancestor, short-circuits the descendant cascade (#1333) — so
-		// logging it at ERROR here only produces misleading "previous block
-		// NOT_FOUND" spam. Genuine lookup failures (e.g. storage errors) still ERROR.
-		if errors.Is(err, errors.ErrBlockNotFound) {
-			sm.logger.Debugf("[HandleBlockDirect][%s] previous block %s not found (orphan/out-of-order; caller will request missing blocks): %v", blockHash.String(), block.MsgBlock().Header.PrevBlock, err)
-		} else {
-			sm.logger.Errorf("[HandleBlockDirect][%s] failed to get block header for previous block %s: %s", blockHash.String(), block.MsgBlock().Header.PrevBlock, err)
+	if parent != nil {
+		// The dispatcher already resolved this block's parent (still in the window,
+		// so not yet queryable via the blockchain store) — use its height directly
+		// instead of looking the parent up. Skips the GetBlockHeader round-trip
+		// entirely on this route.
+		blockHeight = parent.height + 1
+
+		if block.Height() > 0 && uint32(block.Height()) != blockHeight {
+			return errors.NewBlockInvalidError("block height %d is not the correct height for block %s, expected %d", block.Height(), blockHash, blockHeight)
 		}
 
-		return errors.NewProcessingError("failed to get block header for previous block %s", block.MsgBlock().Header.PrevBlock, err)
+		heightInt32, cerr := safeconversion.Uint32ToInt32(blockHeight)
+		if cerr != nil {
+			return errors.NewProcessingError(blockHeightConversionMsg, cerr)
+		}
+
+		block.SetHeight(heightInt32)
+	} else {
+		// Lookup previous block height from blockchain
+		_, previousBlockHeaderMeta, err = sm.blockchainClient.GetBlockHeader(ctx, &block.MsgBlock().Header.PrevBlock)
+		if err != nil {
+			// A missing parent is an expected, recoverable condition: a normal orphan /
+			// out-of-order tip announce, or a descendant of a block that was rejected
+			// upstream. The caller (handleBlockMsg) answers with a getblocks and, for a
+			// known-failed ancestor, short-circuits the descendant cascade (#1333) — so
+			// logging it at ERROR here only produces misleading "previous block
+			// NOT_FOUND" spam. Genuine lookup failures (e.g. storage errors) still ERROR.
+			if errors.Is(err, errors.ErrBlockNotFound) {
+				sm.logger.Debugf("[HandleBlockDirect][%s] previous block %s not found (orphan/out-of-order; caller will request missing blocks): %v", blockHash.String(), block.MsgBlock().Header.PrevBlock, err)
+			} else {
+				sm.logger.Errorf("[HandleBlockDirect][%s] failed to get block header for previous block %s: %s", blockHash.String(), block.MsgBlock().Header.PrevBlock, err)
+			}
+
+			return errors.NewProcessingError("failed to get block header for previous block %s", block.MsgBlock().Header.PrevBlock, err)
+		}
+
+		if block.Height() <= 0 {
+			// block height was not set in the msgBlock, set it from our lookup
+			blockHeight = previousBlockHeaderMeta.Height + 1
+
+			blockHeightInt32, err := safeconversion.Uint32ToInt32(blockHeight)
+			if err != nil {
+				return errors.NewProcessingError(blockHeightConversionMsg, err)
+			}
+
+			block.SetHeight(blockHeightInt32)
+		} else {
+			// check whether the block height being reported is the correct block height
+			previousBlockHeightInt32, err := safeconversion.Uint32ToInt32(previousBlockHeaderMeta.Height + 1)
+			if err != nil {
+				return errors.NewProcessingError(blockHeightConversionMsg, err)
+			}
+
+			if block.Height() != previousBlockHeightInt32 {
+				return errors.NewBlockInvalidError("block height %d is not the correct height for block %s, expected %d", block.Height(), blockHash, previousBlockHeaderMeta.Height+1)
+			}
+
+			blockHeight, err = safeconversion.Int32ToUint32(block.Height())
+			if err != nil {
+				return errors.NewProcessingError("failed to convert block height to uint32", err)
+			}
+		}
 	}
 
-	if block.Height() <= 0 {
-		// block height was not set in the msgBlock, set it from our lookup
-		blockHeight = previousBlockHeaderMeta.Height + 1
-
-		blockHeightInt32, err := safeconversion.Uint32ToInt32(blockHeight)
-		if err != nil {
-			return errors.NewProcessingError("failed to convert block height to int32", err)
-		}
-
-		block.SetHeight(blockHeightInt32)
-	} else {
-		// check whether the block height being reported is the correct block height
-		previousBlockHeightInt32, err := safeconversion.Uint32ToInt32(previousBlockHeaderMeta.Height + 1)
-		if err != nil {
-			return errors.NewProcessingError("failed to convert block height to int32", err)
-		}
-
-		if block.Height() != previousBlockHeightInt32 {
-			return errors.NewBlockInvalidError("block height %d is not the correct height for block %s, expected %d", block.Height(), blockHash, previousBlockHeaderMeta.Height+1)
-		}
-
-		blockHeight, err = safeconversion.Int32ToUint32(block.Height())
-		if err != nil {
-			return errors.NewProcessingError("failed to convert block height to uint32", err)
-		}
+	// A block committed from the park after a restart has no delivering peer at
+	// all, and (*Peer).String dereferences the peer's address and asks it
+	// whether it is the sync peer — so calling it on nil panics, on the
+	// block-queue goroutine, in production.
+	peerLabel := "recovered-from-disk"
+	if peer != nil {
+		peerLabel = peer.String()
 	}
 
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "HandleBlockDirect",
@@ -125,21 +158,40 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 			block.Hash().String(),
 			blockHeight,
 			len(block.Transactions()),
-			peer.String(),
+			peerLabel,
 		),
 		tracing.WithTag("blockHash", block.Hash().String()),
-		tracing.WithTag("peer", peer.String()),
+		tracing.WithTag("peer", peerLabel),
 		tracing.WithHistogram(prometheusLegacyNetsyncHandleBlockDirect),
 	)
 	defer func() {
 		// set the block height gauge in the prometheus metrics
 		prometheusLegacyNetsyncBlockHeight.Set(float64(blockHeight))
 
+		// A nil error here means the block went into the chain, and blockHeight
+		// was derived from its parent's row rather than from anything the peer
+		// claimed, so this is the one place the committed height is known
+		// exactly. The park sweep needs it: a block parked below the committed
+		// tip can never be needed again, and the header list cannot answer that
+		// question because an arriving front block's header is removed before
+		// the park ever sees it, which moves the front past the very block being
+		// waited for.
+		if err == nil && blockHeight > 0 {
+			sm.noteCommittedHeight(int32(blockHeight))
+		}
+
 		deferFn(err)
 	}()
 
 	// Wait for block assembly to be ready
 	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, sm.logger, sm.blockAssembly, blockHeight, sm.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
+		if sm.windowRoute(blockHeight) {
+			// On the window route a parked gate is a local condition: wrap so
+			// handleBlockMsg pushes no reject, awaitBlockResult keeps the peer, and
+			// the backoff throttles re-delivery instead of churning the sync peer.
+			return errors.NewServiceError("[HandleBlockDirect][%s] block assembly not ready for height %d on the window route", blockHash.String(), blockHeight, err)
+		}
+
 		// block-assembly is still behind, so we cannot process this block
 		return err
 	}
@@ -188,7 +240,19 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	// has cloned the scripts out, nothing references block/msgBlock any more,
 	// so the multi-GB wire block and its decode arena can be collected while
 	// the heavy extend/subtree/utxo/validate phases are still running.
+	// Timed, because it is a full walk over every transaction in the block and
+	// nothing used to say so. On mainnet block 759245, 3.44 GB across 100,001
+	// transactions, 60 of the block's 113 seconds sat in regions that emitted no
+	// log line at all, and this is one of them. A phase that is not timed cannot
+	// be argued about, only guessed at, and four guesses about these regions have
+	// already been wrong.
+	_, _, sizeDone := tracing.Tracer("netsync").Start(ctx, "blockSerializeSize",
+		tracing.WithLogMessage(sm.logger, "[blockSerializeSize][%s] measuring %d transactions", block.Hash().String(), len(block.Transactions())),
+	)
+
 	blockSize := block.MsgBlock().SerializeSize()
+
+	sizeDone()
 
 	blockSizeUint64, err := safeconversion.IntToUint64(blockSize)
 	if err != nil {
@@ -200,11 +264,24 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	// Pre-extract the tx hashes for the orphan-processing goroutine below.
 	// Copy the hash *values* (not the *chainhash.Hash pointers returned by
 	// tx.Hash(), which alias into the bsvutil.Tx wrapper and would pin it).
+	//
+	// Timed for the same reason as the size walk above, and this one is the more
+	// expensive of the two: a transaction's hash is a double SHA256 over its full
+	// serialisation, so this loop is another complete pass over the block's bytes
+	// on a single goroutine.
+	_, _, hashDone := tracing.Tracer("netsync").Start(ctx, "blockTxHashes",
+		tracing.WithLogMessage(sm.logger, "[blockTxHashes][%s] hashing %d transactions", block.Hash().String(), len(block.Transactions())),
+	)
+
 	wireTxs := block.Transactions()
 	txHashes := make([]chainhash.Hash, len(wireTxs))
+
 	for i, tx := range wireTxs {
 		txHashes[i] = *tx.Hash()
 	}
+
+	hashDone()
+
 	blockHashStr := block.Hash().String()
 
 	// validate all subtrees and store all subtree data
@@ -252,6 +329,38 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 			return errors.NewBlockInvalidError("[HandleBlockDirect][%s %d] duplicate transaction on unified route", blockHashStr, blockHeight, err)
 		}
 		teranodeBlock.SubtreeSlices = nil
+	}
+
+	// Ordering hand-shake with an in-flight parent (window route only; parent is nil
+	// everywhere else). A child may start its own ProcessBlock RPC once the parent
+	// has started its own — from that point the parent's spends are already queued
+	// behind its own create in commit order, so a spend of a coin the parent creates
+	// can never land ahead of that create. The select needs the pre-check below
+	// because a parent that started its RPC and THEN failed must still let the
+	// child through to its own RPC (where the server-side window aborts it with the
+	// recorded error): only a parent that failed BEFORE starting its RPC — settled
+	// ready with rpcStarted still open — short-circuits here. Without the pre-check,
+	// a select between two simultaneously-ready cases picks uniformly at random, so
+	// a parent settling failed in the same instant it starts its RPC could
+	// non-deterministically take the abort branch instead.
+	if parent != nil && parent.entry != nil {
+		select {
+		case <-parent.entry.rpcStarted:
+		default:
+			select {
+			case <-parent.entry.rpcStarted:
+			case <-parent.entry.settled:
+				if parent.entry.failed.Load() {
+					return errors.NewServiceError("[HandleBlockDirect][%s] predecessor %s failed before this block started; aborting", blockHash.String(), parent.entry.hash.String())
+				}
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+
+	if own := frontierEntryFromContext(ctx); own != nil {
+		own.markRPCStarted()
 	}
 
 	// call the process block wrapper, which will add tracing and logging
@@ -531,10 +640,39 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		}
 	}
 
+	// Concurrent, because there is nothing to serialise. This loop used to be a
+	// plain indexed for, and on mainnet block 759245 it spent 34.5 seconds
+	// writing 25 subtrees at 1.38 seconds each while 47 of the box's 48 cores sat
+	// idle. Each iteration touches only its own index of three slices, and
+	// writeSubtree reads nothing from the manager but the logger, the settings
+	// and the store, so the iterations share no mutable state. The three blob
+	// keys it writes derive from that subtree's own root hash, so two iterations
+	// cannot collide on a key either.
+	//
+	// The limit is derived from the store's own write concurrency rather than
+	// chosen, so the two cannot drift: each writeSubtree takes three of the
+	// store's write permits, one per artefact, and going past what the store will
+	// admit converts parallelism into queueing. It is then capped, because the
+	// binding constraint here is not the store but the heap: this runs with a
+	// decoded block resident against a soft memory limit, and go-bt's extended
+	// write path allocates heavily per transaction, so widening this multiplies
+	// allocation pressure at exactly the wrong moment. Four is deliberately
+	// short of what the store would allow.
+	writeConcurrency := parkWriteConcurrency(sm.settings)
+
+	wg, wgCtx := errgroup.WithContext(ctx)
+	wg.SetLimit(writeConcurrency)
+
 	for i := 0; i < numSubtrees; i++ {
-		if err = sm.writeSubtree(ctx, bi, slices[i], subtreeDatas[i], subtreeMetas[i], quickValidationMode); err != nil {
-			return nil, nil, 0, err
-		}
+		i := i
+
+		wg.Go(func() error {
+			return sm.writeSubtree(wgCtx, bi, slices[i], subtreeDatas[i], subtreeMetas[i], quickValidationMode)
+		})
+	}
+
+	if err = wg.Wait(); err != nil {
+		return nil, nil, 0, err
 	}
 
 	// In quickValidationMode the transactions and subtree files have already been
@@ -611,6 +749,25 @@ func (sm *SyncManager) legacyUnified(height uint32) bool {
 		sm.legacyOutpointOnly(height)
 }
 
+// windowRouteEnabled is every conjunct of windowRoute that does not depend on the
+// block's height: the settings, the store's outpoint-only support and the chain
+// params. The dispatcher asks it before spending an RPC to resolve a block's height,
+// because with any of these off the answer to windowRoute could only be false.
+func (sm *SyncManager) windowRouteEnabled() bool {
+	return sm.settings != nil &&
+		sm.settings.BlockValidation.QuickWindowBlocks >= 1 &&
+		sm.settings.BlockValidation.LegacyUnifiedBelowCheckpoint &&
+		sm.settings.BlockValidation.OutpointOnlyBelowCheckpoint &&
+		sm.utxoStore != nil && sm.utxoStore.SupportsOutpointOnlySpend() &&
+		sm.chainParams != nil
+}
+
+// windowRoute reports whether blocks at height take the quick window: the unified
+// below-checkpoint route with the window setting at 1 or more.
+func (sm *SyncManager) windowRoute(height uint32) bool {
+	return sm.windowRouteEnabled() && model.BelowCheckpoint(sm.chainParams.Checkpoints, height)
+}
+
 // legacyFailClosed reports whether this block takes the fail-closed variant of the
 // non-unified legacy below-checkpoint inline path: the operator enabled
 // blockvalidation_legacy_below_checkpoint_fail_closed AND the outpoint-only gate
@@ -632,9 +789,10 @@ func (sm *SyncManager) legacyFailClosed(height uint32) bool {
 // never wait (pre-existing behaviour). On the below-checkpoint outpoint-only
 // fast path the wait is redundant three ways: (1) its documented purpose is
 // BIP68 parent-height lookup, and BIP68 is skipped below the checkpoint;
-// (2) block dispatch is serial — blockHandler in manager.go is the single
-// goroutine consuming blockQueue, so the parent's UTXOs are committed before
-// this block starts; (3) the legacy path calls AddBlock with WithMinedSet(true)
+// (2) the quick window gates every spend on the commit of the create that made
+// its coin, so a parent's outputs are never spent before the parent's create
+// has committed, see services/blockvalidation/quick_window.go; (3) the legacy
+// path calls AddBlock with WithMinedSet(true)
 // (see buildAddBlockOpts in services/blockvalidation/BlockValidation.go), so
 // GetBlockIsMined is always instantly true and only costs a gRPC round-trip
 // per block.
@@ -654,6 +812,39 @@ func (sm *SyncManager) checkSubtreeFromBlock(ctx context.Context, bi blockIdent,
 	}
 
 	return nil
+}
+
+// subtreeWriteArtefacts is how many of the blob store's write permits one
+// writeSubtree call takes: the subtree's node file, its transaction data and its
+// meta, each through its own file storer.
+const subtreeWriteArtefacts = 3
+
+// maxConcurrentSubtreeWrites is the ceiling on how many subtrees are written at
+// once, whatever the store would allow. The store is not the binding constraint:
+// this runs with a whole decoded block resident against a soft memory limit, and
+// the extended-transaction write path allocates heavily per transaction, so
+// widening this multiplies allocation pressure at the worst moment. Four
+// recovers most of a serial loop's cost while leaving the heap alone.
+const maxConcurrentSubtreeWrites = 4
+
+// parkWriteConcurrency reports how many subtree writes may run at once. Derived
+// from the store's own limit so the two cannot drift into over-subscription,
+// where extra goroutines only queue for permits, then capped for the heap.
+func parkWriteConcurrency(tSettings *settings.Settings) int {
+	if tSettings == nil {
+		return 1
+	}
+
+	permits := tSettings.Block.FileStoreWriteConcurrency / subtreeWriteArtefacts
+	if permits > maxConcurrentSubtreeWrites {
+		permits = maxConcurrentSubtreeWrites
+	}
+
+	if permits < 1 {
+		permits = 1
+	}
+
+	return permits
 }
 
 func (sm *SyncManager) writeSubtree(ctx context.Context, bi blockIdent, subtree *subtreepkg.Subtree,
@@ -1881,8 +2072,12 @@ func calculateTransactionFee(tx *bt.Tx) (uint64, error) {
 // stages iterate instead of block.Transactions(), so this is the last function
 // that needs the decoded wire block.
 func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper]) ([]chainhash.Hash, error) {
+	// At info rather than debug: this is where 22 of block 759245's unlogged
+	// seconds sit, and it is the phase that converts the whole block into a
+	// second representation, so it is the one most worth seeing in a production
+	// log. One line per block is not a volume problem.
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "createTxMap",
-		tracing.WithDebugLogMessage(
+		tracing.WithLogMessage(
 			sm.logger,
 			"[createTxMap][%s %d] processing transactions into map for block",
 			block.Hash().String(),
@@ -1894,12 +2089,16 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block, tx
 	txOrder := make([]chainhash.Hash, 0, len(block.Transactions()))
 
 	for _, wireTx := range block.Transactions() {
-		// Copy the hash value out of the bsvutil.Tx wrapper. bt.Tx.SetTxHash
-		// stores the pointer, so passing wireTx.Hash() directly would keep
-		// the wrapping wire.MsgTx (and its decode arena) alive through this
-		// bt.Tx and the TxMapWrapper it lands in.
-		hashCopy := *wireTx.Hash()
-		txOrder = append(txOrder, hashCopy)
+		// The wrapper's hash is shared rather than copied. It used to be copied
+		// so that bt.Tx.SetTxHash, which stores the pointer it is given, could
+		// not keep the wrapping wire.MsgTx and its decode arena alive. The
+		// converter below now aliases that arena on purpose, so a copy here
+		// prevents nothing and costs one allocation per transaction.
+		//
+		// bsvutil.Tx.Hash memoises into a field it assigns exactly once and
+		// never reassigns, so the value behind this pointer does not move.
+		hash := wireTx.Hash()
+		txOrder = append(txOrder, *hash)
 
 		tx := &bt.Tx{}
 
@@ -1909,8 +2108,8 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block, tx
 
 		// don't add the coinbase to the txMap, we cannot process it anyway
 		if !tx.IsCoinbase() {
-			tx.SetTxHash(&hashCopy)
-			txMap.Set(hashCopy, &TxMapWrapper{Tx: tx})
+			tx.SetTxHash(hash)
+			txMap.Set(*hash, &TxMapWrapper{Tx: tx})
 		}
 	}
 
@@ -1934,23 +2133,56 @@ func WireTxToGoBtTx(wireTx *bsvutil.Tx, tx *bt.Tx) error {
 	tx.LockTime = wTx.LockTime
 
 	tx.Inputs = make([]*bt.Input, len(wTx.TxIn))
+
 	for i, in := range wTx.TxIn {
+		// The scripts are ALIASED, not copied, and so is the previous-output
+		// hash. The bt.Tx points into the decoded wire transaction and into
+		// go-wire's decode arena behind it, which means the wire block stays
+		// reachable for as long as any converted transaction does. That is
+		// deliberate. See TestConversionHoldsOneCopyOfTheBlock.
+		//
+		// This used to clone every script, so the arena could be released when
+		// the conversion returned. The reasoning was that holding both
+		// representations at once does not fit a 3.44 GB block under a 6 GiB
+		// soft limit. The reasoning was right and the conclusion was backwards.
+		//
+		// Mainnet transactions at this height average a measured 27 KB, so a
+		// transaction is almost entirely script bytes. Holding the arena and
+		// holding your own copies of the scripts are therefore the same number
+		// of bytes: measured, the converted transactions alone come to 0.98
+		// times the wire block and the aliased ones to 1.01. What the clone
+		// added was a transient peak of 1.98 times the wire block while both
+		// were live, plus a full copy of every script.
+		//
+		// Under the node's own conditions, a heap pinned at a 6 GiB limit
+		// against 137 million live objects, that copy cost 22.89 ms per block
+		// at the mainnet shape against 0.43 ms for aliasing, because each
+		// allocation must pay off sweep debt before it may proceed. It also
+		// allocated 56 MB per block against 1.09 MB.
+		//
+		// Aliasing is safe because of what go-wire's arena guarantees in its
+		// own documentation: returned slices are stable forever with nothing
+		// ever moving them, capacity equals length so an append cannot reach
+		// into the neighbouring script, and the arena is never explicitly freed,
+		// so a chunk is reclaimed only once nothing points into it. Nothing in
+		// teranode or in go-bt writes through a script pointer, which
+		// TestConversionDoesNotModifyTheWireBlock holds to.
 		tx.Inputs[i] = &bt.Input{
-			UnlockingScript:    &bscript.Script{},
+			UnlockingScript:    (*bscript.Script)(&in.SignatureScript),
 			PreviousTxOutIndex: in.PreviousOutPoint.Index,
 			SequenceNumber:     in.Sequence,
 		}
+
 		_ = tx.Inputs[i].PreviousTxIDAdd(&in.PreviousOutPoint.Hash)
-		*tx.Inputs[i].UnlockingScript = bytes.Clone(in.SignatureScript)
 	}
 
 	tx.Outputs = make([]*bt.Output, len(wTx.TxOut))
+
 	for i, out := range wTx.TxOut {
 		tx.Outputs[i] = &bt.Output{
-			Satoshis:      uint64(out.Value),
-			LockingScript: &bscript.Script{},
+			Satoshis:      uint64(out.Value), //nolint:gosec
+			LockingScript: (*bscript.Script)(&out.PkScript),
 		}
-		*tx.Outputs[i].LockingScript = bytes.Clone(out.PkScript)
 	}
 
 	return nil

@@ -1438,6 +1438,13 @@ func TestShouldDisconnectOnBlockErr(t *testing.T) {
 	// Wrapped transient-local errors are still suppressed (chain is walked).
 	require.False(t, shouldDisconnectOnBlockErr(errors.NewProcessingError("wrap", errors.NewStorageError("inner"))))
 
+	// ChiR7: handleBlockMsg wraps the judgement inside ErrServiceUnavailable when
+	// the block was already judged before this delivery, so the peer that
+	// answered our own retry keeps its association. The wrapped validation error
+	// is carried for the log line and must not undo the suppression.
+	require.False(t, shouldDisconnectOnBlockErr(
+		errors.NewServiceUnavailableError("block already judged", errors.NewBlockInvalidError("bad merkle root"))))
+
 	// A genuine block validation failure rotates the peer.
 	require.True(t, shouldDisconnectOnBlockErr(errors.NewBlockInvalidError("bad merkle root")))
 }
@@ -1740,7 +1747,7 @@ func TestAwaitBlockResult_ReleasesAndExitsOnTeardown(t *testing.T) {
 
 		finished := make(chan struct{})
 		go func() {
-			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+			sp.awaitBlockResult(done, nil, 0, &chainhash.Hash{})
 			close(finished)
 		}()
 
@@ -1769,7 +1776,7 @@ func TestAwaitBlockResult_ReleasesAndExitsOnTeardown(t *testing.T) {
 
 		finished := make(chan struct{})
 		go func() {
-			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+			sp.awaitBlockResult(done, nil, 0, &chainhash.Hash{})
 			close(finished)
 		}()
 
@@ -1795,7 +1802,7 @@ func TestAwaitBlockResult_ReleasesAndExitsOnTeardown(t *testing.T) {
 
 		finished := make(chan struct{})
 		go func() {
-			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+			sp.awaitBlockResult(done, nil, 0, &chainhash.Hash{})
 			close(finished)
 		}()
 
@@ -1822,7 +1829,7 @@ func TestAwaitBlockResult_ReleasesAndExitsOnTeardown(t *testing.T) {
 				panicked <- recover()
 				close(finished)
 			}()
-			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+			sp.awaitBlockResult(done, nil, 0, &chainhash.Hash{})
 		}()
 
 		// Tear down with done still empty so the goroutine must take the sp.quit

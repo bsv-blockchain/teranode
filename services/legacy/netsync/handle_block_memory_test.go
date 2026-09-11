@@ -360,6 +360,7 @@ func TestHandleBlockDirect_TestnetLargeBlock(t *testing.T) {
 		validatorClient,
 		utxoStore,
 		subtreeStore,
+		nil,
 		subtreeValidation,
 		blockValidation,
 		blockAssemblyClient,
@@ -383,7 +384,7 @@ func TestHandleBlockDirect_TestnetLargeBlock(t *testing.T) {
 	t.Logf("[%s] Starting HandleBlockDirect...", time.Since(benchStartTime))
 	startTime := time.Now()
 
-	err = sm.HandleBlockDirect(ctx, &peer.Peer{}, *blockHash, block.MsgBlock())
+	err = sm.HandleBlockDirect(ctx, &peer.Peer{}, *blockHash, block.MsgBlock(), nil)
 	elapsed := time.Since(startTime)
 
 	// === Stop CPU profiling ===

@@ -85,6 +85,22 @@ var (
 	// below-checkpoint outpoint-only path is active (setting on, height ≤ highest
 	// checkpoint). A rising rate indicates the fast path is in use during IBD.
 	prometheusBlockValidationOutpointOnlyBlocks prometheus.Counter
+
+	// quick-validation commit tail: per-step timings for commitBlock, the shared
+	// final commit for the quick-validation path.
+	prometheusBlockValidationQuickCommitAddBlock    prometheus.Histogram
+	prometheusBlockValidationQuickCommitUnlock      prometheus.Histogram
+	prometheusBlockValidationQuickCommitSubtreesSet prometheus.Histogram
+	prometheusBlockValidationQuickCommitBlockExists prometheus.Histogram
+
+	// quick window: admission depth, gate waits, misses and aborts for the
+	// overlapping below-checkpoint window.
+	prometheusBlockValidationQuickWindowDepth            prometheus.Gauge
+	prometheusBlockValidationQuickWindowGateWait         prometheus.Histogram
+	prometheusBlockValidationQuickWindowGateWaits        prometheus.Counter
+	prometheusBlockValidationQuickWindowMissTotal        prometheus.Counter
+	prometheusBlockValidationQuickWindowAbortsTotal      *prometheus.CounterVec
+	prometheusBlockValidationQuickWindowOldestAgeSeconds prometheus.Gauge
 )
 
 var (
@@ -257,6 +273,102 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockvalidation",
 			Name:      "setmined_enqueue_overflow_total",
 			Help:      "Total number of setMined enqueues parked in the overflow set because setMinedChan was full. A sustained rise means producers are outpacing the serial setMined worker; the overflow set is deduped by block hash, so memory stays bounded by the number of distinct blocks.",
+		},
+	)
+
+	prometheusBlockValidationQuickCommitAddBlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_commit_add_block_seconds",
+			Help:      "AddBlock duration in the quick-validation commit tail",
+			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockValidationQuickCommitUnlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_commit_unlock_seconds",
+			Help:      "Unlock pass duration in the quick-validation commit tail",
+			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockValidationQuickCommitSubtreesSet = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_commit_subtrees_set_seconds",
+			Help:      "SetBlockSubtreesSet duration in the quick-validation commit tail",
+			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockValidationQuickCommitBlockExists = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_commit_block_exists_seconds",
+			Help:      "SetBlockExists duration in the quick-validation commit tail",
+			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockValidationQuickWindowDepth = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_window_depth",
+			Help:      "Blocks admitted to the quick window and not yet left",
+		},
+	)
+
+	prometheusBlockValidationQuickWindowGateWait = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_window_gate_wait_seconds",
+			Help:      "Time a batch waited on predecessor gates",
+			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockValidationQuickWindowGateWaits = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_window_gate_waits_total",
+			Help:      "Batches that waited on at least one predecessor gate",
+		},
+	)
+
+	prometheusBlockValidationQuickWindowMissTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_validate_window_miss_total",
+			Help:      "Spends of a registered parent that the store did not find (ship gate: zero)",
+		},
+	)
+
+	prometheusBlockValidationQuickWindowAbortsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_window_aborts_total",
+			Help:      "Entries failed, by cause: head_failed, predecessor_failed, gate_failed, commit_failed, shutdown, left_before_commit",
+		},
+		[]string{"cause"},
+	)
+
+	prometheusBlockValidationQuickWindowOldestAgeSeconds = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_window_oldest_age_seconds",
+			Help:      "Age of the oldest in-flight entry in the quick window",
 		},
 	)
 

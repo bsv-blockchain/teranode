@@ -12,6 +12,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"net"
 	"strconv"
@@ -85,17 +86,38 @@ const (
 	// peer that is making real progress. Mirrors the netsync default
 	// minSyncPeerNetworkSpeed (50 KiB/s) — comfortably above ping/inv chatter,
 	// far below real block-transfer rates.
+	//
+	// Half of svnode's equivalent floor, -blockstallingmindownloadspeed, which
+	// defaults to 100 KB/s. So a peer this node still counts as making progress
+	// is one svnode would already have judged stalled. Deliberately not changed
+	// here: raising it disconnects peers that today survive, which is a decision
+	// to take with numbers from a real sync rather than for symmetry.
 	minBlockDownloadBytesPerSec = 51200
 
-	// MaxBlockDownloadTime is the absolute wall-clock ceiling on how long a
+	// MaxBlockDownloadTime is the wall-clock floor AND fallback for how long a
 	// single block fetch may be kept alive by throughput-based deadline
-	// extension. Without a cap, a malicious peer could dribble bytes at just
+	// extension. Without such a cap a malicious peer could dribble bytes at just
 	// above minBlockDownloadBytesPerSec indefinitely — never completing a valid
-	// block — and hold the single sync-peer slot, stalling IBD. Past this cap
-	// the block deadline is enforced (and, in netsync, the sync peer rotated)
-	// regardless of throughput. Generous for honest fat blocks: a 4 GB block
-	// need only average ~2.3 MB/s to finish inside the window. Shared with the
-	// netsync sync-peer rotation cap so both layers agree.
+	// block — and hold the single sync-peer slot, stalling IBD. Generous for
+	// honest fat blocks: a 4 GB block need only average ~2.3 MB/s to finish
+	// inside the window, and that example still describes the shortest window
+	// any fetch gets, because blockDownloadBudget floors on this value.
+	//
+	// blockDownloadBudget scales the ceiling with the chain's block interval,
+	// whether we are catching up, and how many peers we are downloading from,
+	// and then takes the larger of that and this constant. The floor exists
+	// because the scaling is only ever meant to WIDEN the deadline for
+	// multi-peer IBD: at the tip the scaled value is 100% of a ten-minute block
+	// interval, which would have narrowed the shipped ceiling threefold and left
+	// the 4 GB example above describing a value nothing used. The cost of the
+	// floor is that legacy_blockDownloadTimeoutBasePercent can no longer narrow
+	// the tip ceiling below thirty minutes; it can still widen it.
+	//
+	// It is also the flat cap on netsync's sync-peer rotation, which is NOT
+	// scaled (SyncManager.CheckSyncPeer). With the floor in place the two layers
+	// can only disagree one way round: the peer layer is at least as patient as
+	// netsync everywhere, so netsync rotates a stalled sync peer before the peer
+	// layer would disconnect it, during catch-up and at the tip alike.
 	MaxBlockDownloadTime = 30 * time.Minute
 )
 
@@ -148,6 +170,11 @@ type MessageListeners struct {
 	// header), 0 when the size was not measured; it lets the handler weight the
 	// block without an O(all-tx) SerializeSize() walk on the read-loop.
 	OnBlock func(p *Peer, msg *wire.MsgBlock, buf []byte, payloadSize int64)
+
+	// OnBlockOnDisk is invoked for a block whose body was streamed to the park
+	// rather than decoded. Its transactions are not in memory; the listener
+	// reads them back from the park if it needs them.
+	OnBlockOnDisk func(p *Peer, msg *MsgBlockOnDisk)
 
 	// OnCFilter is invoked when a peer receives a cfilter bitcoin message.
 	OnCFilter func(p *Peer, msg *wire.MsgCFilter)
@@ -288,6 +315,20 @@ type Config struct {
 	// values must not contain the illegal characters specified in BIP 14:
 	// '/', ':', '(', ')'.
 	UserAgentComments []string
+
+	// CatchingUp reports whether the node is still catching up with the chain.
+	// A block download is given a far longer ceiling while this is true, because
+	// historical blocks are large and our own validation backpressure delays the
+	// read loop. Nil means "assume we are at the tip", which is the conservative
+	// choice: the shorter ceiling.
+	CatchingUp func() bool
+
+	// PeersWithBlockDownloads reports how many peers currently have a block
+	// request outstanding, this one included. Downloading from several peers at
+	// once makes each transfer legitimately slower because our own downstream
+	// link is shared, so the ceiling widens with the count. Nil means "just this
+	// peer", which adds no compensation.
+	PeersWithBlockDownloads func() int
 
 	// ChainParams identifies which chain parameters the peer is associated
 	// with.  It is highly recommended to specify this field, however it can
@@ -1538,14 +1579,201 @@ func blockResponsePending(pending map[string]time.Time) bool {
 	return false
 }
 
+// blockDownloadBudget is the wall-clock ceiling on a single block transfer.
+//
+// It is a percentage of the chain's target block interval rather than a fixed
+// duration, so one setting is correct on any chain, and it widens on two counts:
+// while we are catching up (historical blocks are large and our own validation
+// backpressure delays the read loop), and once per other peer we are downloading
+// from (our downstream link is shared between them, so each transfer is honestly
+// slower). This mirrors svnode, which computes
+//
+//	nPowTargetSpacing * (timeoutBase + timeoutPerPeer * nOtherPeers) / 100
+//
+// with base 100%/600% for tip/catch-up and 50% per other peer.
+//
+// Only peers with a genuine outstanding request are counted, so a peer cannot
+// inflate our patience by advertising blocks it does not have.
+//
+// The result is floored at MaxBlockDownloadTime, so this calculation can only
+// widen the deadline, never narrow it. See that constant for why.
+//
+// It is also capped at MaxBlockDownloadBudget, the largest value these same
+// settings can produce. svnode keeps one clock: the figure that bounds a
+// download is the figure the timeout fires on, because its BlockDownloadTracker
+// has no expiry of its own at all. This node holds a second record of who owes
+// what, and that record's ceiling is derived from MaxBlockDownloadBudget too, so
+// capping here is what stops the two clocks disagreeing when the number of peers
+// downloading exceeds what the node's own download window and per-peer depth
+// imply. At shipped settings the cap never binds: it is 375 minutes against a
+// realistic catch-up budget of 95.
+func (p *Peer) blockDownloadBudget() time.Duration {
+	interval := p.cfg.ChainParams.TargetTimePerBlock
+	if interval <= 0 {
+		return MaxBlockDownloadTime
+	}
+
+	base := p.settings.Legacy.BlockDownloadTimeoutBasePercent
+	if p.cfg.CatchingUp != nil && p.cfg.CatchingUp() {
+		base = p.settings.Legacy.BlockDownloadTimeoutBaseIBDPercent
+	}
+
+	// Count only OTHER peers: this peer's own download is what the ceiling is
+	// being computed for, and svnode excludes it for the same reason.
+	others := 0
+	if p.cfg.PeersWithBlockDownloads != nil {
+		if n := p.cfg.PeersWithBlockDownloads() - 1; n > 0 {
+			others = n
+		}
+	}
+
+	budget := scaledBlockDownloadBudget(interval, base, p.settings.Legacy.BlockDownloadTimeoutPerPeerPercent, int64(others))
+
+	return min(budget, MaxBlockDownloadBudget(p.settings, interval))
+}
+
+// maxPeersWithBlockDownloads is the number of peers the node's own configuration
+// lets hold a block download at once, and so the bound on the "other peers
+// downloading" term of the budget.
+//
+// The scheduler will not place a block once the ledger holds
+// legacy_blockDownloadWindow of them, and it fills one peer to
+// legacy_maxBlocksInTransitPerPeer before moving to the next (block_scheduler.go
+// hands out contiguous runs), so the window divided by that depth is how many
+// peers the configuration spreads the work over. At shipped settings that is
+// 1024/16 = 64.
+//
+// It is a configuration figure, not a runtime measurement, which is the point:
+// the download ledger's ownership ceiling and the peer layer's budget both
+// derive from it, so neither can drift away from the other. blockDownloadBudget
+// caps itself at the result, so a runtime peer count above this bound narrows
+// the budget rather than escaping the ceiling.
+func maxPeersWithBlockDownloads(s *settings.Settings) int {
+	if s == nil {
+		return 1
+	}
+
+	window := max(1, s.Legacy.BlockDownloadWindow)
+
+	perPeer := max(1, s.Legacy.MaxBlocksInTransitPerPeer)
+
+	// Written as a division and a remainder rather than (window+perPeer-1)/perPeer,
+	// which overflows on a window set near MaxInt.
+	peers := window / perPeer
+	if window%perPeer != 0 {
+		peers++
+	}
+
+	return max(1, peers)
+}
+
+// MaxBlockDownloadBudget is the largest wall-clock ceiling blockDownloadBudget
+// can return for these settings on a chain with this target block interval.
+//
+// The download ledger in netsync uses it to size how long a peer stays on the
+// hook for a block it was asked for. That has to be at least this, or a transfer
+// the peer layer legitimately keeps alive outlives the record saying we asked
+// for it, and the finished block arrives looking unrequested: the peer loses its
+// whole association and the completed download is thrown away.
+//
+// Maximising over both bases and over the peer bound rather than reading the
+// live state keeps it a pure function of settings, so both callers get the same
+// answer at any moment. A negative per-peer percentage is read as zero here,
+// because with one the budget shrinks as peers are added and the maximum is the
+// no-other-peers case.
+//
+// Both terms are held to what the arithmetic can carry. The formula falls back
+// to MaxBlockDownloadTime when a percentage would overflow the interval
+// multiply, and a maximum that took that fallback would be SHORTER than the live
+// budget of a configuration that does not overflow, which would turn the cap in
+// blockDownloadBudget into a narrowing. Clamping instead returns the largest
+// ceiling the arithmetic can express, which no live budget can exceed.
+func MaxBlockDownloadBudget(s *settings.Settings, interval time.Duration) time.Duration {
+	if s == nil || interval <= 0 {
+		return MaxBlockDownloadTime
+	}
+
+	// The largest percentage total this interval can carry, from the same bound
+	// scaledBlockDownloadBudget applies to the product.
+	maxTotal := int64(math.MaxInt64) / int64(interval)
+
+	base := min(maxTotal, max(s.Legacy.BlockDownloadTimeoutBasePercent, s.Legacy.BlockDownloadTimeoutBaseIBDPercent))
+	perPeer := max(int64(0), s.Legacy.BlockDownloadTimeoutPerPeerPercent)
+	others := int64(maxPeersWithBlockDownloads(s) - 1)
+
+	if perPeer > 0 {
+		if room := (maxTotal - base) / perPeer; others > room {
+			others = room
+		}
+	}
+
+	return scaledBlockDownloadBudget(interval, base, perPeer, others)
+}
+
+// scaledBlockDownloadBudget is svnode's
+//
+//	nPowTargetSpacing * (timeoutBase + timeoutPerPeer * nOtherPeers) / 100
+//
+// with this node's floor and misconfiguration fallbacks applied. It is shared by
+// the live budget and by the maximum the ledger derives its ceiling from, so
+// there is one formula rather than two that can be edited apart.
+func scaledBlockDownloadBudget(interval time.Duration, base, perPeer, others int64) time.Duration {
+	if interval <= 0 {
+		return MaxBlockDownloadTime
+	}
+
+	// Bound this multiply rather than inspecting its result, for the reason the
+	// interval multiply below is bounded: an overflowed product is as likely to
+	// look small and plausible as to look wrong. The headroom is measured against
+	// a base of zero when the base is negative, so the guard itself cannot
+	// overflow on a misconfigured base; a negative base only makes the sum
+	// smaller, which the total check below already handles.
+	if perPeer > 0 && others > (math.MaxInt64-max(int64(0), base))/perPeer {
+		return MaxBlockDownloadTime
+	}
+
+	total := base + perPeer*others
+	if total <= 0 {
+		// A misconfiguration must never produce a zero ceiling, which would
+		// disconnect every peer immediately. Fall back to the old constant.
+		return MaxBlockDownloadTime
+	}
+
+	// Bound the multiply rather than inspecting its result. An overflowing
+	// product wraps to a small POSITIVE duration as readily as to a negative
+	// one — 30744574% of a ten-minute interval wraps to 3.26 seconds — and a
+	// three-second ceiling disconnects every peer just as surely as a zero
+	// would, while sailing straight past any check on the sign. Both operands
+	// are positive here, so this division is the exact largest total that
+	// cannot overflow.
+	if total > math.MaxInt64/int64(interval) {
+		return MaxBlockDownloadTime
+	}
+
+	// The product cannot overflow now, but a chain whose interval is shorter
+	// than the percentage divisor can still floor to zero.
+	budget := time.Duration(total) * interval / 100
+	if budget <= 0 {
+		return MaxBlockDownloadTime
+	}
+
+	// Widen only. At the tip the scaled value is base (100%) of the block
+	// interval with no other peers to add, which on every chain here is ten
+	// minutes: a third of the ceiling this code replaced. Nothing in the
+	// multi-peer work wanted the tip narrowed, so the shipped value is kept as
+	// the floor and the scaling does its widening above it. During catch-up the
+	// floor never binds: 600% of ten minutes is an hour.
+	return max(budget, MaxBlockDownloadTime)
+}
+
 // shouldExtendBlockDeadline reports whether an expired block-response deadline
 // should be extended (because the block is still actively arriving) rather than
 // treated as a stall. Extension is allowed only while throughput is healthy AND
-// the fetch has been in flight for less than MaxBlockDownloadTime — the
-// wall-clock cap that stops a peer dribbling bytes forever from holding the
-// sync slot indefinitely. blockFetchStart is the zero value when no block fetch
-// is in flight.
-func shouldExtendBlockDeadline(command string, healthyDownload bool, blockFetchStart, now time.Time) bool {
+// the fetch has been in flight for less than budget — the wall-clock ceiling
+// that stops a peer dribbling bytes forever from holding the sync slot
+// indefinitely, supplied by blockDownloadBudget. blockFetchStart is the zero
+// value when no block fetch is in flight.
+func shouldExtendBlockDeadline(command string, healthyDownload bool, blockFetchStart, now time.Time, budget time.Duration) bool {
 	if !isBlockResponseCommand(command) || !healthyDownload {
 		return false
 	}
@@ -1554,7 +1782,7 @@ func shouldExtendBlockDeadline(command string, healthyDownload bool, blockFetchS
 		return false
 	}
 
-	return now.Sub(blockFetchStart) < MaxBlockDownloadTime
+	return now.Sub(blockFetchStart) < budget
 }
 
 // responseStallBudget returns the deadline allowance a pending response of the
@@ -1676,8 +1904,8 @@ func (p *Peer) stallHandler() {
 	lastAssocReadBytes := p.AssociationReadBytes()
 
 	// blockFetchStart records when the current block fetch first went in flight.
-	// It bounds how long throughput-based extension can keep a block alive
-	// (MaxBlockDownloadTime); zero when no block fetch is outstanding.
+	// It bounds how long throughput-based extension can keep a block alive (see
+	// blockDownloadBudget); zero when no block fetch is outstanding.
 	var blockFetchStart time.Time
 out:
 	for {
@@ -1783,7 +2011,8 @@ out:
 			// its adjusted deadline. While a block fetch is in flight,
 			// non-block deadlines are suppressed (see expiredStallResponse).
 			if command, stalled := expiredStallResponse(pendingResponses, now, offset); stalled {
-				if shouldExtendBlockDeadline(command, healthyDownload, blockFetchStart, now) {
+				budget := p.blockDownloadBudget()
+				if shouldExtendBlockDeadline(command, healthyDownload, blockFetchStart, now, budget) {
 					// The block is still actively arriving at a healthy rate and
 					// within the wall-clock cap; extend the whole block-response
 					// group (armed together) rather than disconnect a peer
@@ -1796,7 +2025,7 @@ out:
 					}
 
 					p.logger.Debugf("Extending block deadline for %s: downloading at %d B/s (%.0fs into fetch, cap %s)",
-						p, recvDelta/uint64(stallTickInterval.Seconds()), now.Sub(blockFetchStart).Seconds(), MaxBlockDownloadTime)
+						p, recvDelta/uint64(stallTickInterval.Seconds()), now.Sub(blockFetchStart).Seconds(), budget)
 				} else {
 					reason := fmt.Sprintf("Peer appears to be stalled or misbehaving, %s timeout", command)
 					p.DisconnectWithInfo(reason)
@@ -1854,7 +2083,7 @@ func UseBlockPrefetchIngestion(budgetBytes int64, net wire.BitcoinNet) bool {
 // should run for this command. With block prefetch ingestion active, OnBlock
 // legitimately blocks in AcquireBlockPrefetch under budget backpressure for
 // longer than PeerProcessingTimeout; block-stall detection is owned by the
-// netsync stall detector, the idle timer, and MaxBlockDownloadTime, so the
+// netsync stall detector, the idle timer, and the block-download budget, so the
 // watchdog is not armed for block messages in that mode. It shares the
 // UseBlockPrefetchIngestion predicate with netsync.SyncManager.UsePrefetchIngestion
 // so the read-loop and sync manager agree on when prefetch is active — regtest
@@ -1973,8 +2202,8 @@ out:
 		// With block prefetch enabled, OnBlock legitimately parks in
 		// AcquireBlockPrefetch under budget backpressure for longer than
 		// PeerProcessingTimeout; block-stall detection is then owned by the
-		// netsync stall detector, the idle timer, and MaxBlockDownloadTime, so the
-		// per-message watchdog must not fire for block messages in that mode.
+		// netsync stall detector, the idle timer, and the block-download budget, so
+		// the per-message watchdog must not fire for block messages in that mode.
 		if shouldArmProcessingTimer(rmsg.Command(), p.settings.Legacy.BlockPrefetchBufferBytes, p.cfg.ChainParams.Net) {
 			processingTimer.Reset(p.settings.Legacy.PeerProcessingTimeout)
 		}
@@ -2057,6 +2286,11 @@ out:
 				// the read-loop — the largest blocks are exactly where that walk
 				// hurt the download/processing overlap this feature exists for.
 				p.cfg.Listeners.OnBlock(p, msg, nil, int64(n-wire.MessageHeaderSize))
+			}
+
+		case *MsgBlockOnDisk:
+			if p.cfg.Listeners.OnBlockOnDisk != nil {
+				p.cfg.Listeners.OnBlockOnDisk(p, msg)
 			}
 
 		case *wire.MsgInv:

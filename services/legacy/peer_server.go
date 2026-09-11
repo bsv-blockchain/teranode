@@ -47,7 +47,6 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
-	blob_options "github.com/bsv-blockchain/teranode/stores/blob/options"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -502,7 +501,6 @@ type server struct {
 	utxoStore         utxostore.Store
 	subtreeStore      blob.Store
 	tempStore         blob.Store
-	concurrentStore   *blob.ConcurrentBlob[chainhash.Hash]
 	subtreeValidation subtreevalidation.Interface
 	blockValidation   blockvalidation.Interface
 	blockAssembly     *blockassembly.Client
@@ -1288,6 +1286,15 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payl
 		// synchronous backpressure) and also spares fabricated blocks the
 		// SerializeSize walk below. Blocks we actually requested take the fast path.
 		if !sm.BlockRequested(sp.Peer, blockHash) {
+			// One exception: when sync stalls on a single block we ask a second
+			// peer for the same block, and cancel the request with the losers
+			// once a copy arrives. A late copy from one of exactly those peers is
+			// an answer to our own question, so drop it and leave the peer alone.
+			if sm.BlockRacedTo(sp.Peer, blockHash) {
+				sp.server.logger.Debugf("dropping late copy of block %s from %s, another peer already delivered it", blockHash, sp)
+				return
+			}
+
 			// Unrequested block: evict the whole association (primary drives the
 			// sync-peer rotation, plus the stream sub-peer's own connection), mirroring
 			// handleBlockMsg's downstream eviction. See disconnectMisbehaving.
@@ -1334,12 +1341,20 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte, payl
 		// is what stops a disconnected peer from wedging the single shared
 		// block-processing goroutine — and through it every other peer.
 		done := make(chan error, 1)
-		sm.QueueBlock(block, sp.Peer, done)
+
+		// Closed by the sync manager as soon as this block's memory is charged to
+		// the budget that owns it next: the quick window's byte charge if the block
+		// is dispatched, the park's byte budget if it is kept for a missing parent.
+		// That is when the download bytes are owed back, and it is far earlier than
+		// the reply.
+		handedOff := make(chan struct{})
+
+		sm.QueueBlock(block, sp.Peer, done, handedOff)
 
 		// Return immediately so the read-loop downloads the next block while this
 		// one is validated; the result (budget release + disconnect-on-failure)
 		// is handled off the read-loop.
-		go sp.awaitBlockResult(done, weight, blockHash)
+		go sp.awaitBlockResult(done, handedOff, weight, blockHash)
 	}
 }
 
@@ -1503,15 +1518,67 @@ func blockAdmissionWeight(payloadSize int64, buf []byte, msg *wire.MsgBlock) int
 // prefetched block; the number of live instances is bounded by the prefetch
 // budget. It deliberately captures only blockHash (not the block or its decode
 // arena) so the block's memory can be released while processing proceeds.
-func (sp *serverPeer) awaitBlockResult(done chan error, weight int64, blockHash *chainhash.Hash) {
-	// Release the reserved budget AND drop the in-flight-dedup hash exactly once on
-	// every exit path (normal reply, sp.quit hold-then-drain, sp.ctx backstop).
-	// Pairing the hash removal with the budget release here is what keeps the two
-	// halves of the admission gate on one lifetime: a copy of this hash cannot be
-	// re-admitted until this block has fully left the pipeline.
-	defer sp.server.syncManager.ReleaseBlockPrefetch(*blockHash, weight)
+func (sp *serverPeer) awaitBlockResult(done chan error, handedOff chan struct{}, weight int64, blockHash *chainhash.Hash) {
+	// The dedup hash is dropped on every exit path (normal reply, sp.quit
+	// hold-then-drain, sp.ctx backstop), which is what stops a second copy of this
+	// block being validated while the first is still in the pipeline.
+	defer sp.server.syncManager.ReleaseBlockPrefetchHash(*blockHash)
 
-	var err error
+	// The byte weight is given back separately, and earlier: on whichever of the
+	// hand-off and the reply comes first. This goroutine owns the release, which
+	// is what makes it exactly once, and it holds a weight from its own successful
+	// acquire, so it can never release bytes nobody reserved. Both of those would
+	// panic the semaphore, and the panic would land on a peer's read loop.
+	//
+	// Why earlier at all: the budget is acquired AFTER a block has been read off
+	// the wire, in OnBlock, so a read loop parked in that acquire cannot read its
+	// next message. Holding the bytes through validation therefore stops other
+	// peers downloading. Measured on mainnet at height 752,100 with the budget at
+	// 256 MiB: one or two blocks in flight and five or six read loops blocked,
+	// on a link delivering 27 MB/s.
+	//
+	// Nothing becomes unbounded, because the hand-off fires only once the block is
+	// charged to the window's byte budget or to the park's. What the split removes
+	// is the download budget double-counting memory another budget already
+	// accounts for.
+	// Called on both paths below. Exactly-once is enforced inside the sync
+	// manager, under the same lock that holds the dedup set, because that is
+	// where the flag can live beside the data it protects: releasing a weight
+	// twice panics the semaphore, and the panic would land on a peer's read loop.
+	releaseBytes := func() {
+		sp.server.syncManager.ReleaseBlockPrefetchBytes(*blockHash, weight)
+	}
+
+	defer releaseBytes()
+
+	var (
+		err       error
+		haveReply bool
+	)
+
+	// Wait for whichever comes first. A hand-off means the block is charged
+	// elsewhere and the bytes go back now, then the wait for the reply continues
+	// below. A reply first means the block never reached either budget, which is
+	// every path that ends in the head: an unrequested block, one inside its
+	// backoff, one whose parent recently failed. Teardown falls through to the
+	// existing handling, which deliberately holds the budget until the block
+	// actually leaves the pipeline.
+	if handedOff != nil {
+		select {
+		case <-handedOff:
+			releaseBytes()
+		case err = <-done:
+			haveReply = true
+		case <-sp.quit:
+		case <-sp.ctx.Done():
+		}
+	}
+
+	if haveReply {
+		sp.reportBlockResult(err, blockHash)
+
+		return
+	}
 
 	select {
 	case err = <-done:
@@ -1547,14 +1614,24 @@ func (sp *serverPeer) awaitBlockResult(done chan error, weight int64, blockHash 
 		return
 	}
 
-	if err != nil {
-		sp.server.logger.Errorf("block processing failed: %v", err)
+	sp.reportBlockResult(err, blockHash)
+}
 
-		if shouldDisconnectOnBlockErr(err) {
-			// Evict the whole association so the sync peer actually rotates; see
-			// disconnectMisbehaving (a bare sp disconnect misses the primary).
-			disconnectMisbehaving(sp, fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", blockHash))
-		}
+// reportBlockResult logs a failed block and, when the error says the block itself
+// was the problem, evicts the peer's whole association so the sync peer actually
+// rotates. Its own function because awaitBlockResult now has two ways of learning
+// the outcome, and both owe the same response.
+func (sp *serverPeer) reportBlockResult(err error, blockHash *chainhash.Hash) {
+	if err == nil {
+		return
+	}
+
+	sp.server.logger.Errorf("block processing failed: %v", err)
+
+	if shouldDisconnectOnBlockErr(err) {
+		// Evict the whole association so the sync peer actually rotates; see
+		// disconnectMisbehaving (a bare sp disconnect misses the primary).
+		disconnectMisbehaving(sp, fmt.Sprintf("block %s processing failed, disconnecting to trigger sync peer rotation", blockHash))
 	}
 }
 
@@ -2028,13 +2105,19 @@ func (sp *serverPeer) OnReject(p *peer.Peer, msg *wire.MsgReject) {
 	sp.server.logger.Warnf("Received reject message from peer %s, cmd: %s, code: %s, reason: %s, hash: %s", p, msg.Cmd, msg.Code.String(), msg.Reason, msg.Hash.String())
 }
 
-// OnNotFound logs all not found messages received from the remote peer.
+// OnNotFound handles a not found message received from the remote peer.
+//
+// It used to only log. A notfound naming a block we asked this peer for has to
+// reach the sync manager: the peer has told us its copy is never coming, so its
+// obligation for that block must be discharged and the block put back into the
+// download walk, or it is stranded behind a forward-only cursor with nobody
+// owing it.
 func (sp *serverPeer) OnNotFound(p *peer.Peer, msg *wire.MsgNotFound) {
 	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnNotFound",
 		tracing.WithHistogram(peerServerMetrics["OnNotFound"]),
 	)
 
-	sp.server.logger.Warnf("Received not found message from peer %s, %d not found invs", p, len(msg.InvList))
+	sp.server.syncManager.NotFound(msg, sp.Peer)
 }
 
 // OnRead is invoked when a peer receives a message and it is used to update
@@ -3137,6 +3220,7 @@ func newPeerConfig(sp *serverPeer) *peer.Config {
 			OnMemPool:      sp.OnMemPool,
 			OnTx:           sp.OnTx,
 			OnBlock:        sp.OnBlock,
+			OnBlockOnDisk:  sp.OnBlockOnDisk,
 			OnInv:          sp.OnInv,
 			OnHeaders:      sp.OnHeaders,
 			OnGetData:      sp.OnGetData,
@@ -3158,14 +3242,29 @@ func newPeerConfig(sp *serverPeer) *peer.Config {
 			OnCreateStream: sp.OnCreateStream,
 			OnStreamAck:    sp.OnStreamAck,
 		},
-		AddrMe:             addrMe,
-		NewestBlock:        sp.newestBlock,
-		HostToNetAddress:   sp.server.addrManager.HostToNetAddress,
-		Proxy:              cfg.Proxy,
-		UserAgentName:      userAgentName,
-		UserAgentVersion:   version.String(),
-		UserAgentComments:  cfg.UserAgentComments,
-		ChainParams:        sp.server.settings.ChainCfgParams,
+		AddrMe:            addrMe,
+		NewestBlock:       sp.newestBlock,
+		HostToNetAddress:  sp.server.addrManager.HostToNetAddress,
+		Proxy:             cfg.Proxy,
+		UserAgentName:     userAgentName,
+		UserAgentVersion:  version.String(),
+		UserAgentComments: cfg.UserAgentComments,
+		ChainParams:       sp.server.settings.ChainCfgParams,
+		CatchingUp: func() bool {
+			if sp.server == nil || sp.server.syncManager == nil {
+				return false
+			}
+			// The cached answer, never the live one: this runs on the peer's
+			// stall handler, which must not block on a blockchain round trip.
+			return !sp.server.syncManager.IsCurrentCached()
+		},
+		PeersWithBlockDownloads: func() int {
+			if sp.server == nil || sp.server.syncManager == nil {
+				return 0
+			}
+			return sp.server.syncManager.PeersWithBlockDownloads()
+		},
+
 		Services:           sp.server.services,
 		DisableRelayTx:     cfg.BlocksOnly,
 		ProtocolVersion:    peer.MaxProtocolVersion,
@@ -4028,19 +4127,13 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		utxoStore:            utxoStore,
 		subtreeStore:         subtreeStore,
 		tempStore:            tempStore,
-		concurrentStore: blob.NewConcurrentBlob[chainhash.Hash](
-			tempStore,
-			blob_options.WithDeleteAt(10),
-			blob_options.WithSubDirectory("blocks"),
-			blob_options.WithAllowOverwrite(true),
-		),
-		subtreeValidation: subtreeValidation,
-		blockValidation:   blockValidation,
-		blockAssembly:     blockAssembly,
-		assetHTTPAddress:  assetHTTPAddress,
-		banList:           banList,
-		banChan:           banChan,
-		associationMgr:    peer.NewAssociationManager(),
+		subtreeValidation:    subtreeValidation,
+		blockValidation:      blockValidation,
+		blockAssembly:        blockAssembly,
+		assetHTTPAddress:     assetHTTPAddress,
+		banList:              banList,
+		banChan:              banChan,
+		associationMgr:       peer.NewAssociationManager(),
 	}
 
 	s.syncManager, err = netsync.New(
@@ -4051,6 +4144,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		validationClient,
 		utxoStore,
 		subtreeStore,
+		tempStore,
 		subtreeValidation,
 		blockValidation,
 		blockAssembly,
@@ -4569,4 +4663,21 @@ func (s *server) handleBanEvent(_ context.Context, event p2p.BanEvent) {
 	if err != nil {
 		s.logger.Errorf("Error disconnecting banned peers: %v", err)
 	}
+}
+
+// OnBlockOnDisk handles a block whose body the wire layer streamed straight to
+// the park's store instead of decoding it.
+//
+// It is the counterpart of OnBlock and is deliberately much smaller. There is no
+// prefetch budget to reserve, because nothing about this block is in memory; no
+// reply channel, because there is no processing to wait on here; and no
+// hand-off, because the read loop is already free. All that is left is telling
+// the sync manager the bytes exist, which its consumer goroutine turns into a
+// park entry and a drain request.
+func (sp *serverPeer) OnBlockOnDisk(_ *peer.Peer, msg *peer.MsgBlockOnDisk) {
+	if msg == nil || sp.server == nil || sp.server.syncManager == nil {
+		return
+	}
+
+	sp.server.syncManager.QueueBlockOnDisk(msg.BlockBody, sp.Peer)
 }
