@@ -1538,21 +1538,18 @@ Unfreezes a previously frozen UTXO, allowing it to be spent.
 Replaces a frozen UTXO's commitment using its outpoint and the old and new hashes.
 No destination address or replacement locking script is accepted.
 
-**Known regression:** do not reassign to a different owner. The RPC can succeed
-with a `null` result while leaving the output unspendable by both owners, even
-after maturity. See the [reassignment limitation](../../topics/services/alert.md#24-utxo-reassignment)
-and [issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).
+**Do not use ownership-changing reassignment**; see the [reassignment limitation and backend differences](../../topics/services/alert.md#24-utxo-reassignment).
 
 **Parameters** (positional, in this order):
 
 1. `oldtxid` (string, required) - Transaction ID of the frozen output, as a hex hash
 2. `oldvout` (numeric, required) - Output index
-3. `oldutxohash` (string, required) - Current UTXO commitment, as a hex hash
+3. `oldutxohash` (string, required) - Supplied current UTXO commitment, as a hex hash; checked by Aerospike but not SQL
 4. `newutxohash` (string, required) - Replacement UTXO commitment, as a hex hash
 
 **Returns:**
 
-- `null` on success; an error if hash parsing or the store operation fails. Success does not establish spendability.
+- `null` on success; a hash-parsing or store error otherwise. Short hex is zero-padded; the output index is cast to `uint32` without a sign check.
 
 **Example Request:**
 

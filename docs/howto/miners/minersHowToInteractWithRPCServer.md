@@ -194,12 +194,12 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
     - Returns: Boolean `true` if successful
 
 6. `reassign`: Replaces a frozen UTXO's commitment using its outpoint and the old and new hashes
-    - **Known regression:** do not reassign to a different owner. A successful result can leave the output unspendable by both owners, even after maturity. See the [reassignment limitation](../../topics/services/alert.md#24-utxo-reassignment) and [issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).
+    - **Do not use ownership-changing reassignment**; see the [limitation and backend differences](../../topics/services/alert.md#24-utxo-reassignment).
     - Parameters (positional, in this order):
 
         - `oldtxid` (string, required): Transaction ID of the frozen output, as a hex hash
         - `oldvout` (numeric, required): Output index
-        - `oldutxohash` (string, required): Current UTXO commitment, as a hex hash
+        - `oldutxohash` (string, required): Supplied current UTXO commitment, as a hex hash; checked by Aerospike but not SQL
         - `newutxohash` (string, required): Replacement UTXO commitment, as a hex hash
 
     - Returns: JSON `null` on success; an error if hash parsing or the store operation fails

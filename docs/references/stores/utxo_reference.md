@@ -241,7 +241,7 @@ type Store interface {
     // It does not persist a replacement locking script. Changing the owner
     // currently strands the output for both owners even after maturity; see
     // https://github.com/bsv-blockchain/teranode/issues/1725.
-    // SQL honors the configured delay; Aerospike currently uses the fixed constant.
+    // SQL uses a positive configured delay (zero falls back to 1,000); Aerospike uses the fixed constant.
     ReAssignUTXO(ctx context.Context, utxo *Spend, newUtxo *Spend, tSettings *settings.Settings) error
 
     // GetCounterConflicting returns the counter conflicting transactions for a given transaction hash.

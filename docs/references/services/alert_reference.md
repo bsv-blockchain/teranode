@@ -193,7 +193,7 @@ Adds funds to the consensus blacklist, setting specified UTXOs as un-spendable. 
 func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []models.ConfiscationTransactionDetails) (*models.AddToConfiscationTransactionWhitelistResponse, error)
 ```
 
-Re-assigns UTXOs to confiscation transactions, allowing them to be spent.
+Updates UTXO commitments for confiscation transactions; see the [reassignment limitation](../../topics/services/alert.md#24-utxo-reassignment).
 
 #### Helper Methods
 
@@ -318,11 +318,7 @@ Core alert data structure containing:
 
 For UTXO freeze, unfreeze, and reassignment operations:
 
-**Known regression:** an applied ownership-changing reassignment can leave the
-output unspendable by both owners, even after maturity. Do not treat processing
-status as proof of spendability. See the
-[reassignment limitation](../../topics/services/alert.md#24-utxo-reassignment) and
-[issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).
+**Do not use ownership-changing reassignment**; see the [limitation and backend differences](../../topics/services/alert.md#24-utxo-reassignment).
 
 - **UTXO Identifiers**:
 
@@ -330,7 +326,7 @@ status as proof of spendability. See the
     - **Output indices (vout)**
     - **Block Height**: Target block height for UTXO operations
     - **Operation Type**: Freeze, unfreeze, or reassign
-    - **New Address**: For UTXO reassignment operations (destination address)
+    - **Replacement Commitment**: Derived from the confiscation transaction; the replacement script is not persisted
     - **Execution Status**: Whether the UTXO operation has been applied
 
 #### 4. Peer Management Alert Data

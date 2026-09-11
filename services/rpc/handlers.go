@@ -2631,27 +2631,16 @@ func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	return nil, nil
 }
 
-// handleReassign implements the reassign command, which reassigns a specific UTXO to a
-// new UTXO hash, allowing for flexible UTXO management.
-//
-// This command provides a way to update the UTXO set by reassigning a UTXO to a new
-// UTXO hash. This is useful in scenarios such as:
-// - Correcting errors in the UTXO set
-// - Updating the UTXO set after a chain reorganization
-// - Managing UTXOs during testing and debugging
-//
-// The reassign operation is used to correct mistakes in the UTXO management process.
-//
-// Security considerations:
-// - Requires admin privileges to execute
-// - May trigger transaction reordering in the transaction processing system
-// - Changes persist across node restarts
-// - Should be used carefully to avoid disrupting legitimate transactions
+// handleReassign updates a frozen output's commitment and maturity gate using
+// an outpoint and old/new commitment hashes. Both full and limited RPC users can
+// call it. It does not persist a replacement script or refuse an ownership change;
+// changing the owner currently strands the output even after maturity.
+// See https://github.com/bsv-blockchain/teranode/issues/1725.
 //
 // Parameters:
 //   - ctx: Context for cancellation and tracing
 //   - s: The RPC server instance providing access to service clients
-//   - cmd: The parsed command arguments (bsvjson.ReassignCmd with OldTxID, OldVout, and NewUTXOHash)
+//   - cmd: The parsed command arguments (bsvjson.ReassignCmd with OldTxID, OldVout, OldUTXOHash, and NewUTXOHash)
 //   - _: Unused channel for close notification
 //
 // Returns:

@@ -73,7 +73,7 @@ The below table summarises the services supported in the current version:
 | getminingcandidate        | Supported  | Returns data needed to construct a block to work on                          |
 | invalidateblock           | Supported  | Permanently marks a block as invalid                                         |
 | isbanned                  | Supported  | Checks if a network address is currently banned                              |
-| reassign                  | Restricted | Updates a frozen UTXO commitment; ownership changes currently strand the output |
+| reassign                  | Supported | Updates a frozen UTXO commitment; ownership changes currently strand the output |
 | reconsiderblock           | Supported  | Removes invalidity status of a block                                         |
 | sendrawtransaction        | Supported  | Submits raw transaction to local node and network                            |
 | setban                    | Supported  | Attempts to add or remove an IP/Subnet from the banned list                  |
@@ -1044,10 +1044,7 @@ The `isbanned` command checks if a specific network address is currently banned 
 The `reassign` command replaces the stored commitment of a frozen UTXO using an
 outpoint and the old and new UTXO hashes. It does not accept a destination address.
 
-**Known regression:** do not reassign to a different owner. The RPC can succeed
-with a `null` result while leaving the output unspendable by both owners, even
-after maturity. See the [reassignment limitation](alert.md#24-utxo-reassignment)
-and [issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).
+**Do not use ownership-changing reassignment**; see the [reassignment limitation and backend differences](alert.md#24-utxo-reassignment).
 
 #### Function Overview
 
@@ -1057,13 +1054,15 @@ and [issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).
 
     - `oldtxid` (string, required): Transaction ID of the frozen output, as a hex hash
     - `oldvout` (numeric, required): Output index
-    - `oldutxohash` (string, required): Current UTXO commitment, as a hex hash
+    - `oldutxohash` (string, required): Supplied current UTXO commitment, as a hex hash; checked by Aerospike but not SQL
     - `newutxohash` (string, required): Replacement UTXO commitment, as a hex hash
 
 - **Return Value**:
 
     - On success: JSON `null`; this confirms the store operation, not spendability
-    - On failure: An error if a hash cannot be parsed or the store operation fails
+    - On failure: A hash-parsing or store error; short hex is zero-padded and the output index is cast to `uint32` without a sign check
+
+![RPC reassignment](img/plantuml/rpc/rpc-reassign.svg)
 
 #### Process Flow
 
@@ -1091,10 +1090,9 @@ and [issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).
 
 #### Important Notes
 
-- Passing the maturity gate does not restore spendability after an ownership-changing reassignment.
-- The RPC does not validate that the new commitment has an authoritative replacement script.
-- SQL honors the configured maturity delay; Aerospike currently uses the fixed 1,000-block delay.
-- Recovery for already-reassigned outputs needs a validated procedure; see issue 1725 above.
+The command is available to limited RPC users as well as administrators. SQL does
+not check the supplied old commitment; the backend differences and missing
+replacement-script persistence are described in the limitation linked above.
 
 ### 3.20. Command: Reconsider Block
 

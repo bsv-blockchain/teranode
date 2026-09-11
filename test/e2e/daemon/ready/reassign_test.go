@@ -2,12 +2,12 @@ package smoke
 
 import (
 	"testing"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/daemon"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -37,6 +37,7 @@ func TestReassignSQLiteEnforcesMaturityAndRejectsUnstoredScript(t *testing.T) {
 			func(s *settings.Settings) {
 				// Reduce coinbase maturity for faster test
 				s.ChainCfgParams.CoinbaseMaturity = testCoinbaseMaturity
+				s.Validator.UseLocalValidator = true
 				// Reduce reassigned UTXO spendable blocks for faster test
 				s.UtxoStore.ReAssignedUtxoSpendableAfterBlocks = testReassignedUtxoSpendableAfter
 			},
@@ -46,29 +47,29 @@ func TestReassignSQLiteEnforcesMaturityAndRejectsUnstoredScript(t *testing.T) {
 	defer td.Stop(t)
 	require.Equal(t, "sqlite", td.Settings.UtxoStore.UtxoStore.Scheme)
 
-	// Public ingress redacts some validation errors. Pair every rejection
-	// there with its exact cause from a real validator over the same stores.
-	// Nil Kafka producers and a disabled assembly handoff keep this probe local.
-	v, err := validator.New(td.Ctx, td.Logger, td.Settings, td.UtxoStore,
-		nil, nil, nil, td.BlockchainClient)
-	require.NoError(t, err)
-	requireRejected := func(tx *bt.Tx, reason string) {
+	// Public ingress removes the validator's error chain. Check that ingress
+	// reaches validation, then pin the cause with the daemon's local validator.
+	requireRejected := func(tx *bt.Tx, spend *utxo.Spend, cause error, detail string) {
 		t.Helper()
-		// Snapshot before either path runs, and decode separate requests.
-		// Keep tx untouched so retries still supply the original extended fields.
-		submittedBytes := tx.ExtendedBytes()
-		ingress, err := bt.NewTxFromBytes(submittedBytes)
-		require.NoError(t, err)
-		require.Error(t, td.PropagationClient.ProcessTransaction(td.Ctx, ingress))
-		probe, err := bt.NewTxFromBytes(submittedBytes)
-		require.NoError(t, err)
-		_, err = v.ValidateWithOptions(td.Ctx, probe, td.UtxoStore.GetBlockHeight(),
+		require.ErrorContains(t, td.PropagationClient.ProcessTransaction(td.Ctx, tx), "failed to validate transaction")
+		// Re-extension mutates inputs; preserve the fixture for subsequent probes.
+		// Height 0 selects tip+1, exactly as propagation does.
+		_, err := td.ValidatorClient.ValidateWithOptions(td.Ctx, tx.Clone(), 0,
 			&validator.Options{AddTXToBlockAssembly: false})
-		require.ErrorContains(t, err, reason)
+		require.Error(t, err)
+		if cause != nil {
+			require.ErrorIs(t, err, cause)
+		}
+		if detail != "" {
+			require.ErrorContains(t, err, detail)
+		}
+		status, err := td.UtxoStore.GetSpend(td.Ctx, spend)
+		require.NoError(t, err)
+		require.Nil(t, status.SpendingData, "every rejected spend must leave the output unspent")
 	}
 
 	// Set run state
-	err = td.BlockchainClient.Run(td.Ctx, "test")
+	err := td.BlockchainClient.Run(td.Ctx, "test")
 	require.NoError(t, err)
 
 	// Generate initial blocks (coinbase maturity + 1)
@@ -149,6 +150,12 @@ func TestReassignSQLiteEnforcesMaturityAndRejectsUnstoredScript(t *testing.T) {
 		UTXOHash: reassignUtxoHash,
 	}
 
+	// Reassignment computes maturity from the store's height, which updates
+	// asynchronously. Pin the starting height before either commitment changes.
+	reassignHeight := uint32(testCoinbaseMaturity + 2)
+	td.WaitForUtxoStoreHeight(t, reassignHeight)
+	require.Equal(t, reassignHeight, td.UtxoStore.GetBlockHeight())
+
 	err = td.UtxoStore.ReAssignUTXO(td.Ctx, spend, newSpend, td.Settings)
 	require.NoError(t, err)
 
@@ -160,10 +167,7 @@ func TestReassignSQLiteEnforcesMaturityAndRejectsUnstoredScript(t *testing.T) {
 	status, err := td.UtxoStore.GetSpend(td.Ctx, sameOwnerSpend)
 	require.NoError(t, err)
 	require.Equal(t, int(utxo.Status_IMMATURE), status.Status)
-	requireRejected(bobSpendingTx, "not spendable until")
-	status, err = td.UtxoStore.GetSpend(td.Ctx, sameOwnerSpend)
-	require.NoError(t, err)
-	require.Nil(t, status.SpendingData, "the immature spend must leave the output unspent")
+	requireRejected(bobSpendingTx, sameOwnerSpend, errors.ErrTxLocked, "")
 
 	// ReAssignUTXO changes the commitment, not the stored locking script.
 	// The validator must not accept Charles's replacement script supplied in
@@ -185,28 +189,24 @@ func TestReassignSQLiteEnforcesMaturityAndRejectsUnstoredScript(t *testing.T) {
 	err = charlesSpendingTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: charlesPrivatekey})
 	require.NoError(t, err)
 
-	requireRejected(charlesSpendingTx, "OP_EQUALVERIFY")
+	requireRejected(charlesSpendingTx, newSpend, nil, "OP_EQUALVERIFY")
 
-	// Mine beyond the boundary, then wait for the UTXO store's asynchronous
-	// height update before attributing any rejection to the locking script.
-	td.MineAndWait(t, testReassignedUtxoSpendableAfter+1)
-	require.Eventually(t, func() bool {
-		for _, maturedSpend := range []*utxo.Spend{newSpend, sameOwnerSpend} {
-			status, err := td.UtxoStore.GetSpend(td.Ctx, maturedSpend)
-			if err != nil || status == nil || status.Status != int(utxo.Status_OK) {
-				return false
-			}
-		}
-		return true
-	}, 30*time.Second, 100*time.Millisecond, "both outputs must mature in the UTXO store")
+	// Mine to the exact maturity height and wait for the asynchronous store
+	// update, retaining coverage of an off-by-one error in the gate.
+	td.MineAndWait(t, testReassignedUtxoSpendableAfter)
+	maturityHeight := reassignHeight + testReassignedUtxoSpendableAfter
+	td.WaitForUtxoStoreHeight(t, maturityHeight)
+	require.Equal(t, maturityHeight, td.UtxoStore.GetBlockHeight())
+	for _, maturedSpend := range []*utxo.Spend{newSpend, sameOwnerSpend} {
+		status, err := td.UtxoStore.GetSpend(td.Ctx, maturedSpend)
+		require.NoError(t, err)
+		require.Equal(t, int(utxo.Status_OK), status.Status)
+	}
 
 	// The changed commitment has matured, but it does not authorize trusting
 	// the submitter's replacement script. Ownership-changing reassignment
 	// needs an authoritative script source in addition to ReAssignUTXO.
-	requireRejected(charlesSpendingTx, "OP_EQUALVERIFY")
-	status, err = td.UtxoStore.GetSpend(td.Ctx, newSpend)
-	require.NoError(t, err)
-	require.Nil(t, status.SpendingData, "the rejected transaction must leave the output unspent")
+	requireRejected(charlesSpendingTx, newSpend, nil, "OP_EQUALVERIFY")
 
 	// The original owner is locked out too: its signature matches the stored
 	// script, but its commitment no longer matches the reassigned hash.
@@ -214,10 +214,7 @@ func TestReassignSQLiteEnforcesMaturityAndRejectsUnstoredScript(t *testing.T) {
 		transactions.WithInput(aliceToBobTx, 0, bobPrivateKey),
 		transactions.WithP2PKHOutputs(1, 100, charles),
 	)
-	requireRejected(originalOwnerSpendingTx, "UTXO_MISMATCH")
-	status, err = td.UtxoStore.GetSpend(td.Ctx, newSpend)
-	require.NoError(t, err)
-	require.Nil(t, status.SpendingData, "the original owner's rejected spend must leave the output unspent")
+	requireRejected(originalOwnerSpendingTx, newSpend, errors.ErrUtxoHashMismatch, "")
 
 	// Self-reassignment is only a maturity control, not a working confiscation.
 	// The same-owner output now passes both script validation and the height gate.

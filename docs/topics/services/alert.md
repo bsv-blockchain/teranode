@@ -146,23 +146,37 @@ fails against the original stored script. The original owner's signature passes
 that script, but its spend fails with `UTXO_MISMATCH` against the changed commitment.
 Waiting for more blocks does not restore spendability.
 
-This affects ownership-changing alert/confiscation and RPC reassignment. A successful
-RPC result or alert processing response does not guarantee that the output can be
-spent. There is no documented, validated recovery procedure across backends: SQL
-freezing ignores the supplied commitment, whereas Aerospike checks it, so operators
-must not assume that re-freezing and restoring the original hash is portable.
-Restoring support requires an authoritative replacement-script source and validation
-support; accepting a submitter's extended script would undermine the security fix.
+This affects ownership-changing alert/confiscation and RPC reassignment. Neither
+entry point currently refuses an ownership change: a successful RPC result or alert
+processing response confirms the store operation only. Restoration requires
+persisting and validating an authoritative replacement script; accepting a
+submitter's extended script would undermine the security fix.
 [Issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725) tracks restoration,
-recovery, backend parity and operator guidance.
+recovery, backend parity and operator guidance. There is no validated recovery
+procedure across backends, so do not assume that re-freezing and restoring the
+original hash is portable.
 
-`TestReassignSQLiteEnforcesMaturityAndRejectsUnstoredScript` covers SQLite only. It
-pins both owners' rejection after a commitment change and uses self-reassignment
-(the commitment stays the same) solely as a positive maturity control. That control
-does not demonstrate a working ownership-changing confiscation flow. SQLite honors
-the test's five-block setting; Aerospike currently ignores
-`utxostore_reassignedUtxoSpendableAfterBlocks` and uses the fixed 1,000-block delay.
-This smoke test provides no Aerospike reassignment coverage.
+Backend differences that also affect recovery and testing:
+
+| Behavior | SQLite / PostgreSQL | Aerospike |
+|---|---|---|
+| Supplied current commitment when freezing or reassigning | Not checked; the outpoint selects the output | Checked against the stored commitment |
+| Reassignment maturity delay | Uses a positive `utxostore_reassignedUtxoSpendableAfterBlocks`; zero falls back to 1,000 | Always 1,000 blocks; ignores the setting |
+| Immature reassigned spend error | `ErrTxLocked` | `ErrUtxoFrozen` |
+| Reassignment history | No reassignment audit record | Appends to the `reassignments` bin |
+
+The RPC also accepts short hexadecimal hashes by zero-padding them. It casts the
+output index to `uint32` without rejecting negative values, so malformed outpoints
+can reach the store rather than produce a parameter-validation error. Callers
+should supply complete 64-character hashes and a non-negative output index.
+The method is available to both full and limited RPC credentials; the warning
+above describes an operational limitation, not an enforced access restriction.
+
+The [reassignment smoke test](https://github.com/bsv-blockchain/teranode/blob/release/v0.15/test/e2e/daemon/ready/reassign_test.go) covers
+SQLite only. It checks both owners' rejection after a commitment change and uses
+self-reassignment (an unchanged commitment) solely as a positive control at the
+exact maturity height. It provides no Aerospike reassignment coverage and does not
+demonstrate a working ownership-changing confiscation flow.
 
 ![alert_reassign_utxo.svg](img/plantuml/alert/alert_reassign_utxo.svg)
 

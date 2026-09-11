@@ -59,7 +59,7 @@ It handles the core functionalities of the UTXO Store:
 The UTXO Store includes functionality to **freeze** and **unfreeze** UTXOs, as well as **re-assign** them.
 
 - BSV is the only blockchain that allows legal recourse for lost asset (token) recovery to legally rightful owners by design. The Alert System can also freeze assets based on court injunctions and legal notices.
-- Teranode must be able to re-assign (a set of) UTXO(s) to another (specified) address at a specified block height.
+- Ownership-changing reassignment is currently unsafe; see the [reassignment limitation](../services/alert.md#24-utxo-reassignment).
 
 ## 2. Architecture
 
@@ -392,11 +392,11 @@ The UTXO Store supports advanced UTXO management features, which can be utilized
     - If not frozen, it returns an error
 
 3. **Reassigning UTXOs**: Updates the commitment of a frozen output.
-    - **Known regression:** changing the owner leaves the output unspendable by both owners after mandatory re-extension, even after maturity. Do not use ownership-changing reassignment. See the [reassignment limitation](../services/alert.md#24-utxo-reassignment) and [issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).
+    - **Do not use ownership-changing reassignment**; see the [limitation and backend differences](../services/alert.md#24-utxo-reassignment).
     - Verifies the UTXO exists and is frozen
     - Updates the UTXO hash to the new value
-    - Sets the maturity height to current + 1,000 blocks by default; SQL honors the configured override, while Aerospike currently always uses the constant
-    - Logs the reassignment for audit purposes
+    - Sets the maturity height to current + 1,000 blocks by default; SQL honors a positive configured override (zero falls back to 1,000), while Aerospike currently always uses the constant
+    - Aerospike appends reassignment history to its `reassignments` bin; SQL has no reassignment audit record
     - **Important**: Passing the maturity gate alone does not make a changed-owner output spendable
 
 ### 4.9. Unmined Transaction Management

@@ -11,31 +11,14 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
-	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
-	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/stretchr/testify/require"
 )
 
-// Hold an inventory lookup immediately before it enters the real SQL batcher.
-type heldInventoryStore struct {
-	utxo.Store
-	entered chan struct{}
-	release chan struct{}
-	once    sync.Once
-	calls   atomic.Int32
-}
-
-func (s *heldInventoryStore) Get(ctx context.Context, hash *chainhash.Hash, selected ...fields.FieldName) (*meta.Data, error) {
-	s.calls.Add(1)
-	s.once.Do(func() { close(s.entered) })
-	<-s.release
-	return s.Store.Get(ctx, hash, selected...)
-}
-
+// Exhaust the real SQL connection pool so the inventory Get has entered the
+// batcher and reached SQL, rather than pausing a wrapper before Store.Get.
 func TestStop_WaitsForInventoryBeforeClosingStore(t *testing.T) {
 	sm, p, state := newHeaderProvenanceManager(t)
 	sm.quit = make(chan struct{})
@@ -52,49 +35,61 @@ func TestStop_WaitsForInventoryBeforeClosingStore(t *testing.T) {
 	require.NoError(t, err)
 	store, err := sql.New(context.Background(), ulogger.TestLogger{}, sm.settings, storeURL)
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close(context.Background())) })
-	held := &heldInventoryStore{Store: store, entered: make(chan struct{}), release: make(chan struct{})}
-	sm.utxoStore = held
+	var closeStoreOnce sync.Once
+	closeStore := func() { closeStoreOnce.Do(func() { require.NoError(t, store.Close(context.Background())) }) }
+	t.Cleanup(closeStore)
+	sm.utxoStore = store
 	sm.Start()
 
+	store.RawDB().SetMaxOpenConns(1)
+	connection, err := store.RawDB().Conn(t.Context())
+	require.NoError(t, err)
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { require.NoError(t, connection.Close()) }) }
+	t.Cleanup(release)
+	waits := store.RawDB().Stats().WaitCount
 	inv := wire.NewMsgInv()
 	require.NoError(t, inv.AddInvVect(wire.NewInvVect(wire.InvTypeTx, &chainhash.Hash{1})))
 	handled := make(chan struct{})
 	go func() {
+		defer close(handled)
 		sm.handleInvMsg(&invMsg{inv: inv, peer: p})
-		close(handled)
 	}()
-	select {
-	case <-held.entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("inventory lookup did not start")
-	}
+	t.Cleanup(func() {
+		release()
+		select {
+		case <-handled:
+		case <-time.After(5 * time.Second):
+			t.Error("inventory handler did not finish")
+		}
+		require.NoError(t, sm.Stop())
+	})
+	require.Eventually(t, func() bool {
+		return store.RawDB().Stats().WaitCount > waits
+	}, 5*time.Second, time.Millisecond, "the batcher must reach the real SQL connection pool")
 
-	remaining := 2
 	stopped := make(chan error, 2)
 	go func() { stopped <- sm.Stop() }()
 	<-sm.quit
-	// The service and its context watcher can call Stop concurrently. Both must join.
 	go func() { stopped <- sm.Stop() }()
-	select {
-	case err := <-stopped:
-		remaining--
-		t.Errorf("Stop returned before the inventory lookup completed: %v", err)
-	case <-time.After(100 * time.Millisecond):
-	}
-	close(held.release)
-	<-handled
-	for i := 0; i < remaining; i++ {
+	require.Never(t, func() bool { return len(stopped) != 0 }, 100*time.Millisecond, time.Millisecond,
+		"both Stop callers must wait for the SQL read")
+	release()
+	for range 2 {
 		select {
 		case err := <-stopped:
 			require.NoError(t, err)
 		case <-time.After(5 * time.Second):
-			t.Fatal("Stop did not finish after inventory completed")
+			t.Fatal("Stop did not finish after SQL became available")
 		}
 	}
-	// A delayed Kafka callback must not submit another lookup after shutdown.
-	sm.handleInvMsg(&invMsg{inv: inv, peer: p})
-	require.EqualValues(t, 1, held.calls.Load())
+	closeStore()
+	// Delayed network/Kafka handlers must not submit work to the closed batcher.
+	require.NotPanics(t, func() {
+		sm.handleInvMsg(&invMsg{inv: inv, peer: p})
+		sm.handleTxMsg(nil)
+		sm.handleHeadersMsg(nil)
+	})
 }
 
 func TestStop_BeforeStart(t *testing.T) {

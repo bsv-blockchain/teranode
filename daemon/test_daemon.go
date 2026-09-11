@@ -41,6 +41,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/propagation"
 	"github.com/bsv-blockchain/teranode/services/pruner"
+	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
@@ -78,6 +79,7 @@ type TestDaemon struct {
 	Ctx                   context.Context
 	Logger                ulogger.Logger
 	PropagationClient     *propagation.Client
+	ValidatorClient       validator.Interface
 	Settings              *settings.Settings
 	SubtreeStore          blob.Store
 	BlockchainStore       blockchainstore.Store
@@ -110,7 +112,8 @@ type TestOptions struct {
 	StartDaemonDependencies bool
 	FSMState                blockchain.FSMStateType
 	// UTXOStoreType specifies which UTXO store backend to use ("aerospike", "postgres", "sqlite")
-	// If empty, keeps the configured store (SQLite with SystemTestSettings).
+	// "sqlite" selects an in-memory store. An empty value keeps the configured
+	// store (file-backed SQLite with SystemTestSettings).
 	UTXOStoreType string
 	// ContainerManager allows reusing an existing container manager from a previous TestDaemon.
 	// When set, the daemon will use the existing container instead of creating a new one.
@@ -630,6 +633,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		Ctx:                   ctx,
 		Logger:                logger,
 		PropagationClient:     propagationClient,
+		ValidatorClient:       validatorClient,
 		Settings:              appSettings,
 		SubtreeStore:          subtreeStore,
 		BlockchainStore:       blockchainStore,
@@ -1597,6 +1601,15 @@ func (td *TestDaemon) WaitForBlockStateChange(t *testing.T, expectedBlock *model
 			}
 		}
 	}
+}
+
+// WaitForUtxoStoreHeight waits for the store to observe the blockchain height.
+// Block notifications update the store asynchronously, after MineAndWait returns.
+func (td *TestDaemon) WaitForUtxoStoreHeight(t *testing.T, height uint32) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		return td.UtxoStore.GetBlockHeight() >= height
+	}, 30*time.Second, 100*time.Millisecond, "UTXO store must reach height %d", height)
 }
 
 func (td *TestDaemon) WaitForBlockhash(t *testing.T, blockHash *chainhash.Hash, timeout time.Duration) {
