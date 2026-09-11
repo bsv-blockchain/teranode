@@ -818,6 +818,12 @@ Error responses include a JSON object with an error message:
 
 ### Merkle Proof Endpoints
 
+These endpoints accept transaction IDs only. A hash with no mined transaction
+(including a subtree root) returns HTTP 404 with
+`transaction not found; BUMP proofs require a transaction ID`.
+Transactions found only in orphan blocks return HTTP 404 with
+`transaction not in main chain`.
+
 - **GET `/api/v1/merkle_proof/:hash`**
     - Purpose: Get merkle proof for a transaction (binary)
     - Parameters: `hash` - Transaction hash (hex string)

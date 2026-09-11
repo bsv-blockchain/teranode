@@ -2,6 +2,7 @@ package bump
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -93,27 +94,20 @@ func TestConvertToBUMPLargeBlockOffsets(t *testing.T) {
 	require.True(t, bytes.Contains(bin, wantVarInt[:]), "encoded BUMP must contain the 64-bit VarInt of the txid offset")
 }
 
-// TestConvertToBUMPSubtreeProofSentinel pins the subtree-proof path: a proof of
-// a subtree root (not of a transaction) carries TxIndexInSubtree == -1 with an
-// empty SubtreeProof, and the leaf being proven is the subtree root itself at
-// global offset == SubtreeIndex. The old 32-bit code folded the -1 sentinel to
-// 0xFFFFFFFF, so every subtree-proof BUMP served by the asset server's fallback
-// carried garbage offsets.
-func TestConvertToBUMPSubtreeProofSentinel(t *testing.T) {
-	proof := proofWithLevels(t, 0, 2, 3, -1)
-	proof.TxID = chainhash.Hash{} // subtree proofs carry no transaction id
+// TestConvertToBUMPRejectsSubtreeProof prevents issue 1500's sibling-only BUMP
+// from escaping the converter. Interior subtree roots are not transaction IDs.
+func TestConvertToBUMPRejectsSubtreeProof(t *testing.T) {
+	for _, levels := range []int{0, 1, 2} {
+		t.Run(fmt.Sprintf("block levels %d", levels), func(t *testing.T) {
+			proof := proofWithLevels(t, 0, levels, 0, -1)
+			proof.TxID = chainhash.Hash{}
+			proof.SubtreeRoot = chainhash.DoubleHashH([]byte("subtree root"))
 
-	bump, err := ConvertToBUMP(proof)
-	require.NoError(t, err)
-	require.Len(t, bump.Path, 2)
-
-	// Leaf (the subtree root) sits at global offset 3; its sibling is 2.
-	require.Len(t, bump.Path[0], 1)
-	require.Equal(t, uint64(2), bump.Path[0][0].Offset)
-
-	// Next level: (3>>1)^1 = 0.
-	require.Len(t, bump.Path[1], 1)
-	require.Equal(t, uint64(0), bump.Path[1][0].Offset)
+			converted, err := ConvertToBUMP(proof)
+			require.ErrorContains(t, err, "BUMP proofs require a transaction ID")
+			require.Nil(t, converted)
+		})
+	}
 }
 
 // requireOffsetsFrom asserts that every level's offsets derive from the given
