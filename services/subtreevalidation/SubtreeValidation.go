@@ -371,8 +371,14 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 
 	tx = &bt.Tx{}
 
-	_, err = tx.ReadFrom(body)
+	bytesRead, err := tx.ReadFrom(body)
 	if err != nil {
+		return nil, err
+	}
+
+	// Peer-supplied bytes: reject a non-minimal CompactSize encoding, which
+	// go-bt would otherwise accept and silently canonicalize (issue 1421).
+	if err = checkCanonicalTxEncoding(tx, bytesRead); err != nil {
 		return nil, err
 	}
 
@@ -1373,7 +1379,12 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 							bufferedReader.Reset(nil) // clear reference before returning to pool
 							bufioReaderPool.Put(bufferedReader)
 						}()
-						subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtreeForData, bufferedReader)
+						// Count what the parser consumes: go-subtree discards the
+						// per-transaction byte counts, so canonical encoding is
+						// checked over the whole payload below (issue 1421).
+						countingBody := util.NewCountingReader(bufferedReader)
+
+						subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtreeForData, countingBody)
 						_ = body.Close()
 						if err != nil {
 							u.logger.Errorf("[validateSubtree][%s] failed to create subtree data from reader: %v", subtreeHash.String(), err)
@@ -1388,6 +1399,11 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 							subtreeDataBytes, err := subtreeData.Serialize()
 							if err != nil {
 								u.logger.Errorf("[validateSubtree][%s] failed to serialize subtree data: %v", subtreeHash.String(), err)
+							} else if canonicalErr := util.CheckCanonicalSubtreeData(countingBody.BytesConsumed(), subtreeDataBytes, omittedCoinbaseTx(subtreeForData, subtreeData)); canonicalErr != nil {
+								// Peer-supplied bytes: reject rather than storing the
+								// canonicalised form, which would discard the evidence
+								// and bless a subtree SV Node rejects at parse.
+								return nil, errors.NewProcessingError("[validateSubtree][%s] non-canonical subtree data", subtreeHash.String(), canonicalErr)
 							} else {
 								dah := u.utxoStore.GetBlockHeight() + u.settings.GetSubtreeValidationBlockHeightRetention()
 

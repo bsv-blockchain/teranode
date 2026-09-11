@@ -926,13 +926,19 @@ func (u *Server) readTransactionsFromSubtreeDataStream(subtree *subtreepkg.Subtr
 	for {
 		tx := &bt.Tx{}
 
-		_, err := tx.ReadFromWithArena(reader, arena)
+		bytesRead, err := tx.ReadFromWithArena(reader, arena)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				// End of stream reached
 				break
 			}
 			return txIndex, errors.NewProcessingError("[readTransactionsFromSubtreeDataStream] error reading transaction", err)
+		}
+
+		// Peer-supplied bytes: reject a non-minimal CompactSize encoding, which
+		// go-bt would otherwise accept and silently canonicalize (issue 1421).
+		if err = checkCanonicalTxEncoding(tx, bytesRead); err != nil {
+			return txIndex, errors.NewProcessingError("[readTransactionsFromSubtreeDataStream] non-canonical transaction", err)
 		}
 
 		if tx.IsCoinbase() && txIndex == 1 {
