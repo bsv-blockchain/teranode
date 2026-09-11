@@ -36,10 +36,9 @@ jobs:
       pull-requests: read
     outputs:
       full: ${{ steps.s.outputs.full }}
-      # any_go is intentionally not surfaced: no job gates on it any more (the
-      # linter always runs for Sonar). It still appears in the action's
-      # "Scope decision" log group for debugging.
-      run_unit: ${{ steps.s.outputs.run_unit }}
+      # any_go and run_unit are intentionally not surfaced - no job gates on
+      # either, and neither is safe to gate on (see the action's outputs: note).
+      # Both still appear in the action's "Scope decision" log group for debugging.
       unit_pkgs: ${{ steps.s.outputs.unit_pkgs }}
     steps:
       # Local action reference requires the workspace to be checked out first.
@@ -52,11 +51,16 @@ jobs:
 
   golangci-lint:
     name: golangci-lint
-    # Deliberately NOT scope-gated. The downstream Sonar pipeline
-    # (sonar-inputs -> sonar-pr-analyze.yaml) hard-requires
-    # golangci-lint-report.xml, and a missing input fails the required
-    # "SonarQube Quality Gate" check. Skipping this job on docs-only PRs would
-    # turn every such PR red, so it always runs and always uploads a report.
+    # Deliberately NOT scope-gated, for two reasons in descending order of force:
+    #  1. `golangci-lint` is itself a REQUIRED status check on main and
+    #     release/* (the branch ruleset requires: test, golangci-lint, filename
+    #     check report, gitleaks). A skipped required check satisfies branch
+    #     protection, so scope-gating this job would let a PR merge with the
+    #     linter never having run. This is the reason that actually matters.
+    #  2. The downstream Sonar pipeline (sonar-inputs -> sonar-pr-analyze.yaml)
+    #     hard-requires golangci-lint-report.xml, so skipping would also break
+    #     that job. Note sonar-inputs and the SonarQube Quality Gate are NOT
+    #     required checks - that is lost signal, not a bypassed gate.
     # arm64-safe: pure Go analysis, no containers (golangci-lint ships arm64).
     runs-on: teranode-runner-8-core-arm
     steps:
@@ -96,12 +100,15 @@ jobs:
     name: test
     needs: [scope]
     # Always runs, for two independent reasons:
-    #  1. Sonar: main's sonar-inputs job hard-requires coverage.out, so this job
-    #     must emit one on every run or the required Quality Gate check fails.
-    #  2. Fail-open: a status function is REQUIRED here. Without one, a scope job
-    #     that dies in checkout/setup-go/go-cache (before it can fail open) makes
-    #     this job SKIP, and a skipped required check satisfies branch
-    #     protection - a green PR with zero tests run.
+    #  1. `test` is a REQUIRED status check on main and release/* (the ruleset
+    #     requires: test, golangci-lint, filename check report, gitleaks), and a
+    #     skipped required check satisfies branch protection. So this job must
+    #     never be scope-gated, and a status function is REQUIRED here: without
+    #     one, a scope job that dies in checkout/setup-go/go-cache (before it can
+    #     fail open) makes this job SKIP - a green PR with zero tests run.
+    #  2. Sonar: sonar-inputs hard-requires coverage.out, so this job must emit
+    #     one on every run. Note sonar-inputs and the SonarQube Quality Gate are
+    #     NOT required checks, so that one is lost signal rather than a gate.
     # Scope then only decides WHAT runs; see the run step's branching.
     if: ${{ !cancelled() }}
     runs-on: teranode-runner-16-core-arm
@@ -180,8 +187,13 @@ jobs:
             make test TEST_PKGS="$UNIT_PKGS"
           else
             # No production package affected (e.g. an e2e-only change). There is
-            # nothing to test, but Sonar still requires a coverage profile, so
-            # emit a valid empty one rather than failing the required gate.
+            # nothing to test, but sonar-inputs still requires a coverage
+            # profile, so emit a valid empty one rather than failing that job.
+            # Reaching this branch with an EMPTY scope output set (rather than a
+            # genuinely empty closure) is what the scope job's `|| exit 1` on
+            # every $GITHUB_OUTPUT write exists to prevent: a failed write fails
+            # the job, and `needs.scope.result != 'success'` above then forces
+            # the full run instead of landing here.
             echo "No affected unit packages - emitting empty coverage profile"
             echo "mode: atomic" > coverage.out
           fi

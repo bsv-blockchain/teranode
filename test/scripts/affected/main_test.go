@@ -43,7 +43,16 @@ func TestCompute(t *testing.T) {
 	t.Run("any_go reflects whether go changed", func(t *testing.T) {
 		require.True(t, compute([]string{"services/p2p/server.go"}, fixtureGraph()).AnyGo)
 		require.False(t, compute([]string{"docs/foo.md"}, fixtureGraph()).AnyGo)
-		require.True(t, compute([]string{"go.mod"}, fixtureGraph()).AnyGo, "full implies any_go")
+
+		// any_go is a diagnostic and must not overstate: a full run forced by a
+		// non-Go global input reports any_go=false, because no .go file changed.
+		res := compute([]string{"go.mod"}, fixtureGraph())
+		require.True(t, res.Full)
+		require.False(t, res.AnyGo, "full must not imply any_go")
+
+		res = compute([]string{"go.mod", "services/p2p/server.go"}, fixtureGraph())
+		require.True(t, res.Full)
+		require.True(t, res.AnyGo)
 	})
 
 	t.Run("docs only runs nothing", func(t *testing.T) {
@@ -138,7 +147,8 @@ func TestIsGlobalInput(t *testing.T) {
 		"test/scripts/gotestsum_with_retry.sh", "test/scripts/list_test_shard.sh",
 		// Compose-mounted runtime assets. No Go import edge reaches them, but
 		// the e2e/chainintegrity nodes boot against them.
-		"compose/aerospike/aerospike-1.conf", "compose/scripts/generate-blocks.sh", "compose/grafana/dashboards/x.json"}
+		"compose/aerospike/aerospike-1.conf", "compose/scripts/generate-blocks.sh", "compose/postgres/init.sql",
+		"compose/wait.sh", "compose/settings_test.conf", "compose/docker-compose-ss.yml"}
 	for _, f := range yes {
 		require.True(t, isGlobalInput(f), f)
 	}
@@ -148,6 +158,48 @@ func TestIsGlobalInput(t *testing.T) {
 	for _, f := range no {
 		require.False(t, isGlobalInput(f), f)
 	}
+}
+
+// The blanket "non-Go file under compose/ is Tier-0" rule escalated roughly half
+// the non-Go tree to a full run for no reason: docs, grafana/prometheus
+// provisioning that the suites' stacks never even start, and the generator
+// tools' own //go:embed'd inputs, which `go list` attributes precisely.
+func TestComposeScopableCarveOuts(t *testing.T) {
+	scoped := []string{
+		// Docs.
+		"compose/MULTINODE.md", "compose/grafana/dashboards/README.md",
+		"compose/scripts/toxiproxy-chaos-testing.md",
+		// Observability sidecars: mounted only by the dev/blaster stacks, absent
+		// from test/docker-compose.e2etest*.yml and docker-compose-chainintegrity.yml.
+		"compose/grafana/dashboards/blockassembly-state.json",
+		"compose/grafana/datasources/main.yaml",
+		"compose/prometheus/prometheus.yml", "compose/prometheus/prometheus-1.yml",
+		// gennodes' embedded inputs - reported in EmbedFiles, so mapped exactly.
+		"compose/cmd/gennodes/peer_keys.json",
+		"compose/cmd/gennodes/templates/docker-compose.yml.tmpl",
+		"compose/cmd/gennodes/templates/settings.conf.tmpl",
+	}
+	for _, f := range scoped {
+		require.True(t, composeScopable(f), f)
+		require.False(t, isGlobalInput(f), "carve-out must not force a full run: %s", f)
+	}
+
+	// Everything else under compose/ stays Tier-0: a newly added runtime asset
+	// escalates by default rather than being silently scoped out.
+	for _, f := range []string{
+		"compose/aerospike/aerospike.conf", "compose/postgres/init.sql",
+		"compose/scripts/toxiproxy-config.json", "compose/wait.sh",
+		"compose/multinode.sh", "compose/docker-compose-chainintegrity.yml",
+		"compose/some-new-mounted-asset.json",
+	} {
+		require.False(t, composeScopable(f), f)
+		require.True(t, isGlobalInput(f), f)
+	}
+
+	// A carve-out exempts a file from the compose/ rule only - it must not
+	// short-circuit the Dockerfile and settings*.conf checks that follow it.
+	require.True(t, composeScopable("compose/cmd/tool/x.md"), "fixture guard: compose/cmd/ is a carve-out")
+	require.True(t, isGlobalInput("compose/cmd/tool/Dockerfile"), "Dockerfile rule still applies inside a carve-out")
 }
 
 // Embedded assets are compiled into their package, but the dir-prefix mapping
@@ -172,6 +224,10 @@ func TestEmbeddedAssetsMapToOwningPackage(t *testing.T) {
 		require.Contains(t, res.UnitPkgs, m)
 	})
 
+	// NOTE: the dir-prefix scan alone already reaches services/blockchain here, so
+	// this subtest pins the end-to-end outcome rather than the embedOwner path.
+	// The embedOwner-only cases are "root-level embed", "embed inside a nested
+	// package", and "embed outside every package dir".
 	t.Run("nested embed maps to its package and its importers", func(t *testing.T) {
 		res := compute([]string{"services/blockchain/schema/blockchain.sql"}, graph())
 		require.False(t, res.Full)
@@ -180,10 +236,30 @@ func TestEmbeddedAssetsMapToOwningPackage(t *testing.T) {
 		require.True(t, res.RunSmoke, "e2e/ready imports blockchain")
 	})
 
+	// Also reachable by the dir-prefix scan (see the NOTE above); kept as an
+	// end-to-end assertion that a TestEmbedFiles entry lands on its suite.
 	t.Run("test embed maps to its suite", func(t *testing.T) {
 		res := compute([]string{"test/e2e/daemon/ready/testdata/blocks.json"}, graph())
 		require.False(t, res.Full)
 		require.True(t, res.RunSmoke)
+	})
+
+	// The `if embedded { continue }` de-escalation in compute. A declared embed
+	// can sit outside every package dir - testdata/ is not a package, and the root
+	// package's Dir "." matches root-LEVEL files only - so without the guard an
+	// embedded .go asset would hit "maps to no known package" and force a full
+	// run. Deleting the guard turns each of these into Full=true.
+	t.Run("embed outside every package dir is mapped, not escalated", func(t *testing.T) {
+		g := graph()
+		g[0].EmbedFiles = []string{"testdata/golden.go"} // root package
+		res := compute([]string{"testdata/golden.go"}, g)
+		require.False(t, res.Full, "a declared embed must not escalate to a full run")
+		require.Contains(t, res.UnitPkgs, m, "attributed to the embedding package")
+
+		// Same shape via TestEmbedFiles, and with the file NOT declared as an
+		// embed the escalation is exactly what we want back.
+		require.True(t, compute([]string{"testdata/golden.go"}, fixtureGraph()).Full,
+			"an undeclared .go file outside every package still forces full")
 	})
 
 	// A parent package may embed a file that physically lives inside a nested

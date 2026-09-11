@@ -14,16 +14,15 @@ inputs:
     description: "'true' to force the full suite regardless of the diff (ci-full label)."
     default: 'false'
 
+# NOTE: `any_go` and `run_unit` are deliberately NOT declared here. Both are
+# diagnostics that the tool still prints into the "Scope decision" log group, and
+# neither is safe to gate a job on: `run_unit` reads false on a full run (the full
+# path emits no package list because a full run needs none), so a job wired to it
+# would skip the unit suite on exactly the runs that most need it.
 outputs:
   full:
     description: Run the complete suite; ignore the scoped lists.
     value: ${{ steps.scope.outputs.full }}
-  any_go:
-    description: Any .go file changed (diagnostic only; linters always run).
-    value: ${{ steps.scope.outputs.any_go }}
-  run_unit:
-    description: Run scoped unit tests.
-    value: ${{ steps.scope.outputs.run_unit }}
   unit_pkgs:
     description: Space-separated import paths for `make test TEST_PKGS=...`.
     value: ${{ steps.scope.outputs.unit_pkgs }}
@@ -69,31 +68,45 @@ runs:
 
         # Scoping is an OPTIMIZATION, never a gate: any failure here must fall
         # back to the full suite (fail-open), not skip every test job. A scope
-        # job that exits non-zero - or emits a partial/empty output set - would
-        # leave every downstream `if: needs.scope.outputs.* == 'true'` false, so
-        # all test/lint/smoke/sequential jobs would be SKIPPED, producing a green
-        # PR with zero tests run. So on any error we write a complete full=true
-        # output set and exit 0.
+        # job that emits a partial/empty output set would leave every downstream
+        # `if: needs.scope.outputs.* == 'true'` false, so all test/smoke/
+        # sequential jobs would be SKIPPED, producing a green PR with zero tests
+        # run. So on any error we write a complete full=true output set.
+        #
+        # The fallback for a FAILED WRITE is the opposite: exit non-zero. Every
+        # gated job now carries `needs.scope.result != 'success'` in its `if:`
+        # (and `test` carries `!cancelled()`), so a failed scope job runs the full
+        # suite - whereas exiting 0 with an unwritten $GITHUB_OUTPUT is the one
+        # state those guards cannot see, and lands on the `test` job's branch that
+        # writes a stub coverage.out and runs nothing. "Exit 0 at all costs" was
+        # right when the gates were bare output checks; with the guards it is the
+        # less safe option. Hence `|| exit 1` on every emit path below.
         emit_full() {
           {
-            echo "full=true"; echo "any_go=true"
+            # any_go is a diagnostic (nothing gates on it) and on this path the
+            # tool never ran, so we genuinely do not know - say so rather than
+            # guessing a bool in either direction.
+            echo "full=true"; echo "any_go=unknown"
             echo "reason=$1"
             echo "run_unit=false"; echo "unit_pkgs="
             echo "run_smoke=false"; echo "run_chainintegrity=false"
             echo "run_seq=false"; echo "seq_pkgs="
-          } >> "$GITHUB_OUTPUT"
+          } >> "$GITHUB_OUTPUT" || {
+            echo "::error::scope: cannot write \$GITHUB_OUTPUT - failing the job so the gates fall open"
+            return 1
+          }
           echo "$1"
         }
 
         if [ "$FORCE_FULL" = "true" ]; then
-          emit_full "ci-full label set - forcing full suite"
+          emit_full "ci-full label set - forcing full suite" || exit 1
           exit 0
         fi
 
         # Changed-file list via the API (no deep git history needed).
         if ! gh pr diff "$PR_NUMBER" --name-only > /tmp/changed-files.txt; then
           echo "::warning::scope: gh pr diff failed - running full suite"
-          emit_full "scope error (gh pr diff failed) - running full suite"
+          emit_full "scope error (gh pr diff failed) - running full suite" || exit 1
           exit 0
         fi
         echo "::group::Changed files"; cat /tmp/changed-files.txt; echo "::endgroup::"
@@ -105,8 +118,11 @@ runs:
         # re-running the tool in -json mode just to print a decision.
         if go run ./test/scripts/affected < /tmp/changed-files.txt > /tmp/scope-output.txt; then
           echo "::group::Scope decision"; cat /tmp/scope-output.txt; echo "::endgroup::"
-          cat /tmp/scope-output.txt >> "$GITHUB_OUTPUT"
+          if ! cat /tmp/scope-output.txt >> "$GITHUB_OUTPUT"; then
+            echo "::error::scope: cannot write \$GITHUB_OUTPUT - failing the job so the gates fall open"
+            exit 1
+          fi
         else
           echo "::warning::scope: affected tool failed - running full suite"
-          emit_full "scope error (affected tool failed) - running full suite"
+          emit_full "scope error (affected tool failed) - running full suite" || exit 1
         fi

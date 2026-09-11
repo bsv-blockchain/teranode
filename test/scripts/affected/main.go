@@ -11,14 +11,20 @@
 // Output is GITHUB_OUTPUT-style `key=value` lines (or JSON with -json):
 //
 //	full=<bool>                  run the complete suite; ignore the scoped lists
-//	any_go=<bool>                a .go file changed (diagnostic only)
+//	any_go=<bool>                a .go file changed (diagnostic only — see below)
 //	reason=<string>              human-readable explanation
-//	run_unit=<bool>              run scoped unit tests
+//	run_unit=<bool>              unit_pkgs is non-empty (diagnostic only — see below)
 //	unit_pkgs=<space-separated>  import paths for `make test TEST_PKGS=...`
 //	run_smoke=<bool>             closure touches test/e2e/daemon/ready
 //	run_chainintegrity=<bool>    closure touches test/e2e/chainintegrity
 //	run_seq=<bool>               run scoped sequential tests
 //	seq_pkgs=<space-separated>   repo-relative dirs for run_tests_sequentially.sh
+//
+// `any_go` and `run_unit` are DIAGNOSTICS: they exist for the scope-decision log
+// and for local `-json` runs, and no CI job gates on either. Do not wire one to a
+// job `if:`. `run_unit` in particular reads false on a full run (the full path
+// emits no package list, because a full run needs none), so a gate written
+// against it would skip the unit suite on exactly the runs that need it most.
 package main
 
 import (
@@ -80,14 +86,47 @@ type Pkg struct {
 // Result is the scoping decision.
 type Result struct {
 	Full              bool     `json:"full"`
-	AnyGo             bool     `json:"any_go"` // any .go file changed (diagnostic; linters always run)
+	AnyGo             bool     `json:"any_go"` // a .go file changed (diagnostic; linters always run)
 	Reason            string   `json:"reason"`
-	RunUnit           bool     `json:"run_unit"`
+	RunUnit           bool     `json:"run_unit"` // UnitPkgs is non-empty (diagnostic; false on a full run)
 	UnitPkgs          []string `json:"unit_pkgs"`
 	RunSmoke          bool     `json:"run_smoke"`
 	RunChainIntegrity bool     `json:"run_chainintegrity"`
 	RunSeq            bool     `json:"run_seq"`
 	SeqPkgs           []string `json:"seq_pkgs"`
+}
+
+// composeScopable reports whether a file under compose/ is exempt from the
+// blanket compose/ Tier-0 rule — i.e. one the import graph can attribute exactly,
+// or one no suite could observe even if it were mis-scoped. Everything else under
+// compose/ stays Tier-0, so a newly added runtime asset is escalating by default.
+func composeScopable(f string) bool {
+	switch {
+	case strings.HasSuffix(f, ".go"):
+		// Go sources the import graph DOES see (compose/cmd/..., chain_integrity.go).
+		return true
+	case strings.HasSuffix(f, ".md"):
+		// Docs: compose/MULTINODE.md, compose/*/README.md, the toxiproxy notes.
+		return true
+	case strings.HasPrefix(f, "compose/grafana/"),
+		strings.HasPrefix(f, "compose/prometheus/"):
+		// Observability provisioning — dashboards, datasources, scrape configs.
+		// Mounted only into grafana/prometheus sidecars, and no scope-gated suite
+		// starts one: test/docker-compose.e2etest*.yml and
+		// compose/docker-compose-chainintegrity.yml define neither service. The
+		// one test stack that DOES define prometheus, test/docker-compose-host.yml,
+		// is booted only from test/tnb and test/e2e/daemon/wip - both outside the
+		// scoped suites (ready / chainintegrity / sequentialtest) - and even there
+		// testcontainers brings up only the explicitly named services. No suite
+		// asserts on a dashboard or a scrape config.
+		return true
+	case strings.HasPrefix(f, "compose/cmd/"):
+		// The generator tools' own tree. Their sources are graph nodes, and
+		// peer_keys.json + templates/ are //go:embed'd, so `go list` reports them
+		// in EmbedFiles and the embed mapping attributes each one to its package.
+		return true
+	}
+	return false
 }
 
 // isGlobalInput reports whether a changed file is a Tier-0 global input whose
@@ -116,11 +155,12 @@ func isGlobalInput(f string) bool {
 		return true
 	}
 	// Everything the compose stacks mount into their nodes at runtime — aerospike
-	// configs (compose/aerospike/*.conf -> /etc/aerospike.conf), helper scripts
-	// (compose/scripts/), and the stack definitions themselves. None of it is a
-	// Go import edge, yet the suites boot against it. Go sources under compose/
-	// are excluded: those the import graph DOES see, so scoping them is safe.
-	if strings.HasPrefix(f, "compose/") && !strings.HasSuffix(f, ".go") {
+	// configs (compose/aerospike/*.conf -> /etc/aerospike.conf), compose/postgres/
+	// init.sql, helper scripts (compose/scripts/, wait.sh), and the stack
+	// definitions themselves. None of it is a Go import edge, yet the suites boot
+	// against it. Files the graph can attribute precisely, or that no suite can
+	// observe at all, are carved back out by composeScopable.
+	if strings.HasPrefix(f, "compose/") && !composeScopable(f) {
 		return true
 	}
 
@@ -139,9 +179,12 @@ func isGlobalInput(f string) bool {
 //
 // pkgs must have Dir set to a REPO-RELATIVE path ("." for the module root).
 func compute(changedFiles []string, pkgs []Pkg) (res Result) {
-	// any_go is a diagnostic in the scope-decision log - the linter is no longer
-	// gated on it, because the Sonar pipeline requires its report on every run.
-	// Set it on whatever Result we return (full implies it).
+	// any_go is a diagnostic in the scope-decision log - no job gates on it, because
+	// the linter always runs. It means exactly what it says: a .go file was in the
+	// diff. It is deliberately NOT or-ed with Full - a full run triggered by
+	// go.mod or a compose stack reports any_go=false, which is the truth, and a
+	// diagnostic that overstates is worse than no diagnostic. Set it on whatever
+	// Result we return.
 	anyGo := false
 	for _, f := range changedFiles {
 		if strings.HasSuffix(f, ".go") {
@@ -149,7 +192,7 @@ func compute(changedFiles []string, pkgs []Pkg) (res Result) {
 			break
 		}
 	}
-	defer func() { res.AnyGo = anyGo || res.Full }()
+	defer func() { res.AnyGo = anyGo }()
 
 	// Tier 0: any global input forces a full run.
 	for _, f := range changedFiles {
@@ -218,7 +261,13 @@ func compute(changedFiles []string, pkgs []Pkg) (res Result) {
 		}
 		if best == "" {
 			if embedded {
-				continue // already attributed to the package that embeds it
+				// Already attributed to the package that embeds it. This is a
+				// de-escalation - without it the .go check below would force a
+				// full run - so it is load-bearing precisely for an embedded .go
+				// file that lives outside every package dir: a root-package
+				// `//go:embed testdata/x.go` (testdata/ is not a package, and the
+				// root package's Dir "." matches root-LEVEL files only).
+				continue
 			}
 			if strings.HasSuffix(f, ".go") {
 				return Result{Full: true, Reason: "changed .go file maps to no known package: " + f}
@@ -361,19 +410,24 @@ func emit(res Result, asJSON bool, w *os.File) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(res)
 	}
-	// reason is free-form and can echo an attacker-influenced filename; strip
-	// CR/LF so it can never inject extra key=value lines into $GITHUB_OUTPUT.
-	reason := strings.NewReplacer("\r", " ", "\n", " ").Replace(res.Reason)
+	// Every non-boolean value derives from repo paths, so any of them can echo an
+	// attacker-influenced filename: reason quotes one directly, and the package
+	// lists are built from `go list` Dir/ImportPath values. Strip CR/LF from all
+	// three so none can inject extra key=value lines into $GITHUB_OUTPUT - and,
+	// for seq_pkgs, so nothing reaches `make ... SEQ_PKGS="$SEQ_PKGS"` with an
+	// embedded newline. Not exploitable in a single-module repo with no control
+	// characters in any tracked path, but the guard costs one shared replacer.
+	sanitize := strings.NewReplacer("\r", " ", "\n", " ").Replace
 	var b strings.Builder
 	fmt.Fprintf(&b, "full=%t\n", res.Full)
 	fmt.Fprintf(&b, "any_go=%t\n", res.AnyGo)
-	fmt.Fprintf(&b, "reason=%s\n", reason)
+	fmt.Fprintf(&b, "reason=%s\n", sanitize(res.Reason))
 	fmt.Fprintf(&b, "run_unit=%t\n", res.RunUnit)
-	fmt.Fprintf(&b, "unit_pkgs=%s\n", strings.Join(res.UnitPkgs, " "))
+	fmt.Fprintf(&b, "unit_pkgs=%s\n", sanitize(strings.Join(res.UnitPkgs, " ")))
 	fmt.Fprintf(&b, "run_smoke=%t\n", res.RunSmoke)
 	fmt.Fprintf(&b, "run_chainintegrity=%t\n", res.RunChainIntegrity)
 	fmt.Fprintf(&b, "run_seq=%t\n", res.RunSeq)
-	fmt.Fprintf(&b, "seq_pkgs=%s\n", strings.Join(res.SeqPkgs, " "))
+	fmt.Fprintf(&b, "seq_pkgs=%s\n", sanitize(strings.Join(res.SeqPkgs, " ")))
 	_, err := w.WriteString(b.String())
 	return err
 }
@@ -390,10 +444,19 @@ func main() {
 	}
 
 	// Fast path: a global input change is full regardless of the graph, so skip
-	// the (relatively expensive) `go list` entirely.
+	// the (relatively expensive) `go list` entirely. any_go is still reported
+	// honestly (see compute) rather than hardcoded true, so the log line matches
+	// what the diff actually contained.
+	anyGo := false
+	for _, f := range changed {
+		if strings.HasSuffix(f, ".go") {
+			anyGo = true
+			break
+		}
+	}
 	for _, f := range changed {
 		if isGlobalInput(f) {
-			if err := emit(Result{Full: true, AnyGo: true, Reason: "global input changed: " + f}, *asJSON, os.Stdout); err != nil {
+			if err := emit(Result{Full: true, AnyGo: anyGo, Reason: "global input changed: " + f}, *asJSON, os.Stdout); err != nil {
 				fmt.Fprintln(os.Stderr, "affected: emit:", err)
 				os.Exit(1)
 			}

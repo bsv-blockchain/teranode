@@ -67,8 +67,11 @@ jobs:
 
   smoketest:
     name: smoketest
+    # Deliberately NOT continue-on-error, for the reason spelled out on the
+    # `sequential` job below: this is the merge-to-main backstop for a suite the
+    # PR workflow now scope-gates, and an advisory job leaves the workflow green,
+    # so it catches a mis-scope only if someone happens to read the logs.
     runs-on: teranode-runner-8-core
-    continue-on-error: true
     steps:
       - name: Login to Docker Hub
         uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
@@ -104,9 +107,9 @@ jobs:
 
   prunertest:
     name: prunertest
+    # Deliberately NOT continue-on-error - same reason as smoketest above.
     # arm64: aerospike (8.1, arm64), no SV-node (see teranode_pr_smoketests.yaml).
     runs-on: teranode-runner-8-core-arm
-    continue-on-error: true
     steps:
       - name: Login to Docker Hub
         uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
@@ -181,8 +184,11 @@ jobs:
           # referenced by the pre-existing smoketest/prunertest jobs but never
           # defined in this workflow (only in teranode_pr_smoketests.yaml), so it
           # expands to empty. "test" is the value the PR workflow runs these same
-          # make targets under. The pre-existing empty references are left alone
-          # deliberately - changing them would alter jobs this PR is not about.
+          # make targets under. The pre-existing empty references above are left
+          # alone deliberately: those two jobs pass on main today with the empty
+          # value, and swapping it in the same change that promotes them from
+          # advisory to hard gates would risk turning main red for a config
+          # reason rather than a real break. Worth a separate change.
           settings_context: test
 
       - name: Upload sequential shard results

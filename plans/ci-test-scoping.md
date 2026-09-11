@@ -87,16 +87,38 @@ never scopes out); a missing tag hides import edges (unsafe). Union = safe.
 
 ### P5 — Wire `teranode_pr_tests.yaml`
 - Replace the current dorny-based `changes` job with a `scope` job (P2 action).
-- `golangci-lint` and `test` are **not** scope-gated: the downstream Sonar
-  pipeline (`sonar-inputs` -> `sonar-pr-analyze.yaml`) hard-requires
-  `golangci-lint-report.xml` and `coverage.out`, and a missing input fails the
-  required "SonarQube Quality Gate" check. Both jobs always run and always
-  upload; `scope` only decides WHAT `test` runs (`unit_pkgs` via `TEST_PKGS`).
+- `golangci-lint` and `test` are **not** scope-gated. The reason that matters is
+  branch protection: per the live ruleset on `main` and `release/*`, the required
+  status checks are **`test`, `golangci-lint`, `filename check report`,
+  `gitleaks`** — and a *skipped* required check satisfies branch protection. So
+  scope-gating either job would let a PR merge with the unit suite or the linter
+  never having run. Secondarily, the Sonar pipeline (`sonar-inputs` ->
+  `sonar-pr-analyze.yaml`) hard-requires `golangci-lint-report.xml` and
+  `coverage.out`; skipping would break that too, but note **`sonar-inputs` and the
+  SonarQube Quality Gate are NOT required checks**, so that failure mode is lost
+  signal, not a bypassed gate. Both jobs always run and always upload; `scope`
+  only decides WHAT `test` runs (`unit_pkgs` via `TEST_PKGS`).
+- The same distinction bounds the whole risk story: **none of the scope-gated e2e
+  jobs (smoke, pruner, legacy-sync, chainintegrity, sequential) is a required
+  check**, before or after this change. A wrongly skipped e2e job is therefore
+  lost signal caught by the merge-to-main backstop (P7), not a bypassed gate.
 - Coverage is therefore produced on every run, including scoped ones, with
   `-coverpkg` narrowed to the scoped set (the closure contains every changed
   production package, so Sonar's new-code coverage is unaffected). Instrumenting
   `./...` is what drives the ~110GB full-run peak, not writing a profile.
-- `any_go` is retained as a diagnostic in the scope-decision log only.
+- `any_go` and `run_unit` are retained as diagnostics in the scope-decision log
+  only, and are **not** declared as action or job outputs, so nothing can be wired
+  to them. `run_unit` reads false on a full run (the full path emits no package
+  list because a full run needs none), so a gate written against it would skip the
+  unit suite on exactly the runs that most need it. `any_go` means literally "a
+  `.go` file was in the diff" — it is not or-ed with `full`, so a full run forced
+  by `go.mod` reports `any_go=false`, which is the truth.
+- Every `$GITHUB_OUTPUT` write in the scope action is `|| exit 1`. A failed write
+  is the one state the job-level guards cannot see: exiting 0 with an unwritten
+  output set lands on the `test` job's "no affected packages" branch, which writes
+  a stub `coverage.out` and runs nothing — a green required check having run zero
+  tests. Failing the job instead trips `needs.scope.result != 'success'` and runs
+  the full suite.
 
 ### P6 — Wire `teranode_pr_smoketests.yaml`
 - Add `scope` job; gate `smoketest` on `run_smoke`, `sequential` on `run_seq`
@@ -123,6 +145,15 @@ never scopes out); a missing tag hides import edges (unsafe). Union = safe.
   commented out, and nightly runs the separate binary-based `chainintegrity.run`
   rather than the `test/e2e/chainintegrity` go-test suite. Without them a closure
   mis-scope for either suite would never be caught anywhere. (Done.)
+- **Dropped `continue-on-error` from `smoketest` and `prunertest`** in
+  `teranode_main_tests.yaml`. These are the backstop for the two suites the PR
+  workflow makes most skippable, and the argument already applied to `sequential`
+  applies verbatim: an advisory job leaves the workflow green, so it catches a
+  mis-scope only if someone reads the logs. Both pass on `main` today. (Done.)
+- **Known, deliberately deferred:** those two jobs pass `settings_context:
+  ${{ env.SETTINGS_CONTEXT_DEFAULT }}`, which is undefined in this workflow and
+  expands to empty. They pass that way today, so swapping in `test` was kept out
+  of the change that promotes them to hard gates — it belongs in its own PR.
 
 ### P8 — Migration / rollout
 - Land P1–P4 (tool + scripts) with unit tests first; verify the tool locally against
@@ -139,8 +170,24 @@ never scopes out); a missing tag hides import edges (unsafe). Union = safe.
   root-package embed (which owns no subtree to prefix-match) still maps correctly.
 - **Runtime inputs no import edge can express** are Tier-0 global inputs: all of
   `test/scripts/` (the smoke runner shells out to `gotestsum_with_retry.sh` and
-  `list_test_shard.sh`), and all non-Go files under `compose/` (aerospike configs
-  mounted as `/etc/aerospike.conf`, `compose/scripts/` helpers, and the stack
-  definitions). Go sources under `compose/` stay scoped - those the graph does see.
+  `list_test_shard.sh`), and non-Go files under `compose/` (aerospike configs
+  mounted as `/etc/aerospike.conf`, `compose/postgres/init.sql`,
+  `compose/scripts/` helpers, `wait.sh`, and the stack definitions). Three
+  subtrees are carved back out of that blanket rule (`composeScopable`), because
+  they roughly halved the non-Go tree's blast radius for nothing:
+  - `*.md` — docs.
+  - `compose/grafana/**`, `compose/prometheus/**` — observability provisioning,
+    mounted only into sidecars that no scope-gated suite starts.
+    `test/docker-compose.e2etest*.yml` and
+    `compose/docker-compose-chainintegrity.yml` define neither service; the one
+    test stack that does define prometheus, `test/docker-compose-host.yml`, is
+    booted only from `test/tnb` and `test/e2e/daemon/wip`, both outside the
+    scoped suites, and testcontainers there brings up only named services.
+  - `compose/cmd/**` — the generator tools' own tree. Sources are graph nodes and
+    `peer_keys.json` + `templates/` are `//go:embed`'d, so `go list` attributes
+    every file there to a package exactly.
+
+  Everything else under `compose/` stays Tier-0, so a newly added runtime asset
+  escalates by default rather than being silently scoped out.
 - prunertest/legacy-sync/chainintegrity gating policy resolved (P6/P7): PR-gated
   on the closure, with a real merge-to-main gate for each.
