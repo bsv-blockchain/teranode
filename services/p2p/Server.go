@@ -3139,6 +3139,9 @@ func peerInfoToP2PProto(p *blockchain.PeerInfo) *p2p_api.PeerRegistryInfo {
 		CatchupAttempts:        p.CatchupAttempts,
 		CatchupSuccesses:       p.CatchupSuccesses,
 		CatchupFailures:        p.CatchupFailures,
+		BlocksReceived:         p.BlocksReceived,
+		SubtreesReceived:       p.SubtreesReceived,
+		TransactionsReceived:   p.TransactionsReceived,
 	}
 }
 

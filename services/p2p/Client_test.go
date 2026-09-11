@@ -957,7 +957,14 @@ func TestSimpleClientGetPeerRegistry(t *testing.T) {
 			GetPeerRegistryFunc: func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeerRegistryResponse, error) {
 				return &p2p_api.GetPeerRegistryResponse{
 					Peers: []*p2p_api.PeerRegistryInfo{
-						{Id: "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz", Height: 99, IsConnected: true},
+						{
+							Id:                   "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz",
+							Height:               99,
+							IsConnected:          true,
+							BlocksReceived:       3,
+							SubtreesReceived:     4,
+							TransactionsReceived: 5,
+						},
 					},
 				}, nil
 			},
@@ -966,6 +973,9 @@ func TestSimpleClientGetPeerRegistry(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, peers, 1)
 		require.Equal(t, uint32(99), peers[0].Height)
+		require.Equal(t, int64(3), peers[0].BlocksReceived)
+		require.Equal(t, int64(4), peers[0].SubtreesReceived)
+		require.Equal(t, int64(5), peers[0].TransactionsReceived)
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
