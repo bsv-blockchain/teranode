@@ -161,7 +161,7 @@ Backend differences that also affect recovery and testing:
 | Behavior | SQLite / PostgreSQL | Aerospike |
 |---|---|---|
 | Supplied current commitment when freezing or reassigning | Not checked; the outpoint selects the output | Checked against the stored commitment |
-| Reassignment maturity delay | Uses a positive `utxostore_reassignedUtxoSpendableAfterBlocks`; zero falls back to 1,000 | Always 1,000 blocks; ignores the setting |
+| Reassignment maturity delay | Uses a positive [`utxostore_reassignedUtxoSpendableAfterBlocks`](../../references/settings/stores/utxo_settings.md#configuration-settings); zero falls back to 1,000 | Always 1,000 blocks; ignores the setting |
 | Immature reassigned spend error | `ErrTxLocked` | `ErrUtxoFrozen` |
 | Reassignment history | No reassignment audit record | Appends to the `reassignments` bin |
 
