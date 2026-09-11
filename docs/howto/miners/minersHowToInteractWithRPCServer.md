@@ -193,7 +193,8 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 
     - Returns: Boolean `true` if successful
 
-6. `reassign`: Reassigns ownership of a specific UTXO to a new Bitcoin address
+6. `reassign`: Updates a frozen UTXO's commitment for a destination address
+    - **Known regression:** do not reassign to a different owner. A successful result can leave the output unspendable by both owners, even after maturity. See the [reassignment limitation](../../topics/services/alert.md#24-utxo-reassignment) and [issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).
     - Parameters:
 
         - `txid` (string, required): The transaction ID of the UTXO

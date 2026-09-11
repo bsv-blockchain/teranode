@@ -1535,7 +1535,12 @@ Unfreezes a previously frozen UTXO, allowing it to be spent.
 
 ### reassign
 
-Reassigns ownership of a specific UTXO to a new Bitcoin address.
+Updates a frozen UTXO's commitment for a destination address.
+
+**Known regression:** do not reassign to a different owner. The RPC can return
+`true` while leaving the output unspendable by both owners, even after maturity.
+See the [reassignment limitation](../../topics/services/alert.md#24-utxo-reassignment)
+and [issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).
 
 **Parameters:**
 

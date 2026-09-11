@@ -138,15 +138,31 @@ The Alert Service initializes the necessary components and services to start pro
 
 ### 2.4. UTXO Reassignment
 
-**Current limitation:** `ReAssignUTXO` updates the UTXO commitment, clears the freeze,
-and sets a maturity height, but does not persist the replacement locking script.
-Mandatory transaction re-extension therefore still retrieves the original script
-from the UTXO store. A spend signed only for the replacement owner is rejected even
-after maturity; supplying the replacement script in extended transaction bytes
-cannot authorize it. Supporting a different owner requires an authoritative source
-for the replacement script and corresponding validation support. Reassignment to
-the stored owner still enforces the maturity delay and permits a valid spend after
-that delay. The reassignment smoke test covers both behaviors.
+**Known regression — do not reassign to a different owner:** mandatory transaction
+re-extension makes an output with a changed commitment unspendable by both owners,
+even after maturity. `ReAssignUTXO` updates the commitment, freeze state and maturity
+height but does not persist the replacement locking script. The new owner's spend
+fails against the original stored script. The original owner's signature passes
+that script, but its spend fails with `UTXO_MISMATCH` against the changed commitment.
+Waiting for more blocks does not restore spendability.
+
+This affects ownership-changing alert/confiscation and RPC reassignment. A successful
+RPC result or alert processing response does not guarantee that the output can be
+spent. There is no documented, validated recovery procedure across backends: SQL
+freezing ignores the supplied commitment, whereas Aerospike checks it, so operators
+must not assume that re-freezing and restoring the original hash is portable.
+Restoring support requires an authoritative replacement-script source and validation
+support; accepting a submitter's extended script would undermine the security fix.
+[Issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725) tracks restoration,
+recovery, backend parity and operator guidance.
+
+`TestReassignSQLiteEnforcesMaturityAndRejectsUnstoredScript` covers SQLite only. It
+pins both owners' rejection after a commitment change and uses self-reassignment
+(the commitment stays the same) solely as a positive maturity control. That control
+does not demonstrate a working ownership-changing confiscation flow. SQLite honors
+the test's five-block setting; Aerospike currently ignores
+`utxostore_reassignedUtxoSpendableAfterBlocks` and uses the fixed 1,000-block delay.
+This smoke test provides no Aerospike reassignment coverage.
 
 ![alert_reassign_utxo.svg](img/plantuml/alert/alert_reassign_utxo.svg)
 

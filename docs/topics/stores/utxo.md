@@ -391,12 +391,13 @@ The UTXO Store supports advanced UTXO management features, which can be utilized
     - If frozen, it removes the freeze mark
     - If not frozen, it returns an error
 
-3. **Reassigning UTXOs**: UTXOs can be reassigned to a new transaction output, but only if they are frozen first.
+3. **Reassigning UTXOs**: Updates the commitment of a frozen output.
+    - **Known regression:** changing the owner leaves the output unspendable by both owners after mandatory re-extension, even after maturity. Do not use ownership-changing reassignment. See the [reassignment limitation](../services/alert.md#24-utxo-reassignment) and [issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).
     - Verifies the UTXO exists and is frozen
     - Updates the UTXO hash to the new value
-    - Sets spendable block height to current + 1,000 blocks (defined by `ReAssignedUtxoSpendableAfterBlocks` constant)
+    - Sets the maturity height to current + 1,000 blocks by default; SQL honors the configured override, while Aerospike currently always uses the constant
     - Logs the reassignment for audit purposes
-    - **Important**: Reassigned UTXOs cannot be spent until 1,000 blocks have passed after the reassignment to ensure network consensus and prevent disputes
+    - **Important**: Passing the maturity gate alone does not make a changed-owner output spendable
 
 ### 4.9. Unmined Transaction Management
 
