@@ -939,10 +939,11 @@ func (sp *serverPeer) OnProtoconf(p *peer.Peer, msg *wire.MsgProtoconf) {
 // first message on a new inbound TCP connection, requesting to join an
 // existing multistream association.
 func (sp *serverPeer) OnCreateStream(p *peer.Peer, msg *wire.MsgCreateStream) {
-	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnCreateStream",
+	_, _, deferFn := tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnCreateStream",
 		tracing.WithHistogram(peerServerMetrics["OnCreateStream"]),
-		tracing.WithLogMessage(sp.server.logger, "OnCreateStream from %s", p),
+		tracing.WithDebugLogMessage(sp.server.logger, "OnCreateStream from %s", p),
 	)
+	defer deferFn()
 
 	if !sp.server.settings.Legacy.AllowBlockPriority {
 		sp.server.logger.Warnf("Received createstream from %s but AllowBlockPriority is disabled", p)
@@ -990,10 +991,11 @@ func (sp *serverPeer) OnCreateStream(p *peer.Peer, msg *wire.MsgCreateStream) {
 // OnStreamAck is invoked when a peer sends a streamack message confirming
 // that our createstream request was accepted.
 func (sp *serverPeer) OnStreamAck(p *peer.Peer, msg *wire.MsgStreamAck) {
-	_, _, _ = tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnStreamAck",
+	_, _, deferFn := tracing.Tracer("legacy").Start(sp.ctx, "serverPeer.OnStreamAck",
 		tracing.WithHistogram(peerServerMetrics["OnStreamAck"]),
-		tracing.WithLogMessage(sp.server.logger, "OnStreamAck from %s", p),
+		tracing.WithDebugLogMessage(sp.server.logger, "OnStreamAck from %s", p),
 	)
+	defer deferFn()
 
 	sp.server.logger.Infof("Received streamack for stream type %d from %s", msg.StreamType, p)
 }

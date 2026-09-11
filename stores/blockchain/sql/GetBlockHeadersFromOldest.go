@@ -69,7 +69,7 @@ import (
 //   - nil if the operation was successful (even if fewer headers than requested were found)
 func (s *SQL) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockHeaders",
-		tracing.WithLogMessage(s.logger, "[GetBlockHeaders][%s] called for %d headers", targetHash.String(), numberOfHeaders),
+		tracing.WithDebugLogMessage(s.logger, "[GetBlockHeaders][%s] called for %d headers", targetHash.String(), numberOfHeaders),
 	)
 	defer deferFn()
 

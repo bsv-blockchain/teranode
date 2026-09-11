@@ -898,7 +898,7 @@ func (u *Server) blockHandler(kafkaMsg *kafkamessage.KafkaBlockTopicMessage) err
 	}
 
 	if exists {
-		u.logger.Infof("[BlockFound][%s] already validated, skipping", hash.String())
+		u.logger.Debugf("[BlockFound][%s] already validated, skipping", hash.String())
 		return nil
 	}
 
@@ -957,7 +957,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 	}
 
 	if exists {
-		u.logger.Infof("[processBlockFoundChannel][%s] already validated, skipping", blockFound.hash.String())
+		u.logger.Debugf("[processBlockFoundChannel][%s] already validated, skipping", blockFound.hash.String())
 
 		if blockFound.errCh != nil {
 			blockFound.errCh <- nil
@@ -1261,7 +1261,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	}
 
 	if exists {
-		u.logger.Infof("[BlockFound][%s] already validated, skipping", util.ReverseAndHexEncodeSlice(req.Hash))
+		u.logger.Debugf("[BlockFound][%s] already validated, skipping", util.ReverseAndHexEncodeSlice(req.Hash))
 		return &blockvalidation_api.EmptyMessage{}, nil
 	}
 
