@@ -46,6 +46,26 @@ Before submitting a bug report, gather the following information:
 
     - Include any relevant visual information
 
+## Severity
+
+New bug reports must select a severity using the "Severity" section of the bug report
+template, and the maintainer triaging the issue applies the matching `severity:*` label.
+Choose the level that matches the observed impact:
+
+- `severity:critical` — consensus failure, data loss or corruption, funds at risk, or a
+  node that cannot sync or stay up. No workaround.
+- `severity:major` — a core function is broken or badly degraded (e.g. sustained
+  throughput loss, a service that needs manual restarts), but a workaround exists.
+- `severity:minor` — cosmetic, documentation, or low-impact issues with an easy
+  workaround.
+
+This replaces the old convention of encoding severity in the issue title (e.g.
+`[P2P-003][medium]`) for new issues going forward. The retired brackets were
+`[high]`/`[medium]`/`[low]`, which line up positionally with
+`critical`/`major`/`minor`; treat that as orientation when reading old issues, not as an
+exact equivalence — re-grade against the criteria above if it matters. Existing issue
+titles are not being changed retroactively and existing issues are not being relabelled.
+
 ## Submitting the Bug Report
 
 1. Go to the Teranode GitHub repository.
@@ -59,6 +79,12 @@ Before submitting a bug report, gather the following information:
 When creating a new issue, GitHub will automatically load a template. The template includes the following sections:
 
 ```markdown
+## Severity (required)
+Tick exactly one (see the severity criteria above):
+- [ ] severity:critical — consensus failure, data loss or corruption, funds at risk, or a node that cannot sync or stay up, with no workaround
+- [ ] severity:major — a core function is broken or badly degraded (sustained throughput loss, a service needing manual restarts), but a workaround exists
+- [ ] severity:minor — cosmetic, documentation, or low-impact issues with an easy workaround
+
 ## Describe the bug
 A clear and concise description of what the bug is.
 
@@ -78,7 +104,7 @@ If applicable, add screenshots to help explain your problem.
 ## Timeline
 When did the bug first occur, or when did you first notice it?
 
-## Desktop (please complete the following information):
+## Desktop (please complete the following information)
 
 - OS: [e.g. iOS]
 - Browser [e.g. chrome, safari]
