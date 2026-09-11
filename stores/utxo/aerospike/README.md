@@ -1,4 +1,3 @@
-
 # Aerospike UTXO Store
 
 This document describes the Aerospike UTXO store implementation, including the data structures and Lua User-Defined Functions (UDFs) that provide the bridge between the Go application and Aerospike.
@@ -31,6 +30,7 @@ external - true if transaction data is in external store
 totalExtraRecs - total number of extra records for pagination
 spentExtraRecs - number of spent extra records
 utxoSpendableIn - map of UTXO-specific freeze heights
+creating - boolean flag set to true while the transaction is in the creation process (absent when not creating)
 ```
 
 ### Large Transaction with External Storage (< 20,000 outputs)
@@ -83,6 +83,52 @@ if recordNumber > 0 then
     key = key + "_" + recordNumber
 end
 ```
+
+## Create-First Transaction Flow
+
+The UTXO store implements a create-first ordering approach for transaction processing, which ensures safety and consistency in distributed transaction environments.
+
+### Generalized Create-First Flow
+
+1. **Create Phase**: 
+   - Transaction record is first created in a tentative 'creating' state
+   - The `creating` bin is set to `true` during this phase
+   - Transaction data is populated but not yet finalized
+
+2. **Processing Phase**:
+   - Inputs are spent/processed 
+   - Transaction is validated and prepared for commitment
+
+3. **Commit Phase**:
+   - Transaction is finalized and committed to persistent storage
+   - The `creating` bin is deleted from the record (absence means not creating)
+   - Transaction becomes fully available for spending
+
+### Recovery Paths
+
+When transaction processing fails or becomes stale, the system employs three recovery paths:
+
+1. **Validator Roll-Forward** (on ErrTxExists + Creating):
+   - When a transaction is detected in creating state during validation
+   - Validator performs roll-forward to complete the transaction
+   - This handles cases where the initial creation was interrupted
+
+2. **Pruner Sweep**:
+   - The pruner identifies stale 'creating' transactions 
+   - Instead of deleting them, the pruner rolls them forward through processing
+   - This prevents accumulation of incomplete transaction states
+
+3. **setMined**:
+   - Transactions that are successfully mined are processed through the setMined path
+   - This finalizes transactions that were created and properly validated
+   - Ensures transactions move from 'creating' to 'mined' state
+
+### Benefits of Create-First Ordering
+
+- **Safety**: Prevents orphaned spends by ensuring parent transactions are complete before child transactions
+- **Recoverability**: Partially-processed transactions can be retried or cleaned up 
+- **Consistency**: Maintains atomicity of transaction operations
+- **Cleanup**: Stale 'creating' transactions are properly handled rather than deleted
 
 ## Lua Bridge Interface
 
