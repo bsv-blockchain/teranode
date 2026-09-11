@@ -158,8 +158,10 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 				continue
 			}
 
-			// Check FSM state - skip during CATCHINGBLOCKS if configured
-			if s.settings.Pruner.SkipDuringCatchup {
+			// Check FSM state - skip during CATCHINGBLOCKS if configured.
+			// Guard against a nil blockchainClient (e.g. in tests) the same
+			// way the blockAssemblyClient check below does.
+			if s.settings.Pruner.SkipDuringCatchup && s.blockchainClient != nil {
 				fsmState, err := s.blockchainClient.GetFSMCurrentState(ctx)
 				if err != nil {
 					s.logger.Warnf("Failed to get FSM state, skipping pruner: %v", err)

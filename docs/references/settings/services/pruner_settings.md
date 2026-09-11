@@ -146,6 +146,8 @@ When enabled, the pruner checks FSM state and skips all deletion operations duri
 - `false` (default): Normal pruning during catchup (safe with retention >= 288 blocks)
 - `true`: Skip all pruning during catchup state
 
+Note: this defers rather than eliminates the prune burst - a node that skips a long catchup hits one much larger DAH sweep on entering the RUNNING state.
+
 ### pruner_blockAssemblyWaitTimeout
 
 **Type**: Duration
@@ -185,17 +187,7 @@ When Aerospike connection pool utilization exceeds this threshold, the pruner au
 - `OnBlockPersisted` (default): Triggers on BlockPersisted notifications (coordinated with Block Persister)
 - `OnBlockMined`: Triggers on Block notifications with mined_set=true
 
-### pruner_force_ignore_block_persister_height
-
-**Type**: Boolean
-
-**Default**: `false`
-
-**Environment Variable**: `pruner_force_ignore_block_persister_height`
-
-**Description**: Force ignore block persister height tracking
-
-When enabled, uses Block notifications with mined_set=true instead of BlockPersisted notifications from Block Persister for determining safe prune height.
+To use Block notifications with mined_set=true instead of BlockPersisted notifications from Block Persister for determining safe prune height, set `pruner_block_trigger=OnBlockMined`.
 
 ### pruner_utxoSetTTL
 
