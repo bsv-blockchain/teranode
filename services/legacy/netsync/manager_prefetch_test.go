@@ -12,7 +12,6 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	peerpkg "github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/semaphore"
 )
@@ -38,9 +37,10 @@ func TestBlockRequested(t *testing.T) {
 
 	newSM := func(params *chaincfg.Params) *SyncManager {
 		return &SyncManager{
-			logger:      ulogger.TestLogger{},
-			chainParams: params,
-			peerStates:  txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
+			logger:         ulogger.TestLogger{},
+			chainParams:    params,
+			peerStates:     txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
+			blockDownloads: newBlockDownloadTracker(blockRequestAssignmentTTL),
 		}
 	}
 
@@ -61,9 +61,8 @@ func TestBlockRequested(t *testing.T) {
 	t.Run("requested block is admitted", func(t *testing.T) {
 		sm := newSM(&chaincfg.MainNetParams)
 		p := &peerpkg.Peer{}
-		reqd := expiringmap.New[chainhash.Hash, struct{}](time.Minute)
-		reqd.Set(hash, struct{}{})
-		sm.peerStates.Set(p, &peerSyncState{requestedBlocks: reqd})
+		sm.peerStates.Set(p, &peerSyncState{})
+		sm.blockDownloads.Add(p, hash)
 
 		require.True(t, sm.BlockRequested(p, &hash))
 	})
@@ -71,9 +70,7 @@ func TestBlockRequested(t *testing.T) {
 	t.Run("unrequested block from a known peer is rejected", func(t *testing.T) {
 		sm := newSM(&chaincfg.MainNetParams)
 		p := &peerpkg.Peer{}
-		sm.peerStates.Set(p, &peerSyncState{
-			requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](time.Minute),
-		})
+		sm.peerStates.Set(p, &peerSyncState{})
 
 		require.False(t, sm.BlockRequested(p, &hash))
 	})
@@ -458,7 +455,7 @@ func TestLocalReadBackpressured(t *testing.T) {
 	// stale backdates the progress stamp well past the stall timeout so a
 	// non-empty backlog reads as a hung pipeline rather than progressing work.
 	stale := func(sm *SyncManager) {
-		sm.lastBacklogProgress.Store(time.Now().Add(-time.Hour).UnixNano())
+		sm.lastChainProgress.Store(time.Now().Add(-time.Hour).UnixNano())
 	}
 
 	t.Run("kill switch (budget nil): suppression is unconditional on any backlog", func(t *testing.T) {
@@ -470,7 +467,7 @@ func TestLocalReadBackpressured(t *testing.T) {
 		// blocks and owns processing-stall liveness, so suppression here stays
 		// UNCONDITIONAL — exactly as pre-prefetch.
 		sm.blockBacklog.Add(1)
-		sm.noteBacklogProgress()
+		sm.noteChainProgress()
 		require.True(t, sm.localReadBackpressured())
 
 		// Even a stale progress stamp must NOT lift suppression on the kill switch:
@@ -490,7 +487,7 @@ func TestLocalReadBackpressured(t *testing.T) {
 		// A progressing backlog is self-backpressure: a stale last-block-time
 		// then reflects our validation speed, not the peer.
 		sm.blockBacklog.Add(5)
-		sm.noteBacklogProgress()
+		sm.noteChainProgress()
 		require.True(t, sm.localReadBackpressured())
 
 		// Progress has stalled past the timeout — a genuine hang. Deliberately do
@@ -563,7 +560,7 @@ func TestHandleCheckSyncPeer_PrefetchBackpressure(t *testing.T) {
 		// reflects our validation speed, not the peer. The healthy peer must be
 		// kept (rotation would panic in this minimal SyncManager).
 		sm.blockBacklog.Add(3)
-		sm.noteBacklogProgress()
+		sm.noteChainProgress()
 
 		require.NotPanics(t, func() { sm.handleCheckSyncPeer() })
 		require.Equal(t, sp, sm.loadSyncPeer())
@@ -578,7 +575,7 @@ func TestHandleCheckSyncPeer_PrefetchBackpressure(t *testing.T) {
 		// the rotation path runs (panicking in this minimal SyncManager, which
 		// proves it ran rather than being suppressed).
 		sm.blockBacklog.Add(3)
-		sm.lastBacklogProgress.Store(time.Now().Add(-time.Hour).UnixNano())
+		sm.lastChainProgress.Store(time.Now().Add(-time.Hour).UnixNano())
 
 		require.Panics(t, func() { sm.handleCheckSyncPeer() })
 	})
@@ -614,9 +611,7 @@ func TestHandleBlockMsg_SkipsDisconnectedPeer(t *testing.T) {
 	// standing in for a peer awaitBlockResult has just disconnected.
 	p := &peerpkg.Peer{}
 	require.False(t, p.Connected())
-	sm.peerStates.Set(p, &peerSyncState{
-		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](time.Minute),
-	})
+	sm.peerStates.Set(p, &peerSyncState{})
 
 	err := sm.handleBlockMsg(&blockQueueMsg{
 		blockHash: chainhash.Hash{0x01},

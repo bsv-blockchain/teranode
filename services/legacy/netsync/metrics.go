@@ -25,6 +25,8 @@ var (
 	prometheusLegacyNetsyncBlockTxNrOutputs               prometheus.Histogram
 	prometheusLegacyNetsyncBlockTxValidate                prometheus.Histogram
 	prometheusLegacyNetsyncOrphans                        prometheus.Gauge
+	prometheusLegacyNetsyncParkedBlocks                   prometheus.Gauge
+	prometheusLegacyNetsyncParkedBytes                    prometheus.Gauge
 	prometheusLegacyNetsyncOrphanTime                     prometheus.Histogram
 
 	// prometheusLegacyNetsyncPrewarmErrors counts validator errors observed during the
@@ -193,6 +195,22 @@ func _initPrometheusMetrics() {
 		Help:      "The number of orphan transactions",
 	})
 	prometheus.MustRegister(prometheusLegacyNetsyncOrphans)
+
+	prometheusLegacyNetsyncParkedBlocks = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "teranode",
+		Subsystem: "legacy_netsync",
+		Name:      "parked_blocks",
+		Help:      "The number of downloaded blocks held on disk waiting for their parent",
+	})
+	prometheus.MustRegister(prometheusLegacyNetsyncParkedBlocks)
+
+	prometheusLegacyNetsyncParkedBytes = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "teranode",
+		Subsystem: "legacy_netsync",
+		Name:      "parked_bytes",
+		Help:      "The serialized bytes of downloaded blocks held on disk waiting for their parent",
+	})
+	prometheus.MustRegister(prometheusLegacyNetsyncParkedBytes)
 
 	prometheusLegacyNetsyncOrphanTime = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "teranode",

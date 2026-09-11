@@ -118,6 +118,15 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		}
 	}
 
+	// A block committed from the park after a restart has no delivering peer at
+	// all, and (*Peer).String dereferences the peer's address and asks it
+	// whether it is the sync peer — so calling it on nil panics, on the
+	// block-queue goroutine, in production.
+	peerLabel := "recovered-from-disk"
+	if peer != nil {
+		peerLabel = peer.String()
+	}
+
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "HandleBlockDirect",
 		tracing.WithLogMessage(
 			sm.logger,
@@ -125,15 +134,27 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 			block.Hash().String(),
 			blockHeight,
 			len(block.Transactions()),
-			peer.String(),
+			peerLabel,
 		),
 		tracing.WithTag("blockHash", block.Hash().String()),
-		tracing.WithTag("peer", peer.String()),
+		tracing.WithTag("peer", peerLabel),
 		tracing.WithHistogram(prometheusLegacyNetsyncHandleBlockDirect),
 	)
 	defer func() {
 		// set the block height gauge in the prometheus metrics
 		prometheusLegacyNetsyncBlockHeight.Set(float64(blockHeight))
+
+		// A nil error here means the block went into the chain, and blockHeight
+		// was derived from its parent's row rather than from anything the peer
+		// claimed, so this is the one place the committed height is known
+		// exactly. The park sweep needs it: a block parked below the committed
+		// tip can never be needed again, and the header list cannot answer that
+		// question because an arriving front block's header is removed before
+		// the park ever sees it, which moves the front past the very block being
+		// waited for.
+		if err == nil && blockHeight > 0 {
+			sm.noteCommittedHeight(int32(blockHeight))
+		}
 
 		deferFn(err)
 	}()

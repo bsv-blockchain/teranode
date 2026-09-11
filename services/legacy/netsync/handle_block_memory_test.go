@@ -360,6 +360,7 @@ func TestHandleBlockDirect_TestnetLargeBlock(t *testing.T) {
 		validatorClient,
 		utxoStore,
 		subtreeStore,
+		nil,
 		subtreeValidation,
 		blockValidation,
 		blockAssemblyClient,

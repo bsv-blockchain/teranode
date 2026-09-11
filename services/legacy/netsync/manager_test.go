@@ -29,6 +29,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/txscript"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/validator"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
@@ -105,6 +106,21 @@ func (tc *testContext) Setup(t *testing.T, config *testConfig) error {
 
 	subtreeStore := blob_memory.New()
 
+	// A real file-backed temp store, because the out-of-order block park needs a
+	// store whose contents a restart could enumerate — anything else and the park
+	// switches itself off.
+	tempStoreURL, err := url.Parse("file://" + t.TempDir())
+	if err != nil {
+		return errors.NewServiceError("failed to parse temp store url", err)
+	}
+
+	tSettings.Legacy.TempStore = tempStoreURL
+
+	tempStore, err := blob.NewStore(ulogger.TestLogger{}, tempStoreURL)
+	if err != nil {
+		return errors.NewServiceError("failed to create temp store", err)
+	}
+
 	subtreeValidation := &subtreevalidation.MockSubtreeValidation{}
 
 	blockvalidationClient, err := blockvalidation.NewClient(context.Background(), ulogger.TestLogger{}, tSettings, "manager_test")
@@ -119,6 +135,7 @@ func (tc *testContext) Setup(t *testing.T, config *testConfig) error {
 		validatorClient,
 		utxoStore,
 		subtreeStore,
+		tempStore,
 		subtreeValidation,
 		blockvalidationClient,
 		nil,
@@ -986,12 +1003,9 @@ func TestHandleBlockMsg_OrphanDuringCatchup(t *testing.T) {
 	p := peer.NewInboundPeer(ulogger.TestLogger{}, test.CreateBaseTestSettings(t), &peer.Config{})
 
 	state := &peerSyncState{
-		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),
-		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](time.Minute),
+		requestedTxns: expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),
 	}
 	defer state.requestedTxns.Stop()
-	defer state.requestedBlocks.Stop()
-	state.requestedBlocks.Set(blockHash, struct{}{})
 
 	sm := &SyncManager{
 		ctx:              context.Background(),
@@ -999,11 +1013,10 @@ func TestHandleBlockMsg_OrphanDuringCatchup(t *testing.T) {
 		chainParams:      &chaincfg.MainNetParams,
 		blockchainClient: blockchainClient,
 		peerStates:       txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
-		requestedBlocks:  expiringmap.New[chainhash.Hash, struct{}](time.Minute),
+		blockDownloads:   newBlockDownloadTracker(blockRequestAssignmentTTL),
 	}
-	defer sm.requestedBlocks.Stop()
 	sm.peerStates.Set(p, state)
-	sm.requestedBlocks.Set(blockHash, struct{}{})
+	sm.blockDownloads.Add(p, blockHash)
 
 	err := sm.handleBlockMsg(&blockQueueMsg{
 		block:       msgBlock,
@@ -1031,11 +1044,9 @@ func newBackoffTestManager(t *testing.T, blockchainClient *blockchain2.Mock, blo
 	p := peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{})
 
 	state := &peerSyncState{
-		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),
-		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](time.Minute),
+		requestedTxns: expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),
 	}
-	t.Cleanup(func() { state.requestedTxns.Stop(); state.requestedBlocks.Stop() })
-	state.requestedBlocks.Set(blockHash, struct{}{})
+	t.Cleanup(func() { state.requestedTxns.Stop() })
 
 	sm := &SyncManager{
 		ctx:                  context.Background(),
@@ -1044,13 +1055,13 @@ func newBackoffTestManager(t *testing.T, blockchainClient *blockchain2.Mock, blo
 		chainParams:          &chaincfg.MainNetParams,
 		blockchainClient:     blockchainClient,
 		peerStates:           txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
-		requestedBlocks:      expiringmap.New[chainhash.Hash, struct{}](time.Minute),
+		blockDownloads:       newBlockDownloadTracker(blockRequestAssignmentTTL),
 		blockFailureBackoff:  expiringmap.New[chainhash.Hash, *blockFailureState](time.Minute),
 		recentlyFailedBlocks: expiringmap.New[chainhash.Hash, struct{}](time.Minute),
 	}
-	t.Cleanup(func() { sm.requestedBlocks.Stop(); sm.blockFailureBackoff.Stop(); sm.recentlyFailedBlocks.Stop() })
+	t.Cleanup(func() { sm.blockFailureBackoff.Stop(); sm.recentlyFailedBlocks.Stop() })
 	sm.peerStates.Set(p, state)
-	sm.requestedBlocks.Set(blockHash, struct{}{})
+	sm.blockDownloads.Add(p, blockHash)
 
 	return sm, p
 }
@@ -1525,8 +1536,8 @@ func TestHandleCheckSyncPeer_LocalBacklog(t *testing.T) {
 		sps := newStalledState()
 		sm := newSyncManager(sp, sps)
 
-		sm.blockBacklog.Add(1)   // a block is queued or mid-validation locally
-		sm.noteBacklogProgress() // fresh progress: backlog is advancing, not hung
+		sm.blockBacklog.Add(1) // a block is queued or mid-validation locally
+		sm.noteChainProgress() // fresh progress: backlog is advancing, not hung
 
 		// Rotation would panic in this minimal SyncManager (no blockchain
 		// client), so NotPanics proves the peer was kept.
@@ -1825,4 +1836,66 @@ func TestHandleNewPeerMsg_SkipsDisconnectedPeer(t *testing.T) {
 	sm.handleNewPeerMsg(disconnectedPeer)
 
 	require.False(t, sm.peerStates.Exists(disconnectedPeer), "disconnected peer must not be registered in peerStates")
+}
+
+// TestHandleCheckSyncPeer_SpeedArmRespectsAssociationThroughput covers the arm
+// the healthy-throughput suppression used to miss.
+//
+// validNetworkSpeed reads BytesReceived, which is the sync peer object's own
+// counter. Under the BlockPriority stream policy a large block arrives on DATA1,
+// so that counter barely moves while the association is pulling at full rate,
+// and the peer records a speed violation every tick. The suppression guarded
+// only the last-block-time arm, so the speed arm rotated a peer that was
+// downloading perfectly well. Observed on mainnet at 124 MB average blocks: the
+// sync peer was demoted three times in seven minutes, mid-transfer, each
+// demotion reopening its assignments and rewinding the cursor, so the work was
+// done twice.
+func TestHandleCheckSyncPeer_SpeedArmRespectsAssociationThroughput(t *testing.T) {
+	// speedViolatingState has a clean last-block-time arm so only the speed arm
+	// can fire, which is what isolates the arm under test. The general stream is
+	// silent and the association is pulling hard: a large block on DATA1.
+	speedViolatingState := func(assocBytes uint64) *syncPeerState {
+		return &syncPeerState{
+			lastBlockTime:          time.Now(),
+			ticks:                  maxNetworkViolations + 1,
+			violations:             maxNetworkViolations,
+			recvBytes:              0,
+			recvBytesLastTick:      0,
+			assocReadBytes:         assocBytes,
+			assocReadBytesLastTick: 0,
+		}
+	}
+
+	t.Run("a peer downloading on DATA1 is not rotated for a quiet general stream", func(t *testing.T) {
+		sm := newDemotionManager(t)
+		sm.headersFirstMode.Store(false) // speed checks only run outside headers-first
+		sm.minSyncPeerNetworkSpeed = 51200
+
+		sp, _, _ := connectRacePeer(t, 90, 1000)
+		state := registerRacePeer(sm, sp)
+		sm.storeSyncPeer(sp, speedViolatingState(64<<20))
+
+		sm.handleCheckSyncPeer()
+
+		// The demotion cooldown is the observable, not the sync-peer pointer: a
+		// demoted peer is re-elected immediately when it is the only candidate,
+		// so the pointer looks unchanged either way.
+		require.False(t, state.inDemotionCooldown(),
+			"a peer whose association is downloading at a healthy rate must not be demoted for a quiet general stream")
+	})
+
+	t.Run("a genuinely silent peer is still rotated", func(t *testing.T) {
+		sm := newDemotionManager(t)
+		sm.headersFirstMode.Store(false)
+		sm.minSyncPeerNetworkSpeed = 51200
+
+		sp, _, _ := connectRacePeer(t, 91, 1000)
+		state := registerRacePeer(sm, sp)
+		sm.storeSyncPeer(sp, speedViolatingState(0)) // nothing anywhere on the association
+
+		sm.handleCheckSyncPeer()
+
+		require.True(t, state.inDemotionCooldown(),
+			"a peer sending nothing on any stream is stalled and must still be demoted")
+	})
 }
