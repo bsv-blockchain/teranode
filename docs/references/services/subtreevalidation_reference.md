@@ -4,6 +4,37 @@
 
 The `Server` type implements the core functionality for subtree validation in a blockchain system. It handles subtree and transaction metadata processing, interacts with various data stores, and manages Kafka consumers for distributed processing. The service is a critical component in validating transaction subtrees for inclusion in the blockchain.
 
+## Assembly feeding observations
+
+`teranode_subtreevalidation_assembly_feeding_suppressed_total{path,observed_state}`
+counts FSM observations that suppress assembly feeding, once per handler admission
+check for admitted validation. Kafka messages skipped during catchup do not
+increment it. It does not count transactions or confirm that the node is durably
+paused. Paths are
+`check_subtree_legacy`, `check_subtree_peer`, `check_block_subtrees`, and
+`kafka_subtree`. Observed states are `idle`, `catchingblocks`, `unknown`, and
+`missing`; RUNNING observations do not increment the counter.
+
+The blockchain client can report a synthetic IDLE after its notification stream
+breaks. Feeding remains disabled until a RUNNING observation returns after cache
+recovery. Block assembly independently recovers stored transactions missing from
+its mining templates at `blockassembly_unminedRecoveryInterval` (default `1h`).
+Recovery requires an authoritative RUNNING response and matching chain tip; real
+IDLE and unavailable or uncertain authority defer it. A deferred or failed pass
+is retried after at most one minute. Cache recovery alone does not replay the
+transactions immediately.
+
+Recovery rechecks transaction and parent eligibility, including transactions
+already accepted into assembly's queue. It preserves validator-owned locks and
+rebuilds parent-before-child order without changing UTXO state. Selection failure
+leaves the existing template and queue intact. A failed destructive rebuild
+prevents mining and queue consumption until repair succeeds. This is automatic
+template repair, not a service drain or permission to rewind live stores.
+
+Unexpected suppression emits a warning at most once per minute per service
+instance. Expected CATCHINGBLOCKS observations still count for admitted block
+validation but do not warn or consume the warning budget.
+
 ## Types
 
 ### Server
@@ -627,3 +658,8 @@ Background goroutine that listens for blockchain events and updates the service'
 - [Subtree Validation Settings](../settings/services/subtreevalidation_settings.md)
 - [Subtree Validation Protobuf Reference](../protobuf_docs/subtreevalidationProto.md)
 - [Prometheus Metrics](../prometheusMetrics.md)
+
+Suppressed assembly feeding also emits a warning at most once per minute per
+service instance, including the observed state and entry path. The counter still
+records every gate observation during warning rate limiting. A warning does not
+prove an operator pause: check blockchain connectivity and authoritative state.

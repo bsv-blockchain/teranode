@@ -2,12 +2,66 @@
 
 **Related Topic**: [Block Assembly Service](../../../topics/services/blockAssembly.md)
 
+## Automatic unmined recovery
+
+`blockassembly_unminedRecoveryInterval` sets the delay between automatic recovery
+passes (default `1h`). Zero uses the default; a negative duration such as `-1s`
+disables new automatic passes. Apply configuration changes by restarting block
+assembly. Disabling recovery does not undo a partial rebuild or clear its mining
+gate: already-started repair must complete. Stored transactions missed by assembly
+may remain absent until a later restart/reset when automatic recovery is disabled.
+
+Block assembly reads
+the unmined index and rebuilds eligible stored, queued and assembled transactions
+in parent-before-child order. It does not unlock transactions, alter their mined
+status or run the full-store consistency scan.
+
+Recovery starts only with an authoritative RUNNING state and matching assembly
+and blockchain tips. Unavailable, unready or persistence-uncertain authority,
+IDLE, catchup and tip mismatch defer it. Deferred or failed attempts retry after
+`min(interval, 1m)`; the next fully recovered pass waits the full configured interval
+after completion. Newly suppressed transactions can therefore wait for the next
+pass. Ongoing outages or chain processing can extend that delay.
+
+The scan, fresh metadata reads and rebuilding use CPU, memory and storage I/O.
+Queue consumption pauses while the dispatcher prepares and applies the rebuild;
+size the ingest queue accordingly. The one-hour default limits frequency; it is
+not a benchmark-derived guarantee for every deployment. Existing mining jobs
+retain their subtree storage across replacement. A failed destructive rebuild
+keeps new mining and normal dequeue closed until a retry succeeds. If the chain
+advances during that failure, recovery first repairs the original assembly tip;
+mining stays closed until normal chain reconciliation reaches the new tip.
+
+Reset, full reset, input-validation reset, reorg and chain movement are also
+refused while a destructive rebuild needs repair. Reset RPCs return the actual
+operation error rather than acknowledging a refused reset as successful. If the
+caller times out after reset has started, the reset continues under the service
+lifetime; its outcome is unknown to that caller. Inspect assembly state and logs
+before issuing another reset. Watch
+`teranode_subtreeprocessor_recovery_pending_seconds`: it is zero when no memory
+rebuild is pending and measures time since replacement began, including across
+failed retries. Successful publication clears it.
+
+If repair remains pending, inspect the recovery error and correct its cause
+(for example, free space in `blockassembly_subtreeMmapDir`). Repair uses a retry delay of at most one minute while authoritatively RUNNING;
+ongoing listener work or authority failures can delay it further. If repair cannot
+complete, stop block assembly, correct the underlying fault, optionally set
+`blockassembly_unminedRecoveryInterval = -1s`, and restart it. Startup rebuilds
+assembly from stored transactions. The disable setting prevents new periodic
+passes; it does not remove the startup reload or make live-store rewind safe.
+
+Upgrade the blockchain service before relying on this recovery: it needs the new
+`ReadFSMState` RPC. An older server returns Unimplemented, so recovery waits and
+logs an informational upgrade message. Other authority, storage and rebuild errors
+remain warnings. Cached or synthetic IDLE is never treated as authoritative RUNNING.
+
 ## Configuration Settings
 
 | Setting                              | Type          | Default          | Environment Variable                               | Usage                                                                                |
 |--------------------------------------|---------------|------------------|----------------------------------------------------|--------------------------------------------------------------------------------------|
 | Disabled                             | bool          | false            | blockassembly_disabled                             | Service-level kill switch, all operations return early                               |
 | GenerateTipWaitTimeout               | time.Duration | 90s              | blockassembly_generateTipWaitTimeout               | Bounds the generate readiness wait; effective bound is min(this, caller deadline)     |
+| UnminedRecoveryInterval              | time.Duration | 1h               | blockassembly_unminedRecoveryInterval              | Recovery delay while authoritatively RUNNING; zero uses 1h, negative disables new passes       |
 | GRPCAddress                          | string        | "localhost:8085" | blockassembly_grpcAddress                          | Client connection address                                                            |
 | GRPCListenAddress                    | string        | ":8085"          | blockassembly_grpcListenAddress                    | **CRITICAL** - gRPC server binding (service skipped if empty)                        |
 | GRPCMaxRetries                       | int           | 3                | blockassembly_grpcMaxRetries                       | gRPC client retry attempts                                                           |

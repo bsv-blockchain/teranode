@@ -2,11 +2,50 @@
 package subtreeprocessor
 
 import (
+	"context"
+	"runtime"
 	"sync/atomic"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
+
+// snapshotPublished visits a fixed queue prefix without removing it. Only the
+// processor goroutine may call it. Producers can append while selection runs.
+func (q *LockFreeQueue) snapshotPublished(ctx context.Context, visit func(chainhash.Hash)) (*TxBatch, error) {
+	boundary := q.tail.Load()
+	if boundary == nil {
+		return nil, nil
+	}
+	for cursor := q.head; cursor != boundary; {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		next := cursor.next.Load()
+		if next == nil {
+			// A producer swapped tail but has not linked its batch yet.
+			runtime.Gosched()
+			continue
+		}
+		for _, node := range next.nodes {
+			visit(node.Hash)
+		}
+		cursor = next
+	}
+	return boundary, nil
+}
+
+// discardThrough commits a previously captured prefix. snapshotPublished already
+// observed every link, so no producer wait or timestamp comparison is needed.
+func (q *LockFreeQueue) discardThrough(boundary *TxBatch) {
+	if boundary == nil {
+		return
+	}
+	for q.head != boundary {
+		_, _ = q.dequeueBatch(0)
+	}
+}
 
 // normalizeMaxQueueItems validates and normalizes the configured ingest-queue
 // item cap, following the clamp-and-warn convention used for other out-of-range

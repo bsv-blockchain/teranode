@@ -171,6 +171,10 @@ service BlockchainAPI {
   // GetFSMCurrentState retrieves the current state of the FSM.
   rpc GetFSMCurrentState(google.protobuf.Empty) returns (GetFSMStateResponse) {}
 
+  // ReadFSMState returns the uncached, persistence-confirmed state. Unready,
+  // busy or uncertain authority returns Unavailable instead of synthetic IDLE.
+  rpc ReadFSMState(google.protobuf.Empty) returns (GetFSMStateResponse) {}
+
   // WaitUntilFSMTransitionFromIdleState waits for FSM to transition from IDLE state.
   rpc WaitUntilFSMTransitionFromIdleState(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 

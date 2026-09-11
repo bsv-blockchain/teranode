@@ -94,6 +94,10 @@ var (
 	// need a signal so they can detect malformed-message bursts that would otherwise be invisible.
 	// Reason labels: nil_message, too_short, unmarshal_failure, bad_hash, bad_url.
 	prometheusSubtreeKafkaMalformed *prometheus.CounterVec
+
+	// Counts FSM observations that suppress assembly feeding, not transactions or
+	// confirmed pauses. Paths and observed states are bounded at the call sites.
+	prometheusAssemblyFeedingSuppressed *prometheus.CounterVec
 )
 
 var (
@@ -210,6 +214,16 @@ func _initPrometheusMetrics() {
 			Name:      "set_tx_meta_cache_kafka_errors",
 			Help:      "Number of errors setting tx meta cache from kafka",
 		},
+	)
+
+	prometheusAssemblyFeedingSuppressed = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "assembly_feeding_suppressed_total",
+			Help:      "FSM observations suppressing assembly feeding for admitted validation; observed state is cached and does not confirm a durable pause",
+		},
+		[]string{"path", "observed_state"},
 	)
 
 	prometheusSubtreeKafkaMalformed = promauto.NewCounterVec(

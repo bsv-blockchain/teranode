@@ -643,19 +643,12 @@ func TestGetCurrentDifficultyCoverage(t *testing.T) {
 
 // TestResetBlockAssemblyCoverage tests the ResetBlockAssembly function coverage
 func TestResetBlockAssemblyCoverage(t *testing.T) {
-	server, _, _, _ := setup(t)
-	ctx := t.Context()
-
-	t.Run("reset block assembly", func(t *testing.T) {
-		// Call reset function - testing for coverage
-		resp, err := server.ResetBlockAssembly(ctx, &blockassembly_api.EmptyMessage{})
-		if err == nil {
-			assert.NotNil(t, resp)
-		} else {
-			// Error case also provides coverage
-			assert.NotNil(t, err)
-		}
-	})
+	server := newResetRPCListeningServer(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	resp, err := server.ResetBlockAssembly(ctx, &blockassembly_api.EmptyMessage{})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
 }
 
 // TestGetBlockAssemblyStateCoverage tests the GetBlockAssemblyState function coverage
@@ -1678,12 +1671,13 @@ func TestResetFunctionsIntensive(t *testing.T) {
 	})
 
 	t.Run("ResetBlockAssembly normal operation", func(t *testing.T) {
-		server, _ := setupServer(t)
-		server.blockAssembler.unminedTransactionsLoading.Store(false)
+		server := newResetRPCListeningServer(t)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
 
-		resp, err := server.ResetBlockAssembly(context.Background(), &blockassembly_api.EmptyMessage{})
-		assert.NoError(t, err)
-		assert.NotNil(t, resp)
+		resp, err := server.ResetBlockAssembly(ctx, &blockassembly_api.EmptyMessage{})
+		require.NoError(t, err)
+		require.NotNil(t, resp)
 	})
 
 	t.Run("ResetBlockAssemblyFully with unmined transactions loading", func(t *testing.T) {
@@ -1697,12 +1691,13 @@ func TestResetFunctionsIntensive(t *testing.T) {
 	})
 
 	t.Run("ResetBlockAssemblyFully normal operation", func(t *testing.T) {
-		server, _ := setupServer(t)
-		server.blockAssembler.unminedTransactionsLoading.Store(false)
+		server := newResetRPCListeningServer(t)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
 
-		resp, err := server.ResetBlockAssemblyFully(context.Background(), &blockassembly_api.EmptyMessage{})
-		assert.NoError(t, err)
-		assert.NotNil(t, resp)
+		resp, err := server.ResetBlockAssemblyFully(ctx, &blockassembly_api.EmptyMessage{})
+		require.NoError(t, err)
+		require.NotNil(t, resp)
 	})
 }
 
@@ -2022,12 +2017,13 @@ func TestResetBlockAssemblyFully(t *testing.T) {
 	})
 
 	t.Run("reset fully successful", func(t *testing.T) {
-		server, _ := setupServer(t)
-		server.blockAssembler.unminedTransactionsLoading.Store(false)
+		server := newResetRPCListeningServer(t)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
 
-		resp, err := server.ResetBlockAssemblyFully(context.Background(), &blockassembly_api.EmptyMessage{})
-		assert.NoError(t, err)
-		assert.NotNil(t, resp)
+		resp, err := server.ResetBlockAssemblyFully(ctx, &blockassembly_api.EmptyMessage{})
+		require.NoError(t, err)
+		require.NotNil(t, resp)
 	})
 }
 

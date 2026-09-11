@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/go-chaincfg"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -885,7 +886,8 @@ func TestMiningCandidateTimeFlooredAtMedianTimePast(t *testing.T) {
 	tipHeader := buildFutureChain(t, t.Context(), server.blockchainClient, baseTime)
 	server.blockAssembler.setBestBlockHeader(tipHeader, 11)
 
-	candidate, _, err := server.blockAssembler.GetMiningCandidate(t.Context())
+	candidate, _, miningLease, err := server.blockAssembler.GetMiningCandidate(t.Context())
+	defer miningLease.Release()
 	require.NoError(t, err)
 	require.NotNil(t, candidate)
 
@@ -927,7 +929,9 @@ func TestMiningCandidateMainPathTimeFloored(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		var err error
-		candidate, _, err = ba.GetMiningCandidate(ctx)
+		var miningLease *subtreeprocessor.MiningSnapshotLease
+		candidate, _, miningLease, err = ba.GetMiningCandidate(ctx)
+		defer miningLease.Release()
 
 		return err == nil && candidate != nil && candidate.NumTxs > 0
 	}, 5*time.Second, 50*time.Millisecond, "expected a subtree-populated candidate for the future-stamped tip")

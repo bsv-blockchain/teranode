@@ -22,6 +22,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
@@ -493,7 +494,8 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	var s []*subtree.Subtree
 	require.Eventually(t, func() bool {
 		// Use internal method to get subtrees directly (gRPC client doesn't return SubtreeSlices)
-		_, subtrees, err := ba.blockAssembler.GetMiningCandidate(context.Background())
+		_, subtrees, miningLease, err := ba.blockAssembler.GetMiningCandidate(context.Background())
+		defer miningLease.Release()
 		if err != nil {
 			return false
 		}
@@ -644,7 +646,9 @@ func TestShouldHandleReorg(t *testing.T) {
 	var st1 []*subtree.Subtree
 	require.Eventually(t, func() bool {
 		var err error
-		mc1, st1, err = ba.blockAssembler.GetMiningCandidate(context.Background())
+		var miningLease *subtreeprocessor.MiningSnapshotLease
+		mc1, st1, miningLease, err = ba.blockAssembler.GetMiningCandidate(context.Background())
+		defer miningLease.Release()
 		if err != nil || mc1 == nil {
 			return false
 		}
@@ -683,7 +687,8 @@ func TestShouldHandleReorg(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Verify transactions are still present after reorg
-	mc2, st2, err := ba.blockAssembler.GetMiningCandidate(context.Background())
+	mc2, st2, miningLease, err := ba.blockAssembler.GetMiningCandidate(context.Background())
+	defer miningLease.Release()
 	require.NoError(t, err)
 	require.NotNil(t, mc2)
 	require.NotEmpty(t, st2)
@@ -913,7 +918,8 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	// Get mining candidate while on Chain A
 	t.Log("Getting mining candidate on Chain A...")
 
-	mc1, subtrees1, err := ba.blockAssembler.GetMiningCandidate(context.Background())
+	mc1, subtrees1, miningLease, err := ba.blockAssembler.GetMiningCandidate(context.Background())
+	defer miningLease.Release()
 	require.NoError(t, err)
 	require.NotNil(t, mc1)
 	require.NotEmpty(t, subtrees1)
@@ -947,7 +953,8 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	require.NoError(t, err, "Timeout waiting for block assembler to adopt Chain B")
 
 	// Verify transactions are still present after reorg
-	mc2, subtrees2, err := ba.blockAssembler.GetMiningCandidate(context.Background())
+	mc2, subtrees2, miningLease, err := ba.blockAssembler.GetMiningCandidate(context.Background())
+	defer miningLease.Release()
 	require.NoError(t, err)
 	require.NotNil(t, mc2)
 	require.NotEmpty(t, subtrees2)
