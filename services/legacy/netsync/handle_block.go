@@ -36,7 +36,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, blockHash chainhash.Hash, msgBlock *wire.MsgBlock) (err error) {
+func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, blockHash chainhash.Hash, msgBlock *wire.MsgBlock, origin blockRequestOrigin) (err error) {
 	sm.logger.Debugf("[HandleBlockDirect][%s] starting handling block", blockHash.String())
 
 	// Make sure we have the correct height for this block before continuing
@@ -123,6 +123,29 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		deferFn(err)
 	}()
 
+	// Reject invalid proof of work before waits or transaction processing.
+	var headerBytes bytes.Buffer
+	if err = block.MsgBlock().Header.Serialize(&headerBytes); err != nil {
+		return errors.NewProcessingError("failed to serialize header", err)
+	}
+
+	// create the Teranode compatible block header
+	header, err := model.NewBlockHeaderFromBytes(headerBytes.Bytes())
+	if err != nil {
+		return errors.NewProcessingError("failed to create block header from bytes", err)
+	}
+
+	if err = header.HasMetPowLimit(sm.chainParams); err != nil {
+		return errors.NewBlockInvalidError("block declares a target easier than the network proof-of-work limit", err)
+	}
+	if valid, _, powErr := header.HasMetTargetDifficulty(); !valid {
+		return errors.NewBlockInvalidError("invalid block header: %s", header.Hash().String(), powErr)
+	}
+
+	if len(block.Transactions()) == 0 {
+		return errors.NewBlockInvalidError("block contains no transactions")
+	}
+
 	// Wait for block assembly to be ready
 	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, sm.logger, sm.blockAssembly, blockHeight, sm.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
 		// block-assembly is still behind, so we cannot process this block
@@ -136,18 +159,6 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		if err = sm.waitForPreviousBlockMined(ctx, &block.MsgBlock().Header.PrevBlock, blockHeight); err != nil {
 			return err
 		}
-	}
-
-	// 3. Create a block message with (block hash, coinbase tx and slice if 1 subtree)
-	var headerBytes bytes.Buffer
-	if err = block.MsgBlock().Header.Serialize(&headerBytes); err != nil {
-		return errors.NewProcessingError("failed to serialize header", err)
-	}
-
-	// create the Teranode compatible block header
-	header, err := model.NewBlockHeaderFromBytes(headerBytes.Bytes())
-	if err != nil {
-		return errors.NewProcessingError("failed to create block header from bytes", err)
 	}
 
 	var coinbase bytes.Buffer
@@ -168,7 +179,8 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 
 	// validate all subtrees and store all subtree data
 	// this also should spend and create all utxos
-	subtrees, blockID, err := sm.prepareSubtrees(ctx, block)
+	commitment := &model.Block{Header: header, CoinbaseTx: coinbaseTx}
+	subtrees, blockID, err := sm.prepareSubtrees(ctx, block, origin, commitment)
 	if err != nil {
 		return err
 	}
@@ -184,12 +196,6 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	teranodeBlock, err := model.NewBlock(header, coinbaseTx, subtrees, uint64(len(block.Transactions())), blockSizeUint64, blockHeight, blockID)
 	if err != nil {
 		return errors.NewProcessingError("failed to create model.NewBlock", err)
-	}
-
-	// pre-check that there is enough proof of work on the block, before we do any other processing
-	headerValid, _, err := teranodeBlock.Header.HasMetTargetDifficulty()
-	if !headerValid {
-		return errors.NewBlockInvalidError("invalid block header: %s", teranodeBlock.Header.Hash().String(), err)
 	}
 
 	// call the process block wrapper, which will add tracing and logging
@@ -292,7 +298,7 @@ type TxMapWrapper struct {
 	ChildLevelInBlock  uint32
 }
 
-func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block) (subtrees []*chainhash.Hash, blockID uint32, err error) {
+func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block, origin blockRequestOrigin, commitment *model.Block) (subtrees []*chainhash.Hash, blockID uint32, err error) {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "prepareSubtrees",
 		tracing.WithLogMessage(
 			sm.logger,
@@ -315,6 +321,9 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 
 	txCount := len(block.Transactions())
 	if txCount <= 1 {
+		if err = commitment.CheckMerkleRoot(ctx); err != nil {
+			return nil, 0, errors.NewBlockInvalidError("block body does not match header", err)
+		}
 		return subtrees, blockID, nil
 	}
 
@@ -374,17 +383,28 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		return nil, 0, err
 	}
 
+	// Authenticate the body before assigning IDs or writing UTXOs/subtree markers.
+	// Merkle padding can hide duplicate transactions, so both checks are required.
+	if err = model.CheckSubtreeSlicesForDuplicateTxs(subtreeSlices); err != nil {
+		return nil, 0, err
+	}
+	for _, slice := range subtreeSlices {
+		subtrees = append(subtrees, slice.RootHash())
+	}
+	commitment.Subtrees = subtrees
+	commitment.SubtreeSlices = subtreeSlices
+	if err = commitment.CheckMerkleRoot(ctx); err != nil {
+		return nil, 0, errors.NewBlockInvalidError("block body does not match header", err)
+	}
+	commitment.SubtreeSlices = nil
+
 	blockHeight32, convErr := safeconversion.Int32ToUint32(block.Height())
 	if convErr != nil {
 		return nil, 0, errors.NewProcessingError("[prepareSubtrees] failed to convert block height", convErr)
 	}
 
-	// Quick validation is safe whenever the block sits at/below the highest hard-coded
-	// checkpoint for the active network. POW (verified upstream by HasMetTargetDifficulty)
-	// plus checkpoint-anchored chain linkage make the block canonical regardless of which
-	// FSM state drove the catch-up. The checkpoint list is owned by go-chaincfg — see PR
-	// #844 for the matching FSM-RUN gate that relies on the same invariant.
-	quickValidationMode := sm.quickValidationAllowed(blockHeight32)
+	// Only checkpoint-proven requests may bypass full script validation.
+	quickValidationMode := sm.quickValidationAllowed(origin, blockHeight32)
 
 	if quickValidationMode {
 		// Fetch block ID upfront so UTXOs carry mined info from creation. This ID is
@@ -434,32 +454,20 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		}
 	}
 
-	for i := 0; i < numSubtrees; i++ {
-		subtrees = append(subtrees, subtreeSlices[i].RootHash())
-	}
-
 	return subtrees, blockID, nil
 }
 
-// quickValidationAllowed reports whether the given block height is covered by a
-// hard-coded checkpoint for the active network. Checkpoint-anchored chain linkage
-// combined with the upstream PoW check makes the block canonical, so we can skip
-// subtree re-validation and the per-UTXO setTxMined cross-check.
-//
-// Returns false when the network defines no checkpoints (regtest) or when the
-// block height is above the highest checkpoint — those blocks must follow the
-// regular validation path.
-func (sm *SyncManager) quickValidationAllowed(blockHeight uint32) bool {
+// quickValidationAllowed requires a positive checkpoint-covered height and a proven header request.
+func (sm *SyncManager) quickValidationAllowed(origin blockRequestOrigin, blockHeight uint32) bool {
 	if sm.chainParams == nil {
 		return false
 	}
 
-	highest := blockchain.HighestCheckpointHeight(sm.chainParams.Checkpoints)
-	if highest == 0 {
+	if !origin.headerProven {
 		return false
 	}
 
-	return blockHeight <= highest
+	return model.BelowCheckpoint(sm.chainParams.Checkpoints, blockHeight)
 }
 
 func (sm *SyncManager) checkSubtreeFromBlock(ctx context.Context, block *bsvutil.Block, subtree *subtreepkg.Subtree) error {
@@ -1154,11 +1162,8 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 					validator.WithInBlock(true),
 					validator.WithSkipTxMetaPublishing(true),
 					validator.WithCreateConflicting(true),
-					// PreValidateTransactions is only reached via the quickValidationMode
-					// path (see prepareSubtrees → ValidateTransactionsLegacyMode), which
-					// runs only when the block height is at or below the highest
-					// hard-coded checkpoint. PoW + checkpoint linkage establish the chain
-					// as canonical, so re-running BDK scripts is pure overhead.
+					// prepareSubtrees permits this skip only for a checkpoint-proven
+					// request whose transaction body matches the header commitment.
 					validator.WithSkipScriptValidation(true),
 					validator.WithCandidateBlockTime(candidateBlockTime),
 					validator.WithCandidateParentMedianTime(candidateParentMedianTime),
@@ -1669,7 +1674,9 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block, tx
 			// bt.Tx and the TxMapWrapper it lands in.
 			hashCopy := *wireTx.Hash()
 			tx.SetTxHash(&hashCopy)
-			txMap.Set(hashCopy, &TxMapWrapper{Tx: tx})
+			if _, inserted := txMap.SetIfNotExists(hashCopy, &TxMapWrapper{Tx: tx}); !inserted {
+				return errors.NewBlockInvalidError("block contains duplicate transaction %s", hashCopy.String())
+			}
 		}
 	}
 

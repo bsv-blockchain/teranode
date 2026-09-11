@@ -154,13 +154,29 @@ type headerNode struct {
 	hash   *chainhash.Hash
 }
 
+// blockRequestOrigin records HOW a block came to be requested. It is the proof
+// that backs every below-checkpoint fast path: the hardcoded checkpoints certify
+// one chain, not a height range, so "this block sits below the highest
+// checkpoint" says nothing about whether it belongs to that chain.
+//
+// The zero value is deliberately untrusted, so a request recorded by a call site
+// that has not thought about provenance fails closed.
+type blockRequestOrigin struct {
+	// headerProven is true when the request came from fetchHeaderBlocks, i.e. from
+	// a header run handleHeadersMsg verified links back to a block we already
+	// trust AND forward to a pinned checkpoint hash. That run is the ancestry
+	// proof. Blocks requested because a peer advertised them (handleInvMsg) carry
+	// no such proof and are never header-proven.
+	headerProven bool
+}
+
 // peerSyncState stores additional information that the SyncManager tracks
 // about a peer.
 type peerSyncState struct {
 	syncCandidate   bool
 	requestQueue    *txmap.SyncedSlice[wire.InvVect]
 	requestedTxns   *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
-	requestedBlocks *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
+	requestedBlocks *expiringmap.ExpiringMap[chainhash.Hash, blockRequestOrigin]
 }
 
 // syncPeerState stores additional info about the sync peer.
@@ -401,7 +417,7 @@ type SyncManager struct {
 	// (except syncPeer/syncPeerState which are protected by syncPeerMu).
 	rejectedTxns    *txmap.SyncedMap[chainhash.Hash, struct{}]
 	requestedTxns   *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
-	requestedBlocks *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
+	requestedBlocks *expiringmap.ExpiringMap[chainhash.Hash, blockRequestOrigin]
 	syncPeerMu      sync.RWMutex // protects syncPeer and syncPeerState
 	syncPeer        *peerpkg.Peer
 	syncPeerState   *syncPeerState
@@ -417,10 +433,15 @@ type SyncManager struct {
 
 	// The following fields are used for headers-first mode.
 	headersFirstMode atomic.Bool // accessed from multiple goroutines, must be atomic
-	headerList       *list.List
-	startHeader      *list.Element
-	nextCheckpoint   *chaincfg.Checkpoint
-	blockSizeTracker *blockSizeTracker // tracks block sizes for dynamic in-flight adjustment
+
+	// headerMu protects the header list, cursor, pending checkpoint and verified
+	// boundary as one state. Never hold it during full block validation.
+	headerMu                 sync.Mutex
+	headerList               *list.List
+	startHeader              *list.Element
+	nextCheckpoint           *chaincfg.Checkpoint
+	verifiedCheckpointHeight int32             // highest checkpoint hash matched by handleHeadersMsg
+	blockSizeTracker         *blockSizeTracker // tracks block sizes for dynamic in-flight adjustment
 
 	// An optional fee estimator.
 	// feeEstimator *mempool.FeeEstimator
@@ -478,9 +499,17 @@ func (sm *SyncManager) storeSyncPeer(peer *peerpkg.Peer, state *syncPeerState) {
 // resetHeaderState sets the headers-first mode state to values appropriate for
 // syncing from a new peer.
 func (sm *SyncManager) resetHeaderState(newestHash *chainhash.Hash, newestHeight int32) {
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
+	sm.resetHeaderStateLocked(newestHash, newestHeight)
+}
+
+// resetHeaderStateLocked requires headerMu.
+func (sm *SyncManager) resetHeaderStateLocked(newestHash *chainhash.Hash, newestHeight int32) {
 	sm.headersFirstMode.Store(false)
 	sm.headerList.Init()
 	sm.startHeader = nil
+	sm.verifiedCheckpointHeight = 0
 
 	// When there is a next checkpoint, add an entry for the latest known
 	// block into the header pool.  This allows the next downloaded header
@@ -677,6 +706,8 @@ func (sm *SyncManager) startSync() {
 	// and fully validate them.  Finally, regression test mode does
 	// not support the headers-first approach so do normal block
 	// downloads when in regression test mode.
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
 	if sm.nextCheckpoint != nil &&
 		bestBlockHeightInt32 < sm.nextCheckpoint.Height &&
 		sm.chainParams != &chaincfg.RegressionNetParams {
@@ -820,8 +851,8 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 	sm.peerStates.Set(peer, &peerSyncState{
 		syncCandidate:   isSyncCandidate,
 		requestQueue:    txmap.NewSyncedSlice[wire.InvVect](maxRequestedBlocks),
-		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second), // allow the node 10 seconds to respond to the tx request
-		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](60 * time.Minute), // allow the node 1 hour to respond to the requested blocks, needed for legacy sync/checkpoints
+		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),           // allow the node 10 seconds to respond to the tx request
+		requestedBlocks: expiringmap.New[chainhash.Hash, blockRequestOrigin](60 * time.Minute), // allow the node 1 hour to respond to the requested blocks, needed for legacy sync/checkpoints
 	})
 
 	// Start syncing by choosing the best candidate if needed.
@@ -982,11 +1013,14 @@ func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
 
 	// Only disconnect if we have a valid sync peer
 	if sp != nil {
+		sm.headerMu.Lock()
 		// Log current sync state before disconnecting
 		if sm.headersFirstMode.Load() {
 			sm.logger.Debugf("Current header sync state - headerList length: %d, startHeader exists: %v",
 				sm.headerList.Len(), sm.startHeader != nil)
 		}
+
+		sm.headerMu.Unlock()
 
 		sp.SetSyncPeer(false)
 		sp.DisconnectWithInfo("updateSyncPeer - disconnect old sync peer")
@@ -1319,7 +1353,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// properly.
 	isCheckpointBlock := false
 
-	if sm.headersFirstMode.Load() {
+	sm.headerMu.Lock()
+	if sm.headersFirstMode.Load() && sm.nextCheckpoint != nil {
 		sm.logger.Debugf("[handleBlockMsg][%s] headers-first mode, checking block", bmsg.blockHash)
 
 		firstNodeEl := sm.headerList.Front()
@@ -1335,6 +1370,14 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			}
 		}
 	}
+
+	sm.headerMu.Unlock()
+
+	// Read the request provenance BEFORE the delete below removes it, and pass it
+	// explicitly to HandleBlockDirect. It is the proof that backs the
+	// below-checkpoint fast paths (see blockRequestOrigin), so it has to outlive
+	// the request bookkeeping.
+	blockOrigin := sm.blockOrigin(state, bmsg.blockHash)
 
 	// Remove block from request maps. Either chain will know about it, and
 	// so we shouldn't have any more instances of trying to fetch it, or we
@@ -1360,7 +1403,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// if not in Legacy Sync mode, we need to potentially download the block,
 	// promote block to the block validation via kafka (p2p -> blockvalidation message),
 	// without calling HandleBlockDirect. Such that it doesn't interfere with the operation of block validation.
-	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.blockHash, bmsg.block); err != nil {
+	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.blockHash, bmsg.block, blockOrigin); err != nil {
 		if errors.Is(err, errors.ErrBlockNotFound) {
 			// We don't have the parent of this block. During legacy sync /
 			// catching blocks this is typically the peer announcing its tip
@@ -1485,13 +1528,19 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		}
 	}
 
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
+	// A peer reset may have changed header state while the block was validated.
+	isCheckpointBlock = isCheckpointBlock && sm.headersFirstMode.Load() &&
+		sm.nextCheckpoint != nil && bmsg.blockHash.IsEqual(sm.nextCheckpoint.Hash)
+
 	// This is headers-first mode, so if the block is not a checkpoint
 	// request more blocks using the header list to maintain the pipeline
 	// at the dynamic max limit (adjusts based on block size).
 	if !isCheckpointBlock {
 		dynamicMax := sm.blockSizeTracker.calculateMaxInFlightBlocks()
 		if sm.startHeader != nil && state.requestedBlocks.Len() < dynamicMax {
-			sm.fetchHeaderBlocks()
+			sm.fetchHeaderBlocksLocked()
 		} else if !sm.current() && state.requestedBlocks.Len() == 0 {
 			sm.logger.Debugf("Not current, and no headers to sync to, fetching more headers")
 
@@ -1542,6 +1591,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// from the block after this one up to the end of the chain (zero hash).
 	sm.headersFirstMode.Store(false)
 	sm.headerList.Init()
+	sm.startHeader = nil
+	sm.verifiedCheckpointHeight = 0
 	sm.logger.Infof("Reached the final checkpoint -- switching to normal mode")
 
 	locator := blockchain.BlockLocator([]*chainhash.Hash{&bmsg.blockHash})
@@ -1552,9 +1603,62 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	return nil
 }
 
+// headerNodeProven reports whether this list entry is committed by a checkpoint
+// hash actually matched by handleHeadersMsg. Linkage alone is not proof.
+//
+// nextCheckpoint is the pending download target: it advances on checkpoint BLOCK
+// delivery, before the next header run is verified. Only verifiedCheckpointHeight
+// bounds the proven prefix, including while an unverified tail is being appended.
+// Resetting header state discards this proof along with the list it certifies.
+func (sm *SyncManager) headerNodeProven(node *headerNode) bool {
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
+	return sm.headerNodeProvenLocked(node)
+}
+
+// headerNodeProvenLocked requires headerMu.
+func (sm *SyncManager) headerNodeProvenLocked(node *headerNode) bool {
+	if node == nil || sm.nextCheckpoint == nil {
+		return false
+	}
+
+	return node.height > 0 && node.height <= sm.verifiedCheckpointHeight
+}
+
+// blockOrigin returns the request provenance for a delivered block.
+//
+// It reads the PER-PEER record, not sm.requestedBlocks: New() builds the global
+// map with a 60-second expiry (it exists for handleInvMsg dedupe) while the
+// per-peer map gets 60 minutes precisely because legacy sync and checkpoints need
+// it, and expiringmap.Get neither refreshes nor tolerates expiry. Reading the
+// global map made any block slower than a minute — the common case on mainnet,
+// with multi-GB blocks queued behind up to dynamicMaxInFlight earlier requests —
+// silently lose its header proof and fall back to full validation.
+//
+// This is also the record the unsolicited-block check consults, so provenance and
+// admission consult the same per-peer map. An inv re-request can replace a proof
+// with the untrusted zero value, which safely restores full validation. An absent
+// entry, map or peer state also yields the untrusted zero value.
+func (sm *SyncManager) blockOrigin(state *peerSyncState, blockHash chainhash.Hash) blockRequestOrigin {
+	if state == nil || state.requestedBlocks == nil {
+		return blockRequestOrigin{}
+	}
+
+	origin, _ := state.requestedBlocks.Get(blockHash)
+
+	return origin
+}
+
 // fetchHeaderBlocks creates and sends a request to the syncPeer for the next
 // list of blocks to be downloaded based on the current list of headers.
 func (sm *SyncManager) fetchHeaderBlocks() {
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
+	sm.fetchHeaderBlocksLocked()
+}
+
+// fetchHeaderBlocksLocked requires headerMu.
+func (sm *SyncManager) fetchHeaderBlocksLocked() {
 	// Nothing to do if there is no sync peer.
 	sp := sm.loadSyncPeer()
 	if sp == nil {
@@ -1619,9 +1723,10 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 				break
 			}
 
-			sm.requestedBlocks.Set(*node.hash, struct{}{})
-			peerState, _ := sm.peerStates.Get(sp)
-			peerState.requestedBlocks.Set(*node.hash, struct{}{})
+			// Reuse the checked peer state even if the peer disconnects during the request.
+			origin := blockRequestOrigin{headerProven: sm.headerNodeProvenLocked(node)}
+			sm.requestedBlocks.Set(*node.hash, origin)
+			peerState.requestedBlocks.Set(*node.hash, origin)
 
 			numRequested++
 		}
@@ -1642,6 +1747,9 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 // handleHeadersMsg handles block header messages from all peers.  Headers are
 // requested when performing a headers-first sync.
 func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
+
 	sm.logger.Debugf("[handleHeadersMsg] received headers message with %d headers from %s", len(hmsg.headers.Headers), hmsg.peer)
 	peer := hmsg.peer
 
@@ -1669,7 +1777,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 	msg := hmsg.headers
 	numHeaders := len(msg.Headers)
 
-	if !sm.headersFirstMode.Load() {
+	if !sm.headersFirstMode.Load() || sm.nextCheckpoint == nil {
 		reason := fmt.Sprintf("Got %d unrequested headers from %s", numHeaders, peer.String())
 		peer.DisconnectWithWarning(reason)
 
@@ -1698,7 +1806,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 			return
 		}
 
-		sm.resetHeaderState(bestBlockHeader.Hash(), bestBlockHeightInt32)
+		sm.resetHeaderStateLocked(bestBlockHeader.Hash(), bestBlockHeightInt32)
 
 		prevNodeEl = sm.headerList.Back()
 		if prevNodeEl == nil {
@@ -1746,6 +1854,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 		// Verify the header at the next checkpoint height matches.
 		if node.height == sm.nextCheckpoint.Height {
 			if node.hash.IsEqual(sm.nextCheckpoint.Hash) {
+				sm.verifiedCheckpointHeight = node.height
 				receivedCheckpoint = true
 
 				sm.logger.Infof("Verified downloaded block "+
@@ -1774,7 +1883,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 		// fetching the blocks.
 		sm.headerList.Remove(sm.headerList.Front())
 		sm.logger.Infof("Received %v block headers: Fetching blocks", sm.headerList.Len())
-		sm.fetchHeaderBlocks()
+		sm.fetchHeaderBlocksLocked()
 
 		return
 	}
@@ -1955,8 +2064,12 @@ outside:
 					break outside
 				}
 
-				sm.requestedBlocks.Set(iv.Hash, struct{}{})
-				state.requestedBlocks.Set(iv.Hash, struct{}{})
+				// Peer-advertised: we are requesting this only because a peer said it
+				// exists. That is no proof of checkpoint ancestry, so the origin stays
+				// at its untrusted zero value and quickValidationAllowed will deny the
+				// below-checkpoint fast path for it.
+				sm.requestedBlocks.Set(iv.Hash, blockRequestOrigin{})
+				state.requestedBlocks.Set(iv.Hash, blockRequestOrigin{})
 
 				numRequested++
 			}
@@ -2412,9 +2525,9 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		// txMemPool:     config.TxMemPool,
 		orphanTxs:       expiringmap.New[chainhash.Hash, *orphanTxAndParents](tSettings.Legacy.OrphanEvictionDuration).WithMaxSize(tSettings.Legacy.MaxOrphanTxs),
 		chainParams:     config.ChainParams,
-		rejectedTxns:    txmap.NewSyncedMap[chainhash.Hash, struct{}](maxRejectedTxns), // limit map size to maxRejectedTxns
-		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),   // give peers 10 seconds to respond
-		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](60 * time.Second),   // give peers 60 seconds to respond
+		rejectedTxns:    txmap.NewSyncedMap[chainhash.Hash, struct{}](maxRejectedTxns),         // limit map size to maxRejectedTxns
+		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),           // give peers 10 seconds to respond
+		requestedBlocks: expiringmap.New[chainhash.Hash, blockRequestOrigin](60 * time.Second), // give peers 60 seconds to respond
 		peerStates:      txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
 		// progressLogger:  newBlockProgressLogger("Processed", log),
 		msgChan:          make(chan interface{}, maxMsgQueueSize),

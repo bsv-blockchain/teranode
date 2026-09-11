@@ -963,22 +963,22 @@ func TestHandleBlockMsg_OrphanDuringCatchup(t *testing.T) {
 
 	state := &peerSyncState{
 		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),
-		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](time.Minute),
+		requestedBlocks: expiringmap.New[chainhash.Hash, blockRequestOrigin](time.Minute),
 	}
 	defer state.requestedTxns.Stop()
 	defer state.requestedBlocks.Stop()
-	state.requestedBlocks.Set(blockHash, struct{}{})
+	state.requestedBlocks.Set(blockHash, blockRequestOrigin{})
 
 	sm := &SyncManager{
 		ctx:              context.Background(),
 		logger:           ulogger.TestLogger{},
 		blockchainClient: blockchainClient,
 		peerStates:       txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
-		requestedBlocks:  expiringmap.New[chainhash.Hash, struct{}](time.Minute),
+		requestedBlocks:  expiringmap.New[chainhash.Hash, blockRequestOrigin](time.Minute),
 	}
 	defer sm.requestedBlocks.Stop()
 	sm.peerStates.Set(p, state)
-	sm.requestedBlocks.Set(blockHash, struct{}{})
+	sm.requestedBlocks.Set(blockHash, blockRequestOrigin{})
 
 	err := sm.handleBlockMsg(&blockQueueMsg{
 		block:       msgBlock,
