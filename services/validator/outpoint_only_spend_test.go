@@ -290,6 +290,67 @@ func TestValidate_OutpointOnlySpend_RequiresSkipScriptValidation(t *testing.T) {
 	require.Contains(t, err.Error(), "OutpointOnlySpend requires SkipScriptValidation")
 }
 
+// TestValidate_SkipScriptValidation_RequiresSkipPolicyChecks verifies the
+// PR-review P1-12 guard: SkipScriptValidation returns before the per-script fee
+// tiers run, so requesting it without SkipPolicyChecks (a combination only an
+// external caller could craft, since the one internal caller pairs them) is
+// rejected as a misconfiguration before any store access.
+func TestValidate_SkipScriptValidation_RequiresSkipPolicyChecks(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///skipscript_requires_skippolicy")
+	require.NoError(t, err)
+
+	store, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+	require.NoError(t, store.SetBlockHeight(500))
+	require.NoError(t, store.SetMedianBlockTime(1700000000))
+
+	childTx := bt.NewTx()
+	coinbaseScript, err := bscript.NewP2PKHFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
+	require.NoError(t, err)
+	childInput := &bt.Input{
+		PreviousTxOutIndex: 0,
+		SequenceNumber:     0xfffffffe,
+		UnlockingScript:    bscript.NewFromBytes([]byte{0x00}),
+	}
+	zeroHash := new(chainhash.Hash)
+	require.NoError(t, childInput.PreviousTxIDAdd(zeroHash))
+	childTx.Inputs = append(childTx.Inputs, childInput)
+	childTx.Outputs = append(childTx.Outputs, &bt.Output{Satoshis: 400, LockingScript: coinbaseScript})
+
+	v := &Validator{
+		logger:      logger,
+		utxoStore:   store,
+		settings:    tSettings,
+		txValidator: NewTxValidator(logger, tSettings),
+		stats:       gocore.NewStat("validator"),
+	}
+
+	// SkipScriptValidation=true with SkipPolicyChecks left false: the bypass shape.
+	opts := &Options{
+		SkipUtxoCreation:     true,
+		SkipScriptValidation: true,
+		// SkipPolicyChecks intentionally omitted (false)
+	}
+
+	_, err = v.ValidateWithOptions(ctx, childTx, 500, opts)
+	require.Error(t, err, "SkipScriptValidation without SkipPolicyChecks must return an error")
+	require.Contains(t, err.Error(), "SkipScriptValidation requires SkipPolicyChecks")
+
+	// Correctly paired, the guard does not fire (it fails later for other reasons,
+	// but never with this misconfiguration message).
+	opts.SkipPolicyChecks = true
+	_, err = v.ValidateWithOptions(ctx, childTx, 500, opts)
+	if err != nil {
+		require.NotContains(t, err.Error(), "SkipScriptValidation requires SkipPolicyChecks")
+	}
+}
+
 // TestValidate_OutpointOnlySpend_RejectedAboveCheckpoint verifies the validator's
 // defence-in-depth height guard: even a correctly-paired OutpointOnlySpend +
 // SkipScriptValidation request must be rejected when the block height is above the
