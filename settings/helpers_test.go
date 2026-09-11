@@ -273,3 +273,58 @@ func TestPreviousBlockHeaderCountFloor(t *testing.T) {
 
 	require.GreaterOrEqual(t, NewSettings().BlockValidation.PreviousBlockHeaderCount, uint64(11))
 }
+
+// TestGetPostgresPoolSettings_CircuitBreaker pins the per-service override
+// path for the five circuit breaker keys (<prefix>_postgres_circuitBreaker*).
+// Before this was wired, getPostgresPoolSettings never read these keys, so a
+// service-specific override silently fell back to whatever the global
+// Postgres settings produced.
+func TestGetPostgresPoolSettings_CircuitBreaker(t *testing.T) {
+	t.Run("per-service circuit breaker keys populate the returned settings", func(t *testing.T) {
+		gocore.Config().Set("myservice_postgres_circuitBreakerEnabled", "true")
+		gocore.Config().Set("myservice_postgres_circuitBreakerFailureThreshold", "9")
+		gocore.Config().Set("myservice_postgres_circuitBreakerHalfOpenMax", "6")
+		gocore.Config().Set("myservice_postgres_circuitBreakerCooldown", "15s")
+		gocore.Config().Set("myservice_postgres_circuitBreakerFailureWindow", "5s")
+
+		defer func() {
+			gocore.Config().Unset("myservice_postgres_circuitBreakerEnabled")
+			gocore.Config().Unset("myservice_postgres_circuitBreakerFailureThreshold")
+			gocore.Config().Unset("myservice_postgres_circuitBreakerHalfOpenMax")
+			gocore.Config().Unset("myservice_postgres_circuitBreakerCooldown")
+			gocore.Config().Unset("myservice_postgres_circuitBreakerFailureWindow")
+		}()
+
+		poolSettings := getPostgresPoolSettings("myservice")
+		require.NotNil(t, poolSettings)
+		require.NotNil(t, poolSettings.CircuitBreakerEnabled)
+		require.True(t, *poolSettings.CircuitBreakerEnabled)
+		require.Equal(t, 9, poolSettings.CircuitBreakerFailureThreshold)
+		require.Equal(t, 6, poolSettings.CircuitBreakerHalfOpenMax)
+		require.Equal(t, 15*time.Second, poolSettings.CircuitBreakerCooldown)
+		require.Equal(t, 5*time.Second, poolSettings.CircuitBreakerFailureWindow)
+	})
+
+	t.Run("a single circuit breaker key alone counts as configured", func(t *testing.T) {
+		gocore.Config().Set("otherservice_postgres_circuitBreakerFailureThreshold", "9")
+		defer gocore.Config().Unset("otherservice_postgres_circuitBreakerFailureThreshold")
+
+		poolSettings := getPostgresPoolSettings("otherservice")
+		require.NotNil(t, poolSettings, "setting only a circuit breaker key must not be treated as unconfigured")
+		require.Equal(t, 9, poolSettings.CircuitBreakerFailureThreshold)
+	})
+
+	t.Run("nothing configured for the prefix returns nil", func(t *testing.T) {
+		require.Nil(t, getPostgresPoolSettings("unconfiguredservice"))
+	})
+
+	t.Run("explicit false is distinguishable from absent", func(t *testing.T) {
+		gocore.Config().Set("falseservice_postgres_circuitBreakerEnabled", "false")
+		defer gocore.Config().Unset("falseservice_postgres_circuitBreakerEnabled")
+
+		poolSettings := getPostgresPoolSettings("falseservice")
+		require.NotNil(t, poolSettings, "an explicit false key must count as configured, not as absent")
+		require.NotNil(t, poolSettings.CircuitBreakerEnabled)
+		require.False(t, *poolSettings.CircuitBreakerEnabled)
+	})
+}
