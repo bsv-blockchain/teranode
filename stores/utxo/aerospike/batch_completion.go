@@ -1,6 +1,7 @@
 package aerospike
 
 import (
+	"context"
 	"runtime/debug"
 	"time"
 
@@ -52,6 +53,14 @@ func signalBatchPanic[T any](recovered any, batch []T, fnName string, logger ulo
 	}
 
 	return true
+}
+
+// isContextWaitErr reports whether a completion.Group.Wait error came from the context arm
+// rather than the timer arm. Classification is by the error Wait RETURNED; the helper
+// deliberately takes no context, so it cannot re-derive the verdict from a context that may
+// have been cancelled after Wait returned. See the policy note in Spend/IncrementSpentRecords.
+func isContextWaitErr(waitErr error) bool {
+	return errors.Is(waitErr, context.Canceled) || errors.Is(waitErr, context.DeadlineExceeded)
 }
 
 // batcherWaitTimeout bounds how long a submitter waits for a batcher to deliver

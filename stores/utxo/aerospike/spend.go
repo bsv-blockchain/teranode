@@ -409,7 +409,13 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	// channel-send and collector-select overhead to a single operation for the
 	// whole tx. Circuit-breaker fast-failed items complete inline (decrementing
 	// the group) and are excluded from the enqueued set.
-	toEnqueue := make([]*batchSpend, 0, len(spends))
+	//
+	// toEnqueue aliases items on the common path (no breaker, or breaker closed):
+	// PutBatchCtx snapshots the slice itself, so a second copy costs one N-pointer
+	// allocation per tx and buys nothing. It splits into its own filtered slice
+	// only once the breaker fast-fails an input.
+	toEnqueue := items
+	filtered := false
 
 	for idx, spend := range spends {
 		if spend == nil {
@@ -427,11 +433,23 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 
 		// Fast-fail check: if circuit breaker is already open, reject immediately.
 		if s.spendCircuitBreaker != nil && !s.spendCircuitBreaker.Allow() {
+			// First rejection: every earlier item was accepted, so items[:idx] is
+			// exactly the accepted prefix. Tracked with a bool rather than a nil
+			// test on toEnqueue, because make([]T, 0, n) is non-nil and a nil test
+			// would misbehave when the FIRST input is rejected.
+			if !filtered {
+				filtered = true
+				toEnqueue = append(make([]*batchSpend, 0, len(spends)), items[:idx]...)
+			}
+
 			item.complete(errors.NewServiceUnavailableError("[SPEND] circuit breaker open, rejecting request"))
+
 			continue
 		}
 
-		toEnqueue = append(toEnqueue, item)
+		if filtered {
+			toEnqueue = append(toEnqueue, item)
+		}
 	}
 
 	// PutBatchCtx is a no-op on an empty slice (e.g. every input fast-failed).
@@ -1135,6 +1153,14 @@ func (s *Store) SetDAHForChildRecords(txID *chainhash.Hash, childCount int, dah 
 	// positive value still bounds the wait so a wedged batcher cannot pin the
 	// caller forever.
 	if waitErr := group.Wait(s.ctx, s.batcherWait); waitErr != nil {
+		// Wait returned a context error, so classify as cancellation regardless of
+		// elapsed time. Reporting a store-context cancel as an elapsed timeout is
+		// false on both counts and puts a ServiceUnavailable — what retry layers
+		// key on — in front of an orderly shutdown.
+		if isContextWaitErr(waitErr) {
+			return errors.NewContextCanceledError("[setDAHForChildRecords][%s] store context cancelled while waiting for child records: %s", txID.String(), waitErr)
+		}
+
 		return errors.NewServiceUnavailableError("[setDAHForChildRecords][%s] set DAH for child records did not complete within %s: %s", txID.String(), s.batcherWait, waitErr)
 	}
 
@@ -1353,6 +1379,15 @@ func (s *Store) IncrementSpentRecords(txid *chainhash.Hash, increment int, block
 	// is still drained on Close (setDAH/increment drain after spend), so an early
 	// s.ctx cancel does not drop the write.
 	if waitErr := group.Wait(s.ctx, spendTimeout); waitErr != nil {
+		// Wait returned a context error, so classify as cancellation regardless of
+		// elapsed time, and do not bump BatchTimeout. The verdict is never
+		// re-derived from s.ctx.Err() after the fact: both arms of Wait's select
+		// can be ready at once, and a post-return recheck would relabel a real
+		// timeout as a cancellation whenever a shutdown happens to overlap.
+		if isContextWaitErr(waitErr) {
+			return nil, errors.NewContextCanceledError("[IncrementSpentRecords][%s] store context cancelled while waiting for batch response: %s", txid.String(), waitErr)
+		}
+
 		if prometheusUtxoMapErrors != nil {
 			prometheusUtxoMapErrors.WithLabelValues("IncrementSpentRecords", "BatchTimeout").Inc()
 		}
