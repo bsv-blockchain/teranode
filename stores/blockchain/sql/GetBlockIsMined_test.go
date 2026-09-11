@@ -123,3 +123,59 @@ func TestGetBlockIsMined(t *testing.T) {
 		})
 	}
 }
+
+// A negative answer must not be served from the response cache once the
+// mined_set column has changed underneath it.
+func TestGetBlockIsMined_NegativeAnswerIsNotCached(t *testing.T) {
+	logger := ulogger.TestLogger{}
+	dbURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	store, err := New(logger, dbURL, settings.NewSettings())
+	require.NoError(t, err)
+	defer store.Close(context.Background())
+
+	genesisBlock, err := store.GetBlockByID(context.Background(), 0)
+	require.NoError(t, err)
+
+	hashMerkleRoot, err := chainhash.NewHashFromStr("d1de05a65845a49ad63eed887c4cf7cc824e02b5d10de82829f740b748b9737f")
+	require.NoError(t, err)
+
+	bits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	coinbaseTx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030100002f6d312d65752fb670097da68d1b768d8b21f6ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+	require.NoError(t, err)
+
+	subtree, err := chainhash.NewHashFromStr("0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098")
+	require.NoError(t, err)
+
+	testBlock := &model.Block{
+		Header: &model.BlockHeader{
+			Version:        1,
+			Timestamp:      1729259727,
+			Nonce:          0,
+			HashPrevBlock:  genesisBlock.Hash(),
+			HashMerkleRoot: hashMerkleRoot,
+			Bits:           *bits,
+		},
+		Height:           1,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{subtree},
+	}
+
+	_, _, err = store.StoreBlock(context.Background(), testBlock, "test", options.WithMinedSet(false))
+	require.NoError(t, err)
+
+	isMined, err := store.GetBlockIsMined(context.Background(), testBlock.Hash())
+	require.NoError(t, err)
+	require.False(t, isMined)
+
+	_, err = store.db.ExecContext(context.Background(), "UPDATE blocks SET mined_set = true WHERE hash = $1", testBlock.Hash().CloneBytes())
+	require.NoError(t, err)
+
+	isMined, err = store.GetBlockIsMined(context.Background(), testBlock.Hash())
+	require.NoError(t, err)
+	require.True(t, isMined, "a stale negative answer was served from the response cache")
+}
