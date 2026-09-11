@@ -2,7 +2,6 @@ package aerospike
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -157,6 +156,14 @@ func TestSetDAHForChildRecords_GenuineTimeoutStillReportsTimeout(t *testing.T) {
 // The two-branch test is exhaustive because Wait returns only those two
 // classes, so "not a ctx error" IS the timeout.
 func TestIsContextWaitErr_ClassifiesByReturnedError(t *testing.T) {
+	// The timer-arm error comes from completion.Group itself rather than a
+	// hand-rolled imitation, so this fixture cannot drift from what Wait
+	// actually returns. The group has one outstanding item that nothing
+	// completes and a background context, so only the timer arm can fire.
+	timerArmErr := completion.NewGroup(1).Wait(context.Background(), time.Nanosecond)
+	require.Error(t, timerArmErr)
+	require.True(t, errors.Is(timerArmErr, completion.ErrWaitTimeout))
+
 	tests := []struct {
 		name    string
 		waitErr error
@@ -164,11 +171,7 @@ func TestIsContextWaitErr_ClassifiesByReturnedError(t *testing.T) {
 	}{
 		{name: "context canceled", waitErr: context.Canceled, expect: true},
 		{name: "context deadline exceeded", waitErr: context.DeadlineExceeded, expect: true},
-		{
-			name:    "timer arm",
-			waitErr: fmt.Errorf("%w after %s", completion.ErrWaitTimeout, 30*time.Second),
-			expect:  false,
-		},
+		{name: "timer arm", waitErr: timerArmErr, expect: false},
 		{name: "unrelated error", waitErr: errors.NewStorageError("aerospike record unreadable"), expect: false},
 	}
 
