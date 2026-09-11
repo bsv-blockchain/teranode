@@ -396,6 +396,9 @@ type SyncManager struct {
 	peerNotifier PeerNotifier
 	started      int32
 	shutdown     int32
+	stopOnce     sync.Once
+	handlerMu    sync.Mutex // serializes handler admission and Start with shutdown
+	handlers     sync.WaitGroup
 	orphanTxs    *expiringmap.ExpiringMap[chainhash.Hash, *orphanTxAndParents]
 	chainParams  *chaincfg.Params
 	msgChan      chan interface{}
@@ -1054,6 +1057,11 @@ func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
 
 // handleTxMsg handles transaction messages from all peers.
 func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
+	if !sm.beginHandler() {
+		return
+	}
+	defer sm.handlers.Done()
+
 	ctx, _, _ := tracing.Tracer("SyncManager").Start(sm.ctx, "handleTxMsg",
 		tracing.WithHistogram(prometheusLegacyNetsyncHandleTxMsg),
 		tracing.WithDebugLogMessage(sm.logger, "handling transaction message for %s from %s", tmsg.tx.Hash(), tmsg.peer),
@@ -1747,6 +1755,11 @@ func (sm *SyncManager) fetchHeaderBlocksLocked() {
 // handleHeadersMsg handles block header messages from all peers.  Headers are
 // requested when performing a headers-first sync.
 func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
+	if !sm.beginHandler() {
+		return
+	}
+	defer sm.handlers.Done()
+
 	sm.headerMu.Lock()
 	defer sm.headerMu.Unlock()
 
@@ -1939,6 +1952,11 @@ func (sm *SyncManager) haveInventory(invVect *wire.InvVect) (bool, error) {
 // handleInvMsg handles inv messages from all peers.
 // We examine the inventory advertised by the remote peer and act accordingly.
 func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
+	if !sm.beginHandler() {
+		return
+	}
+	defer sm.handlers.Done()
+
 	sm.logger.Debugf("[handleInvMsg] received inv message with %d inv vectors from %s", len(imsg.inv.InvList), imsg.peer)
 	peer := imsg.peer
 
@@ -2195,8 +2213,11 @@ func (sm *SyncManager) blockHandler() {
 	// create a block queue to handle block messages in a separate goroutine, in order
 	blockQueue := make(chan *blockQueueMsg, maxBlockQueue)
 
-	// start the block queue handler
+	// Join the sequential worker before signalling that the block handler is done.
+	var blockWorker sync.WaitGroup
+	blockWorker.Add(1)
 	go func() {
+		defer blockWorker.Done()
 		for {
 			select {
 			case <-sm.quit:
@@ -2209,7 +2230,10 @@ func (sm *SyncManager) blockHandler() {
 				sm.blockBacklog.Add(-1)
 
 				if msg.reply != nil {
-					msg.reply <- err
+					select {
+					case msg.reply <- err:
+					case <-sm.quit:
+					}
 				}
 			}
 		}
@@ -2244,7 +2268,10 @@ out:
 			case *newPeerMsg:
 				sm.handleNewPeerMsg(msg.peer)
 				if msg.reply != nil {
-					msg.reply <- struct{}{}
+					select {
+					case msg.reply <- struct{}{}:
+					case <-sm.quit:
+					}
 				}
 
 			case *txMsg:
@@ -2252,7 +2279,10 @@ out:
 					// process tx messages in parallel
 					sm.handleTxMsg(msg)
 					if msg.reply != nil {
-						msg.reply <- struct{}{}
+						select {
+						case msg.reply <- struct{}{}:
+						case <-sm.quit:
+						}
 					}
 				}(msg)
 
@@ -2261,12 +2291,17 @@ out:
 
 				sm.blockBacklog.Add(1)
 
-				blockQueue <- &blockQueueMsg{
+				select {
+				case blockQueue <- &blockQueueMsg{
 					block:       msg.block.MsgBlock(),
 					blockHash:   *msg.block.Hash(),
 					blockHeight: msg.block.Height(),
 					peer:        msg.peer,
 					reply:       msg.reply,
+				}:
+				case <-sm.quit:
+					sm.blockBacklog.Add(-1)
+					break out
 				}
 
 			case *invMsg:
@@ -2278,7 +2313,10 @@ out:
 			case *donePeerMsg:
 				sm.handleDonePeerMsg(msg.peer)
 				if msg.reply != nil {
-					msg.reply <- struct{}{}
+					select {
+					case msg.reply <- struct{}{}:
+					case <-sm.quit:
+					}
 				}
 
 			case getSyncPeerMsg:
@@ -2287,15 +2325,25 @@ out:
 				if sp := sm.loadSyncPeer(); sp != nil {
 					peerID = sp.ID()
 				}
-				msg.reply <- peerID
+				select {
+				case msg.reply <- peerID:
+				case <-sm.quit:
+				}
 
 			case isCurrentMsg:
 				sm.logger.Warnf("isCurrentMsg is deprecated, use current() instead")
-				msg.reply <- sm.current()
+				select {
+				case msg.reply <- sm.current():
+				case <-sm.quit:
+				}
 
 			case pauseMsg:
 				// Wait until the sender unpauses the manager.
-				<-msg.unpause
+				select {
+				case <-msg.unpause:
+				case <-sm.quit:
+					break out
+				}
 
 			default:
 				sm.logger.Warnf("Invalid message type in block handler: %T", msg)
@@ -2306,6 +2354,7 @@ out:
 		}
 	}
 
+	blockWorker.Wait()
 	close(sm.handlerDone)
 	sm.logger.Infof("Block handler done")
 }
@@ -2453,35 +2502,49 @@ func (sm *SyncManager) DonePeer(peer *peerpkg.Peer, done chan struct{}) {
 	sm.msgChan <- &donePeerMsg{peer: peer, reply: done}
 }
 
+// beginHandler admits work before shutdown and lets Stop wait for it. Holding
+// handlerMu across Add prevents a late Kafka callback from racing Wait.
+func (sm *SyncManager) beginHandler() bool {
+	sm.handlerMu.Lock()
+	defer sm.handlerMu.Unlock()
+	if atomic.LoadInt32(&sm.shutdown) != 0 {
+		return false
+	}
+	sm.handlers.Add(1)
+	return true
+}
+
 // Start begins the core block handler which processes block and inv messages.
 func (sm *SyncManager) Start() {
-	// Already started?
-	if atomic.AddInt32(&sm.started, 1) != 1 {
+	sm.handlerMu.Lock()
+	defer sm.handlerMu.Unlock()
+	if atomic.LoadInt32(&sm.shutdown) != 0 || !atomic.CompareAndSwapInt32(&sm.started, 0, 1) {
 		return
 	}
-
 	sm.logger.Infof("Starting sync manager")
-
 	go sm.blockHandler()
 }
 
-// Stop gracefully shuts down the sync manager by stopping all asynchronous
-// handlers and waiting for them to finish.
+// Stop prevents new message processing and waits for active handlers to
+// finish. Every caller waits for completion.
 func (sm *SyncManager) Stop() error {
-	if atomic.AddInt32(&sm.shutdown, 1) != 1 {
-		sm.logger.Warnf("Sync manager is already in the process of " +
-			"shutting down")
-		return nil
-	}
+	sm.stopOnce.Do(func() {
+		sm.handlerMu.Lock()
+		atomic.StoreInt32(&sm.shutdown, 1)
+		close(sm.quit)
+		started := atomic.LoadInt32(&sm.started) != 0
+		sm.handlerMu.Unlock()
 
-	sm.logger.Infof("Sync manager shutting down")
-	close(sm.quit)
-	<-sm.handlerDone
+		sm.logger.Infof("Sync manager shutting down")
+		if started {
+			<-sm.handlerDone
+		}
+		sm.handlers.Wait()
 
-	sm.orphanTxs.Stop()
-	sm.requestedTxns.Stop()
-	sm.requestedBlocks.Stop()
-
+		sm.orphanTxs.Stop()
+		sm.requestedTxns.Stop()
+		sm.requestedBlocks.Stop()
+	})
 	return nil
 }
 
@@ -2564,6 +2627,11 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// set an eviction function for orphan transactions
 	// this will be called when an orphan transaction is evicted from the map
 	sm.orphanTxs.WithEvictionFunction(func(txHash chainhash.Hash, orphanTx *orphanTxAndParents) bool {
+		if !sm.beginHandler() {
+			return true
+		}
+		defer sm.handlers.Done()
+
 		// try to process one last time
 		// passing in block height 0, which will default to utxo store block height in validator
 		if _, err := sm.validationClient.Validate(sm.ctx, orphanTx.tx, 0); err != nil {
