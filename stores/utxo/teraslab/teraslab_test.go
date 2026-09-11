@@ -1,0 +1,136 @@
+//go:build teraslab
+
+package teraslab_test
+
+import (
+	"context"
+	"testing"
+
+	"github.com/bsv-blockchain/teranode/stores/utxo"
+	teraslabstore "github.com/bsv-blockchain/teranode/stores/utxo/teraslab"
+	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
+	"github.com/stretchr/testify/require"
+)
+
+// Ensure Store implements the utxo.Store interface.
+var _ utxo.Store = (*teraslabstore.Store)(nil)
+
+func TestStore(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.Store(t, store)
+}
+
+func TestSpend(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.Spend(t, store)
+}
+
+func TestRestore(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.Restore(t, store)
+}
+
+func TestFreeze(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.Freeze(t, store)
+}
+
+func TestReAssign(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.ReAssign(t, store)
+}
+
+func TestSetMined(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.SetMined(t, store)
+}
+
+func TestConflicting(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.Conflicting(t, store)
+}
+
+func TestSanity(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.Sanity(t, store)
+}
+
+func TestGetSpendNotFound(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.GetSpendNotFound(t, store)
+}
+
+func TestSpendErrorTypes(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.SpendErrorTypes(t, store)
+}
+
+func TestSetBlockHeightZero(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.SetBlockHeightZero(t, store)
+}
+
+func TestSetLockedBehavior(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.SetLockedBehavior(t, store)
+}
+
+func TestSetConflictingBehavior(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.SetConflictingBehavior(t, store)
+}
+
+func TestSetMinedUnminedSince(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.SetMinedUnminedSince(t, store)
+}
+
+func TestSpendIdempotent(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.SpendIdempotent(t, store)
+}
+
+func TestSetMinedWithSpent(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.SetMinedWithSpent(t, store)
+}
+
+func TestMinedThenSpendAllPrunes(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+
+	prunerSvc, err := store.GetPrunerService()
+	require.NoError(t, err)
+	require.NotNil(t, prunerSvc, "teraslab store must provide a pruner service")
+	prunerSvc.Start(context.Background())
+
+	tests.MinedThenSpendAllPrunes(t, store, prunerSvc)
+}
+
+func TestConflictWAL(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.ConflictWAL(t, store)
+}
+
+func TestConflictWALCrashRecovery(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.ConflictWALCrashRecovery(t, store)
+}
