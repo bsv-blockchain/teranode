@@ -139,7 +139,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		return errors.NewBlockInvalidError("block declares a target easier than the network proof-of-work limit", err)
 	}
 	if valid, _, powErr := header.HasMetTargetDifficulty(); !valid {
-		return errors.NewBlockInvalidError("invalid block header: %s", header.Hash().String(), powErr)
+		return errors.NewBlockInvalidError("invalid block header: %s: %v", header.Hash().String(), powErr.Error(), powErr)
 	}
 
 	if len(block.Transactions()) == 0 {

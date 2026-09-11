@@ -118,6 +118,8 @@ func TestHandleBlockDirect_RejectsPoWBeforeAssemblyWait(t *testing.T) {
 			require.ErrorContains(t, err, "block declares a target easier than the network proof-of-work limit")
 		} else {
 			require.ErrorContains(t, err, "invalid block header")
+			require.ErrorContains(t, err, "block header does not meet target")
+			require.NotContains(t, err.Error(), "%!")
 		}
 	}
 }

@@ -628,9 +628,19 @@ func (u *Server) buildHeaderCache(catchupCtx *CatchupContext) error {
 
 	// Verify first header connects to common ancestor
 	if len(catchupCtx.blockHeaders) > 0 {
+		if catchupCtx.commonAncestorHash == nil || catchupCtx.blockHeaders[0] == nil {
+			return errors.NewBlockInvalidError("[catchup] missing common ancestor or first header")
+		}
 		firstHeaderParent := catchupCtx.blockHeaders[0].HashPrevBlock
 		if !firstHeaderParent.IsEqual(catchupCtx.commonAncestorHash) {
-			u.logger.Warnf("[catchup][%s] first header parent %s doesn't match common ancestor %s", catchupCtx.blockUpTo.Hash().String(), firstHeaderParent.String(), catchupCtx.commonAncestorHash.String())
+			return errors.NewBlockInvalidError("[catchup][%s] first header parent %s doesn't match common ancestor %s", catchupCtx.blockUpTo.Hash().String(), firstHeaderParent.String(), catchupCtx.commonAncestorHash.String())
+		}
+	}
+
+	// Check every link before positional heights can authorize validation skips.
+	for i := 1; i < len(catchupCtx.blockHeaders); i++ {
+		if catchupCtx.blockHeaders[i] == nil || !catchupCtx.blockHeaders[i].HashPrevBlock.IsEqual(catchupCtx.blockHeaders[i-1].Hash()) {
+			return errors.NewBlockInvalidError("[catchup] disconnected header at index %d", i)
 		}
 	}
 
@@ -659,11 +669,7 @@ func (u *Server) buildHeaderCache(catchupCtx *CatchupContext) error {
 //   - error: If checkpoint verification fails
 func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) error {
 	catchupCtx.useQuickValidation = false
-
-	// Quick validation disabled, no need to verify checkpoints
-	if !u.settings.BlockValidation.CatchupAllowQuickValidation {
-		return nil
-	}
+	catchupCtx.highestCheckpointHeight = 0
 
 	// Get checkpoints from catchup context
 	if len(catchupCtx.checkpoints) == 0 {
@@ -691,7 +697,7 @@ func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) erro
 
 	if checkpointsChecked > 0 {
 		u.logger.Infof("[catchup][%s] Successfully verified %d checkpoint(s) in header chain", catchupCtx.blockUpTo.Hash().String(), checkpointsChecked)
-		catchupCtx.useQuickValidation = true // enabled: BlockAssembly sync check added in tryQuickValidation
+		catchupCtx.useQuickValidation = u.settings.BlockValidation.CatchupAllowQuickValidation
 	}
 
 	return nil
@@ -707,9 +713,20 @@ func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) erro
 //   - int: Number of checkpoints successfully verified
 //   - error: If checkpoint verification fails (hash mismatch)
 func (u *Server) verifyCheckpointsAgainstHeaders(catchupCtx *CatchupContext) (int, error) {
-	// Get the highest checkpoint height for reference
-	highestCheckpointHeight := blockchain.HighestCheckpointHeight(catchupCtx.checkpoints)
-	catchupCtx.highestCheckpointHeight = highestCheckpointHeight
+	catchupCtx.highestCheckpointHeight = 0
+	if catchupCtx.commonAncestorMeta == nil || catchupCtx.commonAncestorHash == nil {
+		return 0, errors.NewBlockInvalidError("[catchup] missing common ancestor")
+	}
+	if uint64(catchupCtx.commonAncestorMeta.Height)+uint64(len(catchupCtx.blockHeaders)) > uint64(^uint32(0)) {
+		return 0, errors.NewBlockInvalidError("[catchup] header heights overflow uint32")
+	}
+	previousHash := catchupCtx.commonAncestorHash
+	for i, header := range catchupCtx.blockHeaders {
+		if header == nil || !header.HashPrevBlock.IsEqual(previousHash) {
+			return 0, errors.NewBlockInvalidError("[catchup] header at index %d does not connect to common ancestor", i)
+		}
+		previousHash = header.Hash()
+	}
 
 	firstBlockHeight := catchupCtx.commonAncestorMeta.Height + 1
 	lastBlockHeight := catchupCtx.commonAncestorMeta.Height + uint32(len(catchupCtx.blockHeaders))
@@ -717,6 +734,7 @@ func (u *Server) verifyCheckpointsAgainstHeaders(catchupCtx *CatchupContext) (in
 	u.logger.Debugf("[catchup][%s] Verifying checkpoints in height range %d-%d (common ancestor at %d)", catchupCtx.blockUpTo.Hash().String(), firstBlockHeight, lastBlockHeight, catchupCtx.commonAncestorMeta.Height)
 
 	checkpointsChecked := 0
+	var verifiedHeight uint32
 	for _, checkpoint := range catchupCtx.checkpoints {
 		checkpointHeight := uint32(checkpoint.Height)
 
@@ -742,9 +760,13 @@ func (u *Server) verifyCheckpointsAgainstHeaders(catchupCtx *CatchupContext) (in
 
 			u.logger.Infof("[catchup][%s] Verified checkpoint at height %d with hash %s", catchupCtx.blockUpTo.Hash().String(), checkpointHeight, checkpoint.Hash.String())
 			checkpointsChecked++
+			if checkpointHeight > verifiedHeight {
+				verifiedHeight = checkpointHeight
+			}
 		}
 	}
 
+	catchupCtx.highestCheckpointHeight = verifiedHeight
 	return checkpointsChecked, nil
 }
 
@@ -765,6 +787,10 @@ func (u *Server) verifyChainContinuity(ctx context.Context, catchupCtx *CatchupC
 	}
 
 	firstBlock := catchupCtx.blockHeaders[0]
+
+	if catchupCtx.commonAncestorHash == nil || !firstBlock.HashPrevBlock.IsEqual(catchupCtx.commonAncestorHash) {
+		return errors.NewBlockInvalidError("[catchup] first header does not connect to common ancestor")
+	}
 
 	// Verify parent exists (should be common ancestor)
 	parentExists, err := u.blockValidation.GetBlockExists(ctx, firstBlock.HashPrevBlock)
@@ -1060,6 +1086,7 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 				// Create validation options with cached headers
 				opts := &ValidateBlockOptions{
 					CachedHeaders:           cachedHeaders,
+					checkpointProven:        catchupCtx.blockCheckpointProven(block),
 					IsCatchupMode:           true,
 					DisableOptimisticMining: true,
 					PeerID:                  peerID,
@@ -1114,7 +1141,7 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, catchupCtx *CatchupContext, peerID, baseURL string, writeJobsChan chan<- *SubtreeWriteJob) (bool, error) {
 	// Determine if this specific block can use quick validation
 	// A block can use quick validation if it's at or below the highest verified checkpoint height
-	canUseQuickValidation := catchupCtx.useQuickValidation && block.Height <= catchupCtx.highestCheckpointHeight
+	canUseQuickValidation := catchupCtx.useQuickValidation && catchupCtx.blockCheckpointProven(block)
 
 	// If block is not eligible for quick validation, use normal validation
 	if !canUseQuickValidation {
@@ -1143,9 +1170,13 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 			prometheusCatchupErrors.WithLabelValues(peerID, "validation_failure").Inc()
 		}
 
-		// Block is incomplete (e.g. seeded peer without full block data) — abort catchup for this peer
-		// Keep subtree files — they contain valid data that the next peer's validation can reuse
-		// Failure reporting is handled by the caller (Server.go / peer_selection.go)
+		// A body-authentication failure must abort without retrying the body through
+		// a state-mutating path or deleting another block's shared subtree files.
+		if errors.Is(err, errors.ErrBlockInvalid) {
+			return false, err
+		}
+		// Block is incomplete (e.g. seeded peer without full block data) — abort catchup for this peer.
+		// Keep subtree files that the next peer's validation can reuse.
 		if errors.Is(err, errors.ErrBlockIncomplete) {
 			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s from peer %s is incomplete (no coinbase), aborting catchup",
 				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), peerID)
@@ -1312,4 +1343,14 @@ func newHashFromStr(hexStr string) *chainhash.Hash {
 	}
 
 	return hash
+}
+
+// blockCheckpointProven binds the verified height range to the actual fetched header.
+func (c *CatchupContext) blockCheckpointProven(block *model.Block) bool {
+	if c.commonAncestorMeta == nil || block.Height == 0 ||
+		block.Height <= c.commonAncestorMeta.Height || block.Height > c.highestCheckpointHeight {
+		return false
+	}
+	index := uint64(block.Height - c.commonAncestorMeta.Height - 1)
+	return index < uint64(len(c.blockHeaders)) && c.blockHeaders[index].Hash().IsEqual(block.Hash())
 }

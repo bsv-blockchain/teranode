@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -50,13 +51,40 @@ func TestSkipExpectedDifficulty_RebuildsInvalidatedPrefix(t *testing.T) {
 	_, best, err := client.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
 	require.Equal(t, uint32(2), best.Height)
-	require.False(t, u.skipExpectedDifficulty(ctx, blocks[0]), "a completed prefix needs no stored-block exception")
+	require.False(t, u.skipExpectedDifficulty(ctx, blocks[0], false), "a completed prefix needs no stored-block exception")
 
 	_, err = client.InvalidateBlock(ctx, blocks[0].Hash())
 	require.NoError(t, err)
 	_, best, err = client.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
 	require.Zero(t, best.Height, "invalidation must remove the whole descendant prefix")
-	require.True(t, u.skipExpectedDifficulty(ctx, blocks[0]), "rebuilding historical blocks must retain the syncing skip")
-	require.True(t, u.skipExpectedDifficulty(ctx, blocks[1]))
+	require.True(t, u.skipExpectedDifficulty(ctx, blocks[0], false), "rebuilding historical blocks must retain the syncing skip")
+	require.True(t, u.skipExpectedDifficulty(ctx, blocks[1], false))
+}
+
+func TestSkipExpectedDifficultyRejectsStoredFork(t *testing.T) {
+	ctx := context.Background()
+	cfg := test.CreateBaseTestSettings(t)
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+	store, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.(interface{ Close() error }).Close()) })
+	client, err := blockchain.NewLocalClient(ulogger.TestLogger{}, cfg, store, nil, nil)
+	require.NoError(t, err)
+	blocks := testhelpers.CreateTestBlocksWithPrev(t, 2, cfg.ChainCfgParams.GenesisHash)
+	for i, block := range blocks {
+		block.Height = uint32(i + 1)
+		require.NoError(t, client.AddBlock(ctx, block, "test"))
+	}
+	cfg.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 2, Hash: blocks[1].Hash()}}
+	_, err = client.InvalidateBlock(ctx, blocks[0].Hash())
+	require.NoError(t, err)
+	fork := testhelpers.CreateTestBlocksWithPrev(t, 1, cfg.ChainCfgParams.GenesisHash)[0]
+	fork.Height = 1
+	fork.Header.Nonce++
+	require.NoError(t, client.AddBlock(ctx, fork, "test"))
+	u := &BlockValidation{settings: cfg, blockchainClient: client, logger: ulogger.TestLogger{}}
+	require.False(t, u.skipExpectedDifficulty(ctx, fork, false), "being stored below checkpoint does not prove ancestry")
+	require.True(t, u.skipExpectedDifficulty(ctx, blocks[0], false), "the invalidated checkpoint ancestor remains proven")
 }

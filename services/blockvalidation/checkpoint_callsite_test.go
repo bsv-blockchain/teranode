@@ -35,7 +35,7 @@ func TestCheckpointValidationCallSites(t *testing.T) {
 			entry = "reValidateBlock"
 		}
 		t.Run(entry, func(t *testing.T) {
-			for _, gate := range []string{"pow limit", "expected difficulty", "unmet target", "checkpoint mismatch", "matching checkpoint"} {
+			for _, gate := range []string{"pow limit", "expected difficulty", "expected difficulty during IBD", "pinned checkpoint during IBD", "unmet target", "checkpoint mismatch", "matching checkpoint"} {
 				t.Run(gate, func(t *testing.T) {
 					ctx, cancel := context.WithCancel(context.Background())
 					defer cancel()
@@ -75,7 +75,7 @@ func TestCheckpointValidationCallSites(t *testing.T) {
 					header := settings.ChainCfgParams.GenesisBlock.Header
 					header.PrevBlock = *settings.ChainCfgParams.GenesisHash
 					header.Bits = 0x207fffff
-					if gate == "expected difficulty" {
+					if gate == "expected difficulty" || gate == "expected difficulty during IBD" || gate == "pinned checkpoint during IBD" {
 						header.Bits = 0x2070ffff
 					}
 					// Keep a distinct candidate and meet its declared target. Only the gate
@@ -100,6 +100,12 @@ func TestCheckpointValidationCallSites(t *testing.T) {
 					if gate == "matching checkpoint" {
 						settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 1, Hash: candidate.Hash()}}
 					}
+					if gate == "expected difficulty during IBD" {
+						settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 100, Hash: &chainhash.Hash{9}}}
+					}
+					if gate == "pinned checkpoint during IBD" {
+						settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 1, Hash: candidate.Hash()}, {Height: 100, Hash: &chainhash.Hash{9}}}
+					}
 					candidate.Subtrees = []*chainhash.Hash{{1}}
 					candidate.SubtreeSlices = nil
 					require.True(t, candidate.Height > 0 && candidate.Height <= blockchain.HighestCheckpointHeight(settings.ChainCfgParams.Checkpoints))
@@ -114,13 +120,15 @@ func TestCheckpointValidationCallSites(t *testing.T) {
 					switch gate {
 					case "pow limit":
 						require.ErrorContains(t, err, "block declares a target easier than the network proof-of-work limit")
-					case "expected difficulty":
+					case "expected difficulty", "expected difficulty during IBD":
 						require.ErrorContains(t, err, "block has incorrect difficulty bits")
 					case "unmet target":
 						require.ErrorContains(t, err, "block does not meet target difficulty")
+						require.NotContains(t, err.Error(), "%!")
+						require.ErrorContains(t, err, "block header does not meet target")
 					case "checkpoint mismatch":
 						require.ErrorContains(t, err, "block conflicts with hardcoded checkpoint")
-					case "matching checkpoint":
+					case "matching checkpoint", "pinned checkpoint during IBD":
 						require.ErrorContains(t, err, "checkpoint subtree boundary reached")
 						return
 					}

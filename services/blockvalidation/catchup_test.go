@@ -3453,6 +3453,7 @@ func TestCheckpointValidationHeightCalculation(t *testing.T) {
 			Header: blocks[14].Header,
 			Height: 14,
 		},
+		commonAncestorHash: blocks[7].Hash(),
 		commonAncestorMeta: &model.BlockHeaderMeta{
 			Height: 7, // This is the key: common ancestor at height 7
 		},

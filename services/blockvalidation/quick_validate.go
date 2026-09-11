@@ -198,6 +198,10 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		return errors.NewBlockIncompleteError("[quickValidateBlock][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
 	}
 
+	if err := u.authenticateQuickBlockBody(ctx, block); err != nil {
+		return err
+	}
+
 	var (
 		err error
 		id  uint64
@@ -285,6 +289,10 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 	// Reject blocks without a valid coinbase (e.g. from seeded peers that don't have full block data)
 	if block.CoinbaseTx == nil || len(block.CoinbaseTx.Inputs) == 0 {
 		return errors.NewBlockIncompleteError("[quickValidateBlockAsync][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
+	}
+
+	if err := u.authenticateQuickBlockBody(ctx, block); err != nil {
+		return err
 	}
 
 	var (
@@ -1531,5 +1539,22 @@ func (u *BlockValidation) extendBatch(
 		}
 	}
 
+	return nil
+}
+
+// authenticateQuickBlockBody checks the complete body before any batch can assign
+// a block ID, mutate UTXOs, or promote subtree files. The preflight reads only node
+// hashes; transaction data is still streamed in batches by the existing pipeline.
+func (u *BlockValidation) authenticateQuickBlockBody(ctx context.Context, block *model.Block) error {
+	body := &model.Block{Header: block.Header, CoinbaseTx: block.CoinbaseTx, Subtrees: block.Subtrees}
+	if err := body.GetAndValidateSubtrees(ctx, u.logger, u.subtreeStore, u.settings.BlockValidation.SubtreeBatchSize); err != nil {
+		return err
+	}
+	if err := model.CheckSubtreeSlicesForDuplicateTxs(body.SubtreeSlices); err != nil {
+		return err
+	}
+	if err := body.CheckMerkleRoot(ctx); err != nil {
+		return errors.NewBlockInvalidError("[quickValidateBlock][%s] body does not match header merkle root", block.Hash().String(), err)
+	}
 	return nil
 }

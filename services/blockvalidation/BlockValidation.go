@@ -63,6 +63,9 @@ type ValidateBlockOptions struct {
 	// When provided, ValidateBlock will use these headers instead of fetching them.
 	CachedHeaders []*model.BlockHeader
 
+	// checkpointProven is set only for a block in a verified catchup header prefix.
+	checkpointProven bool
+
 	// IsCatchupMode indicates the block is being validated during catchup.
 	// This enables optimizations like reduced logging and header reuse.
 	IsCatchupMode bool
@@ -1427,19 +1430,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				u.storeInvalidBlock(ctx, block, opts.PeerID, reason)
 			}
 
-			return errors.NewBlockInvalidError("[ValidateBlock][%s] block does not meet target difficulty: %s", block.Header.Hash().String(), err)
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] %s", block.Header.Hash().String(), reason, err)
 		}
 
-		// Skip the expected-nBits (DAA) check for blocks at or below the highest checkpoint:
-		// the difficulty schedule over that prefix is already certified by the pinned
-		// checkpoint hashes, and re-deriving it would require reproducing every historical
-		// retarget rule exactly. block.Height is settled against the parent before this
-		// function runs (Server.deriveBlockHeight on the peer route; catchup and the operator
-		// revalidation endpoint carry authoritative heights), and BelowCheckpoint applies the
-		// mandatory height > 0 guard, so a peer cannot obtain the skip by declaring height 0
-		// or a fabricated sub-checkpoint height. The checkpoint hash-match itself was
-		// asserted above.
-		skipDifficultyCheck := u.skipExpectedDifficulty(ctx, block)
+		// Only checkpoint-proven ancestry certifies historical difficulty rules.
+		// Parent-derived height alone does not authenticate a peer's fork.
+		skipDifficultyCheck := u.skipExpectedDifficulty(ctx, block, opts.checkpointProven)
 
 		if skipDifficultyCheck {
 			ctxLogger.Debugf("[ValidateBlock][%s] skipping expected-nBits validation for block at height %d (at or below highest checkpoint height %d)",
@@ -1943,12 +1939,12 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	}
 
 	if headerValid, _, err := blockData.block.Header.HasMetTargetDifficulty(); !headerValid {
-		return errors.NewBlockInvalidError("[reValidateBlock][%s] block does not meet target difficulty: %s", blockData.block.Header.Hash().String(), err)
+		return errors.NewBlockInvalidError("[reValidateBlock][%s] block does not meet target difficulty: %s", blockData.block.Header.Hash().String(), err.Error(), err)
 	}
 
 	// Skip the expected-nBits (DAA) check for blocks at or below the highest checkpoint:
 	// the difficulty schedule over that prefix is certified by the pinned checkpoint hashes.
-	skipDifficultyCheck := u.skipExpectedDifficulty(ctx, blockData.block)
+	skipDifficultyCheck := u.skipExpectedDifficulty(ctx, blockData.block, false)
 
 	if skipDifficultyCheck {
 		u.logger.Debugf("[reValidateBlock][%s] skipping expected-nBits validation for block at height %d (at or below highest checkpoint height %d)",
@@ -2491,8 +2487,8 @@ func (u *BlockValidation) StopCaches() {
 	u.subtreeExistsCache.Stop()
 }
 
-// skipExpectedDifficulty fails closed if the best-chain height cannot be established.
-func (u *BlockValidation) skipExpectedDifficulty(ctx context.Context, block *model.Block) bool {
+// skipExpectedDifficulty requires checkpoint ancestry and fails closed on missing chain state.
+func (u *BlockValidation) skipExpectedDifficulty(ctx context.Context, block *model.Block, checkpointProven bool) bool {
 	checkpoints := u.settings.ChainCfgParams.Checkpoints
 
 	if !model.BelowCheckpoint(checkpoints, block.Height) {
@@ -2507,5 +2503,32 @@ func (u *BlockValidation) skipExpectedDifficulty(ctx context.Context, block *mod
 
 	// Invalidation removes descendants from the best chain, so reconsidering
 	// historical blocks is covered by the syncing arm as the prefix is rebuilt.
-	return model.SkipExpectedDifficulty(checkpoints, block.Height, bestMeta.Height)
+	if !model.SkipExpectedDifficulty(checkpoints, block.Height, bestMeta.Height) {
+		return false
+	}
+	if checkpointProven {
+		return true
+	}
+
+	// Historical reconsideration may rebuild an invalidated prefix. Prove its
+	// ancestry from a stored pinned checkpoint, including invalidated headers;
+	// merely finding the candidate in storage would also trust stored forks.
+	for _, checkpoint := range checkpoints {
+		if checkpoint.Height < 0 || uint32(checkpoint.Height) < block.Height || checkpoint.Hash == nil {
+			continue
+		}
+		if uint32(checkpoint.Height) == block.Height && checkpoint.Hash.IsEqual(block.Hash()) {
+			return true
+		}
+		_, checkpointMeta, err := u.blockchainClient.GetBlockHeader(ctx, checkpoint.Hash)
+		if err != nil || checkpointMeta == nil || checkpointMeta.Height != uint32(checkpoint.Height) {
+			continue
+		}
+		headers, metas, err := u.blockchainClient.GetBlockHeadersFromOldest(ctx, checkpoint.Hash, block.Hash(), 1)
+		if err == nil && len(headers) == 1 && len(metas) == 1 && headers[0] != nil && metas[0] != nil &&
+			metas[0].Height == block.Height && headers[0].Hash().IsEqual(block.Hash()) {
+			return true
+		}
+	}
+	return false
 }

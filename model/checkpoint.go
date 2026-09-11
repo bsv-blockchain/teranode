@@ -25,6 +25,7 @@ func BelowCheckpoint(checkpoints []chaincfg.Checkpoint, height uint32) bool {
 }
 
 // SkipExpectedDifficulty permits historical DAA rules only while building the checkpoint prefix.
+// Callers must independently prove checkpoint ancestry; height alone grants no trust.
 // Once synced, a new low-height fork must satisfy the expected difficulty.
 func SkipExpectedDifficulty(checkpoints []chaincfg.Checkpoint, blockHeight, bestHeight uint32) bool {
 	if !BelowCheckpoint(checkpoints, blockHeight) {
