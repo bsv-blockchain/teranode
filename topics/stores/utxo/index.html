@@ -7617,7 +7617,7 @@
 <li><strong>Delete</strong>: Remove UTXOs from the store.</li>
 <li><strong>Block Height Management</strong>: Set and retrieve the current blockchain height, which can be crucial for determining the spendability of certain UTXOs based on locktime conditions.</li>
 <li><strong>FreezeUTXOs / UnFreezeUTXOs</strong>: Mark UTXOs as frozen or unfrozen, in scenarios involving alert systems or temporary holds on specific UTXOs.</li>
-<li><strong>ReAssignUTXO</strong>: Reassign a UTXO to a different owner.</li>
+<li><strong>ReAssignUTXO</strong>: Update a frozen output's commitment and maturity gate. Ownership changes currently strand the output for both owners; see the <a href="../../services/alert/#24-utxo-reassignment">reassignment limitation</a>.</li>
 </ul>
 <p><strong>Principles</strong>:</p>
 <ul>
@@ -7929,13 +7929,14 @@
 </ul>
 </li>
 <li>
-<p><strong>Reassigning UTXOs</strong>: UTXOs can be reassigned to a new transaction output, but only if they are frozen first.</p>
+<p><strong>Reassigning UTXOs</strong>: Updates the commitment of a frozen output.</p>
 <ul>
+<li><strong>Known regression:</strong> changing the owner leaves the output unspendable by both owners after mandatory re-extension, even after maturity. Do not use ownership-changing reassignment. See the <a href="../../services/alert/#24-utxo-reassignment">reassignment limitation</a> and <a href="https://github.com/bsv-blockchain/teranode/issues/1725">issue 1725</a>.</li>
 <li>Verifies the UTXO exists and is frozen</li>
 <li>Updates the UTXO hash to the new value</li>
-<li>Sets spendable block height to current + 1,000 blocks (defined by <code>ReAssignedUtxoSpendableAfterBlocks</code> constant)</li>
+<li>Sets the maturity height to current + 1,000 blocks by default; SQL honors the configured override, while Aerospike currently always uses the constant</li>
 <li>Logs the reassignment for audit purposes</li>
-<li><strong>Important</strong>: Reassigned UTXOs cannot be spent until 1,000 blocks have passed after the reassignment to ensure network consensus and prevent disputes</li>
+<li><strong>Important</strong>: Passing the maturity gate alone does not make a changed-owner output spendable</li>
 </ul>
 </li>
 </ol>

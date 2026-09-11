@@ -7338,20 +7338,22 @@
 </ul>
 </li>
 <li>
-<p><code>reassign</code>: Reassigns ownership of a specific UTXO to a new Bitcoin address</p>
+<p><code>reassign</code>: Replaces a frozen UTXO's commitment using its outpoint and the old and new hashes</p>
 <ul>
+<li><strong>Known regression:</strong> do not reassign to a different owner. A successful result can leave the output unspendable by both owners, even after maturity. See the <a href="../../../topics/services/alert/#24-utxo-reassignment">reassignment limitation</a> and <a href="https://github.com/bsv-blockchain/teranode/issues/1725">issue 1725</a>.</li>
 <li>
-<p>Parameters:</p>
+<p>Parameters (positional, in this order):</p>
 <ul>
-<li><code>txid</code> (string, required): The transaction ID of the UTXO</li>
-<li><code>vout</code> (numeric, required): The output index</li>
-<li><code>destination</code> (string, required): The Bitcoin address to reassign to</li>
+<li><code>oldtxid</code> (string, required): Transaction ID of the frozen output, as a hex hash</li>
+<li><code>oldvout</code> (numeric, required): Output index</li>
+<li><code>oldutxohash</code> (string, required): Current UTXO commitment, as a hex hash</li>
+<li><code>newutxohash</code> (string, required): Replacement UTXO commitment, as a hex hash</li>
 </ul>
 </li>
 <li>
-<p>Returns: Boolean <code>true</code> if successful</p>
+<p>Returns: JSON <code>null</code> on success; an error if hash parsing or the store operation fails</p>
 </li>
-<li>Note: The UTXO must be frozen before it can be reassigned</li>
+<li>Note: The output must be frozen. The command accepts no destination address and does not store a replacement locking script. Success does not establish spendability.</li>
 </ul>
 </li>
 <li>

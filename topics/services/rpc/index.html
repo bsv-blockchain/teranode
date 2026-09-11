@@ -9798,8 +9798,8 @@
 </tr>
 <tr>
 <td>reassign</td>
-<td>Supported</td>
-<td>Reassigns ownership of a specific UTXO to a new Bitcoin address</td>
+<td>Restricted</td>
+<td>Updates a frozen UTXO commitment; ownership changes currently strand the output</td>
 </tr>
 <tr>
 <td>reconsiderblock</td>
@@ -11092,72 +11092,71 @@
 <li>Works in conjunction with the <code>setban</code> command which is used to add or remove bans</li>
 </ul>
 <h3 id="319-command-reassign">3.19. Command: Reassign<a class="headerlink" href="#319-command-reassign" title="Permanent link">&para;</a></h3>
-<p>The <code>reassign</code> command allows administrators to change the ownership of a specific UTXO by reassigning it to a new Bitcoin address.</p>
+<p>The <code>reassign</code> command replaces the stored commitment of a frozen UTXO using an
+outpoint and the old and new UTXO hashes. It does not accept a destination address.</p>
+<p><strong>Known regression:</strong> do not reassign to a different owner. The RPC can succeed
+with a <code>null</code> result while leaving the output unspendable by both owners, even
+after maturity. See the <a href="../alert/#24-utxo-reassignment">reassignment limitation</a>
+and <a href="https://github.com/bsv-blockchain/teranode/issues/1725">issue 1725</a>.</p>
 <h4 id="function-overview_13">Function Overview<a class="headerlink" href="#function-overview_13" title="Permanent link">&para;</a></h4>
 <ul>
 <li>
-<p><strong>Purpose</strong>: To reassign ownership of a specific transaction output (UTXO) to a new Bitcoin address</p>
+<p><strong>Purpose</strong>: Update a frozen output's commitment and maturity gate; no replacement locking script is stored.</p>
 </li>
 <li>
-<p><strong>Parameters</strong>:</p>
+<p><strong>Parameters</strong> (positional, in this order):</p>
 <ul>
-<li><code>txid</code> (string, required): The transaction ID of the output to reassign</li>
-<li><code>vout</code> (numeric, required): The output index to reassign</li>
-<li><code>destination</code> (string, required): The Bitcoin address to reassign the UTXO to</li>
+<li><code>oldtxid</code> (string, required): Transaction ID of the frozen output, as a hex hash</li>
+<li><code>oldvout</code> (numeric, required): Output index</li>
+<li><code>oldutxohash</code> (string, required): Current UTXO commitment, as a hex hash</li>
+<li><code>newutxohash</code> (string, required): Replacement UTXO commitment, as a hex hash</li>
 </ul>
 </li>
 <li>
 <p><strong>Return Value</strong>:</p>
 <ul>
-<li>On success: Returns <code>true</code> indicating the UTXO was successfully reassigned</li>
-<li>On failure: Returns an error if the UTXO cannot be found or reassigned</li>
+<li>On success: JSON <code>null</code>; this confirms the store operation, not spendability</li>
+<li>On failure: An error if a hash cannot be parsed or the store operation fails</li>
 </ul>
 </li>
 </ul>
 <h4 id="process-flow_14">Process Flow<a class="headerlink" href="#process-flow_14" title="Permanent link">&para;</a></h4>
-<p><img alt="rpc-reassign.svg" src="../img/plantuml/rpc/rpc-reassign.svg" /></p>
 <ol>
 <li>
 <p><strong>Request Processing</strong>:</p>
 <ul>
-<li>Receives request with transaction ID, output index, and destination address</li>
-<li>Validates input parameters</li>
+<li>Reads the outpoint and both commitment hashes from <code>ReassignCmd</code></li>
 <li>Initializes tracing and metrics</li>
+<li>Parses the transaction ID and both UTXO hashes</li>
 </ul>
 </li>
 <li>
-<p><strong>UTXO and Address Validation</strong>:</p>
+<p><strong>Store Operation</strong>:</p>
 <ul>
-<li>Checks if the specified UTXO exists</li>
-<li>Validates the destination address format and network compatibility</li>
-</ul>
-</li>
-<li>
-<p><strong>Reassignment Operation</strong>:</p>
-<ul>
-<li>Creates a new scriptPubKey for the destination address</li>
-<li>Updates the UTXO record with the new ownership information</li>
-<li>Records the reassignment action for auditing purposes</li>
+<li>Calls <code>ReAssignUTXO</code> with the old outpoint/commitment and new commitment</li>
+<li>The store requires a frozen output, replaces its commitment, clears the freeze and sets its maturity gate</li>
+<li>Neither the handler nor the store constructs or persists a replacement locking script</li>
 </ul>
 </li>
 <li>
 <p><strong>Response Construction</strong>:</p>
 <ul>
-<li>Returns <code>true</code> on successful reassignment operation</li>
-<li>Returns error if validation fails or database update fails</li>
+<li>Returns JSON <code>null</code> when the store operation succeeds, or an error on failure</li>
 </ul>
 </li>
 </ol>
 <h4 id="success-response-fields_15">(Success) Response Fields<a class="headerlink" href="#success-response-fields_15" title="Permanent link">&para;</a></h4>
 <ul>
-<li>Returns boolean <code>true</code> on successful reassignment operation</li>
+<li><code>result</code>: <code>null</code></li>
+<li><code>error</code>: <code>null</code></li>
+<li><code>id</code>: The request ID</li>
 </ul>
 <h4 id="important-notes_4">Important Notes<a class="headerlink" href="#important-notes_4" title="Permanent link">&para;</a></h4>
 <ul>
-<li>Reassigning a UTXO changes its spending conditions without creating a new transaction</li>
-<li>This is an administrative function that bypasses normal Bitcoin transaction rules</li>
-<li>Should only be used in specific regulatory or recovery scenarios</li>
-<li>The operation creates a permanent record in the audit log</li>
+<li>Passing the maturity gate does not restore spendability after an ownership-changing reassignment.</li>
+<li>The RPC does not validate that the new commitment has an authoritative replacement script.</li>
+<li>SQL honors the configured maturity delay; Aerospike currently uses the fixed 1,000-block delay.</li>
+<li>Recovery for already-reassigned outputs needs a validated procedure; see issue 1725 above.</li>
 </ul>
 <h3 id="320-command-reconsider-block">3.20. Command: Reconsider Block<a class="headerlink" href="#320-command-reconsider-block" title="Permanent link">&para;</a></h3>
 <p>The <code>reconsiderblock</code> command removes the invalid status of a block and its descendants, allowing them to be reconsidered for inclusion in the blockchain. This command is typically used to undo the effects of <code>invalidateblock</code>.</p>

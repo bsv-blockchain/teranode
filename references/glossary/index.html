@@ -6707,6 +6707,8 @@
 
 <h1 id="teranode-bsv-glossary">Teranode BSV Glossary<a class="headerlink" href="#teranode-bsv-glossary" title="Permanent link">&para;</a></h1>
 <p><strong>Alert Service</strong>: A system that provides network alert functionality, allowing for UTXO freezing/unfreezing, UTXO reassignment, peer management, and block invalidation for network security and compliance purposes.</p>
+<p>Ownership-changing reassignment currently strands the output for both owners;
+see the <a href="../../topics/services/alert/#24-utxo-reassignment">Alert Service limitation</a>.</p>
 <p><strong>Aerospike</strong>: A high-performance, distributed NoSQL database used in Teranode as the primary storage backend for the UTXO Store, providing low-latency access to unspent transaction outputs.</p>
 <p><strong>Asset Service</strong>: Provides HTTP and WebSocket APIs for blockchain data access, serving transactions, subtrees, blocks, block headers, and UTXOs.</p>
 <p><strong>Block</strong>: A container of grouped subtrees, including a coinbase transaction and a header, forming the blockchain.</p>

@@ -8090,6 +8090,11 @@
 </ul>
 <h4 id="3-utxo-related-alert-data">3. UTXO-Related Alert Data<a class="headerlink" href="#3-utxo-related-alert-data" title="Permanent link">&para;</a></h4>
 <p>For UTXO freeze, unfreeze, and reassignment operations:</p>
+<p><strong>Known regression:</strong> an applied ownership-changing reassignment can leave the
+output unspendable by both owners, even after maturity. Do not treat processing
+status as proof of spendability. See the
+<a href="../../../topics/services/alert/#24-utxo-reassignment">reassignment limitation</a> and
+<a href="https://github.com/bsv-blockchain/teranode/issues/1725">issue 1725</a>.</p>
 <ul>
 <li>
 <p><strong>UTXO Identifiers</strong>:</p>

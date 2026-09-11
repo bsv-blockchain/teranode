@@ -8187,7 +8187,7 @@
 <li><a href="#version">version</a> - Returns the server version information</li>
 <li><a href="#freeze">freeze</a> - Freezes specified UTXOs or OUTPUTs</li>
 <li><a href="#unfreeze">unfreeze</a> - Unfreezes specified UTXOs or OUTPUTs</li>
-<li><a href="#reassign">reassign</a> - Reassigns specified frozen UTXOs to a new address</li>
+<li><a href="#reassign">reassign</a> - Updates a frozen UTXO commitment; ownership-changing reassignment is currently unsafe</li>
 <li><a href="#getchaintips">getchaintips</a> - Returns information about all known chain tips</li>
 </ul>
 </li>
@@ -8452,7 +8452,7 @@
 <li><code>handleSubmitMiningSolution</code>: Submits a solved block to the network</li>
 <li><code>handleFreeze</code>: Freezes specified UTXOs to prevent spending</li>
 <li><code>handleUnfreeze</code>: Unfreezes previously frozen UTXOs</li>
-<li><code>handleReassign</code>: Reassigns specified frozen UTXOs to a new address</li>
+<li><code>handleReassign</code>: Updates a frozen UTXO commitment; ownership-changing reassignment is currently unsafe</li>
 <li><code>handleSetBan</code>: Adds or removes IP addresses/subnets from the node's ban list</li>
 <li><code>handleClearBanned</code>: Removes all bans from the node</li>
 <li><code>handleListBanned</code>: Lists all currently banned IP addresses and subnets</li>
@@ -9403,18 +9403,26 @@ getpeerinfo, invalidateblock, reconsiderblock, setban, isbanned, listbanned, cle
 </span><span id="__span-67-5"><a id="__codelineno-67-5" name="__codelineno-67-5" href="#__codelineno-67-5"></a><span class="p">}</span>
 </span></code></pre></div>
 <h3 id="reassign">reassign<a class="headerlink" href="#reassign" title="Permanent link">&para;</a></h3>
-<p>Reassigns ownership of a specific UTXO to a new Bitcoin address.</p>
-<p><strong>Parameters:</strong></p>
+<p>Replaces a frozen UTXO's commitment using its outpoint and the old and new hashes.
+No destination address or replacement locking script is accepted.</p>
+<p><strong>Known regression:</strong> do not reassign to a different owner. The RPC can succeed
+with a <code>null</code> result while leaving the output unspendable by both owners, even
+after maturity. See the <a href="../../../topics/services/alert/#24-utxo-reassignment">reassignment limitation</a>
+and <a href="https://github.com/bsv-blockchain/teranode/issues/1725">issue 1725</a>.</p>
+<p><strong>Parameters</strong> (positional, in this order):</p>
 <ol>
-<li><code>txid</code> (string, required) - Transaction ID of the output to reassign</li>
-<li><code>vout</code> (numeric, required) - Output index to reassign</li>
-<li><code>destination</code> (string, required) - Bitcoin address to reassign the UTXO to</li>
+<li><code>oldtxid</code> (string, required) - Transaction ID of the frozen output, as a hex hash</li>
+<li><code>oldvout</code> (numeric, required) - Output index</li>
+<li><code>oldutxohash</code> (string, required) - Current UTXO commitment, as a hex hash</li>
+<li><code>newutxohash</code> (string, required) - Replacement UTXO commitment, as a hex hash</li>
 </ol>
 <p><strong>Returns:</strong></p>
 <ul>
-<li><code>boolean</code> - True if the UTXO was successfully reassigned</li>
+<li><code>null</code> on success; an error if hash parsing or the store operation fails. Success does not establish spendability.</li>
 </ul>
 <p><strong>Example Request:</strong></p>
+<p>This illustrates self-reassignment with an unchanged commitment. Replace the
+outpoint and both hash values with those of an actual frozen output.</p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-68-1"><a id="__codelineno-68-1" name="__codelineno-68-1" href="#__codelineno-68-1"></a><span class="p">{</span>
 </span><span id="__span-68-2"><a id="__codelineno-68-2" name="__codelineno-68-2" href="#__codelineno-68-2"></a><span class="w">    </span><span class="nt">"jsonrpc"</span><span class="p">:</span><span class="w"> </span><span class="s2">"1.0"</span><span class="p">,</span>
 </span><span id="__span-68-3"><a id="__codelineno-68-3" name="__codelineno-68-3" href="#__codelineno-68-3"></a><span class="w">    </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"curltest"</span><span class="p">,</span>
@@ -9422,13 +9430,14 @@ getpeerinfo, invalidateblock, reconsiderblock, setban, isbanned, listbanned, cle
 </span><span id="__span-68-5"><a id="__codelineno-68-5" name="__codelineno-68-5" href="#__codelineno-68-5"></a><span class="w">    </span><span class="nt">"params"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 </span><span id="__span-68-6"><a id="__codelineno-68-6" name="__codelineno-68-6" href="#__codelineno-68-6"></a><span class="w">        </span><span class="s2">"a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0"</span><span class="p">,</span>
 </span><span id="__span-68-7"><a id="__codelineno-68-7" name="__codelineno-68-7" href="#__codelineno-68-7"></a><span class="w">        </span><span class="mi">1</span><span class="p">,</span>
-</span><span id="__span-68-8"><a id="__codelineno-68-8" name="__codelineno-68-8" href="#__codelineno-68-8"></a><span class="w">        </span><span class="s2">"1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"</span>
-</span><span id="__span-68-9"><a id="__codelineno-68-9" name="__codelineno-68-9" href="#__codelineno-68-9"></a><span class="w">    </span><span class="p">]</span>
-</span><span id="__span-68-10"><a id="__codelineno-68-10" name="__codelineno-68-10" href="#__codelineno-68-10"></a><span class="p">}</span>
+</span><span id="__span-68-8"><a id="__codelineno-68-8" name="__codelineno-68-8" href="#__codelineno-68-8"></a><span class="w">        </span><span class="s2">"1111111111111111111111111111111111111111111111111111111111111111"</span><span class="p">,</span>
+</span><span id="__span-68-9"><a id="__codelineno-68-9" name="__codelineno-68-9" href="#__codelineno-68-9"></a><span class="w">        </span><span class="s2">"1111111111111111111111111111111111111111111111111111111111111111"</span>
+</span><span id="__span-68-10"><a id="__codelineno-68-10" name="__codelineno-68-10" href="#__codelineno-68-10"></a><span class="w">    </span><span class="p">]</span>
+</span><span id="__span-68-11"><a id="__codelineno-68-11" name="__codelineno-68-11" href="#__codelineno-68-11"></a><span class="p">}</span>
 </span></code></pre></div>
 <p><strong>Example Response:</strong></p>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-69-1"><a id="__codelineno-69-1" name="__codelineno-69-1" href="#__codelineno-69-1"></a><span class="p">{</span>
-</span><span id="__span-69-2"><a id="__codelineno-69-2" name="__codelineno-69-2" href="#__codelineno-69-2"></a><span class="w">    </span><span class="nt">"result"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-69-2"><a id="__codelineno-69-2" name="__codelineno-69-2" href="#__codelineno-69-2"></a><span class="w">    </span><span class="nt">"result"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
 </span><span id="__span-69-3"><a id="__codelineno-69-3" name="__codelineno-69-3" href="#__codelineno-69-3"></a><span class="w">    </span><span class="nt">"error"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
 </span><span id="__span-69-4"><a id="__codelineno-69-4" name="__codelineno-69-4" href="#__codelineno-69-4"></a><span class="w">    </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"curltest"</span>
 </span><span id="__span-69-5"><a id="__codelineno-69-5" name="__codelineno-69-5" href="#__codelineno-69-5"></a><span class="p">}</span>
