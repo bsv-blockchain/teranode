@@ -11,97 +11,128 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
-	"github.com/bsv-blockchain/teranode/services/blockchain"
-	"github.com/bsv-blockchain/teranode/services/legacy/peer"
-	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/expiringmap"
-	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
 
-// Hold a real UTXO read open to reproduce an inventory handler that outlives
-// the message loop. The store must remain usable until that read has finished.
+// Hold an inventory lookup immediately before it enters the real SQL batcher.
 type heldInventoryStore struct {
 	utxo.Store
 	entered chan struct{}
 	release chan struct{}
-	reads   atomic.Int32
+	once    sync.Once
+	calls   atomic.Int32
 }
 
-func (s *heldInventoryStore) Get(ctx context.Context, hash *chainhash.Hash, fieldNames ...fields.FieldName) (*meta.Data, error) {
-	if s.reads.Add(1) == 1 {
-		close(s.entered)
-		<-s.release
-	}
-	return s.Store.Get(ctx, hash, fieldNames...)
+func (s *heldInventoryStore) Get(ctx context.Context, hash *chainhash.Hash, selected ...fields.FieldName) (*meta.Data, error) {
+	s.calls.Add(1)
+	s.once.Do(func() { close(s.entered) })
+	<-s.release
+	return s.Store.Get(ctx, hash, selected...)
 }
 
-func TestStopWaitsForInventoryReads(t *testing.T) {
-	ctx := t.Context()
-	logger := ulogger.TestLogger{}
-	settings := test.CreateBaseTestSettings(t)
-	storeURL, err := url.Parse("sqlitememory://")
+func TestStop_WaitsForInventoryBeforeClosingStore(t *testing.T) {
+	sm, p, state := newHeaderProvenanceManager(t)
+	sm.quit = make(chan struct{})
+	sm.handlerDone = make(chan struct{})
+	sm.msgChan = make(chan interface{}, 1)
+	sm.orphanTxs = expiringmap.New[chainhash.Hash, *orphanTxAndParents](time.Hour)
+	sm.requestedTxns = expiringmap.New[chainhash.Hash, struct{}](time.Hour)
+	sm.rejectedTxns = txmap.NewSyncedMap[chainhash.Hash, struct{}]()
+	sm.headersFirstMode.Store(false)
+	state.requestQueue = txmap.NewSyncedSlice[wire.InvVect](1)
+	state.requestedTxns = expiringmap.New[chainhash.Hash, struct{}](time.Hour)
+	t.Cleanup(state.requestedTxns.Stop)
+	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(t, err)
-	chainStore, err := blockchainstore.NewStore(logger, storeURL, settings)
-	require.NoError(t, err)
-	client, err := blockchain.NewLocalClient(logger, settings, chainStore, nil, nil)
-	require.NoError(t, err)
-	store, err := sql.New(ctx, logger, settings, storeURL)
+	store, err := sql.New(context.Background(), ulogger.TestLogger{}, sm.settings, storeURL)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close(context.Background())) })
 	held := &heldInventoryStore{Store: store, entered: make(chan struct{}), release: make(chan struct{})}
-	p := peer.NewInboundPeer(logger, settings, &peer.Config{})
-	sm := &SyncManager{
-		ctx: ctx, logger: logger, blockchainClient: client, utxoStore: held,
-		peerStates:  txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
-		handlerDone: make(chan struct{}), quit: make(chan struct{}),
-		orphanTxs:       expiringmap.New[chainhash.Hash, *orphanTxAndParents](time.Minute),
-		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](time.Minute),
-		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](time.Minute),
-		rejectedTxns:    txmap.NewSyncedMap[chainhash.Hash, struct{}](),
-	}
-	state := &peerSyncState{
-		requestQueue:  txmap.NewSyncedSlice[wire.InvVect](1),
-		requestedTxns: expiringmap.New[chainhash.Hash, struct{}](time.Minute),
-	}
-	t.Cleanup(state.requestedTxns.Stop)
-	sm.peerStates.Set(p, state)
-	sm.storeSyncPeer(p, nil)
-	msg := &invMsg{peer: p, inv: &wire.MsgInv{InvList: []*wire.InvVect{{Type: wire.InvTypeTx}}}}
-	readDone := make(chan struct{})
-	go func() { defer close(readDone); sm.handleInvMsg(msg) }()
-	var releaseOnce sync.Once
-	release := func() { releaseOnce.Do(func() { close(held.release) }) }
-	t.Cleanup(func() { release(); <-readDone })
+	sm.utxoStore = held
+	sm.Start()
+
+	inv := wire.NewMsgInv()
+	require.NoError(t, inv.AddInvVect(wire.NewInvVect(wire.InvTypeTx, &chainhash.Hash{1})))
+	handled := make(chan struct{})
+	go func() {
+		sm.handleInvMsg(&invMsg{inv: inv, peer: p})
+		close(handled)
+	}()
 	select {
 	case <-held.entered:
 	case <-time.After(5 * time.Second):
-		t.Fatal("inventory handler did not reach the UTXO read")
+		t.Fatal("inventory lookup did not start")
 	}
-	// Simulate the message loop having exited while its inventory worker is busy.
-	close(sm.handlerDone)
+
+	remaining := 2
 	stopped := make(chan error, 2)
 	go func() { stopped <- sm.Stop() }()
 	<-sm.quit
+	// The service and its context watcher can call Stop concurrently. Both must join.
 	go func() { stopped <- sm.Stop() }()
-	require.Never(t, func() bool { return len(stopped) != 0 }, 100*time.Millisecond, time.Millisecond,
-		"every Stop caller must wait for the in-flight UTXO read")
-	release()
-	for range 2 {
+	select {
+	case err := <-stopped:
+		remaining--
+		t.Errorf("Stop returned before the inventory lookup completed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(held.release)
+	<-handled
+	for i := 0; i < remaining; i++ {
 		select {
 		case err := <-stopped:
 			require.NoError(t, err)
 		case <-time.After(5 * time.Second):
-			t.Fatal("Stop did not finish after the inventory read")
+			t.Fatal("Stop did not finish after inventory completed")
 		}
 	}
-	// A queued inventory goroutine may start late; shutdown must reject it
-	// before touching the store, which the daemon can now safely close.
-	sm.handleInvMsg(msg)
-	require.EqualValues(t, 1, held.reads.Load())
+	// A delayed Kafka callback must not submit another lookup after shutdown.
+	sm.handleInvMsg(&invMsg{inv: inv, peer: p})
+	require.EqualValues(t, 1, held.calls.Load())
+}
+
+func TestStop_BeforeStart(t *testing.T) {
+	sm, _, _ := newHeaderProvenanceManager(t)
+	sm.quit = make(chan struct{})
+	sm.handlerDone = make(chan struct{})
+	sm.orphanTxs = expiringmap.New[chainhash.Hash, *orphanTxAndParents](time.Hour)
+	sm.requestedTxns = expiringmap.New[chainhash.Hash, struct{}](time.Hour)
+	stopped := make(chan error, 1)
+	go func() { stopped <- sm.Stop() }()
+	select {
+	case err := <-stopped:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop waited for a block handler that was never started")
+	}
+	sm.Start()
+	require.Zero(t, atomic.LoadInt32(&sm.started), "Start must not revive a stopped manager")
+	require.NoError(t, sm.Stop())
+}
+
+func TestStop_WhilePaused(t *testing.T) {
+	sm, _, _ := newHeaderProvenanceManager(t)
+	sm.quit = make(chan struct{})
+	sm.handlerDone = make(chan struct{})
+	sm.msgChan = make(chan interface{})
+	sm.orphanTxs = expiringmap.New[chainhash.Hash, *orphanTxAndParents](time.Hour)
+	sm.requestedTxns = expiringmap.New[chainhash.Hash, struct{}](time.Hour)
+	sm.Start()
+	// The unbuffered queue makes Pause wait until blockHandler receives it.
+	unpause := sm.Pause()
+	defer close(unpause)
+	stopped := make(chan error, 1)
+	go func() { stopped <- sm.Stop() }()
+	select {
+	case err := <-stopped:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop waited for the paused caller to resume")
+	}
 }

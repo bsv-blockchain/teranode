@@ -30,6 +30,7 @@ func TestQuickValidateBlock(t *testing.T) {
 		suite.MockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 		block := testhelpers.CreateTestBlocks(t, 1)[0]
+		block.Header.HashMerkleRoot = block.CoinbaseTx.TxIDChainHash()
 
 		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "")
 		assert.NoError(t, err, "Should successfully quick validate an empty block")

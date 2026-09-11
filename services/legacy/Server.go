@@ -717,5 +717,10 @@ func (s *Server) Stop(_ context.Context) error {
 		return nil
 	}
 
-	return s.server.Stop()
+	if err := s.server.Stop(); err != nil {
+		return err
+	}
+	// The peer server stop only signals shutdown. Join the sync manager before
+	// the service manager returns and the daemon closes its UTXO store.
+	return s.server.syncManager.Stop()
 }

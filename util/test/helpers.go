@@ -35,3 +35,12 @@ func CreateBaseTestSettings(t TestingT) *settings.Settings {
 
 	return tSettings
 }
+
+// MainNetParamsForSyntheticPoW preserves mainnet rules while allowing easy test headers.
+// Real proof-of-work limit tests must use the unmodified network parameters.
+func MainNetParamsForSyntheticPoW() *chaincfg.Params {
+	params := chaincfg.MainNetParams
+	params.PowLimit = chaincfg.RegressionNetParams.PowLimit
+	params.PowLimitBits = 0x207fffff
+	return &params
+}
