@@ -682,7 +682,7 @@ func TestGetCounterConflictingTxHashes_Success(t *testing.T) {
 		Return(&meta.Data{}, nil)
 
 	// Execute test
-	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
+	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0, 288)
 
 	// Assertions
 	require.NoError(t, err)
@@ -703,7 +703,7 @@ func TestGetCounterConflictingTxHashes_GetTxError(t *testing.T) {
 		Return(nil, errors.NewProcessingError("get tx error"))
 
 	// Execute test
-	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
+	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0, 288)
 
 	// Assertions
 	assert.Nil(t, result)
@@ -731,7 +731,7 @@ func TestGetCounterConflictingTxHashes_GetParentError(t *testing.T) {
 		Return(nil, errors.NewProcessingError("get parent error"))
 
 	// Execute test
-	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
+	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0, 288)
 
 	// Assertions
 	assert.Nil(t, result)
@@ -762,7 +762,7 @@ func TestGetCounterConflictingTxHashes_OutOfRangeError(t *testing.T) {
 		}, nil)
 
 	// Execute test
-	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
+	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0, 288)
 
 	// Assertions
 	assert.Nil(t, result)
@@ -806,7 +806,7 @@ func TestGetCounterConflictingTxHashes_FrozenChildError(t *testing.T) {
 		Return(nil, nil).Maybe()
 
 	// Execute test
-	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
+	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0, 288)
 
 	// Assertions
 	assert.Nil(t, result)
@@ -842,7 +842,7 @@ func TestGetCounterConflictingTxHashes_GetConflictingChildrenError(t *testing.T)
 		Return(nil, errors.NewProcessingError("get conflicting children error"))
 
 	// Execute test
-	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
+	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0, 288)
 
 	// Assertions
 	assert.Nil(t, result)
@@ -872,7 +872,7 @@ func TestGetCounterConflictingTxHashes_NilSpendingData(t *testing.T) {
 		}, nil)
 
 	// Execute test
-	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
+	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0, 288)
 
 	// Assertions
 	require.NoError(t, err)
@@ -1030,7 +1030,7 @@ func TestGetCounterConflictingTxHashes_DedupesSpenderWalks(t *testing.T) {
 	mockStore.On("Get", mock.Anything, &spenderHash, mock.Anything).
 		Return(&meta.Data{}, nil)
 
-	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
+	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0, 288)
 	require.NoError(t, err)
 	assert.Contains(t, result, txHash)
 	assert.Contains(t, result, spenderHash)
