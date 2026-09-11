@@ -259,6 +259,12 @@ message StateMessage {
   uint32 removeMapCount = 9; // the number of transactions in the remove map
   repeated string subtrees = 10; // the hashes of the current subtrees
   int64 queueHeadAgeMillis = 11; // how long the oldest queued batch has been waiting, in milliseconds (0 when empty)
+  // Whether block assembly has reached its in-memory transaction limit. This is
+  // the resident-set bound (queued plus subtree-held), which is a different
+  // condition from queueMaxItems below: that one bounds the queue alone and
+  // trips when the dispatcher stalls, whereas this trips when the dispatcher is
+  // draining normally but no blocks are being mined.
+  bool txIngressFull = 12;
 }
 
 // Slim, atomic-only view of the block-assembly ingest queue, intended for

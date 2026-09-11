@@ -43,6 +43,7 @@ enum NotificationType {
   PeerFailure = 6;  // Peer failed to provide data (catchup, subtree, block, etc)
   BlockPersisted = 7;  // Block persister completed processing a block (includes height in metadata)
   BlockMinedUnset = 8; // Block's mined_set flag set to false (e.g., via InvalidateBlock RPC)
+  BlockAssemblyFull = 9; // Block assembly reached its in-memory transaction limit (metadata "full" is "true" or "false")
 }
 
 // swagger:model NotificationMetadata

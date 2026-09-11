@@ -818,6 +818,42 @@ type ClientI interface {
 	// - Error if the state check fails
 	IsFSMCurrentState(ctx context.Context, state FSMStateType) (bool, error)
 
+	// IsBlockAssemblyFull reports whether block assembly has reached its in-memory transaction limit.
+	//
+	// Block assembly measures how many transactions it holds in RAM and broadcasts a
+	// BlockAssemblyFull notification when it crosses the configured limit, and again when it drops
+	// back to the resume watermark. Implementations cache that value locally, so this call is an
+	// atomic read with no RPC and is safe on the per-transaction ingress path.
+	//
+	// Transaction ingress points call this to stop feeding block assembly while it is full:
+	// propagation, legacy netsync, the sendrawtransaction RPC, and peer-announced subtree
+	// validation. The subtree path keeps validating and still creates the UTXOs, and skips only the
+	// mining-template insert, because a later block carrying those transactions must still validate.
+	// Transactions arriving inside a block are never gated, for the same reason. If you add another
+	// path that reaches block assembly, gate it here too, and add it to the table in the
+	// blockassembly_maxTransactionsInMemory setting documentation.
+	//
+	// The first three refuse, so the sender retries and the transaction arrives again once there is
+	// room. The subtree path does not: it silently skips the template insert, and nothing revisits
+	// those transactions when the flag clears. They still carry UnminedSince, so the next restart
+	// reloads them, but within a running process they enter the template only via a block.
+	//
+	// It is deliberately not part of the FSM, because fullness is orthogonal to the node lifecycle:
+	// a full node stays RUNNING and keeps syncing.
+	//
+	// The flag is eventually consistent and defaults to false, so transactions can still arrive
+	// after block assembly reports full. That is expected. Transactions already in flight are always
+	// accepted, and the overshoot is bounded by validator Kafka consumer lag rather than by the
+	// limit, because the validator keeps draining its topic into block assembly after ingress stops.
+	//
+	// A refusal expires. Implementations honour a cached full=true only while block assembly keeps
+	// re-announcing it, so a block assembly reconfigured without a limit, or stopped altogether,
+	// releases the ingress points instead of leaving them refusing until they restart.
+	//
+	// Returns:
+	// - Boolean indicating whether block assembly is currently refusing new transactions
+	IsBlockAssemblyFull() bool
+
 	// WaitForFSMtoTransitionToGivenState blocks until the FSM transitions to the specified state.
 	//
 	// This method waits synchronously until the blockchain FSM reaches the specified state.

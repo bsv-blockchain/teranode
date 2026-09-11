@@ -26,15 +26,16 @@ const (
 type NotificationType int32
 
 const (
-	NotificationType_PING             NotificationType = 0
-	NotificationType_Subtree          NotificationType = 1
-	NotificationType_Block            NotificationType = 2
-	NotificationType_NotUsed          NotificationType = 3 // Deprecated, was previously used for MiningOn
-	NotificationType_FSMState         NotificationType = 4
-	NotificationType_BlockSubtreesSet NotificationType = 5
-	NotificationType_PeerFailure      NotificationType = 6 // Peer failed to provide data (catchup, subtree, block, etc)
-	NotificationType_BlockPersisted   NotificationType = 7 // Block persister completed processing a block (includes height in metadata)
-	NotificationType_BlockMinedUnset  NotificationType = 8 // Block's mined_set flag set to false (e.g., via InvalidateBlock RPC)
+	NotificationType_PING              NotificationType = 0
+	NotificationType_Subtree           NotificationType = 1
+	NotificationType_Block             NotificationType = 2
+	NotificationType_NotUsed           NotificationType = 3 // Deprecated, was previously used for MiningOn
+	NotificationType_FSMState          NotificationType = 4
+	NotificationType_BlockSubtreesSet  NotificationType = 5
+	NotificationType_PeerFailure       NotificationType = 6 // Peer failed to provide data (catchup, subtree, block, etc)
+	NotificationType_BlockPersisted    NotificationType = 7 // Block persister completed processing a block (includes height in metadata)
+	NotificationType_BlockMinedUnset   NotificationType = 8 // Block's mined_set flag set to false (e.g., via InvalidateBlock RPC)
+	NotificationType_BlockAssemblyFull NotificationType = 9 // Block assembly reached its in-memory transaction limit (metadata "full" is "true" or "false")
 )
 
 // Enum value maps for NotificationType.
@@ -49,17 +50,19 @@ var (
 		6: "PeerFailure",
 		7: "BlockPersisted",
 		8: "BlockMinedUnset",
+		9: "BlockAssemblyFull",
 	}
 	NotificationType_value = map[string]int32{
-		"PING":             0,
-		"Subtree":          1,
-		"Block":            2,
-		"NotUsed":          3,
-		"FSMState":         4,
-		"BlockSubtreesSet": 5,
-		"PeerFailure":      6,
-		"BlockPersisted":   7,
-		"BlockMinedUnset":  8,
+		"PING":              0,
+		"Subtree":           1,
+		"Block":             2,
+		"NotUsed":           3,
+		"FSMState":          4,
+		"BlockSubtreesSet":  5,
+		"PeerFailure":       6,
+		"BlockPersisted":    7,
+		"BlockMinedUnset":   8,
+		"BlockAssemblyFull": 9,
 	}
 )
 
@@ -873,7 +876,7 @@ const file_model_model_proto_rawDesc = "" +
 	"\x06height\x18\x01 \x01(\rR\x06height\x12\x12\n" +
 	"\x04hash\x18\x02 \x01(\tR\x04hash\x12\x1c\n" +
 	"\tbranchlen\x18\x03 \x01(\rR\tbranchlen\x12\x16\n" +
-	"\x06status\x18\x04 \x01(\tR\x06status*\x9f\x01\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status*\xb6\x01\n" +
 	"\x10NotificationType\x12\b\n" +
 	"\x04PING\x10\x00\x12\v\n" +
 	"\aSubtree\x10\x01\x12\t\n" +
@@ -883,7 +886,8 @@ const file_model_model_proto_rawDesc = "" +
 	"\x10BlockSubtreesSet\x10\x05\x12\x0f\n" +
 	"\vPeerFailure\x10\x06\x12\x12\n" +
 	"\x0eBlockPersisted\x10\a\x12\x13\n" +
-	"\x0fBlockMinedUnset\x10\bB*Z(github.com/bsv-blockchain/teranode/modelb\x06proto3"
+	"\x0fBlockMinedUnset\x10\b\x12\x15\n" +
+	"\x11BlockAssemblyFull\x10\tB*Z(github.com/bsv-blockchain/teranode/modelb\x06proto3"
 
 var (
 	file_model_model_proto_rawDescOnce sync.Once
