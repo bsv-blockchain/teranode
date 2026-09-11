@@ -211,10 +211,17 @@ func formatValue(val reflect.Value) string {
 		}
 		return formatValue(val.Elem())
 	case reflect.Slice:
-		if val.Type().Elem().Kind() == reflect.String {
+		switch val.Type().Elem().Kind() {
+		case reflect.String:
 			slice := make([]string, val.Len())
 			for i := 0; i < val.Len(); i++ {
 				slice[i] = val.Index(i).String()
+			}
+			return formatStringSlice(slice)
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			slice := make([]string, val.Len())
+			for i := 0; i < val.Len(); i++ {
+				slice[i] = formatInt(int(val.Index(i).Int()))
 			}
 			return formatStringSlice(slice)
 		}

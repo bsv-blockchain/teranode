@@ -13,12 +13,12 @@
 | StoreBatcherSize | int | 1024 | legacy_storeBatcherSize | **CRITICAL** - Store operation batch size |
 | StoreBatcherConcurrency | int | 32 | legacy_storeBatcherConcurrency | **CRITICAL** - Store operation parallelism |
 | SpendBatcherSize | int | 1024 | legacy_spendBatcherSize | **CRITICAL** - Spend operation batch size |
-| SpendBatcherConcurrency | int | 32 | legacy_spendBatcherConcurrency | **CRITICAL** - Spend operation parallelism |
+| SpendBatcherConcurrency | int | 4 | legacy_spendBatcherConcurrency | **CRITICAL** - Spend operation parallelism |
 | OutpointBatcherSize | int | 1024 | legacy_outpointBatcherSize | **CRITICAL** - Outpoint operation batch size |
 | OutpointBatcherConcurrency | int | 32 | legacy_outpointBatcherConcurrency | Outpoint operation parallelism |
 | PrintInvMessages | bool | false | legacy_printInvMessages | Debug logging for inventory messages |
 | GRPCAddress | string | "" | legacy_grpcAddress | **CRITICAL** - gRPC client connections (required for client, returns error if empty) |
-| AllowBlockPriority | bool | false | legacy_allowBlockPriority | Block priority handling |
+| AllowBlockPriority | bool | true | legacy_allowBlockPriority | Block priority handling |
 | GRPCListenAddress | string | "" | legacy_grpcListenAddress | gRPC server binding |
 | SavePeers | bool | false | legacy_savePeers | Peer information persistence |
 | AllowSyncCandidateFromLocalPeers | bool | false | legacy_allowSyncCandidateFromLocalPeers | **CRITICAL** - Local peer sync candidate selection |

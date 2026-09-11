@@ -123,7 +123,7 @@ service is often a Kafka problem. Redpanda speaks the Kafka API; the same checks
 |---|---|---|
 | **Consumer-group lag** per topic | growing | consumer can't keep up with the producer (the consumer service is the bottleneck) |
 | Under-replicated / offline partitions | >0 | broker/disk problem; durability at risk |
-| Partition count vs consumer concurrency | — | effective concurrency = `partitions / consumer_ratio`, *not* the `kafkaWorkers` setting |
+| Partition count vs consumer concurrency | — | effective concurrency = `partitions / consumer_ratio` |
 | Broker disk usage | near full | Redpanda/Kafka will throttle or stall producers |
 | Topic throughput (msgs/s in vs out) | out << in | backlog building |
 

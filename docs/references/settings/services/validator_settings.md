@@ -8,7 +8,6 @@
 |---------|------|---------|---------------------|-------|
 | GRPCAddress | string | "localhost:8081" | validator_grpcAddress | gRPC client connections |
 | GRPCListenAddress | string | ":8081" | validator_grpcListenAddress | **CRITICAL** - gRPC server binding, service only starts if not empty |
-| KafkaWorkers | int | 0 | validator_kafkaWorkers | Kafka worker thread configuration |
 | SendBatchSize | int | 100 | validator_sendBatchSize | Batch processing size |
 | SendBatchTimeout | int | 2 | validator_sendBatchTimeout | Batch processing timeout |
 | SendBatchWorkers | int | 10 | validator_sendBatchWorkers | Batch worker thread count |
@@ -28,23 +27,28 @@
 ## Configuration Dependencies
 
 ### gRPC Server Management
+
 - Service only starts if `GRPCListenAddress` is not empty
 - Health checks are conditional on gRPC server configuration
 
 ### HTTP Server Management
+
 - HTTP server only starts if `HTTPListenAddress` is not empty
 - Rate limiting applied when HTTP server is enabled
 - Uses `HTTPRateLimit` for middleware configuration
 
 ### Debug Logging
+
 - When `VerboseDebug = true`, provides detailed logging for validation operations
 - Controls logging in block assembly interactions
 
 ### Batch Processing
+
 - `SendBatchSize`, `SendBatchTimeout`, and `SendBatchWorkers` work together
 - Controls transaction batch processing performance
 
 ### Block Validation Retry Logic
+
 - `BlockValidationMaxRetries`, `BlockValidationRetrySleep`, and `BlockValidationDelay` control resilience
 - Manages block validation failure recovery
 
