@@ -34,8 +34,8 @@ func registerWirePeer(t *testing.T, reg *blockchain.CentralizedPeerRegistry, id 
 func TestGetNodeStatusMessage_SeparatesLegacyPeerCount(t *testing.T) {
 	s, reg := newServerWithLocalRegistry(t)
 
-	s.addConnectedPeer(mustNewPeerID(t), "client/1.0", 10, nil, "")
-	s.addConnectedPeer(mustNewPeerID(t), "client/1.0", 20, nil, "")
+	s.addConnectedPeer(mustNewPeerID(t), "client/1.0", peerHeightClaim{Height: 10, AdvertisedHeight: 10}, nil, "")
+	s.addConnectedPeer(mustNewPeerID(t), "client/1.0", peerHeightClaim{Height: 20, AdvertisedHeight: 20}, nil, "")
 	registerWirePeer(t, reg, "legacy:203.0.113.7:8333", 30, "")
 	registerWirePeer(t, reg, "legacy:203.0.113.8:8333", 31, "")
 	registerWirePeer(t, reg, "legacy:203.0.113.9:8333", 32, "")
@@ -73,7 +73,7 @@ func TestSyncCoordinator_NeverSeesWirePeer(t *testing.T) {
 func TestGetPeerRegistry_ExcludesWirePeers(t *testing.T) {
 	s, reg := newServerWithLocalRegistry(t)
 
-	s.addConnectedPeer(mustNewPeerID(t), "client/1.0", 10, nil, "")
+	s.addConnectedPeer(mustNewPeerID(t), "client/1.0", peerHeightClaim{Height: 10, AdvertisedHeight: 10}, nil, "")
 	registerWirePeer(t, reg, "legacy:203.0.113.7:8333", 30, "")
 
 	resp, err := s.GetPeerRegistry(context.Background(), nil)
@@ -86,7 +86,7 @@ func TestGetPeerRegistry_ExcludesWirePeers(t *testing.T) {
 func TestGetPeers_ExcludesWirePeers(t *testing.T) {
 	s, reg := newServerWithLocalRegistry(t)
 
-	s.addConnectedPeer(mustNewPeerID(t), "client/1.0", 10, nil, "")
+	s.addConnectedPeer(mustNewPeerID(t), "client/1.0", peerHeightClaim{Height: 10, AdvertisedHeight: 10}, nil, "")
 	registerWirePeer(t, reg, "legacy:203.0.113.7:8333", 30, "")
 
 	resp, err := s.GetPeers(context.Background(), nil)
@@ -114,8 +114,8 @@ func TestReconcileConnectionStates_LeavesWirePeersConnected(t *testing.T) {
 	liveID := mustNewPeerID(t)
 	goneID := mustNewPeerID(t)
 
-	s.addConnectedPeer(liveID, "", 0, nil, "")
-	s.addConnectedPeer(goneID, "", 0, nil, "")
+	s.addConnectedPeer(liveID, "", peerHeightClaim{Height: 0, AdvertisedHeight: 0}, nil, "")
+	s.addConnectedPeer(goneID, "", peerHeightClaim{Height: 0, AdvertisedHeight: 0}, nil, "")
 	registerWirePeer(t, reg, "legacy:203.0.113.7:8333", 912344, "")
 	registerWirePeer(t, reg, "legacy:198.51.100.9:8333", 912100, "")
 

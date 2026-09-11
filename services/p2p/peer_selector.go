@@ -193,7 +193,7 @@ func (ps *PeerSelector) getFullNodeCandidates(peers []*blockchain.PeerInfo, basi
 	for _, p := range peers {
 		if ps.isEligibleFullNode(p, now, basicEligible, healthByURL) {
 			candidates = append(candidates, p)
-			ps.logger.Debugf("[PeerSelector] Full node candidate: %s (validated_height=%d, advertised_height=%d, mode=%s)",
+			ps.logger.Debugf("[PeerSelector] Full node candidate: %s (validated_height=%d, sync_height=%d, mode=%s)",
 				p.ID, p.ValidatedHeight, p.Height, p.Storage)
 		}
 	}
@@ -209,7 +209,7 @@ func (ps *PeerSelector) getPrunedNodeCandidates(peers []*blockchain.PeerInfo, ba
 		// Only include if eligible but NOT a full node
 		if ps.isEligible(p, basicEligible, healthByURL) && !ps.isEffectiveFullNode(p, now) {
 			candidates = append(candidates, p)
-			ps.logger.Debugf("[PeerSelector] Pruned node candidate: %s (validated_height=%d, advertised_height=%d, mode=%s)",
+			ps.logger.Debugf("[PeerSelector] Pruned node candidate: %s (validated_height=%d, sync_height=%d, mode=%s)",
 				p.ID, p.ValidatedHeight, p.Height, p.Storage)
 		}
 	}
@@ -317,11 +317,11 @@ func (ps *PeerSelector) selectFromCandidates(candidates []*blockchain.PeerInfo, 
 	if !isFullNode {
 		nodeType = "PRUNED"
 	}
-	ps.logger.Infof("[PeerSelector] Selected %s node peer %s (validated_height=%d, advertised_height=%d, banScore=%d, avgResponseTimeMs=%d) from %d candidates (topBandSize=%d, index=%d)",
+	ps.logger.Infof("[PeerSelector] Selected %s node peer %s (validated_height=%d, sync_height=%d, banScore=%d, avgResponseTimeMs=%d) from %d candidates (topBandSize=%d, index=%d)",
 		nodeType, selected.ID, selected.ValidatedHeight, selected.Height, selected.BanScore, selected.AvgResponseTimeMs, len(candidates), topBandSize, selectedIndex)
 
 	for i := 0; i < len(candidates) && i < 3; i++ {
-		ps.logger.Debugf("[PeerSelector] Candidate %d: %s (validated_height=%d, advertised_height=%d, banScore=%d, avgResponseTimeMs=%d, mode=%s, url=%s)",
+		ps.logger.Debugf("[PeerSelector] Candidate %d: %s (validated_height=%d, sync_height=%d, banScore=%d, avgResponseTimeMs=%d, mode=%s, url=%s)",
 			i+1, candidates[i].ID, candidates[i].ValidatedHeight, candidates[i].Height, candidates[i].BanScore, candidates[i].AvgResponseTimeMs, candidates[i].Storage, candidates[i].DataHubURL)
 	}
 

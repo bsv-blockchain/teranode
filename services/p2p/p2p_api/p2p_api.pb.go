@@ -51,6 +51,10 @@ type Peer struct {
 	Banscore         int32                  `protobuf:"varint,25,opt,name=banscore,proto3" json:"banscore,omitempty"`
 	Whitelisted      bool                   `protobuf:"varint,26,opt,name=whitelisted,proto3" json:"whitelisted,omitempty"`
 	FeeFilter        int64                  `protobuf:"varint,27,opt,name=feeFilter,proto3" json:"feeFilter,omitempty"`
+	// Raw height the peer advertised, before the unvalidated-lead cap that
+	// produces currentHeight. Telemetry only; currentHeight still drives sync
+	// decisions. 0 for peers on older versions that do not report it.
+	AdvertisedHeight uint32 `protobuf:"varint,28,opt,name=advertisedHeight,proto3" json:"advertisedHeight,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -270,6 +274,13 @@ func (x *Peer) GetWhitelisted() bool {
 func (x *Peer) GetFeeFilter() int64 {
 	if x != nil {
 		return x.FeeFilter
+	}
+	return 0
+}
+
+func (x *Peer) GetAdvertisedHeight() uint32 {
+	if x != nil {
+		return x.AdvertisedHeight
 	}
 	return 0
 }
@@ -2399,6 +2410,9 @@ type PeerRegistryInfo struct {
 	CatchupAttempts  int64 `protobuf:"varint,27,opt,name=catchup_attempts,json=catchupAttempts,proto3" json:"catchup_attempts,omitempty"`
 	CatchupSuccesses int64 `protobuf:"varint,28,opt,name=catchup_successes,json=catchupSuccesses,proto3" json:"catchup_successes,omitempty"`
 	CatchupFailures  int64 `protobuf:"varint,29,opt,name=catchup_failures,json=catchupFailures,proto3" json:"catchup_failures,omitempty"`
+	// Raw height the peer advertised, before the unvalidated-lead cap that
+	// produces `height`. Telemetry only; `height` still drives sync decisions.
+	AdvertisedHeight uint32 `protobuf:"varint,30,opt,name=advertised_height,json=advertisedHeight,proto3" json:"advertised_height,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -2618,6 +2632,13 @@ func (x *PeerRegistryInfo) GetCatchupSuccesses() int64 {
 func (x *PeerRegistryInfo) GetCatchupFailures() int64 {
 	if x != nil {
 		return x.CatchupFailures
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetAdvertisedHeight() uint32 {
+	if x != nil {
+		return x.AdvertisedHeight
 	}
 	return 0
 }
@@ -2863,7 +2884,7 @@ var File_services_p2p_p2p_api_p2p_api_proto protoreflect.FileDescriptor
 
 const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\n" +
-	"\"services/p2p/p2p_api/p2p_api.proto\x12\ap2p_api\x1a\x1bgoogle/protobuf/empty.proto\"\xb0\x06\n" +
+	"\"services/p2p/p2p_api/p2p_api.proto\x12\ap2p_api\x1a\x1bgoogle/protobuf/empty.proto\"\xdc\x06\n" +
 	"\x04Peer\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04addr\x18\x02 \x01(\tR\x04addr\x12\x1c\n" +
@@ -2896,7 +2917,8 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\rcurrentHeight\x18\x18 \x01(\rR\rcurrentHeight\x12\x1a\n" +
 	"\bbanscore\x18\x19 \x01(\x05R\bbanscore\x12 \n" +
 	"\vwhitelisted\x18\x1a \x01(\bR\vwhitelisted\x12\x1c\n" +
-	"\tfeeFilter\x18\x1b \x01(\x03R\tfeeFilter\"7\n" +
+	"\tfeeFilter\x18\x1b \x01(\x03R\tfeeFilter\x12*\n" +
+	"\x10advertisedHeight\x18\x1c \x01(\rR\x10advertisedHeight\"7\n" +
 	"\x10GetPeersResponse\x12#\n" +
 	"\x05peers\x18\x01 \x03(\v2\r.p2p_api.PeerR\x05peers\":\n" +
 	"\x0eBanPeerRequest\x12\x12\n" +
@@ -3020,7 +3042,7 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\x17IsPeerUnhealthyResponse\x12!\n" +
 	"\fis_unhealthy\x18\x01 \x01(\bR\visUnhealthy\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12)\n" +
-	"\x10reputation_score\x18\x03 \x01(\x02R\x0freputationScore\"\xe7\b\n" +
+	"\x10reputation_score\x18\x03 \x01(\x02R\x0freputationScore\"\x94\t\n" +
 	"\x10PeerRegistryInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06height\x18\x02 \x01(\rR\x06height\x12\x1d\n" +
@@ -3052,7 +3074,8 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\x17last_catchup_error_time\x18\x1a \x01(\x03R\x14lastCatchupErrorTime\x12)\n" +
 	"\x10catchup_attempts\x18\x1b \x01(\x03R\x0fcatchupAttempts\x12+\n" +
 	"\x11catchup_successes\x18\x1c \x01(\x03R\x10catchupSuccesses\x12)\n" +
-	"\x10catchup_failures\x18\x1d \x01(\x03R\x0fcatchupFailures\"J\n" +
+	"\x10catchup_failures\x18\x1d \x01(\x03R\x0fcatchupFailures\x12+\n" +
+	"\x11advertised_height\x18\x1e \x01(\rR\x10advertisedHeight\"J\n" +
 	"\x17GetPeerRegistryResponse\x12/\n" +
 	"\x05peers\x18\x01 \x03(\v2\x19.p2p_api.PeerRegistryInfoR\x05peers\"b\n" +
 	"\x1cRecordBytesDownloadedRequest\x12\x17\n" +

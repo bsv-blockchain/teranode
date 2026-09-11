@@ -942,7 +942,15 @@ func (m Model) renderPeersPanel() string {
 				repStyled = errorStyle.Render(repScore)
 			}
 
-			line := fmt.Sprintf("  %s h:%d rep:%s", peerID, peer.Height, repStyled)
+			// AdvertisedHeight is the peer's raw claim; Height is capped for
+			// sync decisions and only used as a fallback for older peers that
+			// do not report AdvertisedHeight.
+			displayHeight := peer.AdvertisedHeight
+			if displayHeight == 0 {
+				displayHeight = peer.Height
+			}
+
+			line := fmt.Sprintf("  %s h:%d rep:%s", peerID, displayHeight, repStyled)
 			content.WriteString(line)
 			content.WriteString("\n")
 			shown++

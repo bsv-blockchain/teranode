@@ -234,7 +234,7 @@ func TestSimpleClientGetPeers(t *testing.T) {
 			GetPeersFunc: func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeersResponse, error) {
 				return &p2p_api.GetPeersResponse{
 					Peers: []*p2p_api.Peer{
-						{Id: "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz", Addr: "/ip4/127.0.0.1/tcp/9905", CurrentHeight: 101, Banscore: 7, BytesReceived: 2048},
+						{Id: "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz", Addr: "/ip4/127.0.0.1/tcp/9905", CurrentHeight: 101, AdvertisedHeight: 962710, Banscore: 7, BytesReceived: 2048},
 						{Id: "12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw", Addr: "/ip4/127.0.0.2/tcp/9905", CurrentHeight: 99},
 					},
 				}, nil
@@ -251,10 +251,12 @@ func TestSimpleClientGetPeers(t *testing.T) {
 		require.Len(t, peers, 2)
 		require.Equal(t, "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz", peers[0].ID.String())
 		require.Equal(t, uint32(101), peers[0].Height)
+		require.Equal(t, uint32(962710), peers[0].AdvertisedHeight)
 		require.Equal(t, 7, peers[0].BanScore)
 		require.Equal(t, uint64(2048), peers[0].BytesReceived)
 		require.True(t, peers[0].IsConnected)
 		require.Equal(t, uint32(99), peers[1].Height)
+		require.Equal(t, uint32(0), peers[1].AdvertisedHeight, "older peer with no advertised height reported")
 	})
 
 	t.Run("grpc_error", func(t *testing.T) {
@@ -957,7 +959,7 @@ func TestSimpleClientGetPeerRegistry(t *testing.T) {
 			GetPeerRegistryFunc: func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeerRegistryResponse, error) {
 				return &p2p_api.GetPeerRegistryResponse{
 					Peers: []*p2p_api.PeerRegistryInfo{
-						{Id: "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz", Height: 99, IsConnected: true},
+						{Id: "12D3KooWBhWMmHCXuyfM48dEPRsBzkemQQu71yC9rR2zHGmAjzQz", Height: 99, AdvertisedHeight: 962710, IsConnected: true},
 					},
 				}, nil
 			},
@@ -966,6 +968,8 @@ func TestSimpleClientGetPeerRegistry(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, peers, 1)
 		require.Equal(t, uint32(99), peers[0].Height)
+		require.Equal(t, uint32(962710), peers[0].AdvertisedHeight,
+			"the asset peers endpoint reads AdvertisedHeight off this conversion")
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
