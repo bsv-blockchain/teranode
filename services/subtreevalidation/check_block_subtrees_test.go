@@ -173,7 +173,11 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		response, err := server.CheckBlockSubtrees(context.Background(), request)
 		require.Error(t, err)
 		assert.Nil(t, response)
-		assert.Contains(t, err.Error(), "Failed to get block from blockchain client")
+		// The message must name the thing that actually failed. This site parses the
+		// block bytes off the request; it never touches the blockchain client, and the
+		// gRPC wrap puts this message on the status line a caller logs.
+		assert.Contains(t, err.Error(), "failed to deserialise block from request bytes")
+		assert.NotContains(t, err.Error(), "blockchain client")
 	})
 
 	t.Run("BlockchainClientError", func(t *testing.T) {
@@ -241,7 +245,10 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		response, err := server.CheckBlockSubtrees(context.Background(), request)
 		require.Error(t, err)
 		assert.Nil(t, response)
-		assert.Contains(t, err.Error(), "Failed to get block headers from blockchain client")
+		// Tag included on purpose. Server.go carries the same message under
+		// [CheckSubtree], and the gRPC wrap puts this line in front of a caller, so
+		// the tag is the only thing telling the two call sites apart in a log.
+		assert.Contains(t, err.Error(), "[CheckBlockSubtrees] Failed to get block headers from blockchain client")
 	})
 
 	t.Run("HTTPFetchingPath", func(t *testing.T) {
@@ -424,7 +431,10 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		response, err := server.CheckBlockSubtrees(context.Background(), request)
 		require.Error(t, err)
 		assert.Nil(t, response)
-		assert.Contains(t, err.Error(), "failed to load subtree transactions")
+		// The handler now returns a gRPC-wrapped error, whose Error() renders only the
+		// outermost message; the chain lives in the status details. Unwrap the way the
+		// production client does before asserting on the nested reason.
+		assert.Contains(t, errors.UnwrapGRPC(err).Error(), "failed to load subtree transactions")
 	})
 }
 
@@ -924,7 +934,7 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 		// from http://127.0.0.1:0, which fails deterministically because nothing listens there. The important thing is it detected missing via quorum.
 		_, err = server.CheckBlockSubtrees(context.Background(), request)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to load subtree transactions")
+		assert.Contains(t, errors.UnwrapGRPC(err).Error(), "failed to load subtree transactions")
 	})
 
 	t.Run("QuorumTimeout_TreatsAsMissing", func(t *testing.T) {
@@ -998,8 +1008,8 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 		_, err = server.CheckBlockSubtrees(context.Background(), request)
 		require.Error(t, err)
 		// The error should be from the HTTP fetch, not from quorum timeout
-		assert.Contains(t, err.Error(), "failed to load subtree transactions")
-		assert.NotContains(t, err.Error(), "quorum lock")
+		assert.Contains(t, errors.UnwrapGRPC(err).Error(), "failed to load subtree transactions")
+		assert.NotContains(t, errors.UnwrapGRPC(err).Error(), "quorum lock")
 	})
 
 	t.Run("QuorumContextCancelled_ReturnsError", func(t *testing.T) {
