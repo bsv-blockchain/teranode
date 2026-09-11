@@ -46,7 +46,7 @@ It handles the core functionalities of the UTXO Store:
 - **Delete**: Remove UTXOs from the store.
 - **Block Height Management**: Set and retrieve the current blockchain height, which can be crucial for determining the spendability of certain UTXOs based on locktime conditions.
 - **FreezeUTXOs / UnFreezeUTXOs**: Mark UTXOs as frozen or unfrozen, in scenarios involving alert systems or temporary holds on specific UTXOs.
-- **ReAssignUTXO**: Reassign a UTXO to a different owner.
+- **ReAssignUTXO**: Update a frozen output's commitment and maturity gate. Ownership changes currently strand the output for both owners; see the [reassignment limitation](../services/alert.md#24-utxo-reassignment).
 
 **Principles**:
 

@@ -54,10 +54,13 @@ func TestReassignSQLiteEnforcesMaturityAndRejectsUnstoredScript(t *testing.T) {
 	require.NoError(t, err)
 	requireRejected := func(tx *bt.Tx, reason string) {
 		t.Helper()
-		require.Error(t, td.PropagationClient.ProcessTransaction(td.Ctx, tx))
-		// Validation re-extends in place. Preserve the submitted extended
-		// fields so a later attempt still supplies the same replacement script.
-		probe, err := bt.NewTxFromBytes(tx.ExtendedBytes())
+		// Snapshot before either path runs, and decode separate requests.
+		// Keep tx untouched so retries still supply the original extended fields.
+		submittedBytes := tx.ExtendedBytes()
+		ingress, err := bt.NewTxFromBytes(submittedBytes)
+		require.NoError(t, err)
+		require.Error(t, td.PropagationClient.ProcessTransaction(td.Ctx, ingress))
+		probe, err := bt.NewTxFromBytes(submittedBytes)
 		require.NoError(t, err)
 		_, err = v.ValidateWithOptions(td.Ctx, probe, td.UtxoStore.GetBlockHeight(),
 			&validator.Options{AddTXToBlockAssembly: false})
