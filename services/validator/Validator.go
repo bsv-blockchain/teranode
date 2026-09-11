@@ -34,6 +34,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
+	"github.com/bsv-blockchain/teranode/util/rejectedtx"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/cespare/xxhash/v2"
 	"github.com/ordishs/gocore"
@@ -733,9 +734,13 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 
 				txID := tx.TxIDChainHash().String()
 
+				// The reason is re-broadcast network-wide by p2p, so it carries
+				// the error codes (plus at most one fixed reject literal) rather
+				// than the raw, input-shaped error text; see util/rejectedtx. The
+				// full error is still returned to the caller.
 				m := &kafkamessage.KafkaRejectedTxTopicMessage{
 					TxHash: txID,
-					Reason: err.Error(),
+					Reason: rejectedtx.Reason(err),
 					PeerId: "", // Empty peer_id indicates internal rejection
 				}
 

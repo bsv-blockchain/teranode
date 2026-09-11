@@ -44,6 +44,8 @@
 | SeenHashMaxSize | int | 10000 | p2p_seen_hash_max_size | Maximum entries in each per-topic seen-hash announcement dedup cache |
 | SeenHashTTL | time.Duration | 2m | p2p_seen_hash_ttl | Accounting window for the seen-hash announcement dedup |
 | SeenHashMaxPublishers | int | 3 | p2p_seen_hash_max_publishers | Distinct announcers of one hash forwarded to Kafka per publish window |
+| RejectedTxPublishRate | int | 10 | p2p_rejected_tx_publish_rate | Steady-state re-broadcasts per second of internally rejected transactions on the rejected_tx gossip topic (0 or negative selects the default; no unlimited mode) |
+| RejectedTxPublishBurst | int | 100 | p2p_rejected_tx_publish_burst | Back-to-back rejected-tx re-broadcasts allowed before the steady-state rate applies (0 or negative selects the default) |
 | PeerRegistryBatchInterval | time.Duration | 1s | p2p_peer_registry_batch_interval | Flush interval for batched peer-registry updates from gossip handlers |
 | GossipHandlerConcurrency | int | 4 | p2p_gossip_handler_concurrency | Concurrent gossip handler workers per pubsub topic |
 | WebSocketMaxConnections | int | 1000 | p2p_websocket_max_connections | Maximum concurrent /p2p-ws websocket connections (0 disables the cap) |

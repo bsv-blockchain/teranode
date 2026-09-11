@@ -73,6 +73,22 @@ func TestP2PPeerMapSettings_LoaderReadsAllKeys(t *testing.T) {
 					"loader must read p2p_seen_hash_max_publishers; otherwise the publisher budget is unconfigurable")
 			},
 		},
+		{
+			key:      "p2p_rejected_tx_publish_rate",
+			override: "3",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 3, s.P2P.RejectedTxPublishRate,
+					"loader must read p2p_rejected_tx_publish_rate; otherwise the rejected-tx egress rate is unconfigurable")
+			},
+		},
+		{
+			key:      "p2p_rejected_tx_publish_burst",
+			override: "17",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 17, s.P2P.RejectedTxPublishBurst,
+					"loader must read p2p_rejected_tx_publish_burst; otherwise the rejected-tx egress burst is unconfigurable")
+			},
+		},
 	}
 
 	for _, tc := range cases {

@@ -1017,8 +1017,9 @@ func (s *Server) cleanupPeerMaps() {
 	// being announced.
 	seenBlockExpired := s.blockSeenHashes.DeleteExpired(now)
 	seenSubtreeExpired := s.subtreeSeenHashes.DeleteExpired(now)
-	if seenBlockExpired > 0 || seenSubtreeExpired > 0 {
-		s.logger.Infof("[cleanupPeerMaps] removed %d expired seen-block-hash entries, %d expired seen-subtree-hash entries", seenBlockExpired, seenSubtreeExpired)
+	rejectedTxExpired := s.rejectedTxEgress.deleteExpired(now)
+	if seenBlockExpired > 0 || seenSubtreeExpired > 0 || rejectedTxExpired > 0 {
+		s.logger.Infof("[cleanupPeerMaps] removed %d expired seen-block-hash entries, %d expired seen-subtree-hash entries, %d expired rejected-tx dedup entries", seenBlockExpired, seenSubtreeExpired, rejectedTxExpired)
 	}
 
 	// Evict expired reputationCache entries. shouldSkipUnhealthyPeer only ever
@@ -1104,8 +1105,8 @@ func (s *Server) cleanupPeerMaps() {
 	}
 
 	// Log current sizes
-	s.logger.Infof("[cleanupPeerMaps] current map sizes - blocks: %d, subtrees: %d, seen block hashes: %d, seen subtree hashes: %d",
-		s.blockPeerMap.Len(), s.subtreePeerMap.Len(), s.blockSeenHashes.Len(), s.subtreeSeenHashes.Len())
+	s.logger.Infof("[cleanupPeerMaps] current map sizes - blocks: %d, subtrees: %d, seen block hashes: %d, seen subtree hashes: %d, rejected-tx dedup: %d",
+		s.blockPeerMap.Len(), s.subtreePeerMap.Len(), s.blockSeenHashes.Len(), s.subtreeSeenHashes.Len(), s.rejectedTxEgress.size())
 }
 
 // startPeerMapCleanup starts the periodic cleanup goroutine

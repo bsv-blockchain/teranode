@@ -371,3 +371,66 @@ func errorCodeCategory(code ERR) string {
 		return ""
 	}
 }
+
+// maxChainWalkDepth bounds how many links Walk (and so CodeChain) visits.
+// It counts links, not the codes a caller keeps, so it holds on chains where
+// every link is skipped: same-coded chains, foreign wrappers, or a cycle that
+// slipped past SetWrappedErr's guards.
+//
+// Unlike maxIsChainDepth, which is pure cycle insurance set far above any
+// legitimate depth, this is a deliberate truncation: legitimate chains are a
+// handful of links, and the tens-of-thousands-link shape (mass spend failure,
+// block 820116) is exactly the error that reaches the per-rejection paths this
+// walker serves. Walking it costs hundreds of microseconds per call and its
+// tail carries nothing worth sending to every peer, so a code or message
+// buried past this depth is knowingly not reported. Callers that must see the
+// innermost link on any chain (DeepestPublicCause, (*Error).Is) keep their own
+// loops on the larger bound.
+const maxChainWalkDepth = 64
+
+// Walk calls visit for each teranode error along err's unwrap chain,
+// outermost first, until visit returns false or the chain ends. Foreign
+// (non-teranode) links are stepped over without a call. The walk visits at
+// most maxChainWalkDepth links in total, so it is bounded on any chain shape.
+func Walk(err error, visit func(*Error) bool) {
+	for e, depth := err, 0; e != nil && depth < maxChainWalkDepth; e, depth = errors.Unwrap(e), depth+1 {
+		te, ok := e.(*Error)
+		if !ok || te == nil {
+			continue
+		}
+
+		if !visit(te) {
+			return
+		}
+	}
+}
+
+// CodeChain returns the codes of the teranode errors along err's unwrap
+// chain, outermost first, with repeated codes dropped and at most max entries
+// (a non-positive max means no cap). ERR_UNKNOWN links are skipped without
+// stopping the walk: that is also what New produces when it flattens a
+// foreign error passed as the wrapped error. The walk itself is bounded by
+// Walk. It is the bounded, input-free summary of an error for places where
+// the full text must not travel, such as messages re-broadcast to other nodes.
+func CodeChain(err error, max int) []ERR {
+	var codes []ERR
+
+	seen := make(map[ERR]struct{})
+
+	Walk(err, func(te *Error) bool {
+		if te.code == ERR_UNKNOWN {
+			return true
+		}
+
+		if _, dup := seen[te.code]; dup {
+			return true
+		}
+
+		seen[te.code] = struct{}{}
+		codes = append(codes, te.code)
+
+		return max <= 0 || len(codes) < max
+	})
+
+	return codes
+}
