@@ -59,7 +59,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "p2p",
 			Name:      "rejected_tx_publish_suppressed_total",
-			Help:      "Number of internally rejected transactions not re-broadcast on the rejected_tx gossip topic, by reason (rate_limited = egress token bucket exhausted, duplicate = same txid already re-broadcast within the publish window)",
+			Help:      "Number of internally rejected transactions not re-broadcast on the rejected_tx gossip topic, by reason (rate_limited = egress token bucket exhausted, duplicate = txid still inside its dedup period after an earlier re-broadcast, about two 15s publish windows under sustained repeats)",
 		},
 		[]string{"reason"},
 	)

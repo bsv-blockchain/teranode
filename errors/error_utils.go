@@ -375,10 +375,17 @@ func errorCodeCategory(code ERR) string {
 // maxChainWalkDepth bounds how many links Walk (and so CodeChain) visits.
 // It counts links, not the codes a caller keeps, so it holds on chains where
 // every link is skipped: same-coded chains, foreign wrappers, or a cycle that
-// slipped past SetWrappedErr's guards. Legitimate chains are a handful of
-// links; the tens-of-thousands-link shape (mass spend failure, block 820116)
-// is exactly the error that reaches the per-rejection paths this walker
-// serves, and its tail carries nothing worth the visit.
+// slipped past SetWrappedErr's guards.
+//
+// Unlike maxIsChainDepth, which is pure cycle insurance set far above any
+// legitimate depth, this is a deliberate truncation: legitimate chains are a
+// handful of links, and the tens-of-thousands-link shape (mass spend failure,
+// block 820116) is exactly the error that reaches the per-rejection paths this
+// walker serves. Walking it costs hundreds of microseconds per call and its
+// tail carries nothing worth sending to every peer, so a code or message
+// buried past this depth is knowingly not reported. Callers that must see the
+// innermost link on any chain (DeepestPublicCause, (*Error).Is) keep their own
+// loops on the larger bound.
 const maxChainWalkDepth = 64
 
 // Walk calls visit for each teranode error along err's unwrap chain,

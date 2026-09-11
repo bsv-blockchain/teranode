@@ -46,6 +46,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
+	"github.com/bsv-blockchain/teranode/util/rejectedtx"
 	"github.com/bsv-blockchain/teranode/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -1220,7 +1221,7 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 		// invalid transaction, and each re-broadcast is fanned out to the whole
 		// mesh, so the egress is deduplicated per txid and rate limited before
 		// any publish work. Suppression is counted, not logged per message.
-		grant, why := s.rejectedTxEgress.allow(txID, selfID, time.Now())
+		grant, why := s.rejectedTxEgress.allow(txID, selfID)
 		if grant == nil {
 			rejectedTxPublishSuppressed(why)
 			s.logger.Debugf("[rejectedTxHandler] not re-broadcasting rejected tx %s: %s", txID, why)
@@ -1228,14 +1229,23 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 			return nil
 		}
 
+		// The reason is held to the closed grammar in util/rejectedtx at this
+		// chokepoint, not only at the validator that produced it: during a
+		// rolling upgrade a pre-upgrade validator still publishes err.Error()
+		// on the in-cluster topic, and that free text must not leave the node.
+		reason := rejectedtx.Normalize(m.Reason)
+		if reason != m.Reason {
+			s.logger.Debugf("[rejectedTxHandler] rejected tx %s reason does not fit the reason grammar, sending %s", txID, reason)
+		}
+
 		rejectedTxMessage := RejectedTxMessage{
 			TxID:   txID,
-			Reason: m.Reason,
+			Reason: reason,
 			PeerID: selfID,
 		}
 
-		// Self-check against the bounds we enforce on ingress: truncates the
-		// validator's reason text so it always passes remote validation.
+		// Self-check against the bounds we enforce on ingress, so the message
+		// always passes remote validation.
 		rejectedTxMessage.sanitizeFields()
 
 		if err := rejectedTxMessage.validateFields(); err != nil {

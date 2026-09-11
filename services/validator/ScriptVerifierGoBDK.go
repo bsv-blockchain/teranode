@@ -18,11 +18,15 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/rejectedtx"
 )
 
 const (
-	errMsgInvalidTx = "GoBDK fail to ValidateTransaction"
-	errMsgPolicy    = "GoBDK fail to ValidateTransaction by policy settings"
+	// The outer messages are the fixed literals the rejected-tx reason may
+	// carry to the network; defining them in util/rejectedtx keeps the
+	// verifier and the allowlist from drifting apart.
+	errMsgInvalidTx = rejectedtx.DetailGoBDKInvalidTx
+	errMsgPolicy    = rejectedtx.DetailGoBDKPolicy
 
 	// mempoolHeight is the BDK / svnode sentinel for "this UTXO is not yet
 	// confirmed" — sourced from bitcoin-sv/src/protocol_era.h:14

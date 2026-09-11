@@ -175,10 +175,19 @@ func (c *seenHashCache) capLocked() int {
 	return c.maxSize
 }
 
-// ttlLocked returns the TTL in force. Callers must hold the mutex.
+// ttlLocked returns the TTL in force, never shorter than the publish window.
+// Check's expiry branch (entry older than the TTL: fresh announcement, publish)
+// runs before the publish window is consulted, so a TTL below the window would
+// re-publish every repeat that arrives after it and silently switch the dedup
+// off for every consumer, the rejected-tx egress included. Callers must hold
+// the mutex.
 func (c *seenHashCache) ttlLocked() time.Duration {
 	if c.ttl <= 0 {
 		return defaultSeenHashCacheTTL
+	}
+
+	if c.ttl < seenHashPublishWindow {
+		return seenHashPublishWindow
 	}
 
 	return c.ttl

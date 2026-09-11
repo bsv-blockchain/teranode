@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// rejectedTxGateClock is the wall clock the gate reads when none is injected.
+var rejectedTxGateClock = time.Now
+
 const (
 	// defaultRejectedTxPublishRate is the steady-state number of internally
 	// rejected transactions per second this node re-broadcasts on the
@@ -67,6 +70,10 @@ type rejectedTxEgressGate struct {
 	mu     sync.Mutex
 	bucket *tokenBucket
 	seen   seenHashCache
+	// clock is the single time source for allow and publishFailed, so a test
+	// on a synthetic timeline cannot have the bucket rewound by one call that
+	// reads the wall clock. Nil means time.Now.
+	clock func() time.Time
 }
 
 // rejectedTxGrant is one approved re-broadcast: the dedup slot and the rate
@@ -167,16 +174,31 @@ func (g *rejectedTxEgressGate) bucketLocked() *tokenBucket {
 	return g.bucket
 }
 
+// now reads the gate's clock.
+func (g *rejectedTxEgressGate) now() time.Time {
+	g.mu.Lock()
+	clock := g.clock
+	g.mu.Unlock()
+
+	if clock == nil {
+		return rejectedTxGateClock()
+	}
+
+	return clock()
+}
+
 // allow reports whether the rejected transaction txID may be re-broadcast now.
 // On approval it returns the grant to hand back should the publish not reach
 // the network; otherwise the grant is nil and reason is one of the
 // rejectedTxSuppressed* labels. The dedup check runs first so a repeated txid
 // never spends a rate-limit token; a txid refused by the rate limiter has its
 // dedup grant returned so it is not also treated as already announced.
-func (g *rejectedTxEgressGate) allow(txID, selfID string, now time.Time) (grant *rejectedTxGrant, reason string) {
+func (g *rejectedTxEgressGate) allow(txID, selfID string) (grant *rejectedTxGrant, reason string) {
 	g.mu.Lock()
 	bucket := g.bucketLocked()
 	g.mu.Unlock()
+
+	now := g.now()
 
 	if publish, _ := g.seen.Check(txID, selfID, now); !publish {
 		return nil, rejectedTxSuppressedDuplicate
@@ -196,7 +218,7 @@ func (g *rejectedTxEgressGate) allow(txID, selfID string, now time.Time) (grant 
 // same txid can retry rather than being suppressed as a duplicate, and the
 // rate token, since nothing was sent.
 func (gr *rejectedTxGrant) publishFailed() {
-	gr.bucket.refund(time.Now())
+	gr.bucket.refund(gr.gate.now())
 	gr.gate.seen.PublishFailed(gr.txID, gr.selfID)
 }
 
@@ -212,7 +234,7 @@ func (g *rejectedTxEgressGate) size() int {
 	return g.seen.Len()
 }
 
-// clear drops the dedup state. The limiter is kept: it holds no memory worth
+// clear drops the dedup state. The bucket is kept: it holds no memory worth
 // freeing and a refilled bucket on restart would only widen the burst.
 func (g *rejectedTxEgressGate) clear() {
 	g.seen.Clear()
