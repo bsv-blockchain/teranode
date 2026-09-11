@@ -239,9 +239,41 @@ func TestHeaderProvenance_ConcurrentReset(t *testing.T) {
 			go func() { defer wg.Done(); <-start; sm.fetchHeaderBlocks() }()
 			close(start)
 			wg.Wait()
+			// Reset disables headers-first mode under headerMu. If it wins
+			// the lock first, the late header is ignored; otherwise it clears
+			// the proof published by the header handler.
 			require.Zero(t, sm.verifiedCheckpointHeight)
 			require.Nil(t, sm.startHeader)
 			require.Equal(t, 1, sm.headerList.Len())
+		})
+	}
+}
+
+func TestHeaderProvenance_ResetOrdering(t *testing.T) {
+	for _, resetFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("resetFirst=%v", resetFirst), func(t *testing.T) {
+			sm, p, _ := newHeaderProvenanceManager(t)
+			anchor := hashFrom(0x52)
+			header := wire.NewBlockHeader(1, &anchor, &chainhash.Hash{}, 0x207fffff, 1)
+			hash := header.BlockHash()
+			sm.nextCheckpoint = &chaincfg.Checkpoint{Height: 101, Hash: &hash}
+			sm.headerList.PushBack(&headerNode{height: 100, hash: &anchor})
+			headers := wire.NewMsgHeaders()
+			require.NoError(t, headers.AddBlockHeader(header))
+			if resetFirst {
+				sm.resetHeaderState(&anchor, 100)
+			}
+			sm.handleHeadersMsg(&headersMsg{headers: headers, peer: p})
+			if !resetFirst {
+				require.Equal(t, int32(101), sm.verifiedCheckpointHeight)
+				sm.resetHeaderState(&anchor, 100)
+			}
+			sm.fetchHeaderBlocks()
+			require.False(t, sm.headersFirstMode.Load())
+			require.Zero(t, sm.verifiedCheckpointHeight)
+			require.Nil(t, sm.startHeader)
+			require.Equal(t, 1, sm.headerList.Len())
+			require.Equal(t, anchor, *sm.headerList.Front().Value.(*headerNode).hash)
 		})
 	}
 }

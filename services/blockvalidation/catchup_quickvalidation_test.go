@@ -119,6 +119,7 @@ func TestTryQuickValidation(t *testing.T) {
 		block := testhelpers.CreateTestBlocks(t, 1)[0]
 		block.Height = 100
 		block.Header.HashMerkleRoot = block.CoinbaseTx.TxIDChainHash()
+		block.TransactionCount = 1
 
 		catchupCtx := &CatchupContext{
 			useQuickValidation:      true,

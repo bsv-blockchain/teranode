@@ -394,7 +394,9 @@ func (u *BlockValidation) processBlockSubtrees(ctx context.Context, block *model
 // This is the fallback when SubtreeBatchPrefetchDepth is 0.
 func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, block *model.Block) (uint64, error) {
 	numSubtrees := len(block.Subtrees)
-	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
+	if len(block.SubtreeSlices) != numSubtrees {
+		block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
+	}
 	var existingBlockID uint64
 
 	// Get block ID first (check for retry using first tx after reading first batch)
@@ -475,7 +477,9 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 //   - On retry, Create() returns ErrTxExists, and SetMinedMulti() updates the correct BlockID
 func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, block *model.Block, prefetchDepth int) (uint64, error) {
 	numSubtrees := len(block.Subtrees)
-	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
+	if len(block.SubtreeSlices) != numSubtrees {
+		block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
+	}
 	var existingBlockID uint64
 	blockIDSet := false
 
@@ -617,7 +621,9 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 //   - error: If processing fails or context is cancelled
 func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context, block *model.Block, prefetchDepth int, writeJobsChan chan<- *SubtreeWriteJob) (uint64, error) {
 	numSubtrees := len(block.Subtrees)
-	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
+	if len(block.SubtreeSlices) != numSubtrees {
+		block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
+	}
 	var existingBlockID uint64
 	blockIDSet := false
 
@@ -768,35 +774,41 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 	if !localExists {
 		return subtreeResult{err: errors.NewNotFoundError("[getBlockTransactions][%s] subtree %s not found locally", block.Hash().String(), subtreeHash.String())}
 	}
-	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], localFileType)
-	if err != nil {
-		return subtreeResult{err: errors.NewNotFoundError("[getBlockTransactions][%s] failed to get subtree %s", block.Hash().String(), subtreeHash.String(), err)}
+	// Reuse nodes authenticated by the quick preflight. Each batch reads its
+	// slice before the processing stage replaces it with the completed subtree.
+	var subtree *subtreepkg.Subtree
+	if len(block.SubtreeSlices) == len(block.Subtrees) {
+		subtree = block.SubtreeSlices[subtreeIdx]
 	}
-	defer subtreeReader.Close()
-
-	// Use pooled buffered reader to reduce GC pressure
 	bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
-	bufferedReader.Reset(subtreeReader)
 	defer func() {
 		bufferedReader.Reset(nil)
 		bufioReaderPool.Put(bufferedReader)
 	}()
-
-	// subtree only contains the tx hashes (nodes) of the subtree
-	var subtree *subtreepkg.Subtree
-	if u.mmapDir != "" {
-		subtree, err = subtreepkg.NewSubtreeFromReaderMmap(bufferedReader, u.mmapDir)
+	if subtree == nil {
+		subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], localFileType)
 		if err != nil {
-			// Fallback to heap on mmap failure — reset reader and retry
-			u.logger.Warnf("[getBlockTransactions][%s] mmap deserialization failed for subtree %s, falling back to heap: %v", block.Hash().String(), subtreeHash.String(), err)
-			bufferedReader.Reset(subtreeReader)
+			return subtreeResult{err: errors.NewNotFoundError("[getBlockTransactions][%s] failed to get subtree %s", block.Hash().String(), subtreeHash.String(), err)}
+		}
+		defer subtreeReader.Close()
+
+		bufferedReader.Reset(subtreeReader)
+		// subtree only contains the tx hashes (nodes) of the subtree
+		if u.mmapDir != "" {
+			subtree, err = subtreepkg.NewSubtreeFromReaderMmap(bufferedReader, u.mmapDir)
+			if err != nil {
+				// Fallback to heap on mmap failure — reset reader and retry
+				u.logger.Warnf("[getBlockTransactions][%s] mmap deserialization failed for subtree %s, falling back to heap: %v", block.Hash().String(), subtreeHash.String(), err)
+				bufferedReader.Reset(subtreeReader)
+				subtree, err = subtreepkg.NewSubtreeFromReader(bufferedReader)
+			}
+		} else {
 			subtree, err = subtreepkg.NewSubtreeFromReader(bufferedReader)
 		}
-	} else {
-		subtree, err = subtreepkg.NewSubtreeFromReader(bufferedReader)
-	}
-	if err != nil {
-		return subtreeResult{err: errors.NewProcessingError("[getBlockTransactions][%s] failed to deserialize subtree %s", block.Hash().String(), subtreeHash.String(), err)}
+		if err != nil {
+			return subtreeResult{err: errors.NewProcessingError("[getBlockTransactions][%s] failed to deserialize subtree %s", block.Hash().String(), subtreeHash.String(), err)}
+		}
+
 	}
 
 	// get the subtree data from disk
@@ -1542,9 +1554,10 @@ func (u *BlockValidation) extendBatch(
 	return nil
 }
 
-// authenticateQuickBlockBody checks the complete body before any batch can assign
-// a block ID, mutate UTXOs, or promote subtree files. The preflight reads only node
-// hashes; transaction data is still streamed in batches by the existing pipeline.
+// authenticateQuickBlockBody checks every subtree and transaction body before any
+// batch can assign a block ID, mutate UTXOs, or promote subtree files. Retain the
+// authenticated nodes for processing, but release decoded transactions one subtree
+// at a time to avoid retaining a second complete block's transaction data.
 func (u *BlockValidation) authenticateQuickBlockBody(ctx context.Context, block *model.Block) error {
 	body := &model.Block{Header: block.Header, CoinbaseTx: block.CoinbaseTx, Subtrees: block.Subtrees}
 	if err := body.GetAndValidateSubtrees(ctx, u.logger, u.subtreeStore, u.settings.BlockValidation.SubtreeBatchSize); err != nil {
@@ -1556,5 +1569,24 @@ func (u *BlockValidation) authenticateQuickBlockBody(ctx context.Context, block 
 	if err := body.CheckMerkleRoot(ctx); err != nil {
 		return errors.NewBlockInvalidError("[quickValidateBlock][%s] body does not match header merkle root", block.Hash().String(), err)
 	}
+	authenticatedCount := body.TransactionCount
+	if len(body.Subtrees) == 0 {
+		authenticatedCount = 1 // the separately serialized coinbase is the whole body
+	}
+	if block.TransactionCount != authenticatedCount {
+		return errors.NewBlockInvalidError("[quickValidateBlock][%s] transaction count %d does not match authenticated body count %d", block.Hash().String(), block.TransactionCount, authenticatedCount)
+	}
+	// Parsing transaction bytes checks each hash against the authenticated nodes
+	// and rejects missing or malformed data even in batches processed much later.
+	for i, hash := range body.Subtrees {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if result := u.readSubtree(ctx, body, i, hash); result.err != nil {
+			return result.err
+		}
+	}
+	block.SubtreeSlices = body.SubtreeSlices
+
 	return nil
 }
