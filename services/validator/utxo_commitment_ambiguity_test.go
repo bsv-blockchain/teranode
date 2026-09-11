@@ -179,6 +179,10 @@ func TestValidate_RejectsGenuineUnspendableOutput(t *testing.T) {
 	for _, f := range ambiguityFixtures {
 		t.Run(f.name, func(t *testing.T) {
 			v, parent, ctx := newAmbiguityValidator(t, "ambiguity_honest_"+f.name, f)
+			// The zero-value fixture cannot pay a fee. Disable the fee requirement
+			// explicitly so CI policy settings cannot mask the script failure.
+			v.settings.Policy.MinMiningTxFee = 0
+			v.txValidator = NewTxValidator(v.logger, v.settings)
 
 			honest := spendOf(t, parent, f.realScript, f.realSats, 0)
 
