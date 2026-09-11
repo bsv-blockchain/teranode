@@ -32,7 +32,7 @@ The Service features are:
 
 ### UTXO Reassignment
 
-- Ability to reassign UTXOs to another specified address at a given block height.
+- Updates frozen UTXO commitments and maturity state. Ownership-changing reassignment currently strands the output for both owners and must not be used; see the [reassignment limitation](#24-utxo-reassignment).
 
 ### Peer Management
 
@@ -138,15 +138,45 @@ The Alert Service initializes the necessary components and services to start pro
 
 ### 2.4. UTXO Reassignment
 
-**Current limitation:** `ReAssignUTXO` updates the UTXO commitment, clears the freeze,
-and sets a maturity height, but does not persist the replacement locking script.
-Mandatory transaction re-extension therefore still retrieves the original script
-from the UTXO store. A spend signed only for the replacement owner is rejected even
-after maturity; supplying the replacement script in extended transaction bytes
-cannot authorize it. Supporting a different owner requires an authoritative source
-for the replacement script and corresponding validation support. Reassignment to
-the stored owner still enforces the maturity delay and permits a valid spend after
-that delay. The reassignment smoke test covers both behaviors.
+**Known regression — do not reassign to a different owner:** mandatory transaction
+re-extension makes an output with a changed commitment unspendable by both owners,
+even after maturity. `ReAssignUTXO` updates the commitment, freeze state and maturity
+height but does not persist the replacement locking script. The new owner's spend
+fails against the original stored script. The original owner's signature passes
+that script, but its spend fails with `UTXO_MISMATCH` against the changed commitment.
+Waiting for more blocks does not restore spendability.
+
+This affects ownership-changing alert/confiscation and RPC reassignment. Neither
+entry point currently refuses an ownership change: a successful RPC result or alert
+processing response confirms the store operation only. Restoration requires
+persisting and validating an authoritative replacement script; accepting a
+submitter's extended script would undermine the security fix.
+[Issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725) tracks restoration,
+recovery, backend parity and operator guidance. There is no validated recovery
+procedure across backends, so do not assume that re-freezing and restoring the
+original hash is portable.
+
+Backend differences that also affect recovery and testing:
+
+| Behavior | SQLite / PostgreSQL | Aerospike |
+|---|---|---|
+| Supplied current commitment when freezing or reassigning | Not checked; the outpoint selects the output | Checked against the stored commitment |
+| Reassignment maturity delay | Uses a positive [`utxostore_reassignedUtxoSpendableAfterBlocks`](../../references/settings/stores/utxo_settings.md#configuration-settings); zero falls back to 1,000 | Always 1,000 blocks; ignores the setting |
+| Immature reassigned spend error | `ErrTxLocked` | `ErrUtxoFrozen` |
+| Reassignment history | No reassignment audit record | Appends to the `reassignments` bin |
+
+The RPC also accepts short hexadecimal hashes by zero-padding them. It casts the
+output index to `uint32` without rejecting negative values, so malformed outpoints
+can reach the store rather than produce a parameter-validation error. Callers
+should supply complete 64-character hashes and a non-negative output index.
+The method is available to both full and limited RPC credentials; the warning
+above describes an operational limitation, not an enforced access restriction.
+
+The [reassignment smoke test](https://github.com/bsv-blockchain/teranode/blob/release/v0.15/test/e2e/daemon/ready/reassign_test.go) covers
+SQLite only. It checks both owners' rejection after a commitment change and uses
+self-reassignment (an unchanged commitment) solely as a positive control at the
+exact maturity height. It provides no Aerospike reassignment coverage and does not
+demonstrate a working ownership-changing confiscation flow.
 
 ![alert_reassign_utxo.svg](img/plantuml/alert/alert_reassign_utxo.svg)
 

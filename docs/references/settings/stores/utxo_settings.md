@@ -9,6 +9,7 @@
 | UtxoStore | *url.URL | "" | utxostore | **CRITICAL** - UTXO store backend URL |
 | BlockHeightRetention | uint32 | globalBlockHeightRetention | utxostore_blockHeightRetention | Block height retention period |
 | UnminedTxRetention | uint32 | globalBlockHeightRetention/2 | utxostore_unminedTxRetention | Unmined transaction retention |
+| ReAssignedUtxoSpendableAfterBlocks | uint32 | 1000 | utxostore_reassignedUtxoSpendableAfterBlocks | SQL reassignment maturity delay in blocks: positive values apply; zero falls back to 1,000. Aerospike ignores this setting and always uses 1,000. Maturity does not restore ownership-changing reassignment; see [the reassignment limitation](../../../topics/services/alert.md#24-utxo-reassignment). |
 | ParentPreservationBlocks | uint32 | blocksInADayOnAverage*10 | utxostore_parentPreservationBlocks | Parent preservation period |
 | OutpointBatcherSize | int | 100 | utxostore_outpointBatcherSize | Outpoint operation batch size |
 | OutpointBatcherDurationMillis | int | 10 | utxostore_outpointBatcherDurationMillis | Outpoint batch duration |

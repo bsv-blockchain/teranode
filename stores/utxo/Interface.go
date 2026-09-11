@@ -45,8 +45,8 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 )
 
-// ReAssignedUtxoSpendableAfterBlocks is the number of blocks that must pass
-// before a reassigned UTXO becomes spendable.
+// ReAssignedUtxoSpendableAfterBlocks is the default reassignment maturity delay.
+// Passing this gate does not restore spendability after an ownership change.
 const ReAssignedUtxoSpendableAfterBlocks = 1_000
 
 // BlockState represents an atomic snapshot of blockchain state containing
@@ -359,8 +359,11 @@ type Store interface {
 	// UnFreezeUTXOs removes the frozen status from UTXOs, allowing them to be spent again.
 	UnFreezeUTXOs(ctx context.Context, spends []*Spend, tSettings *settings.Settings) error
 
-	// ReAssignUTXO reassigns a UTXO to a new transaction output.
-	// The UTXO will become spendable after ReAssignedUtxoSpendableAfterBlocks blocks.
+	// ReAssignUTXO updates a frozen UTXO's commitment and maturity gate.
+	// It does not persist a replacement locking script. Changing the owner
+	// currently strands the output for both owners even after maturity; see
+	// https://github.com/bsv-blockchain/teranode/issues/1725.
+	// SQL uses a positive configured delay (zero falls back to 1,000); Aerospike uses the fixed constant.
 	ReAssignUTXO(ctx context.Context, utxo *Spend, newUtxo *Spend, tSettings *settings.Settings) error
 
 	// GetCounterConflicting returns the counter conflicting transactions for a given transaction hash.

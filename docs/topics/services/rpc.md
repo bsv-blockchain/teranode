@@ -73,7 +73,7 @@ The below table summarises the services supported in the current version:
 | getminingcandidate        | Supported  | Returns data needed to construct a block to work on                          |
 | invalidateblock           | Supported  | Permanently marks a block as invalid                                         |
 | isbanned                  | Supported  | Checks if a network address is currently banned                              |
-| reassign                  | Supported  | Reassigns ownership of a specific UTXO to a new Bitcoin address              |
+| reassign                  | Supported | Updates a frozen UTXO commitment; ownership changes currently strand the output |
 | reconsiderblock           | Supported  | Removes invalidity status of a block                                         |
 | sendrawtransaction        | Supported  | Submits raw transaction to local node and network                            |
 | setban                    | Supported  | Attempts to add or remove an IP/Subnet from the banned list                  |
@@ -1041,59 +1041,58 @@ The `isbanned` command checks if a specific network address is currently banned 
 
 ### 3.19. Command: Reassign
 
-The `reassign` command allows administrators to change the ownership of a specific UTXO by reassigning it to a new Bitcoin address.
+The `reassign` command replaces the stored commitment of a frozen UTXO using an
+outpoint and the old and new UTXO hashes. It does not accept a destination address.
+
+**Do not use ownership-changing reassignment**; see the [reassignment limitation and backend differences](alert.md#24-utxo-reassignment).
 
 #### Function Overview
 
-- **Purpose**: To reassign ownership of a specific transaction output (UTXO) to a new Bitcoin address
+- **Purpose**: Update a frozen output's commitment and maturity gate; no replacement locking script is stored.
 
-- **Parameters**:
+- **Parameters** (positional, in this order):
 
-    - `txid` (string, required): The transaction ID of the output to reassign
-    - `vout` (numeric, required): The output index to reassign
-    - `destination` (string, required): The Bitcoin address to reassign the UTXO to
+    - `oldtxid` (string, required): Transaction ID of the frozen output, as a hex hash
+    - `oldvout` (numeric, required): Output index
+    - `oldutxohash` (string, required): Supplied current UTXO commitment, as a hex hash; checked by Aerospike but not SQL
+    - `newutxohash` (string, required): Replacement UTXO commitment, as a hex hash
 
 - **Return Value**:
 
-    - On success: Returns `true` indicating the UTXO was successfully reassigned
-    - On failure: Returns an error if the UTXO cannot be found or reassigned
+    - On success: JSON `null`; this confirms the store operation, not spendability
+    - On failure: A hash-parsing or store error; short hex is zero-padded and the output index is cast to `uint32` without a sign check
+
+![RPC reassignment](img/plantuml/rpc/rpc-reassign.svg)
 
 #### Process Flow
 
-![rpc-reassign.svg](img/plantuml/rpc/rpc-reassign.svg)
-
 1. **Request Processing**:
 
-    - Receives request with transaction ID, output index, and destination address
-    - Validates input parameters
+    - Reads the outpoint and both commitment hashes from `ReassignCmd`
     - Initializes tracing and metrics
+    - Parses the transaction ID and both UTXO hashes
 
-2. **UTXO and Address Validation**:
+2. **Store Operation**:
 
-    - Checks if the specified UTXO exists
-    - Validates the destination address format and network compatibility
+    - Calls `ReAssignUTXO` with the old outpoint/commitment and new commitment
+    - The store requires a frozen output, replaces its commitment, clears the freeze and sets its maturity gate
+    - Neither the handler nor the store constructs or persists a replacement locking script
 
-3. **Reassignment Operation**:
+3. **Response Construction**:
 
-    - Creates a new scriptPubKey for the destination address
-    - Updates the UTXO record with the new ownership information
-    - Records the reassignment action for auditing purposes
-
-4. **Response Construction**:
-
-    - Returns `true` on successful reassignment operation
-    - Returns error if validation fails or database update fails
+    - Returns JSON `null` when the store operation succeeds, or an error on failure
 
 #### (Success) Response Fields
 
-- Returns boolean `true` on successful reassignment operation
+- `result`: `null`
+- `error`: `null`
+- `id`: The request ID
 
 #### Important Notes
 
-- Reassigning a UTXO changes its spending conditions without creating a new transaction
-- This is an administrative function that bypasses normal Bitcoin transaction rules
-- Should only be used in specific regulatory or recovery scenarios
-- The operation creates a permanent record in the audit log
+The command is available to limited RPC users as well as administrators. SQL does
+not check the supplied old commitment; the backend differences and missing
+replacement-script persistence are described in the limitation linked above.
 
 ### 3.20. Command: Reconsider Block
 

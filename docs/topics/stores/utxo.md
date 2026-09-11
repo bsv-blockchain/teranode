@@ -46,7 +46,7 @@ It handles the core functionalities of the UTXO Store:
 - **Delete**: Remove UTXOs from the store.
 - **Block Height Management**: Set and retrieve the current blockchain height, which can be crucial for determining the spendability of certain UTXOs based on locktime conditions.
 - **FreezeUTXOs / UnFreezeUTXOs**: Mark UTXOs as frozen or unfrozen, in scenarios involving alert systems or temporary holds on specific UTXOs.
-- **ReAssignUTXO**: Reassign a UTXO to a different owner.
+- **ReAssignUTXO**: Update a frozen output's commitment and maturity gate. Ownership changes currently strand the output for both owners; see the [reassignment limitation](../services/alert.md#24-utxo-reassignment).
 
 **Principles**:
 
@@ -59,7 +59,7 @@ It handles the core functionalities of the UTXO Store:
 The UTXO Store includes functionality to **freeze** and **unfreeze** UTXOs, as well as **re-assign** them.
 
 - BSV is the only blockchain that allows legal recourse for lost asset (token) recovery to legally rightful owners by design. The Alert System can also freeze assets based on court injunctions and legal notices.
-- Teranode must be able to re-assign (a set of) UTXO(s) to another (specified) address at a specified block height.
+- Ownership-changing reassignment is currently unsafe; see the [reassignment limitation](../services/alert.md#24-utxo-reassignment).
 
 ## 2. Architecture
 
@@ -391,12 +391,13 @@ The UTXO Store supports advanced UTXO management features, which can be utilized
     - If frozen, it removes the freeze mark
     - If not frozen, it returns an error
 
-3. **Reassigning UTXOs**: UTXOs can be reassigned to a new transaction output, but only if they are frozen first.
+3. **Reassigning UTXOs**: Updates the commitment of a frozen output.
+    - **Do not use ownership-changing reassignment**; see the [limitation and backend differences](../services/alert.md#24-utxo-reassignment).
     - Verifies the UTXO exists and is frozen
     - Updates the UTXO hash to the new value
-    - Sets spendable block height to current + 1,000 blocks (defined by `ReAssignedUtxoSpendableAfterBlocks` constant)
-    - Logs the reassignment for audit purposes
-    - **Important**: Reassigned UTXOs cannot be spent until 1,000 blocks have passed after the reassignment to ensure network consensus and prevent disputes
+    - Sets the maturity height to current + 1,000 blocks by default; SQL honors a positive configured override (zero falls back to 1,000), while Aerospike currently always uses the constant
+    - Aerospike appends reassignment history to its `reassignments` bin; SQL has no reassignment audit record
+    - **Important**: Passing the maturity gate alone does not make a changed-owner output spendable
 
 ### 4.9. Unmined Transaction Management
 
@@ -606,7 +607,7 @@ UTXO Store Package Structure (stores/utxo)
 The UTXO Store is a data store component that is used by various services. It is not run independently. To use the UTXO Store locally, run services that depend on it, such as the Validator or UTXO Persister:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -validator=1 
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -validator=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running services locally.

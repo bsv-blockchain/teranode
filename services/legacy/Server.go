@@ -78,6 +78,13 @@ type Server struct {
 	// server is the internal server implementation
 	server *server
 
+	// lifecycleMu serializes Start admission with shutdown. Every Stop caller
+	// joins the same Start invocation, including its internal-server cleanup.
+	lifecycleMu sync.Mutex
+	startDone   chan struct{}
+	startCancel context.CancelFunc
+	stopping    bool
+
 	// lastHash stores the most recent block hash
 	lastHash *chainhash.Hash
 
@@ -629,6 +636,19 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
 
+	s.lifecycleMu.Lock()
+	if s.stopping || s.startDone != nil {
+		s.lifecycleMu.Unlock()
+		return errors.NewProcessingError("legacy server already started or stopping")
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	s.startCancel = cancel
+	s.startDone = done
+	s.lifecycleMu.Unlock()
+	defer close(done)
+	defer cancel()
+
 	// Blocks until the FSM transitions from the IDLE state
 	err := s.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 	if err != nil {
@@ -641,7 +661,17 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	}
 
 	s.logger.Infof("[Legacy Server] Starting internal server...")
-	go s.server.Start()
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		s.server.Start()
+	}()
+	defer func() {
+		_ = s.server.Stop()
+		// The daemon closes stores after service Start methods return. Keep
+		// those stores alive until the peer handler and sync manager exit.
+		<-serverDone
+	}()
 	s.logger.Infof("[Legacy Server] Internal server started on port %s", s.settings.Legacy.GRPCListenAddress)
 
 	// Start periodic peer statistics logging
@@ -692,17 +722,27 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // - Shuts down the internal server state
 // - Releases any allocated resources
 //
-// The method attempts to ensure that all connections are properly terminated
-// and resources are released, but it may not wait indefinitely for operations
-// to complete if they're taking too long.
+// Every caller waits for Start and its internal-server cleanup to finish.
+// Shutdown also cancels an outstanding FSM wait or gRPC service.
 //
 // Parameters:
 //   - _: Context parameter (unused in the current implementation)
 //
 // Returns an error if the shutdown process encounters problems, or nil on successful shutdown.
-// Returns nil immediately if the inner server was never initialized (e.g. when Init failed
-// before newServer succeeded), so the daemon error path cannot dereference a nil server.
+// Handles an uninitialized inner server (e.g. when Init failed before newServer
+// succeeded) without dereferencing it, while still joining any active Start call.
 func (s *Server) Stop(_ context.Context) error {
+	s.lifecycleMu.Lock()
+	s.stopping = true
+	done, cancel := s.startDone, s.startCancel
+	s.lifecycleMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		defer func() { <-done }()
+	}
+
 	if s.server == nil {
 		return nil
 	}
