@@ -12,6 +12,7 @@
 | GRPCListenAddress                    | string        | ":8085"          | blockassembly_grpcListenAddress                    | **CRITICAL** - gRPC server binding (service skipped if empty)                        |
 | GRPCMaxRetries                       | int           | 3                | blockassembly_grpcMaxRetries                       | gRPC client retry attempts                                                           |
 | GRPCRetryBackoff                     | time.Duration | 2s               | blockassembly_grpcRetryBackoff                     | Retry delay timing                                                                   |
+| LivenessStallTimeout                 | time.Duration | 0s               | blockassembly_livenessStallTimeout                 | Liveness reports 503 if the main select stops being serviced for this long; 0 = off  |
 | LocalDAHCache                        | string        | ""               | blockassembly_localDAHCache                        | **UNUSED** - Reserved for future DAH caching                                         |
 | MaxBlockReorgCatchup                 | int           | 100              | blockassembly_maxBlockReorgCatchup                 | Map capacity for current chain tracking                                              |
 | MaxBlockReorgRollback                | int           | 100              | blockassembly_maxBlockReorgRollback                | **UNUSED** - Defined but not referenced in code                                      |
