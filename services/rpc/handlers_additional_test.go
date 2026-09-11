@@ -6535,10 +6535,9 @@ func (acceptingValidator) Validate(_ context.Context, _ *bt.Tx, _ uint32, _ ...v
 }
 
 // decoratingUtxoStore stamps a fixed input-satoshis value on every input of
-// every tx passed to PreviousOutputsDecorate. RPC-arriving txs are wire-format
-// only (no PreviousTxSatoshis), so the handler always invokes decoration; this
-// stub stands in for what the real UTXO store would do, giving us a known
-// inputSats value to compute fee against.
+// every tx passed to PreviousOutputsDecorate. These tests submit wire-format
+// transactions and use a fixed input value to check the fee ceiling. Extended
+// submissions are covered with a real store in extended_fee_test.go.
 type decoratingUtxoStore struct {
 	utxo.Store
 	inputSats uint64

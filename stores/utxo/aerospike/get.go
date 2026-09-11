@@ -536,6 +536,12 @@ func (s *Store) addAbstractedBins(bins []fields.FieldName) []fields.FieldName {
 		}
 	}
 
+	if slices.Contains(newBins, fields.Outputs) {
+		if !slices.Contains(newBins, fields.External) {
+			newBins = append(newBins, fields.External)
+		}
+	}
+
 	if slices.Contains(newBins, fields.BlockIDs) {
 		if !slices.Contains(newBins, fields.BlockHeights) {
 			newBins = append(newBins, fields.BlockHeights)
@@ -645,7 +651,7 @@ NEXT_BATCH_RECORD:
 		// TxInpoints can be computed without scripts using optimized parser
 		needsFullExternalTx := false
 		for _, field := range items[idx].Fields {
-			if field == fields.Tx || field == fields.Inputs {
+			if field == fields.Tx || field == fields.Inputs || field == fields.Outputs {
 				needsFullExternalTx = true
 				break
 			}
@@ -692,7 +698,11 @@ NEXT_BATCH_RECORD:
 				if external {
 					items[idx].Data.Tx = externalTx
 				} else {
-					tx := &bt.Tx{}
+					// Preserve outputs if that projection was processed first.
+					tx := items[idx].Data.Tx
+					if tx == nil {
+						tx = &bt.Tx{}
+					}
 
 					if inputInterfaces, ok := bins[fields.Inputs.String()].([]interface{}); ok {
 						tx.Inputs = make([]*bt.Input, len(inputInterfaces))
@@ -704,6 +714,64 @@ NEXT_BATCH_RECORD:
 							_, err = tx.Inputs[i].ReadFromExtended(bytes.NewReader(input))
 							if err != nil {
 								return errors.NewTxInvalidError("could not read input", err)
+							}
+						}
+					}
+
+					items[idx].Data.Tx = tx
+				}
+
+			case fields.Outputs:
+				// check that we are not also getting the tx, as this will be handled above
+				if slices.Contains(items[idx].Fields, fields.Tx) {
+					continue
+				}
+
+				// If the tx is external, we already have it, otherwise we need to build it from the bins.
+				if external {
+					items[idx].Data.Tx = externalTx
+				} else {
+					// Merge into whatever a sibling case already built rather than
+					// replacing it. A caller asking for both fields.Inputs and
+					// fields.Outputs without fields.Tx would otherwise get only
+					// whichever case ran last, since each assigns Data.Tx wholesale.
+					tx := items[idx].Data.Tx
+					if tx == nil {
+						tx = &bt.Tx{}
+					}
+
+					if outputInterfaces, ok := bins[fields.Outputs.String()].([]interface{}); ok {
+						tx.Outputs = make([]*bt.Output, len(outputInterfaces))
+
+						for i, outputInterface := range outputInterfaces {
+							if outputInterface == nil {
+								continue
+							}
+
+							// Record the failure against this item and move on, rather
+							// than returning a function-level error. sendGetBatch fails
+							// every waiter on a function-level error, so one corrupt
+							// outputs bin would reject every unrelated parent in the
+							// batch. This projection is read once per parent per input
+							// of every transaction, so that blast radius is live.
+							//
+							// The fields.Inputs case above still aborts the batch. Left
+							// alone deliberately: widening the blast-radius fix to a
+							// pre-existing path is not this change's business, but it is
+							// the same shape and worth a follow-up.
+							outputBytes, isBytes := outputInterface.([]byte)
+							if !isBytes {
+								items[idx].Err = errors.NewStorageError("output %d has type %T, want []byte", i, outputInterface)
+
+								continue NEXT_BATCH_RECORD // because the stored outputs bin is malformed.
+							}
+
+							tx.Outputs[i] = &bt.Output{}
+
+							if _, err = tx.Outputs[i].ReadFrom(bytes.NewReader(outputBytes)); err != nil {
+								items[idx].Err = errors.NewStorageError("could not read output", err)
+
+								continue NEXT_BATCH_RECORD // because there was an error reading an output from the store.
 							}
 						}
 					}

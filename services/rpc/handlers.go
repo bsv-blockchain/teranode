@@ -868,20 +868,30 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	// MaxRawTxFee of 0 disables it entirely (operator opt-out).
 	allowHighFees := c.AllowHighFees != nil && *c.AllowHighFees
 	if !allowHighFees && s.settings.Policy.MaxRawTxFee > 0 {
-		// Extend the tx so PreviousTxSatoshis is populated; PreviousOutputsDecorate
-		// populates the input fields but does not flip tx.IsExtended() on its own
-		// (go-bt requires an explicit SetExtended call). We mark it explicitly so
-		// the validator's own IsExtended() guard skips re-decoration, and so the
-		// gRPC client serialises the extended bytes instead of wire bytes.
-		if !tx.IsExtended() {
-			if err = s.utxoStore.PreviousOutputsDecorate(ctx, tx); err != nil {
-				return nil, &bsvjson.RPCError{
-					Code:    bsvjson.ErrRPCVerify,
-					Message: "TX rejected: " + err.Error(),
-				}
+		// Resolve the fee from local outputs even when the caller sends extended
+		// bytes. The decorator only fills missing fields, so clear both supplied
+		// fields first; removing the IsExtended gate alone would still trust them.
+		// The validator re-reads the parents for consensus validation. This read
+		// must happen before submission so an excessive fee can reject the call.
+		for _, input := range tx.Inputs {
+			if input == nil {
+				continue
 			}
-			tx.SetExtended(true)
+
+			input.PreviousTxScript = nil
+			input.PreviousTxSatoshis = 0
 		}
+
+		tx.SetExtended(false)
+
+		if err = s.utxoStore.PreviousOutputsDecorate(ctx, tx); err != nil {
+			return nil, &bsvjson.RPCError{
+				Code:    bsvjson.ErrRPCVerify,
+				Message: "TX rejected: " + err.Error(),
+			}
+		}
+
+		tx.SetExtended(true)
 
 		inputSats := tx.TotalInputSatoshis()
 		outputSats := tx.TotalOutputSatoshis()

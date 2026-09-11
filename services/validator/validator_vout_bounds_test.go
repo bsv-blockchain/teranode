@@ -46,7 +46,7 @@ func Test_getUtxoBlockHeightAndExtendForParentTx_VoutOutOfRange(t *testing.T) {
 	// extend=true forces the parent-output dereference path. nil validationOptions
 	// is handled (the ParentMetadata shortcut is nil-guarded), so the store Get
 	// path is taken.
-	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentHash, []int{0}, utxoHeights, childTx, true, nil)
+	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentHash, []int{0}, utxoHeights, childTx, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "has no output for index")
 }

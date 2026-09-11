@@ -1043,8 +1043,13 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 
 		mockUtxoStore.On("GetBlockState").Return(utxostore.BlockState{Height: 1000, MedianTime: 1000000000})
 
+		// Extended transactions are re-extended from the store too
+		// (GHSA-v76m-6vc7-g7c7), so the parent read must carry outputs.
 		mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{
 			BlockHeights: make([]uint32, 0),
+			Tx: &bt.Tx{
+				Outputs: []*bt.Output{{LockingScript: bscript.NewFromBytes([]byte{0x51}), Satoshis: 1000000}},
+			},
 		}, nil)
 
 		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), NewDefaultOptions())
@@ -1074,18 +1079,27 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 			return hash.String() == "10031ea0997a461d4e09157c6f9d15ff09e61f73aebd9e7f821e4c77c8251afe"
 		}), mock.Anything).Return(&meta.Data{
 			BlockHeights: []uint32{125, 126},
+			Tx: &bt.Tx{
+				Outputs: []*bt.Output{{LockingScript: bscript.NewFromBytes([]byte{0x51}), Satoshis: 1000000}},
+			},
 		}, nil).Once()
 
 		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
 			return hash.String() == "9c1599ff3e2ba140c9df526fdb239db236227840093916e90244835d0780a053"
 		}), mock.Anything).Return(&meta.Data{
 			BlockHeights: []uint32{},
+			Tx: &bt.Tx{
+				Outputs: []*bt.Output{{LockingScript: bscript.NewFromBytes([]byte{0x51}), Satoshis: 2000000}},
+			},
 		}, nil).Once()
 
 		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
 			return hash.String() == "928ed84cd4c48beb0d3494ccc17cc1e06b1473f9dc118db9bb56972395ede461"
 		}), mock.Anything).Return(&meta.Data{
 			BlockHeights: []uint32{768, 769},
+			Tx: &bt.Tx{
+				Outputs: []*bt.Output{{LockingScript: bscript.NewFromBytes([]byte{0x51}), Satoshis: 3000000}},
+			},
 		}, nil).Once()
 
 		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), NewDefaultOptions())
@@ -1794,6 +1808,11 @@ func TestGetUtxoBlockHeightAndExtendForParentTx_NilValidationOptions(t *testing.
 	mockUtxoStore.On("GetBlockState").Return(utxostore.BlockState{Height: 1000, MedianTime: 1000000000})
 	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{
 		BlockHeights: []uint32{999},
+		// Extension is unconditional (GHSA-v76m-6vc7-g7c7), so a parent that
+		// resolves must carry the output being spent.
+		Tx: &bt.Tx{
+			Outputs: []*bt.Output{{Satoshis: 1000, LockingScript: bscript.NewFromBytes([]byte{0x51})}},
+		},
 	}, nil)
 
 	v := &Validator{
@@ -1803,7 +1822,7 @@ func TestGetUtxoBlockHeightAndExtendForParentTx_NilValidationOptions(t *testing.
 	utxoHeights := make([]uint32, 1)
 
 	// Test with nil validationOptions - should not panic
-	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, false, nil)
+	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, nil)
 
 	// Should complete successfully without panic
 	require.NoError(t, err)
@@ -1820,8 +1839,23 @@ func TestGetUtxoBlockHeightAndExtendForParentTx_WithParentMetadata(t *testing.T)
 
 	parentTxHash := *tx.Inputs[0].PreviousTxIDChainHash()
 
-	// Create mock UTXO store (should NOT be called when metadata is provided)
+	// The store IS still read: ParentMetadata supplies the block height, but the
+	// parent's outputs come from the store because extension is unconditional
+	// (GHSA-v76m-6vc7-g7c7). This test previously asserted no read at all, which
+	// held only while an already-extended transaction skipped extension.
 	mockUtxoStore := utxostore.MockUtxostore{}
+	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{
+		// Deliberately a different height from the metadata below: the assertion
+		// that utxoHeights takes the metadata value is what proves the
+		// optimization still does its job.
+		BlockHeights: []uint32{999},
+		Tx: &bt.Tx{
+			Outputs: []*bt.Output{{
+				Satoshis:      1000,
+				LockingScript: bscript.NewFromBytes([]byte{0x51}),
+			}},
+		},
+	}, nil)
 
 	v := &Validator{
 		utxoStore: &mockUtxoStore,
@@ -1840,15 +1874,13 @@ func TestGetUtxoBlockHeightAndExtendForParentTx_WithParentMetadata(t *testing.T)
 		ParentMetadata: parentMetadata,
 	}
 
-	// Test with parent metadata - should use metadata instead of UTXO store
-	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, false, validationOptions)
+	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, validationOptions)
 
-	// Should complete successfully and use metadata block height
 	require.NoError(t, err)
-	assert.Equal(t, uint32(12345), utxoHeights[0])
-
-	// Verify UTXO store was not called
-	mockUtxoStore.AssertNotCalled(t, "Get")
+	assert.Equal(t, uint32(12345), utxoHeights[0],
+		"the height must come from ParentMetadata, not the store's 999")
+	assert.Equal(t, uint64(1000), tx.Inputs[0].PreviousTxSatoshis,
+		"the previous output must come from the store, not the caller")
 }
 
 // The fallback path writes the unconfirmedParentHeight sentinel when the
@@ -1872,6 +1904,11 @@ func TestGetUtxoBlockHeightAndExtendForParentTx_FallbackWritesUnconfirmedSentine
 	mockUtxoStore := utxostore.MockUtxostore{}
 	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{
 		BlockHeights: []uint32{},
+		// Extension is unconditional (GHSA-v76m-6vc7-g7c7), so a parent that
+		// resolves must carry the output being spent.
+		Tx: &bt.Tx{
+			Outputs: []*bt.Output{{Satoshis: 1000, LockingScript: bscript.NewFromBytes([]byte{0x51})}},
+		},
 	}, nil)
 
 	v := &Validator{
@@ -1888,7 +1925,7 @@ func TestGetUtxoBlockHeightAndExtendForParentTx_FallbackWritesUnconfirmedSentine
 	require.Nil(t, opts.ParentMetadata, "this test exercises the no-ParentMetadata code path")
 
 	utxoHeights := make([]uint32, 1)
-	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, false, opts)
+	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, opts)
 	require.NoError(t, err)
 	require.Equal(t, unconfirmedParentHeight, utxoHeights[0],
 		"fallback must write the teranode-internal sentinel, not blockState.Height+1")
@@ -1969,7 +2006,7 @@ func TestGetUtxoBlockHeightAndExtendForParentTx_ParentMetadataPreservedThroughEx
 	utxoHeights := make([]uint32, 1)
 	// extend == true → must call utxoStore.Get for the tx body AND preserve
 	// the ParentMetadata-supplied height.
-	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, true, validationOptions)
+	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, validationOptions)
 	require.NoError(t, err)
 	require.Equal(t, candidateHeight, utxoHeights[0],
 		"ParentMetadata-supplied height must survive the extend==true fallthrough; the post-Get fallback must not overwrite it")
@@ -2032,7 +2069,7 @@ func TestGetUtxoBlockHeightAndExtendForParentTx_UnconfirmedSentinelOnlyAppliedWh
 	}
 
 	utxoHeights := make([]uint32, 1)
-	err = v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, true, validationOptions)
+	err = v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, validationOptions)
 	require.NoError(t, err)
 	require.NotEqual(t, unconfirmedParentHeight, utxoHeights[0],
 		"unconfirmedParentHeight must NOT be applied when ParentMetadata covers the parent — drift pin against future refactors that reintroduce the unconditional post-Get overwrite")
