@@ -501,14 +501,9 @@ func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*batchIte
 	// (unbuffered handoff, no timeout). complete is CAS-guarded, so
 	// re-completing an item an earlier stage already completed is a no-op.
 	defer func() {
-		if r := recover(); r != nil {
-			s.logger.Errorf("[sendBatchToBlockAssembly] recovered panic, failing %d batch item(s): %v", len(batch), r)
-
-			err := errors.NewProcessingError("panic in sendBatchToBlockAssembly: %v", r)
-			for _, item := range batch {
-				item.complete(err)
-			}
-		}
+		util.SignalBatchPanic(recover(), batch, "sendBatchToBlockAssembly", s.logger, func(it *batchItem, err error) {
+			it.complete(err)
+		})
 	}()
 
 	if s.settings.BlockAssembly.UseColumnarBatch {

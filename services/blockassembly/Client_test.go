@@ -955,8 +955,14 @@ func TestClient_sendBatchToBlockAssembly(t *testing.T) {
 		require.NotPanics(t, func() { client.sendBatchToBlockAssembly(ctx, batch) })
 
 		require.NoError(t, group.Wait(context.Background(), 0))
-		require.Error(t, batch[0].result)
-		require.Error(t, batch[1].result)
+
+		// The sweep is shared (util.SignalBatchPanic); the error text it builds
+		// must stay "panic in <fnName>: <recovered>", as the hand-rolled sweep
+		// produced.
+		for i, item := range batch {
+			require.Error(t, item.result, "batch item %d must be completed, not stranded", i)
+			require.Contains(t, item.result.Error(), "panic in sendBatchToBlockAssembly")
+		}
 	})
 }
 
