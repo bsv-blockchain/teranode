@@ -38,7 +38,7 @@
 | ValidationWarmupCount | int | 128 | blockvalidation_validation_warmup_count | Validation warmup behavior |
 | BatchMissingTransactions | bool | false | blockvalidation_batch_missing_transactions | Missing transaction batching |
 | CheckSubtreeFromBlockTimeout | time.Duration | 5m | blockvalidation_check_subtree_from_block_timeout | Subtree validation timeout |
-| SubtreeDataFetchTimeout | time.Duration | 10m | blockvalidation_subtree_data_fetch_timeout | Bound on one detached subtree_data fetch (download + parse + store) |
+| SubtreeDataFetchTimeout | time.Duration | 10m | blockvalidation_subtree_data_fetch_timeout | Bound on one subtree_data download and parse, including retries; local store uses parent context |
 | SubtreeMetaPeerFetchTimeout | time.Duration | 10m | blockvalidation_subtree_meta_peer_fetch_timeout | Per-fetch budget for a subtree meta regeneration subtree_data fetch (all 503 retries + body stream); a cache-busting retry gets a fresh budget |
 | CheckSubtreeFromBlockRetries | int | 5 | blockvalidation_check_subtree_from_block_retries | Subtree validation retries |
 | CheckSubtreeFromBlockRetryBackoffDuration | time.Duration | 30s | blockvalidation_check_subtree_from_block_retry_backoff_duration | Subtree retry backoff |
@@ -46,6 +46,10 @@
 | PreviousBlockHeaderCount | uint64 | 100 | blockvalidation_previous_block_header_count | **CRITICAL** - Header chain cache size. Floored at 11 (`settings.MedianTimeSpan`): the run is what median-time-past is measured over, so a lower value would compute the median over fewer blocks than consensus requires and accept blocks the rest of the network rejects. Anything below 11 is raised to it, with a warning on stderr |
 | CatchupMaxRetries | int | 3 | blockvalidation_catchup_max_retries | Catchup operation retries |
 | CatchupIterationTimeout | int | 30 | blockvalidation_catchup_iteration_timeout | **CRITICAL** - Catchup iteration timeout |
+| BlockFetchTimeout | time.Duration | 2m | blockvalidation_block_fetch_timeout | Whole-response budget for a block or batch: pacing, retries and streamed body |
+| SubtreeFetchTimeout | time.Duration | 120s | blockvalidation_subtree_fetch_timeout | Whole-response budget for a subtree hash list |
+| MaxIncomingBlockBytes | int64 | 8589934592 | blockvalidation_max_incoming_block_bytes | Aggregate serialized-byte cap shared by every block in a response |
+| PerPeerFetchRate | int | 8 | blockvalidation_per_peer_fetch_rate | Requests/sec and burst per data-hub URL; non-positive disables pacing |
 | CatchupOperationTimeout | int | 300 | blockvalidation_catchup_operation_timeout | **CRITICAL** - Catchup operation timeout |
 | CatchupMaxAccumulatedHeaders | int | 100000 | blockvalidation_max_accumulated_headers | **CRITICAL** - Memory protection during catchup |
 | CircuitBreakerFailureThreshold | int | 5 | blockvalidation_circuit_breaker_failure_threshold | Circuit breaker failure detection |
@@ -182,3 +186,13 @@ blockvalidation_subtree_batch_size=32
 # Disable pipeline (sequential processing)
 blockvalidation_subtree_batch_prefetch_depth=0
 ```
+
+## Catchup HTTP budgets and pacing
+
+Block fetches and subtree hash lists each default to a two-minute response budget. Subtree data downloads default to ten minutes because peers may generate those files on demand. These deadlines include pacing, all retry attempts, and the streamed response; non-positive timeout values fall back to defaults. Earlier caller deadlines still apply. Subtree data downloads survive sibling failures but stop on catchup cancellation or shutdown. Local storage writes use the parent context and retain local error attribution.
+
+HTTP 429 and 503 responses receive jittered backoff. Numeric `Retry-After` hints are honored up to 30 seconds, with at most 60 seconds spent sleeping between attempts. That sleep budget is separate from the response deadline; request and body-read time also consume the response deadline.
+
+The default pacing rate of 8 requests/sec is conservative for the unverified server tier (10/sec). A remote peer may grant signed requests 50/sec or exempt a recognized miner, but signing alone does not prove that allowance. For a known fleet granting the default authenticated tier, configure 40/sec; use other values according to the remote limits. Zero or negative disables client pacing. A saturated peer queue can fail over to another peer without a reputation penalty.
+
+`MaxIncomingBlockBytes` caps aggregate serialized bytes, including the complete coinbase, across a batch. It does not cap decoded heap usage: many small coinbase outputs add object overhead. Coinbase scanning also respects the accepted block-size policy and remaining response budget. Do not size transport limits assuming every valid coinbase is only a few megabytes.

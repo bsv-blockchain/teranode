@@ -211,83 +211,40 @@ func TestCatchup_ConnectionDropMidTransfer(t *testing.T) {
 	})
 
 	t.Run("CircuitBreakerOpensAfterRepeatedDrops", func(t *testing.T) {
-		config := &testhelpers.CatchupServerConfig{
-			SecretMiningThreshold:   100,
-			MaxRetries:              0,
-			RetryDelay:              50 * time.Millisecond,
-			CatchupOperationTimeout: 30,
-			CircuitBreakerConfig: &catchup.CircuitBreakerConfig{
-				FailureThreshold:    2,
-				SuccessThreshold:    2,
-				Timeout:             time.Second,
-				MaxHalfOpenRequests: 1,
-			},
-		}
-		suite := NewCatchupTestSuiteWithConfig(t, config)
-		defer suite.Cleanup()
-
-		suite.MockUTXOStore.On("GetBlockHeight").Return(uint32(1000)).Maybe()
-
-		testHeaders := testhelpers.GetMainnetHeadersRange(t, 0, 10)
-		targetBlock := &model.Block{
-			Header: testHeaders[9],
-			Height: 1010,
-		}
-
-		suite.MockBlockchain.On("GetBlockExists", mock.Anything, targetBlock.Hash()).
-			Return(false, nil)
-
-		bestBlockHeader := testHeaders[0]
-		suite.MockBlockchain.On("GetBestBlockHeader", mock.Anything).
-			Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 1000}, nil)
-
-		suite.MockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).
-			Return([]uint32{1}, nil).Maybe()
-
-		suite.MockBlockchain.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).
-			Return([]*chainhash.Hash{bestBlockHeader.Hash()}, nil)
-
-		suite.MockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
-			Return([]*model.BlockHeader{bestBlockHeader}, []*model.BlockHeaderMeta{{Height: 1000, ID: 1}}, nil).Maybe()
-
-		suite.MockBlockchain.On("GetBlockHeader", mock.Anything, bestBlockHeader.Hash()).
-			Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 1000, ID: 1}, nil).Maybe()
-
-		suite.MockBlockchain.On("GetBlockExists", mock.Anything, bestBlockHeader.Hash()).
-			Return(true, nil).Maybe()
-
-		for _, header := range testHeaders[1:] {
-			suite.MockBlockchain.On("GetBlockExists", mock.Anything, header.Hash()).
-				Return(false, nil).Maybe()
-		}
+		server, _, recorder, targetBlock, _ := newHeaderAttributionServer(t)
+		server.peerCircuitBreakers = catchup.NewPeerCircuitBreakers(catchup.CircuitBreakerConfig{
+			FailureThreshold:    2,
+			SuccessThreshold:    2,
+			Timeout:             time.Minute,
+			MaxHalfOpenRequests: 1,
+		})
 
 		httpMock := testhelpers.NewHTTPMockSetup(t)
 		defer httpMock.Deactivate()
-
 		httpMock.RegisterErrorResponse("http://bad-peer", errors.NewError("connection reset by peer"))
 		httpMock.Activate()
 
 		peerID := "peer-bad-001"
+		ctx := context.Background()
+		breaker := server.peerCircuitBreakers.GetBreaker(peerID)
+		for attempt := 1; attempt <= 2; attempt++ {
+			// Let the configured retry finish. An expired caller deadline is a
+			// local cancellation and must not count as a connection failure.
+			_, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, peerID, "http://bad-peer")
+			require.ErrorContains(t, err, "connection reset by peer")
+			require.False(t, errors.IsLocalError(err))
+			require.NoError(t, ctx.Err())
+			_, failures, _, _ := breaker.GetStats()
+			require.Equal(t, attempt, failures)
+			require.Equal(t, attempt, recorder.failures)
+		}
 
-		ctx1, cancel1 := context.WithTimeout(suite.Ctx, 2*time.Second)
-		_, _, err1 := suite.Server.catchupGetBlockHeaders(ctx1, targetBlock, peerID, "http://bad-peer")
-		cancel1()
-		assert.Error(t, err1)
-
-		ctx2, cancel2 := context.WithTimeout(suite.Ctx, 2*time.Second)
-		_, _, err2 := suite.Server.catchupGetBlockHeaders(ctx2, targetBlock, peerID, "http://bad-peer")
-		cancel2()
-		assert.Error(t, err2)
-
-		ctx3, cancel3 := context.WithTimeout(suite.Ctx, 2*time.Second)
-		_, _, err3 := suite.Server.catchupGetBlockHeaders(ctx3, targetBlock, peerID, "http://bad-peer")
-		cancel3()
-		assert.Error(t, err3)
-		assert.Contains(t, err3.Error(), "circuit breaker open")
-
-		breaker := suite.Server.peerCircuitBreakers.GetBreaker(peerID)
-		state, _, _, _ := breaker.GetStats()
-		assert.Equal(t, catchup.StateOpen, state)
+		_, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, peerID, "http://bad-peer")
+		require.ErrorContains(t, err, "circuit breaker open")
+		state, failures, _, _ := breaker.GetStats()
+		require.Equal(t, catchup.StateOpen, state)
+		require.Equal(t, 2, failures)
+		require.Equal(t, 2, recorder.failures, "rejected admission must not add another peer failure")
 	})
 }
 

@@ -2420,7 +2420,7 @@ func (s *Server) handlePeerFailureNotification(_ context.Context, notification *
 
 	// For catchup failures, trigger peer switch via sync coordinator
 	if failureType == "catchup" && s.syncCoordinator != nil {
-		s.syncCoordinator.HandleCatchupFailure(reason)
+		s.syncCoordinator.HandleCatchupFailureForPeer(peerID, reason)
 	}
 
 	return nil

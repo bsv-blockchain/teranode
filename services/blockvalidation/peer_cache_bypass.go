@@ -6,6 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 // cacheBypassRetryableKey marks an error whose cause is a peer response that a
@@ -102,6 +103,7 @@ func (u *Server) peerResourceURL(baseURL, resource string, hash *chainhash.Hash,
 // and the caller still tries alternative peers. Carries the cache-bypass marker so
 // the same peer is retried once with a cache-busting URL.
 func newPoisonedSubtreeDataError(peerID, baseURL string, subtreeHash *chainhash.Hash, missing, expected int, bytesRead uint64) error {
+	baseURL = util.RedactPeerURL(baseURL) // keep peer-gossiped path/query out of the error text
 	var e *errors.Error
 
 	if bytesRead == 0 {
@@ -135,7 +137,7 @@ func formatSubtreeFetchAttempts(attempts []subtreeFetchAttempt) string {
 	parts := make([]string, 0, len(attempts))
 
 	for _, attempt := range attempts {
-		parts = append(parts, fmt.Sprintf("%s %s (%s)=%v", attempt.role, attempt.peerID, attempt.baseURL, attempt.err))
+		parts = append(parts, fmt.Sprintf("%s %s (%s)=%v", attempt.role, attempt.peerID, util.RedactPeerURL(attempt.baseURL), attempt.err))
 	}
 
 	return strings.Join(parts, "; ")

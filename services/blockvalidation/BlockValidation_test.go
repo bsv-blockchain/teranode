@@ -4397,6 +4397,8 @@ func TestSetMinedRetryBackoff(t *testing.T) {
 // to a dedicated, ctx-cancellable, WaitGroup-tracked goroutine that re-enqueues via the
 // non-blocking enqueueSetMined.
 func TestScheduleSetMinedRetry(t *testing.T) {
+	initPrometheusMetrics()
+
 	t.Run("re-enqueues after the backoff without blocking the caller", func(t *testing.T) {
 		u := newSetMinedTestBV(1)
 		ctx := context.Background()

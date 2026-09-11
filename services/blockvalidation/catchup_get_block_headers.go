@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 )
 
@@ -55,16 +56,42 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 
 	// Use baseURL as fallback if peerID is not provided (for backward compatibility)
 	identifier := peerID
+	displayIdentifier := peerID
 	if identifier == "" {
 		identifier = baseURL
+		displayIdentifier = util.RedactPeerURL(baseURL)
 	}
 
 	// Check if we're using circuit breaker
 	var circuitBreaker *catchup.CircuitBreaker
+	cancelProbe := func() {}
 	if u.peerCircuitBreakers != nil {
 		circuitBreaker = u.peerCircuitBreakers.GetBreaker(identifier)
-		if !circuitBreaker.CanCall() {
-			return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "Circuit breaker open for peer"), nil, errors.NewServiceUnavailableError("circuit breaker open for peer %s", identifier)
+		var allowed bool
+		allowed, cancelProbe = circuitBreaker.CanCallWithCancel()
+		if !allowed {
+			return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "Circuit breaker open for peer"), nil, errors.NewServiceUnavailableError("circuit breaker open for peer %s", displayIdentifier)
+		}
+	}
+
+	// Every admission must finish: unrecorded exits release the probe neutrally,
+	// while a success/failure already releases it through the breaker outcome.
+	peerOutcomeRecorded := false
+	defer func() {
+		if !peerOutcomeRecorded {
+			cancelProbe()
+		}
+	}()
+	recordFailure := func() {
+		peerOutcomeRecorded = true
+		if circuitBreaker != nil {
+			circuitBreaker.RecordFailure()
+		}
+	}
+	recordSuccess := func() {
+		peerOutcomeRecorded = true
+		if circuitBreaker != nil {
+			circuitBreaker.RecordSuccess()
 		}
 	}
 
@@ -74,38 +101,25 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 	if u.isPeerMalicious(ctx, identifier) {
 		u.logger.Warnf("[catchup][%s] aborting catchup: peer %s is marked as malicious by P2P service", blockUpTo.Hash().String(), identifier)
 
-		if circuitBreaker != nil {
-			circuitBreaker.RecordFailure()
-		}
+		recordFailure()
 
-		return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "Peer marked malicious by P2P service"), nil, errors.NewNetworkPeerMaliciousError("peer %s is marked as malicious by P2P service", identifier)
+		return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "Peer marked malicious by P2P service"), nil, errors.NewNetworkPeerMaliciousError("peer %s is marked as malicious by P2P service", displayIdentifier)
 	}
 
 	// Check if target block already exists
 	exists, err := u.blockValidation.GetBlockExists(ctx, blockUpTo.Hash())
 	if err != nil {
-		if circuitBreaker != nil {
-			circuitBreaker.RecordFailure()
-		}
-
 		return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "Failed to check block existence"), nil, errors.NewServiceError("[catchup][%s] failed to check if block exists", blockUpTo.Hash().String(), err)
 	}
 
 	// If the block already exists, we can return immediately
 	if exists {
-		if circuitBreaker != nil {
-			circuitBreaker.RecordSuccess()
-		}
-
 		return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, true, "Block already exists"), nil, nil
 	}
 
 	// Get our current best block
 	bestBlockHeader, bestBlockMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
-		if circuitBreaker != nil {
-			circuitBreaker.RecordFailure()
-		}
 		return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "Failed to get best block header"), nil, errors.NewServiceError("[catchup][%s] failed to get best block header", blockUpTo.Hash().String(), err)
 	}
 
@@ -169,10 +183,6 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 	// Create block locator
 	locatorHashes, err := u.blockchainClient.GetBlockLocator(ctx, locatorHeader.Hash(), locatorHeight)
 	if err != nil {
-		if circuitBreaker != nil {
-			circuitBreaker.RecordFailure()
-		}
-
 		return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL, 0, failedIterations, false, "Failed to get block locator"), nil, errors.NewServiceError("[catchup][%s] failed to get block locator", blockUpTo.Hash().String(), err)
 	}
 
@@ -200,7 +210,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 
 		if peerID == "" {
 			u.logger.Warnf("[catchup][%s] No peerID provided for peer at %s", blockUpTo.Hash().String(), baseURL)
-			return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "No peerID provided"), nil, errors.NewProcessingError("[catchup][%s] peerID is required but not provided for peer %s", blockUpTo.Hash().String(), baseURL)
+			return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "No peerID provided"), nil, errors.NewProcessingError("[catchup][%s] peerID is required but not provided for peer %s", blockUpTo.Hash().String(), util.RedactPeerURL(baseURL))
 		}
 		// Check if peer is marked as malicious by P2P service. The peer can be
 		// flagged mid-catchup (e.g. based on behaviour reported during earlier
@@ -209,11 +219,9 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		if u.isPeerMalicious(ctx, identifier) {
 			u.logger.Warnf("[catchup][%s] aborting catchup: peer %s is marked as malicious by P2P service", chainTipHash.String(), identifier)
 
-			if circuitBreaker != nil {
-				circuitBreaker.RecordFailure()
-			}
+			recordFailure()
 
-			return catchup.CreateCatchupResult(allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL, iteration, failedIterations, false, "Peer marked malicious by P2P service"), nil, errors.NewNetworkPeerMaliciousError("peer %s is marked as malicious by P2P service", identifier)
+			return catchup.CreateCatchupResult(allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL, iteration, failedIterations, false, "Peer marked malicious by P2P service"), nil, errors.NewNetworkPeerMaliciousError("peer %s is marked as malicious by P2P service", displayIdentifier)
 		}
 
 		// Create context with iteration timeout to prevent slow-loris attacks
@@ -238,6 +246,15 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		blockHeadersBytes, err := catchup.FetchHeadersWithRetry(iterCtx, u.logger, requestURL, maxRetries)
 		iterCancel() // Clean up the iteration context
 		if err != nil {
+			// A parent cancellation or operation deadline also ends iterCtx, but is
+			// local. Only an iteration timeout with a live parent blames the peer.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return catchup.CreateCatchupResult(
+					allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,
+					iteration, failedIterations, false, "Catchup context ended",
+				), nil, errors.NewContextCanceledError("catchup context ended while fetching headers", ctxErr)
+			}
+
 			// Check if it's specifically a context deadline exceeded from the iteration timeout
 			// This indicates the peer is too slow to respond within our timeout
 			if errors.Is(err, context.DeadlineExceeded) {
@@ -246,9 +263,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 				u.logger.Warnf("[catchup][%s] iteration %d: peer %s timed out after %v", chainTipHash.String(), iteration, baseURL, elapsed)
 
 				// Record failure in circuit breaker
-				if circuitBreaker != nil {
-					circuitBreaker.RecordFailure()
-				}
+				recordFailure()
 
 				// Report slow response as catchup failure to P2P service
 				u.reportCatchupFailure(ctx, identifier)
@@ -269,7 +284,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 				return catchup.CreateCatchupResult(
 					allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,
 					iteration, failedIterations, false, "Peer response timeout",
-				), nil, markCatchupFailureReported(errors.NewNetworkTimeoutError("peer %s timed out after %v during iteration %d", baseURL, elapsed, iteration))
+				), nil, markCatchupFailureReported(errors.NewNetworkTimeoutError("peer %s timed out after %v during iteration %d", util.RedactPeerURL(baseURL), elapsed, iteration))
 			}
 
 			// Handle other non-timeout errors
@@ -283,12 +298,12 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 			}
 			failedIterations = append(failedIterations, iterErr)
 
-			if circuitBreaker != nil {
-				circuitBreaker.RecordFailure()
+			// Both breaker and reputation exclude local errors, including a wrapped
+			// cancellation from a local dependency while the parent remains live.
+			if !errors.IsLocalError(err) {
+				recordFailure()
+				u.reportCatchupFailure(ctx, identifier)
 			}
-
-			// Report failed request to P2P service
-			u.reportCatchupFailure(ctx, identifier)
 
 			// Check if this is a malicious response. Both returns below are marked
 			// as already-reported (the failure was recorded just above) so the
@@ -309,9 +324,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 
 		// Validate header bytes
 		if err = catchup.ValidateBlockHeaderBytes(blockHeadersBytes); err != nil {
-			if circuitBreaker != nil {
-				circuitBreaker.RecordFailure()
-			}
+			recordFailure()
 			return catchup.CreateCatchupResult(
 				allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,
 				iteration, failedIterations, false, "Invalid header bytes",
@@ -337,9 +350,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 			}
 
 			// For non-malicious parse errors, still fail but with different error type
-			if circuitBreaker != nil {
-				circuitBreaker.RecordFailure()
-			}
+			recordFailure()
 
 			return catchup.CreateCatchupResult(
 				allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,
@@ -472,8 +483,8 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 	}
 
 	// Record success with circuit breaker if we succeeded
-	if circuitBreaker != nil && (reachedTarget || totalHeadersFetched > 0) {
-		circuitBreaker.RecordSuccess()
+	if reachedTarget || totalHeadersFetched > 0 {
+		recordSuccess()
 	}
 
 	u.logger.Infof("[catchup][%s] completed: %d headers fetched in %d iterations, reached target: %v, reason: %s", chainTipHash.String(), totalHeadersFetched, iteration, reachedTarget, stopReason)

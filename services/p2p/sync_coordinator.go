@@ -355,12 +355,6 @@ func (sc *SyncCoordinator) registryRemovePeer(peerID string) error {
 	return sc.registry.RemovePeer(ctx, peerID)
 }
 
-func (sc *SyncCoordinator) registryRecordSyncFailure(peerID string) error {
-	ctx, cancel := sc.boundedRPCContext()
-	defer cancel()
-	return sc.registry.UpdatePeerMetrics(ctx, peerID, 0, 0, 0, false, true, false, 0)
-}
-
 func (sc *SyncCoordinator) registryRegisterPeer(info *blockchain.PeerInfo) error {
 	ctx, cancel := sc.boundedRPCContext()
 	defer cancel()
@@ -710,36 +704,31 @@ func (sc *SyncCoordinator) HandlePeerDisconnected(peerID peer.ID) {
 	}
 }
 
-// HandleCatchupFailure handles catchup failures
-func (sc *SyncCoordinator) HandleCatchupFailure(reason string) {
-	sc.logger.Infof("[SyncCoordinator] Handling catchup failure: %s", reason)
+// HandleCatchupFailureForPeer switches a named failed sync peer without charging
+// reputation again. Unattributed or non-current failures run the same guarded
+// evaluation as the periodic monitor: retain recent progress, preempt only for
+// higher validated work after the grace period, and evict a stalled peer.
+func (sc *SyncCoordinator) HandleCatchupFailureForPeer(peerID, reason string) {
+	sc.logger.Infof("[SyncCoordinator] Handling catchup failure for peer %s: %s", peerID, reason)
 
-	// Hold decisionMu across the whole read-record-clear-retrigger sequence so a
-	// concurrent trigger cannot activate a new peer between the read and the clear
-	// (which would wrongly evict the freshly-activated peer).
 	sc.decisionMu.Lock()
 	defer sc.decisionMu.Unlock()
 
-	// Get the failed peer before clearing
-	sc.mu.RLock()
-	failedPeer := sc.currentSyncPeer
-	sc.mu.RUnlock()
-
-	// Record failure for the failed peer BEFORE clearing and triggering sync
-	// This ensures reputation is updated so the peer selector won't re-select the same peer
-	if failedPeer != "" {
-		sc.logger.Infof("[SyncCoordinator] Recording failure for failed peer %s", failedPeer)
-		if err := sc.registryRecordSyncFailure(failedPeer); err != nil {
-			sc.warnfUnlessStopping("[SyncCoordinator] UpdatePeerMetrics(failure) for %s: %v", failedPeer, err)
+	// Named current sync peer: atomic compare-and-clear, then re-select.
+	if peerID != "" && sc.clearSyncPeerIfCurrent(peerID) {
+		sc.logger.Infof("[SyncCoordinator] Cleared failed sync peer %s", peerID)
+		if err := sc.triggerSyncLocked(); err != nil {
+			sc.logger.Errorf("[SyncCoordinator] Failed to trigger sync after failure: %v", err)
 		}
+		return
 	}
 
-	// Clear current sync peer
-	sc.clearSyncPeerIfCurrent("")
-
-	// Trigger new sync
-	if err := sc.triggerSyncLocked(); err != nil {
-		sc.logger.Errorf("[SyncCoordinator] Failed to trigger sync after failure: %v", err)
+	// Reuse the monitor's progress and preemption rules under the same lock.
+	sc.evaluateSyncPeerLocked()
+	if sc.currentSyncPeerLocked() == "" {
+		if err := sc.triggerSyncLocked(); err != nil {
+			sc.warnfUnlessStopping("[SyncCoordinator] Failed to trigger sync after unattributed failure: %v", err)
+		}
 	}
 }
 
@@ -1310,6 +1299,11 @@ func (sc *SyncCoordinator) periodicEvaluation(ctx context.Context) {
 func (sc *SyncCoordinator) evaluateSyncPeer() {
 	sc.decisionMu.Lock()
 	defer sc.decisionMu.Unlock()
+	sc.evaluateSyncPeerLocked()
+}
+
+// evaluateSyncPeerLocked requires decisionMu to be held by the caller.
+func (sc *SyncCoordinator) evaluateSyncPeerLocked() {
 
 	now := time.Now()
 	sc.mu.RLock()

@@ -101,7 +101,7 @@ func (u *Server) reportCatchupFailure(ctx context.Context, peerID string) {
 }
 
 func (u *Server) reportCatchupFailureForError(ctx context.Context, peerID string, err error) {
-	if errors.Is(err, errors.ErrBlockIncomplete) {
+	if err == nil || errors.IsLocalError(err) || errors.Is(err, errors.ErrBlockIncomplete) {
 		return
 	}
 	if catchupFailureAlreadyReported(err) {

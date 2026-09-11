@@ -51,6 +51,7 @@ func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uin
 
 	// Convert PeerInfo to our internal type
 	peers := make([]PeerForCatchup, 0, len(peerInfos))
+	var prunedFallback []PeerForCatchup // pruned peers held back, used only if no others qualify
 	for _, p := range peerInfos {
 		// Filter out peers that don't have the target height yet
 		// (we only want peers that are at or above our target)
@@ -65,7 +66,7 @@ func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uin
 			continue
 		}
 
-		peers = append(peers, PeerForCatchup{
+		candidate := PeerForCatchup{
 			ID:                     p.ID.String(),
 			Storage:                p.Storage,
 			DataHubURL:             p.DataHubURL,
@@ -75,7 +76,24 @@ func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uin
 			CatchupAttempts:        p.CatchupAttempts,
 			CatchupSuccesses:       p.CatchupSuccesses,
 			CatchupFailures:        p.CatchupFailures,
-		})
+		}
+
+		// Deprioritise pruned peers as catchup primaries: they 404 on archival subtree
+		// data during IBD, wasting a fetch attempt per block before failover. They are
+		// held back as a fallback rather than hard-excluded, so an all-pruned peer set
+		// still gets an attempt (and a diagnosable 404) instead of stranding the node.
+		if isPrunedPeer(p.Storage) {
+			prunedFallback = append(prunedFallback, candidate)
+			continue
+		}
+
+		peers = append(peers, candidate)
+	}
+
+	// Fall back to pruned peers only when no full/unknown peer qualifies.
+	if len(peers) == 0 && len(prunedFallback) > 0 {
+		u.logger.Warnf("[peer_selection] No non-pruned peers for catchup; falling back to %d pruned peer(s)", len(prunedFallback))
+		peers = prunedFallback
 	}
 
 	u.logger.Infof("[peer_selection] Selected %d peers for catchup (from %d total)", len(peers), len(peerInfos))
@@ -129,6 +147,13 @@ func (u *Server) tryAlternativePeersForCatchup(ctx context.Context, block *model
 			u.processBlockNotify.Delete(*blockHash)
 			u.catchupAlternatives.Delete(*blockHash)
 			return true
+		}
+
+		// A peer-specific pacing queue can recover elsewhere; shutdown and local
+		// storage/configuration faults cannot. Neither should penalize a peer.
+		if shouldStopPeerFailover(ctx, altErr) {
+			u.logger.Warnf("[catchup] Local error trying peer %s for block %s, not blaming peer, stopping alternatives: %v", bestPeer.ID, blockHash.String(), altErr)
+			break
 		}
 
 		u.logger.Warnf("[catchup] Peer %s failed for block %s: %v", bestPeer.ID, blockHash.String(), altErr)
