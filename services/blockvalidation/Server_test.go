@@ -585,8 +585,8 @@ func TestServer_catchup(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		// Set the best block to the last stored block (block 49)
-		mockBlockchainStore.BestBlock = blocks[49]
+		// StoreBlock already selected block 49 under its lock. Do not write
+		// BestBlock directly while the subscription goroutine reads it.
 
 		// Build headers response - should include common ancestor (block 49) and new blocks (50-99)
 		// Headers should be in order from oldest to newest

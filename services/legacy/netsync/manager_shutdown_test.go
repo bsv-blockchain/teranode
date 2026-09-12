@@ -136,3 +136,48 @@ func TestStop_WhilePaused(t *testing.T) {
 		t.Fatal("Stop waited for the paused caller to resume")
 	}
 }
+
+func TestShutdown_ReleasesBlockedQueueCalls(t *testing.T) {
+	for _, operation := range []string{"inventory", "headers", "block", "transaction", "new peer", "done peer", "sync peer", "pause"} {
+		t.Run(operation, func(t *testing.T) {
+			sm, p, _ := newHeaderProvenanceManager(t)
+			sm.quit = make(chan struct{})
+			sm.msgChan = make(chan interface{}) // no consumer can accept the send
+			sm.orphanTxs = expiringmap.New[chainhash.Hash, *orphanTxAndParents](time.Hour)
+			sm.requestedTxns = expiringmap.New[chainhash.Hash, struct{}](time.Hour)
+			returned := make(chan struct{})
+			go func() {
+				switch operation {
+				case "inventory":
+					sm.QueueInv(wire.NewMsgInv(), p)
+				case "headers":
+					sm.QueueHeaders(wire.NewMsgHeaders(), p)
+				case "block":
+					sm.QueueBlock(nil, p, make(chan error, 1))
+				case "transaction":
+					sm.QueueTx(nil, p, nil)
+				case "new peer":
+					sm.NewPeer(p, nil)
+				case "done peer":
+					sm.DonePeer(p, nil)
+				case "sync peer":
+					sm.SyncPeerID()
+				case "pause":
+					close(sm.Pause())
+				}
+				close(returned)
+			}()
+			select {
+			case <-returned:
+				t.Fatal("queue call returned without a consumer or shutdown")
+			case <-time.After(50 * time.Millisecond):
+			}
+			require.NoError(t, sm.Stop())
+			select {
+			case <-returned:
+			case <-time.After(5 * time.Second):
+				t.Fatal("queue call remained blocked after shutdown")
+			}
+		})
+	}
+}
