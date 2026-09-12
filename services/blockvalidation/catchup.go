@@ -844,6 +844,10 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 	}
 	defer u.restoreFSMState(ctx, catchupCtx)
 
+	// Carry ownership through tracing and detached subtree-data downloads.
+	artifacts := &catchupArtifacts{Store: u.subtreeStore, files: make(map[catchupArtifactKey]*catchupArtifact)}
+	ctx = context.WithValue(ctx, catchupArtifactsKey{}, artifacts)
+
 	// Create error group for concurrent operations
 	errorGroup, gCtx := errgroup.WithContext(ctx)
 
@@ -879,6 +883,7 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 	// Wait for both operations to complete
 	err := errorGroup.Wait()
 	if err != nil {
+		artifacts.cleanup(u.logger)
 		catchupCtx.catchupError = err
 	}
 
@@ -1197,6 +1202,8 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 				}
 			}
 		}
+		// Force normal validation to reload metadata after a partial quick attempt.
+		block.SubtreeSlices = nil
 		// Quick validation failed, try normal validation
 		return true, nil
 	}

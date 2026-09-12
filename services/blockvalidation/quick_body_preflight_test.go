@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -189,7 +190,7 @@ func TestQuickBodyPreflightRejectsMalformedData(t *testing.T) {
 				close(blobs.gateRelease)
 				err := <-finished
 				require.False(t, mutated, "no UTXOs may be created while later transaction data is unauthenticated")
-				require.Error(t, err)
+				require.True(t, errors.Is(err, errors.ErrBlockInvalid), "%v", err)
 				require.Zero(t, block.ID, "malformed later data must be rejected before the first batch mutates state")
 				require.Empty(t, jobs)
 				for _, tx := range txs[1:] {
@@ -240,6 +241,214 @@ func TestQuickBodyPreflightReusesNodes(t *testing.T) {
 			stored, err := u.blockchainClient.GetBlock(context.Background(), block.Hash())
 			require.NoError(t, err)
 			require.EqualValues(t, 6, stored.TransactionCount)
+		})
+	}
+}
+
+func TestQuickBodyPreflightRequiresCoinbasePlaceholder(t *testing.T) {
+	for _, mode := range []string{"sequential", "pipeline", "async"} {
+		t.Run(mode, func(t *testing.T) {
+			u, block, txs, blobs := newQuickBodyFixture(t, mode)
+			// A different coinbase in the first slot must not be silently replaced
+			// when checking the header's merkle root or parsing transaction data.
+			otherCoinbase := block.CoinbaseTx.Clone()
+			otherCoinbase.Outputs[0].Satoshis++
+			st, err := subtreepkg.NewTreeByLeafCount(2)
+			require.NoError(t, err)
+			require.NoError(t, st.AddNode(*otherCoinbase.TxIDChainHash(), 0, uint64(otherCoinbase.Size())))
+			require.NoError(t, st.AddNode(*txs[1].TxIDChainHash(), 0, uint64(txs[1].Size())))
+			block.Subtrees[0] = st.RootHash()
+			raw, err := st.Serialize()
+			require.NoError(t, err)
+			require.NoError(t, blobs.Set(context.Background(), st.RootHash()[:], fileformat.FileTypeSubtreeToCheck, raw))
+			raw = append(otherCoinbase.Bytes(), txs[1].Bytes()...)
+			require.NoError(t, blobs.Set(context.Background(), st.RootHash()[:], fileformat.FileTypeSubtreeData, raw))
+			jobs := make(chan *SubtreeWriteJob, 10)
+			require.ErrorContains(t, runQuickBody(u, block, mode, jobs), "coinbase placeholder")
+			require.Zero(t, block.ID)
+			require.Empty(t, jobs)
+			for _, tx := range txs[1:] {
+				_, err := u.utxoStore.Get(context.Background(), tx.TxIDChainHash())
+				require.True(t, errors.Is(err, errors.ErrTxNotFound), "%v", err)
+			}
+		})
+	}
+}
+
+func TestQuickBodyPreflightMmapOwnership(t *testing.T) {
+	for _, mode := range []string{"sequential", "pipeline", "async"} {
+		t.Run(mode, func(t *testing.T) {
+			u, block, _, blobs := newQuickBodyFixture(t, mode)
+			u.mmapDir = t.TempDir()
+			cleanup, err := u.authenticateQuickBlockBody(context.Background(), block)
+			require.NoError(t, err)
+			defer cleanup()
+			for _, st := range block.SubtreeSlices {
+				require.True(t, st.IsMmapBacked())
+			}
+			batch, err := u.prefetchSubtreeBatch(context.Background(), block, 0, len(block.Subtrees))
+			require.NoError(t, err)
+			batch.Close()
+			// A failed intermediate batch must not unmap the block's borrowed nodes.
+			require.NoError(t, block.CheckMerkleRoot(context.Background()))
+			require.EqualValues(t, len(block.Subtrees), blobs.nodeReads.Load())
+			cleanup()
+			for _, st := range block.SubtreeSlices {
+				require.Nil(t, st, "fallback must not see an unmapped subtree")
+			}
+			files, err := os.ReadDir(u.mmapDir)
+			require.NoError(t, err)
+			require.Empty(t, files)
+			jobs := make(chan *SubtreeWriteJob, 10)
+			require.NoError(t, runQuickBody(u, block, mode, jobs), "a fresh attempt must reload after cleanup")
+		})
+	}
+}
+
+func TestQuickBodyPreflightRecomputesStoredRoot(t *testing.T) {
+	for _, mmap := range []bool{false, true} {
+		t.Run(fmt.Sprintf("mmap=%v", mmap), func(t *testing.T) {
+			u, block, txs, blobs := newQuickBodyFixture(t, "sequential")
+			if mmap {
+				u.mmapDir = t.TempDir()
+			}
+			hash := block.Subtrees[2]
+			raw, err := blobs.Get(context.Background(), hash[:], fileformat.FileTypeSubtreeToCheck)
+			require.NoError(t, err)
+			// Keep the serialized root and store key, replace a node and its data.
+			copy(raw[56:88], txs[0].TxIDChainHash()[:])
+			require.NoError(t, blobs.Set(context.Background(), hash[:], fileformat.FileTypeSubtreeToCheck, raw, bloboptions.WithAllowOverwrite(true)))
+			data := append(txs[0].Bytes(), txs[5].Bytes()...)
+			require.NoError(t, blobs.Set(context.Background(), hash[:], fileformat.FileTypeSubtreeData, data, bloboptions.WithAllowOverwrite(true)))
+			cleanup, err := u.authenticateQuickBlockBody(context.Background(), block)
+			defer cleanup()
+			require.ErrorContains(t, err, "nodes do not match its root")
+			require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+			require.Zero(t, block.ID)
+		})
+	}
+}
+
+func TestQuickBodyPreflightMissingFileIsNotInvalid(t *testing.T) {
+	u, block, _, blobs := newQuickBodyFixture(t, "sequential")
+	require.NoError(t, blobs.Del(context.Background(), block.Subtrees[2][:], fileformat.FileTypeSubtreeData))
+	cleanup, err := u.authenticateQuickBlockBody(context.Background(), block)
+	defer cleanup()
+	require.Error(t, err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "a missing file is not a verdict on the body")
+	require.Zero(t, block.ID)
+}
+
+type failingPreflightCreateStore struct{ utxo.Store }
+
+func (s *failingPreflightCreateStore) Create(context.Context, *bt.Tx, uint32, ...utxo.CreateOption) (*meta.Data, error) {
+	return nil, errors.NewStorageError("injected UTXO write failure")
+}
+
+func TestQuickBodyPreflightMmapProcessingFailure(t *testing.T) {
+	for _, mode := range []string{"sequential", "pipeline", "async"} {
+		t.Run(mode, func(t *testing.T) {
+			u, block, _, _ := newQuickBodyFixture(t, mode)
+			u.mmapDir = t.TempDir()
+			utxos := u.utxoStore
+			u.utxoStore = &failingPreflightCreateStore{Store: utxos}
+			jobs := make(chan *SubtreeWriteJob, 10)
+			require.Error(t, runQuickBody(u, block, mode, jobs))
+			for _, st := range block.SubtreeSlices {
+				if st != nil {
+					require.False(t, st.IsMmapBacked(), "failed processing must not leave an unmapped reference")
+				}
+			}
+			files, err := os.ReadDir(u.mmapDir)
+			require.NoError(t, err)
+			require.Empty(t, files)
+			u.utxoStore = utxos
+			require.NoError(t, runQuickBody(u, block, mode, make(chan *SubtreeWriteJob, 10)))
+		})
+	}
+}
+
+type parallelPreflightStore struct {
+	blob.Store
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *parallelPreflightStore) GetIoReader(ctx context.Context, key []byte, kind fileformat.FileType, opts ...bloboptions.FileOption) (io.ReadCloser, error) {
+	if kind == fileformat.FileTypeSubtreeData {
+		select {
+		case s.entered <- struct{}{}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return s.Store.GetIoReader(ctx, key, kind, opts...)
+}
+
+func TestQuickBodyPreflightBoundedParallelReads(t *testing.T) {
+	u, block, _, blobs := newQuickBodyFixture(t, "sequential")
+	u.settings.Block.GetAndValidateSubtreesConcurrency = 2
+	u.settings.BlockValidation.SubtreeBatchSize = 100
+	reads := &parallelPreflightStore{Store: blobs, entered: make(chan struct{}, 3), release: make(chan struct{})}
+	u.subtreeStore = reads
+	finished := make(chan error, 1)
+	go func() {
+		cleanup, err := u.authenticateQuickBlockBody(context.Background(), block)
+		cleanup()
+		finished <- err
+	}()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-reads.entered:
+		case <-time.After(5 * time.Second):
+			close(reads.release)
+			t.Fatal("preflight did not read two subtrees concurrently")
+		}
+	}
+	select {
+	case <-reads.entered:
+		t.Error("preflight exceeded the configured read concurrency")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(reads.release)
+	require.NoError(t, <-finished)
+}
+
+type reopenFailureStore struct {
+	blob.Store
+	reads atomic.Int32
+}
+
+func (s *reopenFailureStore) GetIoReader(ctx context.Context, key []byte, kind fileformat.FileType, opts ...bloboptions.FileOption) (io.ReadCloser, error) {
+	if kind == fileformat.FileTypeSubtreeToCheck && s.reads.Add(1) > 1 {
+		return nil, errors.NewStorageError("injected reopen failure")
+	}
+	return s.Store.GetIoReader(ctx, key, kind, opts...)
+}
+
+func TestQuickBodyPreflightMmapFallback(t *testing.T) {
+	for _, reopenFails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reopenFails=%v", reopenFails), func(t *testing.T) {
+			u, block, _, blobs := newQuickBodyFixture(t, "sequential")
+			u.mmapDir = t.TempDir() + "/missing/directory"
+			if reopenFails {
+				u.subtreeStore = &reopenFailureStore{Store: blobs}
+			}
+			result := u.readSubtree(context.Background(), block, 0, block.Subtrees[0])
+			if reopenFails {
+				require.Error(t, result.err)
+				require.True(t, errors.Is(result.err, errors.ErrStorageError))
+				return
+			}
+			require.NoError(t, result.err, "fallback must reopen at byte zero")
+			defer result.subtree.Close()
+			require.False(t, result.subtree.IsMmapBacked())
+			require.Equal(t, *block.Subtrees[0], *result.subtree.RootHash())
 		})
 	}
 }

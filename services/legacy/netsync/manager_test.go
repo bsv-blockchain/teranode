@@ -418,7 +418,7 @@ func setupQueueInvTests() (chan interface{}, chan *kafka.Message, *SyncManager, 
 func TestSendDuringShutdown(t *testing.T) {
 	t.Run("open channel delivers", func(t *testing.T) {
 		ch := make(chan int, 1)
-		require.True(t, sendDuringShutdown(ch, 7))
+		require.True(t, sendDuringShutdown(ch, 7, nil))
 		require.Equal(t, 7, <-ch)
 	})
 
@@ -426,7 +426,7 @@ func TestSendDuringShutdown(t *testing.T) {
 		ch := make(chan int)
 		close(ch)
 		require.NotPanics(t, func() {
-			require.False(t, sendDuringShutdown(ch, 1))
+			require.False(t, sendDuringShutdown(ch, 1, nil))
 		})
 	})
 }

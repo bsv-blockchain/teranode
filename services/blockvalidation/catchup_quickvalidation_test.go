@@ -56,7 +56,7 @@ func TestTryQuickValidation(t *testing.T) {
 		assert.True(t, shouldTryNormal, "should return true to use normal validation when block is above checkpoint height")
 	})
 
-	t.Run("should handle subtree deletion when quick validation fails", func(t *testing.T) {
+	t.Run("should reject malformed body without deleting shared subtrees", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
 		defer suite.Cleanup()
 
@@ -88,21 +88,14 @@ func TestTryQuickValidation(t *testing.T) {
 		// Create a buffered channel for async writes
 		writeJobsChan := make(chan *SubtreeWriteJob, 10)
 
-		// The quick validation will fail because we didn't set up all the necessary mocks
-		// This should trigger the subtree cleanup logic
 		shouldTryNormal, err := suite.Server.tryQuickValidation(ctx, block, catchupCtx, "", "http://test", writeJobsChan)
-
-		assert.NoError(t, err, "should not return error even when quick validation fails")
-		assert.True(t, shouldTryNormal, "should return true to fallback to normal validation")
-
-		// Verify subtrees were deleted
-		_, err = suite.Server.subtreeStore.Get(ctx, subtreeHash1[:], fileformat.FileTypeSubtree)
-		assert.Error(t, err, "subtree1 should have been deleted")
-		assert.True(t, errors.Is(err, errors.ErrNotFound))
-
-		_, err = suite.Server.subtreeStore.Get(ctx, subtreeHash2[:], fileformat.FileTypeSubtree)
-		assert.Error(t, err, "subtree2 should have been deleted")
-		assert.True(t, errors.Is(err, errors.ErrNotFound))
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid), "%v", err)
+		require.False(t, shouldTryNormal)
+		for _, hash := range block.Subtrees {
+			exists, err := suite.Server.subtreeStore.Exists(ctx, hash[:], fileformat.FileTypeSubtree)
+			require.NoError(t, err)
+			require.True(t, exists, "body rejection must preserve shared subtree files")
+		}
 	})
 
 	t.Run("should return false when quick validation succeeds", func(t *testing.T) {

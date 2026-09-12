@@ -2355,6 +2355,8 @@ out:
 	}
 
 	blockWorker.Wait()
+	// Queued blocks are abandoned on shutdown; peer waits also observe shutdown.
+	sm.blockBacklog.Store(0)
 	close(sm.handlerDone)
 	sm.logger.Infof("Block handler done")
 }
@@ -2364,11 +2366,11 @@ func (sm *SyncManager) NewPeer(peer *peerpkg.Peer, done chan struct{}) {
 	// Ignore if we are shutting down.
 	if atomic.LoadInt32(&sm.shutdown) != 0 {
 		if done != nil {
-			done <- struct{}{}
+			sendDuringShutdown(done, struct{}{}, sm.quit)
 		}
 		return
 	}
-	sm.msgChan <- &newPeerMsg{peer: peer, reply: done}
+	sendDuringShutdown[interface{}](sm.msgChan, &newPeerMsg{peer: peer, reply: done}, sm.quit)
 }
 
 // QueueTx adds the passed transaction message and peer to the block handling
@@ -2378,12 +2380,12 @@ func (sm *SyncManager) QueueTx(tx *bsvutil.Tx, peer *peerpkg.Peer, done chan str
 	// Don't accept more transactions if we're shutting down.
 	if atomic.LoadInt32(&sm.shutdown) != 0 {
 		if done != nil {
-			done <- struct{}{}
+			sendDuringShutdown(done, struct{}{}, sm.quit)
 		}
 		return
 	}
 
-	sm.msgChan <- &txMsg{tx: tx, peer: peer, reply: done}
+	sendDuringShutdown[interface{}](sm.msgChan, &txMsg{tx: tx, peer: peer, reply: done}, sm.quit)
 }
 
 // QueueBlock adds the passed block message and peer to the block handling
@@ -2392,33 +2394,29 @@ func (sm *SyncManager) QueueTx(tx *bsvutil.Tx, peer *peerpkg.Peer, done chan str
 func (sm *SyncManager) QueueBlock(block *bsvutil.Block, peer *peerpkg.Peer, done chan error) {
 	// Don't accept more blocks if we're shutting down.
 	if atomic.LoadInt32(&sm.shutdown) != 0 {
-		done <- nil
+		sendDuringShutdown[error](done, nil, sm.quit)
 		return
 	}
 
-	sm.msgChan <- &blockMsg{block: block, peer: peer, reply: done}
+	sendDuringShutdown[interface{}](sm.msgChan, &blockMsg{block: block, peer: peer, reply: done}, sm.quit)
 }
 
-// sendDuringShutdown delivers v on ch, recovering from the "send on closed
-// channel" panic that races teardown. Inv delivery runs on peer read-loop
-// goroutines (OnInv -> QueueInv), but the channels they target are torn down by
-// a different goroutine during shutdown: the kafka async producer closes
-// legacyKafkaInvCh in its Stop(), and the block handler stops draining msgChan.
-// The shutdown flag check in QueueInv narrows but cannot close that window — a
-// flag check and a channel send are not atomic against a concurrent close — so
-// a late inv would otherwise crash the whole process. Dropping an inv during
-// shutdown is safe: inv is an advisory announcement, re-sent by the peer (or a
-// later session) on the next connection. Returns false if the channel was closed.
-func sendDuringShutdown[T any](ch chan T, v T) (sent bool) {
+// sendDuringShutdown lets blocked producers exit when consumers stop draining.
+// The Kafka producer can also close its input during teardown, so tolerate a
+// late send to that channel. Returns false when delivery is abandoned.
+func sendDuringShutdown[T any](ch chan T, v T, quit <-chan struct{}) (sent bool) {
 	defer func() {
 		if recover() != nil {
 			sent = false
 		}
 	}()
 
-	ch <- v
-
-	return true
+	select {
+	case ch <- v:
+		return true
+	case <-quit:
+		return false
+	}
 }
 
 // QueueInv adds the passed inv message and peer to the block handling queue.
@@ -2452,7 +2450,7 @@ func (sm *SyncManager) QueueInv(inv *wire.MsgInv, peer *peerpkg.Peer) {
 
 		if len(invBlockMsg.InvList) > 0 {
 			netsyncInvMsg := invMsg{inv: invBlockMsg, peer: peer}
-			sendDuringShutdown[interface{}](sm.msgChan, &netsyncInvMsg)
+			sendDuringShutdown[interface{}](sm.msgChan, &netsyncInvMsg, sm.quit)
 		}
 
 		if len(invTxMsg.InvList) > 0 {
@@ -2468,11 +2466,11 @@ func (sm *SyncManager) QueueInv(inv *wire.MsgInv, peer *peerpkg.Peer) {
 			sm.logger.Debugf("writing INV message to Kafka from peer %s, length: %d", peer.String(), len(value))
 			sendDuringShutdown(sm.legacyKafkaInvCh, &kafka.Message{
 				Value: value,
-			})
+			}, sm.quit)
 		}
 	} else {
 		netsyncInvMsg := invMsg{inv: inv, peer: peer}
-		sendDuringShutdown[interface{}](sm.msgChan, &netsyncInvMsg)
+		sendDuringShutdown[interface{}](sm.msgChan, &netsyncInvMsg, sm.quit)
 	}
 }
 
@@ -2485,7 +2483,7 @@ func (sm *SyncManager) QueueHeaders(headers *wire.MsgHeaders, peer *peerpkg.Peer
 		return
 	}
 
-	sm.msgChan <- &headersMsg{headers: headers, peer: peer}
+	sendDuringShutdown[interface{}](sm.msgChan, &headersMsg{headers: headers, peer: peer}, sm.quit)
 }
 
 // DonePeer informs the blockmanager that a peer has disconnected.
@@ -2493,13 +2491,13 @@ func (sm *SyncManager) DonePeer(peer *peerpkg.Peer, done chan struct{}) {
 	// Ignore if we are shutting down.
 	if atomic.LoadInt32(&sm.shutdown) != 0 {
 		if done != nil {
-			done <- struct{}{}
+			sendDuringShutdown(done, struct{}{}, sm.quit)
 		}
 		return
 	}
 
 	sm.logger.Infof("Done peer %s", peer)
-	sm.msgChan <- &donePeerMsg{peer: peer, reply: done}
+	sendDuringShutdown[interface{}](sm.msgChan, &donePeerMsg{peer: peer, reply: done}, sm.quit)
 }
 
 // beginHandler admits work before shutdown and lets Stop wait for it. Holding
@@ -2551,9 +2549,13 @@ func (sm *SyncManager) Stop() error {
 // SyncPeerID returns the ID of the current sync peer, or 0 if there is none.
 func (sm *SyncManager) SyncPeerID() int32 {
 	reply := make(chan int32)
-	sm.msgChan <- getSyncPeerMsg{reply: reply}
-
-	return <-reply
+	sendDuringShutdown[interface{}](sm.msgChan, getSyncPeerMsg{reply: reply}, sm.quit)
+	select {
+	case id := <-reply:
+		return id
+	case <-sm.quit:
+		return 0
+	}
 }
 
 // IsCurrent returns whether the sync manager believes it is synced with
@@ -2568,7 +2570,7 @@ func (sm *SyncManager) IsCurrent() bool {
 // message sender should avoid pausing the sync manager for long durations.
 func (sm *SyncManager) Pause() chan<- struct{} {
 	c := make(chan struct{})
-	sm.msgChan <- pauseMsg{c}
+	sendDuringShutdown[interface{}](sm.msgChan, pauseMsg{c}, sm.quit)
 
 	return c
 }
