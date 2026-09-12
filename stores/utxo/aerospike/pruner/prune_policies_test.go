@@ -114,40 +114,11 @@ func testParentUpdates(t *testing.T, n int) map[string]*parentUpdateInfo {
 }
 
 // Parent updates mutate records that SURVIVE the prune, so they must stay on
-// COMMIT_ALL even when removals are relaxed. Asserted against the records the
-// pruner actually builds — asserting the aerospike client's constructor
-// defaults instead would guard nothing about this package.
-func TestBuildCombinedCleanupRecordsKeepsParentUpdatesCommitAll(t *testing.T) {
-	updates := testParentUpdates(t, 2)
-	keys := testKeys(t, 3)
-
-	// No native builder and no lua package → the plain MapPutItems BatchWrite
-	// parent path.
-	s := &Service{
-		utxoSetTTL:           false,
-		removalCommitLevel:   aerospike.COMMIT_MASTER,
-		fieldDeletedChildren: "deletedChildren",
-	}
-
-	batchRecords, parentEnd, parentUsesModTeranode := s.buildCombinedCleanupRecords(updates, keys)
-
-	require.False(t, parentUsesModTeranode)
-	require.Len(t, batchRecords, len(updates)+len(keys))
-	require.Equal(t, len(updates), parentEnd)
-
-	for i, record := range batchRecords[:parentEnd] {
-		batchWrite, ok := record.(*aerospike.BatchWrite)
-		require.True(t, ok, "parent record %d should be a BatchWrite", i)
-		require.Equal(t, aerospike.COMMIT_ALL, batchWrite.Policy.CommitLevel, "parent update %d must not inherit the relaxed removal commit level", i)
-		require.Equal(t, aerospike.UPDATE_ONLY, batchWrite.Policy.RecordExistsAction)
-	}
-
-	for i, record := range batchRecords[parentEnd:] {
-		batchDelete, ok := record.(*aerospike.BatchDelete)
-		require.True(t, ok, "child record %d should be a BatchDelete", i)
-		require.Equal(t, aerospike.COMMIT_MASTER, batchDelete.Policy.CommitLevel)
-	}
-}
+// COMMIT_ALL even when removals are relaxed. The parent updates and the child
+// deletions no longer share one batch (see flushCleanupBatches), so the parent
+// half is asserted via buildParentUpdateRecords and the removal half via
+// buildDeletionBatchRecords; both assert against the records the pruner
+// actually builds.
 
 // Same guarantee on the mod-teranode parent path: the addDeletedChildren UDF
 // records keep COMMIT_ALL.
@@ -160,36 +131,15 @@ func TestBuildParentUpdateRecordsKeepCommitAll(t *testing.T) {
 		luaPackage:           "teranode",
 	}
 
-	batchRecords := s.buildParentUpdateRecords(updates)
+	batchRecords, infos := s.buildParentUpdateRecords(updates)
 
 	require.Len(t, batchRecords, len(updates))
+	require.Len(t, infos, len(batchRecords), "infos must be index-aligned with the records")
 
 	for i, record := range batchRecords {
 		batchUDF, ok := record.(*aerospike.BatchUDF)
 		require.True(t, ok, "parent record %d should be a BatchUDF", i)
 		require.Equal(t, aerospike.COMMIT_ALL, batchUDF.Policy.CommitLevel, "parent update %d must not inherit the relaxed removal commit level", i)
-	}
-}
-
-// A relaxed removal commit level must not leak into the combined batch's parent
-// half when removals are NOT relaxed either — both halves are COMMIT_ALL.
-func TestBuildCombinedCleanupRecordsUnrelaxed(t *testing.T) {
-	updates := testParentUpdates(t, 1)
-	keys := testKeys(t, 2)
-
-	s := &Service{
-		utxoSetTTL:           true,
-		removalCommitLevel:   aerospike.COMMIT_ALL,
-		fieldDeletedChildren: "deletedChildren",
-	}
-
-	batchRecords, parentEnd, _ := s.buildCombinedCleanupRecords(updates, keys)
-
-	require.Len(t, batchRecords, len(updates)+len(keys))
-
-	for i, record := range batchRecords[parentEnd:] {
-		batchWrite, ok := record.(*aerospike.BatchWrite)
-		require.True(t, ok, "child record %d should be a BatchWrite when utxoSetTTL is on", i)
-		require.Equal(t, aerospike.COMMIT_ALL, batchWrite.Policy.CommitLevel)
+		require.NotNil(t, infos[i].key, "parent record %d must have a matching info", i)
 	}
 }

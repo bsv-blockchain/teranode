@@ -117,6 +117,7 @@ func (s *Store) buildSpendFilterExpression(
 	ignoreConflicting bool,
 	ignoreLocked bool,
 	currentBlockHeight uint32,
+	spendingTxID *chainhash.Hash,
 ) *aerospike.Expression {
 	// Get bin references
 	utxosBin := aerospike.ExpListBin(fields.Utxos.String())
@@ -220,6 +221,38 @@ func (s *Store) buildSpendFilterExpression(
 			aerospike.ExpBlobVal(utxoHash),
 		),
 	)
+
+	// Replay protection (see the deletedChildren bookkeeping in the pruner): a
+	// surviving parent carries a deletedChildren map in which the pruner records
+	// every child it has already removed. A spend arriving after that marker must
+	// not recreate the UTXO, so the filter refuses any parent record that already
+	// names this spender. Without this clause a confirmed-and-pruned transaction
+	// could be spent a second time: its outputs were deleted with the parent, but
+	// a re-delivered spend would recreate a single live UTXO that no pruner sweep
+	// will ever see again.
+	//
+	// Legitimate deliveries never trip this. txHandler never re-delivers a spend,
+	// and the pruner only removes a child whose parent has been stable for the
+	// retention window, so a spender showing up twice is exactly the replay this
+	// clause exists to catch. When a record is refused here it falls through to
+	// the Lua UDF, which distinguishes a double-spend from an idempotent
+	// re-delivery.
+	if spendingTxID != nil {
+		filterConditions = append(filterConditions,
+			aerospike.ExpOr(
+				aerospike.ExpNot(aerospike.ExpBinExists(fields.DeletedChildren.String())),
+				aerospike.ExpEq(
+					aerospike.ExpMapGetByKey(
+						aerospike.MapReturnType.COUNT,
+						aerospike.ExpTypeINT,
+						aerospike.ExpStringVal(spendingTxID.String()),
+						aerospike.ExpMapBin(fields.DeletedChildren.String()),
+					),
+					aerospike.ExpIntVal(0),
+				),
+			),
+		)
+	}
 
 	// Combine all conditions with AND
 	if len(filterConditions) == 1 {
@@ -329,6 +362,7 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 			bItem.ignoreConflicting,
 			bItem.ignoreLocked,
 			bItem.blockHeight,
+			bItem.spend.SpendingData.TxID,
 		)
 
 		// Create batch write policy with filter

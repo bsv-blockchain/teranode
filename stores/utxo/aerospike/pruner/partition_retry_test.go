@@ -51,6 +51,12 @@ func ensurePrometheusMetrics() {
 		prometheusUtxoTimeoutEvents = prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "test_utxo_pruner_timeout_events_total",
 		})
+		prometheusUtxoInputResolutionErrors = prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "test_utxo_pruner_input_resolution_errors_total",
+		})
+		prometheusUtxoParentUpdateFailures = prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "test_utxo_pruner_parent_update_failures_total",
+		})
 		prometheusUtxoParentsSkippedPruned = prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "test_utxo_pruner_parents_skipped_pruned_total",
 		})
