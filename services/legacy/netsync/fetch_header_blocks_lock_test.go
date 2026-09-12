@@ -413,7 +413,7 @@ func TestCommitHeaderCandidates_RefusesASecondCommitFromTheSameSnapshot(t *testi
 
 	// One reading of the list, shared by both rounds — exactly what two
 	// concurrent walks from the same startHeader come back holding.
-	snapshot, anchorEl, anchorHash, ok := sm.snapshotHeaderCandidates(len(hashes))
+	snapshot, anchorEl, anchorHash, _, ok := sm.snapshotHeaderCandidates(len(hashes))
 	require.True(t, ok)
 	require.Equal(t, hashes, snapshot, "the snapshot should be the whole seeded run")
 

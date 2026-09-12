@@ -4911,6 +4911,90 @@ func (sm *SyncManager) dropBlockFromWalk(blockHash chainhash.Hash, removedFront 
 	sm.rewindHeaderCursor(blockHash, removedFront)
 }
 
+// reanchorStrandedWalk puts the download cursor back on the front of the header
+// list when it has come to rest ABOVE the read-ahead ceiling, and answers
+// whether it moved it.
+//
+// The walk is forward-only: commitHeaderCandidates advances startHeader past
+// every header it considers, and the only things that ever move it back are the
+// drop paths (rewindHeaderCursor) and a peer losing its slice. None of those
+// fire for a block that was requested and simply never arrived, and the download
+// ledger holds such a block for an hour before it expires.
+//
+// So the cursor can end up stranded, and once it is, nothing recovers it. The
+// ceiling is anchored to the last COMMITTED block, the cursor is above it, so
+// snapshotHeaderCandidates breaks on its first header and the round asks for
+// nothing; nothing is asked for, so nothing arrives; nothing arrives, so nothing
+// commits; nothing commits, so the anchor never rises and the ceiling never
+// reaches the cursor. Measured on mainnet on 2026-09-12 at height 11238: park
+// empty, download window empty, nothing in flight, the block loop idle for over
+// three minutes, and 955,208 headers queued running to height 966,445.
+//
+// The front is the right place to restart from, and it is the only one that
+// needs no bookkeeping. A header is removed from the list when its block
+// arrives, so the front is by definition the lowest block still wanted — it is
+// the answer to "which blocks above the last one I processed do I not have?"
+// recomputed from the list itself. Everything between the front and the old
+// cursor is then re-examined on this pass and sorted by the two filters the walk
+// already applies: haveInventory answers for blocks this node holds, so they are
+// walked past without a request, and RequestedWithin answers for blocks a peer
+// still owes, so they are stepped over and the cursor pins in front of them.
+// Neither can ask a peer for a block twice, which is what makes restarting at
+// the front safe rather than merely convenient.
+//
+// It does NOT weaken the read-ahead bound: every header the round then considers
+// is still checked against the same ceiling one at a time, and the front is by
+// construction no higher than the cursor that was refused.
+//
+// Called once per fetchHeaderBlocks, outside the round loop, and that placement
+// is the whole of the correctness argument. Inside the loop it is a spin: the
+// loop's only measure of progress is the cursor, commitHeaderCandidates advances
+// it, and resetting it to the front on every round destroys exactly the progress
+// the loop is reading. Tried on 2026-09-12, it turned
+// TestScheduler_DoesNotReadFurtherAheadThanTheLookaheadLimit into a hang —
+// round N requested nothing because every candidate was already in flight,
+// assigner.remaining therefore never fell, and the next round re-walked the same
+// four headers, for ever.
+func (sm *SyncManager) reanchorStrandedWalk() bool {
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
+
+	if sm.startHeader == nil || sm.headerList == nil {
+		return false
+	}
+
+	front := sm.headerList.Front()
+	if front == nil || front == sm.startHeader {
+		// A cursor already on the front cannot be stranded above anything. When
+		// the FRONT itself is above the ceiling this node is a full read-ahead
+		// depth ahead of its own committer, which is the bound doing its job and
+		// not a stall: committing raises the anchor and the ceiling with it.
+		return false
+	}
+
+	node, isHeaderNode := sm.startHeader.Value.(*headerNode)
+	if !isHeaderNode || node.hash == nil {
+		return false
+	}
+
+	ceiling, hasCeiling := sm.lookaheadCeilingLocked()
+	if !hasCeiling || int64(node.height) <= ceiling {
+		return false
+	}
+
+	sm.startHeader = front
+
+	frontHeight := int32(-1)
+	if frontNode, isFrontNode := front.Value.(*headerNode); isFrontNode {
+		frontHeight = frontNode.height
+	}
+
+	sm.logger.Warnf("[fetchHeaderBlocks] download cursor at height %d is stranded above the read-ahead ceiling %d, restarting the walk at the front of the list (height %d)",
+		node.height, ceiling, frontHeight)
+
+	return true
+}
+
 // fetchHeaderBlocks asks for the next run of blocks the header list describes,
 // spread over every peer eligible to carry one.
 //
@@ -4972,6 +5056,11 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 		return
 	}
 
+	// Once per pass, before any round runs: a cursor left above the ceiling asks
+	// for nothing for ever, because the ceiling only rises when a block commits
+	// and no block can commit while nothing is being asked for.
+	sm.reanchorStrandedWalk()
+
 	// Every budget this pass spends, and every peer it may spend it on, decided
 	// with no lock held. A nil answer means there is nothing to hand out.
 	assigner := sm.newDownloadAssigner()
@@ -4989,11 +5078,35 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 	// already have cost a slot in the round but not a request, so a second round
 	// picks up the shortfall — which is what keeps the getdata contents the same
 	// as the old single-locked walk, where the loop simply carried on past them.
+	// The height the previous round walked from. Every round must start strictly
+	// higher than the one before it, and that is what bounds the loop: heights in
+	// the header list increase, so a strictly rising anchor can only be raised
+	// finitely often before the snapshot runs out of headers below the ceiling.
+	//
+	// commitHeaderCandidates already refuses to report more work when it did not
+	// move the cursor, which is the same rule read from the other end and is what
+	// normally ends the loop. This is the belt to that pair of braces: the cursor
+	// is shared state, and rewindHeaderCursor can move it BACKWARDS from another
+	// goroutine between two rounds. Without this that is a live spin — round N+1
+	// would re-walk headers round N already walked — and a spin in this loop is
+	// worse than the stall it is here to cure, because it holds a CPU and takes
+	// headerMu over and over in front of the block-queue consumer.
+	lastAnchorHeight := int32(-1)
+
 	for assigner.remaining > 0 {
-		hashes, anchor, anchorHash, ok := sm.snapshotHeaderCandidates(assigner.remaining)
+		hashes, anchor, anchorHash, anchorHeight, ok := sm.snapshotHeaderCandidates(assigner.remaining)
 		if !ok {
 			break
 		}
+
+		if anchorHeight <= lastAnchorHeight {
+			sm.logger.Debugf("[fetchHeaderBlocks] the walk is no longer moving forward (anchor height %d, previous round %d), leaving the rest to the next pass",
+				anchorHeight, lastAnchorHeight)
+
+			break
+		}
+
+		lastAnchorHeight = anchorHeight
 
 		alreadyHave := make([]bool, len(hashes))
 
@@ -5198,17 +5311,25 @@ func (sm *SyncManager) lookaheadCeilingLocked() (int64, bool) {
 }
 
 // snapshotHeaderCandidates copies up to limit hashes from startHeader forward,
-// and returns the element startHeader points at together with its hash, so the
-// blockchain lookups can be made with headerMu released and the commit can tell
-// whether the list moved in the meantime. ok is false when there is nothing
-// usable to walk.
-func (sm *SyncManager) snapshotHeaderCandidates(limit int) (hashes []chainhash.Hash, anchor *list.Element, anchorHash chainhash.Hash, ok bool) {
+// and returns the element startHeader points at together with its hash and
+// height, so the blockchain lookups can be made with headerMu released, the
+// commit can tell whether the list moved in the meantime, and the caller can
+// tell whether its next round starts anywhere new. ok is false when there is
+// nothing usable to walk.
+func (sm *SyncManager) snapshotHeaderCandidates(limit int) (hashes []chainhash.Hash, anchor *list.Element, anchorHash chainhash.Hash, anchorHeight int32, ok bool) {
 	sm.headerMu.Lock()
 	defer sm.headerMu.Unlock()
 
 	anchor = sm.startHeader
 	if anchor == nil {
-		return nil, nil, chainhash.Hash{}, false
+		return nil, nil, chainhash.Hash{}, 0, false
+	}
+
+	// Read here rather than off the returned element, because the caller has the
+	// lock released by then and the walk's own height bound must not be read
+	// from shared state unlocked.
+	if anchorNode, isHeaderNode := anchor.Value.(*headerNode); isHeaderNode {
+		anchorHeight = anchorNode.height
 	}
 
 	// Asked once rather than per header: it is a property of the node, not of
@@ -5273,10 +5394,10 @@ func (sm *SyncManager) snapshotHeaderCandidates(limit int) (hashes []chainhash.H
 	}
 
 	if len(hashes) == 0 {
-		return nil, nil, chainhash.Hash{}, false
+		return nil, nil, chainhash.Hash{}, 0, false
 	}
 
-	return hashes, anchor, hashes[0], true
+	return hashes, anchor, hashes[0], anchorHeight, true
 }
 
 // commitHeaderCandidates re-takes headerMu and, provided the list has not moved
@@ -5507,7 +5628,24 @@ func (sm *SyncManager) commitHeaderCandidates(assigner *downloadAssigner, anchor
 		advanceCursor(e)
 	}
 
-	return requested, e != nil
+	// more is "another round from this pass can do something new", and the only
+	// honest measure of that is whether the cursor moved. The next round starts
+	// at startHeader, so a cursor left where this round found it makes the next
+	// round an exact repeat: the same hashes snapshotted, the same blockchain
+	// lookups made, the same headers refused. Nothing in that round can place a
+	// request either, so assigner.remaining does not fall, so the loop has
+	// nothing left to stop it.
+	//
+	// That state is ordinary, not exotic. It is what a pinned cursor leaves
+	// behind whenever the first candidate is a block a peer still owes:
+	// RequestedWithin steps over it and pins, so the round may well request
+	// higher blocks but startHeader stays exactly where it began.
+	//
+	// Returning false here costs nothing real. The headers this round could not
+	// reach are still in the list, and the next pass — every arriving block and
+	// every headers message starts one — walks them from wherever the cursor
+	// then is.
+	return requested, e != nil && sm.startHeader != anchor
 }
 
 // handleHeadersMsg handles block header messages from all peers.  Headers are
