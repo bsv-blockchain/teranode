@@ -22,6 +22,15 @@ import (
 )
 
 func TestCatchupArtifacts_InvalidBodyCanBeRetried(t *testing.T) {
+	testCatchupArtifactsRetry(t, true)
+}
+
+func TestCatchupArtifacts_TemporaryFailurePreservesProgress(t *testing.T) {
+	testCatchupArtifactsRetry(t, false)
+}
+
+func testCatchupArtifactsRetry(t *testing.T, invalidBody bool) {
+	t.Helper()
 	ctx := context.Background()
 	bv, block, _, blobs := newQuickBodyFixture(t, "async")
 	payloads := make(map[string][]byte)
@@ -42,7 +51,10 @@ func TestCatchupArtifacts_InvalidBodyCanBeRetried(t *testing.T) {
 			require.NoError(t, blobs.Del(ctx, hash[:], fileformat.FileTypeSubtreeData))
 		}
 	}
-	block.TransactionCount = 7 // same genuine header, dishonest serialized body count
+	bv.settings.BlockValidation.SubtreeFetchConcurrency = 1
+	if invalidBody {
+		block.TransactionCount = 7 // same genuine header, dishonest serialized body count
+	}
 	badBody, err := block.Bytes()
 	require.NoError(t, err)
 	block.TransactionCount = 6
@@ -61,6 +73,10 @@ func TestCatchupArtifacts_InvalidBodyCanBeRetried(t *testing.T) {
 		}
 		if data, ok := payloads[r.URL.Path]; ok {
 			fetched.Add(1)
+			if !invalidBody && !goodPeer.Load() && r.URL.Path == "/subtree_data/"+block.Subtrees[1].String() {
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
 			_, _ = w.Write(data)
 			return
 		}
@@ -76,18 +92,28 @@ func TestCatchupArtifacts_InvalidBodyCanBeRetried(t *testing.T) {
 			blockHeaders: []*model.BlockHeader{block.Header}, commonAncestorMeta: &model.BlockHeaderMeta{Height: 0},
 			useQuickValidation: true, highestCheckpointHeight: 1})
 	}
-	require.ErrorIs(t, attempt(), errors.ErrBlockInvalid)
+	err = attempt()
+	require.Error(t, err)
+	require.Equal(t, invalidBody, errors.Is(err, errors.ErrBlockInvalid), "%v", err)
 	require.EqualValues(t, 4, fetched.Load())
 	for i, hash := range block.Subtrees {
 		for _, kind := range []fileformat.FileType{fileformat.FileTypeSubtreeToCheck, fileformat.FileTypeSubtreeData} {
 			exists, err := blobs.Exists(ctx, hash[:], kind)
 			require.NoError(t, err)
-			require.Equal(t, i == 2, exists, "only preexisting files survive failed catchup")
+			expected := i == 2
+			if !invalidBody {
+				expected = i != 1 || kind == fileformat.FileTypeSubtreeToCheck
+			}
+			require.Equal(t, expected, exists, "invalid bodies discard their files; transient failures retain progress")
 		}
 	}
 	goodPeer.Store(true)
 	require.NoError(t, attempt())
-	require.EqualValues(t, 8, fetched.Load(), "the next peer must refetch files discarded with the invalid body")
+	if invalidBody {
+		require.EqualValues(t, 8, fetched.Load(), "the next peer must refetch files discarded with the invalid body")
+	} else {
+		require.EqualValues(t, 5, fetched.Load(), "only the missing transaction data should be fetched on retry")
+	}
 	stored, err := bv.blockchainClient.GetBlock(ctx, block.Hash())
 	require.NoError(t, err)
 	require.EqualValues(t, 6, stored.TransactionCount)

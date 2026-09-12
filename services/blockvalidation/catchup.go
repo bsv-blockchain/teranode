@@ -883,7 +883,11 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 	// Wait for both operations to complete
 	err := errorGroup.Wait()
 	if err != nil {
-		artifacts.cleanup(u.logger)
+		// Discard rejected bodies, but retain partial downloads after transient
+		// failures (such as peer rate limits) so the next attempt can progress.
+		if errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid) {
+			artifacts.cleanup(u.logger)
+		}
 		catchupCtx.catchupError = err
 	}
 
