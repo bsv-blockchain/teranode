@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -87,11 +89,10 @@ func TestFreezeUnfreezeResultHandling(t *testing.T) {
 	t.Run("reassign_missing_record_errors", func(t *testing.T) {
 		missingTx := chainhash.HashH([]byte("reassign-missing-record-tx"))
 		missingUtxo := chainhash.HashH([]byte("reassign-missing-record-utxo"))
-		newUtxo := chainhash.HashH([]byte("reassign-missing-record-new-utxo"))
 
 		err := store.ReAssignUTXO(ctx,
 			&utxo.Spend{TxID: &missingTx, Vout: 0, UTXOHash: &missingUtxo, SpendingData: spendingData},
-			&utxo.Spend{TxID: &missingTx, Vout: 0, UTXOHash: &newUtxo, SpendingData: spendingData},
+			&bt.Output{Satoshis: 1, LockingScript: bscript.NewFromBytes([]byte{0x51})},
 			tSettings)
 		require.Error(t, err)
 	})
