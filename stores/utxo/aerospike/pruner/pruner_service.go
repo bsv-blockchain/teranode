@@ -1186,6 +1186,7 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 		}
 
 		// Accumulate parent updates, skipping parents already pruned in this session
+		retain := false
 		for _, input := range inputs {
 			// Check if parent TX was already pruned — if so, skip the update
 			parentTxID := input.PreviousTxIDChainHash()
@@ -1201,8 +1202,13 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 					txHash.String(), blockHeight, parentTxID.String(), input.PreviousTxOutIndex, err)
 				prometheusUtxoInputResolutionErrors.Inc()
 				skippedCount++
-				continue
+				retain = true
+
+				break
 			}
+		}
+		if retain {
+			continue
 		}
 
 		// Accumulate external files

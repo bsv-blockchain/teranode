@@ -414,10 +414,12 @@ func TestExternalFileAlreadyDeleted(t *testing.T) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, recordsProcessed, int64(0))
 
-	// Verify the Aerospike record was still deleted
+	// The record's inputs cannot be resolved (its blob is gone), so no
+	// replay markers can be written for its parents. Deleting it anyway
+	// would reopen the #1701 "child removed with no marker" hole, so it
+	// must be retained for a later prune cycle.
 	_, err = client.Get(nil, key)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	require.NoError(t, err)
 }
 
 // TestMixedExternalAndNormalTransactions tests pruning of both types in one batch
