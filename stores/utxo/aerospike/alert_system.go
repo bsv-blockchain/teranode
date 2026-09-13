@@ -60,6 +60,7 @@ import (
 	"strings"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -217,20 +218,36 @@ func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings
 //
 // The reassignment process:
 //   - Verifies the UTXO exists and is frozen
-//   - Updates the UTXO hash to the new value
+//   - Persists the replacement locking script so re-extension returns it
+//   - Recomputes the UTXO hash from the amended output and stores it
 //   - Sets spendable block height to current + ReAssignedUtxoSpendableAfterBlocks
 //   - Logs the reassignment for audit purposes
 //
 // Parameters:
 //   - ctx: Context for cancellation/timeout
 //   - oldUtxo: The frozen UTXO to reassign
-//   - newUtxo: The new UTXO details
+//   - amendedOutput: The replacement output (locking script and satoshis)
+//   - tSettings: Transaction settings for batch policy and maturity gate
 //
 // Returns error if:
 //   - Original UTXO doesn't exist
 //   - Original UTXO is not frozen
 //   - Reassignment fails
-func (s *Store) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
+func (s *Store) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, amendedOutput *bt.Output, tSettings *settings.Settings) error {
+	if amendedOutput == nil || amendedOutput.LockingScript == nil || len(amendedOutput.LockingScript.Bytes()) == 0 {
+		return errors.NewInvalidArgumentError("amended output is required to reassign UTXO %s:%d", oldUtxo.TxID, oldUtxo.Vout)
+	}
+
+	newUtxoHash, err := util.UTXOHashFromOutput(oldUtxo.TxID, amendedOutput, oldUtxo.Vout)
+	if err != nil {
+		return err
+	}
+
+	spendableAfter := uint32(utxo.ReAssignedUtxoSpendableAfterBlocks)
+	if tSettings != nil && tSettings.UtxoStore.ReAssignedUtxoSpendableAfterBlocks > 0 {
+		spendableAfter = tSettings.UtxoStore.ReAssignedUtxoSpendableAfterBlocks
+	}
+
 	keySource := uaerospike.CalculateKeySource(oldUtxo.TxID, oldUtxo.Vout, s.utxoBatchSize)
 
 	aeroKey, aErr := aerospike.NewKey(s.namespace, s.setName, keySource)
@@ -245,9 +262,10 @@ func (s *Store) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *ut
 			batchUDFPolicy, LuaPackage, aeroKey, subOpReassign, "reassign",
 			s.calculateOffsetForOutput(oldUtxo.Vout),
 			oldUtxo.UTXOHash[:],
-			newUtxo.UTXOHash[:],
+			newUtxoHash[:],
 			int(s.GetBlockHeight()),
-			utxo.ReAssignedUtxoSpendableAfterBlocks,
+			int(spendableAfter),
+			amendedOutput.LockingScript.Bytes(),
 		),
 	}
 

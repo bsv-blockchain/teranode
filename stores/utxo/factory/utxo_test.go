@@ -165,7 +165,7 @@ func (m *MockUTXOStore) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend,
 	return nil
 }
 
-func (m *MockUTXOStore) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
+func (m *MockUTXOStore) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, amendedOutput *bt.Output, tSettings *settings.Settings) error {
 	return nil
 }
 

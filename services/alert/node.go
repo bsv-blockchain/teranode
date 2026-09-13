@@ -475,23 +475,11 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 				LockingScript: newLockingScript,                                          // new locking script
 			}
 
-			// Calculate the replacement commitment. ReAssignUTXO does not persist
-			// the replacement script, so changing the owner currently strands
-			// the output for both owners after mandatory re-extension (issue 1725).
-			newUtxoHash, err := util.UTXOHashFromOutput(txIn.PreviousTxIDChainHash(), amendedOutputScript, txIn.PreviousTxOutIndex)
-			if err != nil {
-				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err)...)
-				continue
-			}
-
-			newUtxo := &utxo.Spend{
-				TxID:     txIn.PreviousTxIDChainHash(),
-				Vout:     txIn.PreviousTxOutIndex,
-				UTXOHash: newUtxoHash,
-			}
-
-			// re-assign the utxo
-			if err = n.utxoStore.ReAssignUTXO(ctx, oldUtxo, newUtxo, n.settings); err != nil {
+			// re-assign the utxo. The store derives the replacement commitment
+			// from the amended output and persists the replacement locking
+			// script, so the new owner is spendable after the maturity gate and
+			// the original owner is no longer (issue 1725).
+			if err = n.utxoStore.ReAssignUTXO(ctx, oldUtxo, amendedOutputScript, n.settings); err != nil {
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err)...)
 			}
 		}
