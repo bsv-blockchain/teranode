@@ -4976,6 +4976,15 @@ func TestHandleUnfreezeComprehensive(t *testing.T) {
 func TestHandleReassignComprehensive(t *testing.T) {
 	logger := mocklogger.NewTestLogger()
 
+	const (
+		validTxID  = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+		validHash  = "101112131415161718191a1b1c1d1e1f000102030405060708090a0b0c0d0e0f"
+		validHash2 = "1f1e1d1c1b1a19181716151413121110f0e0d0c0b0a09080706050403020100"
+	)
+
+	scriptHex := "51"
+	satoshis := uint64(1000)
+
 	t.Run("requires valid old transaction ID", func(t *testing.T) {
 		s := &RPCServer{
 			logger:   logger,
@@ -4985,8 +4994,9 @@ func TestHandleReassignComprehensive(t *testing.T) {
 		cmd := &bsvjson.ReassignCmd{
 			OldTxID:     "invalid-txid",
 			OldVout:     0,
-			OldUTXOHash: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-			NewUTXOHash: "101112131415161718191a1b1c1d1e1f000102030405060708090a0b0c0d0e0f",
+			OldUTXOHash: validHash,
+			Newscript:   &scriptHex,
+			Newsatoshis: &satoshis,
 		}
 
 		_, err := handleReassign(context.Background(), s, cmd, nil)
@@ -5001,10 +5011,11 @@ func TestHandleReassignComprehensive(t *testing.T) {
 		}
 
 		cmd := &bsvjson.ReassignCmd{
-			OldTxID:     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+			OldTxID:     validTxID,
 			OldVout:     0,
 			OldUTXOHash: "invalid-utxo-hash",
-			NewUTXOHash: "101112131415161718191a1b1c1d1e1f000102030405060708090a0b0c0d0e0f",
+			Newscript:   &scriptHex,
+			Newsatoshis: &satoshis,
 		}
 
 		_, err := handleReassign(context.Background(), s, cmd, nil)
@@ -5012,22 +5023,101 @@ func TestHandleReassignComprehensive(t *testing.T) {
 		assert.Contains(t, err.Error(), "invalid byte")
 	})
 
-	t.Run("requires valid new UTXO hash", func(t *testing.T) {
+	t.Run("requires a replacement locking script", func(t *testing.T) {
 		s := &RPCServer{
 			logger:   logger,
 			settings: &settings.Settings{},
 		}
 
 		cmd := &bsvjson.ReassignCmd{
-			OldTxID:     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+			OldTxID:     validTxID,
 			OldVout:     0,
-			OldUTXOHash: "101112131415161718191a1b1c1d1e1f000102030405060708090a0b0c0d0e0f",
-			NewUTXOHash: "invalid-utxo-hash",
+			OldUTXOHash: validHash,
+		}
+
+		_, err := handleReassign(context.Background(), s, cmd, nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "reassign requires a new locking script")
+	})
+
+	t.Run("rejects an invalid replacement locking script", func(t *testing.T) {
+		s := &RPCServer{
+			logger:   logger,
+			settings: &settings.Settings{},
+		}
+
+		invalidScript := "not-hex"
+		cmd := &bsvjson.ReassignCmd{
+			OldTxID:     validTxID,
+			OldVout:     0,
+			OldUTXOHash: validHash,
+			Newscript:   &invalidScript,
+			Newsatoshis: &satoshis,
+		}
+
+		_, err := handleReassign(context.Background(), s, cmd, nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid newscript hex")
+	})
+
+	t.Run("requires replacement satoshis", func(t *testing.T) {
+		s := &RPCServer{
+			logger:   logger,
+			settings: &settings.Settings{},
+		}
+
+		cmd := &bsvjson.ReassignCmd{
+			OldTxID:     validTxID,
+			OldVout:     0,
+			OldUTXOHash: validHash,
+			Newscript:   &scriptHex,
+		}
+
+		_, err := handleReassign(context.Background(), s, cmd, nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "reassign requires newsatoshis")
+	})
+
+	t.Run("requires valid NewUTXOHash when provided", func(t *testing.T) {
+		s := &RPCServer{
+			logger:   logger,
+			settings: &settings.Settings{},
+		}
+
+		invalidNewHash := "invalid-utxo-hash"
+		cmd := &bsvjson.ReassignCmd{
+			OldTxID:     validTxID,
+			OldVout:     0,
+			OldUTXOHash: validHash,
+			Newscript:   &scriptHex,
+			Newsatoshis: &satoshis,
+			NewUTXOHash: &invalidNewHash,
 		}
 
 		_, err := handleReassign(context.Background(), s, cmd, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid byte")
+	})
+
+	t.Run("rejects a NewUTXOHash that does not match the derived commitment", func(t *testing.T) {
+		s := &RPCServer{
+			logger:   logger,
+			settings: &settings.Settings{},
+		}
+
+		mismatchedHash := validHash2
+		cmd := &bsvjson.ReassignCmd{
+			OldTxID:     validTxID,
+			OldVout:     0,
+			OldUTXOHash: validHash,
+			Newscript:   &scriptHex,
+			Newsatoshis: &satoshis,
+			NewUTXOHash: &mismatchedHash,
+		}
+
+		_, err := handleReassign(context.Background(), s, cmd, nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "does not match the commitment derived")
 	})
 
 	t.Run("requires utxo store", func(t *testing.T) {
@@ -5038,10 +5128,11 @@ func TestHandleReassignComprehensive(t *testing.T) {
 		}
 
 		cmd := &bsvjson.ReassignCmd{
-			OldTxID:     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+			OldTxID:     validTxID,
 			OldVout:     0,
-			OldUTXOHash: "101112131415161718191a1b1c1d1e1f000102030405060708090a0b0c0d0e0f",
-			NewUTXOHash: "1f1e1d1c1b1a19181716151413121110f0e0d0c0b0a09080706050403020100",
+			OldUTXOHash: validHash,
+			Newscript:   &scriptHex,
+			Newsatoshis: &satoshis,
 		}
 
 		// This should panic when utxoStore is nil

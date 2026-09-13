@@ -318,9 +318,9 @@ func (s *Store) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettin
 	return err
 }
 
-func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
-	err := s.store.ReAssignUTXO(ctx, utxo, newUtxo, tSettings)
-	s.logger.Debugf("[UTXOStore][logger][ReAssignUTXO] utxo %v newUtxo %v err %v : %s", utxo, newUtxo, err, caller())
+func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, amendedOutput *bt.Output, tSettings *settings.Settings) error {
+	err := s.store.ReAssignUTXO(ctx, utxo, amendedOutput, tSettings)
+	s.logger.Debugf("[UTXOStore][logger][ReAssignUTXO] utxo %v amendedOutput %v err %v : %s", utxo, amendedOutput, err, caller())
 
 	return err
 }

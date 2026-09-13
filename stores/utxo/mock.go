@@ -230,8 +230,8 @@ func (m *MockUtxostore) UnFreezeUTXOs(ctx context.Context, spends []*Spend, tSet
 
 // ReAssignUTXO mocks the reassignment of a UTXO to a new transaction output.
 // Returns the configured mock response for UTXO reassignment operations.
-func (m *MockUtxostore) ReAssignUTXO(ctx context.Context, utxo *Spend, newUtxo *Spend, tSettings *settings.Settings) error {
-	args := m.Called(ctx, utxo, newUtxo, tSettings)
+func (m *MockUtxostore) ReAssignUTXO(ctx context.Context, utxo *Spend, amendedOutput *bt.Output, tSettings *settings.Settings) error {
+	args := m.Called(ctx, utxo, amendedOutput, tSettings)
 	return args.Error(0)
 }
 

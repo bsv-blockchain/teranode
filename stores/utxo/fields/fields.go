@@ -68,6 +68,8 @@ const (
 	SubtreeIdxs FieldName = "subtreeIdxs"
 	// Reassignments tracks UTXOs that have been reassigned
 	Reassignments FieldName = "reassignments"
+	// ReassignedScripts maps reassigned output offsets to their replacement locking scripts
+	ReassignedScripts FieldName = "reassignedScripts"
 	// DeleteAtHeight specifies the block height at which the record should be deleted
 	DeleteAtHeight FieldName = "deleteAtHeight"
 	// CreatedAt is the timestamp when the unmined transaction was first added to the store

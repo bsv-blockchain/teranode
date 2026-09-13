@@ -524,12 +524,11 @@ type Store interface {
 	// UnFreezeUTXOs removes the frozen status from UTXOs, allowing them to be spent again.
 	UnFreezeUTXOs(ctx context.Context, spends []*Spend, tSettings *settings.Settings) error
 
-	// ReAssignUTXO updates a frozen UTXO's commitment and maturity gate.
-	// It does not persist a replacement locking script. Changing the owner
-	// currently strands the output for both owners even after maturity; see
-	// https://github.com/bsv-blockchain/teranode/issues/1725.
-	// SQL honors the configured delay; Aerospike currently uses the fixed constant.
-	ReAssignUTXO(ctx context.Context, utxo *Spend, newUtxo *Spend, tSettings *settings.Settings) error
+	// ReAssignUTXO persists a frozen UTXO's replacement locking script and
+	// recomputes its commitment from the amended output, then applies the
+	// reassignment maturity gate. After the gate elapses the output is
+	// spendable by the new owner, and the original owner can no longer spend it.
+	ReAssignUTXO(ctx context.Context, utxo *Spend, amendedOutput *bt.Output, tSettings *settings.Settings) error
 
 	// GetCounterConflicting returns the counter conflicting transactions for a given transaction hash.
 	GetCounterConflicting(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error)

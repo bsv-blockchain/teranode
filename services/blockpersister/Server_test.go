@@ -1038,7 +1038,7 @@ func (m *MockUTXOStore) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend, t
 func (m *MockUTXOStore) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	return nil
 }
-func (m *MockUTXOStore) ReAssignUTXO(ctx context.Context, utxoSpend *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
+func (m *MockUTXOStore) ReAssignUTXO(ctx context.Context, utxoSpend *utxo.Spend, amendedOutput *bt.Output, tSettings *settings.Settings) error {
 	return nil
 }
 func (m *MockUTXOStore) GetCounterConflicting(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
