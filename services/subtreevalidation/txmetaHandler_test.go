@@ -187,8 +187,8 @@ func (m *mockCache) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSe
 	return args.Error(0)
 }
 
-func (m *mockCache) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
-	args := m.Called(ctx, utxo, newUtxo, tSettings)
+func (m *mockCache) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, amendedOutput *bt.Output, tSettings *settings.Settings) error {
+	args := m.Called(ctx, utxo, amendedOutput, tSettings)
 	return args.Error(0)
 }
 
