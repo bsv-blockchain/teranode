@@ -190,9 +190,13 @@ p2p_enable_mdns=false     # mDNS peer discovery
 p2p_allow_private_ips=false  # RFC1918 private networks
 ```
 
-`p2p_allow_private_ips` also governs the static SSRF check on peer-supplied DataHub URLs:
-with `true` that check is skipped entirely, so an announced URL naming a private, loopback or
-link-local address is accepted into the peer registry.
+`p2p_allow_private_ips` also governs the static SSRF check on peer-supplied DataHub URLs.
+With `false` (the default) a literal-IP URL is rejected unless it is a global unicast address
+outside the IANA special-purpose blocks: loopback, RFC1918 private, RFC6598 shared address
+space (100.64.0.0/10, carrier NAT and Tailscale-style overlays), link-local, multicast,
+broadcast, unspecified, benchmarking, documentation and reserved ranges, plus the IPv6
+transition ranges that embed an IPv4 address. With `true` that check is skipped entirely, so
+an announced URL naming any such address is accepted into the peer registry.
 
 It does **not** affect the connection-time guard. Every outbound request to a peer-supplied
 URL - availability probes and block/subtree fetches alike - refuses loopback (127.0.0.0/8,

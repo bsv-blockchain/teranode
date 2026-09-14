@@ -2196,3 +2196,57 @@ func TestSyncCoordinator_HandleFSMTransition_FallbackDoesNotReleasePenalizedAhea
 	require.False(t, sc.handleFSMTransition(&running), "penalized ahead peer must not be released as level")
 	require.Equal(t, "current", sc.GetCurrentSyncPeer())
 }
+
+// TestSyncCoordinator_HandlePeerDisconnected_ReselectIsTrackedAndCancellable
+// guards the sync-peer re-selection goroutine: it used to be an untracked
+// bare time.Sleep that survived Stop's drain and re-ran a full sync decision
+// on a stopped coordinator. It must now be wg-tracked and wake on stop.
+func TestSyncCoordinator_HandlePeerDisconnected_ReselectIsTrackedAndCancellable(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	pid := mustNewPeerID(t)
+
+	sc.mu.Lock()
+	sc.currentSyncPeer = pid.String()
+	sc.mu.Unlock()
+
+	sc.HandlePeerDisconnected(pid)
+	require.Empty(t, sc.GetCurrentSyncPeer(), "disconnected sync peer must be cleared")
+
+	// Stop well inside the re-select delay: the drain must complete promptly
+	// because the sleeper wakes on stopCh instead of running out its timer.
+	stopCtx, cancel := context.WithTimeout(context.Background(), syncPeerReselectDelay/2)
+	defer cancel()
+	start := time.Now()
+	sc.Stop(stopCtx)
+
+	select {
+	case <-sc.drained:
+	default:
+		t.Fatal("Stop must wait for the re-select goroutine and it must exit on stop")
+	}
+	require.Less(t, time.Since(start), syncPeerReselectDelay, "re-select goroutine must wake on stop, not sleep out its delay")
+}
+
+// After Stop has begun, a late libp2p disconnect callback must not spawn a
+// tracked goroutine: wg.Add racing wg.Wait is a WaitGroup misuse panic.
+func TestSyncCoordinator_GoTracked_RefusedAfterStop(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+
+	ran := make(chan struct{})
+	require.True(t, sc.goTracked(func() { close(ran) }), "goTracked must run work before Stop")
+	select {
+	case <-ran:
+	case <-time.After(5 * time.Second):
+		t.Fatal("tracked goroutine did not run")
+	}
+
+	sc.Stop(context.Background())
+
+	require.False(t, sc.goTracked(func() { t.Error("must not run after Stop") }), "goTracked must refuse work once Stop has begun")
+
+	pid := mustNewPeerID(t)
+	sc.mu.Lock()
+	sc.currentSyncPeer = pid.String()
+	sc.mu.Unlock()
+	require.NotPanics(t, func() { sc.HandlePeerDisconnected(pid) }, "late disconnect after Stop must be a no-op, not a WaitGroup misuse")
+}
