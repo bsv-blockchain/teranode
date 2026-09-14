@@ -328,10 +328,12 @@ func TestHandleBlockMsg_CorruptBody_HeadersFirst_ReRequestsBlock(t *testing.T) {
 	require.True(t, WaitUntil(func() bool { return sc.sawGetData(sc.pendingHashes[0]) }, 2*time.Second),
 		"the corrupt branch must ALSO refill the header-block pipeline — it re-arms the dropped hash in the same breath, so its descendants have a parent on the way")
 
-	_, inGlobal := sc.sm.requestedBlocks.Get(sc.blockHash)
+	globalOrigin, inGlobal := sc.sm.requestedBlocks.Get(sc.blockHash)
 	require.True(t, inGlobal, "sm.requestedBlocks must be re-armed, or the inv route would request the block twice")
-	_, inPeer := sc.state.requestedBlocks.Get(sc.blockHash)
+	require.False(t, globalOrigin.headerProven, "the direct re-request must re-arm with the untrusted zero origin, forcing full validation")
+	peerOrigin, inPeer := sc.state.requestedBlocks.Get(sc.blockHash)
 	require.True(t, inPeer, "state.requestedBlocks must be re-armed, or handleBlockMsg disconnects the peer that answers")
+	require.False(t, peerOrigin.headerProven, "the per-peer map must also carry the untrusted zero origin")
 }
 
 // TestHandleBlockMsg_CorruptBody_AtCap_DoesNotReRequestBlock pins the wasted-re-request fix

@@ -1720,9 +1720,13 @@ func (u *BlockValidation) buildSubtreeJobsForBatch(ctx context.Context, block *m
 		return err
 	}
 
-	// Freshness is already known synchronously here — fullSubtreeExists was computed during
-	// prefetch, before any write is queued — so this does NOT need anything back from the
-	// asynchronous subtreeWriteWorker (bitcoin-sv/teranode#4692).
+	// Unlike the two fetch producers (fetchAndStoreSubtree / fetchAndStoreSubtreeData), which mark
+	// fresh only after their own Set succeeds, quick validation marks fresh here at enqueue time —
+	// before the asynchronous subtreeWriteWorker has landed the write — because fullSubtreeExists was
+	// computed synchronously during prefetch, so freshness is already known and needs nothing back
+	// from the worker. Marking before the write lands is deliberate and harmless: a pair whose write
+	// never lands is simply not on disk, and the cleanup path's Del tolerates ErrNotFound (see
+	// removeCatchupSubtreeFiles in catchup.go) (bitcoin-sv/teranode#4692).
 	for i := 0; i < batchSize; i++ {
 		if !batch.fullSubtreeExists[i] {
 			freshness.markFresh(batch.subtreeHashes[i], fileformat.FileTypeSubtree)
