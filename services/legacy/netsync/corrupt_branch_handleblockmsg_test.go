@@ -44,11 +44,14 @@ func TestHandleBlockMsg_CorruptBody_NotMarkedFailed(t *testing.T) {
 	const height = int32(500)
 
 	// Build a well-formed unified-route block, then give it an easy PoW target so the difficulty
-	// pre-check passes and execution reaches CheckMerkleRoot. Its header merkle root is left zeroed,
-	// so the computed root from the built subtrees cannot match it — a body-derived corrupt verdict.
+	// pre-check passes and execution reaches CheckMerkleRoot. buildExtendedSubtreeBlock commits the
+	// body in the header, so zero the merkle root afterwards: the root computed from the built
+	// subtrees then cannot match it — a body-derived corrupt verdict. Both edits land BEFORE the
+	// nonce is mined, since the header hash covers them.
 	block, _, _ := buildExtendedSubtreeBlock(t, height, 5)
 	msgBlock := block.MsgBlock()
-	msgBlock.Header.Bits = 0x207fffff // regtest max target
+	msgBlock.Header.Bits = 0x207fffff             // regtest max target
+	msgBlock.Header.MerkleRoot = chainhash.Hash{} // body no longer bound to the header
 	// Mine a nonce that meets the (easy) target: the max-target check still rejects ~half of random
 	// hashes, so a fixed nonce would be flaky. HandleBlockDirect checks PoW on the model header, so
 	// mine against that same predicate.
@@ -148,11 +151,14 @@ func runCorruptReRequestScenario(t *testing.T, maxCorruptAttempts int) corruptRe
 	const height = int32(500)
 
 	// Build a well-formed unified-route block, then give it an easy PoW target so the difficulty
-	// pre-check passes and execution reaches CheckMerkleRoot. Its header merkle root is left zeroed,
-	// so the computed root from the built subtrees cannot match it — a body-derived corrupt verdict.
+	// pre-check passes and execution reaches CheckMerkleRoot. buildExtendedSubtreeBlock commits the
+	// body in the header, so zero the merkle root afterwards: the root computed from the built
+	// subtrees then cannot match it — a body-derived corrupt verdict. Both edits land BEFORE the
+	// nonce is mined, since the header hash covers them.
 	block, _, _ := buildExtendedSubtreeBlock(t, height, 5)
 	msgBlock := block.MsgBlock()
-	msgBlock.Header.Bits = 0x207fffff // regtest max target
+	msgBlock.Header.Bits = 0x207fffff             // regtest max target
+	msgBlock.Header.MerkleRoot = chainhash.Hash{} // body no longer bound to the header
 	// Mine a nonce that meets the (easy) target: the max-target check still rejects ~half of random
 	// hashes, so a fixed nonce would be flaky. HandleBlockDirect checks PoW on the model header, so
 	// mine against that same predicate.

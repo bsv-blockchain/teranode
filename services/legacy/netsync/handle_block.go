@@ -2005,8 +2005,14 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block, tx
 		if !tx.IsCoinbase() {
 			tx.SetTxHash(&hashCopy)
 			// Reject before parallel extension can process the same wrapper twice.
+			//
+			// Body-derived (CVE-2012-2459 duplicate in the received tx set): classify corrupt so the
+			// caller drops it and allows a re-request, never invalid=true (bitcoin-sv/teranode#4692).
+			// This guard fires before the CheckSubtreeSlicesForDuplicateTxs floor in prepareSubtrees,
+			// so it is the verdict a duplicate actually reaches on the legacy route; the two must
+			// agree or the floor below is unreachable dead classification.
 			if _, added := txMap.SetIfNotExists(hashCopy, &TxMapWrapper{Tx: tx}); !added {
-				return nil, errors.NewBlockInvalidError("[createTxMap] duplicate transaction %s in block (CVE-2012-2459)", hashCopy.String())
+				return nil, errors.NewBlockCorruptError("[createTxMap] duplicate transaction %s in block (CVE-2012-2459)", hashCopy.String())
 			}
 		}
 	}
