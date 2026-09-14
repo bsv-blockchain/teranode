@@ -1699,19 +1699,24 @@ func (sm *SyncManager) requestMissingBlocks(peer *peerpkg.Peer, blockHash chainh
 // already present there, so a getblocks issued alongside this call cannot request the same block a
 // second time.
 //
-// origin is the provenance the dropped delivery carried, re-armed unchanged. This re-request is the
-// same hash from the same header run, so its ancestry proof is the one blockOrigin already read
-// before the corrupt branch cleared the maps — restoring it grants nothing the entry did not already
-// have, and a delivery that was never header-proven stays unproven and takes full validation.
-func (sm *SyncManager) requestBlockDirect(peer *peerpkg.Peer, state *peerSyncState, blockHash chainhash.Hash, origin blockRequestOrigin) {
+// Both entries are re-armed with the UNTRUSTED zero origin, never with the proof the dropped
+// delivery carried. headerProven means the request came from fetchHeaderBlocks; this is a direct
+// getdata, so by that definition it is not proven, and blockOrigin's own contract records losing a
+// proof on a re-request as the safe outcome — "an inv re-request can replace a proof with the
+// untrusted zero value, which safely restores full validation". The cost is that the recovered copy
+// takes full validation instead of the below-checkpoint fast path; the alternative would invent a
+// route by which a fast-path proof survives a transport the header-provenance design never
+// sanctioned, on a body we have just judged corrupt. Re-arming is only about admission — the
+// unrequested-block guard and the prefetch gate read these maps — not about provenance.
+func (sm *SyncManager) requestBlockDirect(peer *peerpkg.Peer, state *peerSyncState, blockHash chainhash.Hash) {
 	getDataMessage := wire.NewMsgGetDataSizeHint(1)
 	if err := getDataMessage.AddInvVect(wire.NewInvVect(wire.InvTypeBlock, &blockHash)); err != nil {
 		sm.logger.Warnf(unexpectedFailureAddingInventoryMsg, err)
 		return
 	}
 
-	sm.requestedBlocks.Set(blockHash, origin)
-	state.requestedBlocks.Set(blockHash, origin)
+	sm.requestedBlocks.Set(blockHash, blockRequestOrigin{})
+	state.requestedBlocks.Set(blockHash, blockRequestOrigin{})
 
 	sm.logger.Debugf("[requestBlockDirect][%s] re-requesting dropped block from %s", blockHash, peer)
 
@@ -2066,7 +2071,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 				// while headersFirstMode is set so the getblocks can never become a getdata. Recovery
 				// at the cap is the cooldown window lapsing or sync-peer rotation.
 				if !sm.corruptBlockAttemptsExhausted(bmsg.blockHash, bmsg.peer.Addr()) {
-					sm.requestBlockDirect(peer, state, bmsg.blockHash, blockOrigin)
+					sm.requestBlockDirect(peer, state, bmsg.blockHash)
 				}
 
 				// Keep the getblocks as well: in the legacy sync protocol it doubles as the
