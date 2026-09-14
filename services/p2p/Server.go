@@ -1440,9 +1440,9 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 	// would exempt them from registry cleanup and let a flood of self-signed
 	// messages under fresh peer IDs grow the registry without bound.
 	if s.hasLiveConnection(from) {
-		s.addConnectedPeer(senderID, "", 0, nil, "")
+		s.addConnectedPeer(senderID, "", peerHeightClaim{}, nil, "")
 	} else {
-		s.addPeer(senderID, "", 0, nil, "")
+		s.addPeer(senderID, "", peerHeightClaim{}, nil, "")
 	}
 	s.touchLastMessageTime(senderID)
 
@@ -1455,7 +1455,7 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 				return
 			}
 			// Add as gossiped peer (not connected) before updating last message time
-			s.addPeer(peerID, "", 0, nil, "")
+			s.addPeer(peerID, "", peerHeightClaim{}, nil, "")
 			s.touchLastMessageTime(peerID)
 		}
 	}
@@ -1556,7 +1556,10 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	// clients. It is bounded here rather than in sanitizeNodeStatusMessage so
 	// that sanitizeAdvertisedTip still sees the value the peer actually sent.
 	notificationBestBlockHash := sanitizePeerHexString(nodeStatusMessage.BestBlockHash, maxPeerHexStringLen)
-	sanitizedBestHeight := nodeStatusMessage.BestHeight
+	// sanitizedBestHeight's zero value is never used: addPeer below is only
+	// reached when sanitizedTipOK is true, which only happens after
+	// sanitizeAdvertisedTip has assigned it a real value.
+	var sanitizedBestHeight uint32
 	var sanitizedBestBlockHash *chainhash.Hash
 	sanitizedTipOK := false
 
@@ -1589,10 +1592,16 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 
 	if !isSelf && nodeStatusMessage.BestHeight > 0 && nodeStatusMessage.PeerID != "" {
 		var ok bool
-		sanitizedBestHeight, sanitizedBestBlockHash, ok = s.sanitizeAdvertisedTip(nodeStatusMessage.PeerID, nodeStatusMessage.BestHeight, nodeStatusMessage.BestBlockHash, s.getLocalHeight(ctx))
+		sanitizedBestHeight, notificationBestHeight, sanitizedBestBlockHash, ok = s.sanitizeAdvertisedTip(nodeStatusMessage.PeerID, nodeStatusMessage.BestHeight, nodeStatusMessage.BestBlockHash, s.getLocalHeight(ctx))
 		if ok {
 			sanitizedTipOK = true
-			notificationBestHeight = sanitizedBestHeight
+			// Only the registry copy below is capped. notificationBestHeight
+			// keeps the height the peer actually advertised (clamped only if
+			// implausible): the cap is a bound on what an unvalidated claim
+			// may influence, not a statement about the peer, and a node still
+			// catching up would otherwise report every peer at
+			// localHeight+maxLead — a number no peer ever sent, shown next to
+			// that peer's real tip hash.
 			notificationBestBlockHash = sanitizedBestBlockHash.String()
 		} else {
 			notificationBestHeight = 0
@@ -1668,7 +1677,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 			return
 		}
 
-		s.addPeer(peerID, nodeStatusMessage.ClientName, sanitizedBestHeight, sanitizedBestBlockHash, nodeStatusMessage.BaseURL)
+		s.addPeer(peerID, nodeStatusMessage.ClientName, peerHeightClaim{Height: sanitizedBestHeight, AdvertisedHeight: notificationBestHeight}, sanitizedBestBlockHash, nodeStatusMessage.BaseURL)
 		s.logger.Debugf("[handleNodeStatusTopic] Updated block hash %s for peer %s", notificationBestBlockHash, peerID)
 
 		// Update storage mode if provided
@@ -1682,7 +1691,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	// Also ensure the sender is in the registry
 	if !isSelf && peerID != "" {
 		if senderID, err := peer.Decode(peerID); err == nil {
-			s.addPeer(senderID, "", 0, nil, "")
+			s.addPeer(senderID, "", peerHeightClaim{}, nil, "")
 		}
 	}
 }
@@ -2690,11 +2699,12 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 			addr := addrByPeerID[p.ID]
 
 			resp.Peers = append(resp.Peers, &p2p_api.Peer{
-				Id:            p.ID,
-				Addr:          addr,
-				Banscore:      p.BanScore,
-				CurrentHeight: p.Height,
-				BytesReceived: p.BytesReceived,
+				Id:               p.ID,
+				Addr:             addr,
+				Banscore:         p.BanScore,
+				CurrentHeight:    p.Height,
+				AdvertisedHeight: p.AdvertisedHeight,
+				BytesReceived:    p.BytesReceived,
 			})
 		}
 
@@ -3114,6 +3124,7 @@ func peerInfoToP2PProto(p *blockchain.PeerInfo) *p2p_api.PeerRegistryInfo {
 	return &p2p_api.PeerRegistryInfo{
 		Id:                     p.ID,
 		Height:                 p.Height,
+		AdvertisedHeight:       p.AdvertisedHeight,
 		BlockHash:              blockHashStr,
 		DataHubUrl:             p.DataHubURL,
 		BanScore:               p.BanScore,

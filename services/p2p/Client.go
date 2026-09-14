@@ -810,10 +810,11 @@ func convertFromAPIPeerInfo(apiPeer interface{}) (*PeerInfo, error) {
 		}
 
 		return &PeerInfo{
-			ID:            peerID,
-			Height:        p.CurrentHeight,
-			BanScore:      int(p.Banscore),
-			BytesReceived: p.BytesReceived,
+			ID:               peerID,
+			Height:           p.CurrentHeight,
+			AdvertisedHeight: p.AdvertisedHeight,
+			BanScore:         int(p.Banscore),
+			BytesReceived:    p.BytesReceived,
 		}, nil
 
 	case *p2p_api.PeerInfoForCatchup:
@@ -853,6 +854,7 @@ func convertFromAPIPeerInfo(apiPeer interface{}) (*PeerInfo, error) {
 			ID:                     peerID,
 			ClientName:             p.ClientName,
 			Height:                 p.Height,
+			AdvertisedHeight:       p.AdvertisedHeight,
 			BlockHash:              blockHash,
 			DataHubURL:             p.DataHubUrl,
 			BanScore:               int(p.BanScore),

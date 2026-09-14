@@ -810,6 +810,12 @@ message PeerRegistryInfo {
 
   // Wire-protocol-only fields. Absent (nil) for libp2p peers.
   LegacyPeerInfo legacy = 46;
+
+  // Raw height the peer advertised, before the unvalidated-lead cap that
+  // produces `height`. Telemetry only: `height` remains the value sync
+  // decisions read. While this node catches up the two differ, and reporting
+  // only the capped one makes every peer appear to sit at local+max_lead.
+  uint32 advertised_height = 47;
 }
 
 // RegisterPeerRequest registers or updates a peer in the centralized registry.

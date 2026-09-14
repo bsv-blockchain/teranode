@@ -33,6 +33,10 @@ message Peer {
   int32 banscore = 25;
   bool whitelisted = 26;
   int64 feeFilter = 27;
+  // Raw height the peer advertised, before the unvalidated-lead cap that
+  // produces currentHeight. Telemetry only; currentHeight still drives sync
+  // decisions. 0 for peers on older versions that do not report it.
+  uint32 advertisedHeight = 28;
   }
 
 
@@ -281,6 +285,10 @@ message AddBanScoreRequest {
     int64 catchup_attempts = 27;
     int64 catchup_successes = 28;
     int64 catchup_failures = 29;
+
+    // Raw height the peer advertised, before the unvalidated-lead cap that
+    // produces `height`. Telemetry only; `height` still drives sync decisions.
+    uint32 advertised_height = 30;
   }
 
   message GetPeerRegistryResponse {

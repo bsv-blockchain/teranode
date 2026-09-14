@@ -672,8 +672,16 @@ func checkBlockchainState(ctx context.Context, s *settings.Settings, clients *se
 					connected++
 				}
 
-				if peer.Height > maxHeight {
-					maxHeight = peer.Height
+				// AdvertisedHeight is the peer's raw claim; Height is capped
+				// for sync decisions and only used as a fallback for older
+				// peers that do not report AdvertisedHeight.
+				peerHeight := peer.AdvertisedHeight
+				if peerHeight == 0 {
+					peerHeight = peer.Height
+				}
+
+				if peerHeight > maxHeight {
+					maxHeight = peerHeight
 				}
 			}
 
@@ -758,8 +766,16 @@ func checkServiceConsistency(stats *model.BlockStats, fsmState *blockchain.FSMSt
 			var maxPeerHeight uint32
 
 			for _, peer := range peers {
-				if peer.Height > maxPeerHeight {
-					maxPeerHeight = peer.Height
+				// AdvertisedHeight is the peer's raw claim; Height is capped
+				// for sync decisions and only used as a fallback for older
+				// peers that do not report AdvertisedHeight.
+				peerHeight := peer.AdvertisedHeight
+				if peerHeight == 0 {
+					peerHeight = peer.Height
+				}
+
+				if peerHeight > maxPeerHeight {
+					maxPeerHeight = peerHeight
 				}
 			}
 
