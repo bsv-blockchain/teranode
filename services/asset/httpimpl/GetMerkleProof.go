@@ -88,7 +88,7 @@ type LegacyMerkleProofResponse struct {
 //
 //   - 404 Not Found:
 //     Returned when no mined transaction exists for the hash, including subtree-root queries
-//     Example: {"message": "transaction not found; BUMP proofs require a transaction ID"}
+//     Example: {"message": "mined transaction not found; BUMP proofs require a mined transaction ID"}
 //
 //     Returned when the hash is a known transaction but exists only in orphan blocks
 //     Example: {"message": "transaction not in main chain"}
@@ -176,7 +176,7 @@ func (h *HTTP) GetMerkleProof(mode ReadMode) func(c echo.Context) error {
 			}
 			if errors.Is(err, errors.ErrNotFound) {
 				prometheusAssetHTTPGetMerkleProof.WithLabelValues("NotFound", "404").Inc()
-				return echo.NewHTTPError(http.StatusNotFound, "transaction not found; BUMP proofs require a transaction ID")
+				return echo.NewHTTPError(http.StatusNotFound, "mined transaction not found; BUMP proofs require a mined transaction ID")
 			}
 			prometheusAssetHTTPGetMerkleProof.WithLabelValues("InternalError", "500").Inc()
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())

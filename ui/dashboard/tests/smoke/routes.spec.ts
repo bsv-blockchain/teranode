@@ -395,7 +395,6 @@ test.describe('smoke: /viewer/subtree position', () => {
     const detailsTitle = subtreeTitles(smokePage).filter({ hasText: /^Subtree Details/ })
     const tabs: [string, string][] = [
       ['JSON', 'json'],
-      ['Merkle Proof', 'merkleproof'],
       ['Overview', 'overview'],
     ]
     for (const [label, tab] of tabs) {
@@ -413,12 +412,25 @@ test.describe('smoke: /viewer/subtree position', () => {
         await expect(smokePage.locator('.json-tree').first()).toContainText(
           new RegExp(`Height:\\s*${subtreeDetail.data.Height}\\b`),
         )
-      } else if (tab === 'merkleproof') {
-        await expect(smokePage.locator('.tree-container svg')).toBeVisible()
       } else {
         await expectSubtreeTitles(smokePage, 0)
       }
     }
     await expectNoConsoleErrorsOnceSettled(smokePage, consoleErrors)
   })
+})
+
+// Old subtree proof links must remain usable without requesting a tx-only proof.
+test('subtree proof links fall back to overview', async ({ smokePage }) => {
+  const proofRequests: string[] = []
+  smokePage.on('request', (request) => {
+    if (request.url().includes('/merkle_proof/')) proofRequests.push(request.url())
+  })
+  await smokePage.goto(`/viewer/subtree/?hash=${DETAIL_HASH}&tab=merkleproof`)
+  await expect(smokePage.getByRole('button', { name: 'Overview', exact: true })).toBeVisible()
+  await expect(smokePage.getByRole('button', { name: /merkle proof/i })).toHaveCount(0)
+  await expect(smokePage.locator('.fields')).toBeVisible()
+  await smokePage.getByRole('button', { name: 'JSON', exact: true }).click()
+  await expect(smokePage.locator('.json')).toBeVisible()
+  expect(proofRequests).toEqual([])
 })

@@ -4,7 +4,6 @@
   import { page } from '$app/stores'
   import SubtreeDetailsCard from './subtree-details-card/index.svelte'
   import SubtreeTxsCard from './subtree-txs-card/index.svelte'
-  import SubtreeMerkleVisualizer from './subtree-merkle-visualizer/index.svelte'
 
   import NoData from '../no-data-card/index.svelte'
   import { spinCount } from '$internal/stores/nav'
@@ -22,7 +21,7 @@
 
   let { hash = '' }: { hash?: string } = $props()
 
-  const blockHash = $derived(ready ? $page.url.searchParams.get('blockHash') ?? '' : '')
+  const blockHash = $derived(ready ? ($page.url.searchParams.get('blockHash') ?? '') : '')
 
   // Position of this subtree within the block, as presentation context from the
   // URL. Derived beside blockHash rather than from fetched data, so an
@@ -32,11 +31,9 @@
 
   let display: DetailTab = $state(DetailTab.overview)
 
-  const tab = $derived(ready ? $page.url.searchParams.get('tab') ?? '' : '')
+  const tab = $derived(ready ? ($page.url.searchParams.get('tab') ?? '') : '')
   $effect(() => {
-    display = tab === DetailTab.json ? DetailTab.json :
-              tab === DetailTab.merkleproof ? DetailTab.merkleproof :
-              DetailTab.overview
+    display = tab === DetailTab.json ? DetailTab.json : DetailTab.overview
   })
 
   let result: any = $state(null)
@@ -124,9 +121,6 @@
   {#if display === DetailTab.overview}
     <div style="height: 20px"></div>
     <SubtreeTxsCard subtree={result} {blockHash} {index} />
-  {:else if display === DetailTab.merkleproof}
-    <div style="height: 20px"></div>
-    <SubtreeMerkleVisualizer subtreeHash={hash} {blockHash} />
   {/if}
 {:else if $spinCount === 0}
   <div class="no-data">
