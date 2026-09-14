@@ -94,6 +94,58 @@ func TestSignalBatchPanic(t *testing.T) {
 		require.Contains(t, it.result.Error(), "original result")
 		require.NotContains(t, it.result.Error(), "panic in", "the panic sweep must not clobber an already-completed item")
 	})
+
+	t.Run("a runtime.Error panic value is rendered, not orphaned", func(t *testing.T) {
+		// The most common real panic is a nil dereference, which recovers as a
+		// runtime.Error. runtime.Error IS an error, so errors.New takes it as the
+		// wrapped error and the format verb starves unless the value is rendered
+		// first. The panic is raised for real rather than faked with a constructed
+		// value, so this cannot drift from what the runtime actually produces.
+		var recovered any
+
+		func() {
+			defer func() { recovered = recover() }()
+
+			var p *int
+
+			_ = *p
+		}()
+
+		rErr, ok := recovered.(error)
+		require.True(t, ok, "a nil dereference must recover as an error")
+		require.Contains(t, rErr.Error(), "nil pointer dereference")
+
+		it := &item{}
+		require.True(t, SignalBatchPanic(recovered, []*item{it}, "sendGetBatch", logger, signal))
+
+		require.Contains(t, it.result.Error(), "panic in sendGetBatch")
+		require.Contains(t, it.result.Error(), "nil pointer dereference")
+		require.NotContains(t, it.result.Error(), "MISSING",
+			"the panic value must be rendered before it reaches errors.New")
+	})
+
+	t.Run("an *errors.Error panic value keeps its classification", func(t *testing.T) {
+		// The other half of the contract, and the regression guard against
+		// "simplifying" the type switch away: rendering the value for the verb
+		// must not cost the wrapped cause. IsRetryableError walks wrappedErr by
+		// code (errors/error_utils.go:27-53), so it sees the StorageError through
+		// the ProcessingError only while the chain survives. The NotContains here
+		// fails against the pre-fix code; the IsRetryableError does not, and is the
+		// guard rather than the demonstration. Asserted with
+		// IsRetryableError rather than errors.Is on purpose — Error.Is falls back
+		// to substring matching on the rendered message when the target is not an
+		// *Error (errors/errors.go:173-177), so it would pass on flattened text
+		// too and prove nothing.
+		it := &item{}
+		require.True(t, SignalBatchPanic(errors.NewStorageError("aerospike record unreadable"),
+			[]*item{it}, "sendGetBatch", logger, signal))
+
+		require.Contains(t, it.result.Error(), "panic in sendGetBatch")
+		require.Contains(t, it.result.Error(), "aerospike record unreadable")
+		require.NotContains(t, it.result.Error(), "MISSING")
+		require.True(t, errors.IsRetryableError(it.result),
+			"the recovered error must stay in the chain, not be flattened into the message")
+	})
 }
 
 // TestSignalBatchPanic_LogIsSingleLine pins the %q decision behind the log

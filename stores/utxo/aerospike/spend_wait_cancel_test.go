@@ -181,3 +181,40 @@ func TestIsContextWaitErr_ClassifiesByReturnedError(t *testing.T) {
 		})
 	}
 }
+
+// stuckCtx reports cancellation from Err() while its Done() never fires.
+// completion.Group.Wait reads ctx.Err() only on its ctx.Done() branch
+// (completion.go:91-111), so this context deterministically forces the timer arm
+// while making any post-Wait s.ctx.Err() recheck look like a cancellation.
+type stuckCtx struct{ context.Context }
+
+func (stuckCtx) Done() <-chan struct{} { return nil }
+
+func (stuckCtx) Err() error { return context.Canceled }
+
+// TestIncrementSpentRecords_TimeoutIsNotRelabelledByACancelledStoreContext pins
+// the half of the classification policy that the isContextWaitErr signature
+// cannot enforce on its own: the call site must classify by the error Wait
+// RETURNED and must never re-derive the verdict from s.ctx.Err() afterwards.
+// Both arms of Wait's select can be ready at once, so a recheck would relabel a
+// real timeout as a cancellation whenever a shutdown happened to overlap — the
+// same class of lie in the other direction. IncrementSpentRecords is the site
+// where that also silently suppresses the alert-grade BatchTimeout counter.
+func TestIncrementSpentRecords_TimeoutIsNotRelabelledByACancelledStoreContext(t *testing.T) {
+	s := newTestStoreForBatchWait(t)
+	s.settings.UtxoStore.SpendWaitTimeout = 20 * time.Millisecond
+	s.ctx = stuckCtx{context.Background()}
+
+	before := batchTimeoutCounter("IncrementSpentRecords")
+
+	txid := chainhash.HashH([]byte("increment-timeout-cancelled-ctx"))
+
+	_, err := s.IncrementSpentRecords(&txid, 1, 100)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "timed out after")
+	require.True(t, errors.Is(err, errors.ErrServiceUnavailable))
+	require.False(t, errors.Is(err, errors.ErrContextCanceled),
+		"a genuine timeout must not be relabelled as a cancellation by a store context that reports Canceled")
+	require.Equal(t, before+1, batchTimeoutCounter("IncrementSpentRecords"),
+		"a genuine timeout must still bump BatchTimeout exactly once")
+}

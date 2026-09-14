@@ -481,9 +481,9 @@ func (c *Client) handleBatchError(batch []*batchItem, err error, format string, 
 func (c *Client) handleBatchResponse(batch []*batchItem, response *propagation_api.ProcessTransactionBatchResponse) {
 	// The server must return exactly one result per batch item. If it returns
 	// fewer (a contract violation), ranging over response.Errors would leave the
-	// tail items un-completed and strand their callers forever on group.Wait
-	// (single-item ProcessTransaction waits unbounded with no ctx arm). Guard the
-	// length and fail every item with a clear error rather than stranding them or
+	// tail items un-completed and their callers blocked on group.Wait until the
+	// caller context or batchHandoffTimeout released them. Guard the length and
+	// fail every item with a clear error rather than leaving them to that wait or
 	// index-panicking into the sweep.
 	if len(response.Errors) != len(batch) {
 		err := errors.NewProcessingError("[handleBatchResponse] propagation returned %d results for a batch of %d", len(response.Errors), len(batch))
@@ -597,9 +597,10 @@ func (c *Client) processBatchViaHTTP(ctx context.Context, batch []*batchItem, it
 //   - error: Error if batch processing fails at the transport level
 func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem) error {
 	// go-batcher recovers panics raised in this dispatch fn; without a sweep a
-	// panic part-way through would strand every submitter blocked on group.Wait
-	// (unbuffered handoff, no timeout). complete is CAS-guarded, so
-	// re-completing an item an earlier stage already completed is a no-op.
+	// panic part-way through would leave every submitter blocked on group.Wait
+	// until its caller context or batchHandoffTimeout released it. complete is
+	// CAS-guarded, so re-completing an item an earlier stage already completed is
+	// a no-op.
 	defer func() {
 		util.SignalBatchPanic(recover(), batch, "ProcessTransactionBatch", c.logger, func(it *batchItem, err error) {
 			it.complete(err)

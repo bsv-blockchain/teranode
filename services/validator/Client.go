@@ -441,14 +441,10 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 	}
 	c.batcher.PutCtx(ctx, item)
 
-	// Bounded by the CALLER's context AND a finite backstop. Every resolved
-	// production caller is either shutdown-only — legacy netsync tx ingest, whose
-	// ctx is the one handed to netsync.New and carries no deadline — or has no
-	// guaranteed deadline at all: the JSON-RPC handler passes the request ctx,
-	// which cancels on client disconnect only, and nothing in that chain sets a
-	// timeout. So nothing bounds this wait during normal operation, and the ctx
-	// arm alone would let a wedged dispatcher park this goroutine;
-	// batchHandoffTimeout is what makes the wait finite.
+	// Bounded by the CALLER's context AND a finite backstop. Nothing in the call
+	// chain guarantees a deadline, so nothing bounds this wait during normal
+	// operation and the ctx arm alone would let a wedged dispatcher park this
+	// goroutine; batchHandoffTimeout is what makes the wait finite.
 	//
 	// An early return is ABANDONMENT, not cancellation: the item is already on the
 	// batcher and the dispatcher may still send it, so the transaction may yet
@@ -462,7 +458,7 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 	//     by the caller (record deleted, inputs unspent); doing that to a
 	//     transaction still in flight could delete a record already absorbed
 	//     downstream. A ServiceError keeps it out of the ErrThresholdExceeded
-	//     branch and inside the caller's "ambiguous hand-off failure" branch.
+	//     branch, so no caller unwinds a transaction that may still be in flight.
 	if waitErr := group.Wait(ctx, batchHandoffTimeout); waitErr != nil {
 		return nil, errors.NewServiceError("validator batch handoff abandoned before dispatch completed", waitErr)
 	}
@@ -529,9 +525,10 @@ func (c *Client) handleValidationError(ctx context.Context, tx *bt.Tx, blockHeig
 // each transaction individually over HTTP.
 func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
 	// go-batcher recovers panics raised in this dispatch fn; without a sweep a
-	// panic part-way through would strand every submitter blocked on group.Wait
-	// (unbuffered handoff, no timeout). complete is CAS-guarded, so
-	// re-completing an item an earlier stage already completed is a no-op.
+	// panic part-way through would leave every submitter blocked on group.Wait
+	// until its caller context or batchHandoffTimeout released it. complete is
+	// CAS-guarded, so re-completing an item an earlier stage already completed is
+	// a no-op.
 	defer func() {
 		util.SignalBatchPanic(recover(), batch, "sendBatchToValidator", c.logger, func(it *batchItem, err error) {
 			it.complete(validateBatchResponse{err: err})

@@ -43,7 +43,22 @@ func SignalBatchPanic[T any](recovered any, batch []T, fnName string, logger ulo
 	logger.Errorf("[%s] recovered panic, failing %d batch item(s): recovered=%q stack=%q",
 		fnName, len(batch), fmt.Sprintf("%v", recovered), debug.Stack())
 
-	err := errors.NewProcessingError("panic in %s: %v", fnName, recovered)
+	// Render the value for the verb, and ALSO pass it as the trailing argument
+	// when it is an error: errors.New extracts a trailing error as the wrapped
+	// cause, so this fills the verb without flattening the chain. A recovered
+	// *errors.Error keeps its code and its own wrapped chain that way, which the
+	// IsRetryableError / IsTransientLocalError walks read. A non-error value must
+	// NOT be passed twice — it is not extracted, so it would survive as a spare
+	// parameter and render as %!(EXTRA string=boom).
+	text := fmt.Sprint(recovered)
+
+	var err error
+	if cause, ok := recovered.(error); ok {
+		err = errors.NewProcessingError("panic in %s: %s", fnName, text, cause)
+	} else {
+		err = errors.NewProcessingError("panic in %s: %s", fnName, text)
+	}
+
 	for _, item := range batch {
 		signal(item, err)
 	}

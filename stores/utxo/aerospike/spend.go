@@ -1158,7 +1158,7 @@ func (s *Store) SetDAHForChildRecords(txID *chainhash.Hash, childCount int, dah 
 		// false on both counts and puts a ServiceUnavailable — what retry layers
 		// key on — in front of an orderly shutdown.
 		if isContextWaitErr(waitErr) {
-			return errors.NewContextCanceledError("[setDAHForChildRecords][%s] store context cancelled while waiting for child records: %s", txID.String(), waitErr)
+			return errors.NewContextCanceledError("[setDAHForChildRecords][%s] store context cancelled while waiting for child records", txID.String(), waitErr)
 		}
 
 		return errors.NewServiceUnavailableError("[setDAHForChildRecords][%s] set DAH for child records did not complete within %s: %s", txID.String(), s.batcherWait, waitErr)
@@ -1385,7 +1385,7 @@ func (s *Store) IncrementSpentRecords(txid *chainhash.Hash, increment int, block
 		// can be ready at once, and a post-return recheck would relabel a real
 		// timeout as a cancellation whenever a shutdown happens to overlap.
 		if isContextWaitErr(waitErr) {
-			return nil, errors.NewContextCanceledError("[IncrementSpentRecords][%s] store context cancelled while waiting for batch response: %s", txid.String(), waitErr)
+			return nil, errors.NewContextCanceledError("[IncrementSpentRecords][%s] store context cancelled while waiting for batch response", txid.String(), waitErr)
 		}
 
 		if prometheusUtxoMapErrors != nil {
