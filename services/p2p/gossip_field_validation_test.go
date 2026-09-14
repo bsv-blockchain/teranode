@@ -511,10 +511,6 @@ func TestGossipFieldBoundaries(t *testing.T) {
 	require.Error(t, checkGossipString("url", strings.Repeat("u", maxGossipURLLen+1), maxGossipURLLen))
 }
 
-// Empty optional protocol-format values must never be scored: a node with no
-// best block legitimately sends "", and older peers omit fields entirely. This
-// pins the empty-allowed rule against any future "make the bounds exact"
-// refactor, which would otherwise ban the whole network.
 // A block announcement whose hash is present but short passes the hex bound
 // in validateFields, yet must still be dropped and scored: chainhash would
 // otherwise zero-pad it into a well-formed-looking tip.
@@ -621,8 +617,25 @@ func TestHandleTopics_MalformedInnerJSONScored(t *testing.T) {
 			handler(server, context.Background(), garbage, self)
 
 			requireNoNotification(t, server, "malformed own message must be dropped")
-			_, registered := reg.Get(self)
-			require.False(t, registered, "own malformed message must not create a registry entry via scoring")
+			if info, registered := reg.Get(self); registered {
+				require.Zero(t, info.BanScore, "own malformed message must not be self-scored")
+			}
+		})
+
+		// Valid JSON that merely mismatches a field type (another
+		// implementation encoding an ignored field differently) is dropped
+		// but must not be scored, or a benign wire divergence bans a peer.
+		t.Run(name+"_field_type_mismatch_not_scored", func(t *testing.T) {
+			server, remotePeerID, _, banScore := newGossipFieldTestServer(t)
+			// Field names match case-insensitively: Hash/TxID hit the block,
+			// subtree and rejected-tx structs, fee_policy the node_status one.
+			mismatch := []byte(`{"PeerID":"` + remotePeerID.String() + `","Hash":["x"],"TxID":["x"],"fee_policy":"flat"}`)
+			require.True(t, json.Valid(mismatch), "test fixture must be structurally valid JSON")
+
+			handler(server, context.Background(), mismatch, remotePeerID.String())
+
+			requireNoNotification(t, server, "type-mismatched message must be dropped")
+			require.Zero(t, banScore(), "field type mismatch must not be scored")
 		})
 
 		// The banned-peer skip must run before decoding so a banned peer's
@@ -640,6 +653,12 @@ func TestHandleTopics_MalformedInnerJSONScored(t *testing.T) {
 	}
 }
 
+// Empty optional protocol-format values must never be scored: a node with no
+// best block legitimately sends "" in node_status, and older peers omit fields
+// entirely. This pins the empty-allowed rule for node_status against any
+// future "make the bounds exact" refactor, which would otherwise ban the
+// whole network. (Block and subtree announcements are the exception: their
+// hash is mandatory and an empty one is scored, see the tests above.)
 func TestHandleNodeStatusTopic_EmptyOptionalFieldsNotScored(t *testing.T) {
 	server, remotePeerID, _, banScore := newGossipFieldTestServer(t)
 

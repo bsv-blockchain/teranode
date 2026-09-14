@@ -3,6 +3,7 @@ package p2p
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2200,10 +2201,19 @@ func TestSyncCoordinator_HandleFSMTransition_FallbackDoesNotReleasePenalizedAhea
 // TestSyncCoordinator_HandlePeerDisconnected_ReselectIsTrackedAndCancellable
 // guards the sync-peer re-selection goroutine: it used to be an untracked
 // bare time.Sleep that survived Stop's drain and re-ran a full sync decision
-// on a stopped coordinator. It must now be wg-tracked and wake on stop.
+// on a stopped coordinator. It must now be wg-tracked, wake on stop, and not
+// run TriggerSync once Stop has begun.
 func TestSyncCoordinator_HandlePeerDisconnected_ReselectIsTrackedAndCancellable(t *testing.T) {
 	sc, _ := newTestSyncCoordinator(t)
 	pid := mustNewPeerID(t)
+
+	// TriggerSync always resolves the local height first, so the callback
+	// doubles as a "did a sync decision run" probe.
+	var localHeightCalls atomic.Int32
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 {
+		localHeightCalls.Add(1)
+		return 0
+	})
 
 	sc.mu.Lock()
 	sc.currentSyncPeer = pid.String()
@@ -2212,19 +2222,23 @@ func TestSyncCoordinator_HandlePeerDisconnected_ReselectIsTrackedAndCancellable(
 	sc.HandlePeerDisconnected(pid)
 	require.Empty(t, sc.GetCurrentSyncPeer(), "disconnected sync peer must be cleared")
 
-	// Stop well inside the re-select delay: the drain must complete promptly
-	// because the sleeper wakes on stopCh instead of running out its timer.
-	stopCtx, cancel := context.WithTimeout(context.Background(), syncPeerReselectDelay/2)
-	defer cancel()
+	// Stop well inside the re-select delay with an unbounded ctx: Stop only
+	// returns once the drain completes, so a sleeper that ignored stopCh
+	// would hold it for the full delay, and an untracked one would let the
+	// drain report clean and then fire TriggerSync afterwards.
 	start := time.Now()
-	sc.Stop(stopCtx)
+	sc.Stop(context.Background())
+	require.Less(t, time.Since(start), syncPeerReselectDelay, "drain must not wait out the re-select delay")
 
 	select {
 	case <-sc.drained:
 	default:
 		t.Fatal("Stop must wait for the re-select goroutine and it must exit on stop")
 	}
-	require.Less(t, time.Since(start), syncPeerReselectDelay, "re-select goroutine must wake on stop, not sleep out its delay")
+
+	// Outlive the original sleep to prove nothing fires late.
+	time.Sleep(syncPeerReselectDelay + 200*time.Millisecond)
+	require.Zero(t, localHeightCalls.Load(), "no sync decision may run after Stop")
 }
 
 // After Stop has begun, a late libp2p disconnect callback must not spawn a

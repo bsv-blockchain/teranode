@@ -100,7 +100,8 @@ type SyncCoordinator struct {
 	// lifecycleMu orders wg.Add against Stop's wg.Wait for goroutines spawned
 	// from libp2p callbacks (see goTracked): stopping is set under it before
 	// Wait begins, so a late callback can never Add to a WaitGroup that is
-	// already draining.
+	// already draining. Start's own monitor goroutines are not guarded: the
+	// service wires Start strictly before Stop.
 	lifecycleMu sync.Mutex
 	stopping    bool
 }
@@ -721,7 +722,7 @@ func (sc *SyncCoordinator) HandlePeerDisconnected(peerID peer.ID) {
 		// peers' status updates can land first. Tracked and cancellable like
 		// every other coordinator goroutine: a bare sleep would outlive Stop's
 		// drain and re-run a full select-and-activate on a stopped coordinator.
-		sc.goTracked(func() {
+		if !sc.goTracked(func() {
 			timer := time.NewTimer(syncPeerReselectDelay)
 			defer timer.Stop()
 
@@ -734,7 +735,9 @@ func (sc *SyncCoordinator) HandlePeerDisconnected(peerID peer.ID) {
 			}
 
 			_ = sc.TriggerSync()
-		})
+		}) {
+			sc.logger.Debugf("[SyncCoordinator] coordinator stopping, not re-selecting a sync peer after %s disconnected", idStr)
+		}
 	}
 }
 

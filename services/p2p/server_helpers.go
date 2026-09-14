@@ -57,9 +57,12 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 	if err = json.Unmarshal(m, &blockMessage); err != nil {
 		// The message bus only scores a malformed outer envelope; garbage
 		// inside a valid envelope is a protocol violation this layer must
-		// charge, or a flood of it is free.
+		// charge, or a flood of it is free. Score only structurally invalid
+		// JSON: a type mismatch on a single field (e.g. another
+		// implementation encoding an ignored field differently) is dropped
+		// unscored, so a benign wire-format divergence cannot ban a peer.
 		s.logger.Errorf("[handleBlockTopic] json unmarshal error from peer %s: %v", fromID, err)
-		if !isSelf {
+		if !isSelf && !json.Valid(m) {
 			s.addProtocolViolation(fromID)
 		}
 		return
@@ -251,10 +254,11 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 	subtreeMessage = SubtreeMessage{}
 
 	if err = json.Unmarshal(m, &subtreeMessage); err != nil {
-		// See handleBlockTopic: inner-envelope garbage is scored here because
-		// the message bus only counts a malformed outer envelope.
+		// See handleBlockTopic: structurally invalid JSON is scored here
+		// because the message bus only counts a malformed outer envelope; a
+		// field type mismatch is dropped unscored.
 		s.logger.Errorf("[handleSubtreeTopic] json unmarshal error from peer %s: %v", fromID, err)
-		if !isSelf {
+		if !isSelf && !json.Valid(m) {
 			s.addProtocolViolation(fromID)
 		}
 		return
@@ -489,7 +493,9 @@ var unsafeIPRanges = mustParseUnsafeIPRanges(
 	unsafeIPRangeSpec{"198.51.100.0/24", "documentation address"},
 	unsafeIPRangeSpec{"203.0.113.0/24", "documentation address"},
 	unsafeIPRangeSpec{"198.18.0.0/15", "benchmarking address"},
+	unsafeIPRangeSpec{"192.88.99.0/24", "6to4 relay anycast address"},
 	unsafeIPRangeSpec{"240.0.0.0/4", "reserved address"},
+	unsafeIPRangeSpec{"::/96", "IPv4-compatible address"},
 	unsafeIPRangeSpec{"64:ff9b::/96", "NAT64 address"},
 	unsafeIPRangeSpec{"64:ff9b:1::/48", "local-use NAT64 address"},
 	unsafeIPRangeSpec{"100::/64", "discard-only address"},
@@ -521,10 +527,11 @@ func mustParseUnsafeIPRanges(specs ...unsafeIPRangeSpec) []unsafeIPRange {
 // The policy is default-deny: anything that is not a global unicast address
 // is unsafe, and the global-unicast space is further filtered by the
 // special-purpose blocks in unsafeIPRanges, because IsGlobalUnicast() alone
-// still admits RFC 1918, RFC 6598, TEST-NET and reserved space. A hostname is
-// never resolved here (see validateDataHubURL); this runs on literal IPs and
-// on whatever a resolver later hands to the dial guard, so the two paths
-// share one definition of "internal".
+// still admits RFC 1918, RFC 6598, TEST-NET and reserved space. This is the
+// static pre-filter's policy only, applied to literal IPs in announced URLs
+// (a hostname is never resolved here, see validateDataHubURL); the
+// connection-time policy is util.DefaultSSRFDialPolicy, which is deliberately
+// narrower because fetches legitimately traverse private networks.
 func isUnsafeIP(ip net.IP) string {
 	switch {
 	case ip.IsLoopback():
@@ -662,10 +669,11 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 
 	err = json.Unmarshal(m, &rejectedTxMessage)
 	if err != nil {
-		// See handleBlockTopic: inner-envelope garbage is scored here because
-		// the message bus only counts a malformed outer envelope.
+		// See handleBlockTopic: structurally invalid JSON is scored here
+		// because the message bus only counts a malformed outer envelope; a
+		// field type mismatch is dropped unscored.
 		s.logger.Errorf("[handleRejectedTxTopic] json unmarshal error from peer %s: %v", fromID, err)
-		if !isSelf {
+		if !isSelf && !json.Valid(m) {
 			s.addProtocolViolation(fromID)
 		}
 		return
@@ -678,7 +686,7 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 
 	if err = rejectedTxMessage.validateFields(); err != nil {
 		s.logger.Errorf("[handleRejectedTxTopic] invalid rejected tx message field from peer %s: %v", fromID, err)
-		if fromID != s.P2PClient.GetID() {
+		if !isSelf {
 			s.addProtocolViolation(fromID)
 		}
 		return

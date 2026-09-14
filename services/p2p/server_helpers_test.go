@@ -974,6 +974,7 @@ func TestIsUnsafeIP(t *testing.T) {
 		{"benchmarking_high", "198.19.255.255", "benchmarking address"},
 		{"just_below_benchmarking_is_public", "198.17.255.255", ""},
 		{"reserved_240", "240.0.0.1", "reserved address"},
+		{"six_to_four_relay_anycast", "192.88.99.1", "6to4 relay anycast address"},
 		{"multicast_ipv4", "224.0.1.1", "multicast address"},
 		{"multicast_ipv4_high", "239.255.255.250", "multicast address"},
 		{"broadcast", "255.255.255.255", "broadcast address"},
@@ -986,6 +987,8 @@ func TestIsUnsafeIP(t *testing.T) {
 		{"teredo", "2001::1", "Teredo address"},
 		{"doc_ipv6", "2001:db8::1", "documentation address"},
 		{"six_to_four", "2002:a00:1::1", "6to4 address"},
+		{"ipv4_compatible_embeds_private", "::a00:1", "IPv4-compatible address"},
+		{"ipv4_compatible_embeds_public", "::808:808", "IPv4-compatible address"},
 		{"public_ipv6_next_to_teredo", "2001:1::1", ""},
 	}
 
