@@ -60,7 +60,8 @@ type Server struct {
 	subtreevalidation_api.UnimplementedSubtreeValidationAPIServer
 
 	// logger handles all logging operations for the service
-	logger ulogger.Logger
+	logger                         ulogger.Logger
+	assemblySuppressionLastWarning atomic.Int64
 
 	// settings contains the configuration parameters for the service
 	// including connection details, timeouts, and operational modes
@@ -822,6 +823,26 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		}
 	}
 
+	currentState, err := u.blockchainClient.GetFSMCurrentState(ctx)
+	if err != nil {
+		if request.BaseUrl == "legacy" {
+			return false, errors.NewProcessingError("[CheckSubtree] Failed to get FSM current state", err)
+		}
+		// Peer validation does not require FSM availability. Fail closed only
+		// on assembly feeding, including when a failed read returns a state.
+		currentState = nil
+	}
+
+	// Only known RUNNING state permits either entry path to feed block
+	// assembly. Admitted catchup writes may finish in IDLE; their bulk-history
+	// transactions must not enter the template. RUNNING retains reorg
+	// resilience for transactions from legacy-bridge tip blocks.
+	assemblyPath := "check_subtree_peer"
+	if request.BaseUrl == "legacy" {
+		assemblyPath = "check_subtree_legacy"
+	}
+	addToAssembly := u.allowAssemblyForObservedFSM(currentState, assemblyPath)
+
 	// Check if the base URL is "legacy", which indicates that the subtree is coming from a block from the legacy service.
 	if request.BaseUrl == "legacy" {
 		// read from legacy store
@@ -906,19 +927,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 			validator.WithIgnoreLocked(true),
 			validator.WithCandidateParentMedianTime(candidateParentMedianTime),
 			validator.WithUnconfirmedParentsAtCandidateHeight(true),
-		}
-
-		currentState, err := u.blockchainClient.GetFSMCurrentState(ctx)
-		if err != nil {
-			return false, errors.NewProcessingError("[CheckSubtree] Failed to get FSM current state", err)
-		}
-
-		// While catching up blocks, disable adding transactions to block
-		// assembly: bulk-history txs do not belong in our template. In
-		// RUNNING, assembly stays enabled so txs from a legacy-bridge tip
-		// block survive in the mempool if the block loses a reorg.
-		if *currentState == blockchain.FSMStateCATCHINGBLOCKS {
-			validatorOptions = append(validatorOptions, validator.WithAddTXToBlockAssembly(false))
+			validator.WithAddTXToBlockAssembly(addToAssembly),
 		}
 
 		// Call the validateSubtreeInternal method
@@ -960,6 +969,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		validator.WithCreateConflicting(true),
 		validator.WithIgnoreLocked(true),
 		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+		validator.WithAddTXToBlockAssembly(addToAssembly),
 	); err != nil {
 		return false, errors.NewProcessingError("[CheckSubtree] Failed to validate subtree %s", hash.String(), err)
 	}

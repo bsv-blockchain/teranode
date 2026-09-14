@@ -486,6 +486,15 @@ func (m *Mock) GetFSMCurrentState(ctx context.Context) (*FSMStateType, error) {
 	return args.Get(0).(*FSMStateType), args.Error(1)
 }
 
+// ReadFSMState mocks the ReadFSMState method.
+func (m *Mock) ReadFSMState(ctx context.Context) (FSMStateType, error) {
+	args := m.Called(ctx)
+	if err := args.Error(1); err != nil {
+		return FSMStateIDLE, err
+	}
+	return args.Get(0).(FSMStateType), nil
+}
+
 // IsFSMCurrentState mocks the IsFSMCurrentState method
 func (m *Mock) IsFSMCurrentState(ctx context.Context, state FSMStateType) (bool, error) {
 	args := m.Called(ctx, state)

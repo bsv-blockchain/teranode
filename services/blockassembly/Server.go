@@ -103,7 +103,8 @@ type BlockAssembly struct {
 	subtreeStore blob.Store
 
 	// jobStore caches mining jobs with TTL
-	jobStore *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job]
+	jobStore   *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job]
+	jobStoreMu sync.Mutex
 
 	// blockSubmissionChan handles block submission requests
 	blockSubmissionChan chan *BlockSubmissionRequest
@@ -174,6 +175,9 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store
 		blockSubmissionChan: make(chan *BlockSubmissionRequest),
 	}
 
+	ba.jobStore.OnEviction(func(_ context.Context, _ ttlcache.EvictionReason, item *ttlcache.Item[chainhash.Hash, *subtreeprocessor.Job]) {
+		item.Value().Lease.Release()
+	})
 	go ba.jobStore.Start()
 
 	return ba
@@ -509,11 +513,11 @@ type subtreeStorageWork struct {
 
 // subtreeStorageResult represents the result of a subtree storage operation.
 type subtreeStorageResult struct {
-	seq              uint64                             // sequence number for ordering
-	request          subtreeprocessor.NewSubtreeRequest // original request
-	err              error                              // error from storage operation
-	skipNotification bool                               // whether notification should be skipped
-	storedOK         bool                               // true if subtree was stored successfully
+	seq              uint64         // sequence number for ordering
+	subtreeHash      chainhash.Hash // immutable root for notifications after storage releases the subtree
+	err              error          // error from storage operation
+	skipNotification bool           // whether notification should be skipped
+	storedOK         bool           // true if subtree was stored successfully
 }
 
 // runNewSubtreeListener handles incoming requests for new subtrees.
@@ -544,18 +548,28 @@ func (ba *BlockAssembly) runNewSubtreeListener(ctx context.Context, newSubtreeCh
 		ba.subtreeNotificationSender(ctx, resultChan)
 	}()
 
+	defer func() {
+		close(workChan)
+		wg.Wait()
+		close(resultChan)
+		<-notifyDone
+	}()
 	var seq uint64
 	for {
 		select {
 		case <-ctx.Done():
 			ba.logger.Infof("Stopping subtree listener")
-			close(workChan)
-			wg.Wait()
-			close(resultChan)
-			<-notifyDone
 			return
 
-		case newSubtreeRequest := <-newSubtreeChan:
+		case newSubtreeRequest, ok := <-newSubtreeChan:
+			if !ok {
+				return
+			}
+			ownedRequest, retained := newSubtreeRequest.TakeStorageOwnership()
+			if !retained {
+				continue
+			}
+			newSubtreeRequest = ownedRequest
 			ba.logger.Infof("[runNewSubtreeListener][%s] New subtree request: %d", newSubtreeRequest.Subtree.RootHash().String(), seq)
 			work := &subtreeStorageWork{
 				seq:     seq,
@@ -566,6 +580,7 @@ func (ba *BlockAssembly) runNewSubtreeListener(ctx context.Context, newSubtreeCh
 			select {
 			case workChan <- work:
 			case <-ctx.Done():
+				newSubtreeRequest.Release()
 				return
 			}
 		}
@@ -577,13 +592,14 @@ func (ba *BlockAssembly) subtreeStorageWorker(ctx context.Context, workChan <-ch
 	for work := range workChan {
 		select {
 		case <-ctx.Done():
-			return
+			work.request.Release()
+			continue
 		default:
 		}
 
 		result := &subtreeStorageResult{
 			seq:              work.seq,
-			request:          work.request,
+			subtreeHash:      *work.request.Subtree.RootHash(),
 			skipNotification: work.request.SkipNotification,
 		}
 
@@ -611,7 +627,7 @@ func (ba *BlockAssembly) subtreeStorageWorker(ctx context.Context, workChan <-ch
 		select {
 		case resultChan <- result:
 		case <-ctx.Done():
-			return
+			// Storage still owns the mapping; finish it and drain queued work.
 		}
 
 		// Wait for all work to complete before sending response to caller
@@ -668,10 +684,10 @@ func (ba *BlockAssembly) subtreeNotificationSender(ctx context.Context, resultCh
 
 			// Send notification if needed
 			if !r.skipNotification && r.storedOK {
-				ba.logger.Infof("[BlockAssembly:Init][%s] sending subtree notification", r.request.Subtree.RootHash().String())
-				ba.sendSubtreeNotification(ctx, *r.request.Subtree.RootHash())
+				ba.logger.Infof("[BlockAssembly:Init][%s] sending subtree notification", r.subtreeHash.String())
+				ba.sendSubtreeNotification(ctx, r.subtreeHash)
 			} else {
-				ba.logger.Infof("[BlockAssembly:Init][%s] skipping subtree notification (skip=%v, stored=%v)", r.request.Subtree.RootHash().String(), r.skipNotification, r.storedOK)
+				ba.logger.Infof("[BlockAssembly:Init][%s] skipping subtree notification (skip=%v, stored=%v)", r.subtreeHash.String(), r.skipNotification, r.storedOK)
 			}
 		}
 	}
@@ -848,6 +864,11 @@ func (ba *BlockAssembly) sendSubtreeNotification(ctx context.Context, subtreeHas
 //   - allDone: Channel that closes when all work is complete
 //   - err: Any error encountered during setup
 func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest subtreeprocessor.NewSubtreeRequest, subtreeRetryChan chan *subtreeRetrySend) (subtreeDone <-chan bool, allDone <-chan struct{}, err error) {
+	defer func() {
+		if allDone == nil {
+			subtreeRequest.Release()
+		}
+	}()
 	subtree := subtreeRequest.Subtree
 
 	ctx, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "storeSubtreeData",
@@ -928,11 +949,14 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 					ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree meta already exists", subtree.RootHash().String())
 				} else {
 					ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree meta: %s", subtree.RootHash().String(), err)
-					subtreeRetryChan <- &subtreeRetrySend{
+					select {
+					case subtreeRetryChan <- &subtreeRetrySend{
 						subtreeHash:      *subtree.RootHash(),
 						subtreeBytes:     subtreeBytes,
 						subtreeMetaBytes: subtreeMetaBytes,
 						retries:          0,
+					}:
+					case <-ctx.Done():
 					}
 				}
 			}
@@ -955,10 +979,13 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 				ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree already exists", subtree.RootHash().String())
 			} else {
 				ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree: %s", subtree.RootHash().String(), err)
-				subtreeRetryChan <- &subtreeRetrySend{
+				select {
+				case subtreeRetryChan <- &subtreeRetrySend{
 					subtreeHash:  *subtree.RootHash(),
 					subtreeBytes: subtreeBytes,
 					retries:      0,
+				}:
+				case <-ctx.Done():
 				}
 				storedOK = false
 			}
@@ -972,6 +999,7 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	// with the worker that reads the storedOK value from subtreeDoneCh.
 	go func() {
 		defer close(allDoneCh)
+		defer subtreeRequest.Release()
 		<-subtreeStorageDone
 		<-metaDoneCh
 		// Trigger cleanup of soft-deleted transactions
@@ -1088,6 +1116,7 @@ func (ba *BlockAssembly) Start(ctx context.Context, readyCh chan<- struct{}) (er
 func (ba *BlockAssembly) Stop(ctx context.Context) error {
 	ba.stopOnce.Do(func() {
 		ba.jobStore.Stop()
+		ba.jobStore.DeleteAll()
 
 		// Stop the subtree processor to stop the announcement ticker and cleanup resources
 		if ba.blockAssembler != nil && ba.blockAssembler.subtreeProcessor != nil {
@@ -1577,20 +1606,28 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, req *blockassem
 
 	includeSubtreeHashes := req.IncludeSubtrees
 
-	miningCandidate, subtrees, err := ba.blockAssembler.GetMiningCandidate(ctx)
+	miningCandidate, subtrees, lease, err := ba.blockAssembler.GetMiningCandidate(ctx)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
+
+	defer lease.Release()
+	cacheLease, _ := lease.Retain()
 
 	ba.logger.Debugf("in GetMiningCandidate: miningCandidate: %+v", miningCandidate.Stringify(true))
 
 	id, _ := chainhash.NewHash(miningCandidate.Id)
 
+	ba.jobStoreMu.Lock()
+	// Delete first: ttlcache replacement does not invoke eviction callbacks.
+	ba.jobStore.Delete(*id)
 	ba.jobStore.Set(*id, &subtreeprocessor.Job{
 		ID:              id,
 		Subtrees:        subtrees,
 		MiningCandidate: miningCandidate,
+		Lease:           cacheLease,
 	}, jobTTL) // create a new job with a TTL, will be cleaned up automatically
+	ba.jobStoreMu.Unlock()
 
 	if includeSubtreeHashes {
 		miningCandidate.SubtreeHashes = make([][]byte, len(subtrees))
@@ -1765,12 +1802,20 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		return nil, err
 	}
 
+	ba.jobStoreMu.Lock()
 	jobItem := ba.jobStore.Get(*storeID)
 	if jobItem == nil {
+		ba.jobStoreMu.Unlock()
 		return nil, errors.NewNotFoundError("[BlockAssembly][%s] job not found", jobID)
 	}
 
 	job := jobItem.Value()
+	requestLease, retained := job.Lease.Retain()
+	ba.jobStoreMu.Unlock()
+	if !retained {
+		return nil, errors.NewNotFoundError("[BlockAssembly][%s] job expired", jobID)
+	}
+	defer requestLease.Release()
 
 	hashPrevBlock, err := chainhash.NewHash(job.MiningCandidate.PreviousHash)
 	if err != nil {
@@ -1941,30 +1986,10 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		TransactionCount: transactionCount,
 		SizeInBytes:      blockSize,
 		Subtrees:         jobSubtreeHashes, // we need to store the hashes of the subtrees in the block, without the coinbase
-		// Aliases the subtree processor's live slice rather than copying it, so
-		// this block shares both the backing array and the *Subtree values with
-		// whatever else holds the job. Block.Valid must therefore not mutate
-		// either: model.Block.closeMmapSubtreesLocked is the release on that
-		// path, and it never writes to the array — a cross-package dependency
-		// worth naming, because a release that reached further would corrupt the
-		// processor's state from inside block validation.
-		//
-		// It does Close mmap-backed entries, and these CAN be mmap-backed: with
-		// blockassembly_subtreeMmapDir set, the processor builds its chained
-		// subtrees with SubtreeProcessor.newSubtree, which returns
-		// NewTreeByLeafCountMmap. What keeps that harmless is only that the
-		// release never runs on this path — GetAndValidateSubtrees takes its
-		// "already loaded" early exit, because len(jobSubtreeHashes) always
-		// equals len(job.Subtrees) and every job subtree carries nodes. Tighten
-		// that loaded-check, or hand this block a subtree it cannot account for,
-		// and block validation would unmap and delete the live processor's
-		// backing files.
-		//
-		// Copying the slice would not buy anything either, because Close acts on
-		// the *Subtree and not on the array: a clone holds the same pointers.
-		// Anything that stops relying on the early exit has to give the block
-		// subtrees of its own, or tell the release the entries are not its to
-		// close.
+		// The request lease keeps these shared immutable subtrees mapped through
+		// validation and storage, even if a reset or cache eviction retires the job.
+		// Block.Valid must preserve the existing already-loaded fast path so it
+		// does not close storage owned by this lease.
 		SubtreeSlices: job.Subtrees,
 		CoinbaseBUMP:  coinbaseBUMP,
 	}
@@ -2124,12 +2149,20 @@ func (ba *BlockAssembly) GetCandidateBlock(ctx context.Context, req *blockassemb
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("invalid candidate ID", err))
 	}
 
+	ba.jobStoreMu.Lock()
 	jobItem := ba.jobStore.Get(*storeID)
 	if jobItem == nil {
+		ba.jobStoreMu.Unlock()
 		return nil, errors.WrapGRPC(errors.NewNotFoundError("[GetCandidateBlock][%s] candidate not found", candidateID))
 	}
 
 	job := jobItem.Value()
+	requestLease, retained := job.Lease.Retain()
+	ba.jobStoreMu.Unlock()
+	if !retained {
+		return nil, errors.WrapGRPC(errors.NewNotFoundError("[GetCandidateBlock][%s] candidate expired", candidateID))
+	}
+	defer requestLease.Release()
 
 	// Create default coinbase transaction from the mining candidate
 	coinbaseTx, err := job.MiningCandidate.CreateCoinbaseTxCandidate(ba.blockAssembler.settings)
@@ -2235,7 +2268,9 @@ func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembl
 		return nil, errors.NewServiceError(errServiceNotReadyUnminedLoading)
 	}
 
-	ba.blockAssembler.Reset(false)
+	if err := ba.blockAssembler.resetWithOptionsContext(ctx, false, false); err != nil {
+		return nil, err
+	}
 
 	return &blockassembly_api.EmptyMessage{}, nil
 }
@@ -2253,7 +2288,9 @@ func (ba *BlockAssembly) ResetBlockAssemblyFully(ctx context.Context, _ *blockas
 		return nil, errors.NewServiceError(errServiceNotReadyUnminedLoading)
 	}
 
-	ba.blockAssembler.Reset(true)
+	if err := ba.blockAssembler.resetWithOptionsContext(ctx, true, false); err != nil {
+		return nil, err
+	}
 
 	return &blockassembly_api.EmptyMessage{}, nil
 }
@@ -2275,7 +2312,9 @@ func (ba *BlockAssembly) ResetBlockAssemblyValidateInputs(ctx context.Context, _
 		return nil, errors.NewServiceError(errServiceNotReadyUnminedLoading)
 	}
 
-	ba.blockAssembler.ResetWithInputValidation()
+	if err := ba.blockAssembler.resetWithOptionsContext(ctx, false, true); err != nil {
+		return nil, err
+	}
 
 	return &blockassembly_api.EmptyMessage{}, nil
 }
@@ -2553,10 +2592,12 @@ func (ba *BlockAssembly) CheckBlockAssembly(_ context.Context, _ *blockassembly_
 //   - *blockassembly_api.OKResponse: Response indicating success
 func (ba *BlockAssembly) GetBlockAssemblyBlockCandidate(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.GetBlockAssemblyBlockCandidateResponse, error) {
 	// get a mining candidate
-	candidate, subtrees, err := ba.blockAssembler.GetMiningCandidate(ctx)
+	candidate, subtrees, lease, err := ba.blockAssembler.GetMiningCandidate(ctx)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockAssemblyBlockTemplate] error getting mining candidate", err))
 	}
+
+	defer lease.Release()
 
 	subtreeHashes := make([]*chainhash.Hash, len(subtrees))
 	for i, subtree := range subtrees {

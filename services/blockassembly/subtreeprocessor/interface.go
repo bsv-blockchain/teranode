@@ -155,6 +155,13 @@ type Interface interface {
 	//   - ResetResponse: Response containing reset operation results
 	Reset(blockHeader *model.BlockHeader, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, useFastForwardReset bool, postProcess func() error) ResetResponse
 
+	// RecoverUnmined rebuilds the current assembly from a read-only prepared
+	// selection while preserving feeds published after its queue snapshot.
+	RecoverUnmined(ctx context.Context, header *model.BlockHeader, scanHashes []chainhash.Hash, prepare func(context.Context, []chainhash.Hash, func(chainhash.Hash) bool) ([]*utxostore.UnminedTransaction, error)) error
+
+	// RecoveryPending reports an incomplete memory rebuild requiring a read-only retry.
+	RecoveryPending() bool
+
 	// Remove removes a specific transaction from the processor by its hash.
 	// This is used when transactions become invalid or need to be excluded.
 	//
@@ -377,8 +384,8 @@ type Interface interface {
 	//   - uint64: Total size in bytes of all chained subtrees
 	GetChainedSubtreesTotalSize() uint64
 
-	// GetPrecomputedMiningData returns the pre-computed mining data for lock-free reads.
-	// This can be called from any goroutine without synchronization.
+	// GetPrecomputedMiningData returns a snapshot whose Lease must be released
+	// after the caller finishes reading its subtree nodes.
 	GetPrecomputedMiningData() *PrecomputedMiningData
 
 	// GetIncompleteSubtreeMiningData requests a snapshot of the incomplete subtree

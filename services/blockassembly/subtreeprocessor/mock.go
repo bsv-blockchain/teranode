@@ -72,6 +72,19 @@ func (m *MockSubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveBackBlo
 	return args.Get(0).(ResetResponse)
 }
 
+func (m *MockSubtreeProcessor) RecoverUnmined(ctx context.Context, header *model.BlockHeader, scanHashes []chainhash.Hash, prepare func(context.Context, []chainhash.Hash, func(chainhash.Hash) bool) ([]*utxostore.UnminedTransaction, error)) error {
+	return m.Called(ctx, header, scanHashes, prepare).Error(0)
+}
+
+func (m *MockSubtreeProcessor) RecoveryPending() bool {
+	// Existing callers model a healthy processor unless the test explicitly
+	// requests the new recovery-failure state.
+	if !m.IsMethodCallable(nil, "RecoveryPending") {
+		return false
+	}
+	return m.Called().Bool(0)
+}
+
 func (m *MockSubtreeProcessor) GetCurrentBlockHeader() *model.BlockHeader {
 	args := m.Called()
 	return args.Get(0).(*model.BlockHeader)

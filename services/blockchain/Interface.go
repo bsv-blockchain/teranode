@@ -804,6 +804,11 @@ type ClientI interface {
 	// - Pointer to FSMStateType representing the current state of the blockchain FSM
 	// - Error if the state retrieval fails
 	GetFSMCurrentState(ctx context.Context) (*FSMStateType, error)
+
+	// ReadFSMState bypasses the subscription cache and returns a ready,
+	// persistence-confirmed state. Unavailable authority returns an error.
+	// The result is a snapshot, not a lease or a work-drain barrier.
+	ReadFSMState(ctx context.Context) (FSMStateType, error)
 	// IsFSMCurrentState checks if the FSM is in a specific state.
 	//
 	// This method compares the current state of the blockchain FSM with the provided state

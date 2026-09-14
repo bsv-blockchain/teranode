@@ -52,20 +52,24 @@ func (u *Server) subtreeMessageHandler(ctx context.Context) func(msg *kafka.Kafk
 		default:
 		}
 
-		state, err := u.blockchainClient.GetFSMCurrentState(gCtx)
-		if err != nil {
-			return errors.NewProcessingError("[subtreeMessageHandler] failed to get FSM current state", err)
-		}
-
-		if *state == blockchain.FSMStateCATCHINGBLOCKS {
-			return nil
-		}
-
 		// In BlocksOnly mode, skip processing peer-announced subtrees (only process subtrees from blocks)
 		if u.settings.SubtreeValidation.BlocksOnly {
 			return nil
 		}
 
+		state, err := u.blockchainClient.GetFSMCurrentState(gCtx)
+		if err != nil {
+			return errors.NewProcessingError("[subtreeMessageHandler] failed to get FSM current state", err)
+		}
+
+		// Catchup skips peer validation entirely; no assembly-feeding decision
+		// is made for these messages.
+		if state != nil && *state == blockchain.FSMStateCATCHINGBLOCKS {
+			return nil
+		}
+		// Ordinary peer validation may continue in IDLE, but only known
+		// RUNNING state permits feeding its transactions into block assembly.
+		addToAssembly := u.allowAssemblyForObservedFSM(state, "kafka_subtree")
 		var kafkaMsg kafkamessage.KafkaSubtreeTopicMessage
 		if err := proto.Unmarshal(msg.Value, &kafkaMsg); err != nil {
 			u.logger.Errorf("[subtreeMessageHandler] failed to unmarshal kafka message: %v", err)
@@ -90,7 +94,7 @@ func (u *Server) subtreeMessageHandler(ctx context.Context) func(msg *kafka.Kafk
 		// Run the subtree handler in a goroutine managed by errgroup.
 		// We validate subtrees on best effort basis - no retries needed.
 		g.Go(func() error {
-			err := u.subtreesHandler(gCtx, hash, baseURL, kafkaMsg.PeerId)
+			err := u.subtreesHandler(gCtx, hash, baseURL, kafkaMsg.PeerId, validator.WithAddTXToBlockAssembly(addToAssembly))
 			if err == nil {
 				return nil
 			}
