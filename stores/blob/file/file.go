@@ -91,6 +91,53 @@ func parseFsyncMode(s string) (fsyncMode, error) {
 	}
 }
 
+// parseChecksum interprets the `checksum` URL parameter. An absent parameter leaves
+// checksumming enabled, so a store URL that does not mention it behaves exactly as it
+// always has. A value that is neither boolean-true nor boolean-false is a configuration
+// error rather than a silently ignored typo, mirroring parseFsyncMode.
+func parseChecksum(s string) (bool, error) {
+	switch strings.ToLower(s) {
+	case "", "true", "1":
+		return true, nil
+	case "false", "0":
+		return false, nil
+	default:
+		return true, errors.NewConfigurationError("[File] invalid checksum %q (must be true|false)", s)
+	}
+}
+
+// onlyWriter hides any ReadFrom method on the wrapped writer. io.CopyBuffer discards the
+// caller's buffer when dst implements io.ReaderFrom, and *os.File does; for the sources this
+// store actually sees (a bytes.Reader or an io.Pipe, both behind an io.TeeReader) ReadFrom has
+// no kernel fast path to offer and merely falls back to its own 32 KiB buffer. Hiding it keeps
+// the configured buffer in force.
+type onlyWriter struct{ io.Writer }
+
+const copyBufferSize = 1 << 20 // 1 MiB
+
+// copyBufPool keeps the copy buffers alive between blob writes. The pool is not an
+// optimisation: at the blob write rates this store sustains, allocating a megabyte per
+// write would trade copy time for garbage-collection time and lose.
+var copyBufPool = sync.Pool{
+	New: func() any { b := make([]byte, copyBufferSize); return &b },
+}
+
+func copyWithPooledBuffer(dst *os.File, src io.Reader) (int64, error) {
+	bufp := copyBufPool.Get().(*[]byte)
+	defer copyBufPool.Put(bufp)
+
+	return io.CopyBuffer(onlyWriter{dst}, src, *bufp)
+}
+
+// memReader carries an in-memory payload from Set into SetFromReader so the body can be
+// hashed and written in one shot instead of running a chunked copy loop over it.
+type memReader struct {
+	*bytes.Reader
+	buf []byte
+}
+
+func (memReader) Close() error { return nil }
+
 // File implements the blob.Store interface using the local filesystem for storage.
 // It provides a robust, persistent blob storage solution with features like automatic
 // cleanup of expired blobs, data integrity verification, and efficient handling of
@@ -127,6 +174,25 @@ type File struct {
 	storeType storetypes.BlobStoreType
 	// fsyncMode controls fsync behaviour during atomic publication; see fsyncMode docs.
 	fsyncMode fsyncMode
+	// checksum controls whether a blob's payload is digested and published as a
+	// "<filename>.sha256" sidecar. Set via the `checksum` URL parameter; default true.
+	//
+	// With it disabled the store neither hashes the payload nor publishes the sidecar, which
+	// removes a full-payload SHA-256 and a second create/write/fsync/rename/dir-fsync cycle
+	// from every write. Nothing in this repository reads a sidecar back, and no read path
+	// verifies one, so disabling it is a write-cost decision rather than an integrity one.
+	//
+	// Switching the flag on an existing store directory has these semantics:
+	//
+	//   - true -> false, key rewritten: the sidecar left by the earlier write is removed
+	//     best-effort as part of the new publication, so it cannot survive describing content
+	//     that is gone.
+	//   - true -> false, key not rewritten: the sidecar persists and still matches the content
+	//     present.
+	//   - false -> true: the sidecar is regenerated on the next write to that key only. Keys
+	//     that are not rewritten have none; there is no backfill.
+	//   - Del removes the sidecar either way, and treats an absent one as success.
+	checksum bool
 }
 
 func (s *File) debugEnabled() bool {
@@ -427,9 +493,14 @@ func releaseWritePermit() {
 //
 // The storeURL format follows the pattern: file:///path/to/storage/directory?param1=value1&param2=value2
 // Supported URL parameters include:
-// - header: Custom header to prepend to blobs (can be hex-encoded or plain text)
-// - eofmarker: Custom footer marker to append to blobs (can be hex-encoded or plain text)
-// - checksum: When set to "true", enables SHA256 checksumming of blobs
+//   - header: Custom header to prepend to blobs (can be hex-encoded or plain text)
+//   - eofmarker: Custom footer marker to append to blobs (can be hex-encoded or plain text)
+//   - checksum: "true"/"1" (the default when the parameter is absent) digests every blob and
+//     publishes a "<filename>.sha256" sidecar beside it. "false"/"0" skips both the digest and
+//     the sidecar, and removes any sidecar an earlier write left behind. Any other value is a
+//     configuration error. See the checksum field on File for the mode-transition semantics.
+//   - fsyncMode: "full" (the default when the parameter is absent), "data" or "none". Controls
+//     how much of the atomic publication is flushed to stable storage; see the fsyncMode docs.
 //
 // Parameters:
 //   - logger: Logger instance for recording operations and errors
@@ -500,6 +571,11 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 		return nil, err
 	}
 
+	parsedChecksum, err := parseChecksum(storeURL.Query().Get("checksum"))
+	if err != nil {
+		return nil, err
+	}
+
 	if len(storeOpts.SubDirectory) > 0 {
 		if err := os.MkdirAll(filepath.Join(path, storeOpts.SubDirectory), 0755); err != nil {
 			return nil, errors.NewStorageError("[File] failed to create sub directory", err)
@@ -514,6 +590,7 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 		blobDeletionScheduler: storeOpts.BlobDeletionScheduler,
 		storeType:             storeOpts.StoreType,
 		fsyncMode:             parsedFsyncMode,
+		checksum:              parsedChecksum,
 	}
 
 	// Check if longterm storage options are provided
@@ -789,19 +866,28 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 		}
 	}()
 
-	// Set up the hasher; keep destination as the raw *os.File so io.Copy can use the ReadFrom fast path
-	hasher := sha256.New()
+	// Set up the hasher. A store with checksums disabled has none at all: the payload is
+	// neither teed nor digested, and no sidecar is published.
+	var hasher hash.Hash
+	if s.checksum {
+		hasher = sha256.New()
+	}
 
 	// Write header unless SkipHeader option is set. Write it to both the file and the hasher.
 	if !merged.SkipHeader {
 		header := fileformat.NewHeader(fileType)
-		if err := header.Write(io.MultiWriter(file, hasher)); err != nil {
+
+		headerDst := io.Writer(file)
+		if hasher != nil {
+			headerDst = io.MultiWriter(file, hasher)
+		}
+
+		if err := header.Write(headerDst); err != nil {
 			return errors.NewStorageError("[File][SetFromReader] [%s] failed to write header to file", filename, err)
 		}
 	}
 
-	// Stream the body using io.Copy with io.TeeReader so the file can use ReadFrom fast path while also hashing.
-	bytesWritten, err := io.Copy(file, io.TeeReader(reader, hasher))
+	bytesWritten, err := writeBody(file, reader, hasher)
 	if err != nil {
 		return errors.NewStorageError("[File][SetFromReader] [%s] failed to write data to file", filename, err)
 	}
@@ -823,6 +909,21 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 	}
 	cleanupTmpFile = false
 
+	if !s.checksum {
+		// A blob written while checksums were enabled leaves a sidecar behind; republishing the
+		// blob without checksums would leave that sidecar describing content that no longer
+		// exists. Nothing in this package can prove a sidecar is absent — errorOnOverwrite treats
+		// every Stat error as "missing", renameTempFile has a documented TOCTOU window, and Del
+		// swallows a failed sidecar unlink — so the removal is attempted unconditionally rather
+		// than predicated on any such proof.
+		//
+		// Best-effort: a stale sidecar is inert (nothing in this repository reads one) and must
+		// not turn a successfully published blob into a failed write.
+		if removeErr := s.removeStorePath(filename + checksumExtension); removeErr != nil && !os.IsNotExist(removeErr) {
+			s.logger.Warnf("[File][SetFromReader] failed to remove stale checksum file for %s: %v", filename, removeErr)
+		}
+	}
+
 	// Write SHA256 hash file
 	if err = s.writeHashFile(hasher, filename); err != nil {
 		if removeErr := s.removeStorePath(filename); removeErr != nil && !os.IsNotExist(removeErr) {
@@ -836,6 +937,44 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 	return nil
 }
 
+// writeBody streams the blob body from reader into file, digesting it into hasher when the
+// store has checksums enabled, and returns the number of body bytes written.
+//
+// Set hands down a memReader carrying the whole payload. That lets the body be written and
+// hashed with one call each instead of running a chunked copy loop over a payload the caller
+// already holds complete in memory. Every other source is copied through the shared 1 MiB
+// buffer; onlyWriter is what keeps that buffer in force against io.CopyBuffer's ReaderFrom
+// shortcut.
+func writeBody(file *os.File, reader io.Reader, hasher hash.Hash) (int64, error) {
+	if mr, ok := reader.(memReader); ok {
+		if hasher != nil {
+			_, _ = hasher.Write(mr.buf) // hash.Hash never reports a write error
+		}
+
+		n, err := file.Write(mr.buf)
+
+		return int64(n), err
+	}
+
+	if hasher != nil {
+		return copyWithPooledBuffer(file, io.TeeReader(reader, hasher))
+	}
+
+	// No TeeReader in the way: if the source can write itself, let it drive the copy — no
+	// buffer of ours is involved. How many file.Write calls that costs is the source's
+	// business, and io.WriterTo puts no bound on it.
+	if wt, ok := reader.(io.WriterTo); ok {
+		return wt.WriteTo(file)
+	}
+
+	return copyWithPooledBuffer(file, reader)
+}
+
+// writeHashFile publishes the "<filename>.sha256" sidecar for a completed blob.
+//
+// A nil hasher means the store has checksums disabled, in which case there is nothing to
+// digest and nothing to publish: the function is a no-op success. Callers rely on that
+// contract rather than guarding the call themselves.
 func (s *File) writeHashFile(hasher hash.Hash, filename string) error {
 	if hasher == nil {
 		return nil
@@ -864,6 +1003,10 @@ func (s *File) writeHashFile(hasher hash.Hash, filename string) error {
 // This method is a convenience wrapper around SetFromReader that converts the byte slice
 // to a reader before delegating to SetFromReader for the actual storage operation.
 //
+// The reader it passes down is a memReader, which keeps the complete payload visible to
+// SetFromReader so the body can be written and hashed in a single call each rather than
+// through a chunked copy loop.
+//
 // Parameters:
 //   - ctx: Context for the operation
 //   - key: The key identifying the blob
@@ -877,7 +1020,7 @@ func (s *File) Set(ctx context.Context, key []byte, fileType fileformat.FileType
 	keyHex := formatKeyHex(key)
 	s.debugf("[File] Set start key=%s type=%s size=%d", keyHex, fileType, len(value))
 
-	reader := io.NopCloser(bytes.NewReader(value))
+	reader := memReader{Reader: bytes.NewReader(value), buf: value}
 
 	err := s.SetFromReader(ctx, key, fileType, reader, opts...)
 	if err == nil {
