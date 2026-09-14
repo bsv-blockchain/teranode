@@ -356,7 +356,7 @@ func TestGetMerkleProof(t *testing.T) {
 		httpErr, ok := err.(*echo.HTTPError)
 		require.True(t, ok)
 		assert.Equal(t, http.StatusNotFound, httpErr.Code)
-		require.Equal(t, "transaction not found; BUMP proofs require a transaction ID", httpErr.Message)
+		require.Equal(t, "mined transaction not found; BUMP proofs require a mined transaction ID", httpErr.Message)
 
 		mockRepo.AssertExpectations(t)
 	})
@@ -400,7 +400,7 @@ func TestGetMerkleProof(t *testing.T) {
 		httpErr, ok := err.(*echo.HTTPError)
 		require.True(t, ok)
 		require.Equal(t, http.StatusNotFound, httpErr.Code)
-		require.Equal(t, "transaction not found; BUMP proofs require a transaction ID", httpErr.Message)
+		require.Equal(t, "mined transaction not found; BUMP proofs require a mined transaction ID", httpErr.Message)
 
 		mockRepo.AssertExpectations(t)
 	})
@@ -529,7 +529,11 @@ func TestGetMerkleProof_OrphanOnly_Returns404(t *testing.T) {
 // Keep the old fallback's data available so this fails with HTTP 200 before the fix.
 func TestGetMerkleProof_SubtreeHash_ReturnsNotFound(t *testing.T) {
 	initPrometheusMetrics()
-	for _, mode := range []ReadMode{JSON, HEX, BINARY_STREAM} {
+	for _, tc := range []struct {
+		mode   ReadMode
+		suffix string
+	}{{JSON, "/json"}, {HEX, "/hex"}, {BINARY_STREAM, ""}} {
+		mode := tc.mode
 		t.Run(fmt.Sprint(mode), func(t *testing.T) {
 			mockRepo := &MockRepositoryForMerkleProof{}
 
@@ -569,7 +573,7 @@ func TestGetMerkleProof_SubtreeHash_ReturnsNotFound(t *testing.T) {
 				repository: mockRepo,
 			}
 			e := echo.New()
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/merkle_proof/"+queriedHash.String()+"/json", nil)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/merkle_proof/"+queriedHash.String()+tc.suffix, nil)
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
 			c.SetParamNames("hash")
@@ -581,7 +585,7 @@ func TestGetMerkleProof_SubtreeHash_ReturnsNotFound(t *testing.T) {
 			require.Equal(t, http.StatusNotFound, rec.Code)
 			var response map[string]string
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
-			require.Equal(t, "transaction not found; BUMP proofs require a transaction ID", response["message"])
+			require.Equal(t, "mined transaction not found; BUMP proofs require a mined transaction ID", response["message"])
 			mockRepo.AssertNotCalled(t, "FindBlocksContainingSubtree", mock.Anything, mock.Anything)
 			mockRepo.AssertExpectations(t)
 		})
