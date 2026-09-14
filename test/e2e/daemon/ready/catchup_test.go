@@ -241,6 +241,9 @@ func newNode(t *testing.T, nodeNumber int, enableBlockPersister bool, enablePrun
 				s.P2P.StaticPeers = []string{}
 				s.ChainCfgParams.CoinbaseMaturity = 1
 				s.GlobalBlockHeightRetention = 1
+				// This test exercises recovery after pruning. Allow the small block
+				// burst without rate-limit retries consuming the sync deadline.
+				s.Asset.HTTPHeavyRateLimit = 100
 				s.P2P.SyncCoordinatorPeriodicEvaluationInterval = 1 * time.Second
 				s.Pruner.BlockTrigger = settings.PrunerBlockTriggerOnBlockPersisted
 			},

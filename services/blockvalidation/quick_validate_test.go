@@ -31,6 +31,7 @@ func TestQuickValidateBlock(t *testing.T) {
 
 		block := testhelpers.CreateTestBlocks(t, 1)[0]
 		block.Header.HashMerkleRoot = block.CoinbaseTx.TxIDChainHash()
+		block.TransactionCount = 1
 
 		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "")
 		assert.NoError(t, err, "Should successfully quick validate an empty block")
