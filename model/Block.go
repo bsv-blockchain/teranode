@@ -918,8 +918,16 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	// never poisoned.
 	//
 	// Ordering constraint: this must stay ABOVE CoinbaseScriptSigLengthInBounds, which indexes
-	// Inputs[0] unconditionally and documents IsCoinbase() as its "at least one input" guarantee.
-	if !b.CoinbaseTx.IsCoinbase() {
+	// Inputs[0] unconditionally and documents this check as its "at least one input" guarantee —
+	// IsConsensusCoinbase requires exactly one input, so that guarantee still holds.
+	//
+	// IsConsensusCoinbase rather than go-bt's Tx.IsCoinbase: the latter accepts a null prevout
+	// hash with EITHER a 0xFFFFFFFF index OR a 0xFFFFFFFF sequence number, so it admits a shape
+	// svnode rejects. This is where the verdict is actually decided — above the checkpoint it is
+	// the only check that runs, and on catch-up a quick-route rejection that is neither corrupt
+	// nor incomplete comes back through here — so a looser test here overrules the strict one on
+	// the quick route.
+	if !IsConsensusCoinbase(b.CoinbaseTx) {
 		return false, bindErr("[BLOCK][%s] block coinbase tx is not a valid coinbase tx", b.String())
 	}
 
@@ -1055,6 +1063,31 @@ func bindClassifiedError(merkleRootChecked bool, format string, args ...interfac
 	}
 
 	return errors.NewBlockCorruptError(format, args...)
+}
+
+// IsConsensusCoinbase reports whether tx has the coinbase shape consensus requires:
+// exactly one input whose previous outpoint is NULL — a zero hash AND an index of
+// 0xFFFFFFFF. This is svnode's CTransaction::IsCoinBase (vin.size() == 1 &&
+// vin[0].prevout.IsNull(), where COutPoint::IsNull() is hash.IsNull() && n == uint32(-1)).
+//
+// Deliberately NOT go-bt's Tx.IsCoinbase, which accepts a null hash plus EITHER a
+// 0xFFFFFFFF prevout index OR a 0xFFFFFFFF sequence number. The sequence number says
+// nothing about coinbase-ness, so that disjunction admits a transaction svnode rejects:
+// prevout (0x00..00, 0) with sequence 0xFFFFFFFF. Anywhere the answer decides a consensus
+// verdict, the looser predicate is a chain-split shape, so use this one.
+func IsConsensusCoinbase(tx *bt.Tx) bool {
+	if tx == nil || len(tx.Inputs) != 1 {
+		return false
+	}
+
+	in := tx.Inputs[0]
+	if in.PreviousTxOutIndex != 0xFFFFFFFF {
+		return false
+	}
+
+	var nullHash [32]byte
+
+	return bytes.Equal(in.PreviousTxID(), nullHash[:])
 }
 
 // CoinbaseScriptSigLengthInBounds reports whether the coinbase scriptSig (unlocking script)
@@ -1219,9 +1252,10 @@ func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params, storeSupportsOu
 	}
 
 	// Skip the coinbase no-inflation check (coinbaseOutput <= subsidy + fees) only when ALL
-	// THREE conditions hold: the block is at/below the highest HARDCODED checkpoint, the store
-	// can actually produce the fee=0 subtrees this skip exists to tolerate, and the block is a
-	// confirmed ancestor of the pinned checkpoint. Each condition answers a distinct concern:
+	// FOUR conditions hold: the block is at/below the highest HARDCODED checkpoint, the store
+	// can actually produce the fee=0 subtrees this skip exists to tolerate, the block is a
+	// confirmed ancestor of the pinned checkpoint, and its body was bound to the header.
+	// Each condition answers a distinct concern:
 	//
 	//  1. NOT gated on the OutpointOnlyBelowCheckpoint setting. The outpoint-only fast path
 	//     persists subtree fees as 0. A block synced that way must still revalidate on
@@ -1248,10 +1282,22 @@ func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params, storeSupportsOu
 	//     SetCheckpointConfirmedAncestor) because it needs blockchain state model cannot see; it
 	//     is fail-safe (any lookup error or ambiguity yields false → the check runs).
 	//
+	//  4. GATED on merkleRootChecked, exactly as the sibling validOrderAndBlessed skip is.
+	//     Conjunct 3's reasoning — "the checkpoint transitively commits the coinbase" — only
+	//     holds once the body has been hashed against the header: the checkpoint commits the
+	//     header, the header commits the merkle root, the merkle root commits the coinbase.
+	//     Without that last step the checkpoint says nothing about the coinbase, and skipping
+	//     the arithmetic would leave its value unchecked. merkleRootChecked is already a
+	//     parameter here (it classifies the verdicts below); this makes it gate the skip too.
+	//     The two below-checkpoint skips are still not congruent: skipOrderAndBlessedBelowCheckpoint
+	//     additionally requires the OutpointOnlyBelowCheckpoint opt-in (via OutpointOnlyEligible),
+	//     which this skip deliberately does NOT — see conjunct 1. So it engages on a subset of the
+	//     blocks this one does; the binding is the precondition they share, not the whole predicate.
+	//
 	// HighestCheckpointHeight is the single source of truth shared with the fast-path write
 	// side, so the fee-write boundary and this fee-skip boundary cannot diverge (invariant
 	// I3); see model/checkpoint.go.
-	if storeSupportsOutpointOnly && checkpointConfirmedAncestor && b.Height <= HighestCheckpointHeight(params.Checkpoints) {
+	if merkleRootChecked && storeSupportsOutpointOnly && checkpointConfirmedAncestor && b.Height <= HighestCheckpointHeight(params.Checkpoints) {
 		return nil
 	}
 

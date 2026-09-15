@@ -81,7 +81,10 @@ func newSkipTestSettings(t *testing.T, enabled bool, checkpointHeight int32) *se
 // is a confirmed checkpoint ancestor AND a checkpoint exists AND 0 < height <=
 // checkpoint) must hold; any one missing keeps the skip OFF (fail-safe). The
 // store-support and confirmed-ancestor gates mirror the sibling fee skip in
-// checkBlockRewardAndFees so both skips engage on exactly the same blocks.
+// checkBlockRewardAndFees, and both now require the body to have been bound. They
+// are not congruent, though: this skip additionally requires the
+// OutpointOnlyBelowCheckpoint opt-in, which the fee skip deliberately does not, so
+// it engages on a subset of the fee skip's blocks.
 func TestBlock_SkipOrderAndBlessedBelowCheckpoint_Predicate(t *testing.T) {
 	const checkpointHeight = int32(2000)
 
@@ -181,6 +184,13 @@ func TestBlock_Valid_SkipRefusedWhenMerkleRootNotChecked(t *testing.T) {
 
 	coinbase, err := bt.NewTxFromString(CoinbaseHex)
 	require.NoError(t, err)
+
+	// An unbound body now also refuses the sibling fee skip, so the coinbase value has to
+	// fit under the bare subsidy for this test to reach step 12 at all. The value is
+	// irrelevant to what is asserted here (which skip engages).
+	for _, out := range coinbase.Outputs {
+		out.Satoshis = 1
+	}
 
 	txHash, err := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 	require.NoError(t, err)

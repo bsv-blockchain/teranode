@@ -268,6 +268,25 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		return err
 	}
 
+	// The binding says the header commits to this body; it does not say the single
+	// transaction in a no-subtree body is coinbase-shaped. The route's other coinbase
+	// checks are len(Inputs) != 0 and the scriptSig length bound, neither of which
+	// rejects an ordinary spend standing in for the coinbase. Deliberately placed AFTER
+	// the binding: the transaction is then the miner's own committed body, so a
+	// non-coinbase one is genuine invalidity — ahead of the binding the same failure
+	// would be indistinguishable from a corrupted download (bitcoin-sv/teranode#4692).
+	// Scoped to the no-subtree shape, which is the shape this binding covers. A body that
+	// carries subtrees is bound later, by validateSubtrees' CheckMerkleRoot, and gets the
+	// same shape check there — behind its own binding, so both carry the invalid class for
+	// the same reason.
+	//
+	// IsConsensusCoinbase rather than go-bt's Tx.IsCoinbase: the latter is a disjunction that
+	// also accepts a 0xFFFFFFFF sequence number in place of a null prevout index, admitting a
+	// transaction svnode rejects.
+	if len(block.Subtrees) == 0 && !model.IsConsensusCoinbase(block.CoinbaseTx) {
+		return errors.NewBlockInvalidError("[quickValidateBlock][%s] coinbase-only body whose only transaction is not a coinbase", block.Hash().String())
+	}
+
 	// Compute the below-checkpoint fast-path mode ONCE for this block and thread it through
 	// the pipeline (rather than re-deriving it at each seam) so every phase agrees.
 	outpointOnly := u.quickValidateOutpointOnly(block)
@@ -287,7 +306,7 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		if err != nil {
 			// Preserve a corrupt-body verdict from validateSubtrees (bitcoin-sv/teranode#4692) instead
 			// of shadowing it with an outer ErrProcessing.
-			if errors.IsBlockCorrupt(err) {
+			if errors.IsBlockCorrupt(err) || errors.Is(err, errors.ErrBlockInvalid) {
 				return err
 			}
 
@@ -371,6 +390,25 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		return emptyWG, nil, err
 	}
 
+	// The binding says the header commits to this body; it does not say the single
+	// transaction in a no-subtree body is coinbase-shaped. The route's other coinbase
+	// checks are len(Inputs) != 0 and the scriptSig length bound, neither of which
+	// rejects an ordinary spend standing in for the coinbase. Deliberately placed AFTER
+	// the binding: the transaction is then the miner's own committed body, so a
+	// non-coinbase one is genuine invalidity — ahead of the binding the same failure
+	// would be indistinguishable from a corrupted download (bitcoin-sv/teranode#4692).
+	// Scoped to the no-subtree shape, which is the shape this binding covers. A body that
+	// carries subtrees is bound later, by validateSubtrees' CheckMerkleRoot, and gets the
+	// same shape check there — behind its own binding, so both carry the invalid class for
+	// the same reason.
+	//
+	// IsConsensusCoinbase rather than go-bt's Tx.IsCoinbase: the latter is a disjunction that
+	// also accepts a 0xFFFFFFFF sequence number in place of a null prevout index, admitting a
+	// transaction svnode rejects.
+	if len(block.Subtrees) == 0 && !model.IsConsensusCoinbase(block.CoinbaseTx) {
+		return emptyWG, nil, errors.NewBlockInvalidError("[quickValidateBlockAsync][%s] coinbase-only body whose only transaction is not a coinbase", block.Hash().String())
+	}
+
 	// Compute the below-checkpoint fast-path mode ONCE for this block and thread it through
 	// the pipeline (rather than re-deriving it at each seam) so every phase agrees.
 	outpointOnly := u.quickValidateOutpointOnly(block)
@@ -396,7 +434,7 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 			// Preserve a corrupt-body verdict from validateSubtrees (bitcoin-sv/teranode#4692) instead
 			// of shadowing it with an outer ErrProcessing, so the caller re-downloads a
 			// fresh body rather than treating it as a transient processing error.
-			if errors.IsBlockCorrupt(err) {
+			if errors.IsBlockCorrupt(err) || errors.Is(err, errors.ErrBlockInvalid) {
 				return wg, freshlyWritten, err
 			}
 
@@ -915,6 +953,54 @@ func (u *BlockValidation) validateSubtrees(ctx context.Context, block *model.Blo
 		}
 
 		return 0, errors.NewProcessingError("[validateSubtrees][%s] merkle root check failed", block.Hash().String(), err)
+	}
+
+	// CVE-2012-2459. The merkle root CANNOT detect a duplicated trailing transaction:
+	// the duplicate-last-node-when-odd rule makes the mutated body produce the SAME root,
+	// and so the same block hash, as the honest block. A body that binds to a
+	// checkpoint-certified header can therefore still carry a repeated transaction,
+	// reusing the honest block's proof of work at no mining cost. Block.Valid runs the
+	// pooled/disk-backed equivalent at its step 11; this route holds the slices in memory
+	// and must run the slice-only scan, which is what model.CheckSubtreeSlicesForDuplicateTxs
+	// documents itself as being for.
+	//
+	// Corrupt, not invalid: a duplicated transaction is a defect in the body a peer served,
+	// and the honest hash it binds to must not be condemned (bitcoin-sv/teranode#4692).
+	// The dedup scan below skips slot [0][0] only when it holds the coinbase placeholder,
+	// so "first node is the placeholder" is its unstated precondition, and Valid enforces it
+	// as its own step 7. Without it a first subtree whose node 0 is a real txid — reachable on
+	// a retry that reuses a locally present .subtree blob — passes the merkle check with the
+	// body's true first transaction silently substituted, and the scan would then treat that
+	// txid as an ordinary node.
+	if len(block.SubtreeSlices) > 0 {
+		first := block.SubtreeSlices[0]
+		if first == nil {
+			return 0, errors.NewProcessingError("[validateSubtrees][%s] first subtree was released during validation", block.Hash().String())
+		}
+
+		if len(first.Nodes) == 0 {
+			return 0, errors.NewBlockCorruptError("[validateSubtrees][%s] first subtree has no nodes", block.Hash().String())
+		}
+
+		if !first.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholder) {
+			return 0, errors.NewBlockCorruptError("[validateSubtrees][%s] first transaction in first subtree is not a coinbase placeholder: %s", block.Hash().String(), first.Nodes[0].Hash.String())
+		}
+	}
+
+	if err := model.CheckSubtreeSlicesForDuplicateTxs(block.SubtreeSlices); err != nil {
+		return 0, err
+	}
+
+	// The coinbase shape, for the subtree-carrying body. CheckMerkleRoot above substitutes
+	// block.CoinbaseTx's txid for the placeholder before hashing, so by here the header
+	// commits to this exact transaction — which is why an unshaped coinbase is genuine
+	// invalidity rather than a corrupt download. The no-subtree shape gets the same check at
+	// this route's entry points, behind its own binding.
+	//
+	// The shape check in getBlockTransactions does NOT cover this: it inspects
+	// subtreeData.Txs[0], a different object from block.CoinbaseTx.
+	if !model.IsConsensusCoinbase(block.CoinbaseTx) {
+		return 0, errors.NewBlockInvalidError("[validateSubtrees][%s] block coinbase tx is not a valid coinbase tx", block.Hash().String())
 	}
 
 	return existingBlockID, nil

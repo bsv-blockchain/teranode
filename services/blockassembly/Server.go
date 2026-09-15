@@ -1839,6 +1839,16 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		if len(coinbaseTx.Inputs[0].UnlockingScript.Bytes()) < 2 || len(coinbaseTx.Inputs[0].UnlockingScript.Bytes()) > int(ba.blockAssembler.settings.ChainCfgParams.MaxCoinbaseScriptSigSize) {
 			return nil, errors.NewProcessingError("[BlockAssembly][%s] bad coinbase length", jobID)
 		}
+
+		// The submitted coinbase must have the shape consensus requires — a null prevout,
+		// not merely a null prevout hash. block.Valid below applies the same predicate, and
+		// a failure there is treated as "the subtreeprocessor created an invalid block" and
+		// resets block assembly. Rejecting the submission here keeps a malformed coinbase
+		// from a local miner out of that path: it is the submitter's input that is wrong,
+		// not assembly's state.
+		if !model.IsConsensusCoinbase(coinbaseTx) {
+			return nil, errors.NewProcessingError("[BlockAssembly][%s] submitted coinbase transaction is not a valid coinbase", jobID)
+		}
 	} else {
 		// recreate coinbase tx here, nothing was passed in
 		coinbaseTx, err = jobItem.Value().MiningCandidate.CreateCoinbaseTxCandidate(ba.blockAssembler.settings)
