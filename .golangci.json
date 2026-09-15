@@ -89,6 +89,13 @@
             "forbidigo"
           ],
           "path": "errors"
+        },
+        {
+          "linters": [
+            "depguard",
+            "forbidigo"
+          ],
+          "path": "test/scripts"
         }
       ]
     },
