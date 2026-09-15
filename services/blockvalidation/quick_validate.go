@@ -310,7 +310,7 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		}
 	}
 
-	if err := u.checkQuickValidationCoinbaseLength(block, "quickValidateBlock"); err != nil {
+	if err := u.checkQuickValidationCoinbase(block, "quickValidateBlock"); err != nil {
 		return err
 	}
 
@@ -416,31 +416,37 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		}
 	}
 
-	if err := u.checkQuickValidationCoinbaseLength(block, "quickValidateBlockAsync"); err != nil {
+	if err := u.checkQuickValidationCoinbase(block, "quickValidateBlockAsync"); err != nil {
 		return wg, freshlyWritten, err
 	}
 
 	return wg, freshlyWritten, u.commitBlock(ctx, block, peerID, "quickValidateBlockAsync")
 }
 
-// checkQuickValidationCoinbaseLength enforces model.CoinbaseScriptSigLengthInBounds on the
-// quick-validation path, which never calls block.Valid and so would otherwise never run its step 4b
-// at all (bitcoin-sv/teranode#4692). Called once, after subtree processing (if any) has already
-// returned successfully, at which point the body is merkle-bound on BOTH shapes:
+// checkQuickValidationCoinbase enforces model.CoinbaseCommonRuleViolation (bitcoin-sv/teranode#4835)
+// and model.CoinbaseScriptSigLengthInBounds (bitcoin-sv/teranode#4692) on the quick-validation path,
+// which never calls block.Valid and so would otherwise never run either coinbase check at all. They
+// run in bitcoin-sv's CheckCoinbase order, transaction rules before bad-cb-length. Called once,
+// after subtree processing (if any) has already returned successfully, at which point the body is
+// merkle-bound on BOTH shapes:
 //   - block.Subtrees non-empty: processBlockSubtrees / processBlockSubtreesPipelineAsync's common
 //     tail (validateSubtrees) already ran CheckMerkleRoot successfully.
 //   - block.Subtrees empty: model.Block.CheckCoinbaseOnlyBodyBound ran at this route's entry, and
 //     for a single-transaction block the header merkle root IS the coinbase txid — the same binding
 //     model applies at its own binding block.
 //
-// So a bad coinbase length here is genuine consensus invalidity on either shape, condemnable once,
-// exactly as model's step 4b classifies it through bindErr. There is no unbound shape left on this
+// So a coinbase rule breach here is genuine consensus invalidity on either shape, condemnable once,
+// exactly as Valid classifies both checks through bindErr. There is no unbound shape left on this
 // route for a corrupt verdict to apply to.
 //
 // This is defence-in-depth, not a commonly-reachable path: quick validation only runs for blocks at
 // or below the highest hash-verified checkpoint for this catchup run (catchup.go,
 // tryQuickValidation).
-func (u *BlockValidation) checkQuickValidationCoinbaseLength(block *model.Block, caller string) error {
+func (u *BlockValidation) checkQuickValidationCoinbase(block *model.Block, caller string) error {
+	if reason := model.CoinbaseCommonRuleViolation(block.CoinbaseTx, block.Height, u.settings.ChainCfgParams); reason != "" {
+		return errors.NewBlockInvalidError("[%s][%s] coinbase breaks a transaction rule: %s", caller, block.Hash().String(), reason)
+	}
+
 	if !model.CoinbaseScriptSigLengthInBounds(block.CoinbaseTx, u.settings.ChainCfgParams) {
 		return errors.NewBlockInvalidError("[%s][%s] bad coinbase length", caller, block.Hash().String())
 	}

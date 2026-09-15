@@ -923,6 +923,17 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		return false, bindErr("[BLOCK][%s] block coinbase tx is not a valid coinbase tx", b.String())
 	}
 
+	// bitcoin-sv's CheckTransactionCommon on the coinbase: non-empty inputs and outputs, the
+	// consensus size limit, the output money range and the pre-Genesis sigop limit
+	// (bitcoin-sv/teranode#4835). Regular transactions get these from BDK; the coinbase does not go
+	// through BDK, so they are applied here. Same position as in bitcoin-sv's CheckCoinbase (after
+	// the is-coinbase check, before bad-cb-length) and the same binding-aware classification as the
+	// checks either side of it. Factored into CoinbaseCommonRuleViolation so the quick-validation
+	// path enforces the identical rules.
+	if reason := CoinbaseCommonRuleViolation(b.CoinbaseTx, b.Height, settings.ChainCfgParams); reason != "" {
+		return false, bindErr("[BLOCK][%s] coinbase breaks a transaction rule: %s", b.String(), reason)
+	}
+
 	// 4b. Check that the coinbase scriptSig (unlocking script) length is within consensus bounds.
 	// Deliberately AFTER the merkle binding (bitcoin-sv/teranode#4692): a bound
 	// body's coinbase IS the miner's committed coinbase, so a bad length on it is genuine consensus

@@ -30,6 +30,9 @@ func shortScriptSigCoinbaseForService(t *testing.T) *bt.Tx {
 	coinbaseTx := bt.NewTx()
 	require.NoError(t, coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0))
 	coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x01})
+	// One output, so the coinbase transaction rules (bitcoin-sv/teranode#4835) pass and the length
+	// check is what fails.
+	coinbaseTx.AddOutput(&bt.Output{Satoshis: 0, LockingScript: bscript.NewFromBytes([]byte{bscript.OpTRUE})})
 	require.True(t, coinbaseTx.IsCoinbase(), "fixture must still be a coinbase")
 
 	return coinbaseTx
