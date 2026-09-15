@@ -249,7 +249,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			GetMissingTransactions:                getInt("blockvalidation_getMissingTransactions", 32, alternativeContext...),
 			QuorumTimeout:                         getDuration("block_quorum_timeout", 10*time.Second, alternativeContext...),
 			ProcessTxMetaUsingStoreBatchSize:      getInt("blockvalidation_processTxMetaUsingStore_BatchSize", 1024, alternativeContext...),
-			UTXOPersisterBufferSize:               getString("utxoPersister_buffer_size", "4KB", alternativeContext...),
+			UTXOPersisterBufferSize:               getString("utxoPersister_buffer_size", "256KB", alternativeContext...),
 			UTXOPersisterDirect:                   getBool("direct", true, alternativeContext...),
 			TxStore:                               getURL("txstore", "", alternativeContext...),
 			UtxoStore:                             getURL("txmeta_store", "", alternativeContext...),

@@ -765,29 +765,35 @@ func TestNewWithFsyncMode(t *testing.T) {
 // visible in CI. Operators sizing for NFS-backed deployments can compare the gap
 // between fsyncModeFull and fsyncModeNone here against measurements on their target
 // filesystem to decide whether to opt out of the directory fsync.
+//
+// The checksum axis measures what the checksum store parameter costs on this same path.
+// It measures the payload digest and the sidecar's second atomic publication together and
+// cannot separate them, so it says what the knob costs, not what hashing alone costs.
 func BenchmarkSetFromReader_FsyncModes(b *testing.B) {
-	for _, payloadSize := range []int{256, 4 * 1024, 64 * 1024} {
+	for _, payloadSize := range []int{256, 4 * 1024, 64 * 1024, 1024 * 1024} {
 		for _, mode := range []string{"full", "data", "none"} {
-			b.Run(fmt.Sprintf("payload=%dB/mode=%s", payloadSize, mode), func(b *testing.B) {
-				tempDir := b.TempDir()
+			for _, checksum := range []bool{true, false} {
+				b.Run(fmt.Sprintf("payload=%dB/mode=%s/checksum=%v", payloadSize, mode, checksum), func(b *testing.B) {
+					tempDir := b.TempDir()
 
-				u, err := url.Parse("file://" + tempDir + "?fsyncMode=" + mode)
-				require.NoError(b, err)
+					u, err := url.Parse(fmt.Sprintf("file://%s?fsyncMode=%s&checksum=%v", tempDir, mode, checksum))
+					require.NoError(b, err)
 
-				f, err := New(ulogger.TestLogger{}, u)
-				require.NoError(b, err)
+					f, err := New(ulogger.TestLogger{}, u)
+					require.NoError(b, err)
 
-				payload := bytes.Repeat([]byte("x"), payloadSize)
-				ctx := context.Background()
+					payload := bytes.Repeat([]byte("x"), payloadSize)
+					ctx := context.Background()
 
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
-					key := []byte(fmt.Sprintf("bench-%d", i))
-					if err := f.Set(ctx, key, fileformat.FileTypeTesting, payload); err != nil {
-						b.Fatal(err)
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						key := []byte(fmt.Sprintf("bench-%d", i))
+						if err := f.Set(ctx, key, fileformat.FileTypeTesting, payload); err != nil {
+							b.Fatal(err)
+						}
 					}
-				}
-			})
+				})
+			}
 		}
 	}
 }
@@ -1591,4 +1597,464 @@ func TestFile_BlockHeightCh_ConsumerExitsOnChannelClose(t *testing.T) {
 	// every iteration.)
 	require.Equal(t, uint32(42), fileStore.currentBlockHeight.Load(),
 		"height must not be clobbered to 0 by a spin on the closed channel")
+}
+
+func newFileStoreFromURL(t testing.TB, rawURL string) *File {
+	t.Helper()
+
+	u, err := url.Parse(rawURL)
+	require.NoError(t, err)
+
+	f, err := New(ulogger.TestLogger{}, u)
+	require.NoError(t, err)
+
+	return f
+}
+
+func testBlobFilename(t testing.TB, f *File, dir string, key []byte) string {
+	t.Helper()
+
+	filename, err := f.options.ConstructFilename(dir, key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+
+	return filename
+}
+
+// requireSidecarMatchesBlob recomputes the digest from the bytes actually on disk rather than
+// from anything the store held, so the sidecar is checked against the published blob and not
+// against the store's own hasher.
+func requireSidecarMatchesBlob(t testing.TB, blobPath string) {
+	t.Helper()
+
+	onDisk, err := os.ReadFile(blobPath)
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(blobPath + checksumExtension)
+	require.NoError(t, err)
+
+	parts := strings.Fields(string(content))
+	require.Len(t, parts, 2, "sidecar must hold a digest and a filename")
+	require.Equal(t, fmt.Sprintf("%x", sha256.Sum256(onDisk)), parts[0])
+	require.Equal(t, filepath.Base(blobPath), parts[1])
+}
+
+func requireNoSidecar(t testing.TB, blobPath string) {
+	t.Helper()
+
+	_, err := os.Stat(blobPath + checksumExtension)
+	require.True(t, os.IsNotExist(err), "no checksum sidecar expected beside %s", blobPath)
+}
+
+func requireNoTempFilesLeft(t testing.TB, dir string) {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+
+	for _, entry := range entries {
+		require.False(t, strings.HasSuffix(entry.Name(), ".tmp"), "temporary file should be cleaned up: %s", entry.Name())
+	}
+}
+
+func TestParseChecksumParam(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want bool
+		ok   bool
+	}{
+		{"", true, true},
+		{"true", true, true},
+		{"TRUE", true, true},
+		{"1", true, true},
+		{"false", false, true},
+		{"FALSE", false, true},
+		{"0", false, true},
+		{"bogus", true, false},
+		{"yes", true, false},
+	} {
+		got, err := parseChecksum(tc.in)
+		if tc.ok {
+			require.NoError(t, err, "input=%q", tc.in)
+			require.Equal(t, tc.want, got, "input=%q", tc.in)
+		} else {
+			require.Error(t, err, "input=%q", tc.in)
+		}
+	}
+
+	t.Run("store construction fails on an invalid value", func(t *testing.T) {
+		u, err := url.Parse("file://" + t.TempDir() + "?checksum=bogus")
+		require.NoError(t, err)
+
+		_, err = New(ulogger.TestLogger{}, u)
+		require.Error(t, err)
+	})
+}
+
+func TestNewWithChecksumDisabled(t *testing.T) {
+	ctx := context.Background()
+	key := []byte("checksum-param")
+	value := []byte("checksum param payload")
+
+	t.Run("disabled", func(t *testing.T) {
+		tempDir := t.TempDir()
+		f := newFileStoreFromURL(t, "file://"+tempDir+"?checksum=false")
+
+		require.NoError(t, f.Set(ctx, key, fileformat.FileTypeTesting, value))
+
+		got, err := f.Get(ctx, key, fileformat.FileTypeTesting)
+		require.NoError(t, err)
+		require.Equal(t, value, got)
+
+		requireNoSidecar(t, testBlobFilename(t, f, tempDir, key))
+	})
+
+	t.Run("absent parameter keeps the sidecar", func(t *testing.T) {
+		tempDir := t.TempDir()
+		f := newFileStoreFromURL(t, "file://"+tempDir)
+
+		require.NoError(t, f.Set(ctx, key, fileformat.FileTypeTesting, value))
+
+		got, err := f.Get(ctx, key, fileformat.FileTypeTesting)
+		require.NoError(t, err)
+		require.Equal(t, value, got)
+
+		requireSidecarMatchesBlob(t, testBlobFilename(t, f, tempDir, key))
+	})
+}
+
+// TestSetAndSetFromReaderProduceIdenticalBytes guards the in-memory fast path in Set: the
+// bytes it publishes must be indistinguishable from the ones the streaming path publishes,
+// across payload sizes, both checksum settings and both header settings. It asserts bytes,
+// not syscall or call counts.
+func TestSetAndSetFromReaderProduceIdenticalBytes(t *testing.T) {
+	ctx := context.Background()
+
+	for _, payloadSize := range []int{1, 4 * 1024, 64 * 1024, 4 * 1024 * 1024} {
+		for _, checksum := range []bool{true, false} {
+			for _, skipHeader := range []bool{false, true} {
+				name := fmt.Sprintf("payload=%dB/checksum=%v/skipHeader=%v", payloadSize, checksum, skipHeader)
+
+				t.Run(name, func(t *testing.T) {
+					tempDir := t.TempDir()
+					f := newFileStoreFromURL(t, fmt.Sprintf("file://%s?checksum=%v", tempDir, checksum))
+
+					payload := bytes.Repeat([]byte("q"), payloadSize)
+					opts := []options.FileOption{options.WithSkipHeader(skipHeader)}
+
+					setKey := []byte("set-" + name)
+					readerKey := []byte("reader-" + name)
+
+					require.NoError(t, f.Set(ctx, setKey, fileformat.FileTypeTesting, payload, opts...))
+					require.NoError(t, f.SetFromReader(ctx, readerKey, fileformat.FileTypeTesting,
+						io.NopCloser(bytes.NewReader(payload)), opts...))
+
+					var expected []byte
+
+					if !skipHeader {
+						var header bytes.Buffer
+						require.NoError(t, fileformat.NewHeader(fileformat.FileTypeTesting).Write(&header))
+
+						expected = append(expected, header.Bytes()...)
+					}
+
+					expected = append(expected, payload...)
+
+					setFile := testBlobFilename(t, f, tempDir, setKey)
+					readerFile := testBlobFilename(t, f, tempDir, readerKey)
+
+					setBytes, err := os.ReadFile(setFile)
+					require.NoError(t, err)
+					readerBytes, err := os.ReadFile(readerFile)
+					require.NoError(t, err)
+
+					require.True(t, bytes.Equal(expected, setBytes), "Set published %d bytes, expected %d", len(setBytes), len(expected))
+					require.True(t, bytes.Equal(setBytes, readerBytes), "Set and SetFromReader must publish identical bytes")
+
+					for _, blobPath := range []string{setFile, readerFile} {
+						if checksum {
+							requireSidecarMatchesBlob(t, blobPath)
+						} else {
+							requireNoSidecar(t, blobPath)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestSetEmptyPayloadStillErrors(t *testing.T) {
+	tempDir := t.TempDir()
+	f := newFileStoreFromURL(t, "file://"+tempDir)
+
+	key := []byte("empty-payload")
+
+	err := f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "reader provided zero bytes of data")
+
+	_, statErr := os.Stat(testBlobFilename(t, f, tempDir, key))
+	require.True(t, os.IsNotExist(statErr), "no blob should be published for an empty payload")
+
+	requireNoTempFilesLeft(t, tempDir)
+}
+
+// countingReader records how many Read calls the copy loop makes. It deliberately keeps its
+// source in a named field so that neither WriteTo nor ReadFrom is promoted onto it: those
+// would let the copy bypass the store's buffer and make the count meaningless.
+type countingReader struct {
+	src   *bytes.Reader
+	reads int
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	c.reads++
+
+	return c.src.Read(p)
+}
+
+func (c *countingReader) Close() error { return nil }
+
+// TestSetFromReaderUsesConfiguredCopyBuffer is the regression test for the ReaderFrom trap:
+// io.CopyBuffer silently discards the caller's buffer when the destination implements
+// io.ReaderFrom, which *os.File does, and the failure mode is a no-op rather than an error.
+// Only a call count catches it.
+//
+// It measures io.Reader.Read granularity. The generic copy loop issues one destination Write
+// per non-empty Read, so this also fixes the Write granularity of that loop; it says nothing
+// about how many write syscalls those Writes become.
+func TestSetFromReaderUsesConfiguredCopyBuffer(t *testing.T) {
+	ctx := context.Background()
+	payload := bytes.Repeat([]byte("z"), 4*1024*1024)
+
+	for _, checksum := range []bool{true, false} {
+		t.Run(fmt.Sprintf("checksum=%v", checksum), func(t *testing.T) {
+			tempDir := t.TempDir()
+			f := newFileStoreFromURL(t, fmt.Sprintf("file://%s?checksum=%v", tempDir, checksum))
+
+			reader := &countingReader{src: bytes.NewReader(payload)}
+			key := []byte("copy-buffer")
+
+			require.NoError(t, f.SetFromReader(ctx, key, fileformat.FileTypeTesting, reader))
+
+			// 4 MiB through a 1 MiB buffer is 4 full reads plus the terminating empty read the
+			// generic loop always performs. A 32 KiB buffer would take 129.
+			require.LessOrEqual(t, reader.reads, 8,
+				"copy buffer is not in force: %d reads for a 4 MiB payload", reader.reads)
+
+			got, err := f.Get(ctx, key, fileformat.FileTypeTesting)
+			require.NoError(t, err)
+			require.True(t, bytes.Equal(payload, got), "payload must survive the buffered copy")
+		})
+	}
+}
+
+func TestChecksumDisabledRemovesSidecarOnOverwrite(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	key := []byte("checksum-overwrite")
+
+	withChecksum := newFileStoreFromURL(t, "file://"+tempDir)
+	require.NoError(t, withChecksum.Set(ctx, key, fileformat.FileTypeTesting, []byte("first")))
+
+	filename := testBlobFilename(t, withChecksum, tempDir, key)
+	requireSidecarMatchesBlob(t, filename)
+
+	withoutChecksum := newFileStoreFromURL(t, "file://"+tempDir+"?checksum=false")
+	require.NoError(t, withoutChecksum.Set(ctx, key, fileformat.FileTypeTesting, []byte("second"),
+		options.WithAllowOverwrite(true)))
+
+	got, err := withoutChecksum.Get(ctx, key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+	require.Equal(t, []byte("second"), got)
+
+	requireNoSidecar(t, filename)
+}
+
+func TestChecksumModeTransitions(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("enabled to disabled without a rewrite keeps the sidecar", func(t *testing.T) {
+		tempDir := t.TempDir()
+		untouched := []byte("untouched")
+		rewritten := []byte("rewritten")
+
+		withChecksum := newFileStoreFromURL(t, "file://"+tempDir)
+		require.NoError(t, withChecksum.Set(ctx, untouched, fileformat.FileTypeTesting, []byte("keep me")))
+
+		untouchedFile := testBlobFilename(t, withChecksum, tempDir, untouched)
+		requireSidecarMatchesBlob(t, untouchedFile)
+
+		withoutChecksum := newFileStoreFromURL(t, "file://"+tempDir+"?checksum=false")
+		require.NoError(t, withoutChecksum.Set(ctx, rewritten, fileformat.FileTypeTesting, []byte("new key")))
+
+		// The key that was not rewritten keeps a sidecar that still describes its content.
+		requireSidecarMatchesBlob(t, untouchedFile)
+		requireNoSidecar(t, testBlobFilename(t, withoutChecksum, tempDir, rewritten))
+	})
+
+	t.Run("disabled to enabled regenerates only on the next write to that key", func(t *testing.T) {
+		tempDir := t.TempDir()
+		rewritten := []byte("rewritten")
+		untouched := []byte("untouched")
+
+		withoutChecksum := newFileStoreFromURL(t, "file://"+tempDir+"?checksum=false")
+		require.NoError(t, withoutChecksum.Set(ctx, rewritten, fileformat.FileTypeTesting, []byte("first")))
+		require.NoError(t, withoutChecksum.Set(ctx, untouched, fileformat.FileTypeTesting, []byte("first")))
+
+		rewrittenFile := testBlobFilename(t, withoutChecksum, tempDir, rewritten)
+		untouchedFile := testBlobFilename(t, withoutChecksum, tempDir, untouched)
+
+		requireNoSidecar(t, rewrittenFile)
+		requireNoSidecar(t, untouchedFile)
+
+		withChecksum := newFileStoreFromURL(t, "file://"+tempDir)
+		require.NoError(t, withChecksum.Set(ctx, rewritten, fileformat.FileTypeTesting, []byte("second"),
+			options.WithAllowOverwrite(true)))
+
+		requireSidecarMatchesBlob(t, rewrittenFile)
+		requireNoSidecar(t, untouchedFile)
+	})
+
+	t.Run("del succeeds with the sidecar absent and with it present", func(t *testing.T) {
+		tempDir := t.TempDir()
+		absent := []byte("sidecar-absent")
+		present := []byte("sidecar-present")
+
+		withoutChecksum := newFileStoreFromURL(t, "file://"+tempDir+"?checksum=false")
+		require.NoError(t, withoutChecksum.Set(ctx, absent, fileformat.FileTypeTesting, []byte("value")))
+
+		absentFile := testBlobFilename(t, withoutChecksum, tempDir, absent)
+		requireNoSidecar(t, absentFile)
+		require.NoError(t, withoutChecksum.Del(ctx, absent, fileformat.FileTypeTesting))
+
+		_, statErr := os.Stat(absentFile)
+		require.True(t, os.IsNotExist(statErr))
+
+		withChecksum := newFileStoreFromURL(t, "file://"+tempDir)
+		require.NoError(t, withChecksum.Set(ctx, present, fileformat.FileTypeTesting, []byte("value")))
+
+		presentFile := testBlobFilename(t, withChecksum, tempDir, present)
+		requireSidecarMatchesBlob(t, presentFile)
+		require.NoError(t, withChecksum.Del(ctx, present, fileformat.FileTypeTesting))
+
+		_, statErr = os.Stat(presentFile)
+		require.True(t, os.IsNotExist(statErr))
+		requireNoSidecar(t, presentFile)
+	})
+}
+
+func TestGetIoReaderWithoutSidecar(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+
+	f := newFileStoreFromURL(t, "file://"+tempDir+"?checksum=false")
+
+	key := []byte("no-sidecar-read")
+	value := bytes.Repeat([]byte("payload"), 1024)
+
+	require.NoError(t, f.Set(ctx, key, fileformat.FileTypeTesting, value))
+	requireNoSidecar(t, testBlobFilename(t, f, tempDir, key))
+
+	got, err := f.Get(ctx, key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+	require.Equal(t, value, got)
+
+	reader, err := f.GetIoReader(ctx, key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+
+	defer func() {
+		require.NoError(t, reader.Close())
+	}()
+
+	streamed, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.Equal(t, value, streamed)
+}
+
+func TestSetFromReaderAbortsCleanlyMidStream(t *testing.T) {
+	ctx := context.Background()
+
+	for _, checksum := range []bool{true, false} {
+		t.Run(fmt.Sprintf("checksum=%v", checksum), func(t *testing.T) {
+			tempDir := t.TempDir()
+			f := newFileStoreFromURL(t, fmt.Sprintf("file://%s?checksum=%v", tempDir, checksum))
+
+			key := []byte("aborted-stream")
+			reader := &errorAfterNBytesReader{
+				data:          bytes.Repeat([]byte("a"), 4096),
+				errorAt:       2048,
+				errorToReturn: errors.NewProcessingError("simulated reader error"),
+			}
+
+			err := f.SetFromReader(ctx, key, fileformat.FileTypeTesting, reader)
+			require.Error(t, err)
+
+			filename := testBlobFilename(t, f, tempDir, key)
+
+			_, statErr := os.Stat(filename)
+			require.True(t, os.IsNotExist(statErr), "no blob should be published for an aborted stream")
+
+			requireNoSidecar(t, filename)
+			requireNoTempFilesLeft(t, tempDir)
+		})
+	}
+}
+
+// TestChecksumDisabledRemovesOrphanSidecar covers the case a removal predicated on
+// AllowOverwrite would skip: the blob genuinely does not exist, so the overwrite check passes,
+// yet a sidecar is sitting there from an earlier life of that key. The removal is
+// unconditional precisely because nothing can prove the sidecar is absent.
+func TestChecksumDisabledRemovesOrphanSidecar(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+
+	f := newFileStoreFromURL(t, "file://"+tempDir+"?checksum=false")
+
+	key := []byte("orphan-sidecar")
+	filename := testBlobFilename(t, f, tempDir, key)
+
+	require.NoError(t, os.WriteFile(filename+checksumExtension, []byte("stale digest\n"), 0600))
+
+	_, statErr := os.Stat(filename)
+	require.True(t, os.IsNotExist(statErr), "the blob must genuinely be absent for this case")
+
+	require.NoError(t, f.Set(ctx, key, fileformat.FileTypeTesting, []byte("fresh value")))
+
+	got, err := f.Get(ctx, key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+	require.Equal(t, []byte("fresh value"), got)
+
+	requireNoSidecar(t, filename)
+}
+
+// TestChecksumDisabledSidecarRemovalFailureIsNotFatal pins the best-effort half of the
+// contract: a sidecar that cannot be unlinked must not turn a successfully published blob
+// into a failed write.
+func TestChecksumDisabledSidecarRemovalFailureIsNotFatal(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+
+	f := newFileStoreFromURL(t, "file://"+tempDir+"?checksum=false")
+
+	key := []byte("undeletable-sidecar")
+	filename := testBlobFilename(t, f, tempDir, key)
+	sidecar := filename + checksumExtension
+
+	// A non-empty directory where the sidecar belongs: the unlink fails with something other
+	// than "not found".
+	require.NoError(t, os.Mkdir(sidecar, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(sidecar, "occupant"), []byte("x"), 0600))
+
+	require.NoError(t, f.Set(ctx, key, fileformat.FileTypeTesting, []byte("value")))
+
+	got, err := f.Get(ctx, key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+	require.Equal(t, []byte("value"), got)
+
+	info, err := os.Stat(sidecar)
+	require.NoError(t, err, "the undeletable path must survive")
+	require.True(t, info.IsDir())
+
+	requireNoTempFilesLeft(t, tempDir)
 }
