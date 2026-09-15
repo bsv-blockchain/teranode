@@ -728,24 +728,34 @@ func TestMultistreamSVNodeSyncFromTeranode(t *testing.T) {
 		verifyTeranodeServedHeaders(t, sv, targetHeight)
 	} else {
 		t.Logf("Multistream SVNode synced to height %d from teranode - blocks validated by legacy consensus", targetHeight)
-	}
 
-	// Verify per-stream byte counts show DATA1 sent data
-	resp, err := td.CallRPC(ctx, "getpeerinfo", []any{})
-	require.NoError(t, err)
+		// Verify per-stream byte counts show DATA1 sent data. Only meaningful
+		// when sync actually succeeded above - if it didn't, teranode may
+		// never have been asked for block data at all.
+		resp, err := td.CallRPC(ctx, "getpeerinfo", []any{})
+		require.NoError(t, err)
 
-	var p2pResp helper.P2PRPCResponse
-	err = json.Unmarshal([]byte(resp), &p2pResp)
-	require.NoError(t, err)
+		var p2pResp helper.P2PRPCResponse
+		err = json.Unmarshal([]byte(resp), &p2pResp)
+		require.NoError(t, err)
 
-	for _, peer := range p2pResp.Result {
-		if len(peer.Streams) == 0 {
-			continue
-		}
-		for _, s := range peer.Streams {
-			if s.StreamType == streamTypeData1 {
-				require.Greater(t, s.BytesSent, 0, "DATA1 stream should have sent block data to svnode")
-				t.Logf("Verified DATA1 stream bytessent=%d for peer %s", s.BytesSent, peer.Addr)
+		// Teranode's connection manager also targets automatic outbound
+		// peers of its own and can dial back to svnode once it learns its
+		// address, creating a second, teranode-initiated association. That
+		// association's DATA1 stream legitimately carries zero bytes: it is
+		// not the connection svnode used to sync. Restrict the assertion to
+		// the peer svnode itself connected to teranode (Inbound == true),
+		// which is the one and only association through which teranode
+		// served block data to svnode.
+		for _, peer := range p2pResp.Result {
+			if !peer.Inbound {
+				continue
+			}
+			for _, s := range peer.Streams {
+				if s.StreamType == streamTypeData1 {
+					require.Greater(t, s.BytesSent, 0, "DATA1 stream should have sent block data to svnode")
+					t.Logf("Verified DATA1 stream bytessent=%d for peer %s", s.BytesSent, peer.Addr)
+				}
 			}
 		}
 	}
