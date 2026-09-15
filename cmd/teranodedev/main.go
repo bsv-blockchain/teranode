@@ -720,7 +720,7 @@ func handleChainMismatch(projectRoot string, cfg *config.Config, storeURL *url.U
 	}
 
 	fmt.Printf("  [FAIL] Configured network is %q but stored blockchain data is from %q\n", result.ConfiguredNet, storedDesc)
-	fmt.Printf("         Store:            %s\n", result.StoreURL)
+	fmt.Printf("         Store:            %s\n", result.StoreURL) // urlsafe: prereq.CheckChain redacts before storing it
 	fmt.Printf("         Stored genesis:   %s\n", result.StoredHash)
 	fmt.Printf("         Expected genesis: %s\n", result.ExpectedHash)
 	fmt.Println()

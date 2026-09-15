@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
@@ -60,7 +61,7 @@ func ReadAerospikeKafka(
 	statsIntervalSecs int,
 ) error {
 	logger.Infof("Starting Aerospike Kafka connector reader")
-	logger.Infof("  Kafka URL: %s", kafkaURLStr)
+	logger.Infof("  Kafka URL: %s", urlutil.RedactString(kafkaURLStr))
 	if txIDFilter != "" {
 		logger.Infof("  TxID Filter: %s", txIDFilter)
 	} else {

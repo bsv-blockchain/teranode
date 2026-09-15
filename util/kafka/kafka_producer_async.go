@@ -19,6 +19,7 @@ import (
 
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -259,7 +260,7 @@ func clampBatchMaxBytes(flushBytes int) int32 {
 
 // NewKafkaAsyncProducer creates a new async producer with the given configuration using franz-go.
 func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*KafkaAsyncProducer, error) {
-	logger.Debugf("Starting async kafka producer for %v", cfg.URL)
+	logger.Debugf("Starting async kafka producer for %s", urlutil.Redact(cfg.URL))
 
 	producer := &KafkaAsyncProducer{
 		Config: cfg,
@@ -632,10 +633,10 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 
 		select {
 		case <-signals:
-			c.Config.Logger.Infof("[kafka] Received signal, shutting down producer %v ...", c.Config.URL)
+			c.Config.Logger.Infof("[kafka] Received signal, shutting down producer %s ...", urlutil.Redact(c.Config.URL))
 			cancel()
 		case <-internalCtx.Done():
-			c.Config.Logger.Infof("[kafka] Context done, shutting down producer %v ...", c.Config.URL)
+			c.Config.Logger.Infof("[kafka] Context done, shutting down producer %s ...", urlutil.Redact(c.Config.URL))
 		}
 
 		_ = c.Stop()
@@ -694,10 +695,10 @@ func (c *KafkaAsyncProducer) startInMemory(ctx context.Context, ch chan *Message
 
 		select {
 		case <-signals:
-			c.Config.Logger.Infof("[kafka] Received signal, shutting down producer %v ...", c.Config.URL)
+			c.Config.Logger.Infof("[kafka] Received signal, shutting down producer %s ...", urlutil.Redact(c.Config.URL))
 			cancel()
 		case <-internalCtx.Done():
-			c.Config.Logger.Infof("[kafka] Context done, shutting down producer %v ...", c.Config.URL)
+			c.Config.Logger.Infof("[kafka] Context done, shutting down producer %s ...", urlutil.Redact(c.Config.URL))
 		}
 
 		_ = c.Stop()

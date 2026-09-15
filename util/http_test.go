@@ -1580,3 +1580,39 @@ func TestSharedAndSafeClientsShareRedirectRule(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildHTTPErrorRedactsURLPassword covers the status-code error built for a
+// non-OK response. That message is logged and forwarded, so a URL carrying a
+// password must reach it masked. Every return is exercised: no body, a body, a
+// truncated body, and a body read that fails.
+func TestBuildHTTPErrorRedactsURLPassword(t *testing.T) {
+	const password = "canary-http-error-password"
+
+	rawURL := "http://teranode:" + password + "@blob.example:8080/subtree"
+
+	bodies := map[string]func() io.ReadCloser{
+		"no body":    func() io.ReadCloser { return nil },
+		"short body": func() io.ReadCloser { return io.NopCloser(strings.NewReader("not found")) },
+		"truncated body": func() io.ReadCloser {
+			return io.NopCloser(strings.NewReader(strings.Repeat("x", maxHTTPErrorBodyBytes+10)))
+		},
+		"failed read": func() io.ReadCloser { return io.NopCloser(failingReader{}) },
+	}
+
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			resp := &http.Response{StatusCode: http.StatusNotFound, Body: body()}
+
+			err := buildHTTPError(resp, rawURL)
+			require.Error(t, err)
+
+			require.NotContains(t, err.Error(), password, "the URL password reached the error message")
+			require.Contains(t, err.Error(), "teranode", "the username should survive redaction")
+			require.Contains(t, err.Error(), "blob.example:8080", "the host should survive redaction")
+		})
+	}
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
