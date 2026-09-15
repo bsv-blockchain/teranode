@@ -6215,17 +6215,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_force_ignore_block_persister_height" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_force_ignore_block_persister_height
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#pruner_utxosetttl" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7538,17 +7527,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_force_ignore_block_persister_height" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_force_ignore_block_persister_height
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#pruner_utxosetttl" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -8324,6 +8302,7 @@
 <li><code>false</code> (default): Normal pruning during catchup (safe with retention &gt;= 288 blocks)</li>
 <li><code>true</code>: Skip all pruning during catchup state</li>
 </ul>
+<p>Note: this defers rather than eliminates the prune burst - a node that skips a long catchup hits one much larger DAH sweep on entering the RUNNING state.</p>
 <h3 id="pruner_blockassemblywaittimeout">pruner_blockAssemblyWaitTimeout<a class="headerlink" href="#pruner_blockassemblywaittimeout" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Duration</p>
 <p><strong>Default</strong>: <code>10m</code></p>
@@ -8346,12 +8325,7 @@
 <li><code>OnBlockPersisted</code> (default): Triggers on BlockPersisted notifications (coordinated with Block Persister)</li>
 <li><code>OnBlockMined</code>: Triggers on Block notifications with mined_set=true</li>
 </ul>
-<h3 id="pruner_force_ignore_block_persister_height">pruner_force_ignore_block_persister_height<a class="headerlink" href="#pruner_force_ignore_block_persister_height" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Boolean</p>
-<p><strong>Default</strong>: <code>false</code></p>
-<p><strong>Environment Variable</strong>: <code>pruner_force_ignore_block_persister_height</code></p>
-<p><strong>Description</strong>: Force ignore block persister height tracking</p>
-<p>When enabled, uses Block notifications with mined_set=true instead of BlockPersisted notifications from Block Persister for determining safe prune height.</p>
+<p>To use Block notifications with mined_set=true instead of BlockPersisted notifications from Block Persister for determining safe prune height, set <code>pruner_block_trigger=OnBlockMined</code>.</p>
 <h3 id="pruner_utxosetttl">pruner_utxoSetTTL<a class="headerlink" href="#pruner_utxosetttl" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Boolean</p>
 <p><strong>Default</strong>: <code>false</code></p>
