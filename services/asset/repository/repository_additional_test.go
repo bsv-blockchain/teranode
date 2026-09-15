@@ -186,29 +186,102 @@ func TestRepository_GetSubtreeBytes_Success(t *testing.T) {
 	assert.Equal(t, subtreeBytes, retrievedBytes)
 }
 
-// Test GetSubtreeBytes method with fallback to FileTypeSubtreeToCheck
-func TestRepository_GetSubtreeBytes_Fallback(t *testing.T) {
-	// Create test subtree data
+// TestRepository_PendingSubtreeIsNotServed pins the rule that Asset never answers with a
+// subtree it has only as FileTypeSubtreeToCheck, the pre-validation copy written when this
+// node fetches a subtree from a peer during catch-up (bitcoin-sv/teranode#4842).
+//
+// Five of these readers used to fall back to that file type directly, and the sixth,
+// GetSubtreeDataReader, admitted it as a regeneration source. That is how a peer-chosen hash
+// could be read back out of the victim's own public Asset origin. The test covers all six
+// together so a seventh reader added later is an obvious omission rather than a silent one.
+//
+// Each refusal is asserted as a not-found error, because that is what the HTTP handlers map
+// to 404; a bare "some error" would also pass for a broken fixture or a 500. The final
+// subtest then writes the validated file for the same hash and requires the readers to
+// succeed, so the refusals are proven to come from the file type and nothing else.
+func TestRepository_PendingSubtreeIsNotServed(t *testing.T) {
 	st, err := subtree.NewTreeByLeafCount(2)
 	require.NoError(t, err)
 
 	tx := &bt.Tx{Version: 1, LockTime: 0}
-	err = st.AddNode(*tx.TxIDChainHash(), 0, 0)
-	require.NoError(t, err)
-	err = st.AddNode(*tx.TxIDChainHash(), 0, 0)
-	require.NoError(t, err)
+	require.NoError(t, st.AddNode(*tx.TxIDChainHash(), 0, 0))
+	require.NoError(t, st.AddNode(*tx.TxIDChainHash(), 0, 0))
 
 	subtreeHash := st.RootHash()
 	subtreeBytes, err := st.Serialize()
 	require.NoError(t, err)
 
-	// Store with FileTypeSubtreeToCheck instead of FileTypeSubtree
 	repo := createTestRepositoryWithSubtreeDataToCheck(t, subtreeHash, subtreeBytes)
+	ctx := context.Background()
 
-	// Test GetSubtreeBytes should fallback successfully
-	retrievedBytes, err := repo.GetSubtreeBytes(context.Background(), subtreeHash)
-	assert.NoError(t, err)
-	assert.Equal(t, subtreeBytes, retrievedBytes)
+	t.Run("GetSubtreeBytes", func(t *testing.T) {
+		retrieved, err := repo.GetSubtreeBytes(ctx, subtreeHash)
+		require.ErrorIs(t, err, errors.ErrNotFound)
+		require.Nil(t, retrieved)
+	})
+
+	t.Run("GetSubtreeTxIDsReader", func(t *testing.T) {
+		reader, err := repo.GetSubtreeTxIDsReader(ctx, subtreeHash)
+		require.ErrorIs(t, err, errors.ErrNotFound)
+		require.Nil(t, reader)
+	})
+
+	t.Run("GetSubtree", func(t *testing.T) {
+		retrieved, err := repo.GetSubtree(ctx, subtreeHash)
+		require.ErrorIs(t, err, errors.ErrNotFound)
+		require.Nil(t, retrieved)
+	})
+
+	t.Run("GetSubtreeHead", func(t *testing.T) {
+		retrieved, numNodes, err := repo.GetSubtreeHead(ctx, subtreeHash)
+		require.ErrorIs(t, err, errors.ErrNotFound)
+		require.Nil(t, retrieved)
+		require.Equal(t, 0, numNodes)
+	})
+
+	// GetSubtreeExists gates the public POST /subtree/:hash/txs and search routes, so a
+	// pending subtree must read as absent rather than merely fail to serve.
+	t.Run("GetSubtreeExists", func(t *testing.T) {
+		exists, err := repo.GetSubtreeExists(ctx, subtreeHash)
+		require.NoError(t, err)
+		require.False(t, exists)
+	})
+
+	// The subtree_data route regenerates from the subtree file on demand. A pending-only
+	// subtree must not be a regeneration source either, or the removal above is bypassed.
+	t.Run("GetSubtreeDataReader", func(t *testing.T) {
+		reader, err := repo.GetSubtreeDataReader(ctx, subtreeHash)
+		require.ErrorIs(t, err, errors.ErrNotFound)
+		require.Nil(t, reader)
+	})
+
+	// Positive control on the same repository and hash: once the validated file exists the
+	// readers answer. Without this, every refusal above would also pass against a fixture
+	// that could not serve anything at all.
+	t.Run("ValidatedSubtreeIsServed", func(t *testing.T) {
+		require.NoError(t, repo.SubtreeStore.Set(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtree, subtreeBytes))
+
+		retrievedBytes, err := repo.GetSubtreeBytes(ctx, subtreeHash)
+		require.NoError(t, err)
+		require.Equal(t, subtreeBytes, retrievedBytes)
+
+		reader, err := repo.GetSubtreeTxIDsReader(ctx, subtreeHash)
+		require.NoError(t, err)
+		require.NoError(t, reader.Close())
+
+		retrieved, err := repo.GetSubtree(ctx, subtreeHash)
+		require.NoError(t, err)
+		require.Equal(t, *subtreeHash, *retrieved.RootHash())
+
+		head, numNodes, err := repo.GetSubtreeHead(ctx, subtreeHash)
+		require.NoError(t, err)
+		require.NotNil(t, head)
+		require.Equal(t, 2, numNodes)
+
+		exists, err := repo.GetSubtreeExists(ctx, subtreeHash)
+		require.NoError(t, err)
+		require.True(t, exists)
+	})
 }
 
 // Test GetSubtreeBytes method with error
@@ -406,31 +479,6 @@ func TestRepository_GetSubtreeHead_ShortRead(t *testing.T) {
 	assert.Equal(t, 0, numNodes)
 }
 
-// Test GetSubtreeTxIDsReader fallback path (50% -> 100%)
-func TestRepository_GetSubtreeTxIDsReader_FallbackPath(t *testing.T) {
-	// Create test subtree data
-	st, err := subtree.NewTreeByLeafCount(2)
-	require.NoError(t, err)
-
-	tx := &bt.Tx{Version: 1, LockTime: 0}
-	err = st.AddNode(*tx.TxIDChainHash(), 0, 0)
-	require.NoError(t, err)
-	err = st.AddNode(*tx.TxIDChainHash(), 0, 0)
-	require.NoError(t, err)
-
-	subtreeHash := st.RootHash()
-	subtreeBytes, err := st.Serialize()
-	require.NoError(t, err)
-
-	repo := createTestRepositoryWithSubtreeDataToCheck(t, subtreeHash, subtreeBytes)
-
-	// Should fallback to FileTypeSubtreeToCheck successfully
-	reader, err := repo.GetSubtreeTxIDsReader(context.Background(), subtreeHash)
-	assert.NoError(t, err)
-	assert.NotNil(t, reader)
-	defer reader.Close()
-}
-
 // Test GetSubtreeExists different cases
 func TestRepository_GetSubtreeExists_Additional(t *testing.T) {
 	repo := createTestRepository(t)
@@ -443,30 +491,6 @@ func TestRepository_GetSubtreeExists_Additional(t *testing.T) {
 	exists, err := repo.GetSubtreeExists(context.Background(), nonExistentHash)
 	assert.NoError(t, err)
 	assert.False(t, exists)
-}
-
-// Test GetSubtree fallback path (66.7% -> 100%)
-func TestRepository_GetSubtree_FallbackPath(t *testing.T) {
-	// Create test subtree data
-	st, err := subtree.NewTreeByLeafCount(2)
-	require.NoError(t, err)
-
-	tx := &bt.Tx{Version: 1, LockTime: 0}
-	err = st.AddNode(*tx.TxIDChainHash(), 0, 0)
-	require.NoError(t, err)
-	err = st.AddNode(*tx.TxIDChainHash(), 0, 0)
-	require.NoError(t, err)
-
-	subtreeHash := st.RootHash()
-	subtreeBytes, err := st.Serialize()
-	require.NoError(t, err)
-
-	repo := createTestRepositoryWithSubtreeDataToCheck(t, subtreeHash, subtreeBytes)
-
-	// Should fallback to FileTypeSubtreeToCheck successfully
-	retrievedSubtree, err := repo.GetSubtree(context.Background(), subtreeHash)
-	assert.NoError(t, err)
-	assert.NotNil(t, retrievedSubtree)
 }
 
 // Test GetTransaction success path via TX store (88.9% -> 100%)
@@ -528,31 +552,6 @@ func TestRepository_GetTransactionMeta_Error(t *testing.T) {
 	txMeta, err := repo.GetTransactionMeta(context.Background(), nonExistentHash)
 	assert.Error(t, err)
 	assert.Nil(t, txMeta)
-}
-
-// Test GetSubtreeHead fallback path (76.9% -> higher coverage)
-func TestRepository_GetSubtreeHead_FallbackPath(t *testing.T) {
-	// Create test subtree data
-	st, err := subtree.NewTreeByLeafCount(2)
-	require.NoError(t, err)
-
-	tx := &bt.Tx{Version: 1, LockTime: 0}
-	err = st.AddNode(*tx.TxIDChainHash(), 0, 0)
-	require.NoError(t, err)
-	err = st.AddNode(*tx.TxIDChainHash(), 0, 0)
-	require.NoError(t, err)
-
-	subtreeHash := st.RootHash()
-	subtreeBytes, err := st.Serialize()
-	require.NoError(t, err)
-
-	repo := createTestRepositoryWithSubtreeDataToCheck(t, subtreeHash, subtreeBytes)
-
-	// Should fallback to FileTypeSubtreeToCheck successfully
-	retrievedSubtree, numNodes, err := repo.GetSubtreeHead(context.Background(), subtreeHash)
-	assert.NoError(t, err)
-	assert.NotNil(t, retrievedSubtree)
-	assert.Equal(t, 2, numNodes)
 }
 
 // Test error paths for several 80% coverage functions
@@ -719,7 +718,8 @@ func createTestRepositoryWithSubtreeDataToCheck(t *testing.T, subtreeHash *chain
 	blockStore, err := blob.NewStore(logger, memoryURL)
 	require.NoError(t, err)
 
-	// Store subtree data with FileTypeSubtreeToCheck
+	// Store the subtree ONLY as FileTypeSubtreeToCheck, the pre-validation copy, so a
+	// reader that still falls back to it is visible as a test failure.
 	err = subtreeStore.Set(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeToCheck, subtreeBytes)
 	require.NoError(t, err)
 
