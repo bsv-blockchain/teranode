@@ -149,10 +149,10 @@ func TestReassignSQLiteEnforcesMaturityAndRejectsUnstoredScript(t *testing.T) {
 		UTXOHash: reassignUtxoHash,
 	}
 
-	err = td.UtxoStore.ReAssignUTXO(td.Ctx, spend, newSpend, td.Settings)
+	err = td.UtxoStore.ReAssignUTXO(td.Ctx, spend, amendedOutputScript, td.Settings)
 	require.NoError(t, err)
 
-	require.NoError(t, td.UtxoStore.ReAssignUTXO(td.Ctx, sameOwnerSpend, sameOwnerSpend, td.Settings))
+	require.NoError(t, td.UtxoStore.ReAssignUTXO(td.Ctx, sameOwnerSpend, aliceToBobTx.Outputs[1], td.Settings))
 	bobSpendingTx := td.CreateTransactionWithOptions(t,
 		transactions.WithInput(aliceToBobTx, 1, bobPrivateKey),
 		transactions.WithP2PKHOutputs(1, 100, charles),
@@ -165,9 +165,9 @@ func TestReassignSQLiteEnforcesMaturityAndRejectsUnstoredScript(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, status.SpendingData, "the immature spend must leave the output unspent")
 
-	// ReAssignUTXO changes the commitment, not the stored locking script.
-	// The validator must not accept Charles's replacement script supplied in
-	// extended transaction bytes, before or after the maturity height.
+	// ReAssignUTXO persisted the replacement locking script and re-extension
+	// now surfaces it. Charles signs against that script, so the validator
+	// must gate the spend by the maturity height, not reject the script.
 	charlesSpendingTx := bt.NewTx()
 	charlesUtxo := &bt.UTXO{
 		TxIDHash:      aliceToBobTx.TxIDChainHash(),
@@ -185,10 +185,24 @@ func TestReassignSQLiteEnforcesMaturityAndRejectsUnstoredScript(t *testing.T) {
 	err = charlesSpendingTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: charlesPrivatekey})
 	require.NoError(t, err)
 
-	requireRejected(charlesSpendingTx, "OP_EQUALVERIFY")
+	// Pre-maturity, the new owner is held by the reassignment gate.
+	requireRejected(charlesSpendingTx, "not spendable until")
+
+	// The original owner is locked out: after reassignment, re-extension
+	// surfaces the persisted replacement script, so Bob's signature over the
+	// original script fails script validation rather than a hash mismatch.
+	// The rejected spend must leave the output untouched.
+	originalOwnerSpendingTx := td.CreateTransactionWithOptions(t,
+		transactions.WithInput(aliceToBobTx, 0, bobPrivateKey),
+		transactions.WithP2PKHOutputs(1, 100, charles),
+	)
+	requireRejected(originalOwnerSpendingTx, "OP_EQUALVERIFY")
+	status, err = td.UtxoStore.GetSpend(td.Ctx, newSpend)
+	require.NoError(t, err)
+	require.Nil(t, status.SpendingData, "the original owner's rejected spend must leave the output unspent")
 
 	// Mine beyond the boundary, then wait for the UTXO store's asynchronous
-	// height update before attributing any rejection to the locking script.
+	// height update before expecting the new owner's spend to be accepted.
 	td.MineAndWait(t, testReassignedUtxoSpendableAfter+1)
 	require.Eventually(t, func() bool {
 		for _, maturedSpend := range []*utxo.Spend{newSpend, sameOwnerSpend} {
@@ -200,24 +214,17 @@ func TestReassignSQLiteEnforcesMaturityAndRejectsUnstoredScript(t *testing.T) {
 		return true
 	}, 30*time.Second, 100*time.Millisecond, "both outputs must mature in the UTXO store")
 
-	// The changed commitment has matured, but it does not authorize trusting
-	// the submitter's replacement script. Ownership-changing reassignment
-	// needs an authoritative script source in addition to ReAssignUTXO.
-	requireRejected(charlesSpendingTx, "OP_EQUALVERIFY")
-	status, err = td.UtxoStore.GetSpend(td.Ctx, newSpend)
+	// The replacement script persisted by ReAssignUTXO is now authoritative:
+	// Charles's spend (built against the replacement script) is accepted after
+	// the maturity gate.
+	postMaturityCharlesTx := bt.NewTx()
+	err = postMaturityCharlesTx.FromUTXOs(charlesUtxo)
 	require.NoError(t, err)
-	require.Nil(t, status.SpendingData, "the rejected transaction must leave the output unspent")
-
-	// The original owner is locked out too: its signature matches the stored
-	// script, but its commitment no longer matches the reassigned hash.
-	originalOwnerSpendingTx := td.CreateTransactionWithOptions(t,
-		transactions.WithInput(aliceToBobTx, 0, bobPrivateKey),
-		transactions.WithP2PKHOutputs(1, 100, charles),
-	)
-	requireRejected(originalOwnerSpendingTx, "UTXO_MISMATCH")
-	status, err = td.UtxoStore.GetSpend(td.Ctx, newSpend)
+	err = postMaturityCharlesTx.AddP2PKHOutputFromPubKeyBytes(bob.Compressed(), 100)
 	require.NoError(t, err)
-	require.Nil(t, status.SpendingData, "the original owner's rejected spend must leave the output unspent")
+	err = postMaturityCharlesTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: charlesPrivatekey})
+	require.NoError(t, err)
+	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, postMaturityCharlesTx))
 
 	// Self-reassignment is only a maturity control, not a working confiscation.
 	// The same-owner output now passes both script validation and the height gate.

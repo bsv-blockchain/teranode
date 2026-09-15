@@ -1017,13 +1017,13 @@ func (t *TxMetaCache) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend, t
 	return nil
 }
 
-// ReAssignUTXO reassigns a UTXO from one transaction to another in the underlying store
+// ReAssignUTXO reassigns a UTXO to a new output in the underlying store
 // and ensures cache consistency by removing any related entries.
 //
 // Parameters:
 // - ctx: Context for the operation
 // - utxo: The original UTXO to reassign
-// - newUtxo: The new UTXO to assign to
+// - amendedOutput: The replacement output (locking script and satoshis)
 // - tSettings: Transaction settings that control the reassignment behavior
 //
 // Returns:
@@ -1031,8 +1031,8 @@ func (t *TxMetaCache) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend, t
 //
 // This method maintains cache consistency by removing both the original and new
 // transaction entries from the cache after the reassignment is complete.
-func (t *TxMetaCache) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
-	if err := t.utxoStore.ReAssignUTXO(ctx, utxo, newUtxo, tSettings); err != nil {
+func (t *TxMetaCache) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, amendedOutput *bt.Output, tSettings *settings.Settings) error {
+	if err := t.utxoStore.ReAssignUTXO(ctx, utxo, amendedOutput, tSettings); err != nil {
 		return err
 	}
 

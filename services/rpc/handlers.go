@@ -41,6 +41,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/go-wire"
@@ -2806,14 +2807,46 @@ func handleReassign(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, err
 	}
 
-	newUTXOHash, err := chainhash.NewHashFromStr(c.NewUTXOHash)
+	if c.Newscript == nil || *c.Newscript == "" {
+		return nil, errors.NewInvalidArgumentError("reassign requires a new locking script (newscript) so the replacement output can be persisted; without it the reassigned UTXO is unspendable by both owners (issue #1725)")
+	}
+
+	script, err := hex.DecodeString(*c.Newscript)
 	if err != nil {
-		return nil, err
+		return nil, errors.NewInvalidArgumentError("invalid newscript hex: %s", err)
+	}
+	if len(script) == 0 {
+		return nil, errors.NewInvalidArgumentError("newscript must not be empty")
+	}
+
+	if c.Newsatoshis == nil {
+		return nil, errors.NewInvalidArgumentError("reassign requires newsatoshis so the replacement commitment can be derived from the output")
+	}
+
+	amendedOutput := &bt.Output{
+		Satoshis:      *c.Newsatoshis,
+		LockingScript: bscript.NewFromBytes(script),
+	}
+
+	if c.NewUTXOHash != nil && *c.NewUTXOHash != "" {
+		expectedHash, err := chainhash.NewHashFromStr(*c.NewUTXOHash)
+		if err != nil {
+			return nil, err
+		}
+
+		derivedHash, err := util.UTXOHashFromOutput(oldTXIDHash, amendedOutput, uint32(c.OldVout)) // nolint:gosec
+		if err != nil {
+			return nil, err
+		}
+
+		if !expectedHash.IsEqual(derivedHash) {
+			return nil, errors.NewInvalidArgumentError("newutxohash %s does not match the commitment derived from newscript and newsatoshis (%s)", expectedHash, derivedHash)
+		}
 	}
 
 	if err = s.utxoStore.ReAssignUTXO(ctx,
 		&utxo.Spend{TxID: oldTXIDHash, Vout: uint32(c.OldVout), UTXOHash: oldUTXOHash}, // nolint:gosec
-		&utxo.Spend{UTXOHash: newUTXOHash}, s.settings); err != nil {
+		amendedOutput, s.settings); err != nil {
 		return nil, err
 	}
 

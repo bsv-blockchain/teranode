@@ -716,7 +716,9 @@ type ReassignCmd struct {
 	OldTxID     string
 	OldVout     int
 	OldUTXOHash string
-	NewUTXOHash string
+	Newscript   *string // Hex-encoded replacement locking script
+	Newsatoshis *uint64 // Replacement output satoshis
+	NewUTXOHash *string // Expected replacement commitment (optional, validated if provided)
 }
 
 // NewSetBanCmd returns a new instance which can be used to issue a setban JSON-RPC command.
