@@ -31,6 +31,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/batchermetrics"
+	"github.com/bsv-blockchain/teranode/util/cohort"
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
@@ -300,6 +301,44 @@ type Validator struct {
 	// goroutines start, and per-tx readers only contend with each other on the read lock.
 	mtpMu    sync.RWMutex
 	mtpStore []uint32
+
+	// cohortStamper hands out the issue-556 cohort label for transactions this
+	// validator creates. Transactions that reach the validator have no block ID
+	// at create time - whether they arrived from the mempool or were first seen
+	// inside a block being validated - so they get a wall-clock cohort, the
+	// second they were created in. One stamper per Validator instance, because
+	// the stamper keeps a floor across the stamps it issues.
+	//
+	// That floor is therefore per-process, and Teranode runs a validator inside
+	// every propagation pod as well as the validator service, so a cluster holds
+	// several independent floors. Nothing calls ObserveMapped yet, so no floor
+	// is ever raised today; making the floor a real global guard is part of the
+	// map-row writer, not of this spine. See util/cohort.Stamper.
+	//
+	// nil when UtxoStore.CohortStamping is off, in which case no create call
+	// passes WithCohort at all and the stored label stays at cohort.Unset.
+	cohortStamper *cohort.Stamper
+}
+
+// stampCohort returns the create option that labels a new transaction record
+// with its cohort, or nil when there is nothing to stamp: the feature flag is
+// off, or the stamper could not issue an ID.
+//
+// A stamper failure must not fail the transaction - the label is not consulted
+// by anything yet - so it is logged and the record is created unlabelled, which
+// is exactly what the flag-off path does.
+func (v *Validator) stampCohort() utxo.CreateOption {
+	if v.cohortStamper == nil {
+		return nil
+	}
+
+	id, err := v.cohortStamper.Stamp()
+	if err != nil {
+		v.logger.Warnf("[Validator] could not stamp cohort, creating tx without one: %v", err)
+		return nil
+	}
+
+	return utxo.WithCohort(id)
 }
 
 // New creates a new Validator instance with the provided configuration.
@@ -328,6 +367,10 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		rejectedTxKafkaProducerClient:       rejectedTxKafkaProducerClient,
 		policyRejectedTxKafkaProducerClient: policyRejectedTxKafkaProducerClient,
 		blockchainClient:                    blockchainClient,
+	}
+
+	if tSettings.UtxoStore.CohortStamping {
+		v.cohortStamper = cohort.NewStamper()
 	}
 
 	// The ingest hand-off subtracts the per-attempt floor from the retry window, so a
@@ -1686,6 +1729,10 @@ func (v *Validator) CreateInUtxoStore(ctx context.Context, tx *bt.Tx, blockHeigh
 		createOptions = append(createOptions, utxo.WithLocked(true))
 	}
 
+	if cohortOpt := v.stampCohort(); cohortOpt != nil {
+		createOptions = append(createOptions, cohortOpt)
+	}
+
 	createOptions = append(createOptions, extraOpts...)
 
 	txMetaData, _, err := v.utxoStore.SpendAndCreate(ctx, tx, blockHeight, createOptions...)
@@ -2017,6 +2064,10 @@ func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, bl
 	} else if addToBlockAssembly {
 		// mark the tx as locked, since we are going to add it to the block assembly
 		opts = append(opts, utxo.WithLocked(true))
+	}
+
+	if cohortOpt := v.stampCohort(); cohortOpt != nil {
+		opts = append(opts, cohortOpt)
 	}
 
 	txMetaData, spends, err := v.utxoStore.SpendAndCreate(ctx, tx, blockHeight, opts...)

@@ -1092,6 +1092,15 @@ func Test_SmokeTests(t *testing.T) {
 		tests.SpendAndCreate(t, db)
 	})
 
+	t.Run("cohort round trip", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.CohortRoundTrip(t, db)
+	})
+
 	t.Run("spend and create create only", func(t *testing.T) {
 		db, _ := setup(ctx, t)
 

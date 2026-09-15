@@ -84,7 +84,7 @@ func importSnapshotFile(t *testing.T, path string, store *utxosql.Store) error {
 	var processErr error
 
 	for w := range utxoWrapperCh {
-		if err := processUTXO(context.Background(), store, w, nil); err != nil && processErr == nil {
+		if err := processUTXO(context.Background(), store, w, nil, false); err != nil && processErr == nil {
 			processErr = err
 		}
 	}
