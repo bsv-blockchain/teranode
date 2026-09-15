@@ -616,6 +616,19 @@ func Test_headAgeGaugeConcurrentDrainRace(t *testing.T) {
 			persisted := true
 
 			for i := 0; i < 100_000; i++ {
+				// Yield the P between reads. On a constrained GOMAXPROCS (as CI
+				// runners commonly are) a tight loop of atomic-only reads never
+				// hits a cooperative preemption point on its own, so a producer
+				// that reserved queueLength but has not yet completed publish's
+				// CAS can be starved for the loop's entire duration - the
+				// documented one-batch skew then reads as "persisted" even
+				// though it is not a latched gauge, just a descheduled producer
+				// that never got a turn. Gosched gives that producer the
+				// scheduling opportunity the skew's self-healing depends on,
+				// so only a genuinely latched value - one that does not clear
+				// no matter how many turns other goroutines get - survives.
+				runtime.Gosched()
+
 				if q.headAgeMillis(nowMillis) != 0 || q.length() == 0 {
 					persisted = false
 					break
