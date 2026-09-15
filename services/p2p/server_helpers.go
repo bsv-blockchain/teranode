@@ -40,21 +40,31 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 		return
 	}
 
+	// Drop messages from banned peers before decoding, so a banned peer
+	// cannot keep triggering uncached AddBanScore RPCs with malformed
+	// payloads, and before any registration, WebSocket forwarding, or further
+	// processing. Own messages are identified by the real sender, not the
+	// claimed PeerID, so a banned peer spoofing our ID cannot dodge the skip;
+	// genuine own messages return at the self check below.
+	isSelf := fromID == s.P2PClient.GetID()
+	if !isSelf && s.shouldSkipBannedPeer(fromID, "handleBlockTopic") {
+		return
+	}
+
 	// decode request
 	blockMessage = BlockMessage{}
 
 	if err = json.Unmarshal(m, &blockMessage); err != nil {
-		s.logger.Errorf("[handleBlockTopic] json unmarshal error: %v", err)
-		return
-	}
-
-	// Drop messages from banned peers before any registration, WebSocket
-	// forwarding, or further processing (and before field validation and the
-	// spoof check, so a banned peer cannot keep triggering uncached
-	// AddBanScore RPCs). Own messages are identified by the real sender, not
-	// the claimed PeerID, so a banned peer spoofing our ID cannot dodge the
-	// skip; genuine own messages return at the self check below.
-	if fromID != s.P2PClient.GetID() && s.shouldSkipBannedPeer(fromID, "handleBlockTopic") {
+		// The message bus only scores a malformed outer envelope; garbage
+		// inside a valid envelope is a protocol violation this layer must
+		// charge, or a flood of it is free. Score only structurally invalid
+		// JSON: a type mismatch on a single field (e.g. another
+		// implementation encoding an ignored field differently) is dropped
+		// unscored, so a benign wire-format divergence cannot ban a peer.
+		s.logger.Errorf("[handleBlockTopic] json unmarshal error from peer %s: %v", fromID, err)
+		if !isSelf && !json.Valid(m) {
+			s.addProtocolViolation(fromID)
+		}
 		return
 	}
 
@@ -67,7 +77,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 
 	if err = blockMessage.validateFields(); err != nil {
 		s.logger.Errorf("[handleBlockTopic] invalid block message field from peer %s: %v", fromID, err)
-		if fromID != s.P2PClient.GetID() {
+		if !isSelf {
 			s.addProtocolViolation(fromID)
 		}
 		return
@@ -89,7 +99,6 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 
 	// The spoof check above proved fromID == blockMessage.PeerID, so the
 	// sender comparison alone decides self.
-	isSelf := fromID == s.P2PClient.GetID()
 	advertisedHeight := blockMessage.Height
 	if isSelf {
 		hash, err = s.parseHash(blockMessage.Hash, "handleBlockTopic")
@@ -100,6 +109,10 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 		var ok bool
 		advertisedHeight, hash, ok = s.sanitizeAdvertisedTip(blockMessage.PeerID, blockMessage.Height, blockMessage.Hash, s.getLocalHeight(ctx))
 		if !ok {
+			// validateFields already proved the hash is bounded hex, so the
+			// only way to get here is a missing or short hash: a malformed
+			// protocol-format field, scored like any other.
+			s.addProtocolViolation(fromID)
 			return
 		}
 	}
@@ -226,21 +239,28 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 		return
 	}
 
+	// Drop messages from banned peers before decoding, so a banned peer
+	// cannot keep triggering uncached AddBanScore RPCs with malformed
+	// payloads, and before any registration, WebSocket forwarding, or further
+	// processing. Own messages are identified by the real sender, not the
+	// claimed PeerID, so a banned peer spoofing our ID cannot dodge the skip;
+	// genuine own messages return at the self check below.
+	isSelf := fromID == s.P2PClient.GetID()
+	if !isSelf && s.shouldSkipBannedPeer(fromID, "handleSubtreeTopic") {
+		return
+	}
+
 	// decode request
 	subtreeMessage = SubtreeMessage{}
 
 	if err = json.Unmarshal(m, &subtreeMessage); err != nil {
-		s.logger.Errorf("[handleSubtreeTopic] json unmarshal error: %v", err)
-		return
-	}
-
-	// Drop messages from banned peers before any registration, WebSocket
-	// forwarding, or further processing (and before field validation and the
-	// spoof check, so a banned peer cannot keep triggering uncached
-	// AddBanScore RPCs). Own messages are identified by the real sender, not
-	// the claimed PeerID, so a banned peer spoofing our ID cannot dodge the
-	// skip; genuine own messages return at the self check below.
-	if fromID != s.P2PClient.GetID() && s.shouldSkipBannedPeer(fromID, "handleSubtreeTopic") {
+		// See handleBlockTopic: structurally invalid JSON is scored here
+		// because the message bus only counts a malformed outer envelope; a
+		// field type mismatch is dropped unscored.
+		s.logger.Errorf("[handleSubtreeTopic] json unmarshal error from peer %s: %v", fromID, err)
+		if !isSelf && !json.Valid(m) {
+			s.addProtocolViolation(fromID)
+		}
 		return
 	}
 
@@ -251,7 +271,7 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 
 	if err = subtreeMessage.validateFields(); err != nil {
 		s.logger.Errorf("[handleSubtreeTopic] invalid subtree message field from peer %s: %v", fromID, err)
-		if fromID != s.P2PClient.GetID() {
+		if !isSelf {
 			s.addProtocolViolation(fromID)
 		}
 		return
@@ -273,8 +293,13 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 
 	// Parse the hash before any use, mirroring handleBlockTopic: a malformed
 	// hash must not reach WebSocket subscribers or count as peer activity.
+	// validateFields already proved it is bounded hex, so a failure here is a
+	// missing or short hash: a protocol-format violation, scored like the rest.
 	hash, err = s.parseHash(subtreeMessage.Hash, "handleSubtreeTopic")
 	if err != nil {
+		if !isSelf {
+			s.addProtocolViolation(fromID)
+		}
 		return
 	}
 
@@ -296,7 +321,7 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 
 	// Ignore our own messages. The spoof check above proved fromID equals the
 	// claimed PeerID, so the sender comparison alone decides self.
-	if fromID == s.P2PClient.GetID() {
+	if isSelf {
 		s.logger.Debugf("[handleSubtreeTopic] ignoring own subtree message for %s", subtreeMessage.Hash)
 		return
 	}
@@ -445,8 +470,68 @@ func extractHost(urlStr string) string {
 	return strings.ToLower(host)
 }
 
+// unsafeIPRange is a special-purpose address block that the net.IP
+// predicates in isUnsafeIP do not classify, paired with the reason reported
+// for it.
+type unsafeIPRange struct {
+	cidr   *net.IPNet
+	reason string
+}
+
+// unsafeIPRanges lists the IANA special-purpose blocks (RFC 6890) that are
+// not covered by IsLoopback / IsPrivate / IsLinkLocal* / IsUnspecified /
+// IsGlobalUnicast. The load-bearing entry is RFC 6598 shared address space:
+// carrier NAT, and the overlay range Tailscale hands out, so an operator that
+// reaches internal services over such an overlay would otherwise have them
+// exposed to peer-advertised URLs. The IPv6 transition ranges embed an IPv4
+// address and are blocked wholesale rather than decoded.
+var unsafeIPRanges = mustParseUnsafeIPRanges(
+	unsafeIPRangeSpec{"0.0.0.0/8", "this-network address"},
+	unsafeIPRangeSpec{"100.64.0.0/10", "shared address space (RFC 6598)"},
+	unsafeIPRangeSpec{"192.0.0.0/24", "IETF protocol assignment address"},
+	unsafeIPRangeSpec{"192.0.2.0/24", "documentation address"},
+	unsafeIPRangeSpec{"198.51.100.0/24", "documentation address"},
+	unsafeIPRangeSpec{"203.0.113.0/24", "documentation address"},
+	unsafeIPRangeSpec{"198.18.0.0/15", "benchmarking address"},
+	unsafeIPRangeSpec{"192.88.99.0/24", "6to4 relay anycast address"},
+	unsafeIPRangeSpec{"240.0.0.0/4", "reserved address"},
+	unsafeIPRangeSpec{"::/96", "IPv4-compatible address"},
+	unsafeIPRangeSpec{"64:ff9b::/96", "NAT64 address"},
+	unsafeIPRangeSpec{"64:ff9b:1::/48", "local-use NAT64 address"},
+	unsafeIPRangeSpec{"100::/64", "discard-only address"},
+	unsafeIPRangeSpec{"2001::/32", "Teredo address"},
+	unsafeIPRangeSpec{"2001:db8::/32", "documentation address"},
+	unsafeIPRangeSpec{"2002::/16", "6to4 address"},
+)
+
+type unsafeIPRangeSpec struct {
+	cidr   string
+	reason string
+}
+
+func mustParseUnsafeIPRanges(specs ...unsafeIPRangeSpec) []unsafeIPRange {
+	out := make([]unsafeIPRange, 0, len(specs))
+	for _, sp := range specs {
+		_, cidr, err := net.ParseCIDR(sp.cidr)
+		if err != nil {
+			panic("p2p: invalid unsafe IP range " + sp.cidr + ": " + err.Error())
+		}
+		out = append(out, unsafeIPRange{cidr: cidr, reason: sp.reason})
+	}
+	return out
+}
+
 // isUnsafeIP checks if an IP address points to an internal/unsafe network.
 // Returns a non-empty reason string if unsafe, empty string if safe.
+//
+// The policy is default-deny: anything that is not a global unicast address
+// is unsafe, and the global-unicast space is further filtered by the
+// special-purpose blocks in unsafeIPRanges, because IsGlobalUnicast() alone
+// still admits RFC 1918, RFC 6598, TEST-NET and reserved space. This is the
+// static pre-filter's policy only, applied to literal IPs in announced URLs
+// (a hostname is never resolved here, see validateDataHubURL); the
+// connection-time policy is util.DefaultSSRFDialPolicy, which is deliberately
+// narrower because fetches legitimately traverse private networks.
 func isUnsafeIP(ip net.IP) string {
 	switch {
 	case ip.IsLoopback():
@@ -457,9 +542,27 @@ func isUnsafeIP(ip net.IP) string {
 		return "link-local address"
 	case ip.IsUnspecified():
 		return "unspecified address"
-	default:
-		return ""
+	case ip.IsMulticast():
+		return "multicast address"
+	case !ip.IsGlobalUnicast():
+		// Everything IsGlobalUnicast excludes is handled above except the
+		// IPv4 limited broadcast address.
+		return "broadcast address"
 	}
+
+	// Normalise IPv4-mapped IPv6 so "::ffff:100.64.0.1" matches the IPv4
+	// blocks like the plain form does.
+	if ip4 := ip.To4(); ip4 != nil {
+		ip = ip4
+	}
+
+	for _, r := range unsafeIPRanges {
+		if r.cidr.Contains(ip) {
+			return r.reason
+		}
+	}
+
+	return ""
 }
 
 // isLocalhostHostname checks if a hostname refers to localhost.
@@ -472,7 +575,9 @@ func isLocalhostHostname(hostname string) bool {
 // - Invalid schemes (only http/https allowed)
 // - Loopback addresses (127.x.x.x, ::1)
 // - Private network addresses (10.x.x.x, 172.16-31.x.x, 192.168.x.x, fc00::/7)
+// - Shared address space / carrier NAT (100.64.0.0/10)
 // - Link-local addresses (169.254.x.x, fe80::/10)
+// - Any other non-global-unicast or IANA special-purpose address (see isUnsafeIP)
 //
 // This is a cheap static pre-filter only: it deliberately performs no DNS resolution, since
 // that would let a peer trigger a blocking lookup per announcement. A hostname that resolves
@@ -550,20 +655,27 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 		return
 	}
 
+	// Drop messages from banned peers before decoding, so a banned peer
+	// cannot keep triggering uncached AddBanScore RPCs with malformed
+	// payloads, and before any registration or further processing. Own
+	// messages are identified by the real sender, not the claimed PeerID, so
+	// a banned peer spoofing our ID cannot dodge the skip.
+	isSelf := fromID == s.P2PClient.GetID()
+	if !isSelf && s.shouldSkipBannedPeer(fromID, "handleRejectedTxTopic") {
+		return
+	}
+
 	rejectedTxMessage = RejectedTxMessage{}
 
 	err = json.Unmarshal(m, &rejectedTxMessage)
 	if err != nil {
-		s.logger.Errorf("[handleRejectedTxTopic] json unmarshal error: %v", err)
-		return
-	}
-
-	// Drop messages from banned peers before any registration or further
-	// processing (and before field validation and the spoof check, so a
-	// banned peer cannot keep triggering uncached AddBanScore RPCs). Own
-	// messages are identified by the real sender, not the claimed PeerID, so
-	// a banned peer spoofing our ID cannot dodge the skip.
-	if fromID != s.P2PClient.GetID() && s.shouldSkipBannedPeer(fromID, "handleRejectedTxTopic") {
+		// See handleBlockTopic: structurally invalid JSON is scored here
+		// because the message bus only counts a malformed outer envelope; a
+		// field type mismatch is dropped unscored.
+		s.logger.Errorf("[handleRejectedTxTopic] json unmarshal error from peer %s: %v", fromID, err)
+		if !isSelf && !json.Valid(m) {
+			s.addProtocolViolation(fromID)
+		}
 		return
 	}
 
@@ -574,7 +686,7 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 
 	if err = rejectedTxMessage.validateFields(); err != nil {
 		s.logger.Errorf("[handleRejectedTxTopic] invalid rejected tx message field from peer %s: %v", fromID, err)
-		if fromID != s.P2PClient.GetID() {
+		if !isSelf {
 			s.addProtocolViolation(fromID)
 		}
 		return
@@ -686,6 +798,15 @@ func (s *Server) getLocalHeight(ctx context.Context) uint32 {
 }
 
 func (s *Server) sanitizeAdvertisedTip(peerID string, advertisedHeight uint32, advertisedHash string, localHeight uint32) (uint32, *chainhash.Hash, bool) {
+	// Require the full 64-character form before decoding: NewHashFromStr
+	// zero-pads a short or empty string instead of failing, which would let an
+	// omitted best_block_hash register the peer with the all-zero hash and
+	// satisfy the "tip is known" gates in the sync coordinator.
+	if len(advertisedHash) != chainhash.MaxHashStringSize {
+		s.logger.Warnf("[sanitizeAdvertisedTip] rejecting advertised tip from peer %s: block hash length %d, expected %d", peerID, len(advertisedHash), chainhash.MaxHashStringSize)
+		return 0, nil, false
+	}
+
 	hash, err := chainhash.NewHashFromStr(advertisedHash)
 	if err != nil {
 		// Log the length, never the value: node_status deliberately feeds the
@@ -1299,11 +1420,21 @@ func (s *Server) getPeerFromMap(peerMap *cappedPeerMap, hash string, mapType str
 	return entry.peerID, nil
 }
 
-// parseHash converts a string hash to chainhash
+// parseHash converts a gossip hash string to a chainhash. It requires the
+// full 64-hex-character form: chainhash.NewHashFromStr zero-pads anything
+// shorter (an empty string decodes to the all-zero hash with a nil error), so
+// an omitted or truncated field would otherwise pass as a well-formed hash.
+// The value is only echoed to the log once its length is known to be bounded.
 func (s *Server) parseHash(hashStr string, context string) (*chainhash.Hash, error) {
+	if len(hashStr) != chainhash.MaxHashStringSize {
+		err := errors.NewInvalidArgumentError("hash length %d, expected %d hex characters", len(hashStr), chainhash.MaxHashStringSize)
+		s.logger.Errorf("[%s] rejecting hash: %v", context, err)
+		return nil, err
+	}
+
 	hash, err := chainhash.NewHashFromStr(hashStr)
 	if err != nil {
-		s.logger.Errorf("[%s] error getting chainhash from string %s: %v", context, hashStr, err)
+		s.logger.Errorf("[%s] error getting chainhash from string %q: %v", context, hashStr, err)
 		return nil, err
 	}
 

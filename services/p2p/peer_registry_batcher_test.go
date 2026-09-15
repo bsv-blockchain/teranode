@@ -1029,3 +1029,212 @@ func TestUpdatePeerLastMessageTime_BatchedPathSkipsSelfOriginator(t *testing.T) 
 	_, ok = reg.Get(self.String())
 	require.False(t, ok, "own peer ID must not be registered from self-gossip")
 }
+
+// TestPeerRegistryBatcher_TimeoutRequeuesRemainder guards the flush-budget
+// path: when the cycle's ctx expires partway through, the updates not yet
+// pushed were already swapped out of b.pending and used to be dropped on
+// return. They must be requeued so the next cycle delivers them.
+func TestPeerRegistryBatcher_TimeoutRequeuesRemainder(t *testing.T) {
+	t.Run("budget spent before the cycle starts", func(t *testing.T) {
+		b, _, reg := newBatcherWithCountingRegistry()
+
+		peers := make([]string, 5)
+		for i := range peers {
+			peers[i] = mustNewPeerID(t).String()
+			b.enqueueRegister(peers[i], "client/1.0", uint32(i+1), nil, "", true)
+		}
+
+		expired, cancel := context.WithCancel(context.Background())
+		cancel()
+		b.flushOnce(expired)
+
+		for _, pid := range peers {
+			_, ok := reg.Get(pid)
+			require.False(t, ok, "nothing can be flushed under an expired budget")
+		}
+		b.mu.Lock()
+		require.Len(t, b.pending, len(peers), "every unflushed update must be requeued, not dropped")
+		b.mu.Unlock()
+
+		b.flushOnce(context.Background())
+		for i, pid := range peers {
+			got, ok := reg.Get(pid)
+			require.True(t, ok, "requeued update must land on the next cycle")
+			require.Equal(t, uint32(i+1), got.Height, "requeued registration data must survive intact")
+			require.True(t, got.IsConnected, "requeued connected intent must survive intact")
+		}
+	})
+
+	t.Run("budget spent mid-cycle", func(t *testing.T) {
+		reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+		flushCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		expiring := &cancelOnFirstRegisterClient{
+			PeerRegistryClientI: blockchain.NewLocalPeerRegistryClient(reg),
+			cancel:              cancel,
+		}
+		b := newPeerRegistryBatcher(context.Background(), ulogger.TestLogger{}, expiring, time.Hour)
+
+		peers := make([]string, 5)
+		for i := range peers {
+			peers[i] = mustNewPeerID(t).String()
+			b.enqueueRegister(peers[i], "client/1.0", uint32(i+1), nil, "", false)
+			b.enqueueBytesReceived(peers[i], 100)
+		}
+
+		// The first RegisterPeer cancels the flush ctx: that peer's follow-up
+		// RPCs fail and are requeued individually, every later peer is
+		// requeued wholesale by the timeout path.
+		b.flushOnce(flushCtx)
+
+		b.flushOnce(context.Background())
+		for i, pid := range peers {
+			got, ok := reg.Get(pid)
+			require.True(t, ok, "peer %d must be registered after the retry cycle", i)
+			require.Equal(t, uint32(i+1), got.Height)
+			require.Equal(t, uint64(100), got.BytesReceived, "accumulated bytes must survive the cut-short cycle")
+		}
+	})
+
+	t.Run("newer observation wins over the requeued snapshot", func(t *testing.T) {
+		b, _, reg := newBatcherWithCountingRegistry()
+		pid := mustNewPeerID(t).String()
+		b.enqueueRegister(pid, "old/1.0", 10, nil, "", false)
+
+		expired, cancel := context.WithCancel(context.Background())
+		cancel()
+		b.flushOnce(expired)
+
+		// A fresher observation arrives before the retry.
+		b.enqueueRegister(pid, "new/2.0", 12, nil, "", false)
+		b.flushOnce(context.Background())
+
+		got, ok := reg.Get(pid)
+		require.True(t, ok)
+		require.Equal(t, uint32(12), got.Height, "height merge must stay monotonic across a requeue")
+		require.Equal(t, "new/2.0", got.ClientName, "latest client name must win over the requeued snapshot")
+	})
+}
+
+// cancelOnFirstRegisterClient cancels the supplied context as a side effect
+// of the first RegisterPeer, simulating a flush budget that expires while the
+// cycle is mid-way through its peers.
+type cancelOnFirstRegisterClient struct {
+	blockchain.PeerRegistryClientI
+	cancel   context.CancelFunc
+	attempts int
+}
+
+func (c *cancelOnFirstRegisterClient) RegisterPeer(ctx context.Context, info *blockchain.PeerInfo) error {
+	c.attempts++
+	err := c.PeerRegistryClientI.RegisterPeer(ctx, info)
+	if c.attempts == 1 {
+		c.cancel()
+	}
+	return err
+}
+
+// startBlockedFlushPair enqueues two connected peers and starts a flush that
+// blocks inside the first RegisterPeer. It returns the peer whose RegisterPeer
+// is in flight (the victim), the other one, the blocking hook and a channel
+// closed when the flush completes. The caller drives the interleaving.
+func startBlockedFlushPair(t *testing.T) (b *peerRegistryBatcher, reg *blockchain.CentralizedPeerRegistry, local blockchain.PeerRegistryClientI, blocking *blockingRegistryClient, victim, bystander string, flushDone chan struct{}) {
+	t.Helper()
+
+	reg = blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	local = blockchain.NewLocalPeerRegistryClient(reg)
+	blocking = &blockingRegistryClient{
+		PeerRegistryClientI: local,
+		enteredRegister:     make(chan string),
+		releaseRegister:     make(chan struct{}),
+	}
+	b = newPeerRegistryBatcher(context.Background(), ulogger.TestLogger{}, blocking, time.Hour)
+
+	victim = mustNewPeerID(t).String()
+	bystander = mustNewPeerID(t).String()
+	b.enqueueRegister(victim, "", 0, nil, "", true)
+	b.enqueueRegister(bystander, "", 0, nil, "", true)
+
+	flushDone = make(chan struct{})
+	go func() {
+		defer close(flushDone)
+		b.flushOnce(context.Background())
+	}()
+
+	// Map iteration order decides which peer blocks first.
+	if first := recvRegisterEntered(t, blocking.enteredRegister); first != victim {
+		victim, bystander = bystander, victim
+	}
+	return b, reg, local, blocking, victim, bystander, flushDone
+}
+
+func finishBlockedFlush(t *testing.T, blocking *blockingRegistryClient, flushDone chan struct{}) {
+	t.Helper()
+	blocking.releaseRegister <- struct{}{} // victim's RegisterPeer applies now
+	recvRegisterEntered(t, blocking.enteredRegister)
+	blocking.releaseRegister <- struct{}{} // bystander's
+	select {
+	case <-flushDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("flush did not complete")
+	}
+}
+
+// TestPeerRegistryBatcher_RemovalDuringInFlightRegisterIsCompensated
+// reproduces the resurrection race: removePeer runs forget() and its own
+// RemovePeer while the flush's RegisterPeer for that peer is in flight. The
+// registry then applies the RegisterPeer AFTER the RemovePeer, leaving a live
+// entry for a peer that (being banned) will never send the message that
+// would reconcile it. The flush must notice the tombstone after its RPCs
+// return and issue a compensating RemovePeer.
+func TestPeerRegistryBatcher_RemovalDuringInFlightRegisterIsCompensated(t *testing.T) {
+	b, reg, local, blocking, victim, bystander, flushDone := startBlockedFlushPair(t)
+
+	// removePeer's sequence, racing the in-flight RegisterPeer.
+	b.forget(victim)
+	require.NoError(t, local.UpdateConnectionState(context.Background(), victim, false))
+	require.NoError(t, local.RemovePeer(context.Background(), victim))
+
+	finishBlockedFlush(t, blocking, flushDone)
+
+	_, ok := reg.Get(victim)
+	require.False(t, ok, "peer removed while its RegisterPeer was in flight must not be resurrected")
+	got, ok := reg.Get(bystander)
+	require.True(t, ok, "compensating removal must be scoped to the removed peer")
+	require.True(t, got.IsConnected)
+
+	b.mu.Lock()
+	_, asserted := b.lastAsserted[victim]
+	b.mu.Unlock()
+	require.False(t, asserted, "removed peer must not be recorded as asserted")
+}
+
+// A peer that is forgotten and then re-enqueued inside the same cycle has a
+// legitimate registration pending for the next cycle, so the compensating
+// RemovePeer must be skipped: it would otherwise wipe registry writes made
+// by paths that bypass the batcher (catchup penalties, sync coordinator
+// peer info) for a peer that is coming right back.
+func TestPeerRegistryBatcher_ReenqueueDuringInFlightRegisterSkipsCompensation(t *testing.T) {
+	b, reg, local, blocking, victim, _, flushDone := startBlockedFlushPair(t)
+
+	b.forget(victim)
+	require.NoError(t, local.RemovePeer(context.Background(), victim))
+	b.enqueueRegister(victim, "back/1.0", 7, nil, "", true) // fresh observation mid-cycle
+
+	finishBlockedFlush(t, blocking, flushDone)
+
+	_, ok := reg.Get(victim)
+	require.True(t, ok, "a peer with a fresh pending observation must not be compensated away")
+
+	// Drain the extra blocking-hook round for the retry flush.
+	go func() {
+		<-blocking.enteredRegister
+		blocking.releaseRegister <- struct{}{}
+	}()
+	b.flushOnce(context.Background())
+
+	got, ok := reg.Get(victim)
+	require.True(t, ok)
+	require.Equal(t, uint32(7), got.Height, "the fresh observation must land on the next cycle")
+	require.Equal(t, "back/1.0", got.ClientName)
+}
