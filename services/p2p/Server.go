@@ -194,15 +194,15 @@ type Server struct {
 	peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
 	peerMapTTL           time.Duration // Time-to-live for peer map entries; the size cap lives in cappedPeerMap.maxSize
 
-	// liveConnCache caches, per peer ID, whether the peer had an open libp2p
-	// connection when last checked (liveConnCacheEntry, expires after
-	// reputationCacheTTL). Written by isPeerIPBanned's existing GetPeers walk
-	// and by hasLiveConnection on a miss; updatePeerLastMessageTime consults
-	// it so gossip-relayed publishers are never marked IsConnected while a
-	// freshly connected neighbour is flagged on its first message.
+	// liveConns is the snapshot of open libp2p connections (peer ID ->
+	// connected multiaddrs) the gossip hot path reads for liveness and IP-ban
+	// checks: updatePeerLastMessageTime consults it so gossip-relayed
+	// publishers are never marked IsConnected while a freshly connected
+	// neighbour is flagged on its first message. Its size is bounded by open
+	// connections, not by distinct authors seen; see liveConnSnapshot.
 	// reconcileInFlight keeps ticker-driven reconcile passes from piling up
 	// when the registry is slow.
-	liveConnCache     sync.Map
+	liveConns         liveConnSnapshot
 	reconcileInFlight atomic.Bool
 
 	invalidPolicyWarnOnce sync.Once // Emits the invalid-fee-policy warning at most once per process to avoid log spam
@@ -228,18 +228,18 @@ type Server struct {
 	// a notificationMsg must never be mutated after being stored or published.
 	latestNodeStatus atomic.Pointer[notificationMsg]
 
-	// ipBanCache is a short-lived cache of "is this peer's IP banned" lookups
-	// used by shouldSkipBannedPeer, avoiding a GetPeers scan per gossip message.
-	ipBanCache sync.Map // peerID string -> ipBanCacheEntry
 	// reputationCache is a short-lived cache of peer reputation scores used by
 	// shouldSkipUnhealthyPeer to avoid a gRPC round-trip per pubsub message.
-	// Entries expire after reputationCacheTTL; misses fall back to the registry.
-	reputationCache sync.Map // peerID string -> reputationCacheEntry
-	// banStatusCache is a short-lived cache of registry IsPeerBanned lookups
-	// used by shouldSkipBannedPeer, avoiding a gRPC round-trip per gossip
-	// message. Entries expire after reputationCacheTTL; local ban transitions
-	// (onPeerBanned) overwrite the entry immediately.
-	banStatusCache sync.Map // peerID string -> banStatusCacheEntry
+	// Entries expire after reputationCacheTTL; misses fall back to the
+	// registry. Only directly connected peers are ever inserted, and the cache
+	// is bounded at insert (applyPeerMapLimits), so gossip from free-to-mint
+	// identities cannot grow it.
+	reputationCache boundedTTLCache[reputationCacheEntry]
+	// bannedPeers mirrors the registry's banned peer IDs for
+	// shouldSkipBannedPeer, refreshed once per bannedPeerRefreshInterval
+	// instead of one IsPeerBanned round-trip per distinct author; local ban
+	// transitions (onPeerBanned) are applied to it immediately.
+	bannedPeers bannedPeerMirror
 	// registryBatcher coalesces the per-message peer-registry writes from the
 	// gossip handlers into one batch of RPCs per peer per flush interval. Nil
 	// in tests that construct Server directly; helpers then fall back to
@@ -783,6 +783,11 @@ func (s *Server) applyPeerMapLimits(tSettings *settings.Settings) {
 	s.blockPeerMap.setMaxSize(maxSize)
 	s.subtreePeerMap.setMaxSize(maxSize)
 	s.reportedInvalidBlocks.setMaxSize(maxSize)
+
+	// The per-peer reputation cache shares the cap: it is keyed by peer ID
+	// rather than by hash, so the same figure bounds it far more loosely, but
+	// one knob keeps every gossip-driven map under one documented limit.
+	s.reputationCache.setMaxSize(maxSize)
 
 	// The seen-hash dedup caches take their limits from the same call: their
 	// zero values fall back to the package defaults, so this too costs only
@@ -2069,8 +2074,8 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 	// least one gossip message since process start — liveness derives from
 	// the message bus's topic-peer set, so a connected-but-silent peer is
 	// invisible until its first message. A flag can lag reality by up to
-	// reputationCacheTTL after a connect and by up to one cleanup interval
-	// after a disconnect.
+	// liveConnMissRefreshInterval after a connect and by up to one cleanup
+	// interval after a disconnect.
 	// The two transports are counted separately: ConnectedPeersCount keeps
 	// its established libp2p-only meaning for every node already consuming
 	// this gossip message, and legacy peers get their own figure.
@@ -2898,8 +2903,8 @@ func (s *Server) onPeerBanned(peerID, reason string) {
 	prometheusP2PBanEvents.WithLabelValues(normalizeBanReasonLabel(reason)).Inc()
 
 	// Make the ban effective for gossip filtering immediately, without waiting
-	// for the cached IsPeerBanned=false entry to expire.
-	s.banStatusCache.Store(peerID, banStatusCacheEntry{banned: true, expiresAt: time.Now().Add(reputationCacheTTL)})
+	// for the banned-peer mirror's next registry refresh.
+	s.bannedPeers.add(peerID, time.Now())
 
 	pid, err := peer.Decode(peerID)
 	if err != nil {
@@ -2966,16 +2971,13 @@ func (s *Server) ResetReputation(ctx context.Context, req *p2p_api.ResetReputati
 		return nil, errors.WrapGRPCPublic(errors.NewServiceError("reset reputation", err))
 	}
 
-	// Drop cached ban statuses so a reset (which may unban) takes effect
-	// immediately instead of after the cache TTL.
+	// Drop the mirrored ban status so a reset (which may unban) takes effect
+	// immediately instead of after the mirror's next refresh.
 	if req.PeerId == "" {
-		s.banStatusCache.Range(func(key, _ interface{}) bool {
-			s.banStatusCache.Delete(key)
-			return true
-		})
+		s.bannedPeers.clear()
 		s.logger.Infof("[ResetReputation] Reset reputation for all peers. Count: %d", peersReset)
 	} else {
-		s.banStatusCache.Delete(req.PeerId)
+		s.bannedPeers.remove(req.PeerId)
 		s.logger.Infof("[ResetReputation] Reset reputation for peer %s", req.PeerId)
 	}
 
