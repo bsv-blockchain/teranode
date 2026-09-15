@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/daemon"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/test"
@@ -389,8 +390,10 @@ func TestPrunerParentFullySpentNotDeletedBeforeChildren(t *testing.T) {
 	err = node.WaitForBlockPersisted(triggerBlock.Hash(), 10*time.Second)
 	require.NoError(t, err)
 
-	node.WaitForPruner(t, 10*time.Second)
-
-	_, err = node.UtxoStore.Get(node.Ctx, parentHash)
-	require.Error(t, err)
+	// Earlier pruning cycles may still have queued callbacks, so wait for the
+	// parent record itself to be deleted after its retention height.
+	require.Eventually(t, func() bool {
+		_, err := node.UtxoStore.Get(node.Ctx, parentHash, fields.DeleteAtHeight)
+		return errors.Is(err, errors.ErrTxNotFound)
+	}, 10*time.Second, 100*time.Millisecond, "fully spent parent should be pruned")
 }

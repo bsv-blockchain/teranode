@@ -411,6 +411,8 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.ChainCfgParams = test.MainNetParamsForSyntheticPoW()
+	// This synthetic PoW fixture uses modern difficulty rules from genesis.
+	tSettings.ChainCfgParams.DaaForkHeight = 0
 
 	blockHeader := &model.BlockHeader{
 		Version:        1,
