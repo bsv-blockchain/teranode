@@ -162,7 +162,9 @@ func TestValidateBlock_UnusableHeaderRunIsRebuiltByHashWalk(t *testing.T) {
 
 	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 
-	subtreeBytes, err := subtree.SerializeNodes()
+	// Serialize(), not SerializeNodes(): cached-subtree validation reads the full file, including
+	// its conflicting-node trailer.
+	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
 	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
