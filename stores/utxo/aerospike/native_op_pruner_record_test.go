@@ -29,6 +29,9 @@ func nativeStoreWithSharedPolicy(t *testing.T) *Store {
 
 	s := &Store{nativeOpBatchWritePolicy: policy, logger: ulogger.TestLogger{}}
 	s.useNativeTeranodeOps.Store(true)
+	// A dispatcher that proved replay protection, so the replay-protection
+	// sub-ops (addDeletedChildren among them) are native too.
+	s.nativeReplayProtection.Store(true)
 
 	return s
 }

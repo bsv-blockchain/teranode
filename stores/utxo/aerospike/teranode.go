@@ -74,7 +74,7 @@ import (
 var teranodeLUA []byte
 
 var (
-	LuaPackage      = "teranode_v61" // N.B. Do not have any "." in this string
+	LuaPackage      = "teranode_v65" // N.B. Do not have any "." in this string
 	LuaPackageMined = LuaPackage + "_mined"
 )
 
@@ -275,6 +275,12 @@ type LuaMapResponse struct {
 	BlockIDs   []int                `json:"blockIDs,omitempty"`
 	Errors     map[int]LuaErrorInfo `json:"errors,omitempty"`
 	ChildCount int                  `json:"childCount,omitempty"`
+	// Idempotent lists the spend indexes whose utxo already recorded exactly this
+	// spend, so the Lua wrote nothing for them. They succeed, but a rollback must
+	// leave them alone: the spend they matched is the confirmed, historical one.
+	// Absent from responses produced by a native-op server that predates it, in
+	// which case every success is treated as a fresh spend, as before.
+	Idempotent []int `json:"idempotent,omitempty"`
 	// Debug      string               `json:"debug,omitempty"`
 }
 
@@ -297,6 +303,7 @@ type LuaMapResponse struct {
 // scalar fields rather than relying on r.Errors == nil semantics.
 func (r *LuaMapResponse) Reset() {
 	r.Status = ""
+	r.Idempotent = nil
 	r.ErrorCode = ""
 	r.Message = ""
 	r.Signal = ""
@@ -437,6 +444,20 @@ func (s *Store) parseLuaMapResponseInto(response interface{}, result *LuaMapResp
 
 			result.Errors[offset] = errorInfo
 		}
+	}
+
+	// Parse idempotent list for spendMulti
+	// Parsed like blockIDs, through luaResponseIntSlice, because the native
+	// dispatcher may encode it as a typed integer slice such as []int64. A bare
+	// []interface{} assertion failed that shape, and a parse failure completes
+	// every spend in the record with an error and demotes the native path.
+	if idempotentField, ok := respMap["idempotent"]; ok {
+		offsets, err := luaResponseIntSlice(idempotentField)
+		if err != nil {
+			return errors.NewProcessingError("invalid idempotent list (%T)", idempotentField, err)
+		}
+
+		result.Idempotent = append(result.Idempotent[:0], offsets...)
 	}
 
 	// Parse childCount

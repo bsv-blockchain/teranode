@@ -119,6 +119,20 @@ func TestParseLuaMapResponse(t *testing.T) {
 			},
 		},
 		{
+			// The native dispatcher may encode the idempotent list as a typed
+			// integer slice, as it does blockIDs. A bare []interface{} assertion
+			// rejected it and failed every spend in the record.
+			name: "native response with a typed idempotent slice",
+			response: map[string]interface{}{
+				"status":     "OK",
+				"idempotent": []int64{0, 3},
+			},
+			expectError: false,
+			validateResult: func(t *testing.T, result *LuaMapResponse) {
+				assert.Equal(t, []int{0, 3}, result.Idempotent)
+			},
+		},
+		{
 			name: "minimal response with only status",
 			response: map[interface{}]interface{}{
 				"status": "ERROR",
