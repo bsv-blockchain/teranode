@@ -31,11 +31,13 @@
     data = {},
     display = DetailTab.overview,
     blockHash = '',
+    index,
     ondisplay,
   }: {
     data?: any
     display?: DetailTab
     blockHash?: string
+    index?: number
     ondisplay?: (detail: { value: string }) => void
   } = $props()
 
@@ -91,7 +93,9 @@
   })
 </script>
 
-<Card title={t(`${baseKey}.title`, { height: expandedData.height })}>
+<Card
+  title={index === undefined ? t(`${baseKey}.title_generic`) : t(`${baseKey}.title`, { index })}
+>
   {#snippet subtitle()}
   <div class="copy-link">
     <div class="hash">{expandedData.hash}</div>
