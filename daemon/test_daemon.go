@@ -431,9 +431,9 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	appSettings.RPC.CacheEnabled = false
 	appSettings.UsePrometheusGRPCMetrics = false
 
-	// Give the in-process P2P/Legacy servers and their clients a shared, non-placeholder
-	// admin API key so protected admin RPCs (ban/unban, connect/disconnect peer) authenticate.
-	// settings.conf ships no key, so without this every admin RPC would return Unauthenticated.
+	// Give Blockchain/P2P/Legacy servers and their clients a shared test credential.
+	// Blockchain requires it for startup, reads, writes and subscriptions.
+	// settings.conf deliberately ships no production default.
 	// Tests that need a specific key still override it below via SettingsOverrideFunc.
 	appSettings.GRPCAdminAPIKey = "teranode-testdaemon-admin-key"
 

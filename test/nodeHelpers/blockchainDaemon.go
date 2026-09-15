@@ -61,6 +61,8 @@ func NewBlockchainDaemon(t *testing.T) (*BlockchainDaemon, error) {
 
 	logger := ulogger.NewErrorTestLogger(t, cancel)
 	tSettings := settings.NewSettings("dev.system.test")
+	// Shared only by this test daemon and its clients; production has no default key.
+	tSettings.GRPCAdminAPIKey = "teranode-node-helper-test-service-key"
 	tSettings.LocalTestStartFromState = "RUNNING"
 
 	// Configure settings for in-memory Kafka

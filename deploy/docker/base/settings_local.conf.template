@@ -107,19 +107,11 @@
 # ResetReputation cross the auth interceptor and need a key that every service reads.
 #
 # It is intentionally NOT set in the repo's settings.conf (a public repo, so any
-# committed value is world-readable). Unset = a random key is generated per service
-# and these RPCs return Unauthenticated. Well-known placeholders (e.g. "testkey")
-# are ignored. Use a strong random value of 32+ characters.
-#
-# After the P2P data-plane RPCs were placed behind this key, it is no longer only
-# an admin concern: block and subtree validation use it to report validated chain
-# progress and block/subtree delivery. Without it those reports are rejected, no
-# peer ever becomes a proven sync candidate, and catchup stays in the budget-gated
-# probe tier - the node keeps running but never settles on a good sync peer. Set
-# the SAME value for every service in the deployment.
-#
-# REQUIRED for a working multi-container node - uncomment and set a real value:
-# grpc_admin_api_key.docker.m = your_32_plus_char_random_secret
+# committed value is world-readable). Blockchain refuses startup if it is unset,
+# a known placeholder, or shorter than 16 characters, including on development
+# networks. Docker Compose requires grpc_admin_api_key in the environment/.env and
+# passes it to every service. Generate a random value (32+ characters recommended).
+# Upgrade credential-capable clients first and Blockchain last.
 
 # ==============================================================================
 # MINING CONFIGURATION

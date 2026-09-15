@@ -522,6 +522,11 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
 
+	if err := util.ValidateRequiredAdminAPIKey(b.settings.GRPCAdminAPIKey); err != nil {
+		return err
+	}
+	util.ValidateAdminAPIKey(b.logger, "Blockchain", b.settings.GRPCAdminAPIKey, b.settings.BlockChain.GRPCListenAddress, b.settings.SecurityLevelGRPC)
+
 	b.startKafka()
 
 	// Settings here still live under tSettings.P2P.* — the centralized
@@ -584,7 +589,7 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		blockchain_api.RegisterBlockchainAPIServer(server, b)
 		blockchain_api.RegisterPeerRegistryServiceServer(server, b)
 		closeOnce.Do(func() { close(readyCh) })
-	}, nil); err != nil {
+	}, b.grpcAuthOptions()); err != nil {
 		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Blockchain][Start] can't start GRPC server", err))
 	}
 
@@ -639,8 +644,8 @@ func (b *Blockchain) startHTTP(ctx context.Context) error {
 		return c.String(http.StatusOK, "OK")
 	})
 
-	e.GET("/invalidate/:hash", b.invalidateHandler)
-	e.GET("/revalidate/:hash", b.revalidateHandler)
+	e.POST("/invalidate/:hash", b.invalidateHandler, b.requireAdminAPIKey)
+	e.POST("/revalidate/:hash", b.revalidateHandler, b.requireAdminAPIKey)
 
 	go func() {
 		<-ctx.Done()

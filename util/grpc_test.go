@@ -446,8 +446,7 @@ func TestStartGRPCServerBasic(t *testing.T) {
 
 	// Register function for the gRPC service
 	registerFunc := func(server *grpc.Server) {
-		// Register reflection service (this is what the actual function does)
-		// We don't need to register a specific service for this test
+		// We do not need a registered service for this listener lifecycle test.
 		close(serverReady)
 	}
 

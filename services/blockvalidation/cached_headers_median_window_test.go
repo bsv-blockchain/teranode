@@ -135,7 +135,8 @@ func TestValidateBlock_CachedHeadersShortWindowIsRefused(t *testing.T) {
 	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 
 	// Prime the subtree store so subtree validation passes and the run reaches the header check.
-	subtreeBytes, err := subtree.SerializeNodes()
+	// The cached-subtree reader needs the full header and conflicting-node trailer.
+	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
 	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
