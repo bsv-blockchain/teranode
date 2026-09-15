@@ -382,26 +382,47 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
             end
         end
 
+        -- Replay protection: a spend of a transaction the pruner has already
+        -- removed must be rejected, even while this output still looks unspent.
+        -- The pruner records every removed child on the parent's
+        -- deletedChildren map, keyed by the child's txid, so the incoming
+        -- spender being named there proves this spend is a replay.
+        --
+        -- The key is the INCOMING spender (spendingData), not
+        -- existingSpendingData: a replayed transaction re-appears with its
+        -- original bytes while the output element may hold anything after
+        -- pruning, so only the incoming bytes still name the offender. The
+        -- expression filter applies the same rule before this UDF is ever
+        -- reached.
+        --
+        -- Idempotent re-deliveries of live spends are unaffected: their txid is
+        -- not in deletedChildren, so they fall through to the same-data branch
+        -- below and are swallowed without re-incrementing spentUtxos.
+        if deletedChildren ~= nil then
+            local childTxID = spendingDataBytesToTxHex(spendingData)
+            if deletedChildren[childTxID] then
+                local error = map()
+
+                error[FIELD_ERROR_CODE] = ERROR_CODE_INVALID_SPEND
+                error[FIELD_MESSAGE] = MSG_INVALID_SPEND
+                if existingSpendingData ~= nil then
+                    error[FIELD_SPENDING_DATA] = spendingDataBytesToHex(existingSpendingData)
+                end
+
+                errors[idx] = error
+
+                goto continue
+            end
+        end
+
         -- Handle already spent UTXO
         if existingSpendingData then
 
             if bytes_equal(existingSpendingData, spendingData) then
-                -- Already spent with same data
-
-                if deletedChildren ~= nil then
-                    -- Check whether this child tx (by txid) exists in the deletedChildren map, if yes, error out
-                    local childTxID = spendingDataBytesToTxHex(existingSpendingData)
-                    if deletedChildren[childTxID] then
-                        local error = map()
-
-                        error[FIELD_ERROR_CODE] = ERROR_CODE_INVALID_SPEND
-                        error[FIELD_MESSAGE] = MSG_INVALID_SPEND
-                        error[FIELD_SPENDING_DATA] = spendingDataBytesToHex(existingSpendingData)
-
-                        errors[idx] = error
-                    end
-                end
-
+                -- Already spent with same data - idempotent re-delivery, no
+                -- response map entry; the marker either landed (outer replay
+                -- check rejected it) or the spend is live. Swallow quietly so
+                -- spentUtxos is not re-incremented.
                 goto continue
             elseif isFrozen(existingSpendingData) then
                 local error = map()

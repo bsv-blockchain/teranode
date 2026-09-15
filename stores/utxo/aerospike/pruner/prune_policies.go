@@ -50,8 +50,9 @@ func newPrunerTTLTouchPolicy(commitLevel aerospike.CommitLevel) *aerospike.Batch
 
 // buildDeletionBatchRecords turns the pruned keys into the batch records that
 // remove them: a hard delete per key, or a 1-second TTL touch when
-// pruner_utxoSetTTL is enabled. Shared by executeBatchDeletions and the child
-// half of executeBatchCleanupCombined so both paths get the same durability.
+// pruner_utxoSetTTL is enabled. Used by executeBatchDeletions for the child-records
+// half of a prune chunk; the parent markers always went out in their own
+// executeBatchParentUpdates round-trip first.
 func buildDeletionBatchRecords(keys []*aerospike.Key, utxoSetTTL bool, commitLevel aerospike.CommitLevel) []aerospike.BatchRecordIfc {
 	batchRecords := make([]aerospike.BatchRecordIfc, len(keys))
 

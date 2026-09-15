@@ -39,8 +39,6 @@ var _ pruner.Service = (*Service)(nil)
 
 var IndexName, _ = gocore.Config().Get("pruner_IndexName", "pruner_dah_index")
 
-const errParentUpdateOpsFailed = "%d parent update operations failed"
-
 // Wire vocabulary of the addDeletedChildren mod-teranode response. These mirror
 // the constants in teranode.lua (FIELD_STATUS / FIELD_ERROR_CODE / FIELD_MESSAGE,
 // STATUS_OK / STATUS_ERROR, ERROR_CODE_TX_NOT_FOUND) and the store's LuaSuccess
@@ -93,6 +91,8 @@ var (
 	prometheusUtxoExternalFilesDeletedSkipped prometheus.Counter
 	prometheusUtxoRetryAttempts               prometheus.Counter
 	prometheusUtxoTimeoutEvents               prometheus.Counter
+	prometheusUtxoInputResolutionErrors       prometheus.Counter
+	prometheusUtxoParentUpdateFailures        prometheus.Counter
 	prometheusUtxoParentsSkippedPruned        prometheus.Counter
 	prometheusUtxoPrunedSetSize               prometheus.Gauge
 	prometheusUtxoPrunedSetSaturated          prometheus.Gauge
@@ -240,6 +240,31 @@ type Service struct {
 type parentUpdateInfo struct {
 	key         *aerospike.Key
 	childHashes []*chainhash.Hash // Child transactions being deleted
+	// seen dedups childHashes. One consolidation transaction can spend many
+	// outputs of the same parent, and every one of those inputs asks for the
+	// same (parent, child) marker. Without this, a 10k-input spend of a single
+	// parent built a 10k-element list of the identical 64-char hex string in one
+	// batch record.
+	seen map[chainhash.Hash]struct{}
+}
+
+// add appends childHash unless this parent record already has it queued.
+func (p *parentUpdateInfo) add(childHash *chainhash.Hash) {
+	if _, ok := p.seen[*childHash]; ok {
+		return
+	}
+
+	p.seen[*childHash] = struct{}{}
+	p.childHashes = append(p.childHashes, childHash)
+}
+
+// pendingDeletion is one scanned record and every Aerospike key that removing it
+// requires (master plus any pagination records). Deletion is gated on the
+// record's parent markers having landed, so the keys have to stay grouped by
+// child transaction rather than flattened into one list.
+type pendingDeletion struct {
+	txHash *chainhash.Hash
+	keys   []*aerospike.Key
 }
 
 // externalFileInfo holds information about external files to delete
@@ -320,6 +345,14 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		prometheusUtxoTimeoutEvents = promauto.NewCounter(prometheus.CounterOpts{
 			Name: "utxo_pruner_timeout_events_total",
 			Help: "Total number of timeout events requiring retry during pruning operations",
+		})
+		prometheusUtxoInputResolutionErrors = promauto.NewCounter(prometheus.CounterOpts{
+			Name: "utxo_pruner_input_resolution_errors_total",
+			Help: "Total number of records retained during pruning because their input references could not be resolved",
+		})
+		prometheusUtxoParentUpdateFailures = promauto.NewCounter(prometheus.CounterOpts{
+			Name: "utxo_pruner_parent_update_failures_total",
+			Help: "Total number of parent replay-marker writes that failed; the children they protect are held back from deletion and reconsidered next cycle",
 		})
 		prometheusUtxoParentsSkippedPruned = promauto.NewCounter(prometheus.CounterOpts{
 			Name: "utxo_pruner_parents_skipped_pruned_total",
@@ -1061,7 +1094,7 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 
 	// Step 3: Accumulate operations for entire chunk, then flush once (efficient batching)
 	allParentUpdates := make(map[string]*parentUpdateInfo, 1000)
-	allDeletions := make([]*aerospike.Key, 0, 1000)      // Accumulate all deletions for chunk
+	allDeletions := make([]*pendingDeletion, 0, 1000)    // Accumulate all deletions for chunk
 	allExternalFiles := make([]*externalFileInfo, 0, 10) // Accumulate external files (<1%)
 	processedCount := 0
 	skippedCount := 0
@@ -1142,10 +1175,18 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 		// Add loop at the top of processRecordChunk.
 		inputs, err := s.getTxInputsFromBins(ctx, blockHeight, rec.Record.Bins, txHash)
 		if err != nil {
-			return 0, 0, err
+			// The record cannot be safely removed right now: the inputs that
+			// must receive its deletedChildren markers could not be resolved.
+			// Retaining it keeps it visible and lets the next prune cycle
+			// reconsider it. See getTxInputsFromBins on the missing-blob case.
+			s.logger.Infof("Retaining %s at height %d: could not resolve inputs for replay markers: %v", txHash.String(), blockHeight, err)
+			prometheusUtxoInputResolutionErrors.Inc()
+			skippedCount++
+			continue
 		}
 
 		// Accumulate parent updates, skipping parents already pruned in this session
+		retain := false
 		for _, input := range inputs {
 			// Check if parent TX was already pruned — if so, skip the update
 			parentTxID := input.PreviousTxIDChainHash()
@@ -1154,21 +1195,20 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 				continue
 			}
 
-			keySource := uaerospike.CalculateKeySource(parentTxID, input.PreviousTxOutIndex, s.utxoBatchSize)
-			parentKeyStr := string(keySource)
+			// Failure here means the key source for one of this record's
+			// parents is unreachable - same retention reasoning as above.
+			if err := s.addParentUpdatesForInput(allParentUpdates, parentTxID, input.PreviousTxOutIndex, txHash); err != nil {
+				s.logger.Infof("Retaining %s at height %d: could not enqueue replay marker for parent %s:%d: %v",
+					txHash.String(), blockHeight, parentTxID.String(), input.PreviousTxOutIndex, err)
+				prometheusUtxoInputResolutionErrors.Inc()
+				skippedCount++
+				retain = true
 
-			if existing, ok := allParentUpdates[parentKeyStr]; ok {
-				existing.childHashes = append(existing.childHashes, txHash)
-			} else {
-				parentKey, err := aerospike.NewKey(s.namespace, s.set, keySource)
-				if err != nil {
-					return 0, 0, err
-				}
-				allParentUpdates[parentKeyStr] = &parentUpdateInfo{
-					key:         parentKey,
-					childHashes: []*chainhash.Hash{txHash},
-				}
+				break
 			}
+		}
+		if retain {
+			continue
 		}
 
 		// Accumulate external files
@@ -1184,18 +1224,22 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 			})
 		}
 
-		// Accumulate deletions (master + child records)
-		allDeletions = append(allDeletions, rec.Record.Key)
+		// Accumulate deletions (master + child records), grouped by transaction
+		// so a held-back child leaves every one of its keys in place.
+		deletion := &pendingDeletion{txHash: txHash, keys: make([]*aerospike.Key, 1, 2)}
+		deletion.keys[0] = rec.Record.Key
 
 		if totalExtraRecs, hasExtraRecs := rec.Record.Bins[s.fieldTotalExtraRecs].(int); hasExtraRecs && totalExtraRecs > 0 {
 			for i := 1; i <= totalExtraRecs; i++ {
 				childKeySource := uaerospike.CalculateKeySourceInternal(txHash, uint32(i))
 				childKey, err := aerospike.NewKey(s.namespace, s.set, childKeySource)
 				if err == nil {
-					allDeletions = append(allDeletions, childKey)
+					deletion.keys = append(deletion.keys, childKey)
 				}
 			}
 		}
+
+		allDeletions = append(allDeletions, deletion)
 
 		processedCount++
 	}
@@ -1204,9 +1248,21 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 	// Aerospike network I/O. The chunk's record TXIDs were Added to
 	// prunedSet at the top of this function so concurrent chunks can see
 	// them during this wait.
-	if err := s.flushCleanupBatches(ctx, allParentUpdates, allDeletions, allExternalFiles); err != nil {
+	//
+	// Children whose parent marker did not land are held back: they return
+	// in heldBack and are counted as skipped so every prune cycle advances
+	// past, not into, their poison parent record.
+	heldBack, err := s.flushCleanupBatches(ctx, allParentUpdates, allDeletions, allExternalFiles)
+	if err != nil {
 		return 0, 0, err
 	}
+
+	if heldBack > 0 {
+		s.logger.Warnf("Chunk flush held back %d child records whose parent updates failed; reconsidering them next cycle", heldBack)
+	}
+
+	processedCount -= heldBack
+	skippedCount += heldBack
 
 	// Report record-level errors once per chunk (avoid log flooding)
 	if recordErrorCount > 0 {
@@ -1499,11 +1555,15 @@ func (s *Service) getTxInputsFromBins(ctx context.Context, blockHeight uint32, b
 					return nil, nil
 				}
 
-				// Idempotent: External file missing (cleaned by LocalDAH or previous run)
-				// We can still proceed with record deletion - return empty inputs list
-				s.logger.Debugf("external tx %s already deleted from blob store at height %d, proceeding to delete Aerospike record",
+				// Retain the record: its inputs cannot be resolved, so the parents
+				// that must carry its replay markers are unknown. Deleting it here
+				// is exactly the #1701 hole - a child removed with no marker - and a
+				// missing blob is indistinguishable from a concurrent deletion race,
+				// so there is no idempotent reading of it. The record is reconsidered
+				// by the next prune cycle and eventually removed via a normal prune.
+				s.logger.Debugf("external tx %s not found in blob store at height %d, retaining record for later cleanup",
 					txHash.String(), blockHeight)
-				return []*bt.Input{}, nil
+				return nil, errors.NewProcessingError("external tx %s not found in blob store at height %d", txHash.String(), blockHeight)
 			}
 			// Other errors should still be reported
 			return nil, errors.NewProcessingError("error getting external tx %s at height %d: %v", txHash.String(), blockHeight, err)
@@ -1535,7 +1595,14 @@ func (s *Service) getTxInputsFromBins(ctx context.Context, blockHeight uint32, b
 		// This skips parsing ScriptSig (can be 0-10KB) and Sequence fields
 		// 5-10x faster than Input.ReadFrom() which parses the entire input
 		for i, inputInterface := range inputInterfaces {
-			inputBytes := inputInterface.([]byte)
+			inputBytes, ok := inputInterface.([]byte)
+			if !ok {
+				// A record storing a malformed (non-byte-slice) input element
+				// cannot have its parents located; retain it rather than
+				// deleting a child whose markers are unknowable.
+				return nil, errors.NewProcessingError("input element %d of tx %s at height %d is %T, expected []byte",
+					i, txHash.String(), blockHeight, inputInterface)
+			}
 
 			// Fast path: extract only PreviousTxID and Index (36 bytes)
 			prevTxID, prevIndex, err := extractInputReference(inputBytes)
@@ -1562,66 +1629,142 @@ func (s *Service) getTxInputsFromBins(ctx context.Context, blockHeight uint32, b
 	return inputs, nil
 }
 
-// flushCleanupBatches flushes accumulated parent updates, external file deletions, and Aerospike deletions
-func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[string]*parentUpdateInfo, deletions []*aerospike.Key, externalFiles []*externalFileInfo) error {
-	// Combine parent updates and Aerospike record deletions into a single
-	// BatchOperate round-trip. Aerospike's batch API accepts mixed
-	// BatchRecordIfc lists (UDFs + Deletes + Writes), so the server fans
-	// them out per-node and we get one network round-trip per chunk
-	// instead of two.
-	//
-	// When defensive mode is on we keep the two-step sequence (parents
-	// first, deletions second) — the defensive safety check reads the
-	// parent's deletedChildren bin and assumes the update has landed
-	// before the child record is gone.
-	//
-	// When defensive mode is off the two go out together. Note that the
-	// deletedChildren bin IS still read on the spend path regardless of
-	// mode (teranode.lua checks it on an idempotent re-spend), so a parent
-	// update that fails inside the combined batch leaves the child deleted
-	// with no replay marker. See #1701; ordering this path like the
-	// defensive one is open follow-up work.
-	if s.defensiveEnabled {
-		if len(parentUpdates) > 0 {
-			if err := s.executeBatchParentUpdates(ctx, parentUpdates); err != nil {
-				return err
-			}
+// addParentUpdate accumulates replay protection for a surviving parent record.
+// It is the single producer of parentUpdateInfo values: processRecordChunk and
+// ProcessSingleRecord both go through it, so the two cannot disagree about which
+// records get a marker.
+func (s *Service) addParentUpdate(updates map[string]*parentUpdateInfo, source []byte, childHash *chainhash.Hash) error {
+	if existing, ok := updates[string(source)]; ok {
+		existing.add(childHash)
+
+		return nil
+	}
+
+	key, err := aerospike.NewKey(s.namespace, s.set, source)
+	if err != nil {
+		return err
+	}
+
+	info := &parentUpdateInfo{key: key, seen: make(map[chainhash.Hash]struct{}, 1)}
+	info.add(childHash)
+	updates[string(source)] = info
+
+	return nil
+}
+
+// addParentUpdatesForInput queues the one marker write a spent outpoint needs:
+// on the output PAGE that holds this vout, which is the record the spend path
+// reads (uaerospike.CalculateKeySource, the same key Lua's spend targets).
+//
+// No copy goes on the master record. When the page differs from the master
+// (vout >= utxoBatchSize) nothing reads a master entry in either defensive mode:
+// the Lua spend reads the page it targets, and the defensive scan matches
+// deletedChildren against the scanned record's own utxos bin, which on the master
+// holds outputs 0..utxoBatchSize-1 only (splitIntoBatches), so a child of a
+// higher output is never named there. What the copy did do was accumulate ~70
+// bytes per pruned child on a record that never shrinks; a 16k-output parent
+// crossed write-block-size at roughly 15k children and every later marker write
+// to it failed with RECORD_TOO_BIG. Page-only marking bounds each record to one
+// entry per output it actually holds.
+func (s *Service) addParentUpdatesForInput(updates map[string]*parentUpdateInfo, parentTxID *chainhash.Hash, vout uint32, childHash *chainhash.Hash) error {
+	return s.addParentUpdate(updates, uaerospike.CalculateKeySource(parentTxID, vout, s.utxoBatchSize), childHash)
+}
+
+// flushCleanupBatches persists replay protection before removing children, and
+// removes only the children whose protection actually landed.
+//
+// Aerospike batches are not atomic across records, so a failed marker write must
+// leave the affected children in place for a later cycle, regardless of
+// defensive mode. Per-record marker failures are isolated: they hold back the
+// children of that one parent and are returned in heldBack. Only a whole-batch
+// failure - the BatchOperate call itself, or a cancelled context - is returned
+// as an error, because that says nothing about any individual record.
+//
+// Isolating per-record failures is the same reasoning as the retention path in
+// getTxInputsFromBins: PruneWithPartitions never retries a non-TimeoutError and
+// services/pruner/worker.go logs the failure and advances lastProcessedHeight
+// anyway, so one permanently-unwritable parent record returned as a chunk error
+// would re-fail every block forever and NotifyPruneComplete would never fire
+// again.
+func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[string]*parentUpdateInfo, deletions []*pendingDeletion, externalFiles []*externalFileInfo) (heldBack int, err error) {
+	var blocked map[chainhash.Hash]struct{}
+
+	if len(parentUpdates) > 0 {
+		blocked, err = s.executeBatchParentUpdates(ctx, parentUpdates)
+		if err != nil {
+			return 0, err
 		}
-		if !s.settings.Pruner.SkipDeletions && len(deletions) > 0 {
-			if err := s.executeBatchDeletions(ctx, deletions); err != nil {
-				return err
-			}
+	}
+
+	keys := make([]*aerospike.Key, 0, len(deletions))
+
+	for _, deletion := range deletions {
+		if _, held := blocked[*deletion.txHash]; held {
+			heldBack++
+
+			continue
 		}
-	} else {
-		var keys []*aerospike.Key
-		if !s.settings.Pruner.SkipDeletions {
-			keys = deletions
-		}
-		if err := s.executeBatchCleanupCombined(ctx, parentUpdates, keys); err != nil {
-			return err
+
+		keys = append(keys, deletion.keys...)
+	}
+
+	// SkipDeletions gates the external blob deletions as well as the record
+	// deletions. The pruner is the only production deleter of those blobs (the
+	// external store is built with WithDisableDAH(true) and the blobs carry no
+	// DAH), so deleting the blob while the record is deliberately retained
+	// leaves a record whose transaction can never be read back.
+	if s.settings.Pruner.SkipDeletions {
+		return heldBack, nil
+	}
+
+	if len(keys) > 0 {
+		if err := s.executeBatchDeletions(ctx, keys); err != nil {
+			return heldBack, err
 		}
 	}
 
 	if len(externalFiles) > 0 {
-		if err := s.executeBatchExternalFileDeletions(ctx, externalFiles); err != nil {
-			return err
+		remaining := externalFiles
+
+		if len(blocked) > 0 {
+			remaining = make([]*externalFileInfo, 0, len(externalFiles))
+
+			for _, file := range externalFiles {
+				if _, held := blocked[*file.txHash]; held {
+					continue
+				}
+
+				remaining = append(remaining, file)
+			}
+		}
+
+		if len(remaining) > 0 {
+			if err := s.executeBatchExternalFileDeletions(ctx, remaining); err != nil {
+				return heldBack, err
+			}
 		}
 	}
 
-	return nil
+	return heldBack, nil
 }
 
 // buildParentUpdateRecords builds the addDeletedChildren parent-update batch
 // records on the mod-teranode path: it prefers the injected native-op builder
 // (buildAddDeletedChildrenRecord → native subOpAddDeletedChildren) and falls back
 // to a direct Lua NewBatchUDF. Callers must only invoke it when the mod-teranode
-// path is active (buildAddDeletedChildrenRecord != nil || luaPackage != ""); it
-// is shared by the combined and two-call cleanup paths so the two never diverge.
-func (s *Service) buildParentUpdateRecords(updates map[string]*parentUpdateInfo) []aerospike.BatchRecordIfc {
+// path is active (buildAddDeletedChildrenRecord != nil || luaPackage != "").
+//
+// infos is index-aligned with the returned records and identifies, for each
+// record, the children its marker protects, so a per-record failure can be
+// turned into the set of children that must be held back from deletion.
+func (s *Service) buildParentUpdateRecords(updates map[string]*parentUpdateInfo) ([]aerospike.BatchRecordIfc, []*parentUpdateInfo) {
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(updates))
+	infos := make([]*parentUpdateInfo, 0, len(updates))
 
 	for _, info := range updates {
+		infos = append(infos, info)
+
 		childHashList := make([]interface{}, 0, len(info.childHashes))
 		for _, childHash := range info.childHashes {
 			childHashList = append(childHashList, childHash.String())
@@ -1640,140 +1783,7 @@ func (s *Service) buildParentUpdateRecords(updates map[string]*parentUpdateInfo)
 		}
 	}
 
-	return batchRecords
-}
-
-// buildCombinedCleanupRecords builds the batch records for the single-round-trip
-// combined cleanup: parent updates in [0, parentEnd) followed by child deletions
-// in [parentEnd, len).
-//
-// Parent updates prefer the injected native-op builder
-// (buildAddDeletedChildrenRecord → native subOpAddDeletedChildren), fall back to
-// a direct Lua NewBatchUDF, and finally to a plain MapPutItems BatchWrite when
-// neither mod-teranode path is configured. This mirrors executeBatchParentUpdates:
-// keying the choice purely on luaPackage (the old behaviour) ignored the native
-// builder and left the pruner emitting batch_sub_udf on native-op deployments
-// with defensive mode off.
-//
-// parentUsesModTeranode reports whether the parent-update records answer with a
-// mod-teranode SUCCESS map (native or UDF) rather than the plain BatchWrite path,
-// which has no response map at all. The caller passes it to
-// classifyParentUpdateResult to select the response contract. It does not imply
-// anything about missing parents: all three paths can report those, the UDF as an
-// ERROR/TX_NOT_FOUND response and the other two as KEY_NOT_FOUND.
-func (s *Service) buildCombinedCleanupRecords(updates map[string]*parentUpdateInfo, keys []*aerospike.Key) (batchRecords []aerospike.BatchRecordIfc, parentEnd int, parentUsesModTeranode bool) {
-	batchRecords = make([]aerospike.BatchRecordIfc, 0, len(updates)+len(keys))
-
-	parentUsesModTeranode = s.buildAddDeletedChildrenRecord != nil || s.luaPackage != ""
-
-	if len(updates) > 0 {
-		if parentUsesModTeranode {
-			batchRecords = append(batchRecords, s.buildParentUpdateRecords(updates)...)
-		} else {
-			batchWritePolicy := aerospike.NewBatchWritePolicy()
-			batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
-			mapPolicy := aerospike.DefaultMapPolicy()
-			for _, info := range updates {
-				items := make(map[interface{}]interface{}, len(info.childHashes))
-				for _, childHash := range info.childHashes {
-					items[childHash.String()] = true
-				}
-				op := aerospike.MapPutItemsOp(mapPolicy, s.fieldDeletedChildren, items)
-				batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, info.key, op))
-			}
-		}
-	}
-
-	parentEnd = len(batchRecords)
-
-	// Child deletions — TTL touch (utxoSetTTL=true) or hard delete. These carry
-	// removalCommitLevel; the parent updates above keep COMMIT_ALL. CommitLevel is
-	// carried per record, so mixing both in one BatchOperate is safe.
-	if len(keys) > 0 {
-		batchRecords = append(batchRecords, buildDeletionBatchRecords(keys, s.utxoSetTTL, s.removalCommitLevel)...)
-	}
-
-	return batchRecords, parentEnd, parentUsesModTeranode
-}
-
-// executeBatchCleanupCombined sends parent updates and child record deletions in
-// a SINGLE Aerospike BatchOperate call. Halves the round-trip count vs the
-// two-call path. Only safe when defensive mode is off (because the defensive
-// safety check has an implicit ordering dependency between parent.deletedChildren
-// writes and child record deletions).
-func (s *Service) executeBatchCleanupCombined(ctx context.Context, updates map[string]*parentUpdateInfo, keys []*aerospike.Key) error {
-	if len(updates) == 0 && len(keys) == 0 {
-		return nil
-	}
-
-	batchRecords, parentEnd, parentUsesModTeranode := s.buildCombinedCleanupRecords(updates, keys)
-
-	if len(batchRecords) == 0 {
-		return nil
-	}
-
-	select {
-	case <-ctx.Done():
-		s.logger.Infof("Context cancelled, skipping combined cleanup batch")
-		return ctx.Err()
-	default:
-	}
-
-	if err := s.client.BatchOperate(s.batchPolicy, batchRecords); err != nil {
-		if parentUsesModTeranode {
-			s.reportNativeOpError(err)
-		}
-
-		s.logger.Errorf("Combined cleanup batch failed: %v", err)
-
-		return errors.NewStorageError("combined cleanup batch failed", err)
-	}
-
-	// Parse results in two regions: [0, parentEnd) are parent updates,
-	// [parentEnd, end) are child deletions.
-	parentTally := tallyParentUpdateResults(batchRecords[:parentEnd], parentUsesModTeranode, s.observeNativeOpError)
-	parentSuccess, parentNotFound, parentErrors := parentTally.success, parentTally.notFound, parentTally.failed
-	firstParentErr := parentTally.firstErr
-
-	deleteErrors, firstDeleteErr := tallyChildDeletionResults(batchRecords[parentEnd:])
-
-	if parentErrors > 0 {
-		s.logger.Errorf("Combined cleanup: %d parent update errors (first: %v)", parentErrors, firstParentErr)
-		return errors.NewStorageError(errParentUpdateOpsFailed, parentErrors, firstParentErr)
-	}
-	if deleteErrors > 0 {
-		s.logger.Errorf("Combined cleanup: %d deletion errors (first: %v)", deleteErrors, firstDeleteErr)
-		return errors.NewStorageError("%d deletion operations failed", deleteErrors, firstDeleteErr)
-	}
-
-	if parentSuccess > 0 {
-		prometheusUtxoParentsUpdated.Add(float64(parentSuccess))
-	}
-	if parentNotFound > 0 {
-		prometheusUtxoParentsUpdatedSkipped.Add(float64(parentNotFound))
-	}
-
-	return nil
-}
-
-// extractTxHash extracts the transaction hash from record bins
-func (s *Service) extractTxHash(bins aerospike.BinMap) (*chainhash.Hash, error) {
-	txIDBytes, ok := bins[s.fieldTxID].([]byte)
-	if !ok || len(txIDBytes) != 32 {
-		return nil, errors.NewProcessingError("invalid or missing txid")
-	}
-
-	txHash, err := chainhash.NewHash(txIDBytes)
-	if err != nil {
-		return nil, errors.NewProcessingError("invalid txid bytes: %v", err)
-	}
-
-	return txHash, nil
-}
-
-// extractInputs extracts the transaction inputs from record bins
-func (s *Service) extractInputs(ctx context.Context, blockHeight uint32, bins aerospike.BinMap, txHash *chainhash.Hash) ([]*bt.Input, error) {
-	return s.getTxInputsFromBins(ctx, blockHeight, bins, txHash)
+	return batchRecords, infos
 }
 
 // executeBatchParentUpdates performs Phase 2a: updates parent records to mark that their
@@ -1789,9 +1799,12 @@ func (s *Service) extractInputs(ctx context.Context, blockHeight uint32, bins ae
 // - Partial batch failures can be retried without side effects
 //
 // This must complete before Phase 2b (child deletion) to maintain referential integrity.
-func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[string]*parentUpdateInfo) error {
+//
+// blocked holds every child transaction whose marker did not land on at least
+// one of its parents; the caller must not delete those children this cycle.
+func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[string]*parentUpdateInfo) (map[chainhash.Hash]struct{}, error) {
 	if len(updates) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	if s.buildAddDeletedChildrenRecord != nil || s.luaPackage != "" {
@@ -1807,44 +1820,62 @@ func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[str
 // parent: the UDF reports it as an ERROR/TX_NOT_FOUND response and the native
 // path as a KEY_NOT_FOUND batch error, and both are counted as skipped rather
 // than failed.
-func (s *Service) executeBatchParentUpdatesUDF(ctx context.Context, updates map[string]*parentUpdateInfo) error {
-	batchRecords := s.buildParentUpdateRecords(updates)
+func (s *Service) executeBatchParentUpdatesUDF(ctx context.Context, updates map[string]*parentUpdateInfo) (map[chainhash.Hash]struct{}, error) {
+	batchRecords, infos := s.buildParentUpdateRecords(updates)
 
 	select {
 	case <-ctx.Done():
 		s.logger.Infof("Context cancelled, skipping parent update batch")
-		return ctx.Err()
+		return nil, ctx.Err()
 	default:
 	}
 
 	if err := s.client.BatchOperate(s.batchPolicy, batchRecords); err != nil {
 		s.reportNativeOpError(err)
-		s.logger.Errorf("Batch parent update failed: %v", err)
 
-		return errors.NewStorageError("batch parent update failed", err)
+		if isBatchTransportError(err) {
+			s.logger.Errorf("Batch parent update failed at the transport: %v", err)
+
+			return nil, errors.NewStorageError("batch parent update failed", err)
+		}
+
+		// A server-side rejection: the batch reached the server, so the
+		// per-record results below are readable and the failure can be isolated
+		// to the parents it actually affected. Returning here instead would fail
+		// the chunk, and one permanently-unwritable parent record would then
+		// wedge pruning node-wide - the exact failure mode the retention path in
+		// getTxInputsFromBins was added to avoid.
+		s.logger.Warnf("Batch parent update returned a server-side rejection, classifying per record: %v", err)
 	}
 
 	// Both mod-teranode producers answer with a SUCCESS map, so this path is
 	// always classified against the mod-teranode contract.
-	tally := tallyParentUpdateResults(batchRecords, true, s.observeNativeOpError)
-	successCount, notFoundCount, errorCount := tally.success, tally.notFound, tally.failed
+	tally := tallyParentUpdateResults(batchRecords, infos, true, s.observeNativeOpError)
 
-	if errorCount > 0 {
-		s.logger.Errorf("Batch parent update: %d of %d parent updates failed (first: %v)",
-			errorCount, len(batchRecords), tally.firstErr)
+	return s.reportParentUpdateTally(tally, len(batchRecords)), nil
+}
 
-		return errors.NewStorageError(errParentUpdateOpsFailed, errorCount, tally.firstErr)
+// reportParentUpdateTally records the batch's counters and returns the children
+// that must not be deleted. A per-record failure is logged and isolated, never
+// returned as an error: see flushCleanupBatches for why one poison record must
+// not fail the cycle.
+func (s *Service) reportParentUpdateTally(tally parentUpdateTally, total int) map[chainhash.Hash]struct{} {
+	if tally.failed > 0 {
+		prometheusUtxoParentUpdateFailures.Add(float64(tally.failed))
+
+		s.logger.Errorf("Batch parent update: %d of %d parent updates failed, holding back %d child records for a later cycle (first: %v)",
+			tally.failed, total, len(tally.blocked), tally.firstErr)
 	}
 
-	if successCount > 0 {
-		prometheusUtxoParentsUpdated.Add(float64(successCount))
+	if tally.success > 0 {
+		prometheusUtxoParentsUpdated.Add(float64(tally.success))
 	}
 
-	if notFoundCount > 0 {
-		prometheusUtxoParentsUpdatedSkipped.Add(float64(notFoundCount))
+	if tally.notFound > 0 {
+		prometheusUtxoParentsUpdatedSkipped.Add(float64(tally.notFound))
 	}
 
-	return nil
+	return tally.blocked
 }
 
 // addDeletedChildrenStatus reads the status / errorCode / message fields from the
@@ -1931,6 +1962,25 @@ func (s *Service) reportNativeOpError(err error) {
 	s.observeNativeOpError(err)
 }
 
+// isBatchTransportError reports whether a BatchOperate error means the call did
+// not reach the server, so nothing can be said about any individual record and
+// the whole chunk has to be retried. Anything else - a UDF failure, a
+// RECORD_TOO_BIG, a rejected bin type - reached the server and left readable
+// per-record results, which the caller isolates instead of failing the cycle.
+//
+// The result-code set is the same one partitionWorker already treats as
+// retryable when a scan record carries it.
+func isBatchTransportError(err error) bool {
+	var asErr aerospike.Error
+	if !errors.As(err, &asErr) {
+		// Not an aerospike error at all: nothing to classify per record, so be
+		// conservative and treat it as fatal to the chunk.
+		return true
+	}
+
+	return asErr.Matches(types.TIMEOUT, types.NETWORK_ERROR, types.NO_RESPONSE, types.SERVER_NOT_AVAILABLE)
+}
+
 // parentUpdateTally is the aggregate outcome of a parent-update batch region.
 type parentUpdateTally struct {
 	success  int
@@ -1940,21 +1990,26 @@ type parentUpdateTally struct {
 	// `aerospike.Error` so a synthesised response error can be carried without
 	// faking an aerospike.Error.
 	firstErr error
+	// blocked holds every child transaction whose marker did not land on at
+	// least one of its parents. Those children must not be deleted this cycle.
+	blocked map[chainhash.Hash]struct{}
 }
 
-// tallyParentUpdateResults classifies every record in a parent-update batch
-// region. Shared by the combined single-round-trip path and the defensive-mode
-// two-call path so the two cannot report the same server response differently.
+// tallyParentUpdateResults classifies every record in a parent-update batch.
 //
 // observeErr, when non-nil, is handed the raw per-record error before it is
 // classified — see Options.ObserveNativeOpError. Only mod-teranode records are
 // reported: the plain MapPutItems path never travelled the native path, so its
 // errors carry no signal about native support. KEY_NOT_FOUND is reported too;
 // filtering by result code is the observer's job, not the pruner's.
-func tallyParentUpdateResults(batchRecords []aerospike.BatchRecordIfc, usesModTeranode bool, observeErr func(error)) parentUpdateTally {
+//
+// infos, when non-nil, is index-aligned with batchRecords and identifies the
+// children each record protects, so a per-record failure can be turned into the
+// set of children that must be held back rather than failing the whole chunk.
+func tallyParentUpdateResults(batchRecords []aerospike.BatchRecordIfc, infos []*parentUpdateInfo, usesModTeranode bool, observeErr func(error)) parentUpdateTally {
 	var tally parentUpdateTally
 
-	for _, rec := range batchRecords {
+	for i, rec := range batchRecords {
 		if observeErr != nil && usesModTeranode {
 			if recErr := rec.BatchRec().Err; recErr != nil {
 				observeErr(recErr)
@@ -1976,31 +2031,20 @@ func tallyParentUpdateResults(batchRecords []aerospike.BatchRecordIfc, usesModTe
 			if tally.firstErr == nil {
 				tally.firstErr = outcomeErr
 			}
+
+			if infos != nil && i < len(infos) {
+				if tally.blocked == nil {
+					tally.blocked = make(map[chainhash.Hash]struct{})
+				}
+
+				for _, childHash := range infos[i].childHashes {
+					tally.blocked[*childHash] = struct{}{}
+				}
+			}
 		}
 	}
 
 	return tally
-}
-
-// tallyChildDeletionResults counts failed child-record deletions. KEY_NOT_FOUND
-// is idempotent success here — the child is already gone, which is the outcome
-// the deletion was asking for.
-func tallyChildDeletionResults(batchRecords []aerospike.BatchRecordIfc) (deleteErrors int, firstDeleteErr aerospike.Error) {
-	for _, rec := range batchRecords {
-		batchRec := rec.BatchRec()
-
-		if batchRec.Err == nil || batchRec.Err.Matches(aerospike.ErrKeyNotFound.ResultCode) {
-			continue
-		}
-
-		if firstDeleteErr == nil {
-			firstDeleteErr = batchRec.Err
-		}
-
-		deleteErrors++
-	}
-
-	return deleteErrors, firstDeleteErr
 }
 
 // parentUpdateOutcome is how a single addDeletedChildren batch record is tallied.
@@ -2081,14 +2125,17 @@ func classifyParentUpdateResult(batchRec *aerospike.BatchRecord, usesModTeranode
 // executeBatchParentUpdatesBatchWrite is the fallback when Lua UDF is not configured.
 // Uses BatchWrite+MapPutItemsOp with UPDATE_ONLY policy. Missing records generate
 // KEY_NOT_FOUND in Aerospike client metrics but are handled gracefully.
-func (s *Service) executeBatchParentUpdatesBatchWrite(ctx context.Context, updates map[string]*parentUpdateInfo) error {
+func (s *Service) executeBatchParentUpdatesBatchWrite(ctx context.Context, updates map[string]*parentUpdateInfo) (map[chainhash.Hash]struct{}, error) {
 	batchWritePolicy := aerospike.NewBatchWritePolicy()
 	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 
 	mapPolicy := aerospike.DefaultMapPolicy()
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(updates))
+	infos := make([]*parentUpdateInfo, 0, len(updates))
 
 	for _, info := range updates {
+		infos = append(infos, info)
+
 		items := make(map[interface{}]interface{}, len(info.childHashes))
 		for _, childHash := range info.childHashes {
 			items[childHash.String()] = true
@@ -2101,49 +2148,32 @@ func (s *Service) executeBatchParentUpdatesBatchWrite(ctx context.Context, updat
 	select {
 	case <-ctx.Done():
 		s.logger.Infof("Context cancelled, skipping parent update batch")
-		return ctx.Err()
+		return nil, ctx.Err()
 	default:
 	}
 
 	// No reportNativeOpError here: this is the plain MapPutItems fallback, whose
 	// records never travelled the native path, so its failures say nothing about
 	// native-op support.
+	//
+	// A BatchOperate error fails the whole chunk. Unlike the mod-teranode paths,
+	// this one has no per-record success map, and a whole-batch server rejection
+	// arrives without per-record errors (nil Err below would read as success and
+	// DELETE the children with no marker — the #1701 hole we are closing). Only
+	// per-record failures are isolated, and those already come back as per-record
+	// errors with a nil batch error, keeping this path aligned with the
+	// hold-back logic without risking a fail-open.
 	if err := s.client.BatchOperate(s.batchPolicy, batchRecords); err != nil {
 		s.logger.Errorf("Batch parent update failed: %v", err)
 
-		return errors.NewStorageError("batch parent update failed", err)
+		return nil, errors.NewStorageError("batch parent update failed", err)
 	}
 
-	successCount := 0
-	notFoundCount := 0
-	errorCount := 0
+	// Plain MapPutItems records carry no mod-teranode SUCCESS map, so they are
+	// never classified against it.
+	tally := tallyParentUpdateResults(batchRecords, infos, false, s.observeNativeOpError)
 
-	for _, rec := range batchRecords {
-		if rec.BatchRec().Err != nil {
-			if rec.BatchRec().Err.Matches(aerospike.ErrKeyNotFound.ResultCode) {
-				notFoundCount++
-				continue
-			}
-			s.logger.Errorf("Parent update error for key %v: %v", rec.BatchRec().Key, rec.BatchRec().Err)
-			errorCount++
-		} else {
-			successCount++
-		}
-	}
-
-	if errorCount > 0 {
-		return errors.NewStorageError(errParentUpdateOpsFailed, errorCount)
-	}
-
-	if successCount > 0 {
-		prometheusUtxoParentsUpdated.Add(float64(successCount))
-	}
-
-	if notFoundCount > 0 {
-		prometheusUtxoParentsUpdatedSkipped.Add(float64(notFoundCount))
-	}
-
-	return nil
+	return s.reportParentUpdateTally(tally, len(batchRecords)), nil
 }
 
 // executeBatchDeletions performs Phase 2b: removes child transaction records from Aerospike
@@ -2277,20 +2307,8 @@ func (s *Service) ProcessSingleRecord(txHash *chainhash.Hash, inputs []*bt.Input
 	// Build parent updates map
 	parentUpdates := make(map[string]*parentUpdateInfo, len(inputs)) // One parent per input (worst case)
 	for _, input := range inputs {
-		keySource := uaerospike.CalculateKeySource(input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, s.utxoBatchSize)
-		parentKeyStr := string(keySource)
-
-		if existing, ok := parentUpdates[parentKeyStr]; ok {
-			existing.childHashes = append(existing.childHashes, txHash)
-		} else {
-			parentKey, err := aerospike.NewKey(s.namespace, s.set, keySource)
-			if err != nil {
-				return errors.NewProcessingError("failed to create parent key", err)
-			}
-			parentUpdates[parentKeyStr] = &parentUpdateInfo{
-				key:         parentKey,
-				childHashes: []*chainhash.Hash{txHash},
-			}
+		if err := s.addParentUpdatesForInput(parentUpdates, input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, txHash); err != nil {
+			return errors.NewProcessingError("failed to create parent key", err)
 		}
 	}
 
@@ -2299,5 +2317,17 @@ func (s *Service) ProcessSingleRecord(txHash *chainhash.Hash, inputs []*bt.Input
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return s.executeBatchParentUpdates(ctx, parentUpdates)
+
+	blocked, err := s.executeBatchParentUpdates(ctx, parentUpdates)
+	if err != nil {
+		return err
+	}
+
+	// Surface a marker that did not land as an error so the caller (a manual
+	// cleanup / test path) knows the transaction's removal is not replay-safe yet.
+	if len(blocked) > 0 {
+		return errors.NewProcessingError("parent update failed for %s; transaction not deleted", txHash.String())
+	}
+
+	return nil
 }
