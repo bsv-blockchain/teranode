@@ -96,3 +96,81 @@ func TestReadSubtree_MmapFallbackReReadsFromStart(t *testing.T) {
 	require.Len(t, result.subtreeData.Txs, 1)
 	require.Nil(t, result.subtreeData.Txs[0])
 }
+
+// TestReadSubtree_MmapEnabled_MatchesHeapResult confirms that block validation
+// with a configured, writable mmap directory is behaviour-neutral: the loaded
+// subtree and its data must be identical to the heap-allocated (mmap disabled)
+// case, the only difference being where the subtree Nodes live in memory.
+func TestReadSubtree_MmapEnabled_MatchesHeapResult(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := context.Background()
+
+	coinbaseTx, err := bt.NewTxFromString(model.CoinbaseHex)
+	require.NoError(t, err)
+	coinbaseTx.Outputs = nil
+	require.NoError(t, coinbaseTx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000))
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+
+	subtreeData := subtreepkg.NewSubtreeData(subtree)
+	require.NoError(t, subtreeData.AddTx(coinbaseTx, 0))
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+
+	subtreeDataBytes, err := subtreeData.Serialize()
+	require.NoError(t, err)
+
+	block := &model.Block{
+		Header: &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: subtree.RootHash(),
+			Timestamp:      1,
+		},
+		Height: 1,
+	}
+
+	runReadSubtree := func(mmapDir string) subtreeResult {
+		utxoStore, subtreeValidationClient, blockchainClient, txStore, subtreeStore, cleanup := setup(t)
+		defer cleanup()
+
+		require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+		require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeData, subtreeDataBytes))
+
+		tSettings := test.CreateBaseTestSettings(t)
+
+		bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+		bv.mmapDir = mmapDir
+
+		result := bv.readSubtree(ctx, block, 0, subtree.RootHash())
+
+		// Release any mmap-backed resources before the enclosing t.TempDir() (used
+		// by the caller for mmapDir) is torn down, so cleanup never races an open
+		// mapping or its backing file.
+		t.Cleanup(func() {
+			if result.subtree != nil {
+				_ = result.subtree.Close()
+			}
+		})
+
+		return result
+	}
+
+	heapResult := runReadSubtree("")
+	require.NoError(t, heapResult.err)
+	require.False(t, heapResult.subtree.IsMmapBacked())
+
+	mmapResult := runReadSubtree(t.TempDir())
+	require.NoError(t, mmapResult.err)
+	require.True(t, mmapResult.subtree.IsMmapBacked(), "expected mmap-backed subtree when a writable mmapDir is configured")
+
+	require.Equal(t, heapResult.subtree.RootHash(), mmapResult.subtree.RootHash())
+	require.Equal(t, heapResult.subtree.Length(), mmapResult.subtree.Length())
+	require.Equal(t, heapResult.subtree.Nodes, mmapResult.subtree.Nodes)
+	require.Equal(t, heapResult.subtreeData.Txs, mmapResult.subtreeData.Txs)
+	require.Equal(t, heapResult.fullSubtreeExists, mmapResult.fullSubtreeExists)
+}
