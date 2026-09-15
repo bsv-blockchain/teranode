@@ -8533,7 +8533,7 @@ getpeerinfo, invalidateblock, reconsiderblock, setban, isbanned, listbanned, cle
 </ul>
 <div class="admonition warning">
 <p class="admonition-title">Security Note</p>
-<p>The API key provides administrative access to peer-policy operations. Keep it secret, never commit it, and prefer <code>securityLevelGRPC &gt;= 2</code> (verified TLS) when the gRPC listener is not loopback-bound so the key is not exposed in transit. Note that a <em>configured</em> key is currently echoed in the node's startup settings dump, so treat startup logs as sensitive and prefer supplying the key via the environment or a secret store.</p>
+<p>The API key provides administrative access to peer-policy operations. Keep it secret, never commit it, and prefer <code>security_level_grpc &gt;= 2</code> (verified TLS) when the gRPC listener is not loopback-bound so the key is not exposed in transit. Note that a <em>configured</em> key is currently echoed in the node's startup settings dump, so treat startup logs as sensitive and prefer supplying the key via the environment or a secret store.</p>
 </div>
 <h2 id="general-format">General Format<a class="headerlink" href="#general-format" title="Permanent link">&para;</a></h2>
 <div class="admonition info">
