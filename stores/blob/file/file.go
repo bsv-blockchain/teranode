@@ -118,6 +118,21 @@ const copyBufferSize = 1 << 20 // 1 MiB
 // copyBufPool keeps the copy buffers alive between blob writes. The pool is not an
 // optimisation: at the blob write rates this store sustains, allocating a megabyte per
 // write would trade copy time for garbage-collection time and lose.
+//
+// What it costs. One buffer is checked out per streaming write (copyWithPooledBuffer); Set
+// checks out none, because an in-memory payload goes down the memReader arm of writeBody.
+// Streaming writes are bounded by writeSemaphore, which is process-global across every file
+// store instance and is sized at the applied write concurrency. Checked-out copy-buffer
+// memory is therefore roughly the applied write concurrency times copyBufferSize: at the
+// default write limit of 256 that is 256 MiB. That figure is the default-limit example, not
+// a ceiling — the limit is configurable and validated only into [MinSemaphoreLimit,
+// MaxSemaphoreLimit]. Retained memory is a different quantity: a sync.Pool is neither a cap
+// nor a guaranteed floor, and buffers nobody is using are dropped by the collector. Before
+// pooling, each concurrent write instead held a transient 32 KiB genericReadFrom buffer.
+//
+// The 1 MiB size matches the subtree path, whose own pooled reader is 1 MiB. Note that for
+// the per-record writes the utxo-persister path issues, the pipe writer's own buffer bounds
+// each PipeReader.Read, so most of a 1 MiB copy buffer goes unused on that path.
 var copyBufPool = sync.Pool{
 	New: func() any { b := make([]byte, copyBufferSize); return &b },
 }
