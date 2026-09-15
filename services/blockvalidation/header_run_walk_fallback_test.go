@@ -162,7 +162,9 @@ func TestValidateBlock_UnusableHeaderRunIsRebuiltByHashWalk(t *testing.T) {
 
 	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 
-	subtreeBytes, err := subtree.SerializeNodes()
+	// Store the complete subtree, including metadata and the conflicting-node trailer.
+	// Cached-subtree validation reads this format before checking header context.
+	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
 	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 
