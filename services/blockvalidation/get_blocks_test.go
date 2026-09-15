@@ -819,6 +819,39 @@ func TestFetchBlocksBatch_CurrentBehavior(t *testing.T) {
 		assert.Contains(t, err.Error(), "failed to get blocks from peer")
 		require.Nil(t, fetchedBlocks)
 	})
+
+	// A peer that keeps streaming well-formed blocks past what was requested must not grow
+	// the result past n: before bitcoin-sv/teranode#4742, fetchBlocksBatch read the whole
+	// response into memory and looped until EOF, so a malicious/misbehaving peer answering
+	// "n=1" with 3 blocks would return all 3 to the caller.
+	t.Run("Peer Sends More Blocks Than Requested", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		blocks := testhelpers.CreateTestBlockChain(t, 4)
+		targetHash := blocks[1].Header.Hash()
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder(
+			"GET",
+			fmt.Sprintf("http://test-peer/blocks/%s?n=1", targetHash.String()),
+			httpmock.NewBytesResponder(200, func() []byte {
+				var allBytes []byte
+				for i := 1; i <= 3; i++ {
+					blockBytes, _ := blocks[i].Bytes()
+					allBytes = append(allBytes, blockBytes...)
+				}
+				return allBytes
+			}()),
+		)
+
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "test-peer-id", "http://test-peer")
+		require.NoError(t, err)
+		require.Len(t, fetchedBlocks, 1, "must stop at the requested count, not read every block the peer chose to send")
+		assert.Equal(t, targetHash, fetchedBlocks[0].Header.Hash())
+	})
 }
 
 // TestFetchSingleBlock_CurrentBehavior documents the current behavior of fetchSingleBlock function
