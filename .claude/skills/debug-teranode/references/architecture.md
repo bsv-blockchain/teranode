@@ -248,7 +248,7 @@ seeding from an exported UTXO set.
 | `kafka_invalid_blocks` | Block Validation → subscribers | `{block_hash, reason}` | varies |
 | `kafka_legacy_inv` | Legacy P2P | legacy inv messages | auto |
 
-- Consumer concurrency = `partitions / consumer_ratio` (NOT the `kafkaWorkers` setting directly).
+- Consumer concurrency = `partitions / consumer_ratio`.
 - Teranode **pauses** processing when Kafka is unhealthy and auto-resumes (safe-state design).
 
 ---
