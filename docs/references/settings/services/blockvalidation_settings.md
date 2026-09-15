@@ -61,9 +61,10 @@
 | MaxTrackedForks | int | 1000 | blockvalidation_max_tracked_forks | Maximum total forks tracked |
 | NearForkThreshold | int | 0 | blockvalidation_near_fork_threshold | Near fork detection (0=coinbase maturity/2) |
 | FetchLargeBatchSize | int | 100 | blockvalidation_fetch_large_batch_size | Block fetch batch size |
-| FetchNumWorkers | int | 1 | blockvalidation_fetch_num_workers | Block fetch worker goroutines |
+| FetchNumWorkers | int | 16 | blockvalidation_fetch_num_workers | Catchup workers running the per-block subtree-data prewarm |
 | FetchBufferSize | int | 50 | blockvalidation_fetch_buffer_size | Block fetch channel buffer |
-| SubtreeFetchConcurrency | int | 8 | blockvalidation_subtree_fetch_concurrency | Concurrent subtree fetches per block |
+| SubtreeFetchConcurrency | int | 32 | blockvalidation_subtree_fetch_concurrency | Concurrent subtree fetches per block |
+| CatchupPrefetchBudgetBytes | int64 | 268435456 | blockvalidation_catchup_prefetch_budget_bytes | Declared block bytes admitted concurrently into the catchup subtree-data prewarm (0 disables) |
 | SubtreeBatchSize | int | 16 | blockvalidation_subtree_batch_size | Subtrees processed per batch in quick validation |
 | SubtreeBatchPrefetchDepth | int | 2 | blockvalidation_subtree_batch_prefetch_depth | Batches to prefetch ahead in pipeline (0=sequential) |
 | GetBlockTransactionsConcurrency | int | 64 | blockvalidation_get_block_transactions_concurrency | Block transaction fetch concurrency |
@@ -197,6 +198,12 @@ blockvalidation_catchupConcurrency=8
 blockvalidation_fetch_num_workers=32
 blockvalidation_subtree_batch_size=32
 ```
+
+Raising `blockvalidation_fetch_num_workers` raises catchup memory: each worker runs one
+block's subtree-data prewarm, parsing every transaction of every subtree of that block into
+memory. Size `blockvalidation_catchup_prefetch_budget_bytes` against measured headroom on
+the target deployment — it caps the declared block bytes admitted concurrently across those
+workers, which is not the same thing as a process-memory ceiling.
 
 ### Catchup Mode Configuration
 
