@@ -3968,7 +3968,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	}
 
 	// overwrite any config options from settings, if applicable
-	setConfigValuesFromSettings(logger, config.GetAll(), cfg)
+	setConfigValuesFromSettings(logger, config, cfg)
 
 	// If Port was set via settings, update activeNetParams
 	if cfg.Port != "" {
