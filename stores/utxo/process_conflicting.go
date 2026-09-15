@@ -133,10 +133,19 @@ var step5RetryDelays = []time.Duration{0, 50 * time.Millisecond, 200 * time.Mill
 //     so the queue→subtree dequeue path can reject children of conflicting
 //     parents that arrive after the cascade has run.
 func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockHash chainhash.Hash, conflictingTxHashes []chainhash.Hash,
-	processedConflictingHashesMap map[chainhash.Hash]struct{}) (losingTxHashesMap txmap.TxMap, allMarkedConflicting []chainhash.Hash, err error) {
+	processedConflictingHashesMap map[chainhash.Hash]struct{}, guard AncestryGuard, opts ...ProcessConflictingOption) (losingTxHashesMap txmap.TxMap, allMarkedConflicting []chainhash.Hash, err error) {
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "ProcessConflicting")
 
 	defer deferFn()
+
+	// The guard is the security property of this function, so it is a required
+	// parameter rather than an option: a call site cannot reintroduce the
+	// ancestor-double-spend hole by leaving something out. A caller with no
+	// blockchain to consult passes NoAncestryGuard, which is greppable.
+	var options processConflictingOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
 
 	// Crash-safety write-ahead log (#861): record the intent durably BEFORE any
 	// state mutation, and remove it once the operation completes successfully. A
@@ -282,6 +291,55 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 	}
 
 	losingTxHashes := losingTxHashesMap.Keys()
+
+	// Chain-authorise the demotions before any state is mutated. A loser that is
+	// confirmed in blockHash's own ancestry must not be demoted — doing so would
+	// reverse a confirmed spend with no reorg. See filterAncestryConfirmedLosers.
+	//
+	// Fail-soft towards the CALLER, all-or-nothing towards the STORE: a refusal
+	// abandons the whole operation with nothing mutated, but reports success, so
+	// block movement continues and the UTXO set is left consistent with the
+	// honest chain. Returning an error instead would wedge block assembly —
+	// Reset replays the same blocks through this same function and would hit the
+	// same refusal on every retry. The caller learns of it via onRefused and
+	// invalidates the block out of band, once block movement has finished.
+	if guard.enabled() {
+		winnerSet := make(map[chainhash.Hash]struct{}, len(conflictingTxHashes))
+		for _, winner := range conflictingTxHashes {
+			winnerSet[winner] = struct{}{}
+		}
+
+		keptLosers, refusedLosers, filterErr := filterAncestryConfirmedLosers(ctx, s, losingTxHashes, winnerSet, blockHash, guard)
+		if filterErr != nil {
+			return nil, nil, filterErr
+		}
+
+		if len(refusedLosers) > 0 {
+			for _, refused := range refusedLosers {
+				prometheusUtxoConflictingDemotionRefused.Inc()
+
+				if options.onRefused != nil {
+					options.onRefused(refused)
+				}
+			}
+
+			// One refusal aborts the whole operation, rather than just dropping
+			// that loser and carrying on. A winner spends the outpoints held by
+			// every loser in its counter-conflicting set, so promoting it in step
+			// 3 while a refused loser is left spent would overwrite that
+			// confirmed spend — precisely the corruption this guard exists to
+			// prevent. Partial application is more dangerous than none.
+			//
+			// Nothing has been mutated at this point, so returning here leaves
+			// the UTXO set consistent with the honest chain. An empty map (not
+			// nil) is returned because callers call Length() on it, and reporting
+			// losers we did not actually demote would have block assembly mark
+			// them conflicting in their subtrees.
+			return txmap.NewSplitSwissMap(0), nil, nil
+		}
+
+		losingTxHashes = keptLosers
+	}
 
 	// - 1: mark all losingTxHashesPerConflictingTx as conflicting + all its spending transactions recursively.
 	//   allMarkedConflicting is the BFS expansion: every hash now flagged Conflicting=true. Forwarded to callers so

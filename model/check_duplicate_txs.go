@@ -33,7 +33,7 @@ import (
 //
 // It scans every node hash across all subtree slices into a plain Go map,
 // skipping the coinbase placeholder at position [0][0], and returns a
-// BlockInvalidError on the first duplicate. It is intentionally lightweight —
+// BlockCorruptError on the first duplicate. It is intentionally lightweight —
 // O(N) in the total transaction count with one map allocation — so it is cheap
 // enough to run unconditionally on every slice-only path. Callers on the full
 // validation path (Block.Valid) instead use the pooled/disk-backed
@@ -63,7 +63,10 @@ func CheckSubtreeSlicesForDuplicateTxs(slices []*subtreepkg.Subtree) error {
 			}
 
 			if _, exists := seen[node.Hash]; exists {
-				return errors.NewBlockInvalidError(
+				// Body-derived (a duplicate in the received tx set) and reachable on an
+				// unbound body: classify corrupt so it is re-downloaded, not poisoned
+				// (bitcoin-sv/teranode#4692).
+				return errors.NewBlockCorruptError(
 					"[CheckSubtreeSlicesForDuplicateTxs] block contains duplicate transaction %s (CVE-2012-2459)",
 					node.Hash.String(),
 				)

@@ -110,7 +110,16 @@ func TestHandleBlockMsg_VerifiedHeaderBodyCommitment(t *testing.T) {
 					} else {
 						require.ErrorContains(t, err, "merkle root mismatch")
 					}
-					require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+					// Every mutation here is body-derived and caught BEFORE the body is bound to
+					// the header, so the verdict is corrupt, not invalid (bitcoin-sv/teranode#4692):
+					// the received body cannot distinguish an honest block corrupted in transit
+					// from an attacker's junk, so it may not condemn the hash. ErrBlockCorrupt is
+					// deliberately NOT matched by errors.Is(err, ErrBlockInvalid), so assert both
+					// directions — the non-poisoning guarantee is exactly the second one. What this
+					// test already pins below is unchanged and is the other half of the point: no
+					// UTXO effect, no downstream call, no transaction created.
+					require.True(t, errors.IsBlockCorrupt(err))
+					require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 					require.False(t, downstream.called)
 					after, err := store.Get(sm.ctx, parent.TxIDChainHash(), fields.Utxos)
 					require.NoError(t, err)

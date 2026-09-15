@@ -851,6 +851,85 @@ func TestValidateCoinbaseHeight_ChainCfgDriven(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestStoreBlock_CoinbaseHeightGuardSkippedForInvalidWrites pins the rule that storing a block with
+// invalid=true is the act of RECORDING that the block failed a consensus rule, so the store must not
+// re-apply that same rule as a precondition on the write. BIP34 is where the two collide exactly: the
+// validator's bad-cb-height verdict and this store guard test the identical condition, so without the
+// skip the invalid write fails, the caller logs and swallows the store error, and the block is
+// re-validated at full cost on every re-announcement instead of being remembered
+// (bitcoin-sv/teranode#4692).
+func TestStoreBlock_CoinbaseHeightGuardSkippedForInvalidWrites(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	// Activate BIP34 at height 1 so the very first stored block runs the coinbase-height guard.
+	params := chaincfg.RegressionNetParams
+	params.BIP0034Height = 1
+	tSettings.ChainCfgParams = &params
+
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+	defer s.Close(context.Background())
+
+	ctx := context.Background()
+
+	// block1 settles at height 1 and its coinbase pushes that height as three bytes (01 00 00), which
+	// is not the minimal encoding — so ExtractCoinbaseHeight REJECTS it and the guard fails before it
+	// ever compares heights. That is deliberately the shape used here: the skip has to cover the whole
+	// guard, not merely the height comparison, or a block whose coinbase height cannot even be parsed
+	// stays unrecordable.
+	_, _, err = s.StoreBlock(ctx, block1, "test-peer")
+	require.Error(t, err, "the guard must stay intact for a normal write")
+	require.Contains(t, err.Error(), "failed to extract coinbase height")
+
+	exists, err := s.GetBlockExists(ctx, block1.Hash())
+	require.NoError(t, err)
+	require.False(t, exists, "a normal write must still be refused, and must leave no row behind")
+
+	// The same block written as invalid: the guard is not consulted at all, so the unparseable
+	// coinbase height never blocks the record of the verdict.
+	_, height, err := s.StoreBlock(ctx, block1, "test-peer", options.WithInvalid(true))
+	require.NoError(t, err, "recording a consensus failure must not re-apply the rule it records")
+	require.Equal(t, uint32(1), height)
+
+	exists, err = s.GetBlockExists(ctx, block1.Hash())
+	require.NoError(t, err)
+	require.True(t, exists, "the invalid write must be accepted so the verdict is remembered")
+
+	_, meta, err := s.GetBlockHeader(ctx, block1.Hash())
+	require.NoError(t, err)
+	require.NotNil(t, meta)
+	require.True(t, meta.Invalid, "the stored row must carry the invalid verdict")
+}
+
+// TestStoreBlock_CoinbaseHeightGuardDoesNotApplyBelowBIP34Activation is the negative half: with the
+// guard inactive for the height being written, the same block stores normally with no options.
+// Together with the test above this pins that the skip is scoped to invalid writes and has not
+// disabled the guard outright.
+func TestStoreBlock_CoinbaseHeightGuardDoesNotApplyBelowBIP34Activation(t *testing.T) {
+	// Default regtest params put BIP34 activation far above these heights, so the guard short-circuits
+	// before inspecting the coinbase and block1 is a perfectly ordinary write.
+	tSettings := test.CreateBaseTestSettings(t)
+
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+	defer s.Close(context.Background())
+
+	ctx := context.Background()
+
+	_, height, err := s.StoreBlock(ctx, block1, "test-peer")
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), height)
+
+	exists, err := s.GetBlockExists(ctx, block1.Hash())
+	require.NoError(t, err)
+	require.True(t, exists)
+}
+
 func TestStoreBlock_SubtreeProcessing(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	storeURL, err := url.Parse("sqlitememory:///")
