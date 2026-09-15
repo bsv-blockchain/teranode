@@ -94,6 +94,11 @@ var (
 	// need a signal so they can detect malformed-message bursts that would otherwise be invisible.
 	// Reason labels: nil_message, too_short, unmarshal_failure, bad_hash, bad_url.
 	prometheusSubtreeKafkaMalformed *prometheus.CounterVec
+
+	// prometheusSubtreeAlreadyExistsSkipped counts subtree Kafka messages skipped because the
+	// subtree already exists. This is individually benign (best-effort, no retries), but without
+	// a metric a spike in the rate would be invisible.
+	prometheusSubtreeAlreadyExistsSkipped prometheus.Counter
 )
 
 var (
@@ -220,5 +225,14 @@ func _initPrometheusMetrics() {
 			Help:      "Number of malformed Kafka subtree messages dropped, by reason",
 		},
 		[]string{"reason"},
+	)
+
+	prometheusSubtreeAlreadyExistsSkipped = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "subtree_already_exists_skipped_total",
+			Help:      "Number of subtree Kafka messages skipped because the subtree already exists",
+		},
 	)
 }

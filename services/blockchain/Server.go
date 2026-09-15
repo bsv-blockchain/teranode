@@ -1267,7 +1267,7 @@ func (b *Blockchain) GetBlocks(ctx context.Context, req *blockchain_api.GetBlock
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlocks",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlockHeaders),
-		tracing.WithLogMessage(b.logger, "[GetBlocks] called for %s", util.ReverseAndHexEncodeSlice(req.Hash)),
+		tracing.WithDebugLogMessage(b.logger, "[GetBlocks] called for %s", util.ReverseAndHexEncodeSlice(req.Hash)),
 	)
 	defer deferFn()
 
@@ -1302,7 +1302,7 @@ func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_a
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockByHeight",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlock),
-		tracing.WithLogMessage(b.logger, "[GetBlockByHeight] called for %d", request.Height),
+		tracing.WithDebugLogMessage(b.logger, "[GetBlockByHeight] called for %d", request.Height),
 	)
 	defer deferFn()
 
@@ -1335,10 +1335,10 @@ func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_a
 
 // GetBlockByID retrieves a block by its ID.
 func (b *Blockchain) GetBlockByID(ctx context.Context, request *blockchain_api.GetBlockByIDRequest) (*blockchain_api.GetBlockResponse, error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockByHeight",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockByID",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlock),
-		tracing.WithLogMessage(b.logger, "[GetBlockByID] called for %d", request.Id),
+		tracing.WithDebugLogMessage(b.logger, "[GetBlockByID] called for %d", request.Id),
 	)
 	defer deferFn()
 
@@ -2552,10 +2552,10 @@ func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_ap
 //   - *emptypb.Empty: Empty response indicating successful notification queuing
 //   - error: Any error encountered during notification processing
 func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.Notification) (*emptypb.Empty, error) {
-	_, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "RevalidateBlock",
+	_, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "SendNotification",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainSendNotification),
-		tracing.WithLogMessage(b.logger, "[SendNotification] called for %s notification type %s", util.ReverseAndHexEncodeSlice(req.Hash), req.Type.String()),
+		tracing.WithDebugLogMessage(b.logger, "[SendNotification] called for %s notification type %s", util.ReverseAndHexEncodeSlice(req.Hash), req.Type.String()),
 	)
 	defer deferFn()
 

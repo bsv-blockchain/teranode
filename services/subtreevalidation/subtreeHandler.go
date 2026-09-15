@@ -96,7 +96,8 @@ func (u *Server) subtreeMessageHandler(ctx context.Context) func(msg *kafka.Kafk
 			}
 
 			if errors.Is(err, errors.ErrSubtreeExists) {
-				u.logger.Warnf("[subtreeMessageHandler] Subtree already exists - skipping")
+				prometheusSubtreeAlreadyExistsSkipped.Inc()
+				u.logger.Debugf("[subtreeMessageHandler] Subtree already exists - skipping")
 				return nil
 			}
 
@@ -117,7 +118,7 @@ func (u *Server) subtreesHandler(ctx context.Context, hash *chainhash.Hash, base
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "subtreesHandler",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusSubtreeValidationValidateSubtreeHandler),
-		tracing.WithLogMessage(u.logger, "[subtreesHandler] Received subtree message for %s from %s", hash.String(), baseURL.String()),
+		tracing.WithDebugLogMessage(u.logger, "[subtreesHandler] Received subtree message for %s from %s", hash.String(), baseURL.String()),
 	)
 	defer deferFn()
 

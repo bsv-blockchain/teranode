@@ -46,7 +46,7 @@ import (
 func (u *Server) CreateSubtreeDataFileStreaming(ctx context.Context, subtreeHash chainhash.Hash, block *model.Block, n int) error {
 	ctx, _, deferFn := tracing.Tracer("blockpersister").Start(ctx, "CreateSubtreeDataFileStreaming",
 		tracing.WithHistogram(prometheusBlockPersisterSubtrees),
-		tracing.WithLogMessage(u.logger, "[CreateSubtreeDataFileStreaming][%s] creating subtreeData %d / %d for [%s]", block.String(), n, len(block.Subtrees), subtreeHash.String()),
+		tracing.WithDebugLogMessage(u.logger, "[CreateSubtreeDataFileStreaming][%s] creating subtreeData %d / %d for [%s]", block.String(), n, len(block.Subtrees), subtreeHash.String()),
 	)
 	defer deferFn()
 
