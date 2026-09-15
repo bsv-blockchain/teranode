@@ -126,15 +126,28 @@ func NewHistory(ctx context.Context, path string, chain HistoryChain, archive bl
 		}
 	}()
 	db.SetMaxOpenConns(1)
-	_, err = db.ExecContext(ctx, `PRAGMA journal_mode=DELETE; PRAGMA synchronous=EXTRA; PRAGMA cache_size=-4096;
+	if _, err = db.ExecContext(ctx, `PRAGMA journal_mode=DELETE; PRAGMA synchronous=EXTRA; PRAGMA cache_size=-4096;`); err != nil {
+		return nil, err
+	}
+	// A cancelled initialization must leave either an empty database or the full schema.
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(ctx, `
  CREATE TABLE blocks(hash TEXT PRIMARY KEY,height INTEGER NOT NULL,header BLOB NOT NULL,leaves BLOB NOT NULL);
  CREATE TABLE transactions(txid TEXT NOT NULL,block TEXT NOT NULL,position INTEGER NOT NULL,raw BLOB NOT NULL,PRIMARY KEY(txid,block));
+ CREATE INDEX transactions_by_block ON transactions(block);
  CREATE TABLE targets(id TEXT PRIMARY KEY);
  CREATE TABLE spends(parent TEXT,vout INTEGER,child TEXT,PRIMARY KEY(parent,vout,child));
  CREATE TABLE headers(height INTEGER PRIMARY KEY,hash TEXT,header BLOB);
  CREATE TABLE gaps(height INTEGER PRIMARY KEY,reason TEXT NOT NULL);
  CREATE TABLE coverage(data BLOB NOT NULL);`)
 	if err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
 	if o.TargetsPath != "" {
@@ -670,6 +683,22 @@ func openHistory(ctx context.Context, path string, chain HistoryChain, options H
 		}
 	}()
 	db.SetMaxOpenConns(1)
+	var objects int
+	if err = db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_schema").Scan(&objects); err != nil {
+		return nil, err
+	}
+	if objects == 0 {
+		var applicationID, userVersion int
+		if err = db.QueryRowContext(ctx, "PRAGMA application_id").Scan(&applicationID); err != nil {
+			return nil, err
+		}
+		if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&userVersion); err != nil {
+			return nil, err
+		}
+		if applicationID == 0 && userVersion == 0 {
+			return nil, errors.NewProcessingError("history index uninitialized", sql.ErrNoRows)
+		}
+	}
 	var data []byte
 	if err = db.QueryRowContext(ctx, "SELECT data FROM coverage WHERE length(data)<=65536").Scan(&data); err != nil {
 		return nil, errors.NewProcessingError("history index incomplete", err)
@@ -1146,6 +1175,14 @@ func (h *LocalHistory) unconfirmedTransaction(ctx context.Context, id string, ti
 			return nil, errors.NewProcessingError("unconfirmed input unavailable")
 		}
 		seen[key] = true
+		// Inclusion alone does not cover spends: only target parents are indexed.
+		var covered int
+		if err = h.db.QueryRowContext(ctx, "SELECT count(*) FROM targets WHERE id=?", parentID).Scan(&covered); err != nil {
+			return nil, err
+		}
+		if covered == 0 {
+			return nil, errors.NewProcessingError("unconfirmed parent spend coverage unavailable")
+		}
 		var spent int
 		if err = h.db.QueryRowContext(ctx, "SELECT count(*) FROM spends WHERE parent=? AND vout=?", parentID, in.PreviousTxOutIndex).Scan(&spent); err != nil {
 			return nil, err
