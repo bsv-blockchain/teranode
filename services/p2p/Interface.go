@@ -213,7 +213,10 @@ type ClientI interface {
 	IsPeerUnhealthy(ctx context.Context, peerID string) (bool, string, float32, error)
 
 	// GetPeerRegistry retrieves the comprehensive peer registry data.
-	// Returns all peers in the registry with their complete information.
+	// Returns all peers in the registry with the subset of PeerInfo carried by
+	// p2p_api.PeerRegistryInfo (see convertFromAPIPeerInfo); in-process sync
+	// backoff state (LastSyncAttempt, SyncAttemptCount, LastReputationReset,
+	// ReputationResetCount) and CatchupBlocks are not transmitted.
 	GetPeerRegistry(ctx context.Context) ([]*PeerInfo, error)
 
 	// RecordBytesDownloaded records the number of bytes downloaded via HTTP from a peer.

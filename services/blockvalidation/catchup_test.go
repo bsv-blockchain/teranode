@@ -3805,7 +3805,7 @@ func TestQuickValidationBoundToActuallyVerifiedCheckpoint(t *testing.T) {
 	blockAboveVerifiedCheckpoint.Height = 8
 
 	shouldTryNormal, err := suite.Server.tryQuickValidation(
-		suite.Ctx, blockAboveVerifiedCheckpoint, catchupCtx, "", "http://test", nil)
+		suite.Ctx, blockAboveVerifiedCheckpoint, catchupCtx, "", "http://test", nil, nil)
 	require.NoError(t, err)
 	require.True(t, shouldTryNormal,
 		"block above the verified checkpoint but below the merely-configured checkpoint must fall back to normal validation")

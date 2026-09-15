@@ -2,6 +2,7 @@ package httpimpl
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/labstack/echo/v4"
@@ -372,6 +374,54 @@ func TestPeerAuthMiddleware_AllowlistMember_GetsTier(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, tierMiner, *captured)
+}
+
+// registryStubP2PClient is a p2p.ClientI that only answers GetPeerRegistry.
+type registryStubP2PClient struct {
+	p2p.ClientI
+	peers []*p2p.PeerInfo
+}
+
+func (c *registryStubP2PClient) GetPeerRegistry(_ context.Context) ([]*p2p.PeerInfo, error) {
+	return c.peers, nil
+}
+
+// TestPeerTierCache_Refresh_ClassifiesByBlocksReceived — refresh's
+// classification predicate: tierMiner requires BlocksReceived > 0 together with
+// ReputationScore >= threshold (inclusive); every other registered peer is
+// tierPeer and an unknown peer stays tierUnverified. The guard that
+// BlocksReceived actually survives the p2p gRPC hop lives in
+// services/p2p/server_handler_test.go (TestServer_GetPeerRegistry_ReceivedCountersSurviveWire).
+func TestPeerTierCache_Refresh_ClassifiesByBlocksReceived(t *testing.T) {
+	newPeerID := func() peer.ID {
+		k, _, err := crypto.GenerateEd25519Key(rand.Reader)
+		require.NoError(t, err)
+		id, err := peer.IDFromPublicKey(k.GetPublic())
+		require.NoError(t, err)
+		return id
+	}
+
+	miner := newPeerID()
+	atThreshold := newPeerID()
+	noBlocks := newPeerID()
+	lowRep := newPeerID()
+	unknown := newPeerID()
+
+	client := &registryStubP2PClient{peers: []*p2p.PeerInfo{
+		{ID: miner, BlocksReceived: 1, ReputationScore: 90},
+		{ID: atThreshold, BlocksReceived: 1, ReputationScore: 50},
+		{ID: noBlocks, BlocksReceived: 0, ReputationScore: 100},
+		{ID: lowRep, BlocksReceived: 50, ReputationScore: 10},
+	}}
+
+	cache := newPeerTierCache(ulogger.TestLogger{}, client, 50)
+	cache.refresh(context.Background())
+
+	require.Equal(t, tierMiner, cache.GetTier(miner))
+	require.Equal(t, tierMiner, cache.GetTier(atThreshold), "reputation exactly at threshold qualifies")
+	require.Equal(t, tierPeer, cache.GetTier(noBlocks), "no blocks received must not be a miner")
+	require.Equal(t, tierPeer, cache.GetTier(lowRep), "reputation below threshold must not be a miner")
+	require.Equal(t, tierUnverified, cache.GetTier(unknown))
 }
 
 // TestParsePeerAuthAllowlist — parsing of the pipe-separated config value.

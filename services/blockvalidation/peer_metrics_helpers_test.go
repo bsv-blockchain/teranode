@@ -28,6 +28,50 @@ func (f *failureCountingP2PClient) RecordCatchupFailureWithKind(_ context.Contex
 	return nil
 }
 
+// isPeerMaliciousCallRecorder is a P2PClientI whose IsPeerMalicious records that it was called
+// and always answers true; every other method hits the nil embedded interface and panics. Used to
+// prove a gated peerID never reaches the p2p client at all (bitcoin-sv/teranode#4692).
+type isPeerMaliciousCallRecorder struct {
+	P2PClientI
+	called bool
+}
+
+func (r *isPeerMaliciousCallRecorder) IsPeerMalicious(_ context.Context, _ string) (bool, string, error) {
+	r.called = true
+	return true, "should never be reached for a gated peerID", nil
+}
+
+// TestIsPeerMalicious_GatesEmptyAndLegacyPeerIDs pins the legacy-peerID gate (bitcoin-sv/teranode#4692):
+// a "legacy:"-namespaced peerID must be treated exactly like an empty one — isPeerMalicious returns
+// false without ever querying the p2p client, removing the per-block gRPC round-trip on the legacy
+// hot path. A real (non-legacy, non-empty) peerID must still be queried, proving the gate is
+// specific to the legacy namespace rather than disabling the check entirely.
+func TestIsPeerMalicious_GatesEmptyAndLegacyPeerIDs(t *testing.T) {
+	t.Run("empty peerID: gated, no client call", func(t *testing.T) {
+		rec := &isPeerMaliciousCallRecorder{}
+		u := &Server{logger: ulogger.TestLogger{}, p2pClient: rec}
+
+		require.False(t, u.isPeerMalicious(context.Background(), ""))
+		require.False(t, rec.called, "an empty peerID must never reach the p2p client")
+	})
+
+	t.Run("legacy-prefixed peerID: gated, no client call", func(t *testing.T) {
+		rec := &isPeerMaliciousCallRecorder{}
+		u := &Server{logger: ulogger.TestLogger{}, p2pClient: rec}
+
+		require.False(t, u.isPeerMalicious(context.Background(), LegacyPeerIDPrefix+"1.2.3.4:8333"))
+		require.False(t, rec.called, "a legacy-prefixed peerID must never reach the p2p client")
+	})
+
+	t.Run("real peerID: not gated, client is queried", func(t *testing.T) {
+		rec := &isPeerMaliciousCallRecorder{}
+		u := &Server{logger: ulogger.TestLogger{}, p2pClient: rec}
+
+		require.True(t, u.isPeerMalicious(context.Background(), "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"))
+		require.True(t, rec.called, "a genuine libp2p peerID must still be queried")
+	})
+}
+
 // TestReportCatchupFailureForError_SkipsAlreadyReported guards the
 // one-failure-per-attempt invariant: when a lower layer (the header-fetch
 // stage) has already recorded the failure, the top-level handler must not
@@ -58,6 +102,71 @@ func TestReportCatchupFailureForError_SkipsAlreadyReported(t *testing.T) {
 			markCatchupFailureReported(errors.NewServiceError("http request returned status code [429]")))
 		u.reportCatchupFailureForError(context.Background(), "peer-1", err)
 		require.Equal(t, 0, client.failures)
+	})
+
+	t.Run("block incomplete is still skipped", func(t *testing.T) {
+		u, client := newServer()
+		u.reportCatchupFailureForError(context.Background(), "peer-1", errors.ErrBlockIncomplete)
+		require.Equal(t, 0, client.failures)
+	})
+}
+
+// TestReportCatchupFailureForError_SkipsCorrupt pins this helper's exemptions
+// (bitcoin-sv/teranode#4692). The corrupt-body one is about DOUBLE charging: releaseCatchupLock
+// already charges the primary once for the corrupt cycle, and the corrupt error reaches
+// processCatchupChItem's generic tail unwrapped, so charging again here would be the third charge
+// for one body. The local-policy-decline one is about charging AT ALL: the limit is this node's, so
+// no peer earns a reputation failure for it on any path.
+//
+// A generic error must still be charged, so both exemptions are specific to their sentinels rather
+// than a blanket suppression — that positive control is what keeps the "0 failures" rows meaningful.
+func TestReportCatchupFailureForError_SkipsCorrupt(t *testing.T) {
+	newServer := func() (*Server, *failureCountingP2PClient) {
+		client := &failureCountingP2PClient{}
+		return &Server{p2pClient: client, logger: ulogger.TestLogger{}}, client
+	}
+
+	t.Run("corrupt block body is skipped", func(t *testing.T) {
+		u, client := newServer()
+		u.reportCatchupFailureForError(context.Background(), "peer-1", errors.NewBlockCorruptError("[BLOCK] body is corrupt"))
+		require.Equal(t, 0, client.failures)
+	})
+
+	t.Run("wrapped corrupt block body is skipped", func(t *testing.T) {
+		u, client := newServer()
+		err := errors.NewProcessingError("catchup failed",
+			errors.NewBlockCorruptError("[BLOCK] body is corrupt"))
+		u.reportCatchupFailureForError(context.Background(), "peer-1", err)
+		require.Equal(t, 0, client.failures)
+	})
+
+	// A local policy decline (excessiveblocksize) is OUR configuration, so no peer may be charged for
+	// it (bitcoin-sv/teranode#4692). The exemption lives HERE, at the shared chokepoint, rather than
+	// only at the terminal branch in processCatchupChItem — which is what makes the invariant hold on
+	// the ALTERNATIVE paths: tryAlternativePeersForCatchup (reached from both the per-(hash, peerID)
+	// decline pre-empt and the bad/malicious branch) and the generic tail's cached-alternatives loop
+	// all route their per-candidate failures through this helper. On a genuinely over-limit block
+	// every candidate declines identically, so without this each honest peer would be charged and
+	// pushed toward the reputation floor that GetPeersAtMaxHeight filters on.
+	t.Run("local policy decline is skipped", func(t *testing.T) {
+		u, client := newServer()
+		u.reportCatchupFailureForError(context.Background(), "peer-1",
+			errors.NewBlockPolicyDeclinedError("[ValidateBlock] block size 5 exceeds excessiveblocksize 4 (local policy)"))
+		require.Equal(t, 0, client.failures)
+	})
+
+	t.Run("wrapped local policy decline is skipped", func(t *testing.T) {
+		u, client := newServer()
+		err := errors.NewProcessingError("catchup failed",
+			errors.NewBlockPolicyDeclinedError("block size exceeds excessiveblocksize"))
+		u.reportCatchupFailureForError(context.Background(), "peer-1", err)
+		require.Equal(t, 0, client.failures)
+	})
+
+	t.Run("generic processing error is still charged", func(t *testing.T) {
+		u, client := newServer()
+		u.reportCatchupFailureForError(context.Background(), "peer-1", errors.NewProcessingError("something else failed"))
+		require.Equal(t, 1, client.failures)
 	})
 
 	t.Run("block incomplete is still skipped", func(t *testing.T) {
