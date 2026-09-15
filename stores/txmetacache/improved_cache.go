@@ -13,7 +13,6 @@ import (
 	swiss "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/cespare/xxhash/v2"
-	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
 )
@@ -97,6 +96,10 @@ const (
 	maxSlabBytesPerMmap = 4 * 1024 * 1024           // 4MB target maximum slab size
 	minSlabBytesPerMmap = minSlabChunks * ChunkSize // keep in sync with minSlabChunks
 )
+
+// defaultTrimRatio is used by New when no trimRatio is supplied by the caller.
+// It matches the default of subtreevalidation_txMetaCacheTrimRatio.
+const defaultTrimRatio = 2
 
 // smallSetMultiBatchThreshold gates SetMulti's two paths: at or below this
 // size, keys are written sequentially via per-key Set on the caller's
@@ -286,6 +289,9 @@ type ImprovedCache struct {
 //   - Unallocated: Allocates memory on demand, suitable for caches with unpredictable usage patterns
 //   - Preallocated: Allocates all memory upfront, optimizing for predictable high-throughput scenarios
 //   - Trimmed: Uses a trimming strategy to manage memory, balancing between the other approaches
+//   - trimRatio: Optional override for how aggressively the Preallocated bucket type trims its
+//     chunk arena on generation rollover (see subtreevalidation_txMetaCacheTrimRatio). Ignored by
+//     every other bucket type. Defaults to defaultTrimRatio when omitted.
 //
 // Returns:
 // - A new ImprovedCache instance configured with the specified parameters
@@ -293,7 +299,7 @@ type ImprovedCache struct {
 //
 // The cache distributes data across multiple buckets to reduce lock contention,
 // with each bucket initialized according to the specified allocation strategy.
-func New(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
+func New(maxBytes int, bucketType BucketType, trimRatio ...int) (*ImprovedCache, error) {
 	LogCacheConfig(BucketsCount, MapInitialCapacity)
 
 	if maxBytes <= 0 {
@@ -311,7 +317,10 @@ func New(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
 		maxBucketBytes = ChunkSize * 8
 	}
 
-	trimRatio, _ := gocore.Config().GetInt("txMetaCacheTrimRatio", 2)
+	ratio := defaultTrimRatio
+	if len(trimRatio) > 0 {
+		ratio = trimRatio[0]
+	}
 
 	switch bucketType {
 	// if the cache is unallocated cache, unallocatedCache is false, minedBlockStore
@@ -331,7 +340,7 @@ func New(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
 			}
 		}
 	case Preallocated:
-		c.trimRatio = trimRatio
+		c.trimRatio = ratio
 
 		for i := range BucketsCount {
 			c.buckets[i] = &bucketPreallocated{}
