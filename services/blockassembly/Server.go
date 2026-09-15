@@ -2386,6 +2386,7 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 		RemoveMapCount:        removeMapLen32,
 		Subtrees:              subtreeHashesStrings,
 		QueueHeadAgeMillis:    ba.blockAssembler.QueueHeadAge().Milliseconds(),
+		TxIngressFull:         ba.blockAssembler.IsTxIngressFull(),
 	}, nil
 }
 

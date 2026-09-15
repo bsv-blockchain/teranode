@@ -316,6 +316,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			IdleSleepDuration:                    getDuration("blockassembly_idle_sleep_duration", 10*time.Millisecond, alternativeContext...),
 			MaxQueueItems:                        getInt64("blockassembly_maxQueueItems", 0, alternativeContext...),
 			QueueFullWaitTimeout:                 getDuration("blockassembly_queueFullWaitTimeout", 100*time.Millisecond, alternativeContext...),
+			MaxTransactionsInMemory:              getUint64("blockassembly_maxTransactionsInMemory", 0, alternativeContext...),
+			MaxTransactionsInMemoryResume:        getUint64("blockassembly_maxTransactionsInMemoryResume", 0, alternativeContext...),
 		},
 
 		BlockChain: BlockChainSettings{
