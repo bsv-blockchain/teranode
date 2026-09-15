@@ -3,7 +3,6 @@ package subtreevalidation
 import (
 	"bufio"
 	"context"
-	"fmt"
 	"io"
 	"sort"
 	"sync"
@@ -129,7 +128,10 @@ func (u *Server) loadSubtreeBatch(ctx, fetchCtx context.Context, request *subtre
 				}
 			} else {
 				// get the subtree from the peer
-				url := fmt.Sprintf("%s/subtree/%s", request.BaseUrl, subtreeHash.String())
+				url, joinErr := util.JoinPeerURL(request.BaseUrl, "subtree", subtreeHash.String())
+				if joinErr != nil {
+					return errors.NewServiceError("[CheckBlockSubtrees][%s] invalid peer base URL", subtreeHash.String(), joinErr)
+				}
 
 				// Bound the body at the receive-side policy cap (MaxIncomingSubtreeBytes) so a
 				// malicious peer can't OOM us by streaming oversized responses. This must be
@@ -278,7 +280,7 @@ func (u *Server) loadSubtreeBatch(ctx, fetchCtx context.Context, request *subtre
 
 				if !subtreeDataExists {
 					// get the subtree data from the peer and process it directly
-					url := fmt.Sprintf("%s/subtree_data/%s", request.BaseUrl, subtreeHash.String())
+					url, subtreeDataErr := util.JoinPeerURL(request.BaseUrl, "subtree_data", subtreeHash.String())
 
 					// Retry on 503 — peer's asset service may reject under admission control
 					// while it generates the file on-demand from Aerospike.
@@ -297,7 +299,10 @@ func (u *Server) loadSubtreeBatch(ctx, fetchCtx context.Context, request *subtre
 					// pre-warmed cache for the next retry. The trade-off is that abort
 					// detection waits for in-flight peers instead of cancelling early;
 					// acceptable here because the per-fetch streaming timeout still bounds it.
-					body, subtreeDataErr := util.DoHTTPRequestBodyReaderWithRetry(fetchCtx, url)
+					var body io.ReadCloser
+					if subtreeDataErr == nil {
+						body, subtreeDataErr = util.DoHTTPRequestBodyReaderWithRetry(fetchCtx, url)
+					}
 					if subtreeDataErr != nil {
 						return errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree data from %s", subtreeHash.String(), url, subtreeDataErr)
 					}

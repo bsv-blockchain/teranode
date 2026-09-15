@@ -273,12 +273,21 @@ func (d *Daemon) updateServiceStatuses(logger ulogger.Logger) {
 }
 
 // Start initializes and starts the Daemon and its services.
+// applyPeerURLPolicy configures the process-wide client for peer-supplied URLs. Hostnames
+// in those URLs may resolve to private-network addresses only on a node that already
+// accepts private peers, matching the static check p2p applies to announced DataHub URLs.
+func applyPeerURLPolicy(appSettings *settings.Settings) {
+	util.SetSSRFAllowPrivateNetworks(appSettings.P2P.AllowPrivateIPs)
+}
+
 func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settings.Settings, readyChannel ...chan struct{}) {
 	if d.loggerFactory == nil {
 		d.loggerFactory = func(serviceName string) ulogger.Logger {
 			return ulogger.New(serviceName, ulogger.WithLevel(appSettings.LogLevel))
 		}
 	}
+
+	applyPeerURLPolicy(appSettings)
 
 	// Before continuing, if the command line contains "-wait_for_postgres=1", wait for postgres to be ready
 	if d.shouldStart("wait_for_postgres", args) {

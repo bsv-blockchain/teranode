@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -87,39 +88,46 @@ func TestPeerHealthCheck_RejectsInternalAddresses(t *testing.T) {
 	}
 }
 
-// TestPeerProbeAllowsPrivateAddresses is the availability guard-rail. The probe only decides
-// whether to fetch from a peer, so it must never refuse an address the block/subtree fetch
-// path would accept. RFC1918 is the case that matters: the fetch path allows it by documented
-// design, so a probe that refused it would drop peers catchup could have used - a node whose
-// peers resolve into private space would find no sync peer at all. The probe therefore shares
-// util.DefaultSSRFDialPolicy instead of owning a policy that can drift from it.
+// TestPeerProbePrivateAddressesFollowSetting is the availability guard-rail. The probe only
+// decides whether to fetch from a peer, so it must refuse exactly what the block/subtree fetch
+// path refuses: a probe stricter than the fetch would drop peers catchup could have used, and
+// one looser would be pointless. Both share util.DefaultSSRFDialPolicy, where private-network
+// addresses follow p2p_allow_private_ips (applied process-wide by the daemon) since issue 4843.
 //
-// The dial is expected to fail (nothing is listening); what matters is that it fails as a
-// network error rather than an SSRF rejection, under both settings of AllowPrivateIPs.
-func TestPeerProbeAllowsPrivateAddresses(t *testing.T) {
+// With the setting on, the dial is expected to fail as a network error (nothing is
+// listening) rather than an SSRF rejection. With it off, the guard refuses before dialing.
+func TestPeerProbePrivateAddressesFollowSetting(t *testing.T) {
+	origAllowPrivate := util.SSRFAllowPrivateNetworks()
+	t.Cleanup(func() { util.SetSSRFAllowPrivateNetworks(origAllowPrivate) })
+
 	for _, allowPrivateIPs := range []bool{false, true} {
+		util.SetSSRFAllowPrivateNetworks(allowPrivateIPs)
+
 		ps := newSelectorWithPrivateIPs(t, allowPrivateIPs)
 
-		for _, hostPort := range []string{"10.255.255.1:1", "192.168.255.254:1", "[fc00::1]:1"} {
-			t.Run(hostPort, func(t *testing.T) {
+		for _, hostPort := range []string{"10.255.255.1:1", "192.168.255.254:1", "[fc00::1]:1", "100.64.0.1:1"} {
+			t.Run(fmt.Sprintf("%s_allow_private_%v", hostPort, allowPrivateIPs), func(t *testing.T) {
 				// Bounded so an unroutable private address cannot stall the test.
 				ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 				defer cancel()
 
 				_, err := ps.checkPeerAvailability(ctx, "http://"+hostPort+"/api/v1")
 				require.Error(t, err)
-				require.NotContains(t, err.Error(), "SSRF dial check",
-					"private address must not be refused by the guard (AllowPrivateIPs=%v)", allowPrivateIPs)
-				require.NotContains(t, err.Error(), "private address")
+
+				if allowPrivateIPs {
+					require.NotContains(t, err.Error(), "SSRF dial check", "private address must not be refused by the guard")
+				} else {
+					require.Contains(t, err.Error(), "private-network address", "private address must be refused by the guard")
+				}
 			})
 		}
-	}
 
-	// The shared policy is the single source of truth for both paths.
-	for _, ipStr := range []string{"10.0.0.5", "192.168.1.10", "172.16.4.4", "fc00::1"} {
-		ip := net.ParseIP(ipStr)
-		require.NotNil(t, ip, ipStr)
-		require.Empty(t, util.DefaultSSRFDialPolicy(ip), "the fetch path must allow %s", ipStr)
+		// The shared policy is the single source of truth for both paths.
+		for _, ipStr := range []string{"10.0.0.5", "192.168.1.10", "172.16.4.4", "fc00::1"} {
+			ip := net.ParseIP(ipStr)
+			require.NotNil(t, ip, ipStr)
+			require.Equal(t, allowPrivateIPs, util.DefaultSSRFDialPolicy(ip) == "", "the fetch path policy for %s", ipStr)
+		}
 	}
 }
 
