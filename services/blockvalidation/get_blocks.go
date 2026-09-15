@@ -3,7 +3,6 @@ package blockvalidation
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -1373,24 +1372,40 @@ func (u *Server) fetchBlocksBatch(ctx context.Context, hash *chainhash.Hash, n u
 	)
 	defer deferFn()
 
-	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/blocks/%s?n=%d", baseURL, hash.String(), n))
+	url := fmt.Sprintf("%s/blocks/%s?n=%d", baseURL, hash.String(), n)
+
+	// Stream and parse incrementally rather than io.ReadAll-ing the whole response: a block
+	// carries no consensus-defined maximum size, so there is no byte cap to apply here (unlike
+	// fetchSubtreeFromPeer's DoHTTPRequestBounded). Parsing off the wire bounds the allocation
+	// structurally instead - a hostile/gzip-amplifying peer can only grow the process by as much
+	// as one in-progress block's already-bounded fields (bitcoin-sv/teranode#4742).
+	bodyReader, err := util.DoHTTPRequestBodyReader(ctx, url)
 	if err != nil {
 		return nil, errors.NewProcessingError("[catchup:fetchBlocksBatch][%s] failed to get blocks from peer", hash.String(), err)
 	}
 
-	// Track bytes downloaded from peer
-	if u.p2pClient != nil && peerID != "" {
-		if err := u.p2pClient.RecordBytesDownloaded(ctx, peerID, uint64(len(blockBytes))); err != nil {
-			u.logger.Warnf("[fetchBlocksBatch][%s] failed to record %d bytes downloaded from peer %s: %v", hash.String(), len(blockBytes), peerID, err)
-		}
+	countingReader := &countingReadCloser{
+		reader: bodyReader,
+		onClose: func(bytesRead uint64) {
+			if u.p2pClient != nil && peerID != "" {
+				trackCtx, _, deferFn := tracing.DecoupleTracingSpan(ctx, "blockvalidation", "recordBytesDownloaded")
+				defer deferFn()
+
+				if err := u.p2pClient.RecordBytesDownloaded(trackCtx, peerID, bytesRead); err != nil {
+					u.logger.Warnf("[fetchBlocksBatch][%s] failed to record %d bytes downloaded from peer %s: %v", hash.String(), bytesRead, peerID, err)
+				}
+			}
+		},
 	}
+	defer countingReader.Close()
 
-	blockReader := bytes.NewReader(blockBytes)
+	blocks := make([]*model.Block, 0, n)
 
-	blocks := make([]*model.Block, 0)
-
-	for {
-		block, err := model.NewBlockFromReader(blockReader)
+	// Bounded by n, not read-until-EOF: a peer that keeps streaming well-formed blocks past
+	// what was asked for would otherwise drive an allocation bounded only by how long it kept
+	// sending, in *model.Block values that no byte cap could constrain.
+	for uint32(len(blocks)) < n {
+		block, err := model.NewBlockFromReader(countingReader)
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				break
@@ -1422,26 +1437,37 @@ func (u *Server) fetchSingleBlock(ctx context.Context, hash *chainhash.Hash, pee
 	)
 	defer deferFn()
 
-	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", baseURL, hash.String()))
+	url := fmt.Sprintf("%s/block/%s", baseURL, hash.String())
+
+	// Stream and parse incrementally rather than io.ReadAll-ing the whole response - see the
+	// comment on fetchBlocksBatch's DoHTTPRequestBodyReader call (bitcoin-sv/teranode#4742).
+	bodyReader, err := util.DoHTTPRequestBodyReader(ctx, url)
 	if err != nil {
 		return nil, errors.NewProcessingError("[catchup:fetchSingleBlock][%s] failed to get block from peer", hash.String(), err)
 	}
 
-	// Track bytes downloaded from peer
-	if u.p2pClient != nil && peerID != "" {
-		if err := u.p2pClient.RecordBytesDownloaded(ctx, peerID, uint64(len(blockBytes))); err != nil {
-			u.logger.Warnf("[fetchSingleBlock][%s] failed to record %d bytes downloaded from peer %s: %v", hash.String(), len(blockBytes), peerID, err)
-		}
-	}
+	countingReader := &countingReadCloser{
+		reader: bodyReader,
+		onClose: func(bytesRead uint64) {
+			if u.p2pClient != nil && peerID != "" {
+				trackCtx, _, deferFn := tracing.DecoupleTracingSpan(ctx, "blockvalidation", "recordBytesDownloaded")
+				defer deferFn()
 
-	block, err := model.NewBlockFromBytes(blockBytes)
+				if err := u.p2pClient.RecordBytesDownloaded(trackCtx, peerID, bytesRead); err != nil {
+					u.logger.Warnf("[fetchSingleBlock][%s] failed to record %d bytes downloaded from peer %s: %v", hash.String(), bytesRead, peerID, err)
+				}
+			}
+		},
+	}
+	defer countingReader.Close()
+
+	block, err := model.NewBlockFromReader(countingReader)
 	if err != nil {
 		return nil, errors.NewProcessingError("[catchup:fetchSingleBlock][%s] failed to create block from bytes", hash.String(), err)
 	}
 
 	if block == nil {
-		return nil, errors.NewProcessingError("[catchup:fetchSingleBlock][%s] block could not be created from %d bytes received from peer",
-			hash.String(), len(blockBytes))
+		return nil, errors.NewProcessingError("[catchup:fetchSingleBlock][%s] block could not be created from peer response", hash.String())
 	}
 
 	// The peer chooses the response body, so a well-formed block is not necessarily the
