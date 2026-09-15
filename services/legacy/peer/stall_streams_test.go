@@ -205,24 +205,24 @@ func TestShouldExtendBlockDeadline(t *testing.T) {
 	start := now.Add(-time.Minute) // fetch in flight for 1 minute
 
 	t.Run("healthy block within cap extends", func(t *testing.T) {
-		require.True(t, shouldExtendBlockDeadline(wire.CmdBlock, true, start, now))
+		require.True(t, shouldExtendBlockDeadline(wire.CmdBlock, true, start, now, MaxBlockDownloadTime))
 	})
 
 	t.Run("non-block command never extends", func(t *testing.T) {
-		require.False(t, shouldExtendBlockDeadline(wire.CmdHeaders, true, start, now))
+		require.False(t, shouldExtendBlockDeadline(wire.CmdHeaders, true, start, now, MaxBlockDownloadTime))
 	})
 
 	t.Run("unhealthy throughput does not extend", func(t *testing.T) {
-		require.False(t, shouldExtendBlockDeadline(wire.CmdBlock, false, start, now))
+		require.False(t, shouldExtendBlockDeadline(wire.CmdBlock, false, start, now, MaxBlockDownloadTime))
 	})
 
 	t.Run("no fetch in flight does not extend", func(t *testing.T) {
-		require.False(t, shouldExtendBlockDeadline(wire.CmdBlock, true, time.Time{}, now))
+		require.False(t, shouldExtendBlockDeadline(wire.CmdBlock, true, time.Time{}, now, MaxBlockDownloadTime))
 	})
 
 	t.Run("past the wall-clock cap stops extending despite healthy throughput", func(t *testing.T) {
 		overCap := now.Add(-MaxBlockDownloadTime - time.Second)
-		require.False(t, shouldExtendBlockDeadline(wire.CmdBlock, true, overCap, now),
+		require.False(t, shouldExtendBlockDeadline(wire.CmdBlock, true, overCap, now, MaxBlockDownloadTime),
 			"a slow-drip peer must be rotated once the cap is exceeded")
 	})
 }

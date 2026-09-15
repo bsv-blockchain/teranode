@@ -319,6 +319,10 @@ type BlockValidation struct {
 	// spendRetryBackoff overrides the pause between quick-validate spend retry
 	// attempts; zero means spendRetryBackoffDefault. Settable in tests.
 	spendRetryBackoff time.Duration
+
+	// quickWindow overlaps consecutive below-checkpoint legacy blocks' UTXO work. nil when
+	// blockvalidation_quick_window_blocks resolves below 1. See quick_window.go.
+	quickWindow *quickWindow
 }
 
 // subtreeFromBytesWithMmap creates a subtree from bytes, using mmap if dir is non-empty.
@@ -456,6 +460,20 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		if c, ok := o.(P2PClientI); ok {
 			bv.p2pClient = c
 		}
+	}
+
+	// The window's caller budget is shared across every block in flight, and is twice the
+	// per-wave create limit because a single block already runs two creating waves at once:
+	// one block alone must still be able to fill both.
+	//
+	// Started after the p2pClient wiring above for the same reason that wiring is first: the
+	// window starts a goroutine, and a goroutine must not be able to observe a half-built
+	// BlockValidation.
+	if depth := quickWindowDepth(tSettings, logger); depth >= 1 {
+		bv.quickWindow = newQuickWindow(logger, depth, 2*quickValidateCreateLimit(&tSettings.BlockValidation, &tSettings.UtxoStore), func(cctx context.Context, e *windowEntry) error {
+			return bv.commitBlock(cctx, e.Block(), e.peerID, "quickWindow")
+		})
+		bv.quickWindow.Start(ctx)
 	}
 
 	go func() {

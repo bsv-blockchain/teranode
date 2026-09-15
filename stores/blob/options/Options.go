@@ -168,6 +168,25 @@ func WithDeleteAt(dah uint32) FileOption {
 	}
 }
 
+// WithNoDAH turns Delete-At-Height off for one operation, whatever retention the
+// store itself was built with. It is the file-level counterpart of the
+// WithDisableDAH store option, and the counterpart of WithNoHashPrefix below:
+// something a caller can pass to undo a store-level default it does not own.
+//
+// It exists because MergeOptions copies the store's BlockHeightRetention into
+// every operation BEFORE any file option runs, and the file store then derives a
+// DAH from that retention for any blob that has none of its own. A caller that
+// owns the whole lifetime of the blobs it writes — deleting them itself, on its
+// own schedule, and needing them present until it does — otherwise has no way to
+// say so, and would silently start losing blobs the day somebody gave its store
+// a retention. Pass it on every operation for such a blob, not only the write.
+func WithNoDAH() FileOption {
+	return func(s *Options) {
+		s.DAH = 0
+		s.DisableDAH = true
+	}
+}
+
 // WithFilename configures the filename for the file.
 func WithFilename(name string) FileOption {
 	return func(s *Options) {
