@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -657,4 +660,63 @@ func TestGetUTXODeletionsReader_ClosesOnReadError(t *testing.T) {
 	_, err = us.GetUTXODeletionsReader(ctx)
 	require.Error(t, err, "GetUTXODeletionsReader must surface the read error")
 	require.True(t, errReader.closed, "reader must be Closed when GetUTXODeletionsReader returns an error - otherwise the file-store read permit leaks")
+}
+
+// countingCloser records how many times it was closed, so a test can pin that a repeated
+// Close of the pooled reader does not run the underlying close again.
+type countingCloser struct {
+	calls int
+	err   error
+}
+
+func (c *countingCloser) Close() error {
+	c.calls++
+	return c.err
+}
+
+func newTestPooledBufReader(payload string, closer io.Closer) *pooledBufReader {
+	return &pooledBufReader{
+		reader: filestorer.AcquireReader(strings.NewReader(payload), 4096),
+		closer: closer,
+	}
+}
+
+// TestPooledReaderRejectsReadAfterClose pins that a read once the buffer has gone back to
+// the pool is an error, not a dereference of a buffer another goroutine may now own.
+func TestPooledReaderRejectsReadAfterClose(t *testing.T) {
+	r := newTestPooledBufReader("payload", &countingCloser{})
+
+	require.NoError(t, r.Close())
+
+	n, err := r.Read(make([]byte, 8))
+	require.Error(t, err)
+	require.Zero(t, n)
+}
+
+// TestPooledReaderIoCopyCannotBypassTheGuard is the regression for the embedded
+// *bufio.Reader this type replaced. io.Copy selects a source's WriteTo before it ever calls
+// Read, so with the reader embedded the promoted bufio.Reader.WriteTo would have streamed
+// straight past the guard in Read and dereferenced a released buffer.
+func TestPooledReaderIoCopyCannotBypassTheGuard(t *testing.T) {
+	r := newTestPooledBufReader("payload", &countingCloser{})
+
+	require.NoError(t, r.Close())
+
+	n, err := io.Copy(io.Discard, r)
+	require.Error(t, err)
+	require.Zero(t, n)
+}
+
+// TestPooledReaderCloseRunsUnderlyingCloserExactlyOnce pins that a repeated Close neither
+// releases the buffer twice nor closes the underlying reader twice; the underlying close is
+// what returns the file store's read permit.
+func TestPooledReaderCloseRunsUnderlyingCloserExactlyOnce(t *testing.T) {
+	closeErr := errors.NewProcessingError("underlying close failed")
+	closer := &countingCloser{err: closeErr}
+	r := newTestPooledBufReader("payload", closer)
+
+	require.ErrorIs(t, r.Close(), closeErr, "the first Close must report the underlying closer's error")
+	require.NoError(t, r.Close())
+	require.NoError(t, r.Close())
+	require.Equal(t, 1, closer.calls)
 }

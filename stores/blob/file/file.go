@@ -934,7 +934,19 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 		//
 		// Best-effort: a stale sidecar is inert (nothing in this repository reads one) and must
 		// not turn a successfully published blob into a failed write.
-		if removeErr := s.removeStorePath(filename + checksumExtension); removeErr != nil && !os.IsNotExist(removeErr) {
+		//
+		// Plain os.Remove rather than removeStorePath, because this runs on every write while
+		// checksums are off and the sidecar is almost never there. os.Remove is an unlink and,
+		// only if that fails, an rmdir: two syscalls on the common missing-sidecar path, against
+		// removeStorePath's fresh os.OpenRoot (which fstats the descriptor), a walk of every path
+		// component, the unlink and the close. What it gives up is os.Root confinement against
+		// symlinked path components; validatePathWithinBase does not replace it, being Abs, Clean
+		// and a prefix test with no symlink resolution, and ConstructFilename rejects ".." in
+		// SubDirectory without rejecting separators there. Accepted, not disproved: no component
+		// of the store's own directory tree is assumed to be an attacker-controlled symlink, since
+		// planting one already requires write access to the node's data directory, and Del removes
+		// this exact path with plain os.Remove under the same assumption.
+		if removeErr := os.Remove(filename + checksumExtension); removeErr != nil && !os.IsNotExist(removeErr) {
 			s.logger.Warnf("[File][SetFromReader] failed to remove stale checksum file for %s: %v", filename, removeErr)
 		}
 	}
