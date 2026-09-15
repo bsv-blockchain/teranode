@@ -527,10 +527,7 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Settings here still live under tSettings.P2P.* — the centralized
 	// registry inherits the existing operator-facing knobs unchanged. Moving
 	// them under tSettings.BlockChain.* is a follow-up rename.
-	registryTTL := b.settings.P2P.PeerRegistryTTL
-	if registryTTL <= 0 {
-		registryTTL = 24 * time.Hour
-	}
+	registryTTL := resolvePeerRegistryTTL(b.logger, b.settings.P2P.PeerRegistryTTL)
 	cleanupInterval := b.settings.P2P.PeerRegistryCleanupInterval
 	maxSize := b.settings.P2P.PeerRegistryMaxSize
 
@@ -912,6 +909,41 @@ func (b *Blockchain) startSubscriptions() {
 // the helper goroutine continues until Send eventually returns, then discards
 // the result — this residual goroutine is bounded to one per stuck stream.
 const sendDeadline = 5 * time.Second
+
+// minPeerRegistryTTL is the floor applied to an operator-configured
+// p2p_peer_registry_ttl. A connected peer republishes node_status every
+// nodeStatusPublishInterval (10s, see services/p2p/Server.go), which refreshes
+// LastSeen via Register (services/blockchain/peer_registry.go), and the
+// gossip-handler batcher coalesces those refreshes for up to one minute
+// (registryReassertTTL, services/p2p/peer_registry_batcher.go) before
+// re-asserting. A TTL below this floor risks the cleanup loop expiring an
+// actively-connected peer between its own batched refreshes — the peer then
+// fails IsPeerUnhealthy (services/p2p/handle_catchup_metrics.go), which gates
+// it out of catchup, and drops any not-yet-flushed validated-header progress
+// (RecordValidatedPeerProgress, services/blockchain/peer_registry.go). Five
+// minutes is 5x the batcher's reassert window and 30x the publish interval,
+// comfortably covering a missed beat or two of either.
+const minPeerRegistryTTL = 5 * time.Minute
+
+// resolvePeerRegistryTTL applies the same coercion Server.go has always
+// applied for ttl<=0 (select the 24h default) and adds a floor for a
+// configured-but-too-short positive value. Unlike maxSize<=0 and
+// cleanupInterval<=0 (both documented, permanent opt-outs — see StartCleanup
+// and Cleanup's doc comments), there is no legitimate reason to run the
+// registry with a TTL below minPeerRegistryTTL, so that range is coerced
+// rather than honoured. The coercion is logged because a silently-corrected
+// setting is exactly the failure mode this settings-wiring batch exists to
+// fix.
+func resolvePeerRegistryTTL(logger ulogger.Logger, configured time.Duration) time.Duration {
+	if configured <= 0 {
+		return 24 * time.Hour
+	}
+	if configured < minPeerRegistryTTL {
+		logger.Warnf("[Blockchain] p2p_peer_registry_ttl %s is below the minimum %s; using %s instead", configured, minPeerRegistryTTL, minPeerRegistryTTL)
+		return minPeerRegistryTTL
+	}
+	return configured
+}
 
 // runSubscriberDrain pulls notifications from the subscriber's pending buffer
 // and calls Send on its gRPC stream. One goroutine per subscriber preserves
