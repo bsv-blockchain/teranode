@@ -293,10 +293,12 @@ This feature is particularly important when validating transactions that:
 - Need to be accepted regardless of local policy preferences
 - Have already been confirmed on the blockchain
 
+Minimum-fee enforcement itself lives in BDK: the validator pushes `minminingtxfee` (plus the consolidation-policy values) into BDK at startup, and BDK applies the fee floor, including the free-consolidation exemption, during `ValidateTransaction` in policy mode. The one fee rule enforced in Go is the optional per-script tier schedules (`minminingtxfeebyscriptsize`, `minminingtxfeebyscriptops`), which BDK has no API for. The free-consolidation exemption is honoured for the `minminingtxfee` floor term only; the per-script surcharge is always due, so a large-script output cannot be created cheaply and then "consolidated" to dodge it. Because BDK re-checks and re-exempts its own floor one call later, any imperfect match in the Go exemption predicate can at most drop the small byte-rate floor, never the surcharge. Note that neither schedule is advertised on `/v1/policy` or the P2P `fee_policy` message, so wallets and peers cannot discover it; an operator enabling it must communicate the schedule out of band (a follow-up will extend the Teranode-owned P2P policy message):
+
 ```go
 // Example of policy checks being conditionally applied:
 if !validationOptions.SkipPolicyChecks {
-    if err := tv.checkFees(tx, blockHeight, utxoHeights); err != nil {
+    if err := tv.checkScriptTieredFees(tx, blockHeight, utxoHeights); err != nil {
         return err
     }
 }
