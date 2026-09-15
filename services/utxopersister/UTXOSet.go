@@ -380,9 +380,51 @@ func (us *UTXOSet) Abort(err error) {
 	}
 }
 
-type readCloserWrapper struct {
-	*bufio.Reader
-	io.Closer
+// pooledBufReader owns a pooled *bufio.Reader for the lifetime of one read, returning it on
+// Close.
+//
+// The reader is a named field rather than an embedded one, and that is the point of the type.
+// Embedding promotes the whole bufio.Reader method set, including WriteTo; io.Copy selects a
+// source's WriteTo before it ever calls Read, so a caller could stream straight past the guard
+// in Read below and dereference a buffer this type had already given back. With a named field
+// the type is exactly an io.ReadCloser, which is all that GetUTXOAdditionsReader and
+// GetUTXODeletionsReader promise.
+//
+// Not safe for concurrent use: a Close must not overlap a Read, the same contract bufio.Reader
+// itself carries. Every consumer in this repository closes on the frame that reads.
+type pooledBufReader struct {
+	reader *bufio.Reader
+	closer io.Closer
+	once   sync.Once
+}
+
+// Read delegates to the pooled buffer, or reports that the buffer has already been returned.
+func (p *pooledBufReader) Read(b []byte) (int, error) {
+	if p.reader == nil {
+		return 0, errors.NewProcessingError("read from a utxo-persister reader that is already closed")
+	}
+
+	return p.reader.Read(b)
+}
+
+// Close returns the buffer to the pool and closes the underlying reader. The sync.Once keeps
+// both to exactly one occurrence: releasing twice would hand one buffer to two owners, and the
+// underlying close is what releases the file store's read permit. Repeat calls return nil.
+func (p *pooledBufReader) Close() error {
+	var err error
+
+	p.once.Do(func() {
+		reader := p.reader
+		p.reader = nil
+
+		filestorer.ReleaseReader(reader)
+
+		if p.closer != nil {
+			err = p.closer.Close()
+		}
+	})
+
+	return err
 }
 
 // GetUTXOAdditionsReader returns a reader for accessing UTXO additions.
@@ -426,9 +468,9 @@ func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, e
 
 	us.logger.Debugf("Using %s buffer for utxo-additions reader", bufferSize)
 
-	r = &readCloserWrapper{
-		Reader: bufio.NewReaderSize(r, bufferSize.Int()),
-		Closer: r.(io.Closer),
+	r = &pooledBufReader{
+		reader: filestorer.AcquireReader(r, bufferSize.Int()),
+		closer: r,
 	}
 
 	return r, nil
@@ -466,9 +508,9 @@ func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, e
 
 	us.logger.Debugf("Using %s buffer for utxo-deletions reader", bufferSize)
 
-	r = &readCloserWrapper{
-		Reader: bufio.NewReaderSize(r, bufferSize.Int()),
-		Closer: r.(io.Closer),
+	r = &pooledBufReader{
+		reader: filestorer.AcquireReader(r, bufferSize.Int()),
+		closer: r,
 	}
 
 	return r, nil
@@ -616,9 +658,9 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 
 		us.logger.Infof("Using %s buffer for previous UTXOSet reader", bufferSize)
 
-		previousUTXOSetReader = &readCloserWrapper{
-			Reader: bufio.NewReaderSize(previousUTXOSetReader, bufferSize.Int()),
-			Closer: previousUTXOSetReader.(io.Closer),
+		previousUTXOSetReader = &pooledBufReader{
+			reader: filestorer.AcquireReader(previousUTXOSetReader, bufferSize.Int()),
+			closer: previousUTXOSetReader,
 		}
 
 		defer previousUTXOSetReader.Close()
