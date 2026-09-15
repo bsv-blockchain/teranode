@@ -3,6 +3,7 @@ package blockvalidation
 import (
 	"encoding/hex"
 	"math/big"
+	"os"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -22,6 +23,7 @@ func daaSettings(t *testing.T, base chaincfg.Params) *settings.Settings {
 
 	tSettings := test.CreateBaseTestSettings(t)
 	p := base
+	p.DaaForkHeight = 0 // Synthetic chains exercise the modern DAA.
 	tSettings.ChainCfgParams = &p
 
 	return tSettings
@@ -66,6 +68,51 @@ func buildConstantChain(n int, spacing uint32, bits *model.NBit) (*model.BlockHe
 	}
 
 	return anchor, headers
+}
+
+func TestValidateHeaderChainDifficulty_HistoricalTestnet(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	params := chaincfg.TestNetParams
+	tSettings.ChainCfgParams = &params
+	data, err := os.ReadFile("../blockchain/testdata/testnet_headers_0_547.bin")
+	require.NoError(t, err)
+	require.Len(t, data, 548*80)
+	headers := make([]*model.BlockHeader, 547)
+	for i := range headers {
+		headers[i], err = model.NewBlockHeaderFromBytes(data[(i+1)*80 : (i+2)*80])
+		require.NoError(t, err)
+	}
+	require.NoError(t, validateHeaderChainDifficulty(tSettings, &model.BlockHeaderMeta{Height: 0}, headers))
+}
+
+func TestValidateHeaderChainDifficulty_STNPreservesExistingRules(t *testing.T) {
+	s := test.CreateBaseTestSettings(t)
+	params := chaincfg.StnParams
+	s.ChainCfgParams = &params
+	bits, err := model.NewNBitFromString("180a097a")
+	require.NoError(t, err)
+	anchor, headers := buildConstantChain(300, 600, bits)
+	anchor.Height = 1000 // STN used DAA here before this historical testnet fix.
+	require.NoError(t, validateHeaderChainDifficulty(s, anchor, headers))
+	headers[200].Bits = *powLimitNBit(s)
+	require.True(t, errors.IsMaliciousResponseError(validateHeaderChainDifficulty(s, anchor, headers)))
+}
+
+func TestValidateHeaderChainDifficulty_DAAActivation(t *testing.T) {
+	tSettings := daaSettings(t, chaincfg.MainNetParams)
+	bits, err := model.NewNBitFromString("180a097a")
+	require.NoError(t, err)
+	for _, count := range []int{200, 201} {
+		anchor, headers := buildConstantChain(count, 600, bits)
+		tSettings.ChainCfgParams.DaaForkHeight = anchor.Height + 200
+		headers[count-1].Bits = *powLimitNBit(tSettings)
+		err := validateHeaderChainDifficulty(tSettings, anchor, headers)
+		if count == 200 {
+			require.NoError(t, err, "historical targets are deferred to full-block validation")
+		} else {
+			require.True(t, errors.IsMaliciousResponseError(err), "modern DAA must run at its parent-height activation")
+		}
+	}
 }
 
 // TestValidateHeaderChainDifficulty_ValidConstantChain proves the DAA check accepts a

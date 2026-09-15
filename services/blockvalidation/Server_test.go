@@ -696,7 +696,6 @@ func TestServer_catchup(t *testing.T) {
 			logger:              logger,
 			settings:            tSettings,
 			blockchainClient:    mockBlockchainClient,
-			blockValidation:     NewBlockValidation(testCtx, logger, tSettings, mockBlockchainClient, subtreeStore, nil, nil, nil, nil),
 			utxoStore:           utxoStore,
 			processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
 			catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
@@ -723,6 +722,8 @@ func TestServer_catchup(t *testing.T) {
 
 		// Set the best block to the last stored block (block 49)
 		mockBlockchainStore.BestBlock = blocks[49]
+		// Start subscription readers only after the mock's best block is set.
+		server.blockValidation = NewBlockValidation(testCtx, logger, tSettings, mockBlockchainClient, subtreeStore, nil, nil, nil, nil)
 
 		// Build headers response - should include common ancestor (block 49) and new blocks (50-99)
 		// Headers should be in order from oldest to newest

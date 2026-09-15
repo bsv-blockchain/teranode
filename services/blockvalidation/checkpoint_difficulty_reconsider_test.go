@@ -26,7 +26,7 @@ func TestSkipExpectedDifficulty_RebuildsInvalidatedPrefix(t *testing.T) {
 	client, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, store, nil, nil)
 	require.NoError(t, err)
 
-	// Two synthetic historical blocks suffice to exercise the actual invalidation
+	// Two synthetic blocks suffice to exercise the actual invalidation
 	// cascade and best-height lookup, independently of the historical DAA rules.
 	prev := tSettings.ChainCfgParams.GenesisHash
 	blocks := make([]*model.Block, 0, 2)
@@ -58,6 +58,26 @@ func TestSkipExpectedDifficulty_RebuildsInvalidatedPrefix(t *testing.T) {
 	_, best, err = client.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
 	require.Zero(t, best.Height, "invalidation must remove the whole descendant prefix")
-	require.True(t, u.skipExpectedDifficulty(ctx, blocks[0]), "rebuilding historical blocks must retain the syncing skip")
+	require.True(t, u.skipExpectedDifficulty(ctx, blocks[0]), "rebuilding this synthetic post-DAA prefix retains the syncing skip")
 	require.True(t, u.skipExpectedDifficulty(ctx, blocks[1]))
+}
+
+func TestSkipExpectedDifficulty_EnforcesHistoricalRules(t *testing.T) {
+	ctx := context.Background()
+	s := test.CreateBaseTestSettings(t)
+	params := chaincfg.TestNetParams
+	s.ChainCfgParams = &params
+	store, err := blockchainstore.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, s)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close(ctx)) })
+	client, err := blockchain.NewLocalClient(ulogger.TestLogger{}, s, store, nil, nil)
+	require.NoError(t, err)
+	u := &BlockValidation{settings: s, blockchainClient: client, logger: ulogger.TestLogger{}}
+	for _, height := range []uint32{149, params.DaaForkHeight - 1, params.DaaForkHeight, params.DaaForkHeight + 1} {
+		require.True(t, model.BelowCheckpoint(params.Checkpoints, height))
+		// A fresh store has no authenticated checkpoint ancestry. Pre-DAA
+		// deferral must reach the historical calculator in full validation.
+		wantSkip := height > params.DaaForkHeight
+		require.Equal(t, wantSkip, u.skipExpectedDifficulty(ctx, &model.Block{Height: height}), "height %d", height)
+	}
 }
