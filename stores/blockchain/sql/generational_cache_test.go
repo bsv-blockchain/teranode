@@ -6,11 +6,12 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/stretchr/testify/require"
 )
 
 func TestGenerationalCache_PreventStaleWrites(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -34,7 +35,7 @@ func TestGenerationalCache_PreventStaleWrites(t *testing.T) {
 }
 
 func TestGenerationalCache_AllowFreshWrites(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -54,7 +55,7 @@ func TestGenerationalCache_AllowFreshWrites(t *testing.T) {
 }
 
 func TestGenerationalCache_MultipleInvalidations(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -79,7 +80,7 @@ func TestGenerationalCache_MultipleInvalidations(t *testing.T) {
 }
 
 func TestGenerationalCache_ConcurrentOperations(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -118,7 +119,7 @@ func TestGenerationalCache_ConcurrentOperations(t *testing.T) {
 }
 
 func TestGenerationalCache_StopMultipleTimes(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 
 	// Should not panic when called multiple times
 	require.NotPanics(t, func() {
@@ -129,7 +130,7 @@ func TestGenerationalCache_StopMultipleTimes(t *testing.T) {
 }
 
 func TestGenerationalCache_GetBeforeSet(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -141,7 +142,7 @@ func TestGenerationalCache_GetBeforeSet(t *testing.T) {
 }
 
 func TestGenerationalCache_TTLExpiration(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -166,7 +167,7 @@ func TestGenerationalCache_TTLExpiration(t *testing.T) {
 }
 
 func TestGenerationalCache_DifferentKeys(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key1 := chainhash.Hash{1}
@@ -191,7 +192,7 @@ func TestGenerationalCache_DifferentKeys(t *testing.T) {
 }
 
 func TestGenerationalCache_SetReturnValue(t *testing.T) {
-	gc := NewGenerationalCache()
+	gc := NewGenerationalCache(0)
 	defer gc.Stop()
 
 	key := chainhash.Hash{1, 2, 3}
@@ -208,4 +209,31 @@ func TestGenerationalCache_SetReturnValue(t *testing.T) {
 		result := op.Set("test", 1*time.Hour)
 		require.False(t, result, "Set should return false when generation changed")
 	})
+}
+
+func TestGenerationalCache_Capacity(t *testing.T) {
+	gc := NewGenerationalCache(2)
+	defer gc.Stop()
+	for i := byte(1); i <= 3; i++ {
+		require.True(t, gc.NewOp(chainhash.Hash{i}).Set(i, time.Hour))
+	}
+	require.Nil(t, gc.NewOp(chainhash.Hash{1}).Get())
+	require.NotNil(t, gc.NewOp(chainhash.Hash{2}).Get())
+	require.NotNil(t, gc.NewOp(chainhash.Hash{3}).Get())
+}
+
+func TestGenerationalCache_HeaderByteBudget(t *testing.T) {
+	gc := NewGenerationalCache(100000)
+	defer gc.Stop()
+	value := [2]interface{}{make([]*model.BlockHeader, 8192), make([]*model.BlockHeaderMeta, 8192)}
+	for i := byte(1); i <= 17; i++ {
+		require.True(t, gc.NewOp(chainhash.Hash{i}).Set(value, time.Hour))
+	}
+	require.Nil(t, gc.NewOp(chainhash.Hash{1}).Get(), "entry cap alone would retain all header results")
+	require.NotNil(t, gc.NewOp(chainhash.Hash{17}).Get())
+	oversized := [2]interface{}{make([]*model.BlockHeader, 140000), make([]*model.BlockHeaderMeta, 140000)}
+	require.False(t, gc.NewOp(chainhash.Hash{18}).Set(oversized, time.Hour))
+	require.Nil(t, gc.NewOp(chainhash.Hash{18}).Get())
+	gc.DeleteAll()
+	require.True(t, gc.NewOp(chainhash.Hash{19}).Set(value, time.Hour))
 }

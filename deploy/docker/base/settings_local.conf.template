@@ -107,9 +107,10 @@
 # ResetReputation cross the auth interceptor and need a key that every service reads.
 #
 # It is intentionally NOT set in the repo's settings.conf (a public repo, so any
-# committed value is world-readable). Unset = a random key is generated per service
-# and these RPCs return Unauthenticated. Well-known placeholders (e.g. "testkey")
-# are ignored. Use a strong random value of 32+ characters.
+# committed value is world-readable). With an empty key, P2P generates a random
+# key and rejects protected RPCs; Blockchain and Legacy disable gRPC admin auth
+# and warn. P2P ignores placeholders and stays closed; Blockchain and Legacy
+# reject placeholders at startup. Use a strong random value of 32+ characters.
 #
 # After the P2P data-plane RPCs were placed behind this key, it is no longer only
 # an admin concern: block and subtree validation use it to report validated chain

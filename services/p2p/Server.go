@@ -1273,12 +1273,13 @@ func (s *Server) grpcAuthOptions() (*util.AuthOptions, error) {
 		return nil, err
 	}
 
-	if util.ValidateAdminAPIKey(s.logger, "P2P", apiKey, listenAddress, s.settings.SecurityLevelGRPC) {
+	if util.IsPlaceholderAdminAPIKey(apiKey) {
 		// Configured key is a well-known placeholder; ignore it and fall back to
 		// the random-key path below rather than trusting a world-readable value.
 		apiKey = ""
 	}
 
+	util.WarnIfAdminAPIKeyExposed(s.logger, "P2P", apiKey, listenAddress, s.settings.SecurityLevelGRPC)
 	s.warnIfUnreachableBind(listenAddress, s.settings.P2P.GRPCAddress)
 
 	if apiKey == "" {

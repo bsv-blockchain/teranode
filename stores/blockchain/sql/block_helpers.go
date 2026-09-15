@@ -19,6 +19,37 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// maxResultPrealloc bounds how many result slots a query may preallocate from a
+// caller-supplied count or height range. The slice still grows to whatever the
+// query actually returns, so this changes no result - it only stops a request
+// that names an enormous range from turning into an enormous allocation before
+// a single row has been read.
+const maxResultPrealloc = 16384
+
+// preallocFor converts a requested result count into a safe preallocation size.
+func preallocFor(requested uint64) int {
+	if requested > maxResultPrealloc {
+		return maxResultPrealloc
+	}
+
+	if requested < 1 {
+		return 1
+	}
+
+	return int(requested)
+}
+
+// preallocForRange converts a [startHeight, endHeight] window into a safe
+// preallocation size, treating a reversed range as empty instead of
+// underflowing uint32 subtraction into ~4 billion.
+func preallocForRange(startHeight, endHeight uint32) int {
+	if endHeight < startHeight {
+		return 1
+	}
+
+	return preallocFor(uint64(endHeight-startHeight) + 1)
+}
+
 // processBlockRows processes SQL query results for blocks and converts them to model.BlockInfo objects.
 // If includeHash is true, it expects the hash field to be included in the query results.
 func (s *SQL) processBlockRows(rows *sql.Rows) ([]*model.BlockInfo, error) {
