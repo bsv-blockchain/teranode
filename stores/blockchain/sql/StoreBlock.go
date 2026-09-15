@@ -154,11 +154,32 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		block.Header.HashPrevBlock != nil &&
 		*block.Header.HashPrevBlock == *preBestHash
 
-	// mainChainRebuilding only needs to cover the window where on_main_chain
-	// is in flux — i.e. when the INSERT writes false but the row may turn out
-	// to be the new best (reorg / fork). The common extend (onMainChain=true)
-	// is written atomically with on_main_chain=true and needs no guard.
-	if !onMainChain {
+	// Raise the guard before the INSERT and hold it for the whole call: always on a node
+	// running the forked-set route, and only for a non-extend on every other node.
+	//
+	// On a forked-set node a common extend needs it too. The INSERT writes on_main_chain =
+	// true atomically, which is true of the row and false of the classification: the INSERT
+	// can write true for a block that the chain_work tiebreak below then places on a fork,
+	// and a concurrent StoreBlock can advance maxBlockID past this id while that is being
+	// decided. In that window the row exists, says true, sits at or below maxBlockID, and
+	// is absent from the forked set, so the in-memory route answers "on the main chain" for
+	// a fork block with no query. Absence from the forked set is positive proof on that
+	// route, so a gap in the guard is a false positive rather than a wasted query.
+	//
+	// On every other node the guard stays where it was. mainChainRebuilding is not read
+	// only by the forked-set route: checkBlockIsInCurrentChainSQL and the other
+	// on_main_chain readers use it to choose between their indexed flag lookup and a
+	// flag-free walk, which for CheckBlockIsInCurrentChain is a parent_id CTE from the tip
+	// down to the queried id. Raising it on every extend would move those readers onto the
+	// walk for the length of every StoreBlock, on nodes that gain nothing from it, because
+	// the window it closes is only unsafe on the forked-set route. An SQL-route reader in
+	// that window reads the same true flag it has always read, and slowPathMu is what keeps
+	// that case from arising, per Case 1 below.
+	//
+	// The forked-set node does pay that cost on those other readers. That is the trade the
+	// route asks for, and it is scoped to the nodes that opted into the route.
+	guardWholeCall := s.useInMemoryChainCheck || !onMainChain
+	if guardWholeCall {
 		s.mainChainRebuilding.Add(1)
 		defer s.mainChainRebuilding.Add(-1)
 	}
@@ -233,19 +254,30 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		// the row is now flagged true on a fork. Clear it defensively, with
 		// mainChainRebuilding bracketing so concurrent readers fall back to
 		// the CTE for the brief inconsistency window.
+		//
+		// On a forked-set node the guard is already held for the whole call, which is what
+		// this clear and the rebuild below both need. On any other node it was not raised
+		// for an extend and there is no rebuild to cover, so bracket just the UPDATE, as
+		// this branch always did there.
 		if onMainChain {
-			s.mainChainRebuilding.Add(1)
+			if !guardWholeCall {
+				s.mainChainRebuilding.Add(1)
+			}
+
 			if _, clearErr := s.db.ExecContext(postBestCtx, `UPDATE blocks SET on_main_chain = false WHERE id = $1`, newBlockID); clearErr != nil {
 				s.logger.Errorf("StoreBlock: clear sibling-fork on_main_chain: %v", clearErr)
 			}
-			s.mainChainRebuilding.Add(-1)
+
+			if !guardWholeCall {
+				s.mainChainRebuilding.Add(-1)
+			}
 		}
 		if s.useInMemoryChainCheck {
 			s.blockTimestampCache.Clear()
 			s.updateMaxBlockID(newBlockID)
 			rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
 			defer rebuildCancel()
-			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+			if rebuildErr := s.triggerRebuildOffChainSetAfterWrite(rebuildCtx); rebuildErr != nil {
 				s.logger.Errorf("StoreBlock: %v", rebuildErr)
 			} else {
 				s.lastSuccessfulRebuild.Store(time.Now().Unix())
@@ -271,7 +303,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 			s.logger.Errorf("StoreBlock: reconcileOnMainChain: %v", reconcileErr)
 		}
 		if s.useInMemoryChainCheck {
-			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+			if rebuildErr := s.triggerRebuildOffChainSetAfterWrite(rebuildCtx); rebuildErr != nil {
 				s.logger.Errorf("StoreBlock: %v", rebuildErr)
 			} else {
 				s.lastSuccessfulRebuild.Store(time.Now().Unix())
