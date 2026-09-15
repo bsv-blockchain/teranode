@@ -51,6 +51,7 @@ import (
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -248,6 +249,16 @@ type Server struct {
 	// adaptiveFetch controls whether subtreeData is pre-fetched during catchup
 	// or skipped because the tx distributor is keeping the UTXO store up to date.
 	adaptiveFetch *adaptivefetch.State
+
+	// catchupPrefetchBudget caps, by declared serialized block bytes, the blocks admitted
+	// concurrently into the catch-up subtree-data prewarm. nil means disabled
+	// (blockvalidation_catchup_prefetch_budget_bytes = 0, or a Server built directly by a
+	// test). Only the catch-up pipeline takes a reservation: RevalidateBlock's single-block
+	// prewarm does not, so an operator-triggered revalidation can never park behind catch-up.
+	// It DOES share the oversized-block subtree-concurrency rule — see
+	// boundSubtreeConcurrencyByBudget, which explains why that is deliberate.
+	catchupPrefetchBudget      *semaphore.Weighted
+	catchupPrefetchBudgetBytes int64
 
 	// fetchSubtreeDataForBlockFn is the function used by blockWorker to fetch
 	// subtree data for a block. Production code always uses the real method;
@@ -487,6 +498,14 @@ func New(
 
 	bVal.fetchSubtreeDataForBlockFn = bVal.fetchSubtreeDataForBlock
 	bVal.catchupFunc = bVal.catchup
+
+	// 0 disables rather than falling back to a default: an explicit operator opt-out that
+	// restores the pre-#1139 behaviour exactly, and it keeps every test that builds a bare
+	// &Server{...} working unchanged.
+	if budget := tSettings.BlockValidation.CatchupPrefetchBudgetBytes; budget > 0 {
+		bVal.catchupPrefetchBudgetBytes = budget
+		bVal.catchupPrefetchBudget = semaphore.NewWeighted(budget)
+	}
 
 	return bVal
 }
