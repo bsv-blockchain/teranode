@@ -28,6 +28,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/semaphore"
 )
 
 // CatchupTestSuite provides a complete test environment for catchup tests
@@ -193,6 +194,16 @@ func (s *CatchupTestSuite) createServer(t *testing.T) {
 		catchupStatsMu:      sync.RWMutex{},
 	}
 	s.Server.fetchSubtreeDataForBlockFn = s.Server.fetchSubtreeDataForBlock
+
+	// Mirror New(): give the suite the same catch-up prefetch budget production gets. Test
+	// blocks are tiny, so they take the TryAcquire fast path and nothing changes — but it
+	// gives the acquire/release pairing coverage on the real pipeline. Guarded the same way
+	// as New() so a test that sets the budget to 0 disables it rather than building a
+	// zero-capacity semaphore nothing could ever acquire.
+	if budget := tSettings.BlockValidation.CatchupPrefetchBudgetBytes; budget > 0 {
+		s.Server.catchupPrefetchBudgetBytes = budget
+		s.Server.catchupPrefetchBudget = semaphore.NewWeighted(budget)
+	}
 
 	// Add cleanup for channels
 	s.AddCleanup(func() {
