@@ -94,6 +94,10 @@ func ConvertToBUMP(proof *merkleproof.MerkleProof) (*Format, error) {
 		return nil, errors.NewInvalidArgumentError("BUMP proofs require a transaction ID; subtree-only proofs are unsupported")
 	}
 
+	if proof.TxID == (chainhash.Hash{}) {
+		return nil, errors.NewInvalidArgumentError("transaction ID must not be zero")
+	}
+
 	bump := &Format{
 		BlockHeight: proof.BlockHeight,
 		Path:        make([]Level, 0),
@@ -161,8 +165,7 @@ func ConvertToBUMP(proof *merkleproof.MerkleProof) (*Format, error) {
 
 	// BRC-74 requires level 0 to include the target txid (flag 0x02) alongside its sibling.
 	// Without this, go-bc's CalculateRootGivenTxid cannot find the starting transaction.
-	var zeroHash chainhash.Hash
-	if proof.TxID != zeroHash && len(bump.Path) > 0 {
+	if len(bump.Path) > 0 {
 		txidNode := Node{
 			Offset: globalOffset,
 			Hash:   hashToDisplayHex(proof.TxID),

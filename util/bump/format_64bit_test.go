@@ -219,3 +219,15 @@ func TestConvertToBUMPRejectsInconsistentIndices(t *testing.T) {
 		require.Contains(t, err.Error(), "does not fit in a block")
 	})
 }
+
+func TestConvertToBUMPRejectsMissingTxID(t *testing.T) {
+	for _, levels := range []int{0, 1, 2} {
+		t.Run(fmt.Sprintf("levels %d", levels), func(t *testing.T) {
+			proof := proofWithLevels(t, levels, 0, 0, 0)
+			proof.TxID = chainhash.Hash{}
+			converted, err := ConvertToBUMP(proof)
+			require.ErrorContains(t, err, "transaction ID must not be zero")
+			require.Nil(t, converted)
+		})
+	}
+}
