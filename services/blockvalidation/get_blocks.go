@@ -1257,7 +1257,10 @@ func (u *Server) fetchSubtreeFromPeer(ctx context.Context, subtreeHash *chainhas
 	defer deferFn()
 
 	// Construct URL for subtree endpoint (for subtreeToCheck)
-	url := u.peerResourceURL(baseURL, "subtree", subtreeHash, bypassCache)
+	url, err := u.peerResourceURL(baseURL, "subtree", subtreeHash, bypassCache)
+	if err != nil {
+		return nil, errors.NewServiceError("[catchup:fetchSubtreeFromPeer] invalid peer base URL for subtree %s", subtreeHash.String(), err)
+	}
 
 	u.logger.Debugf("[catchup:fetchSubtreeFromPeer] fetching subtree from %s", url)
 
@@ -1325,7 +1328,10 @@ func (u *Server) fetchSubtreeDataFromPeer(ctx context.Context, subtreeHash *chai
 
 	// peerResourceURL builds <baseURL>/subtree_data/<hash>, appending the cachebust
 	// query parameter when bypassCache is set.
-	url := u.peerResourceURL(baseURL, "subtree_data", subtreeHash, bypassCache)
+	url, err := u.peerResourceURL(baseURL, "subtree_data", subtreeHash, bypassCache)
+	if err != nil {
+		return nil, errors.NewServiceError("[catchup:fetchSubtreeDataFromPeer] invalid peer base URL for subtree %s", subtreeHash.String(), err)
+	}
 
 	u.logger.Debugf("[catchup:fetchSubtreeDataFromPeer] fetching subtree data from %s", url)
 
@@ -1373,7 +1379,12 @@ func (u *Server) fetchBlocksBatch(ctx context.Context, hash *chainhash.Hash, n u
 	)
 	defer deferFn()
 
-	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/blocks/%s?n=%d", baseURL, hash.String(), n))
+	blocksURL, err := util.JoinPeerURL(baseURL, "blocks", hash.String())
+	if err != nil {
+		return nil, errors.NewProcessingError("[catchup:fetchBlocksBatch][%s] invalid peer base URL", hash.String(), err)
+	}
+
+	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s?n=%d", blocksURL, n))
 	if err != nil {
 		return nil, errors.NewProcessingError("[catchup:fetchBlocksBatch][%s] failed to get blocks from peer", hash.String(), err)
 	}
@@ -1422,7 +1433,12 @@ func (u *Server) fetchSingleBlock(ctx context.Context, hash *chainhash.Hash, pee
 	)
 	defer deferFn()
 
-	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", baseURL, hash.String()))
+	blockURL, err := util.JoinPeerURL(baseURL, "block", hash.String())
+	if err != nil {
+		return nil, errors.NewProcessingError("[catchup:fetchSingleBlock][%s] invalid peer base URL", hash.String(), err)
+	}
+
+	blockBytes, err := util.DoHTTPRequest(ctx, blockURL)
 	if err != nil {
 		return nil, errors.NewProcessingError("[catchup:fetchSingleBlock][%s] failed to get block from peer", hash.String(), err)
 	}

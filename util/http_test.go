@@ -1019,8 +1019,13 @@ func TestDefaultSSRFDialPolicy(t *testing.T) {
 		})
 	}
 
-	// RFC1918 / ULA ranges are intentionally allowed: teranode peers, k8s pods and
-	// private miner interconnects all live on private networks.
+	// RFC1918 / ULA ranges are allowed when p2p_allow_private_ips is set: teranode peers,
+	// k8s pods and private miner interconnects can all live on private networks. Refusal
+	// with the setting off is covered by TestDefaultSSRFDialPolicy_PrivateNetworksFollowSetting.
+	origAllowPrivate := SSRFAllowPrivateNetworks()
+	SetSSRFAllowPrivateNetworks(true)
+	defer SetSSRFAllowPrivateNetworks(origAllowPrivate)
+
 	allowed := []string{
 		"8.8.8.8",
 		"1.1.1.1",
@@ -1133,9 +1138,13 @@ func TestNewSSRFSafeDialContext_CustomPolicy(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "private address")
 
-	// The package default policy allows private ranges, so it dials instead. Bound the
+	// With private networks allowed the package default policy dials instead. Bound the
 	// attempt: a dropped (rather than refused) RFC1918 packet would otherwise sit here for
 	// the dialer's full 30s.
+	origAllowPrivate := SSRFAllowPrivateNetworks()
+	SetSSRFAllowPrivateNetworks(true)
+	defer SetSSRFAllowPrivateNetworks(origAllowPrivate)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
