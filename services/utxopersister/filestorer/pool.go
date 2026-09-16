@@ -23,13 +23,20 @@ var (
 )
 
 // acquireWriter returns a *bufio.Writer of size bytes writing to w, reusing a pooled buffer
-// when one of exactly that size is available. bufio cannot resize a buffer, so a pooled
-// writer of any other size is dropped and a new one allocated; the caller's size is never
-// silently widened or narrowed.
+// when one of exactly that size is available. bufio cannot resize a buffer, so the caller's
+// size is never silently widened or narrowed.
+//
+// A pooled writer of another size goes back in the pool rather than being dropped: it is
+// still the right buffer for whoever put it there. One Get inspects one buffer, so a
+// mismatch still allocates; it no longer costs the pool the buffer it missed on.
 func acquireWriter(w io.Writer, size int) *bufio.Writer {
-	if bw, ok := writerPool.Get().(*bufio.Writer); ok && bw.Size() == size {
-		bw.Reset(w)
-		return bw
+	if bw, ok := writerPool.Get().(*bufio.Writer); ok {
+		if bw.Size() == size {
+			bw.Reset(w)
+			return bw
+		}
+
+		writerPool.Put(bw)
 	}
 
 	return bufio.NewWriterSize(w, size)
@@ -44,15 +51,20 @@ func resetForPool(bw *bufio.Writer) {
 }
 
 // AcquireReader returns a *bufio.Reader of size bytes reading from r, reusing a pooled
-// buffer when one of exactly that size is available. Same sizing rule as acquireWriter.
+// buffer when one of exactly that size is available. Same sizing rule as acquireWriter,
+// including the return of a size-mismatched buffer to the pool.
 //
 // Note that bufio.NewReaderSize enforces a small minimum buffer, so a size below it yields a
 // reader whose Size is that minimum and which therefore never matches on the next acquire.
 // That is a missed reuse at pathological sizes, not a correctness problem.
 func AcquireReader(r io.Reader, size int) *bufio.Reader {
-	if br, ok := readerPool.Get().(*bufio.Reader); ok && br.Size() == size {
-		br.Reset(r)
-		return br
+	if br, ok := readerPool.Get().(*bufio.Reader); ok {
+		if br.Size() == size {
+			br.Reset(r)
+			return br
+		}
+
+		readerPool.Put(br)
 	}
 
 	return bufio.NewReaderSize(r, size)

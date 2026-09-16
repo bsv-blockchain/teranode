@@ -3,6 +3,8 @@ package filestorer
 import (
 	"bufio"
 	"io"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -70,4 +72,104 @@ func TestAcquireReaderRespectsSize(t *testing.T) {
 	small := AcquireReader(strings.NewReader("small"), 4*1024)
 	require.Equal(t, 4*1024, small.Size())
 	ReleaseReader(small)
+}
+
+// poolReuseAttempts bounds the retries below. An attempt succeeds only if both Puts survive,
+// which is 0.75 * 0.75 = 0.5625 under -race (sync/pool.go drops one Put in four there), so 24
+// attempts put a false failure at about 1e-9. The pre-fix code cannot pass on any attempt: it
+// drops the mismatched buffer every time, so there is nothing left in the pool to come back.
+const poolReuseAttempts = 24
+
+// drainPools empties both pools so an attempt can only get back its own buffer. Two
+// collections are required - the first moves live items to the victim cache, the second drops
+// them - and an explicit runtime.GC still collects while GOGC is off.
+func drainPools() {
+	runtime.GC()
+	runtime.GC()
+}
+
+// pinPoolsForTest keeps a background collection from emptying a pool in the middle of an
+// attempt and leaves one P for the per-P private slot to live on. Neither guarantees reuse -
+// nothing can, see poolReuseAttempts - they only lower the miss rate.
+func pinPoolsForTest(t *testing.T) {
+	t.Helper()
+
+	prevProcs := runtime.GOMAXPROCS(1)
+	prevGC := debug.SetGCPercent(-1)
+
+	t.Cleanup(func() {
+		debug.SetGCPercent(prevGC)
+		runtime.GOMAXPROCS(prevProcs)
+	})
+}
+
+// TestAcquireReaderKeepsMismatchedBufferInPool pins that asking for a size the pool cannot
+// serve does not destroy the buffer it holds. The consumers of this package use different
+// sizes, so a mismatch is an ordinary event, not a pathological one.
+func TestAcquireReaderKeepsMismatchedBufferInPool(t *testing.T) {
+	pinPoolsForTest(t)
+
+	const (
+		largeSize = 256 * 1024
+		smallSize = 4 * 1024
+	)
+
+	reused := false
+
+	for attempt := 0; attempt < poolReuseAttempts && !reused; attempt++ {
+		drainPools()
+
+		large := AcquireReader(strings.NewReader("large"), largeSize)
+		require.Equal(t, largeSize, large.Size())
+		ReleaseReader(large)
+
+		// Wrong size for this caller: the pooled buffer cannot be served and must go back.
+		small := AcquireReader(strings.NewReader("small"), smallSize)
+		require.Equal(t, smallSize, small.Size())
+
+		again := AcquireReader(strings.NewReader("large again"), largeSize)
+		require.Equal(t, largeSize, again.Size())
+		reused = again == large
+
+		ReleaseReader(small)
+		ReleaseReader(again)
+	}
+
+	require.True(t, reused, "a size-mismatched buffer must go back in the pool, not be dropped")
+}
+
+// TestAcquireWriterKeepsMismatchedBufferInPool is the write-side counterpart, on the same
+// terms.
+func TestAcquireWriterKeepsMismatchedBufferInPool(t *testing.T) {
+	pinPoolsForTest(t)
+
+	const (
+		largeSize = 256 * 1024
+		smallSize = 4 * 1024
+	)
+
+	reused := false
+
+	for attempt := 0; attempt < poolReuseAttempts && !reused; attempt++ {
+		drainPools()
+
+		large := acquireWriter(io.Discard, largeSize)
+		require.Equal(t, largeSize, large.Size())
+		resetForPool(large)
+		writerPool.Put(large)
+
+		small := acquireWriter(io.Discard, smallSize)
+		require.Equal(t, smallSize, small.Size())
+
+		again := acquireWriter(io.Discard, largeSize)
+		require.Equal(t, largeSize, again.Size())
+		reused = again == large
+
+		resetForPool(small)
+		writerPool.Put(small)
+		resetForPool(again)
+		writerPool.Put(again)
+	}
+
+	require.True(t, reused, "a size-mismatched buffer must go back in the pool, not be dropped")
 }

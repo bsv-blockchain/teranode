@@ -1669,8 +1669,14 @@ func TestParseChecksumParam(t *testing.T) {
 		{"false", false, true},
 		{"FALSE", false, true},
 		{"0", false, true},
+		{"yes", true, true},
+		{"on", true, true},
+		{"ENABLED", true, true},
+		{"no", false, true},
+		{"off", false, true},
+		{"disabled", false, true},
 		{"bogus", true, false},
-		{"yes", true, false},
+		{"maybe", true, false},
 	} {
 		got, err := parseChecksum(tc.in)
 		if tc.ok {

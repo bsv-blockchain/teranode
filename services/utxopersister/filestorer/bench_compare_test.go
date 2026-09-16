@@ -106,6 +106,13 @@ var benchCompareSmallPayloads = []int{256, 4 * 1024}
 // The backing store runs with fsync and checksumming both off, so neither a durability
 // barrier nor a second create/write/rename cycle for the sidecar sits between the buffer and
 // the number.
+//
+// The B/op it reports is a warm-pool best case. One buffer cycles through every iteration and
+// a benchmark loop rarely collects, so an acquire almost always hits. sync.Pool drops what
+// nobody is using across two collections, and a storer that finds the pool empty allocates
+// its whole buffer exactly as the unpooled code did. Pooling is never worse than that; how
+// much it saves on a syncing node depends on block rate against collection rate, which this
+// benchmark cannot show.
 func BenchmarkCompare_FileStorerSmallWrite(b *testing.B) {
 	for _, payloadSize := range benchCompareSmallPayloads {
 		for _, bufferSize := range []string{"4KB", "256KB"} {

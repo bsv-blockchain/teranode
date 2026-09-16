@@ -95,14 +95,19 @@ func parseFsyncMode(s string) (fsyncMode, error) {
 // checksumming enabled, so a store URL that does not mention it behaves exactly as it
 // always has. A value that is neither boolean-true nor boolean-false is a configuration
 // error rather than a silently ignored typo, mirroring parseFsyncMode.
+//
+// The truthy and falsy spellings are accepted broadly on purpose. Nothing read this
+// parameter until it was implemented, so any value anywhere was inert; a store URL outside
+// this repository carrying checksum=yes or checksum=on would otherwise turn a previously
+// harmless string into a node that does not start.
 func parseChecksum(s string) (bool, error) {
 	switch strings.ToLower(s) {
-	case "", "true", "1":
+	case "", "true", "1", "yes", "on", "enabled":
 		return true, nil
-	case "false", "0":
+	case "false", "0", "no", "off", "disabled":
 		return false, nil
 	default:
-		return true, errors.NewConfigurationError("[File] invalid checksum %q (must be true|false)", s)
+		return true, errors.NewConfigurationError("[File] invalid checksum %q (must be true|false, or one of 1|0|yes|no|on|off|enabled|disabled)", s)
 	}
 }
 
@@ -510,10 +515,12 @@ func releaseWritePermit() {
 // Supported URL parameters include:
 //   - header: Custom header to prepend to blobs (can be hex-encoded or plain text)
 //   - eofmarker: Custom footer marker to append to blobs (can be hex-encoded or plain text)
-//   - checksum: "true"/"1" (the default when the parameter is absent) digests every blob and
-//     publishes a "<filename>.sha256" sidecar beside it. "false"/"0" skips both the digest and
-//     the sidecar, and removes any sidecar an earlier write left behind. Any other value is a
-//     configuration error. See the checksum field on File for the mode-transition semantics.
+//   - checksum: "true" (the default when the parameter is absent) digests every blob and
+//     publishes a "<filename>.sha256" sidecar beside it. "false" skips both the digest and
+//     the sidecar, and removes any sidecar an earlier write left behind. "1"/"yes"/"on"/
+//     "enabled" and "0"/"no"/"off"/"disabled" are accepted as the respective synonyms; any
+//     other value is a configuration error. See the checksum field on File for the
+//     mode-transition semantics.
 //   - fsyncMode: "full" (the default when the parameter is absent), "data" or "none". Controls
 //     how much of the atomic publication is flushed to stable storage; see the fsyncMode docs.
 //
