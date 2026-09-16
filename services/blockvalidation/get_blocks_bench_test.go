@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"runtime"
 	"sync"
@@ -232,8 +233,9 @@ type benchPrefetchBlock struct {
 // buildBenchPrefetchTx builds one syntactically valid, NON-extended transaction with a large
 // input script and a large output script. It is never signed: nothing on the subtree_data
 // receive path verifies signatures, only that each transaction hashes to the subtree node it
-// sits under.
-func buildBenchPrefetchTx(b *testing.B, shapeName string, blockIdx, subtreeIdx, txIdx int) *bt.Tx {
+// sits under. scriptBytes is a parameter rather than the constant because the latency sweep
+// needs a many-subtree shape with small payloads.
+func buildBenchPrefetchTx(b *testing.B, shapeName string, blockIdx, subtreeIdx, txIdx, scriptBytes int) *bt.Tx {
 	b.Helper()
 
 	tx := bt.NewTx()
@@ -241,7 +243,7 @@ func buildBenchPrefetchTx(b *testing.B, shapeName string, blockIdx, subtreeIdx, 
 	// A real (non-zero) previous txid, so the transaction is never mistaken for a coinbase.
 	previous := chainhash.DoubleHashH([]byte(fmt.Sprintf("%s/%d/%d/%d", shapeName, blockIdx, subtreeIdx, txIdx)))
 
-	unlocking := bscript.Script(bytes.Repeat([]byte{0x51}, benchPrefetchScriptBytes))
+	unlocking := bscript.Script(bytes.Repeat([]byte{0x51}, scriptBytes))
 
 	input := &bt.Input{
 		PreviousTxOutIndex: 0,
@@ -255,7 +257,7 @@ func buildBenchPrefetchTx(b *testing.B, shapeName string, blockIdx, subtreeIdx, 
 
 	tx.Inputs = append(tx.Inputs, input)
 
-	locking := bscript.Script(bytes.Repeat([]byte{0x52}, benchPrefetchScriptBytes))
+	locking := bscript.Script(bytes.Repeat([]byte{0x52}, scriptBytes))
 	tx.AddOutput(&bt.Output{Satoshis: 1000, LockingScript: &locking})
 
 	return tx
@@ -265,7 +267,7 @@ func buildBenchPrefetchTx(b *testing.B, shapeName string, blockIdx, subtreeIdx, 
 // /subtree_data body. The body is the concatenation of each transaction's STANDARD
 // serialization, which is exactly what Data.Serialize would emit for a subtree with no
 // coinbase placeholder.
-func buildBenchPrefetchSubtree(b *testing.B, shapeName string, blockIdx, subtreeIdx, txCount int) benchPrefetchSubtree {
+func buildBenchPrefetchSubtree(b *testing.B, shapeName string, blockIdx, subtreeIdx, txCount, scriptBytes int) benchPrefetchSubtree {
 	b.Helper()
 
 	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(txCount)
@@ -274,10 +276,10 @@ func buildBenchPrefetchSubtree(b *testing.B, shapeName string, blockIdx, subtree
 	}
 
 	nodeBytes := make([]byte, 0, txCount*chainhash.HashSize)
-	dataBytes := make([]byte, 0, txCount*(2*benchPrefetchScriptBytes+256))
+	dataBytes := make([]byte, 0, txCount*(2*scriptBytes+256))
 
 	for i := 0; i < txCount; i++ {
-		tx := buildBenchPrefetchTx(b, shapeName, blockIdx, subtreeIdx, i)
+		tx := buildBenchPrefetchTx(b, shapeName, blockIdx, subtreeIdx, i, scriptBytes)
 		hash := tx.TxIDChainHash()
 
 		if err = subtree.AddNode(*hash, uint64(i+1), uint64(tx.Size())); err != nil {
@@ -311,7 +313,7 @@ func buildBenchPrefetchBlocks(b *testing.B, shape benchPrefetchShape) ([]benchPr
 		)
 
 		for subtreeIdx, subtreeTxs := range shape.txsPerSubtree {
-			fixture := buildBenchPrefetchSubtree(b, shape.name, blockIdx, subtreeIdx, subtreeTxs)
+			fixture := buildBenchPrefetchSubtree(b, shape.name, blockIdx, subtreeIdx, subtreeTxs, benchPrefetchScriptBytes)
 
 			declared += uint64(len(fixture.dataBytes))
 			txCount += uint64(subtreeTxs)
@@ -526,4 +528,211 @@ func runBenchPrefetch(b *testing.B, server *Server, fixtures []benchPrefetchBloc
 			b.Errorf("prewarm failed for block %d: %v", result.index, result.err)
 		}
 	}
+}
+
+// BenchmarkCatchupSubtreeDataPrefetchLatency is SUPPLEMENTAL evidence about the
+// oversized-block subtree-concurrency rule, and nothing more.
+//
+// It exists because BenchmarkCatchupSubtreeDataPrefetch understates that rule's cost: its
+// oversized shape has 11 subtrees and no network latency, while a scale-size block is roughly
+// 60 to 130 subtrees and every fetch crosses a real network. Serialising subtree_data fetches
+// serialises round trips, not just parsing, so latency is the term that matters and the
+// existing fixture has none of it.
+//
+// SCOPE, and it travels with every number this produces: ONE block per cell, reduced payloads,
+// httpmock responders with an injected sleep, and a per-cell budget lowered until the block is
+// oversized, on one workstation. Absolute figures are not transferable. The only meaningful
+// quantity is R, the within-cell ratio of budget-on to budget-off wall clock at a FIXED
+// injected latency, and it says something only about the subtree-concurrency rule.
+//
+// This is NOT a catch-up measurement on a scale-size block against a real peer. It does not
+// establish that the rule's production cost is bounded or acceptable, it carries no threshold,
+// and no default is chosen from it (bsv-blockchain/teranode#1139).
+//
+// One block per cell is deliberate. With two or more, an oversized block is clamped to the
+// whole budget and admitted alone, so the others park in acquireCatchupPrefetch and the ratio
+// would mix block-level admission with the per-block subtree rule rather than isolating the
+// rule under discussion.
+//
+//	set -o pipefail
+//	export SETTINGS_CONTEXT=test
+//	go test -tags testtxmetacache -run '^$' -bench BenchmarkCatchupSubtreeDataPrefetchLatency \
+//	  -benchtime 1x -benchmem -timeout 60m ./services/blockvalidation/ 2>&1 | tee /tmp/bench-latency.log
+func BenchmarkCatchupSubtreeDataPrefetchLatency(b *testing.B) {
+	fixture := buildBenchLatencyBlock(b)
+
+	// Half the declared size: enough to make this single block oversized whatever the fixture
+	// serializes to, while staying far above the 64 KiB reservation floor.
+	budgetBytes := int64(fixture.block.SizeInBytes / 2) //nolint:gosec
+
+	// The workload travels with the numbers, so a pasted result cannot be read as more than
+	// it is.
+	b.Logf("supplemental: 1 block, %d subtrees, %d txs each, %d declared bytes, budget-on=%d bytes (oversized), budget-off=0, httpmock responders with an injected sleep",
+		benchLatencySubtrees, benchLatencyTxsPerSubtree, fixture.block.SizeInBytes, budgetBytes)
+
+	for _, latency := range benchLatencySweep() {
+		b.Run("latency="+latency.String(), func(b *testing.B) {
+			var off, on time.Duration
+
+			for i := 0; i < b.N; i++ {
+				off += runBenchLatencyCell(b, fixture, 0, latency)
+				on += runBenchLatencyCell(b, fixture, budgetBytes, latency)
+			}
+
+			b.ReportMetric(off.Seconds()*1000/float64(b.N), "ms_budget_off")
+			b.ReportMetric(on.Seconds()*1000/float64(b.N), "ms_budget_on")
+
+			if off > 0 {
+				b.ReportMetric(float64(on)/float64(off), "R")
+			}
+		})
+	}
+}
+
+const (
+	// benchLatencySubtrees is a realistic subtree count for a scale-size block, which is
+	// roughly 60 to 130 subtrees. The per-subtree payload is small instead: the serial rule's
+	// latency cost scales with the NUMBER of subtrees, and materialising a genuinely
+	// scale-size fixture is neither possible here nor what this measures.
+	benchLatencySubtrees      = 64
+	benchLatencyTxsPerSubtree = 4
+
+	// benchLatencyScriptBytes keeps each transaction small, so the whole fixture is a couple
+	// of MiB and transfer cost stays well below the injected latency.
+	benchLatencyScriptBytes = 4 * 1024
+
+	// benchLatencySubtreeConcurrency is the shipped default, so budget-off runs the fan-out a
+	// real node would run.
+	benchLatencySubtreeConcurrency = 32
+)
+
+// benchLatencySweep is the injected per-response latency sweep: none, a same-region round
+// trip, and a wide-area one.
+func benchLatencySweep() []time.Duration {
+	return []time.Duration{0, 20 * time.Millisecond, 200 * time.Millisecond}
+}
+
+// buildBenchLatencyBlock materialises the single many-subtree block used by every latency cell.
+func buildBenchLatencyBlock(b *testing.B) benchPrefetchBlock {
+	b.Helper()
+
+	subtrees := make([]benchPrefetchSubtree, 0, benchLatencySubtrees)
+	hashes := make([]*chainhash.Hash, 0, benchLatencySubtrees)
+
+	var (
+		declared uint64
+		txCount  uint64
+	)
+
+	for subtreeIdx := 0; subtreeIdx < benchLatencySubtrees; subtreeIdx++ {
+		subtree := buildBenchPrefetchSubtree(b, "latency", 0, subtreeIdx, benchLatencyTxsPerSubtree,
+			benchLatencyScriptBytes)
+
+		declared += uint64(len(subtree.dataBytes))
+		txCount += benchLatencyTxsPerSubtree
+
+		subtrees = append(subtrees, subtree)
+		hashes = append(hashes, subtree.hash)
+	}
+
+	return benchPrefetchBlock{
+		block: &model.Block{
+			Height:           2000,
+			SizeInBytes:      declared,
+			TransactionCount: txCount,
+			Subtrees:         hashes,
+		},
+		subtrees: subtrees,
+	}
+}
+
+// benchLatencyResponder serves a pre-built body after an injected delay. Nothing is generated
+// inside the responder, so no allocation of the measured workload happens in the timed region.
+func benchLatencyResponder(body []byte, latency time.Duration) httpmock.Responder {
+	return func(_ *http.Request) (*http.Response, error) {
+		if latency > 0 {
+			time.Sleep(latency)
+		}
+
+		return httpmock.NewBytesResponse(200, body), nil
+	}
+}
+
+// runBenchLatencyCell runs the one block through the real catch-up worker once and returns the
+// wall clock it took. Both /subtree and /subtree_data sleep: a block parsing its subtrees one
+// at a time pays both round trips per subtree.
+func runBenchLatencyCell(b *testing.B, fixture benchPrefetchBlock, budgetBytes int64,
+	latency time.Duration) time.Duration {
+	b.Helper()
+
+	b.StopTimer()
+
+	logger := ulogger.TestLogger{}
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	for _, subtree := range fixture.subtrees {
+		httpmock.RegisterResponder("GET",
+			fmt.Sprintf("%s/subtree/%s", benchPrefetchBaseURL, subtree.hash.String()),
+			benchLatencyResponder(subtree.nodeBytes, latency))
+		httpmock.RegisterResponder("GET",
+			fmt.Sprintf("%s/subtree_data/%s", benchPrefetchBaseURL, subtree.hash.String()),
+			benchLatencyResponder(subtree.dataBytes, latency))
+	}
+
+	// Fresh, empty file store per cell: fetchAndStoreSubtreeData returns early when the blob
+	// already exists, so a reused store would turn the second cell into cache hits.
+	storeURL, err := url.Parse("file://" + b.TempDir())
+	if err != nil {
+		b.Fatalf("failed to parse store url: %v", err)
+	}
+
+	store, err := file.New(logger, storeURL, options.WithBlobDeletionScheduler(noopBlobDeletionScheduler{}))
+	if err != nil {
+		b.Fatalf("failed to create file store: %v", err)
+	}
+
+	tSettings := test.CreateBaseTestSettings(b)
+	// One worker for one block: block-level admission is deliberately out of scope here.
+	tSettings.BlockValidation.FetchNumWorkers = 1
+	tSettings.BlockValidation.SubtreeFetchConcurrency = benchLatencySubtreeConcurrency
+	tSettings.BlockValidation.CatchupParallelFetchEnabled = false
+	tSettings.BlockValidation.CatchupPrefetchBudgetBytes = budgetBytes
+
+	afCfg := adaptivefetch.DefaultConfig()
+	afCfg.BootstrapMode = adaptivefetch.ModePessimistic
+
+	af, err := adaptivefetch.New(afCfg, "bench-catchup-prefetch-latency", prometheus.NewRegistry())
+	if err != nil {
+		b.Fatalf("failed to create adaptive fetch state: %v", err)
+	}
+
+	server := &Server{
+		logger:        logger,
+		settings:      tSettings,
+		subtreeStore:  store,
+		stats:         gocore.NewStat("bench-catchup-prefetch-latency"),
+		adaptiveFetch: af,
+	}
+	server.fetchSubtreeDataForBlockFn = server.fetchSubtreeDataForBlock
+
+	if budgetBytes > 0 {
+		server.catchupPrefetchBudgetBytes = budgetBytes
+		server.catchupPrefetchBudget = semaphore.NewWeighted(budgetBytes)
+	}
+
+	b.StartTimer()
+
+	start := time.Now()
+	runBenchPrefetch(b, server, []benchPrefetchBlock{fixture})
+	elapsed := time.Since(start)
+
+	b.StopTimer()
+
+	if err = store.Close(context.Background()); err != nil {
+		b.Fatalf("failed to close store: %v", err)
+	}
+
+	return elapsed
 }

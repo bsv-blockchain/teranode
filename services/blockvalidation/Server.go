@@ -500,8 +500,10 @@ func New(
 	bVal.catchupFunc = bVal.catchup
 
 	// 0 disables rather than falling back to a default: an explicit operator opt-out that
-	// restores the pre-#1139 behaviour exactly, and it keeps every test that builds a bare
-	// &Server{...} working unchanged.
+	// turns off the byte budget AND the oversized-block subtree-concurrency rule
+	// (bsv-blockchain/teranode#1139). It does NOT restore the pre-change behaviour exactly —
+	// the streamed store write in fetchAndStoreSubtreeData is unconditional and applies either
+	// way. It keeps every test that builds a bare &Server{...} working unchanged.
 	if budget := tSettings.BlockValidation.CatchupPrefetchBudgetBytes; budget > 0 {
 		bVal.catchupPrefetchBudgetBytes = budget
 		bVal.catchupPrefetchBudget = semaphore.NewWeighted(budget)

@@ -64,7 +64,7 @@
 | FetchNumWorkers | int | 16 | blockvalidation_fetch_num_workers | Catchup workers running the per-block subtree-data prewarm |
 | FetchBufferSize | int | 50 | blockvalidation_fetch_buffer_size | Block fetch channel buffer |
 | SubtreeFetchConcurrency | int | 32 | blockvalidation_subtree_fetch_concurrency | Concurrent subtree fetches per block |
-| CatchupPrefetchBudgetBytes | int64 | 268435456 | blockvalidation_catchup_prefetch_budget_bytes | Declared block bytes admitted concurrently into the catchup subtree-data prewarm (0 disables) |
+| CatchupPrefetchBudgetBytes | int64 | 268435456 | blockvalidation_catchup_prefetch_budget_bytes | Declared block bytes admitted concurrently into the catchup subtree-data prewarm (0 disables the budget and the subtree-concurrency rule it drives) |
 | SubtreeBatchSize | int | 16 | blockvalidation_subtree_batch_size | Subtrees processed per batch in quick validation |
 | SubtreeBatchPrefetchDepth | int | 2 | blockvalidation_subtree_batch_prefetch_depth | Batches to prefetch ahead in pipeline (0=sequential) |
 | GetBlockTransactionsConcurrency | int | 64 | blockvalidation_get_block_transactions_concurrency | Block transaction fetch concurrency |
@@ -204,6 +204,15 @@ block's subtree-data prewarm, parsing every transaction of every subtree of that
 memory. Size `blockvalidation_catchup_prefetch_budget_bytes` against measured headroom on
 the target deployment — it caps the declared block bytes admitted concurrently across those
 workers, which is not the same thing as a process-memory ceiling.
+
+A block whose declared size exceeds that budget, or which declares no size at all, parses its
+subtrees one at a time instead of `blockvalidation_subtree_fetch_concurrency` at a time. Setting
+the budget to `0` disables the budget and that rule together; it does not restore the
+pre-budget behaviour exactly, because subtree data is streamed into the blob store either way.
+The counters `teranode_blockvalidation_catchup_prefetch_budget_parked_total`,
+`teranode_blockvalidation_catchup_prefetch_oversized_blocks_total` and
+`teranode_blockvalidation_catchup_prefetch_undeclared_size_blocks_total` report how often each
+of those regimes is entered.
 
 ### Catchup Mode Configuration
 

@@ -32,6 +32,18 @@ var bufioReaderPool = sync.Pool{
 	},
 }
 
+// bufioWriterPool reuses the buffers that absorb bt.Tx.SerializeTo's many small writes when a
+// subtree_data body is streamed into the blob store. 64 KiB, not 1 MiB: the buffer exists only to
+// stop each 4-byte and varint-sized write becoming a synchronous io.Pipe rendezvous, which 64 KiB
+// does just as well, and up to blockvalidation_fetch_num_workers x
+// blockvalidation_subtree_fetch_concurrency of these are live at once
+// (bsv-blockchain/teranode#1139).
+var bufioWriterPool = sync.Pool{
+	New: func() interface{} {
+		return bufio.NewWriterSize(nil, 64*1024)
+	},
+}
+
 // SubtreeWriteJob represents a subtree file write that can be processed asynchronously.
 // The subtree structure is built synchronously (needed for merkle validation),
 // but the actual I/O can be deferred to a background worker pool.

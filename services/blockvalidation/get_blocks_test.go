@@ -1,6 +1,7 @@
 package blockvalidation
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -35,6 +36,7 @@ import (
 	"github.com/jarcoal/httpmock"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -4852,10 +4854,10 @@ func TestBoundSubtreeConcurrencyByBudget(t *testing.T) {
 			expected: configured,
 		},
 		{
-			name:     "undeclared size leaves the configured concurrency alone",
+			name:     "undeclared size drops to a single subtree at a time",
 			budget:   budget,
 			block:    &model.Block{SizeInBytes: 0},
-			expected: configured,
+			expected: 1,
 		},
 		{
 			name:     "block below the budget keeps the configured concurrency",
@@ -4876,6 +4878,18 @@ func TestBoundSubtreeConcurrencyByBudget(t *testing.T) {
 			expected: 1,
 		},
 		{
+			name:     "the largest representable int64 drops to one",
+			budget:   budget,
+			block:    &model.Block{SizeInBytes: math.MaxInt64},
+			expected: 1,
+		},
+		{
+			name:     "the first value the int64 conversion rejects drops to one",
+			budget:   budget,
+			block:    &model.Block{SizeInBytes: 1 << 63},
+			expected: 1,
+		},
+		{
 			name:     "a declared size too large for an int64 also drops to one",
 			budget:   budget,
 			block:    &model.Block{SizeInBytes: math.MaxUint64},
@@ -4885,7 +4899,7 @@ func TestBoundSubtreeConcurrencyByBudget(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			server := &Server{catchupPrefetchBudgetBytes: tc.budget}
+			server := &Server{logger: ulogger.TestLogger{}, catchupPrefetchBudgetBytes: tc.budget}
 			require.Equal(t, tc.expected, server.boundSubtreeConcurrencyByBudget(configured, tc.block))
 		})
 	}
@@ -4896,6 +4910,14 @@ func TestBoundSubtreeConcurrencyByBudget(t *testing.T) {
 // under a 256 MiB budget, so an average rule would permit the full 32-way concurrency — yet
 // if two of those subtrees hold ~2 GiB each, both can be in flight and ~4 GiB is retained.
 // The fits/does-not-fit predicate is skew-independent and requires 1.
+//
+// The skew cannot be measured before the fetch, which is why the predicate has to be
+// size-free. /subtree serves bare node hashes with no per-node fee or size, and the receive
+// path rebuilds every node with subtree.AddNode(hash, 0, 0) (get_blocks.go), so a freshly
+// peer-fetched Subtree.SizeInBytes is 0. /subtree_data is served as a chunked stream with no
+// Content-Length, so no final per-subtree size exists before its body has been consumed
+// either. A weight source that is populated only for a locally held, already-validated subtree
+// cannot bound the peer-supplied path, which is the path that needs bounding.
 func TestBoundSubtreeConcurrencyByBudget_SkewedSubtreeSizes(t *testing.T) {
 	const (
 		budgetBytes = 256 << 20
@@ -4920,6 +4942,179 @@ func TestBoundSubtreeConcurrencyByBudget_SkewedSubtreeSizes(t *testing.T) {
 	server := &Server{catchupPrefetchBudgetBytes: budgetBytes}
 	require.Equal(t, 1, server.boundSubtreeConcurrencyByBudget(configured, block),
 		"a block larger than the budget must parse its subtrees one at a time, whatever the average says")
+}
+
+// TestBoundSubtreeConcurrencyByBudget_UndeclaredSizeIsNotExempt pins the shape a peer gets for
+// free: declaring no size at all. Exempting it would make "no declaration" the cheapest way to
+// claim the full configured subtree fan-out while promising nothing, so an undeclared size is
+// treated as the least trustworthy value rather than the most.
+func TestBoundSubtreeConcurrencyByBudget_UndeclaredSizeIsNotExempt(t *testing.T) {
+	const (
+		budgetBytes = 256 << 20
+		configured  = 32
+		subtreeQty  = 128
+	)
+
+	subtrees := make([]*chainhash.Hash, subtreeQty)
+	for i := range subtrees {
+		hash := chainhash.DoubleHashH([]byte(fmt.Sprintf("undeclared-subtree-%d", i)))
+		subtrees[i] = &hash
+	}
+
+	block := &model.Block{
+		SizeInBytes: 0,
+		Subtrees:    subtrees,
+	}
+
+	server := &Server{logger: ulogger.TestLogger{}, catchupPrefetchBudgetBytes: budgetBytes}
+	require.Equal(t, 1, server.boundSubtreeConcurrencyByBudget(configured, block),
+		"a block that declares no size must parse its subtrees one at a time")
+}
+
+// TestBoundSubtreeConcurrencyByBudget_CounterBranches pins which counter each clamping branch
+// increments. The undeclared-size counter is the attack signal, so it must never be muddied by
+// ordinary oversized blocks, and a declaration too large to represent is oversized — it exceeds
+// every positive budget — rather than a category of its own.
+func TestBoundSubtreeConcurrencyByBudget_CounterBranches(t *testing.T) {
+	const (
+		budgetBytes = 256 << 20
+		configured  = 32
+	)
+
+	initPrometheusMetrics()
+
+	server := &Server{logger: ulogger.TestLogger{}, catchupPrefetchBudgetBytes: budgetBytes}
+
+	tests := []struct {
+		name                string
+		block               *model.Block
+		expectOversized     float64
+		expectUndeclared    float64
+		expectedConcurrency int
+	}{
+		{
+			name:                "undeclared size counts as undeclared only",
+			block:               &model.Block{SizeInBytes: 0},
+			expectUndeclared:    1,
+			expectedConcurrency: 1,
+		},
+		{
+			name:                "over budget counts as oversized only",
+			block:               &model.Block{SizeInBytes: budgetBytes + 1},
+			expectOversized:     1,
+			expectedConcurrency: 1,
+		},
+		{
+			name:                "a size too large to represent counts as oversized only",
+			block:               &model.Block{SizeInBytes: math.MaxUint64},
+			expectOversized:     1,
+			expectedConcurrency: 1,
+		},
+		{
+			name:                "a fitting block counts nothing",
+			block:               &model.Block{SizeInBytes: budgetBytes - 1},
+			expectedConcurrency: configured,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			oversizedBefore := testutil.ToFloat64(prometheusCatchupPrefetchOversizedBlocks)
+			undeclaredBefore := testutil.ToFloat64(prometheusCatchupPrefetchUndeclaredSizeBlocks)
+
+			require.Equal(t, tc.expectedConcurrency, server.boundSubtreeConcurrencyByBudget(configured, tc.block))
+
+			require.Equal(t, tc.expectOversized,
+				testutil.ToFloat64(prometheusCatchupPrefetchOversizedBlocks)-oversizedBefore)
+			require.Equal(t, tc.expectUndeclared,
+				testutil.ToFloat64(prometheusCatchupPrefetchUndeclaredSizeBlocks)-undeclaredBefore)
+		})
+	}
+}
+
+// withNilCatchupPrefetchCollectors sets the three catch-up prefetch counters to nil for the
+// duration of one test and restores them afterwards, so a test can assert what happens on a
+// server built before initPrometheusMetrics has ever run. Merely NOT calling
+// initPrometheusMetrics is not enough: it is a package-level sync.Once and any earlier test in
+// the binary may already have fired it, which would make the arrangement silently vacuous.
+//
+// Safe because this package adds no t.Parallel() anywhere, so Go runs its tests one at a time,
+// and these three globals are read from exactly two functions — acquireCatchupPrefetch and
+// boundSubtreeConcurrencyByBudget — which the caller below drives synchronously on the test
+// goroutine. The only way a concurrent read could reach them during the swap is a catch-up
+// goroutine leaked by an earlier test, which is a defect in that test rather than a hazard
+// this helper can design around.
+func withNilCatchupPrefetchCollectors(t *testing.T) {
+	t.Helper()
+
+	parked := prometheusCatchupPrefetchBudgetParked
+	oversized := prometheusCatchupPrefetchOversizedBlocks
+	undeclared := prometheusCatchupPrefetchUndeclaredSizeBlocks
+
+	t.Cleanup(func() {
+		prometheusCatchupPrefetchBudgetParked = parked
+		prometheusCatchupPrefetchOversizedBlocks = oversized
+		prometheusCatchupPrefetchUndeclaredSizeBlocks = undeclared
+	})
+
+	prometheusCatchupPrefetchBudgetParked = nil
+	prometheusCatchupPrefetchOversizedBlocks = nil
+	prometheusCatchupPrefetchUndeclaredSizeBlocks = nil
+}
+
+// TestCatchupPrefetchMetrics_NilCollectorsDoNotPanic drives every site that increments one of
+// the new counters with that counter actually set to nil, which is the state of a server built
+// before initPrometheusMetrics has run — the bare &Server{...} shape most of this package's
+// tests use. Remove any one of the nil guards and the matching subtest panics.
+//
+// The logger is covered on the clamp branches only, where it is genuinely nil-guarded. The
+// budget-park log is not guarded and never was: that path only runs when a budget semaphore
+// exists, which New() only ever builds alongside a logger.
+func TestCatchupPrefetchMetrics_NilCollectorsDoNotPanic(t *testing.T) {
+	withNilCatchupPrefetchCollectors(t)
+
+	require.Nil(t, prometheusCatchupPrefetchBudgetParked, "the arrangement must really be nil, or this test proves nothing")
+	require.Nil(t, prometheusCatchupPrefetchOversizedBlocks)
+	require.Nil(t, prometheusCatchupPrefetchUndeclaredSizeBlocks)
+
+	t.Run("clamp branches with a nil logger too", func(t *testing.T) {
+		const budgetBytes = 256 << 20
+
+		server := &Server{catchupPrefetchBudgetBytes: budgetBytes}
+		require.Nil(t, server.logger)
+
+		require.NotPanics(t, func() {
+			require.Equal(t, 1, server.boundSubtreeConcurrencyByBudget(32, &model.Block{SizeInBytes: 0}))
+			require.Equal(t, 1, server.boundSubtreeConcurrencyByBudget(32, &model.Block{SizeInBytes: math.MaxUint64}))
+			require.Equal(t, 1, server.boundSubtreeConcurrencyByBudget(32, &model.Block{SizeInBytes: budgetBytes + 1}))
+		})
+	})
+
+	t.Run("budget park", func(t *testing.T) {
+		const budget = int64(minCatchupPrefetchWeight)
+
+		server := &Server{
+			logger:                     ulogger.TestLogger{},
+			catchupPrefetchBudgetBytes: budget,
+			catchupPrefetchBudget:      semaphore.NewWeighted(budget),
+		}
+
+		// Hold the whole capacity, so the next acquire misses the TryAcquire fast path and
+		// takes the park branch that logs and counts.
+		require.True(t, server.catchupPrefetchBudget.TryAcquire(budget))
+
+		// Alive on entry — acquireCatchupPrefetch returns early on an already-cancelled
+		// context, before it can reach the park — and short enough that the blocking
+		// Acquire below it gives up promptly.
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		require.NotPanics(t, func() {
+			weight, err := server.acquireCatchupPrefetch(ctx, &model.Block{SizeInBytes: 1})
+			require.Error(t, err, "the park must end in the context expiring, not in a reservation")
+			require.Zero(t, weight)
+		})
+	})
 }
 
 // TestFetchSubtreeDataForBlock_OversizedBlockAppliesToAnyCaller documents the deliberate
@@ -5028,7 +5223,7 @@ func TestFetchSubtreeDataForBlock_OversizedBlockAppliesToAnyCaller(t *testing.T)
 
 	t.Run("disabled budget leaves every caller unchanged", func(t *testing.T) {
 		require.Greater(t, maxObservedConcurrency(t, 0, 1<<40), int32(1),
-			"blockvalidation_catchup_prefetch_budget_bytes=0 must restore the previous behaviour exactly")
+			"blockvalidation_catchup_prefetch_budget_bytes=0 must disable the subtree-concurrency rule for every caller")
 	})
 }
 
@@ -5261,6 +5456,8 @@ func runStoreFailureScenario(t *testing.T, readBytes int64) {
 		peerID, baseURL, false, freshness)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "injected store failure")
+	require.True(t, errors.Is(err, errors.ErrStorageError),
+		"a store-side failure must stay a StorageError, whatever the producer reported once the pipe was closed")
 
 	require.Equal(t, int32(1), store.calls.Load())
 	require.Equal(t, readBytes, store.bytesRead.Load())
@@ -5298,4 +5495,254 @@ func TestFetchAndStoreSubtreeData_NoGoroutineLeak(t *testing.T) {
 	t.Run("store returns before reading", func(t *testing.T) { runStoreFailureScenario(t, 0) })
 	t.Run("store fails partway through", func(t *testing.T) { runStoreFailureScenario(t, 32) })
 	t.Run("successful write", func(t *testing.T) { TestFetchAndStoreSubtreeData_StoredBytesMatchSerialize(t) })
+}
+
+// TestSubtreeDataWriteFailure_Classification pins the check order, which is not
+// interchangeable. Data.WriteTransactionsToWriter wraps a writer failure with two %w verbs, so
+// an error raised because the store aborted and fetchAndStoreSubtreeData then closed the read
+// side satisfies errors.Is for BOTH ErrTransactionWrite and io.ErrClosedPipe. Matching the
+// producer sentinel first would charge an innocent peer for our own storage failure, and a
+// peer-attributable error is what drives alternative-peer failover and the peer-failure charge.
+func TestSubtreeDataWriteFailure_Classification(t *testing.T) {
+	subtreeHash := chainhash.DoubleHashH([]byte("write-failure-classification"))
+	peerID := "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
+	baseURL := "http://classification-peer:8080"
+
+	storeErr := errors.NewStorageError("injected store failure")
+
+	tests := []struct {
+		name        string
+		writeErr    error
+		storeErr    error
+		expectNil   bool
+		expectLocal bool
+	}{
+		{
+			name:      "no failure at all",
+			expectNil: true,
+		},
+		{
+			name:        "store error alone stays local",
+			storeErr:    storeErr,
+			expectLocal: true,
+		},
+		{
+			name:        "a bare closed pipe alongside a store error stays local",
+			writeErr:    io.ErrClosedPipe,
+			storeErr:    storeErr,
+			expectLocal: true,
+		},
+		{
+			name:        "a producer error whose cause is our own closed pipe stays local",
+			writeErr:    fmt.Errorf("%w at index %d: %w", subtreepkg.ErrTransactionWrite, 3, io.ErrClosedPipe),
+			storeErr:    storeErr,
+			expectLocal: true,
+		},
+		{
+			// The store reported success without draining the pipe, so the producer's own
+			// Write came back with our pr.Close(). Nothing here is the peer's doing, and a
+			// silently-nil verdict would store a truncated blob as if it were complete.
+			name:        "a wrapped closed pipe with no store error stays local",
+			writeErr:    fmt.Errorf("%w at index %d: %w", subtreepkg.ErrTransactionWrite, 2, io.ErrClosedPipe),
+			expectLocal: true,
+		},
+		{
+			// The store succeeded, so only the producer failed: the body the peer served
+			// parsed but cannot be re-serialized. It must stay peer-attributable rather than
+			// be accepted merely because storeErr is nil.
+			name:        "a genuine producer error with no store error stays the peer's",
+			writeErr:    subtreepkg.ErrTransactionNil,
+			expectLocal: false,
+		},
+		{
+			name:        "a nil transaction is the peer's unusable body",
+			writeErr:    subtreepkg.ErrTransactionNil,
+			storeErr:    storeErr,
+			expectLocal: false,
+		},
+		{
+			name:        "a producer write failure over a non-pipe cause is the peer's",
+			writeErr:    fmt.Errorf("%w at index %d: %w", subtreepkg.ErrTransactionWrite, 1, io.ErrShortWrite),
+			storeErr:    storeErr,
+			expectLocal: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := subtreeDataWriteFailure(peerID, baseURL, &subtreeHash, tc.writeErr, tc.storeErr)
+
+			if tc.expectNil {
+				require.NoError(t, err)
+				return
+			}
+
+			require.Error(t, err)
+			require.Equal(t, tc.expectLocal, errors.IsLocalError(err))
+
+			if tc.expectLocal {
+				require.True(t, errors.Is(err, errors.ErrStorageError))
+				return
+			}
+
+			require.True(t, errors.Is(err, errors.ErrProcessing))
+			require.Contains(t, err.Error(), peerID, "a peer-attributable error must name the peer")
+		})
+	}
+}
+
+// TestFetchAndStoreSubtreeData_StoreAbortMidStreamStaysLocal is the end-to-end form of the
+// classification's critical row. The body is larger than the pooled 64 KiB write buffer, so the
+// producer is genuinely parked inside a Write within SerializeTo rather than only in the final
+// Flush, and the store fails without reading a byte. The producer therefore reports a wrapped
+// io.ErrClosedPipe raised by our own pr.Close(), and the peer must not be charged for it.
+func TestFetchAndStoreSubtreeData_StoreAbortMidStreamStaysLocal(t *testing.T) {
+	baseURL := "http://aborting-store-peer:8080"
+	peerID := "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
+
+	subtree, body := newLargeStreamingSubtreeDataFixture(t)
+	subtreeHash := subtree.RootHash()
+
+	require.Greater(t, len(body), 64*1024,
+		"the body must exceed the pooled write buffer, or the producer never blocks inside a Write")
+
+	store := &stubSetFromReaderStore{
+		readBytes: 0,
+		err:       errors.NewStorageError("injected store failure"),
+	}
+
+	server := &Server{
+		logger:       ulogger.TestLogger{},
+		subtreeStore: store,
+		settings:     test.CreateBaseTestSettings(t),
+	}
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree_data/%s", baseURL, subtreeHash.String()),
+		httpmock.NewBytesResponder(200, body))
+
+	err := server.fetchAndStoreSubtreeData(context.Background(), &model.Block{Height: 100}, subtreeHash,
+		subtree, peerID, baseURL, false, newSubtreeFreshness())
+	require.Error(t, err)
+	require.True(t, errors.IsLocalError(err),
+		"our own pipe close must never be reclassified as a peer-supplied unusable body")
+	require.NotContains(t, err.Error(), peerID, "a local failure must not name the peer")
+}
+
+// newLargeStreamingSubtreeDataFixture builds a subtree whose serialized subtree_data body is
+// several times the pooled 64 KiB write buffer, using one large unlocking script per
+// transaction. Nothing on this path verifies signatures, only that each transaction hashes to
+// the subtree node it sits under.
+func newLargeStreamingSubtreeDataFixture(t *testing.T) (*subtreepkg.Subtree, []byte) {
+	t.Helper()
+
+	const (
+		leafCount   = 4
+		scriptBytes = 64 * 1024
+	)
+
+	txs := make([]*bt.Tx, 0, leafCount)
+
+	for i := 0; i < leafCount; i++ {
+		tx := bt.NewTx()
+
+		previous := chainhash.DoubleHashH([]byte(fmt.Sprintf("large-streaming-fixture-%d", i)))
+		unlocking := bscript.Script(bytes.Repeat([]byte{0x51}, scriptBytes))
+
+		input := &bt.Input{
+			PreviousTxOutIndex: 0,
+			UnlockingScript:    &unlocking,
+			SequenceNumber:     0xfffffffe,
+		}
+		require.NoError(t, input.PreviousTxIDAdd(&previous))
+
+		tx.Inputs = append(tx.Inputs, input)
+
+		locking := bscript.Script([]byte{0x52})
+		tx.AddOutput(&bt.Output{Satoshis: 1000, LockingScript: &locking})
+
+		txs = append(txs, tx)
+	}
+
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(leafCount)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+
+	for i, tx := range txs[1:] {
+		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), uint64(i+1), uint64(tx.Size()))) //nolint:gosec
+	}
+
+	data := subtreepkg.NewSubtreeData(subtree)
+	for i, tx := range txs {
+		require.NoError(t, data.AddTx(tx, i))
+	}
+
+	body, err := data.Serialize()
+	require.NoError(t, err)
+
+	return subtree, body
+}
+
+// TestBufioWriterPool_SizeAndAbandonedWriterReset pins exactly two things and deliberately
+// claims no more than that.
+//
+//  1. Every writer the pool hands out is the configured 64 KiB, which is the size the streamed
+//     store write is sized against.
+//  2. Reset is what clears a writer abandoned MID-WRITE. That is the shape
+//     fetchAndStoreSubtreeData leaves behind when the store aborts: the producer is parked in a
+//     Write, pr.Close() releases it, and the writer goes back to the pool still holding
+//     buffered bytes that were never flushed.
+//
+// What this does NOT prove is that the production deferred Reset(nil)+Put ran. sync.Pool gives
+// no identity guarantee, so a later Get cannot be asserted to return the same writer, and
+// dropping the production Reset(nil) is a RETENTION defect — a pooled writer keeps a live
+// *io.PipeWriter and up to 64 KiB of stale bytes reachable while it sits idle — rather than a
+// behavioural one, because the next user calls Reset(dst) before writing and that discards
+// both. There is no observable behaviour to assert on there, so no assertion here pretends to.
+func TestBufioWriterPool_SizeAndAbandonedWriterReset(t *testing.T) {
+	const poolBufferBytes = 64 * 1024
+
+	abandoned := bufioWriterPool.Get().(*bufio.Writer)
+
+	// A destination that fails every write, standing in for the pipe whose read side has been
+	// closed: the abandoned writer must be safe to recycle whatever its destination did.
+	abandoned.Reset(&failingWriter{})
+	require.Equal(t, poolBufferBytes, abandoned.Available(), "the pool must hand out 64 KiB writers")
+
+	_, err := abandoned.Write([]byte("abandoned-payload"))
+	require.NoError(t, err, "a short write stays in the buffer and never reaches the destination")
+	require.Positive(t, abandoned.Buffered(), "the fixture must leave bytes buffered, or it is not the abandoned case")
+
+	abandoned.Reset(nil)
+	require.Zero(t, abandoned.Buffered(), "Reset must drop the unflushed bytes, not carry them into the pool")
+	require.Equal(t, poolBufferBytes, abandoned.Available())
+
+	bufioWriterPool.Put(abandoned)
+
+	// Not necessarily the same writer; the assertions below hold either way.
+	next := bufioWriterPool.Get().(*bufio.Writer)
+
+	var out bytes.Buffer
+
+	next.Reset(&out)
+	require.Equal(t, poolBufferBytes, next.Available())
+	require.Zero(t, next.Buffered())
+
+	_, err = next.Write([]byte("next-use"))
+	require.NoError(t, err)
+	require.NoError(t, next.Flush())
+	require.Equal(t, "next-use", out.String(), "a recycled writer must emit only its own bytes")
+
+	next.Reset(nil)
+	bufioWriterPool.Put(next)
+}
+
+// failingWriter rejects every write, so a bufio.Writer over it can only ever hold its bytes in
+// the buffer.
+type failingWriter struct{}
+
+func (failingWriter) Write(_ []byte) (int, error) {
+	return 0, io.ErrClosedPipe
 }
