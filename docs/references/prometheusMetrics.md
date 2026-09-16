@@ -181,6 +181,9 @@ CounterVec and HistogramVec metrics use labels: `peer_id`, `success`, `error_typ
 | `teranode_blockvalidation_catchup_headers_fetched_total`     | CounterVec   | Total number of headers fetched during catchup                   |
 | `teranode_blockvalidation_catchup_errors_total`              | CounterVec   | Total number of errors during catchup operations                 |
 | `teranode_blockvalidation_catchup_active`                    | Gauge        | Number of active catchup operations (0 or 1)                     |
+| `teranode_blockvalidation_catchup_prefetch_budget_parked_total` | Counter      | Total times a prewarm worker parked waiting for prefetch budget  |
+| `teranode_blockvalidation_catchup_prefetch_oversized_blocks_total` | Counter      | Total blocks declaring a size over the budget, parsed one subtree at a time |
+| `teranode_blockvalidation_catchup_prefetch_undeclared_size_blocks_total` | Counter      | Total blocks declaring no size, parsed one subtree at a time     |
 | `teranode_blockvalidation_priority_queue_size`               | GaugeVec     | Current size of the block priority queue by priority level       |
 | `teranode_blockvalidation_priority_queue_added_total`        | CounterVec   | Total number of blocks added to priority queue by priority level |
 | `teranode_blockvalidation_priority_queue_processed_total`    | CounterVec   | Total number of blocks processed from priority queue             |
