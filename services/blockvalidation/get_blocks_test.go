@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -5497,6 +5498,28 @@ func TestFetchAndStoreSubtreeData_NoGoroutineLeak(t *testing.T) {
 	t.Run("successful write", func(t *testing.T) { TestFetchAndStoreSubtreeData_StoredBytesMatchSerialize(t) })
 }
 
+// twoVerbWrap reproduces the error shape Data.WriteTransactionsToWriter produces when a write
+// fails: it wraps a sentinel AND the underlying cause in one error, so errors.Is matches both.
+// go-subtree builds it with two %w verbs in one fmt.Errorf; that call is forbidden here, and
+// Unwrap() []error is the same thing the two-verb form compiles down to, so errors.Is traverses
+// it identically. Constructing it directly also keeps the test honest about what it is pinning:
+// an error that satisfies two sentinels at once, whatever produced it.
+type twoVerbWrap struct {
+	sentinel error
+	index    int
+	cause    error
+}
+
+func newTwoVerbWrap(sentinel error, index int, cause error) error {
+	return &twoVerbWrap{sentinel: sentinel, index: index, cause: cause}
+}
+
+func (e *twoVerbWrap) Error() string {
+	return e.sentinel.Error() + " at index " + strconv.Itoa(e.index) + ": " + e.cause.Error()
+}
+
+func (e *twoVerbWrap) Unwrap() []error { return []error{e.sentinel, e.cause} }
+
 // TestSubtreeDataWriteFailure_Classification pins the check order, which is not
 // interchangeable. Data.WriteTransactionsToWriter wraps a writer failure with two %w verbs, so
 // an error raised because the store aborted and fetchAndStoreSubtreeData then closed the read
@@ -5534,7 +5557,7 @@ func TestSubtreeDataWriteFailure_Classification(t *testing.T) {
 		},
 		{
 			name:        "a producer error whose cause is our own closed pipe stays local",
-			writeErr:    fmt.Errorf("%w at index %d: %w", subtreepkg.ErrTransactionWrite, 3, io.ErrClosedPipe),
+			writeErr:    newTwoVerbWrap(subtreepkg.ErrTransactionWrite, 3, io.ErrClosedPipe),
 			storeErr:    storeErr,
 			expectLocal: true,
 		},
@@ -5543,7 +5566,7 @@ func TestSubtreeDataWriteFailure_Classification(t *testing.T) {
 			// Write came back with our pr.Close(). Nothing here is the peer's doing, and a
 			// silently-nil verdict would store a truncated blob as if it were complete.
 			name:        "a wrapped closed pipe with no store error stays local",
-			writeErr:    fmt.Errorf("%w at index %d: %w", subtreepkg.ErrTransactionWrite, 2, io.ErrClosedPipe),
+			writeErr:    newTwoVerbWrap(subtreepkg.ErrTransactionWrite, 2, io.ErrClosedPipe),
 			expectLocal: true,
 		},
 		{
@@ -5562,7 +5585,7 @@ func TestSubtreeDataWriteFailure_Classification(t *testing.T) {
 		},
 		{
 			name:        "a producer write failure over a non-pipe cause is the peer's",
-			writeErr:    fmt.Errorf("%w at index %d: %w", subtreepkg.ErrTransactionWrite, 1, io.ErrShortWrite),
+			writeErr:    newTwoVerbWrap(subtreepkg.ErrTransactionWrite, 1, io.ErrShortWrite),
 			storeErr:    storeErr,
 			expectLocal: false,
 		},
@@ -5674,9 +5697,12 @@ func newLargeStreamingSubtreeDataFixture(t *testing.T) (*subtreepkg.Subtree, []b
 		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), uint64(i+1), uint64(tx.Size()))) //nolint:gosec
 	}
 
+	// Index 0 holds the coinbase placeholder, so it carries no transaction: AddTx validates the
+	// transaction against the node hash it is filed under, and the placeholder matches none.
+	// Data.Serialize skips index 0 under exactly that condition.
 	data := subtreepkg.NewSubtreeData(subtree)
-	for i, tx := range txs {
-		require.NoError(t, data.AddTx(tx, i))
+	for i, tx := range txs[1:] {
+		require.NoError(t, data.AddTx(tx, i+1))
 	}
 
 	body, err := data.Serialize()
