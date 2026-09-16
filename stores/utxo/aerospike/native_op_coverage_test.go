@@ -21,17 +21,29 @@ var allSubOps = []uint8{
 }
 
 // TestUseNativeForSubOp_Fencing locks the routing gate: native only when the
-// setting is on, and unspend is always fenced to the UDF path (#899).
+// setting is on, and unspend (#899) plus freeze/unfreeze (#1422) are always
+// fenced to the UDF path.
 func TestUseNativeForSubOp_Fencing(t *testing.T) {
 	off := &Store{}
 	on := &Store{}
 	on.useNativeTeranodeOps.Store(true)
 
+	// Fenced to the UDF path even when native is on:
+	//   - unspend: the UDF enforces the #766 SpendingData ownership check.
+	//   - freeze/unfreeze: they carry the alert system's enforceAtHeight window in two
+	//     trailing arguments, and unfreeze must clear the bins that hold it. The
+	//     server-fork dispatcher's SUBOP_TABLE predates both, so routing them native
+	//     would silently drop the window and leave an always-enforced freeze behind.
+	fenced := map[uint8]bool{
+		subOpUnspend:  true,
+		subOpFreeze:   true,
+		subOpUnfreeze: true,
+	}
+
 	for _, op := range allSubOps {
 		require.Falsef(t, off.useNativeForSubOp(op), "sub-op %d must use UDF when native disabled", op)
 
-		want := op != subOpUnspend // unspend is fenced to UDF even when native is on
-		require.Equalf(t, want, on.useNativeForSubOp(op), "sub-op %d native routing", op)
+		require.Equalf(t, !fenced[op], on.useNativeForSubOp(op), "sub-op %d native routing", op)
 	}
 }
 

@@ -18,7 +18,8 @@ func TestUseNativeForSubOp_FencesUnspend(t *testing.T) {
 		}
 	}
 
-	// Flag ON: every sub-op is native EXCEPT unspend, which is fenced to UDF.
+	// Flag ON: every sub-op is native EXCEPT unspend and freeze/unfreeze, which are
+	// fenced to UDF.
 	on := &Store{}
 	on.useNativeTeranodeOps.Store(true)
 
@@ -26,8 +27,18 @@ func TestUseNativeForSubOp_FencesUnspend(t *testing.T) {
 		t.Fatal("subOpUnspend must be fenced to the UDF path even with native ops on (#899)")
 	}
 
+	// Freeze and unfreeze gained the alert system's enforceAtHeight window as two trailing
+	// arguments, and unfreeze must clear the bins that hold it. The server-fork dispatcher
+	// predates both, so routing them native would drop the window on the floor and leave an
+	// always-enforced freeze behind — the fleet-splitting behaviour #1422 removes.
+	for _, op := range []uint8{subOpFreeze, subOpUnfreeze} {
+		if on.useNativeForSubOp(op) {
+			t.Fatalf("sub-op %d must be fenced to the UDF path even with native ops on (#1422)", op)
+		}
+	}
+
 	for _, op := range []uint8{
-		subOpSpend, subOpSpendMulti, subOpSetMined, subOpFreeze, subOpUnfreeze,
+		subOpSpend, subOpSpendMulti, subOpSetMined,
 		subOpReassign, subOpSetConflicting, subOpPreserveUntil, subOpSetLocked,
 	} {
 		if !on.useNativeForSubOp(op) {

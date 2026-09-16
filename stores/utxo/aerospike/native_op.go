@@ -44,6 +44,17 @@ import (
 // Sub-op IDs are wire contract — frozen, must match the SUBOP_TABLE
 // in modules/mod-teranode/src/main/mod_teranode_native_op.c on the
 // server-private fork. Never renumber.
+//
+// KNOWN GAP (#1422): the native spendMulti dispatcher predates the alert system's
+// enforceAtHeight window. It reads the frozen sentinel out of the utxos list, so it still
+// rejects a spend of a frozen coin, but it cannot see the utxoFreezeFrom/utxoFreezeUntil
+// bins and it ignores the per-spend ignorePolicyFreeze key. A node with
+// aerospike_use_native_teranode_ops enabled therefore keeps the pre-#1422 behaviour for
+// spends — a freeze applied at every height, from the moment the alert arrived — and can
+// reject a block the rest of the fleet accepts. The setting is off by default and already
+// requires a matching server build; do not enable it until the dispatcher implements the
+// window, and do not enable it while a freeze is in force. Freeze and unfreeze themselves
+// are fenced to the UDF path below, so the window is always written correctly.
 const (
 	subOpSpend                  uint8 = 1
 	subOpSpendMulti             uint8 = 2
@@ -79,7 +90,17 @@ func encodeNativeOpPayload(subOp uint8, args []any) ([]byte, error) {
 
 // useNativeForSubOp decides whether a given mod-teranode sub-op may use the
 // native operate-path. It requires the setting+capability flag, and additionally
-// FENCES unspend (subOpUnspend) to the UDF/Lua path regardless of the flag.
+// FENCES unspend (subOpUnspend), freeze (subOpFreeze) and unfreeze (subOpUnfreeze)
+// to the UDF/Lua path regardless of the flag.
+//
+// Rationale (#1422): freeze and unfreeze gained two trailing arguments carrying the
+// alert system's enforceAtHeight window, and unfreeze must additionally clear the
+// window bins it writes. The server-fork dispatcher's SUBOP_TABLE entries for sub-ops
+// 5 and 6 predate that window, so a native freeze would drop the heights on the floor
+// and leave an unqualified, always-enforced freeze behind — a freeze that bites at a
+// height no other node agrees on, which is exactly the split this change removes.
+// Freezes are rare, operator-initiated writes, so the UDF path costs nothing that
+// matters here. Un-fence them once the dispatcher implements the window.
 //
 // Rationale (#899): the UDF unspend path always enforces the #766 SpendingData
 // ownership check before reversing a spend. The native path would forward
@@ -94,7 +115,16 @@ func encodeNativeOpPayload(subOp uint8, args []any) ([]byte, error) {
 // ownership-rejection probe analogous to the spend probe could un-fence it in
 // a follow-up once that scenario is exercised end-to-end.
 func (s *Store) useNativeForSubOp(subOp uint8) bool {
-	return s.useNativeTeranodeOps.Load() && subOp != subOpUnspend
+	if !s.useNativeTeranodeOps.Load() {
+		return false
+	}
+
+	switch subOp {
+	case subOpUnspend, subOpFreeze, subOpUnfreeze:
+		return false
+	default:
+		return true
+	}
 }
 
 // demoteNativeOnUnsupported permanently demotes the store to the UDF path when

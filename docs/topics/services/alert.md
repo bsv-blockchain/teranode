@@ -23,12 +23,27 @@ The Service features are:
 
 ### UTXO Freezing
 
-- Ability to freeze a set of UTXOs at a specified block height.
+- Ability to freeze a set of UTXOs over a range of block heights.
 - Frozen UTXOs are classified as such and attempts to spend them are rejected.
+- A freeze carries two controls at once, mirroring SV Node:
+    - a **policy freeze**, effective as soon as the alert is processed, which keeps the
+      coin out of this node's mempool and out of the blocks it builds; and
+    - a **consensus freeze**, enforced only for blocks whose height falls in the alert's
+      `enforceAtHeight` window `[start, stop)`.
+- Only the consensus freeze decides whether a block is valid. Because every node derives
+  the window from the chain rather than from when the alert happened to arrive, two honest
+  nodes always reach the same verdict on the same block. A block that violates the window
+  is rejected once, as a clean block-invalid verdict, and never re-fetched.
+- A freeze with no window, or with `start` 0, is enforced at every height — the behaviour
+  of every freeze issued before windows existed, so no migration is needed.
 
 ### UTXO Unfreezing
 
 - Capability to unfreeze a set of UTXOs at a specified block height.
+- An alert whose `enforceAtHeight` range covers no height at all (`stop <= start`) lifts
+  the freeze outright.
+- An alert whose window has merely elapsed lifts the consensus freeze; it lifts the policy
+  freeze as well only when the alert sets `policyExpiresWithConsensus`.
 
 ### UTXO Reassignment
 

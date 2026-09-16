@@ -107,9 +107,10 @@ type batchSpend struct {
 	// acquire-loading it on the abort path synchronizes-with that write and can
 	// then safely read the slot (see resolveSpendCompletions). completed alone
 	// cannot serve this role: it is set by the CAS, i.e. BEFORE the slot write.
-	published         atomic.Bool
-	ignoreConflicting bool
-	ignoreLocked      bool
+	published          atomic.Bool
+	ignoreConflicting  bool
+	ignoreLocked       bool
+	ignorePolicyFreeze bool
 }
 
 // complete writes err into the item's result slot (spend.Err) and marks the
@@ -395,6 +396,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
 	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
+	useIgnorePolicyFreeze := len(ignoreFlags) > 0 && ignoreFlags[0].IgnorePolicyFreeze
 
 	spends, err = utxo.GetSpends(tx)
 	if err != nil {
@@ -423,11 +425,12 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		}
 
 		item := &batchSpend{
-			spend:             spend,
-			blockHeight:       blockHeight,
-			group:             group,
-			ignoreConflicting: useIgnoreConflicting,
-			ignoreLocked:      useIgnoreLocked,
+			spend:              spend,
+			blockHeight:        blockHeight,
+			group:              group,
+			ignoreConflicting:  useIgnoreConflicting,
+			ignoreLocked:       useIgnoreLocked,
+			ignorePolicyFreeze: useIgnorePolicyFreeze,
 		}
 		items[idx] = item
 
@@ -822,14 +825,22 @@ func (s *Store) validateSpendItem(bItem *batchSpend) error {
 	return nil
 }
 
-// createSpendMapValue creates the map value for a spend item
+// createSpendMapValue creates the map value for a spend item.
+//
+// ignorePolicyFreeze rides in the per-spend map rather than becoming another positional
+// argument to spendMulti deliberately: spendMulti is the hot path and its argument list
+// is a wire contract shared with the server-fork native dispatcher (see native_op.go), so
+// adding a positional argument there would have to be matched outside this repo before
+// the native path could be used at all. Lua reads an absent key as nil, which is the
+// safe default — the policy freeze is enforced.
 func (s *Store) createSpendMapValue(idx int, bItem *batchSpend) aerospike.MapValue {
 	return aerospike.NewMapValue(map[any]any{
-		"idx":          idx,
-		"offset":       s.calculateOffsetForOutput(bItem.spend.Vout),
-		"vOut":         bItem.spend.Vout,
-		"utxoHash":     bItem.spend.UTXOHash[:],
-		"spendingData": bItem.spend.SpendingData.Bytes(),
+		"idx":                idx,
+		"offset":             s.calculateOffsetForOutput(bItem.spend.Vout),
+		"vOut":               bItem.spend.Vout,
+		"utxoHash":           bItem.spend.UTXOHash[:],
+		"spendingData":       bItem.spend.SpendingData.Bytes(),
+		"ignorePolicyFreeze": bItem.ignorePolicyFreeze,
 	})
 }
 

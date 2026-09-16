@@ -2103,6 +2103,7 @@ func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, bl
 
 	opts := []utxo.CreateOption{
 		utxo.WithIgnoreLocked(validationOptions.IgnoreLocked),
+		utxo.WithIgnorePolicyFreeze(validationOptions.IgnorePolicyFreeze),
 	}
 
 	if validationOptions.OutpointOnlySpend {

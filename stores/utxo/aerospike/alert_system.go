@@ -68,22 +68,28 @@ import (
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 )
 
-// FreezeUTXOs marks UTXOs as frozen by setting their spending transaction ID to FF...FF.
-// Frozen UTXOs cannot be spent until unfrozen or reassigned.
+// FreezeUTXOs marks UTXOs as frozen by setting their spending transaction ID to FF...FF
+// and recording the alert's enforceAtHeight window from each Spend's FreezeFrom and
+// FreezeUntil. Frozen UTXOs cannot be spent until unfrozen or reassigned; the window
+// decides which blocks the freeze is a consensus violation for (see issue #1422).
 //
 // The operation is performed atomically via a Lua script that:
 //   - Verifies the UTXO exists and matches the provided hash
-//   - Checks the UTXO is not already spent or frozen
+//   - Checks the UTXO is not already spent
 //   - Sets the spending transaction ID to FF...FF to mark as frozen
+//   - Records the freeze window per output offset
+//
+// A repeat freeze for an already-frozen output updates its window; only a repeat asking
+// for the window already stored is reported as already frozen.
 //
 // Parameters:
 //   - ctx: Context for cancellation/timeout
-//   - spends: Array of UTXOs to freeze
+//   - spends: Array of UTXOs to freeze, each carrying its FreezeFrom/FreezeUntil window
 //
 // Returns error if any UTXO:
 //   - Doesn't exist
 //   - Is already spent
-//   - Is already frozen
+//   - Is already frozen with the same window
 //   - Fails to freeze
 func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
@@ -101,6 +107,8 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 			batchUDFPolicy, LuaPackage, aeroKey, subOpFreeze, "freeze",
 			s.calculateOffsetForOutput(spend.Vout),
 			spend.UTXOHash[:],
+			int(spend.FreezeFrom),
+			int(spend.FreezeUntil),
 		))
 	}
 
@@ -153,6 +161,7 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 //   - Verifies the UTXO exists and matches the provided hash
 //   - Checks the UTXO is currently frozen
 //   - Clears the frozen spending transaction ID (the frozen spendingTxID)
+//   - Clears the recorded enforceAtHeight window, so nothing is inherited by a re-freeze
 //
 // Parameters:
 //   - ctx: Context for cancellation/timeout

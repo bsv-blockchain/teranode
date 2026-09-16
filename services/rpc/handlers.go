@@ -2702,11 +2702,54 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		return nil, err
 	}
 
-	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
+	// Optional enforceAtHeight window, mirroring SV Node's addToConsensusBlacklist.
+	// Omitted means [0, 0) — enforced at every height, the unqualified freeze this
+	// command has always issued. See issue #1422.
+	freezeFrom, freezeUntil, err := freezeWindowFromRPC(c.EnforceAtHeightStart, c.EnforceAtHeightStop)
+	if err != nil {
+		return nil, err
+	}
+
+	spend := &utxo.Spend{TxID: h, Vout: uint32(c.Vout), UTXOHash: h, FreezeFrom: freezeFrom, FreezeUntil: freezeUntil} // nolint:gosec
+
+	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spend}, s.settings); err != nil {
 		return nil, err
 	}
 
 	return nil, nil
+}
+
+// freezeWindowFromRPC validates and converts the optional enforceAtHeight arguments of
+// the freeze command into the half-open window [from, until) the UTXO store persists.
+// A nil or zero bound means "no bound": from genesis for the lower, no end for the upper.
+func freezeWindowFromRPC(start, stop *int) (freezeFrom uint32, freezeUntil uint32, err error) {
+	if start != nil {
+		if *start < 0 {
+			return 0, 0, errors.NewInvalidArgumentError("enforceAtHeightStart must not be negative")
+		}
+
+		if freezeFrom, err = safeconversion.IntToUint32(*start); err != nil {
+			return 0, 0, err
+		}
+	}
+
+	if stop != nil {
+		if *stop < 0 {
+			return 0, 0, errors.NewInvalidArgumentError("enforceAtHeightStop must not be negative")
+		}
+
+		if freezeUntil, err = safeconversion.IntToUint32(*stop); err != nil {
+			return 0, 0, err
+		}
+	}
+
+	// An inverted or empty window would freeze nothing while reporting success, which an
+	// operator cannot tell apart from the freeze having worked.
+	if freezeUntil > 0 && freezeUntil <= freezeFrom {
+		return 0, 0, errors.NewInvalidArgumentError("enforceAtHeight range [%d, %d) is empty", freezeFrom, freezeUntil)
+	}
+
+	return freezeFrom, freezeUntil, nil
 }
 
 // handleUnfreeze implements the unfreeze command, which removes the frozen status from

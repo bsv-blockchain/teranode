@@ -1949,7 +1949,10 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				if !opts.IsRevalidation {
 					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
 				}
-				return errors.NewBlockInvalidError("[ValidateBlock][%s] block contains invalid transactions: %s", block.Hash().String(), err)
+				// One verb, one arg: the trailing error is consumed as the wrapped cause,
+				// not as a format argument, so a second %s rendered as %!s(MISSING). The
+				// cause is still carried — and printed — by the wrap itself.
+				return errors.NewBlockInvalidError("[ValidateBlock][%s] block contains invalid transactions", block.Hash().String(), err)
 			}
 
 			// Catchup-state errors: a parent transaction is not yet in our store because we

@@ -245,6 +245,148 @@ func Freeze(t *testing.T, db utxostore.Store) {
 	require.Equal(t, spendTx.TxIDChainHash().String(), resp.SpendingData.TxID.String())
 }
 
+// FreezeEnforceAtHeight is the cross-backend contract for the alert system's
+// enforceAtHeight window (issue #1422): a freeze must be a consensus violation for
+// exactly the blocks inside [FreezeFrom, FreezeUntil) and for no others, so that every
+// node reaches the same verdict on the same block however late the alert reached it.
+//
+// It also pins the two tiers apart. The policy tier rejects a spend at any height and is
+// what keeps a frozen coin out of this node's mempool and block templates; a spend
+// carrying WithIgnorePolicyFreeze — which every block-validation spend does — sees only
+// the height-anchored consensus tier.
+func FreezeEnforceAtHeight(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	const (
+		windowStart = 500
+		windowStop  = 600
+	)
+
+	// spendAt attempts the spend at blockHeight and returns the per-input error. The
+	// spend is rolled back afterwards on success so each case starts from an unspent
+	// output. asBlock selects the block-validation caller (policy tier bypassed).
+	spendAt := func(t *testing.T, blockHeight uint32, asBlock bool) error {
+		t.Helper()
+
+		opts := []utxostore.CreateOption{utxostore.WithSpendOnly()}
+		if asBlock {
+			opts = append(opts, utxostore.WithIgnorePolicyFreeze(true))
+		}
+
+		_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
+
+		_, attempted, err := db.SpendAndCreate(ctx, spendTx, blockHeight, opts...)
+		if err == nil {
+			// Undo the spend so the next case sees the same unspent output.
+			require.NoError(t, db.Unspend(ctx, attempted, false))
+			return nil
+		}
+
+		require.NotEmpty(t, attempted, "a failed spend must report which input failed")
+
+		return attempted[0].Err
+	}
+
+	_, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	err = db.FreezeUTXOs(ctx, []*utxostore.Spend{{
+		TxID:        TXHash,
+		Vout:        0,
+		UTXOHash:    utxoHash0,
+		FreezeFrom:  windowStart,
+		FreezeUntil: windowStop,
+	}}, tSettings)
+	require.NoError(t, err)
+
+	// The consensus tier is exactly the half-open interval. The boundaries are the whole
+	// point: an off-by-one at either end is a one-block window in which two honest nodes
+	// disagree about the same block.
+	for _, tc := range []struct {
+		name        string
+		blockHeight uint32
+		frozen      bool
+	}{
+		{name: "well below the window", blockHeight: 1, frozen: false},
+		{name: "one block below the start", blockHeight: windowStart - 1, frozen: false},
+		{name: "the start height itself", blockHeight: windowStart, frozen: true},
+		{name: "inside the window", blockHeight: (windowStart + windowStop) / 2, frozen: true},
+		{name: "the last enforced height", blockHeight: windowStop - 1, frozen: true},
+		{name: "the stop height itself", blockHeight: windowStop, frozen: false},
+		{name: "well above the window", blockHeight: windowStop + 1000, frozen: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			blockErr := spendAt(t, tc.blockHeight, true)
+
+			if tc.frozen {
+				require.ErrorIs(t, blockErr, errors.ErrFrozen,
+					"a block at height %d is inside [%d, %d) and must be rejected", tc.blockHeight, windowStart, windowStop)
+			} else {
+				require.NoError(t, blockErr,
+					"a block at height %d is outside [%d, %d) and must be accepted", tc.blockHeight, windowStart, windowStop)
+			}
+
+			// The policy tier does not care about height: the coin stays out of this
+			// node's mempool and block templates for as long as it is frozen.
+			require.ErrorIs(t, spendAt(t, tc.blockHeight, false), errors.ErrFrozen,
+				"the policy freeze must reject a non-block spend at every height")
+		})
+	}
+
+	// The output is still reported frozen throughout — the sentinel is the policy tier,
+	// which the window does not touch.
+	resp, err := db.GetSpend(ctx, testSpend0)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_FROZEN), resp.Status)
+
+	// Re-issuing the same window is a no-op the caller is told about, so an alert that
+	// arrives twice does not read as a successful change.
+	sameWindow := []*utxostore.Spend{{TxID: TXHash, Vout: 0, UTXOHash: utxoHash0, FreezeFrom: windowStart, FreezeUntil: windowStop}}
+	require.Error(t, db.FreezeUTXOs(ctx, sameWindow, tSettings), "re-freezing with an unchanged window must report already frozen")
+
+	// Re-issuing a DIFFERENT window updates it: an authority can extend, shorten or shift
+	// the enforcement window of a freeze it already issued.
+	widened := []*utxostore.Spend{{TxID: TXHash, Vout: 0, UTXOHash: utxoHash0, FreezeFrom: windowStart, FreezeUntil: windowStop + 100}}
+	require.NoError(t, db.FreezeUTXOs(ctx, widened, tSettings))
+	require.ErrorIs(t, spendAt(t, windowStop, true), errors.ErrFrozen, "the widened window must now cover the old stop height")
+	require.NoError(t, spendAt(t, windowStop+100, true), "the widened window must still end at its new stop height")
+
+	// Unfreezing drops the window along with the sentinel, so nothing is left for a later
+	// re-freeze to inherit.
+	require.NoError(t, db.UnFreezeUTXOs(ctx, widened, tSettings))
+
+	resp, err = db.GetSpend(ctx, testSpend0)
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_OK), resp.Status)
+
+	require.NoError(t, spendAt(t, windowStart, true), "an unfrozen output must be spendable inside the old window")
+	require.NoError(t, spendAt(t, windowStart, false), "an unfrozen output must be spendable outside block validation too")
+
+	// An unqualified freeze — no window, which is every freeze written before the window
+	// existed — is enforced at every height, in both tiers.
+	unqualified := []*utxostore.Spend{{TxID: TXHash, Vout: 0, UTXOHash: utxoHash0}}
+	require.NoError(t, db.FreezeUTXOs(ctx, unqualified, tSettings))
+
+	for _, blockHeight := range []uint32{1, windowStart, windowStop, windowStop + 1000} {
+		require.ErrorIs(t, spendAt(t, blockHeight, true), errors.ErrFrozen,
+			"an unqualified freeze must be enforced at height %d", blockHeight)
+		require.ErrorIs(t, spendAt(t, blockHeight, false), errors.ErrFrozen,
+			"an unqualified freeze must be enforced at height %d for non-block spends", blockHeight)
+	}
+
+	require.NoError(t, db.UnFreezeUTXOs(ctx, unqualified, tSettings))
+
+	// An open-ended window (no stop) never lapses.
+	openEnded := []*utxostore.Spend{{TxID: TXHash, Vout: 0, UTXOHash: utxoHash0, FreezeFrom: windowStart}}
+	require.NoError(t, db.FreezeUTXOs(ctx, openEnded, tSettings))
+
+	require.NoError(t, spendAt(t, windowStart-1, true), "an open-ended window must not bite below its start")
+	require.ErrorIs(t, spendAt(t, windowStart, true), errors.ErrFrozen, "an open-ended window must bite at its start")
+	require.ErrorIs(t, spendAt(t, windowStop+1_000_000, true), errors.ErrFrozen, "an open-ended window must never lapse")
+}
+
 func ReAssign(t *testing.T, db utxostore.Store) {
 	ctx := context.Background()
 

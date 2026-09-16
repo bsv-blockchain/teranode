@@ -645,7 +645,14 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		releaseArenas,
 	)
 	if err != nil {
-		return nil, err
+		// WrapGRPC, like every other error return in this function. Without it the status
+		// carries no error details, so UnwrapGRPC on the caller's side rebuilds a single
+		// opaque ERR_ERROR whose message is the rendered chain — and every errors.Is check
+		// block validation makes on the result (ErrTxInvalid, ErrBlockCorrupt,
+		// ErrTxMissingParent) silently returns false. That is how a transaction-level
+		// consensus failure reached ValidateBlock looking like generic trouble and got
+		// retried instead of failing the block once (issue #1422).
+		return nil, errors.WrapGRPC(err)
 	}
 
 	u.logger.Infof("[CheckBlockSubtrees] Completed processing %d transactions across %d subtree batches", totalProcessedTxs, numBatches)
@@ -687,11 +694,17 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	//       mempool policy-mode path (substituteUnconfirmedHeights with the
 	//       candidate height ≈ tip+1), so no new class of transaction reaches
 	//       block assembly.
+	//   - WithIgnorePolicyFreeze: every spend here happens because a PoW-checked block
+	//       contains the transaction, so only the height-anchored consensus tier of an
+	//       alert-system freeze may reject it. The policy tier takes effect the moment
+	//       the alert reached THIS node, so honouring it here would let gossip timing
+	//       decide whether a block is valid — the fleet split issue #1422 removes.
 	subtreeValidatorOptions := []validator.Option{
 		validator.WithSkipPolicyChecks(true),
 		validator.WithInBlock(true),
 		validator.WithCreateConflicting(true),
 		validator.WithIgnoreLocked(true),
+		validator.WithIgnorePolicyFreeze(true),
 		validator.WithCandidateBlockTime(candidateBlockTime),
 		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
 		validator.WithUnconfirmedParentsAtCandidateHeight(true),
@@ -1274,6 +1287,7 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		validator.WithInBlock(true),
 		validator.WithCreateConflicting(true),
 		validator.WithIgnoreLocked(true),
+		validator.WithIgnorePolicyFreeze(true),
 		validator.WithCandidateBlockTime(candidateBlockTime),
 		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
 		validator.WithUnconfirmedParentsAtCandidateHeight(true),
