@@ -145,8 +145,36 @@ type Spend struct {
 	// ConflictingTxID is the transaction ID that conflicts with this UTXO
 	ConflictingTxID *chainhash.Hash `json:"conflictingTxId,omitempty"`
 
+	// FreezeFrom and FreezeUntil carry the alert system's enforceAtHeight window on a
+	// FreezeUTXOs call, the half-open interval [FreezeFrom, FreezeUntil). A spend is a
+	// consensus violation only for a block whose height falls inside it, which is what
+	// makes a freeze deterministic across the fleet instead of a function of how fast
+	// the alert gossiped to each node (issue #1422).
+	//
+	// FreezeFrom 0 means "from genesis", i.e. always enforced — the behaviour of every
+	// freeze written before this field existed, so a stored window of (0, 0) and an
+	// absent window are the same thing and no migration is needed. FreezeUntil 0 means
+	// the window never ends.
+	//
+	// Both are ignored outside FreezeUTXOs; the spend path reads the window back from
+	// the store, never from the caller.
+	FreezeFrom  uint32 `json:"freezeFrom,omitempty"`
+	FreezeUntil uint32 `json:"freezeUntil,omitempty"`
+
 	// error is the error that occurred during the spend operation
 	Err error `json:"err,omitempty"`
+}
+
+// FreezeWindowActiveAt reports whether a freeze window [from, until) is being enforced
+// at blockHeight. from == 0 means "from genesis"; until == 0 means "no end". The upper
+// bound is exclusive, matching SV Node's enforceAtHeight and Teranode's own >=
+// activation-height convention.
+func FreezeWindowActiveAt(from, until, blockHeight uint32) bool {
+	if blockHeight < from {
+		return false
+	}
+
+	return until == 0 || blockHeight < until
 }
 
 // Clone creates a deep copy of the Spend struct.
@@ -157,8 +185,10 @@ func (s *Spend) Clone() *Spend {
 	}
 
 	clone := &Spend{
-		Vout: s.Vout,
-		Err:  s.Err,
+		Vout:        s.Vout,
+		Err:         s.Err,
+		FreezeFrom:  s.FreezeFrom,
+		FreezeUntil: s.FreezeUntil,
 	}
 
 	if s.TxID != nil {
@@ -191,6 +221,10 @@ type IgnoreFlags struct {
 	// Set ONLY on the gated below-checkpoint outpoint-only path (spec §3.2 Seam 1). Default
 	// false — above-checkpoint and steady-state spends always enforce the hash.
 	SkipUTXOHashCheck bool
+	// IgnorePolicyFreeze drops the policy tier of the alert system's freeze, leaving only
+	// the height-anchored consensus tier. Set ONLY on spends performed while validating a
+	// block (see WithIgnorePolicyFreeze).
+	IgnorePolicyFreeze bool
 }
 
 // ConflictingChildRemoval identifies one (parent, child) pair that should be
@@ -323,6 +357,27 @@ func WithIgnoreConflicting(b bool) CreateOption {
 func WithIgnoreLocked(b bool) CreateOption {
 	return func(o *CreateOptions) {
 		o.IgnoreFlags.IgnoreLocked = b
+	}
+}
+
+// WithIgnorePolicyFreeze makes the spend phase of SpendAndCreate ignore the policy tier
+// of the alert system's freeze, leaving only the height-anchored consensus tier.
+//
+// The alert system's AddToConsensusBlacklist sets two controls at once, mirroring SV
+// Node: a policy freeze that takes effect the moment the alert is processed, and a
+// consensus freeze enforced only for blocks inside the alert's enforceAtHeight window.
+// The policy freeze is ours alone — it keeps the coin out of our mempool and out of our
+// block templates — and must never be a reason to reject a block another node produced,
+// because every node learns of the alert at a different moment and a block's validity
+// cannot depend on that. Set this flag on EVERY spend performed while validating a
+// block, and on no other spend.
+//
+// The invariant this buys: any ErrFrozen that reaches block validation is a violation
+// of a height-anchored consensus freeze, so it is unambiguously a block-invalid verdict
+// rather than something to retry. See issue #1422.
+func WithIgnorePolicyFreeze(b bool) CreateOption {
+	return func(o *CreateOptions) {
+		o.IgnoreFlags.IgnorePolicyFreeze = b
 	}
 }
 
@@ -519,9 +574,18 @@ type Store interface {
 
 	// FreezeUTXOs marks UTXOs as frozen, preventing them from being spent.
 	// This is used by the alert system to prevent spending of UTXOs.
+	//
+	// Each Spend carries the alert's enforceAtHeight window in FreezeFrom/FreezeUntil.
+	// Implementations must persist it per output and enforce it in the spend path
+	// against the height of the block being validated, so that every node applies the
+	// freeze at the same chain height however late the alert reached it. A (0, 0)
+	// window is enforced at every height, which is what a freeze written before this
+	// field existed means.
 	FreezeUTXOs(ctx context.Context, spends []*Spend, tSettings *settings.Settings) error
 
 	// UnFreezeUTXOs removes the frozen status from UTXOs, allowing them to be spent again.
+	// Implementations must clear the stored enforceAtHeight window as well as the frozen
+	// marker, so an unfrozen output carries no residual height gate.
 	UnFreezeUTXOs(ctx context.Context, spends []*Spend, tSettings *settings.Settings) error
 
 	// ReAssignUTXO updates a frozen UTXO's commitment and maturity gate.

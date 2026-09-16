@@ -328,28 +328,106 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 			continue
 		}
 
-		// create a spend object
-		spend := &utxo.Spend{
-			TxID:     txHash,
-			Vout:     vout,
-			UTXOHash: utxoHash,
+		freezeFrom, freezeUntil, enforcesNothing, err := enforceAtHeightWindow(fund)
+		if err != nil {
+			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
+			continue
 		}
 
-		// check the height enforcement, if the height is below our current height, we are unfreezing, otherwise freezing
-		if len(fund.EnforceAtHeight) > 0 && fund.EnforceAtHeight[0].Stop < int(n.utxoStore.GetBlockHeight()) {
+		// create a spend object carrying the alert's enforceAtHeight window, so the store
+		// enforces the freeze at a chain height every node derives identically instead of
+		// from the moment this node happened to process the alert (issue #1422)
+		spend := &utxo.Spend{
+			TxID:        txHash,
+			Vout:        vout,
+			UTXOHash:    utxoHash,
+			FreezeFrom:  freezeFrom,
+			FreezeUntil: freezeUntil,
+		}
+
+		// Two shapes mean "lift this freeze entirely":
+		//
+		//  - A window that enforces nothing at any height (stop <= start). This is the
+		//    unfreeze idiom: go-alert-system delivers unfreeze alerts through this same
+		//    RPC, and an empty range is how an authority says the hold is over outright.
+		//  - A window that has already elapsed, when the alert also says the policy hold
+		//    expires with the consensus hold.
+		//
+		// An elapsed window WITHOUT PolicyExpiresWithConsensus keeps the policy freeze and
+		// lets only the consensus tier lapse — the literal meaning of "policy does not
+		// expire with consensus", and what SV Node does with its two independent lists.
+		// The coin stays out of this node's mempool and block templates while becoming
+		// spendable in blocks again; the admin unfreeze RPC still lifts it completely.
+		//
+		// Anything else is a freeze, INCLUDING a window that starts above our tip — the
+		// window itself now does the timing work, so a not-yet-active freeze is recorded
+		// and simply does not bite until its start height. Before this, a freeze was
+		// applied outright the instant it arrived and the start height was discarded.
+		windowElapsed := freezeUntil > 0 && uint64(freezeUntil) <= uint64(n.utxoStore.GetBlockHeight())
+
+		if enforcesNothing || (windowElapsed && fund.PolicyExpiresWithConsensus) {
 			// unfreeze
 			if err = n.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{spend}, n.settings); err != nil {
+				n.logger.Warnf("[AddToConsensusBlacklist] failed to unfreeze %s:%d: %v", fund.TxOut.TxId, fund.TxOut.Vout, err)
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
 			}
 		} else {
 			// freeze
 			if err = n.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spend}, n.settings); err != nil {
+				n.logger.Warnf("[AddToConsensusBlacklist] failed to freeze %s:%d for heights [%d, %d): %v", fund.TxOut.TxId, fund.TxOut.Vout, freezeFrom, freezeUntil, err)
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
 			}
 		}
 	}
 
 	return response, nil
+}
+
+// enforceAtHeightWindow converts a fund's enforceAtHeight ranges into the half-open
+// window [from, until) the UTXO store stores per output.
+//
+// The alert wire format carries exactly one range per fund
+// (go-alert-system app/models/alert_message_freeze_utxo.go: 57 bytes, txid ‖ vout ‖
+// start ‖ stop ‖ policyExpiresWithConsensus), while SV Node's addToConsensusBlacklist
+// JSON permits a list. The union of several ranges is not representable as one window,
+// so more than one range is rejected rather than silently collapsed to the first — a
+// freeze that is quietly enforced over the wrong heights is the failure mode this whole
+// change exists to remove.
+//
+// A fund with no range at all, or a zero start, means "enforce from genesis", which is
+// how every freeze behaved before the window existed. A zero stop means "no end".
+//
+// enforcesNothing reports a range that covers no height at all (stop <= start). That is
+// not an error: go-alert-system delivers unfreeze alerts through the same RPC, and an
+// empty range is how an authority says the hold is over outright.
+func enforceAtHeightWindow(fund models.Fund) (freezeFrom uint32, freezeUntil uint32, enforcesNothing bool, err error) {
+	if len(fund.EnforceAtHeight) == 0 {
+		return 0, 0, false, nil
+	}
+
+	if len(fund.EnforceAtHeight) > 1 {
+		return 0, 0, false, errors.NewError("enforceAtHeight carries %d ranges; only one is supported", len(fund.EnforceAtHeight))
+	}
+
+	enforce := fund.EnforceAtHeight[0]
+
+	if enforce.Start < 0 || enforce.Stop < 0 {
+		return 0, 0, false, errors.NewError("enforceAtHeight range [%d, %d) is negative", enforce.Start, enforce.Stop)
+	}
+
+	if freezeFrom, err = safeconversion.IntToUint32(enforce.Start); err != nil {
+		return 0, 0, false, err
+	}
+
+	if freezeUntil, err = safeconversion.IntToUint32(enforce.Stop); err != nil {
+		return 0, 0, false, err
+	}
+
+	if freezeUntil > 0 && freezeUntil <= freezeFrom {
+		return freezeFrom, freezeUntil, true, nil
+	}
+
+	return freezeFrom, freezeUntil, false, nil
 }
 
 // getAddToConsensusBlacklistResponse creates a standardized response for failed blacklist operations.

@@ -29,12 +29,15 @@ func TestSpendMultiNativePayloadRoundTrip(t *testing.T) {
 	utxoHash := &chainhash.Hash{0xaa, 0xbb, 0xcc, 0xdd}
 	sd := spendpkg.NewSpendingData(&chainhash.Hash{0x09, 0x09, 0x09}, 7)
 
-	bItem := &batchSpend{spend: &utxo.Spend{
-		TxID:         &chainhash.Hash{0x01, 0x02, 0x03},
-		Vout:         5,
-		UTXOHash:     utxoHash,
-		SpendingData: sd,
-	}}
+	bItem := &batchSpend{
+		spend: &utxo.Spend{
+			TxID:         &chainhash.Hash{0x01, 0x02, 0x03},
+			Vout:         5,
+			UTXOHash:     utxoHash,
+			SpendingData: sd,
+		},
+		ignorePolicyFreeze: true,
+	}
 
 	const idx = 3
 	batchItems := []aerospike.MapValue{s.createSpendMapValue(idx, bItem)}
@@ -95,8 +98,8 @@ func TestSpendMultiNativePayloadRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("spend item = %T, want map[string]any", items[0])
 	}
-	if len(m) != 5 {
-		t.Fatalf("spend map has %d keys, want 5 — msgpack must not drop fields: %#v", len(m), m)
+	if len(m) != 6 {
+		t.Fatalf("spend map has %d keys, want 6 — msgpack must not drop fields: %#v", len(m), m)
 	}
 
 	// Every field round-trips faithfully.
@@ -111,6 +114,12 @@ func TestSpendMultiNativePayloadRoundTrip(t *testing.T) {
 	}
 	if got, _ := m["utxoHash"].([]byte); !bytes.Equal(got, utxoHash[:]) {
 		t.Fatalf("utxoHash = %x, want %x", got, utxoHash[:])
+	}
+	// ignorePolicyFreeze rides in the per-spend map rather than as a positional argument
+	// precisely so spendMulti's native arg list stays a 5-element wire contract (#1422).
+	// An old dispatcher ignores the unknown key; a new one must receive it faithfully.
+	if got, ok := m["ignorePolicyFreeze"].(bool); !ok || !got {
+		t.Fatalf("ignorePolicyFreeze = %#v, want true", m["ignorePolicyFreeze"])
 	}
 	if got, _ := m["spendingData"].([]byte); !bytes.Equal(got, sd.Bytes()) {
 		t.Fatalf("spendingData = %x, want %x", got, sd.Bytes())

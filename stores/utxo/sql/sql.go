@@ -91,12 +91,13 @@ const (
 // batchSpend represents a single UTXO spend request in a batch.
 // Mirrors aerospike/spend.go batchSpend struct.
 type batchSpend struct {
-	spend             *utxo.Spend // UTXO to spend
-	blockHeight       uint32      // Current block height
-	errCh             chan error  // Channel for completion notification
-	ignoreConflicting bool
-	ignoreLocked      bool
-	skipUTXOHashCheck bool
+	spend              *utxo.Spend // UTXO to spend
+	blockHeight        uint32      // Current block height
+	errCh              chan error  // Channel for completion notification
+	ignoreConflicting  bool
+	ignoreLocked       bool
+	skipUTXOHashCheck  bool
+	ignorePolicyFreeze bool
 }
 
 // Store implements the UTXO store interface using a SQL database backend.
@@ -1875,6 +1876,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
 	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
 	useSkipUTXOHashCheck := len(ignoreFlags) > 0 && ignoreFlags[0].SkipUTXOHashCheck
+	useIgnorePolicyFreeze := len(ignoreFlags) > 0 && ignoreFlags[0].IgnorePolicyFreeze
 
 	if useSkipUTXOHashCheck {
 		spends, err = utxo.GetSpendsOutpointOnly(tx)
@@ -1926,12 +1928,13 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 
 			errCh := make(chan error, 1)
 			s.spendBatcher.PutCtx(ctx, &batchSpend{
-				spend:             spend,
-				blockHeight:       blockHeight,
-				errCh:             errCh,
-				ignoreConflicting: useIgnoreConflicting,
-				ignoreLocked:      useIgnoreLocked,
-				skipUTXOHashCheck: useSkipUTXOHashCheck,
+				spend:              spend,
+				blockHeight:        blockHeight,
+				errCh:              errCh,
+				ignoreConflicting:  useIgnoreConflicting,
+				ignoreLocked:       useIgnoreLocked,
+				skipUTXOHashCheck:  useSkipUTXOHashCheck,
+				ignorePolicyFreeze: useIgnorePolicyFreeze,
 			})
 
 			// Wait for batch response with timeout to prevent indefinite blocking
@@ -2131,6 +2134,26 @@ type spendSelectResult struct {
 	conflicting            bool
 	locked                 bool
 	spendableIn            *uint32
+	freezeFrom             *uint32
+	freezeUntil            *uint32
+}
+
+// consensusFrozenAt reports whether the alert system's enforceAtHeight window on this
+// output is being enforced for a block at blockHeight. A NULL bound reads as 0, which
+// means "from genesis" / "no end" — the meaning of every freeze written before the
+// window columns existed.
+func (r *spendSelectResult) consensusFrozenAt(blockHeight uint32) bool {
+	var from, until uint32
+
+	if r.freezeFrom != nil {
+		from = *r.freezeFrom
+	}
+
+	if r.freezeUntil != nil {
+		until = *r.freezeUntil
+	}
+
+	return utxo.FreezeWindowActiveAt(from, until, blockHeight)
 }
 
 // trySendSpendBatchBulk uses bulk SELECT + bulk UPDATE for PostgreSQL.
@@ -2152,7 +2175,8 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 	sb.WriteString(`
 		SELECT v.batch_idx,
 		       o.transaction_id, o.coinbase_spending_height, o.utxo_hash,
-		       o.spending_data, o.frozen OR t.frozen AS frozen, t.conflicting, t.locked, o.spendableIn
+		       o.spending_data, o.frozen OR t.frozen AS frozen, t.conflicting, t.locked, o.spendableIn,
+		       o.freezeFrom, o.freezeUntil
 		FROM (VALUES `)
 	args := make([]interface{}, 0, len(batch)*3)
 	paramIdx := 1
@@ -2184,7 +2208,8 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 	for rows.Next() {
 		r := &spendSelectResult{}
 		if err := rows.Scan(&r.batchIdx, &r.transactionID, &r.coinbaseSpendingHeight,
-			&r.utxoHash, &r.spendingDataBytes, &r.frozen, &r.conflicting, &r.locked, &r.spendableIn); err != nil {
+			&r.utxoHash, &r.spendingDataBytes, &r.frozen, &r.conflicting, &r.locked, &r.spendableIn,
+			&r.freezeFrom, &r.freezeUntil); err != nil {
 			rows.Close()
 			if isDeadlock(err) {
 				return true
@@ -2238,9 +2263,22 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			continue
 		}
 
+		// A freeze carries two controls at once, mirroring SV Node (issue #1422). The
+		// height-anchored consensus tier rejects the spend for any block inside the
+		// alert's enforceAtHeight window — a window every node derives identically from
+		// the chain. The policy tier is local-only, so a caller validating a block passes
+		// IgnorePolicyFreeze and sees the consensus tier alone; otherwise the verdict on
+		// a block would depend on when the alert happened to reach each node.
 		if r.frozen {
-			validationErrors[i] = errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
-			continue
+			if r.consensusFrozenAt(item.blockHeight) {
+				validationErrors[i] = errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d at block height %d", spend.TxID, spend.Vout, item.blockHeight)
+				continue
+			}
+
+			if !item.ignorePolicyFreeze {
+				validationErrors[i] = errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+				continue
+			}
 		}
 		if r.conflicting && !item.ignoreConflicting {
 			validationErrors[i] = errors.NewTxConflictingError("[Spend] tx is conflicting for %s:%d", spend.TxID, spend.Vout)
@@ -2683,6 +2721,8 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 		,t.conflicting
 		,t.locked
 		,o.spendableIn
+		,o.freezeFrom
+		,o.freezeUntil
 		FROM outputs o
 		JOIN transactions t ON o.transaction_id = t.id
 		WHERE t.hash = $1
@@ -2721,11 +2761,14 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 			conflicting            bool
 			locked                 bool
 			spendableIn            *uint32
+			freezeFrom             *uint32
+			freezeUntil            *uint32
 		)
 
 		err = txn.QueryRowContext(s.ctx, q1, spend.TxID[:], spend.Vout).Scan(
 			&transactionID, &coinbaseSpendingHeight, &utxoHash,
 			&spendingDataBytes, &frozen, &conflicting, &locked, &spendableIn,
+			&freezeFrom, &freezeUntil,
 		)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -2740,10 +2783,25 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 			continue
 		}
 
-		// Validate the UTXO state
+		// Validate the UTXO state.
+		//
+		// A freeze carries two controls at once, mirroring SV Node (issue #1422): the
+		// height-anchored consensus tier below, enforced only for blocks inside the
+		// alert's enforceAtHeight window, and a local-only policy tier a block-validation
+		// caller opts out of with IgnorePolicyFreeze. See the same split in
+		// trySendSpendBatchBulk.
 		if frozen {
-			validationErrors[i] = errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
-			continue
+			frozenSpend := &spendSelectResult{freezeFrom: freezeFrom, freezeUntil: freezeUntil}
+
+			if frozenSpend.consensusFrozenAt(item.blockHeight) {
+				validationErrors[i] = errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d at block height %d", spend.TxID, spend.Vout, item.blockHeight)
+				continue
+			}
+
+			if !item.ignorePolicyFreeze {
+				validationErrors[i] = errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+				continue
+			}
 		}
 
 		if conflicting && !item.ignoreConflicting {
@@ -4876,6 +4934,8 @@ func createPostgresSchemaImpl(db DBExecutor) error {
         ,spending_data            BYTEA
         ,frozen                   BOOLEAN DEFAULT FALSE
         ,spendableIn              INT
+        ,freezeFrom               BIGINT
+        ,freezeUntil              BIGINT
         ,PRIMARY KEY (transaction_id, idx)
 	  );
 	`); err != nil {
@@ -4953,6 +5013,26 @@ func createPostgresSchemaImpl(db DBExecutor) error {
 	`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not add preserve_until column to transactions table - [%+v]", err)
+	}
+
+	// Add the alert system's enforceAtHeight window to outputs if it doesn't exist
+	// (issue #1422). Nullable with no default: NULL reads back as "from genesis, no end",
+	// which is what every freeze written before the window existed meant, so an upgrade
+	// neither migrates data nor silently unfreezes anything.
+	if _, err := db.Exec(`
+		DO $$
+		BEGIN
+			IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'outputs'::regclass AND attname = 'freezefrom' AND NOT attisdropped) THEN
+				ALTER TABLE outputs ADD COLUMN freezeFrom BIGINT;
+			END IF;
+
+			IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'outputs'::regclass AND attname = 'freezeuntil' AND NOT attisdropped) THEN
+				ALTER TABLE outputs ADD COLUMN freezeUntil BIGINT;
+			END IF;
+		END $$;
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not add freeze window columns to outputs table - [%+v]", err)
 	}
 
 	// Ensure block_ids FK has ON DELETE CASCADE — only drop+recreate if it exists without CASCADE
@@ -5087,6 +5167,8 @@ func createSqliteSchema(db *usql.DB) error {
         ,spending_data            BLOB
         ,frozen                   BOOLEAN DEFAULT FALSE
         ,spendableIn              INT
+        ,freezeFrom               BIGINT
+        ,freezeUntil              BIGINT
         ,PRIMARY KEY (transaction_id, idx)
 	  );
 	`); err != nil {
@@ -5313,6 +5395,42 @@ func createSqliteSchema(db *usql.DB) error {
 		`); err != nil {
 			_ = db.Close()
 			return errors.NewStorageError("could not add preserve_until column to transactions table - [%+v]", err)
+		}
+	}
+
+	// Add the alert system's enforceAtHeight window to outputs if it doesn't exist
+	// (issue #1422). Nullable with no default: NULL reads back as "from genesis, no end",
+	// which is what every freeze written before the window existed meant, so an upgrade
+	// neither migrates data nor silently unfreezes anything.
+	for _, freezeColumn := range []string{"freezeFrom", "freezeUntil"} {
+		rows, err = db.Query(`
+			SELECT COUNT(*)
+			FROM pragma_table_info('outputs')
+			WHERE name = ?
+		`, freezeColumn)
+		if err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not check outputs table for %s column - [%+v]", freezeColumn, err)
+		}
+
+		var freezeColumnCount int
+
+		if rows.Next() {
+			if err := rows.Scan(&freezeColumnCount); err != nil {
+				rows.Close()
+				_ = db.Close()
+
+				return errors.NewStorageError("could not scan %s column count - [%+v]", freezeColumn, err)
+			}
+		}
+
+		rows.Close()
+
+		if freezeColumnCount == 0 {
+			if _, err := db.Exec(`ALTER TABLE outputs ADD COLUMN ` + freezeColumn + ` BIGINT;`); err != nil {
+				_ = db.Close()
+				return errors.NewStorageError("could not add %s column to outputs table - [%+v]", freezeColumn, err)
+			}
 		}
 	}
 

@@ -1452,6 +1452,10 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 					validator.WithAddTXToBlockAssembly(false),
 					validator.WithSkipPolicyChecks(true),
 					validator.WithInBlock(true),
+					// These spends happen because a checkpoint-proven block contains the
+					// transaction, so only the height-anchored consensus tier of an
+					// alert-system freeze may reject them (issue #1422).
+					validator.WithIgnorePolicyFreeze(true),
 					validator.WithSkipTxMetaPublishing(true),
 					// PreValidateTransactions is only reached via the quickValidationMode
 					// path (see prepareSubtrees → ValidateTransactionsLegacyMode), which
@@ -1609,7 +1613,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 			for txIdx := range blockTxsPerLevel[i] {
 				timeStart = time.Now()
 
-				if _, validateErr := sm.validationClient.Validate(ctx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true), validator.WithInBlock(true), validator.WithCandidateBlockTime(candidateBlockTime), validator.WithCandidateParentMedianTime(candidateParentMedianTime)); validateErr != nil {
+				if _, validateErr := sm.validationClient.Validate(ctx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true), validator.WithInBlock(true), validator.WithIgnorePolicyFreeze(true), validator.WithCandidateBlockTime(candidateBlockTime), validator.WithCandidateParentMedianTime(candidateParentMedianTime)); validateErr != nil {
 					classifyAndCountPrewarmError(sm.logger, validateErr)
 				}
 
@@ -1632,7 +1636,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 					}()
 
 					// send to validation, but only if the parent is not in the same block
-					if _, validateErr := sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true), validator.WithInBlock(true), validator.WithCandidateBlockTime(candidateBlockTime), validator.WithCandidateParentMedianTime(candidateParentMedianTime)); validateErr != nil {
+					if _, validateErr := sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], blockHeightUint32, validator.WithSkipPolicyChecks(true), validator.WithInBlock(true), validator.WithIgnorePolicyFreeze(true), validator.WithCandidateBlockTime(candidateBlockTime), validator.WithCandidateParentMedianTime(candidateParentMedianTime)); validateErr != nil {
 						classifyAndCountPrewarmError(sm.logger, validateErr)
 					}
 

@@ -49,15 +49,20 @@ import (
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 )
 
-// FreezeUTXOs marks UTXOs as frozen, preventing them from being spent.
-// Returns an error if any UTXO is already spent or frozen.
+// FreezeUTXOs marks UTXOs as frozen, preventing them from being spent, and records each
+// Spend's enforceAtHeight window (FreezeFrom/FreezeUntil) so the freeze is enforced at the
+// same chain height on every node rather than from the moment the alert arrived here.
+//
+// Returns an error if any UTXO is already spent, or is already frozen with the same
+// window. A repeat freeze that asks for a different window updates it: an authority can
+// extend, shorten or shift the enforcement window of a freeze it already issued.
 func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tSettings *settings.Settings) error {
 	txHashIDMap := make(map[string]int)
 
 	// check whether the UTXOs are already spent or frozen
 	for _, spend := range spends {
 		q := `
-            SELECT t.id, o.frozen, o.spending_data
+            SELECT t.id, o.frozen, o.spending_data, o.freezeFrom, o.freezeUntil
             FROM outputs AS o, transactions AS t
             WHERE t.hash = $1
               AND o.transaction_id = t.id AND o.idx = $2
@@ -67,9 +72,11 @@ func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tSet
 			id           int
 			spendingData []byte
 			frozen       bool
+			freezeFrom   *uint32
+			freezeUntil  *uint32
 		)
 
-		if err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&id, &frozen, &spendingData); err != nil {
+		if err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&id, &frozen, &spendingData, &freezeFrom, &freezeUntil); err != nil {
 			return err
 		}
 
@@ -82,7 +89,7 @@ func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tSet
 			return errors.NewUtxoSpentError(*spendingData.TxID, spend.Vout, *spend.UTXOHash, spendingData)
 		}
 
-		if frozen {
+		if frozen && nullableHeight(freezeFrom) == spend.FreezeFrom && nullableHeight(freezeUntil) == spend.FreezeUntil {
 			return errors.NewUtxoFrozenError("transaction %s:%d already frozen", spend.TxID, spend.Vout)
 		}
 
@@ -93,8 +100,8 @@ func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tSet
 	for _, spend := range spends {
 		id := txHashIDMap[spend.TxID.String()]
 
-		q := `UPDATE outputs SET frozen = true WHERE transaction_id = $1 AND idx = $2 AND spending_data IS NULL`
-		if _, err := s.db.ExecContext(ctx, q, id, spend.Vout); err != nil {
+		q := `UPDATE outputs SET frozen = true, freezeFrom = $3, freezeUntil = $4 WHERE transaction_id = $1 AND idx = $2 AND spending_data IS NULL`
+		if _, err := s.db.ExecContext(ctx, q, id, spend.Vout, nullableHeightArg(spend.FreezeFrom), nullableHeightArg(spend.FreezeUntil)); err != nil {
 			return err
 		}
 	}
@@ -102,8 +109,30 @@ func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tSet
 	return nil
 }
 
-// UnFreezeUTXOs removes the frozen status from UTXOs.
-// Returns an error if any UTXO is not frozen.
+// nullableHeight normalises a NULL freeze bound to 0. NULL and 0 both mean "no bound" —
+// "from genesis" for the lower bound, "no end" for the upper — so a freeze written before
+// the window columns existed compares equal to an unqualified freeze.
+func nullableHeight(h *uint32) uint32 {
+	if h == nil {
+		return 0
+	}
+
+	return *h
+}
+
+// nullableHeightArg is the inverse: a 0 bound is stored as NULL rather than 0, so an
+// unqualified freeze leaves the columns as they would have been before this change.
+func nullableHeightArg(h uint32) interface{} {
+	if h == 0 {
+		return nil
+	}
+
+	return h
+}
+
+// UnFreezeUTXOs removes the frozen status from UTXOs and clears their enforceAtHeight
+// window, so an unfrozen output carries no residual height gate for a later re-freeze
+// to inherit. Returns an error if any UTXO is not frozen.
 func (s *Store) UnFreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tSettings *settings.Settings) error {
 	txHashIDMap := make(map[string]int)
 
@@ -135,7 +164,7 @@ func (s *Store) UnFreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tS
 	for _, spend := range spends {
 		id := txHashIDMap[spend.TxID.String()]
 
-		q := `UPDATE outputs SET frozen = false WHERE transaction_id = $1 AND idx = $2 AND spending_data IS NULL AND frozen = true`
+		q := `UPDATE outputs SET frozen = false, freezeFrom = NULL, freezeUntil = NULL WHERE transaction_id = $1 AND idx = $2 AND spending_data IS NULL AND frozen = true`
 		if _, err := s.db.ExecContext(ctx, q, id, spend.Vout); err != nil {
 			return err
 		}
@@ -179,7 +208,7 @@ func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo
 	// re-assign the UTXO to the new UTXO
 	q = `
         UPDATE outputs
-        SET utxo_hash = $1, frozen = false, spendableIn = $2
+        SET utxo_hash = $1, frozen = false, freezeFrom = NULL, freezeUntil = NULL, spendableIn = $2
         WHERE transaction_id = $3
           AND idx = $4
           AND spending_data IS NULL

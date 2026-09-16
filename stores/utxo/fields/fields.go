@@ -46,6 +46,12 @@ const (
 	Creating FieldName = "creating"
 	// UtxoSpendableIn indicates the number of blocks after which the UTXO becomes spendable
 	UtxoSpendableIn FieldName = "utxoSpendableIn"
+	// UtxoFreezeFrom is the first block height at which the alert system's freeze is
+	// enforced for an output (0 = from genesis). Paired with UtxoFreezeUntil.
+	UtxoFreezeFrom FieldName = "utxoFreezeFrom"
+	// UtxoFreezeUntil is the first block height at which the alert system's freeze is no
+	// longer enforced for an output, i.e. the window is half-open (0 = no end).
+	UtxoFreezeUntil FieldName = "utxoFreezeUntil"
 	// SpendingHeight is the block height at which the UTXO was spent
 	SpendingHeight FieldName = "spendingHeight"
 	// Utxos represents the UTXOs associated with a transaction

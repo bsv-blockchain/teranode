@@ -10,6 +10,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -85,7 +86,9 @@ func TestCheckBlockSubtrees_RejectsZeroNodeLocalRead(t *testing.T) {
 
 	_, err := server.CheckBlockSubtrees(context.Background(), request)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "subtree has zero nodes",
+	// Assert on what a real caller sees: CheckBlockSubtrees returns through WrapGRPC,
+	// whose rendered string is the outermost message only, and the client unwraps (#1422).
+	require.Contains(t, errors.UnwrapGRPC(err).Error(), "subtree has zero nodes",
 		"a zero-node subtree read locally must be rejected in CheckBlockSubtrees, not passed to block.Valid")
 }
 
@@ -123,6 +126,8 @@ func TestCheckBlockSubtrees_RejectsZeroNodeFetch(t *testing.T) {
 
 	_, err := server.CheckBlockSubtrees(context.Background(), request)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "subtree has zero nodes",
+	// Assert on what a real caller sees: CheckBlockSubtrees returns through WrapGRPC,
+	// whose rendered string is the outermost message only, and the client unwraps (#1422).
+	require.Contains(t, errors.UnwrapGRPC(err).Error(), "subtree has zero nodes",
 		"a zero-node subtree fetch must be rejected at the explicit leaf-count check")
 }

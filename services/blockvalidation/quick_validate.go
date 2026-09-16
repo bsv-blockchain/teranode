@@ -1699,8 +1699,13 @@ func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.
 		for _, tx := range pending {
 			tx := tx
 			spendG.Go(func() error {
+				// WithIgnorePolicyFreeze: this spend happens because a checkpointed block
+				// contains the transaction, so only the height-anchored consensus tier of
+				// an alert-system freeze may reject it — the policy tier lands whenever the
+				// alert reached this node and must never decide a block's validity (#1422).
 				if _, _, err := u.utxoStore.SpendAndCreate(spendCtx, tx, block.Height, utxo.WithSpendOnly(),
-					utxo.WithIgnoreLocked(true), utxo.WithSkipUTXOHashCheck(outpointOnly)); err != nil {
+					utxo.WithIgnoreLocked(true), utxo.WithIgnorePolicyFreeze(true),
+					utxo.WithSkipUTXOHashCheck(outpointOnly)); err != nil {
 					if errors.IsRetryableError(err) {
 						mu.Lock()
 						retryable = append(retryable, tx)
@@ -1709,7 +1714,18 @@ func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.
 						return nil
 					}
 					mu.Lock()
-					hardFail = errors.NewProcessingError("[spendBatchWithRetry][%s] failed to spend tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
+					// A frozen spend here is a height-anchored consensus freeze: the spend
+					// above carries IgnorePolicyFreeze, so the locally-timed policy tier
+					// cannot produce this error and what remains is a verdict every node
+					// derives identically from the chain. Report it as ErrBlockInvalid so
+					// ValidateBlock marks the block invalid once instead of taking its
+					// infrastructure-error branch and re-fetching the block forever — the
+					// silent-stall shape issue #1422 removes.
+					if errors.Is(err, errors.ErrFrozen) {
+						hardFail = errors.NewBlockInvalidError("[spendBatchWithRetry][%s] tx %s spends a frozen utxo at block height %d", block.Hash().String(), tx.TxIDChainHash().String(), block.Height, err)
+					} else {
+						hardFail = errors.NewProcessingError("[spendBatchWithRetry][%s] failed to spend tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
+					}
 					mu.Unlock()
 				}
 				return nil

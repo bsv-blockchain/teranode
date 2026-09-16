@@ -1631,6 +1631,13 @@ func TestSmokeTests(t *testing.T) {
 		tests.Freeze(t, store)
 	})
 
+	t.Run("aerospike_freeze_enforce_at_height", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.FreezeEnforceAtHeight(t, store)
+	})
+
 	t.Run("aerospike_reassign", func(t *testing.T) {
 		err := store.Delete(ctx, tests.TXHash)
 		require.NoError(t, err)

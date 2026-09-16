@@ -23,6 +23,10 @@ local BIN_LOCKED = "locked"
 local BIN_CREATING = "creating"
 local BIN_UTXOS = "utxos"
 local BIN_UTXO_SPENDABLE_IN = "utxoSpendableIn"
+-- Alert-system freeze window, half-open [from, until), stored per output offset.
+-- from == nil/0 means "from genesis"; until == nil/0 means "no end". See issue #1422.
+local BIN_UTXO_FREEZE_FROM = "utxoFreezeFrom"
+local BIN_UTXO_FREEZE_UNTIL = "utxoFreezeUntil"
 local BIN_LAST_SPENT_STATE = "lastSpentState"  -- Tracks last signaled state: "ALLSPENT" or "NOTALLSPENT"
 local BIN_DELETED_CHILDREN = "deletedChildren"  -- Tracks which child transactions have already been deleted
 
@@ -53,6 +57,7 @@ local MSG_CONFLICTING = "TX is conflicting"
 local MSG_LOCKED = "TX is locked and cannot be spent"
 local MSG_CREATING = "TX is being created and cannot be spent yet"
 local MSG_FROZEN = "UTXO is frozen"
+local MSG_FROZEN_AT_HEIGHT = "UTXO is frozen at block height "
 local MSG_ALREADY_FROZEN = "UTXO is already frozen"
 local MSG_FROZEN_UNTIL = "UTXO is not spendable until block "
 local MSG_COINBASE_IMMATURE = "Coinbase UTXO can only be spent when it matures"
@@ -245,6 +250,84 @@ local function isFrozen(spendingData)
     return true
 end
 
+-- Function to check whether the alert system's freeze window for an output is being
+-- enforced at a given block height. The window is half-open: [from, until). A nil or 0
+-- `from` means "from genesis", a nil or 0 `until` means "no end", so a freeze written
+-- before the window bins existed reads back as (0, 0) and is enforced at every height.
+--
+-- freezeFromMap/freezeUntilMap are read once by the caller and passed in, so a batch of
+-- spends against the same record does not re-read the bins per spend.
+local function freezeWindowActiveAt(freezeFromMap, freezeUntilMap, offset, currentBlockHeight)
+    local from = 0
+    if freezeFromMap ~= nil and freezeFromMap[offset] ~= nil then
+        from = freezeFromMap[offset]
+    end
+
+    if currentBlockHeight < from then
+        return false
+    end
+
+    local untilHeight = 0
+    if freezeUntilMap ~= nil and freezeUntilMap[offset] ~= nil then
+        untilHeight = freezeUntilMap[offset]
+    end
+
+    return untilHeight == 0 or currentBlockHeight < untilHeight
+end
+
+-- Function to read the stored freeze window for one output offset, normalising an
+-- absent bin or entry to 0 so callers never have to distinguish "no window" from
+-- "window from genesis with no end" — they mean the same thing.
+local function getFreezeWindow(rec, offset)
+    local from = 0
+    local freezeFromMap = rec[BIN_UTXO_FREEZE_FROM]
+    if freezeFromMap ~= nil and freezeFromMap[offset] ~= nil then
+        from = freezeFromMap[offset]
+    end
+
+    local untilHeight = 0
+    local freezeUntilMap = rec[BIN_UTXO_FREEZE_UNTIL]
+    if freezeUntilMap ~= nil and freezeUntilMap[offset] ~= nil then
+        untilHeight = freezeUntilMap[offset]
+    end
+
+    return from, untilHeight
+end
+
+-- Function to write the freeze window for one output offset. A 0 bound is written as an
+-- explicit 0 rather than by deleting the entry, and a 0 bound on a record that has no
+-- window bin at all creates nothing — so the common unqualified freeze leaves no bins
+-- behind and the expression-based spend path's bin-existence guard stays as narrow as
+-- possible. Readers normalise 0 and absent to the same thing, so the two encodings of
+-- "no bound" are interchangeable. The caller is responsible for aerospike:update(rec).
+local function setFreezeWindow(rec, offset, freezeFrom, freezeUntil)
+    local bounds = { { BIN_UTXO_FREEZE_FROM, freezeFrom }, { BIN_UTXO_FREEZE_UNTIL, freezeUntil } }
+
+    for i = 1, #bounds do
+        local binName = bounds[i][1]
+        local value = bounds[i][2] or 0
+        local boundMap = rec[binName]
+
+        if value > 0 then
+            if boundMap == nil then
+                boundMap = map()
+            end
+
+            boundMap[offset] = value
+            rec[binName] = boundMap
+        elseif boundMap ~= nil then
+            boundMap[offset] = 0
+            rec[binName] = boundMap
+        end
+    end
+end
+
+-- Function to drop the freeze window for one output offset, so an unfrozen output carries
+-- no residual height gate. The caller is responsible for aerospike:update(rec).
+local function clearFreezeWindow(rec, offset)
+    setFreezeWindow(rec, offset, 0, 0)
+end
+
 -- The first argument is the record to update. This is passed to the UDF by aerospike based on the Key that the UDF is getting executed on
 -- offset number - the offset in the utxos list (vout % utxoBatchSize)
 -- utxoHash []byte - 32 byte little-endian hash of the UTXO
@@ -344,6 +427,8 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
     local errors = map()
     local deletedChildren = rec[BIN_DELETED_CHILDREN]
     local spendableIn = rec[BIN_UTXO_SPENDABLE_IN]
+    local freezeFromMap = rec[BIN_UTXO_FREEZE_FROM]
+    local freezeUntilMap = rec[BIN_UTXO_FREEZE_UNTIL]
     local spendCount = #spends
     local spentUtxos = rec[BIN_SPENT_UTXOS] or 0
 
@@ -404,14 +489,36 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
 
                 goto continue
             elseif isFrozen(existingSpendingData) then
-                local error = map()
+                -- The frozen sentinel carries two controls at once, mirroring SV Node
+                -- (issue #1422). The height-anchored consensus freeze rejects this spend
+                -- for any block inside the alert's enforceAtHeight window, and every node
+                -- derives that window identically from the chain. The policy freeze is
+                -- local-only — it keeps the coin out of our mempool and our block
+                -- templates — so a caller validating a block passes ignorePolicyFreeze and
+                -- sees only the consensus tier. Without that split the verdict on a block
+                -- would depend on when the alert happened to reach each node.
+                local consensusFrozen = freezeWindowActiveAt(freezeFromMap, freezeUntilMap, offset, currentBlockHeight)
 
-                error[FIELD_ERROR_CODE] = ERROR_CODE_FROZEN
-                error[FIELD_MESSAGE] = MSG_FROZEN
+                if consensusFrozen or not spend['ignorePolicyFreeze'] then
+                    local error = map()
 
-                errors[idx] = error
+                    error[FIELD_ERROR_CODE] = ERROR_CODE_FROZEN
 
-                goto continue
+                    if consensusFrozen then
+                        error[FIELD_MESSAGE] = MSG_FROZEN_AT_HEIGHT .. currentBlockHeight
+                    else
+                        error[FIELD_MESSAGE] = MSG_FROZEN
+                    end
+
+                    errors[idx] = error
+
+                    goto continue
+                end
+
+                -- Policy-only freeze bypassed by a block-validation spend: fall through and
+                -- record the spend, overwriting the sentinel, exactly as an unfrozen output
+                -- would. The consensus window, if any, stays on the record so a later block
+                -- inside it is still rejected.
             else
                 local error = map()
 
@@ -705,12 +812,14 @@ end
 -- The first argument is the record to update. This is passed to the UDF by aerospike based on the Key that the UDF is getting executed on
 -- offset number - the offset in the utxos list (vout % utxoBatchSize)
 -- utxoHash []byte - 32 byte little-endian hash of the UTXO
+-- freezeFrom number - first block height the freeze is enforced at (0 = from genesis)
+-- freezeUntil number - first block height the freeze is no longer enforced at (0 = no end)
 --   __
 --  / _|_ __ ___  ___ _______
 -- | |_| '__/ _ \/ _ \_  / _ \
 -- |  _| | |  __/  __// /  __/
 -- |_| |_|  \___|\___/___\___|
-function freeze(rec, offset, utxoHash)
+function freeze(rec, offset, utxoHash, freezeFrom, freezeUntil)
     local response = map()
 
     if not aerospike:exists(rec) then
@@ -743,9 +852,27 @@ function freeze(rec, offset, utxoHash)
     -- If the utxo has been spent, check if it's already frozen
     if existingSpendingData then
         if isFrozen(existingSpendingData) then
-            response[FIELD_STATUS] = STATUS_ERROR
-            response[FIELD_ERROR_CODE] = ERROR_CODE_ALREADY_FROZEN
-            response[FIELD_MESSAGE] = MSG_ALREADY_FROZEN
+            -- An authority can re-issue a freeze for an already-frozen output to extend,
+            -- shorten or shift its enforceAtHeight window, so a repeat freeze that changes
+            -- the window is an update rather than a no-op. Only a repeat that asks for the
+            -- window the record already carries is reported as ALREADY_FROZEN, which is
+            -- what the alert system and the admin RPC have always seen for an unqualified
+            -- re-freeze.
+            local storedFrom, storedUntil = getFreezeWindow(rec, offset)
+
+            if storedFrom == (freezeFrom or 0) and storedUntil == (freezeUntil or 0) then
+                response[FIELD_STATUS] = STATUS_ERROR
+                response[FIELD_ERROR_CODE] = ERROR_CODE_ALREADY_FROZEN
+                response[FIELD_MESSAGE] = MSG_ALREADY_FROZEN
+
+                return response
+            end
+
+            setFreezeWindow(rec, offset, freezeFrom, freezeUntil)
+
+            aerospike:update(rec)
+
+            response[FIELD_STATUS] = STATUS_OK
 
             return response
         else
@@ -776,6 +903,8 @@ function freeze(rec, offset, utxoHash)
     -- Update record
     utxos[offset + 1] = newUtxo
     rec[BIN_UTXOS] = utxos
+
+    setFreezeWindow(rec, offset, freezeFrom, freezeUntil)
 
     aerospike:update(rec)
 
@@ -849,6 +978,10 @@ function unfreeze(rec, offset, utxoHash)
     utxos[offset + 1] = newUtxo -- NB - lua arrays are 1-based!!!!
 
     rec[BIN_UTXOS] = utxos
+
+    -- Drop the enforceAtHeight window with the sentinel, so an unfrozen output carries no
+    -- residual height gate that a later re-freeze would silently inherit.
+    clearFreezeWindow(rec, offset)
 
     aerospike:update(rec)
 
@@ -946,6 +1079,11 @@ function reassign(rec, offset, utxoHash, newUtxoHash, blockHeight, spendableAfte
     }
 
     spendableInMap[offset] = blockHeight + spendableAfter
+
+    -- Reassignment clears the frozen sentinel, so the enforceAtHeight window that went
+    -- with it has to go too — otherwise a later re-freeze of this output would silently
+    -- inherit the old authority's heights. Mirrors UnFreezeUTXOs and the SQL store.
+    clearFreezeWindow(rec, offset)
 
     -- Ensure record is not DAH'd when all UTXOs are spent
     rec[BIN_RECORD_UTXOS] = rec[BIN_RECORD_UTXOS] + 1

@@ -147,6 +147,7 @@ type ValidateTransactionRequest struct {
 	UnconfirmedParentsAtCandidateHeight *bool   `protobuf:"varint,12,opt,name=unconfirmed_parents_at_candidate_height,json=unconfirmedParentsAtCandidateHeight,proto3,oneof" json:"unconfirmed_parents_at_candidate_height,omitempty"` // Resolve unconfirmed-parent heights to the candidate block height instead of failing closed (consensus-mode sentinel → MEMPOOL_HEIGHT → bad-txns-unconfirmed-input-in-block). CONSENSUS SAFETY: fail-open — the height feeds per-input script-era flag selection in BDK, and the floater backstop is block validation's parent-membership check. Compatible with add_tx_to_block_assembly=true (a floater child blessed at the candidate height equals what policy-mode admission would put in assembly anyway). Set by the legacy block-sync path (subtreevalidation checkSubtreeFromBlock, BaseUrl "legacy") and by the block-validation path (CheckBlockSubtrees, which runs after ValidateBlock's PoW checks); MUST NOT be set on peer-facing or mempool-admission paths. DEPLOYMENT SKEW (request-only field, no data migration in any direction): new sender → old validator ignores the unknown field and keeps the old fail-closed behaviour, so it stamps the unconfirmedParentHeight sentinel for genuine in-block parents and BDK rejects them with bad-txns-unconfirmed-input-in-block — this now degrades ORDINARY block validation (any block with intra-block parent chains, via the CheckBlockSubtrees setter), not just legacy catchup, for the whole skew window; old sender → new validator reconstructs absent as false (old behaviour); mixed validator fleets behind load balancing make identical legacy requests pass or wedge depending on which instance serves them. Upgrade subtreevalidation and validator together; downgrade reintroduces the wedge for future legacy catchup but corrupts nothing.
 	SkipScriptValidation                *bool   `protobuf:"varint,13,opt,name=skip_script_validation,json=skipScriptValidation,proto3,oneof" json:"skip_script_validation,omitempty"`                                                  // Skip BDK script/signature validation for transactions below the checkpoint height. Request-only. DEPLOYMENT SKEW: new sender → old validator ignores this field and performs full script validation (slower, never corrupts state); old sender → new validator reconstructs absent as false (old behaviour, full validation).
 	OutpointOnlySpend                   *bool   `protobuf:"varint,14,opt,name=outpoint_only_spend,json=outpointOnlySpend,proto3,oneof" json:"outpoint_only_spend,omitempty"`                                                           // Below-checkpoint outpoint-only spend fast path: skips parent-tx reads, fee computation, and UTXO-hash checksum. MUST travel with skip_script_validation=true; the validator enforces this invariant and returns a processing error if outpoint_only_spend is true without skip_script_validation. Request-only. DEPLOYMENT SKEW: new sender → old validator ignores this field and performs full extend+spend (slower, never corrupts state); old sender → new validator reconstructs absent as false (old behaviour, full spend).
+	IgnorePolicyFreeze                  *bool   `protobuf:"varint,15,opt,name=ignore_policy_freeze,json=ignorePolicyFreeze,proto3,oneof" json:"ignore_policy_freeze,omitempty"`                                                        // Drop the policy tier of the alert system's freeze, leaving only the height-anchored consensus tier (the alert's enforceAtHeight window). MUST be set on every spend performed while validating a block, and on no other spend: the policy freeze takes effect the moment an alert is processed and so lands at a different wall-clock moment on every node, which is exactly what must never decide whether a block is valid (issue #1422). Set alongside in_block by subtreevalidation and legacy block sync. Explicit by design — do NOT infer from in_block or skip_policy_checks. Request-only. DEPLOYMENT SKEW: new sender → old validator ignores this field, but an old validator has no freeze window to enforce either, so it applies the pre-#1422 immediate freeze and can reject a peer's block that a new node accepts — upgrade subtreevalidation and validator together, and issue no freeze during the skew window; old sender → new validator reconstructs absent as false, i.e. the policy freeze is enforced during block validation, which is the pre-#1422 behaviour and never corrupts state.
 	unknownFields                       protoimpl.UnknownFields
 	sizeCache                           protoimpl.SizeCache
 }
@@ -268,6 +269,13 @@ func (x *ValidateTransactionRequest) GetSkipScriptValidation() bool {
 func (x *ValidateTransactionRequest) GetOutpointOnlySpend() bool {
 	if x != nil && x.OutpointOnlySpend != nil {
 		return *x.OutpointOnlySpend
+	}
+	return false
+}
+
+func (x *ValidateTransactionRequest) GetIgnorePolicyFreeze() bool {
+	if x != nil && x.IgnorePolicyFreeze != nil {
+		return *x.IgnorePolicyFreeze
 	}
 	return false
 }
@@ -551,7 +559,7 @@ const file_services_validator_validator_api_validator_api_proto_rawDesc = "" +
 	"\x0eHealthResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x18\n" +
 	"\adetails\x18\x02 \x01(\tR\adetails\x128\n" +
-	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\x9e\b\n" +
+	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xee\b\n" +
 	"\x1aValidateTransactionRequest\x12)\n" +
 	"\x10transaction_data\x18\x01 \x01(\fR\x0ftransactionData\x12!\n" +
 	"\fblock_height\x18\x02 \x01(\rR\vblockHeight\x121\n" +
@@ -566,7 +574,8 @@ const file_services_validator_validator_api_validator_api_proto_rawDesc = "" +
 	"'unconfirmed_parents_at_candidate_height\x18\f \x01(\bH\bR#unconfirmedParentsAtCandidateHeight\x88\x01\x01\x129\n" +
 	"\x16skip_script_validation\x18\r \x01(\bH\tR\x14skipScriptValidation\x88\x01\x01\x123\n" +
 	"\x13outpoint_only_spend\x18\x0e \x01(\bH\n" +
-	"R\x11outpointOnlySpend\x88\x01\x01B\x15\n" +
+	"R\x11outpointOnlySpend\x88\x01\x01\x125\n" +
+	"\x14ignore_policy_freeze\x18\x0f \x01(\bH\vR\x12ignorePolicyFreeze\x88\x01\x01B\x15\n" +
 	"\x13_skip_utxo_creationB\x1b\n" +
 	"\x19_add_tx_to_block_assemblyB\x15\n" +
 	"\x13_skip_policy_checksB\x15\n" +
@@ -577,7 +586,8 @@ const file_services_validator_validator_api_validator_api_proto_rawDesc = "" +
 	"\t_in_blockB*\n" +
 	"(_unconfirmed_parents_at_candidate_heightB\x19\n" +
 	"\x17_skip_script_validationB\x16\n" +
-	"\x14_outpoint_only_spendJ\x04\b\n" +
+	"\x14_outpoint_only_spendB\x17\n" +
+	"\x15_ignore_policy_freezeJ\x04\b\n" +
 	"\x10\vR\x0fparent_metadata\"{\n" +
 	"\x1bValidateTransactionResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12\x12\n" +
