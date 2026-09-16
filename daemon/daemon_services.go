@@ -158,8 +158,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 // startProfilerAndMetrics initializes and starts the profiler if the address is set in the app settings.
 func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settings) {
 	profilerAddr := appSettings.ProfilerAddr
-	if profilerAddr != "" && !pprofRegistered.Load() {
-		pprofRegistered.Store(true)
+	if profilerAddr != "" && pprofRegistered.CompareAndSwap(false, true) {
 
 		// Enable block / mutex profiling when configured. Both are disabled by
 		// default (rate/fraction == 0) and incur negligible overhead at the
@@ -175,10 +174,17 @@ func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settin
 			logger.Infof("runtime.SetMutexProfileFraction(%d) enabled — /debug/pprof/mutex now collecting", frac)
 		}
 
+		// Claim the Prometheus endpoint before the goroutine so the mux builder
+		// stays free of package-level state.
+		prometheusEndpoint := appSettings.PrometheusEndpoint
+		if prometheusEndpoint != "" && !metricsRegistered.CompareAndSwap(false, true) {
+			prometheusEndpoint = ""
+		}
+
 		go func() {
 			server := &http.Server{
 				Addr:         profilerAddr,
-				Handler:      newProfilerMux(logger, appSettings),
+				Handler:      newProfilerMux(logger, appSettings, prometheusEndpoint),
 				ReadTimeout:  60 * time.Second,
 				WriteTimeout: 60 * time.Second,
 				IdleTimeout:  120 * time.Second,
@@ -193,8 +199,7 @@ func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settin
 
 		// start prometheus metrics endpoint if enabled
 		prometheusEndpoint := appSettings.PrometheusEndpoint
-		if prometheusEndpoint != "" && !metricsRegistered.Load() {
-			metricsRegistered.Store(true)
+		if prometheusEndpoint != "" && metricsRegistered.CompareAndSwap(false, true) {
 			logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
 			http.Handle(prometheusEndpoint, promhttp.Handler())
 		}
@@ -202,19 +207,30 @@ func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settin
 }
 
 // newProfilerMux builds the handler set served on the profiler listener: pprof,
-// fgprof, the gocore stats pages, the Prometheus endpoint and, when the
-// listener cannot be reached from the network, the memory analyzer.
+// fgprof, the gocore stats pages, the Prometheus endpoint (when
+// prometheusEndpoint is non-empty; the caller decides that so this function
+// touches no package-level state) and, when the listener cannot be reached
+// from the network, the memory analyzer.
 //
-// The memory analyzer (/debug/memory) prints the exact virtual-address range
-// of every large mapping in the process, taken from /proc/self/smaps. That
-// output defeats ASLR, which is the prerequisite for turning any later
-// memory-corruption bug into a reliable exploit, so it is only registered when
-// profilerAddr is loopback-bound. A wildcard or interface-bound profiler
-// (the default outside the dev context, so Prometheus can scrape it) never
-// serves the route: it answers 404 there. To use the analyzer against a
-// deployed node, bind profilerAddr to loopback and port-forward, or run
-// cmd/memanalyzer inside the container.
-func newProfilerMux(logger ulogger.Logger, appSettings *settings.Settings) *http.ServeMux {
+// The memory analyzer (/debug/memory) prints the exact virtual-address range,
+// permissions and RSS of every large mapping in the process, taken from
+// /proc/self/smaps, as plain text. That is a complete, directly readable
+// ASLR-defeating map, so it is only registered when profilerAddr is
+// loopback-bound. A wildcard or interface-bound profiler (the default outside
+// the dev context, so Prometheus can scrape /metrics) answers 404 on the
+// route. The gate is on the bind address, not the request's remote address,
+// because the remote read path this closes (a peer-triggered fetch made by
+// this process or a sibling in the same pod) arrives from loopback.
+//
+// The pprof routes stay on the listener regardless of bind. Note that Go's
+// pprof proto profiles embed the /proc/self/maps mapping table too, so this
+// gate narrows the disclosure rather than eliminating it; moving pprof off
+// network-reachable listeners is tracked separately.
+//
+// To use the analyzer against a deployed node, run cmd/memanalyzer inside the
+// container, or bind profilerAddr to loopback and port-forward (which also
+// moves /metrics and pprof to loopback for that process).
+func newProfilerMux(logger ulogger.Logger, appSettings *settings.Settings, prometheusEndpoint string) *http.ServeMux {
 	profilerAddr := appSettings.ProfilerAddr
 
 	logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)
@@ -243,9 +259,7 @@ func newProfilerMux(logger ulogger.Logger, appSettings *settings.Settings) *http
 		gocore.RegisterStatsHandlers(mux)
 	}
 
-	prometheusEndpoint := appSettings.PrometheusEndpoint
-	if prometheusEndpoint != "" && !metricsRegistered.Load() {
-		metricsRegistered.Store(true)
+	if prometheusEndpoint != "" {
 		logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
 		mux.Handle(prometheusEndpoint, promhttp.Handler())
 	}

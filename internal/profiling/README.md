@@ -63,6 +63,8 @@ mapping (binary, shared libraries, heap, stacks, named mmaps). That defeats ASLR
 the process, so never register the handler on a listener reachable from the network.
 The Teranode daemon only registers it when `profilerAddr` is loopback-bound
 (`localhost`, `127.0.0.1`, `::1`); on any other bind `/debug/memory` answers 404.
+(Go's pprof proto profiles on the same listener also embed the `/proc/self/maps`
+table, so treat the whole profiler listener as sensitive.)
 
 Then access it:
 

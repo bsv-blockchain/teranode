@@ -139,7 +139,7 @@ go build -o memanalyzer ./cmd/memanalyzer
 
 ### For Production
 
-1. Add memory breakdown to monitoring dashboards
+1. Export the breakdown totals via `profiling.GetCompleteMemoryProfile()` in-process; do not poll `/debug/memory` (it is not served on a network-reachable `profilerAddr`)
 2. Set up alerts if anonymous memory grows unexpectedly
 3. Track RSS growth trends by category
 
@@ -200,7 +200,7 @@ The provided tools enable:
 - Real-time memory breakdown
 - Identification of memory growth sources
 - Debugging of RSS vs heap discrepancies
-- Production monitoring and alerting
+- Production monitoring and alerting (via in-process export, not the HTTP route)
 
 For questions about unexplained memory usage, first check:
 

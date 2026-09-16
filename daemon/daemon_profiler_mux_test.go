@@ -14,6 +14,9 @@ import (
 // memory analyzer prints exact process address mappings, so it must be absent
 // (404) from every profiler listener that is reachable from the network and
 // present only on loopback-bound listeners (the .dev default).
+//
+// Also checks that Prometheus registration follows the caller's decision and
+// is not derived from settings inside the builder.
 func TestNewProfilerMuxMemoryAnalyzerLoopbackOnly(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -32,7 +35,10 @@ func TestNewProfilerMuxMemoryAnalyzerLoopbackOnly(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mux := newProfilerMux(ulogger.TestLogger{}, &settings.Settings{ProfilerAddr: tt.addr})
+			// No Prometheus endpoint and no stats prefix: the builder is pure, so
+			// this test touches neither the metricsRegistered atomic nor gocore's
+			// global stats handlers that other daemon tests depend on.
+			mux := newProfilerMux(ulogger.TestLogger{}, &settings.Settings{ProfilerAddr: tt.addr}, "")
 
 			req := httptest.NewRequest(http.MethodGet, "/debug/memory", nil)
 
@@ -45,14 +51,12 @@ func TestNewProfilerMuxMemoryAnalyzerLoopbackOnly(t *testing.T) {
 				require.Empty(t, pattern, "memory analyzer must not be registered on a network-reachable profiler")
 			}
 
-			// End-to-end: the network-reachable listener must answer 404, not
-			// the analyzer output and not an analyzer error.
-			rec := httptest.NewRecorder()
-			mux.ServeHTTP(rec, req)
-
-			if tt.registered {
-				require.NotEqual(t, http.StatusNotFound, rec.Code)
-			} else {
+			// End-to-end on the network-reachable listener: the route must
+			// answer 404. The registered case is not served here because the
+			// real handler reads /proc/self/smaps (500 on non-Linux).
+			if !tt.registered {
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, req)
 				require.Equal(t, http.StatusNotFound, rec.Code)
 			}
 
@@ -61,4 +65,17 @@ func TestNewProfilerMuxMemoryAnalyzerLoopbackOnly(t *testing.T) {
 			require.Equal(t, "/debug/pprof/", pprofPattern)
 		})
 	}
+}
+
+// TestNewProfilerMuxPrometheusEndpointFromCaller ensures the builder mounts the
+// Prometheus handler exactly where the caller says, and nowhere when told not
+// to, even if settings carry an endpoint.
+func TestNewProfilerMuxPrometheusEndpointFromCaller(t *testing.T) {
+	appSettings := &settings.Settings{ProfilerAddr: ":9091", PrometheusEndpoint: "/metrics"}
+
+	_, pattern := newProfilerMux(ulogger.TestLogger{}, appSettings, "").Handler(httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	require.Empty(t, pattern, "builder must not register /metrics when the caller did not claim it")
+
+	_, pattern = newProfilerMux(ulogger.TestLogger{}, appSettings, "/metrics").Handler(httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	require.Equal(t, "/metrics", pattern)
 }
