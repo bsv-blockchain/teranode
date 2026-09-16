@@ -490,7 +490,7 @@ func Test_Server_processBlockFound(t *testing.T) {
 // context, which carries no deadline of its own. Before wrapping the fetchSingleBlock call in
 // an explicit context.WithTimeout, DoHTTPRequestBodyReader's own default-timeout fallback
 // (used since bitcoin-sv/teranode#4742 in place of the old io.ReadAll-based DoHTTPRequest)
-// would silently apply http_streaming_timeout (5 minutes) instead of the 30s budget every
+// would silently apply http_streaming_timeout (600 s in settings.conf) instead of the 30 s budget every
 // sibling fetchSingleBlock call site sets explicitly - a 20x wider window for a hostile or
 // slow peer. Assert the peer HTTP request actually carries a deadline no wider than that
 // budget, not just that the fetch succeeds.
@@ -531,7 +531,7 @@ func Test_Server_processBlockFound_BoundsPeerFetchDeadline(t *testing.T) {
 
 	require.True(t, sawDeadline, "peer block fetch must run under a bounded context deadline, not an unbounded one")
 	require.Greater(t, remaining, time.Duration(0))
-	require.LessOrEqual(t, remaining, peerBlockFetchTimeout+time.Second, "peer fetch deadline must not silently widen to the 5-minute streaming default")
+	require.LessOrEqual(t, remaining, peerBlockFetchTimeout+time.Second, "peer fetch deadline must not silently widen to the http_streaming_timeout fallback")
 }
 
 // Test_Server_processBlockFound_SettlesPeerSuppliedHeight pins the height settlement at the

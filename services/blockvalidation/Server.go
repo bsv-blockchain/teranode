@@ -1739,9 +1739,9 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	} else {
 		// Bound the fetch: this ctx is the block-processing worker's service-lifetime context
 		// with no deadline of its own, and fetchSingleBlock's DoHTTPRequestBodyReader would
-		// otherwise fall back to the 5-minute streaming timeout (bitcoin-sv/teranode#4742) - a
-		// 20x wider window for a hostile peer than the 30s budget every sibling fetchSingleBlock
-		// call site sets explicitly.
+		// otherwise fall back to http_streaming_timeout (600 s in settings.conf,
+		// bitcoin-sv/teranode#4742) - a 20x wider window for a hostile peer than the 30 s budget
+		// every sibling fetchSingleBlock call site sets explicitly.
 		fetchCtx, fetchCancel := context.WithTimeout(ctx, peerBlockFetchTimeout)
 		block, err = u.fetchSingleBlock(fetchCtx, hash, peerID, baseURL)
 		fetchCancel()

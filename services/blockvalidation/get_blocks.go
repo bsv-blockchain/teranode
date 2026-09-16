@@ -26,11 +26,16 @@ import (
 
 // peerBlockFetchTimeout bounds a single peer HTTP fetch of block data - whether a batch of
 // blocks or one block - so a slow or hostile peer cannot hold a fetch goroutine open
-// indefinitely. util.DoHTTPRequestBodyReader defaults to http_streaming_timeout (5 min, sized
-// for large subtree_data downloads) when the context carries no deadline of its own, which is
-// far too generous a budget for a block message; every block fetch call site sets this
-// explicitly instead of relying on that default.
+// indefinitely. util.DoHTTPRequestBodyReader falls back to http_streaming_timeout when the
+// context carries no deadline of its own (600 s as shipped in settings.conf, 300 s compiled-in
+// default, sized for large subtree_data downloads), which is far too generous a budget for a
+// block message; every block fetch call site sets this explicitly instead of relying on that
+// fallback.
 const peerBlockFetchTimeout = 30 * time.Second
+
+// overSendProbeTimeout bounds fetchBlocksBatch's diagnostic read past the last requested block.
+// It is diagnostic only, so it must never spend a meaningful share of peerBlockFetchTimeout.
+const overSendProbeTimeout = 2 * time.Second
 
 // Work item represents a block with its position for ordered delivery
 type workItem struct {
@@ -169,9 +174,9 @@ func (u *Server) batchFetchAndDistribute(ctx context.Context, blockHeaders []*mo
 			blockUpTo.Hash().String(), i, end-1, len(batchHeaders))
 
 		// Fetch entire batch in one HTTP request, from last block, since the data is returned newest-first.
-		// Bound the fetch explicitly: DoHTTPRequestBodyReader (used since bitcoin-sv/teranode#4742) falls
-		// back to the 5-minute streaming timeout when ctx carries no deadline, versus the 30s http_timeout
-		// the old io.ReadAll-based DoHTTPRequest got by the same default-timeout fallback.
+		// Bound the fetch explicitly: when ctx carries no deadline, DoHTTPRequestBodyReader (used since
+		// bitcoin-sv/teranode#4742) falls back to http_streaming_timeout (600 s in settings.conf), where the
+		// old io.ReadAll-based DoHTTPRequest fell back to http_timeout (30 s in settings.conf).
 		fetchCtx, fetchCancel := context.WithTimeout(ctx, peerBlockFetchTimeout)
 		blocks, err := u.fetchBlocksBatch(fetchCtx, batchHeaders[len(batchHeaders)-1].Hash(), uint32(len(batchHeaders)), peerID, baseURL)
 		fetchCancel()
@@ -1393,8 +1398,15 @@ func (u *Server) fetchBlocksBatch(ctx context.Context, hash *chainhash.Hash, n u
 	// only halves peak memory versus io.ReadAll, though - it does not by itself bound anything,
 	// since the subtree hash list length is an unvalidated wire varint (model/Block.go) that the
 	// parse loop honours with no ceiling. Each block message is additionally capped below via
-	// io.LimitedReader (bitcoin-sv/teranode#4742).
-	bodyReader, err := util.DoHTTPRequestBodyReader(ctx, url)
+	// io.LimitedReader (bitcoin-sv/teranode#4742); see that comment for what the cap does not
+	// cover.
+	//
+	// reqCtx exists so the over-send probe below can abort the body read on its own short
+	// budget without spending the caller's fetch deadline.
+	reqCtx, reqCancel := context.WithCancel(ctx)
+	defer reqCancel()
+
+	bodyReader, err := util.DoHTTPRequestBodyReader(reqCtx, url)
 	if err != nil {
 		return nil, errors.NewProcessingError("[catchup:fetchBlocksBatch][%s] failed to get blocks from peer", hash.String(), err)
 	}
@@ -1426,6 +1438,11 @@ func (u *Server) fetchBlocksBatch(ctx context.Context, hash *chainhash.Hash, n u
 		// even though the response itself is streamed rather than io.ReadAll'd. Use a
 		// LimitedReader (not a byte-counted DoHTTPRequestBounded-style cap on the whole
 		// response) so cap-exhaustion is distinguishable per-block from a genuine short stream.
+		//
+		// The cap bounds bytes delivered, not bytes allocated. It does not bound the coinbase
+		// read: go-bt's readArenaScript allocates a script's declared length (up to its
+		// MaxArenaAlloc, 1 GiB) before reading any of it, so that allocation happens whatever
+		// this cap is (bsv-blockchain/go-bt#187).
 		limited := &io.LimitedReader{R: countingReader, N: maxBlockMessageBytes}
 
 		block, err := model.NewBlockFromReader(limited)
@@ -1452,8 +1469,18 @@ func (u *Server) fetchBlocksBatch(ctx context.Context, hash *chainhash.Hash, n u
 	// of correct data is at least as likely to be a caching proxy or ?n= version skew as it is
 	// to be malicious (see the ErrBlockPolicyDeclined exemption in peer_metrics_helpers.go for
 	// the same reasoning about not punishing ambiguous peer behaviour).
+	//
+	// The probe reads a body the peer still controls, so it gets its own budget: a peer that
+	// sends the n blocks and then never ends the response would otherwise hold this read until
+	// the fetch deadline, and the batch would still return success.
+	probeTimer := time.AfterFunc(overSendProbeTimeout, reqCancel)
+
 	var probe [1]byte
-	if _, probeErr := io.ReadFull(countingReader, probe[:]); probeErr == nil {
+	_, probeErr := io.ReadFull(countingReader, probe[:])
+
+	probeTimer.Stop()
+
+	if probeErr == nil {
 		u.logger.Warnf("[catchup:fetchBlocksBatch][%s] peer %s streamed more than the %d blocks requested", hash.String(), peerID, n)
 		u.reportCatchupError(ctx, peerID, fmt.Sprintf("peer over-sent on /blocks (requested %d)", n))
 	}
@@ -1503,7 +1530,8 @@ func (u *Server) fetchSingleBlock(ctx context.Context, hash *chainhash.Hash, pee
 	defer countingReader.Close()
 
 	// Cap what the block message may consume off the wire - see fetchBlocksBatch's matching
-	// io.LimitedReader comment (bitcoin-sv/teranode#4742).
+	// io.LimitedReader comment, including what the cap does not bound (bitcoin-sv/teranode#4742,
+	// bsv-blockchain/go-bt#187).
 	maxBlockMessageBytes := u.settings.BlockValidation.MaxIncomingBlockMessageBytes
 	limited := &io.LimitedReader{R: countingReader, N: maxBlockMessageBytes}
 
