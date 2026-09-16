@@ -7153,9 +7153,16 @@
 <tr>
 <td>checksum</td>
 <td>bool</td>
-<td>false</td>
+<td>true</td>
 <td>File backend parameter</td>
-<td><strong>CRITICAL</strong> - SHA256 checksumming for data integrity</td>
+<td>Writes a <code>&lt;blob&gt;.sha256</code> sidecar alongside every blob. No read path verifies it, so this is a write-cost parameter, not an integrity one. Accepted values are <code>true</code>/<code>1</code>/<code>yes</code>/<code>on</code>/<code>enabled</code> and <code>false</code>/<code>0</code>/<code>no</code>/<code>off</code>/<code>disabled</code>; anything else fails at startup</td>
+</tr>
+<tr>
+<td>fsyncMode</td>
+<td>string</td>
+<td>full</td>
+<td>File backend parameter</td>
+<td><code>full</code> fsyncs the temp file and then the parent directory after the rename. <code>data</code> skips the parent-directory fsync, so a freshly published filename can be lost across a crash while already-published content survives. <code>none</code> skips both</td>
 </tr>
 <tr>
 <td>header</td>
@@ -7188,7 +7195,8 @@
 <h3 id="data-integrity">Data Integrity<a class="headerlink" href="#data-integrity" title="Permanent link">&para;</a></h3>
 <ul>
 <li>When <code>checksum = true</code>, creates .sha256 files alongside blobs</li>
-<li>Validates checksums during read operations</li>
+<li>When <code>checksum = false</code>, no digest and no sidecar is written, and the store <em>attempts</em> to unlink any sidecar an earlier write left behind. This is best-effort: the attempt happens after the blob is already published, a failure is logged rather than failing the write, and a stale sidecar can therefore survive</li>
+<li>There is no backfill in either direction: switching <code>checksum</code> back to <code>true</code> restores a sidecar only for keys written after the change, and out-of-band tooling that verifies sidecars loses its inputs for any store switched to <code>false</code></li>
 <li>Removes checksum files during deletion</li>
 </ul>
 <h3 id="debug-logging">Debug Logging<a class="headerlink" href="#debug-logging" title="Permanent link">&para;</a></h3>
@@ -7220,7 +7228,7 @@
 <tr>
 <td>file</td>
 <td>file://</td>
-<td>All parameters including checksum, header</td>
+<td>All parameters including checksum, fsyncMode, header</td>
 </tr>
 <tr>
 <td>http</td>

@@ -7031,7 +7031,7 @@
 <tr>
 <td>UTXOPersisterBufferSize</td>
 <td>string</td>
-<td>"4KB"</td>
+<td>"256KB"</td>
 <td>utxoPersister_buffer_size</td>
 <td><strong>CRITICAL</strong> - Buffer size for UTXO file I/O operations</td>
 </tr>
@@ -7048,8 +7048,16 @@
 <h3 id="buffer-management">Buffer Management<a class="headerlink" href="#buffer-management" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>UTXOPersisterBufferSize</code> is parsed using bytesize.Parse()</li>
-<li>Falls back to 4KB (4096 bytes) if parsing fails</li>
 <li>Used for buffered I/O operations when reading/writing UTXO files</li>
+<li>The default of <code>256KB</code> applies to every consumer</li>
+<li>
+<p>The values below are the fallbacks used only when the configured value fails to parse, and they differ by consumer rather than by direction:</p>
+<ul>
+<li>The file storer's write buffer falls back to 128KB</li>
+<li>The block persister's subtree-data read buffer falls back to 128KB</li>
+<li>The utxo-additions, utxo-deletions and previous-utxo-set read buffers fall back to 4096 bytes</li>
+</ul>
+</li>
 </ul>
 <h3 id="io-operations">I/O Operations<a class="headerlink" href="#io-operations" title="Permanent link">&para;</a></h3>
 <ul>
@@ -7105,11 +7113,11 @@
 </table>
 <h2 id="configuration-examples">Configuration Examples<a class="headerlink" href="#configuration-examples" title="Permanent link">&para;</a></h2>
 <h3 id="basic-configuration">Basic Configuration<a class="headerlink" href="#basic-configuration" title="Permanent link">&para;</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>utxoPersister_buffer_size = "4KB"
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>utxoPersister_buffer_size = "256KB"
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>direct = true
 </span></code></pre></div>
 <h3 id="performance-tuning">Performance Tuning<a class="headerlink" href="#performance-tuning" title="Permanent link">&para;</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>utxoPersister_buffer_size = "64KB"
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>utxoPersister_buffer_size = "1MB"
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>direct = true
 </span></code></pre></div>
 <h3 id="memory-constrained">Memory Constrained<a class="headerlink" href="#memory-constrained" title="Permanent link">&para;</a></h3>
