@@ -24,6 +24,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
 	"github.com/bsv-blockchain/teranode/services/validator"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -39,6 +40,10 @@ const (
 	// txNotFoundInTxMapMsg is the error message used when a transaction hash
 	// cannot be located in the block's txMap.
 	txNotFoundInTxMapMsg = "transaction %s not found in txMap"
+
+	// blockHeightConversionMsg is the processing error returned when a block
+	// height cannot be safely narrowed to an int32.
+	blockHeightConversionMsg = "failed to convert block height to int32"
 )
 
 // HandleBlockDirect ingests a full block delivered by a legacy peer.
@@ -49,7 +54,13 @@ const (
 // height alone can never justify skipping script validation. Callers that
 // cannot establish provenance must pass the zero value, which denies the fast
 // path.
-func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, blockHash chainhash.Hash, msgBlock *wire.MsgBlock, origin blockRequestOrigin) (err error) {
+//
+// parent is the window route's in-flight-parent hand-shake and is orthogonal to
+// origin: one says "may this block start before its parent has finished", the
+// other says "may this block skip work". They are separate parameters rather
+// than one struct because the routes that have an answer for each are different
+// — a converted block resolves no parent but can still carry a proof.
+func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, blockHash chainhash.Hash, msgBlock *wire.MsgBlock, parent *inflightParent, origin blockRequestOrigin) (err error) {
 	sm.logger.Debugf("[HandleBlockDirect][%s] starting handling block", blockHash.String())
 
 	// Make sure we have the correct height for this block before continuing
@@ -82,49 +93,77 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 
 	block := bsvutil.NewBlock(msgBlock)
 
-	// Lookup previous block height from blockchain
-	_, previousBlockHeaderMeta, err = sm.blockchainClient.GetBlockHeader(ctx, &block.MsgBlock().Header.PrevBlock)
-	if err != nil {
-		// A missing parent is an expected, recoverable condition: a normal orphan /
-		// out-of-order tip announce, or a descendant of a block that was rejected
-		// upstream. The caller (handleBlockMsg) answers with a getblocks and, for a
-		// known-failed ancestor, short-circuits the descendant cascade (#1333) — so
-		// logging it at ERROR here only produces misleading "previous block
-		// NOT_FOUND" spam. Genuine lookup failures (e.g. storage errors) still ERROR.
-		if errors.Is(err, errors.ErrBlockNotFound) {
-			sm.logger.Debugf("[HandleBlockDirect][%s] previous block %s not found (orphan/out-of-order; caller will request missing blocks): %v", blockHash.String(), block.MsgBlock().Header.PrevBlock, err)
-		} else {
-			sm.logger.Errorf("[HandleBlockDirect][%s] failed to get block header for previous block %s: %s", blockHash.String(), block.MsgBlock().Header.PrevBlock, err)
+	if parent != nil {
+		// The dispatcher already resolved this block's parent (still in the window,
+		// so not yet queryable via the blockchain store) — use its height directly
+		// instead of looking the parent up. Skips the GetBlockHeader round-trip
+		// entirely on this route.
+		blockHeight = parent.height + 1
+
+		if block.Height() > 0 && uint32(block.Height()) != blockHeight {
+			return errors.NewBlockInvalidError("block height %d is not the correct height for block %s, expected %d", block.Height(), blockHash, blockHeight)
 		}
 
-		return errors.NewProcessingError("failed to get block header for previous block %s", block.MsgBlock().Header.PrevBlock, err)
+		heightInt32, cerr := safeconversion.Uint32ToInt32(blockHeight)
+		if cerr != nil {
+			return errors.NewProcessingError(blockHeightConversionMsg, cerr)
+		}
+
+		block.SetHeight(heightInt32)
+	} else {
+		// Lookup previous block height from blockchain
+		_, previousBlockHeaderMeta, err = sm.blockchainClient.GetBlockHeader(ctx, &block.MsgBlock().Header.PrevBlock)
+		if err != nil {
+			// A missing parent is an expected, recoverable condition: a normal orphan /
+			// out-of-order tip announce, or a descendant of a block that was rejected
+			// upstream. The caller (handleBlockMsg) answers with a getblocks and, for a
+			// known-failed ancestor, short-circuits the descendant cascade (#1333) — so
+			// logging it at ERROR here only produces misleading "previous block
+			// NOT_FOUND" spam. Genuine lookup failures (e.g. storage errors) still ERROR.
+			if errors.Is(err, errors.ErrBlockNotFound) {
+				sm.logger.Debugf("[HandleBlockDirect][%s] previous block %s not found (orphan/out-of-order; caller will request missing blocks): %v", blockHash.String(), block.MsgBlock().Header.PrevBlock, err)
+			} else {
+				sm.logger.Errorf("[HandleBlockDirect][%s] failed to get block header for previous block %s: %s", blockHash.String(), block.MsgBlock().Header.PrevBlock, err)
+			}
+
+			return errors.NewProcessingError("failed to get block header for previous block %s", block.MsgBlock().Header.PrevBlock, err)
+		}
+
+		if block.Height() <= 0 {
+			// block height was not set in the msgBlock, set it from our lookup
+			blockHeight = previousBlockHeaderMeta.Height + 1
+
+			blockHeightInt32, err := safeconversion.Uint32ToInt32(blockHeight)
+			if err != nil {
+				return errors.NewProcessingError(blockHeightConversionMsg, err)
+			}
+
+			block.SetHeight(blockHeightInt32)
+		} else {
+			// check whether the block height being reported is the correct block height
+			previousBlockHeightInt32, err := safeconversion.Uint32ToInt32(previousBlockHeaderMeta.Height + 1)
+			if err != nil {
+				return errors.NewProcessingError(blockHeightConversionMsg, err)
+			}
+
+			if block.Height() != previousBlockHeightInt32 {
+				return errors.NewBlockInvalidError("block height %d is not the correct height for block %s, expected %d", block.Height(), blockHash, previousBlockHeaderMeta.Height+1)
+			}
+
+			blockHeight, err = safeconversion.Int32ToUint32(block.Height())
+			if err != nil {
+				return errors.NewProcessingError("failed to convert block height to uint32", err)
+			}
+		}
 	}
 
-	if block.Height() <= 0 {
-		// block height was not set in the msgBlock, set it from our lookup
-		blockHeight = previousBlockHeaderMeta.Height + 1
-
-		blockHeightInt32, err := safeconversion.Uint32ToInt32(blockHeight)
-		if err != nil {
-			return errors.NewProcessingError("failed to convert block height to int32", err)
-		}
-
-		block.SetHeight(blockHeightInt32)
-	} else {
-		// check whether the block height being reported is the correct block height
-		previousBlockHeightInt32, err := safeconversion.Uint32ToInt32(previousBlockHeaderMeta.Height + 1)
-		if err != nil {
-			return errors.NewProcessingError("failed to convert block height to int32", err)
-		}
-
-		if block.Height() != previousBlockHeightInt32 {
-			return errors.NewBlockInvalidError("block height %d is not the correct height for block %s, expected %d", block.Height(), blockHash, previousBlockHeaderMeta.Height+1)
-		}
-
-		blockHeight, err = safeconversion.Int32ToUint32(block.Height())
-		if err != nil {
-			return errors.NewProcessingError("failed to convert block height to uint32", err)
-		}
+	// A block committed from the park after a restart has no delivering peer at
+	// all, and (*Peer).String dereferences the peer's address and asks it
+	// whether it is the sync peer — so calling it on nil panics, on the
+	// block-queue goroutine, in production.
+	peerLabel := "recovered-from-disk"
+	if peer != nil {
+		peerLabel = peer.String()
 	}
 
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "HandleBlockDirect",
@@ -134,10 +173,10 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 			block.Hash().String(),
 			blockHeight,
 			len(block.Transactions()),
-			peer.String(),
+			peerLabel,
 		),
 		tracing.WithTag("blockHash", block.Hash().String()),
-		tracing.WithTag("peer", peer.String()),
+		tracing.WithTag("peer", peerLabel),
 		tracing.WithHistogram(prometheusLegacyNetsyncHandleBlockDirect),
 	)
 	defer func() {
@@ -185,6 +224,13 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 
 	// Wait for block assembly to be ready
 	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, sm.logger, sm.blockAssembly, blockHeight, sm.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
+		if sm.windowRoute(blockHeight) {
+			// On the window route a parked gate is a local condition: wrap so
+			// handleBlockMsg pushes no reject, awaitBlockResult keeps the peer, and
+			// the backoff throttles re-delivery instead of churning the sync peer.
+			return errors.NewServiceError("[HandleBlockDirect][%s] block assembly not ready for height %d on the window route", blockHash.String(), blockHeight, err)
+		}
+
 		// block-assembly is still behind, so we cannot process this block
 		return err
 	}
@@ -222,7 +268,19 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	// has cloned the scripts out, nothing references block/msgBlock any more,
 	// so the multi-GB wire block and its decode arena can be collected while
 	// the heavy extend/subtree/utxo/validate phases are still running.
+	// Timed, because it is a full walk over every transaction in the block and
+	// nothing used to say so. On mainnet block 759245, 3.44 GB across 100,001
+	// transactions, 60 of the block's 113 seconds sat in regions that emitted no
+	// log line at all, and this is one of them. A phase that is not timed cannot
+	// be argued about, only guessed at, and four guesses about these regions have
+	// already been wrong.
+	_, _, sizeDone := tracing.Tracer("netsync").Start(ctx, "blockSerializeSize",
+		tracing.WithLogMessage(sm.logger, "[blockSerializeSize][%s] measuring %d transactions", block.Hash().String(), len(block.Transactions())),
+	)
+
 	blockSize := block.MsgBlock().SerializeSize()
+
+	sizeDone()
 
 	blockSizeUint64, err := safeconversion.IntToUint64(blockSize)
 	if err != nil {
@@ -234,11 +292,24 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	// Pre-extract the tx hashes for the orphan-processing goroutine below.
 	// Copy the hash *values* (not the *chainhash.Hash pointers returned by
 	// tx.Hash(), which alias into the bsvutil.Tx wrapper and would pin it).
+	//
+	// Timed for the same reason as the size walk above, and this one is the more
+	// expensive of the two: a transaction's hash is a double SHA256 over its full
+	// serialisation, so this loop is another complete pass over the block's bytes
+	// on a single goroutine.
+	_, _, hashDone := tracing.Tracer("netsync").Start(ctx, "blockTxHashes",
+		tracing.WithLogMessage(sm.logger, "[blockTxHashes][%s] hashing %d transactions", block.Hash().String(), len(block.Transactions())),
+	)
+
 	wireTxs := block.Transactions()
 	txHashes := make([]chainhash.Hash, len(wireTxs))
+
 	for i, tx := range wireTxs {
 		txHashes[i] = *tx.Hash()
 	}
+
+	hashDone()
+
 	blockHashStr := block.Hash().String()
 
 	// validate all subtrees and store all subtree data
@@ -246,7 +317,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	// NOTE: last use of `block` — from here down only scalars and tx hash
 	// copies are referenced, so the decode arena is collectable as soon as
 	// createTxMap inside prepareSubtrees returns.
-	subtrees, _, blockID, err := sm.prepareSubtrees(ctx, block, origin, &model.Block{Header: header, CoinbaseTx: coinbaseTx})
+	subtrees, preparedSubtreeSlices, blockID, err := sm.prepareSubtrees(ctx, block, origin, &model.Block{Header: header, CoinbaseTx: coinbaseTx})
 	if err != nil {
 		return err
 	}
@@ -256,22 +327,138 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		return errors.NewProcessingError("failed to create model.NewBlock", err)
 	}
 
-	// Derive the serving peer identity for the block-validation corrupt cap. The two caps'
-	// keys intentionally differ only by the LegacyPeerIDPrefix namespace below: netsync's own
-	// cap (recordCorruptBlockAttempt) keys on the bare peer.Addr(), while this value threaded
-	// into blockValidation.ProcessBlock carries the prefix — both are still derived from the
-	// identical peer.Addr() call, so they still bound the same serving connection. The
-	// divergence exists solely so nothing downstream of blockvalidation can mistake this value
-	// for a libp2p peer ID: isLegacyPeerID (services/blockvalidation/peer_metrics_helpers.go)
-	// makes isPeerMalicious, penalizeCorruptBlockPeer and the invalid-block Kafka producer treat any
-	// LegacyPeerIDPrefix-prefixed value the same as an empty peerID, so it never reaches
-	// p2pClient.AddBanScore/IsPeerMalicious. See isLegacyPeerID's doc for why that gate exists
-	// (bitcoin-sv/teranode#4692).
-	// Peer.Addr() dereferences the peer with no nil-receiver guard, so guard here: a nil peer
-	// degrades to the empty-peerID no-cap defence rather than panicking.
-	peerID := ""
-	if peer != nil {
-		peerID = blockvalidation.LegacyPeerIDPrefix + peer.Addr()
+	// Everything from here on needs nothing but the model.Block just built: no
+	// wire bytes, no per-transaction data. That is what lets commitPreparedBlock
+	// also serve HandleConvertedBlock, whose model.Block comes from a converted
+	// record on disk instead of from decoding msgBlock — see that method and
+	// the shared tail's own doc comment for why the split sits exactly here.
+	return sm.commitPreparedBlock(ctx, teranodeBlock, blockHash, blockHashStr, blockHeight, parent, preparedSubtreeSlices, txHashes, legacyCorruptPeerID(peer))
+}
+
+// legacyCorruptPeerID is the serving-peer identity threaded into
+// blockValidation.ProcessBlock for the block-validation corrupt cap
+// (bitcoin-sv/teranode#4692).
+//
+// The two caps' keys intentionally differ only by the LegacyPeerIDPrefix namespace:
+// netsync's own cap (recordCorruptBlockAttempt) keys on the bare peer.Addr(), while
+// this value carries the prefix — both are still derived from the identical
+// peer.Addr() call, so they still bound the same serving connection. The divergence
+// exists solely so nothing downstream of blockvalidation can mistake this value for a
+// libp2p peer ID: isLegacyPeerID (services/blockvalidation/peer_metrics_helpers.go)
+// makes isPeerMalicious, penalizeCorruptBlockPeer and the invalid-block Kafka producer
+// treat any LegacyPeerIDPrefix-prefixed value the same as an empty peerID, so it never
+// reaches p2pClient.AddBanScore/IsPeerMalicious.
+//
+// Peer.Addr() dereferences the peer with no nil-receiver guard, so a nil peer degrades
+// to the empty-peerID no-cap defence rather than panicking. That is also what a block
+// recovered from disk gets: the park has no peer to charge, and charging the wrong one
+// is worse than charging nobody.
+func legacyCorruptPeerID(peer *peer.Peer) string {
+	if peer == nil {
+		return ""
+	}
+
+	return blockvalidation.LegacyPeerIDPrefix + peer.Addr()
+}
+
+// commitPreparedBlock is the tail every route into the committer shares: the
+// proof-of-work check, the (redundant-except-on-the-converted-route) merkle and
+// duplicate re-checks, the in-flight-parent ordering hand-shake, the frontier
+// hand-off, and the commit itself via ProcessBlock, plus the best-effort orphan
+// replay.
+//
+// It is extracted rather than copied because every check in it is
+// consensus-relevant: a second hand-written copy in HandleConvertedBlock could
+// drift from this one on exactly the checks that decide whether a block's
+// transactions land in the UTXO set. Both HandleBlockDirect (teranodeBlock built
+// from a freshly decoded wire block) and HandleConvertedBlock (teranodeBlock read
+// back from a converted record) call this same function with the model.Block
+// they each produced, so there is exactly one place that decides what happens to
+// it next.
+//
+// preparedSubtreeSlices is non-nil only on the unified route's live path, where
+// prepareSubtrees still holds the in-memory subtree slices; a converted block
+// carries no slices (the record holds only subtree root hashes), so the merkle
+// and duplicate re-check below is naturally skipped for it — see the comment at
+// that check for why skipping is safe there, not just convenient.
+//
+// txHashes is the block's transaction hashes, pre-extracted before decoding
+// released the wire block; empty for a converted block, which never decodes one
+// (see the comment at the orphan-replay goroutine below).
+func (sm *SyncManager) commitPreparedBlock(ctx context.Context, teranodeBlock *model.Block, blockHash chainhash.Hash, blockHashStr string, blockHeight uint32, parent *inflightParent, preparedSubtreeSlices []*subtreepkg.Subtree, txHashes []chainhash.Hash, peerID string) (err error) {
+	// pre-check that there is enough proof of work on the block, before we do any other processing
+	headerValid, _, err := teranodeBlock.Header.HasMetTargetDifficulty()
+	if !headerValid {
+		return errors.NewBlockInvalidError("invalid block header: %s", teranodeBlock.Header.Hash().String(), err)
+	}
+
+	// Unified route integrity floor: block.Valid (and its CheckMerkleRoot) no
+	// longer runs server-side on this route, and unlike catchup — whose subtree
+	// lists arrive bound to checkpoint-verified headers — legacy builds these
+	// subtrees itself from the wire block. Verify the merkle root here so a
+	// corrupt or tampered wire block can never reach the UTXO store. PoW was
+	// checked above; header linkage was checked on receipt.
+	//
+	// CheckMerkleRoot alone is NOT sufficient: a CVE-2012-2459 duplicate-tx
+	// mutation preserves the merkle root via the duplicate-last-when-odd rule,
+	// so it passes the merkle check while still containing a repeated hash.
+	// The CVE-2012-2459 dedup floor now runs unconditionally inside prepareSubtrees
+	// (on the locally-built slices, for every route), so it is already enforced
+	// before we get here — the second call below is a defensive belt-and-braces on
+	// the unified route's returned slices and is kept in sync with unified_dedup_test.go.
+	// It must run while SubtreeSlices is still populated, before the nil-out below.
+	//
+	// A converted block (preparedSubtreeSlices == nil here, always) never runs this
+	// block at all, and that is not the same as skipping it blindly. Both guarantees
+	// it exists to give already hold, earlier, for a converted block: the pipeline
+	// sink verified the merkle root against the header before the record was ever
+	// written (pipelineBlockSink), and the CVE-2012-2459 dedup floor inside
+	// prepareSubtrees's equivalent (the stream builder's duplicate map) is mandatory
+	// and cannot be disabled — so a duplicate transaction can never reach a written
+	// record in the first place. Re-running either check here would need the
+	// transactions themselves, which is exactly what this route exists not to read.
+	if preparedSubtreeSlices != nil {
+		teranodeBlock.SubtreeSlices = preparedSubtreeSlices
+		if err = teranodeBlock.CheckMerkleRoot(ctx); err != nil {
+			return errors.NewBlockInvalidError("[commitPreparedBlock][%s %d] merkle root mismatch on unified route", blockHashStr, blockHeight, err)
+		}
+		if err = model.CheckSubtreeSlicesForDuplicateTxs(preparedSubtreeSlices); err != nil {
+			return errors.NewBlockInvalidError("[commitPreparedBlock][%s %d] duplicate transaction on unified route", blockHashStr, blockHeight, err)
+		}
+		teranodeBlock.SubtreeSlices = nil
+	}
+
+	// Ordering hand-shake with an in-flight parent (window route only; parent is nil
+	// everywhere else, including always for a converted block: see HandleConvertedBlock's
+	// own doc comment on why it never resolves one). A child may start its own
+	// ProcessBlock RPC once the parent has started its own — from that point the
+	// parent's spends are already queued behind its own create in commit order, so a
+	// spend of a coin the parent creates can never land ahead of that create. The
+	// select needs the pre-check below because a parent that started its RPC and THEN
+	// failed must still let the child through to its own RPC (where the server-side
+	// window aborts it with the recorded error): only a parent that failed BEFORE
+	// starting its RPC — settled ready with rpcStarted still open — short-circuits
+	// here. Without the pre-check, a select between two simultaneously-ready cases
+	// picks uniformly at random, so a parent settling failed in the same instant it
+	// starts its RPC could non-deterministically take the abort branch instead.
+	if parent != nil && parent.entry != nil {
+		select {
+		case <-parent.entry.rpcStarted:
+		default:
+			select {
+			case <-parent.entry.rpcStarted:
+			case <-parent.entry.settled:
+				if parent.entry.failed.Load() {
+					return errors.NewServiceError("[commitPreparedBlock][%s] predecessor %s failed before this block started; aborting", blockHash.String(), parent.entry.hash.String())
+				}
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+
+	if own := frontierEntryFromContext(ctx); own != nil {
+		own.markRPCStarted()
 	}
 
 	// call the process block wrapper, which will add tracing and logging
@@ -282,8 +469,14 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 
 	// process any orphan transactions that are now valid in background
 	// this will also remove the transactions from the orphan pool.
-	// txHashes was pre-extracted above (before prepareSubtrees) so this
-	// goroutine holds no reference into the decoded block.
+	// txHashes was pre-extracted before decoding released the wire block (or is
+	// empty for a converted block, which never held one), so this goroutine holds
+	// no reference into a decoded block either way. A converted block runs this
+	// loop zero times: it has no per-transaction hash list to check the orphan
+	// pool against, only the subtree root hashes the record carries. That leaves
+	// orphans depending on this block's own transactions unswept until some other
+	// event retires them — a narrower, documented gap, not a silent one, and it
+	// does not affect whether THIS block commits correctly.
 	go func() {
 		acceptedTxs := make([]*TxHashAndFee, 0)
 		for i := range txHashes {
@@ -291,12 +484,226 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		}
 
 		if len(acceptedTxs) > 0 {
-			sm.logger.Infof("[HandleBlockDirect][%s %d] accepted %d orphan transactions", blockHashStr, blockHeight, len(acceptedTxs))
+			sm.logger.Infof("[commitPreparedBlock][%s %d] accepted %d orphan transactions", blockHashStr, blockHeight, len(acceptedTxs))
 			sm.peerNotifier.AnnounceNewTransactions(acceptedTxs)
 		}
 	}()
 
 	return nil
+}
+
+// HandleConvertedBlock commits a block that was converted from wire bytes into
+// a model.Block as it streamed off the socket (pipelineBlockSink), instead of
+// being decoded from a whole block read back off disk. blk is that record,
+// already carrying its header, coinbase, counts and subtree root hashes — see
+// (*blockPark).ReadConverted.
+//
+// It is reached only from the two places that commit a block already sitting in
+// the park — drainParkedDescendants (block_park_drain.go) and the dispatcher's
+// parked worker (block_dispatcher.go) — after IsConverted has told the caller a
+// converted record exists under this hash instead of a whole-block one. Neither
+// caller ever has an in-flight parent to hand it (the comment on the
+// dispatcher's parkedRun calls passing one instead "the single most dangerous
+// edit anyone can make here"): by the time anything commits a parked block, its
+// parent is already in the chain, so the ordinary blockchain-store lookup below
+// is always the right way to resolve its height, exactly as it is for
+// HandleBlockDirect's own nil-parent branch. That is also why this function
+// takes no parent parameter at all, rather than a parameter callers must
+// remember to pass as nil.
+//
+// Everything here up to the call into commitPreparedBlock mirrors
+// HandleBlockDirect's own pre-tail checks, minus everything that needs the
+// block's transactions: there is no wire block to decode, no coinbase to
+// extract, no subtrees to build, and so no prepareSubtrees call. blk already
+// carries what that work would have produced.
+func (sm *SyncManager) HandleConvertedBlock(ctx context.Context, peer *peer.Peer, blockHash chainhash.Hash, blk *model.Block) (err error) {
+	sm.logger.Debugf("[HandleConvertedBlock][%s] starting handling converted block", blockHash.String())
+
+	// check whether this block already exists
+	blockExists, err := sm.blockchainClient.GetBlockExists(ctx, &blockHash)
+	if err != nil {
+		sm.logger.Errorf("[HandleConvertedBlock][%s] failed to check if block exists: %s", blockHash.String(), err)
+		return errors.NewProcessingError("failed to check if block exists", err)
+	}
+
+	if blockExists {
+		sm.logger.Warnf("[HandleConvertedBlock][%s] block already exists", blockHash.String())
+		return nil
+	}
+
+	// Same reasoning as HandleBlockDirect's identical refresh: the validation
+	// this block is about to go through can run long, and without this the sync
+	// peer looks stalled and gets rotated mid-commit.
+	if sps, ok := sm.syncPeerStateFor(peer); ok {
+		sps.updateLastBlockTime()
+	}
+
+	// pipelineBlockSink no longer refuses to convert a block above the final
+	// checkpoint, or one whose parent height would not resolve at conversion
+	// time — see its own doc comment. So this can no longer assert
+	// legacyUnified(blk.Height): an above-checkpoint record reaching here is
+	// now the ordinary case this task exists to make work, not a bug, and
+	// blockID 0 is correct on both routes regardless of legacyUnified (Step 1
+	// of this task's report: the ordinary route already passes zero above the
+	// checkpoint, and zero is the universal "assign server-side" convention
+	// full validation reads too).
+	//
+	// What still has to hold is the same "parent resolved" test the sink
+	// itself runs — a record whose height was never resolved (the sentinel 0
+	// pipelineParentHeight's fallback writes) needs correcting before
+	// anything below trusts blk.Height. That test is answered by THIS lookup,
+	// not a separate pipelineParentHeight call: a first version of this fix
+	// called pipelineParentHeight here too, purely to evaluate the gate,
+	// before making the identical GetBlockHeader call below to re-derive the
+	// height — two store round trips for the same parent, on the single
+	// goroutine that commits every block in order, which starving is this
+	// node's own known stall mode. GetBlockHeader failing with
+	// ErrBlockNotFound below IS "not resolved": by the time a commit is
+	// attempted the parent is already required to be committed
+	// (parentIsInChain, streaming_install.go, gates the drain that gets
+	// here), so pipelineParentHeight's extra header-cache path (needed at
+	// conversion time, when the parent may still only be in flight) answers
+	// nothing here that this store call does not already answer.
+	//
+	// A ServiceError, not anything else, for the not-found case: parkCommitFailure
+	// reads a ServiceError as parkDispositionRetryLater (keep the blob, no
+	// rewind, no blame) rather than parkDispositionBlockRejected (delete the
+	// only copy, rewind the cursor, blame the peer, and fail the block
+	// forever at that height) — see pipeline_sink.go's own gate comment for
+	// the rule this protects: never let a converted record reach a committer
+	// that can refuse it on a condition the re-download would only
+	// reproduce. (parkCommitFailure also has its own dedicated
+	// errors.ErrBlockNotFound case, parkDispositionParentGone, which keeps
+	// the blob just as this does; this still classifies explicitly rather
+	// than relying on that fallback matching, so the classification here is
+	// not a silent side effect of what error type happens to wrap what.)
+	_, previousBlockHeaderMeta, err := sm.blockchainClient.GetBlockHeader(ctx, blk.Header.HashPrevBlock)
+	if err != nil {
+		if errors.Is(err, errors.ErrBlockNotFound) {
+			sm.logger.Debugf("[HandleConvertedBlock][%s] previous block %s not found (orphan/out-of-order; caller will request missing blocks): %v", blockHash.String(), blk.Header.HashPrevBlock, err)
+
+			return errors.NewServiceError("[HandleConvertedBlock][%s] parent %s is not yet resolvable; retrying once it is", blockHash.String(), blk.Header.HashPrevBlock, err)
+		}
+
+		sm.logger.Errorf("[HandleConvertedBlock][%s] failed to get block header for previous block %s: %s", blockHash.String(), blk.Header.HashPrevBlock, err)
+
+		return errors.NewProcessingError("failed to get block header for previous block %s", blk.Header.HashPrevBlock, err)
+	}
+
+	// derivedHeight is the store's own current, authoritative answer.
+	//
+	// blk.Height == 0 is pipelineParentHeight's own "unresolved" sentinel (see
+	// its doc comment): it means this record's height was never really
+	// resolved at conversion time, not that the block is genuinely at height
+	// 0 (genesis is never received over the wire). Correcting it here, now
+	// that the parent is required to be committed, is the re-derivation the
+	// sink's own comment promises ("the committer re-derives the height from
+	// the store before committing anything, so a record carrying zero is
+	// corrected there") — without it, a record stuck at 0 would fail the
+	// mismatch check below forever, since nothing else ever rewrites the
+	// stored record.
+	//
+	// A ServiceError, not a BlockInvalidError, and deliberately so, for every
+	// OTHER mismatch: this is a disagreement between two things THIS node
+	// computed about its own chain view, not a claim the peer made. blk.Height
+	// was resolved once already, at conversion time (pipelineParentHeight),
+	// from whichever of the header cache or the store answered first; this
+	// re-derives it from the store's CURRENT view of the same parent. A
+	// mismatch means that view moved between conversion and commit — a
+	// reorg, or the record simply going stale while it sat parked — not that
+	// the block's own header chain or merkle root lied about anything, both
+	// of which are checked elsewhere. parkCommitFailure has no case for a
+	// plain ProcessingError-shaped BlockInvalidError here either, but the
+	// eligibility assertion above already established the pattern this must
+	// match: a ServiceError is IsTransientLocalError, which parkCommitFailure
+	// reads as parkDispositionRetryLater (keep the blob, no rewind, no blame)
+	// instead of parkDispositionBlockRejected (delete the only copy, rewind
+	// the cursor, blame the peer, and fail the block at that height forever).
+	// A converted record has no whole-block fallback to re-derive from, so
+	// treating a local staleness as a bad block would destroy it for a
+	// condition a retry, once this node's own view catches up, resolves
+	// cleanly.
+	derivedHeight := previousBlockHeaderMeta.Height + 1
+
+	switch {
+	case blk.Height == 0:
+		blk.Height = derivedHeight
+	case blk.Height != derivedHeight:
+		return errors.NewServiceError("[HandleConvertedBlock][%s] block height %d is not the correct height for block %s, expected %d", blockHash.String(), blk.Height, blockHash, derivedHeight)
+	}
+
+	blockHeight := blk.Height
+
+	// A block committed from the park after a restart, or drained by a worker
+	// whose parked entry carries a nil peer, has no delivering peer at all — see
+	// HandleBlockDirect's identical guard.
+	peerLabel := "recovered-from-disk"
+	if peer != nil {
+		peerLabel = peer.String()
+	}
+
+	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "HandleConvertedBlock",
+		tracing.WithLogMessage(
+			sm.logger,
+			"[HandleConvertedBlock][%s %d] %d txs, peer %s",
+			blk.Hash().String(),
+			blockHeight,
+			blk.TransactionCount,
+			peerLabel,
+		),
+		tracing.WithTag("blockHash", blk.Hash().String()),
+		tracing.WithTag("peer", peerLabel),
+		tracing.WithHistogram(prometheusLegacyNetsyncHandleBlockDirect),
+	)
+	defer func() {
+		prometheusLegacyNetsyncBlockHeight.Set(float64(blockHeight))
+
+		deferFn(err)
+	}()
+
+	// Wait for block assembly to be ready — the same external readiness gate
+	// HandleBlockDirect waits on, called directly rather than through the shared
+	// tail because it is a liveness check against another service, not a
+	// consensus decision: there is nothing here for a second call site to drift
+	// on.
+	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, sm.logger, sm.blockAssembly, blockHeight, sm.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
+		if sm.windowRoute(blockHeight) {
+			return errors.NewServiceError("[HandleConvertedBlock][%s] block assembly not ready for height %d on the window route", blockHash.String(), blockHeight, err)
+		}
+
+		return err
+	}
+
+	// Wait for the previous block's setTxMined to complete — see
+	// needsParentMinedWait for the redundancy argument. Below the checkpoint,
+	// on the outpoint-only fast path, that wait is skipped as redundant, same
+	// as HandleBlockDirect above. Above the checkpoint this route now also
+	// receives converted records (task 13), where outpoint-only is not
+	// active, so the wait runs here exactly as it does for any other
+	// above-checkpoint block on the ordinary route — not a route that only
+	// ever lands below the checkpoint, as a stale version of this comment
+	// once claimed.
+	//
+	// The origin is re-read from the header cache rather than remembered from the
+	// delivery that converted this record: a converted record can be committed
+	// after a restart, where nothing about that delivery survives. An unprovable
+	// record simply takes the wait, which is the safe direction — the wait costs
+	// latency, skipping it wrongly costs ordering.
+	if sm.needsParentMinedWait(sm.blockOrigin(blockHash), blockHeight) {
+		if err = sm.waitForPreviousBlockMined(ctx, blk.Header.HashPrevBlock, blockHeight); err != nil {
+			return err
+		}
+	}
+
+	// The shared tail: proof-of-work check, the merkle/duplicate re-check (a
+	// no-op here — preparedSubtreeSlices is nil, see commitPreparedBlock's own
+	// comment on why that is safe rather than merely convenient for this
+	// route), the in-flight-parent hand-shake (also a no-op — parent is nil, as
+	// it always is for a block committed from the park), the commit itself, and
+	// the orphan replay (a no-op too — txHashes is nil, because this route
+	// never decodes the block's transactions and so never learns their
+	// individual hashes).
+	return sm.commitPreparedBlock(ctx, blk, blockHash, blk.Hash().String(), blockHeight, nil, nil, nil, legacyCorruptPeerID(peer))
 }
 
 // waitForPreviousBlockMined waits for the previous block to have mined_set=true.
@@ -597,10 +1004,39 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		}
 	}
 
+	// Concurrent, because there is nothing to serialise. This loop used to be a
+	// plain indexed for, and on mainnet block 759245 it spent 34.5 seconds
+	// writing 25 subtrees at 1.38 seconds each while 47 of the box's 48 cores sat
+	// idle. Each iteration touches only its own index of three slices, and
+	// writeSubtree reads nothing from the manager but the logger, the settings
+	// and the store, so the iterations share no mutable state. The three blob
+	// keys it writes derive from that subtree's own root hash, so two iterations
+	// cannot collide on a key either.
+	//
+	// The limit is derived from the store's own write concurrency rather than
+	// chosen, so the two cannot drift: each writeSubtree takes three of the
+	// store's write permits, one per artefact, and going past what the store will
+	// admit converts parallelism into queueing. It is then capped, because the
+	// binding constraint here is not the store but the heap: this runs with a
+	// decoded block resident against a soft memory limit, and go-bt's extended
+	// write path allocates heavily per transaction, so widening this multiplies
+	// allocation pressure at exactly the wrong moment. Four is deliberately
+	// short of what the store would allow.
+	writeConcurrency := parkWriteConcurrency(sm.settings)
+
+	wg, wgCtx := errgroup.WithContext(ctx)
+	wg.SetLimit(writeConcurrency)
+
 	for i := 0; i < numSubtrees; i++ {
-		if err = sm.writeSubtree(ctx, bi, slices[i], subtreeDatas[i], subtreeMetas[i], quickValidationMode); err != nil {
-			return nil, nil, 0, err
-		}
+		i := i
+
+		wg.Go(func() error {
+			return sm.writeSubtree(wgCtx, bi, slices[i], subtreeDatas[i], subtreeMetas[i], quickValidationMode)
+		})
+	}
+
+	if err = wg.Wait(); err != nil {
+		return nil, nil, 0, err
 	}
 
 	// In quickValidationMode the transactions and subtree files have already been
@@ -705,6 +1141,25 @@ func (sm *SyncManager) legacyUnified(origin blockRequestOrigin, height uint32) b
 		sm.legacyOutpointOnly(origin, height)
 }
 
+// windowRouteEnabled is every conjunct of windowRoute that does not depend on the
+// block's height: the settings, the store's outpoint-only support and the chain
+// params. The dispatcher asks it before spending an RPC to resolve a block's height,
+// because with any of these off the answer to windowRoute could only be false.
+func (sm *SyncManager) windowRouteEnabled() bool {
+	return sm.settings != nil &&
+		sm.settings.BlockValidation.QuickWindowBlocks >= 1 &&
+		sm.settings.BlockValidation.LegacyUnifiedBelowCheckpoint &&
+		sm.settings.BlockValidation.OutpointOnlyBelowCheckpoint &&
+		sm.utxoStore != nil && sm.utxoStore.SupportsOutpointOnlySpend() &&
+		sm.chainParams != nil
+}
+
+// windowRoute reports whether blocks at height take the quick window: the unified
+// below-checkpoint route with the window setting at 1 or more.
+func (sm *SyncManager) windowRoute(height uint32) bool {
+	return sm.windowRouteEnabled() && model.BelowCheckpoint(sm.chainParams.Checkpoints, height)
+}
+
 // legacyFailClosed reports whether this block takes the fail-closed variant of the
 // non-unified legacy below-checkpoint inline path: the operator enabled
 // blockvalidation_legacy_below_checkpoint_fail_closed AND the outpoint-only gate
@@ -726,9 +1181,10 @@ func (sm *SyncManager) legacyFailClosed(origin blockRequestOrigin, height uint32
 // never wait (pre-existing behaviour). On the below-checkpoint outpoint-only
 // fast path the wait is redundant three ways: (1) its documented purpose is
 // BIP68 parent-height lookup, and BIP68 is skipped below the checkpoint;
-// (2) block dispatch is serial — blockHandler in manager.go is the single
-// goroutine consuming blockQueue, so the parent's UTXOs are committed before
-// this block starts; (3) the legacy path calls AddBlock with WithMinedSet(true)
+// (2) the quick window gates every spend on the commit of the create that made
+// its coin, so a parent's outputs are never spent before the parent's create
+// has committed, see services/blockvalidation/quick_window.go; (3) the legacy
+// path calls AddBlock with WithMinedSet(true)
 // (see buildAddBlockOpts in services/blockvalidation/BlockValidation.go), so
 // GetBlockIsMined is always instantly true and only costs a gRPC round-trip
 // per block.
@@ -748,6 +1204,39 @@ func (sm *SyncManager) checkSubtreeFromBlock(ctx context.Context, bi blockIdent,
 	}
 
 	return nil
+}
+
+// subtreeWriteArtefacts is how many of the blob store's write permits one
+// writeSubtree call takes: the subtree's node file, its transaction data and its
+// meta, each through its own file storer.
+const subtreeWriteArtefacts = 3
+
+// maxConcurrentSubtreeWrites is the ceiling on how many subtrees are written at
+// once, whatever the store would allow. The store is not the binding constraint:
+// this runs with a whole decoded block resident against a soft memory limit, and
+// the extended-transaction write path allocates heavily per transaction, so
+// widening this multiplies allocation pressure at the worst moment. Four
+// recovers most of a serial loop's cost while leaving the heap alone.
+const maxConcurrentSubtreeWrites = 4
+
+// parkWriteConcurrency reports how many subtree writes may run at once. Derived
+// from the store's own limit so the two cannot drift into over-subscription,
+// where extra goroutines only queue for permits, then capped for the heap.
+func parkWriteConcurrency(tSettings *settings.Settings) int {
+	if tSettings == nil {
+		return 1
+	}
+
+	permits := tSettings.Block.FileStoreWriteConcurrency / subtreeWriteArtefacts
+	if permits > maxConcurrentSubtreeWrites {
+		permits = maxConcurrentSubtreeWrites
+	}
+
+	if permits < 1 {
+		permits = 1
+	}
+
+	return permits
 }
 
 func (sm *SyncManager) writeSubtree(ctx context.Context, bi blockIdent, subtree *subtreepkg.Subtree,
@@ -1975,8 +2464,12 @@ func calculateTransactionFee(tx *bt.Tx) (uint64, error) {
 // stages iterate instead of block.Transactions(), so this is the last function
 // that needs the decoded wire block.
 func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper]) ([]chainhash.Hash, error) {
+	// At info rather than debug: this is where 22 of block 759245's unlogged
+	// seconds sit, and it is the phase that converts the whole block into a
+	// second representation, so it is the one most worth seeing in a production
+	// log. One line per block is not a volume problem.
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "createTxMap",
-		tracing.WithDebugLogMessage(
+		tracing.WithLogMessage(
 			sm.logger,
 			"[createTxMap][%s %d] processing transactions into map for block",
 			block.Hash().String(),
@@ -1988,12 +2481,16 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block, tx
 	txOrder := make([]chainhash.Hash, 0, len(block.Transactions()))
 
 	for _, wireTx := range block.Transactions() {
-		// Copy the hash value out of the bsvutil.Tx wrapper. bt.Tx.SetTxHash
-		// stores the pointer, so passing wireTx.Hash() directly would keep
-		// the wrapping wire.MsgTx (and its decode arena) alive through this
-		// bt.Tx and the TxMapWrapper it lands in.
-		hashCopy := *wireTx.Hash()
-		txOrder = append(txOrder, hashCopy)
+		// The wrapper's hash is shared rather than copied. It used to be copied
+		// so that bt.Tx.SetTxHash, which stores the pointer it is given, could
+		// not keep the wrapping wire.MsgTx and its decode arena alive. The
+		// converter below now aliases that arena on purpose, so a copy here
+		// prevents nothing and costs one allocation per transaction.
+		//
+		// bsvutil.Tx.Hash memoises into a field it assigns exactly once and
+		// never reassigns, so the value behind this pointer does not move.
+		hash := wireTx.Hash()
+		txOrder = append(txOrder, *hash)
 
 		tx := &bt.Tx{}
 
@@ -2003,7 +2500,8 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block, tx
 
 		// don't add the coinbase to the txMap, we cannot process it anyway
 		if !tx.IsCoinbase() {
-			tx.SetTxHash(&hashCopy)
+			tx.SetTxHash(hash)
+
 			// Reject before parallel extension can process the same wrapper twice.
 			//
 			// Body-derived (CVE-2012-2459 duplicate in the received tx set): classify corrupt so the
@@ -2011,8 +2509,14 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block, tx
 			// This guard fires before the CheckSubtreeSlicesForDuplicateTxs floor in prepareSubtrees,
 			// so it is the verdict a duplicate actually reaches on the legacy route; the two must
 			// agree or the floor below is unreachable dead classification.
-			if _, added := txMap.SetIfNotExists(hashCopy, &TxMapWrapper{Tx: tx}); !added {
-				return nil, errors.NewBlockCorruptError("[createTxMap] duplicate transaction %s in block (CVE-2012-2459)", hashCopy.String())
+			//
+			// Keyed on *hash, not on a copy: this branch shares the memoised
+			// bsvutil.Tx hash deliberately (see the comment where hash is taken),
+			// and upstream's hashCopy existed only because that sharing was not
+			// yet safe there. SetIfNotExists takes the key by value, so the map
+			// holds its own copy either way.
+			if _, added := txMap.SetIfNotExists(*hash, &TxMapWrapper{Tx: tx}); !added {
+				return nil, errors.NewBlockCorruptError("[createTxMap] duplicate transaction %s in block (CVE-2012-2459)", hash.String())
 			}
 		}
 	}
@@ -2037,23 +2541,56 @@ func WireTxToGoBtTx(wireTx *bsvutil.Tx, tx *bt.Tx) error {
 	tx.LockTime = wTx.LockTime
 
 	tx.Inputs = make([]*bt.Input, len(wTx.TxIn))
+
 	for i, in := range wTx.TxIn {
+		// The scripts are ALIASED, not copied, and so is the previous-output
+		// hash. The bt.Tx points into the decoded wire transaction and into
+		// go-wire's decode arena behind it, which means the wire block stays
+		// reachable for as long as any converted transaction does. That is
+		// deliberate. See TestConversionHoldsOneCopyOfTheBlock.
+		//
+		// This used to clone every script, so the arena could be released when
+		// the conversion returned. The reasoning was that holding both
+		// representations at once does not fit a 3.44 GB block under a 6 GiB
+		// soft limit. The reasoning was right and the conclusion was backwards.
+		//
+		// Mainnet transactions at this height average a measured 27 KB, so a
+		// transaction is almost entirely script bytes. Holding the arena and
+		// holding your own copies of the scripts are therefore the same number
+		// of bytes: measured, the converted transactions alone come to 0.98
+		// times the wire block and the aliased ones to 1.01. What the clone
+		// added was a transient peak of 1.98 times the wire block while both
+		// were live, plus a full copy of every script.
+		//
+		// Under the node's own conditions, a heap pinned at a 6 GiB limit
+		// against 137 million live objects, that copy cost 22.89 ms per block
+		// at the mainnet shape against 0.43 ms for aliasing, because each
+		// allocation must pay off sweep debt before it may proceed. It also
+		// allocated 56 MB per block against 1.09 MB.
+		//
+		// Aliasing is safe because of what go-wire's arena guarantees in its
+		// own documentation: returned slices are stable forever with nothing
+		// ever moving them, capacity equals length so an append cannot reach
+		// into the neighbouring script, and the arena is never explicitly freed,
+		// so a chunk is reclaimed only once nothing points into it. Nothing in
+		// teranode or in go-bt writes through a script pointer, which
+		// TestConversionDoesNotModifyTheWireBlock holds to.
 		tx.Inputs[i] = &bt.Input{
-			UnlockingScript:    &bscript.Script{},
+			UnlockingScript:    (*bscript.Script)(&in.SignatureScript),
 			PreviousTxOutIndex: in.PreviousOutPoint.Index,
 			SequenceNumber:     in.Sequence,
 		}
+
 		_ = tx.Inputs[i].PreviousTxIDAdd(&in.PreviousOutPoint.Hash)
-		*tx.Inputs[i].UnlockingScript = bytes.Clone(in.SignatureScript)
 	}
 
 	tx.Outputs = make([]*bt.Output, len(wTx.TxOut))
+
 	for i, out := range wTx.TxOut {
 		tx.Outputs[i] = &bt.Output{
-			Satoshis:      uint64(out.Value),
-			LockingScript: &bscript.Script{},
+			Satoshis:      uint64(out.Value), //nolint:gosec
+			LockingScript: (*bscript.Script)(&out.PkScript),
 		}
-		*tx.Outputs[i].LockingScript = bytes.Clone(out.PkScript)
 	}
 
 	return nil

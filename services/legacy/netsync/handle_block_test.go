@@ -104,7 +104,7 @@ func TestSyncManager_HandleBlockDirect(t *testing.T) {
 	err = msgBlock.Deserialize(bytes.NewReader(blockBytes))
 	require.NoError(t, err)
 
-	err = sm.HandleBlockDirect(t.Context(), &peer.Peer{}, *blockHash, msgBlock, blockRequestOrigin{headerProven: true})
+	err = sm.HandleBlockDirect(t.Context(), &peer.Peer{}, *blockHash, msgBlock, nil, blockRequestOrigin{headerProven: true})
 	require.NoError(t, err)
 }
 

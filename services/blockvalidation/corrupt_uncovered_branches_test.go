@@ -105,7 +105,7 @@ func TestQuickValidateBlock_CorruptSubtreeVerdictUnwrapped(t *testing.T) {
 	// computed root — an unbound body-derived defect classified ERR_BLOCK_CORRUPT.
 	block.Header.HashMerkleRoot = &chainhash.Hash{}
 
-	err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "")
+	err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "", nil)
 	require.Error(t, err)
 	require.True(t, errors.IsBlockCorrupt(err),
 		"a corrupt subtree verdict must be returned unwrapped, got: %v", err)

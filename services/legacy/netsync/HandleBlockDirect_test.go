@@ -124,6 +124,7 @@ func Test_HandleBlockDirect(t *testing.T) {
 		validatorClient,
 		utxoStore,
 		subtreeStore,
+		nil,
 		subtreeValidation,
 		blockValidation,
 		blockAssemblyClient,
@@ -131,6 +132,6 @@ func Test_HandleBlockDirect(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = sm.HandleBlockDirect(context.Background(), &peer.Peer{}, *block.Hash(), nil, blockRequestOrigin{headerProven: true})
+	err = sm.HandleBlockDirect(context.Background(), &peer.Peer{}, *block.Hash(), nil, nil, blockRequestOrigin{headerProven: true})
 	require.NoError(t, err)
 }

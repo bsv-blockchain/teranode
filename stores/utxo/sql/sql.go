@@ -4263,7 +4263,15 @@ func (s *Store) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) 
 	}
 
 	if m := missingInputs.Load(); m > 0 {
-		return errors.NewProcessingError("failed to decorate previous outputs: %d inputs could not be resolved", m)
+		// ErrTxNotFound, not a generic processing error: a genuine query/connectivity fault
+		// above already returned via g.Wait() and never reaches here, so every path that lands
+		// on this line is "the store has no row for one of these outpoints" — the same class
+		// aerospike's own per-outpoint miss uses (aerospike/get.go sendOutpointBatch). Callers
+		// (quickWindow's decorate/gate seam in blockvalidation) tell a real backend fault, which
+		// stays fail-closed, apart from a plain not-found, which can be a predecessor block's
+		// create that just has not committed yet, by this class rather than by string-matching
+		// the message.
+		return errors.NewTxNotFoundError("failed to decorate previous outputs: %d inputs could not be resolved", m)
 	}
 
 	return nil

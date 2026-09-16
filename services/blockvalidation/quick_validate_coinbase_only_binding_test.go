@@ -101,7 +101,7 @@ func TestQuickValidate_CoinbaseOnlyBodyBinding(t *testing.T) {
 
 		block := buildTruncatedBody(t, suite.Server.settings, 1)
 
-		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "")
+		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "", nil)
 		require.Error(t, err)
 		require.True(t, errors.IsBlockCorrupt(err), "an emptied subtree list is a corrupt body, got: %v", err)
 		require.False(t, errors.Is(err, errors.ErrBlockInvalid), "the honest hash must never be condemned on an unbound body")

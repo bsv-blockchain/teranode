@@ -2,7 +2,6 @@ package netsync
 
 import (
 	"bytes"
-	"container/list"
 	"sync"
 	"testing"
 	"time"
@@ -52,6 +51,11 @@ func TestHandleBlockMsg_CorruptBody_NotMarkedFailed(t *testing.T) {
 	msgBlock := block.MsgBlock()
 	msgBlock.Header.Bits = 0x207fffff             // regtest max target
 	msgBlock.Header.MerkleRoot = chainhash.Hash{} // body no longer bound to the header
+	// The unified route requires a checkpoint-ancestry proof now, and the only source of
+	// one is a header-cache run rooted at the committed tip, so the block is anchored on
+	// a tip this fixture can also hand to committedTip.
+	tipHeader := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+	msgBlock.Header.PrevBlock = *tipHeader.Hash()
 	// Mine a nonce that meets the (easy) target: the max-target check still rejects ~half of random
 	// hashes, so a fixed nonce would be flaky. HandleBlockDirect checks PoW on the model header, so
 	// mine against that same predicate.
@@ -97,9 +101,16 @@ func TestHandleBlockMsg_CorruptBody_NotMarkedFailed(t *testing.T) {
 	sm.blockCorruptAttempts = expiringmap.New[legacyCorruptAttemptKey, *corruptAttemptState](10 * time.Minute)
 	t.Cleanup(func() { sm.blockCorruptAttempts.Stop() })
 
-	// newBackoffTestManager records the delivery as header-proven, which is what the unified
-	// route now additionally requires, so assert against that same origin.
-	require.True(t, sm.legacyUnified(blockRequestOrigin{headerProven: true}, uint32(height)),
+	// The proof itself: a checkpoint pinned at this block's own height, and a header
+	// cache filled with the one-header run that matches it. Without this the delivery is
+	// unproven, the unified route is denied, and the test would exercise the ordinary
+	// route instead of the one it is about.
+	params.Checkpoints = append(params.Checkpoints, chaincfg.Checkpoint{Height: height, Hash: &blockHash})
+	sm.headerCache = newHeaderCache().WithCheckpoints(params.Checkpoints)
+	require.True(t, sm.headerCache.Fill(*tipHeader.Hash(), height, []*wire.BlockHeader{&msgBlock.Header}))
+	require.True(t, sm.blockOrigin(blockHash).headerProven, "the fixture must actually prove the header")
+
+	require.True(t, sm.legacyUnified(sm.blockOrigin(blockHash), uint32(height)),
 		"unified route must be ON for this fixture")
 
 	err := sm.handleBlockMsg(&blockQueueMsg{
@@ -159,6 +170,12 @@ func runCorruptReRequestScenario(t *testing.T, maxCorruptAttempts int) corruptRe
 	msgBlock := block.MsgBlock()
 	msgBlock.Header.Bits = 0x207fffff             // regtest max target
 	msgBlock.Header.MerkleRoot = chainhash.Hash{} // body no longer bound to the header
+	// The header cache anchors on the node's committed tip and refuses a run that does
+	// not build on it, so the dropped block must name that tip as its parent or the
+	// wanted-range pass has nothing to recover it with.
+	tipHeader := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+	tipHash := *tipHeader.Hash()
+	msgBlock.Header.PrevBlock = tipHash
 	// Mine a nonce that meets the (easy) target: the max-target check still rejects ~half of random
 	// hashes, so a fixed nonce would be flaky. HandleBlockDirect checks PoW on the model header, so
 	// mine against that same predicate.
@@ -174,30 +191,35 @@ func runCorruptReRequestScenario(t *testing.T, maxCorruptAttempts int) corruptRe
 	}
 	blockHash := msgBlock.Header.BlockHash()
 
-	// Descendants still pending in the header list, which the refill is expected to request. Kept
-	// distinct from blockHash so the refill's getdata cannot be confused with requestBlockDirect's.
-	pendingHashes := [2]chainhash.Hash{{0xA1}, {0xA2}}
+	// The descendants the wanted-range pass is expected to reach for once the dropped
+	// block is asked for again. They are a real linked run above the dropped block
+	// rather than two invented hashes, because the header cache only accepts a run
+	// that links, and it is the cache the pass reads.
+	pendingHeaders, pending := linkedRun(blockHash, 2)
+	pendingHashes := [2]chainhash.Hash{pending[0], pending[1]}
+
+	cacheRun := append([]*wire.BlockHeader{&msgBlock.Header}, pendingHeaders...)
 
 	catchingBlocks := blockchain2.FSMStateCATCHINGBLOCKS
-	bestHeader := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
 
 	blockchainClient := &blockchain2.Mock{}
 	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&catchingBlocks, nil)
 	blockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
-	// The pending header hashes the refill will consider must report "not held", which is the
-	// haveInventory branch that requests them. Registered FIRST so it wins over the catch-all below,
-	// which testify resolves in registration order.
+	// The dropped hash and its descendants must all report "not held", which is the
+	// haveInventory branch that requests them. Registered FIRST so it wins over the
+	// catch-all below, which testify resolves in registration order.
 	blockchainClient.On("GetBlockHeader", mock.Anything, mock.MatchedBy(func(h *chainhash.Hash) bool {
-		return h != nil && (h.IsEqual(&pendingHashes[0]) || h.IsEqual(&pendingHashes[1]))
+		return h != nil && (h.IsEqual(&blockHash) || h.IsEqual(&pendingHashes[0]) || h.IsEqual(&pendingHashes[1]))
 	})).Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil), errors.NewNotFoundError("not found")).Maybe()
-	// The parent header lookup: the wire header's PrevBlock is the zero hash; return a parent one
-	// height below so the height-consistency check in HandleBlockDirect passes.
+	// The parent header lookup: return a parent one height below so the
+	// height-consistency check in HandleBlockDirect passes.
 	parentMeta := &model.BlockHeaderMeta{Height: uint32(height) - 1}
 	blockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
 		Return(&model.BlockHeader{}, parentMeta, nil)
-	// requestMissingBlocks' own dependencies, so the corrupt branch's re-request can be observed.
-	blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(bestHeader, &model.BlockHeaderMeta{Height: 100}, nil)
-	blockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return([]*chainhash.Hash{bestHeader.Hash()}, nil)
+	blockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return([]*chainhash.Hash{{}}, nil)
+	// The committed tip sits one below the dropped block, so the wanted range the
+	// recovery pass computes starts at exactly that block.
+	blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(tipHeader, &model.BlockHeaderMeta{Height: uint32(height) - 1}, nil)
 
 	var getDataMu sync.Mutex
 	getDataHashes := map[chainhash.Hash]struct{}{}
@@ -250,25 +272,31 @@ func runCorruptReRequestScenario(t *testing.T, maxCorruptAttempts int) corruptRe
 	sm.blockCorruptAttempts = expiringmap.New[legacyCorruptAttemptKey, *corruptAttemptState](10 * time.Minute)
 	t.Cleanup(func() { sm.blockCorruptAttempts.Stop() })
 
-	// newBackoffTestManager records the delivery as header-proven, which is what the unified
-	// route now additionally requires, so assert against that same origin.
-	require.True(t, sm.legacyUnified(blockRequestOrigin{headerProven: true}, uint32(height)),
-		"unified route must be ON for this fixture")
-
-	// Headers-first is the whole point of these cases. The header list carries PENDING nodes and
-	// startHeader points at the first of them, so the refill can genuinely reach fetchHeaderBlocks —
-	// without that the refill is a no-op and the refill leg would prove nothing.
+	// Headers-first is the whole point of these cases. The recovery route is the
+	// wanted-range pass, which names heights out of the header cache, so the cache is
+	// filled with a run rooted at the committed tip: the dropped block at height 500
+	// and two descendants above it. Without that fill the pass names nothing and the
+	// re-request leg would prove nothing.
 	sm.headersFirstMode.Store(true)
-	sm.headerList = list.New()
-	for i := range pendingHashes {
-		sm.headerList.PushBack(&headerNode{height: height + int32(i) + 1, hash: &pendingHashes[i]})
-	}
-	sm.startHeader = sm.headerList.Front()
 	sm.blockSizeTracker = newBlockSizeTracker(10)
 	sm.storeSyncPeer(p, &syncPeerState{})
+	// The cache carries the ancestry proof as well as the heights: a checkpoint pinned at
+	// the top of the run proves everything below it by linkage, which is what the unified
+	// route this fixture is about now additionally requires.
+	params.Checkpoints = append(params.Checkpoints, chaincfg.Checkpoint{Height: height + 2, Hash: &pendingHashes[1]})
+	sm.headerCache = newHeaderCache().WithCheckpoints(params.Checkpoints)
+	require.True(t, sm.headerCache.Fill(tipHash, height, cacheRun))
+	require.True(t, sm.blockOrigin(blockHash).headerProven, "the fixture must actually prove the header")
+	require.True(t, sm.legacyUnified(sm.blockOrigin(blockHash), uint32(height)),
+		"unified route must be ON for this fixture")
 
 	state, ok := sm.peerStates.Get(p)
 	require.True(t, ok)
+	// eligibleBlockPeers only considers connected sync candidates, and the assigner is
+	// nil without one — which would make every re-request assertion below pass or fail
+	// for the wrong reason.
+	state.syncCandidate = true
+	state.noteBestKnownHeight(height + 10)
 
 	err = sm.handleBlockMsg(&blockQueueMsg{block: msgBlock, blockHash: blockHash, blockHeight: height, peer: p})
 
@@ -284,36 +312,28 @@ func runCorruptReRequestScenario(t *testing.T, maxCorruptAttempts int) corruptRe
 }
 
 // TestHandleBlockMsg_CorruptBody_HeadersFirst_ReRequestsBlock pins the recovery half of the corrupt
-// branch in the mode that actually needs it (bitcoin-sv/teranode#4692). In headers-first mode the
-// getblocks re-request is inert: the peer answers with an inv, and processInvMsg discards invs while
-// headersFirstMode is set, so the hash never reaches state.requestQueue and no getdata is ever
-// issued. The header-block pipeline cannot recover it either — fetchHeaderBlocks walks forward from
-// sm.startHeader, and this block's header node was removed from headerList before validation ran.
+// branch in the mode that actually needs it (bitcoin-sv/teranode#4692).
 //
-// So the branch must issue a DIRECT getdata, and must put the hash back into both request maps: the
-// branch cleared them before validation, handleBlockMsg disconnects a peer that delivers a block it
-// has no record of requesting, and BlockRequested reads the per-peer map.
+// Upstream recovered the dropped hash with a direct getdata to the same peer, because both of its
+// other routes were blocked: a getblocks is answered with an inv and processInvMsg discards invs
+// while headers-first mode is on, and its header-block walk only ever went forward from a cursor
+// the dropped hash had already passed. Neither structure exists here. The recovery is the ordinary
+// wanted-range pass, which recomputes what the node wants from the committed tip every time it
+// runs, so the dropped hash is the first thing it names; the delivery has already released this
+// peer's ownership of it, so nothing holds it back, and the assigner is free to place it with a
+// different peer, which a direct getdata could not do.
 //
-// This is ALSO the control for the refill on this branch — the one thing the sibling corrupt-cap
-// gate must NOT do (bitcoin-sv/teranode#4692). Refilling is correct here precisely because this branch
-// re-arms the failing hash in the same breath, so the descendants the refill requests have a parent
-// on the way; the cap gate re-arms nothing, which is why its refill was removed. The fixture
-// therefore carries a pipeline the refill can genuinely top up: pending headerNode entries, a
-// startHeader pointing at them, this peer stored as the sync peer, and a header lookup that reports
-// those pending hashes as not held.
+// The assertion is the outcome rather than the call: a connected peer pair, and the remote end's
+// OnGetData listener records every block hash that actually arrived on the wire. Both legs are
+// pinned — the dropped hash itself, and a descendant of it, which only a pass that got past the
+// dropped block can have asked for.
 //
-// The assertion is the outcome, not the call: a connected peer pair, and the remote end's OnGetData
-// listener records every block hash that actually arrived on the wire, so the two legs are pinned
-// independently — the dropped hash comes only from requestBlockDirect, a PENDING header hash only
-// from the refill's fetchHeaderBlocks.
-//
-// Mutation proof, two of them: replacing sm.requestBlockDirect with the bare sm.requestMissingBlocks
-// that preceded it leaves no getdata for the dropped hash and both maps empty; deleting this
-// branch's refillHeaderBlockPipeline call leaves no getdata for the pending header hash.
+// Mutation proof: delete the sm.fetchHeaderBlocks() call on the corrupt branch and no getdata for
+// either hash reaches the wire before the deadline.
 func TestHandleBlockMsg_CorruptBody_HeadersFirst_ReRequestsBlock(t *testing.T) {
 	initPrometheusMetrics()
 
-	// Cap of 2, so this single corrupt delivery stays BELOW it and the direct re-request is expected.
+	// Cap of 2, so this single corrupt delivery stays BELOW it and the re-request is expected.
 	// At the cap the re-request is deliberately suppressed — pinned by the sibling test below — so a
 	// cap of 1 here would exercise that gate instead of the re-request this test is about.
 	sc := runCorruptReRequestScenario(t, 2)
@@ -322,33 +342,30 @@ func TestHandleBlockMsg_CorruptBody_HeadersFirst_ReRequestsBlock(t *testing.T) {
 	require.True(t, errors.IsBlockCorrupt(sc.err))
 
 	require.True(t, WaitUntil(func() bool { return sc.sawGetData(sc.blockHash) }, 2*time.Second),
-		"a corrupt drop in headers-first mode must put a getdata for the same hash on the wire")
+		"a corrupt drop in headers-first mode must put a getdata for the same hash back on the wire")
 
-	// The refill leg: a PENDING header hash, which only fetchHeaderBlocks can have requested.
 	require.True(t, WaitUntil(func() bool { return sc.sawGetData(sc.pendingHashes[0]) }, 2*time.Second),
-		"the corrupt branch must ALSO refill the header-block pipeline — it re-arms the dropped hash in the same breath, so its descendants have a parent on the way")
+		"the pass must carry on past the dropped block, so its descendants are requested in the same breath")
 
-	globalOrigin, inGlobal := sc.sm.requestedBlocks.Get(sc.blockHash)
-	require.True(t, inGlobal, "sm.requestedBlocks must be re-armed, or the inv route would request the block twice")
-	require.False(t, globalOrigin.headerProven, "the direct re-request must re-arm with the untrusted zero origin, forcing full validation")
-	peerOrigin, inPeer := sc.state.requestedBlocks.Get(sc.blockHash)
-	require.True(t, inPeer, "state.requestedBlocks must be re-armed, or handleBlockMsg disconnects the peer that answers")
-	require.False(t, peerOrigin.headerProven, "the per-peer map must also carry the untrusted zero origin")
+	// The ledger is what admits the answer: a block delivered with no owner on record costs an
+	// honest peer its connection, so a re-request that did not record itself would be worse than
+	// no re-request at all.
+	require.True(t, sc.sm.blockDownloads.RequestedWithin(sc.blockHash, blockRequestRetryInterval),
+		"the re-request must be recorded in the download ledger, or the delivery it invites is treated as unrequested")
 }
 
 // TestHandleBlockMsg_CorruptBody_AtCap_DoesNotReRequestBlock pins the wasted-re-request fix
 // (bitcoin-sv/teranode#4692). On the corrupt attempt that REACHES the per-(hash, peerID) cap, the
-// direct re-request must be skipped: the gate at the top of handleBlockMsg would drop that peer's
-// next delivery of this hash anyway, but only after the whole block body had crossed the wire — the
+// re-request must be skipped: the gate at the top of the delivery path would drop that peer's next
+// delivery of this hash anyway, but only after the whole block body had crossed the wire — the
 // exact waste that gate's own comment says it avoids by not re-requesting.
 //
-// The refill assertion is the control that makes the negative meaningful: the pipeline refill still
-// runs on this branch, so a PENDING header hash DOES reach the wire. Observing that first proves the
-// connection is live and the wait was long enough, so the absence of a getdata for the dropped hash
-// is a real absence rather than a race.
+// The absence is checked against a positive control from the sibling test above, which proves the
+// same fixture does put a getdata on the wire when the cap allows it, so this is a real absence
+// rather than a race.
 //
-// Mutation proof: remove the corruptBlockAttemptsExhausted guard around requestBlockDirect and the
-// dropped hash appears on the wire, reddening the negative assertion.
+// Mutation proof: remove the corruptBlockAttemptsExhausted guard around the pass and the dropped
+// hash appears on the wire, reddening the negative assertion.
 func TestHandleBlockMsg_CorruptBody_AtCap_DoesNotReRequestBlock(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -360,19 +377,12 @@ func TestHandleBlockMsg_CorruptBody_AtCap_DoesNotReRequestBlock(t *testing.T) {
 	require.True(t, sc.sm.corruptBlockAttemptsExhausted(sc.blockHash, sc.peerAddr),
 		"the fixture must actually reach the cap, or this test proves nothing")
 
-	// Control: the refill still fires, so the wire is live and the wait below is long enough.
-	require.True(t, WaitUntil(func() bool { return sc.sawGetData(sc.pendingHashes[0]) }, 2*time.Second),
-		"the pipeline refill must still run at the cap — only the direct re-request of the dropped hash is suppressed")
-
-	require.False(t, sc.sawGetData(sc.blockHash),
+	require.False(t, WaitUntil(func() bool { return sc.sawGetData(sc.blockHash) }, 500*time.Millisecond),
 		"at the cap the dropped hash must NOT be re-requested: the gate would discard that delivery only after the full body crossed the wire")
 
-	// The request maps are left clear, which is the corollary: nothing is expected from this peer for
-	// this hash until the cooldown window lapses or the sync peer rotates.
-	_, inGlobal := sc.sm.requestedBlocks.Get(sc.blockHash)
-	require.False(t, inGlobal, "sm.requestedBlocks must not be re-armed for a hash we deliberately did not request")
-	_, inPeer := sc.state.requestedBlocks.Get(sc.blockHash)
-	require.False(t, inPeer, "state.requestedBlocks must not be re-armed for a hash we deliberately did not request")
+	// The corollary: nothing is owed by anybody for this hash until the cooldown window lapses.
+	require.False(t, sc.sm.blockDownloads.RequestedWithin(sc.blockHash, blockRequestRetryInterval),
+		"the ledger must not record a request the node deliberately did not make")
 
 	// Unchanged by the gate: a corrupt body is still never marked failed, so its descendants are not
 	// suppressed as a NOT_FOUND cascade.

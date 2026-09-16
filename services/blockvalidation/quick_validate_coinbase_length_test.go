@@ -67,7 +67,7 @@ func TestQuickValidateBlock_CoinbaseLengthBinding(t *testing.T) {
 		block.Header.HashMerkleRoot, err = subtree.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, 0)
 		require.NoError(t, err)
 
-		err = suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "")
+		err = suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "", nil)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrBlockInvalid), "a merkle-bound bad coinbase length must condemn invalid, got: %v", err)
 		require.False(t, errors.IsBlockCorrupt(err), "must NOT be corrupt")
@@ -90,7 +90,7 @@ func TestQuickValidateBlock_CoinbaseLengthBinding(t *testing.T) {
 		// model's coinbase-only binding rule — which this route now asserts at its entry point. The
 		// body is therefore bound, and a bad coinbase length on a bound body is genuine consensus
 		// invalidity, condemnable once, exactly as model's step 4b classifies it.
-		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "")
+		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "", nil)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrBlockInvalid), "a bound bad coinbase length must condemn invalid, got: %v", err)
 		require.False(t, errors.IsBlockCorrupt(err), "must NOT be corrupt")

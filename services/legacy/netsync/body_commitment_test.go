@@ -5,7 +5,6 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -42,7 +41,7 @@ func TestHandleBlockMsg_VerifiedHeaderBodyCommitment(t *testing.T) {
 			for _, mutation := range []string{"none", "transaction", "coinbase", "coinbase only", "duplicate"} {
 				t.Run(mutation, func(t *testing.T) {
 					initPrometheusMetrics()
-					sm, p, state := newHeaderProvenanceManager(t)
+					sm, p, _ := newHeaderProvenanceManager(t)
 					sm.settings.BlockValidation.LegacyUnifiedBelowCheckpoint = unified
 					storeURL, err := url.Parse("sqlitememory:///")
 					require.NoError(t, err)
@@ -76,12 +75,15 @@ func TestHandleBlockMsg_VerifiedHeaderBodyCommitment(t *testing.T) {
 					block.Header.MerkleRoot = *roots[len(roots)-1]
 					require.True(t, solveBlock(&block.Header, sm.chainParams.PowLimit))
 					hash := block.Header.BlockHash()
-					sm.nextCheckpoint = &chaincfg.Checkpoint{Height: 1, Hash: &hash}
-					sm.headerList.PushBack(&headerNode{height: 0, hash: sm.chainParams.GenesisHash})
+					// Prove the header the honest way, through the production path: pin a
+					// checkpoint at height 1 naming this block and hand the handler a headers
+					// batch containing it. The cache anchors on the committed tip, which is
+					// genesis here, so the batch's single header sits at height 1 and matches.
+					pinCheckpoint(sm, 1, &hash)
 					headers := wire.NewMsgHeaders()
 					require.NoError(t, headers.AddBlockHeader(&block.Header))
 					sm.handleHeadersMsg(&headersMsg{headers: headers, peer: p})
-					require.True(t, sm.blockOrigin(state, hash).headerProven)
+					require.True(t, sm.blockOrigin(hash).headerProven)
 
 					switch mutation {
 					case "duplicate":
@@ -99,6 +101,11 @@ func TestHandleBlockMsg_VerifiedHeaderBodyCommitment(t *testing.T) {
 						require.NotEqual(t, block.Header.MerkleRoot, *roots[len(roots)-1])
 					}
 
+					// This branch's download ledger, not upstream's requestedBlocks maps,
+					// is what handleBlockMsg consults to admit a block: mark it owed by
+					// this peer or the call is rejected as unrequested before it ever
+					// reaches the check this test is about.
+					require.True(t, sm.blockDownloads.Add(p, hash))
 					err = sm.handleBlockMsg(&blockQueueMsg{block: block, blockHash: hash, peer: p})
 					if mutation == "none" {
 						require.ErrorContains(t, err, "body commitment downstream sentinel")
