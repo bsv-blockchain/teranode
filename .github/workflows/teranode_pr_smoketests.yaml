@@ -19,8 +19,35 @@ env:
   GO_VERSION: "1.26.0"
 
 jobs:
+  scope:
+    name: compute test scope
+    runs-on: teranode-runner-8-core-arm
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      full: ${{ steps.s.outputs.full }}
+      run_smoke: ${{ steps.s.outputs.run_smoke }}
+      run_chainintegrity: ${{ steps.s.outputs.run_chainintegrity }}
+      run_seq: ${{ steps.s.outputs.run_seq }}
+      seq_pkgs: ${{ steps.s.outputs.seq_pkgs }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - id: s
+        uses: ./.github/actions/test-scope
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          force-full: ${{ contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+
   smoketest:
     name: smoketest (shard ${{ matrix.shard }})
+    needs: [scope]
+    # A status function is REQUIRED for fail-open. Without one, a scope job that
+    # dies at the runner/step level (checkout, setup-go, go-cache) - before the
+    # action can fail open - makes this job SKIP, and a skipped required check
+    # satisfies branch protection. `needs.scope.result != 'success'` turns that
+    # into a full run instead of a silent pass.
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.full == 'true' || needs.scope.outputs.run_smoke == 'true') }}
     runs-on: teranode-runner-8-core
     strategy:
       fail-fast: false
@@ -63,6 +90,14 @@ jobs:
 
   prunertest:
     name: prunertest
+    # Runs in test/e2e/daemon/ready (same package as smoke), so gated on run_smoke.
+    needs: [scope]
+    # A status function is REQUIRED for fail-open. Without one, a scope job that
+    # dies at the runner/step level (checkout, setup-go, go-cache) - before the
+    # action can fail open - makes this job SKIP, and a skipped required check
+    # satisfies branch protection. `needs.scope.result != 'success'` turns that
+    # into a full run instead of a silent pass.
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.full == 'true' || needs.scope.outputs.run_smoke == 'true') }}
     # arm64: TestPruner/TestBlobDeletion use aerospike (8.1, arm64) but no
     # SV-node, so this moves to arm unlike smoketest/legacy-sync/sequential.
     runs-on: teranode-runner-8-core-arm
@@ -102,6 +137,14 @@ jobs:
 
   legacy-sync:
     name: legacy-sync
+    # Runs in test/e2e/daemon/ready (same package as smoke), so gated on run_smoke.
+    needs: [scope]
+    # A status function is REQUIRED for fail-open. Without one, a scope job that
+    # dies at the runner/step level (checkout, setup-go, go-cache) - before the
+    # action can fail open - makes this job SKIP, and a skipped required check
+    # satisfies branch protection. `needs.scope.result != 'success'` turns that
+    # into a full run instead of a silent pass.
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.full == 'true' || needs.scope.outputs.run_smoke == 'true') }}
     runs-on: teranode-runner-8-core
     steps:
       - name: Login to Docker Hub
@@ -139,6 +182,13 @@ jobs:
 
   chainintegrity:
     name: chainintegrity
+    needs: [scope]
+    # A status function is REQUIRED for fail-open. Without one, a scope job that
+    # dies at the runner/step level (checkout, setup-go, go-cache) - before the
+    # action can fail open - makes this job SKIP, and a skipped required check
+    # satisfies branch protection. `needs.scope.result != 'success'` turns that
+    # into a full run instead of a silent pass.
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.full == 'true' || needs.scope.outputs.run_chainintegrity == 'true') }}
     # arm64: no SV-node; images all arm64-capable (teranode multi-arch,
     # aerospike-server:8.1 arm64, postgres + redpanda arm64).
     runs-on: teranode-runner-8-core-arm
@@ -178,6 +228,15 @@ jobs:
 
   sequential:
     name: sequential (shard ${{ matrix.shard }})
+    needs: [scope]
+    # A status function is REQUIRED for fail-open. Without one, a scope job that
+    # dies at the runner/step level (checkout, setup-go, go-cache) - before the
+    # action can fail open - makes this job SKIP, and a skipped required check
+    # satisfies branch protection. `needs.scope.result != 'success'` turns that
+    # into a full run instead of a silent pass.
+    # On a scope-job failure seq_pkgs is empty, which the runner reads as
+    # "all packages" - so the fallback run is the full sequential suite.
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.full == 'true' || needs.scope.outputs.run_seq == 'true') }}
     runs-on: teranode-runner-8-core
     strategy:
       fail-fast: false
@@ -204,9 +263,14 @@ jobs:
         uses: ./.github/actions/go-cache
 
       - name: Run sequential shard
-        run: make sequentialtest-shard SHARD=${{ matrix.shard }} TOTAL=7
+        # On full runs SEQ_PKGS is empty → all sequential packages. On scoped runs
+        # it restricts the shard to the affected packages. SEQ_PKGS comes in via
+        # env (not ${{ }} interpolated into the run-line) so the tool-produced
+        # package list can never be parsed as shell.
+        run: make sequentialtest-shard SHARD=${{ matrix.shard }} TOTAL=7 SEQ_PKGS="$SEQ_PKGS"
         env:
           settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
+          SEQ_PKGS: ${{ needs.scope.outputs.seq_pkgs }}
 
       - name: Upload sequential shard results
         if: always()
