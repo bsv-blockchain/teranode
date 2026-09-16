@@ -7855,6 +7855,11 @@
 </li>
 </ul>
 <h3 id="merkle-proof-endpoints">Merkle Proof Endpoints<a class="headerlink" href="#merkle-proof-endpoints" title="Permanent link">&para;</a></h3>
+<p>These endpoints accept transaction IDs only. A hash with no mined transaction
+(including a subtree root) returns HTTP 404 with
+<code>mined transaction not found; BUMP proofs require a mined transaction ID</code>.
+Transactions found only in orphan blocks return HTTP 404 with
+<code>transaction not in main chain</code>.</p>
 <ul>
 <li>
 <p>GET <code>/api/v1/merkle_proof/:hash</code></p>
