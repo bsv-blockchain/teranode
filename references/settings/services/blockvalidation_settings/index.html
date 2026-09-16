@@ -7592,9 +7592,9 @@
 <tr>
 <td>FetchNumWorkers</td>
 <td>int</td>
-<td>1</td>
+<td>16</td>
 <td>blockvalidation_fetch_num_workers</td>
-<td>Block fetch worker goroutines</td>
+<td>Catchup workers running the per-block subtree-data prewarm</td>
 </tr>
 <tr>
 <td>FetchBufferSize</td>
@@ -7606,9 +7606,16 @@
 <tr>
 <td>SubtreeFetchConcurrency</td>
 <td>int</td>
-<td>8</td>
+<td>32</td>
 <td>blockvalidation_subtree_fetch_concurrency</td>
 <td>Concurrent subtree fetches per block</td>
+</tr>
+<tr>
+<td>CatchupPrefetchBudgetBytes</td>
+<td>int64</td>
+<td>268435456</td>
+<td>blockvalidation_catchup_prefetch_budget_bytes</td>
+<td>Declared block bytes admitted concurrently into the catchup subtree-data prewarm (0 disables the budget and the subtree-concurrency rule it drives)</td>
 </tr>
 <tr>
 <td>SubtreeBatchSize</td>
@@ -7843,6 +7850,19 @@
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="nv">blockvalidation_fetch_num_workers</span><span class="o">=</span><span class="m">32</span>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="nv">blockvalidation_subtree_batch_size</span><span class="o">=</span><span class="m">32</span>
 </span></code></pre></div>
+<p>Raising <code>blockvalidation_fetch_num_workers</code> raises catchup memory: each worker runs one
+block's subtree-data prewarm, parsing every transaction of every subtree of that block into
+memory. Size <code>blockvalidation_catchup_prefetch_budget_bytes</code> against measured headroom on
+the target deployment — it caps the declared block bytes admitted concurrently across those
+workers, which is not the same thing as a process-memory ceiling.</p>
+<p>A block whose declared size exceeds that budget, or which declares no size at all, parses its
+subtrees one at a time instead of <code>blockvalidation_subtree_fetch_concurrency</code> at a time. Setting
+the budget to <code>0</code> disables the budget and that rule together; it does not restore the
+pre-budget behaviour exactly, because subtree data is streamed into the blob store either way.
+The counters <code>teranode_blockvalidation_catchup_prefetch_budget_parked_total</code>,
+<code>teranode_blockvalidation_catchup_prefetch_oversized_blocks_total</code> and
+<code>teranode_blockvalidation_catchup_prefetch_undeclared_size_blocks_total</code> report how often each
+of those regimes is entered.</p>
 <h3 id="catchup-mode-configuration">Catchup Mode Configuration<a class="headerlink" href="#catchup-mode-configuration" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nv">blockvalidation_useCatchupWhenBehind</span><span class="o">=</span><span class="nb">true</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nv">blockvalidation_catchup_max_retries</span><span class="o">=</span><span class="m">5</span>

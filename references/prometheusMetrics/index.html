@@ -7970,6 +7970,21 @@
 <td>Number of active catchup operations (0 or 1)</td>
 </tr>
 <tr>
+<td><code>teranode_blockvalidation_catchup_prefetch_budget_parked_total</code></td>
+<td>Counter</td>
+<td>Total times a prewarm worker parked waiting for prefetch budget</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_catchup_prefetch_oversized_blocks_total</code></td>
+<td>Counter</td>
+<td>Total blocks declaring a size over the budget, parsed one subtree at a time</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_catchup_prefetch_undeclared_size_blocks_total</code></td>
+<td>Counter</td>
+<td>Total blocks declaring no size, parsed one subtree at a time</td>
+</tr>
+<tr>
 <td><code>teranode_blockvalidation_priority_queue_size</code></td>
 <td>GaugeVec</td>
 <td>Current size of the block priority queue by priority level</td>
