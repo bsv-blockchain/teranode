@@ -159,3 +159,18 @@ test.describe('smoke: /peers legacy card', () => {
     ).toHaveLength(0)
   })
 })
+
+// Old subtree proof links must remain usable without requesting a tx-only proof.
+test('subtree proof links fall back to overview', async ({ smokePage }) => {
+  const proofRequests: string[] = []
+  smokePage.on('request', (request) => {
+    if (request.url().includes('/merkle_proof/')) proofRequests.push(request.url())
+  })
+  await smokePage.goto(`/viewer/subtree/?hash=${DETAIL_HASH}&tab=merkleproof`)
+  await expect(smokePage.getByRole('button', { name: 'Overview', exact: true })).toBeVisible()
+  await expect(smokePage.getByRole('button', { name: /merkle proof/i })).toHaveCount(0)
+  await expect(smokePage.locator('.fields')).toBeVisible()
+  await smokePage.getByRole('button', { name: 'JSON', exact: true }).click()
+  await expect(smokePage.locator('.json')).toBeVisible()
+  expect(proofRequests).toEqual([])
+})
