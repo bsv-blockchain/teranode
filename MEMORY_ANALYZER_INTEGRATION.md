@@ -2,17 +2,28 @@
 
 ## Overview
 
-The memory analyzer is now integrated into Teranode and available on all services that have the profiler enabled.
+The memory analyzer is integrated into Teranode and available on all services that have the profiler enabled **on a loopback-bound address**.
 
 ## Where It's Used
 
-The memory analyzer handler is registered in `daemon/daemon_services.go` in the `startProfilerAndMetrics` function (line 189):
+The memory analyzer handler is registered in `daemon/daemon_services.go` in `newProfilerMux`, and only when `profilerAddr` is loopback-bound:
 
 ```go
-// memory analyzer support (includes mmap, non-heap memory)
-logger.Infof("Memory analyzer available on http://%s/debug/memory", profilerAddr)
-mux.HandleFunc("/debug/memory", profiling.MemoryProfileHandler)
+// memory analyzer support (includes mmap, non-heap memory) - loopback only
+if util.IsLoopbackListenAddress(profilerAddr) {
+    logger.Infof("Memory analyzer available on http://%s/debug/memory", profilerAddr)
+    mux.HandleFunc("/debug/memory", profiling.MemoryProfileHandler)
+}
 ```
+
+### Why loopback only
+
+The analyzer output lists the exact virtual-address range of every large mapping in the
+process (the Teranode binary, shared libraries, heap and stack regions, named mmaps).
+That defeats ASLR, which is the prerequisite for turning any later memory-corruption bug
+into a reliable exploit. The default non-dev `profilerAddr` is `:${PROFILE_PORT}` (all
+interfaces, so Prometheus can scrape `/metrics`), and on that bind `/debug/memory`
+answers 404. The `.dev` context binds `localhost:${PROFILE_PORT}` and keeps the route.
 
 ## How to Access
 
@@ -20,7 +31,7 @@ mux.HandleFunc("/debug/memory", profiling.MemoryProfileHandler)
 
 The memory analyzer is available when:
 
-1. `ProfilerAddr` is set in settings (e.g., `:6060`)
+1. `ProfilerAddr` is set in settings to a loopback address (e.g., `localhost:6060`); on `:6060` or any interface bind the route is not registered
 2. The service has started successfully
 3. You're running on Linux (requires `/proc/[pid]/smaps`)
 
@@ -41,6 +52,9 @@ curl http://localhost:6060/debug/memory?top=100
 
 ### Example: Accessing from Kubernetes
 
+Set `profilerAddr` to `localhost:6060` on the pod (port-forward reaches loopback inside the
+pod's network namespace), or run `cmd/memanalyzer` via `kubectl exec` instead.
+
 ```bash
 # Port-forward to a pod
 kubectl port-forward subtree-validator-pod 6060:6060
@@ -52,8 +66,9 @@ curl http://localhost:6060/debug/memory > memory_analysis.txt
 ### Example: Accessing from Docker Compose
 
 ```bash
-# If service exposes port 6060
-curl http://localhost:6060/debug/memory
+# Only when the service's profilerAddr is loopback-bound and reached from inside
+# the container; a published port on a wildcard bind answers 404.
+docker compose exec <service> curl -s http://localhost:6060/debug/memory
 ```
 
 ## Which Services Have It

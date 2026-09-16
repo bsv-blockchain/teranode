@@ -31,6 +31,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/servicemanager"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -175,47 +176,13 @@ func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settin
 		}
 
 		go func() {
-			logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)
-
-			prefix := appSettings.StatsPrefix
-			logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, prefix)
-
 			server := &http.Server{
 				Addr:         profilerAddr,
-				Handler:      nil,
+				Handler:      newProfilerMux(logger, appSettings),
 				ReadTimeout:  60 * time.Second,
 				WriteTimeout: 60 * time.Second,
 				IdleTimeout:  120 * time.Second,
 			}
-
-			// register pprof handlers
-			mux := http.NewServeMux()
-			mux.HandleFunc("/debug/pprof/", pprof.Index)
-			mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-			mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-			mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-			mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-
-			// fgprof support
-			mux.Handle("/debug/fgprof", fgprof.Handler())
-
-			// memory analyzer support (includes mmap, non-heap memory)
-			logger.Infof("Memory analyzer available on http://%s/debug/memory", profilerAddr)
-			mux.HandleFunc("/debug/memory", profiling.MemoryProfileHandler)
-
-			if appSettings.StatsPrefix != "" {
-				gocore.RegisterStatsHandlers(mux)
-			}
-
-			prometheusEndpoint := appSettings.PrometheusEndpoint
-			if prometheusEndpoint != "" && !metricsRegistered.Load() {
-				metricsRegistered.Store(true)
-				logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
-				mux.Handle(prometheusEndpoint, promhttp.Handler())
-			}
-
-			// add mux to the server
-			server.Handler = mux
 
 			logger.Fatalf("%v", server.ListenAndServe())
 		}()
@@ -232,6 +199,58 @@ func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settin
 			http.Handle(prometheusEndpoint, promhttp.Handler())
 		}
 	}
+}
+
+// newProfilerMux builds the handler set served on the profiler listener: pprof,
+// fgprof, the gocore stats pages, the Prometheus endpoint and, when the
+// listener cannot be reached from the network, the memory analyzer.
+//
+// The memory analyzer (/debug/memory) prints the exact virtual-address range
+// of every large mapping in the process, taken from /proc/self/smaps. That
+// output defeats ASLR, which is the prerequisite for turning any later
+// memory-corruption bug into a reliable exploit, so it is only registered when
+// profilerAddr is loopback-bound. A wildcard or interface-bound profiler
+// (the default outside the dev context, so Prometheus can scrape it) never
+// serves the route: it answers 404 there. To use the analyzer against a
+// deployed node, bind profilerAddr to loopback and port-forward, or run
+// cmd/memanalyzer inside the container.
+func newProfilerMux(logger ulogger.Logger, appSettings *settings.Settings) *http.ServeMux {
+	profilerAddr := appSettings.ProfilerAddr
+
+	logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	// fgprof support
+	mux.Handle("/debug/fgprof", fgprof.Handler())
+
+	// memory analyzer support (includes mmap, non-heap memory) - loopback only,
+	// see the function comment.
+	if util.IsLoopbackListenAddress(profilerAddr) {
+		logger.Infof("Memory analyzer available on http://%s/debug/memory", profilerAddr)
+		mux.HandleFunc("/debug/memory", profiling.MemoryProfileHandler)
+	} else {
+		logger.Infof("Memory analyzer (/debug/memory) disabled: profilerAddr %q is not loopback-bound and the analyzer exposes process address mappings", profilerAddr)
+	}
+
+	if appSettings.StatsPrefix != "" {
+		logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, appSettings.StatsPrefix)
+		gocore.RegisterStatsHandlers(mux)
+	}
+
+	prometheusEndpoint := appSettings.PrometheusEndpoint
+	if prometheusEndpoint != "" && !metricsRegistered.Load() {
+		metricsRegistered.Store(true)
+		logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
+		mux.Handle(prometheusEndpoint, promhttp.Handler())
+	}
+
+	return mux
 }
 
 // startBlockchainService initializes and starts the Blockchain service.

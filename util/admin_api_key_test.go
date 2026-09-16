@@ -167,7 +167,7 @@ func TestIsLoopbackListenAddress(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, isLoopbackListenAddress(tt.addr))
+			require.Equal(t, tt.want, IsLoopbackListenAddress(tt.addr))
 		})
 	}
 }

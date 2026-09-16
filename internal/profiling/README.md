@@ -58,6 +58,12 @@ import "github.com/bsv-blockchain/teranode/internal/profiling"
 http.HandleFunc("/debug/memory", profiling.MemoryProfileHandler)
 ```
 
+**Security:** the output includes the exact virtual-address range of every large
+mapping (binary, shared libraries, heap, stacks, named mmaps). That defeats ASLR for
+the process, so never register the handler on a listener reachable from the network.
+The Teranode daemon only registers it when `profilerAddr` is loopback-bound
+(`localhost`, `127.0.0.1`, `::1`); on any other bind `/debug/memory` answers 404.
+
 Then access it:
 
 ```bash
