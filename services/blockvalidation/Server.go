@@ -1064,7 +1064,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		// state an announcement flood creates — so an unbounded fetch would let
 		// a slow peer pin the worker indefinitely. Same budget as the
 		// priority-queue catchup fetch in addBlockToPriorityQueue.
-		fetchCtx, fetchCancel := context.WithTimeout(ctx, 30*time.Second)
+		fetchCtx, fetchCancel := context.WithTimeout(ctx, peerBlockFetchTimeout)
 		block, err := u.fetchSingleBlock(fetchCtx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
 		fetchCancel()
 		if err != nil {
@@ -1737,7 +1737,14 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	if len(useBlock) > 0 {
 		block = useBlock[0]
 	} else {
-		block, err = u.fetchSingleBlock(ctx, hash, peerID, baseURL)
+		// Bound the fetch: this ctx is the block-processing worker's service-lifetime context
+		// with no deadline of its own, and fetchSingleBlock's DoHTTPRequestBodyReader would
+		// otherwise fall back to the 5-minute streaming timeout (bitcoin-sv/teranode#4742) - a
+		// 20x wider window for a hostile peer than the 30s budget every sibling fetchSingleBlock
+		// call site sets explicitly.
+		fetchCtx, fetchCancel := context.WithTimeout(ctx, peerBlockFetchTimeout)
+		block, err = u.fetchSingleBlock(fetchCtx, hash, peerID, baseURL)
+		fetchCancel()
 		if err != nil {
 			return err
 		}
@@ -2780,7 +2787,7 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 
 	// Create isolated context with timeout for transient fetch operation
 	// This ensures fetch failures don't affect other operations using parent context
-	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), peerBlockFetchTimeout)
 	defer fetchCancel()
 
 	// Fetch the block to classify it
