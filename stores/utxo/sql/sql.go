@@ -2007,10 +2007,15 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	}
 
 	if len(spends) != len(spentSpends) {
-		// Rollback successful spends when the transaction has genuine validation failures
-		// (double-spend, frozen, conflicting, hash mismatch). For transient errors, skip
-		// rollback — the optimistic locking makes spends idempotent for the same spender.
-		if needsSpendRollback(spends) {
+		// Roll back the successful spends when the transaction has genuine validation
+		// failures (double-spend, frozen, conflicting, hash mismatch), and also whenever
+		// the spending tx has no record in the store, whatever the failure class
+		// (issue 1214). A spend that stands with no spender record is a dangling
+		// reference that later counter-conflicting walks dereference to TX_NOT_FOUND.
+		// The optimistic locking makes spends idempotent for the same spender, so a
+		// retry re-applies them. When the spender record exists, the spends belong to
+		// it and must stand. Mirrors aerospike spend.go.
+		if len(spentSpends) > 0 && (needsSpendRollback(spends) || (!txAlreadyExists && s.spenderRecordAbsent(ctx, tx))) {
 			if unspendErr := s.Unspend(context.Background(), spentSpends); unspendErr != nil {
 				s.logger.Errorf("error in sql unspend (batched mode): %v", unspendErr)
 			}
@@ -2033,6 +2038,21 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	prometheusUtxoSpend.Add(float64(len(spends)))
 
 	return spends, nil
+}
+
+// spenderRecordAbsent reports whether the store definitely holds no record for
+// the spending tx. Only a definite "no row" answers true: a query failure keeps
+// the successful spends in place, because unspending the inputs of a record
+// that may exist is the worse outcome.
+func (s *Store) spenderRecordAbsent(ctx context.Context, tx *bt.Tx) bool {
+	var spendingTxExists bool
+	if err := s.db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM transactions WHERE hash = $1)", tx.TxIDChainHash()[:]).Scan(&spendingTxExists); err != nil {
+		s.logger.Warnf("[Spend][%s] could not confirm whether the spending tx exists after a partial spend failure, leaving the successful spends in place: %v", tx.TxID(), err)
+
+		return false
+	}
+
+	return !spendingTxExists
 }
 
 // needsSpendRollback returns true if any spend failed due to a validation error
