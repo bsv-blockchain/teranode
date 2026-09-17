@@ -8892,7 +8892,8 @@
 <h3 id="centrifuge-configuration-real-time-updates">Centrifuge Configuration (Real-time Updates)<a class="headerlink" href="#centrifuge-configuration-real-time-updates" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>asset_centrifuge_disable</code>: Whether to disable Centrifuge server (default: false)</li>
-<li><code>asset_centrifugeListenAddress</code>: Centrifuge listen address (default: ":8000")</li>
+<li><code>asset_centrifugeListenAddress</code>: Non-empty enables Centrifuge (default: ":8892"). Not bound; the WebSocket is served on Asset HTTP at <code>/connection/websocket</code></li>
+<li><code>asset_centrifugeAllowOrigins</code>: Pipe-separated extra browser origins allowed to open the WebSocket (default: "", same-host only)</li>
 </ul>
 <h3 id="security">Security<a class="headerlink" href="#security" title="Permanent link">&para;</a></h3>
 <ul>

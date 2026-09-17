@@ -8566,8 +8566,9 @@
 <ul>
 <li><strong>WebSocket URL</strong>: <code>/connection/websocket</code><ul>
 <li>Protocol: WebSocket (ws:// or wss://)</li>
-<li>Default port: 8892 (configurable via <code>asset_centrifugeListenAddress</code>)</li>
-<li>Authentication: Automatic credential assignment on connection</li>
+<li>Served on the Asset HTTP server (<code>asset_httpListenAddress</code>, default port 8090). <code>asset_centrifugeListenAddress</code> only enables the socket and is not bound as a separate listener</li>
+<li>Authentication: none. Each connection is assigned a random user ID. The socket carries the same public, read-only telemetry the P2P service gossips</li>
+<li>Origin check: browser connections must come from the same hostname as the request or from <code>asset_centrifugeAllowOrigins</code>; cross-site origins get HTTP 403</li>
 <li>Connection requirements: Asset service must have cached current node status from P2P</li>
 </ul>
 </li>
@@ -8831,13 +8832,21 @@ payload lives at <code>push.pub.data</code>:</p>
 </ul>
 </li>
 <li>
-<p><strong>Asset Centrifuge Listen Address (<code>asset_centrifugeListenAddress</code>)</strong>: WebSocket server listen address.</p>
+<p><strong>Asset Centrifuge Listen Address (<code>asset_centrifugeListenAddress</code>)</strong>: Enables the Centrifuge WebSocket when non-empty.</p>
 <ul>
 <li>Type: <code>string</code></li>
 <li>Default: <code>":8892"</code></li>
 <li>Environment Variable: <code>TERANODE_ASSET_CENTRIFUGELISTENADDRESS</code></li>
-<li>Impact: Determines Centrifuge WebSocket server listening address when enabled</li>
-<li>Code Usage: Used for Centrifuge server address configuration</li>
+<li>Impact: The address is <strong>not bound</strong>. The WebSocket is served on Asset HTTP at <code>/connection/websocket</code>, so restricting this address does not protect it</li>
+<li>Code Usage: An empty value skips Centrifuge creation; otherwise the value is only logged at startup</li>
+</ul>
+</li>
+<li>
+<p><strong>Asset Centrifuge Allow Origins (<code>asset_centrifugeAllowOrigins</code>)</strong>: Extra browser origins allowed to open the WebSocket.</p>
+<ul>
+<li>Type: <code>string</code> (pipe-separated <code>scheme://host[:port]</code> origins; <code>*</code> allows all)</li>
+<li>Default: <code>""</code> (same-host origins and non-browser clients only)</li>
+<li>Impact: Needed only when a reverse proxy rewrites the Host header seen by the Asset service</li>
 </ul>
 </li>
 </ul>
@@ -8917,8 +8926,8 @@ payload lives at <code>push.pub.data</code>:</p>
 <p><strong>Centrifuge Real-time Updates:</strong></p>
 <ul>
 <li><strong>Primary Setting</strong>: <code>asset_centrifuge_disable</code> (controls feature)</li>
-<li><strong>Dependencies</strong>: <code>asset_centrifugeListenAddress</code>, <code>asset_httpAddress</code></li>
-<li><strong>Interaction</strong>: When enabled, requires valid HTTP address and listen address; URL validation performed</li>
+<li><strong>Dependencies</strong>: <code>asset_centrifugeListenAddress</code> (non-empty enables), <code>asset_httpAddress</code>, <code>asset_centrifugeAllowOrigins</code></li>
+<li><strong>Interaction</strong>: When enabled, requires a valid HTTP address; URL validation performed. The WebSocket shares the Asset HTTP listener</li>
 </ul>
 <p>Centrifuge supports the following subscription channels:</p>
 <ul>
@@ -8995,7 +9004,7 @@ payload lives at <code>push.pub.data</code>:</p>
 <li><code>TERANODE_ASSET_HTTPPUBLICADDRESS</code> - Public-facing URL</li>
 <li><code>TERANODE_ASSET_APIPREFIX</code> - API URL prefix</li>
 <li><code>TERANODE_ASSET_CENTRIFUGE_DISABLE</code> - Disable Centrifuge service</li>
-<li><code>TERANODE_ASSET_CENTRIFUGELISTENADDRESS</code> - Centrifuge listen address</li>
+<li><code>TERANODE_ASSET_CENTRIFUGELISTENADDRESS</code> - Enables the Centrifuge WebSocket when non-empty; not bound as a listener (the socket is served on Asset HTTP)</li>
 <li><code>TERANODE_ASSET_SIGN_HTTP_RESPONSES</code> - Enable response signing</li>
 <li><code>TERANODE_SECURITYLEVELHTTP</code> - HTTP security level</li>
 <li><code>TERANODE_SERVER_CERTFILE</code> - TLS certificate file</li>
