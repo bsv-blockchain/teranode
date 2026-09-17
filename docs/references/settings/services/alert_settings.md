@@ -14,7 +14,7 @@
 | P2PPort | int | 9908 | ALERT_P2P_PORT | P2P listening port (string length >= 2 after PORT_PREFIX applied) |
 | P2PBootstrapPeer | string | "" | alert_p2p_bootstrap_peer | Extra libp2p bootstrap multiaddr for private alert networks (public IPFS peers are still tried) |
 | P2PAllowPrivateIPs | bool | false | alert_p2p_allow_private_ips | Allow dialing/accepting/advertising RFC1918 addresses on the alert network |
-| P2PPeerDiscoveryInterval | duration | 10m | alert_p2p_peer_discovery_interval | Peer discovery and alert sync cadence |
+| P2PPeerDiscoveryInterval | time.Duration | 10m | alert_p2p_peer_discovery_interval | Peer discovery and alert sync cadence |
 | P2PDHTMode | string | "client" | alert_p2p_dht_mode | Kademlia DHT mode: `client` or `server` |
 
 ## Network-Specific Behavior
