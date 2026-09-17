@@ -797,6 +797,9 @@ func TestStore_Constants(t *testing.T) {
 			fields.TxInpoints,
 			fields.BlockIDs,
 			fields.UtxoSpendableIn,
+			fields.UtxoFreezeFrom,
+			fields.UtxoFreezeUntil,
+			fields.UtxoFreezeExp,
 			fields.Conflicting,
 		}
 

@@ -836,7 +836,9 @@ func TestAerospike(t *testing.T) {
 		var tErr *errors.Error
 		require.ErrorAs(t, err, &tErr)
 		require.Equal(t, errors.ERR_UTXO_ERROR, tErr.Code())
-		require.ErrorIs(t, err, errors.ErrFrozen)
+		// An unqualified freeze is a (0, 0) window — consensus-active at every height —
+		// and the consensus tier is checked first (#1422).
+		require.ErrorIs(t, err, errors.ErrUtxoConsensusFrozen)
 	})
 
 	t.Run("aerospike_get_conflicting", func(t *testing.T) {
