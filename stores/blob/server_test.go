@@ -6,10 +6,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -167,6 +170,7 @@ type countingReadSeekCloser struct {
 	readErr    error
 	seekErr    error
 	closeCount int
+	maxReadLen int // largest buffer handed to Read
 }
 
 func newCountingReadSeekCloser(data []byte) *countingReadSeekCloser {
@@ -174,6 +178,8 @@ func newCountingReadSeekCloser(data []byte) *countingReadSeekCloser {
 }
 
 func (c *countingReadSeekCloser) Read(p []byte) (int, error) {
+	c.maxReadLen = max(c.maxReadLen, len(p))
+
 	if c.readErr != nil {
 		return 0, c.readErr
 	}
@@ -413,4 +419,182 @@ func TestHandleRangeRequest_ContentRangeUnknownTotalForNonSeekable(t *testing.T)
 	gotCR := rr.Header().Get("Content-Range")
 	require.Equal(t, "bytes 0-0/*", gotCR,
 		"non-seekable readers cannot report a total, so Content-Range must use the RFC 7233 \"*\" sentinel")
+}
+
+func TestParseByteRange(t *testing.T) {
+	valid := []struct {
+		header string
+		want   byteRange
+	}{
+		{header: "bytes=0-4", want: byteRange{first: 0, last: 4}},
+		{header: "bytes=5-5", want: byteRange{first: 5, last: 5}},
+		{header: "bytes=5-", want: byteRange{first: 5, openEnded: true}},
+		{header: "bytes=-3", want: byteRange{suffix: true, suffixLen: 3}},
+		{header: "bytes=0-9223372036854775807", want: byteRange{first: 0, last: math.MaxInt64}},
+	}
+
+	for _, tt := range valid {
+		t.Run("valid "+tt.header, func(t *testing.T) {
+			got, status := parseByteRange(tt.header)
+			require.Equal(t, http.StatusOK, status)
+			require.Equal(t, tt.want, got)
+		})
+	}
+
+	malformed := []string{
+		"",
+		"0-4",
+		"items=0-4",
+		"bytes=",
+		"bytes=-",
+		"bytes=5",
+		"bytes=+5-6",
+		"bytes=5-+6",
+		"bytes=--5",
+		"bytes= 5-6",
+		"bytes=5-6 ",
+		"bytes=a-b",
+		"bytes=5-6-7",
+		"bytes=99999999999999999999-",
+		"bytes=0-9223372036854775808",
+		"bytes=-99999999999999999999",
+	}
+
+	for _, header := range malformed {
+		t.Run("malformed "+header, func(t *testing.T) {
+			_, status := parseByteRange(header)
+			require.Equal(t, http.StatusBadRequest, status)
+		})
+	}
+
+	notSatisfiable := []string{"bytes=0-1,3-4", "bytes=5-2"}
+
+	for _, header := range notSatisfiable {
+		t.Run("not satisfiable "+header, func(t *testing.T) {
+			_, status := parseByteRange(header)
+			require.Equal(t, http.StatusRequestedRangeNotSatisfiable, status)
+		})
+	}
+}
+
+// TestHandleRangeRequest_AllocationIndependentOfRangeHeader is the regression test for
+// bitcoin-sv/teranode issue 4853: the handler used to make([]byte, end-start) from the
+// header before looking at the blob, so a one-byte object with a multi-gigabyte range
+// allocated gigabytes. The auditor observed the reader being handed an 8 MiB buffer for
+// a 1-byte blob. The span must now be clamped to the real size and the body streamed.
+func TestHandleRangeRequest_AllocationIndependentOfRangeHeader(t *testing.T) {
+	for _, header := range []string{"bytes=0-8388607", "bytes=0-2147483647", "bytes=0-9223372036854775807"} {
+		t.Run(header, func(t *testing.T) {
+			reader := newCountingReadSeekCloser([]byte{0x42})
+			srv := &HTTPBlobServer{store: &fakeRangeStore{reader: reader}, logger: ulogger.New("rangereq")}
+
+			req := httptest.NewRequest("GET", "/blob/", nil)
+			req.Header.Set("Range", header)
+			rr := httptest.NewRecorder()
+
+			srv.handleRangeRequest(rr, req, []byte("k"), fileformat.FileTypeTesting)
+
+			require.Equal(t, http.StatusPartialContent, rr.Code)
+			require.Equal(t, []byte{0x42}, rr.Body.Bytes())
+			require.Equal(t, "bytes 0-0/1", rr.Header().Get("Content-Range"))
+			require.Equal(t, "1", rr.Header().Get("Content-Length"))
+			require.LessOrEqual(t, reader.maxReadLen, 64*1024, "read buffer must not be sized from the Range header")
+			require.Equal(t, 1, reader.closeCount)
+		})
+	}
+}
+
+func TestHandleRangeRequest_ResolvesAgainstBlobSize(t *testing.T) {
+	payload := []byte("0123456789") // 10 bytes
+	store := newFileBackedFakeStore(t, payload).underlying(t)
+	srv := &HTTPBlobServer{store: store, logger: ulogger.New("rangereq")}
+
+	serve := func(header string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "/blob/", nil)
+		req.Header.Set("Range", header)
+		rr := httptest.NewRecorder()
+
+		srv.handleRangeRequest(rr, req, []byte("k"), fileformat.FileTypeTesting)
+
+		return rr
+	}
+
+	served := []struct {
+		header       string
+		body         string
+		contentRange string
+	}{
+		{header: "bytes=5-", body: "56789", contentRange: "bytes 5-9/10"},
+		{header: "bytes=0-", body: "0123456789", contentRange: "bytes 0-9/10"},
+		{header: "bytes=-3", body: "789", contentRange: "bytes 7-9/10"},
+		{header: "bytes=-50", body: "0123456789", contentRange: "bytes 0-9/10"},
+		{header: "bytes=8-100", body: "89", contentRange: "bytes 8-9/10"},
+		{header: "bytes=9-9", body: "9", contentRange: "bytes 9-9/10"},
+		{header: "bytes=3-9223372036854775807", body: "3456789", contentRange: "bytes 3-9/10"},
+	}
+
+	for _, tt := range served {
+		t.Run(tt.header, func(t *testing.T) {
+			rr := serve(tt.header)
+
+			require.Equal(t, http.StatusPartialContent, rr.Code)
+			require.Equal(t, tt.body, rr.Body.String())
+			require.Equal(t, tt.contentRange, rr.Header().Get("Content-Range"))
+			require.Equal(t, strconv.Itoa(len(tt.body)), rr.Header().Get("Content-Length"))
+		})
+	}
+
+	unsatisfiable := []string{"bytes=10-", "bytes=10-20", "bytes=9223372036854775807-", "bytes=-0"}
+
+	for _, header := range unsatisfiable {
+		t.Run(header+" is 416 with size", func(t *testing.T) {
+			rr := serve(header)
+
+			require.Equal(t, http.StatusRequestedRangeNotSatisfiable, rr.Code)
+			require.Equal(t, "bytes */10", rr.Header().Get("Content-Range"))
+		})
+	}
+
+	for _, header := range []string{"bytes=5-2", "bytes=0-1,3-4"} {
+		t.Run(header+" is 416", func(t *testing.T) {
+			require.Equal(t, http.StatusRequestedRangeNotSatisfiable, serve(header).Code)
+		})
+	}
+
+	t.Run("malformed is 400", func(t *testing.T) {
+		require.Equal(t, http.StatusBadRequest, serve("bytes=+1-2").Code)
+	})
+}
+
+func TestHandleRangeRequest_NonSeekableNeedsSizeForSuffixAndOpenEnded(t *testing.T) {
+	for _, header := range []string{"bytes=-3", "bytes=0-", "bytes=2-"} {
+		t.Run(header, func(t *testing.T) {
+			reader := &nonSeekingCloser{}
+			srv := &HTTPBlobServer{store: &fakeRangeStore{reader: reader}, logger: ulogger.New("rangereq")}
+
+			req := httptest.NewRequest("GET", "/blob/", nil)
+			req.Header.Set("Range", header)
+			rr := httptest.NewRecorder()
+
+			srv.handleRangeRequest(rr, req, []byte("k"), fileformat.FileTypeTesting)
+
+			require.Equal(t, http.StatusInternalServerError, rr.Code)
+			require.Contains(t, rr.Body.String(), "does not support seeking")
+			require.Equal(t, 1, reader.closeCount)
+		})
+	}
+
+	t.Run("explicit range from zero streams with unknown total", func(t *testing.T) {
+		srv := &HTTPBlobServer{store: &fakeRangeStore{reader: io.NopCloser(strings.NewReader("hello world"))}, logger: ulogger.New("rangereq")}
+
+		req := httptest.NewRequest("GET", "/blob/", nil)
+		req.Header.Set("Range", "bytes=0-4")
+		rr := httptest.NewRecorder()
+
+		srv.handleRangeRequest(rr, req, []byte("k"), fileformat.FileTypeTesting)
+
+		require.Equal(t, http.StatusPartialContent, rr.Code)
+		require.Equal(t, "hello", rr.Body.String())
+		require.Equal(t, "bytes 0-4/*", rr.Header().Get("Content-Range"))
+	})
 }
