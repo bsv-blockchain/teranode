@@ -702,16 +702,19 @@ func NewIsBannedCmd(ipOrSubnet string) *IsBannedCmd {
 
 // FreezeCmd defines the freeze JSON-RPC command.
 //
-// EnforceAtHeightStart and EnforceAtHeightStop are the optional half-open enforcement
-// window [start, stop) mirroring SV Node's addToConsensusBlacklist enforceAtHeight. Both
-// default to 0, meaning "from genesis" and "no end" — i.e. omitting them reproduces the
-// unqualified freeze this command has always issued. See issue #1422.
+// EnforceAtHeightStart, EnforceAtHeightStop and PolicyExpiresWithConsensus mirror SV
+// Node's addToConsensusBlacklist: the half-open consensus window [start, stop) and
+// whether the policy tier lifts when it ends. Omitting all three issues the unqualified
+// freeze this command has always issued — enforced at every height. When a stop is given
+// it is an exclusive end: stop <= start is an empty interval that enforces nothing by
+// consensus. See issue #1422.
 type FreezeCmd struct {
-	TxID                 string
-	Vout                 int
-	UTXOHash             string
-	EnforceAtHeightStart *int `jsonrpcdefault:"0"`
-	EnforceAtHeightStop  *int `jsonrpcdefault:"0"`
+	TxID                       string
+	Vout                       int
+	UTXOHash                   string
+	EnforceAtHeightStart       *int  `jsonrpcdefault:"0"`
+	EnforceAtHeightStop        *int  `jsonrpcdefault:"0"`
+	PolicyExpiresWithConsensus *bool `jsonrpcdefault:"false"`
 }
 
 type UnfreezeCmd struct {

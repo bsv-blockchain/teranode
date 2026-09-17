@@ -52,6 +52,9 @@ const (
 	// UtxoFreezeUntil is the first block height at which the alert system's freeze is no
 	// longer enforced for an output, i.e. the window is half-open (0 = no end).
 	UtxoFreezeUntil FieldName = "utxoFreezeUntil"
+	// UtxoFreezeExp marks outputs whose policy freeze expires with the consensus window
+	// (the alert's policyExpiresWithConsensus); absent means the policy freeze persists.
+	UtxoFreezeExp FieldName = "utxoFreezeExp"
 	// SpendingHeight is the block height at which the UTXO was spent
 	SpendingHeight FieldName = "spendingHeight"
 	// Utxos represents the UTXOs associated with a transaction

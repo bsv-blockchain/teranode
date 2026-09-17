@@ -18,10 +18,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestEnforceAtHeightWindow pins the mapping from an alert's enforceAtHeight ranges onto
-// the half-open window the UTXO store persists. Before issue #1422 only Stop was read,
-// and only to decide freeze-vs-unfreeze against the live tip; Start was discarded
-// entirely, which is what let alert-gossip timing decide whether a block was valid.
+// TestEnforceAtHeightWindow pins the mapping from an alert's enforceAtHeight range onto
+// the stored window, through utxo.NormalizeFreezeWindow. Before issue #1422 only Stop
+// was read, and only to decide freeze-vs-unfreeze against the live tip; Start was
+// discarded entirely, which is what let alert-gossip timing decide whether a block was
+// valid. The mapping follows SV Node: stop is an exclusive end, stop <= start is an empty
+// interval, and "no end" is a stop the chain never reaches.
 func TestEnforceAtHeightWindow(t *testing.T) {
 	fundWith := func(enforce ...models.Enforce) models.Fund {
 		return models.Fund{
@@ -30,47 +32,57 @@ func TestEnforceAtHeightWindow(t *testing.T) {
 		}
 	}
 
-	t.Run("no range means enforce from genesis with no end", func(t *testing.T) {
-		from, until, enforcesNothing, err := enforceAtHeightWindow(fundWith())
-		require.NoError(t, err)
-		require.Equal(t, uint32(0), from)
-		require.Equal(t, uint32(0), until)
-		require.False(t, enforcesNothing)
-	})
-
 	t.Run("start is carried through, not discarded", func(t *testing.T) {
-		from, until, enforcesNothing, err := enforceAtHeightWindow(fundWith(models.Enforce{Start: 800_000, Stop: 800_100}))
+		from, until, err := enforceAtHeightWindow(fundWith(models.Enforce{Start: 800_000, Stop: 800_100}))
 		require.NoError(t, err)
 		require.Equal(t, uint32(800_000), from, "the start height must reach the store")
 		require.Equal(t, uint32(800_100), until)
-		require.False(t, enforcesNothing)
 	})
 
-	t.Run("a zero stop means no end", func(t *testing.T) {
-		from, until, enforcesNothing, err := enforceAtHeightWindow(fundWith(models.Enforce{Start: 800_000}))
+	t.Run("a stop the chain never reaches is effectively unbounded", func(t *testing.T) {
+		from, until, err := enforceAtHeightWindow(fundWith(models.Enforce{Start: 800_000, Stop: 1 << 40}))
 		require.NoError(t, err)
 		require.Equal(t, uint32(800_000), from)
-		require.Equal(t, uint32(0), until)
-		require.False(t, enforcesNothing)
+		require.Equal(t, uint32(utxo.FreezeWindowNever), until)
+		require.True(t, utxo.FreezeWindowActiveAt(from, until, 1_000_000_000))
 	})
 
-	t.Run("an empty range is the unfreeze idiom, not an error", func(t *testing.T) {
-		_, _, enforcesNothing, err := enforceAtHeightWindow(fundWith(models.Enforce{Start: 100, Stop: 100}))
-		require.NoError(t, err)
-		require.True(t, enforcesNothing)
-	})
+	// The pre-#1422 unfreeze idiom, and SV Node's empty interval: never consensus-active.
+	// Whether the policy tier lifts too is the alert's policyExpiresWithConsensus, applied
+	// by the store, not here.
+	for _, tc := range []struct {
+		name        string
+		start, stop int
+	}{
+		{name: "(0, 0)", start: 0, stop: 0},
+		{name: "stop equal to start", start: 100, stop: 100},
+		{name: "stop below start", start: 200, stop: 100},
+		{name: "a zero stop with a positive start", start: 500, stop: 0},
+	} {
+		t.Run("an empty interval is never consensus-active: "+tc.name, func(t *testing.T) {
+			from, until, err := enforceAtHeightWindow(fundWith(models.Enforce{Start: tc.start, Stop: tc.stop}))
+			require.NoError(t, err)
+			require.Equal(t, uint32(utxo.FreezeWindowNever), from)
+			require.Equal(t, uint32(utxo.FreezeWindowNever), until)
 
-	t.Run("an inverted range enforces nothing", func(t *testing.T) {
-		_, _, enforcesNothing, err := enforceAtHeightWindow(fundWith(models.Enforce{Start: 200, Stop: 100}))
+			for _, h := range []uint32{0, 1, 100, 500, 1_000_000} {
+				require.False(t, utxo.FreezeWindowActiveAt(from, until, h), "active at %d", h)
+			}
+		})
+	}
+
+	t.Run("no range at all is an empty interval, never enforce-everywhere", func(t *testing.T) {
+		from, until, err := enforceAtHeightWindow(fundWith())
 		require.NoError(t, err)
-		require.True(t, enforcesNothing)
+		require.Equal(t, uint32(utxo.FreezeWindowNever), from)
+		require.Equal(t, uint32(utxo.FreezeWindowNever), until)
 	})
 
 	// The alert wire format carries exactly one range per fund; more than one cannot be
 	// represented as a single window, and silently keeping the first would enforce a
 	// freeze over heights the authority did not ask for.
 	t.Run("more than one range is rejected", func(t *testing.T) {
-		_, _, _, err := enforceAtHeightWindow(fundWith(
+		_, _, err := enforceAtHeightWindow(fundWith(
 			models.Enforce{Start: 100, Stop: 200},
 			models.Enforce{Start: 300, Stop: 400},
 		))
@@ -78,7 +90,7 @@ func TestEnforceAtHeightWindow(t *testing.T) {
 	})
 
 	t.Run("a negative bound is rejected", func(t *testing.T) {
-		_, _, _, err := enforceAtHeightWindow(fundWith(models.Enforce{Start: -1, Stop: 100}))
+		_, _, err := enforceAtHeightWindow(fundWith(models.Enforce{Start: -1, Stop: 100}))
 		require.Error(t, err)
 	})
 }
@@ -148,9 +160,9 @@ func TestAddToConsensusBlacklistRecordsWindow(t *testing.T) {
 
 	require.NoError(t, spendAtHeight(windowStart-1),
 		"a block below the freeze's start height must still be accepted")
-	require.ErrorIs(t, spendAtHeight(windowStart), errors.ErrFrozen,
+	require.ErrorIs(t, spendAtHeight(windowStart), errors.ErrUtxoConsensusFrozen,
 		"a block at the freeze's start height must be rejected")
-	require.ErrorIs(t, spendAtHeight(windowStop-1), errors.ErrFrozen,
+	require.ErrorIs(t, spendAtHeight(windowStop-1), errors.ErrUtxoConsensusFrozen,
 		"a block at the last enforced height must be rejected")
 	require.NoError(t, spendAtHeight(windowStop),
 		"a block at the freeze's stop height must be accepted again")

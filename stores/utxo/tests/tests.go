@@ -13,6 +13,7 @@ import (
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/settings"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -215,7 +216,9 @@ func Freeze(t *testing.T, db utxostore.Store) {
 	_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
 	_, spends, err := db.SpendAndCreate(ctx, spendTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 	require.ErrorIs(t, err, errors.ErrUtxoError)
-	require.ErrorIs(t, spends[0].Err, errors.ErrFrozen)
+	// An unqualified freeze is a (0, 0) window — consensus-active at every height — and the
+	// consensus tier is checked first, so this is the consensus verdict, not the policy one.
+	require.ErrorIs(t, spends[0].Err, errors.ErrUtxoConsensusFrozen)
 
 	resp, err := db.GetSpend(ctx, testSpend0)
 	require.NoError(t, err)
@@ -319,19 +322,23 @@ func FreezeEnforceAtHeight(t *testing.T, db utxostore.Store) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			blockErr := spendAt(t, tc.blockHeight, true)
+			mempoolErr := spendAt(t, tc.blockHeight, false)
 
 			if tc.frozen {
-				require.ErrorIs(t, blockErr, errors.ErrFrozen,
+				require.ErrorIs(t, blockErr, errors.ErrUtxoConsensusFrozen,
 					"a block at height %d is inside [%d, %d) and must be rejected", tc.blockHeight, windowStart, windowStop)
+				// The consensus tier is checked first, so inside the window a mempool spend
+				// gets the consensus verdict too.
+				require.ErrorIs(t, mempoolErr, errors.ErrUtxoConsensusFrozen,
+					"a non-block spend at height %d is inside [%d, %d) and must be rejected", tc.blockHeight, windowStart, windowStop)
 			} else {
 				require.NoError(t, blockErr,
 					"a block at height %d is outside [%d, %d) and must be accepted", tc.blockHeight, windowStart, windowStop)
+				// The policy tier does not care about height: the coin stays out of this
+				// node's mempool and block templates for as long as it is frozen.
+				require.ErrorIs(t, mempoolErr, errors.ErrFrozen,
+					"the policy freeze must reject a non-block spend at height %d, outside the window", tc.blockHeight)
 			}
-
-			// The policy tier does not care about height: the coin stays out of this
-			// node's mempool and block templates for as long as it is frozen.
-			require.ErrorIs(t, spendAt(t, tc.blockHeight, false), errors.ErrFrozen,
-				"the policy freeze must reject a non-block spend at every height")
 		})
 	}
 
@@ -342,18 +349,18 @@ func FreezeEnforceAtHeight(t *testing.T, db utxostore.Store) {
 	require.Equal(t, int(utxostore.Status_FROZEN), resp.Status)
 
 	// Re-issuing the same window is a no-op the caller is told about, so an alert that
-	// arrives twice does not read as a successful change.
+	// arrives twice does not read as a successful change — on every backend.
 	sameWindow := []*utxostore.Spend{{TxID: TXHash, Vout: 0, UTXOHash: utxoHash0, FreezeFrom: windowStart, FreezeUntil: windowStop}}
-	require.Error(t, db.FreezeUTXOs(ctx, sameWindow, tSettings), "re-freezing with an unchanged window must report already frozen")
+	require.ErrorIs(t, db.FreezeUTXOs(ctx, sameWindow, tSettings), errors.ErrFrozen, "re-freezing with an unchanged window must report already frozen")
 
 	// Re-issuing a DIFFERENT window updates it: an authority can extend, shorten or shift
 	// the enforcement window of a freeze it already issued.
 	widened := []*utxostore.Spend{{TxID: TXHash, Vout: 0, UTXOHash: utxoHash0, FreezeFrom: windowStart, FreezeUntil: windowStop + 100}}
 	require.NoError(t, db.FreezeUTXOs(ctx, widened, tSettings))
-	require.ErrorIs(t, spendAt(t, windowStop, true), errors.ErrFrozen, "the widened window must now cover the old stop height")
+	require.ErrorIs(t, spendAt(t, windowStop, true), errors.ErrUtxoConsensusFrozen, "the widened window must now cover the old stop height")
 	require.NoError(t, spendAt(t, windowStop+100, true), "the widened window must still end at its new stop height")
 
-	// Unfreezing drops the window along with the sentinel, so nothing is left for a later
+	// Unfreezing drops the record along with the sentinel, so nothing is left for a later
 	// re-freeze to inherit.
 	require.NoError(t, db.UnFreezeUTXOs(ctx, widened, tSettings))
 
@@ -370,9 +377,9 @@ func FreezeEnforceAtHeight(t *testing.T, db utxostore.Store) {
 	require.NoError(t, db.FreezeUTXOs(ctx, unqualified, tSettings))
 
 	for _, blockHeight := range []uint32{1, windowStart, windowStop, windowStop + 1000} {
-		require.ErrorIs(t, spendAt(t, blockHeight, true), errors.ErrFrozen,
+		require.ErrorIs(t, spendAt(t, blockHeight, true), errors.ErrUtxoConsensusFrozen,
 			"an unqualified freeze must be enforced at height %d", blockHeight)
-		require.ErrorIs(t, spendAt(t, blockHeight, false), errors.ErrFrozen,
+		require.ErrorIs(t, spendAt(t, blockHeight, false), errors.ErrUtxoConsensusFrozen,
 			"an unqualified freeze must be enforced at height %d for non-block spends", blockHeight)
 	}
 
@@ -383,8 +390,188 @@ func FreezeEnforceAtHeight(t *testing.T, db utxostore.Store) {
 	require.NoError(t, db.FreezeUTXOs(ctx, openEnded, tSettings))
 
 	require.NoError(t, spendAt(t, windowStart-1, true), "an open-ended window must not bite below its start")
-	require.ErrorIs(t, spendAt(t, windowStart, true), errors.ErrFrozen, "an open-ended window must bite at its start")
-	require.ErrorIs(t, spendAt(t, windowStop+1_000_000, true), errors.ErrFrozen, "an open-ended window must never lapse")
+	require.ErrorIs(t, spendAt(t, windowStart, true), errors.ErrUtxoConsensusFrozen, "an open-ended window must bite at its start")
+	require.ErrorIs(t, spendAt(t, windowStop+1_000_000, true), errors.ErrUtxoConsensusFrozen, "an open-ended window must never lapse")
+
+	require.NoError(t, db.UnFreezeUTXOs(ctx, openEnded, tSettings))
+
+	freezeEnforceAtHeightOutpointRecord(t, db, tSettings, spendAt, windowStart, windowStop)
+}
+
+// freezeEnforceAtHeightOutpointRecord is the second half of FreezeEnforceAtHeight: the
+// consensus record is a property of the OUTPOINT, not of this node's spent-state for it,
+// so that every node reaches the same verdict on the same block whatever it currently
+// records about the coin (issue #1422). Each case is a way two honest nodes could
+// otherwise disagree.
+func freezeEnforceAtHeightOutpointRecord(t *testing.T, db utxostore.Store, tSettings *settings.Settings,
+	spendAt func(t *testing.T, blockHeight uint32, asBlock bool) error, windowStart, windowStop uint32) {
+	ctx := context.Background()
+
+	windowed := []*utxostore.Spend{{TxID: TXHash, Vout: 0, UTXOHash: utxoHash0, FreezeFrom: windowStart, FreezeUntil: windowStop}}
+
+	// Case 1 — a below-window block spend, then a rollback (conflict resolution or a
+	// spend rollback), must leave the coin frozen in BOTH tiers. On a store whose policy
+	// marker shares the spending-data slot, the block spend overwrote the marker; the
+	// freeze record has to carry the freeze on its own from there.
+	t.Run("freeze survives a below-window spend and its rollback", func(t *testing.T) {
+		require.NoError(t, db.FreezeUTXOs(ctx, windowed, tSettings))
+
+		require.NoError(t, spendAt(t, windowStart-1, true), "a block below the window is accepted") // spendAt rolls back
+
+		resp, err := db.GetSpend(ctx, testSpend0)
+		require.NoError(t, err)
+		require.Equal(t, int(utxostore.Status_FROZEN), resp.Status, "the rolled-back coin must read frozen again")
+
+		require.ErrorIs(t, spendAt(t, windowStart-1, false), errors.ErrFrozen, "the policy tier must hold the rolled-back coin")
+		require.ErrorIs(t, spendAt(t, windowStart, true), errors.ErrUtxoConsensusFrozen, "the consensus tier must hold the rolled-back coin")
+
+		require.NoError(t, db.UnFreezeUTXOs(ctx, windowed, tSettings))
+	})
+
+	// Case 2 — the same transaction inside the window while this node already records it
+	// as spent (a fork block, or a re-mine after a reorg, carrying a below-window spend).
+	// The idempotent "already spent by this very transaction" path must not short-circuit
+	// the consensus check, or a node that saw the earlier block accepts what a node that
+	// did not rejects. A different spender is rejected for the same reason, ahead of the
+	// double-spend verdict it would otherwise get.
+	t.Run("the same spend inside the window is rejected even when already recorded as spent", func(t *testing.T) {
+		require.NoError(t, db.FreezeUTXOs(ctx, windowed, tSettings))
+
+		_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
+		_, recorded, err := db.SpendAndCreate(ctx, spendTx, windowStart-1, utxostore.WithSpendOnly(), utxostore.WithIgnorePolicyFreeze(true))
+		require.NoError(t, err, "a block below the window is accepted")
+
+		resp, err := db.GetSpend(ctx, testSpend0)
+		require.NoError(t, err)
+		require.Equal(t, int(utxostore.Status_SPENT), resp.Status, "a spent output reports SPENT, not FROZEN")
+		require.NotNil(t, resp.SpendingData)
+		require.Equal(t, spendTx.TxIDChainHash().String(), resp.SpendingData.TxID.String(), "a spent output reports its real spender, never the sentinel")
+
+		_, attempted, err := db.SpendAndCreate(ctx, spendTx, windowStart, utxostore.WithSpendOnly(), utxostore.WithIgnorePolicyFreeze(true))
+		require.Error(t, err)
+		require.NotEmpty(t, attempted)
+		require.ErrorIs(t, attempted[0].Err, errors.ErrUtxoConsensusFrozen, "the same transaction at an in-window height must be rejected, not treated as an idempotent re-spend")
+
+		otherSpender := spendTx.Clone()
+		otherSpender.Version = spendTx.Version + 1
+
+		_, attempted, err = db.SpendAndCreate(ctx, otherSpender, windowStart, utxostore.WithSpendOnly(), utxostore.WithIgnorePolicyFreeze(true))
+		require.Error(t, err)
+		require.NotEmpty(t, attempted)
+		require.ErrorIs(t, attempted[0].Err, errors.ErrUtxoConsensusFrozen, "a different spender inside the window is a freeze verdict before it is a double spend")
+
+		// Outside the window the idempotent path is back, and so is the double-spend verdict.
+		_, _, err = db.SpendAndCreate(ctx, spendTx, windowStop, utxostore.WithSpendOnly(), utxostore.WithIgnorePolicyFreeze(true))
+		require.NoError(t, err, "the same transaction at an out-of-window height is the idempotent re-spend again")
+
+		_, attempted, err = db.SpendAndCreate(ctx, otherSpender, windowStop, utxostore.WithSpendOnly(), utxostore.WithIgnorePolicyFreeze(true))
+		require.Error(t, err)
+		require.NotEmpty(t, attempted)
+		require.ErrorIs(t, attempted[0].Err, errors.ErrSpent)
+
+		require.NoError(t, db.Unspend(ctx, recorded, false))
+		require.NoError(t, db.UnFreezeUTXOs(ctx, windowed, tSettings))
+	})
+
+	// Case 3 — a late alert for an output this node already records as spent must still
+	// be recorded, so the node judges a fork block or a re-mine of that spend exactly as
+	// the nodes that received the alert first do. SV Node's frozen-TXO database is keyed
+	// on outpoints regardless of the UTXO set; so is this one.
+	t.Run("a freeze is recorded on an already-spent output", func(t *testing.T) {
+		_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
+		_, recorded, err := db.SpendAndCreate(ctx, spendTx, windowStart-1, utxostore.WithSpendOnly())
+		require.NoError(t, err, "the coin is spent before any alert exists")
+
+		require.NoError(t, db.FreezeUTXOs(ctx, windowed, tSettings), "a late alert on a spent output must be recorded, not refused")
+
+		resp, err := db.GetSpend(ctx, testSpend0)
+		require.NoError(t, err)
+		require.Equal(t, int(utxostore.Status_SPENT), resp.Status)
+		require.Equal(t, spendTx.TxIDChainHash().String(), resp.SpendingData.TxID.String())
+
+		_, attempted, err := db.SpendAndCreate(ctx, spendTx, windowStart, utxostore.WithSpendOnly(), utxostore.WithIgnorePolicyFreeze(true))
+		require.Error(t, err)
+		require.NotEmpty(t, attempted)
+		require.ErrorIs(t, attempted[0].Err, errors.ErrUtxoConsensusFrozen, "the late record must govern the same spend inside the window")
+
+		require.NoError(t, db.UnFreezeUTXOs(ctx, windowed, tSettings), "unfreeze must work on a spent output that carries only the record")
+
+		_, _, err = db.SpendAndCreate(ctx, spendTx, windowStart, utxostore.WithSpendOnly(), utxostore.WithIgnorePolicyFreeze(true))
+		require.NoError(t, err, "with the record gone the same spend is the idempotent path again")
+
+		require.NoError(t, db.Unspend(ctx, recorded, false))
+	})
+
+	// Case 4 — policyExpiresWithConsensus: the policy tier lifts by itself when the
+	// window ends, but only when the alert said so. Judged at the height the mempool path
+	// uses, so no scheduler is needed.
+	t.Run("policy expiry follows the flag", func(t *testing.T) {
+		expiring := []*utxostore.Spend{{TxID: TXHash, Vout: 0, UTXOHash: utxoHash0, FreezeFrom: windowStart, FreezeUntil: windowStop, FreezePolicyExpires: true}}
+		require.NoError(t, db.FreezeUTXOs(ctx, expiring, tSettings))
+
+		require.ErrorIs(t, spendAt(t, windowStop-1, false), errors.ErrUtxoConsensusFrozen, "inside the window every tier holds")
+		require.NoError(t, spendAt(t, windowStop, false), "at the window's end the policy tier lifts with it")
+
+		require.NoError(t, db.UnFreezeUTXOs(ctx, expiring, tSettings))
+
+		require.NoError(t, db.FreezeUTXOs(ctx, windowed, tSettings))
+
+		require.ErrorIs(t, spendAt(t, windowStop, false), errors.ErrFrozen, "without the flag the policy tier outlives the window")
+		require.NoError(t, spendAt(t, windowStop, true), "…but a block at the window's end is accepted")
+
+		require.NoError(t, db.UnFreezeUTXOs(ctx, windowed, tSettings))
+	})
+
+	// Case 5 — an empty interval, the shape an unfreeze alert takes: never consensus
+	// active; the policy tier lifts immediately with the flag, and persists without it.
+	t.Run("an empty interval is never consensus-active", func(t *testing.T) {
+		never := []*utxostore.Spend{{TxID: TXHash, Vout: 0, UTXOHash: utxoHash0, FreezeFrom: utxostore.FreezeWindowNever, FreezeUntil: utxostore.FreezeWindowNever}}
+		require.NoError(t, db.FreezeUTXOs(ctx, never, tSettings))
+
+		for _, h := range []uint32{1, windowStart, windowStop, windowStop + 1_000_000} {
+			require.NoError(t, spendAt(t, h, true), "a block at height %d must be accepted", h)
+			require.ErrorIs(t, spendAt(t, h, false), errors.ErrFrozen, "the policy tier persists at height %d without the flag", h)
+		}
+
+		released := []*utxostore.Spend{{TxID: TXHash, Vout: 0, UTXOHash: utxoHash0, FreezeFrom: utxostore.FreezeWindowNever, FreezeUntil: utxostore.FreezeWindowNever, FreezePolicyExpires: true}}
+		require.NoError(t, db.FreezeUTXOs(ctx, released, tSettings), "re-issuing with the flag updates the record")
+
+		require.NoError(t, spendAt(t, windowStart, false), "with the flag the coin is fully released")
+
+		resp, err := db.GetSpend(ctx, testSpend0)
+		require.NoError(t, err)
+		require.Equal(t, int(utxostore.Status_OK), resp.Status)
+
+		require.NoError(t, db.UnFreezeUTXOs(ctx, released, tSettings))
+	})
+
+	// Case 6 — the consensus verdict is its own error code. The reassignment maturity
+	// hold shares ErrFrozen and is anchored to this node's tip, so it must never be
+	// mistaken for a consensus verdict; and the below-checkpoint bypass drops the
+	// consensus tier without touching the policy tier.
+	t.Run("the consensus verdict is distinct from every other frozen error", func(t *testing.T) {
+		require.NoError(t, db.FreezeUTXOs(ctx, windowed, tSettings))
+
+		inWindow := spendAt(t, windowStart, true)
+		require.ErrorIs(t, inWindow, errors.ErrUtxoConsensusFrozen)
+		require.NotErrorIs(t, inWindow, errors.ErrFrozen, "a consensus verdict must not carry the policy/maturity code")
+
+		policy := spendAt(t, windowStart-1, false)
+		require.ErrorIs(t, policy, errors.ErrFrozen)
+		require.NotErrorIs(t, policy, errors.ErrUtxoConsensusFrozen, "a policy rejection must not carry the consensus code")
+
+		_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
+		_, recorded, err := db.SpendAndCreate(ctx, spendTx, windowStart, utxostore.WithSpendOnly(), utxostore.WithIgnorePolicyFreeze(true), utxostore.WithIgnoreConsensusFreeze(true))
+		require.NoError(t, err, "the below-checkpoint bypass must accept an in-window spend")
+		require.NoError(t, db.Unspend(ctx, recorded, false))
+
+		_, attempted, err := db.SpendAndCreate(ctx, spendTx, windowStart, utxostore.WithSpendOnly(), utxostore.WithIgnoreConsensusFreeze(true))
+		require.Error(t, err)
+		require.NotEmpty(t, attempted)
+		require.ErrorIs(t, attempted[0].Err, errors.ErrFrozen, "the consensus bypass alone must leave the policy tier in place")
+
+		require.NoError(t, db.UnFreezeUTXOs(ctx, windowed, tSettings))
+	})
 }
 
 func ReAssign(t *testing.T, db utxostore.Store) {

@@ -38,6 +38,7 @@ var (
 	ErrServiceNotStarted          = New(ERR_SERVICE_NOT_STARTED, "service not started")
 	ErrServiceUnavailable         = New(ERR_SERVICE_UNAVAILABLE, "service unavailable")
 	ErrFrozen                     = New(ERR_UTXO_FROZEN, "tx is frozen")
+	ErrUtxoConsensusFrozen        = New(ERR_UTXO_CONSENSUS_FROZEN, "utxo is frozen at this block height")
 	ErrNonFinal                   = New(ERR_UTXO_NON_FINAL, "tx is non-final")
 	ErrSpent                      = New(ERR_UTXO_SPENT, "utxo already spent")
 	ErrUtxoHashMismatch           = New(ERR_UTXO_MISMATCH, "utxo hash mismatch")
@@ -430,6 +431,14 @@ func NewUtxoNonFinalError(message string, params ...interface{}) *Error {
 // NewUtxoFrozenError creates a new error with the utxo frozen error code.
 func NewUtxoFrozenError(message string, params ...interface{}) *Error {
 	return New(ERR_UTXO_FROZEN, message, params...)
+}
+
+// NewUtxoConsensusFrozenError creates a new error with the utxo consensus frozen error
+// code: the block height being validated falls inside the outpoint's enforceAtHeight
+// window. Unlike ErrFrozen it is a verdict every node derives identically from the chain,
+// which is what lets block validation mark the block invalid on it (issue #1422).
+func NewUtxoConsensusFrozenError(message string, params ...interface{}) *Error {
+	return New(ERR_UTXO_CONSENSUS_FROZEN, message, params...)
 }
 
 // NewUtxoHashMismatchError creates a new error with the utxo hash mismatch error code.

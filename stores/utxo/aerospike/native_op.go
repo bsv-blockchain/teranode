@@ -45,16 +45,18 @@ import (
 // in modules/mod-teranode/src/main/mod_teranode_native_op.c on the
 // server-private fork. Never renumber.
 //
-// KNOWN GAP (#1422): the native spendMulti dispatcher predates the alert system's
-// enforceAtHeight window. It reads the frozen sentinel out of the utxos list, so it still
-// rejects a spend of a frozen coin, but it cannot see the utxoFreezeFrom/utxoFreezeUntil
-// bins and it ignores the per-spend ignorePolicyFreeze key. A node with
-// aerospike_use_native_teranode_ops enabled therefore keeps the pre-#1422 behaviour for
-// spends — a freeze applied at every height, from the moment the alert arrived — and can
-// reject a block the rest of the fleet accepts. The setting is off by default and already
-// requires a matching server build; do not enable it until the dispatcher implements the
-// window, and do not enable it while a freeze is in force. Freeze and unfreeze themselves
-// are fenced to the UDF path below, so the window is always written correctly.
+// FENCED UNTIL mod-teranode IMPLEMENTS THE FREEZE RECORD (#1422): spend, spendMulti,
+// freeze and unfreeze all route through the UDF path regardless of the setting. The
+// alert system's freeze is now a per-offset record in the utxoFreezeFrom/Until/Exp bins,
+// evaluated against the height of the block being validated and BEFORE the spent-state
+// branches, with two per-spend flags (ignorePolicyFreeze, ignoreConsensusFreeze). The
+// server-fork dispatcher predates all of that: it reads only the 0xFF sentinel out of the
+// utxos list, so it would enforce a freeze at every height from the moment the alert
+// arrived, miss a record whose sentinel a block-validation spend overwrote, and ignore
+// both flags — each of which lets a native-ops node reject a block the rest of the fleet
+// accepts, or accept one it rejects. The setting still routes setMined, setLocked,
+// setConflicting, preserveUntil and the rest natively; un-fence the four once the
+// dispatcher implements the record and a probe proves it.
 const (
 	subOpSpend                  uint8 = 1
 	subOpSpendMulti             uint8 = 2
@@ -90,17 +92,15 @@ func encodeNativeOpPayload(subOp uint8, args []any) ([]byte, error) {
 
 // useNativeForSubOp decides whether a given mod-teranode sub-op may use the
 // native operate-path. It requires the setting+capability flag, and additionally
-// FENCES unspend (subOpUnspend), freeze (subOpFreeze) and unfreeze (subOpUnfreeze)
-// to the UDF/Lua path regardless of the flag.
+// FENCES unspend (subOpUnspend), and the four freeze-aware sub-ops — spend,
+// spendMulti, freeze and unfreeze — to the UDF/Lua path regardless of the flag.
 //
-// Rationale (#1422): freeze and unfreeze gained two trailing arguments carrying the
-// alert system's enforceAtHeight window, and unfreeze must additionally clear the
-// window bins it writes. The server-fork dispatcher's SUBOP_TABLE entries for sub-ops
-// 5 and 6 predate that window, so a native freeze would drop the heights on the floor
-// and leave an unqualified, always-enforced freeze behind — a freeze that bites at a
-// height no other node agrees on, which is exactly the split this change removes.
-// Freezes are rare, operator-initiated writes, so the UDF path costs nothing that
-// matters here. Un-fence them once the dispatcher implements the window.
+// Rationale for the freeze-aware four (#1422): see the FENCED UNTIL note on the sub-op
+// table above. In short, the alert system's freeze became a per-offset record with
+// height-anchored semantics and two per-spend flags, none of which the server-fork
+// dispatcher implements; routing any of these four natively would let a native-ops
+// node disagree with the fleet about a block. Un-fence once the dispatcher catches up
+// and a start-up probe proves it.
 //
 // Rationale (#899): the UDF unspend path always enforces the #766 SpendingData
 // ownership check before reversing a spend. The native path would forward
@@ -120,7 +120,7 @@ func (s *Store) useNativeForSubOp(subOp uint8) bool {
 	}
 
 	switch subOp {
-	case subOpUnspend, subOpFreeze, subOpUnfreeze:
+	case subOpUnspend, subOpSpend, subOpSpendMulti, subOpFreeze, subOpUnfreeze:
 		return false
 	default:
 		return true
@@ -647,6 +647,6 @@ func (s *Store) initNativeTeranodeOps(ctx context.Context) {
 		s.logger.Infof("[teranode-native-op] setting requested native ops but server " +
 			"capability probe rejected; using UDF path")
 	} else if supported {
-		s.logger.Infof("[teranode-native-op] enabled (op type 200, sub_op_id wire format)")
+		s.logger.Infof("[teranode-native-op] enabled (op type 200, sub_op_id wire format); spend, spendMulti, freeze and unfreeze stay on the UDF path until the dispatcher implements the alert system's freeze record (#1422)")
 	}
 }

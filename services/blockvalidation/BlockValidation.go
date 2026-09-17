@@ -1959,7 +1959,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				ctxLogger.Warnf("[ValidateBlock][%s] transient missing-data during subtree validation, will retry: %s", block.Hash().String(), err)
 				// Transient LOCAL ordering gap, not the serving peer's fault: mark it so the
 				// catchup penalty path does not demote an honest (possibly sole-source) peer.
-				return errors.NewBlockIncompleteTransientError("[ValidateBlock][%s] transient missing-data during subtree validation: %s", block.Hash().String(), err)
+				return errors.NewBlockIncompleteTransientError("[ValidateBlock][%s] transient missing-data during subtree validation", block.Hash().String(), err)
 			}
 
 			return err
@@ -2282,13 +2282,13 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 							u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, "floater: parent not in block and not on chain: "+err.Error())
 						}
 
-						return errors.NewBlockInvalidError("[ValidateBlock][%s] block contains a floater (unconfirmed parent not in block): %s", block.Hash().String(), err)
+						return errors.NewBlockInvalidError("[ValidateBlock][%s] block contains a floater (unconfirmed parent not in block)", block.Hash().String(), err)
 					}
 
 					// Transient LOCAL catchup-ordering gap (unabsorbed parent, issue 1031), not
 					// the serving peer's fault: mark it so the catchup penalty path does not
 					// demote an honest (possibly sole-source) ahead peer.
-					return errors.NewBlockIncompleteTransientError("[ValidateBlock][%s] block validation hit transient missing-data state: %s", block.Hash().String(), err)
+					return errors.NewBlockIncompleteTransientError("[ValidateBlock][%s] block validation hit transient missing-data state", block.Hash().String(), err)
 				}
 
 				if !opts.IsRevalidation {

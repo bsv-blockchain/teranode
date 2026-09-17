@@ -214,6 +214,12 @@ The `freeze` command allows administrators to freeze a specific UTXO, preventing
 
     - `txid` (string, required): The transaction ID of the output to freeze
     - `vout` (numeric, required): The output index to freeze
+    - `utxohash` (string, optional): Unused; the UTXO hash is derived from the stored output
+    - `enforceAtHeightStart` (numeric, optional): First block height at which a block spending the output is invalid
+    - `enforceAtHeightStop` (numeric, optional): Exclusive end of that interval. `stop <= start` is an empty interval that enforces nothing by consensus; omit both to freeze at every height
+    - `policyExpiresWithConsensus` (boolean, optional, default `false`): Whether the policy freeze (this node's mempool and templates) lifts once the interval ends
+
+    These mirror SV Node's `addToConsensusBlacklist`. See the [Alert Service](alert.md) for the two-tier semantics.
 
 - **Return Value**:
 

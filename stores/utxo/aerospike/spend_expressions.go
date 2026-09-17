@@ -193,6 +193,7 @@ func (s *Store) buildSpendFilterExpression(
 	filterConditions = append(filterConditions,
 		aerospike.ExpNot(aerospike.ExpBinExists(fields.UtxoFreezeFrom.String())),
 		aerospike.ExpNot(aerospike.ExpBinExists(fields.UtxoFreezeUntil.String())),
+		aerospike.ExpNot(aerospike.ExpBinExists(fields.UtxoFreezeExp.String())),
 	)
 
 	// Check UTXO exists at offset (list size > offset)

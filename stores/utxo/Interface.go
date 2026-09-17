@@ -33,6 +33,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"math"
 	"sort"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -156,14 +157,27 @@ type Spend struct {
 	// absent window are the same thing and no migration is needed. FreezeUntil 0 means
 	// the window never ends.
 	//
-	// Both are ignored outside FreezeUTXOs; the spend path reads the window back from
-	// the store, never from the caller.
+	// All three are ignored outside FreezeUTXOs; the spend path reads the record back
+	// from the store, never from the caller.
 	FreezeFrom  uint32 `json:"freezeFrom,omitempty"`
 	FreezeUntil uint32 `json:"freezeUntil,omitempty"`
+
+	// FreezePolicyExpires is the alert's policyExpiresWithConsensus: when set, the policy
+	// tier of the freeze (this node's mempool and templates) lifts by itself once the
+	// consensus window ends, instead of persisting until an explicit unfreeze.
+	FreezePolicyExpires bool `json:"freezePolicyExpires,omitempty"`
 
 	// error is the error that occurred during the spend operation
 	Err error `json:"err,omitempty"`
 }
+
+// FreezeWindowNever is the stored bound for a freeze whose consensus window covers no
+// height at all — an empty enforceAtHeight interval on the wire. A window with
+// from == FreezeWindowNever is never active (no block height reaches it), while the
+// policy tier still applies per FreezePolicyExpires. It is deliberately not (0, 0): that
+// stored encoding is what every freeze written before windows existed means, "enforce
+// at every height", so the two must never be confused.
+const FreezeWindowNever = math.MaxUint32
 
 // FreezeWindowActiveAt reports whether a freeze window [from, until) is being enforced
 // at blockHeight. from == 0 means "from genesis"; until == 0 means "no end". The upper
@@ -177,6 +191,51 @@ func FreezeWindowActiveAt(from, until, blockHeight uint32) bool {
 	return until == 0 || blockHeight < until
 }
 
+// FreezePolicyActiveAt reports whether the policy tier of a freeze record still applies
+// at blockHeight: always, unless the record says the policy expires with consensus and
+// the consensus window has ended — either because blockHeight has reached its end, or
+// because the window is empty (until <= from, the shape an unfreeze alert takes) and so
+// ended before it began. A record with no end (until == 0) never expires this way.
+func FreezePolicyActiveAt(from, until uint32, policyExpires bool, blockHeight uint32) bool {
+	if !policyExpires || until == 0 {
+		return true
+	}
+
+	windowEnded := blockHeight >= until || until <= from
+
+	return !windowEnded
+}
+
+// NormalizeFreezeWindow converts an alert's enforceAtHeight interval, as it arrives on
+// the wire (start, stop as unsigned 64-bit heights), into the stored window.
+//
+// SV Node treats stop as the exclusive end of the interval: stop <= start — including
+// stop == 0 — is an empty interval that enforces nothing, and "no end" is expressed by
+// a stop the chain will never reach, not by 0. That is the opposite of the stored
+// encoding, where 0 means unbounded, so this is the one place the two meet:
+//
+//   - stop <= start → (FreezeWindowNever, FreezeWindowNever), enforcesNothing true;
+//   - otherwise → (start, stop), each clamped to the uint32 range, so an authority's
+//     "maximum" stop is effectively unbounded.
+//
+// A caller wanting the legacy "enforce at every height" record — only the admin RPC with
+// no arguments — must bypass this function and store (0, 0) explicitly.
+func NormalizeFreezeWindow(start, stop uint64) (from, until uint32, enforcesNothing bool) {
+	if stop <= start {
+		return FreezeWindowNever, FreezeWindowNever, true
+	}
+
+	return clampFreezeHeight(start), clampFreezeHeight(stop), false
+}
+
+func clampFreezeHeight(h uint64) uint32 {
+	if h > math.MaxUint32 {
+		return math.MaxUint32
+	}
+
+	return uint32(h)
+}
+
 // Clone creates a deep copy of the Spend struct.
 // Returns nil if the receiver is nil.
 func (s *Spend) Clone() *Spend {
@@ -185,10 +244,11 @@ func (s *Spend) Clone() *Spend {
 	}
 
 	clone := &Spend{
-		Vout:        s.Vout,
-		Err:         s.Err,
-		FreezeFrom:  s.FreezeFrom,
-		FreezeUntil: s.FreezeUntil,
+		Vout:                s.Vout,
+		Err:                 s.Err,
+		FreezeFrom:          s.FreezeFrom,
+		FreezeUntil:         s.FreezeUntil,
+		FreezePolicyExpires: s.FreezePolicyExpires,
 	}
 
 	if s.TxID != nil {
@@ -225,6 +285,9 @@ type IgnoreFlags struct {
 	// the height-anchored consensus tier. Set ONLY on spends performed while validating a
 	// block (see WithIgnorePolicyFreeze).
 	IgnorePolicyFreeze bool
+	// IgnoreConsensusFreeze drops the consensus tier as well. Set ONLY on the
+	// below-checkpoint quick-validation path (see WithIgnoreConsensusFreeze).
+	IgnoreConsensusFreeze bool
 }
 
 // ConflictingChildRemoval identifies one (parent, child) pair that should be
@@ -378,6 +441,20 @@ func WithIgnoreLocked(b bool) CreateOption {
 func WithIgnorePolicyFreeze(b bool) CreateOption {
 	return func(o *CreateOptions) {
 		o.IgnoreFlags.IgnorePolicyFreeze = b
+	}
+}
+
+// WithIgnoreConsensusFreeze makes the spend phase of SpendAndCreate ignore the
+// height-anchored consensus tier of the alert system's freeze as well as the policy tier.
+//
+// Set ONLY on the below-checkpoint quick-validation path. A block at or below a
+// checkpoint is canonical by definition — the checkpoint is the stronger consensus
+// assertion — so no alert may retroactively invalidate it, and a node catching up must
+// never be wedged by a freeze whose window happens to cover already-checkpointed
+// heights. Every other spend evaluates the window.
+func WithIgnoreConsensusFreeze(b bool) CreateOption {
+	return func(o *CreateOptions) {
+		o.IgnoreFlags.IgnoreConsensusFreeze = b
 	}
 }
 
@@ -572,20 +649,32 @@ type Store interface {
 
 	// functions related to Alert System
 
-	// FreezeUTXOs marks UTXOs as frozen, preventing them from being spent.
-	// This is used by the alert system to prevent spending of UTXOs.
+	// FreezeUTXOs records the alert system's freeze on each output: the policy marker
+	// (this node's mempool and templates) and the consensus record — the enforceAtHeight
+	// window in FreezeFrom/FreezeUntil plus FreezePolicyExpires — enforced in the spend
+	// path against the height of the block being validated.
 	//
-	// Each Spend carries the alert's enforceAtHeight window in FreezeFrom/FreezeUntil.
-	// Implementations must persist it per output and enforce it in the spend path
-	// against the height of the block being validated, so that every node applies the
-	// freeze at the same chain height however late the alert reached it. A (0, 0)
-	// window is enforced at every height, which is what a freeze written before this
-	// field existed means.
+	// The consensus record is a property of the OUTPOINT, not of this node's spent-state
+	// for it, because every node must reach the same verdict on the same block whatever
+	// it currently records about the coin (issue #1422). Implementations therefore
+	// guarantee:
+	//   - a freeze is recorded on an already-spent output (the policy marker is skipped),
+	//     so a late alert still governs a fork block or a re-mine inside the window;
+	//   - the record survives Unspend, so a rolled-back below-window spend leaves the
+	//     coin frozen again with no gap;
+	//   - the consensus check runs before any spent-state short-circuit, so a spend
+	//     already recorded as "spent by this same transaction" is still rejected at an
+	//     in-window height.
+	// A repeat freeze for an already-frozen output updates its record; only a repeat
+	// asking for the record already stored reports already-frozen. A (0, 0) window is
+	// enforced at every height, which is what a freeze written before windows existed
+	// means; see NormalizeFreezeWindow for how an alert's interval maps onto this.
 	FreezeUTXOs(ctx context.Context, spends []*Spend, tSettings *settings.Settings) error
 
-	// UnFreezeUTXOs removes the frozen status from UTXOs, allowing them to be spent again.
-	// Implementations must clear the stored enforceAtHeight window as well as the frozen
-	// marker, so an unfrozen output carries no residual height gate.
+	// UnFreezeUTXOs removes the policy marker and the consensus record from UTXOs. It
+	// succeeds on any output that carries either, spent or not, and is the only way a
+	// consensus record is ever deleted — alerts add or replace records, never remove
+	// them, so a deep reorg into an elapsed window is judged identically everywhere.
 	UnFreezeUTXOs(ctx context.Context, spends []*Spend, tSettings *settings.Settings) error
 
 	// ReAssignUTXO updates a frozen UTXO's commitment and maturity gate.

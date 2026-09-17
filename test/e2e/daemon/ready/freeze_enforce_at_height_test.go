@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -50,6 +51,17 @@ func waitForTxMined(t *testing.T, td *daemon.TestDaemon, tx *bt.Tx) {
 		"transaction %s was never stamped as mined on %s", tx.TxIDChainHash().String(), td.Settings.ClientName)
 }
 
+// waitForBestBlock blocks until the node's best block is the given hash.
+func waitForBestBlock(t *testing.T, td *daemon.TestDaemon, hash *chainhash.Hash, context string) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		best, _, err := td.BlockchainClient.GetBestBlockHeader(td.Ctx)
+
+		return err == nil && best.Hash().Equal(*hash)
+	}, 30*time.Second, 200*time.Millisecond, "%s: best block never became %s on %s", context, hash.String(), td.Settings.ClientName)
+}
+
 // requireRecordedInvalid asserts that a block was rejected with a clean block-invalid
 // verdict AND that the node actually recorded the verdict, rather than treating the
 // rejection as transient and queuing the block for another attempt.
@@ -73,6 +85,8 @@ func requireRecordedInvalid(t *testing.T, td *daemon.TestDaemon, block *model.Bl
 		"the rejection must be a clean block-invalid verdict, not a retryable error: %v", err)
 	require.ErrorIs(t, err, errors.ErrTxInvalid,
 		"the verdict must name the transaction-level cause so it survives classification: %v", err)
+	require.ErrorIs(t, err, errors.ErrUtxoConsensusFrozen,
+		"the cause must be the height-anchored consensus code, never the policy/maturity one: %v", err)
 
 	require.Eventually(t, func() bool {
 		invalidBlocks, listErr := td.BlockchainClient.GetLastNInvalidBlocks(td.Ctx, 20)
@@ -129,9 +143,9 @@ func TestFreezeEnforceAtHeightBoundary(t *testing.T) {
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
 	require.NoError(t, err)
 
-	// One parent transaction with three spendable outputs. Each boundary case consumes a
-	// different one, so a case never depends on whether an earlier case spent the coin.
-	parentTx, err := td.CreateParentTransactionWithNOutputs(t, block1.CoinbaseTx, 3)
+	// One parent transaction with four spendable outputs. Each case consumes a different
+	// one, so a case never depends on whether an earlier case spent the coin.
+	parentTx, err := td.CreateParentTransactionWithNOutputs(t, block1.CoinbaseTx, 4)
 	require.NoError(t, err)
 
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, parentTx))
@@ -150,6 +164,11 @@ func TestFreezeEnforceAtHeightBoundary(t *testing.T) {
 		freezeSpend(t, parentTx, 2, windowStart, windowStop),
 	}
 	require.NoError(t, td.UtxoStore.FreezeUTXOs(td.Ctx, frozen, td.Settings))
+
+	// The fourth coin's policy freeze expires with its window (policyExpiresWithConsensus).
+	expiring := freezeSpend(t, parentTx, 3, windowStart, windowStop)
+	expiring.FreezePolicyExpires = true
+	require.NoError(t, td.UtxoStore.FreezeUTXOs(td.Ctx, []*utxo.Spend{expiring}, td.Settings))
 
 	// The policy tier bites immediately and at every height: a frozen coin never reaches
 	// this node's mempool or its block templates, however far off the consensus window is.
@@ -201,6 +220,20 @@ func TestFreezeEnforceAtHeightBoundary(t *testing.T) {
 	// A block AT the stop height: the window is half-open, so enforcement is over.
 	_, err = submitBlockSpending(t, 2, windowStop)
 	require.NoError(t, err, "a block at the freeze's stop height must be accepted again")
+
+	// The policy tier outlives the window unless the alert said otherwise: coin 3's did,
+	// so it may enter the mempool now; coin 2's did not, and its spend is still rejected
+	// there even though a block spending it was just accepted.
+	require.Eventually(t, func() bool {
+		return td.UtxoStore.GetBlockHeight() >= windowStop-1
+	}, 20*time.Second, 100*time.Millisecond, "the utxo store must have caught up to the tip")
+
+	expiredSpend := td.CreateTransactionWithOptions(t,
+		transactions.WithInput(parentTx, 3),
+		transactions.WithP2PKHOutputs(1, 1000),
+	)
+	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, expiredSpend),
+		"a policy freeze that expires with consensus must lift once the window has ended")
 }
 
 // TestFreezeAlertTimingKeepsFleetInAgreement is the multi-node reproduction from issue
@@ -257,11 +290,11 @@ func TestFreezeAlertTimingKeepsFleetInAgreement(t *testing.T) {
 	// syncB pulls nodeB up to nodeA's current tip. InjectPeer snapshots nodeA's best
 	// header at call time, so it has to be re-issued after nodeA mines rather than once
 	// up front.
-	syncB := func(t *testing.T, block *model.Block) {
+	syncB := func(t *testing.T, hash *chainhash.Hash) {
 		t.Helper()
 
 		nodeB.InjectPeer(t, nodeA)
-		nodeB.WaitForBlockhash(t, block.Hash(), 60*time.Second)
+		nodeB.WaitForBlockhash(t, hash, 60*time.Second)
 	}
 
 	coinbaseTx := nodeA.MineToMaturityAndGetSpendableCoinbaseTx(t, nodeA.Ctx)
@@ -269,8 +302,7 @@ func TestFreezeAlertTimingKeepsFleetInAgreement(t *testing.T) {
 	bestA, _, err := nodeA.BlockchainClient.GetBestBlockHeader(nodeA.Ctx)
 	require.NoError(t, err)
 
-	nodeB.InjectPeer(t, nodeA)
-	nodeB.WaitForBlockhash(t, bestA.Hash(), 60*time.Second)
+	syncB(t, bestA.Hash())
 	requireSameTip(t, "after the initial sync")
 
 	// Two coins, so the below-window and inside-window cases are independent.
@@ -283,7 +315,7 @@ func TestFreezeAlertTimingKeepsFleetInAgreement(t *testing.T) {
 	nodeA.WaitForBlockAssemblyToProcessTx(t, parentTx.TxIDChainHash().String())
 
 	parentBlock := nodeA.MineAndWait(t, 1)
-	syncB(t, parentBlock)
+	syncB(t, parentBlock.Hash())
 	requireSameTip(t, "after the parent transaction was mined")
 
 	// Accepting a block and stamping its transactions as mined are separate steps. Both
@@ -325,16 +357,13 @@ func TestFreezeAlertTimingKeepsFleetInAgreement(t *testing.T) {
 	nodeB.WaitForBlockHeight(t, blockBelow, 30*time.Second)
 	requireSameTip(t, "after a block below the freeze window")
 
-	// Now the alert reaches nodeB too — late, which is the whole point.
-	//
-	// The first coin has already been spent, by the block above that both nodes accepted
-	// because it sits below the window, so freezing it now legitimately fails as
-	// already-spent. That is the price of height-anchoring and it is the right price: a
-	// coin can genuinely be spent before its window opens, identically on every node,
-	// instead of on whichever nodes happened to hear the alert last.
-	require.Error(t, nodeB.UtxoStore.FreezeUTXOs(nodeB.Ctx, freezes[:1], nodeB.Settings),
-		"the coin spent below the window is gone on nodeB, exactly as it is on nodeA")
-	require.NoError(t, nodeB.UtxoStore.FreezeUTXOs(nodeB.Ctx, freezes[1:], nodeB.Settings))
+	// Now the alert reaches nodeB too — late, which is the whole point. The first coin is
+	// already spent there, by the block both nodes just accepted; the freeze is recorded
+	// on it regardless, because the consensus record is a property of the outpoint, not
+	// of what this node currently records about the coin. That is what lets nodeB judge
+	// the fork below exactly as nodeA does.
+	require.NoError(t, nodeB.UtxoStore.FreezeUTXOs(nodeB.Ctx, freezes, nodeB.Settings),
+		"a late alert must be recorded even on a coin this node already has spent")
 
 	// A block INSIDE the window spending the other frozen coin. Both nodes must now reject
 	// it, cleanly, and neither may be left re-validating it.
@@ -353,4 +382,134 @@ func TestFreezeAlertTimingKeepsFleetInAgreement(t *testing.T) {
 	requireRecordedInvalid(t, nodeB, blockInside, errB)
 
 	requireSameTip(t, "after both nodes rejected a block inside the freeze window")
+
+	// The adversarial case: a FORK carrying the below-window spend at a height inside the
+	// window. Both nodes already record that coin as spent by this very transaction (from
+	// blockBelow), so the store's idempotent "already spent by this tx" path would accept
+	// it if the consensus check did not run first. A node that had never seen blockBelow
+	// would reject it — so both nodes must reject it, or the fleet splits along who saw
+	// blockBelow. forkBase is an empty sibling of blockBelow; forkInside builds on it.
+	_, forkBase := nodeA.CreateTestBlock(t, parentBlock, 90003)
+	require.Equal(t, windowStart-1, forkBase.Height)
+
+	require.NoError(t, nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, forkBase, "legacy", true), "an empty fork block is valid")
+	require.NoError(t, nodeB.BlockValidation.ValidateBlock(nodeB.Ctx, forkBase, nodeA.AssetURL, true), "an empty fork block is valid")
+
+	_, forkInside := nodeA.CreateTestBlock(t, forkBase, 90004, spendBelow)
+	require.Equal(t, windowStart, forkInside.Height)
+
+	errA = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, forkInside, "legacy", true)
+	requireRecordedInvalid(t, nodeA, forkInside, errA)
+
+	errB = nodeB.BlockValidation.ValidateBlock(nodeB.Ctx, forkInside, nodeA.AssetURL, true)
+	requireRecordedInvalid(t, nodeB, forkInside, errB)
+
+	requireSameTip(t, "after both nodes rejected a fork re-mining the below-window spend inside the window")
+}
+
+// TestFreezeReorgRejectsReminedSpend is the other adversarial shape: the block that spent
+// the coin below the window is reorged out, and the same spend then turns up at a height
+// inside the window. Teranode does not unspend on reorg — the disconnected block's
+// transactions simply become unmined again — so the store still records the coin as
+// spent by that transaction, and the verdict must not depend on that.
+func TestFreezeReorgRejectsReminedSpend(t *testing.T) {
+	SharedTestLock.Lock()
+	defer SharedTestLock.Unlock()
+
+	const coinbaseMaturity = 2
+
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:       true,
+		EnableValidator: true,
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.ChainCfgParams.CoinbaseMaturity = coinbaseMaturity
+			},
+		),
+	})
+	defer td.Stop(t)
+
+	require.NoError(t, td.BlockchainClient.Run(td.Ctx, "test"))
+
+	_, err := td.CallRPC(td.Ctx, "generate", []interface{}{coinbaseMaturity + 1})
+	require.NoError(t, err)
+
+	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
+	require.NoError(t, err)
+
+	parentTx, err := td.CreateParentTransactionWithNOutputs(t, block1.CoinbaseTx, 2)
+	require.NoError(t, err)
+
+	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, parentTx))
+	td.WaitForBlockAssemblyToProcessTx(t, parentTx.TxIDChainHash().String())
+
+	parentBlock := td.MineAndWait(t, 1)
+	waitForTxMined(t, td, parentTx)
+
+	windowStart := parentBlock.Height + 2
+	windowStop := windowStart + 2
+
+	require.NoError(t, td.UtxoStore.FreezeUTXOs(td.Ctx, []*utxo.Spend{
+		freezeSpend(t, parentTx, 0, windowStart, windowStop),
+		freezeSpend(t, parentTx, 1, windowStart, windowStop),
+	}, td.Settings))
+
+	// The coin is spent below the window, validly.
+	spendBelow := td.CreateTransactionWithOptions(t,
+		transactions.WithInput(parentTx, 0),
+		transactions.WithP2PKHOutputs(1, 1000),
+	)
+
+	_, blockBelow := td.CreateTestBlock(t, parentBlock, 91001, spendBelow)
+	require.Equal(t, windowStart-1, blockBelow.Height)
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, blockBelow, "legacy", true))
+	waitForBestBlock(t, td, blockBelow.Hash(), "after the below-window spend")
+
+	// A competing two-block chain from the same parent, carrying nothing, reorgs it out.
+	_, competing1 := td.CreateTestBlock(t, parentBlock, 91002)
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, competing1, "legacy", true), "a sibling of the tip is a valid fork block")
+
+	_, competing2 := td.CreateTestBlock(t, competing1, 91003)
+	require.Equal(t, windowStart, competing2.Height)
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, competing2, "legacy", true), "the longer fork must be accepted")
+	waitForBestBlock(t, td, competing2.Hash(), "after the reorg")
+
+	// The spend is back in this node's own template — Teranode re-admits a disconnected
+	// block's transactions without re-validation. Reported, not asserted: keeping it out
+	// belongs to block assembly and is tracked separately from #1422.
+	if hashes, listErr := td.BlockAssemblyClient.GetTransactionHashes(td.Ctx); listErr == nil {
+		for _, h := range hashes {
+			if h == spendBelow.TxIDChainHash().String() {
+				t.Logf("NOTE: the reorged-out spend %s is back in block assembly at height %d, inside the freeze window", h, windowStart+1)
+			}
+		}
+	}
+
+	// The same spend re-mined at a height inside the window. The store still records the
+	// coin as spent by exactly this transaction, so without the consensus check running
+	// ahead of the idempotent path this would be accepted here and rejected on every node
+	// that never saw blockBelow.
+	_, remined := td.CreateTestBlock(t, competing2, 91004, spendBelow)
+	require.Equal(t, windowStart+1, remined.Height)
+	requireRecordedInvalid(t, td, remined, td.BlockValidation.ValidateBlock(td.Ctx, remined, "legacy", true))
+
+	// And the coin that was never spent is, of course, still frozen.
+	spendOther := td.CreateTransactionWithOptions(t,
+		transactions.WithInput(parentTx, 1),
+		transactions.WithP2PKHOutputs(1, 1000),
+	)
+
+	_, insideOther := td.CreateTestBlock(t, competing2, 91005, spendOther)
+	requireRecordedInvalid(t, td, insideOther, td.BlockValidation.ValidateBlock(td.Ctx, insideOther, "legacy", true))
+
+	// Past the window, both spends are valid again.
+	_, filler := td.CreateTestBlock(t, competing2, 91006)
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, filler, "legacy", true))
+	waitForBestBlock(t, td, filler.Hash(), "after the filler block")
+
+	_, atStop := td.CreateTestBlock(t, filler, 91007, spendOther)
+	require.Equal(t, windowStop, atStop.Height)
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, atStop, "legacy", true),
+		"a block at the window's end spending a frozen coin must be accepted again")
 }

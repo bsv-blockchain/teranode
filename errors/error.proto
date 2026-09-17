@@ -80,6 +80,12 @@ enum ERR {
   UTXO_INVALID_SIZE=75;
   UTXO_UNSPENT=76;
   UTXO_WALK_LIMIT_EXCEEDED=77;
+  // A spend rejected by the alert system's height-anchored consensus freeze: the block
+  // height being validated falls inside the outpoint's enforceAtHeight window. Distinct
+  // from UTXO_FROZEN, which covers the locally-timed policy tier and the reassignment
+  // maturity hold — only this code is a verdict every node derives identically from the
+  // chain, so only this code may mark a block invalid (issue #1422).
+  UTXO_CONSENSUS_FROZEN=78;
   UTXO_ERROR=79;
   // Kafka errors 80-89
   KAFKA_DECODE_ERROR=80;
