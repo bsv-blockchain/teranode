@@ -78,7 +78,6 @@ Example: `PORT_PREFIX=1` with `ALERT_P2P_PORT=9908` results in port 19908.
 | P2P.Port | String length >= 2 characters | `config.ErrNoP2PPort` | During `Init()` |
 | StoreURL | Supported scheme (sqlite/sqlitememory/postgres/mysql) | `ErrDatastoreUnsupported` | During `Init()` |
 
-
 ## Configuration Examples
 
 ### Production Configuration
@@ -86,7 +85,7 @@ Example: `PORT_PREFIX=1` with `ALERT_P2P_PORT=9908` results in port 19908.
 ```bash
 alert_store=postgres://user:pass@host:5432/alert_db?sslmode=require
 alert_genesis_keys=key1|key2|key3
-alert_p2p_port=4001
+ALERT_P2P_PORT=4001
 alert_protocol_id=/bitcoin/alert-system/1.0.0
 alert_topic_name=bitcoin_alert_system
 ```
@@ -105,4 +104,3 @@ alert_genesis_keys=devkey1
 alert_p2p_private_key=
 # File will be created at: $HOME/.alert-system/private_key.pem
 ```
-
