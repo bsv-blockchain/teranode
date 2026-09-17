@@ -418,9 +418,16 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	// (issue #1422).
 	sentinelPresent := spendingData != nil && bytes.Equal(spendingData.Bytes(), frozenUTXOBytes)
 
-	var freezeRec freezeRecord
+	var (
+		freezeRec freezeRecord
+		freezeErr error
+	)
+
 	if value != nil {
-		freezeRec = readFreezeRecord(value.Bins, int(spend.Vout%uint32(s.utxoBatchSize))) // nolint:gosec
+		freezeRec, freezeErr = readFreezeRecord(value.Bins, int(spend.Vout%uint32(s.utxoBatchSize))) // nolint:gosec
+		if freezeErr != nil {
+			return nil, errors.NewStorageError("[GetSpend][%s:%d] malformed freeze record", spend.TxID.String(), spend.Vout, freezeErr)
+		}
 	}
 
 	if sentinelPresent && !utxo.FreezePolicyActiveAt(freezeRec.from, freezeRec.until, freezeRec.policyExpires, s.GetBlockHeight()+1) {
@@ -1481,7 +1488,9 @@ func (s *Store) processUTXOs(ctx context.Context, txid *chainhash.Hash, bins aer
 		}
 	}
 
-	s.synthesiseFrozenSpendingData(bins, 0, len(utxos), spendingDatas)
+	if err := s.synthesiseFrozenSpendingData(bins, 0, len(utxos), spendingDatas); err != nil {
+		return nil, errors.NewStorageError("[processUTXOs][%s] malformed freeze record", txid.String(), err)
+	}
 
 	// Add any extra UTXOs from child records...
 	totalExtraRecs, ok := bins[fields.TotalExtraRecs.String()].(int)
@@ -1506,9 +1515,12 @@ func (s *Store) processUTXOs(ctx context.Context, txid *chainhash.Hash, bins aer
 //     (policyExpiresWithConsensus) is stale, and reads as unspent so block assembly can
 //     re-admit the coin, as GetSpend already reports it;
 //   - an output spent by a real transaction is left alone.
-func (s *Store) synthesiseFrozenSpendingData(bins aerospike.BinMap, baseOffset, count int, spendingDatas []*spendpkg.SpendingData) {
+//
+// Freeze data of the wrong shape is an error: it feeds consensus decisions and must not
+// read as "not frozen".
+func (s *Store) synthesiseFrozenSpendingData(bins aerospike.BinMap, baseOffset, count int, spendingDatas []*spendpkg.SpendingData) error {
 	if _, found := bins[fields.UtxoFreezeFrom.String()]; !found {
-		return
+		return nil
 	}
 
 	nextHeight := s.GetBlockHeight() + 1
@@ -1519,7 +1531,11 @@ func (s *Store) synthesiseFrozenSpendingData(bins aerospike.BinMap, baseOffset, 
 			continue
 		}
 
-		rec := readFreezeRecord(bins, offset)
+		rec, err := readFreezeRecord(bins, offset)
+		if err != nil {
+			return err
+		}
+
 		if !rec.present {
 			continue
 		}
@@ -1535,6 +1551,8 @@ func (s *Store) synthesiseFrozenSpendingData(bins aerospike.BinMap, baseOffset, 
 			spendingDatas[i] = nil
 		}
 	}
+
+	return nil
 }
 
 // processConflictingChildren extracts and processes conflicting children data from Aerospike bins.
@@ -1620,7 +1638,9 @@ func (s *Store) getAllExtraUTXOs(ctx context.Context, txID *chainhash.Hash, tota
 
 		// A freeze record on a paginated output lives on its own extra record, keyed by
 		// the offset within that record.
-		s.synthesiseFrozenSpendingData(extraRecord.Bins, baseOffset, expected, spendingDatas)
+		if err := s.synthesiseFrozenSpendingData(extraRecord.Bins, baseOffset, expected, spendingDatas); err != nil {
+			return errors.NewStorageError("[getAllExtraUTXOs][%s] malformed freeze record on extra record %d", txID.String(), recordNum, err)
+		}
 	}
 
 	return nil

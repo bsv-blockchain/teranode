@@ -2759,16 +2759,25 @@ func utxoHashForOutput(ctx context.Context, store utxo.Store, txHash *chainhash.
 // freezeWindowFromRPC converts the optional enforceAtHeight arguments of the freeze
 // command into the stored window.
 //
-// Both omitted (or both 0) is the unqualified freeze this command has always issued —
-// enforced at every height, stored as (0, 0). Once either is given, SV Node's interval
-// semantics apply through utxo.NormalizeFreezeWindow: stop is an exclusive end, and
-// stop <= start is an empty interval that enforces nothing by consensus.
+// Both omitted is the unqualified freeze this command has always issued — enforced at
+// every height, stored as (0, 0). Once either is given, SV Node's interval semantics
+// apply through utxo.NormalizeFreezeWindow: stop is an exclusive end, and stop <= start
+// — an explicit (0, 0) included — is an empty interval that enforces nothing by
+// consensus. A stop given alone starts at genesis; a start given alone has no end. The
+// command's height fields carry no jsonrpcdefault, which is what keeps omission
+// distinguishable from an explicit zero here.
 func freezeWindowFromRPC(start, stop *int) (freezeFrom uint32, freezeUntil uint32, err error) {
-	var startHeight, stopHeight int
+	if start == nil && stop == nil {
+		return 0, 0, nil
+	}
+
+	var startHeight int
 
 	if start != nil {
 		startHeight = *start
 	}
+
+	stopHeight := int(utxo.FreezeWindowNever) // no end: a stop the chain never reaches
 
 	if stop != nil {
 		stopHeight = *stop
@@ -2776,10 +2785,6 @@ func freezeWindowFromRPC(start, stop *int) (freezeFrom uint32, freezeUntil uint3
 
 	if startHeight < 0 || stopHeight < 0 {
 		return 0, 0, errors.NewInvalidArgumentError("enforceAtHeight bounds must not be negative")
-	}
-
-	if startHeight == 0 && stopHeight == 0 {
-		return 0, 0, nil
 	}
 
 	freezeFrom, freezeUntil, _ = utxo.NormalizeFreezeWindow(uint64(startHeight), uint64(stopHeight))
