@@ -12,6 +12,7 @@ var (
 	prometheusP2PWebsocketNotificationsDropped *prometheus.CounterVec
 	prometheusP2PWebsocketClientsEvicted       prometheus.Counter
 	prometheusP2PGossipKafkaPublishDropped     *prometheus.CounterVec
+	prometheusP2PHTTPRateLimited               prometheus.Counter
 
 	prometheusMetricsInitOnce sync.Once
 )
@@ -59,6 +60,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "p2p",
 			Name:      "websocket_clients_evicted_total",
 			Help:      "Number of websocket clients evicted from the broadcast fan-out because their send buffer was full when a broadcast reached them",
+		},
+	)
+
+	prometheusP2PHTTPRateLimited = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "p2p",
+			Name:      "http_rate_limited_total",
+			Help:      "Number of P2P HTTP requests (health, websocket upgrades) rejected by the per-source rate limiter",
 		},
 	)
 }
