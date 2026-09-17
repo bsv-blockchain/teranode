@@ -288,6 +288,11 @@ func HTTPClient() *http.Client {
 // DoHTTPRequest performs an HTTP GET or POST request and returns the response body as bytes.
 // Uses GET by default, switches to POST if requestBody is provided.
 // Automatically handles timeouts and validates response status codes.
+//
+// Deprecated: this reads the whole body with io.ReadAll and applies no cap, so a peer-controlled
+// response of unbounded size is read into memory in full (bitcoin-sv/teranode#4742). It has no
+// production callers left. Use DoHTTPRequestBounded for a caller-known size, or
+// DoHTTPRequestBodyReader to stream and bound the parse itself.
 func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]byte, error) {
 	bodyReaderCloser, cancelFn, err := doHTTPRequest(ctx, url, requestBody...)
 	defer cancelFn()

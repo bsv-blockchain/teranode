@@ -203,6 +203,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 		Asset: AssetSettings{
 			APIPrefix:               getString("asset_apiPrefix", "/api/v1", alternativeContext...),
 			CentrifugeListenAddress: getString("asset_centrifugeListenAddress", ":8892", alternativeContext...),
+			CentrifugeAllowOrigins:  getString("asset_centrifugeAllowOrigins", "", alternativeContext...),
 			CentrifugeDisable:       getBool("asset_centrifuge_disable", false, alternativeContext...),
 			HTTPAddress:             getString("asset_httpAddress", "http://localhost:8090/api/v1", alternativeContext...),
 			HTTPPublicAddress:       getString("asset_httpPublicAddress", "", alternativeContext...),
@@ -402,6 +403,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			CircuitBreakerTimeoutSeconds:   getInt("blockvalidation_circuit_breaker_timeout_seconds", 30, alternativeContext...),
 			// Block fetching configuration
 			FetchLargeBatchSize:             getInt("blockvalidation_fetch_large_batch_size", 100, alternativeContext...),
+			MaxIncomingBlockMessageBytes:    int64(getInt("blockvalidation_max_incoming_block_message_bytes", 128*1024*1024, alternativeContext...)),
 			FetchNumWorkers:                 getInt("blockvalidation_fetch_num_workers", 16, alternativeContext...),
 			FetchBufferSize:                 getInt("blockvalidation_fetch_buffer_size", 50, alternativeContext...),
 			SubtreeFetchConcurrency:         getInt("blockvalidation_subtree_fetch_concurrency", 32, alternativeContext...),

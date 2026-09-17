@@ -169,7 +169,7 @@ Scans all 16+ listen addresses across services and detects conflicts. The check 
 - `:8080` and `0.0.0.0:8080` both bind all interfaces, so they conflict
 - `127.0.0.1:8080` and `10.0.0.1:8080` bind different interfaces, no conflict
 
-Listen addresses checked: Blockchain gRPC/HTTP, Block Assembly gRPC, Block Validation gRPC, Subtree Validation gRPC, Validator gRPC/HTTP, P2P gRPC/HTTP, Propagation gRPC/HTTP, Asset HTTP, Asset Centrifuge, Block Persister HTTP, Faucet HTTP, Health Check HTTP, RPC.
+Listen addresses checked: Blockchain gRPC/HTTP, Block Assembly gRPC, Block Validation gRPC, Subtree Validation gRPC, Validator gRPC/HTTP, P2P gRPC/HTTP, Propagation gRPC/HTTP, Asset HTTP, Block Persister HTTP, Faucet HTTP, Health Check HTTP, RPC.
 
 ### Security
 

@@ -21,6 +21,7 @@ package validator
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -351,6 +352,106 @@ func TestScriptVerifierGoBDKMapScriptErrors(t *testing.T) {
 	}
 }
 
+// abiFailureCodes are the ABI error codes the binding actually emits.
+// ABI_ERR_OK (0) and ABI_ERR_COUNT (5) are enum sentinels, not failures, so they
+// are deliberately excluded; an out-of-range code is covered separately below.
+var abiFailureCodes = []bdkscript.ABIErrorCode{
+	bdkscript.ABI_ERR_LENGTH_NEGATIVE,
+	bdkscript.ABI_ERR_LENGTH_NOT_REPRESENTABLE,
+	bdkscript.ABI_ERR_NULL_BUFFER,
+	bdkscript.ABI_ERR_LENGTH_OVERFLOW,
+}
+
+// TestScriptVerifierGoBDKClassifiesABIErrorsAsNodeFaults pins the classification
+// the binding's own contract demands: an ABIError reports that the call could not
+// be expressed across the C boundary, so it says nothing about the transaction.
+// Classifying it as a verdict would let a local binding defect reject a
+// consensus-valid transaction — in block validation, a chain split.
+//
+// The classification is mode-independent: a call that could not be made is not a
+// verdict under consensus rules either.
+func TestScriptVerifierGoBDKClassifiesABIErrorsAsNodeFaults(t *testing.T) {
+	verifier := &scriptVerifierGoBDK{logger: ulogger.TestLogger{}}
+
+	for _, code := range abiFailureCodes {
+		for _, consensus := range []bool{false, true} {
+			t.Run(fmt.Sprintf("abi_code_%d_consensus_%t", code, consensus), func(t *testing.T) {
+				got := verifier.mapBDKValidationError(bdkscript.NewABIError(code), consensus)
+
+				require.ErrorIs(t, got, errors.ErrProcessing)
+				require.False(t, errors.Is(got, errors.ErrTxInvalid), "an ABI error must never become a transaction verdict")
+				require.False(t, errors.Is(got, errors.ErrTxPolicy))
+			})
+		}
+	}
+}
+
+// TestScriptVerifierGoBDKKeepsABIErrorOpaque is the public-surface half: the
+// abi-* strings describe this node's binding, not the submitted transaction, so
+// none of them may cross the public error boundary. The expected message is
+// byte-identical to the CGO-exception one — the same node-fault class.
+func TestScriptVerifierGoBDKKeepsABIErrorOpaque(t *testing.T) {
+	verifier := &scriptVerifierGoBDK{logger: ulogger.TestLogger{}}
+
+	for _, code := range abiFailureCodes {
+		for _, consensus := range []bool{false, true} {
+			t.Run(fmt.Sprintf("abi_code_%d_consensus_%t", code, consensus), func(t *testing.T) {
+				abiErr := bdkscript.NewABIError(code)
+				require.NotEmpty(t, abiErr.Error())
+
+				got := verifier.mapBDKValidationError(abiErr, consensus)
+
+				require.Equal(t, "PROCESSING (4): "+errMsgInvalidTx, errors.UserMessage(got))
+				require.NotContains(t, errors.UserMessage(got), abiErr.Error())
+			})
+		}
+	}
+}
+
+// TestScriptVerifierGoBDKClassifiesUnknownABICodeAsNodeFault pins that the branch
+// keys on the type, not on the set of codes: a code this build does not recognise
+// is still not a verdict.
+func TestScriptVerifierGoBDKClassifiesUnknownABICodeAsNodeFault(t *testing.T) {
+	verifier := &scriptVerifierGoBDK{logger: ulogger.TestLogger{}}
+
+	got := verifier.mapBDKValidationError(bdkscript.NewABIError(bdkscript.ABIErrorCode(999)), false)
+
+	require.ErrorIs(t, got, errors.ErrProcessing)
+	require.False(t, errors.Is(got, errors.ErrTxInvalid))
+}
+
+// foreignError stands in for the value BDK's translateTxError returns for a
+// domain it does not recognise: a plain error that is neither a *errors.Error nor
+// any of the engine's three types. Declared here rather than built with
+// fmt.Errorf or the standard library's errors.New because the repo's linters
+// forbid both outside the errors package; what the test needs is only that the
+// value be foreign to this package.
+type foreignError struct{ msg string }
+
+func (e foreignError) Error() string { return e.msg }
+
+// TestScriptVerifierGoBDKClassifiesUnknownDomainErrorAsNodeFault covers the error
+// BDK's translateTxError returns for a domain it does not know: a plain error that
+// is none of the three engine types. It used to fall through to NewTxInvalidError,
+// making a value this node could not interpret into a verdict about a transaction
+// it never examined — so every future error domain re-opened the same hole.
+func TestScriptVerifierGoBDKClassifiesUnknownDomainErrorAsNodeFault(t *testing.T) {
+	verifier := &scriptVerifierGoBDK{logger: ulogger.TestLogger{}}
+
+	for _, consensus := range []bool{false, true} {
+		t.Run(fmt.Sprintf("consensus_%t", consensus), func(t *testing.T) {
+			unknown := foreignError{msg: "unknown TxError domain=7 code=3"}
+
+			got := verifier.mapBDKValidationError(unknown, consensus)
+
+			require.ErrorIs(t, got, errors.ErrProcessing)
+			require.False(t, errors.Is(got, errors.ErrTxInvalid))
+			require.False(t, errors.Is(got, errors.ErrTxPolicy))
+			require.Equal(t, "PROCESSING (4): "+errMsgInvalidTx, errors.UserMessage(got))
+		})
+	}
+}
+
 func Test_ScriptVerificationGoBDK_invalid(t *testing.T) {
 	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams)
 
@@ -458,4 +559,158 @@ func TestSubstituteUnconfirmedHeights_EmptySlice(t *testing.T) {
 	in := []uint32{}
 	out := substituteUnconfirmedHeights(in, 500, true)
 	require.Equal(t, in, out)
+}
+
+// The extended-serialisation length identity, and the helpers that state it.
+//
+// ScriptVerifierGoBDK.go:285 hands BDK tx.ExtendedBytes(). Both this node and the
+// BDK parser assume the extended representation is the bare one plus a fixed
+// marker plus a fixed per-input overhead:
+//
+//	extended = bare + 6 + Σᵢ (8 + varint(sᵢ) + sᵢ)
+//
+// where sᵢ is the length of input i's previous locking script. The 6 bytes are
+// the marker 00 00 00 00 00 EF and the 8 are the previous output's satoshi value.
+// The helpers below are test-only: nothing in the production path computes a
+// length, and nothing should start to on their account.
+
+// extendedOverhead returns the bytes the extended serialisation adds to the bare
+// one for inputs whose previous locking scripts have the given lengths. A nil
+// previous script contributes a length of 0, because go-bt writes a single 0x00
+// for it, which is exactly varint(0).
+func extendedOverhead(prevScriptLens []int) int {
+	overhead := 6 // the extended marker, 00 00 00 00 00 EF
+
+	for _, s := range prevScriptLens {
+		overhead += 8 + bt.VarInt(uint64(s)).Length() + s
+	}
+
+	return overhead
+}
+
+// extendedTxSize computes len(tx.ExtendedBytes()) without serialising anything.
+func extendedTxSize(tx *bt.Tx) int {
+	prevScriptLens := make([]int, 0, len(tx.Inputs))
+
+	for _, in := range tx.Inputs {
+		if in.PreviousTxScript == nil {
+			prevScriptLens = append(prevScriptLens, 0)
+		} else {
+			prevScriptLens = append(prevScriptLens, len(*in.PreviousTxScript))
+		}
+	}
+
+	return tx.Size() + extendedOverhead(prevScriptLens)
+}
+
+// newSyntheticExtendedTx builds a transaction with one input per entry of
+// prevScriptLens; a negative entry leaves that input's PreviousTxScript nil.
+func newSyntheticExtendedTx(t *testing.T, prevScriptLens []int) *bt.Tx {
+	t.Helper()
+
+	tx := bt.NewTx()
+
+	for _, l := range prevScriptLens {
+		in := &bt.Input{
+			PreviousTxOutIndex: 0,
+			SequenceNumber:     bt.DefaultSequenceNumber,
+			PreviousTxSatoshis: 1000,
+			UnlockingScript:    bscript.NewFromBytes([]byte{0x51}),
+		}
+		require.NoError(t, in.PreviousTxIDAddStr(coinbaseTxID))
+
+		if l >= 0 {
+			in.PreviousTxScript = bscript.NewFromBytes(make([]byte, l))
+		}
+
+		tx.Inputs = append(tx.Inputs, in)
+	}
+
+	tx.Outputs = append(tx.Outputs, &bt.Output{
+		Satoshis:      500,
+		LockingScript: bscript.NewFromBytes([]byte{0x76, 0xa9, 0x88, 0xac}),
+	})
+
+	return tx
+}
+
+// TestExtendedTxSizeMatchesSerialiser asserts the identity against the serialiser
+// teranode actually pins, over real transactions and over synthetic ones sitting
+// on both varint transitions a corpus can reach (1→3 bytes at 253, 3→5 at 65536).
+// The 5→9 transition needs a 4 GiB previous locking script and is asserted
+// arithmetically instead — see TestExtendedOverheadVarIntFiveToNineTransition.
+func TestExtendedTxSizeMatchesSerialiser(t *testing.T) {
+	for _, test := range testTxs {
+		t.Run("real_tx_"+test.TxID, func(t *testing.T) {
+			tx, err := bt.NewTxFromString(test.ExtendedTx)
+			require.NoError(t, err)
+
+			require.Equal(t, len(tx.ExtendedBytes()), extendedTxSize(tx))
+		})
+	}
+
+	synthetic := []struct {
+		name           string
+		prevScriptLens []int
+	}{
+		{name: "empty_script", prevScriptLens: []int{0}},
+		{name: "one_byte_script", prevScriptLens: []int{1}},
+		{name: "varint_1_byte_max", prevScriptLens: []int{252}},
+		{name: "varint_3_byte_min", prevScriptLens: []int{253}},
+		{name: "varint_3_byte_max", prevScriptLens: []int{65535}},
+		{name: "varint_5_byte_min", prevScriptLens: []int{65536}},
+		{name: "nil_previous_script", prevScriptLens: []int{-1}},
+		{name: "multi_input_mix", prevScriptLens: []int{-1, 0, 1, 252, 253, 65535, 65536}},
+	}
+
+	for _, tt := range synthetic {
+		t.Run("synthetic_"+tt.name, func(t *testing.T) {
+			tx := newSyntheticExtendedTx(t, tt.prevScriptLens)
+
+			require.Equal(t, len(tx.ExtendedBytes()), extendedTxSize(tx))
+		})
+	}
+}
+
+// TestExtendedOverheadAtLengthBoundaries states the arithmetic at the total
+// lengths that matter to the C boundary: the issue's own construction, and totals
+// sitting exactly on and just past INT32_MAX and UINT32_MAX. It tests the size
+// arithmetic only — no transaction of this size is built, and the boundary itself
+// is proven on the bdk side.
+func TestExtendedOverheadAtLengthBoundaries(t *testing.T) {
+	// The issue's construction: three inputs, 720,000,000-byte previous locking
+	// scripts, a 143-byte bare transaction.
+	require.Equal(t, 2160000188, 143+extendedOverhead([]int{720000000, 720000000, 720000000}))
+
+	// One input, a 143-byte bare transaction: total = 143 + 6 + 8 + 5 + s.
+	tests := []struct {
+		name      string
+		scriptLen int
+		wantTotal int
+	}{
+		{name: "total_at_int32_max", scriptLen: 2147483485, wantTotal: math.MaxInt32},
+		{name: "total_past_int32_max", scriptLen: 2147483486, wantTotal: math.MaxInt32 + 1},
+		{name: "total_at_uint32_max", scriptLen: 4294967133, wantTotal: math.MaxUint32},
+		{name: "total_past_uint32_max", scriptLen: 4294967134, wantTotal: math.MaxUint32 + 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, 5, bt.VarInt(uint64(tt.scriptLen)).Length())
+			require.Equal(t, tt.wantTotal, 143+extendedOverhead([]int{tt.scriptLen}))
+		})
+	}
+}
+
+// TestExtendedOverheadVarIntFiveToNineTransition closes the one varint transition
+// a corpus cannot reach: it needs a previous locking script of MaxUint32+1 bytes,
+// a 4 GiB allocation. The real serialiser is deliberately NOT exercised here —
+// this asserts only that the helper charges what the pinned go-bt VarInt.Length()
+// charges on either side of the transition.
+func TestExtendedOverheadVarIntFiveToNineTransition(t *testing.T) {
+	require.Equal(t, 5, bt.VarInt(uint64(math.MaxUint32)).Length())
+	require.Equal(t, 6+8+5+math.MaxUint32, extendedOverhead([]int{math.MaxUint32}))
+
+	require.Equal(t, 9, bt.VarInt(uint64(math.MaxUint32+1)).Length())
+	require.Equal(t, 6+8+9+math.MaxUint32+1, extendedOverhead([]int{math.MaxUint32 + 1}))
 }

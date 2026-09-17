@@ -440,7 +440,8 @@ The Asset Service uses the following configuration values from the settings syst
 ### Centrifuge Configuration (Real-time Updates)
 
 - `asset_centrifuge_disable`: Whether to disable Centrifuge server (default: false)
-- `asset_centrifugeListenAddress`: Centrifuge listen address (default: ":8000")
+- `asset_centrifugeListenAddress`: Non-empty enables Centrifuge (default: ":8892"). Not bound; the WebSocket is served on Asset HTTP at `/connection/websocket`
+- `asset_centrifugeAllowOrigins`: Pipe-separated extra browser origins allowed to open the WebSocket (default: "", same-host only)
 
 ### Security
 

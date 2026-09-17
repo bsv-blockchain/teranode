@@ -81,7 +81,6 @@ func checkPortConflicts(s *settings.Settings) []ConfigResult {
 		{"Propagation gRPC", s.Propagation.GRPCListenAddress},
 		{"Propagation HTTP", s.Propagation.HTTPListenAddress},
 		{"Asset HTTP", s.Asset.HTTPListenAddress},
-		{"Asset Centrifuge", s.Asset.CentrifugeListenAddress},
 		{"Block Persister HTTP", s.BlockPersister.HTTPListenAddress},
 		{"Faucet HTTP", s.Faucet.HTTPListenAddress},
 		{"Health Check HTTP", s.HealthCheckHTTPListenAddress},

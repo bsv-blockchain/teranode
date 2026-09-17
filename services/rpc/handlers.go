@@ -2256,7 +2256,27 @@ func handleListBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-ch
 		}
 	}
 
-	return bannedList, nil
+	// Return each exact string once, retaining the first occurrence in the
+	// collected order: successful P2P entries first, then successful legacy
+	// entries. An empty collected slice is returned unchanged so that a nil
+	// list stays nil and a non-nil empty list stays non-nil empty.
+	if len(bannedList) == 0 {
+		return bannedList, nil
+	}
+
+	seen := make(map[string]struct{})
+	unique := make([]string, 0)
+
+	for _, banned := range bannedList {
+		if _, exists := seen[banned]; exists {
+			continue
+		}
+
+		seen[banned] = struct{}{}
+		unique = append(unique, banned)
+	}
+
+	return unique, nil
 }
 
 // handleClearBanned implements the clearbanned command, which removes all IP address
