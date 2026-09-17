@@ -228,7 +228,14 @@ func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings
 		}
 
 		if res.Status == LuaStatusError {
-			errorsThrown = append(errorsThrown, errors.NewStorageError("[unfreeze][%d][%s] failed to unfreeze aerospike utxo: %s", batchID, spendDesc, res.Message))
+			switch res.ErrorCode {
+			case LuaErrorCodeUtxoNotFrozen:
+				// Neither the policy marker nor a consensus record: reported the same way
+				// the SQL store reports it, so callers classify with errors.Is on both.
+				errorsThrown = append(errorsThrown, errors.NewUtxoFrozenError("[unfreeze][%d][%s] aerospike utxo is not frozen", batchID, spendDesc))
+			default:
+				errorsThrown = append(errorsThrown, errors.NewStorageError("[unfreeze][%d][%s] failed to unfreeze aerospike utxo: %s", batchID, spendDesc, res.Message))
+			}
 		}
 	}
 
