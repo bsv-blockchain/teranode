@@ -57,14 +57,72 @@ package aerospike
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 )
+
+// markFreezeExtraRecords writes, on each transaction's main record, the utxoFreezeRecs
+// marker naming every extra (pagination) record about to receive a freeze record, so a
+// freeze-record read can go straight to those records instead of scanning them all (see
+// readFreezeRecords). It runs BEFORE the freeze itself: a reader may then see a marker
+// with no record behind it, which costs one wasted read, but never a record with no
+// marker, which would hide a consensus freeze from block validation. Markers are never
+// removed, for the same reason — an unfreeze racing a freeze of another output on the
+// same extra record could otherwise remove a marker that record still needs.
+//
+// A transaction the store does not hold is skipped, matching the UDF's silent
+// TX_NOT_FOUND on the freeze itself.
+func (s *Store) markFreezeExtraRecords(spends []*utxo.Spend, tSettings *settings.Settings) error {
+	marks := make(map[chainhash.Hash][]int)
+
+	for _, spend := range spends {
+		recordNum := int(spend.Vout) / s.utxoBatchSize
+		if recordNum == 0 || slices.Contains(marks[*spend.TxID], recordNum) {
+			continue
+		}
+
+		marks[*spend.TxID] = append(marks[*spend.TxID], recordNum)
+	}
+
+	if len(marks) == 0 {
+		return nil
+	}
+
+	writePolicy := util.GetAerospikeWritePolicy(tSettings, 0)
+	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+
+	for txID, recordNums := range marks {
+		txID := txID
+
+		mainKey, err := aerospike.NewKey(s.namespace, s.setName, uaerospike.CalculateKeySourceInternal(&txID, 0))
+		if err != nil {
+			return errors.NewProcessingError("[freeze] failed to create key for %s", txID.String(), err)
+		}
+
+		ops := make([]*aerospike.Operation, 0, len(recordNums))
+		for _, recordNum := range recordNums {
+			ops = append(ops, aerospike.MapPutOp(aerospike.DefaultMapPolicy(), fields.UtxoFreezeRecs.String(), recordNum, 1))
+		}
+
+		if _, err = s.client.Operate(writePolicy, mainKey, ops...); err != nil {
+			if isKeyNotFound(err) {
+				continue
+			}
+
+			return errors.NewStorageError("[freeze] failed to mark freeze records on %s", txID.String(), err)
+		}
+	}
+
+	return nil
+}
 
 // luaMsgFreezeRecordedOnSpent is the message the freeze UDF returns, with STATUS_OK, when
 // it recorded the consensus window on an output that was already spent by a real
@@ -94,6 +152,10 @@ const luaMsgFreezeRecordedOnSpent = "freeze recorded on spent output"
 //   - Is already frozen with the same record
 //   - Fails to freeze
 func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
+	if err := s.markFreezeExtraRecords(spends, tSettings); err != nil {
+		return err
+	}
+
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(spends))
 

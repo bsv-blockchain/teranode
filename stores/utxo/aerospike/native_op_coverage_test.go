@@ -30,16 +30,18 @@ func TestUseNativeForSubOp_Fencing(t *testing.T) {
 
 	// Fenced to the UDF path even when native is on:
 	//   - unspend: the UDF enforces the #766 SpendingData ownership check.
-	//   - spend/spendMulti/freeze/unfreeze: the alert system's freeze is a per-offset
-	//     record with height-anchored semantics and two per-spend flags, none of which
-	//     the server-fork dispatcher implements. Routing any of them natively would let
-	//     a native-ops node disagree with the fleet about a block.
+	//   - spend/spendMulti/freeze/unfreeze/reassign: the alert system's freeze is a
+	//     per-offset record with height-anchored semantics and two per-spend flags, none
+	//     of which the server-fork dispatcher implements. Routing any of them natively
+	//     would let a native-ops node disagree with the fleet about a block, or leave a
+	//     reassigned output carrying the record it was reassigned out of.
 	fenced := map[uint8]bool{
 		subOpUnspend:    true,
 		subOpSpend:      true,
 		subOpSpendMulti: true,
 		subOpFreeze:     true,
 		subOpUnfreeze:   true,
+		subOpReassign:   true,
 	}
 
 	for _, op := range allSubOps {

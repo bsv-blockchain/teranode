@@ -2,6 +2,7 @@ package aerospike
 
 import (
 	"context"
+	"sort"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -46,21 +47,36 @@ func readFreezeRecord(bins aerospike.BinMap, offset int) freezeRecord {
 }
 
 // readFreezeRecords collects every output's freeze record for a transaction into the
-// shape meta.Data carries, from the main record's bins plus — only when the transaction
-// is paginated — each extra record's freeze bins, since a record on a paginated output
-// lives on the extra record that holds that output. Returns nil when no output carries a
-// record, which is every transaction until an alert names one of its outputs.
+// shape meta.Data carries: the main record's bins, plus the freeze bins of each extra
+// record that the main record's utxoFreezeRecs marker names — a record on a paginated
+// output lives on the extra record that holds that output. Only marked extra records are
+// read, so a transaction with no frozen output costs no extra round trip however many
+// outputs it has; this read rides on block validation's parent check (see
+// model.getParentTxMetaBlockIDs). Returns nil when no output carries a record.
+//
+// A marked extra record that cannot be read is storage damage, not evidence that the
+// output is free — the full UTXO read classifies the same condition the same way — and
+// this result decides whether a block is valid, so it is an error rather than a skip.
+//
+// The legacy 0xFF sentinel in the utxos list is deliberately not consulted here. An
+// output frozen before the bins existed carries only the sentinel, but the sentinel also
+// occupies the spending-data slot, so such an output is unspent by construction and every
+// spend of it goes through spendMulti, which reads the sentinel as an always-active
+// record. There is therefore no already-validated spender for this block-level check to
+// catch, and reading the utxos bins of every parent here would put the largest bin on
+// the hottest read in block validation. The one path that overwrites a sentinel without
+// that check is the below-checkpoint bypass, whose block is canonical by definition.
 func (s *Store) readFreezeRecords(ctx context.Context, txID *chainhash.Hash, bins aerospike.BinMap) (map[uint32]meta.FreezeRecord, error) {
 	records := collectFreezeRecords(bins, 0, nil)
 
-	totalExtraRecs, ok := bins[fields.TotalExtraRecs.String()].(int)
-	if !ok || totalExtraRecs <= 0 {
+	extraRecordNums := markedFreezeExtraRecords(bins)
+	if len(extraRecordNums) == 0 {
 		return records, nil
 	}
 
 	policy := util.GetAerospikeReadPolicy(s.settings)
 
-	for recordNum := 1; recordNum <= totalExtraRecs; recordNum++ {
+	for _, recordNum := range extraRecordNums {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -73,19 +89,44 @@ func (s *Store) readFreezeRecords(ctx context.Context, txID *chainhash.Hash, bin
 		extraRecord, err := s.client.Get(policy, extraKey,
 			fields.UtxoFreezeFrom.String(), fields.UtxoFreezeUntil.String(), fields.UtxoFreezeExp.String())
 		if err != nil {
-			if errors.Is(err, aerospike.ErrKeyNotFound) {
-				continue
-			}
-
-			return nil, errors.NewStorageError("failed to get extra record", err)
+			return nil, errors.NewStorageError("[readFreezeRecords][%s] failed to get extra record %d, which the freeze marker names", txID.String(), recordNum, err)
 		}
 
-		if extraRecord != nil && extraRecord.Bins != nil {
-			records = collectFreezeRecords(extraRecord.Bins, recordNum*s.utxoBatchSize, records)
+		if extraRecord == nil || extraRecord.Bins == nil {
+			return nil, errors.NewStorageError("[readFreezeRecords][%s] extra record %d, which the freeze marker names, has no bins — torn or mis-keyed record", txID.String(), recordNum)
 		}
+
+		records = collectFreezeRecords(extraRecord.Bins, recordNum*s.utxoBatchSize, records)
 	}
 
 	return records, nil
+}
+
+// markedFreezeExtraRecords returns, in ascending order, the extra record numbers named
+// by the main record's utxoFreezeRecs marker. The marker is a map keyed by record
+// number, which Aerospike hands back as map[interface{}]interface{} with int keys.
+func markedFreezeExtraRecords(bins aerospike.BinMap) []int {
+	raw, found := bins[fields.UtxoFreezeRecs.String()]
+	if !found || raw == nil {
+		return nil
+	}
+
+	m, ok := raw.(map[interface{}]interface{})
+	if !ok {
+		return nil
+	}
+
+	nums := make([]int, 0, len(m))
+
+	for k := range m {
+		if n, ok := k.(int); ok && n > 0 {
+			nums = append(nums, n)
+		}
+	}
+
+	sort.Ints(nums)
+
+	return nums
 }
 
 // collectFreezeRecords adds the freeze records found in one record's bins to records,

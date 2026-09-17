@@ -2117,6 +2117,7 @@ func needsSpendRollback(spends []*utxo.Spend) bool {
 		if errors.Is(spend.Err, errors.ErrSpent) ||
 			errors.Is(spend.Err, errors.ErrTxConflicting) ||
 			errors.Is(spend.Err, errors.ErrFrozen) ||
+			errors.Is(spend.Err, errors.ErrUtxoConsensusFrozen) ||
 			errors.Is(spend.Err, errors.ErrUtxoHashMismatch) {
 			return true
 		}

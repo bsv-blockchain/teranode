@@ -749,12 +749,23 @@ func (s *Store) addAbstractedBins(bins []fields.FieldName) []fields.FieldName {
 		if !slices.Contains(newBins, fields.TotalUtxos) {
 			newBins = append(newBins, fields.TotalUtxos)
 		}
+
+		// The spending-data view depends on the freeze bins: an output whose 0xFF
+		// sentinel a block-validation spend overwrote and a rollback then cleared is
+		// frozen only by its record, and a sentinel whose policy tier has expired must
+		// not be reported as a spender (see synthesiseFrozenSpendingData).
+		for _, bin := range []fields.FieldName{fields.UtxoFreezeFrom, fields.UtxoFreezeUntil, fields.UtxoFreezeExp} {
+			if !slices.Contains(newBins, bin) {
+				newBins = append(newBins, bin)
+			}
+		}
 	}
 
-	// A freeze-record read needs all three freeze bins plus the pagination counter, so
-	// records on paginated outputs can be followed to their extra records.
+	// A freeze-record read needs all three freeze bins plus the main record's marker of
+	// which extra records carry one, so records on paginated outputs can be followed to
+	// their extra records without scanning them all.
 	if slices.Contains(newBins, fields.UtxoFreezeFrom) || slices.Contains(newBins, fields.UtxoFreezeUntil) || slices.Contains(newBins, fields.UtxoFreezeExp) {
-		for _, bin := range []fields.FieldName{fields.UtxoFreezeFrom, fields.UtxoFreezeUntil, fields.UtxoFreezeExp, fields.TotalExtraRecs} {
+		for _, bin := range []fields.FieldName{fields.UtxoFreezeFrom, fields.UtxoFreezeUntil, fields.UtxoFreezeExp, fields.UtxoFreezeRecs} {
 			if !slices.Contains(newBins, bin) {
 				newBins = append(newBins, bin)
 			}
@@ -1483,13 +1494,18 @@ func (s *Store) processUTXOs(ctx context.Context, txid *chainhash.Hash, bins aer
 	return spendingDatas, nil
 }
 
-// synthesiseFrozenSpendingData stands the frozen sentinel in for the spender of every
-// UNSPENT output in [baseOffset, baseOffset+count) that carries a freeze record whose
-// policy tier still holds it, mirroring what the SQL store's Get does for its frozen
-// column. Conflict resolution keys "frozen" off SpendingDatas carrying FrozenBytesTxHash,
-// and an output whose 0xFF sentinel a block-validation spend overwrote and a rollback
-// then cleared has only the freeze bins left to say so (issue #1422). A spent output is
-// left alone: it reports its real spender.
+// synthesiseFrozenSpendingData reconciles the spending-data view of every output in
+// [baseOffset, baseOffset+count) with its freeze record, mirroring what the SQL store's
+// Get does for its frozen column (issue #1422):
+//
+//   - an UNSPENT output whose record's policy tier still holds it reports the frozen
+//     sentinel as its spender — conflict resolution keys "frozen" off SpendingDatas
+//     carrying FrozenBytesTxHash, and an output whose 0xFF sentinel a block-validation
+//     spend overwrote and a rollback then cleared has only the freeze bins to say so;
+//   - a sentinel still in the slot after the policy tier expired with the window
+//     (policyExpiresWithConsensus) is stale, and reads as unspent so block assembly can
+//     re-admit the coin, as GetSpend already reports it;
+//   - an output spent by a real transaction is left alone.
 func (s *Store) synthesiseFrozenSpendingData(bins aerospike.BinMap, baseOffset, count int, spendingDatas []*spendpkg.SpendingData) {
 	if _, found := bins[fields.UtxoFreezeFrom.String()]; !found {
 		return
@@ -1499,13 +1515,24 @@ func (s *Store) synthesiseFrozenSpendingData(bins aerospike.BinMap, baseOffset, 
 
 	for offset := 0; offset < count; offset++ {
 		i := baseOffset + offset
-		if i >= len(spendingDatas) || spendingDatas[i] != nil {
+		if i >= len(spendingDatas) {
 			continue
 		}
 
 		rec := readFreezeRecord(bins, offset)
-		if rec.present && utxo.FreezePolicyActiveAt(rec.from, rec.until, rec.policyExpires, nextHeight) {
-			spendingDatas[i] = spendpkg.NewSpendingData(&subtree.FrozenBytesTxHash, i)
+		if !rec.present {
+			continue
+		}
+
+		policyActive := utxo.FreezePolicyActiveAt(rec.from, rec.until, rec.policyExpires, nextHeight)
+
+		switch {
+		case spendingDatas[i] == nil:
+			if policyActive {
+				spendingDatas[i] = spendpkg.NewSpendingData(&subtree.FrozenBytesTxHash, i)
+			}
+		case !policyActive && bytes.Equal(spendingDatas[i].Bytes(), frozenUTXOBytes):
+			spendingDatas[i] = nil
 		}
 	}
 }

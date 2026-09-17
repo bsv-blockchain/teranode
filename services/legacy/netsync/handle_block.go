@@ -1453,9 +1453,12 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 					validator.WithSkipPolicyChecks(true),
 					validator.WithInBlock(true),
 					// These spends happen because a checkpoint-proven block contains the
-					// transaction, so only the height-anchored consensus tier of an
-					// alert-system freeze may reject them (issue #1422).
+					// transaction. A block a hardcoded checkpoint already proves canonical
+					// cannot be invalidated by an alert, so neither tier of an alert-system
+					// freeze may reject them — the rule blockvalidation's own
+					// below-checkpoint spend applies (issue #1422).
 					validator.WithIgnorePolicyFreeze(true),
+					validator.WithIgnoreConsensusFreeze(true),
 					validator.WithSkipTxMetaPublishing(true),
 					// PreValidateTransactions is only reached via the quickValidationMode
 					// path (see prepareSubtrees → ValidateTransactionsLegacyMode), which

@@ -236,6 +236,83 @@ func TestFreezeEnforceAtHeightBoundary(t *testing.T) {
 		"a policy freeze that expires with consensus must lift once the window has ended")
 }
 
+// TestFreezeSameBlockParentChain covers the pair block validation cannot delegate to the
+// store: a parent and its child both already validated by this node, then an alert on
+// the parent's output, then a block inside the window carrying BOTH. Subtree validation
+// blesses both on existence without re-spending the child, and the parent is in the
+// same block so the chain check skips it — the freeze is judged only by the block-level
+// parent check, which must therefore see same-block parents too (issue #1422).
+func TestFreezeSameBlockParentChain(t *testing.T) {
+	SharedTestLock.Lock()
+	defer SharedTestLock.Unlock()
+
+	const coinbaseMaturity = 2
+
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:       true,
+		EnableValidator: true,
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.ChainCfgParams.CoinbaseMaturity = coinbaseMaturity
+			},
+		),
+	})
+	defer td.Stop(t)
+
+	require.NoError(t, td.BlockchainClient.Run(td.Ctx, "test"))
+
+	_, err := td.CallRPC(td.Ctx, "generate", []interface{}{coinbaseMaturity + 1})
+	require.NoError(t, err)
+
+	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
+	require.NoError(t, err)
+
+	// The pair: the parent spends the coinbase, the child spends parent:0. Both are
+	// validated and sit in this node's store before any alert exists.
+	parentTx, err := td.CreateParentTransactionWithNOutputs(t, block1.CoinbaseTx, 2)
+	require.NoError(t, err)
+	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, parentTx))
+	td.WaitForBlockAssemblyToProcessTx(t, parentTx.TxIDChainHash().String())
+
+	childTx := td.CreateTransactionWithOptions(t,
+		transactions.WithInput(parentTx, 0),
+		transactions.WithP2PKHOutputs(1, 1000),
+	)
+	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, childTx))
+	td.WaitForBlockAssemblyToProcessTx(t, childTx.TxIDChainHash().String())
+
+	best, _, err := td.BlockchainClient.GetBestBlockHeader(td.Ctx)
+	require.NoError(t, err)
+	tip, err := td.BlockchainClient.GetBlock(td.Ctx, best.Hash())
+	require.NoError(t, err)
+
+	// The alert arrives after the child was validated: parent:0 is already spent, so only
+	// the consensus record is written.
+	windowStart := tip.Height + 2
+	windowStop := windowStart + 2
+	require.NoError(t, td.UtxoStore.FreezeUTXOs(td.Ctx,
+		[]*utxo.Spend{freezeSpend(t, parentTx, 0, windowStart, windowStop)}, td.Settings))
+
+	// Below the window the pair is valid, in one block, everywhere.
+	_, blockBelow := td.CreateTestBlock(t, tip, 93001, parentTx, childTx)
+	require.Equal(t, windowStart-1, blockBelow.Height)
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, blockBelow, "legacy", true),
+		"a block below the window carrying the parent and its child must be accepted")
+
+	// A fork: an empty sibling of blockBelow, then a block at windowStart re-mining the
+	// same pair. Both transactions are known, so nothing re-spends the child; the verdict
+	// rests on the block-level check seeing the parent's record through the in-block edge.
+	_, forkBase := td.CreateTestBlock(t, tip, 93002)
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, forkBase, "legacy", true), "an empty fork block is valid")
+
+	_, forkInside := td.CreateTestBlock(t, forkBase, 93003, parentTx, childTx)
+	require.Equal(t, windowStart, forkInside.Height)
+
+	err = td.BlockValidation.ValidateBlock(td.Ctx, forkInside, "legacy", true)
+	requireRecordedInvalid(t, td, forkInside, err)
+}
+
 // TestFreezeAlertTimingKeepsFleetInAgreement is the multi-node reproduction from issue
 // #1422: two honest nodes receive the same freeze alert on opposite sides of a block.
 //

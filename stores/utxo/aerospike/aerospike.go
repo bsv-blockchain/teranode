@@ -104,6 +104,7 @@ var (
 		fields.UtxoFreezeFrom,
 		fields.UtxoFreezeUntil,
 		fields.UtxoFreezeExp,
+		fields.UtxoFreezeRecs,
 		fields.Conflicting,
 	}
 )

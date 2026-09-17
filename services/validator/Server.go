@@ -624,6 +624,10 @@ func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) (
 		opts.IgnorePolicyFreeze = *req.IgnorePolicyFreeze
 	}
 
+	if req.IgnoreConsensusFreeze != nil {
+		opts.IgnoreConsensusFreeze = *req.IgnoreConsensusFreeze
+	}
+
 	return opts, nil
 }
 
@@ -965,6 +969,10 @@ func extractValidationParams(c echo.Context) (uint32, *Options) {
 	// reject a block the rest of the fleet accepts (issue #1422).
 	if ignorePolicyFreezeStr := c.QueryParam("ignorePolicyFreeze"); ignorePolicyFreezeStr != "" {
 		options.IgnorePolicyFreeze = ignorePolicyFreezeStr == trueString || ignorePolicyFreezeStr == "1"
+	}
+
+	if ignoreConsensusFreezeStr := c.QueryParam("ignoreConsensusFreeze"); ignoreConsensusFreezeStr != "" {
+		options.IgnoreConsensusFreeze = ignoreConsensusFreezeStr == trueString || ignoreConsensusFreezeStr == "1"
 	}
 
 	return blockHeight, options

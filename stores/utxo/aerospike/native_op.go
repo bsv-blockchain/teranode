@@ -46,17 +46,20 @@ import (
 // server-private fork. Never renumber.
 //
 // FENCED UNTIL mod-teranode IMPLEMENTS THE FREEZE RECORD (#1422): spend, spendMulti,
-// freeze and unfreeze all route through the UDF path regardless of the setting. The
-// alert system's freeze is now a per-offset record in the utxoFreezeFrom/Until/Exp bins,
-// evaluated against the height of the block being validated and BEFORE the spent-state
-// branches, with two per-spend flags (ignorePolicyFreeze, ignoreConsensusFreeze). The
-// server-fork dispatcher predates all of that: it reads only the 0xFF sentinel out of the
-// utxos list, so it would enforce a freeze at every height from the moment the alert
-// arrived, miss a record whose sentinel a block-validation spend overwrote, and ignore
-// both flags — each of which lets a native-ops node reject a block the rest of the fleet
-// accepts, or accept one it rejects. The setting still routes setMined, setLocked,
-// setConflicting, preserveUntil and the rest natively; un-fence the four once the
-// dispatcher implements the record and a probe proves it.
+// freeze, unfreeze and reassign all route through the UDF path regardless of the
+// setting. The alert system's freeze is now a per-offset record in the
+// utxoFreezeFrom/Until/Exp bins, evaluated against the height of the block being
+// validated and BEFORE the spent-state branches, with two per-spend flags
+// (ignorePolicyFreeze, ignoreConsensusFreeze). The server-fork dispatcher predates all of
+// that: it reads only the 0xFF sentinel out of the utxos list, so it would enforce a
+// freeze at every height from the moment the alert arrived, miss a record whose sentinel
+// a block-validation spend overwrote, and ignore both flags — each of which lets a
+// native-ops node reject a block the rest of the fleet accepts, or accept one it rejects.
+// Reassign is fenced with them because it must accept a record-only freeze (a rolled-back
+// below-window spend leaves only the record) and must clear the record along with the
+// sentinel, or the replacement output inherits the old authority's heights. The setting
+// still routes setMined, setLocked, setConflicting, preserveUntil and the rest natively;
+// un-fence the five once the dispatcher implements the record and a probe proves it.
 const (
 	subOpSpend                  uint8 = 1
 	subOpSpendMulti             uint8 = 2
@@ -92,15 +95,16 @@ func encodeNativeOpPayload(subOp uint8, args []any) ([]byte, error) {
 
 // useNativeForSubOp decides whether a given mod-teranode sub-op may use the
 // native operate-path. It requires the setting+capability flag, and additionally
-// FENCES unspend (subOpUnspend), and the four freeze-aware sub-ops — spend,
-// spendMulti, freeze and unfreeze — to the UDF/Lua path regardless of the flag.
+// FENCES unspend (subOpUnspend), and the five freeze-aware sub-ops — spend,
+// spendMulti, freeze, unfreeze and reassign — to the UDF/Lua path regardless of the flag.
 //
-// Rationale for the freeze-aware four (#1422): see the FENCED UNTIL note on the sub-op
+// Rationale for the freeze-aware five (#1422): see the FENCED UNTIL note on the sub-op
 // table above. In short, the alert system's freeze became a per-offset record with
 // height-anchored semantics and two per-spend flags, none of which the server-fork
-// dispatcher implements; routing any of these four natively would let a native-ops
-// node disagree with the fleet about a block. Un-fence once the dispatcher catches up
-// and a start-up probe proves it.
+// dispatcher implements; routing any of these five natively would let a native-ops
+// node disagree with the fleet about a block, or leave a reassigned output carrying the
+// freeze it was reassigned out of. Un-fence once the dispatcher catches up and a
+// start-up probe proves it.
 //
 // Rationale (#899): the UDF unspend path always enforces the #766 SpendingData
 // ownership check before reversing a spend. The native path would forward
@@ -120,7 +124,7 @@ func (s *Store) useNativeForSubOp(subOp uint8) bool {
 	}
 
 	switch subOp {
-	case subOpUnspend, subOpSpend, subOpSpendMulti, subOpFreeze, subOpUnfreeze:
+	case subOpUnspend, subOpSpend, subOpSpendMulti, subOpFreeze, subOpUnfreeze, subOpReassign:
 		return false
 	default:
 		return true

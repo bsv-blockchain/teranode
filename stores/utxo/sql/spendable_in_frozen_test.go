@@ -110,3 +110,40 @@ func TestSpendableInHoldRollsBackSiblingSpends(t *testing.T) {
 		"sibling input was left spent by a rejected transaction -- the failed spend did not roll back")
 	require.Empty(t, resp.SpendingData, "sibling input must carry no spending data after the rollback")
 }
+
+// TestConsensusFreezeRollsBackSiblingSpends pins ErrUtxoConsensusFrozen's place in the
+// rollback set: a multi-input block-context spend that fails on one consensus-frozen
+// input must not leave its other inputs marked spent by a transaction the block cannot
+// carry (issue #1422). The consensus verdict is its own code, distinct from ErrFrozen,
+// so it has to be listed on its own.
+func TestConsensusFreezeRollsBackSiblingSpends(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, tx := setup(ctx, t)
+
+	// Two inputs: vout 0 spendable, vout 1 consensus-frozen for [100, 200).
+	spendTx := utxo2.GetSpendingTx(tx, 0, 1)
+
+	_, err := utxoStore.Create(ctx, tx, 0)
+	require.NoError(t, err)
+
+	spends, err := utxo.GetSpends(spendTx)
+	require.NoError(t, err)
+	require.Len(t, spends, 2)
+
+	frozen := *spends[1]
+	frozen.FreezeFrom, frozen.FreezeUntil = 100, 200
+	require.NoError(t, utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{&frozen}, utxoStore.settings))
+
+	// A block-context spend (policy tier bypassed) inside the window.
+	_, err = utxoStore.Spend(ctx, spendTx, 150, utxo.IgnoreFlags{IgnorePolicyFreeze: true})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrUtxoConsensusFrozen), "expected the frozen input to fail with the consensus code, got: %v", err)
+
+	resp, err := utxoStore.GetSpend(ctx, spends[0])
+	require.NoError(t, err)
+	require.Equal(t, int(utxo.Status_OK), resp.Status,
+		"sibling input was left spent by a rejected transaction -- the failed spend did not roll back")
+	require.Empty(t, resp.SpendingData, "sibling input must carry no spending data after the rollback")
+}

@@ -2997,11 +2997,16 @@ func TestValidationFunctions(t *testing.T) {
 		err = block.txMap.Put(*hash1, 0)
 		require.NoError(t, err)
 
-		// Test with parent in same block (valid order)
+		// Test with parent in same block (valid order): no chain check, but the parent is
+		// still handed on, flagged, so its freeze records are judged.
 		parentTxHashes := []chainhash.Hash{*hash1}
-		missingParents, err := block.checkParentTransactions(parentTxHashes, nil, 1, subtreepkg.Node{Hash: *hash2}, hash1, 0, 0)
+		voutsByParent := map[chainhash.Hash][]uint32{*hash1: {0, 2}}
+		missingParents, err := block.checkParentTransactions(parentTxHashes, voutsByParent, 1, subtreepkg.Node{Hash: *hash2}, hash1, 0, 0)
 		require.NoError(t, err)
-		assert.Empty(t, missingParents) // Should be empty since parent is in same block
+		require.Len(t, missingParents, 1)
+		require.True(t, missingParents[0].sameBlock)
+		require.Equal(t, *hash1, missingParents[0].parentTxHash)
+		require.Equal(t, []uint32{0, 2}, missingParents[0].vouts)
 	})
 
 	t.Run("checkParentTransactions with invalid order", func(t *testing.T) {
