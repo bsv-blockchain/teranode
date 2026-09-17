@@ -349,6 +349,21 @@ func bdkCause(code errors.ERR, errVerify error) *errors.Error {
 }
 
 func (v *scriptVerifierGoBDK) mapBDKValidationError(errVerify error, consensus bool) error {
+	// An ABI error is the binding reporting that the call could not be expressed
+	// across the C boundary — a length that cannot be represented, or a length
+	// inconsistent with its pointer. It says nothing about the transaction, so it
+	// is classified before anything that reads as a verdict: a reader adding a
+	// fourth branch meets the fail-safe classification first.
+	//
+	// PROCESSING with the raw errVerify, not bdkCause: bdkCause exists to carry a
+	// verdict across the public boundary, and the abi-* strings are neither
+	// verdicts nor about the transaction — they describe this node's binding. The
+	// operator still gets them from the caller's Warnf line above.
+	var abiErr bdkscript.ABIError
+	if errors.As(errVerify, &abiErr) {
+		return errors.NewProcessingError(errMsgInvalidTx, errVerify)
+	}
+
 	var dosErr bdkscript.DoSError
 	if errors.As(errVerify, &dosErr) {
 		switch dosErr.Code() {
@@ -368,7 +383,9 @@ func (v *scriptVerifierGoBDK) mapBDKValidationError(errVerify error, consensus b
 	}
 
 	var scriptErr bdkscript.ScriptError
-	if errors.As(errVerify, &scriptErr) {
+
+	matchedScript := errors.As(errVerify, &scriptErr)
+	if matchedScript {
 		errCode := scriptErr.Code()
 		if errCode == bdkscript.SCRIPT_ERR_CGO_EXCEPTION {
 			// A CGO exception is a fault in this node, not a verdict about the
@@ -382,6 +399,15 @@ func (v *scriptVerifierGoBDK) mapBDKValidationError(errVerify error, consensus b
 			policyErr := errors.NewTxPolicyError(errMsgPolicy, bdkCause(errors.ERR_TX_POLICY, errVerify))
 			return errors.NewTxInvalidError(errMsgInvalidTx, policyErr)
 		}
+	}
+
+	// Anything that is none of the three engine types is a value this node could
+	// not interpret — today, the plain error BDK's translateTxError returns for a
+	// domain it does not know. Turning that into a verdict would let a domain BDK
+	// adds later reject a transaction this node never examined, so it takes the
+	// same node-fault path as the two branches above.
+	if !matchedScript {
+		return errors.NewProcessingError(errMsgInvalidTx, errVerify)
 	}
 
 	return errors.NewTxInvalidError(errMsgInvalidTx, bdkCause(errors.ERR_TX_INVALID, errVerify))
