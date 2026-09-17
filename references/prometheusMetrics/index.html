@@ -8105,6 +8105,42 @@
 <td></td>
 <td>WebSocket clients evicted from the broadcast fan-out because their send buffer was full when a broadcast reached them</td>
 </tr>
+<tr>
+<td><code>teranode_p2p_connected_peers</code></td>
+<td>Gauge</td>
+<td>-</td>
+<td>Number of peers currently connected to this node over the p2p network (directly connected only, matching <code>node_status.connected_peers_count</code>)</td>
+</tr>
+<tr>
+<td><code>teranode_p2p_ban_events_total</code></td>
+<td>Counter</td>
+<td><code>reason</code></td>
+<td>Total number of peer ban events; <code>reason</code> is one of <code>protocol_violation</code>, <code>invalid_subtree</code>, <code>invalid_block</code>, <code>spam</code>, <code>operator_ban</code> (BanPeer RPC), or <code>unknown</code></td>
+</tr>
+<tr>
+<td><code>teranode_p2p_catchup_attempts_total</code></td>
+<td>Counter</td>
+<td>-</td>
+<td>Total number of catchup attempts made against peers</td>
+</tr>
+<tr>
+<td><code>teranode_p2p_catchup_successes_total</code></td>
+<td>Counter</td>
+<td>-</td>
+<td>Total number of successful catchups completed from peers</td>
+</tr>
+<tr>
+<td><code>teranode_p2p_catchup_failures_total</code></td>
+<td>Counter</td>
+<td><code>kind</code></td>
+<td>Total number of failed catchup attempts against peers; <code>kind</code> is one of <code>generic</code> or <code>block_incomplete</code></td>
+</tr>
+<tr>
+<td><code>teranode_p2p_websocket_connections</code></td>
+<td>Gauge</td>
+<td>-</td>
+<td>Number of currently connected websocket notification subscribers</td>
+</tr>
 </tbody>
 </table>
 <h2 id="legacy-peer-server-metrics">Legacy Peer Server Metrics<a class="headerlink" href="#legacy-peer-server-metrics" title="Permanent link">&para;</a></h2>

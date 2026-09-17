@@ -8441,7 +8441,7 @@ or replication issues.</p>
 <li>Too short: Frequent timeouts logged</li>
 <li>Too long: Blocks other operations unnecessarily</li>
 </ul>
-<p><strong>Metrics</strong>: Monitor <code>pruner_duration_seconds</code> to determine appropriate timeout</p>
+<p><strong>Metrics</strong>: Monitor <code>teranode_pruner_duration_seconds</code> to determine appropriate timeout</p>
 <h2 id="utxo-store-settings">UTXO Store Settings<a class="headerlink" href="#utxo-store-settings" title="Permanent link">&para;</a></h2>
 <p>These settings control the pruning behavior at the UTXO store level.</p>
 <h3 id="utxostore_unminedtxretention">utxostore_unminedTxRetention<a class="headerlink" href="#utxostore_unminedtxretention" title="Permanent link">&para;</a></h3>
@@ -8753,9 +8753,9 @@ or replication issues.</p>
 <h2 id="monitoring-settings">Monitoring Settings<a class="headerlink" href="#monitoring-settings" title="Permanent link">&para;</a></h2>
 <p>While not configuration settings, these Prometheus metrics should be monitored:</p>
 <ul>
-<li><code>pruner_duration_seconds</code>: Adjust <code>jobTimeout</code> if consistently near timeout</li>
-<li><code>pruner_skipped_total{reason="not_running"}</code>: Indicates Block Assembly issues</li>
-<li><code>pruner_errors_total</code>: Indicates database or connectivity issues</li>
+<li><code>teranode_pruner_duration_seconds</code>: Adjust <code>jobTimeout</code> if consistently near timeout</li>
+<li><code>teranode_pruner_skipped_total{reason="block_assembly_timeout"}</code>: Indicates Block Assembly issues</li>
+<li><code>teranode_pruner_errors_total</code>: Indicates database or connectivity issues</li>
 <li><code>utxo_cleanup_batch_duration_seconds</code>: Indicates Aerospike performance</li>
 </ul>
 <h2 id="troubleshooting-configuration-issues">Troubleshooting Configuration Issues<a class="headerlink" href="#troubleshooting-configuration-issues" title="Permanent link">&para;</a></h2>
@@ -8778,7 +8778,7 @@ or replication issues.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>pruner_jobTimeout = 20m  # or higher
 </span></code></pre></div>
 <h3 id="slow-pruning">Slow Pruning<a class="headerlink" href="#slow-pruning" title="Permanent link">&para;</a></h3>
-<p><strong>Symptoms</strong>: High <code>pruner_duration_seconds</code> values</p>
+<p><strong>Symptoms</strong>: High <code>teranode_pruner_duration_seconds</code> values</p>
 <p><strong>Solutions:</strong></p>
 <ol>
 <li>
@@ -8807,12 +8807,12 @@ or replication issues.</p>
 <ol>
 <li>
 <p>Verify pruner running:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a>curl<span class="w"> </span>http://localhost:8096/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>pruner_processed_total
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a>curl<span class="w"> </span>http://localhost:8096/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>teranode_pruner_active
 </span></code></pre></div>
 </li>
 <li>
-<p>Check <code>pruner_skipped_total</code> reasons:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a>curl<span class="w"> </span>http://localhost:8096/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>pruner_skipped_total
+<p>Check <code>teranode_pruner_skipped_total</code> reasons:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a>curl<span class="w"> </span>http://localhost:8096/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>teranode_pruner_skipped_total
 </span></code></pre></div>
 </li>
 <li>
