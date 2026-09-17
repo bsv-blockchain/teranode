@@ -213,14 +213,6 @@ func TestMessageType(t *testing.T) {
 	})
 }
 
-func TestConstants(t *testing.T) {
-	t.Run("Access control constants", func(t *testing.T) {
-		assert.Equal(t, "Access-Control-Allow-Origin", AccessControlAllowOrigin)
-		assert.Equal(t, "Access-Control-Allow-Headers", AccessControlAllowHeaders)
-		assert.Equal(t, "Access-Control-Allow-Credentials", AccessControlAllowCredentials)
-	})
-}
-
 func TestCentrifuge_ValidationLogic(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	mockRepo := &repository.Repository{}
@@ -446,86 +438,127 @@ func TestWebsocketHandler_SubprotocolNegotiation(t *testing.T) {
 	})
 }
 
-func TestCheckSameHost(t *testing.T) {
+func TestCheckOrigin(t *testing.T) {
 	tests := []struct {
-		name      string
-		origin    string
-		host      string
-		wantError bool
+		name    string
+		origin  string
+		host    string
+		allowed []string
+		wantOK  bool
 	}{
-		{
-			name:      "same host",
-			origin:    "http://example.com",
-			host:      "example.com",
-			wantError: false, // checkSameHost is disabled, always returns nil
-		},
-		{
-			name:      "https origin for http request",
-			origin:    "https://example.com",
-			host:      "example.com",
-			wantError: false, // checkSameHost is disabled, always returns nil
-		},
-		{
-			name:      "different host",
-			origin:    "http://evil.com",
-			host:      "example.com",
-			wantError: false, // checkSameHost is disabled, always returns nil
-		},
-		{
-			name:      "missing origin",
-			origin:    "",
-			host:      "example.com",
-			wantError: false, // checkSameHost is disabled, always returns nil
-		},
-		{
-			name:      "same host with port",
-			origin:    "http://localhost:8080",
-			host:      "localhost:8080",
-			wantError: false, // checkSameHost is disabled, always returns nil
-		},
-		{
-			name:      "different port",
-			origin:    "http://localhost:9090",
-			host:      "localhost:8080",
-			wantError: false, // checkSameHost is disabled, always returns nil
-		},
+		{name: "missing origin (non-browser client)", origin: "", host: "node.example.com:8090", wantOK: true},
+		{name: "same host and port", origin: "http://localhost:8090", host: "localhost:8090", wantOK: true},
+		{name: "same host, different port (vite dev server)", origin: "http://localhost:5173", host: "localhost:8090", wantOK: true},
+		{name: "same host, https page behind proxy", origin: "https://node.example.com", host: "node.example.com:8090", wantOK: true},
+		{name: "hostname compare is case-insensitive", origin: "https://Node.Example.com", host: "node.example.com", wantOK: true},
+		{name: "ipv6 same host", origin: "http://[::1]:5173", host: "[::1]:8090", wantOK: true},
+		{name: "cross-site origin", origin: "https://evil.example", host: "node.example.com:8090", wantOK: false},
+		{name: "suffix of host is not same host", origin: "https://example.com", host: "node.example.com:8090", wantOK: false},
+		{name: "host as prefix of attacker domain", origin: "https://node.example.com.evil.example", host: "node.example.com:8090", wantOK: false},
+		{name: "opaque null origin", origin: "null", host: "node.example.com:8090", wantOK: false},
+		{name: "allowlisted origin", origin: "https://dash.example.com", host: "internal-asset:8090", allowed: []string{"https://dash.example.com"}, wantOK: true},
+		{name: "allowlist match ignores case and trailing slash", origin: "https://Dash.example.com", host: "internal-asset:8090", allowed: []string{" https://dash.example.com/ "}, wantOK: true},
+		{name: "allowlist requires exact scheme and port", origin: "http://dash.example.com:8080", host: "internal-asset:8090", allowed: []string{"https://dash.example.com"}, wantOK: false},
+		{name: "wildcard allows any origin", origin: "https://evil.example", host: "node.example.com:8090", allowed: []string{"*"}, wantOK: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "http://"+tt.host+"/ws", nil)
+			req := httptest.NewRequest("GET", "http://"+tt.host+"/connection/websocket", nil)
 			req.Host = tt.host
+
 			if tt.origin != "" {
 				req.Header.Set("Origin", tt.origin)
 			}
 
-			err := checkSameHost(req)
-			// checkSameHost is currently disabled and always returns nil
-			assert.NoError(t, err)
+			err := checkOrigin(req, tt.allowed)
+			if tt.wantOK {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+
+			require.Equal(t, tt.wantOK, originCheck(tt.allowed)(req))
 		})
 	}
 }
 
-func TestSameHostOriginCheck(t *testing.T) {
-	check := sameHostOriginCheck()
+func TestParseAllowedOrigins(t *testing.T) {
+	require.Nil(t, parseAllowedOrigins(""))
+	require.Equal(t, []string{"https://a.example", "http://b.example:5173"}, parseAllowedOrigins(" https://a.example || http://b.example:5173 "))
+}
 
-	t.Run("allows same host", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "http://example.com/ws", nil)
-		req.Host = "example.com"
-		req.Header.Set("Origin", "http://example.com")
+// TestCentrifuge_WebsocketOriginEnforced drives real upgrades through the production
+// wiring (readinessMiddleware + checkWebsocketOrigin) and proves a cross-site browser
+// page can no longer open the socket, while the same-host dashboard, non-browser
+// clients and operator-allowlisted origins still can (bitcoin-sv/teranode issue 4848).
+func TestCentrifuge_WebsocketOriginEnforced(t *testing.T) {
+	logger := ulogger.TestLogger{}
+	tSettings := &settings.Settings{
+		Asset: settings.AssetSettings{
+			HTTPAddress:            "http://localhost:8080",
+			CentrifugeAllowOrigins: "https://dash.example.com",
+		},
+	}
+	mockHTTP, err := createTestHTTP(logger, &repository.Repository{})
+	require.NoError(t, err)
 
-		// Since checkSameHost always returns nil, sameHostOriginCheck returns err != nil, which is false
-		assert.False(t, check(req))
+	c, err := New(logger, tSettings, nil, mockHTTP)
+	require.NoError(t, err)
+	require.NoError(t, c.Init(context.Background()))
+
+	defer func() { _ = c.centrifugeNode.Shutdown(context.Background()) }()
+
+	c.statusMutex.Lock()
+	c.cachedCurrentNodeStatus = &notificationMsg{Type: "node_status", PeerID: "test"}
+	c.currentNodePeerID = "test"
+	c.statusMutex.Unlock()
+
+	wsHandler := NewWebsocketHandler(c.centrifugeNode, WebsocketConfig{CheckOrigin: c.checkWebsocketOrigin})
+	server := httptest.NewServer(c.readinessMiddleware(wsHandler))
+
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	serverHost := strings.TrimPrefix(server.URL, "http://")
+	serverHostname, _, err := net.SplitHostPort(serverHost)
+	require.NoError(t, err)
+
+	dial := func(origin string) (*websocket.Conn, *http.Response, error) {
+		header := http.Header{}
+		if origin != "" {
+			header.Set("Origin", origin)
+		}
+
+		return websocket.DefaultDialer.Dial(wsURL, header)
+	}
+
+	t.Run("cross-site origin is refused with 403", func(t *testing.T) {
+		conn, resp, err := dial("https://evil.example")
+		if conn != nil {
+			_ = conn.Close()
+		}
+
+		require.Error(t, err)
+		require.NotNil(t, resp)
+		require.Equal(t, http.StatusForbidden, resp.StatusCode)
+		require.True(t, c.originRejectWarned.Load(), "first rejection must be surfaced at WARN")
 	})
 
-	t.Run("rejects different host", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "http://example.com/ws", nil)
-		req.Host = "example.com"
-		req.Header.Set("Origin", "http://evil.com")
+	accepted := map[string]string{
+		"same host, other port": "http://" + serverHostname + ":5173",
+		"no origin header":      "",
+		"allowlisted origin":    "https://dash.example.com",
+	}
 
-		// Since checkSameHost always returns nil, sameHostOriginCheck returns err != nil, which is false
-		assert.False(t, check(req))
-	})
+	for name, origin := range accepted {
+		t.Run(name+" is accepted", func(t *testing.T) {
+			conn, _, err := dial(origin)
+			require.NoError(t, err)
+
+			_ = conn.Close()
+		})
+	}
 }
 
 func TestWebsocketTransport_Methods(t *testing.T) {
@@ -1674,7 +1707,7 @@ func TestWebsocketHandler_BidirectionalConnect(t *testing.T) {
 
 	// Mirror centrifuge.go: auto-subscribe to a known channel so we can also
 	// confirm OnConnecting subscriptions land in the reply. Production wires
-	// Credentials via authMiddleware; for the unit test we return them from
+	// Credentials via readinessMiddleware; for the unit test we return them from
 	// OnConnecting directly.
 	node.OnConnecting(func(_ context.Context, _ centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{
@@ -1718,18 +1751,18 @@ func TestWebsocketHandler_BidirectionalConnect(t *testing.T) {
 	require.NotNil(t, subs["node_status"], "OnConnecting subscriptions must appear in the connect reply; got %s", string(data))
 }
 
-// TestWebsocketHandler_BidirectionalConnectThroughAuthMiddleware exercises the
-// full handshake through the production `authMiddleware`, which is the exact
+// TestWebsocketHandler_BidirectionalConnectThroughReadinessMiddleware exercises the
+// full handshake through the production `readinessMiddleware`, which is the exact
 // path that depends on `context.WithoutCancel(r.Context())` in the handler.
 //
-// `authMiddleware` calls `centrifuge.SetCredentials(ctx, …)` on the request
+// `readinessMiddleware` calls `centrifuge.SetCredentials(ctx, …)` on the request
 // context and then returns from `ServeHTTP` once the upgrade goroutine has
 // launched — at which point `net/http` cancels the request context. If the
 // handler ever stops detaching cancellation, centrifuge's `HandleCommand`
 // observes `<-c.ctx.Done()` on every subsequent frame and silently aborts
 // the connect (no reply ever reaches the client). This test catches that
 // regression.
-func TestWebsocketHandler_BidirectionalConnectThroughAuthMiddleware(t *testing.T) {
+func TestWebsocketHandler_BidirectionalConnectThroughReadinessMiddleware(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := &settings.Settings{
 		Asset: settings.AssetSettings{HTTPAddress: "http://localhost:8080"},
@@ -1742,7 +1775,7 @@ func TestWebsocketHandler_BidirectionalConnectThroughAuthMiddleware(t *testing.T
 	require.NoError(t, c.Init(context.Background()))
 	defer func() { _ = c.centrifugeNode.Shutdown(context.Background()) }()
 
-	// authMiddleware short-circuits with 503 until current node status is
+	// readinessMiddleware short-circuits with 503 until current node status is
 	// cached; populate it so the handshake can proceed.
 	c.statusMutex.Lock()
 	c.cachedCurrentNodeStatus = &notificationMsg{Type: "node_status", PeerID: "test"}
@@ -1752,7 +1785,7 @@ func TestWebsocketHandler_BidirectionalConnectThroughAuthMiddleware(t *testing.T
 	wsHandler := NewWebsocketHandler(c.centrifugeNode, WebsocketConfig{
 		CheckOrigin: func(_ *http.Request) bool { return true },
 	})
-	server := httptest.NewServer(c.authMiddleware(wsHandler))
+	server := httptest.NewServer(c.readinessMiddleware(wsHandler))
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
@@ -1764,7 +1797,7 @@ func TestWebsocketHandler_BidirectionalConnectThroughAuthMiddleware(t *testing.T
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"id":1,"connect":{}}`)))
 
 	_, data, err := conn.ReadMessage()
-	require.NoError(t, err, "expected a centrifuge connect reply via authMiddleware")
+	require.NoError(t, err, "expected a centrifuge connect reply via readinessMiddleware")
 
 	var reply map[string]any
 	require.NoError(t, json.Unmarshal(data, &reply), "raw reply: %s", string(data))
@@ -1994,13 +2027,13 @@ func TestCentrifuge_Stop(t *testing.T) {
 	})
 }
 
-// Test authMiddleware function
-func TestCentrifuge_AuthMiddleware(t *testing.T) {
+// Test readinessMiddleware function
+func TestCentrifuge_ReadinessMiddleware(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	mockRepo := &repository.Repository{}
 	mockHTTP := &httpimpl.HTTP{}
 
-	t.Run("authMiddleware rejects when service not ready", func(t *testing.T) {
+	t.Run("readinessMiddleware rejects when service not ready", func(t *testing.T) {
 		tSettings := &settings.Settings{
 			Asset: settings.AssetSettings{
 				HTTPAddress: "http://localhost:8080",
@@ -2015,8 +2048,8 @@ func TestCentrifuge_AuthMiddleware(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		})
 
-		// Wrap with auth middleware
-		wrapped := c.authMiddleware(testHandler)
+		// Wrap with readiness middleware
+		wrapped := c.readinessMiddleware(testHandler)
 
 		// Create test request
 		req := httptest.NewRequest("GET", "/test", nil)
@@ -2029,7 +2062,7 @@ func TestCentrifuge_AuthMiddleware(t *testing.T) {
 		assert.Contains(t, rec.Body.String(), "Asset service not ready")
 	})
 
-	t.Run("authMiddleware allows when service ready", func(t *testing.T) {
+	t.Run("readinessMiddleware allows when service ready", func(t *testing.T) {
 		tSettings := &settings.Settings{
 			Asset: settings.AssetSettings{
 				HTTPAddress: "http://localhost:8080",
@@ -2053,7 +2086,7 @@ func TestCentrifuge_AuthMiddleware(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		})
 
-		wrapped := c.authMiddleware(testHandler)
+		wrapped := c.readinessMiddleware(testHandler)
 
 		req := httptest.NewRequest("GET", "/test", nil)
 		rec := httptest.NewRecorder()
@@ -2063,10 +2096,11 @@ func TestCentrifuge_AuthMiddleware(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.True(t, handlerCalled)
 
-		// Check CORS headers
-		assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
-		assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Headers"))
-		assert.Equal(t, "true", rec.Header().Get("Access-Control-Allow-Credentials"))
+		// No wildcard CORS headers: they are meaningless on a websocket upgrade and
+		// advertised any-origin access with credentials (bitcoin-sv/teranode issue 4848).
+		require.Empty(t, rec.Header().Get("Access-Control-Allow-Origin"))
+		require.Empty(t, rec.Header().Get("Access-Control-Allow-Headers"))
+		require.Empty(t, rec.Header().Get("Access-Control-Allow-Credentials"))
 	})
 }
 

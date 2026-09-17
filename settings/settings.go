@@ -199,6 +199,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 		Asset: AssetSettings{
 			APIPrefix:               getString("asset_apiPrefix", "/api/v1", alternativeContext...),
 			CentrifugeListenAddress: getString("asset_centrifugeListenAddress", ":8892", alternativeContext...),
+			CentrifugeAllowOrigins:  getString("asset_centrifugeAllowOrigins", "", alternativeContext...),
 			CentrifugeDisable:       getBool("asset_centrifuge_disable", false, alternativeContext...),
 			HTTPAddress:             getString("asset_httpAddress", "http://localhost:8090/api/v1", alternativeContext...),
 			HTTPPublicAddress:       getString("asset_httpPublicAddress", "", alternativeContext...),
