@@ -417,7 +417,12 @@ func TestNode_AddToConsensusBlacklist_NilParentOutput(t *testing.T) {
 		response, err := node.AddToConsensusBlacklist(ctx, funds)
 		require.NoError(t, err)
 		require.Equal(t, 1, len(response.NotProcessed))
-		require.Contains(t, response.NotProcessed[0].Reason, "output 0 not found")
+		// A body-less record is not a missing output: the record exists, and the
+		// reason has to say which of the two it is or it points an operator at a
+		// malformed transaction that does not exist.
+		require.Contains(t, response.NotProcessed[0].Reason, "its body is not retained by this node")
+		require.Contains(t, response.NotProcessed[0].Reason, "utxostore_skipTxBodyBelowCheckpoint")
+		require.NotContains(t, response.NotProcessed[0].Reason, "output 0 not found")
 	})
 
 	t.Run("in-range nil output element", func(t *testing.T) {
@@ -489,7 +494,10 @@ func TestNode_AddToConfiscationTransactionWhitelist_NilParentOutput(t *testing.T
 		response, err := node.AddToConfiscationTransactionWhitelist(ctx, buildConfiscation(t))
 		require.NoError(t, err)
 		require.Equal(t, 1, len(response.NotProcessed))
-		require.Contains(t, response.NotProcessed[0].Reason, "output 1 not found")
+		// Same distinction as AddToConsensusBlacklist above.
+		require.Contains(t, response.NotProcessed[0].Reason, "its body is not retained by this node")
+		require.Contains(t, response.NotProcessed[0].Reason, "utxostore_skipTxBodyBelowCheckpoint")
+		require.NotContains(t, response.NotProcessed[0].Reason, "output 1 not found")
 	})
 
 	t.Run("in-range nil output element", func(t *testing.T) {

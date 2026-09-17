@@ -1733,6 +1733,100 @@ func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context,
 		}
 	}
 
+	// A body-less parent record is a legal answer from the UTXO store: the body
+	// window has aged out, or utxostore_skipTxBodyBelowCheckpoint meant the bytes
+	// were never written for a parent mined at or below the checkpoint. That is
+	// the steady state for the utxoset store on mainnet (below the 945,000
+	// checkpoint, or 288 blocks behind the tip) and would otherwise fail
+	// essentially every real spend, so it falls back to a second read: the
+	// store's coin table, which (for utxoset) holds only the two columns a
+	// spend actually needs -- satoshis and script -- for every output that is
+	// still UNSPENT, keyed by (txid, vout). PreviousOutputsDecorate is the
+	// store's own primitive for filling exactly that, one indexed probe per
+	// input, with no need to know the parent's full output count (the store
+	// interface deliberately has no "get outputs by txid" -- see
+	// PreviousOutputsDecorate's doc and stores/utxo/utxoset/decorate.go).
+	//
+	// Tested once, above the loop: whether the parent has a body does not vary
+	// per input. len(idxs)==0 extends nothing, so there is nothing to fall back
+	// for.
+	if txMeta.Tx == nil && len(idxs) > 0 {
+		// A scratch transaction, not tx itself, is decorated. This function is
+		// one of several goroutines racing over the SAME *bt.Tx (one per
+		// distinct parent, see getUtxoBlockHeightsAndExtendTx's errgroup), so
+		// PreviousOutputsDecorate — which walks ALL of tx.Inputs, not just
+		// idxs — would read and concurrently write inputs that belong to a
+		// sibling parent being decorated by another goroutine at the same
+		// moment, both a data race and a correctness bug (its results could
+		// overwrite another parent's just-written script). Copying only this
+		// parent's inputs into a private *bt.Tx confines the store call to the
+		// exact idxs this goroutine owns.
+		scratch := &bt.Tx{Inputs: make([]*bt.Input, len(idxs))}
+		for i, idx := range idxs {
+			cp := *tx.Inputs[idx] // struct copy: same PreviousTxIDChainHash/PreviousTxOutIndex, independent Script/Satoshis
+
+			// Discard any script/value the child transaction arrived carrying
+			// before decorating. PreviousOutputsDecorate skips an input that
+			// already carries a non-nil script ("already decorated" — see its
+			// doc comment), so an uncleared input would make it fall back to
+			// exactly the attacker-controlled fields GHSA-v76m-6vc7-g7c7 exists
+			// to reject, defeating the whole point of re-reading from the store.
+			cp.PreviousTxScript = nil
+			cp.PreviousTxSatoshis = 0
+			scratch.Inputs[i] = &cp
+		}
+
+		decorateErr := v.utxoStore.PreviousOutputsDecorate(gCtx, scratch)
+
+		// The distinct message survives the fallback: whatever decorate
+		// answers, wrap it so an operator reading the log sees why a
+		// coin-table lookup happened at all (body not retained) rather than a
+		// bare decorate failure that looks unrelated to the checkpoint/aging
+		// policy that caused it.
+		wrap := func(cause error) error {
+			return errors.NewProcessingError("[Validate][%s] parent transaction %s is in the store but its body is not retained by this node (aged out, or below the utxostore_skipTxBodyBelowCheckpoint boundary); falling back to the coin table for output %d failed",
+				tx.TxIDChainHash().String(), parentTxHash.String(), tx.Inputs[idxs[0]].PreviousTxOutIndex, cause)
+		}
+
+		if decorateErr != nil {
+			// A coin absent from the table is spent or never existed — the
+			// same "go and look for this parent" situation extendTransaction
+			// already classifies as a missing parent (errors.Is walks the
+			// wrapped chain by code, so wrapping here does not hide the
+			// ErrTxNotFound code from the caller's classification check).
+			if errors.Is(decorateErr, errors.ErrTxNotFound) {
+				return errors.NewTxNotFoundError("[Validate][%s] parent transaction %s is in the store but its body is not retained by this node (aged out, or below the utxostore_skipTxBodyBelowCheckpoint boundary); the coin table holds no unspent coin at index %d, so the parent is being treated as missing",
+					tx.TxIDChainHash().String(), parentTxHash.String(), tx.Inputs[idxs[0]].PreviousTxOutIndex, decorateErr)
+			}
+
+			// Anything else (e.g. a reassigned coin, which decorate reports
+			// but deliberately leaves undecorated because only the new owner
+			// holds that script) is a processing error: waiting will never
+			// make it decoratable.
+			return wrap(decorateErr)
+		}
+
+		// decorateErr == nil means every scratch input was actually filled
+		// (BatchPreviousOutputsDecorate returns an error for both the
+		// not-found and the reassigned case — see its doc comment — so nil
+		// here is not merely "no error", it is a positive guarantee). This
+		// check is defensive insurance against that guarantee ever
+		// regressing: an empty script must never reach the caller, because
+		// script-less validation would pass against no script at all.
+		for i, idx := range idxs {
+			if scratch.Inputs[i].PreviousTxScript == nil {
+				return wrap(errors.NewProcessingError("coin-table decorate reported success but left output %d undecorated", tx.Inputs[idx].PreviousTxOutIndex))
+			}
+		}
+
+		for i, idx := range idxs {
+			tx.Inputs[idx].PreviousTxSatoshis = scratch.Inputs[i].PreviousTxSatoshis
+			tx.Inputs[idx].PreviousTxScript = scratch.Inputs[i].PreviousTxScript
+		}
+
+		return nil
+	}
+
 	// Extend the transaction inputs from the parent's outputs (idx bounds already
 	// validated at the top of the function). Unconditional: this overwrite is what
 	// discards any previous-output metadata the caller supplied.

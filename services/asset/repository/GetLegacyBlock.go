@@ -551,6 +551,27 @@ func (repo *Repository) writeChunkToWriter(ctx context.Context, w io.Writer, blo
 			}
 			continue
 		} else {
+			// A record with no serialized body is a legal answer from the UTXO store
+			// — the body window has aged out, or utxostore_skipTxBodyBelowCheckpoint
+			// meant the bytes below the checkpoint were never written — and getTxs
+			// does not count it as missed, because the record IS there.
+			//
+			// Without this guard WriteTo dereferences the nil *bt.Tx. That panic was
+			// already contained: util.RecoverToError on the streaming goroutine turns
+			// it into an error and the reader end of the pipe closes. What it was not
+			// is diagnosable — the operator got a recovered runtime panic naming a
+			// line, not the transaction. The guard gives that error a name and the
+			// txid instead.
+			//
+			// Either way the response is already committed: the legacy block header
+			// and transaction count went out before the first chunk, so the client
+			// sees a chunked stream that stops early rather than an HTTP error. That
+			// is the endpoint refusing a block it cannot serve, and it is why the
+			// setting documents this as a block the asset service cannot serve at all.
+			if chunkMetaSlice[i] == nil || chunkMetaSlice[i].Tx == nil {
+				return errors.NewProcessingError("[writeChunkToWriter] tx %s at offset %d is not retained in full by this node", chunkHashes[i].String(), chunkOffset+i)
+			}
+
 			// always write the non-extended normal bytes to the subtree data file !
 			// our peer node should extend the transactions if needed
 			if _, err := chunkMetaSlice[i].Tx.WriteTo(w); err != nil {
