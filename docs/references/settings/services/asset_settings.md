@@ -136,8 +136,11 @@ asset_httpListenAddress=:8090
 
 ```bash
 asset_centrifuge_disable=false
+# Enables the websocket; not bound, the socket is served on Asset HTTP at /connection/websocket
 asset_centrifugeListenAddress=:8892
 asset_httpAddress=http://localhost:8090/api/v1
+# Only needed when a reverse proxy rewrites the Host header the Asset service sees
+asset_centrifugeAllowOrigins=https://dashboard.example.com
 ```
 
 ### HTTP Response Signing

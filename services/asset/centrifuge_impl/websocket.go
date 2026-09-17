@@ -207,7 +207,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		// which is right after this goroutine launches. The centrifuge core
 		// checks ctx.Done() inside HandleCommand and aborts every frame if the
 		// context is dead — so we keep request-scoped values (notably the
-		// Credentials set by authMiddleware) but strip the cancellation signal.
+		// Credentials set by readinessMiddleware) but strip the cancellation signal.
 		// The connection lifetime is owned by closeFn / the read loop below.
 		c, closeFn, err := centrifuge.NewClient(context.WithoutCancel(r.Context()), s.node, transport)
 		if err != nil {
@@ -468,15 +468,20 @@ func originCheck(allowedOrigins []string) func(r *http.Request) bool {
 //   - it carries no Origin header (non-browser clients do not send one),
 //   - the Origin hostname equals the request Host hostname, ignoring scheme and port
 //     (the dashboard dev server and a TLS reverse proxy both serve the page from a
-//     different port than the Asset HTTP socket), or
+//     different port than the Asset HTTP socket),
+//   - both hostnames are loopback (localhost, 127.0.0.0/8, ::1), which are the same
+//     machine however they are spelled, or
 //   - the Origin matches an entry in allowedOrigins, or allowedOrigins contains "*".
 //
 // This is not authentication: a non-browser client can omit or forge Origin. It stops
-// a third-party web page from opening the socket from a visitor's browser.
+// a third-party web page from opening the socket from a visitor's browser. It does not
+// survive DNS rebinding: a page on a name the attacker controls that resolves to this
+// node sends a matching Host and Origin.
 //
 // Parameters:
 //   - r: HTTP request to check
-//   - allowedOrigins: extra origins accepted besides the same host
+//   - allowedOrigins: extra origins accepted besides the same host, already normalised
+//     by parseAllowedOrigins (trimmed, no trailing slash)
 //
 // Returns:
 //   - error: Error if origin check fails
@@ -487,7 +492,6 @@ func checkOrigin(r *http.Request, allowedOrigins []string) error {
 	}
 
 	for _, allowed := range allowedOrigins {
-		allowed = strings.TrimSuffix(strings.TrimSpace(allowed), "/")
 		if allowed == "*" || strings.EqualFold(allowed, origin) {
 			return nil
 		}
@@ -505,9 +509,20 @@ func checkOrigin(r *http.Request, allowedOrigins []string) error {
 
 	requestHost = strings.TrimSuffix(strings.TrimPrefix(requestHost, "["), "]")
 
-	if requestHost != "" && strings.EqualFold(u.Hostname(), requestHost) {
+	if requestHost != "" && (strings.EqualFold(u.Hostname(), requestHost) || isLoopbackHost(u.Hostname()) && isLoopbackHost(requestHost)) {
 		return nil
 	}
 
 	return errors.NewServiceError("request Origin %q is not authorized for Host %q", origin, r.Host)
+}
+
+// isLoopbackHost reports whether host is "localhost" or a loopback IP literal.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+
+	return ip != nil && ip.IsLoopback()
 }

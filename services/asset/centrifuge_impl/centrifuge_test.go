@@ -457,7 +457,12 @@ func TestCheckOrigin(t *testing.T) {
 		{name: "host as prefix of attacker domain", origin: "https://node.example.com.evil.example", host: "node.example.com:8090", wantOK: false},
 		{name: "opaque null origin", origin: "null", host: "node.example.com:8090", wantOK: false},
 		{name: "allowlisted origin", origin: "https://dash.example.com", host: "internal-asset:8090", allowed: []string{"https://dash.example.com"}, wantOK: true},
-		{name: "allowlist match ignores case and trailing slash", origin: "https://Dash.example.com", host: "internal-asset:8090", allowed: []string{" https://dash.example.com/ "}, wantOK: true},
+		{name: "allowlist match ignores case", origin: "https://Dash.example.com", host: "internal-asset:8090", allowed: []string{"https://dash.example.com"}, wantOK: true},
+		{name: "loopback ip page, localhost socket (vite dev server)", origin: "http://127.0.0.1:5173", host: "localhost:8090", wantOK: true},
+		{name: "localhost page, ipv6 loopback socket", origin: "http://localhost:5173", host: "[::1]:8090", wantOK: true},
+		{name: "any 127/8 address is loopback", origin: "http://127.0.0.2:5173", host: "127.0.0.1:8090", wantOK: true},
+		{name: "loopback origin against non-loopback host", origin: "http://localhost:5173", host: "node.example.com:8090", wantOK: false},
+		{name: "loopback-looking hostname is not loopback", origin: "http://127.0.0.1.evil.example", host: "localhost:8090", wantOK: false},
 		{name: "allowlist requires exact scheme and port", origin: "http://dash.example.com:8080", host: "internal-asset:8090", allowed: []string{"https://dash.example.com"}, wantOK: false},
 		{name: "wildcard allows any origin", origin: "https://evil.example", host: "node.example.com:8090", allowed: []string{"*"}, wantOK: true},
 	}
@@ -484,12 +489,99 @@ func TestCheckOrigin(t *testing.T) {
 }
 
 func TestParseAllowedOrigins(t *testing.T) {
-	require.Nil(t, parseAllowedOrigins(""))
-	require.Equal(t, []string{"https://a.example", "http://b.example:5173"}, parseAllowedOrigins(" https://a.example || http://b.example:5173 "))
+	logger := ulogger.TestLogger{}
+
+	t.Run("empty value allows nothing extra", func(t *testing.T) {
+		require.Nil(t, parseAllowedOrigins(logger, ""))
+	})
+
+	t.Run("entries are trimmed and trailing slashes removed", func(t *testing.T) {
+		require.Equal(t,
+			[]string{"https://a.example", "http://b.example:5173", "*"},
+			parseAllowedOrigins(logger, " https://a.example/ || http://b.example:5173 | * "))
+	})
+
+	// Each of these can never equal a browser Origin header, so keeping it would fail
+	// closed without a trace. They are dropped (with a WARN) and valid neighbours kept.
+	invalid := map[string]string{
+		"no scheme":               "dash.example.com",
+		"path":                    "https://dash.example.com/live",
+		"query":                   "https://dash.example.com?x=1",
+		"fragment":                "https://dash.example.com#x",
+		"userinfo":                "https://user@dash.example.com",
+		"wildcard subdomain":      "https://*.example.com",
+		"comma-separated list":    "https://a.example,https://b.example",
+		"scheme only":             "https://",
+		"opaque scheme:host":      "localhost:5173",
+		"unparseable percent":     "https://%zz",
+		"bare wildcard with path": "*/x",
+	}
+
+	for name, entry := range invalid {
+		t.Run("drops "+name, func(t *testing.T) {
+			require.Equal(t, []string{"https://ok.example"}, parseAllowedOrigins(logger, entry+"|https://ok.example"))
+		})
+	}
 }
 
-// TestCentrifuge_WebsocketOriginEnforced drives real upgrades through the production
-// wiring (readinessMiddleware + checkWebsocketOrigin) and proves a cross-site browser
+// recordingRegistrar captures what registerHTTPHandlers mounts, standing in for the
+// Asset HTTP server whose router is not exposed.
+type recordingRegistrar struct {
+	handlers map[string]http.Handler
+}
+
+func (r *recordingRegistrar) AddHTTPHandler(pattern string, handler http.Handler) error {
+	if r.handlers == nil {
+		r.handlers = map[string]http.Handler{}
+	}
+
+	r.handlers[pattern] = handler
+
+	return nil
+}
+
+func TestCentrifuge_RegisterHTTPHandlersMountsOnlyWebsocket(t *testing.T) {
+	c, err := New(ulogger.TestLogger{}, &settings.Settings{Asset: settings.AssetSettings{HTTPAddress: "http://localhost:8080"}}, nil, nil)
+	require.NoError(t, err)
+
+	reg := &recordingRegistrar{}
+	c.registerHTTPHandlers(reg)
+
+	// Only the websocket: the /client/ demo file server must not come back on public Asset HTTP.
+	require.Len(t, reg.handlers, 1)
+	require.Contains(t, reg.handlers, "/connection/websocket")
+}
+
+func TestCentrifuge_OriginRejectWarnIsRateLimited(t *testing.T) {
+	c, err := New(ulogger.TestLogger{}, &settings.Settings{Asset: settings.AssetSettings{HTTPAddress: "http://localhost:8080"}}, nil, nil)
+	require.NoError(t, err)
+
+	crossSite := func() *http.Request {
+		req := httptest.NewRequest("GET", "http://node.example.com/connection/websocket", nil)
+		req.Header.Set("Origin", "https://evil.example")
+
+		return req
+	}
+
+	require.False(t, c.checkWebsocketOrigin(crossSite()))
+
+	first := c.originRejectWarnedAt.Load()
+	require.NotZero(t, first, "a rejection must be surfaced at WARN")
+
+	require.False(t, c.checkWebsocketOrigin(crossSite()))
+	require.Equal(t, first, c.originRejectWarnedAt.Load(), "a repeat within the interval must not WARN again")
+
+	// Once the interval has passed, the next rejection warns again: an attacker cannot
+	// use up the warning for the life of the process.
+	stale := time.Now().Add(-originRejectWarnInterval - time.Second).UnixNano()
+	c.originRejectWarnedAt.Store(stale)
+
+	require.False(t, c.checkWebsocketOrigin(crossSite()))
+	require.Greater(t, c.originRejectWarnedAt.Load(), stale)
+}
+
+// TestCentrifuge_WebsocketOriginEnforced drives real upgrades through the handler Start
+// mounts (registerHTTPHandlers) and proves a cross-site browser
 // page can no longer open the socket, while the same-host dashboard, non-browser
 // clients and operator-allowlisted origins still can (bitcoin-sv/teranode issue 4848).
 func TestCentrifuge_WebsocketOriginEnforced(t *testing.T) {
@@ -514,8 +606,11 @@ func TestCentrifuge_WebsocketOriginEnforced(t *testing.T) {
 	c.currentNodePeerID = "test"
 	c.statusMutex.Unlock()
 
-	wsHandler := NewWebsocketHandler(c.centrifugeNode, WebsocketConfig{CheckOrigin: c.checkWebsocketOrigin})
-	server := httptest.NewServer(c.readinessMiddleware(wsHandler))
+	reg := &recordingRegistrar{}
+	c.registerHTTPHandlers(reg)
+	require.Contains(t, reg.handlers, "/connection/websocket")
+
+	server := httptest.NewServer(reg.handlers["/connection/websocket"])
 
 	defer server.Close()
 
@@ -542,7 +637,7 @@ func TestCentrifuge_WebsocketOriginEnforced(t *testing.T) {
 		require.Error(t, err)
 		require.NotNil(t, resp)
 		require.Equal(t, http.StatusForbidden, resp.StatusCode)
-		require.True(t, c.originRejectWarned.Load(), "first rejection must be surfaced at WARN")
+		require.NotZero(t, c.originRejectWarnedAt.Load(), "a rejection must be surfaced at WARN")
 	})
 
 	accepted := map[string]string{

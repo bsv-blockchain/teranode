@@ -67,8 +67,8 @@ type Centrifuge struct {
 	cachedCurrentNodeStatus *notificationMsg // Cached current node status for new clients
 	currentNodePeerID       string           // Track the current node's peer ID
 	statusMutex             sync.RWMutex     // Protects cachedCurrentNodeStatus and currentNodePeerID
-	allowedOrigins          []string         // asset_centrifugeAllowOrigins, split on "|"
-	originRejectWarned      atomic.Bool      // First rejected websocket Origin logged at WARN, the rest at DEBUG
+	allowedOrigins          []string         // asset_centrifugeAllowOrigins, validated and normalised
+	originRejectWarnedAt    atomic.Int64     // UnixNano of the last rejected-Origin WARN, 0 = never
 
 	// Test seams for the p2p dial loop (#1334), defaulted in New. Overridden in
 	// tests to drive dial outcomes and backoff timing without real DNS or sleeps.
@@ -140,7 +140,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		settings:       tSettings,
 		repository:     repo,
 		baseURL:        assetHTTPAddress,
-		allowedOrigins: parseAllowedOrigins(tSettings.Asset.CentrifugeAllowOrigins),
+		allowedOrigins: parseAllowedOrigins(logger, tSettings.Asset.CentrifugeAllowOrigins),
 		httpServer:     httpServer,
 		dialWebsocket: func(urlStr string) (*websocket.Conn, *http.Response, error) {
 			return websocket.DefaultDialer.Dial(urlStr, nil)
@@ -156,18 +156,42 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	return c, nil
 }
 
-// parseAllowedOrigins splits the pipe-separated asset_centrifugeAllowOrigins value,
-// dropping blank entries.
-func parseAllowedOrigins(raw string) []string {
+// parseAllowedOrigins splits the pipe-separated asset_centrifugeAllowOrigins value into
+// normalised entries (trimmed, trailing slash removed) that checkOrigin compares as-is.
+//
+// An entry that is not "*" or a bare scheme://host[:port] origin can never equal a browser
+// Origin header, so it is dropped with a WARN instead of silently matching nothing: this
+// setting is the recovery path when the dashboard is refused, and a typo must be visible.
+func parseAllowedOrigins(logger ulogger.Logger, raw string) []string {
 	var origins []string
 
 	for _, origin := range strings.Split(raw, "|") {
-		if origin = strings.TrimSpace(origin); origin != "" {
-			origins = append(origins, origin)
+		origin = strings.TrimSuffix(strings.TrimSpace(origin), "/")
+		if origin == "" {
+			continue
 		}
+
+		if origin != "*" && !isBareOrigin(origin) {
+			logger.Warnf("[Centrifuge] ignoring asset_centrifugeAllowOrigins entry %q: expected scheme://host[:port] or *", origin)
+			continue
+		}
+
+		origins = append(origins, origin)
 	}
 
 	return origins
+}
+
+// isBareOrigin reports whether s has the shape of a browser Origin: scheme and host, an
+// optional port, and nothing else (no path, query, fragment, userinfo or wildcard).
+func isBareOrigin(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil {
+		return false
+	}
+
+	return u.Scheme != "" && u.Hostname() != "" && u.Path == "" && u.RawQuery == "" &&
+		u.Fragment == "" && u.User == nil && u.Opaque == "" && !strings.Contains(u.Host, "*")
 }
 
 // Init initializes the Centrifuge server and sets up event handlers for
@@ -279,12 +303,7 @@ func (c *Centrifuge) Start(ctx context.Context, addr string) error {
 		return err
 	}
 
-	websocketHandler := NewWebsocketHandler(c.centrifugeNode, WebsocketConfig{
-		ReadBufferSize:     1024,
-		UseWriteBufferPool: true,
-		CheckOrigin:        c.checkWebsocketOrigin,
-	})
-	_ = c.httpServer.AddHTTPHandler("/connection/websocket", c.readinessMiddleware(websocketHandler))
+	c.registerHTTPHandlers(c.httpServer)
 
 	<-ctx.Done()
 
@@ -528,17 +547,46 @@ func (c *Centrifuge) Stop(_ context.Context) error {
 	return nil
 }
 
-// checkWebsocketOrigin applies checkOrigin with asset_centrifugeAllowOrigins. The first
-// rejection is logged at WARN so an operator whose reverse proxy rewrites Host can find the
-// setting; later rejections stay at DEBUG so a hostile page cannot flood the log.
+// websocketPath is where the Centrifuge websocket is mounted on the Asset HTTP server.
+const websocketPath = "/connection/websocket"
+
+// originRejectWarnInterval bounds how often a rejected websocket Origin is logged at WARN.
+const originRejectWarnInterval = 5 * time.Minute
+
+// httpHandlerRegistrar is the part of the Asset HTTP server Start mounts handlers on.
+type httpHandlerRegistrar interface {
+	AddHTTPHandler(pattern string, handler http.Handler) error
+}
+
+// registerHTTPHandlers mounts everything Centrifuge serves on the Asset HTTP server. Start
+// and the tests share it, so the tests guard exactly what production exposes.
+func (c *Centrifuge) registerHTTPHandlers(srv httpHandlerRegistrar) {
+	_ = srv.AddHTTPHandler(websocketPath, c.websocketHTTPHandler())
+}
+
+// websocketHTTPHandler builds the handler mounted at /connection/websocket: the readiness
+// gate plus the asset_centrifugeAllowOrigins origin check.
+func (c *Centrifuge) websocketHTTPHandler() http.Handler {
+	return c.readinessMiddleware(NewWebsocketHandler(c.centrifugeNode, WebsocketConfig{
+		ReadBufferSize:     1024,
+		UseWriteBufferPool: true,
+		CheckOrigin:        c.checkWebsocketOrigin,
+	}))
+}
+
+// checkWebsocketOrigin applies checkOrigin with asset_centrifugeAllowOrigins. A rejection
+// is logged at WARN at most once per originRejectWarnInterval, so an operator whose reverse
+// proxy rewrites Host can always find the setting in the log, while a hostile page can
+// neither flood the log nor use up the warning for good. Other rejections go to DEBUG.
 func (c *Centrifuge) checkWebsocketOrigin(r *http.Request) bool {
 	err := checkOrigin(r, c.allowedOrigins)
 	if err == nil {
 		return true
 	}
 
-	if c.originRejectWarned.CompareAndSwap(false, true) {
-		c.logger.Warnf("[Centrifuge] websocket upgrade rejected: %v; if this is a legitimate dashboard behind a proxy that rewrites Host, add its origin to asset_centrifugeAllowOrigins (further rejections logged at DEBUG)", err)
+	last, now := c.originRejectWarnedAt.Load(), time.Now().UnixNano()
+	if now-last >= int64(originRejectWarnInterval) && c.originRejectWarnedAt.CompareAndSwap(last, now) {
+		c.logger.Warnf("[Centrifuge] websocket upgrade rejected: %v; if this is a legitimate dashboard behind a proxy that rewrites Host, add its origin to asset_centrifugeAllowOrigins (repeat rejections within %s logged at DEBUG)", err, originRejectWarnInterval)
 	} else {
 		c.logger.Debugf("[Centrifuge] websocket upgrade rejected: %v", err)
 	}

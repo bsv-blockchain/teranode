@@ -803,7 +803,6 @@ func WaitForPortsFree(t *testing.T, ctx context.Context, settings *settings.Sett
 // GetPorts returns a slice of ports from the provided settings.
 func GetPorts(appSettings *settings.Settings) []int {
 	ports := []int{
-		getPortFromString(appSettings.Asset.CentrifugeListenAddress),
 		getPortFromString(appSettings.Asset.HTTPListenAddress),
 		getPortFromString(appSettings.BlockPersister.HTTPListenAddress),
 		getPortFromString(appSettings.BlockAssembly.GRPCListenAddress),

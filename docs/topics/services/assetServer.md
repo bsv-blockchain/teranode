@@ -893,7 +893,7 @@ See `docs/references/settings/services/asset_settings.md` for the full list of r
 - `TERANODE_ASSET_HTTPPUBLICADDRESS` - Public-facing URL
 - `TERANODE_ASSET_APIPREFIX` - API URL prefix
 - `TERANODE_ASSET_CENTRIFUGE_DISABLE` - Disable Centrifuge service
-- `TERANODE_ASSET_CENTRIFUGELISTENADDRESS` - Centrifuge listen address
+- `TERANODE_ASSET_CENTRIFUGELISTENADDRESS` - Enables the Centrifuge WebSocket when non-empty; not bound as a listener (the socket is served on Asset HTTP)
 - `TERANODE_ASSET_SIGN_HTTP_RESPONSES` - Enable response signing
 - `TERANODE_SECURITYLEVELHTTP` - HTTP security level
 - `TERANODE_SERVER_CERTFILE` - TLS certificate file
