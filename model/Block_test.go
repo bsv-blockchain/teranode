@@ -108,7 +108,7 @@ func TestZeroCoverageFunctions(t *testing.T) {
 		txHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 
 		// Test with empty parent hashes - this will succeed
-		result, err := block.checkParentTransactions([]chainhash.Hash{}, 0, subtreepkg.Node{Hash: *txHash}, txHash, 0, 0)
+		result, err := block.checkParentTransactions([]chainhash.Hash{}, nil, 0, subtreepkg.Node{Hash: *txHash}, txHash, 0, 0)
 		assert.NoError(t, err)
 		assert.Len(t, result, 0)
 	})
@@ -140,7 +140,7 @@ func TestZeroCoverageFunctions(t *testing.T) {
 			txHash:       *txHash,
 		}
 
-		txMeta, err := getParentTxMetaBlockIDs(context.Background(), createTestUTXOStore(t), parentTxStruct)
+		txMeta, err := getParentTxMetaBlockIDs(context.Background(), createTestUTXOStore(t), parentTxStruct, 0)
 		// This may or may not error depending on implementation
 		_ = err
 		_ = txMeta
@@ -2967,7 +2967,7 @@ func TestValidationFunctions(t *testing.T) {
 
 		// Test with no parent transactions
 		parentTxHashes := []chainhash.Hash{}
-		missingParents, err := block.checkParentTransactions(parentTxHashes, 1, subtreepkg.Node{Hash: *hash1}, hash2, 0, 0)
+		missingParents, err := block.checkParentTransactions(parentTxHashes, nil, 1, subtreepkg.Node{Hash: *hash1}, hash2, 0, 0)
 		require.NoError(t, err)
 		assert.Empty(t, missingParents)
 	})
@@ -2980,7 +2980,7 @@ func TestValidationFunctions(t *testing.T) {
 
 		// Test with missing parent transaction
 		parentTxHashes := []chainhash.Hash{*hash1}
-		missingParents, err := block.checkParentTransactions(parentTxHashes, 1, subtreepkg.Node{Hash: *hash2}, hash1, 0, 0)
+		missingParents, err := block.checkParentTransactions(parentTxHashes, nil, 1, subtreepkg.Node{Hash: *hash2}, hash1, 0, 0)
 		require.NoError(t, err)
 		assert.Len(t, missingParents, 1)
 		assert.Equal(t, *hash1, missingParents[0].parentTxHash)
@@ -2999,7 +2999,7 @@ func TestValidationFunctions(t *testing.T) {
 
 		// Test with parent in same block (valid order)
 		parentTxHashes := []chainhash.Hash{*hash1}
-		missingParents, err := block.checkParentTransactions(parentTxHashes, 1, subtreepkg.Node{Hash: *hash2}, hash1, 0, 0)
+		missingParents, err := block.checkParentTransactions(parentTxHashes, nil, 1, subtreepkg.Node{Hash: *hash2}, hash1, 0, 0)
 		require.NoError(t, err)
 		assert.Empty(t, missingParents) // Should be empty since parent is in same block
 	})
@@ -3016,7 +3016,7 @@ func TestValidationFunctions(t *testing.T) {
 
 		// Test with parent in same block but invalid order
 		parentTxHashes := []chainhash.Hash{*hash1}
-		_, err = block.checkParentTransactions(parentTxHashes, 1, subtreepkg.Node{Hash: *hash2}, hash1, 0, 0)
+		_, err = block.checkParentTransactions(parentTxHashes, nil, 1, subtreepkg.Node{Hash: *hash2}, hash1, 0, 0)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "comes before parent transaction")
 	})
@@ -6276,7 +6276,7 @@ func TestGetParentTxMetaBlockIDs_MissingParentIsTransient(t *testing.T) {
 		txHash:       *txHash,
 	}
 
-	_, err := getParentTxMetaBlockIDs(context.Background(), createTestUTXOStore(t), parentTxStruct)
+	_, err := getParentTxMetaBlockIDs(context.Background(), createTestUTXOStore(t), parentTxStruct, 0)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrBlockIncomplete),
 		"missing parent tx is a catchup-state condition and must be transient (incomplete)")

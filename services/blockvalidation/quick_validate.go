@@ -1693,12 +1693,13 @@ func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.
 		for _, tx := range pending {
 			tx := tx
 			spendG.Go(func() error {
-				// WithIgnorePolicyFreeze: this spend happens because a checkpointed block
-				// contains the transaction, so only the height-anchored consensus tier of
-				// an alert-system freeze may reject it — the policy tier lands whenever the
-				// alert reached this node and must never decide a block's validity (#1422).
+				// Both tiers of an alert-system freeze are bypassed here (#1422): the policy
+				// tier because it lands whenever the alert reached this node and must never
+				// decide a block's validity, and the consensus tier because this is the
+				// below-checkpoint path — a checkpointed block is canonical by definition,
+				// and no alert may retroactively invalidate it or wedge a node catching up.
 				if _, _, err := u.utxoStore.SpendAndCreate(spendCtx, tx, block.Height, utxo.WithSpendOnly(),
-					utxo.WithIgnoreLocked(true), utxo.WithIgnorePolicyFreeze(true),
+					utxo.WithIgnoreLocked(true), utxo.WithIgnorePolicyFreeze(true), utxo.WithIgnoreConsensusFreeze(true),
 					utxo.WithSkipUTXOHashCheck(outpointOnly)); err != nil {
 					if errors.IsRetryableError(err) {
 						mu.Lock()
@@ -1708,17 +1709,23 @@ func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.
 						return nil
 					}
 					mu.Lock()
-					// A frozen spend here is a height-anchored consensus freeze: the spend
-					// above carries IgnorePolicyFreeze, so the locally-timed policy tier
-					// cannot produce this error and what remains is a verdict every node
-					// derives identically from the chain. Report it as ErrBlockInvalid so
-					// ValidateBlock marks the block invalid once instead of taking its
-					// infrastructure-error branch and re-fetching the block forever — the
-					// silent-stall shape issue #1422 removes.
-					if errors.Is(err, errors.ErrFrozen) {
-						hardFail = errors.NewBlockInvalidError("[spendBatchWithRetry][%s] tx %s spends a frozen utxo at block height %d", block.Hash().String(), tx.TxIDChainHash().String(), block.Height, err)
+					// These goroutines race for hardFail: the first hard failure wins, except
+					// that a block-invalid verdict is never downgraded to a processing error
+					// by a later, unrelated failure — ValidateBlock re-queues on processing
+					// errors, which would turn a recorded verdict back into the endless
+					// re-validate loop issue #1422 removes.
+					var candidate error
+					if errors.Is(err, errors.ErrUtxoConsensusFrozen) {
+						// Cannot occur while the spend above carries IgnoreConsensusFreeze;
+						// kept because if it ever does surface it is a verdict every node
+						// derives identically and must be recorded as one.
+						candidate = errors.NewBlockInvalidError("[spendBatchWithRetry][%s] tx %s spends a consensus-frozen utxo at block height %d", block.Hash().String(), tx.TxIDChainHash().String(), block.Height, err)
 					} else {
-						hardFail = errors.NewProcessingError("[spendBatchWithRetry][%s] failed to spend tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
+						candidate = errors.NewProcessingError("[spendBatchWithRetry][%s] failed to spend tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
+					}
+
+					if hardFail == nil || (errors.Is(candidate, errors.ErrBlockInvalid) && !errors.Is(hardFail, errors.ErrBlockInvalid)) {
+						hardFail = candidate
 					}
 					mu.Unlock()
 				}

@@ -25,25 +25,47 @@ The Service features are:
 
 - Ability to freeze a set of UTXOs over a range of block heights.
 - Frozen UTXOs are classified as such and attempts to spend them are rejected.
-- A freeze carries two controls at once, mirroring SV Node:
+- A freeze carries two controls at once, mirroring SV Node's `addToConsensusBlacklist`:
     - a **policy freeze**, effective as soon as the alert is processed, which keeps the
       coin out of this node's mempool and out of the blocks it builds; and
     - a **consensus freeze**, enforced only for blocks whose height falls in the alert's
-      `enforceAtHeight` window `[start, stop)`.
+      `enforceAtHeight` interval `[start, stop)`.
 - Only the consensus freeze decides whether a block is valid. Because every node derives
-  the window from the chain rather than from when the alert happened to arrive, two honest
-  nodes always reach the same verdict on the same block. A block that violates the window
-  is rejected once, as a clean block-invalid verdict, and never re-fetched.
-- A freeze with no window, or with `start` 0, is enforced at every height — the behaviour
-  of every freeze issued before windows existed, so no migration is needed.
+  the interval from the chain rather than from when the alert happened to arrive, two
+  honest nodes always reach the same verdict on the same block. A block that violates the
+  interval is rejected once, as a clean block-invalid verdict, and never re-fetched.
+- The interval follows SV Node's semantics: `stop` is an exclusive end, `stop <= start`
+  (including `stop = 0`) is an *empty* interval that is never consensus-active, and "no
+  end" is expressed by a `stop` the chain will never reach — not by 0.
+- The consensus record is a property of the **outpoint**, not of a node's current
+  spent-state for it, and the node guarantees three things so that every node judges
+  every block identically whatever it currently records about the coin:
+    - a block that spends the coin **below** `start` is valid everywhere and is accepted —
+      rejecting it only on nodes that hold the alert would be the timing split this design
+      removes. The freeze survives that spend: a fork block or a re-mine carrying the same
+      spend at a height inside the interval is rejected, even by a node that already
+      records the coin as spent;
+    - the freeze survives a rollback of that spend, so the coin is frozen again with no gap;
+    - an alert for a coin that is already spent is still recorded, so a node whose alert
+      arrived late judges a fork or a re-mine exactly as the nodes whose alert arrived first.
+- A freeze issued through the admin `freeze` RPC with no interval is enforced at every
+  height — the behaviour of every freeze issued before intervals existed, so no migration
+  is needed.
 
 ### UTXO Unfreezing
 
-- Capability to unfreeze a set of UTXOs at a specified block height.
-- An alert whose `enforceAtHeight` range covers no height at all (`stop <= start`) lifts
-  the freeze outright.
-- An alert whose window has merely elapsed lifts the consensus freeze; it lifts the policy
-  freeze as well only when the alert sets `policyExpiresWithConsensus`.
+- Alerts add or replace a coin's freeze record; they never delete it. The consensus record
+  must stay so that a deep reorg into an elapsed interval is judged identically everywhere.
+  The admin `unfreeze` RPC is the explicit delete.
+- An unfreeze alert on this RPC is an empty interval (`stop <= start`) with
+  `policyExpiresWithConsensus` set: the consensus tier is never active and the policy tier
+  lifts with it, releasing the coin. With the flag clear the coin stays out of this node's
+  mempool and templates, exactly as SV Node keeps its policy blacklist — re-issue with the
+  flag, or use the admin `unfreeze` RPC, to release it.
+- `policyExpiresWithConsensus` is persisted with the record, so a future interval's policy
+  freeze lifts by itself once the interval ends.
+- Nothing is decided against the node's own tip when an alert arrives, so a node that
+  receives an alert early, late, or on replay ends up in the same state.
 
 ### UTXO Reassignment
 

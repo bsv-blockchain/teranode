@@ -1008,7 +1008,8 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 		// outermost message only; the chain lives in the status details. Assert on what a real
 		// caller sees — the subtreevalidation client calls UnwrapGRPC on every error (#1422).
 		assert.Contains(t, errors.UnwrapGRPC(err).Error(), "failed to load subtree transactions")
-		assert.NotContains(t, err.Error(), "quorum lock")
+		// Assert on what a real caller sees — CheckBlockSubtrees returns through WrapGRPC.
+		assert.NotContains(t, errors.UnwrapGRPC(err).Error(), "quorum lock")
 	})
 
 	t.Run("QuorumContextCancelled_ReturnsError", func(t *testing.T) {

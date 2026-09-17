@@ -431,17 +431,20 @@ func (u *Server) blessMissingTransaction(ctx context.Context, blockHash chainhas
 	// this should spend utxos, create the tx meta and create new utxos
 	txMeta, err = u.validatorClient.ValidateWithOptions(ctx, tx, blockHeight, validationOptions)
 
-	// A freeze that rejects a spend HERE is a height-anchored consensus freeze: every
-	// block-context spend carries IgnorePolicyFreeze, so the locally-timed policy tier
-	// cannot produce this error and what remains is a verdict every node derives
-	// identically from the chain. It is therefore a consensus violation by the block,
-	// not a transient local condition — and the distinction is load-bearing. Block
-	// validation persists a block as invalid on ErrTxInvalid and treats ErrProcessing as
-	// infrastructure trouble to retry, so classifying a frozen spend as processing makes
-	// the rejecting node re-fetch and re-validate the same block forever instead of
-	// failing it once. See issue #1422.
-	if err != nil && errors.Is(err, errors.ErrFrozen) {
-		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s/%s][%s] transaction spends a frozen utxo at block height %d", blockHash.String(), subtreeHash.String(), tx.TxID(), blockHeight, err)
+	// A consensus-frozen spend is a verdict about the block, not a transient local
+	// condition, and the distinction is load-bearing: block validation persists a block
+	// as invalid on ErrTxInvalid and treats ErrProcessing as infrastructure trouble to
+	// retry, so leaving it as processing makes the rejecting node re-fetch and
+	// re-validate the same block forever instead of failing it once (issue #1422).
+	//
+	// Two guards, both required. The error code: only ErrUtxoConsensusFrozen is
+	// height-anchored — ErrFrozen also covers the policy tier and the reassignment
+	// maturity hold, neither of which every node derives identically. And the option:
+	// IgnorePolicyFreeze marks a block-context call; the Kafka subtree-announcement path
+	// validates peers' subtrees at tip+1 without it, and its rejections must keep their
+	// pre-existing processing classification.
+	if err != nil && errors.Is(err, errors.ErrUtxoConsensusFrozen) && validationOptions != nil && validationOptions.IgnorePolicyFreeze {
+		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s/%s][%s] transaction spends a consensus-frozen utxo at block height %d", blockHash.String(), subtreeHash.String(), tx.TxID(), blockHeight, err)
 	}
 
 	if err != nil && !errors.Is(err, errors.ErrTxConflicting) {

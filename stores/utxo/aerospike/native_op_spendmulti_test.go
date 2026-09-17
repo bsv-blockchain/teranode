@@ -36,7 +36,8 @@ func TestSpendMultiNativePayloadRoundTrip(t *testing.T) {
 			UTXOHash:     utxoHash,
 			SpendingData: sd,
 		},
-		ignorePolicyFreeze: true,
+		ignorePolicyFreeze:    true,
+		ignoreConsensusFreeze: true,
 	}
 
 	const idx = 3
@@ -98,8 +99,8 @@ func TestSpendMultiNativePayloadRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("spend item = %T, want map[string]any", items[0])
 	}
-	if len(m) != 6 {
-		t.Fatalf("spend map has %d keys, want 6 — msgpack must not drop fields: %#v", len(m), m)
+	if len(m) != 7 {
+		t.Fatalf("spend map has %d keys, want 7 — msgpack must not drop fields: %#v", len(m), m)
 	}
 
 	// Every field round-trips faithfully.
@@ -120,6 +121,9 @@ func TestSpendMultiNativePayloadRoundTrip(t *testing.T) {
 	// An old dispatcher ignores the unknown key; a new one must receive it faithfully.
 	if got, ok := m["ignorePolicyFreeze"].(bool); !ok || !got {
 		t.Fatalf("ignorePolicyFreeze = %#v, want true", m["ignorePolicyFreeze"])
+	}
+	if got, ok := m["ignoreConsensusFreeze"].(bool); !ok || !got {
+		t.Fatalf("ignoreConsensusFreeze = %#v, want true", m["ignoreConsensusFreeze"])
 	}
 	if got, _ := m["spendingData"].([]byte); !bytes.Equal(got, sd.Bytes()) {
 		t.Fatalf("spendingData = %x, want %x", got, sd.Bytes())

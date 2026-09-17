@@ -55,6 +55,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/jellydator/ttlcache/v3"
@@ -2679,7 +2680,8 @@ func handleGetMiningInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 // Parameters:
 //   - ctx: Context for cancellation and tracing
 //   - s: The RPC server instance providing access to service clients
-//   - cmd: The parsed command arguments (bsvjson.FreezeCmd with TxID and Vout)
+//   - cmd: The parsed command arguments (bsvjson.FreezeCmd with TxID, Vout and the
+//     optional enforceAtHeight interval and policyExpiresWithConsensus flag)
 //   - _: Unused channel for close notification
 //
 // Returns:
@@ -2702,15 +2704,32 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		return nil, err
 	}
 
-	// Optional enforceAtHeight window, mirroring SV Node's addToConsensusBlacklist.
-	// Omitted means [0, 0) — enforced at every height, the unqualified freeze this
-	// command has always issued. See issue #1422.
+	vout, err := safeconversion.IntToUint32(c.Vout)
+	if err != nil {
+		return nil, errors.NewInvalidArgumentError("vout %d is out of range", c.Vout)
+	}
+
+	// The store keys the freeze on the real UTXO hash — the Aerospike UDF verifies it
+	// against the stored output before writing — so derive it from the parent output the
+	// way the alert service does, rather than passing the txid in its place.
+	utxoHash, err := utxoHashForOutput(ctx, s.utxoStore, h, vout)
+	if err != nil {
+		return nil, err
+	}
+
 	freezeFrom, freezeUntil, err := freezeWindowFromRPC(c.EnforceAtHeightStart, c.EnforceAtHeightStop)
 	if err != nil {
 		return nil, err
 	}
 
-	spend := &utxo.Spend{TxID: h, Vout: uint32(c.Vout), UTXOHash: h, FreezeFrom: freezeFrom, FreezeUntil: freezeUntil} // nolint:gosec
+	spend := &utxo.Spend{
+		TxID:                h,
+		Vout:                vout,
+		UTXOHash:            utxoHash,
+		FreezeFrom:          freezeFrom,
+		FreezeUntil:         freezeUntil,
+		FreezePolicyExpires: c.PolicyExpiresWithConsensus != nil && *c.PolicyExpiresWithConsensus,
+	}
 
 	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spend}, s.settings); err != nil {
 		return nil, err
@@ -2719,35 +2738,51 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 	return nil, nil
 }
 
-// freezeWindowFromRPC validates and converts the optional enforceAtHeight arguments of
-// the freeze command into the half-open window [from, until) the UTXO store persists.
-// A nil or zero bound means "no bound": from genesis for the lower, no end for the upper.
-func freezeWindowFromRPC(start, stop *int) (freezeFrom uint32, freezeUntil uint32, err error) {
-	if start != nil {
-		if *start < 0 {
-			return 0, 0, errors.NewInvalidArgumentError("enforceAtHeightStart must not be negative")
-		}
+// utxoHashForOutput computes the UTXO hash of output vout of the transaction txHash as
+// the store holds it, keyed on the requested txid (see services/alert/node.go for why
+// the stored transaction's own hash is not used).
+func utxoHashForOutput(ctx context.Context, store utxo.Store, txHash *chainhash.Hash, vout uint32) (*chainhash.Hash, error) {
+	parentTxMeta, err := store.Get(ctx, txHash, fields.Tx)
+	if err != nil {
+		return nil, err
+	}
 
-		if freezeFrom, err = safeconversion.IntToUint32(*start); err != nil {
-			return 0, 0, err
-		}
+	if parentTxMeta == nil || parentTxMeta.Tx == nil ||
+		uint64(vout) >= uint64(len(parentTxMeta.Tx.Outputs)) ||
+		parentTxMeta.Tx.Outputs[vout] == nil {
+		return nil, errors.NewInvalidArgumentError("output %s:%d not found", txHash.String(), vout)
+	}
+
+	return util.UTXOHashFromOutput(txHash, parentTxMeta.Tx.Outputs[vout], vout)
+}
+
+// freezeWindowFromRPC converts the optional enforceAtHeight arguments of the freeze
+// command into the stored window.
+//
+// Both omitted (or both 0) is the unqualified freeze this command has always issued —
+// enforced at every height, stored as (0, 0). Once either is given, SV Node's interval
+// semantics apply through utxo.NormalizeFreezeWindow: stop is an exclusive end, and
+// stop <= start is an empty interval that enforces nothing by consensus.
+func freezeWindowFromRPC(start, stop *int) (freezeFrom uint32, freezeUntil uint32, err error) {
+	var startHeight, stopHeight int
+
+	if start != nil {
+		startHeight = *start
 	}
 
 	if stop != nil {
-		if *stop < 0 {
-			return 0, 0, errors.NewInvalidArgumentError("enforceAtHeightStop must not be negative")
-		}
-
-		if freezeUntil, err = safeconversion.IntToUint32(*stop); err != nil {
-			return 0, 0, err
-		}
+		stopHeight = *stop
 	}
 
-	// An inverted or empty window would freeze nothing while reporting success, which an
-	// operator cannot tell apart from the freeze having worked.
-	if freezeUntil > 0 && freezeUntil <= freezeFrom {
-		return 0, 0, errors.NewInvalidArgumentError("enforceAtHeight range [%d, %d) is empty", freezeFrom, freezeUntil)
+	if startHeight < 0 || stopHeight < 0 {
+		return 0, 0, errors.NewInvalidArgumentError("enforceAtHeight bounds must not be negative")
 	}
+
+	if startHeight == 0 && stopHeight == 0 {
+		return 0, 0, nil
+	}
+
+	freezeFrom, freezeUntil, _ = utxo.NormalizeFreezeWindow(uint64(startHeight), uint64(stopHeight))
 
 	return freezeFrom, freezeUntil, nil
 }

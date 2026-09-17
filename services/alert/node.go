@@ -328,63 +328,53 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 			continue
 		}
 
-		freezeFrom, freezeUntil, enforcesNothing, err := enforceAtHeightWindow(fund)
+		freezeFrom, freezeUntil, err := enforceAtHeightWindow(fund)
 		if err != nil {
 			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
 			continue
 		}
 
-		// create a spend object carrying the alert's enforceAtHeight window, so the store
-		// enforces the freeze at a chain height every node derives identically instead of
-		// from the moment this node happened to process the alert (issue #1422)
+		// Record the alert exactly as sent — window and policy-expiry flag — and let the
+		// store's predicates do all the timing work at every height from here on. Nothing
+		// is decided against this node's tip at arrival: that is what makes the outcome a
+		// pure function of the alert and the chain, identical on a node that received it
+		// early, late, or on replay (issue #1422).
+		//
+		//   - A window that starts above the tip is recorded and simply does not bite
+		//     until its start height.
+		//   - An elapsed window's consensus tier is already inert; its policy tier stays
+		//     unless the alert set policyExpiresWithConsensus, which is SV Node's meaning.
+		//   - An empty interval (stop <= start, the shape an unfreeze alert takes on this
+		//     RPC) records a window that is never consensus-active; with the flag set the
+		//     policy tier lifts too, so the coin is fully released. With the flag clear it
+		//     stays out of this node's templates, exactly as SV Node keeps its policy
+		//     blacklist — resend with the flag, or use the admin unfreeze RPC, to release.
+		//
+		// Alerts therefore never delete a consensus record: a deep reorg into an elapsed
+		// window must be judged identically everywhere. The admin unfreeze RPC is the
+		// explicit delete.
 		spend := &utxo.Spend{
-			TxID:        txHash,
-			Vout:        vout,
-			UTXOHash:    utxoHash,
-			FreezeFrom:  freezeFrom,
-			FreezeUntil: freezeUntil,
+			TxID:                txHash,
+			Vout:                vout,
+			UTXOHash:            utxoHash,
+			FreezeFrom:          freezeFrom,
+			FreezeUntil:         freezeUntil,
+			FreezePolicyExpires: fund.PolicyExpiresWithConsensus,
 		}
 
-		// Two shapes mean "lift this freeze entirely":
-		//
-		//  - A window that enforces nothing at any height (stop <= start). This is the
-		//    unfreeze idiom: go-alert-system delivers unfreeze alerts through this same
-		//    RPC, and an empty range is how an authority says the hold is over outright.
-		//  - A window that has already elapsed, when the alert also says the policy hold
-		//    expires with the consensus hold.
-		//
-		// An elapsed window WITHOUT PolicyExpiresWithConsensus keeps the policy freeze and
-		// lets only the consensus tier lapse — the literal meaning of "policy does not
-		// expire with consensus", and what SV Node does with its two independent lists.
-		// The coin stays out of this node's mempool and block templates while becoming
-		// spendable in blocks again; the admin unfreeze RPC still lifts it completely.
-		//
-		// Anything else is a freeze, INCLUDING a window that starts above our tip — the
-		// window itself now does the timing work, so a not-yet-active freeze is recorded
-		// and simply does not bite until its start height. Before this, a freeze was
-		// applied outright the instant it arrived and the start height was discarded.
-		windowElapsed := freezeUntil > 0 && uint64(freezeUntil) <= uint64(n.utxoStore.GetBlockHeight())
-
-		if enforcesNothing || (windowElapsed && fund.PolicyExpiresWithConsensus) {
-			// unfreeze
-			if err = n.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{spend}, n.settings); err != nil {
-				n.logger.Warnf("[AddToConsensusBlacklist] failed to unfreeze %s:%d: %v", fund.TxOut.TxId, fund.TxOut.Vout, err)
-				response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
-			}
-		} else {
-			// freeze
-			if err = n.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spend}, n.settings); err != nil {
-				n.logger.Warnf("[AddToConsensusBlacklist] failed to freeze %s:%d for heights [%d, %d): %v", fund.TxOut.TxId, fund.TxOut.Vout, freezeFrom, freezeUntil, err)
-				response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
-			}
+		if err = n.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spend}, n.settings); err != nil {
+			n.logger.Warnf("[AddToConsensusBlacklist] failed to record freeze of %s:%d for heights [%d, %d) policyExpires=%t: %v", fund.TxOut.TxId, fund.TxOut.Vout, freezeFrom, freezeUntil, fund.PolicyExpiresWithConsensus, err)
+			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
 		}
 	}
 
 	return response, nil
 }
 
-// enforceAtHeightWindow converts a fund's enforceAtHeight ranges into the half-open
-// window [from, until) the UTXO store stores per output.
+// enforceAtHeightWindow converts a fund's enforceAtHeight range into the stored window,
+// via utxo.NormalizeFreezeWindow, which is where SV Node's interval semantics (stop is an
+// exclusive end; stop <= start is an empty interval; "no end" is a stop the chain never
+// reaches) meet the store's encoding.
 //
 // The alert wire format carries exactly one range per fund
 // (go-alert-system app/models/alert_message_freeze_utxo.go: 57 bytes, txid ‖ vout ‖
@@ -394,40 +384,27 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 // freeze that is quietly enforced over the wrong heights is the failure mode this whole
 // change exists to remove.
 //
-// A fund with no range at all, or a zero start, means "enforce from genesis", which is
-// how every freeze behaved before the window existed. A zero stop means "no end".
-//
-// enforcesNothing reports a range that covers no height at all (stop <= start). That is
-// not an error: go-alert-system delivers unfreeze alerts through the same RPC, and an
-// empty range is how an authority says the hold is over outright.
-func enforceAtHeightWindow(fund models.Fund) (freezeFrom uint32, freezeUntil uint32, enforcesNothing bool, err error) {
+// A fund with no range at all cannot come off the wire (the 57-byte record always
+// carries one); it is treated as an empty interval, never as "enforce at every height".
+func enforceAtHeightWindow(fund models.Fund) (freezeFrom uint32, freezeUntil uint32, err error) {
 	if len(fund.EnforceAtHeight) == 0 {
-		return 0, 0, false, nil
+		from, until, _ := utxo.NormalizeFreezeWindow(0, 0)
+		return from, until, nil
 	}
 
 	if len(fund.EnforceAtHeight) > 1 {
-		return 0, 0, false, errors.NewError("enforceAtHeight carries %d ranges; only one is supported", len(fund.EnforceAtHeight))
+		return 0, 0, errors.NewError("enforceAtHeight carries %d ranges; only one is supported", len(fund.EnforceAtHeight))
 	}
 
 	enforce := fund.EnforceAtHeight[0]
 
 	if enforce.Start < 0 || enforce.Stop < 0 {
-		return 0, 0, false, errors.NewError("enforceAtHeight range [%d, %d) is negative", enforce.Start, enforce.Stop)
+		return 0, 0, errors.NewError("enforceAtHeight range [%d, %d) is negative", enforce.Start, enforce.Stop)
 	}
 
-	if freezeFrom, err = safeconversion.IntToUint32(enforce.Start); err != nil {
-		return 0, 0, false, err
-	}
+	from, until, _ := utxo.NormalizeFreezeWindow(uint64(enforce.Start), uint64(enforce.Stop))
 
-	if freezeUntil, err = safeconversion.IntToUint32(enforce.Stop); err != nil {
-		return 0, 0, false, err
-	}
-
-	if freezeUntil > 0 && freezeUntil <= freezeFrom {
-		return freezeFrom, freezeUntil, true, nil
-	}
-
-	return freezeFrom, freezeUntil, false, nil
+	return from, until, nil
 }
 
 // getAddToConsensusBlacklistResponse creates a standardized response for failed blacklist operations.

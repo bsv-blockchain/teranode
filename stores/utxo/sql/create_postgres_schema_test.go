@@ -6,6 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/util/usql"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCreatePostgresSchema_Success(t *testing.T) {
@@ -205,8 +206,8 @@ func TestCreatePostgresSchema_ErrorAtOutputsFreezeWindowColumns(t *testing.T) {
 	udb := &usql.DB{DB: nil}
 	err := createPostgresSchemaWithMockDB(udb, mockDB)
 
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "could not add freeze window columns to outputs table")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "could not add freeze window columns to outputs table")
 }
 
 func TestCreatePostgresSchema_ErrorAtBlockIDsConstraintEnsure(t *testing.T) {

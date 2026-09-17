@@ -107,10 +107,11 @@ type batchSpend struct {
 	// acquire-loading it on the abort path synchronizes-with that write and can
 	// then safely read the slot (see resolveSpendCompletions). completed alone
 	// cannot serve this role: it is set by the CAS, i.e. BEFORE the slot write.
-	published          atomic.Bool
-	ignoreConflicting  bool
-	ignoreLocked       bool
-	ignorePolicyFreeze bool
+	published             atomic.Bool
+	ignoreConflicting     bool
+	ignoreLocked          bool
+	ignorePolicyFreeze    bool
+	ignoreConsensusFreeze bool
 }
 
 // complete writes err into the item's result slot (spend.Err) and marks the
@@ -397,6 +398,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
 	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
 	useIgnorePolicyFreeze := len(ignoreFlags) > 0 && ignoreFlags[0].IgnorePolicyFreeze
+	useIgnoreConsensusFreeze := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConsensusFreeze
 
 	spends, err = utxo.GetSpends(tx)
 	if err != nil {
@@ -425,12 +427,13 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		}
 
 		item := &batchSpend{
-			spend:              spend,
-			blockHeight:        blockHeight,
-			group:              group,
-			ignoreConflicting:  useIgnoreConflicting,
-			ignoreLocked:       useIgnoreLocked,
-			ignorePolicyFreeze: useIgnorePolicyFreeze,
+			spend:                 spend,
+			blockHeight:           blockHeight,
+			group:                 group,
+			ignoreConflicting:     useIgnoreConflicting,
+			ignoreLocked:          useIgnoreLocked,
+			ignorePolicyFreeze:    useIgnorePolicyFreeze,
+			ignoreConsensusFreeze: useIgnoreConsensusFreeze,
 		}
 		items[idx] = item
 
@@ -632,6 +635,7 @@ func isSpendRollbackError(err error) bool {
 	return errors.Is(err, errors.ErrSpent) ||
 		errors.Is(err, errors.ErrTxConflicting) ||
 		errors.Is(err, errors.ErrFrozen) ||
+		errors.Is(err, errors.ErrUtxoConsensusFrozen) ||
 		errors.Is(err, errors.ErrUtxoHashMismatch)
 }
 
@@ -827,20 +831,20 @@ func (s *Store) validateSpendItem(bItem *batchSpend) error {
 
 // createSpendMapValue creates the map value for a spend item.
 //
-// ignorePolicyFreeze rides in the per-spend map rather than becoming another positional
-// argument to spendMulti deliberately: spendMulti is the hot path and its argument list
-// is a wire contract shared with the server-fork native dispatcher (see native_op.go), so
-// adding a positional argument there would have to be matched outside this repo before
-// the native path could be used at all. Lua reads an absent key as nil, which is the
-// safe default — the policy freeze is enforced.
+// The two freeze flags ride in the per-spend map rather than becoming positional
+// arguments to spendMulti deliberately: spendMulti's argument list is a wire contract
+// shared with the server-fork native dispatcher (see native_op.go), so adding a
+// positional argument there would have to be matched outside this repo. Lua reads an
+// absent key as nil, which is the safe default — both tiers of the freeze are enforced.
 func (s *Store) createSpendMapValue(idx int, bItem *batchSpend) aerospike.MapValue {
 	return aerospike.NewMapValue(map[any]any{
-		"idx":                idx,
-		"offset":             s.calculateOffsetForOutput(bItem.spend.Vout),
-		"vOut":               bItem.spend.Vout,
-		"utxoHash":           bItem.spend.UTXOHash[:],
-		"spendingData":       bItem.spend.SpendingData.Bytes(),
-		"ignorePolicyFreeze": bItem.ignorePolicyFreeze,
+		"idx":                   idx,
+		"offset":                s.calculateOffsetForOutput(bItem.spend.Vout),
+		"vOut":                  bItem.spend.Vout,
+		"utxoHash":              bItem.spend.UTXOHash[:],
+		"spendingData":          bItem.spend.SpendingData.Bytes(),
+		"ignorePolicyFreeze":    bItem.ignorePolicyFreeze,
+		"ignoreConsensusFreeze": bItem.ignoreConsensusFreeze,
 	})
 }
 
@@ -1058,6 +1062,8 @@ func (s *Store) createGeneralError(errorCode LuaErrorCode, txID *chainhash.Hash,
 	switch errorCode {
 	case LuaErrorCodeFrozen:
 		return errors.NewUtxoFrozenError("[SPEND_BATCH_LUA][%s] transaction is frozen, blockHeight %d - %s", txID.String(), thisBlockHeight, message)
+	case LuaErrorCodeConsensusFrozen:
+		return errors.NewUtxoConsensusFrozenError("[SPEND_BATCH_LUA][%s] transaction is consensus-frozen, blockHeight %d - %s", txID.String(), thisBlockHeight, message)
 	case LuaErrorCodeConflicting:
 		return errors.NewTxConflictingError("[SPEND_BATCH_LUA][%s] transaction is conflicting, blockHeight %d - %s", txID.String(), thisBlockHeight, message)
 	case LuaErrorCodeLocked:
@@ -1113,6 +1119,9 @@ func (s *Store) createSpendError(errMsg LuaErrorInfo, batchItem *batchSpend, txI
 
 	case LuaErrorCodeFrozen:
 		return errors.NewUtxoFrozenError("[SPEND_BATCH_LUA][%s] UTXO is frozen, vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
+
+	case LuaErrorCodeConsensusFrozen:
+		return errors.NewUtxoConsensusFrozenError("[SPEND_BATCH_LUA][%s] UTXO is consensus-frozen, vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
 
 	case LuaErrorCodeFrozenUntil:
 		return errors.NewUtxoFrozenError("[SPEND_BATCH_LUA][%s] UTXO frozen until block, vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)

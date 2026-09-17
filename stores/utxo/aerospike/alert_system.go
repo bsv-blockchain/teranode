@@ -57,39 +57,41 @@ package aerospike
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 )
 
-// FreezeUTXOs marks UTXOs as frozen by setting their spending transaction ID to FF...FF
-// and recording the alert's enforceAtHeight window from each Spend's FreezeFrom and
-// FreezeUntil. Frozen UTXOs cannot be spent until unfrozen or reassigned; the window
-// decides which blocks the freeze is a consensus violation for (see issue #1422).
+// luaMsgFreezeRecordedOnSpent is the message the freeze UDF returns, with STATUS_OK, when
+// it recorded the consensus window on an output that was already spent by a real
+// transaction. Keep in sync with MSG_FREEZE_RECORDED_ON_SPENT in teranode.lua.
+const luaMsgFreezeRecordedOnSpent = "freeze recorded on spent output"
+
+// FreezeUTXOs records the alert system's freeze on each output: the policy marker — the
+// spending-data slot set to FF...FF, only while the output is unspent — and the consensus
+// record in the utxoFreezeFrom/Until/Exp bins, which is written whether or not the output
+// is spent because it is a property of the outpoint, not of this node's spent-state for
+// it (issue #1422). See utxo.Store.FreezeUTXOs for the guarantees.
 //
 // The operation is performed atomically via a Lua script that:
 //   - Verifies the UTXO exists and matches the provided hash
-//   - Checks the UTXO is not already spent
-//   - Sets the spending transaction ID to FF...FF to mark as frozen
-//   - Records the freeze window per output offset
+//   - Sets the spending transaction ID to FF...FF if the output is unspent
+//   - Records the freeze window and policy-expiry flag per output offset
 //
-// A repeat freeze for an already-frozen output updates its window; only a repeat asking
-// for the window already stored is reported as already frozen.
+// A repeat freeze for an already-frozen output updates its record; only a repeat asking
+// for exactly the record already stored is reported as already frozen.
 //
 // Parameters:
 //   - ctx: Context for cancellation/timeout
-//   - spends: Array of UTXOs to freeze, each carrying its FreezeFrom/FreezeUntil window
+//   - spends: Array of UTXOs to freeze, each carrying its window and policy-expiry flag
 //
 // Returns error if any UTXO:
 //   - Doesn't exist
-//   - Is already spent
-//   - Is already frozen with the same window
+//   - Is already frozen with the same record
 //   - Fails to freeze
 func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
@@ -109,6 +111,7 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 			spend.UTXOHash[:],
 			int(spend.FreezeFrom),
 			int(spend.FreezeUntil),
+			spend.FreezePolicyExpires,
 		))
 	}
 
@@ -127,23 +130,32 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 
 		res, err := s.teranodeBatchRecordResponse(fmt.Sprintf("[freeze][%d][%s]", batchID, spendDesc), record)
 		if err != nil {
-			// The UDF path ignores TX_NOT_FOUND on freeze (only SPENT is
-			// reported below); keep the native path's KEY_NOT_FOUND — the same
-			// condition under UPDATE_ONLY — equally silent.
+			// The UDF path ignores TX_NOT_FOUND on freeze; keep the native path's
+			// KEY_NOT_FOUND — the same condition under UPDATE_ONLY — equally silent.
 			if !errors.Is(err, errors.ErrTxNotFound) {
 				errorsThrown = append(errorsThrown, err)
 			}
 			continue
 		}
 
-		if res.Status == LuaStatusError && res.ErrorCode == LuaErrorCodeSpent {
-			// Extract spending data from error message
-			hexData := strings.TrimPrefix(res.Message, "SPENT:")
-			if spendingData, parseErr := spendpkg.NewSpendingDataFromString(hexData); parseErr == nil {
-				errorsThrown = append(errorsThrown, errors.NewStorageError("[freeze][%d][%s] failed to freeze aerospike utxo because it's already SPENT by %v", batchID, spendDesc, spendingData))
-			} else {
+		if res.Status == LuaStatusError {
+			switch res.ErrorCode {
+			case LuaErrorCodeAlreadyFrozen:
+				// A repeat freeze asking for exactly the record already stored. Reported
+				// the same way the SQL store reports it, so a duplicate alert reads as
+				// NotProcessed on every backend rather than as a change on this one.
+				errorsThrown = append(errorsThrown, errors.NewUtxoFrozenError("[freeze][%d][%s] aerospike utxo already frozen with this window", batchID, spendDesc))
+			default:
 				errorsThrown = append(errorsThrown, errors.NewStorageError("[freeze][%d][%s] failed to freeze aerospike utxo: %s", batchID, spendDesc, res.Message))
 			}
+
+			continue
+		}
+
+		// The consensus record is a property of the outpoint and is recorded on a spent
+		// output too (issue #1422); the UDF says so, and it is worth an operator seeing.
+		if res.Message == luaMsgFreezeRecordedOnSpent {
+			s.logger.Infof("[freeze][%d][%s] freeze recorded on spent output for heights [%d, %d)", batchID, spendDesc, spends[idx].FreezeFrom, spends[idx].FreezeUntil)
 		}
 	}
 
