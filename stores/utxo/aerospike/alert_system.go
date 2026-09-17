@@ -140,6 +140,9 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 
 		if res.Status == LuaStatusError {
 			switch res.ErrorCode {
+			case LuaErrorCodeTxNotFound:
+				// Missing records are a deliberate no-op on freeze, matching the native
+				// path's silent KEY_NOT_FOUND above.
 			case LuaErrorCodeAlreadyFrozen:
 				// A repeat freeze asking for exactly the record already stored. Reported
 				// the same way the SQL store reports it, so a duplicate alert reads as
@@ -160,7 +163,10 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 	}
 
 	if len(errorsThrown) > 0 {
-		return errors.NewStorageError("[freeze][%d] failed to batch freeze %d aerospike utxos: %v", batchID, len(spends), errorsThrown)
+		// The first per-record error is the wrapped cause, so callers can classify with
+		// errors.Is (already-frozen surfaces as ErrFrozen, as on SQL); the full list still
+		// renders in the message.
+		return errors.NewStorageError("[freeze][%d] failed to batch freeze %d aerospike utxos: %v", batchID, len(spends), errorsThrown, errorsThrown[0])
 	}
 
 	return nil
@@ -227,7 +233,7 @@ func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings
 	}
 
 	if len(errorsThrown) > 0 {
-		return errors.NewStorageError("[unfreeze][%d] failed to batch unfreeze %d aerospike utxos: %v", batchID, len(spends), errorsThrown)
+		return errors.NewStorageError("[unfreeze][%d] failed to batch unfreeze %d aerospike utxos: %v", batchID, len(spends), errorsThrown, errorsThrown[0])
 	}
 
 	return nil

@@ -5,6 +5,7 @@ import (
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
@@ -53,19 +54,44 @@ func TestFreezeUnfreezeResultHandling(t *testing.T) {
 		SpendingData: spendingData,
 	}
 
-	t.Run("freeze_already_spent_utxo_errors", func(t *testing.T) {
-		err := store.FreezeUTXOs(ctx, []*utxo.Spend{spend}, tSettings)
-		require.Error(t, err)
-		// The SPENT errorCode branch fires; the dispatcher reports the spend
-		// via the "Already spent" message (spendingData travels in a separate
-		// response field, so the message-embedded hex parse falls through to
-		// the plain-message error).
-		require.Contains(t, err.Error(), "Already spent")
-	})
-
 	t.Run("unfreeze_unfrozen_utxo_errors", func(t *testing.T) {
 		err := store.UnFreezeUTXOs(ctx, []*utxo.Spend{spend}, tSettings)
-		require.Error(t, err)
+		require.ErrorIs(t, err, errors.ErrFrozen, "an output with neither marker nor record cannot be unfrozen")
+	})
+
+	t.Run("freeze_already_spent_utxo_records_the_window", func(t *testing.T) {
+		// The consensus record is a property of the outpoint (#1422): a freeze on an
+		// output already spent by a real transaction records the window and leaves the
+		// spending data alone, so a late alert still governs a fork block or a re-mine
+		// of that spend inside the window.
+		spend.FreezeFrom = 500
+		spend.FreezeUntil = 600
+
+		require.NoError(t, store.FreezeUTXOs(ctx, []*utxo.Spend{spend}, tSettings))
+
+		rec, err := client.Get(nil, key)
+		require.NoError(t, err)
+
+		fromMap, ok := rec.Bins[fields.UtxoFreezeFrom.String()].(map[interface{}]interface{})
+		require.True(t, ok, "the freeze record must be written on the spent output")
+		require.Equal(t, 500, fromMap[0])
+
+		utxos, ok := rec.Bins[fields.Utxos.String()].([]interface{})
+		require.True(t, ok)
+		require.Equal(t, spentUtxo, utxos[0].([]byte), "the real spender must be left in place")
+
+		// The identical record again is reported, not silently treated as a change.
+		require.ErrorIs(t, store.FreezeUTXOs(ctx, []*utxo.Spend{spend}, tSettings), errors.ErrFrozen)
+	})
+
+	t.Run("unfreeze_spent_utxo_with_record_succeeds", func(t *testing.T) {
+		require.NoError(t, store.UnFreezeUTXOs(ctx, []*utxo.Spend{spend}, tSettings))
+
+		rec, err := client.Get(nil, key)
+		require.NoError(t, err)
+
+		_, found := rec.Bins[fields.UtxoFreezeFrom.String()]
+		require.False(t, found, "unfreeze must drop the record from a spent output too")
 	})
 
 	t.Run("freeze_missing_record_is_skipped", func(t *testing.T) {
