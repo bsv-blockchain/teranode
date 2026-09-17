@@ -55,6 +55,13 @@ const (
 	// UtxoFreezeExp marks outputs whose policy freeze expires with the consensus window
 	// (the alert's policyExpiresWithConsensus); absent means the policy freeze persists.
 	UtxoFreezeExp FieldName = "utxoFreezeExp"
+	// UtxoFreezeRecs lives on a transaction's MAIN record only: the set of extra
+	// (pagination) record numbers that carry, or once carried, a freeze record for one of
+	// their outputs. A freeze-record read follows it instead of scanning every extra
+	// record, so a transaction with no frozen output costs one read whatever its size.
+	// Written before the record it points at and never removed (see
+	// aerospike.markFreezeExtraRecords).
+	UtxoFreezeRecs FieldName = "utxoFreezeRecs"
 	// SpendingHeight is the block height at which the UTXO was spent
 	SpendingHeight FieldName = "spendingHeight"
 	// Utxos represents the UTXOs associated with a transaction

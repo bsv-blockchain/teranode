@@ -572,6 +572,90 @@ func freezeEnforceAtHeightOutpointRecord(t *testing.T, db utxostore.Store, tSett
 
 		require.NoError(t, db.UnFreezeUTXOs(ctx, windowed, tSettings))
 	})
+
+	// Case 7 — a freeze on an output past the store's per-record batch (an Aerospike
+	// pagination record) must be recorded, enforced and readable exactly like one on the
+	// first batch. Block validation's parent check reads records by transaction, and a
+	// record it cannot see is a freeze it cannot enforce.
+	t.Run("a freeze on a paginated output is enforced and readable", func(t *testing.T) {
+		batchSize := tSettings.UtxoStore.UtxoBatchSize
+		require.Positive(t, batchSize)
+
+		big := bt.NewTx()
+		require.NoError(t, big.FromUTXOs(&bt.UTXO{
+			TxIDHash:      Tx.TxIDChainHash(),
+			Vout:          0,
+			LockingScript: Tx.Outputs[0].LockingScript,
+			Satoshis:      Tx.Outputs[0].Satoshis,
+		}))
+		big.Inputs[0].UnlockingScript = dummyUnlockingScript
+
+		for len(big.Outputs) < batchSize+2 {
+			big.AddOutput(&bt.Output{Satoshis: 1, LockingScript: Tx.Outputs[0].LockingScript})
+		}
+
+		_, _, err := db.SpendAndCreate(ctx, big, 1000, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		vout := uint32(batchSize + 1) // nolint:gosec
+		bigHash := big.TxIDChainHash()
+		bigUtxoHash, err := util.UTXOHashFromOutput(bigHash, big.Outputs[vout], vout)
+		require.NoError(t, err)
+
+		record := []*utxostore.Spend{{TxID: bigHash, Vout: vout, UTXOHash: bigUtxoHash, FreezeFrom: windowStart, FreezeUntil: windowStop}}
+		require.NoError(t, db.FreezeUTXOs(ctx, record, tSettings))
+
+		got, err := db.Get(ctx, bigHash, fields.UtxoFreezeFrom, fields.UtxoFreezeUntil, fields.UtxoFreezeExp)
+		require.NoError(t, err)
+		require.Equal(t, map[uint32]meta.FreezeRecord{vout: {From: windowStart, Until: windowStop}}, got.FreezeRecords,
+			"a freeze-record read must find the record on the paginated output")
+
+		bigSpend := bt.NewTx()
+		require.NoError(t, bigSpend.FromUTXOs(&bt.UTXO{TxIDHash: bigHash, Vout: vout, LockingScript: big.Outputs[vout].LockingScript, Satoshis: big.Outputs[vout].Satoshis}))
+		bigSpend.Inputs[0].UnlockingScript = dummyUnlockingScript
+		require.NoError(t, bigSpend.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1))
+
+		_, attempted, err := db.SpendAndCreate(ctx, bigSpend, windowStart, utxostore.WithSpendOnly(), utxostore.WithIgnorePolicyFreeze(true))
+		require.Error(t, err)
+		require.NotEmpty(t, attempted)
+		require.ErrorIs(t, attempted[0].Err, errors.ErrUtxoConsensusFrozen)
+
+		require.NoError(t, db.UnFreezeUTXOs(ctx, record, tSettings))
+
+		got, err = db.Get(ctx, bigHash, fields.UtxoFreezeFrom, fields.UtxoFreezeUntil, fields.UtxoFreezeExp)
+		require.NoError(t, err)
+		require.Empty(t, got.FreezeRecords, "unfreeze must remove the record on the paginated output")
+	})
+
+	// Case 8 — the spending-data view that block assembly and conflict resolution read
+	// (Get with the utxos field) must agree with GetSpend about policy expiry: the frozen
+	// sentinel stands in for the spender only while the policy tier holds the coin. Two
+	// outputs, both with policyExpiresWithConsensus, windows anchored on the store's
+	// current height: one ends after the next block, one ends at it.
+	t.Run("policy expiry is visible in the spending-data view", func(t *testing.T) {
+		nextHeight := db.GetBlockHeight() + 1
+
+		utxoHash1, err := util.UTXOHashFromOutput(TXHash, Tx.Outputs[1], 1)
+		require.NoError(t, err)
+
+		expiring := []*utxostore.Spend{
+			{TxID: TXHash, Vout: 0, UTXOHash: utxoHash0, FreezeFrom: 0, FreezeUntil: nextHeight + 1, FreezePolicyExpires: true},
+			{TxID: TXHash, Vout: 1, UTXOHash: utxoHash1, FreezeFrom: 0, FreezeUntil: nextHeight, FreezePolicyExpires: true},
+		}
+		require.NoError(t, db.FreezeUTXOs(ctx, expiring, tSettings))
+
+		got, err := db.Get(ctx, TXHash, fields.Utxos)
+		require.NoError(t, err)
+		require.NotNil(t, got.SpendingDatas[0], "an unspent coin held by the policy tier reports the frozen sentinel")
+		require.True(t, got.SpendingDatas[0].TxID.Equal(subtree.FrozenBytesTxHash))
+		require.Nil(t, got.SpendingDatas[1], "once the policy tier has expired with the window the coin must read unspent again")
+
+		resp, err := db.GetSpend(ctx, expiring[1])
+		require.NoError(t, err)
+		require.Equal(t, int(utxostore.Status_OK), resp.Status, "GetSpend must agree with the spending-data view")
+
+		require.NoError(t, db.UnFreezeUTXOs(ctx, expiring, tSettings))
+	})
 }
 
 func ReAssign(t *testing.T, db utxostore.Store) {

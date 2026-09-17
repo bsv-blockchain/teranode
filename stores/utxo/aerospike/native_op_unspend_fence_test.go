@@ -10,7 +10,7 @@ import "testing"
 func TestUseNativeForSubOp_FlagOffNeverNative(t *testing.T) {
 	// Flag OFF: never native, regardless of sub-op.
 	off := &Store{}
-	for _, op := range []uint8{subOpSpend, subOpSpendMulti, subOpUnspend, subOpSetMined, subOpSetLocked} {
+	for _, op := range []uint8{subOpSpend, subOpSpendMulti, subOpUnspend, subOpReassign, subOpSetMined, subOpSetLocked} {
 		if off.useNativeForSubOp(op) {
 			t.Fatalf("flag off must never use native (sub-op %d)", op)
 		}
@@ -21,7 +21,7 @@ func TestUseNativeForSubOp_FlagOffNeverNative(t *testing.T) {
 	on.useNativeTeranodeOps.Store(true)
 
 	for _, op := range []uint8{
-		subOpSetMined, subOpReassign, subOpSetConflicting, subOpPreserveUntil, subOpSetLocked,
+		subOpSetMined, subOpSetConflicting, subOpPreserveUntil, subOpSetLocked,
 		subOpIncrementSpentExtraRec, subOpSetDeleteAtHeight, subOpAddDeletedChildren,
 	} {
 		if !on.useNativeForSubOp(op) {

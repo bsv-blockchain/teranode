@@ -492,20 +492,6 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
             goto continue
         end
 
-        if spendableIn then
-            local spendableHeight = spendableIn[offset]
-            if spendableHeight and spendableHeight > currentBlockHeight then
-                local error = map()
-
-                error[FIELD_ERROR_CODE] = ERROR_CODE_FROZEN_UNTIL
-                error[FIELD_MESSAGE] = MSG_FROZEN_UNTIL .. spendableHeight
-
-                errors[idx] = error
-
-                goto continue
-            end
-        end
-
         -- The alert system's freeze carries two controls at once, mirroring SV Node
         -- (issue #1422), and they are checked HERE, before any spent-state branch:
         --
@@ -548,6 +534,23 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
 
                 error[FIELD_ERROR_CODE] = ERROR_CODE_FROZEN
                 error[FIELD_MESSAGE] = MSG_FROZEN
+
+                errors[idx] = error
+
+                goto continue
+            end
+        end
+
+        -- The reassignment-maturity hold is judged AFTER the freeze, so that a later alert
+        -- on a reassigned-but-immature output yields the consensus verdict at an in-window
+        -- height rather than the retryable FROZEN_UNTIL — the SQL store's ordering.
+        if spendableIn then
+            local spendableHeight = spendableIn[offset]
+            if spendableHeight and spendableHeight > currentBlockHeight then
+                local error = map()
+
+                error[FIELD_ERROR_CODE] = ERROR_CODE_FROZEN_UNTIL
+                error[FIELD_MESSAGE] = MSG_FROZEN_UNTIL .. spendableHeight
 
                 errors[idx] = error
 

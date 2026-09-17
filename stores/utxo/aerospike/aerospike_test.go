@@ -800,6 +800,7 @@ func TestStore_Constants(t *testing.T) {
 			fields.UtxoFreezeFrom,
 			fields.UtxoFreezeUntil,
 			fields.UtxoFreezeExp,
+			fields.UtxoFreezeRecs,
 			fields.Conflicting,
 		}
 

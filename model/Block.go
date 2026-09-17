@@ -88,6 +88,9 @@ type missingParentTx struct {
 	// vouts are the outputs of parentTxHash that txHash spends, so the parent's
 	// alert-system freeze records can be judged against this block's height.
 	vouts []uint32
+	// sameBlock marks a parent that is itself in this block: its position was already
+	// verified, so only its freeze records are judged (see checkSameBlockParentFreeze).
+	sameBlock bool
 }
 
 type OutPoint struct {
@@ -1814,6 +1817,10 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 	// two options: 1- parent is currently under validation, 2- parent is from forked chain.
 	// for the first situation we don't start validating the current block until the parent is validated.
 	// parent tx meta was not found, must be old, ignore | it is a coinbase, which obviously is mined in a block
+	if parentTxStruct.sameBlock {
+		return oldBlockIDs, checkSameBlockParentFreeze(gCtx, txMetaStore, parentTxStruct, b.Height)
+	}
+
 	parentTxMeta, err := getParentTxMetaBlockIDs(gCtx, txMetaStore, parentTxStruct, b.Height)
 	if err != nil {
 		return oldBlockIDs, err
@@ -1966,7 +1973,15 @@ func (b *Block) checkParentTransactions(parentTxHashes []chainhash.Hash, voutsBy
 					b.String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), parentTxHash.String())
 			}
 			// if the parent is in the same block, we have already checked whether it is on the same chain
-			// in a previous block here above. No need to check again
+			// in a previous block here above. No need to check again — but its outputs can
+			// still carry an alert-system freeze record, judged in checkSameBlockParentFreeze.
+			checkParentTxHashes = append(checkParentTxHashes, missingParentTx{
+				parentTxHash: parentTxHash,
+				txHash:       subtreeNode.Hash,
+				vouts:        voutsByParent[parentTxHash],
+				sameBlock:    true,
+			})
+
 			continue
 		}
 
@@ -1978,6 +1993,32 @@ func (b *Block) checkParentTransactions(parentTxHashes []chainhash.Hash, voutsBy
 	}
 
 	return checkParentTxHashes, nil
+}
+
+// checkSameBlockParentFreeze judges the alert system's freeze records of a parent that
+// is itself in this block. Such a parent needs no chain check — its position in the
+// block was verified already — but its outputs can carry a consensus freeze all the
+// same: an alert names an outpoint, and a coin created by a transaction still in the
+// mempool can be frozen after a child spending it was validated. Subtree validation
+// then blesses both on existence without re-spending the child, so this is the only
+// place the freeze is judged for that pair, exactly as for an out-of-block parent
+// (issue #1422). It reads the freeze fields only.
+//
+// A parent the store does not hold is passed over rather than reported as incomplete:
+// same-block parents are not chain-checked at all, and an absent parent carries no
+// record.
+func checkSameBlockParentFreeze(gCtx context.Context, txMetaStore utxo.Store, parentTxStruct missingParentTx, blockHeight uint32) error {
+	parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxStruct.parentTxHash,
+		fields.UtxoFreezeFrom, fields.UtxoFreezeUntil, fields.UtxoFreezeExp)
+	if err != nil {
+		if errors.Is(err, errors.ErrTxNotFound) {
+			return nil
+		}
+
+		return errors.NewStorageError("error getting same-block parent transaction %s from txMetaStore", parentTxStruct.parentTxHash.String(), err)
+	}
+
+	return checkParentFreezeRecords(parentTxMeta, parentTxStruct, blockHeight)
 }
 
 func filterCurrentBlockHeaderIDsMap(parentTxMeta *meta.Data, currentBlockHeaderIDsMap map[uint32]struct{}) (map[uint32]struct{}, uint32) {

@@ -44,6 +44,13 @@ type Options struct {
 	// See issue #1422 and utxo.WithIgnorePolicyFreeze.
 	IgnorePolicyFreeze bool
 
+	// IgnoreConsensusFreeze drops the consensus tier of the alert system's freeze as
+	// well, so no freeze rejects the spend. Only legitimate for a block at or below the
+	// highest hardcoded checkpoint — canonical by definition, so no alert may
+	// retroactively invalidate it — and the validator rejects it anywhere else.
+	// See issue #1422 and utxo.WithIgnoreConsensusFreeze.
+	IgnoreConsensusFreeze bool
+
 	// SkipTxMetaPublishing determines whether txmeta should be published to Kafka
 	// When true, the validator won't publish transaction metadata to the txmeta Kafka topic
 	// Used during legacy catchup (quickValidationMode) where no consumer needs the data
@@ -336,6 +343,22 @@ func WithIgnoreLocked(ignoreLocked bool) Option {
 func WithIgnorePolicyFreeze(ignorePolicyFreeze bool) Option {
 	return func(o *Options) {
 		o.IgnorePolicyFreeze = ignorePolicyFreeze
+	}
+}
+
+// WithIgnoreConsensusFreeze creates an option that drops the consensus tier of the alert
+// system's freeze as well as the policy tier, for the spends of a block a hardcoded
+// checkpoint already proves canonical. The validator rejects it above the checkpoint or
+// without SkipScriptValidation.
+//
+// Parameters:
+//   - ignoreConsensusFreeze: When true, no alert-system freeze rejects the spend
+//
+// Returns:
+//   - Option: Function that sets the ignoreConsensusFreeze option
+func WithIgnoreConsensusFreeze(ignoreConsensusFreeze bool) Option {
+	return func(o *Options) {
+		o.IgnoreConsensusFreeze = ignoreConsensusFreeze
 	}
 }
 

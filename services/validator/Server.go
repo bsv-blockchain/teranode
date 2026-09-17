@@ -623,6 +623,10 @@ func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) (
 		opts.IgnorePolicyFreeze = *req.IgnorePolicyFreeze
 	}
 
+	if req.IgnoreConsensusFreeze != nil {
+		opts.IgnoreConsensusFreeze = *req.IgnoreConsensusFreeze
+	}
+
 	return opts, nil
 }
 

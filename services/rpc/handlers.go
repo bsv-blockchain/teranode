@@ -2849,7 +2849,20 @@ func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, err
 	}
 
-	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
+	vout, err := safeconversion.IntToUint32(c.Vout)
+	if err != nil {
+		return nil, errors.NewInvalidArgumentError("vout %d is out of range", c.Vout)
+	}
+
+	// Keyed on the real UTXO hash exactly as freeze is: the Aerospike UDF verifies it
+	// against the stored output before clearing the record, so passing the txid in its
+	// place would leave a coin frozen by this RPC impossible to unfreeze by it.
+	utxoHash, err := utxoHashForOutput(ctx, s.utxoStore, h, vout)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: vout, UTXOHash: utxoHash}}, s.settings); err != nil {
 		return nil, err
 	}
 

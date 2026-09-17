@@ -942,6 +942,23 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, err
 	}
 
+	// IgnoreConsensusFreeze lifts the alert system's consensus tier, which is only ever
+	// legitimate for a block a hardcoded checkpoint already proves canonical; gate it the
+	// way OutpointOnlySpend is gated so no other caller can reach it (issue #1422).
+	if validationOptions.IgnoreConsensusFreeze && !validationOptions.SkipScriptValidation {
+		err = errors.NewProcessingError("[Validate][%s] IgnoreConsensusFreeze requires SkipScriptValidation", txID)
+		span.RecordError(err)
+
+		return nil, err
+	}
+
+	if validationOptions.IgnoreConsensusFreeze && blockHeight > blockchain.HighestCheckpointHeight(v.settings.ChainCfgParams.Checkpoints) {
+		err = errors.NewProcessingError("[Validate][%s] IgnoreConsensusFreeze must not be used above the highest checkpoint (height %d)", txID, blockHeight)
+		span.RecordError(err)
+
+		return nil, err
+	}
+
 	// Fail closed on a store that does not support the fast path: OutpointOnlySpend
 	// relies on SkipUTXOHashCheck / SkipExtendedInputs, which such a store ignores —
 	// it would then derive the UTXO hash from absent parent data and hard-error on the
@@ -2127,6 +2144,7 @@ func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, bl
 	opts := []utxo.CreateOption{
 		utxo.WithIgnoreLocked(validationOptions.IgnoreLocked),
 		utxo.WithIgnorePolicyFreeze(validationOptions.IgnorePolicyFreeze),
+		utxo.WithIgnoreConsensusFreeze(validationOptions.IgnoreConsensusFreeze),
 	}
 
 	if validationOptions.OutpointOnlySpend {

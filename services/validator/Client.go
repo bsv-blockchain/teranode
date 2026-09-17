@@ -333,6 +333,7 @@ func buildValidateTxRequest(transactionData []byte, blockHeight uint32, opts *Op
 		SkipScriptValidation:                &opts.SkipScriptValidation,
 		OutpointOnlySpend:                   &opts.OutpointOnlySpend,
 		IgnorePolicyFreeze:                  &opts.IgnorePolicyFreeze,
+		IgnoreConsensusFreeze:               &opts.IgnoreConsensusFreeze,
 	}
 }
 

@@ -73,7 +73,7 @@ func describeAerospikeRecord(record *aerospike.Record) string {
 // setMined decision turns on. Bins listed here are rendered before any others.
 //
 // Without this, plain alphabetical ordering plus truncation is actively
-// misleading: fields.go defines 36 bin names, so an alphabetical cut always
+// misleading: fields.go defines 37 bin names, so an alphabetical cut always
 // renders blockHeights…deletedChildren and always discards spentUtxos,
 // totalUtxos, recordUtxos, utxos, utxoSpendableIn, the freeze record and
 // spendingHeight.
@@ -86,14 +86,15 @@ var binDiagnosticPriority = map[string]int{
 	fields.UtxoFreezeFrom.String():  5,
 	fields.UtxoFreezeUntil.String(): 6,
 	fields.UtxoFreezeExp.String():   7,
-	fields.SpendingHeight.String():  8,
-	fields.SpentExtraRecs.String():  9,
-	fields.TotalExtraRecs.String():  10,
-	fields.Conflicting.String():     11,
-	fields.Locked.String():          12,
-	fields.External.String():        13,
-	fields.DeleteAtHeight.String():  11,
-	fields.PreserveUntil.String():   12,
+	fields.UtxoFreezeRecs.String():  8,
+	fields.SpendingHeight.String():  9,
+	fields.SpentExtraRecs.String():  10,
+	fields.TotalExtraRecs.String():  11,
+	fields.Conflicting.String():     12,
+	fields.Locked.String():          13,
+	fields.External.String():        14,
+	fields.DeleteAtHeight.String():  15,
+	fields.PreserveUntil.String():   16,
 }
 
 func describeAerospikeBins(bins aerospike.BinMap) string {

@@ -48,6 +48,21 @@ The Service features are:
     - the freeze survives a rollback of that spend, so the coin is frozen again with no gap;
     - an alert for a coin that is already spent is still recorded, so a node whose alert
       arrived late judges a fork or a re-mine exactly as the nodes whose alert arrived first.
+- A transaction the node has already validated is not re-spent when a later block
+  carries it, so block validation judges the records of every parent a block's
+  transactions spend — parents in earlier blocks and parents inside the same block alike.
+  A chained parent/child pair frozen after both were validated is therefore rejected
+  inside the interval like any other spend.
+- A block at or below the highest hardcoded checkpoint is canonical by definition, and
+  no alert may retroactively invalidate it: neither tier of a freeze is applied to its
+  spends, on the block-validation and the legacy-sync catch-up paths alike.
+- On Aerospike the record lives in per-output map bins (`utxoFreezeFrom`,
+  `utxoFreezeUntil`, `utxoFreezeExp`) of the record holding the output, and a
+  transaction's main record carries a `utxoFreezeRecs` marker naming the pagination
+  records that hold one, so block validation's parent read never scans a large
+  transaction's pagination records. Spend, freeze, unfreeze and reassign are routed
+  through the Lua path whatever `aerospike_use_native_teranode_ops` says, until the
+  native dispatcher implements the record.
 - A freeze issued through the admin `freeze` RPC with no interval is enforced at every
   height — the behaviour of every freeze issued before intervals existed, so no migration
   is needed.
