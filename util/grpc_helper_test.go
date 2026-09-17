@@ -17,6 +17,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	prometheusgolang "github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -289,6 +290,13 @@ func mockLogger() ulogger.Logger {
 // resetPrometheusOnce resets the sync.Once variables for testing.
 // This is needed to test RegisterPrometheusMetrics multiple times.
 func resetPrometheusOnce() {
+	// Unregister the collectors before resetting the Once. Resetting the Once
+	// alone lets a later RegisterPrometheusMetrics call MustRegister collectors
+	// that are still in the global registry, which panics ("duplicate metrics
+	// collector registration attempted") — flaky across test ordering and
+	// deterministic under -count>1. Unregister is a no-op if not registered.
+	prometheusgolang.Unregister(prometheusMetrics)
+	prometheusgolang.Unregister(grpcClientRetriesTotal)
 	prometheusRegisterServerOnce = sync.Once{}
 	prometheusRegisterClientOnce = sync.Once{}
 }
