@@ -1523,20 +1523,29 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 		return
 	}
 
-	var nodeStatusMessage NodeStatusMessage
-
-	if err := json.Unmarshal(m, &nodeStatusMessage); err != nil {
-		s.logger.Errorf("[handleNodeStatusTopic] json unmarshal error: %v", err)
-		return
-	}
-
 	// Check if this is our own message
 	isSelf := peerID == s.P2PClient.GetID()
 
-	// Drop messages from banned peers before any registration, WebSocket
-	// forwarding, or further processing. This runs before field validation so
-	// a banned peer cannot keep triggering uncached AddBanScore RPCs.
+	// Drop messages from banned peers before decoding, so a banned peer
+	// cannot keep triggering uncached AddBanScore RPCs with malformed
+	// payloads, and before any registration, WebSocket forwarding, or further
+	// processing.
 	if !isSelf && s.shouldSkipBannedPeer(peerID, "handleNodeStatusTopic") {
+		return
+	}
+
+	var nodeStatusMessage NodeStatusMessage
+
+	if err := json.Unmarshal(m, &nodeStatusMessage); err != nil {
+		// The message bus only scores a malformed outer envelope; garbage
+		// inside a valid envelope is a protocol violation this layer must
+		// charge, or a flood of it is free. Score only structurally invalid
+		// JSON: a type mismatch on a single field (another implementation or
+		// version encoding e.g. fee_policy differently) is dropped unscored.
+		s.logger.Errorf("[handleNodeStatusTopic] json unmarshal error from peer %s: %v", peerID, err)
+		if !isSelf && !json.Valid(m) {
+			_ = s.applyBanScore(peerID, ReasonProtocolViolation)
+		}
 		return
 	}
 
@@ -1662,20 +1671,21 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 		s.logger.Warnf("[handleNodeStatusTopic] notification channel full, dropped node_status notification for %s", nodeStatusMessage.PeerID)
 	}
 
-	// Update peer height if provided (but not for our own messages)
+	// Update peer height if provided (but not for our own messages). An
+	// unverifiable tip (missing, short or malformed hash) skips only the
+	// height/hash update: the peer's storage mode and its registry presence
+	// are still recorded below, it just has no known tip.
 	if !isSelf && nodeStatusMessage.BestHeight > 0 && nodeStatusMessage.PeerID != "" {
-		if !sanitizedTipOK {
-			return
-		}
-
 		peerID, err := peer.Decode(nodeStatusMessage.PeerID)
 		if err != nil {
 			s.logger.Errorf("[handleNodeStatusTopic] failed to decode peer ID %s: %v", nodeStatusMessage.PeerID, err)
 			return
 		}
 
-		s.addPeer(peerID, nodeStatusMessage.ClientName, sanitizedBestHeight, sanitizedBestBlockHash, nodeStatusMessage.BaseURL)
-		s.logger.Debugf("[handleNodeStatusTopic] Updated block hash %s for peer %s", notificationBestBlockHash, peerID)
+		if sanitizedTipOK {
+			s.addPeer(peerID, nodeStatusMessage.ClientName, sanitizedBestHeight, sanitizedBestBlockHash, nodeStatusMessage.BaseURL)
+			s.logger.Debugf("[handleNodeStatusTopic] Updated block hash %s for peer %s", notificationBestBlockHash, peerID)
+		}
 
 		// Update storage mode if provided
 		// Store whether the peer is a full node or pruned node
