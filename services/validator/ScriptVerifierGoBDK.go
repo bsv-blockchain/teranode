@@ -361,6 +361,14 @@ func (v *scriptVerifierGoBDK) mapBDKValidationError(errVerify error, consensus b
 	// operator still gets them from the caller's Warnf line above.
 	var abiErr bdkscript.ABIError
 	if errors.As(errVerify, &abiErr) {
+		// This branch returns the same class as the catch-all at the bottom of the
+		// function, so no caller can tell the two apart from the error alone. The
+		// log line is what makes the branch discriminable, and it is the only
+		// ABI-specific operational signal this node emits. A test asserts on it, so
+		// a later refactor that reorders or deletes this branch fails instead of
+		// silently routing ABI errors into the verdict path.
+		v.logger.Warnf("BDK ABI error, call not expressible across the C boundary: code=%d error=%v", abiErr.Code(), errVerify)
+
 		return errors.NewProcessingError(errMsgInvalidTx, errVerify)
 	}
 
@@ -376,8 +384,20 @@ func (v *scriptVerifierGoBDK) mapBDKValidationError(errVerify error, consensus b
 		default:
 			if dosErr.Code() <= bdkscript.DOS_ERR_OK || dosErr.Code() >= bdkscript.DOS_ERR_COUNT {
 				v.logger.Warnf("unknown BDK DoS error code=%d error=%v", dosErr.Code(), errVerify)
+
+				// A code outside the range this build knows is a value this node
+				// cannot interpret, exactly like the unknown error domain handled at
+				// the bottom of this function — so it takes the same node-fault path.
+				// Returning a verdict here would let a policy-class DOS_ERR_* that BDK
+				// adds later read as a hard consensus violation downstream
+				// (SubtreeValidation.go, check_block_subtrees.go) and condemn a block
+				// on a rule this node never evaluated. The fail-safe rule has to hold
+				// one level below the domain boundary too, not only at it.
+				return errors.NewProcessingError(errMsgInvalidTx, errVerify)
 			}
 
+			// A code inside the known range that this switch does not name
+			// explicitly is a genuine verdict from a rule this build understands.
 			return errors.NewTxInvalidError(errMsgInvalidTx, bdkCause(errors.ERR_TX_INVALID, errVerify))
 		}
 	}
