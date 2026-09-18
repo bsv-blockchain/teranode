@@ -1065,6 +1065,24 @@ func Test_SmokeTests(t *testing.T) {
 		tests.SetConflictingBehavior(t, db)
 	})
 
+	t.Run("quick path create spend mined semantics", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.QuickPathCreateSpendMinedSemantics(t, db)
+	})
+
+	t.Run("absent record observables", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.AbsentRecordObservables(t, db)
+	})
+
 	t.Run("set mined unmined since", func(t *testing.T) {
 		db, _ := setup(ctx, t)
 

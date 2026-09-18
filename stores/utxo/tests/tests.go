@@ -1934,3 +1934,114 @@ func DeleteThenUnspendRestoresParentPaginated(t *testing.T, db utxostore.Store, 
 	require.NoError(t, db.Unspend(ctx, spends), "re-unspending an already-unspent output must be a no-op")
 	require.NoError(t, db.DeleteComplete(ctx, child.TxIDChainHash()), "re-completing an already-deleted record must not error")
 }
+
+// QuickPathCreateSpendMinedSemantics pins the exact create/spend/mined state machine
+// the quick-validation route drives, so both backends are known to agree on it
+// (bitcoin-sv/teranode#4838).
+//
+// That route creates a transaction with WithCreateOnly + WithMinedBlockInfo +
+// WithLocked, then spends its parent's output with WithSpendOnly +
+// WithIgnoreLocked(true). The finding turns on two properties of that sequence: the
+// spend lands even though the record is locked, and the later mined transition
+// CLEARS the lock. A lock that survived would make the route's partial state
+// unusable by anything else; it does not, which is why "the UTXOs stay locked" is
+// not a rollback.
+func QuickPathCreateSpendMinedSemantics(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	const (
+		candidateBlockID = uint32(9911)
+		acceptedBlockID  = uint32(9912)
+	)
+
+	parent := newTestTx(t, 7_100_000)
+
+	_, _, err := db.SpendAndCreate(ctx, parent, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	defer func() { _ = db.Delete(ctx, parent.TxIDChainHash()) }()
+
+	child := bt.NewTx()
+	require.NoError(t, child.From(
+		parent.TxIDChainHash().String(), 0,
+		parent.Outputs[0].LockingScript.String(),
+		parent.Outputs[0].Satoshis,
+	))
+	child.Inputs[0].UnlockingScript = dummyUnlockingScript
+	require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+
+	_ = db.Delete(ctx, child.TxIDChainHash())
+
+	defer func() { _ = db.Delete(ctx, child.TxIDChainHash()) }()
+
+	// Create the child the way the quick path does: locked, and already stamped with
+	// the candidate block's id.
+	_, _, err = db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1,
+		utxostore.WithCreateOnly(),
+		utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: candidateBlockID, BlockHeight: 101, SubtreeIdx: 0}),
+		utxostore.WithLocked(true),
+	)
+	require.NoError(t, err)
+
+	md, err := db.Get(ctx, child.TxIDChainHash(), fields.Locked, fields.BlockIDs)
+	require.NoError(t, err)
+	require.True(t, md.Locked, "the quick path creates its records locked")
+	require.Equal(t, []uint32{candidateBlockID}, md.BlockIDs)
+
+	// Spend the parent output on the child's behalf. The lock does not stop it.
+	_, resultSpends, err := db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1,
+		utxostore.WithSpendOnly(), utxostore.WithIgnoreLocked(true))
+	require.NoError(t, err)
+	require.Len(t, resultSpends, 1)
+
+	parentUTXOHash, err := util.UTXOHashFromOutput(parent.TxIDChainHash(), parent.Outputs[0], 0)
+	require.NoError(t, err)
+
+	resp, err := db.GetSpend(ctx, &utxostore.Spend{TxID: parent.TxIDChainHash(), Vout: 0, UTXOHash: parentUTXOHash})
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_SPENT), resp.Status, "the genuine parent output is spent by the candidate's child")
+
+	// The mined transition clears the lock: the flag is not a rollback barrier.
+	_, err = db.SetMinedMulti(ctx, []*chainhash.Hash{child.TxIDChainHash()},
+		utxostore.MinedBlockInfo{BlockID: acceptedBlockID, BlockHeight: 102, SubtreeIdx: 1, OnLongestChain: true})
+	require.NoError(t, err)
+
+	md, err = db.Get(ctx, child.TxIDChainHash(), fields.Locked, fields.BlockIDs, fields.Tx)
+	require.NoError(t, err)
+	require.False(t, md.Locked, "the mined transition unlocks the record")
+	require.Contains(t, md.BlockIDs, acceptedBlockID)
+	require.NotNil(t, md.Tx)
+	require.Len(t, md.Tx.Outputs, len(child.Outputs), "the outputs survive the mined transition intact")
+}
+
+// AbsentRecordObservables pins what "no record, no spend" MEANS on a store, so the
+// no-mutation assertions the quick-validation regression makes are the same claim on
+// both backends rather than an SQL-only one (bitcoin-sv/teranode#4838):
+//
+//   - Get for a transaction that was never created reports not-found, not an empty
+//     record;
+//   - GetSpend for an output nobody spent reports it spendable.
+func AbsentRecordObservables(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	absent := newTestTx(t, 7_200_000)
+	_ = db.Delete(ctx, absent.TxIDChainHash())
+
+	_, err := db.Get(ctx, absent.TxIDChainHash())
+	require.Error(t, err)
+	require.ErrorIs(t, err, errors.ErrTxNotFound, "an absent transaction must be not-found, never an empty record")
+
+	unspentParent := newTestTx(t, 7_210_000)
+
+	_, _, err = db.SpendAndCreate(ctx, unspentParent, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	defer func() { _ = db.Delete(ctx, unspentParent.TxIDChainHash()) }()
+
+	utxoHash, err := util.UTXOHashFromOutput(unspentParent.TxIDChainHash(), unspentParent.Outputs[0], 0)
+	require.NoError(t, err)
+
+	resp, err := db.GetSpend(ctx, &utxostore.Spend{TxID: unspentParent.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash})
+	require.NoError(t, err)
+	require.Equal(t, int(utxostore.Status_OK), resp.Status, "an output nobody spent must report spendable")
+}
