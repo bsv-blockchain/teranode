@@ -265,7 +265,7 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 		db:                    db,
 		engine:                util.SQLEngine(storeURL.Scheme),
 		logger:                logger,
-		responseCache:         NewGenerationalCache(),
+		responseCache:         NewGenerationalCache(tSettings.BlockChain.GenerationalCacheCapacity),
 		cacheTTL:              2 * time.Minute,
 		chainParams:           tSettings.ChainCfgParams,
 		rawMinerTag:           tSettings.BlockChain.RawMinerTag,
@@ -285,7 +285,7 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 	go s.blockIDReservations.Start() // janitor
 
 	if useInMemory {
-		s.chainWalkCache = NewGenerationalCache()
+		s.chainWalkCache = NewGenerationalCache(tSettings.BlockChain.GenerationalCacheCapacity)
 		s.offChainBlockIDs = make(map[uint32]struct{})
 	}
 

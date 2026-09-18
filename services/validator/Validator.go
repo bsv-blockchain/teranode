@@ -287,10 +287,8 @@ type Validator struct {
 	// foreseeable chain length.
 	//
 	// mtpMu guards concurrent access to mtpStore.
-	//   - EnsureMTPLoaded acquires the write lock for the duration of the fetch + append +
-	//     in-place overlap patch. Concurrent EnsureMTPLoaded callers serialise; the second
-	//     one fast-paths out after acquiring the lock if the first already populated the
-	//     range it needs.
+	//   - EnsureMTPLoaded serializes fetches with mtpLoadMu, leaving readers free
+	//     during RPCs. It takes mtpMu only to inspect or publish the store.
 	//   - validateTransaction acquires the read lock around its MTP lookups. This protects
 	//     against the cross-block case where block N's per-tx goroutines are still reading
 	//     while block N+1's EnsureMTPLoaded is appending or patching overlap entries (the
@@ -298,8 +296,9 @@ type Validator struct {
 	//     readers may be addressing).
 	// Same-block contention is negligible: EnsureMTPLoaded runs once per block before per-tx
 	// goroutines start, and per-tx readers only contend with each other on the read lock.
-	mtpMu    sync.RWMutex
-	mtpStore []uint32
+	mtpLoadMu sync.Mutex
+	mtpMu     sync.RWMutex
+	mtpStore  []uint32
 }
 
 // New creates a new Validator instance with the provided configuration.
@@ -2742,13 +2741,20 @@ func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) err
 
 	needed := blockHeight
 
-	v.mtpMu.Lock()
-	defer v.mtpMu.Unlock()
+	v.mtpMu.RLock()
+	covered := uint32(len(v.mtpStore)) > needed
+	v.mtpMu.RUnlock()
+	if covered {
+		return nil
+	}
 
-	// Fast path: store already covers the needed height.  A concurrent EnsureMTPLoaded
-	// that won the lock may have already populated the store; re-checking here avoids a
-	// redundant gRPC fetch.
+	// Serialize loaders without blocking readers of already loaded heights.
+	// Recheck after admission so concurrent callers do not duplicate RPCs.
+	v.mtpLoadMu.Lock()
+	defer v.mtpLoadMu.Unlock()
+	v.mtpMu.RLock()
 	currentLen := uint32(len(v.mtpStore))
+	v.mtpMu.RUnlock()
 	if currentLen > needed {
 		return nil
 	}
@@ -2774,6 +2780,9 @@ func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) err
 	if uint32(len(fetched)) != expected {
 		return errors.NewProcessingError("[Validator][EnsureMTPLoaded] MTP count mismatch: expected %d, got %d", expected, len(fetched))
 	}
+
+	v.mtpMu.Lock()
+	defer v.mtpMu.Unlock()
 
 	// Patch any overlap values that changed (reorg-invalidated entries).
 	for i := fromHeight; i < currentLen; i++ {
@@ -2806,7 +2815,7 @@ func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) err
 // Phase 2 is only executed when phase 1 succeeds and SkipPolicyChecks is true (block context).
 // This avoids the cost of MTP lookups when a transaction fails normal validation.
 // MTP values are read from v.mtpStore, pre-loaded by EnsureMTPLoaded before concurrent
-// goroutines start, so no gRPC calls or locking are needed here.
+// goroutines start; lookups take a read lock and do not issue gRPC calls.
 func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
 	ctx, span, deferFn := tracing.Tracer("validator").Start(ctx, "validateTransaction",
 		tracing.WithHistogram(prometheusTransactionValidate),
