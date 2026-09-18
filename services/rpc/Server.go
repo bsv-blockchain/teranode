@@ -285,8 +285,8 @@ var rpcUnimplemented = map[string]struct{}{
 }
 
 // rpcMethodAccess is the privilege a JSON-RPC method requires. Every method in
-// rpcHandlersBeforeInit must appear in rpcMethodPolicy exactly once; a
-// regression test enforces this so a new handler cannot be served to the limited
+// rpcHandlersBeforeInit must appear in rpcMethodPolicy; a regression test
+// enforces this so a new handler cannot be served to the limited
 // role by accident, and an unclassified method is treated as admin-only.
 type rpcMethodAccess int
 

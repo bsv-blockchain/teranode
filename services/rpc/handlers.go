@@ -2761,7 +2761,7 @@ func alertSpendFromArgs(txID string, vout int, utxoHash string) (*utxo.Spend, er
 // management process.
 //
 // Security considerations:
-// - Requires admin privileges to execute
+// - Admin-only: rpcMethodPolicy classifies it rpcAccessAdmin, so rpc_limit_user is rejected before dispatch
 // - May trigger transaction reordering in the transaction processing system
 // - Changes persist across node restarts
 // - Should be used carefully to avoid disrupting legitimate transactions
@@ -2809,7 +2809,7 @@ func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 // The reassign operation is used to correct mistakes in the UTXO management process.
 //
 // Security considerations:
-// - Requires admin privileges to execute
+// - Admin-only: rpcMethodPolicy classifies it rpcAccessAdmin, so rpc_limit_user is rejected before dispatch
 // - May trigger transaction reordering in the transaction processing system
 // - Changes persist across node restarts
 // - Should be used carefully to avoid disrupting legitimate transactions
@@ -2833,14 +2833,7 @@ func handleReassign(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 	c := cmd.(*bsvjson.ReassignCmd)
 
-	var err error
-
-	oldTXIDHash, err := chainhash.NewHashFromStr(c.OldTxID)
-	if err != nil {
-		return nil, err
-	}
-
-	oldUTXOHash, err := chainhash.NewHashFromStr(c.OldUTXOHash)
+	oldSpend, err := alertSpendFromArgs(c.OldTxID, c.OldVout, c.OldUTXOHash)
 	if err != nil {
 		return nil, err
 	}
@@ -2850,9 +2843,7 @@ func handleReassign(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, err
 	}
 
-	if err = s.utxoStore.ReAssignUTXO(ctx,
-		&utxo.Spend{TxID: oldTXIDHash, Vout: uint32(c.OldVout), UTXOHash: oldUTXOHash}, // nolint:gosec
-		&utxo.Spend{UTXOHash: newUTXOHash}, s.settings); err != nil {
+	if err = s.utxoStore.ReAssignUTXO(ctx, oldSpend, &utxo.Spend{UTXOHash: newUTXOHash}, s.settings); err != nil {
 		return nil, err
 	}
 

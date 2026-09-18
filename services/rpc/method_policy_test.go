@@ -17,6 +17,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
@@ -69,6 +70,30 @@ func TestRPCMethodPolicyLimitedTiers(t *testing.T) {
 	}
 
 	require.ElementsMatch(t, []string{"getminingcandidate", "sendrawtransaction", "submitblock", "submitminingsolution"}, writable)
+
+	// The read-only tier is pinned too, so promoting an admin method into the
+	// limited role is a deliberate, reviewed change to this list.
+	var readable []string
+
+	for method, access := range rpcMethodPolicy {
+		if access == rpcAccessLimitedRead {
+			readable = append(readable, method)
+		}
+	}
+
+	require.ElementsMatch(t, []string{
+		"createrawtransaction", "decoderawtransaction", "decodescript", "estimatefee",
+		"getbestblock", "getbestblockhash", "getblock", "getblockcount", "getblockhash",
+		"getblockheader", "getcfilter", "getcfilterheader", "getcurrentnet", "getdifficulty",
+		"getheaders", "getinfo", "getnettotals", "getnetworkhashps", "getrawmempool",
+		"getrawtransaction", "gettxout", "gettxoutproof", "help", "searchrawtransactions",
+		"uptime", "validateaddress", "verifymessage", "verifytxoutproof", "version",
+	}, readable)
+
+	// Node administration must stay admin-only regardless of how the tiers evolve.
+	for _, method := range []string{"invalidateblock", "reconsiderblock", "setban", "clearbanned", "generate", "generatetoaddress", "stop"} {
+		require.Equal(t, rpcAccessAdmin, methodAccess(method), "%s must be admin-only", method)
+	}
 }
 
 // recordingUTXOStore wraps a real store and records every alert-system mutation
@@ -113,6 +138,20 @@ func (r *recordingUTXOStore) mutationCount() int {
 	return len(r.freezes) + len(r.unfreezes) + r.reassigns
 }
 
+func (r *recordingUTXOStore) snapshotFreezes() []*utxo.Spend {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return append([]*utxo.Spend(nil), r.freezes...)
+}
+
+func (r *recordingUTXOStore) snapshotUnfreezes() []*utxo.Spend {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return append([]*utxo.Spend(nil), r.unfreezes...)
+}
+
 type rpcResponse struct {
 	Result json.RawMessage `json:"result"`
 	Error  *struct {
@@ -127,6 +166,9 @@ func basicAuth(user, pass string) string {
 
 // startTestRPCServer binds a real listener and serves the full HTTP path
 // (checkAuth -> jsonRPCRead -> policy -> handler) exactly as a client hits it.
+// The server is a struct literal, not NewServer: only the UTXO store and the
+// help cache are wired, so handlers that need other service clients will fail
+// inside the handler rather than at the policy gate.
 func startTestRPCServer(t *testing.T, store utxo.Store, tSettings *settings.Settings) string {
 	t.Helper()
 
@@ -143,17 +185,32 @@ func startTestRPCServer(t *testing.T, store utxo.Store, tSettings *settings.Sett
 		statusLines:            make(map[int]string),
 		requestProcessShutdown: make(chan struct{}),
 		utxoStore:              store,
+		helpCacher:             newHelpCacher(),
 		authsha:                sha256.Sum256([]byte(basicAuth("admin", "adminpass"))),
 		limitauthsha:           sha256.Sum256([]byte(basicAuth("limited", "limitpass"))),
 	}
 	require.NoError(t, s.Init(context.Background()))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
+	done := make(chan struct{})
+
+	t.Cleanup(func() {
+		cancel()
+
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Log("rpc server did not stop within 5s")
+		}
+	})
 
 	readyCh := make(chan struct{})
 
-	go func() { _ = s.Start(ctx, readyCh) }()
+	go func() {
+		defer close(done)
+
+		_ = s.Start(ctx, readyCh)
+	}()
 
 	select {
 	case <-readyCh:
@@ -249,6 +306,7 @@ func TestLimitedUserCannotAdministerUTXOs(t *testing.T) {
 			resp := callRPC(t, serverURL, limited, tc.method, tc.params...)
 			require.NotNil(t, resp.Error, "%s must fail for the limited role", tc.method)
 			require.Equal(t, "limited user not authorized for this method", resp.Error.Message)
+			require.Equal(t, bsvjson.ErrRPCInvalidParams.Code, bsvjson.RPCErrorCode(resp.Error.Code), "error code is part of the wire contract")
 			require.Equal(t, before, store.mutationCount(), "store mutation reached for %s", tc.method)
 		})
 	}
@@ -273,9 +331,10 @@ func TestLimitedUserCannotAdministerUTXOs(t *testing.T) {
 		resp := callRPC(t, serverURL, admin, "freeze", txID.String(), 0, utxoHash.String())
 		require.Nil(t, resp.Error, "admin freeze failed: %+v", resp.Error)
 
-		require.Len(t, store.freezes, 1)
-		require.Equal(t, utxoHash.String(), store.freezes[0].UTXOHash.String(), "handler must pass the caller-supplied commitment, not the txid")
-		require.Equal(t, txID.String(), store.freezes[0].TxID.String())
+		freezes := store.snapshotFreezes()
+		require.Len(t, freezes, 1)
+		require.Equal(t, utxoHash.String(), freezes[0].UTXOHash.String(), "handler must pass the caller-supplied commitment, not the txid")
+		require.Equal(t, txID.String(), freezes[0].TxID.String())
 
 		spendResp, err := sqlStore.GetSpend(ctx, &utxo.Spend{TxID: txID, Vout: 0, UTXOHash: utxoHash})
 		require.NoError(t, err)
@@ -283,8 +342,9 @@ func TestLimitedUserCannotAdministerUTXOs(t *testing.T) {
 
 		resp = callRPC(t, serverURL, admin, "unfreeze", txID.String(), 0, utxoHash.String())
 		require.Nil(t, resp.Error, "admin unfreeze failed: %+v", resp.Error)
-		require.Len(t, store.unfreezes, 1)
-		require.Equal(t, utxoHash.String(), store.unfreezes[0].UTXOHash.String())
+		unfreezes := store.snapshotUnfreezes()
+		require.Len(t, unfreezes, 1)
+		require.Equal(t, utxoHash.String(), unfreezes[0].UTXOHash.String())
 
 		spendResp, err = sqlStore.GetSpend(ctx, &utxo.Spend{TxID: txID, Vout: 0, UTXOHash: utxoHash})
 		require.NoError(t, err)

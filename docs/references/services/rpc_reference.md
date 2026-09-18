@@ -421,7 +421,7 @@ verifytxoutproof, version
 **State-changing capabilities deliberately granted to the limited role:**
 sendrawtransaction, submitblock, getminingcandidate, submitminingsolution
 
-These relay transactions and mining work. They are a separate, explicit grant on top of
+These relay transactions, and hand out and accept mining work. They are a separate, explicit grant on top of
 the read-only tier, not an implication of it; do not treat the limited role as strictly
 read-only if these matter to your threat model.
 
