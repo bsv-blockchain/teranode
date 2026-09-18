@@ -53,6 +53,62 @@ func ValidateSubtreeMatchesKey(subtree *subtreepkg.Subtree, key *chainhash.Hash)
 	return nil
 }
 
+// ValidateSubtreeNodesMatchKey recomputes the subtree's merkle root from its
+// Nodes and compares that to the key, then compares the file's claimed root to
+// the key as well.
+//
+// The second comparison is not redundant. RootHash() returns the .subtree
+// header's cached bytes for anything deserialized from storage, and
+// Block.CheckMerkleRoot composes that cached value for every subtree after the
+// first. Proving claim == recomputed == key is what makes every later
+// RootHash() consumer sound: the cache is then known to be the tree's own root
+// rather than a peer-supplied field that happens to sit in the same file.
+//
+// Use this rather than ValidateSubtreeMatchesKey wherever the node list goes on
+// to drive a decision. The claim-only check catches the wrong file under the
+// right key; only this one catches a rewritten header over an unrelated node
+// list (bitcoin-sv/teranode#4838).
+func ValidateSubtreeNodesMatchKey(subtree *subtreepkg.Subtree, key *chainhash.Hash) error {
+	if subtree == nil {
+		return errors.NewProcessingError("subtree is nil")
+	}
+
+	if key == nil {
+		return errors.NewProcessingError("subtree key is nil")
+	}
+
+	// BuildMerkleTreeStoreFromBytes returns an EMPTY slice for an empty node
+	// list, so the len-1 index below would panic without this.
+	if len(subtree.Nodes) == 0 {
+		return errors.NewProcessingError("subtree has no nodes, so it cannot be matched against key %s", key.String())
+	}
+
+	store, err := subtreepkg.BuildMerkleTreeStoreFromBytes(subtree.Nodes)
+	if err != nil {
+		return errors.NewProcessingError("failed to recompute merkle root of subtree for key %s", key.String(), err)
+	}
+
+	if store == nil || len(*store) == 0 {
+		return errors.NewProcessingError("recomputed merkle tree of subtree for key %s is empty", key.String())
+	}
+
+	computed := (*store)[len(*store)-1]
+	if !computed.IsEqual(key) {
+		return errors.NewProcessingError("subtree nodes do not hash to its key %s: they hash to %s", key.String(), computed.String())
+	}
+
+	rootHash := subtree.RootHash()
+	if rootHash == nil {
+		return errors.NewProcessingError("subtree has no root hash, so it cannot be matched against key %s", key.String())
+	}
+
+	if !rootHash.IsEqual(key) {
+		return errors.NewProcessingError("subtree does not match its key %s: file was built for %s", key.String(), rootHash.String())
+	}
+
+	return nil
+}
+
 // NewSubtreeMetaFromValidatedReader deserializes a .subtreeMeta stream after
 // checking its fixed 36-byte header — the root hash the file was built for and
 // the entry count it claims — against the subtree and key it is being read for
