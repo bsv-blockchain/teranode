@@ -195,11 +195,13 @@ func TestScriptVerifierGoBDKValidateTransactionRejectsCoinbaseBeforeBDK(t *testi
 func TestScriptVerifierGoBDKMapDoSErrors(t *testing.T) {
 	verifier := &scriptVerifierGoBDK{logger: ulogger.TestLogger{}}
 
+	// Only codes inside the range this build knows. DOS_ERR_OK and an
+	// out-of-range code are not verdicts and are pinned separately by
+	// TestScriptVerifierGoBDKClassifiesOutOfRangeDoSCodeAsNodeFault.
 	tests := []struct {
 		code       bdkscript.DoSErrorCode
 		wantPolicy bool
 	}{
-		{code: bdkscript.DOS_ERR_OK},
 		{code: bdkscript.DOS_ERR_NULL_PREVOUT},
 		{code: bdkscript.DOS_ERR_P2SH_OUTPUT_POST_GENESIS},
 		{code: bdkscript.DOS_ERR_SIGOPS_CONSENSUS},
@@ -218,7 +220,6 @@ func TestScriptVerifierGoBDKMapDoSErrors(t *testing.T) {
 		{code: bdkscript.DOS_ERR_INPUT_VALUES_OUT_OF_RANGE},
 		{code: bdkscript.DOS_ERR_INPUTS_BELOW_OUTPUTS},
 		{code: bdkscript.DOS_ERR_INSUFFICIENT_FEE, wantPolicy: true},
-		{code: bdkscript.DoSErrorCode(999)},
 	}
 
 	for _, tt := range tests {
@@ -235,6 +236,90 @@ func TestScriptVerifierGoBDKMapDoSErrors(t *testing.T) {
 	// (e.g. RPC reject-reason mapping) can identify the policy-floor rejection.
 	feeErr := verifier.mapBDKValidationError(bdkscript.NewDoSError(bdkscript.DOS_ERR_INSUFFICIENT_FEE), false)
 	assert.Contains(t, feeErr.Error(), "transaction fee is too low")
+}
+
+// TestScriptVerifierGoBDKClassifiesOutOfRangeDoSCodeAsNodeFault pins the
+// fail-safe one level below the error-domain boundary.
+//
+// A DoS code outside the range this build knows is a value this node cannot
+// interpret, exactly like an unrecognised error domain. Returning a verdict for
+// it would let a policy-class DOS_ERR_* that BDK adds later read as a hard
+// consensus violation at SubtreeValidation.go and check_block_subtrees.go, and
+// condemn a block on a rule this node never evaluated.
+//
+// The sentinels are deliberately included: DOS_ERR_OK is "no failure" and
+// DOS_ERR_COUNT is an enum bound, so neither is a verdict about a transaction.
+func TestScriptVerifierGoBDKClassifiesOutOfRangeDoSCodeAsNodeFault(t *testing.T) {
+	verifier := &scriptVerifierGoBDK{logger: ulogger.TestLogger{}}
+
+	for _, code := range []bdkscript.DoSErrorCode{
+		bdkscript.DOS_ERR_OK,
+		bdkscript.DOS_ERR_COUNT,
+		bdkscript.DoSErrorCode(999),
+		bdkscript.DoSErrorCode(-1),
+	} {
+		for _, consensus := range []bool{false, true} {
+			t.Run(fmt.Sprintf("dos_code_%d_consensus_%t", code, consensus), func(t *testing.T) {
+				got := verifier.mapBDKValidationError(bdkscript.NewDoSError(code), consensus)
+
+				require.ErrorIs(t, got, errors.ErrProcessing)
+				require.False(t, errors.Is(got, errors.ErrTxInvalid),
+					"a DoS code this build cannot interpret must never become a transaction verdict")
+				require.False(t, errors.Is(got, errors.ErrTxPolicy))
+			})
+		}
+	}
+}
+
+// capturingT records the Logf calls a logger makes so a test can assert on a
+// specific line. ulogger.UnifiedTestLogger routes every level through
+// TestingT.Logf, and its default level (Info) lets Warnf through.
+type capturingT struct{ lines []string }
+
+func (c *capturingT) Errorf(string, ...interface{}) {}
+func (c *capturingT) FailNow()                      {}
+func (c *capturingT) Logf(format string, args ...any) {
+	c.lines = append(c.lines, fmt.Sprintf(format, args...))
+}
+
+// TestScriptVerifierGoBDKLogsABIErrorDistinctly is what makes the ABIError branch
+// discriminable.
+//
+// That branch returns the same class as the unknown-domain catch-all, so no
+// assertion on the returned error can tell whether the branch ran. Without this
+// test, deleting it leaves the whole suite green while a later reorder could send
+// ABI errors into the verdict path and condemn a valid block. The log line is
+// also the only ABI-specific operational signal this node emits.
+func TestScriptVerifierGoBDKLogsABIErrorDistinctly(t *testing.T) {
+	for _, code := range abiFailureCodes {
+		t.Run(fmt.Sprintf("abi_code_%d", code), func(t *testing.T) {
+			capt := &capturingT{}
+			verifier := &scriptVerifierGoBDK{logger: ulogger.NewUnifiedTestLogger(capt, t.Name(), "validator")}
+
+			got := verifier.mapBDKValidationError(bdkscript.NewABIError(code), false)
+			require.ErrorIs(t, got, errors.ErrProcessing)
+
+			logged := strings.Join(capt.lines, "\n")
+			require.Contains(t, logged, "BDK ABI error")
+			require.Contains(t, logged, fmt.Sprintf("code=%d", code))
+		})
+	}
+
+	// The other node-fault paths must NOT emit the ABI line, or it would not
+	// identify anything.
+	t.Run("not_emitted_for_other_node_faults", func(t *testing.T) {
+		capt := &capturingT{}
+		verifier := &scriptVerifierGoBDK{logger: ulogger.NewUnifiedTestLogger(capt, t.Name(), "validator")}
+
+		require.ErrorIs(t,
+			verifier.mapBDKValidationError(bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_CGO_EXCEPTION), false),
+			errors.ErrProcessing)
+		require.ErrorIs(t,
+			verifier.mapBDKValidationError(foreignError{msg: "unknown TxError domain=7 code=3"}, false),
+			errors.ErrProcessing)
+
+		require.NotContains(t, strings.Join(capt.lines, "\n"), "BDK ABI error")
+	})
 }
 
 // TestScriptVerifierGoBDKSurfacesTheCauseOnce pins how the engine's own verdict
