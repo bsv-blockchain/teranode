@@ -63,7 +63,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 		// A placeholder is ignored by the server (which uses a random key), so a
 		// client that sent it would still be rejected; warn instead of logging a
 		// reassuring "using API key" line that contradicts the server.
-		logger.Warnf("[P2P Client] grpc_admin_api_key is unset or a well-known placeholder; admin RPCs (ban, unban, connect/disconnect peer) will fail with Unauthenticated because the server ignores placeholders and uses a random key")
+		logger.Warnf("[P2P Client] grpc_admin_api_key is unset or a well-known placeholder; protected admin and data-plane reporting RPCs will fail with Unauthenticated because the server ignores placeholders and uses a random key")
 	} else {
 		logger.Infof("[P2P Client] Using API key for authentication")
 	}
@@ -71,8 +71,12 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
 		MaxRetries:   tSettings.GRPCMaxRetries,
 		RetryBackoff: tSettings.GRPCRetryBackoff,
-		APIKey:       apiKey, // Add the API key to the connection options
-		CallerName:   "p2p",
+		// Attach the key only to the protected RPCs that actually require it, so
+		// the credential is not stamped onto every ordinary call over what is
+		// a plaintext transport by default.
+		APIKey:        apiKey,
+		APIKeyMethods: authProtectedMethods(),
+		CallerName:    "p2p",
 	}, tSettings)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to init p2p service connection ", err)

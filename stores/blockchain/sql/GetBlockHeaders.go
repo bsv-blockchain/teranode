@@ -95,6 +95,9 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 		cacheTTL = chainWalkCacheTTL
 	}
 
+	// Caller-supplied counts produce distinct cache keys. GenerationalCache
+	// bounds both entry count (blockchain_generationalCacheCapacity) and retained
+	// header-query payloads (64 MiB); larger results are returned without caching.
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeaders-%s-%d", blockHashFrom.String(), numberOfHeaders)))
 	cacheOp := cache.NewOp(cacheID)
 
@@ -229,8 +232,13 @@ func (s *SQL) processBlockHeadersRows(rows *sql.Rows, numberOfHeaders uint64, ha
 		processedAt    *time.CustomTime
 	)
 
-	blockHeaders := make([]*model.BlockHeader, 0, numberOfHeaders)
-	blockHeaderMetas := make([]*model.BlockHeaderMeta, 0, numberOfHeaders)
+	// numberOfHeaders comes straight off the wire and is only used as a SQL
+	// LIMIT, which a huge value satisfies trivially - so bound what it is
+	// allowed to preallocate here, after the query has already run.
+	capacity := preallocFor(numberOfHeaders)
+
+	blockHeaders := make([]*model.BlockHeader, 0, capacity)
+	blockHeaderMetas := make([]*model.BlockHeaderMeta, 0, capacity)
 
 	for rows.Next() {
 		blockHeader := &model.BlockHeader{}

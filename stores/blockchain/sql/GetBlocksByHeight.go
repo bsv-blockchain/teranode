@@ -78,8 +78,7 @@ func (s *SQL) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	capacity := max(1, endHeight-startHeight+1)
-	blocks := make([]*model.Block, 0, capacity)
+	blocks := make([]*model.Block, 0, preallocForRange(startHeight, endHeight))
 
 	var q string
 	if s.mainChainRebuilding.Load() > 0 {

@@ -31,7 +31,7 @@ func createMockSQL() (*SQL, sqlmock.Sqlmock, error) {
 	s := &SQL{
 		db:            udb,
 		logger:        ulogger.TestLogger{},
-		responseCache: NewGenerationalCache(),
+		responseCache: NewGenerationalCache(0),
 		cacheTTL:      2 * time.Minute,
 		chainParams:   tSettings.ChainCfgParams,
 	}

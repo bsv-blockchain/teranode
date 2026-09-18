@@ -426,13 +426,16 @@ getpeerinfo, invalidateblock, reconsiderblock, setban, isbanned, listbanned, cle
 
 For GRPC services, certain administrative operations require additional API key authentication:
 
-- **Protected Methods**: state-mutating admin operations require API key authentication. On the P2P service these are `BanPeer`, `UnbanPeer`, `ClearBanned`, `AddBanScore`, `ResetReputation`, `ConnectPeer` and `DisconnectPeer`; on the Legacy service, `BanPeer` and `UnbanPeer`.
-- **Configuration**: Set via the `grpc_admin_api_key` setting. Source it from an environment variable or secret store, not committed configuration; well-known placeholders (e.g. `testkey`, `changeme`) are ignored at startup (logged and treated as unset).
-- **Fail-closed default**: if no API key is configured (or a placeholder is ignored), the server generates a random key at startup. This *generated* key is never logged, and it leaves the protected admin RPCs unreachable until an operator sets a shared key that both the server and its internal clients read.
-- **Usage**: API key must be included in GRPC requests as metadata with the key `x-api-key`.
+- **Protected Methods**: `BanPeer`, `UnbanPeer`, `ClearBanned`, `AddBanScore`, `ResetReputation`, `ConnectPeer` and `DisconnectPeer` plus all ten internal catchup, validation, and download reporting RPCs in P2P (the full `authProtectedMethods` set), and `BanPeer`, `UnbanPeer` and `ClearBanned` in Legacy, and every state-mutating RPC on the Blockchain service — including `SendNotification`, `ReportPeerFailure`, `SetBlockSubtreesSet`, `AddBlock`, `InvalidateBlock`, `RevalidateBlock`, `SetState`, `Run`/`Idle`/`SendFSMEvent`, `GetNextBlockID` and the `PeerRegistryService` mutation RPCs
+- **Configuration**: Set via `grpc_admin_api_key` setting in the configuration file. It ships empty
+- **Empty key**: P2P generates a random key and rejects protected calls with `Unauthenticated`, including data-plane reports needed for sync-peer selection. Blockchain and Legacy disable gRPC admin authentication and warn that protected RPCs are reachable without credentials
+- **Placeholder keys**: P2P ignores known placeholders and uses its random-key, fail-closed path. Blockchain and Legacy refuse startup with a configuration error
+- **Weak keys**: P2P rejects short real keys on non-loopback listeners outside regtest; use a shared random secret of at least 32 characters
+- **Usage**: API key must be included in GRPC requests as metadata with the key `x-api-key`
+- **HTTP**: The blockchain service's `POST /invalidate/:hash` and `POST /revalidate/:hash` routes take the same key in an `x-api-key` header, and are disabled outright when no key is configured
 
 !!! warning "Security Note"
-    The API key provides administrative access to peer-policy operations. Keep it secret, never commit it, and prefer `security_level_grpc >= 2` (verified TLS) when the gRPC listener is not loopback-bound so the key is not exposed in transit. Note that a *configured* key is currently echoed in the node's startup settings dump, so treat startup logs as sensitive and prefer supplying the key via the environment or a secret store.
+    The API key provides administrative access to peer-policy operations and the blockchain service's state-mutating RPCs. Keep it secret, never commit it, and prefer `security_level_grpc >= 2` (verified TLS) when the gRPC listener is not loopback-bound so the key is not exposed in transit. See the rolling-upgrade note in the [RPC topic documentation](../../topics/services/rpc.md) before enabling it on a running cluster.
 
 ## General Format
 

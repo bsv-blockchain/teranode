@@ -121,6 +121,7 @@ All metrics are CounterVec type with labels: `function` (handler function name),
 | `teranode_blockchain_get_block_header_ids`              | Histogram | Histogram of GetBlockHeaderIDs calls to the blockchain service          |
 | `teranode_blockchain_invalidate_block`                  | Histogram | Histogram of InvalidateBlock calls to the blockchain service            |
 | `teranode_blockchain_revalidate_block`                  | Histogram | Histogram of RevalidateBlock calls to the blockchain service            |
+| `teranode_blockchain_notifications_dropped_total` | Counter | Replaceable PING notifications dropped when the shared queue is full (`type` label); delivery-critical notifications wait for queue space or return a context error |
 | `teranode_blockchain_send_notification`                 | Histogram | Histogram of SendNotification calls to the blockchain service           |
 | `teranode_blockchain_set_block_mined_set`               | Histogram | Histogram of SetBlockMinedSet calls to the blockchain service           |
 | `teranode_blockchain_get_blocks_mined_not_set`          | Histogram | Histogram of GetBlocksMinedNotSet calls to the blockchain service       |
@@ -445,3 +446,14 @@ CounterVec metrics use labels: `function` (function name), `error` (error type).
 | `teranode_subtreeprocessor_dynamic_subtree_size`         | Gauge     | Size of the dynamic subtree in the subtree processor              |
 | `teranode_subtreeprocessor_current_state`                | Gauge     | Current state of the subtree processor                           |
 | `teranode_subtreeprocessor_oversize_batch_admitted_total` | Counter  | Number of client batches that exceeded the normalized `blockassembly_maxQueueItems` and were admitted alone onto an empty queue, so the ceiling is transiently exceeded by one batch rather than that client wedging forever. **Any** non-zero value means a client's batch size is above this pod's normalized cap and the cross-pod sizing guidance in the `blockassembly_maxQueueItems` longdesc has not been applied |
+
+## gRPC Infrastructure Metrics
+
+Cross-cutting metrics emitted by the shared gRPC client/server helpers (`util/grpc_helper.go`), not tied to a single service.
+
+| Metric Name                          | Type       | Description                                                                                                                                          |
+|---------------------------------------|------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `teranode_grpc_panics_recovered_total` | CounterVec | Total number of gRPC handler panics recovered by the panic-recovery interceptor. Labels: `grpc_service`, `grpc_method`.                                |
+| `teranode_grpc_auth_rejections_total`  | CounterVec | Total number of gRPC requests rejected by the admin API key auth interceptor (missing metadata, missing key, or a key that does not match). Labels: `grpc_method`. Watch this counter during a rolling upgrade to catch a mismatched `grpc_admin_api_key` across services - protected RPCs fail while health checks stay green. |
+
+Note: the two counters have different label sets (panics carry `grpc_service`+`grpc_method`, auth rejections only `grpc_method`), so joining them in one dashboard query requires aggregating away `grpc_service` first.

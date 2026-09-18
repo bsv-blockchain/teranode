@@ -134,11 +134,32 @@ All RPC commands require a valid username and password for authentication. The s
 
 #### GRPC API Key Authentication
 
-For GRPC services, certain administrative operations require additional API key authentication. The following methods require an API key:
+The `grpc_admin_api_key` setting authenticates state-mutating gRPC calls using the `x-api-key` metadata header. Clients and servers must share the same secret.
 
-- **Ban/Unban Operations**: `BanPeer` and `UnbanPeer` methods in both P2P and Legacy services require API key authentication for security.
+- **P2P:** protects the seven admin operations (`BanPeer`, `UnbanPeer`, `ClearBanned`, `AddBanScore`, `ResetReputation`, `ConnectPeer`, `DisconnectPeer`) and ten internal reporting RPCs (`RecordCatchupAttempt`, `RecordCatchupSuccess`, `RecordCatchupFailure`, `RecordCatchupMalicious`, `UpdateCatchupError`, `ReportValidSubtree`, `ReportValidBlock`, `ReportValidBlockHeaders`, `ReportValidatedChainProgress`, `RecordBytesDownloaded`). Client and server use the same protected-method map.
+- **Legacy:** protects `BanPeer`, `UnbanPeer`, and `ClearBanned` when a key is configured.
+- **Blockchain:** protects state-mutating RPCs, including `SendNotification`, `ReportPeerFailure`, `SetBlockSubtreesSet`, `AddBlock`, `InvalidateBlock`, and peer-registry mutations, when a key is configured.
 
-The API key is configured via the `grpc_admin_api_key` setting and must be included in GRPC requests as metadata with the key `x-api-key`. Source it from an environment variable or secret store rather than committing it to configuration; a *configured* key is currently echoed in the node's startup settings dump, so treat startup logs as sensitive. Well-known placeholders such as `testkey` or `changeme` are ignored at startup (logged and treated as unset). If no API key is provided, the server generates a random key at startup; this generated key is never logged and leaves these admin operations unreachable (fail-closed) until an operator configures a shared key that both the server and its internal clients read.
+The shipped key is empty. The services deliberately have different empty-key policies:
+
+| Service | Empty key | Known placeholder |
+|---|---|---|
+| P2P | Generates an unavailable random key; protected RPCs reject calls with `Unauthenticated` | Ignores the placeholder and uses the same fail-closed path |
+| Blockchain and Legacy | Disables gRPC admin authentication and logs a startup warning; protected RPCs are reachable without credentials | Refuses startup with a configuration error |
+
+P2P retains the data-plane authentication already merged in PR 1532. Without a shared usable key, validation services cannot report validated chain progress or delivery, which prevents peers from becoming proven sync candidates. P2P also retains startup rejection of weak keys on non-loopback listeners outside regtest. Configure a random secret of at least 32 characters consistently across the deployment, using an environment variable or secret store.
+
+#### Blockchain HTTP admin endpoints
+
+The blockchain service's own HTTP listener (`blockchain_httpListenAddress`) exposes block invalidation and revalidation. These are `POST /invalidate/:hash` and `POST /revalidate/:hash`, and they require the same `x-api-key` header as the equivalent GRPC RPCs — the GRPC interceptor does not run on the HTTP path, so the routes carry their own check. Unlike the GRPC surface, these routes fail **closed**: with `grpc_admin_api_key` unset they return `403` rather than becoming open, because no Teranode service calls them and the asset service already offers an authenticated equivalent.
+
+#### Rolling upgrades
+
+Attaching the `x-api-key` header on the blockchain client is new. A service binary built before that change sends no header, so if `grpc_admin_api_key` is non-empty and the blockchain service is upgraded ahead of its callers, every mutating RPC from the older binaries fails with `Unauthenticated` — block validation stops committing blocks, notifications stop flowing and FSM state stops updating, while the failures appear only in logs.
+
+**Required upgrade order:** upgrade all blockchain-client services (block assembly, block validation, block persister, subtree validation, p2p, legacy, asset) first, and the blockchain service last. An old server ignores the extra metadata.
+
+Leaving `grpc_admin_api_key` empty does not make this order optional. This release also caps `GetMedianTimePastByHeights`: an older validator sends an unchunked whole-chain request that the new server rejects with `InvalidArgument`, halting validation even while health checks pass. Set `blockchain_maxMedianTimePastHeights` consistently across the fleet; newer clients retry smaller batches if the server has a lower cap.
 
 ## 2. Architecture
 
