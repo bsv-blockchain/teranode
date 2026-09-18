@@ -57,35 +57,105 @@ package aerospike
 import (
 	"context"
 	"fmt"
-	"strings"
+	"slices"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 )
 
-// FreezeUTXOs marks UTXOs as frozen by setting their spending transaction ID to FF...FF.
-// Frozen UTXOs cannot be spent until unfrozen or reassigned.
+// markFreezeExtraRecords writes, on each transaction's main record, the utxoFreezeRecs
+// marker naming every extra (pagination) record about to receive a freeze record, so a
+// freeze-record read can go straight to those records instead of scanning them all (see
+// readFreezeRecords). It runs BEFORE the freeze itself: a reader may then see a marker
+// with no record behind it, which costs one wasted read, but never a record with no
+// marker, which would hide a consensus freeze from block validation. Markers are never
+// removed, for the same reason — an unfreeze racing a freeze of another output on the
+// same extra record could otherwise remove a marker that record still needs.
+//
+// A transaction the store does not hold is skipped, matching the UDF's silent
+// TX_NOT_FOUND on the freeze itself.
+func (s *Store) markFreezeExtraRecords(spends []*utxo.Spend, tSettings *settings.Settings) error {
+	marks := make(map[chainhash.Hash][]int)
+
+	for _, spend := range spends {
+		recordNum := int(spend.Vout) / s.utxoBatchSize
+		if recordNum == 0 || slices.Contains(marks[*spend.TxID], recordNum) {
+			continue
+		}
+
+		marks[*spend.TxID] = append(marks[*spend.TxID], recordNum)
+	}
+
+	if len(marks) == 0 {
+		return nil
+	}
+
+	writePolicy := util.GetAerospikeWritePolicy(tSettings, 0)
+	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+
+	for txID, recordNums := range marks {
+		txID := txID
+
+		mainKey, err := aerospike.NewKey(s.namespace, s.setName, uaerospike.CalculateKeySourceInternal(&txID, 0))
+		if err != nil {
+			return errors.NewProcessingError("[freeze] failed to create key for %s", txID.String(), err)
+		}
+
+		ops := make([]*aerospike.Operation, 0, len(recordNums))
+		for _, recordNum := range recordNums {
+			ops = append(ops, aerospike.MapPutOp(aerospike.DefaultMapPolicy(), fields.UtxoFreezeRecs.String(), recordNum, 1))
+		}
+
+		if _, err = s.client.Operate(writePolicy, mainKey, ops...); err != nil {
+			if isKeyNotFound(err) {
+				continue
+			}
+
+			return errors.NewStorageError("[freeze] failed to mark freeze records on %s", txID.String(), err)
+		}
+	}
+
+	return nil
+}
+
+// luaMsgFreezeRecordedOnSpent is the message the freeze UDF returns, with STATUS_OK, when
+// it recorded the consensus window on an output that was already spent by a real
+// transaction. Keep in sync with MSG_FREEZE_RECORDED_ON_SPENT in teranode.lua.
+const luaMsgFreezeRecordedOnSpent = "freeze recorded on spent output"
+
+// FreezeUTXOs records the alert system's freeze on each output: the policy marker — the
+// spending-data slot set to FF...FF, only while the output is unspent — and the consensus
+// record in the utxoFreezeFrom/Until/Exp bins, which is written whether or not the output
+// is spent because it is a property of the outpoint, not of this node's spent-state for
+// it (issue #1422). See utxo.Store.FreezeUTXOs for the guarantees.
 //
 // The operation is performed atomically via a Lua script that:
 //   - Verifies the UTXO exists and matches the provided hash
-//   - Checks the UTXO is not already spent or frozen
-//   - Sets the spending transaction ID to FF...FF to mark as frozen
+//   - Sets the spending transaction ID to FF...FF if the output is unspent
+//   - Records the freeze window and policy-expiry flag per output offset
+//
+// A repeat freeze for an already-frozen output updates its record; only a repeat asking
+// for exactly the record already stored is reported as already frozen.
 //
 // Parameters:
 //   - ctx: Context for cancellation/timeout
-//   - spends: Array of UTXOs to freeze
+//   - spends: Array of UTXOs to freeze, each carrying its window and policy-expiry flag
 //
 // Returns error if any UTXO:
 //   - Doesn't exist
-//   - Is already spent
-//   - Is already frozen
+//   - Is already frozen with the same record
 //   - Fails to freeze
 func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
+	if err := s.markFreezeExtraRecords(spends, tSettings); err != nil {
+		return err
+	}
+
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(spends))
 
@@ -101,6 +171,9 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 			batchUDFPolicy, LuaPackage, aeroKey, subOpFreeze, "freeze",
 			s.calculateOffsetForOutput(spend.Vout),
 			spend.UTXOHash[:],
+			int(spend.FreezeFrom),
+			int(spend.FreezeUntil),
+			spend.FreezePolicyExpires,
 		))
 	}
 
@@ -119,28 +192,43 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 
 		res, err := s.teranodeBatchRecordResponse(fmt.Sprintf("[freeze][%d][%s]", batchID, spendDesc), record)
 		if err != nil {
-			// The UDF path ignores TX_NOT_FOUND on freeze (only SPENT is
-			// reported below); keep the native path's KEY_NOT_FOUND — the same
-			// condition under UPDATE_ONLY — equally silent.
+			// The UDF path ignores TX_NOT_FOUND on freeze; keep the native path's
+			// KEY_NOT_FOUND — the same condition under UPDATE_ONLY — equally silent.
 			if !errors.Is(err, errors.ErrTxNotFound) {
 				errorsThrown = append(errorsThrown, err)
 			}
 			continue
 		}
 
-		if res.Status == LuaStatusError && res.ErrorCode == LuaErrorCodeSpent {
-			// Extract spending data from error message
-			hexData := strings.TrimPrefix(res.Message, "SPENT:")
-			if spendingData, parseErr := spendpkg.NewSpendingDataFromString(hexData); parseErr == nil {
-				errorsThrown = append(errorsThrown, errors.NewStorageError("[freeze][%d][%s] failed to freeze aerospike utxo because it's already SPENT by %v", batchID, spendDesc, spendingData))
-			} else {
+		if res.Status == LuaStatusError {
+			switch res.ErrorCode {
+			case LuaErrorCodeTxNotFound:
+				// Missing records are a deliberate no-op on freeze, matching the native
+				// path's silent KEY_NOT_FOUND above.
+			case LuaErrorCodeAlreadyFrozen:
+				// A repeat freeze asking for exactly the record already stored. Reported
+				// the same way the SQL store reports it, so a duplicate alert reads as
+				// NotProcessed on every backend rather than as a change on this one.
+				errorsThrown = append(errorsThrown, errors.NewUtxoFrozenError("[freeze][%d][%s] aerospike utxo already frozen with this window", batchID, spendDesc))
+			default:
 				errorsThrown = append(errorsThrown, errors.NewStorageError("[freeze][%d][%s] failed to freeze aerospike utxo: %s", batchID, spendDesc, res.Message))
 			}
+
+			continue
+		}
+
+		// The consensus record is a property of the outpoint and is recorded on a spent
+		// output too (issue #1422); the UDF says so, and it is worth an operator seeing.
+		if res.Message == luaMsgFreezeRecordedOnSpent {
+			s.logger.Infof("[freeze][%d][%s] freeze recorded on spent output for heights [%d, %d)", batchID, spendDesc, spends[idx].FreezeFrom, spends[idx].FreezeUntil)
 		}
 	}
 
 	if len(errorsThrown) > 0 {
-		return errors.NewStorageError("[freeze][%d] failed to batch freeze %d aerospike utxos: %v", batchID, len(spends), errorsThrown)
+		// The first per-record error is the wrapped cause, so callers can classify with
+		// errors.Is (already-frozen surfaces as ErrFrozen, as on SQL); the full list still
+		// renders in the message.
+		return errors.NewStorageError("[freeze][%d] failed to batch freeze %d aerospike utxos: %v", batchID, len(spends), errorsThrown, errorsThrown[0])
 	}
 
 	return nil
@@ -153,6 +241,7 @@ func (s *Store) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings *
 //   - Verifies the UTXO exists and matches the provided hash
 //   - Checks the UTXO is currently frozen
 //   - Clears the frozen spending transaction ID (the frozen spendingTxID)
+//   - Clears the recorded enforceAtHeight window, so nothing is inherited by a re-freeze
 //
 // Parameters:
 //   - ctx: Context for cancellation/timeout
@@ -201,12 +290,19 @@ func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend, tSettings
 		}
 
 		if res.Status == LuaStatusError {
-			errorsThrown = append(errorsThrown, errors.NewStorageError("[unfreeze][%d][%s] failed to unfreeze aerospike utxo: %s", batchID, spendDesc, res.Message))
+			switch res.ErrorCode {
+			case LuaErrorCodeUtxoNotFrozen:
+				// Neither the policy marker nor a consensus record: reported the same way
+				// the SQL store reports it, so callers classify with errors.Is on both.
+				errorsThrown = append(errorsThrown, errors.NewUtxoFrozenError("[unfreeze][%d][%s] aerospike utxo is not frozen", batchID, spendDesc))
+			default:
+				errorsThrown = append(errorsThrown, errors.NewStorageError("[unfreeze][%d][%s] failed to unfreeze aerospike utxo: %s", batchID, spendDesc, res.Message))
+			}
 		}
 	}
 
 	if len(errorsThrown) > 0 {
-		return errors.NewStorageError("[unfreeze][%d] failed to batch unfreeze %d aerospike utxos: %v", batchID, len(spends), errorsThrown)
+		return errors.NewStorageError("[unfreeze][%d] failed to batch unfreeze %d aerospike utxos: %v", batchID, len(spends), errorsThrown, errorsThrown[0])
 	}
 
 	return nil

@@ -899,11 +899,16 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		// substitutes tip+1 for unconfirmed parents — equal to the candidate
 		// height at the tip, and era flags cannot differ post-Genesis).
 		// Accepted-block txs are mined-removed from assembly as always.
+		// WithIgnorePolicyFreeze: these spends happen because a block or announced
+		// subtree contains the transaction, so only the height-anchored consensus tier
+		// of an alert-system freeze may reject them — see issue #1422 and
+		// validator.WithIgnorePolicyFreeze.
 		validatorOptions := []validator.Option{
 			validator.WithSkipPolicyChecks(true),
 			validator.WithInBlock(true),
 			validator.WithCreateConflicting(true),
 			validator.WithIgnoreLocked(true),
+			validator.WithIgnorePolicyFreeze(true),
 			validator.WithCandidateParentMedianTime(candidateParentMedianTime),
 			validator.WithUnconfirmedParentsAtCandidateHeight(true),
 		}
@@ -950,6 +955,10 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 	// block header in the peer-facing request); Options.CandidateParentMedianTime
 	// IS populated from the request's PreviousBlockHash — see the legacy
 	// branch above for the rationale.
+	// No WithIgnorePolicyFreeze here: this branch has no production caller (legacy
+	// netsync is the only one, and it takes the branch above) and, unlike that branch,
+	// leaves AddTXToBlockAssembly on — so bypassing the policy tier would put a spend of
+	// a frozen coin into this node's own template.
 	if _, err = u.ValidateSubtreeInternal(
 		ctx,
 		v,

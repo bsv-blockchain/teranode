@@ -424,7 +424,10 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		response, err := server.CheckBlockSubtrees(context.Background(), request)
 		require.Error(t, err)
 		assert.Nil(t, response)
-		assert.Contains(t, err.Error(), "failed to load subtree transactions")
+		// CheckBlockSubtrees returns its errors through WrapGRPC, whose rendered string is the
+		// outermost message only; the chain lives in the status details. Assert on what a real
+		// caller sees — the subtreevalidation client calls UnwrapGRPC on every error (#1422).
+		assert.Contains(t, errors.UnwrapGRPC(err).Error(), "failed to load subtree transactions")
 	})
 }
 
@@ -924,7 +927,10 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 		// from http://127.0.0.1:0, which fails deterministically because nothing listens there. The important thing is it detected missing via quorum.
 		_, err = server.CheckBlockSubtrees(context.Background(), request)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to load subtree transactions")
+		// CheckBlockSubtrees returns its errors through WrapGRPC, whose rendered string is the
+		// outermost message only; the chain lives in the status details. Assert on what a real
+		// caller sees — the subtreevalidation client calls UnwrapGRPC on every error (#1422).
+		assert.Contains(t, errors.UnwrapGRPC(err).Error(), "failed to load subtree transactions")
 	})
 
 	t.Run("QuorumTimeout_TreatsAsMissing", func(t *testing.T) {
@@ -998,8 +1004,12 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 		_, err = server.CheckBlockSubtrees(context.Background(), request)
 		require.Error(t, err)
 		// The error should be from the HTTP fetch, not from quorum timeout
-		assert.Contains(t, err.Error(), "failed to load subtree transactions")
-		assert.NotContains(t, err.Error(), "quorum lock")
+		// CheckBlockSubtrees returns its errors through WrapGRPC, whose rendered string is the
+		// outermost message only; the chain lives in the status details. Assert on what a real
+		// caller sees — the subtreevalidation client calls UnwrapGRPC on every error (#1422).
+		assert.Contains(t, errors.UnwrapGRPC(err).Error(), "failed to load subtree transactions")
+		// Assert on what a real caller sees — CheckBlockSubtrees returns through WrapGRPC.
+		assert.NotContains(t, errors.UnwrapGRPC(err).Error(), "quorum lock")
 	})
 
 	t.Run("QuorumContextCancelled_ReturnsError", func(t *testing.T) {

@@ -1507,6 +1507,13 @@ func TestErrorCodeToGRPCCode(t *testing.T) {
 			expected: codes.FailedPrecondition,
 		},
 		{
+			// The height-anchored sibling of ERR_UTXO_FROZEN: same family, same
+			// reasoning, and it is on publicCauseCodes so it needs a row here too.
+			name:     "maps ERR_UTXO_CONSENSUS_FROZEN to codes.FailedPrecondition",
+			errCode:  ERR_UTXO_CONSENSUS_FROZEN,
+			expected: codes.FailedPrecondition,
+		},
+		{
 			name:     "unmapped code BLOCK_NOT_FOUND defaults to codes.Internal",
 			errCode:  ERR_BLOCK_NOT_FOUND,
 			expected: codes.Internal,

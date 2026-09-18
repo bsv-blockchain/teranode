@@ -310,6 +310,22 @@ func TestSpendBatchRejectsDuplicateDifferentSpendersSQLite(t *testing.T) {
 	assertSpendBatchRejectsDuplicateDifferentSpenders(t, ctx, store)
 }
 
+// TestFreezeEnforceAtHeightPostgresBulk runs the cross-backend freeze contract against
+// Postgres with batched operations on, so the bulk spend path — the production path,
+// which sqlitememory never exercises — is covered by the same oracle as the others.
+func TestFreezeEnforceAtHeightPostgresBulk(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	store, ctx := setupPostgresStore(t)
+	store.settings.UtxoStore.BatchSQLOperations = true
+
+	require.NoError(t, store.Delete(ctx, tests.TXHash))
+
+	tests.FreezeEnforceAtHeight(t, store)
+}
+
 func TestSpendBatchRejectsDuplicateDifferentSpendersPostgresBulk(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -970,6 +986,15 @@ func Test_SmokeTests(t *testing.T) {
 		require.NoError(t, err)
 
 		tests.Freeze(t, db)
+	})
+
+	t.Run("sql freeze enforce at height", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.FreezeEnforceAtHeight(t, db)
 	})
 
 	t.Run("sql reassign", func(t *testing.T) {

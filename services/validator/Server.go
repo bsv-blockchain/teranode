@@ -620,6 +620,14 @@ func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) (
 		opts.OutpointOnlySpend = *req.OutpointOnlySpend
 	}
 
+	if req.IgnorePolicyFreeze != nil {
+		opts.IgnorePolicyFreeze = *req.IgnorePolicyFreeze
+	}
+
+	if req.IgnoreConsensusFreeze != nil {
+		opts.IgnoreConsensusFreeze = *req.IgnoreConsensusFreeze
+	}
+
 	return opts, nil
 }
 
@@ -954,6 +962,17 @@ func extractValidationParams(c echo.Context) (uint32, *Options) {
 
 	if outpointOnlyStr := c.QueryParam("outpointOnlySpend"); outpointOnlyStr != "" {
 		options.OutpointOnlySpend = outpointOnlyStr == trueString || outpointOnlyStr == "1"
+	}
+
+	// Parity with the gRPC body field (IgnorePolicyFreeze) so a block-validation caller
+	// falling back to HTTP cannot silently reacquire the policy tier of a freeze and
+	// reject a block the rest of the fleet accepts (issue #1422).
+	if ignorePolicyFreezeStr := c.QueryParam("ignorePolicyFreeze"); ignorePolicyFreezeStr != "" {
+		options.IgnorePolicyFreeze = ignorePolicyFreezeStr == trueString || ignorePolicyFreezeStr == "1"
+	}
+
+	if ignoreConsensusFreezeStr := c.QueryParam("ignoreConsensusFreeze"); ignoreConsensusFreezeStr != "" {
+		options.IgnoreConsensusFreeze = ignoreConsensusFreezeStr == trueString || ignoreConsensusFreezeStr == "1"
 	}
 
 	return blockHeight, options

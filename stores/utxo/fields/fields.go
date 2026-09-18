@@ -46,6 +46,22 @@ const (
 	Creating FieldName = "creating"
 	// UtxoSpendableIn indicates the number of blocks after which the UTXO becomes spendable
 	UtxoSpendableIn FieldName = "utxoSpendableIn"
+	// UtxoFreezeFrom is the first block height at which the alert system's freeze is
+	// enforced for an output (0 = from genesis). Paired with UtxoFreezeUntil.
+	UtxoFreezeFrom FieldName = "utxoFreezeFrom"
+	// UtxoFreezeUntil is the first block height at which the alert system's freeze is no
+	// longer enforced for an output, i.e. the window is half-open (0 = no end).
+	UtxoFreezeUntil FieldName = "utxoFreezeUntil"
+	// UtxoFreezeExp marks outputs whose policy freeze expires with the consensus window
+	// (the alert's policyExpiresWithConsensus); absent means the policy freeze persists.
+	UtxoFreezeExp FieldName = "utxoFreezeExp"
+	// UtxoFreezeRecs lives on a transaction's MAIN record only: the set of extra
+	// (pagination) record numbers that carry, or once carried, a freeze record for one of
+	// their outputs. A freeze-record read follows it instead of scanning every extra
+	// record, so a transaction with no frozen output costs one read whatever its size.
+	// Written before the record it points at and never removed (see
+	// aerospike.markFreezeExtraRecords).
+	UtxoFreezeRecs FieldName = "utxoFreezeRecs"
 	// SpendingHeight is the block height at which the UTXO was spent
 	SpendingHeight FieldName = "spendingHeight"
 	// Utxos represents the UTXOs associated with a transaction

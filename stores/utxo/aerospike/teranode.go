@@ -74,7 +74,7 @@ import (
 var teranodeLUA []byte
 
 var (
-	LuaPackage      = "teranode_v61" // N.B. Do not have any "." in this string
+	LuaPackage      = "teranode_v64" // N.B. Do not have any "." in this string
 	LuaPackageMined = LuaPackage + "_mined"
 )
 
@@ -246,6 +246,7 @@ const (
 	LuaErrorCodeLocked           LuaErrorCode = "LOCKED"
 	LuaErrorCodeCreating         LuaErrorCode = "CREATING"
 	LuaErrorCodeFrozen           LuaErrorCode = "FROZEN"
+	LuaErrorCodeConsensusFrozen  LuaErrorCode = "CONSENSUS_FROZEN"
 	LuaErrorCodeAlreadyFrozen    LuaErrorCode = "ALREADY_FROZEN"
 	LuaErrorCodeFrozenUntil      LuaErrorCode = "FROZEN_UNTIL"
 	LuaErrorCodeCoinbaseImmature LuaErrorCode = "COINBASE_IMMATURE"

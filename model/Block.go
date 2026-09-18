@@ -85,6 +85,12 @@ var (
 type missingParentTx struct {
 	parentTxHash chainhash.Hash
 	txHash       chainhash.Hash
+	// vouts are the outputs of parentTxHash that txHash spends, so the parent's
+	// alert-system freeze records can be judged against this block's height.
+	vouts []uint32
+	// sameBlock marks a parent that is itself in this block: its position was already
+	// verified, so only its freeze records are judged (see checkSameBlockParentFreeze).
+	sameBlock bool
 }
 
 type OutPoint struct {
@@ -1800,7 +1806,11 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 	// two options: 1- parent is currently under validation, 2- parent is from forked chain.
 	// for the first situation we don't start validating the current block until the parent is validated.
 	// parent tx meta was not found, must be old, ignore | it is a coinbase, which obviously is mined in a block
-	parentTxMeta, err := getParentTxMetaBlockIDs(gCtx, txMetaStore, parentTxStruct)
+	if parentTxStruct.sameBlock {
+		return oldBlockIDs, checkSameBlockParentFreeze(gCtx, txMetaStore, parentTxStruct, b.Height)
+	}
+
+	parentTxMeta, err := getParentTxMetaBlockIDs(gCtx, txMetaStore, parentTxStruct, b.Height)
 	if err != nil {
 		return oldBlockIDs, err
 	}
@@ -1882,6 +1892,19 @@ func (b *Block) validateTransaction(ctx context.Context, deps *validationDepende
 			b.String(), params.subtreeHash.String(), params.sIdx, params.snIdx, params.subtreeNode.Hash.String())
 	}
 
+	// Which outputs of each parent this transaction spends, so the parent check can
+	// judge the alert system's per-output freeze records against this block's height.
+	txInpoints, err := params.subtreeMetaSlice.GetTxInpoints(params.snIdx)
+	if err != nil {
+		return nil, errors.NewStorageError("[validOrderAndBlessed][%s][%s:%d]:%d error getting tx inpoints from subtree meta slice",
+			b.String(), params.subtreeHash.String(), params.sIdx, params.snIdx, err)
+	}
+
+	voutsByParent := make(map[chainhash.Hash][]uint32, len(parentTxHashes))
+	for _, inpoint := range txInpoints {
+		voutsByParent[inpoint.Hash] = append(voutsByParent[inpoint.Hash], inpoint.Index)
+	}
+
 	// Check for duplicate inputs
 	err = b.checkDuplicateInputs(params.subtreeMetaSlice, validationCtx, params.subtreeHash, params.sIdx, params.snIdx, params.subtreeNode)
 	if err != nil {
@@ -1900,7 +1923,7 @@ func (b *Block) validateTransaction(ctx context.Context, deps *validationDepende
 	// }
 
 	// Check parent transactions
-	return b.checkParentTransactions(parentTxHashes, txIdx, params.subtreeNode, params.subtreeHash, params.sIdx, params.snIdx)
+	return b.checkParentTransactions(parentTxHashes, voutsByParent, txIdx, params.subtreeNode, params.subtreeHash, params.sIdx, params.snIdx)
 }
 
 func (b *Block) checkDuplicateInputs(subtreeMetaSlice *subtreepkg.Meta, validationCtx *validationContext,
@@ -1926,7 +1949,7 @@ func (b *Block) checkDuplicateInputs(subtreeMetaSlice *subtreepkg.Meta, validati
 	return nil
 }
 
-func (b *Block) checkParentTransactions(parentTxHashes []chainhash.Hash, txIdx uint64,
+func (b *Block) checkParentTransactions(parentTxHashes []chainhash.Hash, voutsByParent map[chainhash.Hash][]uint32, txIdx uint64,
 	subtreeNode subtreepkg.Node, subtreeHash *chainhash.Hash, sIdx, snIdx int) ([]missingParentTx, error) {
 	checkParentTxHashes := make([]missingParentTx, 0, len(parentTxHashes)/16) // assume 1 in 16 parents will be missing
 
@@ -1939,14 +1962,52 @@ func (b *Block) checkParentTransactions(parentTxHashes []chainhash.Hash, txIdx u
 					b.String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), parentTxHash.String())
 			}
 			// if the parent is in the same block, we have already checked whether it is on the same chain
-			// in a previous block here above. No need to check again
+			// in a previous block here above. No need to check again — but its outputs can
+			// still carry an alert-system freeze record, judged in checkSameBlockParentFreeze.
+			checkParentTxHashes = append(checkParentTxHashes, missingParentTx{
+				parentTxHash: parentTxHash,
+				txHash:       subtreeNode.Hash,
+				vouts:        voutsByParent[parentTxHash],
+				sameBlock:    true,
+			})
+
 			continue
 		}
 
-		checkParentTxHashes = append(checkParentTxHashes, missingParentTx{parentTxHash, subtreeNode.Hash})
+		checkParentTxHashes = append(checkParentTxHashes, missingParentTx{
+			parentTxHash: parentTxHash,
+			txHash:       subtreeNode.Hash,
+			vouts:        voutsByParent[parentTxHash],
+		})
 	}
 
 	return checkParentTxHashes, nil
+}
+
+// checkSameBlockParentFreeze judges the alert system's freeze records of a parent that
+// is itself in this block. Such a parent needs no chain check — its position in the
+// block was verified already — but its outputs can carry a consensus freeze all the
+// same: an alert names an outpoint, and a coin created by a transaction still in the
+// mempool can be frozen after a child spending it was validated. Subtree validation
+// then blesses both on existence without re-spending the child, so this is the only
+// place the freeze is judged for that pair, exactly as for an out-of-block parent
+// (issue #1422). It reads the freeze fields only.
+//
+// A parent the store does not hold is passed over rather than reported as incomplete:
+// same-block parents are not chain-checked at all, and an absent parent carries no
+// record.
+func checkSameBlockParentFreeze(gCtx context.Context, txMetaStore utxo.Store, parentTxStruct missingParentTx, blockHeight uint32) error {
+	parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxStruct.parentTxHash,
+		fields.UtxoFreezeFrom, fields.UtxoFreezeUntil, fields.UtxoFreezeExp)
+	if err != nil {
+		if errors.Is(err, errors.ErrTxNotFound) {
+			return nil
+		}
+
+		return errors.NewStorageError("error getting same-block parent transaction %s from txMetaStore", parentTxStruct.parentTxHash.String(), err)
+	}
+
+	return checkParentFreezeRecords(parentTxMeta, parentTxStruct, blockHeight)
 }
 
 func filterCurrentBlockHeaderIDsMap(parentTxMeta *meta.Data, currentBlockHeaderIDsMap map[uint32]struct{}) (map[uint32]struct{}, uint32) {
@@ -1967,8 +2028,16 @@ func filterCurrentBlockHeaderIDsMap(parentTxMeta *meta.Data, currentBlockHeaderI
 	return foundInPreviousBlocks, minBlockID
 }
 
-func getParentTxMetaBlockIDs(gCtx context.Context, txMetaStore utxo.Store, parentTxStruct missingParentTx) (*meta.Data, error) {
-	parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxStruct.parentTxHash, fields.BlockIDs)
+func getParentTxMetaBlockIDs(gCtx context.Context, txMetaStore utxo.Store, parentTxStruct missingParentTx, blockHeight uint32) (*meta.Data, error) {
+	// The three freeze fields ride on the read block validation already makes for every
+	// out-of-block parent, so judging the alert system's consensus freeze here costs no
+	// extra round trip. It has to happen here, at block level: a transaction the node
+	// already knows — from an announced subtree validated at tip+1, from a block on
+	// another fork, or from a block that was reorged out — is not re-validated by subtree
+	// validation, so the store's own check never runs for it, yet a block carrying it at a
+	// height inside the freeze window is invalid all the same (issue #1422).
+	parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxStruct.parentTxHash, fields.BlockIDs,
+		fields.UtxoFreezeFrom, fields.UtxoFreezeUntil, fields.UtxoFreezeExp)
 	if err != nil {
 		if errors.Is(err, errors.ErrTxNotFound) {
 			// Parent tx is not in our store yet. During catchup this is a transient ordering
@@ -1987,7 +2056,36 @@ func getParentTxMetaBlockIDs(gCtx context.Context, txMetaStore utxo.Store, paren
 		return nil, errors.NewBlockIncompleteError("parent transaction %s of tx %s has no block IDs", parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String())
 	}
 
+	if err := checkParentFreezeRecords(parentTxMeta, parentTxStruct, blockHeight); err != nil {
+		return nil, err
+	}
+
 	return parentTxMeta, nil
+}
+
+// checkParentFreezeRecords rejects the block when any output it spends of this parent
+// carries an alert-system freeze record whose consensus window covers the block's
+// height. It is a verdict every node derives identically from the chain — the record is
+// a property of the outpoint, recorded whether or not the coin was already spent when
+// the alert arrived — which is what makes it safe to persist the block as invalid.
+func checkParentFreezeRecords(parentTxMeta *meta.Data, parentTxStruct missingParentTx, blockHeight uint32) error {
+	if len(parentTxMeta.FreezeRecords) == 0 {
+		return nil
+	}
+
+	for _, vout := range parentTxStruct.vouts {
+		rec, ok := parentTxMeta.FreezeRecords[vout]
+		if !ok || !utxo.FreezeWindowActiveAt(rec.From, rec.Until, blockHeight) {
+			continue
+		}
+
+		return errors.NewBlockInvalidError("[validOrderAndBlessed] block at height %d spends consensus-frozen output %s:%d via transaction %s",
+			blockHeight, parentTxStruct.parentTxHash.String(), vout, parentTxStruct.txHash.String(),
+			errors.NewTxInvalidError("transaction %s spends a consensus-frozen utxo at block height %d", parentTxStruct.txHash.String(), blockHeight,
+				errors.NewUtxoConsensusFrozenError("utxo %s:%d is frozen for heights [%d, %d)", parentTxStruct.parentTxHash.String(), vout, rec.From, rec.Until)))
+	}
+
+	return nil
 }
 
 func (b *Block) GetSubtrees(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, getAndValidateSubtreesConcurrency int) ([]*subtreepkg.Subtree, error) {

@@ -183,6 +183,19 @@ func (s *Store) buildSpendFilterExpression(
 		aerospike.ExpNot(aerospike.ExpBinExists(fields.UtxoSpendableIn.String())),
 	)
 
+	// Same conservative guard, same reason, for the alert system's enforceAtHeight window
+	// (issue #1422). The window is a per-offset map, and whether it bites depends on
+	// comparing currentBlockHeight against this offset's bounds — a comparison filter
+	// expressions cannot make. Any record carrying either bound is therefore filtered out
+	// and retried through the Lua UDF, which evaluates the window per-offset and applies
+	// the policy/consensus split. Records with no freeze at all — every record, until an
+	// alert is issued — carry neither bin and are unaffected.
+	filterConditions = append(filterConditions,
+		aerospike.ExpNot(aerospike.ExpBinExists(fields.UtxoFreezeFrom.String())),
+		aerospike.ExpNot(aerospike.ExpBinExists(fields.UtxoFreezeUntil.String())),
+		aerospike.ExpNot(aerospike.ExpBinExists(fields.UtxoFreezeExp.String())),
+	)
+
 	// Check UTXO exists at offset (list size > offset)
 	filterConditions = append(filterConditions,
 		aerospike.ExpGreater(
@@ -434,10 +447,11 @@ func (s *Store) processSpendBatchResultsExpressions(
 				if aErr.ResultCode == types.FILTERED_OUT {
 					// The expression can't disambiguate which filter clause rejected
 					// the record. Retry every FILTERED_OUT through Lua so spends
-					// blocked solely by the conservative UtxoSpendableIn guard get
-					// a correct decision, while genuine rejections (already-spent,
-					// conflicting, locked, frozen-until-X) still surface the right
-					// classified error from the Lua UDF.
+					// blocked solely by the conservative UtxoSpendableIn and
+					// UtxoFreezeFrom/UtxoFreezeUntil guards get a correct decision,
+					// while genuine rejections (already-spent, conflicting, locked,
+					// frozen-until-X, frozen inside an enforceAtHeight window) still
+					// surface the right classified error from the Lua UDF.
 					retryThroughLua = append(retryThroughLua, bItem)
 					continue
 				}
@@ -552,8 +566,9 @@ func (s *Store) processSpendBatchResultsExpressions(
 	}
 
 	// Dispatch FILTERED_OUT records to the Lua UDF for a correct decision. The Lua
-	// path checks UtxoSpendableIn per-offset and returns the precise rejection
-	// reason for records that genuinely cannot be spent. Each item is still
+	// path checks UtxoSpendableIn and the enforceAtHeight freeze window per-offset
+	// and returns the precise rejection reason for records that genuinely cannot be
+	// spent. Each item is still
 	// uncompleted at this point — Lua's dispatch completes it exactly once.
 	//
 	// This is a single additional batched Lua call per expression batch — its
