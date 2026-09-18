@@ -284,59 +284,114 @@ var rpcUnimplemented = map[string]struct{}{
 	"preciousblock": {},
 }
 
-// Commands that are available to a limited user
-var rpcLimited = map[string]struct{}{
-	// Websockets commands
-	"loadtxfilter":          {},
-	"notifyblocks":          {},
-	"notifynewtransactions": {},
-	"notifyreceived":        {},
-	"notifyspent":           {},
-	"rescan":                {},
-	"rescanblocks":          {},
-	"session":               {},
+// rpcMethodAccess is the privilege a JSON-RPC method requires. Every method in
+// rpcHandlersBeforeInit must appear in rpcMethodPolicy exactly once; a
+// regression test enforces this so a new handler cannot be served to the limited
+// role by accident, and an unclassified method is treated as admin-only.
+type rpcMethodAccess int
 
-	// Websockets AND HTTP/S commands
-	"help": {},
+const (
+	// rpcAccessAdmin: only rpc_user/rpc_pass may call the method. Default for
+	// anything unclassified.
+	rpcAccessAdmin rpcMethodAccess = iota
 
-	// HTTP/S-only commands
-	"createrawtransaction":  {},
-	"decoderawtransaction":  {},
-	"decodescript":          {},
-	"estimatefee":           {},
-	"getbestblock":          {},
-	"getbestblockhash":      {},
-	"getblock":              {},
-	"getblockcount":         {},
-	"getblockhash":          {},
-	"getblockheader":        {},
-	"getcfilter":            {},
-	"getcfilterheader":      {},
-	"getcurrentnet":         {},
-	"getdifficulty":         {},
-	"getheaders":            {},
-	"getinfo":               {},
-	"getnettotals":          {},
-	"getnetworkhashps":      {},
-	"getrawmempool":         {},
-	"getrawtransaction":     {},
-	"gettxout":              {},
-	"gettxoutproof":         {},
-	"searchrawtransactions": {},
-	"sendrawtransaction":    {},
-	"submitblock":           {},
-	"uptime":                {},
-	"validateaddress":       {},
-	"verifymessage":         {},
-	"verifytxoutproof":      {},
-	"version":               {},
-	"getminingcandidate":    {},
-	"submitminingsolution":  {},
+	// rpcAccessLimitedRead: read-only query, available to rpc_limit_user.
+	rpcAccessLimitedRead
 
-	// BSV-specific commands
-	"freeze":   {},
-	"unfreeze": {},
-	"reassign": {},
+	// rpcAccessLimitedWrite: changes node or network state but is deliberately
+	// exposed to rpc_limit_user as a documented capability (relaying
+	// transactions, submitting mining work). Keep this list short and explicit.
+	rpcAccessLimitedWrite
+)
+
+// limitedMayCall reports whether rpc_limit_user is authorized for this access level.
+func (a rpcMethodAccess) limitedMayCall() bool {
+	return a == rpcAccessLimitedRead || a == rpcAccessLimitedWrite
+}
+
+// rpcMethodPolicy is the single source of truth for method authorization.
+var rpcMethodPolicy = map[string]rpcMethodAccess{
+	// Read-only, available to the limited role
+	"createrawtransaction":  rpcAccessLimitedRead,
+	"decoderawtransaction":  rpcAccessLimitedRead,
+	"decodescript":          rpcAccessLimitedRead,
+	"estimatefee":           rpcAccessLimitedRead,
+	"getbestblock":          rpcAccessLimitedRead,
+	"getbestblockhash":      rpcAccessLimitedRead,
+	"getblock":              rpcAccessLimitedRead,
+	"getblockcount":         rpcAccessLimitedRead,
+	"getblockhash":          rpcAccessLimitedRead,
+	"getblockheader":        rpcAccessLimitedRead,
+	"getcfilter":            rpcAccessLimitedRead,
+	"getcfilterheader":      rpcAccessLimitedRead,
+	"getcurrentnet":         rpcAccessLimitedRead,
+	"getdifficulty":         rpcAccessLimitedRead,
+	"getheaders":            rpcAccessLimitedRead,
+	"getinfo":               rpcAccessLimitedRead,
+	"getnettotals":          rpcAccessLimitedRead,
+	"getnetworkhashps":      rpcAccessLimitedRead,
+	"getrawmempool":         rpcAccessLimitedRead,
+	"getrawtransaction":     rpcAccessLimitedRead,
+	"gettxout":              rpcAccessLimitedRead,
+	"gettxoutproof":         rpcAccessLimitedRead,
+	"help":                  rpcAccessLimitedRead,
+	"searchrawtransactions": rpcAccessLimitedRead,
+	"uptime":                rpcAccessLimitedRead,
+	"validateaddress":       rpcAccessLimitedRead,
+	"verifymessage":         rpcAccessLimitedRead,
+	"verifytxoutproof":      rpcAccessLimitedRead,
+	"version":               rpcAccessLimitedRead,
+
+	// State-changing, intentionally available to the limited role
+	"getminingcandidate":   rpcAccessLimitedWrite,
+	"sendrawtransaction":   rpcAccessLimitedWrite,
+	"submitblock":          rpcAccessLimitedWrite,
+	"submitminingsolution": rpcAccessLimitedWrite,
+
+	// Admin-only
+	"addnode":            rpcAccessAdmin,
+	"clearbanned":        rpcAccessAdmin,
+	"debuglevel":         rpcAccessAdmin,
+	"generate":           rpcAccessAdmin,
+	"generatetoaddress":  rpcAccessAdmin,
+	"getaddednodeinfo":   rpcAccessAdmin,
+	"getblockbyheight":   rpcAccessAdmin,
+	"getblockchaininfo":  rpcAccessAdmin,
+	"getblocktemplate":   rpcAccessAdmin,
+	"getchaintips":       rpcAccessAdmin,
+	"getconnectioncount": rpcAccessAdmin,
+	"getgenerate":        rpcAccessAdmin,
+	"gethashespersec":    rpcAccessAdmin,
+	"getmempoolinfo":     rpcAccessAdmin,
+	"getmininginfo":      rpcAccessAdmin,
+	"getpeerinfo":        rpcAccessAdmin,
+	"invalidateblock":    rpcAccessAdmin,
+	"isbanned":           rpcAccessAdmin,
+	"listbanned":         rpcAccessAdmin,
+	"node":               rpcAccessAdmin,
+	"ping":               rpcAccessAdmin,
+	"reconsiderblock":    rpcAccessAdmin,
+	"setban":             rpcAccessAdmin,
+	"setgenerate":        rpcAccessAdmin,
+	"stop":               rpcAccessAdmin,
+	"verifychain":        rpcAccessAdmin,
+
+	// BSV alert administration: mutates consensus-relevant UTXO state and is
+	// persisted across restarts. Never available to the limited role.
+	"freeze":   rpcAccessAdmin,
+	"unfreeze": rpcAccessAdmin,
+	"reassign": rpcAccessAdmin,
+}
+
+// methodAccess returns the classification for a method, defaulting to admin-only
+// for anything not explicitly listed.
+func methodAccess(method string) rpcMethodAccess {
+	access, ok := rpcMethodPolicy[method]
+	if !ok {
+		return rpcAccessAdmin
+	}
+
+	return access
 }
 
 // builderScript is a convenience function which is used for hard-coded scripts
@@ -1215,13 +1270,13 @@ func (s *RPCServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 			}
 		}()
 
-		// Check if the user is limited and set error if method unauthorized
-		if !isAdmin {
-			if _, ok := rpcLimited[request.Method]; !ok {
-				jsonErr = &bsvjson.RPCError{
-					Code:    bsvjson.ErrRPCInvalidParams.Code,
-					Message: "limited user not authorized for this method",
-				}
+		// Check if the user is limited and set error if method unauthorized.
+		// Unclassified methods are admin-only, so the limited role can never
+		// reach a handler the policy table does not explicitly grant.
+		if !isAdmin && !methodAccess(request.Method).limitedMayCall() {
+			jsonErr = &bsvjson.RPCError{
+				Code:    bsvjson.ErrRPCInvalidParams.Code,
+				Message: "limited user not authorized for this method",
 			}
 		}
 

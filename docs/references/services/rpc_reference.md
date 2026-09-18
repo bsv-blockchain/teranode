@@ -406,21 +406,32 @@ Authentication is performed using HTTP Basic Auth.
 
 ### Admin vs Limited Access
 
-Admin users can execute all RPC commands. Limited users can execute the following commands:
+Admin users can execute all RPC commands. Every registered method is classified in
+exactly one of three tiers in `rpcMethodPolicy` (`services/rpc/Server.go`); a method
+missing from the table is treated as admin-only, and a test fails the build if any
+registered handler is unclassified. Limited users can execute the following commands:
 
-**Read-only commands:**
+**Read-only commands (limited role):**
 createrawtransaction, decoderawtransaction, decodescript, estimatefee, getbestblock, getbestblockhash,
 getblock, getblockcount, getblockhash, getblockheader, getcfilter, getcfilterheader, getcurrentnet,
 getdifficulty, getheaders, getinfo, getnettotals, getnetworkhashps, getrawmempool, getrawtransaction,
 gettxout, gettxoutproof, help, searchrawtransactions, uptime, validateaddress, verifymessage,
 verifytxoutproof, version
 
-**State-changing commands (also available to limited users):**
-sendrawtransaction, submitblock, getminingcandidate, submitminingsolution, freeze, unfreeze, reassign
+**State-changing capabilities deliberately granted to the limited role:**
+sendrawtransaction, submitblock, getminingcandidate, submitminingsolution
+
+These relay transactions and mining work. They are a separate, explicit grant on top of
+the read-only tier, not an implication of it; do not treat the limited role as strictly
+read-only if these matter to your threat model.
 
 **Admin-only commands (not available to limited users):**
 generate, generatetoaddress, getblockbyheight, getblockchaininfo, getchaintips, getmininginfo,
-getpeerinfo, invalidateblock, reconsiderblock, setban, isbanned, listbanned, clearbanned, stop
+getpeerinfo, invalidateblock, reconsiderblock, setban, isbanned, listbanned, clearbanned, stop,
+freeze, unfreeze, reassign
+
+`freeze`, `unfreeze` and `reassign` administer consensus-relevant UTXO state that persists
+across restarts and are never available to the limited role.
 
 ### GRPC API Key Authentication
 
@@ -1461,16 +1472,19 @@ Checks if a network address is currently banned.
 
 ### freeze
 
-Freezes a specific UTXO, preventing it from being spent.
+Freezes a specific UTXO, preventing it from being spent. Admin-only.
 
-**Parameters:**
+**Parameters** (positional, in this order):
 
 1. `txid` (string, required) - Transaction ID of the output to freeze
 2. `vout` (numeric, required) - Output index to freeze
+3. `utxohash` (string, required) - UTXO commitment of the output, as a hex hash. The
+   Aerospike backend verifies it against the stored output and rejects a mismatch; the
+   SQL backend locates the output by `txid`/`vout` alone.
 
 **Returns:**
 
-- `boolean` - True if the UTXO was successfully frozen
+- `null` on success; an error if hash parsing or the store operation fails
 
 **Example Request:**
 
@@ -1481,7 +1495,8 @@ Freezes a specific UTXO, preventing it from being spent.
     "method": "freeze",
     "params": [
         "a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0",
-        1
+        1,
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
     ]
 }
 ```
@@ -1490,7 +1505,7 @@ Freezes a specific UTXO, preventing it from being spent.
 
 ```json
 {
-    "result": true,
+    "result": null,
     "error": null,
     "id": "curltest"
 }
@@ -1498,16 +1513,17 @@ Freezes a specific UTXO, preventing it from being spent.
 
 ### unfreeze
 
-Unfreezes a previously frozen UTXO, allowing it to be spent.
+Unfreezes a previously frozen UTXO, allowing it to be spent. Admin-only.
 
-**Parameters:**
+**Parameters** (positional, in this order):
 
 1. `txid` (string, required) - Transaction ID of the frozen output
 2. `vout` (numeric, required) - Output index to unfreeze
+3. `utxohash` (string, required) - UTXO commitment of the output, as a hex hash (see `freeze`)
 
 **Returns:**
 
-- `boolean` - True if the UTXO was successfully unfrozen
+- `null` on success; an error if hash parsing or the store operation fails
 
 **Example Request:**
 
@@ -1518,7 +1534,8 @@ Unfreezes a previously frozen UTXO, allowing it to be spent.
     "method": "unfreeze",
     "params": [
         "a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0",
-        1
+        1,
+        "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
     ]
 }
 ```
@@ -1527,7 +1544,7 @@ Unfreezes a previously frozen UTXO, allowing it to be spent.
 
 ```json
 {
-    "result": true,
+    "result": null,
     "error": null,
     "id": "curltest"
 }
@@ -1536,7 +1553,7 @@ Unfreezes a previously frozen UTXO, allowing it to be spent.
 ### reassign
 
 Replaces a frozen UTXO's commitment using its outpoint and the old and new hashes.
-No destination address or replacement locking script is accepted.
+No destination address or replacement locking script is accepted. Admin-only.
 
 **Known regression:** do not reassign to a different owner. The RPC can succeed
 with a `null` result while leaving the output unspendable by both owners, even
