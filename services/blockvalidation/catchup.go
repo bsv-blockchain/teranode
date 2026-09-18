@@ -1964,6 +1964,21 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 			return false, err
 		}
 
+		// A locally stored subtree blob whose nodes do not hash to its key, which
+		// quick validation could NOT confirm removed (bitcoin-sv/teranode#4838).
+		// Falling through is worse than useless here: normal validation's loader
+		// checks only the .subtree header's claimed root against its key, so it would
+		// be handed the one blob this route has just proved is forged, by the one
+		// route that cannot detect it. Abort the catch-up run instead — loudly, since
+		// this is local storage corruption, and with no ban score, since no peer can
+		// have caused it.
+		if isUnquarantinedLocalSubtree(err) {
+			u.logger.Errorf("[catchup:tryQuickValidation][%s] block %s: a local subtree blob does not hash to its key and could not be removed, aborting rather than falling through to normal validation: %v",
+				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), err)
+
+			return false, err
+		}
+
 		u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] quick validation failed for block %s, removing .subtree files: %v",
 			catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), err)
 
@@ -2088,8 +2103,8 @@ func mergeFreshlyWritten(sets ...map[chainhash.Hash]map[fileformat.FileType]stru
 // only on the branch that ran BECAUSE the blob was not present, so an already-present (possibly
 // promoted) blob is never marked. The two fetch producers mark after their own Set succeeds
 // (fetchAndStoreSubtree / fetchAndStoreSubtreeData in get_blocks.go); quick validation's
-// FileTypeSubtree producer marks at enqueue time instead, from the fullSubtreeExists flags
-// computed synchronously during prefetch, because its write is handed to an asynchronous worker
+// FileTypeSubtree producer marks at enqueue time instead, from the already-present full subtrees
+// carried synchronously off the prefetch read, because its write is handed to an asynchronous worker
 // (quick_validate.go). Marking before the write lands is harmless here: a pair whose write never
 // lands is simply not on disk, and Del tolerates ErrNotFound.
 //
