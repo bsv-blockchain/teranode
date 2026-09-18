@@ -7284,14 +7284,14 @@
 <tr>
 <td>ProcessTxMetaUsingStoreBatchSize</td>
 <td>int</td>
-<td>max(4, CPU/2)</td>
+<td>1024</td>
 <td>blockvalidation_processTxMetaUsingStore_BatchSize</td>
 <td>Store processing batch size</td>
 </tr>
 <tr>
 <td>ProcessTxMetaUsingStoreConcurrency</td>
 <td>int</td>
-<td>32</td>
+<td>max(4, CPU/2)</td>
 <td>blockvalidation_processTxMetaUsingStore_Concurrency</td>
 <td>Store processing concurrency</td>
 </tr>
@@ -7301,6 +7301,13 @@
 <td>1</td>
 <td>blockvalidation_processTxMetaUsingStore_MissingTxThreshold</td>
 <td>Store miss threshold</td>
+</tr>
+<tr>
+<td>ProcessTxMetaUsingStoreRetries</td>
+<td>int</td>
+<td>3</td>
+<td>blockvalidation_processTxMetaUsingStore_Retries</td>
+<td>Retries for a transient store failure; negative values clamp to 0</td>
 </tr>
 <tr>
 <td>SkipCheckParentMined</td>
