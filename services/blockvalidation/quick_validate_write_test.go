@@ -17,18 +17,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// countingSubtreeStore wraps a blob.Store and counts Exists calls so tests can
-// assert that writeSubtreeFilesFromTxs reuses the precomputed fullSubtreeExists
-// value (computed during prefetch/readSubtree) instead of issuing its own
-// existence lookup on the write path.
+// countingSubtreeStore wraps a blob.Store and counts the read calls a write-path
+// implementation might make, so tests can assert that writeSubtreeFilesFromTxs
+// consumes what the batch read already resolved and anchored instead of issuing its
+// own existence lookup or reload on the write path.
 type countingSubtreeStore struct {
 	blob.Store
 	existsCalls atomic.Int64
+	getCalls    atomic.Int64
 }
 
 func (c *countingSubtreeStore) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) (bool, error) {
 	c.existsCalls.Add(1)
 	return c.Store.Exists(ctx, key, fileType, opts...)
+}
+
+func (c *countingSubtreeStore) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) ([]byte, error) {
+	c.getCalls.Add(1)
+	return c.Store.Get(ctx, key, fileType, opts...)
 }
 
 // makeWriteTestBlock builds a minimal block whose Hash() is computable and that
@@ -63,9 +69,11 @@ func buildNodeSubtree(t *testing.T, txHashes []chainhash.Hash) *subtreepkg.Subtr
 	return st
 }
 
-// TestWriteSubtreeFilesFromTxs_ReusesPrecomputedExists guards issue #4666: the
-// write path must trust the fullSubtreeExists flag plumbed through from the
-// prefetch phase and must not issue its own subtreeStore.Exists round-trip.
+// TestWriteSubtreeFilesFromTxs_ReusesPrecomputedExists guards issue #4666 and,
+// since bitcoin-sv/teranode#4838, the stronger property that replaced it: the write
+// path must consume the subtree the batch read already resolved and anchored, and
+// must not touch the store for it at all. A read here would run beside (or after)
+// the batch's create and spend, so nothing it learned could stop a mutation.
 func TestWriteSubtreeFilesFromTxs_ReusesPrecomputedExists(t *testing.T) {
 	ctx := context.Background()
 
@@ -94,7 +102,7 @@ func TestWriteSubtreeFilesFromTxs_ReusesPrecomputedExists(t *testing.T) {
 		block := makeWriteTestBlock(t, 2)
 		nodeSubtree := buildNodeSubtree(t, txHashes)
 
-		err := bv.writeSubtreeFilesFromTxs(ctx, block, subtreeIdx, nodeSubtree, txs, *nodeSubtree.RootHash(), false, false)
+		err := bv.writeSubtreeFilesFromTxs(ctx, block, subtreeIdx, nodeSubtree, txs, *nodeSubtree.RootHash(), nil, false)
 		require.NoError(t, err)
 
 		// No existence lookup should have been issued on the write path.
@@ -109,35 +117,25 @@ func TestWriteSubtreeFilesFromTxs_ReusesPrecomputedExists(t *testing.T) {
 		require.NotNil(t, block.SubtreeSlices[subtreeIdx])
 	})
 
-	t.Run("exists: loads existing file without calling Exists", func(t *testing.T) {
+	t.Run("carried: uses the handed-over subtree without touching the store", func(t *testing.T) {
 		store := &countingSubtreeStore{Store: blobmemory.New()}
 		bv := newBV(store)
 		block := makeWriteTestBlock(t, 2)
 		nodeSubtree := buildNodeSubtree(t, txHashes)
 
-		// Pre-store a full subtree file (as a prior write would have done).
+		// Pre-store a full subtree file (as a prior write would have done); the
+		// carried object stands in for what the batch read loaded from it.
 		fullBytes, err := nodeSubtree.Serialize()
 		require.NoError(t, err)
 		require.NoError(t, store.Store.Set(ctx, nodeSubtree.RootHash()[:], fileformat.FileTypeSubtree, fullBytes))
 
-		err = bv.writeSubtreeFilesFromTxs(ctx, block, subtreeIdx, nodeSubtree, txs, *nodeSubtree.RootHash(), true, false)
+		carried := buildNodeSubtree(t, txHashes)
+
+		err = bv.writeSubtreeFilesFromTxs(ctx, block, subtreeIdx, nodeSubtree, txs, *nodeSubtree.RootHash(), carried, false)
 		require.NoError(t, err)
 
 		require.Equal(t, int64(0), store.existsCalls.Load())
-		require.NotNil(t, block.SubtreeSlices[subtreeIdx])
-	})
-
-	t.Run("exists flag trusted: missing file surfaces as error, not a rebuild", func(t *testing.T) {
-		// Passing fullSubtreeExists=true while the file is absent proves the flag
-		// is trusted verbatim: the code takes the load branch (which errors) rather
-		// than re-deriving existence and rebuilding.
-		store := &countingSubtreeStore{Store: blobmemory.New()}
-		bv := newBV(store)
-		block := makeWriteTestBlock(t, 2)
-		nodeSubtree := buildNodeSubtree(t, txHashes)
-
-		err := bv.writeSubtreeFilesFromTxs(ctx, block, subtreeIdx, nodeSubtree, txs, *nodeSubtree.RootHash(), true, false)
-		require.Error(t, err)
-		require.Equal(t, int64(0), store.existsCalls.Load())
+		require.Equal(t, int64(0), store.getCalls.Load(), "the write path must not reload a subtree the read already anchored")
+		require.Same(t, carried, block.SubtreeSlices[subtreeIdx])
 	})
 }
