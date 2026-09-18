@@ -757,6 +757,25 @@ func setupQuickValidateMocks(s *CatchupTestSuite) {
 	s.MockValidator.Errors = []error{nil, nil, nil}
 }
 
+// setupQuickValidateMocksBodyRejected is setupQuickValidateMocks for bodies the route
+// now rejects BEFORE the pipeline runs (bitcoin-sv/teranode#4838): the body is bound to
+// the header for the whole block first, so an unbound or malformed one never reaches
+// create, spend or the block-id assignment.
+//
+// The UTXO expectations are therefore optional rather than mandatory — leaving them
+// mandatory would assert the very calls the fix removes. Tests using this assert the
+// absence positively instead, with AssertNotCalled.
+func setupQuickValidateMocksBodyRejected(s *CatchupTestSuite) {
+	s.MockBlockchain.On("AssignBlockID", mock.Anything, mock.Anything).Return(uint64(1), nil).Maybe()
+	s.MockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	s.MockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
+	s.MockUTXOStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return((*meta.Data)(nil), errors.NewNotFoundError("not found")).Maybe()
+	s.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchCreateOnly()).Return(&meta.Data{}, nil, nil).Maybe()
+	s.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).Return(nil, []*utxo.Spend{}, nil).Maybe()
+	s.MockUTXOStore.On("SetLocked", mock.Anything, mock.Anything, false).Return(nil).Maybe()
+	s.MockValidator.Errors = []error{nil, nil, nil}
+}
+
 func TestQuickValidateBlock_UtxoLockGating(t *testing.T) {
 	t.Run("setting off: UTXOs locked then unlocked", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
