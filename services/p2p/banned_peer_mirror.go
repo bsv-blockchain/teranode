@@ -31,22 +31,30 @@ const (
 // distinct authors arrive in between, and a lookup for an unknown author
 // allocates nothing.
 //
-// Refreshes are single-flight and, after the first load, never block a
-// lookup: the worker that finds the mirror stale re-lists inline while
-// concurrent workers read the previous view. The first load is awaited by
-// everyone so a peer banned before this process started is dropped from its
-// very first message. A failed refresh keeps the last good view and is not
-// retried until the next interval (fail open for bans it has not yet seen,
-// the same breaker the per-peer cache applied).
+// Refreshes are single-flight and never block a lookup: the worker that finds
+// the mirror stale re-lists inline while concurrent workers read the previous
+// view. Server.Start primes the mirror before subscribing to any topic so a
+// peer banned before this process started is dropped from its very first
+// message; should that priming fail or be skipped (tests that construct
+// Server directly), lookups fail open on the empty view until the first
+// refresh lands. A failed refresh keeps the last good view and is not retried
+// until the next interval (fail open for bans it has not yet seen, the same
+// breaker the per-peer cache applied).
 //
-// Local ban transitions are added directly and remembered for one interval so
-// a refresh whose round-trip straddled the transition cannot drop them.
+// Local ban transitions are applied directly. An addition is remembered for
+// one interval so a refresh whose round-trip straddled it cannot drop it; a
+// removal (unban) bumps the generation so a refresh whose round-trip straddled
+// it is discarded rather than resurrecting the ban from the pre-reset listing.
 type bannedPeerMirror struct {
 	mu          sync.RWMutex
 	ids         map[string]struct{}
 	recentLocal map[string]time.Time // local additions, kept across a refresh for one interval
 	refreshedAt time.Time
 	loaded      bool
+	// gen counts unbans (remove, clear). A refresh captures it before the
+	// registry round-trip and replace discards the listing if it moved, since
+	// that listing may predate the unban.
+	gen uint64
 
 	// refreshMu serialises refreshes. It is held across the registry
 	// round-trip, so it must never be taken while holding mu.
@@ -63,13 +71,13 @@ func (m *bannedPeerMirror) contains(peerID string) bool {
 	return ok
 }
 
-// state returns whether the mirror has ever been loaded and whether it is due
-// a refresh at now.
-func (m *bannedPeerMirror) state(now time.Time) (loaded, stale bool) {
+// state returns whether the mirror is due a refresh at now, and the unban
+// generation a refresh started now must hand back to replace.
+func (m *bannedPeerMirror) state(now time.Time) (stale bool, gen uint64) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	return m.loaded, !m.loaded || now.Sub(m.refreshedAt) >= bannedPeerRefreshInterval
+	return !m.loaded || now.Sub(m.refreshedAt) >= bannedPeerRefreshInterval, m.gen
 }
 
 // add marks peerID banned immediately (a local ban transition).
@@ -89,8 +97,9 @@ func (m *bannedPeerMirror) add(peerID string, now time.Time) {
 	m.recentLocal[peerID] = now
 }
 
-// remove drops peerID from the mirror (an unban) and forces a refresh on the
-// next lookup so the registry's view is re-read rather than trusted stale.
+// remove drops peerID from the mirror (an unban), forces a refresh on the
+// next lookup so the registry's view is re-read rather than trusted stale,
+// and invalidates any listing already in flight.
 func (m *bannedPeerMirror) remove(peerID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -98,10 +107,11 @@ func (m *bannedPeerMirror) remove(peerID string) {
 	delete(m.ids, peerID)
 	delete(m.recentLocal, peerID)
 	m.refreshedAt = time.Time{}
+	m.gen++
 }
 
-// clear empties the mirror (all bans reset) and forces a refresh on the next
-// lookup.
+// clear empties the mirror (all bans reset), forces a refresh on the next
+// lookup and invalidates any listing already in flight.
 func (m *bannedPeerMirror) clear() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -109,6 +119,7 @@ func (m *bannedPeerMirror) clear() {
 	m.ids = nil
 	m.recentLocal = nil
 	m.refreshedAt = time.Time{}
+	m.gen++
 }
 
 // invalidate makes the next lookup refresh the mirror from the registry.
@@ -119,13 +130,20 @@ func (m *bannedPeerMirror) invalidate() {
 	m.refreshedAt = time.Time{}
 }
 
-// replace installs the registry's banned set as of now, keeping any local
-// additions younger than one refresh interval: a ban applied here while the
-// listing round-trip was in flight may be missing from the reply, and dropping
-// it would re-open a window the immediate add exists to close.
-func (m *bannedPeerMirror) replace(banned []string, now time.Time) {
+// replace installs the registry's banned set as of now, provided no unban
+// happened since gen was captured (otherwise the listing may predate the
+// unban and is discarded; refreshedAt stays cleared so the next lookup
+// re-lists). Local additions younger than one refresh interval are kept: a
+// ban applied here while the listing round-trip was in flight may be missing
+// from the reply, and dropping it would re-open a window the immediate add
+// exists to close. Returns whether the listing was installed.
+func (m *bannedPeerMirror) replace(banned []string, now time.Time, gen uint64) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.gen != gen {
+		return false
+	}
 
 	ids := make(map[string]struct{}, len(banned)+len(m.recentLocal))
 	for _, id := range banned {
@@ -143,6 +161,8 @@ func (m *bannedPeerMirror) replace(banned []string, now time.Time) {
 	m.ids = ids
 	m.refreshedAt = now
 	m.loaded = true
+
+	return true
 }
 
 // markAttempt records a failed refresh so the registry is not retried until
@@ -157,27 +177,37 @@ func (m *bannedPeerMirror) markAttempt(now time.Time) {
 }
 
 // isRegistryBanned reports whether the registry currently bans peerID,
-// answered from the banned-peer mirror. The first lookup loads the mirror
-// synchronously; afterwards a lookup that finds it older than
-// bannedPeerRefreshInterval re-lists the registry inline if no other worker is
-// already doing so, and otherwise answers from the current view.
+// answered from the banned-peer mirror. A lookup that finds the mirror stale
+// (or not yet loaded) re-lists the registry inline if no other worker is
+// already doing so, and otherwise answers from the current view; it never
+// waits on another worker's round-trip.
 func (s *Server) isRegistryBanned(peerID string) bool {
 	if s.peerRegistry == nil {
 		return false
 	}
 
-	now := time.Now()
-
-	if loaded, stale := s.bannedPeers.state(now); stale {
-		s.refreshBannedPeers(!loaded)
+	if stale, _ := s.bannedPeers.state(time.Now()); stale {
+		s.refreshBannedPeers(false)
 	}
 
 	return s.bannedPeers.contains(peerID)
 }
 
+// primeBannedPeers loads the banned-peer mirror once, waiting for the
+// round-trip, so the gossip gate enforces pre-existing registry bans from the
+// first message it sees. Called from Start before the topic subscriptions.
+func (s *Server) primeBannedPeers() {
+	if s.peerRegistry == nil {
+		return
+	}
+
+	s.refreshBannedPeers(true)
+}
+
 // refreshBannedPeers re-lists the registry's banned peers into the mirror.
-// With wait set the caller blocks until a refresh has happened (first load);
-// otherwise it returns at once when another refresh is in flight.
+// With wait set the caller blocks until a refresh has happened (startup
+// priming); otherwise it returns at once when another refresh is in flight,
+// which is the only mode the gossip path uses.
 func (s *Server) refreshBannedPeers(wait bool) {
 	if wait {
 		s.bannedPeers.refreshMu.Lock()
@@ -187,7 +217,8 @@ func (s *Server) refreshBannedPeers(wait bool) {
 	defer s.bannedPeers.refreshMu.Unlock()
 
 	// Whoever held the lock before us may have just done the work.
-	if _, stale := s.bannedPeers.state(time.Now()); !stale {
+	stale, gen := s.bannedPeers.state(time.Now())
+	if !stale {
 		return
 	}
 
@@ -207,5 +238,7 @@ func (s *Server) refreshBannedPeers(wait bool) {
 		return
 	}
 
-	s.bannedPeers.replace(banned, time.Now())
+	if !s.bannedPeers.replace(banned, time.Now(), gen) {
+		s.logger.Debugf("[refreshBannedPeers] discarded a banned-peer listing that straddled a reset; the next lookup re-lists")
+	}
 }

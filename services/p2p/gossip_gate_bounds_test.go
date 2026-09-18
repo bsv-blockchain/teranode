@@ -82,18 +82,22 @@ func TestHandleBlockTopic_FreshAuthorsCostNoPerAuthorLookupsOrCacheEntries(t *te
 
 	s, counting, client, _, producer := newGateBoundsTestServer(t, flood)
 
+	start := time.Now()
 	for i := 0; i < flood; i++ {
 		author := mustNewPeerID(t)
 		s.handleBlockTopic(context.Background(), blockAnnouncement(t, author, i), author.String())
 	}
+	elapsed := time.Since(start)
 
 	require.Len(t, producer.PublishChannel(), flood, "well-formed announcements from unknown authors are still forwarded")
 
+	// The registry and walk budgets are one per interval plus the initial
+	// load, however long the loop took: they must not track flood.
 	require.Zero(t, counting.callCount("IsPeerBanned"), "the ban gate must not look authors up one by one")
-	require.Equal(t, 1, counting.callCount("ListBannedPeers"), "the banned set is listed once per refresh interval, not per author")
+	require.LessOrEqual(t, counting.callCount("ListBannedPeers"), 1+int(elapsed/bannedPeerRefreshInterval), "the banned set is listed once per refresh interval, not per author")
 	require.Zero(t, counting.callCount("GetPeer"), "relayed authors must not cost a reputation lookup")
 	require.Zero(t, s.reputationCache.Len(), "relayed authors must not occupy reputation cache entries")
-	require.LessOrEqual(t, int(client.walks.Load()), 2, "GetPeers walks must not scale with the number of unknown authors")
+	require.LessOrEqual(t, int(client.walks.Load()), 1+int(elapsed/liveConnMissRefreshInterval), "GetPeers walks must not scale with the number of unknown authors")
 }
 
 // A message that fails field validation from an unknown author must leave no
@@ -257,10 +261,11 @@ func TestLiveConnSnapshot_WalksAreThrottled(t *testing.T) {
 	client.peers = []p2pMessageBus.PeerInfo{{ID: neighbour.String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}}}
 	s.P2PClient = client
 
+	start := time.Now()
 	for i := 0; i < 100; i++ {
 		require.False(t, s.hasLiveConnection(mustNewPeerID(t).String()))
 	}
-	require.LessOrEqual(t, int(client.walks.Load()), 2, "misses must not each walk GetPeers")
+	require.LessOrEqual(t, int(client.walks.Load()), 1+int(time.Since(start)/liveConnMissRefreshInterval), "misses must not each walk GetPeers")
 
 	before := client.walks.Load()
 	for i := 0; i < 100; i++ {
@@ -287,15 +292,105 @@ func TestBannedPeerMirror_LocalBanSurvivesStraddlingRefresh(t *testing.T) {
 	pid := mustNewPeerID(t).String()
 
 	m.add(pid, now)
-	m.replace(nil, now.Add(time.Millisecond))
+	_, gen := m.state(now)
+	require.True(t, m.replace(nil, now.Add(time.Millisecond), gen))
 	require.True(t, m.contains(pid), "a fresh local ban must survive a refresh that predates it")
 
-	m.replace(nil, now.Add(bannedPeerRefreshInterval))
+	require.True(t, m.replace(nil, now.Add(bannedPeerRefreshInterval), gen))
 	require.False(t, m.contains(pid), "once the registry has had a full interval to report it, the registry's view wins")
 
 	m.add(pid, now)
 	m.remove(pid)
 	require.False(t, m.contains(pid), "an unban is immediate")
+}
+
+// An unban applied locally while a registry listing was in flight must not be
+// undone by that listing landing afterwards: the pre-reset listing still
+// names the peer, and installing it would re-ban the peer for a full refresh
+// interval right after the operator lifted the ban.
+func TestBannedPeerMirror_UnbanSurvivesStraddlingRefresh(t *testing.T) {
+	var m bannedPeerMirror
+	now := time.Now()
+	pid := mustNewPeerID(t).String()
+
+	_, gen := m.state(now)
+	require.True(t, m.replace([]string{pid}, now, gen))
+	require.True(t, m.contains(pid))
+
+	// A refresh starts (captures gen), then the operator unbans, then the
+	// refresh's listing arrives, still naming the peer.
+	_, inFlight := m.state(now)
+	m.remove(pid)
+	require.False(t, m.replace([]string{pid}, now.Add(time.Millisecond), inFlight), "a listing that straddled an unban must be discarded")
+	require.False(t, m.contains(pid), "the unban must hold")
+
+	stale, next := m.state(now.Add(time.Millisecond))
+	require.True(t, stale, "the discarded listing must leave the mirror due a re-list")
+
+	// The re-list, started after the unban, is installed normally.
+	require.True(t, m.replace(nil, now.Add(2*time.Millisecond), next))
+	require.False(t, m.contains(pid))
+
+	// clear is an unban of everything and invalidates in-flight listings too.
+	_, inFlight = m.state(now)
+	m.clear()
+	require.False(t, m.replace([]string{pid}, now, inFlight))
+	require.False(t, m.contains(pid))
+}
+
+// The gossip path never waits on a refresh another worker is running: while
+// one lookup holds the round-trip, concurrent lookups answer from the current
+// view at once, even before the first load has landed.
+func TestIsRegistryBanned_NeverWaitsOnInFlightRefresh(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+
+	// Simulate a refresh stuck in its registry round-trip.
+	s.bannedPeers.refreshMu.Lock()
+	defer s.bannedPeers.refreshMu.Unlock()
+
+	done := make(chan bool, 1)
+	go func() { done <- s.isRegistryBanned(mustNewPeerID(t).String()) }()
+
+	select {
+	case banned := <-done:
+		require.False(t, banned, "an unknown author fails open while the first load is in flight")
+	case <-time.After(2 * time.Second):
+		t.Fatal("isRegistryBanned blocked behind another worker's refresh")
+	}
+}
+
+// Start primes the mirror so a peer banned before the process started is
+// dropped from its first message, without the hot path having to wait.
+func TestPrimeBannedPeers_LoadsPreexistingBans(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	pid := mustNewPeerID(t)
+	banPeerInRegistry(t, reg, pid)
+
+	counting := newCountingRegistryClient(s.peerRegistry)
+	s.peerRegistry = counting
+
+	s.primeBannedPeers()
+
+	require.Equal(t, 1, counting.callCount("ListBannedPeers"))
+	require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"), "a pre-existing ban is enforced from the first message")
+	require.Equal(t, 1, counting.callCount("ListBannedPeers"), "the primed mirror serves the first lookup without another round-trip")
+}
+
+// Cap evictions are counted for the periodic sweep's capacity diagnostic and
+// the counter resets on read.
+func TestBoundedTTLCache_CountsEvictions(t *testing.T) {
+	var c boundedTTLCache[int]
+	c.setMaxSize(2)
+	expires := time.Now().Add(time.Minute)
+
+	c.Set("a", 1, expires)
+	c.Set("b", 2, expires)
+	require.Zero(t, c.EvictionsSinceLastRead())
+
+	c.Set("c", 3, expires)
+	c.Set("d", 4, expires)
+	require.Equal(t, 2, c.EvictionsSinceLastRead())
+	require.Zero(t, c.EvictionsSinceLastRead(), "the counter resets on read")
 }
 
 // An operator reset re-reads the registry's ban state at once instead of

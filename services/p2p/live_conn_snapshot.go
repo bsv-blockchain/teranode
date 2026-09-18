@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -34,20 +35,47 @@ const (
 // by how many distinct authors it has heard from, so a message from a
 // never-before-seen identity allocates nothing here.
 //
+// Readers load the current view through an atomic pointer and never take a
+// lock, so the two or three liveness checks each gossip message performs do
+// not serialise the handlers; rebuildMu only serialises rebuilds, so
+// concurrent lookups that all find the view stale share one GetPeers walk.
+//
 // The zero value is an untaken snapshot; the first lookup builds it.
 type liveConnSnapshot struct {
-	mu      sync.Mutex
+	view      atomic.Pointer[liveConnView]
+	rebuildMu sync.Mutex
+}
+
+// liveConnView is one immutable snapshot of the open connections.
+type liveConnView struct {
 	addrs   map[string][]string
 	takenAt time.Time
-	taken   bool
+}
+
+// lookup answers for peerID from this view if the view is entitled to: a hit
+// while the view is younger than liveConnSnapshotTTL, or a miss while it is
+// younger than liveConnMissRefreshInterval. decided is false when the caller
+// must rebuild instead.
+func (v *liveConnView) lookup(peerID string, now time.Time) (addrs []string, live, decided bool) {
+	age := now.Sub(v.takenAt)
+	if age >= liveConnSnapshotTTL {
+		return nil, false, false
+	}
+
+	if addrs, ok := v.addrs[peerID]; ok {
+		return addrs, true, true
+	}
+
+	if age < liveConnMissRefreshInterval {
+		return nil, false, true
+	}
+
+	return nil, false, false
 }
 
 // invalidate forces the next lookup to rebuild the snapshot.
 func (l *liveConnSnapshot) invalidate() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	l.taken = false
+	l.view.Store(nil)
 }
 
 // liveConnAddrs reports whether peerID has an open libp2p connection and, if
@@ -61,9 +89,7 @@ func (l *liveConnSnapshot) invalidate() {
 // liveConnSnapshotTTL. A miss rebuilds the snapshot first — so a neighbour that
 // connected after the last build is found — unless one was built within
 // liveConnMissRefreshInterval, which is what keeps a flood of unknown authors
-// from turning every message into a walk. The mutex is held across the walk:
-// concurrent lookups wait for the one rebuild rather than each running their
-// own.
+// from turning every message into a walk.
 func (s *Server) liveConnAddrs(peerID string) ([]string, bool) {
 	if s.P2PClient == nil {
 		return nil, false
@@ -71,33 +97,34 @@ func (s *Server) liveConnAddrs(peerID string) ([]string, bool) {
 
 	now := time.Now()
 
-	s.liveConns.mu.Lock()
-	defer s.liveConns.mu.Unlock()
-
-	if s.liveConns.taken {
-		age := now.Sub(s.liveConns.takenAt)
-
-		if age < liveConnSnapshotTTL {
-			if addrs, ok := s.liveConns.addrs[peerID]; ok {
-				return addrs, true
-			}
-
-			if age < liveConnMissRefreshInterval {
-				return nil, false
-			}
+	if v := s.liveConns.view.Load(); v != nil {
+		if addrs, live, decided := v.lookup(peerID, now); decided {
+			return addrs, live
 		}
 	}
 
-	s.rebuildLiveConnsLocked(now)
+	s.liveConns.rebuildMu.Lock()
+	defer s.liveConns.rebuildMu.Unlock()
 
-	addrs, ok := s.liveConns.addrs[peerID]
+	// Another worker may have rebuilt while we waited for the lock; its view
+	// is at least as fresh as the one we would build.
+	if v := s.liveConns.view.Load(); v != nil {
+		if addrs, live, decided := v.lookup(peerID, now); decided {
+			return addrs, live
+		}
+	}
+
+	v := s.rebuildLiveConnsLocked(now)
+
+	addrs, ok := v.addrs[peerID]
 
 	return addrs, ok
 }
 
-// rebuildLiveConnsLocked walks P2PClient.GetPeers() once and stores the peers
-// with open connections. Callers must hold liveConns.mu.
-func (s *Server) rebuildLiveConnsLocked(now time.Time) {
+// rebuildLiveConnsLocked walks P2PClient.GetPeers() once, publishes the peers
+// with open connections as the current view and returns it. Callers must
+// hold liveConns.rebuildMu.
+func (s *Server) rebuildLiveConnsLocked(now time.Time) *liveConnView {
 	peers := s.P2PClient.GetPeers()
 	addrs := make(map[string][]string, len(peers))
 
@@ -107,9 +134,10 @@ func (s *Server) rebuildLiveConnsLocked(now time.Time) {
 		}
 	}
 
-	s.liveConns.addrs = addrs
-	s.liveConns.takenAt = now
-	s.liveConns.taken = true
+	v := &liveConnView{addrs: addrs, takenAt: now}
+	s.liveConns.view.Store(v)
+
+	return v
 }
 
 // hasLiveConnection reports whether the peer has an open libp2p connection,
@@ -143,12 +171,12 @@ func (s *Server) snapshotLiveConnIDs() map[string]struct{} {
 		return live
 	}
 
-	s.liveConns.mu.Lock()
-	defer s.liveConns.mu.Unlock()
+	s.liveConns.rebuildMu.Lock()
+	defer s.liveConns.rebuildMu.Unlock()
 
-	s.rebuildLiveConnsLocked(time.Now())
+	v := s.rebuildLiveConnsLocked(time.Now())
 
-	for id := range s.liveConns.addrs {
+	for id := range v.addrs {
 		live[id] = struct{}{}
 	}
 

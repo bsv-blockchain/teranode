@@ -27,6 +27,9 @@ type boundedTTLCache[V any] struct {
 	entries map[string]*list.Element
 	order   *list.List // front = oldest insert, back = newest; values are *boundedTTLEntry[V]
 	maxSize int
+	// evicted counts entries dropped to make room since the last
+	// EvictionsSinceLastRead, so the periodic sweep can report cap pressure.
+	evicted int
 }
 
 type boundedTTLEntry[V any] struct {
@@ -114,6 +117,7 @@ func (c *boundedTTLCache[V]) Set(key string, value V, expiresAt time.Time) {
 		}
 
 		c.removeLocked(oldest)
+		c.evicted++
 	}
 
 	c.entries[key] = c.order.PushBack(&boundedTTLEntry[V]{key: key, value: value, expiresAt: expiresAt})
@@ -155,6 +159,18 @@ func (c *boundedTTLCache[V]) DeleteExpired(now time.Time) int {
 	}
 
 	return removed
+}
+
+// EvictionsSinceLastRead returns how many entries the cap evicted since the
+// previous call, and resets the counter.
+func (c *boundedTTLCache[V]) EvictionsSinceLastRead() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	evicted := c.evicted
+	c.evicted = 0
+
+	return evicted
 }
 
 // Len returns the number of entries, expired ones included until swept.

@@ -1050,14 +1050,19 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Start the peer-map sweep before the topic subscriptions that feed it, for
 	// the same reason. The gossip handlers below insert into the attribution
-	// maps and the reputation and IP-ban caches, and subscribeToTopic
-	// deliberately drains its channel without watching ctx.Done, so its workers
-	// outlive a failed Start. Starting the sweep afterwards would leave any
-	// early return between here and there — the blockchain Subscribe below —
-	// with those maps being fed and nothing expiring them or reading the
-	// at-capacity diagnostic. The attribution maps are bounded at insert either
-	// way (issue 1409), but the caches that share this sweep are TTL-only.
+	// maps and the reputation cache, and subscribeToTopic deliberately drains
+	// its channel without watching ctx.Done, so its workers outlive a failed
+	// Start. Starting the sweep afterwards would leave any early return
+	// between here and there — the blockchain Subscribe below — with those
+	// maps being fed and nothing expiring them or reading the at-capacity
+	// diagnostic. Every one of them is bounded at insert (issue 1409), so the
+	// sweep is about expiry and visibility rather than about the bound.
 	s.startPeerMapCleanup(ctx)
+
+	// Load the registry's banned set before any gossip can arrive, so a peer
+	// banned before this process started is dropped from its first message.
+	// The gossip path itself never waits on a refresh; see bannedPeerMirror.
+	s.primeBannedPeers()
 
 	// Subscribe to all topics
 	s.subscribeToTopic(ctx, s.blockTopicName, s.handleBlockTopic)

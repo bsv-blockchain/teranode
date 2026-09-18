@@ -1055,6 +1055,13 @@ func (s *Server) cleanupPeerMaps() {
 			blockEvictions.total, blockEvictions, subtreeEvictions.total, subtreeEvictions)
 	}
 
+	// The reputation cache only holds directly connected peers, so it sits at
+	// capacity only when more peers are connected than the cap allows; that
+	// means the cap is undersized for this node, not that gossip is flooding.
+	if reputationEvictions := s.reputationCache.EvictionsSinceLastRead(); reputationEvictions > 0 {
+		s.logger.Warnf("[cleanupPeerMaps] reputation cache at capacity since the last sweep: evicted %d entries; more connected peers than p2p_peer_map_max_size allows", reputationEvictions)
+	}
+
 	// Log current sizes
 	s.logger.Infof("[cleanupPeerMaps] current map sizes - blocks: %d, subtrees: %d, seen block hashes: %d, seen subtree hashes: %d",
 		s.blockPeerMap.Len(), s.subtreePeerMap.Len(), s.blockSeenHashes.Len(), s.subtreeSeenHashes.Len())
