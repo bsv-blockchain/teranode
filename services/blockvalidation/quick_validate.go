@@ -937,6 +937,24 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 
 // validateSubtrees validates subtree sizes and merkle root after processing.
 func (u *BlockValidation) validateSubtrees(ctx context.Context, block *model.Block, existingBlockID uint64) (uint64, error) {
+	if err := checkSubtreeBodyBinding(ctx, block); err != nil {
+		return 0, err
+	}
+
+	return existingBlockID, nil
+}
+
+// checkSubtreeBodyBinding runs every check that relates a block's subtree slices to
+// its header, in the order they have always run: subtree-size uniformity, the merkle
+// root, the coinbase placeholder at slot [0][0], the duplicate-transaction scan, and
+// the coinbase shape.
+//
+// Extracted so the same sequence can be run twice on different objects: once on a
+// probe carrying the structures as served, before anything durable happens, and once
+// at the tail on the rebuilt slices. Nothing here reads transaction bodies — the
+// checks compose node hashes and the coinbase — so it can run on a block whose
+// subtree_data has never been opened.
+func checkSubtreeBodyBinding(ctx context.Context, block *model.Block) error {
 	// Validate subtree sizes
 	subtreeSize := 0
 	for i := 0; i < len(block.SubtreeSlices)-1; i++ {
@@ -947,7 +965,7 @@ func (u *BlockValidation) validateSubtrees(ctx context.Context, block *model.Blo
 			// (not wrapped in ErrProcessing, which would shadow it at ValidateBlock and
 			// route it as a transient processing error). The caller re-downloads a fresh
 			// body instead of poisoning the hash (bitcoin-sv/teranode#4692).
-			return 0, errors.NewBlockCorruptError("[validateSubtrees][%s] subtree %d size mismatch", block.Hash().String(), i)
+			return errors.NewBlockCorruptError("[validateSubtrees][%s] subtree %d size mismatch", block.Hash().String(), i)
 		}
 	}
 
@@ -961,10 +979,10 @@ func (u *BlockValidation) validateSubtrees(ctx context.Context, block *model.Blo
 		// the sibling subtree-size check above does — the wrap keeps the infrastructure
 		// classification (ErrProcessing/ErrStorage) in the cause chain.
 		if errors.IsBlockCorrupt(err) {
-			return 0, err
+			return err
 		}
 
-		return 0, errors.NewProcessingError("[validateSubtrees][%s] merkle root check failed", block.Hash().String(), err)
+		return errors.NewProcessingError("[validateSubtrees][%s] merkle root check failed", block.Hash().String(), err)
 	}
 
 	// CVE-2012-2459. The merkle root CANNOT detect a duplicated trailing transaction:
@@ -987,20 +1005,20 @@ func (u *BlockValidation) validateSubtrees(ctx context.Context, block *model.Blo
 	if len(block.SubtreeSlices) > 0 {
 		first := block.SubtreeSlices[0]
 		if first == nil {
-			return 0, errors.NewProcessingError("[validateSubtrees][%s] first subtree was released during validation", block.Hash().String())
+			return errors.NewProcessingError("[validateSubtrees][%s] first subtree was released during validation", block.Hash().String())
 		}
 
 		if len(first.Nodes) == 0 {
-			return 0, errors.NewBlockCorruptError("[validateSubtrees][%s] first subtree has no nodes", block.Hash().String())
+			return errors.NewBlockCorruptError("[validateSubtrees][%s] first subtree has no nodes", block.Hash().String())
 		}
 
 		if !first.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholder) {
-			return 0, errors.NewBlockCorruptError("[validateSubtrees][%s] first transaction in first subtree is not a coinbase placeholder: %s", block.Hash().String(), first.Nodes[0].Hash.String())
+			return errors.NewBlockCorruptError("[validateSubtrees][%s] first transaction in first subtree is not a coinbase placeholder: %s", block.Hash().String(), first.Nodes[0].Hash.String())
 		}
 	}
 
 	if err := model.CheckSubtreeSlicesForDuplicateTxs(block.SubtreeSlices); err != nil {
-		return 0, err
+		return err
 	}
 
 	// The coinbase shape, for the subtree-carrying body. CheckMerkleRoot above substitutes
@@ -1012,27 +1030,42 @@ func (u *BlockValidation) validateSubtrees(ctx context.Context, block *model.Blo
 	// The shape check in getBlockTransactions does NOT cover this: it inspects
 	// subtreeData.Txs[0], a different object from block.CoinbaseTx.
 	if !model.IsConsensusCoinbase(block.CoinbaseTx) {
-		return 0, errors.NewBlockInvalidError("[validateSubtrees][%s] block coinbase tx is not a valid coinbase tx", block.Hash().String())
+		return errors.NewBlockInvalidError("[validateSubtrees][%s] block coinbase tx is not a valid coinbase tx", block.Hash().String())
 	}
 
-	return existingBlockID, nil
+	return nil
 }
 
-// readSubtree reads a single subtree from disk and validates its transactions.
-func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, subtreeIdx int, subtreeHash *chainhash.Hash) subtreeResult {
+// subtreeStructure is what one read of a subtree's node list yields: the structure
+// itself and the file type findLocalSubtreeFile resolved it from. The file type is
+// carried rather than re-derived, because re-resolving it later can select a
+// different sibling than the one that was actually read.
+type subtreeStructure struct {
+	subtree  *subtreepkg.Subtree
+	fileType fileformat.FileType
+}
+
+// readSubtreeStructure reads and deserializes a single subtree's node list from the
+// local blob store.
+//
+// It is the one place on the quick-validation route that turns a subtree hash into a
+// node list — the whole-block pre-bind pass and all three per-batch readers go
+// through it — so anything that must hold for every read of a subtree on this route
+// belongs here rather than being restated at each caller.
+func (u *BlockValidation) readSubtreeStructure(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash) (subtreeStructure, error) {
 	// On retry the subtree may already be promoted to FileTypeSubtree (the
 	// "already validated" marker) and FileTypeSubtreeToCheck cleaned up, so
 	// consult both file types — see findLocalSubtreeFile.
 	localFileType, localExists, err := findLocalSubtreeFile(ctx, u.subtreeStore, *subtreeHash)
 	if err != nil {
-		return subtreeResult{err: errors.NewStorageError("[getBlockTransactions][%s] failed to locate subtree %s", block.Hash().String(), subtreeHash.String(), err)}
+		return subtreeStructure{}, errors.NewStorageError("[getBlockTransactions][%s] failed to locate subtree %s", block.Hash().String(), subtreeHash.String(), err)
 	}
 	if !localExists {
-		return subtreeResult{err: errors.NewNotFoundError("[getBlockTransactions][%s] subtree %s not found locally", block.Hash().String(), subtreeHash.String())}
+		return subtreeStructure{}, errors.NewNotFoundError("[getBlockTransactions][%s] subtree %s not found locally", block.Hash().String(), subtreeHash.String())
 	}
 	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], localFileType)
 	if err != nil {
-		return subtreeResult{err: errors.NewNotFoundError("[getBlockTransactions][%s] failed to get subtree %s", block.Hash().String(), subtreeHash.String(), err)}
+		return subtreeStructure{}, errors.NewNotFoundError("[getBlockTransactions][%s] failed to get subtree %s", block.Hash().String(), subtreeHash.String(), err)
 	}
 	defer func() {
 		if subtreeReader != nil {
@@ -1066,7 +1099,7 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 
 			fallbackReader, ferr := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], localFileType)
 			if ferr != nil {
-				return subtreeResult{err: errors.NewNotFoundError("[getBlockTransactions][%s] failed to re-open subtree %s for heap fallback", block.Hash().String(), subtreeHash.String(), ferr)}
+				return subtreeStructure{}, errors.NewNotFoundError("[getBlockTransactions][%s] failed to re-open subtree %s for heap fallback", block.Hash().String(), subtreeHash.String(), ferr)
 			}
 			defer fallbackReader.Close()
 
@@ -1077,7 +1110,7 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 		subtree, err = subtreepkg.NewSubtreeFromReader(bufferedReader)
 	}
 	if err != nil {
-		return subtreeResult{err: errors.NewProcessingError("[getBlockTransactions][%s] failed to deserialize subtree %s", block.Hash().String(), subtreeHash.String(), err)}
+		return subtreeStructure{}, errors.NewProcessingError("[getBlockTransactions][%s] failed to deserialize subtree %s", block.Hash().String(), subtreeHash.String(), err)
 	}
 
 	// A zero-node subtree cannot be honest, and this route has no other check for it
@@ -1089,8 +1122,37 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 	// the guarantee local and stable if that constructor ever changes. Placed before the
 	// subtree-data read so a junk blob costs one deserialisation, not two.
 	if subtree.Length() == 0 {
-		return subtreeResult{err: errors.NewProcessingError("[getBlockTransactions][%s] subtree %s has zero nodes", block.Hash().String(), subtreeHash.String())}
+		releaseSubtreeStructure(subtree)
+		return subtreeStructure{}, errors.NewProcessingError("[getBlockTransactions][%s] subtree %s has zero nodes", block.Hash().String(), subtreeHash.String())
 	}
+
+	return subtreeStructure{subtree: subtree, fileType: localFileType}, nil
+}
+
+// releaseSubtreeStructure drops a subtree the reader owns and is not going to
+// return, unmapping it when it is mmap-backed. Nodes are detached before the
+// close, the order model.Block's own release uses: Close leaves Nodes pointing at
+// the region it has just unmapped.
+func releaseSubtreeStructure(subtree *subtreepkg.Subtree) {
+	if subtree == nil {
+		return
+	}
+
+	if subtree.IsMmapBacked() {
+		_ = subtree.ReleaseNodes()
+	}
+
+	_ = subtree.Close()
+}
+
+// readSubtree reads a single subtree from disk and validates its transactions.
+func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, subtreeIdx int, subtreeHash *chainhash.Hash) subtreeResult {
+	structure, err := u.readSubtreeStructure(ctx, block, subtreeHash)
+	if err != nil {
+		return subtreeResult{err: err}
+	}
+
+	subtree := structure.subtree
 
 	// get the subtree data from disk
 	subtreeDataReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
@@ -1099,8 +1161,13 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 	}
 	defer subtreeDataReader.Close()
 
-	// Reuse the same pooled reader for subtree data
+	// Pooled buffered reader, as the structure read uses, to reduce GC pressure
+	bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
 	bufferedReader.Reset(subtreeDataReader)
+	defer func() {
+		bufferedReader.Reset(nil)
+		bufioReaderPool.Put(bufferedReader)
+	}()
 
 	// the subtree data reader will make sure the data matches the transaction ids from the subtree
 	subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtree, bufferedReader)
@@ -1126,7 +1193,7 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 	// Check if full .subtree file already exists (for retry scenarios). If the
 	// reader above already pulled from FileTypeSubtree we know it's present
 	// without another store round-trip.
-	fullSubtreeExists := localFileType == fileformat.FileTypeSubtree
+	fullSubtreeExists := structure.fileType == fileformat.FileTypeSubtree
 	if !fullSubtreeExists {
 		fullSubtreeExists, _ = u.subtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 	}
