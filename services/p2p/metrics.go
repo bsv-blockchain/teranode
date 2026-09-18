@@ -18,6 +18,7 @@ var (
 	prometheusP2PWebsocketNotificationsDropped *prometheus.CounterVec
 	prometheusP2PWebsocketClientsEvicted       prometheus.Counter
 	prometheusP2PGossipKafkaPublishDropped     *prometheus.CounterVec
+	prometheusP2PRejectedTxPublishSuppressed   *prometheus.CounterVec
 
 	// prometheusP2PConnectedPeers tracks the number of peers currently connected
 	// to this node over the libp2p network.
@@ -82,6 +83,16 @@ func _initPrometheusMetrics() {
 			Help:      "Number of gossip announcements dropped because the Kafka producer's publish channel was full, by topic",
 		},
 		[]string{"topic"},
+	)
+
+	prometheusP2PRejectedTxPublishSuppressed = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "p2p",
+			Name:      "rejected_tx_publish_suppressed_total",
+			Help:      "Number of internally rejected transactions not re-broadcast on the rejected_tx gossip topic, by reason (rate_limited = egress token bucket exhausted, duplicate = txid still inside its dedup period after an earlier re-broadcast, about two 15s publish windows under sustained repeats)",
+		},
+		[]string{"reason"},
 	)
 
 	prometheusP2PWebsocketClientsEvicted = promauto.NewCounter(
@@ -164,4 +175,13 @@ func notificationDropped(notificationType string) {
 func gossipPublishDropped(topic string) {
 	initPrometheusMetrics()
 	prometheusP2PGossipKafkaPublishDropped.WithLabelValues(topic).Inc()
+}
+
+// rejectedTxPublishSuppressed records an internally rejected transaction whose
+// re-broadcast the egress gate dropped. A counter rather than a warn log for
+// the same reason as gossipPublishDropped: the flood that trips the gate is
+// exactly when one log line per drop would bury the log.
+func rejectedTxPublishSuppressed(reason string) {
+	initPrometheusMetrics()
+	prometheusP2PRejectedTxPublishSuppressed.WithLabelValues(reason).Inc()
 }
