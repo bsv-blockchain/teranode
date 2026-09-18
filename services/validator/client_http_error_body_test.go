@@ -133,7 +133,9 @@ func TestValidateTransactionViaHTTP_BoundedDiagnostics(t *testing.T) {
 			client := &Client{validatorHTTPAddr: addr, logger: logger}
 			tx := createTestTransaction(t)
 
-			err = client.validateTransactionViaHTTP(context.Background(), tx, 100, NewDefaultOptions())
+			// Height 0 with default options is the only shape the HTTP fallback
+			// still carries; a caller-asserted height is refused before sending.
+			err = client.validateTransactionViaHTTP(context.Background(), tx, 0, NewDefaultOptions())
 			if tc.success {
 				require.NoError(t, err)
 				require.Empty(t, logger.warning)
