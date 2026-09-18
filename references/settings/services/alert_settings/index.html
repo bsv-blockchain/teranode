@@ -7080,6 +7080,34 @@
 <td>ALERT_P2P_PORT</td>
 <td>P2P listening port (string length &gt;= 2 after PORT_PREFIX applied)</td>
 </tr>
+<tr>
+<td>P2PBootstrapPeer</td>
+<td>string</td>
+<td>""</td>
+<td>alert_p2p_bootstrap_peer</td>
+<td>Extra libp2p bootstrap multiaddr for private alert networks (public IPFS peers are still tried)</td>
+</tr>
+<tr>
+<td>P2PAllowPrivateIPs</td>
+<td>bool</td>
+<td>false</td>
+<td>alert_p2p_allow_private_ips</td>
+<td>Allow dialing/accepting/advertising RFC1918 addresses on the alert network</td>
+</tr>
+<tr>
+<td>P2PPeerDiscoveryInterval</td>
+<td>time.Duration</td>
+<td>10m</td>
+<td>alert_p2p_peer_discovery_interval</td>
+<td>Peer discovery and alert sync cadence</td>
+</tr>
+<tr>
+<td>P2PDHTMode</td>
+<td>string</td>
+<td>"client"</td>
+<td>alert_p2p_dht_mode</td>
+<td>Kademlia DHT mode: <code>client</code> or <code>server</code></td>
+</tr>
 </tbody>
 </table>
 <h2 id="network-specific-behavior">Network-Specific Behavior<a class="headerlink" href="#network-specific-behavior" title="Permanent link">&para;</a></h2>
@@ -7162,11 +7190,6 @@
 <td>AutoMigrate</td>
 <td>true</td>
 <td>Database schema migration on startup</td>
-</tr>
-<tr>
-<td>DHTMode</td>
-<td>"client"</td>
-<td>DHT client mode</td>
 </tr>
 <tr>
 <td>P2P.IP</td>
