@@ -1950,7 +1950,16 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		CoinbaseTx:       coinbaseTx,
 		TransactionCount: transactionCount,
 		SizeInBytes:      blockSize,
-		Subtrees:         jobSubtreeHashes, // we need to store the hashes of the subtrees in the block, without the coinbase
+		// The height this candidate was issued for (GetMiningCandidate sets it to best+1).
+		// block.Valid below is height-dependent and reads it: CoinbaseCommonRuleViolation picks the
+		// pre- or post-Genesis coinbase limits from it, and the BIP34 and reward checks are guarded
+		// on it being non-zero. Leaving it unset judged every submitted block at height 0, which is
+		// below every network's Genesis activation, so a coinbase over 1MB or over the pre-Genesis
+		// 20,000-sigop limit was rejected here while every peer would accept it, and the BIP34 and
+		// reward checks never ran at all. GetBlockAssemblyBlockCandidate builds its block from the
+		// same candidate field.
+		Height:   job.MiningCandidate.Height,
+		Subtrees: jobSubtreeHashes, // we need to store the hashes of the subtrees in the block, without the coinbase
 		// Aliases the subtree processor's live slice rather than copying it, so
 		// this block shares both the backing array and the *Subtree values with
 		// whatever else holds the job. Block.Valid must therefore not mutate
