@@ -433,21 +433,21 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) (retErr err
 
 		height := kafkaMsg.Height
 
-		options := &Options{
-			SkipUtxoCreation:     kafkaMsg.Options.SkipUtxoCreation,
-			AddTXToBlockAssembly: kafkaMsg.Options.AddTXToBlockAssembly,
-			SkipPolicyChecks:     kafkaMsg.Options.SkipPolicyChecks,
-			CreateConflicting:    kafkaMsg.Options.CreateConflicting,
-			// A queue-full shed on the ingest path must not advance the offset
-			// past an un-handed-off tx; retry the handoff in place, bounded by
-			// validator_blockAssemblyShedRetryTimeout and then unwound and dropped
-			// (propagation has already returned success), not retried forever.
-			WaitForBlockAssembly: true,
-		}
+		options := kafkaValidationOptions(kafkaMsg.Options)
 
 		// should not pass in a height when validating from Kafka, should just be current utxo store height
 		if _, err = v.validator.ValidateWithOptions(consumerCtx, tx, height, options); err != nil {
-			prometheusInvalidTransactions.Inc()
+			// ErrTxMissingParent here means the tx merely arrived before its
+			// parent on this Kafka topic's 32 concurrent partitions - it is not
+			// evidence of an attack or a malformed tx, so count it separately
+			// from prometheusInvalidTransactions to keep that counter usable as
+			// a signal for genuinely invalid/attack traffic.
+			if errors.Is(err, errors.ErrTxMissingParent) {
+				prometheusMissingParentTransactions.Inc()
+			} else {
+				prometheusInvalidTransactions.Inc()
+			}
+
 			v.logger.Errorf("[Validator] Invalid tx: %s", err)
 
 			return err
@@ -489,6 +489,52 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) (retErr err
 	}
 
 	return nil
+}
+
+// optionsFromKafkaMessage converts the wire-level KafkaTxValidationOptions into
+// the validator's internal Options, treating a nil options message the same as
+// one whose fields are all absent/false.
+//
+// KafkaTxValidationOptions is an optional-presence proto3 message field
+// (kafka_messages.proto), so a producer that omits it entirely - including a
+// foreign or crafted producer on the validatortxs topic, which is not
+// authenticated - unmarshals with kafkaMsg.Options == nil. The in-tree
+// producer (propagation's validateTransactionViaKafka) always populates
+// Options from validator.NewDefaultOptions(), so falling back to those same
+// defaults here means an omitted Options field can never be more permissive
+// than what the trusted producer already sends.
+func optionsFromKafkaMessage(opts *kafkamessage.KafkaTxValidationOptions) *Options {
+	if opts == nil {
+		return NewDefaultOptions()
+	}
+
+	return &Options{
+		SkipUtxoCreation:     opts.SkipUtxoCreation,
+		AddTXToBlockAssembly: opts.AddTXToBlockAssembly,
+		SkipPolicyChecks:     opts.SkipPolicyChecks,
+		CreateConflicting:    opts.CreateConflicting,
+	}
+}
+
+// kafkaValidationOptions builds the Options passed to ValidateWithOptions for a
+// message received on the validatortxs Kafka topic. It starts from
+// optionsFromKafkaMessage's nil-safe extraction of the wire-level fields, then
+// always sets WaitForBlockAssembly.
+//
+// WaitForBlockAssembly is NOT carried on the wire (KafkaTxValidationOptions has
+// no such field) - it is a property of this ingest path, not of the message
+// content: a queue-full shed on the block-assembly handoff must not advance the
+// Kafka offset past an un-handed-off tx, so the handoff is retried in place,
+// bounded by validator_blockAssemblyShedRetryTimeout and then unwound and
+// dropped (propagation has already returned success to its caller), rather than
+// retried forever. Applying it here, after optionsFromKafkaMessage, means it is
+// set unconditionally for every Kafka-sourced tx regardless of whether Options
+// was present on the wire.
+func kafkaValidationOptions(opts *kafkamessage.KafkaTxValidationOptions) *Options {
+	options := optionsFromKafkaMessage(opts)
+	options.WaitForBlockAssembly = true
+
+	return options
 }
 
 // Stop gracefully shuts down the validator server and all associated components.
