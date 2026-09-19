@@ -763,8 +763,14 @@ type StateMessage struct {
 	RemoveMapCount        uint32                 `protobuf:"varint,9,opt,name=removeMapCount,proto3" json:"removeMapCount,omitempty"`              // the number of transactions in the remove map
 	Subtrees              []string               `protobuf:"bytes,10,rep,name=subtrees,proto3" json:"subtrees,omitempty"`                          // the hashes of the current subtrees
 	QueueHeadAgeMillis    int64                  `protobuf:"varint,11,opt,name=queueHeadAgeMillis,proto3" json:"queueHeadAgeMillis,omitempty"`     // how long the oldest queued batch has been waiting, in milliseconds (0 when empty)
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	// Whether block assembly has reached its in-memory transaction limit. This is
+	// the resident-set bound (queued plus subtree-held), which is a different
+	// condition from queueMaxItems below: that one bounds the queue alone and
+	// trips when the dispatcher stalls, whereas this trips when the dispatcher is
+	// draining normally but no blocks are being mined.
+	TxIngressFull bool `protobuf:"varint,12,opt,name=txIngressFull,proto3" json:"txIngressFull,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StateMessage) Reset() {
@@ -872,6 +878,13 @@ func (x *StateMessage) GetQueueHeadAgeMillis() int64 {
 		return x.QueueHeadAgeMillis
 	}
 	return 0
+}
+
+func (x *StateMessage) GetTxIngressFull() bool {
+	if x != nil {
+		return x.TxIngressFull
+	}
+	return false
 }
 
 // Slim, atomic-only view of the block-assembly ingest queue, intended for
@@ -1339,7 +1352,7 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\b_version\"\x1c\n" +
 	"\n" +
 	"OKResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xb0\x03\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xd6\x03\n" +
 	"\fStateMessage\x12.\n" +
 	"\x12blockAssemblyState\x18\x01 \x01(\tR\x12blockAssemblyState\x124\n" +
 	"\x15subtreeProcessorState\x18\x02 \x01(\tR\x15subtreeProcessorState\x12\"\n" +
@@ -1354,7 +1367,8 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\x0eremoveMapCount\x18\t \x01(\rR\x0eremoveMapCount\x12\x1a\n" +
 	"\bsubtrees\x18\n" +
 	" \x03(\tR\bsubtrees\x12.\n" +
-	"\x12queueHeadAgeMillis\x18\v \x01(\x03R\x12queueHeadAgeMillis\"\xc3\x01\n" +
+	"\x12queueHeadAgeMillis\x18\v \x01(\x03R\x12queueHeadAgeMillis\x12$\n" +
+	"\rtxIngressFull\x18\f \x01(\bR\rtxIngressFull\"\xc3\x01\n" +
 	"\x11QueueStatsMessage\x12\x1e\n" +
 	"\n" +
 	"queueCount\x18\x01 \x01(\x03R\n" +

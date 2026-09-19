@@ -152,6 +152,31 @@ func TestNewClientWithAddressNotificationLoop(t *testing.T) {
 	last := c.lastBlockNotification
 	c.subscribersMu.Unlock()
 	require.NotNil(t, last)
+
+	// The BlockAssemblyFull arm of the same loop. This is the code a deployed node runs: propagation,
+	// legacy netsync, the RPC and subtree validation all read the flag through a *Client like this
+	// one, so without driving a real notification through a real subscription the ingress limit could
+	// be silently dead in production with the whole suite green.
+	require.False(t, c.IsBlockAssemblyFull(),
+		"a client must default to accepting transactions before block assembly says anything")
+
+	fakeSrv.subCh <- NewBlockAssemblyFullNotification(true)
+
+	require.Eventually(t, c.IsBlockAssemblyFull, 2*time.Second, 10*time.Millisecond,
+		"the client must pick up a full block assembly from its subscription")
+
+	fakeSrv.subCh <- NewBlockAssemblyFullNotification(false)
+
+	require.Eventually(t, func() bool { return !c.IsBlockAssemblyFull() }, 2*time.Second, 10*time.Millisecond,
+		"the client must pick up block assembly reporting room again")
+
+	// The arm consumes this type rather than forwarding it, so an ingress-limit announcement must not
+	// reach ordinary subscribers.
+	select {
+	case got := <-ch:
+		t.Fatalf("BlockAssemblyFull must not be forwarded to subscribers, got %v", got.Type)
+	case <-time.After(100 * time.Millisecond):
+	}
 }
 
 func TestClientHealth(t *testing.T) {
