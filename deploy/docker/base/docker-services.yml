@@ -216,7 +216,21 @@ services:
     user: "0:0"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./blockassembly.rules.yml:/etc/prometheus/blockassembly.rules.yml
       - ${DATA_PATH}/prometheus:/prometheus
+
+  alertmanager:
+    container_name: alertmanager
+    image: prom/alertmanager:v0.26.0
+    ports:
+      # 9093 on the host is already taken by kafka's pandaproxy in this stack.
+      - "127.0.0.1:9094:9093"
+    networks:
+      - teranode-network
+    user: "0:0"
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml
+      - ${DATA_PATH}/alertmanager:/alertmanager
 
   grafana:
     container_name: grafana
