@@ -97,7 +97,7 @@ type HTTP struct {
 //
 // Configuration:
 //   - ECHO_DEBUG: Enable debug logging
-//   - http_sign_response: Enable response signing
+//   - asset_sign_http_responses: Enable response signing
 //   - p2p_private_key: Private key for response signing
 //   - securityLevelHTTP: 0 for HTTP, non-zero for HTTPS
 //   - server_certFile: TLS certificate file (HTTPS only)

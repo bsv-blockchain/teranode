@@ -40,7 +40,7 @@ var allowedFixtures = map[string]bool{
 	// Coinbase teranode2 / teranode3 fixtures (compose/settings_test.conf).
 	"860616e0492a3050aa760440469acfe4f57cf5387a765f5227603c4f6aeac985bf6643d453a1d68a101e52766e9feb9721b95e34aa73e5ea6c69a44be43cab6d": true,
 	"1d6a9c8963fdbb86eabc4d10cb1efdf418197cfc3f9779e3c8229663411ae5c8f1cee260eeeae89cb45aae6955230557eba5bf63ef38087ec6be91ab744326c7": true,
-	// Long-committed dev wallet WIF fixtures (settings.conf PK1-PK6, also in
+	// Long-committed dev wallet WIF fixtures (settings.conf PK1-PK3, also in
 	// util/general_test.go and compose/docker-compose-3blasters.yml). Note:
 	// miner_wallet_private_keys.operator.mainnet resolves to these unless the
 	// deployment overrides PK1-PK3; flagged as a related finding on
@@ -48,9 +48,6 @@ var allowedFixtures = map[string]bool{
 	"L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q": true,
 	"KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k": true,
 	"L3NVjmwg3nC7ZPrwMVF6FXiG1a1RZ89nhizmJVctGztRKLYrhtFL": true,
-	// Pre-existing committed dev libp2p PSK (settings.conf p2p_shared_key).
-	// No Go consumer references the setting; candidate for separate removal.
-	"285b49e6d910726a70f205086c39cbac6d8dcc47839053a21b1f614773bbc137": true,
 }
 
 // knownSettingsFiles must always be among the discovered scan targets; a
@@ -225,7 +222,7 @@ func TestNoRealPrivateKeysCommitted(t *testing.T) {
 				// The structural ban on context-less defaults covers hex
 				// identity keys (this guard's subject). Context-less WIF
 				// wallet defaults (coinbase_wallet_private_key = ${PK1}) are
-				// pre-existing and tracked with the PK1-PK6 related finding
+				// pre-existing and tracked with the PK1-PK3 related finding
 				// on bitcoin-sv/teranode issue 4739.
 				if privateKeyName.MatchString(name) && isKeyShapedHex(part) {
 					require.NotEmpty(t, context,
