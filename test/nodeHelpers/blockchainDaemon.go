@@ -63,6 +63,15 @@ func NewBlockchainDaemon(t *testing.T) (*BlockchainDaemon, error) {
 	tSettings := settings.NewSettings("dev.system.test")
 	tSettings.LocalTestStartFromState = "RUNNING"
 
+	// Off-heap mmap/disk-backed storage settings are opt-in and validated (must
+	// exist and be writable) at service construction/startup. A developer's
+	// local settings_local.conf may legitimately point these at real
+	// directories for manual testing of the feature; reset them here so
+	// system tests never depend on paths that only exist on one machine.
+	tSettings.BlockAssembly.SubtreeMmapDir = ""
+	tSettings.BlockAssembly.TxMapDirs = nil
+	tSettings.BlockValidation.SubtreeMmapDir = ""
+
 	// Configure settings for in-memory Kafka
 	tSettings.Kafka.BlocksConfig.Scheme = memoryScheme
 	tSettings.Kafka.BlocksFinalConfig.Scheme = memoryScheme

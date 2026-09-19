@@ -755,6 +755,14 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		return errors.NewConfigurationError("could not get utxostore URL", err)
 	}
 
+	// Fail startup on a misconfigured mmap dir rather than letting
+	// subtreeFromBytesWithMmap silently fall back to heap allocation on every
+	// subtree load — that would defeat the RAM-reduction feature without any
+	// visible signal to the operator.
+	if err := util.ValidateWritableDir(u.settings.BlockValidation.SubtreeMmapDir); err != nil {
+		return errors.NewConfigurationError("blockvalidation_subtreeMmapDir is not usable", err)
+	}
+
 	// Only create a new BlockValidation if one wasn't already set (for testing).
 	// Pass the P2P client through the variadic opts so block-validation can strike the peer
 	// that served a corrupt block body (bitcoin-sv/teranode#4692) with correct attribution to
