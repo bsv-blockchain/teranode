@@ -91,14 +91,21 @@
 
 ### Optimistic Mining
 
-- `OptimisticMining = true`: enables background validation for performance on paths that opt in
-- Block validation proceeds while subtree validation runs in the background
+- `OptimisticMining` defaults to `true`: once the block's subtrees have been validated
+  (transaction and script checks, synchronously), the block is added to the chain and mining can
+  start on it, before the remaining block-level checks have run
+- Those block-level checks continue in the background - merkle root, coinbase and BIP34 checks,
+  duplicate transactions, transaction ordering and parent-spend checks, and the old-block-ID
+  double-spend scan. If a background check proves the block invalid it is invalidated and its
+  UTXO effects are rolled back; a transient storage or processing failure instead schedules a
+  re-validation and leaves the block on the chain in the meantime
 - Can be overridden per-validation via the `DisableOptimisticMining` option
 - **On the peer-served validation path optimistic mining is OFF unless BOTH
   `blockvalidation_optimistic_mining` AND `blockvalidation_optimistic_mining_peer_blocks` are set**
   (default `(true, false)` = off). The global flag being false always wins, so the peer-blocks flag
-  can never bypass it (bitcoin-sv/teranode#4692). Revalidation of an already-stored block is always
-  non-optimistic regardless of these flags.
+  can never bypass it (bitcoin-sv/teranode#4692). Revalidation of an already-stored block, and
+  blocks arriving over the legacy sync route (`baseURL == "legacy"`), are always non-optimistic
+  regardless of these flags.
 - **The catch-up path is always non-optimistic**, whatever these two flags are set to. It validates
   against a cached header run holding only the block's in-batch predecessors, which cannot carry the
   median-time-past window the optimistic branch checks synchronously; lifting this requires the
@@ -108,6 +115,8 @@
   invalidated/poisoned rather than re-downloaded) until the `block.Valid` integrity-floor split lands
   and removes that path. With the default (peer-blocks off) a corrupt body is never added and is
   re-downloaded, not poisoned.
+- Checkpoint-verified blocks take the quick-validation pipeline instead, which never consults this
+  setting.
 
 ### Corrupt-body re-download cap
 
