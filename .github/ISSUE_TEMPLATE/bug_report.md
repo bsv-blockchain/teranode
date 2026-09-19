@@ -7,6 +7,14 @@ assignees: ''
 
 ---
 
+## Severity (required)
+
+Tick exactly one (see the [severity criteria](../../docs/howto/bugReporting.md#severity)):
+
+- [ ] severity:critical — consensus failure, data loss or corruption, funds at risk, or a node that cannot sync or stay up, with no workaround
+- [ ] severity:major — a core function is broken or badly degraded (sustained throughput loss, a service needing manual restarts), but a workaround exists
+- [ ] severity:minor — cosmetic, documentation, or low-impact issues with an easy workaround
+
 ## Describe the bug
 
 A clear and concise description of what the bug is.
@@ -32,7 +40,7 @@ If applicable, add screenshots to help explain your problem.
 
 When did the bug first occur, or when did you first notice it?
 
-## Desktop (please complete the following information):
+## Desktop (please complete the following information)
 
 - OS: [e.g. iOS]
 - Browser [e.g. chrome, safari]
