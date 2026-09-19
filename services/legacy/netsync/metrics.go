@@ -25,6 +25,7 @@ var (
 	prometheusLegacyNetsyncBlockTxNrOutputs               prometheus.Histogram
 	prometheusLegacyNetsyncBlockTxValidate                prometheus.Histogram
 	prometheusLegacyNetsyncOrphans                        prometheus.Gauge
+	prometheusLegacyNetsyncOrphansAbandoned               prometheus.Counter
 	prometheusLegacyNetsyncOrphanTime                     prometheus.Histogram
 
 	// prometheusLegacyNetsyncPrewarmErrors counts validator errors observed during the
@@ -193,6 +194,14 @@ func _initPrometheusMetrics() {
 		Help:      "The number of orphan transactions",
 	})
 	prometheus.MustRegister(prometheusLegacyNetsyncOrphans)
+
+	prometheusLegacyNetsyncOrphansAbandoned = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "teranode",
+		Subsystem: "legacy_netsync",
+		Name:      "orphans_abandoned_total",
+		Help:      "Orphan transactions dropped for good: evicted from the orphan pool and still invalid on the final validation attempt",
+	})
+	prometheus.MustRegister(prometheusLegacyNetsyncOrphansAbandoned)
 
 	prometheusLegacyNetsyncOrphanTime = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "teranode",
