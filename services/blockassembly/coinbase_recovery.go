@@ -127,7 +127,17 @@ func (b *BlockAssembler) canonicalCoinbaseAt(ctx context.Context, height uint32)
 		return false, nil, errors.NewProcessingError("[coinbaseRecovery] canonical block at height %d has no coinbase", height)
 	}
 
-	txMeta, err := b.utxoStore.Get(ctx, blk.CoinbaseTx.TxIDChainHash(), fields.Tx)
+	// Ask for fields.Creating rather than fields.Tx, which reassembles the whole
+	// transaction just to be discarded. The question is whether the store holds
+	// a usable coinbase, not whether a row exists: a multi-record create that was
+	// interrupted before its flag was cleared leaves Creating=true, and spends
+	// refuse such a record. Reporting it absent sends it to the repair, whose
+	// create tolerates ErrTxExists and clears the flag on aerospike.
+	//
+	// An external blob that has gone missing under a record is not probed. The
+	// aerospike create writes the blob before any record, so an interrupted
+	// create cannot leave a record without one.
+	txMeta, err := b.utxoStore.Get(ctx, blk.CoinbaseTx.TxIDChainHash(), fields.Creating)
 	if err != nil {
 		// Either code means the same thing here -- the coinbase is not in the
 		// store -- and which one comes back depends on the store backend.
@@ -138,7 +148,8 @@ func (b *BlockAssembler) canonicalCoinbaseAt(ctx context.Context, height uint32)
 		return false, blk, errors.NewProcessingError("[coinbaseRecovery] error checking coinbase at height %d", height, err)
 	}
 
-	if txMeta == nil || txMeta.Tx == nil {
+	// A missing record surfaces as (nil, nil) on some backends.
+	if txMeta == nil || txMeta.Creating {
 		return false, blk, nil
 	}
 

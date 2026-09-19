@@ -358,14 +358,6 @@ func (u *Server) readSubtree(ctx context.Context, subtreeHash chainhash.Hash) (*
 
 Reads a subtree from the subtree store by its hash. This method attempts to retrieve the subtree from storage, trying both regular subtree files and subtrees marked for checking if the primary lookup fails.
 
-##### processTxMetaUsingStore
-
-```go
-func (u *Server) processTxMetaUsingStore(ctx context.Context, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.SubtreeData) error
-```
-
-Processes transaction metadata using the UTXO store. This method handles the retrieval and processing of transaction metadata for all transactions in a subtree, with support for both batched and individual transaction processing modes.
-
 #### Legacy: WriteTxs
 
 ```go
@@ -424,7 +416,6 @@ All settings use the `BlockPersister` section (setting keys prefixed with `block
 
 - **`BlockPersister.PersistSleep`**: Sleep duration between processing attempts when no blocks are available (default: `10s`).
 - **`BlockPersister.Concurrency`**: Number of parallel persistence workers (default: `8`).
-- **`BlockPersister.BatchMissingTransactions`**: When true, enables batched retrieval of transaction metadata for better performance (default: `true`).
 - **`BlockPersister.ProcessUTXOFiles`**: When true, processes UTXO files during block persistence (default: `true`).
 - **`BlockPersister.SkipUTXODelete`**: Debug setting to skip UTXO deletion during persistence (default: `false`).
 
