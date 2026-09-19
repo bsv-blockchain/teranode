@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -154,12 +155,12 @@ func TestCheckBlockIsInCurrentChain_InMemory_ContextCancellation(t *testing.T) {
 	assert.NoError(t, err)
 	assert.False(t, result)
 
-	// A would-be-positive (a real on-chain id) is now confirmed against the
-	// authoritative on_main_chain flag so a non-existent id can't be mistaken for
-	// on-chain. That confirmation is a DB query, so a cancelled context surfaces as
-	// an error rather than an unverified true.
-	_, err = s.CheckBlockIsInCurrentChain(ctx, []uint32{uint32(blockID)})
-	assert.Error(t, err)
+	// A real on-chain id is now answered from the forked set, which is also fully
+	// in-memory, so a cancelled context has no effect on it either. Only the
+	// about-to-reject path (every candidate in the forked set) still queries.
+	result, err = s.CheckBlockIsInCurrentChain(ctx, []uint32{uint32(blockID)})
+	assert.NoError(t, err)
+	assert.True(t, result)
 }
 
 func TestCheckBlockIsInCurrentChain_InMemory_ClosedDB(t *testing.T) {
@@ -177,38 +178,119 @@ func TestCheckBlockIsInCurrentChain_InMemory_ClosedDB(t *testing.T) {
 	assert.NoError(t, err)
 	assert.False(t, result)
 
-	// A positive candidate is confirmed against on_main_chain, which needs the DB;
-	// with the DB closed this surfaces an error instead of an unverified true.
-	_, err = s.CheckBlockIsInCurrentChain(context.Background(), []uint32{uint32(blockID)})
-	assert.Error(t, err)
+	// A positive is answered from the forked set, so a closed database does not stop
+	// it. TestCheckBlockIsInCurrentChain_InMemory_OnChainIDAnsweredFromMemory is the
+	// dedicated test for that contract; this one only checks the closed database does
+	// not turn it into an error.
+	result, err = s.CheckBlockIsInCurrentChain(context.Background(), []uint32{uint32(blockID)})
+	assert.NoError(t, err)
+	assert.True(t, result)
 }
 
-func TestCheckBlockIsInCurrentChain_InMemory_PhantomBelowMaxID(t *testing.T) {
-	s := newStoreWithInMemoryChainCheck(t)
-	defer s.Close(context.Background())
-
-	_, _, err := s.StoreBlock(context.Background(), block1, "")
-	require.NoError(t, err)
-
-	// Commit block2 under a high explicit id, leaving a large gap of non-existent
-	// ids below maxBlockID (simulating an orphaned/phantom id-sequence gap).
+// TestCheckBlockIsInCurrentChain_GapIDDivergesBetweenRoutes documents, rather than
+// hides, the one input on which the two routes disagree.
+//
+// A gap id is an id at or below maxBlockID with no committed blocks row. The SQL
+// route rejects it, because there is no on_main_chain row and the parent_id walk
+// never reaches it. The forked-set route accepts it, because it is not in the forked
+// set and the route treats absence as proof of membership.
+//
+// This is issue 1055, and it is accepted deliberately. Gap ids DO exist and they are
+// created by ordinary running, so do not read the paragraphs below as a claim that they
+// cannot happen. They can, and the reason this is still safe is measured, not argued.
+//
+// MEASURED on the Hetzner boxes, 2026-09-01. Gap ids present:
+//
+//	SELECT (SELECT MAX(id) FROM blocks) + 1 - (SELECT COUNT(*) FROM blocks) FROM blocks;
+//	mainnet 184, testnet 0, teratestnet 0    (genesis commits at id 0, hence the +1)
+//
+// mainnet's 184 sit in 12 interior runs of 1 to 31 ids. Every run follows a multi-minute
+// pause in block storage and is exactly as long as the number of blocks that were in
+// flight when the node stopped. They are restart scars: an id is reserved for a block,
+// the node stops before writing anything about that block, and on restart the block is
+// re-processed under a fresh id. Block HEIGHTS are unbroken across every run, so no block
+// is missing. Only ids were burned.
+//
+// Nothing references them, which is the property that makes the accept safe. The utxoset
+// store packs a transaction's blocks into tx_ident.membership as 12-byte big-endian
+// triples of block id, height and subtree index. Decoding those around all 12 runs, across
+// all 8 partitions: 381,599 stamps examined, ZERO pointing at an id with no blocks row.
+// Transactions reference id 271114 and then jump to 271117; the burned 271115 and 271116
+// appear on nothing. Every transaction carries exactly one block (0 rows with
+// length(membership) > 12 out of 18M on one partition), so a transaction's created_height
+// is the height of the block stamped on it and that scan could not have missed a stamp.
+//
+// So the failure that burns an id lands BEFORE any stamping. The wrong answer exists and
+// is currently unreachable, because reaching it needs something to hold a burned id and
+// hand it to this function. Nothing does.
+//
+// Do NOT re-derive this. Two separate reviews have now spent significant time proving that
+// gap ids exist, which was never in doubt, and stopping there. The question that decides
+// safety is whether anything REFERENCES one, and the query above plus the membership
+// decode answers it in minutes. If you want to re-check it on a node, run those two, not a
+// fresh argument about block-id assignment.
+//
+// What is NOT a guarantee: the protection is where a crash lands, not a rule the code
+// enforces. Two paths can stamp an id that then goes nowhere. storeInvalidBlock re-commits
+// a pre-assigned block under a fresh id, abandoning the id already written onto its
+// transactions (services/blockvalidation/BlockValidation.go). The gRPC AddBlock handler
+// passes a caller-supplied id straight through with no bound and no continuity check
+// (services/blockchain/Server.go). Four production call sites pass options.WithID, so an
+// earlier version of this comment claiming none did was simply wrong. If either path ever
+// fires, the burned id becomes referenced and reachable, permanently, and the asset server
+// reads block ids straight off transaction metadata.
+//
+// The shadow comparison is the standing instrument for that: while
+// blockchain_chain_check_shadow_compare is on, the id behind every forked-set accept is
+// checked against the SQL answer, and a mismatch is logged and counted. This test builds the mismatch on
+// purpose so the two routes' behaviour is written down and a reviewer does not have to
+// reconstruct it.
+func TestCheckBlockIsInCurrentChain_GapIDDivergesBetweenRoutes(t *testing.T) {
 	const highID = 100000
-	committed, _, err := s.StoreBlock(context.Background(), block2, "", options.WithID(highID))
-	require.NoError(t, err)
-	require.Equal(t, uint64(highID), committed)
 
-	// A phantom id (<= maxBlockID, no row, not in the off-chain set) must be
-	// rejected: it has no on_main_chain=true row, identical to the SQL route.
-	// Pre-fix the in-memory path wrongly returned true here — a toggled/untoggled
-	// consensus split.
-	result, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{highID - 1})
-	require.NoError(t, err)
-	assert.False(t, result, "non-existent id below maxBlockID must not be treated as on-chain")
+	newStoreWithGap := func(t *testing.T, useInMemory bool) *SQL {
+		t.Helper()
+		s := newOnMainChainTestStoreWith(t, func(st *settings.Settings) {
+			st.BlockChain.UseInMemoryChainCheck = useInMemory
+			st.BlockChain.ChainCheckShadowCompare = false
+		})
+		_, _, err := s.StoreBlock(context.Background(), block1, "")
+		require.NoError(t, err)
 
-	// Sanity: the real committed on-chain id still resolves true.
-	result, err = s.CheckBlockIsInCurrentChain(context.Background(), []uint32{highID})
-	require.NoError(t, err)
-	assert.True(t, result)
+		// Commit block2 under a high explicit id, leaving a large run of ids below
+		// maxBlockID that belong to no block.
+		committed, _, err := s.StoreBlock(context.Background(), block2, "", options.WithID(highID))
+		require.NoError(t, err)
+		require.Equal(t, uint64(highID), committed)
+
+		return s
+	}
+
+	t.Run("SQL route rejects a gap id", func(t *testing.T) {
+		s := newStoreWithGap(t, false)
+
+		result, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{highID - 1})
+		require.NoError(t, err)
+		require.False(t, result, "the authoritative route must reject an id with no committed row")
+	})
+
+	t.Run("forked-set route accepts a gap id", func(t *testing.T) {
+		s := newStoreWithGap(t, true)
+
+		result, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{highID - 1})
+		require.NoError(t, err)
+		require.True(t, result, "absence from the forked set is taken as proof of main-chain membership")
+	})
+
+	t.Run("both routes accept the real committed id", func(t *testing.T) {
+		for _, useInMemory := range []bool{false, true} {
+			s := newStoreWithGap(t, useInMemory)
+
+			result, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{highID})
+			require.NoError(t, err)
+			require.True(t, result)
+		}
+	})
 }
 
 // TestCheckBlockIsInCurrentChain_InMemory_UninitialisedMaxBlockID reproduces the
@@ -462,4 +544,472 @@ func TestCheckBlockIsInCurrentChain_InMemory_InvalidatedBlock(t *testing.T) {
 	result, err = s.CheckBlockIsInCurrentChain(context.Background(), []uint32{uint32(blockID2)})
 	require.NoError(t, err)
 	assert.False(t, result, "Invalidated block should be off-chain (in-memory path)")
+}
+
+// TestCheckBlockIsInCurrentChain_InMemory_OnChainIDAnsweredFromMemory pins the
+// forked-set fast path. An id that is at or below maxBlockID and absent from the
+// off-chain (forked) set is on the main chain, and the store must say so with no
+// database round trip at all. Proven by closing the database first: the answer
+// still comes back true. Before this change the same call confirmed every
+// candidate against on_main_chain and so errored on a closed database.
+func TestCheckBlockIsInCurrentChain_InMemory_OnChainIDAnsweredFromMemory(t *testing.T) {
+	s := newStoreWithInMemoryChainCheck(t)
+
+	blockID, _, err := s.StoreBlock(context.Background(), block1, "")
+	require.NoError(t, err)
+
+	s.Close(context.Background())
+
+	result, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{uint32(blockID)})
+	require.NoError(t, err)
+	require.True(t, result, "committed id absent from the forked set must be answered from memory")
+}
+
+// TestCheckBlockIsInCurrentChain_ShadowCompare_CountsDisagreement covers the soak
+// instrument. While blockchain_chain_check_shadow_compare is on, every answer the
+// forked-set route gives is also computed the authoritative way and the two are
+// compared. The comparison exists to measure whether the two routes ever disagree
+// on a live node, so it must count mismatches and must never change the answer.
+func TestCheckBlockIsInCurrentChain_ShadowCompare_CountsDisagreement(t *testing.T) {
+	const highID = 100000
+
+	s := newOnMainChainTestStoreWith(t, func(st *settings.Settings) {
+		st.BlockChain.UseInMemoryChainCheck = true
+		st.BlockChain.ChainCheckShadowCompare = true
+	})
+
+	_, _, err := s.StoreBlock(context.Background(), block1, "")
+	require.NoError(t, err)
+
+	committed, _, err := s.StoreBlock(context.Background(), block2, "", options.WithID(highID))
+	require.NoError(t, err)
+	require.Equal(t, uint64(highID), committed)
+
+	// Both routes agree that the committed id is on the main chain.
+	result, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{highID})
+	require.NoError(t, err)
+	require.True(t, result)
+	require.Zero(t, s.chainCheckShadowMismatches.Load(), "agreeing answers must not be counted")
+
+	// A gap id is where they differ. The answer stays the in-memory one and the
+	// mismatch is counted.
+	result, err = s.CheckBlockIsInCurrentChain(context.Background(), []uint32{highID - 1})
+	require.NoError(t, err)
+	require.True(t, result, "the shadow comparison must not change the answer")
+	require.Equal(t, uint64(1), s.chainCheckShadowMismatches.Load())
+}
+
+// TestCheckBlockIsInCurrentChain_ShadowCompare_SurvivesSQLFailure pins the other
+// half of "must never change the answer". The shadow query is best effort: if it
+// cannot run, the in-memory answer still stands. Anything else would make turning
+// the instrument on strictly worse than leaving it off, which is the opposite of
+// what a soak is for.
+func TestCheckBlockIsInCurrentChain_ShadowCompare_SurvivesSQLFailure(t *testing.T) {
+	s := newStoreWithInMemoryChainCheck(t)
+	s.chainCheckShadowCompare = true
+
+	blockID, _, err := s.StoreBlock(context.Background(), block1, "")
+	require.NoError(t, err)
+
+	s.Close(context.Background())
+
+	result, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{uint32(blockID)})
+	require.NoError(t, err, "a failed shadow query must not surface as an error")
+	require.True(t, result)
+}
+
+// TestCheckBlockIsInCurrentChain_ShadowCompare_CountsEveryComparison makes a quiet
+// soak readable. Zero mismatches means nothing on its own: it looks identical to a
+// path that never ran. Counting the comparisons as well is what separates "the two
+// routes agreed 40,000 times" from "the forked-set route was never reached".
+func TestCheckBlockIsInCurrentChain_ShadowCompare_CountsEveryComparison(t *testing.T) {
+	s := newOnMainChainTestStoreWith(t, func(st *settings.Settings) {
+		st.BlockChain.UseInMemoryChainCheck = true
+		st.BlockChain.ChainCheckShadowCompare = true
+	})
+
+	storeBlocks(t, s, block1, block2, block3)
+
+	var block2ID uint32
+	require.NoError(t, s.db.QueryRow(`SELECT id FROM blocks WHERE hash = $1`, block2.Hash()[:]).Scan(&block2ID))
+
+	require.Zero(t, s.chainCheckShadowChecks.Load())
+
+	for i := 0; i < 3; i++ {
+		result, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{block2ID})
+		require.NoError(t, err)
+		require.True(t, result)
+	}
+
+	require.Equal(t, uint64(3), s.chainCheckShadowChecks.Load(), "every agreeing comparison must be counted too")
+	require.Zero(t, s.chainCheckShadowMismatches.Load())
+}
+
+// TestCheckBlockIsInCurrentChain_RebuildGuardSuppressesForkedSetRoute pins the
+// invariant that every caller mutating on_main_chain leans on.
+//
+// maxBlockID is advanced before the forked set is rebuilt, so between the two a
+// block that has just moved off the main chain is inside the id<=maxBlockID range
+// and not yet in the forked set. The in-memory route reads "not forked" as "on the
+// main chain", so it would answer true for a block that is not on it. What closes
+// that window is mainChainRebuilding: while it is held, CheckBlockIsInCurrentChain
+// must not answer from the forked set at all, and must go to the flag-free SQL.
+//
+// A gap id stands in for the mid-rebuild block here, because it is the input on
+// which the two routes are known to disagree: guard clear it comes back true from
+// the forked set, guard held it comes back false from SQL. Both halves are asserted,
+// so removing the guard from CheckBlockIsInCurrentChain fails this test rather than
+// silently widening the window StoreBlock, InvalidateBlock and RevalidateBlock all
+// hold the guard to cover.
+func TestCheckBlockIsInCurrentChain_RebuildGuardSuppressesForkedSetRoute(t *testing.T) {
+	const highID = 100000
+
+	s := newOnMainChainTestStoreWith(t, func(st *settings.Settings) {
+		st.BlockChain.UseInMemoryChainCheck = true
+		st.BlockChain.ChainCheckShadowCompare = false
+	})
+
+	_, _, err := s.StoreBlock(context.Background(), block1, "")
+	require.NoError(t, err)
+
+	committed, _, err := s.StoreBlock(context.Background(), block2, "", options.WithID(highID))
+	require.NoError(t, err)
+	require.Equal(t, uint64(highID), committed)
+
+	// Wait out any rebuild StoreBlock kicked off, so the guard state under test is
+	// the one this test sets rather than a leftover.
+	for s.mainChainRebuilding.Load() > 0 {
+		time.Sleep(time.Millisecond)
+	}
+
+	// Guard clear: the forked-set route answers, and a gap id comes back true.
+	result, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{highID - 1})
+	require.NoError(t, err)
+	require.True(t, result, "precondition: with the guard clear the forked-set route answers")
+
+	// Guard held: the forked-set route must be suppressed and SQL must answer.
+	s.mainChainRebuilding.Add(1)
+	defer s.mainChainRebuilding.Add(-1)
+
+	result, err = s.CheckBlockIsInCurrentChain(context.Background(), []uint32{highID - 1})
+	require.NoError(t, err)
+	require.False(t, result, "while a rebuild is in flight the forked set must not be trusted")
+
+	// A genuinely on-chain id is still on-chain under the guard: the guard suppresses
+	// the fast path, it does not turn correct positives into invalidations.
+	result, err = s.CheckBlockIsInCurrentChain(context.Background(), []uint32{highID})
+	require.NoError(t, err)
+	require.True(t, result)
+}
+
+// TestCheckBlockIsInCurrentChain_UnbuiltForkedSetDefersToSQL covers the failure the
+// forked-set route is most exposed to, because it is the one the store already expects
+// to happen: rebuildOffChainSet timing out on a cold cache during catchup.
+//
+// mainChainRebuilding is held across the startup rebuild, but it is released whether
+// that rebuild succeeded or failed, and maxBlockID survives a failure because
+// refreshMaxBlockID runs first and is a cheap index-only scan. So both of the earlier
+// escapes in CheckBlockIsInCurrentChain pass while offChainBlockIDs is still the empty
+// map New() made, and an empty forked set makes every committed id look on-chain.
+//
+// That is the false-positive direction this route introduced. A block that is genuinely
+// off the chain must not come back on-chain just because the set failed to build, so the
+// route has to defer to SQL until a rebuild has actually completed once.
+func TestCheckBlockIsInCurrentChain_UnbuiltForkedSetDefersToSQL(t *testing.T) {
+	s := newOnMainChainTestStoreWith(t, func(st *settings.Settings) {
+		st.BlockChain.UseInMemoryChainCheck = true
+		st.BlockChain.ChainCheckShadowCompare = false
+	})
+
+	blockID1, _, err := s.StoreBlock(context.Background(), block1, "")
+	require.NoError(t, err)
+
+	blockID2, _, err := s.StoreBlock(context.Background(), block2, "")
+	require.NoError(t, err)
+
+	// Take block2 genuinely off the chain, so the two routes agree about it and the
+	// only thing under test is whether the forked set is trusted.
+	_, err = s.InvalidateBlock(context.Background(), block2.Header.Hash())
+	require.NoError(t, err)
+
+	for s.mainChainRebuilding.Load() > 0 {
+		time.Sleep(time.Millisecond)
+	}
+
+	s.offChainBlockIDsMu.RLock()
+	_, forked := s.offChainBlockIDs[uint32(blockID2)]
+	s.offChainBlockIDsMu.RUnlock()
+	require.True(t, forked, "precondition: the invalidated block must be in the forked set")
+
+	// Reproduce a startup whose rebuild never completed: maxBlockID is populated, the
+	// guard is clear, and the forked set is the empty map New() made.
+	s.offChainBlockIDsMu.Lock()
+	s.offChainBlockIDs = make(map[uint32]struct{})
+	s.offChainBlockIDsMu.Unlock()
+	s.lastSuccessfulRebuild.Store(0)
+
+	require.Zero(t, s.mainChainRebuilding.Load(), "the guard must be clear for this to be the case under test")
+	require.NotZero(t, s.maxBlockID.Load(), "maxBlockID survives a failed rebuild")
+
+	// Absence from an unbuilt forked set is not proof of anything. SQL must answer, and
+	// SQL knows the invalidated block is off the chain.
+	result, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{uint32(blockID2)})
+	require.NoError(t, err)
+	require.False(t, result, "an unbuilt forked set must not turn an off-chain block into an on-chain one")
+
+	// The still-on-chain block is unaffected: deferring to SQL suppresses the fast path,
+	// it does not turn correct positives into invalidations.
+	result, err = s.CheckBlockIsInCurrentChain(context.Background(), []uint32{uint32(blockID1)})
+	require.NoError(t, err)
+	require.True(t, result)
+
+	// Once a rebuild completes, the route is trusted again and still agrees with SQL.
+	require.NoError(t, s.rebuildOffChainSet(context.Background()))
+	require.NotZero(t, s.lastSuccessfulRebuild.Load(), "a completed rebuild must stamp its own success")
+
+	result, err = s.CheckBlockIsInCurrentChain(context.Background(), []uint32{uint32(blockID2)})
+	require.NoError(t, err)
+	require.False(t, result)
+}
+
+// countingErrorLogger counts Errorf calls so a test can assert how much a path logs,
+// not just what it computes. Everything else is TestLogger's.
+type countingErrorLogger struct {
+	ulogger.TestLogger
+
+	errors atomic.Uint64
+}
+
+func (l *countingErrorLogger) Errorf(format string, args ...interface{}) {
+	l.errors.Add(1)
+}
+
+// TestCheckBlockIsInCurrentChain_ShadowCompare_SamplesRepeatMismatches pins the third
+// property of the soak instrument, next to "never changes the answer" and "a failed
+// shadow query is not an error": a disagreement that repeats must not drown the node.
+//
+// A systematic mismatch fires on every call that touches the offending id. Unsampled,
+// that is one error line per request, and this instrument defaults on. What must stay
+// exact is the counter, because the two-minute totals line is what a soak is read from.
+func TestCheckBlockIsInCurrentChain_ShadowCompare_SamplesRepeatMismatches(t *testing.T) {
+	const (
+		highID = 100000
+		calls  = 60
+	)
+
+	s := newOnMainChainTestStoreWith(t, func(st *settings.Settings) {
+		st.BlockChain.UseInMemoryChainCheck = true
+		st.BlockChain.ChainCheckShadowCompare = true
+	})
+
+	_, _, err := s.StoreBlock(context.Background(), block1, "")
+	require.NoError(t, err)
+
+	committed, _, err := s.StoreBlock(context.Background(), block2, "", options.WithID(highID))
+	require.NoError(t, err)
+	require.Equal(t, uint64(highID), committed)
+
+	logger := &countingErrorLogger{}
+	s.logger = logger
+
+	// A gap id disagrees on every call, which is the systematic case.
+	for i := 0; i < calls; i++ {
+		result, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{highID - 1})
+		require.NoError(t, err)
+		require.True(t, result, "sampling must not change the answer")
+	}
+
+	require.Equal(t, uint64(calls), s.chainCheckShadowMismatches.Load(), "every mismatch must be counted")
+	require.Equal(t, uint64(10), logger.errors.Load(), "only the first ten mismatches may be logged at error")
+}
+
+func TestShouldLogShadowMismatch(t *testing.T) {
+	for _, total := range []uint64{1, 2, 9, 10, 1000, 2000, 100000} {
+		require.True(t, shouldLogShadowMismatch(total), "mismatch #%d must be logged", total)
+	}
+
+	for _, total := range []uint64{11, 12, 999, 1001, 99999} {
+		require.False(t, shouldLogShadowMismatch(total), "mismatch #%d must be sampled out", total)
+	}
+}
+
+// TestCheckBlockIsInCurrentChain_ShadowCompare_ComparesTheAcceptedID pins what the soak
+// instrument compares when the forked-set route accepts. The route answers true off one
+// specific id. With ANY-of semantics, handing SQL the whole slice lets it agree via a
+// different, genuinely on-chain id, so a call that the route answered off a gap id reads
+// as agreement. A tx's parent block ids are exactly that shape, which would let a soak
+// report zero mismatches on a node that accepted a gap id on every call.
+func TestCheckBlockIsInCurrentChain_ShadowCompare_ComparesTheAcceptedID(t *testing.T) {
+	const highID = 100000
+
+	s := newOnMainChainTestStoreWith(t, func(st *settings.Settings) {
+		st.BlockChain.UseInMemoryChainCheck = true
+		st.BlockChain.ChainCheckShadowCompare = true
+	})
+
+	_, _, err := s.StoreBlock(context.Background(), block1, "")
+	require.NoError(t, err)
+
+	committed, _, err := s.StoreBlock(context.Background(), block2, "", options.WithID(highID))
+	require.NoError(t, err)
+	require.Equal(t, uint64(highID), committed)
+
+	// The gap id comes first, so it is the one the forked-set route accepts. The real
+	// committed id after it is on the main chain, so SQL over the whole slice says true.
+	result, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{highID - 1, highID})
+	require.NoError(t, err)
+	require.True(t, result, "the shadow comparison must not change the answer")
+	require.Equal(t, uint64(1), s.chainCheckShadowChecks.Load())
+	require.Equal(t, uint64(1), s.chainCheckShadowMismatches.Load(),
+		"the route accepted a gap id, and SQL agreeing via a different id must not hide that")
+}
+
+// forkedSetSnapshotBefore captures the installed forked set and its epoch, so a test can
+// put a set that predates a write back in place.
+func forkedSetSnapshotBefore(s *SQL) (map[uint32]struct{}, uint64) {
+	s.offChainBlockIDsMu.RLock()
+	defer s.offChainBlockIDsMu.RUnlock()
+
+	return s.offChainBlockIDs, s.offChainSetEpoch.Load()
+}
+
+// newStoreWithInvalidatedBlock2 builds block1 and block2, keeps the forked set as it was
+// before block2 was invalidated, and then invalidates block2 through the real mutator.
+func newStoreWithInvalidatedBlock2(t *testing.T) (*SQL, uint32, map[uint32]struct{}, uint64) {
+	t.Helper()
+
+	s := newOnMainChainTestStoreWith(t, func(st *settings.Settings) {
+		st.BlockChain.UseInMemoryChainCheck = true
+		st.BlockChain.ChainCheckShadowCompare = false
+	})
+
+	_, _, err := s.StoreBlock(context.Background(), block1, "")
+	require.NoError(t, err)
+
+	blockID2, _, err := s.StoreBlock(context.Background(), block2, "")
+	require.NoError(t, err)
+
+	staleSet, staleEpoch := forkedSetSnapshotBefore(s)
+	_, forked := staleSet[uint32(blockID2)]
+	require.False(t, forked, "precondition: before the invalidation block2 is not in the forked set")
+
+	_, err = s.InvalidateBlock(context.Background(), block2.Header.Hash())
+	require.NoError(t, err)
+
+	for s.mainChainRebuilding.Load() > 0 {
+		time.Sleep(time.Millisecond)
+	}
+
+	require.Greater(t, s.chainStateEpoch.Load(), staleEpoch, "precondition: the invalidation bumped the write epoch")
+	require.NotZero(t, s.lastSuccessfulRebuild.Load(), "precondition: the set is trusted by timestamp")
+
+	return s, uint32(blockID2), staleSet, staleEpoch
+}
+
+// TestCheckBlockIsInCurrentChain_SetOlderThanTheLatestWriteIsNotTrusted is icellan's
+// reproduction of a post-write rebuild that fails after an earlier success. The rebuild
+// error is logged, lastSuccessfulRebuild is still set from the earlier success, and the
+// guard is released over a set that does not contain the block that just moved. Nothing
+// about the timestamp says the set is stale, so the route must read staleness from the
+// epoch the set was built at instead.
+func TestCheckBlockIsInCurrentChain_SetOlderThanTheLatestWriteIsNotTrusted(t *testing.T) {
+	s, blockID2, staleSet, staleEpoch := newStoreWithInvalidatedBlock2(t)
+
+	// Put the pre-invalidation set back, as a failed rebuild would have left it.
+	s.offChainBlockIDsMu.Lock()
+	s.offChainBlockIDs = staleSet
+	s.offChainSetEpoch.Store(staleEpoch)
+	s.offChainBlockIDsMu.Unlock()
+
+	require.Zero(t, s.mainChainRebuilding.Load())
+
+	result, err := s.CheckBlockIsInCurrentChain(context.Background(), []uint32{blockID2})
+	require.NoError(t, err)
+	require.False(t, result, "a set built before the invalidation must not answer for the invalidated block")
+}
+
+// TestCheckBlockIsInCurrentChain_GuardRaisedAfterTheCallersCheckIsSeen covers a reader
+// that passed CheckBlockIsInCurrentChain's guard check and was descheduled before taking
+// its snapshot. A mutator then raised the guard and committed its write, but has not yet
+// rebuilt the set or bumped the epoch. The snapshot the reader now takes is missing the
+// block that moved, so it must look at the guard again once it holds the snapshot.
+//
+// It drives checkBlockIsInCurrentChainInMemory directly, because that is exactly the state
+// of a reader that has already passed the outer check.
+func TestCheckBlockIsInCurrentChain_GuardRaisedAfterTheCallersCheckIsSeen(t *testing.T) {
+	s, blockID2, staleSet, _ := newStoreWithInvalidatedBlock2(t)
+
+	// Mid-mutation: the write has committed, and the set and its epoch still describe the
+	// state before it. The epoch matches, so only the guard can tell this reader.
+	s.offChainBlockIDsMu.Lock()
+	s.offChainBlockIDs = staleSet
+	s.offChainSetEpoch.Store(s.chainStateEpoch.Load())
+	s.offChainBlockIDsMu.Unlock()
+
+	maxID := uint32(s.maxBlockID.Load())
+
+	result, route, _, err := s.checkBlockIsInCurrentChainInMemory(context.Background(), []uint32{blockID2}, maxID)
+	require.NoError(t, err)
+	require.True(t, result, "precondition: with the guard clear the stale set answers, which is the window under test")
+	require.Equal(t, answeredByForkedSet, route)
+
+	s.mainChainRebuilding.Add(1)
+	defer s.mainChainRebuilding.Add(-1)
+
+	result, route, _, err = s.checkBlockIsInCurrentChainInMemory(context.Background(), []uint32{blockID2}, maxID)
+	require.NoError(t, err)
+	require.False(t, result, "a guard raised after the caller looked must still keep the stale set from answering")
+	require.Equal(t, answeredBySQL, route)
+}
+
+// guardRecordingLogger records mainChainRebuilding at each Warnf, so a test can read the
+// guard from inside StoreBlock at a point after the INSERT.
+type guardRecordingLogger struct {
+	ulogger.TestLogger
+
+	s      *SQL
+	warned atomic.Bool
+	guard  atomic.Int32
+}
+
+func (l *guardRecordingLogger) Warnf(format string, args ...interface{}) {
+	l.guard.Store(l.s.mainChainRebuilding.Load())
+	l.warned.Store(true)
+}
+
+// TestStoreBlock_ExtendHoldsTheGuardOnlyOnForkedSetNodes pins the scope of the guard a
+// common extend raises. On a forked-set node it has to be held from before the INSERT,
+// because a row written true can still be classified onto a fork, and absence from the
+// forked set is positive proof there. On every other node it must not be: the SQL route
+// and the other on_main_chain readers take their flag-free walk while it is held, and those
+// nodes gain nothing from paying that on every block.
+//
+// The durable reservation DELETE runs after the INSERT and warns when it fails, so dropping
+// that table gives a deterministic look at the guard mid-call.
+func TestStoreBlock_ExtendHoldsTheGuardOnlyOnForkedSetNodes(t *testing.T) {
+	for _, useInMemory := range []bool{false, true} {
+		t.Run(fmt.Sprintf("useInMemoryChainCheck=%v", useInMemory), func(t *testing.T) {
+			s := newOnMainChainTestStoreWith(t, func(st *settings.Settings) {
+				st.BlockChain.UseInMemoryChainCheck = useInMemory
+				st.BlockChain.ChainCheckShadowCompare = false
+			})
+
+			_, err := s.db.Exec(`DROP TABLE block_id_reservations`)
+			require.NoError(t, err)
+
+			logger := &guardRecordingLogger{s: s}
+			s.logger = logger
+
+			_, _, err = s.StoreBlock(context.Background(), block1, "")
+			require.NoError(t, err)
+			require.True(t, logger.warned.Load(), "precondition: the failed reservation DELETE must warn mid-call")
+			require.True(t, getOnMainChain(t, s, block1.Hash()[:]), "precondition: block1 is a common extend")
+
+			if useInMemory {
+				require.Equal(t, int32(1), logger.guard.Load(), "a forked-set node must hold the guard across an extend")
+			} else {
+				require.Zero(t, logger.guard.Load(), "an extend must not send SQL-route readers to the flag-free walk")
+			}
+		})
+	}
 }
