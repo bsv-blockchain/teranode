@@ -95,6 +95,11 @@ const migrationFullRebuildTimeout = 30 * time.Minute
 type SQL struct {
 	// db is the underlying SQL database connection pool
 	db *usql.DB
+	// reconcileHook, when set by a test, replaces the result of the on_main_chain
+	// reconciliation that StoreBlock runs inside the fork-path transaction. It is
+	// per store rather than package-global, so tests cannot leak it into each other.
+	// Always nil in production.
+	reconcileHook func() error
 	// engine identifies which SQL engine is being used (PostgreSQL, SQLite, etc.)
 	engine util.SQLEngine
 	// logger provides structured logging capabilities
@@ -1422,6 +1427,12 @@ func (s *SQL) needsFullOnMainChainRebuild(ctx context.Context) (bool, error) {
 // Idempotent: a no-op when on_main_chain already matches the chain_work
 // best's lineage within the walked window.
 func (s *SQL) reconcileOnMainChain(ctx context.Context) error {
+	return s.reconcileOnMainChainExec(ctx, s.db)
+}
+
+// reconcileOnMainChainExec is reconcileOnMainChain against a caller-supplied executor,
+// so StoreBlock can run it inside the same transaction as the INSERT.
+func (s *SQL) reconcileOnMainChainExec(ctx context.Context, exec execQuerier) error {
 	maxDepth := int64(s.chainParams.CoinbaseMaturity) * 2
 	if maxDepth < 100 {
 		maxDepth = 100
@@ -1461,7 +1472,7 @@ func (s *SQL) reconcileOnMainChain(ctx context.Context) error {
 					AND id NOT IN (SELECT id FROM new_path))
 			  )
 	`
-	if _, err := s.db.ExecContext(ctx, q, maxDepth); err != nil {
+	if _, err := exec.ExecContext(ctx, q, maxDepth); err != nil {
 		return errors.NewStorageError("reconcileOnMainChain: failed to apply diff", err)
 	}
 	return nil

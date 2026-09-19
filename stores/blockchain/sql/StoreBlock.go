@@ -163,9 +163,59 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		defer s.mainChainRebuilding.Add(-1)
 	}
 
-	newBlockID, height, _, _, err := s.storeBlock(ctx, block, peerID, storeBlockOptions, onMainChain)
-	if err != nil {
-		return 0, height, err
+	// The fork path writes the row and repairs on_main_chain in ONE transaction, so a
+	// failure between them cannot leave a committed block carrying a flag nothing will
+	// revisit. The reconciliation is a single statement bounded to the recent lineage,
+	// so the transaction stays small however large the blocks are: it touches block
+	// rows only, never transactions or coins.
+	//
+	// The common extend keeps its single auto-committed INSERT, which already writes
+	// the correct flag and needs no repair.
+	var (
+		newBlockID uint64
+		height     uint32
+		err        error
+	)
+
+	if onMainChain {
+		newBlockID, height, _, _, err = s.storeBlock(ctx, s.db, block, peerID, storeBlockOptions, onMainChain)
+		if err != nil {
+			return 0, height, err
+		}
+	} else {
+		// RetryTx keeps the pool's retry and circuit-breaker behaviour, but retries
+		// the whole transaction rather than one statement: a statement that fails
+		// inside a PostgreSQL transaction aborts it, so only a fresh BEGIN can retry.
+		err = s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
+			var storeErr error
+
+			newBlockID, height, _, _, storeErr = s.storeBlock(ctx, tx, block, peerID, storeBlockOptions, onMainChain)
+			if storeErr != nil {
+				return storeErr
+			}
+
+			reconcileErr := s.reconcileOnMainChainExec(ctx, tx)
+			if s.reconcileHook != nil {
+				reconcileErr = s.reconcileHook()
+			}
+
+			if reconcileErr != nil {
+				return errors.NewStorageError("StoreBlock: reconcileOnMainChain", reconcileErr)
+			}
+
+			return nil
+		})
+		if err != nil {
+			// storeBlock and the reconciliation already return typed errors, which
+			// callers match on (block exists, invalid argument). Only a raw driver
+			// error from BEGIN or COMMIT needs wrapping here.
+			var typedErr *errors.Error
+			if errors.As(err, &typedErr) {
+				return 0, height, err
+			}
+
+			return 0, height, errors.NewStorageError("StoreBlock: commit block and on_main_chain reconciliation", err)
+		}
 	}
 
 	// Reset response cache to invalidate cached best block ID and headers
@@ -232,7 +282,8 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		// current code, but which the previous Case 1 comment glossed over),
 		// the row is now flagged true on a fork. Clear it defensively, with
 		// mainChainRebuilding bracketing so concurrent readers fall back to
-		// the CTE for the brief inconsistency window.
+		// the CTE for the brief inconsistency window. A fork-path insert
+		// (onMainChain false) was already reconciled inside its transaction.
 		if onMainChain {
 			s.mainChainRebuilding.Add(1)
 			if _, clearErr := s.db.ExecContext(postBestCtx, `UPDATE blocks SET on_main_chain = false WHERE id = $1`, newBlockID); clearErr != nil {
@@ -263,13 +314,10 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 			s.updateMaxBlockID(newBlockID)
 			s.resetChainWalkCache()
 		}
-		// Reconcile against the actual chain_work-best block read inside the
-		// helper transaction. We pass no caller-side tip IDs because they are
-		// inherently racy (a concurrent fast-path StoreBlock can extend the
-		// best between our INSERT and the helper's transaction).
-		if reconcileErr := s.reconcileOnMainChain(rebuildCtx); reconcileErr != nil {
-			s.logger.Errorf("StoreBlock: reconcileOnMainChain: %v", reconcileErr)
-		}
+		// on_main_chain needs no repair here. Case 2 is only reachable when
+		// onMainChain was false, and that path ran reconcileOnMainChainExec in
+		// the same transaction as the INSERT, against the chain_work best read
+		// inside that transaction.
 		if s.useInMemoryChainCheck {
 			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
 				s.logger.Errorf("StoreBlock: %v", rebuildErr)
@@ -379,7 +427,17 @@ func (s *SQL) getPreviousBlockInfo(ctx context.Context, prevBlockHash chainhash.
 //   - uint32: The height of the block in the blockchain
 //   - []byte: The calculated cumulative chain work for this block as a byte array
 //   - error: Any error encountered during the operation, including validation failures
-func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string, storeBlockOptions options.StoreBlockOptions, onMainChain bool) (uint64, uint32, []byte, bool, error) {
+//
+// execQuerier is the subset of database calls storeBlock needs. Both *usql.DB and
+// *sql.Tx satisfy it, so the INSERT can run on the pool (fast path) or inside a
+// transaction that also carries the on_main_chain reconciliation (fork path).
+type execQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
+	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+}
+
+func (s *SQL) storeBlock(ctx context.Context, exec execQuerier, block *model.Block, peerID string, storeBlockOptions options.StoreBlockOptions, onMainChain bool) (uint64, uint32, []byte, bool, error) {
 	var (
 		coinbaseTxID string
 		q            string
@@ -605,7 +663,7 @@ RETURNING id
 
 	if useCustomID {
 		// When using custom ID, the ID is the first parameter
-		rows, err = s.db.QueryContext(ctx, q,
+		rows, err = exec.QueryContext(ctx, q,
 			storeBlockOptions.ID,
 			previousBlockID,
 			block.Header.Version,
@@ -633,7 +691,7 @@ RETURNING id
 		)
 	} else {
 		// When using auto-increment, no ID parameter is needed
-		rows, err = s.db.QueryContext(ctx, q,
+		rows, err = exec.QueryContext(ctx, q,
 			previousBlockID,
 			block.Header.Version,
 			block.Hash().CloneBytes(),
