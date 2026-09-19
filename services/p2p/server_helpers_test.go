@@ -406,15 +406,15 @@ func TestServerHelpers_ShouldSkipBannedPeer_FlagsBanned(t *testing.T) {
 
 	require.False(t, s.shouldSkipBannedPeer(pid.String(), "test"), "no ban → don't skip")
 
-	// A purely registry-side ban is masked by the cached negative lookup until
-	// the entry expires (reputationCacheTTL).
+	// A purely registry-side ban is masked by the banned-peer mirror until its
+	// next refresh (bannedPeerRefreshInterval).
 	reg.AddBanScore(pid.String(), "spam", 0)
 	reg.AddBanScore(pid.String(), "spam", 0)
-	require.False(t, s.shouldSkipBannedPeer(pid.String(), "test"), "cached negative lookup masks the ban briefly")
+	require.False(t, s.shouldSkipBannedPeer(pid.String(), "test"), "mirror masks a registry-side ban briefly")
 
-	// Once the cache entry expires (simulated by dropping it), the ban is honored.
-	s.banStatusCache.Delete(pid.String())
-	require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"), "score-banned peer is skipped after cache expiry")
+	// Once the mirror is due a refresh (simulated by invalidating it), the ban is honored.
+	s.bannedPeers.invalidate()
+	require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"), "score-banned peer is skipped after the mirror refreshes")
 }
 
 // TestServerHelpers_ShouldSkipBannedPeer_LocalBanImmediate verifies that a ban
@@ -460,16 +460,49 @@ func TestServerHelpers_ShouldSkipUnhealthyPeer(t *testing.T) {
 	s, reg := newServerWithLocalRegistry(t)
 	pid := mustNewPeerID(t)
 
-	// Unknown peer ID (not in registry) — must not skip; that's a relay path.
+	// The peer is directly connected: the reputation gate only ever applies to
+	// live neighbours.
+	s.P2PClient = &MockServerP2PClient{peers: []p2pMessageBus.PeerInfo{
+		{ID: pid.String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}},
+	}}
+
+	// Unknown peer ID (not in registry) — must not skip.
 	require.False(t, s.shouldSkipUnhealthyPeer(pid.String(), "test"))
 
-	// Register and drive reputation below threshold.
+	// Register and drive reputation below threshold. The unknown verdict above
+	// is cached for reputationCacheTTL, so drop it to observe the new score.
 	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
 	reg.UpdateMetrics(pid.String(), 0, 0, 0, false, false, true, 0)
+	s.reputationCache.Delete(pid.String())
 	require.True(t, s.shouldSkipUnhealthyPeer(pid.String(), "test"))
 
 	// Non-decodable IDs (hostname-like) are not skipped.
 	require.False(t, s.shouldSkipUnhealthyPeer("not-an-id", "test"))
+}
+
+// TestServerHelpers_ShouldSkipUnhealthyPeer_RelayedAuthorNotLookedUp pins the
+// connected-only contract: a low-reputation peer whose messages arrive relayed
+// (no open connection) is neither skipped nor looked up in the registry. The
+// author of a relayed message is a free-to-mint identity, so a lookup per
+// author would be a registry round-trip per message under identity rotation.
+func TestServerHelpers_ShouldSkipUnhealthyPeer_RelayedAuthorNotLookedUp(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	counting := newCountingRegistryClient(s.peerRegistry)
+	s.peerRegistry = counting
+	pid := mustNewPeerID(t)
+
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+	reg.UpdateMetrics(pid.String(), 0, 0, 0, false, false, true, 0)
+
+	// Known to the message bus as an author, but with no open connection.
+	s.P2PClient = &MockServerP2PClient{peers: []p2pMessageBus.PeerInfo{{ID: pid.String()}}}
+
+	for i := 0; i < 50; i++ {
+		require.False(t, s.shouldSkipUnhealthyPeer(pid.String(), "test"), "relayed authors are allowed through unconditionally")
+	}
+
+	require.Zero(t, counting.callCount("GetPeer"), "a relayed author must not cost a registry lookup")
+	require.Zero(t, s.reputationCache.Len(), "a relayed author must not occupy a reputation cache entry")
 }
 
 // TestServerHelpers_HandleBlockTopic_LowReputationPeerStillForwarded is a
@@ -497,6 +530,8 @@ func TestServerHelpers_HandleBlockTopic_LowReputationPeerStillForwarded(t *testi
 	lowRep := mustNewPeerID(t)
 	reg.Register(&blockchain.PeerInfo{ID: lowRep.String()})
 	reg.UpdateMetrics(lowRep.String(), 0, 0, 0, false, false, true, 0)
+	// Directly connected, so the reputation gate would apply if a handler ran it.
+	mockP2P.peers = []p2pMessageBus.PeerInfo{{ID: lowRep.String(), Addrs: []string{"/ip4/10.0.0.1/tcp/9905"}}}
 
 	require.True(t, s.shouldSkipUnhealthyPeer(lowRep.String(), "precondition"),
 		"precondition: peer must be below the unhealthy threshold")
@@ -1065,8 +1100,9 @@ func TestValidateDataHubURL(t *testing.T) {
 }
 
 // TestCleanupPeerMaps_EvictsExpiredReputationEntries confirms that the
-// reputationCache populated by shouldSkipUnhealthyPeer does not grow without
-// bound — cleanupPeerMaps must sweep entries whose expiresAt has passed.
+// reputationCache populated by shouldSkipUnhealthyPeer is reclaimed for peers
+// that stopped gossiping — cleanupPeerMaps must sweep entries whose expiry has
+// passed even though nobody looks them up again.
 func TestCleanupPeerMaps_EvictsExpiredReputationEntries(t *testing.T) {
 	s := &Server{
 		logger:     ulogger.TestLogger{},
@@ -1074,21 +1110,15 @@ func TestCleanupPeerMaps_EvictsExpiredReputationEntries(t *testing.T) {
 	}
 
 	now := time.Now()
-	s.reputationCache.Store("expired-peer", reputationCacheEntry{
-		score:     75.0,
-		expiresAt: now.Add(-time.Second),
-	})
-	s.reputationCache.Store("fresh-peer", reputationCacheEntry{
-		score:     75.0,
-		expiresAt: now.Add(reputationCacheTTL),
-	})
+	s.reputationCache.Set("expired-peer", reputationCacheEntry{score: 75.0, known: true}, now.Add(-time.Second))
+	s.reputationCache.Set("fresh-peer", reputationCacheEntry{score: 75.0, known: true}, now.Add(reputationCacheTTL))
+	require.Equal(t, 2, s.reputationCache.Len())
 
 	s.cleanupPeerMaps()
 
-	_, expiredStillThere := s.reputationCache.Load("expired-peer")
-	assert.False(t, expiredStillThere, "expired reputationCache entry must be evicted")
-	_, freshStillThere := s.reputationCache.Load("fresh-peer")
-	assert.True(t, freshStillThere, "fresh reputationCache entry must survive cleanup")
+	require.Equal(t, 1, s.reputationCache.Len(), "expired reputationCache entry must be evicted")
+	_, freshStillThere := s.reputationCache.Get("fresh-peer", time.Now())
+	require.True(t, freshStillThere, "fresh reputationCache entry must survive cleanup")
 }
 
 func TestServerHelpers_SanitizeAdvertisedTip_ClampsAndOverflow(t *testing.T) {

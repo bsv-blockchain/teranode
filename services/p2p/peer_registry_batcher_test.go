@@ -102,6 +102,21 @@ func (c *countingRegistryClient) IsPeerBanned(ctx context.Context, peerID string
 	return c.PeerRegistryClientI.IsPeerBanned(ctx, peerID)
 }
 
+func (c *countingRegistryClient) ListBannedPeers(ctx context.Context) ([]string, error) {
+	c.count("ListBannedPeers")
+	return c.PeerRegistryClientI.ListBannedPeers(ctx)
+}
+
+func (c *countingRegistryClient) GetPeer(ctx context.Context, peerID string) (*blockchain.PeerInfo, bool, error) {
+	c.count("GetPeer")
+	return c.PeerRegistryClientI.GetPeer(ctx, peerID)
+}
+
+func (c *countingRegistryClient) AddBanScore(ctx context.Context, peerID string, reason string, defaultPoints int32) (int32, bool, error) {
+	c.count("AddBanScore")
+	return c.PeerRegistryClientI.AddBanScore(ctx, peerID, reason, defaultPoints)
+}
+
 // newBatcherWithCountingRegistry returns a manual-flush batcher (interval far
 // in the future, not started) over a counting client backed by a real local
 // registry.
@@ -425,7 +440,8 @@ func TestServer_GossipFlood_BoundedRegistryRPCs(t *testing.T) {
 		s.handleBlockTopic(context.Background(), msgBytes, remote.String())
 	}
 
-	require.Equal(t, 1, counting.callCount("IsPeerBanned"), "ban status must be cached, not checked per message")
+	require.Equal(t, 0, counting.callCount("IsPeerBanned"), "ban status is answered from the mirrored banned set, never looked up per peer")
+	require.Equal(t, 1, counting.callCount("ListBannedPeers"), "the banned set is listed once per refresh interval, not per message")
 	require.Equal(t, 0, counting.callCount("RegisterPeer"), "no registry writes on the gossip hot path")
 	require.Equal(t, 0, counting.callCount("UpdateLastMessageTime"))
 	require.Equal(t, 0, counting.callCount("UpdatePeerMetrics"))
@@ -970,19 +986,20 @@ func TestSubscribeToTopic_PanicInHandlerDoesNotCrash(t *testing.T) {
 	}
 }
 
-// erroringBanClient fails every IsPeerBanned lookup, simulating a degraded
+// erroringBanClient fails every ListBannedPeers refresh, simulating a degraded
 // registry.
 type erroringBanClient struct {
 	blockchain.PeerRegistryClientI
 }
 
-func (c *erroringBanClient) IsPeerBanned(_ context.Context, _ string) (bool, error) {
-	return false, errors.NewServiceError("registry unavailable")
+func (c *erroringBanClient) ListBannedPeers(_ context.Context) ([]string, error) {
+	return nil, errors.NewServiceError("registry unavailable")
 }
 
-// TestShouldSkipBannedPeer_ErrorBreaker verifies ChiR2: when IsPeerBanned
-// errors, the failure is cached (fail open) so a gossip flood against a
-// degraded registry costs one RPC per peer per TTL instead of one per message.
+// TestShouldSkipBannedPeer_ErrorBreaker verifies ChiR2: when the banned-peer
+// refresh errors, the failure is remembered (fail open) so a gossip flood
+// against a degraded registry costs one RPC per refresh interval instead of
+// one per message — regardless of how many distinct authors it comes from.
 func TestShouldSkipBannedPeer_ErrorBreaker(t *testing.T) {
 	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
 	counting := newCountingRegistryClient(&erroringBanClient{blockchain.NewLocalPeerRegistryClient(reg)})
@@ -993,12 +1010,13 @@ func TestShouldSkipBannedPeer_ErrorBreaker(t *testing.T) {
 		gCtx:         context.Background(),
 	}
 
-	pid := mustNewPeerID(t).String()
 	for i := 0; i < 100; i++ {
+		pid := mustNewPeerID(t).String()
 		require.False(t, s.shouldSkipBannedPeer(pid, "test"), "lookup errors must fail open")
 	}
 
-	require.Equal(t, 1, counting.callCount("IsPeerBanned"), "failed lookups must be cached, not retried per message")
+	require.Equal(t, 1, counting.callCount("ListBannedPeers"), "a failed refresh must not be retried per message")
+	require.Zero(t, counting.callCount("IsPeerBanned"), "the gossip gate must not look authors up one by one")
 }
 
 // TestUpdatePeerLastMessageTime_BatchedPathSkipsSelfOriginator mirrors the

@@ -13,7 +13,6 @@ import (
 	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
-	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -168,9 +167,7 @@ func TestOnPeerBanned_CircuitOnlyAddrsBanNoIP(t *testing.T) {
 
 	// The peer-ID ban must still take full effect: gossip filter cache marked
 	// banned and the peer removed from the registry.
-	v, ok := s.banStatusCache.Load(pid.String())
-	require.True(t, ok, "banStatusCache must be primed on ban")
-	require.True(t, v.(banStatusCacheEntry).banned, "banStatusCache must mark the peer banned")
+	require.True(t, s.bannedPeers.contains(pid.String()), "banned-peer mirror must be primed on ban")
 	_, found := reg.Get(pid.String())
 	require.False(t, found, "the banned circuit-only peer must be removed from the registry")
 }
@@ -468,33 +465,6 @@ func TestShouldSkipBannedPeer_RelayedPeerOfBannedRelayIPNotSkipped(t *testing.T)
 	require.False(t, reg.IsBannedPeer(pid.String()), "peer intentionally not banned in the registry")
 	require.False(t, s.shouldSkipBannedPeer(pid.String(), "test"),
 		"a relay IP ban must not drop gossip from peers behind the relay")
-}
-
-// TestCleanupPeerMaps_EvictsExpiredIPBanEntries mirrors the reputationCache
-// eviction test: isPeerIPBanned only ever inserts, so cleanupPeerMaps must
-// sweep expired ipBanCache entries or the map grows once per unique peer ID.
-func TestCleanupPeerMaps_EvictsExpiredIPBanEntries(t *testing.T) {
-	s := &Server{
-		logger:     ulogger.TestLogger{},
-		peerMapTTL: time.Minute,
-	}
-
-	now := time.Now()
-	s.ipBanCache.Store("expired-peer", ipBanCacheEntry{
-		banned:    true,
-		expiresAt: now.Add(-time.Second),
-	})
-	s.ipBanCache.Store("fresh-peer", ipBanCacheEntry{
-		banned:    false,
-		expiresAt: now.Add(reputationCacheTTL),
-	})
-
-	s.cleanupPeerMaps()
-
-	_, expiredStillThere := s.ipBanCache.Load("expired-peer")
-	require.False(t, expiredStillThere, "expired ipBanCache entry must be evicted")
-	_, freshStillThere := s.ipBanCache.Load("fresh-peer")
-	require.True(t, freshStillThere, "fresh ipBanCache entry must survive cleanup")
 }
 
 func TestHandleBlockTopic_IPBannedPeerDropped(t *testing.T) {
