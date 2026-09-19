@@ -36,9 +36,20 @@ import (
 )
 
 const (
-	// txNotFoundInTxMapMsg is the error message used when a transaction hash
-	// cannot be located in the block's txMap.
-	txNotFoundInTxMapMsg = "transaction %s not found in txMap"
+	// txNotFoundInTxMapExtendMsg is the error message used when a transaction hash
+	// cannot be located in the block's txMap while extending transactions.
+	// errors.Error.Error() does not print the captured file/line, so the phase
+	// name is baked into the message itself to let an operator tell this apart
+	// from the createUtxos and PreValidateTransactions variants below.
+	txNotFoundInTxMapExtendMsg = "transaction %s not found in txMap during extend"
+
+	// txNotFoundInTxMapCreateUtxosMsg is the error message used when a transaction
+	// hash cannot be located in the block's txMap while creating utxos.
+	txNotFoundInTxMapCreateUtxosMsg = "transaction %s not found in txMap during createUtxos"
+
+	// txNotFoundInTxMapPreValidateMsg is the error message used when a transaction
+	// hash cannot be located in the block's txMap during PreValidateTransactions.
+	txNotFoundInTxMapPreValidateMsg = "transaction %s not found in txMap during PreValidateTransactions"
 )
 
 // HandleBlockDirect ingests a full block delivered by a legacy peer.
@@ -128,6 +139,13 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	}
 
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "HandleBlockDirect",
+		// This span's INFO level is load-bearing. HandleBlockDirect has a named
+		// (err error) return and passes it to deferFn, and an INFO span with a
+		// non-nil error logs at ERROR (util/tracing/tracing.go, logTraceMessage).
+		// Several per-phase spans below it are at DEBUG, where that escalation
+		// only happens if the logger is already at DEBUG, so at production
+		// logLevel=INFO their failures surface only here. Phases that kept INFO
+		// (PreValidateTransactions, createSubtrees) escalate on their own.
 		tracing.WithLogMessage(
 			sm.logger,
 			"[HandleBlockDirect][%s %d] %d txs, peer %s",
@@ -328,7 +346,7 @@ func (sm *SyncManager) waitForPreviousBlockMined(ctx context.Context, prevBlockH
 
 func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Block, peerID string) (err error) {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "SyncManager:processBlock",
-		tracing.WithLogMessage(
+		tracing.WithDebugLogMessage(
 			sm.logger,
 			"[SyncManager:processBlock][%s %d] processing block",
 			teranodeBlock.Hash().String(),
@@ -388,7 +406,7 @@ type blockIdent struct {
 // the wire block; its subtree fields are populated here for the Merkle check.
 func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block, origin blockRequestOrigin, commitment *model.Block) (subtrees []*chainhash.Hash, subtreeSlices []*subtreepkg.Subtree, blockID uint32, err error) {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "prepareSubtrees",
-		tracing.WithLogMessage(
+		tracing.WithDebugLogMessage(
 			sm.logger,
 			"[prepareSubtrees][%s] processing subtree for block height %d, tx count %d",
 			block.Hash().String(),
@@ -738,7 +756,7 @@ func (sm *SyncManager) needsParentMinedWait(origin blockRequestOrigin, height ui
 
 func (sm *SyncManager) checkSubtreeFromBlock(ctx context.Context, bi blockIdent, subtree *subtreepkg.Subtree) error {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "checkSubtreeFromBlock",
-		tracing.WithLogMessage(sm.logger, "[checkSubtreeFromBlock][%s] checking subtree for block %s height %d", subtree.RootHash().String(), bi.hash.String(), bi.height),
+		tracing.WithDebugLogMessage(sm.logger, "[checkSubtreeFromBlock][%s] checking subtree for block %s height %d", subtree.RootHash().String(), bi.hash.String(), bi.height),
 	)
 
 	defer deferFn()
@@ -753,7 +771,7 @@ func (sm *SyncManager) checkSubtreeFromBlock(ctx context.Context, bi blockIdent,
 func (sm *SyncManager) writeSubtree(ctx context.Context, bi blockIdent, subtree *subtreepkg.Subtree,
 	subtreeData *subtreepkg.Data, subtreeMetaData *subtreepkg.Meta, quickValidationMode bool) error {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "writeSubtree",
-		tracing.WithLogMessage(sm.logger, "[writeSubtree][%s] writing subtree for block %s height %d", subtree.RootHash().String(), bi.hash.String(), bi.height),
+		tracing.WithDebugLogMessage(sm.logger, "[writeSubtree][%s] writing subtree for block %s height %d", subtree.RootHash().String(), bi.hash.String(), bi.height),
 	)
 
 	subtreeFileExtension := fileformat.FileTypeSubtreeToCheck
@@ -933,7 +951,7 @@ func (sm *SyncManager) ValidateTransactionsLegacyMode(ctx context.Context, txMap
 	bi blockIdent, blockID uint32) (err error) {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "validateTransactionsLegacyMode",
 		tracing.WithHistogram(prometheusLegacyNetsyncValidateTransactionsLegacyMode),
-		tracing.WithLogMessage(sm.logger, "[validateTransactionsLegacyMode] called for block %s, height %d", bi.hash, bi.height),
+		tracing.WithDebugLogMessage(sm.logger, "[validateTransactionsLegacyMode] called for block %s, height %d", bi.hash, bi.height),
 	)
 
 	defer func() {
@@ -1218,7 +1236,7 @@ func candidateParentMedianTimeFromHeaders(parentHash *chainhash.Hash, headers []
 // block is valid.
 func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper], bi blockIdent, blockID uint32, outpointOnly bool) (err error) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "createUtxos",
-		tracing.WithLogMessage(sm.logger, "[createUtxos] called for block %s / height %d", bi.hash, bi.height),
+		tracing.WithDebugLogMessage(sm.logger, "[createUtxos] called for block %s / height %d", bi.hash, bi.height),
 		tracing.WithHistogram(prometheusLegacyNetsyncCreateUtxos),
 	)
 
@@ -1267,7 +1285,7 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[c
 		g.Go(func() error {
 			txWrapper, ok := txMap.Get(txHash)
 			if !ok {
-				return errors.NewProcessingError(txNotFoundInTxMapMsg, txHash.String())
+				return errors.NewProcessingError(txNotFoundInTxMapCreateUtxosMsg, txHash.String())
 			}
 
 			createOpts := append(baseOpts[:len(baseOpts):len(baseOpts)],
@@ -1442,7 +1460,7 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 				if !ok {
 					// Not found in txMap — non-recoverable, fail immediately
 					mu.Lock()
-					hardFail = errors.NewProcessingError(txNotFoundInTxMapMsg, txHash.String())
+					hardFail = errors.NewProcessingError(txNotFoundInTxMapPreValidateMsg, txHash.String())
 					mu.Unlock()
 					return nil
 				}
@@ -1571,7 +1589,7 @@ func classifyAndCountPrewarmError(logger ulogger.Logger, err error) {
 // The levels indicate the number of parents in the block.
 func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32, blockTxsPerLevel map[uint32][]*bt.Tx, bi blockIdent) (err error) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "validateTransactions",
-		tracing.WithLogMessage(sm.logger, "[validateTransactions] called for block %s / height %d", bi.hash, bi.height),
+		tracing.WithDebugLogMessage(sm.logger, "[validateTransactions] called for block %s / height %d", bi.hash, bi.height),
 		tracing.WithHistogram(prometheusLegacyNetsyncValidateTransactions),
 	)
 
@@ -1652,7 +1670,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 
 func (sm *SyncManager) extendTransactions(ctx context.Context, bi blockIdent, txOrder []chainhash.Hash, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper], outpointOnly bool) (err error) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "extendTransactions",
-		tracing.WithLogMessage(sm.logger, "[extendTransactions] called for block %s / height %d", bi.hash, bi.height),
+		tracing.WithDebugLogMessage(sm.logger, "[extendTransactions] called for block %s / height %d", bi.hash, bi.height),
 		tracing.WithHistogram(prometheusLegacyNetsyncExtendTransactions),
 	)
 
@@ -1692,7 +1710,7 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, bi blockIdent, tx
 		// the coinbase transaction is not part of the txMap
 		txWrapper, found := txMap.Get(txHash)
 		if !found {
-			return errors.NewTxError(txNotFoundInTxMapMsg, txHash.String())
+			return errors.NewTxError(txNotFoundInTxMapExtendMsg, txHash.String())
 		}
 
 		tx := txWrapper.Tx
