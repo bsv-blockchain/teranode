@@ -113,6 +113,11 @@ Usage: teranode-cli <command> [options]
 |                      |                                                | `--force-deep` - Allow a rewind deeper than 100 blocks           |
 |                      |                                                | `--verify` - Run post-rewind consistency checks                  |
 |                      |                                                | `--concurrency` - Subtree-load concurrency (default: 0 = auto)   |
+| `repair-missing-parents` | Rebuild UTXO-store parent records that were | `--peer` - Healthy peer asset base URL (required)                |
+|                      | pruned while a child still referenced them     | `--txids` - Comma-separated parent txids known to be missing     |
+|                      | (issue 1768), from a healthy peer              | `--scan` - Walk unmined txs and queue absent parents             |
+|                      | (node must be stopped)                         | `--dry-run` - Print the plan, write nothing                      |
+|                      |                                                | `--force-live` - Proceed when FSM is not IDLE (DANGEROUS)        |
 
 ### Interactive Tools
 
@@ -314,6 +319,30 @@ Options:
 - `--end-height`: Ending block height (0 for current tip) (default: 0)
 
 ⚠️ **Warning**: This command modifies blockchain database records. Always run with `--dry-run=true` first to preview changes before applying them to production databases.
+
+### Repair Missing Parents
+
+```bash
+teranode-cli repair-missing-parents --peer=<peer-asset-url> [--txids=<txid>,<txid>] [--scan] [--dry-run]
+```
+
+Rebuilds UTXO-store parent records that the pruner deleted while an unmined child still referenced them (issue 1768). A node in that state cannot validate the block that mines a spender of the lost record and retries the same block forever.
+
+For each missing parent the tool reads the transaction, its block heights and its per-output spent state from a healthy peer's asset service, maps the peer's block hashes to local block IDs, recreates the record as mined, and replays each recorded spend with the real spending transaction. An output the peer records as spent is never recreated as unspent.
+
+Options:
+
+- `--peer`: Base URL of a healthy peer's asset service, for example `http://peer:8090` (required)
+- `--txids`: Comma-separated parent txids you already know are missing
+- `--scan`: Walk every unmined transaction in the store and queue any parent it references that is absent. Finds latent holes whose spender has not been mined yet.
+- `--dry-run`: Print the plan and write nothing
+- `--force-live`: Proceed when the FSM is not IDLE (DANGEROUS: races block validation on the same records)
+
+Pass `--txids`, `--scan`, or both. The report lists one line per parent with the outcome: `repaired`, `already present`, `peer has pruned it`, `peer block not on our chain`, `store records a different spender`, or `failed`. The command exits non-zero when any parent is not repaired.
+
+The scan cannot see a hole whose only child is already mined; that hole surfaces as a catch-up wedge naming the parent, which you pass with `--txids`. A parent the peer has itself pruned cannot be rebuilt by this tool.
+
+⚠️ **Warning**: Stop the node first. The tool refuses to run unless the FSM is IDLE.
 
 ### Rewind Blockchain
 

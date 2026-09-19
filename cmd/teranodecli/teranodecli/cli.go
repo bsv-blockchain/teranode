@@ -7,7 +7,9 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/cmd/aerospikekafkaconnector"
 	"github.com/bsv-blockchain/teranode/cmd/aerospikereader"
 	"github.com/bsv-blockchain/teranode/cmd/bitcointoutxoset"
@@ -20,6 +22,7 @@ import (
 	"github.com/bsv-blockchain/teranode/cmd/logs"
 	"github.com/bsv-blockchain/teranode/cmd/monitor"
 	"github.com/bsv-blockchain/teranode/cmd/reconsiderblock"
+	"github.com/bsv-blockchain/teranode/cmd/repairmissingparents"
 	"github.com/bsv-blockchain/teranode/cmd/resetblockassembly"
 	"github.com/bsv-blockchain/teranode/cmd/rewindblockchain/rewindblockchain"
 	"github.com/bsv-blockchain/teranode/cmd/seeder"
@@ -60,6 +63,7 @@ var commandHelp = map[string]string{
 	"resetblockassembly":      "Reset block assembly state",
 	"checkblockassembly":      "Check block assembly state by validating unmined transaction inputs (read-only)",
 	"fix-chainwork":           "Fix incorrect chainwork values in blockchain database",
+	"repair-missing-parents":  "Rebuild UTXO-store parent records pruned while a child still referenced them (issue 1768), from a healthy peer's asset service (node must be stopped)",
 	"rewindblockchain":        "Rewind blockchain DB, UTXO store and subtree blobs to Block Assembly's persisted height (DESTRUCTIVE, node must be stopped)",
 	"validate-utxo-set":       "Validate UTXO set file",
 	"subtreebench":            "Benchmark SubtreeProcessor throughput with CPU and memory profiling",
@@ -442,6 +446,8 @@ func Start(args []string, version, commit string) {
 
 			return fixChainwork(*dbURL, *dryRun, *batchSize, uint32(*startHeight), uint32(*endHeight))
 		}
+	case "repair-missing-parents":
+		cmd.Execute = repairMissingParentsExecute(logger, tSettings, registerRepairMissingParentsFlags(cmd.FlagSet))
 	case "rewindblockchain":
 		cmd.Execute = rewindExecute(logger, tSettings, registerRewindFlags(cmd.FlagSet))
 	case "validate-utxo-set":
@@ -687,5 +693,89 @@ func (f *rewindFlags) options() rewindblockchain.Options {
 		Concurrency:  *f.concurrency,
 		Stdin:        os.Stdin,
 		Stdout:       os.Stdout,
+	}
+}
+
+// repairMissingParentsFlags holds the parsed repair-missing-parents flag values.
+// Registration lives here rather than inline in the dispatch switch so tests can
+// exercise the flag surface without opening any store.
+type repairMissingParentsFlags struct {
+	peer      *string
+	txids     *string
+	scan      *bool
+	dryRun    *bool
+	forceLive *bool
+}
+
+// registerRepairMissingParentsFlags registers the repair-missing-parents flags on fs.
+func registerRepairMissingParentsFlags(fs *flag.FlagSet) *repairMissingParentsFlags {
+	return &repairMissingParentsFlags{
+		peer:      fs.String("peer", "", "Healthy peer asset service base URL, e.g. http://peer:8090 (required)"),
+		txids:     fs.String("txids", "", "Comma-separated parent txids known to be missing"),
+		scan:      fs.Bool("scan", false, "Walk every unmined transaction and queue any absent parent it references"),
+		dryRun:    fs.Bool("dry-run", false, "Print the plan and write nothing"),
+		forceLive: fs.Bool("force-live", false, "Proceed even if the FSM is not IDLE (DANGEROUS: races block validation)"),
+	}
+}
+
+// options converts the parsed flags into repairmissingparents.Options.
+func (f *repairMissingParentsFlags) options() (repairmissingparents.Options, error) {
+	opts := repairmissingparents.Options{
+		PeerURL:   *f.peer,
+		Scan:      *f.scan,
+		DryRun:    *f.dryRun,
+		ForceLive: *f.forceLive,
+		Stdout:    os.Stdout,
+	}
+
+	for _, s := range strings.Split(*f.txids, ",") {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+
+		h, err := chainhash.NewHashFromStr(s)
+		if err != nil {
+			return opts, errors.NewInvalidArgumentError("invalid txid %q", s, err)
+		}
+
+		opts.TxIDs = append(opts.TxIDs, *h)
+	}
+
+	if opts.PeerURL == "" {
+		return opts, errors.NewInvalidArgumentError("--peer is required")
+	}
+
+	if len(opts.TxIDs) == 0 && !opts.Scan {
+		return opts, errors.NewInvalidArgumentError("nothing to do: pass --txids and/or --scan")
+	}
+
+	return opts, nil
+}
+
+// repairMissingParentsExecute builds the Execute closure for repair-missing-parents.
+// The positional-argument guard mirrors rewindExecute: Go's flag package stops at the
+// first non-flag argument, so a stray positional would silently drop later flags.
+func repairMissingParentsExecute(logger ulogger.Logger, tSettings *settings.Settings, f *repairMissingParentsFlags) func(args []string) error {
+	return func(args []string) error {
+		if len(args) > 0 {
+			return errors.NewProcessingError("repair-missing-parents takes no positional arguments (got %v); use --txids", args)
+		}
+
+		opts, err := f.options()
+		if err != nil {
+			return err
+		}
+
+		report, err := repairmissingparents.Run(context.Background(), logger, tSettings, opts)
+		if err != nil {
+			return err
+		}
+
+		if report.Failed() {
+			return errors.NewProcessingError("one or more parents were not repaired; see report above")
+		}
+
+		return nil
 	}
 }
