@@ -474,7 +474,7 @@ func (u *Server) blessMissingTransaction(ctx context.Context, blockHash chainhas
 func (u *Server) checkCounterConflictingOnCurrentChain(ctx context.Context, txHash chainhash.Hash, blockIds map[uint32]bool) error {
 	// the tx is conflicting, check whether the counter-conflicting transactions have already been mined on our chain
 	// first get the parent transactions and check if they were spent
-	counterConflictingTxHashes, err := utxo.GetCounterConflictingTxHashes(ctx, u.utxoStore, txHash, u.settings.UtxoStore.ConflictingChildrenMaxNodes)
+	counterConflictingTxHashes, err := utxo.GetCounterConflictingTxHashes(ctx, u.utxoStore, txHash, u.settings.UtxoStore.ConflictingChildrenMaxNodes, u.settings.GetUtxoStoreBlockHeightRetention())
 	if err != nil {
 		return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] failed to get counter conflicting tx hashes", txHash.String(), err)
 	}
