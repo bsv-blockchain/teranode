@@ -435,27 +435,58 @@ func (u *Server) isPeerMalicious(ctx context.Context, peerID string) bool {
 //
 // Returns:
 //   - bool: True if peer has bad reputation
-func (u *Server) isPeerBad(peerID string) bool {
+//   - string: The reason the peer was judged bad, empty when it was not
+func (u *Server) isPeerBad(peerID string) (bool, string) {
 	if peerID == "" {
-		return false
+		return false, ""
 	}
 
 	// Query P2P service for peer health status
 	if u.p2pClient != nil {
 		// Use context.Background() since the old method didn't require context
-		isUnhealthy, reason, reputationScore, err := u.p2pClient.IsPeerUnhealthy(context.Background(), peerID)
+		isUnhealthy, reason, reputationScore, unknown, err := u.p2pClient.IsPeerUnhealthy(context.Background(), peerID)
 		if err != nil {
 			u.logger.Warnf("[isPeerBad] Failed to check if peer %s is unhealthy: %v", peerID, err)
 			// On error, assume peer is not bad to avoid false positives
-			return false
+			return false, ""
+		}
+		if unknown {
+			// Absence of information, not a verdict: a peer absent from the registry (e.g. its
+			// first announcement, raced against the peer-registry batcher flush) must not be
+			// refused as a catchup source. Fail open, matching the empty-ID and error branches
+			// above. Warn (not Debug) because this should be transient and worth noticing if
+			// it isn't; the counter makes a sustained rate visible without grepping logs.
+			u.logger.Warnf("[isPeerBad] Peer %s is unknown to the registry; treating as healthy", peerID)
+			prometheusCatchupPeerHealthGate.WithLabelValues("unknown").Inc()
+			return false, ""
 		}
 		if isUnhealthy {
 			u.logger.Debugf("[isPeerBad] Peer %s is unhealthy (reputation: %.2f): %s", peerID, reputationScore, reason)
 		}
-		return isUnhealthy
+		return isUnhealthy, reason
 	}
 
-	return false
+	return false, ""
+}
+
+// classifyPeerRefusalReason maps a catchup-source refusal to one of a fixed set of metric label
+// values. The label set is closed deliberately: reason comes from badReason (a message built from
+// interpolated numeric scores, e.g. "low reputation score: 12.34") or from the malicious flag,
+// neither of which is safe to use as a Prometheus label directly (unbounded cardinality from a
+// value that is effectively caller-influenced, since it moves with the peer's own behaviour).
+func classifyPeerRefusalReason(badReason string, malicious bool) string {
+	if malicious {
+		return "malicious"
+	}
+
+	switch {
+	case strings.HasPrefix(badReason, "low reputation score"):
+		return "low_reputation"
+	case strings.HasPrefix(badReason, "low success rate"):
+		return "low_success_rate"
+	default:
+		return "other"
+	}
 }
 
 // reportValidBlockForPeers reports a successfully validated block to the P2P service

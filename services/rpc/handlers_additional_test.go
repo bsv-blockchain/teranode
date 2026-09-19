@@ -5688,8 +5688,8 @@ func (m *mockP2PClient) IsPeerMalicious(ctx context.Context, peerID string) (boo
 	return false, "", nil
 }
 
-func (m *mockP2PClient) IsPeerUnhealthy(ctx context.Context, peerID string) (bool, string, float32, error) {
-	return false, "", 0, nil
+func (m *mockP2PClient) IsPeerUnhealthy(ctx context.Context, peerID string) (bool, string, float32, bool, error) {
+	return false, "", 0, false, nil
 }
 
 func (m *mockP2PClient) BanPeer(ctx context.Context, addr string, until int64) error {

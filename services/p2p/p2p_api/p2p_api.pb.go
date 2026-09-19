@@ -2311,6 +2311,7 @@ type IsPeerUnhealthyResponse struct {
 	IsUnhealthy     bool                   `protobuf:"varint,1,opt,name=is_unhealthy,json=isUnhealthy,proto3" json:"is_unhealthy,omitempty"`
 	Reason          string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`                                            // Optional reason why peer is considered unhealthy
 	ReputationScore float32                `protobuf:"fixed32,3,opt,name=reputation_score,json=reputationScore,proto3" json:"reputation_score,omitempty"` // Current reputation score
+	Unknown         bool                   `protobuf:"varint,4,opt,name=unknown,proto3" json:"unknown,omitempty"`                                         // True if the peer is absent from the registry (no information, not a verdict)
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -2364,6 +2365,13 @@ func (x *IsPeerUnhealthyResponse) GetReputationScore() float32 {
 		return x.ReputationScore
 	}
 	return 0
+}
+
+func (x *IsPeerUnhealthyResponse) GetUnknown() bool {
+	if x != nil {
+		return x.Unknown
+	}
+	return false
 }
 
 // Comprehensive peer information with all registry metadata
@@ -3044,11 +3052,12 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\fis_malicious\x18\x01 \x01(\bR\visMalicious\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"1\n" +
 	"\x16IsPeerUnhealthyRequest\x12\x17\n" +
-	"\apeer_id\x18\x01 \x01(\tR\x06peerId\"\x7f\n" +
+	"\apeer_id\x18\x01 \x01(\tR\x06peerId\"\x99\x01\n" +
 	"\x17IsPeerUnhealthyResponse\x12!\n" +
 	"\fis_unhealthy\x18\x01 \x01(\bR\visUnhealthy\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12)\n" +
-	"\x10reputation_score\x18\x03 \x01(\x02R\x0freputationScore\"\xf2\t\n" +
+	"\x10reputation_score\x18\x03 \x01(\x02R\x0freputationScore\x12\x18\n" +
+	"\aunknown\x18\x04 \x01(\bR\aunknown\"\xf2\t\n" +
 	"\x10PeerRegistryInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06height\x18\x02 \x01(\rR\x06height\x12\x1d\n" +

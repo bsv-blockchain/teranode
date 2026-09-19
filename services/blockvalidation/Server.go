@@ -2161,8 +2161,11 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 	}
 
 	// Check if peer is bad or malicious before attempting catchup
-	if u.isPeerBad(c.peerID) || u.isPeerMalicious(ctx, c.peerID) {
-		u.logger.Warnf("[catchup][%s] peer %s (%s) is marked as bad or malicious, trying alternative peers", c.block.Hash().String(), c.peerID, c.baseURL)
+	if bad, badReason := u.isPeerBad(c.peerID); bad || u.isPeerMalicious(ctx, c.peerID) {
+		malicious := !bad
+		reason := classifyPeerRefusalReason(badReason, malicious)
+		prometheusCatchupPeerHealthGate.WithLabelValues(reason).Inc()
+		u.logger.Warnf("[catchup][%s] peer %s (%s) refused as catchup source (%s), trying alternative peers", c.block.Hash().String(), c.peerID, c.baseURL, reason)
 
 		// Try alternative peers from P2P service instead of just skipping
 		if !u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID) {

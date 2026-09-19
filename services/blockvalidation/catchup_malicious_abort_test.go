@@ -78,8 +78,8 @@ func (m *maliciousAbortP2PClient) ReportValidSubtree(_ context.Context, _ string
 func (m *maliciousAbortP2PClient) ReportValidatedChainProgress(_ context.Context, _ string, _ uint32, _ string, _ []byte) error {
 	return nil
 }
-func (m *maliciousAbortP2PClient) IsPeerUnhealthy(_ context.Context, _ string) (bool, string, float32, error) {
-	return false, "", 0, nil
+func (m *maliciousAbortP2PClient) IsPeerUnhealthy(_ context.Context, _ string) (bool, string, float32, bool, error) {
+	return false, "", 0, false, nil
 }
 func (m *maliciousAbortP2PClient) RecordBytesDownloaded(_ context.Context, _ string, _ uint64) error {
 	return nil

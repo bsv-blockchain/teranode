@@ -73,7 +73,7 @@ message ListBannedResponse {
 message ClearBannedResponse {
     bool ok = 1;
 }
-  
+
 message AddBanScoreRequest {
     string peer_id = 1;
     string reason = 2;
@@ -245,6 +245,7 @@ message AddBanScoreRequest {
     bool is_unhealthy = 1;
     string reason = 2;  // Optional reason why peer is considered unhealthy
     float reputation_score = 3;  // Current reputation score
+    bool unknown = 4;  // True if the peer is absent from the registry (no information, not a verdict)
   }
 
   // Comprehensive peer information with all registry metadata
@@ -359,4 +360,3 @@ message AddBanScoreRequest {
     // Get single peer information by peer ID
     rpc GetPeer(GetPeerRequest) returns (GetPeerResponse) {}
   }
-  
