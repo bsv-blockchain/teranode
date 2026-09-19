@@ -336,8 +336,15 @@ func (u *Server) blockchainSubscriptionListener(ctx context.Context) {
 				// Cancel context before retrying to prevent leak
 				subscribeCancel()
 
-				// backoff for 5 seconds and try again
-				time.Sleep(5 * time.Second)
+				// backoff for 5 seconds and try again, but stop immediately if the
+				// caller's context is cancelled rather than blocking the shutdown
+				// path for up to 5 seconds.
+				select {
+				case <-ctx.Done():
+					ctxLogger.Warnf("[SubtreeValidation:blockchainSubscriptionListener] exiting during backoff: %s", ctx.Err())
+					return
+				case <-time.After(5 * time.Second):
+				}
 
 				continue
 			}
