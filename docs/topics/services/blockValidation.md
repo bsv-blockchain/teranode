@@ -501,23 +501,36 @@ Transactions in standard Bitcoin format are extended in-memory for validation:
 
 **Merkle Root Verification:**
 
-After processing all transactions, the system verifies:
-
-```go
-if err := block.CheckMerkleRoot(ctx); err != nil {
-    return errors.NewProcessingError("merkle root mismatch")
-}
-```
-
-This ensures the transactions match the block header before proceeding.
+Before processing can mutate UTXOs, `authenticateQuickBlockBody` recomputes
+subtree roots from their nodes and checks them against both the stored root and
+the requested subtree hash. It then checks the block merkle root, subtree
+partitioning, duplicate transactions and declared transaction count, and parses
+every transaction body. This authenticates the supplied bytes against the
+checkpoint-proven header before quick processing starts.
 
 **Error Handling:**
 
-If quick validation encounters any errors:
+Quick validation authenticates the complete body before assigning a block ID or
+mutating UTXOs. Error handling depends on what failed:
 
-- Removes `.subtree` files to force reprocessing
-- Falls back to normal validation automatically
-- Normal validation re-creates UTXOs and validates with full script execution
+- An invalid body (`ErrBlockInvalid`) aborts catchup without normal-validation
+  fallback or wholesale deletion of shared `.subtree` files. After all readers
+  and writers finish, cleanup removes pending files created by this attempt,
+  preserving files that already existed and data for promoted subtrees.
+- Corrupt cached subtree nodes or transaction data are local storage failures,
+  not evidence against the current peer. Catchup aborts without penalizing that
+  peer or entering normal validation. After workers finish, the identified
+  corrupt files are removed so a later attempt can fetch fresh copies. Pending
+  files retained from an earlier attempt are treated as cached data too. Other
+  local service failures also abort, without evicting healthy cached files.
+- An incomplete block aborts catchup while retaining files for another peer to
+  reuse. Other quick-validation failures remove `.subtree` files and clear
+  cached subtree slices before falling back to normal validation, which
+  re-creates UTXOs and performs full script validation.
+
+Artifact cleanup uses the configured subtree-fetch concurrency (default eight),
+a five-second timeout per file, and a one-minute overall deadline. Failed or
+unprocessed deletions leave files in place and produce a single summary warning.
 
 For implementation details, see `quick_validate.go` in `services/blockvalidation/`.
 

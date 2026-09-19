@@ -584,8 +584,7 @@ func TestServer_catchup(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		// Set the best block to the last stored block (block 49)
-		mockBlockchainStore.BestBlock = blocks[49]
+		// StoreBlock already selected block 49 under its lock.
 		// Start subscription readers only after the mock's best block is set.
 		server.blockValidation = NewBlockValidation(testCtx, logger, tSettings, mockBlockchainClient, subtreeStore, nil, nil, nil, nil)
 

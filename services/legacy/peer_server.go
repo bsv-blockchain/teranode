@@ -312,6 +312,7 @@ type server struct {
 	relayInv             chan relayMsg
 	broadcast            chan broadcastMsg
 	peerHeightsUpdate    chan updatePeerHeightsMsg
+	lifecycleMu          sync.Mutex // serializes worker registration with Stop
 	wg                   sync.WaitGroup
 	quit                 chan struct{}
 	nat                  NAT
@@ -918,16 +919,21 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 	host, _, err := net.SplitHostPort(sp.Addr())
 	if err == nil {
 		// Use a channel to get the response from the query
-		respChan := make(chan bool)
+		respChan := make(chan bool, 1)
 
 		// Create a proper query message to check if the peer is banned
-		sp.server.query <- &isPeerBannedMsg{
-			addr:  host,
-			reply: respChan,
+		select {
+		case sp.server.query <- &isPeerBannedMsg{addr: host, reply: respChan}:
+		case <-sp.server.quit:
+			return
 		}
 
-		// Wait for the response
-		isBanned := <-respChan
+		var isBanned bool
+		select {
+		case isBanned = <-respChan:
+		case <-sp.server.quit:
+			return
+		}
 		if isBanned {
 			sp.server.logger.Warnf("Ignoring block %s from banned legacy peer %s",
 				msg.BlockHash().String(), sp.Addr())
@@ -963,7 +969,12 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 		// the bitcoin block has been fully processed.
 		sp.server.syncManager.QueueBlock(block, sp.Peer, sp.blockProcessed)
 
-		err = <-sp.blockProcessed
+		// Shutdown can discard queued blocks and their replies.
+		select {
+		case err = <-sp.blockProcessed:
+		case <-sp.server.quit:
+			return
+		}
 		if err != nil {
 			sp.server.logger.Errorf("block processing failed: %v", err)
 
@@ -2529,7 +2540,10 @@ func (s *server) outboundPeerConnected(c *connmgr.ConnReq, conn net.Conn) {
 // done along with other performing other desirable cleanup.
 func (s *server) peerDoneHandler(sp *serverPeer) {
 	sp.WaitForDisconnect()
-	s.donePeers <- sp
+	select {
+	case s.donePeers <- sp:
+	case <-s.quit:
+	}
 
 	// Only tell sync manager we are gone if we ever told it we existed.
 	if sp.VersionKnown() {
@@ -2885,31 +2899,32 @@ cleanup:
 
 // Start begins accepting connections from peers.
 func (s *server) Start() {
-	// Already started?
-	if atomic.AddInt32(&s.started, 1) != 1 {
+	s.lifecycleMu.Lock()
+	if atomic.LoadInt32(&s.shutdown) != 0 || !atomic.CompareAndSwapInt32(&s.started, 0, 1) {
+		s.lifecycleMu.Unlock()
 		return
 	}
-
-	s.wg.Add(1)
-	go s.rebroadcastHandler()
-
-	s.wg.Add(1)
-	s.peerHandler()
-
+	// Register all workers before Stop can begin waiting for them.
+	s.wg.Add(3)
 	if s.nat != nil {
 		s.wg.Add(1)
+	}
+	s.lifecycleMu.Unlock()
+
+	go s.rebroadcastHandler()
+	if s.nat != nil {
 		go s.upnpUpdateThread()
 	}
-
-	// Start listening for ban events
 	go s.listenForBanEvents(s.ctx)
-
+	s.peerHandler()
 	s.WaitForShutdown()
 }
 
 // Stop gracefully shuts down the server by stopping and disconnecting all
 // peers and the main listener.
 func (s *server) Stop() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 	// Make sure this only happens once.
 	if atomic.AddInt32(&s.shutdown, 1) != 1 {
 		s.logger.Infof("Server is already in the process of shutting down")
@@ -2921,6 +2936,19 @@ func (s *server) Stop() error {
 	// Signal the remaining goroutines to quit.
 	close(s.quit)
 
+	return nil
+}
+
+// stopAndWait preserves peerHandler's disconnect-before-sync-manager ordering.
+// The final Stop also joins a manager initialized without starting the server.
+func (s *server) stopAndWait() error {
+	if err := s.Stop(); err != nil {
+		return err
+	}
+	s.WaitForShutdown()
+	if s.syncManager != nil {
+		return s.syncManager.Stop()
+	}
 	return nil
 }
 
@@ -3388,8 +3416,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		// wait for the ctx to be done
 		<-ctx.Done()
 		// stop the servers
-		_ = s.Stop()
-		_ = s.syncManager.Stop()
+		_ = s.stopAndWait()
 	}()
 
 	return &s, nil
@@ -3716,13 +3743,20 @@ func pickNoun(n uint64, singular, plural string) string {
 
 // listenForBanEvents continuously listens for ban events from the P2P service
 // and handles them by disconnecting banned peers. This method runs in a goroutine
-// and will exit when the context is canceled.
+// and is joined during shutdown. It exits when the context is canceled or the
+// server stops, including while a disconnect query is in flight.
 func (s *server) listenForBanEvents(ctx context.Context) {
+	defer s.wg.Done()
 	for {
 		select {
+		case <-s.quit:
+			return
 		case <-ctx.Done():
 			return
-		case event := <-s.banChan:
+		case event, ok := <-s.banChan:
+			if !ok {
+				return
+			}
 			s.handleBanEvent(ctx, event)
 		}
 	}
@@ -3731,7 +3765,7 @@ func (s *server) listenForBanEvents(ctx context.Context) {
 // handleBanEvent processes a ban event from the P2P service by disconnecting
 // peers that match the banned IP address or subnet. Only "add" ban actions
 // are processed; other actions are ignored.
-func (s *server) handleBanEvent(_ context.Context, event p2p.BanEvent) {
+func (s *server) handleBanEvent(ctx context.Context, event p2p.BanEvent) {
 	if event.Action != "add" {
 		return // We only care about new bans
 	}
@@ -3744,15 +3778,26 @@ func (s *server) handleBanEvent(_ context.Context, event p2p.BanEvent) {
 			peerIP := net.ParseIP(sp.Addr())
 			return sp.Addr() == event.IP || (event.Subnet != nil && event.Subnet.Contains(peerIP))
 		},
-		reply: make(chan error),
+		// The peer handler may reply after this listener stops waiting.
+		reply: make(chan error, 1),
 	}
 
 	// Send the message to the peer handler
-	s.query <- disconnectMsg
+	select {
+	case s.query <- disconnectMsg:
+	case <-s.quit:
+		return
+	case <-ctx.Done():
+		return
+	}
 
 	// Wait for the reply
-	err := <-disconnectMsg.reply
-	if err != nil {
-		s.logger.Errorf("Error disconnecting banned peers: %v", err)
+	select {
+	case err := <-disconnectMsg.reply:
+		if err != nil {
+			s.logger.Errorf("Error disconnecting banned peers: %v", err)
+		}
+	case <-s.quit:
+	case <-ctx.Done():
 	}
 }
