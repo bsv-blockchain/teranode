@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	testutil "github.com/bsv-blockchain/teranode/util/test"
@@ -30,6 +31,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/semaphore"
 )
+
+// unlockedDecorate answers a mocked BatchDecorate the way a real store does for
+// records that exist and are not locked.
+func unlockedDecorate(args mock.Arguments) {
+	for _, item := range args.Get(1).([]*utxo.UnresolvedMetaData) {
+		item.Data = &meta.Data{}
+	}
+}
 
 // CatchupTestSuite provides a complete test environment for catchup tests
 type CatchupTestSuite struct {
@@ -77,6 +86,11 @@ func NewCatchupTestSuiteWithConfig(t *testing.T, config *testhelpers.CatchupServ
 func (s *CatchupTestSuite) setupMocks() {
 	s.MockBlockchain = &blockchain.Mock{}
 	s.MockUTXOStore = &utxo.MockUtxostore{}
+	// The create-first block path classifies every ErrTxExists record through
+	// BatchDecorate (utxo.LeftoversAmong): answers like a real store with no locked
+	// records. A real store fills every item with Data or Err, and LeftoversAmong
+	// refuses an item with neither.
+	s.MockUTXOStore.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything).Run(unlockedDecorate).Return(nil).Maybe()
 	s.MockValidator = &validator.MockValidator{UtxoStore: s.MockUTXOStore}
 	s.HttpMock = testhelpers.NewHTTPMockSetup(s.T)
 

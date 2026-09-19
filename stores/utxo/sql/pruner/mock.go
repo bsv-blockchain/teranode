@@ -230,6 +230,11 @@ func (m *MockConn) Begin() (driver.Tx, error) {
 	return &MockTx{}, nil
 }
 
+// BeginTx supports the isolation requested by the atomic pruning transaction.
+func (m *MockConn) BeginTx(_ context.Context, _ driver.TxOptions) (driver.Tx, error) {
+	return &MockTx{}, nil
+}
+
 // MockStmt is a mock statement
 type MockStmt struct {
 	mockDB *MockDB
