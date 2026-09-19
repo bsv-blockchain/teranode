@@ -131,6 +131,13 @@ type Daemon struct {
 	server             *http.Server
 	serverMu           sync.Mutex
 	stopCh             chan struct{}
+	// startErr and startErrMu record the error (if any) returned by
+	// startServices on the most recent Start call. Start() itself only logs
+	// this error; startErr lets callers within the package (e.g. the test
+	// harness) distinguish a transient failure worth retrying from one that
+	// must fail fast, without reaching into logger internals.
+	startErr   error
+	startErrMu sync.Mutex
 }
 
 // New creates a new Daemon instance with the provided options.
@@ -231,6 +238,15 @@ func (d *Daemon) Stop(skipTracerShutdown ...bool) error {
 	}
 }
 
+// startError returns the error (if any) that startServices returned during
+// the most recent Start call. It is nil until Start has run at least once.
+func (d *Daemon) startError() error {
+	d.startErrMu.Lock()
+	defer d.startErrMu.Unlock()
+
+	return d.startErr
+}
+
 // updateServiceStatuses logs the statuses of all services managed by the ServiceManager.
 func (d *Daemon) updateServiceStatuses(logger ulogger.Logger) {
 	// Get detailed information about all services
@@ -303,6 +319,11 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 	}
 
 	err := d.startServices(sm.Ctx, logger, appSettings, sm, args, readyChInternal)
+
+	d.startErrMu.Lock()
+	d.startErr = err
+	d.startErrMu.Unlock()
+
 	if err != nil {
 		logger.Errorf("error starting services: %v", err)
 		sm.ForceShutdown()
