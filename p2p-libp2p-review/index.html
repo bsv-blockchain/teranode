@@ -7079,10 +7079,12 @@
 <ul>
 <li><strong>Single peer at a time</strong> — deliberate, locked behind <code>mu sync.RWMutex</code> (line 32). <code>TriggerSync</code> clears, selects, sends via Kafka. No concurrent peer changes.</li>
 <li>Selection key (peer_selector.go:42): full-storage nodes first, sorted reputation desc → response time asc → ban score asc → height desc. Falls back to youngest pruned node only if <code>AllowPrunedNodeFallback</code>.</li>
-<li>Stall handling (<code>evaluateSyncPeer</code> line 566) runs every <code>SyncCoordinatorPeriodicEvaluationInterval</code> (default 30s) and switches peers when:</li>
+<li>Stall handling (<code>evaluateSyncPeer</code> line 566) runs every <code>SyncCoordinatorPeriodicEvaluationInterval</code> (default 30s) and switches peers when:<ul>
 <li>reputation drops below 20,</li>
 <li>peer disappears from registry,</li>
 <li>syncing &gt; 5 min with no inbound message for 1 min (records <code>RecordCatchupFailure</code>).</li>
+</ul>
+</li>
 <li>Repeated failures degrade reputation; they don't auto-ban. There's commented-out malicious-detection logic at <code>sync_coordinator.go:390-405</code> that would close the loop, currently disabled.</li>
 <li><strong>No parallel fan-out.</strong> This is a deliberate "cooperative" choice — a single-peer model is simpler to reason about and avoids redundant block downloads — but it also means a slow but-not-failing peer can throttle the whole node's catch-up. Worth reconsidering once we're past the initial network growth phase.</li>
 </ul>
@@ -7097,7 +7099,7 @@
 <h3 id="blocker">Blocker<a class="headerlink" href="#blocker" title="Permanent link">&para;</a></h3>
 <ol>
 <li><del><strong><code>StaticPeers</code> is dead code in <code>services/p2p/</code>.</strong></del> <strong>Resolved.</strong> Wired through <code>go-p2p-message-bus</code> v0.1.17 (<code>services/p2p/Server.go:334</code>).</li>
-<li><del><strong><code>PeerRegistry</code> has no eviction policy.</strong></del> <strong>Resolved.</strong> TTL + LRU eviction added (<code>services/blockchain/peer_registry.go</code> <code>Cleanup</code>, with <code>p2p_peer_registry_max_size</code>/<code>_ttl</code>/<code>_cleanup_interval</code> settings). Banned peers are exempt; connected peers only while active within the TTL, and a periodic reconciliation sweep in the p2p service clears stale <code>IsConnected</code> flags (no libp2p disconnect callback exists).</li>
+<li><del><strong><code>PeerRegistry</code> has no eviction policy.</strong></del> <strong>Resolved.</strong> TTL + LRU eviction added (<code>services/blockchain/peer_registry.go</code> <code>Cleanup</code>, with <code>p2p_peer_registry_max_size</code>/<code>_ttl</code>/<code>_cleanup_interval</code> settings). Banned peers are exempt; connected peers only while active within the TTL, and a periodic reconciliation sweep in the p2p service clears stale <code>IsConnected</code> flags (no libp2p disconnect callback exists). Note: the three settings carried <code>key:</code>/<code>default:</code> tags but <code>settings.NewSettings()</code> never read them, so the cleanup loop never actually started until that loader wiring was added — settings.conf overrides of these keys had no effect before then.</li>
 <li><strong>Pre-relay topic validators (<code>pubsub.RegisterTopicValidator</code>).</strong> Per-topic size caps now run in handlers (mitigates the worst payloads), but schema and rate are still enforced <em>after</em> gossipsub fan-out. Closing this gap is a library change: extend <code>go-p2p-message-bus</code> so callers can register a validator function, then teranode supplies one per topic. Highest-leverage hardening change still outstanding.</li>
 </ol>
 <h3 id="should-fix">Should-fix<a class="headerlink" href="#should-fix" title="Permanent link">&para;</a></h3>
