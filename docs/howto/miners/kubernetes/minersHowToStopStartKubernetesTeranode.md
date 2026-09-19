@@ -1,6 +1,6 @@
 # How to Start and Stop Teranode in Kubernetes
 
-Last modified: 6-March-2025
+Last modified: 1-July-2026
 
 ## Introduction
 
