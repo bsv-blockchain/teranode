@@ -1128,6 +1128,15 @@ func Test_SmokeTests(t *testing.T) {
 		tests.SpendAndCreateSpendErrorSurfacesPerInput(t, db)
 	})
 
+	t.Run("spend partial failure rolls back", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendPartialFailureRollsBack(t, db)
+	})
+
 	t.Run("spend and create invalid options", func(t *testing.T) {
 		db, _ := setup(ctx, t)
 

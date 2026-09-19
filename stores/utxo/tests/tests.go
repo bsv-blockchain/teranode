@@ -926,6 +926,121 @@ func SpendErrorTypes(t *testing.T, db utxostore.Store) {
 	})
 }
 
+// SpendPartialFailureRollsBack covers the write-side invariant behind issue 1214:
+// when a multi-input spend batch fails part-way and the spending tx has no record
+// in the store, none of its inputs may stay marked as spent by it. A spend that
+// stands with no spender record is a dangling reference that every later
+// counter-conflicting walk dereferences to TX_NOT_FOUND. The rollback must run
+// for every failure class that leaves the record uncreated (a locked parent, a
+// missing parent), not only for the double-spend / frozen / conflicting classes.
+//
+// The guard case pins the opposite edge: when the spender record already exists,
+// a failed re-spend must NOT unspend the inputs of that live record.
+func SpendPartialFailureRollsBack(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	createParent := func(t *testing.T, satoshis uint64, opts ...utxostore.CreateOption) *bt.Tx {
+		t.Helper()
+
+		parent := newTestTx(t, satoshis)
+		_, _, err := db.SpendAndCreate(ctx, parent, 1000, append(opts, utxostore.WithCreateOnly())...)
+		require.NoError(t, err)
+
+		t.Cleanup(func() { _ = db.Delete(ctx, parent.TxIDChainHash()) })
+
+		return parent
+	}
+
+	childOf := func(t *testing.T, outSatoshis uint64, parents ...*bt.Tx) *bt.Tx {
+		t.Helper()
+
+		child := bt.NewTx()
+		for _, parent := range parents {
+			require.NoError(t, child.From(parent.TxIDChainHash().String(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+		}
+
+		for _, input := range child.Inputs {
+			input.UnlockingScript = dummyUnlockingScript
+		}
+
+		require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", outSatoshis))
+
+		return child
+	}
+
+	spenderOf := func(t *testing.T, parent *bt.Tx) *chainhash.Hash {
+		t.Helper()
+
+		m, err := db.Get(ctx, parent.TxIDChainHash(), fields.Utxos)
+		require.NoError(t, err)
+		require.Len(t, m.SpendingDatas, 1)
+
+		if m.SpendingDatas[0] == nil {
+			return nil
+		}
+
+		return m.SpendingDatas[0].TxID
+	}
+
+	t.Run("locked parent rolls back the spends that succeeded", func(t *testing.T) {
+		goodParent := createParent(t, 7_100_000)
+		lockedParent := createParent(t, 7_200_000, utxostore.WithLocked(true))
+
+		child := childOf(t, 1_000, goodParent, lockedParent)
+
+		_, spends, err := db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
+		require.Error(t, err)
+		require.Len(t, spends, 2)
+		require.NoError(t, spends[0].Err, "the spend on the unlocked parent succeeds inside the batch")
+		require.ErrorIs(t, spends[1].Err, errors.ErrTxLocked)
+
+		require.Nil(t, spenderOf(t, goodParent), "input 0 must be unspent again: the spender %s has no record, so a surviving spend is a dangling reference", child.TxID())
+		require.Nil(t, spenderOf(t, lockedParent))
+	})
+
+	t.Run("missing parent rolls back the spends that succeeded", func(t *testing.T) {
+		goodParent := createParent(t, 7_300_000)
+		missingParent := newTestTx(t, 7_400_000)
+
+		child := childOf(t, 1_000, goodParent, missingParent)
+
+		_, spends, err := db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
+		require.Error(t, err)
+		require.Len(t, spends, 2)
+		require.NoError(t, spends[0].Err, "the spend on the present parent succeeds inside the batch")
+		require.ErrorIs(t, spends[1].Err, errors.ErrTxNotFound)
+
+		require.Nil(t, spenderOf(t, goodParent), "input 0 must be unspent again: the spender %s has no record, so a surviving spend is a dangling reference", child.TxID())
+	})
+
+	t.Run("existing spender record keeps its spends on a failed re-spend", func(t *testing.T) {
+		goodParent := createParent(t, 7_500_000)
+		lockedParent := createParent(t, 7_600_000, utxostore.WithLocked(true))
+
+		child := childOf(t, 1_000, goodParent, lockedParent)
+
+		_, _, err := db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		t.Cleanup(func() {
+			childSpends, spendsErr := utxostore.GetSpends(child)
+			require.NoError(t, spendsErr)
+			_ = db.Unspend(ctx, childSpends)
+			_ = db.Delete(ctx, child.TxIDChainHash())
+		})
+
+		_, spends, err := db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
+		require.Error(t, err)
+		require.Len(t, spends, 2)
+		require.NoError(t, spends[0].Err)
+		require.ErrorIs(t, spends[1].Err, errors.ErrTxLocked)
+
+		spender := spenderOf(t, goodParent)
+		require.NotNil(t, spender, "the spender record exists, so its spend on input 0 must stand for the retry")
+		require.Equal(t, child.TxIDChainHash().String(), spender.String())
+	})
+}
+
 // GetSpendNotFound tests that GetSpend returns a SpendResponse with Status_NOT_FOUND
 // (and nil error) when the referenced UTXO doesn't exist. This is a behavioral contract:
 // not-found is a status, not an error.
