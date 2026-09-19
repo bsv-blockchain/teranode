@@ -1,6 +1,7 @@
 x-teranode-base:
   &teranode-base
   image: ghcr.io/bsv-blockchain/teranode:v0.14.4
+  init: true
   networks:
     - teranode-network
   volumes:
@@ -22,7 +23,7 @@ services:
     entrypoint: [ "/app/entrypoint.sh" ]
     command: [ "-blockchain=1" ]
     healthcheck:
-      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8087" ]
+      test: [ "CMD-SHELL", "netstat -ltn | grep -c 8087" ]
       interval: 5s
       timeout: 30s
       retries: 10
@@ -41,7 +42,7 @@ services:
       blockchain:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8091" ]
+      test: [ "CMD-SHELL", "netstat -ltn | grep -c 8091" ]
       interval: 5s
       timeout: 30s
       retries: 10
@@ -72,7 +73,7 @@ services:
       blockchain:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8086" ]
+      test: [ "CMD-SHELL", "netstat -ltn | grep -c 8086" ]
       interval: 5s
       timeout: 30s
       retries: 10
@@ -90,7 +91,7 @@ services:
       blockchain:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8088" ]
+      test: [ "CMD-SHELL", "netstat -ltn | grep -c 8088" ]
       interval: 5s
       timeout: 30s
       retries: 10
@@ -107,7 +108,7 @@ services:
       blockchain:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8085" ]
+      test: [ "CMD-SHELL", "netstat -ltn | grep -c 8085" ]
       interval: 5s
       timeout: 30s
       retries: 10
@@ -143,7 +144,7 @@ services:
       blockassembly:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8084" ]
+      test: [ "CMD-SHELL", "netstat -ltn | grep -c 8084" ]
       interval: 5s
       timeout: 30s
       retries: 10
@@ -162,7 +163,7 @@ services:
       blockchain:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "9905" ]
+      test: [ "CMD-SHELL", "netstat -ltn | grep -c 9905" ]
       interval: 5s
       timeout: 30s
       retries: 10
@@ -192,7 +193,7 @@ services:
       blockchain:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8096" ]
+      test: [ "CMD-SHELL", "netstat -ltn | grep -c 8096" ]
       interval: 5s
       timeout: 30s
       retries: 10
