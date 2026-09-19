@@ -32,6 +32,7 @@ import (
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
@@ -535,16 +536,16 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		store, err := blob.NewStore(b.logger, storeURL,
 			blobstoreoptions.WithStoreType(blobstoretypes.PEERREGISTRYSTORE))
 		if err != nil {
-			b.logger.Warnf("[Blockchain] failed to construct peer registry blob store %s: %v", storeURL.Redacted(), err)
+			b.logger.Warnf("[Blockchain] failed to construct peer registry blob store %s: %v", urlutil.Redact(storeURL), err)
 		} else {
 			b.peerRegistryStore = store
 			// Use the configured TTL on Load so persisted reputation history
 			// survives exactly as long as operators have asked for, instead of
 			// a hardcoded value that ignored their config.
 			if err := b.peerRegistry.Load(ctx, store, registryTTL); err != nil {
-				b.logger.Warnf("[Blockchain] failed to load peer registry from %s: %v", storeURL.Redacted(), err)
+				b.logger.Warnf("[Blockchain] failed to load peer registry from %s: %v", urlutil.Redact(storeURL), err)
 			} else {
-				b.logger.Infof("[Blockchain] loaded %d peers from %s", b.peerRegistry.Count(), storeURL.Redacted())
+				b.logger.Infof("[Blockchain] loaded %d peers from %s", b.peerRegistry.Count(), urlutil.Redact(storeURL))
 			}
 			if interval := b.settings.BlockChain.PeerRegistrySaveInterval; interval > 0 {
 				// Tracked on the registry's WaitGroup so Close() drains it on Stop()

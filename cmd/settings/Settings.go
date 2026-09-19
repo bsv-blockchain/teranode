@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/ordishs/gocore"
@@ -166,7 +167,11 @@ func sortValue(v interface{}) interface{} {
 //   - Prints the settings, version, and commit information to stdout.
 //   - Logs errors if the settings cannot be marshaled to JSON.
 func PrintSettings(logger ulogger.Logger, s *settings.Settings, version, commit string) {
-	stats := gocore.Config().Stats()
+	// See cmd/teranode/daemon.go: gocore decrypts each value before rendering
+	// the dump and masks only its own "*EHE*" prefix, so a plaintext store URL
+	// arrives here with its password intact. Two lines below, settings.Redact
+	// is careful about exactly the same credential.
+	stats := urlutil.RedactText(gocore.Config().Stats())
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
 	redacted, err := settings.Redact(s)

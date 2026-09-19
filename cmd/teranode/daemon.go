@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/bsv-blockchain/teranode/daemon"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/file"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -13,6 +14,30 @@ import (
 	"github.com/bsv-blockchain/teranode/util/debugflags"
 	"github.com/ordishs/gocore"
 )
+
+// redactedConfigDump is the boot-time settings dump RunDaemon logs.
+//
+// gocore's Config().Stats() resolves every setting and decrypts it on the way
+// past, and masks only values still carrying gocore's literal "*EHE*" prefix.
+// A plaintext postgres://user:password@host store URL therefore reaches the log
+// verbatim, and docs/howto/bugReporting.md asks operators to paste this output
+// into a bug report. Redact the URLs before either happens.
+//
+// It is a named function rather than an expression so a test can assert what
+// RunDaemon actually logs.
+func redactedConfigDump() string {
+	return urlutil.RedactText(gocore.Config().Stats())
+}
+
+// configAdvertisingPayload is what RunDaemon registers as gocore's "CONFIG"
+// app payload. gocore POSTs it to advertisingURL on every advertising tick,
+// when that setting is non-empty, and Config().GetAll() hands back the raw
+// configuration map with no masking of any kind. Teranode store URLs carry
+// their password in the userinfo, so the raw map is a set of working
+// credentials leaving the node over HTTP.
+func configAdvertisingPayload() interface{} {
+	return urlutil.RedactMapValues(gocore.Config().GetAll())
+}
 
 // RunDaemon starts the teranode daemon with all necessary initialization
 func RunDaemon(progname, version, commit string) {
@@ -22,9 +47,7 @@ func RunDaemon(progname, version, commit string) {
 	// Call the gocore.Log function to initialize the logger and start the Unix domain socket that allows us to configure settings at runtime.
 	gocore.Log(progname)
 
-	gocore.AddAppPayloadFn("CONFIG", func() interface{} {
-		return gocore.Config().GetAll()
-	})
+	gocore.AddAppPayloadFn("CONFIG", configAdvertisingPayload)
 
 	// Initialize settings
 	tSettings := settings.NewSettings()
@@ -78,7 +101,7 @@ func RunDaemon(progname, version, commit string) {
 
 	util.InitGRPCResolver(logger, tSettings.GRPCResolver)
 
-	stats := gocore.Config().Stats()
+	stats := redactedConfigDump()
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
 	daemon.New(daemon.WithLoggerFactory(func(serviceName string) ulogger.Logger {

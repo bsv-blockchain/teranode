@@ -132,7 +132,16 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	}
 
 	if _, err := url.Parse(assetHTTPAddress); err != nil {
-		return nil, errors.NewConfigurationError("asset_httpAddress is not a valid URL", err)
+		// url.Parse embeds the string it was given verbatim in its error, and
+		// asset_httpAddress is operator-supplied. It is a public address rather
+		// than a store URL, so nothing is expected to carry userinfo here, but
+		// the shape is the one this sweep is closing everywhere else.
+		var parseErr *url.Error
+		if errors.As(err, &parseErr) {
+			return nil, errors.NewConfigurationError("asset_httpAddress is not a valid URL", parseErr.Err)
+		}
+
+		return nil, errors.NewConfigurationError("asset_httpAddress is not a valid URL")
 	}
 
 	c := &Centrifuge{

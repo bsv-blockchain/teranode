@@ -21,22 +21,15 @@ func ParseMultiHostURL(rawURL string) (*url.URL, error) {
 
 	afterScheme := rawURL[schemeEnd+3:]
 
-	pathStart := strings.Index(afterScheme, "/")
-	queryStart := strings.Index(afterScheme, "?")
+	// RFC 3986 ends the authority at the first "/", "?" or "#", whichever comes
+	// first. Looking for "/" before "?" splits "http://host?ids=a,b/c" at the
+	// slash inside the query, which puts the query into the host.
+	hostPart := afterScheme
+	rest := ""
 
-	var hostPart string
-	var rest string
-
-	switch {
-	case pathStart >= 0:
-		hostPart = afterScheme[:pathStart]
-		rest = afterScheme[pathStart:]
-	case queryStart >= 0:
-		hostPart = afterScheme[:queryStart]
-		rest = afterScheme[queryStart:]
-	default:
-		hostPart = afterScheme
-		rest = ""
+	if end := strings.IndexAny(afterScheme, "/?#"); end >= 0 {
+		hostPart = afterScheme[:end]
+		rest = afterScheme[end:]
 	}
 
 	hosts := strings.Split(hostPart, ",")
@@ -47,7 +40,12 @@ func ParseMultiHostURL(rawURL string) (*url.URL, error) {
 		return nil, err
 	}
 
-	if atIdx := strings.Index(hostPart, "@"); atIdx >= 0 {
+	// Split the userinfo off at the LAST "@", which is what net/url does. The
+	// first "@" is wrong whenever the password contains a raw "@": the tail of
+	// the password survives into u.Host and is then printed by the very helper
+	// whose job is to mask it, and welded onto the first broker by every
+	// consumer that splits u.Host on commas.
+	if atIdx := strings.LastIndex(hostPart, "@"); atIdx >= 0 {
 		hostPart = hostPart[atIdx+1:]
 	}
 

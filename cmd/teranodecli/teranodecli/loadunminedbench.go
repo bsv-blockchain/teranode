@@ -57,7 +57,14 @@ func runLoadUnminedBenchmark(txCount int, cpuProfile, memProfile, aerospikeURL s
 	// Parse Aerospike URL and create store
 	aerospikeURI, err := url.Parse(aerospikeURL)
 	if err != nil {
-		return errors.NewProcessingError("failed to parse Aerospike URL", err)
+		// Same shape as fix_chainwork: --aerospike-url can carry userinfo and
+		// url.Parse echoes its whole input in the error.
+		var parseErr *url.Error
+		if errors.As(err, &parseErr) {
+			return errors.NewProcessingError("failed to parse Aerospike URL", parseErr.Err)
+		}
+
+		return errors.NewProcessingError("failed to parse Aerospike URL")
 	}
 
 	aerospikeStore, err = aerospike.New(ctx, ulogger.TestLogger{}, tSettings, aerospikeURI)

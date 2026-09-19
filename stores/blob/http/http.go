@@ -95,7 +95,7 @@ func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) 
 //   - string: Description of the health status
 //   - error: Any error that occurred during the health check
 func (s *HTTPStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
-	resp, err := s.httpClient.Get(fmt.Sprintf("%s/health", s.baseURL))
+	resp, err := s.httpClient.Get(fmt.Sprintf("%s/health", s.baseURL)) // urlsafe: builds the request URL sent to the blob server, not a log line; the credentials in baseURL are the point
 	if err != nil {
 		return http.StatusServiceUnavailable, "HTTP Store: Service Unavailable", errors.NewStorageError("[HTTPStore] Health check failed", err)
 	}
@@ -121,7 +121,7 @@ func (s *HTTPStore) Exists(ctx context.Context, key []byte, fileType fileformat.
 	encodedKey := base64.URLEncoding.EncodeToString(key) + "." + fileType.String()
 
 	query := options.FileOptionsToQuery(fileType, opts...)
-	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode())
+	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode()) // urlsafe: builds the request URL sent to the blob server, not a log line; the credentials in baseURL are the point
 
 	resp, err := s.httpClient.Head(url)
 	if err != nil {
@@ -173,7 +173,7 @@ func (s *HTTPStore) GetIoReader(ctx context.Context, key []byte, fileType filefo
 	encodedKey := base64.URLEncoding.EncodeToString(key) + "." + fileType.String()
 
 	query := options.FileOptionsToQuery(fileType, opts...)
-	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode())
+	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode()) // urlsafe: builds the request URL sent to the blob server, not a log line; the credentials in baseURL are the point
 
 	resp, err := s.httpClient.Get(url)
 	if err != nil {
@@ -234,7 +234,7 @@ func (s *HTTPStore) SetFromReader(ctx context.Context, key []byte, fileType file
 	// diagnostics only. The receiving node does NOT use the sender's DAH — it applies its
 	// own retention policy via its local BlockHeightRetention setting. See QueryToFileOptions.
 	query := options.FileOptionsToQuery(fileType, opts...)
-	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode())
+	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode()) // urlsafe: builds the request URL sent to the blob server, not a log line; the credentials in baseURL are the point
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, value)
 	if err != nil {
@@ -273,7 +273,7 @@ func (s *HTTPStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.
 	encodedKey := base64.URLEncoding.EncodeToString(key) + "." + fileType.String()
 
 	query := options.FileOptionsToQuery(fileType, opts...)
-	url := fmt.Sprintf(blobURLFormatWithDAH, s.baseURL, encodedKey, query.Encode(), dah)
+	url := fmt.Sprintf(blobURLFormatWithDAH, s.baseURL, encodedKey, query.Encode(), dah) // urlsafe: builds the request URL sent to the blob server, not a log line; the credentials in baseURL are the point
 
 	req, err := http.NewRequestWithContext(ctx, "PATCH", url, nil)
 	if err != nil {
@@ -308,7 +308,7 @@ func (s *HTTPStore) Del(ctx context.Context, key []byte, fileType fileformat.Fil
 	encodedKey := base64.URLEncoding.EncodeToString(key) + "." + fileType.String()
 
 	query := options.FileOptionsToQuery(fileType, opts...)
-	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode())
+	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode()) // urlsafe: builds the request URL sent to the blob server, not a log line; the credentials in baseURL are the point
 
 	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
 	if err != nil {

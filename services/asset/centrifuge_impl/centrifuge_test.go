@@ -144,6 +144,32 @@ func TestNew(t *testing.T) {
 		assert.Nil(t, centrifuge)
 		assert.Contains(t, err.Error(), "asset_httpAddress is not a valid URL")
 	})
+
+	// url.Parse embeds the whole string it was given in its error, so wrapping
+	// that error undoes any redaction of the value. asset_httpAddress is a
+	// public address rather than a store URL, so nothing is expected to carry
+	// userinfo here, but the message must not echo it if it does.
+	t.Run("Invalid URL - does not echo the configured value", func(t *testing.T) {
+		const password = "canary-asset-address-password"
+
+		tSettings := &settings.Settings{
+			Asset: settings.AssetSettings{
+				// A space in the host is what makes url.Parse refuse it.
+				HTTPAddress: "http://teranode:" + password + "@asset host:8080",
+			},
+		}
+
+		centrifuge, err := New(logger, tSettings, mockRepo, mockHTTP)
+		require.Error(t, err)
+		assert.Nil(t, centrifuge)
+
+		assert.NotContains(t, err.Error(), password, "the configured value reached the error message")
+		assert.NotContains(t, err.Error(), "teranode:", "the configured userinfo reached the error message")
+
+		assert.Contains(t, err.Error(), "asset_httpAddress is not a valid URL")
+		assert.Contains(t, strings.ToLower(err.Error()), "invalid character",
+			"expected url.Parse's own reason to survive, got: %v", err)
+	})
 }
 
 func TestCentrifuge_Structure(t *testing.T) {

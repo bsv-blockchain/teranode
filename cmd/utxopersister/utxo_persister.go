@@ -22,6 +22,7 @@ import (
 	"strconv"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	utxopersisterservice "github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -95,7 +96,7 @@ func RunUtxoPersister(logger ulogger.Logger, settings *settings.Settings) {
 		}
 	}
 
-	logger.Infof("Using blockStore at %s with hashPrefix %d", blockStoreURL, hashPrefix)
+	logger.Infof("Using blockStore at %s with hashPrefix %d", urlutil.Redact(blockStoreURL), hashPrefix)
 
 	// Create the block store
 	blockStore, err := blob.NewStore(logger, blockStoreURL, options.WithHashPrefix(hashPrefix))
@@ -114,7 +115,7 @@ func RunUtxoPersister(logger ulogger.Logger, settings *settings.Settings) {
 			return
 		}
 
-		logger.Infof("Using blockchainStore at %s", blockchainStoreURL)
+		logger.Infof("Using blockchainStore at %s", urlutil.Redact(blockchainStoreURL))
 
 		var blockchainStore blockchainstore.Store
 

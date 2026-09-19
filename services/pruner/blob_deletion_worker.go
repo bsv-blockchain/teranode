@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
@@ -162,7 +163,7 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 			for st := range storeTypes {
 				urlStr := st.String()
 				if u, err := s.settings.GetBlobStoreURL(int32(st)); err == nil && u != nil {
-					urlStr = st.String() + "=" + u.String()
+					urlStr = st.String() + "=" + urlutil.Redact(u)
 				}
 				storeInfo = append(storeInfo, urlStr)
 			}
@@ -288,7 +289,7 @@ func (s *Server) getBlobStore(storeType storetypes.BlobStoreType) (blob.Store, e
 		return nil, errors.NewStorageError("failed to create blob store for %s", storeType.String(), err)
 	}
 
-	s.logger.Infof("[pruner] blob deletion: initialized %s store at %s (hashPrefix=%d)", storeType.String(), storeURL.String(), hashPrefix)
+	s.logger.Infof("[pruner] blob deletion: initialized %s store at %s (hashPrefix=%d)", storeType.String(), urlutil.Redact(storeURL), hashPrefix)
 
 	// Cache it (note: map writes in Go are not thread-safe, but this is acceptable
 	// since it's idempotent and only happens once per store type)

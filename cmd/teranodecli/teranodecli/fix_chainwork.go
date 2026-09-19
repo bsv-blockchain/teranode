@@ -70,12 +70,12 @@ func buildPostgresConnString(storeURL *url.URL) string {
 
 	// Only add user if it's not empty
 	if dbUser != "" {
-		connStr = fmt.Sprintf("%s user=%s", connStr, dbUser)
+		connStr = fmt.Sprintf("%s user=%s", connStr, dbUser) // urlsafe: builds the DSN handed to sql.Open; the caller never logs it
 	}
 
 	// Only add password if it's not empty
 	if dbPassword != "" {
-		connStr = fmt.Sprintf("%s password=%s", connStr, dbPassword)
+		connStr = fmt.Sprintf("%s password=%s", connStr, dbPassword) // urlsafe: builds the DSN handed to sql.Open; the caller never logs it
 	}
 
 	return connStr
@@ -85,7 +85,16 @@ func fixChainwork(dbURL string, dryRun bool, batchSize int, startHeight, endHeig
 	// Parse database URL
 	parsedURL, err := url.Parse(dbURL)
 	if err != nil {
-		return errors.NewProcessingError("failed to parse database URL", err)
+		// --db-url is a postgres DSN carrying its password in the userinfo, and
+		// url.Parse embeds the string it was given verbatim in its error. This
+		// error is printed to stdout by cli.go, which is container logs in
+		// practice, so report the parse reason alone.
+		var parseErr *url.Error
+		if errors.As(err, &parseErr) {
+			return errors.NewProcessingError("failed to parse database URL", parseErr.Err)
+		}
+
+		return errors.NewProcessingError("failed to parse database URL")
 	}
 
 	// Determine database type and connection string

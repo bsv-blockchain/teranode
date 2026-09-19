@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
@@ -60,7 +61,7 @@ func ReadAerospikeKafka(
 	statsIntervalSecs int,
 ) error {
 	logger.Infof("Starting Aerospike Kafka connector reader")
-	logger.Infof("  Kafka URL: %s", kafkaURLStr)
+	logger.Infof("  Kafka URL: %s", urlutil.RedactString(kafkaURLStr))
 	if txIDFilter != "" {
 		logger.Infof("  TxID Filter: %s", txIDFilter)
 	} else {
@@ -76,7 +77,15 @@ func ReadAerospikeKafka(
 	// Parse Kafka URL
 	kafkaURL, err := url.Parse(kafkaURLStr)
 	if err != nil {
-		return errors.NewProcessingError("failed to parse Kafka URL", err)
+		// url.Parse embeds the string it was given verbatim in its error, so
+		// wrapping err here would undo the redaction fourteen lines above.
+		// Report the parse reason on its own.
+		var parseErr *url.Error
+		if errors.As(err, &parseErr) {
+			return errors.NewProcessingError("failed to parse Kafka URL", parseErr.Err)
+		}
+
+		return errors.NewProcessingError("failed to parse Kafka URL")
 	}
 
 	// Convert hex filter to bytes for comparison

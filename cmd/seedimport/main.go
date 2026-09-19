@@ -84,7 +84,19 @@ func run(ctx context.Context, logger ulogger.Logger, s *settings.Settings, block
 
 	seedURL, err := url.Parse(seedURLStr)
 	if err != nil {
-		return errors.NewConfigurationError("invalid --seed-url %q", seedURLStr, err)
+		// Neither the raw flag value nor url.Parse's error may be echoed: the
+		// value can carry userinfo credentials, and url.Parse embeds the string
+		// it was given verbatim in its error. Report the parse reason alone.
+		var parseErr *url.Error
+		if errors.As(err, &parseErr) {
+			// No format verb: errors.New* strips a trailing error parameter as
+			// the wrapped error and only calls fmt.Errorf when parameters
+			// remain, so a "%v" here would survive into the message unrendered.
+			// The wrapped reason renders after " -> " on its own.
+			return errors.NewConfigurationError("invalid --seed-url", parseErr.Err)
+		}
+
+		return errors.NewConfigurationError("invalid --seed-url")
 	}
 
 	hashPrefix := -2
