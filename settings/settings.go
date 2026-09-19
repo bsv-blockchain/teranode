@@ -105,13 +105,13 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MaxRawTxFee:     getUint64("maxrawtxfee", 10_000_000, alternativeContext...), // 0.1 BSV, matches bitcoin-sv DEFAULT_TRANSACTION_MAXFEE (COIN/10)
 			// MaxOrphanTxSize:                 getInt("maxorphantxsize", 1000000, alternativeContext...),
 			DataCarrierSize:              int64(getInt("datacarriersize", 1000000, alternativeContext...)),
-			MaxScriptSizePolicy:          getInt("maxscriptsizepolicy", 100000000, alternativeContext...), // 100MB
-			MaxOpsPerScriptPolicy:        int64(getInt("maxopsperscriptpolicy", 1000000, alternativeContext...)),
-			MaxScriptNumLengthPolicy:     getInt("maxscriptnumlengthpolicy", 10000, alternativeContext...),       // 10K
-			MaxPubKeysPerMultisigPolicy:  int64(getInt("maxpubkeyspermultisigpolicy", 0, alternativeContext...)), // 0 is unlimited
-			MaxTxSigopsCountsPolicy:      int64(getInt("maxtxsigopscountspolicy", 0, alternativeContext...)),     // 0 is unlimited
-			MaxStackMemoryUsagePolicy:    getInt("maxstackmemoryusagepolicy", 104857600, alternativeContext...),  // 100MB
-			MaxStackMemoryUsageConsensus: getInt("maxstackmemoryusageconsensus", 0, alternativeContext...),       // 0 is unlimited
+			MaxScriptSizePolicy:          getInt("maxscriptsizepolicy", 100000000, alternativeContext...),           // 100MB
+			MaxOpsPerScriptPolicy:        int64(getInt("maxopsperscriptpolicy", 4294967295, alternativeContext...)), // UINT32_MAX, matches bitcoin-sv DEFAULT_OPS_PER_SCRIPT_POLICY_AFTER_GENESIS
+			MaxScriptNumLengthPolicy:     getInt("maxscriptnumlengthpolicy", 10000, alternativeContext...),          // 10K
+			MaxPubKeysPerMultisigPolicy:  int64(getInt("maxpubkeyspermultisigpolicy", 0, alternativeContext...)),    // 0 is unlimited
+			MaxTxSigopsCountsPolicy:      int64(getInt("maxtxsigopscountspolicy", 0, alternativeContext...)),        // 0 is unlimited
+			MaxStackMemoryUsagePolicy:    getInt("maxstackmemoryusagepolicy", 104857600, alternativeContext...),     // 100MB
+			MaxStackMemoryUsageConsensus: getInt("maxstackmemoryusageconsensus", 0, alternativeContext...),          // 0 is unlimited
 			// LimitAncestorCount:              getInt("limitancestorcount", 1000000, alternativeContext...),
 			// LimitCPFPGroupMembersCount:      getInt("limitcpfpgroupmemberscount", 1000000, alternativeContext...),
 			AcceptNonStdOutputs: getBool("acceptnonstdoutputs", true, alternativeContext...),
