@@ -4,6 +4,10 @@
 // 	protoc        v7.35.1
 // source: services/p2p/p2p_api/p2p_api.proto
 
+// Version: v1 (implicit). No version suffix; the unsuffixed name IS v1. A
+// breaking change adds the next suffixed version (v2) alongside it -- see
+// docs/references/protoVersioning.md.
+
 package p2p_api
 
 import (
