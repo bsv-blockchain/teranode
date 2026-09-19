@@ -76,26 +76,34 @@ func TestHTTPHandlerPath_ProtobufBody_EndToEnd(t *testing.T) {
 	require.Equal(t, uint32(1234567), gotOpts.CandidateParentMedianTime)
 }
 
-// TestHTTPHandlerPath_LegacyOctetStream_BackwardCompat pins that the legacy
-// /tx path (Content-Type: application/octet-stream + raw tx body + scalar
-// query params) still works: the query params project into Options and the
-// shared request builder + server projection round-trip without error.
+// TestHTTPHandlerPath_LegacyOctetStream_BackwardCompat pins the legacy /tx
+// contract as it now stands: a non-protobuf Content-Type (including
+// application/octet-stream) is still accepted and still carries raw tx bytes,
+// but it projects to block height 0 and NewDefaultOptions() regardless of what
+// the caller put in the query string. Height 0 makes the validator derive the
+// height from its own chain state instead of honouring a caller assertion.
 func TestHTTPHandlerPath_LegacyOctetStream_BackwardCompat(t *testing.T) {
-	e := echo.New()
-	ctx, err := echoRequestWithQuery(e, "blockHeight=42")
-	require.NoError(t, err)
+	httpReq := httptest.NewRequest(http.MethodPost,
+		"/tx?blockHeight=42&skipScriptValidation=true&outpointOnlySpend=true", strings.NewReader(""))
+	httpReq.Header.Set("Content-Type", "application/octet-stream")
 
-	require.False(t, isProtobufContentType(ctx.Request().Header.Get("Content-Type")),
+	require.False(t, isProtobufContentType(httpReq.Header.Get("Content-Type")),
 		"legacy path must not be misclassified as protobuf")
 
-	blockHeight, opts := extractValidationParams(ctx)
-	require.Equal(t, uint32(42), blockHeight)
+	// The projection the legacy branch of handleSingleTx now performs: no query
+	// parameter is consulted, so the request is height 0 with default options.
+	req := buildValidateTxRequest([]byte{1, 2, 3}, 0, NewDefaultOptions())
 
-	// The legacy path subsequently calls buildValidateTxRequest + optionsFromValidateRequest.
-	// The projection must not error on the legacy shape.
-	req := buildValidateTxRequest([]byte{1, 2, 3}, blockHeight, opts)
-	_, err = optionsFromValidateRequest(req)
+	opts, err := optionsFromValidateRequest(req)
 	require.NoError(t, err)
+
+	require.Equal(t, uint32(0), req.BlockHeight,
+		"the legacy path must not carry a caller-asserted block height")
+	require.False(t, opts.SkipScriptValidation)
+	require.False(t, opts.OutpointOnlySpend)
+	require.False(t, opts.SkipPolicyChecks)
+	require.False(t, opts.InBlock)
+	require.True(t, opts.AddTXToBlockAssembly, "mempool submission is the legacy path's semantics")
 }
 
 // TestUnconfirmedParentsAtCandidateHeight_WireRoundTrip pins the
