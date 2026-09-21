@@ -996,6 +996,23 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 		return newPoisonedSubtreeDataError(peerID, baseURL, subtreeHash, missing, subtree.Length(), bytesRead)
 	}
 
+	// A complete body can still be the wrong body, and this is the one boundary where
+	// the party responsible is known (bitcoin-sv/teranode#4838). The reader above stores
+	// one slot per subtree without ever comparing it to a node — the coinbase diversion
+	// model.FirstMismatchedSubtreeDataTx documents — so a peer can drop a
+	// header-committed transaction, put a fabricated one in its place, and leave a body
+	// that satisfies every length and nil check. Nothing downstream can attribute it:
+	// once these bytes are on disk the read side sees only a local file, and the catch-up
+	// primary it would otherwise be charged to need not be the peer that served this
+	// subtree. So the tie is established here, against the peer holding it, before the
+	// body is stored.
+	//
+	// The exemption argument matches the MissingSubtreeDataTxs call above and must:
+	// index 0 under a coinbase placeholder holds the coinbase, which no node names.
+	if idx, expected, got, mismatched := model.FirstMismatchedSubtreeDataTx(subtree, subtreeData, true); mismatched {
+		return newMismatchedSubtreeDataError(peerID, baseURL, subtreeHash, idx, expected, got)
+	}
+
 	// Stream the transactions straight into the store instead of building a second complete
 	// in-memory copy with Serialize() and handing that to Set: the parsed []*bt.Tx is already
 	// resident, and one more full serialized copy per in-flight subtree_data is exactly the

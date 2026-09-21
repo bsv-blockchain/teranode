@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -148,6 +149,44 @@ func newPreBindHarness(t *testing.T, subtreeStore blob.Store) *preBindHarness {
 		chain:        chain,
 		genesisHash:  tSettings.ChainCfgParams.GenesisHash,
 	}
+}
+
+// enableOutpointOnlyFastPath switches the harness onto the below-checkpoint
+// outpoint-only mode, which is the regime the fabricated-coinbase forgery is
+// reachable in and the only one in which a regression test for it can bite.
+//
+// On the ORDINARY path extendBatch calls discardSuppliedPreviousOutputs and then
+// BatchPreviousOutputsDecorate for anything it could not resolve from a same-block
+// parent. A coinbase-shaped transaction's only input is the null outpoint
+// (32 zero bytes, index 0xffffffff), which no row in the store can satisfy, so the
+// decorate reports an unresolved input and the whole batch fails in stage 2 — before
+// AssignBlockID and before createAndSpendUTXOsForBatch. A fixture left on that path
+// therefore still gets an error, still has no fake record and still has an unspent
+// parent with the production comparison REMOVED, i.e. it passes against the very bug
+// it is named for.
+//
+// Outpoint-only skips decorate entirely (extendBatch's `!batch.outpointOnly` guard),
+// so the fabricated transaction survives to createAndSpendUTXOsForBatch. There it is
+// created in phase 1 — shouldSkipUnspendableCreate is false because
+// QuickValidateSkipUtxoLock defaults off, so lockUTXOs is true — and its own spend of
+// the null outpoint is then WAIVED in phase 2 by the store's "already blessed" rule:
+// Spend sees ErrTxNotFound for the parent, finds the spending transaction already in
+// the transactions table (phase 1 put it there), and clears the error. Nothing is left
+// to stop the block.
+//
+// Two settings make it eligible, and both are needed: the operator opt-in, and a
+// checkpoint above the fixture height, because model.BelowCheckpoint requires a
+// non-zero highest checkpoint and regression-net ships none. CreateBaseTestSettings
+// gives every harness its own copy of the chain params, so assigning a fresh
+// Checkpoints slice here cannot leak into another test.
+func (h *preBindHarness) enableOutpointOnlyFastPath() {
+	h.t.Helper()
+
+	h.bv.settings.BlockValidation.OutpointOnlyBelowCheckpoint = true
+	h.bv.settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 1000}}
+
+	require.True(h.t, h.bv.quickValidateOutpointOnly(&model.Block{Height: preBindHeight}),
+		"precondition: the fixture must really take the outpoint-only path, or the forgery dies in extendBatch and the test proves nothing")
 }
 
 // storeGenuineParent creates a transaction with one spendable output in the UTXO
@@ -390,6 +429,428 @@ func (h *preBindHarness) oneSubtreeBody(coinbase *bt.Tx, child *bt.Tx) *subtreep
 	h.storeBlob(st.RootHash(), fileformat.FileTypeSubtreeData, serializeSubtreeData(h.t, st, true, coinbase, []*bt.Tx{child}))
 
 	return st
+}
+
+// multiSubtreeBody stores an honest N-subtree body — .subtreeToCheck and .subtreeData
+// for every subtree, the coinbase placeholder in the first — and returns the
+// subtrees, their roots and the header merkle root they compose to.
+//
+// It exists because every fixture in this file until now was one or two subtrees at
+// the default SubtreeBatchSize, so no fixture ever crossed a batch boundary. The
+// binding pass's own doc cites the multi-batch case as the reason the check cannot
+// live in the batch pipeline — AssignBlockID runs inside the batch loop, so a
+// batch-time check lands after a durable reservation for every batch past the first —
+// and that is exactly the case nothing exercised.
+//
+// The shape rules Block.CheckMerkleRoot enforces are asserted here rather than left to
+// the caller: a fixture that quietly violates them fails for the wrong reason and
+// proves nothing about what it was written for.
+func (h *preBindHarness) multiSubtreeBody(coinbase *bt.Tx, groups [][]*bt.Tx) (subtrees []*subtreepkg.Subtree, roots []*chainhash.Hash, merkleRoot *chainhash.Hash) {
+	h.t.Helper()
+
+	require.NotEmpty(h.t, groups, "a body needs at least one subtree")
+
+	subtrees = make([]*subtreepkg.Subtree, len(groups))
+	roots = make([]*chainhash.Hash, len(groups))
+
+	for i, group := range groups {
+		st := buildSubtreeOver(h.t, i == 0, group)
+
+		structureBytes, err := st.Serialize()
+		require.NoError(h.t, err)
+
+		h.storeBlob(st.RootHash(), fileformat.FileTypeSubtreeToCheck, structureBytes)
+		h.storeBlob(st.RootHash(), fileformat.FileTypeSubtreeData, serializeSubtreeData(h.t, st, i == 0, coinbase, group))
+
+		subtrees[i] = st
+		roots[i] = st.RootHash()
+	}
+
+	target := subtrees[0].Length()
+	require.True(h.t, subtreepkg.IsPowerOfTwo(target),
+		"the first subtree's leaf count must be a power of two, got %d", target)
+
+	for i, st := range subtrees {
+		if i == len(subtrees)-1 {
+			require.LessOrEqual(h.t, st.Length(), target, "the final subtree may be shorter but never longer")
+			continue
+		}
+
+		require.Equal(h.t, target, st.Length(), "only the final subtree may be incomplete (index %d)", i)
+	}
+
+	hashes := make([]chainhash.Hash, len(subtrees))
+	hashes[0] = coinbaseSubstitutedRoot(h.t, subtrees[0], coinbase)
+
+	for i := 1; i < len(subtrees); i++ {
+		hashes[i] = *subtrees[i].RootHash()
+	}
+
+	// A short final subtree contributes its root lifted to the target height, which is
+	// what makes it occupy a same-capacity slot in the top-level tree.
+	if last := subtrees[len(subtrees)-1]; last.Length() < target {
+		lifted, err := last.RootHashPadded(subtrees[0].Height)
+		require.NoError(h.t, err)
+
+		hashes[len(hashes)-1] = *lifted
+	}
+
+	return subtrees, roots, composeBlockMerkleRoot(h.t, hashes)
+}
+
+// multiBatchGroups builds the transaction groups for a body of len(sizes) subtrees,
+// each spending its own freshly stored parent, and returns the groups alongside the
+// parents so a test can assert on either side of a spend. seed varies the parent txids
+// so two fixtures in one package cannot collide.
+func (h *preBindHarness) multiBatchGroups(seed byte, sizes []int) (groups [][]*bt.Tx, parents []*bt.Tx) {
+	h.t.Helper()
+
+	groups = make([][]*bt.Tx, len(sizes))
+
+	next := seed
+
+	for i, size := range sizes {
+		group := make([]*bt.Tx, 0, size)
+
+		for j := 0; j < size; j++ {
+			parent := h.storeGenuineParent(next)
+			next++
+
+			parents = append(parents, parent)
+			group = append(group, preBindSpendOf(h.t, parent, 9_000))
+		}
+
+		groups[i] = group
+	}
+
+	return groups, parents
+}
+
+// TestQuickValidate_MultiBatch_HonestBody_Validates is the over-rejection guard for a
+// body that spans several batches: five subtrees at SubtreeBatchSize 2, so the block
+// is three batches rather than the single batch every other fixture here produces.
+//
+// Nothing in the suite crossed a batch boundary before this, which left the binding
+// pass's whole point — that it runs before the first batch's AssignBlockID rather than
+// alongside it — exercised only on bodies where there is no second batch to be ahead of.
+func TestQuickValidate_MultiBatch_HonestBody_Validates(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+	h.bv.settings.BlockValidation.SubtreeBatchSize = 2
+
+	coinbase := preBindCoinbase(t, 0x17)
+
+	// The first subtree carries the placeholder, so one transaction gives it two
+	// leaves; the rest carry two each, matching it.
+	groups, parents := h.multiBatchGroups(0x8a, []int{1, 2, 2, 2, 2})
+
+	subtrees, roots, merkleRoot := h.multiSubtreeBody(coinbase, groups)
+	require.Len(t, subtrees, 5)
+
+	block := h.newPreBindBlock(coinbase, roots, merkleRoot, 10)
+
+	require.NoError(t, h.bv.quickValidateBlock(h.ctx, block, "peer", ""),
+		"an honest body must validate however many batches it spans")
+
+	for _, group := range groups {
+		for _, tx := range group {
+			created, err := h.utxoStore.Get(h.ctx, tx.TxIDChainHash())
+			require.NoError(t, err, "every transaction of every batch must have been created")
+			require.Equal(t, tx.TxIDChainHash().String(), created.Tx.TxID())
+		}
+	}
+
+	for _, parent := range parents {
+		utxoHash, err := util.UTXOHashFromOutput(parent.TxIDChainHash(), parent.Outputs[0], 0)
+		require.NoError(t, err)
+
+		resp, err := h.utxoStore.GetSpend(h.ctx, &utxo.Spend{TxID: parent.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash})
+		require.NoError(t, err)
+		require.Equal(t, int(utxo.Status_SPENT), resp.Status, "every parent output must have been spent")
+	}
+}
+
+// TestQuickValidate_MultiBatch_MismatchedBody_NoUTXOMutation is INVARIANT PM on a body
+// that spans three batches: the header commits to a different body, so nothing may be
+// mutated — and in particular batch 0 must not have run, which is the case a
+// single-batch fixture cannot express.
+//
+// Mutation target: moving the binding check into the batch pipeline. Batch 0 would
+// then create, spend and take a block id before the later batches were ever examined.
+func TestQuickValidate_MultiBatch_MismatchedBody_NoUTXOMutation(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+	h.bv.settings.BlockValidation.SubtreeBatchSize = 2
+
+	coinbase := preBindCoinbase(t, 0x18)
+
+	groups, parents := h.multiBatchGroups(0x9a, []int{1, 2, 2, 2, 2})
+
+	_, roots, _ := h.multiSubtreeBody(coinbase, groups)
+
+	// The header commits to a different honest one-subtree body, so the served body
+	// binds to nothing.
+	otherParent := h.storeGenuineParent(0xaa)
+	other := buildSubtreeOver(t, true, []*bt.Tx{preBindSpendOf(t, otherParent, 7_000)})
+
+	block := h.newPreBindBlock(coinbase, roots,
+		composeBlockMerkleRoot(t, []chainhash.Hash{coinbaseSubstitutedRoot(t, other, coinbase)}),
+		10)
+
+	err := h.bv.quickValidateBlock(h.ctx, block, "peer", "")
+	require.Error(t, err)
+	require.True(t, errors.IsBlockCorrupt(err), "an unbound body is a corrupt download, got %v", err)
+
+	// The first batch's transactions are the ones a batch-time check would already have
+	// applied, so they are what this asserts on.
+	h.requireNoUTXOMutation(block, parents[0], groups[0][0])
+
+	for _, group := range groups {
+		for _, tx := range group {
+			_, getErr := h.utxoStore.Get(h.ctx, tx.TxIDChainHash())
+			require.True(t, errors.Is(getErr, errors.ErrTxNotFound),
+				"no transaction of any batch may have been created, got %v", getErr)
+		}
+	}
+}
+
+// fakeCoinbaseSlotBody overwrites the subtree_data of a NON-FIRST subtree with the
+// one body shape the subtree data reader stores without ever comparing it to a node,
+// and returns the fabricated transaction it smuggles in.
+//
+// The served stream is [nodes[0], FAKE, nodes[1]]. The reader compares nodes[0],
+// stores it and advances its running index to 1; FAKE is coinbase-shaped and arrives
+// while that index stands at 1, so it is diverted into slot 0 — overwriting the
+// transaction just stored, with no node comparison and without advancing the index —
+// and nodes[1] is then compared as usual. The result is [FAKE, nodes[1]]: no nil slot,
+// the right number of entries, and a header-committed transaction silently replaced.
+//
+// Hand-assembled because the API cannot express it: Data.AddTx refuses a
+// coinbase-shaped transaction at a non-zero index and Data.Serialize emits exactly
+// Length() entries.
+func (h *preBindHarness) fakeCoinbaseSlotBody(root *chainhash.Hash, nonce byte, a, b *bt.Tx) *bt.Tx {
+	h.t.Helper()
+
+	fake := preBindCoinbase(h.t, nonce)
+	require.True(h.t, fake.IsCoinbase(), "precondition: the diverted transaction must be coinbase-shaped")
+
+	// The payoff the forgery exists for: an output far larger than anything the honest
+	// body creates, so its presence in the store is unmistakable.
+	fake.Outputs[0].Satoshis = 2_000_000 * 100_000_000
+
+	h.storeBlob(root, fileformat.FileTypeSubtreeData,
+		bytes.Join([][]byte{a.SerializeBytes(), fake.SerializeBytes(), b.SerializeBytes()}, nil))
+
+	return fake
+}
+
+// TestQuickValidate_FakeCoinbaseSlot_CarriedPath_NoUTXOMutation is the regression for
+// the uncompared slot on the path where the damage is permanent: a promoted .subtree
+// blob already exists, so the tree is carried rather than rebuilt, the tail
+// CheckMerkleRoot is satisfied by that carried tree, and nothing downstream looks at
+// the transactions again.
+//
+// Two subtrees, because the diversion is only reachable in a subtree that carries no
+// coinbase placeholder — the first one starts its running index at 1 and spends the
+// diversion on its own legitimate coinbase.
+//
+// WHAT HAPPENS WITH THE COMPARISON REMOVED, step by step, because the fixture only
+// bites if every one of these holds:
+//
+//   - readSubtree hands on Txs = [fake, child3] for the second subtree. No nil slot,
+//     so the existing missing-tx check is satisfied.
+//   - extendBatch SKIPS decorate, because enableOutpointOnlyFastPath put the block on
+//     the below-checkpoint path. Without that the fake's null outpoint is unresolvable
+//     and the batch dies here, before any mutation — which is why this test would pass
+//     against the bug on the ordinary path.
+//   - createAndSpendUTXOsForBatch phase 1 CREATES the fake: lockUTXOs is true, so
+//     shouldSkipUnspendableCreate is false, and the create is told to skip extended
+//     inputs.
+//   - phase 2 spends. child3's and filler's spends resolve against their own parents.
+//     The fake's spend of the null outpoint returns ErrTxNotFound for the parent and is
+//     then WAIVED by the store's already-blessed rule, because phase 1 has just put the
+//     fake into the transactions table. No hard failure.
+//   - the tail CheckMerkleRoot composes the CARRIED trees, which are honest, so it
+//     passes, and the block commits.
+//
+// Every honest transaction spends its OWN parent output. Sharing one parent would make
+// the second spend of it fail and abort the block on reversion, so the assertions below
+// would go red for a spend conflict rather than for the forgery.
+//
+// Mutation target: removing the node-hash comparison in readSubtree must make this test
+// commit the block with fake's outputs in the store. Each assertion below names which
+// side of that it pins.
+func TestQuickValidate_FakeCoinbaseSlot_CarriedPath_NoUTXOMutation(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+	h.enableOutpointOnlyFastPath()
+
+	coinbase := preBindCoinbase(t, 0x19)
+
+	fillerParent := h.storeGenuineParent(0xba)
+	child2Parent := h.storeGenuineParent(0xbb)
+	child3Parent := h.storeGenuineParent(0xbc)
+
+	filler := preBindSpendOf(t, fillerParent, 1_000)
+	first := buildSubtreeOver(t, true, []*bt.Tx{filler})
+
+	child2 := preBindSpendOf(t, child2Parent, 2_000)
+	child3 := preBindSpendOf(t, child3Parent, 2_100)
+	second := buildSubtreeOver(t, false, []*bt.Tx{child2, child3})
+
+	firstBytes, err := first.Serialize()
+	require.NoError(t, err)
+	secondBytes, err := second.Serialize()
+	require.NoError(t, err)
+
+	// Both file types for both subtrees: the promoted blob is what makes this the
+	// carried path, where the rebuilt-tree merkle check never runs.
+	h.storeBlob(first.RootHash(), fileformat.FileTypeSubtreeToCheck, firstBytes)
+	h.storeBlob(first.RootHash(), fileformat.FileTypeSubtree, firstBytes)
+	h.storeBlob(first.RootHash(), fileformat.FileTypeSubtreeData, serializeSubtreeData(t, first, true, coinbase, []*bt.Tx{filler}))
+
+	h.storeBlob(second.RootHash(), fileformat.FileTypeSubtreeToCheck, secondBytes)
+	h.storeBlob(second.RootHash(), fileformat.FileTypeSubtree, secondBytes)
+
+	fake := h.fakeCoinbaseSlotBody(second.RootHash(), 0xfb, child2, child3)
+
+	block := h.newPreBindBlock(coinbase,
+		[]*chainhash.Hash{first.RootHash(), second.RootHash()},
+		composeBlockMerkleRoot(t, []chainhash.Hash{coinbaseSubstitutedRoot(t, first, coinbase), *second.RootHash()}),
+		4)
+
+	err = h.bv.quickValidateBlock(h.ctx, block, "peer", "")
+	require.Error(t, err, "a transaction that is not the one its node names must be rejected")
+
+	// Red on reversion: phase 1 creates it.
+	_, getErr := h.utxoStore.Get(h.ctx, fake.TxIDChainHash())
+	require.True(t, errors.Is(getErr, errors.ErrTxNotFound),
+		"the fabricated transaction must never have been created, got %v", getErr)
+
+	// Red on reversion: child3 really is in the served body, so phase 2 spends its
+	// parent. This is the assertion that proves the batch reached create and spend
+	// rather than dying earlier for an unrelated reason.
+	h.requireParentUnspent(child3Parent)
+	h.requireParentUnspent(fillerParent)
+
+	// NOT a mutation target, and deliberately labelled as one that is not: the forgery
+	// DISPLACES child2, so on reversion it is absent from the body and its parent stays
+	// unspent either way. It pins the other half of the damage — a header-committed
+	// transaction silently dropped — under the fix.
+	h.requireParentUnspent(child2Parent)
+
+	// Red on reversion: the batch reaches stage 3, which assigns the id.
+	require.Zero(t, block.ID, "no block id may be set on a body whose transactions were never all checked")
+	require.Zero(t, h.chain.assignCount(), "AssignBlockID must not be reached")
+
+	// Red on reversion: the carried trees satisfy the tail check, so the block commits
+	// and the forgery becomes permanent. This is the outcome the whole item is about.
+	_, committed := h.bv.blockExistsCache.Get(*block.Hash())
+	require.False(t, committed, "the block must not have been committed")
+}
+
+// TestQuickValidate_FakeCoinbaseSlot_LaterBatch_FakeNeverCreated pins the CROSS-BATCH
+// property, which is the one the single-batch fixtures cannot express.
+//
+// Five subtrees at SubtreeBatchSize 2, with the forgery on subtree 4 — the last batch
+// — so batches 0 and 1 have already created, spent and taken a block id by the time
+// the forged body is read. The claim this pins is narrow and exact: a transaction-data
+// defect is caught in the BATCH THAT CARRIES IT, before that batch mutates anything,
+// because a batch's read strictly precedes its own create and spend on every variant.
+// The fabricated transaction therefore never reaches create, and the transaction it
+// displaced is never treated as spent.
+//
+// What the earlier batches applied is deliberately NOT asserted away. Those are
+// transactions whose txids each equal a node hash the whole-block binding already
+// committed to — a partial application of a genuine, checkpoint-certified block, which
+// is exactly the residual this route scopes and which the retry path converges. Do not
+// "tighten" this test with requireNoUTXOMutation, block.ID == 0 or assignCount == 0:
+// all three are legitimately non-zero here, and making them pass would mean reading
+// the whole block's transaction bytes before the pipeline — doubling catch-up body I/O
+// to remove a partial application of a genuine block, which is neither an attack nor
+// new.
+//
+// Reversion walk, so the fixture's bite is checkable without running it: readSubtree
+// hands on Txs = [fake, survivor] for subtree 4; extendBatch skips decorate because
+// enableOutpointOnlyFastPath put the block on the below-checkpoint path, so the fake's
+// unresolvable null outpoint does not abort the batch in stage 2; phase 1 of
+// createAndSpendUTXOsForBatch CREATES the fake and the survivor; phase 2 spends the
+// survivor's parent and waives the fake's own null-outpoint spend under the store's
+// already-blessed rule. Only then does the tail CheckMerkleRoot reject — this fixture
+// stores no promoted .subtree, so the tree is REBUILT from the transactions and the
+// rebuilt root no longer matches the header. Rejected block, fabricated outputs
+// already in the store: that is the state this test exists to make impossible.
+//
+// Every honest transaction has its own parent, so nothing here can fail for a spend
+// conflict instead of for the forgery.
+//
+// Mutation target: removing the node-hash comparison in readSubtree must make fake's
+// outputs appear in the store, even though the block is still rejected by the tail
+// merkle check.
+func TestQuickValidate_FakeCoinbaseSlot_LaterBatch_FakeNeverCreated(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+	h.enableOutpointOnlyFastPath()
+	h.bv.settings.BlockValidation.SubtreeBatchSize = 2
+
+	coinbase := preBindCoinbase(t, 0x1a)
+
+	groups, parents := h.multiBatchGroups(0xca, []int{1, 2, 2, 2, 2})
+
+	subtrees, roots, merkleRoot := h.multiSubtreeBody(coinbase, groups)
+
+	// Subtree 4 is alone in the third batch, so batches 0 and 1 are complete — or at
+	// least under way — before its body is ever read.
+	last := len(subtrees) - 1
+	displaced, survivor := groups[last][0], groups[last][1]
+	displacedParent, survivorParent := parents[len(parents)-2], parents[len(parents)-1]
+
+	fake := h.fakeCoinbaseSlotBody(roots[last], 0xfc, displaced, survivor)
+
+	block := h.newPreBindBlock(coinbase, roots, merkleRoot, 10)
+
+	err := h.bv.quickValidateBlock(h.ctx, block, "peer", "")
+	require.Error(t, err)
+	require.False(t, errors.IsBlockCorrupt(err),
+		"the disposition is the quarantine of a local blob, not a corrupt verdict against the peer's body, got %v", err)
+
+	// Red on reversion: without the marker there is no quarantine, so the forged body
+	// survives for the next attempt to read.
+	forgedGone, existsErr := h.subtreeStore.Exists(h.ctx, roots[last][:], fileformat.FileTypeSubtreeData)
+	require.NoError(t, existsErr)
+	require.False(t, forgedGone, "the forged subtree_data blob must be quarantined")
+
+	// THE POINT OF THE TEST, and red on reversion: phase 1 creates the fabricated
+	// transaction before the tail check ever runs.
+	_, getErr := h.utxoStore.Get(h.ctx, fake.TxIDChainHash())
+	require.True(t, errors.Is(getErr, errors.ErrTxNotFound),
+		"the fabricated transaction must never have been created, got %v", getErr)
+
+	// Red on reversion for the survivor, which is genuinely in the served body and is
+	// created alongside the fake. The displaced transaction is absent either way.
+	for _, tx := range groups[last] {
+		_, txErr := h.utxoStore.Get(h.ctx, tx.TxIDChainHash())
+		require.True(t, errors.Is(txErr, errors.ErrTxNotFound),
+			"no transaction of the failing batch may have been created, got %v", txErr)
+	}
+
+	// Red on reversion: phase 2 spends the survivor's parent. Together with the create
+	// assertions this is what proves the batch reached the mutation stage rather than
+	// failing earlier for an unrelated reason.
+	h.requireParentUnspent(survivorParent)
+
+	// NOT a mutation target: the forgery DISPLACES this transaction, so on reversion it
+	// is absent from the body and its parent stays unspent either way. It pins the
+	// other half of the damage — a header-committed transaction silently dropped.
+	h.requireParentUnspent(displacedParent)
+
+	// NOT a mutation target either: with no promoted blob the rebuilt tree fails the
+	// tail check on reversion too, so the block is rejected either way. Kept because
+	// "rejected" is exactly what makes the create assertions above the whole point —
+	// a test that only checked for an error would pass against the bug.
+	_, committed := h.bv.blockExistsCache.Get(*block.Hash())
+	require.False(t, committed, "the block must not have been committed")
+
+	// Earlier batches are a different matter and are deliberately NOT asserted on:
+	// batches 0 and 1 carry transactions whose txids each equal a node hash the
+	// whole-block binding already committed to, so applying them is the accepted
+	// partial application of a genuine, checkpoint-certified block.
 }
 
 // TestQuickValidate_MismatchedBody_NoUTXOMutation is the B-029 regression: a body
@@ -893,6 +1354,140 @@ func TestQuickValidate_QuarantineUnconfirmed_AbortsWithoutFallthrough(t *testing
 	require.Empty(t, catchupCtx.corruptBlockHash, "no ban score may be applied for a local storage fault")
 
 	h.requireNoUTXOMutation(block, parent, child)
+}
+
+// capturingLogger records the format strings handed to Warnf and Errorf, delegating
+// everything else. It exists so a test can assert WHICH of two failure messages a
+// branch chose, which is the whole substance of distinguishing "nothing was
+// attempted" from "the store would not let go of it".
+type capturingLogger struct {
+	ulogger.Logger
+
+	mu   sync.Mutex
+	logs []string
+}
+
+func (l *capturingLogger) record(format string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.logs = append(l.logs, format)
+}
+
+func (l *capturingLogger) Warnf(format string, args ...interface{}) {
+	l.record(format)
+	l.Logger.Warnf(format, args...)
+}
+
+func (l *capturingLogger) Errorf(format string, args ...interface{}) {
+	l.record(format)
+	l.Logger.Errorf(format, args...)
+}
+
+func (l *capturingLogger) logged(substr string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	for _, entry := range l.logs {
+		if strings.Contains(entry, substr) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// delCountingSubtreeStore counts Del calls and never removes anything, so "the store
+// was never asked" is asserted directly rather than inferred from a log line.
+type delCountingSubtreeStore struct {
+	blob.Store
+
+	mu   sync.Mutex
+	dels int
+}
+
+func (s *delCountingSubtreeStore) Del(_ context.Context, _ []byte, _ fileformat.FileType, _ ...bloboptions.FileOption) error {
+	s.mu.Lock()
+	s.dels++
+	s.mu.Unlock()
+
+	return nil
+}
+
+func (s *delCountingSubtreeStore) delCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.dels
+}
+
+// TestQuarantineSubtreeKeyMismatch_CancelledContextStillFailsClosed is the companion
+// to the abort test above, for the case where the quarantine never gets to try.
+//
+// The catch-up context is shared, so by the time a run is unwinding it may already be
+// cancelled. Every delete attempt then returns instantly and the store is never asked
+// — but the blob is just as present as if the store had refused, so the verdict must
+// still be fail-closed. Only the report differs: accusing local storage of holding on
+// to a blob nothing ever tried to delete sends whoever reads the log after a fault
+// that does not exist.
+//
+// Mutation target: dropping the context check makes the cancelled case indistinguish-
+// able from a storage refusal, and the message assertion below goes red.
+func TestQuarantineSubtreeKeyMismatch_CancelledContextStillFailsClosed(t *testing.T) {
+	store := &delCountingSubtreeStore{Store: blobmemory.New()}
+
+	h := newPreBindHarness(t, store)
+
+	logger := &capturingLogger{Logger: h.bv.logger}
+	h.bv.logger = logger
+
+	key := chainhash.HashH([]byte("quarantine-cancelled-context"))
+	marked := markSubtreeKeyMismatch(
+		errors.NewProcessingError("subtree %s does not match its key", key.String()),
+		subtreeBlobRef{hash: key, fileType: fileformat.FileTypeSubtreeToCheck},
+	)
+
+	cancelled, cancel := context.WithCancel(h.ctx)
+	cancel()
+
+	out := h.bv.quarantineSubtreeKeyMismatch(cancelled, marked)
+
+	require.True(t, isUnquarantinedLocalSubtree(out),
+		"a blob that could not be removed is unremoved whatever the reason: the verdict must stay fail-closed")
+	require.Zero(t, store.delCount(), "a cancelled context must not spend attempts on the store")
+	require.True(t, logger.logged("no deletion was attempted"),
+		"the cancelled case must be reported as such")
+	require.False(t, logger.logged("could not confirm removal"),
+		"a blob nothing tried to delete must not be reported as one the store would not release")
+}
+
+// TestQuarantineSubtreeKeyMismatch_UndeletableIsReportedAsSuch is the other half of
+// the pair: with a live context the store IS asked, it silently keeps the blob, and
+// that is the case the storage-fault message belongs to. Without this the message
+// assertion above would pass against an implementation that only ever emits one.
+func TestQuarantineSubtreeKeyMismatch_UndeletableIsReportedAsSuch(t *testing.T) {
+	store := &delCountingSubtreeStore{Store: blobmemory.New()}
+
+	h := newPreBindHarness(t, store)
+
+	logger := &capturingLogger{Logger: h.bv.logger}
+	h.bv.logger = logger
+
+	key := chainhash.HashH([]byte("quarantine-undeletable-blob"))
+	h.storeBlob(&key, fileformat.FileTypeSubtreeToCheck, []byte{0x01})
+
+	marked := markSubtreeKeyMismatch(
+		errors.NewProcessingError("subtree %s does not match its key", key.String()),
+		subtreeBlobRef{hash: key, fileType: fileformat.FileTypeSubtreeToCheck},
+	)
+
+	out := h.bv.quarantineSubtreeKeyMismatch(h.ctx, marked)
+
+	require.True(t, isUnquarantinedLocalSubtree(out))
+	require.Equal(t, quarantineDeleteAttempts, store.delCount(),
+		"every attempt must be spent against a store that is actually answering")
+	require.True(t, logger.logged("could not confirm removal"))
+	require.False(t, logger.logged("no deletion was attempted"))
 }
 
 // replacingSubtreeStore serves honest bytes for a key on the FIRST GetIoReader and

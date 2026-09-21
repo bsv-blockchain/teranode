@@ -26,6 +26,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
@@ -35,6 +36,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -4266,6 +4268,46 @@ func TestBlockvalidation_AdaptiveFetch_PessToOptToPess(t *testing.T) {
 		"single 500-miss optimistic block must trip back to pessimistic")
 }
 
+// mismatchedSubtreeDataBody builds the one shape the missing-transaction predicate
+// cannot see: a COMPLETE subtree_data body in which the reader's uncompared slot has
+// been filled with a fabricated transaction (bitcoin-sv/teranode#4838). It returns the
+// subtree, the raw bytes a peer would serve for it, and the fabricated transaction.
+//
+// The subtree must carry no coinbase placeholder, and that is the mechanism rather
+// than a detail. serializeFromReader diverts a transaction to slot 0, uncompared, when
+// its running index stands at 1 and the transaction is coinbase-shaped; a subtree that
+// starts with the placeholder begins at index 1 and spends the diversion on its own
+// legitimate coinbase, so only a subtree without one reaches index 1 with a real
+// transaction already stored at slot 0 — which every subtree after the first does,
+// straight after its first transaction.
+//
+// The served stream is [a, FAKE, b]: a is compared against node 0 and stored, FAKE
+// overwrites it with no comparison and without advancing the index, and b is then
+// compared against node 1. Every slot ends up filled, so neither the body's length nor
+// its nil count gives it away — only comparing each stored transaction to its node does.
+//
+// Hand-assembled rather than built through Data.AddTx/Serialize: AddTx rejects a
+// coinbase-shaped transaction at a non-zero index and Serialize emits exactly Length()
+// entries, so the API cannot express this body at all.
+func mismatchedSubtreeDataBody(t *testing.T, a, b *bt.Tx) (*subtreepkg.Subtree, []byte, *bt.Tx) {
+	t.Helper()
+
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddNode(*a.TxIDChainHash(), 1, 11))
+	require.NoError(t, subtree.AddNode(*b.TxIDChainHash(), 2, 12))
+	require.NotEqual(t, subtreepkg.CoinbasePlaceholderHashValue, subtree.Nodes[0].Hash,
+		"precondition: the diversion is only reachable in a subtree with no coinbase placeholder")
+
+	fake := preBindCoinbase(t, 0xfa)
+	require.True(t, fake.IsCoinbase(), "precondition: the diverted transaction must be coinbase-shaped")
+	require.False(t, subtree.Nodes[0].Hash.Equal(*fake.TxIDChainHash()))
+
+	body := bytes.Join([][]byte{a.SerializeBytes(), fake.SerializeBytes(), b.SerializeBytes()}, nil)
+
+	return subtree, body, fake
+}
+
 // TestFetchAndStoreSubtreeData_PoisonedResponses covers issue 1368: a peer that
 // answers subtree_data with 200 and an empty (or truncated) body must produce a
 // distinct, peer-attributed error rather than a generic parse failure.
@@ -4384,6 +4426,46 @@ func TestFetchAndStoreSubtreeData_PoisonedResponses(t *testing.T) {
 		require.True(t, errors.Is(err, errors.ErrExternal))
 		require.True(t, isCacheBypassRetryable(err))
 	})
+
+	// A body can be complete and still be the wrong body. The missing-transaction
+	// predicate counts nil slots, so it passes this one — and every structural anchor
+	// downstream passes it too, because the node list is untouched. The only check that
+	// can see it is the transaction-to-node comparison, and this is the one boundary
+	// where the party that served the bytes is known (bitcoin-sv/teranode#4838).
+	//
+	// The retry marker is asserted deliberately: without it the verdict is a dead end
+	// rather than one cache-busted retry followed by failover, which is how every other
+	// unusable body on this path behaves.
+	t.Run("CompleteButMismatchedBodyIsAPeerFailure", func(t *testing.T) {
+		server := newServer()
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		mismatched, body, fake := mismatchedSubtreeDataBody(t, txs[1], txs[2])
+		mismatchedHash := mismatched.RootHash()
+
+		httpmock.RegisterResponder("GET",
+			fmt.Sprintf("%s/subtree_data/%s", baseURL, mismatchedHash.String()),
+			httpmock.NewBytesResponder(200, body))
+
+		err := server.fetchAndStoreSubtreeData(ctx, testBlock, mismatchedHash, mismatched, peerID, baseURL, false, nil)
+		require.Error(t, err, "a complete body whose transactions are not the subtree's must be rejected")
+		require.Contains(t, err.Error(), "is not the one the subtree names")
+		require.Contains(t, err.Error(), peerID, "the peer that served the bytes must be named")
+		require.Contains(t, err.Error(), baseURL)
+		require.Contains(t, err.Error(), fake.TxIDChainHash().String(), "the fabricated transaction must be named")
+		require.True(t, errors.Is(err, errors.ErrExternal))
+		require.False(t, errors.IsLocalError(err), "must not short-circuit the alternative-peer loop")
+		require.True(t, isCacheBypassRetryable(err),
+			"a mismatched body must buy the same cache-busted retry an empty one does")
+
+		// Storing it anyway would convert an attributable peer fault into an
+		// unattributable local one: the read side would find it on disk, see only a
+		// local file, and quarantine it with nobody charged.
+		stored, existsErr := server.subtreeStore.Exists(ctx, mismatchedHash[:], fileformat.FileTypeSubtreeData)
+		require.NoError(t, existsErr)
+		require.False(t, stored, "a rejected body must never be written")
+	})
 }
 
 // TestFetchAndStoreSubtreeAndSubtreeData_CacheBypassRetry covers the issue-1368
@@ -4446,6 +4528,114 @@ func TestFetchAndStoreSubtreeAndSubtreeData_CacheBypassRetry(t *testing.T) {
 	counts := httpmock.GetCallCountInfo()
 	require.Equal(t, 1, counts["GET "+poisonedURL], "the poisoned URL must be requested exactly once")
 	require.Equal(t, 1, counts["GET "+bustedURL], "the bypass retry must fire exactly once")
+
+	// A complete-but-mismatched body must be DISPOSED of exactly like a poisoned one:
+	// one cache-busted retry against the same peer, then failover to an alternative
+	// (bitcoin-sv/teranode#4838). Rejecting it is not enough on its own — an error with
+	// no retry marker is a dead end, and the peer that served it keeps the subtree
+	// unobtainable for the whole cache TTL, which is the issue-1368 stall on a new error
+	// class. Its own server and fixture, so the counts above stay the empty-body case's.
+	t.Run("MismatchedBodyRetriesThenFailsOverToAnAlternative", func(t *testing.T) {
+		const altBaseURL = "http://alternative-peer:8000"
+
+		altPeerID := peer.ID("alternative-peer-serving-the-honest-body").String()
+		require.NotEqual(t, peerID, altPeerID)
+
+		mismatched, badBody, _ := mismatchedSubtreeDataBody(t, txs[1], txs[2])
+		mismatchedHash := mismatched.RootHash()
+
+		honest := subtreepkg.NewSubtreeData(mismatched)
+		require.NoError(t, honest.AddTx(txs[1], 0))
+		require.NoError(t, honest.AddTx(txs[2], 1))
+		honestBody, serErr := honest.Serialize()
+		require.NoError(t, serErr)
+
+		var nodes []byte
+		nodes = append(nodes, txs[1].TxIDChainHash()[:]...)
+		nodes = append(nodes, txs[2].TxIDChainHash()[:]...)
+
+		fake := &subtreeAttributionP2PClient{
+			peers: []*p2p.PeerInfo{
+				{
+					ID:         peer.ID("alternative-peer-serving-the-honest-body"),
+					DataHubURL: altBaseURL,
+					Height:     1000,
+					IsBanned:   false,
+					// Must stay at or above 20, and DataHubURL non-empty, or
+					// GetPeersAtMaxHeight filters this peer out silently, no failover
+					// happens, and the test passes for the wrong reason.
+					ReputationScore: 50,
+				},
+			},
+		}
+
+		altServer := &Server{
+			logger:       ulogger.TestLogger{},
+			subtreeStore: memory.New(),
+			settings:     test.CreateBaseTestSettings(t),
+			p2pClient:    fake,
+		}
+
+		var (
+			mu            sync.Mutex
+			primaryData   []string // RawQuery of each subtree_data request to the primary
+			altDataCalls  int
+			altSubtreeGot int
+		)
+
+		httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree/%s", baseURL, mismatchedHash.String()),
+			httpmock.NewBytesResponder(200, nodes))
+
+		// The primary serves the same mismatched bytes to the cache-busted retry too, so
+		// the cache is ruled out and the peer itself is the fault.
+		httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree_data/%s", baseURL, mismatchedHash.String()),
+			func(req *http.Request) (*http.Response, error) {
+				mu.Lock()
+				primaryData = append(primaryData, req.URL.RawQuery)
+				mu.Unlock()
+
+				return httpmock.NewBytesResponse(200, badBody), nil
+			})
+
+		httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree/%s", altBaseURL, mismatchedHash.String()),
+			func(*http.Request) (*http.Response, error) {
+				mu.Lock()
+				altSubtreeGot++
+				mu.Unlock()
+
+				return httpmock.NewBytesResponse(200, nodes), nil
+			})
+
+		httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree_data/%s", altBaseURL, mismatchedHash.String()),
+			func(*http.Request) (*http.Response, error) {
+				mu.Lock()
+				altDataCalls++
+				mu.Unlock()
+
+				return httpmock.NewBytesResponse(200, honestBody), nil
+			})
+
+		servingPeer, fetchErr := altServer.fetchAndStoreSubtreeAndSubtreeData(ctx, &model.Block{Height: 100}, mismatchedHash, peerID, baseURL, nil)
+		require.NoError(t, fetchErr, "the alternative peer's honest body must complete the fetch")
+		require.Equal(t, altPeerID, servingPeer, "the alternative peer must be recorded as the one that served it")
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		require.Len(t, primaryData, 2, "the marker must buy exactly one cache-busted retry against the primary")
+		require.Empty(t, primaryData[0], "the first attempt must not carry a cachebust parameter")
+		require.Contains(t, primaryData[1], "cachebust=", "the retry must bust the cache")
+		require.Equal(t, 1, altDataCalls, "the alternative must be asked for the body exactly once")
+		require.Zero(t, altSubtreeGot,
+			"the node list was stored by the primary's honest /subtree response, so the alternative is only needed for the body")
+
+		// The stored body is the alternative's, not the primary's: had the mismatched one
+		// been written, the read side would later find it, see only a local file, and
+		// quarantine it with nobody charged.
+		storedBody, getErr := altServer.subtreeStore.Get(ctx, mismatchedHash[:], fileformat.FileTypeSubtreeData)
+		require.NoError(t, getErr)
+		require.Equal(t, honestBody, storedBody, "the rejected body must never reach the store")
+	})
 }
 
 // TestFetchAndStoreSubtreeAndSubtreeData_AllPeersFailedErrorNamesEveryPeer covers

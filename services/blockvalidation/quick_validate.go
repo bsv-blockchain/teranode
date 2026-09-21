@@ -965,7 +965,7 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 
 // validateSubtrees validates subtree sizes and merkle root after processing.
 func (u *BlockValidation) validateSubtrees(ctx context.Context, block *model.Block, existingBlockID uint64) (uint64, error) {
-	if err := checkSubtreeBodyBinding(ctx, block); err != nil {
+	if err := checkSubtreeBodyBinding(ctx, block, "validateSubtrees"); err != nil {
 		return 0, err
 	}
 
@@ -982,7 +982,13 @@ func (u *BlockValidation) validateSubtrees(ctx context.Context, block *model.Blo
 // at the tail on the rebuilt slices. Nothing here reads transaction bodies — the
 // checks compose node hashes and the coinbase — so it can run on a block whose
 // subtree_data has never been opened.
-func checkSubtreeBodyBinding(ctx context.Context, block *model.Block) error {
+//
+// caller names the pass, and the two are not interchangeable to whoever reads the
+// failure. The same message from the pre-bind pass means the body a peer served never
+// bound and nothing was mutated; from the tail it means the REBUILT slices disagree
+// with the header after this block's transactions were already created and spent. A
+// single literal label made the two indistinguishable in a log.
+func checkSubtreeBodyBinding(ctx context.Context, block *model.Block, caller string) error {
 	// Validate subtree sizes
 	subtreeSize := 0
 	for i := 0; i < len(block.SubtreeSlices)-1; i++ {
@@ -993,7 +999,7 @@ func checkSubtreeBodyBinding(ctx context.Context, block *model.Block) error {
 			// (not wrapped in ErrProcessing, which would shadow it at ValidateBlock and
 			// route it as a transient processing error). The caller re-downloads a fresh
 			// body instead of poisoning the hash (bitcoin-sv/teranode#4692).
-			return errors.NewBlockCorruptError("[validateSubtrees][%s] subtree %d size mismatch", block.Hash().String(), i)
+			return errors.NewBlockCorruptError("[%s][%s] subtree %d size mismatch", caller, block.Hash().String(), i)
 		}
 	}
 
@@ -1003,14 +1009,14 @@ func checkSubtreeBodyBinding(ctx context.Context, block *model.Block) error {
 		// merkle/subtree-shape checks, processing/storage for infrastructure. Return a
 		// corrupt verdict UNWRAPPED so it is not shadowed by an outer ErrProcessing
 		// (bitcoin-sv/teranode#4692); a shadowed corrupt would be mis-routed as transient. Wrap the
-		// non-corrupt (infrastructure) errors with the [validateSubtrees][hash] site context, as
+		// non-corrupt (infrastructure) errors with the [caller][hash] site context, as
 		// the sibling subtree-size check above does — the wrap keeps the infrastructure
 		// classification (ErrProcessing/ErrStorage) in the cause chain.
 		if errors.IsBlockCorrupt(err) {
 			return err
 		}
 
-		return errors.NewProcessingError("[validateSubtrees][%s] merkle root check failed", block.Hash().String(), err)
+		return errors.NewProcessingError("[%s][%s] merkle root check failed", caller, block.Hash().String(), err)
 	}
 
 	// CVE-2012-2459. The merkle root CANNOT detect a duplicated trailing transaction:
@@ -1033,15 +1039,15 @@ func checkSubtreeBodyBinding(ctx context.Context, block *model.Block) error {
 	if len(block.SubtreeSlices) > 0 {
 		first := block.SubtreeSlices[0]
 		if first == nil {
-			return errors.NewProcessingError("[validateSubtrees][%s] first subtree was released during validation", block.Hash().String())
+			return errors.NewProcessingError("[%s][%s] first subtree was released during validation", caller, block.Hash().String())
 		}
 
 		if len(first.Nodes) == 0 {
-			return errors.NewBlockCorruptError("[validateSubtrees][%s] first subtree has no nodes", block.Hash().String())
+			return errors.NewBlockCorruptError("[%s][%s] first subtree has no nodes", caller, block.Hash().String())
 		}
 
 		if !first.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholder) {
-			return errors.NewBlockCorruptError("[validateSubtrees][%s] first transaction in first subtree is not a coinbase placeholder: %s", block.Hash().String(), first.Nodes[0].Hash.String())
+			return errors.NewBlockCorruptError("[%s][%s] first transaction in first subtree is not a coinbase placeholder: %s", caller, block.Hash().String(), first.Nodes[0].Hash.String())
 		}
 	}
 
@@ -1058,7 +1064,7 @@ func checkSubtreeBodyBinding(ctx context.Context, block *model.Block) error {
 	// The shape check in getBlockTransactions does NOT cover this: it inspects
 	// subtreeData.Txs[0], a different object from block.CoinbaseTx.
 	if !model.IsConsensusCoinbase(block.CoinbaseTx) {
-		return errors.NewBlockInvalidError("[validateSubtrees][%s] block coinbase tx is not a valid coinbase tx", block.Hash().String())
+		return errors.NewBlockInvalidError("[%s][%s] block coinbase tx is not a valid coinbase tx", caller, block.Hash().String())
 	}
 
 	return nil
@@ -1360,7 +1366,20 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 		bufioReaderPool.Put(bufferedReader)
 	}()
 
-	// the subtree data reader will make sure the data matches the transaction ids from the subtree
+	// The subtree data reader compares MOST transactions it stores against the node
+	// they occupy — but not all of them, so the comparison cannot be delegated to it
+	// (bitcoin-sv/teranode#4838). Its running index advances only on a compared store,
+	// and a transaction that is coinbase-shaped while that index stands at 1 is
+	// diverted into slot 0, overwriting what is already there and continuing WITHOUT
+	// advancing the index and WITHOUT any node comparison. In a subtree that carries
+	// no coinbase placeholder — every subtree after the first — the index stands at 1
+	// straight after the first real transaction, so one slot per such subtree is
+	// written from bytes nothing ever tied to the header. The body then drops a
+	// header-committed transaction and carries a fabricated one in its place while
+	// every structural anchor, and the merkle root composed from the node lists, still
+	// agree.
+	//
+	// The loop below closes that by comparing every slot itself.
 	subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtree, bufferedReader)
 	if err != nil {
 		return subtreeResult{err: errors.NewProcessingError("[getBlockTransactions][%s] failed to deserialize subtree data %s: %v", block.Hash().String(), subtreeHash.String(), err)}
@@ -1377,6 +1396,32 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 		} else {
 			if tx == nil {
 				return subtreeResult{err: errors.NewProcessingError("[getBlockTransactions][%s] missing tx at index %d in subtree %s", block.Hash().String(), idx, subtreeHash.String())}
+			}
+
+			// Deliberately NOT scoped to non-first subtrees. The defect is a slot that
+			// was never compared; keying our guard on the reader's current diversion
+			// condition would let it silently stop covering the slot if that condition
+			// ever changes. The cost is nil: the reader calls SetTxHash on every
+			// transaction it stores, including the diverted one, so this is a cache read.
+			if idx >= len(subtree.Nodes) {
+				return subtreeResult{err: errors.NewProcessingError("[getBlockTransactions][%s] subtree data %s carries a transaction at index %d beyond the subtree's %d nodes", block.Hash().String(), subtreeHash.String(), idx, len(subtree.Nodes))}
+			}
+
+			if !subtree.Nodes[idx].Hash.Equal(*tx.TxIDChainHash()) {
+				// Routed through the key-mismatch quarantine rather than to
+				// NewBlockCorruptError or a bare processing error. Corrupt would strike the
+				// catch-up PRIMARY, which under parallel fetch need not be the peer that
+				// served this subtree, and the fetch-site hash check the corrupt branch
+				// justifies itself by is exactly the check that misses this shape. A bare
+				// processing error would leave the forged body on disk for a reader with
+				// the same blind spot. The quarantine deletes this exact blob, confirms the
+				// deletion, aborts the run fail-closed when it cannot, and applies no ban
+				// score to a peer nothing has proved served it.
+				return subtreeResult{err: markSubtreeKeyMismatch(
+					errors.NewProcessingError("[getBlockTransactions][%s] subtree data %s transaction at index %d does not match its node: node %s, transaction %s",
+						block.Hash().String(), subtreeHash.String(), idx, subtree.Nodes[idx].Hash.String(), tx.TxIDChainHash().String()),
+					subtreeBlobRef{hash: *subtreeHash, fileType: fileformat.FileTypeSubtreeData},
+				)}
 			}
 		}
 	}

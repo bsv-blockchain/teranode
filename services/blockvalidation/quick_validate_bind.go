@@ -3,6 +3,7 @@ package blockvalidation
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
@@ -14,10 +15,14 @@ import (
 )
 
 // subtreeKeyMismatchKey marks an error whose cause is a locally stored subtree blob
-// whose nodes do not hash to the key it is stored under. The value is a
-// []subtreeBlobRef naming the exact blobs, so the handler deletes what was actually
-// read rather than re-resolving the file type and possibly picking a different
-// sibling. The marker pattern is the one markCacheBypassRetryable uses.
+// that does not answer to the key it is stored under. Two shapes qualify: a .subtree
+// or .subtreeToCheck blob whose nodes do not hash to that key, and a .subtreeData
+// blob whose transactions do not match that subtree's nodes. Both are the same fault
+// — bytes on disk under a key they do not belong to — and both take the same
+// disposition. The value is a []subtreeBlobRef naming the exact blobs, so the handler
+// deletes what was actually read rather than re-resolving the file type and possibly
+// picking a different sibling. The marker pattern is the one markCacheBypassRetryable
+// uses.
 const subtreeKeyMismatchKey = "subtree_key_mismatch"
 
 // subtreeKeyMismatchUnquarantinedKey marks a key mismatch whose blob could NOT be
@@ -153,6 +158,13 @@ func isUnquarantinedLocalSubtree(err error) bool {
 // whole block first, and holds only node hashes — 48 bytes per transaction — never a
 // transaction body (bitcoin-sv/teranode#4838).
 //
+// That figure is the whole cost on every attempt, including a retry. A promoted
+// FileTypeSubtree blob is still read and anchored by readSubtreeStructure when one is
+// present, because anchoring it before the pipeline is the only pre-mutation check for
+// a forged promoted blob beside an honest subtree_to_check — but this pass never reads
+// its node list, so it releases it immediately rather than retaining a second copy of
+// the block's nodes for the duration.
+//
 // The checks run on a probe block rather than on the live one: the pipeline is still
 // the single writer of block.SubtreeSlices, so nothing here can race the TTL cleaner
 // that releases a cached block's subtree nodes.
@@ -164,7 +176,6 @@ func (u *BlockValidation) bindSubtreeBodyToHeader(ctx context.Context, block *mo
 	}
 
 	slices := make([]*subtreepkg.Subtree, len(block.Subtrees))
-	carried := make([]*subtreepkg.Subtree, len(block.Subtrees))
 
 	// Collected under a mutex rather than taken from the errgroup's single error: a
 	// doctored body can name several mismatching blobs and every one of them has to
@@ -219,8 +230,13 @@ func (u *BlockValidation) bindSubtreeBodyToHeader(ctx context.Context, block *mo
 				return err
 			}
 
+			// The promoted blob has served its purpose the moment readSubtreeStructure
+			// anchored it; nothing in this pass reads it. Released here rather than at
+			// the deferred sweep below so the block never holds two node lists per
+			// subtree at once.
+			releaseSubtreeStructure(structure.fullSubtree)
+
 			slices[idx] = structure.subtree
-			carried[idx] = structure.fullSubtree
 
 			return nil
 		})
@@ -232,10 +248,6 @@ func (u *BlockValidation) bindSubtreeBodyToHeader(ctx context.Context, block *mo
 	// the pipeline reads its own. Released after the checks below, which need them.
 	defer func() {
 		for _, subtree := range slices {
-			releaseSubtreeStructure(subtree)
-		}
-
-		for _, subtree := range carried {
 			releaseSubtreeStructure(subtree)
 		}
 	}()
@@ -267,7 +279,7 @@ func (u *BlockValidation) bindSubtreeBodyToHeader(ctx context.Context, block *mo
 		SubtreeSlices: slices,
 	}
 
-	return checkSubtreeBodyBinding(ctx, probe)
+	return checkSubtreeBodyBinding(ctx, probe, "bindSubtreeBodyToHeader")
 }
 
 // combineSweepMismatchError folds the whole-block sweep's collected verdicts into the
@@ -328,12 +340,14 @@ func dedupeSubtreeBlobRefs(refs []subtreeBlobRef) []subtreeBlobRef {
 // anchored transactions, so the blob ends up either correct on disk or absent and
 // re-fetched.
 //
-// A blob that does not match its own key is a LOCAL fault, not a peer fault, and the
-// classification is by elimination rather than by caution: every in-tree writer
+// A blob that does not answer to its own key is a LOCAL fault, not a peer fault, and
+// the classification is by elimination rather than by caution: every in-tree writer
 // serializes a tree built with AddNode, whose root is therefore recomputed, and the
-// fetch path compares those bytes against the requested hash and strikes the serving
-// peer before storing anything. What can be read back mismatching is a stale or
-// damaged local file, so no ban score is applied here.
+// fetch path checks what it is about to store against the hash it asked for —
+// structures against the requested hash, and a subtree_data body against the nodes of
+// the subtree it belongs to — striking the serving peer before anything is written.
+// What can be read back mismatching is therefore a stale or damaged local file, so no
+// ban score is applied here.
 //
 // Returns err untouched when there is no marker.
 func (u *BlockValidation) quarantineSubtreeKeyMismatch(ctx context.Context, err error) error {
@@ -349,14 +363,27 @@ func (u *BlockValidation) quarantineSubtreeKeyMismatch(ctx context.Context, err 
 	var unconfirmed int
 
 	for _, ref := range refs {
-		if u.deleteSubtreeBlobConfirmed(ctx, ref) {
-			u.logger.Warnf("[quarantineSubtreeKeyMismatch] removed local subtree blob %s (%s) whose nodes do not hash to its key", ref.hash.String(), ref.fileType)
+		confirmed, attempted := u.deleteSubtreeBlobConfirmed(ctx, ref)
+		if confirmed {
+			u.logger.Warnf("[quarantineSubtreeKeyMismatch] removed local subtree blob %s (%s) that does not answer to the key it is stored under", ref.hash.String(), ref.fileType)
 			continue
 		}
 
 		unconfirmed++
 
-		u.logger.Errorf("[quarantineSubtreeKeyMismatch] could not confirm removal of local subtree blob %s (%s) whose nodes do not hash to its key", ref.hash.String(), ref.fileType)
+		// The two failures are reported apart because they say different things to
+		// whoever reads the log. "Could not be removed" accuses the local storage; on a
+		// cancelled shared catch-up context every attempt returns instantly and nothing
+		// was ever asked of the store, so reporting it that way sends the reader after a
+		// storage fault that does not exist. The VERDICT is the same either way — an
+		// unremoved blob is unremoved whatever the reason, and the attempt must still
+		// fail closed.
+		if !attempted {
+			u.logger.Warnf("[quarantineSubtreeKeyMismatch] context cancelled before local subtree blob %s (%s) could be removed; no deletion was attempted", ref.hash.String(), ref.fileType)
+			continue
+		}
+
+		u.logger.Errorf("[quarantineSubtreeKeyMismatch] could not confirm removal of local subtree blob %s (%s) that does not answer to the key it is stored under", ref.hash.String(), ref.fileType)
 	}
 
 	if unconfirmed > 0 {
@@ -371,12 +398,46 @@ func (u *BlockValidation) quarantineSubtreeKeyMismatch(ctx context.Context, err 
 // undeletable blob into a long stall.
 const quarantineDeleteAttempts = 3
 
+// quarantineDeleteBackoff is the pause before each retry. Retrying a failing store
+// with no pause at all spends all three attempts inside a few microseconds, which
+// rides out nothing: the transient fault the retries exist for has not had time to
+// clear. The last entry is reused if the attempt count ever grows.
+var quarantineDeleteBackoff = []time.Duration{50 * time.Millisecond, 100 * time.Millisecond}
+
 // deleteSubtreeBlobConfirmed deletes one exact blob and PROVES it is gone, because a
 // Del that reports success while the blob survives would let the attempt fall
 // through to a loader that cannot detect the forgery. ErrNotFound from Del counts as
 // success: the blob is absent, which is the property being established.
-func (u *BlockValidation) deleteSubtreeBlobConfirmed(ctx context.Context, ref subtreeBlobRef) bool {
+//
+// It returns whether the absence was confirmed and whether the store was asked at all.
+// The second value exists for the caller's log line only: a cancelled context makes
+// every attempt return without touching the store, and reporting that as a blob that
+// could not be removed points the reader at local storage when the cause was the
+// caller's own cancellation. Both cases are failures and both fail closed.
+func (u *BlockValidation) deleteSubtreeBlobConfirmed(ctx context.Context, ref subtreeBlobRef) (confirmed, attempted bool) {
 	for attempt := 0; attempt < quarantineDeleteAttempts; attempt++ {
+		if attempt > 0 {
+			// Slept through a select rather than a bare sleep: the catch-up context is
+			// shared, so a cancellation arriving mid-backoff must end the loop rather
+			// than hold it for the rest of the pause.
+			idx := attempt - 1
+			if idx >= len(quarantineDeleteBackoff) {
+				idx = len(quarantineDeleteBackoff) - 1
+			}
+
+			select {
+			case <-time.After(quarantineDeleteBackoff[idx]):
+			case <-ctx.Done():
+				return false, attempted
+			}
+		}
+
+		if ctx.Err() != nil {
+			return false, attempted
+		}
+
+		attempted = true
+
 		delErr := u.subtreeStore.Del(ctx, ref.hash[:], ref.fileType)
 		if delErr != nil && !errors.Is(delErr, errors.ErrNotFound) {
 			continue
@@ -384,9 +445,9 @@ func (u *BlockValidation) deleteSubtreeBlobConfirmed(ctx context.Context, ref su
 
 		exists, existsErr := u.subtreeStore.Exists(ctx, ref.hash[:], ref.fileType)
 		if existsErr == nil && !exists {
-			return true
+			return true, attempted
 		}
 	}
 
-	return false
+	return false, attempted
 }

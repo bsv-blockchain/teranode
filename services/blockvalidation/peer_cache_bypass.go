@@ -123,6 +123,27 @@ func newPoisonedSubtreeDataError(peerID, baseURL string, subtreeHash *chainhash.
 	return e
 }
 
+// newMismatchedSubtreeDataError builds the error returned when a peer answers a
+// subtree_data request with a complete body that nonetheless carries a transaction the
+// subtree does not name at that index.
+//
+// A sibling of newPoisonedSubtreeDataError in classification as well as in shape, and
+// deliberately so. The body is complete, so nothing about its length gives it away, but
+// it is no more usable than an empty one and it is attributable to exactly the same
+// party: the peer whose bytes these are. ErrExternal keeps errors.IsLocalError false so
+// the caller still fails over to an alternative peer, and the cache-bypass marker earns
+// the one cache-busted retry against this peer first — a caching layer in front of it can
+// replay a bad body just as readily as a short one, and without the marker a mismatch
+// would be a dead end rather than a retry (bitcoin-sv/teranode#4838).
+func newMismatchedSubtreeDataError(peerID, baseURL string, subtreeHash *chainhash.Hash, idx int, expected, got *chainhash.Hash) error {
+	e := errors.NewExternalError("[catchup:fetchAndStoreSubtreeData] peer %s (%s) served subtree_data for %s whose transaction at index %d is not the one the subtree names (node %s, transaction %s)",
+		peerID, baseURL, subtreeHash.String(), idx, expected.String(), got.String())
+
+	e.SetData(cacheBypassRetryableKey, true)
+
+	return e
+}
+
 // subtreeFetchAttempt records one peer's attempt at serving a subtree, so an
 // all-peers-failed error can name every peer and its own failure instead of only the
 // last one tried.
