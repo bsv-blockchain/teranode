@@ -29,12 +29,14 @@ type recordingValidator struct {
 	calls       int
 	lastHeight  uint32
 	lastOptions *Options
+	lastTx      *bt.Tx
 }
 
 func (r *recordingValidator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, o *Options) (*meta.Data, error) {
 	r.calls++
 	r.lastHeight = blockHeight
 	r.lastOptions = o
+	r.lastTx = tx
 
 	return r.MockValidator.ValidateWithOptions(ctx, tx, blockHeight, o)
 }

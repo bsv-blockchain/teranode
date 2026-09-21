@@ -605,10 +605,14 @@ func (c *Client) retryBatchItemsIndividually(ctx context.Context, batch []*batch
 			item.complete(validateBatchResponse{metaData: nil, err: retryErr})
 
 			// Stop the loop, do not just skip this item. A shed means the node has
-			// reported itself saturated; a cancelled context means the caller is gone.
-			// Either way every remaining item would be a full validation that cannot
-			// succeed, which is what routing through handleValidationError exists to
-			// avoid — enforced here for the loop, not only per item.
+			// reported itself saturated. A cancelled context here means the CLIENT is
+			// shutting down, not that this item's submitter left: the ctx on this path
+			// is the client-lifetime one NewClient closes over when it builds the
+			// sendBatch dispatch function, while a submitter's own context only ever
+			// reaches the batcher through PutCtx. Either way every remaining item would
+			// be a full validation that cannot succeed, which is what routing through
+			// handleValidationError exists to avoid — enforced here for the loop, not
+			// only per item.
 			if errors.Is(retryErr, errors.ErrThresholdExceeded) || ctx.Err() != nil {
 				c.notifyAllBatchItems(batch[i+1:], nil, retryErr)
 				return
