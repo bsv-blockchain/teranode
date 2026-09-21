@@ -2770,7 +2770,15 @@ func TestTryQuickValidation_UnquarantinedAbort_SweepsOwnSubtreeFiles(t *testing.
 		// binding pass performs exactly one GetIoReader per subtree — the mmap re-open
 		// cannot fire, mmapDir is empty in this harness — so the first read is the
 		// binding pass's and is served honest, and the batch read is the second.
-		unrelated := buildSubtreeOver(t, false, []*bt.Tx{preBindSpendOf(t, h.storeGenuineParent(0xac), 3_300), preBindSpendOf(t, h.storeGenuineParent(0xad), 3_400)})
+		// The node list is built from transactions the fixture ALREADY created rather
+		// than from fresh parents. storeGenuineParent derives its transaction purely
+		// from the seed byte, so a seed inside the contiguous range multiBatchGroups
+		// just consumed re-creates an identical transaction and the store rejects it on
+		// its UNIQUE hash constraint. Reusing existing ones makes that collision
+		// impossible instead of merely picking different numbers. These transactions are
+		// never validated here: the subtree exists only to be serialized into bytes that
+		// hash somewhere other than the key, which forgeSubtreeHeaderRoot asserts.
+		unrelated := buildSubtreeOver(t, false, []*bt.Tx{fixture.groups[0][0], fixture.groups[1][0]})
 		store.replaceAfterFirstRead(fixture.roots[forgedIdx], fileformat.FileTypeSubtreeToCheck,
 			forgeSubtreeHeaderRoot(t, unrelated, fixture.roots[forgedIdx]))
 
