@@ -5,6 +5,9 @@ import (
 	"context"
 	"errors"
 	"strings"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // IsRetryableError determines if an error is transient and the operation should be retried.
@@ -151,7 +154,15 @@ func IsMaliciousResponseError(err error) bool {
 		}
 	}
 
-	// Check for patterns that might indicate malicious behavior
+	// Check for patterns that might indicate malicious behavior.
+	//
+	// CAUTION: this is substring matching over the RENDERED error text, and Teranode renders each
+	// error's code name into its own message (see Error.Error). Any error code whose name contains
+	// one of these ordinary English words therefore matches here — e.g. ERR_BLOCK_CORRUPT renders
+	// "BLOCK_CORRUPT" and matches "corrupt". Callers that must distinguish such a code (e.g. the
+	// corrupt-body re-download recovery, bitcoin-sv/teranode#4692) MUST test the specific classifier
+	// (errors.IsBlockCorrupt) BEFORE calling IsMaliciousResponseError, or their branch is dead.
+	// Prefer a specific code check over adding words here.
 	errStr := strings.ToLower(err.Error())
 	maliciousStrings := []string{
 		"invalid header",
@@ -240,6 +251,40 @@ func IsContextError(err error) bool {
 	return false
 }
 
+// IsGRPCMessageTooLarge reports whether err is the TRANSPORT-level
+// ResourceExhausted that signals a message over the gRPC size limit, as opposed to
+// a block-assembly queue-full shed, which reuses the same gRPC code by way of
+// ERR_THRESHOLD_EXCEEDED.
+//
+// The distinction matters because only the former is fixable by re-sending the
+// same transaction over HTTP. Re-sending a shed drives a second full validation
+// against a node that has just reported itself saturated, and logs the overload as
+// a message-size problem.
+//
+// It lives here rather than in a service package for two reasons: it is a pure
+// error-classification predicate with no service dependencies, and it belongs next
+// to the round-trip convention it enforces — application control flow keys on the
+// reconstructed ERR code that WrapGRPC/UnwrapGRPC carry in the status detail, not
+// on the gRPC code. One helper, called from every site, is also what stops the two
+// clients' rules from drifting apart.
+//
+// A non-status error yields false, which preserves the "not a status error →
+// unwrap and return" behaviour at the call sites.
+//
+// Parameters:
+//   - err: Error to classify (typically straight off a gRPC call)
+//
+// Returns:
+//   - bool: true only for a ResourceExhausted that is not a threshold-exceeded shed
+func IsGRPCMessageTooLarge(err error) bool {
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.ResourceExhausted {
+		return false
+	}
+
+	return !Is(UnwrapGRPC(err), ErrThresholdExceeded)
+}
+
 // IsLocalError checks if an error is a local resource error (not peer-related).
 // Local errors include context cancellation, semaphore exhaustion, and storage errors
 // that are caused by local resource constraints rather than peer failures.
@@ -283,6 +328,15 @@ func GetErrorCategory(err error) string {
 
 	if IsContextError(err) {
 		return "context"
+	}
+
+	// ERR_BLOCK_CORRUPT renders "BLOCK_CORRUPT" into its own message, which the substring fallback in
+	// IsMaliciousResponseError matches on "corrupt" — so without this early-out every corrupt-body
+	// error is attributed to "malicious" in telemetry instead of "block" (its code is inside the
+	// block range). Same ordering rule the routing sites follow: test the specific classifier first
+	// (bitcoin-sv/teranode#4692).
+	if IsBlockCorrupt(err) {
+		return "block"
 	}
 
 	if IsMaliciousResponseError(err) {
@@ -330,6 +384,11 @@ func errorCodeCategory(code ERR) string {
 		return "state"
 	case code >= 110 && code <= 119:
 		return "network"
+	// The original block decade (10-19) is full, so further block errors are numbered
+	// from 120 and must map to the same category — otherwise a block error would fall
+	// through to the empty default and be mis-bucketed.
+	case code >= 120 && code <= 129:
+		return "block"
 	default:
 		return ""
 	}

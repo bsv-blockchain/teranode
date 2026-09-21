@@ -242,6 +242,7 @@ func peerInfoToProto(info *PeerInfo) *blockchain_api.PeerRegistryInfo {
 		CatchupAttempts:           info.CatchupAttempts,
 		CatchupSuccesses:          info.CatchupSuccesses,
 		CatchupFailures:           info.CatchupFailures,
+		Legacy:                    legacyPeerInfoToProto(info.Legacy),
 	}
 }
 
@@ -312,6 +313,45 @@ func protoToPeerInfo(logger ulogger.Logger, p *blockchain_api.PeerRegistryInfo) 
 		CatchupAttempts:           p.CatchupAttempts,
 		CatchupSuccesses:          p.CatchupSuccesses,
 		CatchupFailures:           p.CatchupFailures,
+		Legacy:                    protoToLegacyPeerInfo(p.Legacy),
+	}
+}
+
+// legacyPeerInfoToProto converts the domain legacy block to its proto form.
+// A nil input returns nil, so a libp2p peer carries no legacy message.
+func legacyPeerInfoToProto(legacy *LegacyPeerInfo) *blockchain_api.LegacyPeerInfo {
+	if legacy == nil {
+		return nil
+	}
+
+	return &blockchain_api.LegacyPeerInfo{
+		Inbound:         legacy.Inbound,
+		ProtocolVersion: legacy.ProtocolVersion,
+		ServiceFlags:    legacy.ServiceFlags,
+		PingMicros:      legacy.PingMicros,
+		TimeOffsetSecs:  legacy.TimeOffsetSecs,
+		StartingHeight:  legacy.StartingHeight,
+		IsSyncPeer:      legacy.IsSyncPeer,
+		TimeConnected:   timestamppb.New(legacy.TimeConnected),
+	}
+}
+
+// protoToLegacyPeerInfo converts a proto legacy block to the domain type.
+// A nil input returns nil.
+func protoToLegacyPeerInfo(legacy *blockchain_api.LegacyPeerInfo) *LegacyPeerInfo {
+	if legacy == nil {
+		return nil
+	}
+
+	return &LegacyPeerInfo{
+		Inbound:         legacy.Inbound,
+		ProtocolVersion: legacy.ProtocolVersion,
+		ServiceFlags:    legacy.ServiceFlags,
+		PingMicros:      legacy.PingMicros,
+		TimeOffsetSecs:  legacy.TimeOffsetSecs,
+		StartingHeight:  legacy.StartingHeight,
+		IsSyncPeer:      legacy.IsSyncPeer,
+		TimeConnected:   protoTimeToTime(legacy.TimeConnected),
 	}
 }
 

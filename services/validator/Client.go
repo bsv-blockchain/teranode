@@ -41,10 +41,28 @@ import (
 	"github.com/bsv-blockchain/teranode/util/batchermetrics"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
+
+// batchHandoffTimeout backstops the batch hand-off wait so a dispatcher that never signals
+// (panic, missed code path, wedged transport) releases the submitter instead of parking it for
+// the life of the process. It must OUTLAST the deepest downstream wait this client fronts, or
+// it aborts work the lower layers would still have completed — see the settings.conf note on
+// aerospike_batchPolicy.docker.m for that exact bug happening one layer down.
+//
+// Sized against the committed default configuration:
+//
+//   - the utxo store's own submitter guard, which the downstream service waits on:
+//     batch TotalTimeout (settings.conf: 5m) plus aerospike_overload_retry_max_elapsed (2m)
+//     plus 30s grace, i.e. 7m30s
+//   - the store's spend wait, a separate sequential stage: utxostore_spendWaitTimeout (30s)
+//
+// 8m floor, rounded to 10m. Client-side queueing is deliberately NOT modelled: the flush
+// interval (validator_sendBatchTimeout) is a batching trigger, not an end-to-end bound, and
+// worker saturation or the batcher's max-concurrency limiter can hold an item longer than it.
+// A var, not a const, purely so tests can shorten it; production never reassigns it.
+var batchHandoffTimeout = 10 * time.Minute
 
 // batchItem represents a single item in a validation batch request
 type batchItem struct {
@@ -423,12 +441,27 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 	}
 	c.batcher.PutCtx(ctx, item)
 
-	// group.Wait(context.Background(), 0): 0 timeout allocates no timer and a
-	// background context never cancels, so this blocks purely on the dispatcher
-	// completing the item — identical to the previous bare <-doneCh receive (no
-	// timeout, no ctx arm). It can only return nil, so the result slot is always
-	// safe to read here.
-	_ = group.Wait(context.Background(), 0)
+	// Bounded by the CALLER's context AND a finite backstop. Nothing in the call
+	// chain guarantees a deadline, so nothing bounds this wait during normal
+	// operation and the ctx arm alone would let a wedged dispatcher park this
+	// goroutine; batchHandoffTimeout is what makes the wait finite.
+	//
+	// An early return is ABANDONMENT, not cancellation: the item is already on the
+	// batcher and the dispatcher may still send it, so the transaction may yet
+	// reach the validator. Two consequences, both load-bearing:
+	//
+	//   - item.result MUST NOT be read on this path. It is a struct value the
+	//     dispatcher writes later from its own goroutine; not reading it is what
+	//     keeps that write race-free (no concurrent reader), and it is why the read
+	//     below is reachable only after Wait returned nil.
+	//   - the error MUST NOT be mistakable for a queue-full shed. A shed is unwound
+	//     by the caller (record deleted, inputs unspent); doing that to a
+	//     transaction still in flight could delete a record already absorbed
+	//     downstream. A ServiceError keeps it out of the ErrThresholdExceeded
+	//     branch, so no caller unwinds a transaction that may still be in flight.
+	if waitErr := group.Wait(ctx, batchHandoffTimeout); waitErr != nil {
+		return nil, errors.NewServiceError("validator batch handoff abandoned before dispatch completed", waitErr)
+	}
 
 	r := item.result
 
@@ -452,15 +485,24 @@ func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight
 // fallback returns nil; a failed fallback returns the HTTP verdict, not the
 // original ResourceExhausted error.
 func (c *Client) handleValidationError(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options, err error) error {
-	// Check if the error is related to message size (ResourceExhausted)
-	st, ok := status.FromError(err)
-	if !ok || st.Code() != codes.ResourceExhausted || c.validatorHTTPAddr == nil {
+	// Only an oversized gRPC message is fixable by re-sending over HTTP. A
+	// block-assembly queue-full shed arrives with the same ResourceExhausted code
+	// (via ERR_THRESHOLD_EXCEEDED) but must be surfaced to the caller instead: the
+	// node has just reported itself saturated, and re-sending would drive a second
+	// full validation against it. A non-status error also lands here, preserving the
+	// original "not a status error → unwrap and return" behaviour.
+	if !errors.IsGRPCMessageTooLarge(err) || c.validatorHTTPAddr == nil {
+		if errors.Is(errors.UnwrapGRPC(err), errors.ErrThresholdExceeded) {
+			c.logger.Warnf("[ValidateWithOptions][%s] block assembly shed the transaction (queue full); not retrying over HTTP", tx.TxID())
+		}
+
 		return errors.UnwrapGRPC(err)
 	}
 
-	// Try HTTP fallback
+	// Try HTTP fallback. The gate above guarantees this really is a size problem,
+	// so the message wording is now accurate rather than assumed.
 	c.logger.Warnf("[ValidateWithOptions][%s] Transaction exceeds gRPC message limit, falling back to validator /tx endpoint: %s",
-		tx.TxID(), st.Message())
+		tx.TxID(), status.Convert(err).Message())
 
 	httpErr := c.validateTransactionViaHTTP(ctx, tx, blockHeight, validationOptions)
 	if httpErr == nil {
@@ -483,18 +525,14 @@ func (c *Client) handleValidationError(ctx context.Context, tx *bt.Tx, blockHeig
 // each transaction individually over HTTP.
 func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
 	// go-batcher recovers panics raised in this dispatch fn; without a sweep a
-	// panic part-way through would strand every submitter blocked on group.Wait
-	// (unbuffered handoff, no timeout). complete is CAS-guarded, so
-	// re-completing an item an earlier stage already completed is a no-op.
+	// panic part-way through would leave every submitter blocked on group.Wait
+	// until its caller context or batchHandoffTimeout released it. complete is
+	// CAS-guarded, so re-completing an item an earlier stage already completed is
+	// a no-op.
 	defer func() {
-		if r := recover(); r != nil {
-			c.logger.Errorf("[sendBatchToValidator] recovered panic, failing %d batch item(s): %v", len(batch), r)
-
-			err := errors.NewProcessingError("panic in sendBatchToValidator: %v", r)
-			for _, item := range batch {
-				item.complete(validateBatchResponse{err: err})
-			}
-		}
+		util.SignalBatchPanic(recover(), batch, "sendBatchToValidator", c.logger, func(it *batchItem, err error) {
+			it.complete(validateBatchResponse{err: err})
+		})
 	}()
 
 	// Prepare batch request
@@ -528,10 +566,13 @@ func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
 	c.processBatchResponse(batch, resp)
 }
 
-// shouldAttemptHTTPFallback determines if HTTP fallback should be attempted based on the error
+// shouldAttemptHTTPFallback determines if HTTP fallback should be attempted based
+// on the error. Kept as the named seam its call site reads through; it is now a
+// one-line wrapper over the shared predicate so a batch-level queue-full shed
+// cannot be mistaken for an oversized message and amplified into one HTTP
+// validation per transaction in the batch.
 func (c *Client) shouldAttemptHTTPFallback(err error) bool {
-	st, ok := status.FromError(err)
-	return ok && st.Code() == codes.ResourceExhausted && c.validatorHTTPAddr != nil
+	return errors.IsGRPCMessageTooLarge(err) && c.validatorHTTPAddr != nil
 }
 
 // handleBatchHTTPFallback attempts to validate each transaction individually via HTTP
@@ -616,6 +657,20 @@ func (c *Client) notifyAllBatchItems(batch []*batchItem, metadata []byte, err er
 	}
 }
 
+// maxHTTPFallbackErrorBodyBytes bounds the raw prefix retained for diagnostics.
+const maxHTTPFallbackErrorBodyBytes = 2 * 1024
+
+// readHTTPFallbackErrorBody leaves body ownership with the caller. One extra
+// byte distinguishes a complete prefix from a truncated response.
+func readHTTPFallbackErrorBody(body io.Reader) ([]byte, bool) {
+	bodyBytes, _ := io.ReadAll(io.LimitReader(body, maxHTTPFallbackErrorBodyBytes+1))
+	if len(bodyBytes) > maxHTTPFallbackErrorBodyBytes {
+		return bodyBytes[:maxHTTPFallbackErrorBodyBytes], true
+	}
+
+	return bodyBytes, false
+}
+
 // validateTransactionViaHTTP sends a transaction to the validator's HTTP endpoint
 // This is used as a fallback when gRPC message size limits are exceeded.
 //
@@ -678,16 +733,25 @@ func (c *Client) validateTransactionViaHTTP(ctx context.Context, tx *bt.Tx, bloc
 	// validator's internal error chain verbatim, and callers that classify on the
 	// error code read a permanent rejection as something worth retrying.
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-
 		verdict := errors.HTTPErrorFrom(resp.Header)
+
+		// The body is an opaque diagnostic: keep a bounded prefix so a large error
+		// response is never buffered or formatted in full, and quote it so control
+		// bytes cannot forge extra log lines.
+		body, truncated := readHTTPFallbackErrorBody(resp.Body)
+
+		diagnostic := fmt.Sprintf("%q", string(body))
+		if truncated {
+			diagnostic += " (truncated)"
+		}
+
 		if verdict == nil {
 			return errors.NewServiceError("[ValidateWithOptions][%s] validator /tx endpoint returned non-OK status: %d, body: %s",
-				tx.TxID(), resp.StatusCode, string(body))
+				tx.TxID(), resp.StatusCode, diagnostic)
 		}
 
 		c.logger.Warnf("[ValidateWithOptions][%s] validator /tx endpoint rejected transaction: status=%d body=%s",
-			tx.TxID(), resp.StatusCode, string(body))
+			tx.TxID(), resp.StatusCode, diagnostic)
 
 		return errors.New(verdict.Code(), "[ValidateWithOptions][%s] %s", tx.TxID(), verdict.Message())
 	}

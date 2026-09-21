@@ -6,12 +6,14 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -23,7 +25,16 @@ import (
 func freshTestServer(t *testing.T) (*Server, *blockchain.CentralizedPeerRegistry, peer.ID) {
 	t.Helper()
 
-	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	return freshTestServerWithBanConfig(t, blockchain.DefaultBanConfig())
+}
+
+// freshTestServerWithBanConfig is freshTestServer with a caller-supplied
+// BanConfig, for tests that need to observe ban-score accumulation without the
+// ban+removal that DefaultBanConfig's threshold triggers.
+func freshTestServerWithBanConfig(t *testing.T, cfg blockchain.BanConfig) (*Server, *blockchain.CentralizedPeerRegistry, peer.ID) {
+	t.Helper()
+
+	reg := blockchain.NewCentralizedPeerRegistry(cfg)
 	client := blockchain.NewLocalPeerRegistryClient(reg)
 
 	priv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 0)
@@ -47,6 +58,18 @@ func (f *failingValidatedProgressRegistry) RecordValidatedPeerProgress(_ context
 	return f.err
 }
 
+// failingAddBanScoreRegistry wraps a real registry client but makes AddBanScore
+// fail, so the throttle-rollback path in RecordCatchupMalicious can be tested.
+// All other calls (UpdatePeerMetrics, etc.) pass through to the real registry.
+type failingAddBanScoreRegistry struct {
+	blockchain.PeerRegistryClientI
+	err error
+}
+
+func (f *failingAddBanScoreRegistry) AddBanScore(_ context.Context, _, _ string, _ int32) (int32, bool, error) {
+	return 0, false, f.err
+}
+
 func TestRecordCatchupAttempt_RegistersSyncAttempt(t *testing.T) {
 	s, reg, pid := freshTestServer(t)
 	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
@@ -59,6 +82,27 @@ func TestRecordCatchupAttempt_RegistersSyncAttempt(t *testing.T) {
 	require.Equal(t, int32(1), got.SyncAttemptCount)
 	require.False(t, got.LastSyncAttempt.IsZero())
 	require.Equal(t, int64(1), got.CatchupAttempts)
+}
+
+// TestRecordCatchupAttempt_IncrementsCounter confirms the success path
+// increments prometheusP2PCatchupAttempts, and that the early-return on an
+// invalid peer ID (before the registry call) does not.
+func TestRecordCatchupAttempt_IncrementsCounter(t *testing.T) {
+	initPrometheusMetrics()
+
+	before := testutil.ToFloat64(prometheusP2PCatchupAttempts)
+
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	resp, err := s.RecordCatchupAttempt(context.Background(), &p2p_api.RecordCatchupAttemptRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusP2PCatchupAttempts))
+
+	_, err = s.RecordCatchupAttempt(context.Background(), &p2p_api.RecordCatchupAttemptRequest{PeerId: "not-a-peer-id"})
+	require.Error(t, err)
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusP2PCatchupAttempts), "an invalid peer ID must not increment the counter")
 }
 
 func TestRecordCatchupAttempt_InvalidPeerID(t *testing.T) {
@@ -96,6 +140,27 @@ func TestRecordCatchupFailure_UpdatesInteractionMetrics(t *testing.T) {
 	got, _ := reg.Get(pid.String())
 	require.Equal(t, int64(1), got.InteractionFailures)
 	require.Equal(t, int64(1), got.CatchupFailures)
+}
+
+// TestRecordCatchupSuccess_IncrementsCounter confirms the success path
+// increments prometheusP2PCatchupSuccesses, and that the early-return on an
+// invalid peer ID (before the registry call) does not.
+func TestRecordCatchupSuccess_IncrementsCounter(t *testing.T) {
+	initPrometheusMetrics()
+
+	before := testutil.ToFloat64(prometheusP2PCatchupSuccesses)
+
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	resp, err := s.RecordCatchupSuccess(context.Background(), &p2p_api.RecordCatchupSuccessRequest{PeerId: pid.String(), DurationMs: 100})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusP2PCatchupSuccesses))
+
+	_, err = s.RecordCatchupSuccess(context.Background(), &p2p_api.RecordCatchupSuccessRequest{PeerId: "not-a-peer"})
+	require.Error(t, err)
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusP2PCatchupSuccesses), "an invalid peer ID must not increment the counter")
 }
 
 func TestRecordCatchupFailure_BlockIncomplete_DowngradesFullPeer(t *testing.T) {
@@ -217,6 +282,35 @@ func TestRecordCatchupFailure_BlockIncomplete_DoesNotBanPeer(t *testing.T) {
 	require.False(t, banned)
 }
 
+// TestRecordCatchupFailure_IncrementsFailureCounter confirms both the generic
+// and block-incomplete failure paths increment the prometheusP2PCatchupFailures
+// counter, labelled by the normalized failure kind, so an operator can alert on
+// catchup failures the same way they already can for attempts/successes.
+func TestRecordCatchupFailure_IncrementsFailureCounter(t *testing.T) {
+	initPrometheusMetrics()
+
+	genericBefore := testutil.ToFloat64(prometheusP2PCatchupFailures.WithLabelValues(catchupFailureKindGeneric))
+	blockIncompleteBefore := testutil.ToFloat64(prometheusP2PCatchupFailures.WithLabelValues(catchupFailureKindBlockIncomplete))
+
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	resp, err := s.RecordCatchupFailure(context.Background(), &p2p_api.RecordCatchupFailureRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, genericBefore+1, testutil.ToFloat64(prometheusP2PCatchupFailures.WithLabelValues(catchupFailureKindGeneric)))
+
+	blockHash := chainhash.HashH([]byte("counter-block-incomplete"))
+	resp, err = s.RecordCatchupFailure(context.Background(), &p2p_api.RecordCatchupFailureRequest{
+		PeerId:      pid.String(),
+		FailureKind: catchupFailureKindBlockIncomplete,
+		BlockHash:   blockHash.String(),
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, blockIncompleteBefore+1, testutil.ToFloat64(prometheusP2PCatchupFailures.WithLabelValues(catchupFailureKindBlockIncomplete)))
+}
+
 func TestRecordCatchupFailure_UnknownFailureKind_Generic(t *testing.T) {
 	s, reg, pid := freshTestServer(t)
 	reg.Register(&blockchain.PeerInfo{ID: pid.String(), Storage: "full"})
@@ -249,20 +343,95 @@ func TestRecordCatchupMalicious_PinsReputationLow(t *testing.T) {
 	require.Equal(t, 5.0, got.ReputationScore)
 }
 
-func TestUpdateCatchupReputation_NoOp(t *testing.T) {
+func TestRecordCatchupMalicious_AddsBanScore(t *testing.T) {
 	s, reg, pid := freshTestServer(t)
 	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
-	r1, _ := reg.Get(pid.String())
 
-	resp, err := s.UpdateCatchupReputation(context.Background(), &p2p_api.UpdateCatchupReputationRequest{
-		PeerId: pid.String(),
-		Score:  99.9,
-	})
+	_, err := s.RecordCatchupMalicious(context.Background(), &p2p_api.RecordCatchupMaliciousRequest{PeerId: pid.String()})
 	require.NoError(t, err)
-	require.True(t, resp.Ok)
 
-	r2, _ := reg.Get(pid.String())
-	require.Equal(t, r1.ReputationScore, r2.ReputationScore, "manual reputation override is a no-op now")
+	got, ok := reg.Get(pid.String())
+	require.True(t, ok)
+	require.Equal(t, int32(50), got.BanScore)
+	require.False(t, got.IsBanned)
+}
+
+func TestRecordCatchupMalicious_SameWindowReportsChargeOnce(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	// One offense is reported through several catchup paths in quick
+	// succession; only the first report within the window may add ban score.
+	for range 3 {
+		_, err := s.RecordCatchupMalicious(context.Background(), &p2p_api.RecordCatchupMaliciousRequest{PeerId: pid.String()})
+		require.NoError(t, err)
+	}
+
+	got, ok := reg.Get(pid.String())
+	require.True(t, ok)
+	require.Equal(t, int64(3), got.MaliciousCount)
+	require.Equal(t, int32(50), got.BanScore)
+	require.False(t, got.IsBanned)
+}
+
+func TestRecordCatchupMalicious_ChargesAgainAfterWindow(t *testing.T) {
+	// High threshold so two charges accumulate observably without tripping the
+	// ban (which would remove the PeerInfo and hide BanScore). This test pins
+	// only that the throttle releases once the window has elapsed - a distinct
+	// offense is charged again rather than collapsed. It deliberately does not
+	// model the registry's decay clock (it ages only the throttle map), so the
+	// two clean +50 charges here are not a production strike count: with real
+	// decay a ban takes three charges over 20+ minutes, pinned in blockchain's
+	// TestCatchupMaliciousPointsOutrunWindowDecay.
+	cfg := blockchain.DefaultBanConfig()
+	cfg.Threshold = 1000
+	s, reg, pid := freshTestServerWithBanConfig(t, cfg)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	_, err := s.RecordCatchupMalicious(context.Background(), &p2p_api.RecordCatchupMaliciousRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+
+	got, ok := reg.Get(pid.String())
+	require.True(t, ok)
+	require.Equal(t, int32(50), got.BanScore)
+
+	s.catchupMaliciousChargeMu.Lock()
+	s.catchupMaliciousLastCharge[pid.String()] = time.Now().Add(-catchupMaliciousChargeWindow)
+	s.catchupMaliciousChargeMu.Unlock()
+
+	_, err = s.RecordCatchupMalicious(context.Background(), &p2p_api.RecordCatchupMaliciousRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+
+	got, ok = reg.Get(pid.String())
+	require.True(t, ok)
+	require.Equal(t, int32(100), got.BanScore, "second charge applied after the window released the throttle")
+}
+
+func TestRecordCatchupMalicious_FailedChargeReleasesThrottle(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	// Wrap the real registry so the malicious record still lands but the
+	// ban-score charge fails.
+	s.peerRegistry = &failingAddBanScoreRegistry{
+		PeerRegistryClientI: s.peerRegistry,
+		err:                 errors.NewServiceError("registry unavailable"),
+	}
+
+	_, err := s.RecordCatchupMalicious(context.Background(), &p2p_api.RecordCatchupMaliciousRequest{PeerId: pid.String()})
+	require.NoError(t, err, "a failed charge must not fail the RPC")
+
+	// The malicious record still landed.
+	got, ok := reg.Get(pid.String())
+	require.True(t, ok)
+	require.Equal(t, int64(1), got.MaliciousCount)
+
+	// The throttle stamp was rolled back, so the next report is free to retry
+	// rather than being suppressed for a full window.
+	s.catchupMaliciousChargeMu.Lock()
+	_, throttled := s.catchupMaliciousLastCharge[pid.String()]
+	s.catchupMaliciousChargeMu.Unlock()
+	require.False(t, throttled, "a failed charge must release the throttle so the next report retries")
 }
 
 func TestUpdateCatchupError_StoresMessageAndTime(t *testing.T) {
@@ -435,6 +604,40 @@ func TestIsPeerMalicious_BannedPeerIsMalicious(t *testing.T) {
 	resp, err := s.IsPeerMalicious(context.Background(), &p2p_api.IsPeerMaliciousRequest{PeerId: pid.String()})
 	require.NoError(t, err)
 	require.True(t, resp.IsMalicious)
+}
+
+func TestIsPeerMalicious_RecordedMaliciousPeer(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	_, err := s.RecordCatchupMalicious(context.Background(), &p2p_api.RecordCatchupMaliciousRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+
+	// One report does not ban yet, but the malicious record must be visible.
+	banned, err := s.peerRegistry.IsPeerBanned(context.Background(), pid.String())
+	require.NoError(t, err)
+	require.False(t, banned)
+
+	resp, err := s.IsPeerMalicious(context.Background(), &p2p_api.IsPeerMaliciousRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+	require.True(t, resp.IsMalicious)
+	require.Equal(t, "malicious behavior recorded 1 time(s)", resp.Reason)
+}
+
+func TestIsPeerMalicious_ReconsideredPeerRecovers(t *testing.T) {
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	_, err := s.RecordCatchupMalicious(context.Background(), &p2p_api.RecordCatchupMaliciousRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+
+	// ReconsiderBadPeers with a zero cooldown clears the malicious record; the
+	// peer must stop reporting as malicious (it is not banned after one report).
+	require.Equal(t, 1, reg.ReconsiderBadPeers(0))
+
+	resp, err := s.IsPeerMalicious(context.Background(), &p2p_api.IsPeerMaliciousRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+	require.False(t, resp.IsMalicious)
 }
 
 func TestIsPeerMalicious_CleanPeer(t *testing.T) {
@@ -705,4 +908,79 @@ func TestIsPeerUnhealthy_HealthyPeer(t *testing.T) {
 	resp, err := s.IsPeerUnhealthy(context.Background(), &p2p_api.IsPeerUnhealthyRequest{PeerId: pid.String()})
 	require.NoError(t, err)
 	require.False(t, resp.IsUnhealthy)
+}
+
+// A success report flagged as a whole completed catchup settles the sync slot
+// through the coordinator (asynchronously); an unflagged report — the shape old
+// blockvalidation versions sent per header batch — must not touch the slot.
+func TestRecordCatchupSuccess_SettlesSyncSlotOnlyWhenCatchupCompleted(t *testing.T) {
+	newServerWithSyncPeer := func(t *testing.T) (*Server, peer.ID) {
+		t.Helper()
+
+		s, reg, pid := freshTestServer(t)
+		tSettings := &settings.Settings{
+			P2P: settings.P2PSettings{
+				AllowPrunedNodeFallback:                   true,
+				MaxUnvalidatedAdvertisedHeightLead:        10_000,
+				MaxUnprovenSyncProbesPerBackoffWindow:     3,
+				FullDeliveryFreshnessWindow:               24 * time.Hour,
+				SyncCoordinatorPeriodicEvaluationInterval: 30 * time.Second,
+			},
+		}
+		sc := NewSyncCoordinator(
+			context.Background(),
+			ulogger.TestLogger{},
+			tSettings,
+			s.peerRegistry,
+			NewPeerSelector(ulogger.TestLogger{}, tSettings),
+			nil,
+			nil,
+		)
+		sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 0 })
+		setSyncCoordinatorLocalTip(t, sc, 200, []byte{0x03})
+		s.syncCoordinator = sc
+
+		hash := syncCoordinatorTestHash(t)
+		reg.Register(&blockchain.PeerInfo{
+			ID:                 pid.String(),
+			DataHubURL:         "http://peer",
+			Height:             200,
+			BlockHash:          hash,
+			Storage:            "full",
+			ValidatedBlockHash: hash,
+			ValidatedChainWork: []byte{0x03}, // level with local: a completed report settles as success
+		})
+		claimSyncTestPeer(sc, pid.String(), time.Minute, []byte{0x03})
+		return s, pid
+	}
+
+	t.Run("completed report settles the slot", func(t *testing.T) {
+		s, pid := newServerWithSyncPeer(t)
+
+		resp, err := s.RecordCatchupSuccess(context.Background(), &p2p_api.RecordCatchupSuccessRequest{
+			PeerId:           pid.String(),
+			DurationMs:       (30 * time.Second).Milliseconds(),
+			CatchupCompleted: true,
+		})
+		require.NoError(t, err)
+		require.True(t, resp.Ok)
+
+		require.Eventually(t, func() bool {
+			return s.syncCoordinator.GetCurrentSyncPeer() == ""
+		}, 5*time.Second, 10*time.Millisecond, "completed catchup report must settle the sync slot")
+	})
+
+	t.Run("legacy header-batch report leaves the slot alone", func(t *testing.T) {
+		s, pid := newServerWithSyncPeer(t)
+
+		resp, err := s.RecordCatchupSuccess(context.Background(), &p2p_api.RecordCatchupSuccessRequest{
+			PeerId:     pid.String(),
+			DurationMs: (30 * time.Second).Milliseconds(),
+		})
+		require.NoError(t, err)
+		require.True(t, resp.Ok)
+
+		time.Sleep(100 * time.Millisecond) // grace for a goroutine that must not exist
+		require.Equal(t, pid.String(), s.syncCoordinator.GetCurrentSyncPeer(), "unflagged report must not settle the sync slot")
+	})
 }

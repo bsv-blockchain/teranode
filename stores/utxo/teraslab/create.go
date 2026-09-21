@@ -142,6 +142,15 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return err
 }
 
+// DeleteComplete removes a transaction and everything it owns. The TeraSlab
+// server stores each tx as a single record (no client-side pagination into
+// child records or external blobs), so Delete already leaves nothing behind —
+// DeleteComplete is equivalent to Delete, as it is for the SQL backend. Both
+// are idempotent (an absent record is a success).
+func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
+	return s.Delete(ctx, hash)
+}
+
 // recordExists reports whether a record for txid is present. The bool is only
 // meaningful when the returned error is nil.
 func (s *Store) recordExists(ctx context.Context, txid teraslab.TxID) (bool, error) {

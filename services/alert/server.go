@@ -349,10 +349,13 @@ func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting
 		P2P: config.P2PConfig{
 			IP:                    "0.0.0.0",
 			Port:                  strconv.Itoa(s.settings.Alert.P2PPort),
-			DHTMode:               "client",
+			DHTMode:               s.settings.Alert.P2PDHTMode,
 			AlertSystemProtocolID: s.settings.Alert.ProtocolID,
 			TopicName:             topicName,
 			PrivateKey:            s.settings.Alert.P2PPrivateKey,
+			BootstrapPeer:         s.settings.Alert.P2PBootstrapPeer,
+			AllowPrivateIPs:       s.settings.Alert.P2PAllowPrivateIPs,
+			PeerDiscoveryInterval: s.settings.Alert.P2PPeerDiscoveryInterval,
 		},
 		Services: config.Services{
 			Log:        NewLogger(s.logger.Duplicate(ulogger.WithSkipFrame(1))),

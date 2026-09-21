@@ -156,6 +156,27 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 	// their subtrees directly over HTTP (not via the gossip subtree handler), so
 	// the reputation filter retained in handleSubtreeTopic does not affect catchup.
 
+	// Suppress replayed announcements before the Kafka publish (issue: gossip
+	// ingest amplification). GossipSub only dedups on message ID (sender +
+	// seqno), so byte-identical announcements with fresh seqnos arrive as new
+	// messages, and each publish below is amplified downstream into gRPC
+	// round-trips, a store lookup and a peer-controlled HTTP fetch. Only the
+	// first few DISTINCT announcers per hash are published per window, keeping
+	// block validation's alternative-source failover fed; the peer bookkeeping
+	// above still ran, so registry state and ban attribution stay fresh for
+	// suppressed announcements. A peer that keeps re-announcing the same hash
+	// is surfaced to the operator once per threshold-multiple of repeats —
+	// deliberately not auto-scored, see seenHashRepeatWarnThreshold.
+	publish, peerRepeats := s.blockSeenHashes.Check(hash.String(), fromID, now)
+	if peerRepeats > 0 && peerRepeats%seenHashRepeatWarnThreshold == 0 {
+		s.logger.Warnf("[handleBlockTopic] peer %s re-announced block %s %d times within the seen-hash TTL", fromID, hash.String(), peerRepeats)
+	}
+
+	if !publish {
+		s.logger.Debugf("[handleBlockTopic] suppressing duplicate announcement of block %s from peer %s", hash.String(), fromID)
+		return
+	}
+
 	// Always send block to kafka - let block validation service decide what to do based on sync state
 	// send block to kafka, if configured
 	if s.blocksKafkaProducerClient != nil {
@@ -169,14 +190,26 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 
 		value, err := proto.Marshal(msg)
 		if err != nil {
+			s.blockSeenHashes.PublishFailed(hash.String(), fromID)
 			s.logger.Errorf("[handleBlockTopic] error marshaling KafkaBlockTopicMessage: %v", err)
 			return
 		}
 
-		s.blocksKafkaProducerClient.Publish(&kafka.Message{
+		// Non-blocking publish: a blocking send here would let broker
+		// backpressure stall the whole gossip worker pool. On a drop, return
+		// the publish grant so a later announcement of the hash can retry.
+		if !s.blocksKafkaProducerClient.TryPublish(&kafka.Message{
 			Key:   []byte(hash.String()),
 			Value: value,
-		})
+		}) {
+			s.blockSeenHashes.PublishFailed(hash.String(), fromID)
+			gossipPublishDropped("block")
+			s.logger.Debugf("[handleBlockTopic] kafka blocks producer backlogged, dropped announcement of block %s from peer %s", hash.String(), fromID)
+		}
+	} else {
+		// No producer configured: nothing was published, so return the grant
+		// to keep the accounting honest.
+		s.blockSeenHashes.PublishFailed(hash.String(), fromID)
 	}
 }
 
@@ -286,6 +319,20 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 	s.storePeerMapEntry(&s.subtreePeerMap, hash.String(), fromID, now)
 	s.logger.Debugf("[handleSubtreeTopic] storing peer %s for subtree %s", fromID, subtreeMessage.Hash)
 
+	// Suppress replayed announcements before the Kafka publish, mirroring
+	// handleBlockTopic. The check sits AFTER the unhealthy-peer gate above so
+	// an announcement that gate drops does not mark the hash seen and thereby
+	// suppress a later, healthy announcement of the same subtree.
+	publish, peerRepeats := s.subtreeSeenHashes.Check(hash.String(), fromID, now)
+	if peerRepeats > 0 && peerRepeats%seenHashRepeatWarnThreshold == 0 {
+		s.logger.Warnf("[handleSubtreeTopic] peer %s re-announced subtree %s %d times within the seen-hash TTL", fromID, hash.String(), peerRepeats)
+	}
+
+	if !publish {
+		s.logger.Debugf("[handleSubtreeTopic] suppressing duplicate announcement of subtree %s from peer %s", hash.String(), fromID)
+		return
+	}
+
 	if s.subtreeKafkaProducerClient != nil { // tests may not set this
 		msg := &kafkamessage.KafkaSubtreeTopicMessage{
 			Hash:   hash.String(),
@@ -295,20 +342,31 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 
 		value, err := proto.Marshal(msg)
 		if err != nil {
+			s.subtreeSeenHashes.PublishFailed(hash.String(), fromID)
 			s.logger.Errorf("[handleSubtreeTopic] error marshaling KafkaSubtreeTopicMessage: %v", err)
 			return
 		}
 
-		s.subtreeKafkaProducerClient.Publish(&kafka.Message{
+		// Non-blocking publish, as in handleBlockTopic: drop under producer
+		// backpressure and return the grant so a later announcement can retry.
+		if !s.subtreeKafkaProducerClient.TryPublish(&kafka.Message{
 			Key:   []byte(hash.String()),
 			Value: value,
-		})
+		}) {
+			s.subtreeSeenHashes.PublishFailed(hash.String(), fromID)
+			gossipPublishDropped("subtree")
+			s.logger.Debugf("[handleSubtreeTopic] kafka subtrees producer backlogged, dropped announcement of subtree %s from peer %s", hash.String(), fromID)
+		}
+	} else {
+		// No producer configured (tests): return the grant to keep the
+		// accounting honest.
+		s.subtreeSeenHashes.PublishFailed(hash.String(), fromID)
 	}
 }
 
 // addProtocolViolation records a protocol violation against a peer.
 func (s *Server) addProtocolViolation(peerID string) {
-	s.applyBanScore(peerID, ReasonProtocolViolation)
+	_ = s.applyBanScore(peerID, ReasonProtocolViolation)
 }
 
 // isBlacklistedBaseURL checks the given baseURL against the operator-configured
@@ -822,11 +880,43 @@ func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
 
 	s.logger.Infof("[processInvalidBlockMessage] processing invalid block %s: %s", blockHash, reason)
 
-	// Look up the peer ID that sent this block
-	peerID, err := s.getPeerFromMap(&s.blockPeerMap, blockHash, "block")
-	if err != nil {
-		s.logger.Warnf("[processInvalidBlockMessage] %v", err)
-		return nil // Not an error, just no peer to ban
+	// Kafka is at-least-once and the revalidation path can republish the same
+	// block, so a block must be scored once, not once per delivery. The old
+	// code got that for free — the ban was gated on a peer-map entry deleted
+	// after scoring — but the message now carries its own attribution, so the
+	// dedupe has to be explicit. The record is TTL-bounded like the peer maps:
+	// a redelivery after the TTL can re-score, which matches the attribution
+	// window the map-gated path always had.
+	if prev, ok := s.reportedInvalidBlocks.Load(blockHash); ok {
+		s.logger.Debugf("[processInvalidBlockMessage] already scored peer %s for invalid block %s, skipping duplicate delivery", prev.peerID, blockHash)
+		return nil
+	}
+
+	// Attribution, strongest source first. The message's peer ID is block
+	// validation's own record of who announced the block (spoof-checked at
+	// gossip time), carried end-to-end so it cannot be washed out: the peer map
+	// is bounded and eviction-prone, so a peer that floods distinct hashes
+	// between serving an invalid block and its verdict — or the offender doing
+	// the same to its own entry — used to erase the only attribution and void
+	// the ban (issue 1433).
+	peerID := invalidBlockMsg.GetPeerId()
+
+	if peerID == "" {
+		// Older producers and paths without provenance (setTxMined): the peer
+		// map entry stored at announcement time.
+		var err error
+		if peerID, err = s.getPeerFromMap(&s.blockPeerMap, blockHash, "block"); err != nil {
+			// Last resort, mirroring ReportInvalidSubtree: resolve the DataHub
+			// URL the block was fetched from back to the peer serving it.
+			if peerURL := invalidBlockMsg.GetPeerUrl(); peerURL != "" {
+				peerID = s.getPeerIDFromDataHubURL(peerURL)
+			}
+
+			if peerID == "" {
+				s.logger.Warnf("[processInvalidBlockMessage] %v", err)
+				return nil // Not an error, just no peer to ban
+			}
+		}
 	}
 
 	// Add ban score to the peer
@@ -842,6 +932,10 @@ func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
 		s.logger.Errorf("[processInvalidBlockMessage] error adding ban score to peer %s: %v", peerID, err)
 		return err
 	}
+
+	// Recorded only after a successful score, so the consumer's in-process
+	// retries of a failed AddBanScore are not deduplicated away.
+	s.reportedInvalidBlocks.Store(blockHash, peerMapEntry{peerID: peerID, timestamp: time.Now()})
 
 	// Remove the block from the map to avoid memory leaks
 	s.blockPeerMap.Delete(blockHash)
@@ -916,6 +1010,16 @@ func (s *Server) cleanupPeerMaps() {
 	ttlCutoff := now.Add(-s.peerMapTTLOrDefault())
 	blockExpired := s.blockPeerMap.DeleteExpired(ttlCutoff)
 	subtreeExpired := s.subtreePeerMap.DeleteExpired(ttlCutoff)
+	s.reportedInvalidBlocks.DeleteExpired(ttlCutoff)
+
+	// Sweep the seen-hash caches too. They self-bound at insert and expire
+	// lazily on Check, so this only reclaims memory for hashes that stopped
+	// being announced.
+	seenBlockExpired := s.blockSeenHashes.DeleteExpired(now)
+	seenSubtreeExpired := s.subtreeSeenHashes.DeleteExpired(now)
+	if seenBlockExpired > 0 || seenSubtreeExpired > 0 {
+		s.logger.Infof("[cleanupPeerMaps] removed %d expired seen-block-hash entries, %d expired seen-subtree-hash entries", seenBlockExpired, seenSubtreeExpired)
+	}
 
 	// Evict expired reputationCache entries. shouldSkipUnhealthyPeer only ever
 	// inserts; without this sweep the map would grow once per unique peer ID
@@ -986,20 +1090,22 @@ func (s *Server) cleanupPeerMaps() {
 
 	// Surface how many entries the inline cap evicted since the last sweep
 	// (issue 1409) — flood visibility without a per-insert log line. Sustained
-	// eviction means announcements are arriving faster than the cap can hold,
-	// so attribution for the oldest of them is being aged out early. The
-	// attribution matters as much as the count: pressure spread across peers
-	// is throughput and a larger cap helps, whereas one dominant contributor
-	// is a flood, where a larger cap just hands the attacker more memory and a
-	// longer sweep — ban the peer instead (issue 1503).
+	// eviction means announcements are arriving faster than the cap can hold.
+	// Under the fair-share rule (issue 1503) a dominant contributor's pressure
+	// mostly lands on its own entries once it exceeds its share, so eviction
+	// volume alone no longer implies other peers' attribution is being lost —
+	// which is why the attribution matters as much as the count: pressure
+	// spread across peers is throughput and a larger cap helps, whereas one
+	// dominant contributor is a flood, where a larger cap just hands the
+	// attacker more memory and a longer sweep — ban the peer instead.
 	if blockEvictions, subtreeEvictions := s.blockPeerMap.EvictionsSinceLastRead(), s.subtreePeerMap.EvictionsSinceLastRead(); blockEvictions.total > 0 || subtreeEvictions.total > 0 {
-		s.logger.Warnf("[cleanupPeerMaps] peer maps at capacity since the last sweep: evicted %d oldest block entries (%s) and %d oldest subtree entries (%s)",
+		s.logger.Warnf("[cleanupPeerMaps] peer maps at capacity since the last sweep: evicted %d block entries (%s) and %d subtree entries (%s)",
 			blockEvictions.total, blockEvictions, subtreeEvictions.total, subtreeEvictions)
 	}
 
 	// Log current sizes
-	s.logger.Infof("[cleanupPeerMaps] current map sizes - blocks: %d, subtrees: %d",
-		s.blockPeerMap.Len(), s.subtreePeerMap.Len())
+	s.logger.Infof("[cleanupPeerMaps] current map sizes - blocks: %d, subtrees: %d, seen block hashes: %d, seen subtree hashes: %d",
+		s.blockPeerMap.Len(), s.subtreePeerMap.Len(), s.blockSeenHashes.Len(), s.subtreeSeenHashes.Len())
 }
 
 // startPeerMapCleanup starts the periodic cleanup goroutine
@@ -1163,12 +1269,18 @@ func (s *Server) shouldSkipUnhealthyPeer(from string, messageType string) bool {
 }
 
 // storePeerMapEntry stores a peer entry in the specified map. The map is
-// bounded inline (issue 1409): at capacity the OLDEST entry is evicted, so a
-// distinct-hash flood cannot grow memory without bound between sweeps, and
-// cannot pre-emptively suppress attribution for the announcement arriving
-// next. A flood after an honest announcement can still age it out before
-// validation reports on it (issue 1503), and a peer can age out its own
-// attribution the same way to escape the invalid-block ban path (issue 1433).
+// bounded inline (issue 1409): at capacity an insert from a peer already
+// holding its fair share evicts that peer's own oldest entry, and only a peer
+// below its share evicts the global oldest (issue 1503) — so a distinct-hash
+// flood cannot grow memory without bound between sweeps, and its eviction
+// pressure past that share lands on the flooder's own entries rather than
+// other peers' attribution (up to one share of others' oldest entries can
+// still be displaced while ramping up; see the cappedPeerMap type comment). A
+// peer can still age out its OWN attribution by flooding (issue 1433). For
+// blocks, neither residual voids the ban: the invalid-block Kafka message
+// carries the announcer's peer ID and DataHub URL end-to-end, so
+// processInvalidBlockMessage uses this map only when block validation did not
+// know the block's provenance.
 func (s *Server) storePeerMapEntry(peerMap *cappedPeerMap, hash string, from string, timestamp time.Time) {
 	peerMap.Store(hash, peerMapEntry{
 		peerID:    from,
@@ -1330,7 +1442,12 @@ func (s *Server) reconcileConnectionStates(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, reconcileTimeout)
 	defer cancel()
 
-	peers, err := s.peerRegistry.ListPeers(ctx, nil, 0, 0, false, false)
+	// libp2p peers only. Liveness comes from P2PClient.GetPeers(), which
+	// reports libp2p IDs, so a wire-protocol peer could never be a member of
+	// live and every one of them would take the "flagged but not live" arm
+	// below. Those entries are owned by the legacy service's own mirror, which
+	// is the only thing that knows whether a Bitcoin p2p connection is open.
+	peers, err := s.peerRegistry.ListPeers(ctx, transportHTTPFilter(), 0, 0, false, false)
 	if err != nil {
 		s.logger.Warnf("[reconcileConnectionStates] ListPeers failed: %v", err)
 		return
@@ -1579,4 +1696,16 @@ func (s *Server) disconnectBannedPeerByID(ctx context.Context, peerID peer.ID, r
 	}
 
 	s.removePeer(peerID)
+}
+
+// transportHTTPFilter returns a ListPeers transport filter that admits libp2p
+// (HTTP DataHub) peers only. Wire-protocol peers registered by the legacy
+// service are visibility-only entries: catchup fetches blocks and subtrees over
+// HTTP from a peer's DataHub, which a wire peer cannot serve. Filtering on
+// transport states that reason directly, rather than relying on a wire peer
+// happening to have an empty DataHubURL.
+func transportHTTPFilter() *blockchain_api.TransportType {
+	transport := blockchain_api.TransportType_TRANSPORT_HTTP
+
+	return &transport
 }

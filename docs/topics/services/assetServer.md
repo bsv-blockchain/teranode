@@ -470,8 +470,9 @@ The Asset Server provides real-time blockchain event notifications through WebSo
 
 - **WebSocket URL**: `/connection/websocket`
     - Protocol: WebSocket (ws:// or wss://)
-    - Default port: 8892 (configurable via `asset_centrifugeListenAddress`)
-    - Authentication: Automatic credential assignment on connection
+    - Served on the Asset HTTP server (`asset_httpListenAddress`, default port 8090). `asset_centrifugeListenAddress` only enables the socket and is not bound as a separate listener
+    - Authentication: none. Each connection is assigned a random user ID. The socket carries the same public, read-only telemetry the P2P service gossips
+    - Origin check: browser connections must come from the same hostname as the request or from `asset_centrifugeAllowOrigins`; cross-site origins get HTTP 403
     - Connection requirements: Asset service must have cached current node status from P2P
 
 #### Subscription Management
@@ -716,12 +717,17 @@ The Asset Server can be configured using various settings that control its behav
     - Impact: When `true`, disables real-time WebSocket functionality entirely
     - Code Usage: Controls conditional Centrifuge server creation (Server.go line 204)
 
-- **Asset Centrifuge Listen Address (`asset_centrifugeListenAddress`)**: WebSocket server listen address.
+- **Asset Centrifuge Listen Address (`asset_centrifugeListenAddress`)**: Enables the Centrifuge WebSocket when non-empty.
     - Type: `string`
     - Default: `":8892"`
     - Environment Variable: `TERANODE_ASSET_CENTRIFUGELISTENADDRESS`
-    - Impact: Determines Centrifuge WebSocket server listening address when enabled
-    - Code Usage: Used for Centrifuge server address configuration
+    - Impact: The address is **not bound**. The WebSocket is served on Asset HTTP at `/connection/websocket`, so restricting this address does not protect it
+    - Code Usage: An empty value skips Centrifuge creation; otherwise the value is only logged at startup
+
+- **Asset Centrifuge Allow Origins (`asset_centrifugeAllowOrigins`)**: Extra browser origins allowed to open the WebSocket.
+    - Type: `string` (pipe-separated `scheme://host[:port]` origins; `*` allows all)
+    - Default: `""` (same-host origins and non-browser clients only)
+    - Impact: Needed only when a reverse proxy rewrites the Host header seen by the Asset service
 
 **Centrifuge Subscription Channels:**
 
@@ -785,8 +791,8 @@ Centrifuge supports the following subscription channels:
 **Centrifuge Real-time Updates:**
 
 - **Primary Setting**: `asset_centrifuge_disable` (controls feature)
-- **Dependencies**: `asset_centrifugeListenAddress`, `asset_httpAddress`
-- **Interaction**: When enabled, requires valid HTTP address and listen address; URL validation performed
+- **Dependencies**: `asset_centrifugeListenAddress` (non-empty enables), `asset_httpAddress`, `asset_centrifugeAllowOrigins`
+- **Interaction**: When enabled, requires a valid HTTP address; URL validation performed. The WebSocket shares the Asset HTTP listener
 
 Centrifuge supports the following subscription channels:
 
@@ -887,7 +893,7 @@ See `docs/references/settings/services/asset_settings.md` for the full list of r
 - `TERANODE_ASSET_HTTPPUBLICADDRESS` - Public-facing URL
 - `TERANODE_ASSET_APIPREFIX` - API URL prefix
 - `TERANODE_ASSET_CENTRIFUGE_DISABLE` - Disable Centrifuge service
-- `TERANODE_ASSET_CENTRIFUGELISTENADDRESS` - Centrifuge listen address
+- `TERANODE_ASSET_CENTRIFUGELISTENADDRESS` - Enables the Centrifuge WebSocket when non-empty; not bound as a listener (the socket is served on Asset HTTP)
 - `TERANODE_ASSET_SIGN_HTTP_RESPONSES` - Enable response signing
 - `TERANODE_SECURITYLEVELHTTP` - HTTP security level
 - `TERANODE_SERVER_CERTFILE` - TLS certificate file

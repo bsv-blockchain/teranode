@@ -77,7 +77,17 @@ Provides health check information via gRPC, exposing the readiness health check 
 func (b *Blockchain) Init(ctx context.Context) error
 ```
 
-Initializes the blockchain service, setting up the finite state machine (FSM) that governs the service's operational states. It handles three initialization scenarios: test mode, new deployment, and normal operation where it restores the previously persisted state from storage.
+Initializes the blockchain service and its finite state machine (FSM). The
+test-only local override takes precedence; a fresh store uses
+`blockchain_initializeNodeInState` (empty means `CATCHINGBLOCKS`); and a restart
+normally restores its persisted state without validating unused boot configuration.
+Invalid configured states abort fresh-node startup; storage failures abort startup.
+Fresh or persisted `RUNNING` is checked against the active network's highest
+checkpoint. Below-checkpoint configured `RUNNING` fails without fallback;
+persisted `RUNNING` with a successfully read tip below the checkpoint is durably
+migrated to `CATCHINGBLOCKS`. Tip-read failures or missing metadata abort startup
+without changing the persisted state. Unrecognized persisted state names also
+abort startup without writes; `LEGACYSYNCING` retains its explicit migration.
 
 ### Start
 
@@ -524,7 +534,7 @@ Waits for the FSM to transition from the IDLE state.
 func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.SendFSMEventRequest) (*blockchain_api.GetFSMStateResponse, error)
 ```
 
-Sends an event to the finite state machine.
+Sends an explicit operator event to the finite state machine. Accepted transitions persist their destination before memory, notifications, or metrics change. Failed writes return an error; the database may nevertheless have committed, so retry the event or request a convenience target to reconcile before relying on restart state. No compensating rollback is attempted.
 
 ### Run
 
@@ -532,7 +542,11 @@ Sends an event to the finite state machine.
 func (b *Blockchain) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
 ```
 
-Transitions the FSM to the RUNNING state.
+Automatically promotes `CATCHINGBLOCKS` to `RUNNING`. It refuses automatic promotion from operator `IDLE`, including catchup retries after a lost response. Explicit operator `SendFSMEvent(RUN)` can leave IDLE when checkpoint-safe; explicit `CATCHUPBLOCKS` starts synchronization. A tip below the highest checkpoint or an unreadable tip refuses promotion.
+
+The Run, CatchUpBlocks, and Idle convenience RPCs check authoritative state under the transition lock. An already-current target normally succeeds without writing, but after an uncertain persistence result it succeeds only after an acknowledged write of that target. Clients contact the server even when their cached state already matches. Reconciliation emits no new transition notification.
+
+Catchup completion makes at most three promotion attempts for transient failures, with cancellable one-second backoff. Exhaustion warns that RUNNING was not durably confirmed and asks the operator to inspect FSM state, mining readiness and store health. This does not retry permanent state rejections or override an operator STOP.
 
 ### CatchUpBlocks
 
@@ -540,7 +554,9 @@ Transitions the FSM to the RUNNING state.
 func (b *Blockchain) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
 ```
 
-Transitions the FSM to the CATCHINGBLOCKS state.
+Automatically transitions RUNNING to CATCHINGBLOCKS and reconciles an already-current CATCHINGBLOCKS state. It refuses operator IDLE under the same transition lock as STOP and RUN. An explicit operator `SendFSMEvent(CATCHUPBLOCKS)` can start synchronization from IDLE.
+
+An IDLE refusal prevents block validation from starting its fetch/validation workers or scheduling a completion RUN. The consumer logs the refusal and clears processing markers without charging a peer failure or consuming the per-block retry budget. Catchup attempt telemetry may already have been recorded before FSM admission. A later notification can retry after explicit resume; immediate replay is not guaranteed.
 
 ### Idle
 

@@ -61,31 +61,32 @@ func policyFromSettings(p *settings.PolicySettings) *FeePolicy {
 
 // NodeStatusMessage represents a node status update message
 type NodeStatusMessage struct {
-	PeerID              string     `json:"peer_id"`
-	ClientName          string     `json:"client_name"` // Name of this node client
-	Type                string     `json:"type"`
-	BaseURL             string     `json:"base_url"`
-	PropagationURL      string     `json:"propagation_url,omitempty"` // Optional URL for peers to use for propagating txs (defaults to BaseURL if empty)
-	Version             string     `json:"version"`
-	CommitHash          string     `json:"commit_hash"`
-	BestBlockHash       string     `json:"best_block_hash"`
-	BestHeight          uint32     `json:"best_height"`
-	TxCount             uint64     `json:"tx_count,omitempty"`      // Number of transactions in block assembly
-	SubtreeCount        uint32     `json:"subtree_count,omitempty"` // Number of subtrees in block assembly
-	FSMState            string     `json:"fsm_state"`
-	StartTime           int64      `json:"start_time"`
-	Uptime              float64    `json:"uptime"`
-	MinerName           string     `json:"miner_name"` // Name of the miner that mined the best block
-	ListenMode          string     `json:"listen_mode"`
-	ChainWork           string     `json:"chain_work"`                      // Chain work as hex string
-	SyncPeerID          string     `json:"sync_peer_id,omitempty"`          // ID of the peer we're syncing from
-	SyncPeerHeight      uint32     `json:"sync_peer_height,omitempty"`      // Height of the sync peer
-	SyncPeerBlockHash   string     `json:"sync_peer_block_hash,omitempty"`  // Best block hash of the sync peer
-	SyncConnectedAt     int64      `json:"sync_connected_at,omitempty"`     // Unix timestamp when we first connected to this sync peer
-	MinMiningTxFee      *float64   `json:"min_mining_tx_fee,omitempty"`     // Minimum mining transaction fee configured for this node (nil = unknown, 0 = no fee). Prefer FeePolicy.MiningFee.
-	FeePolicy           *FeePolicy `json:"fee_policy,omitempty"`            // Full fee policy advertised to peers (nil = unknown/old peer)
-	ConnectedPeersCount int        `json:"connected_peers_count,omitempty"` // Number of connected peers
-	Storage             string     `json:"storage,omitempty"`               // Storage mode: "full" (block persister running and caught up), "pruned" (no persister or lagging), or empty (old version)
+	PeerID                    string     `json:"peer_id"`
+	ClientName                string     `json:"client_name"` // Name of this node client
+	Type                      string     `json:"type"`
+	BaseURL                   string     `json:"base_url"`
+	PropagationURL            string     `json:"propagation_url,omitempty"` // Optional URL for peers to use for propagating txs (defaults to BaseURL if empty)
+	Version                   string     `json:"version"`
+	CommitHash                string     `json:"commit_hash"`
+	BestBlockHash             string     `json:"best_block_hash"`
+	BestHeight                uint32     `json:"best_height"`
+	TxCount                   uint64     `json:"tx_count,omitempty"`      // Number of transactions in block assembly
+	SubtreeCount              uint32     `json:"subtree_count,omitempty"` // Number of subtrees in block assembly
+	FSMState                  string     `json:"fsm_state"`
+	StartTime                 int64      `json:"start_time"`
+	Uptime                    float64    `json:"uptime"`
+	MinerName                 string     `json:"miner_name"` // Name of the miner that mined the best block
+	ListenMode                string     `json:"listen_mode"`
+	ChainWork                 string     `json:"chain_work"`                             // Chain work as hex string
+	SyncPeerID                string     `json:"sync_peer_id,omitempty"`                 // ID of the peer we're syncing from
+	SyncPeerHeight            uint32     `json:"sync_peer_height,omitempty"`             // Height of the sync peer
+	SyncPeerBlockHash         string     `json:"sync_peer_block_hash,omitempty"`         // Best block hash of the sync peer
+	SyncConnectedAt           int64      `json:"sync_connected_at,omitempty"`            // Unix timestamp when we first connected to this sync peer
+	MinMiningTxFee            *float64   `json:"min_mining_tx_fee,omitempty"`            // Minimum mining transaction fee configured for this node (nil = unknown, 0 = no fee). Prefer FeePolicy.MiningFee.
+	FeePolicy                 *FeePolicy `json:"fee_policy,omitempty"`                   // Full fee policy advertised to peers (nil = unknown/old peer)
+	ConnectedPeersCount       int        `json:"connected_peers_count,omitempty"`        // Number of connected peers
+	LegacyConnectedPeersCount int        `json:"legacy_connected_peers_count,omitempty"` // Number of connected legacy (Bitcoin wire protocol) peers
+	Storage                   string     `json:"storage,omitempty"`                      // Storage mode: "full" (block persister running and caught up), "pruned" (no persister or lagging), or empty (old version)
 }
 
 // BlockMessage announces the availability of a new block to the P2P network.

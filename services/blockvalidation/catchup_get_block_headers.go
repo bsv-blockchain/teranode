@@ -234,8 +234,14 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 
 		u.logger.Debugf("[catchup][%s] iteration %d: requesting headers with locator starting at %s (timeout: %v)", chainTipHash.String(), iteration, currentLocatorHashes[0].String(), iterationTimeout)
 
-		// Fetch with retry using iteration context with timeout
-		blockHeadersBytes, err := catchup.FetchHeadersWithRetry(iterCtx, u.logger, requestURL, maxRetries)
+		// Fetch with retry using iteration context with timeout. The request always asks for
+		// maxBlockHeadersPerRequest headers of a fixed BlockHeaderSize each, but the peer's
+		// response legitimately includes one more: the starting (common-ancestor) header is
+		// itself echoed back, duplicating the previous iteration's last header (see the
+		// dedup at "GetBlockHeadersFromOldest includes the starting block" below). +1 accounts
+		// for that extra header so a well-behaved peer's response is never rejected.
+		maxHeaderBytes := int64(maxBlockHeadersPerRequest+1) * int64(model.BlockHeaderSize)
+		blockHeadersBytes, err := catchup.FetchHeadersWithRetry(iterCtx, u.logger, requestURL, maxRetries, maxHeaderBytes)
 		iterCancel() // Clean up the iteration context
 		if err != nil {
 			// Check if it's specifically a context deadline exceeded from the iteration timeout
@@ -328,7 +334,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 				// Report malicious behavior to P2P service
 				u.reportCatchupMalicious(ctx, identifier, "malicious response during header parsing")
 
-				u.logger.Errorf("[catchup][%s] SECURITY: Peer %s sent malicious headers - should be banned (banning not yet implemented)", chainTipHash.String(), baseURL)
+				u.logger.Errorf("[catchup][%s] SECURITY: Peer %s sent malicious headers - reported as malicious for ban scoring", chainTipHash.String(), baseURL)
 
 				return catchup.CreateCatchupResult(
 					allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,

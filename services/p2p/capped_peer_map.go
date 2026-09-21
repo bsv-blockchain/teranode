@@ -15,46 +15,54 @@ import (
 // letting a distinct-hash flood balloon memory between sweeps and making the
 // sweep's own full-map sort scale with the flood.
 //
-// At capacity a new key evicts the OLDEST entry rather than being refused.
+// At capacity a new key evicts an existing entry rather than being refused.
 // That direction is deliberate: refusing the new key would let a flooder fill
 // every slot with junk hashes ahead of time and so suppress attribution for
-// the invalid block it announces next. Evicting oldest keeps memory bounded
-// while always retaining the most recent announcements, which are the ones an
-// in-flight validation is about to report.
+// the invalid block it announces next. Which entry is evicted depends on who
+// is inserting (issue 1503): a peer already holding at least its fair share
+// of the map — the capacity divided by the number of peers present — evicts
+// ITS OWN oldest entry, and only a peer below that share evicts the global
+// oldest. Past its share a flooder's pressure therefore lands on its own junk,
+// while an honest peer holding a handful of entries keeps the old
+// global-oldest behavior. The share is computed from the peers actually in
+// the map, so it needs no tuning and adapts as the mix changes.
 //
-// What this does NOT do is make attribution flood-proof, in two distinct ways.
+// What this bounds — not eliminates — is cross-peer washout. While ramping up
+// to its share on an already-full map, each identity still evicts the global
+// oldest, so one flooder displaces up to one share's worth of other peers'
+// oldest entries (previously: the entire map), and a sybil flood can wash the
+// whole map at a cost of one identity (a live libp2p connection) per share.
 //
-// Cross-peer: the map is a single space shared by all peers, so a peer that
-// announces enough distinct hashes AFTER an honest announcement can age that
-// honest entry out before the block finishes validating. Evicting oldest
-// changes when a flooder can strike, not whether it can; closing that needs a
-// per-peer share of the map, tracked in issue 1503.
+// Self-eviction remains: a peer at its share drops its own oldest entry, so a
+// peer can still age out its own attribution by announcing enough distinct
+// hashes between serving an invalid block and its verdict (issue 1433). For
+// blocks, that no longer voids the ban: the invalid-block Kafka message now
+// carries the announcer's peer ID and DataHub URL end-to-end, so the consumer
+// does not depend on this map when block validation knows the provenance —
+// and the subtree report path has carried a URL fallback all along.
 //
-// Self-eviction: a peer can drop ITS OWN attribution the same way, by
-// announcing maxSize further distinct hashes on the same topic between serving
-// an invalid block and that block being reported. This is the sharper of the
-// two, because the invalid-block Kafka message carries only the hash and a
-// reason, so this map is the sole attribution channel the ban path has — losing
-// the entry means the peer is never scored. It is not created here (the sweep
-// on main trimmed oldest-first too), but it is made cheaper: the retention
-// window between sweeps is now set by the announcement rate, which the attacker
-// controls, rather than by the cleanup timer, which it does not. A per-peer
-// share does not help, since a peer evicting from its own share is exactly the
-// case; it needs a per-peer announcement budget, tracked in issue 1433.
+// Attribution from this map is best-effort, as the TTL already implies.
 //
-// Attribution is best-effort here, as the TTL already implies.
-//
-// Eviction is O(1): a list holds keys in insertion order (most recent at the
-// back), so no sort is needed at insert or at sweep time.
+// Eviction is O(1): a global list holds keys in insertion order (most recent
+// at the back), each peer's entries are threaded onto a per-peer list in the
+// same order, and every node carries its element in both, so no sort or scan
+// is needed at insert or at sweep time.
 //
 // There is no unbounded mode. An unconfigured map falls back to
 // defaultPeerMapMaxSize rather than growing without limit, so the control
 // cannot be defeated by a construction path that forgets to configure it.
 type cappedPeerMap struct {
 	mu      sync.Mutex
-	entries map[string]*list.Element
+	entries map[string]*peerMapNode
 	order   *list.List // front = oldest, back = newest; values are *peerMapNode
 	maxSize int
+
+	// perPeer threads each peer's live entries in insertion order (values are
+	// the same *peerMapNode as in order). It is what makes fair-share eviction
+	// O(1): the inserter's own oldest entry is the front of its list. A peer's
+	// list is removed when its last entry goes, so len(perPeer) counts the
+	// peers actually holding entries — the denominator of the fair share.
+	perPeer map[string]*list.List
 
 	// evicted counts entries dropped to make room since the last sweep read —
 	// flood observability without a per-insert log line. Guarded by mu, not
@@ -103,11 +111,15 @@ type evictionStats struct {
 	spread bool
 }
 
-// peerMapNode is the list payload: the key plus its entry, so evicting from
-// the list front also identifies the map key to delete.
+// peerMapNode is the shared payload of both lists: the key, its entry, and the
+// node's element in each list, so eviction from either direction can unlink
+// the node from both and delete its map key without a scan.
 type peerMapNode struct {
 	hash  string
 	entry peerMapEntry
+
+	globalElem *list.Element // this node's element in order
+	peerElem   *list.Element // this node's element in perPeer[entry.peerID]
 }
 
 // setMaxSize configures the insert cap, normalising a non-positive value to
@@ -140,26 +152,40 @@ func (m *cappedPeerMap) capLocked() int {
 // init prepares the internal structures; callers must hold the mutex.
 func (m *cappedPeerMap) initLocked() {
 	if m.entries == nil {
-		m.entries = make(map[string]*list.Element)
+		m.entries = make(map[string]*peerMapNode)
 		m.order = list.New()
+		m.perPeer = make(map[string]*list.List)
 	}
 }
 
-// Store inserts or updates an entry, evicting the oldest entry first when a
-// new key would exceed the cap. Updating an existing key refreshes its value
-// and its recency, so attribution for a hash announced by two peers is
-// last-writer-wins — unchanged from the sync.Map this replaced, and reachable
-// only when a second node genuinely announces the same hash as its own tip,
-// since the fromID check rejects re-attribution by relays.
+// Store inserts or updates an entry, evicting an existing entry first when a
+// new key would exceed the cap — the inserter's own oldest when it already
+// holds its fair share of the map, the global oldest otherwise (issue 1503).
+// Updating an existing key refreshes its value and its recency, so attribution
+// for a hash announced by two peers is last-writer-wins — unchanged from the
+// sync.Map this replaced, and reachable only when a second node genuinely
+// announces the same hash as its own tip, since the fromID check rejects
+// re-attribution by relays.
 func (m *cappedPeerMap) Store(hash string, entry peerMapEntry) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.initLocked()
 
-	if existing, ok := m.entries[hash]; ok {
-		existing.Value.(*peerMapNode).entry = entry
-		m.order.MoveToBack(existing)
+	if node, ok := m.entries[hash]; ok {
+		oldPeerID := node.entry.peerID
+		node.entry = entry
+		m.order.MoveToBack(node.globalElem)
+
+		// Re-attribution moves the node to the new owner's list; the length of
+		// each list is that peer's fair-share usage, so it must follow the
+		// entry it accounts for.
+		if oldPeerID == entry.peerID {
+			m.perPeer[entry.peerID].MoveToBack(node.peerElem)
+		} else {
+			m.removePeerElemLocked(oldPeerID, node.peerElem)
+			node.peerElem = m.peerListLocked(entry.peerID).PushBack(node)
+		}
 
 		return
 	}
@@ -171,20 +197,16 @@ func (m *cappedPeerMap) Store(hash string, entry peerMapEntry) {
 	// updates refresh in place and leave the length alone.
 	limit := m.capLocked()
 
-	for m.order.Len() >= limit {
-		// Front cannot be nil here: capLocked never returns less than 1, so the
-		// loop guard means the list is non-empty. Taken defensively rather than
-		// asserted, because the alternative to a wrong guess here is a nil
-		// dereference on the gossip hot path.
-		oldest := m.order.Front()
-		if oldest == nil {
+	for len(m.entries) >= limit {
+		victim := m.fairShareVictimLocked(entry.peerID, limit)
+		if victim == nil {
+			// Both lists empty while entries says otherwise cannot happen, but
+			// the alternative to a wrong guess here is a nil dereference on the
+			// gossip hot path.
 			break
 		}
 
-		node := oldest.Value.(*peerMapNode)
-
-		m.order.Remove(oldest)
-		delete(m.entries, node.hash)
+		m.removeNodeLocked(victim)
 		m.evicted++
 
 		// Attribute the eviction to the peer whose insert forced it, not to
@@ -194,7 +216,69 @@ func (m *cappedPeerMap) Store(hash string, entry peerMapEntry) {
 		m.recordEvictorLocked(entry.peerID)
 	}
 
-	m.entries[hash] = m.order.PushBack(&peerMapNode{hash: hash, entry: entry})
+	node := &peerMapNode{hash: hash, entry: entry}
+	node.globalElem = m.order.PushBack(node)
+	node.peerElem = m.peerListLocked(entry.peerID).PushBack(node)
+	m.entries[hash] = node
+}
+
+// fairShareVictimLocked picks which entry the full map gives up for peerID's
+// new key (issue 1503). An inserter already holding at least its fair share —
+// limit divided by the number of peers present — gives up its own oldest
+// entry, so a flooder's pressure past its share lands on the flooder's own
+// junk; anyone below that share displaces the global oldest, the
+// pre-fair-share behavior (which is why a flooder still displaces up to one
+// share's worth of other peers' entries while ramping up — see the type
+// comment). The
+// integer division never yields zero at capacity (each present peer holds at
+// least one entry, so len(perPeer) <= len(entries)); draining an over-cap map
+// after a live cap decrease can push it to zero, which just means every
+// present peer is over its share and self-evicts first — the drain still
+// terminates because each iteration removes one entry. Callers must hold the
+// mutex.
+func (m *cappedPeerMap) fairShareVictimLocked(peerID string, limit int) *peerMapNode {
+	if pl := m.perPeer[peerID]; pl != nil && pl.Len() >= limit/len(m.perPeer) {
+		return pl.Front().Value.(*peerMapNode)
+	}
+
+	if oldest := m.order.Front(); oldest != nil {
+		return oldest.Value.(*peerMapNode)
+	}
+
+	return nil
+}
+
+// peerListLocked returns peerID's insertion-order list, creating it on first
+// use. Callers must hold the mutex.
+func (m *cappedPeerMap) peerListLocked(peerID string) *list.List {
+	pl := m.perPeer[peerID]
+	if pl == nil {
+		pl = list.New()
+		m.perPeer[peerID] = pl
+	}
+
+	return pl
+}
+
+// removePeerElemLocked unlinks one element from peerID's list, dropping the
+// list itself when it empties so len(perPeer) keeps counting only peers that
+// hold entries. Callers must hold the mutex.
+func (m *cappedPeerMap) removePeerElemLocked(peerID string, elem *list.Element) {
+	if pl := m.perPeer[peerID]; pl != nil {
+		pl.Remove(elem)
+
+		if pl.Len() == 0 {
+			delete(m.perPeer, peerID)
+		}
+	}
+}
+
+// removeNodeLocked unlinks node from both lists and deletes its key. Callers
+// must hold the mutex.
+func (m *cappedPeerMap) removeNodeLocked(node *peerMapNode) {
+	m.order.Remove(node.globalElem)
+	m.removePeerElemLocked(node.entry.peerID, node.peerElem)
+	delete(m.entries, node.hash)
 }
 
 // recordEvictorLocked attributes one eviction to the peer whose insert forced
@@ -237,12 +321,12 @@ func (m *cappedPeerMap) Load(hash string) (peerMapEntry, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	element, ok := m.entries[hash]
+	node, ok := m.entries[hash]
 	if !ok {
 		return peerMapEntry{}, false
 	}
 
-	return element.Value.(*peerMapNode).entry, true
+	return node.entry, true
 }
 
 // Delete removes the entry for hash, if present.
@@ -250,9 +334,8 @@ func (m *cappedPeerMap) Delete(hash string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if element, ok := m.entries[hash]; ok {
-		m.order.Remove(element)
-		delete(m.entries, hash)
+	if node, ok := m.entries[hash]; ok {
+		m.removeNodeLocked(node)
 	}
 }
 
@@ -267,6 +350,7 @@ func (m *cappedPeerMap) Clear() {
 
 	m.entries = nil
 	m.order = nil
+	m.perPeer = nil
 	m.evictors = nil
 	m.evictorsOverflow = false
 
@@ -312,8 +396,7 @@ func (m *cappedPeerMap) DeleteExpired(cutoff time.Time) int {
 		next := element.Next()
 
 		if node := element.Value.(*peerMapNode); node.entry.timestamp.Before(cutoff) {
-			m.order.Remove(element)
-			delete(m.entries, node.hash)
+			m.removeNodeLocked(node)
 
 			removed++
 		}

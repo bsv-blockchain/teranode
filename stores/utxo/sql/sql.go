@@ -1753,7 +1753,14 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 		}
 	}
 
-	if contains(bins, fields.Tx) {
+	// fields.Outputs is a projection in its own right: the outputs query above
+	// already ran for it, and the validator's re-extension path reads nothing but
+	// Outputs[vout] (GHSA-v76m-6vc7-g7c7). Without this the decoded outputs were
+	// built and then dropped, and Data.Tx came back nil.
+	//
+	// fields.Inputs deliberately not included: it has never attached here, and
+	// widening it would change what existing callers of that projection see.
+	if contains(bins, fields.Tx) || contains(bins, fields.Outputs) {
 		data.Tx = &tx
 	}
 
@@ -3192,6 +3199,13 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
+// DeleteComplete removes a transaction and all its associated data. The SQL store
+// never paginates a transaction across records, so its Delete already removes the
+// whole transaction; DeleteComplete is therefore equivalent to Delete here.
+func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
+	return s.Delete(ctx, hash)
+}
+
 func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
 	if len(hashes) == 0 {
 		return make(map[chainhash.Hash][]uint32), nil
@@ -3728,9 +3742,17 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 			continue // already marked as error above
 		}
 
-		// Build tx if needed for Tx or TxInpoints fields
+		// Build tx for the projections that are meant to land in Data.Tx.
+		// fields.Outputs is one of them: the outputs query already ran for it and
+		// the validator's re-extension path reads nothing but Outputs[vout]
+		// (GHSA-v76m-6vc7-g7c7), but the rows were built and then dropped, so
+		// Data.Tx came back nil.
+		//
+		// Deliberately NOT keyed on needInputs/needOutputs: needInputs is also
+		// true for fields.Inputs, which has always returned a nil Data.Tx, and
+		// callers distinguish "no transaction" by that nil.
 		var tx *bt.Tx
-		if contains(bins, fields.Tx) || contains(bins, fields.TxInpoints) {
+		if contains(bins, fields.Tx) || contains(bins, fields.TxInpoints) || contains(bins, fields.Outputs) {
 			tx = &bt.Tx{
 				Version:  row.version,
 				LockTime: row.lockTime,
@@ -4595,7 +4617,8 @@ func (s *Store) setUnlockedBulk(ctx context.Context, txHashes []chainhash.Hash) 
 //
 // Behavior:
 //   - onLongestChain=true: Clears unmined_since (transaction is mined on main chain)
-//   - onLongestChain=false: Sets unmined_since to current height (transaction is unmined)
+//   - onLongestChain=false: Keeps an existing unmined_since; a NULL value is stamped with
+//     utxo.BackdatedUnminedSince (see the Aerospike implementation for why)
 //
 // CRITICAL - Resilient Error Handling (Must Not Fail Fast):
 // This function attempts to update ALL transactions even if some fail. This is essential during
@@ -4673,10 +4696,15 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 			q = fmt.Sprintf(`UPDATE transactions SET unmined_since = NULL WHERE hash IN %s`, inClause)
 			args = inArgs
 		} else {
-			// currentBlockHeight is $1, hashes start at $2
+			// unminedSince is $1, hashes start at $2. COALESCE keeps an existing unmined_since;
+			// only a NULL value (mined -> unmined) is stamped, and it is backdated so the
+			// pruner's parent-preservation scan picks the transaction up on its next cycle
+			// (issue 1768; see utxo.BackdatedUnminedSince).
+			unminedSince := utxo.BackdatedUnminedSince(currentBlockHeight, s.settings.UtxoStore.UnminedTxRetention)
+
 			inClause, inArgs := buildINClause(chunk, 2)
-			q = fmt.Sprintf(`UPDATE transactions SET unmined_since = $1 WHERE hash IN %s`, inClause)
-			args = append([]interface{}{currentBlockHeight}, inArgs...)
+			q = fmt.Sprintf(`UPDATE transactions SET unmined_since = COALESCE(unmined_since, $1) WHERE hash IN %s`, inClause)
+			args = append([]interface{}{unminedSince}, inArgs...)
 		}
 
 		result, err := s.db.ExecContext(ctx, q, args...)

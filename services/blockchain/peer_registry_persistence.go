@@ -44,7 +44,10 @@ type persistedBanEntry struct {
 //   - 2: added catchup-specific counters (CatchupAttempts/CatchupSuccesses/
 //     CatchupFailures) to PeerInfo. Bumped so a downgraded binary refuses to
 //     re-save (and thereby silently zero) counters it does not understand.
-const persistedRegistryVersion = 2
+//   - 3: added the nested Legacy block (wire-protocol-only peer fields) to
+//     PeerInfo. Bumped for the same reason: a version 2 binary would drop the
+//     legacy fields on its next save.
+const persistedRegistryVersion = 3
 
 // errFutureRegistryVersion is returned by loadPeerRegistry when the blob's
 // envelope.Version is newer than this binary supports. Callers (currently

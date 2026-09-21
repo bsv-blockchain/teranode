@@ -77,6 +77,13 @@ func (m *MockUtxostore) Delete(ctx context.Context, hash *chainhash.Hash) error 
 	return args.Error(0)
 }
 
+// DeleteComplete mocks the complete deletion of a transaction (master record,
+// pagination children and external blob(s)) from the UTXO store.
+func (m *MockUtxostore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
+	args := m.Called(ctx, hash)
+	return args.Error(0)
+}
+
 // GetSpend mocks the retrieval of spend information from the UTXO store.
 // Returns the configured mock response for spend lookup operations.
 func (m *MockUtxostore) GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error) {

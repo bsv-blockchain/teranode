@@ -58,12 +58,11 @@ func makeChildResult(t *testing.T, s *Service, childSeed byte, parents []chainha
 	}
 }
 
-// newTestServiceForSkip builds a Service configured for direct unit testing of
-// processRecordChunk's prunedSet skip path. Defensive mode is off and
-// SkipDeletions is on so the deletion path stays gated; the test only
-// exercises chunks where ALL inputs reference parents already in the set,
-// so flushCleanupBatches never attempts a real Aerospike call.
-func newTestServiceForSkip(t *testing.T) *Service {
+// newTestService builds a Service configured for direct unit testing of
+// processRecordChunk. Defensive mode is off and SkipDeletions is on so the
+// deletion path stays gated and flushCleanupBatches never attempts a real
+// Aerospike call.
+func newTestService(t *testing.T) *Service {
 	t.Helper()
 	ensurePrometheusMetrics()
 
@@ -90,66 +89,14 @@ func newTestServiceForSkip(t *testing.T) *Service {
 	}
 }
 
-// TestProcessRecordChunk_SkipsParentsInPrunedSet verifies that when every
-// parent TXID referenced by a chunk is registered in the shared PrunedTxSet,
-// processRecordChunk:
-//   - omits all parent-update accumulation
-//   - increments utxo_pruner_parents_skipped_pruned_total once per input
-//   - reports the child record as processed (skipped count = 0)
-//
-// Because all parent updates are skipped, flushCleanupBatches receives an
-// empty parentUpdates map and never touches the Aerospike client — making
-// the test deterministic without a real cluster.
-func TestProcessRecordChunk_SkipsParentsInPrunedSet(t *testing.T) {
+// TestProcessRecordChunk_NilPrunedSetIsNoOp verifies that the nil prunedSet
+// production always passes (the cuckoo skip is disabled, see #1701) causes no
+// skipped-pruned increments. The chunk is crafted with zero inputs so no
+// parent updates accumulate and the flushCleanupBatches deletion path stays
+// gated by SkipDeletions.
+func TestProcessRecordChunk_NilPrunedSetIsNoOp(t *testing.T) {
 	ctx := context.Background()
-	svc := newTestServiceForSkip(t)
-
-	// Two distinct parents to confirm the metric increments per input.
-	// PrunedTxSet.CheckAndRemove is destructive, but each parent appears
-	// only once in the chunk, so the destructive semantic is fine here.
-	var parentA chainhash.Hash
-	for i := range parentA {
-		parentA[i] = 0xAA
-	}
-	var parentB chainhash.Hash
-	for i := range parentB {
-		parentB[i] = 0xBB
-	}
-
-	prunedSet := NewPrunedTxSet(4, 4096)
-	prunedSet.Add(parentA)
-	prunedSet.Add(parentB)
-	require.Equal(t, 2, prunedSet.Len())
-
-	chunk := []*aerospike.Result{
-		makeChildResult(t, svc, 0x11, []chainhash.Hash{parentA, parentB}),
-	}
-
-	before := testutil.ToFloat64(prometheusUtxoParentsSkippedPruned)
-
-	processed, skipped, err := svc.processRecordChunk(ctx, 1000, chunk, prunedSet)
-	require.NoError(t, err)
-	require.Equal(t, 1, processed, "the record itself is still processed for deletion")
-	require.Equal(t, 0, skipped, "no defensive skip when defensive mode is off")
-
-	after := testutil.ToFloat64(prometheusUtxoParentsSkippedPruned)
-	require.Equal(t, float64(2), after-before,
-		"each input whose parent is in the set must increment the skipped-pruned metric")
-
-	// Both parents removed via CheckAndRemove (Len -= 2), and the chunk's
-	// own TXID was Added by the up-front loop at the start of
-	// processRecordChunk (Len += 1). Net: 1 entry (the child).
-	require.Equal(t, 1, prunedSet.Len(),
-		"parents removed, child TXID added by the up-front Add loop")
-}
-
-// TestProcessRecordChunk_EmptyPrunedSetIsNoOp verifies that an empty
-// PrunedTxSet does not cause any skipped-pruned increments. The chunk is
-// crafted with zero inputs so no parent updates accumulate and the
-// flushCleanupBatches deletion path stays gated by SkipDeletions.
-func TestProcessRecordChunk_EmptyPrunedSetIsNoOp(t *testing.T) {
-	ctx := context.Background()
-	svc := newTestServiceForSkip(t)
+	svc := newTestService(t)
 
 	var childTxID chainhash.Hash
 	for i := range childTxID {
@@ -174,11 +121,9 @@ func TestProcessRecordChunk_EmptyPrunedSetIsNoOp(t *testing.T) {
 		},
 	}
 
-	prunedSet := NewPrunedTxSet(4, 4096)
-
 	before := testutil.ToFloat64(prometheusUtxoParentsSkippedPruned)
 
-	processed, skipped, err := svc.processRecordChunk(ctx, 1000, chunk, prunedSet)
+	processed, skipped, err := svc.processRecordChunk(ctx, 1000, chunk, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, processed)
 	require.Equal(t, 0, skipped)

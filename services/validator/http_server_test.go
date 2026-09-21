@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -49,6 +51,10 @@ func TestHTTPEndpoints(t *testing.T) {
 			Fee:          32279815860,
 			SizeInBytes:  245,
 			BlockHeights: []uint32{999},
+			// The validator re-extends from the parent's own outputs rather than
+			// trusting the ones the submitter supplied (GHSA-v76m-6vc7-g7c7), so
+			// the mocked parent must carry the output sampleTxHex spends.
+			Tx: sampleTxParent(),
 		}
 		utxoMock.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(metaData, nil)
 
@@ -104,6 +110,10 @@ func TestHTTPEndpoints(t *testing.T) {
 			Fee:          32279815860,
 			SizeInBytes:  245,
 			BlockHeights: []uint32{999},
+			// The validator re-extends from the parent's own outputs rather than
+			// trusting the ones the submitter supplied (GHSA-v76m-6vc7-g7c7), so
+			// the mocked parent must carry the output sampleTxHex spends.
+			Tx: sampleTxParent(),
 		}
 		utxoMock.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(metaData, nil)
 
@@ -145,4 +155,20 @@ func TestHTTPEndpoints(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, rec.Code, "Response body: %s", rec.Body.String())
 	})
+}
+
+// sampleTxParent is the parent transaction sampleTxHex spends: its input takes
+// vout 1, so the output vector is padded to that index.
+func sampleTxParent() *bt.Tx {
+	script, err := hex.DecodeString("76a914c52f8797b57f0b0cfc5856a5dd4a6f491a41822c88ac")
+	if err != nil {
+		panic(err)
+	}
+
+	return &bt.Tx{
+		Outputs: []*bt.Output{
+			{Satoshis: 0, LockingScript: bscript.NewFromBytes(script)},
+			{Satoshis: 797702, LockingScript: bscript.NewFromBytes(script)},
+		},
+	}
 }

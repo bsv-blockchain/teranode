@@ -302,6 +302,16 @@ type SubtreeProcessor struct {
 	// blockchainClient provides access to blockchain data
 	blockchainClient blockchain.ClientI
 
+	// pendingInvalidations collects blocks whose conflict resolution asked to
+	// demote a transaction confirmed on that block's own ancestry. Such a block
+	// is an ancestor double spend and should never have been accepted; the
+	// demotion is refused so UTXO state stays consistent with the honest chain,
+	// and the block hash is parked here for BlockAssembler to invalidate AFTER
+	// block movement completes. Invalidating inline would re-enter the
+	// blockchain service while this processor still holds movement state.
+	pendingInvalidationsMu sync.Mutex
+	pendingInvalidations   []chainhash.Hash
+
 	// subtreeStore provides persistent storage for subtrees
 	subtreeStore blob.Store
 
@@ -528,7 +538,8 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 		return nil, errors.NewInvalidArgumentError("error adding coinbase placeholder to first subtree", err)
 	}
 
-	queue := NewLockFreeQueue()
+	maxQueueItems := normalizeMaxQueueItems(logger, tSettings.BlockAssembly.MaxQueueItems, tSettings.BlockAssembly.SendBatchSize)
+	queue := NewLockFreeQueueWithLimit(maxQueueItems)
 
 	// Calculate subtree sample size based on expected block time
 	// With ~10 min blocks, 18 samples = ~3 hours of history
@@ -1571,7 +1582,8 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 					// postProcess). Any in-flight tx whose parent gets cascaded here
 					// is dropped by that drain regardless of cascade discovery, so
 					// the per-block transient set is not needed here.
-					losingTxHashesMap, _, err := utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, *block.Hash(), conflictingNodes, processedConflictingHashesMap)
+					losingTxHashesMap, _, err := utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, *block.Hash(), conflictingNodes, processedConflictingHashesMap,
+						utxostore.NewAncestryGuard(stp.blockchainClient.CheckBlockIsAncestorOfBlock), stp.refusalHandler(block))
 					if err != nil {
 						return errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions in Reset()", block.String(), err)
 					}
@@ -1950,6 +1962,15 @@ func (stp *SubtreeProcessor) TxCount() uint64 {
 // number of batches - see LockFreeQueue.length for why that distinction
 // matters.
 //
+// For items added through the bounded reservation path (AddBatchIfRoom), this
+// counts reserved-or-published items: while a failed reservation is being rolled
+// back the value can transiently read slightly higher than the number of
+// dequeuable items, but it never reads lower than the published-outstanding
+// count — the directional guarantee the state-transition drain snapshot relies
+// on. The unbounded AddBatch path now reserves before publishing too, so it
+// upholds that same guarantee; it additionally bypasses the cap entirely and is
+// not used by the ingest handlers.
+//
 // Returns:
 //   - int64: Current queue length, in transactions
 func (stp *SubtreeProcessor) QueueLength() int64 {
@@ -2009,6 +2030,31 @@ func (stp *SubtreeProcessor) ConsumerStarted() bool {
 //   - bool: true once the consumer goroutine has exited
 func (stp *SubtreeProcessor) ConsumerExited() bool {
 	return stp.stopped.Load()
+}
+
+// QueueMaxItems returns the enforced (normalized) ingest-queue item cap, or a
+// value <= 0 when the queue is unbounded. It is the cap the reservation path
+// actually enforces, reported in the queue-full shed message.
+//
+// Returns:
+//   - int64: The enforced item cap (<= 0 when unbounded)
+func (stp *SubtreeProcessor) QueueMaxItems() int64 {
+	return stp.queue.MaxItems()
+}
+
+// QueueHeadAge returns how long the oldest batch still in the ingest queue has
+// been waiting. It is a diagnostic gauge for dispatcher-stall visibility and is
+// safe to call from a monitoring goroutine; it returns 0 when the queue is empty.
+//
+// Returns:
+//   - time.Duration: Age of the oldest queued batch, or 0 if the queue is empty
+func (stp *SubtreeProcessor) QueueHeadAge() time.Duration {
+	// Use the queue's injectable clock, the same source publish stamps batches
+	// with, so the age is a difference of two readings of one clock rather than a
+	// mix of the fake clock and wall time — deterministic under a fake clock and
+	// consistent with every other queue time comparison.
+	ageMillis := stp.queue.headAgeMillis(stp.queue.clock.Now().UnixMilli())
+	return time.Duration(ageMillis) * time.Millisecond
 }
 
 // SubtreeCount returns the total number of subtrees.
@@ -2597,13 +2643,35 @@ func (stp *SubtreeProcessor) updateChainedSubtreeCounts() {
 	stp.chainedSubtreesTotalSize.Store(totalSize)
 }
 
-// AddBatch adds a batch of transaction nodes to the processor queue.
+// AddBatch adds a batch of transaction nodes to the processor queue
+// unconditionally. This path bypasses the capacity bound but, like
+// AddBatchIfRoom, reserves its items before publishing so it upholds the
+// queueLength >= published-outstanding invariant; callers needing the bound must
+// use AddBatchIfRoom.
+//
+// Its only non-test caller is the teranodecli subtree benchmark, which drives the
+// processor directly and wants no cap. The ingest handlers must use AddBatchIfRoom:
+// this method is what the queue bound exists to keep them away from.
 //
 // Parameters:
 //   - nodes: Transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
 func (stp *SubtreeProcessor) AddBatch(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) {
 	stp.queue.enqueueBatch(nodes, txInpoints)
+}
+
+// AddBatchIfRoom adds a batch of transaction nodes to the processor queue only
+// if the configured capacity bound would not be exceeded, reporting whether it
+// did. When no bound is configured it never refuses, behaving as AddBatch.
+//
+// Parameters:
+//   - nodes: Transaction nodes to add
+//   - txInpoints: Parent transaction references for each node
+//
+// Returns:
+//   - bool: true if the batch was enqueued, false if it was refused for room
+func (stp *SubtreeProcessor) AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) bool {
+	return stp.queue.enqueueBatchIfRoom(nodes, txInpoints)
 }
 
 // AddDirectly adds a transaction node directly to the subtree processor without going through the queue.
@@ -3719,7 +3787,15 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// Assembly txs must be included because some may have entered the UTXO store via
 	// block validation of a non-longest-chain block (e.g., competing fork), where they
 	// were inserted with UnminedSince=0 (mined). These need unmined_since set.
-	// For txs that already have unmined_since set (from propagation), this is idempotent.
+	//
+	// This folds the WHOLE mempool into the mark-false set on every reorg. It is only safe
+	// because MarkTransactionsOnLongestChain(false) keeps an existing unmined_since and
+	// stamps only an absent one. Before that guard (issue 1768) every reorg rewrote
+	// unmined_since = currentBlockHeight across the mempool, which restarted the pruner's
+	// parent-preservation clock for every unmined child while each parent's deleteAtHeight
+	// kept counting from the original spend — a one-block fork opened a
+	// blockHeightRetention-unminedTxRetention window in which parents were pruned from
+	// under live children.
 	//
 	// MoveBack txs are handled by BlockAssembler.Reset (which calls
 	// MarkTransactionsOnLongestChain before reorgBlocks runs).
@@ -4438,6 +4514,72 @@ func (stp *SubtreeProcessor) createTransactionMapIfNeeded(ctx context.Context, b
 	return transactionMap, conflictingNodes, nil
 }
 
+// refusalHandler builds the refusal callback for utxostore.ProcessConflicting
+// for the block currently being applied. The guard itself is passed separately
+// as a required argument.
+//
+// The block is already stored by the time block assembly moves forward, so the
+// guard anchors on the block's own hash rather than its parent: the ancestry
+// query includes the target block itself, which also catches a losing
+// transaction mined in the applying block.
+//
+// A refused demotion means the block is an ancestor double spend. It is logged
+// at error level, counted on teranode_utxo_conflicting_demotion_refused_total,
+// and the block is queued for out-of-band invalidation.
+func (stp *SubtreeProcessor) refusalHandler(block *model.Block) utxostore.ProcessConflictingOption {
+	blockHash := *block.Hash()
+
+	return utxostore.WithRefusalHandler(
+		func(loser chainhash.Hash) {
+			stp.logger.Errorf("[processConflictingTransactions][%s] REFUSED to demote transaction %s: it is mined on this block's own ancestry. "+
+				"The block contains a double spend of a confirmed transaction and should not have been accepted; queuing it for invalidation",
+				blockHash.String(), loser.String())
+
+			stp.QueueInvalidation(blockHash)
+		},
+	)
+}
+
+// QueueInvalidation records a block that must be invalidated because its
+// conflict resolution would have reversed a spend confirmed in its own
+// ancestry. Idempotent.
+//
+// Also used to put a hash BACK on the queue when the invalidation RPC fails:
+// the refusal has already made conflict resolution a no-op, so until the block
+// is actually invalidated this node is building on a chain it knows to be
+// invalid, and dropping the request would leave that state with nothing but a
+// log line to find it by.
+func (stp *SubtreeProcessor) QueueInvalidation(blockHash chainhash.Hash) {
+	stp.pendingInvalidationsMu.Lock()
+	defer stp.pendingInvalidationsMu.Unlock()
+
+	for _, existing := range stp.pendingInvalidations {
+		if existing.Equal(blockHash) {
+			return
+		}
+	}
+
+	stp.pendingInvalidations = append(stp.pendingInvalidations, blockHash)
+}
+
+// DrainPendingInvalidations returns and clears the blocks whose conflict
+// resolution was refused because it would have reversed a confirmed spend.
+// BlockAssembler calls this after block movement has finished and invalidates
+// each one best-effort.
+func (stp *SubtreeProcessor) DrainPendingInvalidations() []chainhash.Hash {
+	stp.pendingInvalidationsMu.Lock()
+	defer stp.pendingInvalidationsMu.Unlock()
+
+	if len(stp.pendingInvalidations) == 0 {
+		return nil
+	}
+
+	drained := stp.pendingInvalidations
+	stp.pendingInvalidations = nil
+
+	return drained
+}
+
 // processConflictingTransactions handles conflicting transactions and returns
 // losing transaction hashes plus the transient conflicting-hash set populated
 // from the BFS cascade. Callers feed the set into the immediately-following
@@ -4518,7 +4660,8 @@ func (stp *SubtreeProcessor) processConflictingTransactions(ctx context.Context,
 		}
 
 		var allMarkedConflicting []chainhash.Hash
-		if losingTxHashesMap, allMarkedConflicting, err = utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, *block.Hash(), conflictingNodes, processedConflictingHashesMap); err != nil {
+		if losingTxHashesMap, allMarkedConflicting, err = utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, *block.Hash(), conflictingNodes, processedConflictingHashesMap,
+			utxostore.NewAncestryGuard(stp.blockchainClient.CheckBlockIsAncestorOfBlock), stp.refusalHandler(block)); err != nil {
 			return nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions", block.String(), err)
 		}
 

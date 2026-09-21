@@ -30,9 +30,6 @@ type P2PClientI interface {
 	// UpdateCatchupError stores the last catchup error for a peer.
 	UpdateCatchupError(ctx context.Context, peerID string, errorMsg string) error
 
-	// UpdateCatchupReputation updates the reputation score for a peer.
-	UpdateCatchupReputation(ctx context.Context, peerID string, score float64) error
-
 	// GetPeersForCatchup returns peers suitable for catchup operations.
 	// Returns a slice of PeerInfo sorted by reputation (highest first).
 	GetPeersForCatchup(ctx context.Context) ([]*p2p.PeerInfo, error)
@@ -56,7 +53,8 @@ type P2PClientI interface {
 	ReportValidatedChainProgress(ctx context.Context, peerID string, height uint32, blockHash string, chainWork []byte) error
 
 	// IsPeerMalicious checks if a peer is considered malicious based on their behavior.
-	// A peer is considered malicious if they are banned or have a very low reputation score.
+	// A peer is considered malicious if it is banned or has malicious behavior recorded
+	// against it (via RecordCatchupMalicious).
 	IsPeerMalicious(ctx context.Context, peerID string) (bool, string, error)
 
 	// IsPeerUnhealthy checks if a peer is considered unhealthy based on their performance.
@@ -66,4 +64,9 @@ type P2PClientI interface {
 	// RecordBytesDownloaded records the number of bytes downloaded via HTTP from a peer.
 	// This is called after downloading data (blocks, subtrees, etc.) from a peer's DataHub URL.
 	RecordBytesDownloaded(ctx context.Context, peerID string, bytesDownloaded uint64) error
+
+	// AddBanScore adds to a peer's ban score with the specified reason. Used to strike the
+	// peer that served a corrupt block body (bitcoin-sv/teranode#4692) without persisting the block
+	// as invalid; the registry maps the reason string to concrete penalty points.
+	AddBanScore(ctx context.Context, peerID string, reason string) error
 }

@@ -1,0 +1,374 @@
+package p2p
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/util/kafka"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+)
+
+// newSeenHashTestServer wires independent block and subtree producers at the
+// production buffer depth (gossipKafkaPublishBuffer), so the backpressure
+// tests exercise the drop threshold production actually configures and a drop
+// on one topic cannot mask the other.
+func newSeenHashTestServer(t *testing.T) (*Server, *blockchain.CentralizedPeerRegistry, *kafka.KafkaAsyncProducerMock, *kafka.KafkaAsyncProducerMock) {
+	t.Helper()
+
+	s, reg := newServerWithLocalRegistry(t)
+	setServerLocalHeight(t, s, 100)
+
+	mockP2P := new(MockServerP2PClient)
+	mockP2P.peerID = mustNewPeerID(t)
+	s.P2PClient = mockP2P
+	s.notificationCh = make(chan *notificationMsg, 256)
+
+	blockProducer := kafka.NewKafkaAsyncProducerMockWithBuffer(gossipKafkaPublishBuffer)
+	subtreeProducer := kafka.NewKafkaAsyncProducerMockWithBuffer(gossipKafkaPublishBuffer)
+	s.blocksKafkaProducerClient = blockProducer
+	s.subtreeKafkaProducerClient = subtreeProducer
+
+	return s, reg, blockProducer, subtreeProducer
+}
+
+func announceBlock(t *testing.T, s *Server, from peer.ID, blockHash string) {
+	t.Helper()
+
+	msgBytes, err := json.Marshal(BlockMessage{
+		PeerID:     from.String(),
+		ClientName: "client/1.0",
+		DataHubURL: "http://peer.example",
+		Hash:       blockHash,
+		Height:     101,
+	})
+	require.NoError(t, err)
+
+	s.handleBlockTopic(context.Background(), msgBytes, from.String())
+}
+
+func announceSubtree(t *testing.T, s *Server, from peer.ID, subtreeHash string) {
+	t.Helper()
+
+	msgBytes, err := json.Marshal(SubtreeMessage{
+		PeerID:     from.String(),
+		ClientName: "client/1.0",
+		DataHubURL: "http://peer.example",
+		Hash:       subtreeHash,
+	})
+	require.NoError(t, err)
+
+	s.handleSubtreeTopic(context.Background(), msgBytes, from.String())
+}
+
+func drainPublished(producer *kafka.KafkaAsyncProducerMock) []*kafka.Message {
+	var out []*kafka.Message
+	for {
+		select {
+		case msg := <-producer.PublishChannel():
+			out = append(out, msg)
+		default:
+			return out
+		}
+	}
+}
+
+// The first seenHashMaxPublishersPerHash distinct announcers of a hash reach
+// Kafka (block validation collects the later ones as alternative fetch
+// sources); everything past the budget, and every same-peer replay, is
+// suppressed. Per-peer bookkeeping still runs for suppressed announcements.
+func TestHandleBlockTopic_DuplicateAnnouncementSuppressed(t *testing.T) {
+	s, reg, producer, _ := newSeenHashTestServer(t)
+
+	blockHash := chainhash.HashH([]byte("seen-hash dedup block")).String()
+
+	peers := make([]peer.ID, seenHashMaxPublishersPerHash+1)
+	for i := range peers {
+		peers[i] = mustNewPeerID(t)
+	}
+
+	// Distinct announcers up to the budget publish; the next one is suppressed.
+	for _, p := range peers {
+		announceBlock(t, s, p, blockHash)
+	}
+
+	published := drainPublished(producer)
+	require.Len(t, published, seenHashMaxPublishersPerHash,
+		"exactly the publisher budget of distinct announcers may reach Kafka")
+	for _, msg := range published {
+		require.Equal(t, blockHash, string(msg.Key))
+	}
+
+	// Replays from any announcer are suppressed.
+	announceBlock(t, s, peers[0], blockHash)
+	announceBlock(t, s, peers[len(peers)-1], blockHash)
+	require.Empty(t, drainPublished(producer), "replays must never reach Kafka")
+
+	// The suppressed announcer's registry entry must still have been updated.
+	info, ok := reg.Get(peers[len(peers)-1].String())
+	require.True(t, ok, "suppressed announcements must still register the peer")
+	require.NotNil(t, info.BlockHash)
+	require.Equal(t, blockHash, info.BlockHash.String())
+
+	// A different hash still goes through.
+	otherHash := chainhash.HashH([]byte("another block")).String()
+	announceBlock(t, s, peers[0], otherHash)
+
+	published = drainPublished(producer)
+	require.Len(t, published, 1)
+	require.Equal(t, otherHash, string(published[0].Key))
+}
+
+// Suppression must not hide announcements from the WebSocket/dashboard
+// notification path: every valid announcement, duplicate or not, still
+// notifies.
+func TestHandleBlockTopic_DuplicatesStillNotify(t *testing.T) {
+	s, _, _, _ := newSeenHashTestServer(t)
+
+	blockHash := chainhash.HashH([]byte("notify block")).String()
+	p := mustNewPeerID(t)
+
+	announceBlock(t, s, p, blockHash)
+	announceBlock(t, s, p, blockHash)
+
+	require.Len(t, s.notificationCh, 2, "duplicate announcements must still reach the notification channel")
+}
+
+// Same-hash repeats are suppressed and surfaced to the operator, but NEVER
+// auto-scored: ReasonSpam at 50 points against the 100-point threshold would
+// turn a degraded honest peer (a crash-looping blockchain service replays its
+// tip on every 1s reconnect) into a 24h network-wide ban. Suppression alone
+// carries the security value; see seenHashRepeatWarnThreshold.
+func TestHandleBlockTopic_RepeatAnnouncerSuppressedButNeverBanned(t *testing.T) {
+	s, reg, producer, _ := newSeenHashTestServer(t)
+
+	blockHash := chainhash.HashH([]byte("spam replay block")).String()
+	replayer := mustNewPeerID(t)
+
+	for i := 0; i <= seenHashRepeatWarnThreshold+3; i++ {
+		announceBlock(t, s, replayer, blockHash)
+	}
+
+	require.False(t, reg.IsBannedPeer(replayer.String()),
+		"same-hash repeats must never accrue an automatic ban")
+	require.Len(t, drainPublished(producer), 1,
+		"only the replayer's first announcement may reach Kafka")
+}
+
+// A publish grant consumed while no Kafka producer is configured must be
+// returned, so the accounting never claims a publish that did not happen.
+func TestHandleBlockTopic_NilProducerReturnsGrant(t *testing.T) {
+	s, _, producer, _ := newSeenHashTestServer(t)
+	s.blocksKafkaProducerClient = nil
+
+	blockHash := chainhash.HashH([]byte("nil producer block")).String()
+	peerA := mustNewPeerID(t)
+
+	announceBlock(t, s, peerA, blockHash)
+
+	s.blocksKafkaProducerClient = producer
+	announceBlock(t, s, peerA, blockHash)
+
+	published := drainPublished(producer)
+	require.Len(t, published, 1, "the grant burned with no producer must be retryable")
+	require.Equal(t, blockHash, string(published[0].Key))
+}
+
+// When the Kafka producer is backlogged the announcement is dropped instead of
+// blocking the gossip worker, and the publish grant is returned so a later
+// announcement - even a repeat by the same peer - can retry.
+func TestHandleBlockTopic_ProducerBackpressureDropsAndAllowsRetry(t *testing.T) {
+	s, _, producer, _ := newSeenHashTestServer(t)
+
+	// Fill the mock producer's buffer so TryPublish fails.
+	for i := 0; i < cap(producer.PublishChannel()); i++ {
+		producer.PublishChannel() <- &kafka.Message{}
+	}
+
+	blockHash := chainhash.HashH([]byte("backpressure block")).String()
+	peerA := mustNewPeerID(t)
+
+	announceBlock(t, s, peerA, blockHash)
+
+	// Broker recovers: the buffer drains.
+	drainPublished(producer)
+
+	announceBlock(t, s, peerA, blockHash)
+
+	published := drainPublished(producer)
+	require.Len(t, published, 1, "a dropped publish must not permanently suppress the hash")
+	require.Equal(t, blockHash, string(published[0].Key))
+}
+
+func TestHandleSubtreeTopic_DuplicateAnnouncementSuppressed(t *testing.T) {
+	s, _, _, producer := newSeenHashTestServer(t)
+
+	subtreeHash := chainhash.HashH([]byte("seen-hash dedup subtree")).String()
+
+	for i := 0; i < seenHashMaxPublishersPerHash+2; i++ {
+		announceSubtree(t, s, mustNewPeerID(t), subtreeHash)
+	}
+
+	published := drainPublished(producer)
+	require.Len(t, published, seenHashMaxPublishersPerHash,
+		"only the publisher budget of distinct announcers may reach Kafka")
+	require.Equal(t, subtreeHash, string(published[0].Key))
+}
+
+// An announcement dropped by the unhealthy-peer gate must not mark the hash as
+// seen: later announcements of the same subtree from healthy peers must keep
+// their full publish budget, or low-reputation peers could shadow subtrees off
+// the network.
+func TestHandleSubtreeTopic_UnhealthyPeerDropDoesNotMarkSeen(t *testing.T) {
+	s, reg, _, producer := newSeenHashTestServer(t)
+
+	lowRep := mustNewPeerID(t)
+	reg.Register(&blockchain.PeerInfo{ID: lowRep.String()})
+	reg.UpdateMetrics(lowRep.String(), 0, 0, 0, false, false, true, 0)
+	require.True(t, s.shouldSkipUnhealthyPeer(lowRep.String(), "precondition"),
+		"precondition: peer must be below the unhealthy threshold")
+
+	subtreeHash := chainhash.HashH([]byte("shadowed subtree")).String()
+
+	announceSubtree(t, s, lowRep, subtreeHash)
+	require.Empty(t, drainPublished(producer), "unhealthy peer's announcement must be dropped")
+
+	healthy := mustNewPeerID(t)
+	announceSubtree(t, s, healthy, subtreeHash)
+
+	published := drainPublished(producer)
+	require.Len(t, published, 1, "healthy peer's announcement of the same subtree must be published")
+	require.Equal(t, subtreeHash, string(published[0].Key))
+}
+
+// A blockchain-subscription reconnect replays the current tip notification, so
+// the sender must suppress consecutive re-announcements of the same hash or a
+// node with a flapping blockchain stream would read as a spammer to its peers.
+// A reorg away and back changes the hash in between and must still announce.
+func TestHandleBlockNotification_SuppressesConsecutiveDuplicateTip(t *testing.T) {
+	fsmState := blockchain_api.FSMStateType_RUNNING
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil).Maybe()
+	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).
+		Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 100}, nil).Maybe()
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).
+		Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 100}, nil).Maybe()
+	mockBlockchain.On("GetState", mock.Anything, mock.Anything).
+		Return([]byte(nil), errors.NewNotFoundError("not set")).Maybe()
+
+	s, p2pClient := newGateTestServer(t, mockBlockchain)
+	p2pClient.peerID = mustNewPeerID(t)
+	p2pClient.peers = []p2pMessageBus.PeerInfo{{ID: "connected-peer"}}
+	s.notificationCh = make(chan *notificationMsg, 64)
+	s.AssetHTTPAddressURL = "http://asset.example"
+
+	countBlockPublishes := func() int {
+		n := 0
+		for _, call := range p2pClient.Calls {
+			if call.Method == "Publish" && call.Arguments.String(1) == s.blockTopicName {
+				n++
+			}
+		}
+		return n
+	}
+
+	tipA := chainhash.HashH([]byte("tip A"))
+	tipB := chainhash.HashH([]byte("tip B"))
+
+	require.NoError(t, s.handleBlockNotification(context.Background(), &tipA))
+	require.NoError(t, s.handleBlockNotification(context.Background(), &tipA), "replayed tip notification")
+	require.Equal(t, 1, countBlockPublishes(), "a replayed tip notification must not re-announce")
+
+	require.NoError(t, s.handleBlockNotification(context.Background(), &tipB))
+	require.NoError(t, s.handleBlockNotification(context.Background(), &tipA), "reorg back to the previous tip")
+	require.Equal(t, 3, countBlockPublishes(), "a reorg back to a recent hash must still announce")
+}
+
+// A GossipSub publish into an empty mesh succeeds silently; recording the tip
+// then would suppress the re-announcement a later-connecting peer needs, so
+// the guard must not engage until the publish had someone to reach.
+func TestHandleBlockNotification_EmptyMeshDoesNotArmSuppression(t *testing.T) {
+	fsmState := blockchain_api.FSMStateType_RUNNING
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil).Maybe()
+	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).
+		Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 100}, nil).Maybe()
+	mockBlockchain.On("GetBestBlockHeader", mock.Anything).
+		Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 100}, nil).Maybe()
+	mockBlockchain.On("GetState", mock.Anything, mock.Anything).
+		Return([]byte(nil), errors.NewNotFoundError("not set")).Maybe()
+
+	s, p2pClient := newGateTestServer(t, mockBlockchain)
+	p2pClient.peerID = mustNewPeerID(t)
+	p2pClient.peers = []p2pMessageBus.PeerInfo{}
+	s.notificationCh = make(chan *notificationMsg, 64)
+	s.AssetHTTPAddressURL = "http://asset.example"
+
+	countBlockPublishes := func() int {
+		n := 0
+		for _, call := range p2pClient.Calls {
+			if call.Method == "Publish" && call.Arguments.String(1) == s.blockTopicName {
+				n++
+			}
+		}
+		return n
+	}
+
+	tip := chainhash.HashH([]byte("startup tip"))
+
+	// Nobody connected: the publish reaches no one and must not arm the guard.
+	require.NoError(t, s.handleBlockNotification(context.Background(), &tip))
+	require.NoError(t, s.handleBlockNotification(context.Background(), &tip))
+	require.Equal(t, 2, countBlockPublishes(), "a publish nobody heard must not suppress the re-announcement")
+
+	// A peer connects: the next announcement is recorded, later replays
+	// suppressed. Reset the cached probe so the connection is seen at once.
+	p2pClient.peers = []p2pMessageBus.PeerInfo{{ID: "connected-peer"}}
+	s.connectedPeersProbe.Store(nil)
+	require.NoError(t, s.handleBlockNotification(context.Background(), &tip))
+	require.NoError(t, s.handleBlockNotification(context.Background(), &tip))
+	require.Equal(t, 3, countBlockPublishes(), "suppression engages once the mesh is non-empty")
+}
+
+// The subtree announce path carries the same consecutive-duplicate guard as
+// the block path: a replayed notification must not re-gossip, while distinct
+// subtrees stream through unaffected.
+func TestHandleSubtreeNotification_SuppressesConsecutiveDuplicate(t *testing.T) {
+	fsmState := blockchain_api.FSMStateType_RUNNING
+	mockBlockchain := &blockchain.Mock{}
+	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil).Maybe()
+
+	s, p2pClient := newGateTestServer(t, mockBlockchain)
+	p2pClient.peerID = mustNewPeerID(t)
+	p2pClient.peers = []p2pMessageBus.PeerInfo{{ID: "connected-peer"}}
+	s.AssetHTTPAddressURL = "http://asset.example"
+
+	countSubtreePublishes := func() int {
+		n := 0
+		for _, call := range p2pClient.Calls {
+			if call.Method == "Publish" && call.Arguments.String(1) == s.subtreeTopicName {
+				n++
+			}
+		}
+		return n
+	}
+
+	subtreeA := chainhash.HashH([]byte("subtree A"))
+	subtreeB := chainhash.HashH([]byte("subtree B"))
+
+	require.NoError(t, s.handleSubtreeNotification(context.Background(), &subtreeA))
+	require.NoError(t, s.handleSubtreeNotification(context.Background(), &subtreeA), "replayed subtree notification")
+	require.Equal(t, 1, countSubtreePublishes(), "a replayed subtree notification must not re-announce")
+
+	require.NoError(t, s.handleSubtreeNotification(context.Background(), &subtreeB))
+	require.NoError(t, s.handleSubtreeNotification(context.Background(), &subtreeA), "a re-notified earlier subtree is not a consecutive duplicate")
+	require.Equal(t, 3, countSubtreePublishes())
+}

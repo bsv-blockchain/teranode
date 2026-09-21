@@ -2,15 +2,67 @@ package blockvalidation
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/jellydator/ttlcache/v3"
 )
 
 const (
 	catchupFailureKindGeneric         = "generic"
 	catchupFailureKindBlockIncomplete = "block_incomplete"
+
+	// LegacyPeerIDPrefix marks a peerID as originating from the legacy netsync path, rather than a
+	// libp2p peer ID. The prefix guarantees the value can never collide with or be mistaken for a
+	// real libp2p peer ID anywhere downstream (logs, caches, metrics), and it is what the
+	// isLegacyPeerID gates below match on to keep such a value out of this service's ban-scoring
+	// and malicious-check paths (bitcoin-sv/teranode#4692).
+	//
+	// Note the prefix does NOT mean "absent from the centralized peer registry": a legacy peer has a
+	// real registry entry, created and reaped under a byte-identical prefix by
+	// services/legacy/peer_registry_sync.go. See isLegacyPeerID for the reason the gates exist
+	// anyway.
+	//
+	// Exported deliberately: the value that has to match it is BUILT in another package
+	// (services/legacy/netsync/handle_block.go), so a second literal there could drift from this one
+	// silently and put legacy TCP addresses straight back into the centralized registry. The
+	// producer imports this const, so the two sides cannot be separated. services/legacy/netsync
+	// already imports this package; nothing here imports services/legacy, so there is no cycle.
+	LegacyPeerIDPrefix = "legacy:"
+
+	// peerMaliciousCacheTTL bounds how stale a cached IsPeerMalicious verdict
+	// may be served. Long enough to shed the per-message RPC fan-out under an
+	// announcement flood, short enough that a freshly banned peer is refused
+	// within seconds.
+	peerMaliciousCacheTTL = 5 * time.Second
 )
+
+// isLegacyPeerID reports whether peerID was namespaced by the legacy netsync path rather than
+// being a real p2p identity.
+//
+// THE POLICY, stated once here because three sites implement it: a legacy:-prefixed peerID never
+// enters a blockvalidation path that ban-scores or malicious-checks through the p2p service; legacy
+// fault attribution belongs to the legacy service, because only it can enforce
+// (bitcoin-sv/teranode#4692).
+//
+// The reason is enforceability, NOT invisibility. A legacy peer does have a centralized-registry
+// entry: services/legacy/peer_registry_sync.go registers it under a byte-identical "legacy:" prefix
+// on its reconcile tick and clears it on disconnect, so the entry is real and dashboard-visible.
+// What cannot be done with it is a ban. p2p.Server.onPeerBanned decodes the peerID with
+// peer.Decode, which cannot parse "legacy:1.2.3.4:8333"; it logs and returns before touching the
+// ban list or disconnecting anything, so a ban recorded against such an id is unenforceable. Worse,
+// the invalid-block consumer's hash-keyed reportedInvalidBlocks dedupe would then suppress scoring
+// the real p2p announcer of the same hash. It would also add a gRPC round-trip and double-charge
+// the peer for one corrupt body.
+//
+// Legacy misbehaviour is attributed where it IS enforceable: strikeIfCorruptBlockBody's transient
+// ban score on the serving connection (services/legacy/peer_server.go) and sync-peer rotation via
+// shouldDisconnectOnBlockErr. The three sites implementing the policy are penalizeCorruptBlockPeer,
+// isPeerMalicious and kafkaNotifyBlockInvalid's peerID clearing.
+func isLegacyPeerID(peerID string) bool {
+	return strings.HasPrefix(peerID, LegacyPeerIDPrefix)
+}
 
 // reportCatchupAttempt reports a catchup attempt to the P2P service.
 // Falls back to local metrics if P2P client is unavailable.
@@ -94,9 +146,36 @@ func (u *Server) reportCatchupFailure(ctx context.Context, peerID string) {
 }
 
 func (u *Server) reportCatchupFailureForError(ctx context.Context, peerID string, err error) {
+	if errors.IsBlockCorrupt(err) {
+		// releaseCatchupLock already charged this cycle for the corrupt body, once, at the site
+		// that classified it. A corrupt verdict is deliberately not "unvalidatable" and is not
+		// wrapped as ErrExternal, so it reaches processCatchupChItem's generic tail and would be
+		// charged a second time here — re-creating the CatchupFailures > CatchupAttempts skew the
+		// other exemptions in this helper exist to prevent (bitcoin-sv/teranode#4692).
+		//
+		// Only the reputation charge is suppressed. The ReportPeerFailure call that follows in
+		// processCatchupChItem is NOT gated: it is the sync-peer rotation signal, not a reputation
+		// call, and rotating away from a peer that served a corrupt body is the desired response.
+		return
+	}
+
 	if errors.Is(err, errors.ErrBlockIncomplete) {
 		return
 	}
+
+	if errors.Is(err, errors.ErrBlockPolicyDeclined) {
+		// A local policy decline (excessiveblocksize) is OUR configuration, so no peer may be charged
+		// for it (bitcoin-sv/teranode#4692). Exempting HERE rather than only at the terminal branch in
+		// processCatchupChItem is what makes that invariant hold on the ALTERNATIVE paths too: the
+		// per-(hash, peerID) decline pre-empt and the bad/malicious branch both offer the hash to the
+		// best peers via tryAlternativePeersForCatchup, and the generic tail walks the cached
+		// alternatives — and on a genuinely over-limit block every one of those candidates declines
+		// identically, because the limit is ours and not theirs. Charging each of them would push
+		// honest peers toward the reputation floor that GetPeersAtMaxHeight/SelectAlternativePeer
+		// filter on, which is the self-isolation this work exists to remove.
+		return
+	}
+
 	if catchupFailureAlreadyReported(err) {
 		// The layer where the failure occurred (e.g. the header-fetch stage)
 		// already recorded it; reporting again would let CatchupFailures exceed
@@ -277,6 +356,14 @@ func (u *Server) reportCatchupMalicious(ctx context.Context, peerID string, reas
 
 	u.logger.Warnf("[peer_metrics] Recording malicious attempt from peer %s: %s", peerID, reason)
 
+	// Drop the cached verdict up front, whether or not the report RPC below
+	// succeeds: this node has evidence against the peer NOW, and a stale
+	// not-malicious entry must not be served for up to the cache TTL
+	// mid-catchup while the report is retried or lost.
+	if u.peerMaliciousCache != nil {
+		u.peerMaliciousCache.Delete(peerID)
+	}
+
 	// Report to P2P service if client is available
 	if u.p2pClient != nil {
 		if err := u.p2pClient.RecordCatchupMalicious(ctx, peerID); err != nil {
@@ -300,25 +387,44 @@ func (u *Server) reportCatchupMalicious(ctx context.Context, peerID string, reas
 // Returns:
 //   - bool: True if peer is malicious
 func (u *Server) isPeerMalicious(ctx context.Context, peerID string) bool {
-	if peerID == "" {
+	if peerID == "" || isLegacyPeerID(peerID) || u.p2pClient == nil {
 		return false
 	}
 
-	// Query P2P service for peer status
-	if u.p2pClient != nil {
-		isMalicious, reason, err := u.p2pClient.IsPeerMalicious(ctx, peerID)
-		if err != nil {
-			u.logger.Warnf("[isPeerMalicious] Failed to check if peer %s is malicious: %v", peerID, err)
-			// On error, assume peer is not malicious to avoid false positives
-			return false
+	// Serve from the short-lived cache when possible: every gossip-driven
+	// Kafka message costs two of these checks (consumer gate + worker gate)
+	// and each is a p2p gRPC that fans into a blockchain RPC, so an
+	// announcement flood would otherwise become an RPC storm. A nil cache
+	// (Server literals in tests) degrades to uncached lookups.
+	if u.peerMaliciousCache != nil {
+		if item := u.peerMaliciousCache.Get(peerID); item != nil {
+			return item.Value()
 		}
-		if isMalicious {
-			u.logger.Debugf("[isPeerMalicious] Peer %s is malicious: %s", peerID, reason)
-		}
-		return isMalicious
 	}
 
-	return false
+	// Query P2P service for peer status
+	isMalicious, reason, err := u.p2pClient.IsPeerMalicious(ctx, peerID)
+	if err != nil {
+		u.logger.Warnf("[isPeerMalicious] Failed to check if peer %s is malicious: %v", peerID, err)
+		// On error, assume peer is not malicious to avoid false positives.
+		// Cache the fallback verdict too, so a degraded p2p service is asked
+		// (and logged) once per TTL per peer instead of once per message.
+		if u.peerMaliciousCache != nil {
+			u.peerMaliciousCache.Set(peerID, false, ttlcache.DefaultTTL)
+		}
+
+		return false
+	}
+
+	if isMalicious {
+		u.logger.Debugf("[isPeerMalicious] Peer %s is malicious: %s", peerID, reason)
+	}
+
+	if u.peerMaliciousCache != nil {
+		u.peerMaliciousCache.Set(peerID, isMalicious, ttlcache.DefaultTTL)
+	}
+
+	return isMalicious
 }
 
 // isPeerBad checks if a peer has a bad reputation.

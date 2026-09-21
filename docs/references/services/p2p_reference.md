@@ -39,7 +39,11 @@ type Server struct {
     nodeStatusTopicName               string             // pubsub topic for node status messages
     topicPrefix                       string             // Chain identifier prefix for topic validation
     blockPeerMap                      cappedPeerMap      // Which peer sent each block (canonical chainhash.Hash.String() -> peerMapEntry); insert-capped
-    subtreePeerMap                    cappedPeerMap      // Which peer sent each subtree (canonical chainhash.Hash.String() -> peerMapEntry); insert-capped
+    subtreePeerMap                    cappedPeerMap      // Which peer ANNOUNCED each subtree via gossip, not necessarily who served its bytes (canonical chainhash.Hash.String() -> peerMapEntry); insert-capped
+    blockSeenHashes                   seenHashCache      // Block hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
+    subtreeSeenHashes                 seenHashCache      // Subtree hashes already announced within the TTL; suppresses replayed announcements before the Kafka publish
+    lastAnnouncedBlockHash            atomic.Pointer[chainhash.Hash] // Most recently gossiped tip; suppresses the consecutive re-announcements a blockchain-subscription reconnect replays
+    lastAnnouncedSubtreeHash          atomic.Pointer[chainhash.Hash] // Most recently gossiped subtree, same consecutive-duplicate guard as lastAnnouncedBlockHash
     startTime                         time.Time          // Server start time for uptime calculation
     peerRegistry                      *PeerRegistry      // Central registry for all peer information
     peerSelector                      *PeerSelector      // Peer selection logic (+ SSRF-safe client for availability probes)
@@ -328,22 +332,11 @@ Records a failed catchup attempt with a peer. This increments failure counters a
 func (s *Server) RecordCatchupMalicious(ctx context.Context, req *p2p_api.RecordCatchupMaliciousRequest) (*p2p_api.RecordCatchupMaliciousResponse, error)
 ```
 
-Marks a peer as malicious after detecting invalid data during catchup. This severely penalizes the peer's reputation.
+Marks a peer as malicious after detecting invalid data during catchup. This pins the peer's reputation to a near-zero score, makes `IsPeerMalicious` report the peer as malicious (excluding it from catchup), and raises the peer's ban score (rate-limited to one charge per peer per window), so repeated offenses lead to an automatic ban.
 
 **Parameters**:
 
 - `peer_id` (string): The peer identifier
-
-```go
-func (s *Server) UpdateCatchupReputation(ctx context.Context, req *p2p_api.UpdateCatchupReputationRequest) (*p2p_api.UpdateCatchupReputationResponse, error)
-```
-
-Directly sets a peer's reputation score. Use sparingly as this bypasses the normal reputation calculation algorithm.
-
-**Parameters**:
-
-- `peer_id` (string): The peer identifier
-- `score` (double): Reputation score value (0-100 range)
 
 ```go
 func (s *Server) UpdateCatchupError(ctx context.Context, req *p2p_api.UpdateCatchupErrorRequest) (*p2p_api.UpdateCatchupErrorResponse, error)
@@ -482,6 +475,8 @@ Records bytes downloaded from a peer via HTTP (typically from their DataHub).
 - `invalidSubtreeHandler`: Processes notifications about invalid subtrees from Kafka.
 - `rejectedTxHandler`: Processes rejected transaction notifications from Kafka.
 
+Both announcement handlers deduplicate by hash before publishing to Kafka: per short publish window only the first few distinct announcers of a hash are forwarded (keeping block validation's alternative-source failover fed, and re-opening every few seconds so colluding announcers cannot capture a hash's fetch sources). A peer that keeps re-announcing the same hash is logged for the operator. The Kafka publish is non-blocking; announcements dropped under producer backpressure stay retryable by later announcements of the same hash.
+
 ### Message Structures
 
 The P2P service uses JSON-encoded messages for network communication:
@@ -610,9 +605,9 @@ The following settings can be configured for the p2p service:
 
 ### Network Configuration
 
-- `p2p_listen_addresses`: Specifies the IP addresses for the P2P service to bind to.
-- `p2p_advertise_addresses`: Addresses to advertise to other peers in the network. Each address can be specified with or without a port (e.g., `192.168.1.1` or `example.com:9906`). When a port is not specified, the system will use the value from `p2p_port` as the default. Both IP addresses and domain names are supported. Format examples: `192.168.1.1`, `example.com:9906`, `node.local:8001`.
-- `p2p_port`: **REQUIRED** - Defines the port number on which the P2P service listens.
+- `p2p_listen_addresses`: **REQUIRED** - Declares the libp2p bind. The message bus always binds `0.0.0.0` and `::` on `p2p_port`, so only the wildcard forms (`0.0.0.0`, `::`, `/ip4/0.0.0.0/tcp/<p2p_port>`, `/ip6/::/tcp/<p2p_port>`) are accepted; a narrower value fails startup instead of being silently ignored. Restrict exposure with a firewall on `p2p_port`.
+- `p2p_advertise_addresses`: Multiaddrs to advertise to other peers, pipe-separated (e.g. `/ip4/203.0.113.5/tcp/9905` or `/dns4/node.example.com/tcp/9905`). They are passed to libp2p verbatim, so each entry must be a complete multiaddr including the port; a bare `host:port` is rejected and the P2P service fails to start. When empty, libp2p advertises the interface addresses it bound and the public address peers observe via the Identify protocol.
+- `p2p_port`: **REQUIRED** - Defines the port number on which libp2p listens. It is always bound, whether or not `p2p_advertise_addresses` is set, so firewall rules and port mappings can rely on it.
 - `p2p_block_topic`: **REQUIRED** - The topic name used for block-related messages in the P2P network.
 - `p2p_subtree_topic`: **REQUIRED** - Specifies the topic for subtree-related messages within the P2P network.
 - `p2p_rejected_tx_topic`: **REQUIRED** - Specifies the topic for broadcasting information about rejected transactions.
@@ -656,6 +651,22 @@ The server uses goroutines for handling concurrent operations, such as message p
 ## Security
 
 The server supports both HTTP and HTTPS configurations based on the `securityLevelHTTP` setting. When using HTTPS, it requires certificate and key files to be specified in the configuration.
+
+### gRPC authentication
+
+Every state-mutating `PeerService` RPC requires the `grpc_admin_api_key` value in the `x-api-key` metadata header. That covers the operator-facing admin calls (`BanPeer`, `UnbanPeer`, `ClearBanned`, `AddBanScore`, `ResetReputation`, `ConnectPeer`, `DisconnectPeer`) *and* the internal data-plane reporters called by block and subtree validation (`RecordCatchupAttempt`, `RecordCatchupSuccess`, `RecordCatchupFailure`, `RecordCatchupMalicious`, `UpdateCatchupError`, `ReportValidSubtree`, `ReportValidBlock`, `ReportValidBlockHeaders`, `ReportValidatedChainProgress`, `RecordBytesDownloaded`).
+
+The reporters are authenticated because they write peer reputation and validated chain progress against a caller-supplied peer ID, and peer IDs are cheap to mint offline. `ReportValidatedChainProgress` in particular feeds sync-peer selection, so an unauthenticated caller could nominate a Sybil as sync peer and flag every honest peer malicious. Internal callers construct their client through `p2p.NewClient`, which attaches the key automatically, so they need no special handling.
+
+Only read-only queries (`GetPeers`, `GetPeer`, `GetPeerRegistry`, `GetPeersForCatchup`, `IsBanned`, `ListBanned`, `IsPeerMalicious`, `IsPeerUnhealthy`) are reachable without the key. The classification is enforced by tests that parse the handler sources, so an RPC that gains a write can no longer stay on the public list.
+
+`p2p_grpcListenAddress` binds to loopback by default; widen it only when the service is reached from another container or pod, and set a strong `grpc_admin_api_key` when you do. The shipped `docker.m`, `docker.ss` and `operator` contexts widen it because those topologies run P2P in its own container or pod.
+
+`grpc_admin_api_key` is deliberately not committed, and `util.ValidateAdminAPIKey` (shared with the legacy and RPC services) rejects well-known placeholders: a placeholder is logged as an error and then **ignored**, so the server falls back to a randomly generated key. That fails closed — every protected RPC rejects all callers, including the internal reporters — rather than accepting a value anyone can read from this repository. Supply a strong secret (32+ characters) via an environment variable or secret store.
+
+The mirror-image misconfiguration is logged as an error at startup: a routable `p2p_grpcAddress` meeting a loopback `p2p_grpcListenAddress` means block and subtree validation get connection-refused on every call. That failure is otherwise silent — the reporters and `selectBestPeersForCatchup` only warn, and no health check covers the p2p client — so the node would simply stop finding catchup peers while its port healthcheck stayed green.
+
+Note that the read-only RPCs are still a reconnaissance surface: `GetPeerRegistry` and `GetPeersForCatchup` return the full peer set including peer IDs, DataHub URLs, heights, reputation and ban state. Where the bind is widened - in particular the `operator` context, which fronts the peer gRPC port with an ingress - keep the port reachable only from inside the cluster.
 
 ## Related Documents
 

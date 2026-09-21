@@ -431,7 +431,7 @@ func TestServerHelpers_ShouldSkipBannedPeer_LocalBanImmediate(t *testing.T) {
 	// protocol_violation = 20 points; 6 hits cross the default 100 threshold
 	// and trigger onPeerBanned, which overwrites the cached negative entry.
 	for i := 0; i < 6; i++ {
-		s.applyBanScore(pid.String(), ReasonProtocolViolation)
+		_ = s.applyBanScore(pid.String(), ReasonProtocolViolation)
 	}
 
 	require.True(t, s.shouldSkipBannedPeer(pid.String(), "test"), "locally banned peer must be skipped immediately")
@@ -853,7 +853,7 @@ func TestServerHelpers_AddProtocolViolation_AccumulatesScore(t *testing.T) {
 
 func TestServerHelpers_ApplyBanScore_NilRegistryNoPanic(t *testing.T) {
 	s := &Server{logger: ulogger.TestLogger{}, gCtx: context.Background()}
-	require.NotPanics(t, func() { s.applyBanScore("anything", "spam") })
+	require.NotPanics(t, func() { _ = s.applyBanScore("anything", "spam") })
 }
 
 func TestServerHelpers_OnPeerBanned_InvalidIDReturnsCleanly(t *testing.T) {

@@ -184,6 +184,21 @@ func TestBuildP2PMessageBusConfig_MeshProtection(t *testing.T) {
 		require.Equal(t, addrs, conf.AnnounceAddrs)
 		require.Equal(t, 9906, conf.Port)
 	})
+
+	// Committed settings ship with no advertise addresses. Port used to be set
+	// only alongside them, so the default deployment bound a random ephemeral
+	// port and every firewall rule written for p2p_port pointed at nothing.
+	t.Run("port is set without advertise addresses", func(t *testing.T) {
+		s := build(true, true, false)
+		s.P2P.Port = 9906
+
+		for _, addrs := range [][]string{nil, {}} {
+			conf, err := buildP2PMessageBusConfig(ulogger.TestLogger{}, s, privKey, "proto", "off", addrs)
+			require.NoError(t, err)
+			require.Equal(t, 9906, conf.Port)
+			require.Empty(t, conf.AnnounceAddrs)
+		}
+	})
 }
 
 // TestPrivateIPColocationWhitelist pins the whitelist contents: dual-stack local

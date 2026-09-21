@@ -574,16 +574,10 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 			s.logger.Warnf("[UTXOPersister] failed to delete previous utxo-set-hash for %s: %v", lastWrittenUTXOSetHash.String(), err)
 		}
 
-		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSet+".sha256"); err != nil {
-			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
-		}
-
+		// No separate delete for the ".sha256" sidecars: the Del calls above already remove the
+		// checksum file alongside the blob it describes.
 		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoHeaders); err != nil {
 			s.logger.Warnf("[UTXOPersister] Error deleting UTXOHeaders for block %s height %d: %v", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
-		}
-
-		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoHeaders+".sha256"); err != nil {
-			s.logger.Warnf("[UTXOPersister] Error deleting UTXOHeaders sha256 for block %s height %d: %v", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
 		}
 	}
 

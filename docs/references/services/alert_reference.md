@@ -318,6 +318,12 @@ Core alert data structure containing:
 
 For UTXO freeze, unfreeze, and reassignment operations:
 
+**Known regression:** an applied ownership-changing reassignment can leave the
+output unspendable by both owners, even after maturity. Do not treat processing
+status as proof of spendability. See the
+[reassignment limitation](../../topics/services/alert.md#24-utxo-reassignment) and
+[issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).
+
 - **UTXO Identifiers**:
 
     - **Transaction hashes (txid)**

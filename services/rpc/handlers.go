@@ -878,20 +878,32 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	// MaxRawTxFee of 0 disables it entirely (operator opt-out).
 	allowHighFees := c.AllowHighFees != nil && *c.AllowHighFees
 	if !allowHighFees && s.settings.Policy.MaxRawTxFee > 0 {
-		// Extend the tx so PreviousTxSatoshis is populated; PreviousOutputsDecorate
-		// populates the input fields but does not flip tx.IsExtended() on its own
-		// (go-bt requires an explicit SetExtended call). We mark it explicitly so
-		// the validator's own IsExtended() guard skips re-decoration, and so the
-		// gRPC client serialises the extended bytes instead of wire bytes.
-		if !tx.IsExtended() {
-			if err = s.utxoStore.PreviousOutputsDecorate(ctx, tx); err != nil {
-				return nil, &bsvjson.RPCError{
-					Code:    bsvjson.ErrRPCVerify,
-					Message: txRejectedPrefix + err.Error(),
-				}
+		// Resolve the fee from local outputs even when the caller sends extended
+		// bytes. The decorator only fills missing fields, so clear both supplied
+		// fields first; removing the IsExtended gate alone would still trust them.
+		// The validator re-reads the parents for consensus validation. This read
+		// must happen before submission so an excessive fee can reject the call.
+		// PreviousOutputsDecorate does not return the parent metadata needed to
+		// reuse this lookup through Options.PrefetchedParents.
+		for _, input := range tx.Inputs {
+			if input == nil {
+				continue
 			}
-			tx.SetExtended(true)
+
+			input.PreviousTxScript = nil
+			input.PreviousTxSatoshis = 0
 		}
+
+		tx.SetExtended(false)
+
+		if err = s.utxoStore.PreviousOutputsDecorate(ctx, tx); err != nil {
+			return nil, &bsvjson.RPCError{
+				Code:    bsvjson.ErrRPCVerify,
+				Message: txRejectedPrefix + err.Error(),
+			}
+		}
+
+		tx.SetExtended(true)
 
 		inputSats := tx.TotalInputSatoshis()
 		outputSats := tx.TotalOutputSatoshis()
@@ -2244,7 +2256,27 @@ func handleListBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-ch
 		}
 	}
 
-	return bannedList, nil
+	// Return each exact string once, retaining the first occurrence in the
+	// collected order: successful P2P entries first, then successful legacy
+	// entries. An empty collected slice is returned unchanged so that a nil
+	// list stays nil and a non-nil empty list stays non-nil empty.
+	if len(bannedList) == 0 {
+		return bannedList, nil
+	}
+
+	seen := make(map[string]struct{})
+	unique := make([]string, 0)
+
+	for _, banned := range bannedList {
+		if _, exists := seen[banned]; exists {
+			continue
+		}
+
+		seen[banned] = struct{}{}
+		unique = append(unique, banned)
+	}
+
+	return unique, nil
 }
 
 // handleClearBanned implements the clearbanned command, which removes all IP address

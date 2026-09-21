@@ -382,7 +382,7 @@ func setup(t *testing.T) *testContext {
 	subtreeStore := memory_blob.New()
 	blockStore := memory_blob.New()
 
-	repo, err := NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil)
+	repo, err := NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil, nil)
 	require.NoError(t, err)
 
 	return &testContext{

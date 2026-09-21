@@ -47,6 +47,10 @@ propagation_httpAddresses.docker.teranode{{ .Index }}          = http://teranode
 asset_httpAddress.docker.teranode{{ .Index }}                  = http://teranode{{ .Index }}-asset:${ASSET_HTTP_PORT}${asset_apiPrefix}
 asset_propagation_proxy_address.docker.teranode{{ .Index }}    = http://teranode{{ .Index }}-propagation:${PROPAGATION_HTTP_PORT}
 p2p_grpcAddress.docker.teranode{{ .Index }}                    = teranode{{ .Index }}-p2p:${P2P_GRPC_PORT}
+# The p2p gRPC listener is loopback by default; in split mode the p2p service
+# lives in its own container, so it has to accept connections from the sibling
+# blockvalidation/subtreevalidation containers.
+p2p_grpcListenAddress.docker.teranode{{ .Index }}              = :${P2P_GRPC_PORT}
 {{- end }}
 {{- end }}
 

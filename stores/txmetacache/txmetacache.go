@@ -521,6 +521,22 @@ func putMetaBytesBuf(bp *[]byte) {
 	metaBytesBufPool.Put(bp)
 }
 
+// UnderlyingStore returns the store this cache wraps, so a caller that knows its
+// reads cannot benefit from caching can go straight to the origin.
+//
+// The block-validation path is the case this exists for: it reads a whole
+// block's transactions exactly once, and setMined evicts them immediately
+// afterwards, so routing it through the cache only serializes and inserts
+// entries that are never read back — and evicts the ingest path's hot working
+// set to make room. Measured on the scaling cluster while revalidating a single
+// block: 0 cache hits against ~755k insertions/s.
+//
+// Callers must not use this to bypass the cache for writes or for reads that
+// could be served from it; it is a read-through escape hatch only.
+func (t *TxMetaCache) UnderlyingStore() utxo.Store {
+	return t.utxoStore
+}
+
 // BatchDecorate retrieves metadata for multiple transactions in a single batch operation.
 // This is more efficient than calling Get for each transaction individually.
 //
@@ -790,6 +806,38 @@ func (t *TxMetaCache) Delete(_ context.Context, hash *chainhash.Hash) error {
 	t.metrics.evictions.Add(1)
 
 	return nil
+}
+
+// DeleteComplete removes the transaction from the durable store completely
+// (master record, pagination children and external blob(s)) via the wrapped
+// store, then drops the cache entry. Unlike Delete — which is cache-only — this
+// reaches the underlying store, so a caller that needs the whole record gone
+// gets it.
+//
+// The eviction is UNCONDITIONAL: it happens whether the durable delete succeeded
+// or failed, so this method carries no precondition on which store it may wrap.
+// A caller that reads this cache for presence — the validator's shed unwind reads
+// the record back after the delete to decide whether it may unspend the inputs —
+// therefore cannot be answered "still present" for a transaction whose master is
+// already gone, which is the answer that would send the unwind down the
+// record-still-present arm and leave the inputs spent.
+//
+// The separate, larger gap is Delete, which is cache-only and reaches no record
+// at all; that is a different method with its own callers and is documented by
+// TestTxMetaCache_DeleteIsCacheOnly_KnownContractGap.
+func (t *TxMetaCache) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
+	// Evict BEFORE inspecting the error. The backing cascade removes the master
+	// record first, so a failure can mean the record is already gone — and a
+	// surviving cache entry would then answer "present" for a transaction that is
+	// not. A miss is never less correct than a stale hit: GetMeta falls through to
+	// the underlying store on a miss, so the worst cost of evicting early is one
+	// read-through.
+	err := t.utxoStore.DeleteComplete(ctx, hash)
+
+	t.cache.Del(hash[:])
+	t.metrics.evictions.Add(1)
+
+	return err
 }
 
 // appendHeightToValue appends the current block height to the end of the

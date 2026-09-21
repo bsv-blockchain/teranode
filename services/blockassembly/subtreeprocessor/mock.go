@@ -152,6 +152,17 @@ func (m *MockSubtreeProcessor) ConsumerExited() bool {
 	return args.Bool(0)
 }
 
+func (m *MockSubtreeProcessor) QueueMaxItems() int64 {
+	args := m.Called()
+	return args.Get(0).(int64)
+}
+
+// QueueHeadAge implements Interface.QueueHeadAge
+func (m *MockSubtreeProcessor) QueueHeadAge() time.Duration {
+	args := m.Called()
+	return args.Get(0).(time.Duration)
+}
+
 func (m *MockSubtreeProcessor) SubtreeCount() int {
 	args := m.Called()
 	return args.Int(0)
@@ -183,6 +194,12 @@ func (m *MockSubtreeProcessor) GetIncompleteSubtreeMiningData(_ context.Context)
 // AddBatch implements Interface.AddBatch
 func (m *MockSubtreeProcessor) AddBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) {
 	m.Called(nodes, txInpoints)
+}
+
+// AddBatchIfRoom implements Interface.AddBatchIfRoom
+func (m *MockSubtreeProcessor) AddBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
+	args := m.Called(nodes, txInpoints)
+	return args.Bool(0)
 }
 
 func (m *MockSubtreeProcessor) AddDirectly(node *subtree.Node, txInpoints *subtree.TxInpoints, skipNotification bool) error {
@@ -217,6 +234,26 @@ func (m *MockSubtreeProcessor) MoveForwardBlock(block *model.Block) error {
 	args := m.Called(block)
 	return args.Error(0)
 }
+
+// DrainPendingInvalidations and QueueInvalidation implement the invalidation
+// side of Interface.
+//
+// Deliberately plain no-ops rather than testify calls. Both are driven by block
+// movement on every announcement, so routing them through testify would make
+// every existing test that never mentions them fail on an unexpected call. The
+// obvious workaround — scanning m.ExpectedCalls to decide whether a test has
+// stubbed them — reads testify's state without its mutex, which races against
+// any test still registering expectations while the assembler runs.
+//
+// Nothing currently asserts on these through the mock; the behaviour is covered
+// against the real SubtreeProcessor in conflicting_ancestry_guard_test.go. A
+// test that needs to assert on them should route that method through testify
+// then, and set the expectation before starting the component under test.
+func (m *MockSubtreeProcessor) DrainPendingInvalidations() []chainhash.Hash {
+	return nil
+}
+
+func (m *MockSubtreeProcessor) QueueInvalidation(_ chainhash.Hash) {}
 
 // Reorg implements Interface.Reorg
 func (m *MockSubtreeProcessor) Reorg(moveBackBlocks []*model.Block, modeUpBlocks []*model.Block) error {

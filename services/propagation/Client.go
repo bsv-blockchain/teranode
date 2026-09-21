@@ -53,9 +53,27 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// batchHandoffTimeout backstops the batch hand-off wait so a dispatcher that never signals
+// (panic, missed code path, wedged transport) releases the submitter instead of parking it for
+// the life of the process. It must OUTLAST the deepest downstream wait this client fronts, or
+// it aborts work the lower layers would still have completed — see the settings.conf note on
+// aerospike_batchPolicy.docker.m for that exact bug happening one layer down.
+//
+// Sized against the committed default configuration:
+//
+//   - the utxo store's own submitter guard, which the downstream service waits on:
+//     batch TotalTimeout (settings.conf: 5m) plus aerospike_overload_retry_max_elapsed (2m)
+//     plus 30s grace, i.e. 7m30s
+//   - the store's spend wait, a separate sequential stage: utxostore_spendWaitTimeout (30s)
+//
+// 8m floor, rounded to 10m. Client-side queueing is deliberately NOT modelled: the flush
+// interval (propagation_sendBatchTimeout) is a batching trigger, not an end-to-end bound, and
+// worker saturation or the batcher's max-concurrency limiter can hold an item longer than it.
+// A var, not a const, purely so tests can shorten it; production never reassigns it.
+var batchHandoffTimeout = 10 * time.Minute
 
 // batchItem represents a single transaction in a batch along with its completion state.
 // This type serves as the fundamental unit in the transaction batch processing system:
@@ -290,12 +308,30 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 
 		c.batcher.PutCtx(ctx, item)
 
-		// group.Wait(context.Background(), 0): 0 timeout allocates no timer and
-		// a background context never cancels, so this blocks purely on the
-		// dispatcher completing the item — identical to the previous bare
-		// <-done receive (no timeout, no ctx arm). It can only return nil, so
-		// the result slot is always safe to read here.
-		_ = group.Wait(context.Background(), 0)
+		// Bounded by the CALLER's context AND a finite backstop. No production
+		// caller of ProcessTransaction was found outside this package; the same
+		// contract is applied here for consistency, because this is a published
+		// client type, and no production exposure is claimed for it. The backstop
+		// is what makes the wait finite regardless: a ctx arm is only as good as
+		// the deadline the caller happens to carry, and a wedged dispatcher must
+		// not be able to park a submitter for the life of the process.
+		//
+		// An early return is ABANDONMENT, not cancellation: the item is already on
+		// the batcher and the dispatcher may still send it, so the transaction may
+		// yet reach propagation. Two consequences, both load-bearing:
+		//
+		//   - item.result MUST NOT be read on this path. The dispatcher writes it
+		//     later from its own goroutine; not reading it is what keeps that write
+		//     race-free (no concurrent reader), and it is why the read below is
+		//     reachable only after Wait returned nil.
+		//   - the error MUST NOT be mistakable for a queue-full shed. A shed is
+		//     unwound by the caller (record deleted, inputs unspent); doing that to
+		//     a transaction still in flight could delete a record already absorbed
+		//     downstream. A ServiceError keeps it out of the ErrThresholdExceeded
+		//     branch and inside the caller's "ambiguous hand-off failure" branch.
+		if err := group.Wait(ctx, batchHandoffTimeout); err != nil {
+			return errors.NewServiceError("propagation batch handoff abandoned before dispatch completed", err)
+		}
 
 		return item.result
 	}
@@ -310,14 +346,22 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 		return nil
 	}
 
-	// Check if the error is related to message size (ResourceExhausted)
-	st, ok := status.FromError(err)
-	if ok && st.Code() == codes.ResourceExhausted {
-		// Log the fallback
+	// Only an oversized gRPC message is fixable by re-sending over HTTP. A
+	// block-assembly queue-full shed reuses the same ResourceExhausted code (via
+	// ERR_THRESHOLD_EXCEEDED), and re-sending it would drive a second full
+	// validation against a node that has just reported itself saturated. This
+	// server currently collapses a shed to codes.Internal before it reaches here,
+	// so the gate is defensive — it pins the client behaviour for when that changes.
+	if errors.IsGRPCMessageTooLarge(err) {
+		// Log the fallback. The gate guarantees this really is a size problem.
 		c.logger.Warnf("[ProcessTransaction][%s] Transaction exceeds gRPC message limit, falling back to validator /tx endpoint: %s",
-			tx.TxID(), st.Message())
+			tx.TxID(), status.Convert(err).Message())
 
 		return c.sendTransactionViaHTTP(ctx, txBytes, *tx.TxIDChainHash())
+	}
+
+	if errors.Is(errors.UnwrapGRPC(err), errors.ErrThresholdExceeded) {
+		c.logger.Warnf("[ProcessTransaction][%s] block assembly shed the transaction (queue full); not retrying over HTTP", tx.TxID())
 	}
 
 	// For any other types of errors, return the unwrapped gRPC error
@@ -437,9 +481,9 @@ func (c *Client) handleBatchError(batch []*batchItem, err error, format string, 
 func (c *Client) handleBatchResponse(batch []*batchItem, response *propagation_api.ProcessTransactionBatchResponse) {
 	// The server must return exactly one result per batch item. If it returns
 	// fewer (a contract violation), ranging over response.Errors would leave the
-	// tail items un-completed and strand their callers forever on group.Wait
-	// (single-item ProcessTransaction waits unbounded with no ctx arm). Guard the
-	// length and fail every item with a clear error rather than stranding them or
+	// tail items un-completed and their callers blocked on group.Wait until the
+	// caller context or batchHandoffTimeout released them. Guard the length and
+	// fail every item with a clear error rather than leaving them to that wait or
 	// index-panicking into the sweep.
 	if len(response.Errors) != len(batch) {
 		err := errors.NewProcessingError("[handleBatchResponse] propagation returned %d results for a batch of %d", len(response.Errors), len(batch))
@@ -553,18 +597,14 @@ func (c *Client) processBatchViaHTTP(ctx context.Context, batch []*batchItem, it
 //   - error: Error if batch processing fails at the transport level
 func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem) error {
 	// go-batcher recovers panics raised in this dispatch fn; without a sweep a
-	// panic part-way through would strand every submitter blocked on group.Wait
-	// (unbuffered handoff, no timeout). complete is CAS-guarded, so
-	// re-completing an item an earlier stage already completed is a no-op.
+	// panic part-way through would leave every submitter blocked on group.Wait
+	// until its caller context or batchHandoffTimeout released it. complete is
+	// CAS-guarded, so re-completing an item an earlier stage already completed is
+	// a no-op.
 	defer func() {
-		if r := recover(); r != nil {
-			c.logger.Errorf("[ProcessTransactionBatch] recovered panic, failing %d batch item(s): %v", len(batch), r)
-
-			err := errors.NewProcessingError("panic in ProcessTransactionBatch: %v", r)
-			for _, item := range batch {
-				item.complete(err)
-			}
-		}
+		util.SignalBatchPanic(recover(), batch, "ProcessTransactionBatch", c.logger, func(it *batchItem, err error) {
+			it.complete(err)
+		})
 	}()
 
 	// Create a slice of raw transaction bytes for the gRPC request
@@ -598,12 +638,16 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 		return nil
 	}
 
-	// Check if the error is related to message size (ResourceExhausted)
-	st, ok := status.FromError(err)
-	if ok && st.Code() == codes.ResourceExhausted {
-		// Log the fallback
+	// Only an oversized batch is fixable by re-sending over HTTP. A block-assembly
+	// queue-full shed reuses the same ResourceExhausted code (via
+	// ERR_THRESHOLD_EXCEEDED), and re-sending would drive a full HTTP validation for
+	// every transaction in the batch against a node that has just reported itself
+	// saturated — a shed batch amplified into N validations. Same gate as the
+	// single-transaction path above, so the two cannot drift.
+	if errors.IsGRPCMessageTooLarge(err) {
+		// Log the fallback. The gate guarantees this really is a size problem.
 		c.logger.Warnf("[ProcessTransactionBatch] Batch exceeds gRPC message limit, falling back to validator /txs endpoint: %s",
-			st.Message())
+			status.Convert(err).Message())
 
 		return c.processBatchViaHTTP(ctx, batch, items)
 	}
@@ -611,6 +655,10 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 	// Any other gRPC error - unwrap it according to our error handling rule
 	// and propagate to all transactions in batch
 	unwrappedErr := errors.UnwrapGRPC(err)
+
+	if errors.Is(unwrappedErr, errors.ErrThresholdExceeded) {
+		c.logger.Warnf("[ProcessTransactionBatch] block assembly shed the batch (queue full); not retrying over HTTP")
+	}
 
 	return c.handleBatchError(batch, unwrappedErr, "[ProcessTransactionBatch] Failed to process transaction batch")
 }

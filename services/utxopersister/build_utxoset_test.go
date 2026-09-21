@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"strings"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -104,8 +103,11 @@ func buildChainHeaders(t *testing.T, genesis *chainhash.Hash, n uint32) ([]*mode
 // readSetUTXOs parses a utxo-set file into a {txid:index -> value} map.
 // GetUTXOSetReader strips the 8-byte fileformat magic; the per-file metadata
 // CreateUTXOSet writes (32 block hash + 4 height + 32 previous hash = 68 bytes)
-// is skipped before the wrapper records. End-of-records is the 16-byte footer,
-// surfaced as io.EOF or "unexpected EOF" (mirrors CreateUTXOSet's own reader).
+// is skipped before the wrapper records. End-of-records is the 16-byte
+// footer, reported via the ErrRecordBoundary sentinel (mirrors CreateUTXOSet's
+// own reader). This helper reads back a file the test just wrote in the same
+// process, so - unlike the production readers - it does not need to validate
+// the footer's counts against what it processed.
 func readSetUTXOs(t *testing.T, ctx context.Context, tSettings *settings.Settings, store blob.Store, hash *chainhash.Hash) map[string]uint64 {
 	t.Helper()
 
@@ -124,7 +126,7 @@ func readSetUTXOs(t *testing.T, ctx context.Context, tSettings *settings.Setting
 	for {
 		w, err := NewUTXOWrapperFromReader(ctx, r)
 		if err != nil {
-			if err == io.EOF || strings.Contains(err.Error(), "unexpected EOF") {
+			if _, ok := err.(*ErrRecordBoundary); ok {
 				break
 			}
 

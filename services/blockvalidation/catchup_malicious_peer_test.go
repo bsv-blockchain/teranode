@@ -216,13 +216,22 @@ func TestCatchup_SybilAttack(t *testing.T) {
 		// Mock UTXO store block height
 		mockUTXOStore.On("GetBlockHeight").Return(uint32(1000))
 
-		// Use consecutive mainnet headers for proper chain linkage
-		// Get 21 headers: header[0] is the common ancestor, headers[1:21] are the chain
+		// The common ancestor is a real mainnet header. That is all the mainnet fixtures are needed for
+		// here: it is already in our chain, so it is never re-validated.
 		mainnetHeaders := testhelpers.GetMainnetHeadersRange(t, 0, 21)
 		bestBlockHeader := mainnetHeaders[0]
 
-		// Honest chain is the consecutive mainnet headers after the common ancestor
-		honestHeaders := mainnetHeaders[1:21]
+		// The honest chain is SYNTHETIC rather than a replay of mainnet headers. The honest peer serves
+		// coinbase-only bodies for these headers, and a body that declares no subtrees must carry the
+		// coinbase txid as its merkle root — an identity a real mainnet header can never satisfy
+		// against a synthetic coinbase. Building the chain from the same CreateSimpleCoinbaseTx
+		// coinbases the responder serves makes the honest blocks genuinely valid, which is what the
+		// honest-peer-succeeds assertion below depends on. The adversarial fork is unchanged and still
+		// branches from the same ancestor.
+		const honestChainLength = 20
+		const honestStartHeight = uint32(1001)
+
+		honestHeaders := testhelpers.CreateSyntheticChainFromAtHeight(bestBlockHeader, honestChainLength, honestStartHeight)
 
 		// Create fake headers that branch from the common ancestor
 		// These are synthetic headers with valid PoW that will fail other validation
@@ -235,8 +244,8 @@ func TestCatchup_SybilAttack(t *testing.T) {
 		adversarialForkHeaders := adversarialFork[1:]
 
 		targetBlock := &model.Block{
-			Header: honestHeaders[19], // Last header in the honest chain (index 19 since honestHeaders is [1:21])
-			Height: 1020,
+			Header: honestHeaders[honestChainLength-1], // tip of the honest chain
+			Height: honestStartHeight + honestChainLength - 1,
 		}
 		targetHash := targetBlock.Hash()
 
@@ -246,7 +255,7 @@ func TestCatchup_SybilAttack(t *testing.T) {
 
 		// Mock that the target block header is from the honest chain
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, targetHash).
-			Return(targetBlock.Header, &model.BlockHeaderMeta{Height: 1020}, nil).Maybe()
+			Return(targetBlock.Header, &model.BlockHeaderMeta{Height: targetBlock.Height}, nil).Maybe()
 
 		// bestBlockHeader is already set from mainnetHeaders[0] above
 		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).
@@ -277,13 +286,15 @@ func TestCatchup_SybilAttack(t *testing.T) {
 		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
-		// Create full blocks for the honest chain
+		// Create full blocks for the honest chain. The coinbase height MUST match the one the header
+		// was bound to, or the body no longer hashes to the header's merkle root.
 		honestBlocks := make([]*model.Block, len(honestHeaders))
 		for i, header := range honestHeaders {
+			height := honestStartHeight + uint32(i) // nolint:gosec
 			honestBlocks[i] = &model.Block{
 				Header:     header,
-				Height:     uint32(1001 + i),
-				CoinbaseTx: testhelpers.CreateSimpleCoinbaseTx(uint32(1001 + i)),
+				Height:     height,
+				CoinbaseTx: testhelpers.CreateSimpleCoinbaseTx(height),
 			}
 		}
 
@@ -448,13 +459,60 @@ func TestCatchup_SybilAttack(t *testing.T) {
 		// the height GetBestBlockHeader is mocked with above), so the common-ancestor
 		// walk stops at bestBlockHeader instead of treating blocks we hold but have not
 		// adopted as potential ancestors.
-		for i := 1; i < len(mainnetHeaders); i++ {
-			header := mainnetHeaders[i]
+		for i, header := range honestHeaders {
+			height := honestStartHeight + uint32(i) // nolint:gosec
 			mockBlockchainClient.On("GetBlockExists", mock.Anything, header.Hash()).
 				Return(false, nil).Maybe()
 			mockBlockchainClient.On("GetBlockHeader", mock.Anything, header.Hash()).
-				Return(header, &model.BlockHeaderMeta{Height: uint32(1000 + i)}, nil).Maybe()
+				Return(header, &model.BlockHeaderMeta{Height: height}, nil).Maybe()
 		}
+
+		// Two difficulty regimes. The suite-wide GetNextWorkRequired expectation answers mainnet bits
+		// (1d00ffff), which the synthetic honest chain cannot meet — its headers are mined to the
+		// regtest 207fffff target, the same target the adversarial fork already uses. testify resolves
+		// expectations in registration order, so the broad one registered by the harness has to be
+		// dropped before a narrower one can win.
+		//
+		// The split is by PARENT hash, and the honest chain and the adversarial fork share their first
+		// parent — the common ancestor — so that one lookup answers easy bits for both. Only the
+		// adversarial fork's first header is affected; every later adversarial lookup keys on a fork
+		// header and falls back to mainnet bits. That is harmless here because the Sybil peers fail
+		// structurally, on the target block being absent from the chain they serve, before any
+		// per-block difficulty check — which is what the failCount assertion at the end pins.
+		keptExpectations := mockBlockchainClient.ExpectedCalls[:0]
+
+		for _, expectation := range mockBlockchainClient.ExpectedCalls {
+			if expectation.Method != "GetNextWorkRequired" {
+				keptExpectations = append(keptExpectations, expectation)
+			}
+		}
+
+		mockBlockchainClient.ExpectedCalls = keptExpectations
+
+		honestParents := make(map[chainhash.Hash]struct{}, len(honestHeaders)+1)
+		honestParents[*bestBlockHeader.Hash()] = struct{}{}
+
+		for _, header := range honestHeaders {
+			honestParents[*header.Hash()] = struct{}{}
+		}
+
+		easyNBits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+		mainnetNBits, err := model.NewNBitFromString("1d00ffff")
+		require.NoError(t, err)
+
+		mockBlockchainClient.On("GetNextWorkRequired", mock.Anything,
+			mock.MatchedBy(func(prevHash *chainhash.Hash) bool {
+				if prevHash == nil {
+					return false
+				}
+
+				_, ok := honestParents[*prevHash]
+
+				return ok
+			}), mock.Anything).Return(easyNBits, nil).Maybe()
+		mockBlockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).
+			Return(mainnetNBits, nil).Maybe()
 
 		// Mock GetBlock for the common ancestor (needed during validation)
 		mockBlockchainClient.On("GetBlock", mock.Anything, bestBlockHeader.Hash()).

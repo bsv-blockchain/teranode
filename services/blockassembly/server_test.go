@@ -244,11 +244,11 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		genesisHash := chainhash.HashH([]byte("genesis"))
 		for i := uint64(0); i < 10; i++ {
 			// Different output index for each tx
-			server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
+			require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
 				Hash:        chainhash.HashH([]byte(fmt.Sprintf("%d", i))),
 				Fee:         i,
 				SizeInBytes: i,
-			}}, []*subtreepkg.TxInpoints{singleParentInpointsPtr(genesisHash, uint32(i))})
+			}}, []*subtreepkg.TxInpoints{singleParentInpointsPtr(genesisHash, uint32(i))}))
 		}
 
 		require.Eventually(t, func() bool {
@@ -554,11 +554,11 @@ func TestTxCount(t *testing.T) {
 		// to avoid TxInpoints serialization issues
 		for i := 0; i < 3; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("tx-%d", i)))
-			server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
+			require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}}, []*subtreepkg.TxInpoints{{}})
+			}}, []*subtreepkg.TxInpoints{{}}))
 		}
 
 		// Wait for processing - expect initial count + 3 added transactions
@@ -577,11 +577,11 @@ func TestSubmitMiningSolution_InvalidBlock_HandlesReset(t *testing.T) {
 		// Add some transactions to create a mining candidate
 		for i := 0; i < 5; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("tx%d", i)))
-			server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
+			require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}}, []*subtreepkg.TxInpoints{{}})
+			}}, []*subtreepkg.TxInpoints{{}}))
 		}
 
 		// Wait for transactions to be processed
@@ -1400,11 +1400,11 @@ func TestRemoveTxIntensive(t *testing.T) {
 
 		// First add a transaction
 		txHash := chainhash.HashH([]byte("test-tx-to-remove"))
-		server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
+		require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
 			Hash:        txHash,
 			Fee:         100,
 			SizeInBytes: 250,
-		}}, []*subtreepkg.TxInpoints{{}})
+		}}, []*subtreepkg.TxInpoints{{}}))
 
 		// Wait for it to be added
 		time.Sleep(10 * time.Millisecond)
@@ -1548,11 +1548,11 @@ func TestGetMiningCandidateIntensive(t *testing.T) {
 		// Add some transactions to create subtrees
 		for i := 0; i < 5; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("mining-tx-%d", i)))
-			server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
+			require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}}, []*subtreepkg.TxInpoints{{}})
+			}}, []*subtreepkg.TxInpoints{{}}))
 		}
 
 		time.Sleep(50 * time.Millisecond) // Allow processing
@@ -2057,11 +2057,11 @@ func TestRemoveTxEdgeCases(t *testing.T) {
 
 		// Add a transaction first
 		txHash := chainhash.HashH([]byte("test-tx-remove"))
-		server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
+		require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
 			Hash:        txHash,
 			Fee:         100,
 			SizeInBytes: 250,
-		}}, []*subtreepkg.TxInpoints{{}})
+		}}, []*subtreepkg.TxInpoints{{}}))
 
 		// Now remove it to cover the success path
 		req := &blockassembly_api.RemoveTxRequest{

@@ -29,6 +29,13 @@ Network sync needs no seed data:
 ./start.sh
 ```
 
+A fresh `docker.m` deployment starts in `IDLE`. For network sync without a seed
+inspection window, start catchup explicitly:
+
+```bash
+./cli.sh setfsmstate --fsmstate catchingblocks
+```
+
 Monitor progress:
 
 ```bash
@@ -146,17 +153,58 @@ then start normally:
 
 Do not restore data from one network into a configuration for another network.
 
-## FSM State
+## Verify a Seed Before Catch-up
 
-`./start.sh` performs the normal FSM transition. If a startup race leaves the
-node in `INIT`, set the state manually:
+The quickstart stack uses the `docker.m` settings context. A fresh blockchain
+store therefore starts in `IDLE`, including the first start after `./seed.sh`:
+the seeder writes chain data and the Block Assembler checkpoint, but no FSM
+state. While the node is parked, confirm that the seeded tip and network match
+the snapshot you intended to load and that every service can reach its store.
 
 ```bash
-./cli.sh setfsmstate --fsmstate RUNNING
-./cli.sh getfsmstate
+./start.sh
+./status.sh
+./cli.sh getfsmstate                        # expect IDLE
 ```
 
+During this IDLE inspection window, `subtreevalidation` and `pruner` have not
+bound their gRPC listeners yet. With the port-listen healthchecks in the bundled
+Docker definitions, their health status may remain **starting** or become
+**unhealthy** while parked: those gRPC ports are not listening. That status
+alone does not indicate a bad seed. Inspect the blockchain FSM, seeded tip and
+logs; the blockchain listener remains available for the CLI command below.
+Other enabled services with the same startup wait and port probes can behave
+similarly.
+
+After verification, start synchronization explicitly:
+
+```bash
+./cli.sh setfsmstate --fsmstate catchingblocks
+./cli.sh getfsmstate                        # expect CATCHINGBLOCKS
+```
+
+After allowing the services time to initialize, run `./status.sh` again. If
+subtreevalidation or pruner remains unhealthy after leaving IDLE, inspect its
+logs and store connectivity; do not dismiss a continuing failure as expected.
+
+Catch-up promotes the node to `RUNNING` after it reaches the active network's
+highest checkpoint. There is no transition from `CATCHINGBLOCKS` back to
+`IDLE`, so verify the seed first. To skip this window on an unattended node,
+set `blockchain_initializeNodeInState.docker.m = CATCHINGBLOCKS` in
+`settings_local.conf` before the first start.
+
 ## Troubleshooting Sync
+
+An unrecognized persisted FSM state aborts blockchain startup with an error
+naming the stored value. The node preserves that value rather than guessing
+whether catchup or mining was intended. `LEGACYSYNCING` is the one supported
+legacy migration and resumes as `CATCHINGBLOCKS`.
+
+For an unknown value, stop the stack and verify that the data and Teranode
+version are compatible. Restore a compatible backup or repair the FSM record
+through your datastore maintenance procedure before restarting. The CLI cannot
+repair this while blockchain startup is failing. Preserve a backup before any
+store repair; a reset and resync is a separate recovery choice.
 
 - Check container health with `./status.sh`.
 - Check service logs with `./logs.sh blockchain`, `./logs.sh legacy`, or

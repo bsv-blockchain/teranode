@@ -421,12 +421,6 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/merkle_proof/:hash/hex", h.GetMerkleProof(HEX))
 	apiGroup.GET("/merkle_proof/:hash/json", h.GetMerkleProof(JSON))
 
-	if h.settings.StatsPrefix != "" {
-		e.GET(h.settings.StatsPrefix+"stats", AdaptStdHandler(gocore.HandleStats))
-		e.GET(h.settings.StatsPrefix+"reset", AdaptStdHandler(gocore.ResetStats))
-		e.GET(h.settings.StatsPrefix+"*", AdaptStdHandler(gocore.HandleOther))
-	}
-
 	// Create auth handler for protecting admin endpoints (used regardless of dashboard state)
 	authHandler := dashboard.NewAuthHandler(h.logger, h.settings)
 

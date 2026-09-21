@@ -4,7 +4,7 @@ Last modified: 11-June-2026
 
 ## Why This Matters
 
-Teranode's P2P layer (libp2p) needs inbound TCP connections on the P2P port (`9905` in the shipped configuration) to accept direct peer connections. The port peers actually dial is whatever your `p2p_listen_addresses` / `p2p_advertise_addresses` multiaddrs specify — the load balancer listener port must match the port in your advertise multiaddr. A node that can only dial out still works, but it contributes far less to network health: it cannot be dialed by other peers, cannot serve as a DHT server, and cannot join the BSV Association bootstrap pool (see [Joining the DNS Bootstrap Pool](#joining-the-dns-bootstrap-pool)).
+Teranode's P2P layer (libp2p) needs inbound TCP connections on the P2P port (`9905` in the shipped configuration) to accept direct peer connections. libp2p binds `p2p_port` on all interfaces; the port peers actually dial is the one in your `p2p_advertise_addresses` multiaddr, so the load balancer listener port must match it. A node that can only dial out still works, but it contributes far less to network health: it cannot be dialed by other peers, cannot serve as a DHT server, and cannot join the BSV Association bootstrap pool (see [Joining the DNS Bootstrap Pool](#joining-the-dns-bootstrap-pool)).
 
 Inside Kubernetes this is not automatic. Pod IPs are not routable from the internet, and the default Service behaviour (`externalTrafficPolicy: Cluster`) breaks libp2p in subtle ways described below. This guide shows a working pattern for AWS/EKS; the principles carry over to other cloud providers.
 

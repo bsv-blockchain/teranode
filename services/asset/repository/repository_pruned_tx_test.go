@@ -52,7 +52,7 @@ func newRepoWithMockedUtxoStore(t *testing.T) (*repository.Repository, *utxo.Moc
 
 	mockUtxoStore := &utxo.MockUtxostore{}
 
-	repo, err := repository.NewRepository(logger, tSettings, mockUtxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil)
+	repo, err := repository.NewRepository(logger, tSettings, mockUtxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil, nil)
 	require.NoError(t, err)
 
 	return repo, mockUtxoStore, txStore

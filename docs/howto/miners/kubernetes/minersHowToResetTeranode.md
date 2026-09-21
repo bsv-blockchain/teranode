@@ -156,11 +156,12 @@ kubectl get pods -n teranode-operator
 
 ### Set FSM State
 
-Teranode starts in IDLE state. You need to transition to the appropriate state:
+The reset leaves a fresh store, so the `operator` context starts Teranode in
+IDLE. Start synchronization after verifying the reset:
 
 ```bash
 # Via teranode-cli
-kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate RUNNING
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate catchingblocks
 ```
 
 ### Monitor Synchronization

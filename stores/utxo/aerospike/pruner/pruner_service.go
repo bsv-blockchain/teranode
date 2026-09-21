@@ -209,9 +209,8 @@ type Service struct {
 	// every write outside the pruner stay on COMMIT_ALL — see prune_policies.go.
 	removalCommitLevel aerospike.CommitLevel
 
-	// Persisted across prune sessions so that parents pruned in earlier blocks can still be
-	// recognised when their children reach the prune horizon a session or more later.
-	// Nil when defensiveEnabled is true.
+	// Always nil. PrunedTxSet is a cuckoo filter and must not decide
+	// parent-marker writes; a false positive drops replay protection.
 	prunedSet *PrunedTxSet
 
 	partitionWorkerFn func(ctx context.Context, blockHeight uint32, partitionStart int, partitionCount int, prunedSet *PrunedTxSet) (int64, int64, error)
@@ -324,15 +323,15 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		})
 		prometheusUtxoParentsSkippedPruned = promauto.NewCounter(prometheus.CounterOpts{
 			Name: "utxo_pruner_parents_skipped_pruned_total",
-			Help: "Number of parent updates skipped because parent was already pruned (in this or a prior session)",
+			Help: "Always 0: the PrunedTxSet parent-update skip is disabled (see #1701). Number of parent updates skipped because parent was already pruned (in this or a prior session)",
 		})
 		prometheusUtxoPrunedSetSize = promauto.NewGauge(prometheus.GaugeOpts{
 			Name: "utxo_pruner_pruned_set_size",
-			Help: "Approximate number of TXIDs tracked in the in-memory PrunedTxSet across prune sessions",
+			Help: "Always 0: PrunedTxSet is never constructed (see #1701). Approximate number of TXIDs tracked in the in-memory PrunedTxSet across prune sessions",
 		})
 		prometheusUtxoPrunedSetSaturated = promauto.NewGauge(prometheus.GaugeOpts{
 			Name: "utxo_pruner_pruned_set_saturated",
-			Help: "1 if any PrunedTxSet Insert has failed since construction without rotation recovering it (extreme CAS contention without saturation, or insertion into a freshly-rotated generation also failing — both are error/backstop signals; should be 0 in normal operation. Use utxo_pruner_pruned_set_rotations for routine cap pressure.)",
+			Help: "Always 0 because PrunedTxSet is never constructed (see #1701) — do NOT read 0 here as healthy. 1 if any PrunedTxSet Insert has failed since construction without rotation recovering it (extreme CAS contention without saturation, or insertion into a freshly-rotated generation also failing — both are error/backstop signals; should be 0 in normal operation. Use utxo_pruner_pruned_set_rotations for routine cap pressure.)",
 		})
 		// Tracked as a Gauge (not a Counter) because the value is sampled
 		// from PrunedTxSet.Rotations() at the end of each prune session
@@ -341,7 +340,7 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		// reserved for Counter metrics.
 		prometheusUtxoPrunedSetRotations = promauto.NewGauge(prometheus.GaugeOpts{
 			Name: "utxo_pruner_pruned_set_rotations",
-			Help: "Cumulative number of generation rotations across all PrunedTxSet shards (each rotation drops the previous-gen entries; high rate suggests pruner_utxoPrunedSetMaxEntries is too small)",
+			Help: "Always 0: PrunedTxSet is never constructed (see #1701). Cumulative number of generation rotations across all PrunedTxSet shards (each rotation drops the previous-gen entries; high rate suggests pruner_utxoPrunedSetMaxEntries is too small)",
 		})
 	})
 
@@ -398,14 +397,11 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		fieldBlockHeights:              fields.BlockHeights.String(),
 	}
 
-	// PrunedTxSet is persistent across prune sessions so children whose parents were pruned
-	// in earlier sessions can still skip the parent-update round-trip. Defensive mode is
-	// incompatible with the optimisation because records may be skipped after the reader
-	// registers them.
-	if !service.defensiveEnabled {
-		service.prunedSet = NewPrunedTxSet(256, settings.Pruner.UTXOPrunedSetMaxEntries)
-	}
-
+	// Do not construct PrunedTxSet. It is a cuckoo filter used to skip
+	// parent deletedChildren writes; a false positive drops the replay
+	// marker on a live parent. prunedSet stays nil so every parent is
+	// updated. Missing parents already return TX_NOT_FOUND / KEY_NOT_FOUND
+	// and are counted as skipped.
 	service.partitionWorkerFn = service.partitionWorker
 
 	return service, nil
@@ -788,36 +784,10 @@ func (s *Service) PruneWithPartitions(ctx context.Context, blockHeight uint32, b
 		partitionStart += partitionCount
 	}
 
-	// PrunedTxSet is owned by the Service and reused across prune sessions within the
-	// life of this process. This lets children whose parents were pruned in an earlier
-	// session (the common case for chains crossing block-height boundaries) still skip
-	// the parent-update round-trip. The set lives only in memory — it is rebuilt from
-	// scratch on pod restart and is not persisted to disk.
-	//
-	// Invariants:
-	//   - nil when defensiveEnabled: records may be skipped after the reader registers them,
-	//     which would incorrectly suppress parent updates for records still in Aerospike.
-	//   - Add is idempotent at the call-site level (cuckoo Insert may re-insert a duplicate
-	//     fingerprint, but Count tracks all successful inserts so re-scanning a partition
-	//     after a timeout is functionally safe).
-	//   - CheckAndRemove (cuckoo Delete) is destructive — one consumer per parent. For high
-	//     fan-out parents spanning sessions, only the first child to look gets the skip;
-	//     subsequent children fall back to the round-trip. Perf nit, not a correctness bug.
-	//   - The skip suppresses the deletedChildren bin update. That bin is only consulted by
-	//     the defensive-mode safety check (always off when prunedSet is non-nil), so a
-	//     missed update — including the ~3% cuckoo false-positive rate — has no
-	//     behavioural consequence.
-	//
-	// Memory is bounded by settings.Pruner.UTXOPrunedSetMaxEntries — interpreted as a
-	// TOTAL entry budget across both generations of all shards, so memory ≈ maxEntries
-	// × ~1 byte (default 10M ≈ 10 MiB; 0 selects the built-in 2B default ≈ 2 GiB).
-	// When the current generation saturates it rotates into the `previous` slot and a
-	// fresh `current` is allocated, so the set never freezes — older entries simply
-	// fall out of `previous` on the next rotation. The
-	// utxo_pruner_pruned_set_rotations gauge surfaces rotation rate;
-	// utxo_pruner_pruned_set_saturated indicates the rare case where an Insert fails
-	// even in the freshly-rotated current generation (a backstop signal, not the
-	// normal at-capacity indicator).
+	// prunedSet is always nil (cuckoo skip disabled: a false positive
+	// dropped deletedChildren on a live parent). The nil-guarded Add /
+	// CheckAndRemove paths below are therefore no-ops; every parent gets
+	// an addDeletedChildren write.
 	prunedSet := s.prunedSet
 
 	// Cumulative counters persist across retry attempts
@@ -1605,8 +1575,12 @@ func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[str
 	// parent's deletedChildren bin and assumes the update has landed
 	// before the child record is gone.
 	//
-	// When defensive mode is off (the dev-scale-1 default), order
-	// doesn't matter because the deletedChildren bin is never read.
+	// When defensive mode is off the two go out together. Note that the
+	// deletedChildren bin IS still read on the spend path regardless of
+	// mode (teranode.lua checks it on an idempotent re-spend), so a parent
+	// update that fails inside the combined batch leaves the child deleted
+	// with no replay marker. See #1701; ordering this path like the
+	// defensive one is open follow-up work.
 	if s.defensiveEnabled {
 		if len(parentUpdates) > 0 {
 			if err := s.executeBatchParentUpdates(ctx, parentUpdates); err != nil {

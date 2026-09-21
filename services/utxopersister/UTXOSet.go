@@ -21,7 +21,6 @@ import (
 	"encoding/binary"
 	"io"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -381,9 +380,51 @@ func (us *UTXOSet) Abort(err error) {
 	}
 }
 
-type readCloserWrapper struct {
-	*bufio.Reader
-	io.Closer
+// pooledBufReader owns a pooled *bufio.Reader for the lifetime of one read, returning it on
+// Close.
+//
+// The reader is a named field rather than an embedded one, and that is the point of the type.
+// Embedding promotes the whole bufio.Reader method set, including WriteTo; io.Copy selects a
+// source's WriteTo before it ever calls Read, so a caller could stream straight past the guard
+// in Read below and dereference a buffer this type had already given back. With a named field
+// the type is exactly an io.ReadCloser, which is all that GetUTXOAdditionsReader and
+// GetUTXODeletionsReader promise.
+//
+// Not safe for concurrent use: a Close must not overlap a Read, the same contract bufio.Reader
+// itself carries. Every consumer in this repository closes on the frame that reads.
+type pooledBufReader struct {
+	reader *bufio.Reader
+	closer io.Closer
+	once   sync.Once
+}
+
+// Read delegates to the pooled buffer, or reports that the buffer has already been returned.
+func (p *pooledBufReader) Read(b []byte) (int, error) {
+	if p.reader == nil {
+		return 0, errors.NewProcessingError("read from a utxo-persister reader that is already closed")
+	}
+
+	return p.reader.Read(b)
+}
+
+// Close returns the buffer to the pool and closes the underlying reader. The sync.Once keeps
+// both to exactly one occurrence: releasing twice would hand one buffer to two owners, and the
+// underlying close is what releases the file store's read permit. Repeat calls return nil.
+func (p *pooledBufReader) Close() error {
+	var err error
+
+	p.once.Do(func() {
+		reader := p.reader
+		p.reader = nil
+
+		filestorer.ReleaseReader(reader)
+
+		if p.closer != nil {
+			err = p.closer.Close()
+		}
+	})
+
+	return err
 }
 
 // GetUTXOAdditionsReader returns a reader for accessing UTXO additions.
@@ -427,9 +468,9 @@ func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, e
 
 	us.logger.Debugf("Using %s buffer for utxo-additions reader", bufferSize)
 
-	r = &readCloserWrapper{
-		Reader: bufio.NewReaderSize(r, bufferSize.Int()),
-		Closer: r.(io.Closer),
+	r = &pooledBufReader{
+		reader: filestorer.AcquireReader(r, bufferSize.Int()),
+		closer: r,
 	}
 
 	return r, nil
@@ -467,9 +508,9 @@ func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, e
 
 	us.logger.Debugf("Using %s buffer for utxo-deletions reader", bufferSize)
 
-	r = &readCloserWrapper{
-		Reader: bufio.NewReaderSize(r, bufferSize.Int()),
-		Closer: r.(io.Closer),
+	r = &pooledBufReader{
+		reader: filestorer.AcquireReader(r, bufferSize.Int()),
+		closer: r,
 	}
 
 	return r, nil
@@ -589,12 +630,14 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 	}
 
 	var (
-		readStat   = createStat.NewStat("readTX")
-		filterStat = createStat.NewStat("filterUTXOs")
-		writeStat  = createStat.NewStat("writeUTXOs")
-		ts         = gocore.CurrentTime()
-		txCount    uint64
-		utxoCount  uint64
+		readStat    = createStat.NewStat("readTX")
+		filterStat  = createStat.NewStat("filterUTXOs")
+		writeStat   = createStat.NewStat("writeUTXOs")
+		ts          = gocore.CurrentTime()
+		txCount     uint64
+		utxoCount   uint64
+		recordsRead uint64
+		utxosRead   uint64
 	)
 
 	if c.firstPreviousBlockHash.String() != c.settings.ChainCfgParams.GenesisHash.String() {
@@ -615,9 +658,9 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 
 		us.logger.Infof("Using %s buffer for previous UTXOSet reader", bufferSize)
 
-		previousUTXOSetReader = &readCloserWrapper{
-			Reader: bufio.NewReaderSize(previousUTXOSetReader, bufferSize.Int()),
-			Closer: previousUTXOSetReader.(io.Closer),
+		previousUTXOSetReader = &pooledBufReader{
+			reader: filestorer.AcquireReader(previousUTXOSetReader, bufferSize.Int()),
+			closer: previousUTXOSetReader,
 		}
 
 		defer previousUTXOSetReader.Close()
@@ -659,40 +702,48 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 				// height/coinbase + its UTXOs).
 				utxoWrapper, err := NewUTXOWrapperFromReader(ctx, previousUTXOSetReader)
 				if err != nil {
-					// CreateUTXOSet appends a 16-byte footer (txCount +
-					// utxoCount) after the final UTXOWrapper. This loop does
-					// not consult that count, so it only learns the records
-					// are exhausted when the next read either lands exactly on
-					// EOF (a bare io.EOF) or short-reads the footer, which
-					// io.ReadFull reports as io.ErrUnexpectedEOF ("unexpected
-					// EOF"). cmd/utxovalidator handles the same footer.
-					//
-					// The short read is matched by substring, not
-					// structurally: errors.New flattens a non-*Error cause to
-					// its message (errors/errors.go:334-336), discarding the
-					// io.ErrUnexpectedEOF sentinel - so errors.Is(err,
-					// io.ErrUnexpectedEOF) would itself reduce to this same
-					// strings.Contains. (And do not fold the io.EOF clause into
-					// errors.Is: "EOF" is a substring of "unexpected EOF", so
-					// it would swallow this footer error too.) A structural fix
-					// - FromReader returning a typed sentinel, and validating
-					// records-read == txCount against the footer - is tracked
-					// as a follow-up.
-					//
-					// Consequence: a genuinely truncated tail is
-					// indistinguishable from the footer and is silently
-					// accepted (pre-existing; same as utxovalidator). Matching
-					// only "unexpected EOF" - not the broader "failed to read
-					// txid" utxovalidator also matches - keeps a real non-EOF
-					// read error loud rather than swallowed.
-					if err == io.EOF || strings.Contains(err.Error(), "unexpected EOF") {
-						break OUTER
+					// CreateUTXOSet unconditionally appends a 16-byte footer
+					// (txCount||utxoCount) after the final UTXOWrapper, with
+					// no marker byte in front of it. The only way this loop
+					// can legitimately be done is if the next read lands
+					// exactly on those footer bytes - which FromReader
+					// reports via the ErrRecordBoundary sentinel - and the
+					// footer's counts agree with what was actually read
+					// here. Anything else (a bare io.EOF, which can only
+					// happen if the footer itself is missing entirely; a
+					// short read at any other offset; or an
+					// ErrRecordBoundary whose footer bytes don't match) is a
+					// genuine truncation and must fail loudly rather than
+					// silently produce a new snapshot that omits the
+					// unread tail.
+					var boundary *ErrRecordBoundary
+					if !errors.As(err, &boundary) {
+						return errors.NewStorageError("error reading previous utxo-set (%s.%s) at iteration %d", c.firstPreviousBlockHash.String(), fileformat.FileTypeUtxoSet, recordsRead, err)
 					}
 
-					return errors.NewStorageError("error reading previous utxo-set (%s.%s) at iteration %d", c.firstPreviousBlockHash.String(), fileformat.FileTypeUtxoSet, txCount, err)
+					expectedTxCount, expectedUTXOCount, decErr := DecodeFooter(boundary.FooterBytes[:])
+					if decErr != nil {
+						return errors.NewStorageError("error decoding previous utxo-set (%s.%s) footer", c.firstPreviousBlockHash.String(), fileformat.FileTypeUtxoSet, decErr)
+					}
+
+					if expectedTxCount != recordsRead || expectedUTXOCount != utxosRead {
+						return errors.NewProcessingError("previous utxo-set (%s.%s) is truncated: footer expects %d transactions/%d utxos, only %d/%d were read",
+							c.firstPreviousBlockHash.String(), fileformat.FileTypeUtxoSet, expectedTxCount, expectedUTXOCount, recordsRead, utxosRead)
+					}
+
+					break OUTER
 				}
 
 				ts = readStat.AddTime(ts)
+
+				// Count every wrapper read from the previous file,
+				// unconditionally and before deletion filtering, so the
+				// truncation check above compares against what was actually
+				// read - not against txCount/utxoCount, which only track
+				// survivors after filtering and exist to write the *new*
+				// file's own footer below.
+				recordsRead++
+				utxosRead += uint64(len(utxoWrapper.UTXOs))
 
 				// Filter UTXOs based on the deletions map
 				utxoWrapper.UTXOs = filterUTXOs(utxoWrapper.UTXOs, c.deletions, &utxoWrapper.TxID)

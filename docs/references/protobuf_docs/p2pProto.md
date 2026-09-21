@@ -51,8 +51,6 @@
     - [UnbanPeerResponse](#UnbanPeerResponse)
     - [UpdateCatchupErrorRequest](#UpdateCatchupErrorRequest)
     - [UpdateCatchupErrorResponse](#UpdateCatchupErrorResponse)
-    - [UpdateCatchupReputationRequest](#UpdateCatchupReputationRequest)
-    - [UpdateCatchupReputationResponse](#UpdateCatchupReputationResponse)
 
     - [PeerService](#PeerService)
 
@@ -376,6 +374,12 @@ Represents comprehensive peer information with all registry metadata.
 | client_name | [string](#string) |  | Human-readable name of the client software |
 | last_catchup_error | [string](#string) |  | Last error message from catchup attempt |
 | last_catchup_error_time | [int64](#int64) |  | Time of last catchup error (Unix timestamp) |
+| catchup_attempts | [int64](#int64) |  | Number of catchup attempts with this peer |
+| catchup_successes | [int64](#int64) |  | Number of successful catchup operations |
+| catchup_failures | [int64](#int64) |  | Number of failed catchup operations |
+| blocks_received | [int64](#int64) |  | Number of blocks received from this peer |
+| subtrees_received | [int64](#int64) |  | Number of subtrees received from this peer |
+| transactions_received | [int64](#int64) |  | Number of transactions received from this peer |
 
 <a name="RecordBytesDownloadedRequest"></a>
 
@@ -585,27 +589,6 @@ Represents the response from updating a catchup error.
 | ----- | ---- | ----- | ----------- |
 | ok | [bool](#bool) |  | Indicates whether the operation succeeded |
 
-<a name="UpdateCatchupReputationRequest"></a>
-
-### UpdateCatchupReputationRequest
-
-Represents a request to update the catchup reputation score for a peer.
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| peer_id | [string](#string) |  | Peer ID to update |
-| score | [double](#double) |  | Reputation score between 0-100 |
-
-<a name="UpdateCatchupReputationResponse"></a>
-
-### UpdateCatchupReputationResponse
-
-Represents the response from updating catchup reputation.
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| ok | [bool](#bool) |  | Indicates whether the operation succeeded |
-
 <!-- end messages -->
 
 <!-- end enums -->
@@ -633,7 +616,6 @@ Service provides methods for P2P peer management, including connection handling,
 | RecordCatchupSuccess | [RecordCatchupSuccessRequest](#p2p_api-RecordCatchupSuccessRequest) | [RecordCatchupSuccessResponse](#p2p_api-RecordCatchupSuccessResponse) | Records a successful catchup operation including duration. Improves peer reputation. |
 | RecordCatchupFailure | [RecordCatchupFailureRequest](#p2p_api-RecordCatchupFailureRequest) | [RecordCatchupFailureResponse](#p2p_api-RecordCatchupFailureResponse) | Records a failed catchup operation. Negatively affects peer reputation. |
 | RecordCatchupMalicious | [RecordCatchupMaliciousRequest](#p2p_api-RecordCatchupMaliciousRequest) | [RecordCatchupMaliciousResponse](#p2p_api-RecordCatchupMaliciousResponse) | Records a malicious catchup attempt by a peer. Severely damages peer reputation. |
-| UpdateCatchupReputation | [UpdateCatchupReputationRequest](#p2p_api-UpdateCatchupReputationRequest) | [UpdateCatchupReputationResponse](#p2p_api-UpdateCatchupReputationResponse) | Updates the catchup reputation score for a peer (0-100). |
 | UpdateCatchupError | [UpdateCatchupErrorRequest](#p2p_api-UpdateCatchupErrorRequest) | [UpdateCatchupErrorResponse](#p2p_api-UpdateCatchupErrorResponse) | Records an error message from a catchup attempt for debugging. |
 | ResetReputation | [ResetReputationRequest](#p2p_api-ResetReputationRequest) | [ResetReputationResponse](#p2p_api-ResetReputationResponse) | Resets reputation scores for a peer or all peers. |
 | GetPeersForCatchup | [GetPeersForCatchupRequest](#p2p_api-GetPeersForCatchupRequest) | [GetPeersForCatchupResponse](#p2p_api-GetPeersForCatchupResponse) | Retrieves peers that are suitable for catchup operations with their reputation scores. |

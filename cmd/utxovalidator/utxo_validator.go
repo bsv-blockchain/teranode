@@ -11,10 +11,10 @@ import (
 	"io"
 	"os"
 	"strconv"
-	"strings"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
@@ -119,17 +119,45 @@ func validateUTXOSet(ctx context.Context, r io.Reader, verbose bool) (*UTXOValid
 
 	for {
 		if err = utxoWrapper.FromReader(ctx, br, false); err != nil {
-			if err == io.EOF {
-				break // End of file reached
-			}
-			// Handle unexpected EOF more gracefully - this can happen at the end of large files
-			errStr := err.Error()
-			if strings.Contains(errStr, "failed to read txid") || strings.Contains(errStr, "unexpected EOF") {
-				fmt.Printf("Reached end of file after processing %d transactions\n", processedWrappers)
-				break
+			// utxopersister writers unconditionally append a 16-byte footer
+			// (txCount||utxoCount) after the final record, with no marker
+			// byte in front of it. The only way this loop can legitimately
+			// be done is if the next read lands exactly on those footer
+			// bytes (reported via ErrRecordBoundary) and the footer's
+			// counts agree with what was actually read here. Anything else
+			// - a bare io.EOF (only possible if the footer itself is
+			// missing), a short read at any other offset, or an
+			// ErrRecordBoundary whose footer bytes don't match - is a
+			// genuine truncation and must fail loudly rather than being
+			// reported as a successful, complete validation.
+			var boundary *utxopersister.ErrRecordBoundary
+			if !errors.As(err, &boundary) {
+				return nil, errors.NewProcessingError("error reading UTXO wrapper", err)
 			}
 
-			return nil, errors.NewProcessingError("error reading UTXO wrapper", err)
+			expectedTxCount, expectedUTXOCount, decErr := utxopersister.DecodeFooter(boundary.FooterBytes[:])
+			if decErr != nil {
+				return nil, errors.NewProcessingError("error decoding utxo-set footer", decErr)
+			}
+
+			processedTxCount, tcErr := safeconversion.IntToUint64(processedWrappers)
+			if tcErr != nil {
+				return nil, errors.NewProcessingError("error converting processed transaction count", tcErr)
+			}
+
+			processedUTXOCount, ucErr := safeconversion.IntToUint64(result.UTXOCount)
+			if ucErr != nil {
+				return nil, errors.NewProcessingError("error converting processed UTXO count", ucErr)
+			}
+
+			if expectedTxCount != processedTxCount || expectedUTXOCount != processedUTXOCount {
+				return nil, errors.NewProcessingError("utxo-set file truncated: footer expects %d transactions/%d utxos, only %d/%d were read",
+					expectedTxCount, expectedUTXOCount, processedTxCount, processedUTXOCount)
+			}
+
+			fmt.Printf("Reached end of file after processing %d transactions\n", processedWrappers)
+
+			break
 		}
 
 		result.ActualSatoshis += utxoWrapper.UTXOTotalValue

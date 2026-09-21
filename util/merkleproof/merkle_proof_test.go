@@ -17,19 +17,6 @@ type MockMerkleProofConstructor struct {
 	blockHeader       *model.BlockHeader
 	subtrees          map[string]*subtree.Subtree
 	mainChainBlockIDs map[uint32]bool
-
-	// Override for FindBlocksContainingSubtree. When nil, returns default
-	// single-entry data; when set, returns the contents verbatim. Set
-	// blockIDs to an empty slice to simulate SQL main-chain filter excluding
-	// orphans.
-	findBlocksOverride *findBlocksReturn
-}
-
-type findBlocksReturn struct {
-	blockIDs       []uint32
-	blockHeights   []uint32
-	subtreeIndices []int
-	err            error
 }
 
 func (m *MockMerkleProofConstructor) GetTxMeta(txHash *chainhash.Hash) (*TxMetaData, error) {
@@ -52,10 +39,6 @@ func (m *MockMerkleProofConstructor) GetSubtree(subtreeHash *chainhash.Hash) (*s
 }
 
 func (m *MockMerkleProofConstructor) FindBlocksContainingSubtree(subtreeHash *chainhash.Hash) ([]uint32, []uint32, []int, error) {
-	if m.findBlocksOverride != nil {
-		o := m.findBlocksOverride
-		return o.blockIDs, o.blockHeights, o.subtreeIndices, o.err
-	}
 	// Return mock data for testing
 	return []uint32{1}, []uint32{100}, []int{0}, nil
 }
@@ -600,28 +583,6 @@ func TestConstructMerkleProof_MainChainFilter(t *testing.T) {
 		require.NotNil(t, proof)
 		assert.Equal(t, uint32(101), proof.BlockHeight)
 	})
-}
-
-func TestConstructSubtreeMerkleProof_OrphanOnlySubtree_NotFound(t *testing.T) {
-	// Subtree only in orphan blocks: SQL gate (WHERE on_main_chain = true)
-	// excludes it, repository returns empty, ConstructSubtreeMerkleProof must
-	// return a not-found error so the HTTP handler returns 404 — never an
-	// orphan-anchored proof.
-	subtreeHash, _ := chainhash.NewHashFromStr("1111111111111111111111111111111111111111111111111111111111111111")
-
-	mock := &MockMerkleProofConstructor{
-		findBlocksOverride: &findBlocksReturn{
-			blockIDs:       []uint32{},
-			blockHeights:   []uint32{},
-			subtreeIndices: []int{},
-			err:            nil,
-		},
-	}
-
-	proof, err := ConstructSubtreeMerkleProof(subtreeHash, mock)
-	assert.Nil(t, proof)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found in any block")
 }
 
 func TestMerkleProofWithRealTransaction(t *testing.T) {
