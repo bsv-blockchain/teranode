@@ -74,6 +74,10 @@ var (
 	prometheusHandleUnfreeze             prometheus.Histogram
 	prometheusHandleReassign             prometheus.Histogram
 	prometheusHandleGetchaintips         prometheus.Histogram
+
+	// prometheusTransactionsRejectedBlockAssemblyFull counts sendrawtransaction submissions refused
+	// because block assembly reached its in-memory transaction limit.
+	prometheusTransactionsRejectedBlockAssemblyFull prometheus.Counter
 )
 
 var (
@@ -344,6 +348,14 @@ func _initPrometheusMetrics() {
 			Name:      "get_chaintips",
 			Help:      "Histogram of calls to handleGetchaintips in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusTransactionsRejectedBlockAssemblyFull = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "rpc",
+			Name:      "transactions_rejected_block_assembly_full",
+			Help:      "Number of transactions refused because block assembly reached its in-memory transaction limit",
 		},
 	)
 }

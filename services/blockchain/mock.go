@@ -3,6 +3,7 @@ package blockchain
 import (
 	"context"
 	"encoding/binary"
+	"sync/atomic"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -20,6 +21,18 @@ import (
 // Mock implements the blockchain.ClientI interface for testing purposes.
 type Mock struct {
 	mock.Mock
+
+	// BlockAssemblyFull backs IsBlockAssemblyFull. Set it directly to simulate a full block assembly.
+	BlockAssemblyFull atomic.Bool
+}
+
+// IsBlockAssemblyFull mocks the IsBlockAssemblyFull method.
+//
+// This reads a plain field rather than going through m.Called, because ingress paths call it for
+// every transaction and a testify expectation would have to be registered in every test that
+// validates a transaction. The zero value reports "not full", which is the safe default.
+func (m *Mock) IsBlockAssemblyFull() bool {
+	return m.BlockAssemblyFull.Load()
 }
 
 // Health mocks the Health method.
