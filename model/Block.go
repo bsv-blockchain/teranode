@@ -2787,8 +2787,9 @@ type firstRootMemo struct {
 // early binding check passes only the first and last, and the middle lengths
 // are checked once the rest are loaded.
 //
-// label is only called to build an error: CheckMerkleRoot passes b.String, which
-// takes subtreeSlicesMu.
+// label is called at most once per multi-subtree body, and never while the caller
+// holds subtreeSlicesMu: CheckMerkleRoot passes b.String, which takes it, and the
+// load hooks, which run under it, pass a precomputed hash string instead.
 func blockMerkleRoot(label func() string, hashes []chainhash.Hash, slices []*subtreepkg.Subtree, allLoaded bool) (*chainhash.Hash, error) {
 	if len(hashes) == 1 {
 		return &hashes[0], nil
@@ -2811,18 +2812,25 @@ func blockMerkleRoot(label func() string, hashes []chainhash.Hash, slices []*sub
 	targetLength := firstSubtree.Length()
 	targetHeight := firstSubtree.Height
 
+	// The bracketed site prefix these messages have always carried. Built once and
+	// handed to the shared helpers so their text stays byte-identical to what this
+	// function produced inline, block label included.
+	siteLabel := "BLOCK][" + label()
+
 	// Lift correctness depends on the first subtree's leaf count being a power
 	// of two — that's what makes the partitioned top-tree composition match
 	// the canonical flat merkle root. Without this guard a peer can craft a
 	// non-power-of-two first subtree (e.g. lengths [3, 2]) and produce a
 	// merkle root that a canonical SV Node validator would not agree with.
-	if !subtreepkg.IsPowerOfTwo(targetLength) {
-		return nil, errors.NewBlockCorruptError(
-			"[BLOCK][%s] first subtree leaf count is not a power of two: %d",
-			label(), targetLength,
-		)
-	}
-
+	//
+	// That guard and the per-subtree length rules now live in
+	// model.CheckSubtreeShape, so the quick-validation binding pass — which walks the
+	// block in chunks and therefore can never call this function — runs the same
+	// arithmetic instead of a second copy of it. Reached only when len(hashes) > 1:
+	// the single-subtree early exit above stays deliberately ahead of it, because one
+	// subtree with a non-power-of-two leaf count is a legitimate body. The guard runs
+	// on index 0, which is always present here, so it still precedes every length
+	// rule.
 	for i, sub := range slices {
 		isLast := i == len(slices)-1
 
@@ -2833,21 +2841,11 @@ func blockMerkleRoot(label func() string, hashes []chainhash.Hash, slices []*sub
 				continue
 			}
 
-			return nil, errors.NewProcessingError("[BLOCK][%s] subtree %d of %d was released during validation", label(), i, len(slices))
+			return nil, errors.NewProcessingError("[%s] subtree %d of %d was released during validation", siteLabel, i, len(slices))
 		}
 
-		if !isLast && sub.Length() != targetLength {
-			return nil, errors.NewBlockCorruptError(
-				"[BLOCK][%s] only the final subtree may be incomplete (index %d, length %d, targetLength %d)",
-				label(), i, sub.Length(), targetLength,
-			)
-		}
-
-		if isLast && sub.Length() > targetLength {
-			return nil, errors.NewBlockCorruptError(
-				"[BLOCK][%s] final subtree exceeds first subtree size (length %d, targetLength %d)",
-				label(), sub.Length(), targetLength,
-			)
+		if err := CheckSubtreeShape(siteLabel, i, sub.Length(), targetLength, isLast); err != nil {
+			return nil, err
 		}
 	}
 
@@ -2863,46 +2861,21 @@ func blockMerkleRoot(label func() string, hashes []chainhash.Hash, slices []*sub
 	// for adversarial transaction counts — see issue #901.
 	last := slices[len(slices)-1]
 	if last == nil {
-		return nil, errors.NewProcessingError("[BLOCK][%s] final subtree was released during validation", label())
+		return nil, errors.NewProcessingError("[%s] final subtree was released during validation", siteLabel)
 	}
 
 	if last.Length() < targetLength {
 		liftedRoot, err := last.RootHashPadded(targetHeight)
 		if err != nil {
-			return nil, errors.NewProcessingError("[BLOCK][%s] failed lifting final subtree", label(), err)
+			return nil, errors.NewProcessingError("[%s] failed lifting final subtree", siteLabel, err)
 		}
 
 		hashes[len(hashes)-1] = *liftedRoot
 	}
 
-	st, err := subtreepkg.NewIncompleteTreeByLeafCount(len(hashes))
-	if err != nil {
-		return nil, errors.NewProcessingError("[BLOCK][%s] error creating new root tree", label(), err)
-	}
-
-	seen := make(map[chainhash.Hash]struct{}, len(hashes))
-
-	for _, hash := range hashes {
-		if _, dup := seen[hash]; dup {
-			return nil, errors.NewBlockCorruptError("[BLOCK][%s] duplicate subtree root hash in top-level merkle tree: %s", label(), hash.String())
-		}
-
-		seen[hash] = struct{}{}
-
-		err = st.AddNode(hash, 1, 0)
-		if err != nil {
-			return nil, errors.NewProcessingError("[BLOCK][%s] error adding node to root tree", label(), err)
-		}
-	}
-
-	calculatedMerkleRoot := st.RootHash()
-
-	calculatedMerkleRootHash, err := chainhash.NewHash(calculatedMerkleRoot[:])
-	if err != nil {
-		return nil, errors.NewProcessingError("[BLOCK][%s] error creating calculated merkle root hash", label(), err)
-	}
-
-	return calculatedMerkleRootHash, nil
+	// Shared with the chunked binding pass, for the same reason as the shape rules:
+	// one implementation of the duplicate-root scan and the top-tree build.
+	return ComposeSubtreeRootsToMerkleRoot(siteLabel, hashes)
 }
 
 // ExtractCoinbaseHeight attempts to extract the height of the block from the

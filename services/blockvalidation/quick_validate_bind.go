@@ -165,121 +165,340 @@ func isUnquarantinedLocalSubtree(err error) bool {
 // its node list, so it releases it immediately rather than retaining a second copy of
 // the block's nodes for the duration.
 //
-// The checks run on a probe block rather than on the live one: the pipeline is still
-// the single writer of block.SubtreeSlices, so nothing here can race the TTL cleaner
-// that releases a cached block's subtree nodes.
+// It walks the block ONE CHUNK OF SUBTREES AT A TIME, releasing each chunk before
+// reading the next. It used to read every subtree in the block at once at a hard-coded
+// fan-out of 128, which bypassed the per-batch residency cap the pipeline exists to
+// enforce: a catch-up block of several hundred million-node subtrees held tens of
+// gigabytes of node data at once, and with mmapDir set one live mapping and one temp
+// file per subtree, where the pipeline would have held one batch. What survives a chunk
+// is 32 bytes of root per subtree plus the running duplicate-transaction set.
+//
+// The chunk width is the pipeline's own SubtreeBatchSize, so the pass cannot be more
+// resident than the stage it protects.
+//
+// Handing these anchored structures forward to the pipeline instead — so it need not
+// re-read them — was considered and rejected. It cannot fix the residency: it EXTENDS
+// it, from "until this function returns" to "until the last batch leaves stage 3". The
+// duplicate structure read the pipeline then performs is the deliberate price of
+// binding the whole block before the first batch mutates anything; the two pull in
+// opposite directions and this is the chosen side (bitcoin-sv/teranode#4838). What can
+// be removed without moving any anchor is removed — see readSubtreeStructure's two
+// modes.
 func (u *BlockValidation) bindSubtreeBodyToHeader(ctx context.Context, block *model.Block) error {
-	if len(block.Subtrees) == 0 {
+	numSubtrees := len(block.Subtrees)
+	if numSubtrees == 0 {
 		// A coinbase-only body is bound at the entry points by
 		// CheckCoinbaseOnlyBodyBound; there is no subtree list to compose.
 		return nil
 	}
 
-	slices := make([]*subtreepkg.Subtree, len(block.Subtrees))
+	chunkWidth := u.settings.BlockValidation.SubtreeBatchSize
+	if chunkWidth < 1 {
+		chunkWidth = 1
+	}
 
-	// Collected under a mutex rather than taken from the errgroup's single error: a
-	// doctored body can name several mismatching blobs and every one of them has to
-	// be quarantined, not just whichever read failed first.
+	// The bracketed site prefix, pre-rendered once, so the shared model helpers emit
+	// "[bindSubtreeBodyToHeader][<hash>] …" exactly as the messages written here do.
+	label := "bindSubtreeBodyToHeader][" + block.Hash().String()
+
+	// Retained across the whole block: one root per subtree, and the txid set. Nothing
+	// else. The node lists themselves live only for their own chunk.
+	roots := make([]chainhash.Hash, numSubtrees)
+	deduper := model.NewSubtreeTxDeduper(0)
+
+	// The first subtree fixes the body's target shape, and chunk 0 is read first, so
+	// both are known before any later chunk needs them.
+	var targetLength, targetHeight int
+
+	// Accumulated across ALL chunks rather than returned from the first failing one.
+	// This pass is the only place that can name EVERY mismatching blob for the
+	// quarantine: stopping at the first would leave a second forged blob on disk, the
+	// attempt would be classified an ordinary local fault, and normal validation would
+	// be handed that blob — whose loader checks only the .subtree header's claimed root
+	// and so cannot detect it. That fall-through is what this pass exists to prevent
+	// (bitcoin-sv/teranode#4838). The cost is reading every structure even once one is
+	// known bad, bounded by the block's node hashes and never its transaction bodies.
+	//
+	// firstCheckErr is accumulated the same way and for the same reason. A composed
+	// check — shape, duplicate scan, root — can only fail once enough of the body has
+	// been read, and returning it the moment it is found would stop the walk with later
+	// chunks unread and their forged blobs unnamed. Before the chunking that could not
+	// happen: every subtree was read before any check ran. A read error still wins over
+	// a check error at the end, because it is the one that carries the quarantine.
+	//
+	// The mutex is function-scoped rather than per-chunk so there is no question about
+	// which lock guards these; chunks are walked strictly in sequence, so it is only
+	// ever contended within one chunk.
+	//
+	// firstMismatch and firstOtherErr are one slot PER CLASS rather than a single
+	// first-error slot, because a single slot makes the outcome depend on which
+	// goroutine happened to finish first: the class that lost would be recorded nowhere
+	// and silently dropped. firstReadErr stays as the "did anything fail at all"
+	// sentinel and as the error to return when no mismatch occurred.
 	var (
 		mismatchMu       sync.Mutex
 		mismatches       []subtreeBlobRef
 		firstMismatch    error
+		firstOtherErr    error
 		anyUnquarantined bool
+		firstReadErr     error
+		firstCheckErr    error
 	)
 
-	// Deliberately a plain errgroup.Group on the caller's context, NOT
-	// errgroup.WithContext: the first failing read must not cancel its siblings.
-	//
-	// This pass is the only place that can name EVERY mismatching blob for the
-	// quarantine, and a cancelled sibling returns a context error in place of its own
-	// anchor verdict. One forged blob would then be deleted, the attempt would be
-	// classified an ordinary local fault, and normal validation would be handed the
-	// other one — whose loader checks only the .subtree header's claimed root and so
-	// cannot detect it. That is the fall-through this pass exists to prevent
-	// (bitcoin-sv/teranode#4838). The cost is reading every structure even once one is
-	// known bad, bounded by the block's node hashes and never its transaction bodies.
-	var g errgroup.Group
-	util.SafeSetLimit(u.logger, &g, 128)
+	for chunkStart := 0; chunkStart < numSubtrees; chunkStart += chunkWidth {
+		chunkEnd := chunkStart + chunkWidth
+		if chunkEnd > numSubtrees {
+			chunkEnd = numSubtrees
+		}
 
-	for i := range block.Subtrees {
-		idx := i
-		hash := block.Subtrees[idx]
+		chunk := make([]*subtreepkg.Subtree, chunkEnd-chunkStart)
 
-		g.Go(func() error {
-			structure, err := u.readSubtreeStructure(ctx, block, hash)
-			if err != nil {
-				if refs := subtreeKeyMismatchRefs(err); len(refs) > 0 {
+		// Deliberately a plain errgroup.Group on the caller's context, NOT
+		// errgroup.WithContext: the first failing read must not cancel its siblings,
+		// because a cancelled sibling returns a context error in place of its own anchor
+		// verdict and its blob would go unnamed.
+		//
+		// Fan-out is capped by the chunk itself: reading 128 at a time out of a chunk of
+		// 16 would put the residency straight back.
+		var g errgroup.Group
+
+		limit := chunkWidth
+		if limit > 128 {
+			limit = 128
+		}
+
+		util.SafeSetLimit(u.logger, &g, limit)
+
+		for i := chunkStart; i < chunkEnd; i++ {
+			local := i - chunkStart
+			hash := block.Subtrees[i]
+
+			g.Go(func() error {
+				// Anchor only: this pass never reads a promoted blob's node list, so
+				// readSubtreeStructure anchors it and releases it rather than handing it
+				// back. The anchor itself must stay — with both file types present
+				// findLocalSubtreeFile prefers ToCheck, so a forged promoted blob beside an
+				// honest one is caught only here, before the pipeline.
+				structure, err := u.readSubtreeStructure(ctx, block, hash, subtreeReadAnchorOnly)
+				if err != nil {
+					// Collected under a mutex rather than taken from the group's single
+					// error: a doctored body can name several mismatching blobs and every
+					// one of them has to be quarantined, not just whichever failed first.
 					mismatchMu.Lock()
+					defer mismatchMu.Unlock()
 
-					mismatches = append(mismatches, refs...)
+					if refs := subtreeKeyMismatchRefs(err); len(refs) > 0 {
+						mismatches = append(mismatches, refs...)
 
-					if firstMismatch == nil {
-						firstMismatch = err
+						if firstMismatch == nil {
+							firstMismatch = err
+						}
+
+						// The FAIL-CLOSED verdict is aggregated separately from the refs,
+						// because only one error survives as firstMismatch and it may not be
+						// the one that could not audit its sibling.
+						if isUnquarantinedLocalSubtree(err) {
+							anyUnquarantined = true
+						}
+					} else if firstOtherErr == nil {
+						// The two CLASSES are tracked in separate slots, and that is the
+						// whole point rather than tidiness. A single "first error" slot is
+						// order-dependent: whichever class lost the race is simply not
+						// recorded anywhere, so a mismatch arriving before an ErrNotFound
+						// discards the ErrNotFound — the exact loss this tracking exists to
+						// stop. With one slot per class, the join below fires whenever both
+						// classes occurred, in either order.
+						firstOtherErr = err
 					}
 
-					// The FAIL-CLOSED verdict is aggregated separately from the refs,
-					// because only one error survives as firstMismatch and it may not be
-					// the one that could not audit its sibling.
-					if isUnquarantinedLocalSubtree(err) {
-						anyUnquarantined = true
+					if firstReadErr == nil {
+						firstReadErr = err
 					}
 
-					mismatchMu.Unlock()
+					return err
 				}
 
+				chunk[local] = structure.subtree
+
+				return nil
+			})
+		}
+
+		chunkErr := g.Wait()
+
+		// The chunk's node lists die here, before the next chunk is read. That is the
+		// whole point of the restructuring, so the release must not be skipped on any
+		// path out of the loop body — hence a closure with its own defer rather than a
+		// release at each exit.
+		checkErr := func() error {
+			defer func() {
+				for _, subtree := range chunk {
+					releaseSubtreeStructure(subtree)
+				}
+			}()
+
+			// Once anything has failed, later chunks are read and anchored ONLY: their
+			// roots can never be composed into a verdict, and feeding a partial body to
+			// the shape rules or the duplicate scan would produce a second, misleading
+			// error. Reading them is not wasted work — it is what names their blobs for
+			// the quarantine.
+			if chunkErr != nil || firstReadErr != nil || firstCheckErr != nil {
+				return nil
+			}
+
+			for local, subtree := range chunk {
+				idx := chunkStart + local
+
+				if subtree == nil {
+					return errors.NewProcessingError("[bindSubtreeBodyToHeader][%s] subtree %d of %d was released during validation", block.Hash().String(), idx, numSubtrees)
+				}
+
+				if idx == 0 {
+					if len(subtree.Nodes) == 0 {
+						return errors.NewBlockCorruptError("[bindSubtreeBodyToHeader][%s] first subtree has no nodes", block.Hash().String())
+					}
+
+					// The dedup scan below skips slot [0][0] only when it holds the coinbase
+					// placeholder, so "first node is the placeholder" is its unstated
+					// precondition, and Block.Valid enforces it as its own step 7. Without it
+					// a first subtree whose node 0 is a real txid — reachable on a retry that
+					// reuses a locally present .subtree blob — passes the merkle check with
+					// the body's true first transaction silently substituted, and the scan
+					// would then treat that txid as an ordinary node.
+					if !subtree.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholder) {
+						return errors.NewBlockCorruptError("[bindSubtreeBodyToHeader][%s] first transaction in first subtree is not a coinbase placeholder: %s", block.Hash().String(), subtree.Nodes[0].Hash.String())
+					}
+
+					targetLength = subtree.Length()
+					targetHeight = subtree.Height
+				}
+
+				// A ONE-SUBTREE BLOCK IS EXEMPT from the shape rules, exactly as
+				// Block.CheckMerkleRoot is: it returns the single subtree's root directly
+				// from its len(hashes) == 1 branch, before the power-of-two guard and the
+				// non-final/final length rules. A single subtree with a non-power-of-two
+				// leaf count is a legitimate body today, so applying the guard here would
+				// reject genuine blocks that the normal route accepts.
+				if numSubtrees > 1 {
+					if err := model.CheckSubtreeShape(label, idx, subtree.Length(), targetLength, idx == numSubtrees-1); err != nil {
+						return err
+					}
+				}
+
+				// CVE-2012-2459, and it is whole-block: the merkle root CANNOT detect a
+				// duplicated trailing transaction, because the duplicate-last-node-when-odd
+				// rule makes the mutated body produce the SAME root and so the same block
+				// hash as the honest one. Only the txid SET has to span the block, not the
+				// node lists, which is what makes the scan survive chunking at all. The
+				// GLOBAL index is passed, so the placeholder skip stays pinned to block
+				// position [0][0].
+				if err := deduper.Add(idx, subtree); err != nil {
+					return err
+				}
+
+				switch {
+				case idx == 0:
+					// The coinbase substituted for the placeholder, computed while the
+					// object is still alive — after this chunk there is no subtree left to
+					// compute it from.
+					root, err := subtree.RootHashWithReplaceRootNode(block.CoinbaseTx.TxIDChainHash(), 0, uint64(block.CoinbaseTx.Size())) // nolint: gosec
+					if err != nil {
+						return errors.NewProcessingError("[bindSubtreeBodyToHeader][%s] error replacing root node in subtree", block.Hash().String(), err)
+					}
+
+					roots[idx] = *root
+
+				case idx == numSubtrees-1 && subtree.Length() < targetLength:
+					// A short final subtree contributes its root LIFTED to the first
+					// subtree's height, so it occupies the slot of a same-capacity subtree
+					// in the top-level tree. Chunks are walked in order, so targetHeight is
+					// already known.
+					lifted, err := subtree.RootHashPadded(targetHeight)
+					if err != nil {
+						return errors.NewProcessingError("[bindSubtreeBodyToHeader][%s] failed lifting final subtree", block.Hash().String(), err)
+					}
+
+					roots[idx] = *lifted
+
+				default:
+					root := subtree.RootHash()
+					if root == nil {
+						return errors.NewProcessingError("[bindSubtreeBodyToHeader][%s] subtree %d returned nil root hash", block.Hash().String(), idx)
+					}
+
+					roots[idx] = *root
+				}
+			}
+
+			return nil
+		}()
+
+		// Recorded, not returned: the remaining chunks still have to be read so their
+		// blobs can be named. Before the chunking, a composed check could not even run
+		// until every subtree had been read, so returning here would be a genuine
+		// regression in quarantine completeness rather than a change of message.
+		if checkErr != nil && firstCheckErr == nil {
+			firstCheckErr = checkErr
+		}
+	}
+
+	if firstReadErr != nil {
+		refs := dedupeSubtreeBlobRefs(mismatches)
+
+		if firstMismatch != nil {
+			// Prefer an anchor verdict over any sibling's read failure: it is the error
+			// that carries the quarantine, and the group reports whichever failed first
+			// rather than whichever matters. firstOtherErr — not firstReadErr — is what
+			// is folded in: firstReadErr is whichever class failed first and is the SAME
+			// value as firstMismatch whenever a mismatch won that race, which would make
+			// the join a no-op in exactly half the orderings.
+			return combineSweepMismatchError(firstMismatch, refs, anyUnquarantined, firstOtherErr)
+		}
+
+		return firstReadErr
+	}
+
+	if firstCheckErr != nil {
+		return firstCheckErr
+	}
+
+	// Compose and compare. For one subtree the composed root IS that subtree's
+	// coinbase-substituted root, which is Block.CheckMerkleRoot's len(hashes) == 1
+	// branch reproduced exactly.
+	composed := &roots[0]
+
+	if numSubtrees > 1 {
+		var err error
+
+		composed, err = model.ComposeSubtreeRootsToMerkleRoot(label, roots)
+		if err != nil {
+			if errors.IsBlockCorrupt(err) {
 				return err
 			}
 
-			// The promoted blob has served its purpose the moment readSubtreeStructure
-			// anchored it; nothing in this pass reads it. Released here rather than at
-			// the deferred sweep below so the block never holds two node lists per
-			// subtree at once.
-			releaseSubtreeStructure(structure.fullSubtree)
-
-			slices[idx] = structure.subtree
-
-			return nil
-		})
-	}
-
-	readErr := g.Wait()
-
-	// Every structure read here is discarded once the composition has been checked;
-	// the pipeline reads its own. Released after the checks below, which need them.
-	defer func() {
-		for _, subtree := range slices {
-			releaseSubtreeStructure(subtree)
+			return errors.NewProcessingError("[bindSubtreeBodyToHeader][%s] merkle root composition failed", block.Hash().String(), err)
 		}
-	}()
-
-	if readErr != nil {
-		mismatchMu.Lock()
-		refs := dedupeSubtreeBlobRefs(mismatches)
-		mismatchErr := firstMismatch
-		unquarantined := anyUnquarantined
-		mismatchMu.Unlock()
-
-		if mismatchErr != nil {
-			// Prefer an anchor verdict over any sibling's read failure: it is the error
-			// that carries the quarantine, and errgroup reports whichever failed first
-			// rather than whichever matters.
-			return combineSweepMismatchError(mismatchErr, refs, unquarantined)
-		}
-
-		return readErr
 	}
 
-	// A probe rather than the live block: block.SubtreeSlices is still set exactly
-	// once, by the pipeline, as it is today.
-	probe := &model.Block{
-		Header:        block.Header,
-		CoinbaseTx:    block.CoinbaseTx,
-		Height:        block.Height,
-		Subtrees:      block.Subtrees,
-		SubtreeSlices: slices,
+	if !block.Header.HashMerkleRoot.IsEqual(composed) {
+		// The received body's subtrees do not hash to the header's merkle root: the body
+		// is not bound to the header, so this cannot condemn the hash — classify corrupt
+		// and re-download, never invalid=true (bitcoin-sv/teranode#4692).
+		return errors.NewBlockCorruptError("[bindSubtreeBodyToHeader][%s] merkle root does not match", block.Hash().String())
 	}
 
-	return checkSubtreeBodyBinding(ctx, probe, "bindSubtreeBodyToHeader")
+	// The coinbase shape, last, because the composition above is what makes the header
+	// commit to this exact transaction — which is why an unshaped coinbase is genuine
+	// invalidity rather than a corrupt download.
+	//
+	// IsConsensusCoinbase rather than go-bt's Tx.IsCoinbase: the latter is a disjunction
+	// that also accepts a 0xFFFFFFFF sequence number in place of a null prevout index,
+	// admitting a transaction svnode rejects.
+	if !model.IsConsensusCoinbase(block.CoinbaseTx) {
+		return errors.NewBlockInvalidError("[bindSubtreeBodyToHeader][%s] block coinbase tx is not a valid coinbase tx", block.Hash().String())
+	}
+
+	return nil
 }
 
 // combineSweepMismatchError folds the whole-block sweep's collected verdicts into the
@@ -293,8 +512,30 @@ func (u *BlockValidation) bindSubtreeBodyToHeader(ctx context.Context, block *mo
 // would delete cleanly, the boundary would report success, and the attempt would fall
 // through to normal validation with an unaudited blob still on disk — which is exactly
 // the outcome the marker exists to prevent.
-func combineSweepMismatchError(firstMismatch error, refs []subtreeBlobRef, anyUnquarantined bool) error {
+//
+// otherErr is whichever read failed FIRST, mismatch or not, and it is joined in rather
+// than discarded. The two can differ: a subtree can be missing or unreadable in the
+// same pass in which a different one fails its anchor, and the anchor verdict is the
+// one preferred as the outer error because it is what carries the quarantine. Dropping
+// the other left an ErrNotFound invisible to both the log and any errors.Is
+// classification downstream, so an attempt that was partly an infrastructure failure
+// read as a pure blob forgery. The mismatch stays outermost, so nothing about the
+// existing routing changes; the other becomes a reachable cause.
+func combineSweepMismatchError(firstMismatch error, refs []subtreeBlobRef, anyUnquarantined bool, otherErr error) error {
 	combined := markSubtreeKeyMismatch(firstMismatch, refs...)
+
+	// Identity, not errors.Is. The collector now classifies its two error slots, so it
+	// can no longer pass the same value twice; this stays as a guard so a future caller
+	// that reintroduces a single first-error slot degrades to a no-op join rather than
+	// wrapping an error in itself.
+	if otherErr != nil && otherErr != firstMismatch {
+		combined = errors.NewProcessingError("subtree key mismatch alongside an unrelated read failure", errors.Join(combined, otherErr))
+
+		// Re-applied to the new outer error: the markers live in the wrapper's data, and
+		// the walk that reads them stops at the first link that has them, so the
+		// re-wrapped chain must carry them at the top.
+		combined = markSubtreeKeyMismatch(combined, refs...)
+	}
 
 	if anyUnquarantined {
 		combined = markUnquarantinedLocalSubtree(combined)
