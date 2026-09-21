@@ -2989,3 +2989,149 @@ func TestBindSubtreeBodyToHeader_MismatchFirstThenReadFailure_BothSurvive(t *tes
 	require.True(t, errors.Is(bindErr, errors.ErrNotFound),
 		"an unrelated read failure alongside a mismatch must stay reachable whichever order they arrive in, got %v", bindErr)
 }
+
+// firstAttemptForgery is commit-1's carried fixture with the promoted blobs left OUT,
+// so buildSubtreeAndQueueWrite takes its REBUILD branch for every subtree.
+//
+// That single difference is the whole of freemans13's finding. On the carried path the
+// stored tree is adopted and the tail merkle check is satisfied by it, so the block
+// commits. With nothing promoted the tree is rebuilt from the transactions actually
+// read, so the rebuilt root no longer matches the header and the tail check DOES reject
+// — but it runs after createAndSpendUTXOsForBatch, so by then the fabricated outputs
+// exist and the honest transactions' parents have been spent.
+type firstAttemptForgery struct {
+	block        *model.Block
+	fake         *bt.Tx
+	displaced    *bt.Tx
+	fillerParent *bt.Tx
+	child2Parent *bt.Tx
+	child3Parent *bt.Tx
+}
+
+func (h *preBindHarness) fakeCoinbaseFirstAttemptBody(nonce, seed byte) firstAttemptForgery {
+	h.t.Helper()
+
+	// Outpoint-only for the same reason the carried fixture needs it: on the ordinary
+	// path the fabricated coinbase's null prevout cannot be decorated, so the batch
+	// dies in extendBatch before any mutation and the store assertions below would pass
+	// with the production comparison removed.
+	h.enableOutpointOnlyFastPath()
+
+	coinbase := preBindCoinbase(h.t, nonce)
+
+	fillerParent := h.storeGenuineParent(seed)
+	child2Parent := h.storeGenuineParent(seed + 1)
+	child3Parent := h.storeGenuineParent(seed + 2)
+
+	filler := preBindSpendOf(h.t, fillerParent, 1_000)
+	first := buildSubtreeOver(h.t, true, []*bt.Tx{filler})
+
+	child2 := preBindSpendOf(h.t, child2Parent, 2_000)
+	child3 := preBindSpendOf(h.t, child3Parent, 2_100)
+	second := buildSubtreeOver(h.t, false, []*bt.Tx{child2, child3})
+
+	firstBytes, err := first.Serialize()
+	require.NoError(h.t, err)
+	secondBytes, err := second.Serialize()
+	require.NoError(h.t, err)
+
+	h.storeBlob(first.RootHash(), fileformat.FileTypeSubtreeToCheck, firstBytes)
+	h.storeBlob(first.RootHash(), fileformat.FileTypeSubtreeData, serializeSubtreeData(h.t, first, true, coinbase, []*bt.Tx{filler}))
+
+	h.storeBlob(second.RootHash(), fileformat.FileTypeSubtreeToCheck, secondBytes)
+
+	fake := h.fakeCoinbaseSlotBody(second.RootHash(), 0xfd, child2, child3)
+
+	// No promoted blob anywhere: this is a first attempt, so every tree is rebuilt.
+	for _, root := range []*chainhash.Hash{first.RootHash(), second.RootHash()} {
+		exists, existsErr := h.subtreeStore.Exists(h.ctx, root[:], fileformat.FileTypeSubtree)
+		require.NoError(h.t, existsErr)
+		require.False(h.t, exists, "precondition: a promoted blob would make this the carried path, which is the other test")
+	}
+
+	return firstAttemptForgery{
+		block: h.newPreBindBlock(coinbase,
+			[]*chainhash.Hash{first.RootHash(), second.RootHash()},
+			composeBlockMerkleRoot(h.t, []chainhash.Hash{coinbaseSubstitutedRoot(h.t, first, coinbase), *second.RootHash()}),
+			4),
+		fake:         fake,
+		displaced:    child2,
+		fillerParent: fillerParent,
+		child2Parent: child2Parent,
+		child3Parent: child3Parent,
+	}
+}
+
+// requireFirstAttemptUnmutated is the assertion set both entry points share.
+func (h *preBindHarness) requireFirstAttemptUnmutated(f firstAttemptForgery) {
+	h.t.Helper()
+
+	// Red on reversion: phase 1 of createAndSpendUTXOsForBatch creates it, well before
+	// the tail merkle check gets to reject the block.
+	_, getErr := h.utxoStore.Get(h.ctx, f.fake.TxIDChainHash())
+	require.True(h.t, errors.Is(getErr, errors.ErrTxNotFound),
+		"the fabricated transaction must never have been created, got %v", getErr)
+
+	// Red on reversion: these transactions really are in the served body, so their
+	// parents are spent in phase 2. This is what proves the batch reached create and
+	// spend rather than failing earlier for an unrelated reason.
+	h.requireParentUnspent(f.child3Parent)
+	h.requireParentUnspent(f.fillerParent)
+
+	// The displaced transaction: no record, and its parent never spent. NOT a mutation
+	// target — the forgery removes child2 from the body, so it is absent either way —
+	// but it pins the other half of the damage, a header-committed transaction silently
+	// dropped.
+	_, displacedErr := h.utxoStore.Get(h.ctx, f.displaced.TxIDChainHash())
+	require.True(h.t, errors.Is(displacedErr, errors.ErrTxNotFound),
+		"the displaced transaction must have no record either, got %v", displacedErr)
+
+	h.requireParentUnspent(f.child2Parent)
+}
+
+// TestQuickValidate_FakeCoinbaseSlot_FirstAttempt_NoUTXOMutation covers the reachability
+// the carried-path test does not: the uncompared coinbase slot breaks the no-mutation
+// invariant on the FIRST attempt too, with no promoted blob anywhere.
+//
+// With nothing promoted the tree is rebuilt from the transactions, so the tail
+// CheckMerkleRoot does reject the block. That is exactly what makes this worth its own
+// test and exactly what makes it easy to write badly: THE BLOCK IS REJECTED EITHER WAY.
+// A test that asserts only that quickValidateBlock returns an error passes with the
+// node-hash comparison removed from readSubtree. The store assertions are the entire
+// regression — the tail check runs after createAndSpendUTXOsForBatch, so on reversion
+// the fabricated outputs are already in the UTXO store and the honest siblings' parents
+// are already spent when it fires.
+func TestQuickValidate_FakeCoinbaseSlot_FirstAttempt_NoUTXOMutation(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+
+	f := h.fakeCoinbaseFirstAttemptBody(0x28, 0xda)
+
+	require.Error(t, h.bv.quickValidateBlock(h.ctx, f.block, "peer", ""),
+		"a transaction that is not the one its node names must be rejected")
+
+	h.requireFirstAttemptUnmutated(f)
+}
+
+// TestQuickValidateAsync_FakeCoinbaseSlot_FirstAttempt_NoUTXOMutation is the same case
+// on the DEFAULT catch-up entry point, which rebuilds through buildSubtreeJobsForBatch
+// rather than writeSubtreeFilesForBatch — a different arm of the same rebuild branch,
+// running beside createAndSpendUTXOsForBatch instead of after it.
+func TestQuickValidateAsync_FakeCoinbaseSlot_FirstAttempt_NoUTXOMutation(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+
+	f := h.fakeCoinbaseFirstAttemptBody(0x29, 0xea)
+
+	writeJobsChan := make(chan *SubtreeWriteJob, 16)
+
+	g, gCtx := errgroup.WithContext(h.ctx)
+	g.Go(func() error { return h.bv.subtreeWriteWorker(gCtx, writeJobsChan) })
+
+	_, _, err := h.bv.quickValidateBlockAsync(h.ctx, f.block, "peer", "", writeJobsChan)
+
+	close(writeJobsChan)
+	require.NoError(t, g.Wait())
+
+	require.Error(t, err, "a transaction that is not the one its node names must be rejected")
+
+	h.requireFirstAttemptUnmutated(f)
+}
