@@ -1,6 +1,7 @@
 package model
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"testing"
@@ -63,6 +64,46 @@ func TestValidateSubtreeNodesMatchKey_RecomputesRatherThanTrustingTheClaim(t *te
 	require.Error(t, ValidateSubtreeNodesMatchKey(forged, &key))
 
 	require.NoError(t, ValidateSubtreeNodesMatchKey(honest, &key))
+}
+
+// TestValidateSubtreeNodesMatchKey_RejectsForgedClaimedRoot covers the OTHER half of
+// the helper, which nothing else does: the nodes are honest for the key and the
+// header's claimed root is the lie.
+//
+// It is the inverse of the forgery above and it is not covered by it. There the nodes
+// were wrong and the claim was right, so the recomputation rejects it and the claim
+// comparison never has to. Here the recomputation is satisfied, and only the claim
+// comparison is left to notice — which matters because RootHash() returns that claimed
+// value for anything deserialized from storage, and Block.CheckMerkleRoot composes it
+// verbatim for every subtree after the first. A subtree whose nodes are genuine but
+// whose cached root is someone else's would contribute that other root to the
+// composition.
+//
+// Mutation target: deleting the rootHash.IsEqual(key) block in
+// ValidateSubtreeNodesMatchKey.
+func TestValidateSubtreeNodesMatchKey_RejectsForgedClaimedRoot(t *testing.T) {
+	honest := nodeSubtree(t, 8)
+	key := *honest.RootHash()
+
+	// A claim belonging to a different, real subtree, so the lie is a plausible root
+	// rather than junk.
+	lie := *nodeSubtree(t, 4).RootHash()
+	require.False(t, lie.IsEqual(&key))
+
+	b, err := honest.Serialize()
+	require.NoError(t, err)
+	copy(b[:chainhash.HashSize], lie[:])
+
+	// Read through NewSubtreeFromReader so the cached root really is the doctored
+	// header's, which is what the claim comparison reads.
+	forgedClaimHonestNodes, err := subtreepkg.NewSubtreeFromReader(bytes.NewReader(b))
+	require.NoError(t, err)
+
+	require.True(t, forgedClaimHonestNodes.RootHash().IsEqual(&lie),
+		"precondition: the deserialized object must carry the forged claim, or the test proves nothing")
+
+	require.Error(t, ValidateSubtreeNodesMatchKey(forgedClaimHonestNodes, &key),
+		"nodes that hash to the key do not excuse a header claiming a different root")
 }
 
 // TestValidateSubtreeNodesMatchKey_Guards pins the fail-closed cases.
