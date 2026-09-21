@@ -25,7 +25,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, v
 
 	params := teraslab.SetConflictingParams{
 		Value:                value,
-		CurrentBlockHeight:   s.blockHeight.Load(),
+		CurrentBlockHeight:   s.GetBlockHeight(),
 		BlockHeightRetention: s.settings.GetUtxoStoreBlockHeightRetention(),
 	}
 

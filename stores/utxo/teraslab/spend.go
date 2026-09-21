@@ -147,7 +147,7 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 	}
 
 	params := teraslab.UnspendBatchParams{
-		CurrentBlockHeight:   s.blockHeight.Load(),
+		CurrentBlockHeight:   s.GetBlockHeight(),
 		BlockHeightRetention: s.settings.GetUtxoStoreBlockHeightRetention(),
 	}
 

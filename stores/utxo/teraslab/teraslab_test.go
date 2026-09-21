@@ -81,6 +81,18 @@ func TestSetBlockHeightZero(t *testing.T) {
 	tests.SetBlockHeightZero(t, store)
 }
 
+func TestSetBlockStateContract(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.SetBlockStateContract(t, store)
+}
+
+func TestSetBlockStateSnapshotUnderConcurrency(t *testing.T) {
+	store, _, deferFn := initTeraSlabWithDefaults(t)
+	defer deferFn()
+	tests.SetBlockStateSnapshotUnderConcurrency(t, store)
+}
+
 func TestSetLockedBehavior(t *testing.T) {
 	store, _, deferFn := initTeraSlabWithDefaults(t)
 	defer deferFn()

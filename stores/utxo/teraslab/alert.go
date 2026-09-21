@@ -72,7 +72,7 @@ func (s *Store) ReAssignUTXO(ctx context.Context, utxoSpend *utxo.Spend, newUtxo
 	}
 
 	params := teraslab.ReassignBatchParams{
-		BlockHeight:    s.blockHeight.Load(),
+		BlockHeight:    s.GetBlockHeight(),
 		SpendableAfter: utxo.ReAssignedUtxoSpendableAfterBlocks,
 	}
 

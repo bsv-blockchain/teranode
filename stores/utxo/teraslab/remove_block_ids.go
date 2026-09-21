@@ -62,7 +62,7 @@ func (s *Store) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockIDsRemo
 		params := teraslab.SetMinedBatchParams{
 			BlockID:              blockID,
 			UnsetMined:           true,
-			CurrentBlockHeight:   s.blockHeight.Load(),
+			CurrentBlockHeight:   s.GetBlockHeight(),
 			BlockHeightRetention: s.settings.GetUtxoStoreBlockHeightRetention(),
 		}
 

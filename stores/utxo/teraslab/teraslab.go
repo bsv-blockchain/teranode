@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-batcher/v2"
@@ -38,12 +37,15 @@ type batcherIfc[T any] interface {
 // Store implements the UTXO store interface using TeraSlab.
 // It is thread-safe for concurrent access.
 type Store struct {
-	client          *teraslab.Client
-	blockHeight     atomic.Uint32
-	medianBlockTime atomic.Uint32
-	logger          ulogger.Logger
-	settings        *settings.Settings
-	utxoBatchSize   int
+	client *teraslab.Client
+	// utxo.BlockStateFields supplies the six chain-tip methods (Set/GetBlockHeight,
+	// Set/GetMedianBlockTime, Set/GetBlockState) behind a single atomic snapshot,
+	// so a reader can never observe a torn (height, medianTime) pair — issue 1443.
+	// teraslab keeps no external mirror, so it embeds without overriding any of them.
+	utxo.BlockStateFields
+	logger        ulogger.Logger
+	settings      *settings.Settings
+	utxoBatchSize int
 
 	storeBatcher     batcherIfc[batchStoreItem]
 	getBatcher       batcherIfc[batchGetItem]
@@ -228,48 +230,8 @@ func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, er
 	return http.StatusOK, details, nil
 }
 
-// SetBlockHeight updates the current block height in the store.
-func (s *Store) SetBlockHeight(blockHeight uint32) error {
-	if blockHeight == 0 {
-		// Use the typed invalid-argument error so callers can classify it via
-		// errors.Is, matching the Aerospike/SQL backends.
-		return errors.NewInvalidArgumentError("block height cannot be zero")
-	}
-	s.blockHeight.Store(blockHeight)
-	return nil
-}
-
-// GetBlockHeight returns the current block height from the store.
-func (s *Store) GetBlockHeight() uint32 {
-	return s.blockHeight.Load()
-}
-
-// SetMedianBlockTime updates the median block time in the store.
-func (s *Store) SetMedianBlockTime(medianTime uint32) error {
-	s.medianBlockTime.Store(medianTime)
-	return nil
-}
-
-// SetBlockState publishes the current tip's block height and median block time
-// in one call (utxo.Store contract: both fields come from one tip snapshot). It
-// delegates to the existing setters, keeping the height-zero guard that the
-// Aerospike/SQL BlockStateFields helper also enforces.
-func (s *Store) SetBlockState(blockHeight, medianTime uint32) error {
-	if err := s.SetBlockHeight(blockHeight); err != nil {
-		return err
-	}
-	return s.SetMedianBlockTime(medianTime)
-}
-
-// GetMedianBlockTime returns the current median block time from the store.
-func (s *Store) GetMedianBlockTime() uint32 {
-	return s.medianBlockTime.Load()
-}
-
-// GetBlockState returns an atomic snapshot of both block height and median block time.
-func (s *Store) GetBlockState() utxo.BlockState {
-	return utxo.BlockState{
-		Height:     s.blockHeight.Load(),
-		MedianTime: s.medianBlockTime.Load(),
-	}
-}
+// The six chain-tip methods — Set/GetBlockHeight, Set/GetMedianBlockTime and
+// Set/GetBlockState — are provided by the embedded utxo.BlockStateFields, which
+// stores the (height, medianTime) pair behind a single atomic snapshot and keeps
+// the height-zero guard on SetBlockHeight/SetBlockState. teraslab needs no
+// override (no external mirror to keep in sync, unlike the Aerospike backend).

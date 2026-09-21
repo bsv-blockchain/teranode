@@ -134,7 +134,7 @@ func (s *Store) GetSpend(ctx context.Context, sp *utxo.Spend) (*utxo.SpendRespon
 		// is only immature while the current chain height has not yet reached that
 		// height, matching Aerospike's maturity check (spendableIn > blockHeight).
 		spendableHeight := binary.LittleEndian.Uint32(slot.SpendingData[0:4])
-		if spendableHeight > s.blockHeight.Load() {
+		if spendableHeight > s.GetBlockHeight() {
 			resp.Status = int(utxo.Status_IMMATURE)
 		} else {
 			resp.Status = int(utxo.Status_OK)

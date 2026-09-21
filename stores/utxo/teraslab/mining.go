@@ -26,7 +26,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 		SubtreeIdx:           uint32(minedBlockInfo.SubtreeIdx), //nolint:gosec
 		OnLongestChain:       minedBlockInfo.OnLongestChain,
 		UnsetMined:           minedBlockInfo.UnsetMined,
-		CurrentBlockHeight:   s.blockHeight.Load(),
+		CurrentBlockHeight:   s.GetBlockHeight(),
 		BlockHeightRetention: s.settings.GetUtxoStoreBlockHeightRetention(),
 	}
 
@@ -107,7 +107,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 
 	params := teraslab.MarkLongestChainParams{
 		OnLongestChain:       onLongestChain,
-		CurrentBlockHeight:   s.blockHeight.Load(),
+		CurrentBlockHeight:   s.GetBlockHeight(),
 		BlockHeightRetention: s.settings.GetUtxoStoreBlockHeightRetention(),
 	}
 
