@@ -48,31 +48,76 @@ func CheckSubtreeSlicesForDuplicateTxs(slices []*subtreepkg.Subtree) error {
 		}
 	}
 
-	seen := make(map[chainhash.Hash]struct{}, totalNodes)
+	deduper := NewSubtreeTxDeduper(totalNodes)
 
 	for subIdx, subtree := range slices {
-		if subtree == nil {
+		if err := deduper.Add(subIdx, subtree); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// SubtreeTxDeduper is CheckSubtreeSlicesForDuplicateTxs with the slice loop turned
+// inside out, so a caller that cannot hold every subtree at once can still run the
+// whole-block scan.
+//
+// The scan is inherently whole-block — a duplicate spanning two subtrees is only
+// visible to something that has seen both — but holding the SLICES for the whole block
+// is a different requirement from holding the txid SET, and only the second is
+// unavoidable. The chunked binding pass releases each chunk's structures before reading
+// the next and feeds them through here as it goes, which is what lets it bound its
+// residency without giving up the check (bitcoin-sv/teranode#4838).
+//
+// One implementation, two drivers: CheckSubtreeSlicesForDuplicateTxs above is now a
+// thin loop over this type, so the coinbase-placeholder skip and the corrupt
+// classification cannot drift between the two callers.
+type SubtreeTxDeduper struct {
+	seen map[chainhash.Hash]struct{}
+}
+
+// NewSubtreeTxDeduper returns a deduper sized for capacityHint total nodes. The hint
+// only avoids rehashing; an understated one costs growth, never correctness.
+func NewSubtreeTxDeduper(capacityHint int) *SubtreeTxDeduper {
+	if capacityHint < 0 {
+		capacityHint = 0
+	}
+
+	return &SubtreeTxDeduper{seen: make(map[chainhash.Hash]struct{}, capacityHint)}
+}
+
+// Add folds one subtree's nodes into the running set, returning a BlockCorruptError on
+// the first node already seen. subIdx is the subtree's index in the BLOCK, not in the
+// caller's chunk: the coinbase-placeholder skip is defined at block position [0][0],
+// so a chunked caller must pass the global index or it will dedupe the placeholder
+// against a real txid.
+//
+// A nil subtree contributes nothing, matching the slice driver's behaviour.
+func (d *SubtreeTxDeduper) Add(subIdx int, subtree *subtreepkg.Subtree) error {
+	if subtree == nil {
+		return nil
+	}
+
+	for txIdx, node := range subtree.Nodes {
+		// Skip the coinbase placeholder (all-0xFF hash) that occupies the
+		// first position of the first subtree. It is not a real transaction
+		// hash and must not be deduped against itself.
+		if subIdx == 0 && txIdx == 0 && node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 			continue
 		}
-		for txIdx, node := range subtree.Nodes {
-			// Skip the coinbase placeholder (all-0xFF hash) that occupies the
-			// first position of the first subtree. It is not a real transaction
-			// hash and must not be deduped against itself.
-			if subIdx == 0 && txIdx == 0 && node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-				continue
-			}
 
-			if _, exists := seen[node.Hash]; exists {
-				// Body-derived (a duplicate in the received tx set) and reachable on an
-				// unbound body: classify corrupt so it is re-downloaded, not poisoned
-				// (bitcoin-sv/teranode#4692).
-				return errors.NewBlockCorruptError(
-					"[CheckSubtreeSlicesForDuplicateTxs] block contains duplicate transaction %s (CVE-2012-2459)",
-					node.Hash.String(),
-				)
-			}
-			seen[node.Hash] = struct{}{}
+		if _, exists := d.seen[node.Hash]; exists {
+			// Body-derived (a duplicate in the received tx set) and reachable on an
+			// unbound body: classify corrupt so it is re-downloaded, not poisoned
+			// (bitcoin-sv/teranode#4692).
+			return errors.NewBlockCorruptError(
+				"[CheckSubtreeSlicesForDuplicateTxs] block contains duplicate transaction %s (CVE-2012-2459)",
+				node.Hash.String(),
+			)
 		}
+
+		d.seen[node.Hash] = struct{}{}
 	}
 
 	return nil

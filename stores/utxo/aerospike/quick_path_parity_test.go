@@ -45,6 +45,14 @@ func TestQuickPathParity(t *testing.T) {
 	store, err := New(ctx, logger, tSettings, aeroURL)
 	require.NoError(t, err)
 
+	// Registered AFTER New, which is itself after the container's terminate cleanup, so
+	// LIFO ordering closes the store's client and background workers before the
+	// container they are talking to is torn down. Only the container was being cleaned
+	// up before this, leaving the store's own resources to the end of the process.
+	t.Cleanup(func() {
+		require.NoError(t, store.Close(ctx))
+	})
+
 	require.NoError(t, store.SetBlockHeight(100))
 
 	t.Run("quick_path_create_spend_mined_semantics", func(t *testing.T) {

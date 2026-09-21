@@ -26,6 +26,7 @@ import (
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -413,6 +414,19 @@ func (h *preBindHarness) requireParentUnspent(parent *bt.Tx) {
 	resp, err := h.utxoStore.GetSpend(h.ctx, &utxo.Spend{TxID: parent.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash})
 	require.NoError(h.t, err)
 	require.Equal(h.t, int(utxo.Status_OK), resp.Status, "the genuine parent output must still be unspent")
+}
+
+// requireParentSpent is the positive counterpart, for the fixtures that must prove a
+// body was fully applied rather than that it was not.
+func (h *preBindHarness) requireParentSpent(parent *bt.Tx) {
+	h.t.Helper()
+
+	utxoHash, err := util.UTXOHashFromOutput(parent.TxIDChainHash(), parent.Outputs[0], 0)
+	require.NoError(h.t, err)
+
+	resp, err := h.utxoStore.GetSpend(h.ctx, &utxo.Spend{TxID: parent.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash})
+	require.NoError(h.t, err)
+	require.Equal(h.t, int(utxo.Status_SPENT), resp.Status, "the parent output must have been spent")
 }
 
 // oneSubtreeBody stores an honest one-subtree body (coinbase + one child spending
@@ -1501,15 +1515,114 @@ type replacingSubtreeStore struct {
 	honest      map[string]int
 	served      map[string]int
 	blockDelete bool
+
+	// delNoOp and delError are PER-PAIR delete faults, where blockDelete is global. A
+	// fixture that must make one exact blob undeletable while the catch-up cleanup
+	// deletes others cannot use the global switch: it would swallow the cleanup's own
+	// deletes too and make the assertion about them unfalsifiable.
+	delNoOp  map[string]struct{}
+	delError map[string]struct{}
+
+	// gate delays the SERVING OF FORGED BYTES until a given number of Sets of a given
+	// file type have happened, so a test can place a forgery strictly after an earlier
+	// batch's writes have landed rather than racing them.
+	gate          chan struct{}
+	gateFileType  fileformat.FileType
+	gateRemaining int
+	gateOpened    bool
+	gateTimeout   bool
 }
 
 func newReplacingSubtreeStore(inner blob.Store) *replacingSubtreeStore {
 	return &replacingSubtreeStore{
-		Store:  inner,
-		forged: make(map[string][]byte),
-		honest: make(map[string]int),
-		served: make(map[string]int),
+		Store:    inner,
+		forged:   make(map[string][]byte),
+		honest:   make(map[string]int),
+		served:   make(map[string]int),
+		delNoOp:  make(map[string]struct{}),
+		delError: make(map[string]struct{}),
 	}
+}
+
+// blockDelNoOp makes Del report success for one exact pair without removing it, so
+// Exists stays true. That is what stops deleteSubtreeBlobConfirmed from confirming,
+// which is what applies the fail-closed marker.
+func (s *replacingSubtreeStore) blockDelNoOp(key *chainhash.Hash, fileType fileformat.FileType) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.delNoOp[string(key[:])+string(fileType)] = struct{}{}
+}
+
+// blockDelError makes Del return a storage error for one exact pair, which is what
+// drives removeCatchupSubtreeFiles' own failure path.
+func (s *replacingSubtreeStore) blockDelError(key *chainhash.Hash, fileType fileformat.FileType) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.delError[string(key[:])+string(fileType)] = struct{}{}
+}
+
+// releaseAfterNSets opens the gate on the n-th Set of fileType. Used with n set to an
+// earlier batch's subtree count, so the gate opens exactly once that batch's output is
+// on disk and recorded.
+func (s *replacingSubtreeStore) releaseAfterNSets(fileType fileformat.FileType, n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.gate = make(chan struct{})
+	s.gateFileType = fileType
+	s.gateRemaining = n
+}
+
+// gateTimedOut reports whether a forged read gave up waiting. A test asserts this is
+// false, so a wiring mistake fails loudly instead of quietly turning the gate into a
+// no-op and the sequencing it buys into a race.
+func (s *replacingSubtreeStore) gateTimedOut() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.gateTimeout
+}
+
+// waitForGate blocks until the gate opens, bounded. Called only on the path about to
+// serve FORGED bytes, never on an honest read, so the pass that must see the honest
+// blob is never delayed by it.
+func (s *replacingSubtreeStore) waitForGate() {
+	s.mu.Lock()
+	gate := s.gate
+	s.mu.Unlock()
+
+	if gate == nil {
+		return
+	}
+
+	select {
+	case <-gate:
+	case <-time.After(5 * time.Second):
+		s.mu.Lock()
+		s.gateTimeout = true
+		s.mu.Unlock()
+	}
+}
+
+func (s *replacingSubtreeStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...bloboptions.FileOption) error {
+	if err := s.Store.Set(ctx, key, fileType, value, opts...); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.gate != nil && !s.gateOpened && fileType == s.gateFileType {
+		s.gateRemaining--
+		if s.gateRemaining <= 0 {
+			s.gateOpened = true
+			close(s.gate)
+		}
+	}
+
+	return nil
 }
 
 func (s *replacingSubtreeStore) replaceAfterFirstRead(key *chainhash.Hash, fileType fileformat.FileType, forged []byte) {
@@ -1580,6 +1693,11 @@ func (s *replacingSubtreeStore) servedCount(method string, key *chainhash.Hash, 
 
 func (s *replacingSubtreeStore) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) (io.ReadCloser, error) {
 	if forged, replace := s.replacementFor("reader", key, fileType); replace {
+		// Gate the FORGED bytes, not the read: an honest read must never block, or the
+		// whole-block pass — which has to see the honest blob — would wait on writes
+		// that only happen after it.
+		s.waitForGate()
+
 		return io.NopCloser(bytes.NewReader(forged)), nil
 	}
 
@@ -1595,11 +1713,19 @@ func (s *replacingSubtreeStore) Get(ctx context.Context, key []byte, fileType fi
 }
 
 func (s *replacingSubtreeStore) Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) error {
+	mapKey := string(key) + string(fileType)
+
 	s.mu.Lock()
 	blocked := s.blockDelete
+	_, noOp := s.delNoOp[mapKey]
+	_, failing := s.delError[mapKey]
 	s.mu.Unlock()
 
-	if blocked {
+	if failing {
+		return errors.NewStorageError("simulated delete failure for %s", fileType)
+	}
+
+	if blocked || noOp {
 		return nil
 	}
 
@@ -2220,7 +2346,7 @@ func TestCombineSweepMismatchError_PropagatesUnquarantinedMarker(t *testing.T) {
 	require.False(t, isUnquarantinedLocalSubtree(ordinary), "precondition: the kept error is an ordinary mismatch")
 
 	t.Run("a later unauditable sibling is still fail-closed", func(t *testing.T) {
-		combined := combineSweepMismatchError(ordinary, refs, true)
+		combined := combineSweepMismatchError(ordinary, refs, true, nil)
 
 		require.True(t, isUnquarantinedLocalSubtree(combined),
 			"the fail-closed verdict of a DIFFERENT hash must survive the fold")
@@ -2235,11 +2361,56 @@ func TestCombineSweepMismatchError_PropagatesUnquarantinedMarker(t *testing.T) {
 			refs[0],
 		)
 
-		combined := combineSweepMismatchError(plain, refs, false)
+		combined := combineSweepMismatchError(plain, refs, false, nil)
 
 		require.False(t, isUnquarantinedLocalSubtree(combined),
 			"nothing may be marked fail-closed when every mismatch was fully audited")
 		require.ElementsMatch(t, refs, subtreeKeyMismatchRefs(combined))
+	})
+}
+
+// TestCombineSweepMismatchError_JoinsUnrelatedReadFailure pins that a NON-mismatch read
+// failure landing in the same pass is not thrown away.
+//
+// The pass keeps one error to return and prefers the anchor verdict, because that is
+// what carries the quarantine. But the first read to fail may have been something else
+// entirely — a subtree that is simply absent, or a storage fault — and discarding it
+// left an attempt that was partly an infrastructure failure looking like a pure blob
+// forgery, in the log and to any errors.Is downstream.
+//
+// Mutation target: dropping the join must make the ErrNotFound unreachable while the
+// mismatch assertions all still pass.
+func TestCombineSweepMismatchError_JoinsUnrelatedReadFailure(t *testing.T) {
+	hashA := chainhash.HashH([]byte("sweep-join-mismatch"))
+	refs := []subtreeBlobRef{{hash: hashA, fileType: fileformat.FileTypeSubtreeToCheck}}
+
+	mismatch := markSubtreeKeyMismatch(
+		errors.NewProcessingError("subtree %s does not match its key", hashA.String()),
+		refs[0],
+	)
+
+	// A different subtree of the same block was simply not there.
+	absent := errors.NewNotFoundError("subtree %s not found locally", chainhash.HashH([]byte("sweep-join-absent")).String())
+
+	combined := combineSweepMismatchError(mismatch, refs, false, absent)
+
+	require.True(t, errors.Is(combined, errors.ErrNotFound),
+		"the unrelated read failure must stay reachable in the chain")
+	require.ElementsMatch(t, refs, subtreeKeyMismatchRefs(combined),
+		"re-wrapping must not lose the quarantine refs: the marker walk stops at the first link that carries them")
+	require.False(t, isUnquarantinedLocalSubtree(combined))
+
+	t.Run("the same error is not joined to itself", func(t *testing.T) {
+		self := markSubtreeKeyMismatch(
+			errors.NewProcessingError("subtree %s does not match its key", hashA.String()),
+			refs[0],
+		)
+
+		// When the first failing read WAS the mismatch, both arguments are one value.
+		out := combineSweepMismatchError(self, refs, true, self)
+
+		require.True(t, isUnquarantinedLocalSubtree(out))
+		require.ElementsMatch(t, refs, subtreeKeyMismatchRefs(out))
 	})
 }
 
@@ -2374,4 +2545,447 @@ func TestQuickValidate_OrdinaryMismatchThenUnauditableSibling_Aborts(t *testing.
 	survived, err := inner.Exists(h.ctx, unauditableKey[:], fileformat.FileTypeSubtree)
 	require.NoError(t, err)
 	require.True(t, survived, "the unaudited sibling is still on disk")
+}
+
+// TestQuickValidate_PromotedOnlySubtreeReadOnce pins the arm nothing else in this suite
+// reaches: the subtree resolves to FileTypeSubtree because there is no
+// FileTypeSubtreeToCheck beside it, which is the retry shape — the blob promoted, the
+// to-check blob cleaned up.
+//
+// On that arm the structure just read IS the promoted blob and has already been
+// anchored, so neither pass has any reason to fetch it again: the binding pass never
+// consumes it, and the batch takes a copy of the node list it is already holding. Both
+// halves are asserted by the same poison, which is why one test covers the call site.
+//
+// TestQuickValidate_PromotedSubtreeReadExactlyTwice cannot pin this: oneSubtreeBody
+// writes the ToCheck blob, so findLocalSubtreeFile resolves to ToCheck and this arm is
+// never entered. The fixture has to be assembled rather than reused.
+//
+// Mutation target: restoring the readFullSubtreeAnchored call on this arm makes the
+// poisoned Get fire on its FIRST call, so the anchor fails and the block is rejected —
+// and the count moves from 0 to 1. Reverting only the binding pass's anchor-only mode
+// fails it the same way. Both assertions bite only because the poison is registered
+// with an honest allowance of ZERO: replaceAfterFirstGet would serve the first Get
+// honestly (replacementFor defaults the allowance to 1), so a single restored read
+// would still validate and only the count would move. Do not "simplify" it.
+func TestQuickValidate_PromotedOnlySubtreeReadOnce(t *testing.T) {
+	store := newReplacingSubtreeStore(blobmemory.New())
+
+	h := newPreBindHarness(t, store)
+
+	coinbase := preBindCoinbase(t, 0x23)
+	parent := h.storeGenuineParent(0x8b)
+	child := preBindSpendOf(t, parent, 9_000)
+
+	served := buildSubtreeOver(t, true, []*bt.Tx{child})
+
+	promoted, err := served.Serialize()
+	require.NoError(t, err)
+
+	// FileTypeSubtree and its data, and deliberately NO FileTypeSubtreeToCheck, so
+	// findLocalSubtreeFile resolves to the promoted blob.
+	h.storeBlob(served.RootHash(), fileformat.FileTypeSubtree, promoted)
+	h.storeBlob(served.RootHash(), fileformat.FileTypeSubtreeData, serializeSubtreeData(t, served, true, coinbase, []*bt.Tx{child}))
+
+	toCheckExists, err := h.subtreeStore.Exists(h.ctx, served.RootHash()[:], fileformat.FileTypeSubtreeToCheck)
+	require.NoError(t, err)
+	require.False(t, toCheckExists, "precondition: without this the read resolves to ToCheck and the arm is never entered")
+
+	unrelated := buildSubtreeOver(t, true, []*bt.Tx{preBindSpendOf(t, parent, 5_100)})
+	store.replaceAfterNGets(served.RootHash(), fileformat.FileTypeSubtree, 0,
+		forgeSubtreeHeaderRoot(t, unrelated, served.RootHash()))
+
+	block := h.newPreBindBlock(coinbase,
+		[]*chainhash.Hash{served.RootHash()},
+		composeBlockMerkleRoot(t, []chainhash.Hash{coinbaseSubstitutedRoot(t, served, coinbase)}),
+		2)
+
+	require.NoError(t, h.bv.quickValidateBlock(h.ctx, block, "peer", ""),
+		"neither pass may Get the promoted blob, so the poison must never be served")
+
+	require.Zero(t, store.servedCount("get", served.RootHash(), fileformat.FileTypeSubtree),
+		"the promoted blob was already read through GetIoReader and anchored; a Get here is a re-read of bytes already in hand")
+
+	created, err := h.utxoStore.Get(h.ctx, child.TxIDChainHash())
+	require.NoError(t, err)
+	require.Equal(t, child.TxIDChainHash().String(), created.Tx.TxID())
+}
+
+// TestQuickValidate_TwoForgedBlobsInDifferentChunks_BothQuarantined is the
+// chunk-boundary version of TestQuickValidate_TwoForgedBlobs_BothQuarantined, which at
+// the default batch size lives entirely inside one chunk and so cannot see this.
+//
+// The binding pass now walks the block a chunk at a time. The temptation when chunking
+// is to stop at the first chunk that fails — it looks like obviously dead work to carry
+// on reading. It is not: this pass is the only place that can name EVERY mismatching
+// blob for the quarantine, and a blob left on disk is handed to normal validation,
+// whose loader checks only the .subtree header's claimed root and therefore cannot
+// detect it. Reading the later chunks is what names them.
+//
+// Five subtrees at SubtreeBatchSize 2 gives chunks [0,1], [2,3], [4], with the forgeries
+// in the first and the last.
+//
+// Mutation target: early-returning from the chunk loop on the first failing chunk must
+// leave subtree 4's forged blob on disk.
+func TestQuickValidate_TwoForgedBlobsInDifferentChunks_BothQuarantined(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+	h.bv.settings.BlockValidation.SubtreeBatchSize = 2
+
+	coinbase := preBindCoinbase(t, 0x24)
+
+	groups, parents := h.multiBatchGroups(0x9b, []int{1, 2, 2, 2, 2})
+
+	subtrees, roots, merkleRoot := h.multiSubtreeBody(coinbase, groups)
+
+	// Both blobs keep their key and their claimed root; only their node lists are
+	// replaced, which is the shape the claim-only check cannot see.
+	forgedIdx := []int{0, len(subtrees) - 1}
+	for _, idx := range forgedIdx {
+		unrelated := buildSubtreeOver(t, idx == 0, []*bt.Tx{preBindSpendOf(t, parents[0], uint64(1_000+idx))})
+		h.storeForgedStructure(roots[idx], unrelated, fileformat.FileTypeSubtreeToCheck)
+	}
+
+	block := h.newPreBindBlock(coinbase, roots, merkleRoot, 10)
+
+	err := h.bv.quickValidateBlock(h.ctx, block, "peer", "")
+	require.Error(t, err)
+	require.False(t, errors.IsBlockCorrupt(err), "a local blob fault must not condemn the peer's body, got %v", err)
+
+	h.requireNoUTXOMutation(block, parents[0], groups[0][0])
+
+	for _, idx := range forgedIdx {
+		exists, existsErr := h.subtreeStore.Exists(h.ctx, roots[idx][:], fileformat.FileTypeSubtreeToCheck)
+		require.NoError(t, existsErr)
+		require.False(t, exists,
+			"every mismatching blob must be quarantined whatever chunk it is in; subtree %d survived", idx)
+	}
+
+	// The honest middle chunk is untouched: the sweep names what failed its anchor, not
+	// everything in a block that had a failure.
+	for idx := 1; idx < len(subtrees)-1; idx++ {
+		exists, existsErr := h.subtreeStore.Exists(h.ctx, roots[idx][:], fileformat.FileTypeSubtreeToCheck)
+		require.NoError(t, existsErr)
+		require.True(t, exists, "an honest blob must survive the quarantine; subtree %d was deleted", idx)
+	}
+}
+
+// catchupSweepFixture is the body both catch-up cleanup tests need: four subtrees of
+// two leaves across two batches, everything honest so the body BINDS CLEANLY, and no
+// FileTypeSubtree stored up front so quick validation builds and queues one per subtree
+// it processes and records it in freshness.
+//
+// Binding cleanly is the whole point. An unbound body never reaches the build phase, so
+// freshlyWritten is empty and a sweep assertion over it asserts nothing — which is
+// exactly why neither of the rewritten corrupt_uncovered_branches fixtures can cover
+// this and why a new shape was needed.
+type catchupSweepFixture struct {
+	block  *model.Block
+	roots  []*chainhash.Hash
+	groups [][]*bt.Tx
+}
+
+func (h *preBindHarness) catchupSweepBody(coinbase *bt.Tx, seed byte) catchupSweepFixture {
+	h.t.Helper()
+
+	h.bv.settings.BlockValidation.SubtreeBatchSize = 2
+
+	groups, _ := h.multiBatchGroups(seed, []int{1, 2, 2, 2})
+
+	_, roots, merkleRoot := h.multiSubtreeBody(coinbase, groups)
+
+	for _, root := range roots {
+		exists, err := h.subtreeStore.Exists(h.ctx, root[:], fileformat.FileTypeSubtree)
+		require.NoError(h.t, err)
+		require.False(h.t, exists, "precondition: quick validation must be the thing that creates the FileTypeSubtree blobs")
+	}
+
+	return catchupSweepFixture{
+		block:  h.newPreBindBlock(coinbase, roots, merkleRoot, 8),
+		roots:  roots,
+		groups: groups,
+	}
+}
+
+// runCatchupSweep drives server.tryQuickValidation with a real write worker, joined
+// before it returns. The worker is load-bearing rather than scaffolding: without it the
+// queued jobs are never Done()'d, waitDone never closes, and the cleanup this pins is
+// never reached at all.
+func (h *preBindHarness) runCatchupSweep(block *model.Block) (bool, error) {
+	h.t.Helper()
+
+	server, catchupCtx := h.newAbortServer()
+	catchupCtx.blockUpTo = block
+
+	writeJobsChan := make(chan *SubtreeWriteJob, 16)
+
+	g, gCtx := errgroup.WithContext(h.ctx)
+	g.Go(func() error { return h.bv.subtreeWriteWorker(gCtx, writeJobsChan) })
+
+	tryNormal, err := server.tryQuickValidation(h.ctx, block, catchupCtx, "peer", "http://peer", writeJobsChan, nil)
+
+	close(writeJobsChan)
+	require.NoError(h.t, g.Wait())
+
+	return tryNormal, err
+}
+
+// TestTryQuickValidation_UnquarantinedAbort_SweepsOwnSubtreeFiles is the ONLY pin on
+// the fail-closed abort branch's cleanup. That branch used to return immediately,
+// doing neither of the two things both of its sibling branches do — join the write
+// waiter and sweep this attempt's own .subtree output — so its build product survived
+// to the next attempt, where findLocalSubtreeFile may reuse it.
+//
+// Sweeping does not soften the abort. The blob that could not be removed is a different
+// object from the ones deleted here, the branch still returns false so normal
+// validation is never reached, and this is the only opportunity: nothing runs after it.
+//
+// Reaching the branch, step by step, so a wiring bug is distinguishable from a real
+// failure: the binding pass passes on honest bytes → batch 0 creates, spends, builds
+// and writes two FileTypeSubtree blobs → the gate opens → batch 1's read of subtree 3
+// is served forged bytes → ValidateSubtreeNodesMatchKey fails →
+// rejectKeyMismatchAndAuditSibling finds no FileTypeSubtree sibling for subtree 3,
+// because its batch never reached the build phase, so it returns a plain key mismatch →
+// the deferred boundary Dels (no-op) and still sees Exists → markUnquarantinedLocalSubtree
+// → tryQuickValidation is not IsBlockCorrupt, so it falls to the isUnquarantinedLocalSubtree
+// branch.
+//
+// Mutation target: deleting the removeCatchupSubtreeFiles call from that branch must
+// leave batch 0's FileTypeSubtree blobs on disk.
+func TestTryQuickValidation_UnquarantinedAbort_SweepsOwnSubtreeFiles(t *testing.T) {
+	// failBatch0Delete drives the sub-case for the log-don't-return discipline; the
+	// main case leaves it false.
+	run := func(t *testing.T, failBatch0Delete bool) {
+		t.Helper()
+
+		store := newReplacingSubtreeStore(blobmemory.New())
+
+		h := newPreBindHarness(t, store)
+
+		coinbase := preBindCoinbase(t, 0x25)
+		fixture := h.catchupSweepBody(coinbase, 0xab)
+
+		batch0, forgedIdx := fixture.roots[:2], 3
+
+		// Forge subtree 3's structure only AFTER the whole-block pass has read it. The
+		// binding pass performs exactly one GetIoReader per subtree — the mmap re-open
+		// cannot fire, mmapDir is empty in this harness — so the first read is the
+		// binding pass's and is served honest, and the batch read is the second.
+		unrelated := buildSubtreeOver(t, false, []*bt.Tx{preBindSpendOf(t, h.storeGenuineParent(0xac), 3_300), preBindSpendOf(t, h.storeGenuineParent(0xad), 3_400)})
+		store.replaceAfterFirstRead(fixture.roots[forgedIdx], fileformat.FileTypeSubtreeToCheck,
+			forgeSubtreeHeaderRoot(t, unrelated, fixture.roots[forgedIdx]))
+
+		// Gate the forged bytes on BATCH 0's two writes having completed. Without this
+		// the forgery can surface — and cancel gCtx — before batch 0 has queued or
+		// written anything, leaving freshlyWritten empty and the sweep assertion
+		// vacuous. Stage 1 prefetches batch 1 while stage 3 processes batch 0, so this
+		// is a real race and not a theoretical one. No deadlock: the write worker is an
+		// independent goroutine draining a buffered channel, and batch 0 has already
+		// passed stage 1.
+		store.releaseAfterNSets(fileformat.FileTypeSubtree, len(batch0))
+
+		// Only subtree 3's blob is undeletable, so the sweep's own deletes still work
+		// and the assertion about them can fail.
+		store.blockDelNoOp(fixture.roots[forgedIdx], fileformat.FileTypeSubtreeToCheck)
+
+		if failBatch0Delete {
+			store.blockDelError(batch0[0], fileformat.FileTypeSubtree)
+		}
+
+		tryNormal, err := h.runCatchupSweep(fixture.block)
+
+		require.False(t, store.gateTimedOut(),
+			"the gate timed out, so the forgery was not sequenced after batch 0's writes and nothing below is meaningful")
+
+		require.False(t, tryNormal, "an unquarantined mismatching blob must NOT be handed to normal validation")
+		require.Error(t, err)
+		require.True(t, isUnquarantinedLocalSubtree(err),
+			"the fail-closed marker must survive, which is also what proves a cleanup error was not returned in its place: %v", err)
+
+		// Subtree 3's forged blob is still there — deletion genuinely failed, which is
+		// the premise of this branch rather than an incidental detail.
+		survived, existsErr := h.subtreeStore.Exists(h.ctx, fixture.roots[forgedIdx][:], fileformat.FileTypeSubtreeToCheck)
+		require.NoError(t, existsErr)
+		require.True(t, survived)
+
+		// The fetch phase's blobs are untouched: this call passes freshlyWritten only,
+		// with no merge of fetchFreshlyWritten.
+		for _, root := range batch0 {
+			for _, fileType := range []fileformat.FileType{fileformat.FileTypeSubtreeToCheck, fileformat.FileTypeSubtreeData} {
+				exists, e := h.subtreeStore.Exists(h.ctx, root[:], fileType)
+				require.NoError(t, e)
+				require.True(t, exists, "the peer-supplied %s must survive a local-storage fault", fileType)
+			}
+		}
+
+		if failBatch0Delete {
+			// The sub-case stops here: one of batch 0's blobs was made undeletable on
+			// purpose, so the sweep necessarily failed. What matters is the assertion
+			// above — the returned error STILL carries the fail-closed marker, i.e. the
+			// cleanup failure was logged rather than returned in its place.
+			return
+		}
+
+		// THE ASSERTION THIS TEST EXISTS FOR: the sweep ran, and it ran before the
+		// marked error was returned.
+		for _, root := range batch0 {
+			exists, e := h.subtreeStore.Exists(h.ctx, root[:], fileformat.FileTypeSubtree)
+			require.NoError(t, e)
+			require.False(t, exists, "this attempt's own FileTypeSubtree output must have been swept")
+		}
+	}
+
+	t.Run("sweeps this attempt's own subtree files", func(t *testing.T) {
+		run(t, false)
+	})
+
+	// Mutation target for this sub-case alone: returning delErr instead of logging it
+	// makes this red while the main case stays green, which is precisely why it is
+	// worth the extra few lines.
+	t.Run("a failing sweep is logged, not returned in place of the verdict", func(t *testing.T) {
+		run(t, true)
+	})
+}
+
+// txFailingUtxoStore fails the create of one exact transaction, which is how a fault is
+// placed in STAGE 3 of a chosen batch rather than in its read.
+type txFailingUtxoStore struct {
+	utxo.Store
+
+	failTxID chainhash.Hash
+}
+
+func (s *txFailingUtxoStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
+	if tx.TxIDChainHash().IsEqual(&s.failTxID) {
+		return nil, nil, errors.NewProcessingError("simulated utxo failure for %s", s.failTxID.String())
+	}
+
+	return s.Store.SpendAndCreate(ctx, tx, blockHeight, opts...)
+}
+
+// TestTryQuickValidation_LaterBatchFailure_SweepsOwnSubtreeFiles restores the coverage
+// the corrupt_uncovered_branches rewrite dropped: the ORDINARY LOCAL-FAULT branch
+// deleting quick validation's own FileTypeSubtree output.
+//
+// It is a near-twin of the fail-closed test above and must not be merged with it. That
+// one drives the isUnquarantinedLocalSubtree branch, which returns (false, err) and
+// aborts; this one drives the local-fault branch, which returns (true, nil) and falls
+// through. Each is the only pin on its own branch's cleanup call. They share the
+// fixture, not the test.
+//
+// The fault is in STAGE 3 of the LAST batch, and that placement is the reason the test
+// is deterministic. Stage 3 consumes extendedChan strictly in order and one batch at a
+// time, so batch 0 is fully processed — jobs queued, freshness recorded — before the
+// failing batch reaches it. A missing .subtreeData on the later batch would instead
+// fail in stage 1, which runs CONCURRENTLY with stage 3's batch 0, and gCtx
+// cancellation could then abort batch 0's build before it queued anything, leaving the
+// sweep assertion flaky. Do not swap the lever.
+//
+// Mutation target: deleting the removeCatchupSubtreeFiles call in the local-fault
+// branch leaves batch 0's FileTypeSubtree blobs present; widening it to a per-hash
+// delete instead reddens the ToCheck / Data survival assertions.
+func TestTryQuickValidation_LaterBatchFailure_SweepsOwnSubtreeFiles(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+
+	coinbase := preBindCoinbase(t, 0x26)
+	fixture := h.catchupSweepBody(coinbase, 0xbb)
+
+	batch0 := fixture.roots[:2]
+
+	// A transaction that appears only in the FINAL batch.
+	failing := &txFailingUtxoStore{Store: h.utxoStore, failTxID: *fixture.groups[3][0].TxIDChainHash()}
+	h.bv.utxoStore = failing
+
+	tryNormal, err := h.runCatchupSweep(fixture.block)
+
+	// The branch taken is asserted through its observable contract: the local-fault
+	// branch is the only one that returns (true, nil).
+	require.NoError(t, err, "a local UTXO fault is neither corrupt nor unquarantined, so nothing is returned")
+	require.True(t, tryNormal, "the run must fall through to normal validation, which is what makes deleting only quick validation's own output correct")
+
+	// THE COVERAGE THAT WAS LOST: batch 0's own build product is gone.
+	for _, root := range batch0 {
+		exists, existsErr := h.subtreeStore.Exists(h.ctx, root[:], fileformat.FileTypeSubtree)
+		require.NoError(t, existsErr)
+		require.False(t, exists, "quick validation's own FileTypeSubtree output must have been swept")
+	}
+
+	// The peer-supplied blobs survive: normal validation is meant to REUSE them, and
+	// this branch deliberately passes no fetch-phase freshness.
+	for _, root := range batch0 {
+		for _, fileType := range []fileformat.FileType{fileformat.FileTypeSubtreeToCheck, fileformat.FileTypeSubtreeData} {
+			exists, existsErr := h.subtreeStore.Exists(h.ctx, root[:], fileType)
+			require.NoError(t, existsErr)
+			require.True(t, exists, "the fetched %s must survive a purely local failure", fileType)
+		}
+	}
+}
+
+// TestBindSubtreeBodyToHeader_MismatchFirstThenReadFailure_BothSurvive is the
+// COLLECTOR-level pin for the join, and it fixes the ordering that the pure-function
+// test cannot.
+//
+// combineSweepMismatchError called directly with two distinct errors passes whatever
+// the collector does with them, so it proves only that the fold works — not that the
+// collector ever hands it two different errors. It did not: a single first-error slot
+// was filled by whichever goroutine finished first, so a key mismatch arriving BEFORE
+// an unrelated read failure left the unrelated failure recorded nowhere, and the fold
+// received the mismatch as both arguments and did nothing. The opposite order worked,
+// which is why only an ordered test can tell the two implementations apart.
+//
+// The ordering is a happens-before edge, not a sleep. The forged hash's LAST store
+// call is its sibling existence probe — everything after it is formatting an error and
+// taking a mutex — so the missing hash's first probe is gated on that, with a settle on
+// top so it cannot overtake.
+//
+// Mutation target: reverting to one shared first-error slot (or folding firstReadErr
+// instead of firstOtherErr) must make the ErrNotFound assertion below go red while
+// every mismatch assertion stays green.
+func TestBindSubtreeBodyToHeader_MismatchFirstThenReadFailure_BothSurvive(t *testing.T) {
+	inner := blobmemory.New()
+
+	coinbase := preBindCoinbase(t, 0x27)
+
+	forgedKey := chainhash.HashH([]byte("ordered-join-forged"))
+	missingKey := chainhash.HashH([]byte("ordered-join-missing"))
+
+	h := newPreBindHarness(t, inner)
+
+	parent := h.storeGenuineParent(0x9c)
+
+	// The mismatch: a blob whose claimed root is its key while its nodes hash
+	// elsewhere, with no sibling to audit, so it produces a plain key mismatch.
+	h.storeForgedStructure(&forgedKey, buildSubtreeOver(t, true, []*bt.Tx{preBindSpendOf(t, parent, 2_200)}), fileformat.FileTypeSubtreeToCheck)
+
+	// The unrelated failure: nothing is stored under this key at all, so
+	// findLocalSubtreeFile reports it absent and the read fails ErrNotFound — a
+	// different CLASS of failure, carrying no quarantine refs.
+	missingExists, err := inner.Exists(h.ctx, missingKey[:], fileformat.FileTypeSubtreeToCheck)
+	require.NoError(t, err)
+	require.False(t, missingExists, "precondition: this hash must have no blob, or it is not a read failure")
+
+	ordered := newOrderedMismatchStore(inner, &forgedKey, &missingKey, 200*time.Millisecond)
+	h.bv.subtreeStore = ordered
+	h.subtreeStore = ordered
+
+	block := h.newPreBindBlock(coinbase,
+		[]*chainhash.Hash{&forgedKey, &missingKey},
+		composeBlockMerkleRoot(t, []chainhash.Hash{forgedKey, missingKey}),
+		4)
+
+	// The collector itself, not an entry point: the quarantine boundary would rewrite
+	// the error and this test is about what the sweep produces.
+	bindErr := h.bv.bindSubtreeBodyToHeader(h.ctx, block)
+	require.Error(t, bindErr)
+
+	// The mismatch stays the outer verdict, so nothing about the existing routing or
+	// the quarantine changes.
+	require.ElementsMatch(t,
+		[]subtreeBlobRef{{hash: forgedKey, fileType: fileformat.FileTypeSubtreeToCheck}},
+		subtreeKeyMismatchRefs(bindErr),
+		"the mismatching blob must still be named for the quarantine")
+
+	// THE ASSERTION THIS TEST EXISTS FOR: the unrelated failure survived even though
+	// the mismatch was recorded first.
+	require.True(t, errors.Is(bindErr, errors.ErrNotFound),
+		"an unrelated read failure alongside a mismatch must stay reachable whichever order they arrive in, got %v", bindErr)
 }

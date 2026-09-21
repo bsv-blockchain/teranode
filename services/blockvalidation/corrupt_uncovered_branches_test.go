@@ -168,6 +168,13 @@ func TestQuickValidateBlockAsync_CorruptSubtreeVerdictUnwrapped(t *testing.T) {
 // freshly-written FileTypeSubtree blob present after the call, reddening the "blob removed"
 // assertion; reverting to the old wide per-hash delete would also delete
 // FileTypeSubtreeToCheck/FileTypeSubtreeData, reddening the "untouched" assertions.
+//
+// These two fixtures no longer reach the build phase (the body fails at the whole-block
+// binding pass), so the cleanup they drive has nothing of quick validation's OWN to delete.
+// Coverage for removeCatchupSubtreeFiles deleting a freshly built FileTypeSubtree now lives in
+// TestTryQuickValidation_LaterBatchFailure_SweepsOwnSubtreeFiles and
+// TestTryQuickValidation_UnquarantinedAbort_SweepsOwnSubtreeFiles, which use a body that binds
+// cleanly and fails in a later batch (bitcoin-sv/teranode#4838).
 func TestTryQuickValidation_CorruptPath(t *testing.T) {
 	suite := NewCatchupTestSuite(t)
 	defer suite.Cleanup()
@@ -247,6 +254,13 @@ func TestTryQuickValidation_CorruptPath(t *testing.T) {
 // FileTypeSubtreeData present after cleanup, reddening the "same-attempt fresh types deleted"
 // assertions; widening removeCatchupSubtreeFiles back to a per-hash delete would instead delete
 // the untouched sibling hash's blobs, reddening the "unrelated hash untouched" assertions.
+//
+// These two fixtures no longer reach the build phase (the body fails at the whole-block
+// binding pass), so the cleanup they drive has nothing of quick validation's OWN to delete.
+// Coverage for removeCatchupSubtreeFiles deleting a freshly built FileTypeSubtree now lives in
+// TestTryQuickValidation_LaterBatchFailure_SweepsOwnSubtreeFiles and
+// TestTryQuickValidation_UnquarantinedAbort_SweepsOwnSubtreeFiles, which use a body that binds
+// cleanly and fails in a later batch (bitcoin-sv/teranode#4838).
 func TestTryQuickValidation_CorruptPath_MergesFetchAndQuickFreshness(t *testing.T) {
 	suite := NewCatchupTestSuite(t)
 	defer suite.Cleanup()
