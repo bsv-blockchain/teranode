@@ -494,11 +494,11 @@ func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
 
 		// Check if the error is related to message size (ResourceExhausted).
 		//
-		// The predicate still requires a configured validator HTTP address even
-		// though the individual retry below now starts on gRPC and does not need
-		// one. That conjunct is pre-existing: without an HTTP address such a batch
-		// already failed outright before the retry existed, so relaxing it is an
-		// improvement rather than a repair and is left out of this change.
+		// The retry below starts on unary gRPC and needs no HTTP address, so the
+		// predicate does not ask for one: an aggregate-oversized batch is retried
+		// item by item whether or not validator_httpAddress is configured. Only an
+		// item that is itself too large for gRPC reaches the HTTP send, and
+		// handleValidationError gates that on the address separately.
 		if c.shouldAttemptHTTPFallback(err) {
 			c.retryBatchItemsIndividually(ctx, batch)
 			return
@@ -519,8 +519,12 @@ func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
 // it is a one-line wrapper over the shared predicate so a batch-level queue-full
 // shed cannot be mistaken for an oversized message and amplified into one full
 // re-validation per transaction in the batch against a saturated node.
+//
+// It says nothing about HTTP reachability. The retry it opens runs over unary
+// gRPC, and whether an individual item may then be sent over HTTP is
+// handleValidationError's decision, gated there on a configured address.
 func (c *Client) shouldAttemptHTTPFallback(err error) bool {
-	return errors.IsGRPCMessageTooLarge(err) && c.validatorHTTPAddr != nil
+	return errors.IsGRPCMessageTooLarge(err)
 }
 
 // retryBatchItemsIndividually re-sends every item of a batch the validator
@@ -528,9 +532,9 @@ func (c *Client) shouldAttemptHTTPFallback(err error) bool {
 //
 // The retry goes over UNARY gRPC first, not straight to HTTP. A batch exceeds the
 // gRPC message limit in AGGREGATE far more often than any single transaction in it
-// does, and gRPC is the typed internal transport: it carries every validation
-// option. Going straight to HTTP would not downgrade such an item, it would refuse
-// it outright — the HTTP surface carries transaction bytes only (issue 4840) — so a
+// does, and gRPC is the transport that carries every validation option. Going
+// straight to HTTP would not downgrade such an item, it would refuse it outright —
+// the HTTP surface carries transaction bytes only (issue 4840) — so a
 // block-validation or legacy-sync item, which travels with SkipPolicyChecks,
 // InBlock and the candidate times, would hard-fail even though it fits comfortably
 // in a request of its own.
@@ -540,13 +544,26 @@ func (c *Client) shouldAttemptHTTPFallback(err error) bool {
 // the unary path: only a message-size error opens the fallback, a block-assembly
 // queue-full shed is surfaced to the caller instead of being re-sent against a node
 // that just reported itself saturated, and any other failure is returned unwrapped.
+// A shed also stops the loop, not just the item that saw it: the remaining items
+// complete with the same error without being sent, as does a cancelled context.
+// A per-item verdict is different — it says nothing about the node's health, so the
+// loop carries on to the next item.
 //
-// Sequential by design: a batch can hold a parent and its child, and the batch it
-// replaces submitted them in order.
+// Sequential by design, but NOT for ordering. The batch path this replaces does not
+// order a parent before its child either: ValidateTransactionBatch runs every item
+// in its own errgroup goroutine, so a parent and child in one batch were already
+// validated concurrently. Nothing downstream may rely on that path, or on this loop,
+// to sequence them.
+//
+// The loop stays sequential for the reasons that do hold: it bounds the load placed
+// on a validator that has just rejected an oversized batch, and issuing one request
+// at a time is what makes the shed and cancellation abort above meaningful — a
+// concurrent fan-out would already have sent the remaining items before the first
+// failure came back.
 func (c *Client) retryBatchItemsIndividually(ctx context.Context, batch []*batchItem) {
 	c.logger.Warnf("Batch exceeds the gRPC message limit, retrying its %d transactions individually", len(batch))
 
-	for _, item := range batch {
+	for i, item := range batch {
 		txReq := item.req
 
 		// The typed transport first. Each item carries its full option set here,
@@ -586,6 +603,16 @@ func (c *Client) retryBatchItemsIndividually(ctx context.Context, batch []*batch
 		if retryErr := c.handleValidationError(ctx, tx, txReq.BlockHeight, options, err); retryErr != nil {
 			c.logger.Errorf("[%s] individual retry failed: %v", tx.TxID(), retryErr)
 			item.complete(validateBatchResponse{metaData: nil, err: retryErr})
+
+			// Stop the loop, do not just skip this item. A shed means the node has
+			// reported itself saturated; a cancelled context means the caller is gone.
+			// Either way every remaining item would be a full validation that cannot
+			// succeed, which is what routing through handleValidationError exists to
+			// avoid — enforced here for the loop, not only per item.
+			if errors.Is(retryErr, errors.ErrThresholdExceeded) || ctx.Err() != nil {
+				c.notifyAllBatchItems(batch[i+1:], nil, retryErr)
+				return
+			}
 
 			continue
 		}
@@ -688,13 +715,15 @@ func (c *Client) validateTransactionViaHTTP(ctx context.Context, tx *bt.Tx, bloc
 
 	// The validator's HTTP endpoint carries transaction bytes only, so refuse here
 	// rather than send options that the far end will reject. Doing it client-side
-	// also makes the refusal independent of the peer's version: during a rolling
-	// upgrade an un-upgraded validator would still honour these flags over an
-	// unauthenticated transport. Issue 4840, finding B-022.
+	// stops THIS client being a route for those flags whatever version the peer
+	// runs; it does not make the property hold generally. The guarantee against an
+	// arbitrary HTTP caller lands when the SERVER is upgraded, because an
+	// un-upgraded validator still parses the old query string for anyone who asks.
+	// Issue 4840, finding B-022.
 	if reason := nonDefaultValidationOptions(vreq); reason != "" {
 		return errors.NewServiceError(
 			"[ValidateWithOptions][%s] transaction exceeds the gRPC message limit and %s cannot be sent "+
-				"over the HTTP fallback; raise the validator gRPC message size instead", tx.TxID(), reason)
+				"over the HTTP fallback; the validator gRPC message size is fixed at 1 GiB", tx.TxID(), reason)
 	}
 
 	// Marshal the full request via the shared builder — same proto, same field

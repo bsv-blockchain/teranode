@@ -931,6 +931,9 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// a tip genuinely past the checkpoint while below-checkpoint work is in flight is a genuine
 	// rejection whose remedy is to turn the fast path off
 	// (blockvalidation_outpoint_only_below_checkpoint=false), which is also the default.
+	// The condition is `>`, mirroring the caller-asserted guard immediately above it, so it also
+	// admits a tip exactly at the highest checkpoint — a case for which the paragraph above claims
+	// no legitimate producer.
 	// Issue 4840, finding B-022.
 	if validationOptions.OutpointOnlySpend && blockState.Height > blockchain.HighestCheckpointHeight(v.settings.ChainCfgParams.Checkpoints) {
 		err = errors.NewProcessingError("[Validate][%s] OutpointOnlySpend must not be used once the node's chain tip is past the highest checkpoint (tip height %d)", txID, blockState.Height)

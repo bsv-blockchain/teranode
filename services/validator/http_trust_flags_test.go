@@ -200,3 +200,67 @@ func TestHandleSingleTx_ProtobufDefaultOptionsAccepted(t *testing.T) {
 	require.Equal(t, uint32(0), rec.lastHeight)
 	require.Equal(t, NewDefaultOptions(), rec.lastOptions)
 }
+
+// TestHandleMultipleTx_HasNoProtobufShape is the structural counterpart to the
+// guard on /tx. handleMultipleTx never calls nonDefaultValidationOptions, which is
+// correct only because /txs has no body shape that could carry an option at all.
+// Nothing in the code says so, so these two subtests do: the handler reads no
+// Content-Type, and a protobuf body delivers no option and no asserted height.
+func TestHandleMultipleTx_HasNoProtobufShape(t *testing.T) {
+	t.Run("content type does not change the outcome", func(t *testing.T) {
+		txBytes := newTinyTx(t).SerializeBytes()
+
+		var body bytes.Buffer
+		body.Write(txBytes)
+		body.Write(txBytes)
+
+		// One body, two independently built servers, two Content-Types. Any
+		// divergence means /txs has grown a body shape discriminated on the header.
+		post := func(contentType string) (*httptest.ResponseRecorder, *recordingValidator) {
+			srv, rec := newTrustFlagServer(t)
+
+			return postToHandler(t, srv.HTTP().HandleMultipleTx(context.Background()),
+				"/txs", contentType, body.Bytes()), rec
+		}
+
+		plainRes, plainRec := post("application/octet-stream")
+		protoRes, protoRec := post("application/x-protobuf")
+
+		require.Equal(t, plainRes.Code, protoRes.Code,
+			"handleMultipleTx must not branch on Content-Type; plain body: %s, protobuf body: %s",
+			plainRes.Body.String(), protoRes.Body.String())
+		require.Equal(t, plainRec.calls, protoRec.calls)
+		require.Equal(t, plainRec.lastHeight, protoRec.lastHeight)
+		require.Equal(t, plainRec.lastOptions, protoRec.lastOptions)
+	})
+
+	t.Run("a protobuf body cannot deliver options", func(t *testing.T) {
+		srv, rec := newTrustFlagServer(t)
+
+		opts := NewDefaultOptions()
+		opts.SkipPolicyChecks = true
+		opts.SkipScriptValidation = true
+
+		body, err := proto.Marshal(buildValidateTxRequest(newTinyTx(t).SerializeBytes(), 620000, opts))
+		require.NoError(t, err)
+
+		postToHandler(t, srv.HTTP().HandleMultipleTx(context.Background()),
+			"/txs", "application/x-protobuf", body)
+
+		// Deliberately no status-code or call-count assertion. handleMultipleTx
+		// hands the body straight to bt.Tx.ReadFrom, which reads the leading
+		// protobuf framing as transaction fields: the field-1 tag 0x0a and a length
+		// varint, then the transaction's own version bytes, after which a 0x00 is
+		// taken as the input count, a second 0x00 as the output count, and four more
+		// bytes as a lock time that is not the 0xEF extended-format marker. The read
+		// SUCCEEDS with a zero-input, zero-output transaction, so the handler
+		// validates it and the final status depends on where the remaining bytes stop
+		// parsing. Pinning that would pin an accident. What matters is the projection.
+		if rec.calls > 0 {
+			require.Equal(t, uint32(0), rec.lastHeight,
+				"a protobuf body must not be able to nominate a block height on /txs")
+			require.Equal(t, NewDefaultOptions(), rec.lastOptions,
+				"a protobuf body must not be able to select validation options on /txs")
+		}
+	})
+}

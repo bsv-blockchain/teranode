@@ -867,10 +867,13 @@ func httpStatusForTxError(err error) int {
 //
 // The endpoint carries transaction bytes only. It accepts NO validation options:
 // the query string is not read at all, and a protobuf body that asks for anything
-// other than plain mempool-submission semantics is rejected with 400. Validation
-// options are only expressible over the validator's gRPC API, which is the typed
-// internal transport; this endpoint is unauthenticated, so a caller assertion here
-// is not a trust basis for a consensus-affecting flag. Issue 4840, finding B-022.
+// other than plain mempool-submission semantics is rejected with 400. The gRPC API
+// is the only transport that can express these options; this endpoint is
+// unauthenticated, so a caller assertion here is not a trust basis for a
+// consensus-affecting flag. The gRPC listener is not itself authenticated on the
+// shipped profile either (security_level_grpc defaults to 0 and no auth
+// interceptor is installed), so this removes the HTTP route rather than removing
+// the capability from unauthenticated callers. Issue 4840, finding B-022.
 //
 // Parameters:
 //   - ctx: Context for the handler operation, passed through to validation
@@ -896,7 +899,13 @@ func (v *Server) handleSingleTx(ctx context.Context) echo.HandlerFunc {
 		//   - any other Content-Type (legacy, including application/octet-stream):
 		//     body is the raw tx bytes. Kept for backward compatibility with
 		//     non-protobuf callers; the request is projected to height 0 and
-		//     default options, so the server derives the height itself.
+		//     default options, so the server derives the height itself. The two
+		//     shapes differ deliberately in what they do with an option they cannot
+		//     express: a protobuf body carrying a non-default one is REJECTED with a
+		//     400 naming the field, while this shape DROPS any query parameter,
+		//     because it predates the protobuf body and exists for callers that
+		//     cannot send one. Whether it should reject instead is a behaviour
+		//     change, and is not made here.
 		var req *validator_api.ValidateTransactionRequest
 		if isProtobufContentType(c.Request().Header.Get("Content-Type")) {
 			req = &validator_api.ValidateTransactionRequest{}

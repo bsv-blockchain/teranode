@@ -6,7 +6,10 @@ transport. The HTTP /tx endpoint is unauthenticated (no auth middleware is insta
 in startHTTPServer), so a flag set there is a caller assertion from an arbitrary
 peer, not a trust basis. Consensus-affecting options — SkipScriptValidation,
 OutpointOnlySpend, SkipPolicyChecks, InBlock, the candidate times, an asserted block
-height — are only expressible over the validator's gRPC API.
+height — are only expressible over the validator's gRPC API. That listener is not
+itself authenticated on the shipped profile (security_level_grpc defaults to 0 and
+no auth interceptor is installed), so this guard removes the HTTP route rather than
+removing the capability from unauthenticated callers.
 */
 package validator
 

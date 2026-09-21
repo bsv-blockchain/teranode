@@ -58,8 +58,8 @@ func TestValidateTransactionViaHTTP_RefusesNonDefaultOptions(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "skipScriptValidation",
 		"the error must name the field that cannot be carried")
-	require.Contains(t, err.Error(), "raise the validator gRPC message size",
-		"the error must name the remedy, not just the refusal")
+	require.Contains(t, err.Error(), "fixed at 1 GiB",
+		"the error must state why the limit cannot simply be raised, not name a setting that does not exist")
 	require.Equal(t, int64(0), calls.Load(),
 		"the refusal must happen before the request is sent, not after the server rejects it")
 }
