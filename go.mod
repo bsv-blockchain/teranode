@@ -1,6 +1,6 @@
 module github.com/bsv-blockchain/teranode
 
-go 1.26.0
+go 1.27.0
 
 replace github.com/in-toto/in-toto-golang => github.com/in-toto/in-toto-golang v0.9.0
 

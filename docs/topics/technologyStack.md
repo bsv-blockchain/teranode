@@ -1,6 +1,6 @@
 # 🔧 Technology Stack
 
-## Go (1.26.0 or above)
+## Go (1.27.0 or above)
 
 Teranode is written in **Go**, leveraging its efficiency and simplicity to build scalable, concurrent microservices. **Go** was chosen for its high performance, especially when dealing with concurrent processes, which is crucial for handling the scale of blockchain validation and transaction processing within Teranode.
 
