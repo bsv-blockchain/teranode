@@ -236,7 +236,11 @@ FUZZ_TARGETS = \
 	model:FuzzDiskParentSpendsMap_Parity \
 	pkg/fileformat:FuzzHeaderParsersAgree \
 	pkg/fileformat:FuzzReadHeaderFromBytes \
-	services/utxopersister:FuzzUTXOWrapperFromBytes
+	services/utxopersister:FuzzUTXOWrapperFromBytes \
+	services/legacy/peer:FuzzReadWireMessage \
+	services/legacy/peer:FuzzStreamingBlockFraming \
+	services/rpc/bsvjson:FuzzParseRPCRequest \
+	services/rpc/bsvjson:FuzzUnmarshalCmd
 
 # Per-target budget. The nightly workflow uses 5m; the default here is kept
 # short so `make fuzz` is usable as a pre-push check.

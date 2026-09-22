@@ -74,6 +74,14 @@ jobs:
             target: FuzzReadHeaderFromBytes
           - pkg: services/utxopersister
             target: FuzzUTXOWrapperFromBytes
+          - pkg: services/legacy/peer
+            target: FuzzReadWireMessage
+          - pkg: services/legacy/peer
+            target: FuzzStreamingBlockFraming
+          - pkg: services/rpc/bsvjson
+            target: FuzzParseRPCRequest
+          - pkg: services/rpc/bsvjson
+            target: FuzzUnmarshalCmd
     steps:
       - name: Checkout code
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4

@@ -14,7 +14,7 @@ import (
 // makeTestBlock builds a wire.MsgBlock with synthetic transactions whose
 // scripts have a fixed size, useful for confirming the streaming decoder
 // reconstructs the same structure that the buffered path produces.
-func makeTestBlock(t *testing.T, numTxs, scriptLen int) *wire.MsgBlock {
+func makeTestBlock(t testing.TB, numTxs, scriptLen int) *wire.MsgBlock {
 	t.Helper()
 
 	prev := chainhash.Hash{}
