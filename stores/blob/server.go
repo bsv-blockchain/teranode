@@ -27,7 +27,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -273,8 +272,12 @@ func (s *HTTPBlobServer) handleGet(w http.ResponseWriter, r *http.Request, opts 
 // 1. Parse the Range header strictly (parseByteRange)
 // 2. Open the blob and, when the reader is seekable, determine its payload size
 // 3. Resolve the range against that size before reading anything
-// 4. Set Content-Range (and Content-Length when the size is known)
+// 4. Set Content-Range and Content-Length
 // 5. Stream exactly the resolved span to the client
+//
+// A reader that cannot seek has no size, so the handler cannot promise which bytes it
+// will send. It ignores the Range header, as RFC 9110 section 14.2 allows, and streams
+// the whole blob with 200 like a plain GET.
 //
 // The response body is streamed with io.CopyN, so memory use does not depend on the
 // requested span. Allocating a buffer sized from the header let a tiny request make the
@@ -285,8 +288,7 @@ func (s *HTTPBlobServer) handleGet(w http.ResponseWriter, r *http.Request, opts 
 //   - 416 Range Not Satisfiable for multiple ranges, a reversed range, a zero-length
 //     suffix, or a first byte at or past the end of the blob (with "bytes */size" when
 //     the size is known)
-//   - 500 when the store cannot seek and the range needs it (first byte > 0, suffix or
-//     open-ended forms)
+//   - 200 with the whole blob when the store cannot seek
 //
 // Parameters:
 //   - w: HTTP response writer for sending the partial content response
@@ -335,22 +337,14 @@ func (s *HTTPBlobServer) handleRangeRequest(w http.ResponseWriter, r *http.Reque
 	//     rather than the payload total the client cares about.
 	seeker, isSeeker := dataReader.(io.Seeker)
 	if !isSeeker {
-		// Without a size only a range starting at byte 0 with an explicit last byte can be
-		// served; the total is reported as "*" per RFC 7233 section 4.2.
-		if br.suffix || br.openEnded || br.first > 0 {
-			http.Error(w, "Store does not support seeking", http.StatusInternalServerError)
-			return
-		}
-
-		span := br.last
-		if span < math.MaxInt64 {
-			span++
-		}
-
+		// Without a size, a 206 would have to advertise a Content-Range before knowing
+		// whether the blob holds those bytes. Ignore the range and serve the whole blob.
 		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/*", br.last))
-		w.WriteHeader(http.StatusPartialContent)
-		_, _ = io.CopyN(w, dataReader, span)
+		w.WriteHeader(http.StatusOK)
+
+		if n, err := io.Copy(w, dataReader); err != nil {
+			s.logger.Errorf("[BlobServer] range request fallback read failed after %d bytes for key %x: %v", n, key, err)
+		}
 
 		return
 	}
@@ -388,7 +382,12 @@ func (s *HTTPBlobServer) handleRangeRequest(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Length", strconv.FormatInt(span, 10))
 	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", first, last, size))
 	w.WriteHeader(http.StatusPartialContent)
-	_, _ = io.CopyN(w, dataReader, span)
+
+	// The headers are already sent, so a short copy cannot change the status. The client
+	// detects it against Content-Length; log it so the operator sees the store fault too.
+	if n, err := io.CopyN(w, dataReader, span); err != nil {
+		s.logger.Errorf("[BlobServer] range read failed after %d/%d bytes for key %x: %v", n, span, key, err)
+	}
 }
 
 // byteRange is one parsed "bytes=" range spec, not yet resolved against a blob size.
