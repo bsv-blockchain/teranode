@@ -3,8 +3,8 @@ package blob
 
 import (
 	"bytes"
-	"encoding/base64"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -452,7 +452,9 @@ func TestServerRejectsUnsafeFilename(t *testing.T) {
 		".",
 	}
 
-	do := func(method, filename string, body io.Reader) *http.Response {
+	do := func(t *testing.T, method, filename string, body io.Reader) *http.Response {
+		t.Helper()
+
 		q := url.Values{"filename": []string{filename}}
 
 		req, err := http.NewRequest(method, ts.URL+blobPath+"?"+q.Encode(), body)
@@ -474,7 +476,7 @@ func TestServerRejectsUnsafeFilename(t *testing.T) {
 					body = bytes.NewReader([]byte("payload"))
 				}
 
-				resp := do(method, filename, body)
+				resp := do(t, method, filename, body)
 				require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 			})
 		}
@@ -485,20 +487,31 @@ func TestServerRejectsUnsafeFilename(t *testing.T) {
 	require.Equal(t, []byte("victim"), got, "file outside the store subdirectory must be untouched")
 
 	t.Run("valid basename round-trips", func(t *testing.T) {
-		resp := do(http.MethodPost, "custom", bytes.NewReader([]byte("payload")))
+		resp := do(t, http.MethodPost, "custom", bytes.NewReader([]byte("payload")))
 		require.Equal(t, http.StatusCreated, resp.StatusCode)
 
-		resp = do(http.MethodHead, "custom", nil)
+		resp = do(t, http.MethodHead, "custom", nil)
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 
-		resp = do(http.MethodGet, "custom", nil)
+		resp = do(t, http.MethodGet, "custom", nil)
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 
 		data, err := io.ReadAll(resp.Body)
 		require.NoError(t, err)
 		require.Equal(t, []byte("payload"), data)
 
-		resp = do(http.MethodDelete, "custom", nil)
+		resp = do(t, http.MethodDelete, "custom", nil)
 		require.Equal(t, http.StatusNoContent, resp.StatusCode)
 	})
+}
+
+// TestGetKeyFromPath_ShortPath guards the unauthenticated path parser against a slice panic on
+// paths shorter than the "/blob/" prefix, e.g. "GET /x.dat".
+func TestGetKeyFromPath_ShortPath(t *testing.T) {
+	for _, p := range []string{"/x.dat", ".dat", "/blob.dat", "nodot"} {
+		t.Run(p, func(t *testing.T) {
+			_, _, err := getKeyFromPath(p)
+			require.Error(t, err)
+		})
+	}
 }

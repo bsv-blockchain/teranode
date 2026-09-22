@@ -1,10 +1,10 @@
 package options
 
 import (
-	"path/filepath"
-	"strings"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -274,6 +274,8 @@ var filenameCases = []struct {
 	{"hex hash with extension", "0000000000000000000000000000000000000000000000000000000000000000.block", true},
 	{"dots inside name", "a.b.c", true},
 	{"leading dot", ".hidden", true},
+	{"literal percent in name", "a%b", true},
+	{"embedded dotdot without separator", "a..b", true},
 	{"max length", strings.Repeat("a", MaxFilenameLength), true},
 
 	{"empty", "", false},
@@ -291,7 +293,8 @@ var filenameCases = []struct {
 	{"percent-encoded slash", "..%2F..%2Fsecret", false},
 	{"percent-encoded slash lowercase", "..%2f..%2fsecret", false},
 	{"percent-encoded backslash", "..%5C..%5Csecret", false},
-	{"percent-encoded dot", "%2E%2E/secret", false},
+	{"percent-encoded dot", "%2e%2e", false},
+	{"percent-encoded dot uppercase", "%2E%2E", false},
 	{"percent-encoded nul", "name%00.dat", false},
 	{"too long", strings.Repeat("a", MaxFilenameLength+1), false},
 }

@@ -565,7 +565,7 @@ func (s *HTTPBlobServer) handleDelete(w http.ResponseWriter, r *http.Request, op
 func getKeyFromPath(path string) ([]byte, fileformat.FileType, error) {
 	// Assuming the path is in the format "/blob/{key}.{fileType}"
 	pos := strings.LastIndex(path, ".")
-	if pos == -1 {
+	if pos < len("/blob/") {
 		return nil, "", errors.NewInvalidArgumentError("invalid path format")
 	}
 

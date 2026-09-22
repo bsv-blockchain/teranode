@@ -3,6 +3,7 @@ package s3
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -258,9 +259,9 @@ func TestS3WithURLHeaderFooter(t *testing.T) {
 
 		// Verify raw data in mock includes header and footer
 		objectKeyPtr, err := s3Store.getObjectKey(key, fileformat.FileTypeTesting, s3Store.options)
-			require.NoError(t, err)
+		require.NoError(t, err)
 
-			objectKey := aws.ToString(objectKeyPtr)
+		objectKey := aws.ToString(objectKeyPtr)
 		rawData := mock.store[objectKey]
 
 		// Verify header and footer are present in raw data
@@ -354,9 +355,9 @@ func TestS3_GetCacheMiss(t *testing.T) {
 
 	// Set up test data directly in mock store to simulate existing S3 data without cache
 	objectKeyPtr, err := s3Store.getObjectKey(key, fileformat.FileTypeTesting, s3Store.options)
-			require.NoError(t, err)
+	require.NoError(t, err)
 
-			objectKey := aws.ToString(objectKeyPtr)
+	objectKey := aws.ToString(objectKeyPtr)
 
 	ft := fileformat.FileTypeTesting.ToMagicBytes()
 	mock.store[objectKey] = append(ft[:], value...)
@@ -504,7 +505,8 @@ func TestS3_GetObjectKey_PrefixIsolation(t *testing.T) {
 		{"nul byte", "name\x00.block", false},
 		{"percent-encoded slash", "..%2F..%2Ftenant-b%2Fprivate.block", false},
 		{"percent-encoded backslash", "..%5C..%5Ctenant-b", false},
-		{"percent-encoded dot", "%2E%2E/tenant-b", false},
+		{"percent-encoded dot", "%2e%2e", false},
+		{"literal percent in name", "a%b", true},
 		{"dot", ".", false},
 		{"dotdot", "..", false},
 		{"too long", strings.Repeat("a", options.MaxFilenameLength+1), false},
@@ -568,22 +570,93 @@ func TestS3_CRUDRejectsTraversalFilename(t *testing.T) {
 	mock.store["tenant-b/private.block"] = []byte("victim")
 
 	err := s3Store.Set(ctx, hash, fileformat.FileTypeBlock, []byte("x"), escape)
-	require.Error(t, err)
+	requireInvalidArgument(t, err)
 
 	err = s3Store.SetFromReader(ctx, hash, fileformat.FileTypeBlock, io.NopCloser(bytes.NewReader([]byte("x"))), escape)
-	require.Error(t, err)
+	requireInvalidArgument(t, err)
 
 	_, err = s3Store.Get(ctx, hash, fileformat.FileTypeBlock, escape)
-	require.Error(t, err)
+	requireInvalidArgument(t, err)
 
 	_, err = s3Store.GetIoReader(ctx, hash, fileformat.FileTypeBlock, escape)
-	require.Error(t, err)
+	requireInvalidArgument(t, err)
 
 	_, err = s3Store.Exists(ctx, hash, fileformat.FileTypeBlock, escape)
-	require.Error(t, err)
+	requireInvalidArgument(t, err)
 
 	err = s3Store.Del(ctx, hash, fileformat.FileTypeBlock, escape)
-	require.Error(t, err)
+	requireInvalidArgument(t, err)
 
 	require.Equal(t, []byte("victim"), mock.store["tenant-b/private.block"], "target object must be untouched")
+}
+
+func requireInvalidArgument(t *testing.T, err error) {
+	t.Helper()
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrInvalidArgument), "expected invalid-argument error, got %v", err)
+}
+
+// TestS3_GetObjectKey_SubDirectoryShapes pins the object key produced for every subDirectory
+// spelling an operator might configure, so the prefix normalisation never silently re-keys an
+// existing bucket. Expected values equal what filepath.Join produced before validation existed.
+func TestS3_GetObjectKey_SubDirectoryShapes(t *testing.T) {
+	hash := []byte{0x01}
+	hashKey := "01." + fileformat.FileTypeBlock.String()
+
+	cases := []struct {
+		subDir string
+		want   string
+	}{
+		{"", hashKey},
+		{"blocks", "blocks/" + hashKey},
+		{"blocks/", "blocks/" + hashKey},
+		{"/blocks", "/blocks/" + hashKey},
+		{"/blocks/", "/blocks/" + hashKey},
+		{"/", "/" + hashKey},
+		{"./blocks", "blocks/" + hashKey},
+		{"blocks//sub", "blocks/sub/" + hashKey},
+		{"path/to/dir", "path/to/dir/" + hashKey},
+	}
+
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("%q", tc.subDir), func(t *testing.T) {
+			s3Store, _ := setupTestS3(t)
+			s3Store.options = options.NewStoreOptions(options.WithDefaultSubDirectory(tc.subDir))
+
+			key, err := s3Store.getObjectKey(hash, fileformat.FileTypeBlock, s3Store.options)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, aws.ToString(key))
+
+			// A custom filename under the same prefix must stay under it too.
+			merged := options.MergeOptions(s3Store.options, []options.FileOption{options.WithFilename("custom.dat")})
+			key, err = s3Store.getObjectKey(hash, fileformat.FileTypeDat, merged)
+			require.NoError(t, err)
+			require.Equal(t, strings.TrimSuffix(tc.want, hashKey)+"custom.dat", aws.ToString(key))
+		})
+	}
+}
+
+// TestS3_SetAndGet_WithFilename round-trips a custom filename through the mock client end to
+// end, proving a valid basename still works after validation was added.
+func TestS3_SetAndGet_WithFilename(t *testing.T) {
+	s3Store, mock := setupTestS3(t)
+	s3Store.options = options.NewStoreOptions(options.WithDefaultSubDirectory("blocks/tenant-a"))
+
+	ctx := context.Background()
+	opt := options.WithFilename("lastProcessed.dat")
+
+	require.NoError(t, s3Store.Set(ctx, nil, fileformat.FileTypeDat, []byte("42"), opt))
+
+	_, ok := mock.store["blocks/tenant-a/lastProcessed.dat"]
+	require.True(t, ok, "object must be stored under the configured prefix")
+
+	exists, err := s3Store.Exists(ctx, nil, fileformat.FileTypeDat, opt)
+	require.NoError(t, err)
+	require.True(t, exists)
+
+	got, err := s3Store.Get(ctx, nil, fileformat.FileTypeDat, opt)
+	require.NoError(t, err)
+	require.Equal(t, []byte("42"), got)
+
+	require.NoError(t, s3Store.Del(ctx, nil, fileformat.FileTypeDat, opt))
 }

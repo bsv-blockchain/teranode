@@ -563,11 +563,20 @@ func (g *S3) getObjectKey(hash []byte, fileType fileformat.FileType, o *options.
 		ext    string
 	)
 
-	subDir := strings.Trim(o.SubDirectory, "/")
-
-	for _, segment := range strings.Split(subDir, "/") {
+	for _, segment := range strings.Split(o.SubDirectory, "/") {
 		if segment == ".." {
 			return nil, errors.NewInvalidArgumentError("[S3] subdirectory contains path traversal sequence")
+		}
+	}
+
+	// Normalise the configured prefix the same way path.Join will, so the prefix assertion
+	// below compares like with like. A leading slash is preserved: S3 keys may legitimately
+	// start with "/", and changing that would silently re-key every existing object.
+	subDir := ""
+	if o.SubDirectory != "" {
+		subDir = path.Clean(o.SubDirectory)
+		if subDir == "." {
+			subDir = ""
 		}
 	}
 
@@ -587,7 +596,12 @@ func (g *S3) getObjectKey(hash []byte, fileType fileformat.FileType, o *options.
 
 	objectKey := path.Join(subDir, prefix, key)
 
-	if subDir != "" && !strings.HasPrefix(objectKey, subDir+"/") {
+	requiredPrefix := subDir
+	if requiredPrefix != "" && !strings.HasSuffix(requiredPrefix, "/") {
+		requiredPrefix += "/"
+	}
+
+	if subDir != "" && !strings.HasPrefix(objectKey, requiredPrefix) {
 		return nil, errors.NewInvalidArgumentError("[S3] object key %q escapes configured subdirectory %q", objectKey, subDir)
 	}
 
