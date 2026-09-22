@@ -1084,6 +1084,12 @@ func TestValidateDataHubURL(t *testing.T) {
 		{"localhost_uppercase", "http://LOCALHOST/api", true, "localhost"},
 		{"localhost_mixed_case_trailing_dot", "http://LocalHost./api", true, "localhost"},
 		{"sub_localhost_uppercase", "http://sub.LOCALHOST/api", true, "localhost"},
+
+		// Not a clean base URL: fetch paths are joined onto it (issue 4843)
+		{"query_suffix", "http://attacker.example:9644/v1/debug/bundle?x=", true, "query"},
+		{"bare_query", "http://attacker.example/api?", true, "query"},
+		{"fragment", "http://attacker.example/api#x", true, "fragment"},
+		{"userinfo", "http://user:pass@example.com/api", true, "userinfo"},
 	}
 
 	for _, tt := range tests {
@@ -1097,6 +1103,19 @@ func TestValidateDataHubURL(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestValidateDataHubURL_ShapeCheckedWhenPrivateIPsAllowed keeps the base-URL shape check
+// on for nodes with p2p_allow_private_ips set, which skip the address checks.
+func TestValidateDataHubURL_ShapeCheckedWhenPrivateIPsAllowed(t *testing.T) {
+	server := &Server{
+		logger:   ulogger.New("test"),
+		settings: &settings.Settings{P2P: settings.P2PSettings{AllowPrivateIPs: true}},
+	}
+
+	require.NoError(t, server.validateDataHubURL("http://10.0.0.5:8090/api/v1"))
+	require.ErrorContains(t, server.validateDataHubURL("http://10.0.0.5:9644/v1/debug/bundle?x="), "query")
+	require.ErrorContains(t, server.validateDataHubURL("http://10.0.0.5:8090/api/v1#"), "fragment")
 }
 
 // TestCleanupPeerMaps_EvictsExpiredReputationEntries confirms that the

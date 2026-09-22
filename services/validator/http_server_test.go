@@ -33,7 +33,11 @@ func TestHTTPEndpoints(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("Single transaction via HTTP endpoint", func(t *testing.T) {
-		// Create test settings with policy checks disabled
+		// The /tx endpoint carries transaction bytes only — it accepts no
+		// validation options on any body shape — so the transaction has to stand
+		// up to plain mempool-submission semantics: policy checks on, UTXOs
+		// created, block assembly requested. Block assembly is disabled here so
+		// the requested hand-off is a no-op.
 		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.BlockAssembly.Disabled = true
 
@@ -58,8 +62,11 @@ func TestHTTPEndpoints(t *testing.T) {
 		}
 		utxoMock.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(metaData, nil)
 
-		// Mock the SpendAndCreate method with empty slice of *utxo.Spend for the return value
-		utxoMock.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, nil)
+		// SpendAndCreate must return the transaction's metadata: without the
+		// skipUtxoCreation option the validator no longer derives it from the
+		// transaction itself, and the handler serialises whatever the store
+		// returns before replying 200.
+		utxoMock.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(metaData, []*utxo.Spend{}, nil)
 
 		// Create a new server
 		server := validator.NewServer(logger, tSettings, utxoMock, nil, nil, nil, nil, nil, nil)
@@ -71,9 +78,8 @@ func TestHTTPEndpoints(t *testing.T) {
 		// Test HTTP handler for a single transaction
 		e := echo.New()
 
-		// Build URL with parameters to bypass validation issues
-		queryParams := "skipUtxoCreation=true&addTxToBlockAssembly=false&skipPolicyChecks=true&createConflicting=false&candidateParentMedianTime=1625097600"
-		req := httptest.NewRequest(http.MethodPost, "/tx?"+queryParams, bytes.NewReader(txBytes))
+		// No query parameters: the endpoint does not read them.
+		req := httptest.NewRequest(http.MethodPost, "/tx", bytes.NewReader(txBytes))
 		rec := httptest.NewRecorder()
 
 		req.Header.Set("Content-Type", "application/octet-stream")
@@ -92,7 +98,8 @@ func TestHTTPEndpoints(t *testing.T) {
 	})
 
 	t.Run("Multiple transactions via HTTP endpoint", func(t *testing.T) {
-		// Create test settings with policy checks disabled
+		// Same contract as /tx: /txs carries transaction bytes only, so every
+		// transaction in the stream is validated with default options.
 		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.BlockAssembly.Disabled = true
 
@@ -117,8 +124,9 @@ func TestHTTPEndpoints(t *testing.T) {
 		}
 		utxoMock.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(metaData, nil)
 
-		// Mock the SpendAndCreate method with empty slice of *utxo.Spend for the return value
-		utxoMock.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, nil)
+		// SpendAndCreate must return the transaction's metadata — see the single-tx
+		// case above for why.
+		utxoMock.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(metaData, []*utxo.Spend{}, nil)
 
 		// Create a new server
 		server := validator.NewServer(logger, tSettings, utxoMock, nil, nil, nil, nil, nil, nil)
@@ -136,9 +144,8 @@ func TestHTTPEndpoints(t *testing.T) {
 		buf.Write(txBytes)
 		buf.Write(txBytes)
 
-		// Build URL with parameters to bypass validation issues
-		queryParams := "skipUtxoCreation=true&addTxToBlockAssembly=false&skipPolicyChecks=true&createConflicting=false&candidateParentMedianTime=1625097600"
-		req := httptest.NewRequest(http.MethodPost, "/txs?"+queryParams, &buf)
+		// No query parameters: the endpoint does not read them.
+		req := httptest.NewRequest(http.MethodPost, "/txs", &buf)
 		rec := httptest.NewRecorder()
 
 		req.Header.Set("Content-Type", "application/octet-stream")
