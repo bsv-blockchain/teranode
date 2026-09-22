@@ -6,6 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 // cacheBypassRetryableKey marks an error whose cause is a peer response that a
@@ -86,13 +87,20 @@ func isCacheBypassRetryable(err error) bool {
 // the same handler but misses the cache, forcing a fresh on-demand generation. This
 // needs no change on the peer, which is the only lever available against a fleet we
 // cannot update.
-func (u *Server) peerResourceURL(baseURL, resource string, hash *chainhash.Hash, bypassCache bool) string {
-	url := fmt.Sprintf("%s/%s/%s", baseURL, resource, hash.String())
-	if !bypassCache {
-		return url
+//
+// The path is joined structurally (util.JoinPeerURL), so a base URL carrying its own
+// query, fragment or credentials is an error rather than a way to change the path.
+func (u *Server) peerResourceURL(baseURL, resource string, hash *chainhash.Hash, bypassCache bool) (string, error) {
+	url, err := util.JoinPeerURL(baseURL, resource, hash.String())
+	if err != nil {
+		return "", err
 	}
 
-	return fmt.Sprintf("%s?cachebust=%d", url, u.cacheBustCounter.Add(1))
+	if !bypassCache {
+		return url, nil
+	}
+
+	return fmt.Sprintf("%s?cachebust=%d", url, u.cacheBustCounter.Add(1)), nil
 }
 
 // newPoisonedSubtreeDataError builds the error returned when a peer answers a

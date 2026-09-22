@@ -919,6 +919,29 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, err
 	}
 
+	// The guard above bounds the height the CALLER asserted; an attacker simply asserts a low
+	// one. This bounds the height the NODE'S OWN CHAIN has reached. It is a TIP-derived bound,
+	// not a proof that validation has replayed through that height: GetBlockState reads the UTXO
+	// store snapshot, which production initialises from blockchainClient.GetBestHeightAndTime and
+	// refreshes on each Block notification (stores/utxo/factory/utxo.go). It holds because legacy
+	// netsync validates block H's transactions inside prepareSubtrees BEFORE the block is added,
+	// and blockHandler consumes blockQueue on a single goroutine, so the tip cannot reach H while
+	// H is validating. Same `>` boundary as above, so the block AT checkpoint height C (tip C-1)
+	// still qualifies. A lagging snapshot is fail-open (more permissive, never a false rejection);
+	// a tip genuinely past the checkpoint while below-checkpoint work is in flight is a genuine
+	// rejection whose remedy is to turn the fast path off
+	// (blockvalidation_outpoint_only_below_checkpoint=false), which is also the default.
+	// The condition is `>`, mirroring the caller-asserted guard immediately above it, so it also
+	// admits a tip exactly at the highest checkpoint — a case for which the paragraph above claims
+	// no legitimate producer.
+	// Issue 4840, finding B-022.
+	if validationOptions.OutpointOnlySpend && blockState.Height > blockchain.HighestCheckpointHeight(v.settings.ChainCfgParams.Checkpoints) {
+		err = errors.NewProcessingError("[Validate][%s] OutpointOnlySpend must not be used once the node's chain tip is past the highest checkpoint (tip height %d)", txID, blockState.Height)
+		span.RecordError(err)
+
+		return nil, err
+	}
+
 	// Fail closed on a store that does not support the fast path: OutpointOnlySpend
 	// relies on SkipUTXOHashCheck / SkipExtendedInputs, which such a store ignores —
 	// it would then derive the UTXO hash from absent parent data and hard-error on the
