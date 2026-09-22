@@ -77,10 +77,12 @@ The store uses `go-batcher` to aggregate individual operations into batch wire r
 | `storeBatcher` | `Create` calls | `client.CreateBatch()` | `StoreBatcherSize`, `StoreBatcherDurationMillis` |
 | `getBatcher` | `Get` / `GetMeta` calls | `client.GetRecordBatch()` | `GetBatcherSize`, `GetBatcherDurationMillis` |
 | `spendBatcher` | `Spend` calls (grouped by `SpendBatchParams`) | `client.SpendBatch()` | `SpendBatcherSize`, `SpendBatcherDurationMillis` |
+| `setLockedBatcher` | `SetLocked` calls (grouped by `value`) | `client.SetLockedBatch()` | `LockedBatcherSize`, `LockedBatcherDurationMillis` |
+| `decorateBatcher` | `BatchDecorate` calls | `client.GetRecordBatch()` | `GetBatcherSize`, `GetBatcherDurationMillis` (shared with `getBatcher`) |
 
 Each batch item includes a `done` channel. The caller blocks on this channel until the batch containing their item is flushed and the result is known.
 
-The `Spend` method enqueues its inputs into `spendBatcher`, which coalesces spends from many transactions into shared `SpendBatch` RPCs — grouped by `SpendBatchParams` (block height + ignore flags + retention), since the server takes one params set per RPC. This amortizes the server's per-RPC redo fsync across many transactions, the main catch-up throughput lever. Per-transaction atomicity is preserved: the global-indexed batch response is split back per transaction, and a genuinely-invalid transaction's already-spent inputs are rolled back. `SetLocked` and the other mutations call the client directly (not batched).
+The `Spend` method enqueues its inputs into `spendBatcher`, which coalesces spends from many transactions into shared `SpendBatch` RPCs — grouped by `SpendBatchParams` (block height + ignore flags + retention), since the server takes one params set per RPC. This amortizes the server's per-RPC redo fsync across many transactions, the main catch-up throughput lever. Per-transaction atomicity is preserved: the global-indexed batch response is split back per transaction, and a genuinely-invalid transaction's already-spent inputs are rolled back. `SetLocked` is likewise coalesced through `setLockedBatcher` (grouped by lock value), and `BatchDecorate` through `decorateBatcher` (sharing the get path). The remaining mutations (`SetConflicting`, `SetMinedMulti`, `Delete`, …) call the client directly.
 
 ### Field-selective Get batching
 
