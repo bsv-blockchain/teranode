@@ -380,6 +380,13 @@ type SubtreeProcessor struct {
 	// "error getting node txInpoints from currentTxMap".
 	diskTxMapShadow *DiskTxMap
 
+	// diskTxMapAnchor is the disk map reorgBlocks captured before its
+	// moveForward loop and restores on rollback. It is pinned for the duration
+	// of the reorg — the fresh-allocation path must not retire it along with the
+	// per-iteration maps, because rollback still needs to read it after the last
+	// iteration has been discarded.
+	diskTxMapAnchor *DiskTxMap
+
 	// diskTxMapRetired holds disk maps displaced by the fresh-allocation path
 	// (multi-block reorgs, where disableCurrentTxMapPool forbids the swap because
 	// rollback must keep the pre-reorg pointer valid across the whole loop).
@@ -3452,18 +3459,8 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	defer func() { stp.disableCurrentTxMapPool = false }()
 
 	// With DiskTxMap the fresh-allocation path leaves the displaced maps holding
-	// Badger directories that only Close() removes. By the time this returns the
-	// reorg has either committed or rolled back, so the surviving map is
-	// whichever currentTxMap now points at and every other one can go.
-	defer func() {
-		if stp.diskTxMap != nil {
-			if surviving, ok := stp.currentTxMap.(*DiskTxMap); ok {
-				stp.diskTxMap = surviving
-			}
-
-			stp.closeRetiredDiskTxMaps()
-		}
-	}()
+	// Badger directories that only Close() removes.
+	defer stp.finishReorgDiskTxMaps()
 
 	if moveBackBlocks == nil {
 		return errors.NewProcessingError("you must pass in blocks to move down the chain")
@@ -4753,6 +4750,34 @@ func (stp *SubtreeProcessor) newDiskTxMap(prefix string, capacity uint) (*DiskTx
 	})
 }
 
+// finishReorgDiskTxMaps releases the disk maps a reorg allocated. By the time it
+// runs the reorg has either committed or rolled back, so the surviving map is
+// whichever currentTxMap now points at and every other one can go.
+func (stp *SubtreeProcessor) finishReorgDiskTxMaps() {
+	if stp.diskTxMap == nil {
+		return
+	}
+
+	// Both the last iteration's map and the pinned anchor are candidates, and
+	// exactly one of them is what currentTxMap now points at: the anchor if the
+	// reorg rolled back, the last map if it committed. Retire both and let the
+	// survivor filter in closeRetiredDiskTxMaps keep the right one — otherwise
+	// the loser is in neither list and is closed by nobody, leaving its writer
+	// goroutines parked on writeCh and its Badger directories on disk.
+	stp.diskTxMapRetired = append(stp.diskTxMapRetired, stp.diskTxMap)
+
+	if stp.diskTxMapAnchor != nil {
+		stp.diskTxMapRetired = append(stp.diskTxMapRetired, stp.diskTxMapAnchor)
+		stp.diskTxMapAnchor = nil
+	}
+
+	if surviving, ok := stp.currentTxMap.(*DiskTxMap); ok {
+		stp.diskTxMap = surviving
+	}
+
+	stp.closeRetiredDiskTxMaps()
+}
+
 // closeRetiredDiskTxMaps closes and forgets every disk map displaced by the
 // fresh-allocation path, releasing their Badger directories. Safe to call when
 // none are outstanding.
@@ -4797,7 +4822,16 @@ func (stp *SubtreeProcessor) resetSubtreeState(createProperlySizedSubtrees bool)
 				return errors.NewProcessingError("[resetSubtreeState] error creating disk tx map for reorg", freshErr)
 			}
 
-			stp.diskTxMapRetired = append(stp.diskTxMapRetired, stp.diskTxMap)
+			if stp.diskTxMapAnchor == nil {
+				// First reset of this reorg: the map being displaced is the one
+				// reorgBlocks captured for rollback, so it has to outlive every
+				// iteration. Pin it rather than retiring it — finishReorgDiskTxMaps
+				// decides its fate once the reorg's outcome is known.
+				stp.diskTxMapAnchor = stp.diskTxMap
+			} else {
+				stp.diskTxMapRetired = append(stp.diskTxMapRetired, stp.diskTxMap)
+			}
+
 			stp.diskTxMap = freshMap
 			stp.currentTxMap = freshMap
 		} else {
@@ -5188,6 +5222,17 @@ func (stp *SubtreeProcessor) swapCurrentTxMapBack() {
 // reads. No-op when the pool is disabled (multi-block reorg).
 func (stp *SubtreeProcessor) clearCurrentTxMapShadow() {
 	if stp.disableCurrentTxMapPool {
+		// Multi-block reorg: resetSubtreeState allocated a fresh map instead of
+		// swapping, so there is no shadow to empty — but this is still the point
+		// at which the map this block captured becomes unread, and for the disk
+		// path that map is a retired one holding a full set of cuckoo filters, a
+		// write channel and one Badger instance per disk. Release it now rather
+		// than letting one accumulate per moved-forward block until reorgBlocks
+		// returns; the anchor is pinned separately and survives.
+		if stp.diskTxMap != nil {
+			stp.closeRetiredDiskTxMaps()
+		}
+
 		return
 	}
 

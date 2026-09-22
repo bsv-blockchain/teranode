@@ -3,6 +3,7 @@ package subtreeprocessor
 import (
 	"context"
 	"net/url"
+	"os"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -133,12 +134,23 @@ func TestResetSubtreeState_DiskTxMap_ReorgKeepsCapturedMapReadable(t *testing.T)
 		"the reorg path must allocate a fresh map rather than reuse the captured one")
 	require.Equal(t, 0, stp.currentTxMap.Length(), "the fresh map must start empty")
 
-	// The displaced map owns Badger directories, so it must be retired for the
-	// reorg to close rather than silently dropped.
-	require.NotEmpty(t, stp.diskTxMapRetired, "the displaced map must be retired for closing")
+	// The displaced map owns Badger directories, so it must be tracked for the
+	// reorg to close rather than silently dropped. The first one displaced is
+	// the anchor rollback restores, so it is pinned rather than retired — a
+	// retired map can be closed at any commit point, and this one cannot be
+	// until the reorg's outcome is known.
+	require.Same(t, originalCurrentTxMap, stp.diskTxMapAnchor,
+		"the map rollback restores must be pinned as the reorg anchor")
+	require.Empty(t, stp.diskTxMapRetired, "the anchor must not be retired mid-reorg")
+
+	require.NoError(t, stp.resetSubtreeState(true))
+	require.NotEmpty(t, stp.diskTxMapRetired,
+		"every map displaced after the anchor must be retired for closing")
 
 	stp.closeRetiredDiskTxMaps()
 	require.Empty(t, stp.diskTxMapRetired)
+	require.Same(t, originalCurrentTxMap, stp.diskTxMapAnchor,
+		"closing the retired maps must not take the anchor with them")
 }
 
 // Two consecutive blocks: each reset must expose an empty map while keeping the
@@ -176,4 +188,115 @@ func TestResetSubtreeState_DiskTxMap_AlternatesAcrossBlocks(t *testing.T) {
 	_, found = stp.currentTxMap.Get(first)
 	require.False(t, found, "block 1 entries must not reappear when the half is reused")
 	require.Equal(t, 0, stp.currentTxMap.Length(), "the reused half must come back empty")
+}
+
+// liveDiskTxMapGenerations counts the Badger generations still on disk under a
+// txMapDir. Each DiskTxMap creates exactly one directory per configured dir and
+// only Close() removes it (tempstore.Close does the os.RemoveAll), so this is a
+// direct count of the disk maps that are still alive.
+func liveDiskTxMapGenerations(t *testing.T, dir string) int {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+
+	live := 0
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			live++
+		}
+	}
+
+	return live
+}
+
+// A reorg that rolls back must not leak the map the failing iteration allocated.
+// Each resetSubtreeState under disableCurrentTxMapPool retires the map it
+// displaces, so after N iterations the retired list holds maps 0..N-1 while
+// stp.diskTxMap points at map N. Rollback restores currentTxMap to map 0, so the
+// survivor filter spares map 0 and closes 1..N-1 — map N is in neither list and
+// is closed by nobody. Its writer goroutines stay blocked on writeCh forever,
+// which keeps the whole map (and its cuckoo filters) reachable, and its Badger
+// directories are never removed.
+func TestReorgBlocks_DiskTxMap_ClosesEveryMapButTheSurvivor(t *testing.T) {
+	dir := t.TempDir()
+	stp := newSubtreeProcessorWithTxMapDirs(t, []string{dir})
+
+	require.Equal(t, 2, liveDiskTxMapGenerations(t, dir),
+		"precondition: the constructor allocates both halves of the double buffer")
+
+	// What reorgBlocks captures before its moveForward loop and restores on rollback.
+	anchor := stp.currentTxMap
+
+	stp.disableCurrentTxMapPool = true
+
+	for range 3 {
+		require.NoError(t, stp.resetSubtreeState(true))
+	}
+
+	stp.disableCurrentTxMapPool = false
+
+	// The third block failed: reorgBlocks' rollback restores the captured pointer.
+	stp.currentTxMap = anchor
+
+	stp.finishReorgDiskTxMaps()
+
+	require.Same(t, anchor, stp.diskTxMap, "the survivor must become the active map")
+	require.Equal(t, 2, liveDiskTxMapGenerations(t, dir),
+		"a rolled-back reorg must leave only the surviving map and its shadow: "+
+			"every map the loop allocated owns Badger directories that only Close() removes")
+}
+
+// The same cleanup on the success path: the last iteration's map survives and
+// everything else, including the pre-reorg anchor, goes.
+func TestReorgBlocks_DiskTxMap_ClosesAnchorOnSuccess(t *testing.T) {
+	dir := t.TempDir()
+	stp := newSubtreeProcessorWithTxMapDirs(t, []string{dir})
+
+	stp.disableCurrentTxMapPool = true
+
+	for range 3 {
+		require.NoError(t, stp.resetSubtreeState(true))
+	}
+
+	stp.disableCurrentTxMapPool = false
+
+	surviving := stp.currentTxMap
+
+	stp.finishReorgDiskTxMaps()
+
+	require.Same(t, surviving, stp.diskTxMap)
+	require.Equal(t, 2, liveDiskTxMapGenerations(t, dir),
+		"a committed reorg must close the pre-reorg anchor along with the intermediates")
+}
+
+// A deep reorg must not hold every intermediate map alive until reorgBlocks
+// returns. At production defaults each DiskTxMap carries a gigabyte of cuckoo
+// filters, a million-entry write channel and one Badger instance per disk, so
+// accumulating one per moved-forward block defeats the point of a disk-backed
+// map. Only two need to outlive an iteration: the anchor rollback restores, and
+// the map the in-flight moveForwardBlock captured before its reset.
+func TestReorgBlocks_DiskTxMap_DoesNotAccumulateAcrossBlocks(t *testing.T) {
+	dir := t.TempDir()
+	stp := newSubtreeProcessorWithTxMapDirs(t, []string{dir})
+
+	stp.disableCurrentTxMapPool = true
+
+	for block := range 8 {
+		require.NoError(t, stp.resetSubtreeState(true))
+
+		// Commit point of this block: the map it captured is now unread.
+		stp.clearCurrentTxMapShadow()
+
+		require.LessOrEqual(t, liveDiskTxMapGenerations(t, dir), 3,
+			"after block %d the reorg must hold at most the anchor, the active map and the shadow",
+			block)
+	}
+
+	stp.disableCurrentTxMapPool = false
+
+	stp.finishReorgDiskTxMaps()
+
+	require.Equal(t, 2, liveDiskTxMapGenerations(t, dir))
 }
