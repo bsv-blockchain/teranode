@@ -3,6 +3,8 @@ package httpimpl
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -69,4 +71,49 @@ func TestSecurityHeadersMiddleware_SetsContentSecurityPolicy(t *testing.T) {
 	require.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"))
 	require.Equal(t, "DENY", rec.Header().Get("X-Frame-Options"))
 	require.Equal(t, "max-age=31536000; includeSubDomains", rec.Header().Get("Strict-Transport-Security"))
+}
+
+// TestContentSecurityPolicy_MatchesDashboardCopy is the enforced drift check between the two copies
+// of the policy (bitcoin-sv/teranode#4844).
+//
+// The dashboard carries its own copy in hooks.server.ts for development, where this Go middleware
+// does not run. Two hand-maintained copies of a security header drift, and the browser test asserts
+// the behaviour of the DASHBOARD's copy — so without this check the browser could be proving things
+// about a string production never serves. Comparing them here is what makes that test meaningful.
+func TestContentSecurityPolicy_MatchesDashboardCopy(t *testing.T) {
+	// Walk up from services/asset/httpimpl to the repository root.
+	hooksPath := filepath.Join("..", "..", "..", "ui", "dashboard", "src", "hooks.server.ts")
+
+	source, err := os.ReadFile(hooksPath)
+	require.NoError(t, err, "the dashboard copy of the policy must be readable from here")
+
+	// The TypeScript copy is written as adjacent quoted string literals, one directive per line.
+	// Reassemble it the way the TypeScript compiler would, so the comparison is against the value
+	// the dashboard actually serves rather than against its formatting.
+	const marker = "export const CONTENT_SECURITY_POLICY ="
+
+	idx := strings.Index(string(source), marker)
+	require.GreaterOrEqual(t, idx, 0, "hooks.server.ts must export CONTENT_SECURITY_POLICY")
+
+	tail := string(source)[idx+len(marker):]
+	end := strings.Index(tail, "\n\n")
+	require.GreaterOrEqual(t, end, 0, "could not find the end of the policy declaration")
+
+	var assembled strings.Builder
+
+	for _, piece := range strings.Split(tail[:end], "\n") {
+		piece = strings.TrimSpace(piece)
+
+		first := strings.Index(piece, `"`)
+		last := strings.LastIndex(piece, `"`)
+
+		if first < 0 || last <= first {
+			continue
+		}
+
+		assembled.WriteString(piece[first+1 : last])
+	}
+
+	require.Equal(t, contentSecurityPolicy, assembled.String(),
+		"the dashboard copy of the Content-Security-Policy has drifted from the one this service serves")
 }
