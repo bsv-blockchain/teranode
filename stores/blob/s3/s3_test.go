@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -76,7 +77,10 @@ func TestS3_SetAndGet(t *testing.T) {
 			require.NoError(t, err)
 
 			// Verify raw data in mock includes headers and footers
-			objectKey := aws.ToString(s3Store.getObjectKey(tt.key, fileformat.FileTypeTesting, options.MergeOptions(s3Store.options, opts)))
+			objectKeyPtr, err := s3Store.getObjectKey(tt.key, fileformat.FileTypeTesting, options.MergeOptions(s3Store.options, opts))
+			require.NoError(t, err)
+
+			objectKey := aws.ToString(objectKeyPtr)
 
 			rawData := mock.store[objectKey]
 			magicBytes := fileformat.FileTypeTesting.ToMagicBytes()
@@ -142,7 +146,10 @@ func TestS3_SetFromReader(t *testing.T) {
 			require.NoError(t, err)
 
 			// Verify raw data in mock includes headers and footers
-			objectKey := aws.ToString(s3Store.getObjectKey(tt.key, fileformat.FileTypeTesting, options.MergeOptions(s3Store.options, opts)))
+			objectKeyPtr, err := s3Store.getObjectKey(tt.key, fileformat.FileTypeTesting, options.MergeOptions(s3Store.options, opts))
+			require.NoError(t, err)
+
+			objectKey := aws.ToString(objectKeyPtr)
 
 			rawData := mock.store[objectKey]
 			magicBytes := fileformat.FileTypeTesting.ToMagicBytes()
@@ -250,7 +257,10 @@ func TestS3WithURLHeaderFooter(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify raw data in mock includes header and footer
-		objectKey := aws.ToString(s3Store.getObjectKey(key, fileformat.FileTypeTesting, s3Store.options))
+		objectKeyPtr, err := s3Store.getObjectKey(key, fileformat.FileTypeTesting, s3Store.options)
+			require.NoError(t, err)
+
+			objectKey := aws.ToString(objectKeyPtr)
 		rawData := mock.store[objectKey]
 
 		// Verify header and footer are present in raw data
@@ -343,7 +353,10 @@ func TestS3_GetCacheMiss(t *testing.T) {
 	value := []byte("test-value")
 
 	// Set up test data directly in mock store to simulate existing S3 data without cache
-	objectKey := aws.ToString(s3Store.getObjectKey(key, fileformat.FileTypeTesting, s3Store.options))
+	objectKeyPtr, err := s3Store.getObjectKey(key, fileformat.FileTypeTesting, s3Store.options)
+			require.NoError(t, err)
+
+			objectKey := aws.ToString(objectKeyPtr)
 
 	ft := fileformat.FileTypeTesting.ToMagicBytes()
 	mock.store[objectKey] = append(ft[:], value...)
@@ -460,4 +473,117 @@ func TestS3_GetIoReader_ClosesBodyOnFileTypeMismatch(t *testing.T) {
 	_, err := s3Store.GetIoReader(context.Background(), []byte("k"), fileformat.FileTypeTesting)
 	require.Error(t, err, "file-type mismatch must surface as an error")
 	require.Equal(t, 1, body.closeCount, "result.Body must be Closed exactly once when file-type mismatches - otherwise the S3 HTTP connection leaks")
+}
+
+// TestS3_GetObjectKey_PrefixIsolation is the S3 half of the cross-backend regression table for
+// caller-controlled filenames: a filename received over HTTP must never resolve to an object
+// key outside the store's configured subDirectory, and the key must be built with object-key
+// (slash) semantics rather than host filepath semantics.
+func TestS3_GetObjectKey_PrefixIsolation(t *testing.T) {
+	const subDir = "blocks/tenant-a"
+
+	s3Store, _ := setupTestS3(t)
+	s3Store.options = options.NewStoreOptions(options.WithDefaultSubDirectory(subDir))
+
+	hash := []byte{0x01, 0x02}
+
+	cases := []struct {
+		name     string
+		filename string
+		valid    bool
+	}{
+		{"plain basename", "lastProcessed.dat", true},
+		{"dots inside name", "a.b.c", true},
+		{"parent traversal slash", "../../tenant-b/private.block", false},
+		{"parent traversal backslash", `..\..\tenant-b\private.block`, false},
+		{"single parent", "../private.block", false},
+		{"absolute unix", "/tenant-b/private.block", false},
+		{"absolute windows", `C:\tenant-b\private.block`, false},
+		{"nested relative", "tenant-b/private.block", false},
+		{"repeated separators", "a//b", false},
+		{"nul byte", "name\x00.block", false},
+		{"percent-encoded slash", "..%2F..%2Ftenant-b%2Fprivate.block", false},
+		{"percent-encoded backslash", "..%5C..%5Ctenant-b", false},
+		{"percent-encoded dot", "%2E%2E/tenant-b", false},
+		{"dot", ".", false},
+		{"dotdot", "..", false},
+		{"too long", strings.Repeat("a", options.MaxFilenameLength+1), false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			merged := options.MergeOptions(s3Store.options, []options.FileOption{options.WithFilename(tc.filename)})
+
+			key, err := s3Store.getObjectKey(hash, fileformat.FileTypeBlock, merged)
+			if !tc.valid {
+				require.Error(t, err)
+				require.True(t, errors.Is(err, errors.ErrInvalidArgument), "expected invalid-argument error, got %v", err)
+				require.Nil(t, key)
+
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, subDir+"/"+tc.filename, aws.ToString(key))
+		})
+	}
+
+	t.Run("hash-derived key stays under prefix", func(t *testing.T) {
+		key, err := s3Store.getObjectKey(hash, fileformat.FileTypeBlock, s3Store.options)
+		require.NoError(t, err)
+		require.True(t, strings.HasPrefix(aws.ToString(key), subDir+"/"), "key %q not under %q", aws.ToString(key), subDir)
+	})
+
+	t.Run("no subdirectory, filename only", func(t *testing.T) {
+		plain, _ := setupTestS3(t)
+		merged := options.MergeOptions(plain.options, []options.FileOption{options.WithFilename("lastProcessed.dat")})
+
+		key, err := plain.getObjectKey(hash, fileformat.FileTypeDat, merged)
+		require.NoError(t, err)
+		require.Equal(t, "lastProcessed.dat", aws.ToString(key))
+	})
+
+	t.Run("subdirectory with traversal is rejected", func(t *testing.T) {
+		bad, _ := setupTestS3(t)
+		bad.options = options.NewStoreOptions(options.WithDefaultSubDirectory("blocks/../tenant-b"))
+
+		key, err := bad.getObjectKey(hash, fileformat.FileTypeBlock, bad.options)
+		require.Error(t, err)
+		require.Nil(t, key)
+	})
+}
+
+// TestS3_CRUDRejectsTraversalFilename proves every S3 CRUD method refuses before touching the
+// client when the filename would escape the prefix, so no cross-prefix read, probe, write or
+// delete reaches the bucket.
+func TestS3_CRUDRejectsTraversalFilename(t *testing.T) {
+	s3Store, mock := setupTestS3(t)
+	s3Store.options = options.NewStoreOptions(options.WithDefaultSubDirectory("blocks/tenant-a"))
+
+	ctx := context.Background()
+	hash := []byte{0x01}
+	escape := options.WithFilename("../../tenant-b/private.block")
+
+	// Seed the object the attacker is aiming at, so a bypass would be observable.
+	mock.store["tenant-b/private.block"] = []byte("victim")
+
+	err := s3Store.Set(ctx, hash, fileformat.FileTypeBlock, []byte("x"), escape)
+	require.Error(t, err)
+
+	err = s3Store.SetFromReader(ctx, hash, fileformat.FileTypeBlock, io.NopCloser(bytes.NewReader([]byte("x"))), escape)
+	require.Error(t, err)
+
+	_, err = s3Store.Get(ctx, hash, fileformat.FileTypeBlock, escape)
+	require.Error(t, err)
+
+	_, err = s3Store.GetIoReader(ctx, hash, fileformat.FileTypeBlock, escape)
+	require.Error(t, err)
+
+	_, err = s3Store.Exists(ctx, hash, fileformat.FileTypeBlock, escape)
+	require.Error(t, err)
+
+	err = s3Store.Del(ctx, hash, fileformat.FileTypeBlock, escape)
+	require.Error(t, err)
+
+	require.Equal(t, []byte("victim"), mock.store["tenant-b/private.block"], "target object must be untouched")
 }
