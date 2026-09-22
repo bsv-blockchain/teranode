@@ -202,6 +202,8 @@ The service can be configured with various options through the `options.StoreOpt
 
 Query parameters are automatically converted to `options.FileOption` using `options.QueryToFileOptions()` for per-request configuration.
 
+The `filename` query parameter is untrusted input and is validated by `options.ValidateFilename()` before any backend sees it. It must be a single portable basename: non-empty, at most 255 bytes, not `.` or `..`, and free of slashes, backslashes, NUL bytes, colons and percent-encoded separators. Requests that fail this check receive `400 Bad Request`. The file and S3 backends apply the same rule to `WithFilename` internally, and the S3 backend additionally verifies that the final object key stays under the configured `subDirectory`.
+
 ## Streaming Write Safety (SetFromReader)
 
 The `SetFromReader` method provides safe streaming writes with automatic error recovery:

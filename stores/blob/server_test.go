@@ -4,12 +4,14 @@ package blob
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -413,4 +415,103 @@ func TestHandleRangeRequest_ContentRangeUnknownTotalForNonSeekable(t *testing.T)
 	gotCR := rr.Header().Get("Content-Range")
 	require.Equal(t, "bytes 0-0/*", gotCR,
 		"non-seekable readers cannot report a total, so Content-Range must use the RFC 7233 \"*\" sentinel")
+}
+
+// TestServerRejectsUnsafeFilename drives the real HTTPBlobServer end-to-end over a file store
+// and asserts that a traversal filename on the query string is rejected with 400 on every
+// method before it reaches the backend, while a plain basename still works. The store is
+// rooted in a subdirectory so an escape would be observable on disk.
+func TestServerRejectsUnsafeFilename(t *testing.T) {
+	tempDir := t.TempDir()
+
+	storeURL, err := url.Parse(fmt.Sprintf("file://%s?testId=%d", tempDir, time.Now().UnixNano()))
+	require.NoError(t, err)
+
+	blobServer, err := NewHTTPBlobServer(ulogger.TestLogger{}, storeURL, options.WithDefaultSubDirectory("tenant-a"))
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(blobServer)
+	defer ts.Close()
+
+	// Plant a "foreign" file outside the store's subdirectory; it must survive every attempt.
+	victim := filepath.Join(tempDir, "tenant-b", "private."+fileformat.FileTypeTesting.String())
+	require.NoError(t, os.MkdirAll(filepath.Dir(victim), 0o755))
+	require.NoError(t, os.WriteFile(victim, []byte("victim"), 0o600))
+
+	key := base64.URLEncoding.EncodeToString([]byte("key1"))
+	blobPath := "/blob/" + key + "." + fileformat.FileTypeTesting.String()
+
+	unsafe := []string{
+		"../tenant-b/private",
+		"../../tenant-b/private",
+		`..\tenant-b\private`,
+		"/tenant-b/private",
+		"tenant-b/private",
+		"..%2Ftenant-b%2Fprivate",
+		"..",
+		".",
+	}
+
+	do := func(t *testing.T, method, filename string, body io.Reader) *http.Response {
+		t.Helper()
+
+		q := url.Values{"filename": []string{filename}}
+
+		req, err := http.NewRequest(method, ts.URL+blobPath+"?"+q.Encode(), body)
+		require.NoError(t, err)
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+
+		t.Cleanup(func() { _ = resp.Body.Close() })
+
+		return resp
+	}
+
+	for _, filename := range unsafe {
+		for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPatch, http.MethodDelete} {
+			t.Run(method+" "+filename, func(t *testing.T) {
+				var body io.Reader
+				if method == http.MethodPost {
+					body = bytes.NewReader([]byte("payload"))
+				}
+
+				resp := do(t, method, filename, body)
+				require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			})
+		}
+	}
+
+	got, err := os.ReadFile(victim)
+	require.NoError(t, err)
+	require.Equal(t, []byte("victim"), got, "file outside the store subdirectory must be untouched")
+
+	t.Run("valid basename round-trips", func(t *testing.T) {
+		resp := do(t, http.MethodPost, "custom", bytes.NewReader([]byte("payload")))
+		require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+		resp = do(t, http.MethodHead, "custom", nil)
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		resp = do(t, http.MethodGet, "custom", nil)
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		data, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		require.Equal(t, []byte("payload"), data)
+
+		resp = do(t, http.MethodDelete, "custom", nil)
+		require.Equal(t, http.StatusNoContent, resp.StatusCode)
+	})
+}
+
+// TestGetKeyFromPath_ShortPath guards the unauthenticated path parser against a slice panic on
+// paths shorter than the "/blob/" prefix, e.g. "GET /x.dat".
+func TestGetKeyFromPath_ShortPath(t *testing.T) {
+	for _, p := range []string{"/x.dat", ".dat", "/blob.dat", "nodot"} {
+		t.Run(p, func(t *testing.T) {
+			_, _, err := getKeyFromPath(p)
+			require.Error(t, err)
+		})
+	}
 }

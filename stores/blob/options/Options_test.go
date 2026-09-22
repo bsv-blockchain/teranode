@@ -3,8 +3,11 @@ package options
 import (
 	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -226,7 +229,8 @@ func TestFileOptionsToQuery(t *testing.T) {
 func TestQueryToFileOptions(t *testing.T) {
 	t.Run("Empty query", func(t *testing.T) {
 		query := url.Values{}
-		opts := QueryToFileOptions(query)
+		opts, err := QueryToFileOptions(query)
+		require.NoError(t, err)
 		assert.Empty(t, opts)
 	})
 
@@ -237,7 +241,8 @@ func TestQueryToFileOptions(t *testing.T) {
 			"allowOverwrite":       []string{"true"},
 		}
 
-		opts := QueryToFileOptions(query)
+		opts, err := QueryToFileOptions(query)
+		require.NoError(t, err)
 		options := NewFileOptions(opts...)
 
 		assert.Equal(t, uint32(5), options.DAH)
@@ -250,8 +255,104 @@ func TestQueryToFileOptions(t *testing.T) {
 			"dah": []string{"invalid"},
 		}
 
-		opts := QueryToFileOptions(query)
+		opts, err := QueryToFileOptions(query)
+		require.NoError(t, err)
 		options := NewFileOptions(opts...)
 		assert.Equal(t, uint32(0), options.DAH)
 	})
+}
+
+// filenameCases is the shared table for every layer that accepts a caller-supplied filename:
+// the HTTP query parser, the file backend and (in its own package) the S3 backend.
+var filenameCases = []struct {
+	name     string
+	filename string
+	valid    bool
+}{
+	{"plain basename", "lastProcessed", true},
+	{"basename with extension", "lastProcessed.dat", true},
+	{"hex hash with extension", "0000000000000000000000000000000000000000000000000000000000000000.block", true},
+	{"dots inside name", "a.b.c", true},
+	{"leading dot", ".hidden", true},
+	{"literal percent in name", "a%b", true},
+	{"embedded dotdot without separator", "a..b", true},
+	{"max length", strings.Repeat("a", MaxFilenameLength), true},
+
+	{"empty", "", false},
+	{"dot", ".", false},
+	{"dotdot", "..", false},
+	{"parent traversal slash", "../../tenant-b/private.block", false},
+	{"parent traversal backslash", `..\..\tenant-b\private.block`, false},
+	{"absolute unix", "/etc/passwd", false},
+	{"absolute windows", `C:\Windows\system32`, false},
+	{"windows volume only", "C:", false},
+	{"nested relative", "sub/dir/file", false},
+	{"repeated separators", "a//b", false},
+	{"trailing slash", "name/", false},
+	{"nul byte", "name\x00.dat", false},
+	{"percent-encoded slash", "..%2F..%2Fsecret", false},
+	{"percent-encoded slash lowercase", "..%2f..%2fsecret", false},
+	{"percent-encoded backslash", "..%5C..%5Csecret", false},
+	{"percent-encoded dot", "%2e%2e", false},
+	{"percent-encoded dot uppercase", "%2E%2E", false},
+	{"percent-encoded nul", "name%00.dat", false},
+	{"too long", strings.Repeat("a", MaxFilenameLength+1), false},
+}
+
+func TestValidateFilename(t *testing.T) {
+	for _, tc := range filenameCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateFilename(tc.filename)
+			if tc.valid {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				require.True(t, errors.Is(err, errors.ErrInvalidArgument), "expected invalid-argument error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestQueryToFileOptionsRejectsUnsafeFilename(t *testing.T) {
+	for _, tc := range filenameCases {
+		if tc.filename == "" {
+			// An absent filename is simply "no filename option"; covered by "Empty query".
+			continue
+		}
+
+		t.Run(tc.name, func(t *testing.T) {
+			opts, err := QueryToFileOptions(url.Values{"filename": []string{tc.filename}})
+			if tc.valid {
+				require.NoError(t, err)
+				require.Equal(t, tc.filename, NewFileOptions(opts...).Filename)
+			} else {
+				require.Error(t, err)
+				require.Nil(t, opts)
+			}
+		})
+	}
+}
+
+func TestConstructFilenameRejectsUnsafeFilename(t *testing.T) {
+	base := t.TempDir()
+
+	for _, tc := range filenameCases {
+		if tc.filename == "" {
+			// Empty means "derive from the hash"; the hash path is covered by TestOptionsConstructFilename.
+			continue
+		}
+
+		t.Run(tc.name, func(t *testing.T) {
+			o := NewFileOptions(WithFilename(tc.filename))
+
+			got, err := o.ConstructFilename(base, []byte{0x01}, fileformat.FileTypeTesting)
+			if tc.valid {
+				require.NoError(t, err)
+				require.Equal(t, filepath.Join(base, tc.filename+"."+fileformat.FileTypeTesting.String()), got)
+			} else {
+				require.Error(t, err)
+				require.Empty(t, got)
+			}
+		})
+	}
 }
