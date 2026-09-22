@@ -98,26 +98,21 @@ type queryRower interface {
 	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
 }
 
-// observedFreezeStatePredicate pins a write to the exact freeze state a preceding SELECT
-// observed, bound as $1..$4 in the order observedFreezeStateArgs returns them. The read
-// is a plain SELECT on both engines (SQLite has no row lock to take), so the write itself
-// carries the condition: a write that affects no row lost a race with another freeze,
-// unfreeze or reassignment of the same output, and the caller reports that rather than
-// commit a decision made on stale state — two concurrent identical freezes cannot both
-// succeed, and an unfreeze cannot clear a record written after it looked.
+// observedFreezeStateArgs returns r's freeze state as the first four arguments of the
+// freeze, unfreeze and reassign UPDATEs below — $1 frozen, $2 freezeFrom, $3 freezeUntil,
+// $4 freezePolicyExpires; statement-specific arguments follow from $5 — which pin the
+// write to the exact state the preceding SELECT observed. The read is a plain SELECT on
+// both engines (SQLite has no row lock to take), so the write itself carries the
+// condition: a write that affects no row lost a race with another freeze, unfreeze or
+// reassignment of the same output, and the caller reports that rather than commit a
+// decision made on stale state — two concurrent identical freezes cannot both succeed,
+// and an unfreeze cannot clear a record written after it looked.
 //
-// NULL-safe on both engines without an engine-specific operator (so the statements that
-// use it stay literal SQL): a nullable height compares through a sentinel no height takes,
-// the nullable flag through the FALSE that NULL means. frozen is NOT NULL.
-const observedFreezeStatePredicate = `
-          AND frozen = $1
-          AND COALESCE(freezeFrom, CAST(-1 AS BIGINT)) = COALESCE($2, CAST(-1 AS BIGINT))
-          AND COALESCE(freezeUntil, CAST(-1 AS BIGINT)) = COALESCE($3, CAST(-1 AS BIGINT))
-          AND COALESCE(freezePolicyExpires, FALSE) = COALESCE($4, FALSE)`
-
-// observedFreezeStateArgs returns r's freeze state in the order
-// observedFreezeStatePredicate binds it: $1 frozen, $2 freezeFrom, $3 freezeUntil,
-// $4 freezePolicyExpires. Statement-specific arguments follow from $5.
+// The predicate is written out in each statement rather than shared, so that every
+// statement is one literal (the static-analysis contract for SQL text). It is NULL-safe
+// on both engines without an engine-specific operator: a nullable height compares
+// through a sentinel no height takes, the nullable flag through the FALSE that NULL
+// means; frozen is NOT NULL.
 func observedFreezeStateArgs(r *freezeRow) []interface{} {
 	return []interface{}{r.frozen, r.freezeFrom, r.freezeUntil, r.policyExpires}
 }
@@ -173,7 +168,11 @@ func (s *Store) freezeUTXO(ctx context.Context, spend *utxostore.Spend) error {
         UPDATE outputs
         SET frozen = (CASE WHEN spending_data IS NULL THEN TRUE ELSE frozen END),
             freezeFrom = $7, freezeUntil = $8, freezePolicyExpires = $9
-        WHERE transaction_id = $5 AND idx = $6` + observedFreezeStatePredicate
+        WHERE transaction_id = $5 AND idx = $6
+          AND frozen = $1
+          AND COALESCE(freezeFrom, CAST(-1 AS BIGINT)) = COALESCE($2, CAST(-1 AS BIGINT))
+          AND COALESCE(freezeUntil, CAST(-1 AS BIGINT)) = COALESCE($3, CAST(-1 AS BIGINT))
+          AND COALESCE(freezePolicyExpires, FALSE) = COALESCE($4, FALSE)`
 
 	args := append(observedFreezeStateArgs(r), r.id, spend.Vout, spend.FreezeFrom, nullableHeightArg(spend.FreezeUntil), nullableBoolArg(spend.FreezePolicyExpires))
 
@@ -265,7 +264,11 @@ func (s *Store) unfreezeUTXO(ctx context.Context, spend *utxostore.Spend) error 
 	q := `
         UPDATE outputs
         SET frozen = FALSE, freezeFrom = NULL, freezeUntil = NULL, freezePolicyExpires = NULL
-        WHERE transaction_id = $5 AND idx = $6` + observedFreezeStatePredicate
+        WHERE transaction_id = $5 AND idx = $6
+          AND frozen = $1
+          AND COALESCE(freezeFrom, CAST(-1 AS BIGINT)) = COALESCE($2, CAST(-1 AS BIGINT))
+          AND COALESCE(freezeUntil, CAST(-1 AS BIGINT)) = COALESCE($3, CAST(-1 AS BIGINT))
+          AND COALESCE(freezePolicyExpires, FALSE) = COALESCE($4, FALSE)`
 
 	res, err := txn.ExecContext(ctx, q, append(observedFreezeStateArgs(r), r.id, spend.Vout)...)
 	if err != nil {
@@ -320,7 +323,11 @@ func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo
         SET utxo_hash = $5, frozen = FALSE, freezeFrom = NULL, freezeUntil = NULL, freezePolicyExpires = NULL, spendableIn = $6
         WHERE transaction_id = $7
           AND idx = $8
-          AND spending_data IS NULL` + observedFreezeStatePredicate
+          AND spending_data IS NULL
+          AND frozen = $1
+          AND COALESCE(freezeFrom, CAST(-1 AS BIGINT)) = COALESCE($2, CAST(-1 AS BIGINT))
+          AND COALESCE(freezeUntil, CAST(-1 AS BIGINT)) = COALESCE($3, CAST(-1 AS BIGINT))
+          AND COALESCE(freezePolicyExpires, FALSE) = COALESCE($4, FALSE)`
 
 	res, err := txn.ExecContext(ctx, q, append(observedFreezeStateArgs(r), newUtxo.UTXOHash[:], spendableIn, r.id, utxo.Vout)...)
 	if err != nil {

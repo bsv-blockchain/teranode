@@ -85,6 +85,8 @@ import (
 const (
 	errOutputNotFound           = "output %s:%d not found"
 	errFailedCreateSpendingData = "failed to create spending data from bytes"
+	errSpendConsensusFrozen     = "[Spend] utxo is frozen for %s:%d at block height %d"
+	errSpendPolicyFrozen        = "[Spend] utxo is frozen for %s:%d"
 	errSQLUpdatingTransactions  = "SQL error updating transactions: %v"
 )
 
@@ -2312,11 +2314,11 @@ func classifyMissedSpend(current *spendSelectResult, item *batchSpend) error {
 	}
 
 	if !item.ignoreConsensusFreeze && current.consensusFrozenAt(item.blockHeight) {
-		return errors.NewUtxoConsensusFrozenError("[Spend] utxo is frozen for %s:%d at block height %d", spend.TxID, spend.Vout, item.blockHeight)
+		return errors.NewUtxoConsensusFrozenError(errSpendConsensusFrozen, spend.TxID, spend.Vout, item.blockHeight)
 	}
 
 	if !item.ignorePolicyFreeze && current.policyFrozenAt(item.blockHeight) {
-		return errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+		return errors.NewUtxoFrozenError(errSpendPolicyFrozen, spend.TxID, spend.Vout)
 	}
 
 	return errors.NewStorageError("[Spend] freeze state of %s:%d changed under the write; the spend must be re-read", spend.TxID, spend.Vout)
@@ -2444,11 +2446,11 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 		//   caller validating a block passes IgnorePolicyFreeze and sees only the
 		//   consensus tier.
 		if !item.ignoreConsensusFreeze && r.consensusFrozenAt(item.blockHeight) {
-			validationErrors[i] = errors.NewUtxoConsensusFrozenError("[Spend] utxo is frozen for %s:%d at block height %d", spend.TxID, spend.Vout, item.blockHeight)
+			validationErrors[i] = errors.NewUtxoConsensusFrozenError(errSpendConsensusFrozen, spend.TxID, spend.Vout, item.blockHeight)
 			continue
 		}
 		if !item.ignorePolicyFreeze && r.policyFrozenAt(item.blockHeight) {
-			validationErrors[i] = errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+			validationErrors[i] = errors.NewUtxoFrozenError(errSpendPolicyFrozen, spend.TxID, spend.Vout)
 			continue
 		}
 		if r.conflicting && !item.ignoreConflicting {
@@ -2994,12 +2996,12 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 		}
 
 		if !item.ignoreConsensusFreeze && freezeState.consensusFrozenAt(item.blockHeight) {
-			validationErrors[i] = errors.NewUtxoConsensusFrozenError("[Spend] utxo is frozen for %s:%d at block height %d", spend.TxID, spend.Vout, item.blockHeight)
+			validationErrors[i] = errors.NewUtxoConsensusFrozenError(errSpendConsensusFrozen, spend.TxID, spend.Vout, item.blockHeight)
 			continue
 		}
 
 		if !item.ignorePolicyFreeze && freezeState.policyFrozenAt(item.blockHeight) {
-			validationErrors[i] = errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+			validationErrors[i] = errors.NewUtxoFrozenError(errSpendPolicyFrozen, spend.TxID, spend.Vout)
 			continue
 		}
 
