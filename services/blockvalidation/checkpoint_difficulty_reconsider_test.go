@@ -51,15 +51,21 @@ func TestSkipExpectedDifficulty_RebuildsInvalidatedPrefix(t *testing.T) {
 	_, best, err := client.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
 	require.Equal(t, uint32(2), best.Height)
-	require.False(t, u.skipExpectedDifficulty(ctx, blocks[0]), "a completed prefix needs no stored-block exception")
+	require.False(t, u.skipExpectedDifficulty(ctx, blocks[0], true), "a completed prefix needs no stored-block exception")
 
 	_, err = client.InvalidateBlock(ctx, blocks[0].Hash())
 	require.NoError(t, err)
 	_, best, err = client.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
 	require.Zero(t, best.Height, "invalidation must remove the whole descendant prefix")
-	require.True(t, u.skipExpectedDifficulty(ctx, blocks[0]), "rebuilding this synthetic post-DAA prefix retains the syncing skip")
-	require.True(t, u.skipExpectedDifficulty(ctx, blocks[1]))
+	require.True(t, u.skipExpectedDifficulty(ctx, blocks[0], true), "rebuilding this synthetic post-DAA prefix retains the syncing skip")
+	require.True(t, u.skipExpectedDifficulty(ctx, blocks[1], true))
+
+	// The same two blocks, in the same rebuilding state, get NO shortcut off the catch-up path
+	// (bitcoin-sv/teranode#4844). Catch-up is the only route that has already enforced this rule
+	// over the whole fetched header chain, so it is the only route that may skip it here.
+	require.False(t, u.skipExpectedDifficulty(ctx, blocks[0], false), "the shortcut is catch-up only")
+	require.False(t, u.skipExpectedDifficulty(ctx, blocks[1], false), "the shortcut is catch-up only")
 }
 
 func TestSkipExpectedDifficulty_EnforcesHistoricalRules(t *testing.T) {
@@ -78,6 +84,8 @@ func TestSkipExpectedDifficulty_EnforcesHistoricalRules(t *testing.T) {
 		// A fresh store has no authenticated checkpoint ancestry. Pre-DAA
 		// deferral must reach the historical calculator in full validation.
 		wantSkip := height > params.DaaForkHeight
-		require.Equal(t, wantSkip, u.skipExpectedDifficulty(ctx, &model.Block{Height: height}), "height %d", height)
+		require.Equal(t, wantSkip, u.skipExpectedDifficulty(ctx, &model.Block{Height: height}, true), "height %d", height)
+		require.False(t, u.skipExpectedDifficulty(ctx, &model.Block{Height: height}, false),
+			"height %d: the shortcut is catch-up only", height)
 	}
 }

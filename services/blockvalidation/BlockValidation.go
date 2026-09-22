@@ -1939,8 +1939,8 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		}
 
 		// Expected-nBits. Historical targets are always checked here, including during initial
-		// sync; later blocks retain the existing checkpoint-prefix shortcut. Height is settled
-		// against the parent before this function runs.
+		// sync; catch-up retains the checkpoint-prefix shortcut. Height is settled against the
+		// parent before this function runs.
 		//
 		// This runs ONCE, above the parent-invalid check below, on both header sources
 		// (bitcoin-sv/teranode#4844). It is the only thing that closes the cheapest mass-spam
@@ -1948,15 +1948,18 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// only costs difficulty 1, and built on the current tip it carries the wrong nBits — so it
 		// is rejected here, persisting nothing, instead of reaching the parent-invalid check, which
 		// must keep the real body for reconsideration and would otherwise be spammable at that
-		// price. The shortcut leaves a gap at or below the highest checkpoint, where this rule is
-		// skipped and the parent-invalid check stays difficulty-1 reachable.
+		// price.
 		//
 		// GetNextWorkRequired reads the parent's stored row and follows parent_id ancestry without
 		// filtering invalid rows, so it is safe for a block whose parent is marked invalid — which
 		// only this ordering makes reachable. It does not consume opts.CachedHeaders, so the catchup
 		// branch above needs nothing more than the parent's header row, which sequential catchup has
 		// already stored by the time this runs.
-		if u.skipExpectedDifficulty(ctx, block) {
+		//
+		// The checkpoint-prefix shortcut is available only to catch-up, whose header pipeline has
+		// already enforced this same rule over the whole fetched chain; every other caller gets the
+		// real rule. See skipExpectedDifficulty.
+		if u.skipExpectedDifficulty(ctx, block, opts.IsCatchupMode) {
 			ctxLogger.Debugf("[ValidateBlock][%s] skipping expected-nBits validation for block at height %d (at or below highest checkpoint height %d)",
 				block.Header.Hash().String(), block.Height, blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints))
 		} else {
@@ -3163,11 +3166,42 @@ func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
 // activation. Historical blocks must reach the calculator because the native
 // catchup precheck defers them to full-block validation.
 //
+// CATCH-UP ONLY (bitcoin-sv/teranode#4844). The shortcut exists for a node that is still
+// building the checkpoint-certified prefix, and the only route that legitimately delivers
+// below-checkpoint bodies to a syncing node is catch-up — which recomputes the DAA-required nBits
+// over the WHOLE fetched header chain and strikes the peer as malicious on a mismatch, at step 9.5,
+// before a single body is fetched (validateCatchupHeaderDifficulty). That header pipeline is what
+// makes skipping the body-level check safe there.
+//
+// The directly peer-delivered path has no such pipeline. Granting it the shortcut let a peer extend
+// an honest parent with a difficulty-1 block whose declared bits are never checked against the chain
+// it claims to extend: merkle-bound, that block is condemned and PERSISTED as invalid, and its
+// difficulty-1 descendants then reach the parent-invalid branch, which keeps their attacker-chosen
+// unbound bodies. Both writes cost the attacker difficulty 1, and the exposure is largest during
+// initial sync, which is exactly when the predicate below is satisfied. A block's own proof-of-work
+// floor is not a substitute: it bounds how easy a declared target may be, not whether it is the
+// correct one for that chain position.
+//
+// Requiring the real rule on the direct path costs nothing honest: a peer announcing a new block
+// announces it at the tip, where BelowCheckpoint is false and the shortcut never applied. A block
+// wrongly refused here returns the ordinary incorrect-difficulty-bits error, which persists nothing
+// and leaves the hash free for a later delivery.
+//
+// One consequence is deliberate and worth knowing: an operator reconsidering a below-checkpoint
+// block is not catch-up either, so that path now evaluates the real rule too. A genuinely mined
+// block agrees with it - invalidation takes descendants off the main chain but leaves their rows and
+// their parent_id ancestry intact, so the calculator still has the history it needs - and a
+// disagreement there is a fact worth surfacing rather than skipping past.
+//
 // Fail-closed: if the best height cannot be read we cannot show we are still
 // building the prefix, so the real rule runs. That is the safe direction; on a
 // syncing node the block is re-fetched and retried, whereas skipping wrongly
 // hands a peer free proof-of-work.
-func (u *BlockValidation) skipExpectedDifficulty(ctx context.Context, block *model.Block) bool {
+func (u *BlockValidation) skipExpectedDifficulty(ctx context.Context, block *model.Block, isCatchupMode bool) bool {
+	if !isCatchupMode {
+		return false
+	}
+
 	if block.Height <= u.settings.ChainCfgParams.DaaForkHeight && u.settings.ChainCfgParams.Net != wire.STN {
 		return false
 	}
@@ -3276,8 +3310,11 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 		return errors.NewBlockInvalidError("[reValidateBlock][%s] block does not meet target difficulty: %s", blockData.block.Header.Hash().String(), err)
 	}
 
-	// Apply the same historical and checkpoint policy as ordinary validation.
-	skipDifficultyCheck := u.skipExpectedDifficulty(ctx, blockData.block)
+	// Apply the same historical and checkpoint policy as ordinary validation, including the rule
+	// that the checkpoint-prefix shortcut belongs to catch-up alone (bitcoin-sv/teranode#4844).
+	// A block re-queued out of catch-up keeps its mode and keeps the shortcut; everything else
+	// re-queued here, including an operator reconsider, evaluates the real rule.
+	skipDifficultyCheck := u.skipExpectedDifficulty(ctx, blockData.block, blockData.isCatchupMode)
 
 	if skipDifficultyCheck {
 		u.logger.Debugf("[reValidateBlock][%s] skipping expected-nBits validation for block at height %d (at or below highest checkpoint height %d)",
