@@ -772,6 +772,37 @@ func accessLogMiddleware(logger ulogger.Logger) echo.MiddlewareFunc {
 	}
 }
 
+// contentSecurityPolicy is the policy served with every asset-service response, including the
+// built dashboard this binary serves (bitcoin-sv/teranode#4844). It is DEFENCE IN DEPTH, not a
+// strict policy, and it must not be described as one:
+//
+//   - 'unsafe-inline' stays in script-src because the built dashboard carries three inline
+//     <script> blocks (the pre-paint theme setter, font loading, and SvelteKit's bootstrap);
+//     without it the dashboard breaks on first paint. That also means an inline `onerror=`
+//     handler STILL FIRES.
+//   - connect-src keeps https: and wss: because the dashboard is used to drive REMOTE teranode
+//     instances. That also means a same-origin fetch() can still post data to an attacker origin.
+//
+// What it does buy: remote <script src> and import('https://...') are blocked, so the
+// amplification step of a coinbase-borne payload is stopped and an attacker is confined to what
+// fits in a coinbase; <object>/<embed>, <base> hijacking, remote form submission and framing are
+// blocked too.
+//
+// Escaping at the dashboard's HTML sink is the actual fix for markup in peer-controlled fields;
+// this is the second line. The request Host is deliberately NOT interpolated - that would put
+// attacker-influenced input into a response header, and 'self' already covers the dashboard's own
+// origin over http and https, including same-origin ws:// and wss:// under CSP3.
+const contentSecurityPolicy = "default-src 'self'; " +
+	"script-src 'self' 'unsafe-inline'; " +
+	"style-src 'self' 'unsafe-inline'; " +
+	"img-src 'self' data:; " +
+	"font-src 'self' data:; " +
+	"object-src 'none'; " +
+	"base-uri 'self'; " +
+	"form-action 'self'; " +
+	"frame-ancestors 'none'; " +
+	"connect-src 'self' https: wss:"
+
 // securityHeadersMiddleware adds security headers to all HTTP responses.
 func securityHeadersMiddleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -779,6 +810,12 @@ func securityHeadersMiddleware() echo.MiddlewareFunc {
 			c.Response().Header().Set("X-Content-Type-Options", "nosniff")
 			c.Response().Header().Set("X-Frame-Options", "DENY")
 			c.Response().Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+			// Emitted on /api/** and binary responses too, where it is inert. A skipper would be
+			// more code, and more chances to get the predicate wrong, than the thing it avoids.
+			// frame-ancestors duplicates X-Frame-Options above; both are kept, the latter for
+			// older clients.
+			c.Response().Header().Set("Content-Security-Policy", contentSecurityPolicy)
+
 			return next(c)
 		}
 	}

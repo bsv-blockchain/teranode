@@ -42,22 +42,30 @@ export const handle: Handle = async ({ event, resolve }) => {
     // Prevent MIME type sniffing
     response.headers.set('X-Content-Type-Options', 'nosniff')
 
-    // Build dynamic connect-src based on the request host so that the CSP works
-    // regardless of whether the dashboard is accessed via localhost or a remote hostname.
-    const host = event.request.headers.get('host') ?? 'localhost:8090'
-    const httpOrigin = `http://${host}`
-    const wsOrigin = `ws://${host}`
-    const wssOrigin = `wss://${host}`
-
-    // Content Security Policy with allowances for the asset service, centrifuge websocket, and external teranode instances
-    // Allow connections to any https:// URL for teranode instances, but restrict other resource types
+    // Content Security Policy.
+    //
+    // This hook does NOT run in production: the dashboard is built with adapter-static and
+    // served by the Go asset service, so the authoritative policy is the one in
+    // securityHeadersMiddleware (services/asset/httpimpl/http.go). Fix that one; this copy is
+    // kept byte-identical to it so development and production cannot drift apart.
+    //
+    // It is defence in depth, not a strict policy: 'unsafe-inline' is required by the three
+    // inline scripts the built dashboard carries, so inline event handlers still fire, and
+    // connect-src stays wide because the dashboard drives remote teranode instances.
+    // The request host is deliberately not interpolated - 'self' already covers the dashboard's
+    // own origin, including same-origin ws:// and wss:// under CSP3.
     response.headers.set(
       'Content-Security-Policy',
       "default-src 'self'; " +
         "script-src 'self' 'unsafe-inline'; " +
         "style-src 'self' 'unsafe-inline'; " +
         "img-src 'self' data:; " +
-        `connect-src 'self' ${httpOrigin} ${wsOrigin} ${wssOrigin} https: wss:;`,
+        "font-src 'self' data:; " +
+        "object-src 'none'; " +
+        "base-uri 'self'; " +
+        "form-action 'self'; " +
+        "frame-ancestors 'none'; " +
+        "connect-src 'self' https: wss:",
     )
 
     // Referrer policy

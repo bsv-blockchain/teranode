@@ -7,17 +7,13 @@
  * own, so escaping happens here.
  */
 
-/**
- * Escapes the characters that let text become markup.
- *
- * `"` is deliberately left as-is: the escaped text is only ever interpolated
- * into element content, never into an attribute value, so a quote there is
- * inert. Escaping `&` first is what stops `&lt;` in the input from being
- * decoded back into `<` by the browser.
- */
-export function escapeHtml(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
+import { escapeHtml } from '$internal/utils/escapeHtml'
+
+// Re-exported so the existing importers of this module keep working. The
+// function itself now lives in $internal/utils, because the fork viewer needs
+// the same escaping and a second convention would be a second thing to get
+// wrong.
+export { escapeHtml }
 
 /**
  * Matches one JSON token: a quoted string (optionally followed by the `:` that
