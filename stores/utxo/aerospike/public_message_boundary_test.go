@@ -19,7 +19,7 @@ var allLuaErrorCodes = []LuaErrorCode{
 	LuaErrorCodeFrozenUntil, LuaErrorCodeCoinbaseImmature, LuaErrorCodeSpent,
 	LuaErrorCodeInvalidSpend, LuaErrorCodeUtxosNotFound, LuaErrorCodeUtxoNotFound,
 	LuaErrorCodeUtxoInvalidSize, LuaErrorCodeUtxoHashMismatch,
-	LuaErrorCodeUtxoNotFrozen, LuaErrorCodeInvalidParameter,
+	LuaErrorCodeUtxoNotFrozen, LuaErrorCodeInvalidParameter, LuaErrorCodeFreezeRecordDamaged,
 }
 
 // TestPublicVerdictMessagesOmitInternalBatchID pins the rule that a spend verdict

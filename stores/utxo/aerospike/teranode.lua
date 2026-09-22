@@ -57,6 +57,7 @@ local ERROR_CODE_UTXO_INVALID_SIZE = "UTXO_INVALID_SIZE"
 local ERROR_CODE_UTXO_HASH_MISMATCH = "UTXO_HASH_MISMATCH"
 local ERROR_CODE_UTXO_NOT_FROZEN = "UTXO_NOT_FROZEN"
 local ERROR_CODE_INVALID_PARAMETER = "INVALID_PARAMETER"
+local ERROR_CODE_FREEZE_RECORD_DAMAGED = "FREEZE_RECORD_DAMAGED"
 
 -- Message constants
 local MSG_CONFLICTING = "TX is conflicting"
@@ -64,6 +65,7 @@ local MSG_LOCKED = "TX is locked and cannot be spent"
 local MSG_CREATING = "TX is being created and cannot be spent yet"
 local MSG_FROZEN = "UTXO is frozen"
 local MSG_CONSENSUS_FROZEN = "UTXO is frozen at block height "
+local MSG_FREEZE_RECORD_DAMAGED = "freeze record on this output is malformed"
 local MSG_FREEZE_RECORDED_ON_SPENT = "freeze recorded on spent output"
 local MSG_ALREADY_FROZEN = "UTXO is already frozen"
 local MSG_FROZEN_UNTIL = "UTXO is not spendable until block "
@@ -285,26 +287,50 @@ local function freezePolicyActiveAt(freezeFrom, freezeUntil, policyExpires, curr
     return not windowEnded
 end
 
+-- The largest height a freeze record can hold: heights are uint32 on the Go side.
+local MAX_FREEZE_HEIGHT = 4294967295
+
+-- Function to report whether a stored freeze height has the only shape FreezeUTXOs
+-- writes: a number in the uint32 range. Anything else is storage damage. The Go reader
+-- (mapBinEntryInt in freeze_record.go) applies the same bound, so the spend path and
+-- block validation cannot diverge on a damaged record.
+local function freezeHeightValid(h)
+    return type(h) == "number" and h >= 0 and h <= MAX_FREEZE_HEIGHT
+end
+
 -- Function to read one output's freeze record out of maps the caller has already read
 -- from the record, so a batch of spends does not re-read the bins per spend. Returns
--- present, from, until, policyExpires. Presence is the from entry: it is always written
--- when a freeze is recorded, whatever its value. policyExpires is the value of the exp
--- entry, not its presence: setFreezeRecord writes true or removes the entry, so anything
--- else is damage and reads as "does not expire" — the reading that keeps the policy tier
--- in force. The Go reader (readFreezeRecord) rejects the same entry as storage damage.
+-- present, from, until, policyExpires, damaged. Presence is the from entry: it is always
+-- written when a freeze is recorded, whatever its value. policyExpires is the value of the
+-- exp entry, not its presence: setFreezeRecord writes true or removes the entry, so
+-- anything else is damage and reads as "does not expire" — the reading that keeps the
+-- policy tier in force. damaged is set when a present height is not a number in the
+-- uint32 range; the heights then read as 0 and the caller must not judge a window by
+-- them — the spend path reports FREEZE_RECORD_DAMAGED, as the Go reader reports storage
+-- damage, and a freeze overwrites the record rather than reporting it already stored.
 local function freezeRecordFromMaps(freezeFromMap, freezeUntilMap, freezeExpMap, offset)
     if freezeFromMap == nil or freezeFromMap[offset] == nil then
-        return false, 0, 0, false
+        return false, 0, 0, false, false
     end
+
+    local fromHeight = freezeFromMap[offset]
+    local damaged = not freezeHeightValid(fromHeight)
 
     local untilHeight = 0
     if freezeUntilMap ~= nil and freezeUntilMap[offset] ~= nil then
         untilHeight = freezeUntilMap[offset]
+        if not freezeHeightValid(untilHeight) then
+            damaged = true
+        end
+    end
+
+    if damaged then
+        return true, 0, 0, false, true
     end
 
     local policyExpires = freezeExpMap ~= nil and freezeExpMap[offset] == true
 
-    return true, freezeFromMap[offset], untilHeight, policyExpires
+    return true, fromHeight, untilHeight, policyExpires, false
 end
 
 -- Function to read one output's freeze record straight from the record.
@@ -514,7 +540,21 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         -- before the bins existed has only the sentinel and means "at every height", and a
         -- sentinel a block-validation spend overwrote has only the bins.
         local sentinelPresent = existingSpendingData ~= nil and isFrozen(existingSpendingData)
-        local recordPresent, freezeFrom, freezeUntil, policyExpires = freezeRecordFromMaps(freezeFromMap, freezeUntilMap, freezeExpMap, offset)
+        local recordPresent, freezeFrom, freezeUntil, policyExpires, freezeDamaged = freezeRecordFromMaps(freezeFromMap, freezeUntilMap, freezeExpMap, offset)
+
+        -- A damaged record cannot be judged, and must never read as "not frozen": the
+        -- spend is refused with a code the Go side reports as storage damage, exactly as
+        -- block validation's reader does for the same bins.
+        if freezeDamaged then
+            local error = map()
+
+            error[FIELD_ERROR_CODE] = ERROR_CODE_FREEZE_RECORD_DAMAGED
+            error[FIELD_MESSAGE] = MSG_FREEZE_RECORD_DAMAGED
+
+            errors[idx] = error
+
+            goto continue
+        end
 
         if recordPresent or sentinelPresent then
             if not spend['ignoreConsensusFreeze'] and freezeWindowActiveAt(freezeFrom, freezeUntil, currentBlockHeight) then
@@ -923,14 +963,15 @@ function freeze(rec, offset, utxoHash, freezeFrom, freezeUntil, policyExpires)
     local wantExp = policyExpires == true
 
     local sentinelPresent = existingSpendingData ~= nil and isFrozen(existingSpendingData)
-    local recordPresent, storedFrom, storedUntil, storedExp = getFreezeRecord(rec, offset)
+    local recordPresent, storedFrom, storedUntil, storedExp, storedDamaged = getFreezeRecord(rec, offset)
 
     -- An authority can re-issue a freeze for an already-frozen output to extend, shorten
     -- or shift its enforceAtHeight window, so a repeat freeze that changes the record is
     -- an update rather than a no-op. Only a repeat that asks for exactly the record
     -- already stored is reported as ALREADY_FROZEN, which is what the alert system and
-    -- the admin RPC have always seen for a re-freeze.
-    if (recordPresent or sentinelPresent)
+    -- the admin RPC have always seen for a re-freeze. A damaged record matches nothing:
+    -- the freeze overwrites it, which is how such a record is repaired.
+    if (recordPresent or sentinelPresent) and not storedDamaged
         and storedFrom == wantFrom and storedUntil == wantUntil and storedExp == wantExp then
         response[FIELD_STATUS] = STATUS_ERROR
         response[FIELD_ERROR_CODE] = ERROR_CODE_ALREADY_FROZEN

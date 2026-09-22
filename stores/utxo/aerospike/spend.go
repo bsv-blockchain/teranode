@@ -1135,6 +1135,9 @@ func (s *Store) createSpendError(errMsg LuaErrorInfo, batchItem *batchSpend, txI
 	case LuaErrorCodeUtxoInvalidSize:
 		return errors.NewUtxoInvalidSize("[SPEND_BATCH_LUA][%s] UTXO invalid size for vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
 
+	case LuaErrorCodeFreezeRecordDamaged:
+		return errors.NewStorageError("[SPEND_BATCH_LUA][%s] malformed freeze record for vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
+
 	default:
 		return errors.NewStorageError("[SPEND_BATCH_LUA][%s] error for vout %d (code: %s): %s", txID.String(), batchItem.spend.Vout, errMsg.ErrorCode, errMsg.Message)
 	}

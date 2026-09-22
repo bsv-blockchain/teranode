@@ -2,6 +2,7 @@ package aerospike
 
 import (
 	"context"
+	"math"
 	"sort"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -56,8 +57,8 @@ func readFreezeRecord(bins aerospike.BinMap, offset int) (freezeRecord, error) {
 
 	return freezeRecord{
 		present:       true,
-		from:          uint32(from),  // nolint:gosec // heights are written as uint32 by FreezeUTXOs
-		until:         uint32(until), // nolint:gosec // heights are written as uint32 by FreezeUTXOs
+		from:          uint32(from),  // nolint:gosec // range-checked by mapBinEntryInt
+		until:         uint32(until), // nolint:gosec // range-checked by mapBinEntryInt
 		policyExpires: policyExpires,
 	}, nil
 }
@@ -249,7 +250,12 @@ func mapBinEntryBool(bins aerospike.BinMap, bin fields.FieldName, offset int) (b
 	return b, nil
 }
 
-// mapBinEntryInt is mapBinEntry for the height bins: a present entry must be an int.
+// mapBinEntryInt is mapBinEntry for the height bins: a present entry must be an int in
+// the uint32 range, the only shape FreezeUTXOs writes. Anything else is storage damage
+// and an error, never a height: a wrapped conversion would turn -1 into
+// FreezeWindowNever and silently disarm a freeze. The Lua reader
+// (freezeHeightValid in teranode.lua) applies the same bound, so the spend path and
+// block validation cannot diverge on a damaged record.
 func mapBinEntryInt(bins aerospike.BinMap, bin fields.FieldName, offset int) (int, bool, error) {
 	v, found, err := mapBinEntry(bins, bin, offset)
 	if err != nil || !found {
@@ -259,6 +265,10 @@ func mapBinEntryInt(bins aerospike.BinMap, bin fields.FieldName, offset int) (in
 	n, ok := v.(int)
 	if !ok {
 		return 0, false, errors.NewStorageError("%s bin entry for offset %d is %T, want an int", bin, offset, v)
+	}
+
+	if n < 0 || n > math.MaxUint32 {
+		return 0, false, errors.NewStorageError("%s bin entry for offset %d is %d, outside the uint32 height range", bin, offset, n)
 	}
 
 	return n, true, nil

@@ -1825,6 +1825,12 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 				PolicyExpires: nullableBool(freezePolicyExpires),
 			}
 		}
+
+		// A read that failed part-way must not hand block validation a partial map: a
+		// record it did not reach is an active freeze it would not see.
+		if err = rows.Err(); err != nil {
+			return nil, err
+		}
 	}
 
 	// fields.Outputs is a projection in its own right: the outputs query above
@@ -2258,10 +2264,13 @@ func (r *spendSelectResult) policyFrozenAt(blockHeight uint32) bool {
 	return r.hasFreezeRecord() && utxo.FreezePolicyActiveAt(nullableHeight(r.freezeFrom), nullableHeight(r.freezeUntil), nullableBool(r.freezePolicyExpires), blockHeight)
 }
 
-// spendFreezeStateUnchanged is the bulk spend UPDATE's guard that an output's freeze
-// state is still the one its VALUES row was judged by (issue #1422). Postgres only, like
-// the bulk path; NULL-safe through a sentinel no height takes and the FALSE that a NULL
-// flag means.
+// spendFreezeStateUnchanged is the bulk spend statement's guard that an output's freeze
+// state is still the one its VALUES row was judged by (issue #1422), on the spending
+// branch and on the idempotent-match branch alike: a freeze that lands together with
+// this transaction's own spend must miss both and be re-read, so that an in-window spend
+// is the consensus verdict rather than an idempotent success. Postgres only, like the
+// bulk path; NULL-safe through a sentinel no height takes and the FALSE that a NULL flag
+// means.
 const spendFreezeStateUnchanged = `
 				  AND o.frozen = v.frozen
 				  AND COALESCE(o.freezeFrom, -1) = COALESCE(v.freeze_from, -1)
@@ -2289,16 +2298,28 @@ func (s *Store) rereadSpendRow(ctx context.Context, txn *sql.Tx, transactionID i
 // classifyMissedSpend is the verdict for a spend whose conditional UPDATE affected no row.
 // The UPDATE is pinned to spending_data IS NULL and to the freeze state the SELECT
 // observed, so something changed under it, and the row as it is NOW says what (issue
-// #1422):
+// #1422). The freeze is judged first, in the order the initial validation uses, because
+// the consensus record is a property of the outpoint and not of its spent-state: a
+// freeze that landed together with a spend — this transaction's own, or a competitor's —
+// still makes an in-window spend the consensus verdict, never an idempotent success or a
+// plain ErrSpent. Then:
 //   - spent with this spend's own spending data: an idempotent re-spend, returned as nil;
 //   - spent by another transaction: ErrSpent, naming the actual spender;
-//   - still unspent: the alert system changed the output's freeze state between the read
-//     and the write. The spend is judged again against the current record, and if it is
-//     still admissible (an unfreeze landed, say) the caller gets a retryable storage
-//     error, so the spend is re-read rather than committed on a decision made from stale
-//     state. Aerospike's atomic UDF has no such gap; this is SQL's equivalent.
+//   - still unspent: the freeze state moved but the spend is still admissible (an unfreeze
+//     landed, say); the caller gets a retryable storage error, so the spend is re-read
+//     rather than committed on a decision made from stale state.
+//
+// Aerospike's atomic UDF has no such gap; this is SQL's equivalent.
 func classifyMissedSpend(current *spendSelectResult, item *batchSpend) error {
 	spend := item.spend
+
+	if !item.ignoreConsensusFreeze && current.consensusFrozenAt(item.blockHeight) {
+		return errors.NewUtxoConsensusFrozenError(errSpendConsensusFrozen, spend.TxID, spend.Vout, item.blockHeight)
+	}
+
+	if !item.ignorePolicyFreeze && current.policyFrozenAt(item.blockHeight) {
+		return errors.NewUtxoFrozenError(errSpendPolicyFrozen, spend.TxID, spend.Vout)
+	}
 
 	if len(current.spendingDataBytes) > 0 {
 		if spend.SpendingData != nil && bytes.Equal(current.spendingDataBytes, spend.SpendingData.Bytes()) {
@@ -2311,14 +2332,6 @@ func classifyMissedSpend(current *spendSelectResult, item *batchSpend) error {
 		}
 
 		return errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, existing)
-	}
-
-	if !item.ignoreConsensusFreeze && current.consensusFrozenAt(item.blockHeight) {
-		return errors.NewUtxoConsensusFrozenError(errSpendConsensusFrozen, spend.TxID, spend.Vout, item.blockHeight)
-	}
-
-	if !item.ignorePolicyFreeze && current.policyFrozenAt(item.blockHeight) {
-		return errors.NewUtxoFrozenError(errSpendPolicyFrozen, spend.TxID, spend.Vout)
 	}
 
 	return errors.NewStorageError("[Spend] freeze state of %s:%d changed under the write; the spend must be re-read", spend.TxID, spend.Vout)
@@ -2613,7 +2626,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 				FROM v
 				JOIN outputs o
 				  ON o.transaction_id = v.transaction_id AND o.idx = v.idx
-				WHERE o.spending_data = v.spending_data
+				WHERE o.spending_data = v.spending_data`+spendFreezeStateUnchanged+`
 			),
 			parents AS (
 				SELECT transaction_id, count(*) AS spent_in_batch FROM upd_spent GROUP BY transaction_id
@@ -2649,7 +2662,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 		} else {
 			ub.WriteString(`) AS v(transaction_id,idx,spending_data,batch_idx,frozen,freeze_from,freeze_until,freeze_exp)
 			WHERE o.transaction_id = v.transaction_id AND o.idx = v.idx
-			AND ((o.spending_data IS NULL` + spendFreezeStateUnchanged + `) OR o.spending_data = v.spending_data)
+			AND (o.spending_data IS NULL OR o.spending_data = v.spending_data)` + spendFreezeStateUnchanged + `
 			RETURNING v.batch_idx`)
 		}
 

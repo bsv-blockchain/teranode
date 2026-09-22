@@ -134,16 +134,63 @@ func assertSpendRechecksFreezeStateUnderTheWrite(t *testing.T, ctx context.Conte
 
 	t.Run("a competing spend landing under the write is reported with the actual spender", func(t *testing.T) {
 		spend1 := utxo2.GetSpendingTx(tx, 1)
+		spends1, err := utxo.GetSpends(spend1)
+		require.NoError(t, err)
+
 		other := chainhash.HashH([]byte("the spender that got there first"))
 		otherSpender := spendpkg.NewSpendingData(&other, 0)
 
 		store.testBeforeSpendWrite = changeOutput(1, `spending_data = $3`, otherSpender.Bytes())
 		defer func() { store.testBeforeSpendWrite = nil }()
 
-		_, err := store.Spend(ctx, spend1, blockHeight)
+		_, err = store.Spend(ctx, spend1, blockHeight)
 		require.NoError(t, hookErr)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrSpent), "got: %v", err)
 		require.Contains(t, err.Error(), other.String(), "the error must name the transaction that actually spent the output")
+
+		// Hand the output back for the next cases.
+		store.testBeforeSpendWrite = nil
+		reset := *spends1[0]
+		reset.SpendingData = otherSpender
+		require.NoError(t, store.Unspend(ctx, []*utxo.Spend{&reset}))
+	})
+
+	// The consensus record is a property of the outpoint, not of its spent-state, so a
+	// freeze that lands together with a spend still decides an in-window spend — in the
+	// order the initial validation uses, before any spent-state result.
+	alwaysWindow := `frozen = TRUE, freezeFrom = 0`
+
+	t.Run("a freeze landing with this transaction's own spend is the consensus verdict, not an idempotent success", func(t *testing.T) {
+		spend1 := utxo2.GetSpendingTx(tx, 1)
+		spends1, err := utxo.GetSpends(spend1)
+		require.NoError(t, err)
+
+		store.testBeforeSpendWrite = changeOutput(1, alwaysWindow+`, spending_data = $3`, spends1[0].SpendingData.Bytes())
+		defer func() { store.testBeforeSpendWrite = nil }()
+
+		_, err = store.Spend(ctx, spend1, blockHeight)
+		require.NoError(t, hookErr)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrUtxoConsensusFrozen), "got: %v", err)
+
+		store.testBeforeSpendWrite = nil
+		require.NoError(t, store.Unspend(ctx, []*utxo.Spend{spends1[0]}))
+		require.NoError(t, store.UnFreezeUTXOs(ctx, []*utxo.Spend{spends1[0]}, store.settings))
+	})
+
+	t.Run("a freeze landing with a competing spend is the consensus verdict, not ErrSpent", func(t *testing.T) {
+		spend1 := utxo2.GetSpendingTx(tx, 1)
+		other := chainhash.HashH([]byte("a competitor that also got frozen"))
+		otherSpender := spendpkg.NewSpendingData(&other, 0)
+
+		store.testBeforeSpendWrite = changeOutput(1, alwaysWindow+`, spending_data = $3`, otherSpender.Bytes())
+		defer func() { store.testBeforeSpendWrite = nil }()
+
+		_, err := store.Spend(ctx, spend1, blockHeight)
+		require.NoError(t, hookErr)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrUtxoConsensusFrozen), "got: %v", err)
+		require.False(t, errors.Is(err, errors.ErrSpent))
 	})
 }

@@ -258,6 +258,10 @@ const (
 	LuaErrorCodeUtxoHashMismatch LuaErrorCode = "UTXO_HASH_MISMATCH"
 	LuaErrorCodeUtxoNotFrozen    LuaErrorCode = "UTXO_NOT_FROZEN"
 	LuaErrorCodeInvalidParameter LuaErrorCode = "INVALID_PARAMETER"
+	// LuaErrorCodeFreezeRecordDamaged: the output's freeze record holds a height outside
+	// the uint32 range; the spend is refused as storage damage, as block validation's
+	// reader (freeze_record.go) refuses the same bins.
+	LuaErrorCodeFreezeRecordDamaged LuaErrorCode = "FREEZE_RECORD_DAMAGED"
 )
 
 // LuaErrorInfo represents an individual error from Lua functions

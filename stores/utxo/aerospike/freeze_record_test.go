@@ -1,6 +1,7 @@
 package aerospike
 
 import (
+	"math"
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -78,6 +79,27 @@ func TestReadFreezeRecordShape(t *testing.T) {
 			untilBin: map[interface{}]interface{}{5: []byte{1}},
 		}, 5)
 		require.ErrorIs(t, err, errors.ErrStorageError)
+	})
+
+	t.Run("a height outside the uint32 range is storage damage, never a wrapped height", func(t *testing.T) {
+		for name, bins := range map[string]aerospike.BinMap{
+			"negative from":         {fromBin: map[interface{}]interface{}{5: -1}},
+			"from above MaxUint32":  {fromBin: map[interface{}]interface{}{5: math.MaxUint32 + 1}},
+			"negative until":        {fromBin: map[interface{}]interface{}{5: 100}, untilBin: map[interface{}]interface{}{5: -1}},
+			"until above MaxUint32": {fromBin: map[interface{}]interface{}{5: 100}, untilBin: map[interface{}]interface{}{5: math.MaxUint32 + 1}},
+		} {
+			_, err := readFreezeRecord(bins, 5)
+			require.ErrorIs(t, err, errors.ErrStorageError, name)
+		}
+	})
+
+	t.Run("the range bounds themselves are heights", func(t *testing.T) {
+		rec, err := readFreezeRecord(aerospike.BinMap{
+			fromBin:  map[interface{}]interface{}{5: 0},
+			untilBin: map[interface{}]interface{}{5: math.MaxUint32},
+		}, 5)
+		require.NoError(t, err)
+		require.Equal(t, freezeRecord{present: true, from: 0, until: math.MaxUint32}, rec)
 	})
 }
 
