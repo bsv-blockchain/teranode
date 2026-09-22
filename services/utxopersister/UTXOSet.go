@@ -90,6 +90,11 @@ type UTXOSet struct {
 	// blockHeight represents the height of the current block
 	blockHeight uint32
 
+	// blockHeightKnown records whether blockHeight is the height this set was opened for.
+	// Zero is a valid block height, so it cannot double as "unknown". The additions and
+	// deletions readers refuse to open a set where this is false.
+	blockHeightKnown bool
+
 	// additionsStorer manages storage of UTXO additions
 	additionsStorer *filestorer.FileStorer
 
@@ -183,15 +188,16 @@ func NewUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 	}
 
 	return &UTXOSet{
-		ctx:             ctx,
-		logger:          logger,
-		settings:        tSettings,
-		blockHash:       *blockHash,
-		blockHeight:     blockHeight,
-		additionsStorer: additionsStorer,
-		deletionsStorer: deletionsStorer,
-		store:           store,
-		stats:           gocore.NewStat("utxopersister"),
+		ctx:              ctx,
+		logger:           logger,
+		settings:         tSettings,
+		blockHash:        *blockHash,
+		blockHeight:      blockHeight,
+		blockHeightKnown: true,
+		additionsStorer:  additionsStorer,
+		deletionsStorer:  deletionsStorer,
+		store:            store,
+		stats:            gocore.NewStat("utxopersister"),
 	}, nil
 }
 
@@ -206,6 +212,7 @@ func NewUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 // - tSettings: Configuration settings that control behavior
 // - store: Blob store instance for accessing persisted UTXO data
 // - blockHash: Pointer to the hash of the block whose UTXO set is being accessed
+// - blockHeight: Optional height the block is being opened at
 //
 // Returns:
 // - *UTXOSet: The initialized UTXOSet instance
@@ -215,15 +222,27 @@ func NewUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 // It only initializes a UTXOSet instance with the necessary references to access existing data.
 // Use this method when you need to read from an existing UTXO set but don't need to
 // verify its existence first. For verification, use GetUTXOSetWithExistCheck instead.
-func GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, error) {
-	return &UTXOSet{
+//
+// A set opened without a blockHeight cannot be used to read the additions or deletions deltas:
+// those readers check the header each file carries against the block hash and height the set
+// was opened for, and refuse when the height is absent. Callers that read a delta must supply
+// the height; callers that only reach CreateUTXOSet need not.
+func GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash, blockHeight ...uint32) (*UTXOSet, error) {
+	us := &UTXOSet{
 		ctx:       ctx,
 		logger:    logger,
 		settings:  tSettings,
 		blockHash: *blockHash,
 		store:     store,
 		stats:     gocore.NewStat("utxopersister"),
-	}, nil
+	}
+
+	if len(blockHeight) > 0 {
+		us.blockHeight = blockHeight[0]
+		us.blockHeightKnown = true
+	}
+
+	return us, nil
 }
 
 // GetUTXOSetWithExistCheck creates a new UTXOSet instance and checks if it exists.
@@ -236,6 +255,7 @@ func GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 // - tSettings: Configuration settings that control behavior
 // - store: Blob store instance for accessing persisted UTXO data
 // - blockHash: Pointer to the hash of the block whose UTXO set is being accessed
+// - blockHeight: Height the block is being opened at, checked against each delta's header
 //
 // Returns:
 // - *UTXOSet: The initialized UTXOSet instance
@@ -246,14 +266,16 @@ func GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 // It initializes a UTXOSet instance and then verifies whether a UTXO set file
 // exists for the specified block hash. This is useful when you need to determine
 // if a UTXO set needs to be created before attempting to read from it.
-func GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, bool, error) {
+func GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash, blockHeight uint32) (*UTXOSet, bool, error) {
 	us := &UTXOSet{
-		ctx:       ctx,
-		logger:    logger,
-		settings:  tSettings,
-		blockHash: *blockHash,
-		store:     store,
-		stats:     gocore.NewStat("utxopersister"),
+		ctx:              ctx,
+		logger:           logger,
+		settings:         tSettings,
+		blockHash:        *blockHash,
+		blockHeight:      blockHeight,
+		blockHeightKnown: true,
+		store:            store,
+		stats:            gocore.NewStat("utxopersister"),
 	}
 
 	// Check to see if the utxo-set already exists
@@ -427,34 +449,66 @@ func (p *pooledBufReader) Close() error {
 	return err
 }
 
+// readDeltaHeader reads the 36-byte block hash and height header that NewUTXOSet writes at the
+// front of an additions or deletions file, and checks it against the key and height this UTXOSet
+// was opened under. A delta naming a different block is not this block's delta, whatever the
+// store returned it for, and folding it into the cumulative set would carry its outputs into the
+// snapshot and its commitment.
+//
+// Use io.ReadFull rather than r.Read because the longterm-client fallback in
+// openFileWithFallback returns a reader that can short-read without error, which would
+// silently misalign every subsequent record.
+func (us *UTXOSet) readDeltaHeader(r io.Reader, fileType fileformat.FileType) error {
+	var storedHash chainhash.Hash
+
+	if _, err := io.ReadFull(r, storedHash[:]); err != nil {
+		return errors.NewStorageError("error reading block hash", err)
+	}
+
+	var storedHeight uint32
+
+	if err := binary.Read(r, binary.LittleEndian, &storedHeight); err != nil {
+		return errors.NewStorageError("error reading block height", err)
+	}
+
+	if !storedHash.IsEqual(&us.blockHash) {
+		return errors.NewStorageError("%s header names block %s but was opened for %s", fileType, storedHash.String(), us.blockHash.String())
+	}
+
+	if storedHeight != us.blockHeight {
+		return errors.NewStorageError("%s header for %s names height %d but was opened at height %d", fileType, us.blockHash.String(), storedHeight, us.blockHeight)
+	}
+
+	return nil
+}
+
 // GetUTXOAdditionsReader returns a reader for accessing UTXO additions.
 // It creates a reader for the additions file of the current block or a specified block.
 // This reader can be used to iterate through all UTXOs added in the block.
 // Returns a ReadCloser interface and any error encountered.
+//
+// The set must have been opened with the block height: the file's header is checked against
+// both the block hash and the height, so a set opened without one is refused.
 func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, error) {
 	ctx, _, deferFn := tracing.Tracer("utxopersister").Start(ctx, "GetUTXOAdditionsReader",
 		tracing.WithDebugLogMessage(us.logger, "[GetUTXOAdditionsReader] called"),
 	)
 	defer deferFn()
 
+	if !us.blockHeightKnown {
+		return nil, errors.NewProcessingError("utxo delta reader for %s requires the block height the set was opened for", us.blockHash.String())
+	}
+
 	r, err := us.store.GetIoReader(ctx, us.blockHash[:], fileformat.FileTypeUtxoAdditions, options.WithDeleteAt(0))
 	if err != nil {
 		return nil, errors.NewStorageError("error getting utxo-additions reader", err)
 	}
 
-	// Close on the Read failure paths so the underlying file-store read
-	// permit (held by semaphoreReadCloser) is released. Use io.ReadFull
-	// rather than r.Read because the longterm-client fallback in
-	// openFileWithFallback returns a reader that can short-read without
-	// error, which would silently misalign every subsequent record.
-	if _, err = io.ReadFull(r, make([]byte, 32)); err != nil {
+	// Close on the header failure paths so the underlying file-store read
+	// permit (held by semaphoreReadCloser) is released.
+	if err = us.readDeltaHeader(r, fileformat.FileTypeUtxoAdditions); err != nil {
 		_ = r.Close()
-		return nil, errors.NewStorageError("error reading block hash", err)
-	}
-
-	if _, err = io.ReadFull(r, make([]byte, 4)); err != nil {
-		_ = r.Close()
-		return nil, errors.NewStorageError("error reading block height", err)
+		return nil, err
 	}
 
 	utxopersisterBufferSize := us.settings.Block.UTXOPersisterBufferSize
@@ -480,21 +534,23 @@ func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, e
 // It creates a reader for the deletions file of the current block or a specified block.
 // This reader can be used to iterate through all UTXOs deleted (spent) in the block.
 // Returns a ReadCloser interface and any error encountered.
+//
+// The set must have been opened with the block height: the file's header is checked against
+// both the block hash and the height, so a set opened without one is refused.
 func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, error) {
+	if !us.blockHeightKnown {
+		return nil, errors.NewProcessingError("utxo delta reader for %s requires the block height the set was opened for", us.blockHash.String())
+	}
+
 	r, err := us.store.GetIoReader(ctx, us.blockHash[:], fileformat.FileTypeUtxoDeletions, options.WithDeleteAt(0))
 	if err != nil {
 		return nil, errors.NewStorageError("error getting utxo-deletions reader", err)
 	}
 
-	// See GetUTXOAdditionsReader for the rationale on Close + io.ReadFull.
-	if _, err = io.ReadFull(r, make([]byte, 32)); err != nil {
+	// See GetUTXOAdditionsReader for the rationale on Close.
+	if err = us.readDeltaHeader(r, fileformat.FileTypeUtxoDeletions); err != nil {
 		_ = r.Close()
-		return nil, errors.NewStorageError("error reading block hash", err)
-	}
-
-	if _, err = io.ReadFull(r, make([]byte, 4)); err != nil {
-		_ = r.Close()
-		return nil, errors.NewStorageError("error reading block height", err)
+		return nil, err
 	}
 
 	utxopersisterBufferSize := us.settings.Block.UTXOPersisterBufferSize

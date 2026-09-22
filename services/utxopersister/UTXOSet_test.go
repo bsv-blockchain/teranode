@@ -487,10 +487,10 @@ func TestNewUTXOSet(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 
-	ud1, err := NewUTXOSet(ctx, ulogger.TestLogger{}, tSettings, store, &hash1, 0)
+	// The height is given to the constructor rather than assigned afterwards: it is written
+	// into the delta headers, and the readers below check those headers against it.
+	ud1, err := NewUTXOSet(ctx, ulogger.TestLogger{}, tSettings, store, &hash1, 10)
 	require.NoError(t, err)
-
-	ud1.blockHeight = 10
 
 	err = ud1.ProcessTx(tx)
 	require.NoError(t, err)
@@ -631,7 +631,9 @@ func TestGetUTXOAdditionsReader_ClosesOnReadError(t *testing.T) {
 		reader:     errReader,
 	}
 
-	us, err := GetUTXOSet(ctx, logger, tSettings, store, &someHash)
+	// The height is required: without it the reader refuses before it ever reads, and this
+	// test would pass on the wrong error.
+	us, err := GetUTXOSet(ctx, logger, tSettings, store, &someHash, 7)
 	require.NoError(t, err)
 
 	_, err = us.GetUTXOAdditionsReader(ctx)
@@ -654,7 +656,8 @@ func TestGetUTXODeletionsReader_ClosesOnReadError(t *testing.T) {
 		reader:     errReader,
 	}
 
-	us, err := GetUTXOSet(ctx, logger, tSettings, store, &someHash)
+	// See TestGetUTXOAdditionsReader_ClosesOnReadError: the height is required.
+	us, err := GetUTXOSet(ctx, logger, tSettings, store, &someHash, 7)
 	require.NoError(t, err)
 
 	_, err = us.GetUTXODeletionsReader(ctx)
