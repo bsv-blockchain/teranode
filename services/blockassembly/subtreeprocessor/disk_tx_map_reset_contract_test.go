@@ -36,8 +36,35 @@ func newSubtreeProcessorWithTxMapDirs(t *testing.T, dirs []string) *SubtreeProce
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		if stp.diskTxMap != nil {
-			stp.diskTxMap.Close()
+		// Every half owns Badger directories that only Close() removes, plus one
+		// writer goroutine per configured dir. Closing the active half alone
+		// leaks the rest into the t.TempDir the framework then tries to remove —
+		// and these tests deliberately create retired and pinned halves.
+		closed := make(map[*DiskTxMap]struct{})
+
+		halves := append([]*DiskTxMap{stp.diskTxMap, stp.diskTxMapShadow, stp.diskTxMapAnchor},
+			stp.diskTxMapRetired...)
+
+		for _, half := range halves {
+			if half == nil {
+				continue
+			}
+
+			if _, done := closed[half]; done {
+				continue
+			}
+
+			closed[half] = struct{}{}
+
+			_ = half.Close()
+		}
+
+		// Close is the only thing that releases these directories, so an
+		// unclosed half shows up here as a leftover generation.
+		for _, dir := range dirs {
+			if left := liveDiskTxMapGenerations(t, dir); left != 0 {
+				t.Errorf("%d disk tx map generation(s) left in %s: a half was never closed", left, dir)
+			}
 		}
 	})
 
