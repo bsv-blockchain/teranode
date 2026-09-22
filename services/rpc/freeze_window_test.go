@@ -26,7 +26,7 @@ func TestFreezeWindowFromRPC(t *testing.T) {
 		{name: "stop at start is an empty interval", start: ip(100), stop: ip(100), wantFrom: utxo.FreezeWindowNever, wantUntil: utxo.FreezeWindowNever},
 		{name: "stop below start is an empty interval", start: ip(100), stop: ip(50), wantFrom: utxo.FreezeWindowNever, wantUntil: utxo.FreezeWindowNever},
 		{name: "a window", start: ip(100), stop: ip(200), wantFrom: 100, wantUntil: 200},
-		{name: "a start alone has no end", start: ip(100), wantFrom: 100, wantUntil: utxo.FreezeWindowNever},
+		{name: "a start alone has no end", start: ip(100), wantFrom: 100, wantUntil: 0},
 		{name: "a stop alone starts at genesis", stop: ip(200), wantFrom: 0, wantUntil: 200},
 		{name: "a negative bound is rejected", start: ip(-1), stop: ip(5), wantErr: true},
 	} {

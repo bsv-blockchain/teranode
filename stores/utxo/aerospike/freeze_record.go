@@ -13,6 +13,9 @@ import (
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 )
 
+// errBinNotMap is the storage-damage message for a per-offset map bin of the wrong type.
+const errBinNotMap = "%s bin is %T, want a map"
+
 // freezeRecord is one output's alert-system freeze record as read back from the
 // utxoFreezeFrom/Until/Exp bins. present is the utxoFreezeFrom entry: it is always
 // written when a freeze is recorded, whatever its value, so its presence says "this
@@ -140,7 +143,7 @@ func markedFreezeExtraRecords(bins aerospike.BinMap) ([]int, error) {
 
 	m, ok := raw.(map[interface{}]interface{})
 	if !ok {
-		return nil, errors.NewStorageError("%s bin is %T, want a map", fields.UtxoFreezeRecs, raw)
+		return nil, errors.NewStorageError(errBinNotMap, fields.UtxoFreezeRecs, raw)
 	}
 
 	nums := make([]int, 0, len(m))
@@ -170,7 +173,7 @@ func collectFreezeRecords(bins aerospike.BinMap, baseOffset int, records map[uin
 
 	fromMap, ok := raw.(map[interface{}]interface{})
 	if !ok {
-		return nil, errors.NewStorageError("%s bin is %T, want a map", fields.UtxoFreezeFrom, raw)
+		return nil, errors.NewStorageError(errBinNotMap, fields.UtxoFreezeFrom, raw)
 	}
 
 	for k := range fromMap {
@@ -214,7 +217,7 @@ func mapBinEntry(bins aerospike.BinMap, bin fields.FieldName, offset int) (inter
 
 	m, ok := raw.(map[interface{}]interface{})
 	if !ok {
-		return nil, false, errors.NewStorageError("%s bin is %T, want a map", bin, raw)
+		return nil, false, errors.NewStorageError(errBinNotMap, bin, raw)
 	}
 
 	v, found := m[offset]

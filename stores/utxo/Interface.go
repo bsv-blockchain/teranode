@@ -214,26 +214,26 @@ func FreezePolicyActiveAt(from, until uint32, policyExpires bool, blockHeight ui
 // a stop the chain will never reach, not by 0. That is the opposite of the stored
 // encoding, where 0 means unbounded, so this is the one place the two meet:
 //
-//   - stop <= start → (FreezeWindowNever, FreezeWindowNever), enforcesNothing true;
-//   - otherwise → (start, stop), each clamped to the uint32 range, so an authority's
-//     "maximum" stop is effectively unbounded.
+//   - stop <= start, or a start no uint32 height can reach → (FreezeWindowNever,
+//     FreezeWindowNever), enforcesNothing true;
+//   - a stop no uint32 height can reach → (start, 0): every representable height from
+//     start on is inside the interval, which is what the stored 0 means. Clamping such a
+//     stop to math.MaxUint32 would instead exclude that one height, because until is
+//     exclusive;
+//   - otherwise → (start, stop) as is.
 //
 // A caller wanting the legacy "enforce at every height" record — only the admin RPC with
 // no arguments — must bypass this function and store (0, 0) explicitly.
 func NormalizeFreezeWindow(start, stop uint64) (from, until uint32, enforcesNothing bool) {
-	if stop <= start {
+	if stop <= start || start > math.MaxUint32 {
 		return FreezeWindowNever, FreezeWindowNever, true
 	}
 
-	return clampFreezeHeight(start), clampFreezeHeight(stop), false
-}
-
-func clampFreezeHeight(h uint64) uint32 {
-	if h > math.MaxUint32 {
-		return math.MaxUint32
+	if stop > math.MaxUint32 {
+		return uint32(start), 0, false
 	}
 
-	return uint32(h)
+	return uint32(start), uint32(stop), false
 }
 
 // Clone creates a deep copy of the Spend struct.

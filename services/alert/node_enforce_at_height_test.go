@@ -3,6 +3,7 @@ package alert
 
 import (
 	"context"
+	"math"
 	"net/url"
 	"testing"
 
@@ -39,12 +40,13 @@ func TestEnforceAtHeightWindow(t *testing.T) {
 		require.Equal(t, uint32(800_100), until)
 	})
 
-	t.Run("a stop the chain never reaches is effectively unbounded", func(t *testing.T) {
+	t.Run("a stop the chain never reaches is stored as no end", func(t *testing.T) {
 		from, until, err := enforceAtHeightWindow(fundWith(models.Enforce{Start: 800_000, Stop: 1 << 40}))
 		require.NoError(t, err)
 		require.Equal(t, uint32(800_000), from)
-		require.Equal(t, uint32(utxo.FreezeWindowNever), until)
+		require.Equal(t, uint32(0), until, "the stored 0 is the only encoding that covers every representable height")
 		require.True(t, utxo.FreezeWindowActiveAt(from, until, 1_000_000_000))
+		require.True(t, utxo.FreezeWindowActiveAt(from, until, math.MaxUint32))
 	})
 
 	// The pre-#1422 unfreeze idiom, and SV Node's empty interval: never consensus-active.

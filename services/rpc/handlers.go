@@ -2783,9 +2783,12 @@ func utxoHashForOutput(ctx context.Context, store utxo.Store, txHash *chainhash.
 // every height, stored as (0, 0). Once either is given, SV Node's interval semantics
 // apply through utxo.NormalizeFreezeWindow: stop is an exclusive end, and stop <= start
 // — an explicit (0, 0) included — is an empty interval that enforces nothing by
-// consensus. A stop given alone starts at genesis; a start given alone has no end. The
-// command's height fields carry no jsonrpcdefault, which is what keeps omission
-// distinguishable from an explicit zero here.
+// consensus. A stop given alone starts at genesis; a start given alone has no end,
+// passed as a stop no height can reach so that the stored window is the 0 that means
+// "no end" (math.MaxUint32 itself would not do: until is exclusive, so it would leave
+// the last representable height outside the interval). The command's height fields
+// carry no jsonrpcdefault, which is what keeps omission distinguishable from an explicit
+// zero here.
 func freezeWindowFromRPC(start, stop *int) (freezeFrom uint32, freezeUntil uint32, err error) {
 	if start == nil && stop == nil {
 		return 0, 0, nil
@@ -2797,17 +2800,17 @@ func freezeWindowFromRPC(start, stop *int) (freezeFrom uint32, freezeUntil uint3
 		startHeight = *start
 	}
 
-	stopHeight := int(utxo.FreezeWindowNever) // no end: a stop the chain never reaches
-
-	if stop != nil {
-		stopHeight = *stop
-	}
-
-	if startHeight < 0 || stopHeight < 0 {
+	if startHeight < 0 || (stop != nil && *stop < 0) {
 		return 0, 0, errors.NewInvalidArgumentError("enforceAtHeight bounds must not be negative")
 	}
 
-	freezeFrom, freezeUntil, _ = utxo.NormalizeFreezeWindow(uint64(startHeight), uint64(stopHeight))
+	stopHeight := uint64(math.MaxUint32) + 1 // no end: a stop the chain never reaches
+
+	if stop != nil {
+		stopHeight = uint64(*stop)
+	}
+
+	freezeFrom, freezeUntil, _ = utxo.NormalizeFreezeWindow(uint64(startHeight), stopHeight)
 
 	return freezeFrom, freezeUntil, nil
 }

@@ -88,8 +88,10 @@ func TestNormalizeFreezeWindow(t *testing.T) {
 		{name: "a bounded interval is stored as is", start: 500, stop: 600, wantFrom: 500, wantUntil: 600},
 		{name: "from genesis until a height", start: 0, stop: 600, wantFrom: 0, wantUntil: 600},
 		{name: "a one-block interval", start: 500, stop: 501, wantFrom: 500, wantUntil: 501},
-		{name: "a stop beyond uint32 clamps to effectively unbounded", start: 500, stop: math.MaxUint64, wantFrom: 500, wantUntil: math.MaxUint32},
-		{name: "a start beyond uint32 is never reached", start: math.MaxUint64 - 1, stop: math.MaxUint64, wantFrom: math.MaxUint32, wantUntil: math.MaxUint32},
+		{name: "a stop beyond uint32 is stored as no end", start: 500, stop: math.MaxUint64, wantFrom: 500, wantUntil: 0},
+		{name: "a start beyond uint32 is never reached", start: math.MaxUint64 - 1, stop: math.MaxUint64, wantFrom: math.MaxUint32, wantUntil: math.MaxUint32, enforcesNothing: true},
+		{name: "the last representable height is inside an interval whose stop lies beyond it", start: math.MaxUint32, stop: math.MaxUint32 + 1, wantFrom: math.MaxUint32, wantUntil: 0},
+		{name: "a stop at the last representable height excludes it, as any stop does", start: math.MaxUint32 - 1, stop: math.MaxUint32, wantFrom: math.MaxUint32 - 1, wantUntil: math.MaxUint32},
 	}
 
 	for _, tc := range tests {
@@ -101,12 +103,25 @@ func TestNormalizeFreezeWindow(t *testing.T) {
 
 			// Whatever was stored, an empty wire interval must never be consensus-active.
 			if tc.enforcesNothing {
-				for _, h := range []uint32{0, uint32(tc.start), 1_000_000} {
+				for _, h := range []uint32{0, uint32(tc.start), 1_000_000, math.MaxUint32} {
 					require.False(t, FreezeWindowActiveAt(from, until, h), "empty interval active at %d", h)
 				}
 			}
 		})
 	}
+
+	// The stored window must enforce exactly the representable heights the wire interval
+	// contains, at the top of the range as everywhere else: an exclusive stop beyond
+	// uint32 covers math.MaxUint32, an exclusive stop AT math.MaxUint32 does not.
+	t.Run("boundary at the last representable height", func(t *testing.T) {
+		from, until, _ := NormalizeFreezeWindow(math.MaxUint32, math.MaxUint32+1)
+		require.True(t, FreezeWindowActiveAt(from, until, math.MaxUint32), "[MaxUint32, MaxUint32+1) contains MaxUint32")
+		require.False(t, FreezeWindowActiveAt(from, until, math.MaxUint32-1))
+
+		from, until, _ = NormalizeFreezeWindow(math.MaxUint32-1, math.MaxUint32)
+		require.True(t, FreezeWindowActiveAt(from, until, math.MaxUint32-1))
+		require.False(t, FreezeWindowActiveAt(from, until, math.MaxUint32), "[MaxUint32-1, MaxUint32) excludes MaxUint32")
+	})
 }
 
 // TestFreezePolicyActiveAt pins policyExpiresWithConsensus: the policy tier lifts once

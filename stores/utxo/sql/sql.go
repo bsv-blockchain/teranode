@@ -114,6 +114,12 @@ type Store struct {
 	createBatcher *batcher.Batcher[batchCreateItem]
 	unlockBatcher *batcher.Batcher[batchUnlockItem]
 
+	// testBeforeSpendWrite, when set, runs inside the spend transaction between the read
+	// of an output's state and the conditional UPDATE that spends it. Test-only and nil in
+	// production: it is how a freeze, unfreeze or competing spend landing in that gap is
+	// produced deterministically on both engines (spend_freeze_race_test.go).
+	testBeforeSpendWrite func(ctx context.Context, txn *sql.Tx)
+
 	// utxo.BlockStateFields supplies the chain-tip height and median block time
 	// as one atomic snapshot, and with them the Store interface's six
 	// block-state methods. SetBlockHeight, SetMedianBlockTime and SetBlockState
@@ -2250,6 +2256,72 @@ func (r *spendSelectResult) policyFrozenAt(blockHeight uint32) bool {
 	return r.hasFreezeRecord() && utxo.FreezePolicyActiveAt(nullableHeight(r.freezeFrom), nullableHeight(r.freezeUntil), nullableBool(r.freezePolicyExpires), blockHeight)
 }
 
+// spendFreezeStateUnchanged is the bulk spend UPDATE's guard that an output's freeze
+// state is still the one its VALUES row was judged by (issue #1422). Postgres only, like
+// the bulk path; NULL-safe through a sentinel no height takes and the FALSE that a NULL
+// flag means.
+const spendFreezeStateUnchanged = `
+				  AND o.frozen = v.frozen
+				  AND COALESCE(o.freezeFrom, -1) = COALESCE(v.freeze_from, -1)
+				  AND COALESCE(o.freezeUntil, -1) = COALESCE(v.freeze_until, -1)
+				  AND COALESCE(o.freezePolicyExpires, FALSE) = COALESCE(v.freeze_exp, FALSE)`
+
+// rereadSpendRow reads, inside txn, the current state of one output whose conditional
+// spend UPDATE affected no row, so the miss can be judged against the row as it is now.
+func (s *Store) rereadSpendRow(ctx context.Context, txn *sql.Tx, transactionID int, vout uint32) (*spendSelectResult, error) {
+	q := `
+		SELECT o.spending_data, o.frozen, t.frozen, o.freezeFrom, o.freezeUntil, o.freezePolicyExpires
+		FROM outputs o
+		JOIN transactions t ON t.id = o.transaction_id
+		WHERE o.transaction_id = $1 AND o.idx = $2
+	`
+
+	r := &spendSelectResult{transactionID: transactionID}
+	if err := txn.QueryRowContext(ctx, q, transactionID, vout).Scan(&r.spendingDataBytes, &r.frozen, &r.txFrozen, &r.freezeFrom, &r.freezeUntil, &r.freezePolicyExpires); err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
+// classifyMissedSpend is the verdict for a spend whose conditional UPDATE affected no row.
+// The UPDATE is pinned to spending_data IS NULL and to the freeze state the SELECT
+// observed, so something changed under it, and the row as it is NOW says what (issue
+// #1422):
+//   - spent with this spend's own spending data: an idempotent re-spend, returned as nil;
+//   - spent by another transaction: ErrSpent, naming the actual spender;
+//   - still unspent: the alert system changed the output's freeze state between the read
+//     and the write. The spend is judged again against the current record, and if it is
+//     still admissible (an unfreeze landed, say) the caller gets a retryable storage
+//     error, so the spend is re-read rather than committed on a decision made from stale
+//     state. Aerospike's atomic UDF has no such gap; this is SQL's equivalent.
+func classifyMissedSpend(current *spendSelectResult, item *batchSpend) error {
+	spend := item.spend
+
+	if len(current.spendingDataBytes) > 0 {
+		if spend.SpendingData != nil && bytes.Equal(current.spendingDataBytes, spend.SpendingData.Bytes()) {
+			return nil
+		}
+
+		existing, parseErr := spendpkg.NewSpendingDataFromBytes(current.spendingDataBytes)
+		if parseErr != nil {
+			return errors.NewProcessingError(errFailedCreateSpendingData, parseErr)
+		}
+
+		return errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, existing)
+	}
+
+	if !item.ignoreConsensusFreeze && current.consensusFrozenAt(item.blockHeight) {
+		return errors.NewUtxoConsensusFrozenError("[Spend] utxo is frozen for %s:%d at block height %d", spend.TxID, spend.Vout, item.blockHeight)
+	}
+
+	if !item.ignorePolicyFreeze && current.policyFrozenAt(item.blockHeight) {
+		return errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+	}
+
+	return errors.NewStorageError("[Spend] freeze state of %s:%d changed under the write; the spend must be re-read", spend.TxID, spend.Vout)
+}
+
 // trySendSpendBatchBulk uses bulk SELECT + bulk UPDATE for PostgreSQL.
 func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 	txn, err := s.db.BeginTx(s.ctx, nil)
@@ -2480,22 +2552,29 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 
 		var ub strings.Builder
 		if wrapDAH {
-			ub.WriteString(`WITH v(transaction_id,idx,spending_data,batch_idx) AS (VALUES `)
+			ub.WriteString(`WITH v(transaction_id,idx,spending_data,batch_idx,frozen,freeze_from,freeze_until,freeze_exp) AS (VALUES `)
 		} else {
 			ub.WriteString(`
 			UPDATE outputs o
 			SET spending_data = v.spending_data
 			FROM (VALUES `)
 		}
-		updateArgs := make([]interface{}, 0, len(dedupedUpdate)*4+1)
+		// Each row carries the freeze state its verdict above was computed from, so the
+		// UPDATE can be pinned to it (spendFreezeStateUnchanged): the alert system may
+		// change that state between the read and the write (issue #1422). A row the
+		// UPDATE does not touch is re-read and judged again below.
+		updateArgs := make([]interface{}, 0, len(dedupedUpdate)*8+1)
 		pidx := 1
 		for j, u := range dedupedUpdate {
 			if j > 0 {
 				ub.WriteByte(',')
 			}
-			ub.WriteString(fmt.Sprintf("($%d::int,$%d::int,$%d::bytea,$%d::int)", pidx, pidx+1, pidx+2, pidx+3))
-			updateArgs = append(updateArgs, u.transactionID, u.vout, u.spendingData, u.batchIdx)
-			pidx += 4
+			observed := resultMap[u.batchIdx]
+			ub.WriteString(fmt.Sprintf("($%d::int,$%d::int,$%d::bytea,$%d::int,$%d::bool,$%d::bigint,$%d::bigint,$%d::bool)",
+				pidx, pidx+1, pidx+2, pidx+3, pidx+4, pidx+5, pidx+6, pidx+7))
+			updateArgs = append(updateArgs, u.transactionID, u.vout, u.spendingData, u.batchIdx,
+				observed.frozen, observed.freezeFrom, observed.freezeUntil, observed.freezePolicyExpires)
+			pidx += 8
 		}
 		if wrapDAH {
 			newDAH := int64(s.GetBlockHeight() + 1 + retention)
@@ -2524,7 +2603,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			upd_spent AS (
 				UPDATE outputs o SET spending_data = v.spending_data FROM v
 				WHERE o.transaction_id = v.transaction_id AND o.idx = v.idx
-				  AND o.spending_data IS NULL
+				  AND o.spending_data IS NULL`+spendFreezeStateUnchanged+`
 				RETURNING v.batch_idx, o.transaction_id
 			),
 			upd_idem AS (
@@ -2566,10 +2645,14 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			UNION ALL
 			SELECT batch_idx FROM upd_idem`, dahIdx, dahIdx))
 		} else {
-			ub.WriteString(`) AS v(transaction_id,idx,spending_data,batch_idx)
+			ub.WriteString(`) AS v(transaction_id,idx,spending_data,batch_idx,frozen,freeze_from,freeze_until,freeze_exp)
 			WHERE o.transaction_id = v.transaction_id AND o.idx = v.idx
-			AND (o.spending_data IS NULL OR o.spending_data = v.spending_data)
+			AND ((o.spending_data IS NULL` + spendFreezeStateUnchanged + `) OR o.spending_data = v.spending_data)
 			RETURNING v.batch_idx`)
+		}
+
+		if s.testBeforeSpendWrite != nil {
+			s.testBeforeSpendWrite(s.ctx, txn)
 		}
 
 		uRows, err := txn.QueryContext(s.ctx, ub.String(), updateArgs...)
@@ -2622,35 +2705,30 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			}
 		}
 
-		// The bulk UPDATE and the sibling upd_idem CTE share one statement
-		// snapshot. If a concurrent transaction commits the SAME spending_data
-		// on one of our target rows after our snapshot is taken, upd_spent's
-		// EPQ recheck will reject the row (spending_data no longer NULL) and
-		// upd_idem's snapshot-level predicate won't match it (NULL at snapshot,
-		// filter is `= v.spending_data`). The row ends up in neither RETURNING
-		// set and would be wrongly marked as UtxoSpentError.
-		//
-		// Run a second, fresh-snapshot SELECT over the missed rows to catch
-		// those concurrent idempotent commits. Anything whose current
-		// spending_data matches ours is a successful idempotent spend.
+		// A row the UPDATE did not touch changed under it. Either it was spent
+		// concurrently — the bulk UPDATE and the sibling upd_idem CTE share one
+		// statement snapshot, so a concurrent commit of OUR spending data lands in
+		// neither RETURNING set (upd_spent's EPQ recheck sees it non-NULL, upd_idem's
+		// snapshot predicate sees it NULL) — or its freeze state moved. Re-read every
+		// missed row against a fresh snapshot and judge each by classifyMissedSpend,
+		// exactly as the per-row path does.
 		if len(missedIdxs) > 0 {
 			var sb strings.Builder
-			sb.WriteString(`SELECT v.batch_idx FROM (VALUES `)
-			args := make([]interface{}, 0, len(missedIdxs)*4)
+			sb.WriteString(`SELECT v.batch_idx, o.spending_data, o.frozen, t.frozen, o.freezeFrom, o.freezeUntil, o.freezePolicyExpires
+			FROM (VALUES `)
+			args := make([]interface{}, 0, len(missedIdxs)*3)
 			pidx := 1
 			for i, bIdx := range missedIdxs {
 				if i > 0 {
 					sb.WriteByte(',')
 				}
-				sb.WriteString(fmt.Sprintf("($%d::int,$%d::int,$%d::bytea,$%d::int)", pidx, pidx+1, pidx+2, pidx+3))
-				spend := batch[bIdx].spend
-				r := resultMap[bIdx]
-				args = append(args, r.transactionID, spend.Vout, spend.SpendingData.Bytes(), bIdx)
-				pidx += 4
+				sb.WriteString(fmt.Sprintf("($%d::int,$%d::int,$%d::int)", pidx, pidx+1, pidx+2))
+				args = append(args, resultMap[bIdx].transactionID, batch[bIdx].spend.Vout, bIdx)
+				pidx += 3
 			}
-			sb.WriteString(`) AS v(transaction_id,idx,spending_data,batch_idx)
+			sb.WriteString(`) AS v(transaction_id,idx,batch_idx)
 			JOIN outputs o ON o.transaction_id = v.transaction_id AND o.idx = v.idx
-			WHERE o.spending_data = v.spending_data`)
+			JOIN transactions t ON t.id = o.transaction_id`)
 
 			iRows, err := txn.QueryContext(s.ctx, sb.String(), args...)
 			if err != nil {
@@ -2658,45 +2736,55 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 					return true
 				}
 				for _, item := range batch {
-					item.errCh <- errors.NewStorageError("[Spend] failed: concurrent-idempotent re-check", err)
+					item.errCh <- errors.NewStorageError("[Spend] failed: re-reading rows the bulk UPDATE missed", err)
 				}
 				return false
 			}
+			reread := make(map[int]*spendSelectResult, len(missedIdxs))
 			for iRows.Next() {
-				var bIdx int
-				if err := iRows.Scan(&bIdx); err != nil {
+				r := &spendSelectResult{}
+				if err := iRows.Scan(&r.batchIdx, &r.spendingDataBytes, &r.frozen, &r.txFrozen, &r.freezeFrom, &r.freezeUntil, &r.freezePolicyExpires); err != nil {
 					iRows.Close()
 					if isDeadlock(err) {
 						return true
 					}
 					for _, item := range batch {
-						item.errCh <- errors.NewStorageError("[Spend] failed: scanning concurrent-idempotent re-check", err)
+						item.errCh <- errors.NewStorageError("[Spend] failed: scanning rows the bulk UPDATE missed", err)
 					}
 					return false
 				}
-				updatedSet[bIdx] = true
-				// Parent has just had its output confirmed-spent by someone
-				// else with our exact spending_data. Treat it as an idempotent
-				// match for DAH-healing purposes, same as the in-statement path.
-				idempotentParentIDs[resultMap[bIdx].transactionID] = struct{}{}
+				r.transactionID = resultMap[r.batchIdx].transactionID
+				reread[r.batchIdx] = r
 			}
 			if err := iRows.Close(); err != nil {
 				if isDeadlock(err) {
 					return true
 				}
 				for _, item := range batch {
-					item.errCh <- errors.NewStorageError("[Spend] failed: closing concurrent-idempotent re-check", err)
+					item.errCh <- errors.NewStorageError("[Spend] failed: closing the re-read of rows the bulk UPDATE missed", err)
 				}
 				return false
 			}
-		}
 
-		// Anything still not in updatedSet after the re-check is a genuine
-		// UtxoSpentError (row was concurrently spent by a DIFFERENT spender).
-		for _, u := range dedupedUpdate {
-			if !updatedSet[u.batchIdx] {
-				spend := batch[u.batchIdx].spend
-				validationErrors[u.batchIdx] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, spend.SpendingData)
+			for _, bIdx := range missedIdxs {
+				item := batch[bIdx]
+
+				current, found := reread[bIdx]
+				if !found {
+					// The row was there for the SELECT and is gone now.
+					validationErrors[bIdx] = errors.NewTxNotFoundError(errOutputNotFound, item.spend.TxID, item.spend.Vout)
+					continue
+				}
+
+				if verdict := classifyMissedSpend(current, item); verdict != nil {
+					validationErrors[bIdx] = verdict
+					continue
+				}
+
+				// Spent with our exact spending_data by someone else: an idempotent
+				// match for DAH-healing purposes, same as the in-statement path.
+				updatedSet[bIdx] = true
+				idempotentParentIDs[current.transactionID] = struct{}{}
 			}
 		}
 		// Mark idempotent duplicate batch entries as successful (same UTXO, same spending data).
@@ -2830,13 +2918,21 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 		AND o.idx = $2
 	`
 
-	// Optimistic locking: spending_data IS NULL guard prevents concurrent double-spend
+	// Optimistic locking: the spending_data IS NULL guard prevents a concurrent
+	// double-spend, and the freeze-state guard pins the write to the freeze state the
+	// SELECT judged the spend by — the alert system may change that state between the
+	// read and the write (issue #1422). A row the UPDATE does not touch is re-read and
+	// judged again by classifyMissedSpend.
 	q2 := `
 		UPDATE outputs
 		SET spending_data = $1
 		WHERE transaction_id = $2
 		AND idx = $3
 		AND spending_data IS NULL
+		AND frozen = $4
+		AND COALESCE(freezeFrom, CAST(-1 AS BIGINT)) = COALESCE($5, CAST(-1 AS BIGINT))
+		AND COALESCE(freezeUntil, CAST(-1 AS BIGINT)) = COALESCE($6, CAST(-1 AS BIGINT))
+		AND COALESCE(freezePolicyExpires, FALSE) = COALESCE($7, FALSE)
 	`
 
 	successItems := make([]*batchSpend, 0, len(batch))
@@ -2951,8 +3047,13 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 			continue
 		}
 
+		if s.testBeforeSpendWrite != nil {
+			s.testBeforeSpendWrite(s.ctx, txn)
+		}
+
 		// UPDATE outputs with optimistic locking
-		result, err := txn.ExecContext(s.ctx, q2, spend.SpendingData.Bytes(), transactionID, spend.Vout)
+		result, err := txn.ExecContext(s.ctx, q2, spend.SpendingData.Bytes(), transactionID, spend.Vout,
+			frozen, freezeFrom, freezeUntil, freezePolicyExpires)
 		if err != nil {
 			if isDeadlock(err) {
 				return true // retryable
@@ -2978,10 +3079,32 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 				spentParentIDs[transactionID] = struct{}{}
 				continue
 			}
-			// Concurrently spent by a different tx between SELECT and UPDATE.
-			// spendingDataBytes was NULL from SELECT (WHERE spending_data IS NULL),
-			// so we don't have the actual conflicting spender — use current spend data.
-			validationErrors[i] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, spend.SpendingData)
+
+			// The row changed between the SELECT and the UPDATE: spent concurrently, or
+			// its freeze state moved. Re-read it and judge the spend against the row as
+			// it is now.
+			current, rereadErr := s.rereadSpendRow(s.ctx, txn, transactionID, spend.Vout)
+			if rereadErr != nil {
+				if errors.Is(rereadErr, sql.ErrNoRows) {
+					validationErrors[i] = errors.NewTxNotFoundError(errOutputNotFound, spend.TxID, spend.Vout)
+					continue
+				}
+				if isDeadlock(rereadErr) {
+					return true // retryable
+				}
+				item.errCh <- errors.NewStorageError("[Spend] failed: re-reading output %s:%d after a missed UPDATE", spend.TxID, spend.Vout, rereadErr)
+				aborted = true
+				continue
+			}
+
+			if verdict := classifyMissedSpend(current, item); verdict != nil {
+				validationErrors[i] = verdict
+				continue
+			}
+
+			// Spent with our exact spending data by someone else: idempotent.
+			successItems = append(successItems, item)
+			spentParentIDs[transactionID] = struct{}{}
 			continue
 		}
 
