@@ -321,6 +321,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MaxQueueItems:                        getInt64("blockassembly_maxQueueItems", 0, alternativeContext...),
 			QueueFullWaitTimeout:                 getDuration("blockassembly_queueFullWaitTimeout", 100*time.Millisecond, alternativeContext...),
 			TxMapDirs:                            getMultiString("blockassembly_txMapDirs", "|", []string{}, alternativeContext...),
+			SubtreeMmapDir:                       getString("blockassembly_subtreeMmapDir", "", alternativeContext...),
 		},
 
 		BlockChain: BlockChainSettings{
@@ -382,6 +383,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MaxBlocksBehindBlockAssembly:              getInt("blockvalidation_maxBlocksBehindBlockAssembly", 20, alternativeContext...),
 			PeriodicProcessingInterval:                getDuration("blockvalidation_periodic_processing_interval", 1*time.Minute, alternativeContext...),
 			RecentBlockIDsLimit:                       getUint64("blockvalidation_recentBlockIDsLimit", 50000, alternativeContext...),
+			SubtreeMmapDir:                            getString("blockvalidation_subtreeMmapDir", "", alternativeContext...),
 			// Catchup configuration
 			CatchupChBufferSize:                   getInt("blockvalidation_catchupCh_buffer_size", 100, alternativeContext...),
 			UseCatchupWhenBehind:                  getBool("blockvalidation_useCatchupWhenBehind", false, alternativeContext...),

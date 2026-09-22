@@ -44,6 +44,44 @@ func TestBlockAssemblyTxMapDirs_DefaultEmpty(t *testing.T) {
 		"default must be empty so the in-memory map stays the default behaviour")
 }
 
+// blockassembly_subtreeMmapDir and blockvalidation_subtreeMmapDir were dead the
+// same way blockassembly_txMapDirs was: both fields are declared with full
+// documentation and both are consumed downstream -- BlockAssembler passes
+// SubtreeMmapDir to subtreeprocessor.WithMmapDir, BlockValidation copies it to
+// its own mmapDir and branches on it in subtreeFromBytesWithMmap -- but
+// NewSettings never read either one. Both were therefore always "", so the
+// `!= ""` guards never fired and NewTreeByLeafCountMmap / NewSubtreeFromReaderMmap
+// were unreachable by any configuration. As with TxMapDirs there is no fallback
+// log line to find it by, because the mmap path is never entered at all.
+func TestBlockAssemblySubtreeMmapDir_EnvIsRead(t *testing.T) {
+	t.Setenv("blockassembly_subtreeMmapDir", "/data/subtree-mmap")
+
+	tSettings := NewSettings()
+
+	require.Equal(t, "/data/subtree-mmap", tSettings.BlockAssembly.SubtreeMmapDir,
+		"the path must reach the setting, or mmap-backed subtree Nodes can never be enabled")
+}
+
+func TestBlockValidationSubtreeMmapDir_EnvIsRead(t *testing.T) {
+	t.Setenv("blockvalidation_subtreeMmapDir", "/data/subtree-mmap")
+
+	tSettings := NewSettings()
+
+	require.Equal(t, "/data/subtree-mmap", tSettings.BlockValidation.SubtreeMmapDir,
+		"the path must reach the setting, or mmap-backed subtree loading can never be enabled")
+}
+
+// Unset must stay empty: that is what selects heap-allocated Nodes, which is the
+// documented default and the behaviour every existing deployment has today.
+func TestSubtreeMmapDir_DefaultEmpty(t *testing.T) {
+	tSettings := NewSettings()
+
+	require.Empty(t, tSettings.BlockAssembly.SubtreeMmapDir,
+		"default must be empty so heap-allocated Nodes stay the default behaviour")
+	require.Empty(t, tSettings.BlockValidation.SubtreeMmapDir,
+		"default must be empty so heap-allocated Nodes stay the default behaviour")
+}
+
 // knownDeadKeys are settings that are declared on Settings (and therefore
 // advertised to operators by ExportMetadata) but never read by NewSettings, so
 // configuring them does nothing at all. They are recorded here rather than
@@ -51,10 +89,8 @@ func TestBlockAssemblyTxMapDirs_DefaultEmpty(t *testing.T) {
 // retired, others are live bugs. blockassembly_txMapDirs was one of these until
 // it cost ~100 GB of block-assembly heap per node on dev-ovh-1.
 //
-// Two of these are worth calling out as the same bug in the same feature:
-// blockassembly_subtreeMmapDir and blockvalidation_subtreeMmapDir are the
-// subtree half of the mmap work that blockassembly_txMapDirs was the TxMap half
-// of. Any deployment that has mounted a volume for them is getting nothing.
+// blockassembly_subtreeMmapDir and blockvalidation_subtreeMmapDir -- the subtree
+// half of the same mmap feature -- were on this list and are now wired up.
 //
 // This list must only ever shrink. Delete an entry when you wire the key up.
 var knownDeadKeys = map[string]struct{}{
@@ -64,13 +100,11 @@ var knownDeadKeys = map[string]struct{}{
 	"postgres_circuitBreakerCooldown":              {},
 	"postgres_circuitBreakerFailureWindow":         {},
 	"aerospike_enable_preserve_filter_expressions": {},
-	"blockassembly_subtreeMmapDir":                 {},
 	"blockchain_postgres_pool":                     {},
 	"blockchain_raw_miner_tag":                     {},
 	"blockchain_subscription_timeout":              {},
 	"blockchain_peerRegistryStore":                 {},
 	"blockchain_peerRegistrySaveInterval":          {},
-	"blockvalidation_subtreeMmapDir":               {},
 	"utxostore_postgres_pool":                      {},
 	"p2p_peer_map_max_size":                        {},
 	"p2p_peer_map_ttl":                             {},
