@@ -179,6 +179,9 @@ func TestBlock_Valid_UnboundCoinbaseHeightDecodeFailureIsCorrupt(t *testing.T) {
 	coinbase := bt.NewTx()
 	require.NoError(t, coinbase.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0))
 	coinbase.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x04, 0x01})
+	// One output, so the coinbase transaction rules (bitcoin-sv/teranode#4835) pass and height
+	// extraction is what fails.
+	coinbase.AddOutput(&bt.Output{Satoshis: 0, LockingScript: bscript.NewFromBytes([]byte{bscript.OpTRUE})})
 	require.True(t, coinbase.IsCoinbase(), "fixture must still be a coinbase")
 
 	// Subtrees present but NO subtree store: CheckMerkleRoot never runs, so merkleRootChecked stays
