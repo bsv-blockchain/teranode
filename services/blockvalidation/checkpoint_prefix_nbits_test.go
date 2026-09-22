@@ -17,22 +17,33 @@ import (
 )
 
 // checkpointPrefixSettings puts the node inside a checkpoint-certified prefix it has not finished
-// building: a checkpoint at height 100, with only a height-1 block stored, so
-// model.SkipExpectedDifficulty's height predicate is satisfied for every block this test builds.
+// building: a checkpoint at height 100, with only a height-1 block stored.
+//
+// The chain parameters are teratestnet with a relaxed proof-of-work limit, not regtest. That matters
+// twice. The modern DAA is active from height 0 there, so the expected-nBits rule genuinely applies
+// to these fixtures; and regtest sets NoDifficultyAdjustment, which makes catch-up's header precheck
+// return nil immediately and would hide the composition this file is about.
 func checkpointPrefixSettings(t *testing.T) *settings.Settings {
 	t.Helper()
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.OptimisticMining = false
-	tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{
-		{Height: 100, Hash: &chainhash.Hash{0xEE}},
-	}
+
+	params := chaincfg.TeraTestNetParams
+	params.PowLimit = chaincfg.RegressionNetParams.PowLimit
+	params.PowLimitBits = 0x207fffff
+	params.Checkpoints = []chaincfg.Checkpoint{{Height: 100, Hash: &chainhash.Hash{0xEE}}}
+	tSettings.ChainCfgParams = &params
+
+	require.False(t, tSettings.ChainCfgParams.NoDifficultyAdjustment,
+		"fixture precondition: the difficulty rule must actually apply on this chain")
 
 	return tSettings
 }
 
 // storeHonestPrefixParent stores a genuine height-1 block mined at the difficulty the chain expects,
-// leaving the best height at 1 — below the checkpoint, so the node is still building the prefix.
+// leaving the best height at 1 — below the checkpoint, so the node is still building the prefix and
+// the height predicate that used to grant the shortcut is satisfied.
 func storeHonestPrefixParent(ctx context.Context, t *testing.T, client blockchain.ClientI, tSettings *settings.Settings) *model.Block {
 	t.Helper()
 
@@ -55,7 +66,7 @@ func storeHonestPrefixParent(ctx context.Context, t *testing.T, client blockchai
 	require.NoError(t, err)
 	require.Equal(t, uint32(1), best.Height, "fixture precondition: the node is still building the checkpoint prefix")
 	require.True(t, model.SkipExpectedDifficulty(tSettings.ChainCfgParams.Checkpoints, 2, best.Height),
-		"fixture precondition: the height predicate that grants the shortcut is satisfied")
+		"fixture precondition: the height predicate that used to grant the shortcut is satisfied")
 
 	return parent
 }
@@ -85,20 +96,24 @@ func difficulty1ChildOfHonestParent(ctx context.Context, t *testing.T, client bl
 	return child
 }
 
-// TestValidateBlock_BelowCheckpoint_DirectDeliveryStillEnforcesNBits closes the route that survived
-// the first round of this work (bitcoin-sv/teranode#4844).
+// TestValidateBlock_BelowCheckpoint_ExpectedNBitsAlwaysEnforced closes the route that survived two
+// rounds of this work (bitcoin-sv/teranode#4844).
 //
-// The checkpoint-prefix shortcut skipped the expected-nBits rule for ANY caller whose block sat
-// inside a prefix the node was still building. A directly peer-delivered block qualified, so while a
-// node was syncing a peer could extend an honest parent with a difficulty-1 block whose declared
-// bits were never checked against the chain it claims to extend. Merkle-bound, that block is
-// condemned and PERSISTED as invalid — and its difficulty-1 descendants then reach the
-// parent-invalid branch, which deliberately keeps their attacker-chosen unbound bodies. Both writes
-// cost difficulty 1, and initial sync is exactly when the node is most exposed.
+// The expected-nBits rule could be skipped for a block below the highest CONFIGURED checkpoint while
+// the node was still building that prefix. Height below a checkpoint does not establish that a block
+// is on the checkpointed chain, so the exemption was never sound — and neither of the two places
+// that were supposed to cover it does:
 //
-// The shortcut is now catch-up only. This asserts the discriminating behaviour directly: the SAME
-// block, in the SAME chain state, is rejected on the direct path and skipped on the catch-up path.
-func TestValidateBlock_BelowCheckpoint_DirectDeliveryStillEnforcesNBits(t *testing.T) {
+//   - the direct peer path has no header-level difficulty pipeline at all;
+//   - catch-up has one, but validateHeaderChainDifficulty DEFERS every header whose full 144-block
+//     window is not inside the fetched run — the first header and roughly its first 146 successors —
+//     naming this very check as the downstream cover for them. Narrowing the exemption to catch-up
+//     therefore composed the two skips into a hole rather than closing it.
+//
+// Both subtests below assert the same thing from the two delivery shapes, and the catch-up one
+// asserts the composition directly: the real precheck is run over the fetched header run and shown
+// to PASS the bad chain, after which the body validator must be the thing that rejects it.
+func TestValidateBlock_BelowCheckpoint_ExpectedNBitsAlwaysEnforced(t *testing.T) {
 	initPrometheusMetrics()
 
 	t.Run("direct peer delivery is rejected on expected nBits and persists nothing", func(t *testing.T) {
@@ -121,7 +136,7 @@ func TestValidateBlock_BelowCheckpoint_DirectDeliveryStillEnforcesNBits(t *testi
 		requireNothingPersisted(ctx, t, client, child.Hash())
 	})
 
-	t.Run("the same block still takes the shortcut on the catch-up path", func(t *testing.T) {
+	t.Run("catch-up delivery inside the precheck's skipped window is rejected too", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
@@ -131,17 +146,29 @@ func TestValidateBlock_BelowCheckpoint_DirectDeliveryStillEnforcesNBits(t *testi
 		parent := storeHonestPrefixParent(ctx, t, client, tSettings)
 		child := difficulty1ChildOfHonestParent(ctx, t, client, parent)
 
-		// Catch-up's own shape. It reaches here only after validateCatchupHeaderDifficulty has
-		// recomputed the DAA-required bits over the whole fetched header chain and struck the peer
-		// on a mismatch, which is what makes skipping the body-level check safe — and is why this
-		// subtest, which drives the body validator directly with no header pipeline in front of it,
-		// sees the block accepted. It is the positive control for the gate above: without it, the
-		// gate could be closing the shortcut for everyone and every other test would still pass.
-		err := bv.ValidateBlockWithOptions(ctx, child, "http://localhost", &ValidateBlockOptions{
+		_, anchorMeta, err := client.GetBlockHeader(ctx, tSettings.ChainCfgParams.GenesisHash)
+		require.NoError(t, err)
+
+		// The composition, asserted against the REAL precheck rather than described. This fetched
+		// run is two headers long, so every header in it is closer to the anchor than the 144-block
+		// window depth and validateHeaderChainDifficulty skips all of them — it returns nil for a
+		// chain whose second header carries the wrong difficulty bits. Catch-up's own doc comment
+		// names the body-level check as the cover for exactly these headers.
+		require.NoError(t,
+			validateHeaderChainDifficulty(tSettings, anchorMeta, []*model.BlockHeader{parent.Header, child.Header}),
+			"fixture precondition: the header precheck does NOT cover this block, which is why the body check must")
+
+		// So the body validator has to be what rejects it, even on the catch-up path.
+		err = bv.ValidateBlockWithOptions(ctx, child, "http://localhost", &ValidateBlockOptions{
 			CachedHeaders:           []*model.BlockHeader{parent.Header},
 			IsCatchupMode:           true,
 			DisableOptimisticMining: true,
 		})
-		require.NoError(t, err, "catch-up keeps the checkpoint-prefix shortcut")
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+		require.ErrorContains(t, err, "incorrect difficulty bits",
+			"catch-up must not be exempt: its header precheck defers near-anchor headers to this check")
+
+		requireNothingPersisted(ctx, t, client, child.Hash())
 	})
 }

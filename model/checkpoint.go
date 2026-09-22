@@ -98,6 +98,18 @@ func HighestCheckpointHash(checkpoints []chaincfg.Checkpoint) *chainhash.Hash {
 // (DAA) check because the pinned checkpoint hashes already certify the
 // difficulty schedule over its part of the chain.
 //
+// IT HAS NO PRODUCTION CALLER, deliberately, and must not be given one to gate the expected-nBits
+// rule (bitcoin-sv/teranode#4844). Block validation used it for exactly that and it was a hole. The
+// predicate is about HEIGHT, and as the third paragraph below already says, it "does not establish
+// checkpoint ancestry": being below a configured checkpoint is not the same as being ON the
+// checkpointed chain, so a peer could hand a syncing node a difficulty-1 chain whose declared bits
+// were never compared against anything. Catch-up's header precheck does not cover the gap either —
+// it defers the first ~147 headers of every fetched run, and every pre-DAA header, to precisely the
+// check this predicate was suppressing, and blocks genuinely certified by a checkpoint verified in
+// that run never reach the body validator at all. Block validation now runs the expected-nBits rule
+// unconditionally; the measured cost is about 10 microseconds per block. This function and its tests
+// are retained only as the record of the predicate's exact semantics.
+//
 // It requires the height to be inside the certified prefix AND the node to still
 // be building that prefix (bestHeight below the highest checkpoint). The second
 // conjunct is the fix: BelowCheckpoint alone is true for EVERY height in

@@ -2,90 +2,98 @@ package blockvalidation
 
 import (
 	"context"
-	"net/url"
 	"testing"
+	"time"
 
-	"github.com/bsv-blockchain/go-chaincfg"
-	"github.com/bsv-blockchain/go-wire"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/model"
-	"github.com/bsv-blockchain/teranode/services/blockchain"
-	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
-	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util/test"
+	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/stretchr/testify/require"
 )
 
-func TestSkipExpectedDifficulty_RebuildsInvalidatedPrefix(t *testing.T) {
-	ctx := context.Background()
-	tSettings := test.CreateBaseTestSettings(t)
-	storeURL, err := url.Parse("sqlitememory:///")
+// TestReconsider_BelowCheckpoint_RunsExpectedNBitsAndSucceeds is the executable guard for the caller
+// whose behaviour changed when the checkpoint-prefix shortcut was removed
+// (bitcoin-sv/teranode#4844).
+//
+// An operator reconsidering a below-checkpoint block used to skip the expected-nBits rule. It no
+// longer does, so that path now calls GetNextWorkRequired against a chain whose ancestors were just
+// invalidated. The argument that this is safe is that invalidation takes descendants off the main
+// chain but leaves their rows, their parent_id ancestry, their timestamps and their chainwork
+// queryable, and that the difficulty walk does not filter invalid rows — so the calculator still has
+// the history it needs and a genuinely mined block agrees with it.
+//
+// That argument is only worth what an execution of it is worth, so this drives the whole thing: two
+// genuinely mined post-DAA blocks below the checkpoint, the ancestor subtree invalidated, the
+// ancestor reconsidered, and then the descendant put back through the real reconsider pipeline.
+func TestReconsider_BelowCheckpoint_RunsExpectedNBitsAndSucceeds(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tSettings := checkpointPrefixSettings(t)
+	bv, client := newNoPersistHarness(ctx, t, tSettings)
+
+	// Height 1, genuinely mined at the expected difficulty.
+	parent := storeHonestPrefixParent(ctx, t, client, tSettings)
+
+	// Height 2, also genuinely mined at the expected difficulty — the block that will be
+	// reconsidered, and the one whose nBits the reconsider path now recomputes.
+	//
+	// One target spacing after its parent: this chain does not allow blocks to be generated
+	// quickly, so a timestamp merely equal to the parent's fails the median-time-past rule inside
+	// block.Valid and the reconsider would never reach the assertion this test is about.
+	childTimestamp := parent.Header.Timestamp + uint32(tSettings.ChainCfgParams.TargetTimePerBlock.Seconds()) //nolint:gosec
+
+	expected, err := client.GetNextWorkRequired(ctx, parent.Hash(), int64(childTimestamp))
 	require.NoError(t, err)
-	store, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close(ctx)) })
-	client, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, store, nil, nil)
+	require.NotNil(t, expected)
+
+	childCoinbase := coinbaseAtHeight(t, 2)
+	childHdr := minedHeaderWithBits(t, parent.Hash(), childCoinbase.TxIDChainHash(), *expected, childTimestamp)
+
+	child, err := model.NewBlock(childHdr, childCoinbase, []*chainhash.Hash{}, 1, uint64(childCoinbase.Size()), 2, 0)
 	require.NoError(t, err)
 
-	// Two synthetic blocks suffice to exercise the actual invalidation
-	// cascade and best-height lookup, independently of the historical DAA rules.
-	prev := tSettings.ChainCfgParams.GenesisHash
-	blocks := make([]*model.Block, 0, 2)
-	for height := uint32(1); height <= 2; height++ {
-		genesis := tSettings.ChainCfgParams.GenesisBlock
-		header := genesis.Header
-		header.PrevBlock = *prev
-		header.Nonce += height
-		coinbase := wire.NewMsgTx(1)
-		coinbase.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Index: 0xffffffff}, SignatureScript: []byte{1, byte(height)}, Sequence: 0xffffffff})
-		coinbase.AddTxOut(&wire.TxOut{Value: 50 * 100_000_000, PkScript: []byte{0x51}})
-		header.MerkleRoot = coinbase.TxHash()
-		block, err := model.NewBlockFromMsgBlock(&wire.MsgBlock{Header: header, Transactions: []*wire.MsgTx{coinbase}}, nil)
-		require.NoError(t, err)
-		require.NoError(t, client.AddBlock(ctx, block, "test"))
-		block.Height = height
-		blocks = append(blocks, block)
-		prev = block.Hash()
-	}
-	tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 2, Hash: blocks[1].Hash()}}
-	u := &BlockValidation{settings: tSettings, blockchainClient: client, logger: ulogger.TestLogger{}}
-	_, best, err := client.GetBestBlockHeader(ctx)
-	require.NoError(t, err)
-	require.Equal(t, uint32(2), best.Height)
-	require.False(t, u.skipExpectedDifficulty(ctx, blocks[0], true), "a completed prefix needs no stored-block exception")
+	require.NoError(t, client.AddBlock(ctx, child, "test",
+		blockchainoptions.WithMinedSet(true), blockchainoptions.WithSubtreesSet(true)))
 
-	_, err = client.InvalidateBlock(ctx, blocks[0].Hash())
-	require.NoError(t, err)
-	_, best, err = client.GetBestBlockHeader(ctx)
-	require.NoError(t, err)
-	require.Zero(t, best.Height, "invalidation must remove the whole descendant prefix")
-	require.True(t, u.skipExpectedDifficulty(ctx, blocks[0], true), "rebuilding this synthetic post-DAA prefix retains the syncing skip")
-	require.True(t, u.skipExpectedDifficulty(ctx, blocks[1], true))
+	require.True(t, model.BelowCheckpoint(tSettings.ChainCfgParams.Checkpoints, child.Height),
+		"fixture precondition: the reconsidered block sits inside the checkpoint prefix")
 
-	// The same two blocks, in the same rebuilding state, get NO shortcut off the catch-up path
-	// (bitcoin-sv/teranode#4844). Catch-up is the only route that has already enforced this rule
-	// over the whole fetched header chain, so it is the only route that may skip it here.
-	require.False(t, u.skipExpectedDifficulty(ctx, blocks[0], false), "the shortcut is catch-up only")
-	require.False(t, u.skipExpectedDifficulty(ctx, blocks[1], false), "the shortcut is catch-up only")
-}
+	// Invalidate the ANCESTOR, which takes the whole subtree below it off the main chain.
+	_, err = client.InvalidateBlock(ctx, parent.Hash())
+	require.NoError(t, err)
 
-func TestSkipExpectedDifficulty_EnforcesHistoricalRules(t *testing.T) {
-	ctx := context.Background()
-	s := test.CreateBaseTestSettings(t)
-	params := chaincfg.TestNetParams
-	s.ChainCfgParams = &params
-	store, err := blockchainstore.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, s)
+	_, childMeta, err := client.GetBlockHeader(ctx, child.Hash())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close(ctx)) })
-	client, err := blockchain.NewLocalClient(ulogger.TestLogger{}, s, store, nil, nil)
+	require.True(t, childMeta.Invalid, "fixture precondition: invalidating the ancestor condemns the descendant")
+
+	// Reconsider the ancestor. RevalidateBlock clears mined_set, so re-stamp it the way the
+	// setMined worker would; the descendant's validation waits on the parent's mined state.
+	require.NoError(t, client.RevalidateBlock(ctx, parent.Hash()))
+	require.NoError(t, client.SetBlockMinedSet(ctx, parent.Hash()))
+
+	// The difficulty inputs must still be reachable after the invalidation, which is the whole
+	// claim: the calculator walks parent_id and does not filter invalid rows.
+	recomputed, err := client.GetNextWorkRequired(ctx, parent.Hash(), int64(childTimestamp))
+	require.NoError(t, err, "the difficulty walk must survive the ancestor invalidation")
+	require.Equal(t, expected.String(), recomputed.String(),
+		"a genuinely mined block's expected bits must not change because its ancestor was invalidated")
+
+	// The reconsideration must be a fresh validation, not a result replayed from the once-per-block
+	// grace window.
+	time.Sleep(2 * validationResultGrace)
+
+	// Now the real reconsider pipeline, which since this change evaluates expected nBits for this
+	// block instead of skipping it.
+	err = bv.ValidateBlockWithOptions(ctx, child, "http://localhost", &ValidateBlockOptions{
+		IsRevalidation:          true,
+		DisableOptimisticMining: true,
+	})
+	require.NoError(t, err, "a genuinely mined below-checkpoint block must still reconsider cleanly")
+
+	_, childMeta, err = client.GetBlockHeader(ctx, child.Hash())
 	require.NoError(t, err)
-	u := &BlockValidation{settings: s, blockchainClient: client, logger: ulogger.TestLogger{}}
-	for _, height := range []uint32{149, params.DaaForkHeight - 1, params.DaaForkHeight, params.DaaForkHeight + 1} {
-		require.True(t, model.BelowCheckpoint(params.Checkpoints, height))
-		// A fresh store has no authenticated checkpoint ancestry. Pre-DAA
-		// deferral must reach the historical calculator in full validation.
-		wantSkip := height > params.DaaForkHeight
-		require.Equal(t, wantSkip, u.skipExpectedDifficulty(ctx, &model.Block{Height: height}, true), "height %d", height)
-		require.False(t, u.skipExpectedDifficulty(ctx, &model.Block{Height: height}, false),
-			"height %d: the shortcut is catch-up only", height)
-	}
+	require.False(t, childMeta.Invalid, "the reconsidered block must no longer be marked invalid")
 }
