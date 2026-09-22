@@ -2,6 +2,7 @@ package settings
 
 import (
 	"encoding/json"
+	"net/url"
 	"reflect"
 )
 
@@ -47,6 +48,34 @@ func redactValue(v reflect.Value) {
 
 	switch v.Kind() {
 	case reflect.Struct:
+		// A url.URL keeps its credentials in two places, and the JSON round-trip above handles
+		// neither well (bitcoin-sv/teranode#4844). The userinfo PASSWORD vanishes by accident,
+		// because url.Userinfo's fields are all unexported - but what comes back is a non-nil
+		// EMPTY Userinfo, which URL.String() renders as a stray "//@host". RawQuery, by contrast,
+		// is an exported string, so a credential carried as a query parameter survives the
+		// round-trip intact. Apply the same structural redaction the settings portal uses, drop
+		// the empty userinfo, and do not descend into the struct's own fields.
+		if v.Type() == reflect.TypeOf(url.URL{}) {
+			if v.CanSet() {
+				original, ok := v.Interface().(url.URL)
+				if !ok {
+					return
+				}
+
+				redacted := redactURL(&original)
+				if redacted.User != nil {
+					password, _ := redacted.User.Password()
+					if redacted.User.Username() == "" && password == "" {
+						redacted.User = nil
+					}
+				}
+
+				v.Set(reflect.ValueOf(*redacted))
+			}
+
+			return
+		}
+
 		t := v.Type()
 		for i := 0; i < v.NumField(); i++ {
 			f := t.Field(i)

@@ -2,6 +2,7 @@ package settings
 
 import (
 	"encoding/json"
+	"net/url"
 	"reflect"
 	"regexp"
 	"strings"
@@ -200,4 +201,42 @@ func TestRedactPreservesNonSecretFields(t *testing.T) {
 
 	// Secret value does not survive.
 	require.NotContains(t, js, sentinelSecret, "secret UserPwd value leaked through redaction")
+}
+
+// TestRedact_URLCredentialsDoNotSurviveJSONRoundTrip covers the startup settings dump
+// (bitcoin-sv/teranode#4844), which takes a different route to the same data than the settings
+// portal does: a JSON clone, then the tag-driven walker.
+//
+// The two credential positions in a URL behaved differently before the fix. The userinfo PASSWORD
+// vanished by accident, because url.Userinfo's fields are all unexported and json.Marshal emits
+// `{}` for it - leaving behind a non-nil empty Userinfo that URL.String() renders as a stray
+// "//@host". RawQuery, by contrast, is an exported string, so a credential carried as a query
+// parameter survived the round-trip intact and was logged. Both are now handled structurally.
+func TestRedact_URLCredentialsDoNotSurviveJSONRoundTrip(t *testing.T) {
+	const marker = "audit-secret-marker"
+
+	storeURL, err := url.Parse("postgres://audit-user:" + marker + "@db.internal:5432/chain?password=" + marker + "&partitions=4")
+	require.NoError(t, err)
+
+	in := &Settings{}
+	in.BlockChain.StoreURL = storeURL
+
+	out, err := Redact(in)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	data, err := json.Marshal(out)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), marker, "a URL credential leaked into the settings dump")
+
+	require.NotNil(t, out.BlockChain.StoreURL)
+
+	rendered := out.BlockChain.StoreURL.String()
+	require.NotContains(t, rendered, marker)
+	require.Contains(t, rendered, "db.internal:5432", "the backend must stay identifiable")
+	require.NotContains(t, rendered, "//@", "the empty userinfo the JSON round-trip leaves behind must be dropped")
+
+	// The caller's settings are untouched: these are live values the store constructors use.
+	require.Contains(t, in.BlockChain.StoreURL.String(), marker,
+		"Redact works on a clone and must never mutate the input")
 }

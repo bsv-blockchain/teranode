@@ -198,7 +198,7 @@ func formatValue(val reflect.Value) string {
 		// Special handling for url.URL struct
 		if val.Type() == reflect.TypeOf(url.URL{}) {
 			u := val.Interface().(url.URL)
-			return u.String()
+			return redactURL(&u).String()
 		}
 		return fmt.Sprintf("%v", val.Interface())
 	case reflect.Pointer:
@@ -253,7 +253,118 @@ func formatURL(u *url.URL) string {
 	if u == nil {
 		return ""
 	}
-	return u.String()
+
+	return redactURL(u).String()
+}
+
+// credentialQueryKeys are query-parameter names whose values are treated as secrets when a URL
+// setting is rendered for display. Matched case-insensitively as a substring of the parameter
+// name (bitcoin-sv/teranode#4844).
+var credentialQueryKeys = []string{
+	"password", "passwd", "pwd", "secret", "token", "api_key", "apikey",
+	"auth", "auth_key", "credential", "private_key", "access_key", "sas", "signature",
+}
+
+// redactURL returns a display copy of u with embedded credentials removed: the userinfo password
+// and any credential-bearing query parameter are replaced by the standard placeholder. Scheme,
+// user name, host, port, path and non-credential query parameters are preserved, because
+// operators need to see which backend a node points at (bitcoin-sv/teranode#4844).
+//
+// The name-based redact tag cannot see these: nothing in the key `blockchain_store` looks like a
+// secret, yet its documented production syntax is postgres://user:pass@host/db. Doing it
+// structurally here covers every URL setting at once, including ones added later.
+//
+// The URL is copied by VALUE and the caller's is never mutated: these are the live settings the
+// store constructors use, so mutating one would break the node.
+func redactURL(u *url.URL) *url.URL {
+	if u == nil {
+		return nil
+	}
+
+	c := *u
+
+	if c.User != nil {
+		if _, hasPassword := c.User.Password(); hasPassword {
+			c.User = url.UserPassword(c.User.Username(), redactedValue)
+		}
+	}
+
+	c.RawQuery = redactRawQuery(c.RawQuery)
+
+	return &c
+}
+
+// redactRawQuery replaces the values of credential-bearing query parameters, working on the RAW
+// query string rather than a parsed map.
+//
+// Two simpler designs leak. Scanning url.ParseQuery's MAP misses the offending key entirely when
+// the value carries a malformed escape (`password=%ZZ`), so the scan finds nothing, concludes the
+// query is clean, and preserves it byte-for-byte. Splitting the raw string on `&` alone misses
+// `a=1;password=secret`, which is then a single segment whose key parses as `a`.
+//
+// So url.ParseQuery is used ONLY as a yes/no validity oracle, never as a data source, and anything
+// the standard parser rejects has its whole query replaced. That trades display fidelity for
+// safety on malformed input, deliberately: an operator who wrote a malformed query string sees
+// `?********` instead of their parameters, a cosmetic annoyance they can diagnose from the config
+// file - the alternative is printing their password into the settings portal. Do not "improve"
+// this back.
+//
+// Well-formed queries are rewritten segment by segment rather than through Encode(), which would
+// reorder alphabetically and re-percent-encode, churning every kafka and aerospike URL in the
+// settings portal for no benefit.
+func redactRawQuery(rawQuery string) string {
+	if rawQuery == "" {
+		return ""
+	}
+
+	if _, err := url.ParseQuery(rawQuery); err != nil {
+		return redactedValue
+	}
+
+	segments := strings.Split(rawQuery, "&")
+	changed := false
+
+	for i, segment := range segments {
+		eq := strings.Index(segment, "=")
+		if eq < 0 {
+			// A valueless key such as `?password` carries no credential, so rewriting it would
+			// invent a secret that is not there.
+			continue
+		}
+
+		rawKey := segment[:eq]
+
+		key, err := url.QueryUnescape(rawKey)
+		if err != nil {
+			key = rawKey
+		}
+
+		if !isCredentialQueryKey(key) {
+			continue
+		}
+
+		segments[i] = rawKey + "=" + redactedValue
+		changed = true
+	}
+
+	if !changed {
+		return rawQuery
+	}
+
+	return strings.Join(segments, "&")
+}
+
+// isCredentialQueryKey reports whether a query-parameter name looks like it carries a secret.
+func isCredentialQueryKey(key string) bool {
+	lower := strings.ToLower(key)
+
+	for _, candidate := range credentialQueryKeys {
+		if strings.Contains(lower, candidate) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func formatStringSlice(s []string) string {
