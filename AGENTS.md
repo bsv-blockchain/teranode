@@ -18,6 +18,7 @@ make test           # Unit tests (no integration)
 make smoketest      # E2E smoke tests
 make sequentialtest # Order-dependent tests
 make testall        # Everything
+make fuzz           # Fuzz the parsers locally (FUZZTIME=30s default)
 make lint           # Changed files vs main
 make dev            # Dev mode with dashboard
 make gen            # Regenerate protobuf Go code
