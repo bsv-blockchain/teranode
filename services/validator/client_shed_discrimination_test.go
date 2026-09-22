@@ -179,7 +179,9 @@ func TestClient_MessageTooLargeStillFallsBackToHTTP(t *testing.T) {
 		validatorHTTPAddr: httpAddr,
 	}
 
-	_, err := c.ValidateWithOptions(context.Background(), shedTestTx(t), 100, NewDefaultOptions())
+	// Height 0: a caller-asserted height is refused before transmission, so the
+	// shape that still reaches the fallback is the mempool-submission one.
+	_, err := c.ValidateWithOptions(context.Background(), shedTestTx(t), 0, NewDefaultOptions())
 
 	// The HTTP fallback succeeded, so the call reports success without metadata.
 	require.NoError(t, err)

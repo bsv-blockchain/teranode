@@ -7,7 +7,8 @@
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
 | APIPrefix | string | "/api/v1" | asset_apiPrefix | URL prefix for API endpoints |
-| CentrifugeListenAddress | string | ":8892" | asset_centrifugeListenAddress | WebSocket server binding address |
+| CentrifugeListenAddress | string | ":8892" | asset_centrifugeListenAddress | Non-empty enables the WebSocket; not bound (served on Asset HTTP) |
+| CentrifugeAllowOrigins | string | "" | asset_centrifugeAllowOrigins | Pipe-separated extra browser origins allowed to open the WebSocket |
 | CentrifugeDisable | bool | false | asset_centrifuge_disable | Disables WebSocket server |
 | HTTPAddress | string | "`http://localhost:8090/api/v1`" | asset_httpAddress | **Required when Centrifuge enabled** - Must be non-empty and valid URL format |
 | HTTPListenAddress | string | ":8090" | asset_httpListenAddress | **CRITICAL** - HTTP server binding (fails during Init() if empty) |
@@ -135,8 +136,11 @@ asset_httpListenAddress=:8090
 
 ```bash
 asset_centrifuge_disable=false
+# Enables the websocket; not bound, the socket is served on Asset HTTP at /connection/websocket
 asset_centrifugeListenAddress=:8892
 asset_httpAddress=http://localhost:8090/api/v1
+# Only needed when a reverse proxy rewrites the Host header the Asset service sees
+asset_centrifugeAllowOrigins=https://dashboard.example.com
 ```
 
 ### HTTP Response Signing

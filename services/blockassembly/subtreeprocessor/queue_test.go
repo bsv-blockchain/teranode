@@ -60,66 +60,31 @@ func Test_queue(t *testing.T) {
 
 func Test_queueWithTime(t *testing.T) {
 	q := NewLockFreeQueue()
+	clock := &fixedClock{t: time.UnixMilli(1_000)}
+	q.clock = clock
 
-	enqueueBatches(t, q, 1, 10)
-
-	validFromMillis := time.Now().Add(-200 * time.Millisecond).UnixMilli()
-	_, found := q.dequeueBatch(validFromMillis)
-	require.False(t, found)
-
-	time.Sleep(50 * time.Millisecond)
-
-	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
-	_, found = q.dequeueBatch(validFromMillis)
-	require.False(t, found)
-
-	time.Sleep(200 * time.Millisecond)
-
-	batches := 0
-	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
-
-	for {
-		batch, found := q.dequeueBatch(validFromMillis)
-		if !found {
-			break
+	// Exercise both initial enqueue and reuse after draining without depending
+	// on scheduler delays or wall-clock sleeps.
+	for cycle := 0; cycle < 2; cycle++ {
+		enqueueBatches(t, q, 1, 10)
+		enqueuedAt := clock.Now().UnixMilli()
+		for _, cutoff := range []int64{enqueuedAt - 200, enqueuedAt - 150, enqueuedAt} {
+			_, found := q.dequeueBatch(cutoff)
+			require.False(t, found, "cutoff is exclusive")
+			require.Equal(t, int64(10), q.length())
 		}
 
-		assert.Greater(t, batch.time, int64(0))
-		batches++
-	}
-
-	assert.True(t, q.IsEmpty())
-	assert.Equal(t, 10, batches)
-
-	enqueueBatches(t, q, 1, 10)
-
-	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
-	_, found = q.dequeueBatch(validFromMillis)
-	require.False(t, found)
-
-	time.Sleep(50 * time.Millisecond)
-
-	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
-	_, found = q.dequeueBatch(validFromMillis)
-	require.False(t, found)
-
-	time.Sleep(200 * time.Millisecond)
-
-	batches = 0
-	validFromMillis = time.Now().Add(-200 * time.Millisecond).UnixMilli()
-
-	for {
-		batch, found := q.dequeueBatch(validFromMillis)
-		if !found {
-			break
+		for i := 0; i < 10; i++ {
+			batch, found := q.dequeueBatch(enqueuedAt + 1)
+			require.True(t, found)
+			require.Equal(t, enqueuedAt, batch.time)
+			require.Len(t, batch.nodes, 1)
 		}
-
-		assert.Greater(t, batch.time, int64(0))
-		batches++
+		require.True(t, q.IsEmpty())
+		_, found := q.dequeueBatch(enqueuedAt + 1)
+		require.False(t, found)
+		clock.t = clock.t.Add(time.Second)
 	}
-
-	assert.True(t, q.IsEmpty())
-	assert.Equal(t, 10, batches)
 }
 
 // Test_enqueueBatchUnboundedContract pins LockFreeQueue's current intake
@@ -616,6 +581,19 @@ func Test_headAgeGaugeConcurrentDrainRace(t *testing.T) {
 			persisted := true
 
 			for i := 0; i < 100_000; i++ {
+				// Yield the P between reads. On a constrained GOMAXPROCS (as CI
+				// runners commonly are) a tight loop of atomic-only reads never
+				// hits a cooperative preemption point on its own, so a producer
+				// that reserved queueLength but has not yet completed publish's
+				// CAS can be starved for the loop's entire duration - the
+				// documented one-batch skew then reads as "persisted" even
+				// though it is not a latched gauge, just a descheduled producer
+				// that never got a turn. Gosched gives that producer the
+				// scheduling opportunity the skew's self-healing depends on,
+				// so only a genuinely latched value - one that does not clear
+				// no matter how many turns other goroutines get - survives.
+				runtime.Gosched()
+
 				if q.headAgeMillis(nowMillis) != 0 || q.length() == 0 {
 					persisted = false
 					break

@@ -29,6 +29,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
+	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
 	p2pconstants "github.com/bsv-blockchain/teranode/interfaces/p2p"
 	"github.com/bsv-blockchain/teranode/model"
@@ -1865,15 +1866,9 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] block does not meet target difficulty: %s", block.Header.Hash().String(), err)
 		}
 
-		// Skip the expected-nBits (DAA) check for blocks at or below the highest checkpoint:
-		// the difficulty schedule over that prefix is already certified by the pinned
-		// checkpoint hashes, and re-deriving it would require reproducing every historical
-		// retarget rule exactly. block.Height is settled against the parent before this
-		// function runs (Server.deriveBlockHeight on the peer route; catchup and the operator
-		// revalidation endpoint carry authoritative heights), and BelowCheckpoint applies the
-		// mandatory height > 0 guard, so a peer cannot obtain the skip by declaring height 0
-		// or a fabricated sub-checkpoint height. The checkpoint hash-match itself was
-		// asserted above.
+		// Historical targets are always checked here, including during initial sync.
+		// Later blocks retain the existing checkpoint-prefix shortcut. Height is settled
+		// against the parent before this function runs.
 		skipDifficultyCheck := u.skipExpectedDifficulty(ctx, block)
 
 		if skipDifficultyCheck {
@@ -2978,16 +2973,19 @@ func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
 	}
 }
 
-// skipExpectedDifficulty decides whether this block may skip the expected-nBits
-// (DAA) check. It requires proof that the node is still building the
-// checkpoint-certified prefix, not merely that the block's height falls inside
-// it — see model.SkipExpectedDifficulty for why height alone is forgeable.
+// skipExpectedDifficulty retains the checkpoint-prefix shortcut only after DAA
+// activation. Historical blocks must reach the calculator because the native
+// catchup precheck defers them to full-block validation.
 //
 // Fail-closed: if the best height cannot be read we cannot show we are still
 // building the prefix, so the real rule runs. That is the safe direction; on a
 // syncing node the block is re-fetched and retried, whereas skipping wrongly
 // hands a peer free proof-of-work.
 func (u *BlockValidation) skipExpectedDifficulty(ctx context.Context, block *model.Block) bool {
+	if block.Height <= u.settings.ChainCfgParams.DaaForkHeight && u.settings.ChainCfgParams.Net != wire.STN {
+		return false
+	}
+
 	checkpoints := u.settings.ChainCfgParams.Checkpoints
 
 	if !model.BelowCheckpoint(checkpoints, block.Height) {
@@ -3001,7 +2999,7 @@ func (u *BlockValidation) skipExpectedDifficulty(ctx context.Context, block *mod
 	}
 
 	// Invalidation removes descendants from the best chain, so reconsidering
-	// historical blocks is covered by the syncing arm as the prefix is rebuilt.
+	// post-DAA blocks within the checkpoint prefix retains the syncing shortcut.
 	return model.SkipExpectedDifficulty(checkpoints, block.Height, bestMeta.Height)
 }
 
@@ -3092,8 +3090,7 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 		return errors.NewBlockInvalidError("[reValidateBlock][%s] block does not meet target difficulty: %s", blockData.block.Header.Hash().String(), err)
 	}
 
-	// Skip the expected-nBits (DAA) check for blocks at or below the highest checkpoint:
-	// the difficulty schedule over that prefix is certified by the pinned checkpoint hashes.
+	// Apply the same historical and checkpoint policy as ordinary validation.
 	skipDifficultyCheck := u.skipExpectedDifficulty(ctx, blockData.block)
 
 	if skipDifficultyCheck {

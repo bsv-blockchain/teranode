@@ -3267,6 +3267,11 @@ func (b *BlockAssembler) validateUnminedTxInputs(ctx context.Context, txHash cha
 
 		parentMeta, err := b.utxoStore.Get(ctx, parentHash, fields.Utxos)
 		if err != nil || parentMeta == nil {
+			// Log the offending tx and parent so CheckBlockAssemblyValidateInputs is
+			// diagnosable: a pruned parent of a live unmined tx (issue 1768) surfaces here.
+			b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d parent could not be loaded (err=%v, meta nil=%t) — counting as invalid",
+				txHash.String(), parentHash.String(), input.PreviousTxOutIndex, err, parentMeta == nil)
+
 			return false
 		}
 

@@ -4617,7 +4617,8 @@ func (s *Store) setUnlockedBulk(ctx context.Context, txHashes []chainhash.Hash) 
 //
 // Behavior:
 //   - onLongestChain=true: Clears unmined_since (transaction is mined on main chain)
-//   - onLongestChain=false: Sets unmined_since to current height (transaction is unmined)
+//   - onLongestChain=false: Keeps an existing unmined_since; a NULL value is stamped with
+//     utxo.BackdatedUnminedSince (see the Aerospike implementation for why)
 //
 // CRITICAL - Resilient Error Handling (Must Not Fail Fast):
 // This function attempts to update ALL transactions even if some fail. This is essential during
@@ -4695,10 +4696,15 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 			q = fmt.Sprintf(`UPDATE transactions SET unmined_since = NULL WHERE hash IN %s`, inClause)
 			args = inArgs
 		} else {
-			// currentBlockHeight is $1, hashes start at $2
+			// unminedSince is $1, hashes start at $2. COALESCE keeps an existing unmined_since;
+			// only a NULL value (mined -> unmined) is stamped, and it is backdated so the
+			// pruner's parent-preservation scan picks the transaction up on its next cycle
+			// (issue 1768; see utxo.BackdatedUnminedSince).
+			unminedSince := utxo.BackdatedUnminedSince(currentBlockHeight, s.settings.UtxoStore.UnminedTxRetention)
+
 			inClause, inArgs := buildINClause(chunk, 2)
-			q = fmt.Sprintf(`UPDATE transactions SET unmined_since = $1 WHERE hash IN %s`, inClause)
-			args = append([]interface{}{currentBlockHeight}, inArgs...)
+			q = fmt.Sprintf(`UPDATE transactions SET unmined_since = COALESCE(unmined_since, $1) WHERE hash IN %s`, inClause)
+			args = append([]interface{}{unminedSince}, inArgs...)
 		}
 
 		result, err := s.db.ExecContext(ctx, q, args...)

@@ -167,3 +167,23 @@ func TestPreserveSingleUnminedTransactionParents_Coverage_Removed(t *testing.T) 
 		})
 	*/
 }
+
+// BackdatedUnminedSince must hand a mined->unmined transaction straight to the phase-1
+// preservation scan: the value has to satisfy the scan's server-side range filter
+// [1, blockHeight - unminedTxRetention] at the very next pruner cycle.
+func TestBackdatedUnminedSince(t *testing.T) {
+	const retention = uint32(144)
+
+	assert.Equal(t, uint32(856), BackdatedUnminedSince(1000, retention))
+	assert.Equal(t, uint32(1), BackdatedUnminedSince(145, retention), "exactly one block past retention lands on the floor")
+	assert.Equal(t, uint32(1), BackdatedUnminedSince(144, retention), "height equal to retention floors at 1, never 0")
+	assert.Equal(t, uint32(1), BackdatedUnminedSince(10, retention), "height below retention floors at 1")
+	assert.Equal(t, uint32(1000), BackdatedUnminedSince(1000, 0), "zero retention stamps the current height")
+
+	// The stamped value must be <= the cutoff PreserveParentsOfOldUnminedTransactions uses at
+	// the same height, so the transaction is picked up on the next cycle.
+	for _, h := range []uint32{145, 200, 1000, 967060} {
+		cutoff := h - retention
+		assert.LessOrEqual(t, BackdatedUnminedSince(h, retention), cutoff, "height %d", h)
+	}
+}

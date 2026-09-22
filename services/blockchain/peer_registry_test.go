@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"strings"
 	"sync"
@@ -11,8 +12,10 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -866,6 +869,68 @@ func TestCentralizedPeerRegistry_Cleanup_LRUExemptsConnectedAndBanned(t *testing
 	require.Equal(t, 2, r.Count())
 }
 
+// TestCentralizedPeerRegistry_Cleanup_LRUAtProductionScale exercises the LRU
+// phase at the shipped defaults (p2p_peer_registry_max_size=10000,
+// p2p_peer_registry_ttl=24h): enough entries to force eviction, asserting
+// that eviction is strictly oldest-activity-first and that a connected,
+// recently-active peer survives regardless of how much LRU pressure there is.
+func TestCentralizedPeerRegistry_Cleanup_LRUAtProductionScale(t *testing.T) {
+	const maxSize = 10000
+	const ttl = 24 * time.Hour
+	const numExemptConnected = 1 // the one "connected" peer registered below
+	const numIdle = maxSize + 10 // deliberately more than needed to force eviction
+
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	// "connected" is registered first (oldest activity of everyone) so an
+	// activity-blind implementation would evict it first; it must survive
+	// purely because it is exempt, not because of recency.
+	r.Register(&PeerInfo{ID: "connected"})
+	r.UpdateConnectionState("connected", true)
+
+	base := time.Now().Add(-time.Hour)
+	r.mu.Lock()
+	for i := 0; i < numIdle; i++ {
+		id := fmt.Sprintf("idle-%05d", i)
+		// Strictly increasing activity: idle-00000 is oldest, the last one
+		// registered is freshest. All are within ttl, so only the LRU phase
+		// (not TTL) drives eviction here.
+		r.peers[id] = &PeerInfo{
+			ID:       id,
+			LastSeen: base.Add(time.Duration(i) * time.Second),
+		}
+	}
+	r.mu.Unlock()
+
+	// The non-exempt population (numIdle) must be trimmed down to
+	// maxSize-numExemptConnected so the registry as a whole (idle survivors +
+	// the exempt connected peer) settles at exactly maxSize.
+	wantSurvivingIdle := maxSize - numExemptConnected
+	wantEvicted := numIdle - wantSurvivingIdle
+
+	expired, lru := r.Cleanup(maxSize, ttl)
+	require.Equal(t, 0, expired, "all activity is within ttl; nothing should be TTL-evicted")
+	require.Equal(t, wantEvicted, lru, "LRU must evict exactly the amount by which the non-exempt population exceeds its target")
+	require.Equal(t, maxSize, r.Count(), "registry must be trimmed to exactly maxSize (including the exempt connected peer)")
+
+	// Oldest-activity-first: the wantEvicted oldest idle peers (lowest index)
+	// must be gone, and the survivors must be exactly the freshest ones.
+	for i := 0; i < wantEvicted; i++ {
+		id := fmt.Sprintf("idle-%05d", i)
+		_, ok := r.Get(id)
+		require.False(t, ok, "oldest-activity idle peer %s must be evicted first", id)
+	}
+	for i := wantEvicted; i < numIdle; i++ {
+		id := fmt.Sprintf("idle-%05d", i)
+		_, ok := r.Get(id)
+		require.True(t, ok, "fresher idle peer %s must survive LRU eviction", id)
+	}
+
+	got, ok := r.Get("connected")
+	require.True(t, ok, "connected peer must survive LRU eviction regardless of its recency")
+	require.True(t, got.IsConnected)
+}
+
 func TestCentralizedPeerRegistry_Cleanup_EvictsStaleConnected(t *testing.T) {
 	r := NewCentralizedPeerRegistry(DefaultBanConfig())
 
@@ -1114,6 +1179,72 @@ func TestCentralizedPeerRegistry_StartCleanup_ZeroIntervalIsNoOp(t *testing.T) {
 	require.NotPanics(t, func() {
 		r.StartCleanup(context.Background(), 0, time.Hour, 0)
 	})
+	r.Close()
+}
+
+// TestCentralizedPeerRegistry_StartCleanup_WiredFromSettings is the
+// load-bearing test for the settings.go fix: it drives StartCleanup with the
+// exact values settings.NewSettings() produces for
+// p2p_peer_registry_cleanup_interval/_ttl/_max_size, rather than
+// hand-written constants. Before that fix, NewSettings() always returned Go-
+// zero for all three regardless of what settings.conf said, and
+// StartCleanup(ctx, 0, ...) returns immediately (services/blockchain/peer_registry.go:934-937)
+// — so the loop never ran in production. A test that only calls StartCleanup
+// with literal non-zero arguments cannot catch that regression; this one
+// fails again the moment the settings.go wiring is reverted.
+func TestCentralizedPeerRegistry_StartCleanup_WiredFromSettings(t *testing.T) {
+	gocore.Config().Set("p2p_peer_registry_cleanup_interval", "20ms")
+	gocore.Config().Set("p2p_peer_registry_ttl", "300ms")
+	gocore.Config().Set("p2p_peer_registry_max_size", "1")
+	t.Cleanup(func() {
+		gocore.Config().Set("p2p_peer_registry_cleanup_interval", "")
+		gocore.Config().Set("p2p_peer_registry_ttl", "")
+		gocore.Config().Set("p2p_peer_registry_max_size", "")
+	})
+
+	tSettings := settings.NewSettings()
+	require.Equal(t, 20*time.Millisecond, tSettings.P2P.PeerRegistryCleanupInterval,
+		"settings.NewSettings() must read the cleanup interval override")
+	require.Equal(t, 300*time.Millisecond, tSettings.P2P.PeerRegistryTTL)
+	require.Equal(t, 1, tSettings.P2P.PeerRegistryMaxSize)
+
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	// "connected" is actively in use (e.g. a live gossip connection / current
+	// catchup source) and must survive both the TTL and the LRU phase even
+	// though it is never touched again after registration. "stale" is
+	// backdated past the TTL immediately (rather than relying on real time to
+	// age it past a short TTL, which races against however long the test
+	// scheduler takes to reach the first cleanup tick) so it is guaranteed
+	// stale on the very first sweep — deterministically well before
+	// "connected"'s own TTL window elapses.
+	r.Register(&PeerInfo{ID: "stale"})
+	r.mu.Lock()
+	r.peers["stale"].LastSeen = time.Now().Add(-time.Hour)
+	r.peers["stale"].LastMessageTime = time.Now().Add(-time.Hour)
+	r.mu.Unlock()
+
+	r.Register(&PeerInfo{ID: "connected"})
+	r.UpdateConnectionState("connected", true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	r.StartCleanup(ctx,
+		tSettings.P2P.PeerRegistryCleanupInterval,
+		tSettings.P2P.PeerRegistryTTL,
+		tSettings.P2P.PeerRegistryMaxSize,
+	)
+
+	require.Eventually(t, func() bool {
+		_, staleStillPresent := r.Get("stale")
+		return !staleStillPresent
+	}, 200*time.Millisecond, 5*time.Millisecond, "settings-derived cleanup loop must evict the stale peer")
+
+	got, ok := r.Get("connected")
+	require.True(t, ok, "an actively-connected peer must never be evicted by the settings-derived cleanup loop")
+	require.True(t, got.IsConnected)
+
 	r.Close()
 }
 

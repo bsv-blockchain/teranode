@@ -3,7 +3,6 @@ package subtreevalidation
 import (
 	"bufio"
 	"context"
-	"fmt"
 	"io"
 	"sort"
 	"sync"
@@ -129,7 +128,10 @@ func (u *Server) loadSubtreeBatch(ctx, fetchCtx context.Context, request *subtre
 				}
 			} else {
 				// get the subtree from the peer
-				url := fmt.Sprintf("%s/subtree/%s", request.BaseUrl, subtreeHash.String())
+				url, joinErr := util.JoinPeerURL(request.BaseUrl, "subtree", subtreeHash.String())
+				if joinErr != nil {
+					return errors.NewServiceError("[CheckBlockSubtrees][%s] invalid peer base URL", subtreeHash.String(), joinErr)
+				}
 
 				// Bound the body at the receive-side policy cap (MaxIncomingSubtreeBytes) so a
 				// malicious peer can't OOM us by streaming oversized responses. This must be
@@ -278,7 +280,14 @@ func (u *Server) loadSubtreeBatch(ctx, fetchCtx context.Context, request *subtre
 
 				if !subtreeDataExists {
 					// get the subtree data from the peer and process it directly
-					url := fmt.Sprintf("%s/subtree_data/%s", request.BaseUrl, subtreeHash.String())
+					url, joinErr := util.JoinPeerURL(request.BaseUrl, "subtree_data", subtreeHash.String())
+					if joinErr != nil {
+						// Reported on its own rather than through the fetch failure below: there
+						// is no target URL when the join is what failed, so "from <empty>" reads
+						// like a formatting bug rather than an unusable peer base URL. The base
+						// itself is not echoed, because it may carry credentials.
+						return errors.NewServiceError("[CheckBlockSubtrees][%s] invalid peer base URL", subtreeHash.String(), joinErr)
+					}
 
 					// Retry on 503 — peer's asset service may reject under admission control
 					// while it generates the file on-demand from Aerospike.
@@ -1215,7 +1224,7 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		u.logger.Debugf("[processTransactionsInLevels] Pre-check: %d/%d transactions missed in cache, checking UTXO store", missed, len(txHashes))
 
 		batched := u.settings.SubtreeValidation.BatchMissingTransactions
-		missed, err = u.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, blockIds, batched, false)
+		missed, err = u.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, blockIds, batched, false, true)
 		if err != nil {
 			return errors.NewProcessingError("[processTransactionsInLevels] Failed to check txMeta store", err)
 		}

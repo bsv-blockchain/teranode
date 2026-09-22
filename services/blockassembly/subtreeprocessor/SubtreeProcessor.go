@@ -3787,7 +3787,15 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// Assembly txs must be included because some may have entered the UTXO store via
 	// block validation of a non-longest-chain block (e.g., competing fork), where they
 	// were inserted with UnminedSince=0 (mined). These need unmined_since set.
-	// For txs that already have unmined_since set (from propagation), this is idempotent.
+	//
+	// This folds the WHOLE mempool into the mark-false set on every reorg. It is only safe
+	// because MarkTransactionsOnLongestChain(false) keeps an existing unmined_since and
+	// stamps only an absent one. Before that guard (issue 1768) every reorg rewrote
+	// unmined_since = currentBlockHeight across the mempool, which restarted the pruner's
+	// parent-preservation clock for every unmined child while each parent's deleteAtHeight
+	// kept counting from the original spend — a one-block fork opened a
+	// blockHeightRetention-unminedTxRetention window in which parents were pruned from
+	// under live children.
 	//
 	// MoveBack txs are handled by BlockAssembler.Reset (which calls
 	// MarkTransactionsOnLongestChain before reorgBlocks runs).

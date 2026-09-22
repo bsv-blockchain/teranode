@@ -17,9 +17,10 @@
 | ProcessTxMetaUsingCacheBatchSize | int | 1024 | blockvalidation_processTxMetaUsingCache_BatchSize | Cache processing batch size |
 | ProcessTxMetaUsingCacheConcurrency | int | 32 | blockvalidation_processTxMetaUsingCache_Concurrency | Cache processing concurrency |
 | ProcessTxMetaUsingCacheMissingTxThreshold | int | 1 | blockvalidation_processTxMetaUsingCache_MissingTxThreshold | Cache miss threshold |
-| ProcessTxMetaUsingStoreBatchSize | int | max(4, CPU/2) | blockvalidation_processTxMetaUsingStore_BatchSize | Store processing batch size |
-| ProcessTxMetaUsingStoreConcurrency | int | 32 | blockvalidation_processTxMetaUsingStore_Concurrency | Store processing concurrency |
+| ProcessTxMetaUsingStoreBatchSize | int | 1024 | blockvalidation_processTxMetaUsingStore_BatchSize | Store processing batch size |
+| ProcessTxMetaUsingStoreConcurrency | int | max(4, CPU/2) | blockvalidation_processTxMetaUsingStore_Concurrency | Store processing concurrency |
 | ProcessTxMetaUsingStoreMissingTxThreshold | int | 1 | blockvalidation_processTxMetaUsingStore_MissingTxThreshold | Store miss threshold |
+| ProcessTxMetaUsingStoreRetries | int | 3 | blockvalidation_processTxMetaUsingStore_Retries | Retries for a transient store failure; negative values clamp to 0 |
 | SkipCheckParentMined | bool | false | blockvalidation_skipCheckParentMined | Parent block mining validation |
 | SubtreeFoundChConcurrency | int | 1 | blockvalidation_subtreeFoundChConcurrency | Subtree processing concurrency |
 | SubtreeValidationAbandonThreshold | int | 1 | blockvalidation_subtree_validation_abandon_threshold | Subtree validation abandonment |

@@ -3390,6 +3390,124 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 func TestHandleListBannedComprehensive(t *testing.T) {
 	logger := mocklogger.NewTestLogger()
 
+	sourceErr := errors.New(errors.ERR_ERROR, "list banned failed")
+
+	// Deduplication regression coverage: the handler concatenated both sources
+	// verbatim, so an address reported by both services, or repeated by one
+	// service, appeared more than once in the response. Expected slices are
+	// hand-derived from the fixtures; exact-string equality only, no sorting,
+	// normalisation or filtering.
+	for _, tc := range []struct {
+		name              string
+		p2pOn, legacyOn   bool
+		p2p, legacy       []string
+		p2pErr, legacyErr error
+		want              []string
+	}{
+		{
+			name:     "overlap",
+			p2pOn:    true,
+			legacyOn: true,
+			p2p:      []string{"192.0.2.2", "192.0.2.1"},
+			legacy:   []string{"192.0.2.1", "198.51.100.1"},
+			want:     []string{"192.0.2.2", "192.0.2.1", "198.51.100.1"},
+		},
+		{
+			name:     "combined duplicates",
+			p2pOn:    true,
+			legacyOn: true,
+			p2p:      []string{"192.0.2.2", "192.0.2.1", "192.0.2.2"},
+			legacy:   []string{"192.0.2.1", "198.51.100.2", "198.51.100.1", "198.51.100.2"},
+			want:     []string{"192.0.2.2", "192.0.2.1", "198.51.100.2", "198.51.100.1"},
+		},
+		{
+			name:  "p2p duplicates",
+			p2pOn: true,
+			p2p:   []string{"192.0.2.2", "192.0.2.1", "192.0.2.2"},
+			want:  []string{"192.0.2.2", "192.0.2.1"},
+		},
+		{
+			name:     "legacy duplicates",
+			legacyOn: true,
+			legacy:   []string{"198.51.100.2", "198.51.100.1", "198.51.100.2"},
+			want:     []string{"198.51.100.2", "198.51.100.1"},
+		},
+		{
+			name:     "exact strings",
+			p2pOn:    true,
+			legacyOn: true,
+			p2p:      []string{"192.0.2.1", "", "2001:db8::1", "192.0.2.1"},
+			legacy:   []string{"192.0.2.1/32", "", "2001:0db8::1", "2001:DB8::1", " 192.0.2.1 "},
+			want:     []string{"192.0.2.1", "", "2001:db8::1", "192.0.2.1/32", "2001:0db8::1", "2001:DB8::1", " 192.0.2.1 "},
+		},
+		{name: "nil p2p", p2pOn: true},
+		{name: "empty p2p", p2pOn: true, p2p: []string{}, want: []string{}},
+		{name: "nil legacy", legacyOn: true},
+		{name: "empty legacy", legacyOn: true, legacy: []string{}},
+		{name: "nil p2p empty legacy", p2pOn: true, legacyOn: true, legacy: []string{}},
+		{name: "empty p2p nil legacy", p2pOn: true, legacyOn: true, p2p: []string{}, want: []string{}},
+		{name: "empty p2p empty legacy", p2pOn: true, legacyOn: true, p2p: []string{}, legacy: []string{}, want: []string{}},
+		{
+			name:     "p2p error ignores data",
+			p2pOn:    true,
+			legacyOn: true,
+			p2p:      []string{"203.0.113.1"},
+			p2pErr:   sourceErr,
+			legacy:   []string{"198.51.100.2", "198.51.100.1", "198.51.100.2"},
+			want:     []string{"198.51.100.2", "198.51.100.1"},
+		},
+		{
+			name:      "legacy error ignores data",
+			p2pOn:     true,
+			legacyOn:  true,
+			p2p:       []string{"192.0.2.2", "192.0.2.1", "192.0.2.2"},
+			legacy:    []string{"203.0.113.1"},
+			legacyErr: sourceErr,
+			want:      []string{"192.0.2.2", "192.0.2.1"},
+		},
+		{
+			name:      "both errors",
+			p2pOn:     true,
+			legacyOn:  true,
+			p2p:       []string{"192.0.2.1"},
+			p2pErr:    sourceErr,
+			legacy:    []string{"198.51.100.1"},
+			legacyErr: sourceErr,
+		},
+		{name: "p2p error alone", p2pOn: true, p2p: []string{"192.0.2.1"}, p2pErr: sourceErr},
+		{name: "legacy error alone", legacyOn: true, legacy: []string{"198.51.100.1"}, legacyErr: sourceErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Client presence keeps an absent client distinct from a present
+			// client returning a nil slice; the handler reads no settings.
+			s := &RPCServer{logger: logger}
+
+			if tc.p2pOn {
+				s.p2pClient = &mockP2PClient{
+					listBannedFunc: func(context.Context) ([]string, error) {
+						return tc.p2p, tc.p2pErr
+					},
+				}
+			}
+
+			if tc.legacyOn {
+				s.legacyP2PClient = &mockLegacyPeerClient{
+					listBannedFunc: func(context.Context, *emptypb.Empty) (*peer_api.ListBannedResponse, error) {
+						return &peer_api.ListBannedResponse{Banned: tc.legacy}, tc.legacyErr
+					},
+				}
+			}
+
+			result, err := handleListBanned(context.Background(), s, nil, nil)
+
+			require.NoError(t, err)
+			bannedList, ok := result.([]string)
+			require.True(t, ok)
+			// require.Equal on typed slices distinguishes nil from empty.
+			require.Equal(t, tc.want, bannedList)
+		})
+	}
+
 	t.Run("p2p client returns banned list", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
 			listBannedFunc: func(ctx context.Context) ([]string, error) {
@@ -3410,9 +3528,7 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		bannedList, ok := result.([]string)
 		require.True(t, ok)
-		assert.Len(t, bannedList, 2)
-		assert.Contains(t, bannedList, "192.168.1.100")
-		assert.Contains(t, bannedList, "10.0.0.0/24")
+		require.Equal(t, []string{"192.168.1.100", "10.0.0.0/24"}, bannedList)
 	})
 
 	t.Run("legacy peer client returns banned list", func(t *testing.T) {
@@ -3437,9 +3553,7 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		bannedList, ok := result.([]string)
 		require.True(t, ok)
-		assert.Len(t, bannedList, 2)
-		assert.Contains(t, bannedList, "172.16.0.1")
-		assert.Contains(t, bannedList, "192.168.0.0/16")
+		require.Equal(t, []string{"172.16.0.1", "192.168.0.0/16"}, bannedList)
 	})
 
 	t.Run("both clients return banned lists - combined", func(t *testing.T) {
@@ -3471,13 +3585,9 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		bannedList, ok := result.([]string)
 		require.True(t, ok)
-		assert.Len(t, bannedList, 4)
-		// P2P results come first
-		assert.Contains(t, bannedList, "192.168.1.100")
-		assert.Contains(t, bannedList, "10.0.0.0/24")
-		// Legacy results appended
-		assert.Contains(t, bannedList, "172.16.0.1")
-		assert.Contains(t, bannedList, "192.168.0.0/16")
+		// P2P results come first, legacy results appended; disjoint entries are
+		// all retained in that exact order.
+		require.Equal(t, []string{"192.168.1.100", "10.0.0.0/24", "172.16.0.1", "192.168.0.0/16"}, bannedList)
 	})
 
 	t.Run("p2p client error - continues with legacy", func(t *testing.T) {
@@ -3509,8 +3619,7 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		bannedList, ok := result.([]string)
 		require.True(t, ok)
-		assert.Len(t, bannedList, 1)
-		assert.Contains(t, bannedList, "172.16.0.1")
+		require.Equal(t, []string{"172.16.0.1"}, bannedList)
 	})
 
 	t.Run("no clients available - empty list", func(t *testing.T) {
@@ -3526,7 +3635,7 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		bannedList, ok := result.([]string)
 		require.True(t, ok)
-		assert.Empty(t, bannedList)
+		require.Nil(t, bannedList)
 	})
 
 	t.Run("p2p client timeout", func(t *testing.T) {
@@ -3559,7 +3668,85 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		bannedList, ok := result.([]string)
 		require.True(t, ok)
-		assert.Empty(t, bannedList) // Timeout results in empty list
+		require.Nil(t, bannedList) // Timeout results in empty list
+	})
+
+	t.Run("source slice unchanged", func(t *testing.T) {
+		source := []string{"192.0.2.2", "192.0.2.1", "192.0.2.2", "198.51.100.1"}
+
+		s := &RPCServer{
+			logger: logger,
+			p2pClient: &mockP2PClient{
+				listBannedFunc: func(context.Context) ([]string, error) {
+					return source, nil
+				},
+			},
+		}
+
+		result, err := handleListBanned(context.Background(), s, nil, nil)
+
+		require.NoError(t, err)
+		bannedList, ok := result.([]string)
+		require.True(t, ok)
+		require.Equal(t, []string{"192.0.2.2", "192.0.2.1", "198.51.100.1"}, bannedList)
+		// Deduplication must not compact the source-owned slice in place.
+		require.Equal(t, []string{"192.0.2.2", "192.0.2.1", "192.0.2.2", "198.51.100.1"}, source)
+	})
+
+	t.Run("legacy cancellation retains deduplicated p2p", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+
+		legacyStarted := make(chan struct{})
+
+		s := &RPCServer{
+			logger: logger,
+			p2pClient: &mockP2PClient{
+				listBannedFunc: func(context.Context) ([]string, error) {
+					return []string{"192.0.2.2", "192.0.2.1", "192.0.2.2"}, nil
+				},
+			},
+			legacyP2PClient: &mockLegacyPeerClient{
+				listBannedFunc: func(ctx context.Context, _ *emptypb.Empty) (*peer_api.ListBannedResponse, error) {
+					close(legacyStarted)
+					<-ctx.Done()
+
+					return nil, ctx.Err()
+				},
+			},
+		}
+
+		type callResult struct {
+			value interface{}
+			err   error
+		}
+
+		done := make(chan callResult, 1)
+
+		go func() {
+			value, err := handleListBanned(ctx, s, nil, nil)
+			done <- callResult{value: value, err: err}
+		}()
+
+		// Cancel only once the legacy call is in flight, so the sequential
+		// handler has already collected the P2P result. Either the context
+		// branch or the canceled stub result may win; both must keep that data.
+		select {
+		case <-legacyStarted:
+			cancel()
+		case <-time.After(time.Second):
+			t.Fatal("legacy call did not start")
+		}
+
+		select {
+		case result := <-done:
+			require.NoError(t, result.err)
+			bannedList, ok := result.value.([]string)
+			require.True(t, ok)
+			require.Equal(t, []string{"192.0.2.2", "192.0.2.1"}, bannedList)
+		case <-time.After(time.Second):
+			t.Fatal("handler did not return after cancellation")
+		}
 	})
 }
 

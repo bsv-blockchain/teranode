@@ -105,8 +105,8 @@ github.com/benbjohnson/clock v1.3.5 h1:VvXlSJBzZpA/zum6Sj74hxwYI2DIxRWuNIoXAzHZz
 github.com/benbjohnson/clock v1.3.5/go.mod h1:J11/hYXuz8f4ySSvYwY0FKfm+ezbsZBKZxNJlLklBHA=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
-github.com/bitcoin-sv/bdk/module/gobdk v1.2.5-0.20260526081552-cdfa7814ee5d h1:bSTJ5f/DpTWPpnheayyZje7MK0bMSgB5xuWaxh/AOHY=
-github.com/bitcoin-sv/bdk/module/gobdk v1.2.5-0.20260526081552-cdfa7814ee5d/go.mod h1:XxBr/Y+e+pMw3+e2xYECvEayfZM3RX3n0jVvOGC3krE=
+github.com/bitcoin-sv/bdk/module/gobdk v1.2.5-0.20260918043653-4eab3acdbbb9 h1:N50HOHr6u8UP3zfGByTG5+gYbwhSNRMkTr6O8TwodiM=
+github.com/bitcoin-sv/bdk/module/gobdk v1.2.5-0.20260918043653-4eab3acdbbb9/go.mod h1:XxBr/Y+e+pMw3+e2xYECvEayfZM3RX3n0jVvOGC3krE=
 github.com/bitcoinschema/go-bitcoin v0.3.20 h1:jWKT7ePYm4dPaIR2aIAVL8BwdsYtuG/4B87l1+KZyWs=
 github.com/bitcoinschema/go-bitcoin v0.3.20/go.mod h1:HyyMGUTtGE1qOgFJzCmvgsf3y55IfxJ+qLbwRm4Ski4=
 github.com/bitcoinsv/bsvd v0.0.0-20190609155523-4c29707f7173 h1:2yTIV9u7H0BhRDGXH5xrAwAz7XibWJtX2dNezMeNsUo=
@@ -765,8 +765,8 @@ github.com/opencontainers/selinux v1.13.1 h1:A8nNeceYngH9Ow++M+VVEwJVpdFmrlxsN22
 github.com/opencontainers/selinux v1.13.1/go.mod h1:S10WXZ/osk2kWOYKy1x2f/eXF5ZHJoUs8UU/2caNRbg=
 github.com/ordishs/go-bitcoin v1.0.88 h1:sfqBOda6HbEx2Ums4l+ZrYQZablt7cTYfsYJqE9J0oA=
 github.com/ordishs/go-bitcoin v1.0.88/go.mod h1:v3amNoOpGHOROlsisXHKsBbsAK2+J2kAhHBbyxgltRA=
-github.com/ordishs/gocore v1.0.82 h1:jkfvIN4viAYJfKX6gEhuIPVvOn6cWMt0LhN15V5JoiY=
-github.com/ordishs/gocore v1.0.82/go.mod h1:8/PDn0aIq7/AQcrGBXHE1rkw8bkd33bwgCo2SXDq09s=
+github.com/ordishs/gocore v1.1.0 h1:P6TKSIka7JO0nbUWQCrXt77JJWDcTjTK0JcetG9e4Is=
+github.com/ordishs/gocore v1.1.0/go.mod h1:8/PDn0aIq7/AQcrGBXHE1rkw8bkd33bwgCo2SXDq09s=
 github.com/orisano/pixelmatch v0.0.0-20220722002657-fb0b55479cde/go.mod h1:nZgzbfBr3hhjoZnS66nKrHmduYNpc34ny7RK4z5/HM0=
 github.com/outcaste-io/ristretto v0.2.3 h1:AK4zt/fJ76kjlYObOeNwh4T3asEuaCmp26pOvUOL9w0=
 github.com/outcaste-io/ristretto v0.2.3/go.mod h1:W8HywhmtlopSB1jeMg3JtdIhf+DYkLAr0VN/s4+MHac=

@@ -1,6 +1,6 @@
 # 🖥 Developer Setup - Pre-requisites and Installation
 
-This guide assists you in setting up the Teranode project on your machine. The below assumes you are running a recent version of Mac OS.
+This guide assists you in setting up the Teranode project on your machine. The below assumes you are running a recent version of Mac OS on Apple Silicon (arm64). GoBDK ships prebuilt static libraries for `darwin/arm64`, `linux/amd64` and `linux/arm64` only — Intel Macs (`darwin/amd64`) are not a supported build target.
 
 ## Index
 

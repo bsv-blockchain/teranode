@@ -485,6 +485,55 @@ func Test_Server_processBlockFound(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// Test_Server_processBlockFound_BoundsPeerFetchDeadline covers ChiR2 from the #1741 review:
+// processBlockFound's fetch path runs on the block-processing worker's service-lifetime
+// context, which carries no deadline of its own. Before wrapping the fetchSingleBlock call in
+// an explicit context.WithTimeout, DoHTTPRequestBodyReader's own default-timeout fallback
+// (used since bitcoin-sv/teranode#4742 in place of the old io.ReadAll-based DoHTTPRequest)
+// would silently apply http_streaming_timeout (600 s in settings.conf) instead of the 30 s budget every
+// sibling fetchSingleBlock call site sets explicitly - a 20x wider window for a hostile or
+// slow peer. Assert the peer HTTP request actually carries a deadline no wider than that
+// budget, not just that the fetch succeeds.
+func Test_Server_processBlockFound_BoundsPeerFetchDeadline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s, _, block := newProcessBlockFoundHarness(ctx, t)
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	var sawDeadline bool
+	var remaining time.Duration
+
+	httpmock.RegisterResponder(
+		"GET",
+		"http://test-peer/block/"+block.Hash().String(),
+		func(req *http.Request) (*http.Response, error) {
+			deadline, ok := req.Context().Deadline()
+			sawDeadline = ok
+
+			if ok {
+				remaining = time.Until(deadline)
+			}
+
+			blockBytes, err := block.Bytes()
+			require.NoError(t, err)
+
+			return httpmock.NewBytesResponse(200, blockBytes), nil
+		},
+	)
+
+	// No useBlock argument here, unlike every other processBlockFound test in this file: this
+	// is the one exercising the actual fetchSingleBlock HTTP path rather than bypassing it.
+	err := s.processBlockFound(context.Background(), block.Hash(), "peerA", "http://test-peer")
+	require.NoError(t, err)
+
+	require.True(t, sawDeadline, "peer block fetch must run under a bounded context deadline, not an unbounded one")
+	require.Greater(t, remaining, time.Duration(0))
+	require.LessOrEqual(t, remaining, peerBlockFetchTimeout+time.Second, "peer fetch deadline must not silently widen to the http_streaming_timeout fallback")
+}
+
 // Test_Server_processBlockFound_SettlesPeerSuppliedHeight pins the height settlement at the
 // funnel itself, not just the deriveBlockHeight helper in isolation. block.Height is a varint
 // in the block body and is not covered by the header hash, so on the peer-fetched route it is
@@ -696,7 +745,6 @@ func TestServer_catchup(t *testing.T) {
 			logger:              logger,
 			settings:            tSettings,
 			blockchainClient:    mockBlockchainClient,
-			blockValidation:     NewBlockValidation(testCtx, logger, tSettings, mockBlockchainClient, subtreeStore, nil, nil, nil, nil),
 			utxoStore:           utxoStore,
 			processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
 			catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
@@ -723,6 +771,8 @@ func TestServer_catchup(t *testing.T) {
 
 		// Set the best block to the last stored block (block 49)
 		mockBlockchainStore.BestBlock = blocks[49]
+		// Start subscription readers only after the mock's best block is set.
+		server.blockValidation = NewBlockValidation(testCtx, logger, tSettings, mockBlockchainClient, subtreeStore, nil, nil, nil, nil)
 
 		// Build headers response - should include common ancestor (block 49) and new blocks (50-99)
 		// Headers should be in order from oldest to newest

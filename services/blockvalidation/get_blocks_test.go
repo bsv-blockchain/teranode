@@ -827,7 +827,299 @@ func TestFetchBlocksBatch_CurrentBehavior(t *testing.T) {
 		assert.Contains(t, err.Error(), "failed to get blocks from peer")
 		require.Nil(t, fetchedBlocks)
 	})
+
+	// A peer that keeps streaming well-formed blocks past what was requested must not grow
+	// the result past n: before bitcoin-sv/teranode#4742, fetchBlocksBatch read the whole
+	// response into memory and looped until EOF, so a malicious/misbehaving peer answering
+	// "n=1" with 3 blocks would return all 3 to the caller.
+	t.Run("Peer Sends More Blocks Than Requested", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		blocks := testhelpers.CreateTestBlockChain(t, 4)
+		targetHash := blocks[1].Header.Hash()
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder(
+			"GET",
+			fmt.Sprintf("http://test-peer/blocks/%s?n=1", targetHash.String()),
+			httpmock.NewBytesResponder(200, func() []byte {
+				var allBytes []byte
+				for i := 1; i <= 3; i++ {
+					blockBytes, _ := blocks[i].Bytes()
+					allBytes = append(allBytes, blockBytes...)
+				}
+				return allBytes
+			}()),
+		)
+
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "test-peer-id", "http://test-peer")
+		require.NoError(t, err)
+		require.Len(t, fetchedBlocks, 1, "must stop at the requested count, not read every block the peer chose to send")
+		assert.Equal(t, targetHash, fetchedBlocks[0].Header.Hash())
+	})
+
+	// A block message's subtree hash list length is an unvalidated wire varint
+	// (model/Block.go), so streaming the parse instead of io.ReadAll-ing the response only
+	// halves peak memory - it does not bound it. Without a per-message byte cap a peer can
+	// still drive the parsed *model.Block unboundedly large (bitcoin-sv/teranode#4742,
+	// review of #1741, ChiR1).
+	t.Run("Peer Sends A Block Message Exceeding The Byte Cap", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		blocks := testhelpers.CreateTestBlockChain(t, 2)
+		targetHash := blocks[1].Header.Hash()
+
+		blockBytes, err := blocks[1].Bytes()
+		require.NoError(t, err)
+
+		// The cap sits strictly below the real (valid) block's size, so the only way this
+		// fetch can fail is the cap tripping - not a malformed message.
+		suite.Server.settings.BlockValidation.MaxIncomingBlockMessageBytes = int64(len(blockBytes) / 2)
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder(
+			"GET",
+			fmt.Sprintf("http://test-peer/blocks/%s?n=1", targetHash.String()),
+			httpmock.NewBytesResponder(200, blockBytes),
+		)
+
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "test-peer-id", "http://test-peer")
+		require.Error(t, err)
+		require.Nil(t, fetchedBlocks)
+		assert.Contains(t, err.Error(), "exceeds")
+		assert.Contains(t, err.Error(), "byte limit")
+		assert.True(t, errors.Is(err, errors.ErrExternal), "an over-cap block message must be classified as a peer/external error, got: %v", err)
+	})
 }
+
+// TestBatchFetchAndDistribute_BoundsPeerFetchDeadline covers ChiR2 from the #1741 review:
+// batchFetchAndDistribute's ctx descends from the catchup channel consumer's service-lifetime
+// context, which carries no deadline of its own. Before wrapping the fetchBlocksBatch call in
+// an explicit context.WithTimeout, DoHTTPRequestBodyReader's own default-timeout fallback
+// (used since bitcoin-sv/teranode#4742) would silently apply http_streaming_timeout (600 s in
+// settings.conf) instead of the 30 s budget the equivalent fetchSingleBlock call sites already used.
+// Assert the peer HTTP request actually carries a deadline no wider than that budget.
+func TestBatchFetchAndDistribute_BoundsPeerFetchDeadline(t *testing.T) {
+	suite := NewCatchupTestSuite(t)
+	defer suite.Cleanup()
+
+	blocks := testhelpers.CreateTestBlockChain(t, 2)
+	targetBlock := blocks[1]
+	blockHeaders := []*model.BlockHeader{targetBlock.Header}
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	var sawDeadline bool
+	var remaining time.Duration
+
+	httpmock.RegisterResponder(
+		"GET",
+		fmt.Sprintf("http://test-peer/blocks/%s?n=1", targetBlock.Header.Hash().String()),
+		func(req *http.Request) (*http.Response, error) {
+			deadline, ok := req.Context().Deadline()
+			sawDeadline = ok
+
+			if ok {
+				remaining = time.Until(deadline)
+			}
+
+			blockBytes, err := targetBlock.Bytes()
+			require.NoError(t, err)
+
+			return httpmock.NewBytesResponse(200, blockBytes), nil
+		},
+	)
+
+	workQueue := make(chan workItem, 1)
+
+	err := suite.Server.batchFetchAndDistribute(context.Background(), blockHeaders, workQueue, "peerA", "http://test-peer", targetBlock, 1, 0)
+	require.NoError(t, err)
+
+	require.True(t, sawDeadline, "peer block-batch fetch must run under a bounded context deadline, not an unbounded one")
+	require.Greater(t, remaining, time.Duration(0))
+	require.LessOrEqual(t, remaining, peerBlockFetchTimeout+time.Second, "peer fetch deadline must not silently widen to the http_streaming_timeout fallback")
+}
+
+// overSendP2PClient records UpdateCatchupError calls (the diagnostic path fetchBlocksBatch's
+// over-send probe uses) and how many times any reputation-affecting P2PClientI method was
+// invoked; every other method is inherited as a no-op from maliciousAbortP2PClient.
+type overSendP2PClient struct {
+	maliciousAbortP2PClient
+	updateCatchupErrorCalls int
+	lastCatchupError        string
+	reputationChargingCalls int
+}
+
+func (o *overSendP2PClient) UpdateCatchupError(_ context.Context, _ string, errorMsg string) error {
+	o.updateCatchupErrorCalls++
+	o.lastCatchupError = errorMsg
+	return nil
+}
+
+func (o *overSendP2PClient) RecordCatchupFailure(_ context.Context, _ string) error {
+	o.reputationChargingCalls++
+	return nil
+}
+
+func (o *overSendP2PClient) RecordCatchupFailureWithKind(_ context.Context, _, _, _ string) error {
+	o.reputationChargingCalls++
+	return nil
+}
+
+func (o *overSendP2PClient) RecordCatchupMalicious(_ context.Context, _ string) error {
+	o.reputationChargingCalls++
+	return nil
+}
+
+func (o *overSendP2PClient) AddBanScore(_ context.Context, _, _ string) error {
+	o.reputationChargingCalls++
+	return nil
+}
+
+// TestFetchBlocksBatch_OverSendIsDiagnosticOnly covers ChiR3 from the #1741 review: stopping the
+// fetch loop at n (rather than reading every block the peer chose to send) means a peer padding
+// correct data with extra blocks no longer aborts the whole catchup cycle - which is the right
+// behaviour - but it also made the anomaly completely silent. The probe added after the loop
+// must record the observation on the peer dashboard without charging reputation for it: padding
+// on top of correct data is at least as likely to be a caching proxy or ?n= version skew as it
+// is malice (mirrors the ErrBlockPolicyDeclined exemption in peer_metrics_helpers.go).
+func TestFetchBlocksBatch_OverSendIsDiagnosticOnly(t *testing.T) {
+	t.Run("peer sends more than requested: recorded, not charged", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		p2pClient := &overSendP2PClient{}
+		suite.Server.p2pClient = p2pClient
+
+		blocks := testhelpers.CreateTestBlockChain(t, 4)
+		targetHash := blocks[1].Header.Hash()
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder(
+			"GET",
+			fmt.Sprintf("http://test-peer/blocks/%s?n=1", targetHash.String()),
+			httpmock.NewBytesResponder(200, func() []byte {
+				var allBytes []byte
+				for i := 1; i <= 3; i++ {
+					blockBytes, _ := blocks[i].Bytes()
+					allBytes = append(allBytes, blockBytes...)
+				}
+				return allBytes
+			}()),
+		)
+
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "peerA", "http://test-peer")
+		require.NoError(t, err)
+		require.Len(t, fetchedBlocks, 1, "the requested block must still be returned, not discarded on padding")
+
+		require.Equal(t, 1, p2pClient.updateCatchupErrorCalls, "the over-send must be recorded diagnostically")
+		assert.Contains(t, p2pClient.lastCatchupError, "over-sent")
+		require.Equal(t, 0, p2pClient.reputationChargingCalls, "an over-sending peer must never be reputation-charged for it")
+	})
+
+	t.Run("peer sends exactly what was requested: nothing recorded", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		p2pClient := &overSendP2PClient{}
+		suite.Server.p2pClient = p2pClient
+
+		blocks := testhelpers.CreateTestBlockChain(t, 2)
+		targetHash := blocks[1].Header.Hash()
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder(
+			"GET",
+			fmt.Sprintf("http://test-peer/blocks/%s?n=1", targetHash.String()),
+			httpmock.NewBytesResponder(200, func() []byte {
+				blockBytes, _ := blocks[1].Bytes()
+				return blockBytes
+			}()),
+		)
+
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "peerA", "http://test-peer")
+		require.NoError(t, err)
+		require.Len(t, fetchedBlocks, 1)
+
+		require.Equal(t, 0, p2pClient.updateCatchupErrorCalls, "an honest peer answering exactly n must not be flagged")
+	})
+
+	// A peer can send the n blocks and then never end the response. The probe must give up on
+	// its own short budget rather than hold the read until the fetch deadline (review of #1741,
+	// ChiR6).
+	t.Run("peer holds the response open after n blocks: probe gives up quickly", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		p2pClient := &overSendP2PClient{}
+		suite.Server.p2pClient = p2pClient
+
+		blocks := testhelpers.CreateTestBlockChain(t, 2)
+		targetHash := blocks[1].Header.Hash()
+
+		blockBytes, err := blocks[1].Bytes()
+		require.NoError(t, err)
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder(
+			"GET",
+			fmt.Sprintf("http://test-peer/blocks/%s?n=1", targetHash.String()),
+			func(req *http.Request) (*http.Response, error) {
+				resp := httpmock.NewBytesResponse(200, nil)
+				resp.Body = &stallAfterDataBody{data: blockBytes, done: req.Context().Done()}
+
+				return resp, nil
+			},
+		)
+
+		// suite.Ctx carries a 30s deadline, so without the probe's own budget this would take
+		// the whole 30s and still return success.
+		start := time.Now()
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "peerA", "http://test-peer")
+		elapsed := time.Since(start)
+
+		require.NoError(t, err)
+		require.Len(t, fetchedBlocks, 1)
+		require.Less(t, elapsed, overSendProbeTimeout+3*time.Second, "the over-send probe must not hold the read until the fetch deadline")
+		require.Equal(t, 0, p2pClient.updateCatchupErrorCalls, "a stall is not an over-send and must not be reported as one")
+	})
+}
+
+// stallAfterDataBody serves data and then blocks, like a peer that never ends the response,
+// until done closes.
+type stallAfterDataBody struct {
+	data []byte
+	off  int
+	done <-chan struct{}
+}
+
+func (b *stallAfterDataBody) Read(p []byte) (int, error) {
+	if b.off < len(b.data) {
+		n := copy(p, b.data[b.off:])
+		b.off += n
+
+		return n, nil
+	}
+
+	<-b.done
+
+	return 0, context.Canceled
+}
+
+func (b *stallAfterDataBody) Close() error { return nil }
 
 // TestFetchSingleBlock_CurrentBehavior documents the current behavior of fetchSingleBlock function
 func TestFetchSingleBlock_CurrentBehavior(t *testing.T) {
@@ -905,6 +1197,38 @@ func TestFetchSingleBlock_CurrentBehavior(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to create block from bytes")
 		require.Nil(t, fetchedBlock)
+	})
+
+	// See the matching fetchBlocksBatch case ("Peer Sends A Block Message Exceeding The Byte
+	// Cap") for why a per-message byte cap is needed even with the streamed parse
+	// (bitcoin-sv/teranode#4742, review of #1741, ChiR1).
+	t.Run("Peer Sends A Block Message Exceeding The Byte Cap", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		blocks := testhelpers.CreateTestBlockChain(t, 2)
+		targetHash := blocks[1].Header.Hash()
+
+		blockBytes, err := blocks[1].Bytes()
+		require.NoError(t, err)
+
+		suite.Server.settings.BlockValidation.MaxIncomingBlockMessageBytes = int64(len(blockBytes) / 2)
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder(
+			"GET",
+			fmt.Sprintf("http://test-peer/block/%s", targetHash.String()),
+			httpmock.NewBytesResponder(200, blockBytes),
+		)
+
+		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		require.Error(t, err)
+		require.Nil(t, fetchedBlock)
+		assert.Contains(t, err.Error(), "exceeds")
+		assert.Contains(t, err.Error(), "byte limit")
+		assert.True(t, errors.Is(err, errors.ErrExternal), "an over-cap block message must be classified as a peer/external error, got: %v", err)
 	})
 }
 
