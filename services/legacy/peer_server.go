@@ -2344,7 +2344,9 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 	// 1. Writing the entire block to disk (slow, causes context deadline exceeded)
 	// 2. Reading it back from disk (additional I/O overhead)
 	url := fmt.Sprintf("%s/block_legacy/%s?wire=1", s.assetHTTPAddress, hash.String())
-	reader, err := util.DoHTTPRequestBodyReader(s.ctx, url)
+	// asset_httpAddress is this node's own asset service, from settings, and is routinely
+	// localhost or a private container address. The peer-URL client refuses both.
+	reader, err := util.DoLocalServiceHTTPRequestBodyReader(s.ctx, url)
 	if err != nil {
 		sp.server.logger.Errorf("Unable to fetch requested block %v: %v", hash, err)
 

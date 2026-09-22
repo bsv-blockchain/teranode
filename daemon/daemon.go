@@ -272,6 +272,23 @@ func (d *Daemon) updateServiceStatuses(logger ulogger.Logger) {
 	}
 }
 
+// applyPeerURLPolicy configures the process-wide client for peer-supplied URLs. Hostnames
+// in those URLs may resolve to private-network addresses only on a node that already
+// accepts private peers, matching the static check p2p applies to announced DataHub URLs.
+//
+// The refusing case is announced at start-up because it is the one setting here that can
+// stop a working node syncing: a deployment whose peers are reachable only over a private
+// network refuses every fetch, and the probe failure that drops those peers from selection
+// is logged per peer, not once. One line in the first screen of the log names the setting
+// before the first fetch fails.
+func applyPeerURLPolicy(logger ulogger.Logger, appSettings *settings.Settings) {
+	util.SetSSRFAllowPrivateNetworks(appSettings.P2P.AllowPrivateIPs)
+
+	if !appSettings.P2P.AllowPrivateIPs {
+		logger.Warnf("[Daemon] p2p_allow_private_ips=false: peer URLs resolving to a private-network address (RFC1918, fc00::/7, 100.64.0.0/10) are refused, so peers reachable only over a private network cannot be probed or fetched from. Set p2p_allow_private_ips=true on a node that peers over private addresses.")
+	}
+}
+
 // Start initializes and starts the Daemon and its services.
 func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settings.Settings, readyChannel ...chan struct{}) {
 	if d.loggerFactory == nil {
@@ -279,6 +296,8 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 			return ulogger.New(serviceName, ulogger.WithLevel(appSettings.LogLevel))
 		}
 	}
+
+	applyPeerURLPolicy(logger, appSettings)
 
 	// Before continuing, if the command line contains "-wait_for_postgres=1", wait for postgres to be ready
 	if d.shouldStart("wait_for_postgres", args) {
