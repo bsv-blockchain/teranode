@@ -335,10 +335,11 @@ var ssrfDialContext = NewSSRFSafeDialContext(DefaultSSRFDialPolicy)
 // maxSSRFRedirects bounds redirect chains followed while fetching peer-supplied URLs.
 const maxSSRFRedirects = 10
 
-// ssrfCheckRedirect builds the CheckRedirect used for peer-supplied URLs: it bounds the hop
-// count, then rejects a redirect target that leaves http/https, carries credentials, or names
-// a blocked IP literal. Targets naming a hostname are caught by the dialer instead, so this
-// is a cheap pre-check that avoids attempting the connection at all.
+// ssrfCheckRedirect builds the CheckRedirect used for peer-supplied URLs: it refuses any
+// redirect of a POST unconditionally, then - when SSRF protection is enabled - bounds the hop
+// count and rejects a redirect target that leaves the origin, leaves http/https, carries
+// credentials, or names a blocked IP literal. Targets naming a hostname are caught by the
+// dialer instead, so this is a cheap pre-check that avoids attempting the connection at all.
 //
 // Both the shared httpClient and every client from NewSSRFSafeHTTPClient use this, so there is
 // one redirect rule for the threat rather than two that can drift apart.
@@ -348,20 +349,21 @@ func ssrfCheckRedirect(policy SSRFDialPolicy) func(req *http.Request, via []*htt
 			return errors.NewInvalidArgumentError("stopped after %d redirects", maxSSRFRedirects)
 		}
 
+		// A POST body is built from peer-supplied data, so a redirect of a POST is always a peer
+		// choosing a destination for bytes we assembled. A 301, 302 or 303 turns it into a GET
+		// wherever the peer points; a 307 or 308 replays method and body verbatim. Neither is ever
+		// wanted, so this refusal is not conditional on the SSRF toggle below - test topologies
+		// disable that toggle to reach loopback, and must not thereby re-open this.
+		if len(via) > 0 && via[0] != nil && via[0].Method == http.MethodPost {
+			return errors.NewInvalidArgumentError("SSRF redirect check: refusing to follow a redirect of a POST")
+		}
+
 		if !ssrfProtectionEnabled.Load() {
 			return nil
 		}
 
-		if len(via) > 0 && via[0] != nil {
-			// A POST body was built from peer-supplied data. Go does not replay it on a 307
-			// or 308, but a 301, 302 or 303 turns it into a GET to wherever the peer points.
-			if via[0].Method == http.MethodPost {
-				return errors.NewInvalidArgumentError("SSRF redirect check: refusing to follow a redirect of a POST")
-			}
-
-			if via[0].URL != nil && !sameOriginOrUpgrade(via[0].URL, req.URL) {
-				return errors.NewInvalidArgumentError("SSRF redirect check: redirect leaves the origin of the requested URL")
-			}
+		if len(via) > 0 && via[0] != nil && via[0].URL != nil && !sameOriginOrUpgrade(via[0].URL, req.URL) {
+			return errors.NewInvalidArgumentError("SSRF redirect check: redirect leaves the origin of the requested URL")
 		}
 
 		scheme := strings.ToLower(req.URL.Scheme)
