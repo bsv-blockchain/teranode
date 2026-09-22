@@ -48,6 +48,8 @@ func (s *Server) RecordCatchupAttempt(ctx context.Context, req *p2p_api.RecordCa
 		return &p2p_api.RecordCatchupAttemptResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("record catchup attempt", err))
 	}
 
+	prometheusP2PCatchupAttempts.Inc()
+
 	return &p2p_api.RecordCatchupAttemptResponse{Ok: true}, nil
 }
 
@@ -80,6 +82,8 @@ func (s *Server) RecordCatchupSuccess(ctx context.Context, req *p2p_api.RecordCa
 		go s.syncCoordinator.HandleCatchupSuccess(decodedPeer.String(), time.Duration(req.DurationMs)*time.Millisecond)
 	}
 
+	prometheusP2PCatchupSuccesses.Inc()
+
 	return &p2p_api.RecordCatchupSuccessResponse{Ok: true}, nil
 }
 
@@ -97,7 +101,10 @@ func (s *Server) RecordCatchupFailure(ctx context.Context, req *p2p_api.RecordCa
 		return &p2p_api.RecordCatchupFailureResponse{Ok: false}, errors.WrapGRPC(errors.NewServiceError("record catchup failure", err))
 	}
 
-	if normalizeCatchupFailureKind(req.FailureKind) == catchupFailureKindBlockIncomplete {
+	kind := normalizeCatchupFailureKind(req.FailureKind)
+	prometheusP2PCatchupFailures.WithLabelValues(kind).Inc()
+
+	if kind == catchupFailureKindBlockIncomplete {
 		if err := s.recordBlockIncompleteCatchupFailure(ctx, req.PeerId, req.BlockHash); err != nil {
 			return &p2p_api.RecordCatchupFailureResponse{Ok: false}, errors.WrapGRPC(err)
 		}

@@ -87,7 +87,7 @@ func ValidateAdminAPIKey(logger ulogger.Logger, serviceName, apiKey, listenAddre
 	}
 
 	if securityLevel <= 1 && !isLoopbackListenAddress(listenAddress) {
-		logger.Warnf("[%s] grpc_admin_api_key is set but the gRPC listener %q is not loopback-bound and securityLevelGRPC=%d does not provide verified transport security, so the admin key can be harvested in transit; bind the listener to loopback or set securityLevelGRPC >= 2 with certificate verification", serviceName, listenAddress, securityLevel)
+		logger.Warnf("[%s] grpc_admin_api_key is set but the gRPC listener %q is not loopback-bound and security_level_grpc=%d does not provide verified transport security, so the admin key can be harvested in transit; bind the listener to loopback or set security_level_grpc >= 2 with certificate verification", serviceName, listenAddress, securityLevel)
 	}
 
 	return false

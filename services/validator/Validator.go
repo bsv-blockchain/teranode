@@ -924,6 +924,29 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, err
 	}
 
+	// The guard above bounds the height the CALLER asserted; an attacker simply asserts a low
+	// one. This bounds the height the NODE'S OWN CHAIN has reached. It is a TIP-derived bound,
+	// not a proof that validation has replayed through that height: GetBlockState reads the UTXO
+	// store snapshot, which production initialises from blockchainClient.GetBestHeightAndTime and
+	// refreshes on each Block notification (stores/utxo/factory/utxo.go). It holds because legacy
+	// netsync validates block H's transactions inside prepareSubtrees BEFORE the block is added,
+	// and blockHandler consumes blockQueue on a single goroutine, so the tip cannot reach H while
+	// H is validating. Same `>` boundary as above, so the block AT checkpoint height C (tip C-1)
+	// still qualifies. A lagging snapshot is fail-open (more permissive, never a false rejection);
+	// a tip genuinely past the checkpoint while below-checkpoint work is in flight is a genuine
+	// rejection whose remedy is to turn the fast path off
+	// (blockvalidation_outpoint_only_below_checkpoint=false), which is also the default.
+	// The condition is `>`, mirroring the caller-asserted guard immediately above it, so it also
+	// admits a tip exactly at the highest checkpoint — a case for which the paragraph above claims
+	// no legitimate producer.
+	// Issue 4840, finding B-022.
+	if validationOptions.OutpointOnlySpend && blockState.Height > blockchain.HighestCheckpointHeight(v.settings.ChainCfgParams.Checkpoints) {
+		err = errors.NewProcessingError("[Validate][%s] OutpointOnlySpend must not be used once the node's chain tip is past the highest checkpoint (tip height %d)", txID, blockState.Height)
+		span.RecordError(err)
+
+		return nil, err
+	}
+
 	// Fail closed on a store that does not support the fast path: OutpointOnlySpend
 	// relies on SkipUTXOHashCheck / SkipExtendedInputs, which such a store ignores —
 	// it would then derive the UTXO hash from absent parent data and hard-error on the
@@ -962,30 +985,20 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// utxoHeights, and (b) the OutpointOnlySpend guard in validateTransaction's
 	// phase-2 explicitly skips BIP68 (the only remaining utxoHeights consumer).
 	if !validationOptions.OutpointOnlySpend {
-		// check whether the transaction is extended, extend it if not
-		// we also get the block heights of the inputs of the transaction since we are doing a DB lookup
-		if !tx.IsExtended() {
-			// get the block heights of all inputs of the transaction and extend the inputs of not extended transaction.
-			// utxoHeights is a slice of block heights for each input
-			// txInpoints is a struct containing the parent tx hashes and the vout indexes of each input
-			if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
-				err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
-				span.RecordError(err)
+		// Read the parent of every input: this resolves the block heights BIP68
+		// needs and re-extends the transaction from the parents' own outputs,
+		// whether or not the caller handed us previous-output metadata
+		// (GHSA-v76m-6vc7-g7c7).
+		//
+		// This was two calls behind an `if !tx.IsExtended()` / `if
+		// len(utxoHeights) == 0` pair. Extension is now unconditional, so both
+		// gates selected the same single call and the first read as a gate while
+		// gating nothing.
+		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
+			err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
+			span.RecordError(err)
 
-				return nil, err
-			}
-		}
-
-		// if the transaction was extended, we still need to get the block heights of the inputs
-		// since that processing did not happen before extending the transaction
-		// This must be done BEFORE validateTransaction to ensure BIP68 sequence lock validation has the required heights
-		if len(utxoHeights) == 0 {
-			if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
-				err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
-				span.RecordError(err)
-
-				return nil, err
-			}
+			return nil, err
 		}
 	}
 
@@ -1233,6 +1246,30 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, err
 	}
 
+	// From this point on the tx has been durably persisted with its inputs spent and,
+	// when addToBlockAssembly is set, its own record marked Locked (the 2PC
+	// in-progress marker). Routing every return path below through one deferred
+	// cleanup keeps the release in a single place instead of only on the tail of the
+	// happy path. It does NOT unlock on error: see unlockLockedTxOnExit for why an
+	// undelivered tx must stay locked. This is deliberately separate from spend
+	// rollback: spend rollback only ever applies before persistence, and spends must
+	// stand once the tx is durably created (see spendAndCreateInUtxoStore). The
+	// argument (persistedMeta) is captured now, by value of the pointer, so a later
+	// reassignment of txMetaData (e.g. on the SkipUtxoCreation path below) does not
+	// change what the deferred call sees.
+	//
+	// delivered tracks whether the tx has actually reached block assembly, which is
+	// the fact the unlock decision must be gated on. It starts true when this tx
+	// skips block assembly entirely (nothing to deliver), and is flipped to true
+	// only after sendToBlockAssembler returns successfully below. Deliberately NOT
+	// inferred from `err == nil`: a panic between entering the addToBlockAssembly
+	// block and sendToBlockAssembler returning would leave err nil while the tx was
+	// never delivered, and unlocking on that basis would be exactly the hazard this
+	// function exists to prevent.
+	persistedMeta := txMetaData
+	delivered := !addToBlockAssembly
+	defer v.unlockLockedTxOnExit(decoupledCtx, tx, txID, persistedMeta, &err, &delivered)
+
 	if validationOptions.SkipUtxoCreation {
 		// create the tx meta needed for the block assembly
 		if validationOptions.OutpointOnlySpend {
@@ -1431,6 +1468,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				return nil, err
 			}
 		}
+
+		delivered = true
 	}
 
 	// Serialize and enqueue txmeta for the subtree validation kafka topic.
@@ -1452,17 +1491,88 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 	}
 
-	if txMetaData.Locked {
-		if err = v.twoPhaseCommitTransaction(decoupledCtx, tx, txID); err != nil {
-			v.logger.Warnf("[Validate][%s] error during two phase commit, transaction will be marked as spendable on next block: %v", txID, err)
+	// Unlocking (if the tx is still Locked) happens in the deferred
+	// unlockLockedTxOnExit call registered above, on this and every other return
+	// path from this point in the function.
+	return txMetaData, nil
+}
 
-			return txMetaData, err
-		}
-
-		txMetaData.Locked = false
+// unlockLockedTxOnExit is the single point that releases a tx's two-phase-commit
+// Locked flag on the way out of validateInternal. It is deferred immediately
+// after the tx has been durably persisted with its inputs spent (see
+// validateInternal), so the release lives in one place rather than only on the
+// tail of the happy path.
+//
+// It releases the lock ONLY when validateInternal is returning success. The 2PC
+// invariant is that a tx is unlocked after it has reached block assembly, never
+// before (docs/topics/features/two_phase_commit.md). On the error paths between
+// persistence and the end of the function - building tx inpoints, or
+// sendToBlockAssembler failing - the tx is persisted and spent but is NOT in
+// block assembly, so unlocking it here would let a child spending it validate
+// and enter this node's mining template without its parent, producing a block
+// other implementations reject.
+//
+// Staying locked is the documented safe failure mode ("money temporarily can't
+// be spent") and it is normally self-healing, in the right order: the block
+// assembler's unmined-transaction loader adds such a tx to the subtree processor
+// and only then clears its Locked flag (see BlockAssembler.loadUnminedTransactions).
+// One exception: under the default OnRestartValidateParentChain /
+// OnRestartRemoveInvalidParentChainTxs settings, a transaction that gets filtered
+// out of the parent-chain validation during a block-assembly restart is
+// unconditionally unlocked as part of the same batch even though it was never
+// re-added - this is pre-existing block-assembly behaviour, not introduced here.
+//
+// It does not reverse the spend: spend rollback only applies before persistence
+// (see spendAndCreateInUtxoStore) - once the tx is durably created it is valid
+// and its spends must stand.
+//
+// On the success path, if the unlock itself fails, err is set to the unlock error.
+// No caller currently acts on that signal specifically - the real recovery path is
+// the same self-healing loadUnminedTransactions route described above (see
+// docs/topics/features/two_phase_commit.md), not caller-side handling of this
+// error. Setting err is mainly for observability of the failure at the point it
+// happened.
+//
+// The unlock decision is gated on delivered, not on *err being nil. delivered only
+// becomes true once sendToBlockAssembler has actually returned successfully, so it
+// stays false across a panic unwinding from anywhere in that window - unlike *err,
+// which is nil for the entire window regardless of whether delivery happened. Using
+// *err as the proxy would unlock a tx that was never delivered to block assembly if
+// something panicked in that narrow window, which is the exact state this function
+// exists to prevent.
+func (v *Validator) unlockLockedTxOnExit(ctx context.Context, tx *bt.Tx, txID string, txMetaData *meta.Data, err *error, delivered *bool) {
+	if txMetaData == nil || !txMetaData.Locked {
+		return
 	}
 
-	return txMetaData, nil
+	// Not delivered to block assembly - leave it locked for the unmined-transaction
+	// loader to heal. This covers both ordinary error returns and a panic unwinding
+	// through the window between entering the addToBlockAssembly block and
+	// sendToBlockAssembler returning.
+	if delivered == nil || !*delivered {
+		v.logger.Warnf("[Validate][%s] tx stays locked, it was not delivered to block assembly", txID)
+
+		return
+	}
+
+	// Defensive: delivered is true but an error was still recorded. This should not
+	// happen given the current control flow (every return path after delivery sets
+	// no error), but keep it locked rather than trust an inconsistent state.
+	if *err != nil {
+		v.logger.Warnf("[Validate][%s] tx stays locked despite being delivered, due to a later error: %v", txID, *err)
+
+		return
+	}
+
+	if unlockErr := v.twoPhaseCommitTransaction(ctx, tx, txID); unlockErr != nil {
+		v.logger.Warnf("[Validate][%s] error during two phase commit, transaction will be marked as spendable on next block: %v", txID, unlockErr)
+
+		*err = unlockErr
+
+		return
+	}
+
+	txMetaData.Locked = false
 }
 
 // getTransactionInputBlockHeights returns the block heights for each input of the transaction
@@ -1535,14 +1645,12 @@ func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.T
 		parentTxHashes[*parentTxHash] = append(parentTxHashes[*parentTxHash], inputIdx)
 	}
 
-	extend := !tx.IsExtended() // if the tx is not extended, we need to extend it with the parent tx hashes
-
 	for parentTxHash, idxs := range parentTxHashes {
 		parentTxHash := parentTxHash
 		inputIdxs := idxs
 
 		g.Go(func() error {
-			if err := v.getUtxoBlockHeightAndExtendForParentTx(gCtx, parentTxHash, inputIdxs, utxoHeights, tx, extend, prefetched); err != nil {
+			if err := v.getUtxoBlockHeightAndExtendForParentTx(gCtx, parentTxHash, inputIdxs, utxoHeights, tx, prefetched); err != nil {
 				if errors.Is(err, errors.ErrTxNotFound) {
 					return errors.NewTxMissingParentError("[Validate][%s] error getting parent transaction %s", txID, parentTxHash, err)
 				}
@@ -1578,7 +1686,7 @@ func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.T
 //     (BDK rejects with bad-txns-unconfirmed-input-in-block) or the candidate
 //     height in policy mode.
 func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context, parentTxHash chainhash.Hash, idxs []int,
-	utxoHeights []uint32, tx *bt.Tx, extend bool, prefetched map[chainhash.Hash]*meta.Data) error {
+	utxoHeights []uint32, tx *bt.Tx, prefetched map[chainhash.Hash]*meta.Data) error {
 	// Validate every target index up front, before any utxoHeights[idx] (the
 	// height loops below) or tx.Inputs[idx] (the extend loop) dereference. idxs
 	// are positions in tx.Inputs, and the caller sizes utxoHeights to
@@ -1592,20 +1700,42 @@ func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context,
 		}
 	}
 
-	f := []fields.FieldName{fields.BlockIDs, fields.BlockHeights}
-
-	if extend {
-		// add the parent tx outputs to the fields, to be able to extend the transaction
-		f = append(f, fields.Tx)
-	}
+	// Parent outputs are always read, so the transaction is re-extended from
+	// them whether or not the caller supplied previous-output metadata. The UTXO
+	// commitment (util.UTXOHashInto) hashes `lockingScript || VarInt(satoshis)`
+	// with no script-length prefix, so the script/value boundary is not pinned: a
+	// shorter script paired with a larger value reproduces the same commitment.
+	// Trusting a submitter's extended fields therefore let a forged
+	// (OP_TRUE, inflated-value) pair spend a genuinely unspendable output and
+	// mint coins, because the store's utxoHash comparison passes on the collision
+	// (GHSA-v76m-6vc7-g7c7). The extend loop below overwrites rather than fills,
+	// so re-reading is sufficient on its own — no supplied-vs-stored comparison
+	// is needed.
+	//
+	// Outputs only, deliberately: fields.Tx would also pull the parent's inputs —
+	// unlocking scripts, the bulk of a typical transaction — and the extend loop
+	// reads nothing but Outputs[vout]. That saving is confined to parents stored
+	// inline: Aerospike keeps a large transaction's body outside the record and
+	// writes no outputs bin for it, so fields.Outputs has to pull that body too
+	// (see the needsFullExternalTx trigger in stores/utxo/aerospike/get.go), and
+	// for those parents the cost is the same as fields.Tx.
+	//
+	// This widens the projection of a Get that already happens for block heights,
+	// but "widens" is not "free" and it is not free on every store: SQL runs an
+	// extra batchDecorateOutputs query for it (stores/utxo/sql/sql.go), and
+	// Aerospike reads the same record for an inline parent but an extra external
+	// blob for a large one. The read itself is mandatory for the fix — the
+	// supplied outputs cannot be trusted — so this is a cost to measure, not one
+	// to claim away.
+	f := []fields.FieldName{fields.BlockIDs, fields.BlockHeights, fields.Outputs}
 
 	// Use a bulk-prefetched parent if the caller supplied one that carries
-	// everything we need (the parent tx outputs too, when extending). This is a
-	// read-source swap only: the height/sentinel logic below is unchanged, and
-	// any parent not prefetched — or prefetched without the Tx needed for
-	// extension — falls back to a store Get, so correctness is never reduced.
+	// everything we need, which now always includes the parent's outputs: the
+	// extension below is unconditional. This is a read-source swap only — the
+	// height/sentinel logic is unchanged. A missing parent or nil Data.Tx falls
+	// back to a store Get; missing outputs on a non-nil Data.Tx fail below.
 	var txMeta *meta.Data
-	if pf, ok := prefetched[parentTxHash]; ok && pf != nil && (!extend || pf.Tx != nil) {
+	if pf, ok := prefetched[parentTxHash]; ok && pf != nil && pf.Tx != nil {
 		txMeta = pf
 	} else {
 		var err error
@@ -1631,27 +1761,26 @@ func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context,
 		}
 	}
 
-	if extend {
-		// extend the transaction inputs with the parent tx outputs (idx bounds
-		// already validated at the top of the function)
-		for _, idx := range idxs {
-			// PreviousTxOutIndex comes from the (untrusted) child transaction, so
-			// bound it against the parent's output count before indexing.
-			// Otherwise a tx referencing a real parent but a non-existent vout
-			// (e.g. vout 99 on a 2-output parent) panics here with index out of
-			// range and crashes the validator. Mirrors the guard in
-			// stores/utxo/aerospike/get.go.
-			vout := tx.Inputs[idx].PreviousTxOutIndex
-			if txMeta.Tx == nil || txMeta.Tx.Outputs == nil ||
-				int(vout) >= len(txMeta.Tx.Outputs) || txMeta.Tx.Outputs[vout] == nil {
-				return errors.NewProcessingError("[Validate][%s] parent transaction %s has no output for index %d",
-					tx.TxIDChainHash().String(), parentTxHash.String(), vout)
-			}
-
-			// extend the input with the parent tx outputs
-			tx.Inputs[idx].PreviousTxSatoshis = txMeta.Tx.Outputs[vout].Satoshis
-			tx.Inputs[idx].PreviousTxScript = txMeta.Tx.Outputs[vout].LockingScript
+	// Extend the transaction inputs from the parent's outputs (idx bounds already
+	// validated at the top of the function). Unconditional: this overwrite is what
+	// discards any previous-output metadata the caller supplied.
+	for _, idx := range idxs {
+		// PreviousTxOutIndex comes from the (untrusted) child transaction, so
+		// bound it against the parent's output count before indexing.
+		// Otherwise a tx referencing a real parent but a non-existent vout
+		// (e.g. vout 99 on a 2-output parent) panics here with index out of
+		// range and crashes the validator. Mirrors the guard in
+		// stores/utxo/aerospike/get.go.
+		vout := tx.Inputs[idx].PreviousTxOutIndex
+		if txMeta.Tx == nil || txMeta.Tx.Outputs == nil ||
+			int(vout) >= len(txMeta.Tx.Outputs) || txMeta.Tx.Outputs[vout] == nil {
+			return errors.NewProcessingError("[Validate][%s] parent transaction %s has no output for index %d",
+				tx.TxIDChainHash().String(), parentTxHash.String(), vout)
 		}
+
+		// extend the input with the parent tx outputs
+		tx.Inputs[idx].PreviousTxSatoshis = txMeta.Tx.Outputs[vout].Satoshis
+		tx.Inputs[idx].PreviousTxScript = txMeta.Tx.Outputs[vout].LockingScript
 	}
 
 	return nil

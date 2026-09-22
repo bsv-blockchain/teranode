@@ -193,16 +193,36 @@ p2p_allow_private_ips=false  # RFC1918 private networks
 ```
 
 `p2p_allow_private_ips` also governs the static SSRF check on peer-supplied DataHub URLs:
-with `true` that check is skipped entirely, so an announced URL naming a private, loopback or
-link-local address is accepted into the peer registry.
+with `true` the address checks are skipped, so an announced URL naming a private, loopback or
+link-local address is accepted into the peer registry. The URL must still be a clean base URL
+(http or https, no credentials, query or fragment) either way, because fetch paths are joined
+onto it.
 
-It does **not** affect the connection-time guard. Every outbound request to a peer-supplied
-URL - availability probes and block/subtree fetches alike - refuses loopback (127.0.0.0/8,
-::1), link-local (169.254.0.0/16, fe80::/10) and unspecified addresses regardless of this
-setting, including when a peer hostname only resolves to one. Accepting such a URL therefore
-does not make it reachable. Private ranges are permitted at connection time on both paths,
-since peer fetches legitimately traverse private networks; the probe deliberately applies the
-same policy as the fetch path, so it never rejects a peer that catchup could have used.
+At connection time, every outbound request to a peer-supplied URL - availability probes and
+block/subtree fetches alike - resolves the hostname and checks each address:
+
+- Loopback (127.0.0.0/8, ::1), link-local (169.254.0.0/16, fe80::/10) and unspecified
+  addresses are refused regardless of this setting. Accepting such a URL therefore does not
+  make it reachable.
+- Private-network addresses (RFC1918, IPv6 ULA fc00::/7 and shared address space
+  100.64.0.0/10) are refused unless this setting is `true`. With the default `false`, a
+  hostname that resolves to a private address is treated exactly like a private IP literal.
+  Nodes that peer over a private network, such as Kubernetes clusters using
+  `svc.cluster.local` DataHub URLs or multi-node compose stacks, must set it to `true`.
+- With the setting `true`, a hostname that resolved to a public address within the last ten
+  minutes may not resolve to a private one, and an answer mixing public and private addresses
+  is refused. This stops a peer's DNS rebinding a public name onto an internal service
+  between two requests.
+
+A node started with the default `false` logs one warning naming this setting, because a
+deployment whose peers are reachable only over a private network will find no sync peer:
+every availability probe is refused, those peers are dropped from selection, and the node
+stops catching up. Each refused probe is logged at warning level as well, so the cause is
+visible in the log rather than only in a stalled height.
+
+Redirects from a peer may not leave the origin of the requested URL (an http to https upgrade
+on the same host is allowed), and a POST is never redirected. The probe applies the same
+policy as the fetch path, so it never rejects a peer that catchup could have used.
 
 One caveat: if `HTTP_PROXY`/`HTTPS_PROXY` is set, outbound requests are dialled to the proxy
 and the proxy fetches the peer-supplied target on the node's behalf, which the address check

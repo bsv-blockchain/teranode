@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/rand/v2"
 	"net/http"
+	"net/url"
 	"sort"
 	"sync"
 	"time"
@@ -520,10 +521,18 @@ func (ps *PeerSelector) checkCandidatesHealth(ctx context.Context, peers []*bloc
 
 				healthy, err := ps.checkHealth(probeCtx, url)
 				if err != nil {
-					if probeCtx.Err() != nil {
-						ps.logger.Debugf("[PeerSelector] Availability probe for %s aborted: %v", url, err)
-					} else {
-						ps.logger.Debugf("[PeerSelector] Availability probe for %s failed: %v", url, err)
+					switch {
+					case probeCtx.Err() != nil:
+						ps.logger.Debugf("[PeerSelector] Availability probe for %s aborted: %v", peerURLForLog(url), err)
+					case errors.Is(err, errors.ErrInvalidArgument):
+						// The peer was refused before any packet left: an unusable base URL,
+						// or an address our own policy bars (a private-network address with
+						// p2p_allow_private_ips unset). That is a local configuration cause
+						// and it silently removes the peer from selection, so it is not a
+						// debug-level event. An unreachable peer stays at debug.
+						ps.logger.Warnf("[PeerSelector] Availability probe for %s refused before dialling: %v", peerURLForLog(url), err)
+					default:
+						ps.logger.Debugf("[PeerSelector] Availability probe for %s failed: %v", peerURLForLog(url), err)
 					}
 				}
 
@@ -608,19 +617,31 @@ func compareChainWork(a, b []byte) int {
 }
 
 // checkPeerAvailability tests if a peer's DataHub URL is reachable via HTTP.
-// DataHubURL already includes /api/v1 prefix, so we just append the endpoint path.
+// DataHubURL already includes /api/v1 prefix, so the endpoint is appended as a path segment.
 // Any 2xx response counts as available; the probe is bounded by peerHealthCheckTimeout.
 //
 // The probe target is peer-supplied, so it goes through ps.httpClient, whose dialer
 // re-validates every resolved IP against util.DefaultSSRFDialPolicy.
+//
+// The URL is built with util.JoinPeerURL and the health path left empty, so the probe
+// cannot be steered by the base URL's shape. Announced DataHub URLs are shape-checked in
+// validateDataHubURL, but the registry this reads from is also written by the blockchain
+// RegisterPeer API and reloaded from persisted JSON, neither of which re-checks. Building
+// the URL here keeps the guarantee local to the call rather than three layers away.
 func (ps *PeerSelector) checkPeerAvailability(ctx context.Context, dataHubURL string) (bool, error) {
 	if dataHubURL == "" {
 		return false, nil
 	}
 
 	// DataHubURL format: "https://host/api/v1"
-	// Append /bestblockheader to get full endpoint path
-	checker := health.CheckPeerHTTPServer(ps.httpClient, dataHubURL, "/bestblockheader")
+	// The base URL is not echoed here: userinfo is one of the shapes JoinPeerURL refuses,
+	// and the wrapped error names the shape without carrying the credentials.
+	probeURL, err := util.JoinPeerURL(dataHubURL, "bestblockheader")
+	if err != nil {
+		return false, errors.NewInvalidArgumentError("peer health check has an unusable base URL", err)
+	}
+
+	checker := health.CheckPeerHTTPServer(ps.httpClient, probeURL, "")
 
 	statusCode, msg, err := checker(ctx, false)
 	if statusCode == http.StatusOK {
@@ -634,4 +655,18 @@ func (ps *PeerSelector) checkPeerAvailability(ctx context.Context, dataHubURL st
 	}
 
 	return false, err
+}
+
+// peerURLForLog renders a peer-supplied URL for an operator log line with any userinfo
+// removed. The peer chooses this string, and credentials in it are one of the shapes
+// JoinPeerURL refuses, so logging it verbatim would copy them into the log.
+func peerURLForLog(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "<unparseable peer URL>"
+	}
+
+	parsed.User = nil
+
+	return parsed.String()
 }

@@ -110,8 +110,8 @@ type TestOptions struct {
 	SkipRemoveDataDir       bool
 	StartDaemonDependencies bool
 	FSMState                blockchain.FSMStateType
-	// UTXOStoreType specifies which UTXO store backend to use ("aerospike", "postgres")
-	// If empty, defaults to "aerospike"
+	// UTXOStoreType specifies which UTXO store backend to use ("aerospike", "postgres", "sqlite")
+	// If empty, keeps the configured store (SQLite with SystemTestSettings).
 	UTXOStoreType string
 	// ContainerManager allows reusing an existing container manager from a previous TestDaemon.
 	// When set, the daemon will use the existing container instead of creating a new one.
@@ -643,6 +643,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		utxoStore,
 		validatorClient,
 		subtreeValidationClient,
+		p2pClient,
 	)
 
 	assert.NotNil(t, blockchainClient)
@@ -802,7 +803,6 @@ func WaitForPortsFree(t *testing.T, ctx context.Context, settings *settings.Sett
 // GetPorts returns a slice of ports from the provided settings.
 func GetPorts(appSettings *settings.Settings) []int {
 	ports := []int{
-		getPortFromString(appSettings.Asset.CentrifugeListenAddress),
 		getPortFromString(appSettings.Asset.HTTPListenAddress),
 		getPortFromString(appSettings.BlockPersister.HTTPListenAddress),
 		getPortFromString(appSettings.BlockAssembly.GRPCListenAddress),

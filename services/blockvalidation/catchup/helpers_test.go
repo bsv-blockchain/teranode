@@ -1,6 +1,7 @@
 package catchup
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
+	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -447,9 +450,10 @@ func TestFetchHeadersWithRetry(t *testing.T) {
 	url := "http://test.example.com/headers"
 	maxRetries := 3
 
-	// Note: This test will fail because util.DoHTTPRequest will likely fail
+	// Note: This test will fail because util.DoHTTPRequestBounded will likely fail
 	// But it will test the function structure and error handling paths
-	_, err := FetchHeadersWithRetry(ctx, logger, url, maxRetries)
+	maxBytes := int64(10_000 * model.BlockHeaderSize)
+	_, err := FetchHeadersWithRetry(ctx, logger, url, maxRetries, maxBytes)
 
 	// The function should return an error since the URL doesn't exist
 	// but we can verify the function can be called without panicking
@@ -459,7 +463,7 @@ func TestFetchHeadersWithRetry(t *testing.T) {
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err = FetchHeadersWithRetry(cancelledCtx, logger, url, maxRetries)
+	_, err = FetchHeadersWithRetry(cancelledCtx, logger, url, maxRetries, maxBytes)
 	require.Error(t, err)
 }
 
@@ -473,7 +477,8 @@ func TestFetchHeadersWithRetry_ErrorCategorization(t *testing.T) {
 
 	// Test with invalid URL that should cause a connection error
 	invalidURL := "http://192.0.2.0:12345/headers" // RFC 3330 test address
-	_, err := FetchHeadersWithRetry(ctx, logger, invalidURL, 1)
+	maxBytes := int64(10_000 * model.BlockHeaderSize)
+	_, err := FetchHeadersWithRetry(ctx, logger, invalidURL, 1, maxBytes)
 	require.Error(t, err)
 
 	// The error should be wrapped appropriately by the retry mechanism
@@ -485,8 +490,42 @@ func TestFetchHeadersWithRetry_ErrorCategorization(t *testing.T) {
 	defer cancel()
 	time.Sleep(time.Millisecond) // Ensure timeout
 
-	_, err = FetchHeadersWithRetry(timeoutCtx, logger, invalidURL, 1)
+	_, err = FetchHeadersWithRetry(timeoutCtx, logger, invalidURL, 1, maxBytes)
 	require.Error(t, err)
+}
+
+// A peer answering a headers_from_common_ancestor request must not be able to force an
+// unbounded read: FetchHeadersWithRetry sits inside a retry loop, so before
+// bitcoin-sv/teranode#4742 a hostile peer got several unbounded io.ReadAll reads per
+// catchup iteration. The request always asks for a fixed header count of a fixed size
+// each, so the byte cap is exact - a response even one byte over it must be rejected
+// rather than silently truncated and accepted.
+func TestFetchHeadersWithRetry_EnforcesByteCap(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	url := "http://test-peer/headers_from_common_ancestor/abc?n=2"
+	maxBytes := int64(2 * model.BlockHeaderSize) // caller asked for exactly 2 headers
+
+	t.Run("response over the cap is rejected", func(t *testing.T) {
+		httpmock.RegisterResponder("GET", url,
+			httpmock.NewBytesResponder(200, bytes.Repeat([]byte{0xAB}, int(maxBytes)+1)))
+
+		headerBytes, err := FetchHeadersWithRetry(ctx, logger, url, 1, maxBytes)
+		require.Error(t, err)
+		assert.Nil(t, headerBytes)
+	})
+
+	t.Run("response within the cap succeeds", func(t *testing.T) {
+		body := bytes.Repeat([]byte{0xAB}, int(maxBytes))
+		httpmock.RegisterResponder("GET", url, httpmock.NewBytesResponder(200, body))
+
+		headerBytes, err := FetchHeadersWithRetry(ctx, logger, url, 1, maxBytes)
+		require.NoError(t, err)
+		assert.Equal(t, body, headerBytes)
+	})
 }
 
 func TestCreateCatchupResultEdgeCases(t *testing.T) {

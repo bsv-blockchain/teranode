@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -26,6 +28,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/semaphore"
 )
 
 // CatchupTestSuite provides a complete test environment for catchup tests
@@ -76,6 +79,42 @@ func (s *CatchupTestSuite) setupMocks() {
 	s.MockUTXOStore = &utxo.MockUtxostore{}
 	s.MockValidator = &validator.MockValidator{UtxoStore: s.MockUTXOStore}
 	s.HttpMock = testhelpers.NewHTTPMockSetup(s.T)
+
+	// Permissive default for BatchPreviousOutputsDecorate. Block validation now
+	// discards peer-supplied previous-output metadata and re-resolves it locally
+	// (GHSA-v76m-6vc7-g7c7), so blocks whose transactions arrive already extended
+	// reach the store too. Tests that assert on the call use AssertCalled /
+	// AssertNotCalled against actual calls, which this default does not weaken.
+	s.MockUTXOStore.On("BatchPreviousOutputsDecorate", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			// Actually decorate. Returning nil without filling anything would be a
+			// lie the callers now depend on: block validation discards the
+			// peer-supplied previous outputs, so any input this default leaves
+			// empty reaches fee calculation with zero satoshis. Values mirror
+			// nullstore's PreviousOutputsDecorate — a stand-in parent, not the
+			// real one; tests that care about real parent values supply their own
+			// store rather than this mock.
+			txs, ok := args.Get(1).([]*bt.Tx)
+			if !ok {
+				return
+			}
+
+			for _, tx := range txs {
+				if tx == nil {
+					continue
+				}
+
+				for _, input := range tx.Inputs {
+					if input == nil || input.PreviousTxScript != nil {
+						continue
+					}
+
+					input.PreviousTxScript = bscript.NewFromBytes([]byte{0x51})
+					input.PreviousTxSatoshis = 100_000_000_000
+				}
+			}
+		}).
+		Return(nil).Maybe()
 
 	// Permissive default for GetBlockByHeight — used by locator capping when
 	// blockchain height > UTXO height. Returns error so capping falls back to blockchain height.
@@ -155,6 +194,16 @@ func (s *CatchupTestSuite) createServer(t *testing.T) {
 		catchupStatsMu:      sync.RWMutex{},
 	}
 	s.Server.fetchSubtreeDataForBlockFn = s.Server.fetchSubtreeDataForBlock
+
+	// Mirror New(): give the suite the same catch-up prefetch budget production gets. Test
+	// blocks are tiny, so they take the TryAcquire fast path and nothing changes — but it
+	// gives the acquire/release pairing coverage on the real pipeline. Guarded the same way
+	// as New() so a test that sets the budget to 0 disables it rather than building a
+	// zero-capacity semaphore nothing could ever acquire.
+	if budget := tSettings.BlockValidation.CatchupPrefetchBudgetBytes; budget > 0 {
+		s.Server.catchupPrefetchBudgetBytes = budget
+		s.Server.catchupPrefetchBudget = semaphore.NewWeighted(budget)
+	}
 
 	// Add cleanup for channels
 	s.AddCleanup(func() {

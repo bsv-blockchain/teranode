@@ -117,8 +117,8 @@ func ConstructMerkleProof(txID *chainhash.Hash, repo MerkleProofConstructor) (*M
 		// Unknown hash: real stores signal a missing key with ErrTxNotFound.
 		// Deliberately return a plain NotFoundError WITHOUT wrapping the cause —
 		// teranode's errors.Is matches codes through the wrapped chain, so
-		// carrying ERR_TX_NOT_FOUND here would collide with the orphan-only
-		// sentinel below and kill the HTTP layer's subtree fallback.
+		// carrying ERR_TX_NOT_FOUND here would misreport an unknown transaction
+		// as an orphan-only transaction at the HTTP layer.
 		if terr.Is(err, terr.ErrTxNotFound) || terr.Is(err, terr.ErrNotFound) {
 			return nil, terr.NewNotFoundError("transaction %s not found", txID.String())
 		}
@@ -373,97 +373,6 @@ func ConstructMerkleProof(txID *chainhash.Hash, repo MerkleProofConstructor) (*M
 		TxIndexInSubtree: txIndexInSubtree,
 		SubtreeRoot:      *subtreeRootForProof,
 		SubtreeProof:     subtreeProofHashes,
-		BlockProof:       blockProofHashes,
-		Flags:            flags,
-	}
-
-	return proof, nil
-}
-
-// ConstructSubtreeMerkleProof constructs a merkle proof for a given subtree to the block's merkle root.
-// This is used when you have a subtree hash and want to prove its inclusion in a block.
-//
-// Parameters:
-//   - subtreeHash: The subtree hash to create a proof for
-//   - repo: Repository interface providing access to blockchain data
-//
-// Returns:
-//   - *MerkleProof: Merkle proof structure with only block-level proof populated
-//   - error: Any error encountered during proof construction
-func ConstructSubtreeMerkleProof(subtreeHash *chainhash.Hash, repo MerkleProofConstructor) (*MerkleProof, error) {
-	if subtreeHash == nil {
-		return nil, terr.NewInvalidArgumentError("subtree hash cannot be nil")
-	}
-
-	// Find blocks containing this subtree.
-	//
-	// CONTRACT: FindBlocksContainingSubtree MUST return only blocks on the current
-	// best chain. The SQL implementation at
-	// stores/blockchain/sql/FindBlocksContainingSubtree.go filters with
-	// "WHERE b.on_main_chain = true"; if that gate is ever removed, orphan-anchored
-	// subtree proofs leak silently. The merkleproof-layer regression test
-	// TestConstructSubtreeMerkleProof_OrphanOnlySubtree_NotFound pins the
-	// empty-result → not-found behaviour, but cannot validate the SQL gate itself.
-	blockIDs, blockHeights, subtreeIndices, err := repo.FindBlocksContainingSubtree(subtreeHash)
-	if err != nil {
-		return nil, terr.NewProcessingError("failed to find blocks containing subtree", err)
-	}
-
-	// Check if subtree is in any block
-	if len(blockIDs) == 0 || len(blockHeights) == 0 || len(subtreeIndices) == 0 {
-		return nil, terr.NewNotFoundError("subtree not found in any block")
-	}
-
-	// Use the first block containing the subtree
-	blockID := blockIDs[0]
-	blockHeight := blockHeights[0]
-	subtreeIdx := subtreeIndices[0]
-
-	// Get block data using block ID instead of height for better performance
-	block, err := repo.GetBlockByID(uint64(blockID))
-	if err != nil {
-		return nil, terr.NewProcessingError("failed to get block data", err)
-	}
-
-	// Validate subtree index
-	if subtreeIdx < 0 || subtreeIdx >= len(block.Subtrees) {
-		return nil, terr.NewProcessingError(errMsgInvalidSubtreeIndex)
-	}
-
-	// Verify the subtree hash matches
-	if !block.Subtrees[subtreeIdx].IsEqual(subtreeHash) {
-		return nil, terr.NewProcessingError("subtree hash mismatch")
-	}
-
-	// Generate proof from subtree root to block merkle root
-	blockProof, flags, err := GenerateBlockMerkleProof(block.Subtrees, subtreeIdx)
-	if err != nil {
-		return nil, terr.NewProcessingError("failed to generate block merkle proof", err)
-	}
-
-	// Get block hash and header
-	blockHash := block.Hash()
-	blockHeader, err := repo.GetBlockHeader(blockHash)
-	if err != nil {
-		return nil, terr.NewProcessingError("failed to get block header", err)
-	}
-
-	// Convert proof hashes from pointers to values
-	blockProofHashes := make([]chainhash.Hash, len(blockProof))
-	for i, hash := range blockProof {
-		blockProofHashes[i] = *hash
-	}
-
-	// Build the proof structure for subtree-only proof
-	proof := &MerkleProof{
-		TxID:             chainhash.Hash{}, // Empty for subtree proofs
-		BlockHash:        *blockHash,
-		BlockHeight:      blockHeight,
-		MerkleRoot:       *blockHeader.HashMerkleRoot,
-		SubtreeIndex:     subtreeIdx,
-		TxIndexInSubtree: -1, // -1 indicates this is a subtree proof, not a transaction proof
-		SubtreeRoot:      *subtreeHash,
-		SubtreeProof:     []chainhash.Hash{}, // Empty for subtree proofs
 		BlockProof:       blockProofHashes,
 		Flags:            flags,
 	}

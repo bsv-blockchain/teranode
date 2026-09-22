@@ -35,7 +35,7 @@ func TestQuickValidateBlockRejectsOutdatedVersion(t *testing.T) {
 		block.Header.Version = 1
 
 		writeJobsChan := make(chan *SubtreeWriteJob, 1)
-		err := suite.Server.blockValidation.quickValidateBlockAsync(suite.Ctx, block, "test", "", writeJobsChan)
+		_, _, err := suite.Server.blockValidation.quickValidateBlockAsync(suite.Ctx, block, "test", "", writeJobsChan)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "bad-version")
 	})

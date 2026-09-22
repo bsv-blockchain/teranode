@@ -476,6 +476,8 @@ func NewServer(
 ) (*Server, error) {
 	logger.Debugf("Creating P2P service")
 
+	initPrometheusMetrics()
+
 	p2pPort := tSettings.P2P.Port
 	if p2pPort == 0 {
 		return nil, errors.NewConfigurationError("p2p_port not set in config")
@@ -1037,6 +1039,10 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 			}
 		}
 	}()
+
+	// Keep the connected-peers gauge current on its own ticker, independent of
+	// the NAT-diagnostics logging goroutine above (see startConnectedPeersMonitor).
+	s.startConnectedPeersMonitor(ctx, connectedPeersPollInterval)
 
 	// Start the peer-registry batcher before the topic subscriptions that feed it
 	if s.registryBatcher != nil {
@@ -2785,6 +2791,11 @@ func (s *Server) BanPeer(ctx context.Context, peer *p2p_api.BanPeerRequest) (*p2
 		return nil, errors.WrapGRPCPublic(err)
 	}
 
+	// This RPC bypasses AddBanScore/onPeerBanned entirely, so it must
+	// increment prometheusP2PBanEvents itself or operator-issued bans would
+	// be invisible to the metric despite its name implying all ban events.
+	prometheusP2PBanEvents.WithLabelValues(ReasonOperatorBan).Inc()
+
 	return &p2p_api.BanPeerResponse{Ok: true}, nil
 }
 
@@ -2864,7 +2875,7 @@ func (s *Server) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.Cl
 func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreRequest) (*p2p_api.AddBanScoreResponse, error) {
 	reason := req.Reason
 	switch reason {
-	case "invalid_subtree", "protocol_violation", "spam", "invalid_block", "catchup_malicious":
+	case "invalid_subtree", "protocol_violation", "spam", "invalid_block", "catchup_malicious", ReasonCorruptBlockBody:
 		// known reason; pass through to the registry which has matching weights
 	default:
 		if reason == "" {
@@ -2921,6 +2932,10 @@ func (s *Server) onPeerBanned(peerID, reason string) {
 	}
 	until := time.Now().Add(banDuration)
 	s.logger.Infof("[onPeerBanned] Peer %s banned until %s for reason: %s", peerID, until.Format(time.RFC3339), reason)
+	// The label is bounded to the known reason set; the unbounded value
+	// handed to peerRegistry.AddBanScore above is untouched so per-reason
+	// ban-score weights aren't affected.
+	prometheusP2PBanEvents.WithLabelValues(normalizeBanReasonLabel(reason)).Inc()
 
 	// Make the ban effective for gossip filtering immediately, without waiting
 	// for the cached IsPeerBanned=false entry to expire.
@@ -3179,6 +3194,9 @@ func peerInfoToP2PProto(p *blockchain.PeerInfo) *p2p_api.PeerRegistryInfo {
 		CatchupAttempts:        p.CatchupAttempts,
 		CatchupSuccesses:       p.CatchupSuccesses,
 		CatchupFailures:        p.CatchupFailures,
+		BlocksReceived:         p.BlocksReceived,
+		SubtreesReceived:       p.SubtreesReceived,
+		TransactionsReceived:   p.TransactionsReceived,
 	}
 }
 

@@ -4,10 +4,14 @@ package centrifuge_impl
 
 import (
 	"context"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/centrifugal/centrifuge"
 	"github.com/gorilla/websocket"
 )
@@ -44,7 +48,7 @@ type WebsocketConfig struct {
 	MessageSizeLimit int
 
 	// CheckOrigin func to provide custom origin check logic.
-	// nil means allow all origins.
+	// nil means same-host origins only (see checkOrigin).
 	CheckOrigin func(r *http.Request) bool
 
 	// PingInterval sets interval server will send ping messages to clients.
@@ -105,7 +109,7 @@ func NewWebsocketHandler(n *centrifuge.Node, c WebsocketConfig) *WebsocketHandle
 	if c.CheckOrigin != nil {
 		upgrade.CheckOrigin = c.CheckOrigin
 	} else {
-		upgrade.CheckOrigin = sameHostOriginCheck()
+		upgrade.CheckOrigin = originCheck(nil)
 	}
 
 	return &WebsocketHandler{
@@ -203,7 +207,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		// which is right after this goroutine launches. The centrifuge core
 		// checks ctx.Done() inside HandleCommand and aborts every frame if the
 		// context is dead — so we keep request-scoped values (notably the
-		// Credentials set by authMiddleware) but strip the cancellation signal.
+		// Credentials set by readinessMiddleware) but strip the cancellation signal.
 		// The connection lifetime is owned by closeFn / the read loop below.
 		c, closeFn, err := centrifuge.NewClient(context.WithoutCancel(r.Context()), s.node, transport)
 		if err != nil {
@@ -445,41 +449,80 @@ func (t *websocketTransport) Close(_ centrifuge.Disconnect) error {
 	return t.conn.Close()
 }
 
-// sameHostOriginCheck creates a function to verify the origin of WebSocket connections.
+// originCheck returns a websocket upgrader CheckOrigin func backed by checkOrigin.
+//
+// Parameters:
+//   - allowedOrigins: extra origins accepted besides the same host; "*" accepts any origin
 //
 // Returns:
 //   - func(r *http.Request) bool: Origin checking function
-func sameHostOriginCheck() func(r *http.Request) bool {
+func originCheck(allowedOrigins []string) func(r *http.Request) bool {
 	return func(r *http.Request) bool {
-		err := checkSameHost(r)
-		return err != nil
+		return checkOrigin(r, allowedOrigins) == nil
 	}
 }
 
-// checkSameHost verifies that the WebSocket connection originates from the same host.
+// checkOrigin guards the websocket upgrade against cross-site browser connections.
+//
+// A request is accepted when:
+//   - it carries no Origin header (non-browser clients do not send one),
+//   - the Origin hostname equals the request Host hostname, ignoring scheme and port
+//     (the dashboard dev server and a TLS reverse proxy both serve the page from a
+//     different port than the Asset HTTP socket),
+//   - both hostnames are loopback (localhost, 127.0.0.0/8, ::1), which are the same
+//     machine however they are spelled, or
+//   - the Origin matches an entry in allowedOrigins, or allowedOrigins contains "*".
+//
+// This is not authentication: a non-browser client can omit or forge Origin. It stops
+// a third-party web page from opening the socket from a visitor's browser. It does not
+// survive DNS rebinding: a page on a name the attacker controls that resolves to this
+// node sends a matching Host and Origin.
 //
 // Parameters:
 //   - r: HTTP request to check
+//   - allowedOrigins: extra origins accepted besides the same host, already normalised
+//     by parseAllowedOrigins (trimmed, no trailing slash)
 //
 // Returns:
 //   - error: Error if origin check fails
-func checkSameHost(_ *http.Request) error {
-	return nil
-	// origin := r.Header.Get("Origin")
-	//
-	//	if origin == "" {
-	//		return nil
-	//	}
-	//
-	// u, err := url.Parse(origin)
-	//
-	//	if err != nil {
-	//		return errors.NewConfigurationError("failed to parse Origin header %q", origin, err)
-	//	}
-	//
-	//	if strings.EqualFold(r.Host, u.Host) {
-	//		return nil
-	//	}
-	//
-	// return errors.NewServiceError("request Origin %q is not authorized for Host %q", origin, r.Host)
+func checkOrigin(r *http.Request, allowedOrigins []string) error {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return nil
+	}
+
+	for _, allowed := range allowedOrigins {
+		if allowed == "*" || strings.EqualFold(allowed, origin) {
+			return nil
+		}
+	}
+
+	u, err := url.Parse(origin)
+	if err != nil || u.Hostname() == "" {
+		return errors.NewServiceError("request Origin %q is not a valid origin", origin)
+	}
+
+	requestHost := r.Host
+	if h, _, splitErr := net.SplitHostPort(requestHost); splitErr == nil {
+		requestHost = h
+	}
+
+	requestHost = strings.TrimSuffix(strings.TrimPrefix(requestHost, "["), "]")
+
+	if requestHost != "" && (strings.EqualFold(u.Hostname(), requestHost) || isLoopbackHost(u.Hostname()) && isLoopbackHost(requestHost)) {
+		return nil
+	}
+
+	return errors.NewServiceError("request Origin %q is not authorized for Host %q", origin, r.Host)
+}
+
+// isLoopbackHost reports whether host is "localhost" or a loopback IP literal.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+
+	return ip != nil && ip.IsLoopback()
 }

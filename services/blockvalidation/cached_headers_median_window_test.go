@@ -25,8 +25,8 @@ import (
 // direction to the catchup-package test: it takes the route that would break IF the cached
 // catchup headers ever reached the median-time-past check.
 //
-// Today three coincidental facts keep them apart — catchup always sets
-// DisableOptimisticMining alongside CachedHeaders, that forces the non-optimistic branch, and
+// Three facts keep them apart — catchup sets DisableOptimisticMining alongside CachedHeaders
+// UNCONDITIONALLY, not from the operator opt-in, that forces the non-optimistic branch, and
 // that branch re-fetches a full run from the store. Flip any one of them and blocks 2..11 of
 // every catchup batch arrive with a 1..10-header run whose oldest entry is the common
 // ancestor rather than genesis. This test performs that flip deliberately
@@ -135,7 +135,10 @@ func TestValidateBlock_CachedHeadersShortWindowIsRefused(t *testing.T) {
 	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 
 	// Prime the subtree store so subtree validation passes and the run reaches the header check.
-	subtreeBytes, err := subtree.SerializeNodes()
+	// Serialize(), not SerializeNodes(): the cached-subtree ancestry check reads this blob
+	// back with DeserializeSubtreeConflictingFromReader, which needs the conflicting-nodes
+	// trailer that only the full serialisation carries. Production writes Serialize() here.
+	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
 	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 

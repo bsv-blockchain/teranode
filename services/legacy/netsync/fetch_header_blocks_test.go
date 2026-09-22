@@ -42,10 +42,10 @@ func TestFetchHeaderBlocksSurvivesPeerVanishingMidLoop(t *testing.T) {
 
 	// Both expiring maps spawn a cleanup goroutine each, so both are stopped on teardown
 	// rather than left running for the rest of the package suite.
-	sharedRequested := expiringmap.New[chainhash.Hash, struct{}](time.Minute)
+	sharedRequested := expiringmap.New[chainhash.Hash, blockRequestOrigin](time.Minute)
 	t.Cleanup(sharedRequested.Stop)
 
-	peerRequested := expiringmap.New[chainhash.Hash, struct{}](time.Minute)
+	peerRequested := expiringmap.New[chainhash.Hash, blockRequestOrigin](time.Minute)
 	t.Cleanup(peerRequested.Stop)
 
 	sm := &SyncManager{
@@ -94,4 +94,9 @@ func TestFetchHeaderBlocksSurvivesPeerVanishingMidLoop(t *testing.T) {
 	// requestedBlocks claims is already in flight.
 	require.Equal(t, 2, sm.requestedBlocks.Len(), "both headers should still have been requested")
 	require.Equal(t, 2, peerRequested.Len(), "both headers should still be recorded against the peer")
+	for i := byte(1); i <= 2; i++ {
+		origin, exists := peerRequested.Get(chainhash.Hash{i})
+		require.True(t, exists)
+		require.False(t, origin.headerProven, "a retained peer pointer must not grant provenance to an unverified header")
+	}
 }

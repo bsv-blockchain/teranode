@@ -1332,21 +1332,29 @@ func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
 			numGoroutines = 10
 		}
 
-		// add the transaction in parallel
+		// Each submission owns its decoded transaction, as real ingress does.
+		// Validation re-extends inputs in place; sharing pointers across requests
+		// races even though the transactions have identical txids.
+		tx2Bytes, tx3Bytes := txs[2].ExtendedBytes(), txs[3].ExtendedBytes()
 		for i := 0; i < numGoroutines; i++ {
+			tx2, err := bt.NewTxFromBytes(tx2Bytes)
+			require.NoError(t, err)
+			tx3, err := bt.NewTxFromBytes(tx3Bytes)
+			require.NoError(t, err)
+
 			g.Go(func() error {
-				if err := ps.processTransactionInternal(t.Context(), txs[2]); err != nil {
+				if err := ps.processTransactionInternal(t.Context(), tx2); err != nil {
 					return err
 				}
 
-				return ps.processTransactionInternal(t.Context(), txs[3])
+				return ps.processTransactionInternal(t.Context(), tx3)
 			})
 		}
 
 		require.NoError(t, g.Wait(), "processTransactionInternal should not return an error for valid transaction")
 
 		// make sure we only added the transaction once to block assembly
-		assert.Len(t, blockAssemblyClient.Mock.Calls, 2, "processTransactionInternal should only call block assembly once for the same transaction")
+		require.Len(t, blockAssemblyClient.Mock.Calls, 2, "processTransactionInternal should only call block assembly once for the same transaction")
 	})
 }
 

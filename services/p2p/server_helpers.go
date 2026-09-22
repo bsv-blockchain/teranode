@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -499,6 +500,13 @@ func (s *Server) validateDataHubURL(urlStr string) error {
 	hostname := strings.ToLower(strings.TrimRight(parsed.Hostname(), "."))
 	if hostname == "" {
 		return errors.NewInvalidArgumentError("DataHubURL has no hostname")
+	}
+
+	// Every fetch joins protocol paths onto this URL, so it must be a clean base: a query
+	// would turn those paths into query data aimed at a path the peer chose (issue 4843).
+	// This is about shape, not address, so it applies even when private IPs are allowed.
+	if err := util.ValidatePeerBaseURL(urlStr); err != nil {
+		return errors.NewInvalidArgumentError("DataHubURL is not a usable base URL", err)
 	}
 
 	// Skip SSRF checks when private/localhost IPs are allowed (e.g. local dev with host networking)

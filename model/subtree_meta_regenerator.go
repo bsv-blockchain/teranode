@@ -332,7 +332,11 @@ func (r *SubtreeMetaRegenerator) getSubtreeDataFromPeer(ctx context.Context, sub
 	ctx, cancel := context.WithTimeout(ctx, r.peerFetchTimeout)
 	defer cancel()
 
-	url := fmt.Sprintf("%s/subtree_data/%s", peerURL, subtreeHash.String())
+	url, err := util.JoinPeerURL(peerURL, "subtree_data", subtreeHash.String())
+	if err != nil {
+		return nil, false, err
+	}
+
 	if bypassCache {
 		url = fmt.Sprintf("%s?cachebust=%d", url, cacheBustCounter.Add(1))
 	}

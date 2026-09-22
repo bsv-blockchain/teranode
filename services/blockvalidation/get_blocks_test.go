@@ -1,12 +1,15 @@
 package blockvalidation
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,9 +17,11 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
+	p2pconstants "github.com/bsv-blockchain/teranode/interfaces/p2p"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
@@ -24,6 +29,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -31,9 +37,12 @@ import (
 	"github.com/jarcoal/httpmock"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
+	"golang.org/x/sync/semaphore"
 )
 
 // TestFetchBlocksConcurrently_CurrentImplementation tests the existing fetchBlocksConcurrently function behavior
@@ -818,7 +827,299 @@ func TestFetchBlocksBatch_CurrentBehavior(t *testing.T) {
 		assert.Contains(t, err.Error(), "failed to get blocks from peer")
 		require.Nil(t, fetchedBlocks)
 	})
+
+	// A peer that keeps streaming well-formed blocks past what was requested must not grow
+	// the result past n: before bitcoin-sv/teranode#4742, fetchBlocksBatch read the whole
+	// response into memory and looped until EOF, so a malicious/misbehaving peer answering
+	// "n=1" with 3 blocks would return all 3 to the caller.
+	t.Run("Peer Sends More Blocks Than Requested", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		blocks := testhelpers.CreateTestBlockChain(t, 4)
+		targetHash := blocks[1].Header.Hash()
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder(
+			"GET",
+			fmt.Sprintf("http://test-peer/blocks/%s?n=1", targetHash.String()),
+			httpmock.NewBytesResponder(200, func() []byte {
+				var allBytes []byte
+				for i := 1; i <= 3; i++ {
+					blockBytes, _ := blocks[i].Bytes()
+					allBytes = append(allBytes, blockBytes...)
+				}
+				return allBytes
+			}()),
+		)
+
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "test-peer-id", "http://test-peer")
+		require.NoError(t, err)
+		require.Len(t, fetchedBlocks, 1, "must stop at the requested count, not read every block the peer chose to send")
+		assert.Equal(t, targetHash, fetchedBlocks[0].Header.Hash())
+	})
+
+	// A block message's subtree hash list length is an unvalidated wire varint
+	// (model/Block.go), so streaming the parse instead of io.ReadAll-ing the response only
+	// halves peak memory - it does not bound it. Without a per-message byte cap a peer can
+	// still drive the parsed *model.Block unboundedly large (bitcoin-sv/teranode#4742,
+	// review of #1741, ChiR1).
+	t.Run("Peer Sends A Block Message Exceeding The Byte Cap", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		blocks := testhelpers.CreateTestBlockChain(t, 2)
+		targetHash := blocks[1].Header.Hash()
+
+		blockBytes, err := blocks[1].Bytes()
+		require.NoError(t, err)
+
+		// The cap sits strictly below the real (valid) block's size, so the only way this
+		// fetch can fail is the cap tripping - not a malformed message.
+		suite.Server.settings.BlockValidation.MaxIncomingBlockMessageBytes = int64(len(blockBytes) / 2)
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder(
+			"GET",
+			fmt.Sprintf("http://test-peer/blocks/%s?n=1", targetHash.String()),
+			httpmock.NewBytesResponder(200, blockBytes),
+		)
+
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "test-peer-id", "http://test-peer")
+		require.Error(t, err)
+		require.Nil(t, fetchedBlocks)
+		assert.Contains(t, err.Error(), "exceeds")
+		assert.Contains(t, err.Error(), "byte limit")
+		assert.True(t, errors.Is(err, errors.ErrExternal), "an over-cap block message must be classified as a peer/external error, got: %v", err)
+	})
 }
+
+// TestBatchFetchAndDistribute_BoundsPeerFetchDeadline covers ChiR2 from the #1741 review:
+// batchFetchAndDistribute's ctx descends from the catchup channel consumer's service-lifetime
+// context, which carries no deadline of its own. Before wrapping the fetchBlocksBatch call in
+// an explicit context.WithTimeout, DoHTTPRequestBodyReader's own default-timeout fallback
+// (used since bitcoin-sv/teranode#4742) would silently apply http_streaming_timeout (600 s in
+// settings.conf) instead of the 30 s budget the equivalent fetchSingleBlock call sites already used.
+// Assert the peer HTTP request actually carries a deadline no wider than that budget.
+func TestBatchFetchAndDistribute_BoundsPeerFetchDeadline(t *testing.T) {
+	suite := NewCatchupTestSuite(t)
+	defer suite.Cleanup()
+
+	blocks := testhelpers.CreateTestBlockChain(t, 2)
+	targetBlock := blocks[1]
+	blockHeaders := []*model.BlockHeader{targetBlock.Header}
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	var sawDeadline bool
+	var remaining time.Duration
+
+	httpmock.RegisterResponder(
+		"GET",
+		fmt.Sprintf("http://test-peer/blocks/%s?n=1", targetBlock.Header.Hash().String()),
+		func(req *http.Request) (*http.Response, error) {
+			deadline, ok := req.Context().Deadline()
+			sawDeadline = ok
+
+			if ok {
+				remaining = time.Until(deadline)
+			}
+
+			blockBytes, err := targetBlock.Bytes()
+			require.NoError(t, err)
+
+			return httpmock.NewBytesResponse(200, blockBytes), nil
+		},
+	)
+
+	workQueue := make(chan workItem, 1)
+
+	err := suite.Server.batchFetchAndDistribute(context.Background(), blockHeaders, workQueue, "peerA", "http://test-peer", targetBlock, 1, 0)
+	require.NoError(t, err)
+
+	require.True(t, sawDeadline, "peer block-batch fetch must run under a bounded context deadline, not an unbounded one")
+	require.Greater(t, remaining, time.Duration(0))
+	require.LessOrEqual(t, remaining, peerBlockFetchTimeout+time.Second, "peer fetch deadline must not silently widen to the http_streaming_timeout fallback")
+}
+
+// overSendP2PClient records UpdateCatchupError calls (the diagnostic path fetchBlocksBatch's
+// over-send probe uses) and how many times any reputation-affecting P2PClientI method was
+// invoked; every other method is inherited as a no-op from maliciousAbortP2PClient.
+type overSendP2PClient struct {
+	maliciousAbortP2PClient
+	updateCatchupErrorCalls int
+	lastCatchupError        string
+	reputationChargingCalls int
+}
+
+func (o *overSendP2PClient) UpdateCatchupError(_ context.Context, _ string, errorMsg string) error {
+	o.updateCatchupErrorCalls++
+	o.lastCatchupError = errorMsg
+	return nil
+}
+
+func (o *overSendP2PClient) RecordCatchupFailure(_ context.Context, _ string) error {
+	o.reputationChargingCalls++
+	return nil
+}
+
+func (o *overSendP2PClient) RecordCatchupFailureWithKind(_ context.Context, _, _, _ string) error {
+	o.reputationChargingCalls++
+	return nil
+}
+
+func (o *overSendP2PClient) RecordCatchupMalicious(_ context.Context, _ string) error {
+	o.reputationChargingCalls++
+	return nil
+}
+
+func (o *overSendP2PClient) AddBanScore(_ context.Context, _, _ string) error {
+	o.reputationChargingCalls++
+	return nil
+}
+
+// TestFetchBlocksBatch_OverSendIsDiagnosticOnly covers ChiR3 from the #1741 review: stopping the
+// fetch loop at n (rather than reading every block the peer chose to send) means a peer padding
+// correct data with extra blocks no longer aborts the whole catchup cycle - which is the right
+// behaviour - but it also made the anomaly completely silent. The probe added after the loop
+// must record the observation on the peer dashboard without charging reputation for it: padding
+// on top of correct data is at least as likely to be a caching proxy or ?n= version skew as it
+// is malice (mirrors the ErrBlockPolicyDeclined exemption in peer_metrics_helpers.go).
+func TestFetchBlocksBatch_OverSendIsDiagnosticOnly(t *testing.T) {
+	t.Run("peer sends more than requested: recorded, not charged", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		p2pClient := &overSendP2PClient{}
+		suite.Server.p2pClient = p2pClient
+
+		blocks := testhelpers.CreateTestBlockChain(t, 4)
+		targetHash := blocks[1].Header.Hash()
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder(
+			"GET",
+			fmt.Sprintf("http://test-peer/blocks/%s?n=1", targetHash.String()),
+			httpmock.NewBytesResponder(200, func() []byte {
+				var allBytes []byte
+				for i := 1; i <= 3; i++ {
+					blockBytes, _ := blocks[i].Bytes()
+					allBytes = append(allBytes, blockBytes...)
+				}
+				return allBytes
+			}()),
+		)
+
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "peerA", "http://test-peer")
+		require.NoError(t, err)
+		require.Len(t, fetchedBlocks, 1, "the requested block must still be returned, not discarded on padding")
+
+		require.Equal(t, 1, p2pClient.updateCatchupErrorCalls, "the over-send must be recorded diagnostically")
+		assert.Contains(t, p2pClient.lastCatchupError, "over-sent")
+		require.Equal(t, 0, p2pClient.reputationChargingCalls, "an over-sending peer must never be reputation-charged for it")
+	})
+
+	t.Run("peer sends exactly what was requested: nothing recorded", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		p2pClient := &overSendP2PClient{}
+		suite.Server.p2pClient = p2pClient
+
+		blocks := testhelpers.CreateTestBlockChain(t, 2)
+		targetHash := blocks[1].Header.Hash()
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder(
+			"GET",
+			fmt.Sprintf("http://test-peer/blocks/%s?n=1", targetHash.String()),
+			httpmock.NewBytesResponder(200, func() []byte {
+				blockBytes, _ := blocks[1].Bytes()
+				return blockBytes
+			}()),
+		)
+
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "peerA", "http://test-peer")
+		require.NoError(t, err)
+		require.Len(t, fetchedBlocks, 1)
+
+		require.Equal(t, 0, p2pClient.updateCatchupErrorCalls, "an honest peer answering exactly n must not be flagged")
+	})
+
+	// A peer can send the n blocks and then never end the response. The probe must give up on
+	// its own short budget rather than hold the read until the fetch deadline (review of #1741,
+	// ChiR6).
+	t.Run("peer holds the response open after n blocks: probe gives up quickly", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		p2pClient := &overSendP2PClient{}
+		suite.Server.p2pClient = p2pClient
+
+		blocks := testhelpers.CreateTestBlockChain(t, 2)
+		targetHash := blocks[1].Header.Hash()
+
+		blockBytes, err := blocks[1].Bytes()
+		require.NoError(t, err)
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder(
+			"GET",
+			fmt.Sprintf("http://test-peer/blocks/%s?n=1", targetHash.String()),
+			func(req *http.Request) (*http.Response, error) {
+				resp := httpmock.NewBytesResponse(200, nil)
+				resp.Body = &stallAfterDataBody{data: blockBytes, done: req.Context().Done()}
+
+				return resp, nil
+			},
+		)
+
+		// suite.Ctx carries a 30s deadline, so without the probe's own budget this would take
+		// the whole 30s and still return success.
+		start := time.Now()
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "peerA", "http://test-peer")
+		elapsed := time.Since(start)
+
+		require.NoError(t, err)
+		require.Len(t, fetchedBlocks, 1)
+		require.Less(t, elapsed, overSendProbeTimeout+3*time.Second, "the over-send probe must not hold the read until the fetch deadline")
+		require.Equal(t, 0, p2pClient.updateCatchupErrorCalls, "a stall is not an over-send and must not be reported as one")
+	})
+}
+
+// stallAfterDataBody serves data and then blocks, like a peer that never ends the response,
+// until done closes.
+type stallAfterDataBody struct {
+	data []byte
+	off  int
+	done <-chan struct{}
+}
+
+func (b *stallAfterDataBody) Read(p []byte) (int, error) {
+	if b.off < len(b.data) {
+		n := copy(p, b.data[b.off:])
+		b.off += n
+
+		return n, nil
+	}
+
+	<-b.done
+
+	return 0, context.Canceled
+}
+
+func (b *stallAfterDataBody) Close() error { return nil }
 
 // TestFetchSingleBlock_CurrentBehavior documents the current behavior of fetchSingleBlock function
 func TestFetchSingleBlock_CurrentBehavior(t *testing.T) {
@@ -896,6 +1197,38 @@ func TestFetchSingleBlock_CurrentBehavior(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to create block from bytes")
 		require.Nil(t, fetchedBlock)
+	})
+
+	// See the matching fetchBlocksBatch case ("Peer Sends A Block Message Exceeding The Byte
+	// Cap") for why a per-message byte cap is needed even with the streamed parse
+	// (bitcoin-sv/teranode#4742, review of #1741, ChiR1).
+	t.Run("Peer Sends A Block Message Exceeding The Byte Cap", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		blocks := testhelpers.CreateTestBlockChain(t, 2)
+		targetHash := blocks[1].Header.Hash()
+
+		blockBytes, err := blocks[1].Bytes()
+		require.NoError(t, err)
+
+		suite.Server.settings.BlockValidation.MaxIncomingBlockMessageBytes = int64(len(blockBytes) / 2)
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder(
+			"GET",
+			fmt.Sprintf("http://test-peer/block/%s", targetHash.String()),
+			httpmock.NewBytesResponder(200, blockBytes),
+		)
+
+		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		require.Error(t, err)
+		require.Nil(t, fetchedBlock)
+		assert.Contains(t, err.Error(), "exceeds")
+		assert.Contains(t, err.Error(), "byte limit")
+		assert.True(t, errors.Is(err, errors.ErrExternal), "an over-cap block message must be classified as a peer/external error, got: %v", err)
 	})
 }
 
@@ -998,7 +1331,7 @@ func TestFetchAndStoreSubtreeData_DetachedFetchIsBounded(t *testing.T) {
 	start := time.Now()
 	// subtree is nil because the fetch fails before it is used; the parameter only
 	// matters once bytes come back.
-	err := suite.Server.fetchAndStoreSubtreeData(suite.Ctx, blocks[0], subtreeHash, nil, "test-peer-id", "http://test-peer", false)
+	err := suite.Server.fetchAndStoreSubtreeData(suite.Ctx, blocks[0], subtreeHash, nil, "test-peer-id", "http://test-peer", false, nil)
 	elapsed := time.Since(start)
 
 	require.Error(t, err)
@@ -1734,7 +2067,7 @@ func TestSubtreeFunctions(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		_, err = suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		_, err = suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", nil)
 		assert.NoError(t, err)
 
 		// Verify both were stored in subtreeStore
@@ -1786,7 +2119,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			Height: 100,
 		}
 
-		_, err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		_, err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree from")
 	})
@@ -1797,7 +2130,10 @@ func TestSubtreeFunctions(t *testing.T) {
 
 		suite.Server.subtreeStore = memory.New()
 
-		subtreeHash := &chainhash.Hash{0x01, 0x02, 0x03}
+		// The outer subtreeHash is the real root of the node bytes served below. It has to be: the
+		// subtree fetch must SUCCEED here (the fetch-side root check would otherwise reject the bytes
+		// and this test would never reach the subtree_data failure it exists to cover) —
+		// bitcoin-sv/teranode#4692.
 
 		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
@@ -1825,7 +2161,7 @@ func TestSubtreeFunctions(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		_, err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		_, err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree data from")
 	})
@@ -1839,7 +2175,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			Subtrees: []*chainhash.Hash{}, // Empty subtrees
 		}
 
-		_, err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		_, _, err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		assert.NoError(t, err) // Should return early with no error
 	})
 
@@ -1864,7 +2200,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			fmt.Sprintf("http://test-peer/subtree/%s", subtreeHash.String()),
 			httpmock.NewStringResponder(500, "Internal Server Error"))
 
-		_, err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		_, _, err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "Failed to fetch subtree data for block")
 	})
@@ -1899,7 +2235,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			fmt.Sprintf("http://test-peer/subtree_data/%s", subtreeHash.String()),
 			httpmock.NewStringResponder(404, "Not Found"))
 
-		_, err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		_, _, err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "Failed to fetch subtree data for block")
 	})
@@ -1991,7 +2327,11 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 	baseURL := "http://test-peer:8080"
 	ctx := context.Background()
 
-	txs := transactions.CreateTestTransactionChainWithCount(t, 5)
+	// CreateTestTransactionChainWithCount returns count-1 transactions, so 13 yields txs[0..11]:
+	// txs[0..3] for the shared single-subtree fixture below (identical for any count — the chain is
+	// derived from a fixed key in a fixed order) plus nine more for MultipleSubtrees' three
+	// genuinely distinct subtrees.
+	txs := transactions.CreateTestTransactionChainWithCount(t, 13)
 
 	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
 	assert.NoError(t, err)
@@ -2022,7 +2362,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 			Subtrees: []*chainhash.Hash{}, // Empty subtrees
 		}
 
-		_, err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, _, err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.NoError(t, err)
 	})
 
@@ -2049,41 +2389,53 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeDataURL,
 			httpmock.NewBytesResponder(200, subtreeDataBytes))
 
-		_, err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, _, err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.NoError(t, err)
 	})
 
 	t.Run("MultipleSubtrees", func(t *testing.T) {
-		subtreeHash1 := createTestHash("subtree1")
-		subtreeHash2 := createTestHash("subtree2")
-		subtreeHash3 := createTestHash("subtree3")
+		// THREE genuinely distinct subtrees, each requested under the root its own served node bytes
+		// hash to — which the fetch-side root check requires (bitcoin-sv/teranode#4692).
+		//
+		// Naming one hash three times would not do, and neither would reusing the enclosing
+		// fixture's subtree: fetchAndStoreSubtree starts with findLocalSubtreeFile, so a hash already
+		// in the store (SingleSubtree above fetched AND STORED that one into this function's shared
+		// store) or one a sibling goroutine has just written takes the local-load branch and never
+		// fetches. Either way the fan-out this sub-test exists for would collapse, timing-dependently,
+		// into a duplicate of SingleSubtree. Leaf offsets 3/6/9 keep all three clear of it.
+		one := distinctFetchSubtree(t, txs, 3)
+		two := distinctFetchSubtree(t, txs, 6)
+		three := distinctFetchSubtree(t, txs, 9)
 
 		block := &model.Block{
-			Subtrees: []*chainhash.Hash{subtreeHash1, subtreeHash2, subtreeHash3},
+			Subtrees: []*chainhash.Hash{one.hash, two.hash, three.hash},
+		}
+		require.False(t, one.hash.IsEqual(two.hash) || two.hash.IsEqual(three.hash) || one.hash.IsEqual(three.hash),
+			"the three subtrees must be distinct, or the fan-out is not exercised")
+		require.False(t, one.hash.IsEqual(subtreeHash) || two.hash.IsEqual(subtreeHash) || three.hash.IsEqual(subtreeHash),
+			"none may be the already-stored subtree, or it is served from the store and never fetched")
+
+		// Zero the counters (not Reset, which would drop the sibling sub-tests' responders) so the
+		// call-count assertions below measure only this sub-test.
+		httpmock.ZeroCallCounters()
+
+		for _, s := range []fetchSubtreeFixture{one, two, three} {
+			httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree/%s", baseURL, s.hash.String()),
+				httpmock.NewBytesResponder(200, s.nodeBytes))
+			httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree_data/%s", baseURL, s.hash.String()),
+				httpmock.NewBytesResponder(200, s.dataBytes))
 		}
 
-		// Create node hashes for the subtree endpoint (raw hashes, not serialized subtree)
-		var nodeHashes []byte
-		// First is coinbase placeholder
-		nodeHashes = append(nodeHashes, subtreepkg.CoinbasePlaceholderHashValue[:]...)
-		// Then the transaction hashes - just use the first 3 for simplicity
-		nodeHashes = append(nodeHashes, txs[1].TxIDChainHash()[:]...)
-		nodeHashes = append(nodeHashes, txs[2].TxIDChainHash()[:]...)
-		nodeHashes = append(nodeHashes, txs[3].TxIDChainHash()[:]...)
-
-		// Mock HTTP responses for all subtrees
-		for _, hash := range block.Subtrees {
-			subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, hash.String())
-			subtreeDataURL := fmt.Sprintf("%s/subtree_data/%s", baseURL, hash.String())
-
-			httpmock.RegisterResponder("GET", subtreeURL,
-				httpmock.NewBytesResponder(200, nodeHashes))
-			httpmock.RegisterResponder("GET", subtreeDataURL,
-				httpmock.NewBytesResponder(200, subtreeDataBytes))
-		}
-
-		_, err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, _, err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.NoError(t, err)
+
+		// State what this actually exercised: all three were fetched from the peer, so the fan-out
+		// really did run three times rather than collapsing onto one local load.
+		counts := httpmock.GetCallCountInfo()
+		for _, s := range []fetchSubtreeFixture{one, two, three} {
+			require.Equal(t, 1, counts["GET "+fmt.Sprintf("%s/subtree/%s", baseURL, s.hash.String())],
+				"each distinct subtree must be fetched exactly once")
+		}
 	})
 
 	t.Run("SubtreeFetchError", func(t *testing.T) {
@@ -2097,7 +2449,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeURL,
 			httpmock.NewErrorResponder(errors.NewNetworkError("subtree fetch error")))
 
-		_, err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, _, err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "Failed to fetch subtree data for block")
 	})
@@ -2136,7 +2488,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 		cancelCtx, cancel := context.WithCancel(ctx)
 		cancel() // Cancel immediately
 
-		_, err := server.fetchSubtreeDataForBlock(cancelCtx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, _, err := server.fetchSubtreeDataForBlock(cancelCtx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.Error(t, err)
 		// Check for either context canceled or the wrapped error containing context cancellation
 		assert.True(t,
@@ -2294,7 +2646,7 @@ func TestFetchSubtreeDataForBlock_SiblingFailureDoesNotCancelInFlight(t *testing
 	}
 
 	// Overall call MUST fail because B failed — that is correct.
-	_, err = server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+	_, _, err = server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 	require.Error(t, err)
 
 	// Regression: with the fix, A's body completed and was written to disk despite the
@@ -2374,7 +2726,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL, nil)
 		assert.NoError(t, err)
 	})
 
@@ -2407,7 +2759,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree")
 	})
@@ -2449,7 +2801,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree data from")
 	})
@@ -2503,7 +2855,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL, nil)
 		assert.Error(t, err)
 	})
 
@@ -2554,7 +2906,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		_, err := server.fetchAndStoreSubtreeAndSubtreeData(cancelCtx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
+		_, err := server.fetchAndStoreSubtreeAndSubtreeData(cancelCtx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL, nil)
 		assert.Error(t, err)
 		// Check for either context canceled or the wrapped error containing context cancellation
 		assert.True(t,
@@ -2831,60 +3183,32 @@ func TestBlockWorker(t *testing.T) {
 	baseURL := "http://test-peer:8080"
 	ctx := context.Background()
 
-	txs := transactions.CreateTestTransactionChainWithCount(t, 5)
-
-	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
-	assert.NoError(t, err)
-
-	require.NoError(t, subtree.AddCoinbaseNode())
-	require.NoError(t, subtree.AddNode(*txs[1].TxIDChainHash(), 1, 11))
-	require.NoError(t, subtree.AddNode(*txs[2].TxIDChainHash(), 2, 12))
-	require.NoError(t, subtree.AddNode(*txs[3].TxIDChainHash(), 3, 13))
-
-	subtreeHash := subtree.RootHash()
-
-	// subtreeBytes not needed - we use raw node hashes instead
-	// subtreeBytes, err := subtree.Serialize()
-	// require.NoError(t, err)
-
-	subtreeData := subtreepkg.NewSubtreeData(subtree)
-	require.NoError(t, subtreeData.AddTx(txs[0], 0))
-	require.NoError(t, subtreeData.AddTx(txs[1], 1))
-	require.NoError(t, subtreeData.AddTx(txs[2], 2))
-	require.NoError(t, subtreeData.AddTx(txs[3], 3))
-
-	subtreeDataBytes, err := subtreeData.Serialize()
-	require.NoError(t, err)
+	// 8 yields txs[0..6]: two disjoint sets of three leaves so WorkerProcessesBlocksWithSubtrees can
+	// give its two blocks genuinely different subtrees. The per-subtree fixtures are built by
+	// distinctFetchSubtree at the point of use.
+	txs := transactions.CreateTestTransactionChainWithCount(t, 8)
 
 	t.Run("WorkerProcessesBlocksWithSubtrees", func(t *testing.T) {
-		// Create test blocks with subtrees
-		subtreeHash2 := createTestHash("subtree2")
+		// The two blocks name DIFFERENT subtrees, as two real blocks would. Each is requested under
+		// the root its own served node bytes hash to, which the fetch-side root check requires
+		// (bitcoin-sv/teranode#4692); collapsing both onto one hash would make the second block a
+		// local load rather than a fetch.
+		first := distinctFetchSubtree(t, txs, 1)
+		second := distinctFetchSubtree(t, txs, 4)
+		require.False(t, first.hash.IsEqual(second.hash), "the two blocks must name different subtrees")
 
 		block1 := &model.Block{
-			Subtrees: []*chainhash.Hash{subtreeHash},
+			Subtrees: []*chainhash.Hash{first.hash},
 		}
 		block2 := &model.Block{
-			Subtrees: []*chainhash.Hash{subtreeHash2},
+			Subtrees: []*chainhash.Hash{second.hash},
 		}
 
-		// Create node hashes for the subtree endpoint (raw hashes, not serialized subtree)
-		var nodeHashes []byte
-		// First is coinbase placeholder
-		nodeHashes = append(nodeHashes, subtreepkg.CoinbasePlaceholderHashValue[:]...)
-		// Then the transaction hashes
-		nodeHashes = append(nodeHashes, txs[1].TxIDChainHash()[:]...)
-		nodeHashes = append(nodeHashes, txs[2].TxIDChainHash()[:]...)
-		nodeHashes = append(nodeHashes, txs[3].TxIDChainHash()[:]...)
-
-		// Mock HTTP responses for all subtrees
-		for _, hash := range []*chainhash.Hash{subtreeHash, subtreeHash2} {
-			subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, hash.String())
-			subtreeDataURL := fmt.Sprintf("%s/subtree_data/%s", baseURL, hash.String())
-
-			httpmock.RegisterResponder("GET", subtreeURL,
-				httpmock.NewBytesResponder(200, nodeHashes))
-			httpmock.RegisterResponder("GET", subtreeDataURL,
-				httpmock.NewBytesResponder(200, subtreeDataBytes))
+		for _, s := range []fetchSubtreeFixture{first, second} {
+			httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree/%s", baseURL, s.hash.String()),
+				httpmock.NewBytesResponder(200, s.nodeBytes))
+			httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree_data/%s", baseURL, s.hash.String()),
+				httpmock.NewBytesResponder(200, s.dataBytes))
 		}
 
 		// Create channels
@@ -3250,6 +3574,53 @@ func createTestHash(input string) *chainhash.Hash {
 	return &hash
 }
 
+// fetchSubtreeFixture is a subtree plus the two peer responses that satisfy a full
+// fetchAndStoreSubtreeAndSubtreeData: the raw node hashes /subtree serves, and the serialized
+// subtree data /subtree_data serves. hash is the root those node bytes actually hash to, which
+// since bitcoin-sv/teranode#4692 is the only hash the subtree may be requested under.
+type fetchSubtreeFixture struct {
+	hash      *chainhash.Hash
+	nodeBytes []byte
+	dataBytes []byte
+}
+
+// distinctFetchSubtree builds a coinbase-led four-leaf subtree from the three transactions of the
+// chain starting at leafOffset. It mirrors the shape fetchAndStoreSubtree reconstructs from the
+// wire — NewIncompleteTreeByLeafCount(len(nodes)), AddCoinbaseNode for the placeholder, AddNode for
+// the rest — so the root it computes matches the root here. Different offsets give different roots,
+// which is what lets a caller build several subtrees a block can plausibly name.
+func distinctFetchSubtree(t *testing.T, txs []*bt.Tx, leafOffset int) fetchSubtreeFixture {
+	t.Helper()
+
+	leaves := txs[leafOffset : leafOffset+3]
+
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+
+	nodeBytes := make([]byte, 0, 4*chainhash.HashSize)
+	nodeBytes = append(nodeBytes, subtreepkg.CoinbasePlaceholderHashValue[:]...)
+
+	for i, tx := range leaves {
+		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), uint64(i+1), uint64(i+11))) //nolint:gosec
+		nodeBytes = append(nodeBytes, tx.TxIDChainHash()[:]...)
+	}
+
+	// Built only once the subtree is complete: NewSubtreeData sizes its Txs from the subtree's
+	// length, so an earlier construction would have no slot for the leaves added above.
+	data := subtreepkg.NewSubtreeData(subtree)
+	require.NoError(t, data.AddTx(txs[0], 0))
+
+	for i, tx := range leaves {
+		require.NoError(t, data.AddTx(tx, i+1))
+	}
+
+	dataBytes, err := data.Serialize()
+	require.NoError(t, err)
+
+	return fetchSubtreeFixture{hash: subtree.RootHash(), nodeBytes: nodeBytes, dataBytes: dataBytes}
+}
+
 // TestFetchAndStoreSubtree tests the fetchAndStoreSubtree function comprehensively
 func TestFetchAndStoreSubtree(t *testing.T) {
 	t.Run("SubtreeAlreadyExists", func(t *testing.T) {
@@ -3286,7 +3657,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		}
 
 		// Fetch the subtree (should load from store, not network)
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, &subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", false)
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, &subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", false, nil)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -3325,7 +3696,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		testBlock := &model.Block{Height: 100}
 
 		// Should succeed with no HTTP mock registered: load from store, not network.
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, &subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", false)
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, &subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", false, nil)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -3339,9 +3710,11 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
-		subtreeHash := createTestHash("subtree1")
-
-		// Create subtree node bytes (4 hashes)
+		// Create subtree node bytes (4 hashes). The hash the subtree is REQUESTED under must be the
+		// root those nodes actually hash to, or the fetch-side root check rejects the bytes
+		// (bitcoin-sv/teranode#4692) — so derive it rather than inventing one. The tree is built the
+		// same way fetchAndStoreSubtree builds it (NewIncompleteTreeByLeafCount(len), AddNode with
+		// zero fee/size), so the roots agree.
 		nodeBytes := make([]byte, 0)
 		hash1 := chainhash.DoubleHashH([]byte("tx1"))
 		hash2 := chainhash.DoubleHashH([]byte("tx2"))
@@ -3353,6 +3726,14 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		nodeBytes = append(nodeBytes, hash3[:]...)
 		nodeBytes = append(nodeBytes, hash4[:]...)
 
+		servedSubtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
+		require.NoError(t, err)
+		require.NoError(t, servedSubtree.AddNode(hash1, 0, 0))
+		require.NoError(t, servedSubtree.AddNode(hash2, 0, 0))
+		require.NoError(t, servedSubtree.AddNode(hash3, 0, 0))
+		require.NoError(t, servedSubtree.AddNode(hash4, 0, 0))
+		subtreeHash := servedSubtree.RootHash()
+
 		httpmock.RegisterResponder(
 			"GET",
 			fmt.Sprintf("http://test-peer/subtree/%s", subtreeHash.String()),
@@ -3363,7 +3744,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", false)
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", false, nil)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -3381,9 +3762,9 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
-		subtreeHash := createTestHash("subtree-coinbase")
-
-		// Create subtree node bytes with coinbase placeholder as first node
+		// Create subtree node bytes with coinbase placeholder as first node, and request the subtree
+		// under the root those nodes actually hash to — the fetch-side root check requires it
+		// (bitcoin-sv/teranode#4692).
 		nodeBytes := make([]byte, 0)
 		nodeBytes = append(nodeBytes, subtreepkg.CoinbasePlaceholderHashValue[:]...)
 
@@ -3395,6 +3776,14 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		nodeBytes = append(nodeBytes, hash3[:]...)
 		nodeBytes = append(nodeBytes, hash4[:]...)
 
+		servedSubtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
+		require.NoError(t, err)
+		require.NoError(t, servedSubtree.AddCoinbaseNode())
+		require.NoError(t, servedSubtree.AddNode(hash2, 0, 0))
+		require.NoError(t, servedSubtree.AddNode(hash3, 0, 0))
+		require.NoError(t, servedSubtree.AddNode(hash4, 0, 0))
+		subtreeHash := servedSubtree.RootHash()
+
 		httpmock.RegisterResponder(
 			"GET",
 			fmt.Sprintf("http://test-peer/subtree/%s", subtreeHash.String()),
@@ -3405,7 +3794,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", false)
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", false, nil)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -3430,7 +3819,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", false)
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", false, nil)
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -3457,7 +3846,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", false)
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", false, nil)
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -3479,11 +3868,194 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", false)
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", false, nil)
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "Failed to deserialize existing subtree")
+	})
+
+	// RejectsMismatchedRoot pins the fetch-side root check (bitcoin-sv/teranode#4692): a peer's node
+	// bytes must hash to the subtree they were REQUESTED under. Without it the blob is stored under a
+	// filename it does not match, findLocalSubtreeFile short-circuits to it on retry, and the
+	// resulting block-level merkle mismatch is charged to the catch-up primary rather than to the
+	// peer that served the bytes.
+	//
+	// Mutation proof: delete the root check and the mismatched bytes are stored, the call succeeds,
+	// the freshness tracker records the pair, and no strike lands — reddening all four assertions.
+	t.Run("RejectsMismatchedRoot", func(t *testing.T) {
+		const servingPeer = "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
+
+		hash1 := chainhash.DoubleHashH([]byte("mismatch-tx1"))
+		hash2 := chainhash.DoubleHashH([]byte("mismatch-tx2"))
+
+		nodeBytes := make([]byte, 0, 2*chainhash.HashSize)
+		nodeBytes = append(nodeBytes, hash1[:]...)
+		nodeBytes = append(nodeBytes, hash2[:]...)
+
+		honestSubtree, err := subtreepkg.NewIncompleteTreeByLeafCount(2)
+		require.NoError(t, err)
+		require.NoError(t, honestSubtree.AddNode(hash1, 0, 0))
+		require.NoError(t, honestSubtree.AddNode(hash2, 0, 0))
+		honestHash := honestSubtree.RootHash()
+
+		t.Run("mismatched bytes are rejected and the serving peer is struck", func(t *testing.T) {
+			suite := NewCatchupTestSuite(t)
+			defer suite.Cleanup()
+
+			rec := &subtreeAttributionP2PClient{}
+			suite.Server.blockValidation.p2pClient = rec
+
+			httpmock.ActivateNonDefault(util.HTTPClient())
+			defer httpmock.DeactivateAndReset()
+
+			// Request the honest bytes under a hash they do NOT hash to — the doctored case.
+			requestedHash := createTestHash("not-the-root-of-these-nodes")
+			require.False(t, requestedHash.IsEqual(honestHash))
+
+			httpmock.RegisterResponder(
+				"GET",
+				fmt.Sprintf("http://test-peer/subtree/%s", requestedHash.String()),
+				httpmock.NewBytesResponder(200, nodeBytes),
+			)
+
+			freshness := newSubtreeFreshness()
+
+			result, fetchErr := suite.Server.fetchAndStoreSubtree(suite.Ctx, &model.Block{Height: 100},
+				requestedHash, servingPeer, "http://test-peer", false, freshness)
+
+			require.Error(t, fetchErr)
+			require.Nil(t, result)
+			require.Contains(t, fetchErr.Error(), requestedHash.String(), "the error must name the hash that was requested")
+			require.Contains(t, fetchErr.Error(), honestHash.String(), "the error must name the root the bytes actually hash to")
+
+			stored, existsErr := suite.Server.subtreeStore.Exists(suite.Ctx, requestedHash[:], fileformat.FileTypeSubtreeToCheck)
+			require.NoError(t, existsErr)
+			require.False(t, stored, "the blob must never land under a filename it does not match")
+
+			require.Empty(t, freshness.snapshot(), "a rejected fetch must record no freshness")
+
+			// NO strike on this attempt: bypassCache is false, so a caching layer replaying a poisoned
+			// generation is still a live explanation for the mismatch and charging the peer would
+			// charge every peer behind that cache (bitcoin-sv/teranode#4692). The error is marked
+			// cache-bypass retryable instead, which buys the one cache-busted retry that rules the
+			// cache out — the sibling case below.
+			require.Empty(t, rec.struck(),
+				"the mismatch must not be charged to the peer until the cache explanation has been eliminated")
+			require.True(t, isCacheBypassRetryable(fetchErr),
+				"the rejection must be retryable, or the cache-busted attempt that CAN strike is never made")
+		})
+
+		// The other half of the gate: the same mismatch on the cache-busted attempt, where the cache
+		// can no longer explain it, DOES strike (bitcoin-sv/teranode#4692).
+		t.Run("mismatched bytes on the cache-busted attempt strike the serving peer", func(t *testing.T) {
+			suite := NewCatchupTestSuite(t)
+			defer suite.Cleanup()
+
+			rec := &subtreeAttributionP2PClient{}
+			suite.Server.blockValidation.p2pClient = rec
+
+			httpmock.ActivateNonDefault(util.HTTPClient())
+			defer httpmock.DeactivateAndReset()
+
+			requestedHash := createTestHash("not-the-root-of-these-nodes")
+			require.False(t, requestedHash.IsEqual(honestHash))
+
+			httpmock.RegisterResponder(
+				"GET",
+				fmt.Sprintf("http://test-peer/subtree/%s", requestedHash.String()),
+				httpmock.NewBytesResponder(200, nodeBytes),
+			)
+
+			_, fetchErr := suite.Server.fetchAndStoreSubtree(suite.Ctx, &model.Block{Height: 100},
+				requestedHash, servingPeer, "http://test-peer", true, newSubtreeFreshness())
+			require.Error(t, fetchErr)
+
+			strikes := rec.struck()
+			require.Len(t, strikes, 1, "the serving peer must be struck exactly once once the cache is ruled out")
+			require.Equal(t, servingPeer, strikes[0].peerID)
+			require.Equal(t, p2pconstants.ReasonCorruptBlockBody.String(), strikes[0].reason)
+		})
+
+		// Positive control: the check must not reject an honest fetch. Same bytes, requested under
+		// the hash they really do hash to.
+		t.Run("matching bytes are stored, marked fresh, and earn no strike", func(t *testing.T) {
+			suite := NewCatchupTestSuite(t)
+			defer suite.Cleanup()
+
+			rec := &subtreeAttributionP2PClient{}
+			suite.Server.blockValidation.p2pClient = rec
+
+			httpmock.ActivateNonDefault(util.HTTPClient())
+			defer httpmock.DeactivateAndReset()
+
+			httpmock.RegisterResponder(
+				"GET",
+				fmt.Sprintf("http://test-peer/subtree/%s", honestHash.String()),
+				httpmock.NewBytesResponder(200, nodeBytes),
+			)
+
+			freshness := newSubtreeFreshness()
+
+			result, fetchErr := suite.Server.fetchAndStoreSubtree(suite.Ctx, &model.Block{Height: 100},
+				honestHash, servingPeer, "http://test-peer", false, freshness)
+
+			require.NoError(t, fetchErr)
+			require.NotNil(t, result)
+
+			stored, existsErr := suite.Server.subtreeStore.Exists(suite.Ctx, honestHash[:], fileformat.FileTypeSubtreeToCheck)
+			require.NoError(t, existsErr)
+			require.True(t, stored, "an honest fetch must still be stored")
+
+			require.Contains(t, freshness.snapshot()[*honestHash], fileformat.FileTypeSubtreeToCheck,
+				"an honest fetch must still be marked fresh")
+			require.Empty(t, rec.struck(), "an honest fetch must earn no strike")
+		})
+
+		// Strike hygiene (bitcoin-sv/teranode#4692): a response that is not a whole number of node
+		// hashes is MALFORMED, not doctored. The integer division that derives numberOfNodes would
+		// silently drop the trailing partial hash, and the surviving prefix would then hash to some
+		// other root — earning the serving peer a corrupt-body strike for what may be a truncated
+		// transfer. The explicit length guard must reject it first, with no strike.
+		//
+		// Mutation proof: delete the length guard and this sub-test reddens on the strike count.
+		t.Run("malformed node length is rejected without striking the peer", func(t *testing.T) {
+			suite := NewCatchupTestSuite(t)
+			defer suite.Cleanup()
+
+			rec := &subtreeAttributionP2PClient{}
+			suite.Server.blockValidation.p2pClient = rec
+
+			httpmock.ActivateNonDefault(util.HTTPClient())
+			defer httpmock.DeactivateAndReset()
+
+			// The honest bytes with the last hash truncated by one byte.
+			truncated := nodeBytes[:len(nodeBytes)-1]
+			require.NotZero(t, len(truncated)%chainhash.HashSize, "the fixture must be a partial-hash length")
+
+			httpmock.RegisterResponder(
+				"GET",
+				fmt.Sprintf("http://test-peer/subtree/%s", honestHash.String()),
+				httpmock.NewBytesResponder(200, truncated),
+			)
+
+			freshness := newSubtreeFreshness()
+
+			result, fetchErr := suite.Server.fetchAndStoreSubtree(suite.Ctx, &model.Block{Height: 100},
+				honestHash, servingPeer, "http://test-peer", false, freshness)
+
+			require.Error(t, fetchErr)
+			require.Nil(t, result)
+			require.Contains(t, fetchErr.Error(), "not a whole number", "the error must identify the malformed length")
+
+			stored, existsErr := suite.Server.subtreeStore.Exists(suite.Ctx, honestHash[:], fileformat.FileTypeSubtreeToCheck)
+			require.NoError(t, existsErr)
+			require.False(t, stored)
+			require.Empty(t, freshness.snapshot())
+
+			require.Empty(t, rec.struck(),
+				"a malformed length may be a truncated transfer, so it must NOT earn a corrupt-body strike")
+		})
 	})
 }
 
@@ -3517,7 +4089,7 @@ func TestFetchAndStoreSubtreeDataEdgeCases(t *testing.T) {
 		}
 
 		// This should skip fetching since data already exists
-		err = suite.Server.fetchAndStoreSubtreeData(suite.Ctx, testBlock, &subtreeHash, subtree, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", false)
+		err = suite.Server.fetchAndStoreSubtreeData(suite.Ctx, testBlock, &subtreeHash, subtree, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", false, nil)
 		assert.NoError(t, err)
 	})
 }
@@ -3534,9 +4106,9 @@ func TestBlockWorker_Pessimistic_CallsFetchSubtreeData(t *testing.T) {
 		stats:         gocore.NewStat("test-pess"),
 		adaptiveFetch: afState,
 	}
-	server.fetchSubtreeDataForBlockFn = func(ctx context.Context, b *model.Block, peerID, baseURL string) (map[string]struct{}, error) {
+	server.fetchSubtreeDataForBlockFn = func(ctx context.Context, b *model.Block, peerID, baseURL string) (map[string]struct{}, map[chainhash.Hash]map[fileformat.FileType]struct{}, error) {
 		fetchCalls.Add(1)
-		return nil, nil
+		return nil, map[chainhash.Hash]map[fileformat.FileType]struct{}{}, nil
 	}
 
 	workQueue := make(chan workItem, 1)
@@ -3573,9 +4145,9 @@ func TestBlockWorker_Optimistic_SkipsFetchSubtreeData(t *testing.T) {
 		stats:         gocore.NewStat("test-opt"),
 		adaptiveFetch: afState,
 	}
-	server.fetchSubtreeDataForBlockFn = func(ctx context.Context, b *model.Block, peerID, baseURL string) (map[string]struct{}, error) {
+	server.fetchSubtreeDataForBlockFn = func(ctx context.Context, b *model.Block, peerID, baseURL string) (map[string]struct{}, map[chainhash.Hash]map[fileformat.FileType]struct{}, error) {
 		fetchCalls.Add(1)
-		return nil, nil
+		return nil, map[chainhash.Hash]map[fileformat.FileType]struct{}{}, nil
 	}
 
 	workQueue := make(chan workItem, 1)
@@ -3730,7 +4302,7 @@ func TestFetchAndStoreSubtreeData_PoisonedResponses(t *testing.T) {
 
 		httpmock.RegisterResponder("GET", subtreeDataURL, httpmock.NewBytesResponder(200, []byte{}))
 
-		err := server.fetchAndStoreSubtreeData(ctx, testBlock, subtreeHash, subtree, peerID, baseURL, false)
+		err := server.fetchAndStoreSubtreeData(ctx, testBlock, subtreeHash, subtree, peerID, baseURL, false, nil)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "served empty subtree_data")
 		require.Contains(t, err.Error(), peerID)
@@ -3752,7 +4324,7 @@ func TestFetchAndStoreSubtreeData_PoisonedResponses(t *testing.T) {
 
 		httpmock.RegisterResponder("GET", subtreeDataURL, httpmock.NewBytesResponder(200, truncated))
 
-		err := server.fetchAndStoreSubtreeData(ctx, testBlock, subtreeHash, subtree, peerID, baseURL, false)
+		err := server.fetchAndStoreSubtreeData(ctx, testBlock, subtreeHash, subtree, peerID, baseURL, false, nil)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "served incomplete subtree_data")
 		require.True(t, isCacheBypassRetryable(err))
@@ -3775,7 +4347,7 @@ func TestFetchAndStoreSubtreeData_PoisonedResponses(t *testing.T) {
 			fmt.Sprintf("%s/subtree_data/%s", baseURL, coinbaseHash.String()),
 			httpmock.NewBytesResponder(200, []byte{}))
 
-		err = server.fetchAndStoreSubtreeData(ctx, testBlock, coinbaseHash, coinbaseOnly, peerID, baseURL, false)
+		err = server.fetchAndStoreSubtreeData(ctx, testBlock, coinbaseHash, coinbaseOnly, peerID, baseURL, false, nil)
 		require.NoError(t, err)
 	})
 
@@ -3805,7 +4377,7 @@ func TestFetchAndStoreSubtreeData_PoisonedResponses(t *testing.T) {
 			httpmock.NewBytesResponder(200, []byte{}))
 
 		require.NotPanics(t, func() {
-			err = server.fetchAndStoreSubtreeData(ctx, testBlock, oneNodeHash, oneNode, peerID, baseURL, false)
+			err = server.fetchAndStoreSubtreeData(ctx, testBlock, oneNodeHash, oneNode, peerID, baseURL, false, nil)
 		})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "served empty subtree_data")
@@ -3867,7 +4439,7 @@ func TestFetchAndStoreSubtreeAndSubtreeData_CacheBypassRetry(t *testing.T) {
 	httpmock.RegisterResponder("GET", poisonedURL, httpmock.NewBytesResponder(200, []byte{}))
 	httpmock.RegisterResponder("GET", bustedURL, httpmock.NewBytesResponder(200, subtreeDataBytes))
 
-	servingPeer, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, &model.Block{Height: 100}, subtreeHash, peerID, baseURL)
+	servingPeer, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, &model.Block{Height: 100}, subtreeHash, peerID, baseURL, nil)
 	require.NoError(t, err, "the cache-busted retry must recover without any alternative peer")
 	require.Equal(t, peerID, servingPeer)
 
@@ -3901,7 +4473,7 @@ func TestFetchAndStoreSubtreeAndSubtreeData_AllPeersFailedErrorNamesEveryPeer(t 
 		fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String()),
 		httpmock.NewStringResponder(404, `{"message":"NOT_FOUND (3): subtree not found"}`))
 
-	_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, &model.Block{Height: 100}, &subtreeHash, peerID, baseURL)
+	_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, &model.Block{Height: 100}, &subtreeHash, peerID, baseURL, nil)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrExternal))
 	require.Contains(t, err.Error(), "primary "+peerID, "the primary attempt must be named in the summary")
@@ -3922,4 +4494,1605 @@ func TestFormatSubtreeFetchAttempts(t *testing.T) {
 	require.Contains(t, got, "empty body from b")
 	require.Contains(t, got, "; ", "attempts must be separated so each is readable in one log line")
 	require.Empty(t, formatSubtreeFetchAttempts(nil))
+}
+
+// r2SubtreeFixture builds a 4-leaf subtree plus the honest wire bytes a peer would serve for
+// /subtree (the node hashes) and /subtree_data (the serialized txs), for the R2 cache-bypass tests
+// (bitcoin-sv/teranode#4692).
+type r2SubtreeFixture struct {
+	subtree       *subtreepkg.Subtree
+	hash          *chainhash.Hash
+	honestNodes   []byte
+	honestData    []byte
+	subtreeURL    string
+	subtreeDatURL string
+}
+
+func newR2SubtreeFixture(t *testing.T, baseURL string) r2SubtreeFixture {
+	t.Helper()
+
+	txs := transactions.CreateTestTransactionChainWithCount(t, 5)
+
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.NoError(t, subtree.AddNode(*txs[1].TxIDChainHash(), 1, 11))
+	require.NoError(t, subtree.AddNode(*txs[2].TxIDChainHash(), 2, 12))
+	require.NoError(t, subtree.AddNode(*txs[3].TxIDChainHash(), 3, 13))
+
+	// The /subtree wire format is the bare concatenation of node hashes, which is what
+	// fetchAndStoreSubtree parses.
+	honestNodes := make([]byte, 0, subtree.Length()*chainhash.HashSize)
+	for _, n := range subtree.Nodes {
+		honestNodes = append(honestNodes, n.Hash[:]...)
+	}
+
+	subtreeData := subtreepkg.NewSubtreeData(subtree)
+	require.NoError(t, subtreeData.AddTx(txs[0], 0))
+	require.NoError(t, subtreeData.AddTx(txs[1], 1))
+	require.NoError(t, subtreeData.AddTx(txs[2], 2))
+	require.NoError(t, subtreeData.AddTx(txs[3], 3))
+	honestData, err := subtreeData.Serialize()
+	require.NoError(t, err)
+
+	hash := subtree.RootHash()
+
+	return r2SubtreeFixture{
+		subtree:       subtree,
+		hash:          hash,
+		honestNodes:   honestNodes,
+		honestData:    honestData,
+		subtreeURL:    fmt.Sprintf("%s/subtree/%s", baseURL, hash.String()),
+		subtreeDatURL: fmt.Sprintf("%s/subtree_data/%s", baseURL, hash.String()),
+	}
+}
+
+// wrongRootNodes returns a well-formed node list (a whole number of hashes) that does NOT hash to
+// the requested subtree root — the "doctored but well-shaped" case, distinct from a truncated body.
+func (f r2SubtreeFixture) wrongRootNodes() []byte {
+	out := make([]byte, len(f.honestNodes))
+	copy(out, f.honestNodes)
+	// Flip a byte in the LAST node, which changes the computed root while keeping the length legal.
+	out[len(out)-1] ^= 0xFF
+
+	return out
+}
+
+// TestFetchAndStoreSubtree_PoisonedResponses pins the marker at the two /subtree rejection sites
+// (bitcoin-sv/teranode#4692), independently of the retry harness below. Both were plain
+// ProcessingErrors with no cache-bypass marker, so isCacheBypassRetryable was false and
+// tryPeerForSubtree never cache-busted: a caching layer replaying one poisoned generation stalled
+// every peer behind it for the whole TTL, which is the issue-1368 failure on a new error class.
+//
+// The marker must not disturb the error CLASS at either site: ProcessingError is deliberate (a
+// corrupt code here would hit reportCatchupFailureForError's corrupt exemption) and it must stay
+// non-IsLocalError so the alternative-peer walk still runs.
+func TestFetchAndStoreSubtree_PoisonedResponses(t *testing.T) {
+	baseURL := "http://poisoned-peer:8000"
+	peerID := "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
+	ctx := context.Background()
+	testBlock := &model.Block{Height: 100}
+
+	newServer := func() *Server {
+		return &Server{
+			logger:       ulogger.TestLogger{},
+			subtreeStore: memory.New(),
+			settings:     test.CreateBaseTestSettings(t),
+		}
+	}
+
+	t.Run("TruncatedBodyIsCacheBypassRetryable", func(t *testing.T) {
+		f := newR2SubtreeFixture(t, baseURL)
+		server := newServer()
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		// One byte short of a whole number of node hashes.
+		httpmock.RegisterResponder("GET", f.subtreeURL,
+			httpmock.NewBytesResponder(200, f.honestNodes[:len(f.honestNodes)-1]))
+
+		_, err := server.fetchAndStoreSubtree(ctx, testBlock, f.hash, peerID, baseURL, false, nil)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "not a whole number")
+		require.True(t, errors.Is(err, errors.ErrProcessing), "the class must stay ProcessingError")
+		require.False(t, errors.IsLocalError(err), "must not short-circuit the alternative-peer loop")
+		require.True(t, isCacheBypassRetryable(err), "a truncated body is the issue-1368 signature and must be retryable")
+	})
+
+	t.Run("WrongRootBodyIsCacheBypassRetryable", func(t *testing.T) {
+		f := newR2SubtreeFixture(t, baseURL)
+		server := newServer()
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder("GET", f.subtreeURL, httpmock.NewBytesResponder(200, f.wrongRootNodes()))
+
+		_, err := server.fetchAndStoreSubtree(ctx, testBlock, f.hash, peerID, baseURL, false, nil)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "that hash to")
+		require.True(t, errors.Is(err, errors.ErrProcessing), "the class must stay ProcessingError")
+		require.False(t, errors.IsLocalError(err))
+		require.True(t, isCacheBypassRetryable(err))
+	})
+}
+
+// TestTryPeerForSubtree_MalformedSubtreeRecoversViaCacheBypass is icellan's reported failure driven
+// end to end (bitcoin-sv/teranode#4692): the gap was that tryPeerForSubtree never cache-busted for a
+// malformed /subtree, so the unit-level marker assertions above are necessary but not sufficient.
+//
+// The /subtree case differs from the existing subtree_data case in a way that matters: a failed
+// /subtree attempt stores NOTHING — both rejection sites return before the Set — and the local
+// short-circuit at the top of fetchAndStoreSubtree does not consult bypassCache, so the retry must
+// genuinely re-issue /subtree/<hash>?cachebust=… rather than reading a local file.
+func TestTryPeerForSubtree_MalformedSubtreeRecoversViaCacheBypass(t *testing.T) {
+	baseURL := "http://poisoned-peer:8000"
+	peerID := "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
+	ctx := context.Background()
+	testBlock := &model.Block{Height: 100}
+
+	f := newR2SubtreeFixture(t, baseURL)
+
+	server := &Server{
+		logger:       ulogger.TestLogger{},
+		subtreeStore: memory.New(),
+		settings:     test.CreateBaseTestSettings(t),
+	}
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	var (
+		mu          sync.Mutex
+		subtreeReqs []string // RawQuery of each /subtree request, in order
+	)
+
+	httpmock.RegisterResponder("GET", f.subtreeURL, func(req *http.Request) (*http.Response, error) {
+		mu.Lock()
+		n := len(subtreeReqs)
+		subtreeReqs = append(subtreeReqs, req.URL.RawQuery)
+		mu.Unlock()
+
+		// First request: a truncated body, as a cache replaying a failed generation would serve.
+		// Cache-busted request: the honest bytes the peer can still produce on demand.
+		if n == 0 {
+			return httpmock.NewBytesResponse(200, f.honestNodes[:len(f.honestNodes)-1]), nil
+		}
+
+		return httpmock.NewBytesResponse(200, f.honestNodes), nil
+	})
+	httpmock.RegisterResponder("GET", f.subtreeDatURL, httpmock.NewBytesResponder(200, f.honestData))
+
+	require.NoError(t, server.tryPeerForSubtree(ctx, testBlock, f.hash, peerID, baseURL, nil),
+		"the cache-busted retry must recover the subtree")
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, subtreeReqs, 2, "exactly one retry: the first attempt plus the cache-busted one")
+	require.Empty(t, subtreeReqs[0], "the first attempt must not carry a cachebust parameter")
+	require.Contains(t, subtreeReqs[1], "cachebust=", "the retry must bust the cache, or a poisoned entry is replayed for the whole TTL")
+
+	stored, err := server.subtreeStore.Exists(ctx, f.hash[:], fileformat.FileTypeSubtreeToCheck)
+	require.NoError(t, err)
+	require.True(t, stored, "the recovered subtree must be stored")
+}
+
+// TestTryPeerForSubtree_WrongRootSubtreeStrikesOnlyAfterCacheBypass pins the strike gating
+// (bitcoin-sv/teranode#4692). With a caching layer interposed, "these bytes do not match this hash"
+// is a claim about the cache, not the peer — so a poisoned wrong-root generation replayed for the
+// whole TTL would otherwise charge every peer behind that cache. The strike now requires the
+// cache-busted attempt to fail too, which can only under-strike, never over-strike.
+func TestTryPeerForSubtree_WrongRootSubtreeStrikesOnlyAfterCacheBypass(t *testing.T) {
+	baseURL := "http://poisoned-peer:8000"
+	peerID := "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
+	ctx := context.Background()
+	testBlock := &model.Block{Height: 100}
+
+	newServer := func(t *testing.T) (*Server, *banScoreRecorder) {
+		t.Helper()
+
+		rec := &banScoreRecorder{}
+		bv := &BlockValidation{
+			logger:    ulogger.TestLogger{},
+			settings:  test.CreateBaseTestSettings(t),
+			p2pClient: rec,
+		}
+
+		return &Server{
+			logger:          ulogger.TestLogger{},
+			subtreeStore:    memory.New(),
+			settings:        test.CreateBaseTestSettings(t),
+			blockValidation: bv,
+		}, rec
+	}
+
+	t.Run("still wrong after the bypass: struck exactly once", func(t *testing.T) {
+		f := newR2SubtreeFixture(t, baseURL)
+		server, rec := newServer(t)
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		var (
+			mu      sync.Mutex
+			queries []string
+		)
+
+		httpmock.RegisterResponder("GET", f.subtreeURL, func(req *http.Request) (*http.Response, error) {
+			mu.Lock()
+			queries = append(queries, req.URL.RawQuery)
+			mu.Unlock()
+
+			return httpmock.NewBytesResponse(200, f.wrongRootNodes()), nil
+		})
+
+		err := server.tryPeerForSubtree(ctx, testBlock, f.hash, peerID, baseURL, nil)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrProcessing))
+		require.True(t, isCacheBypassRetryable(err))
+
+		mu.Lock()
+		defer mu.Unlock()
+		require.Len(t, queries, 2, "the marker must buy exactly one cache-busted retry")
+		require.Contains(t, queries[1], "cachebust=")
+
+		require.Equal(t, []string{peerID}, rec.struck(),
+			"the peer must be struck once, and only on the attempt that ruled the cache out")
+	})
+
+	t.Run("honest after the bypass: recovered with no strike at all", func(t *testing.T) {
+		f := newR2SubtreeFixture(t, baseURL)
+		server, rec := newServer(t)
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		var callCount atomic.Int32
+
+		httpmock.RegisterResponder("GET", f.subtreeURL, func(_ *http.Request) (*http.Response, error) {
+			if callCount.Add(1) == 1 {
+				return httpmock.NewBytesResponse(200, f.wrongRootNodes()), nil
+			}
+
+			return httpmock.NewBytesResponse(200, f.honestNodes), nil
+		})
+		httpmock.RegisterResponder("GET", f.subtreeDatURL, httpmock.NewBytesResponder(200, f.honestData))
+
+		require.NoError(t, server.tryPeerForSubtree(ctx, testBlock, f.hash, peerID, baseURL, nil))
+
+		require.Empty(t, rec.struck(),
+			"a peer whose cache-busted response is honest was never at fault: the cache was, so it must not be charged")
+	})
+}
+
+// ---------------------------------------------------------------------------------------
+// Catch-up subtree-data prefetch byte budget (bsv-blockchain/teranode#1139)
+// ---------------------------------------------------------------------------------------
+
+// newBudgetedPrefetchServer builds the minimal Server the budget helpers need, with the
+// semaphore sized exactly as New() sizes it.
+func newBudgetedPrefetchServer(t *testing.T, budget int64) *Server {
+	t.Helper()
+
+	return &Server{
+		logger:                     ulogger.TestLogger{},
+		catchupPrefetchBudgetBytes: budget,
+		catchupPrefetchBudget:      semaphore.NewWeighted(budget),
+	}
+}
+
+// newBudgetedPrefetchWorkerServer extends newBudgetedPrefetchServer with the two fields
+// blockWorker itself needs: a stat for the tracing span and an adaptive-fetch state to
+// sample the mode from.
+func newBudgetedPrefetchWorkerServer(t *testing.T, budget int64, mode adaptivefetch.Mode) *Server {
+	t.Helper()
+
+	cfg := adaptivefetch.DefaultConfig()
+	cfg.BootstrapMode = mode
+
+	af, err := adaptivefetch.New(cfg, "test-prefetch-budget", prometheus.NewRegistry())
+	require.NoError(t, err)
+
+	if mode == adaptivefetch.ModeOptimistic {
+		// The state starts pinned pessimistic; arm it (simulating first FSM RUNNING) so
+		// the optimistic bootstrap mode takes effect.
+		af.Arm()
+		require.Equal(t, adaptivefetch.ModeOptimistic, af.Mode())
+	}
+
+	server := newBudgetedPrefetchServer(t, budget)
+	server.stats = gocore.NewStat("test-prefetch-budget")
+	server.adaptiveFetch = af
+
+	return server
+}
+
+func TestAcquireCatchupPrefetch_NilBudgetIsNoop(t *testing.T) {
+	server := &Server{logger: ulogger.TestLogger{}}
+
+	weight, err := server.acquireCatchupPrefetch(context.Background(), &model.Block{SizeInBytes: 1 << 30})
+	require.NoError(t, err)
+	require.Zero(t, weight, "a disabled budget must reserve nothing")
+
+	require.NotPanics(t, func() { server.releaseCatchupPrefetch(0) })
+	require.NotPanics(t, func() { server.releaseCatchupPrefetch(1 << 30) },
+		"releasing against a nil budget must be a no-op, not a semaphore panic")
+}
+
+func TestAcquireCatchupPrefetch_FloorsTinyBlocks(t *testing.T) {
+	const budget = 4 * minCatchupPrefetchWeight
+
+	server := newBudgetedPrefetchServer(t, budget)
+
+	weight, err := server.acquireCatchupPrefetch(context.Background(), &model.Block{SizeInBytes: 1})
+	require.NoError(t, err)
+	require.Equal(t, int64(minCatchupPrefetchWeight), weight,
+		"a one-byte block must still be charged the floor, or a run of tiny blocks admits unbounded concurrent prewarms")
+
+	server.releaseCatchupPrefetch(weight)
+	require.True(t, server.catchupPrefetchBudget.TryAcquire(budget), "the floor weight must be released in full")
+}
+
+func TestAcquireCatchupPrefetch_ClampsOversizedBlock(t *testing.T) {
+	const budget = 2 * minCatchupPrefetchWeight
+
+	server := newBudgetedPrefetchServer(t, budget)
+
+	// 10x the whole budget. Without the clamp this Acquire could never be satisfied and
+	// the worker would park forever against capacity it cannot fit in.
+	weight, err := server.acquireCatchupPrefetch(context.Background(), &model.Block{SizeInBytes: 10 * budget})
+	require.NoError(t, err)
+	require.Equal(t, int64(budget), weight, "an oversized block must be clamped to the whole budget and admitted alone")
+
+	require.False(t, server.catchupPrefetchBudget.TryAcquire(1), "a clamped block holds the entire capacity")
+
+	server.releaseCatchupPrefetch(weight)
+	require.True(t, server.catchupPrefetchBudget.TryAcquire(budget))
+}
+
+func TestAcquireCatchupPrefetch_BlocksUntilRelease(t *testing.T) {
+	const budget = 2 * minCatchupPrefetchWeight
+
+	server := newBudgetedPrefetchServer(t, budget)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Fill the capacity with one clamped block.
+	held, err := server.acquireCatchupPrefetch(ctx, &model.Block{SizeInBytes: 10 * budget})
+	require.NoError(t, err)
+	require.Equal(t, int64(budget), held)
+
+	type acquireResult struct {
+		weight int64
+		err    error
+	}
+
+	second := make(chan acquireResult, 1)
+
+	go func() {
+		weight, acqErr := server.acquireCatchupPrefetch(ctx, &model.Block{SizeInBytes: 1})
+		second <- acquireResult{weight: weight, err: acqErr}
+	}()
+
+	select {
+	case got := <-second:
+		t.Fatalf("second acquire completed while the whole budget was held (weight %d, err %v)", got.weight, got.err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	server.releaseCatchupPrefetch(held)
+
+	select {
+	case got := <-second:
+		require.NoError(t, got.err)
+		require.Equal(t, int64(minCatchupPrefetchWeight), got.weight)
+		server.releaseCatchupPrefetch(got.weight)
+	case <-time.After(5 * time.Second):
+		t.Fatal("second acquire never completed after the first reservation was released")
+	}
+
+	require.True(t, server.catchupPrefetchBudget.TryAcquire(budget), "every reservation must have been handed back")
+}
+
+func TestAcquireCatchupPrefetch_CancelledContextWhenBudgetExhausted(t *testing.T) {
+	const budget = 2 * minCatchupPrefetchWeight
+
+	server := newBudgetedPrefetchServer(t, budget)
+
+	held, err := server.acquireCatchupPrefetch(context.Background(), &model.Block{SizeInBytes: 10 * budget})
+	require.NoError(t, err)
+	require.Equal(t, int64(budget), held)
+
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	weight, err := server.acquireCatchupPrefetch(cancelledCtx, &model.Block{SizeInBytes: 1})
+	require.Error(t, err)
+	require.Zero(t, weight, "a failed acquire must report zero weight so the caller does not release")
+
+	server.releaseCatchupPrefetch(held)
+	require.True(t, server.catchupPrefetchBudget.TryAcquire(budget),
+		"the cancelled acquire must not have consumed any capacity")
+}
+
+// TestAcquireCatchupPrefetch_CancelledContextWhenBudgetAvailable guards the ordering in
+// acquireCatchupPrefetch: the ctx.Err() check sits BEFORE the TryAcquire fast path, because
+// semaphore.Weighted.TryAcquire does not consult the context. Move the check after the fast
+// path and this test fails while every other budget test still passes.
+func TestAcquireCatchupPrefetch_CancelledContextWhenBudgetAvailable(t *testing.T) {
+	const budget = 2 * minCatchupPrefetchWeight
+
+	server := newBudgetedPrefetchServer(t, budget)
+
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	weight, err := server.acquireCatchupPrefetch(cancelledCtx, &model.Block{SizeInBytes: 1})
+	require.Error(t, err)
+	require.Zero(t, weight)
+
+	require.True(t, server.catchupPrefetchBudget.TryAcquire(budget),
+		"a cancelled caller must walk away with nothing reserved even when the whole capacity was free")
+}
+
+// TestBlockWorker_ReleasesPrefetchBudgetOnFetchError guards the defer-in-loop trap: the
+// release must run on EVERY exit of the fetch, including the error path. A reservation that
+// survives a failed fetch leaks capacity for the lifetime of the worker and permanently
+// wedges catch-up.
+//
+// The discrimination this test depends on: blockWorker releases BEFORE it sends the result,
+// so by the time the result arrives the capacity is already back. Every assertion below
+// therefore runs while the worker is still ALIVE and parked on an open, empty work queue.
+// Closing the queue first and waiting for the worker to return — as an earlier version of
+// this test did — cannot detect the trap at all: a bare `defer` at for-loop scope also fires
+// on worker exit, so the buggy implementation would pass. Mentally substitute that defer and
+// the first TryAcquire below must fail.
+func TestBlockWorker_ReleasesPrefetchBudgetOnFetchError(t *testing.T) {
+	const budget = 4 * minCatchupPrefetchWeight
+
+	server := newBudgetedPrefetchWorkerServer(t, budget, adaptivefetch.ModePessimistic)
+
+	var fetchCalls atomic.Int32
+
+	server.fetchSubtreeDataForBlockFn = func(_ context.Context, _ *model.Block, _, _ string) (map[string]struct{}, map[chainhash.Hash]map[fileformat.FileType]struct{}, error) {
+		fetchCalls.Add(1)
+		return nil, nil, errors.NewProcessingError("injected prewarm failure")
+	}
+
+	blocks := testhelpers.CreateTestBlockChain(t, 3)
+
+	// Each block declares more than the whole budget, so its weight clamps to the entire
+	// capacity: a single retained reservation is enough to starve everything after it.
+	blocks[1].SizeInBytes = 10 * budget
+	blocks[2].SizeInBytes = 10 * budget
+
+	// Deliberately NOT closed until the very end, so the worker stays parked on it between
+	// the two blocks instead of exiting and running any loop-scoped defer. blockWorker's
+	// loop selects on the work queue alone, so closing the queue is the only thing that
+	// retires it — hence the once-guarded close, which also retires the worker on a t.Fatal
+	// path rather than leaving it parked for the rest of the package run.
+	workQueue := make(chan workItem, 2)
+	resultQueue := make(chan resultItem, 2)
+
+	var closeQueue sync.Once
+
+	closeWorkQueue := func() { closeQueue.Do(func() { close(workQueue) }) }
+	defer closeWorkQueue()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	workerErr := make(chan error, 1)
+
+	go func() {
+		workerErr <- server.blockWorker(ctx, 0, workQueue, resultQueue, "peer", "http://peer/", blocks[1])
+	}()
+
+	awaitResult := func(which string) {
+		t.Helper()
+
+		select {
+		case result := <-resultQueue:
+			require.Error(t, result.err, "the injected failure must still reach the result queue (%s block)", which)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no result for the %s block: the worker is parked, which is itself the leak this test guards", which)
+		}
+	}
+
+	workQueue <- workItem{block: blocks[1], index: 0}
+	awaitResult("first")
+
+	require.Equal(t, int32(1), fetchCalls.Load())
+
+	// THE assertion. The worker has not exited and will not exit: the whole capacity can
+	// only be free here if the failed fetch released it at the fetch's exit rather than at
+	// the worker's.
+	require.True(t, server.catchupPrefetchBudget.TryAcquire(budget),
+		"a failed prewarm must hand its reservation back immediately, not at worker exit")
+
+	// Hand it straight back so the still-running worker can admit the next block.
+	server.catchupPrefetchBudget.Release(budget)
+
+	// Same worker, second full-budget block: it can only be admitted if the first block's
+	// reservation is genuinely gone, so this fails as a hang-then-timeout rather than
+	// silently passing if the release were skipped.
+	workQueue <- workItem{block: blocks[2], index: 1}
+	awaitResult("second")
+
+	require.Equal(t, int32(2), fetchCalls.Load(),
+		"the second block's prewarm must have run, which it cannot do while a stale reservation is held")
+
+	require.True(t, server.catchupPrefetchBudget.TryAcquire(budget),
+		"the second failed prewarm must also have handed its reservation back before the worker exits")
+
+	server.catchupPrefetchBudget.Release(budget)
+
+	closeWorkQueue()
+
+	select {
+	case err := <-workerErr:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("blockWorker did not shut down after its work queue was closed")
+	}
+
+	require.True(t, server.catchupPrefetchBudget.TryAcquire(budget),
+		"nothing may remain reserved once the worker has exited either")
+}
+
+// TestBlockWorker_OptimisticDoesNotChargeBudget holds the ENTIRE capacity for the whole
+// worker run. An optimistic worker that took a reservation would park on it forever, so the
+// worker completing at all is the assertion.
+func TestBlockWorker_OptimisticDoesNotChargeBudget(t *testing.T) {
+	const budget = 4 * minCatchupPrefetchWeight
+
+	server := newBudgetedPrefetchWorkerServer(t, budget, adaptivefetch.ModeOptimistic)
+
+	require.True(t, server.catchupPrefetchBudget.TryAcquire(budget))
+	defer server.catchupPrefetchBudget.Release(budget)
+
+	var fetchCalls atomic.Int32
+
+	server.fetchSubtreeDataForBlockFn = func(_ context.Context, _ *model.Block, _, _ string) (map[string]struct{}, map[chainhash.Hash]map[fileformat.FileType]struct{}, error) {
+		fetchCalls.Add(1)
+		return nil, map[chainhash.Hash]map[fileformat.FileType]struct{}{}, nil
+	}
+
+	blocks := testhelpers.CreateTestBlockChain(t, 2)
+	realBlock := blocks[1]
+	realBlock.TransactionCount = 100
+	realBlock.SizeInBytes = 10 * budget
+
+	workQueue := make(chan workItem, 1)
+	resultQueue := make(chan resultItem, 1)
+	workQueue <- workItem{block: realBlock, index: 0}
+	close(workQueue)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	require.NoError(t, server.blockWorker(ctx, 0, workQueue, resultQueue, "peer", "http://peer/", realBlock))
+	require.Zero(t, fetchCalls.Load(), "optimistic mode must not call fetchSubtreeDataForBlock")
+
+	result := <-resultQueue
+	require.NoError(t, result.err)
+}
+
+// TestBlockWorker_SecondBlockWaitsForBudget proves the block-level bound: with capacity for
+// exactly one clamped block, the second worker's prewarm cannot start until the first
+// releases.
+func TestBlockWorker_SecondBlockWaitsForBudget(t *testing.T) {
+	const budget = 2 * minCatchupPrefetchWeight
+
+	server := newBudgetedPrefetchWorkerServer(t, budget, adaptivefetch.ModePessimistic)
+
+	var starts atomic.Int32
+
+	firstStarted := make(chan struct{}, 2)
+	release := make(chan struct{})
+
+	server.fetchSubtreeDataForBlockFn = func(_ context.Context, _ *model.Block, _, _ string) (map[string]struct{}, map[chainhash.Hash]map[fileformat.FileType]struct{}, error) {
+		starts.Add(1)
+		firstStarted <- struct{}{}
+		<-release
+
+		return nil, map[chainhash.Hash]map[fileformat.FileType]struct{}{}, nil
+	}
+
+	blocks := testhelpers.CreateTestBlockChain(t, 3)
+
+	// Each block declares more than the whole budget, so each clamps to the whole budget
+	// and only one can be admitted at a time.
+	blocks[1].SizeInBytes = 10 * budget
+	blocks[2].SizeInBytes = 10 * budget
+
+	workQueue := make(chan workItem, 2)
+	resultQueue := make(chan resultItem, 2)
+	workQueue <- workItem{block: blocks[1], index: 0}
+	workQueue <- workItem{block: blocks[2], index: 1}
+	close(workQueue)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	workerErrs := make(chan error, 2)
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < 2; i++ {
+		workerID := i
+
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			workerErrs <- server.blockWorker(ctx, workerID, workQueue, resultQueue, "peer", "http://peer/", blocks[1])
+		}()
+	}
+
+	select {
+	case <-firstStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first block's prewarm never started")
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	require.Equal(t, int32(1), starts.Load(),
+		"the second block's prewarm must not start while the first holds the whole budget")
+
+	close(release)
+	wg.Wait()
+
+	close(workerErrs)
+
+	for err := range workerErrs {
+		require.NoError(t, err)
+	}
+
+	require.Equal(t, int32(2), starts.Load(), "the second prewarm must run once the first releases")
+	require.True(t, server.catchupPrefetchBudget.TryAcquire(budget), "both reservations must have been handed back")
+}
+
+func TestBoundSubtreeConcurrencyByBudget(t *testing.T) {
+	const (
+		budget     = 16 * minCatchupPrefetchWeight
+		configured = 32
+	)
+
+	tests := []struct {
+		name     string
+		budget   int64
+		block    *model.Block
+		expected int
+	}{
+		{
+			name:     "disabled budget leaves the configured concurrency alone",
+			budget:   0,
+			block:    &model.Block{SizeInBytes: 1 << 40},
+			expected: configured,
+		},
+		{
+			name:     "nil block leaves the configured concurrency alone",
+			budget:   budget,
+			block:    nil,
+			expected: configured,
+		},
+		{
+			name:     "undeclared size drops to a single subtree at a time",
+			budget:   budget,
+			block:    &model.Block{SizeInBytes: 0},
+			expected: 1,
+		},
+		{
+			name:     "block below the budget keeps the configured concurrency",
+			budget:   budget,
+			block:    &model.Block{SizeInBytes: budget - 1},
+			expected: configured,
+		},
+		{
+			name:     "block exactly at the budget keeps the configured concurrency",
+			budget:   budget,
+			block:    &model.Block{SizeInBytes: budget},
+			expected: configured,
+		},
+		{
+			name:     "one byte over the budget drops to a single subtree at a time",
+			budget:   budget,
+			block:    &model.Block{SizeInBytes: budget + 1},
+			expected: 1,
+		},
+		{
+			name:     "the largest representable int64 drops to one",
+			budget:   budget,
+			block:    &model.Block{SizeInBytes: math.MaxInt64},
+			expected: 1,
+		},
+		{
+			name:     "the first value the int64 conversion rejects drops to one",
+			budget:   budget,
+			block:    &model.Block{SizeInBytes: 1 << 63},
+			expected: 1,
+		},
+		{
+			name:     "a declared size too large for an int64 also drops to one",
+			budget:   budget,
+			block:    &model.Block{SizeInBytes: math.MaxUint64},
+			expected: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := &Server{logger: ulogger.TestLogger{}, catchupPrefetchBudgetBytes: tc.budget}
+			require.Equal(t, tc.expected, server.boundSubtreeConcurrencyByBudget(configured, tc.block))
+		})
+	}
+}
+
+// TestBoundSubtreeConcurrencyByBudget_SkewedSubtreeSizes pins the counter-example that rules
+// out an average-based divisor: a 4 GiB block with 1024 subtrees averages 4 MiB, comfortably
+// under a 256 MiB budget, so an average rule would permit the full 32-way concurrency — yet
+// if two of those subtrees hold ~2 GiB each, both can be in flight and ~4 GiB is retained.
+// The fits/does-not-fit predicate is skew-independent and requires 1.
+//
+// The skew cannot be measured before the fetch, which is why the predicate has to be
+// size-free. /subtree serves bare node hashes with no per-node fee or size, and the receive
+// path rebuilds every node with subtree.AddNode(hash, 0, 0) (get_blocks.go), so a freshly
+// peer-fetched Subtree.SizeInBytes is 0. /subtree_data is served as a chunked stream with no
+// Content-Length, so no final per-subtree size exists before its body has been consumed
+// either. A weight source that is populated only for a locally held, already-validated subtree
+// cannot bound the peer-supplied path, which is the path that needs bounding.
+func TestBoundSubtreeConcurrencyByBudget_SkewedSubtreeSizes(t *testing.T) {
+	const (
+		budgetBytes = 256 << 20
+		configured  = 32
+		subtreeQty  = 1024
+	)
+
+	subtrees := make([]*chainhash.Hash, subtreeQty)
+	for i := range subtrees {
+		hash := chainhash.DoubleHashH([]byte(fmt.Sprintf("skewed-subtree-%d", i)))
+		subtrees[i] = &hash
+	}
+
+	block := &model.Block{
+		SizeInBytes: 4 << 30,
+		Subtrees:    subtrees,
+	}
+
+	require.Less(t, block.SizeInBytes/subtreeQty, uint64(budgetBytes),
+		"the fixture must have an average per-subtree size well under the budget, or it does not rule out the average rule")
+
+	server := &Server{catchupPrefetchBudgetBytes: budgetBytes}
+	require.Equal(t, 1, server.boundSubtreeConcurrencyByBudget(configured, block),
+		"a block larger than the budget must parse its subtrees one at a time, whatever the average says")
+}
+
+// TestBoundSubtreeConcurrencyByBudget_UndeclaredSizeIsNotExempt pins the shape a peer gets for
+// free: declaring no size at all. Exempting it would make "no declaration" the cheapest way to
+// claim the full configured subtree fan-out while promising nothing, so an undeclared size is
+// treated as the least trustworthy value rather than the most.
+func TestBoundSubtreeConcurrencyByBudget_UndeclaredSizeIsNotExempt(t *testing.T) {
+	const (
+		budgetBytes = 256 << 20
+		configured  = 32
+		subtreeQty  = 128
+	)
+
+	subtrees := make([]*chainhash.Hash, subtreeQty)
+	for i := range subtrees {
+		hash := chainhash.DoubleHashH([]byte(fmt.Sprintf("undeclared-subtree-%d", i)))
+		subtrees[i] = &hash
+	}
+
+	block := &model.Block{
+		SizeInBytes: 0,
+		Subtrees:    subtrees,
+	}
+
+	server := &Server{logger: ulogger.TestLogger{}, catchupPrefetchBudgetBytes: budgetBytes}
+	require.Equal(t, 1, server.boundSubtreeConcurrencyByBudget(configured, block),
+		"a block that declares no size must parse its subtrees one at a time")
+}
+
+// TestBoundSubtreeConcurrencyByBudget_CounterBranches pins which counter each clamping branch
+// increments. The undeclared-size counter is the attack signal, so it must never be muddied by
+// ordinary oversized blocks, and a declaration too large to represent is oversized — it exceeds
+// every positive budget — rather than a category of its own.
+func TestBoundSubtreeConcurrencyByBudget_CounterBranches(t *testing.T) {
+	const (
+		budgetBytes = 256 << 20
+		configured  = 32
+	)
+
+	initPrometheusMetrics()
+
+	server := &Server{logger: ulogger.TestLogger{}, catchupPrefetchBudgetBytes: budgetBytes}
+
+	tests := []struct {
+		name                string
+		block               *model.Block
+		expectOversized     float64
+		expectUndeclared    float64
+		expectedConcurrency int
+	}{
+		{
+			name:                "undeclared size counts as undeclared only",
+			block:               &model.Block{SizeInBytes: 0},
+			expectUndeclared:    1,
+			expectedConcurrency: 1,
+		},
+		{
+			name:                "over budget counts as oversized only",
+			block:               &model.Block{SizeInBytes: budgetBytes + 1},
+			expectOversized:     1,
+			expectedConcurrency: 1,
+		},
+		{
+			name:                "a size too large to represent counts as oversized only",
+			block:               &model.Block{SizeInBytes: math.MaxUint64},
+			expectOversized:     1,
+			expectedConcurrency: 1,
+		},
+		{
+			name:                "a fitting block counts nothing",
+			block:               &model.Block{SizeInBytes: budgetBytes - 1},
+			expectedConcurrency: configured,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			oversizedBefore := testutil.ToFloat64(prometheusCatchupPrefetchOversizedBlocks)
+			undeclaredBefore := testutil.ToFloat64(prometheusCatchupPrefetchUndeclaredSizeBlocks)
+
+			require.Equal(t, tc.expectedConcurrency, server.boundSubtreeConcurrencyByBudget(configured, tc.block))
+
+			require.Equal(t, tc.expectOversized,
+				testutil.ToFloat64(prometheusCatchupPrefetchOversizedBlocks)-oversizedBefore)
+			require.Equal(t, tc.expectUndeclared,
+				testutil.ToFloat64(prometheusCatchupPrefetchUndeclaredSizeBlocks)-undeclaredBefore)
+		})
+	}
+}
+
+// withNilCatchupPrefetchCollectors sets the three catch-up prefetch counters to nil for the
+// duration of one test and restores them afterwards, so a test can assert what happens on a
+// server built before initPrometheusMetrics has ever run. Merely NOT calling
+// initPrometheusMetrics is not enough: it is a package-level sync.Once and any earlier test in
+// the binary may already have fired it, which would make the arrangement silently vacuous.
+//
+// Safe because this package adds no t.Parallel() anywhere, so Go runs its tests one at a time,
+// and these three globals are read from exactly two functions — acquireCatchupPrefetch and
+// boundSubtreeConcurrencyByBudget — which the caller below drives synchronously on the test
+// goroutine. The only way a concurrent read could reach them during the swap is a catch-up
+// goroutine leaked by an earlier test, which is a defect in that test rather than a hazard
+// this helper can design around.
+func withNilCatchupPrefetchCollectors(t *testing.T) {
+	t.Helper()
+
+	parked := prometheusCatchupPrefetchBudgetParked
+	oversized := prometheusCatchupPrefetchOversizedBlocks
+	undeclared := prometheusCatchupPrefetchUndeclaredSizeBlocks
+
+	t.Cleanup(func() {
+		prometheusCatchupPrefetchBudgetParked = parked
+		prometheusCatchupPrefetchOversizedBlocks = oversized
+		prometheusCatchupPrefetchUndeclaredSizeBlocks = undeclared
+	})
+
+	prometheusCatchupPrefetchBudgetParked = nil
+	prometheusCatchupPrefetchOversizedBlocks = nil
+	prometheusCatchupPrefetchUndeclaredSizeBlocks = nil
+}
+
+// TestCatchupPrefetchMetrics_NilCollectorsDoNotPanic drives every site that increments one of
+// the new counters with that counter actually set to nil, which is the state of a server built
+// before initPrometheusMetrics has run — the bare &Server{...} shape most of this package's
+// tests use. Remove any one of the nil guards and the matching subtest panics.
+//
+// The logger is covered on the clamp branches only, where it is genuinely nil-guarded. The
+// budget-park log is not guarded and never was: that path only runs when a budget semaphore
+// exists, which New() only ever builds alongside a logger.
+func TestCatchupPrefetchMetrics_NilCollectorsDoNotPanic(t *testing.T) {
+	withNilCatchupPrefetchCollectors(t)
+
+	require.Nil(t, prometheusCatchupPrefetchBudgetParked, "the arrangement must really be nil, or this test proves nothing")
+	require.Nil(t, prometheusCatchupPrefetchOversizedBlocks)
+	require.Nil(t, prometheusCatchupPrefetchUndeclaredSizeBlocks)
+
+	t.Run("clamp branches with a nil logger too", func(t *testing.T) {
+		const budgetBytes = 256 << 20
+
+		server := &Server{catchupPrefetchBudgetBytes: budgetBytes}
+		require.Nil(t, server.logger)
+
+		require.NotPanics(t, func() {
+			require.Equal(t, 1, server.boundSubtreeConcurrencyByBudget(32, &model.Block{SizeInBytes: 0}))
+			require.Equal(t, 1, server.boundSubtreeConcurrencyByBudget(32, &model.Block{SizeInBytes: math.MaxUint64}))
+			require.Equal(t, 1, server.boundSubtreeConcurrencyByBudget(32, &model.Block{SizeInBytes: budgetBytes + 1}))
+		})
+	})
+
+	t.Run("budget park", func(t *testing.T) {
+		const budget = int64(minCatchupPrefetchWeight)
+
+		server := &Server{
+			logger:                     ulogger.TestLogger{},
+			catchupPrefetchBudgetBytes: budget,
+			catchupPrefetchBudget:      semaphore.NewWeighted(budget),
+		}
+
+		// Hold the whole capacity, so the next acquire misses the TryAcquire fast path and
+		// takes the park branch that logs and counts.
+		require.True(t, server.catchupPrefetchBudget.TryAcquire(budget))
+
+		// Alive on entry — acquireCatchupPrefetch returns early on an already-cancelled
+		// context, before it can reach the park — and short enough that the blocking
+		// Acquire below it gives up promptly.
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		require.NotPanics(t, func() {
+			weight, err := server.acquireCatchupPrefetch(ctx, &model.Block{SizeInBytes: 1})
+			require.Error(t, err, "the park must end in the context expiring, not in a reservation")
+			require.Zero(t, weight)
+		})
+	})
+}
+
+// TestFetchSubtreeDataForBlock_OversizedBlockAppliesToAnyCaller documents the deliberate
+// scope of the oversized-block rule rather than leaving it implicit: it is applied inside
+// fetchSubtreeDataForBlock, so it reaches RevalidateBlock (Server.go calls that function
+// directly) as well as the catch-up pipeline. Unlike the semaphore, the rule never makes an
+// operator operation WAIT on catch-up — it only lowers that call's own parallelism.
+func TestFetchSubtreeDataForBlock_OversizedBlockAppliesToAnyCaller(t *testing.T) {
+	const (
+		budget      = 16 * minCatchupPrefetchWeight
+		concurrency = 4
+	)
+
+	baseURL := "http://oversized-peer:8080"
+	peerID := "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
+
+	txs := transactions.CreateTestTransactionChainWithCount(t, 16)
+
+	fixtures := []fetchSubtreeFixture{
+		distinctFetchSubtree(t, txs, 1),
+		distinctFetchSubtree(t, txs, 4),
+		distinctFetchSubtree(t, txs, 7),
+		distinctFetchSubtree(t, txs, 10),
+	}
+
+	subtreeHashes := make([]*chainhash.Hash, 0, len(fixtures))
+	for _, f := range fixtures {
+		subtreeHashes = append(subtreeHashes, f.hash)
+	}
+
+	// maxObservedConcurrency drives one fetchSubtreeDataForBlock call and reports the
+	// highest number of per-subtree fetches that were ever in flight together, measured in
+	// the /subtree responder each of those goroutines has to pass through.
+	maxObservedConcurrency := func(t *testing.T, budgetBytes int64, sizeInBytes uint64) int32 {
+		t.Helper()
+
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.BlockValidation.SubtreeFetchConcurrency = concurrency
+
+		server := &Server{
+			logger:       ulogger.TestLogger{},
+			subtreeStore: memory.New(),
+			settings:     tSettings,
+			stats:        gocore.NewStat("test-oversized"),
+		}
+
+		if budgetBytes > 0 {
+			server.catchupPrefetchBudgetBytes = budgetBytes
+			server.catchupPrefetchBudget = semaphore.NewWeighted(budgetBytes)
+		}
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		var inFlight, maxInFlight atomic.Int32
+
+		for _, f := range fixtures {
+			fixture := f
+
+			httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree/%s", baseURL, fixture.hash.String()),
+				func(_ *http.Request) (*http.Response, error) {
+					current := inFlight.Add(1)
+
+					for {
+						previous := maxInFlight.Load()
+						if current <= previous || maxInFlight.CompareAndSwap(previous, current) {
+							break
+						}
+					}
+
+					// Long enough that genuinely concurrent goroutines overlap here.
+					time.Sleep(50 * time.Millisecond)
+					inFlight.Add(-1)
+
+					return httpmock.NewBytesResponse(200, fixture.nodeBytes), nil
+				})
+
+			httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree_data/%s", baseURL, fixture.hash.String()),
+				httpmock.NewBytesResponder(200, fixture.dataBytes))
+		}
+
+		block := &model.Block{
+			Height:      1,
+			SizeInBytes: sizeInBytes,
+			Subtrees:    subtreeHashes,
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		_, _, err := server.fetchSubtreeDataForBlock(ctx, block, peerID, baseURL)
+		require.NoError(t, err)
+
+		return maxInFlight.Load()
+	}
+
+	t.Run("block within the budget keeps its configured concurrency", func(t *testing.T) {
+		require.Greater(t, maxObservedConcurrency(t, budget, budget-1), int32(1),
+			"a fitting block must still prewarm its subtrees in parallel")
+	})
+
+	t.Run("oversized block prewarms one subtree at a time", func(t *testing.T) {
+		require.Equal(t, int32(1), maxObservedConcurrency(t, budget, budget+1),
+			"a block larger than the budget must never have two subtree_data payloads in flight")
+	})
+
+	t.Run("disabled budget leaves every caller unchanged", func(t *testing.T) {
+		require.Greater(t, maxObservedConcurrency(t, 0, 1<<40), int32(1),
+			"blockvalidation_catchup_prefetch_budget_bytes=0 must disable the subtree-concurrency rule for every caller")
+	})
+}
+
+// TestFetchAndStoreSubtreeData_ExtendedFormatExceedsDeclaredSize pins the §2.6 gap: the
+// reservation weight is the peer's DECLARED block size, but subtree_data may carry extended
+// transactions. Tx.ReadFrom auto-detects the extended marker and the only check
+// serializeFromReader applies is the txid, which is computed over the STANDARD bytes — so an
+// extended payload is accepted, stored, and served onward, while being strictly larger than
+// the declared size by every input's previous locking script.
+//
+// The fixture uses WELL-FORMED transactions only. This documents format expansion, not the
+// malformed-parser allocation issues tracked elsewhere.
+func TestFetchAndStoreSubtreeData_ExtendedFormatExceedsDeclaredSize(t *testing.T) {
+	baseURL := "http://extended-peer:8080"
+	peerID := "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
+
+	txs := transactions.CreateTestTransactionChainWithCount(t, 5)
+
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+
+	// A previous locking script far larger than anything in the chain fixture, so the
+	// expansion is unambiguous rather than marginal.
+	previousScript := bscript.NewFromBytes(bytes.Repeat([]byte{0x51}, 4096))
+
+	// declaredSize is what an honest peer would put in the block header's size field: the
+	// sum of the STANDARD serialization of every transaction in the block.
+	declaredSize := uint64(len(txs[0].Bytes()))
+
+	extendedBody := make([]byte, 0, 3*8192)
+
+	for i, tx := range txs[1:4] {
+		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), uint64(i+1), uint64(i+11))) //nolint:gosec
+
+		for _, input := range tx.Inputs {
+			input.PreviousTxScript = previousScript
+			input.PreviousTxSatoshis = 100_000
+		}
+
+		require.True(t, tx.IsExtended(), "the fixture must actually be in extended format")
+
+		// The txid is DoubleHashH over the STANDARD bytes, so attaching the previous
+		// output data above cannot have changed the hash added to the subtree.
+		declaredSize += uint64(len(tx.Bytes()))
+		extendedBody = append(extendedBody, tx.ExtendedBytes()...)
+	}
+
+	subtreeHash := subtree.RootHash()
+
+	require.Greater(t, uint64(len(extendedBody)), declaredSize,
+		"the fixture must expand beyond the declared block size, or it does not exercise the gap")
+
+	server := &Server{
+		logger:       ulogger.TestLogger{},
+		subtreeStore: memory.New(),
+		settings:     test.CreateBaseTestSettings(t),
+	}
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree_data/%s", baseURL, subtreeHash.String()),
+		httpmock.NewBytesResponder(200, extendedBody))
+
+	block := &model.Block{Height: 100, SizeInBytes: declaredSize}
+	ctx := context.Background()
+
+	freshness := newSubtreeFreshness()
+
+	// (a) The parser does not distinguish the formats: the over-declared payload is
+	// accepted and stored.
+	require.NoError(t, server.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, peerID, baseURL, false, freshness))
+
+	stored, err := server.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
+	require.NoError(t, err)
+	require.Equal(t, extendedBody, stored,
+		"the store must round-trip the extended bytes, which is how a format-preserving node carries them onward")
+
+	// (b) The bytes pulled off the wire — the whole body, which is what the fetch reads —
+	// exceed the size the budget reservation was sized from.
+	require.Greater(t, uint64(len(stored)), block.SizeInBytes,
+		"the payload for a single subtree already exceeds the whole block's declared size")
+}
+
+// ---------------------------------------------------------------------------------------
+// Streaming the stored subtree_data instead of a second in-memory Serialize() copy
+// ---------------------------------------------------------------------------------------
+
+// stubSetFromReaderStore fails SetFromReader after consuming readBytes bytes of the reader.
+// It implements the two methods fetchAndStoreSubtreeData actually calls; the embedded
+// blob.Store is left nil deliberately, so any other method would fail loudly rather than
+// silently exercise a real store. Nothing is constructed that needs closing, which keeps the
+// goroutine-leak check honest.
+type stubSetFromReaderStore struct {
+	blob.Store
+
+	readBytes int64
+	err       error
+
+	calls     atomic.Int32
+	bytesRead atomic.Int64
+}
+
+func (s *stubSetFromReaderStore) Exists(_ context.Context, _ []byte, _ fileformat.FileType,
+	_ ...options.FileOption) (bool, error) {
+	return false, nil
+}
+
+func (s *stubSetFromReaderStore) SetFromReader(_ context.Context, _ []byte, _ fileformat.FileType,
+	reader io.ReadCloser, _ ...options.FileOption) error {
+	s.calls.Add(1)
+
+	if s.readBytes > 0 {
+		n, _ := io.CopyN(io.Discard, reader, s.readBytes)
+		s.bytesRead.Store(n)
+	}
+
+	return s.err
+}
+
+// newStreamingSubtreeDataFixture builds a subtree, its serialized subtree_data body and the
+// hash the two are served under.
+func newStreamingSubtreeDataFixture(t *testing.T) (*subtreepkg.Subtree, *subtreepkg.Data, []byte) {
+	t.Helper()
+
+	txs := transactions.CreateTestTransactionChainWithCount(t, 5)
+
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.NoError(t, subtree.AddNode(*txs[1].TxIDChainHash(), 1, 11))
+	require.NoError(t, subtree.AddNode(*txs[2].TxIDChainHash(), 2, 12))
+	require.NoError(t, subtree.AddNode(*txs[3].TxIDChainHash(), 3, 13))
+
+	data := subtreepkg.NewSubtreeData(subtree)
+	require.NoError(t, data.AddTx(txs[0], 0))
+	require.NoError(t, data.AddTx(txs[1], 1))
+	require.NoError(t, data.AddTx(txs[2], 2))
+	require.NoError(t, data.AddTx(txs[3], 3))
+
+	body, err := data.Serialize()
+	require.NoError(t, err)
+	require.NotEmpty(t, body)
+
+	return subtree, data, body
+}
+
+// TestFetchAndStoreSubtreeData_StoredBytesMatchSerialize is the equivalence assertion for
+// replacing Serialize()+Set with WriteTransactionsToWriter over a pipe into SetFromReader:
+// the stored blob must be byte-for-byte what Serialize() would have produced.
+func TestFetchAndStoreSubtreeData_StoredBytesMatchSerialize(t *testing.T) {
+	baseURL := "http://streaming-peer:8080"
+	peerID := "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
+
+	subtree, data, body := newStreamingSubtreeDataFixture(t)
+	subtreeHash := subtree.RootHash()
+
+	// Closed on cleanup: the memory store owns a TTL cleaner goroutine, and this test is
+	// also run under goleak by TestFetchAndStoreSubtreeData_NoGoroutineLeak.
+	store := memory.New()
+	t.Cleanup(func() { require.NoError(t, store.Close(context.Background())) })
+
+	server := &Server{
+		logger:       ulogger.TestLogger{},
+		subtreeStore: store,
+		settings:     test.CreateBaseTestSettings(t),
+	}
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree_data/%s", baseURL, subtreeHash.String()),
+		httpmock.NewBytesResponder(200, body))
+
+	ctx := context.Background()
+	freshness := newSubtreeFreshness()
+
+	require.NoError(t, server.fetchAndStoreSubtreeData(ctx, &model.Block{Height: 100}, subtreeHash, subtree,
+		peerID, baseURL, false, freshness))
+
+	stored, err := server.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
+	require.NoError(t, err)
+
+	expected, err := data.Serialize()
+	require.NoError(t, err)
+	require.Equal(t, expected, stored, "the streamed write must produce exactly the bytes Serialize() would have")
+
+	require.Contains(t, freshness.snapshot()[*subtreeHash], fileformat.FileTypeSubtreeData,
+		"a successful streamed write must still mark the blob fresh")
+}
+
+// runStoreFailureScenario drives fetchAndStoreSubtreeData against a store that fails after
+// consuming readBytes bytes, and asserts the three things the pipe rewrite must preserve:
+// the store's error is returned, the blob is never marked fresh, and the producer goroutine
+// was joined before the function returned (pr.Close() then <-done).
+func runStoreFailureScenario(t *testing.T, readBytes int64) {
+	t.Helper()
+
+	baseURL := "http://failing-store-peer:8080"
+	peerID := "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
+
+	subtree, _, body := newStreamingSubtreeDataFixture(t)
+	subtreeHash := subtree.RootHash()
+
+	require.Greater(t, int64(len(body)), readBytes,
+		"the fixture body must outlast the partial read, or the producer is never left parked")
+
+	store := &stubSetFromReaderStore{
+		readBytes: readBytes,
+		err:       errors.NewStorageError("injected store failure"),
+	}
+
+	server := &Server{
+		logger:       ulogger.TestLogger{},
+		subtreeStore: store,
+		settings:     test.CreateBaseTestSettings(t),
+	}
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree_data/%s", baseURL, subtreeHash.String()),
+		httpmock.NewBytesResponder(200, body))
+
+	ctx := context.Background()
+	freshness := newSubtreeFreshness()
+
+	err := server.fetchAndStoreSubtreeData(ctx, &model.Block{Height: 100}, subtreeHash, subtree,
+		peerID, baseURL, false, freshness)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "injected store failure")
+	require.True(t, errors.Is(err, errors.ErrStorageError),
+		"a store-side failure must stay a StorageError, whatever the producer reported once the pipe was closed")
+
+	require.Equal(t, int32(1), store.calls.Load())
+	require.Equal(t, readBytes, store.bytesRead.Load())
+
+	require.Empty(t, freshness.snapshot(),
+		"a failed write must never mark the subtree_data blob fresh")
+}
+
+// TestFetchAndStoreSubtreeData_StoreReturnsBeforeReading covers the worst case for the pipe:
+// the store errors WITHOUT reading a byte, so the producer is parked in its first flush and
+// only pr.Close() can release it. Reversing pr.Close() and <-done deadlocks this test.
+func TestFetchAndStoreSubtreeData_StoreReturnsBeforeReading(t *testing.T) {
+	runStoreFailureScenario(t, 0)
+}
+
+// TestFetchAndStoreSubtreeData_StoreFailsPartwayThrough is the same shape with the store
+// erroring mid-stream, leaving the producer parked with bytes still unconsumed.
+func TestFetchAndStoreSubtreeData_StoreFailsPartwayThrough(t *testing.T) {
+	runStoreFailureScenario(t, 32)
+}
+
+// TestFetchAndStoreSubtreeData_NoGoroutineLeak proves the producer goroutine terminates on
+// every path. -race does not prove goroutine termination; goleak plus the structural <-done
+// join does.
+func TestFetchAndStoreSubtreeData_NoGoroutineLeak(t *testing.T) {
+	ignoreExisting := goleak.IgnoreCurrent()
+
+	defer goleak.VerifyNone(t,
+		ignoreExisting,
+		// gocore's init-time goroutine has no exit path; it is matched by name rather than
+		// by top frame, whose frame is time.Sleep.
+		goleak.IgnoreAnyFunction("github.com/ordishs/gocore.init.0.func1"),
+	)
+
+	t.Run("store returns before reading", func(t *testing.T) { runStoreFailureScenario(t, 0) })
+	t.Run("store fails partway through", func(t *testing.T) { runStoreFailureScenario(t, 32) })
+	t.Run("successful write", func(t *testing.T) { TestFetchAndStoreSubtreeData_StoredBytesMatchSerialize(t) })
+}
+
+// twoVerbWrap reproduces the error shape Data.WriteTransactionsToWriter produces when a write
+// fails: it wraps a sentinel AND the underlying cause in one error, so errors.Is matches both.
+// go-subtree builds it with two %w verbs in one fmt.Errorf; that call is forbidden here, and
+// Unwrap() []error is the same thing the two-verb form compiles down to, so errors.Is traverses
+// it identically. Constructing it directly also keeps the test honest about what it is pinning:
+// an error that satisfies two sentinels at once, whatever produced it.
+type twoVerbWrap struct {
+	sentinel error
+	index    int
+	cause    error
+}
+
+func newTwoVerbWrap(sentinel error, index int, cause error) error {
+	return &twoVerbWrap{sentinel: sentinel, index: index, cause: cause}
+}
+
+func (e *twoVerbWrap) Error() string {
+	return e.sentinel.Error() + " at index " + strconv.Itoa(e.index) + ": " + e.cause.Error()
+}
+
+func (e *twoVerbWrap) Unwrap() []error { return []error{e.sentinel, e.cause} }
+
+// TestSubtreeDataWriteFailure_Classification pins the check order, which is not
+// interchangeable. Data.WriteTransactionsToWriter wraps a writer failure with two %w verbs, so
+// an error raised because the store aborted and fetchAndStoreSubtreeData then closed the read
+// side satisfies errors.Is for BOTH ErrTransactionWrite and io.ErrClosedPipe. Matching the
+// producer sentinel first would charge an innocent peer for our own storage failure, and a
+// peer-attributable error is what drives alternative-peer failover and the peer-failure charge.
+func TestSubtreeDataWriteFailure_Classification(t *testing.T) {
+	subtreeHash := chainhash.DoubleHashH([]byte("write-failure-classification"))
+	peerID := "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
+	baseURL := "http://classification-peer:8080"
+
+	storeErr := errors.NewStorageError("injected store failure")
+
+	tests := []struct {
+		name        string
+		writeErr    error
+		storeErr    error
+		expectNil   bool
+		expectLocal bool
+	}{
+		{
+			name:      "no failure at all",
+			expectNil: true,
+		},
+		{
+			name:        "store error alone stays local",
+			storeErr:    storeErr,
+			expectLocal: true,
+		},
+		{
+			name:        "a bare closed pipe alongside a store error stays local",
+			writeErr:    io.ErrClosedPipe,
+			storeErr:    storeErr,
+			expectLocal: true,
+		},
+		{
+			name:        "a producer error whose cause is our own closed pipe stays local",
+			writeErr:    newTwoVerbWrap(subtreepkg.ErrTransactionWrite, 3, io.ErrClosedPipe),
+			storeErr:    storeErr,
+			expectLocal: true,
+		},
+		{
+			// The store reported success without draining the pipe, so the producer's own
+			// Write came back with our pr.Close(). Nothing here is the peer's doing, and a
+			// silently-nil verdict would store a truncated blob as if it were complete.
+			name:        "a wrapped closed pipe with no store error stays local",
+			writeErr:    newTwoVerbWrap(subtreepkg.ErrTransactionWrite, 2, io.ErrClosedPipe),
+			expectLocal: true,
+		},
+		{
+			// The store succeeded, so only the producer failed: the body the peer served
+			// parsed but cannot be re-serialized. It must stay peer-attributable rather than
+			// be accepted merely because storeErr is nil.
+			name:        "a genuine producer error with no store error stays the peer's",
+			writeErr:    subtreepkg.ErrTransactionNil,
+			expectLocal: false,
+		},
+		{
+			name:        "a nil transaction is the peer's unusable body",
+			writeErr:    subtreepkg.ErrTransactionNil,
+			storeErr:    storeErr,
+			expectLocal: false,
+		},
+		{
+			name:        "a producer write failure over a non-pipe cause is the peer's",
+			writeErr:    newTwoVerbWrap(subtreepkg.ErrTransactionWrite, 1, io.ErrShortWrite),
+			storeErr:    storeErr,
+			expectLocal: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := subtreeDataWriteFailure(peerID, baseURL, &subtreeHash, tc.writeErr, tc.storeErr)
+
+			if tc.expectNil {
+				require.NoError(t, err)
+				return
+			}
+
+			require.Error(t, err)
+			require.Equal(t, tc.expectLocal, errors.IsLocalError(err))
+
+			if tc.expectLocal {
+				require.True(t, errors.Is(err, errors.ErrStorageError))
+				return
+			}
+
+			require.True(t, errors.Is(err, errors.ErrProcessing))
+			require.Contains(t, err.Error(), peerID, "a peer-attributable error must name the peer")
+		})
+	}
+}
+
+// TestFetchAndStoreSubtreeData_StoreAbortMidStreamStaysLocal is the end-to-end form of the
+// classification's critical row. The body is larger than the pooled 64 KiB write buffer, so the
+// producer is genuinely parked inside a Write within SerializeTo rather than only in the final
+// Flush, and the store fails without reading a byte. The producer therefore reports a wrapped
+// io.ErrClosedPipe raised by our own pr.Close(), and the peer must not be charged for it.
+func TestFetchAndStoreSubtreeData_StoreAbortMidStreamStaysLocal(t *testing.T) {
+	baseURL := "http://aborting-store-peer:8080"
+	peerID := "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
+
+	subtree, body := newLargeStreamingSubtreeDataFixture(t)
+	subtreeHash := subtree.RootHash()
+
+	require.Greater(t, len(body), 64*1024,
+		"the body must exceed the pooled write buffer, or the producer never blocks inside a Write")
+
+	store := &stubSetFromReaderStore{
+		readBytes: 0,
+		err:       errors.NewStorageError("injected store failure"),
+	}
+
+	server := &Server{
+		logger:       ulogger.TestLogger{},
+		subtreeStore: store,
+		settings:     test.CreateBaseTestSettings(t),
+	}
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree_data/%s", baseURL, subtreeHash.String()),
+		httpmock.NewBytesResponder(200, body))
+
+	err := server.fetchAndStoreSubtreeData(context.Background(), &model.Block{Height: 100}, subtreeHash,
+		subtree, peerID, baseURL, false, newSubtreeFreshness())
+	require.Error(t, err)
+	require.True(t, errors.IsLocalError(err),
+		"our own pipe close must never be reclassified as a peer-supplied unusable body")
+	require.NotContains(t, err.Error(), peerID, "a local failure must not name the peer")
+}
+
+// newLargeStreamingSubtreeDataFixture builds a subtree whose serialized subtree_data body is
+// several times the pooled 64 KiB write buffer, using one large unlocking script per
+// transaction. Nothing on this path verifies signatures, only that each transaction hashes to
+// the subtree node it sits under.
+func newLargeStreamingSubtreeDataFixture(t *testing.T) (*subtreepkg.Subtree, []byte) {
+	t.Helper()
+
+	const (
+		leafCount   = 4
+		scriptBytes = 64 * 1024
+	)
+
+	txs := make([]*bt.Tx, 0, leafCount)
+
+	for i := 0; i < leafCount; i++ {
+		tx := bt.NewTx()
+
+		previous := chainhash.DoubleHashH([]byte(fmt.Sprintf("large-streaming-fixture-%d", i)))
+		unlocking := bscript.Script(bytes.Repeat([]byte{0x51}, scriptBytes))
+
+		input := &bt.Input{
+			PreviousTxOutIndex: 0,
+			UnlockingScript:    &unlocking,
+			SequenceNumber:     0xfffffffe,
+		}
+		require.NoError(t, input.PreviousTxIDAdd(&previous))
+
+		tx.Inputs = append(tx.Inputs, input)
+
+		locking := bscript.Script([]byte{0x52})
+		tx.AddOutput(&bt.Output{Satoshis: 1000, LockingScript: &locking})
+
+		txs = append(txs, tx)
+	}
+
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(leafCount)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+
+	for i, tx := range txs[1:] {
+		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), uint64(i+1), uint64(tx.Size()))) //nolint:gosec
+	}
+
+	// Index 0 holds the coinbase placeholder, so it carries no transaction: AddTx validates the
+	// transaction against the node hash it is filed under, and the placeholder matches none.
+	// Data.Serialize skips index 0 under exactly that condition.
+	data := subtreepkg.NewSubtreeData(subtree)
+	for i, tx := range txs[1:] {
+		require.NoError(t, data.AddTx(tx, i+1))
+	}
+
+	body, err := data.Serialize()
+	require.NoError(t, err)
+
+	return subtree, body
+}
+
+// TestBufioWriterPool_SizeAndAbandonedWriterReset pins exactly two things and deliberately
+// claims no more than that.
+//
+//  1. Every writer the pool hands out is the configured 64 KiB, which is the size the streamed
+//     store write is sized against.
+//  2. Reset is what clears a writer abandoned MID-WRITE. That is the shape
+//     fetchAndStoreSubtreeData leaves behind when the store aborts: the producer is parked in a
+//     Write, pr.Close() releases it, and the writer goes back to the pool still holding
+//     buffered bytes that were never flushed.
+//
+// What this does NOT prove is that the production deferred Reset(nil)+Put ran. sync.Pool gives
+// no identity guarantee, so a later Get cannot be asserted to return the same writer, and
+// dropping the production Reset(nil) is a RETENTION defect — a pooled writer keeps a live
+// *io.PipeWriter and up to 64 KiB of stale bytes reachable while it sits idle — rather than a
+// behavioural one, because the next user calls Reset(dst) before writing and that discards
+// both. There is no observable behaviour to assert on there, so no assertion here pretends to.
+func TestBufioWriterPool_SizeAndAbandonedWriterReset(t *testing.T) {
+	const poolBufferBytes = 64 * 1024
+
+	abandoned := bufioWriterPool.Get().(*bufio.Writer)
+
+	// A destination that fails every write, standing in for the pipe whose read side has been
+	// closed: the abandoned writer must be safe to recycle whatever its destination did.
+	abandoned.Reset(&failingWriter{})
+	require.Equal(t, poolBufferBytes, abandoned.Available(), "the pool must hand out 64 KiB writers")
+
+	_, err := abandoned.Write([]byte("abandoned-payload"))
+	require.NoError(t, err, "a short write stays in the buffer and never reaches the destination")
+	require.Positive(t, abandoned.Buffered(), "the fixture must leave bytes buffered, or it is not the abandoned case")
+
+	abandoned.Reset(nil)
+	require.Zero(t, abandoned.Buffered(), "Reset must drop the unflushed bytes, not carry them into the pool")
+	require.Equal(t, poolBufferBytes, abandoned.Available())
+
+	bufioWriterPool.Put(abandoned)
+
+	// Not necessarily the same writer; the assertions below hold either way.
+	next := bufioWriterPool.Get().(*bufio.Writer)
+
+	var out bytes.Buffer
+
+	next.Reset(&out)
+	require.Equal(t, poolBufferBytes, next.Available())
+	require.Zero(t, next.Buffered())
+
+	_, err = next.Write([]byte("next-use"))
+	require.NoError(t, err)
+	require.NoError(t, next.Flush())
+	require.Equal(t, "next-use", out.String(), "a recycled writer must emit only its own bytes")
+
+	next.Reset(nil)
+	bufioWriterPool.Put(next)
+}
+
+// failingWriter rejects every write, so a bufio.Writer over it can only ever hold its bytes in
+// the buffer.
+type failingWriter struct{}
+
+func (failingWriter) Write(_ []byte) (int, error) {
+	return 0, io.ErrClosedPipe
 }

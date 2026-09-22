@@ -50,7 +50,7 @@
     - [version](#version) - Returns the server version information
     - [freeze](#freeze) - Freezes specified UTXOs or OUTPUTs
     - [unfreeze](#unfreeze) - Unfreezes specified UTXOs or OUTPUTs
-    - [reassign](#reassign) - Reassigns specified frozen UTXOs to a new address
+    - [reassign](#reassign) - Updates a frozen UTXO commitment; ownership-changing reassignment is currently unsafe
     - [getchaintips](#getchaintips) - Returns information about all known chain tips
 - [Unimplemented RPC Commands](#unimplemented-rpc-commands)
 - [Error Handling](#error-handling)
@@ -349,7 +349,7 @@ Some key handlers include:
 - `handleSubmitMiningSolution`: Submits a solved block to the network
 - `handleFreeze`: Freezes specified UTXOs to prevent spending
 - `handleUnfreeze`: Unfreezes previously frozen UTXOs
-- `handleReassign`: Reassigns specified frozen UTXOs to a new address
+- `handleReassign`: Updates a frozen UTXO commitment; ownership-changing reassignment is currently unsafe
 - `handleSetBan`: Adds or removes IP addresses/subnets from the node's ban list
 - `handleClearBanned`: Removes all bans from the node
 - `handleListBanned`: Lists all currently banned IP addresses and subnets
@@ -432,7 +432,7 @@ For GRPC services, certain administrative operations require additional API key 
 - **Usage**: API key must be included in GRPC requests as metadata with the key `x-api-key`.
 
 !!! warning "Security Note"
-    The API key provides administrative access to peer-policy operations. Keep it secret, never commit it, and prefer `securityLevelGRPC >= 2` (verified TLS) when the gRPC listener is not loopback-bound so the key is not exposed in transit. Note that a *configured* key is currently echoed in the node's startup settings dump, so treat startup logs as sensitive and prefer supplying the key via the environment or a secret store.
+    The API key provides administrative access to peer-policy operations. Keep it secret, never commit it, and prefer `security_level_grpc >= 2` (verified TLS) when the gRPC listener is not loopback-bound so the key is not exposed in transit. Note that a *configured* key is currently echoed in the node's startup settings dump, so treat startup logs as sensitive and prefer supplying the key via the environment or a secret store.
 
 ## General Format
 
@@ -1535,19 +1535,29 @@ Unfreezes a previously frozen UTXO, allowing it to be spent.
 
 ### reassign
 
-Reassigns ownership of a specific UTXO to a new Bitcoin address.
+Replaces a frozen UTXO's commitment using its outpoint and the old and new hashes.
+No destination address or replacement locking script is accepted.
 
-**Parameters:**
+**Known regression:** do not reassign to a different owner. The RPC can succeed
+with a `null` result while leaving the output unspendable by both owners, even
+after maturity. See the [reassignment limitation](../../topics/services/alert.md#24-utxo-reassignment)
+and [issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).
 
-1. `txid` (string, required) - Transaction ID of the output to reassign
-2. `vout` (numeric, required) - Output index to reassign
-3. `destination` (string, required) - Bitcoin address to reassign the UTXO to
+**Parameters** (positional, in this order):
+
+1. `oldtxid` (string, required) - Transaction ID of the frozen output, as a hex hash
+2. `oldvout` (numeric, required) - Output index
+3. `oldutxohash` (string, required) - Current UTXO commitment, as a hex hash
+4. `newutxohash` (string, required) - Replacement UTXO commitment, as a hex hash
 
 **Returns:**
 
-- `boolean` - True if the UTXO was successfully reassigned
+- `null` on success; an error if hash parsing or the store operation fails. Success does not establish spendability.
 
 **Example Request:**
+
+This illustrates self-reassignment with an unchanged commitment. Replace the
+outpoint and both hash values with those of an actual frozen output.
 
 ```json
 {
@@ -1557,7 +1567,8 @@ Reassigns ownership of a specific UTXO to a new Bitcoin address.
     "params": [
         "a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0",
         1,
-        "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        "1111111111111111111111111111111111111111111111111111111111111111"
     ]
 }
 ```
@@ -1566,7 +1577,7 @@ Reassigns ownership of a specific UTXO to a new Bitcoin address.
 
 ```json
 {
-    "result": true,
+    "result": null,
     "error": null,
     "id": "curltest"
 }

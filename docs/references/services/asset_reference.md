@@ -440,7 +440,8 @@ The Asset Service uses the following configuration values from the settings syst
 ### Centrifuge Configuration (Real-time Updates)
 
 - `asset_centrifuge_disable`: Whether to disable Centrifuge server (default: false)
-- `asset_centrifugeListenAddress`: Centrifuge listen address (default: ":8000")
+- `asset_centrifugeListenAddress`: Non-empty enables Centrifuge (default: ":8892"). Not bound; the WebSocket is served on Asset HTTP at `/connection/websocket`
+- `asset_centrifugeAllowOrigins`: Pipe-separated extra browser origins allowed to open the WebSocket (default: "", same-host only)
 
 ### Security
 
@@ -817,6 +818,12 @@ Error responses include a JSON object with an error message:
     - Returns: Subtree data array (JSON) with pagination metadata
 
 ### Merkle Proof Endpoints
+
+These endpoints accept transaction IDs only. A hash with no mined transaction
+(including a subtree root) returns HTTP 404 with
+`mined transaction not found; BUMP proofs require a mined transaction ID`.
+Transactions found only in orphan blocks return HTTP 404 with
+`transaction not in main chain`.
 
 - **GET `/api/v1/merkle_proof/:hash`**
     - Purpose: Get merkle proof for a transaction (binary)

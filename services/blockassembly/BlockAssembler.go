@@ -414,6 +414,12 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 
 				err := b.reset(ctx, resetReq.ValidateInputs)
 
+				// The Reset path replays moveForward blocks through the same
+				// conflict resolution, so it can queue refusals too. Unlike the
+				// reorg path this does not run inside processNewBlockAnnouncement,
+				// so nothing else would drain them until the next block arrives.
+				b.drainPendingInvalidations(ctx)
+
 				// empty out the reset channel
 				for len(b.resetCh) > 0 {
 					bufferedCh := <-b.resetCh
@@ -912,6 +918,12 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 		deferFn()
 	}()
 
+	// Drain on every exit path, including the error returns below: a refusal is
+	// recorded during block movement, and the block still needs invalidating
+	// even if a later step of this round failed. Cheap when empty (one mutex
+	// acquisition), and it must run AFTER movement, never during it.
+	defer b.drainPendingInvalidations(ctx)
+
 	// Use context-aware logger for trace correlation
 	ctxLogger := b.logger.WithTraceContext(ctx)
 
@@ -1317,6 +1329,63 @@ func (b *BlockAssembler) isBlockOnLongestChain(ctx context.Context, blockHash ch
 	return b.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{meta.ID})
 }
 
+// conflictIntentRefusalHandler builds the refusal callback used by WAL replay. Unlike the block-movement path there is no block movement in flight
+// here, but invalidating a block during startup replay would fight the FSM, so
+// refusals are logged and counted only. A refused replay leaves the UTXO set
+// consistent with the honest chain, which is the outcome that matters.
+func (b *BlockAssembler) conflictIntentRefusalHandler(blockHash chainhash.Hash) utxo.ProcessConflictingOption {
+	return utxo.WithRefusalHandler(
+		func(loser chainhash.Hash) {
+			b.logger.Errorf("[replayPendingConflictIntents][%s] REFUSED to demote transaction %s during WAL replay: it is mined on that block's own ancestry",
+				blockHash.String(), loser.String())
+
+			// Queue it like the live path does. A refusal here means a previous
+			// process recorded an intent for a block that is an ancestor double
+			// spend; the demotion is correctly not re-applied, but the block is
+			// still on the chain, and logging alone would leave it there with
+			// nothing to act on it. The first drain after startup picks it up.
+			if b.subtreeProcessor != nil {
+				b.subtreeProcessor.QueueInvalidation(blockHash)
+			}
+		},
+	)
+}
+
+// drainPendingInvalidations invalidates any block whose conflict resolution was
+// refused because it would have reversed a confirmed spend. Called after block
+// movement has completed, never during it: InvalidateBlock re-enters the
+// blockchain service and emits notifications, which is unsafe while the subtree
+// processor still holds movement state.
+//
+// Best-effort by design. The UTXO set is already consistent with the honest
+// chain thanks to the refusal itself; invalidation is what restores agreement
+// on which chain is best. A failure here is logged, not propagated, so it can
+// never turn a consensus problem into a block-assembly outage.
+func (b *BlockAssembler) drainPendingInvalidations(ctx context.Context) {
+	if b.subtreeProcessor == nil {
+		return
+	}
+
+	for _, blockHash := range b.subtreeProcessor.DrainPendingInvalidations() {
+		blockHash := blockHash
+
+		b.logger.Errorf("[drainPendingInvalidations][%s] invalidating block: its conflict resolution would have reversed a spend confirmed in its own ancestry",
+			blockHash.String())
+
+		if _, err := b.blockchainClient.InvalidateBlock(ctx, &blockHash); err != nil {
+			// Put it back rather than dropping it. The refusal already made
+			// conflict resolution a no-op for this block, so until it is
+			// actually invalidated the node is extending a chain it knows to be
+			// invalid. A transient RPC failure must not be the thing that makes
+			// that permanent — the next block announcement retries.
+			b.subtreeProcessor.QueueInvalidation(blockHash)
+
+			b.logger.Errorf("[drainPendingInvalidations][%s] failed to invalidate block, re-queued for retry: %v",
+				blockHash.String(), err)
+		}
+	}
+}
+
 // replayConflictIntent re-runs a single WAL intent against the UTXO store.
 func (b *BlockAssembler) replayConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
 	switch intent.Kind {
@@ -1330,7 +1399,13 @@ func (b *BlockAssembler) replayConflictIntent(ctx context.Context, intent utxo.C
 			seeded[h] = struct{}{}
 		}
 
-		_, _, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes, seeded)
+		// Replay is chain-authorised too. The isBlockOnLongestChain gate above
+		// only establishes that the intent's block is still on the main chain; it
+		// says nothing about whether a losing transaction is confirmed on that
+		// block's own ancestry. Without the guard, replaying an intent recorded by
+		// a pre-fix process would re-apply the very corruption this prevents.
+		_, _, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes, seeded,
+			utxo.NewAncestryGuard(b.blockchainClient.CheckBlockIsAncestorOfBlock), b.conflictIntentRefusalHandler(intent.BlockHash))
 
 		return err
 	case utxo.ConflictIntentReverse:
@@ -1370,7 +1445,13 @@ func (b *BlockAssembler) healStaleConflictIntent(ctx context.Context, intent utx
 			seeded[h] = struct{}{}
 		}
 
-		_, _, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes, seeded)
+		// Replay is chain-authorised too. The isBlockOnLongestChain gate above
+		// only establishes that the intent's block is still on the main chain; it
+		// says nothing about whether a losing transaction is confirmed on that
+		// block's own ancestry. Without the guard, replaying an intent recorded by
+		// a pre-fix process would re-apply the very corruption this prevents.
+		_, _, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes, seeded,
+			utxo.NewAncestryGuard(b.blockchainClient.CheckBlockIsAncestorOfBlock), b.conflictIntentRefusalHandler(intent.BlockHash))
 
 		return err
 	default:
@@ -3186,6 +3267,11 @@ func (b *BlockAssembler) validateUnminedTxInputs(ctx context.Context, txHash cha
 
 		parentMeta, err := b.utxoStore.Get(ctx, parentHash, fields.Utxos)
 		if err != nil || parentMeta == nil {
+			// Log the offending tx and parent so CheckBlockAssemblyValidateInputs is
+			// diagnosable: a pruned parent of a live unmined tx (issue 1768) surfaces here.
+			b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d parent could not be loaded (err=%v, meta nil=%t) — counting as invalid",
+				txHash.String(), parentHash.String(), input.PreviousTxOutIndex, err, parentMeta == nil)
+
 			return false
 		}
 

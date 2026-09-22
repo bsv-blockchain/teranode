@@ -146,6 +146,8 @@ When enabled, the pruner checks FSM state and skips all deletion operations duri
 - `false` (default): Normal pruning during catchup (safe with retention >= 288 blocks)
 - `true`: Skip all pruning during catchup state
 
+Note: this defers rather than eliminates the prune burst - a node that skips a long catchup hits one much larger DAH sweep on entering the RUNNING state.
+
 ### pruner_blockAssemblyWaitTimeout
 
 **Type**: Duration
@@ -185,17 +187,7 @@ When Aerospike connection pool utilization exceeds this threshold, the pruner au
 - `OnBlockPersisted` (default): Triggers on BlockPersisted notifications (coordinated with Block Persister)
 - `OnBlockMined`: Triggers on Block notifications with mined_set=true
 
-### pruner_force_ignore_block_persister_height
-
-**Type**: Boolean
-
-**Default**: `false`
-
-**Environment Variable**: `pruner_force_ignore_block_persister_height`
-
-**Description**: Force ignore block persister height tracking
-
-When enabled, uses Block notifications with mined_set=true instead of BlockPersisted notifications from Block Persister for determining safe prune height.
+To use Block notifications with mined_set=true instead of BlockPersisted notifications from Block Persister for determining safe prune height, set `pruner_block_trigger=OnBlockMined`.
 
 ### pruner_utxoSetTTL
 
@@ -362,7 +354,7 @@ pruner_jobTimeout = 10m
 - Too short: Frequent timeouts logged
 - Too long: Blocks other operations unnecessarily
 
-**Metrics**: Monitor `pruner_duration_seconds` to determine appropriate timeout
+**Metrics**: Monitor `teranode_pruner_duration_seconds` to determine appropriate timeout
 
 ## UTXO Store Settings
 
@@ -843,9 +835,9 @@ export UTXOSTORE_PARENTPRESERVATIONBLOCKS=20000
 
 While not configuration settings, these Prometheus metrics should be monitored:
 
-- `pruner_duration_seconds`: Adjust `jobTimeout` if consistently near timeout
-- `pruner_skipped_total{reason="not_running"}`: Indicates Block Assembly issues
-- `pruner_errors_total`: Indicates database or connectivity issues
+- `teranode_pruner_duration_seconds`: Adjust `jobTimeout` if consistently near timeout
+- `teranode_pruner_skipped_total{reason="block_assembly_timeout"}`: Indicates Block Assembly issues
+- `teranode_pruner_errors_total`: Indicates database or connectivity issues
 - `utxo_cleanup_batch_duration_seconds`: Indicates Aerospike performance
 
 ## Troubleshooting Configuration Issues
@@ -880,7 +872,7 @@ pruner_jobTimeout = 20m  # or higher
 
 ### Slow Pruning
 
-**Symptoms**: High `pruner_duration_seconds` values
+**Symptoms**: High `teranode_pruner_duration_seconds` values
 
 **Solutions:**
 
@@ -914,13 +906,13 @@ pruner_jobTimeout = 20m  # or higher
 1. Verify pruner running:
 
     ```bash
-    curl http://localhost:8096/metrics | grep pruner_processed_total
+    curl http://localhost:8096/metrics | grep teranode_pruner_active
     ```
 
-2. Check `pruner_skipped_total` reasons:
+2. Check `teranode_pruner_skipped_total` reasons:
 
     ```bash
-    curl http://localhost:8096/metrics | grep pruner_skipped_total
+    curl http://localhost:8096/metrics | grep teranode_pruner_skipped_total
     ```
 
 3. Verify Block Assembly in RUNNING state
