@@ -7183,6 +7183,13 @@
 </thead>
 <tbody>
 <tr>
+<td>AllowedPublisherIDs</td>
+<td>[]string</td>
+<td>[]</td>
+<td>p2p_allowed_publisher_ids</td>
+<td>Opt-in allowlist of peer IDs whose pubsub messages this node acts on; empty (default) accepts all. Bare peer IDs, not multiaddrs. Applies to every subscribed topic, so filtered peers also stop refreshing the peer registry and the monitoring feed</td>
+</tr>
+<tr>
 <td>BootstrapPeers</td>
 <td>[]string</td>
 <td>[] (settings.conf ships with <code>/dnsaddr/${network}.bootstrap.teranode.bsvb.tech</code>)</td>
