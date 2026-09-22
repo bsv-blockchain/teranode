@@ -789,9 +789,18 @@ func accessLogMiddleware(logger ulogger.Logger) echo.MiddlewareFunc {
 // blocked too.
 //
 // Escaping at the dashboard's HTML sink is the actual fix for markup in peer-controlled fields;
-// this is the second line. The request Host is deliberately NOT interpolated - that would put
-// attacker-influenced input into a response header, and 'self' already covers the dashboard's own
-// origin over http and https, including same-origin ws:// and wss:// under CSP3.
+// this is the second line.
+//
+// The request Host is deliberately NOT interpolated - that would put attacker-influenced input into
+// a response header. That leaves the dashboard's own WebSocket, which it opens over ws:// whenever
+// the dashboard itself is served over plain http. Whether 'self' covers a same-origin ws:// URL is a
+// CSP3 refinement that is NOT implemented uniformly, so the scheme is listed explicitly rather than
+// assumed: relying on it would break the live feed on every plain-http deployment. Listing ws: costs
+// nothing that connect-src has not already given away - https: and wss: are each equally unbounded,
+// deliberately, because the dashboard is used to drive remote teranode instances.
+//
+// Keep this string in sync with ui/dashboard/src/hooks.server.ts, which carries the development
+// copy, and with ui/dashboard/tests/csp.spec.ts, which asserts its behaviour in a real browser.
 const contentSecurityPolicy = "default-src 'self'; " +
 	"script-src 'self' 'unsafe-inline'; " +
 	"style-src 'self' 'unsafe-inline'; " +
@@ -801,7 +810,7 @@ const contentSecurityPolicy = "default-src 'self'; " +
 	"base-uri 'self'; " +
 	"form-action 'self'; " +
 	"frame-ancestors 'none'; " +
-	"connect-src 'self' https: wss:"
+	"connect-src 'self' https: wss: ws:"
 
 // securityHeadersMiddleware adds security headers to all HTTP responses.
 func securityHeadersMiddleware() echo.MiddlewareFunc {

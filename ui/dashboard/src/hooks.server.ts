@@ -1,6 +1,34 @@
 import type { Handle } from '@sveltejs/kit'
 
 /**
+ * The Content-Security-Policy served with the dashboard.
+ *
+ * This hook does NOT run in production: the dashboard is built with adapter-static and served by
+ * the Go asset service, so the authoritative copy is the constant in
+ * services/asset/httpimpl/http.go. Fix that one; this copy is kept byte-identical to it so
+ * development and production cannot drift apart, and it is exported so the browser test asserts the
+ * same string rather than a fourth transcription of it.
+ *
+ * It is defence in depth, not a strict policy: 'unsafe-inline' is required by the three inline
+ * scripts the built dashboard carries, so inline event handlers still fire, and connect-src stays
+ * wide because the dashboard drives remote teranode instances. ws: is listed explicitly rather than
+ * left to 'self' - whether 'self' covers a same-origin ws:// URL is a CSP3 refinement that is not
+ * implemented uniformly, and the dashboard opens its live feed over ws:// on every plain-http
+ * deployment. The request host is deliberately not interpolated.
+ */
+export const CONTENT_SECURITY_POLICY =
+  "default-src 'self'; " +
+  "script-src 'self' 'unsafe-inline'; " +
+  "style-src 'self' 'unsafe-inline'; " +
+  "img-src 'self' data:; " +
+  "font-src 'self' data:; " +
+  "object-src 'none'; " +
+  "base-uri 'self'; " +
+  "form-action 'self'; " +
+  "frame-ancestors 'none'; " +
+  "connect-src 'self' https: wss: ws:"
+
+/**
  * Server-side middleware to protect routes that require authentication
  */
 export const handle: Handle = async ({ event, resolve }) => {
@@ -42,31 +70,9 @@ export const handle: Handle = async ({ event, resolve }) => {
     // Prevent MIME type sniffing
     response.headers.set('X-Content-Type-Options', 'nosniff')
 
-    // Content Security Policy.
-    //
-    // This hook does NOT run in production: the dashboard is built with adapter-static and
-    // served by the Go asset service, so the authoritative policy is the one in
-    // securityHeadersMiddleware (services/asset/httpimpl/http.go). Fix that one; this copy is
-    // kept byte-identical to it so development and production cannot drift apart.
-    //
-    // It is defence in depth, not a strict policy: 'unsafe-inline' is required by the three
-    // inline scripts the built dashboard carries, so inline event handlers still fire, and
-    // connect-src stays wide because the dashboard drives remote teranode instances.
-    // The request host is deliberately not interpolated - 'self' already covers the dashboard's
-    // own origin, including same-origin ws:// and wss:// under CSP3.
-    response.headers.set(
-      'Content-Security-Policy',
-      "default-src 'self'; " +
-        "script-src 'self' 'unsafe-inline'; " +
-        "style-src 'self' 'unsafe-inline'; " +
-        "img-src 'self' data:; " +
-        "font-src 'self' data:; " +
-        "object-src 'none'; " +
-        "base-uri 'self'; " +
-        "form-action 'self'; " +
-        "frame-ancestors 'none'; " +
-        "connect-src 'self' https: wss:",
-    )
+    // Content Security Policy. See CONTENT_SECURITY_POLICY above for why this copy exists and
+    // what the policy does and does not buy.
+    response.headers.set('Content-Security-Policy', CONTENT_SECURITY_POLICY)
 
     // Referrer policy
     response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
