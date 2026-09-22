@@ -39,9 +39,15 @@ func overpayingCanaryCoinbase(t *testing.T, height uint32) *bt.Tx {
 	return coinbaseTx
 }
 
-// TestValidateBlock_BoundInvalidBody_IsPersistedInvalid is the positive control for the binding
-// gate, and it is not optional (bitcoin-sv/teranode#4844). Without it the gate could be over-broad —
-// declining to persist EVERY invalid block — with every other test still green.
+// TestValidateBlock_BoundInvalidBody_IsPersistedInvalid is a POSITIVE CONTROL, not a regression
+// test: it passes on the base revision, because the behaviour it asserts is the behaviour this
+// change set out to preserve.
+//
+// It is kept because it guards a branch this change actually rewrote. The catch-all that persists
+// an invalid verdict is now gated on the binding reported by ValidWithBinding, and the failure mode
+// of that gate is being OVER-BROAD — declining to persist every invalid block, quietly discarding
+// consensus verdicts — which every other test in this package would pass through silently
+// (bitcoin-sv/teranode#4844).
 //
 // A body that does reconcile to the header's merkle root IS the miner's committed body. A consensus
 // failure in it is genuine invalidity, the hash is condemned, and the full record is written so

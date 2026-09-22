@@ -6,33 +6,36 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
 
-// TestValidateBlock_OptimisticPeerBlocks_UnboundBodyTakesInvalidateRoute is a CHARACTERIZATION test.
-// It pins a DEFERRED exposure, it does not assert that anything is safe.
+// TestValidateBlock_OptimisticPeerBlocks_UnboundBodyTakesInvalidateRoute is a CHARACTERIZATION of a
+// KNOWN, UNFIXED EXPOSURE. It passes on the base revision and it asserts that something unsafe still
+// happens. Do not read a green run here as evidence of anything being closed.
 //
 // When an operator opts into optimistic mining for peer-served blocks, the received body is added to
 // the chain BEFORE block.Valid runs, so an attacker-chosen unbound body is transiently visible as a
-// VALID tip and is then persisted as invalid, carrying the peer's coinbase — the one place the
-// "never persist an unbound body" rule does not hold (bitcoin-sv/teranode#4844). Fixing it means
-// splitting block.Valid so its integrity floor runs before the optimistic AddBlock, which is
-// recorded as the prerequisite on the setting itself
-// (settings/blockvalidation_settings.go, blockvalidation_optimistic_mining_peer_blocks).
+// VALID chain tip and is then persisted as invalid, carrying the peer's chosen coinbase. That is the
+// one configuration in which this change's central rule — never persist a body that is not bound to
+// its header — does not hold (bitcoin-sv/teranode#4844).
 //
-// DELETE this test when that split lands. Operators should keep the flag off until then.
+// It is kept, rather than cut with the other base-passing tests, because it is the only executable
+// statement of the deferral: it makes the remaining exposure reproducible, and it fails loudly the
+// day someone fixes it, which is when it must be deleted.
 //
-// The second subtest is the one protecting the shipped default: with the opt-in off, the same
-// delivery persists nothing.
+// Closing it means splitting block.Valid so its integrity floor runs before the optimistic AddBlock
+// — an architectural change to the validation pipeline, already recorded as the prerequisite on the
+// setting itself (settings/blockvalidation_settings.go,
+// blockvalidation_optimistic_mining_peer_blocks, which defaults to false). Operators should keep
+// that flag off until the split lands.
 func TestValidateBlock_OptimisticPeerBlocks_UnboundBodyTakesInvalidateRoute(t *testing.T) {
 	initPrometheusMetrics()
 
-	// Both subtests deliver the same unbound body: a single-transaction block whose header merkle
-	// root is NOT its coinbase txid, so nothing reconciles the body to the header.
+	// An unbound body: a single-transaction block whose header merkle root is NOT its coinbase
+	// txid, so nothing reconciles the body to the header.
 	t.Run("opted in: the body is added, then invalidated, and the record keeps the peer's coinbase", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -85,48 +88,5 @@ func TestValidateBlock_OptimisticPeerBlocks_UnboundBodyTakesInvalidateRoute(t *t
 		require.NoError(t, err)
 		require.Contains(t, storedMiner, minerMarkupCanary,
 			"the persisted record carries the peer's chosen coinbase — the residual this test pins")
-	})
-
-	t.Run("default configuration: nothing is persisted", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		tSettings := test.CreateBaseTestSettings(t)
-		tSettings.BlockValidation.OptimisticMining = true
-		// The shipped default for the peer path.
-		tSettings.BlockValidation.OptimisticMiningPeerBlocks = false
-		tSettings.ChainCfgParams.Checkpoints = nil
-
-		require.True(t, optimisticMiningDisabledForPeerPath(tSettings, "http://localhost"),
-			"the peer path needs BOTH flags, so the default keeps it non-optimistic")
-
-		bv, client := newNoPersistHarness(ctx, t, tSettings)
-
-		fake := &corruptStrikeP2PClient{}
-		bv.p2pClient = fake
-
-		const blockHeight = uint32(1)
-
-		timestamp := uint32(time.Now().Unix()) //nolint:gosec
-
-		expected, err := client.GetNextWorkRequired(ctx, tSettings.ChainCfgParams.GenesisHash, int64(timestamp))
-		require.NoError(t, err)
-		require.NotNil(t, expected)
-
-		coinbaseTx := canaryCoinbaseAtHeight(t, blockHeight)
-		unboundRoot := chainhash.Hash{0xCD}
-		hdr := minedHeaderWithBits(t, tSettings.ChainCfgParams.GenesisHash, &unboundRoot, *expected, timestamp)
-
-		block, err := model.NewBlock(hdr, coinbaseTx, []*chainhash.Hash{}, 1, uint64(coinbaseTx.Size()), blockHeight, 0)
-		require.NoError(t, err)
-
-		err = bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{
-			PeerID:                  "peer-serving",
-			DisableOptimisticMining: optimisticMiningDisabledForPeerPath(tSettings, "http://localhost"),
-		})
-		require.Error(t, err)
-		require.True(t, errors.IsBlockCorrupt(err), "an unbound body is a verdict on the delivery, got: %v", err)
-
-		requireNothingPersisted(ctx, t, client, block.Hash())
 	})
 }

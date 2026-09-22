@@ -45,8 +45,9 @@ func storeCachedHeadersParent(ctx context.Context, t *testing.T, client blockcha
 	return parent
 }
 
-// TestValidateBlock_CachedHeaders_ParentStoredBeforeHoistedNBitsCheck is the condition the second
-// hoist rests on (bitcoin-sv/teranode#4844).
+// TestValidateBlock_CachedHeaders_ParentStoredBeforeHoistedNBitsCheck is a POSITIVE CONTROL, not a
+// regression test: it passes on the base revision. It is kept because it is the precondition the
+// second hoist rests on, and nothing else asserts it (bitcoin-sv/teranode#4844).
 //
 // Hoisting the expected-nBits check above the parent-invalid check also places its store-backed
 // GetNextWorkRequired ahead of the wait for previous blocks, on the catch-up branch whose headers
@@ -89,10 +90,12 @@ func TestValidateBlock_CachedHeaders_ParentStoredBeforeHoistedNBitsCheck(t *test
 	require.NoError(t, err, "the hoisted expected-nBits lookup must find the parent's stored row on the cached-headers branch")
 }
 
-// TestValidateBlock_CachedHeaders_CorrectNBitsChildOfInvalidParent_StillParentInvalid proves the
-// second hoist did not swallow the verdict it reorders around: a child whose difficulty bits are
-// correct still reaches the parent-invalid check on the cached-headers branch, and still keeps its
-// real body there (bitcoin-sv/teranode#4844).
+// TestValidateBlock_CachedHeaders_CorrectNBitsChildOfInvalidParent_StillParentInvalid is a POSITIVE
+// CONTROL, not a regression test: it passes on the base revision. It is kept because it is what
+// proves the second hoist did not swallow the verdict it reorders around — a child whose difficulty
+// bits are correct still reaches the parent-invalid check on the cached-headers branch, and still
+// keeps its real body there (bitcoin-sv/teranode#4844). The sibling below is the regression: with
+// WRONG bits the same delivery is now rejected before it gets there, and is not persisted.
 func TestValidateBlock_CachedHeaders_CorrectNBitsChildOfInvalidParent_StillParentInvalid(t *testing.T) {
 	initPrometheusMetrics()
 

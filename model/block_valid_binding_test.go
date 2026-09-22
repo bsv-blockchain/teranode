@@ -111,12 +111,13 @@ func TestBlock_ValidWithBinding_ReportsTheBinding(t *testing.T) {
 	})
 }
 
-// TestBlock_ValidWithBinding_IsInvocationLocal is the regression that keeps the binding fact out of
-// the block. Valid runs concurrently — from block validation's optimistic background goroutine and
-// from block assembly — so a field on Block would let one invocation observe another's result.
-// Returning the fact makes it invocation-local by construction, which is why this passes today; the
-// test exists so a refactor back to block-held state fails loudly instead of silently reintroducing
-// the bug. Both calls MUST use the same object, or it proves nothing.
+// TestBlock_ValidWithBinding_IsInvocationLocal cannot fail against the design it ships with: the
+// binding fact is a return value, so it is invocation-local by construction. It is kept as a guard
+// against ONE specific future refactor, because that refactor was actually proposed — holding the
+// fact in a field on Block. Valid runs concurrently, from block validation's optimistic background
+// goroutine and from block assembly, so a field there would let one invocation observe another's
+// result, and an atomic would make the access safe while preserving exactly that bug. This test is
+// what makes that change fail loudly. Both calls MUST use the same object, or it proves nothing.
 func TestBlock_ValidWithBinding_IsInvocationLocal(t *testing.T) {
 	tSettings := bindingTestSettings(t)
 
@@ -135,20 +136,6 @@ func TestBlock_ValidWithBinding_IsInvocationLocal(t *testing.T) {
 	require.False(t, bound, "the second call must report ITS OWN binding, not the first call's")
 }
 
-// TestBlock_Valid_WrapperMatchesValidWithBinding proves the two-value wrapper is faithful, so the
-// call sites left untouched by the split are provably unaffected by it.
-func TestBlock_Valid_WrapperMatchesValidWithBinding(t *testing.T) {
-	tSettings := bindingTestSettings(t)
-
-	block := boundCoinbaseOnlyBlock(t, 1)
-
-	wrapperOK, wrapperErr := block.Valid(context.Background(), ulogger.TestLogger{}, nil, nil,
-		txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockHeader{}, []uint32{}, tSettings, nil)
-
-	bindingOK, _, bindingErr := callValidWithBinding(t, block, tSettings)
-
-	require.Equal(t, bindingOK, wrapperOK)
-	require.Error(t, wrapperErr)
-	require.Error(t, bindingErr)
-	require.Equal(t, bindingErr.Error(), wrapperErr.Error())
-}
+// The wrapper-equivalence test that used to sit here has been removed: Valid is a three-line
+// delegation to ValidWithBinding, so comparing the two compared the implementation to itself and
+// could not fail. The untouched call sites are covered by the suites that exercise them.

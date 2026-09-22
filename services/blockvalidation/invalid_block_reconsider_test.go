@@ -14,8 +14,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestValidateBlock_ParentInvalid_ChildKeepsFullBodyAndReconsiders asserts the behaviour the
-// non-persistence work deliberately PRESERVES (bitcoin-sv/teranode#4844).
+// TestValidateBlock_ParentInvalid_ChildKeepsFullBodyAndReconsiders is a POSITIVE CONTROL, not a
+// regression test: it passes on the base revision, because it asserts the behaviour this change set
+// out to preserve (bitcoin-sv/teranode#4844).
+//
+// It is kept because it guards a branch this change rewrote twice: the parent-invalid site was
+// moved below the hoisted expected-nBits check and merged from two call sites into one, while the
+// rule the rest of this change applies — never persist a body that is not bound to its header —
+// would, over-applied, remove exactly this write.
 //
 // Parent-invalid is an inherited and REVERSIBLE verdict: reconsidering the parent can make the
 // child valid again, and RevalidateBlock reloads the child from the store. So this one site must

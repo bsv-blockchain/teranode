@@ -44,7 +44,10 @@ func oversizedCoinbase(t *testing.T, height uint32) *bt.Tx {
 }
 
 // TestValidateBlock_SameHeaderDifferentBody_HonestBodyStillAccepted is the empirical
-// re-verification of the audit's same-header/different-body proof (bitcoin-sv/teranode#4844).
+// re-verification of the audit's same-header/different-body proof (bitcoin-sv/teranode#4844), and
+// it PASSES ON THE BASE REVISION — the reported scenario was already closed by the earlier
+// corrupt-body classification work. It is kept because the report asserted otherwise and the claim
+// had to be settled by running it rather than by reading the code.
 //
 // A peer keeps a genuine header — the hash nobody can substitute — and serves a body that does not
 // reconcile to it. That verdict is about the DELIVERY, not the block, so it must not condemn the
