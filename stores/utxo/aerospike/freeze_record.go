@@ -27,9 +27,10 @@ type freezeRecord struct {
 }
 
 // readFreezeRecord reads output offset's freeze record out of a record's bins. An absent
-// bin or entry reads as "no record"; a record with no until entry has no end. A bin or
-// entry of the wrong shape is storage damage and an error: these records decide whether
-// a block is valid, and damage must never read as "not frozen".
+// bin or entry reads as "no record"; a record with no until entry has no end; a record
+// with no policy-expiry entry does not expire. A bin or entry of the wrong shape is
+// storage damage and an error: these records decide whether a block is valid and whether
+// a policy freeze lifts, and damage must never read as "not frozen" or as "lifts".
 func readFreezeRecord(bins aerospike.BinMap, offset int) (freezeRecord, error) {
 	from, found, err := mapBinEntryInt(bins, fields.UtxoFreezeFrom, offset)
 	if err != nil {
@@ -45,7 +46,7 @@ func readFreezeRecord(bins aerospike.BinMap, offset int) (freezeRecord, error) {
 		return freezeRecord{}, err
 	}
 
-	_, policyExpires, err := mapBinEntry(bins, fields.UtxoFreezeExp, offset)
+	policyExpires, err := mapBinEntryBool(bins, fields.UtxoFreezeExp, offset)
 	if err != nil {
 		return freezeRecord{}, err
 	}
@@ -222,6 +223,27 @@ func mapBinEntry(bins aerospike.BinMap, bin fields.FieldName, offset int) (inter
 	}
 
 	return v, true, nil
+}
+
+// mapBinEntryBool is mapBinEntry for the policy-expiry bin: an absent entry is false, and
+// a present entry must be a bool — setFreezeRecord in teranode.lua writes true when the
+// flag is set and removes the entry otherwise, and the client hands the value back as a Go
+// bool (TestFreezeRecordBins). Anything else is storage damage rather than "true": the
+// entry decides whether the policy tier lifts when the window ends, so damage must not
+// read as permission to lift it. The Lua reader makes the matching fail-safe choice and
+// reads anything but true as "does not expire".
+func mapBinEntryBool(bins aerospike.BinMap, bin fields.FieldName, offset int) (bool, error) {
+	v, found, err := mapBinEntry(bins, bin, offset)
+	if err != nil || !found {
+		return false, err
+	}
+
+	b, ok := v.(bool)
+	if !ok {
+		return false, errors.NewStorageError("%s bin entry for offset %d is %T, want a bool", bin, offset, v)
+	}
+
+	return b, nil
 }
 
 // mapBinEntryInt is mapBinEntry for the height bins: a present entry must be an int.

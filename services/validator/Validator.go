@@ -949,6 +949,16 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// alongside them (subtree validation, legacy block sync); a request carrying either
 	// without it would admit a coin this node has frozen into block assembly, so it is
 	// rejected before any store access (issue #1422).
+	//
+	// This catches a misconfigured internal caller; it does not authenticate the request.
+	// InBlock is as caller-asserted as the flags it guards, and on the shipped profile the
+	// gRPC listener is unauthenticated (security_level_grpc = 0) — the footing
+	// SkipScriptValidation, SkipPolicyChecks and InBlock itself already stand on, kept
+	// deliberately when issue 4840 (finding B-022) removed these options from HTTP rather
+	// than from gRPC. A caller who can reach this listener can already skip script
+	// validation outright, which is strictly worse than lifting a policy freeze. The
+	// controls for that surface are the operator's: network isolation of the service mesh,
+	// and security_level_grpc = 3, which requires and verifies a client certificate.
 	if (validationOptions.IgnorePolicyFreeze || validationOptions.IgnoreConsensusFreeze) && !validationOptions.InBlock {
 		err = errors.NewProcessingError("[Validate][%s] IgnorePolicyFreeze and IgnoreConsensusFreeze require InBlock", txID)
 		span.RecordError(err)

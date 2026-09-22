@@ -31,10 +31,29 @@ func TestReadFreezeRecordShape(t *testing.T) {
 		rec, err := readFreezeRecord(aerospike.BinMap{
 			fromBin:  map[interface{}]interface{}{5: 100},
 			untilBin: map[interface{}]interface{}{5: 200},
-			expBin:   map[interface{}]interface{}{5: 1},
+			expBin:   map[interface{}]interface{}{5: true},
 		}, 5)
 		require.NoError(t, err)
 		require.Equal(t, freezeRecord{present: true, from: 100, until: 200, policyExpires: true}, rec)
+	})
+
+	t.Run("a false policy-expiry entry reads as not expiring", func(t *testing.T) {
+		rec, err := readFreezeRecord(aerospike.BinMap{
+			fromBin: map[interface{}]interface{}{5: 100},
+			expBin:  map[interface{}]interface{}{5: false},
+		}, 5)
+		require.NoError(t, err)
+		require.Equal(t, freezeRecord{present: true, from: 100}, rec)
+	})
+
+	t.Run("a policy-expiry entry that is not a bool is storage damage, never true", func(t *testing.T) {
+		for name, malformed := range map[string]interface{}{"int": 1, "string": "true", "bytes": []byte{1}} {
+			_, err := readFreezeRecord(aerospike.BinMap{
+				fromBin: map[interface{}]interface{}{5: 100},
+				expBin:  map[interface{}]interface{}{5: malformed},
+			}, 5)
+			require.ErrorIs(t, err, errors.ErrStorageError, "a %s entry must be storage damage", name)
+		}
 	})
 
 	t.Run("a from entry alone is an open-ended record", func(t *testing.T) {

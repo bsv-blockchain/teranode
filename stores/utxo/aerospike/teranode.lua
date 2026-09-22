@@ -288,7 +288,10 @@ end
 -- Function to read one output's freeze record out of maps the caller has already read
 -- from the record, so a batch of spends does not re-read the bins per spend. Returns
 -- present, from, until, policyExpires. Presence is the from entry: it is always written
--- when a freeze is recorded, whatever its value.
+-- when a freeze is recorded, whatever its value. policyExpires is the value of the exp
+-- entry, not its presence: setFreezeRecord writes true or removes the entry, so anything
+-- else is damage and reads as "does not expire" — the reading that keeps the policy tier
+-- in force. The Go reader (readFreezeRecord) rejects the same entry as storage damage.
 local function freezeRecordFromMaps(freezeFromMap, freezeUntilMap, freezeExpMap, offset)
     if freezeFromMap == nil or freezeFromMap[offset] == nil then
         return false, 0, 0, false
@@ -299,7 +302,7 @@ local function freezeRecordFromMaps(freezeFromMap, freezeUntilMap, freezeExpMap,
         untilHeight = freezeUntilMap[offset]
     end
 
-    local policyExpires = freezeExpMap ~= nil and freezeExpMap[offset] ~= nil
+    local policyExpires = freezeExpMap ~= nil and freezeExpMap[offset] == true
 
     return true, freezeFromMap[offset], untilHeight, policyExpires
 end
