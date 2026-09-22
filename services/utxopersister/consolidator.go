@@ -212,7 +212,7 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 		}
 
 		// Get the last 2 block headers from this last processed height
-		us, _, err := GetUTXOSetWithExistCheck(ctx, c.logger, c.settings, c.blockStore, hash)
+		us, _, err := GetUTXOSetWithExistCheck(ctx, c.logger, c.settings, c.blockStore, hash, height)
 		if err != nil {
 			return err
 		}

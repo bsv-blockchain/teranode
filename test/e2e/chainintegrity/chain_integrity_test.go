@@ -744,7 +744,7 @@ func verifyUTXOFiles(t *testing.T, ctx context.Context, node *daemon.TestDaemon,
 		t.Errorf("utxo-additions file does not exist for block %s", blockHash)
 	} else {
 		// Read and verify additions content
-		utxoSet, err := utxopersister.GetUTXOSet(ctx, node.Logger, node.Settings, blockStore, blockHash)
+		utxoSet, err := utxopersister.GetUTXOSet(ctx, node.Logger, node.Settings, blockStore, blockHash, height)
 		if err != nil {
 			t.Errorf("Failed to create UTXO set reader for block %s: %v", blockHash, err)
 		} else {
@@ -781,7 +781,7 @@ func verifyUTXOFiles(t *testing.T, ctx context.Context, node *daemon.TestDaemon,
 		t.Errorf("utxo-deletions file does not exist for block %s", blockHash)
 	} else {
 		// Read and verify deletions content
-		utxoSet, err := utxopersister.GetUTXOSet(ctx, node.Logger, node.Settings, blockStore, blockHash)
+		utxoSet, err := utxopersister.GetUTXOSet(ctx, node.Logger, node.Settings, blockStore, blockHash, height)
 		if err != nil {
 			t.Errorf("Failed to create UTXO set reader for deletions for block %s: %v", blockHash, err)
 		} else {
