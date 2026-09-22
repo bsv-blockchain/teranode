@@ -736,9 +736,14 @@ func (b *Block) CheckHeaderContextual(currentChain []*BlockHeader, settings *set
 }
 
 // Valid runs this function's consensus checks over the block — the header's own proof of work, the
-// contextual header rules, the body/header binding, and the coinbase, duplicate-transaction, reward
-// and ordering checks below. It is not the whole of a block's validation: the expected difficulty
-// bits, checkpoint agreement and the subtree pipeline are enforced by the caller, not here.
+// contextual header rules, and the coinbase, duplicate-transaction, reward and ordering checks
+// below. It ATTEMPTS the body/header binding, but only completes it when the supplied subtree data
+// permits: a block carrying subtrees with a nil subtreeStore passes through unbound, and Valid
+// discards that distinction. Callers that need to know must use ValidWithBinding.
+//
+// It is not the whole of a block's validation. The expected difficulty bits, checkpoint agreement
+// and the subtree pipeline are not performed here at all: they belong to the block-validation
+// service around this call, and block assembly calls this function without them.
 //
 // It is a thin wrapper over ValidWithBinding for the callers that do not need to know whether
 // this invocation bound the body to the header.
