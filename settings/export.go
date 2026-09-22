@@ -280,7 +280,10 @@ const redactedURLValue = "REDACTED"
 //
 // The name-based redact tag cannot see these: nothing in the key `blockchain_store` looks like a
 // secret, yet its documented production syntax is postgres://user:pass@host/db. Doing it
-// structurally here covers every URL setting at once, including ones added later.
+// structurally here covers every URL-typed setting field at once, and any scalar one added later,
+// because they all reach the display path through formatValue. A URL held inside a SLICE would not:
+// formatValue renders a non-string slice as an item count, so it never reaches this function. No
+// such setting exists today; one added later would need formatValue extended to reach it.
 //
 // The URL is copied by VALUE and the caller's is never mutated: these are the live settings the
 // store constructors use, so mutating one would break the node.

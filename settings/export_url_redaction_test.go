@@ -96,9 +96,13 @@ func populateEveryURLField(t *testing.T, s *Settings, rawURL string) int {
 	return populated
 }
 
-// TestExportMetadata_RedactsCredentialsInEveryURLSetting is the structural guarantee: the fix lives
-// in the one formatter every URL setting goes through, so it covers all of them and every one added
-// later, rather than only the fields someone remembered to tag.
+// TestExportMetadata_RedactsCredentialsInEveryURLSetting covers the structural claim: the fix lives
+// in the one formatter every URL-typed setting FIELD goes through, so it covers all of them rather
+// than only the fields someone remembered to tag.
+//
+// The walk below shares one blind spot with the formatter it exercises: neither descends into
+// slices, so a URL held inside one would be neither redacted nor detected here. No such setting
+// exists today, and the count assertion would not notice if one appeared.
 func TestExportMetadata_RedactsCredentialsInEveryURLSetting(t *testing.T) {
 	t.Run("authority form", func(t *testing.T) {
 		s := NewSettings()

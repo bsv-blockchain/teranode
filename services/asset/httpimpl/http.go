@@ -792,12 +792,13 @@ func accessLogMiddleware(logger ulogger.Logger) echo.MiddlewareFunc {
 // this is the second line.
 //
 // The request Host is deliberately NOT interpolated - that would put attacker-influenced input into
-// a response header. That leaves the dashboard's own WebSocket, which it opens over ws:// whenever
-// the dashboard itself is served over plain http. Whether 'self' covers a same-origin ws:// URL is a
-// CSP3 refinement that is NOT implemented uniformly, so the scheme is listed explicitly rather than
-// assumed: relying on it would break the live feed on every plain-http deployment. Listing ws: costs
-// nothing that connect-src has not already given away - https: and wss: are each equally unbounded,
-// deliberately, because the dashboard is used to drive remote teranode instances.
+// a response header. That leaves the dashboard's own WebSocket, which it opens over ws:// when the
+// dashboard itself is served over plain http (ui/dashboard/src/routes/api/config/websocket, which
+// picks the scheme from the page's own protocol). Whether 'self' covers a same-origin ws:// URL is a
+// CSP3 refinement rather than something the directive plainly says, so the scheme is named here
+// instead of relied upon. Listing ws: costs nothing that connect-src has not already given away -
+// https: and wss: are each equally unbounded, deliberately, because the dashboard is used to drive
+// remote teranode instances.
 //
 // Keep this string in sync with ui/dashboard/src/hooks.server.ts, which carries the development
 // copy, and with ui/dashboard/tests/csp.spec.ts, which asserts its behaviour in a real browser.

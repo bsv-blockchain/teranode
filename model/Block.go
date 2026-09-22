@@ -735,7 +735,11 @@ func (b *Block) CheckHeaderContextual(currentChain []*BlockHeader, settings *set
 	return nil
 }
 
-// Valid reports whether the block passes every consensus rule this node can evaluate for it.
+// Valid runs this function's consensus checks over the block — the header's own proof of work, the
+// contextual header rules, the body/header binding, and the coinbase, duplicate-transaction, reward
+// and ordering checks below. It is not the whole of a block's validation: the expected difficulty
+// bits, checkpoint agreement and the subtree pipeline are enforced by the caller, not here.
+//
 // It is a thin wrapper over ValidWithBinding for the callers that do not need to know whether
 // this invocation bound the body to the header.
 func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, txMetaStore utxo.Store, oldBlockIDsMap *txmap.SyncedMap[chainhash.Hash, []uint32],

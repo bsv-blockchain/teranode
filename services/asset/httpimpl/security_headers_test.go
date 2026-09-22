@@ -58,11 +58,10 @@ func TestSecurityHeadersMiddleware_SetsContentSecurityPolicy(t *testing.T) {
 		require.Contains(t, csp, directive)
 	}
 
-	// The dashboard opens its live feed over ws:// whenever it is itself served over plain http.
-	// Whether 'self' covers a same-origin ws:// URL is a CSP3 refinement that is not implemented
-	// uniformly, so both websocket schemes are listed explicitly; leaving it to 'self' would break
-	// the feed on every plain-http deployment. The behaviour, as opposed to the string, is asserted
-	// in a real browser by ui/dashboard/tests/csp.spec.ts.
+	// The dashboard opens its live feed over ws:// when it is itself served over plain http, so both
+	// websocket schemes are named rather than left to 'self', whose coverage of a same-origin ws://
+	// URL is a CSP3 refinement rather than something the directive plainly says. The behaviour, as
+	// opposed to the string, is asserted in a real browser by ui/dashboard/tests/csp.spec.ts.
 	require.Contains(t, csp, "connect-src ")
 	require.Contains(t, csp, " ws:", "ws: must be explicit, not left to 'self'")
 	require.Contains(t, csp, " wss:")

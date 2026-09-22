@@ -6,15 +6,16 @@
  * real document with the real header from the preview origin, then exercise the two behaviours the
  * policy is supposed to have (bitcoin-sv/teranode#4844):
  *
- *  - the dashboard's own live feed, which is opened over ws:// on any plain-http deployment, is NOT
- *    blocked. Whether 'self' covers a same-origin ws:// URL is a CSP3 refinement that is not
- *    implemented uniformly; Chromium does implement it, so this assertion is a guard for other
- *    engines rather than one that would have gone red here.
- *  - a remote module import IS blocked, BY THE POLICY. The module is served successfully from the
- *    test itself and the refusal is confirmed by a securitypolicyviolation event naming script-src,
- *    so the assertion cannot be satisfied by a network error with no policy present. That import is
- *    the amplification step a coinbase-sized payload needs, and it is the only thing this policy
- *    genuinely buys against the reported attack.
+ *  - the dashboard's own live feed, which it opens over ws:// when served over plain http, is NOT
+ *    blocked. Chromium treats 'self' as covering a same-origin ws:// URL, so naming the scheme is
+ *    belt-and-braces there and this assertion would not have gone red in this browser; it guards the
+ *    directive we actually ship rather than the refinement.
+ *  - a remote module import IS blocked, BY THE POLICY. The module is served from the test itself,
+ *    with the CORS header a cross-origin module import requires, and a separate positive control
+ *    shows it genuinely loading when no policy is served — so "blocked" cannot be satisfied by a
+ *    network or CORS failure. The refusal is further confirmed by a securitypolicyviolation event
+ *    naming script-src. That import is the amplification step a coinbase-sized payload needs, and
+ *    blocking it is the main thing this policy buys against the reported attack.
  *
  * Runs under `npm run test:integration`, NOT `npm run test:unit`. CI must run it.
  */
@@ -69,21 +70,59 @@ test('the policy does not block the dashboard own-origin websocket', async ({ pa
   )
 })
 
-test('the policy blocks a remote module import, and CSP is what blocked it', async ({ page }) => {
-  // The remote module is served, successfully, from this test. Without that the import would fail on
-  // DNS alone and the assertion below would hold with no CSP at all - which is exactly what made the
-  // first version of this test worthless. Here the counterfactual is real: remove the policy and the
-  // module loads.
-  let remoteWasFetched = false
-
+/**
+ * Serves the cross-origin module the way a real attacker-controlled host would have to: a 200 with a
+ * JavaScript content type AND the CORS header a cross-origin module import requires. Without that
+ * header the import fails on CORS whatever the policy says, so the counterfactual would be
+ * unfalsifiable — "blocked" would prove nothing about CSP. The positive control below runs the same
+ * route with no policy and requires it to LOAD, which is what makes this route trustworthy.
+ */
+async function serveRemoteModule(page: Page, onFetch?: () => void) {
   await page.route(REMOTE_MODULE_URL, async (route) => {
-    remoteWasFetched = true
+    onFetch?.()
 
     await route.fulfill({
       status: 200,
       contentType: 'text/javascript',
+      headers: { 'Access-Control-Allow-Origin': '*' },
       body: 'export const payload = 1',
     })
+  })
+}
+
+test('the remote module loads when no policy is served (positive control)', async ({ page }) => {
+  // Establishes the counterfactual the next test depends on. If this ever fails, the "CSP blocked
+  // it" assertion below is meaningless and must not be believed.
+  await serveRemoteModule(page)
+
+  await page.route('**/no-csp-fixture', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: '<!doctype html><html><body></body></html>',
+    })
+  })
+
+  await page.goto('/no-csp-fixture')
+
+  const loaded = await page.evaluate(async (remote) => {
+    try {
+      await import(/* @vite-ignore */ remote)
+      return true
+    } catch {
+      return false
+    }
+  }, REMOTE_MODULE_URL)
+
+  expect(loaded, 'without a policy the remote module must genuinely load').toBe(true)
+})
+
+test('the policy blocks a remote module import, and CSP is what blocked it', async ({ page }) => {
+  // The same module, served the same way, now behind the production policy.
+  let remoteWasFetched = false
+
+  await serveRemoteModule(page, () => {
+    remoteWasFetched = true
   })
 
   await openWithProductionCSP(page)

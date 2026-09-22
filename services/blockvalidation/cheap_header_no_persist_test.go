@@ -438,7 +438,8 @@ func TestValidateBlock_Difficulty1ChildOfInvalidParent_RejectedOnNBitsNotPersist
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.OptimisticMining = false
-	// No checkpoints, so the expected-nBits shortcut never engages and the gate genuinely runs.
+	// No checkpoints, matching the shape the rest of this file uses. The expected-nBits rule runs
+	// for every block regardless; there is no longer a checkpoint-prefix exemption to avoid.
 	tSettings.ChainCfgParams.Checkpoints = nil
 
 	bv, client := newNoPersistHarness(ctx, t, tSettings)

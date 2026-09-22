@@ -65,8 +65,15 @@ func storeHonestPrefixParent(ctx context.Context, t *testing.T, client blockchai
 	_, best, err := client.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
 	require.Equal(t, uint32(1), best.Height, "fixture precondition: the node is still building the checkpoint prefix")
-	require.True(t, model.SkipExpectedDifficulty(tSettings.ChainCfgParams.Checkpoints, 2, best.Height),
-		"fixture precondition: the height predicate that used to grant the shortcut is satisfied")
+
+	// The two conditions the removed shortcut keyed on, spelled out rather than borrowed from the
+	// predicate that used to combine them: the candidate sits inside the configured prefix, and the
+	// node has not finished building that prefix. Both hold here, so a fixture that stopped
+	// satisfying them would silently stop testing anything.
+	require.True(t, model.BelowCheckpoint(tSettings.ChainCfgParams.Checkpoints, 2),
+		"fixture precondition: the candidate is inside the configured checkpoint prefix")
+	require.Less(t, best.Height, model.HighestCheckpointHeight(tSettings.ChainCfgParams.Checkpoints),
+		"fixture precondition: the node is still building that prefix")
 
 	return parent
 }

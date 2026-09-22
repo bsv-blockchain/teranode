@@ -11,10 +11,13 @@ import type { Handle } from '@sveltejs/kit'
  *
  * It is defence in depth, not a strict policy: 'unsafe-inline' is required by the three inline
  * scripts the built dashboard carries, so inline event handlers still fire, and connect-src stays
- * wide because the dashboard drives remote teranode instances. ws: is listed explicitly rather than
- * left to 'self' - whether 'self' covers a same-origin ws:// URL is a CSP3 refinement that is not
- * implemented uniformly, and the dashboard opens its live feed over ws:// on every plain-http
- * deployment. The request host is deliberately not interpolated.
+ * wide because the dashboard drives remote teranode instances.
+ *
+ * ws: is listed explicitly rather than left to 'self'. The dashboard does open its live feed over
+ * ws:// when it is served over plain http - routes/api/config/websocket/+server.ts picks the scheme
+ * from the page's own protocol - and whether 'self' covers a same-origin ws:// URL is a CSP3
+ * refinement rather than something the directive plainly says. Naming the scheme costs nothing here
+ * and removes the dependence on that refinement. The request host is deliberately not interpolated.
  */
 export const CONTENT_SECURITY_POLICY =
   "default-src 'self'; " +

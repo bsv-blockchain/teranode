@@ -2,14 +2,51 @@ package blockvalidation
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/stretchr/testify/require"
 )
+
+// observingNBitsClient records which parent hashes the expected-nBits lookup was asked about,
+// delegating everything else to the real client. It is what makes a test assert that validation
+// PERFORMED the difficulty check, rather than only that a block it independently believes to be
+// correct was accepted — an assertion that survives deleting the check entirely.
+type observingNBitsClient struct {
+	blockchain.ClientI
+
+	mu    sync.Mutex
+	asked []chainhash.Hash
+}
+
+func (c *observingNBitsClient) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.Hash, currentBlockTime int64) (*model.NBit, error) {
+	c.mu.Lock()
+	c.asked = append(c.asked, *blockHash)
+	c.mu.Unlock()
+
+	return c.ClientI.GetNextWorkRequired(ctx, blockHash, currentBlockTime)
+}
+
+// timesAskedAbout returns how many times the expected difficulty was looked up for a given parent.
+func (c *observingNBitsClient) timesAskedAbout(hash *chainhash.Hash) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	count := 0
+
+	for _, seen := range c.asked {
+		if seen.IsEqual(hash) {
+			count++
+		}
+	}
+
+	return count
+}
 
 // TestReconsider_BelowCheckpoint_RunsExpectedNBitsAndSucceeds is the executable guard for the caller
 // whose behaviour changed when the checkpoint-prefix shortcut was removed
@@ -25,6 +62,10 @@ import (
 // That argument is only worth what an execution of it is worth, so this drives the whole thing: two
 // genuinely mined post-DAA blocks below the checkpoint, the ancestor subtree invalidated, the
 // ancestor reconsidered, and then the descendant put back through the real reconsider pipeline.
+//
+// The blockchain client is wrapped for that last step, because "a correct block is accepted" is not
+// evidence that the check ran — it holds just as well if the check is deleted. The assertion is that
+// validation ASKED for the expected difficulty.
 func TestReconsider_BelowCheckpoint_RunsExpectedNBitsAndSucceeds(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -85,6 +126,14 @@ func TestReconsider_BelowCheckpoint_RunsExpectedNBitsAndSucceeds(t *testing.T) {
 	// grace window.
 	time.Sleep(2 * validationResultGrace)
 
+	// Watch the lookup from here on. Without this the test asserts only that a block it had already
+	// convinced itself was correct is accepted — which stays true if the expected-nBits block is
+	// deleted outright, and is exactly the mutation this test exists to catch.
+	observer := &observingNBitsClient{ClientI: client}
+	bv.blockchainClient = observer
+
+	require.Zero(t, observer.timesAskedAbout(parent.Hash()), "nothing has asked yet")
+
 	// Now the real reconsider pipeline, which since this change evaluates expected nBits for this
 	// block instead of skipping it.
 	err = bv.ValidateBlockWithOptions(ctx, child, "http://localhost", &ValidateBlockOptions{
@@ -92,6 +141,9 @@ func TestReconsider_BelowCheckpoint_RunsExpectedNBitsAndSucceeds(t *testing.T) {
 		DisableOptimisticMining: true,
 	})
 	require.NoError(t, err, "a genuinely mined below-checkpoint block must still reconsider cleanly")
+
+	require.GreaterOrEqual(t, observer.timesAskedAbout(parent.Hash()), 1,
+		"the reconsider path must actually look up the expected difficulty for this block's parent")
 
 	_, childMeta, err = client.GetBlockHeader(ctx, child.Hash())
 	require.NoError(t, err)

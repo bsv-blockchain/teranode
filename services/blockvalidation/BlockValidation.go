@@ -1951,8 +1951,9 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// THE CHECKPOINT-PREFIX SHORTCUT THAT USED TO GUARD THIS IS GONE, and it must not come back
 		// in any height-only form. It skipped this rule for a block sitting below the highest
 		// CONFIGURED checkpoint while the node was still building that prefix. Height below a
-		// checkpoint does not establish that a block is ON the checkpointed chain, and the two
-		// places that were supposed to cover the gap do not:
+		// checkpoint does not establish that a block is ON the checkpointed chain — BelowCheckpoint
+		// is true for EVERY height in 1..highest — and the two places that were supposed to cover
+		// the gap do not:
 		//
 		//   - Catch-up's header precheck (validateCatchupHeaderDifficulty) deliberately DEFERS every
 		//     header whose full 144-block window is not inside the fetched run — the first header
@@ -1960,16 +1961,20 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		//     immediately on chains with no difficulty adjustment. Its own doc comment names this
 		//     check as the downstream cover for exactly those headers, so skipping here removed the
 		//     only check they ever got.
-		//   - Blocks genuinely certified by a checkpoint verified IN THIS RUN never arrive here at
-		//     all: catch-up routes them to quickValidateBlock (tryQuickValidation gates on
-		//     catchupCtx.highestCheckpointHeight, the verified height, not the configured one). So
-		//     every block that could still reach the shortcut was one catch-up had already decided
-		//     was NOT checkpoint-certified.
+		//   - Catch-up routes blocks certified by a checkpoint verified IN THIS RUN to
+		//     quickValidateBlock, which gates on catchupCtx.highestCheckpointHeight — the verified
+		//     height, not the configured one. That routing is not absolute: tryQuickValidation falls
+		//     back to full validation when block assembly is not ready, or when quick validation
+		//     itself fails. So a certified block CAN arrive here, and the shortcut still could not
+		//     tell it apart from an uncertified one, because the predicate only ever saw height.
 		//
-		// The measured cost of always running it is about 10 microseconds per block against the
-		// local store with the full 144-block ancestor walk exercised — and only for the residual
-		// set, since checkpoint-certified blocks take the quick path. That is not worth a hole a
-		// catch-up peer can walk a difficulty-1 chain through.
+		// A block's own proof-of-work floor is no substitute for this rule: it bounds how easy a
+		// declared target may be, not whether it is the correct one for that chain position
+		// (GHSA-gggq-8f59-4jm9). Running it unconditionally costs one GetNextWorkRequired per block
+		// — a parent header read plus the DAA's ancestor walk, against whatever store the node is
+		// configured with. That is ordinary per-block validation work, of the same kind this node
+		// already does for every block above the highest checkpoint and for every block once synced,
+		// and it is not worth a hole a peer can walk a difficulty-1 chain through.
 		//
 		// GetNextWorkRequired reads the parent's stored row and follows parent_id ancestry without
 		// filtering invalid rows, so it is safe for a block whose parent is marked invalid — which
@@ -3175,9 +3180,9 @@ func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
 }
 
 // The checkpoint-prefix shortcut for the expected-nBits rule used to live here, as
-// skipExpectedDifficulty. It has been REMOVED (bitcoin-sv/teranode#4844) and must not be
-// reintroduced in any height-only form; the reasoning is recorded on the expected-nBits block in
-// ValidateBlockWithOptions, and model.SkipExpectedDifficulty carries the same warning.
+// skipExpectedDifficulty, over a model.SkipExpectedDifficulty height predicate. Both have been
+// REMOVED (bitcoin-sv/teranode#4844) and the rule must not be made conditional again on height
+// alone; the reasoning is recorded on the expected-nBits block in ValidateBlockWithOptions.
 
 // checkpointConfirmedAncestor reports whether block b is provably part of the main
 // chain that has already reached and matched the highest hardcoded checkpoint hash. It
