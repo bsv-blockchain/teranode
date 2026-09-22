@@ -129,10 +129,10 @@ func TestHandleBlockTopic_InvalidFieldsFromUnknownAuthorLeaveNoGateState(t *test
 // A directly connected low-reputation peer is still gated, from a cache entry
 // that is filled once per TTL.
 func TestHandleSubtreeTopic_ConnectedLowReputationPeerStillGated(t *testing.T) {
-	s, counting, _, neighbour, _ := newGateBoundsTestServer(t, 1)
+	s, _, _, neighbour, _ := newGateBoundsTestServer(t, 1)
 	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
-	s.peerRegistry = newCountingRegistryClient(blockchain.NewLocalPeerRegistryClient(reg))
-	counting = s.peerRegistry.(*countingRegistryClient)
+	counting := newCountingRegistryClient(blockchain.NewLocalPeerRegistryClient(reg))
+	s.peerRegistry = counting
 
 	reg.Register(&blockchain.PeerInfo{ID: neighbour.String()})
 	reg.UpdateMetrics(neighbour.String(), 0, 0, 0, false, false, true, 0)
