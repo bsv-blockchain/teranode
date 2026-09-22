@@ -1531,15 +1531,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	var nodeStatusMessage NodeStatusMessage
 
 	if err := json.Unmarshal(m, &nodeStatusMessage); err != nil {
-		// The message bus only scores a malformed outer envelope; garbage
-		// inside a valid envelope is a protocol violation this layer must
-		// charge, or a flood of it is free. Score only structurally invalid
-		// JSON: a type mismatch on a single field (another implementation or
-		// version encoding e.g. fee_policy differently) is dropped unscored.
-		s.logger.Errorf("[handleNodeStatusTopic] json unmarshal error from peer %s: %v", peerID, err)
-		if !isSelf && !json.Valid(m) {
-			_ = s.applyBanScore(peerID, ReasonProtocolViolation)
-		}
+		s.handleGossipDecodeError("handleNodeStatusTopic", m, peerID, isSelf, err)
 		return
 	}
 

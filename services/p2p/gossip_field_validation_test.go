@@ -3,7 +3,9 @@ package p2p
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/model"
@@ -638,6 +640,21 @@ func TestHandleTopics_MalformedInnerJSONScored(t *testing.T) {
 			require.Zero(t, banScore(), "field type mismatch must not be scored")
 		})
 
+		// The unscored half must not echo the payload: an UnmarshalTypeError
+		// carries the offending literal verbatim, up to the topic message cap.
+		t.Run(name+"_field_type_mismatch_not_echoed_to_log", func(t *testing.T) {
+			server, remotePeerID, _, _ := newGossipFieldTestServer(t)
+			capture := &errorCaptureLogger{}
+			server.logger = capture
+			marker := strings.Repeat("7", 4000)
+			mismatch := []byte(`{"PeerID":"` + remotePeerID.String() + `","Hash":` + marker + `,"TxID":` + marker + `,"fee_policy":` + marker + `}`)
+			require.True(t, json.Valid(mismatch))
+
+			handler(server, context.Background(), mismatch, remotePeerID.String())
+
+			require.NotContains(t, capture.errors(), marker[:64], "type-mismatch log must not echo peer-controlled bytes")
+		})
+
 		// The banned-peer skip must run before decoding so a banned peer's
 		// garbage does not keep triggering AddBanScore RPCs.
 		t.Run(name+"_banned_peer_not_rescored", func(t *testing.T) {
@@ -1154,4 +1171,24 @@ func TestInit_TrimsStaticURLConfig(t *testing.T) {
 	require.Equal(t, "http://example.com:8090", s.AssetHTTPAddressURL)
 	require.Equal(t, "http://example.com:8091", s.PropagationURL)
 	require.NoError(t, checkGossipString("base_url", s.AssetHTTPAddressURL, maxGossipURLLen))
+}
+
+// errorCaptureLogger records Errorf lines so tests can assert on what a
+// handler writes to the log for peer-controlled input.
+type errorCaptureLogger struct {
+	ulogger.TestLogger
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *errorCaptureLogger) Errorf(format string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+
+func (l *errorCaptureLogger) errors() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.Join(l.lines, "\n")
 }

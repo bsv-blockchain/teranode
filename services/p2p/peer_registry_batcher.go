@@ -349,6 +349,10 @@ func (b *peerRegistryBatcher) forget(peerID string) {
 	b.mu.Lock()
 	delete(b.lastAsserted, peerID)
 	delete(b.pending, peerID)
+	// A forget supersedes an earlier re-enqueue in the same flush cycle: the
+	// pending registration that justified skipping the compensating
+	// RemovePeer is gone with it. Delete on a nil map is a no-op.
+	delete(b.reenqueuedDuringFlush, peerID)
 	if _, exists := b.removed[peerID]; !exists && len(b.removed) >= registryBatcherMaxPending {
 		// Sweep expired tombstones to make room; if the map is still full the
 		// tombstone is skipped — bounded memory wins, and the lastAsserted

@@ -1238,3 +1238,27 @@ func TestPeerRegistryBatcher_ReenqueueDuringInFlightRegisterSkipsCompensation(t 
 	require.Equal(t, uint32(7), got.Height, "the fresh observation must land on the next cycle")
 	require.Equal(t, "back/1.0", got.ClientName)
 }
+
+// The mirror image of the test above: an observation that lands BEFORE the
+// forget (a gossip worker still processing an earlier message from the peer)
+// leaves no pending registration behind, because forget clears it. The
+// compensating RemovePeer must therefore still fire, or the registry keeps
+// the resurrected entry that nothing reconciles.
+func TestPeerRegistryBatcher_EnqueueThenForgetDuringInFlightRegisterStillCompensates(t *testing.T) {
+	b, reg, local, blocking, victim, bystander, flushDone := startBlockedFlushPair(t)
+
+	b.enqueueRegister(victim, "late/1.0", 3, nil, "", true) // observation first...
+	b.forget(victim)                                        // ...then the removal
+	require.NoError(t, local.RemovePeer(context.Background(), victim))
+
+	finishBlockedFlush(t, blocking, flushDone)
+
+	_, ok := reg.Get(victim)
+	require.False(t, ok, "an enqueue that preceded the forget must not suppress the compensating removal")
+	_, ok = reg.Get(bystander)
+	require.True(t, ok, "compensating removal must be scoped to the removed peer")
+	b.mu.Lock()
+	_, pending := b.pending[victim]
+	b.mu.Unlock()
+	require.False(t, pending, "forget must have cleared the pre-removal observation")
+}

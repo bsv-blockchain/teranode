@@ -55,16 +55,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 	blockMessage = BlockMessage{}
 
 	if err = json.Unmarshal(m, &blockMessage); err != nil {
-		// The message bus only scores a malformed outer envelope; garbage
-		// inside a valid envelope is a protocol violation this layer must
-		// charge, or a flood of it is free. Score only structurally invalid
-		// JSON: a type mismatch on a single field (e.g. another
-		// implementation encoding an ignored field differently) is dropped
-		// unscored, so a benign wire-format divergence cannot ban a peer.
-		s.logger.Errorf("[handleBlockTopic] json unmarshal error from peer %s: %v", fromID, err)
-		if !isSelf && !json.Valid(m) {
-			s.addProtocolViolation(fromID)
-		}
+		s.handleGossipDecodeError("handleBlockTopic", m, fromID, isSelf, err)
 		return
 	}
 
@@ -254,13 +245,7 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 	subtreeMessage = SubtreeMessage{}
 
 	if err = json.Unmarshal(m, &subtreeMessage); err != nil {
-		// See handleBlockTopic: structurally invalid JSON is scored here
-		// because the message bus only counts a malformed outer envelope; a
-		// field type mismatch is dropped unscored.
-		s.logger.Errorf("[handleSubtreeTopic] json unmarshal error from peer %s: %v", fromID, err)
-		if !isSelf && !json.Valid(m) {
-			s.addProtocolViolation(fromID)
-		}
+		s.handleGossipDecodeError("handleSubtreeTopic", m, fromID, isSelf, err)
 		return
 	}
 
@@ -392,6 +377,26 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 // addProtocolViolation records a protocol violation against a peer.
 func (s *Server) addProtocolViolation(peerID string) {
 	_ = s.applyBanScore(peerID, ReasonProtocolViolation)
+}
+
+// handleGossipDecodeError logs and scores a failed json.Unmarshal of a gossip
+// payload. The message bus only scores a malformed outer envelope, so garbage
+// inside a valid envelope must be charged here or a flood of it is free. Only
+// structurally invalid JSON is scored: a field type mismatch (another
+// implementation encoding an ignored field differently) is dropped unscored,
+// so a benign wire-format divergence cannot ban a peer. The two halves log
+// differently on purpose: a syntax error is short, but an UnmarshalTypeError
+// echoes the offending literal in full, up to the topic's message cap, so
+// that half never writes err to the log.
+func (s *Server) handleGossipDecodeError(handlerName string, m []byte, fromID string, isSelf bool, err error) {
+	if !json.Valid(m) {
+		s.logger.Errorf("[%s] malformed JSON from peer %s: %v", handlerName, fromID, err)
+		if !isSelf {
+			s.addProtocolViolation(fromID)
+		}
+		return
+	}
+	s.logger.Errorf("[%s] undecodable message from peer %s: field type mismatch, dropped unscored", handlerName, fromID)
 }
 
 // isBlacklistedBaseURL checks the given baseURL against the operator-configured
@@ -669,13 +674,7 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 
 	err = json.Unmarshal(m, &rejectedTxMessage)
 	if err != nil {
-		// See handleBlockTopic: structurally invalid JSON is scored here
-		// because the message bus only counts a malformed outer envelope; a
-		// field type mismatch is dropped unscored.
-		s.logger.Errorf("[handleRejectedTxTopic] json unmarshal error from peer %s: %v", fromID, err)
-		if !isSelf && !json.Valid(m) {
-			s.addProtocolViolation(fromID)
-		}
+		s.handleGossipDecodeError("handleRejectedTxTopic", m, fromID, isSelf, err)
 		return
 	}
 
