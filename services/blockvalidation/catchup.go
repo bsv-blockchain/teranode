@@ -1765,8 +1765,14 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 							u.logger.Errorf("[catchup:validateBlocksOnChannel][%s] block %s: failed to remove corrupt .subtree files: %v", blockUpTo.Hash().String(), block.Hash().String(), delErr)
 						}
 					} else if shouldReportConsensusMalicious(err) {
-						// ValidateBlockWithOptions already stored the block as invalid if it's a consensus violation
-						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s violates consensus rules (already stored as invalid by ValidateBlockWithOptions)", blockUpTo.Hash().String(), block.Hash().String())
+						// The block violated a consensus rule and was rejected. Whether
+						// ValidateBlockWithOptions ALSO persisted a record depends on whether the
+						// verdict was bound to the header: the header-only verdicts (proof-of-work
+						// limit, declared target, checkpoint conflict, expected difficulty bits,
+						// contextual header rules) deliberately persist nothing, because they are
+						// final and the header behind them is cheap to fabricate
+						// (bitcoin-sv/teranode#4844). Do not assume a stored invalid row exists here.
+						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s violates consensus rules, rejected (a record is persisted only for a header-bound verdict)", blockUpTo.Hash().String(), block.Hash().String())
 						u.reportCatchupMalicious(gCtx, peerID, "invalid_block_validation")
 					}
 

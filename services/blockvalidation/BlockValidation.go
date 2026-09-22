@@ -2049,14 +2049,47 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				return err
 			}
 
-			// Genuine consensus violation — a transaction in the block is invalid. Persist invalid.
+			// An invalid transaction in the received subtrees. This CANNOT condemn the hash
+			// (bitcoin-sv/teranode#4844): subtree validation runs above block.Valid, so nothing has
+			// reconciled block.Subtrees against Header.HashMerkleRoot and the body is still whatever
+			// the serving peer chose. Relaying a genuine fresh header with a doctored subtree list
+			// costs nothing, and persisting on it both stores the peer's coinbase and poisons a real
+			// block hash so the honest body is later refused as already-invalid.
+			//
+			// The binding is not computable here either, so this is unconditional rather than gated:
+			// CheckBlockSubtrees batches the MISSING subtrees and pipelines the load of batch N+1
+			// against the UTXO-mutating process of batch N, a structure that exists to bound memory,
+			// so an early-batch failure leaves later subtrees unfetched. A binding attempt would
+			// report "not bound" for a genuinely bound consensus-invalid block and misclassify it.
+			//
+			// Cost of this, stated plainly: a consensus-invalid block whose fault is an invalid
+			// transaction is no longer REMEMBERED as invalid, so it is re-downloaded on
+			// re-announcement. It is rejected every time either way; only the permanent record is
+			// lost. That is the cost already accepted at the sibling corrupt branch above.
 			if errors.Is(err, errors.ErrTxInvalid) {
-				ctxLogger.Warnf("[ValidateBlock][%s] block contains invalid transactions, marking as invalid: %s", block.Hash().String(), err)
-				reason := fmt.Sprintf("block contains invalid transactions: %s", err.Error())
-				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
+				// Infrastructure first, and inside this branch rather than ahead of it:
+				// processTransactionsInLevels wraps its failures in a processing error, so a blanket
+				// ErrProcessing test placed above ErrTxInvalid would swallow every genuine verdict. A
+				// storage failure or a cancelled context is not evidence of peer misconduct, so it
+				// must neither strike the peer nor produce a corrupt verdict — return it retryable.
+				if errors.Is(err, context.Canceled) ||
+					errors.Is(err, context.DeadlineExceeded) ||
+					errors.Is(err, errors.ErrStorageError) ||
+					errors.Is(err, errors.ErrServiceError) {
+					ctxLogger.Warnf("[ValidateBlock][%s] local failure during subtree transaction validation, will retry: %s", block.Hash().String(), err)
+
+					return err
 				}
-				return errors.NewBlockInvalidError("[ValidateBlock][%s] block contains invalid transactions: %s", block.Hash().String(), err)
+
+				ctxLogger.Warnf("[ValidateBlock][%s] invalid transaction in an unbound subtree list, rejecting without persisting: %s", block.Hash().String(), err)
+
+				// Skip the strike on revalidation (stale announcing-peer ID), mirroring the corrupt
+				// branch above.
+				if !opts.IsRevalidation {
+					u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, "invalid transaction in an unbound subtree list")
+				}
+
+				return errors.NewBlockCorruptError("[ValidateBlock][%s] block contains invalid transactions: %s", block.Hash().String(), err)
 			}
 
 			// Catchup-state errors: a parent transaction is not yet in our store because we
@@ -2320,7 +2353,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// Create meta regenerator with peer URL for potential meta file recovery
 			metaRegenerator := u.createMetaRegenerator([]string{baseURL})
 			block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(ctx, block))
-			if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
+			if ok, bodyBoundToHeader, err := block.ValidWithBinding(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 				reason := "unknown"
 				if err != nil {
 					reason = err.Error()
@@ -2404,8 +2437,20 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					return errors.NewBlockIncompleteTransientError("[ValidateBlock][%s] block validation hit transient missing-data state: %s", block.Hash().String(), err)
 				}
 
+				// Persist only when THIS Valid invocation bound the body to the header
+				// (bitcoin-sv/teranode#4844). Valid runs its contextual header checks BEFORE the
+				// merkle binding, so a contextual failure reaches this catch-all with a body the
+				// serving peer still chose freely; persisting it would store that body's coinbase and
+				// condemn a hash on evidence about the delivery rather than about the block. A bound
+				// body IS the miner's committed body, so the record is correct and keeps its full
+				// body for RevalidateBlock to reconsider. The returned error class is unchanged
+				// either way.
 				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
+					if bodyBoundToHeader {
+						u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
+					} else {
+						u.logger.Warnf("[ValidateBlock][%s] not persisting invalid verdict: this validation did not bind the body to the header: %s", block.Hash().String(), reason)
+					}
 				}
 
 				return errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err)

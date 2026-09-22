@@ -735,8 +735,28 @@ func (b *Block) CheckHeaderContextual(currentChain []*BlockHeader, settings *set
 	return nil
 }
 
+// Valid reports whether the block passes every consensus rule this node can evaluate for it.
+// It is a thin wrapper over ValidWithBinding for the callers that do not need to know whether
+// this invocation bound the body to the header.
 func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, txMetaStore utxo.Store, oldBlockIDsMap *txmap.SyncedMap[chainhash.Hash, []uint32],
 	currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, settings *settings.Settings, metaRegenerator SubtreeMetaRegeneratorI) (bool, error) {
+	ok, _, err := b.ValidWithBinding(ctx, logger, subtreeStore, txMetaStore, oldBlockIDsMap, currentChain, currentBlockHeaderIDs, settings, metaRegenerator)
+
+	return ok, err
+}
+
+// ValidWithBinding is Valid, and additionally reports whether THIS invocation reconciled the
+// block's body to the header's merkle root — by CheckMerkleRoot over the loaded subtrees, or by
+// the coinbase-only binding. The fact is invocation-local: it describes this call and nothing
+// else, and no state is left on the block. That matters because Valid genuinely runs
+// concurrently, both from block validation's optimistic background goroutine and from block
+// assembly, so a field on Block would let one invocation observe another's result.
+//
+// A caller may treat a consensus failure as a verdict on the block HASH only when
+// bodyBoundToHeader is true; on an unbound body the failure is equally consistent with a
+// doctored delivery (bitcoin-sv/teranode#4844).
+func (b *Block) ValidWithBinding(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, txMetaStore utxo.Store, oldBlockIDsMap *txmap.SyncedMap[chainhash.Hash, []uint32],
+	currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, settings *settings.Settings, metaRegenerator SubtreeMetaRegeneratorI) (bool, bool, error) {
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "Valid",
 		tracing.WithHistogram(prometheusBlockValid),
 		tracing.WithLogMessage(logger, "[Block:Valid] called for %s", b.Header.String()),
@@ -746,11 +766,11 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	// 1. Check that the block header hash is less than the target difficulty.
 	headerValid, _, err := b.Header.HasMetTargetDifficulty()
 	if err != nil {
-		return false, errors.NewProcessingError("[BLOCK][%s] error checking target difficulty", b.String(), err)
+		return false, false, errors.NewProcessingError("[BLOCK][%s] error checking target difficulty", b.String(), err)
 	}
 
 	if !headerValid {
-		return false, errors.NewBlockInvalidError("[BLOCK][%s] block header hash is not less than the target difficulty", b.String())
+		return false, false, errors.NewBlockInvalidError("[BLOCK][%s] block header hash is not less than the target difficulty", b.String())
 	}
 
 	// 2, 3, 3b: contextual header checks (2h-future timestamp, median-time-past, block-version
@@ -759,7 +779,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	// where time.Now() has drifted past receipt. Factored into CheckHeaderContextual so the
 	// optimistic path can run them synchronously before AddBlock (issue #1149).
 	if err := b.CheckHeaderContextual(currentChain, settings, logger); err != nil {
-		return false, err
+		return false, false, err
 	}
 
 	// 4. Check that the coinbase transaction is valid (reward checked later).
@@ -770,7 +790,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	// This also keeps ErrBlockIncomplete meaning only "floater" at the block.Valid handlers, so
 	// their "floater: parent not in block" reason string stays accurate.
 	if b.CoinbaseTx == nil {
-		return false, errors.NewBlockCorruptError("[BLOCK][%s] block has no coinbase tx", b.String())
+		return false, false, errors.NewBlockCorruptError("[BLOCK][%s] block has no coinbase tx", b.String())
 	}
 
 	// From here the subtree/merkle checks are body-derived: on an unbound body they cannot
@@ -793,7 +813,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		// quick-validation path, which never reaches this function, enforces the identical rule at
 		// its own entry points instead of carrying a copy (bitcoin-sv/teranode#4692).
 		if err = b.CheckCoinbaseOnlyBodyBound(); err != nil {
-			return false, err
+			return false, merkleRootChecked, err
 		}
 
 		merkleRootChecked = true
@@ -803,7 +823,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		//
 		// 6. Get and validate any missing subtrees.
 		if err = b.GetAndValidateSubtrees(ctx, logger, subtreeStore, settings.Block.GetAndValidateSubtreesConcurrency); err != nil {
-			return false, err
+			return false, merkleRootChecked, err
 		}
 
 		// Verify that we have at least one subtree and that it has at least one node
@@ -811,7 +831,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 			// Body-derived: the reloaded body carried no subtrees at all. This is genuine
 			// corruption of the received body, so keep it corrupt (re-download, strike the
 			// serving peer). Distinct from the emptied-first-subtree case below.
-			return false, errors.NewBlockCorruptError("[BLOCK][%s] block has no subtrees", b.String())
+			return false, merkleRootChecked, errors.NewBlockCorruptError("[BLOCK][%s] block has no subtrees", b.String())
 		}
 
 		// Capture the entry once. Nothing here holds subtreeSlicesMu, so a
@@ -819,7 +839,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		// any two reads — see the header comment on ReleaseSubtreeNodes.
 		firstSubtree := b.SubtreeSlices[0]
 		if firstSubtree == nil {
-			return false, errors.NewProcessingError("[BLOCK][%s] first subtree was released during validation", b.String())
+			return false, merkleRootChecked, errors.NewProcessingError("[BLOCK][%s] first subtree was released during validation", b.String())
 		}
 
 		if len(firstSubtree.Nodes) == 0 {
@@ -831,18 +851,18 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 			// this is a transient LOCAL condition, not peer corruption — return a processing error
 			// (retryable) like the released-first-subtree sibling, never a corrupt verdict that
 			// would strike an innocent peer.
-			return false, errors.NewProcessingError("[BLOCK][%s] first subtree emptied (released) during validation", b.String())
+			return false, merkleRootChecked, errors.NewProcessingError("[BLOCK][%s] first subtree emptied (released) during validation", b.String())
 		}
 
 		// 7. Check that the first transaction in the first subtree is a coinbase placeholder (zeros)
 		if !firstSubtree.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholder) {
-			return false, errors.NewBlockCorruptError("[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.String(), firstSubtree.Nodes[0].Hash.String())
+			return false, merkleRootChecked, errors.NewBlockCorruptError("[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.String(), firstSubtree.Nodes[0].Hash.String())
 		}
 
 		// 8. Calculate the merkle root of the list of subtrees and check it matches the MR in the block header.
 		//    making sure to replace the coinbase placeholder with the coinbase tx hash in the first subtree
 		if err = b.CheckMerkleRoot(ctx); err != nil {
-			return false, err
+			return false, merkleRootChecked, err
 		}
 
 		merkleRootChecked = true
@@ -878,13 +898,13 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 
 	err = b.checkDuplicateTransactions(ctx, logger, settings.Block.CheckDuplicateTransactionsConcurrency, settings.Block.DiskMapDirs)
 	if err != nil {
-		return false, err
+		return false, merkleRootChecked, err
 	}
 
 	// flush disk-backed txMap so all writes are readable before phase 2
 	if flusher, ok := b.txMap.(interface{ Flush() error }); ok {
 		if flushErr := flusher.Flush(); flushErr != nil {
-			return false, errors.NewProcessingError("[Block:Valid][%s] failed to flush txMap", b.String(), flushErr)
+			return false, merkleRootChecked, errors.NewProcessingError("[Block:Valid][%s] failed to flush txMap", b.String(), flushErr)
 		}
 	}
 
@@ -928,7 +948,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	// nor incomplete comes back through here — so a looser test here overrules the strict one on
 	// the quick route.
 	if !IsConsensusCoinbase(b.CoinbaseTx) {
-		return false, bindErr("[BLOCK][%s] block coinbase tx is not a valid coinbase tx", b.String())
+		return false, merkleRootChecked, bindErr("[BLOCK][%s] block coinbase tx is not a valid coinbase tx", b.String())
 	}
 
 	// bitcoin-sv's CheckTransactionCommon on the coinbase: non-empty inputs and outputs, the
@@ -939,7 +959,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	// checks either side of it. Factored into CoinbaseCommonRuleViolation so the quick-validation
 	// path enforces the identical rules.
 	if reason := CoinbaseCommonRuleViolation(b.CoinbaseTx, b.Height, settings.ChainCfgParams); reason != "" {
-		return false, bindErr("[BLOCK][%s] coinbase breaks a transaction rule: %s", b.String(), reason)
+		return false, merkleRootChecked, bindErr("[BLOCK][%s] coinbase breaks a transaction rule: %s", b.String(), reason)
 	}
 
 	// 4b. Check that the coinbase scriptSig (unlocking script) length is within consensus bounds.
@@ -952,7 +972,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	// quick-validation path (services/blockvalidation/quick_validate.go), which never calls Valid,
 	// can enforce the identical rule instead of carrying its own copy.
 	if !CoinbaseScriptSigLengthInBounds(b.CoinbaseTx, settings.ChainCfgParams) {
-		return false, bindErr("[BLOCK][%s] bad coinbase length", b.String())
+		return false, merkleRootChecked, bindErr("[BLOCK][%s] bad coinbase length", b.String())
 	}
 
 	// BIP34 (https://en.bitcoin.it/wiki/BIP_0034) forces miners to encode the block height in the
@@ -996,11 +1016,11 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 			// above guarantee a non-nil coinbase with exactly one input. Not wrapping the typed error
 			// keeps that true regardless of the cause's type; the BIP34 height-mismatch return below is
 			// the template — it wraps no typed error.
-			return false, bindErr("[BLOCK][%s] error extracting coinbase height: %s", b.String(), err.Error())
+			return false, merkleRootChecked, bindErr("[BLOCK][%s] error extracting coinbase height: %s", b.String(), err.Error())
 		}
 
 		if height != b.Height {
-			return false, bindErr("[BLOCK][%s] block height in coinbase tx (%d) does not match block height in block header (%d)", b.String(), height, b.Height)
+			return false, merkleRootChecked, bindErr("[BLOCK][%s] block height in coinbase tx (%d) does not match block height in block header (%d)", b.String(), height, b.Height)
 		}
 	}
 
@@ -1017,7 +1037,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 
 		err = b.checkBlockRewardAndFees(settings.ChainCfgParams, storeSupportsOutpointOnly, b.checkpointConfirmedAncestor, merkleRootChecked)
 		if err != nil {
-			return false, err
+			return false, merkleRootChecked, err
 		}
 	}
 
@@ -1049,12 +1069,12 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 			}
 			err = b.validOrderAndBlessed(ctx, logger, deps, settings.Block.ValidOrderAndBlessedConcurrency, settings.Block.DiskMapDirs, settings.Block.ParentSpendsCapacityMultiplier)
 			if err != nil {
-				return false, err
+				return false, merkleRootChecked, err
 			}
 		}
 	}
 
-	return true, nil
+	return true, merkleRootChecked, nil
 }
 
 // bindClassifiedError classifies a body-derived consensus failure by whether the body was
