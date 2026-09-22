@@ -3322,15 +3322,32 @@ func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
 	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 
+	// The header must be MINED to its own (regtest-easy) target: the two header-only
+	// proof-of-work gates now run above the parent-header fetch, so an unmined header would be
+	// rejected there and the header-fetch error under test would never be reached
+	// (bitcoin-sv/teranode#4844).
+	powNBits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           *powNBits,
+		Nonce:          0,
+	}
+
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+
+		blockHeader.Nonce++
+	}
+
 	block := &model.Block{
-		Header: &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
-			Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
-			Bits:           model.NBit{},
-			Nonce:          0,
-		},
+		Header:           blockHeader,
 		CoinbaseTx:       coinbaseTx,
 		TransactionCount: 1,
 		SizeInBytes:      uint64(coinbaseTx.Size()), //nolint:gosec
@@ -4951,10 +4968,15 @@ func TestBlockValidation_SubtreeError_Classification(t *testing.T) {
 			wantPersisted: false,
 		},
 		{
-			name:          "tx invalid is a consensus violation, persisted",
+			// Subtree validation runs ABOVE block.Valid, so nothing has reconciled the block's
+			// subtree list against the header's merkle root when this verdict is reached: the body
+			// is still whatever the serving peer chose. It is a verdict on the DELIVERY, so the peer
+			// is struck, the body is re-downloaded, and the hash is not condemned
+			// (bitcoin-sv/teranode#4844).
+			name:          "tx invalid on an unbound subtree list is corrupt, not persisted",
 			subtreeErr:    errors.NewTxInvalidError("tx fails script validation"),
-			wantContains:  "BLOCK_INVALID",
-			wantPersisted: true,
+			wantContains:  "BLOCK_CORRUPT",
+			wantPersisted: false,
 		},
 	}
 

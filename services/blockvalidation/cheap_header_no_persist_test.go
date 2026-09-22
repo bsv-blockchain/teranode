@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
-	"github.com/bsv-blockchain/go-bt/v2/bec"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -253,7 +253,7 @@ func TestValidateBlock_Difficulty1Header_IsNotPersisted(t *testing.T) {
 
 		otherHash, err := chainhash.NewHashFromStr("00000000000000000000000000000000000000000000000000000000deadbeef")
 		require.NoError(t, err)
-		tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: blockHeight, Hash: otherHash}}
+		tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: int32(blockHeight), Hash: otherHash}}
 
 		bv, client := newNoPersistHarness(ctx, t, tSettings)
 
@@ -379,7 +379,7 @@ func TestValidateBlock_CheapHeader_RejectedBeforeCheckpointAndParentChecks(t *te
 
 		otherHash, err := chainhash.NewHashFromStr("00000000000000000000000000000000000000000000000000000000deadbeef")
 		require.NoError(t, err)
-		tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: blockHeight, Hash: otherHash}}
+		tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: int32(blockHeight), Hash: otherHash}}
 
 		bv, client := newNoPersistHarness(ctx, t, tSettings)
 

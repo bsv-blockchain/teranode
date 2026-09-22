@@ -603,7 +603,9 @@ func TestValidateBlock_PoWCheckedBeforeSubtreeValidation(t *testing.T) {
 	}
 	mockBlockchain.On("GetBlock", mock.Anything, prevBlockHeader.Hash()).Return(prevBlock, nil).Maybe()
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(blockHeader, &model.BlockHeaderMeta{Height: 1}, nil).Maybe()
-	mockBlockchain.On("GetBlockIsMined", mock.Anything, prevBlockHeader.Hash()).Return(true, nil)
+	// No longer reached: the header-only proof-of-work gates now run above the wait for previous
+	// blocks (bitcoin-sv/teranode#4844).
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, prevBlockHeader.Hash()).Return(true, nil).Maybe()
 
 	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, countingClient)
 

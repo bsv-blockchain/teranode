@@ -93,7 +93,10 @@ test('neutralises markup in the hash and height fields', async ({ page }) => {
     118,
     62,
   )
-  await expectNeutralised(page, html, ['<script>alert(1)</script>', '<iframe src=javascript:alert(1)></iframe>'])
+  await expectNeutralised(page, html, [
+    '<script>alert(1)</script>',
+    '<iframe src=javascript:alert(1)></iframe>',
+  ])
 })
 
 test('neutralises a root-shaped and a child-shaped node label', async ({ page }) => {

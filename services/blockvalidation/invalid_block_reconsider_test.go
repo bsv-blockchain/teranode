@@ -100,6 +100,10 @@ func TestValidateBlock_ParentInvalid_ChildKeepsFullBodyAndReconsiders(t *testing
 	require.NoError(t, err)
 	require.False(t, parentMeta.Invalid, "fixture precondition: the parent is reconsidered")
 
+	// The reconsideration must be a fresh validation, not the earlier parent-invalid result replayed
+	// from the once-per-block grace window.
+	time.Sleep(2 * validationResultGrace)
+
 	// And the child can now be reconsidered too — the end-to-end proof that keeping the real body
 	// keeps the record recoverable.
 	err = bv.ValidateBlockWithOptions(ctx, child, "http://localhost", &ValidateBlockOptions{

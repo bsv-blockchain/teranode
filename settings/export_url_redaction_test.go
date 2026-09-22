@@ -139,7 +139,10 @@ func TestExportMetadata_BlockchainStorePasswordRedacted(t *testing.T) {
 	require.True(t, ok)
 	require.NotContains(t, store.CurrentValue, auditSecretMarker,
 		"the datastore password must not survive into the exported metadata")
-	require.Contains(t, store.CurrentValue, redactedValue)
+	// url.URL.String() percent-encodes the userinfo, so the placeholder is rendered escaped there.
+	// Asserted as the escaped form rather than papered over, so the displayed value is pinned.
+	require.Contains(t, store.CurrentValue, url.PathEscape(redactedValue))
+	require.Contains(t, store.CurrentValue, "audit-user", "the user name is not a secret and stays visible")
 	require.Contains(t, store.CurrentValue, "db.internal:5432")
 
 	adminKey, ok := byKey["grpc_admin_api_key"]
