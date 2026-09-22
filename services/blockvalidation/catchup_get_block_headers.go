@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 )
 
@@ -51,6 +52,12 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 	// Validate that we have a baseURL for making HTTP requests
 	if baseURL == "" {
 		return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "No baseURL provided"), nil, errors.NewInvalidArgumentError("baseURL is required for fetching headers")
+	}
+
+	// The request URL is joined structurally below; reject a base that cannot be (a query,
+	// fragment or credentials in it) before any work is done for this peer.
+	if err := util.ValidatePeerBaseURL(baseURL); err != nil {
+		return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "Invalid baseURL"), nil, err
 	}
 
 	// Use baseURL as fallback if peerID is not provided (for backward compatibility)
@@ -225,17 +232,28 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 
 		// Build request URL with current block locator
 		blockLocatorStr := catchup.BuildBlockLocatorString(currentLocatorHashes)
-		requestURL := fmt.Sprintf("%s/headers_from_common_ancestor/%s?block_locator_hashes=%s&n=%d",
-			baseURL,
-			chainTipHash.String(),
+		headersURL, err := util.JoinPeerURL(baseURL, "headers_from_common_ancestor", chainTipHash.String())
+		if err != nil {
+			iterCancel()
+			return catchup.CreateCatchupResult(allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL, iteration, failedIterations, false, "Invalid baseURL"), nil, err
+		}
+
+		requestURL := fmt.Sprintf("%s?block_locator_hashes=%s&n=%d",
+			headersURL,
 			blockLocatorStr,
 			maxBlockHeadersPerRequest,
 		)
 
 		u.logger.Debugf("[catchup][%s] iteration %d: requesting headers with locator starting at %s (timeout: %v)", chainTipHash.String(), iteration, currentLocatorHashes[0].String(), iterationTimeout)
 
-		// Fetch with retry using iteration context with timeout
-		blockHeadersBytes, err := catchup.FetchHeadersWithRetry(iterCtx, u.logger, requestURL, maxRetries)
+		// Fetch with retry using iteration context with timeout. The request always asks for
+		// maxBlockHeadersPerRequest headers of a fixed BlockHeaderSize each, but the peer's
+		// response legitimately includes one more: the starting (common-ancestor) header is
+		// itself echoed back, duplicating the previous iteration's last header (see the
+		// dedup at "GetBlockHeadersFromOldest includes the starting block" below). +1 accounts
+		// for that extra header so a well-behaved peer's response is never rejected.
+		maxHeaderBytes := int64(maxBlockHeadersPerRequest+1) * int64(model.BlockHeaderSize)
+		blockHeadersBytes, err := catchup.FetchHeadersWithRetry(iterCtx, u.logger, requestURL, maxRetries, maxHeaderBytes)
 		iterCancel() // Clean up the iteration context
 		if err != nil {
 			// Check if it's specifically a context deadline exceeded from the iteration timeout

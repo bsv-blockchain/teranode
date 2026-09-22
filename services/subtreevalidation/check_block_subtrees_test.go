@@ -112,7 +112,7 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		require.NoError(t, err)
 
 		// Mark the subtree as already validated to avoid calling ValidateSubtreeInternal
-		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, []byte("validated"))
+		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
 		require.NoError(t, err)
 
 		// Create a block with subtrees using proper model construction
@@ -845,7 +845,7 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 		subtreeHash := chainhash.Hash{}
 		copy(subtreeHash[:], []byte("quorum_test_subtree_exists__"))
 
-		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, []byte("validated"))
+		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
 		require.NoError(t, err)
 
 		header := &model.BlockHeader{
@@ -1094,7 +1094,7 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 		// and release the lock file. TryLockIfNotExistsWithTimeout will retry and see exists=true.
 		go func() {
 			time.Sleep(50 * time.Millisecond)
-			_ = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, []byte("validated"))
+			_ = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
 			os.Remove(lockFilePath)
 		}()
 
@@ -2126,7 +2126,7 @@ func TestCheckBlockSubtrees_ConcurrentProcessing(t *testing.T) {
 		require.NoError(t, err)
 
 		// Mark as validated to avoid HTTP calls
-		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, []byte("validated"))
+		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
 		require.NoError(t, err)
 	}
 
@@ -2325,6 +2325,28 @@ func (m *MockBlobStore) Close(ctx context.Context) error {
 }
 
 // Helper function to setup test server
+// blessedSubtreeBytes returns a serialized subtree carrying no conflicting
+// transactions.
+//
+// Tests that only need the "already validated" marker to be present must still
+// write a parseable subtree. CheckBlockSubtrees reads each cached subtree's
+// conflicting-node trailer and re-checks it against the candidate chain, and it
+// fails closed on bytes it cannot read — a placeholder payload is
+// indistinguishable from a corrupt or truncated file, and treating it as "no
+// conflicts" would be exactly the bypass that check exists to prevent.
+func blessedSubtreeBytes(t *testing.T) []byte {
+	t.Helper()
+
+	st, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, st.AddCoinbaseNode())
+
+	b, err := st.Serialize()
+	require.NoError(t, err)
+
+	return b
+}
+
 func setupTestServer(t *testing.T) (*Server, func()) {
 	logger := &ulogger.TestLogger{}
 
@@ -2707,7 +2729,7 @@ func TestCheckBlockSubtrees_LargeBlock_MemoryConsumption(t *testing.T) {
 			require.NoError(t, err)
 
 			// Mark the subtree as already validated to avoid HTTP fetching
-			err = server.subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, []byte("validated"))
+			err = server.subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
 			require.NoError(t, err)
 		}
 

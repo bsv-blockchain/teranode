@@ -1,3 +1,7 @@
+// Package p2p provides peer-to-peer networking functionality for the Teranode system.
+// This file contains the Prometheus metrics definitions and initialization for the
+// p2p service, following the same registration pattern used by the other pipeline
+// services (see services/propagation/metrics.go and services/blockassembly/metrics.go).
 package p2p
 
 import (
@@ -7,21 +11,48 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+// Prometheus metrics for monitoring the p2p service's peer registry, ban list,
+// catchup coordination, and websocket subscriber activity.
 var (
 	prometheusP2PPublishBlocked                *prometheus.CounterVec
 	prometheusP2PWebsocketNotificationsDropped *prometheus.CounterVec
 	prometheusP2PWebsocketClientsEvicted       prometheus.Counter
 	prometheusP2PGossipKafkaPublishDropped     *prometheus.CounterVec
 
-	prometheusMetricsInitOnce sync.Once
+	// prometheusP2PConnectedPeers tracks the number of peers currently connected
+	// to this node over the libp2p network.
+	prometheusP2PConnectedPeers prometheus.Gauge
+
+	// prometheusP2PBanEvents counts peer ban events, labelled by ban reason.
+	prometheusP2PBanEvents *prometheus.CounterVec
+
+	// prometheusP2PCatchupAttempts counts catchup attempts made against peers.
+	prometheusP2PCatchupAttempts prometheus.Counter
+
+	// prometheusP2PCatchupSuccesses counts successful catchups completed from peers.
+	prometheusP2PCatchupSuccesses prometheus.Counter
+
+	// prometheusP2PCatchupFailures counts failed catchup attempts against peers,
+	// labelled by normalized failure kind (e.g. "generic", "block_incomplete").
+	prometheusP2PCatchupFailures *prometheus.CounterVec
+
+	// prometheusP2PWebsocketConnections tracks the number of currently connected
+	// websocket notification subscribers.
+	prometheusP2PWebsocketConnections prometheus.Gauge
 )
 
-// initPrometheusMetrics initializes the p2p Prometheus metrics.
-// It uses sync.Once so it is safe to call from multiple entry points.
+var prometheusMetricsInitOnce sync.Once
+
+// initPrometheusMetrics initializes all Prometheus metrics for the p2p service.
+// This function uses sync.Once to ensure metrics are initialized exactly once,
+// preventing duplicate metric registration errors.
 func initPrometheusMetrics() {
 	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
 }
 
+// _initPrometheusMetrics is the internal implementation that registers all
+// Prometheus metrics used by the p2p service. Each metric is namespaced under
+// 'teranode' and the 'p2p' subsystem.
 func _initPrometheusMetrics() {
 	prometheusP2PPublishBlocked = promauto.NewCounterVec(
 		prometheus.CounterOpts{
@@ -59,6 +90,62 @@ func _initPrometheusMetrics() {
 			Subsystem: "p2p",
 			Name:      "websocket_clients_evicted_total",
 			Help:      "Number of websocket clients evicted from the broadcast fan-out because their send buffer was full when a broadcast reached them",
+		},
+	)
+
+	prometheusP2PConnectedPeers = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "p2p",
+			Name:      "connected_peers",
+			Help:      "Number of peers currently connected to this node over the p2p network",
+		},
+	)
+
+	prometheusP2PBanEvents = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "p2p",
+			Name:      "ban_events_total",
+			Help:      "Total number of peer ban events, labelled by ban reason",
+		},
+		[]string{"reason"},
+	)
+
+	prometheusP2PCatchupAttempts = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "p2p",
+			Name:      "catchup_attempts_total",
+			Help:      "Total number of catchup attempts made against peers",
+		},
+	)
+
+	prometheusP2PCatchupSuccesses = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "p2p",
+			Name:      "catchup_successes_total",
+			Help:      "Total number of successful catchups completed from peers",
+		},
+	)
+
+	prometheusP2PCatchupFailures = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "p2p",
+			Name:      "catchup_failures_total",
+			Help:      "Total number of failed catchup attempts against peers, labelled by failure kind",
+		},
+		[]string{"kind"},
+	)
+
+	prometheusP2PWebsocketConnections = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "p2p",
+			Name:      "websocket_connections",
+			Help:      "Number of currently connected websocket notification subscribers",
 		},
 	)
 }

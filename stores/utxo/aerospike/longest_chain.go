@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
 	"golang.org/x/sync/errgroup"
@@ -22,7 +23,19 @@ import (
 //
 // Behavior:
 //   - onLongestChain=true: Clears unmined_since (transaction is mined on main chain)
-//   - onLongestChain=false: Sets unmined_since to current height (transaction is unmined)
+//   - onLongestChain=false: Leaves an existing unmined_since untouched. Only when the bin is
+//     absent (the transaction was mined and a reorg/reset moved its block off the longest
+//     chain) is it stamped, with utxo.BackdatedUnminedSince: current height minus
+//     unminedTxRetention, floored at 1.
+//
+// Both rules protect the same invariant: a parent must not be pruned while an unmined child
+// still references it. The pruner's parent-preservation scan keys off unmined_since, while
+// the parent's deleteAtHeight was stamped when this transaction spent it and keeps counting.
+// Overwriting an existing unmined_since re-armed the child's protection clock against a
+// parent delete clock that did not restart, and a late enough re-stamp let the parent be
+// pruned while the child still needed it; stamping the current height on a mined->unmined
+// transition started the protection clock unminedTxRetention blocks late for the same
+// reason (issue 1768).
 //
 // CRITICAL - Resilient Error Handling (Must Not Fail Fast):
 // This function attempts to update ALL transactions even if some fail.
@@ -55,11 +68,23 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 	// Pre-create the shared operation — identical for every transaction (same bin name, same value).
 	// The aerospike *Operation struct is immutable after creation and only read during serialization,
 	// so sharing one instance across all batch writes is safe and eliminates 2 allocs per tx.
-	var binValue any
-	if !onLongestChain {
-		binValue = currentBlockHeight
+	var op *aerospike.Operation
+	if onLongestChain {
+		op = aerospike.PutOp(aerospike.NewBin(fields.UnminedSince.String(), nil))
+	} else {
+		// Only stamp unminedSince when the bin is absent. ExpUnknown with EvalNoFail makes the
+		// existing-value branch a no-op, so an earlier unminedSince is never overwritten.
+		unminedSince := utxo.BackdatedUnminedSince(currentBlockHeight, s.settings.UtxoStore.UnminedTxRetention)
+
+		op = aerospike.ExpWriteOp(
+			fields.UnminedSince.String(),
+			aerospike.ExpCond(
+				aerospike.ExpBinExists(fields.UnminedSince.String()), aerospike.ExpUnknown(),
+				aerospike.ExpIntVal(int64(unminedSince)),
+			),
+			aerospike.ExpWriteFlagEvalNoFail,
+		)
 	}
-	op := aerospike.PutOp(aerospike.NewBin(fields.UnminedSince.String(), binValue))
 
 	// Divide work evenly across workers (fewer goroutines, sequential batches within each)
 	rangeSize := (len(txHashes) + numWorkers - 1) / numWorkers

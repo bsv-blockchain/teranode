@@ -14,7 +14,8 @@
 | logger | bool | false | `storeURL.Query().Get("logger") == "true"` | **CRITICAL** - Enables debug logging wrapper |
 | hashPrefix | int | 0 | `storeURL.Query().Get("hashPrefix")` | **CRITICAL** - Hash-based directory structure (first N chars) |
 | hashSuffix | int | 0 | `storeURL.Query().Get("hashSuffix")` | **CRITICAL** - Hash-based directory structure (last N chars) |
-| checksum | bool | false | File backend parameter | **CRITICAL** - SHA256 checksumming for data integrity |
+| checksum | bool | true | File backend parameter | Writes a `<blob>.sha256` sidecar alongside every blob. No read path verifies it, so this is a write-cost parameter, not an integrity one. Accepted values are `true`/`1`/`yes`/`on`/`enabled` and `false`/`0`/`no`/`off`/`disabled`; anything else fails at startup |
+| fsyncMode | string | full | File backend parameter | `full` fsyncs the temp file and then the parent directory after the rename. `data` skips the parent-directory fsync, so a freshly published filename can be lost across a crash while already-published content survives. `none` skips both |
 | header | string | "" | File backend parameter | Custom header prepended to blobs |
 
 ## Configuration Dependencies
@@ -40,7 +41,8 @@
 ### Data Integrity
 
 - When `checksum = true`, creates .sha256 files alongside blobs
-- Validates checksums during read operations
+- When `checksum = false`, no digest and no sidecar is written, and the store *attempts* to unlink any sidecar an earlier write left behind. This is best-effort: the attempt happens after the blob is already published, a failure is logged rather than failing the write, and a stale sidecar can therefore survive
+- There is no backfill in either direction: switching `checksum` back to `true` restores a sidecar only for keys written after the change, and out-of-band tooling that verifies sidecars loses its inputs for any store switched to `false`
 - Removes checksum files during deletion
 
 ### Debug Logging
@@ -55,7 +57,7 @@
 |---------|--------|---------------------|
 | null | null:// | logger (localDAHStore blocked) |
 | memory | memory:// | All common parameters |
-| file | file:// | All parameters including checksum, header |
+| file | file:// | All parameters including checksum, fsyncMode, header |
 | http | http:// | All common parameters |
 | s3 | s3:// | All common parameters |
 

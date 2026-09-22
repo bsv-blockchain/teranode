@@ -589,7 +589,8 @@ type Store interface {
 
 	// MarkTransactionsOnLongestChain marks transactions as being on the longest chain or not.
 	// When onLongestChain is true, the unminedSince field is unset (transaction is mined).
-	// When onLongestChain is false, the unminedSince field is set to the current block height.
+	// When onLongestChain is false, an existing unminedSince is kept; only an absent value is
+	// stamped, with BackdatedUnminedSince (issue 1768).
 	MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error
 
 	// internal state functions

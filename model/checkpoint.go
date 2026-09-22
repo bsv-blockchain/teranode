@@ -110,10 +110,9 @@ func HighestCheckpointHash(checkpoints []chaincfg.Checkpoint) *chainhash.Hash {
 //
 // A node that already holds the whole prefix has no legitimate reason to accept a
 // new block inside it, so demanding the real rule there costs nothing. A node
-// still syncing keeps the skip, which it must: re-deriving the historical
-// schedule would mean reproducing every retarget rule the chain has ever used,
-// which is exactly what the checkpoints stand in for. Tightening this during
-// initial block download would reject canonical blocks.
+// still syncing satisfies this prefix predicate. Callers implementing historical
+// retarget rules enforce those separately; this height predicate does not establish
+// checkpoint ancestry or select the applicable difficulty algorithm.
 //
 // Callers that cannot establish bestHeight must not skip. See BelowCheckpoint for
 // the boundary, including the mandatory height > 0 guard.

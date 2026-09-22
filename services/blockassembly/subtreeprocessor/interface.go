@@ -131,6 +131,19 @@ type Interface interface {
 	//   - error: Any error encountered during block processing
 	MoveForwardBlock(block *model.Block) error
 
+	// DrainPendingInvalidations returns and clears the blocks whose conflict
+	// resolution was refused because demoting a losing transaction would have
+	// reversed a spend confirmed on that block's own ancestry. Such a block is
+	// an ancestor double spend and must be invalidated — but only after block
+	// movement has completed, which is why the hashes are parked rather than
+	// acted on inline.
+	DrainPendingInvalidations() []chainhash.Hash
+
+	// QueueInvalidation records a block that must be invalidated because its
+	// conflict resolution would have reversed a spend confirmed in its own
+	// ancestry, or re-queues one whose invalidation attempt failed.
+	QueueInvalidation(blockHash chainhash.Hash)
+
 	// Reorg handles blockchain reorganization by processing blocks that need
 	// to be removed and added during the reorganization process.
 	//

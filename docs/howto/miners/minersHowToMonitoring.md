@@ -71,6 +71,26 @@ Also watch:
 - `teranode_blockvalidation_catchup_active` and
   `teranode_blockvalidation_processing_blocks_stuck` — non-zero for extended
   periods means the node has fallen behind or a block is wedged.
+- `teranode_blockvalidation_catchup_prefetch_budget_parked_total` and
+  `teranode_blockvalidation_catchup_prefetch_oversized_blocks_total` — why a
+  catch-up is slow when nothing else looks wrong. Occasional parking is normal
+  back-pressure; a sustained rate means sustained contention for
+  `blockvalidation_catchup_prefetch_budget_bytes` — the budget may be too small
+  for the blocks being synced, but a slow peer or slow storage also prolongs
+  the reservations already held, so correlate peer and storage latency and
+  catch-up progress before raising it. A rising oversized count means those
+  blocks declare sizes larger than the budget, so each of them parses its
+  subtrees one at a time. Raise the budget only against measured memory
+  headroom.
+- `teranode_blockvalidation_catchup_prefetch_undeclared_size_blocks_total` —
+  blocks served without a declared size, which parse their subtrees one at a
+  time for a different reason: an undeclared size is not worth trusting. A
+  healthy peer declares a size, so a sustained rise points at the peer serving
+  the blocks rather than at your own node.
+
+These three are unlabelled counters — no `blockhash` label, so alert on the
+aggregate rate and resolve the specific block from the accompanying
+blockvalidation log line.
 
 ### Block assembly
 

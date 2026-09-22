@@ -235,6 +235,26 @@ func (m *MockSubtreeProcessor) MoveForwardBlock(block *model.Block) error {
 	return args.Error(0)
 }
 
+// DrainPendingInvalidations and QueueInvalidation implement the invalidation
+// side of Interface.
+//
+// Deliberately plain no-ops rather than testify calls. Both are driven by block
+// movement on every announcement, so routing them through testify would make
+// every existing test that never mentions them fail on an unexpected call. The
+// obvious workaround — scanning m.ExpectedCalls to decide whether a test has
+// stubbed them — reads testify's state without its mutex, which races against
+// any test still registering expectations while the assembler runs.
+//
+// Nothing currently asserts on these through the mock; the behaviour is covered
+// against the real SubtreeProcessor in conflicting_ancestry_guard_test.go. A
+// test that needs to assert on them should route that method through testify
+// then, and set the expectation before starting the component under test.
+func (m *MockSubtreeProcessor) DrainPendingInvalidations() []chainhash.Hash {
+	return nil
+}
+
+func (m *MockSubtreeProcessor) QueueInvalidation(_ chainhash.Hash) {}
+
 // Reorg implements Interface.Reorg
 func (m *MockSubtreeProcessor) Reorg(moveBackBlocks []*model.Block, modeUpBlocks []*model.Block) error {
 	args := m.Called(moveBackBlocks, modeUpBlocks)

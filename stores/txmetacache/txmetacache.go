@@ -521,6 +521,22 @@ func putMetaBytesBuf(bp *[]byte) {
 	metaBytesBufPool.Put(bp)
 }
 
+// UnderlyingStore returns the store this cache wraps, so a caller that knows its
+// reads cannot benefit from caching can go straight to the origin.
+//
+// The block-validation path is the case this exists for: it reads a whole
+// block's transactions exactly once, and setMined evicts them immediately
+// afterwards, so routing it through the cache only serializes and inserts
+// entries that are never read back — and evicts the ingest path's hot working
+// set to make room. Measured on the scaling cluster while revalidating a single
+// block: 0 cache hits against ~755k insertions/s.
+//
+// Callers must not use this to bypass the cache for writes or for reads that
+// could be served from it; it is a read-through escape hatch only.
+func (t *TxMetaCache) UnderlyingStore() utxo.Store {
+	return t.utxoStore
+}
+
 // BatchDecorate retrieves metadata for multiple transactions in a single batch operation.
 // This is more efficient than calling Get for each transaction individually.
 //

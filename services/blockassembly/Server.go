@@ -1801,9 +1801,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	// prevent. The comparison is against the consensus floor rather than the
 	// candidate's own Time, which is usually just the wall clock: rolling ntime
 	// back a few seconds within a job is normal pool behaviour and must stay
-	// legal. Rejecting here rather than letting it reach block.Valid matters
-	// because that failure path treats an invalid block as a subtree-processor
-	// fault and resets block assembly; a bad miner timestamp is not that. The
+	// legal. The
 	// floor is the memoized value the candidate was built from, so this costs no
 	// round-trip, and when it is unknown there is nothing to enforce.
 	if minTime, ok := ba.blockAssembler.MinCandidateTime(hashPrevBlock); ok && int64(nTime) < minTime {
@@ -1838,6 +1836,14 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 
 		if len(coinbaseTx.Inputs[0].UnlockingScript.Bytes()) < 2 || len(coinbaseTx.Inputs[0].UnlockingScript.Bytes()) > int(ba.blockAssembler.settings.ChainCfgParams.MaxCoinbaseScriptSigSize) {
 			return nil, errors.NewProcessingError("[BlockAssembly][%s] bad coinbase length", jobID)
+		}
+
+		// The submitted coinbase must have the shape consensus requires — a null prevout,
+		// not merely a null prevout hash. block.Valid below applies the same predicate and
+		// would also reject it, without resetting block assembly, but rejecting here fails
+		// fast with a message that names the submitter's input as the fault.
+		if !model.IsConsensusCoinbase(coinbaseTx) {
+			return nil, errors.NewProcessingError("[BlockAssembly][%s] submitted coinbase transaction is not a valid coinbase", jobID)
 		}
 	} else {
 		// recreate coinbase tx here, nothing was passed in
@@ -1907,10 +1913,12 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 
 	// Compute coinbase BUMP (merkle proof in BRC-74 format) while subtree data is in memory.
 	// This is a best-effort operation — failure does not block block submission.
-	_, currentHeight := ba.blockAssembler.CurrentBlock()
+	// The proof's height is the candidate's height, the same value the block below carries. The
+	// live tip is the wrong source: a candidate can be more than one block behind it, and the tip
+	// can move between reads, so tip+1 would stamp the proof with a height that is not this block's.
 	var coinbaseBUMP []byte
 	if len(subtreesInJob) > 0 {
-		coinbaseBUMP = ba.computeCoinbaseBUMP(jobID, subtreesInJob, subtreeHashes, currentHeight+1)
+		coinbaseBUMP = ba.computeCoinbaseBUMP(jobID, subtreesInJob, subtreeHashes, job.MiningCandidate.Height)
 	}
 
 	// sizeInBytes from the subtrees, 80 byte header and varint bytes for txcount
@@ -1940,7 +1948,16 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		CoinbaseTx:       coinbaseTx,
 		TransactionCount: transactionCount,
 		SizeInBytes:      blockSize,
-		Subtrees:         jobSubtreeHashes, // we need to store the hashes of the subtrees in the block, without the coinbase
+		// The height this candidate was issued for (GetMiningCandidate sets it to best+1).
+		// block.Valid below is height-dependent and reads it: CoinbaseCommonRuleViolation picks the
+		// pre- or post-Genesis coinbase limits from it, and the BIP34 and reward checks are guarded
+		// on it being non-zero. Leaving it unset judged every submitted block at height 0, which is
+		// below every network's Genesis activation, so a coinbase over 1MB or over the pre-Genesis
+		// 20,000-sigop limit was rejected here while every peer would accept it, and the BIP34 and
+		// reward checks never ran at all. GetBlockAssemblyBlockCandidate builds its block from the
+		// same candidate field.
+		Height:   job.MiningCandidate.Height,
+		Subtrees: jobSubtreeHashes, // we need to store the hashes of the subtrees in the block, without the coinbase
 		// Aliases the subtree processor's live slice rather than copying it, so
 		// this block shares both the backing array and the *Subtree values with
 		// whatever else holds the job. Block.Valid must therefore not mutate
@@ -1972,9 +1989,25 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	// check fully valid, including whether difficulty in header is low enough
 	// TODO add more checks to the Valid function, like whether the parent/child relationships are OK
 	if ok, err := block.Valid(ctx, ba.logger, ba.subtreeStore, nil, nil, nil, nil, ba.settings, nil); !ok {
+		// ErrBlockInvalid here means the submission breaks a consensus rule on data the miner
+		// chose: the proof of work, the timestamp, the block version, or the coinbase (its shape,
+		// BIP34 height, transaction rules or reward). Local assembly state did not cause it and a
+		// reset would not stop it recurring, so reject the submission and keep assembly running.
+		// Every other failure (corrupt body, duplicate transaction, merkle mismatch, processing or
+		// storage error) points at what this node built, so those still reset.
+		if errors.Is(err, errors.ErrBlockInvalid) {
+			ba.logger.Warnf("[BlockAssembly][%s][%s] rejected mining solution, block breaks a consensus rule: %v", jobID, block.Hash().String(), err)
+
+			// remove the job, the same solution would be rejected again
+			ba.jobStore.Delete(*storeID)
+
+			return nil, errors.NewProcessingError("[BlockAssembly][%s][%s] invalid block", jobID, block.Hash().String(), err)
+		}
+
 		ba.logger.Errorf("[BlockAssembly][%s][%s] invalid block: %v - %v", jobID, block.Hash().String(), block.Header, err)
 
-		// the subtreeprocessor created an invalid block, we must reset
+		// block assembly built a block that fails validation for a reason not attributable to the
+		// submitter, so its state is suspect and we must reset
 		ba.blockAssembler.Reset(false)
 
 		// remove the job, we cannot use it anymore

@@ -3,7 +3,6 @@ package subtreevalidation
 import (
 	"bufio"
 	"context"
-	"fmt"
 	"io"
 	"sort"
 	"sync"
@@ -129,7 +128,10 @@ func (u *Server) loadSubtreeBatch(ctx, fetchCtx context.Context, request *subtre
 				}
 			} else {
 				// get the subtree from the peer
-				url := fmt.Sprintf("%s/subtree/%s", request.BaseUrl, subtreeHash.String())
+				url, joinErr := util.JoinPeerURL(request.BaseUrl, "subtree", subtreeHash.String())
+				if joinErr != nil {
+					return errors.NewServiceError("[CheckBlockSubtrees][%s] invalid peer base URL", subtreeHash.String(), joinErr)
+				}
 
 				// Bound the body at the receive-side policy cap (MaxIncomingSubtreeBytes) so a
 				// malicious peer can't OOM us by streaming oversized responses. This must be
@@ -191,12 +193,22 @@ func (u *Server) loadSubtreeBatch(ctx, fetchCtx context.Context, request *subtre
 				// Store the subtreeToCheck marker for later processing, with a DAH of
 				// current block height + subtree-validation retention (set above).
 				if err = u.subtreeStore.Set(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck, subtreeBytes, options.WithDeleteAt(dah)); err != nil {
-					// ErrBlobAlreadyExists is benign: the subtree filename is its content
-					// hash (verified above), so an existing file holds identical bytes. This
-					// happens when the same block is validated concurrently (announced by two
-					// peers) or retried after a partial attempt — racing on this content-
-					// addressed write must not fail the block. Mirrors the same handling for
+					// ErrBlobAlreadyExists is benign HERE: the filename is the merkle
+					// root of the nodes (verified above), so an existing file holds the
+					// same transaction list, which is all this call site needs. This
+					// happens when the same block is validated concurrently (announced by
+					// two peers) or retried after a partial attempt — racing on this
+					// write must not fail the block. Mirrors the same handling for
 					// FileTypeSubtree/FileTypeSubtreeMeta in ValidateSubtreeInternal.
+					//
+					// Do NOT generalise this to "the file is content-addressed, so the
+					// bytes are identical". The ConflictingNodes trailer sits after the
+					// merkle-committed nodes and is NOT covered by the root hash, and
+					// markConflictingTxsInSubtrees rewrites it in place afterwards. Two
+					// files under one subtree key can therefore disagree about which
+					// transactions are conflicting — which is why that trailer is treated
+					// as a candidate index and re-checked against the candidate chain,
+					// never trusted as a per-block fact.
 					if errors.Is(err, errors.ErrBlobAlreadyExists) {
 						u.logger.Warnf("[CheckBlockSubtrees][%s] subtreeToCheck already exists in store", subtreeHash.String())
 					} else {
@@ -268,7 +280,14 @@ func (u *Server) loadSubtreeBatch(ctx, fetchCtx context.Context, request *subtre
 
 				if !subtreeDataExists {
 					// get the subtree data from the peer and process it directly
-					url := fmt.Sprintf("%s/subtree_data/%s", request.BaseUrl, subtreeHash.String())
+					url, joinErr := util.JoinPeerURL(request.BaseUrl, "subtree_data", subtreeHash.String())
+					if joinErr != nil {
+						// Reported on its own rather than through the fetch failure below: there
+						// is no target URL when the join is what failed, so "from <empty>" reads
+						// like a formatting bug rather than an unusable peer base URL. The base
+						// itself is not echoed, because it may carry credentials.
+						return errors.NewServiceError("[CheckBlockSubtrees][%s] invalid peer base URL", subtreeHash.String(), joinErr)
+					}
 
 					// Retry on 503 — peer's asset service may reject under admission control
 					// while it generates the file on-demand from Aerospike.
@@ -466,6 +485,27 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		if subtreeMissing[idx] {
 			missingSubtrees = append(missingSubtrees, *subtreeHash)
 		}
+	}
+
+	// Every subtree we are about to reuse from the store was validated against
+	// SOME chain, not against THIS block's chain. Double-spend validity depends
+	// on the candidate's ancestry, so the ancestry-sensitive part of that verdict
+	// has to be re-derived here even though everything else can be reused.
+	//
+	// This runs over the CACHED subtrees whether or not any others are missing.
+	// Gating it on "all subtrees present" would leave a block that mixes one
+	// fresh subtree with one replayed subtree unchecked, since the fresh-
+	// validation path below only ever looks at the missing ones.
+	cachedSubtrees := make([]chainhash.Hash, 0, len(block.Subtrees))
+
+	for idx, subtreeHash := range block.Subtrees {
+		if !subtreeMissing[idx] {
+			cachedSubtrees = append(cachedSubtrees, *subtreeHash)
+		}
+	}
+
+	if err = u.checkCachedSubtreesAgainstCandidateChain(ctx, block, cachedSubtrees); err != nil {
+		return nil, errors.WrapGRPC(err)
 	}
 
 	// Early return if all subtrees already exist - no need for pause logic
@@ -696,6 +736,164 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	return &subtreevalidation_api.CheckBlockSubtreesResponse{
 		Blessed: true,
 	}, nil
+}
+
+// checkCachedSubtreesAgainstCandidateChain re-derives the ancestry-sensitive
+// part of a cached subtree's verdict for the block now referencing it.
+//
+// # WHY THIS EXISTS
+//
+// A stored subtree is reusable evidence for everything that does not depend on
+// chain context: the transactions parse, their scripts verify, their structure
+// is sound. None of that changes between blocks. Double-spend validity does.
+//
+// A transaction can be legitimately blessed as conflicting while validating a
+// side-fork block, because its counter-spender is not in that fork's ancestry.
+// The same subtree can then be referenced by a later block on a chain that HAS
+// confirmed the counter-spender, where the same transaction is an ancestor
+// double spend. Returning Blessed on file existence alone would give identical
+// block bytes opposite verdicts depending only on what the node happened to
+// validate earlier.
+//
+// # COST
+//
+// Only the conflicting-node trailer is read, which go-subtree recovers by
+// seeking past the node array rather than streaming it. A block whose subtrees
+// carry no conflicting transactions — effectively all of them — costs a few
+// seeks per subtree and no blockchain or UTXO round trips at all. The ancestry
+// fetch and the counter-spend walk happen only when a conflicting transaction
+// is actually present.
+//
+// The ancestry window (retention*2) is deliberately wider than the subtree
+// retention window, so a cached subtree cannot outlive the range this check can
+// see.
+func (u *Server) checkCachedSubtreesAgainstCandidateChain(ctx context.Context, block *model.Block, cachedSubtrees []chainhash.Hash) error {
+	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "checkCachedSubtreesAgainstCandidateChain")
+	defer deferFn()
+
+	if len(cachedSubtrees) == 0 {
+		return nil
+	}
+
+	conflictingTxHashes, err := u.cachedSubtreeConflictingNodes(ctx, cachedSubtrees)
+	if err != nil {
+		return err
+	}
+
+	if len(conflictingTxHashes) == 0 {
+		return nil
+	}
+
+	u.logger.Infof("[CheckBlockSubtrees][%s] %d conflicting transaction(s) in cached subtrees, checking against the candidate chain",
+		block.Hash().String(), len(conflictingTxHashes))
+
+	// Anchored on the candidate's parent, so a side-fork candidate is measured
+	// against ITS ancestry rather than the node's current best chain. Same
+	// source as the full-validation path below.
+	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2))
+	if err != nil {
+		return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to get block headers for cached-subtree check", block.Hash().String(), err)
+	}
+
+	blockIds := make(map[uint32]bool, len(blockHeaderIDs))
+	for _, blockID := range blockHeaderIDs {
+		blockIds[blockID] = true
+	}
+
+	for _, txHash := range conflictingTxHashes {
+		// Same predicate the full-validation path applies via
+		// blessMissingTransaction. Note what that does and does not buy: the two
+		// paths agree on the QUESTION, but they do not start from the same facts.
+		// The fresh path asks it about every transaction the store currently
+		// flags Conflicting; this path can only ask it about the transactions the
+		// trailer names. A transaction that became conflicting after its subtree
+		// was blessed, and whose loser is never mined, never gets a trailer
+		// rewrite — so the cached path can still bless a block the fresh path
+		// would reject. That residual is divergence only: with no trailer entry
+		// there is no promotion, so no confirmed spend is reversed. Closing it
+		// needs the per-transaction conflicting flag, which is a wider change.
+		//
+		// Wrapped as a processing error
+		// rather than forced to tx-invalid: the underlying call returns
+		// ErrTxInvalid only for a genuine ancestry conflict, and errors.Is finds
+		// it through the chain. A walk-budget or store failure stays retryable
+		// instead of permanently marking the block invalid.
+		if err = u.checkCounterConflictingOnCurrentChain(ctx, txHash, blockIds); err != nil {
+			// A trailer names transactions that may have been pruned since the
+			// subtree was blessed — the trailer outlives the records it points
+			// at. The pre-existing caller of this predicate never saw that,
+			// because it had just validated the transaction and so knew the
+			// record existed; reading trailers from cached files removes that
+			// precondition.
+			//
+			// A record we cannot find is not evidence of an ancestor double
+			// spend. Rejecting on it would make one node refuse a block its
+			// peers accept purely because it pruned earlier — a node-local
+			// consensus split caused by housekeeping. Fail open, matching the
+			// same decision in filterAncestryConfirmedLosers, and leave the
+			// store-level guard to catch a real conflict at promotion time.
+			if errors.Is(err, errors.ErrTxNotFound) {
+				u.logger.Warnf("[CheckBlockSubtrees][%s][%s] cannot check cached-subtree conflict: a counter-conflicting record is no longer in the store, skipping",
+					block.Hash().String(), txHash.String())
+
+				continue
+			}
+
+			return errors.NewProcessingError("[CheckBlockSubtrees][%s][%s] cached subtree conflicts with the candidate chain", block.Hash().String(), txHash.String(), err)
+		}
+	}
+
+	return nil
+}
+
+// cachedSubtreeConflictingNodes collects the conflicting-node trailers of every
+// subtree referenced by the block.
+//
+// Fails closed: the caller has just established that each file exists, so a read
+// or parse failure here is a transient fault or a corrupt file, never evidence
+// that a subtree has no conflicting transactions. Treating it as "none" would
+// turn a storage hiccup into a bypass of the check above.
+func (u *Server) cachedSubtreeConflictingNodes(ctx context.Context, cachedSubtrees []chainhash.Hash) ([]chainhash.Hash, error) {
+	perSubtree := make([][]chainhash.Hash, len(cachedSubtrees))
+
+	g, gCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(u.logger, g, u.settings.SubtreeValidation.CheckBlockSubtreesConcurrency)
+
+	for idx := range cachedSubtrees {
+		idx := idx
+		subtreeHash := cachedSubtrees[idx]
+
+		g.Go(func() error {
+			reader, err := u.subtreeStore.GetIoReader(gCtx, subtreeHash[:], fileformat.FileTypeSubtree)
+			if err != nil {
+				return errors.NewProcessingError("[cachedSubtreeConflictingNodes][%s] failed to read cached subtree", subtreeHash.String(), err)
+			}
+
+			defer func() {
+				_ = reader.Close()
+			}()
+
+			conflictingNodes, err := subtreepkg.DeserializeSubtreeConflictingFromReader(reader)
+			if err != nil {
+				return errors.NewProcessingError("[cachedSubtreeConflictingNodes][%s] failed to read conflicting nodes from cached subtree", subtreeHash.String(), err)
+			}
+
+			perSubtree[idx] = conflictingNodes
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	var all []chainhash.Hash
+	for _, conflictingNodes := range perSubtree {
+		all = append(all, conflictingNodes...)
+	}
+
+	return all, nil
 }
 
 // findLocalSubtreeFile reports whether this node already has a copy of the given
@@ -1026,7 +1224,7 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		u.logger.Debugf("[processTransactionsInLevels] Pre-check: %d/%d transactions missed in cache, checking UTXO store", missed, len(txHashes))
 
 		batched := u.settings.SubtreeValidation.BatchMissingTransactions
-		missed, err = u.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, blockIds, batched, false)
+		missed, err = u.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, blockIds, batched, false, true)
 		if err != nil {
 			return errors.NewProcessingError("[processTransactionsInLevels] Failed to check txMeta store", err)
 		}

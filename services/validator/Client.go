@@ -335,65 +335,6 @@ func buildValidateTxRequest(transactionData []byte, blockHeight uint32, opts *Op
 	}
 }
 
-// buildValidateTxHTTPQuery constructs the query string for the HTTP fallback
-// /tx endpoint. Shared with the gRPC builder above so the HTTP path cannot
-// silently drop fields that the gRPC path carries — the most-likely path to
-// hit HTTP fallback is large transactions (gRPC message size limit), which
-// must still receive their per-request options end-to-end.
-func buildValidateTxHTTPQuery(opts *Options, blockHeight uint32) url.Values {
-	queryParams := url.Values{}
-
-	if opts.SkipUtxoCreation {
-		queryParams.Add("skipUtxoCreation", "true")
-	}
-
-	if opts.AddTXToBlockAssembly {
-		queryParams.Add("addTxToBlockAssembly", "true")
-	}
-
-	if opts.SkipPolicyChecks {
-		queryParams.Add("skipPolicyChecks", "true")
-	}
-
-	if opts.CreateConflicting {
-		queryParams.Add("createConflicting", "true")
-	}
-
-	if opts.SkipTxMetaPublishing {
-		queryParams.Add("skipTxMetaPublishing", "true")
-	}
-
-	if opts.InBlock {
-		queryParams.Add("inBlock", "true")
-	}
-
-	if opts.CandidateBlockTime > 0 {
-		queryParams.Add("candidateBlockTime", fmt.Sprintf("%d", opts.CandidateBlockTime))
-	}
-
-	if opts.CandidateParentMedianTime > 0 {
-		queryParams.Add("candidateParentMedianTime", fmt.Sprintf("%d", opts.CandidateParentMedianTime))
-	}
-
-	if opts.UnconfirmedParentsAtCandidateHeight {
-		queryParams.Add("unconfirmedParentsAtCandidateHeight", "true")
-	}
-
-	if opts.SkipScriptValidation {
-		queryParams.Add("skipScriptValidation", "true")
-	}
-
-	if opts.OutpointOnlySpend {
-		queryParams.Add("outpointOnlySpend", "true")
-	}
-
-	if blockHeight > 0 {
-		queryParams.Add("blockHeight", fmt.Sprintf("%d", blockHeight))
-	}
-
-	return queryParams
-}
-
 // Validate performs transaction validation by applying the given options and delegating
 // to ValidateWithOptions. See ValidateWithOptions for details on the validation flow.
 func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*utxometa.Data, error) {
@@ -521,8 +462,9 @@ func (c *Client) handleValidationError(ctx context.Context, tx *bt.Tx, blockHeig
 }
 
 // sendBatchToValidator sends a batch of transactions to the validator via gRPC.
-// If the batch exceeds the gRPC message size limit, it falls back to validating
-// each transaction individually over HTTP.
+// If the batch exceeds the gRPC message size limit, it retries each transaction
+// individually — over gRPC first, since the batch is usually only oversized in
+// aggregate — see retryBatchItemsIndividually.
 func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
 	// go-batcher recovers panics raised in this dispatch fn; without a sweep a
 	// panic part-way through would leave every submitter blocked on group.Wait
@@ -550,9 +492,15 @@ func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
 	if err != nil {
 		c.logger.Errorf("Failed to validate transaction batch: %v", err)
 
-		// Check if the error is related to message size (ResourceExhausted)
+		// Check if the error is related to message size (ResourceExhausted).
+		//
+		// The retry below starts on unary gRPC and needs no HTTP address, so the
+		// predicate does not ask for one: an aggregate-oversized batch is retried
+		// item by item whether or not validator_httpAddress is configured. Only an
+		// item that is itself too large for gRPC reaches the HTTP send, and
+		// handleValidationError gates that on the address separately.
 		if c.shouldAttemptHTTPFallback(err) {
-			c.handleBatchHTTPFallback(ctx, batch)
+			c.retryBatchItemsIndividually(ctx, batch)
 			return
 		}
 
@@ -566,62 +514,117 @@ func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
 	c.processBatchResponse(batch, resp)
 }
 
-// shouldAttemptHTTPFallback determines if HTTP fallback should be attempted based
-// on the error. Kept as the named seam its call site reads through; it is now a
-// one-line wrapper over the shared predicate so a batch-level queue-full shed
-// cannot be mistaken for an oversized message and amplified into one HTTP
-// validation per transaction in the batch.
+// shouldAttemptHTTPFallback determines whether an oversized-batch retry should be
+// attempted based on the error. Kept as the named seam its call site reads through;
+// it is a one-line wrapper over the shared predicate so a batch-level queue-full
+// shed cannot be mistaken for an oversized message and amplified into one full
+// re-validation per transaction in the batch against a saturated node.
+//
+// It says nothing about HTTP reachability. The retry it opens runs over unary
+// gRPC, and whether an individual item may then be sent over HTTP is
+// handleValidationError's decision, gated there on a configured address.
 func (c *Client) shouldAttemptHTTPFallback(err error) bool {
-	return errors.IsGRPCMessageTooLarge(err) && c.validatorHTTPAddr != nil
+	return errors.IsGRPCMessageTooLarge(err)
 }
 
-// handleBatchHTTPFallback attempts to validate each transaction individually via HTTP
-func (c *Client) handleBatchHTTPFallback(ctx context.Context, batch []*batchItem) {
-	c.logger.Warnf("Batch transaction exceeds gRPC message limit, trying HTTP fallback for individual transactions")
+// retryBatchItemsIndividually re-sends every item of a batch the validator
+// rejected as too large, one request at a time.
+//
+// The retry goes over UNARY gRPC first, not straight to HTTP. A batch exceeds the
+// gRPC message limit in AGGREGATE far more often than any single transaction in it
+// does, and gRPC is the transport that carries every validation option. Going
+// straight to HTTP would not downgrade such an item, it would refuse it outright —
+// the HTTP surface carries transaction bytes only (issue 4840) — so a
+// block-validation or legacy-sync item, which travels with SkipPolicyChecks,
+// InBlock and the candidate times, would hard-fail even though it fits comfortably
+// in a request of its own.
+//
+// HTTP stays the fallback for an item that is itself too large for gRPC.
+// handleValidationError makes that decision per item on exactly the same terms as
+// the unary path: only a message-size error opens the fallback, a block-assembly
+// queue-full shed is surfaced to the caller instead of being re-sent against a node
+// that just reported itself saturated, and any other failure is returned unwrapped.
+// A shed also stops the loop, not just the item that saw it: the remaining items
+// complete with the same error without being sent, as does a cancelled context.
+// A per-item verdict is different — it says nothing about the node's health, so the
+// loop carries on to the next item.
+//
+// Sequential by design, but NOT for ordering. The batch path this replaces does not
+// order a parent before its child either: ValidateTransactionBatch runs every item
+// in its own errgroup goroutine, so a parent and child in one batch were already
+// validated concurrently. Nothing downstream may rely on that path, or on this loop,
+// to sequence them.
+//
+// The loop stays sequential for the reasons that do hold: it bounds the load placed
+// on a validator that has just rejected an oversized batch, and issuing one request
+// at a time is what makes the shed and cancellation abort above meaningful — a
+// concurrent fan-out would already have sent the remaining items before the first
+// failure came back.
+func (c *Client) retryBatchItemsIndividually(ctx context.Context, batch []*batchItem) {
+	c.logger.Warnf("Batch exceeds the gRPC message limit, retrying its %d transactions individually", len(batch))
 
-	for _, item := range batch {
-		// Extract transaction data and options from the request
+	for i, item := range batch {
 		txReq := item.req
 
-		tx, err := bt.NewTxFromBytes(txReq.TransactionData)
-		if err != nil {
+		// The typed transport first. Each item carries its full option set here,
+		// so a successful retry is byte-for-byte the request the batch would have
+		// delivered — and it returns real metadata, which the HTTP route cannot.
+		response, err := c.client.ValidateTransaction(ctx, txReq)
+		if err == nil {
+			item.complete(validateBatchResponse{metaData: response.Metadata})
+			continue
+		}
+
+		// Only now are the transaction and its options needed: to decide whether
+		// this single item is itself oversized, and to re-send it if so.
+		tx, parseErr := bt.NewTxFromBytes(txReq.TransactionData)
+		if parseErr != nil {
 			item.complete(validateBatchResponse{
 				metaData: nil,
-				err:      errors.NewServiceError("Failed to parse transaction for HTTP fallback: %v", err),
+				err:      errors.NewServiceError("Failed to parse transaction for individual retry: %v", parseErr),
 			})
 
 			continue
 		}
 
-		// Create options from the request. Reuses the same projection the
-		// server uses so the HTTP fallback cannot silently drop fields that the
-		// gRPC request carried — historically this site missed SkipTxMetaPublishing
-		// (which legacy catchup relies on to avoid extra Kafka work),
-		// CandidateBlockTime (which pre-CSV block validation needs), and
-		// CandidateParentMedianTime (which post-CSV fork / historical block
-		// validation needs).
-		//
-		// The request was just built by this client via buildValidateTxRequest,
-		// so optionsFromValidateRequest cannot fail here in practice (every field
-		// is well-formed by construction). The error is still propagated to surface
-		// any future bug in the client-side builder.
-		options, err := optionsFromValidateRequest(txReq)
-		if err != nil {
-			c.logger.Errorf("[%s] HTTP fallback rejected: client-built request failed projection: %v", tx.TxID(), err)
-			item.complete(validateBatchResponse{metaData: nil, err: err})
+		// Reuses the same projection the server uses. The request was built by
+		// this client via buildValidateTxRequest, so optionsFromValidateRequest
+		// cannot fail here in practice (every field is well-formed by
+		// construction). The error is still propagated to surface any future bug
+		// in the client-side builder.
+		options, optErr := optionsFromValidateRequest(txReq)
+		if optErr != nil {
+			c.logger.Errorf("[%s] individual retry rejected: client-built request failed projection: %v", tx.TxID(), optErr)
+			item.complete(validateBatchResponse{metaData: nil, err: optErr})
+
 			continue
 		}
 
-		// Try HTTP fallback for this individual transaction
-		httpErr := c.validateTransactionViaHTTP(ctx, tx, txReq.BlockHeight, options)
+		if retryErr := c.handleValidationError(ctx, tx, txReq.BlockHeight, options, err); retryErr != nil {
+			c.logger.Errorf("[%s] individual retry failed: %v", tx.TxID(), retryErr)
+			item.complete(validateBatchResponse{metaData: nil, err: retryErr})
 
-		if httpErr == nil {
-			c.logger.Debugf("[%s] Successfully validated via HTTP fallback", tx.TxID())
-			item.complete(validateBatchResponse{metaData: nil, err: nil})
-		} else {
-			c.logger.Errorf("[%s] HTTP fallback failed: %v", tx.TxID(), httpErr)
-			item.complete(validateBatchResponse{metaData: nil, err: httpErr})
+			// Stop the loop, do not just skip this item. A shed means the node has
+			// reported itself saturated. A cancelled context here means the CLIENT is
+			// shutting down, not that this item's submitter left: the ctx on this path
+			// is the client-lifetime one NewClient closes over when it builds the
+			// sendBatch dispatch function, while a submitter's own context only ever
+			// reaches the batcher through PutCtx. Either way every remaining item would
+			// be a full validation that cannot succeed, which is what routing through
+			// handleValidationError exists to avoid — enforced here for the loop, not
+			// only per item.
+			if errors.Is(retryErr, errors.ErrThresholdExceeded) || ctx.Err() != nil {
+				c.notifyAllBatchItems(batch[i+1:], nil, retryErr)
+				return
+			}
+
+			continue
 		}
+
+		// handleValidationError returning nil means the HTTP fallback carried it.
+		// That route returns no metadata.
+		c.logger.Debugf("[%s] validated via the HTTP fallback after an individual retry", tx.TxID())
+		item.complete(validateBatchResponse{metaData: nil, err: nil})
 	}
 }
 
@@ -657,6 +660,20 @@ func (c *Client) notifyAllBatchItems(batch []*batchItem, metadata []byte, err er
 	}
 }
 
+// maxHTTPFallbackErrorBodyBytes bounds the raw prefix retained for diagnostics.
+const maxHTTPFallbackErrorBodyBytes = 2 * 1024
+
+// readHTTPFallbackErrorBody leaves body ownership with the caller. One extra
+// byte distinguishes a complete prefix from a truncated response.
+func readHTTPFallbackErrorBody(body io.Reader) ([]byte, bool) {
+	bodyBytes, _ := io.ReadAll(io.LimitReader(body, maxHTTPFallbackErrorBodyBytes+1))
+	if len(bodyBytes) > maxHTTPFallbackErrorBodyBytes {
+		return bodyBytes[:maxHTTPFallbackErrorBodyBytes], true
+	}
+
+	return bodyBytes, false
+}
+
 // validateTransactionViaHTTP sends a transaction to the validator's HTTP endpoint
 // This is used as a fallback when gRPC message size limits are exceeded.
 //
@@ -670,6 +687,11 @@ func (c *Client) notifyAllBatchItems(batch []*batchItem, metadata []byte, err er
 // The legacy application/octet-stream path remains supported by the server's
 // /tx handler for backward compatibility with non-protobuf callers; this
 // client no longer uses it.
+//
+// The endpoint carries transaction bytes only: it is unauthenticated, so it
+// accepts no validation options and no caller-asserted block height. A request
+// that needs either is refused here, before transmission, rather than sent and
+// rejected — see nonDefaultValidationOptions.
 func (c *Client) validateTransactionViaHTTP(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
 	if c.validatorHTTPAddr == nil {
 		return errors.NewServiceError("[ValidateWithOptions][%s] Transaction exceeds gRPC message limit, but no HTTP endpoint configured for validator", tx.TxID())
@@ -688,9 +710,29 @@ func (c *Client) validateTransactionViaHTTP(ctx context.Context, tx *bt.Tx, bloc
 
 	fullURL := c.validatorHTTPAddr.ResolveReference(endpoint)
 
+	// Bind the built request so the guard below and the marshal share one value.
+	// Named vreq, not req: `req` is already taken further down by the *http.Request
+	// from http.NewRequestWithContext, and the two must not be confused — the guard
+	// must run on the protobuf request, and it must run BEFORE the HTTP request is
+	// constructed so nothing is sent.
+	vreq := buildValidateTxRequest(tx.SerializeBytes(), blockHeight, validationOptions)
+
+	// The validator's HTTP endpoint carries transaction bytes only, so refuse here
+	// rather than send options that the far end will reject. Doing it client-side
+	// stops THIS client being a route for those flags whatever version the peer
+	// runs; it does not make the property hold generally. The guarantee against an
+	// arbitrary HTTP caller lands when the SERVER is upgraded, because an
+	// un-upgraded validator still parses the old query string for anyone who asks.
+	// Issue 4840, finding B-022.
+	if reason := nonDefaultValidationOptions(vreq); reason != "" {
+		return errors.NewServiceError(
+			"[ValidateWithOptions][%s] transaction exceeds the gRPC message limit and %s cannot be sent "+
+				"over the HTTP fallback; the validator gRPC message size is fixed at 1 GiB", tx.TxID(), reason)
+	}
+
 	// Marshal the full request via the shared builder — same proto, same field
 	// projection as gRPC.
-	body, err := proto.Marshal(buildValidateTxRequest(tx.SerializeBytes(), blockHeight, validationOptions))
+	body, err := proto.Marshal(vreq)
 	if err != nil {
 		return errors.NewServiceError("[ValidateWithOptions][%s] error marshalling protobuf body for /tx endpoint: %v", tx.TxID(), err)
 	}
@@ -719,16 +761,25 @@ func (c *Client) validateTransactionViaHTTP(ctx context.Context, tx *bt.Tx, bloc
 	// validator's internal error chain verbatim, and callers that classify on the
 	// error code read a permanent rejection as something worth retrying.
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-
 		verdict := errors.HTTPErrorFrom(resp.Header)
+
+		// The body is an opaque diagnostic: keep a bounded prefix so a large error
+		// response is never buffered or formatted in full, and quote it so control
+		// bytes cannot forge extra log lines.
+		body, truncated := readHTTPFallbackErrorBody(resp.Body)
+
+		diagnostic := fmt.Sprintf("%q", string(body))
+		if truncated {
+			diagnostic += " (truncated)"
+		}
+
 		if verdict == nil {
 			return errors.NewServiceError("[ValidateWithOptions][%s] validator /tx endpoint returned non-OK status: %d, body: %s",
-				tx.TxID(), resp.StatusCode, string(body))
+				tx.TxID(), resp.StatusCode, diagnostic)
 		}
 
 		c.logger.Warnf("[ValidateWithOptions][%s] validator /tx endpoint rejected transaction: status=%d body=%s",
-			tx.TxID(), resp.StatusCode, string(body))
+			tx.TxID(), resp.StatusCode, diagnostic)
 
 		return errors.New(verdict.Code(), "[ValidateWithOptions][%s] %s", tx.TxID(), verdict.Message())
 	}
