@@ -284,6 +284,21 @@ func TestTxToCreateItem(t *testing.T) {
 		require.Equal(t, uint32(6), *item.MinedBlockHeight)
 		require.Equal(t, uint32(7), *item.MinedSubtreeIdx)
 	})
+
+	t.Run("multiple mined block infos fail loud", func(t *testing.T) {
+		// The wire CreateItem holds a single block entry, so more than one
+		// MinedBlockInfo cannot be persisted; storing only [0] would make the
+		// persisted record disagree with the meta.Data create.go returns. Fail
+		// loud rather than silently drop the 2nd+ block.
+		tx := mustTx(t, internalTestTxHex)
+		_, err := txToCreateItem(tx, 0, 100, 0, utxo.CreateOptions{
+			MinedBlockInfos: []utxo.MinedBlockInfo{
+				{BlockID: 5, BlockHeight: 6, SubtreeIdx: 7},
+				{BlockID: 8, BlockHeight: 9, SubtreeIdx: 0},
+			},
+		})
+		require.Error(t, err)
+	})
 }
 
 // tx0LockingScript returns a real p2pkh locking script (output 0 of the test tx).

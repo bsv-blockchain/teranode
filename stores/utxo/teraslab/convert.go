@@ -449,8 +449,17 @@ func txToCreateItem(tx *bt.Tx, blockHeight uint32, coinbaseMaturity uint32, gene
 		}
 	}
 
-	// Set mined block info if provided
-	if len(opts.MinedBlockInfos) > 0 {
+	// Set mined block info if provided. The wire CreateItem carries a single
+	// mined-block entry (MinedBlockID/Height/SubtreeIdx), unlike the Aerospike
+	// record which stores every MinedBlockInfo. Storing only [0] while create.go
+	// returns meta.Data populated from all of them would make the persisted record
+	// silently disagree with the returned value for the 2nd+ block. WithMinedBlockInfo
+	// is variadic, so guard it: one entry is stored, more than one fails loud (the
+	// current caller passes a single entry; multi-entry needs client/server support).
+	if len(opts.MinedBlockInfos) > 1 {
+		return teraslab.CreateItem{}, errors.NewProcessingError("teraslab Create: multiple MinedBlockInfos not supported (wire CreateItem holds one block entry); got %d", len(opts.MinedBlockInfos))
+	}
+	if len(opts.MinedBlockInfos) == 1 {
 		mbi := opts.MinedBlockInfos[0]
 		blockID := mbi.BlockID
 		blockHeightVal := mbi.BlockHeight
