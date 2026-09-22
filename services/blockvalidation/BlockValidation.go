@@ -1791,6 +1791,60 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			return errors.NewBlockIncompleteError("[ValidateBlock][%s] coinbase tx is nil or empty", block.Header.Hash().String())
 		}
 
+		// Header-only proof-of-work gates, run FIRST. HasMetPowLimit and HasMetTargetDifficulty are
+		// pure functions of the 80 header bytes — no height, no parent, no chain state, no store
+		// access — so they are hoisted above the checkpoint, parent-invalid and expected-nBits
+		// checks below (bitcoin-sv/teranode#4844). Those checks are more expensive, and the
+		// parent-invalid ones deliberately persist the peer-supplied body; a header nobody paid for
+		// must never reach them.
+		//
+		// The header hash must meet the target its OWN nBits declares. This is enforced for
+		// every block, including below-checkpoint ones: it is what makes the chainwork the
+		// block contributes (computed from those same declared bits in
+		// getCumulativeChainWork) honestly earned, and it is the cheap gate that stops a
+		// peer buying (fail-open) subtree validation with a garbage header. The subtree-validation
+		// path sets the fail-open WithUnconfirmedParentsAtCandidateHeight validator option, whose
+		// contract requires the tx to come from a locally-held, PoW-checked block — so the
+		// difficulty checks must run before it. Unlike the expected-nBits rule below there is no
+		// historical exception to it — no block on any chain has ever been valid without meeting
+		// its own target — so enforcing it here cannot reject a real block. model.Block.Valid
+		// step 1 runs the identical check on every route that permanently accepts a block, so the
+		// accepted-block set is unchanged; running it here only moves the rejection earlier, ahead
+		// of the optimistic-mining AddBlock that would otherwise put the block on the chain first.
+		// This matters because BelowCheckpoint is true for EVERY height in 1..highestCheckpoint,
+		// not just the checkpoint heights themselves.
+		//
+		// Bound the target the header DECLARES before checking the hash against it.
+		// HasMetTargetDifficulty alone only asks whether the hash meets the target the
+		// header chose for itself, which a fabricated header answers in about two
+		// hashes by declaring nBits=0x207fffff (GHSA-gggq-8f59-4jm9).
+		//
+		// NOT A STRONG WORK GATE, and nothing below may assume it is: HasMetPowLimit bounds the
+		// DECLARED target by the network's EASIEST permitted target, so a header that clears both
+		// gates costs difficulty 1 — seconds on commodity hardware, far less on an ASIC. It stops
+		// free fabrication; it is not mainnet-strength.
+		if limitErr := block.Header.HasMetPowLimit(u.settings.ChainCfgParams); limitErr != nil {
+			if !opts.IsRevalidation {
+				u.rejectFinalHeaderVerdict(block, opts.PeerID, baseURL, "block declares a target easier than the network proof-of-work limit")
+			}
+
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] block declares a target easier than the network proof-of-work limit", block.Header.Hash().String(), limitErr)
+		}
+
+		headerValid, _, err := block.Header.HasMetTargetDifficulty()
+		if !headerValid {
+			reason := "block does not meet target difficulty"
+			if err != nil {
+				reason = fmt.Sprintf("block does not meet target difficulty: %s", err.Error())
+			}
+
+			if !opts.IsRevalidation {
+				u.rejectFinalHeaderVerdict(block, opts.PeerID, baseURL, reason)
+			}
+
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] block does not meet target difficulty: %s", block.Header.Hash().String(), err)
+		}
+
 		// The bad-coinbase-length check used to also run here, on the unbound body, before
 		// block.Valid ever ran — but that intercepted every bad-length body, including a
 		// merkle-bound one whose coinbase is the miner's own committed (and thus genuinely
@@ -1814,7 +1868,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// non-checkpoint heights — the fork-depth rule — is a separate, broader change.)
 		if err = catchup.ValidateHeaderAgainstCheckpoints(block.Header, block.Height, u.settings.ChainCfgParams.Checkpoints); err != nil {
 			if !opts.IsRevalidation {
-				u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, err.Error())
+				u.rejectFinalHeaderVerdict(block, opts.PeerID, baseURL, err.Error())
 			}
 
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] block conflicts with hardcoded checkpoint", block.Hash().String(), err)
@@ -1836,7 +1890,11 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// re-enters after a header-context failure (ReValidateBlockFromScratch) deliberately drops
 		// CachedHeaders instead. A new caller must do one or the other, or first make the cache top
 		// up short windows from the store — see issue #1499.
-		var blockHeaders []*model.BlockHeader
+		var (
+			blockHeaders []*model.BlockHeader
+			parentMeta   *model.BlockHeaderMeta
+		)
+
 		if opts.CachedHeaders != nil && len(opts.CachedHeaders) > 0 {
 			// Use provided cached headers
 			blockHeaders = opts.CachedHeaders
@@ -1846,20 +1904,14 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				ctxLogger.Infof("[ValidateBlock][%s] using %d cached headers", block.Header.Hash().String(), len(blockHeaders))
 			}
 
-			// Check if parent block is invalid - if so, child is automatically invalid
-			// This optimization skips expensive validation when parent is already invalid
 			// For catchup mode with cached headers, we need to query parent metadata
-			_, parentMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
-			if err != nil {
-				ctxLogger.Warnf("[ValidateBlock][%s] failed to get parent block metadata: %v, continuing with validation", block.Hash().String(), err)
+			_, cachedParentMeta, parentMetaErr := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
+			if parentMetaErr != nil {
+				ctxLogger.Warnf("[ValidateBlock][%s] failed to get parent block metadata: %v, continuing with validation", block.Hash().String(), parentMetaErr)
 				// Continue with validation - this is defensive programming
 			}
-			if u.checkParentInvalid(parentMeta) {
-				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, fmt.Sprintf("parent block %s is invalid", block.Header.HashPrevBlock.String()))
-				}
-				return errors.NewBlockInvalidError("[ValidateBlock][%s] parent block is invalid", block.Hash().String())
-			}
+
+			parentMeta = cachedParentMeta
 		} else {
 			// Fetch headers from blockchain service
 			if opts.IsCatchupMode {
@@ -1880,17 +1932,65 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				return errors.NewServiceError("[ValidateBlock][%s] failed to get block headers", block.String(), err)
 			}
 
-			// Check if parent block is invalid using the metadata we just got
-			var parentMeta *model.BlockHeaderMeta
+			// Take the parent's metadata from the run we just got
 			if len(parentBlockHeadersMeta) > 0 {
 				parentMeta = parentBlockHeadersMeta[0]
 			}
-			if u.checkParentInvalid(parentMeta) {
-				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, fmt.Sprintf("parent block %s is invalid", block.Header.HashPrevBlock.String()))
-				}
-				return errors.NewBlockInvalidError("[ValidateBlock][%s] parent block is invalid", block.Hash().String())
+		}
+
+		// Expected-nBits. Historical targets are always checked here, including during initial
+		// sync; later blocks retain the existing checkpoint-prefix shortcut. Height is settled
+		// against the parent before this function runs.
+		//
+		// This runs ONCE, above the parent-invalid check below, on both header sources
+		// (bitcoin-sv/teranode#4844). It is the only thing that closes the cheapest mass-spam
+		// route to a persisted body: a header that clears the two proof-of-work gates above still
+		// only costs difficulty 1, and built on the current tip it carries the wrong nBits — so it
+		// is rejected here, persisting nothing, instead of reaching the parent-invalid check, which
+		// must keep the real body for reconsideration and would otherwise be spammable at that
+		// price. The shortcut leaves a gap at or below the highest checkpoint, where this rule is
+		// skipped and the parent-invalid check stays difficulty-1 reachable.
+		//
+		// GetNextWorkRequired reads the parent's stored row and follows parent_id ancestry without
+		// filtering invalid rows, so it is safe for a block whose parent is marked invalid — which
+		// only this ordering makes reachable. It does not consume opts.CachedHeaders, so the catchup
+		// branch above needs nothing more than the parent's header row, which sequential catchup has
+		// already stored by the time this runs.
+		if u.skipExpectedDifficulty(ctx, block) {
+			ctxLogger.Debugf("[ValidateBlock][%s] skipping expected-nBits validation for block at height %d (at or below highest checkpoint height %d)",
+				block.Header.Hash().String(), block.Height, blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints))
+		} else {
+			// Check that the nBits (difficulty target) is correct for this block
+			expectedNBits, nBitsErr := u.blockchainClient.GetNextWorkRequired(ctx, block.Header.HashPrevBlock, int64(block.Header.Timestamp))
+			if nBitsErr != nil {
+				return errors.NewServiceError("[ValidateBlock][%s] failed to get expected work required", block.Header.Hash().String(), nBitsErr)
 			}
+
+			// Compare the block's nBits with the expected nBits
+			if expectedNBits != nil && block.Header.Bits != *expectedNBits {
+				reason := fmt.Sprintf("incorrect difficulty bits: got %v, expected %v", block.Header.Bits, *expectedNBits)
+				if !opts.IsRevalidation {
+					u.rejectFinalHeaderVerdict(block, opts.PeerID, baseURL, reason)
+				}
+
+				return errors.NewBlockInvalidError("[ValidateBlock][%s] block has incorrect difficulty bits: got %v, expected %v",
+					block.Header.Hash().String(), block.Header.Bits, expectedNBits)
+			}
+		}
+
+		// Check if parent block is invalid - if so, child is automatically invalid.
+		// This optimization skips expensive validation when parent is already invalid.
+		//
+		// This verdict KEEPS the real body (bitcoin-sv/teranode#4844): parent-invalid is inherited
+		// and reversible, and RevalidateBlock reloads the stored block, so the body must survive for
+		// the record to be reconsiderable at all. The cheap spam route into this site is closed by
+		// the expected-nBits check hoisted above it, not by the strength of the proof-of-work limit.
+		if u.checkParentInvalid(parentMeta) {
+			if !opts.IsRevalidation {
+				u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, fmt.Sprintf("parent block %s is invalid", block.Header.HashPrevBlock.String()))
+			}
+
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] parent block is invalid", block.Hash().String())
 		}
 
 		// Wait for reValidationBlock to do its thing
@@ -1902,79 +2002,6 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			if err = u.waitForPreviousBlocksToBeProcessed(ctx, block, blockHeaders); err != nil {
 				// Give up, the parent block isn't being fully validated
 				return errors.NewBlockError("[ValidateBlock][%s] given up waiting on previous blocks to be ready %s", block.Hash().String(), block.Header.HashPrevBlock.String())
-			}
-		}
-
-		// Verify the header's proof-of-work BEFORE the (expensive) subtree validation
-		// below. The subtree-validation path sets the fail-open
-		// WithUnconfirmedParentsAtCandidateHeight validator option, whose contract
-		// requires the tx to come from a locally-held, PoW-checked block — so the
-		// difficulty checks must run first. It also means a peer cannot make us do
-		// full tx validation for a garbage header at zero cost.
-		//
-		// The header hash must meet the target its OWN nBits declares. This is enforced for
-		// every block, including below-checkpoint ones: it is what makes the chainwork the
-		// block contributes (computed from those same declared bits in
-		// getCumulativeChainWork) honestly earned, and it is the cheap gate that stops a
-		// peer buying (fail-open) subtree validation with a garbage header. Unlike the
-		// expected-nBits rule below there is no historical exception to it — no block on any
-		// chain has ever been valid without meeting its own target — so enforcing it here
-		// cannot reject a real block. model.Block.Valid step 1 runs the identical check on
-		// every route that permanently accepts a block, so the accepted-block set is
-		// unchanged; running it here only moves the rejection earlier, ahead of the
-		// optimistic-mining AddBlock that would otherwise put the block on the chain first.
-		// This matters because BelowCheckpoint is true for EVERY height in
-		// 1..highestCheckpoint, not just the checkpoint heights themselves.
-		// Bound the target the header DECLARES before checking the hash against it.
-		// HasMetTargetDifficulty alone only asks whether the hash meets the target the
-		// header chose for itself, which a fabricated header answers in about two
-		// hashes by declaring nBits=0x207fffff (GHSA-gggq-8f59-4jm9). Runs here, ahead
-		// of the UTXO-mutating subtree validation below.
-		if limitErr := block.Header.HasMetPowLimit(u.settings.ChainCfgParams); limitErr != nil {
-			if !opts.IsRevalidation {
-				u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, "block declares a target easier than the network proof-of-work limit")
-			}
-
-			return errors.NewBlockInvalidError("[ValidateBlock][%s] block declares a target easier than the network proof-of-work limit", block.Header.Hash().String(), limitErr)
-		}
-
-		headerValid, _, err := block.Header.HasMetTargetDifficulty()
-		if !headerValid {
-			reason := "block does not meet target difficulty"
-			if err != nil {
-				reason = fmt.Sprintf("block does not meet target difficulty: %s", err.Error())
-			}
-			if !opts.IsRevalidation {
-				u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
-			}
-
-			return errors.NewBlockInvalidError("[ValidateBlock][%s] block does not meet target difficulty: %s", block.Header.Hash().String(), err)
-		}
-
-		// Historical targets are always checked here, including during initial sync.
-		// Later blocks retain the existing checkpoint-prefix shortcut. Height is settled
-		// against the parent before this function runs.
-		skipDifficultyCheck := u.skipExpectedDifficulty(ctx, block)
-
-		if skipDifficultyCheck {
-			ctxLogger.Debugf("[ValidateBlock][%s] skipping expected-nBits validation for block at height %d (at or below highest checkpoint height %d)",
-				block.Header.Hash().String(), block.Height, blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints))
-		} else {
-			// Check that the nBits (difficulty target) is correct for this block
-			expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, block.Header.HashPrevBlock, int64(block.Header.Timestamp))
-			if err != nil {
-				return errors.NewServiceError("[ValidateBlock][%s] failed to get expected work required", block.Header.Hash().String(), err)
-			}
-
-			// Compare the block's nBits with the expected nBits
-			if expectedNBits != nil && block.Header.Bits != *expectedNBits {
-				reason := fmt.Sprintf("incorrect difficulty bits: got %v, expected %v", block.Header.Bits, *expectedNBits)
-				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
-				}
-
-				return errors.NewBlockInvalidError("[ValidateBlock][%s] block has incorrect difficulty bits: got %v, expected %v",
-					block.Header.Hash().String(), block.Header.Bits, expectedNBits)
 			}
 		}
 
@@ -2074,8 +2101,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// checks use the same blockHeaders snapshot the background Valid() consumes.
 			if err = block.CheckHeaderContextual(blockHeaders, u.settings, ctxLogger); err != nil {
 				if errors.Is(err, errors.ErrBlockInvalid) {
+					// Persist nothing (bitcoin-sv/teranode#4844). This is a header-only verdict on a
+					// body that has not been bound to the header, and the 2-hours-in-the-future rule
+					// it can fail is TIME-DEPENDENT: persisting it invalid would mean a block that
+					// becomes valid on the wall clock could never be accepted afterwards.
 					if !opts.IsRevalidation {
-						u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, err.Error())
+						u.rejectFinalHeaderVerdict(block, opts.PeerID, baseURL, err.Error())
 					}
 
 					return errors.NewBlockInvalidError("[ValidateBlock][%s] block header failed contextual validation", block.Header.Hash().String(), err)
@@ -2550,6 +2581,22 @@ func (u *BlockValidation) storeInvalidBlock(ctx context.Context, block *model.Bl
 		}
 	}
 
+	u.kafkaNotifyBlockInvalid(block, reason, peerID, peerURL)
+}
+
+// rejectFinalHeaderVerdict handles a FINAL verdict reached before the body is bound to the
+// header: the header declares a target easier than the network limit, fails to meet the target
+// it declares, conflicts with a hardcoded checkpoint, carries the wrong difficulty bits for its
+// parent, or fails a contextual header rule. Two properties make persisting the wrong choice.
+// The verdict is final, so there is nothing a later state change could recover — no record is
+// needed for reconsideration. And a header that satisfies only the network proof-of-work LIMIT
+// (difficulty 1, not the chain's expected difficulty) is cheap enough to fabricate at scale that
+// a database row per announcement is itself the denial of service, and that row would carry the
+// peer's chosen coinbase as presentation data (bitcoin-sv/teranode#4844).
+// Re-deriving the verdict on each delivery is cheaper than the row we decline to write; repeat
+// delivery is bounded by the peer strike the invalid-block notification drives.
+func (u *BlockValidation) rejectFinalHeaderVerdict(block *model.Block, peerID, peerURL, reason string) {
+	u.logger.Warnf("[ValidateBlock][%s] rejecting without persisting: %s", block.Hash().String(), reason)
 	u.kafkaNotifyBlockInvalid(block, reason, peerID, peerURL)
 }
 

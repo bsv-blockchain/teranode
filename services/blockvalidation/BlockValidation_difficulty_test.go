@@ -129,8 +129,10 @@ func TestValidateBlock_IncorrectDifficultyBits(t *testing.T) {
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, prevBlockHeader.Hash(), mock.Anything).
 		Return(expectedNBits, nil).Once()
 
-	// Mock AddBlock to store invalid block when difficulty check fails
-	mockBlockchain.On("AddBlock", mock.Anything, block, "", mock.Anything).Return(nil).Once()
+	// Registered only so an unexpected write surfaces as a failed assertion below rather than as a
+	// mock panic: wrong difficulty bits is a FINAL verdict on the header alone, reached before the
+	// body is bound to it, so no record is written (bitcoin-sv/teranode#4844).
+	mockBlockchain.On("AddBlock", mock.Anything, block, "", mock.Anything).Return(nil).Maybe()
 
 	// Mock GetBlock for bloom filter creation
 	prevBlock := &model.Block{
@@ -145,7 +147,9 @@ func TestValidateBlock_IncorrectDifficultyBits(t *testing.T) {
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(blockHeader, &model.BlockHeaderMeta{Height: 1}, nil).Maybe()
 
 	// Mock GetBlockIsMined for parent block mining status check
-	mockBlockchain.On("GetBlockIsMined", mock.Anything, prevBlockHeader.Hash()).Return(true, nil)
+	// No longer reached: the expected-nBits check now runs above the wait for previous blocks
+	// to be processed (bitcoin-sv/teranode#4844).
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, prevBlockHeader.Hash()).Return(true, nil).Maybe()
 
 	// Create BlockValidation instance
 	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
@@ -165,6 +169,9 @@ func TestValidateBlock_IncorrectDifficultyBits(t *testing.T) {
 	err = bv.ValidateBlock(ctx, block, "test")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "incorrect difficulty bits")
+
+	// Nothing is persisted for a header-only verdict (bitcoin-sv/teranode#4844).
+	mockBlockchain.AssertNotCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	// Verify all mocks were called
 	mockBlockchain.AssertExpectations(t)
@@ -250,8 +257,10 @@ func TestValidateBlock_DoesNotMeetTargetDifficulty(t *testing.T) {
 	// Mock blockchain client
 	mockBlockchain := new(blockchain.Mock)
 	mockBlockchain.On("GetBlockExists", mock.Anything, blockHeader.Hash()).Return(false, nil).Once()
+	// Registered but no longer expected to fire: the two header-only proof-of-work gates now run
+	// above the parent-header fetch (bitcoin-sv/teranode#4844).
 	mockBlockchain.On("GetBlockHeaders", mock.Anything, prevBlockHeader.Hash(), mock.Anything).
-		Return([]*model.BlockHeader{prevBlockHeader}, []*model.BlockHeaderMeta{{ID: 0, Height: 0}}, nil).Once()
+		Return([]*model.BlockHeader{prevBlockHeader}, []*model.BlockHeaderMeta{{ID: 0, Height: 0}}, nil).Maybe()
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil).Maybe()
 	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil).Maybe()
 
@@ -266,8 +275,10 @@ func TestValidateBlock_DoesNotMeetTargetDifficulty(t *testing.T) {
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, prevBlockHeader.Hash(), mock.Anything).
 		Return(expectedNBits, nil).Maybe()
 
-	// Mock AddBlock to store invalid block when difficulty target is not met
-	mockBlockchain.On("AddBlock", mock.Anything, block, "", mock.Anything).Return(nil).Once()
+	// Registered only so an unexpected write surfaces as a failed assertion below rather than as a
+	// mock panic: a header that does not meet its own declared target is a FINAL verdict on a body
+	// nothing has bound to the header, so no record is written (bitcoin-sv/teranode#4844).
+	mockBlockchain.On("AddBlock", mock.Anything, block, "", mock.Anything).Return(nil).Maybe()
 
 	// Mock GetBlock for bloom filter creation
 	prevBlock := &model.Block{
@@ -281,8 +292,9 @@ func TestValidateBlock_DoesNotMeetTargetDifficulty(t *testing.T) {
 	// Mock GetBestBlockHeader for bloom filter pruning
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(blockHeader, &model.BlockHeaderMeta{Height: 1}, nil).Maybe()
 
-	// Mock GetBlockIsMined for parent block mining status check
-	mockBlockchain.On("GetBlockIsMined", mock.Anything, prevBlockHeader.Hash()).Return(true, nil)
+	// Mock GetBlockIsMined for parent block mining status check. No longer reached: the header-only
+	// proof-of-work gates now run above the wait for previous blocks (bitcoin-sv/teranode#4844).
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, prevBlockHeader.Hash()).Return(true, nil).Maybe()
 
 	// Create BlockValidation instance
 	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
@@ -305,6 +317,9 @@ func TestValidateBlock_DoesNotMeetTargetDifficulty(t *testing.T) {
 
 	// The PoW check short-circuits ahead of the expected-nBits lookup.
 	mockBlockchain.AssertNotCalled(t, "GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything)
+
+	// Nothing is persisted for a header-only verdict (bitcoin-sv/teranode#4844).
+	mockBlockchain.AssertNotCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	// Verify all mocks were called
 	mockBlockchain.AssertExpectations(t)
@@ -559,8 +574,10 @@ func TestValidateBlock_PoWCheckedBeforeSubtreeValidation(t *testing.T) {
 	// Mock blockchain client
 	mockBlockchain := new(blockchain.Mock)
 	mockBlockchain.On("GetBlockExists", mock.Anything, blockHeader.Hash()).Return(false, nil).Once()
+	// Registered but no longer expected to fire: the two header-only proof-of-work gates now run
+	// above the parent-header fetch (bitcoin-sv/teranode#4844).
 	mockBlockchain.On("GetBlockHeaders", mock.Anything, prevBlockHeader.Hash(), mock.Anything).
-		Return([]*model.BlockHeader{prevBlockHeader}, []*model.BlockHeaderMeta{{ID: 0, Height: 0}}, nil).Once()
+		Return([]*model.BlockHeader{prevBlockHeader}, []*model.BlockHeaderMeta{{ID: 0, Height: 0}}, nil).Maybe()
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil).Maybe()
 	mockBlockchain.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil).Maybe()
 
@@ -573,8 +590,10 @@ func TestValidateBlock_PoWCheckedBeforeSubtreeValidation(t *testing.T) {
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, prevBlockHeader.Hash(), mock.Anything).
 		Return(expectedNBits, nil).Maybe()
 
-	// storeInvalidBlock persists the failed block
-	mockBlockchain.On("AddBlock", mock.Anything, block, "", mock.Anything).Return(nil).Once()
+	// Registered only so an unexpected write surfaces as a failed assertion below rather than as a
+	// mock panic: a header that does not meet its own declared target is a FINAL verdict on a body
+	// nothing has bound to the header, so no record is written at all (bitcoin-sv/teranode#4844).
+	mockBlockchain.On("AddBlock", mock.Anything, block, "", mock.Anything).Return(nil).Maybe()
 
 	prevBlock := &model.Block{
 		Header:     prevBlockHeader,
@@ -602,6 +621,9 @@ func TestValidateBlock_PoWCheckedBeforeSubtreeValidation(t *testing.T) {
 
 	// The PoW check short-circuits ahead of the expected-nBits lookup.
 	mockBlockchain.AssertNotCalled(t, "GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything)
+
+	// Nothing is persisted for a header-only verdict (bitcoin-sv/teranode#4844).
+	mockBlockchain.AssertNotCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	mockBlockchain.AssertExpectations(t)
 }
