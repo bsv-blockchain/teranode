@@ -239,4 +239,21 @@ func TestRedact_URLCredentialsDoNotSurviveJSONRoundTrip(t *testing.T) {
 	// The caller's settings are untouched: these are live values the store constructors use.
 	require.Contains(t, in.BlockChain.StoreURL.String(), marker,
 		"Redact works on a clone and must never mutate the input")
+
+	// URL.Opaque is an exported string too, so a credential in the undecomposable
+	// `scheme:opaque` form survives the JSON round-trip just as RawQuery does. It is the same
+	// fail-safe here as in the settings portal.
+	opaque, err := url.Parse("postgres:audit-user:" + marker + "@db.internal:5432/chain")
+	require.NoError(t, err)
+	require.NotEmpty(t, opaque.Opaque, "fixture precondition: the URL is opaque")
+
+	opaqueIn := &Settings{}
+	opaqueIn.BlockChain.StoreURL = opaque
+
+	opaqueOut, err := Redact(opaqueIn)
+	require.NoError(t, err)
+
+	opaqueData, err := json.Marshal(opaqueOut)
+	require.NoError(t, err)
+	require.NotContains(t, string(opaqueData), marker, "an opaque URL credential leaked into the settings dump")
 }

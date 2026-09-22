@@ -265,10 +265,18 @@ var credentialQueryKeys = []string{
 	"auth", "auth_key", "credential", "private_key", "access_key", "sas", "signature",
 }
 
+// redactedURLValue is the placeholder used INSIDE a redacted URL. It is deliberately not the
+// `********` used for ordinary tagged fields: url.URL.String() percent-encodes the userinfo, so
+// that placeholder renders as `%2A%2A%2A%2A%2A%2A%2A%2A` and defeats the only thing a placeholder
+// is for — telling the operator at a glance that a credential was removed
+// (bitcoin-sv/teranode#4844). This value survives URL encoding unchanged in every position it is
+// used: userinfo, query value and opaque component.
+const redactedURLValue = "REDACTED"
+
 // redactURL returns a display copy of u with embedded credentials removed: the userinfo password
-// and any credential-bearing query parameter are replaced by the standard placeholder. Scheme,
-// user name, host, port, path and non-credential query parameters are preserved, because
-// operators need to see which backend a node points at (bitcoin-sv/teranode#4844).
+// and any credential-bearing query parameter are replaced by the placeholder. Scheme, user name,
+// host, port, path and non-credential query parameters are preserved, because operators need to see
+// which backend a node points at (bitcoin-sv/teranode#4844).
 //
 // The name-based redact tag cannot see these: nothing in the key `blockchain_store` looks like a
 // secret, yet its documented production syntax is postgres://user:pass@host/db. Doing it
@@ -283,9 +291,25 @@ func redactURL(u *url.URL) *url.URL {
 
 	c := *u
 
+	// An OPAQUE URL is one net/url could not decompose: `scheme:opaque`, with no `//` authority.
+	// Everything after the scheme lands in one uninterpreted string, so User is nil, Host is empty,
+	// and the structural redaction below has nothing to bite on — yet the opaque part can hold a
+	// credential verbatim, as in `postgres:user:password@host/db`. There is no safe way to pick the
+	// secret out of a form the standard parser itself declined to interpret, so fail safe and
+	// replace the whole component. The scheme is preserved, so an operator can still see which
+	// backend type the setting names and that something was removed
+	// (bitcoin-sv/teranode#4844).
+	if c.Opaque != "" {
+		c.Opaque = redactedURLValue
+		c.User = nil
+		c.RawQuery = redactRawQuery(c.RawQuery)
+
+		return &c
+	}
+
 	if c.User != nil {
 		if _, hasPassword := c.User.Password(); hasPassword {
-			c.User = url.UserPassword(c.User.Username(), redactedValue)
+			c.User = url.UserPassword(c.User.Username(), redactedURLValue)
 		}
 	}
 
@@ -305,7 +329,7 @@ func redactURL(u *url.URL) *url.URL {
 // So url.ParseQuery is used ONLY as a yes/no validity oracle, never as a data source, and anything
 // the standard parser rejects has its whole query replaced. That trades display fidelity for
 // safety on malformed input, deliberately: an operator who wrote a malformed query string sees
-// `?********` instead of their parameters, a cosmetic annoyance they can diagnose from the config
+// `?REDACTED` instead of their parameters, a cosmetic annoyance they can diagnose from the config
 // file - the alternative is printing their password into the settings portal. Do not "improve"
 // this back.
 //
@@ -318,7 +342,7 @@ func redactRawQuery(rawQuery string) string {
 	}
 
 	if _, err := url.ParseQuery(rawQuery); err != nil {
-		return redactedValue
+		return redactedURLValue
 	}
 
 	segments := strings.Split(rawQuery, "&")
@@ -343,7 +367,7 @@ func redactRawQuery(rawQuery string) string {
 			continue
 		}
 
-		segments[i] = rawKey + "=" + redactedValue
+		segments[i] = rawKey + "=" + redactedURLValue
 		changed = true
 	}
 

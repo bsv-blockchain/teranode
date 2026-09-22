@@ -13,13 +13,23 @@ import (
 // contain it (bitcoin-sv/teranode#4844).
 const auditSecretMarker = "audit-secret-marker"
 
-// populateEveryURLField walks a *Settings and sets every *url.URL and url.URL field to a URL
-// carrying the marker in BOTH credential positions - the userinfo password and a `password=`
-// query parameter. Returns how many fields were populated.
+// hierarchicalCredentialURL carries the marker in BOTH credential positions of an ordinary
+// authority-form URL - the userinfo password and a `password=` query parameter.
+const hierarchicalCredentialURL = "scheme://audit-user:" + auditSecretMarker +
+	"@db.internal:5432/chain?password=" + auditSecretMarker + "&partitions=4"
+
+// opaqueCredentialURL is the shape net/url declines to decompose: no `//` authority, so everything
+// after the scheme lands in URL.Opaque and User, Host and Path are all empty. The credential is
+// still right there in the text, and the structural redaction has nothing to bite on.
+const opaqueCredentialURL = "postgres:audit-user:" + auditSecretMarker + "@db.internal:5432/chain"
+
+// populateEveryURLField walks a *Settings and sets every *url.URL and url.URL field to the given
+// URL. Returns how many fields were populated.
 //
 // The count matters: without it a walker bug makes the caller's "no marker anywhere" assertion
-// pass while proving nothing at all.
-func populateEveryURLField(t *testing.T, s *Settings) int {
+// pass while proving nothing at all. Taking the URL as a parameter matters for the same reason:
+// sweeping every field with one SHAPE cannot detect a shape the redactor mishandles.
+func populateEveryURLField(t *testing.T, s *Settings, rawURL string) int {
 	t.Helper()
 
 	populated := 0
@@ -38,7 +48,7 @@ func populateEveryURLField(t *testing.T, s *Settings) int {
 					return
 				}
 
-				u, err := url.Parse("scheme://audit-user:" + auditSecretMarker + "@db.internal:5432/chain?password=" + auditSecretMarker + "&partitions=4")
+				u, err := url.Parse(rawURL)
 				require.NoError(t, err)
 
 				v.Set(reflect.ValueOf(u))
@@ -62,7 +72,7 @@ func populateEveryURLField(t *testing.T, s *Settings) int {
 					return
 				}
 
-				u, err := url.Parse("scheme://audit-user:" + auditSecretMarker + "@db.internal:5432/chain?password=" + auditSecretMarker + "&partitions=4")
+				u, err := url.Parse(rawURL)
 				require.NoError(t, err)
 
 				v.Set(reflect.ValueOf(*u))
@@ -90,30 +100,89 @@ func populateEveryURLField(t *testing.T, s *Settings) int {
 // in the one formatter every URL setting goes through, so it covers all of them and every one added
 // later, rather than only the fields someone remembered to tag.
 func TestExportMetadata_RedactsCredentialsInEveryURLSetting(t *testing.T) {
-	s := NewSettings()
+	t.Run("authority form", func(t *testing.T) {
+		s := NewSettings()
 
-	populated := populateEveryURLField(t, s)
-	require.GreaterOrEqual(t, populated, 25,
-		"the walker must actually have set the URL fields, or this test proves nothing")
+		populated := populateEveryURLField(t, s, hierarchicalCredentialURL)
+		require.GreaterOrEqual(t, populated, 25,
+			"the walker must actually have set the URL fields, or this test proves nothing")
 
-	registry := s.ExportMetadata()
-	require.NotNil(t, registry)
+		registry := s.ExportMetadata()
+		require.NotNil(t, registry)
 
-	byKey := map[string]SettingMetadata{}
+		byKey := map[string]SettingMetadata{}
 
-	for _, setting := range registry.Settings {
-		require.NotContains(t, setting.CurrentValue, auditSecretMarker,
-			"setting %s leaked a credential", setting.Key)
-		byKey[setting.Key] = setting
-	}
+		for _, setting := range registry.Settings {
+			require.NotContains(t, setting.CurrentValue, auditSecretMarker,
+				"setting %s leaked a credential", setting.Key)
+			byKey[setting.Key] = setting
+		}
 
-	// Redaction is surgical: operators still need to see which backend a node points at.
-	store, ok := byKey["blockchain_store"]
-	require.True(t, ok, "blockchain_store must be exported")
-	require.Contains(t, store.CurrentValue, "audit-user", "the user NAME is not a secret and stays visible")
-	require.Contains(t, store.CurrentValue, "db.internal:5432")
-	require.Contains(t, store.CurrentValue, "/chain")
-	require.Contains(t, store.CurrentValue, "partitions=4", "non-credential query parameters are preserved")
+		// Redaction is surgical: operators still need to see which backend a node points at.
+		store, ok := byKey["blockchain_store"]
+		require.True(t, ok, "blockchain_store must be exported")
+		require.Contains(t, store.CurrentValue, "audit-user", "the user NAME is not a secret and stays visible")
+		require.Contains(t, store.CurrentValue, "db.internal:5432")
+		require.Contains(t, store.CurrentValue, "/chain")
+		require.Contains(t, store.CurrentValue, "partitions=4", "non-credential query parameters are preserved")
+	})
+
+	t.Run("opaque form", func(t *testing.T) {
+		// The same sweep over the shape net/url declines to decompose. Running the walk with one
+		// URL shape is what let this case through the first time: every field was populated, every
+		// field was checked, and the shape the redactor could not see was never presented to it.
+		s := NewSettings()
+
+		populated := populateEveryURLField(t, s, opaqueCredentialURL)
+		require.GreaterOrEqual(t, populated, 25,
+			"the walker must actually have set the URL fields, or this test proves nothing")
+
+		registry := s.ExportMetadata()
+		require.NotNil(t, registry)
+
+		for _, setting := range registry.Settings {
+			require.NotContains(t, setting.CurrentValue, auditSecretMarker,
+				"setting %s leaked a credential carried in an opaque URL", setting.Key)
+		}
+	})
+}
+
+// TestRedactURL_OpaqueURLFailsSafe covers the shape the structural redaction cannot decompose
+// (bitcoin-sv/teranode#4844).
+//
+// `postgres:user:password@host/db` has no `//` authority, so net/url puts everything after the
+// scheme into URL.Opaque and leaves User, Host, Path and RawQuery empty. The userinfo and
+// query-parameter rules therefore have nothing to bite on, and String() renders the credential back
+// verbatim. There is no safe way to pick the secret out of a form the standard parser itself
+// declined to interpret, so the whole component is replaced.
+func TestRedactURL_OpaqueURLFailsSafe(t *testing.T) {
+	u, err := url.Parse(opaqueCredentialURL)
+	require.NoError(t, err)
+
+	// Fixture preconditions: this really is the undecomposable shape, not an authority URL in
+	// disguise. If net/url ever starts decomposing it, this test should say the premise moved
+	// rather than pass for the wrong reason.
+	require.NotEmpty(t, u.Opaque, "fixture precondition: the URL is opaque")
+	require.Nil(t, u.User, "fixture precondition: there is no userinfo to redact")
+	require.Empty(t, u.Host, "fixture precondition: there is no host to redact")
+	require.Contains(t, u.String(), auditSecretMarker, "fixture precondition: the raw form leaks")
+
+	redacted := redactURL(u)
+	require.NotContains(t, redacted.String(), auditSecretMarker)
+	require.Equal(t, redactedURLValue, redacted.Opaque, "the fail-safe must have fired")
+	require.Equal(t, "postgres:"+redactedURLValue, redacted.String(),
+		"the scheme stays visible so an operator can still see which backend was named")
+
+	require.Equal(t, opaqueCredentialURL, u.String(), "the caller's URL must never be mutated")
+
+	// An opaque URL can also carry a query, and that half is still redacted surgically.
+	withQuery, err := url.Parse("postgres:host/db?password=" + auditSecretMarker + "&partitions=4")
+	require.NoError(t, err)
+	require.NotEmpty(t, withQuery.Opaque)
+
+	redactedWithQuery := redactURL(withQuery)
+	require.NotContains(t, redactedWithQuery.String(), auditSecretMarker)
+	require.Equal(t, "password="+redactedURLValue+"&partitions=4", redactedWithQuery.RawQuery)
 }
 
 // TestExportMetadata_BlockchainStorePasswordRedacted reproduces the audit's settings-export proof
@@ -139,11 +208,11 @@ func TestExportMetadata_BlockchainStorePasswordRedacted(t *testing.T) {
 	require.True(t, ok)
 	require.NotContains(t, store.CurrentValue, auditSecretMarker,
 		"the datastore password must not survive into the exported metadata")
-	// url.URL.String() percent-encodes the userinfo, so the placeholder is rendered escaped there.
-	// Asserted as the escaped form rather than papered over, so the displayed value is pinned.
-	require.Contains(t, store.CurrentValue, url.PathEscape(redactedValue))
-	require.Contains(t, store.CurrentValue, "audit-user", "the user name is not a secret and stays visible")
-	require.Contains(t, store.CurrentValue, "db.internal:5432")
+	// The placeholder inside a URL is deliberately URL-safe: url.URL.String() percent-encodes the
+	// userinfo, so `********` would render as `%2A%2A%2A%2A%2A%2A%2A%2A` and tell the operator
+	// nothing. Pin the readable form.
+	require.Equal(t, "postgres://audit-user:"+redactedURLValue+"@db.internal:5432/chain", store.CurrentValue)
+	require.NotContains(t, store.CurrentValue, "%2A", "the placeholder must survive URL encoding unchanged")
 
 	adminKey, ok := byKey["grpc_admin_api_key"]
 	require.True(t, ok)
@@ -171,7 +240,7 @@ func TestRedactURL_MalformedQueryFailsSafe(t *testing.T) {
 
 				redacted := redactURL(u)
 				require.NotContains(t, redacted.String(), auditSecretMarker)
-				require.Equal(t, redactedValue, redacted.RawQuery, "the fail-safe must have fired")
+				require.Equal(t, redactedURLValue, redacted.RawQuery, "the fail-safe must have fired")
 
 				require.Equal(t, rawQuery, u.RawQuery, "the caller's URL must never be mutated")
 			})
@@ -187,12 +256,12 @@ func TestRedactURL_MalformedQueryFailsSafe(t *testing.T) {
 			{
 				name:     "credential and non-credential",
 				rawQuery: "password=" + auditSecretMarker + "&partitions=4",
-				want:     "password=" + redactedValue + "&partitions=4",
+				want:     "password=" + redactedURLValue + "&partitions=4",
 			},
 			{
 				name:     "repeated key: both values redacted",
 				rawQuery: "password=&password=" + auditSecretMarker,
-				want:     "password=" + redactedValue + "&password=" + redactedValue,
+				want:     "password=" + redactedURLValue + "&password=" + redactedURLValue,
 			},
 			{
 				name:     "no credential key: preserved byte-for-byte, no reordering",
