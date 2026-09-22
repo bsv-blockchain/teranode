@@ -41,13 +41,16 @@ type Options struct {
 	// Set on every spend performed while validating a block, and on no other spend — the
 	// policy freeze takes effect the moment an alert is processed and therefore lands at a
 	// different moment on every node, which must never decide whether a block is valid.
+	// The validator rejects it unless InBlock is also set.
 	// See issue #1422 and utxo.WithIgnorePolicyFreeze.
 	IgnorePolicyFreeze bool
 
 	// IgnoreConsensusFreeze drops the consensus tier of the alert system's freeze as
 	// well, so no freeze rejects the spend. Only legitimate for a block at or below the
 	// highest hardcoded checkpoint — canonical by definition, so no alert may
-	// retroactively invalidate it — and the validator rejects it anywhere else.
+	// retroactively invalidate it — and the validator rejects it anywhere else: it
+	// requires InBlock and SkipScriptValidation, and both the asserted height and the
+	// node's own tip must be at or below the checkpoint.
 	// See issue #1422 and utxo.WithIgnoreConsensusFreeze.
 	IgnoreConsensusFreeze bool
 

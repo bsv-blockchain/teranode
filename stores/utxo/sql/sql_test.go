@@ -3771,3 +3771,82 @@ func TestGetBlockPlacementFieldsIndependently(t *testing.T) {
 		require.Equal(t, []int{3}, data.SubtreeIdxs)
 	})
 }
+
+// TestGetFreezeRecordFieldsOnBothReadPaths pins that the alert system's per-output
+// freeze-record fields are served by the batched read as well as the direct one, and
+// that the public Get carries them whichever path it takes (issue #1422).
+//
+// It matters because block validation asks for them on the read it already makes for
+// every out-of-block parent (model.getParentTxMetaBlockIDs: BlockIDs plus the three
+// freeze fields). settings.conf sets utxostore_getBatcherSize = 4096, so that read
+// travels the batched path; a freeze field that forced the unbatched path would turn
+// one bulk query per batch into separate transaction, block-ID and freeze queries per
+// parent, on the hottest read in block validation.
+func TestGetFreezeRecordFieldsOnBothReadPaths(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	utxoStore, tx := setup(ctx, t)
+
+	_, err := utxoStore.Create(ctx, tx, 0)
+	require.NoError(t, err)
+
+	utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
+	require.NoError(t, err)
+
+	record := []*utxo.Spend{{
+		TxID: tx.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash,
+		FreezeFrom: 500, FreezeUntil: 600, FreezePolicyExpires: true,
+	}}
+	require.NoError(t, utxoStore.FreezeUTXOs(ctx, record, utxoStore.settings))
+
+	want := map[uint32]meta.FreezeRecord{0: {From: 500, Until: 600, PolicyExpires: true}}
+
+	freezeFields := []fields.FieldName{fields.UtxoFreezeFrom, fields.UtxoFreezeUntil, fields.UtxoFreezeExp}
+
+	// Both paths are called directly so the field selection is pinned whatever the
+	// batcher is configured to do, as TestGetBlockPlacementFieldsIndependently does.
+	for _, field := range freezeFields {
+		t.Run("unbatched read with only "+field.String(), func(t *testing.T) {
+			data, err := utxoStore.getUnbatched(ctx, tx.TxIDChainHash(), []fields.FieldName{field})
+			require.NoError(t, err)
+			require.Equal(t, want, data.FreezeRecords)
+		})
+
+		t.Run("batched read with only "+field.String(), func(t *testing.T) {
+			items := []*utxo.UnresolvedMetaData{{Hash: *tx.TxIDChainHash(), Idx: 0}}
+
+			require.NoError(t, utxoStore.BatchDecorate(ctx, items, field))
+			require.NoError(t, items[0].Err)
+			require.NotNil(t, items[0].Data)
+			require.Equal(t, want, items[0].Data.FreezeRecords)
+		})
+	}
+
+	t.Run("block validation's parent read shape on the batched path", func(t *testing.T) {
+		items := []*utxo.UnresolvedMetaData{{Hash: *tx.TxIDChainHash(), Idx: 0}}
+
+		require.NoError(t, utxoStore.BatchDecorate(ctx, items, fields.BlockIDs, fields.UtxoFreezeFrom, fields.UtxoFreezeUntil, fields.UtxoFreezeExp))
+		require.NoError(t, items[0].Err)
+		require.Equal(t, want, items[0].Data.FreezeRecords)
+	})
+
+	t.Run("public Get carries the record", func(t *testing.T) {
+		data, err := utxoStore.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs, fields.UtxoFreezeFrom, fields.UtxoFreezeUntil, fields.UtxoFreezeExp)
+		require.NoError(t, err)
+		require.Equal(t, want, data.FreezeRecords)
+	})
+
+	t.Run("after an unfreeze neither path reports a record", func(t *testing.T) {
+		require.NoError(t, utxoStore.UnFreezeUTXOs(ctx, record, utxoStore.settings))
+
+		data, err := utxoStore.getUnbatched(ctx, tx.TxIDChainHash(), freezeFields)
+		require.NoError(t, err)
+		require.Empty(t, data.FreezeRecords)
+
+		items := []*utxo.UnresolvedMetaData{{Hash: *tx.TxIDChainHash(), Idx: 0}}
+		require.NoError(t, utxoStore.BatchDecorate(ctx, items, freezeFields...))
+		require.NoError(t, items[0].Err)
+		require.Empty(t, items[0].Data.FreezeRecords)
+	})
+}

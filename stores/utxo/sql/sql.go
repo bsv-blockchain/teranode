@@ -1459,15 +1459,13 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.
 func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.FieldName) (*meta.Data, error) {
 	prometheusUtxoGet.Inc()
 
-	// Use batcher for the common validator path (BlockIDs, BlockHeights, Tx, Inputs, Outputs).
+	// Use batcher for the common validator path (BlockIDs, BlockHeights, Tx, Inputs, Outputs)
+	// and for block validation's parent read, which adds the freeze-record fields to it:
+	// that read runs once per out-of-block parent of every block, so it must stay on the
+	// batched path rather than turn into separate queries per parent (issue #1422).
 	// Fall back to unbatched for fields that BatchDecorate doesn't support
 	// (ConflictingChildren, Utxos) to avoid missing data.
-	// The freeze-record fields are per-output data the batched get does not carry; they
-	// take the direct path below like the other per-output fields. Only block validation's
-	// out-of-block parent read asks for them.
-	needsFreezeRecords := contains(bins, fields.UtxoFreezeFrom) || contains(bins, fields.UtxoFreezeUntil) || contains(bins, fields.UtxoFreezeExp)
-
-	if s.getBatcher != nil && !contains(bins, fields.ConflictingChildren) && !contains(bins, fields.Utxos) && !needsFreezeRecords {
+	if s.getBatcher != nil && !contains(bins, fields.ConflictingChildren) && !contains(bins, fields.Utxos) {
 		return s.getBatched(ctx, hash, bins)
 	}
 
@@ -1777,10 +1775,10 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 		}
 	}
 
-	if contains(bins, fields.UtxoFreezeFrom) || contains(bins, fields.UtxoFreezeUntil) || contains(bins, fields.UtxoFreezeExp) {
+	if needsFreezeRecordsQuery(bins) {
 		// The freeze record per output, for block validation's out-of-block parent
 		// check (issue #1422). Only rows that carry a record are returned, so an
-		// unfrozen transaction costs nothing here.
+		// unfrozen transaction costs nothing here. Mirrored by batchDecorateFreezeRecords.
 		q := `
 			SELECT o.idx, o.frozen, o.freezeFrom, o.freezeUntil, o.freezePolicyExpires
 			FROM transactions as t, outputs as o
@@ -1860,6 +1858,16 @@ func needsBlockIDsQuery(bins []fields.FieldName) bool {
 	return contains(bins, fields.BlockIDs) ||
 		contains(bins, fields.BlockHeights) ||
 		contains(bins, fields.SubtreeIdxs)
+}
+
+// needsFreezeRecordsQuery reports whether any of the alert system's per-output
+// freeze-record fields was requested. All three come from one query over the outputs
+// table, so asking for any of them has to run it. Both read paths call this so the
+// grouping is stated once rather than copied.
+func needsFreezeRecordsQuery(bins []fields.FieldName) bool {
+	return contains(bins, fields.UtxoFreezeFrom) ||
+		contains(bins, fields.UtxoFreezeUntil) ||
+		contains(bins, fields.UtxoFreezeExp)
 }
 
 // parseInsertedAtMillis converts the inserted_at column value into Unix
@@ -3889,6 +3897,7 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 	needInputs := contains(bins, fields.Tx) || contains(bins, fields.Inputs) || contains(bins, fields.TxInpoints) || contains(bins, fields.Utxos)
 	needOutputs := contains(bins, fields.Tx) || contains(bins, fields.Outputs) || contains(bins, fields.Utxos)
 	needBlockIDs := needsBlockIDsQuery(bins)
+	needFreezeRecords := needsFreezeRecordsQuery(bins)
 
 	// Query 2: Bulk fetch inputs
 	if needInputs {
@@ -3907,6 +3916,13 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 	// Query 4: Bulk fetch block_ids
 	if needBlockIDs {
 		if err := s.batchDecorateBlockIDs(ctx, ids, idToTx); err != nil {
+			return err
+		}
+	}
+
+	// Query 5: Bulk fetch the alert system's freeze records
+	if needFreezeRecords {
+		if err := s.batchDecorateFreezeRecords(ctx, ids, idToTx); err != nil {
 			return err
 		}
 	}
@@ -4092,6 +4108,59 @@ func (s *Store) batchDecorateBlockIDs(ctx context.Context, ids []int, idToTx map
 	}
 
 	return nil
+}
+
+// batchDecorateFreezeRecords bulk-fetches the alert system's per-output freeze records
+// for multiple transactions, for block validation's out-of-block parent check (issue
+// #1422). Only rows that carry a record are returned, so an unfrozen transaction costs
+// nothing beyond the query itself. Mirrors the per-transaction read in getUnbatched: a
+// frozen output with no window reads as the (0, 0) record, enforced at every height.
+func (s *Store) batchDecorateFreezeRecords(ctx context.Context, ids []int, idToTx map[int]*batchDecorateTxRow) error {
+	idPlaceholders := make([]string, len(ids))
+	idArgs := make([]interface{}, len(ids))
+	for i, id := range ids {
+		idPlaceholders[i] = fmt.Sprintf("$%d", i+1)
+		idArgs[i] = id
+	}
+	inClause := "(" + strings.Join(idPlaceholders, ",") + ")"
+
+	q := `SELECT transaction_id, idx, freezeFrom, freezeUntil, freezePolicyExpires FROM outputs WHERE transaction_id IN ` + inClause + ` AND (frozen OR freezeFrom IS NOT NULL)`
+
+	rows, err := s.db.QueryContext(ctx, q, idArgs...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			txID                int
+			idx                 uint32
+			freezeFrom          *uint32
+			freezeUntil         *uint32
+			freezePolicyExpires *bool
+		)
+		if err := rows.Scan(&txID, &idx, &freezeFrom, &freezeUntil, &freezePolicyExpires); err != nil {
+			return err
+		}
+
+		row := idToTx[txID]
+		if row == nil {
+			continue
+		}
+
+		if row.data.FreezeRecords == nil {
+			row.data.FreezeRecords = make(map[uint32]meta.FreezeRecord)
+		}
+
+		row.data.FreezeRecords[idx] = meta.FreezeRecord{
+			From:          nullableHeight(freezeFrom),
+			Until:         nullableHeight(freezeUntil),
+			PolicyExpires: nullableBool(freezePolicyExpires),
+		}
+	}
+
+	return rows.Err()
 }
 
 // PreviousOutputsDecorate fetches output information for transaction inputs.

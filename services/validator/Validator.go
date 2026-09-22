@@ -942,6 +942,20 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, err
 	}
 
+	// Both alert-system freeze bypasses describe a spend made while validating a block, and
+	// no other spend: the policy tier is lifted precisely because the moment this node
+	// processed the alert must not decide a block's validity, and the consensus tier only
+	// for a block a checkpoint already proves canonical. Every producer sets InBlock
+	// alongside them (subtree validation, legacy block sync); a request carrying either
+	// without it would admit a coin this node has frozen into block assembly, so it is
+	// rejected before any store access (issue #1422).
+	if (validationOptions.IgnorePolicyFreeze || validationOptions.IgnoreConsensusFreeze) && !validationOptions.InBlock {
+		err = errors.NewProcessingError("[Validate][%s] IgnorePolicyFreeze and IgnoreConsensusFreeze require InBlock", txID)
+		span.RecordError(err)
+
+		return nil, err
+	}
+
 	// IgnoreConsensusFreeze lifts the alert system's consensus tier, which is only ever
 	// legitimate for a block a hardcoded checkpoint already proves canonical; gate it the
 	// way OutpointOnlySpend is gated so no other caller can reach it (issue #1422).
@@ -954,6 +968,17 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 	if validationOptions.IgnoreConsensusFreeze && blockHeight > blockchain.HighestCheckpointHeight(v.settings.ChainCfgParams.Checkpoints) {
 		err = errors.NewProcessingError("[Validate][%s] IgnoreConsensusFreeze must not be used above the highest checkpoint (height %d)", txID, blockHeight)
+		span.RecordError(err)
+
+		return nil, err
+	}
+
+	// The same tip-derived bound OutpointOnlySpend carries above, for the same reason: the
+	// caller-asserted height is the attacker's lever. Its only producer, legacy block sync's
+	// below-checkpoint path, validates block H while the tip is still below H, so a
+	// legitimate request never sees a tip past the checkpoint (issue 4840, finding B-022).
+	if validationOptions.IgnoreConsensusFreeze && blockState.Height > blockchain.HighestCheckpointHeight(v.settings.ChainCfgParams.Checkpoints) {
+		err = errors.NewProcessingError("[Validate][%s] IgnoreConsensusFreeze must not be used once the node's chain tip is past the highest checkpoint (tip height %d)", txID, blockState.Height)
 		span.RecordError(err)
 
 		return nil, err

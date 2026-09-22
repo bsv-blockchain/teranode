@@ -79,7 +79,12 @@ import (
 // same extra record could otherwise remove a marker that record still needs.
 //
 // A transaction the store does not hold is skipped, matching the UDF's silent
-// TX_NOT_FOUND on the freeze itself.
+// TX_NOT_FOUND on the freeze itself — and so is an extra record the store does not hold,
+// checked before its marker is written: readFreezeRecords treats a marker as authoritative
+// and fails the read when the record it names is missing, so a marker left behind by a
+// freeze the UDF then rejected would poison every later parent read block validation makes
+// of this transaction. A record that exists but on which the UDF declines the freeze (a
+// stale hash, say) keeps its marker and costs one wasted read, which is the price above.
 func (s *Store) markFreezeExtraRecords(spends []*utxo.Spend, tSettings *settings.Settings) error {
 	marks := make(map[chainhash.Hash][]int)
 
@@ -98,6 +103,7 @@ func (s *Store) markFreezeExtraRecords(spends []*utxo.Spend, tSettings *settings
 
 	writePolicy := util.GetAerospikeWritePolicy(tSettings, 0)
 	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+	readPolicy := util.GetAerospikeReadPolicy(tSettings)
 
 	for txID, recordNums := range marks {
 		txID := txID
@@ -109,7 +115,20 @@ func (s *Store) markFreezeExtraRecords(spends []*utxo.Spend, tSettings *settings
 
 		ops := make([]*aerospike.Operation, 0, len(recordNums))
 		for _, recordNum := range recordNums {
+			present, err := s.extraRecordExists(readPolicy, &txID, recordNum)
+			if err != nil {
+				return err
+			}
+
+			if !present {
+				continue
+			}
+
 			ops = append(ops, aerospike.MapPutOp(aerospike.DefaultMapPolicy(), fields.UtxoFreezeRecs.String(), recordNum, 1))
+		}
+
+		if len(ops) == 0 {
+			continue
 		}
 
 		if _, err = s.client.Operate(writePolicy, mainKey, ops...); err != nil {
@@ -122,6 +141,27 @@ func (s *Store) markFreezeExtraRecords(spends []*utxo.Spend, tSettings *settings
 	}
 
 	return nil
+}
+
+// extraRecordExists reports whether extra (pagination) record recordNum of txID is in the
+// store. It asks for one small bin rather than the record — the freeze-from map, absent or
+// tiny on every record — so the check never pays for a record's utxos list.
+func (s *Store) extraRecordExists(policy *aerospike.BasePolicy, txID *chainhash.Hash, recordNum int) (bool, error) {
+	key, err := aerospike.NewKey(s.namespace, s.setName, uaerospike.CalculateKeySourceInternal(txID, uint32(recordNum))) // nolint:gosec
+	if err != nil {
+		return false, errors.NewProcessingError("[freeze] failed to create key for extra record %d of %s", recordNum, txID.String(), err)
+	}
+
+	record, err := s.client.Get(policy, key, fields.UtxoFreezeFrom.String())
+	if err != nil {
+		if isKeyNotFound(err) {
+			return false, nil
+		}
+
+		return false, errors.NewStorageError("[freeze] failed to read extra record %d of %s", recordNum, txID.String(), err)
+	}
+
+	return record != nil, nil
 }
 
 // luaMsgFreezeRecordedOnSpent is the message the freeze UDF returns, with STATUS_OK, when

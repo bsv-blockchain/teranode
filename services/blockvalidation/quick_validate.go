@@ -1673,6 +1673,15 @@ func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.
 		backoff = spendRetryBackoffDefault
 	}
 
+	// The consensus tier of an alert-system freeze is bypassed only for a block a HARDCODED
+	// checkpoint proves canonical (#1422). Quick validation also runs above that height under
+	// the catchup-checkpoint override (see the I4 note in createAndSpendUTXOsForBatch), and
+	// there a spend inside a freeze window is the verdict every node derives from the chain:
+	// enforced by the store and recorded below as block-invalid, never bypassed. Nil chain
+	// params fail closed, via the shared model.BelowCheckpoint boundary.
+	ignoreConsensusFreeze := u.settings.ChainCfgParams != nil &&
+		model.BelowCheckpoint(u.settings.ChainCfgParams.Checkpoints, block.Height)
+
 	pending := txs
 	total := len(txs)
 
@@ -1699,13 +1708,14 @@ func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.
 		for _, tx := range pending {
 			tx := tx
 			spendG.Go(func() error {
-				// Both tiers of an alert-system freeze are bypassed here (#1422): the policy
-				// tier because it lands whenever the alert reached this node and must never
-				// decide a block's validity, and the consensus tier because this is the
-				// below-checkpoint path — a checkpointed block is canonical by definition,
-				// and no alert may retroactively invalidate it or wedge a node catching up.
+				// The policy tier of an alert-system freeze is always bypassed here (#1422): it
+				// lands whenever the alert reached this node and must never decide a block's
+				// validity. The consensus tier is bypassed only at or below the hardcoded
+				// checkpoint (ignoreConsensusFreeze above) — a checkpointed block is canonical
+				// by definition, and no alert may retroactively invalidate it or wedge a node
+				// catching up.
 				if _, _, err := u.utxoStore.SpendAndCreate(spendCtx, tx, block.Height, utxo.WithSpendOnly(),
-					utxo.WithIgnoreLocked(true), utxo.WithIgnorePolicyFreeze(true), utxo.WithIgnoreConsensusFreeze(true),
+					utxo.WithIgnoreLocked(true), utxo.WithIgnorePolicyFreeze(true), utxo.WithIgnoreConsensusFreeze(ignoreConsensusFreeze),
 					utxo.WithSkipUTXOHashCheck(outpointOnly)); err != nil {
 					if errors.IsRetryableError(err) {
 						mu.Lock()
@@ -1722,9 +1732,9 @@ func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.
 					// re-validate loop issue #1422 removes.
 					var candidate error
 					if errors.Is(err, errors.ErrUtxoConsensusFrozen) {
-						// Cannot occur while the spend above carries IgnoreConsensusFreeze;
-						// kept because if it ever does surface it is a verdict every node
-						// derives identically and must be recorded as one.
+						// Reachable above the hardcoded checkpoint, where the spend above
+						// enforces the consensus tier: a verdict every node derives identically
+						// from the chain, recorded as one rather than retried.
 						candidate = errors.NewBlockInvalidError("[spendBatchWithRetry][%s] tx %s spends a consensus-frozen utxo at block height %d", block.Hash().String(), tx.TxIDChainHash().String(), block.Height, err)
 					} else {
 						candidate = errors.NewProcessingError("[spendBatchWithRetry][%s] failed to spend tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)

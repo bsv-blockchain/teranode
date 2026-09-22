@@ -9,6 +9,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -29,6 +30,12 @@ type spendRetrySpyStore struct {
 	failuresLeft map[chainhash.Hash]int
 	failErr      map[chainhash.Hash]error
 	spendCalls   atomic.Int64
+	// consensusFrozen[txid]: the spend is rejected with ErrUtxoConsensusFrozen unless the
+	// call carries IgnoreConsensusFreeze — the store's behaviour for a coin whose freeze
+	// window covers blockHeight.
+	consensusFrozen map[chainhash.Hash]bool
+	// lastIgnoreConsensusFreeze records the flag the most recent spend-phase call carried.
+	lastIgnoreConsensusFreeze atomic.Bool
 }
 
 func (s *spendRetrySpyStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
@@ -42,9 +49,13 @@ func (s *spendRetrySpyStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, bloc
 	}
 
 	s.spendCalls.Add(1)
+	s.lastIgnoreConsensusFreeze.Store(options.IgnoreFlags.IgnoreConsensusFreeze)
 	h := *tx.TxIDChainHash()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.consensusFrozen[h] && !options.IgnoreFlags.IgnoreConsensusFreeze {
+		return nil, nil, errors.NewUtxoConsensusFrozenError("utxo is consensus-frozen at height %d", blockHeight)
+	}
 	if n, ok := s.failuresLeft[h]; ok && n > 0 {
 		s.failuresLeft[h] = n - 1
 		return nil, nil, s.failErr[h]
@@ -75,6 +86,56 @@ func newSpendRetryHarness(t *testing.T, spy *spendRetrySpyStore) (*BlockValidati
 	block := &model.Block{Height: 100, Header: model.GenesisBlockHeader}
 
 	return u, block, txs
+}
+
+// TestSpendBatchWithRetry_ConsensusFreezeBypassIsCheckpointBound pins that the consensus
+// tier of an alert-system freeze is lifted only for a block at or below the highest
+// HARDCODED checkpoint. Quick validation also runs above that height under the
+// catchup-checkpoint override, and there a spend inside a freeze window must be the
+// block-invalid verdict every node derives — not bypassed, and not retried (#1422).
+func TestSpendBatchWithRetry_ConsensusFreezeBypassIsCheckpointBound(t *testing.T) {
+	const checkpointHeight = 100
+
+	t.Run("at or below the checkpoint the bypass is carried and the spend succeeds", func(t *testing.T) {
+		spy := &spendRetrySpyStore{failuresLeft: map[chainhash.Hash]int{}, failErr: map[chainhash.Hash]error{}, consensusFrozen: map[chainhash.Hash]bool{}}
+		u, block, txs := newSpendRetryHarness(t, spy)
+		u.settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: checkpointHeight}}
+		block.Height = checkpointHeight
+
+		spy.consensusFrozen[*txs[1].TxIDChainHash()] = true
+
+		require.NoError(t, u.spendBatchWithRetry(context.Background(), block, txs, false))
+		require.True(t, spy.lastIgnoreConsensusFreeze.Load(), "a checkpointed block's spends must carry IgnoreConsensusFreeze")
+		require.Equal(t, int64(3), spy.spendCalls.Load())
+	})
+
+	t.Run("above the checkpoint the window is enforced and the block is invalid", func(t *testing.T) {
+		spy := &spendRetrySpyStore{failuresLeft: map[chainhash.Hash]int{}, failErr: map[chainhash.Hash]error{}, consensusFrozen: map[chainhash.Hash]bool{}}
+		u, block, txs := newSpendRetryHarness(t, spy)
+		u.settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: checkpointHeight}}
+		block.Height = checkpointHeight + 1
+
+		spy.consensusFrozen[*txs[1].TxIDChainHash()] = true
+
+		err := u.spendBatchWithRetry(context.Background(), block, txs, false)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid), "a consensus-frozen spend above the checkpoint is a block-invalid verdict, got %v", err)
+		require.False(t, spy.lastIgnoreConsensusFreeze.Load(), "a block above the checkpoint must not carry IgnoreConsensusFreeze")
+		require.Equal(t, int64(3), spy.spendCalls.Load(), "a consensus verdict is never retried")
+	})
+
+	t.Run("no checkpoints configured fails closed: the window is enforced", func(t *testing.T) {
+		spy := &spendRetrySpyStore{failuresLeft: map[chainhash.Hash]int{}, failErr: map[chainhash.Hash]error{}, consensusFrozen: map[chainhash.Hash]bool{}}
+		u, block, txs := newSpendRetryHarness(t, spy)
+		u.settings.ChainCfgParams.Checkpoints = nil
+
+		spy.consensusFrozen[*txs[0].TxIDChainHash()] = true
+
+		err := u.spendBatchWithRetry(context.Background(), block, txs, false)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid), "got %v", err)
+		require.False(t, spy.lastIgnoreConsensusFreeze.Load())
+	})
 }
 
 func TestSpendBatchWithRetry(t *testing.T) {

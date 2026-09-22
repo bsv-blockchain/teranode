@@ -15,7 +15,7 @@ import (
 // it here too, or the new code goes unswept.
 var allLuaErrorCodes = []LuaErrorCode{
 	LuaErrorCodeTxNotFound, LuaErrorCodeConflicting, LuaErrorCodeLocked,
-	LuaErrorCodeCreating, LuaErrorCodeFrozen, LuaErrorCodeAlreadyFrozen,
+	LuaErrorCodeCreating, LuaErrorCodeFrozen, LuaErrorCodeConsensusFrozen, LuaErrorCodeAlreadyFrozen,
 	LuaErrorCodeFrozenUntil, LuaErrorCodeCoinbaseImmature, LuaErrorCodeSpent,
 	LuaErrorCodeInvalidSpend, LuaErrorCodeUtxosNotFound, LuaErrorCodeUtxoNotFound,
 	LuaErrorCodeUtxoInvalidSize, LuaErrorCodeUtxoHashMismatch,

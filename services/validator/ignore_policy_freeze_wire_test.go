@@ -4,18 +4,21 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/services/validator/validator_api"
-	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
 
 // TestIgnorePolicyFreeze_WireRoundTrip pins the client-build → wire →
-// server-reconstruction path for ignore_policy_freeze (field 15) on both transports.
+// server-reconstruction path for ignore_policy_freeze (field 15) over gRPC.
 //
 // The flag marks a block-context spend, on which only the height-anchored consensus
-// tier of an alert-system freeze may reject. A silent drop on either transport would
-// make a remote validator enforce the wall-clock policy tier during block validation
-// and reintroduce the fleet split issue #1422 removes — so true AND false must survive.
+// tier of an alert-system freeze may reject. A silent drop would make a remote
+// validator enforce the wall-clock policy tier during block validation and
+// reintroduce the fleet split issue #1422 removes — so true AND false must survive.
+//
+// gRPC is the only transport: the /tx HTTP endpoint carries transaction bytes only
+// and refuses a body that sets this field (http_trust_flags_test.go), so there is no
+// HTTP round trip to pin.
 func TestIgnorePolicyFreeze_WireRoundTrip(t *testing.T) {
 	t.Run("true survives gRPC build, marshal, and reconstruction", func(t *testing.T) {
 		opts := ProcessOptions(WithIgnorePolicyFreeze(true))
@@ -58,28 +61,5 @@ func TestIgnorePolicyFreeze_WireRoundTrip(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.False(t, reconstructed.IgnorePolicyFreeze)
-	})
-
-	t.Run("true survives the HTTP fallback query string", func(t *testing.T) {
-		q := buildValidateTxHTTPQuery(&Options{IgnorePolicyFreeze: true}, 500000)
-
-		e := echo.New()
-		ctx, err := echoRequestWithQuery(e, q.Encode())
-		require.NoError(t, err)
-
-		_, opts := extractValidationParams(ctx)
-		require.True(t, opts.IgnorePolicyFreeze, "IgnorePolicyFreeze must survive HTTP fallback round-trip")
-	})
-
-	t.Run("false is not emitted on the HTTP fallback query string", func(t *testing.T) {
-		q := buildValidateTxHTTPQuery(&Options{}, 500000)
-		require.Empty(t, q.Get("ignorePolicyFreeze"))
-
-		e := echo.New()
-		ctx, err := echoRequestWithQuery(e, q.Encode())
-		require.NoError(t, err)
-
-		_, opts := extractValidationParams(ctx)
-		require.False(t, opts.IgnorePolicyFreeze)
 	})
 }
