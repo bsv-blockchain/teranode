@@ -38,9 +38,12 @@ func TestServerOperations(t *testing.T) {
 	serverStoreURL, err := url.Parse(fmt.Sprintf("file://%s?testId=%d", tempDir, time.Now().UnixNano()))
 	require.NoError(t, err)
 
+	const serverAuthToken = "server-operations-token"
+
 	blobServer, err := NewHTTPBlobServer(
 		logger,
 		serverStoreURL,
+		serverAuthToken,
 		options.WithDefaultSubDirectory("sub"),
 	)
 	require.NoError(t, err)
@@ -59,7 +62,7 @@ func TestServerOperations(t *testing.T) {
 	clientStoreURL, err := url.Parse("http://localhost:7979")
 	require.NoError(t, err)
 
-	client, err := blobhttp.New(logger, clientStoreURL)
+	client, err := blobhttp.New(logger, clientStoreURL, options.WithHTTPAuthToken(serverAuthToken))
 	require.NoError(t, err)
 
 	t.Run("SetAndGet", func(t *testing.T) {
@@ -337,7 +340,9 @@ func newFileBackedFakeStore(t *testing.T, payload []byte) *fileBackedFakeStore {
 
 	storeURL, err := url.Parse("file://" + dir)
 	require.NoError(t, err)
-	srv, err := NewHTTPBlobServer(ulogger.New("rangereq"), storeURL)
+	// No token: this fixture only serves GETs, so a read-only server is also a check
+	// that reads are unaffected by the mutation gate.
+	srv, err := NewHTTPBlobServer(ulogger.New("rangereq"), storeURL, "")
 	require.NoError(t, err)
 	_ = srv // just used for the store construction
 

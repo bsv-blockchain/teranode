@@ -148,17 +148,18 @@ func walkSensitiveCheck(t reflect.Type, missing *[]string) {
 // guard against accidentally removing the tag from a sensitive field.
 func TestSensitiveKeysDerivedMatchesExpected(t *testing.T) {
 	expected := map[string]bool{
-		"rpc_pass":                    true,
-		"rpc_limit_pass":              true,
-		"p2p_private_key":             true,
-		"coinbase_p2p_private_key":    true,
-		"alert_p2p_private_key":       true,
-		"coinbase_wallet_private_key": true,
-		"miner_wallet_private_keys":   true,
-		"coinbaseDB":                  true,
-		"coinbaseDBUserPwd":           true,
-		"slack_token":                 true,
-		"grpc_admin_api_key":          true,
+		"rpc_pass":                     true,
+		"rpc_limit_pass":               true,
+		"p2p_private_key":              true,
+		"coinbase_p2p_private_key":     true,
+		"alert_p2p_private_key":        true,
+		"coinbase_wallet_private_key":  true,
+		"miner_wallet_private_keys":    true,
+		"coinbaseDB":                   true,
+		"coinbaseDBUserPwd":            true,
+		"slack_token":                  true,
+		"grpc_admin_api_key":           true,
+		"blockpersister_httpAuthToken": true,
 	}
 
 	got := extractSensitiveKeys()

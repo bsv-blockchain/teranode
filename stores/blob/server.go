@@ -16,14 +16,15 @@
 // provides a RESTful API that follows standard HTTP conventions:
 //   - GET /blob/{key}.{fileType} - Retrieve a blob
 //   - HEAD /blob/{key}.{fileType} - Check if a blob exists
-//   - POST /blob/{key}.{fileType} - Store a new blob
-//   - PATCH /blob/{key}.{fileType} - Update blob's Delete-At-Height value
-//   - DELETE /blob/{key}.{fileType} - Delete a blob
+//   - POST /blob/{key}.{fileType} - Store a new blob (requires Authorization: Bearer)
+//   - PATCH /blob/{key}.{fileType} - Update blob's Delete-At-Height value (requires Authorization: Bearer)
+//   - DELETE /blob/{key}.{fileType} - Delete a blob (requires Authorization: Bearer)
 //   - GET /health - Health check endpoint
 package blob
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -61,26 +62,32 @@ type HTTPBlobServer struct {
 	store Store
 	// logger provides structured logging for server operations
 	logger ulogger.Logger
+	// authToken is the shared secret a caller must present to mutate the store. Empty
+	// means this server is read-only: POST, PATCH and DELETE are refused outright.
+	authToken string
 }
 
 // NewHTTPBlobServer creates a new HTTP blob server instance.
 // Parameters:
 //   - logger: Logger instance for server operations
 //   - storeURL: URL containing the store configuration
+//   - authToken: Shared secret callers must present to POST, PATCH or DELETE a blob.
+//     Empty makes the server read-only.
 //   - opts: Optional store configuration options
 //
 // Returns:
 //   - *HTTPBlobServer: The configured server instance
 //   - error: Any error that occurred during creation
-func NewHTTPBlobServer(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (*HTTPBlobServer, error) {
+func NewHTTPBlobServer(logger ulogger.Logger, storeURL *url.URL, authToken string, opts ...options.StoreOption) (*HTTPBlobServer, error) {
 	store, err := NewStore(logger, storeURL, opts...)
 	if err != nil {
 		return nil, err
 	}
 
 	return &HTTPBlobServer{
-		store:  store,
-		logger: logger,
+		store:     store,
+		logger:    logger,
+		authToken: authToken,
 	}, nil
 }
 
@@ -128,6 +135,8 @@ func (s *HTTPBlobServer) Start(ctx context.Context, addr string) error {
 // - PATCH /blob/{key}.{fileType}: Update blob's Delete-At-Height value
 // - DELETE /blob/{key}.{fileType}: Delete a blob
 //
+// POST, PATCH and DELETE change the store, so they require an authenticated caller.
+//
 // Parameters:
 //   - w: HTTP response writer for sending the response
 //   - r: HTTP request containing the client's request details
@@ -135,6 +144,16 @@ func (s *HTTPBlobServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/health" {
 		s.handleHealth(w, r)
 		return
+	}
+
+	switch r.Method {
+	case http.MethodPost, http.MethodPatch, http.MethodDelete:
+		if !s.authorizeMutation(r) {
+			s.logger.Warnf("[HTTPBlobServer] refused unauthenticated %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+
+			return
+		}
 	}
 
 	opts := options.QueryToFileOptions(r.URL.Query())
@@ -153,6 +172,31 @@ func (s *HTTPBlobServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// authorizeMutation reports whether a request may change the store. With no token
+// configured the server is read-only - a blob server reachable on the network with no
+// shared secret must not accept writes at all. Comparison is constant-time.
+//
+// The token is presented in the clear: this endpoint is plain HTTP. It stops a caller
+// that cannot see our traffic, which is the case this guards against; it is not a
+// defence against anything on the path. Keep the listener on loopback or a trusted segment.
+func (s *HTTPBlobServer) authorizeMutation(r *http.Request) bool {
+	if s.authToken == "" {
+		return false
+	}
+
+	const prefix = "Bearer "
+
+	header := r.Header.Get("Authorization")
+	if !strings.HasPrefix(header, prefix) {
+		return false
+	}
+
+	presented := []byte(strings.TrimPrefix(header, prefix))
+	expected := []byte(s.authToken)
+
+	return len(presented) == len(expected) && subtle.ConstantTimeCompare(presented, expected) == 1
 }
 
 // setCurrentBlockHeight removed - DAH cleanup now handled by pruner service

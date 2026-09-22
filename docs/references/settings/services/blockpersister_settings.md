@@ -9,7 +9,8 @@ Settings are organized under the `BlockPersister` struct in `settings.Settings`.
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
 | Store | *url.URL | "file://./data/blockstore" | blockpersister_store | **CRITICAL** - Block data storage location |
-| HTTPListenAddress | string | ":8083" | blockpersister_httpListenAddress | HTTP server for blob store access |
+| HTTPListenAddress | string | "127.0.0.1:8083" | blockpersister_httpListenAddress | HTTP server for blob store access |
+| HTTPAuthToken | string | "" | blockpersister_httpAuthToken | **CRITICAL** - bearer token required for blob HTTP writes; unset means read-only |
 | Concurrency | int | 8 | blockpersister_concurrency | **CRITICAL** - Parallel subtree processing, reduced by half in all-in-one mode |
 | SkipUTXODelete | bool | false | blockpersister_skipUTXODelete | Skip UTXO deletion processing |
 | PersistSleep | time.Duration | 10s | blockpersister_persistSleep | Sleep duration when no blocks available or after errors |
@@ -28,6 +29,13 @@ Settings are organized under the `BlockPersister` struct in `settings.Settings`.
 
 - When `HTTPListenAddress` is not empty, HTTP server starts
 - Requires valid `Block.BlockStore` URL or returns configuration error
+- The blob API it exposes requires `Authorization: Bearer <HTTPAuthToken>` on POST, PATCH and
+  DELETE. With `HTTPAuthToken` unset the API serves GET and HEAD only and refuses every
+  mutating request with 401
+- The endpoint is plain HTTP with no TLS, so the token crosses the wire in the clear. It
+  binds to loopback by default for that reason; publish it only on a trusted segment
+- Clients configure the same value with `blob_httpAuthToken`, never in the store URL — store
+  URLs are logged verbatim
 
 ### Concurrency Management
 
@@ -65,6 +73,7 @@ Settings are organized under the `BlockPersister` struct in `settings.Settings`.
 |---------|------------|-------|
 | Block.BlockStore | Required when HTTP server enabled | "blockstore setting error" |
 | Store | Must be valid URL format | Store creation failure |
+| HTTPAuthToken | Required for any blob write over HTTP; unset leaves the API read-only | HTTP 401 Unauthorized |
 
 ## Configuration Examples
 
@@ -85,8 +94,13 @@ blockvalidation_processTxMetaUsingStore_BatchSize=2048
 ### HTTP Server Configuration
 
 ```bash
-blockpersister_httpListenAddress=:8083
+blockpersister_httpListenAddress=127.0.0.1:8083
 blockstore=file://./data/blockstore
+
+# Required for writes. Set this in settings_local.conf or the environment, never in the
+# committed settings.conf, and configure the same value on the client side.
+blockpersister_httpAuthToken=<shared-secret>
+blob_httpAuthToken=<shared-secret>
 ```
 
 ### Disable UTXO File Processing
@@ -96,6 +110,13 @@ blockpersister_processUTXOFiles=false
 ```
 
 ## Migration Notes
+
+### Listen Address Default
+
+`blockpersister_httpListenAddress` now defaults to `127.0.0.1:8083` instead of `:8083`. The
+endpoint is plain HTTP and its blob API accepts writes, so it no longer binds every interface
+by default. A deployment that reaches this endpoint from another host must set the address
+explicitly.
 
 ### Settings Reorganization
 
