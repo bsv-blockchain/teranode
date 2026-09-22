@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -269,7 +270,14 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 		u.logger.Infof("[BlockPersister] HTTP server listening on %s", address)
 
-		blobStoreServer, err := blob.NewHTTPBlobServer(u.logger, blockStoreURL, options.WithHashPrefix(hashPrefix))
+		authToken := u.settings.BlockPersister.HTTPAuthToken
+		if authToken == "" {
+			u.logger.Warnf("[BlockPersister] HTTP blob API is read-only: blockpersister_httpAuthToken is not set")
+		} else if !strings.HasPrefix(blockPersisterHTTPListenAddress, "127.0.0.1:") && !strings.HasPrefix(blockPersisterHTTPListenAddress, "localhost:") && !strings.HasPrefix(blockPersisterHTTPListenAddress, "[::1]:") {
+			u.logger.Warnf("[BlockPersister] HTTP blob API listens on %s with no TLS: the auth token crosses the network in the clear", blockPersisterHTTPListenAddress)
+		}
+
+		blobStoreServer, err := blob.NewHTTPBlobServer(u.logger, blockStoreURL, authToken, options.WithHashPrefix(hashPrefix))
 		if err != nil {
 			return errors.NewServiceError("failed to create blob store server", err)
 		}

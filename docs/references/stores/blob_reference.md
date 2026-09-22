@@ -18,16 +18,19 @@ type HTTPBlobServer struct {
     store Store
     // logger provides structured logging for server operations
     logger ulogger.Logger
+    // authToken is the shared secret a caller must present to mutate the store
+    authToken string
 }
 ```
 
 #### Constructor
 
 ```go
-func NewHTTPBlobServer(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (*HTTPBlobServer, error)
+func NewHTTPBlobServer(logger ulogger.Logger, storeURL *url.URL, authToken string, opts ...options.StoreOption) (*HTTPBlobServer, error)
 ```
 
-Creates a new `HTTPBlobServer` instance with the provided logger and store URL.
+Creates a new `HTTPBlobServer` instance with the provided logger, store URL and shared secret.
+An empty `authToken` leaves the server read-only: every mutating request is refused with 401.
 
 #### Methods
 
@@ -152,6 +155,10 @@ The service exposes the following HTTP endpoints:
 - `DELETE /blob/{key}.{fileType}`: Delete a blob.
 
 Note: `{key}` is a base64-encoded blob identifier and `{fileType}` is the file extension corresponding to the blob type.
+
+`POST`, `PATCH` and `DELETE` change the store, so they require an `Authorization: Bearer <token>`
+header matching the server's configured shared secret. With no secret configured the server is
+read-only and refuses all three with 401. `GET`, `HEAD` and `/health` need no credential.
 
 ## Key Features
 
