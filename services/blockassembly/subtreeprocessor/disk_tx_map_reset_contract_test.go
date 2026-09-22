@@ -139,7 +139,7 @@ func TestResetSubtreeState_DiskTxMap_ReorgKeepsCapturedMapReadable(t *testing.T)
 	// the anchor rollback restores, so it is pinned rather than retired — a
 	// retired map can be closed at any commit point, and this one cannot be
 	// until the reorg's outcome is known.
-	require.Same(t, originalCurrentTxMap, stp.diskTxMapAnchor,
+	requireSameMap(t, originalCurrentTxMap, stp.diskTxMapAnchor,
 		"the map rollback restores must be pinned as the reorg anchor")
 	require.Empty(t, stp.diskTxMapRetired, "the anchor must not be retired mid-reorg")
 
@@ -149,7 +149,7 @@ func TestResetSubtreeState_DiskTxMap_ReorgKeepsCapturedMapReadable(t *testing.T)
 
 	stp.closeRetiredDiskTxMaps()
 	require.Empty(t, stp.diskTxMapRetired)
-	require.Same(t, originalCurrentTxMap, stp.diskTxMapAnchor,
+	requireSameMap(t, originalCurrentTxMap, stp.diskTxMapAnchor,
 		"closing the retired maps must not take the anchor with them")
 }
 
@@ -242,7 +242,7 @@ func TestReorgBlocks_DiskTxMap_ClosesEveryMapButTheSurvivor(t *testing.T) {
 
 	stp.finishReorgDiskTxMaps()
 
-	require.Same(t, anchor, stp.diskTxMap, "the survivor must become the active map")
+	requireSameMap(t, anchor, stp.diskTxMap, "the survivor must become the active map")
 	require.Equal(t, 2, liveDiskTxMapGenerations(t, dir),
 		"a rolled-back reorg must leave only the surviving map and its shadow: "+
 			"every map the loop allocated owns Badger directories that only Close() removes")
@@ -266,7 +266,7 @@ func TestReorgBlocks_DiskTxMap_ClosesAnchorOnSuccess(t *testing.T) {
 
 	stp.finishReorgDiskTxMaps()
 
-	require.Same(t, surviving, stp.diskTxMap)
+	requireSameMap(t, surviving, stp.diskTxMap)
 	require.Equal(t, 2, liveDiskTxMapGenerations(t, dir),
 		"a committed reorg must close the pre-reorg anchor along with the intermediates")
 }

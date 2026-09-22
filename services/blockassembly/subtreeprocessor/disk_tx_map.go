@@ -314,13 +314,45 @@ func (m *DiskTxMap) Set(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints) {
 }
 
 // Clear removes all entries and recreates filters and stores.
+// Clear is all-or-nothing: either every disk shard rotates onto a fresh Badger
+// generation and the filters reset with it, or nothing changes at all.
+//
+// A partial clear is silently corrupting rather than merely stale. Get reads
+// straight from the store without consulting the cuckoo filter, so fresh
+// filters over a store that still holds the previous generation's keys answer
+// lookups that should miss with the old inpoints, while count reports an empty
+// map. Callers that need an empty map must therefore check Length() afterwards
+// rather than assume this succeeded — resetSubtreeState does, and fails the
+// block instead of installing a half that is still populated.
 func (m *DiskTxMap) Clear() {
 	m.flushAllDisks()
+
+	// Build every replacement before touching a single shard, so a failure
+	// part-way through leaves nothing half-rotated.
+	replacements := make([]*tempstore.BadgerTempStore, len(m.disks))
+
+	for i := range m.disks {
+		store, err := tempstore.New(tempstore.Options{
+			BasePath:   m.disks[i].path,
+			Prefix:     m.disks[i].prefix,
+			SyncWrites: false,
+		})
+		if err != nil {
+			for _, created := range replacements[:i] {
+				_ = created.Close()
+			}
+
+			return
+		}
+
+		replacements[i] = store
+	}
 
 	perShard := m.capacity / numFilterShards
 	if perShard < 1024 {
 		perShard = 1024
 	}
+
 	for i := range m.shards {
 		m.shards[i].mu.Lock()
 		m.shards[i].filter = cuckoo.NewFilter(uint(perShard))
@@ -331,22 +363,9 @@ func (m *DiskTxMap) Clear() {
 	for i := range m.disks {
 		d := &m.disks[i]
 		d.batch.Cancel()
-		oldStore := d.store
-
-		store, err := tempstore.New(tempstore.Options{
-			BasePath:   d.path,
-			Prefix:     d.prefix,
-			SyncWrites: false,
-		})
-		if err != nil {
-			// Keep old store to avoid nil-pointer panics on subsequent operations
-			d.batch = oldStore.NewWriteBatch()
-			continue
-		}
-
-		_ = oldStore.Close()
-		d.store = store
-		d.batch = store.NewWriteBatch()
+		_ = d.store.Close()
+		d.store = replacements[i]
+		d.batch = replacements[i].NewWriteBatch()
 	}
 
 	m.count.Store(0)
