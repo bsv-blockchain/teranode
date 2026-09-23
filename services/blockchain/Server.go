@@ -16,7 +16,6 @@
 package blockchain
 
 import (
-	"container/ring"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -3362,62 +3361,93 @@ func getBlockLocatorByWalk(ctx context.Context, store blockchain_store.Store, st
 	return locator, nil
 }
 
+// getBlockHeadersToCommonAncestor returns up to maxHeaders headers on hashTarget's
+// chain ending at the newest block the locator and that chain share, ordered from the
+// highest height down to that common ancestor.
+//
+// It resolves the ancestor with a single indexed lookup rather than walking. The
+// previous implementation read the chain backwards in 1,000-header pages until a
+// locator hash turned up, so a locator matching nothing (which any unauthenticated
+// caller of the asset service's /headers_to_common_ancestor route can send) cost work
+// proportional to chain height: around 900 store reads and 900k headers materialised at
+// present mainnet height, for a response of at most maxHeaders
+// (bitcoin-sv/teranode#4894). This shape costs at most four reads whatever the distance.
+//
+// GetLatestBlockHeaderFromBlockLocator picks the highest-height locator entry on
+// hashTarget's chain, which is the same block the backward walk stopped at, since the
+// walk stopped at the first locator hash it met coming down from the target. The
+// sibling getBlockHeadersFromCommonAncestor already resolves its ancestor this way.
 func getBlockHeadersToCommonAncestor(ctx context.Context, store blockchain_store.Store, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	const (
-		numberOfHeaders = 1_000
-		searchLimit     = 10_000
-	)
-
-	var (
-		commonAncestorMeta *model.BlockHeaderMeta
-	)
-
-	blockLocatorMap := make(map[chainhash.Hash]struct{}, len(blockLocatorHashes))
-	for _, hash := range blockLocatorHashes {
-		blockLocatorMap[*hash] = struct{}{}
+	if maxHeaders == 0 || len(blockLocatorHashes) == 0 {
+		return nil, nil, errors.NewNotFoundError("common ancestor hash not found")
 	}
 
-	max := int(maxHeaders)
+	locator := make([]chainhash.Hash, len(blockLocatorHashes))
+	for i, hash := range blockLocatorHashes {
+		locator[i] = *hash
+	}
+
+	// A locator entry that is not on this chain, or no entry at all, is a not-found
+	// answer rather than a storage fault: it is what an unrelated or absent locator
+	// looks like, and the walk this replaces reported it the same way.
+	_, ancestorMeta, err := store.GetLatestBlockHeaderFromBlockLocator(ctx, hashTarget, locator)
+	if err != nil {
+		if errors.Is(err, errors.ErrNotFound) || errors.Is(err, errors.ErrBlockNotFound) {
+			return nil, nil, errors.NewNotFoundError("common ancestor hash not found")
+		}
+
+		return nil, nil, errors.NewStorageError("failed to get common ancestor from block locator", err)
+	}
+
+	_, targetMeta, err := store.GetBlockHeader(ctx, hashTarget)
+	if err != nil {
+		if errors.Is(err, errors.ErrNotFound) || errors.Is(err, errors.ErrBlockNotFound) {
+			return nil, nil, errors.NewNotFoundError("common ancestor hash not found")
+		}
+
+		return nil, nil, errors.NewStorageError("failed to get target block header", err)
+	}
+
+	if targetMeta.Height < ancestorMeta.Height {
+		// The ancestor must sit at or below the target on the same chain, so this means
+		// the two disagree about the chain. Report it as not found rather than serving
+		// headers from somewhere else.
+		return nil, nil, errors.NewNotFoundError("common ancestor hash not found")
+	}
+
+	// Inclusive of both ends: the walk pushed the target and the ancestor into its ring.
+	distance := uint64(targetMeta.Height-ancestorMeta.Height) + 1
+
+	// Not the min builtin: a test file in this package declares its own int-typed min,
+	// which shadows it for the test build.
+	numHeaders := distance
+	if uint64(maxHeaders) < numHeaders {
+		numHeaders = uint64(maxHeaders)
+	}
+
+	// When the span is longer than the response, the walk's ring kept the headers
+	// closest to the ancestor and dropped the rest, so start from the block numHeaders-1
+	// above the ancestor instead of from the target.
 	hashStart := hashTarget
-	lastNHeaders := ring.New(max)
-	lastNMetas := ring.New(max)
 
-out:
-	for searchCount := 0; searchCount < searchLimit; searchCount++ {
-		headers, headerMetas, err := store.GetBlockHeaders(ctx, hashStart, numberOfHeaders)
+	if numHeaders < distance {
+		// nolint:gosec // numHeaders <= maxHeaders, a uint32, so the conversion is exact.
+		startHeight := ancestorMeta.Height + uint32(numHeaders) - 1
+
+		block, _, err := store.GetBlockInChainByHeightHash(ctx, startHeight, hashTarget)
 		if err != nil {
-			return nil, nil, errors.NewStorageError("failed to get block headers", err)
+			return nil, nil, errors.NewStorageError("failed to get block at height %d on the target chain", startHeight, err)
 		}
 
-		if len(headers) <= 1 {
-			break
-		}
-
-		for idx, header := range headers {
-			lastNHeaders.Value = header
-			lastNHeaders = lastNHeaders.Next()
-			lastNMetas.Value = headerMetas[idx]
-			lastNMetas = lastNMetas.Next()
-
-			if _, ok := blockLocatorMap[*header.Hash()]; ok {
-				commonAncestorMeta = headerMetas[idx]
-				break out
-			}
-		}
-
-		// start over with the next 100 block headers
-		// to find the common ancestor
-		hashStart = headers[len(headers)-1].HashPrevBlock
+		hashStart = block.Header.Hash()
 	}
 
-	if commonAncestorMeta == nil {
-		return nil, nil, errors.NewNotFoundError("common ancestor hash not found after scanning last %d headers", searchLimit*numberOfHeaders)
+	headers, headerMetas, err := store.GetBlockHeaders(ctx, hashStart, numHeaders)
+	if err != nil {
+		return nil, nil, errors.NewStorageError("failed to get block headers", err)
 	}
 
-	headerHistory := sliceFromRing[*model.BlockHeader](lastNHeaders)
-	headerMetaHistory := sliceFromRing[*model.BlockHeaderMeta](lastNMetas)
-
-	return headerHistory, headerMetaHistory, nil
+	return headers, headerMetas, nil
 }
 
 // GetBlockHeadersFromCommonAncestor retrieves block headers from a common ancestor.
@@ -3467,18 +3497,6 @@ func getBlockHeadersFromCommonAncestor(ctx context.Context, store blockchain_sto
 
 	// now get the headers from the common ancestor to the target hash
 	return store.GetBlockHeadersFromOldest(ctx, chainTipHash, commonBlockHeader.Hash(), uint64(maxHeaders)) // golint:nolint
-}
-
-func sliceFromRing[T any](ring *ring.Ring) []T {
-	slice := make([]T, 0, ring.Len())
-
-	ring.Do(func(value interface{}) {
-		if value != nil {
-			slice = append(slice, value.(T))
-		}
-	})
-
-	return slice
 }
 
 // SetBlockProcessedAt sets or clears the processed_at timestamp for a block.
