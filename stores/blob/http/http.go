@@ -230,7 +230,7 @@ func (s *HTTPStore) GetIoReader(ctx context.Context, key []byte, fileType filefo
 
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, errors.NewStorageError(fmt.Sprintf("[HTTPStore] GetIoReader failed with status code %d", resp.StatusCode), nil)
+		return nil, errors.NewStorageError("[HTTPStore] GetIoReader failed with status code %d", resp.StatusCode)
 	}
 
 	return resp.Body, nil
@@ -314,7 +314,7 @@ func (s *HTTPStore) SetFromReader(ctx context.Context, key []byte, fileType file
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return errors.NewStorageError(fmt.Sprintf("[HTTPStore] SetFromReader failed with status code %d", resp.StatusCode), nil)
+		return errors.NewStorageError("[HTTPStore] SetFromReader failed with status code %d", resp.StatusCode)
 	}
 
 	return nil
@@ -355,7 +355,7 @@ func (s *HTTPStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return errors.NewStorageError(fmt.Sprintf("[HTTPStore] SetTTL failed with status code %d", resp.StatusCode), nil)
+		return errors.NewStorageError("[HTTPStore] SetTTL failed with status code %d", resp.StatusCode)
 	}
 
 	return nil
@@ -399,7 +399,7 @@ func (s *HTTPStore) Del(ctx context.Context, key []byte, fileType fileformat.Fil
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return errors.NewStorageError(fmt.Sprintf("[HTTPStore] Del failed with status code %d", resp.StatusCode), nil)
+		return errors.NewStorageError("[HTTPStore] Del failed with status code %d", resp.StatusCode)
 	}
 
 	return nil

@@ -19,9 +19,9 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -273,8 +273,8 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		authToken := u.settings.BlockPersister.HTTPAuthToken
 		if authToken == "" {
 			u.logger.Warnf("[BlockPersister] HTTP blob API is read-only: blockpersister_httpAuthToken is not set")
-		} else if !strings.HasPrefix(blockPersisterHTTPListenAddress, "127.0.0.1:") && !strings.HasPrefix(blockPersisterHTTPListenAddress, "localhost:") && !strings.HasPrefix(blockPersisterHTTPListenAddress, "[::1]:") {
-			u.logger.Warnf("[BlockPersister] HTTP blob API listens on %s with no TLS: the auth token crosses the network in the clear", blockPersisterHTTPListenAddress)
+		} else if !isLoopbackListener(listener) {
+			u.logger.Warnf("[BlockPersister] HTTP blob API listens on %s with no TLS: the auth token crosses the network in the clear", listener.Addr())
 		}
 
 		blobStoreServer, err := blob.NewHTTPBlobServer(u.logger, blockStoreURL, authToken, options.WithHashPrefix(hashPrefix))
@@ -458,4 +458,13 @@ func (u *Server) Stop(_ context.Context) error {
 	// flushing store, Kafka producer, or batcher that would need draining here.
 	// If one is ever added, drain it in this method (see DC11/DC15).
 	return nil
+}
+
+// isLoopbackListener reports whether a listener is bound to a loopback address. It looks at the
+// address actually bound rather than the configured string, so "localhost:" or a hostname that
+// resolves to loopback is recognised, and an unspecified address such as ":8083" is not.
+func isLoopbackListener(listener net.Listener) bool {
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+
+	return ok && tcpAddr.IP.IsLoopback()
 }

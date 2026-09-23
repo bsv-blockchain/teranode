@@ -19,6 +19,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"sort"
 	"sync"
@@ -465,14 +466,28 @@ func (us *UTXOSet) readDeltaHeader(r io.Reader, fileType fileformat.FileType) er
 	}
 
 	if !storedHash.IsEqual(&us.blockHash) {
-		return errors.NewStorageError("%s header names block %s but was opened for %s", fileType, storedHash.String(), us.blockHash.String())
+		return us.headerMismatch("%s header names block %s but was opened for %s", fileType, storedHash.String(), us.blockHash.String())
 	}
 
 	if storedHeight != us.blockHeight {
-		return errors.NewStorageError("%s header for %s names height %d but was opened at height %d", fileType, us.blockHash.String(), storedHeight, us.blockHeight)
+		return us.headerMismatch("%s header for %s names height %d but was opened at height %d", fileType, us.blockHash.String(), storedHeight, us.blockHeight)
 	}
 
 	return nil
+}
+
+// headerMismatch logs a persisted file whose header names a different block, then returns the
+// same condition as a storage error. The persister cannot advance past such a file, and the
+// caller's generic retry log would read as a transient fault, so this gets a distinct signal.
+// Read errors do not come here: those can be transient.
+func (us *UTXOSet) headerMismatch(format string, args ...interface{}) error {
+	msg := fmt.Sprintf(format, args...)
+
+	if us.logger != nil {
+		us.logger.Errorf("[UTXOPersister] integrity: %s - the file is corrupt or was replaced; processing cannot advance past this block until it is restored", msg)
+	}
+
+	return errors.NewStorageError(format, args...)
 }
 
 // GetUTXOAdditionsReader returns a reader for accessing UTXO additions.
@@ -730,7 +745,7 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 			return errors.NewStorageError("error reading previous utxo-set block hash", err)
 		}
 		if !storedCurrentBlockHash.IsEqual(c.firstPreviousBlockHash) {
-			return errors.NewStorageError("previous utxo-set block hash mismatch: want %s got %s",
+			return us.headerMismatch("previous utxo-set block hash mismatch: want %s got %s",
 				c.firstPreviousBlockHash.String(), storedCurrentBlockHash.String())
 		}
 
@@ -747,7 +762,7 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 			return errors.NewStorageError("error reading previous utxo-set block height", err)
 		}
 		if storedHeight != c.firstBlockHeight-1 {
-			return errors.NewStorageError("previous utxo-set height mismatch: want %d got %d for %s",
+			return us.headerMismatch("previous utxo-set height mismatch: want %d got %d for %s",
 				c.firstBlockHeight-1, storedHeight, c.firstPreviousBlockHash.String())
 		}
 
