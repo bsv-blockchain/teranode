@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"net/url"
 	"strings"
@@ -3434,7 +3433,7 @@ func TestQuickValidate_SubtreeDataSweep_ClassifiesLaterBodyFaults(t *testing.T) 
 		{
 			name: "non-storage error opening a body that exists fails closed",
 			setup: func(_ *preBindHarness, _ forgedBodiesFixture, store *sweepFaultStore) {
-				store.openErr = fmt.Errorf("simulated raw open failure")
+				store.openErr = errors.NewProcessingError("simulated non-storage open failure")
 			},
 			dataPresent:   true,
 			unquarantined: true,
