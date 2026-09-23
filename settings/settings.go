@@ -91,6 +91,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 		UsePrometheusGRPCMetrics:   getBool("use_prometheus_grpc_metrics", true, alternativeContext...),
 		GRPCEnableReflection:       getBool("grpc_enable_reflection", false, alternativeContext...),
 		GRPCAdminAPIKey:            strings.TrimSpace(getString("grpc_admin_api_key", "", alternativeContext...)),
+		BlobHTTPAuthToken:          getString("blob_httpAuthToken", "", alternativeContext...),
 		GlobalBlockHeightRetention: globalBlockHeightRetention,
 		BatcherDrainMode:           getBool("batcher_drainMode", false, alternativeContext...),
 		BatcherBackground:          getBool("batcher_background", true, alternativeContext...),

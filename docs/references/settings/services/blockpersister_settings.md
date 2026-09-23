@@ -118,6 +118,18 @@ endpoint is plain HTTP and its blob API accepts writes, so it no longer binds ev
 by default. A deployment that reaches this endpoint from another host must set the address
 explicitly.
 
+### Overwrite over the HTTP blob API
+
+`allowOverwrite` is neither sent by the HTTP blob client nor honoured by the blob server:
+whether an existing blob may be replaced is the receiving store's policy. A client write that
+requests overwrite fails with a configuration error before anything is sent, and a write to a
+key that already exists is returned as `ErrBlobAlreadyExists`.
+
+Consequence: the UTXO persister, and any other caller that replaces an existing blob (the
+`lastProcessed` marker, the set-hash sidecar, checkpoints, seed packages, subtree re-writes,
+the peer registry snapshot), cannot run against an `http://` blob store. Point it at the store
+directly.
+
 ### Settings Reorganization
 
 The Block Persister settings have been reorganized into a dedicated `BlockPersisterSettings` struct. The following environment variable names have changed:

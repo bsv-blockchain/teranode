@@ -160,6 +160,10 @@ Note: `{key}` is a base64-encoded blob identifier and `{fileType}` is the file e
 header matching the server's configured shared secret. With no secret configured the server is
 read-only and refuses all three with 401. `GET`, `HEAD` and `/health` need no credential.
 
+`POST` never replaces an existing blob: the server ignores any overwrite request and answers 409,
+which the HTTP client returns as `ErrBlobAlreadyExists`. A client write that asks for overwrite
+(`options.WithAllowOverwrite(true)`) fails with a configuration error before anything is sent.
+
 ## Key Features
 
 1. **Health Checks**: The service provides a health check endpoint.

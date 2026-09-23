@@ -623,3 +623,46 @@ type closeCountingReader struct {
 
 func (c *closeCountingReader) Read(p []byte) (int, error) { return c.r.Read(p) }
 func (c *closeCountingReader) Close() error               { c.closeCount++; return nil }
+
+// TestGetKeyFromPath_ShortPathsDoNotPanic pins the bound check: a dot before the end of the
+// "/blob/" prefix used to slice out of range.
+func TestGetKeyFromPath_ShortPathsDoNotPanic(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+		wantKey []byte
+	}{
+		{name: "dot at root", path: "/.tx", wantErr: true},
+		{name: "dot inside prefix", path: "/blob.tx", wantErr: true},
+		{name: "empty key", path: "/blob/.tx", wantKey: []byte{}},
+		{name: "prefix not at start", path: "/x/blob/abc.tx", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var (
+				key []byte
+				err error
+			)
+
+			require.NotPanics(t, func() { key, _, err = getKeyFromPath(tt.path) })
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tt.wantKey, key)
+		})
+	}
+}
+
+// TestHTTPBlobServer_ShortGetPathIsBadRequest drives the same path through the handler: GET is
+// unauthenticated, so this is reachable by anyone who can reach the listener.
+func TestHTTPBlobServer_ShortGetPathIsBadRequest(t *testing.T) {
+	server, _ := newAuthTestServer(t, "")
+
+	require.Equal(t, http.StatusBadRequest, doBlobRequest(t, server, http.MethodGet, "/.tx", "", nil))
+}

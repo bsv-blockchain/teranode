@@ -18,6 +18,25 @@
 | fsyncMode | string | full | File backend parameter | `full` fsyncs the temp file and then the parent directory after the rename. `data` skips the parent-directory fsync, so a freshly published filename can be lost across a crash while already-published content survives. `none` skips both |
 | header | string | "" | File backend parameter | Custom header prepended to blobs |
 
+## Settings
+
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| BlobHTTPAuthToken | string | "" | blob_httpAuthToken | Token the HTTP blob store client presents on POST, PATCH and DELETE; must match the server's `blockpersister_httpAuthToken` |
+
+### HTTP Client Token
+
+- A top-level `Settings` field, so stores built by the daemon and its services (tx, subtree,
+  temp, block, block-persister, pruner-resolved and Aerospike external stores) resolve it per
+  settings context and pass it with `options.WithHTTPAuthToken`
+- Standalone tools that do not pass the option fall back to reading `blob_httpAuthToken` in
+  the process settings context. A caller that builds its settings with an alternative context
+  must pass `options.WithHTTPAuthToken` itself
+- An explicit `options.WithHTTPAuthToken("")` sends no token and suppresses the fallback
+- Tagged `redact`, so it is masked in the startup settings dump
+- Never place it in a store URL: a URL carrying an `authToken` query parameter is rejected, as
+  store URLs are logged verbatim
+
 ## Configuration Dependencies
 
 ### Batch Processing

@@ -160,6 +160,7 @@ func TestSensitiveKeysDerivedMatchesExpected(t *testing.T) {
 		"slack_token":                  true,
 		"grpc_admin_api_key":           true,
 		"blockpersister_httpAuthToken": true,
+		"blob_httpAuthToken":           true,
 	}
 
 	got := extractSensitiveKeys()

@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -380,4 +381,61 @@ func TestHTTPStore_SendsTokenOnWritesOnly(t *testing.T) {
 	require.Equal(t, "Bearer "+token, seen[http.MethodDelete])
 	require.Empty(t, seen[http.MethodGet], "reads must not carry the credential")
 	require.Empty(t, seen[http.MethodHead], "reads must not carry the credential")
+}
+
+// TestHTTPStore_SetWithAllowOverwriteIsConfigurationError pins that an overwrite request fails
+// loudly before anything is sent, rather than being dropped on the way to a server that would
+// accept the first write and refuse every later one.
+func TestHTTPStore_SetWithAllowOverwriteIsConfigurationError(t *testing.T) {
+	var hits atomic.Int64
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer server.Close()
+
+	storeURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, storeURL, options.WithHTTPAuthToken("t"))
+	require.NoError(t, err)
+
+	err = store.Set(context.Background(), []byte("k"), fileformat.FileTypeTesting, []byte("v"), options.WithAllowOverwrite(true))
+	require.ErrorIs(t, err, errors.ErrConfiguration)
+	require.Zero(t, hits.Load(), "nothing must be sent for a write that cannot be honoured")
+}
+
+// TestHTTPStore_ConflictIsBlobAlreadyExists pins that a 409 is classifiable by callers.
+func TestHTTPStore_ConflictIsBlobAlreadyExists(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+	}))
+	defer server.Close()
+
+	storeURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, storeURL, options.WithHTTPAuthToken("t"))
+	require.NoError(t, err)
+
+	err = store.Set(context.Background(), []byte("k"), fileformat.FileTypeTesting, []byte("v"))
+	require.ErrorIs(t, err, errors.ErrBlobAlreadyExists)
+}
+
+// TestNew_ExplicitEmptyTokenSuppressesFallback pins that the blob_httpAuthToken fallback only
+// applies when no token option was given: an explicit option, even an empty one, wins.
+func TestNew_ExplicitEmptyTokenSuppressesFallback(t *testing.T) {
+	t.Setenv("blob_httpAuthToken", "leak")
+
+	storeURL, err := url.Parse("http://localhost:8080")
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, storeURL, options.WithHTTPAuthToken(""))
+	require.NoError(t, err)
+	require.Empty(t, store.authToken)
+
+	store, err = New(ulogger.TestLogger{}, storeURL)
+	require.NoError(t, err)
+	require.Equal(t, "leak", store.authToken)
 }

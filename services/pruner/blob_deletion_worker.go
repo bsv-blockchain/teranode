@@ -283,7 +283,8 @@ func (s *Server) getBlobStore(storeType storetypes.BlobStoreType) (blob.Store, e
 	}
 
 	// Create new store instance with hash prefix to match daemon store layout
-	store, err := blob.NewStore(s.logger, storeURL, bloboptions.WithHashPrefix(hashPrefix))
+	store, err := blob.NewStore(s.logger, storeURL, bloboptions.WithHashPrefix(hashPrefix),
+		bloboptions.WithHTTPAuthToken(s.settings.BlobHTTPAuthToken))
 	if err != nil {
 		return nil, errors.NewStorageError("failed to create blob store for %s", storeType.String(), err)
 	}

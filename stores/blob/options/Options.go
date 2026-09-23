@@ -61,6 +61,9 @@ type Options struct {
 	// HTTPAuthToken is the shared secret the HTTP blob store presents on mutating
 	// requests (StoreOption)
 	HTTPAuthToken string
+	// HTTPAuthTokenSet records that WithHTTPAuthToken was given, so an explicit empty token
+	// is distinguishable from no option at all (StoreOption)
+	HTTPAuthTokenSet bool
 }
 
 // StoreOption is a function type for configuring store-level options.
@@ -168,6 +171,7 @@ func WithStoreType(storeType storetypes.BlobStoreType) StoreOption {
 func WithHTTPAuthToken(token string) StoreOption {
 	return func(s *Options) {
 		s.HTTPAuthToken = token
+		s.HTTPAuthTokenSet = true
 	}
 }
 
@@ -319,7 +323,9 @@ func FileOptionsToQuery(fileType fileformat.FileType, opts ...FileOption) url.Va
 //
 // Overwrite is deliberately NOT reconstructed from the query. Whether an existing blob may be
 // replaced is the receiving store's policy, never the caller's - honouring it from a query string
-// let anyone who could reach this endpoint replace any object it holds. The "filename" key is
+// let anyone who could reach this endpoint replace any object it holds. The HTTP client refuses an
+// overwrite request with a configuration error rather than dropping it silently (see
+// HTTPStore.SetFromReader). The "filename" key is
 // still honoured; sanitising it is tracked separately in #4847.
 //
 // Parameters:

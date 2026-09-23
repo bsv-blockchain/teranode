@@ -429,7 +429,8 @@ func (d *Stores) GetTxStore(ctx context.Context, logger ulogger.Logger, appSetti
 	d.mainTxStore, err = blob.NewStore(logger, txStoreURL,
 		options.WithHashPrefix(hashPrefix),
 		options.WithBlobDeletionScheduler(blobDeletionScheduler),
-		options.WithStoreType(storetypes.TXSTORE))
+		options.WithStoreType(storetypes.TXSTORE),
+		options.WithHTTPAuthToken(appSettings.BlobHTTPAuthToken))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create tx store", err)
 	}
@@ -481,7 +482,8 @@ func (d *Stores) GetSubtreeStore(ctx context.Context, logger ulogger.Logger, app
 		options.WithHashPrefix(hashPrefix),
 		options.WithBlockHeightCh(ch),
 		options.WithBlobDeletionScheduler(blobDeletionScheduler),
-		options.WithStoreType(storetypes.SUBTREESTORE))
+		options.WithStoreType(storetypes.SUBTREESTORE),
+		options.WithHTTPAuthToken(appSettings.BlobHTTPAuthToken))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create subtree store", err)
 	}
@@ -553,7 +555,8 @@ func (d *Stores) GetTempStore(ctx context.Context, logger ulogger.Logger, appSet
 		options.WithHashPrefix(hashPrefix),
 		options.WithBlockHeightCh(ch),
 		options.WithBlobDeletionScheduler(blobDeletionScheduler),
-		options.WithStoreType(storetypes.TEMPSTORE))
+		options.WithStoreType(storetypes.TEMPSTORE),
+		options.WithHTTPAuthToken(appSettings.BlobHTTPAuthToken))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create temp_store", err)
 	}
@@ -606,7 +609,8 @@ func (d *Stores) GetBlockStore(ctx context.Context, logger ulogger.Logger, appSe
 		options.WithHashPrefix(hashPrefix),
 		options.WithBlockHeightCh(ch),
 		options.WithBlobDeletionScheduler(blobDeletionScheduler),
-		options.WithStoreType(storetypes.BLOCKSTORE))
+		options.WithStoreType(storetypes.BLOCKSTORE),
+		options.WithHTTPAuthToken(appSettings.BlobHTTPAuthToken))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create block store", err)
 	}
@@ -658,7 +662,8 @@ func (d *Stores) GetBlockPersisterStore(ctx context.Context, logger ulogger.Logg
 		options.WithHashPrefix(hashPrefix),
 		options.WithBlockHeightCh(ch),
 		options.WithBlobDeletionScheduler(blobDeletionScheduler),
-		options.WithStoreType(storetypes.BLOCKPERSISTERSTORE))
+		options.WithStoreType(storetypes.BLOCKPERSISTERSTORE),
+		options.WithHTTPAuthToken(appSettings.BlobHTTPAuthToken))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create block persister store", err)
 	}

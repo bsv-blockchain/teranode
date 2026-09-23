@@ -74,7 +74,10 @@ func refuseBlobRedirect(req *http.Request, _ []*http.Request) error {
 //   - opts: Optional store configuration options
 //
 // The shared secret the remote server requires on POST, PATCH and DELETE comes from
-// options.WithHTTPAuthToken, or from the blob_httpAuthToken setting when no option is given.
+// options.WithHTTPAuthToken - even an empty one - or, when that option is not given at all,
+// from the blob_httpAuthToken setting read in the process's own settings context. Stores the
+// daemon builds pass Settings.BlobHTTPAuthToken, so they resolve per context; a caller that
+// builds its settings with an alternative context must pass the option itself.
 // It must never be placed in storeURL: store URLs are logged verbatim.
 //
 // Returns:
@@ -90,9 +93,9 @@ func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) 
 	storeOpts := options.NewStoreOptions(opts...)
 
 	authToken := storeOpts.HTTPAuthToken
-	if authToken == "" {
-		// Same pattern as util/http.go, which reads http_timeout straight from gocore:
-		// it avoids threading a token through the blob.NewStore call sites that do not have one.
+	if !storeOpts.HTTPAuthTokenSet {
+		// Fallback for the standalone tools that build a store without passing the option. It
+		// reads the process context only, which is the context those tools build settings with.
 		authToken, _ = gocore.Config().Get("blob_httpAuthToken", "")
 	}
 
@@ -244,6 +247,10 @@ func (s *HTTPStore) GetIoReader(ctx context.Context, key []byte, fileType filefo
 //   - value: The blob data to store
 //   - opts: Optional file options
 //
+// Overwrite is not available over the HTTP blob API: a call with WithAllowOverwrite(true) fails
+// with a configuration error before anything is sent, and a blob that already exists is
+// reported as ErrBlobAlreadyExists. See SetFromReader.
+//
 // Returns:
 //   - error: Any error that occurred during the operation
 func (s *HTTPStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
@@ -265,9 +272,18 @@ func (s *HTTPStore) Set(ctx context.Context, key []byte, fileType fileformat.Fil
 //   - value: Reader providing the blob data
 //   - opts: Optional file options
 //
+// The server does not take an overwrite request from the caller: whether an existing blob may be
+// replaced is the receiving store's policy. Rather than drop WithAllowOverwrite(true) silently -
+// which lets the first write succeed and refuses every later one - this returns a configuration
+// error before anything is sent. A 409 from the server is returned as ErrBlobAlreadyExists.
+//
 // Returns:
 //   - error: Any error that occurred during the operation
 func (s *HTTPStore) SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, value io.ReadCloser, opts ...options.FileOption) error {
+	if options.NewFileOptions(opts...).AllowOverwrite {
+		return errors.NewConfigurationError("[HTTPStore] overwrite is not available over the HTTP blob API: whether an existing blob may be replaced is the receiving store's policy")
+	}
+
 	encodedKey := base64.URLEncoding.EncodeToString(key) + "." + fileType.String()
 
 	// NOTE: Any WithDeleteAt(dah) in opts is serialized as the "dah" query param for
@@ -292,6 +308,10 @@ func (s *HTTPStore) SetFromReader(ctx context.Context, key []byte, fileType file
 		return errors.NewStorageError("[HTTPStore] SetFromReader failed", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusConflict {
+		return errors.NewBlobAlreadyExistsError("[HTTPStore] SetFromReader: blob already exists")
+	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return errors.NewStorageError(fmt.Sprintf("[HTTPStore] SetFromReader failed with status code %d", resp.StatusCode), nil)

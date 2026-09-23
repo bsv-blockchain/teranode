@@ -23,6 +23,10 @@ p2p_private_key.docker.teranode{{ .Index }}                    = {{ .PrivateKey 
 startAlert.docker.teranode{{ .Index }}                         = false
 p2p_static_peers.docker.teranode{{ .Index }}                   = {{ .StaticPeers }}
 p2p_bootstrap_peers.docker.teranode{{ .Index }}.test           =
+# The block persister HTTP listener is loopback by default; both topologies
+# publish its port, so it has to accept connections from outside the container.
+# No token is set here, so its blob API stays read-only.
+blockpersister_httpListenAddress.docker.teranode{{ .Index }}   = :${BLOCK_PERSISTER_HTTP_PORT}
 {{- if not $.AllInOne }}
 # Split topology: each service runs in its own container. Override the
 # inter-service gRPC/HTTP addresses to dial the sibling container's DNS name
