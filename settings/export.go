@@ -193,7 +193,7 @@ func formatValue(val reflect.Value) string {
 	case reflect.Float32, reflect.Float64:
 		return formatFloat(val.Float())
 	case reflect.String:
-		return val.String()
+		return redactURLString(val.String())
 	case reflect.Struct:
 		// Special handling for url.URL struct
 		if val.Type() == reflect.TypeOf(url.URL{}) {
@@ -211,7 +211,7 @@ func formatValue(val reflect.Value) string {
 		if val.Type().Elem().Kind() == reflect.String {
 			slice := make([]string, val.Len())
 			for i := 0; i < val.Len(); i++ {
-				slice[i] = val.Index(i).String()
+				slice[i] = redactURLString(val.Index(i).String())
 			}
 			return formatStringSlice(slice)
 		}
@@ -271,9 +271,11 @@ const redactedURLValue = "REDACTED"
 // The name-based redact tag cannot see these: nothing in the key `blockchain_store` looks like a
 // secret, yet its documented production syntax is postgres://user:pass@host/db. Doing it
 // structurally here covers every URL-typed setting field at once, and any scalar one added later,
-// because they all reach the display path through formatValue. A URL held inside a SLICE would not:
-// formatValue renders a non-string slice as an item count, so it never reaches this function. No
-// such setting exists today; one added later would need formatValue extended to reach it.
+// because they all reach the display path through formatValue — and, through redactURLString, any
+// string or string-slice setting that holds a URL, so the rule does not depend on the field's Go
+// type. A url.URL held inside a SLICE would not: formatValue renders a non-string slice as an item
+// count, so it never reaches this function. No such setting exists today; one added later would
+// need formatValue extended to reach it.
 //
 // The URL is copied by VALUE and the caller's is never mutated: these are the live settings the
 // store constructors use, so mutating one would break the node.
@@ -324,6 +326,31 @@ func redactFragment(c *url.URL) {
 	}
 }
 
+// redactURLString applies redactURL to a string setting that holds a URL (bitcoin-sv/teranode#4844).
+// Connection strings such as Coinbase.DB are plain strings, so the url.URL case in formatValue never
+// sees them. A value without "://" is returned unchanged. A value that url.Parse rejects keeps only
+// its scheme, on the same fail-safe rule as a malformed query: there is no safe way to pick the
+// secret out of a form the standard parser declined to interpret. A URL the redaction leaves
+// unchanged is returned byte-for-byte, so a URL without credentials is never re-rendered.
+func redactURLString(s string) string {
+	idx := strings.Index(s, "://")
+	if idx < 0 {
+		return s
+	}
+
+	u, err := url.Parse(s)
+	if err != nil {
+		return s[:idx] + "://" + redactedURLValue
+	}
+
+	redacted := redactURL(u).String()
+	if redacted == u.String() {
+		return s
+	}
+
+	return redacted
+}
+
 // redactRawQuery replaces the values of credential-bearing query parameters, working on the RAW
 // query string rather than a parsed map.
 //
@@ -370,6 +397,20 @@ func redactRawQuery(rawQuery string) string {
 		}
 
 		if !isCredentialQueryKey(key) {
+			// A non-credential parameter can still carry a whole URL with credentials of its own
+			// (externalStore=s3://key:secret@bucket). Redact that nested URL the same way, and
+			// re-escape the value only when the redaction changed it, so the shipped
+			// externalStore=file://... forms stay byte-for-byte.
+			value, unescapeErr := url.QueryUnescape(segment[eq+1:])
+			if unescapeErr != nil || !strings.Contains(value, "://") {
+				continue
+			}
+
+			if redacted := redactURLString(value); redacted != value {
+				segments[i] = rawKey + "=" + url.QueryEscape(redacted)
+				changed = true
+			}
+
 			continue
 		}
 

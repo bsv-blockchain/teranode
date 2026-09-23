@@ -11,8 +11,10 @@ import (
 // consistent marker.
 
 // Redact returns a deep clone of s with every field tagged `redact:"true"`
-// replaced by a placeholder. The clone is safe to marshal to JSON for logging.
-// A nil input returns nil with no error.
+// replaced by a placeholder, and the credentials inside every URL-typed field
+// and every string (or string-slice element) that holds a URL removed by the
+// same structural redaction the settings portal uses. The clone is safe to
+// marshal to JSON for logging. A nil input returns nil with no error.
 //
 // Implementation note: the deep clone uses a JSON round-trip, so any fields
 // that do not survive json.Marshal/Unmarshal — function pointers, channels,
@@ -89,6 +91,14 @@ func redactValue(v reflect.Value) {
 			}
 
 			redactValue(v.Field(i))
+		}
+	case reflect.String:
+		// A connection string held as a plain string (Coinbase.DB) carries its credentials in the
+		// same positions a url.URL does (bitcoin-sv/teranode#4844). Tagged fields never reach here:
+		// the struct case above sends them to zeroSecret first. Slice elements reach this case
+		// through the slice loop below.
+		if v.CanSet() {
+			v.SetString(redactURLString(v.String()))
 		}
 	case reflect.Pointer, reflect.Interface:
 		if !v.IsNil() {

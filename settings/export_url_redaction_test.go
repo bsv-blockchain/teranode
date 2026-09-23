@@ -380,3 +380,141 @@ func TestFormatValue_URLPointerIsRedacted(t *testing.T) {
 	require.NotContains(t, formatted, auditSecretMarker)
 	require.Equal(t, "postgres://audit-user:"+redactedURLValue+"@db.internal:5432/chain", formatted)
 }
+
+// coinbaseDBWithPassword is the reviewer's exact value: a connection string held as a plain string.
+const coinbaseDBWithPassword = "postgres://user:supersecret@host:5432/coinbase"
+
+// TestExportMetadata_CoinbaseDBPasswordRedacted is a regression for bitcoin-sv/teranode#4844:
+// Coinbase.DB is a connection string held as a plain string, so neither the url.URL case nor a tag
+// covered it, and its password reached the settings export verbatim.
+func TestExportMetadata_CoinbaseDBPasswordRedacted(t *testing.T) {
+	s := NewSettings()
+	s.Coinbase.DB = coinbaseDBWithPassword
+
+	for _, setting := range s.ExportMetadata().Settings {
+		if setting.Key != "coinbaseDB" {
+			continue
+		}
+
+		require.NotContains(t, setting.CurrentValue, "supersecret")
+
+		return
+	}
+
+	require.Fail(t, "coinbaseDB is not in the exported metadata")
+}
+
+// TestFormatValue_StringURLCredentialsRedacted is a regression for bitcoin-sv/teranode#4844: every
+// string setting whose value holds a URL goes through the same structural redaction as a URL-typed
+// field, and a string without credentials is rendered byte-for-byte.
+func TestFormatValue_StringURLCredentialsRedacted(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		in       string
+		want     string
+		mustDrop string
+	}{
+		{
+			name:     "userinfo password",
+			in:       "postgres://user:" + auditSecretMarker + "@host:5432/db",
+			want:     "postgres://user:" + redactedURLValue + "@host:5432/db",
+			mustDrop: auditSecretMarker,
+		},
+		{
+			name:     "credential query parameter",
+			in:       "https://host/path?token=" + auditSecretMarker + "&partitions=4",
+			want:     "https://host/path?token=" + redactedURLValue + "&partitions=4",
+			mustDrop: auditSecretMarker,
+		},
+		{
+			name:     "malformed escape in the password fails safe",
+			in:       "postgres://u:pa%zz@h",
+			want:     "postgres://" + redactedURLValue,
+			mustDrop: "pa%zz",
+		},
+		{
+			name: "a URL without credentials is unchanged byte-for-byte",
+			in:   "kafka://localhost:9092/blocks?partitions=1&replay=1",
+			want: "kafka://localhost:9092/blocks?partitions=1&replay=1",
+		},
+		{
+			name: "a plain string is unchanged",
+			in:   "/teranode/",
+			want: "/teranode/",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := formatValue(reflect.ValueOf(tc.in))
+			require.Equal(t, tc.want, got)
+
+			if tc.mustDrop != "" {
+				require.NotContains(t, got, tc.mustDrop)
+			}
+
+			sliceGot := formatValue(reflect.ValueOf([]string{tc.in, "plain"}))
+			require.Equal(t, tc.want+"|plain", sliceGot, "each string-slice element is redacted the same way")
+		})
+	}
+}
+
+// TestExportMetadata_DefaultStringSettingsUnchanged is a CONTROL, not a regression: it passes on
+// the base revision. It guards the string routing against display churn: for the default settings,
+// every string and string-slice setting that is not tagged sensitive renders exactly its raw value.
+func TestExportMetadata_DefaultStringSettingsUnchanged(t *testing.T) {
+	s := NewSettings()
+	val := reflect.ValueOf(s).Elem()
+	checked := 0
+
+	for _, entry := range extractMetadataStructure() {
+		if sensitiveKeys[entry.Key] {
+			continue
+		}
+
+		v := getValueAtPath(val, entry.ValuePath)
+		if !v.IsValid() {
+			continue
+		}
+
+		var raw string
+
+		switch {
+		case v.Kind() == reflect.String:
+			raw = v.String()
+		case v.Kind() == reflect.Slice && v.Type().Elem().Kind() == reflect.String:
+			parts := make([]string, v.Len())
+			for i := range parts {
+				parts[i] = v.Index(i).String()
+			}
+
+			raw = formatStringSlice(parts)
+		default:
+			continue
+		}
+
+		checked++
+
+		require.Equal(t, raw, formatValue(v), "setting %s must render its raw value", entry.Key)
+	}
+
+	require.Positive(t, checked, "the walk must reach string settings, or it proves nothing")
+}
+
+// TestRedactRawQuery_NestedURLValueRedacted is a regression for bitcoin-sv/teranode#4844: a
+// parameter whose NAME carries no credential can still hold a whole URL that does, and shipped
+// configurations do nest URLs there (externalStore=file://...).
+func TestRedactRawQuery_NestedURLValueRedacted(t *testing.T) {
+	redacted := redactRawQuery("externalStore=s3://key:" + auditSecretMarker + "@bucket&partitions=4")
+	require.NotContains(t, redacted, auditSecretMarker)
+	require.True(t, strings.HasSuffix(redacted, "&partitions=4"), "the other parameters are kept: %s", redacted)
+
+	// Control: the shipped forms carry no credential and are left byte-for-byte. They are written
+	// as the node sees them, with ${DATADIR} already expanded (./data by default, /data for the
+	// operator context), including the escaped nested query of the docker context.
+	for _, shipped := range []string{
+		"set=utxo&externalStore=file://./data/external",
+		"set=utxo&externalStore=file:///data/external",
+		"IdleTimeout=60s&set=utxo&externalStore=file://./data/external%3FhashPrefix=2",
+	} {
+		require.Equal(t, shipped, redactRawQuery(shipped))
+	}
+}

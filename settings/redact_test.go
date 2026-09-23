@@ -155,6 +155,7 @@ func TestSensitiveKeysDerivedMatchesExpected(t *testing.T) {
 		"alert_p2p_private_key":       true,
 		"coinbase_wallet_private_key": true,
 		"miner_wallet_private_keys":   true,
+		"coinbaseDB":                  true,
 		"coinbaseDBUserPwd":           true,
 		"slack_token":                 true,
 		"grpc_admin_api_key":          true,
@@ -257,4 +258,34 @@ func TestRedact_URLCredentialsDoNotSurviveJSONRoundTrip(t *testing.T) {
 	opaqueData, err := json.Marshal(opaqueOut)
 	require.NoError(t, err)
 	require.NotContains(t, string(opaqueData), marker, "an opaque URL credential leaked into the settings dump")
+}
+
+// TestRedact_CoinbaseDBPasswordRedacted is a regression for bitcoin-sv/teranode#4844: the settings
+// JSON in the startup log printed Coinbase.DB, a connection string held as a plain string, with its
+// password.
+func TestRedact_CoinbaseDBPasswordRedacted(t *testing.T) {
+	in := &Settings{}
+	in.Coinbase.DB = "postgres://user:supersecret@host:5432/coinbase"
+
+	out, err := Redact(in)
+	require.NoError(t, err)
+
+	data, err := json.Marshal(out)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "supersecret")
+}
+
+// TestRedact_StringURLFieldRedacted is a regression for bitcoin-sv/teranode#4844: an UNTAGGED
+// string setting holding a URL with credentials is redacted structurally, so the rule does not
+// depend on the field's Go type or on someone remembering the tag.
+func TestRedact_StringURLFieldRedacted(t *testing.T) {
+	in := &Settings{}
+	in.Advertising.URL = "https://u:secret@x"
+
+	out, err := Redact(in)
+	require.NoError(t, err)
+
+	data, err := json.Marshal(out)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "secret")
 }
