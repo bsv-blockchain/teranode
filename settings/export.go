@@ -205,10 +205,7 @@ func formatValue(val reflect.Value) string {
 		if val.IsNil() {
 			return ""
 		}
-		// Special handling for *url.URL
-		if val.Type() == reflect.TypeOf((*url.URL)(nil)) {
-			return formatURL(val.Interface().(*url.URL))
-		}
+		// A *url.URL reaches the url.URL struct case above through Elem, so it is redacted too.
 		return formatValue(val.Elem())
 	case reflect.Slice:
 		if val.Type().Elem().Kind() == reflect.String {
@@ -249,14 +246,6 @@ func formatDuration(d time.Duration) string {
 	return d.String()
 }
 
-func formatURL(u *url.URL) string {
-	if u == nil {
-		return ""
-	}
-
-	return redactURL(u).String()
-}
-
 // credentialQueryKeys are query-parameter names whose values are treated as secrets when a URL
 // setting is rendered for display. Matched case-insensitively as a substring of the parameter
 // name (bitcoin-sv/teranode#4844).
@@ -276,7 +265,8 @@ const redactedURLValue = "REDACTED"
 // redactURL returns a display copy of u with embedded credentials removed: the userinfo password
 // and any credential-bearing query parameter are replaced by the placeholder. Scheme, user name,
 // host, port, path and non-credential query parameters are preserved, because operators need to see
-// which backend a node points at (bitcoin-sv/teranode#4844).
+// which backend a node points at (bitcoin-sv/teranode#4844). A non-empty fragment is replaced whole,
+// on the same fail-safe rule as the opaque component: it has no structure to redact within.
 //
 // The name-based redact tag cannot see these: nothing in the key `blockchain_store` looks like a
 // secret, yet its documented production syntax is postgres://user:pass@host/db. Doing it
@@ -306,6 +296,7 @@ func redactURL(u *url.URL) *url.URL {
 		c.Opaque = redactedURLValue
 		c.User = nil
 		c.RawQuery = redactRawQuery(c.RawQuery)
+		redactFragment(&c)
 
 		return &c
 	}
@@ -316,9 +307,21 @@ func redactURL(u *url.URL) *url.URL {
 		}
 	}
 
+	redactFragment(&c)
+
 	c.RawQuery = redactRawQuery(c.RawQuery)
 
 	return &c
+}
+
+// redactFragment replaces a non-empty fragment with the placeholder. A fragment is free text that
+// can carry a token (`#token=secret`), and like the opaque component it has no structure the
+// redaction could keep apart from the secret.
+func redactFragment(c *url.URL) {
+	if c.Fragment != "" || c.RawFragment != "" {
+		c.Fragment = redactedURLValue
+		c.RawFragment = ""
+	}
 }
 
 // redactRawQuery replaces the values of credential-bearing query parameters, working on the RAW

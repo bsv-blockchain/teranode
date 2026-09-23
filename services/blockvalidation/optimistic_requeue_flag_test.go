@@ -54,6 +54,7 @@ func TestOptimisticAdded_HeaderIDsFailure_RequeuesWithOnChainFlag(t *testing.T) 
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
@@ -96,6 +97,7 @@ func TestOptimisticAdded_CaughtUpFloaterInvalidateFailure_RequeuesWithOnChainFla
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
@@ -143,6 +145,7 @@ func TestOptimisticAdded_CatchupFloater_RequeuesWithOnChainFlag(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
@@ -190,6 +193,7 @@ func TestOptimisticAdded_InvalidBodyInvalidateFailure_RequeuesWithOnChainFlag(t 
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)

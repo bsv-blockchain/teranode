@@ -544,15 +544,16 @@ func (l *warnCaptureLogger) warned() []string {
 }
 
 // TestNewBlockValidation_OptimisticMiningPeerDisabled_WarnsAtStartup pins the F5 startup warning
-// (bitcoin-sv/teranode#4692): when optimistic mining is globally enabled but disabled on peer-served
-// and catch-up blocks (OptimisticMining && !OptimisticMiningPeerBlocks), NewBlockValidation must emit
-// a single warning naming the restore knob. The warning is logged synchronously at construction, so a
-// cancelled context tears down the background workers immediately.
+// (bitcoin-sv/teranode#4692): when optimistic mining is globally enabled but the peer-blocks opt-in is
+// not set (OptimisticMining && !OptimisticMiningPeerBlocks), optimistic mining stays off on every
+// validation path, and NewBlockValidation must emit a single warning naming the restore knob. The
+// warning is logged synchronously at construction, so a cancelled context tears down the background
+// workers immediately.
 //
 // Mutation proof: deleting the Warnf guard in NewBlockValidation drops the message, reddening the
 // positive case; the negative controls confirm it is not emitted otherwise.
 func TestNewBlockValidation_OptimisticMiningPeerDisabled_WarnsAtStartup(t *testing.T) {
-	const wantPhrase = "optimistic mining is enabled but disabled on peer-served"
+	const wantPhrase = "optimistic mining is enabled but stays off on every validation path"
 
 	newWith := func(t *testing.T, optimistic, peerBlocks bool) *warnCaptureLogger {
 		t.Helper()
@@ -585,7 +586,7 @@ func TestNewBlockValidation_OptimisticMiningPeerDisabled_WarnsAtStartup(t *testi
 
 	t.Run("optimistic on, peer-blocks off: warns", func(t *testing.T) {
 		require.True(t, warnedFor(newWith(t, true, false)),
-			"must warn that optimistic mining is disabled on peer-served/catch-up blocks")
+			"must warn that optimistic mining stays off on every validation path")
 	})
 
 	t.Run("optimistic on, peer-blocks on: no warning", func(t *testing.T) {

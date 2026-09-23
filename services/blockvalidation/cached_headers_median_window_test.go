@@ -46,6 +46,7 @@ func TestValidateBlock_CachedHeadersShortWindowIsRefused(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	// The flip: optimistic mining ON is what routes CachedHeaders into CheckHeaderContextual.
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	coinbaseTx, err := bt.NewTxFromString(model.CoinbaseHex)
 	require.NoError(t, err)
@@ -210,6 +211,7 @@ func runHeaderContextRetryReachesAddBlock(t *testing.T, disableOptimisticMining 
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	coinbaseTx, err := bt.NewTxFromString(model.CoinbaseHex)
 	require.NoError(t, err)

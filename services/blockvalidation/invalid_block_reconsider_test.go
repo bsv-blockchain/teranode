@@ -24,9 +24,11 @@ import (
 // would, over-applied, remove exactly this write.
 //
 // Parent-invalid is an inherited and REVERSIBLE verdict: reconsidering the parent can make the
-// child valid again, and RevalidateBlock reloads the child from the store. So this one site must
-// keep writing the child's REAL body — a header-only or placeholder record could never be
-// reconsidered, which is why the quarantine-representation alternative was rejected.
+// child valid again, and RevalidateBlock reloads the child from the store. So this one site keeps
+// writing the child's REAL body when that body is bound to its header (here a coinbase-only body,
+// bound by the coinbase-txid rule) — a header-only or placeholder record could never be
+// reconsidered, which is why the quarantine-representation alternative was rejected. An unbound
+// body gets the same verdict and no record (parent_invalid_unbound_body_test.go).
 //
 // The child is given the correct expected difficulty bits on purpose, so it clears the hoisted
 // expected-nBits gate and genuinely reaches the parent-invalid check rather than being rejected

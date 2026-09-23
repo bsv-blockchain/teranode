@@ -3852,6 +3852,7 @@ func TestBlockValidation_OptimisticMining_RejectsFutureTimestampSynchronously(t 
 	defer cancel()
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
@@ -3958,6 +3959,7 @@ func TestBlockValidation_DirectPath_RejectsCheckpointHashMismatch(t *testing.T) 
 	defer cancel()
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)

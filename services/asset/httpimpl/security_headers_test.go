@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/services/asset/repository"
+	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 )
@@ -60,8 +63,9 @@ func TestSecurityHeadersMiddleware_SetsContentSecurityPolicy(t *testing.T) {
 
 	// The dashboard opens its live feed over ws:// when it is itself served over plain http, so both
 	// websocket schemes are named rather than left to 'self', whose coverage of a same-origin ws://
-	// URL is a CSP3 refinement rather than something the directive plainly says. The behaviour, as
-	// opposed to the string, is asserted in a real browser by ui/dashboard/tests/csp.spec.ts.
+	// URL is a CSP3 refinement rather than something the directive plainly says. The ws: behaviour,
+	// as opposed to the string, is asserted in a real browser by ui/dashboard/tests/csp.spec.ts;
+	// wss: is covered by https: under CSP3 scheme matching, so only its string is checked.
 	require.Contains(t, csp, "connect-src ")
 	require.Contains(t, csp, " ws:", "ws: must be explicit, not left to 'self'")
 	require.Contains(t, csp, " wss:")
@@ -70,6 +74,38 @@ func TestSecurityHeadersMiddleware_SetsContentSecurityPolicy(t *testing.T) {
 	require.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"))
 	require.Equal(t, "DENY", rec.Header().Get("X-Frame-Options"))
 	require.Equal(t, "max-age=31536000; includeSubDomains", rec.Header().Get("Strict-Transport-Security"))
+
+	// Referrer-Policy matches the development copy in hooks.server.ts, so production does not leak
+	// a full dashboard URL as the Referer on a cross-origin request (bitcoin-sv/teranode#4844).
+	require.Equal(t, "strict-origin-when-cross-origin", rec.Header().Get("Referrer-Policy"))
+}
+
+// TestSecurityHeaders_PresentOnEarlyRejection runs the real middleware chain from New and sends a
+// CORS preflight, which the CORS middleware answers without calling the next handler. The security
+// headers must still be on that response, which holds only if they are registered ahead of the
+// middlewares that can end a request early (the ban list and CORS) (bitcoin-sv/teranode#4844).
+func TestSecurityHeaders_PresentOnEarlyRejection(t *testing.T) {
+	testSettings := &settings.Settings{
+		Asset: settings.AssetSettings{
+			APIPrefix: "/api/v1",
+		},
+		Dashboard:         settings.DashboardSettings{Enabled: false},
+		SecurityLevelHTTP: 0,
+	}
+
+	httpServer, err := New(ulogger.TestLogger{}, testSettings, &repository.Repository{}, nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/bestblockheader", nil)
+	req.Header.Set(echo.HeaderOrigin, "http://example.invalid")
+	req.Header.Set(echo.HeaderAccessControlRequestMethod, http.MethodGet)
+
+	rec := httptest.NewRecorder()
+	httpServer.e.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusNoContent, rec.Code, "fixture precondition: the CORS middleware answered the preflight itself")
+	require.Equal(t, contentSecurityPolicy, rec.Header().Get("Content-Security-Policy"))
+	require.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"))
 }
 
 // TestContentSecurityPolicy_MatchesDashboardCopy is the enforced drift check between the two copies

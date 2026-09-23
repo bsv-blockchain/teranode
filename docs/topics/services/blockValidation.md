@@ -94,7 +94,7 @@ Block validation receives new blocks through two distinct paths:
 
 ##### Optimistic Mining Mode
 
-The `optimisticMining` setting provides a validation strategy that prioritizes block propagation speed over immediate validation completion, reversing the normal validate-then-add sequence. On the peer-served validation path it is **off unless the operator opts in** by setting BOTH `blockvalidation_optimistic_mining` (default `true`) AND `blockvalidation_optimistic_mining_peer_blocks` (default `false`); the global flag being false always wins, so the peer-blocks flag can never bypass it (bitcoin-sv/teranode#4692). The shipped default `(true, false)` therefore keeps the peer-served path non-optimistic. The catch-up path is **always** non-optimistic regardless of both flags: it validates against a cached header run holding only the block's in-batch predecessors, which cannot carry the median-time-past window the optimistic branch checks synchronously (issue 1499). Revalidation of an already-stored block is always non-optimistic regardless of these flags.
+The `optimisticMining` setting provides a validation strategy that prioritizes block propagation speed over immediate validation completion, reversing the normal validate-then-add sequence. On every validation path it is **off unless the operator opts in** by setting BOTH `blockvalidation_optimistic_mining` (default `true`) AND `blockvalidation_optimistic_mining_peer_blocks` (default `false`); the requirement is applied where each validation chooses its mode, not only at the peer entry gate (bitcoin-sv/teranode#4844), and the global flag being false always wins, so the peer-blocks flag can never bypass it (bitcoin-sv/teranode#4692). The shipped default `(true, false)` therefore keeps every validation path non-optimistic. The catch-up path is **always** non-optimistic regardless of both flags: it validates against a cached header run holding only the block's in-batch predecessors, which cannot carry the median-time-past window the optimistic branch checks synchronously (issue 1499). Revalidation of an already-stored block is always non-optimistic regardless of these flags.
 
 **Normal Mode (validate-then-add):**
 
@@ -105,7 +105,7 @@ The `optimisticMining` setting provides a validation strategy that prioritizes b
 4. Notify other services
 ```
 
-**Optimistic Mining Mode (opt-in on the peer-served path):**
+**Optimistic Mining Mode (opt-in):**
 
 ```text
 1. Add block to blockchain immediately (before full validation)
@@ -130,9 +130,10 @@ The optimistic path is implemented in `ValidateBlock()` (services/blockvalidatio
 
 **Configuration:**
 
-- **Settings**: `blockvalidation_optimistic_mining` (default: `true`) AND, on the peer-served
-  path, `blockvalidation_optimistic_mining_peer_blocks` (default: `false`) — BOTH must be
-  set for optimistic mining to engage on that path (bitcoin-sv/teranode#4692)
+- **Settings**: `blockvalidation_optimistic_mining` (default: `true`) AND
+  `blockvalidation_optimistic_mining_peer_blocks` (default: `false`) — BOTH must be set for
+  optimistic mining to engage on any validation path (bitcoin-sv/teranode#4692,
+  bitcoin-sv/teranode#4844)
 - **Catch-up**: never optimistic, whatever the two settings are — the cached header run it
   validates against cannot carry the median-time-past window (issue 1499)
 - **Runtime Override**: Can be disabled per-block via `ValidateBlockOptions.DisableOptimisticMining`
@@ -142,6 +143,11 @@ The optimistic path is implemented in `ValidateBlock()` (services/blockvalidatio
   path is already added before background validation runs, so it takes the *invalidate route*
   (invalidated/poisoned rather than re-downloaded) until the `block.Valid` integrity-floor split
   lands and removes that path
+- **Known exposure under the opt-in**: a received body that carries subtrees is still added before
+  it is bound to its header, and when it is invalidated its coinbase is persisted with the invalid
+  record (bitcoin-sv/teranode#4844). A body carrying no subtrees is bound by the coinbase-only rule
+  and rejected before the add. Keep `blockvalidation_optimistic_mining_peer_blocks` off until the
+  `block.Valid` split lands
 
 **Performance Benefits:**
 
@@ -177,9 +183,9 @@ The optimistic path is implemented in `ValidateBlock()` (services/blockvalidatio
 
 **Enabling / disabling Optimistic Mining:**
 
-On the peer-served path optimistic mining is off by default and must be opted into. Where the risk tradeoffs above are acceptable and low peer-block latency is required:
+Optimistic mining is off by default on every validation path and must be opted into. Where the risk tradeoffs above are acceptable and low peer-block latency is required:
 
-- **Enable on the peer-served path**: set BOTH `blockvalidation_optimistic_mining` (default `true`)
+- **Enable**: set BOTH `blockvalidation_optimistic_mining` (default `true`)
   and `blockvalidation_optimistic_mining_peer_blocks` (default `false`) to `true`. This does not
   enable it during catch-up, which is always non-optimistic
 - **Disable globally**: set `blockvalidation_optimistic_mining` to `false` (the global opt-out

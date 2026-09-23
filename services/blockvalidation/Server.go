@@ -1635,8 +1635,8 @@ func deriveBlockHeight(claimed, parentHeight uint32) (uint32, error) {
 // for this block (bitcoin-sv/teranode#4692). Optimistic mining is permitted on those paths ONLY
 // when BOTH the global OptimisticMining flag AND the dedicated OptimisticMiningPeerBlocks opt-in
 // are set, so the global opt-out always wins and the new peer-blocks flag can never bypass it.
-// Written explicitly at the gate rather than relying on the downstream useOptimisticMining seed
-// (belt-and-suspenders). Revalidation of an already-stored block (RevalidateBlock) is never
+// The downstream useOptimisticMining seed in ValidateBlockWithOptions applies the same conjunction
+// on every validation path; it is repeated here at the gate (belt-and-suspenders). Revalidation of an already-stored block (RevalidateBlock) is never
 // optimistic and does not use this gate.
 //
 // Blocks arriving over the legacy sync route (baseURL == "legacy") are unconditionally

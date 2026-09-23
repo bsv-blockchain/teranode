@@ -6,87 +6,117 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
-	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
 
-// TestValidateBlock_OptimisticPeerBlocks_UnboundBodyTakesInvalidateRoute is a CHARACTERIZATION of a
-// KNOWN, UNFIXED EXPOSURE. It passes on the base revision and it asserts that something unsafe still
-// happens. Do not read a green run here as evidence of anything being closed.
+// TestValidateBlock_OptimisticPeerBlocks_SubtreeLessUnboundBodyRejectedBeforeAdd is a regression for
+// bitcoin-sv/teranode#4844. When an operator opts into optimistic mining for peer-served blocks, the
+// received body is added to the chain BEFORE block.Valid runs. A body carrying no subtrees used to
+// be added unbound — transiently visible as a valid chain tip — and then persisted as invalid with
+// the peer's chosen coinbase. The coinbase-only binding is pure (header plus coinbase), so it now
+// runs before the add: the body is rejected as corrupt, the serving peer is struck, and nothing is
+// written.
 //
-// When an operator opts into optimistic mining for peer-served blocks, the received body is added to
-// the chain BEFORE block.Valid runs, so an attacker-chosen unbound body is transiently visible as a
-// VALID chain tip and is then persisted as invalid, carrying the peer's chosen coinbase. That is the
-// one configuration in which this change's central rule — never persist a body that is not bound to
-// its header — does not hold (bitcoin-sv/teranode#4844).
-//
-// It is kept, rather than cut with the other base-passing tests, because it is the only executable
-// statement of the deferral: it makes the remaining exposure reproducible, and it fails loudly the
-// day someone fixes it, which is when it must be deleted.
-//
-// Closing it means splitting block.Valid so its integrity floor runs before the optimistic AddBlock
-// — an architectural change to the validation pipeline, already recorded as the prerequisite on the
-// setting itself (settings/blockvalidation_settings.go,
-// blockvalidation_optimistic_mining_peer_blocks, which defaults to false). Operators should keep
-// that flag off until the split lands.
-func TestValidateBlock_OptimisticPeerBlocks_UnboundBodyTakesInvalidateRoute(t *testing.T) {
+// The remaining exposure under the opt-in is a body CARRYING subtrees, which cannot be bound until
+// block.Valid is split so its integrity floor runs before the optimistic AddBlock. It is documented
+// on the setting (settings/blockvalidation_settings.go, blockvalidation_optimistic_mining_peer_blocks,
+// which defaults to false) and has no fixture here.
+func TestValidateBlock_OptimisticPeerBlocks_SubtreeLessUnboundBodyRejectedBeforeAdd(t *testing.T) {
 	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
+	tSettings.ChainCfgParams.Checkpoints = nil
+
+	bv, client := newNoPersistHarness(ctx, t, tSettings)
+
+	fake := &corruptStrikeP2PClient{}
+	bv.p2pClient = fake
+
+	const blockHeight = uint32(1)
+
+	timestamp := uint32(time.Now().Unix()) //nolint:gosec
+
+	expected, err := client.GetNextWorkRequired(ctx, tSettings.ChainCfgParams.GenesisHash, int64(timestamp))
+	require.NoError(t, err)
+	require.NotNil(t, expected)
 
 	// An unbound body: a single-transaction block whose header merkle root is NOT its coinbase
 	// txid, so nothing reconciles the body to the header.
-	t.Run("opted in: the body is added, then invalidated, and the record keeps the peer's coinbase", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+	coinbaseTx := canaryCoinbaseAtHeight(t, blockHeight)
+	unboundRoot := chainhash.Hash{0xCD}
+	hdr := minedHeaderWithBits(t, tSettings.ChainCfgParams.GenesisHash, &unboundRoot, *expected, timestamp)
 
-		tSettings := test.CreateBaseTestSettings(t)
-		tSettings.BlockValidation.OptimisticMining = true
-		tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
-		tSettings.ChainCfgParams.Checkpoints = nil
+	block, err := model.NewBlock(hdr, coinbaseTx, []*chainhash.Hash{}, 1, uint64(coinbaseTx.Size()), blockHeight, 0)
+	require.NoError(t, err)
 
-		bv, client := newNoPersistHarness(ctx, t, tSettings)
-
-		fake := &corruptStrikeP2PClient{}
-		bv.p2pClient = fake
-
-		const blockHeight = uint32(1)
-
-		timestamp := uint32(time.Now().Unix()) //nolint:gosec
-
-		expected, err := client.GetNextWorkRequired(ctx, tSettings.ChainCfgParams.GenesisHash, int64(timestamp))
-		require.NoError(t, err)
-		require.NotNil(t, expected)
-
-		coinbaseTx := canaryCoinbaseAtHeight(t, blockHeight)
-		unboundRoot := chainhash.Hash{0xCD}
-		hdr := minedHeaderWithBits(t, tSettings.ChainCfgParams.GenesisHash, &unboundRoot, *expected, timestamp)
-
-		block, err := model.NewBlock(hdr, coinbaseTx, []*chainhash.Hash{}, 1, uint64(coinbaseTx.Size()), blockHeight, 0)
-		require.NoError(t, err)
-
-		err = bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{
-			PeerID:                  "peer-serving",
-			DisableOptimisticMining: optimisticMiningDisabledForPeerPath(tSettings, "http://localhost"),
-		})
-		require.NoError(t, err, "the opt-in path accepts the body before validating it — that IS the exposure")
-
-		exists, err := client.GetBlockExists(ctx, block.Hash())
-		require.NoError(t, err)
-		require.True(t, exists, "the unbound body was published to the chain")
-
-		// The background validation then takes the invalidate route.
-		require.Eventually(t, func() bool {
-			_, meta, metaErr := client.GetBlockHeader(ctx, block.Hash())
-			return metaErr == nil && meta != nil && meta.Invalid
-		}, 15*time.Second, 50*time.Millisecond, "the background validation must invalidate the accepted body")
-
-		stored, err := client.GetBlock(ctx, block.Hash())
-		require.NoError(t, err)
-
-		storedMiner, err := util.ExtractCoinbaseMinerRaw(stored.CoinbaseTx, false)
-		require.NoError(t, err)
-		require.Contains(t, storedMiner, minerMarkupCanary,
-			"the persisted record carries the peer's chosen coinbase — the residual this test pins")
+	err = bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{
+		PeerID:                  "peer-serving",
+		DisableOptimisticMining: optimisticMiningDisabledForPeerPath(tSettings, "http://localhost"),
 	})
+	require.Error(t, err)
+	require.True(t, errors.IsBlockCorrupt(err), "an unbound subtree-less body must be rejected as corrupt, got: %v", err)
+
+	exists, err := client.GetBlockExists(ctx, block.Hash())
+	require.NoError(t, err)
+	require.False(t, exists, "the unbound body must not be added to the chain")
+
+	calls := fake.recorded()
+	require.Len(t, calls, 1, "the serving peer must be struck exactly once")
+	require.Equal(t, "peer-serving", calls[0].peerID)
+}
+
+// TestValidateBlockWithOptions_GlobalFlagAloneIsNotOptimistic is a regression for
+// bitcoin-sv/teranode#4844: the optimistic seed in ValidateBlockWithOptions used to read the global
+// flag alone, so a caller passing no override (the ValidateBlock wrapper, the revalidation worker)
+// went optimistic on the default-true global flag even with the peer-blocks opt-in off. The seed now
+// requires both flags.
+//
+// The block is bound (coinbase-only, merkle root is its coinbase txid) and its coinbase pays twice
+// the subsidy, so it fails consensus after the binding. A synchronous ErrBlockInvalid is only
+// possible on the non-optimistic branch; the optimistic branch adds it first and returns nil.
+func TestValidateBlockWithOptions_GlobalFlagAloneIsNotOptimistic(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = false
+	tSettings.ChainCfgParams.Checkpoints = nil
+
+	bv, client := newNoPersistHarness(ctx, t, tSettings)
+
+	const blockHeight = uint32(1)
+
+	timestamp := uint32(time.Now().Unix()) //nolint:gosec
+
+	expected, err := client.GetNextWorkRequired(ctx, tSettings.ChainCfgParams.GenesisHash, int64(timestamp))
+	require.NoError(t, err)
+	require.NotNil(t, expected)
+
+	coinbaseTx := coinbaseAtHeight(t, blockHeight)
+	// 50 BTC is the regtest subsidy at this height; pay twice that so the no-inflation check fails.
+	coinbaseTx.Outputs[0].Satoshis = 2 * 50 * 100000000
+
+	hdr := minedHeaderWithBits(t, tSettings.ChainCfgParams.GenesisHash, coinbaseTx.TxIDChainHash(), *expected, timestamp)
+
+	block, err := model.NewBlock(hdr, coinbaseTx, []*chainhash.Hash{}, 1, uint64(coinbaseTx.Size()), blockHeight, 0)
+	require.NoError(t, err)
+	require.NoError(t, block.CheckCoinbaseOnlyBodyBound(), "fixture precondition: the body is bound to its header")
+
+	err = bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{
+		PeerID:                  "peer-serving",
+		DisableOptimisticMining: false,
+	})
+	require.Error(t, err, "the non-optimistic branch validates before adding, so the verdict is synchronous")
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "got: %v", err)
 }

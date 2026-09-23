@@ -400,7 +400,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 ) *BlockValidation {
 	logger.Infof("optimisticMining = %v", tSettings.BlockValidation.OptimisticMining)
 	if tSettings.BlockValidation.OptimisticMining && !tSettings.BlockValidation.OptimisticMiningPeerBlocks {
-		logger.Warnf("optimistic mining is enabled but disabled on peer-served and catch-up blocks; set blockvalidation_optimistic_mining_peer_blocks to restore it (bitcoin-sv/teranode#4692)")
+		logger.Warnf("optimistic mining is enabled but stays off on every validation path until blockvalidation_optimistic_mining_peer_blocks is also set (bitcoin-sv/teranode#4692)")
 	}
 	// Initialize Kafka producer for invalid blocks if configured
 	var invalidBlockKafkaProducer kafka.KafkaAsyncProducerI
@@ -1794,7 +1794,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// pure functions of the 80 header bytes — no height, no parent, no chain state, no store
 		// access — so they are hoisted above the checkpoint, parent-invalid and expected-nBits
 		// checks below (bitcoin-sv/teranode#4844). Those checks are more expensive, and the
-		// parent-invalid ones deliberately persist the peer-supplied body; a header nobody paid for
+		// parent-invalid one persists a peer-supplied body when it is bound; a header nobody paid for
 		// must never reach them.
 		//
 		// The header hash must meet the target its OWN nBits declares. This is enforced for
@@ -2001,13 +2001,41 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// Check if parent block is invalid - if so, child is automatically invalid.
 		// This optimization skips expensive validation when parent is already invalid.
 		//
-		// This verdict KEEPS the real body (bitcoin-sv/teranode#4844): parent-invalid is inherited
-		// and reversible, and RevalidateBlock reloads the stored block, so the body must survive for
-		// the record to be reconsiderable at all. The cheap spam route into this site is closed by
-		// the expected-nBits check hoisted above it, not by the strength of the proof-of-work limit.
+		// Parent-invalid is inherited and reversible, and RevalidateBlock reloads the stored block, so
+		// a record is only reconsiderable if it keeps the real body. But the record is written only
+		// when that body is BOUND to the header (bitcoin-sv/teranode#4844): a coinbase-only body,
+		// whose merkle root must be its coinbase txid. A body carrying subtrees cannot be bound
+		// before its subtrees are fetched, so no record is written for it — otherwise replaying an
+		// honest header under a condemned parent would let a peer persist its own coinbase for free.
+		// The cheap spam route into this site is closed by the expected-nBits check hoisted above it.
+		//
+		// What skipping the record costs, exactly:
+		//   - checkParentInvalid sees only the immediate parent's metadata, so a grandchild whose
+		//     parent is the unstored child does NOT get this cheap verdict.
+		//   - The direct path instead finds that parent missing and queues catch-up. Catch-up walks
+		//     the peer's headers back to the last stored one, which is the stored invalid ancestor,
+		//     and aborts on its invalid common ancestor; if that ancestor sits above the local tip,
+		//     validating it fails as "already exists as invalid". Either way the chain is rejected
+		//     without a new row.
+		//   - So each such descendant announcement costs one catch-up header round instead of one
+		//     parent-row lookup, charged to the announcing peer through the catch-up consensus
+		//     failure path, and only for chains built on a block this node already condemned.
+		//   - Once the parent is reconsidered, the child returns through normal sync; it is not
+		//     available from the local store for an operator reconsider.
 		if u.checkParentInvalid(parentMeta) {
 			if !opts.IsRevalidation {
-				u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, fmt.Sprintf("parent block %s is invalid", block.Header.HashPrevBlock.String()))
+				reason := fmt.Sprintf("parent block %s is invalid", block.Header.HashPrevBlock.String())
+
+				// CoinbaseTx is non-nil here: the precheck at the top of this function rejects a
+				// block without one.
+				if len(block.Subtrees) == 0 && block.CheckCoinbaseOnlyBodyBound() == nil {
+					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
+				} else {
+					// Not rejectFinalHeaderVerdict: that one states the verdict is final, and this
+					// one is not — it is lifted if the parent is reconsidered.
+					u.logger.Warnf("[ValidateBlock][%s] not persisting parent-invalid verdict: body not bound to header: %s", block.Hash().String(), reason)
+					u.kafkaNotifyBlockInvalid(block, reason, opts.PeerID, baseURL)
+				}
 			}
 
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] parent block is invalid", block.Hash().String())
@@ -2129,7 +2157,10 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 		ctxLogger.Infof("[ValidateBlock][%s] validating %d subtrees DONE", block.Hash().String(), len(block.Subtrees))
 
-		useOptimisticMining := u.settings.BlockValidation.OptimisticMining
+		// Both flags, here and not only at the peer entry gate (bitcoin-sv/teranode#4844): a caller
+		// that passes no override (the ValidateBlock wrapper, the revalidation worker) must not turn
+		// optimistic on the default-true global flag alone.
+		useOptimisticMining := u.settings.BlockValidation.OptimisticMining && u.settings.BlockValidation.OptimisticMiningPeerBlocks
 		if opts.DisableOptimisticMining {
 			// if the disableOptimisticMining is set to true, then we don't use optimistic mining, even if it is enabled
 			useOptimisticMining = false
@@ -2179,6 +2210,20 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				// clear a stale batched answer; the hash walk above is what does that.
 				if shouldRequeueForHeaderContext(err, opts) {
 					u.ReValidateBlockFromScratch(block, baseURL, opts)
+				}
+
+				return err
+			}
+
+			// Bind a subtree-less body before it is published (bitcoin-sv/teranode#4844). The check
+			// is pure (header plus coinbase) and returns nil for any body carrying subtrees, so an
+			// honest multi-transaction block is never rejected here. Nothing has been added yet, so
+			// this matches the non-optimistic corrupt branch: strike the serving peer and return
+			// corrupt for re-download, under the corrupt-attempt cap. The residual under the opt-in
+			// is a body carrying subtrees, which cannot be bound until block.Valid is split.
+			if err = block.CheckCoinbaseOnlyBodyBound(); err != nil {
+				if !opts.IsRevalidation {
+					u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, err.Error())
 				}
 
 				return err

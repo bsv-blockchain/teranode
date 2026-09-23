@@ -173,6 +173,9 @@ func TestValidateBlock_IncorrectDifficultyBits(t *testing.T) {
 	// Nothing is persisted for a header-only verdict (bitcoin-sv/teranode#4844).
 	mockBlockchain.AssertNotCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
+	// The expected-nBits check runs above the wait for previous blocks.
+	mockBlockchain.AssertNotCalled(t, "GetBlockIsMined", mock.Anything, mock.Anything)
+
 	// Verify all mocks were called
 	mockBlockchain.AssertExpectations(t)
 }
@@ -258,7 +261,8 @@ func TestValidateBlock_DoesNotMeetTargetDifficulty(t *testing.T) {
 	mockBlockchain := new(blockchain.Mock)
 	mockBlockchain.On("GetBlockExists", mock.Anything, blockHeader.Hash()).Return(false, nil).Once()
 	// Registered but no longer expected to fire: the two header-only proof-of-work gates now run
-	// above the parent-header fetch (bitcoin-sv/teranode#4844).
+	// above the parent-header fetch (bitcoin-sv/teranode#4844). Kept as Maybe so a stray call fails
+	// the AssertNotCalled below rather than panicking the mock.
 	mockBlockchain.On("GetBlockHeaders", mock.Anything, prevBlockHeader.Hash(), mock.Anything).
 		Return([]*model.BlockHeader{prevBlockHeader}, []*model.BlockHeaderMeta{{ID: 0, Height: 0}}, nil).Maybe()
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil).Maybe()
@@ -320,6 +324,11 @@ func TestValidateBlock_DoesNotMeetTargetDifficulty(t *testing.T) {
 
 	// Nothing is persisted for a header-only verdict (bitcoin-sv/teranode#4844).
 	mockBlockchain.AssertNotCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+	// The header-only proof-of-work gates run above the parent-header fetch and the wait for
+	// previous blocks.
+	mockBlockchain.AssertNotCalled(t, "GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything)
+	mockBlockchain.AssertNotCalled(t, "GetBlockIsMined", mock.Anything, mock.Anything)
 
 	// Verify all mocks were called
 	mockBlockchain.AssertExpectations(t)
@@ -575,7 +584,8 @@ func TestValidateBlock_PoWCheckedBeforeSubtreeValidation(t *testing.T) {
 	mockBlockchain := new(blockchain.Mock)
 	mockBlockchain.On("GetBlockExists", mock.Anything, blockHeader.Hash()).Return(false, nil).Once()
 	// Registered but no longer expected to fire: the two header-only proof-of-work gates now run
-	// above the parent-header fetch (bitcoin-sv/teranode#4844).
+	// above the parent-header fetch (bitcoin-sv/teranode#4844). Kept as Maybe so a stray call fails
+	// the AssertNotCalled below rather than panicking the mock.
 	mockBlockchain.On("GetBlockHeaders", mock.Anything, prevBlockHeader.Hash(), mock.Anything).
 		Return([]*model.BlockHeader{prevBlockHeader}, []*model.BlockHeaderMeta{{ID: 0, Height: 0}}, nil).Maybe()
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil).Maybe()
@@ -626,6 +636,11 @@ func TestValidateBlock_PoWCheckedBeforeSubtreeValidation(t *testing.T) {
 
 	// Nothing is persisted for a header-only verdict (bitcoin-sv/teranode#4844).
 	mockBlockchain.AssertNotCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+	// The header-only proof-of-work gates run above the parent-header fetch and the wait for
+	// previous blocks.
+	mockBlockchain.AssertNotCalled(t, "GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything)
+	mockBlockchain.AssertNotCalled(t, "GetBlockIsMined", mock.Anything, mock.Anything)
 
 	mockBlockchain.AssertExpectations(t)
 }

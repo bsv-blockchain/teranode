@@ -50,6 +50,7 @@ func TestValidateBlock_UnusableHeaderRunIsRebuiltByHashWalk(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	coinbaseTx, err := bt.NewTxFromString(model.CoinbaseHex)
 	require.NoError(t, err)

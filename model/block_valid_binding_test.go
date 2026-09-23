@@ -109,6 +109,20 @@ func TestBlock_ValidWithBinding_ReportsTheBinding(t *testing.T) {
 		require.True(t, errors.Is(err, errors.ErrBlockInvalid),
 			"a bound body's consensus failure is genuine invalidity, got: %v", err)
 	})
+
+	t.Run("false when subtrees are present and no subtree store is supplied", func(t *testing.T) {
+		block := boundCoinbaseOnlyBlock(t, 1)
+		block.Subtrees = []*chainhash.Hash{{0x01}}
+
+		ok, bound, err := callValidWithBinding(t, block, tSettings)
+		require.False(t, ok)
+		require.Error(t, err)
+		require.False(t, bound, "without a subtree store nothing loads the subtrees, so nothing binds them")
+		// The overpaying coinbase still fails the no-inflation check, but on an unbound body that
+		// failure is classified corrupt, never invalid.
+		require.True(t, errors.IsBlockCorrupt(err), "got: %v", err)
+		require.False(t, errors.Is(err, errors.ErrBlockInvalid), "an unbound body must not condemn the hash, got: %v", err)
+	})
 }
 
 // TestBlock_ValidWithBinding_IsInvocationLocal cannot fail against the design it ships with: the

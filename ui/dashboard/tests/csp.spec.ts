@@ -6,10 +6,12 @@
  * real document with the real header from the preview origin, then exercise the two behaviours the
  * policy is supposed to have (bitcoin-sv/teranode#4844):
  *
- *  - the dashboard's own live feed, which it opens over ws:// when served over plain http, is NOT
- *    blocked. Chromium treats 'self' as covering a same-origin ws:// URL, so naming the scheme is
- *    belt-and-braces there and this assertion would not have gone red in this browser; it guards the
- *    directive we actually ship rather than the refinement.
+ *  - a ws:// websocket to ANOTHER host is NOT blocked. The dashboard drives remote teranode
+ *    instances, and a cross-origin ws:// URL is covered only by the listed ws: scheme, never by
+ *    'self' or https:. So this assertion fails if ws: is dropped from connect-src. (A same-origin
+ *    target would not: Chromium treats 'self' as covering a same-origin ws:// URL.) wss: is listed
+ *    only as belt and braces over https:, which CSP3 scheme matching lets cover wss:// as well, so
+ *    no browser check could fail when it is dropped; that token is guarded as a string instead.
  *  - a remote module import IS blocked, BY THE POLICY. The module is served from the test itself,
  *    with the CORS header a cross-origin module import requires, and a separate positive control
  *    shows it genuinely loading when no policy is served — so "blocked" cannot be satisfied by a
@@ -42,32 +44,41 @@ async function openWithProductionCSP(page: Page) {
   await page.goto('/csp-fixture')
 }
 
-test('the policy does not block the dashboard own-origin websocket', async ({ page }) => {
+test('the policy does not block a websocket to another host', async ({ page }) => {
   await openWithProductionCSP(page)
 
   // A connect-src violation makes the WebSocket constructor throw SecurityError synchronously. A
   // policy-permitted socket that simply cannot connect fails later, asynchronously, so a throw here
-  // means the POLICY refused it and nothing else.
-  const blocked = await page.evaluate(() => {
-    const attempt = (scheme: string) => {
-      try {
-        const ws = new WebSocket(`${scheme}://${location.host}/connection/websocket`)
-        ws.close()
-        return false
-      } catch (e) {
-        return (e as Error).name === 'SecurityError'
-      }
+  // means the POLICY refused it and nothing else. The target host differs from the page's, so
+  // 'self' cannot be what permits it, and ws:// is not a secure scheme, so https: cannot either.
+  const outcome = await page.evaluate(() => {
+    const otherHost = location.hostname === '127.0.0.1' ? 'localhost:1' : '127.0.0.1:1'
+
+    let blocked = false
+    try {
+      const ws = new WebSocket(`ws://${otherHost}/connection/websocket`)
+      ws.close()
+    } catch (e) {
+      blocked = (e as Error).name === 'SecurityError'
     }
 
-    return { ws: attempt('ws'), wss: attempt('wss') }
+    return { otherHost, pageHost: location.host, blocked }
   })
 
-  expect(blocked.ws, 'ws:// to the dashboard own origin must not be blocked by the policy').toBe(
-    false,
+  expect(outcome.otherHost, 'fixture precondition: the target is another host').not.toBe(
+    outcome.pageHost,
   )
-  expect(blocked.wss, 'wss:// to the dashboard own origin must not be blocked by the policy').toBe(
-    false,
-  )
+  expect(outcome.blocked, 'ws:// to another host must not be blocked by the policy').toBe(false)
+})
+
+test('the policy still names wss: in connect-src', () => {
+  // A string check, not a browser one: https: already lets CSP3 scheme matching cover wss://, so
+  // dropping wss: would not change what a browser allows. The token is kept as belt and braces.
+  const connectSrc = CONTENT_SECURITY_POLICY.split(';')
+    .map((directive) => directive.trim())
+    .find((directive) => directive.startsWith('connect-src '))
+
+  expect(connectSrc?.split(' ')).toContain('wss:')
 })
 
 /**

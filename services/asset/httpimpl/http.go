@@ -171,6 +171,10 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 
 	e.Use(middleware.Recover())
 
+	// Security headers first, so a response rejected early by the ban list or answered by the CORS
+	// middleware (a preflight) still carries them.
+	e.Use(securityHeadersMiddleware())
+
 	// Ban list middleware - reject requests from banned IPs early
 	if banList != nil {
 		e.Use(banlist.CreateEchoMiddleware(banList))
@@ -193,8 +197,6 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	e.Use(middleware.GzipWithConfig(middleware.GzipConfig{
 		Skipper: shouldSkipGzipForLargeBinaryAssetResponse,
 	}))
-
-	e.Use(securityHeadersMiddleware())
 
 	// Body size limit runs BEFORE peer-auth so the auth middleware (which reads
 	// the body to verify the SHA-256 digest header) cannot be turned into a
@@ -520,7 +522,8 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	// Register peers endpoint
 	apiGroup.GET("/peers", h.GetPeers)
 
-	// Register settings handler for settings portal (always requires authentication)
+	// Register settings handler for settings portal. It requires authentication when rpc_user and
+	// rpc_pass are set; CheckAuth allows every request when either is empty.
 	settingsHandler := NewSettingsHandler(tSettings, logger)
 	apiSettingsGroup := e.Group(apiPrefix + "/settings")
 	apiSettingsGroup.Use(authHandler.RequireAuthMiddleware)
@@ -820,6 +823,7 @@ func securityHeadersMiddleware() echo.MiddlewareFunc {
 			c.Response().Header().Set("X-Content-Type-Options", "nosniff")
 			c.Response().Header().Set("X-Frame-Options", "DENY")
 			c.Response().Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+			c.Response().Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 			// Emitted on /api/** and binary responses too, where it is inert. A skipper would be
 			// more code, and more chances to get the predicate wrong, than the thing it avoids.
 			// frame-ancestors duplicates X-Frame-Options above; both are kept, the latter for

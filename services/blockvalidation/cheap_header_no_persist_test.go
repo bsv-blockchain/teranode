@@ -98,12 +98,32 @@ func canaryCoinbaseAtHeight(t *testing.T, height uint32) *bt.Tx {
 func newNoPersistHarness(ctx context.Context, t *testing.T, tSettings *settings.Settings) (*BlockValidation, blockchain.ClientI) {
 	t.Helper()
 
-	return newHarnessWithSubtreeResult(ctx, t, tSettings, nil)
+	bv, client, _ := newNoPersistHarnessWithSubtreeClient(ctx, t, tSettings)
+
+	return bv, client
+}
+
+// newNoPersistHarnessWithSubtreeClient is newNoPersistHarness that also hands back the
+// subtree-validation client it wires in, so a test can assert whether subtree validation ran.
+func newNoPersistHarnessWithSubtreeClient(ctx context.Context, t *testing.T, tSettings *settings.Settings) (*BlockValidation, blockchain.ClientI, *countingSubtreeValidationClient) {
+	t.Helper()
+
+	return newHarnessWithSubtreeClient(ctx, t, tSettings, nil)
 }
 
 // newHarnessWithSubtreeResult is newNoPersistHarness with a chosen outcome for subtree validation,
 // so a test can drive the subtree-validation verdicts as well as the header ones.
 func newHarnessWithSubtreeResult(ctx context.Context, t *testing.T, tSettings *settings.Settings, subtreeErr error) (*BlockValidation, blockchain.ClientI) {
+	t.Helper()
+
+	bv, client, _ := newHarnessWithSubtreeClient(ctx, t, tSettings, subtreeErr)
+
+	return bv, client
+}
+
+// newHarnessWithSubtreeClient is the one construction path for the harnesses above: it returns the
+// counting subtree-validation client alongside the service and the blockchain client.
+func newHarnessWithSubtreeClient(ctx context.Context, t *testing.T, tSettings *settings.Settings, subtreeErr error) (*BlockValidation, blockchain.ClientI, *countingSubtreeValidationClient) {
 	t.Helper()
 
 	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
@@ -117,10 +137,11 @@ func newHarnessWithSubtreeResult(ctx context.Context, t *testing.T, tSettings *s
 
 	subtreeVal := &subtreevalidation.MockSubtreeValidation{}
 	subtreeVal.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(subtreeErr)
+	counting := &countingSubtreeValidationClient{Interface: subtreeVal}
 
-	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeVal)
+	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, counting)
 
-	return bv, blockchainClient
+	return bv, blockchainClient, counting
 }
 
 // requireNothingPersisted asserts the block left no trace in the blockchain store: no existence
@@ -316,6 +337,7 @@ func TestValidateBlock_Difficulty1Header_IsNotPersisted(t *testing.T) {
 
 		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.BlockValidation.OptimisticMining = true
+		tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 		bv, client := newNoPersistHarness(ctx, t, tSettings)
 

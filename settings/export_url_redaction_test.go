@@ -343,3 +343,40 @@ func TestRedactRawQuery_PreservesEncoding(t *testing.T) {
 	require.False(t, strings.HasPrefix(redactRawQuery(rawQuery), "MaxRetries"),
 		"parameters must not be reordered")
 }
+
+// TestRedactURL_FragmentRedacted pins that a URL fragment, which can carry a token as free text,
+// is replaced whole, and that a URL without a fragment is left unchanged (bitcoin-sv/teranode#4844).
+func TestRedactURL_FragmentRedacted(t *testing.T) {
+	withFragment, err := url.Parse("postgres://u@h/db#token=" + auditSecretMarker)
+	require.NoError(t, err)
+
+	redacted := redactURL(withFragment).String()
+	require.NotContains(t, redacted, auditSecretMarker)
+	require.True(t, strings.HasSuffix(redacted, "#"+redactedURLValue), "got %s", redacted)
+	require.Contains(t, withFragment.String(), auditSecretMarker, "the caller's URL must never be mutated")
+
+	opaqueWithFragment, err := url.Parse("postgres:host/db#" + auditSecretMarker)
+	require.NoError(t, err)
+	require.NotContains(t, redactURL(opaqueWithFragment).String(), auditSecretMarker)
+
+	withoutFragment, err := url.Parse("postgres://u@h/db")
+	require.NoError(t, err)
+	require.Equal(t, withoutFragment.String(), redactURL(withoutFragment).String())
+}
+
+// TestFormatValue_URLPointerIsRedacted is a CONTROL, not a regression: the settings export
+// dereferences pointers before formatting, so no *url.URL reaches formatValue today. It guards the
+// pointer case now falling through to the url.URL struct case, so a pointer that ever arrives is
+// still redacted.
+func TestFormatValue_URLPointerIsRedacted(t *testing.T) {
+	u := &url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword("audit-user", auditSecretMarker),
+		Host:   "db.internal:5432",
+		Path:   "/chain",
+	}
+
+	formatted := formatValue(reflect.ValueOf(u))
+	require.NotContains(t, formatted, auditSecretMarker)
+	require.Equal(t, "postgres://audit-user:"+redactedURLValue+"@db.internal:5432/chain", formatted)
+}

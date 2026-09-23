@@ -203,9 +203,10 @@ func TestRedactPreservesNonSecretFields(t *testing.T) {
 	require.NotContains(t, js, sentinelSecret, "secret UserPwd value leaked through redaction")
 }
 
-// TestRedact_URLCredentialsDoNotSurviveJSONRoundTrip covers the startup settings dump
-// (bitcoin-sv/teranode#4844), which takes a different route to the same data than the settings
-// portal does: a JSON clone, then the tag-driven walker.
+// TestRedact_URLCredentialsDoNotSurviveJSONRoundTrip covers the settings JSON dump in the startup
+// log (bitcoin-sv/teranode#4844), which takes a different route to the same data than the settings
+// portal does: a JSON clone, then the tag-driven walker. Only that JSON is covered: the STATS block
+// that PrintSettings logs first comes from gocore and is not redacted — tracked separately.
 //
 // The two credential positions in a URL behaved differently before the fix. The userinfo PASSWORD
 // vanished by accident, because url.Userinfo's fields are all unexported and json.Marshal emits
