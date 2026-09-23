@@ -45,7 +45,7 @@
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
 | HTTPRateLimit | int | 1024 | asset_httpRateLimit | Per-IP req/s for unverified clients (0 disables) |
-| HTTPHeavyRateLimit | int | 10 | asset_httpHeavyRateLimit | Per-IP req/s on heavy endpoints (blocks, subtrees, batch txs) |
+| HTTPHeavyRateLimit | int | 10 | asset_httpHeavyRateLimit | Per-IP req/s on heavy endpoints (blocks, subtrees, batch txs, common-ancestor header searches) |
 | HTTPPeerRateMultiplier | int | 5 | asset_httpPeerRateMultiplier | Authenticated peers get base × this rate |
 | HTTPMinerRateLimit | int | 0 | asset_httpMinerRateLimit | Per-peer req/s cap for miner tier; 0 = fully exempt |
 | HTTPBodyLimit | string | "100MB" | asset_httpBodyLimit | Max request body size (Echo BodyLimit, returns 413) |
