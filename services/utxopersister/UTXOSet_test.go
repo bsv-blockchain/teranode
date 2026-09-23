@@ -37,7 +37,7 @@ func TestCreateUTXOSet_NilLastBlockHash(t *testing.T) {
 	// blockHash here is only used to initialise the UTXOSet handle;
 	// the bug is in dereferencing c.lastBlockHash, not us.blockHash.
 	someHash := chainhash.HashH([]byte("test-utxoset-blockhash"))
-	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &someHash)
+	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &someHash, 1)
 	require.NoError(t, err)
 
 	// Construct a consolidator with lastBlockHash == nil — exactly the
@@ -103,7 +103,7 @@ func TestCreateUTXOSet_PreviousSetReadDoesNotDoubleReadMagic(t *testing.T) {
 	c.firstBlockHeight = 43 // the staged previous set is at height 42
 	c.firstBlockHeightKnown = true
 
-	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
+	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash, 43)
 	require.NoError(t, err)
 
 	err = us.CreateUTXOSet(ctx, c)
@@ -147,7 +147,7 @@ func TestCreateUTXOSet_PreviousSetWrongBlockHash(t *testing.T) {
 	c.firstBlockHeight = 43 // the staged previous set is at height 42
 	c.firstBlockHeightKnown = true
 
-	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
+	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash, 43)
 	require.NoError(t, err)
 
 	err = us.CreateUTXOSet(ctx, c)
@@ -194,7 +194,7 @@ func TestCreateUTXOSet_PreviousSetWrongHeight(t *testing.T) {
 	c.firstBlockHeight = 43 // expects the previous set at 42, the staged one says 41
 	c.firstBlockHeightKnown = true
 
-	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
+	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash, 43)
 	require.NoError(t, err)
 
 	err = us.CreateUTXOSet(ctx, c)
@@ -221,7 +221,7 @@ func TestCreateUTXOSet_PreviousSetRefusedWhenStartHeightUnknown(t *testing.T) {
 	c.lastBlockHeight = 43
 	c.previousBlockHash = &previousBlockHash
 
-	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
+	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash, 43)
 	require.NoError(t, err)
 
 	err = us.CreateUTXOSet(ctx, c)
@@ -291,7 +291,7 @@ func TestCreateUTXOSet_PreviousSetWithFooterTerminatesCleanly(t *testing.T) {
 	c.firstBlockHeight = 43 // the staged previous set is at height 42
 	c.firstBlockHeightKnown = true
 
-	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
+	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash, 43)
 	require.NoError(t, err)
 
 	err = us.CreateUTXOSet(ctx, c)
@@ -342,7 +342,7 @@ func TestCreateUTXOSet_PreviousSetTruncatedMidTxID_ReturnsError(t *testing.T) {
 	c.firstBlockHeight = 43 // the staged previous set is at height 42
 	c.firstBlockHeightKnown = true
 
-	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
+	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash, 43)
 	require.NoError(t, err)
 
 	err = us.CreateUTXOSet(ctx, c)
@@ -391,7 +391,7 @@ func TestCreateUTXOSet_PreviousSetMissingFooter_ReturnsError(t *testing.T) {
 	c.firstBlockHeight = 43 // the staged previous set is at height 42
 	c.firstBlockHeightKnown = true
 
-	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
+	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash, 43)
 	require.NoError(t, err)
 
 	err = us.CreateUTXOSet(ctx, c)
@@ -442,7 +442,7 @@ func TestCreateUTXOSet_PreviousSetFooterMismatch_ReturnsError(t *testing.T) {
 	c.firstBlockHeight = 43 // the staged previous set is at height 42
 	c.firstBlockHeightKnown = true
 
-	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
+	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash, 43)
 	require.NoError(t, err)
 
 	err = us.CreateUTXOSet(ctx, c)
@@ -511,7 +511,7 @@ func TestCreateUTXOSet_PreviousSetWithDeletions_NotReportedAsTruncated(t *testin
 	// spentWrapper's single output was spent within the consolidated range.
 	c.deletions[UTXODeletion{TxID: spentTxID, Index: 0}] = struct{}{}
 
-	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
+	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash, 43)
 	require.NoError(t, err)
 
 	err = us.CreateUTXOSet(ctx, c)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"reflect"
+	"strings"
 )
 
 // redactedValue is defined in export.go; both export and the log-safe
@@ -41,6 +42,54 @@ func Redact(s *Settings) (*Settings, error) {
 	redactValue(reflect.ValueOf(&clone).Elem())
 
 	return &clone, nil
+}
+
+// RedactConfigStats masks the value of every sensitive key in the text produced by
+// gocore.Config().Stats(). That dump lists every settings-file key, one per line as
+// "key=value" or "key[context]=value", and masks only encrypted values on its own, so a
+// secret set in a settings file would otherwise reach the log in clear. Every other line
+// is returned unchanged.
+func RedactConfigStats(stats string) string {
+	sensitive := extractSensitiveKeys()
+
+	lines := strings.Split(stats, "\n")
+	for i, line := range lines {
+		eq := strings.Index(line, "=")
+		if eq < 0 {
+			continue
+		}
+
+		key := line[:eq]
+		if bracket := strings.Index(key, "["); bracket >= 0 {
+			key = key[:bracket]
+		}
+
+		if sensitive[key] {
+			lines[i] = line[:eq+1] + redactedValue
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// RedactConfigMap returns a copy of m, as produced by gocore.Config().GetAll(), with the
+// value of every sensitive key masked. Map keys carry the settings context after the first
+// dot ("rpc_pass.docker"), so the part before it is what is matched. The input is not
+// modified.
+func RedactConfigMap(m map[string]string) map[string]string {
+	sensitive := extractSensitiveKeys()
+
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		base, _, _ := strings.Cut(k, ".")
+		if sensitive[base] {
+			v = redactedValue
+		}
+
+		out[k] = v
+	}
+
+	return out
 }
 
 func redactValue(v reflect.Value) {

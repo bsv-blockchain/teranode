@@ -97,8 +97,9 @@ blockvalidation_processTxMetaUsingStore_BatchSize=2048
 blockpersister_httpListenAddress=127.0.0.1:8083
 blockstore=file://./data/blockstore
 
-# Required for writes. Set this in settings_local.conf or the environment, never in the
-# committed settings.conf, and configure the same value on the client side.
+# Required for writes. Set both in the environment and configure the same value on the
+# client side. Values in settings files are masked in the startup dump but held in clear
+# in the file; never put them in the committed settings.conf.
 blockpersister_httpAuthToken=<shared-secret>
 blob_httpAuthToken=<shared-secret>
 ```
@@ -117,6 +118,12 @@ blockpersister_processUTXOFiles=false
 endpoint is plain HTTP and its blob API accepts writes, so it no longer binds every interface
 by default. A deployment that reaches this endpoint from another host must set the address
 explicitly.
+
+### Blob API writes require a token
+
+POST, PATCH and DELETE on the blob HTTP API now return 401 until `blockpersister_httpAuthToken`
+is set on the server and the same value is set as `blob_httpAuthToken` on each client. Reads
+(GET, HEAD, `/health`) are unaffected.
 
 ### Overwrite over the HTTP blob API
 

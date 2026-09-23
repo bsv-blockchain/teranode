@@ -60,9 +60,10 @@ func TestGetUTXOAdditionsReader_AcceptsMatchingHeader(t *testing.T) {
 	require.Equal(t, uint32(7), wrapper.Height)
 }
 
-// TestGetUTXOAdditionsReader_RefusesWhenHeightUnknown pins that the height-optional
-// constructor cannot be used to read a delta: zero is a real block height, so it cannot stand
-// in for "unknown", and a set opened without one has nothing to check the header against.
+// TestGetUTXOAdditionsReader_RefusesWhenHeightUnknown pins the runtime refusal for a set built
+// without a height. GetUTXOSet always takes one, but a package-internal literal (as
+// verifyLastSet builds) can still omit it: zero is a real block height, so it cannot stand in
+// for "unknown", and such a set has nothing to check the header against.
 func TestGetUTXOAdditionsReader_RefusesWhenHeightUnknown(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
@@ -73,10 +74,15 @@ func TestGetUTXOAdditionsReader_RefusesWhenHeightUnknown(t *testing.T) {
 
 	stageBlockDeltas(t, ctx, tSettings, store, &blockA, 7, p2pkhTx(t, 0x12, 1000))
 
-	us, err := GetUTXOSet(ctx, logger, tSettings, store, &blockA)
-	require.NoError(t, err)
+	us := &UTXOSet{
+		ctx:       ctx,
+		logger:    logger,
+		settings:  tSettings,
+		blockHash: blockA,
+		store:     store,
+	}
 
-	_, err = us.GetUTXOAdditionsReader(ctx)
+	_, err := us.GetUTXOAdditionsReader(ctx)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "requires the block height")
 }

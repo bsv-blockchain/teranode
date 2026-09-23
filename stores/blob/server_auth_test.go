@@ -175,6 +175,25 @@ func TestHTTPBlobServer_ReadOnlyWithoutConfiguredToken(t *testing.T) {
 	}
 }
 
+// TestAuthorizeMutation_EmptyConfiguredTokenDeniesEverything pins the deny-by-default guard
+// itself. "Bearer " would reach an empty-versus-empty constant-time compare, which succeeds.
+// Over HTTP the trailing space is trimmed, so this guards against a silent deletion of the
+// guard rather than a live bypass.
+func TestAuthorizeMutation_EmptyConfiguredTokenDeniesEverything(t *testing.T) {
+	s := &HTTPBlobServer{authToken: ""}
+
+	for _, authHeader := range []string{"", "Bearer", "Bearer ", "Bearer x"} {
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/blob/a2V5.testing", nil)
+		require.NoError(t, err)
+
+		if authHeader != "" {
+			req.Header.Set("Authorization", authHeader)
+		}
+
+		require.False(t, s.authorizeMutation(req), "auth header %q must be refused with no configured token", authHeader)
+	}
+}
+
 // TestHTTPBlobServer_QueryAllowOverwriteDoesNotOverwrite is the other regression test issue
 // 4841 asks for: allowOverwrite in the query string must not let a caller replace a blob the
 // store already holds, even with a valid credential.

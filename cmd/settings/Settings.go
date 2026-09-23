@@ -166,7 +166,7 @@ func sortValue(v interface{}) interface{} {
 //   - Prints the settings, version, and commit information to stdout.
 //   - Logs errors if the settings cannot be marshaled to JSON.
 func PrintSettings(logger ulogger.Logger, s *settings.Settings, version, commit string) {
-	stats := gocore.Config().Stats()
+	stats := settings.RedactConfigStats(gocore.Config().Stats())
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
 	redacted, err := settings.Redact(s)
