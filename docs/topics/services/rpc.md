@@ -145,6 +145,8 @@ Source it from the environment or secret storage.
   known-placeholder key causes these servers to generate a random key, leaving
   protected operations unreachable until a shared key is configured.
 
+A key set in a settings file is masked in startup settings dumps but held in clear in the file.
+
 Upgrade credential-capable Blockchain clients first and the Blockchain service
 last. See [Blockchain authentication](blockchainAuthentication.md) for deployment,
 HTTP admin changes, transport, and reflection configuration.

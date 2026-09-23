@@ -146,9 +146,9 @@ type UTXOSet struct {
 
 - `NewUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash, blockHeight uint32) (*UTXOSet, error)`: Creates a new UTXOSet instance for managing UTXOs. It initializes the additions and deletions storers and writes their headers. This constructor prepares the storage for a new block's UTXO additions and deletions.
 
-- `GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, error)`: Creates a new UTXOSet instance for an existing block. It's used for reading existing UTXO data rather than creating new data. This method doesn't check if the UTXO set actually exists.
+- `GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash, blockHeight uint32) (*UTXOSet, error)`: Creates a new UTXOSet instance for an existing block. It's used for reading existing UTXO data rather than creating new data. This method doesn't check if the UTXO set actually exists. The height is required: the additions and deletions readers check each file's header against the block hash and height.
 
-- `GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, bool, error)`: Creates a new UTXOSet instance and checks if it exists. Unlike GetUTXOSet, this method also verifies if the UTXO set for the specified block exists in storage. Returns the UTXOSet, a boolean indicating existence, and any error encountered.
+- `GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash, blockHeight uint32) (*UTXOSet, bool, error)`: Creates a new UTXOSet instance and checks if it exists. Unlike GetUTXOSet, this method also verifies if the UTXO set for the specified block exists in storage. Returns the UTXOSet, a boolean indicating existence, and any error encountered.
 
 #### Methods
 

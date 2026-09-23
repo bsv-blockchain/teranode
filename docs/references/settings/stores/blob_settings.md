@@ -33,7 +33,9 @@
   the process settings context. A caller that builds its settings with an alternative context
   must pass `options.WithHTTPAuthToken` itself
 - An explicit `options.WithHTTPAuthToken("")` sends no token and suppresses the fallback
-- Tagged `redact`, so it is masked in the startup settings dump
+- Tagged `redact`, so it is masked in the startup settings dumps (SETTINGS JSON, STATS and the
+  CONFIG diagnostics payload). Set it in the environment: a value in a settings file is masked
+  in those dumps but held in clear in the file
 - Never place it in a store URL: a URL carrying an `authToken` query parameter is rejected, as
   store URLs are logged verbatim
 

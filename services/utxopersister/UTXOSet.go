@@ -212,7 +212,7 @@ func NewUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 // - tSettings: Configuration settings that control behavior
 // - store: Blob store instance for accessing persisted UTXO data
 // - blockHash: Pointer to the hash of the block whose UTXO set is being accessed
-// - blockHeight: Optional height the block is being opened at
+// - blockHeight: Height the block is being opened at, checked against each delta's header
 //
 // Returns:
 // - *UTXOSet: The initialized UTXOSet instance
@@ -223,26 +223,19 @@ func NewUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 // Use this method when you need to read from an existing UTXO set but don't need to
 // verify its existence first. For verification, use GetUTXOSetWithExistCheck instead.
 //
-// A set opened without a blockHeight cannot be used to read the additions or deletions deltas:
-// those readers check the header each file carries against the block hash and height the set
-// was opened for, and refuse when the height is absent. Callers that read a delta must supply
-// the height; callers that only reach CreateUTXOSet need not.
-func GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash, blockHeight ...uint32) (*UTXOSet, error) {
-	us := &UTXOSet{
-		ctx:       ctx,
-		logger:    logger,
-		settings:  tSettings,
-		blockHash: *blockHash,
-		store:     store,
-		stats:     gocore.NewStat("utxopersister"),
-	}
-
-	if len(blockHeight) > 0 {
-		us.blockHeight = blockHeight[0]
-		us.blockHeightKnown = true
-	}
-
-	return us, nil
+// The height is required because the additions and deletions readers check the header each
+// file carries against the block hash and height the set was opened for.
+func GetUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store blob.Store, blockHash *chainhash.Hash, blockHeight uint32) (*UTXOSet, error) {
+	return &UTXOSet{
+		ctx:              ctx,
+		logger:           logger,
+		settings:         tSettings,
+		blockHash:        *blockHash,
+		blockHeight:      blockHeight,
+		blockHeightKnown: true,
+		store:            store,
+		stats:            gocore.NewStat("utxopersister"),
+	}, nil
 }
 
 // GetUTXOSetWithExistCheck creates a new UTXOSet instance and checks if it exists.
