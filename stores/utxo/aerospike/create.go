@@ -76,6 +76,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/cohort"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/ordishs/gocore"
@@ -131,6 +132,11 @@ type BatchStoreItem struct {
 
 	// Locked indicates if this transaction is locked for spending
 	locked bool
+
+	// cohort is the label the cohort-based mined-state design (issue 556) stamps
+	// on the record at create time. cohort.Unset when the caller passed no
+	// WithCohort, which is what every caller does while the feature flag is off.
+	cohort cohort.ID
 
 	// group signals completion of the whole batch; the producer waits on it
 	// once instead of one channel receive per item.
@@ -201,6 +207,10 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 	txMeta.Locked = createOptions.Locked
 
+	// Cohort label for the cohort-based mined-state design (issue 556). Zero
+	// (cohort.Unset) when the caller did not pass WithCohort.
+	txMeta.Cohort = uint32(createOptions.Cohort)
+
 	// when creating conflicting transactions, we must set the conflictingChildren in all the parents
 	// we should do this before we store the transaction, so we are sure the parents have been updated properly
 	if txMeta.Conflicting {
@@ -252,6 +262,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		subtreeIdxs:  subtreeIdxs,
 		conflicting:  createOptions.Conflicting,
 		locked:       createOptions.Locked,
+		cohort:       createOptions.Cohort,
 		group:        group,
 	}
 
@@ -418,7 +429,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			external = true
 		}
 
-		binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, arena) // false is to say this is a normal record, not external.
+		binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, bItem.cohort, arena) // false is to say this is a normal record, not external.
 		if err != nil {
 			bItem.complete(errors.NewProcessingError("could not get bins to store", err))
 			resultHandledElsewhere[idx] = true
@@ -436,7 +447,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			// that outlives sendStoreBatch (and the per-batch arena). Rebuild its
 			// bins with heap-owned backing (nil arena) so the deferred arena reset
 			// cannot corrupt the bytes the goroutine still references.
-			binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, nil)
+			binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, bItem.cohort, nil)
 			if err != nil {
 				bItem.complete(errors.NewProcessingError("could not rebuild bins for external store", err))
 				resultHandledElsewhere[idx] = true
@@ -605,7 +616,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 				}
 
 				if aErr.ResultCode == types.RECORD_TOO_BIG {
-					binsToStore, err = s.GetBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, batch[idx].blockHeights, batch[idx].subtreeIdxs, true, batch[idx].txHash, batch[idx].isCoinbase, batch[idx].conflicting, batch[idx].locked, nil) // true is to say this is a big record
+					binsToStore, err = s.GetBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, batch[idx].blockHeights, batch[idx].subtreeIdxs, true, batch[idx].txHash, batch[idx].isCoinbase, batch[idx].conflicting, batch[idx].locked, batch[idx].cohort, nil) // true is to say this is a big record
 					if err != nil {
 						batch[idx].complete(errors.NewProcessingError("could not get bins to store", err))
 						continue
@@ -809,13 +820,15 @@ func extendedTxSize(tx *bt.Tx) int {
 //   - external: Whether to use external storage
 //   - txHash: Transaction ID
 //   - isCoinbase: Whether this is a coinbase transaction
+//   - cohortID: The issue-556 cohort label to stamp on the master record;
+//     cohort.Unset writes no bin at all
 //
 // Returns:
 //   - Array of bin batches
 //   - Whether the transaction has UTXOs
 //   - Any error that occurred
 func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHeights []uint32, subtreeIdxs []int, external bool,
-	txHash *chainhash.Hash, isCoinbase bool, isConflicting bool, isLocked bool, arena *bt.Arena) ([][]*aerospike.Bin, error) {
+	txHash *chainhash.Hash, isCoinbase bool, isConflicting bool, isLocked bool, cohortID cohort.ID, arena *bt.Arena) ([][]*aerospike.Bin, error) {
 	var (
 		fee          uint64
 		utxoHashes   []*chainhash.Hash
@@ -946,6 +959,14 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 
 	// add the created at bin in milliseconds to the first record
 	batches[0] = append(batches[0], aerospike.NewBin(fields.CreatedAt.String(), aerospike.NewIntegerValue(int(time.Now().UnixMilli()))))
+
+	// add the cohort label (issue 556) to the master record only, alongside the
+	// other mined-state bins above. cohort.Unset means the caller passed no
+	// WithCohort — write no bin at all so the record is byte-identical to what a
+	// pre-cohort writer produced.
+	if cohortID != cohort.Unset {
+		batches[0] = append(batches[0], aerospike.NewBin(fields.Cohort.String(), aerospike.NewIntegerValue(int(cohortID))))
+	}
 
 	if len(batches) > 1 {
 		// if we have more than one batch, we opt to store the transaction externally

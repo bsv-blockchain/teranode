@@ -19,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/cohort"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1664,6 +1665,46 @@ func SpendAndCreateSpendErrorSurfacesPerInput(t *testing.T, db utxostore.Store) 
 func SpendAndCreateInvalidOptions(t *testing.T, db utxostore.Store) {
 	_, _, err := db.SpendAndCreate(context.Background(), Tx, 1000, utxostore.WithCreateOnly(), utxostore.WithSpendOnly())
 	require.ErrorIs(t, err, errors.ErrInvalidArgument)
+}
+
+// CohortRoundTrip proves the issue-556 cohort label survives create -> read: a
+// clock cohort passed as utxostore.WithCohort comes back from both the metadata
+// Create returns and a subsequent Get, and a create without the option leaves
+// the label at cohort.Unset.
+//
+// fields.Cohort is requested explicitly because it is deliberately not part of
+// utxostore.MetaFields, so aerospike only fetches the bin when a caller names
+// it. The SQL store is not field-gated at all — getUnbatched and
+// batchDecorateChunk both select a fixed column list and populate Cohort on
+// every read — so naming the field is what makes this test mean the same thing
+// on both backends, not a claim that no read path pays for the column.
+func CohortRoundTrip(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	stamp := cohort.ID(1_700_000_000)
+
+	md, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly(), utxostore.WithCohort(stamp))
+	require.NoError(t, err)
+	require.NotNil(t, md)
+	require.Equal(t, uint32(stamp), md.Cohort, "Create must return the cohort it was given")
+
+	stored, err := db.Get(ctx, Tx.TxIDChainHash(), fields.Cohort)
+	require.NoError(t, err)
+	require.Equal(t, uint32(stamp), stored.Cohort, "the cohort must survive the round trip through the store")
+
+	// A create without the option is what every caller does while the feature
+	// flag is off: nothing is stamped and the stored label stays at zero.
+	unstamped := newTestTx(t, 8_000_000)
+	_ = db.Delete(ctx, unstamped.TxIDChainHash())
+
+	md, _, err = db.SpendAndCreate(ctx, unstamped, 1000, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+	require.NotNil(t, md)
+	require.Equal(t, uint32(cohort.Unset), md.Cohort)
+
+	stored, err = db.Get(ctx, unstamped.TxIDChainHash(), fields.Cohort)
+	require.NoError(t, err)
+	require.Equal(t, uint32(cohort.Unset), stored.Cohort)
 }
 
 // DeleteThenUnspendRestoresParent proves the store-level contract the validator's
