@@ -226,23 +226,15 @@ func (u *BlockValidation) bindSubtreeBodyToHeader(ctx context.Context, block *mo
 	// happen: every subtree was read before any check ran. A read error still wins over
 	// a check error at the end, because it is the one that carries the quarantine.
 	//
-	// The mutex is function-scoped rather than per-chunk so there is no question about
-	// which lock guards these; chunks are walked strictly in sequence, so it is only
+	// The collector is function-scoped rather than per-chunk so there is no question
+	// about which lock guards it; chunks are walked strictly in sequence, so it is only
 	// ever contended within one chunk.
 	//
-	// firstMismatch and firstOtherErr are one slot PER CLASS rather than a single
-	// first-error slot, because a single slot makes the outcome depend on which
-	// goroutine happened to finish first: the class that lost would be recorded nowhere
-	// and silently dropped. firstReadErr stays as the "did anything fail at all"
-	// sentinel and as the error to return when no mismatch occurred.
+	// The read failures are classified by subtreeReadVerdicts, one slot per class; see
+	// its doc for why a single first-error slot would silently drop a class.
 	var (
-		mismatchMu       sync.Mutex
-		mismatches       []subtreeBlobRef
-		firstMismatch    error
-		firstOtherErr    error
-		anyUnquarantined bool
-		firstReadErr     error
-		firstCheckErr    error
+		verdicts      subtreeReadVerdicts
+		firstCheckErr error
 	)
 
 	for chunkStart := 0; chunkStart < numSubtrees; chunkStart += chunkWidth {
@@ -281,39 +273,10 @@ func (u *BlockValidation) bindSubtreeBodyToHeader(ctx context.Context, block *mo
 				// honest one is caught only here, before the pipeline.
 				structure, err := u.readSubtreeStructure(ctx, block, hash, subtreeReadAnchorOnly)
 				if err != nil {
-					// Collected under a mutex rather than taken from the group's single
-					// error: a doctored body can name several mismatching blobs and every
-					// one of them has to be quarantined, not just whichever failed first.
-					mismatchMu.Lock()
-					defer mismatchMu.Unlock()
-
-					if refs := subtreeKeyMismatchRefs(err); len(refs) > 0 {
-						mismatches = append(mismatches, refs...)
-
-						if firstMismatch == nil {
-							firstMismatch = err
-						}
-
-						// The FAIL-CLOSED verdict is aggregated separately from the refs,
-						// because only one error survives as firstMismatch and it may not be
-						// the one that could not audit its sibling.
-						if isUnquarantinedLocalSubtree(err) {
-							anyUnquarantined = true
-						}
-					} else if firstOtherErr == nil {
-						// The two CLASSES are tracked in separate slots, and that is the
-						// whole point rather than tidiness. A single "first error" slot is
-						// order-dependent: whichever class lost the race is simply not
-						// recorded anywhere, so a mismatch arriving before an ErrNotFound
-						// discards the ErrNotFound — the exact loss this tracking exists to
-						// stop. With one slot per class, the join below fires whenever both
-						// classes occurred, in either order.
-						firstOtherErr = err
-					}
-
-					if firstReadErr == nil {
-						firstReadErr = err
-					}
+					// Collected rather than taken from the group's single error: a
+					// doctored body can name several mismatching blobs and every one of
+					// them has to be quarantined, not just whichever failed first.
+					verdicts.record(err)
 
 					return err
 				}
@@ -342,7 +305,7 @@ func (u *BlockValidation) bindSubtreeBodyToHeader(ctx context.Context, block *mo
 			// the shape rules or the duplicate scan would produce a second, misleading
 			// error. Reading them is not wasted work — it is what names their blobs for
 			// the quarantine.
-			if chunkErr != nil || firstReadErr != nil || firstCheckErr != nil {
+			if chunkErr != nil || verdicts.failed() || firstCheckErr != nil {
 				return nil
 			}
 
@@ -442,20 +405,10 @@ func (u *BlockValidation) bindSubtreeBodyToHeader(ctx context.Context, block *mo
 		}
 	}
 
-	if firstReadErr != nil {
-		refs := dedupeSubtreeBlobRefs(mismatches)
-
-		if firstMismatch != nil {
-			// Prefer an anchor verdict over any sibling's read failure: it is the error
-			// that carries the quarantine, and the group reports whichever failed first
-			// rather than whichever matters. firstOtherErr — not firstReadErr — is what
-			// is folded in: firstReadErr is whichever class failed first and is the SAME
-			// value as firstMismatch whenever a mismatch won that race, which would make
-			// the join a no-op in exactly half the orderings.
-			return combineSweepMismatchError(firstMismatch, refs, anyUnquarantined, firstOtherErr)
-		}
-
-		return firstReadErr
+	// A read error still wins over a check error, because it is the one that carries
+	// the quarantine.
+	if verdicts.failed() {
+		return verdicts.err()
 	}
 
 	if firstCheckErr != nil {
@@ -499,6 +452,231 @@ func (u *BlockValidation) bindSubtreeBodyToHeader(ctx context.Context, block *mo
 	}
 
 	return nil
+}
+
+// subtreeReadVerdicts collects the failures of a set of concurrent subtree reads so
+// that every mismatching blob is named, not only whichever read failed first. The
+// binding pass, the batch collector and the subtree_data sweep all record into one.
+//
+// firstMismatch and firstOtherErr are one slot PER CLASS rather than a single
+// first-error slot, and that is the whole point rather than tidiness. A single slot is
+// order-dependent: whichever class lost the race is recorded nowhere, so a mismatch
+// arriving before an ErrNotFound discards the ErrNotFound. With one slot per class, the
+// join in err() fires whenever both classes occurred, in either order.
+type subtreeReadVerdicts struct {
+	mu               sync.Mutex
+	mismatches       []subtreeBlobRef
+	firstMismatch    error
+	firstOtherErr    error
+	anyUnquarantined bool
+}
+
+// record classifies one read failure. Nil-safe and safe for concurrent use.
+func (v *subtreeReadVerdicts) record(err error) {
+	if err == nil {
+		return
+	}
+
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	if refs := subtreeKeyMismatchRefs(err); len(refs) > 0 {
+		v.mismatches = append(v.mismatches, refs...)
+
+		if v.firstMismatch == nil {
+			v.firstMismatch = err
+		}
+
+		// The FAIL-CLOSED verdict is aggregated separately from the refs, because only
+		// one error survives as firstMismatch and it may not be the one that could not
+		// audit its sibling.
+		if isUnquarantinedLocalSubtree(err) {
+			v.anyUnquarantined = true
+		}
+
+		return
+	}
+
+	if v.firstOtherErr == nil {
+		v.firstOtherErr = err
+	}
+}
+
+// failed reports whether any read failure was recorded.
+func (v *subtreeReadVerdicts) failed() bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	return v.firstMismatch != nil || v.firstOtherErr != nil
+}
+
+// err returns the one error the recorded failures fold into, or nil when none was
+// recorded. An anchor verdict is preferred over any other read failure because it is
+// the error that carries the quarantine; the other failure is joined in rather than
+// discarded.
+func (v *subtreeReadVerdicts) err() error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	if v.firstMismatch != nil {
+		return combineSweepMismatchError(v.firstMismatch, dedupeSubtreeBlobRefs(v.mismatches), v.anyUnquarantined, v.firstOtherErr)
+	}
+
+	return v.firstOtherErr
+}
+
+// sweepSubtreeDataMismatches names every forged subtree_data blob in the block once one
+// has been found, so the quarantine removes all of them rather than only those in the
+// batch that failed.
+//
+// The batch collector aggregates within one batch only. When a batch fails every
+// driver stops, so a forged body in a later batch is never read; the binding pass reads
+// structures only, so nothing else would name it. The first quarantine would then
+// succeed, the attempt would fall through to normal validation as an ordinary local
+// fault, and the surviving blob would stay on disk for the asset service to serve
+// (bitcoin-sv/teranode#4838).
+//
+// It runs only when err already names a FileTypeSubtreeData blob, so the success path
+// and ordinary failures pay nothing. It walks the block one SubtreeBatchSize chunk at a
+// time, anchor-only, releasing every structure before the next chunk, so its residency
+// is one batch, as in the pipeline. Each failure is classified:
+//
+//   - a key mismatch is merged into err's quarantine refs;
+//   - a context or storage error prevents a verdict, so err is marked unquarantined and
+//     the run aborts instead of falling through with a body nobody could audit;
+//   - ErrNotFound is ignored only once an Exists probe confirms the body is absent,
+//     because readSubtree wraps every open failure of the body as NotFound;
+//   - any other body fault is logged and left in place, the same disposition the batch
+//     path gives it.
+//
+// A non-mismatch failure never replaces the original verdict.
+func (u *BlockValidation) sweepSubtreeDataMismatches(ctx context.Context, block *model.Block, err error) error {
+	refs := subtreeKeyMismatchRefs(err)
+
+	named := make(map[chainhash.Hash]struct{}, len(refs))
+	anyData := false
+
+	for _, ref := range refs {
+		named[ref.hash] = struct{}{}
+
+		if ref.fileType == fileformat.FileTypeSubtreeData {
+			anyData = true
+		}
+	}
+
+	// Structure mismatches are already swept whole-block by the binding pass.
+	if !anyData {
+		return err
+	}
+
+	numSubtrees := len(block.Subtrees)
+
+	chunkWidth := u.settings.BlockValidation.SubtreeBatchSize
+	if chunkWidth < 1 {
+		chunkWidth = 1
+	}
+
+	var (
+		verdicts    subtreeReadVerdicts
+		unauditedMu sync.Mutex
+		unaudited   bool
+	)
+
+	for chunkStart := 0; chunkStart < numSubtrees; chunkStart += chunkWidth {
+		chunkEnd := chunkStart + chunkWidth
+		if chunkEnd > numSubtrees {
+			chunkEnd = numSubtrees
+		}
+
+		// A plain errgroup.Group, as in the binding pass: a failing read must not cancel
+		// its siblings, or they return a context error in place of their own verdict.
+		var g errgroup.Group
+
+		limit := chunkWidth
+		if limit > 128 {
+			limit = 128
+		}
+
+		util.SafeSetLimit(u.logger, &g, limit)
+
+		for i := chunkStart; i < chunkEnd; i++ {
+			idx := i
+			hash := block.Subtrees[i]
+
+			if _, ok := named[*hash]; ok {
+				continue
+			}
+
+			g.Go(func() error {
+				result := u.readSubtree(ctx, block, idx, hash, subtreeReadAnchorOnly)
+				if result.err == nil {
+					releaseSubtreeStructure(result.subtree)
+					releaseSubtreeStructure(result.fullSubtree)
+
+					return nil
+				}
+
+				switch {
+				case len(subtreeKeyMismatchRefs(result.err)) > 0:
+					verdicts.record(result.err)
+
+				case u.sweepReadPreventsVerdict(ctx, hash, result.err):
+					u.logger.Errorf("[sweepSubtreeDataMismatches][%s] subtree %s could not be audited, aborting: %v", block.Hash().String(), hash.String(), result.err)
+
+					unauditedMu.Lock()
+					unaudited = true
+					unauditedMu.Unlock()
+
+				case errors.Is(result.err, errors.ErrNotFound):
+					// Confirmed absent: nothing is on disk to serve.
+
+				default:
+					u.logger.Warnf("[sweepSubtreeDataMismatches][%s] subtree %s has a body fault that is not a forgery, left in place: %v", block.Hash().String(), hash.String(), result.err)
+				}
+
+				return nil
+			})
+		}
+
+		_ = g.Wait()
+	}
+
+	if swept := verdicts.err(); swept != nil {
+		all := dedupeSubtreeBlobRefs(append(append([]subtreeBlobRef{}, refs...), subtreeKeyMismatchRefs(swept)...))
+		err = markSubtreeKeyMismatch(err, all...)
+
+		if isUnquarantinedLocalSubtree(swept) {
+			err = markUnquarantinedLocalSubtree(err)
+		}
+	}
+
+	if unaudited {
+		err = markUnquarantinedLocalSubtree(err)
+	}
+
+	return err
+}
+
+// sweepReadPreventsVerdict reports whether a sweep read failure leaves a subtree_data
+// body that exists but could not be judged.
+//
+// The context and storage classes are checked before ErrNotFound on purpose: readSubtree
+// wraps every failure to open the body as NotFound, and errors.Is walks the wrapped
+// chain, so a storage error beneath that wrapper is still caught here. Any other
+// NotFound is confirmed with an Exists probe rather than trusted, because the same
+// wrapper also covers a raw store error that is not classified as storage.
+func (u *BlockValidation) sweepReadPreventsVerdict(ctx context.Context, hash *chainhash.Hash, readErr error) bool {
+	if ctx.Err() != nil || errors.IsContextError(readErr) || errors.Is(readErr, errors.ErrStorageError) {
+		return true
+	}
+
+	if !errors.Is(readErr, errors.ErrNotFound) {
+		return false
+	}
+
+	exists, existsErr := u.subtreeStore.Exists(ctx, hash[:], fileformat.FileTypeSubtreeData)
+
+	return existsErr != nil || exists
 }
 
 // combineSweepMismatchError folds the whole-block sweep's collected verdicts into the

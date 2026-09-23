@@ -82,7 +82,7 @@ func TestReadSubtree_MmapFallbackReReadsFromStart(t *testing.T) {
 		Height: 1,
 	}
 
-	result := bv.readSubtree(ctx, block, 0, subtree.RootHash())
+	result := bv.readSubtree(ctx, block, 0, subtree.RootHash(), subtreeReadWithFullSubtree)
 
 	// Before the fix this errored ("failed to deserialize subtree") or returned a
 	// corrupt subtree because the fallback read from the consumed stream.
@@ -140,13 +140,12 @@ func requireMmapEngaged(t *testing.T, h *preBindHarness, block *model.Block, sub
 // already copied still mapped.
 //
 // The missing blob is on the FINAL index, and that is load-bearing rather than
-// arbitrary. The collector reads the channels in index order and returns at the first
-// error, so a failure at index 0 can abort before any successful reader's result has
-// been copied into the batch — the pre-fix code would then leak nothing and the test
-// would pass against the bug. With the failure last, indices 0..n-2 are in the batch
-// and the abandoned-batch leak is reliably observable.
+// arbitrary. The collector reads the channels in index order and copies every result
+// that arrives before the first failure into the batch, so with the failure last,
+// indices 0..n-2 are in the batch and only the deferred batch.Close can release them.
+// A failure at index 0 exercises the other release, which the next test covers.
 //
-// Mutation target: removing the deferred batch.Close() from processSubtreeBatch must
+// Mutation target: removing the deferred batch.Close() from prefetchSubtreeBatch must
 // leave three temp files behind. Removing readSubtree's release of structure.subtree
 // leaves a fourth, for the subtree whose own data read failed.
 func TestProcessSubtreeBatch_ReaderFailure_LeavesNoMmapFiles(t *testing.T) {
@@ -171,6 +170,41 @@ func TestProcessSubtreeBatch_ReaderFailure_LeavesNoMmapFiles(t *testing.T) {
 
 	batch, err := h.bv.processSubtreeBatch(h.ctx, block, 0, len(roots), make(map[chainhash.Hash]*bt.Tx), false)
 	require.Error(t, err, "a batch with an unreadable subtree_data must fail")
+	require.Nil(t, batch)
+
+	requireMmapDirEmpty(t, mmapDir)
+}
+
+// TestPrefetchSubtreeBatch_FirstIndexFailure_ReleasesLaterResults covers the release on
+// the AGGREGATED failure path. The collector no longer returns at the first failing
+// index: it receives every channel so every forged blob in the batch is named. With
+// the failure at index 0 nothing is ever copied into the batch, so every later result
+// is released by the collector itself as it arrives, not by the batch's close and not
+// by the defensive drain, which finds every channel already consumed.
+//
+// Mutation target: removing the collector's release of post-failure results must leave
+// temp files behind.
+func TestPrefetchSubtreeBatch_FirstIndexFailure_ReleasesLaterResults(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+
+	mmapDir := t.TempDir()
+	h.bv.mmapDir = mmapDir
+
+	coinbase := preBindCoinbase(t, 0x23)
+
+	groups, _ := h.multiBatchGroups(0xc0, []int{1, 2, 2, 2})
+
+	_, roots, merkleRoot := h.multiSubtreeBody(coinbase, groups)
+	block := h.newPreBindBlock(coinbase, roots, merkleRoot, 8)
+
+	requireMmapEngaged(t, h, block, roots[1])
+	requireMmapDirEmpty(t, mmapDir)
+
+	require.NoError(t, h.subtreeStore.Del(h.ctx, roots[0][:], fileformat.FileTypeSubtreeData))
+
+	batch, err := h.bv.prefetchSubtreeBatch(h.ctx, block, 0, len(roots), false)
+	require.Error(t, err, "a batch with an unreadable subtree_data must fail")
+	require.True(t, errors.Is(err, errors.ErrNotFound), "got %v", err)
 	require.Nil(t, batch)
 
 	requireMmapDirEmpty(t, mmapDir)
