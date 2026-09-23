@@ -100,6 +100,8 @@ func TestCreateUTXOSet_PreviousSetReadDoesNotDoubleReadMagic(t *testing.T) {
 	c.lastBlockHash = &currentBlockHash
 	c.lastBlockHeight = 43
 	c.previousBlockHash = &previousBlockHash
+	c.firstBlockHeight = 43 // the staged previous set is at height 42
+	c.firstBlockHeightKnown = true
 
 	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
 	require.NoError(t, err)
@@ -142,6 +144,8 @@ func TestCreateUTXOSet_PreviousSetWrongBlockHash(t *testing.T) {
 	c.lastBlockHash = &currentBlockHash
 	c.lastBlockHeight = 43
 	c.previousBlockHash = &previousBlockHash
+	c.firstBlockHeight = 43 // the staged previous set is at height 42
+	c.firstBlockHeightKnown = true
 
 	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
 	require.NoError(t, err)
@@ -149,6 +153,84 @@ func TestCreateUTXOSet_PreviousSetWrongBlockHash(t *testing.T) {
 	err = us.CreateUTXOSet(ctx, c)
 	require.Error(t, err, "CreateUTXOSet must reject a previous UTXO set whose stored block hash doesn't match the expected ancestor")
 	assert.Contains(t, err.Error(), "block hash mismatch")
+}
+
+// stagePreviousUTXOSetHeader stores an empty previous UTXO set for previousBlockHash whose
+// header records storedHeight, followed by the zero-count footer.
+func stagePreviousUTXOSetHeader(t *testing.T, ctx context.Context, blockStore *memory.Memory, previousBlockHash chainhash.Hash, storedHeight uint32) {
+	t.Helper()
+
+	grandparentHash := chainhash.HashH([]byte("grandparent-block-for-height-check"))
+
+	var heightBuf [4]byte
+	binary.LittleEndian.PutUint32(heightBuf[:], storedHeight)
+
+	body := make([]byte, 0, len(previousBlockHash)+len(heightBuf)+len(grandparentHash)+FooterSize)
+	body = append(body, previousBlockHash[:]...)
+	body = append(body, heightBuf[:]...)
+	body = append(body, grandparentHash[:]...)
+	body = append(body, make([]byte, FooterSize)...)
+	require.NoError(t, blockStore.Set(ctx, previousBlockHash[:], fileformat.FileTypeUtxoSet, body))
+}
+
+// TestCreateUTXOSet_PreviousSetWrongHeight pins the height half of the previous-set header
+// check: a set stored under the right key and naming the right block, but at a height that is
+// not the one just before the range start, is refused.
+func TestCreateUTXOSet_PreviousSetWrongHeight(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+	blockStore := memory.New()
+
+	previousBlockHash := chainhash.HashH([]byte("previous-block-wrong-height"))
+	currentBlockHash := chainhash.HashH([]byte("current-block-wrong-height"))
+
+	stagePreviousUTXOSetHeader(t, ctx, blockStore, previousBlockHash, 41)
+
+	c := NewConsolidator(logger, tSettings, nil, nil, blockStore, &previousBlockHash)
+	c.lastBlockHash = &currentBlockHash
+	c.lastBlockHeight = 43
+	c.previousBlockHash = &previousBlockHash
+	c.firstBlockHeight = 43 // expects the previous set at 42, the staged one says 41
+	c.firstBlockHeightKnown = true
+
+	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
+	require.NoError(t, err)
+
+	err = us.CreateUTXOSet(ctx, c)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "height mismatch")
+}
+
+// TestCreateUTXOSet_PreviousSetRefusedWhenStartHeightUnknown pins that a consolidator whose
+// range start was never set cannot skip the height check: zero is a real height, so the
+// check is refused rather than compared against a default.
+func TestCreateUTXOSet_PreviousSetRefusedWhenStartHeightUnknown(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+	blockStore := memory.New()
+
+	previousBlockHash := chainhash.HashH([]byte("previous-block-unknown-start"))
+	currentBlockHash := chainhash.HashH([]byte("current-block-unknown-start"))
+
+	stagePreviousUTXOSetHeader(t, ctx, blockStore, previousBlockHash, 42)
+
+	c := NewConsolidator(logger, tSettings, nil, nil, blockStore, &previousBlockHash)
+	c.lastBlockHash = &currentBlockHash
+	c.lastBlockHeight = 43
+	c.previousBlockHash = &previousBlockHash
+
+	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
+	require.NoError(t, err)
+
+	err = us.CreateUTXOSet(ctx, c)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "range start height is not known")
+
+	exists, err := blockStore.Exists(ctx, currentBlockHash[:], fileformat.FileTypeUtxoSet)
+	require.NoError(t, err)
+	require.False(t, exists, "no utxo-set must be written when the previous set cannot be checked")
 }
 
 // TestCreateUTXOSet_PreviousSetWithFooterTerminatesCleanly pins that the
@@ -206,6 +288,8 @@ func TestCreateUTXOSet_PreviousSetWithFooterTerminatesCleanly(t *testing.T) {
 	c.lastBlockHash = &currentBlockHash
 	c.lastBlockHeight = 43
 	c.previousBlockHash = &previousBlockHash
+	c.firstBlockHeight = 43 // the staged previous set is at height 42
+	c.firstBlockHeightKnown = true
 
 	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
 	require.NoError(t, err)
@@ -255,6 +339,8 @@ func TestCreateUTXOSet_PreviousSetTruncatedMidTxID_ReturnsError(t *testing.T) {
 	c.lastBlockHash = &currentBlockHash
 	c.lastBlockHeight = 43
 	c.previousBlockHash = &previousBlockHash
+	c.firstBlockHeight = 43 // the staged previous set is at height 42
+	c.firstBlockHeightKnown = true
 
 	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
 	require.NoError(t, err)
@@ -302,6 +388,8 @@ func TestCreateUTXOSet_PreviousSetMissingFooter_ReturnsError(t *testing.T) {
 	c.lastBlockHash = &currentBlockHash
 	c.lastBlockHeight = 43
 	c.previousBlockHash = &previousBlockHash
+	c.firstBlockHeight = 43 // the staged previous set is at height 42
+	c.firstBlockHeightKnown = true
 
 	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
 	require.NoError(t, err)
@@ -351,6 +439,8 @@ func TestCreateUTXOSet_PreviousSetFooterMismatch_ReturnsError(t *testing.T) {
 	c.lastBlockHash = &currentBlockHash
 	c.lastBlockHeight = 43
 	c.previousBlockHash = &previousBlockHash
+	c.firstBlockHeight = 43 // the staged previous set is at height 42
+	c.firstBlockHeightKnown = true
 
 	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
 	require.NoError(t, err)
@@ -416,6 +506,8 @@ func TestCreateUTXOSet_PreviousSetWithDeletions_NotReportedAsTruncated(t *testin
 	c.lastBlockHash = &currentBlockHash
 	c.lastBlockHeight = 43
 	c.previousBlockHash = &previousBlockHash
+	c.firstBlockHeight = 43 // the staged previous set is at height 42
+	c.firstBlockHeightKnown = true
 	// spentWrapper's single output was spent within the consolidated range.
 	c.deletions[UTXODeletion{TxID: spentTxID, Index: 0}] = struct{}{}
 

@@ -533,7 +533,8 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	if storeURL := b.settings.BlockChain.PeerRegistryStore; storeURL != nil {
 		store, err := blob.NewStore(b.logger, storeURL,
-			blobstoreoptions.WithStoreType(blobstoretypes.PEERREGISTRYSTORE))
+			blobstoreoptions.WithStoreType(blobstoretypes.PEERREGISTRYSTORE),
+			blobstoreoptions.WithHTTPAuthToken(b.settings.BlobHTTPAuthToken))
 		if err != nil {
 			b.logger.Warnf("[Blockchain] failed to construct peer registry blob store %s: %v", storeURL.Redacted(), err)
 		} else {

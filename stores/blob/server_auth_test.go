@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
@@ -192,4 +194,57 @@ func TestHTTPBlobServer_QueryAllowOverwriteDoesNotOverwrite(t *testing.T) {
 	stored, err := store.Get(context.Background(), key, fileformat.FileTypeTesting)
 	require.NoError(t, err)
 	require.Equal(t, []byte("first"), stored, "the original blob must survive")
+}
+
+// warnCapturingLogger records every Warnf message. The handler runs on the server's
+// goroutine, so access is locked.
+type warnCapturingLogger struct {
+	ulogger.TestLogger
+
+	mu    sync.Mutex
+	warns []string
+}
+
+func (l *warnCapturingLogger) Warnf(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.warns = append(l.warns, fmt.Sprintf(format, args...))
+}
+
+func (l *warnCapturingLogger) messages() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return append([]string(nil), l.warns...)
+}
+
+// TestHTTPBlobServer_RefusalLogQuotesPath pins that a caller with no credential cannot forge a
+// log line: the request path is percent-decoded, so it can carry a newline.
+func TestHTTPBlobServer_RefusalLogQuotesPath(t *testing.T) {
+	logger := &warnCapturingLogger{}
+
+	storeURL, err := url.Parse("memory://")
+	require.NoError(t, err)
+
+	blobServer, err := NewHTTPBlobServer(logger, storeURL, "log-token")
+	require.NoError(t, err)
+
+	server := httptest.NewServer(blobServer)
+	t.Cleanup(server.Close)
+
+	status := doBlobRequest(t, server, http.MethodDelete, "/blob/%0A2026-01-01%20INFO%20forged.testing", "", nil)
+	require.Equal(t, http.StatusUnauthorized, status)
+
+	var refusals []string
+
+	for _, msg := range logger.messages() {
+		if strings.Contains(msg, "refused unauthenticated") {
+			refusals = append(refusals, msg)
+		}
+	}
+
+	require.Len(t, refusals, 1)
+	require.NotContains(t, refusals[0], "\n", "the refusal must stay on one line")
+	require.Contains(t, refusals[0], `\n`, "the newline must be logged escaped")
 }

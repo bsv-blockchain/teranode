@@ -215,7 +215,9 @@ The Blob Store includes a comprehensive HTTP REST API server implementation (`HT
 
 POST, PATCH and DELETE require an `Authorization: Bearer <token>` header matching the shared
 secret the server was constructed with. An empty secret leaves the server read-only and refuses
-all three with 401. Reads and the health endpoint need no credential.
+all three with 401. Reads and the health endpoint need no credential. Overwrite is not available
+over this API: an existing blob is answered with 409, and an HTTP client write that asks for
+overwrite fails with a configuration error before anything is sent.
 
 #### Usage Example
 

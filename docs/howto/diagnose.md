@@ -88,6 +88,8 @@ Checks HTTP endpoints by sending GET requests:
 | Health Endpoint | `health_check_httpListenAddress` | `/health` |
 | Profiler (pprof) | `profilerAddr` | `/debug/pprof/` |
 
+The Block Persister listener binds to loopback (`127.0.0.1:8083`) by default, so its check must run on the node's own host or container unless the address is set to a published interface.
+
 Auth-protected endpoints (HTTP 401/403) are reported as OK with a note, since a 401 means the service is running and responding.
 
 ### Infrastructure

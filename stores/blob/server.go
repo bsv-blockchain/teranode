@@ -149,7 +149,8 @@ func (s *HTTPBlobServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost, http.MethodPatch, http.MethodDelete:
 		if !s.authorizeMutation(r) {
-			s.logger.Warnf("[HTTPBlobServer] refused unauthenticated %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+			// The path is quoted: it is percent-decoded and caller-controlled, so it can carry a newline.
+			s.logger.Warnf("[HTTPBlobServer] refused unauthenticated %s %q from %s", r.Method, r.URL.Path, r.RemoteAddr)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 
 			return
@@ -699,9 +700,12 @@ func (s *HTTPBlobServer) handleDelete(w http.ResponseWriter, r *http.Request, op
 //   - error: Any error that occurred during extraction, such as invalid path format,
 //     invalid base64 encoding, or unrecognized file type
 func getKeyFromPath(path string) ([]byte, fileformat.FileType, error) {
-	// Assuming the path is in the format "/blob/{key}.{fileType}"
+	const blobPathPrefix = "/blob/"
+
+	// The path is caller-controlled: a dot before the end of the prefix (e.g. "/.tx") would
+	// otherwise slice out of range and panic the handler.
 	pos := strings.LastIndex(path, ".")
-	if pos == -1 {
+	if !strings.HasPrefix(path, blobPathPrefix) || pos < len(blobPathPrefix) {
 		return nil, "", errors.NewInvalidArgumentError("invalid path format")
 	}
 
@@ -712,7 +716,7 @@ func getKeyFromPath(path string) ([]byte, fileformat.FileType, error) {
 		return nil, "", errors.NewInvalidArgumentError("invalid file type", err)
 	}
 
-	encodedKey := path[6:pos]
+	encodedKey := path[len(blobPathPrefix):pos]
 
 	key, err := base64.URLEncoding.DecodeString(encodedKey)
 	if err != nil {
