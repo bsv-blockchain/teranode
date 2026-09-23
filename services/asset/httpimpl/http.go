@@ -353,14 +353,20 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/headers/:hash/hex", h.GetBlockHeaders(HEX))
 	apiGroup.GET("/headers/:hash/json", h.GetBlockHeaders(JSON))
 
+	// Heavy: a locator that matches nothing makes the blockchain service walk back from
+	// the target in 1,000-header pages until it reaches a match or the start of the chain,
+	// so one unauthenticated request costs work proportional to chain height
+	// (bitcoin-sv/teranode#&NoBreak;4894). The global limiter alone (1024 req/s) does not
+	// price that; these are as expensive as the block and subtree routes below.
+	//
 	// this needs to be removed in the future, after all clients have migrated to the new endpoint
-	apiGroup.GET("/headers_to_common_ancestor/:hash", h.GetBlockHeadersToCommonAncestor(BINARY_STREAM))
-	apiGroup.GET("/headers_to_common_ancestor/:hash/hex", h.GetBlockHeadersToCommonAncestor(HEX))
-	apiGroup.GET("/headers_to_common_ancestor/:hash/json", h.GetBlockHeadersToCommonAncestor(JSON))
+	apiGroup.GET("/headers_to_common_ancestor/:hash", h.GetBlockHeadersToCommonAncestor(BINARY_STREAM), heavyMW()...)
+	apiGroup.GET("/headers_to_common_ancestor/:hash/hex", h.GetBlockHeadersToCommonAncestor(HEX), heavyMW()...)
+	apiGroup.GET("/headers_to_common_ancestor/:hash/json", h.GetBlockHeadersToCommonAncestor(JSON), heavyMW()...)
 
-	apiGroup.GET("/headers_from_common_ancestor/:hash", h.GetBlockHeadersFromCommonAncestor(BINARY_STREAM))
-	apiGroup.GET("/headers_from_common_ancestor/:hash/hex", h.GetBlockHeadersFromCommonAncestor(HEX))
-	apiGroup.GET("/headers_from_common_ancestor/:hash/json", h.GetBlockHeadersFromCommonAncestor(JSON))
+	apiGroup.GET("/headers_from_common_ancestor/:hash", h.GetBlockHeadersFromCommonAncestor(BINARY_STREAM), heavyMW()...)
+	apiGroup.GET("/headers_from_common_ancestor/:hash/hex", h.GetBlockHeadersFromCommonAncestor(HEX), heavyMW()...)
+	apiGroup.GET("/headers_from_common_ancestor/:hash/json", h.GetBlockHeadersFromCommonAncestor(JSON), heavyMW()...)
 
 	apiGroup.GET("/header/:hash", h.GetBlockHeader(BINARY_STREAM))
 	apiGroup.GET("/header/:hash/hex", h.GetBlockHeader(HEX))
