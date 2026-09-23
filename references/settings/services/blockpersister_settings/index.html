@@ -7251,13 +7251,6 @@
 <td><strong>CRITICAL</strong> - Parallel subtree processing, reduced by half in all-in-one mode</td>
 </tr>
 <tr>
-<td>BatchMissingTransactions</td>
-<td>bool</td>
-<td>true</td>
-<td>blockpersister_batchMissingTransactions</td>
-<td>Enable batched transaction metadata retrieval</td>
-</tr>
-<tr>
 <td>SkipUTXODelete</td>
 <td>bool</td>
 <td>false</td>
@@ -7326,7 +7319,7 @@
 </ul>
 <h3 id="transaction-processing">Transaction Processing<a class="headerlink" href="#transaction-processing" title="Permanent link">&para;</a></h3>
 <ul>
-<li>When <code>BatchMissingTransactions</code> is true, uses <code>ProcessTxMetaUsingStoreBatchSize</code></li>
+<li>Transaction metadata is always fetched in batches, sized by <code>ProcessTxMetaUsingStoreBatchSize</code></li>
 <li><strong>Note</strong>: <code>ProcessTxMetaUsingStoreBatchSize</code> uses the <code>blockvalidation_</code> prefix (not <code>blockpersister_</code>) as it's a shared setting with the Block Validation service. Both services use the same batch size for consistent transaction metadata processing.</li>
 </ul>
 <h3 id="utxo-file-processing">UTXO File Processing<a class="headerlink" href="#utxo-file-processing" title="Permanent link">&para;</a></h3>
@@ -7396,8 +7389,7 @@
 </span></code></pre></div>
 <h3 id="high-performance-configuration">High Performance Configuration<a class="headerlink" href="#high-performance-configuration" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">blockpersister_concurrency</span><span class="o">=</span><span class="m">16</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nv">blockpersister_batchMissingTransactions</span><span class="o">=</span><span class="nb">true</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nv">blockvalidation_processTxMetaUsingStore_BatchSize</span><span class="o">=</span><span class="m">2048</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nv">blockvalidation_processTxMetaUsingStore_BatchSize</span><span class="o">=</span><span class="m">2048</span>
 </span></code></pre></div>
 <h3 id="http-server-configuration">HTTP Server Configuration<a class="headerlink" href="#http-server-configuration" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nv">blockpersister_httpListenAddress</span><span class="o">=</span>:8083
