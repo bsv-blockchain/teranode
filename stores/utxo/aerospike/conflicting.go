@@ -25,7 +25,7 @@ func (s *Store) GetCounterConflicting(ctx context.Context, txHash chainhash.Hash
 	// unbounded: this is the conflict-demotion path (ProcessConflicting), which
 	// must always walk the full descendant set to completion — a budget failure
 	// here would wedge block assembly on the block forever (issue 1391)
-	return utxo.GetCounterConflictingTxHashes(ctx, s, txHash, 0)
+	return utxo.GetCounterConflictingTxHashes(ctx, s, txHash, 0, s.settings.GetUtxoStoreBlockHeightRetention())
 }
 
 // GetConflictingChildren returns the conflicting transactions for the given transaction hash
