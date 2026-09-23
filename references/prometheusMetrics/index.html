@@ -7441,6 +7441,11 @@
 <td>Seconds since the subtree processor's consumer goroutine last passed through its dequeue branch; growing alongside a non-zero <code>queued_transactions</code> means intake is queuing unboundedly because the consumer is stuck elsewhere</td>
 </tr>
 <tr>
+<td><code>teranode_blockassembly_liveness_heartbeat_age_seconds</code></td>
+<td>Gauge</td>
+<td>Seconds since the main select loop last beat its liveness heartbeat (0 before the loop starts and after it stops); the value <code>blockassembly_livenessStallTimeout</code> is compared against</td>
+</tr>
+<tr>
 <td><code>teranode_blockassembly_tx_meta_get</code></td>
 <td>Histogram</td>
 <td>Histogram of reading tx meta data from txmeta store in block assembler</td>
