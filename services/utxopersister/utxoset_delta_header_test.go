@@ -2,7 +2,10 @@ package utxopersister
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -107,6 +110,80 @@ func TestGetUTXOAdditionsReader_RejectsForeignBlockHash(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), blockB.String())
 	require.Contains(t, err.Error(), blockA.String())
+}
+
+// errorCapturingLogger records every Errorf message.
+type errorCapturingLogger struct {
+	ulogger.TestLogger
+
+	mu   sync.Mutex
+	errs []string
+}
+
+func (l *errorCapturingLogger) Errorf(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.errs = append(l.errs, fmt.Sprintf(format, args...))
+}
+
+func (l *errorCapturingLogger) messages() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return append([]string(nil), l.errs...)
+}
+
+// integrityMessages returns the captured Errorf messages that carry the integrity signal.
+func (l *errorCapturingLogger) integrityMessages() []string {
+	var integrity []string
+
+	for _, msg := range l.messages() {
+		if strings.Contains(msg, "integrity") {
+			integrity = append(integrity, msg)
+		}
+	}
+
+	return integrity
+}
+
+// TestDeltaReaders_HeaderMismatchLogsIntegrityError pins the distinct signal for a delta that
+// names another block, on both delta readers: the persister cannot advance past it, so it
+// must not look like the generic, transient retry line.
+func TestDeltaReaders_HeaderMismatchLogsIntegrityError(t *testing.T) {
+	tests := []struct {
+		name     string
+		fileType fileformat.FileType
+		open     func(us *UTXOSet, ctx context.Context) (io.ReadCloser, error)
+	}{
+		{name: "additions", fileType: fileformat.FileTypeUtxoAdditions, open: (*UTXOSet).GetUTXOAdditionsReader},
+		{name: "deletions", fileType: fileformat.FileTypeUtxoDeletions, open: (*UTXOSet).GetUTXODeletionsReader},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			logger := &errorCapturingLogger{}
+			tSettings := test.CreateBaseTestSettings(t)
+			store := memory.New()
+
+			blockA := chainhash.HashH([]byte("delta-header-integrity-key-" + tt.name))
+			blockB := chainhash.HashH([]byte("delta-header-integrity-foreign-" + tt.name))
+
+			stageForeignDelta(t, ctx, tSettings, store, &blockA, &blockB, 7, tt.fileType, p2pkhTx(t, 0x17, 1000))
+
+			us, err := GetUTXOSet(ctx, logger, tSettings, store, &blockA, 7)
+			require.NoError(t, err)
+
+			_, err = tt.open(us, ctx)
+			require.Error(t, err)
+
+			integrity := logger.integrityMessages()
+			require.Len(t, integrity, 1)
+			require.Contains(t, integrity[0], blockB.String())
+			require.NotContains(t, integrity[0], "\n", "the log message must stay on one line")
+		})
+	}
 }
 
 // TestGetUTXOAdditionsReader_RejectsHeightMismatch covers the same block hash at the wrong

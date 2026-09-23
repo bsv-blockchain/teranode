@@ -160,6 +160,12 @@ Note: `{key}` is a base64-encoded blob identifier and `{fileType}` is the file e
 header matching the server's configured shared secret. With no secret configured the server is
 read-only and refuses all three with 401. `GET`, `HEAD` and `/health` need no credential.
 
+The HTTP blob client (`stores/blob/http`) supplies that token from `options.WithHTTPAuthToken`,
+or, when the option is not given, from the `blob_httpAuthToken` setting. It sends it only on
+`POST`, `PATCH` and `DELETE`, and refuses to follow any redirect, so the token never leaves for
+a destination the caller did not choose. Never put the token in the store URL: a URL carrying an
+`authToken` query parameter is rejected.
+
 `POST` never replaces an existing blob: the server ignores any overwrite request and answers 409,
 which the HTTP client returns as `ErrBlobAlreadyExists`. A client write that asks for overwrite
 (`options.WithAllowOverwrite(true)`) fails with a configuration error before anything is sent.

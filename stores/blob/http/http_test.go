@@ -423,6 +423,26 @@ func TestHTTPStore_ConflictIsBlobAlreadyExists(t *testing.T) {
 	require.ErrorIs(t, err, errors.ErrBlobAlreadyExists)
 }
 
+// TestHTTPStore_StatusErrorHasNoStrayParam pins that a non-2xx write reports its status code
+// without a formatting artefact such as "%!(EXTRA <nil>)".
+func TestHTTPStore_StatusErrorHasNoStrayParam(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	storeURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, storeURL, options.WithHTTPAuthToken("t"))
+	require.NoError(t, err)
+
+	err = store.Set(context.Background(), []byte("k"), fileformat.FileTypeTesting, []byte("v"))
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "EXTRA")
+	require.Contains(t, err.Error(), "500")
+}
+
 // TestNew_ExplicitEmptyTokenSuppressesFallback pins that the blob_httpAuthToken fallback only
 // applies when no token option was given: an explicit option, even an empty one, wins.
 func TestNew_ExplicitEmptyTokenSuppressesFallback(t *testing.T) {

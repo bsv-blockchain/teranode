@@ -353,9 +353,12 @@ func ssrfCheckRedirect(policy SSRFDialPolicy) func(req *http.Request, via []*htt
 		// choosing a destination for bytes we assembled. A 301, 302 or 303 turns it into a GET
 		// wherever the peer points; a 307 or 308 replays method and body verbatim. Neither is ever
 		// wanted, so this refusal is not conditional on the SSRF toggle below - test topologies
-		// disable that toggle to reach loopback, and must not thereby re-open this.
-		if len(via) > 0 && via[0] != nil && via[0].Method == http.MethodPost {
-			return errors.NewInvalidArgumentError("SSRF redirect check: refusing to follow a redirect of a POST")
+		// disable that toggle to reach loopback, and must not thereby re-open this. Only POST
+		// reaches here today; any other method that is not a plain read (PUT, PATCH, DELETE, ...)
+		// is refused on the same grounds, so a future caller does not re-open it. An empty method
+		// means GET to net/http.
+		if len(via) > 0 && via[0] != nil && !isReadMethod(via[0].Method) {
+			return errors.NewInvalidArgumentError("SSRF redirect check: refusing to follow a redirect of a %s", via[0].Method)
 		}
 
 		if !ssrfProtectionEnabled.Load() {
@@ -385,6 +388,12 @@ func ssrfCheckRedirect(policy SSRFDialPolicy) func(req *http.Request, via []*htt
 
 		return nil
 	}
+}
+
+// isReadMethod reports whether a request method only reads. net/http treats an empty method
+// as GET.
+func isReadMethod(method string) bool {
+	return method == "" || method == http.MethodGet || method == http.MethodHead
 }
 
 // sameOriginOrUpgrade reports whether a redirect from one URL to another keeps the same

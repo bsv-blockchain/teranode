@@ -311,6 +311,32 @@ func TestSSRFCheckRedirect_StaysOnOrigin(t *testing.T) {
 	require.ErrorContains(t, err, "POST")
 }
 
+// TestSSRFCheckRedirect_RefusesAnyNonReadMethod pins that the redirect refusal is not specific
+// to POST: any original request that is not a GET or HEAD is refused, even on the same origin.
+func TestSSRFCheckRedirect_RefusesAnyNonReadMethod(t *testing.T) {
+	origProtection := SSRFProtectionEnabled()
+
+	SetSSRFProtection(true)
+	defer SetSSRFProtection(origProtection)
+
+	check := ssrfCheckRedirect(DefaultSSRFDialPolicy)
+
+	fromURL, err := url.Parse("http://peer.example/a")
+	require.NoError(t, err)
+	toURL, err := url.Parse("http://peer.example/b")
+	require.NoError(t, err)
+
+	for _, method := range []string{http.MethodPut, http.MethodDelete} {
+		err := check(&http.Request{URL: toURL, Method: method}, []*http.Request{{URL: fromURL, Method: method}})
+		require.ErrorContains(t, err, "redirect of a "+method)
+	}
+
+	for _, method := range []string{"", http.MethodGet, http.MethodHead} {
+		require.NoError(t, check(&http.Request{URL: toURL, Method: http.MethodGet}, []*http.Request{{URL: fromURL, Method: method}}),
+			"a same-origin redirect of %q must still be followed", method)
+	}
+}
+
 // TestDoHTTPRequest_POSTRedirectNotFollowed drives a live 302 answer to a POST, which Go
 // would otherwise follow as a GET.
 func TestDoHTTPRequest_POSTRedirectNotFollowed(t *testing.T) {

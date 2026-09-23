@@ -194,6 +194,23 @@ func TestAuthorizeMutation_EmptyConfiguredTokenDeniesEverything(t *testing.T) {
 	}
 }
 
+// TestHTTPBlobServer_BearerSchemeIsCaseInsensitive pins RFC 7235: the auth-scheme matches in
+// any case, but it must still be followed by a space before the token.
+func TestHTTPBlobServer_BearerSchemeIsCaseInsensitive(t *testing.T) {
+	const token = "case-token"
+
+	server, _ := newAuthTestServer(t, token)
+
+	for caseIdx, authHeader := range []string{"bearer " + token, "BEARER " + token} {
+		key := []byte(fmt.Sprintf("bearer-case-%d", caseIdx))
+		status := doBlobRequest(t, server, http.MethodPost, blobPath(key), authHeader, bytes.NewReader([]byte("payload")))
+		require.Equal(t, http.StatusCreated, status, "auth header %q must be accepted", authHeader)
+	}
+
+	status := doBlobRequest(t, server, http.MethodPost, blobPath([]byte("bearer-no-space")), "Bearer"+token, bytes.NewReader([]byte("payload")))
+	require.Equal(t, http.StatusUnauthorized, status, "a scheme with no space before the token must be refused")
+}
+
 // TestHTTPBlobServer_QueryAllowOverwriteDoesNotOverwrite is the other regression test issue
 // 4841 asks for: allowOverwrite in the query string must not let a caller replace a blob the
 // store already holds, even with a valid credential.

@@ -189,12 +189,13 @@ func (s *HTTPBlobServer) authorizeMutation(r *http.Request) bool {
 
 	const prefix = "Bearer "
 
+	// The auth-scheme is case-insensitive (RFC 7235); the token itself is not.
 	header := r.Header.Get("Authorization")
-	if !strings.HasPrefix(header, prefix) {
+	if len(header) < len(prefix) || !strings.EqualFold(header[:len(prefix)], prefix) {
 		return false
 	}
 
-	presented := []byte(strings.TrimPrefix(header, prefix))
+	presented := []byte(header[len(prefix):])
 	expected := []byte(s.authToken)
 
 	return len(presented) == len(expected) && subtle.ConstantTimeCompare(presented, expected) == 1

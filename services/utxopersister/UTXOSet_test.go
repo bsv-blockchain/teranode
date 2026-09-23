@@ -202,6 +202,63 @@ func TestCreateUTXOSet_PreviousSetWrongHeight(t *testing.T) {
 	require.Contains(t, err.Error(), "height mismatch")
 }
 
+// TestCreateUTXOSet_PreviousSetMismatchLogsIntegrityError pins the distinct integrity signal on
+// both previous-set header checks: a set naming another block, and one at the wrong height.
+func TestCreateUTXOSet_PreviousSetMismatchLogsIntegrityError(t *testing.T) {
+	tests := []struct {
+		name         string
+		wrongHash    bool
+		storedHeight uint32
+		wantInLog    string
+	}{
+		{name: "block hash", wrongHash: true, storedHeight: 42, wantInLog: "block hash mismatch"},
+		{name: "height", storedHeight: 41, wantInLog: "height mismatch"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			logger := &errorCapturingLogger{}
+			tSettings := test.CreateBaseTestSettings(t)
+			blockStore := memory.New()
+
+			previousBlockHash := chainhash.HashH([]byte("previous-set-integrity-" + tt.name))
+			currentBlockHash := chainhash.HashH([]byte("current-set-integrity-" + tt.name))
+
+			storedHash := previousBlockHash
+			if tt.wrongHash {
+				storedHash = chainhash.HashH([]byte("previous-set-integrity-wrong-hash"))
+			}
+
+			// A set whose header names storedHash, copied under previousBlockHash when they differ.
+			stagePreviousUTXOSetHeader(t, ctx, blockStore, storedHash, tt.storedHeight)
+
+			if tt.wrongHash {
+				data, err := blockStore.Get(ctx, storedHash[:], fileformat.FileTypeUtxoSet)
+				require.NoError(t, err)
+				require.NoError(t, blockStore.Set(ctx, previousBlockHash[:], fileformat.FileTypeUtxoSet, data))
+			}
+
+			c := NewConsolidator(logger, tSettings, nil, nil, blockStore, &previousBlockHash)
+			c.lastBlockHash = &currentBlockHash
+			c.lastBlockHeight = 43
+			c.previousBlockHash = &previousBlockHash
+			c.firstBlockHeight = 43
+			c.firstBlockHeightKnown = true
+
+			us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash, 43)
+			require.NoError(t, err)
+
+			require.Error(t, us.CreateUTXOSet(ctx, c))
+
+			integrity := logger.integrityMessages()
+			require.Len(t, integrity, 1)
+			require.Contains(t, integrity[0], tt.wantInLog)
+			require.NotContains(t, integrity[0], "\n", "the log message must stay on one line")
+		})
+	}
+}
+
 // TestCreateUTXOSet_PreviousSetRefusedWhenStartHeightUnknown pins that a consolidator whose
 // range start was never set cannot skip the height check: zero is a real height, so the
 // check is refused rather than compared against a default.
