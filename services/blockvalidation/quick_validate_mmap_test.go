@@ -82,7 +82,7 @@ func TestReadSubtree_MmapFallbackReReadsFromStart(t *testing.T) {
 		Height: 1,
 	}
 
-	result := bv.readSubtree(ctx, block, 0, subtree.RootHash(), subtreeReadWithFullSubtree)
+	result := bv.readSubtree(ctx, block, 0, subtree.RootHash(), subtreeReadWithFullSubtree, "batch")
 
 	// Before the fix this errored ("failed to deserialize subtree") or returned a
 	// corrupt subtree because the fallback read from the consumed stream.
@@ -126,7 +126,7 @@ func requireMmapDirEmpty(t *testing.T, mmapDir string) {
 func requireMmapEngaged(t *testing.T, h *preBindHarness, block *model.Block, subtreeHash *chainhash.Hash) {
 	t.Helper()
 
-	structure, err := h.bv.readSubtreeStructure(h.ctx, block, subtreeHash, subtreeReadAnchorOnly)
+	structure, err := h.bv.readSubtreeStructure(h.ctx, block, subtreeHash, subtreeReadAnchorOnly, "binding")
 	require.NoError(t, err)
 	require.True(t, structure.subtree.IsMmapBacked(),
 		"the fixture is not mmap-backed, so nothing below distinguishes a correct release from no release at all")

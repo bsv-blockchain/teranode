@@ -65,7 +65,7 @@ func TestValidateSubtrees_DuplicateTransactionRejected(t *testing.T) {
 
 // TestValidateSubtrees_NonCoinbaseBodyRejected — the subtree-carrying shape had no
 // block.CoinbaseTx.IsCoinbase() check anywhere on this route. The shape check in
-// getBlockTransactions inspects subtreeData.Txs[0], a different object.
+// readSubtree inspects subtreeData.Txs[0], a different object.
 //
 // Checked after CheckMerkleRoot, where the body is bound, so BlockInvalid is the
 // correct class: the header commits to this transaction.

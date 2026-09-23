@@ -1010,6 +1010,12 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 	// The exemption argument matches the MissingSubtreeDataTxs call above and must:
 	// index 0 under a coinbase placeholder holds the coinbase, which no node names.
 	if idx, expected, got, mismatched := model.FirstMismatchedSubtreeDataTx(subtree, subtreeData, true); mismatched {
+		// Struck only on the cache-busted retry, for the reason the wrong-root check in
+		// fetchAndStoreSubtree sets out.
+		if bypassCache && u.blockValidation != nil {
+			u.blockValidation.penalizeCorruptBlockPeer(ctx, peerID, block, "subtree_data transaction mismatch on catchup fetch")
+		}
+
 		return newMismatchedSubtreeDataError(peerID, baseURL, subtreeHash, idx, expected, got)
 	}
 

@@ -3506,3 +3506,266 @@ func TestPrefetchSubtreeBatch_MismatchAndMissingBody_BothSurvive(t *testing.T) {
 		})
 	}
 }
+
+// TestReadSubtree_PlaceholderOutsideFirstPosition_IsCorruptNotQuarantined pins the
+// read side's handling of a subtree whose node 0 is the coinbase placeholder at a block
+// position other than [0][0]. The blob is honest under its own key — it is the first
+// subtree of some other block — so the fault is the block's subtree list, a corrupt
+// body, and the blob must not be sent to the key-mismatch quarantine.
+//
+// readSubtree is called directly because the full entry point is stopped by the
+// binding pass first.
+//
+// Mutation target: removing the placeholder check in readSubtree loses the corrupt
+// verdict: the read then fails the nil-slot rule on slot 0 with an ordinary processing
+// error instead.
+func TestReadSubtree_PlaceholderOutsideFirstPosition_IsCorruptNotQuarantined(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+
+	coinbase := preBindCoinbase(t, 0x30)
+	otherCoinbase := preBindCoinbase(t, 0x31)
+
+	parent := h.storeGenuineParent(0x60)
+	child := preBindSpendOf(t, parent, 9_000)
+
+	first := h.oneSubtreeBody(coinbase, preBindSpendOf(t, h.storeGenuineParent(0x61), 8_000))
+
+	// Placeholder-led, and honest under its own key.
+	second := buildSubtreeOver(t, true, []*bt.Tx{child})
+
+	secondBytes, err := second.Serialize()
+	require.NoError(t, err)
+
+	h.storeBlob(second.RootHash(), fileformat.FileTypeSubtreeToCheck, secondBytes)
+	h.storeBlob(second.RootHash(), fileformat.FileTypeSubtreeData, serializeSubtreeData(t, second, true, otherCoinbase, []*bt.Tx{child}))
+
+	block := h.newPreBindBlock(coinbase,
+		[]*chainhash.Hash{first.RootHash(), second.RootHash()},
+		composeBlockMerkleRoot(t, []chainhash.Hash{coinbaseSubstitutedRoot(t, first, coinbase), *second.RootHash()}),
+		4)
+
+	result := h.bv.readSubtree(h.ctx, block, 1, second.RootHash(), subtreeReadWithFullSubtree, "batch")
+	require.Error(t, result.err)
+	require.True(t, errors.IsBlockCorrupt(result.err), "a placeholder outside [0][0] is a corrupt body, got %v", result.err)
+	require.Nil(t, subtreeKeyMismatchRefs(result.err), "an honest blob must not be named for the quarantine")
+	require.Nil(t, result.subtree)
+
+	h.requireSubtreeDataPresent(second.RootHash(), true, "the honest subtree_data blob must stay on disk")
+}
+
+// TestQuickValidate_NonPowerOfTwoFirstSubtree_NoUTXOMutation pins the binding pass's
+// shape check as the pre-mutation rejection of a first subtree whose leaf count is not
+// a power of two. The header's merkle root is composed from the served roots, so only
+// the shape rule can reject the body before the pipeline; without it the batch creates
+// and spends, and only the tail CheckMerkleRoot rejects the block afterwards.
+//
+// Mutation target: turning the binding pass's `if numSubtrees > 1` shape guard into
+// `if false` must spend a parent or assign a block id.
+func TestQuickValidate_NonPowerOfTwoFirstSubtree_NoUTXOMutation(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+	h.enableOutpointOnlyFastPath()
+
+	coinbase := preBindCoinbase(t, 0x32)
+
+	groups, parents := h.multiBatchGroups(0x68, []int{2, 1})
+
+	// Placeholder plus two transactions: three leaves.
+	first := buildSubtreeOver(t, true, groups[0])
+	require.Equal(t, 3, first.Length())
+	require.False(t, subtreepkg.IsPowerOfTwo(first.Length()), "precondition: the first subtree must not be a power of two")
+
+	second := buildSubtreeOver(t, false, groups[1])
+
+	for i, st := range []*subtreepkg.Subtree{first, second} {
+		stBytes, err := st.Serialize()
+		require.NoError(t, err)
+
+		h.storeBlob(st.RootHash(), fileformat.FileTypeSubtreeToCheck, stBytes)
+		h.storeBlob(st.RootHash(), fileformat.FileTypeSubtreeData, serializeSubtreeData(t, st, i == 0, coinbase, groups[i]))
+	}
+
+	// The short final subtree contributes its root lifted to the first subtree's height,
+	// exactly as the binding pass composes it, so with the shape rule removed the body
+	// binds and nothing else stops it before the pipeline.
+	lifted, err := second.RootHashPadded(first.Height)
+	require.NoError(t, err)
+
+	block := h.newPreBindBlock(coinbase,
+		[]*chainhash.Hash{first.RootHash(), second.RootHash()},
+		composeBlockMerkleRoot(t, []chainhash.Hash{coinbaseSubstitutedRoot(t, first, coinbase), *lifted}),
+		4)
+
+	err = h.bv.quickValidateBlock(h.ctx, block, "peer", "")
+	require.Error(t, err)
+
+	// Store state first, so the mutation fails the test because the batch mutated, not
+	// only because the message changed.
+	h.requireNoUTXOMutation(block, parents[0], groups[0][0])
+
+	for _, parent := range parents {
+		h.requireParentUnspent(parent)
+	}
+
+	require.Contains(t, err.Error(), "[bindSubtreeBodyToHeader]", "the rejection must come from the binding pass, not the tail check")
+	require.Contains(t, err.Error(), "not a power of two")
+	require.True(t, errors.IsBlockCorrupt(err), "got %v", err)
+}
+
+// inFlightGaugeStore counts concurrent structure reads (Get and GetIoReader for
+// FileTypeSubtreeToCheck and FileTypeSubtree) with a mutex-guarded counter, never by
+// counting goroutines. Each read holds until three are in flight or 200 ms pass, so
+// reads that are allowed to overlap do.
+type inFlightGaugeStore struct {
+	blob.Store
+
+	mu          sync.Mutex
+	changed     chan struct{}
+	inFlight    int
+	maxInFlight int
+}
+
+func newInFlightGaugeStore(inner blob.Store) *inFlightGaugeStore {
+	return &inFlightGaugeStore{Store: inner, changed: make(chan struct{})}
+}
+
+func (s *inFlightGaugeStore) counted(fileType fileformat.FileType) bool {
+	return fileType == fileformat.FileTypeSubtreeToCheck || fileType == fileformat.FileTypeSubtree
+}
+
+// signalLocked wakes every waiter; the caller holds s.mu.
+func (s *inFlightGaugeStore) signalLocked() {
+	close(s.changed)
+	s.changed = make(chan struct{})
+}
+
+func (s *inFlightGaugeStore) enter() {
+	s.mu.Lock()
+	s.inFlight++
+
+	if s.inFlight > s.maxInFlight {
+		s.maxInFlight = s.inFlight
+	}
+
+	s.signalLocked()
+	s.mu.Unlock()
+
+	deadline := time.After(200 * time.Millisecond)
+
+	for {
+		s.mu.Lock()
+		if s.inFlight >= 3 {
+			s.mu.Unlock()
+			return
+		}
+
+		changed := s.changed
+		s.mu.Unlock()
+
+		select {
+		case <-changed:
+		case <-deadline:
+			return
+		}
+	}
+}
+
+func (s *inFlightGaugeStore) exit() {
+	s.mu.Lock()
+	s.inFlight--
+	s.signalLocked()
+	s.mu.Unlock()
+}
+
+func (s *inFlightGaugeStore) peak() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.maxInFlight
+}
+
+func (s *inFlightGaugeStore) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) (io.ReadCloser, error) {
+	if s.counted(fileType) {
+		s.enter()
+		defer s.exit()
+	}
+
+	return s.Store.GetIoReader(ctx, key, fileType, opts...)
+}
+
+func (s *inFlightGaugeStore) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) ([]byte, error) {
+	if s.counted(fileType) {
+		s.enter()
+		defer s.exit()
+	}
+
+	return s.Store.Get(ctx, key, fileType, opts...)
+}
+
+// TestBindSubtreeBodyToHeader_ReadsAtMostOneChunkAtATime pins the binding pass's chunk
+// bound: it reads at most SubtreeBatchSize structures at once. It calls the pass
+// directly, so the pipeline's own prefetch overlap is excluded.
+//
+// Timing: with the bound in place maxInFlight cannot exceed 2 whatever the scheduling,
+// because the errgroup limit is the chunk width; the 200 ms hold only adds latency
+// (three chunks, about 600 ms) and can never make the bounded code fail. It affects only
+// sensitivity: on a host so slow that a third read of the unbounded code has not started
+// within 200 ms, the mutation could go undetected, never a false failure.
+//
+// Mutation target: `chunkWidth = numSubtrees` must record three or more reads in flight.
+func TestBindSubtreeBodyToHeader_ReadsAtMostOneChunkAtATime(t *testing.T) {
+	store := newInFlightGaugeStore(blobmemory.New())
+
+	h := newPreBindHarness(t, store)
+	h.bv.settings.BlockValidation.SubtreeBatchSize = 2
+
+	coinbase := preBindCoinbase(t, 0x33)
+
+	groups, _ := h.multiBatchGroups(0x70, []int{1, 2, 2, 2, 2})
+
+	_, roots, merkleRoot := h.multiSubtreeBody(coinbase, groups)
+	require.Len(t, roots, 5)
+
+	block := h.newPreBindBlock(coinbase, roots, merkleRoot, 10)
+
+	require.NoError(t, h.bv.bindSubtreeBodyToHeader(h.ctx, block))
+
+	require.GreaterOrEqual(t, store.peak(), 1, "precondition: the gauge must have seen the structure reads")
+	require.LessOrEqual(t, store.peak(), 2, "the binding pass must read at most one chunk of SubtreeBatchSize structures at a time")
+}
+
+// TestQuickValidate_TruncatedNonFirstSubtreeData_NoUTXOMutation pins readSubtree's
+// nil-slot rejection. A non-first subtree whose subtree_data omits its last
+// transaction ends at a clean EOF, which leaves a trailing nil slot; the batch must fail
+// before any create or spend.
+//
+// Mutation target: turning the nil-slot return into `continue` must spend a parent or
+// assign a block id.
+func TestQuickValidate_TruncatedNonFirstSubtreeData_NoUTXOMutation(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+	h.enableOutpointOnlyFastPath()
+
+	coinbase := preBindCoinbase(t, 0x34)
+
+	groups, parents := h.multiBatchGroups(0x78, []int{1, 2})
+
+	_, roots, merkleRoot := h.multiSubtreeBody(coinbase, groups)
+
+	// Only the first of the second subtree's two transactions.
+	h.storeBlob(roots[1], fileformat.FileTypeSubtreeData, groups[1][0].SerializeBytes())
+
+	block := h.newPreBindBlock(coinbase, roots, merkleRoot, 4)
+
+	err := h.bv.quickValidateBlock(h.ctx, block, "peer", "")
+	require.Error(t, err)
+
+	// Store state first, so the mutation fails the test because the batch mutated, not
+	// only because the message changed.
+	require.Zero(t, block.ID, "no block id may be set")
+	require.Zero(t, h.chain.assignCount(), "AssignBlockID must not be reached")
+
+	for _, parent := range parents {
+		h.requireParentUnspent(parent)
+	}
+
+	require.Contains(t, err.Error(), "missing tx at index")
+}

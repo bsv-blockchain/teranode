@@ -4466,6 +4466,44 @@ func TestFetchAndStoreSubtreeData_PoisonedResponses(t *testing.T) {
 		require.NoError(t, existsErr)
 		require.False(t, stored, "a rejected body must never be written")
 	})
+
+	// The mismatched body is attributable, so it strikes the serving peer — but only on
+	// the cache-busted retry, as the wrong-root subtree does: before the bypass the bytes
+	// may be a cache's, not the peer's.
+	t.Run("CompleteButMismatchedBodyStrikesOnlyAfterCacheBypass", func(t *testing.T) {
+		for _, bypassCache := range []bool{false, true} {
+			rec := &banScoreRecorder{}
+
+			server := newServer()
+			server.blockValidation = &BlockValidation{
+				logger:    ulogger.TestLogger{},
+				settings:  server.settings,
+				p2pClient: rec,
+			}
+
+			httpmock.ActivateNonDefault(util.HTTPClient())
+
+			mismatched, body, _ := mismatchedSubtreeDataBody(t, txs[1], txs[2])
+			mismatchedHash := mismatched.RootHash()
+
+			httpmock.RegisterResponder("GET",
+				fmt.Sprintf("%s/subtree_data/%s", baseURL, mismatchedHash.String()),
+				httpmock.NewBytesResponder(200, body))
+
+			err := server.fetchAndStoreSubtreeData(ctx, testBlock, mismatchedHash, mismatched, peerID, baseURL, bypassCache, nil)
+
+			httpmock.DeactivateAndReset()
+
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "is not the one the subtree names")
+
+			if bypassCache {
+				require.Equal(t, []string{peerID}, rec.struck(), "the cache-busted retry must strike the serving peer exactly once")
+			} else {
+				require.Empty(t, rec.struck(), "a mismatch before the cache bypass must not strike: the bytes may be the cache's")
+			}
+		}
+	})
 }
 
 // TestFetchAndStoreSubtreeAndSubtreeData_CacheBypassRetry covers the issue-1368

@@ -48,7 +48,7 @@ func CheckSubtreeSlicesForDuplicateTxs(slices []*subtreepkg.Subtree) error {
 		}
 	}
 
-	deduper := NewSubtreeTxDeduper(totalNodes)
+	deduper := NewSubtreeTxDeduper("CheckSubtreeSlicesForDuplicateTxs", totalNodes)
 
 	for subIdx, subtree := range slices {
 		if err := deduper.Add(subIdx, subtree); err != nil {
@@ -74,17 +74,20 @@ func CheckSubtreeSlicesForDuplicateTxs(slices []*subtreepkg.Subtree) error {
 // thin loop over this type, so the coinbase-placeholder skip and the corrupt
 // classification cannot drift between the two callers.
 type SubtreeTxDeduper struct {
-	seen map[chainhash.Hash]struct{}
+	label string
+	seen  map[chainhash.Hash]struct{}
 }
 
 // NewSubtreeTxDeduper returns a deduper sized for capacityHint total nodes. The hint
-// only avoids rehashing; an understated one costs growth, never correctness.
-func NewSubtreeTxDeduper(capacityHint int) *SubtreeTxDeduper {
+// only avoids rehashing; an understated one costs growth, never correctness. label is
+// the bracketed site prefix of the duplicate error, so the rejection names the caller
+// that ran the scan.
+func NewSubtreeTxDeduper(label string, capacityHint int) *SubtreeTxDeduper {
 	if capacityHint < 0 {
 		capacityHint = 0
 	}
 
-	return &SubtreeTxDeduper{seen: make(map[chainhash.Hash]struct{}, capacityHint)}
+	return &SubtreeTxDeduper{label: label, seen: make(map[chainhash.Hash]struct{}, capacityHint)}
 }
 
 // Add folds one subtree's nodes into the running set, returning a BlockCorruptError on
@@ -112,8 +115,8 @@ func (d *SubtreeTxDeduper) Add(subIdx int, subtree *subtreepkg.Subtree) error {
 			// unbound body: classify corrupt so it is re-downloaded, not poisoned
 			// (bitcoin-sv/teranode#4692).
 			return errors.NewBlockCorruptError(
-				"[CheckSubtreeSlicesForDuplicateTxs] block contains duplicate transaction %s (CVE-2012-2459)",
-				node.Hash.String(),
+				"[%s] block contains duplicate transaction %s (CVE-2012-2459)",
+				d.label, node.Hash.String(),
 			)
 		}
 
