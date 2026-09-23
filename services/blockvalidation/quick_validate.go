@@ -688,52 +688,18 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 	return u.validateSubtrees(ctx, block, existingBlockID)
 }
 
-// processBlockSubtreesPipeline processes subtrees using a fan-in pipeline that overlaps I/O with processing.
+// startPrefetchAndExtendStages starts the first two stages both pipelined drivers share
+// on g: stage 1 reads each batch with prefetchSubtreeBatch and sends it on prefetchChan,
+// closing it when done; stage 2 extends each batch with extendBatch and sends it on
+// extendedChan, closing it when done. Stage 3, the channel creation and the deferred
+// channel drains stay in each driver, because the async driver's stage 3 carries
+// ownership the synchronous one does not.
 //
-// Three pipeline stages:
-//  1. Reader: Prefetch batches from disk (I/O bound)
-//  2. Extender: Extend transactions (CPU/network bound, sequential for extendedTxs map)
-//  3. Processor: UTXO create+spend AND write files in parallel per batch
-//
-// Error Handling:
-// If any stage encounters an error, the errgroup context is cancelled, stopping all stages.
-// Partial UTXO state changes are safe because:
-//   - By default, UTXOs are created with WithLocked(true), preventing other operations from using them.
-//     If processing fails, unlockSubtreeTransactions is never called, so the locked UTXOs remain locked
-//     and the partial changes are effectively rolled back.
-//   - When QuickValidateSkipUtxoLock is enabled (blocks at or below the highest checkpoint), UTXOs are
-//     created unlocked, so this lock-based rollback barrier does not apply; recovery instead relies on
-//     retry convergence below.
-//   - On retry, Create() returns ErrTxExists, and SetMinedMulti() updates the correct BlockID.
-func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, block *model.Block, prefetchDepth int, outpointOnly bool) (uint64, error) {
+// stageLog and tagSuffix keep each driver's log level and tags: the synchronous driver
+// passes Infof and "", the async one Debugf and ":async".
+func (u *BlockValidation) startPrefetchAndExtendStages(gCtx context.Context, g *errgroup.Group, block *model.Block, outpointOnly bool,
+	prefetchChan, extendedChan chan *SubtreeProcessingBatch, stageLog func(format string, args ...interface{}), tagSuffix string) {
 	numSubtrees := len(block.Subtrees)
-	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
-	var existingBlockID uint64
-	blockIDSet := false
-
-	// Channel for prefetched batches (subtrees read, txs not extended)
-	prefetchChan := make(chan *SubtreeProcessingBatch, prefetchDepth)
-
-	// Channel for extended batches ready for UTXO ops
-	extendedChan := make(chan *SubtreeProcessingBatch, prefetchDepth)
-
-	g, gCtx := errgroup.WithContext(ctx)
-
-	// Ensure channels are drained on error to prevent goroutine leaks and memory leaks
-	// from large SubtreeProcessingBatch structs stuck in channel buffers.
-	//
-	// INVARIANT BO: a batch sitting in a channel buffer has no other owner, so draining
-	// it makes this the owner and it must be CLOSED, not merely dropped. Discarding the
-	// pointer released the struct to the GC but left every mmap region mapped and every
-	// temp file on disk.
-	defer func() {
-		for b := range prefetchChan {
-			b.Close()
-		}
-		for b := range extendedChan {
-			b.Close()
-		}
-	}()
 
 	// Stage 1: Reader - prefetch batches from disk
 	g.Go(func() error {
@@ -753,7 +719,7 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 				// batch exists, which is why it starts here rather than at the top.
 				return err
 			}
-			u.logger.Infof("[pipeline:prefetch][%s] batch %d-%d prefetched in %v", block.Hash().String(), batchStart, batchEnd, time.Since(start))
+			stageLog("[pipeline:prefetch%s][%s] batch %d-%d prefetched in %v", tagSuffix, block.Hash().String(), batchStart, batchEnd, time.Since(start))
 
 			// TRANSFERRING owner: suppress the close once the send completes. An
 			// unconditional defer here would be a use-after-release in stage 2.
@@ -802,7 +768,7 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 				if err := u.extendBatch(gCtx, block, batch, extendedTxs); err != nil {
 					return err
 				}
-				u.logger.Infof("[pipeline:extend][%s] batch %d-%d extended (%d txs) in %v", block.Hash().String(), batch.batchStart, batch.batchEnd, len(batch.batchTxs), time.Since(start))
+				stageLog("[pipeline:extend%s][%s] batch %d-%d extended (%d txs) in %v", tagSuffix, block.Hash().String(), batch.batchStart, batch.batchEnd, len(batch.batchTxs), time.Since(start))
 
 				select {
 				case extendedChan <- batch:
@@ -818,6 +784,59 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 		}
 		return nil
 	})
+}
+
+// processBlockSubtreesPipeline processes subtrees using a fan-in pipeline that overlaps I/O with processing.
+//
+// Three pipeline stages:
+//  1. Reader: Prefetch batches from disk (I/O bound)
+//  2. Extender: Extend transactions (CPU/network bound, sequential for extendedTxs map)
+//  3. Processor: UTXO create+spend AND write files in parallel per batch
+//
+// Error Handling:
+// If any stage encounters an error, the errgroup context is cancelled, stopping all stages.
+// Partial UTXO state changes are safe because:
+//   - By default, UTXOs are created with WithLocked(true), preventing other operations from using them.
+//     If processing fails, unlockSubtreeTransactions is never called, so the created UTXOs stay in the
+//     store, locked; nothing unlocks or removes them. They are not rolled back: recovery is by retry
+//     convergence below.
+//   - When QuickValidateSkipUtxoLock is enabled (blocks at or below the highest checkpoint), UTXOs are
+//     created unlocked, so this lock-based rollback barrier does not apply; recovery instead relies on
+//     retry convergence below.
+//   - On retry, Create() returns ErrTxExists, and SetMinedMulti() updates the correct BlockID.
+func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, block *model.Block, prefetchDepth int, outpointOnly bool) (uint64, error) {
+	numSubtrees := len(block.Subtrees)
+	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
+	var existingBlockID uint64
+	blockIDSet := false
+
+	// Channel for prefetched batches (subtrees read, txs not extended)
+	prefetchChan := make(chan *SubtreeProcessingBatch, prefetchDepth)
+
+	// Channel for extended batches ready for UTXO ops
+	extendedChan := make(chan *SubtreeProcessingBatch, prefetchDepth)
+
+	g, gCtx := errgroup.WithContext(ctx)
+
+	// Ensure channels are drained on error to prevent goroutine leaks and memory leaks
+	// from large SubtreeProcessingBatch structs stuck in channel buffers.
+	//
+	// INVARIANT BO: a batch sitting in a channel buffer has no other owner, so draining
+	// it makes this the owner and it must be CLOSED, not merely dropped. Discarding the
+	// pointer released the struct to the GC but left every mmap region mapped and every
+	// temp file on disk.
+	defer func() {
+		for b := range prefetchChan {
+			b.Close()
+		}
+		for b := range extendedChan {
+			b.Close()
+		}
+	}()
+
+	// Stages 1 and 2: Reader (prefetch batches from disk) and Extender (extend
+	// transactions, sequential for the extendedTxs map).
+	u.startPrefetchAndExtendStages(gCtx, g, block, outpointOnly, prefetchChan, extendedChan, u.logger.Infof, "")
 
 	// Stage 3: Processor - UTXO create+spend AND write files in parallel (per batch)
 	g.Go(func() error {
@@ -952,85 +971,9 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 		}
 	}()
 
-	// Stage 1: Reader - prefetch batches from disk
-	g.Go(func() error {
-		defer close(prefetchChan)
-		subtreeBatchSize := u.settings.BlockValidation.SubtreeBatchSize
-		for batchStart := 0; batchStart < numSubtrees; batchStart += subtreeBatchSize {
-			batchEnd := batchStart + subtreeBatchSize
-			if batchEnd > numSubtrees {
-				batchEnd = numSubtrees
-			}
-
-			start := time.Now()
-			batch, err := u.prefetchSubtreeBatch(gCtx, block, batchStart, batchEnd, outpointOnly)
-			if err != nil {
-				// Nothing owned yet: prefetchSubtreeBatch's deferred close has fired.
-				return err
-			}
-			u.logger.Debugf("[pipeline:prefetch:async][%s] batch %d-%d prefetched in %v", block.Hash().String(), batchStart, batchEnd, time.Since(start))
-
-			// TRANSFERRING owner — see the sync variant for why this must not be an
-			// unconditional defer.
-			if err := func() error {
-				handedOff := false
-
-				defer func() {
-					if !handedOff {
-						batch.Close()
-					}
-				}()
-
-				select {
-				case prefetchChan <- batch:
-					handedOff = true // FIRST statement: ownership is now the receiver's
-				case <-gCtx.Done():
-					return gCtx.Err() // the send did not complete; the defer closes
-				}
-
-				return nil
-			}(); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-
-	// Stage 2: Extender - extend transactions (sequential for extendedTxs map)
-	g.Go(func() error {
-		defer close(extendedChan)
-		extendedTxs := make(map[chainhash.Hash]*bt.Tx)
-		for batch := range prefetchChan {
-			// Received from a channel, so owned here — and transferring, so conditional.
-			if err := func() error {
-				handedOff := false
-
-				defer func() {
-					if !handedOff {
-						batch.Close()
-					}
-				}()
-
-				start := time.Now()
-				if err := u.extendBatch(gCtx, block, batch, extendedTxs); err != nil {
-					return err
-				}
-				u.logger.Debugf("[pipeline:extend:async][%s] batch %d-%d extended (%d txs) in %v", block.Hash().String(), batch.batchStart, batch.batchEnd, len(batch.batchTxs), time.Since(start))
-
-				select {
-				case extendedChan <- batch:
-					handedOff = true // FIRST statement: ownership is now the receiver's
-				case <-gCtx.Done():
-					return gCtx.Err() // the send did not complete; the defer closes
-				}
-
-				return nil
-			}(); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	// Stages 1 and 2: Reader (prefetch batches from disk) and Extender (extend
+	// transactions, sequential for the extendedTxs map).
+	u.startPrefetchAndExtendStages(gCtx, g, block, outpointOnly, prefetchChan, extendedChan, u.logger.Debugf, ":async")
 
 	// Stage 3: Processor - UTXO create+spend, then queue write jobs (per batch)
 	// Unlike the sync version, we don't wait for writes - just queue them
@@ -1219,7 +1162,7 @@ func checkSubtreeBodyBinding(ctx context.Context, block *model.Block, caller str
 	// invalidity rather than a corrupt download. The no-subtree shape gets the same check at
 	// this route's entry points, behind its own binding.
 	//
-	// The shape check in getBlockTransactions does NOT cover this: it inspects
+	// The shape check in readSubtree does NOT cover this: it inspects
 	// subtreeData.Txs[0], a different object from block.CoinbaseTx.
 	if !model.IsConsensusCoinbase(block.CoinbaseTx) {
 		return errors.NewBlockInvalidError("[%s][%s] block coinbase tx is not a valid coinbase tx", caller, block.Hash().String())
@@ -1268,20 +1211,24 @@ const (
 // node list — the whole-block pre-bind pass and all three per-batch readers go
 // through it — so anything that must hold for every read of a subtree on this route
 // belongs here rather than being restated at each caller.
-func (u *BlockValidation) readSubtreeStructure(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, mode subtreeReadMode) (subtreeStructure, error) {
+//
+// site names the pass the read belongs to — "binding", "batch" or "sweep" — and only
+// labels the messages. It is supplied by the caller rather than derived from mode,
+// because the binding pass and the sweep read in the same mode.
+func (u *BlockValidation) readSubtreeStructure(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, mode subtreeReadMode, site string) (subtreeStructure, error) {
 	// On retry the subtree may already be promoted to FileTypeSubtree (the
 	// "already validated" marker) and FileTypeSubtreeToCheck cleaned up, so
 	// consult both file types — see findLocalSubtreeFile.
 	localFileType, localExists, err := findLocalSubtreeFile(ctx, u.subtreeStore, *subtreeHash)
 	if err != nil {
-		return subtreeStructure{}, errors.NewStorageError("[getBlockTransactions][%s] failed to locate subtree %s", block.Hash().String(), subtreeHash.String(), err)
+		return subtreeStructure{}, errors.NewStorageError("[readSubtreeStructure/%s][%s] failed to locate subtree %s", site, block.Hash().String(), subtreeHash.String(), err)
 	}
 	if !localExists {
-		return subtreeStructure{}, errors.NewNotFoundError("[getBlockTransactions][%s] subtree %s not found locally", block.Hash().String(), subtreeHash.String())
+		return subtreeStructure{}, errors.NewNotFoundError("[readSubtreeStructure/%s][%s] subtree %s not found locally", site, block.Hash().String(), subtreeHash.String())
 	}
 	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], localFileType)
 	if err != nil {
-		return subtreeStructure{}, errors.NewNotFoundError("[getBlockTransactions][%s] failed to get subtree %s", block.Hash().String(), subtreeHash.String(), err)
+		return subtreeStructure{}, errors.NewNotFoundError("[readSubtreeStructure/%s][%s] failed to get subtree %s", site, block.Hash().String(), subtreeHash.String(), err)
 	}
 	defer func() {
 		if subtreeReader != nil {
@@ -1306,7 +1253,7 @@ func (u *BlockValidation) readSubtreeStructure(ctx context.Context, block *model
 			// bytes from subtreeReader, which is not seekable, so resetting the buffered
 			// reader onto it would read from mid-stream and produce a corrupt subtree.
 			// Open a fresh reader from the store so the heap path reads from the start.
-			u.logger.Warnf("[getBlockTransactions][%s] mmap deserialization failed for subtree %s, falling back to heap: %v", block.Hash().String(), subtreeHash.String(), err)
+			u.logger.Warnf("[readSubtreeStructure/%s][%s] mmap deserialization failed for subtree %s, falling back to heap: %v", site, block.Hash().String(), subtreeHash.String(), err)
 
 			// The mmap attempt has consumed subtreeReader and it is no longer used; close it
 			// now rather than leaving it open alongside the fallback reader until return.
@@ -1315,7 +1262,7 @@ func (u *BlockValidation) readSubtreeStructure(ctx context.Context, block *model
 
 			fallbackReader, ferr := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], localFileType)
 			if ferr != nil {
-				return subtreeStructure{}, errors.NewNotFoundError("[getBlockTransactions][%s] failed to re-open subtree %s for heap fallback", block.Hash().String(), subtreeHash.String(), ferr)
+				return subtreeStructure{}, errors.NewNotFoundError("[readSubtreeStructure/%s][%s] failed to re-open subtree %s for heap fallback", site, block.Hash().String(), subtreeHash.String(), ferr)
 			}
 			defer fallbackReader.Close()
 
@@ -1326,7 +1273,7 @@ func (u *BlockValidation) readSubtreeStructure(ctx context.Context, block *model
 		subtree, err = subtreepkg.NewSubtreeFromReader(bufferedReader)
 	}
 	if err != nil {
-		return subtreeStructure{}, errors.NewProcessingError("[getBlockTransactions][%s] failed to deserialize subtree %s", block.Hash().String(), subtreeHash.String(), err)
+		return subtreeStructure{}, errors.NewProcessingError("[readSubtreeStructure/%s][%s] failed to deserialize subtree %s", site, block.Hash().String(), subtreeHash.String(), err)
 	}
 
 	// A zero-node subtree cannot be honest, and this route has no other check for it
@@ -1339,7 +1286,7 @@ func (u *BlockValidation) readSubtreeStructure(ctx context.Context, block *model
 	// subtree-data read so a junk blob costs one deserialisation, not two.
 	if subtree.Length() == 0 {
 		releaseSubtreeStructure(subtree)
-		return subtreeStructure{}, errors.NewProcessingError("[getBlockTransactions][%s] subtree %s has zero nodes", block.Hash().String(), subtreeHash.String())
+		return subtreeStructure{}, errors.NewProcessingError("[readSubtreeStructure/%s][%s] subtree %s has zero nodes", site, block.Hash().String(), subtreeHash.String())
 	}
 
 	// Anchor the node list to the key by RECOMPUTING its root, not by reading the
@@ -1353,7 +1300,7 @@ func (u *BlockValidation) readSubtreeStructure(ctx context.Context, block *model
 	if err := model.ValidateSubtreeNodesMatchKey(subtree, subtreeHash); err != nil {
 		releaseSubtreeStructure(subtree)
 
-		return subtreeStructure{}, u.rejectKeyMismatchAndAuditSibling(ctx, block, subtreeHash, localFileType, err)
+		return subtreeStructure{}, u.rejectKeyMismatchAndAuditSibling(ctx, block, subtreeHash, localFileType, err, site)
 	}
 
 	structure := subtreeStructure{subtree: subtree}
@@ -1434,11 +1381,11 @@ func (u *BlockValidation) readSubtreeStructure(ctx context.Context, block *model
 	if existsErr != nil {
 		releaseSubtreeStructure(subtree)
 
-		return subtreeStructure{}, errors.NewStorageError("[getBlockTransactions][%s] failed to probe for full subtree %s", block.Hash().String(), subtreeHash.String(), existsErr)
+		return subtreeStructure{}, errors.NewStorageError("[readSubtreeStructure/%s][%s] failed to probe for full subtree %s", site, block.Hash().String(), subtreeHash.String(), existsErr)
 	}
 
 	if fullSubtreeExists {
-		fullSubtree, err := u.readFullSubtreeAnchored(ctx, block, subtreeHash)
+		fullSubtree, err := u.readFullSubtreeAnchored(ctx, block, subtreeHash, site)
 		if err != nil {
 			releaseSubtreeStructure(subtree)
 
@@ -1488,15 +1435,15 @@ func subtreeSiblingFileType(fileType fileformat.FileType) fileformat.FileType {
 // belong to this key and normal validation may safely use it; and a sibling that
 // EXISTS but cannot be audited marks the attempt unquarantined, so tryQuickValidation
 // aborts rather than falling through to a loader that cannot see the forgery.
-func (u *BlockValidation) rejectKeyMismatchAndAuditSibling(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, readFileType fileformat.FileType, anchorErr error) error {
-	err := errors.NewProcessingError("[getBlockTransactions][%s] subtree %s does not match its key", block.Hash().String(), subtreeHash.String(), anchorErr)
+func (u *BlockValidation) rejectKeyMismatchAndAuditSibling(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, readFileType fileformat.FileType, anchorErr error, site string) error {
+	err := errors.NewProcessingError("[rejectKeyMismatchAndAuditSibling/%s][%s] subtree %s does not match its key", site, block.Hash().String(), subtreeHash.String(), anchorErr)
 	refs := []subtreeBlobRef{{hash: *subtreeHash, fileType: readFileType}}
 
 	sibling := subtreeSiblingFileType(readFileType)
 
 	exists, existsErr := u.subtreeStore.Exists(ctx, subtreeHash[:], sibling)
 	if existsErr != nil {
-		u.logger.Errorf("[getBlockTransactions][%s] subtree %s: cannot probe sibling %s of a mismatching blob, aborting: %v", block.Hash().String(), subtreeHash.String(), sibling, existsErr)
+		u.logger.Errorf("[rejectKeyMismatchAndAuditSibling/%s][%s] subtree %s: cannot probe sibling %s of a mismatching blob, aborting: %v", site, block.Hash().String(), subtreeHash.String(), sibling, existsErr)
 
 		return markUnquarantinedLocalSubtree(markSubtreeKeyMismatch(err, refs...))
 	}
@@ -1507,7 +1454,7 @@ func (u *BlockValidation) rejectKeyMismatchAndAuditSibling(ctx context.Context, 
 
 	siblingBytes, getErr := u.subtreeStore.Get(ctx, subtreeHash[:], sibling)
 	if getErr != nil {
-		u.logger.Errorf("[getBlockTransactions][%s] subtree %s: cannot read sibling %s of a mismatching blob, aborting: %v", block.Hash().String(), subtreeHash.String(), sibling, getErr)
+		u.logger.Errorf("[rejectKeyMismatchAndAuditSibling/%s][%s] subtree %s: cannot read sibling %s of a mismatching blob, aborting: %v", site, block.Hash().String(), subtreeHash.String(), sibling, getErr)
 
 		return markUnquarantinedLocalSubtree(markSubtreeKeyMismatch(err, refs...))
 	}
@@ -1537,22 +1484,22 @@ func (u *BlockValidation) rejectKeyMismatchAndAuditSibling(ctx context.Context, 
 // The returned subtree is the object the batch carries and the block's slice
 // eventually becomes, so its root is memoized on this goroutine before it is
 // published — the same reason buildSubtreeAndQueueWrite memoizes the tree it builds.
-func (u *BlockValidation) readFullSubtreeAnchored(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash) (*subtreepkg.Subtree, error) {
+func (u *BlockValidation) readFullSubtreeAnchored(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, site string) (*subtreepkg.Subtree, error) {
 	fullSubtreeBytes, err := u.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 	if err != nil {
-		return nil, errors.NewNotFoundError("[getBlockTransactions][%s] failed to get existing full subtree %s", block.Hash().String(), subtreeHash.String(), err)
+		return nil, errors.NewNotFoundError("[readFullSubtreeAnchored/%s][%s] failed to get existing full subtree %s", site, block.Hash().String(), subtreeHash.String(), err)
 	}
 
 	fullSubtree, err := u.newSubtreeFromBytes(fullSubtreeBytes)
 	if err != nil {
-		return nil, errors.NewProcessingError("[getBlockTransactions][%s] failed to deserialize full subtree %s", block.Hash().String(), subtreeHash.String(), err)
+		return nil, errors.NewProcessingError("[readFullSubtreeAnchored/%s][%s] failed to deserialize full subtree %s", site, block.Hash().String(), subtreeHash.String(), err)
 	}
 
 	if err := model.ValidateSubtreeNodesMatchKey(fullSubtree, subtreeHash); err != nil {
 		releaseSubtreeStructure(fullSubtree)
 
 		return nil, markSubtreeKeyMismatch(
-			errors.NewProcessingError("[getBlockTransactions][%s] full subtree %s does not match its key", block.Hash().String(), subtreeHash.String(), err),
+			errors.NewProcessingError("[readFullSubtreeAnchored/%s][%s] full subtree %s does not match its key", site, block.Hash().String(), subtreeHash.String(), err),
 			subtreeBlobRef{hash: *subtreeHash, fileType: fileformat.FileTypeSubtree},
 		)
 	}
@@ -1578,11 +1525,12 @@ func releaseSubtreeStructure(subtree *subtreepkg.Subtree) {
 	_ = subtree.Close()
 }
 
-// readSubtree reads a single subtree from disk and validates its transactions. mode is
-// forwarded to readSubtreeStructure: the batch collectors pass
-// subtreeReadWithFullSubtree, the subtree_data sweep passes subtreeReadAnchorOnly.
-func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, subtreeIdx int, subtreeHash *chainhash.Hash, mode subtreeReadMode) (result subtreeResult) {
-	structure, err := u.readSubtreeStructure(ctx, block, subtreeHash, mode)
+// readSubtree reads a single subtree from disk and validates its transactions. mode and
+// site are forwarded to readSubtreeStructure: the batch collectors pass
+// subtreeReadWithFullSubtree and "batch", the subtree_data sweep passes
+// subtreeReadAnchorOnly and "sweep".
+func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, subtreeIdx int, subtreeHash *chainhash.Hash, mode subtreeReadMode, site string) (result subtreeResult) {
+	structure, err := u.readSubtreeStructure(ctx, block, subtreeHash, mode, site)
 	if err != nil {
 		return subtreeResult{err: err}
 	}
@@ -1607,7 +1555,7 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 	// get the subtree data from disk
 	subtreeDataReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 	if err != nil {
-		return subtreeResult{err: errors.NewNotFoundError("[getBlockTransactions][%s] failed to get subtree data %s", block.Hash().String(), subtreeHash.String(), err)}
+		return subtreeResult{err: errors.NewNotFoundError("[readSubtree/%s][%s] failed to get subtree data %s", site, block.Hash().String(), subtreeHash.String(), err)}
 	}
 	defer subtreeDataReader.Close()
 
@@ -1635,7 +1583,7 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 	// The loop below closes that by comparing every slot itself.
 	subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtree, bufferedReader)
 	if err != nil {
-		return subtreeResult{err: errors.NewProcessingError("[getBlockTransactions][%s] failed to deserialize subtree data %s: %v", block.Hash().String(), subtreeHash.String(), err)}
+		return subtreeResult{err: errors.NewProcessingError("[readSubtree/%s][%s] failed to deserialize subtree data %s: %v", site, block.Hash().String(), subtreeHash.String(), err)}
 	}
 
 	// Validate transactions in this subtree
@@ -1643,12 +1591,21 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 		if subtreeIdx == 0 && idx == 0 {
 			// First tx in first subtree must be coinbase
 			if tx != nil && !tx.IsCoinbase() {
-				return subtreeResult{err: errors.NewProcessingError("[getBlockTransactions][%s] invalid coinbase tx at index %d in subtree %s", block.Hash().String(), idx, subtreeHash.String())}
+				return subtreeResult{err: errors.NewProcessingError("[readSubtree/%s][%s] invalid coinbase tx at index %d in subtree %s", site, block.Hash().String(), idx, subtreeHash.String())}
 			}
 			subtreeData.Txs[idx] = nil // set to nil to indicate coinbase
 		} else {
+			// A placeholder anywhere but block position [0][0] is a fault in the block's
+			// own subtree list, not a blob stored under the wrong key, so it is a corrupt
+			// body and carries no quarantine marker: the blob may well be honest under its
+			// key, as the first subtree of some other block. Checked before the nil-slot
+			// rule so the verdict does not depend on whether slot 0 happens to be filled.
+			if idx == 0 && len(subtree.Nodes) > 0 && subtree.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+				return subtreeResult{err: errors.NewBlockCorruptError("[readSubtree/%s][%s] subtree %s at position %d carries the coinbase placeholder outside block position [0][0]", site, block.Hash().String(), subtreeHash.String(), subtreeIdx)}
+			}
+
 			if tx == nil {
-				return subtreeResult{err: errors.NewProcessingError("[getBlockTransactions][%s] missing tx at index %d in subtree %s", block.Hash().String(), idx, subtreeHash.String())}
+				return subtreeResult{err: errors.NewProcessingError("[readSubtree/%s][%s] missing tx at index %d in subtree %s", site, block.Hash().String(), idx, subtreeHash.String())}
 			}
 
 			// Deliberately NOT scoped to non-first subtrees. The defect is a slot that
@@ -1657,7 +1614,7 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 			// ever changes. The cost is nil: the reader calls SetTxHash on every
 			// transaction it stores, including the diverted one, so this is a cache read.
 			if idx >= len(subtree.Nodes) {
-				return subtreeResult{err: errors.NewProcessingError("[getBlockTransactions][%s] subtree data %s carries a transaction at index %d beyond the subtree's %d nodes", block.Hash().String(), subtreeHash.String(), idx, len(subtree.Nodes))}
+				return subtreeResult{err: errors.NewProcessingError("[readSubtree/%s][%s] subtree data %s carries a transaction at index %d beyond the subtree's %d nodes", site, block.Hash().String(), subtreeHash.String(), idx, len(subtree.Nodes))}
 			}
 
 			if !subtree.Nodes[idx].Hash.Equal(*tx.TxIDChainHash()) {
@@ -1671,8 +1628,8 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 				// deletion, aborts the run fail-closed when it cannot, and applies no ban
 				// score to a peer nothing has proved served it.
 				return subtreeResult{err: markSubtreeKeyMismatch(
-					errors.NewProcessingError("[getBlockTransactions][%s] subtree data %s transaction at index %d does not match its node: node %s, transaction %s",
-						block.Hash().String(), subtreeHash.String(), idx, subtree.Nodes[idx].Hash.String(), tx.TxIDChainHash().String()),
+					errors.NewProcessingError("[readSubtree/%s][%s] subtree data %s transaction at index %d does not match its node: node %s, transaction %s",
+						site, block.Hash().String(), subtreeHash.String(), idx, subtree.Nodes[idx].Hash.String(), tx.TxIDChainHash().String()),
 					subtreeBlobRef{hash: *subtreeHash, fileType: fileformat.FileTypeSubtreeData},
 				)}
 			}
@@ -2427,7 +2384,7 @@ func (u *BlockValidation) prefetchSubtreeBatch(
 		hash := block.Subtrees[globalIdx]
 		resultChan := subtreeChannels[localIdx]
 		g.Go(func() error {
-			result := u.readSubtree(gCtx, block, globalIdx, hash, subtreeReadWithFullSubtree)
+			result := u.readSubtree(gCtx, block, globalIdx, hash, subtreeReadWithFullSubtree, "batch")
 
 			// Unconditional send, NOT a select against gCtx.Done(). Exactly one
 			// goroutine sends on this channel and its buffer is 1, so the send cannot

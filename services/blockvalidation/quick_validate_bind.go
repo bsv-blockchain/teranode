@@ -173,8 +173,9 @@ func isUnquarantinedLocalSubtree(err error) bool {
 // file per subtree, where the pipeline would have held one batch. What survives a chunk
 // is 32 bytes of root per subtree plus the running duplicate-transaction set.
 //
-// The chunk width is the pipeline's own SubtreeBatchSize, so the pass cannot be more
-// resident than the stage it protects.
+// The chunk width is the pipeline's own SubtreeBatchSize, so the pass's node-list
+// residency cannot exceed one pipeline batch; the running txid set is whole-block and
+// is the one term that grows with the block.
 //
 // Handing these anchored structures forward to the pipeline instead — so it need not
 // re-read them — was considered and rejected. It cannot fix the residency: it EXTENDS
@@ -203,8 +204,12 @@ func (u *BlockValidation) bindSubtreeBodyToHeader(ctx context.Context, block *mo
 
 	// Retained across the whole block: one root per subtree, and the txid set. Nothing
 	// else. The node lists themselves live only for their own chunk.
+	//
+	// The deduper is created once the first subtree fixes targetLength, so it can be
+	// sized for the whole block; see bindDeduperHintCap.
 	roots := make([]chainhash.Hash, numSubtrees)
-	deduper := model.NewSubtreeTxDeduper(0)
+
+	var deduper *model.SubtreeTxDeduper
 
 	// The first subtree fixes the body's target shape, and chunk 0 is read first, so
 	// both are known before any later chunk needs them.
@@ -271,7 +276,7 @@ func (u *BlockValidation) bindSubtreeBodyToHeader(ctx context.Context, block *mo
 				// back. The anchor itself must stay — with both file types present
 				// findLocalSubtreeFile prefers ToCheck, so a forged promoted blob beside an
 				// honest one is caught only here, before the pipeline.
-				structure, err := u.readSubtreeStructure(ctx, block, hash, subtreeReadAnchorOnly)
+				structure, err := u.readSubtreeStructure(ctx, block, hash, subtreeReadAnchorOnly, "binding")
 				if err != nil {
 					// Collected rather than taken from the group's single error: a
 					// doctored body can name several mismatching blobs and every one of
@@ -334,6 +339,8 @@ func (u *BlockValidation) bindSubtreeBodyToHeader(ctx context.Context, block *mo
 
 					targetLength = subtree.Length()
 					targetHeight = subtree.Height
+
+					deduper = model.NewSubtreeTxDeduper(label, bindDeduperHint(numSubtrees, targetLength))
 				}
 
 				// A ONE-SUBTREE BLOCK IS EXEMPT from the shape rules, exactly as
@@ -355,6 +362,14 @@ func (u *BlockValidation) bindSubtreeBodyToHeader(ctx context.Context, block *mo
 				// node lists, which is what makes the scan survive chunking at all. The
 				// GLOBAL index is passed, so the placeholder skip stays pinned to block
 				// position [0][0].
+				//
+				// Chunks run in order and this loop is skipped once anything has failed,
+				// so idx 0 has always created the deduper by here; the nil check is
+				// defence only.
+				if deduper == nil {
+					return errors.NewProcessingError("[bindSubtreeBodyToHeader][%s] duplicate scan reached subtree %d before the first subtree", block.Hash().String(), idx)
+				}
+
 				if err := deduper.Add(idx, subtree); err != nil {
 					return err
 				}
@@ -452,6 +467,25 @@ func (u *BlockValidation) bindSubtreeBodyToHeader(ctx context.Context, block *mo
 	}
 
 	return nil
+}
+
+// bindDeduperHintCap caps the binding pass's duplicate-set capacity hint. The hint is
+// the subtree count times the first subtree's length, both taken from the peer-supplied
+// body, so it is capped rather than trusted; an understated hint only costs growth.
+const bindDeduperHintCap = 1 << 20
+
+// bindDeduperHint returns min(numSubtrees*targetLength, bindDeduperHintCap), clamping
+// before the multiplication so it cannot overflow.
+func bindDeduperHint(numSubtrees, targetLength int) int {
+	if numSubtrees <= 0 || targetLength <= 0 {
+		return 0
+	}
+
+	if targetLength > bindDeduperHintCap/numSubtrees {
+		return bindDeduperHintCap
+	}
+
+	return numSubtrees * targetLength
 }
 
 // subtreeReadVerdicts collects the failures of a set of concurrent subtree reads so
@@ -608,7 +642,7 @@ func (u *BlockValidation) sweepSubtreeDataMismatches(ctx context.Context, block 
 			}
 
 			g.Go(func() error {
-				result := u.readSubtree(ctx, block, idx, hash, subtreeReadAnchorOnly)
+				result := u.readSubtree(ctx, block, idx, hash, subtreeReadAnchorOnly, "sweep")
 				if result.err == nil {
 					releaseSubtreeStructure(result.subtree)
 					releaseSubtreeStructure(result.fullSubtree)

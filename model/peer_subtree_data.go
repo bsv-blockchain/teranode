@@ -140,7 +140,10 @@ func MissingSubtreeDataTxs(subtree *subtreepkg.Subtree, data *subtreepkg.Data, e
 // exemptPlaceholderAtZero carries exactly the meaning it has in
 // MissingSubtreeDataTxs, and the two must exempt the same slot: a placeholder node has
 // no transaction to be equal to, and the caller that skips it for the nil check would
-// otherwise reject every body it accepts.
+// otherwise reject every body it accepts. Both this fetch-side check and the
+// quick-validation read skip the placeholder slot; the read side additionally refuses a
+// placeholder anywhere but block position [0][0], as a fault in the block's subtree list
+// rather than in the stored blob.
 //
 // The nodes slice is read ONCE and both the bound and the indexing derive from that
 // single read, for the reason MissingSubtreeDataTxs sets out above: Subtree.ReleaseNodes
