@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -3142,4 +3144,365 @@ func TestQuickValidateAsync_FakeCoinbaseSlot_FirstAttempt_NoUTXOMutation(t *test
 	require.Error(t, err, "a transaction that is not the one its node names must be rejected")
 
 	h.requireFirstAttemptUnmutated(f)
+}
+
+// forgedBodiesFixture is a five-subtree honest body in which the named non-first
+// subtrees then have their subtree_data replaced by the fake-coinbase-slot forgery.
+type forgedBodiesFixture struct {
+	block    *model.Block
+	subtrees []*subtreepkg.Subtree
+	groups   [][]*bt.Tx
+	roots    []*chainhash.Hash
+	parents  []*bt.Tx
+	fakes    []*bt.Tx
+}
+
+func (h *preBindHarness) forgedBodies(nonce, seed byte, forged ...int) forgedBodiesFixture {
+	h.t.Helper()
+
+	coinbase := preBindCoinbase(h.t, nonce)
+
+	groups, parents := h.multiBatchGroups(seed, []int{1, 2, 2, 2, 2})
+
+	subtrees, roots, merkleRoot := h.multiSubtreeBody(coinbase, groups)
+
+	fakes := make([]*bt.Tx, 0, len(forged))
+
+	for i, idx := range forged {
+		require.NotZero(h.t, idx, "the forgery is only reachable in a non-first subtree")
+
+		fakes = append(fakes, h.fakeCoinbaseSlotBody(roots[idx], 0xe0+byte(i), groups[idx][0], groups[idx][1]))
+	}
+
+	return forgedBodiesFixture{
+		block:    h.newPreBindBlock(coinbase, roots, merkleRoot, 10),
+		subtrees: subtrees,
+		groups:   groups,
+		roots:    roots,
+		parents:  parents,
+		fakes:    fakes,
+	}
+}
+
+// requireSubtreeDataPresent asserts whether the subtree_data blob under root is still
+// on disk.
+func (h *preBindHarness) requireSubtreeDataPresent(root *chainhash.Hash, present bool, msg string) {
+	h.t.Helper()
+
+	exists, err := h.subtreeStore.Exists(h.ctx, root[:], fileformat.FileTypeSubtreeData)
+	require.NoError(h.t, err)
+	require.Equal(h.t, present, exists, msg)
+}
+
+// requireForgedBodiesQuarantined is the assertion set the forged-bodies tests share:
+// the local-fault disposition, every forged subtree_data removed, nothing created and
+// nothing spent.
+func (h *preBindHarness) requireForgedBodiesQuarantined(f forgedBodiesFixture, err error, forged ...int) {
+	h.t.Helper()
+
+	require.Error(h.t, err)
+	require.False(h.t, errors.IsBlockCorrupt(err),
+		"the disposition is the quarantine of a local blob, not a corrupt verdict against the peer's body, got %v", err)
+
+	for _, idx := range forged {
+		h.requireSubtreeDataPresent(f.roots[idx], false, "every forged subtree_data blob must be quarantined")
+	}
+
+	for _, fake := range f.fakes {
+		_, getErr := h.utxoStore.Get(h.ctx, fake.TxIDChainHash())
+		require.True(h.t, errors.Is(getErr, errors.ErrTxNotFound),
+			"no fabricated transaction may have been created, got %v", getErr)
+	}
+
+	for _, parent := range f.parents {
+		h.requireParentUnspent(parent)
+	}
+
+	require.Zero(h.t, f.block.ID, "no block id may be set")
+	require.Zero(h.t, h.chain.assignCount(), "AssignBlockID must not be reached")
+}
+
+// quickValidateDriver selects one of the three batch drivers the quick-validation
+// entry points can take.
+type quickValidateDriver struct {
+	name          string
+	prefetchDepth int
+	async         bool
+}
+
+var quickValidateDrivers = []quickValidateDriver{
+	{name: "sequential", prefetchDepth: 0},
+	{name: "pipeline", prefetchDepth: 2},
+	{name: "async", prefetchDepth: 2, async: true},
+}
+
+// runQuickValidate runs block through the entry point and driver d selects.
+func (h *preBindHarness) runQuickValidate(d quickValidateDriver, block *model.Block) error {
+	h.t.Helper()
+
+	h.bv.settings.BlockValidation.SubtreeBatchPrefetchDepth = d.prefetchDepth
+
+	if !d.async {
+		return h.bv.quickValidateBlock(h.ctx, block, "peer", "")
+	}
+
+	writeJobsChan := make(chan *SubtreeWriteJob, 16)
+
+	g, gCtx := errgroup.WithContext(h.ctx)
+	g.Go(func() error { return h.bv.subtreeWriteWorker(gCtx, writeJobsChan) })
+
+	_, _, err := h.bv.quickValidateBlockAsync(h.ctx, block, "peer", "", writeJobsChan)
+
+	close(writeJobsChan)
+	require.NoError(h.t, g.Wait())
+
+	return err
+}
+
+// TestPrefetchSubtreeBatch_TwoForgedBodies_BothNamed is the driver-independent half of
+// the same-batch case: the collector every driver's batch read goes through must name
+// both forged subtree_data blobs, not only the first failing index. processSubtreeBatch
+// is prefetchSubtreeBatch followed by extendBatch, so this covers it too.
+//
+// Mutation target: returning at the first failing index must drop subtree 3's ref.
+func TestPrefetchSubtreeBatch_TwoForgedBodies_BothNamed(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+
+	f := h.forgedBodies(0x2a, 0x10, 2, 3)
+
+	batch, err := h.bv.prefetchSubtreeBatch(h.ctx, f.block, 0, 4, false)
+	require.Error(t, err)
+	require.Nil(t, batch)
+
+	require.ElementsMatch(t,
+		[]subtreeBlobRef{
+			{hash: *f.roots[2], fileType: fileformat.FileTypeSubtreeData},
+			{hash: *f.roots[3], fileType: fileformat.FileTypeSubtreeData},
+		},
+		subtreeKeyMismatchRefs(err),
+		"both forged subtree_data blobs in the batch must be named for the quarantine")
+}
+
+// TestQuickValidate_TwoForgedBodiesInOneBatch_BothQuarantined is the same-batch case
+// through every driver: two forged subtree_data blobs in batch 0. Stopping at the first
+// would quarantine only that one, the attempt would read as an ordinary local fault, and
+// the second forged blob would stay on disk for the asset service to serve.
+//
+// Mutation target: returning at the first failing index in the collector does NOT turn
+// this test red on its own, because the entry-point sweep then names subtree 3 as well.
+// Only TestPrefetchSubtreeBatch_TwoForgedBodies_BothNamed pins the collector alone;
+// here the collector mutation must be combined with removing the sweepSubtreeDataMismatches
+// call, which then leaves subtree 3's blob in place.
+func TestQuickValidate_TwoForgedBodiesInOneBatch_BothQuarantined(t *testing.T) {
+	for _, d := range quickValidateDrivers {
+		t.Run(d.name, func(t *testing.T) {
+			h := newPreBindHarness(t, nil)
+			h.bv.settings.BlockValidation.SubtreeBatchSize = 4
+
+			f := h.forgedBodies(0x2b, 0x20, 2, 3)
+
+			err := h.runQuickValidate(d, f.block)
+
+			h.requireForgedBodiesQuarantined(f, err, 2, 3)
+		})
+	}
+}
+
+// TestQuickValidate_ForgedBodiesInTwoBatches_BothQuarantined is the cross-batch case:
+// a failing batch stops every driver, so a forged subtree_data in a later batch is never
+// read by the batch path and only the entry-point sweep can name it.
+//
+// Mutation target: removing the sweepSubtreeDataMismatches call must leave subtree 4's
+// blob in place.
+func TestQuickValidate_ForgedBodiesInTwoBatches_BothQuarantined(t *testing.T) {
+	for _, d := range quickValidateDrivers {
+		t.Run(d.name, func(t *testing.T) {
+			h := newPreBindHarness(t, nil)
+			h.bv.settings.BlockValidation.SubtreeBatchSize = 2
+
+			f := h.forgedBodies(0x2c, 0x30, 1, 4)
+
+			err := h.runQuickValidate(d, f.block)
+
+			h.requireForgedBodiesQuarantined(f, err, 1, 4)
+		})
+	}
+}
+
+// sweepFaultStore injects the faults the subtree_data sweep has to classify. It arms
+// only once the batch path has opened armKey's subtree_data, so the binding pass and
+// the batch path see an ordinary store and only the sweep meets the fault.
+type sweepFaultStore struct {
+	blob.Store
+
+	armKey   chainhash.Hash
+	faultKey chainhash.Hash
+
+	// existsErr fails every existence probe for faultKey.
+	existsErr bool
+
+	// openErr is returned when faultKey's subtree_data is opened.
+	openErr error
+
+	armed atomic.Bool
+}
+
+func (s *sweepFaultStore) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) (io.ReadCloser, error) {
+	if fileType == fileformat.FileTypeSubtreeData {
+		if bytes.Equal(key, s.armKey[:]) {
+			s.armed.Store(true)
+		} else if s.openErr != nil && s.armed.Load() && bytes.Equal(key, s.faultKey[:]) {
+			return nil, s.openErr
+		}
+	}
+
+	return s.Store.GetIoReader(ctx, key, fileType, opts...)
+}
+
+func (s *sweepFaultStore) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) (bool, error) {
+	if s.existsErr && s.armed.Load() && bytes.Equal(key, s.faultKey[:]) {
+		return false, errors.NewStorageError("simulated existence probe failure")
+	}
+
+	return s.Store.Exists(ctx, key, fileType, opts...)
+}
+
+// TestQuickValidate_SubtreeDataSweep_ClassifiesLaterBodyFaults pins the sweep's
+// disposition for every class of failure it can meet in a later batch. Subtree 1 is
+// forged (batch 0) and subtree 4 (batch 2) is varied per row.
+//
+// The sweep only quarantines what the batch path would: forged bodies. A truncated or
+// unparseable body is left in place, as the batch path leaves it; a missing body is
+// ignored once an Exists probe confirms it is absent; and anything that prevents a
+// verdict on a body that is on disk fails the run closed.
+func TestQuickValidate_SubtreeDataSweep_ClassifiesLaterBodyFaults(t *testing.T) {
+	type row struct {
+		name string
+
+		// setup mutates the fixture and configures the fault store.
+		setup func(h *preBindHarness, f forgedBodiesFixture, store *sweepFaultStore)
+
+		// dataPresent is whether subtree 4's subtree_data must still be on disk.
+		dataPresent bool
+
+		unquarantined bool
+	}
+
+	rows := []row{
+		{
+			name: "truncated body is left in place",
+			setup: func(h *preBindHarness, f forgedBodiesFixture, _ *sweepFaultStore) {
+				// A clean EOF short of the subtree length, which leaves a nil slot.
+				h.storeBlob(f.roots[4], fileformat.FileTypeSubtreeData, f.groups[4][0].SerializeBytes())
+			},
+			dataPresent: true,
+		},
+		{
+			name: "unparseable body is left in place",
+			setup: func(h *preBindHarness, f forgedBodiesFixture, _ *sweepFaultStore) {
+				full := serializeSubtreeData(h.t, f.subtrees[4], false, nil, f.groups[4])
+				cut := len(f.groups[4][0].SerializeBytes()) + 10
+				require.Less(h.t, cut, len(full))
+
+				h.storeBlob(f.roots[4], fileformat.FileTypeSubtreeData, full[:cut])
+			},
+			dataPresent: true,
+		},
+		{
+			name: "storage error on the structure probe fails closed",
+			setup: func(_ *preBindHarness, _ forgedBodiesFixture, store *sweepFaultStore) {
+				store.existsErr = true
+			},
+			dataPresent:   true,
+			unquarantined: true,
+		},
+		{
+			name: "missing body is ignored",
+			setup: func(h *preBindHarness, f forgedBodiesFixture, _ *sweepFaultStore) {
+				require.NoError(h.t, h.subtreeStore.Del(h.ctx, f.roots[4][:], fileformat.FileTypeSubtreeData))
+			},
+			dataPresent: false,
+		},
+		{
+			name: "storage error opening the body fails closed",
+			setup: func(_ *preBindHarness, _ forgedBodiesFixture, store *sweepFaultStore) {
+				store.openErr = errors.NewStorageError("simulated storage failure opening the body")
+			},
+			dataPresent:   true,
+			unquarantined: true,
+		},
+		{
+			name: "non-storage error opening a body that exists fails closed",
+			setup: func(_ *preBindHarness, _ forgedBodiesFixture, store *sweepFaultStore) {
+				store.openErr = fmt.Errorf("simulated raw open failure")
+			},
+			dataPresent:   true,
+			unquarantined: true,
+		},
+	}
+
+	for _, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			store := &sweepFaultStore{Store: blobmemory.New()}
+
+			h := newPreBindHarness(t, store)
+			h.bv.settings.BlockValidation.SubtreeBatchSize = 2
+
+			f := h.forgedBodies(0x2d, 0x40, 1)
+
+			store.armKey = *f.roots[1]
+			store.faultKey = *f.roots[4]
+
+			r.setup(h, f, store)
+
+			err := h.bv.quickValidateBlock(h.ctx, f.block, "peer", "")
+
+			h.requireForgedBodiesQuarantined(f, err, 1)
+
+			require.True(t, store.armed.Load(), "precondition: the batch path must have read the forged body")
+
+			// Read through the inner store: the fault store may still refuse the probe.
+			exists, existsErr := store.Store.Exists(h.ctx, f.roots[4][:], fileformat.FileTypeSubtreeData)
+			require.NoError(t, existsErr)
+			require.Equal(t, r.dataPresent, exists, "subtree 4's subtree_data must be deleted only when it is forged")
+
+			require.Equal(t, r.unquarantined, isUnquarantinedLocalSubtree(err),
+				"the run must fail closed exactly when a body on disk could not be judged, got %v", err)
+		})
+	}
+}
+
+// TestPrefetchSubtreeBatch_MismatchAndMissingBody_BothSurvive pins that the collector
+// joins an unrelated read failure to the mismatch whichever index order they arrive in:
+// the forged blob is still named, and the ErrNotFound stays reachable.
+func TestPrefetchSubtreeBatch_MismatchAndMissingBody_BothSurvive(t *testing.T) {
+	orders := []struct {
+		name            string
+		forged, missing int
+	}{
+		{name: "forged before missing", forged: 1, missing: 2},
+		{name: "missing before forged", forged: 2, missing: 1},
+	}
+
+	for _, o := range orders {
+		t.Run(o.name, func(t *testing.T) {
+			h := newPreBindHarness(t, nil)
+
+			f := h.forgedBodies(0x2e, 0x50, o.forged)
+
+			require.NoError(t, h.subtreeStore.Del(h.ctx, f.roots[o.missing][:], fileformat.FileTypeSubtreeData))
+
+			batch, err := h.bv.prefetchSubtreeBatch(h.ctx, f.block, 0, len(f.roots), false)
+			require.Error(t, err)
+			require.Nil(t, batch)
+
+			require.ElementsMatch(t,
+				[]subtreeBlobRef{{hash: *f.roots[o.forged], fileType: fileformat.FileTypeSubtreeData}},
+				subtreeKeyMismatchRefs(err),
+				"the forged blob must be named for the quarantine")
+
+			require.True(t, errors.Is(err, errors.ErrNotFound),
+				"the missing body must stay reachable alongside the mismatch, got %v", err)
+		})
+	}
 }

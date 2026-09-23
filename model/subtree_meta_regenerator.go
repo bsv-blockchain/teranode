@@ -253,11 +253,12 @@ func (r *SubtreeMetaRegenerator) repairLocalSubtreeData(ctx context.Context, sub
 // peer that asks. A missing file has no such consequence: the asset service
 // regenerates it on demand from the subtree instead.
 //
-// Both unusable shapes count. A body that stops at a clean io.EOF short of the
-// subtree's length deserializes "successfully" and is caught by
+// All three unusable shapes count. A body that stops at a clean io.EOF short of
+// the subtree's length deserializes "successfully" and is caught by
 // MissingSubtreeDataTxs; a body truncated mid-transaction fails inside
-// NewSubtreeDataFromReader instead. The file is on disk either way, so it is
-// served outward either way.
+// NewSubtreeDataFromReader instead; and a complete body with a slot filled by a
+// transaction its node does not name is caught by FirstMismatchedSubtreeDataTx.
+// The file is on disk in every case, so it is served outward in every case.
 func (r *SubtreeMetaRegenerator) getLocalSubtreeData(ctx context.Context, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree, isFirstSubtree bool) (*subtreepkg.Data, bool, error) {
 	if r.subtreeStore == nil {
 		return nil, false, errors.NewNotFoundError("subtree store not available")
@@ -279,6 +280,10 @@ func (r *SubtreeMetaRegenerator) getLocalSubtreeData(ctx context.Context, subtre
 
 	if missing := MissingSubtreeDataTxs(subtree, data, isFirstSubtree); missing > 0 {
 		return nil, true, errors.NewProcessingError("[RegenerateMeta][%s] local subtree_data is incomplete (%d of %d txs missing)", subtreeHash.String(), missing, subtree.Length())
+	}
+
+	if idx, expected, got, mismatched := FirstMismatchedSubtreeDataTx(subtree, data, isFirstSubtree); mismatched {
+		return nil, true, errors.NewProcessingError("[RegenerateMeta][%s] local subtree_data transaction at index %d is not the one the subtree names (node %s, transaction %s)", subtreeHash.String(), idx, expected.String(), got.String())
 	}
 
 	return data, false, nil

@@ -249,8 +249,10 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 	// as a deferred rewrite of the named return rather than a call on each failure
 	// path, because the whole-block pass and all three processing variants return
 	// through here and a future return must not be able to bypass it. A no-op for
-	// every error that does not carry the marker (bitcoin-sv/teranode#4838).
+	// every error that does not carry the marker (bitcoin-sv/teranode#4838). The sweep
+	// first names any forged subtree_data in the batches the failing run never read.
 	defer func() {
+		err = u.sweepSubtreeDataMismatches(ctx, block, err)
 		err = u.quarantineSubtreeKeyMismatch(ctx, err)
 	}()
 
@@ -383,8 +385,11 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 	// The ONE boundary for a subtree blob whose nodes do not hash to its key — see
 	// the identical defer in quickValidateBlock (bitcoin-sv/teranode#4838). By the
 	// time this runs the processing errgroup has returned, so no reader of a subtree
-	// blob is still live.
+	// blob is still live. The write workers may still be writing FileTypeSubtree files
+	// while the sweep reads them, which is benign: the file store renames a complete
+	// temp file into place, and whichever version the sweep sees is re-anchored.
 	defer func() {
+		err = u.sweepSubtreeDataMismatches(ctx, block, err)
 		err = u.quarantineSubtreeKeyMismatch(ctx, err)
 	}()
 
@@ -1249,7 +1254,7 @@ type subtreeReadMode int
 
 const (
 	// subtreeReadAnchorOnly anchors a promoted blob and discards it. The whole-block
-	// binding pass.
+	// binding pass and the subtree_data sweep.
 	subtreeReadAnchorOnly subtreeReadMode = iota
 
 	// subtreeReadWithFullSubtree returns the promoted blob for the batch to carry.
@@ -1573,9 +1578,11 @@ func releaseSubtreeStructure(subtree *subtreepkg.Subtree) {
 	_ = subtree.Close()
 }
 
-// readSubtree reads a single subtree from disk and validates its transactions.
-func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, subtreeIdx int, subtreeHash *chainhash.Hash) (result subtreeResult) {
-	structure, err := u.readSubtreeStructure(ctx, block, subtreeHash, subtreeReadWithFullSubtree)
+// readSubtree reads a single subtree from disk and validates its transactions. mode is
+// forwarded to readSubtreeStructure: the batch collectors pass
+// subtreeReadWithFullSubtree, the subtree_data sweep passes subtreeReadAnchorOnly.
+func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, subtreeIdx int, subtreeHash *chainhash.Hash, mode subtreeReadMode) (result subtreeResult) {
+	structure, err := u.readSubtreeStructure(ctx, block, subtreeHash, mode)
 	if err != nil {
 		return subtreeResult{err: err}
 	}
@@ -1982,6 +1989,11 @@ func discardSuppliedPreviousOutputs(tx *bt.Tx) {
 // 2. Same-block parent resolution (extends tx inputs from in-memory txs)
 // 3. External UTXO lookups for remaining unextended inputs
 //
+// Phase 1 is prefetchSubtreeBatch and phases 2 and 3 are extendBatch, the same pair the
+// pipelined variants run as their first two stages, so a fix to either reaches every
+// variant. Extension runs once every read has been collected rather than interleaved
+// with collection; extendedTxsFromPrevBatches is still filled in subtree order.
+//
 // Parameters:
 //   - ctx: Context for cancellation
 //   - block: The block being processed
@@ -1998,169 +2010,20 @@ func (u *BlockValidation) processSubtreeBatch(
 	batchStart, batchEnd int,
 	extendedTxsFromPrevBatches map[chainhash.Hash]*bt.Tx,
 	outpointOnly bool,
-) (_ *SubtreeProcessingBatch, err error) {
-	batchSize := batchEnd - batchStart
-
-	batch := &SubtreeProcessingBatch{
-		subtrees:      make([]*subtreepkg.Subtree, batchSize),
-		subtreeData:   make([]*subtreepkg.Data, batchSize),
-		subtreeHashes: make([]chainhash.Hash, batchSize),
-		txRanges:      make([][2]int, batchSize),
-		batchTxs:      make([]*bt.Tx, 0),
-		fullSubtrees:  make([]*subtreepkg.Subtree, batchSize),
-		batchStart:    batchStart,
-		batchEnd:      batchEnd,
-		outpointOnly:  outpointOnly,
+) (*SubtreeProcessingBatch, error) {
+	batch, err := u.prefetchSubtreeBatch(ctx, block, batchStart, batchEnd, outpointOnly)
+	if err != nil {
+		// prefetchSubtreeBatch's own deferred close has fired and no batch was returned.
+		return nil, err
 	}
 
-	// INVARIANT BO: this function constructs the batch, so it owns it until it returns
-	// it. Every failure exit after a partial collection was abandoning whatever had
-	// already been copied into batch.subtrees / batch.fullSubtrees — including the two
-	// extension-failure exits, which run after EVERY carried full subtree in the batch
-	// has been collected. One deferred close on a named ERROR return covers all of them
-	// and cannot be missed by a future return.
-	//
-	// The batch is a local rather than a named return value on purpose: the failure
-	// exits return a nil batch, so a named batch return would be nil by the time the
-	// defer ran and would close nothing (or panic).
-	defer func() {
-		if err != nil {
-			batch.Close()
-		}
-	}()
-
-	// Phase 1: Read subtrees in parallel
-	subtreeChannels := make([]chan subtreeResult, batchSize)
-	for i := range subtreeChannels {
-		subtreeChannels[i] = make(chan subtreeResult, 1)
+	// INVARIANT BO: this function owns the batch until it returns it, so the extension
+	// failure exit closes it.
+	if err := u.extendBatch(ctx, block, batch, extendedTxsFromPrevBatches); err != nil {
+		batch.Close()
+		return nil, err
 	}
 
-	readerCtx, cancelReaders := context.WithCancel(ctx)
-	g, gCtx := errgroup.WithContext(readerCtx)
-	util.SafeSetLimit(u.logger, g, 128)
-
-	for i := 0; i < batchSize; i++ {
-		globalIdx := batchStart + i
-		localIdx := i
-		hash := block.Subtrees[globalIdx]
-		resultChan := subtreeChannels[localIdx]
-		g.Go(func() error {
-			result := u.readSubtree(gCtx, block, globalIdx, hash)
-
-			// Unconditional send, NOT a select against gCtx.Done(). Exactly one
-			// goroutine sends on this channel and its buffer is 1, so the send cannot
-			// block and cannot deadlock. The select this replaces had two ready cases
-			// under cancellation and Go picks between them at random, so a live result
-			// — now carrying an anchored full subtree as well as the structure — was
-			// discarded unreleased roughly half the time a batch was cancelled.
-			//
-			// Nothing depends on returning gCtx.Err() here: the joiner below discards
-			// g.Wait()'s error, and a read that was actually cancelled surfaces as
-			// result.err to the collector. If a future change adds a second sender or
-			// drops the buffer to zero, this becomes a deadlock — the guarantee is the
-			// one-sender/one-slot pairing, not the absence of the select.
-			resultChan <- result
-
-			return nil
-		})
-	}
-
-	// stopReaders cancels the per-batch readers, JOINS them, and then DRAINS whatever
-	// they published that the collector never consumed, so no reader of a subtree blob
-	// is still live once this function returns and nothing it read is stranded. The
-	// deferred quarantine at the entry points deletes exact blobs, and it must not race
-	// a read of one (bitcoin-sv/teranode#4838). Joining is cheap: every send is into a
-	// single-slot buffered channel, so a cancelled reader always reaches its return.
-	readersDone := make(chan struct{})
-
-	go func() {
-		_ = g.Wait()
-		for _, ch := range subtreeChannels {
-			close(ch)
-		}
-
-		close(readersDone)
-	}()
-
-	stopReaders := func() {
-		cancelReaders()
-		<-readersDone
-
-		// AFTER the join, never before: only now are the channels closed and no sender
-		// live, so ranging cannot race a send. Each channel is consumed at most once by
-		// the collector loop, and a channel the collector already drained yields nothing
-		// after close, so this cannot double-release.
-		for _, ch := range subtreeChannels {
-			for r := range ch {
-				releaseSubtreeStructure(r.subtree)
-				releaseSubtreeStructure(r.fullSubtree)
-			}
-		}
-	}
-
-	// Phase 2: Collect results and extend same-block parents
-	txsNeedingExtension := make([]*bt.Tx, 0)
-
-	for i := 0; i < batchSize; i++ {
-		result, ok := <-subtreeChannels[i]
-		if !ok {
-			stopReaders()
-			return nil, errors.NewProcessingError("[processSubtreeBatch][%s] channel %d closed", block.Hash().String(), batchStart+i)
-		}
-		if result.err != nil {
-			stopReaders()
-			return nil, result.err
-		}
-
-		batch.subtrees[i] = result.subtree
-		batch.subtreeData[i] = result.subtreeData
-		batch.subtreeHashes[i] = result.subtreeHash
-		batch.fullSubtrees[i] = result.fullSubtree
-
-		startIdx := len(batch.batchTxs)
-		for _, tx := range result.subtreeData.Txs {
-			if tx == nil {
-				continue // skip coinbase
-			}
-
-			// Never trust previous-output metadata supplied by the announcing
-			// peer; re-resolve it locally. Skipped on the outpoint-only fast
-			// path, which does no script or value checks at all (see Phase 3).
-			if !outpointOnly {
-				discardSuppliedPreviousOutputs(tx)
-			}
-
-			// Try to extend from same-block parents first
-			if !tx.IsExtended() {
-				needsExternalLookup, extendErr := extendTxFromSameBlockParents(tx, extendedTxsFromPrevBatches)
-				if extendErr != nil {
-					stopReaders()
-					return nil, errors.NewProcessingError("[processSubtreeBatch][%s] same-block parent extension failed", block.Hash().String(), extendErr)
-				}
-
-				if needsExternalLookup {
-					txsNeedingExtension = append(txsNeedingExtension, tx)
-				}
-			}
-
-			extendedTxsFromPrevBatches[*tx.TxIDChainHash()] = tx
-			tx.SetTxHash(tx.TxIDChainHash())
-			batch.batchTxs = append(batch.batchTxs, tx)
-		}
-		batch.txRanges[i] = [2]int{startIdx, len(batch.batchTxs)}
-	}
-
-	// Phase 3: Extend remaining transactions using bulk UTXO store lookup.
-	// Skipped on the outpoint-only fast path: below-checkpoint blocks are certified
-	// valid and parent satoshis/scripts are not needed for UTXO create/spend.
-	if !outpointOnly && len(txsNeedingExtension) > 0 {
-		if err := u.utxoStore.BatchPreviousOutputsDecorate(ctx, txsNeedingExtension); err != nil {
-			stopReaders()
-			return nil, errors.NewProcessingError("[processSubtreeBatch][%s] failed to extend transactions: %v", block.Hash().String(), err)
-		}
-	}
-
-	stopReaders()
 	return batch, nil
 }
 
@@ -2539,10 +2402,9 @@ func (u *BlockValidation) prefetchSubtreeBatch(
 		outpointOnly:  outpointOnly,
 	}
 
-	// INVARIANT BO, exactly as processSubtreeBatch: this function constructs the batch
-	// and owns it until it returns it, so every failure exit after a partial collection
-	// closes what it has already taken. Local rather than a named batch return, because
-	// the failure exits return nil.
+	// INVARIANT BO: this function constructs the batch and owns it until it returns it,
+	// so every failure exit after a partial collection closes what it has already taken.
+	// Local rather than a named batch return, because the failure exits return nil.
 	defer func() {
 		if err != nil {
 			batch.Close()
@@ -2565,11 +2427,20 @@ func (u *BlockValidation) prefetchSubtreeBatch(
 		hash := block.Subtrees[globalIdx]
 		resultChan := subtreeChannels[localIdx]
 		g.Go(func() error {
-			result := u.readSubtree(gCtx, block, globalIdx, hash)
+			result := u.readSubtree(gCtx, block, globalIdx, hash, subtreeReadWithFullSubtree)
 
-			// Unconditional send — see processSubtreeBatch for the full reasoning. One
-			// sender per channel and a buffer of 1, so it cannot block; the select this
-			// replaces discarded a live result at random under cancellation.
+			// Unconditional send, NOT a select against gCtx.Done(). Exactly one
+			// goroutine sends on this channel and its buffer is 1, so the send cannot
+			// block and cannot deadlock. The select this replaces had two ready cases
+			// under cancellation and Go picks between them at random, so a live result
+			// — now carrying an anchored full subtree as well as the structure — was
+			// discarded unreleased roughly half the time a batch was cancelled.
+			//
+			// Returning nil rather than result.err is load-bearing too: a failing read
+			// must not cancel gCtx, or its siblings would return a context error in
+			// place of their own verdict and their blobs would go unnamed. If a future
+			// change adds a second sender or drops the buffer to zero, this becomes a
+			// deadlock — the guarantee is the one-sender/one-slot pairing.
 			resultChan <- result
 
 			return nil
@@ -2582,6 +2453,9 @@ func (u *BlockValidation) prefetchSubtreeBatch(
 	// deferred quarantine at the entry points deletes exact blobs, and it must not race
 	// a read of one (bitcoin-sv/teranode#4838). Joining is cheap: every send is into a
 	// single-slot buffered channel, so a cancelled reader always reaches its return.
+	//
+	// The collector consumes every channel on every path but the `!ok` exit, so the
+	// drain is defensive: it only matters there.
 	readersDone := make(chan struct{})
 
 	go func() {
@@ -2608,16 +2482,36 @@ func (u *BlockValidation) prefetchSubtreeBatch(
 		}
 	}
 
-	// Collect results (no extension yet)
+	// Registered AFTER the batch.Close defer so it runs FIRST: the readers are joined and
+	// drained before the batch is released.
+	defer stopReaders()
+
+	// Collect results (no extension yet). EVERY channel is received, in index order,
+	// even once one has failed, and no read is cancelled on a failure: stopping at the
+	// first failing index would leave a second forged subtree_data in the same batch
+	// unnamed, the quarantine would delete only the first, and normal validation would
+	// be handed the survivor (bitcoin-sv/teranode#4838).
+	var verdicts subtreeReadVerdicts
+
 	for i := 0; i < batchSize; i++ {
 		result, ok := <-subtreeChannels[i]
 		if !ok {
-			stopReaders()
 			return nil, errors.NewProcessingError("[prefetchSubtreeBatch][%s] channel %d closed", block.Hash().String(), batchStart+i)
 		}
+
 		if result.err != nil {
-			stopReaders()
-			return nil, result.err
+			verdicts.record(result.err)
+			continue
+		}
+
+		// Once anything has failed the batch will not be returned, so a later result is
+		// released here rather than copied into it; results copied before the failure
+		// are released by the deferred batch.Close.
+		if verdicts.failed() {
+			releaseSubtreeStructure(result.subtree)
+			releaseSubtreeStructure(result.fullSubtree)
+
+			continue
 		}
 
 		batch.subtrees[i] = result.subtree
@@ -2626,7 +2520,10 @@ func (u *BlockValidation) prefetchSubtreeBatch(
 		batch.fullSubtrees[i] = result.fullSubtree
 	}
 
-	stopReaders()
+	if verdicts.failed() {
+		return nil, verdicts.err()
+	}
+
 	return batch, nil
 }
 
@@ -2686,7 +2583,8 @@ func (u *BlockValidation) extendBatch(
 	}
 
 	// Extend remaining transactions using bulk UTXO store lookup.
-	// Skipped on the outpoint-only fast path (see processSubtreeBatch Phase 3 comment).
+	// Skipped on the outpoint-only fast path: below-checkpoint blocks are certified
+	// valid and parent satoshis/scripts are not needed for UTXO create/spend.
 	if !batch.outpointOnly && len(txsNeedingExtension) > 0 {
 		if err := u.utxoStore.BatchPreviousOutputsDecorate(ctx, txsNeedingExtension); err != nil {
 			return errors.NewProcessingError("[extendBatch][%s] failed to extend transactions: %v", block.Hash().String(), err)
