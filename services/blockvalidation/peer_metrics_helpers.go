@@ -146,7 +146,10 @@ func (u *Server) reportCatchupFailure(ctx context.Context, peerID string) {
 }
 
 func (u *Server) reportCatchupFailureForError(ctx context.Context, peerID string, err error) {
-	if errors.IsBlockCorrupt(err) {
+	// An unbound invalid-transaction verdict is corrupt by class but a consensus rejection on
+	// catch-up (see isUnboundTxInvalidVerdict), so it is charged like a consensus-invalid block
+	// rather than exempted as a corrupt body (bitcoin-sv/teranode#4844).
+	if errors.IsBlockCorrupt(err) && !isUnboundTxInvalidVerdict(err) {
 		// releaseCatchupLock already charged this cycle for the corrupt body, once, at the site
 		// that classified it. A corrupt verdict is deliberately not "unvalidatable" and is not
 		// wrapped as ErrExternal, so it reaches processCatchupChItem's generic tail and would be
@@ -313,6 +316,22 @@ func shouldReportConsensusMalicious(err error) bool {
 	}
 
 	return errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid)
+}
+
+// isUnboundTxInvalidVerdict reports whether a failed block validation is the corrupt verdict
+// ValidateBlockWithOptions returns for an invalid transaction in a subtree list that nothing has
+// bound to the header yet (its subtree invalid-transaction branch, the single producer). The
+// verdict is corrupt so the direct peer path re-downloads under the corrupt-attempt cap, but on
+// catch-up it must be handled as a consensus rejection (bitcoin-sv/teranode#4844): the subtree
+// blobs were verified against their names, every peer serves the same bytes for a fault in the
+// miner's real body, so deleting them and re-downloading would loop with no record, and the
+// malicious report would never fire.
+//
+// No other corrupt producer on the catch-up route matches: the subtree-validation corrupt
+// verdicts (SubtreeValidation.go), the quick_validate.go corrupt sites and model's bindErr wrap no
+// ErrTxInvalid. A local fault is excluded exactly as in shouldReportConsensusMalicious.
+func isUnboundTxInvalidVerdict(err error) bool {
+	return !isLocalCatchupFault(err) && errors.IsBlockCorrupt(err) && errors.Is(err, errors.ErrTxInvalid)
 }
 
 // isLocalCatchupFault reports whether a catchup failure is this node's own doing

@@ -552,6 +552,13 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			// remain attributable through the failedPeers drain below.
 			errorType = "local_fsm_refusal"
 			isPeerError = false
+		case isUnboundTxInvalidVerdict(*err):
+			// An invalid transaction in an unbound subtree list (bitcoin-sv/teranode#4844): corrupt
+			// on the direct peer path, but on catch-up a consensus rejection, scored exactly like
+			// the validation_failure case below. Must precede the corrupt case, which would
+			// otherwise classify it corrupt_block_body and suppress the malicious report.
+			errorType = "validation_failure"
+			reportMalicious = true
 		case errors.IsBlockCorrupt(*err):
 			// Corrupt block body (bitcoin-sv/teranode#4692): classify for the dashboard but do NOT flag
 			// the peer malicious and do NOT open a generic peer-error window here. The serving
@@ -1739,6 +1746,17 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 					if errors.Is(err, errors.ErrBlockIncomplete) {
 						catchupCtx.incompleteBlockHash = block.Hash().String()
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s is incomplete, aborting catchup", blockUpTo.Hash().String(), block.Hash().String(), peerID)
+					} else if isUnboundTxInvalidVerdict(err) {
+						// An invalid transaction in the primary's subtree list (bitcoin-sv/teranode#4844).
+						// Corrupt on the direct path, but a consensus rejection here, so it is tested
+						// ahead of the corrupt branch below. No corruptBlockHash and no blob deletion:
+						// each blob was verified against its name at fetch time, so a retry reads the
+						// right bytes, and an honest different subtree list uses different keys. For a
+						// fault in the miner's real body every peer serves the same bytes, so a corrupt
+						// re-download would only loop. The primary is responsible under the attribution
+						// rule on the options above.
+						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s carries an invalid transaction, rejected as a consensus failure", blockUpTo.Hash().String(), block.Hash().String(), peerID)
+						u.reportCatchupMalicious(gCtx, peerID, "invalid_block_validation")
 					} else if errors.IsBlockCorrupt(err) {
 						// Corrupt block body (bitcoin-sv/teranode#4692): the serving peer was already struck via
 						// AddBanScore inside ValidateBlockWithOptions and the block was NOT stored

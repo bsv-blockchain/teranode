@@ -66,6 +66,9 @@ func TestValidateBlock_SubtreeTxInvalid_IsCorruptNotPersisted(t *testing.T) {
 	require.True(t, errors.IsBlockCorrupt(err),
 		"an invalid transaction in an unbound subtree list is a verdict on the delivery, got: %v", err)
 	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "the genuine hash must never be condemned")
+	require.True(t, isUnboundTxInvalidVerdict(err),
+		"catch-up must be able to tell this verdict apart from a corrupt body, got: %v", err)
+	require.NotContains(t, err.Error(), "MISSING", "the verdict message must not render a missing format argument")
 
 	requireNothingPersisted(ctx, t, client, tampered.Hash())
 

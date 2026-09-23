@@ -2111,9 +2111,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// report "not bound" for a genuinely bound consensus-invalid block and misclassify it.
 			//
 			// Cost of this, stated plainly: a consensus-invalid block whose fault is an invalid
-			// transaction is no longer REMEMBERED as invalid, so it is re-downloaded on
-			// re-announcement. It is rejected every time either way; only the permanent record is
-			// lost. That is the cost already accepted at the sibling corrupt branch above.
+			// transaction is no longer REMEMBERED as invalid. On the direct peer path the verdict is
+			// corrupt, so the block is re-downloaded on re-announcement, bounded by the
+			// corrupt-attempt counter. Catch-up classifies this verdict as a consensus rejection
+			// instead (isUnboundTxInvalidVerdict): it reports the primary malicious, keeps the
+			// verified subtree blobs and does not re-download. Either way it is rejected every time
+			// and the hash is not remembered.
 			if errors.Is(err, errors.ErrTxInvalid) {
 				// Infrastructure first, and inside this branch rather than ahead of it:
 				// processTransactionsInLevels wraps its failures in a processing error, so a blanket
@@ -2137,7 +2140,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, "invalid transaction in an unbound subtree list")
 				}
 
-				return errors.NewBlockCorruptError("[ValidateBlock][%s] block contains invalid transactions: %s", block.Hash().String(), err)
+				return errors.NewBlockCorruptError("[ValidateBlock][%s] block contains invalid transactions", block.Hash().String(), err)
 			}
 
 			// Catchup-state errors: a parent transaction is not yet in our store because we
