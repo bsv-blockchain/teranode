@@ -23,12 +23,64 @@ The Service features are:
 
 ### UTXO Freezing
 
-- Ability to freeze a set of UTXOs at a specified block height.
+- Ability to freeze a set of UTXOs over a range of block heights.
 - Frozen UTXOs are classified as such and attempts to spend them are rejected.
+- A freeze carries two controls at once, mirroring SV Node's `addToConsensusBlacklist`:
+    - a **policy freeze**, effective as soon as the alert is processed, which keeps the
+      coin out of this node's mempool and out of the blocks it builds; and
+    - a **consensus freeze**, enforced only for blocks whose height falls in the alert's
+      `enforceAtHeight` interval `[start, stop)`.
+- Only the consensus freeze decides whether a block is valid. Because every node derives
+  the interval from the chain rather than from when the alert happened to arrive, two
+  honest nodes always reach the same verdict on the same block. A block that violates the
+  interval is rejected once, as a clean block-invalid verdict, and never re-fetched.
+- The interval follows SV Node's semantics: `stop` is an exclusive end, `stop <= start`
+  (including `stop = 0`) is an *empty* interval that is never consensus-active, and "no
+  end" is expressed by a `stop` the chain will never reach — not by 0.
+- The consensus record is a property of the **outpoint**, not of a node's current
+  spent-state for it, and the node guarantees three things so that every node judges
+  every block identically whatever it currently records about the coin:
+    - a block that spends the coin **below** `start` is valid everywhere and is accepted —
+      rejecting it only on nodes that hold the alert would be the timing split this design
+      removes. The freeze survives that spend: a fork block or a re-mine carrying the same
+      spend at a height inside the interval is rejected, even by a node that already
+      records the coin as spent;
+    - the freeze survives a rollback of that spend, so the coin is frozen again with no gap;
+    - an alert for a coin that is already spent is still recorded, so a node whose alert
+      arrived late judges a fork or a re-mine exactly as the nodes whose alert arrived first.
+- A transaction the node has already validated is not re-spent when a later block
+  carries it, so block validation judges the records of every parent a block's
+  transactions spend — parents in earlier blocks and parents inside the same block alike.
+  A chained parent/child pair frozen after both were validated is therefore rejected
+  inside the interval like any other spend.
+- A block at or below the highest hardcoded checkpoint is canonical by definition, and
+  no alert may retroactively invalidate it: neither tier of a freeze is applied to its
+  spends, on the block-validation and the legacy-sync catch-up paths alike.
+- On Aerospike the record lives in per-output map bins (`utxoFreezeFrom`,
+  `utxoFreezeUntil`, `utxoFreezeExp`) of the record holding the output, and a
+  transaction's main record carries a `utxoFreezeRecs` marker naming the pagination
+  records that hold one, so block validation's parent read never scans a large
+  transaction's pagination records. Spend, freeze, unfreeze and reassign are routed
+  through the Lua path whatever `aerospike_use_native_teranode_ops` says, until the
+  native dispatcher implements the record.
+- A freeze issued through the admin `freeze` RPC with no interval is enforced at every
+  height — the behaviour of every freeze issued before intervals existed, so no migration
+  is needed.
 
 ### UTXO Unfreezing
 
-- Capability to unfreeze a set of UTXOs at a specified block height.
+- Alerts add or replace a coin's freeze record; they never delete it. The consensus record
+  must stay so that a deep reorg into an elapsed interval is judged identically everywhere.
+  The admin `unfreeze` RPC is the explicit delete.
+- An unfreeze alert on this RPC is an empty interval (`stop <= start`) with
+  `policyExpiresWithConsensus` set: the consensus tier is never active and the policy tier
+  lifts with it, releasing the coin. With the flag clear the coin stays out of this node's
+  mempool and templates, exactly as SV Node keeps its policy blacklist — re-issue with the
+  flag, or use the admin `unfreeze` RPC, to release it.
+- `policyExpiresWithConsensus` is persisted with the record, so a future interval's policy
+  freeze lifts by itself once the interval ends.
+- Nothing is decided against the node's own tip when an alert arrives, so a node that
+  receives an alert early, late, or on replay ends up in the same state.
 
 ### UTXO Reassignment
 

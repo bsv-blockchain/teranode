@@ -159,6 +159,8 @@ func TestHandleSingleTx_ProtobufNonDefaultOptionsRejected(t *testing.T) {
 		}, "unconfirmedParentsAtCandidateHeight"},
 		{"skipScriptValidation", func(r *validator_api.ValidateTransactionRequest) { r.SkipScriptValidation = boolPtr(true) }, "skipScriptValidation"},
 		{"outpointOnlySpend", func(r *validator_api.ValidateTransactionRequest) { r.OutpointOnlySpend = boolPtr(true) }, "outpointOnlySpend"},
+		{"ignorePolicyFreeze", func(r *validator_api.ValidateTransactionRequest) { r.IgnorePolicyFreeze = boolPtr(true) }, "ignorePolicyFreeze"},
+		{"ignoreConsensusFreeze", func(r *validator_api.ValidateTransactionRequest) { r.IgnoreConsensusFreeze = boolPtr(true) }, "ignoreConsensusFreeze"},
 	}
 
 	for _, tc := range cases {

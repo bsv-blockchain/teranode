@@ -408,6 +408,34 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 		}
 	}
 
+	// The alert system's freeze is held by the 0xFF sentinel in the spending-data slot,
+	// by the freeze record in the utxoFreeze* bins, or both. FROZEN is reported only
+	// while the output is unspent and the policy tier still holds it — judged at the
+	// height the next block would have, as the mempool path does. An output spent by a
+	// real transaction reports SPENT with its real spender: a record may legitimately sit
+	// on a spent output (a below-window spend, or a late alert), and masking the spender
+	// with the sentinel would feed conflict resolution a spender that does not exist
+	// (issue #1422).
+	sentinelPresent := spendingData != nil && bytes.Equal(spendingData.Bytes(), frozenUTXOBytes)
+
+	var (
+		freezeRec freezeRecord
+		freezeErr error
+	)
+
+	if value != nil {
+		freezeRec, freezeErr = readFreezeRecord(value.Bins, int(spend.Vout%uint32(s.utxoBatchSize))) // nolint:gosec
+		if freezeErr != nil {
+			return nil, errors.NewStorageError("[GetSpend][%s:%d] malformed freeze record", spend.TxID.String(), spend.Vout, freezeErr)
+		}
+	}
+
+	if sentinelPresent && !utxo.FreezePolicyActiveAt(freezeRec.from, freezeRec.until, freezeRec.policyExpires, s.GetBlockHeight()+1) {
+		// The policy tier has expired with the window: the sentinel is a stale marker
+		// and the output is, for every practical purpose, plain unspent.
+		spendingData = nil
+	}
+
 	utxoStatus := utxo.CalculateUtxoStatus2(spendingData)
 
 	// check utxo is spendable
@@ -416,7 +444,9 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	}
 
 	// check if frozen
-	if spendingData != nil && bytes.Equal(spendingData.Bytes(), frozenUTXOBytes) {
+	unspent := spendingData == nil || sentinelPresent
+	if unspent && (sentinelPresent || freezeRec.present) &&
+		utxo.FreezePolicyActiveAt(freezeRec.from, freezeRec.until, freezeRec.policyExpires, s.GetBlockHeight()+1) {
 		utxoStatus = utxo.Status_FROZEN
 		// this is needed in for instance conflict resolution where we check the spending data
 		spendingData = spendpkg.NewSpendingData(&subtree.FrozenBytesTxHash, int(spend.Vout))
@@ -725,6 +755,27 @@ func (s *Store) addAbstractedBins(bins []fields.FieldName) []fields.FieldName {
 
 		if !slices.Contains(newBins, fields.TotalUtxos) {
 			newBins = append(newBins, fields.TotalUtxos)
+		}
+
+		// The spending-data view depends on the freeze bins: an output whose 0xFF
+		// sentinel a block-validation spend overwrote and a rollback then cleared is
+		// frozen only by its record, and a sentinel whose policy tier has expired must
+		// not be reported as a spender (see synthesiseFrozenSpendingData).
+		for _, bin := range []fields.FieldName{fields.UtxoFreezeFrom, fields.UtxoFreezeUntil, fields.UtxoFreezeExp} {
+			if !slices.Contains(newBins, bin) {
+				newBins = append(newBins, bin)
+			}
+		}
+	}
+
+	// A freeze-record read needs all three freeze bins plus the main record's marker of
+	// which extra records carry one, so records on paginated outputs can be followed to
+	// their extra records without scanning them all.
+	if slices.Contains(newBins, fields.UtxoFreezeFrom) || slices.Contains(newBins, fields.UtxoFreezeUntil) || slices.Contains(newBins, fields.UtxoFreezeExp) {
+		for _, bin := range []fields.FieldName{fields.UtxoFreezeFrom, fields.UtxoFreezeUntil, fields.UtxoFreezeExp, fields.UtxoFreezeRecs} {
+			if !slices.Contains(newBins, bin) {
+				newBins = append(newBins, bin)
+			}
 		}
 	}
 
@@ -1131,6 +1182,20 @@ NEXT_BATCH_RECORD:
 
 				items[idx].Data.ConflictingChildren = res
 
+			case fields.UtxoFreezeFrom, fields.UtxoFreezeUntil, fields.UtxoFreezeExp:
+				// One decode covers all three bins; a caller asks for the three together
+				// (see model.getParentTxMetaBlockIDs) so that they are all fetched.
+				if items[idx].Data.FreezeRecords == nil {
+					res, err := s.readFreezeRecords(ctx, &items[idx].Hash, bins)
+					if err != nil {
+						items[idx].Err = classifyRecordError("could not process freeze records", err)
+
+						continue NEXT_BATCH_RECORD // because there was an error processing the freeze records.
+					}
+
+					items[idx].Data.FreezeRecords = res
+				}
+
 			case fields.UnminedSince:
 				unminedSince, ok := bins[key.String()].(int)
 				if ok {
@@ -1423,6 +1488,10 @@ func (s *Store) processUTXOs(ctx context.Context, txid *chainhash.Hash, bins aer
 		}
 	}
 
+	if err := s.synthesiseFrozenSpendingData(bins, 0, len(utxos), spendingDatas); err != nil {
+		return nil, errors.NewStorageError("[processUTXOs][%s] malformed freeze record", txid.String(), err)
+	}
+
 	// Add any extra UTXOs from child records...
 	totalExtraRecs, ok := bins[fields.TotalExtraRecs.String()].(int)
 	if ok {
@@ -1432,6 +1501,58 @@ func (s *Store) processUTXOs(ctx context.Context, txid *chainhash.Hash, bins aer
 	}
 
 	return spendingDatas, nil
+}
+
+// synthesiseFrozenSpendingData reconciles the spending-data view of every output in
+// [baseOffset, baseOffset+count) with its freeze record, mirroring what the SQL store's
+// Get does for its frozen column (issue #1422):
+//
+//   - an UNSPENT output whose record's policy tier still holds it reports the frozen
+//     sentinel as its spender — conflict resolution keys "frozen" off SpendingDatas
+//     carrying FrozenBytesTxHash, and an output whose 0xFF sentinel a block-validation
+//     spend overwrote and a rollback then cleared has only the freeze bins to say so;
+//   - a sentinel still in the slot after the policy tier expired with the window
+//     (policyExpiresWithConsensus) is stale, and reads as unspent so block assembly can
+//     re-admit the coin, as GetSpend already reports it;
+//   - an output spent by a real transaction is left alone.
+//
+// Freeze data of the wrong shape is an error: it feeds consensus decisions and must not
+// read as "not frozen".
+func (s *Store) synthesiseFrozenSpendingData(bins aerospike.BinMap, baseOffset, count int, spendingDatas []*spendpkg.SpendingData) error {
+	if _, found := bins[fields.UtxoFreezeFrom.String()]; !found {
+		return nil
+	}
+
+	nextHeight := s.GetBlockHeight() + 1
+
+	for offset := 0; offset < count; offset++ {
+		i := baseOffset + offset
+		if i >= len(spendingDatas) {
+			continue
+		}
+
+		rec, err := readFreezeRecord(bins, offset)
+		if err != nil {
+			return err
+		}
+
+		if !rec.present {
+			continue
+		}
+
+		policyActive := utxo.FreezePolicyActiveAt(rec.from, rec.until, rec.policyExpires, nextHeight)
+
+		switch {
+		case spendingDatas[i] == nil:
+			if policyActive {
+				spendingDatas[i] = spendpkg.NewSpendingData(&subtree.FrozenBytesTxHash, i)
+			}
+		case !policyActive && bytes.Equal(spendingDatas[i].Bytes(), frozenUTXOBytes):
+			spendingDatas[i] = nil
+		}
+	}
+
+	return nil
 }
 
 // processConflictingChildren extracts and processes conflicting children data from Aerospike bins.
@@ -1492,7 +1613,8 @@ func (s *Store) getAllExtraUTXOs(ctx context.Context, txID *chainhash.Hash, tota
 
 		policy := util.GetAerospikeReadPolicy(s.settings)
 
-		extraRecord, err := s.client.Get(policy, extraKey, fields.Utxos.String())
+		extraRecord, err := s.client.Get(policy, extraKey, fields.Utxos.String(),
+			fields.UtxoFreezeFrom.String(), fields.UtxoFreezeUntil.String(), fields.UtxoFreezeExp.String())
 		if err != nil {
 			return errors.NewStorageError("failed to get extra record", err)
 		}
@@ -1512,6 +1634,12 @@ func (s *Store) getAllExtraUTXOs(ctx context.Context, txID *chainhash.Hash, tota
 
 		if applyErr := applyExtraRecordBins(txID, recordNum, extraRecord, baseOffset, spendingDatas, expected); applyErr != nil {
 			return applyErr
+		}
+
+		// A freeze record on a paginated output lives on its own extra record, keyed by
+		// the offset within that record.
+		if err := s.synthesiseFrozenSpendingData(extraRecord.Bins, baseOffset, expected, spendingDatas); err != nil {
+			return errors.NewStorageError("[getAllExtraUTXOs][%s] malformed freeze record on extra record %d", txID.String(), recordNum, err)
 		}
 	}
 

@@ -793,6 +793,11 @@ var publicCauseCodes = map[ERR]struct{}{
 	// block height), and the height the hold expires at only where the store knows
 	// it. All of that is either supplied by the submitter or already public.
 	ERR_UTXO_FROZEN: {},
+	// ERR_UTXO_CONSENSUS_FROZEN is the height-anchored sibling of ERR_UTXO_FROZEN: the
+	// same verdict about the submitted tx, carrying the same public fields plus the
+	// block height it was judged at, which the submitter supplied or can read from the
+	// chain. Same bar, same reasoning.
+	ERR_UTXO_CONSENSUS_FROZEN: {},
 	// ERR_TX_MISSING_PARENT meets every bar above: its messages name transactions
 	// and nothing else, and "a parent this transaction spends is not in my utxo
 	// set" is the most actionable thing a submitter can be told — resubmit the
@@ -1093,7 +1098,7 @@ func ErrorCodeToGRPCCode(code ERR) codes.Code {
 	// asked. The HTTP layer answers 403 for the same error and the two maps are
 	// independent by design; see httpStatusForTxError in services/propagation.
 	case ERR_TX_INVALID_DOUBLE_SPEND, ERR_TX_CONFLICTING, ERR_UTXO_SPENT, ERR_TX_LOCKED, ERR_TX_CREATING,
-		ERR_UTXO_FROZEN, ERR_TX_MISSING_PARENT:
+		ERR_UTXO_FROZEN, ERR_UTXO_CONSENSUS_FROZEN, ERR_TX_MISSING_PARENT:
 		return codes.FailedPrecondition
 	default:
 		return codes.Internal

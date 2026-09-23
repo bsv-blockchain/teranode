@@ -619,6 +619,14 @@ func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) (
 		opts.OutpointOnlySpend = *req.OutpointOnlySpend
 	}
 
+	if req.IgnorePolicyFreeze != nil {
+		opts.IgnorePolicyFreeze = *req.IgnorePolicyFreeze
+	}
+
+	if req.IgnoreConsensusFreeze != nil {
+		opts.IgnoreConsensusFreeze = *req.IgnoreConsensusFreeze
+	}
+
 	return opts, nil
 }
 

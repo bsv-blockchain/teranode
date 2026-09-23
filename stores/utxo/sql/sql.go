@@ -85,18 +85,22 @@ import (
 const (
 	errOutputNotFound           = "output %s:%d not found"
 	errFailedCreateSpendingData = "failed to create spending data from bytes"
+	errSpendConsensusFrozen     = "[Spend] utxo is frozen for %s:%d at block height %d"
+	errSpendPolicyFrozen        = "[Spend] utxo is frozen for %s:%d"
 	errSQLUpdatingTransactions  = "SQL error updating transactions: %v"
 )
 
 // batchSpend represents a single UTXO spend request in a batch.
 // Mirrors aerospike/spend.go batchSpend struct.
 type batchSpend struct {
-	spend             *utxo.Spend // UTXO to spend
-	blockHeight       uint32      // Current block height
-	errCh             chan error  // Channel for completion notification
-	ignoreConflicting bool
-	ignoreLocked      bool
-	skipUTXOHashCheck bool
+	spend                 *utxo.Spend // UTXO to spend
+	blockHeight           uint32      // Current block height
+	errCh                 chan error  // Channel for completion notification
+	ignoreConflicting     bool
+	ignoreLocked          bool
+	skipUTXOHashCheck     bool
+	ignorePolicyFreeze    bool
+	ignoreConsensusFreeze bool
 }
 
 // Store implements the UTXO store interface using a SQL database backend.
@@ -111,6 +115,12 @@ type Store struct {
 	getBatcher    *batcher.Batcher[batchGetItem]
 	createBatcher *batcher.Batcher[batchCreateItem]
 	unlockBatcher *batcher.Batcher[batchUnlockItem]
+
+	// testBeforeSpendWrite, when set, runs inside the spend transaction between the read
+	// of an output's state and the conditional UPDATE that spends it. Test-only and nil in
+	// production: it is how a freeze, unfreeze or competing spend landing in that gap is
+	// produced deterministically on both engines (spend_freeze_race_test.go).
+	testBeforeSpendWrite func(ctx context.Context, txn *sql.Tx)
 
 	// utxo.BlockStateFields supplies the chain-tip height and median block time
 	// as one atomic snapshot, and with them the Store interface's six
@@ -1457,7 +1467,10 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.
 func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.FieldName) (*meta.Data, error) {
 	prometheusUtxoGet.Inc()
 
-	// Use batcher for the common validator path (BlockIDs, BlockHeights, Tx, Inputs, Outputs).
+	// Use batcher for the common validator path (BlockIDs, BlockHeights, Tx, Inputs, Outputs)
+	// and for block validation's parent read, which adds the freeze-record fields to it:
+	// that read runs once per out-of-block parent of every block, so it must stay on the
+	// batched path rather than turn into separate queries per parent (issue #1422).
 	// Fall back to unbatched for fields that BatchDecorate doesn't support
 	// (ConflictingChildren, Utxos) to avoid missing data.
 	if s.getBatcher != nil && !contains(bins, fields.ConflictingChildren) && !contains(bins, fields.Utxos) {
@@ -1713,13 +1726,16 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 
 	if contains(bins, fields.Utxos) {
 		var (
-			idx    int
-			frozen bool
+			idx                 int
+			frozen              bool
+			freezeFrom          *uint32
+			freezeUntil         *uint32
+			freezePolicyExpires *bool
 		)
 
 		// get all the spending tx ids for this tx
 		q := `
-			SELECT o.idx, o.spending_data, o.frozen
+			SELECT o.idx, o.spending_data, o.frozen, o.freezeFrom, o.freezeUntil, o.freezePolicyExpires
 			FROM transactions as t, outputs as o
 			WHERE t.hash = $1
 			  AND t.id = o.transaction_id
@@ -1735,12 +1751,26 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 
 		data.SpendingDatas = make([]*spendpkg.SpendingData, len(tx.Outputs)) // needs to be nullable
 
+		nextHeight := s.GetBlockHeight() + 1
+
 		for rows.Next() {
-			if err = rows.Scan(&idx, &spendingDataBytes, &frozen); err != nil {
+			if err = rows.Scan(&idx, &spendingDataBytes, &frozen, &freezeFrom, &freezeUntil, &freezePolicyExpires); err != nil {
 				return nil, err
 			}
 
-			if data.Frozen || frozen {
+			// The frozen sentinel stands in for the spender only while the output is
+			// UNSPENT and the policy tier holds it; a spent output always reports its
+			// real spender (see GetSpend).
+			freezeState := &spendSelectResult{
+				spendingDataBytes:   spendingDataBytes,
+				frozen:              frozen,
+				txFrozen:            data.Frozen,
+				freezeFrom:          freezeFrom,
+				freezeUntil:         freezeUntil,
+				freezePolicyExpires: freezePolicyExpires,
+			}
+
+			if freezeState.policyFrozenAt(nextHeight) {
 				data.SpendingDatas[idx] = spendpkg.NewSpendingData(&subtree.FrozenBytesTxHash, idx)
 			} else if spendingDataBytes != nil {
 				data.SpendingDatas[idx], err = spendpkg.NewSpendingDataFromBytes(spendingDataBytes)
@@ -1750,6 +1780,56 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 			} else {
 				data.SpendingDatas[idx] = nil
 			}
+		}
+	}
+
+	if needsFreezeRecordsQuery(bins) {
+		// The freeze record per output, for block validation's out-of-block parent
+		// check (issue #1422). Only rows that carry a record are returned, so an
+		// unfrozen transaction costs nothing here. Mirrored by batchDecorateFreezeRecords.
+		q := `
+			SELECT o.idx, o.frozen, o.freezeFrom, o.freezeUntil, o.freezePolicyExpires
+			FROM transactions as t, outputs as o
+			WHERE t.hash = $1
+			  AND t.id = o.transaction_id
+			  AND (o.frozen OR o.freezeFrom IS NOT NULL)
+		`
+
+		rows, err := s.db.QueryContext(ctx, q, hash[:])
+		if err != nil {
+			return nil, err
+		}
+
+		defer rows.Close()
+
+		for rows.Next() {
+			var (
+				idx                 uint32
+				frozen              bool
+				freezeFrom          *uint32
+				freezeUntil         *uint32
+				freezePolicyExpires *bool
+			)
+
+			if err = rows.Scan(&idx, &frozen, &freezeFrom, &freezeUntil, &freezePolicyExpires); err != nil {
+				return nil, err
+			}
+
+			if data.FreezeRecords == nil {
+				data.FreezeRecords = make(map[uint32]meta.FreezeRecord)
+			}
+
+			data.FreezeRecords[idx] = meta.FreezeRecord{
+				From:          nullableHeight(freezeFrom),
+				Until:         nullableHeight(freezeUntil),
+				PolicyExpires: nullableBool(freezePolicyExpires),
+			}
+		}
+
+		// A read that failed part-way must not hand block validation a partial map: a
+		// record it did not reach is an active freeze it would not see.
+		if err = rows.Err(); err != nil {
+			return nil, err
 		}
 	}
 
@@ -1792,6 +1872,16 @@ func needsBlockIDsQuery(bins []fields.FieldName) bool {
 	return contains(bins, fields.BlockIDs) ||
 		contains(bins, fields.BlockHeights) ||
 		contains(bins, fields.SubtreeIdxs)
+}
+
+// needsFreezeRecordsQuery reports whether any of the alert system's per-output
+// freeze-record fields was requested. All three come from one query over the outputs
+// table, so asking for any of them has to run it. Both read paths call this so the
+// grouping is stated once rather than copied.
+func needsFreezeRecordsQuery(bins []fields.FieldName) bool {
+	return contains(bins, fields.UtxoFreezeFrom) ||
+		contains(bins, fields.UtxoFreezeUntil) ||
+		contains(bins, fields.UtxoFreezeExp)
 }
 
 // parseInsertedAtMillis converts the inserted_at column value into Unix
@@ -1875,6 +1965,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
 	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
 	useSkipUTXOHashCheck := len(ignoreFlags) > 0 && ignoreFlags[0].SkipUTXOHashCheck
+	useIgnorePolicyFreeze := len(ignoreFlags) > 0 && ignoreFlags[0].IgnorePolicyFreeze
+	useIgnoreConsensusFreeze := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConsensusFreeze
 
 	if useSkipUTXOHashCheck {
 		spends, err = utxo.GetSpendsOutpointOnly(tx)
@@ -1926,12 +2018,14 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 
 			errCh := make(chan error, 1)
 			s.spendBatcher.PutCtx(ctx, &batchSpend{
-				spend:             spend,
-				blockHeight:       blockHeight,
-				errCh:             errCh,
-				ignoreConflicting: useIgnoreConflicting,
-				ignoreLocked:      useIgnoreLocked,
-				skipUTXOHashCheck: useSkipUTXOHashCheck,
+				spend:                 spend,
+				blockHeight:           blockHeight,
+				errCh:                 errCh,
+				ignoreConflicting:     useIgnoreConflicting,
+				ignoreLocked:          useIgnoreLocked,
+				skipUTXOHashCheck:     useSkipUTXOHashCheck,
+				ignorePolicyFreeze:    useIgnorePolicyFreeze,
+				ignoreConsensusFreeze: useIgnoreConsensusFreeze,
 			})
 
 			// Wait for batch response with timeout to prevent indefinite blocking
@@ -2045,6 +2139,7 @@ func needsSpendRollback(spends []*utxo.Spend) bool {
 		if errors.Is(spend.Err, errors.ErrSpent) ||
 			errors.Is(spend.Err, errors.ErrTxConflicting) ||
 			errors.Is(spend.Err, errors.ErrFrozen) ||
+			errors.Is(spend.Err, errors.ErrUtxoConsensusFrozen) ||
 			errors.Is(spend.Err, errors.ErrUtxoHashMismatch) {
 			return true
 		}
@@ -2127,10 +2222,119 @@ type spendSelectResult struct {
 	coinbaseSpendingHeight uint32
 	utxoHash               []byte
 	spendingDataBytes      []byte
-	frozen                 bool
+	frozen                 bool // outputs.frozen: the policy marker
+	txFrozen               bool // transactions.frozen: policy only, never a consensus record
 	conflicting            bool
 	locked                 bool
 	spendableIn            *uint32
+	freezeFrom             *uint32
+	freezeUntil            *uint32
+	freezePolicyExpires    *bool
+}
+
+// hasFreezeRecord reports whether the output carries the alert system's freeze at all:
+// the policy marker or the consensus record. The record's presence is the freezeFrom
+// column, always written when a freeze is recorded, because the marker alone is not
+// durable across a block-validation spend the way the record must be (issue #1422).
+func (r *spendSelectResult) hasFreezeRecord() bool {
+	return r.frozen || r.freezeFrom != nil
+}
+
+// consensusFrozenAt reports whether the alert system's enforceAtHeight window on this
+// output is being enforced for a block at blockHeight. A NULL bound reads as 0, which
+// means "from genesis" / "no end" — the meaning of every freeze written before the
+// window columns existed.
+func (r *spendSelectResult) consensusFrozenAt(blockHeight uint32) bool {
+	return r.hasFreezeRecord() && utxo.FreezeWindowActiveAt(nullableHeight(r.freezeFrom), nullableHeight(r.freezeUntil), blockHeight)
+}
+
+// policyFrozenAt reports whether the policy tier of the freeze — this node's mempool and
+// templates — still holds the output at blockHeight: while it is unspent, unless the
+// record says the policy expires with consensus and the window has ended. The
+// transaction-level flag has no window and is policy only.
+func (r *spendSelectResult) policyFrozenAt(blockHeight uint32) bool {
+	if len(r.spendingDataBytes) > 0 {
+		return false
+	}
+
+	if r.txFrozen {
+		return true
+	}
+
+	return r.hasFreezeRecord() && utxo.FreezePolicyActiveAt(nullableHeight(r.freezeFrom), nullableHeight(r.freezeUntil), nullableBool(r.freezePolicyExpires), blockHeight)
+}
+
+// spendFreezeStateUnchanged is the bulk spend statement's guard that an output's freeze
+// state is still the one its VALUES row was judged by (issue #1422), on the spending
+// branch and on the idempotent-match branch alike: a freeze that lands together with
+// this transaction's own spend must miss both and be re-read, so that an in-window spend
+// is the consensus verdict rather than an idempotent success. Postgres only, like the
+// bulk path; NULL-safe through a sentinel no height takes and the FALSE that a NULL flag
+// means.
+const spendFreezeStateUnchanged = `
+				  AND o.frozen = v.frozen
+				  AND COALESCE(o.freezeFrom, -1) = COALESCE(v.freeze_from, -1)
+				  AND COALESCE(o.freezeUntil, -1) = COALESCE(v.freeze_until, -1)
+				  AND COALESCE(o.freezePolicyExpires, FALSE) = COALESCE(v.freeze_exp, FALSE)`
+
+// rereadSpendRow reads, inside txn, the current state of one output whose conditional
+// spend UPDATE affected no row, so the miss can be judged against the row as it is now.
+func (s *Store) rereadSpendRow(ctx context.Context, txn *sql.Tx, transactionID int, vout uint32) (*spendSelectResult, error) {
+	q := `
+		SELECT o.spending_data, o.frozen, t.frozen, o.freezeFrom, o.freezeUntil, o.freezePolicyExpires
+		FROM outputs o
+		JOIN transactions t ON t.id = o.transaction_id
+		WHERE o.transaction_id = $1 AND o.idx = $2
+	`
+
+	r := &spendSelectResult{transactionID: transactionID}
+	if err := txn.QueryRowContext(ctx, q, transactionID, vout).Scan(&r.spendingDataBytes, &r.frozen, &r.txFrozen, &r.freezeFrom, &r.freezeUntil, &r.freezePolicyExpires); err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
+// classifyMissedSpend is the verdict for a spend whose conditional UPDATE affected no row.
+// The UPDATE is pinned to spending_data IS NULL and to the freeze state the SELECT
+// observed, so something changed under it, and the row as it is NOW says what (issue
+// #1422). The freeze is judged first, in the order the initial validation uses, because
+// the consensus record is a property of the outpoint and not of its spent-state: a
+// freeze that landed together with a spend — this transaction's own, or a competitor's —
+// still makes an in-window spend the consensus verdict, never an idempotent success or a
+// plain ErrSpent. Then:
+//   - spent with this spend's own spending data: an idempotent re-spend, returned as nil;
+//   - spent by another transaction: ErrSpent, naming the actual spender;
+//   - still unspent: the freeze state moved but the spend is still admissible (an unfreeze
+//     landed, say); the caller gets a retryable storage error, so the spend is re-read
+//     rather than committed on a decision made from stale state.
+//
+// Aerospike's atomic UDF has no such gap; this is SQL's equivalent.
+func classifyMissedSpend(current *spendSelectResult, item *batchSpend) error {
+	spend := item.spend
+
+	if !item.ignoreConsensusFreeze && current.consensusFrozenAt(item.blockHeight) {
+		return errors.NewUtxoConsensusFrozenError(errSpendConsensusFrozen, spend.TxID, spend.Vout, item.blockHeight)
+	}
+
+	if !item.ignorePolicyFreeze && current.policyFrozenAt(item.blockHeight) {
+		return errors.NewUtxoFrozenError(errSpendPolicyFrozen, spend.TxID, spend.Vout)
+	}
+
+	if len(current.spendingDataBytes) > 0 {
+		if spend.SpendingData != nil && bytes.Equal(current.spendingDataBytes, spend.SpendingData.Bytes()) {
+			return nil
+		}
+
+		existing, parseErr := spendpkg.NewSpendingDataFromBytes(current.spendingDataBytes)
+		if parseErr != nil {
+			return errors.NewProcessingError(errFailedCreateSpendingData, parseErr)
+		}
+
+		return errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, existing)
+	}
+
+	return errors.NewStorageError("[Spend] freeze state of %s:%d changed under the write; the spend must be re-read", spend.TxID, spend.Vout)
 }
 
 // trySendSpendBatchBulk uses bulk SELECT + bulk UPDATE for PostgreSQL.
@@ -2152,7 +2356,8 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 	sb.WriteString(`
 		SELECT v.batch_idx,
 		       o.transaction_id, o.coinbase_spending_height, o.utxo_hash,
-		       o.spending_data, o.frozen OR t.frozen AS frozen, t.conflicting, t.locked, o.spendableIn
+		       o.spending_data, o.frozen, t.frozen, t.conflicting, t.locked, o.spendableIn,
+		       o.freezeFrom, o.freezeUntil, o.freezePolicyExpires
 		FROM (VALUES `)
 	args := make([]interface{}, 0, len(batch)*3)
 	paramIdx := 1
@@ -2184,7 +2389,8 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 	for rows.Next() {
 		r := &spendSelectResult{}
 		if err := rows.Scan(&r.batchIdx, &r.transactionID, &r.coinbaseSpendingHeight,
-			&r.utxoHash, &r.spendingDataBytes, &r.frozen, &r.conflicting, &r.locked, &r.spendableIn); err != nil {
+			&r.utxoHash, &r.spendingDataBytes, &r.frozen, &r.txFrozen, &r.conflicting, &r.locked, &r.spendableIn,
+			&r.freezeFrom, &r.freezeUntil, &r.freezePolicyExpires); err != nil {
 			rows.Close()
 			if isDeadlock(err) {
 				return true
@@ -2238,8 +2444,26 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			continue
 		}
 
-		if r.frozen {
-			validationErrors[i] = errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+		// The alert system's freeze carries two controls at once, mirroring SV Node
+		// (issue #1422), and both are checked HERE, before the already-spent branch:
+		//
+		//   consensus: the outpoint's enforceAtHeight window, judged against the height
+		//   of the block being validated. It is a property of the OUTPOINT, not of what
+		//   this node currently records about the coin — a spend already recorded as
+		//   "spent by this same transaction" is still rejected at an in-window height (a
+		//   fork block or a re-mine carrying a below-window spend), otherwise nodes that
+		//   saw that earlier block would accept what nodes that did not reject.
+		//
+		//   policy: keeps the coin out of THIS node's mempool and templates from the
+		//   moment the alert arrived. It lands at a different moment on every node, so a
+		//   caller validating a block passes IgnorePolicyFreeze and sees only the
+		//   consensus tier.
+		if !item.ignoreConsensusFreeze && r.consensusFrozenAt(item.blockHeight) {
+			validationErrors[i] = errors.NewUtxoConsensusFrozenError(errSpendConsensusFrozen, spend.TxID, spend.Vout, item.blockHeight)
+			continue
+		}
+		if !item.ignorePolicyFreeze && r.policyFrozenAt(item.blockHeight) {
+			validationErrors[i] = errors.NewUtxoFrozenError(errSpendPolicyFrozen, spend.TxID, spend.Vout)
 			continue
 		}
 		if r.conflicting && !item.ignoreConflicting {
@@ -2343,22 +2567,29 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 
 		var ub strings.Builder
 		if wrapDAH {
-			ub.WriteString(`WITH v(transaction_id,idx,spending_data,batch_idx) AS (VALUES `)
+			ub.WriteString(`WITH v(transaction_id,idx,spending_data,batch_idx,frozen,freeze_from,freeze_until,freeze_exp) AS (VALUES `)
 		} else {
 			ub.WriteString(`
 			UPDATE outputs o
 			SET spending_data = v.spending_data
 			FROM (VALUES `)
 		}
-		updateArgs := make([]interface{}, 0, len(dedupedUpdate)*4+1)
+		// Each row carries the freeze state its verdict above was computed from, so the
+		// UPDATE can be pinned to it (spendFreezeStateUnchanged): the alert system may
+		// change that state between the read and the write (issue #1422). A row the
+		// UPDATE does not touch is re-read and judged again below.
+		updateArgs := make([]interface{}, 0, len(dedupedUpdate)*8+1)
 		pidx := 1
 		for j, u := range dedupedUpdate {
 			if j > 0 {
 				ub.WriteByte(',')
 			}
-			ub.WriteString(fmt.Sprintf("($%d::int,$%d::int,$%d::bytea,$%d::int)", pidx, pidx+1, pidx+2, pidx+3))
-			updateArgs = append(updateArgs, u.transactionID, u.vout, u.spendingData, u.batchIdx)
-			pidx += 4
+			observed := resultMap[u.batchIdx]
+			ub.WriteString(fmt.Sprintf("($%d::int,$%d::int,$%d::bytea,$%d::int,$%d::bool,$%d::bigint,$%d::bigint,$%d::bool)",
+				pidx, pidx+1, pidx+2, pidx+3, pidx+4, pidx+5, pidx+6, pidx+7))
+			updateArgs = append(updateArgs, u.transactionID, u.vout, u.spendingData, u.batchIdx,
+				observed.frozen, observed.freezeFrom, observed.freezeUntil, observed.freezePolicyExpires)
+			pidx += 8
 		}
 		if wrapDAH {
 			newDAH := int64(s.GetBlockHeight() + 1 + retention)
@@ -2387,7 +2618,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			upd_spent AS (
 				UPDATE outputs o SET spending_data = v.spending_data FROM v
 				WHERE o.transaction_id = v.transaction_id AND o.idx = v.idx
-				  AND o.spending_data IS NULL
+				  AND o.spending_data IS NULL`+spendFreezeStateUnchanged+`
 				RETURNING v.batch_idx, o.transaction_id
 			),
 			upd_idem AS (
@@ -2395,7 +2626,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 				FROM v
 				JOIN outputs o
 				  ON o.transaction_id = v.transaction_id AND o.idx = v.idx
-				WHERE o.spending_data = v.spending_data
+				WHERE o.spending_data = v.spending_data`+spendFreezeStateUnchanged+`
 			),
 			parents AS (
 				SELECT transaction_id, count(*) AS spent_in_batch FROM upd_spent GROUP BY transaction_id
@@ -2429,10 +2660,14 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			UNION ALL
 			SELECT batch_idx FROM upd_idem`, dahIdx, dahIdx))
 		} else {
-			ub.WriteString(`) AS v(transaction_id,idx,spending_data,batch_idx)
+			ub.WriteString(`) AS v(transaction_id,idx,spending_data,batch_idx,frozen,freeze_from,freeze_until,freeze_exp)
 			WHERE o.transaction_id = v.transaction_id AND o.idx = v.idx
-			AND (o.spending_data IS NULL OR o.spending_data = v.spending_data)
+			AND (o.spending_data IS NULL OR o.spending_data = v.spending_data)` + spendFreezeStateUnchanged + `
 			RETURNING v.batch_idx`)
+		}
+
+		if s.testBeforeSpendWrite != nil {
+			s.testBeforeSpendWrite(s.ctx, txn)
 		}
 
 		uRows, err := txn.QueryContext(s.ctx, ub.String(), updateArgs...)
@@ -2485,35 +2720,30 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			}
 		}
 
-		// The bulk UPDATE and the sibling upd_idem CTE share one statement
-		// snapshot. If a concurrent transaction commits the SAME spending_data
-		// on one of our target rows after our snapshot is taken, upd_spent's
-		// EPQ recheck will reject the row (spending_data no longer NULL) and
-		// upd_idem's snapshot-level predicate won't match it (NULL at snapshot,
-		// filter is `= v.spending_data`). The row ends up in neither RETURNING
-		// set and would be wrongly marked as UtxoSpentError.
-		//
-		// Run a second, fresh-snapshot SELECT over the missed rows to catch
-		// those concurrent idempotent commits. Anything whose current
-		// spending_data matches ours is a successful idempotent spend.
+		// A row the UPDATE did not touch changed under it. Either it was spent
+		// concurrently — the bulk UPDATE and the sibling upd_idem CTE share one
+		// statement snapshot, so a concurrent commit of OUR spending data lands in
+		// neither RETURNING set (upd_spent's EPQ recheck sees it non-NULL, upd_idem's
+		// snapshot predicate sees it NULL) — or its freeze state moved. Re-read every
+		// missed row against a fresh snapshot and judge each by classifyMissedSpend,
+		// exactly as the per-row path does.
 		if len(missedIdxs) > 0 {
 			var sb strings.Builder
-			sb.WriteString(`SELECT v.batch_idx FROM (VALUES `)
-			args := make([]interface{}, 0, len(missedIdxs)*4)
+			sb.WriteString(`SELECT v.batch_idx, o.spending_data, o.frozen, t.frozen, o.freezeFrom, o.freezeUntil, o.freezePolicyExpires
+			FROM (VALUES `)
+			args := make([]interface{}, 0, len(missedIdxs)*3)
 			pidx := 1
 			for i, bIdx := range missedIdxs {
 				if i > 0 {
 					sb.WriteByte(',')
 				}
-				sb.WriteString(fmt.Sprintf("($%d::int,$%d::int,$%d::bytea,$%d::int)", pidx, pidx+1, pidx+2, pidx+3))
-				spend := batch[bIdx].spend
-				r := resultMap[bIdx]
-				args = append(args, r.transactionID, spend.Vout, spend.SpendingData.Bytes(), bIdx)
-				pidx += 4
+				sb.WriteString(fmt.Sprintf("($%d::int,$%d::int,$%d::int)", pidx, pidx+1, pidx+2))
+				args = append(args, resultMap[bIdx].transactionID, batch[bIdx].spend.Vout, bIdx)
+				pidx += 3
 			}
-			sb.WriteString(`) AS v(transaction_id,idx,spending_data,batch_idx)
+			sb.WriteString(`) AS v(transaction_id,idx,batch_idx)
 			JOIN outputs o ON o.transaction_id = v.transaction_id AND o.idx = v.idx
-			WHERE o.spending_data = v.spending_data`)
+			JOIN transactions t ON t.id = o.transaction_id`)
 
 			iRows, err := txn.QueryContext(s.ctx, sb.String(), args...)
 			if err != nil {
@@ -2521,45 +2751,55 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 					return true
 				}
 				for _, item := range batch {
-					item.errCh <- errors.NewStorageError("[Spend] failed: concurrent-idempotent re-check", err)
+					item.errCh <- errors.NewStorageError("[Spend] failed: re-reading rows the bulk UPDATE missed", err)
 				}
 				return false
 			}
+			reread := make(map[int]*spendSelectResult, len(missedIdxs))
 			for iRows.Next() {
-				var bIdx int
-				if err := iRows.Scan(&bIdx); err != nil {
+				r := &spendSelectResult{}
+				if err := iRows.Scan(&r.batchIdx, &r.spendingDataBytes, &r.frozen, &r.txFrozen, &r.freezeFrom, &r.freezeUntil, &r.freezePolicyExpires); err != nil {
 					iRows.Close()
 					if isDeadlock(err) {
 						return true
 					}
 					for _, item := range batch {
-						item.errCh <- errors.NewStorageError("[Spend] failed: scanning concurrent-idempotent re-check", err)
+						item.errCh <- errors.NewStorageError("[Spend] failed: scanning rows the bulk UPDATE missed", err)
 					}
 					return false
 				}
-				updatedSet[bIdx] = true
-				// Parent has just had its output confirmed-spent by someone
-				// else with our exact spending_data. Treat it as an idempotent
-				// match for DAH-healing purposes, same as the in-statement path.
-				idempotentParentIDs[resultMap[bIdx].transactionID] = struct{}{}
+				r.transactionID = resultMap[r.batchIdx].transactionID
+				reread[r.batchIdx] = r
 			}
 			if err := iRows.Close(); err != nil {
 				if isDeadlock(err) {
 					return true
 				}
 				for _, item := range batch {
-					item.errCh <- errors.NewStorageError("[Spend] failed: closing concurrent-idempotent re-check", err)
+					item.errCh <- errors.NewStorageError("[Spend] failed: closing the re-read of rows the bulk UPDATE missed", err)
 				}
 				return false
 			}
-		}
 
-		// Anything still not in updatedSet after the re-check is a genuine
-		// UtxoSpentError (row was concurrently spent by a DIFFERENT spender).
-		for _, u := range dedupedUpdate {
-			if !updatedSet[u.batchIdx] {
-				spend := batch[u.batchIdx].spend
-				validationErrors[u.batchIdx] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, spend.SpendingData)
+			for _, bIdx := range missedIdxs {
+				item := batch[bIdx]
+
+				current, found := reread[bIdx]
+				if !found {
+					// The row was there for the SELECT and is gone now.
+					validationErrors[bIdx] = errors.NewTxNotFoundError(errOutputNotFound, item.spend.TxID, item.spend.Vout)
+					continue
+				}
+
+				if verdict := classifyMissedSpend(current, item); verdict != nil {
+					validationErrors[bIdx] = verdict
+					continue
+				}
+
+				// Spent with our exact spending_data by someone else: an idempotent
+				// match for DAH-healing purposes, same as the in-statement path.
+				updatedSet[bIdx] = true
+				idempotentParentIDs[current.transactionID] = struct{}{}
 			}
 		}
 		// Mark idempotent duplicate batch entries as successful (same UTXO, same spending data).
@@ -2679,23 +2919,35 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 		,o.coinbase_spending_height
 		,o.utxo_hash
 		,o.spending_data
-		,o.frozen OR t.frozen AS frozen
+		,o.frozen
+		,t.frozen
 		,t.conflicting
 		,t.locked
 		,o.spendableIn
+		,o.freezeFrom
+		,o.freezeUntil
+		,o.freezePolicyExpires
 		FROM outputs o
 		JOIN transactions t ON o.transaction_id = t.id
 		WHERE t.hash = $1
 		AND o.idx = $2
 	`
 
-	// Optimistic locking: spending_data IS NULL guard prevents concurrent double-spend
+	// Optimistic locking: the spending_data IS NULL guard prevents a concurrent
+	// double-spend, and the freeze-state guard pins the write to the freeze state the
+	// SELECT judged the spend by — the alert system may change that state between the
+	// read and the write (issue #1422). A row the UPDATE does not touch is re-read and
+	// judged again by classifyMissedSpend.
 	q2 := `
 		UPDATE outputs
 		SET spending_data = $1
 		WHERE transaction_id = $2
 		AND idx = $3
 		AND spending_data IS NULL
+		AND frozen = $4
+		AND COALESCE(freezeFrom, CAST(-1 AS BIGINT)) = COALESCE($5, CAST(-1 AS BIGINT))
+		AND COALESCE(freezeUntil, CAST(-1 AS BIGINT)) = COALESCE($6, CAST(-1 AS BIGINT))
+		AND COALESCE(freezePolicyExpires, FALSE) = COALESCE($7, FALSE)
 	`
 
 	successItems := make([]*batchSpend, 0, len(batch))
@@ -2718,14 +2970,19 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 			utxoHash               []byte
 			spendingDataBytes      []byte
 			frozen                 bool
+			txFrozen               bool
 			conflicting            bool
 			locked                 bool
 			spendableIn            *uint32
+			freezeFrom             *uint32
+			freezeUntil            *uint32
+			freezePolicyExpires    *bool
 		)
 
 		err = txn.QueryRowContext(s.ctx, q1, spend.TxID[:], spend.Vout).Scan(
 			&transactionID, &coinbaseSpendingHeight, &utxoHash,
-			&spendingDataBytes, &frozen, &conflicting, &locked, &spendableIn,
+			&spendingDataBytes, &frozen, &txFrozen, &conflicting, &locked, &spendableIn,
+			&freezeFrom, &freezeUntil, &freezePolicyExpires,
 		)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -2740,9 +2997,24 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 			continue
 		}
 
-		// Validate the UTXO state
-		if frozen {
-			validationErrors[i] = errors.NewUtxoFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+		// Validate the UTXO state. The alert system's freeze is checked first and before
+		// the already-spent branch, for the reasons given in trySendSpendBatchBulk.
+		freezeState := &spendSelectResult{
+			spendingDataBytes:   spendingDataBytes,
+			frozen:              frozen,
+			txFrozen:            txFrozen,
+			freezeFrom:          freezeFrom,
+			freezeUntil:         freezeUntil,
+			freezePolicyExpires: freezePolicyExpires,
+		}
+
+		if !item.ignoreConsensusFreeze && freezeState.consensusFrozenAt(item.blockHeight) {
+			validationErrors[i] = errors.NewUtxoConsensusFrozenError(errSpendConsensusFrozen, spend.TxID, spend.Vout, item.blockHeight)
+			continue
+		}
+
+		if !item.ignorePolicyFreeze && freezeState.policyFrozenAt(item.blockHeight) {
+			validationErrors[i] = errors.NewUtxoFrozenError(errSpendPolicyFrozen, spend.TxID, spend.Vout)
 			continue
 		}
 
@@ -2790,8 +3062,13 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 			continue
 		}
 
+		if s.testBeforeSpendWrite != nil {
+			s.testBeforeSpendWrite(s.ctx, txn)
+		}
+
 		// UPDATE outputs with optimistic locking
-		result, err := txn.ExecContext(s.ctx, q2, spend.SpendingData.Bytes(), transactionID, spend.Vout)
+		result, err := txn.ExecContext(s.ctx, q2, spend.SpendingData.Bytes(), transactionID, spend.Vout,
+			frozen, freezeFrom, freezeUntil, freezePolicyExpires)
 		if err != nil {
 			if isDeadlock(err) {
 				return true // retryable
@@ -2817,10 +3094,32 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 				spentParentIDs[transactionID] = struct{}{}
 				continue
 			}
-			// Concurrently spent by a different tx between SELECT and UPDATE.
-			// spendingDataBytes was NULL from SELECT (WHERE spending_data IS NULL),
-			// so we don't have the actual conflicting spender — use current spend data.
-			validationErrors[i] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, spend.SpendingData)
+
+			// The row changed between the SELECT and the UPDATE: spent concurrently, or
+			// its freeze state moved. Re-read it and judge the spend against the row as
+			// it is now.
+			current, rereadErr := s.rereadSpendRow(s.ctx, txn, transactionID, spend.Vout)
+			if rereadErr != nil {
+				if errors.Is(rereadErr, sql.ErrNoRows) {
+					validationErrors[i] = errors.NewTxNotFoundError(errOutputNotFound, spend.TxID, spend.Vout)
+					continue
+				}
+				if isDeadlock(rereadErr) {
+					return true // retryable
+				}
+				item.errCh <- errors.NewStorageError("[Spend] failed: re-reading output %s:%d after a missed UPDATE", spend.TxID, spend.Vout, rereadErr)
+				aborted = true
+				continue
+			}
+
+			if verdict := classifyMissedSpend(current, item); verdict != nil {
+				validationErrors[i] = verdict
+				continue
+			}
+
+			// Spent with our exact spending data by someone else: idempotent.
+			successItems = append(successItems, item)
+			spentParentIDs[transactionID] = struct{}{}
 			continue
 		}
 
@@ -3506,7 +3805,11 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 		 o.utxo_hash
 		,o.coinbase_spending_height
 		,o.spending_data
-		,o.frozen OR t.frozen AS frozen
+		,o.frozen
+		,t.frozen
+		,o.freezeFrom
+		,o.freezeUntil
+		,o.freezePolicyExpires
 		,o.spendableIn
 		,t.conflicting
 		,t.locked
@@ -3521,12 +3824,16 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 		coinbaseSpendingHeight uint32
 		spendingDataBytes      []byte
 		frozen                 bool
+		txFrozen               bool
+		freezeFrom             *uint32
+		freezeUntil            *uint32
+		freezePolicyExpires    *bool
 		spendableIn            *uint32
 		conflicting            bool
 		locked                 bool
 	)
 
-	err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&utxoHash, &coinbaseSpendingHeight, &spendingDataBytes, &frozen, &spendableIn, &conflicting, &locked)
+	err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&utxoHash, &coinbaseSpendingHeight, &spendingDataBytes, &frozen, &txFrozen, &freezeFrom, &freezeUntil, &freezePolicyExpires, &spendableIn, &conflicting, &locked)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// Match aerospike behavior: return NOT_FOUND status instead of error
@@ -3558,7 +3865,22 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 
 	utxoStatus := utxo.CalculateUtxoStatus(spendingData, coinbaseSpendingHeight, s.GetBlockHeight())
 
-	if frozen {
+	// FROZEN is reported only while the output is unspent and the policy tier still
+	// holds it — judged at the height the next block would have, as the mempool path
+	// does. An output spent by a real transaction reports SPENT with its real spender:
+	// a freeze record may legitimately sit on a spent output (a below-window spend, or a
+	// late alert), and masking the spender with the sentinel would feed conflict
+	// resolution a spender that does not exist (issue #1422).
+	freezeState := &spendSelectResult{
+		spendingDataBytes:   spendingDataBytes,
+		frozen:              frozen,
+		txFrozen:            txFrozen,
+		freezeFrom:          freezeFrom,
+		freezeUntil:         freezeUntil,
+		freezePolicyExpires: freezePolicyExpires,
+	}
+
+	if freezeState.policyFrozenAt(s.GetBlockHeight() + 1) {
 		utxoStatus = utxo.Status_FROZEN
 		// this is needed in for instance conflict resolution where we check the spending data
 		spendingData = spendpkg.NewSpendingData(&subtree.FrozenBytesTxHash, int(spend.Vout))
@@ -3713,6 +4035,7 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 	needInputs := contains(bins, fields.Tx) || contains(bins, fields.Inputs) || contains(bins, fields.TxInpoints) || contains(bins, fields.Utxos)
 	needOutputs := contains(bins, fields.Tx) || contains(bins, fields.Outputs) || contains(bins, fields.Utxos)
 	needBlockIDs := needsBlockIDsQuery(bins)
+	needFreezeRecords := needsFreezeRecordsQuery(bins)
 
 	// Query 2: Bulk fetch inputs
 	if needInputs {
@@ -3731,6 +4054,13 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 	// Query 4: Bulk fetch block_ids
 	if needBlockIDs {
 		if err := s.batchDecorateBlockIDs(ctx, ids, idToTx); err != nil {
+			return err
+		}
+	}
+
+	// Query 5: Bulk fetch the alert system's freeze records
+	if needFreezeRecords {
+		if err := s.batchDecorateFreezeRecords(ctx, ids, idToTx); err != nil {
 			return err
 		}
 	}
@@ -3916,6 +4246,59 @@ func (s *Store) batchDecorateBlockIDs(ctx context.Context, ids []int, idToTx map
 	}
 
 	return nil
+}
+
+// batchDecorateFreezeRecords bulk-fetches the alert system's per-output freeze records
+// for multiple transactions, for block validation's out-of-block parent check (issue
+// #1422). Only rows that carry a record are returned, so an unfrozen transaction costs
+// nothing beyond the query itself. Mirrors the per-transaction read in getUnbatched: a
+// frozen output with no window reads as the (0, 0) record, enforced at every height.
+func (s *Store) batchDecorateFreezeRecords(ctx context.Context, ids []int, idToTx map[int]*batchDecorateTxRow) error {
+	idPlaceholders := make([]string, len(ids))
+	idArgs := make([]interface{}, len(ids))
+	for i, id := range ids {
+		idPlaceholders[i] = fmt.Sprintf("$%d", i+1)
+		idArgs[i] = id
+	}
+	inClause := "(" + strings.Join(idPlaceholders, ",") + ")"
+
+	q := `SELECT transaction_id, idx, freezeFrom, freezeUntil, freezePolicyExpires FROM outputs WHERE transaction_id IN ` + inClause + ` AND (frozen OR freezeFrom IS NOT NULL)`
+
+	rows, err := s.db.QueryContext(ctx, q, idArgs...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			txID                int
+			idx                 uint32
+			freezeFrom          *uint32
+			freezeUntil         *uint32
+			freezePolicyExpires *bool
+		)
+		if err := rows.Scan(&txID, &idx, &freezeFrom, &freezeUntil, &freezePolicyExpires); err != nil {
+			return err
+		}
+
+		row := idToTx[txID]
+		if row == nil {
+			continue
+		}
+
+		if row.data.FreezeRecords == nil {
+			row.data.FreezeRecords = make(map[uint32]meta.FreezeRecord)
+		}
+
+		row.data.FreezeRecords[idx] = meta.FreezeRecord{
+			From:          nullableHeight(freezeFrom),
+			Until:         nullableHeight(freezeUntil),
+			PolicyExpires: nullableBool(freezePolicyExpires),
+		}
+	}
+
+	return rows.Err()
 }
 
 // PreviousOutputsDecorate fetches output information for transaction inputs.
@@ -4876,6 +5259,9 @@ func createPostgresSchemaImpl(db DBExecutor) error {
         ,spending_data            BYTEA
         ,frozen                   BOOLEAN DEFAULT FALSE
         ,spendableIn              INT
+        ,freezeFrom               BIGINT
+        ,freezeUntil              BIGINT
+        ,freezePolicyExpires      BOOLEAN
         ,PRIMARY KEY (transaction_id, idx)
 	  );
 	`); err != nil {
@@ -4953,6 +5339,30 @@ func createPostgresSchemaImpl(db DBExecutor) error {
 	`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not add preserve_until column to transactions table - [%+v]", err)
+	}
+
+	// Add the alert system's enforceAtHeight window to outputs if it doesn't exist
+	// (issue #1422). Nullable with no default: NULL reads back as "from genesis, no end",
+	// which is what every freeze written before the window existed meant, so an upgrade
+	// neither migrates data nor silently unfreezes anything.
+	if _, err := db.Exec(`
+		DO $$
+		BEGIN
+			IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'outputs'::regclass AND attname = 'freezefrom' AND NOT attisdropped) THEN
+				ALTER TABLE outputs ADD COLUMN freezeFrom BIGINT;
+			END IF;
+
+			IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'outputs'::regclass AND attname = 'freezeuntil' AND NOT attisdropped) THEN
+				ALTER TABLE outputs ADD COLUMN freezeUntil BIGINT;
+			END IF;
+
+			IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'outputs'::regclass AND attname = 'freezepolicyexpires' AND NOT attisdropped) THEN
+				ALTER TABLE outputs ADD COLUMN freezePolicyExpires BOOLEAN;
+			END IF;
+		END $$;
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not add freeze window columns to outputs table - [%+v]", err)
 	}
 
 	// Ensure block_ids FK has ON DELETE CASCADE — only drop+recreate if it exists without CASCADE
@@ -5087,6 +5497,9 @@ func createSqliteSchema(db *usql.DB) error {
         ,spending_data            BLOB
         ,frozen                   BOOLEAN DEFAULT FALSE
         ,spendableIn              INT
+        ,freezeFrom               BIGINT
+        ,freezeUntil              BIGINT
+        ,freezePolicyExpires      BOOLEAN
         ,PRIMARY KEY (transaction_id, idx)
 	  );
 	`); err != nil {
@@ -5313,6 +5726,46 @@ func createSqliteSchema(db *usql.DB) error {
 		`); err != nil {
 			_ = db.Close()
 			return errors.NewStorageError("could not add preserve_until column to transactions table - [%+v]", err)
+		}
+	}
+
+	// Add the alert system's enforceAtHeight window to outputs if it doesn't exist
+	// (issue #1422). Nullable with no default: NULL reads back as "from genesis, no end",
+	// which is what every freeze written before the window existed meant, so an upgrade
+	// neither migrates data nor silently unfreezes anything.
+	for _, freezeColumn := range []struct{ name, sqlType string }{
+		{"freezeFrom", "BIGINT"},
+		{"freezeUntil", "BIGINT"},
+		{"freezePolicyExpires", "BOOLEAN"},
+	} {
+		rows, err = db.Query(`
+			SELECT COUNT(*)
+			FROM pragma_table_info('outputs')
+			WHERE name = ?
+		`, freezeColumn.name)
+		if err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not check outputs table for %s column", freezeColumn.name, err)
+		}
+
+		var freezeColumnCount int
+
+		if rows.Next() {
+			if err := rows.Scan(&freezeColumnCount); err != nil {
+				rows.Close()
+				_ = db.Close()
+
+				return errors.NewStorageError("could not scan %s column count", freezeColumn.name, err)
+			}
+		}
+
+		rows.Close()
+
+		if freezeColumnCount == 0 {
+			if _, err := db.Exec(`ALTER TABLE outputs ADD COLUMN ` + freezeColumn.name + ` ` + freezeColumn.sqlType + `;`); err != nil {
+				_ = db.Close()
+				return errors.NewStorageError("could not add %s column to outputs table", freezeColumn.name, err)
+			}
 		}
 	}
 

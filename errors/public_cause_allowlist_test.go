@@ -32,6 +32,7 @@ func TestPublicCauseAllowlistIsClosed(t *testing.T) {
 		ERR_TX_LOCKED,
 		ERR_TX_CREATING,
 		ERR_UTXO_FROZEN,
+		ERR_UTXO_CONSENSUS_FROZEN,
 		ERR_TX_MISSING_PARENT,
 	}
 

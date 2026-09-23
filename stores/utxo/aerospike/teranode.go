@@ -74,7 +74,7 @@ import (
 var teranodeLUA []byte
 
 var (
-	LuaPackage      = "teranode_v61" // N.B. Do not have any "." in this string
+	LuaPackage      = "teranode_v64" // N.B. Do not have any "." in this string
 	LuaPackageMined = LuaPackage + "_mined"
 )
 
@@ -246,6 +246,7 @@ const (
 	LuaErrorCodeLocked           LuaErrorCode = "LOCKED"
 	LuaErrorCodeCreating         LuaErrorCode = "CREATING"
 	LuaErrorCodeFrozen           LuaErrorCode = "FROZEN"
+	LuaErrorCodeConsensusFrozen  LuaErrorCode = "CONSENSUS_FROZEN"
 	LuaErrorCodeAlreadyFrozen    LuaErrorCode = "ALREADY_FROZEN"
 	LuaErrorCodeFrozenUntil      LuaErrorCode = "FROZEN_UNTIL"
 	LuaErrorCodeCoinbaseImmature LuaErrorCode = "COINBASE_IMMATURE"
@@ -257,6 +258,10 @@ const (
 	LuaErrorCodeUtxoHashMismatch LuaErrorCode = "UTXO_HASH_MISMATCH"
 	LuaErrorCodeUtxoNotFrozen    LuaErrorCode = "UTXO_NOT_FROZEN"
 	LuaErrorCodeInvalidParameter LuaErrorCode = "INVALID_PARAMETER"
+	// LuaErrorCodeFreezeRecordDamaged: the output's freeze record holds a height outside
+	// the uint32 range; the spend is refused as storage damage, as block validation's
+	// reader (freeze_record.go) refuses the same bins.
+	LuaErrorCodeFreezeRecordDamaged LuaErrorCode = "FREEZE_RECORD_DAMAGED"
 )
 
 // LuaErrorInfo represents an individual error from Lua functions

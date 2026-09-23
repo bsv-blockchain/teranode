@@ -36,6 +36,24 @@ type Options struct {
 	// IgnoreLocked determines whether to ignore transactions marked as locked when spending
 	IgnoreLocked bool
 
+	// IgnorePolicyFreeze drops the policy tier of the alert system's freeze when spending,
+	// leaving only the height-anchored consensus tier (the alert's enforceAtHeight window).
+	// Set on every spend performed while validating a block, and on no other spend — the
+	// policy freeze takes effect the moment an alert is processed and therefore lands at a
+	// different moment on every node, which must never decide whether a block is valid.
+	// The validator rejects it unless InBlock is also set.
+	// See issue #1422 and utxo.WithIgnorePolicyFreeze.
+	IgnorePolicyFreeze bool
+
+	// IgnoreConsensusFreeze drops the consensus tier of the alert system's freeze as
+	// well, so no freeze rejects the spend. Only legitimate for a block at or below the
+	// highest hardcoded checkpoint — canonical by definition, so no alert may
+	// retroactively invalidate it — and the validator rejects it anywhere else: it
+	// requires InBlock and SkipScriptValidation, and both the asserted height and the
+	// node's own tip must be at or below the checkpoint.
+	// See issue #1422 and utxo.WithIgnoreConsensusFreeze.
+	IgnoreConsensusFreeze bool
+
 	// SkipTxMetaPublishing determines whether txmeta should be published to Kafka
 	// When true, the validator won't publish transaction metadata to the txmeta Kafka topic
 	// Used during legacy catchup (quickValidationMode) where no consumer needs the data
@@ -312,6 +330,38 @@ func WithIgnoreConflicting(ignore bool) Option {
 func WithIgnoreLocked(ignoreLocked bool) Option {
 	return func(o *Options) {
 		o.IgnoreLocked = ignoreLocked
+	}
+}
+
+// WithIgnorePolicyFreeze creates an option controlling whether the policy tier of the
+// alert system's freeze is bypassed when spending, leaving only the height-anchored
+// consensus tier.
+//
+// Parameters:
+//   - ignorePolicyFreeze: When true, only a freeze whose enforceAtHeight window covers
+//     the block height being validated rejects the spend
+//
+// Returns:
+//   - Option: Function that sets the ignorePolicyFreeze option
+func WithIgnorePolicyFreeze(ignorePolicyFreeze bool) Option {
+	return func(o *Options) {
+		o.IgnorePolicyFreeze = ignorePolicyFreeze
+	}
+}
+
+// WithIgnoreConsensusFreeze creates an option that drops the consensus tier of the alert
+// system's freeze as well as the policy tier, for the spends of a block a hardcoded
+// checkpoint already proves canonical. The validator rejects it above the checkpoint or
+// without SkipScriptValidation.
+//
+// Parameters:
+//   - ignoreConsensusFreeze: When true, no alert-system freeze rejects the spend
+//
+// Returns:
+//   - Option: Function that sets the ignoreConsensusFreeze option
+func WithIgnoreConsensusFreeze(ignoreConsensusFreeze bool) Option {
+	return func(o *Options) {
+		o.IgnoreConsensusFreeze = ignoreConsensusFreeze
 	}
 }
 

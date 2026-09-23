@@ -942,6 +942,58 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return nil, err
 	}
 
+	// Both alert-system freeze bypasses describe a spend made while validating a block, and
+	// no other spend: the policy tier is lifted precisely because the moment this node
+	// processed the alert must not decide a block's validity, and the consensus tier only
+	// for a block a checkpoint already proves canonical. Every producer sets InBlock
+	// alongside them (subtree validation, legacy block sync); a request carrying either
+	// without it would admit a coin this node has frozen into block assembly, so it is
+	// rejected before any store access (issue #1422).
+	//
+	// This catches a misconfigured internal caller; it does not authenticate the request.
+	// InBlock is as caller-asserted as the flags it guards, and on the shipped profile the
+	// gRPC listener is unauthenticated (security_level_grpc = 0) — the footing
+	// SkipScriptValidation, SkipPolicyChecks and InBlock itself already stand on, kept
+	// deliberately when issue 4840 (finding B-022) removed these options from HTTP rather
+	// than from gRPC. A caller who can reach this listener can already skip script
+	// validation outright, which is strictly worse than lifting a policy freeze. The
+	// controls for that surface are the operator's: network isolation of the service mesh,
+	// and security_level_grpc = 3, which requires and verifies a client certificate.
+	if (validationOptions.IgnorePolicyFreeze || validationOptions.IgnoreConsensusFreeze) && !validationOptions.InBlock {
+		err = errors.NewProcessingError("[Validate][%s] IgnorePolicyFreeze and IgnoreConsensusFreeze require InBlock", txID)
+		span.RecordError(err)
+
+		return nil, err
+	}
+
+	// IgnoreConsensusFreeze lifts the alert system's consensus tier, which is only ever
+	// legitimate for a block a hardcoded checkpoint already proves canonical; gate it the
+	// way OutpointOnlySpend is gated so no other caller can reach it (issue #1422).
+	if validationOptions.IgnoreConsensusFreeze && !validationOptions.SkipScriptValidation {
+		err = errors.NewProcessingError("[Validate][%s] IgnoreConsensusFreeze requires SkipScriptValidation", txID)
+		span.RecordError(err)
+
+		return nil, err
+	}
+
+	if validationOptions.IgnoreConsensusFreeze && blockHeight > blockchain.HighestCheckpointHeight(v.settings.ChainCfgParams.Checkpoints) {
+		err = errors.NewProcessingError("[Validate][%s] IgnoreConsensusFreeze must not be used above the highest checkpoint (height %d)", txID, blockHeight)
+		span.RecordError(err)
+
+		return nil, err
+	}
+
+	// The same tip-derived bound OutpointOnlySpend carries above, for the same reason: the
+	// caller-asserted height is the attacker's lever. Its only producer, legacy block sync's
+	// below-checkpoint path, validates block H while the tip is still below H, so a
+	// legitimate request never sees a tip past the checkpoint (issue 4840, finding B-022).
+	if validationOptions.IgnoreConsensusFreeze && blockState.Height > blockchain.HighestCheckpointHeight(v.settings.ChainCfgParams.Checkpoints) {
+		err = errors.NewProcessingError("[Validate][%s] IgnoreConsensusFreeze must not be used once the node's chain tip is past the highest checkpoint (tip height %d)", txID, blockState.Height)
+		span.RecordError(err)
+
+		return nil, err
+	}
+
 	// Fail closed on a store that does not support the fast path: OutpointOnlySpend
 	// relies on SkipUTXOHashCheck / SkipExtendedInputs, which such a store ignores —
 	// it would then derive the UTXO hash from absent parent data and hard-error on the
@@ -2126,6 +2178,8 @@ func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, bl
 
 	opts := []utxo.CreateOption{
 		utxo.WithIgnoreLocked(validationOptions.IgnoreLocked),
+		utxo.WithIgnorePolicyFreeze(validationOptions.IgnorePolicyFreeze),
+		utxo.WithIgnoreConsensusFreeze(validationOptions.IgnoreConsensusFreeze),
 	}
 
 	if validationOptions.OutpointOnlySpend {
