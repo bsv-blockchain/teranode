@@ -691,8 +691,10 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 
 	// Pre-allocate the shadow half of the double-buffered currentTxMap so that
 	// resetSubtreeState can swap pointers instead of allocating a fresh
-	// 4096-shard SyncedMap structure on every block. Only applicable to the
-	// in-memory path — DiskTxMap already reuses storage in place via Clear().
+	// 4096-shard SyncedMap structure on every block. Only the in-memory path
+	// needs it: the disk path double-buffers with diskTxMapShadow, allocated
+	// above alongside diskTxMap. This is also the fallback when either disk
+	// half could not be created, which leaves diskTxMap nil.
 	if stp.diskTxMap == nil {
 		stp.currentTxMapShadow = NewSplitTxInpointsMap(splitBuckets)
 	}
