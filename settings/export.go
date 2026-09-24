@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 )
 
 // metadataEntry holds the static metadata extracted from struct tags.
@@ -195,10 +197,17 @@ func formatValue(val reflect.Value) string {
 	case reflect.String:
 		return val.String()
 	case reflect.Struct:
-		// Special handling for url.URL struct
+		// Special handling for url.URL struct.
+		//
+		// This is the branch ExportMetadata reaches for a URL setting, even
+		// though all 25 of them are declared *url.URL: getValueAtPath
+		// dereferences every pointer on the field path, including the last, so
+		// formatValue is handed a url.URL value. The *url.URL case below is the
+		// defensive one. TestExportMetadata_URLUserinfoRedaction covers this
+		// one and fails if it stops redacting.
 		if val.Type() == reflect.TypeOf(url.URL{}) {
 			u := val.Interface().(url.URL)
-			return u.String()
+			return urlutil.Redact(&u)
 		}
 		return fmt.Sprintf("%v", val.Interface())
 	case reflect.Pointer:
@@ -249,11 +258,15 @@ func formatDuration(d time.Duration) string {
 	return d.String()
 }
 
+// formatURL renders a URL setting for the settings portal with the userinfo
+// password masked. Store URLs are credentials as well as configuration - a
+// postgres, aerospike, kafka or HTTP blob store URL carries the password in
+// its userinfo - so the portal must never hand back the raw value.
 func formatURL(u *url.URL) string {
 	if u == nil {
 		return ""
 	}
-	return u.String()
+	return urlutil.Redact(u)
 }
 
 func formatStringSlice(s []string) string {

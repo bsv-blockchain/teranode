@@ -42,6 +42,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -558,7 +559,7 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 	// without complaint, so a misconfigured URL such as "file://./" or "file:" would quietly put
 	// blobs wherever the process started. Reject it instead.
 	if path == "" {
-		return nil, errors.NewConfigurationError("[File] store URL %q has no path", storeURL.String())
+		return nil, errors.NewConfigurationError("[File] store URL %q has no path", urlutil.Redact(storeURL))
 	}
 
 	// Resolve the base path once, here, rather than on every read and write. ConstructFilename

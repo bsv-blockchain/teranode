@@ -1589,3 +1589,201 @@ func TestSharedAndSafeClientsShareRedirectRule(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildHTTPErrorRedactsURLPassword covers the status-code error built for a
+// non-OK response. That message is logged and forwarded, so a URL carrying a
+// password must reach it masked. Every return is exercised: no body, a body, a
+// truncated body, and a body read that fails.
+func TestBuildHTTPErrorRedactsURLPassword(t *testing.T) {
+	const password = "canary-http-error-password"
+
+	rawURL := "http://teranode:" + password + "@blob.example:8080/subtree"
+
+	bodies := map[string]func() io.ReadCloser{
+		"no body":    func() io.ReadCloser { return nil },
+		"short body": func() io.ReadCloser { return io.NopCloser(strings.NewReader("not found")) },
+		"truncated body": func() io.ReadCloser {
+			return io.NopCloser(strings.NewReader(strings.Repeat("x", maxHTTPErrorBodyBytes+10)))
+		},
+		"failed read": func() io.ReadCloser { return io.NopCloser(failingReader{}) },
+	}
+
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			resp := &http.Response{StatusCode: http.StatusNotFound, Body: body()}
+
+			err := buildHTTPError(resp, rawURL)
+			require.Error(t, err)
+
+			require.NotContains(t, err.Error(), password, "the URL password reached the error message")
+			require.Contains(t, err.Error(), "teranode", "the username should survive redaction")
+			require.Contains(t, err.Error(), "blob.example:8080", "the host should survive redaction")
+		})
+	}
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+
+// withCredentials rewrites a test server URL to carry userinfo, so the
+// assertions below are about a URL that really holds a password rather than
+// about a string that merely looks like one.
+func withCredentials(t *testing.T, serverURL, password, path string) string {
+	t.Helper()
+
+	u, err := url.Parse(serverURL)
+	require.NoError(t, err)
+
+	u.User = url.UserPassword("teranode", password)
+	u.Path = path
+
+	return u.String()
+}
+
+// requireRedacted is the assertion every branch below shares: the password is
+// gone, and enough of the URL survives that the operator can still tell which
+// peer failed.
+func requireRedacted(t *testing.T, err error, password, host string) {
+	t.Helper()
+
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), password, "the URL password reached the error message")
+	require.Contains(t, err.Error(), "teranode", "the username should survive redaction")
+	require.Contains(t, err.Error(), host, "the host should survive redaction")
+}
+
+// TestDoHTTPRequestRedactsURLPasswordOnEveryFailurePath covers the branches
+// TestBuildHTTPErrorRedactsURLPassword does not reach: the body-read timeout,
+// the body-read error, and the "returned HTML" rejection. Each formats the
+// request URL into its message, so each is a place a store password can escape.
+func TestDoHTTPRequestRedactsURLPasswordOnEveryFailurePath(t *testing.T) {
+	const password = "canary-dohttp-password"
+
+	t.Run("timed out while reading body", func(t *testing.T) {
+		// Headers first, then a body that never arrives, so the failure lands
+		// in the read select rather than in the request itself.
+		release := make(chan struct{})
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "64")
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			<-release
+		}))
+
+		defer func() {
+			close(release)
+			server.Close()
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+		defer cancel()
+
+		u, err := url.Parse(server.URL)
+		require.NoError(t, err)
+
+		_, err = DoHTTPRequest(ctx, withCredentials(t, server.URL, password, "/subtree"))
+		requireRedacted(t, err, password, u.Host)
+		require.Contains(t, err.Error(), "timed out while reading body")
+	})
+
+	t.Run("failed to read body", func(t *testing.T) {
+		// Declaring more bytes than are written makes the server close the
+		// connection short, so io.ReadAll fails with an unexpected EOF.
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "1024")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("short"))
+		}))
+		defer server.Close()
+
+		u, err := url.Parse(server.URL)
+		require.NoError(t, err)
+
+		_, err = DoHTTPRequest(context.Background(), withCredentials(t, server.URL, password, "/subtree"))
+		requireRedacted(t, err, password, u.Host)
+		require.Contains(t, err.Error(), "failed to read body")
+	})
+
+	t.Run("returned HTML", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("<html>nope</html>"))
+		}))
+		defer server.Close()
+
+		u, err := url.Parse(server.URL)
+		require.NoError(t, err)
+
+		_, err = DoHTTPRequest(context.Background(), withCredentials(t, server.URL, password, "/subtree"))
+		requireRedacted(t, err, password, u.Host)
+		require.Contains(t, err.Error(), "returned HTML")
+	})
+}
+
+// TestDoHTTPRequestBodyReaderWithRetryRedactsAndRendersFully covers the message
+// built once the 503 ladder is exhausted. It carried three verbs and, after
+// errors.New* took lastErr as the wrapped error, only two arguments, so it
+// rendered "%!v(MISSING)" in production.
+func TestDoHTTPRequestBodyReaderWithRetryRedactsAndRendersFully(t *testing.T) {
+	const password = "canary-retry-password"
+
+	var attempts atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	cfg := retryConfig{maxAttempts: 2, initialDelay: time.Millisecond, maxDelay: time.Millisecond}
+
+	_, err = doHTTPRequestBodyReaderWithRetry(context.Background(), withCredentials(t, server.URL, password, "/subtree"), cfg)
+	requireRedacted(t, err, password, u.Host)
+
+	require.Equal(t, int32(2), attempts.Load(), "the ladder should have been exhausted")
+	require.Contains(t, err.Error(), "still 503 after 2 attempts")
+	require.NotContains(t, err.Error(), "MISSING", "the message is formatted with fewer arguments than verbs")
+	require.NotContains(t, err.Error(), "%!", "the message renders a format verb literally")
+}
+
+// TestValidateURLRejectsUnparseableURLWithoutEchoingIt pins the last message in
+// this file shaped like the leak the file was swept for: url.Parse embeds the
+// string it was given verbatim in its error, so the reason is unwrapped from it
+// rather than wrapped whole.
+//
+// No credential reaches this line today - callers pass peer base URLs, and the
+// userinfo check a few lines below rejects the rest - so this is consistency
+// with the rest of the file rather than a live exposure.
+func TestValidateURLRejectsUnparseableURLWithoutEchoingIt(t *testing.T) {
+	const password = "canary-validateurl-password"
+
+	restore := SSRFProtectionEnabled()
+	SetSSRFProtection(true)
+
+	defer SetSSRFProtection(restore)
+
+	// A space in the host is what makes url.Parse refuse it.
+	err := ValidateURL("http://teranode:" + password + "@blob server:8080/subtree")
+	require.Error(t, err)
+
+	require.NotContains(t, err.Error(), password, "the URL password reached the error message")
+	require.NotContains(t, err.Error(), "teranode:", "the URL userinfo reached the error message")
+
+	require.Contains(t, err.Error(), "invalid URL")
+	require.Contains(t, strings.ToLower(err.Error()), "invalid character",
+		"expected the parse failure reason to survive, got: %v", err)
+	require.NotContains(t, err.Error(), "%", "the message renders a format verb literally")
+
+	// A raw "#" in the password ends the authority there, and url.Parse's own
+	// reason quotes everything before it as an invalid port. The full password
+	// is never in that reason, so the assertion is on the part that used to be.
+	err = ValidateURL("http://teranode:canary-validate#url-password@blobserver:8080/subtree")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "canary-validate", "the start of the URL password reached the error message")
+	require.Contains(t, err.Error(), "invalid URL")
+}

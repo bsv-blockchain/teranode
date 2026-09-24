@@ -428,16 +428,16 @@ func resolveAdvertiseAddresses(logger ulogger.Logger, tSettings *settings.Settin
 		// Silent mode: no explicit announce addresses. Discoverability is
 		// removed by disabling the DHT (see NewServer), not by this branch.
 		if len(tSettings.P2P.AdvertiseAddresses) > 0 {
-			logger.Infof("[silent mode] p2p_advertise_addresses %v suppressed - nothing is announced in silent mode", tSettings.P2P.AdvertiseAddresses)
+			logger.Infof("[silent mode] p2p_advertise_addresses %v suppressed - nothing is announced in silent mode", tSettings.P2P.AdvertiseAddresses) // urlsafe: libp2p multiaddrs, which have no userinfo
 		} else {
 			logger.Infof("[silent mode] no advertise addresses announced")
 		}
 		return nil
 	case len(tSettings.P2P.AdvertiseAddresses) > 0:
-		logger.Infof("Using configured advertise addresses: %v", tSettings.P2P.AdvertiseAddresses)
+		logger.Infof("Using configured advertise addresses: %v", tSettings.P2P.AdvertiseAddresses) // urlsafe: libp2p multiaddrs, which have no userinfo
 		return tSettings.P2P.AdvertiseAddresses
 	default:
-		logger.Infof("No advertise addresses configured - libp2p will advertise every bound interface address (private ones included) and the public address observed by peers; p2p_share_private_addresses=%v has no effect on this", tSettings.P2P.SharePrivateAddresses)
+		logger.Infof("No advertise addresses configured - libp2p will advertise every bound interface address (private ones included) and the public address observed by peers; p2p_share_private_addresses=%v has no effect on this", tSettings.P2P.SharePrivateAddresses) // urlsafe: a bool
 		return nil
 	}
 }

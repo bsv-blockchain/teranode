@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/ordishs/gocore"
 )
 
@@ -552,10 +553,10 @@ func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]by
 	// Wait for either read completion or context timeout
 	select {
 	case <-ctx.Done():
-		return nil, errors.NewNetworkTimeoutError("http request [%s] timed out while reading body", url)
+		return nil, errors.NewNetworkTimeoutError("http request [%s] timed out while reading body", urlutil.RedactString(url))
 	case <-done:
 		if readErr != nil {
-			return nil, errors.NewServiceError("http request [%s] failed to read body", url, readErr)
+			return nil, errors.NewServiceError("http request [%s] failed to read body", urlutil.RedactString(url), readErr)
 		}
 		return blockBytes, nil
 	}
@@ -596,14 +597,14 @@ func DoHTTPRequestBounded(ctx context.Context, url string, maxBytes int64, reque
 
 	select {
 	case <-ctx.Done():
-		return nil, errors.NewNetworkTimeoutError("http request [%s] timed out while reading body", url)
+		return nil, errors.NewNetworkTimeoutError("http request [%s] timed out while reading body", urlutil.RedactString(url))
 	case <-done:
 		if readErr != nil {
-			return nil, errors.NewServiceError("http request [%s] failed to read body", url, readErr)
+			return nil, errors.NewServiceError("http request [%s] failed to read body", urlutil.RedactString(url), readErr)
 		}
 
 		if int64(len(blockBytes)) > maxBytes {
-			return nil, errors.NewExternalError("http request [%s] response body exceeds %d bytes", url, maxBytes)
+			return nil, errors.NewExternalError("http request [%s] response body exceeds %d bytes", urlutil.RedactString(url), maxBytes)
 		}
 
 		return blockBytes, nil
@@ -703,7 +704,16 @@ func ValidateURL(rawURL string) error {
 
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return errors.NewInvalidArgumentError("invalid URL: %s", err)
+		// url.Parse embeds the string it was given verbatim in its error, so
+		// the reason is unwrapped from it rather than wrapped whole. No
+		// credential reaches here today (callers pass peer base URLs, and the
+		// userinfo check below rejects the rest), but this is the one message
+		// in this file still shaped like the leak the file was swept for.
+		//
+		// The "%s" is dropped for the reason in the 503 message above:
+		// errors.New* takes the trailing error as the wrapped error, leaving no
+		// parameters, so fmt.Errorf never runs and the verb survives.
+		return errors.NewInvalidArgumentError("invalid URL", urlutil.ParseErrorReason(err))
 	}
 
 	scheme := strings.ToLower(parsed.Scheme)
@@ -818,7 +828,7 @@ func executeHTTPRequestWithClient(ctx context.Context, cancelFn context.CancelFu
 		// reuse rather than tearing down, so the same bounded helper applies.
 		drainAndCloseErrorBody(resp.Body)
 
-		return nil, cancelFn, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", rawURL)
+		return nil, cancelFn, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", urlutil.RedactString(rawURL))
 	}
 
 	return resp.Body, cancelFn, nil
@@ -975,7 +985,7 @@ func buildHTTPError(resp *http.Response, rawURL string) error {
 		// maxHTTPErrorBodyBytes is unchanged.
 		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxHTTPErrorBodyBytes+1))
 		if readErr != nil {
-			return errFn("http request [%s] returned status code [%d]", rawURL, resp.StatusCode, readErr)
+			return errFn("http request [%s] returned status code [%d]", urlutil.RedactString(rawURL), resp.StatusCode, readErr)
 		}
 
 		b := raw
@@ -987,14 +997,14 @@ func buildHTTPError(resp *http.Response, rawURL string) error {
 
 		if b != nil {
 			if truncated {
-				return errFn("http request [%s] returned status code [%d] with body %q (truncated)", rawURL, resp.StatusCode, string(b))
+				return errFn("http request [%s] returned status code [%d] with body %q (truncated)", urlutil.RedactString(rawURL), resp.StatusCode, string(b))
 			}
 
-			return errFn("http request [%s] returned status code [%d] with body %q", rawURL, resp.StatusCode, string(b))
+			return errFn("http request [%s] returned status code [%d] with body %q", urlutil.RedactString(rawURL), resp.StatusCode, string(b))
 		}
 	}
 
-	return errFn("http request [%s] returned status code [%d]", rawURL, resp.StatusCode)
+	return errFn("http request [%s] returned status code [%d]", urlutil.RedactString(rawURL), resp.StatusCode)
 }
 
 // parseRetryAfter parses an HTTP Retry-After header value into a duration.
@@ -1083,7 +1093,11 @@ func doHTTPRequestBodyReaderWithRetry(ctx context.Context, url string, cfg retry
 		}
 	}
 
-	return nil, errors.NewServiceUnavailableError("http request [%s] still 503 after %d attempts: %v", url, cfg.maxAttempts, lastErr)
+	// The trailing ": %v" is dropped deliberately. errors.New* takes lastErr as
+	// the wrapped error and removes it from the parameters, so the format
+	// string had three verbs and two arguments and rendered "%!v(MISSING)".
+	// lastErr still renders after " -> ".
+	return nil, errors.NewServiceUnavailableError("http request [%s] still 503 after %d attempts", urlutil.RedactString(url), cfg.maxAttempts, lastErr)
 }
 
 // doHTTPRequestForStreamingWithRetryAfter is doHTTPRequestForStreaming + extracts
@@ -1135,7 +1149,7 @@ func doHTTPRequestForStreamingWithRetryAfter(ctx context.Context, rawURL string,
 
 		cancelFn()
 
-		return nil, 0, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", rawURL)
+		return nil, 0, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", urlutil.RedactString(rawURL))
 	}
 
 	return &readCloserWithCancel{ReadCloser: resp.Body, cancelFn: cancelFn}, 0, nil

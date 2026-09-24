@@ -770,7 +770,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	s.logger.Infof("[Legacy Server] Starting internal server...")
 	go s.server.Start()
-	s.logger.Infof("[Legacy Server] Internal server started on port %s", s.settings.Legacy.GRPCListenAddress)
+	s.logger.Infof("[Legacy Server] Internal server started on port %s", s.settings.Legacy.GRPCListenAddress) // urlsafe: a host:port listen address, no userinfo
 
 	// Start periodic peer statistics logging
 	go s.logPeerStats(ctx)

@@ -31,11 +31,11 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/servicemanager"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/felixge/fgprof"
-	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -204,7 +204,7 @@ func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settin
 			mux.HandleFunc("/debug/memory", profiling.MemoryProfileHandler)
 
 			if appSettings.StatsPrefix != "" {
-				gocore.RegisterStatsHandlers(mux)
+				util.RegisterGocoreStatsHandlers(mux)
 			}
 
 			prometheusEndpoint := appSettings.PrometheusEndpoint
@@ -221,7 +221,7 @@ func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settin
 		}()
 	} else {
 		if appSettings.StatsPrefix != "" {
-			gocore.RegisterStatsHandlers()
+			util.RegisterGocoreStatsHandlers(nil)
 		}
 
 		// start prometheus metrics endpoint if enabled

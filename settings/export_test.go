@@ -199,3 +199,35 @@ func mustParseURL(rawURL string) *url.URL {
 	}
 	return u
 }
+
+// TestExportMetadata_URLUserinfoRedaction covers the settings portal half of
+// the same defect the pruner had: a store URL is configuration and a
+// credential at once, so exporting one raw hands out a working password.
+// Postgres, Aerospike, Kafka and HTTP blob store URLs all carry it in the
+// userinfo.
+func TestExportMetadata_URLUserinfoRedaction(t *testing.T) {
+	const password = "canary-store-password"
+
+	settings := &Settings{
+		Version:        "1.0.0",
+		ChainCfgParams: &chaincfg.MainNetParams,
+	}
+	settings.BlockChain.StoreURL = mustParseURL("postgres://teranode:" + password + "@db:5432/blockchain")
+	settings.UtxoStore.UtxoStore = mustParseURL("aerospike://teranode:" + password + "@aero:3000/utxo")
+	settings.Block.TxStore = mustParseURL("http://teranode:" + password + "@blobserver:8080/")
+
+	registry := settings.ExportMetadata()
+	require.NotNil(t, registry)
+
+	settingsMap := make(map[string]SettingMetadata)
+	for _, s := range registry.Settings {
+		settingsMap[s.Key] = s
+	}
+
+	for _, key := range []string{"blockchain_store", "utxostore", "txstore"} {
+		exported := settingsMap[key].CurrentValue
+		require.NotEmpty(t, exported, "setting %q was not exported, so this test proves nothing", key)
+		require.NotContains(t, exported, password, "setting %q exports the store password", key)
+		require.Contains(t, exported, "teranode:", "setting %q should keep the username", key)
+	}
+}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/internal/banlist"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -328,7 +329,10 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	if tSettings.Asset.PropagationProxyEnabled && tSettings.Asset.PropagationProxyAddress != "" {
 		proxyTarget, err := url.Parse(tSettings.Asset.PropagationProxyAddress)
 		if err != nil {
-			logger.Errorf("[Asset] failed to parse propagation proxy address %q: %v", tSettings.Asset.PropagationProxyAddress, err)
+			// url.Parse embeds the value it was given in its error, and even its
+			// bare reason can quote part of a password, so log a fixed reason
+			// and never the configured address itself.
+			logger.Errorf("[Asset] failed to parse asset_propagation_proxy_address: %v", urlutil.ParseErrorReason(err))
 		} else {
 			apiGroup.POST("/tx", h.ProxyPropagationTx(proxyTarget, "/tx"))
 			apiGroup.POST("/txs", h.ProxyPropagationTx(proxyTarget, "/txs"))
