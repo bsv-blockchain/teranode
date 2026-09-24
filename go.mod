@@ -199,7 +199,7 @@ require (
 	github.com/bsv-blockchain/go-bc v1.1.8
 	github.com/bsv-blockchain/go-bn v1.1.7
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
-	github.com/bsv-blockchain/go-p2p-message-bus v0.1.28-0.20260924113024-ae928385ad0b
+	github.com/bsv-blockchain/go-p2p-message-bus v0.1.28
 	github.com/bsv-blockchain/go-safe-conversion v1.2.0
 	github.com/bsv-blockchain/go-tx-map v1.4.1
 	github.com/bsv-blockchain/go-wire v1.2.11
