@@ -5208,9 +5208,12 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SplitSwi
 	//     enqueue timestamp is >= this value, so we only drain batches
 	//     that existed before this moment. Batches arriving during the
 	//     drain stay queued and roll forward to the next state-transition
-	//     cycle. By design AddTxBatchColumnar (the gRPC ingest path) does
-	//     not backpressure, so this time cap is what stops the loop from
-	//     chasing ingest.
+	//     cycle. The gRPC ingest handlers admit through AddBatchIfRoom,
+	//     which only refuses when blockassembly_maxQueueItems is positive;
+	//     with the default of 0 ingest is not backpressured, and even when
+	//     it is, the queue keeps filling up to its cap during the drain.
+	//     Either way this time cap is what stops the loop from chasing
+	//     ingest.
 	//
 	//  2. Items: queueLength snapshotted at entry, compared against items
 	//     drained. Belt-and-braces — if clock granularity ever caused the

@@ -15,10 +15,11 @@ import (
 // A negative cap is a misconfiguration, not a tiny cap, and is treated as
 // disabled (0). A positive cap below one full drain pass
 // (maxBatchesPerIteration x sendBatchSize items) would refuse every batch and
-// wedge ingest, so it is clamped up to that floor.
+// wedge ingest, so it is clamped up to that floor. Every call also logs exactly
+// one line stating the bound actually in force.
 //
 // Parameters:
-//   - logger: used to warn when a value is clamped
+//   - logger: used to report the bound in force, and to warn when a value is clamped
 //   - maxItems: the configured item cap (0 disables the bound)
 //   - sendBatchSize: the configured per-batch item count
 //
@@ -31,6 +32,7 @@ func normalizeMaxQueueItems(logger ulogger.Logger, maxItems int64, sendBatchSize
 	}
 
 	if maxItems == 0 {
+		logger.Infof("BlockAssembly.MaxQueueItems=0; ingest queue is unbounded, set blockassembly_maxQueueItems to bound memory during long state transitions")
 		return 0
 	}
 
@@ -41,6 +43,8 @@ func normalizeMaxQueueItems(logger ulogger.Logger, maxItems int64, sendBatchSize
 
 		return floor
 	}
+
+	logger.Infof("BlockAssembly.MaxQueueItems=%d; ingest queue bounded at %d items", maxItems, maxItems)
 
 	return maxItems
 }

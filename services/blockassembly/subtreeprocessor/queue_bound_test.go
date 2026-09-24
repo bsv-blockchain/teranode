@@ -1,6 +1,7 @@
 package subtreeprocessor
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -384,6 +385,68 @@ func Test_normalizeMaxQueueItems(t *testing.T) {
 
 	t.Run("healthy_value_passes_through", func(t *testing.T) {
 		require.Equal(t, int64(16_777_216), normalizeMaxQueueItems(logger, 16_777_216, sendBatchSize))
+	})
+}
+
+// queueBoundCapturingLogger records every Infof and Warnf line so a test can
+// assert on how many lines a call emits and what they say.
+type queueBoundCapturingLogger struct {
+	ulogger.TestLogger
+	infos []string
+	warns []string
+}
+
+func (l *queueBoundCapturingLogger) Infof(format string, args ...interface{}) {
+	l.infos = append(l.infos, fmt.Sprintf(format, args...))
+}
+
+func (l *queueBoundCapturingLogger) Warnf(format string, args ...interface{}) {
+	l.warns = append(l.warns, fmt.Sprintf(format, args...))
+}
+
+// Test — every normalizeMaxQueueItems call logs exactly one line stating the
+// bound in force: Info for the accepted values (0 and a healthy cap), and the
+// existing single Warn for the negative and clamped values.
+func Test_normalizeMaxQueueItems_logsEnforcedBound(t *testing.T) {
+	const sendBatchSize = 100
+
+	t.Run("zero_logs_unbounded_info", func(t *testing.T) {
+		logger := &queueBoundCapturingLogger{}
+
+		normalizeMaxQueueItems(logger, 0, sendBatchSize)
+
+		require.Len(t, logger.infos, 1)
+		require.Empty(t, logger.warns)
+		require.Contains(t, logger.infos[0], "blockassembly_maxQueueItems")
+		require.Contains(t, logger.infos[0], "unbounded")
+	})
+
+	t.Run("healthy_value_logs_bound_info", func(t *testing.T) {
+		logger := &queueBoundCapturingLogger{}
+
+		normalizeMaxQueueItems(logger, 16_777_216, sendBatchSize)
+
+		require.Len(t, logger.infos, 1)
+		require.Empty(t, logger.warns)
+		require.Contains(t, logger.infos[0], "bounded at 16777216")
+	})
+
+	t.Run("negative_logs_only_warn", func(t *testing.T) {
+		logger := &queueBoundCapturingLogger{}
+
+		normalizeMaxQueueItems(logger, -5, sendBatchSize)
+
+		require.Empty(t, logger.infos)
+		require.Len(t, logger.warns, 1)
+	})
+
+	t.Run("below_floor_logs_only_warn", func(t *testing.T) {
+		logger := &queueBoundCapturingLogger{}
+
+		normalizeMaxQueueItems(logger, 1, sendBatchSize)
+
+		require.Empty(t, logger.infos)
+		require.Len(t, logger.warns, 1)
 	})
 }
 
