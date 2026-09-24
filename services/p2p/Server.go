@@ -287,6 +287,35 @@ func privateIPColocationWhitelist() []*net.IPNet {
 	return nets
 }
 
+// bsvaBootstrapDomain is the BSVA-managed DNS zone behind the committed
+// p2p_bootstrap_peers default (/dnsaddr/${network}.bootstrap.teranode.bsvb.tech).
+const bsvaBootstrapDomain = ".bootstrap.teranode.bsvb.tech"
+
+// bootstrapPeersForNetwork returns the configured bootstrap peers, minus any
+// BSVA-managed bootstrap entries on regtest. The committed default is templated
+// from ${network}, so a regtest node would otherwise try to resolve
+// regtest.bootstrap.teranode.bsvb.tech: BSVA publishes no such record, since
+// regtest is a local chain with nothing public to join. Operator-supplied peers
+// are kept so private multi-node regtest clusters can still bootstrap.
+func bootstrapPeersForNetwork(logger ulogger.Logger, tSettings *settings.Settings) []string {
+	peers := tSettings.P2P.BootstrapPeers
+	if tSettings.ChainCfgParams == nil || tSettings.ChainCfgParams.Name != chaincfg.RegressionNetParams.Name {
+		return peers
+	}
+
+	kept := make([]string, 0, len(peers))
+	for _, p := range peers {
+		if strings.HasPrefix(p, "/dnsaddr/") && strings.HasSuffix(strings.TrimPrefix(p, "/dnsaddr/"), bsvaBootstrapDomain) {
+			logger.Infof("[p2p] skipping BSVA bootstrap peer %s on regtest", p)
+			continue
+		}
+
+		kept = append(kept, p)
+	}
+
+	return kept
+}
+
 // buildP2PMessageBusConfig maps Teranode P2P settings onto the message bus config.
 //
 // GossipSub mesh protection: peer scoring penalizes IP-colocated Sybil swarms and
@@ -317,7 +346,7 @@ func buildP2PMessageBusConfig(logger ulogger.Logger, tSettings *settings.Setting
 		Name:                tSettings.ClientName,
 		Logger:              logger,
 		PeerCacheFile:       p2pCacheFilePath(tSettings.P2P.PeerCacheDir),
-		BootstrapPeers:      tSettings.P2P.BootstrapPeers,
+		BootstrapPeers:      bootstrapPeersForNetwork(logger, tSettings),
 		StaticPeers:         tSettings.P2P.StaticPeers,
 		AllowedPublisherIDs: tSettings.P2P.AllowedPublisherIDs,
 		ProtocolVersion:     protocolVersion,
