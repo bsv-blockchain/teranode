@@ -43,10 +43,12 @@ package sql
 import (
 	"context"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 // FreezeUTXOs marks UTXOs as frozen, preventing them from being spent.
@@ -146,8 +148,14 @@ func (s *Store) UnFreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tS
 
 // ReAssignUTXO reassigns a frozen UTXO to a new transaction output.
 // The UTXO must be frozen before it can be reassigned.
+// The replacement locking script is persisted so that re-extension returns the
+// new script, and the commitment is recomputed from the amended output.
 // The reassigned UTXO becomes spendable after ReAssignedUtxoSpendableAfterBlocks blocks.
-func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo *utxostore.Spend, tSettings *settings.Settings) error {
+func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, amendedOutput *bt.Output, tSettings *settings.Settings) error {
+	if amendedOutput == nil || amendedOutput.LockingScript == nil || len(amendedOutput.LockingScript.Bytes()) == 0 {
+		return errors.NewInvalidArgumentError("amended output is required to reassign UTXO %s:%d", utxo.TxID, utxo.Vout)
+	}
+
 	// check whether the UTXO is frozen
 	q := `
             SELECT t.id, o.frozen
@@ -169,6 +177,13 @@ func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo
 		return errors.NewUtxoFrozenError("transaction %s:%d is not frozen", utxo.TxID, utxo.Vout)
 	}
 
+	// Derive the replacement UTXO commitment from the amended output so the
+	// persisted hash always matches the persisted locking script.
+	newUtxoHash, err := util.UTXOHashFromOutput(utxo.TxID, amendedOutput, utxo.Vout)
+	if err != nil {
+		return err
+	}
+
 	// Use configurable setting if provided, otherwise fall back to constant
 	reassignBlocks := uint32(utxostore.ReAssignedUtxoSpendableAfterBlocks)
 	if tSettings != nil && tSettings.UtxoStore.ReAssignedUtxoSpendableAfterBlocks > 0 {
@@ -176,17 +191,22 @@ func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo
 	}
 	spendableIn := s.GetBlockHeight() + reassignBlocks
 
-	// re-assign the UTXO to the new UTXO
+	// re-assign the UTXO to the new UTXO, persisting the replacement locking script
 	q = `
         UPDATE outputs
-        SET utxo_hash = $1, frozen = false, spendableIn = $2
-        WHERE transaction_id = $3
-          AND idx = $4
+        SET utxo_hash = $1, locking_script = $2, satoshis = $3, frozen = false, spendableIn = $4
+        WHERE transaction_id = $5
+          AND idx = $6
           AND spending_data IS NULL
           AND frozen = true
     `
-	if _, err := s.db.ExecContext(ctx, q, newUtxo.UTXOHash[:], spendableIn, id, utxo.Vout); err != nil {
+	res, err := s.db.ExecContext(ctx, q, newUtxoHash[:], amendedOutput.LockingScript, amendedOutput.Satoshis, spendableIn, id, utxo.Vout)
+	if err != nil {
 		return err
+	}
+
+	if affected, err := res.RowsAffected(); err == nil && affected != 1 {
+		return errors.NewUtxoFrozenError("transaction %s:%d is not frozen (concurrent spend)", utxo.TxID, utxo.Vout)
 	}
 
 	return nil

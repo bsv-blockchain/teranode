@@ -1697,9 +1697,45 @@ func (s *Store) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) 
 	return g.Wait()
 }
 
+// reassignedScriptsBin decodes the persisted reassignment script overrides from
+// a tx record's bins, keyed by the reassigned output's offset within the record.
+// Returns false when the record has no reassigned outputs. Note: offsets are
+// page-relative, so overrides are honoured for outputs in the base record
+// (offset == vout); overrides for outputs beyond the batch size (later pages,
+// which live in pagination records) are not read by this path.
+func reassignedScriptsBin(bins aerospike.BinMap) (map[uint32][]byte, bool) {
+	raw, found := bins[fields.ReassignedScripts.String()]
+	if !found {
+		return nil, false
+	}
+
+	overrides, ok := raw.(map[interface{}]interface{})
+	if !ok {
+		return nil, false
+	}
+
+	scripts := make(map[uint32][]byte, len(overrides))
+	for k, v := range overrides {
+		offset, ok := k.(int)
+		if !ok {
+			return nil, false
+		}
+
+		script, ok := v.([]byte)
+		if !ok {
+			return nil, false
+		}
+
+		scripts[uint32(offset)] = script
+	}
+
+	return scripts, len(scripts) > 0
+}
+
+// sendOutpointBatch decorates a batch of outpoints with their locking scripts
+// and amounts. go-batcher recovers panics in this fn; complete every item on
+// panic so a crash mid-decoration cannot orphan the waiting submitters.
 func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
-	// go-batcher recovers panics in this fn; complete every item on panic so a
-	// crash mid-decoration cannot orphan the waiting submitters.
 	defer func() {
 		signalBatchPanic(recover(), batch, "sendOutpointBatch", s.logger, func(it *batchOutpoint, err error) {
 			it.complete(err)
@@ -1744,7 +1780,9 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 		// BlockHeights is read so external parents can be reconstructed with the
 		// era-aware unspendable rule keyed to their creation height.
-		bins := []fields.FieldName{fields.Version, fields.LockTime, fields.Inputs, fields.Outputs, fields.External, fields.BlockHeights}
+		// ReassignedScripts is read so re-extension can override a reassigned
+		// output's locking script with the persisted replacement.
+		bins := []fields.FieldName{fields.Version, fields.LockTime, fields.Inputs, fields.Outputs, fields.External, fields.BlockHeights, fields.ReassignedScripts}
 		record := aerospike.NewBatchRead(policy, key, fields.FieldNamesToStrings(bins))
 
 		// Add to batch records
@@ -1764,6 +1802,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 	txs := make(map[chainhash.Hash]*bt.Tx, len(batchRecords))
 	txErrors := make(map[chainhash.Hash]error)
+	reassignedScriptsByTx := make(map[chainhash.Hash]map[uint32][]byte)
 
 	// Process the batch records
 	for idx, batchRecordIfc := range batchRecords {
@@ -1781,6 +1820,10 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		}
 
 		bins := batchRecord.Record.Bins
+
+		if scripts, ok := reassignedScriptsBin(bins); ok {
+			reassignedScriptsByTx[previousTxHash] = scripts
+		}
 
 		var previousTx *bt.Tx
 
@@ -1851,6 +1894,18 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 		batchItem.outpoint.PreviousTxSatoshis = previousTx.Outputs[outIdx].Satoshis
 		batchItem.outpoint.PreviousTxScript = previousTx.Outputs[outIdx].LockingScript
+
+		// A reassigned output must be extended with the persisted replacement
+		// locking script, not the original output's script, so the new owner can
+		// spend it and the original owner's signature no longer validates.
+		// The override is applied to the outpoint only, never mutating the
+		// reconstructed tx (which may be shared from the external-tx cache).
+		if scripts, ok := reassignedScriptsByTx[*batchItem.outpoint.PreviousTxIDChainHash()]; ok {
+			if script, ok := scripts[outIdx]; ok {
+				batchItem.outpoint.PreviousTxScript = bscript.NewFromBytes(script)
+			}
+		}
+
 		batchItem.complete(nil)
 	}
 

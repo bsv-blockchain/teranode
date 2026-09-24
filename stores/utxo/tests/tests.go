@@ -284,14 +284,14 @@ func ReAssign(t *testing.T, db utxostore.Store) {
 	}
 
 	// try to reassign, should fail, utxo has not yet been frozen
-	err = db.ReAssignUTXO(ctx, testSpend0, testSpend1, tSettings)
+	err = db.ReAssignUTXO(ctx, testSpend0, newOutput, tSettings)
 	require.Error(t, err)
 
 	err = db.FreezeUTXOs(ctx, []*utxostore.Spend{testSpend0}, tSettings)
 	require.NoError(t, err)
 
 	// try to reassign, should succeed, utxo has been frozen
-	err = db.ReAssignUTXO(ctx, testSpend0, testSpend1, tSettings)
+	err = db.ReAssignUTXO(ctx, testSpend0, newOutput, tSettings)
 	require.NoError(t, err)
 
 	// should return an error, does not exist anymore
@@ -302,6 +302,17 @@ func ReAssign(t *testing.T, db utxostore.Store) {
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore.Status_IMMATURE), resp.Status)
 	require.Nil(t, resp.SpendingData)
+
+	// Re-extension must surface the persisted replacement locking script, so the
+	// new owner can spend the output after the maturity gate (issue 1725).
+	decorated := spendTx.Clone()
+	_ = decorated.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
+	decorated.Inputs[0].PreviousTxScript = nil
+	err = db.PreviousOutputsDecorate(ctx, decorated)
+	require.NoError(t, err)
+	require.NotNil(t, decorated.Inputs[0].PreviousTxScript)
+	require.Equal(t, newOutput.LockingScript.Bytes(), decorated.Inputs[0].PreviousTxScript.Bytes())
+	require.Equal(t, newOutput.Satoshis, decorated.Inputs[0].PreviousTxSatoshis)
 
 	// try to spend the old utxo, should fail
 	_, _, err = db.SpendAndCreate(ctx, spendTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())

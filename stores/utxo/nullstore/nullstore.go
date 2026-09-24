@@ -260,7 +260,7 @@ func (m *NullStore) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSe
 	return nil
 }
 
-func (m *NullStore) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
+func (m *NullStore) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, amendedOutput *bt.Output, tSettings *settings.Settings) error {
 	return nil
 }
 

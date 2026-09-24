@@ -199,8 +199,8 @@ func (m *MockStore) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSe
 	return args.Error(0)
 }
 
-func (m *MockStore) ReAssignUTXO(ctx context.Context, utxoSpend *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
-	args := m.Called(ctx, utxoSpend, newUtxo, tSettings)
+func (m *MockStore) ReAssignUTXO(ctx context.Context, utxoSpend *utxo.Spend, amendedOutput *bt.Output, tSettings *settings.Settings) error {
+	args := m.Called(ctx, utxoSpend, amendedOutput, tSettings)
 	return args.Error(0)
 }
 
@@ -698,13 +698,13 @@ func TestReAssignUTXO(t *testing.T) {
 
 	ctx := context.Background()
 	oldUtxo := createTestSpend(1)
-	newUtxo := createTestSpend(2)
+	amendedOutput := &bt.Output{Satoshis: 1, LockingScript: bscript.NewFromBytes([]byte{0x51})}
 	tSettings := &settings.Settings{}
 	expectedErr := errors.NewError("reassign utxo error")
 
-	mockStore.On("ReAssignUTXO", ctx, oldUtxo, newUtxo, tSettings).Return(expectedErr)
+	mockStore.On("ReAssignUTXO", ctx, oldUtxo, amendedOutput, tSettings).Return(expectedErr)
 
-	err := store.ReAssignUTXO(ctx, oldUtxo, newUtxo, tSettings)
+	err := store.ReAssignUTXO(ctx, oldUtxo, amendedOutput, tSettings)
 
 	assert.Equal(t, expectedErr, err)
 	mockStore.AssertExpectations(t)

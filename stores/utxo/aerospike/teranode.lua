@@ -13,6 +13,7 @@ local BIN_EXTERNAL = "external"
 local BIN_UNMINED_SINCE = "unminedSince"
 local BIN_PRESERVE_UNTIL = "preserveUntil"
 local BIN_REASSIGNMENTS = "reassignments"
+local BIN_REASSIGNED_SCRIPTS = "reassignedScripts"  -- offset -> replacement locking script for reassigned outputs
 local BIN_RECORD_UTXOS = "recordUtxos"
 local BIN_SPENDING_HEIGHT = "spendingHeight"
 local BIN_SPENT_EXTRA_RECS = "spentExtraRecs"
@@ -70,6 +71,7 @@ local ERR_TX_NOT_FOUND = "TX not found"
 local ERR_UTXOS_NOT_FOUND = "UTXOs list not found"
 local ERR_UTXO_NOT_FOUND = "UTXO not found for offset "
 local ERR_UTXO_INVALID_SIZE = "UTXO has an invalid size"
+local ERR_INVALID_SPEND = "Invalid spend"
 local ERR_UTXO_HASH_MISMATCH = "Output utxohash mismatch"
 local ERR_UTXO_NOT_FROZEN = "UTXO is not frozen"
 local ERR_UTXO_IS_FROZEN = "UTXO is frozen"
@@ -867,7 +869,7 @@ end
 -- | | |  __/ (_| \__ \__ \ | (_| | | | |
 -- |_|  \___|\__,_|___/___/_|\__, |_| |_|
 --                           |___/
-function reassign(rec, offset, utxoHash, newUtxoHash, blockHeight, spendableAfter)
+function reassign(rec, offset, utxoHash, newUtxoHash, blockHeight, spendableAfter, newScript)
     local response = map()
 
     if not aerospike:exists(rec) then
@@ -908,6 +910,14 @@ function reassign(rec, offset, utxoHash, newUtxoHash, blockHeight, spendableAfte
         return response
     end
 
+    if newScript == nil or bytes.size(newScript) == 0 then
+        response[FIELD_STATUS] = STATUS_ERROR
+        response[FIELD_ERROR_CODE] = ERROR_CODE_INVALID_SPEND
+        response[FIELD_MESSAGE] = ERR_INVALID_SPEND
+
+        return response
+    end
+
     -- Check if UTXO is frozen (required for reassignment)
     if not existingSpendingData or not isFrozen(existingSpendingData) then
         response[FIELD_STATUS] = STATUS_ERROR
@@ -937,6 +947,14 @@ function reassign(rec, offset, utxoHash, newUtxoHash, blockHeight, spendableAfte
         rec[BIN_UTXO_SPENDABLE_IN] = spendableInMap
     end
 
+    -- Persist the replacement locking script so that re-extension returns the
+    -- new owner's script instead of the original output's script.
+    local reassignedScripts = rec[BIN_REASSIGNED_SCRIPTS]
+    if reassignedScripts == nil then
+        reassignedScripts = map()
+        rec[BIN_REASSIGNED_SCRIPTS] = reassignedScripts
+    end
+
     -- Record reassignment details
     reassignments[#reassignments + 1] = map {
         offset = offset,
@@ -945,6 +963,7 @@ function reassign(rec, offset, utxoHash, newUtxoHash, blockHeight, spendableAfte
         blockHeight = blockHeight
     }
 
+    reassignedScripts[offset] = newScript
     spendableInMap[offset] = blockHeight + spendableAfter
 
     -- Ensure record is not DAH'd when all UTXOs are spent
