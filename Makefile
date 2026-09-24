@@ -222,6 +222,46 @@ sequentialtest-shard:
 .PHONY: testall
 testall: test longtest sequentialtest
 
+# Fuzz targets as "package:FuzzTarget" pairs. Keep in sync with the matrix in
+# .github/workflows/fuzz.yaml, which fuzzes the same list nightly with a larger
+# budget.
+#
+# A Go fuzz target only mutates inputs when invoked with -fuzz. Under `make
+# test` these same functions merely replay their committed seed corpus as
+# ordinary table tests, so they can never find a new crashing input - running
+# them here is the only way to actually fuzz them locally.
+FUZZ_TARGETS = \
+	model:FuzzNewBlockFromBytes \
+	model:FuzzReadBlockFromReader \
+	model:FuzzDiskParentSpendsMap_Parity \
+	pkg/fileformat:FuzzHeaderParsersAgree \
+	pkg/fileformat:FuzzReadHeaderFromBytes \
+	services/utxopersister:FuzzUTXOWrapperFromBytes \
+	services/legacy/peer:FuzzReadWireMessage \
+	services/legacy/peer:FuzzStreamingBlockFraming \
+	services/rpc/bsvjson:FuzzParseRPCRequest \
+	services/rpc/bsvjson:FuzzUnmarshalCmd
+
+# Per-target budget. The nightly workflow uses 5m; the default here is kept
+# short so `make fuzz` is usable as a pre-push check.
+FUZZTIME ?= 30s
+# Minimization is unbounded by default, which can outlast the budget and hide
+# the crasher. Cap it so a hit is always written out.
+FUZZMINIMIZETIME ?= 60s
+
+# Fuzz every target in FUZZ_TARGETS, stopping at the first crasher.
+# A discovered input is written to <package>/testdata/fuzz/<Target>/<hash>
+# along with a `go test -run=<Target>/<hash>` reproducer.
+# Example: make fuzz FUZZTIME=5m
+.PHONY: fuzz
+fuzz:
+	@for t in $(FUZZ_TARGETS); do \
+		pkg=$${t%%:*}; target=$${t##*:}; \
+		echo "==> $$target ($$pkg), $(FUZZTIME)"; \
+		go test -run='^$$' -fuzz="^$$target$$" -fuzztime=$(FUZZTIME) \
+			-fuzzminimizetime=$(FUZZMINIMIZETIME) ./$$pkg/ || exit 1; \
+	done
+
 # run tests in the test/e2e/daemon directory
 # Tests run in parallel by default - each test gets unique ports and data directories
 # Environment variables:
