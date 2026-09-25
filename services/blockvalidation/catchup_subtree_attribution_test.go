@@ -163,8 +163,8 @@ func (c *subtreeAttributionP2PClient) ReportValidatedChainProgress(_ context.Con
 func (c *subtreeAttributionP2PClient) IsPeerMalicious(_ context.Context, _ string) (bool, string, error) {
 	return false, "", nil
 }
-func (c *subtreeAttributionP2PClient) IsPeerUnhealthy(_ context.Context, _ string) (bool, string, float32, error) {
-	return false, "", 0, nil
+func (c *subtreeAttributionP2PClient) IsPeerUnhealthy(_ context.Context, _ string) (bool, string, float32, bool, error) {
+	return false, "", 0, false, nil
 }
 func (c *subtreeAttributionP2PClient) RecordBytesDownloaded(_ context.Context, _ string, _ uint64) error {
 	return nil

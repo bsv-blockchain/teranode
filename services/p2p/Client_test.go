@@ -934,11 +934,12 @@ func TestSimpleClientIsPeerUnhealthy(t *testing.T) {
 				return &p2p_api.IsPeerUnhealthyResponse{IsUnhealthy: true, Reason: "low rep", ReputationScore: 12.5}, nil
 			},
 		})
-		unhealthy, reason, score, err := client.IsPeerUnhealthy(context.Background(), "peer1")
+		unhealthy, reason, score, unknown, err := client.IsPeerUnhealthy(context.Background(), "peer1")
 		require.NoError(t, err)
 		require.True(t, unhealthy)
 		require.Equal(t, "low rep", reason)
 		require.InDelta(t, 12.5, score, 0.001)
+		require.False(t, unknown)
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -946,7 +947,7 @@ func TestSimpleClientIsPeerUnhealthy(t *testing.T) {
 				return nil, assert.AnError
 			},
 		})
-		_, _, _, err := client.IsPeerUnhealthy(context.Background(), "peer1")
+		_, _, _, _, err := client.IsPeerUnhealthy(context.Background(), "peer1")
 		require.Error(t, err)
 	})
 }
