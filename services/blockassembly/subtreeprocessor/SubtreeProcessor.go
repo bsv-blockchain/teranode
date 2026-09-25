@@ -234,6 +234,12 @@ type SubtreeProcessor struct {
 	// reorgBlockChan handles blockchain reorganization requests
 	reorgBlockChan chan reorgBlocksRequest
 
+	// progressHook, when set, is called at each step of a MoveForwardBlock or
+	// Reorg round trip that proves the work is still advancing. See
+	// SetProgressHook. Atomic because it is installed by the owner after
+	// construction and read from the processor goroutine.
+	progressHook atomic.Pointer[func()]
+
 	// resetCh handles requests to reset the processor state
 	resetCh chan *resetBlocks
 
@@ -1490,7 +1496,18 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	// the map is only used during the reset process and is not stored in the SubtreeProcessor struct
 	processedConflictingHashesMap := make(map[chainhash.Hash]struct{})
 
+	// Every per-block step below reports progress, for the same reason Reorg
+	// does: the owner's main loop is blocked on this call for its whole length,
+	// and a reset can move hundreds of blocks (issue 1447). The serial loops beat
+	// at the top of each block; the concurrent ones beat as each block finishes.
+	//
+	// These use plain reportProgress, not reportProgressUnlessDone like Reorg,
+	// because reset runs on context.Background() and has no cancellation to gate
+	// on. A beat that lands after shutdown is still safe: the installed hook is
+	// BeatIfStarted, which cannot re-arm a heartbeat that Disable has cleared.
 	for _, block := range moveBackBlocks {
+		stp.reportProgress()
+
 		// delete / unspend all transactions spending the coinbase tx
 		if err := stp.removeCoinbaseUtxos(ctx, block); err != nil {
 			// no need to error out if the key doesn't exist anyway
@@ -1526,6 +1543,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 				if err := stp.blockchainClient.SetBlockProcessedAt(gCtx, block.Header.Hash(), true); err != nil {
 					stp.logger.Warnf("[SubtreeProcessor][Reset] error clearing block processed_at for %s: %v", block.String(), err)
 				}
+				stp.reportProgress()
 				return nil // non-critical, don't fail reset
 			})
 		}
@@ -1545,6 +1563,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 				}
 
 				coinbaseTxsAdded.Store(block.Hash().String(), block)
+				stp.reportProgress()
 
 				return nil
 			})
@@ -1576,6 +1595,8 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 		// only the resulting tip needs the full refresh. Do not "fix" by finalizing
 		// every block — that reintroduces the per-block cost this path avoids.
 		for i, block := range moveForwardBlocks {
+			stp.reportProgress()
+
 			if i < len(moveForwardBlocks)-1 {
 				if err := stp.blockchainClient.SetBlockProcessedAt(ctx, block.Header.Hash()); err != nil {
 					stp.logger.Warnf("[SubtreeProcessor][Reset] error setting block processed_at for %s: %v", block.String(), err)
@@ -1586,6 +1607,8 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 		}
 	} else {
 		for _, block := range moveForwardBlocks {
+			stp.reportProgress()
+
 			// A block has potentially some conflicting transactions that need to be processed when we move forward the block
 			conflictingNodes, err := stp.getConflictingNodes(ctx, block)
 			if err != nil {
@@ -1653,6 +1676,8 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 		// irrelevant mid-reset, only the resulting tip needs the full refresh. Do not
 		// "fix" by finalizing every block — that reintroduces the per-block cost.
 		for i, block := range moveForwardBlocks {
+			stp.reportProgress()
+
 			if i < len(moveForwardBlocks)-1 {
 				if err := stp.blockchainClient.SetBlockProcessedAt(ctx, block.Header.Hash()); err != nil {
 					stp.logger.Warnf("[SubtreeProcessor][Reset] error setting block processed_at for %s: %v", block.String(), err)
@@ -3356,6 +3381,61 @@ func (stp *SubtreeProcessor) runHandlerWithRecover(name string, fn func() error)
 	return fn()
 }
 
+// SetProgressHook installs fn to be called at each step of block movement that
+// proves the work is still advancing: once per block applied or rolled back by
+// Reorg or Reset, once per block marked processed, and once per answered poll
+// while waiting for block validation to mark a block mined. A nil fn removes
+// the hook.
+//
+// It exists for the owner's liveness heartbeat (issue 1447). MoveForwardBlock,
+// Reorg and Reset are blocking round trips, so the caller cannot beat while it
+// waits, and a multi-block catch-up would otherwise count as one unbroken stall
+// however steadily it advanced. With the hook, the unbeaten stretch is one
+// step rather than the whole call. A step is still unbounded in its own right:
+// one block's processing grows with its transaction count, and the reset's
+// post-process runs whatever the owner passed in, which beats on its own.
+//
+// An answered poll counts as progress even when the answer is "not mined yet":
+// block validation is responding and block assembly is waiting on it. A failed
+// call does not count, so a wait whose calls keep failing goes stale and the
+// probe fires. Block validation that answers but never finishes is not block
+// assembly's to catch; it belongs to block validation's own liveness, which is
+// tracked in issue 1840.
+//
+// The hook runs on whichever goroutine does the work: the processor goroutine
+// for Reorg, Reset and MoveForwardBlock (including the concurrent per-block
+// steps inside Reset), the caller's own goroutine for WaitForPendingBlocks. It
+// must be cheap and safe for concurrent use.
+func (stp *SubtreeProcessor) SetProgressHook(fn func()) {
+	if fn == nil {
+		stp.progressHook.Store(nil)
+		return
+	}
+
+	stp.progressHook.Store(&fn)
+}
+
+// reportProgress calls the progress hook if one is installed.
+func (stp *SubtreeProcessor) reportProgress() {
+	if fn := stp.progressHook.Load(); fn != nil {
+		(*fn)()
+	}
+}
+
+// reportProgressUnlessDone is reportProgress for loops that keep running after
+// shutdown has begun: once ctx is done it stops beating and leaves the work
+// itself alone. The owner disables its heartbeat on the way out, and the hook
+// already refuses to re-arm a disabled heartbeat, so this is the second of two
+// guards rather than the only one: a step that finishes after cancellation is
+// not progress the probe should hear about.
+func (stp *SubtreeProcessor) reportProgressUnlessDone(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+
+	stp.reportProgress()
+}
+
 // MoveForwardBlock updates the subtrees when a new block is found.
 //
 // Parameters:
@@ -3526,6 +3606,8 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 
 		// Just move forward the blocks and do not go into a full reorg
 		for idx, block := range moveForwardBlocks {
+			stp.reportProgressUnlessDone(ctx)
+
 			// skip dequeue if not the last block
 			skipNotificationsAndDequeue := idx != len(moveForwardBlocks)-1
 
@@ -3619,6 +3701,8 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	}
 
 	for _, block := range moveBackBlocks {
+		stp.reportProgressUnlessDone(ctx)
+
 		// move back the block, getting all the transactions in the block and any conflicting hashes
 		// if we are not moving forward any blocks, we need to make sure we create properly sized subtrees
 		// so we pass in len(moveForwardBlocks) == 0 as the second parameter
@@ -3782,6 +3866,8 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	)
 
 	for blockIdx, block := range moveForwardBlocks {
+		stp.reportProgressUnlessDone(ctx)
+
 		lastMoveForwardBlock := blockIdx == len(moveForwardBlocks)-1
 		// we skip the notifications for now and do them all at the end
 		// transactionMap is returned so we can check which transactions need to be marked as on the longest chain
@@ -3933,6 +4019,8 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 
 	// Mark all the moveForwardBlocks as processed
 	for _, block := range moveForwardBlocks {
+		stp.reportProgressUnlessDone(ctx)
+
 		if err = stp.blockchainClient.SetBlockProcessedAt(ctx, block.Header.Hash()); err != nil {
 			return errors.NewProcessingError("[reorgBlocks][%s] error setting block processed_at timestamp: %v", block.String(), err)
 		}
@@ -5330,6 +5418,10 @@ func (stp *SubtreeProcessor) waitForBlockBeingMined(ctx context.Context, blockHa
 				return false, errors.NewProcessingError("[waitForBlockBeingMined] error getting block mined status", err)
 			}
 
+			// Beat only on an answer. See SetProgressHook for why an answered
+			// "not yet" counts and a failed call does not.
+			stp.reportProgress()
+
 			if blockMined {
 				return true, nil
 			}
@@ -5365,8 +5457,12 @@ func (stp *SubtreeProcessor) WaitForPendingBlocks(ctx context.Context) error {
 	_, err := retry.Retry(ctx, stp.logger, func() (interface{}, error) {
 		blockNotMined, err := stp.blockchainClient.GetBlocksMinedNotSet(ctx)
 		if err != nil {
+			// No beat: a call that keeps failing is not progress, and an
+			// infinite retry of one must go stale. See SetProgressHook.
 			return nil, errors.NewProcessingError("error getting blocks with mined not set", err)
 		}
+
+		stp.reportProgress()
 
 		if len(blockNotMined) == 0 {
 			stp.logger.Infof("[WaitForPendingBlocks] no pending blocks found, ready to load unmined transactions")
