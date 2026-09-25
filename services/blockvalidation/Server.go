@@ -711,9 +711,19 @@ func (u *Server) GetCatchupStatus(ctx context.Context, _ *blockvalidation_api.Em
 func isUnvalidatablePeerError(err error) bool {
 	// A corrupt block body (bitcoin-sv/teranode#4692) is explicitly NOT unvalidatable: the received
 	// body is not bound to the header, so we must not give up on alternative sources —
-	// re-download from another peer instead. It already fails the ErrBlockInvalid check
-	// below (dedicated ERR_BLOCK_CORRUPT sentinel, no match), but guard explicitly so the
-	// don't-give-up intent survives future edits to this predicate.
+	// re-download from another peer instead.
+	//
+	// That deliberately includes the unbound invalid-transaction verdict (isUnboundTxInvalidVerdict,
+	// bitcoin-sv/teranode#4844). Its subtree list came from the primary and was never reconciled to
+	// the header's merkle root, so a primary that named its own subtrees produces exactly this error,
+	// and another peer's copy is how the honest body is recovered. Stopping here would hide it: peers
+	// absorbed into catchupAlternatives do not announce again. For a block whose real body is invalid,
+	// each alternative re-validates and fails, and the cycle counts once toward
+	// CatchupMaxAttemptsPerBlock, so the repeats stop at cooldown.
+	//
+	// A plain corrupt verdict would also fail the ErrBlockInvalid check below (dedicated
+	// ERR_BLOCK_CORRUPT sentinel, no match). This one would not, because it wraps ErrTxInvalid, so this
+	// guard is load-bearing for it.
 	if errors.IsBlockCorrupt(err) {
 		return false
 	}
