@@ -1702,6 +1702,38 @@ func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empt
 	}, nil
 }
 
+// GetBestBlockHeaderUncached is GetBestBlockHeader with the store's response cache left out,
+// and with the block id and mined flag carried on the response.
+func (b *Blockchain) GetBestBlockHeaderUncached(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetBlockHeaderResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBestBlockHeaderUncached",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBestBlockHeader),
+	)
+	defer deferFn()
+
+	chainTip, meta, err := b.store.GetBestBlockHeaderUncached(ctx)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.GetBlockHeaderResponse{
+		BlockHeader:    chainTip.Bytes(),
+		Id:             meta.ID,
+		Height:         meta.Height,
+		TxCount:        meta.TxCount,
+		SizeInBytes:    meta.SizeInBytes,
+		Miner:          meta.Miner,
+		PeerId:         meta.PeerID,
+		BlockTime:      meta.BlockTime,
+		Timestamp:      meta.Timestamp,
+		ChainWork:      meta.ChainWork,
+		MinedSet:       meta.MinedSet,
+		SubtreesSet:    meta.SubtreesSet,
+		Invalid:        meta.Invalid,
+		MedianTimePast: meta.MedianTimePast,
+	}, nil
+}
+
 // CheckBlockIsInCurrentChain verifies if a block is part of the current main chain.
 func (b *Blockchain) CheckBlockIsInCurrentChain(ctx context.Context, req *blockchain_api.CheckBlockIsCurrentChainRequest) (*blockchain_api.CheckBlockIsCurrentChainResponse, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "CheckBlockIsInCurrentChain",
@@ -1818,6 +1850,41 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 	}
 
 	blockHeaders, blockHeaderMetas, err := b.store.GetBlockHeaders(ctx, startHash, req.NumberOfHeaders)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	blockHeaderBytes := make([][]byte, len(blockHeaders))
+	for i, blockHeader := range blockHeaders {
+		blockHeaderBytes[i] = blockHeader.Bytes()
+	}
+
+	blockHeaderMetaBytes := make([][]byte, len(blockHeaders))
+	for i, meta := range blockHeaderMetas {
+		blockHeaderMetaBytes[i] = meta.Bytes()
+	}
+
+	return &blockchain_api.GetBlockHeadersResponse{
+		BlockHeaders: blockHeaderBytes,
+		Metas:        blockHeaderMetaBytes,
+	}, nil
+}
+
+// GetBlockHeadersByParentLinks retrieves headers by walking parent links back from a hash,
+// never by the main-chain flag and never from a cache.
+func (b *Blockchain) GetBlockHeadersByParentLinks(ctx context.Context, req *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeadersByParentLinks",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlockHeaders),
+	)
+	defer deferFn()
+
+	startHash, err := chainhash.NewHash(req.StartHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain][GetBlockHeadersByParentLinks] request's hash is not valid", err))
+	}
+
+	blockHeaders, blockHeaderMetas, err := b.store.GetBlockHeadersByParentLinks(ctx, startHash, req.NumberOfHeaders)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}

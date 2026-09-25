@@ -309,7 +309,8 @@ func TestBlockAssembly_ValidateUnminedTxInputs_CaseA_SpentByDifferentTxCascades(
 		subtreeProcessor: mockStp,
 	}
 
-	ok := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{0: true}, false)
+	ok, err := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{0: true}, false)
+	require.NoError(t, err)
 	assert.False(t, ok, "BA-STARTUP-007(a): tx whose input is spent by another tx must be invalid")
 
 	mockStore.AssertExpectations(t)
@@ -355,7 +356,8 @@ func TestBlockAssembly_ValidateUnminedTxInputs_CaseB_CounterConflictingOnChain(t
 		subtreeProcessor: mockStp,
 	}
 
-	ok := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{confirmedBlockID: true}, false)
+	ok, err := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{confirmedBlockID: true}, false)
+	require.NoError(t, err)
 	assert.False(t, ok, "BA-STARTUP-007(b): tx must be invalid when a counter-conflicting tx is confirmed on chain")
 
 	mockStore.AssertExpectations(t)
@@ -397,7 +399,8 @@ func TestBlockAssembly_ValidateUnminedTxInputs_MissingParentIsLogged(t *testing.
 			utxoStore: mockStore,
 		}
 
-		ok := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{0: true}, true)
+		ok, err := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{0: true}, true)
+		require.NoError(t, err, "a parent that is not found is a verdict, not a store failure")
 		assert.False(t, ok, "tx whose parent cannot be loaded must be invalid")
 
 		require.Len(t, logger.warns, 1, "missing parent must be logged exactly once")
@@ -423,12 +426,14 @@ func TestBlockAssembly_ValidateUnminedTxInputs_MissingParentIsLogged(t *testing.
 			utxoStore: mockStore,
 		}
 
-		ok := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{0: true}, true)
+		// A store answering with no record and no error has failed to answer, so
+		// this reports an error naming both hashes rather than a verdict: calling
+		// the transaction invalid would drop it from the candidate on a store fault.
+		ok, err := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{0: true}, true)
+		require.Error(t, err)
 		assert.False(t, ok)
-
-		require.Len(t, logger.warns, 1)
-		assert.Contains(t, logger.warns[0], txHash.String())
-		assert.Contains(t, logger.warns[0], parentHash.String())
+		assert.Contains(t, err.Error(), txHash.String())
+		assert.Contains(t, err.Error(), parentHash.String())
 
 		mockStore.AssertExpectations(t)
 	})

@@ -202,6 +202,17 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 			s.blobNotify <- sig
 			s.logger.Debugf("[pruner][%s:%d] notified blob deletion worker", blockHashStr, blockHeight)
 
+			// And the stamp worker, the same way: the start conditions have passed, so a
+			// notification-driven drain gets them by construction.
+			if s.stamper != nil {
+				select {
+				case <-s.stampNotify:
+				default:
+				}
+				s.stampNotify <- sig
+				s.logger.Debugf("[pruner][%s:%d] notified stamp worker", blockHashStr, blockHeight)
+			}
+
 			prunerActive.Set(1)
 
 			// Phase 1: Preserve parents of old unmined transactions

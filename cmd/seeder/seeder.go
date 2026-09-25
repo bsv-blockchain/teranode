@@ -520,6 +520,18 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		return nil, errors.NewProcessingError("error in worker", err)
 	}
 
+	// A store whose UTXOs get their block from a deep stamp has nothing to stamp below the
+	// seed, and no containment window there either: without this its stamp would start at
+	// window 0 and walk thousands of missing windows. The utxoset store offers the hook; the
+	// other stores do not and need nothing.
+	if f, ok := utxoStore.(interface {
+		SetStampFloorsForSeed(context.Context, uint32) error
+	}); ok {
+		if err = f.SetStampFloorsForSeed(ctx, height); err != nil {
+			return nil, errors.NewProcessingError("failed to set the stamp floors for the seed", err)
+		}
+	}
+
 	logger.Infof("All workers finished successfully")
 
 	heightStr := fmt.Sprintf("%d\n", height)

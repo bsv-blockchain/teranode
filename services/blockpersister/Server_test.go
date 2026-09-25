@@ -696,6 +696,12 @@ func (m *MockBlockchainClient) GetBlockHeader(ctx context.Context, blockHash *ch
 func (m *MockBlockchainClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
 }
+func (m *MockBlockchainClient) GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return m.GetBestBlockHeader(ctx)
+}
+func (m *MockBlockchainClient) GetBlockHeadersByParentLinks(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return nil, nil, nil
+}
 func (m *MockBlockchainClient) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
 }
@@ -1860,4 +1866,9 @@ func TestHealthConcurrency(t *testing.T) {
 	}
 
 	assert.Equal(t, 0, errorCount)
+}
+
+// SpendsMadeBy returns nothing: no test here drives the conflict-undo path.
+func (m *MockUTXOStore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	return nil, nil
 }

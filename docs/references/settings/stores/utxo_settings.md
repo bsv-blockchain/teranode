@@ -45,6 +45,7 @@
 | MaxMinedBatchSize | int | 1024 | utxostore_maxMinedBatchSize | Max mined transaction batch size |
 | BlockHeightRetentionAdjustment | int32 | 0 | utxostore_blockHeightRetentionAdjustment | **CRITICAL** - Retention adjustment |
 | DisableDAHCleaner | bool | false | utxostore_disableDAHCleaner | **CRITICAL** - DAH cleaner process control |
+| SkipTxBodyBelowCheckpoint | bool | false | utxostore_skipTxBodyBelowCheckpoint | utxoset only - skip the tx_body write at or below the hardcoded checkpoint |
 | PrunerParentUpdateBatcherSize | int | 2000 | utxostore_prunerParentUpdateBatcherSize | Pruner parent update batch size |
 | PrunerParentUpdateBatcherDurationMillis | int | 100 | utxostore_prunerParentUpdateBatcherDurationMillis | Pruner parent update batch duration |
 | PrunerDeleteBatcherSize | int | 5000 | utxostore_prunerDeleteBatcherSize | Pruner delete batch size |

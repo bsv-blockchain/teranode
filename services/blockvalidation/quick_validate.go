@@ -1586,6 +1586,10 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 	var existingTxsMu sync.Mutex
 	var existingTxHashes []*chainhash.Hash
 
+	// skippedTxHashes are the transactions with no spendable outputs left out of the create
+	// wave. See the retry handling after the wave.
+	var skippedTxHashes []*chainhash.Hash
+
 	minedBlockInfo := utxo.MinedBlockInfo{
 		BlockID:     block.ID,
 		BlockHeight: block.Height,
@@ -1600,6 +1604,8 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 
 			if shouldSkipUnspendableCreate(lockUTXOs, u.settings, tx, block.Height) {
 				// Not written to the store; its inputs are still spent in Phase 2.
+				skippedTxHashes = append(skippedTxHashes, tx.TxIDChainHash())
+
 				continue
 			}
 
@@ -1640,6 +1646,18 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 		if err := utxo.SetMinedMultiChunked(ctx, u.logger, u.utxoStore, existingTxHashes, minedBlockInfo,
 			u.settings.UtxoStore.MaxMinedBatchSize, u.settings.UtxoStore.MaxMinedRoutines); err != nil {
 			return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] failed to update mined info for %d existing txs", block.Hash().String(), len(existingTxHashes), err)
+		}
+
+		// Transactions already stored mean an earlier attempt at this block got part way,
+		// and it may have stored the skipped ones as unmined too. Nothing else would ever
+		// mark those mined. A first attempt finds nothing stored and pays nothing here.
+		marked, err := utxo.SetMinedIfPresent(ctx, u.utxoStore, skippedTxHashes, minedBlockInfo, u.settings.UtxoStore.MaxMinedRoutines)
+		if err != nil {
+			return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] failed to mark skipped txs mined", block.Hash().String(), err)
+		}
+
+		if marked > 0 {
+			u.logger.Infof("[createAndSpendUTXOsForBatch][%s] marked %d skipped transactions mined that an earlier attempt had stored", block.Hash().String(), marked)
 		}
 	}
 

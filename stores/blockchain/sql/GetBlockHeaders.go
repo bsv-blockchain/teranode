@@ -147,8 +147,9 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 // The fast path uses the on_main_chain partial index when the start hash is on
 // the main chain. Otherwise the recursive CTE walks parent_id pointers and is
 // authoritative for fork tips and rebuilds.
-func (s *SQL) buildGetBlockHeadersQuery(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) (string, []interface{}) {
-	const blockColumns = `
+// blockHeaderColumns is the column list processBlockHeadersRows scans, in scan order. It is
+// shared by every query that feeds that function so the two cannot drift apart.
+const blockHeaderColumns = `
 			 b.version
 			,b.block_time
 			,b.nonce
@@ -169,6 +170,7 @@ func (s *SQL) buildGetBlockHeadersQuery(ctx context.Context, blockHashFrom *chai
 			,b.processed_at
 			,b.median_time_past`
 
+func (s *SQL) buildGetBlockHeadersQuery(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) (string, []interface{}) {
 	if s.mainChainRebuilding.Load() == 0 {
 		var (
 			onMain      bool
@@ -186,7 +188,7 @@ func (s *SQL) buildGetBlockHeadersQuery(ctx context.Context, blockHashFrom *chai
 			blockHashFrom[:],
 		).Scan(&onMain, &startHeight); scanErr == nil && onMain {
 			fastPath := `
-		SELECT` + blockColumns + `
+		SELECT` + blockHeaderColumns + `
 		FROM blocks b
 		WHERE b.on_main_chain = true
 		  AND b.height <= $1
@@ -198,6 +200,12 @@ func (s *SQL) buildGetBlockHeadersQuery(ctx context.Context, blockHashFrom *chai
 		}
 	}
 
+	return parentLinkHeadersQuery(blockHashFrom, numberOfHeaders)
+}
+
+// parentLinkHeadersQuery is the recursive walk down parent_id from one hash: the authoritative
+// path GetBlockHeaders falls back to, and the only path GetBlockHeadersByParentLinks takes.
+func parentLinkHeadersQuery(blockHashFrom *chainhash.Hash, numberOfHeaders uint64) (string, []interface{}) {
 	cte := `
 		WITH RECURSIVE ChainBlocks AS (
 			SELECT id, parent_id, 1 AS depth
@@ -210,12 +218,13 @@ func (s *SQL) buildGetBlockHeadersQuery(ctx context.Context, blockHashFrom *chai
 			WHERE bb.id != cb.id
 			  AND cb.depth < $2
 		)
-		SELECT` + blockColumns + `
+		SELECT` + blockHeaderColumns + `
 		FROM blocks b
 		JOIN ChainBlocks cb ON b.id = cb.id
 		ORDER BY b.height DESC
 		LIMIT $2
 	`
+
 	return cte, []interface{}{blockHashFrom[:], numberOfHeaders}
 }
 

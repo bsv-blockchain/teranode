@@ -71,6 +71,17 @@ service BlockchainAPI {
   // GetBlockHeaders retrieves headers for multiple blocks.
   rpc GetBlockHeaders(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
 
+  // GetBestBlockHeaderUncached is GetBestBlockHeader with the response cache left out on both
+  // sides, and with the block id filled in. A block store clears the cache only after its own
+  // commit, so the cached call can be one block stale; a caller that writes the tip into
+  // permanent state reads it here.
+  rpc GetBestBlockHeaderUncached(google.protobuf.Empty) returns (GetBlockHeaderResponse) {}
+
+  // GetBlockHeadersByParentLinks retrieves headers by walking parent links back from a hash.
+  // It never selects rows by the on_main_chain flag and never reads or writes a cache, so it
+  // is the fetch a chain answer is proven against.
+  rpc GetBlockHeadersByParentLinks(GetBlockHeadersRequest) returns (GetBlockHeadersResponse) {}
+
   // GetBlockHeadersToCommonAncestor retrieves headers from a block to its common ancestor.
   rpc GetBlockHeadersToCommonAncestor(GetBlockHeadersToCommonAncestorRequest) returns (GetBlockHeadersResponse) {}
 

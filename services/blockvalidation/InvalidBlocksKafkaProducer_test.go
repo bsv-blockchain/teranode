@@ -25,6 +25,14 @@ type MockBlockchainClient struct {
 	mock.Mock
 }
 
+func (m *MockBlockchainClient) GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return m.GetBestBlockHeader(ctx)
+}
+
+func (m *MockBlockchainClient) GetBlockHeadersByParentLinks(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return m.GetBlockHeaders(ctx, hash, numberOfHeaders)
+}
+
 func (m *MockBlockchainClient) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	args := m.Called(ctx, hash, numberOfHeaders)
 	if args.Get(0) == nil {
