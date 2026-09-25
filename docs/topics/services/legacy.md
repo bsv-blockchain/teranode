@@ -350,21 +350,41 @@ This process effectively bridges the gap between Teranode's subtree-based archit
 
 #### 4.2.2. Transaction rebroadcast retry
 
+New txs reach the Legacy Service on the txmeta Kafka topic. That topic is
+spread over partitions, so a child tx can be read before its parent. SV Node
+only accepts a child once it has the parent, so each announce batch is sorted
+parents first, using the parent hashes the txmeta message carries, and sent
+to peers as one ordered batch. A child whose parent arrives in a later batch
+is not held back; the peer's orphan pool and the rebroadcast retry below
+cover it.
+
 The immediate INV dispatch for a newly-announced tx is best-effort: a peer
 that has not finished its version handshake at the instant of relay, or
-that is briefly disconnected, will silently drop the inv. To recover from
-these transient misses, the Legacy Service keeps a bounded retry queue.
+that is briefly disconnected, will silently drop the inv, and an SV Node
+peer may reject the tx for a temporary reason (for example a conflicting
+spend it later discards). To recover from these misses, the Legacy Service
+keeps a bounded retry queue.
 
 - Every tx that passes the FSM `RUNNING` gate is also enqueued on the
   rebroadcast queue at announce time. (The legacy announce path is NOT
   gated by the modern-P2P `listen_mode` setting — see
   `peer_server.AnnounceNewTransactions` for the rationale.)
-- A background `rebroadcastHandler` periodically re-emits every pending
-  entry. The first replay fires 5 minutes after enqueue; subsequent
-  replays are scheduled at a random interval up to 30 minutes.
-- Each entry has a retry budget of `maxRebroadcastAttempts` (6) replay
-  ticks. After that, the entry is aged out — covering roughly 90 minutes
-  in expectation, long enough to ride out a peer reconnect window.
+- Retries follow blocks, not a timer. SV Node clears its recent-rejects
+  filter when its tip changes, so a retry before the next block is likely
+  rejected again. Each valid block on the `blocks_final` Kafka topic
+  schedules one retry `rebroadcastTipDelay` (30 seconds) later; blocks
+  arriving during that delay share the retry.
+- Before each retry, the queue is checked against the UTXO store. Txs that
+  are mined, marked conflicting, or no longer stored are removed, and the
+  parent tx hashes of the rest are read.
+- The remaining entries are re-offered to every connected peer with parents
+  before their children. Queue order alone is not enough: txs are read from
+  the txmeta Kafka topic across partitions, so a child can be queued before
+  its parent, and SV Node only accepts a child once it has the parent. Retries
+  bypass each peer's known-inventory filter, so a peer that already saw the
+  first announce is offered the tx again.
+- Each entry has a budget of `maxRebroadcastTips` (6) retries, about an
+  hour on mainnet. After that it is aged out.
 - The queue is capped at `maxRebroadcastInventory` (4096) entries. New
   adds beyond the cap are dropped: older entries keep their retry budget
   rather than being evicted by fresher adds that haven't yet failed.
@@ -373,22 +393,19 @@ these transient misses, the Legacy Service keeps a bounded retry queue.
   hot path uncontended; if the handler is backlogged past the buffer,
   the add is dropped.
 
-Operators can observe queue saturation via the
-`(*legacy.Server).RebroadcastDropCounts()` method, which returns
-`(adds, capHits uint64)`. A non-zero `adds` count means the channel was
-full when callers tried to add; a non-zero `capHits` count means the
-in-handler map was at capacity. Either way, the affected txs still got
-their immediate INV dispatch — only the retry safety net is lost for
-them. Sustained non-zero drops indicate the rebroadcast queue cannot
-keep up with announce rate at the configured caps. The counters are not
-yet surfaced as Prometheus metrics; wiring them through
-`services/legacy/metrics.go` as gauges (read on collect) is a small
-follow-up.
+The queue is exported as Prometheus metrics:
 
-A future improvement would be to wire `TransactionConfirmed` so block
-inclusion frees entries instead of waiting for them to age out — the
-hook exists on the `PeerNotifier` interface but is not yet wired in
-this codebase.
+| Metric | Meaning |
+|---|---|
+| `teranode_legacy_rebroadcast_pending` | Txs currently queued |
+| `teranode_legacy_rebroadcast_add_dropped_total` | Adds dropped because the handler's channel was full |
+| `teranode_legacy_rebroadcast_cap_hits_total` | Adds dropped because the queue was at its cap |
+| `teranode_legacy_rebroadcast_retries_total` | Tx invs re-offered to peers |
+| `teranode_legacy_rebroadcast_removed_total{reason}` | Entries removed, by `mined`, `conflicting`, `not_found` or `aged_out` |
+
+Dropped adds still got their immediate INV dispatch; only the retry safety
+net is lost for them. Sustained drops mean the queue cannot keep up with the
+announce rate at the configured caps.
 
 ## 5. Technology
 

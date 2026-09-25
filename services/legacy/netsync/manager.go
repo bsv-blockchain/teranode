@@ -513,6 +513,13 @@ type SyncManager struct {
 	txAnnounceMu     sync.RWMutex
 	txAnnounceClosed bool
 
+	// announceParents holds the parent tx hashes of txs waiting in
+	// txAnnounceBatcher, which cannot carry them itself: its items must be
+	// comparable for deduplication. orderAnnounceBatch consumes the entries.
+	// Bounded; an entry lost to eviction, or left behind by a deduplicated
+	// Put, only costs that tx its place in the ordering.
+	announceParents *txmap.SyncedMap[chainhash.Hash, []chainhash.Hash]
+
 	// These fields should only be accessed from the blockHandler thread
 	// (except syncPeer/syncPeerState which are protected by syncPeerMu).
 	rejectedTxns    *txmap.SyncedMap[chainhash.Hash, struct{}]
@@ -3543,13 +3550,47 @@ func (sm *SyncManager) Stop() error {
 // the txmeta Kafka listener goroutine (not joined by Stop), so the read lock
 // pairs with the write lock in closeTxAnnounceBatcher to make a post-close Put a
 // safe no-op.
-func (sm *SyncManager) announceTx(item *TxHashAndFee) {
+func (sm *SyncManager) announceTx(item *TxHashAndFee, parents ...chainhash.Hash) {
 	sm.txAnnounceMu.RLock()
 	defer sm.txAnnounceMu.RUnlock()
 
 	if !sm.txAnnounceClosed && sm.txAnnounceBatcher != nil {
+		if len(parents) > 0 && sm.announceParents != nil {
+			sm.announceParents.Set(item.TxHash, parents)
+		}
+
 		sm.txAnnounceBatcher.Put(item)
 	}
+}
+
+// orderAnnounceBatch reorders a batch from txAnnounceBatcher so every tx
+// comes after any of its parents in the same batch. The txmeta topic is
+// spread over partitions, so a child can be read, and batched, before its
+// parent; SV Node only accepts a child once it has the parent. A child whose
+// parent is in a later batch is not held back: the peer's orphan pool and the
+// rebroadcast queue cover that. Returns a new slice, since the batcher reuses
+// the one it passes in.
+func (sm *SyncManager) orderAnnounceBatch(batch []*TxHashAndFee) []*TxHashAndFee {
+	hashes := make([]chainhash.Hash, len(batch))
+	parents := make([][]chainhash.Hash, len(batch))
+
+	for i, item := range batch {
+		hashes[i] = item.TxHash
+
+		if sm.announceParents != nil {
+			if p, ok := sm.announceParents.Get(item.TxHash); ok {
+				parents[i] = p
+				sm.announceParents.Delete(item.TxHash)
+			}
+		}
+	}
+
+	ordered := make([]*TxHashAndFee, 0, len(batch))
+	for _, i := range ParentsFirst(hashes, func(i int) []chainhash.Hash { return parents[i] }) {
+		ordered = append(ordered, batch[i])
+	}
+
+	return ordered
 }
 
 // closeTxAnnounceBatcher marks the tx-announce batcher closed (so further
@@ -3663,11 +3704,12 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	// create the transaction announcement batcher
+	sm.announceParents = txmap.NewSyncedMap[chainhash.Hash, []chainhash.Hash](2 * maxRequestedTxns)
 	sm.txAnnounceBatcher = batcher.NewWithDeduplicationAndPool[TxHashAndFee](maxRequestedTxns, 1*time.Second, func(batch []*TxHashAndFee) {
 		sm.logger.Debugf("announcing %d transactions to peers", len(batch))
 
-		// process the batch
-		sm.peerNotifier.AnnounceNewTransactions(batch)
+		// process the batch, parents first
+		sm.peerNotifier.AnnounceNewTransactions(sm.orderAnnounceBatch(batch))
 	}, true,
 		batcher.WithName("netsync_tx_announce"),
 		batcher.WithLogger(logger),
@@ -3902,42 +3944,49 @@ func (sm *SyncManager) kafkaINVListener(ctx context.Context, kafkaURL *url.URL, 
 }
 
 func (sm *SyncManager) kafkaBlocksFinalListener(ctx context.Context, kafkaURL *url.URL, groupID string) {
-	kafka.StartKafkaListener(ctx, sm.logger, kafkaURL, groupID, true, func(msg *kafka.KafkaMessage) error {
-		if msg.Key == nil {
-			sm.logger.Errorf("[kafkaBlocksFinalListener] no Kafka message key specified, skipping message")
-			// not going to retry, if we don't have a key/hash
-			return nil
-		}
+	kafka.StartKafkaListener(ctx, sm.logger, kafkaURL, groupID, true, sm.processBlocksFinalMessage, &sm.settings.Kafka)
+}
 
-		hash, err := chainhash.NewHashFromStr(string(msg.Key))
-		if err != nil {
-			sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to create hash from Kafka message key: %v", hash, err)
-			// not going to retry, if we cannot parse the message
-			return nil
-		}
-
-		var blockMsg kafkamessage.KafkaBlocksFinalTopicMessage
-		if err := proto.Unmarshal(msg.Value, &blockMsg); err != nil {
-			sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to unmarshal kafka block topic message: %v", hash, err)
-			// not going to retry, if we cannot parse the message
-			return nil
-		}
-
-		header, err := model.NewBlockHeaderFromBytes(blockMsg.Header)
-		if err != nil {
-			sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to create block header from Kafka message: %v", hash, err)
-			// not going to retry, if we cannot parse the message
-			return nil
-		}
-
-		// create wireBlockHeader
-		wireBlockHeader := header.ToWireBlockHeader()
-
-		sm.logger.Infof("[kafkaBlocksFinalListener] received block final message from Kafka: %s, %s", hash, header.String())
-		sm.peerNotifier.RelayInventory(wire.NewInvVect(wire.InvTypeBlock, hash), wireBlockHeader)
-
+// processBlocksFinalMessage announces a block from the blocks_final topic to
+// peers and signals the rebroadcast queue that a new block has been added.
+// Malformed messages are logged and skipped; it never returns an error, so
+// the listener does not retry them.
+func (sm *SyncManager) processBlocksFinalMessage(msg *kafka.KafkaMessage) error {
+	if msg.Key == nil {
+		sm.logger.Errorf("[kafkaBlocksFinalListener] no Kafka message key specified, skipping message")
+		// not going to retry, if we don't have a key/hash
 		return nil
-	}, &sm.settings.Kafka)
+	}
+
+	hash, err := chainhash.NewHashFromStr(string(msg.Key))
+	if err != nil {
+		sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to create hash from Kafka message key: %v", hash, err)
+		// not going to retry, if we cannot parse the message
+		return nil
+	}
+
+	var blockMsg kafkamessage.KafkaBlocksFinalTopicMessage
+	if err := proto.Unmarshal(msg.Value, &blockMsg); err != nil {
+		sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to unmarshal kafka block topic message: %v", hash, err)
+		// not going to retry, if we cannot parse the message
+		return nil
+	}
+
+	header, err := model.NewBlockHeaderFromBytes(blockMsg.Header)
+	if err != nil {
+		sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to create block header from Kafka message: %v", hash, err)
+		// not going to retry, if we cannot parse the message
+		return nil
+	}
+
+	// create wireBlockHeader
+	wireBlockHeader := header.ToWireBlockHeader()
+
+	sm.logger.Infof("[kafkaBlocksFinalListener] received block final message from Kafka: %s, %s", hash, header.String())
+	sm.peerNotifier.RelayInventory(wire.NewInvVect(wire.InvTypeBlock, hash), wireBlockHeader)
+	sm.peerNotifier.BlockConnected()
+
+	return nil
 }
 
 // kafkaTXmetaListener processes TxMeta Kafka messages in binary batch format.
@@ -4081,7 +4130,7 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 				TxHash: hash,
 				Fee:    txMeta.Fee,
 				Size:   txMeta.SizeInBytes,
-			})
+			}, txMeta.TxInpoints.ParentTxHashes...)
 		} else {
 			offset += int(contentLen)
 			continue

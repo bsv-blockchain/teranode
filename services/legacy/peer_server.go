@@ -9,7 +9,6 @@ package legacy
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -73,28 +72,6 @@ const (
 	// maxKnownAddresses is the maximum number of known addresses to
 	// store in the peer.
 	maxKnownAddresses = 10000
-
-	// maxRebroadcastInventory caps how many tx invs the rebroadcastHandler
-	// holds at once. Beyond this, new adds are dropped — the existing
-	// (older, already-retried) entries keep their retry budget instead of
-	// being evicted by fresher adds that haven't yet failed. The cap is
-	// the only memory bound on the rebroadcast queue, since there is no
-	// TransactionConfirmed hook wired to remove entries on block inclusion.
-	maxRebroadcastInventory = 4096
-
-	// maxRebroadcastAttempts is the per-entry retry budget in the
-	// rebroadcastHandler. With the 5-minute initial + up to 30-minute
-	// random subsequent interval, six attempts cover roughly 90 minutes
-	// in expectation — long enough to ride out a peer reconnect window
-	// without indefinitely retrying txs whose peers will never come back.
-	maxRebroadcastAttempts = 6
-
-	// modifyRebroadcastInvBuffer is the channel buffer between
-	// AddRebroadcastInventory callers and rebroadcastHandler. Sized to
-	// absorb a short backlog while the handler is busy serving a tick;
-	// AddRebroadcastInventory drops on full rather than blocking the
-	// hot relay path, so this is best-effort, not lossless.
-	modifyRebroadcastInvBuffer = 1024
 
 	// cantSplitBanPeerMsg is logged when a peer address cannot be split into
 	// host and port during ban handling.
@@ -471,6 +448,7 @@ type server struct {
 	hashCache            *txscript.HashCache
 	syncManager          *netsync.SyncManager
 	modifyRebroadcastInv chan interface{}
+	rebroadcastTip       chan struct{}
 	newPeers             chan *serverPeer
 	donePeers            chan *serverPeer
 	banPeers             chan *serverPeer
@@ -492,10 +470,20 @@ type server struct {
 	droppedRebroadcastAdds atomic.Uint64
 
 	// droppedRebroadcastCapHits counts rebroadcastHandler add attempts that
-	// failed because pendingInvs was at maxRebroadcastInventory. A non-zero
+	// failed because the queue was at maxRebroadcastInventory. A non-zero
 	// value indicates the retry queue is saturated and new adds are losing
 	// their retry safety net (their immediate RelayInventory still ran).
 	droppedRebroadcastCapHits atomic.Uint64
+
+	// relayTxBatchTail is closed when the most recently started relayTxBatch
+	// send finishes. Each new batch waits on it, so batches go out in order.
+	relayTxBatchMu   sync.Mutex
+	relayTxBatchTail chan struct{}
+
+	// rebroadcastTipDelay is how long rebroadcastHandler waits after a new
+	// block before retrying, so peers have connected it first. A field
+	// rather than the constant so tests can shorten it.
+	rebroadcastTipDelay time.Duration
 
 	// cfCheckptCaches stores a cached slice of filter headers for cfcheckpt
 	// messages for each filter type.
@@ -2132,70 +2120,6 @@ func (sp *serverPeer) OnWrite(_ *peer.Peer, bytesWritten int, msg wire.Message, 
 	sp.server.AddBytesSent(uint64(bytesWritten))
 }
 
-// randomUint16Number returns a random uint16 in a specified input range.  Note
-// that the range is in zeroth ordering; if you pass it 1800, you will get
-// values from 0 to 1800.
-func randomUint16Number(max uint16) uint16 {
-	// In order to avoid modulo bias and ensure every possible outcome in
-	// [0, max) has equal probability, the random number must be sampled
-	// from a random source that has a range limited to a multiple of the
-	// modulus.
-	var randomNumber uint16
-
-	var limitRange = (math.MaxUint16 / max) * max
-
-	for {
-		binary.Read(rand.Reader, binary.LittleEndian, &randomNumber)
-
-		if randomNumber < limitRange {
-			return randomNumber % max
-		}
-	}
-}
-
-// AddRebroadcastInventory adds 'iv' to the list of inventories to be
-// rebroadcasted at random intervals until they show up in a block.
-//
-// Best-effort: sends are non-blocking. If the rebroadcastHandler is
-// backlogged past the channel's buffer, the new add is dropped rather
-// than blocking the hot relay path. Drops are an acceptable trade —
-// the dropped tx still has its immediate RelayInventory dispatch, and
-// the queue already contains older entries (which are more likely to
-// actually be stuck) carrying their own retry budget.
-func (s *server) AddRebroadcastInventory(iv *wire.InvVect, data interface{}) {
-	// Ignore if shutting down.
-	if atomic.LoadInt32(&s.shutdown) != 0 {
-		return
-	}
-
-	select {
-	case s.modifyRebroadcastInv <- broadcastInventoryAdd{invVect: iv, data: data}:
-	default:
-		// Drop on full — see doc comment above. Bumped for operator
-		// visibility via RebroadcastDropCounts.
-		s.droppedRebroadcastAdds.Add(1)
-	}
-}
-
-// RemoveRebroadcastInventory removes 'iv' from the list of items to be
-// rebroadcasted if present.
-func (s *server) RemoveRebroadcastInventory(iv *wire.InvVect) {
-	// Ignore if shutting down.
-	if atomic.LoadInt32(&s.shutdown) != 0 {
-		return
-	}
-
-	select {
-	case s.modifyRebroadcastInv <- broadcastInventoryDel(iv):
-	default:
-		// Drop on full. A missed delete just means the entry ages out
-		// via maxRebroadcastAttempts instead of being purged on block
-		// inclusion — wasted retries, not a correctness issue. Not
-		// counted separately: a saturated channel already surfaces
-		// via droppedRebroadcastAdds.
-	}
-}
-
 // relayTransactions generates and relays inventory vectors for all of the
 // passed transactions to all connected peers and enqueues each iv on the
 // rebroadcast queue.
@@ -2203,15 +2127,23 @@ func (s *server) RemoveRebroadcastInventory(iv *wire.InvVect) {
 // The rebroadcast enqueue closes the gap from issue #942: the immediate
 // RelayInventory dispatch is best-effort — a peer that has not finished its
 // version handshake at this instant, or that is briefly disconnected, will
-// silently drop the inv. The rebroadcastHandler periodically replays
-// pendingInvs so the tx still reaches peers once they're ready, instead of
-// rotting in the local mempool with no retry path.
+// silently drop the inv, and an SV Node peer may reject it for a temporary
+// reason. The rebroadcastHandler replays the queue after each new block so
+// the tx still reaches peers once they're ready, instead of rotting in the
+// local mempool with no retry path.
+//
+// txns arrive parents first (see netsync's orderAnnounceBatch) and are sent
+// as one batch, so each peer is offered a parent before its children.
 func (s *server) relayTransactions(txns []*netsync.TxHashAndFee) {
+	batch := make([]relayMsg, 0, len(txns))
+
 	for _, txHashAndFee := range txns {
 		iv := wire.NewInvVect(wire.InvTypeTx, &txHashAndFee.TxHash)
-		s.RelayInventory(iv, txHashAndFee)
+		batch = append(batch, relayMsg{invVect: iv, data: txHashAndFee})
 		s.AddRebroadcastInventory(iv, txHashAndFee)
 	}
+
+	s.relayTxBatch(batch)
 }
 
 // AnnounceNewTransactions generates and relays inventory vectors and notifies
@@ -3486,11 +3418,47 @@ func (s *server) RelayInventory(invVect *wire.InvVect, data interface{}) {
 	s.relayInventory(relayMsg{invVect: invVect, data: data})
 }
 
-// rebroadcastInventory relays a tx inv from the rebroadcast queue to all
-// connected peers, including those already known to have it. See
-// relayMsg.requeue.
-func (s *server) rebroadcastInventory(invVect *wire.InvVect, data interface{}) {
-	s.relayInventory(relayMsg{invVect: invVect, data: data, requeue: true})
+// relayTxBatch hands a batch of tx invs to the peerHandler in order, so each
+// peer is offered them in batch order. Unlike RelayInventory, which starts a
+// goroutine per inv, one goroutine sends the whole batch, and it waits for the
+// previous batch to finish first, so batches never interleave. It never blocks
+// the caller. Like RelayInventory, it stops relaying as soon as the node
+// leaves RUNNING.
+func (s *server) relayTxBatch(batch []relayMsg) {
+	if len(batch) == 0 {
+		return
+	}
+
+	done := make(chan struct{})
+
+	s.relayTxBatchMu.Lock()
+	prev := s.relayTxBatchTail
+	s.relayTxBatchTail = done
+	s.relayTxBatchMu.Unlock()
+
+	go func() {
+		defer close(done)
+
+		if prev != nil {
+			select {
+			case <-prev:
+			case <-s.quit:
+				return
+			}
+		}
+
+		for _, msg := range batch {
+			if !s.canRelayTx() {
+				return
+			}
+
+			select {
+			case s.relayInv <- msg:
+			case <-s.quit:
+				return
+			}
+		}
+	}()
 }
 
 func (s *server) relayInventory(msg relayMsg) {
@@ -3623,125 +3591,6 @@ func (s *server) UpdatePeerHeights(latestBlkHash *chainhash.Hash, latestHeight i
 		newHeight:  latestHeight,
 		originPeer: updateSource,
 	}
-}
-
-// rebroadcastEntry is a pending rebroadcast inv: the original `data`
-// payload handed to RelayInventory, plus the number of retry ticks the
-// entry has survived. Once attempts reaches maxRebroadcastAttempts the
-// entry ages out — see processRebroadcastTick.
-type rebroadcastEntry struct {
-	data     interface{}
-	attempts int
-}
-
-// tryAddRebroadcast inserts iv→data into pending. If iv is already
-// present, its data payload is refreshed but the attempts counter is
-// preserved — without this, a duplicate Add (e.g. a Kafka replay) would
-// reset the retry budget of a tx that should have aged out.
-//
-// Returns false (and does not mutate pending) when iv is new and
-// pending is at capacity. The caller is responsible for any cap-hit
-// telemetry.
-func tryAddRebroadcast(pending map[wire.InvVect]*rebroadcastEntry, capacity int, iv wire.InvVect, data interface{}) bool {
-	if existing, ok := pending[iv]; ok {
-		existing.data = data
-		return true
-	}
-	if len(pending) >= capacity {
-		return false
-	}
-	pending[iv] = &rebroadcastEntry{data: data}
-	return true
-}
-
-// processRebroadcastTick re-emits every pending entry via the relay
-// callback, increments its attempt counter, and aging-deletes entries
-// that have reached maxAttempts. Returns the relay count for the tick
-// purely as a test affordance.
-func processRebroadcastTick(pending map[wire.InvVect]*rebroadcastEntry, maxAttempts int, relay func(*wire.InvVect, interface{})) int {
-	relayed := 0
-	for iv, entry := range pending {
-		ivCopy := iv
-		relay(&ivCopy, entry.data)
-		entry.attempts++
-		relayed++
-		if entry.attempts >= maxAttempts {
-			delete(pending, iv)
-		}
-	}
-	return relayed
-}
-
-// RebroadcastDropCounts returns the cumulative non-blocking-send drop and
-// map-cap-hit counters for the rebroadcast queue. Read by operator metrics
-// surfaces; never reset.
-func (s *server) RebroadcastDropCounts() (adds, capHits uint64) {
-	return s.droppedRebroadcastAdds.Load(), s.droppedRebroadcastCapHits.Load()
-}
-
-// rebroadcastHandler keeps track of inventories announced via
-// AnnounceNewTransactions that have not yet made it into a block. It
-// periodically re-emits them so a tx that hit a transient miss on first
-// announce (peer not yet handshaken, brief disconnect, or a temporary reject
-// by the peer) still reaches the network. Re-emits bypass each peer's known
-// inventory, so peers that stayed connected are offered the tx again.
-//
-// Bounded because no TransactionConfirmed hook calls RemoveRebroadcastInventory
-// in this codebase — entries are aged out by attempt count, and new adds are
-// dropped once the map is full. This trades some retry coverage for hard
-// memory bounds, which is the right trade for an indefinite-lifetime queue
-// in a high-tx-rate node.
-func (s *server) rebroadcastHandler() {
-	// Wait 5 min before first tx rebroadcast.
-	timer := time.NewTimer(5 * time.Minute)
-
-	pendingInvs := make(map[wire.InvVect]*rebroadcastEntry)
-
-out:
-	for {
-		select {
-		case riv := <-s.modifyRebroadcastInv:
-			switch msg := riv.(type) {
-			// Incoming InvVects are added to our retry map. Re-adds
-			// of existing entries refresh the data payload but keep
-			// the attempt counter — see tryAddRebroadcast.
-			case broadcastInventoryAdd:
-				if !tryAddRebroadcast(pendingInvs, maxRebroadcastInventory, *msg.invVect, msg.data) {
-					s.droppedRebroadcastCapHits.Add(1)
-				}
-
-			// When an InvVect has been added to a block, we can
-			// now remove it, if it was present.
-			case broadcastInventoryDel:
-				delete(pendingInvs, *msg)
-			}
-
-		case <-timer.C:
-			processRebroadcastTick(pendingInvs, maxRebroadcastAttempts, s.rebroadcastInventory)
-
-			// Process at a random time up to 30mins (in seconds)
-			// in the future.
-			timer.Reset(time.Second *
-				time.Duration(randomUint16Number(1800)))
-
-		case <-s.quit:
-			break out
-		}
-	}
-
-	timer.Stop()
-
-	// Drain channels before exiting so nothing is left waiting around
-	// to send.
-cleanup:
-	for {
-		select {
-		case <-s.modifyRebroadcastInv:
-		default:
-			break cleanup
-		}
-	}
-	s.wg.Done()
 }
 
 // Start begins accepting connections from peers.
@@ -4094,6 +3943,8 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		broadcast:            make(chan broadcastMsg, cfg.MaxPeers),
 		quit:                 make(chan struct{}),
 		modifyRebroadcastInv: make(chan interface{}, modifyRebroadcastInvBuffer),
+		rebroadcastTip:       make(chan struct{}, 1),
+		rebroadcastTipDelay:  rebroadcastTipDelay,
 		peerHeightsUpdate:    make(chan updatePeerHeightsMsg),
 		nat:                  nat,
 		timeSource:           blockchain2.NewMedianTime(),

@@ -30,6 +30,10 @@ type PeerNotifier interface {
 	// the availability of new blocks, transactions, or other data.
 	RelayInventory(invVect *wire.InvVect, data interface{})
 
+	// BlockConnected signals that a new valid block has been added, which is
+	// when peers that rejected a tx for a temporary reason may accept it.
+	BlockConnected()
+
 	// TransactionConfirmed notifies peers that a transaction has been confirmed
 	// by inclusion in a block, typically used for cleanup and state updates.
 	TransactionConfirmed(tx *bsvutil.Tx)

@@ -536,7 +536,8 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetP
 // operator observability. Returns (adds, capHits): `adds` counts
 // AddRebroadcastInventory sends that were dropped because
 // modifyRebroadcastInv was full; `capHits` counts in-handler adds that
-// were dropped because pendingInvs was at maxRebroadcastInventory.
+// were dropped because the queue was at maxRebroadcastInventory. Both are
+// also exported as Prometheus counters, see metrics.go.
 //
 // Both counters are cumulative since process start and are never reset.
 // Returns (0, 0) when the internal server is not initialised.
