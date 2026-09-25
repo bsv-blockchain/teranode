@@ -6091,6 +6091,50 @@ func TestCheckMerkleRoot_RejectsFirstSubtreeNotPowerOfTwo(t *testing.T) {
 	require.Contains(t, err.Error(), "first subtree leaf count is not a power of two")
 }
 
+// TestCheckMerkleRoot_AcceptsSingleNonPowerOfTwoSubtree pins the exemption the
+// power-of-two guard must never be applied to: a block with EXACTLY ONE subtree.
+//
+// CheckMerkleRoot takes its len(hashes) == 1 branch and returns that subtree's
+// coinbase-substituted root directly, before the guard and before the non-final/final
+// length rules. There is no second subtree to compose with, so nothing depends on the
+// leaf count being a lift-compatible capacity, and a single subtree of 3 leaves is a
+// legitimate body a real node accepts.
+//
+// TestCheckMerkleRoot_RejectsFirstSubtreeNotPowerOfTwo does NOT cover this:
+// buildBlockWithFirstSubtreeNonPowerOfTwo builds TWO subtrees, so it never reaches the
+// single-subtree branch at all.
+//
+// Mutation target: applying CheckSubtreeShape before the single-subtree early exit —
+// which is exactly what extracting the rules into a shared helper makes easy to do by
+// accident — must make this block be rejected.
+func TestCheckMerkleRoot_AcceptsSingleNonPowerOfTwoSubtree(t *testing.T) {
+	only, err := subtreepkg.NewIncompleteTreeByLeafCount(3)
+	require.NoError(t, err)
+
+	for i := 0; i < 3; i++ {
+		require.NoError(t, only.AddNode(chainhash.HashH([]byte{byte(i)}), 0, 0))
+	}
+
+	require.False(t, subtreepkg.IsPowerOfTwo(only.Length()),
+		"precondition: the single subtree must NOT be a power of two, or the test proves nothing")
+
+	coinbaseTx := newTestCoinbaseTx(t)
+
+	root, err := only.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) // nolint: gosec
+	require.NoError(t, err)
+
+	block := &Block{
+		Header:        newTestBlockHeader(t),
+		CoinbaseTx:    coinbaseTx,
+		Subtrees:      []*chainhash.Hash{only.RootHash()},
+		SubtreeSlices: []*subtreepkg.Subtree{only},
+	}
+	block.Header.HashMerkleRoot = root
+
+	require.NoError(t, block.CheckMerkleRoot(context.Background()),
+		"a single non-power-of-two subtree is a legitimate body and must not be rejected")
+}
+
 // buildBlockWithFirstSubtreeNonPowerOfTwo returns a Block whose first subtree
 // has 3 leaves (non-power-of-two) and second subtree is complete with 4 leaves.
 // Under the lift rules the first subtree's length is the canonical capacity, so

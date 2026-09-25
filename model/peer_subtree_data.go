@@ -2,6 +2,7 @@ package model
 
 import (
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 )
 
@@ -118,4 +119,74 @@ func MissingSubtreeDataTxs(subtree *subtreepkg.Subtree, data *subtreepkg.Data, e
 	}
 
 	return missing
+}
+
+// FirstMismatchedSubtreeDataTx reports the first slot of a subtree_data body whose
+// transaction is not the one the subtree's node at that index names, or ok == false
+// when every filled slot agrees with its node.
+//
+// MissingSubtreeDataTxs is not enough on its own, and this is not a redundant second
+// opinion on the same property (bitcoin-sv/teranode#4838). That predicate counts nil
+// entries, so it is blind to a slot that is filled with the WRONG transaction — and
+// one such slot per subtree is reachable through the reader that produced the body.
+// serializeFromReader advances its running index only on a store it compared against
+// a node; a coinbase-shaped transaction arriving while that index stands at 1 is
+// diverted into slot 0, overwriting it, and the loop continues without advancing the
+// index and without comparing anything. A subtree with no coinbase placeholder — every
+// subtree after the first — reaches index 1 straight after its first transaction, so a
+// served stream can displace a header-committed transaction with a fabricated one and
+// leave no nil behind.
+//
+// exemptPlaceholderAtZero carries exactly the meaning it has in
+// MissingSubtreeDataTxs, and the two must exempt the same slot: a placeholder node has
+// no transaction to be equal to, and the caller that skips it for the nil check would
+// otherwise reject every body it accepts. Both this fetch-side check and the
+// quick-validation read skip the placeholder slot; the read side additionally refuses a
+// placeholder anywhere but block position [0][0], as a fault in the block's subtree list
+// rather than in the stored blob.
+//
+// The nodes slice is read ONCE and both the bound and the indexing derive from that
+// single read, for the reason MissingSubtreeDataTxs sets out above: Subtree.ReleaseNodes
+// clears st.Nodes without the subtree's own mutex, so a length-then-index pair can be
+// split by a release and turn into an out-of-range panic in a goroutine nothing
+// recovers.
+//
+// A nil entry is skipped rather than reported here. It is the other predicate's finding,
+// and duplicating the verdict would give the same body two different errors depending on
+// which caller ran first.
+func FirstMismatchedSubtreeDataTx(subtree *subtreepkg.Subtree, data *subtreepkg.Data, exemptPlaceholderAtZero bool) (idx int, expected, got *chainhash.Hash, ok bool) {
+	if subtree == nil {
+		return 0, nil, nil, false
+	}
+
+	var txs []*bt.Tx
+	if data != nil {
+		txs = data.Txs
+	}
+
+	nodesSlice := subtree.Nodes
+	nodes := len(nodesSlice)
+	coinbaseAtZero := exemptPlaceholderAtZero && nodes > 0 && nodesSlice[0].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue)
+
+	for i := 0; i < nodes && i < len(txs); i++ {
+		if i == 0 && coinbaseAtZero {
+			continue
+		}
+
+		tx := txs[i]
+		if tx == nil {
+			continue
+		}
+
+		txID := tx.TxIDChainHash()
+		if nodesSlice[i].Hash.Equal(*txID) {
+			continue
+		}
+
+		node := nodesSlice[i].Hash
+
+		return i, &node, txID, true
+	}
+
+	return 0, nil, nil, false
 }

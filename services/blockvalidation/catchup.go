@@ -1991,6 +1991,60 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 			return false, err
 		}
 
+		// A locally stored subtree blob whose nodes do not hash to its key, which
+		// quick validation could NOT confirm removed (bitcoin-sv/teranode#4838).
+		// Falling through is worse than useless here: normal validation's loader
+		// checks only the .subtree header's claimed root against its key, so it would
+		// be handed the one blob this route has just proved is forged, by the one
+		// route that cannot detect it. Abort the catch-up run instead — loudly, since
+		// this is local storage corruption, and with no ban score, since no peer can
+		// have caused it.
+		if isUnquarantinedLocalSubtree(err) {
+			u.logger.Errorf("[catchup:tryQuickValidation][%s] block %s: a local subtree blob does not hash to its key and could not be removed, aborting rather than falling through to normal validation: %v",
+				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), err)
+
+			// This branch used to return immediately, doing neither of the two things its
+			// sibling branches above and below both do: join the write waiter, and sweep
+			// this attempt's own freshly written .subtree output.
+			//
+			// Sweeping does NOT soften the fail-closed abort, and the two sets are
+			// different objects. What could not be removed is the blob that FAILED its
+			// key check; what is deleted here is this attempt's own promoted build
+			// product, which is stale either way. And this is the only opportunity: the
+			// branch returns false, so no normal-validation pass follows to clean up
+			// after it, and validateBlocksOnChannel aborts the run — leave the blobs and
+			// they survive to the next attempt, where findLocalSubtreeFile may reuse
+			// them, which is precisely the reuse bug the cleanup exists to close. If the
+			// un-deletable blob happens to be in this set too, deletion simply fails
+			// again and re-confirms the abort.
+			//
+			// freshlyWritten ONLY — deliberately not merged with fetchFreshlyWritten, for
+			// the same reason the local-fault branch below gives: the fault is local
+			// storage corruption, so the peer-supplied FileTypeSubtreeToCheck /
+			// FileTypeSubtreeData are not implicated and a retry should reuse them. Only
+			// the corrupt branch merges, because a corrupt verdict taints the whole
+			// assembled body.
+			select {
+			case <-waitDone:
+				if delErr := u.removeCatchupSubtreeFiles(ctx, catchupCtx, freshlyWritten); delErr != nil {
+					// LOGGED, never returned — the corrupt branch's discipline, not the
+					// local-fault branch's. Returning delErr would replace the error carrying
+					// the isUnquarantinedLocalSubtree marker with a plain storage error, and
+					// that marker is the entire signal this branch exists to surface. The
+					// abort verdict does not depend on whether the cleanup succeeded.
+					u.logger.Errorf("[catchup:tryQuickValidation][%s] block %s: failed to remove this attempt's .subtree files after a fail-closed abort: %v",
+						catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), delErr)
+				}
+			case <-ctx.Done():
+				// See the corrupt-branch comment above: skip cleanup rather than risk
+				// hanging on jobs no worker will ever receive.
+				u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s: catch-up context cancelled while waiting for subtree writes to settle, skipping cleanup",
+					catchupCtx.blockUpTo.Hash().String(), block.Hash().String())
+			}
+
+			return false, err
+		}
+
 		u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] quick validation failed for block %s, removing .subtree files: %v",
 			catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), err)
 
@@ -2115,8 +2169,8 @@ func mergeFreshlyWritten(sets ...map[chainhash.Hash]map[fileformat.FileType]stru
 // only on the branch that ran BECAUSE the blob was not present, so an already-present (possibly
 // promoted) blob is never marked. The two fetch producers mark after their own Set succeeds
 // (fetchAndStoreSubtree / fetchAndStoreSubtreeData in get_blocks.go); quick validation's
-// FileTypeSubtree producer marks at enqueue time instead, from the fullSubtreeExists flags
-// computed synchronously during prefetch, because its write is handed to an asynchronous worker
+// FileTypeSubtree producer marks at enqueue time instead, from the already-present full subtrees
+// carried synchronously off the prefetch read, because its write is handed to an asynchronous worker
 // (quick_validate.go). Marking before the write lands is harmless here: a pair whose write never
 // lands is simply not on disk, and Del tolerates ErrNotFound.
 //

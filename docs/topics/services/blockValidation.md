@@ -495,7 +495,7 @@ Quick validation provides substantial performance improvements:
 
 ##### Subtree and Transaction Processing
 
-During quick validation, the system reconstructs subtree files and extends transactions on-demand (implemented in `getBlockTransactions()`):
+During quick validation, the system reconstructs subtree files and extends transactions on-demand (implemented in `readSubtree()` and `processSubtreeBatch()`):
 
 **Subtree File Generation:**
 

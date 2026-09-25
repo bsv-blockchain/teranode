@@ -1439,6 +1439,94 @@ func TestSubtreeMetaRegenerator_PoisonedLocalData_IsRepairedFromThePeerBody(t *t
 	require.True(t, sawRepair, "the repair must pass WithAllowOverwrite, or a real blob store rejects the write")
 }
 
+// TestSubtreeMetaRegenerator_MismatchedLocalSlot_IsRepairedFromThePeerBody pins the
+// third poisoned shape: a complete local body with one slot filled by a transaction
+// its node does not name. The subtree data reader diverts a coinbase-shaped
+// transaction arriving at running index 1 into slot 0 without comparing it, so the
+// stream [a, FAKE, b] under a non-first subtree deserializes as [FAKE, b] with no nil
+// slot, and the completeness gate alone reports it usable.
+//
+// Mutation target: removing the FirstMismatchedSubtreeDataTx gate in
+// getLocalSubtreeData leaves the forged local file in place.
+func TestSubtreeMetaRegenerator_MismatchedLocalSlot_IsRepairedFromThePeerBody(t *testing.T) {
+	allowLoopbackHTTP(t)
+
+	txA := createTestTransaction(t, "0000000000000000000000000000000000000000000000000000000000000001", 0)
+	txB := createTestTransaction(t, "0000000000000000000000000000000000000000000000000000000000000002", 0)
+
+	// A non-first subtree: no coinbase placeholder at node 0.
+	subtree := &subtreepkg.Subtree{Nodes: []subtreepkg.Node{
+		{Hash: *txA.TxIDChainHash()},
+		{Hash: *txB.TxIDChainHash()},
+	}}
+	subtreeHash := subtree.RootHash()
+
+	honest := subtreepkg.NewSubtreeData(subtree)
+	honest.Txs[0] = txA
+	honest.Txs[1] = txB
+
+	full, err := honest.Serialize()
+	require.NoError(t, err)
+
+	fake := bt.NewTx()
+	require.NoError(t, fake.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0))
+	fake.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x01, 0x00, 0x00, 0x42})
+	require.NoError(t, fake.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+	require.True(t, fake.IsCoinbase(), "precondition: the diverted transaction must be coinbase-shaped")
+
+	forged := append(append(txA.SerializeBytes(), fake.SerializeBytes()...), txB.SerializeBytes()...)
+
+	// Precondition: the forged body is complete, so only the node comparison can see it.
+	parsed, err := subtreepkg.NewSubtreeDataFromReader(subtree, newBytesReader(forged))
+	require.NoError(t, err)
+	require.Zero(t, MissingSubtreeDataTxs(subtree, parsed, false), "precondition: the forged body must leave no nil slot")
+
+	_, _, _, mismatched := FirstMismatchedSubtreeDataTx(subtree, parsed, false)
+	require.True(t, mismatched, "precondition: the forged body must carry a slot its node does not name")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/subtree_data/") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(full)
+	}))
+	defer server.Close()
+
+	dataKey := string(subtreeHash[:]) + "." + string(fileformat.FileTypeSubtreeData)
+
+	mockStore := newMockSubtreeStoreWriter()
+	mockStore.subtreeData[dataKey] = forged
+
+	regenerator := NewSubtreeMetaRegenerator(ulogger.TestLogger{}, mockStore,
+		[]string{server.URL + "/api/v1"}, func() uint32 { return 100 }, 288, 0)
+
+	meta, err := regenerator.RegenerateMeta(context.Background(), subtreeHash, subtree, false)
+	require.NoError(t, err, "regeneration must succeed from the honest peer body")
+	require.NotNil(t, meta)
+
+	require.Equal(t, full, mockStore.subtreeData[dataKey],
+		"the forged local subtree_data must be overwritten with the honest peer body")
+
+	reader, err := mockStore.GetIoReader(context.Background(), subtreeHash[:], fileformat.FileTypeSubtreeData)
+	require.NoError(t, err)
+
+	defer func() {
+		_ = reader.Close()
+	}()
+
+	repaired, err := subtreepkg.NewSubtreeDataFromReader(subtree, reader)
+	require.NoError(t, err)
+	require.Len(t, repaired.Txs, len(subtree.Nodes))
+
+	for i, node := range subtree.Nodes {
+		require.NotNil(t, repaired.Txs[i], "slot %d must be filled", i)
+		require.Equal(t, node.Hash, *repaired.Txs[i].TxIDChainHash(), "slot %d must carry the transaction its node names", i)
+	}
+}
+
 // TestSubtreeMetaRegenerator_AbsentLocalData_IsNotWrittenBack pins the other
 // half of the repair rule: only a file that EXISTS and is unusable is
 // overwritten. A missing subtree_data is not an outward poison at all, because
