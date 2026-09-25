@@ -768,7 +768,7 @@ func (b *Block) ValidWithBinding(ctx context.Context, logger ulogger.Logger, sub
 	currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, settings *settings.Settings, metaRegenerator SubtreeMetaRegeneratorI) (bool, bool, error) {
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "Valid",
 		tracing.WithHistogram(prometheusBlockValid),
-		tracing.WithLogMessage(logger, "[Block:Valid] called for %s", b.Header.String()),
+		tracing.WithDebugLogMessage(logger, "[Block:Valid] called for %s", b.Header.String()),
 	)
 	defer deferFn()
 
@@ -1693,7 +1693,7 @@ func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps
 	}
 
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "validateSubtree",
-		tracing.WithLogMessage(logger, "[validateSubtree][%s][%s:%d] called", b.String(), subtreeHash.String(), sIdx),
+		tracing.WithDebugLogMessage(logger, "[validateSubtree][%s][%s:%d] called", b.String(), subtreeHash.String(), sIdx),
 	)
 	defer deferFn()
 
@@ -1771,7 +1771,7 @@ func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps
 func (b *Block) checkParentsExistOnChain(ctx context.Context, logger ulogger.Logger, deps *validationDependencies,
 	validationCtx *validationContext, checkParentTxHashes []missingParentTx) error {
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "checkParentsExistOnChain",
-		tracing.WithLogMessage(logger, "[validateSubtree][%s] called to check %d parent tx hashes", b.String(), len(checkParentTxHashes)),
+		tracing.WithDebugLogMessage(logger, "[validateSubtree][%s] called to check %d parent tx hashes", b.String(), len(checkParentTxHashes)),
 	)
 	defer deferFn()
 
@@ -2047,7 +2047,7 @@ func (b *Block) GetSubtrees(ctx context.Context, logger ulogger.Logger, subtreeS
 func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, getAndValidateSubtreesConcurrency int) error {
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "GetAndValidateSubtrees",
 		tracing.WithHistogram(prometheusBlockGetAndValidateSubtrees),
-		tracing.WithLogMessage(logger, "[GetAndValidateSubtrees][%s] fetching and validating subtrees", b.String()),
+		tracing.WithDebugLogMessage(logger, "[GetAndValidateSubtrees][%s] fetching and validating subtrees", b.String()),
 	)
 	defer deferFn()
 

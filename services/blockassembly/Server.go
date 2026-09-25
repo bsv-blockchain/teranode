@@ -879,7 +879,7 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	ctx, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "storeSubtreeData",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithHistogram(prometheusBlockAssemblerSubtreeStoredHist),
-		tracing.WithLogMessage(ba.logger, "[BlockAssembly:storeSubtreeData][%s] storing subtree: len %d", subtree.RootHash().String(), subtree.Length()),
+		tracing.WithDebugLogMessage(ba.logger, "[BlockAssembly:storeSubtreeData][%s] storing subtree: len %d", subtree.RootHash().String(), subtree.Length()),
 	)
 	defer deferFn()
 
@@ -1138,7 +1138,7 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		tracing.WithParentStat(ba.stats),
 		tracing.WithHistogram(prometheusBlockAssemblyAddTx),
 		tracing.WithTag("txid", util.ReverseAndHexEncodeSlice(req.Txid)),
-		tracing.WithLogMessage(ba.logger, "[AddTx][%s] add tx called", util.ReverseAndHexEncodeSlice(req.Txid)),
+		tracing.WithDebugLogMessage(ba.logger, "[AddTx][%s] add tx called", util.ReverseAndHexEncodeSlice(req.Txid)),
 	)
 
 	defer func() {
@@ -1209,7 +1209,7 @@ func (ba *BlockAssembly) RemoveTx(ctx context.Context, req *blockassembly_api.Re
 	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "RemoveTx",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithHistogram(prometheusBlockAssemblyRemoveTx),
-		tracing.WithLogMessage(ba.logger, "[RemoveTx][%s] called", util.ReverseAndHexEncodeSlice(req.Txid)),
+		tracing.WithDebugLogMessage(ba.logger, "[RemoveTx][%s] called", util.ReverseAndHexEncodeSlice(req.Txid)),
 	)
 	defer deferFn()
 
@@ -1588,7 +1588,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, req *blockassem
 	ctx, _, endSpan := tracing.Tracer("blockassembly").Start(ctx, "GetMiningCandidate",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithHistogram(prometheusBlockAssemblyGetMiningCandidateDuration),
-		tracing.WithLogMessage(ba.logger, "[GetMiningCandidate] called"),
+		tracing.WithDebugLogMessage(ba.logger, "[GetMiningCandidate] called"),
 	)
 	defer endSpan()
 
@@ -2191,7 +2191,7 @@ func (ba *BlockAssembly) GetCandidateBlock(ctx context.Context, req *blockassemb
 
 	_, _, endSpan := tracing.Tracer("blockassembly").Start(ctx, "GetCandidateBlock",
 		tracing.WithParentStat(ba.stats),
-		tracing.WithLogMessage(ba.logger, "[GetCandidateBlock] called for candidate %s", candidateID),
+		tracing.WithDebugLogMessage(ba.logger, "[GetCandidateBlock] called for candidate %s", candidateID),
 	)
 	defer endSpan()
 
@@ -2497,7 +2497,7 @@ func (ba *BlockAssembly) GetBlockAssemblyQueueStats(_ context.Context, _ *blocka
 func (ba *BlockAssembly) GetBlockAssemblyTxs(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.GetBlockAssemblyTxsResponse, error) {
 	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "GetBlockAssemblyTxsResponse",
 		tracing.WithParentStat(ba.stats),
-		tracing.WithLogMessage(ba.logger, "[GetBlockAssemblyTxsResponse] called"),
+		tracing.WithDebugLogMessage(ba.logger, "[GetBlockAssemblyTxsResponse] called"),
 	)
 	defer deferFn()
 
