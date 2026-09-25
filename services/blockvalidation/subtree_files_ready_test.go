@@ -29,9 +29,12 @@ import (
 // block chained from genesis with subtreeCount fake subtree hashes, added with
 // addBlockOpts (subtrees_set=false either way, since none of the tests below pass
 // WithSubtreesSet). With no options this mirrors an ordinary peer block the instant it
-// lands in the store - every path writes its subtree files before adding the block, so
-// this is the same state a real block is in whether or not its files happen to exist yet;
-// WithInvalid(true) mirrors storeInvalidBlock's record of a rejected one.
+// lands in the store - every validation path writes its subtree files before adding the
+// block, so this is the same state a real block is in whether or not its files happen to
+// exist yet; WithInvalid(true) mirrors storeInvalidBlock's record of a rejected one. Neither
+// option models the blockchain service's raw RevalidateBlock (its /revalidate/:hash endpoint
+// or a direct gRPC call), which is the one route that un-invalidates a block without writing
+// its files - see the doc comment on subtreeFilesReady in BlockValidation.go.
 //
 // The BlockValidation is built as a bare struct, not via NewBlockValidation, so that
 // start()'s background goroutines (setMined worker, periodic ticker) never run - this
@@ -191,7 +194,7 @@ func TestProcessSubtreesNotSet_SetsFlagOnLaterSweepOnceFileAppears(t *testing.T)
 }
 
 // TestProcessSubtreesNotSet_ExcludesInvalidBlocks pins the regression found in review of
-// this PR: storeInvalidBlock persists a rejected block with subtrees_set=false and
+// #1829: storeInvalidBlock persists a rejected block with subtrees_set=false and
 // invalid=true, and its subtree files are usually never written. Before the
 // "invalid = false" filter in GetBlocksSubtreesNotSet, such a block could never satisfy
 // subtreeFilesReady, so it stayed in the sweep's result set and was re-fetched (and
