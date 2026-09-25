@@ -18,6 +18,7 @@ var (
 	prometheusP2PWebsocketNotificationsDropped *prometheus.CounterVec
 	prometheusP2PWebsocketClientsEvicted       prometheus.Counter
 	prometheusP2PGossipKafkaPublishDropped     *prometheus.CounterVec
+	prometheusP2PHTTPRateLimited               prometheus.Counter
 
 	// prometheusP2PConnectedPeers tracks the number of peers currently connected
 	// to this node over the libp2p network.
@@ -146,6 +147,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "p2p",
 			Name:      "websocket_connections",
 			Help:      "Number of currently connected websocket notification subscribers",
+		},
+	)
+
+	prometheusP2PHTTPRateLimited = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "p2p",
+			Name:      "http_rate_limited_total",
+			Help:      "Number of P2P HTTP requests (health, websocket upgrades) rejected by the per-source rate limiter",
 		},
 	)
 }

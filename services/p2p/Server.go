@@ -983,6 +983,13 @@ func (s *Server) setupHTTPServer() *echo.Echo {
 		AllowMethods: []string{echo.GET},
 	}))
 
+	httpRateLimit := 0
+	if s.settings != nil {
+		httpRateLimit = s.settings.P2P.HTTPRateLimit
+	}
+
+	e.Use(newIPRateLimiter(httpRateLimit).Middleware())
+
 	e.GET("/health", func(c echo.Context) error {
 		return c.String(http.StatusOK, "OK")
 	})
