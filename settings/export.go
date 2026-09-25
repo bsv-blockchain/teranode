@@ -332,6 +332,9 @@ func redactFragment(c *url.URL) {
 // its scheme, on the same fail-safe rule as a malformed query: there is no safe way to pick the
 // secret out of a form the standard parser declined to interpret. A URL the redaction leaves
 // unchanged is returned byte-for-byte, so a URL without credentials is never re-rendered.
+// A malformed userinfo is not repaired: a password that starts with digits followed by an unencoded
+// "/" (postgres://u:12/34@host/db) parses as host u, port 12 and path /34@host/db, so there is no
+// userinfo to strip and the value is returned unchanged. url.URL-typed settings share the parser.
 func redactURLString(s string) string {
 	idx := strings.Index(s, "://")
 	if idx < 0 {

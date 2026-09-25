@@ -1751,9 +1751,12 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 						// Corrupt on the direct path, but a consensus rejection here, so it is tested
 						// ahead of the corrupt branch below. No corruptBlockHash and no blob deletion:
 						// each blob was verified against its name at fetch time, so a retry reads the
-						// right bytes, and an honest different subtree list uses different keys. For a
-						// fault in the miner's real body every peer serves the same bytes, so a corrupt
-						// re-download would only loop. The primary is responsible under the attribution
+						// right bytes, and an honest different subtree list uses different keys.
+						// This abort does not end the cycle: processCatchupChItem still walks the
+						// alternative peers for this verdict, because the list is unbound. If the primary
+						// named its own subtrees, another peer serves a different, valid list. If the fault
+						// is in the miner's real body, every alternative fails the same way, bounded by
+						// CatchupMaxAttemptsPerBlock. The primary is responsible under the attribution
 						// rule on the options above.
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s carries an invalid transaction, rejected as a consensus failure", blockUpTo.Hash().String(), block.Hash().String(), peerID)
 						u.reportCatchupMalicious(gCtx, peerID, "invalid_block_validation")

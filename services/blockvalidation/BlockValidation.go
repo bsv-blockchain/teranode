@@ -2114,9 +2114,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// transaction is no longer REMEMBERED as invalid. On the direct peer path the verdict is
 			// corrupt, so the block is re-downloaded on re-announcement, bounded by the
 			// corrupt-attempt counter. Catch-up classifies this verdict as a consensus rejection
-			// instead (isUnboundTxInvalidVerdict): it reports the primary malicious, keeps the
-			// verified subtree blobs and does not re-download. Either way it is rejected every time
-			// and the hash is not remembered.
+			// instead (isUnboundTxInvalidVerdict): it reports the primary malicious and keeps the
+			// verified subtree blobs. It then walks the alternative peers (processCatchupChItem),
+			// each fetching its own copy of the block and subtree list, because the list is unbound
+			// and may be the primary's own, while another peer's may validate. That walk is bounded
+			// by CatchupMaxAttemptsPerBlock. Either way a block whose real body is invalid is
+			// rejected every time, and the hash is not remembered.
 			if errors.Is(err, errors.ErrTxInvalid) {
 				// Infrastructure first, and inside this branch rather than ahead of it:
 				// processTransactionsInLevels wraps its failures in a processing error, so a blanket
