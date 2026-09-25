@@ -47,11 +47,13 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/tracing"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -282,6 +284,16 @@ type Server struct {
 	// When true, indicates that a catchup operation is currently in progress.
 	// This flag ensures only one catchup can run at a time to prevent resource contention.
 	isCatchingUp atomic.Bool
+
+	// peerFetchLimiters holds a per-peer (keyed by data-hub baseURL) client-side
+	// rate limiter that paces catchup heavy fetches (subtree, subtree_data, block
+	// batches) so the combined fan-out cannot burst into a peer's asset heavy-route
+	// limiter and wedge IBD (see issue #1174). Lazily populated by peerFetchLimiter;
+	// guarded by peerFetchLimitersMu.
+	// Bounded (LRU) so a peer churning its advertised DataHubURL across catchup cycles
+	// can't grow this map without limit on a long-running node.
+	peerFetchLimiters   *lru.Cache[string, *rate.Limiter]
+	peerFetchLimitersMu sync.Mutex
 
 	// catchupStatsMu protects concurrent access to lastCatchupTime and lastCatchupResult.
 	// Always acquire this mutex when reading or writing these fields.
@@ -739,6 +751,19 @@ func isUnvalidatablePeerError(err error) bool {
 //   - ctx: Context for initialization operations and service setup
 //
 // Returns an error if initialization fails due to configuration issues or service unavailability
+// validateCatchupSettings rejects catchup configuration that would deterministically fail every
+// block fetch, so an operator sees the problem at service startup rather than as a silent IBD
+// stall. blockvalidation_max_incoming_block_bytes bounds the per-block transport envelope decoded
+// through decodeBoundedBlock's io.LimitedReader (a DoS guard added alongside this path); a
+// non-positive value is NOT "unlimited" — it leaves the decode with no finite budget — so it is
+// rejected loudly here instead of failing every catchup fetch downstream.
+func validateCatchupSettings(s *settings.Settings) error {
+	if s.BlockValidation.MaxIncomingBlockBytes <= 0 {
+		return errors.NewConfigurationError("blockvalidation_max_incoming_block_bytes must be positive, got %d", s.BlockValidation.MaxIncomingBlockBytes)
+	}
+	return nil
+}
+
 func (u *Server) Init(ctx context.Context) (err error) {
 	u.logger.Infof("[Init] Starting block validation initialization")
 
@@ -763,6 +788,10 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	storeURL := u.settings.UtxoStore.UtxoStore
 	if storeURL == nil {
 		return errors.NewConfigurationError("could not get utxostore URL", err)
+	}
+
+	if cfgErr := validateCatchupSettings(u.settings); cfgErr != nil {
+		return cfgErr
 	}
 
 	// Only create a new BlockValidation if one wasn't already set (for testing).
@@ -1074,8 +1103,8 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		// state an announcement flood creates — so an unbounded fetch would let
 		// a slow peer pin the worker indefinitely. Same budget as the
 		// priority-queue catchup fetch in addBlockToPriorityQueue.
-		fetchCtx, fetchCancel := context.WithTimeout(ctx, peerBlockFetchTimeout)
-		block, err := u.fetchSingleBlock(fetchCtx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
+		fetchCtx, fetchCancel := u.withCatchupFetchTimeout(ctx)
+		block, err := u.fetchAnnouncedBlock(fetchCtx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
 		fetchCancel()
 		if err != nil {
 			if blockFound.errCh != nil {
@@ -1748,12 +1777,10 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		block = useBlock[0]
 	} else {
 		// Bound the fetch: this ctx is the block-processing worker's service-lifetime context
-		// with no deadline of its own, and fetchSingleBlock's DoHTTPRequestBodyReader would
-		// otherwise fall back to http_streaming_timeout (600 s in settings.conf,
-		// bitcoin-sv/teranode#4742) - a 20x wider window for a hostile peer than the 30 s budget
-		// every sibling fetchSingleBlock call site sets explicitly.
-		fetchCtx, fetchCancel := context.WithTimeout(ctx, peerBlockFetchTimeout)
-		block, err = u.fetchSingleBlock(fetchCtx, hash, peerID, baseURL)
+		// with no deadline of its own. Use the configured block-response budget, including
+		// retry backoff, rather than the more generous subtree streaming timeout.
+		fetchCtx, fetchCancel := u.withCatchupFetchTimeout(ctx)
+		block, err = u.fetchAnnouncedBlock(fetchCtx, hash, peerID, baseURL)
 		fetchCancel()
 		if err != nil {
 			return err
@@ -2206,21 +2233,22 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 		// Distinguished from ErrServiceError so the silent "clear markers,
 		// retry" loop below doesn't absorb peer issues. We clear markers (so
 		// future P2P notifications for this block can re-trigger catchup),
-		// report peer failure for the originating peer (so P2P routes the
-		// next attempt to a different peer), and log loudly. This avoids the
+		// report failures for peers actually attempted during subtree failover
+		// (falling back to the origin for legacy/direct errors), and log loudly. This avoids the
 		// hot-loop where the same peer keeps being asked for the same
 		// missing subtree data.
 		//
-		// ORDER IS LOAD-BEARING: this check must run before the
-		// ErrServiceError check. errors.Is matches by code across the whole
+		// ORDER IS LOAD-BEARING: this check must run before the ErrStorageError
+		// and ErrServiceError checks. errors.Is matches by code across the whole
 		// wrapped chain, and the ERR_EXTERNAL classification from
 		// fetchAndStoreSubtreeAndSubtreeData arrives buried mid-chain — it
 		// wraps the per-peer ServiceError, and is itself re-wrapped by
 		// fetchSubtreeDataForBlock (ServiceError) and orderedDelivery
 		// (ProcessingError) on the way up. So errors.Is(err, ErrServiceError)
 		// is also true for these errors, and matching on the outermost code
-		// would see ERR_PROCESSING. ERR_EXTERNAL anywhere in the chain means
-		// a peer-side failure was classified, which is what we dispatch on.
+		// would see ERR_PROCESSING. ERR_EXTERNAL is only classified when no local
+		// infrastructure (store/blockchain/context) failed, so it is disjoint from
+		// the local ErrStorageError / IsLocalError buckets below.
 		if errors.Is(err, errors.ErrExternal) {
 			// #1057: count this cycle toward the per-block cap (unless it made
 			// progress) so persistently failing peers cannot drive unbounded
@@ -2238,37 +2266,29 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 			// suppresses exactly that duplicate *reputation* charge.
 			u.reportCatchupFailureForError(ctx, c.peerID, err)
 
-			// ReportPeerFailure is deliberately NOT gated on catchupFailureAlreadyReported.
-			// It is not a reputation call — it is the sync-peer ROTATION signal, and it has
-			// to fire on every all-peers-failed cycle:
-			//
-			//   blockchain.Server.ReportPeerFailure broadcasts NotificationType_PeerFailure
-			//   -> p2p.Server routes failure_type "catchup" to
-			//      syncCoordinator.HandleCatchupFailure (and its subscription listener
-			//      deliberately bypasses the "skip notifications while syncing" filter for
-			//      this type — "needed to switch peers on catchup failure")
-			//   -> SyncCoordinator clears currentSyncPeer and calls triggerSyncLocked, i.e.
-			//      immediate re-selection of a different sync peer.
-			//
-			// A marker gate here is dead code in production: fetchAndStoreSubtreeAndSubtreeData
-			// applies markCatchupFailureReported unconditionally to every all-peers-failed
-			// error and is the only producer of this ErrExternal in the package, so the gate
-			// is always false and rotation never happens. A stuck node would then depend on
-			// the sync coordinator's 30s periodicEvaluation, which only rotates on reputation
-			// below 20 or the 5-minute SyncPeerNoProgressTimeout — a peer with history (say
-			// 100 successes and 1 failure) trips neither, so recovery costs the full five
-			// minutes per stuck cycle.
-			//
-			// The price is one extra interaction-failure charge against the primary. That is
-			// accepted, and consistent with the round-2 adjudication documented in
-			// catchup.go's failedPeers drain: an over-charge is directionally accurate while
-			// an under-charge hides a real failure, and the duplicate increment is a
-			// telemetry-precision cost rather than a reputation-math break. Losing peer
-			// rotation to save one charge is the worse trade — do not re-add the gate.
+			// Notify P2P even when per-fetch reputation was already recorded. The
+			// handler clears a named failed sync peer; for unattributed/non-current
+			// failures it evaluates progress and higher-work alternatives using the
+			// same guarded rules as the periodic monitor, without another penalty.
 			if reportErr := u.blockchainClient.ReportPeerFailure(ctx, c.block.Hash(), c.peerID, "catchup", err.Error()); reportErr != nil {
 				u.logger.Errorf("[catchup] failed to report peer failure for block %s peer %s: %v", c.block.Hash().String(), c.peerID, reportErr)
 			}
 
+			return
+		}
+
+		// A local STORAGE fault (disk full / blob backend down) is also not a peer issue,
+		// but unlike a transient service error it must be surfaced LOUDLY: left at Warnf in
+		// the silent-retry bucket below, a persistent storage fault that outlasts the
+		// per-block cooldown lets the node silently fall behind while appearing healthy.
+		// Same attempt-cap / no-peer-blame handling, but logged at error level. Must run
+		// before the ErrServiceError||IsLocalError bucket (IsLocalError also matches
+		// ErrStorageError, which would otherwise swallow this at Warnf).
+		if errors.Is(err, errors.ErrStorageError) {
+			attempts := u.recordCatchupAttemptUnlessProgress(c.block.Hash())
+			u.logger.Errorf("[catchup] Local STORAGE error during catchup for block %s (attempt %d/%d) — node may fall behind until storage recovers: %v", c.block.Hash().String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock, err)
+			u.processBlockNotify.Delete(*c.block.Hash())
+			u.catchupAlternatives.Delete(*c.block.Hash())
 			return
 		}
 
@@ -2399,6 +2419,11 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 					u.catchupAlternatives.Delete(*blockHash)
 					u.clearCatchupAttempts(blockHash)
 					catchupSucceeded = true
+					break
+				} else if shouldStopPeerFailover(ctx, altErr) {
+					// Shutdown and shared local faults stop failover; saturation of
+					// one peer's pacing queue does not.
+					u.logger.Warnf("[catchup] Local error trying cached alternative peer %s for block %s, not blaming peer: %v", alt.peerID, blockHash.String(), altErr)
 					break
 				} else {
 					u.logger.Warnf("[catchup] Alternative peer %s also failed for block %s: %v", alt.peerID, blockHash.String(), altErr)
@@ -2773,6 +2798,21 @@ func (u *Server) policyDeclineAttemptsExhausted(blockHash *chainhash.Hash, peerI
 	return item != nil && item.Value() >= maxAttempts
 }
 
+// fetchAnnouncedBlock preserves the per-peer policy cooldown when the transport
+// decoder declines a declared size before normal block processing can record it.
+// Every announcement fetch uses this gate, including queue classification.
+func (u *Server) fetchAnnouncedBlock(ctx context.Context, hash *chainhash.Hash, peerID, baseURL string) (*model.Block, error) {
+	if u.policyDeclineAttemptsExhausted(hash, peerID) {
+		return nil, errors.NewBlockPolicyDeclinedError("[fetchAnnouncedBlock][%s] local policy decline cap reached for peer %s; re-fetch suppressed until cooldown expires", hash.String(), peerID)
+	}
+
+	block, err := u.fetchSingleBlock(ctx, hash, peerID, baseURL)
+	if errors.Is(err, errors.ErrBlockPolicyDeclined) {
+		u.recordPolicyDeclineAttempt(hash, peerID)
+	}
+	return block, err
+}
+
 // addBlockToPriorityQueue adds a block to the priority queue with appropriate classification
 func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound processBlockFound) {
 	u.logger.Debugf("[addBlockToPriorityQueue] Started for block %s from %s", blockFound.hash.String(), blockFound.baseURL)
@@ -2797,17 +2837,19 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 
 	// Create isolated context with timeout for transient fetch operation
 	// This ensures fetch failures don't affect other operations using parent context
-	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), peerBlockFetchTimeout)
+	fetchCtx, fetchCancel := u.withCatchupFetchTimeout(context.Background())
 	defer fetchCancel()
 
 	// Fetch the block to classify it
-	block, err := u.fetchSingleBlock(fetchCtx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
+	block, err := u.fetchAnnouncedBlock(fetchCtx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
 	if err != nil {
 		u.logger.Errorf("[addBlockToPriorityQueue] Failed to fetch block %s: %v", blockFound.hash.String(), err)
 
 		// Report peer failure to P2P service for reputation tracking
-		// This ensures peers with misconfigured asset servers (e.g., 401 errors) have their reputation degraded
-		if blockFound.peerID != "" {
+		// This ensures peers with misconfigured asset servers (e.g., 401 errors) have their reputation degraded.
+		// Local resource errors and our block-size policy say nothing about the
+		// serving peer. Neither should change reputation or its dashboard error.
+		if blockFound.peerID != "" && !errors.IsLocalError(err) && !errors.Is(err, errors.ErrBlockPolicyDeclined) {
 			u.reportCatchupFailure(ctx, blockFound.peerID)
 			u.reportCatchupError(ctx, blockFound.peerID, err.Error())
 		}

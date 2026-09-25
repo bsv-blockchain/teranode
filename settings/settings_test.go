@@ -30,6 +30,11 @@ func TestInitialiseSettings(t *testing.T) {
 	require.NotNil(t, tSettings.Block)
 }
 
+func TestMaxIncomingBlockBytesDefault(t *testing.T) {
+	tSettings := NewSettings()
+	require.Equal(t, int64(8*1024*1024*1024), tSettings.BlockValidation.MaxIncomingBlockBytes)
+}
+
 func TestGenesisActivationHeight(t *testing.T) {
 	tests := []struct {
 		name   string

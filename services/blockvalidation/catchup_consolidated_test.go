@@ -170,8 +170,9 @@ func TestCatchup_ConcurrentCatchupLock(t *testing.T) {
 		failureCount := 0
 		mu := sync.Mutex{}
 
-		var wg sync.WaitGroup
+		var wg, attempted sync.WaitGroup
 		wg.Add(numGoroutines)
+		attempted.Add(numGoroutines)
 
 		// Start multiple goroutines trying to acquire catchup lock
 		for i := 0; i < numGoroutines; i++ {
@@ -190,22 +191,25 @@ func TestCatchup_ConcurrentCatchupLock(t *testing.T) {
 				mu.Lock()
 				if err == nil {
 					successCount++
-					// Hold lock briefly
-					time.Sleep(10 * time.Millisecond)
-					server.releaseCatchupLock(ctx, &err)
 				} else {
 					failureCount++
 				}
 				mu.Unlock()
+				attempted.Done()
+				if err == nil {
+					// Keep ownership until every contender has attempted acquisition.
+					attempted.Wait()
+					server.releaseCatchupLock(ctx, &err)
+				}
 			}(i)
 		}
 
 		wg.Wait()
 
 		// Exactly one should succeed
-		assert.Equal(t, 1, successCount,
+		require.Equal(t, 1, successCount,
 			"Exactly one goroutine should acquire lock")
-		assert.Equal(t, numGoroutines-1, failureCount,
+		require.Equal(t, numGoroutines-1, failureCount,
 			"All other goroutines should fail")
 	})
 

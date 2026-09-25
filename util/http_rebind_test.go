@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -145,7 +146,7 @@ func TestRebinding_POSTAfterPublicGETNeverReachesPrivateService(t *testing.T) {
 			}
 
 			require.Error(t, err)
-			require.Contains(t, err.Error(), "private-network address")
+			require.ErrorIs(t, err, errors.ErrNetworkError)
 			require.GreaterOrEqual(t, lookups.Load(), int64(2), "the POST must have needed a fresh connection")
 			require.Zero(t, victimHits.Load(), "the private service must never see the POST")
 		})
@@ -336,7 +337,7 @@ func TestDoHTTPRequest_POSTRedirectNotFollowed(t *testing.T) {
 	}
 
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "POST")
+	require.ErrorIs(t, err, errors.ErrNetworkError)
 	require.Zero(t, redirectedHits.Load())
 }
 
@@ -359,7 +360,7 @@ func TestDoLocalServiceHTTPRequestBodyReader_ReachesLoopback(t *testing.T) {
 	localURL := "http://localhost:" + parsed.Port() + "/api/v1/block_legacy/aa?wire=1"
 
 	_, err = DoHTTPRequestBodyReader(context.Background(), localURL)
-	require.ErrorContains(t, err, "loopback address", "the peer client must still refuse it")
+	require.ErrorIs(t, err, errors.ErrNetworkError, "the peer client must still refuse it")
 
 	reader, err := DoLocalServiceHTTPRequestBodyReader(context.Background(), localURL)
 	require.NoError(t, err)

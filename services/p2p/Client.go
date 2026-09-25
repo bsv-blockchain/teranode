@@ -836,6 +836,7 @@ func convertFromAPIPeerInfo(apiPeer interface{}) (*PeerInfo, error) {
 			CatchupAttempts:  p.CatchupAttempts,
 			CatchupSuccesses: p.CatchupSuccesses,
 			CatchupFailures:  p.CatchupFailures,
+			Storage:          p.Storage,
 		}, nil
 
 	case *p2p_api.PeerRegistryInfo:

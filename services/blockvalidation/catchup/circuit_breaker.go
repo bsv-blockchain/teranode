@@ -31,6 +31,7 @@ type CircuitBreaker struct {
 	successThreshold    int
 	timeout             time.Duration
 	halfOpenRequests    int
+	halfOpenGeneration  uint64
 	maxHalfOpenRequests int
 }
 
@@ -42,7 +43,7 @@ type CircuitBreakerConfig struct {
 	SuccessThreshold int
 	// Timeout is how long to wait before transitioning from open to half-open
 	Timeout time.Duration
-	// MaxHalfOpenRequests is the maximum number of requests allowed in half-open state
+	// MaxHalfOpenRequests is the maximum number of in-flight requests in half-open state
 	MaxHalfOpenRequests int
 }
 
@@ -88,6 +89,42 @@ func (cb *CircuitBreaker) CanCall() bool {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
+	return cb.canCallLocked()
+}
+
+// CanCallWithCancel admits a request like CanCall and returns a callback that
+// releases its half-open slot without recording an outcome. Call the callback
+// only when an admitted request ends without RecordSuccess or RecordFailure.
+// It is idempotent and cannot release a slot from a later half-open generation.
+// A rejected request has no callback; an admitted closed-state request gets a no-op.
+func (cb *CircuitBreaker) CanCallWithCancel() (bool, func()) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	if !cb.canCallLocked() {
+		return false, nil
+	}
+	if cb.state != StateHalfOpen {
+		return true, func() {}
+	}
+
+	generation := cb.halfOpenGeneration
+	canceled := false
+	return true, func() {
+		cb.mu.Lock()
+		defer cb.mu.Unlock()
+		if canceled {
+			return
+		}
+		canceled = true
+		if cb.state == StateHalfOpen && cb.halfOpenGeneration == generation && cb.halfOpenRequests > 0 {
+			cb.halfOpenRequests--
+		}
+	}
+}
+
+// canCallLocked reserves admission while cb.mu is held.
+func (cb *CircuitBreaker) canCallLocked() bool {
 	now := time.Now()
 
 	switch cb.state {
@@ -98,6 +135,7 @@ func (cb *CircuitBreaker) CanCall() bool {
 		if now.Sub(cb.lastStateChange) > cb.timeout {
 			cb.state = StateHalfOpen
 			cb.halfOpenRequests = 1
+			cb.halfOpenGeneration++
 			cb.lastStateChange = now
 			return true
 		}
@@ -125,11 +163,15 @@ func (cb *CircuitBreaker) RecordSuccess() {
 		cb.failureCount = 0
 
 	case StateHalfOpen:
+		if cb.halfOpenRequests > 0 {
+			cb.halfOpenRequests--
+		}
 		cb.successCount++
 		if cb.successCount >= cb.successThreshold {
 			cb.state = StateClosed
 			cb.failureCount = 0
 			cb.successCount = 0
+			cb.halfOpenRequests = 0
 			cb.lastStateChange = time.Now()
 		}
 	}
@@ -161,6 +203,7 @@ func (cb *CircuitBreaker) RecordFailure(count ...int) {
 		cb.state = StateOpen
 		cb.failureCount = 0
 		cb.successCount = 0
+		cb.halfOpenRequests = 0
 		cb.lastStateChange = time.Now()
 	}
 }

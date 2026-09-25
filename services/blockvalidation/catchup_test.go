@@ -313,10 +313,8 @@ func TestCatchupGetBlockHeaders(t *testing.T) {
 		)
 
 		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "peer-test-003", "http://test-peer")
-		assert.Error(t, err)
-		assert.NotNil(t, result)
-		// The error should contain network error since HTTP request failed
-		assert.Contains(t, err.Error(), "network error", "Expected network error but got: %v", err)
+		require.ErrorIs(t, err, errors.ErrNetworkError)
+		require.NotNil(t, result)
 
 		suite.MockBlockchain.AssertExpectations(t)
 	})

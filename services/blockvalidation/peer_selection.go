@@ -20,15 +20,15 @@ type PeerForCatchup struct {
 	CatchupFailures        int64
 }
 
-// selectBestPeersForCatchup queries the P2P service for peers suitable for catchup,
-// sorted by reputation score (highest first).
+// selectBestPeersForCatchup queries the P2P service for whole-catchup alternatives.
+// Full/unknown peers precede pruned peers, preserving registry order within each tier.
 //
 // Parameters:
 //   - ctx: Context for the gRPC call
 //   - targetHeight: The height we're trying to catch up to (for filtering peers)
 //
 // Returns:
-//   - []PeerForCatchup: List of peers sorted by reputation (best first)
+//   - []PeerForCatchup: Eligible peers in fallback order
 //   - error: If the query fails
 func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uint32) ([]PeerForCatchup, error) {
 	// If P2P client is not available, return empty list
@@ -51,6 +51,7 @@ func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uin
 
 	// Convert PeerInfo to our internal type
 	peers := make([]PeerForCatchup, 0, len(peerInfos))
+	var prunedFallback []PeerForCatchup
 	for _, p := range peerInfos {
 		// Filter out peers that don't have the target height yet
 		// (we only want peers that are at or above our target)
@@ -65,7 +66,7 @@ func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uin
 			continue
 		}
 
-		peers = append(peers, PeerForCatchup{
+		candidate := PeerForCatchup{
 			ID:                     p.ID.String(),
 			Storage:                p.Storage,
 			DataHubURL:             p.DataHubURL,
@@ -75,8 +76,24 @@ func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uin
 			CatchupAttempts:        p.CatchupAttempts,
 			CatchupSuccesses:       p.CatchupSuccesses,
 			CatchupFailures:        p.CatchupFailures,
-		})
+		}
+
+		// Pruned peers may lack archival data, but can still serve recent blocks.
+		// Retain them after full/unknown peers so caller exclusions or failed
+		// non-pruned attempts cannot hide a usable fallback.
+		if isPrunedPeer(p.Storage) {
+			prunedFallback = append(prunedFallback, candidate)
+			continue
+		}
+
+		peers = append(peers, candidate)
 	}
+
+	// Keep every eligible pruned peer available after the preferred candidates.
+	if len(peers) == 0 && len(prunedFallback) > 0 {
+		u.logger.Warnf("[peer_selection] No non-pruned peers for catchup; falling back to %d pruned peer(s)", len(prunedFallback))
+	}
+	peers = append(peers, prunedFallback...)
 
 	u.logger.Infof("[peer_selection] Selected %d peers for catchup (from %d total)", len(peers), len(peerInfos))
 	for i, p := range peers {
@@ -129,6 +146,13 @@ func (u *Server) tryAlternativePeersForCatchup(ctx context.Context, block *model
 			u.processBlockNotify.Delete(*blockHash)
 			u.catchupAlternatives.Delete(*blockHash)
 			return true
+		}
+
+		// A peer-specific pacing queue can recover elsewhere; shutdown and local
+		// storage/configuration faults cannot. Neither should penalize a peer.
+		if shouldStopPeerFailover(ctx, altErr) {
+			u.logger.Warnf("[catchup] Local error trying peer %s for block %s, not blaming peer, stopping alternatives: %v", bestPeer.ID, blockHash.String(), altErr)
+			break
 		}
 
 		u.logger.Warnf("[catchup] Peer %s failed for block %s: %v", bestPeer.ID, blockHash.String(), altErr)

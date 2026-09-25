@@ -42,6 +42,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
@@ -531,7 +532,7 @@ func Test_Server_processBlockFound_BoundsPeerFetchDeadline(t *testing.T) {
 
 	require.True(t, sawDeadline, "peer block fetch must run under a bounded context deadline, not an unbounded one")
 	require.Greater(t, remaining, time.Duration(0))
-	require.LessOrEqual(t, remaining, peerBlockFetchTimeout+time.Second, "peer fetch deadline must not silently widen to the http_streaming_timeout fallback")
+	require.LessOrEqual(t, remaining, settings.DefaultBlockFetchTimeout+time.Second, "peer fetch deadline must not silently widen to the http_streaming_timeout fallback")
 }
 
 // Test_Server_processBlockFound_SettlesPeerSuppliedHeight pins the height settlement at the
@@ -1188,6 +1189,8 @@ func Test_Start(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
+	// Isolate this mock-backed server from health checks in other test processes.
+	tSettings.BlockValidation.GRPCListenAddress = "localhost:0"
 
 	// Use actual in-memory stores
 	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
@@ -2200,4 +2203,19 @@ func TestIsUnvalidatablePeerError(t *testing.T) {
 	// Unrelated errors are not peer-malicious either.
 	require.False(t, isUnvalidatablePeerError(errors.NewServiceError("service down")))
 	require.False(t, isUnvalidatablePeerError(nil))
+}
+
+func TestValidateCatchupSettings(t *testing.T) {
+	// Default (8 GiB) is accepted.
+	require.NoError(t, validateCatchupSettings(test.CreateBaseTestSettings(t)))
+
+	// A non-positive transport cap fails loudly at startup rather than stalling every fetch.
+	for _, bad := range []int64{0, -1} {
+		s := test.CreateBaseTestSettings(t)
+		s.BlockValidation.MaxIncomingBlockBytes = bad
+		err := validateCatchupSettings(s)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrConfiguration), "must be a configuration error for %d", bad)
+		require.Contains(t, err.Error(), "blockvalidation_max_incoming_block_bytes")
+	}
 }
