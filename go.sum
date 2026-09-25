@@ -117,8 +117,8 @@ github.com/bitcoinsv/bsvutil v0.0.0-20181216182056-1d77cf353ea9 h1:hFI8rT84FCA0F
 github.com/bitcoinsv/bsvutil v0.0.0-20181216182056-1d77cf353ea9/go.mod h1:p44KuNKUH5BC8uX4ONEODaHUR4+ibC8todEAOGQEJAM=
 github.com/blang/semver v3.5.1+incompatible h1:cQNTCjp13qL8KC3Nbxr/y2Bqb63oX6wdnnjpJbkM4JQ=
 github.com/blang/semver v3.5.1+incompatible/go.mod h1:kRBLl5iJ+tD4TcOOxsy/0fnwebNt5EWlYSAyrTnjyyk=
-github.com/bsv-blockchain/aerospike-client-go/v8 v8.7.1-bsv5 h1:GNsn4PLzhoU8Vm5PNASTEZriQRrpb6kSg4hDUT0qdRM=
-github.com/bsv-blockchain/aerospike-client-go/v8 v8.7.1-bsv5/go.mod h1:t4MjZ6nitI84mr/KhpPGFCCeCT4+y4hq0di8qOHIIGk=
+github.com/bsv-blockchain/aerospike-client-go/v8 v8.7.1-bsv5.0.20260925191343-04978196d2f9 h1:aIMmbSbhSY9zHketgdT/7IwssVO8VmofmexuxwStGjE=
+github.com/bsv-blockchain/aerospike-client-go/v8 v8.7.1-bsv5.0.20260925191343-04978196d2f9/go.mod h1:t4MjZ6nitI84mr/KhpPGFCCeCT4+y4hq0di8qOHIIGk=
 github.com/bsv-blockchain/go-alert-system v0.1.17 h1:qWh/nnN3DiP2OahWbb0hdLBNKkKHXDToSDDnxEzjJ08=
 github.com/bsv-blockchain/go-alert-system v0.1.17/go.mod h1:5ui29gal23sCi7eOfRQ6bGucOisunkaBI2PzdRBFxrc=
 github.com/bsv-blockchain/go-batcher/v2 v2.0.6 h1:YqiS+ZjCPpiytVEQ1A/famVrBW+pGGww10lkKMsa3Rw=
