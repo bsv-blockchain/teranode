@@ -37,7 +37,7 @@ func Test_NewFiniteStateMachine(t *testing.T) {
 		err := fsm.Event(ctx, blockchain_api.FSMEventType_CATCHUPBLOCKS.String())
 		require.NoError(t, err)
 		require.Equal(t, "CATCHINGBLOCKS", fsm.Current())
-		require.False(t, fsm.Can(blockchain_api.FSMEventType_STOP.String()))
+		require.True(t, fsm.Can(blockchain_api.FSMEventType_STOP.String()))
 	})
 }
 

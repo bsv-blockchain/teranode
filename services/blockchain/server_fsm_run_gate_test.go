@@ -465,3 +465,21 @@ func TestSendFSMEvent_RunFromIdle_StoreErrorRejects(t *testing.T) {
 		})
 	}
 }
+
+// Automatic RUN cannot leave operator IDLE, even before checkpoint admission.
+func TestRunFromIdle_RejectsBeforeCheckpointRead(t *testing.T) {
+	ctx := context.Background()
+	b := newFSMHardeningBlockchain(t)
+	b.settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 1}}
+	b.store = &fsmHardeningReadStore{Store: b.store, read: func(context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+		t.Fatal("automatic IDLE rejection must precede the checkpoint read")
+		return nil, nil, nil
+	}}
+	_, err := b.Run(ctx, nil)
+	require.ErrorContains(t, err, "automatic RUN refused from IDLE")
+	require.ErrorContains(t, err, "use SendFSMEvent")
+	require.Equal(t, blockchain_api.FSMStateType_IDLE.String(), b.finiteStateMachine.Current())
+	persisted, err := b.store.GetFSMState(ctx)
+	require.NoError(t, err)
+	require.Equal(t, blockchain_api.FSMStateType_IDLE.String(), persisted)
+}

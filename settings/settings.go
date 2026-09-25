@@ -272,6 +272,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ProcessUTXOFiles:  getBool("blockpersister_processUTXOFiles", true, alternativeContext...),
 		},
 		BlockAssembly: BlockAssemblySettings{
+			UnminedRecoveryTimeout:               getDuration("blockassembly_unminedRecoveryTimeout", 5*time.Minute, alternativeContext...),
+			UnminedRecoveryInterval:              getDuration("blockassembly_unminedRecoveryInterval", 0, alternativeContext...),
 			LivenessStallTimeout:                 getDuration("blockassembly_livenessStallTimeout", 0, alternativeContext...),
 			Disabled:                             getBool("blockassembly_disabled", false, alternativeContext...),
 			GenerateTipWaitTimeout:               getDuration("blockassembly_generateTipWaitTimeout", DefaultGenerateTipWaitTimeout, alternativeContext...),
@@ -637,7 +639,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BlockAssemblyWaitTimeout:        getDuration("pruner_blockAssemblyWaitTimeout", 10*time.Minute, alternativeContext...), // Wait up to 10 minutes for BA to be ready
 			ConnectionPoolWarningThreshold:  getFloat64("pruner_connectionPoolWarningThreshold", 0.7, alternativeContext...),       // Warn/adjust when exceeding 70% of connection pool
 			BlockTrigger:                    getString("pruner_block_trigger", PrunerBlockTriggerOnBlockPersisted, alternativeContext...),
-			SkipDuringCatchup:               getBool("pruner_skipDuringCatchup", false, alternativeContext...),                    // Skip pruning during catchup off by default (see longdesc trade-off)
+			SkipDuringCatchup:               getBool("pruner_skipDuringCatchup", false, alternativeContext...),                    // Require RUNNING before admitting pruning
 			UTXODefensiveEnabled:            getBool("pruner_utxoDefensiveEnabled", false, alternativeContext...),                 // Defensive mode off by default (production)
 			UTXODefensiveBatchReadSize:      getInt("pruner_utxoDefensiveBatchReadSize", 10000, alternativeContext...),            // Batch size for child verification
 			UTXOChunkSize:                   getInt("pruner_utxoChunkSize", 1000, alternativeContext...),                          // Chunk size for batch operations

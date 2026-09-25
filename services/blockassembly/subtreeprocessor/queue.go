@@ -2,11 +2,66 @@
 package subtreeprocessor
 
 import (
+	"context"
+	"runtime"
 	"sync/atomic"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
+
+// snapshotPublished visits a fixed queue prefix without removing it. Only the
+// processor goroutine may call it. Producers can append while selection runs.
+func (q *LockFreeQueue) snapshotPublished(ctx context.Context, visit func(chainhash.Hash)) (*TxBatch, error) {
+	head, boundary := q.publishedCursor()
+	return visitPublishedCursor(ctx, head, boundary, visit)
+}
+
+// publishedCursor must be called on the consumer goroutine. Linked batches
+// and their node slices are immutable, so a retained prefix can be visited
+// elsewhere after the consumer advances head.
+func (q *LockFreeQueue) publishedCursor() (*TxBatch, *TxBatch) {
+	return q.head, q.tail.Load()
+}
+
+func visitPublishedCursor(ctx context.Context, head, boundary *TxBatch, visit func(chainhash.Hash)) (*TxBatch, error) {
+	if boundary == nil {
+		return nil, nil
+	}
+	for cursor := head; cursor != boundary; {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		next := cursor.next.Load()
+		if next == nil {
+			// A producer swapped tail but has not linked its batch yet.
+			runtime.Gosched()
+			continue
+		}
+		for i, node := range next.nodes {
+			if i%1024 == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+			}
+			visit(node.Hash)
+		}
+		cursor = next
+	}
+	return boundary, nil
+}
+
+// discardThrough commits a previously captured prefix. snapshotPublished already
+// observed every link, so no producer wait or timestamp comparison is needed.
+func (q *LockFreeQueue) discardThrough(boundary *TxBatch) {
+	if boundary == nil {
+		return
+	}
+	for q.head != boundary {
+		_, _ = q.dequeueBatch(0)
+	}
+}
 
 // normalizeMaxQueueItems validates and normalizes the configured ingest-queue
 // item cap, following the clamp-and-warn convention used for other out-of-range
@@ -285,6 +340,24 @@ func (q *LockFreeQueue) enqueueBatchIfRoom(nodes []subtree.Node, txInpoints []*s
 
 	q.queueLength.Add(-n) // roll back
 
+	return false
+}
+
+// enqueueRecoveryBatch applies an independent ceiling even when normal ingest
+// is configured unbounded. Atomic reservation shares queueLength with producers,
+// so a repair batch itself cannot push the queue past this ceiling. Ordinary
+// unbounded ingest may independently do so.
+func (q *LockFreeQueue) enqueueRecoveryBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
+	n := int64(len(nodes))
+	limit := maxRecoveryQueuedItems
+	if q.maxItems > 0 && q.maxItems < limit {
+		limit = q.maxItems
+	}
+	if q.queueLength.Add(n) <= limit {
+		q.publish(nodes, txInpoints)
+		return true
+	}
+	q.queueLength.Add(-n)
 	return false
 }
 

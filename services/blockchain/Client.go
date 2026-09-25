@@ -2033,7 +2033,8 @@ func (c *Client) Run(ctx context.Context, source string) error {
 // - Coordinating synchronization across distributed Teranode components
 //
 // The server checks authoritative state and reconciles uncertain persistence
-// before acknowledging an already-current target state.
+// before acknowledging an already-current target state. Use AdmitCatchupWork
+// for state-neutral admission; confirmed operator IDLE returns ErrCatchupPaused.
 //
 // This operation is typically used during:
 // - Service startup when the local chain may be behind
@@ -2049,13 +2050,25 @@ func (c *Client) Run(ctx context.Context, source string) error {
 // Returns:
 //   - error: Any error encountered during the FSM event transmission
 func (c *Client) CatchUpBlocks(ctx context.Context) error {
-	c.logger.Infof("[Blockchain Client] Sending Catchup Transactions event")
+	c.logger.Debugf("[Blockchain Client] Requesting CATCHINGBLOCKS transition")
 
 	_, err := c.client.CatchUpBlocks(ctx, &emptypb.Empty{})
-	if err != nil {
-		return errors.UnwrapGRPC(err)
-	}
+	return catchupTransitionError(ctx, err, c.ReadFSMState)
+}
 
+// AdmitCatchupWork obtains a ready, persistence-confirmed state snapshot
+// serialized with STOP. Subscription cache entries cannot authorize work.
+func (c *Client) AdmitCatchupWork(ctx context.Context) error {
+	state, err := c.ReadFSMState(ctx)
+	if err != nil {
+		return err
+	}
+	if state == FSMStateIDLE {
+		return ErrCatchupPaused
+	}
+	if state != FSMStateRUNNING && state != FSMStateCATCHINGBLOCKS {
+		return errors.NewStateError("catchup work is not admitted in state %s", state)
+	}
 	return nil
 }
 

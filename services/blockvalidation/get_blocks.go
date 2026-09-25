@@ -275,6 +275,12 @@ func (u *Server) blockWorker(ctx context.Context, workerID int, workQueue <-chan
 
 				weight, err = u.acquireCatchupPrefetch(ctx, work.block)
 				if err == nil {
+					// The budget wait may span STOP. Admit this block immediately
+					// before its prefetch writes, then let that accepted unit drain.
+					if admissionErr := u.waitForCatchupAdmission(ctx); admissionErr != nil {
+						u.releaseCatchupPrefetch(weight)
+						return admissionErr
+					}
 					fetchFn := u.fetchSubtreeDataForBlockFn
 					if fetchFn == nil {
 						fetchFn = u.fetchSubtreeDataForBlock

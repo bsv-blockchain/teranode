@@ -45,7 +45,10 @@ func newTestSyncCoordinatorWithSettings(t *testing.T, tSettings *settings.Settin
 		tSettings,
 		client,
 		NewPeerSelector(ulogger.TestLogger{}, tSettings),
-		nil, // blockchainClient — only the FSM monitor needs it; not exercised here
+		&syncCoordinatorStateClient{state: func(context.Context) (*blockchain_api.FSMStateType, error) {
+			state := blockchain_api.FSMStateType_CATCHINGBLOCKS
+			return &state, nil
+		}},
 		nil, // kafka producer — only TriggerSync's send-to-kafka path uses it
 	)
 	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 0 })
@@ -64,6 +67,8 @@ func setSyncCoordinatorLocalTip(t *testing.T, sc *SyncCoordinator, height uint32
 	t.Helper()
 
 	client := &blockchain.Mock{}
+	state := blockchain_api.FSMStateType_RUNNING
+	client.On("ReadFSMState", mock.Anything).Return(state, nil)
 	client.On("GetBestBlockHeader", mock.Anything).Return(
 		&model.BlockHeader{},
 		&model.BlockHeaderMeta{Height: height, ChainWork: chainWork},
@@ -77,6 +82,8 @@ func setSyncCoordinatorLocalTipError(t *testing.T, sc *SyncCoordinator, err erro
 	t.Helper()
 
 	client := &blockchain.Mock{}
+	state := blockchain_api.FSMStateType_RUNNING
+	client.On("ReadFSMState", mock.Anything).Return(state, nil)
 	client.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, err)
 	sc.blockchainClient = client
 	return client
@@ -557,7 +564,7 @@ func TestSyncCoordinator_StartupLocalChainWorkUnavailable_UsesBoundedAdvertisedP
 	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 0 })
 	client := setSyncCoordinatorLocalTipError(t, sc, errors.NewProcessingError("chainwork unavailable"))
 	state := blockchain_api.FSMStateType_RUNNING
-	client.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+	client.On("ReadFSMState", mock.Anything).Return(state, nil)
 
 	reg.Register(&blockchain.PeerInfo{
 		ID:         "advertised",
@@ -1181,7 +1188,7 @@ func newTestSyncCoordinatorWithFSM(t *testing.T, state blockchain_api.FSMStateTy
 	}}
 	bcMock := &blockchain.Mock{}
 	st := state
-	bcMock.On("GetFSMCurrentState", mock.Anything).Return(&st, nil)
+	bcMock.On("ReadFSMState", mock.Anything).Return(st, nil)
 	// checkFSMState refreshes the unproven-probe budget from the local tip
 	// (upstream #1201), which reads the best block header from the client.
 	bcMock.On("GetBestBlockHeader", mock.Anything).Return(
@@ -1383,6 +1390,8 @@ func TestSyncCoordinator_HandleCatchupFailure_WaitsForInFlightDecision(t *testin
 	gate := make(chan struct{})
 	entered := make(chan struct{}, 16)
 	client := &blockchain.Mock{}
+	state := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	client.On("ReadFSMState", mock.Anything).Return(state, nil)
 	client.On("GetBestBlockHeader", mock.Anything).Run(func(mock.Arguments) {
 		select {
 		case entered <- struct{}{}:

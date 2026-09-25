@@ -819,8 +819,8 @@ func setupLargeTestServer(t *testing.T, cacheDir string, subtreeStore blob.Store
 	mockBlockchainClient.On("IsFSMCurrentState", mock.Anything, blockchain.FSMStateRUNNING).
 		Return(true, nil).Maybe()
 	runningState := blockchain.FSMStateRUNNING
-	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).
-		Return(&runningState, nil).Maybe()
+	mockBlockchainClient.On("ReadFSMState", mock.Anything).
+		Return(runningState, nil).Maybe()
 	mockBlockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).
 		Return(true, nil).Maybe()
 	mockBlockchainClient.On("GetBlockHeader", mock.Anything, genesisHash).

@@ -426,65 +426,9 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		}
 	}()
 
-	// Check which subtrees are missing, waiting for any in-flight validations to complete.
-	// When a subtree notification and block notification arrive simultaneously, the subtree
-	// handler may still be processing. Without waiting, we'd immediately mark it as missing
-	// and fetch subtree_data from the peer's asset-cache (expensive Aerospike reconstruction),
-	// which can fail under load and cascade into CATCHINGBLOCKS mode.
-	//
-	// The existence check is bounded-parallel: on NFS-backed blob stores each Exists call is
-	// a network round-trip, so the sequential cost grows linearly with block size. Bounding
-	// concurrency at CheckBlockSubtreesConcurrency keeps the burst predictable.
-	subtreeMissing := make([]bool, len(block.Subtrees))
-	existsGroup, existsCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(u.logger, existsGroup, u.settings.SubtreeValidation.CheckBlockSubtreesConcurrency)
-
-	for idx, subtreeHash := range block.Subtrees {
-		idx := idx
-		subtreeHash := subtreeHash
-
-		existsGroup.Go(func() error {
-			if u.quorum != nil {
-				locked, exists, release, err := u.quorum.TryLockIfNotExistsWithTimeout(existsCtx, subtreeHash, fileformat.FileTypeSubtree)
-				if err != nil {
-					return errors.NewProcessingError("[CheckBlockSubtrees] Failed to acquire quorum lock or determine subtree existence", err)
-				}
-
-				if locked {
-					// File doesn't exist and no one else is working on it — release lock and mark missing.
-					release()
-					subtreeMissing[idx] = true
-					return nil
-				}
-
-				if !exists {
-					// Timed out waiting for in-flight handler — still treat as missing.
-					subtreeMissing[idx] = true
-				}
-				// exists==true: subtree was completed by in-flight handler — no action needed.
-				return nil
-			}
-
-			subtreeExists, err := u.subtreeStore.Exists(existsCtx, subtreeHash[:], fileformat.FileTypeSubtree)
-			if err != nil {
-				return errors.NewProcessingError("[CheckBlockSubtrees] Failed to check if subtree exists in store", err)
-			}
-			if !subtreeExists {
-				subtreeMissing[idx] = true
-			}
-			return nil
-		})
-	}
-
-	if err := existsGroup.Wait(); err != nil {
+	missingSubtrees, cachedSubtrees, err := u.findMissingSubtrees(ctx, block.Subtrees)
+	if err != nil {
 		return nil, err
-	}
-
-	missingSubtrees := make([]chainhash.Hash, 0, len(block.Subtrees))
-	for idx, subtreeHash := range block.Subtrees {
-		if subtreeMissing[idx] {
-			missingSubtrees = append(missingSubtrees, *subtreeHash)
-		}
 	}
 
 	// Every subtree we are about to reuse from the store was validated against
@@ -496,14 +440,6 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	// Gating it on "all subtrees present" would leave a block that mixes one
 	// fresh subtree with one replayed subtree unchecked, since the fresh-
 	// validation path below only ever looks at the missing ones.
-	cachedSubtrees := make([]chainhash.Hash, 0, len(block.Subtrees))
-
-	for idx, subtreeHash := range block.Subtrees {
-		if !subtreeMissing[idx] {
-			cachedSubtrees = append(cachedSubtrees, *subtreeHash)
-		}
-	}
-
 	if err = u.checkCachedSubtreesAgainstCandidateChain(ctx, block, cachedSubtrees); err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -545,14 +481,14 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	// it for both the per-batch processTransactionsInLevels pass and the
 	// validateSubtree closure below. Querying it twice (once per pipeline) could
 	// straddle an FSM transition and give the two pipelines divergent
-	// WithAddTXToBlockAssembly settings for the same block. While catching up
-	// blocks, transactions must NOT be added to block assembly.
-	currentState, err := u.blockchainClient.GetFSMCurrentState(ctx)
+	// WithAddTXToBlockAssembly settings for the same block. Only known RUNNING
+	// state permits admission; catchup writes may still finish after entering IDLE.
+	currentState, err := u.blockchainClient.ReadFSMState(ctx)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockSubtrees] Failed to get FSM current state", err))
 	}
 
-	addTXToBlockAssembly := *currentState != blockchain.FSMStateCATCHINGBLOCKS
+	addTXToBlockAssembly := u.allowAssemblyForObservedFSM(&currentState, "check_block_subtrees")
 
 	// BATCHED SUBTREE LOADING: Get blockIds once before batching
 	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2))
@@ -688,8 +624,8 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	//       state the floater block is invalidated/rolled back (including the
 	//       optimistically-added block), in CATCHINGBLOCKS it
 	//       stays incomplete and is retried (preserving #1031);
-	//   (c) block-assembly contamination — FSM-gated off in
-	//       CATCHINGBLOCKS (both this closure and
+	//   (c) block-assembly contamination — FSM-gated off unless RUNNING
+	//       is positively known (both this closure and
 	//       processTransactionsInLevels gate on the same addTXToBlockAssembly
 	//       captured once above);
 	//       in RUNNING the substitution is byte-identical to the everyday
@@ -736,6 +672,78 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	return &subtreevalidation_api.CheckBlockSubtreesResponse{
 		Blessed: true,
 	}, nil
+}
+
+// findMissingSubtrees checks presence with bounded concurrency and returns
+// missing and cached hashes in block order, waiting for in-flight validation
+// when quorum is enabled. Both lists use the same presence snapshot so cached
+// subtrees can be checked against the candidate ancestry before any early return.
+func (u *Server) findMissingSubtrees(ctx context.Context, subtreeHashes []*chainhash.Hash) ([]chainhash.Hash, []chainhash.Hash, error) {
+	// Check which subtrees are missing, waiting for any in-flight validations to complete.
+	// When a subtree notification and block notification arrive simultaneously, the subtree
+	// handler may still be processing. Without waiting, we'd immediately mark it as missing
+	// and fetch subtree_data from the peer's asset-cache (expensive Aerospike reconstruction),
+	// which can fail under load and cascade into CATCHINGBLOCKS mode.
+	//
+	// The existence check is bounded-parallel: on NFS-backed blob stores each Exists call is
+	// a network round-trip, so the sequential cost grows linearly with block size. Bounding
+	// concurrency at CheckBlockSubtreesConcurrency keeps the burst predictable.
+	subtreeMissing := make([]bool, len(subtreeHashes))
+	existsGroup, existsCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(u.logger, existsGroup, u.settings.SubtreeValidation.CheckBlockSubtreesConcurrency)
+
+	for idx, subtreeHash := range subtreeHashes {
+		idx := idx
+		subtreeHash := subtreeHash
+
+		existsGroup.Go(func() error {
+			if u.quorum != nil {
+				locked, exists, release, err := u.quorum.TryLockIfNotExistsWithTimeout(existsCtx, subtreeHash, fileformat.FileTypeSubtree)
+				if err != nil {
+					return errors.NewProcessingError("[CheckBlockSubtrees] Failed to acquire quorum lock or determine subtree existence", err)
+				}
+
+				if locked {
+					// File doesn't exist and no one else is working on it — release lock and mark missing.
+					release()
+					subtreeMissing[idx] = true
+					return nil
+				}
+
+				if !exists {
+					// Timed out waiting for in-flight handler — still treat as missing.
+					subtreeMissing[idx] = true
+				}
+				// exists==true: subtree was completed by in-flight handler — no action needed.
+				return nil
+			}
+
+			subtreeExists, err := u.subtreeStore.Exists(existsCtx, subtreeHash[:], fileformat.FileTypeSubtree)
+			if err != nil {
+				return errors.NewProcessingError("[CheckBlockSubtrees] Failed to check if subtree exists in store", err)
+			}
+			if !subtreeExists {
+				subtreeMissing[idx] = true
+			}
+			return nil
+		})
+	}
+
+	if err := existsGroup.Wait(); err != nil {
+		return nil, nil, err
+	}
+
+	missingSubtrees := make([]chainhash.Hash, 0, len(subtreeHashes))
+	cachedSubtrees := make([]chainhash.Hash, 0, len(subtreeHashes))
+	for idx, subtreeHash := range subtreeHashes {
+		if subtreeMissing[idx] {
+			missingSubtrees = append(missingSubtrees, *subtreeHash)
+		} else {
+			cachedSubtrees = append(cachedSubtrees, *subtreeHash)
+		}
+	}
+
+	return missingSubtrees, cachedSubtrees, nil
 }
 
 // checkCachedSubtreesAgainstCandidateChain re-derives the ancestry-sensitive

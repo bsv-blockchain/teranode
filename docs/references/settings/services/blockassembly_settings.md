@@ -2,12 +2,26 @@
 
 **Related Topic**: [Block Assembly Service](../../../topics/services/blockAssembly.md)
 
+## Automatic unmined recovery
+
+`blockassembly_unminedRecoveryInterval` is disabled by default (`0s`) while mining-node soak is pending. Set a positive duration to enable periodic repair, then restart block assembly. The duration is measured after each completed pass. Failed or deferred passes retry after at most one minute. Zero or a negative duration disables new passes; startup and operator reset still reload unmined transactions.
+
+An enabled pass requires an authoritative RUNNING state and matching assembly and blockchain tips. It scans the unmined index, checks fresh metadata and ancestry, then queues eligible missing transactions in parent-before-child order. Existing assembled subtrees stay unchanged. If no eligible transaction is missing, the template and its announced roots remain unchanged. Normal queue processing stores and announces any newly completed subtrees. The pass does not unlock transactions or change mined state. Unknown eligibility for an accepted transaction defers the pass.
+
+The scan and metadata selection run outside block assembly's channel listener and subtree processor dispatcher. Dispatcher work captures admission evidence and admits missing transactions in bounded batches, rechecking the chain anchor, current map, queue and removal state. Repair batches also stop at 65,536 queued items even when ordinary ingest is configured unbounded; a lower configured ingest limit applies too. If it fills, rows already admitted remain queued and the next pass retries the rest; mining is not latched closed. Arrivals during selection remain the queue's responsibility. A changed chain tip cancels admission and normal reconciliation takes precedence.
+
+`blockassembly_unminedRecoveryTimeout` limits each pass (default `5m`; nonpositive values use that default). Expiry stops the read-only scan or selection and leaves the current template intact. If some batches were already queued, they continue through normal processing and the next pass deduplicates them. SQL iterator opening and iteration use this context. Aerospike iterator setup uses its client info timeout; iteration observes the context. Custom stores without context-aware iterator creation may still block during opening.
+
+The index scan and metadata reads cost CPU, memory and storage I/O. Enabling the interval needs measurement on the target mining node. An older blockchain service returns Unimplemented for `ReadFSMState`; recovery defers and logs an upgrade message. The service needs that RPC before relying on periodic repair.
+
 ## Configuration Settings
 
 | Setting                              | Type          | Default          | Environment Variable                               | Usage                                                                                |
 |--------------------------------------|---------------|------------------|----------------------------------------------------|--------------------------------------------------------------------------------------|
 | Disabled                             | bool          | false            | blockassembly_disabled                             | Service-level kill switch, all operations return early                               |
 | GenerateTipWaitTimeout               | time.Duration | 90s              | blockassembly_generateTipWaitTimeout               | Bounds the generate readiness wait; effective bound is min(this, caller deadline)     |
+| UnminedRecoveryTimeout | time.Duration | 5m | blockassembly_unminedRecoveryTimeout | Per-pass time budget; nonpositive uses 5m |
+| UnminedRecoveryInterval              | time.Duration | 0s               | blockassembly_unminedRecoveryInterval              | Positive delay enables periodic recovery; nonpositive disables it                    |
 | GRPCAddress                          | string        | "localhost:8085" | blockassembly_grpcAddress                          | Client connection address                                                            |
 | GRPCListenAddress                    | string        | ":8085"          | blockassembly_grpcListenAddress                    | **CRITICAL** - gRPC server binding (service skipped if empty)                        |
 | GRPCMaxRetries                       | int           | 3                | blockassembly_grpcMaxRetries                       | gRPC client retry attempts                                                           |

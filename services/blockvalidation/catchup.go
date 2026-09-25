@@ -299,21 +299,9 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 			u.logger.Errorf("[catchup][%s] Failed to get fork block headers: %v",
 				catchupCtx.blockUpTo.Hash().String(), err)
 		} else {
-			var clearErrors, notifyErrors int
-			for _, header := range headers {
-				if err := u.blockchainClient.ClearBlockMinedSet(ctx, header.Hash()); err != nil {
-					clearErrors++
-				} else {
-					// Send BlockMinedUnset notification to trigger immediate transaction status update
-					// This ensures BlockValidation processes the block immediately instead of waiting
-					// for the periodic job (which runs every 1 minute). Same pattern as InvalidateBlock RPC.
-					if err := u.blockchainClient.SendNotification(ctx, &blockchain_api.Notification{
-						Type: model.NotificationType_BlockMinedUnset,
-						Hash: header.Hash().CloneBytes(),
-					}); err != nil {
-						notifyErrors++
-					}
-				}
+			clearErrors, notifyErrors, err := u.clearForkMinedSets(ctx, headers)
+			if err != nil {
+				return err
 			}
 			if clearErrors > 0 || notifyErrors > 0 {
 				u.logger.Errorf("[catchup][%s] Fork block cleanup: %d/%d clear failures, %d notification failures",
@@ -470,6 +458,16 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 
 		// TODO: all of these should be using error types, and not checking the strings (!)
 		switch {
+		case isCatchupAdmissionFailure(*err):
+			// A failed authoritative admission is our own service/upgrade state.
+			// Generic ServiceError also wraps real peer fetch failures, so this
+			// provenance check must precede the broad classifications below.
+			errorType = "local_catchup_authority"
+			if errors.Is(*err, errors.ErrStateError) {
+				// Keep the existing operator-IDLE dashboard classification.
+				errorType = "local_fsm_refusal"
+			}
+			isPeerError = false
 		case errors.Is(*err, errors.ErrStorageError):
 			// A failed read or write of our own store — a torn, stale or mis-keyed
 			// external transaction blob (issue 1439), a full disk — is this node's
@@ -1323,8 +1321,9 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 	var writeJobsChan chan *SubtreeWriteJob
 
 	// Transition FSM to CATCHINGBLOCKS for all catchup (chain-extending and fork blocks).
-	// If the FSM rejects the transition, the error propagates
-	// up to the catchupCh handler which handles it gracefully without penalizing the peer.
+	// An explicit pause retains the session until resume or shutdown. Transient
+	// authority failures have a bounded retry budget; permanent refusals return
+	// immediately without charging the peer.
 	if err := u.setFSMCatchingBlocks(ctx, catchupCtx, &size); err != nil {
 		return err
 	}
@@ -1584,11 +1583,8 @@ func (u *Server) recordMaliciousAttempt(peerID string, reason string) {
 func (u *Server) setFSMCatchingBlocks(ctx context.Context, catchupCtx *CatchupContext, size *atomic.Int64) error {
 	u.logger.Infof("[catchup][%s] Setting node to CATCHINGBLOCKS state for %d blocks", catchupCtx.blockUpTo.Hash().String(), size.Load())
 
-	if err := u.blockchainClient.CatchUpBlocks(ctx); err != nil {
-		if errors.Is(err, errors.ErrStateError) {
-			return errors.NewStateError("[catchup][%s] FSM rejected CATCHUPBLOCKS transition", catchupCtx.blockUpTo.Hash().String(), err)
-		}
-		return errors.NewServiceError("[catchup][%s] failed to transition FSM to CATCHINGBLOCKS", catchupCtx.blockUpTo.Hash().String(), err)
+	if err := waitForCatchupAdmission(ctx, u.blockchainClient.CatchUpBlocks, catchupAdmissionTimeout, catchupAdmissionRetryInterval); err != nil {
+		return err
 	}
 
 	return nil
@@ -1615,7 +1611,11 @@ func (u *Server) restoreFSMState(ctx context.Context, catchupCtx *CatchupContext
 		attempts++
 		// Never use a cached state read as admission. Only the authority can
 		// decide atomically whether RUN is still permitted after operator STOP.
-		err = u.blockchainClient.Run(ctx, "blockvalidation/Server")
+		// Each attempt gets its own RPC budget. Backoff uses the service
+		// context so a timed-out request cannot poison the following retry.
+		rpcCtx, cancel := context.WithTimeout(ctx, catchupAdmissionTimeout)
+		err = u.blockchainClient.Run(rpcCtx, "blockvalidation/Server")
+		cancel()
 		if err == nil {
 			return
 		}
@@ -1698,6 +1698,12 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 			// Wait for block assembly to be ready if needed
 			if err := blockassemblyutil.WaitForBlockAssemblyReady(gCtx, u.logger, u.blockAssemblyClient, block.Height, u.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
 				return errors.NewProcessingError("[catchup:validateBlocksOnChannel][%s] failed to wait for block assembly for block %s: %v", blockUpTo.Hash().String(), block.Hash().String(), err)
+			}
+
+			// Admit after the potentially long block-assembly wait. Preserve this
+			// item while paused; admitted validation and its async writes may drain.
+			if err := u.waitForCatchupAdmission(gCtx); err != nil {
+				return err
 			}
 
 			// Get cached headers for validation
@@ -2391,4 +2397,26 @@ func newHashFromStr(hexStr string) *chainhash.Hash {
 	}
 
 	return hash
+}
+
+// clearForkMinedSets treats each clear/notification pair as one admitted unit.
+// A STOP after the clear may not suppress its matching notification; the next
+// header must obtain fresh admission.
+func (u *Server) clearForkMinedSets(ctx context.Context, headers []*model.BlockHeader) (clearErrors, notifyErrors int, err error) {
+	for _, header := range headers {
+		if err = u.waitForCatchupAdmission(ctx); err != nil {
+			return
+		}
+		if u.blockchainClient.ClearBlockMinedSet(ctx, header.Hash()) != nil {
+			clearErrors++
+			continue
+		}
+		if u.blockchainClient.SendNotification(ctx, &blockchain_api.Notification{
+			Type: model.NotificationType_BlockMinedUnset,
+			Hash: header.Hash().CloneBytes(),
+		}) != nil {
+			notifyErrors++
+		}
+	}
+	return
 }

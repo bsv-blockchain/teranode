@@ -348,7 +348,7 @@ func TestCheckBlockSubtrees(t *testing.T) {
 			mock.Anything).
 			Return(testHeaders[0], &model.BlockHeaderMeta{}, nil).Once()
 		currentState := blockchain.FSMStateRUNNING
-		server.blockchainClient.(*blockchain.Mock).On("GetFSMCurrentState", mock.Anything).Return(&currentState, nil).Once()
+		server.blockchainClient.(*blockchain.Mock).On("ReadFSMState", mock.Anything).Return(currentState, nil).Once()
 
 		// Create test transactions
 		tx1, err := createTestTransaction("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
@@ -2403,8 +2403,8 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 		Return(true, nil).Maybe()
 
 	currentState := blockchain.FSMStateRUNNING
-	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).
-		Return(&currentState, nil).Maybe()
+	mockBlockchainClient.On("ReadFSMState", mock.Anything).
+		Return(currentState, nil).Maybe()
 
 	afCfg := adaptivefetch.DefaultConfig()
 	afCfg.BootstrapMode = adaptivefetch.ModePessimistic
@@ -2676,9 +2676,9 @@ func TestCheckBlockSubtrees_LargeBlock_MemoryConsumption(t *testing.T) {
 		Return(testHeaders[0], &model.BlockHeaderMeta{}, nil)
 
 	runningState := blockchain.FSMStateRUNNING
-	server.blockchainClient.(*blockchain.Mock).On("GetFSMCurrentState",
+	server.blockchainClient.(*blockchain.Mock).On("ReadFSMState",
 		mock.Anything).
-		Return(&runningState, nil).Maybe()
+		Return(runningState, nil).Maybe()
 
 	server.blockchainClient.(*blockchain.Mock).On("IsFSMCurrentState",
 		mock.Anything, blockchain.FSMStateRUNNING).

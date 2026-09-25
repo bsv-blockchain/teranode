@@ -146,6 +146,11 @@ func (u *Server) reportCatchupFailure(ctx context.Context, peerID string) {
 }
 
 func (u *Server) reportCatchupFailureForError(ctx context.Context, peerID string, err error) {
+	if isCatchupAdmissionFailure(err) {
+		// Blockchain authority is local. A failed admission says nothing about
+		// this serving peer, even when the error arrived via an alternative.
+		return
+	}
 	// An unbound invalid-transaction verdict is corrupt by class but a consensus rejection on
 	// catch-up (see isUnboundTxInvalidVerdict), so it is charged like a consensus-invalid block
 	// rather than exempted as a corrupt body (bitcoin-sv/teranode#4844).

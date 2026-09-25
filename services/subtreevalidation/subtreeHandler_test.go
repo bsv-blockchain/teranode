@@ -235,7 +235,7 @@ func TestSubtreeMessageHandler_BlocksOnly_SkipsProcessing(t *testing.T) {
 	validateSubtreeCalled := atomic.Bool{}
 	blockchainClient := &blockchain.Mock{}
 	runningState := blockchain.FSMStateRUNNING
-	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
+	blockchainClient.On("ReadFSMState", mock.Anything).Return(runningState, nil)
 
 	blockIDsMap := make(map[uint32]bool)
 	server := &testServer{
@@ -295,7 +295,7 @@ func TestSubtreeMessageHandler_BlocksOnlyFalse_ProcessesMessage(t *testing.T) {
 
 	blockchainClient := &blockchain.Mock{}
 	runningState := blockchain.FSMStateRUNNING
-	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
+	blockchainClient.On("ReadFSMState", mock.Anything).Return(runningState, nil)
 	blockchainClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
 
 	blockIDsMap := make(map[uint32]bool)
@@ -407,7 +407,7 @@ func TestSubtreeMessageHandler_BlocksOnly_CatchingBlocksStillSkips(t *testing.T)
 	validateSubtreeCalled := atomic.Bool{}
 	blockchainClient := &blockchain.Mock{}
 	catchingBlocksState := blockchain.FSMStateCATCHINGBLOCKS
-	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&catchingBlocksState, nil)
+	blockchainClient.On("ReadFSMState", mock.Anything).Return(catchingBlocksState, nil)
 
 	server := &testServer{
 		Server: Server{
@@ -444,7 +444,7 @@ func newMalformedTestServer(t *testing.T) *testServer {
 
 	blockchainClient := &blockchain.Mock{}
 	runningState := blockchain.FSMStateRUNNING
-	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
+	blockchainClient.On("ReadFSMState", mock.Anything).Return(runningState, nil)
 
 	return &testServer{
 		Server: Server{

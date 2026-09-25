@@ -302,6 +302,7 @@ func TestLivenessReportsAWedgedLoopAndRecovers(t *testing.T) {
 	require.Equal(t, http.StatusOK, status, "a running loop must be healthy: %s", msg)
 
 	replyCh := make(chan error)
+	releaseReset := make(chan struct{})
 
 	// Registered after setupServer, so it runs before setupServer's cleanup waits
 	// on the loop. An assertion failing below would otherwise leave the loop
@@ -310,6 +311,7 @@ func TestLivenessReportsAWedgedLoopAndRecovers(t *testing.T) {
 
 	t.Cleanup(func() {
 		if released.CompareAndSwap(false, true) {
+			close(releaseReset)
 			select {
 			case <-replyCh:
 			case <-time.After(10 * time.Second):
@@ -317,7 +319,10 @@ func TestLivenessReportsAWedgedLoopAndRecovers(t *testing.T) {
 		}
 	})
 
-	server.blockAssembler.resetCh <- resetRequest{ErrCh: replyCh}
+	server.blockAssembler.resetCh <- resetRequest{ErrCh: replyCh, run: func(context.Context) error {
+		<-releaseReset
+		return nil
+	}}
 
 	require.Eventually(t, func() bool {
 		status, msg, err = server.Health(context.Background(), true)
@@ -328,6 +333,7 @@ func TestLivenessReportsAWedgedLoopAndRecovers(t *testing.T) {
 
 	// Read the reply: the reset case finishes and the loop beats again.
 	released.Store(true)
+	close(releaseReset)
 	<-replyCh
 
 	require.Eventually(t, func() bool {

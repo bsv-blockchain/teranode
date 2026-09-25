@@ -804,6 +804,11 @@ type ClientI interface {
 	// - Pointer to FSMStateType representing the current state of the blockchain FSM
 	// - Error if the state retrieval fails
 	GetFSMCurrentState(ctx context.Context) (*FSMStateType, error)
+
+	// ReadFSMState bypasses the subscription cache and returns a ready,
+	// persistence-confirmed state. Unavailable authority returns an error.
+	// The result is a snapshot, not a lease or a work-drain barrier.
+	ReadFSMState(ctx context.Context) (FSMStateType, error)
 	// IsFSMCurrentState checks if the FSM is in a specific state.
 	//
 	// This method compares the current state of the blockchain FSM with the provided state
@@ -895,6 +900,12 @@ type ClientI interface {
 	// Returns:
 	// - Error if the catch-up process fails
 	CatchUpBlocks(ctx context.Context) error
+
+	// AdmitCatchupWork obtains a ready, persistence-confirmed active snapshot.
+	// It admits one catchup unit without changing RUNNING/CATCHINGBLOCKS state.
+	// Confirmed IDLE returns ErrCatchupPaused; unavailable authority is an error.
+	// Admission is not a work-drain barrier: an admitted unit may finish after STOP.
+	AdmitCatchupWork(ctx context.Context) error
 
 	// ReportPeerFailure notifies the blockchain service about peer download failures.
 	//

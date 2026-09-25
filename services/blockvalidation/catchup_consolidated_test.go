@@ -165,48 +165,54 @@ func TestCatchup_ConcurrentCatchupLock(t *testing.T) {
 		server, _, _, cleanup := setupTestCatchupServer(t)
 		defer cleanup()
 
-		numGoroutines := 10
+		const numGoroutines = 10
 		successCount := 0
 		failureCount := 0
 		mu := sync.Mutex{}
+		start := make(chan struct{})
+		release := make(chan struct{})
+		var attempted, finished sync.WaitGroup
+		attempted.Add(numGoroutines)
+		finished.Add(numGoroutines)
 
-		var wg sync.WaitGroup
-		wg.Add(numGoroutines)
-
-		// Start multiple goroutines trying to acquire catchup lock
 		for i := 0; i < numGoroutines; i++ {
-			go func(id int) {
-				defer wg.Done()
-
-				header := testhelpers.CreateTestHeaders(t, 1)[0]
-				ctx := &CatchupContext{
-					blockUpTo: &model.Block{
-						Header: header,
-						Height: uint32(1000 + id),
-					},
-				}
-
+			header := testhelpers.CreateTestHeaders(t, 1)[0]
+			ctx := &CatchupContext{
+				blockUpTo: &model.Block{
+					Header: header,
+					Height: uint32(1000 + i),
+				},
+			}
+			go func() {
+				defer finished.Done()
+				<-start
 				err := server.acquireCatchupLock(ctx)
 				mu.Lock()
 				if err == nil {
 					successCount++
-					// Hold lock briefly
-					time.Sleep(10 * time.Millisecond)
-					server.releaseCatchupLock(ctx, &err)
 				} else {
 					failureCount++
 				}
 				mu.Unlock()
-			}(i)
+				attempted.Done()
+
+				if err == nil {
+					// Keep ownership until EVERY contender has attempted. A timed
+					// sleep permits a delayed contender to win after release, which
+					// is valid sequential ownership rather than a lock failure.
+					<-release
+					server.releaseCatchupLock(ctx, &err)
+				}
+			}()
 		}
 
-		wg.Wait()
+		close(start)
+		attempted.Wait()
+		close(release)
+		finished.Wait()
 
-		// Exactly one should succeed
-		assert.Equal(t, 1, successCount,
-			"Exactly one goroutine should acquire lock")
-		assert.Equal(t, numGoroutines-1, failureCount,
-			"All other goroutines should fail")
+		require.Equal(t, 1, successCount, "exactly one concurrent contender should acquire the lock")
+		require.Equal(t, numGoroutines-1, failureCount, "all contenders must fail while the winner retains ownership")
 	})
 
 	t.Run("LockReleasedOnPanic", func(t *testing.T) {

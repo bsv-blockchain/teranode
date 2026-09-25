@@ -291,14 +291,28 @@ func (m *MockSubtreeValidationClient) CheckBlockSubtrees(ctx context.Context, bl
 	return nil
 }
 
+// sqliteAuthoritativeFSMClient keeps test admission tied to persisted SQLite
+// state while delegating ordinary chain operations to the local client.
+type sqliteAuthoritativeFSMClient struct {
+	blockchain.ClientI
+	store blockchain_store.Store
+}
+
+func (c *sqliteAuthoritativeFSMClient) ReadFSMState(ctx context.Context) (blockchain.FSMStateType, error) {
+	state, err := c.store.GetFSMState(ctx)
+	if err != nil {
+		return blockchain.FSMStateIDLE, err
+	}
+	value, ok := blockchain_api.FSMStateType_value[state]
+	if !ok {
+		return blockchain.FSMStateIDLE, errors.NewStateError("unknown persisted FSM state %q", state)
+	}
+	return blockchain.FSMStateType(value), nil
+}
+
 // setup prepares a test environment with necessary components for block validation
-// testing. It initializes and configures:
-// - Transaction metadata store
-// - Validator client with mock implementation
-// - Subtree validation services
-// - Transaction and block storage systems
-// The function returns initialized components and a cleanup function to ensure
-// proper test isolation.
+// testing. It initializes and configures the transaction store, validator,
+// subtree validation services, and SQLite blockchain state.
 func setup(t *testing.T) (utxostore.Store, subtreevalidation.Interface, blockchain.ClientI, blob.Store, blob.Store, func()) {
 	// we only need the httpClient, utxoStore and validatorClient when blessing a transaction
 	httpmock.ActivateNonDefault(util.HTTPClient())
@@ -338,15 +352,17 @@ func setup(t *testing.T) (utxostore.Store, subtreevalidation.Interface, blockcha
 	if err != nil {
 		panic(err)
 	}
+	require.NoError(t, blockChainStore.SetFSMState(ctx, blockchain.FSMStateRUNNING.String()))
 
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
 	if err != nil {
 		panic(err)
 	}
 
+	blockchainAuthority := &sqliteAuthoritativeFSMClient{ClientI: blockchainClient, store: blockChainStore}
 	nilConsumer := &kafka.KafkaConsumerGroup{}
 
-	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
+	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainAuthority, nilConsumer, nilConsumer, nil, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -360,7 +376,7 @@ func setup(t *testing.T) (utxostore.Store, subtreevalidation.Interface, blockcha
 		server: subtreeValidationServer,
 	}
 
-	return utxoStore, subtreeValidationClient, blockchainClient, txStore, subtreeStore, func() {
+	return utxoStore, subtreeValidationClient, blockchainAuthority, txStore, subtreeStore, func() {
 		// Stop the subtreeValidationServer to clean up goroutines
 		if err := subtreeValidationServer.Stop(context.Background()); err != nil {
 			// Log the error but don't panic in cleanup

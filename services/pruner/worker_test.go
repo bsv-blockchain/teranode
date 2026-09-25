@@ -312,7 +312,7 @@ func TestWaitForBlockMinedStatusSkippedWhenNoBAClient(t *testing.T) {
 
 // TestSkipDuringCatchupSkipsWhenCatchingUp verifies that when
 // pruner_skipDuringCatchup=true and the FSM reports CATCHINGBLOCKS, the
-// pruner records prunerSkipped("catchup_mode"), never notifies the blob
+// pruner records prunerSkipped("fsm_not_running"), never notifies the blob
 // deletion worker, and never advances lastProcessedHeight.
 func TestSkipDuringCatchupSkipsWhenCatchingUp(t *testing.T) {
 	initPrometheusMetrics()
@@ -339,14 +339,14 @@ func TestSkipDuringCatchupSkipsWhenCatchingUp(t *testing.T) {
 		},
 	}
 
-	skipsBefore := getCounterValue(t, prunerSkipped, "catchup_mode")
+	skipsBefore := getCounterValue(t, prunerSkipped, "fsm_not_running")
 
 	go server.prunerProcessor(ctx)
 
 	server.pruneNotify <- pruneSignal{blockHeight: 500, blockHash: chainhash.Hash{0x04}}
 
 	require.Eventually(t, func() bool {
-		return getCounterValue(t, prunerSkipped, "catchup_mode")-skipsBefore >= 1
+		return getCounterValue(t, prunerSkipped, "fsm_not_running")-skipsBefore >= 1
 	}, time.Second, 10*time.Millisecond)
 
 	select {
@@ -404,12 +404,8 @@ func TestSkipDuringCatchupProceedsWhenRunning(t *testing.T) {
 	blockchainMock.AssertExpectations(t)
 }
 
-// TestSkipDuringCatchupWithNilBlockchainClientDoesNotPanic verifies the
-// missing nil guard: pruner_skipDuringCatchup=true with blockchainClient==nil
-// must not panic on the s.blockchainClient.GetFSMCurrentState call, mirroring
-// the existing blockAssemblyClient!=nil guard used for the mined_set wait.
-// Existing test harnesses construct &Server{} with blockchainClient nil, so
-// without this guard, flipping the flag on in such a harness panics.
+// TestSkipDuringCatchupWithNilBlockchainClientDoesNotPanic retains nil-client
+// safety while requiring positive RUNNING authority before pruning is admitted.
 func TestSkipDuringCatchupWithNilBlockchainClientDoesNotPanic(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -421,7 +417,7 @@ func TestSkipDuringCatchupWithNilBlockchainClientDoesNotPanic(t *testing.T) {
 		logger:           ulogger.New("test"),
 		pruneNotify:      make(chan pruneSignal, 1),
 		blobNotify:       make(chan pruneSignal, 1),
-		blockchainClient: nil, // no client wired, mirrors real test harness construction
+		blockchainClient: nil,
 		settings: &settings.Settings{
 			Pruner: settings.PrunerSettings{
 				SkipDuringCatchup: true,
@@ -429,20 +425,17 @@ func TestSkipDuringCatchupWithNilBlockchainClientDoesNotPanic(t *testing.T) {
 		},
 	}
 
-	// A missing nil guard panics inside the prunerProcessor goroutine, which
-	// crashes the test binary (not recoverable via require.NotPanics since
-	// the panic occurs on a different goroutine); a passing run without a
-	// crash, receiving the blob notification below, proves the guard exists.
-	go server.prunerProcessor(ctx)
-
+	skipsBefore := getCounterValue(t, prunerSkipped, "fsm_error")
+	done := make(chan struct{})
+	go func() { defer close(done); server.prunerProcessor(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
 	server.pruneNotify <- pruneSignal{blockHeight: 502, blockHash: chainhash.Hash{0x06}}
 
-	select {
-	case sig := <-server.blobNotify:
-		require.Equal(t, uint32(502), sig.blockHeight, "blob worker should be notified when the FSM state cannot be determined")
-	case <-time.After(time.Second):
-		t.Fatal("pruning should have proceeded without touching a nil blockchainClient")
-	}
+	require.Eventually(t, func() bool {
+		return getCounterValue(t, prunerSkipped, "fsm_error") > skipsBefore
+	}, time.Second, time.Millisecond, "missing authority must defer pruning without panicking")
+	require.Empty(t, server.blobNotify, "missing authority must not schedule blob deletion")
+	require.Zero(t, server.lastProcessedHeight.Load())
 }
 
 // TestStart_FSMContextCancellation verifies graceful shutdown handling when

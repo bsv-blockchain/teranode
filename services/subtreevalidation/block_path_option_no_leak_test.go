@@ -28,7 +28,7 @@ import (
 //   - the non-legacy branch of the CheckSubtreeFromBlock gRPC handler
 //     (peer-announced subtree with a real base URL), and
 //   - the Kafka subtree handler path (subtreesHandler, invoked by
-//     subtreeMessageHandler with NO validation options).
+//     subtreeMessageHandler with only the assembly-feeding option).
 //
 // The block-path positive (option present on both CheckBlockSubtrees
 // pipelines) is pinned by TestCheckBlockSubtrees_AssembledPath_SkipLevelAndMixedParent;
@@ -71,6 +71,7 @@ func TestUnconfirmedParentsOptionDoesNotLeakToPeerPaths(t *testing.T) {
 
 		nilConsumer := &kafka.KafkaConsumerGroup{}
 		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.SubtreeValidation.QuorumPath = t.TempDir()
 
 		server, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, recordingClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
 		require.NoError(t, err)
@@ -115,8 +116,8 @@ func TestUnconfirmedParentsOptionDoesNotLeakToPeerPaths(t *testing.T) {
 
 		server, recordingClient, childSubtree := newServer(t)
 
-		// subtreeMessageHandler invokes subtreesHandler with NO validation
-		// options; replicate that invocation directly. The handler needs the
+		// Replicate a RUNNING message's assembly-feeding option without the
+		// block-only unconfirmed-parent option. The handler needs the
 		// best-block snapshot the subscription listener would normally
 		// maintain.
 		server.bestBlockHeaderMeta.Store(&model.BlockHeaderMeta{Height: blockHeight - 1})
@@ -126,7 +127,7 @@ func TestUnconfirmedParentsOptionDoesNotLeakToPeerPaths(t *testing.T) {
 		baseURL, err := url.Parse("http://peer.invalid:8090")
 		require.NoError(t, err)
 
-		require.NoError(t, server.subtreesHandler(context.Background(), childSubtree.RootHash(), baseURL, "peer-1"))
+		require.NoError(t, server.subtreesHandler(context.Background(), childSubtree.RootHash(), baseURL, "peer-1", validator.WithAddTXToBlockAssembly(true)))
 
 		requireFlagNeverSet(t, recordingClient, "Kafka subtreesHandler")
 	})

@@ -3175,9 +3175,10 @@ func TestBlockWorker(t *testing.T) {
 	mockSubtreeStore := memory.New()
 	settings := test.CreateBaseTestSettings(t)
 	server := &Server{
-		logger:       logger,
-		subtreeStore: mockSubtreeStore,
-		settings:     settings,
+		blockchainClient: newCatchupAdmissionLocalClient(t),
+		logger:           logger,
+		subtreeStore:     mockSubtreeStore,
+		settings:         settings,
 	}
 
 	baseURL := "http://test-peer:8080"
@@ -4102,9 +4103,10 @@ func TestBlockWorker_Pessimistic_CallsFetchSubtreeData(t *testing.T) {
 
 	var fetchCalls atomic.Int32
 	server := &Server{
-		logger:        ulogger.TestLogger{},
-		stats:         gocore.NewStat("test-pess"),
-		adaptiveFetch: afState,
+		blockchainClient: newCatchupAdmissionLocalClient(t),
+		logger:           ulogger.TestLogger{},
+		stats:            gocore.NewStat("test-pess"),
+		adaptiveFetch:    afState,
 	}
 	server.fetchSubtreeDataForBlockFn = func(ctx context.Context, b *model.Block, peerID, baseURL string) (map[string]struct{}, map[chainhash.Hash]map[fileformat.FileType]struct{}, error) {
 		fetchCalls.Add(1)
@@ -4800,6 +4802,7 @@ func newBudgetedPrefetchWorkerServer(t *testing.T, budget int64, mode adaptivefe
 	}
 
 	server := newBudgetedPrefetchServer(t, budget)
+	server.blockchainClient = newCatchupAdmissionLocalClient(t)
 	server.stats = gocore.NewStat("test-prefetch-budget")
 	server.adaptiveFetch = af
 

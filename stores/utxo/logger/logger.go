@@ -250,6 +250,17 @@ func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 	return s.store.GetUnminedTxIterator()
 }
 
+// GetUnminedTxIteratorContext preserves the underlying store's optional
+// cancellable iterator constructor when logging is enabled.
+func (s *Store) GetUnminedTxIteratorContext(ctx context.Context) (utxo.UnminedTxIterator, error) {
+	if store, ok := s.store.(interface {
+		GetUnminedTxIteratorContext(context.Context) (utxo.UnminedTxIterator, error)
+	}); ok {
+		return store.GetUnminedTxIteratorContext(ctx)
+	}
+	return s.store.GetUnminedTxIterator()
+}
+
 func (s *Store) ScanInconsistentUnminedTxs() (utxo.ConsistencyScanIterator, error) {
 	return s.store.ScanInconsistentUnminedTxs()
 }

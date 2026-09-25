@@ -493,7 +493,8 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		// should include the 7 transactions added + the coinbase placeholder of the first subtree
 		assert.Equal(t, uint64(8), testItems.blockAssembler.subtreeProcessor.TxCount())
 
-		miningCandidate, subtrees, err := testItems.blockAssembler.GetMiningCandidate(ctx)
+		miningCandidate, subtrees, miningLease, err := testItems.blockAssembler.GetMiningCandidate(ctx)
+		defer miningLease.Release()
 		require.NoError(t, err)
 		assert.NotNil(t, miningCandidate)
 		assert.NotNil(t, subtrees)
@@ -882,7 +883,9 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 		require.Eventually(t, func() bool {
 			var mcErr error
 
-			miningCandidate, subtree, mcErr = testItems.blockAssembler.GetMiningCandidate(ctx)
+			var miningLease *subtreeprocessor.MiningSnapshotLease
+			miningCandidate, subtree, miningLease, mcErr = testItems.blockAssembler.GetMiningCandidate(ctx)
+			defer miningLease.Release()
 
 			return mcErr == nil && miningCandidate != nil && len(subtree) == 1
 		}, 5*time.Second, 20*time.Millisecond, "mining candidate did not include the completed subtree in time")
@@ -984,11 +987,13 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		// completeWg.Done() previously fired before the assembler acked the subtree
 		// via ErrChan, so GetMiningCandidate could see NumTxs < 3.
 		require.Eventually(t, func() bool {
-			mc, _, err := testItems.blockAssembler.GetMiningCandidate(ctx)
+			mc, _, miningLease, err := testItems.blockAssembler.GetMiningCandidate(ctx)
+			defer miningLease.Release()
 			return err == nil && mc != nil && mc.NumTxs == 3
 		}, 5*time.Second, 20*time.Millisecond)
 
-		miningCandidate, subtrees, err := testItems.blockAssembler.GetMiningCandidate(ctx)
+		miningCandidate, subtrees, miningLease, err := testItems.blockAssembler.GetMiningCandidate(ctx)
+		defer miningLease.Release()
 		require.NoError(t, err)
 
 		assert.NotNil(t, miningCandidate)
@@ -1094,7 +1099,8 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 
 		completeWg.Wait()
 
-		miningCandidate, subtrees, err := testItems.blockAssembler.GetMiningCandidate(ctx)
+		miningCandidate, subtrees, miningLease, err := testItems.blockAssembler.GetMiningCandidate(ctx)
+		defer miningLease.Release()
 		require.NoError(t, err)
 
 		assert.NotNil(t, miningCandidate)
@@ -1198,7 +1204,9 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 		// template (no error) because precomputed data is not yet available.
 		var err error
 		require.Eventually(t, func() bool {
-			_, _, err = testItems.blockAssembler.GetMiningCandidate(ctx)
+			var miningLease *subtreeprocessor.MiningSnapshotLease
+			_, _, miningLease, err = testItems.blockAssembler.GetMiningCandidate(ctx)
+			defer miningLease.Release()
 			return err != nil
 		}, 5*time.Second, 100*time.Millisecond, "expected GetMiningCandidate to return an error when subtree exceeds max block size")
 
@@ -1330,7 +1338,8 @@ func TestBlockAssembly_CoinbaseSubsidyBugReproduction(t *testing.T) {
 		var coinbaseValue uint64
 
 		require.Eventually(t, func() bool {
-			mc, _, mcErr := testItems.blockAssembler.GetMiningCandidate(ctx)
+			mc, _, miningLease, mcErr := testItems.blockAssembler.GetMiningCandidate(ctx)
+			defer miningLease.Release()
 			if mcErr != nil || mc == nil || mc.NumTxs != 3 {
 				return false
 			}
@@ -1487,7 +1496,8 @@ func TestBlockAssembler_GetMiningCandidate_PrecomputedData(t *testing.T) {
 		// Do not start channel listeners: the subscription goroutine races with
 		// this test by overwriting bestBlock via processNewBlockAnnouncement.
 		// GetMiningCandidate works directly against the values we set above.
-		candidate, subtrees, err := ba.GetMiningCandidate(context.Background())
+		candidate, subtrees, miningLease, err := ba.GetMiningCandidate(context.Background())
+		defer miningLease.Release()
 		require.NoError(t, err)
 		require.NotNil(t, candidate)
 		assert.Equal(t, uint32(2), candidate.Height)
@@ -1523,7 +1533,8 @@ func TestBlockAssembler_GetMiningCandidate_PrecomputedData(t *testing.T) {
 		originalStp := ba.subtreeProcessor
 		ba.subtreeProcessor = mockStp
 
-		candidate, subtrees, err := ba.GetMiningCandidate(context.Background())
+		candidate, subtrees, miningLease, err := ba.GetMiningCandidate(context.Background())
+		defer miningLease.Release()
 		require.NoError(t, err)
 		require.NotNil(t, candidate)
 		// Stale data detected: falls back to empty block at next height (5+1=6)
@@ -1569,7 +1580,8 @@ func TestBlockAssembler_GetMiningCandidate_HappyPath(t *testing.T) {
 		originalStp := ba.subtreeProcessor
 		ba.subtreeProcessor = mockStp
 
-		candidate, subtrees, err := ba.GetMiningCandidate(context.Background())
+		candidate, subtrees, miningLease, err := ba.GetMiningCandidate(context.Background())
+		defer miningLease.Release()
 		require.NoError(t, err)
 		require.NotNil(t, candidate)
 
@@ -1625,7 +1637,8 @@ func TestBlockAssembler_GetMiningCandidate_HappyPath(t *testing.T) {
 		originalStp := ba.subtreeProcessor
 		ba.subtreeProcessor = mockStp
 
-		candidate, subtrees, err := ba.GetMiningCandidate(context.Background())
+		candidate, subtrees, miningLease, err := ba.GetMiningCandidate(context.Background())
+		defer miningLease.Release()
 		require.NoError(t, err)
 		require.NotNil(t, candidate)
 
@@ -1677,6 +1690,9 @@ func TestBlockAssembler_GetMiningCandidate_StaleFallbackIntegration(t *testing.T
 
 		// Verify precomputed data currently references the genesis header
 		data := ba.subtreeProcessor.GetPrecomputedMiningData()
+		if data != nil {
+			defer data.Lease.Release()
+		}
 		// Precomputed data may or may not exist depending on whether a
 		// subtree completed. Either way, the key behavior tested below
 		// is that after advancing the block height, GetMiningCandidate
@@ -1700,7 +1716,8 @@ func TestBlockAssembler_GetMiningCandidate_StaleFallbackIntegration(t *testing.T
 		// so any precomputed or incomplete data references genesis → stale.
 
 		// GetMiningCandidate must detect the mismatch and return an empty block.
-		candidate, subtrees, err := ba.GetMiningCandidate(ctx)
+		candidate, subtrees, miningLease, err := ba.GetMiningCandidate(ctx)
+		defer miningLease.Release()
 		require.NoError(t, err)
 		require.NotNil(t, candidate)
 
@@ -1750,7 +1767,8 @@ func TestBlockAssembler_GetMiningCandidate_StaleFallbackIntegration(t *testing.T
 		// The subtree processor's block header and the block assembler's
 		// best block both point to genesis. Precomputed data (if any) and
 		// incomplete subtree data should be fresh.
-		candidate, subtrees, err := ba.GetMiningCandidate(ctx)
+		candidate, subtrees, miningLease, err := ba.GetMiningCandidate(ctx)
+		defer miningLease.Release()
 		require.NoError(t, err)
 		require.NotNil(t, candidate)
 		assert.Equal(t, uint32(1), candidate.Height)
