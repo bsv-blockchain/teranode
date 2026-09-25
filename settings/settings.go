@@ -374,11 +374,11 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BlockFoundChBufferSize:                    getInt("blockvalidation_blockFoundCh_buffer_size", 1000, alternativeContext...),
 			ValidationWarmupCount:                     getInt("blockvalidation_validation_warmup_count", 128, alternativeContext...),
 			BatchMissingTransactions:                  getBool("blockvalidation_batch_missing_transactions", false, alternativeContext...),
-			CheckSubtreeFromBlockTimeout:              getDuration("blockvalidation_check_subtree_from_block_timeout", 5*time.Minute),
+			CheckSubtreeFromBlockTimeout:              getDuration("blockvalidation_check_subtree_from_block_timeout", 5*time.Minute, alternativeContext...),
 			SubtreeDataFetchTimeout:                   getDuration("blockvalidation_subtree_data_fetch_timeout", DefaultSubtreeDataFetchTimeout, alternativeContext...),
 			SubtreeMetaPeerFetchTimeout:               getDuration("blockvalidation_subtree_meta_peer_fetch_timeout", DefaultSubtreeMetaPeerFetchTimeout, alternativeContext...),
 			CheckSubtreeFromBlockRetries:              getInt("blockvalidation_check_subtree_from_block_retries", 5, alternativeContext...),
-			CheckSubtreeFromBlockRetryBackoffDuration: getDuration("blockvalidation_check_subtree_from_block_retry_backoff_duration", 30*time.Second),
+			CheckSubtreeFromBlockRetryBackoffDuration: getDuration("blockvalidation_check_subtree_from_block_retry_backoff_duration", 30*time.Second, alternativeContext...),
 			SecretMiningThreshold:                     getUint32("blockvalidation_secret_mining_threshold", uint32(params.CoinbaseMaturity-1), alternativeContext...), // golint:nolint
 			PreviousBlockHeaderCount:                  getUint64AtLeast("blockvalidation_previous_block_header_count", 100, MedianTimeSpan, alternativeContext...),
 			MaxBlocksBehindBlockAssembly:              getInt("blockvalidation_maxBlocksBehindBlockAssembly", 20, alternativeContext...),
@@ -551,7 +551,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			// Peer persistence
 			PeerCacheDir: getString("p2p_peer_cache_dir", "", alternativeContext...), // Empty = binary directory
 			BanThreshold: getInt("p2p_ban_threshold", 100, alternativeContext...),
-			BanDuration:  getDuration("p2p_ban_duration", 24*time.Hour),
+			BanDuration:  getDuration("p2p_ban_duration", 24*time.Hour, alternativeContext...),
 			// Peer map cleanup configuration. Defaults match the p2p service's
 			// own fallback constants, so wiring these keys does not change
 			// behaviour for a deployment that never set them.
