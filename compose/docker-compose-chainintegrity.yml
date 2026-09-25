@@ -157,6 +157,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.teranode1.test}
+      grpc_admin_api_key: docker-e2e-test-admin-key
       logLevel: "DEBUG"
     ports:
       - "18000:8000"
@@ -213,6 +214,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.teranode2.test}
+      grpc_admin_api_key: docker-e2e-test-admin-key
       logLevel: "DEBUG"
     ports:
       - "28000:8000"
@@ -269,6 +271,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.teranode3.test}
+      grpc_admin_api_key: docker-e2e-test-admin-key
       logLevel: "DEBUG"
     ports:
       - "38000:8000"
@@ -325,6 +328,7 @@ services:
       ["sh", "-c", "sleep 5 && ./coinbase.run -all=0 -coinbase=1 -faucet=1"]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.teranode1.test}.coinbase
+      grpc_admin_api_key: docker-e2e-test-admin-key
       profilerAddr: "localhost:17092"
     volumes:
       - ../settings.conf:/app/settings.conf
@@ -339,6 +343,7 @@ services:
       - teranode1
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.teranode1.test}.coinbase
+      grpc_admin_api_key: docker-e2e-test-admin-key
       startCoinbase: "false"
       startFaucet: "false"
     entrypoint: ["./blaster.run"]

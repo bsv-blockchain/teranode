@@ -175,14 +175,12 @@ the ConfigMap. They are supplied through a Kubernetes Secret named
 `teranode-operator-secrets`, which the Cluster CR references via `spec.envFrom`. This
 Secret is intentionally not committed to the repository — you must create it yourself.
 
-`grpc_admin_api_key` is **required** for a working node. It authenticates every
-state-mutating P2P `PeerService` RPC, including the peer-reputation and
-validated-chain-progress reports that decide which peer this node syncs from, and the
-`operator` context binds that gRPC port on all interfaces. It is deliberately not
-committed to this repository, and well-known placeholders such as `testkey` are
-rejected and ignored — the server then uses a random key, so every protected RPC,
-including the internal reporters, fails with `Unauthenticated`. Generate a strong
-random value, for example `openssl rand -hex 32`.
+`grpc_admin_api_key` is **required** for Blockchain startup and all of its clients,
+including reads and subscriptions. Empty, placeholder and weak keys cause a startup
+configuration error. It also authenticates protected P2P/Legacy operations. Generate
+one random value with `openssl rand -hex 32` and supply it to every service and CLI
+client through the Secret. For upgrades, deploy credential-capable callers first
+and Blockchain last; see [Blockchain authentication](../../../topics/services/blockchainAuthentication.md).
 
 Create it with a manifest (replace the example values with your own credentials):
 
@@ -199,7 +197,7 @@ stringData:
   utxostore: "aerospike://AEROSPIKE_EXAMPLE_URI_CHANGE_ME"
   # Required. Authenticates the state-mutating P2P PeerService RPCs.
   # Generate with: openssl rand -hex 32
-  grpc_admin_api_key: "GRPC_ADMIN_API_KEY_CHANGE_ME"
+  grpc_admin_api_key: "" # REQUIRED: paste the generated shared secret before applying
 ```
 
 ```bash

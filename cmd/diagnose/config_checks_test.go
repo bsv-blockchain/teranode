@@ -31,7 +31,7 @@ func TestCheckSecurityAdminAPIKey(t *testing.T) {
 	}{
 		{name: "placeholder is an error", key: "testkey", severity: SeverityERROR, value: "well-known placeholder"},
 		{name: "placeholder is an error regardless of case", key: "ChangeMe", severity: SeverityERROR, value: "well-known placeholder"},
-		{name: "weak key warns", key: "shortkey", severity: SeverityWARN},
+		{name: "weak key is an error", key: "shortkey", severity: SeverityERROR},
 		{name: "strong key is ok", key: "a-strong-random-admin-secret-value", severity: SeverityOK},
 	}
 

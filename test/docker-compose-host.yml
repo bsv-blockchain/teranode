@@ -137,6 +137,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.host.teranode1"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       JAEGER_SERVICE_NAME: teranode-1
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
@@ -186,6 +187,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.host.teranode2"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       JAEGER_SERVICE_NAME: teranode-2
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
@@ -234,6 +236,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.host.teranode3"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       JAEGER_SERVICE_NAME: teranode-3
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
@@ -365,6 +368,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.host.teranode1.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       profilerAddr: "localhost:17092"
     volumes:
       - ../settings.conf:/app/settings.conf
@@ -381,6 +385,7 @@ services:
       - teranode-1
     environment:
       SETTINGS_CONTEXT: "docker.host.teranode1.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       BLASTER_ARGS: "-workers=2"
       profilerAddr: "localhost:17093"
     entrypoint: ["./blaster.run"]

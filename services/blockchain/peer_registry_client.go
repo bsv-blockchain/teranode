@@ -139,7 +139,7 @@ func (c *PeerRegistryClient) log() ulogger.Logger {
 // NewPeerRegistryClient connects to the blockchain service and returns a PeerRegistryClientI.
 // It reuses the same address as the blockchain service since PeerRegistryService is served on the same port.
 func NewPeerRegistryClient(ctx context.Context, address string, tSettings *settings.Settings) (PeerRegistryClientI, error) {
-	conn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{}, tSettings)
+	conn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{APIKey: tSettings.GRPCAdminAPIKey}, tSettings)
 	if err != nil {
 		return nil, err
 	}
@@ -406,6 +406,8 @@ func (c *PeerRegistryClient) Close() error {
 
 // NewPeerRegistryClientFromConn creates a PeerRegistryClient using an existing gRPC connection.
 // The caller retains ownership of the connection — Close() on this client is a no-op.
+// The connection must attach grpc_admin_api_key to calls, for example via
+// util.GetGRPCClient with ConnectionOptions.APIKey.
 func NewPeerRegistryClientFromConn(conn *grpc.ClientConn) PeerRegistryClientI {
 	return &PeerRegistryClient{
 		client:   blockchain_api.NewPeerRegistryServiceClient(conn),

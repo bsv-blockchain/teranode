@@ -84,6 +84,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 		GRPCRetryBackoff:           getDuration("grpc_retry_backoff", 250*time.Millisecond, alternativeContext...),
 		SecurityLevelGRPC:          getInt("security_level_grpc", 0, alternativeContext...),
 		UsePrometheusGRPCMetrics:   getBool("use_prometheus_grpc_metrics", true, alternativeContext...),
+		GRPCEnableReflection:       getBool("grpc_enable_reflection", false, alternativeContext...),
 		GRPCAdminAPIKey:            strings.TrimSpace(getString("grpc_admin_api_key", "", alternativeContext...)),
 		GlobalBlockHeightRetention: globalBlockHeightRetention,
 		BatcherDrainMode:           getBool("batcher_drainMode", false, alternativeContext...),

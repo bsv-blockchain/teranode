@@ -1,5 +1,16 @@
 # Blockchain Server Reference Documentation
 
+## Authentication
+
+Blockchain refuses startup without a valid `grpc_admin_api_key`, including in
+development. All BlockchainAPI and PeerRegistryService methods require `x-api-key`
+except HealthGRPC. This includes read-only calls and Subscribe. HTTP `/health` is
+public; `/invalidate/:hash` and `/revalidate/:hash` require authenticated POST
+requests. Reflection is disabled by default.
+
+See [Blockchain authentication](../../topics/services/blockchainAuthentication.md)
+for credential requirements and the required client-first upgrade order.
+
 ## Types
 
 ### Blockchain

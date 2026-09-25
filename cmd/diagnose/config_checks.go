@@ -245,21 +245,21 @@ func checkSecurity(s *settings.Settings) []ConfigResult {
 
 	if s.GRPCAdminAPIKey == "" {
 		results = append(results, ConfigResult{
-			Severity:    severity,
+			Severity:    SeverityERROR,
 			Check:       labelGRPCAdminAPIKey,
 			Value:       valueEmpty,
-			Recommended: "Set grpc_admin_api_key (32+ chars)",
+			Recommended: "Set grpc_admin_api_key on Blockchain and all clients (32+ random chars)",
 		})
 	} else if util.IsPlaceholderAdminAPIKey(s.GRPCAdminAPIKey) {
 		results = append(results, ConfigResult{
 			Severity:    SeverityERROR,
 			Check:       labelGRPCAdminAPIKey,
 			Value:       "well-known placeholder",
-			Recommended: "Replace the placeholder; P2P/Legacy servers ignore it and admin RPCs stay disabled until a real secret is set",
+			Recommended: "Replace the placeholder; Blockchain refuses startup without a valid shared service key",
 		})
 	} else if len(s.GRPCAdminAPIKey) < 16 {
 		results = append(results, ConfigResult{
-			Severity:    SeverityWARN,
+			Severity:    SeverityERROR,
 			Check:       labelGRPCAdminAPIKey,
 			Value:       fmt.Sprintf("%d chars (weak)", len(s.GRPCAdminAPIKey)),
 			Recommended: "Use at least 16 characters, ideally 32+",

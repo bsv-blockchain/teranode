@@ -98,7 +98,8 @@ This hierarchy exists because file-level operations are the foundation of blob s
 | GRPCRetryBackoff | time.Duration | 250ms | grpc_retry_backoff | Retry backoff duration |
 | SecurityLevelGRPC | int | 0 | security_level_grpc | gRPC security level |
 | UsePrometheusGRPCMetrics | bool | true | use_prometheus_grpc_metrics | Enable gRPC Prometheus metrics |
-| GRPCAdminAPIKey | string | "" | grpc_admin_api_key | Admin API authentication key |
+| GRPCAdminAPIKey | string | "" | grpc_admin_api_key | Required shared credential for Blockchain and its clients; empty or invalid keys prevent Blockchain startup |
+| GRPCEnableReflection | bool | false | grpc_enable_reflection | Opt in to gRPC reflection for development diagnostics; Blockchain reflection requires authentication |
 
 ### Monitoring and Profiling
 
