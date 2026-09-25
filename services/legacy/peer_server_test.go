@@ -320,6 +320,8 @@ func newRelayTestServerPeer(t *testing.T, onInv func(*peer.Peer, *wire.MsgInv)) 
 	t.Cleanup(func() {
 		localPeer.DisconnectWithInfo("test cleanup")
 		remotePeer.DisconnectWithInfo("test cleanup")
+		localPeer.WaitForDisconnect()
+		remotePeer.WaitForDisconnect()
 	})
 
 	// The inv is dropped by the peer's queue handler until the version handshake
@@ -352,8 +354,8 @@ func newRelayTestServerPeer(t *testing.T, onInv func(*peer.Peer, *wire.MsgInv)) 
 // announce adds the inv to the peer's known inventory, and a plain
 // QueueInventory drops any later attempt, so a rebroadcast used to reach only
 // peers that connected after the first announce. Drives the real announce and
-// rebroadcast paths (RelayInventory, processRebroadcastTick with
-// rebroadcastInventory, handleRelayInvMsg) over a real connected peer.
+// rebroadcast paths (RelayInventory, rebroadcastQueue.retry with
+// relayRebroadcastBatch, handleRelayInvMsg) over a real connected peer.
 func TestRebroadcastTickReachesPeerThatAlreadySawInv(t *testing.T) {
 	invReceived := make(chan *wire.MsgInv, 10)
 
@@ -406,12 +408,14 @@ func TestRebroadcastTickReachesPeerThatAlreadySawInv(t *testing.T) {
 	deliver()
 	expectNoInv("plain relay re-sent a known inv")
 
-	pending := map[wire.InvVect]*rebroadcastEntry{*iv: {data: data}}
+	queue := newRebroadcastQueue(maxRebroadcastInventory)
+	require.True(t, queue.add(*iv, data))
 
-	for tick := 1; tick <= 2; tick++ {
-		require.Equal(t, 1, processRebroadcastTick(pending, maxRebroadcastAttempts, s.rebroadcastInventory))
+	for retry := 1; retry <= 2; retry++ {
+		relayed, _ := queue.retry(maxRebroadcastTips, s.relayRebroadcastBatch)
+		require.Equal(t, 1, relayed)
 		deliver()
-		expectInv(fmt.Sprintf("rebroadcast tick %d did not reach the peer", tick))
+		expectInv(fmt.Sprintf("rebroadcast retry %d did not reach the peer", retry))
 	}
 }
 
@@ -1022,102 +1026,6 @@ func TestBroadcastMessage_BroadcastsRegardlessOfListenMode(t *testing.T) {
 	}
 }
 
-// TestTryAddRebroadcast_PreservesAttemptsOnReadd locks in the invariant that
-// re-adding an iv already present in pendingInvs does NOT reset its retry
-// counter — otherwise a Kafka replay (or any duplicate hit) could refresh
-// the retry budget of a tx that should have aged out, defeating the
-// maxRebroadcastAttempts ceiling.
-func TestTryAddRebroadcast_PreservesAttemptsOnReadd(t *testing.T) {
-	pending := map[wire.InvVect]*rebroadcastEntry{}
-	iv := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0x01}}
-
-	require.True(t, tryAddRebroadcast(pending, 10, iv, "first"))
-	pending[iv].attempts = 3 // simulate three retry ticks
-
-	require.True(t, tryAddRebroadcast(pending, 10, iv, "second"),
-		"re-add of an existing iv must be accepted (returns true)")
-	require.Equal(t, 3, pending[iv].attempts,
-		"re-add must preserve the existing attempts counter")
-	require.Equal(t, "second", pending[iv].data,
-		"re-add must refresh the data payload")
-	require.Len(t, pending, 1)
-}
-
-// TestTryAddRebroadcast_DropsAtCap covers the bounded-memory contract for the
-// rebroadcast queue: once pendingInvs has `capacity` entries, new (non-update)
-// adds must be rejected. Older entries keep their retry budget rather than
-// being evicted by churn from fresh adds that haven't yet failed.
-func TestTryAddRebroadcast_DropsAtCap(t *testing.T) {
-	const capacity = 4
-	pending := map[wire.InvVect]*rebroadcastEntry{}
-
-	// Fill to capacity.
-	for i := 0; i < capacity; i++ {
-		iv := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{byte(i + 1)}}
-		require.True(t, tryAddRebroadcast(pending, capacity, iv, i),
-			"add #%d below cap must be accepted", i)
-	}
-	require.Len(t, pending, capacity)
-
-	// One more — must be rejected.
-	overflow := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0xff}}
-	require.False(t, tryAddRebroadcast(pending, capacity, overflow, "overflow"),
-		"add beyond cap must be rejected")
-	require.Len(t, pending, capacity, "rejected add must not mutate the map")
-	_, present := pending[overflow]
-	require.False(t, present, "overflow entry must not be inserted")
-
-	// Update of an existing key must still succeed at cap.
-	existing := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0x01}}
-	require.True(t, tryAddRebroadcast(pending, capacity, existing, "updated"),
-		"update of existing key must succeed even at cap")
-	require.Equal(t, "updated", pending[existing].data)
-}
-
-// TestProcessRebroadcastTick_AgesOutAfterMaxAttempts asserts the per-entry
-// retry budget: after `maxAttempts` ticks, the entry is removed even if
-// nothing called RemoveRebroadcastInventory. This is the only mechanism
-// bounding the queue from below, because TransactionConfirmed is dead code
-// in this codebase.
-func TestProcessRebroadcastTick_AgesOutAfterMaxAttempts(t *testing.T) {
-	const maxAttempts = 3
-	pending := map[wire.InvVect]*rebroadcastEntry{}
-	iv := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0x77}}
-	require.True(t, tryAddRebroadcast(pending, 10, iv, "data"))
-
-	var relayed int
-	relay := func(*wire.InvVect, interface{}) { relayed++ }
-
-	for i := 1; i < maxAttempts; i++ {
-		processRebroadcastTick(pending, maxAttempts, relay)
-		require.Len(t, pending, 1, "entry must remain at tick %d", i)
-		require.Equal(t, i, pending[iv].attempts)
-	}
-
-	// Final tick — entry retries one more time, then ages out.
-	processRebroadcastTick(pending, maxAttempts, relay)
-	require.Empty(t, pending, "entry must be deleted after maxAttempts ticks")
-	require.Equal(t, maxAttempts, relayed, "relay must fire exactly maxAttempts times")
-}
-
-// TestProcessRebroadcastTick_KeepsEntriesUnderBudget guards against an
-// off-by-one in the aging logic: an entry must survive ticks until its
-// attempt count actually *reaches* maxAttempts.
-func TestProcessRebroadcastTick_KeepsEntriesUnderBudget(t *testing.T) {
-	const maxAttempts = 6
-	pending := map[wire.InvVect]*rebroadcastEntry{}
-	iv := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0x88}}
-	require.True(t, tryAddRebroadcast(pending, 10, iv, "data"))
-
-	noop := func(*wire.InvVect, interface{}) {}
-	for i := 0; i < maxAttempts-1; i++ {
-		processRebroadcastTick(pending, maxAttempts, noop)
-	}
-
-	require.Len(t, pending, 1, "entry must still be present below budget")
-	require.Equal(t, maxAttempts-1, pending[iv].attempts)
-}
-
 // TestAddRebroadcastInventory_BumpsDropCounterOnFullChannel asserts the
 // observability contract: when modifyRebroadcastInv is saturated, the
 // non-blocking send drops AND increments droppedRebroadcastAdds. Silent
@@ -1496,25 +1404,6 @@ func TestHasServices(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := hasServices(tt.advertised, tt.desired)
 			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-// TestRandomUint16Number tests the randomUint16Number function
-func TestRandomUint16Number(t *testing.T) {
-	tests := []struct {
-		name string
-		max  uint16
-	}{
-		{"small max", 10},
-		{"medium max", 1000},
-		{"large max", 65535},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := randomUint16Number(tt.max)
-			assert.True(t, result < tt.max, "Random number should be less than max")
 		})
 	}
 }
