@@ -7356,7 +7356,7 @@
 <td>bool</td>
 <td>true</td>
 <td>blockvalidation_optimistic_mining</td>
-<td>Optimistic mining behavior (global; the peer-served path also requires OptimisticMiningPeerBlocks, and catch-up is never optimistic)</td>
+<td>Optimistic mining behavior (global; every validation path also requires OptimisticMiningPeerBlocks, and catch-up is never optimistic)</td>
 </tr>
 <tr>
 <td>OptimisticMiningPeerBlocks</td>
@@ -7700,10 +7700,12 @@
 <li><code>OptimisticMining = true</code>: enables background validation for performance on paths that opt in</li>
 <li>Block validation proceeds while subtree validation runs in the background</li>
 <li>Can be overridden per-validation via the <code>DisableOptimisticMining</code> option</li>
-<li><strong>On the peer-served validation path optimistic mining is OFF unless BOTH
+<li><strong>On every validation path optimistic mining is OFF unless BOTH
   <code>blockvalidation_optimistic_mining</code> AND <code>blockvalidation_optimistic_mining_peer_blocks</code> are set</strong>
-  (default <code>(true, false)</code> = off). The global flag being false always wins, so the peer-blocks flag
-  can never bypass it (bitcoin-sv/teranode#4692). Revalidation of an already-stored block is always
+  (default <code>(true, false)</code> = off). The requirement is applied where each validation chooses its
+  mode, not only at the peer entry gate, so an internal caller cannot turn optimistic on the global
+  flag alone (bitcoin-sv/teranode#4844). The global flag being false always wins, so the peer-blocks
+  flag can never bypass it (bitcoin-sv/teranode#4692). Revalidation of an already-stored block is always
   non-optimistic regardless of these flags.</li>
 <li><strong>The catch-up path is always non-optimistic</strong>, whatever these two flags are set to. It validates
   against a cached header run holding only the block's in-batch predecessors, which cannot carry the
@@ -7714,6 +7716,11 @@
   invalidated/poisoned rather than re-downloaded) until the <code>block.Valid</code> integrity-floor split lands
   and removes that path. With the default (peer-blocks off) a corrupt body is never added and is
   re-downloaded, not poisoned.</li>
+<li><strong>Known exposure under the opt-in:</strong> a received body that carries subtrees is still added before
+  it is bound to its header, and when it is invalidated its coinbase is persisted with the invalid
+  record (bitcoin-sv/teranode#4844). A body carrying no subtrees is bound by the coinbase-only rule
+  and rejected before the add. Keep <code>blockvalidation_optimistic_mining_peer_blocks</code> off until the
+  <code>block.Valid</code> split lands.</li>
 </ul>
 <h3 id="corrupt-body-re-download-cap">Corrupt-body re-download cap<a class="headerlink" href="#corrupt-body-re-download-cap" title="Permanent link">&para;</a></h3>
 <ul>
