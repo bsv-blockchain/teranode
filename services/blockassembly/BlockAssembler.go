@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -18,10 +19,10 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/unminedsort"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
-	"github.com/bsv-blockchain/teranode/stores/tempstore"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -2724,9 +2725,14 @@ func stableSortUnminedByCreatedAt(txs []*utxo.UnminedTransaction) {
 		return txs[i].CreatedAt < txs[j].CreatedAt
 	})
 
-	// Reorder within each maximal run of equal CreatedAt so in-set parents come
-	// before their children. Only same-timestamp transactions can be misordered,
-	// so unrelated timestamps are left untouched.
+	orderEqualCreatedAtRunsParentsFirst(txs)
+}
+
+// orderEqualCreatedAtRunsParentsFirst reorders, within each maximal run of equal
+// CreatedAt in txs (already sorted by CreatedAt), in-set parents before their
+// children. Only same-timestamp transactions can be misordered, so unrelated
+// timestamps are left untouched.
+func orderEqualCreatedAtRunsParentsFirst(txs []*utxo.UnminedTransaction) {
 	for start := 0; start < len(txs); {
 		end := start + 1
 		for end < len(txs) && txs[end].CreatedAt == txs[start].CreatedAt {
@@ -3147,7 +3153,7 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, validateIn
 
 					if !b.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
 						// clear the TxInpoints to save memory if we are not using subtree meta
-						unminedTransaction.TxInpoints = &subtree.TxInpoints{}
+						clearUnminedTxInpoints(unminedTransaction)
 					}
 
 					localResult.unminedTxs = append(localResult.unminedTxs, unminedTransaction)
@@ -3362,11 +3368,16 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, validateIn
 	return nil
 }
 
-// sortEntry is a lightweight in-memory structure for sorting.
-// Only 12 bytes per transaction instead of full UnminedTransaction.
-type sortEntry struct {
-	CreatedAt int    // 8 bytes - timestamp with milliseconds for sorting
-	Sequence  uint64 // 8 bytes - key to retrieve from temp store
+// clearUnminedTxInpoints empties a reloaded transaction's inpoints in place.
+// Every store iterator allocates inpoints per transaction, so resetting the
+// existing value is safe and avoids retaining a second object per transaction.
+func clearUnminedTxInpoints(tx *utxo.UnminedTransaction) {
+	if tx.TxInpoints == nil {
+		tx.TxInpoints = &subtree.TxInpoints{}
+		return
+	}
+
+	*tx.TxInpoints = subtree.TxInpoints{}
 }
 
 // validateUnminedTxInputs checks that each input of an unmined transaction is still validly
@@ -3558,15 +3569,13 @@ func (b *BlockAssembler) CheckInputValidation(ctx context.Context) (int, error) 
 	return invalidCount, nil
 }
 
-// loadUnminedTransactionsWithDiskSort loads unmined transactions using disk-based sorting
-// to reduce RAM usage. Instead of loading all transaction data into memory, it:
-// 1. Writes transaction data to BadgerDB temp storage
-// 2. Keeps only minimal sort entries (12 bytes each) in memory
-// 3. Sorts in memory by CreatedAt
-// 4. Reads back from disk in sorted order
+// loadUnminedTransactionsWithDiskSort loads unmined transactions with memory
+// bounded by blockassembly_unminedTxSortBufferRecords instead of by the size of
+// the unmined set. Transactions are buffered as compact records, sorted runs are
+// spilled to blockassembly_unminedTxDiskSortPath as buffers fill, and the runs
+// are merged straight into the subtree processor. With no sort path the compact
+// records are sorted in memory.
 func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context) error {
-	scanHeaders := uint64(1000)
-
 	// Wait for the unmined_since index to be ready
 	if indexWaiter, ok := b.utxoStore.(interface {
 		WaitForIndexReady(ctx context.Context, indexName string) error
@@ -3591,8 +3600,11 @@ func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context
 		prometheusBlockAssemblerUtxoIndexWaitDuration.WithLabelValues("unminedSinceIndex", "skipped").Observe(0)
 	}
 
-	bestBlockHeader, _ := b.CurrentBlock()
-	bestBlockHeaderIDs, err := b.blockchainClient.GetBlockHeaderIDs(ctx, bestBlockHeader.Hash(), scanHeaders)
+	// Same best-chain coverage as the in-memory path: every header back to
+	// genesis, so a tx mined deep in the chain is still recognised as mined.
+	bestBlockHeader, bestBlockHeight := b.CurrentBlock()
+
+	bestBlockHeaderIDs, err := b.blockchainClient.GetBlockHeaderIDs(ctx, bestBlockHeader.Hash(), uint64(bestBlockHeight)+1)
 	if err != nil {
 		return errors.NewProcessingError(errGettingBestBlockHeaders, err)
 	}
@@ -3611,56 +3623,76 @@ func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context
 		return errors.NewProcessingError(errGettingUnminedTxIterator, err)
 	}
 	prometheusBlockAssemblerGetUnminedTxIteratorTime.WithLabelValues("false", "success").Observe(duration)
-	b.logger.Infof("[loadUnminedTransactionsWithDiskSort] successfully created unmined tx iterator")
 
-	// Create temporary BadgerDB store
-	tempStore, err := tempstore.New(tempstore.Options{
-		BasePath: b.settings.BlockAssembly.UnminedTxDiskSortPath,
-		Prefix:   "unmined-sort",
+	return b.loadUnminedSorted(ctx, it, bestBlockHeaderIDsMap)
+}
+
+// unminedSortDirs returns the configured sort directories, or the OS temp
+// directory when none is set: enabling disk sort always bounds memory, as the
+// previous Badger implementation did.
+func unminedSortDirs(paths []string) []string {
+	dirs := make([]string, 0, len(paths))
+
+	for _, p := range paths {
+		if p = strings.TrimSpace(p); p != "" {
+			dirs = append(dirs, p)
+		}
+	}
+
+	if len(dirs) == 0 {
+		return []string{os.TempDir()}
+	}
+
+	return dirs
+}
+
+// loadUnminedSorted filters the iterator's transactions like the in-memory
+// path, orders them by CreatedAt through an unminedsort.Sorter, and adds them
+// to the subtree processor in batches.
+func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedTxIterator, bestBlockHeaderIDsMap map[uint32]bool) error {
+	storeTxInpoints := b.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta
+
+	sorter, err := unminedsort.New(unminedsort.Options{
+		Dirs:          unminedSortDirs(b.settings.BlockAssembly.UnminedTxDiskSortPaths),
+		BufferRecords: b.settings.BlockAssembly.UnminedTxSortBufferRecords,
+		WithInpoints:  storeTxInpoints,
 	})
 	if err != nil {
-		return errors.NewProcessingError("error creating temp store for disk-based sorting", err)
+		return errors.NewProcessingError("error creating unmined transaction sorter", err)
 	}
+
 	defer func() {
-		if closeErr := tempStore.Close(); closeErr != nil {
-			b.logger.Warnf("[loadUnminedTransactionsWithDiskSort] error closing temp store: %v", closeErr)
+		if closeErr := sorter.Close(); closeErr != nil {
+			b.logger.Warnf("[loadUnminedTransactionsWithDiskSort] error removing sort runs: %v", closeErr)
 		}
 	}()
 
-	// Lightweight sort entries - only 12 bytes per tx
-	sortEntries := make([]sortEntry, 0, 1024*1024)
 	lockedTransactions := make([]chainhash.Hash, 0, 1024)
 	markAsMinedOnLongestChain := make([]chainhash.Hash, 0, 1024)
 
 	iteratorStart := time.Now()
-	var sequence uint64
-	totalProcessed := atomic.Int64{}
-	skippedCount := atomic.Int64{}
-	alreadyMinedCount := atomic.Int64{}
-	lockedCount := atomic.Int64{}
+	lastLogTime := iteratorStart
 
-	// Write batch for efficient disk writes
-	writeBatch := tempStore.NewWriteBatch()
+	var totalProcessed, skippedCount, alreadyMinedCount int64
 
-	b.logger.Infof("[loadUnminedTransactionsWithDiskSort] processing unmined transactions and writing to temp store")
+	b.logger.Infof("[loadUnminedTransactionsWithDiskSort] scanning unmined transactions (sort dirs %v, buffer %d records)",
+		unminedSortDirs(b.settings.BlockAssembly.UnminedTxDiskSortPaths), b.settings.BlockAssembly.UnminedTxSortBufferRecords)
 
-	// Process batches from iterator
 	for {
 		batch, err := it.Next(ctx)
 		if err != nil {
-			writeBatch.Cancel()
 			return errors.NewProcessingError("error getting unmined transaction", err)
 		}
 
-		if batch == nil || len(batch) == 0 {
+		if len(batch) == 0 {
 			break
 		}
 
 		for _, unminedTx := range batch {
-			totalProcessed.Add(1)
+			totalProcessed++
 
 			if unminedTx.Skip {
-				skippedCount.Add(1)
+				skippedCount++
 				continue
 			}
 
@@ -3674,7 +3706,7 @@ func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context
 				}
 
 				if skipAlreadyMined {
-					alreadyMinedCount.Add(1)
+					alreadyMinedCount++
 					if unminedTx.UnminedSince > 0 {
 						markAsMinedOnLongestChain = append(markAsMinedOnLongestChain, unminedTx.Node.Hash)
 					}
@@ -3682,60 +3714,29 @@ func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context
 				}
 			}
 
-			// Serialize and write to temp store
-			txData, serErr := utxo.SerializeUnminedTransaction(unminedTx)
-			if serErr != nil {
-				writeBatch.Cancel()
-				return errors.NewProcessingError("error serializing unmined transaction", serErr)
+			if err = sorter.Add(int64(unminedTx.CreatedAt), *unminedTx.Node, unminedTx.TxInpoints); err != nil {
+				return errors.NewProcessingError("error buffering unmined transaction %s for sorting", unminedTx.Node.Hash, err)
 			}
-
-			// Use sequence number as key (8 bytes, big-endian for lexicographic ordering)
-			key := make([]byte, 8)
-			binary.BigEndian.PutUint64(key, sequence)
-
-			if setErr := writeBatch.Set(key, txData); setErr != nil {
-				writeBatch.Cancel()
-				return errors.NewProcessingError("error writing to temp store", setErr)
-			}
-
-			// Add lightweight sort entry
-			sortEntries = append(sortEntries, sortEntry{
-				CreatedAt: unminedTx.CreatedAt,
-				Sequence:  sequence,
-			})
 
 			if unminedTx.Locked {
 				lockedTransactions = append(lockedTransactions, unminedTx.Node.Hash)
-				lockedCount.Add(1)
-			}
-
-			sequence++
-
-			// Flush batch periodically to prevent memory buildup
-			if writeBatch.Count() >= 10000 {
-				if flushErr := writeBatch.Flush(); flushErr != nil {
-					return errors.NewProcessingError("error flushing temp store batch", flushErr)
-				}
 			}
 		}
 
-		if totalProcessed.Load()%100_000 == 0 {
-			b.logger.Infof("[loadUnminedTransactionsWithDiskSort] processed %d unmined transactions so far", totalProcessed.Load())
+		if time.Since(lastLogTime) >= 10*time.Second {
+			elapsed := time.Since(iteratorStart)
+			b.logger.Infof("[loadUnminedTransactionsWithDiskSort] progress: %d txs processed, %.0f txs/sec, elapsed %s",
+				totalProcessed, float64(totalProcessed)/elapsed.Seconds(), elapsed.Truncate(time.Second))
+			lastLogTime = time.Now()
 		}
 	}
 
-	// Flush any remaining writes
-	if flushErr := writeBatch.Flush(); flushErr != nil {
-		return errors.NewProcessingError("error flushing final temp store batch", flushErr)
-	}
-
-	iteratorDuration := time.Since(iteratorStart).Seconds()
-	prometheusBlockAssemblerIteratorProcessingTime.WithLabelValues("false").Observe(iteratorDuration)
-	prometheusBlockAssemblerIteratorTransactionsTotal.WithLabelValues("false").Add(float64(totalProcessed.Load()))
-	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "skipped").Add(float64(skippedCount.Load()))
-	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "already_mined").Add(float64(alreadyMinedCount.Load()))
-	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "locked").Add(float64(lockedCount.Load()))
-	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "added").Add(float64(len(sortEntries)))
+	prometheusBlockAssemblerIteratorProcessingTime.WithLabelValues("false").Observe(time.Since(iteratorStart).Seconds())
+	prometheusBlockAssemblerIteratorTransactionsTotal.WithLabelValues("false").Add(float64(totalProcessed))
+	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "skipped").Add(float64(skippedCount))
+	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "already_mined").Add(float64(alreadyMinedCount))
+	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "locked").Add(float64(len(lockedTransactions)))
+	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues("false", "added").Add(float64(sorter.Len()))
 
 	// Fix data inconsistencies
 	if len(markAsMinedOnLongestChain) > 0 {
@@ -3749,75 +3750,36 @@ func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context
 		b.logger.Infof("[BlockAssembler] fixed %d transactions with inconsistent unmined_since", len(markAsMinedOnLongestChain))
 	}
 
-	// Sort the lightweight entries in memory
-	sortStart := time.Now()
-	sort.Slice(sortEntries, func(i, j int) bool {
-		if sortEntries[i].CreatedAt != sortEntries[j].CreatedAt {
-			return sortEntries[i].CreatedAt < sortEntries[j].CreatedAt
-		}
-		// Deterministic tiebreak on equal CreatedAt: Sequence is the iterator
-		// yield order, which places parents before children where the iterator
-		// itself is ordered. This path does not run validateParentChain (it is
-		// gated on OnRestartValidateParentChain being false), so it never drops
-		// on misordering; the tiebreak removes non-determinism between restarts.
-		return sortEntries[i].Sequence < sortEntries[j].Sequence
-	})
-	txCount := len(sortEntries)
-	var countBucket string
-	switch {
-	case txCount < 1000:
-		countBucket = "<1k"
-	case txCount < 10000:
-		countBucket = "1k-10k"
-	case txCount < 100000:
-		countBucket = "10k-100k"
-	case txCount < 1000000:
-		countBucket = "100k-1M"
-	default:
-		countBucket = ">1M"
+	b.logger.Infof("[BlockAssembler] sorted %d unmined transactions (total processed: %d, skipped: %d, already mined: %d, locked: %d), adding to subtree processor",
+		sorter.Len(), totalProcessed, skippedCount, alreadyMinedCount, len(lockedTransactions))
+
+	batchSize := b.settings.BlockAssembly.UnminedLoadingBatchSize
+	if batchSize <= 0 {
+		batchSize = 1024 * 1024
 	}
-	prometheusBlockAssemblerSortTransactionsTime.WithLabelValues(countBucket).Observe(time.Since(sortStart).Seconds())
 
-	b.logger.Infof("[BlockAssembler] loaded %d unmined transactions into temp store (total processed: %d, skipped: %d, already mined: %d, locked: %d)",
-		len(sortEntries), totalProcessed.Load(), skippedCount.Load(), alreadyMinedCount.Load(), lockedCount.Load())
-
-	b.logger.Infof("[loadUnminedTransactionsWithDiskSort] reading back transactions in sorted order and adding to subtree processor")
-
-	// Read back in sorted order and add to subtree processor
-	batchStart := time.Now()
 	addStart := time.Now()
-	addTxs := float64(0)
 
-	for idx, entry := range sortEntries {
-		// Get transaction data from temp store
-		key := make([]byte, 8)
-		binary.BigEndian.PutUint64(key, entry.Sequence)
-
-		txData, getErr := tempStore.Get(key)
-		if getErr != nil {
-			return errors.NewProcessingError("error reading from temp store", getErr)
+	err = sorter.Drain(ctx, batchSize, func(batch []*utxo.UnminedTransaction) error {
+		// Drain never splits an equal-CreatedAt group across batches, so the
+		// parents-first tiebreak sees every member of a group.
+		if storeTxInpoints {
+			orderEqualCreatedAtRunsParentsFirst(batch)
 		}
 
-		unminedTx, deserErr := utxo.DeserializeUnminedTransaction(txData)
-		if deserErr != nil {
-			return errors.NewProcessingError("error deserializing unmined transaction", deserErr)
+		if err := b.subtreeProcessor.AddNodesDirectly(batch, true); err != nil {
+			return errors.NewProcessingError("error adding unmined transactions batch to subtree processor", err)
 		}
 
-		if err = b.subtreeProcessor.AddDirectly(unminedTx.Node, unminedTx.TxInpoints, true); err != nil {
-			return errors.NewProcessingError("error adding unmined transaction to subtree processor", err)
-		}
+		prometheusBlockAssemblerAddDirectlyBatchTime.Observe(time.Since(addStart).Seconds())
+		prometheusBlockAssemblerAddDirectlyTotal.Add(float64(len(batch)))
+		addStart = time.Now()
 
-		if (idx+1)%10_000 == 0 {
-			prometheusBlockAssemblerAddDirectlyTime.Observe(time.Since(addStart).Seconds())
-			prometheusBlockAssemblerAddDirectlyTotal.Add(addTxs)
-			addStart = time.Now()
-			addTxs = 0
-		}
-
-		addTxs++
+		return nil
+	})
+	if err != nil {
+		return errors.NewProcessingError("error merging sorted unmined transactions into the subtree processor", err)
 	}
-
-	prometheusBlockAssemblerAddDirectlyBatchTime.Observe(time.Since(batchStart).Seconds())
 
 	// Unlock any locked transactions
 	if len(lockedTransactions) > 0 {

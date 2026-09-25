@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"net/url"
-	"sort"
 	"testing"
 	"time"
 
@@ -248,28 +247,6 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		err := ba.loadUnminedTransactions(ctx)
 		require.NoError(t, err)
 	})
-}
-
-func TestSortEntryOrdering(t *testing.T) {
-	// Test that sortEntry slice sorts correctly by CreatedAt
-	entries := []sortEntry{
-		{CreatedAt: 300, Sequence: 2},
-		{CreatedAt: 100, Sequence: 0},
-		{CreatedAt: 200, Sequence: 1},
-		{CreatedAt: 500, Sequence: 4},
-		{CreatedAt: 400, Sequence: 3},
-	}
-
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].CreatedAt < entries[j].CreatedAt
-	})
-
-	// Verify sorted order
-	assert.Equal(t, 100, entries[0].CreatedAt)
-	assert.Equal(t, 200, entries[1].CreatedAt)
-	assert.Equal(t, 300, entries[2].CreatedAt)
-	assert.Equal(t, 400, entries[3].CreatedAt)
-	assert.Equal(t, 500, entries[4].CreatedAt)
 }
 
 // setupDiskSortTest creates a BlockAssembler configured for disk sort testing
