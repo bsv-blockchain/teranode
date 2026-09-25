@@ -129,7 +129,7 @@ func newMainChainCache(client blockchain.ClientI, logger ulogger.Logger, windowS
 // so service startup never blocks on blockchain availability — lookups before
 // the first successful rebuild simply take the unhealthy → direct-RPC path.
 func (c *mainChainCache) Start(ctx context.Context) error {
-	sub, err := c.client.Subscribe(ctx, "asset-mainchain-cache")
+	sub, err := c.client.Subscribe(ctx, blockchain.SubscriberAssetMainChainCache)
 	if err != nil {
 		return err
 	}

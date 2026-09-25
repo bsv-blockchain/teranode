@@ -98,10 +98,14 @@ func (s *SQL) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainh
 		return nil, nil, err
 	}
 
-	numberOfHeaders := blockHeaderTillMeta.Height - blockHeaderFromMeta.Height + 1
+	if blockHeaderTillMeta.Height < blockHeaderFromMeta.Height {
+		return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
+	}
+	numberOfHeaders := uint64(blockHeaderTillMeta.Height) - uint64(blockHeaderFromMeta.Height) + 1
+	capacity := preallocForRange(blockHeaderFromMeta.Height, blockHeaderTillMeta.Height)
 
-	blockHeaders := make([]*model.BlockHeader, 0, numberOfHeaders)
-	blockHeaderMetas := make([]*model.BlockHeaderMeta, 0, numberOfHeaders)
+	blockHeaders := make([]*model.BlockHeader, 0, capacity)
+	blockHeaderMetas := make([]*model.BlockHeaderMeta, 0, capacity)
 
 	q := `
 		WITH RECURSIVE start_block AS (

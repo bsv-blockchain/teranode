@@ -699,7 +699,7 @@ func waitForPostgresToStart(logger ulogger.Logger, address string) error {
 }
 
 func getBlockHeightTrackerCh(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI) (chan uint32, error) {
-	blockchainSubscriptionCh, err := blockchainClient.Subscribe(ctx, "File BlockHeight")
+	blockchainSubscriptionCh, err := blockchainClient.Subscribe(ctx, blockchain.SubscriberFileBlockHeight)
 	if err != nil {
 		return nil, errors.NewServiceError("error subscribing to blockchain", err)
 	}

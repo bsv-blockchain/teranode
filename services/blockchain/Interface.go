@@ -20,15 +20,17 @@ import (
 // constants so that callers of GetSubscribers() can reliably detect which
 // services are currently connected.
 const (
-	SubscriberLegacy            = "legacy/manager"
-	SubscriberP2P               = "p2pServer"
-	SubscriberUTXOStore         = "UTXOStore"
-	SubscriberBlockAssembler    = "BlockAssembler"
-	SubscriberBlockValidation   = "blockvalidation"
-	SubscriberSubtreeValidation = "subtreevalidation"
-	SubscriberPruner            = "Pruner"
-	SubscriberAssetService      = "AssetService"
-	SubscriberUTXOPersister     = "utxo-persister"
+	SubscriberLegacy              = "legacy/manager"
+	SubscriberP2P                 = "p2pServer"
+	SubscriberUTXOStore           = "UTXOStore"
+	SubscriberBlockAssembler      = "BlockAssembler"
+	SubscriberBlockValidation     = "blockvalidation"
+	SubscriberSubtreeValidation   = "subtreevalidation"
+	SubscriberPruner              = "Pruner"
+	SubscriberAssetService        = "AssetService"
+	SubscriberUTXOPersister       = "utxo-persister"
+	SubscriberFileBlockHeight     = "File BlockHeight"
+	SubscriberAssetMainChainCache = "asset-mainchain-cache"
 )
 
 // ClientI defines the interface for blockchain client operations.

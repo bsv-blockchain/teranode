@@ -12,6 +12,10 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// defaultMaxLastNBlocks is the fallback bound on 'n' when settings is nil or
+// unset; mirrors blockchain_maxBlocksByHeightRange's own default.
+const defaultMaxLastNBlocks = 2000
+
 // GetLastNBlocks handles HTTP GET requests to retrieve the most recent blocks
 // in the blockchain. It supports filtering and optional inclusion of orphaned blocks.
 //
@@ -112,6 +116,19 @@ func (h *HTTP) GetLastNBlocks(c echo.Context) error {
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid 'n' parameter", err).Error())
 		}
+	}
+
+	// Bound n so an unauthenticated caller cannot force a whole-chain
+	// materialisation of BlockInfo structs; mirrors the
+	// blockchain_maxBlocksByHeightRange bound the gRPC server applies to
+	// this same GetLastNBlocks call.
+	maxN := int64(defaultMaxLastNBlocks)
+	if h.settings != nil && h.settings.BlockChain.MaxBlocksByHeightRange > 0 {
+		maxN = int64(h.settings.BlockChain.MaxBlocksByHeightRange)
+	}
+
+	if n > maxN {
+		n = maxN
 	}
 
 	fromHeight := uint64(0)
