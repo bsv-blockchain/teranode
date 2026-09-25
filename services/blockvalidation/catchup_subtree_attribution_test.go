@@ -221,7 +221,7 @@ func TestFetchSubtreeDataForBlock_StrikesTheServingPeerNotThePrimary(t *testing.
 	require.NoError(t, subtreeA.AddNode(*txs[3].TxIDChainHash(), 3, 13))
 	hashA := subtreeA.RootHash()
 
-	var nodeBytesA []byte
+	nodeBytesA := make([]byte, 0, len(subtreepkg.CoinbasePlaceholderHashValue)+len(txs[1].TxIDChainHash())+len(txs[2].TxIDChainHash())+len(txs[3].TxIDChainHash()))
 	nodeBytesA = append(nodeBytesA, subtreepkg.CoinbasePlaceholderHashValue[:]...)
 	nodeBytesA = append(nodeBytesA, txs[1].TxIDChainHash()[:]...)
 	nodeBytesA = append(nodeBytesA, txs[2].TxIDChainHash()[:]...)

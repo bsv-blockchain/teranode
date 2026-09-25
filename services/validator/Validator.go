@@ -709,7 +709,16 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 
 	if err != nil {
 		if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
-			// TODO should this also announce transactions with missing parents etc.?
+			// Deliberately does not cover ErrTxMissingParent. This message carries
+			// an empty peer_id, and p2p's rejectedTxHandler re-broadcasts exactly
+			// those to the whole network, so announcing a missing parent would
+			// gossip "rejected" for a transaction that is valid and will succeed
+			// once its parent lands - at a rate proportional to the out-of-order
+			// delivery the 32-partition validatortxs topic produces by design.
+			// The drop is counted instead, on the Kafka intake path in Server.go
+			// (prometheusMissingParentTransactions). The real fix - an orphan pool
+			// like services/legacy/netsync already has, so the child is retried
+			// once its parent lands - remains deferred.
 			if errors.Is(err, errors.ErrTxInvalid) {
 				if v.blockchainClient != nil {
 					var (
