@@ -118,8 +118,9 @@ type Blockchain struct {
 	kafkaChan                     chan *kafka.Message                  // Channel for Kafka messages
 	stats                         *gocore.Stat                         // Statistics tracking
 	finiteStateMachine            *fsm.FSM                             // FSM for blockchain state
-	fsmMu                         sync.Mutex                           // Serialises SendFSMEvent transitions (FSM read-modify-write + stateChangeTimestamp)
+	fsmMu                         sync.RWMutex                         // Serialises SendFSMEvent transitions (FSM read-modify-write + stateChangeTimestamp)
 	fsmPersistenceUncertain       bool                                 // Guarded by fsmMu; last write may have committed despite returning an error
+	fsmNotificationPending        *blockchain_api.Notification         // Guarded by fsmMu; persisted transition awaits ordered publication
 	stateChangeTimestamp          time.Time                            // Timestamp of last state change
 	AppCtx                        context.Context                      // Application context
 	localTestStartState           string                               // Initial state for testing
@@ -812,6 +813,7 @@ func (b *Blockchain) broadcastHeartbeat() {
 func (b *Blockchain) startSubscriptions() {
 	// Signal that subscription manager is now ready to handle subscriptions
 	b.subscriptionManagerReady.Store(true)
+	defer b.subscriptionManagerReady.Store(false)
 	b.logger.Infof("[Blockchain][startSubscriptions] Subscription manager is now ready")
 	for {
 		select {
@@ -2916,6 +2918,9 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 
 // sendFSMEventLocked requires fsmMu to be held.
 func (b *Blockchain) sendFSMEventLocked(ctx context.Context, eventReq *blockchain_api.SendFSMEventRequest) (*blockchain_api.GetFSMStateResponse, error) {
+	if b.fsmNotificationPending != nil {
+		return nil, errors.WrapGRPC(errors.NewStateError("FSM notification publication is pending"))
+	}
 	b.logger.Infof("[Blockchain Server] Received FSM event req: %v, will send event to the FSM", eventReq)
 
 	priorState := b.finiteStateMachine.Current()
@@ -2972,7 +2977,10 @@ func (b *Blockchain) sendFSMEventLocked(ctx context.Context, eventReq *blockchai
 	transitionCtx := context.WithoutCancel(ctx)
 	err := b.finiteStateMachine.Event(transitionCtx, eventReq.Event.String())
 	if err != nil {
-		b.logger.Debugf("[Blockchain Server] Error sending event to FSM; in-memory state has not changed; a failed store write may have committed.")
+		if b.fsmNotificationPending != nil {
+			b.stateChangeTimestamp = time.Now()
+		}
+		b.logger.Debugf("[Blockchain Server] FSM event failed; persistence may be uncertain, or state may have changed with notification publication pending")
 		switch eventErr := err.(type) {
 		case fsm.InTransitionError:
 			return nil, errors.WrapGRPC(errors.NewStateError("[Blockchain Server] FSM event %s rejected: pending transition has not retired; restart required", eventReq.Event.String(), err))
@@ -3083,6 +3091,9 @@ func HighestCheckpointHeight(checkpoints []chaincfg.Checkpoint) uint32 {
 func (b *Blockchain) sendFSMConvenienceEvent(ctx context.Context, event blockchain_api.FSMEventType, target blockchain_api.FSMStateType) (*emptypb.Empty, error) {
 	b.fsmMu.Lock()
 	defer b.fsmMu.Unlock()
+	if b.fsmNotificationPending != nil {
+		return nil, errors.WrapGRPC(errors.NewStateError("FSM notification publication is pending"))
+	}
 
 	current := b.finiteStateMachine.Current()
 	if current == target.String() {

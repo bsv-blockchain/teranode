@@ -148,7 +148,7 @@ func TestCheckBlockSubtrees_ShortCircuitRequiresFileTypeSubtree(t *testing.T) {
 		require.True(t, resp.Blessed)
 
 		// The early return fired: execution never reached the FSM-state read below it.
-		server.blockchainClient.(*blockchain.Mock).AssertNotCalled(t, "GetFSMCurrentState", mock.Anything)
+		server.blockchainClient.(*blockchain.Mock).AssertNotCalled(t, "ReadFSMState", mock.Anything)
 		require.Zero(t, httpmock.GetTotalCallCount(), "no peer fetch may happen on the short-circuit path")
 	})
 
@@ -178,6 +178,6 @@ func TestCheckBlockSubtrees_ShortCircuitRequiresFileTypeSubtree(t *testing.T) {
 		// storeSubtreeFiles and is covered where that runs.
 		_, _ = server.CheckBlockSubtrees(context.Background(), shortCircuitTestBlock(t, subtreeHash))
 
-		server.blockchainClient.(*blockchain.Mock).AssertCalled(t, "GetFSMCurrentState", mock.Anything)
+		server.blockchainClient.(*blockchain.Mock).AssertCalled(t, "ReadFSMState", mock.Anything)
 	})
 }

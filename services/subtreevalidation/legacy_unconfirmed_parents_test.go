@@ -30,6 +30,10 @@ func (c *fsmStateOverrideClient) GetFSMCurrentState(_ context.Context) (*blockch
 	return &state, nil
 }
 
+func (c *fsmStateOverrideClient) ReadFSMState(context.Context) (blockchain.FSMStateType, error) {
+	return c.state, nil
+}
+
 // TestCheckSubtreeFromBlockLegacyUnconfirmedParents is the subtreevalidation
 // regression for the legacy-sync wedge at testnet 1730003: a tx in a mined
 // block spending a same-block parent found the parent in the UTXO store with

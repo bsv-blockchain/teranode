@@ -81,15 +81,21 @@ type BlockAssemblyAPIClient interface {
 	SubmitMiningSolution(ctx context.Context, in *SubmitMiningSolutionRequest, opts ...grpc.CallOption) (*OKResponse, error)
 	// ResetBlockAssembly resets the block assembly state.
 	// Useful for handling reorgs or recovering from errors.
+	// Returns the completed operation result. Cancellation after execution starts
+	// stops waiting only; the accepted reset continues under the service lifetime.
 	ResetBlockAssembly(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*EmptyMessage, error)
 	// ResetBlockAssemblyFully performs a complete reset of the block assembly state.
 	// This includes clearing all transactions and resetting internal structures.
 	// This will traverse the whole UTXO set and is more intensive than a standard reset.
+	// Returns the completed operation result. Cancellation after execution starts
+	// stops waiting only; the accepted reset continues under the service lifetime.
 	ResetBlockAssemblyFully(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*EmptyMessage, error)
 	// ResetBlockAssemblyValidateInputs performs a full reset with input validation.
 	// For each unmined transaction, verifies that its inputs are still spent by this
 	// transaction. If an input is spent by a different tx, marks the tx as conflicting.
 	// Use this to recover from corrupted UTXO state (e.g. after a double-spend incident).
+	// Returns the completed operation result. Cancellation after execution starts
+	// stops waiting only; the accepted reset continues under the service lifetime.
 	ResetBlockAssemblyValidateInputs(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*EmptyMessage, error)
 	// CheckBlockAssemblyValidateInputs checks unmined tx inputs for validity without modifying state.
 	// Returns an error if any unmined transactions have inputs spent by different transactions.
@@ -362,15 +368,21 @@ type BlockAssemblyAPIServer interface {
 	SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*OKResponse, error)
 	// ResetBlockAssembly resets the block assembly state.
 	// Useful for handling reorgs or recovering from errors.
+	// Returns the completed operation result. Cancellation after execution starts
+	// stops waiting only; the accepted reset continues under the service lifetime.
 	ResetBlockAssembly(context.Context, *EmptyMessage) (*EmptyMessage, error)
 	// ResetBlockAssemblyFully performs a complete reset of the block assembly state.
 	// This includes clearing all transactions and resetting internal structures.
 	// This will traverse the whole UTXO set and is more intensive than a standard reset.
+	// Returns the completed operation result. Cancellation after execution starts
+	// stops waiting only; the accepted reset continues under the service lifetime.
 	ResetBlockAssemblyFully(context.Context, *EmptyMessage) (*EmptyMessage, error)
 	// ResetBlockAssemblyValidateInputs performs a full reset with input validation.
 	// For each unmined transaction, verifies that its inputs are still spent by this
 	// transaction. If an input is spent by a different tx, marks the tx as conflicting.
 	// Use this to recover from corrupted UTXO state (e.g. after a double-spend incident).
+	// Returns the completed operation result. Cancellation after execution starts
+	// stops waiting only; the accepted reset continues under the service lifetime.
 	ResetBlockAssemblyValidateInputs(context.Context, *EmptyMessage) (*EmptyMessage, error)
 	// CheckBlockAssemblyValidateInputs checks unmined tx inputs for validity without modifying state.
 	// Returns an error if any unmined transactions have inputs spent by different transactions.

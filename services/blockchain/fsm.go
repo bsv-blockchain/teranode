@@ -4,6 +4,7 @@ package blockchain
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -11,6 +12,10 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/looplab/fsm"
 )
+
+// FSM publication is normally immediate. A stopped subscription manager must
+// not hold the transition lock indefinitely after the state has been persisted.
+const fsmNotificationEnqueueTimeout = time.Second
 
 // FSMTransitions is the single source of truth for blockchain FSM transitions.
 // Used by NewFiniteStateMachine and by AvailableEventsForState.
@@ -89,15 +94,25 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 				"destination": e.Dst,
 			}
 
-			if _, err := b.SendNotification(context.Background(), &blockchain_api.Notification{
+			notification := &blockchain_api.Notification{
 				Type:     model.NotificationType_FSMState,
 				Hash:     (&chainhash.Hash{})[:], // not relevant for FSMEvent notifications
 				Base_URL: "",                     // not relevant for FSMEvent notifications
 				Metadata: &blockchain_api.NotificationMetadata{
 					Metadata: metadata,
 				},
-			}); err != nil {
-				b.logger.Errorf("[Blockchain][FiniteStateMachine] error sending notification: %s", err)
+			}
+			timer := time.NewTimer(fsmNotificationEnqueueTimeout)
+			defer timer.Stop()
+			select {
+			case b.notifications <- notification:
+			case <-timer.C:
+				// Event already persisted and changed in memory. Return an error,
+				// withhold authority, and retry this notification before admitting
+				// another transition so subscribers see states in order.
+				b.fsmNotificationPending = notification
+				e.Err = errors.NewStateError("FSM state persisted but notification publication is pending")
+				go b.retryFSMNotification(notification)
 			}
 
 			prometheusBlockchainFSMCurrentState.Set(float64(blockchain_api.FSMStateType_value[e.Dst]))
@@ -118,6 +133,24 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 	}
 
 	return finiteStateMachine
+}
+
+func (b *Blockchain) retryFSMNotification(notification *blockchain_api.Notification) {
+	ctx := b.AppCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case b.notifications <- notification:
+		b.fsmMu.Lock()
+		if b.fsmNotificationPending == notification {
+			b.fsmNotificationPending = nil
+		}
+		b.fsmMu.Unlock()
+	case <-ctx.Done():
+		// Shutdown discards the in-process queue. Startup restores persisted FSM
+		// state and the subscription manager's initial-state publication.
+	}
 }
 
 // CheckFSM creates a health check function for the blockchain FSM.

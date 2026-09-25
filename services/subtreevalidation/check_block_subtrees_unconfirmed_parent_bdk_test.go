@@ -108,9 +108,10 @@ func newRealBDKServer(t *testing.T, dbName string) (*Server, utxo.Store, *bt.Tx,
 
 	blockchainClient, err := blockchain.NewLocalClient(logger, tSettings, &blockchainstore.MockStore{}, subtreeStore, utxoStore)
 	require.NoError(t, err)
+	authoritativeClient := &fsmStateOverrideClient{ClientI: blockchainClient, state: blockchain.FSMStateRUNNING}
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
-	server, err := New(ctx, logger, tSettings, subtreeStore, txStore, utxoStore, realValidator, blockchainClient, nilConsumer, nilConsumer, nil, nil)
+	server, err := New(ctx, logger, tSettings, subtreeStore, txStore, utxoStore, realValidator, authoritativeClient, nilConsumer, nilConsumer, nil, nil)
 	require.NoError(t, err)
 
 	return server, utxoStore, parentTx, childTx

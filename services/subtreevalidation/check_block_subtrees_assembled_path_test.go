@@ -308,7 +308,7 @@ func TestCheckBlockSubtrees_AssembledPath_SkipLevelAndMixedParent(t *testing.T) 
 	mockBC := server.blockchainClient.(*blockchain.Mock)
 	mockBC.ExpectedCalls = nil
 	currentState := blockchain.FSMStateRUNNING
-	mockBC.On("GetFSMCurrentState", mock.Anything).Return(&currentState, nil).Maybe()
+	mockBC.On("ReadFSMState", mock.Anything).Return(currentState, nil).Maybe()
 	mockBC.On("IsFSMCurrentState", mock.Anything, blockchain.FSMStateRUNNING).Return(true, nil).Maybe()
 	mockBC.On("GetBestBlockHeader", mock.Anything).
 		Return(&model.BlockHeader{}, &model.BlockHeaderMeta{}, nil).Maybe()

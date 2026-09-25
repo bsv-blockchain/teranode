@@ -2,6 +2,7 @@
 package blockassembly
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
@@ -493,7 +495,8 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	var s []*subtree.Subtree
 	require.Eventually(t, func() bool {
 		// Use internal method to get subtrees directly (gRPC client doesn't return SubtreeSlices)
-		_, subtrees, err := ba.blockAssembler.GetMiningCandidate(context.Background())
+		_, subtrees, miningLease, err := ba.blockAssembler.GetMiningCandidate(context.Background())
+		defer miningLease.Release()
 		if err != nil {
 			return false
 		}
@@ -644,7 +647,9 @@ func TestShouldHandleReorg(t *testing.T) {
 	var st1 []*subtree.Subtree
 	require.Eventually(t, func() bool {
 		var err error
-		mc1, st1, err = ba.blockAssembler.GetMiningCandidate(context.Background())
+		var miningLease *subtreeprocessor.MiningSnapshotLease
+		mc1, st1, miningLease, err = ba.blockAssembler.GetMiningCandidate(context.Background())
+		defer miningLease.Release()
 		if err != nil || mc1 == nil {
 			return false
 		}
@@ -683,7 +688,8 @@ func TestShouldHandleReorg(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Verify transactions are still present after reorg
-	mc2, st2, err := ba.blockAssembler.GetMiningCandidate(context.Background())
+	mc2, st2, miningLease, err := ba.blockAssembler.GetMiningCandidate(context.Background())
+	defer miningLease.Release()
 	require.NoError(t, err)
 	require.NotNil(t, mc2)
 	require.NotEmpty(t, st2)
@@ -714,31 +720,42 @@ func TestShouldHandleReorg(t *testing.T) {
 		"Block assembler should follow Chain B due to higher difficulty")
 }
 
-// waitForBestBlockHash waits for the best block to match the expected hash
-// waitForAssemblerBlock polls until the block assembler's current block matches the
-// expected hash or the timeout elapses. This is used after a reorg to ensure the
-// assembler has finished processing (including reloading unmined transactions) before
-// assertions are made about the mining candidate.
-func waitForAssemblerBlock(ctx context.Context, assembler *BlockAssembler, expectedHash *chainhash.Hash, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			header, _ := assembler.CurrentBlock()
-			if header != nil && header.Hash().IsEqual(expectedHash) {
-				return nil
-			}
-
-			time.Sleep(100 * time.Millisecond)
+// waitForAssemblerMiningCandidate waits for the observable result of chain
+// movement and queue processing. A blockchain tip update or even CurrentBlock
+// alone can precede assembly completion; intermediate empty work is valid.
+func waitForAssemblerMiningCandidate(t *testing.T, ctx context.Context, assembler *BlockAssembler, parent *chainhash.Hash, hashes ...*chainhash.Hash) (*model.MiningCandidate, []*subtree.Subtree, *subtreeprocessor.MiningSnapshotLease) {
+	t.Helper()
+	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var candidate *model.MiningCandidate
+	var trees []*subtree.Subtree
+	var lease *subtreeprocessor.MiningSnapshotLease
+	require.Eventually(t, func() bool {
+		var err error
+		candidate, trees, lease, err = assembler.GetMiningCandidate(waitCtx)
+		if err != nil || candidate == nil || !bytes.Equal(candidate.PreviousHash, parent[:]) {
+			lease.Release()
+			return false
 		}
-	}
-
-	return errors.NewProcessingError("timeout waiting for block assembler to adopt block %s", expectedHash)
+		missing := make(map[chainhash.Hash]struct{}, len(hashes))
+		for _, hash := range hashes {
+			missing[*hash] = struct{}{}
+		}
+		for _, tree := range trees {
+			for _, node := range tree.Nodes {
+				delete(missing, node.Hash)
+			}
+		}
+		if len(missing) != 0 {
+			lease.Release()
+			return false
+		}
+		return true
+	}, 10*time.Second, 10*time.Millisecond, "assembly must publish the expected transactions on parent %s", parent)
+	return candidate, trees, lease
 }
 
+// waitForBestBlockHash waits for the best block to match the expected hash.
 func waitForBestBlockHash(ctx context.Context, blockchainClient blockchain.ClientI, expectedHash *chainhash.Hash, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 
@@ -907,14 +924,10 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	err = waitForBestBlockHash(ctx, ba.blockchainClient, chainAHeader4.Hash(), 10*time.Second)
 	require.NoError(t, err, "Timeout waiting for Chain A block 4 to be processed")
 
-	// Additional wait to ensure block assembly has processed the block
-	time.Sleep(500 * time.Millisecond)
-
-	// Get mining candidate while on Chain A
+	// Wait for usable assembly work, not merely the asynchronously updated chain tip.
 	t.Log("Getting mining candidate on Chain A...")
-
-	mc1, subtrees1, err := ba.blockAssembler.GetMiningCandidate(context.Background())
-	require.NoError(t, err)
+	mc1, subtrees1, miningLease := waitForAssemblerMiningCandidate(t, ctx, ba.blockAssembler, chainAHeader4.Hash(), testHash1, testHash2, testHash3)
+	defer miningLease.Release()
 	require.NotNil(t, mc1)
 	require.NotEmpty(t, subtrees1)
 
@@ -940,15 +953,10 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	err = waitForBestBlockHash(ctx, ba.blockchainClient, chainBHeader1.Hash(), 10*time.Second)
 	require.NoError(t, err, "Timeout waiting for reorganization to complete")
 
-	// Wait for block assembly to adopt Chain B as its current block, then wait for it
-	// to finish reloading unmined transactions. Polling is more reliable than a fixed
-	// sleep on slow CI runners where 500ms is not sufficient.
-	err = waitForAssemblerBlock(ctx, ba.blockAssembler, chainBHeader1.Hash(), 10*time.Second)
-	require.NoError(t, err, "Timeout waiting for block assembler to adopt Chain B")
-
-	// Verify transactions are still present after reorg
-	mc2, subtrees2, err := ba.blockAssembler.GetMiningCandidate(context.Background())
-	require.NoError(t, err)
+	// Verify reorg completion through its published candidate. Merely adopting
+	// the new header does not mean replay and transaction admission have finished.
+	mc2, subtrees2, miningLease := waitForAssemblerMiningCandidate(t, ctx, ba.blockAssembler, chainBHeader1.Hash(), testHash1, testHash2, testHash3)
+	defer miningLease.Release()
 	require.NotNil(t, mc2)
 	require.NotEmpty(t, subtrees2)
 

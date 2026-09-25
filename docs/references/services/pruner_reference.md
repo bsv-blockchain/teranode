@@ -98,9 +98,9 @@ teranode_pruner_duration_seconds{operation="dah_pruner"} 5.678
 
 - `reason`: Reason for skipping
     - `block_assembly_timeout` - Timed out or errored waiting for Block Assembly to be ready
-    - `below_min_height` - Block height at or below `pruner_minBlockHeight`
-    - `fsm_error` - Failed to read the blockchain FSM state
-    - `catchup_mode` - Node is in the CATCHINGBLOCKS FSM state and `pruner_skipDuringCatchup` is set
+    - `below_min_height` - Block height at or below `pruner_min_block_height`
+    - `fsm_error` - Catchup guard enabled and blockchain FSM state could not be read
+    - `fsm_not_running` - Catchup guard enabled and blockchain FSM is CATCHINGBLOCKS, IDLE, unknown, or missing
 
 **Example:**
 
@@ -108,10 +108,12 @@ teranode_pruner_duration_seconds{operation="dah_pruner"} 5.678
 teranode_pruner_skipped_total{reason="block_assembly_timeout"} 42
 teranode_pruner_skipped_total{reason="below_min_height"} 10
 teranode_pruner_skipped_total{reason="fsm_error"} 0
-teranode_pruner_skipped_total{reason="catchup_mode"} 7
+teranode_pruner_skipped_total{reason="fsm_not_running"} 7
 ```
 
 **Note**: When defensive mode is enabled, skipped records are logged but not tracked as a separate metric label. Monitor logs for "Defensive skip" messages.
+
+`fsm_not_running` replaces the old `catchup_mode` reason in the `pruner_skipDuringCatchup` guard; the counter name is unchanged. Earlier releases did not load this setting, so configured nodes did not emit either guard reason. The setting now takes effect, including existing `true` configurations: long catchup, IDLE, or unavailable-state periods defer pruning and can increase disk usage. Review the [upgrade note](../settings/services/pruner_settings.md#pruner_skipduringcatchup) and available capacity.
 
 #### teranode_pruner_updating_parents_total
 

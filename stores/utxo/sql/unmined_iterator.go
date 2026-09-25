@@ -23,6 +23,10 @@ type unminedTxIterator struct {
 }
 
 func newUnminedTxIterator(store *Store) (*unminedTxIterator, error) {
+	return newUnminedTxIteratorContext(context.Background(), store)
+}
+
+func newUnminedTxIteratorContext(ctx context.Context, store *Store) (*unminedTxIterator, error) {
 	it := &unminedTxIterator{
 		store: store,
 	}
@@ -43,7 +47,7 @@ func newUnminedTxIterator(store *Store) (*unminedTxIterator, error) {
 		ORDER BY t.id ASC
 	`
 
-	rows, err := store.db.Query(q)
+	rows, err := store.db.QueryContext(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -54,6 +58,9 @@ func newUnminedTxIterator(store *Store) (*unminedTxIterator, error) {
 }
 
 func (it *unminedTxIterator) Next(ctx context.Context) ([]*utxo.UnminedTransaction, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if it.done || it.err != nil || it.rows == nil {
 		return nil, it.err
 	}
@@ -87,11 +94,12 @@ func (it *unminedTxIterator) readOne(ctx context.Context) (*utxo.UnminedTransact
 
 	more := it.rows.Next()
 	if !more {
+		it.err = it.rows.Err()
 		if err := it.Close(); err != nil {
 			it.store.logger.Warnf(errFailedCloseIterator, err)
 		}
 
-		return nil, nil
+		return nil, it.err
 	}
 
 	var (
@@ -253,6 +261,16 @@ func (it *unminedTxIterator) Close() error {
 
 func (s *Store) GetUnminedTxIterator() (utxo.UnminedTxIterator, error) {
 	return newUnminedTxIterator(s)
+}
+
+// GetUnminedTxIteratorContext binds both query admission and row iteration to
+// ctx. Online recovery uses this optional API to bound its serialized scan.
+func (s *Store) GetUnminedTxIteratorContext(ctx context.Context) (utxo.UnminedTxIterator, error) {
+	iterator, err := newUnminedTxIteratorContext(ctx, s)
+	if err != nil {
+		return nil, err
+	}
+	return iterator, nil
 }
 
 // ScanInconsistentUnminedTxs is a no-op for SQL — the SQL store always uses

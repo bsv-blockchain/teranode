@@ -95,11 +95,11 @@ func wireMultiBatchMocks(server *Server) {
 	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
 		mock.Anything, mock.Anything, mock.Anything).
 		Return([]uint32{1, 2, 3}, nil).Maybe()
-	// CheckBlockSubtrees gates optimistic fetch on GetFSMCurrentState (not
+	// CheckBlockSubtrees gates optimistic fetch on ReadFSMState (not
 	// IsFSMCurrentState); mock the method actually on the code path.
 	runningState := blockchain.FSMStateRUNNING
-	server.blockchainClient.(*blockchain.Mock).On("GetFSMCurrentState", mock.Anything).
-		Return(&runningState, nil).Maybe()
+	server.blockchainClient.(*blockchain.Mock).On("ReadFSMState", mock.Anything).
+		Return(runningState, nil).Maybe()
 }
 
 // TestCheckBlockSubtrees_MultiBatch_BalancesArenas drives the real batch

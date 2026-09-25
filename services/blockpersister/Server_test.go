@@ -797,6 +797,14 @@ func (m *MockBlockchainClient) GetFSMCurrentState(ctx context.Context) (*blockch
 	defer m.mu.RUnlock()
 	return &m.fsmState, nil
 }
+func (m *MockBlockchainClient) ReadFSMState(ctx context.Context) (blockchain.FSMStateType, error) {
+	if err := ctx.Err(); err != nil {
+		return blockchain.FSMStateIDLE, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.fsmState, nil
+}
 func (m *MockBlockchainClient) IsFSMCurrentState(ctx context.Context, state blockchain.FSMStateType) (bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

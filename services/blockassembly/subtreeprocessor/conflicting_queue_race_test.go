@@ -197,6 +197,7 @@ func newTestProcessorNoStart(t *testing.T) *SubtreeProcessor {
 			if req.ErrChan != nil {
 				req.ErrChan <- nil
 			}
+			req.Release()
 		}
 	}()
 	t.Cleanup(func() { close(newSubtreeChan) })

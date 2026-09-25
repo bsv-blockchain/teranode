@@ -196,7 +196,6 @@ func TestBlockAssembly_CheckInputValidation(t *testing.T) {
 		// registered, so any attempt to validate either tx would panic the mock.
 		const bestBlockID = uint32(7)
 
-		skippedHash := chainhash.HashH([]byte("ba-startup-008-skipped"))
 		minedHash := chainhash.HashH([]byte("ba-startup-008-mined"))
 
 		mockStore := new(utxostore.MockUtxostore)
@@ -205,7 +204,7 @@ func TestBlockAssembly_CheckInputValidation(t *testing.T) {
 			Return([]uint32{bestBlockID}, nil)
 
 		unmined := []*utxostore.UnminedTransaction{
-			{Node: &subtreepkg.Node{Hash: skippedHash}, Skip: true},
+			{Skip: true},
 			{Node: &subtreepkg.Node{Hash: minedHash}, BlockIDs: []uint32{bestBlockID}},
 		}
 		iter := new(utxostore.MockUnminedTxIterator)
