@@ -59,8 +59,17 @@ func TestEd25519RequestSigner_SignsPostRequestWithBody(t *testing.T) {
 	signer := NewEd25519RequestSigner(privKey)
 
 	body := []byte(`{"txids":["a","b","c"]}`)
-	req, err := http.NewRequest(http.MethodPost, "http://example.test/api/v1/subtree/abc/txs", bytes.NewReader(body))
+
+	// The body is wrapped in a NopCloser deliberately, and must stay wrapped. Handing
+	// http.NewRequest a bare *bytes.Reader makes net/http install GetBody and ContentLength
+	// itself (net/http/request.go, the *bytes.Reader case), so the assertions below would be
+	// about what NewRequest did rather than about the signer. A NopCloser falls to
+	// NewRequest's default case, which leaves both zero - and that is also the shape the real
+	// caller produces: executeHTTPRequestWithClient assigns req.Body = io.NopCloser(...) and
+	// never sets GetBody.
+	req, err := http.NewRequest(http.MethodPost, "http://example.test/api/v1/subtree/abc/txs", io.NopCloser(bytes.NewReader(body)))
 	require.NoError(t, err)
+	require.Nil(t, req.GetBody, "precondition: the request must reach the signer with no GetBody")
 
 	require.NoError(t, signer.SignRequest(req))
 
@@ -68,8 +77,10 @@ func TestEd25519RequestSigner_SignsPostRequestWithBody(t *testing.T) {
 	readBack, err := io.ReadAll(req.Body)
 	require.NoError(t, err)
 	require.Equal(t, body, readBack, "signer must leave req.Body re-readable")
+	// NewRequest left ContentLength at 0 for a NopCloser, so this is the signer's own
+	// assignment - without it the transport would send the body with an unknown length.
 	require.Equal(t, int64(len(body)), req.ContentLength)
-	require.NotNil(t, req.GetBody, "GetBody must be set so HTTP/2 retries replay the body")
+	require.Nil(t, req.GetBody, "signing must not install GetBody - replaying a body across a redirect is the caller's decision, not the signer's")
 
 	digest := req.Header.Get(PeerAuthBodyDigestHeader)
 	want := sha256.Sum256(body)

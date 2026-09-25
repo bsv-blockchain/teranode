@@ -23,7 +23,7 @@ func RunDaemon(progname, version, commit string) {
 	gocore.Log(progname)
 
 	gocore.AddAppPayloadFn("CONFIG", func() interface{} {
-		return gocore.Config().GetAll()
+		return settings.RedactConfigMap(gocore.Config().GetAll())
 	})
 
 	// Initialize settings
@@ -78,7 +78,7 @@ func RunDaemon(progname, version, commit string) {
 
 	util.InitGRPCResolver(logger, tSettings.GRPCResolver)
 
-	stats := gocore.Config().Stats()
+	stats := settings.RedactConfigStats(gocore.Config().Stats())
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
 	daemon.New(daemon.WithLoggerFactory(func(serviceName string) ulogger.Logger {

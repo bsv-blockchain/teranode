@@ -213,11 +213,18 @@ The Blob Store includes a comprehensive HTTP REST API server implementation (`HT
 - **PATCH /blob/{key}.{fileType}**: Update blob's Delete-At-Height value via `dah` query parameter
 - **DELETE /blob/{key}.{fileType}**: Delete blob by key
 
+POST, PATCH and DELETE require an `Authorization: Bearer <token>` header matching the shared
+secret the server was constructed with. An empty secret leaves the server read-only and refuses
+all three with 401. Reads and the health endpoint need no credential. Overwrite is not available
+over this API: an existing blob is answered with 409, and an HTTP client write that asks for
+overwrite fails with a configuration error before anything is sent.
+
 #### Usage Example
 
 ```go
-// Create HTTP blob server
-httpServer := blob.NewHTTPBlobServer(blobStore, logger)
+// Create HTTP blob server. The third argument is the shared secret required for writes;
+// pass "" to serve reads only.
+httpServer, err := blob.NewHTTPBlobServer(logger, storeURL, authToken)
 
 // Start HTTP server
 http.Handle("/blob/", http.StripPrefix("/blob", httpServer))

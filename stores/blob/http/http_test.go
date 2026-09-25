@@ -2,13 +2,19 @@ package http
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
+	"sync/atomic"
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/stretchr/testify/require"
 )
 
 func setupTestServer() (*httptest.Server, *HTTPStore, error) {
@@ -233,4 +239,223 @@ func TestClose(t *testing.T) {
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
+}
+
+// redirectingPair starts a target server that counts its hits and records any Authorization
+// header it sees, plus a server that answers every request with a 302 to it. The status is
+// 302 deliberately: a 307 would prove nothing here, because this client's request bodies are
+// not of a type net/http can replay, so net/http declines to follow a 307 even with no
+// redirect policy at all. A 302 is followed by the default client, and because both servers
+// are on 127.0.0.1 Go treats them as the same host and does not strip Authorization.
+func redirectingPair(t *testing.T) (redirector *httptest.Server, targetHits *atomic.Int64, targetAuth *atomic.Value) {
+	t.Helper()
+
+	targetHits = &atomic.Int64{}
+	targetAuth = &atomic.Value{}
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHits.Add(1)
+		targetAuth.Store(r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(target.Close)
+
+	redirector = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/blob/elsewhere", http.StatusFound)
+	}))
+	t.Cleanup(redirector.Close)
+
+	return redirector, targetHits, targetAuth
+}
+
+// TestHTTPStore_RefusesRedirectOnGet covers issue 4841: a blob server does not redirect, so a
+// redirect can only be something else answering on that address.
+func TestHTTPStore_RefusesRedirectOnGet(t *testing.T) {
+	redirector, targetHits, _ := redirectingPair(t)
+
+	storeURL, err := url.Parse(redirector.URL)
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, storeURL)
+	require.NoError(t, err)
+
+	_, err = store.Get(context.Background(), []byte("k"), fileformat.FileTypeTesting)
+	require.Error(t, err)
+	require.Zero(t, targetHits.Load(), "the redirect target must never be contacted")
+}
+
+// TestHTTPStore_RefusesRedirectOnSetAndDoesNotLeakToken is the write-side half: without the
+// redirect policy the bearer token would be handed to whatever the redirect names.
+func TestHTTPStore_RefusesRedirectOnSetAndDoesNotLeakToken(t *testing.T) {
+	redirector, targetHits, targetAuth := redirectingPair(t)
+
+	storeURL, err := url.Parse(redirector.URL)
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, storeURL, options.WithHTTPAuthToken("leak-me-not"))
+	require.NoError(t, err)
+
+	err = store.Set(context.Background(), []byte("k"), fileformat.FileTypeTesting, []byte("payload"))
+	require.Error(t, err)
+	require.Zero(t, targetHits.Load(), "the redirect target must never be contacted")
+	require.Nil(t, targetAuth.Load(), "the token must never leave for a destination we did not choose")
+}
+
+// TestNew_RejectsTokenInURL pins that a credential cannot be smuggled into a store URL,
+// which callers log verbatim.
+func TestNew_RejectsTokenInURL(t *testing.T) {
+	storeURL, err := url.Parse("http://h:1/?authToken=secret")
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, storeURL)
+	require.Error(t, err)
+	require.Nil(t, store)
+	require.NotContains(t, err.Error(), "secret", "the error must not echo the credential")
+}
+
+// TestNew_StripsQueryFromBaseURL covers the request URL format "%s/blob/%s?%s": a base URL
+// carrying a query of its own produced a malformed request URL.
+func TestNew_StripsQueryFromBaseURL(t *testing.T) {
+	storeURL, err := url.Parse("http://localhost:8080/base?testId=42#frag")
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, storeURL)
+	require.NoError(t, err)
+	require.Equal(t, "http://localhost:8080/base", store.baseURL)
+
+	parsed, err := url.Parse(fmt.Sprintf(blobURLFormat, store.baseURL, "key.testing", "fileType=testing"))
+	require.NoError(t, err)
+	require.Equal(t, "/base/blob/key.testing", parsed.Path)
+	require.Equal(t, "testing", parsed.Query().Get("fileType"))
+}
+
+// TestHTTPStore_SendsTokenOnWritesOnly pins where the credential goes: on the requests that
+// change the store, and nowhere else.
+func TestHTTPStore_SendsTokenOnWritesOnly(t *testing.T) {
+	const token = "write-token"
+
+	var mu sync.Mutex
+
+	seen := map[string]string{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen[r.Method] = r.Header.Get("Authorization")
+		mu.Unlock()
+
+		switch r.Method {
+		case http.MethodPost:
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("test data"))
+		}
+	}))
+	defer server.Close()
+
+	storeURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, storeURL, options.WithHTTPAuthToken(token))
+	require.NoError(t, err)
+
+	key := []byte("k")
+
+	require.NoError(t, store.Set(context.Background(), key, fileformat.FileTypeTesting, []byte("v")))
+	require.NoError(t, store.SetDAH(context.Background(), key, fileformat.FileTypeTesting, 1000))
+	require.NoError(t, store.Del(context.Background(), key, fileformat.FileTypeTesting))
+
+	_, err = store.Get(context.Background(), key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+
+	_, err = store.Exists(context.Background(), key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Equal(t, "Bearer "+token, seen[http.MethodPost])
+	require.Equal(t, "Bearer "+token, seen[http.MethodPatch])
+	require.Equal(t, "Bearer "+token, seen[http.MethodDelete])
+	require.Empty(t, seen[http.MethodGet], "reads must not carry the credential")
+	require.Empty(t, seen[http.MethodHead], "reads must not carry the credential")
+}
+
+// TestHTTPStore_SetWithAllowOverwriteIsConfigurationError pins that an overwrite request fails
+// loudly before anything is sent, rather than being dropped on the way to a server that would
+// accept the first write and refuse every later one.
+func TestHTTPStore_SetWithAllowOverwriteIsConfigurationError(t *testing.T) {
+	var hits atomic.Int64
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer server.Close()
+
+	storeURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, storeURL, options.WithHTTPAuthToken("t"))
+	require.NoError(t, err)
+
+	err = store.Set(context.Background(), []byte("k"), fileformat.FileTypeTesting, []byte("v"), options.WithAllowOverwrite(true))
+	require.ErrorIs(t, err, errors.ErrConfiguration)
+	require.Zero(t, hits.Load(), "nothing must be sent for a write that cannot be honoured")
+}
+
+// TestHTTPStore_ConflictIsBlobAlreadyExists pins that a 409 is classifiable by callers.
+func TestHTTPStore_ConflictIsBlobAlreadyExists(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+	}))
+	defer server.Close()
+
+	storeURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, storeURL, options.WithHTTPAuthToken("t"))
+	require.NoError(t, err)
+
+	err = store.Set(context.Background(), []byte("k"), fileformat.FileTypeTesting, []byte("v"))
+	require.ErrorIs(t, err, errors.ErrBlobAlreadyExists)
+}
+
+// TestHTTPStore_StatusErrorHasNoStrayParam pins that a non-2xx write reports its status code
+// without a formatting artefact such as "%!(EXTRA <nil>)".
+func TestHTTPStore_StatusErrorHasNoStrayParam(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	storeURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, storeURL, options.WithHTTPAuthToken("t"))
+	require.NoError(t, err)
+
+	err = store.Set(context.Background(), []byte("k"), fileformat.FileTypeTesting, []byte("v"))
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "EXTRA")
+	require.Contains(t, err.Error(), "500")
+}
+
+// TestNew_ExplicitEmptyTokenSuppressesFallback pins that the blob_httpAuthToken fallback only
+// applies when no token option was given: an explicit option, even an empty one, wins.
+func TestNew_ExplicitEmptyTokenSuppressesFallback(t *testing.T) {
+	t.Setenv("blob_httpAuthToken", "leak")
+
+	storeURL, err := url.Parse("http://localhost:8080")
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, storeURL, options.WithHTTPAuthToken(""))
+	require.NoError(t, err)
+	require.Empty(t, store.authToken)
+
+	store, err = New(ulogger.TestLogger{}, storeURL)
+	require.NoError(t, err)
+	require.Equal(t, "leak", store.authToken)
 }

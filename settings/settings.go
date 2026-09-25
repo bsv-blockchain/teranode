@@ -85,6 +85,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 		SecurityLevelGRPC:          getInt("security_level_grpc", 0, alternativeContext...),
 		UsePrometheusGRPCMetrics:   getBool("use_prometheus_grpc_metrics", true, alternativeContext...),
 		GRPCAdminAPIKey:            strings.TrimSpace(getString("grpc_admin_api_key", "", alternativeContext...)),
+		BlobHTTPAuthToken:          getString("blob_httpAuthToken", "", alternativeContext...),
 		GlobalBlockHeightRetention: globalBlockHeightRetention,
 		BatcherDrainMode:           getBool("batcher_drainMode", false, alternativeContext...),
 		BatcherBackground:          getBool("batcher_background", true, alternativeContext...),
@@ -265,7 +266,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 		},
 		BlockPersister: BlockPersisterSettings{
 			Store:             getURL("blockpersister_store", "file://./data/blockstore", alternativeContext...),
-			HTTPListenAddress: getString("blockpersister_httpListenAddress", ":8083", alternativeContext...),
+			HTTPListenAddress: getString("blockpersister_httpListenAddress", "127.0.0.1:8083", alternativeContext...),
+			HTTPAuthToken:     getString("blockpersister_httpAuthToken", "", alternativeContext...),
 			Concurrency:       getInt("blockpersister_concurrency", 8, alternativeContext...),
 			SkipUTXODelete:    getBool("blockpersister_skipUTXODelete", false, alternativeContext...),
 			PersistSleep:      getDuration("blockpersister_persistSleep", 10*time.Second, alternativeContext...),

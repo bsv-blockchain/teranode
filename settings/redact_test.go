@@ -148,21 +148,72 @@ func walkSensitiveCheck(t reflect.Type, missing *[]string) {
 // guard against accidentally removing the tag from a sensitive field.
 func TestSensitiveKeysDerivedMatchesExpected(t *testing.T) {
 	expected := map[string]bool{
-		"rpc_pass":                    true,
-		"rpc_limit_pass":              true,
-		"p2p_private_key":             true,
-		"coinbase_p2p_private_key":    true,
-		"alert_p2p_private_key":       true,
-		"coinbase_wallet_private_key": true,
-		"miner_wallet_private_keys":   true,
-		"coinbaseDB":                  true,
-		"coinbaseDBUserPwd":           true,
-		"slack_token":                 true,
-		"grpc_admin_api_key":          true,
+		"rpc_pass":                     true,
+		"rpc_limit_pass":               true,
+		"p2p_private_key":              true,
+		"coinbase_p2p_private_key":     true,
+		"alert_p2p_private_key":        true,
+		"coinbase_wallet_private_key":  true,
+		"miner_wallet_private_keys":    true,
+		"coinbaseDB":                   true,
+		"coinbaseDBUserPwd":            true,
+		"slack_token":                  true,
+		"grpc_admin_api_key":           true,
+		"blockpersister_httpAuthToken": true,
+		"blob_httpAuthToken":           true,
 	}
 
 	got := extractSensitiveKeys()
 	require.Equal(t, expected, got)
+}
+
+// TestRedactConfigStatsMasksSecrets pins the startup STATS dump: gocore masks only encrypted
+// values, so a redact-tagged key set in a settings file must be masked here.
+func TestRedactConfigStatsMasksSecrets(t *testing.T) {
+	in := strings.Join([]string{
+		"SETTINGS",
+		"--------",
+		"rpc_pass=rpc-secret",
+		"blockpersister_httpAuthToken[.docker]=server-secret",
+		"blob_httpAuthToken=client-secret",
+		"blockstore=file://./data/blockstore?a=b",
+		"",
+	}, "\n")
+
+	want := strings.Join([]string{
+		"SETTINGS",
+		"--------",
+		"rpc_pass=" + redactedValue,
+		"blockpersister_httpAuthToken[.docker]=" + redactedValue,
+		"blob_httpAuthToken=" + redactedValue,
+		"blockstore=file://./data/blockstore?a=b",
+		"",
+	}, "\n")
+
+	require.Equal(t, want, RedactConfigStats(in))
+}
+
+// TestRedactConfigMapMasksSecrets pins the CONFIG diagnostics payload: only sensitive keys are
+// masked, whatever their context suffix, and the caller's map is left alone.
+func TestRedactConfigMapMasksSecrets(t *testing.T) {
+	in := map[string]string{
+		"rpc_pass.docker":              "rpc-secret",
+		"blockpersister_httpAuthToken": "server-secret",
+		"_SETTINGS_CONTEXT":            "docker",
+		"blockstore":                   "file://./data/blockstore",
+	}
+
+	out := RedactConfigMap(in)
+
+	require.Equal(t, map[string]string{
+		"rpc_pass.docker":              redactedValue,
+		"blockpersister_httpAuthToken": redactedValue,
+		"_SETTINGS_CONTEXT":            "docker",
+		"blockstore":                   "file://./data/blockstore",
+	}, out)
+
+	require.Equal(t, "rpc-secret", in["rpc_pass.docker"], "the input map must not be mutated")
+	require.Equal(t, "server-secret", in["blockpersister_httpAuthToken"], "the input map must not be mutated")
 }
 
 func TestRedactPreservesNonSecretFields(t *testing.T) {

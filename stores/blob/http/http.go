@@ -24,12 +24,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/ordishs/gocore"
 )
 
 const (
@@ -43,12 +45,21 @@ const (
 type HTTPStore struct {
 	// baseURL is the base URL of the remote blob server (e.g., "http://localhost:8080")
 	baseURL string
+	// authToken is the shared secret presented on mutating requests. Empty means none is sent.
+	authToken string
 	// httpClient is the HTTP client used for making requests with configurable timeout
 	httpClient *http.Client
 	// logger provides structured logging for HTTP operations and errors
 	logger ulogger.Logger
 	// options contains configuration options for the HTTP blob store
 	options *options.Options
+}
+
+// refuseBlobRedirect refuses every redirect. A blob server does not redirect, so a redirect
+// can only be something else answering on that address - and this client carries a bearer
+// token and, for writes, a body. Neither should be handed to a destination we did not choose.
+func refuseBlobRedirect(req *http.Request, _ []*http.Request) error {
+	return errors.NewInvalidArgumentError("blob http store: refusing to follow a redirect to %s", req.URL.Redacted())
 }
 
 // New creates a new HTTP blob store client that connects to a remote blob server.
@@ -62,9 +73,16 @@ type HTTPStore struct {
 //   - storeURL: URL of the remote blob server (e.g., "http://localhost:8080")
 //   - opts: Optional store configuration options
 //
+// The shared secret the remote server requires on POST, PATCH and DELETE comes from
+// options.WithHTTPAuthToken - even an empty one - or, when that option is not given at all,
+// from the blob_httpAuthToken setting read in the process's own settings context. Stores the
+// daemon builds pass Settings.BlobHTTPAuthToken, so they resolve per context; a caller that
+// builds its settings with an alternative context must pass the option itself.
+// It must never be placed in storeURL: store URLs are logged verbatim.
+//
 // Returns:
 //   - *HTTPStore: Configured HTTP blob store client
-//   - error: Configuration error if storeURL is nil
+//   - error: Configuration error if storeURL is nil or carries a token
 func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (*HTTPStore, error) {
 	logger = logger.New("http")
 
@@ -72,13 +90,38 @@ func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) 
 		return nil, errors.NewConfigurationError("storeURL is nil")
 	}
 
-	options := options.NewStoreOptions(opts...)
+	storeOpts := options.NewStoreOptions(opts...)
+
+	authToken := storeOpts.HTTPAuthToken
+	if !storeOpts.HTTPAuthTokenSet {
+		// Fallback for the standalone tools that build a store without passing the option. It
+		// reads the process context only, which is the context those tools build settings with.
+		authToken, _ = gocore.Config().Get("blob_httpAuthToken", "")
+	}
+
+	// A token in the URL would be logged: store URLs are printed verbatim by callers. Refuse
+	// rather than silently accept a credential in a place that leaks.
+	if storeURL.Query().Get("authToken") != "" {
+		return nil, errors.NewConfigurationError("blob http store URL must not carry an authToken query parameter - set blob_httpAuthToken or pass options.WithHTTPAuthToken")
+	}
+
+	// baseURL is formatted into "%s/blob/%s?%s", so it must carry no query of its own -
+	// otherwise every request URL comes out malformed. Strip query and fragment.
+	base := *storeURL
+	base.RawQuery = ""
+	base.ForceQuery = false
+	base.Fragment = ""
+	base.RawFragment = ""
 
 	return &HTTPStore{
-		baseURL:    storeURL.String(),
-		httpClient: &http.Client{Timeout: 30 * time.Second},
-		logger:     logger,
-		options:    options,
+		baseURL:   strings.TrimSuffix(base.String(), "/"),
+		authToken: authToken,
+		httpClient: &http.Client{
+			Timeout:       30 * time.Second,
+			CheckRedirect: refuseBlobRedirect,
+		},
+		logger:  logger,
+		options: storeOpts,
 	}, nil
 }
 
@@ -187,7 +230,7 @@ func (s *HTTPStore) GetIoReader(ctx context.Context, key []byte, fileType filefo
 
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, errors.NewStorageError(fmt.Sprintf("[HTTPStore] GetIoReader failed with status code %d", resp.StatusCode), nil)
+		return nil, errors.NewStorageError("[HTTPStore] GetIoReader failed with status code %d", resp.StatusCode)
 	}
 
 	return resp.Body, nil
@@ -203,6 +246,10 @@ func (s *HTTPStore) GetIoReader(ctx context.Context, key []byte, fileType filefo
 //   - fileType: The type of the file
 //   - value: The blob data to store
 //   - opts: Optional file options
+//
+// Overwrite is not available over the HTTP blob API: a call with WithAllowOverwrite(true) fails
+// with a configuration error before anything is sent, and a blob that already exists is
+// reported as ErrBlobAlreadyExists. See SetFromReader.
 //
 // Returns:
 //   - error: Any error that occurred during the operation
@@ -225,9 +272,18 @@ func (s *HTTPStore) Set(ctx context.Context, key []byte, fileType fileformat.Fil
 //   - value: Reader providing the blob data
 //   - opts: Optional file options
 //
+// The server does not take an overwrite request from the caller: whether an existing blob may be
+// replaced is the receiving store's policy. Rather than drop WithAllowOverwrite(true) silently -
+// which lets the first write succeed and refuses every later one - this returns a configuration
+// error before anything is sent. A 409 from the server is returned as ErrBlobAlreadyExists.
+//
 // Returns:
 //   - error: Any error that occurred during the operation
 func (s *HTTPStore) SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, value io.ReadCloser, opts ...options.FileOption) error {
+	if options.NewFileOptions(opts...).AllowOverwrite {
+		return errors.NewConfigurationError("[HTTPStore] overwrite is not available over the HTTP blob API: whether an existing blob may be replaced is the receiving store's policy")
+	}
+
 	encodedKey := base64.URLEncoding.EncodeToString(key) + "." + fileType.String()
 
 	// NOTE: Any WithDeleteAt(dah) in opts is serialized as the "dah" query param for
@@ -243,14 +299,22 @@ func (s *HTTPStore) SetFromReader(ctx context.Context, key []byte, fileType file
 
 	req.Header.Set("Content-Type", "application/octet-stream")
 
+	if s.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.authToken)
+	}
+
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return errors.NewStorageError("[HTTPStore] SetFromReader failed", err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusConflict {
+		return errors.NewBlobAlreadyExistsError("[HTTPStore] SetFromReader: blob already exists")
+	}
+
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return errors.NewStorageError(fmt.Sprintf("[HTTPStore] SetFromReader failed with status code %d", resp.StatusCode), nil)
+		return errors.NewStorageError("[HTTPStore] SetFromReader failed with status code %d", resp.StatusCode)
 	}
 
 	return nil
@@ -280,6 +344,10 @@ func (s *HTTPStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.
 		return errors.NewStorageError("[HTTPStore] SetTTL failed to create request", err)
 	}
 
+	if s.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.authToken)
+	}
+
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return errors.NewStorageError("[HTTPStore] SetTTL failed", err)
@@ -287,7 +355,7 @@ func (s *HTTPStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return errors.NewStorageError(fmt.Sprintf("[HTTPStore] SetTTL failed with status code %d", resp.StatusCode), nil)
+		return errors.NewStorageError("[HTTPStore] SetTTL failed with status code %d", resp.StatusCode)
 	}
 
 	return nil
@@ -315,6 +383,10 @@ func (s *HTTPStore) Del(ctx context.Context, key []byte, fileType fileformat.Fil
 		return errors.NewStorageError("[HTTPStore] Del failed to create request", err)
 	}
 
+	if s.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.authToken)
+	}
+
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return errors.NewStorageError("[HTTPStore] Del failed", err)
@@ -327,7 +399,7 @@ func (s *HTTPStore) Del(ctx context.Context, key []byte, fileType fileformat.Fil
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return errors.NewStorageError(fmt.Sprintf("[HTTPStore] Del failed with status code %d", resp.StatusCode), nil)
+		return errors.NewStorageError("[HTTPStore] Del failed with status code %d", resp.StatusCode)
 	}
 
 	return nil

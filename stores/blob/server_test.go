@@ -38,9 +38,12 @@ func TestServerOperations(t *testing.T) {
 	serverStoreURL, err := url.Parse(fmt.Sprintf("file://%s?testId=%d", tempDir, time.Now().UnixNano()))
 	require.NoError(t, err)
 
+	const serverAuthToken = "server-operations-token"
+
 	blobServer, err := NewHTTPBlobServer(
 		logger,
 		serverStoreURL,
+		serverAuthToken,
 		options.WithDefaultSubDirectory("sub"),
 	)
 	require.NoError(t, err)
@@ -59,7 +62,7 @@ func TestServerOperations(t *testing.T) {
 	clientStoreURL, err := url.Parse("http://localhost:7979")
 	require.NoError(t, err)
 
-	client, err := blobhttp.New(logger, clientStoreURL)
+	client, err := blobhttp.New(logger, clientStoreURL, options.WithHTTPAuthToken(serverAuthToken))
 	require.NoError(t, err)
 
 	t.Run("SetAndGet", func(t *testing.T) {
@@ -337,7 +340,9 @@ func newFileBackedFakeStore(t *testing.T, payload []byte) *fileBackedFakeStore {
 
 	storeURL, err := url.Parse("file://" + dir)
 	require.NoError(t, err)
-	srv, err := NewHTTPBlobServer(ulogger.New("rangereq"), storeURL)
+	// No token: this fixture only serves GETs, so a read-only server is also a check
+	// that reads are unaffected by the mutation gate.
+	srv, err := NewHTTPBlobServer(ulogger.New("rangereq"), storeURL, "")
 	require.NoError(t, err)
 	_ = srv // just used for the store construction
 
@@ -618,3 +623,46 @@ type closeCountingReader struct {
 
 func (c *closeCountingReader) Read(p []byte) (int, error) { return c.r.Read(p) }
 func (c *closeCountingReader) Close() error               { c.closeCount++; return nil }
+
+// TestGetKeyFromPath_ShortPathsDoNotPanic pins the bound check: a dot before the end of the
+// "/blob/" prefix used to slice out of range.
+func TestGetKeyFromPath_ShortPathsDoNotPanic(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+		wantKey []byte
+	}{
+		{name: "dot at root", path: "/.tx", wantErr: true},
+		{name: "dot inside prefix", path: "/blob.tx", wantErr: true},
+		{name: "empty key", path: "/blob/.tx", wantKey: []byte{}},
+		{name: "prefix not at start", path: "/x/blob/abc.tx", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var (
+				key []byte
+				err error
+			)
+
+			require.NotPanics(t, func() { key, _, err = getKeyFromPath(tt.path) })
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tt.wantKey, key)
+		})
+	}
+}
+
+// TestHTTPBlobServer_ShortGetPathIsBadRequest drives the same path through the handler: GET is
+// unauthenticated, so this is reachable by anyone who can reach the listener.
+func TestHTTPBlobServer_ShortGetPathIsBadRequest(t *testing.T) {
+	server, _ := newAuthTestServer(t, "")
+
+	require.Equal(t, http.StatusBadRequest, doBlobRequest(t, server, http.MethodGet, "/.tx", "", nil))
+}
