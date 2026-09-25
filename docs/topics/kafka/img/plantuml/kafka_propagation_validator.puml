@@ -1,4 +1,7 @@
 @startuml
+' Rendered with PlantUML 1.2024.7 (the version the committed SVGs in this
+' directory were produced with). Regenerate with:
+'   java -jar plantuml-1.2024.7.jar -tsvg kafka_propagation_validator.puml
 skinparam backgroundColor #F0F8FF
 skinparam defaultFontColor #333333
 skinparam arrowColor #666666
@@ -22,6 +25,14 @@ skinparam participant {
 
 
 Propagation --> Validator: Tx Notification\n(kafka_validatortxsConfig)
+
+note right
+  Kafka hop only when kafka_validatortxsConfig
+  is set (empty by default, non-empty in the
+  .operator context). Otherwise Propagation
+  invokes the Validator directly — in-process
+  or over gRPC.
+end note
 
 left footer Last Modified On: %date("dd-MMM-yyyy")
 @enduml

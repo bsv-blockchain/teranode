@@ -112,11 +112,11 @@ Explanation of the sequences:
 
 ### 2.3. Sending new block notifications to the Block Persister
 
-The Blockchain service, after adding a new block, emits a Kafka notification which is received by the Block Persister service. The Block Persister service is responsible for post-processing the block and storing it in a file format, in a persistent data store (such as S3).
+The Blockchain service, after adding a new block, emits a `blocks-final` Kafka notification. The Block Persister service does **not** consume this topic — the only Kafka consumer of `blocks-final` is the Legacy P2P service (`netsync.SyncManager`), which uses it to announce new blocks to legacy (pre-libp2p) peers. The Block Persister instead polls the Blockchain service over gRPC (`GetBlocksNotPersisted`), waking every `blockpersister_persistSleep` (default 10s), and post-processes each returned block into a file format in a persistent data store (such as S3).
 
 ![blockchain_send_to_block_persister.svg](img/plantuml/blockchain/blockchain_send_to_block_persister.svg)
 
-The Blockchain service, based on standard practices, will retry sending the message until Kafka receives it. In case of Kafka downtime, the service will keep retrying for as long as the message is not sent.
+The Blockchain service, based on standard practices, will retry sending the `blocks-final` message until Kafka receives it. In case of Kafka downtime, the service will keep retrying for as long as the message is not sent.
 
 ### 2.4. Getting a block from the blockchain
 
@@ -542,7 +542,7 @@ Block notifications are serialized using Protocol Buffers and contain:
 
 #### Topics
 
-- **Blocks-Final**: Used for finalized block notifications, consumed by the Block Persister service.
+- **Blocks-Final**: Used for finalized block notifications, consumed by the Legacy P2P service (`netsync.SyncManager`) — not the Block Persister, which has no Kafka consumer and instead polls the Blockchain service over gRPC.
 
 #### Error Handling
 
