@@ -445,7 +445,7 @@ The Asset Service uses the following configuration values from the settings syst
 
 ### Security
 
-- `http_sign_response`: Whether to sign HTTP responses (default: false)
+- `asset_sign_http_responses`: Whether to sign HTTP responses (default: false)
 - `p2p_private_key`: Private key for signing responses
 
 ### Dashboard Configuration
@@ -894,7 +894,7 @@ These endpoints require authentication.
 
 ### Authentication
 
-The service supports response signing. When enabled, responses include an `X-Signature` header containing an Ed25519 signature of the response data.
+The service supports response signing. When enabled, responses include an `X-Signature` header containing an Ed25519 signature of the requested hash (the block, transaction, or subtree hash identified in the request), not the response body.
 
 ### Common Headers
 
