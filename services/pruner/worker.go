@@ -134,6 +134,15 @@ func (s *Server) waitForBlockMinedStatus(ctx context.Context, blockHash *chainha
 // DEDUPLICATION:
 // Only one pruner operation runs at a time. The atomic target height always reflects the latest
 // notification, so intermediate heights are naturally skipped.
+//
+// FORCED RE-RUNS:
+// The already-processed guard below (blockHeight <= lastProcessedHeight) is bypassed when
+// sig.force is set. Force signals come only from the fallback ticker (see fireFallbackTick in
+// server.go): they deliberately resend the last known height so Phase 2 gets another chance to
+// collect rows whose delete_at_height fell due at or below that height after the initial pass —
+// which can keep happening even while the trigger height itself is frozen. Every other check
+// below (min height, catchup, mined-set wait, block-assembly safety) still applies to a forced
+// signal exactly as it does to a real notification.
 func (s *Server) prunerProcessor(ctx context.Context) {
 	s.logger.Infof("Starting pruner processor")
 
@@ -147,7 +156,7 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 			blockHeight := sig.blockHeight
 			blockHashStr := sig.blockHash.String()
 
-			if blockHeight <= s.lastProcessedHeight.Load() {
+			if !sig.force && blockHeight <= s.lastProcessedHeight.Load() {
 				continue
 			}
 

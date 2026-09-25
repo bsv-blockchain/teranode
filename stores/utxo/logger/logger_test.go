@@ -73,6 +73,8 @@ func (m *MockStore) Close(ctx context.Context) error {
 
 func (m *MockStore) SupportsOutpointOnlySpend() bool { return m.SupportsOutpointOnlySpendResult }
 
+func (m *MockStore) PoolMaxConns() int { return 0 }
+
 // TestSupportsOutpointOnlySpend_Delegates verifies the logger decorator forwards the
 // wrapped store's fast-path capability in both directions (so a SQL store wrapped by the
 // logger still reports true, and the gates that query through the decorator engage).
@@ -82,6 +84,60 @@ func TestSupportsOutpointOnlySpend_Delegates(t *testing.T) {
 		s := New(context.Background(), ulogger.TestLogger{}, inner)
 		require.Equal(t, want, s.SupportsOutpointOnlySpend(), "logger must delegate SupportsOutpointOnlySpend to the wrapped store")
 	}
+}
+
+// earlyDAHCapableStore embeds MockStore (which already satisfies utxo.Store)
+// and additionally implements the optional SetEarlyDAHBoundary method that
+// the postgres store supports, so it can stand in for "a real store with
+// early-DAH support" when wrapped by the logger decorator.
+type earlyDAHCapableStore struct {
+	*MockStore
+	setCalled bool
+	setHeight uint32
+}
+
+func (m *earlyDAHCapableStore) SetEarlyDAHBoundary(h uint32) {
+	m.setCalled = true
+	m.setHeight = h
+}
+
+// TestSetEarlyDAHBoundary_DelegatesWhenSupported is the regression test for
+// final review Important issue 1: with `?logging=true` on the store URL, the
+// factory's `store.(earlyDAHBoundarySetter)` type assertion used to fail
+// against a logger-wrapped store (the wrapper had no such method), silently
+// disarming an explicitly-enabled early-DAH boundary even on a store that
+// supports it. The logger-wrapped store must both satisfy that assertion and
+// forward the call through to a wrapped store that implements it.
+func TestSetEarlyDAHBoundary_DelegatesWhenSupported(t *testing.T) {
+	inner := &earlyDAHCapableStore{MockStore: &MockStore{}}
+
+	var wrapped utxo.Store = New(context.Background(), ulogger.TestLogger{}, inner)
+
+	setter, ok := wrapped.(interface{ SetEarlyDAHBoundary(uint32) })
+	require.True(t, ok, "logger-wrapped store must satisfy the factory's earlyDAHBoundarySetter type assertion")
+
+	setter.SetEarlyDAHBoundary(12345)
+
+	require.True(t, inner.setCalled, "logger wrapper must forward SetEarlyDAHBoundary to a wrapped store that supports it")
+	require.Equal(t, uint32(12345), inner.setHeight)
+}
+
+// TestSetEarlyDAHBoundary_NoOpWhenUnsupported proves the delegation is
+// optional-interface safe: wrapping a store that does NOT implement
+// SetEarlyDAHBoundary (e.g. aerospike, sql) must not panic when the factory
+// latch calls through the logger wrapper — it stays a silent no-op, matching
+// the factory's own direct (unwrapped) behavior for a store lacking the
+// feature.
+func TestSetEarlyDAHBoundary_NoOpWhenUnsupported(t *testing.T) {
+	inner := &MockStore{}
+	wrapped := New(context.Background(), ulogger.TestLogger{}, inner)
+
+	setter, ok := wrapped.(interface{ SetEarlyDAHBoundary(uint32) })
+	require.True(t, ok, "logger-wrapped store always satisfies the assertion; support for the wrapped store is checked internally")
+
+	require.NotPanics(t, func() {
+		setter.SetEarlyDAHBoundary(999)
+	})
 }
 
 func (m *MockStore) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {

@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PostgreSQL UTXO Store — Plain-English Overview</title>
+<style>
+  :root{
+    --bg:#0f1420; --panel:#161d2e; --panel2:#1d2740; --ink:#e8edf6; --muted:#9fb0cc;
+    --accent:#5cc8ff; --accent2:#7ee787; --warn:#ffcc66; --pink:#ff8bd1;
+    --line:#2c3650; --code:#0b0f18;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 22px 90px}
+  h1{font-size:32px;line-height:1.2;margin:8px 0 4px}
+  h2{font-size:24px;margin:46px 0 10px;padding-top:10px;border-top:1px solid var(--line)}
+  h3{font-size:18px;margin:26px 0 6px;color:var(--accent)}
+  p,li{color:var(--ink)}
+  .sub{color:var(--muted);font-size:17px;margin-top:0}
+  .lead{font-size:17.5px}
+  a{color:var(--accent)}
+  code{background:var(--code);padding:1px 6px;border-radius:5px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px;color:#cfe9ff}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin:16px 0}
+  .panel.tip{border-left:4px solid var(--accent2)}
+  .panel.key{border-left:4px solid var(--warn);background:var(--panel2)}
+  .panel.why{border-left:4px solid var(--pink)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  table{border-collapse:collapse;width:100%;margin:10px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--accent)}
+  td code{font-size:12.5px}
+  .pill{display:inline-block;background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:2px 11px;font-size:12.5px;color:var(--muted);margin:2px 4px 2px 0}
+  .muted{color:var(--muted)}
+  .big{font-size:18px}
+  figure{margin:18px 0;text-align:center}
+  figcaption{color:var(--muted);font-size:13.5px;margin-top:8px}
+  .step{display:flex;gap:14px;margin:12px 0;align-items:flex-start}
+  .step .n{flex:0 0 30px;height:30px;border-radius:50%;background:var(--accent);color:#06121d;font-weight:700;display:flex;align-items:center;justify-content:center}
+  .toc{columns:2;font-size:14.5px}
+  @media(max-width:600px){.toc{columns:1}}
+  .toc a{display:block;padding:2px 0;text-decoration:none;color:var(--muted)}
+  .toc a:hover{color:var(--accent)}
+  hr{border:none;border-top:1px solid var(--line);margin:30px 0}
+  .tag{font-size:12px;padding:1px 7px;border-radius:5px;font-weight:600}
+  .tag.hot{background:#3a1d22;color:#ff9a9a}
+  .tag.bg{background:#13301f;color:#9be8b0}
+  .kbd{font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>The PostgreSQL UTXO Store</h1>
+  <p class="sub">A plain-English tour of how Teranode keeps the set of spendable coins in PostgreSQL — and the unusual “deferred delete” trick at its heart.</p>
+
+  <div class="panel">
+    <strong>Who is this for?</strong> Anyone — you do <em>not</em> need to know Bitcoin internals or PostgreSQL.
+    We build up from zero. If you only read one section, read
+    <a href="#deferred">“The clever bit: deferred deletion.”</a>
+  </div>
+
+  <div class="panel">
+    <strong>Contents</strong>
+    <nav class="toc">
+      <a href="#what">1. What this thing is</a>
+      <a href="#utxo">2. UTXOs in 60 seconds</a>
+      <a href="#bigidea">3. The big idea: two tables</a>
+      <a href="#txs">4. The <code>txs</code> table</a>
+      <a href="#spends">5. The <code>spends</code> table</a>
+      <a href="#spendflow">6. What happens during a spend</a>
+      <a href="#deferred">7. The clever bit: deferred deletion ★</a>
+      <a href="#workers">8. The three workers</a>
+      <a href="#safety">9. Staying correct (reorgs, crashes)</a>
+      <a href="#partitions">10. Partitioning &amp; speed</a>
+      <a href="#fewtables">11. Why so few tables? (the performance story)</a>
+      <a href="#limits">12. How big can a transaction be?</a>
+      <a href="#glossary">13. Glossary</a>
+    </nav>
+  </div>
+
+  <!-- ============================================================= -->
+  <h2 id="what">1. What this thing is</h2>
+  <p class="lead">
+    A Bitcoin (BSV) node has to remember <strong>which coins currently exist and can be spent</strong>.
+    That set is called the <strong>UTXO set</strong>. Every incoming transaction must be checked against
+    it — fast, and millions of times — and the set is constantly changing as coins are spent and created.
+  </p>
+  <p>
+    This package is <strong>one place to store that UTXO set</strong>: a storage backend built on a normal
+    PostgreSQL database, using the Go library <code>pgx</code>. Teranode can use different backends
+    (Aerospike, SQLite, this one) — they all implement the same Go interface (<code>utxo.Store</code>),
+    so the rest of the node doesn’t care which one is plugged in.
+  </p>
+  <div class="panel tip">
+    Two goals shape every decision here:
+    <strong>(1) be fast under heavy concurrent load</strong> (tens of thousands of transactions per second), and
+    <strong>(2) never lose data</strong> — these are real coins, so everything is written durably to disk
+    (<code>synchronous_commit = on</code>).
+  </div>
+
+  <!-- ============================================================= -->
+  <h2 id="utxo">2. UTXOs in 60 seconds</h2>
+  <p>
+    A transaction has <strong>inputs</strong> (coins it spends) and <strong>outputs</strong> (new coins it creates).
+    Each output is a coin. A coin that hasn’t been spent yet is an <strong>Unspent Transaction Output</strong> —
+    a <strong>UTXO</strong>. When a later transaction uses that coin as an input, the coin becomes <em>spent</em>
+    and is no longer part of the live set.
+  </p>
+  <p>So the store really only needs to answer a few questions, very quickly:</p>
+  <ul>
+    <li><strong>Does this coin exist, and is it still unspent?</strong> (validate an input)</li>
+    <li><strong>Mark this coin as spent.</strong> (apply a transaction)</li>
+    <li><strong>Store the new coins this transaction creates.</strong></li>
+    <li><strong>Eventually, throw away coins that are long gone</strong> so the database doesn’t grow forever.</li>
+  </ul>
+  <p class="muted">That last one — “eventually throw away” — is where the interesting design lives.</p>
+
+  <!-- ============================================================= -->
+  <h2 id="bigidea">3. The big idea: two tables</h2>
+  <p>
+    Many designs use a separate row for every single output. This store does <strong>not</strong>. It uses just
+    <strong>two data tables</strong> — plus a few small bookkeeping tables (described after the diagram):
+  </p>
+
+  <figure>
+  <svg viewBox="0 0 900 300" width="100%" role="img" aria-label="Diagram of the two main tables">
+    <defs><marker id="arr" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#5cc8ff"/></marker></defs>
+    <!-- txs -->
+    <rect x="30" y="30" width="350" height="230" rx="12" fill="#1d2740" stroke="#2c3650"/>
+    <text x="50" y="60" fill="#7ee787" font-size="20" font-weight="700">txs</text>
+    <text x="50" y="84" fill="#9fb0cc" font-size="13">one row per transaction</text>
+    <text x="50" y="118" fill="#e8edf6" font-size="13">• hash (the ID)</text>
+    <text x="50" y="142" fill="#e8edf6" font-size="13">• its outputs, packed inline</text>
+    <text x="50" y="166" fill="#e8edf6" font-size="13">• flags: locked / frozen / conflicting</text>
+    <text x="50" y="190" fill="#e8edf6" font-size="13">• which blocks it’s in</text>
+    <text x="50" y="214" fill="#ffcc66" font-size="13">• delete_at_height ← the sticky note</text>
+    <text x="50" y="238" fill="#e8edf6" font-size="13">• raw transaction bytes</text>
+    <!-- spends -->
+    <rect x="520" y="30" width="350" height="230" rx="12" fill="#1d2740" stroke="#2c3650"/>
+    <text x="540" y="60" fill="#7ee787" font-size="20" font-weight="700">spends</text>
+    <text x="540" y="84" fill="#9fb0cc" font-size="13">one row per <em>spent</em> output</text>
+    <text x="540" y="118" fill="#e8edf6" font-size="13">• which output it spent</text>
+    <text x="540" y="142" fill="#e8edf6" font-size="13">  (parent tx + output number)</text>
+    <text x="540" y="166" fill="#e8edf6" font-size="13">• who spent it</text>
+    <text x="540" y="190" fill="#e8edf6" font-size="13">• at what block height</text>
+    <text x="540" y="226" fill="#ff8bd1" font-size="13">a row existing = “this coin is spent”</text>
+    <line x1="380" y1="150" x2="520" y2="150" stroke="#5cc8ff" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="402" y="140" fill="#9fb0cc" font-size="12">points back to</text>
+  </svg>
+  <figcaption>The whole store is essentially these two tables, split into 8 shards each (see <a href="#partitions">§10</a>).</figcaption>
+  </figure>
+
+  <div class="panel why">
+    <strong>Why fold the outputs into the transaction row instead of a separate “outputs” table?</strong><br>
+    A typical transaction has only a handful of outputs. Storing them as a separate row each means
+    millions of extra tiny rows and an extra random-access index to maintain on every write. By packing
+    a transaction’s outputs <em>into the transaction’s own row</em>, validating a spend reads
+    <strong>one row</strong> — no joins, no second index. The trade-off: this is tuned for ordinary
+    transactions; transactions with enormous numbers of outputs are a known weak spot.
+    <br><span class="muted">(The full “why not normalise into many tables like the SQL store?” story is in
+    <a href="#fewtables">§11</a>.)</span>
+  </div>
+
+  <div class="panel">
+    <strong>The small bookkeeping tables.</strong> Besides <code>txs</code> and <code>spends</code>, a few
+    tiny tables keep the background machinery honest. None sit on the hot validation path, and all are
+    negligible in size:
+    <ul>
+      <li><code>dah_part_watermark</code> — the deferred-deletion sweeper’s “bookmark”: how far each shard’s
+        sweep has progressed (one row per shard; see <a href="#deferred">§7</a>). This is the bookmark referred
+        to under crash-safety in <a href="#safety">§9</a>. <code>dah_sweep_control</code> next to it holds the
+        kill switch and tuning knobs, so operations can adjust the sweeper with a plain SQL update.</li>
+      <li><code>pending_deletes</code> — the pruner’s to-do list: (transaction, delete-at-height) pairs written
+        the moment a sticky note is stamped, and removed by whoever clears a note. The pruner reads <em>only</em>
+        this list — it never scans the big tables looking for work.</li>
+      <li><code>pending_unmined</code> — a small “not mined yet” listing kept up to date by a background writer
+        (with a filter so transactions that mine within a second or two never touch it at all), used by cleanup
+        jobs that expire long-unmined transactions.</li>
+      <li><code>dah_dirty_parents</code> — a tiny “please re-check these” queue: when a reorg un-spends a coin,
+        the affected parent transactions are queued here in the same database transaction, and the safety-net
+        worker re-derives their state from the ground truth soon after (see <a href="#safety">§9</a>).</li>
+      <li><code>conflict_intents</code> — a small write-ahead log for conflicting-transaction handling
+        (marking a transaction conflicting, and reversing that during a reorg). An intent row is written
+        <em>before</em> the work begins and deleted when it completes, so a crash mid-operation is replayed
+        cleanly on restart instead of leaving a conflict half-applied.</li>
+    </ul>
+    The “two tables” framing is about where the UTXO data — and every hot-path read and write — actually
+    lives; these auxiliary tables are rarely touched and exist only to make the background workers crash-safe.
+  </div>
+
+  <!-- ============================================================= -->
+  <h2 id="txs">4. The <code>txs</code> table — one row per transaction</h2>
+  <p>This single row holds everything needed to validate a spend against this transaction. Grouped by purpose:</p>
+
+  <h3>Identity &amp; the raw data</h3>
+  <table>
+    <tr><th>Column</th><th>Plain meaning</th></tr>
+    <tr><td><code>hash</code></td><td>The transaction ID. This is the primary key — how rows are found.</td></tr>
+    <tr><td><code>version, lock_time, fee, size_in_bytes, coinbase</code></td><td>Basic facts about the transaction.</td></tr>
+    <tr><td><code>raw_tx</code></td><td>The full transaction bytes (compressed). Output scripts &amp; amounts are read back from here when needed.</td></tr>
+    <tr><td><code>inserted_at</code></td><td>When the row was written.</td></tr>
+  </table>
+
+  <h3>The outputs — “folded” into this row</h3>
+  <p>Instead of one row per output, the outputs are <strong>packed</strong> into a few columns:</p>
+  <table>
+    <tr><th>Column</th><th>Plain meaning</th></tr>
+    <tr><td><code>out_count</code></td><td>How many outputs this transaction has.</td></tr>
+    <tr><td><code>spendable_count</code></td><td>How many of them are actually spendable (e.g. <code>OP_RETURN</code> data outputs can never be spent and don’t count).</td></tr>
+    <tr><td><code>utxo_hashes</code></td><td>All the output identifiers in one blob: 32 bytes per output, back to back.</td></tr>
+    <tr><td><code>out_spendables</code> / <code>out_frozens</code></td><td>Bitmaps — one bit per output — saying “is output #N spendable?” / “is output #N frozen?”.</td></tr>
+    <tr><td><code>coinbase_spending_height</code></td><td>If this is mined-reward money, the height before which it isn’t allowed to be spent (maturity).</td></tr>
+    <tr><td><code>spendable_ins</code></td><td>Per-output “not spendable before this height” restrictions (rare).</td></tr>
+  </table>
+
+  <h3>State that changes over the transaction’s life</h3>
+  <table>
+    <tr><th>Column</th><th>Plain meaning</th></tr>
+    <tr><td><code>locked</code></td><td>Temporarily not spendable (used while a transaction is being processed).</td></tr>
+    <tr><td><code>frozen</code></td><td>Administratively frozen (e.g. by an alert system).</td></tr>
+    <tr><td><code>conflicting</code></td><td>This transaction conflicts with another (double-spend situation).</td></tr>
+    <tr><td><code>conflicting_children</code></td><td>List of transactions that conflict because they tried to spend this one.</td></tr>
+    <tr><td><code>unmined_since</code></td><td>Empty means “mined and on the main chain.” A value means “not on the main chain since height X” (still pending, or reorged out).</td></tr>
+    <tr><td><code>mined_at_height</code>, <code>block_ids</code>, <code>block_heights</code>, <code>subtree_idxs</code></td><td>Which block(s) this transaction appears in. A transaction can be in more than one (e.g. across a reorg), so these are lists.</td></tr>
+    <tr><td><code>preserve_until</code></td><td>“Do not delete before this height,” regardless of anything else.</td></tr>
+    <tr><td><code>spent_bits</code></td><td>A tiny bitmap — one bit per output — maintained by the background sweeper: bit #N set means “output #N has been spent.” When every spendable output’s bit is set, the transaction is fully spent. This is how the store knows a transaction is finished <em>without ever re-counting its spend rows</em> (see <a href="#deferred">§7</a>).</td></tr>
+    <tr><td><code>last_spend_height</code></td><td>The highest block height at which one of this transaction’s outputs was spent — one half of the “when did it finish?” answer.</td></tr>
+    <tr><td style="color:#ffcc66"><code>delete_at_height</code></td><td><strong>The star of the show.</strong> If set, it’s the block height at which this transaction becomes safe to delete. Usually empty. Filled in <em>later</em>, by a background worker — see <a href="#deferred">§7</a>.</td></tr>
+  </table>
+
+  <!-- ============================================================= -->
+  <h2 id="spends">5. The <code>spends</code> table — one row per spent output</h2>
+  <p>This table records the act of spending. There is <strong>no “is spent” flag</strong> anywhere — instead:</p>
+  <div class="panel key big">
+    👉 <strong>A row existing in <code>spends</code> <em>is</em> the fact that the coin is spent.</strong>
+    No row = unspent. Row present = spent.
+  </div>
+  <table>
+    <tr><th>Column</th><th>Plain meaning</th></tr>
+    <tr><td><code>prev_tx_hash</code></td><td>The transaction that <em>created</em> the coin being spent.</td></tr>
+    <tr><td><code>prev_output_idx</code></td><td>Which output of it (output #0, #1, …).</td></tr>
+    <tr><td><code>spending_data</code></td><td>Who spent it: the spending transaction’s ID + which input.</td></tr>
+    <tr><td><code>spent_at_height</code></td><td>The block height at which it was spent. <span class="muted">(Remember this — it matters for deletion.)</span></td></tr>
+  </table>
+
+  <div class="panel why">
+    <strong>The double-spend guard is the table’s own uniqueness rule.</strong>
+    There is a <code>UNIQUE (prev_tx_hash, prev_output_idx)</code> constraint. So the very first attempt to spend
+    a given coin inserts a row and succeeds; a <em>second</em> attempt to spend the same coin fails the insert —
+    the database itself refuses it, and we read back the existing row to report who already spent it. No locks,
+    no read-then-write race: the unique index <em>is</em> the referee.
+  </div>
+  <div class="panel tip">
+    <strong>Why a separate table for spends, instead of a flag on the output?</strong>
+    Inserting a new row is cheap and append-only. Flipping a flag on the transaction row would rewrite that
+    row on every spend, creating churn the database then has to clean up. Keeping spends as pure inserts keeps
+    the busy “spend” path lean.
+  </div>
+
+  <!-- ============================================================= -->
+  <h2 id="spendflow">6. What happens during a spend</h2>
+  <p>When a new transaction spends a coin, the store does this (simplified):</p>
+  <div class="step"><div class="n">1</div><div>Look up the parent transaction’s row by its hash — <strong>one read</strong>. Everything needed (the output’s ID, whether it’s spendable/frozen, coinbase maturity, whether the parent is locked/conflicting) is right there in that single row.</div></div>
+  <div class="step"><div class="n">2</div><div>Check the rules: the output ID must match, it must not be frozen/locked/conflicting, coinbase money must be mature, etc.</div></div>
+  <div class="step"><div class="n">3</div><div>If all good, <strong>insert a row into <code>spends</code></strong> recording the spend and the height. The unique constraint guarantees it can’t be double-spent.</div></div>
+  <div class="step"><div class="n">4</div><div><strong>That’s it.</strong> The store does <em>not</em> stop to figure out whether the parent is now fully spent and ready for deletion. That decision is deferred. <a href="#deferred">↓ (see §7)</a></div></div>
+
+  <!-- ============================================================= -->
+  <h2 id="deferred">7. The clever bit: deferred deletion ★</h2>
+
+  <div class="panel why big">
+    <strong>The problem.</strong> A coin can be deleted once its transaction is fully spent, buried deep enough
+    that it won’t be reorganised away, and no longer needed. But checking “is this whole transaction fully
+    spent <em>now</em>?” on every single spend is expensive — you’d have to count this transaction’s spends,
+    compare to its spendable outputs, and write the answer back onto the busy transaction row. Doing that on
+    the hot path would drag throughput down.
+  </div>
+
+  <p class="lead"><strong>The solution, in one sentence:</strong> the busy path just scribbles down <em>heights</em>;
+  a calm background worker reads those scribbles later and decides when each transaction may die.</p>
+
+  <p>Think of a restaurant:</p>
+  <div class="panel">
+    🍽️ <strong>Waiters (the hot path)</strong> take orders as fast as they can. They don’t stop to figure out
+    which tables are finished — they just note “this dish was served at 7:42.”<br>
+    🧹 <strong>A busser (the background worker)</strong> strolls the floor, sees which tables are actually done,
+    and puts a little <em>“clear after 9 pm”</em> sticky note on them.<br>
+    🗑️ <strong>The cleaner (the pruner)</strong> comes by and simply clears every table whose sticky-note time
+    has passed. The cleaner doesn’t think — it trusts the note.
+  </div>
+
+  <h3>The three moving parts</h3>
+  <figure>
+  <svg viewBox="0 0 900 330" width="100%" role="img" aria-label="Deferred deletion flow">
+    <defs><marker id="a2" markerWidth="11" markerHeight="11" refX="7" refY="3.2" orient="auto">
+      <path d="M0,0 L8,3.2 L0,6.4 Z" fill="#9fb0cc"/></marker></defs>
+
+    <rect x="20" y="40" width="260" height="120" rx="12" fill="#26161b" stroke="#5a2b33"/>
+    <text x="38" y="68" fill="#ff9a9a" font-size="16" font-weight="700">① Hot path (waiters)</text>
+    <text x="38" y="92" fill="#e8edf6" font-size="13">Spend → write a row in spends</text>
+    <text x="38" y="112" fill="#e8edf6" font-size="13">with spent_at_height.</text>
+    <text x="38" y="132" fill="#e8edf6" font-size="13">Mine → record mined_at_height.</text>
+    <text x="38" y="150" fill="#9fb0cc" font-size="12">Cheap. Just records heights.</text>
+
+    <rect x="320" y="40" width="270" height="120" rx="12" fill="#13251a" stroke="#2c5238"/>
+    <text x="338" y="68" fill="#9be8b0" font-size="16" font-weight="700">② Sweeper (busser)</text>
+    <text x="338" y="92" fill="#e8edf6" font-size="13">Background loop. Looks at the</text>
+    <text x="338" y="112" fill="#e8edf6" font-size="13">recently-changed heights, finds</text>
+    <text x="338" y="132" fill="#e8edf6" font-size="13">fully-spent + mined txs, and writes</text>
+    <text x="338" y="150" fill="#ffcc66" font-size="13">delete_at_height (the sticky note).</text>
+
+    <rect x="630" y="40" width="250" height="120" rx="12" fill="#1d2740" stroke="#2c3650"/>
+    <text x="648" y="68" fill="#5cc8ff" font-size="16" font-weight="700">③ Pruner (cleaner)</text>
+    <text x="648" y="92" fill="#e8edf6" font-size="13">Deletes every tx whose</text>
+    <text x="648" y="112" fill="#e8edf6" font-size="13">delete_at_height ≤ current height.</text>
+    <text x="648" y="132" fill="#e8edf6" font-size="13">Dumb &amp; fast. Trusts the note.</text>
+    <text x="648" y="150" fill="#9fb0cc" font-size="12">Removes spends + tx together.</text>
+
+    <line x1="280" y1="100" x2="320" y2="100" stroke="#9fb0cc" stroke-width="2" marker-end="url(#a2)"/>
+    <line x1="590" y1="100" x2="630" y2="100" stroke="#9fb0cc" stroke-width="2" marker-end="url(#a2)"/>
+
+    <rect x="150" y="210" width="600" height="86" rx="12" fill="#161d2e" stroke="#2c3650"/>
+    <text x="170" y="238" fill="#e8edf6" font-size="14" font-weight="700">A bookmark keeps the sweeper honest</text>
+    <text x="170" y="262" fill="#9fb0cc" font-size="13">dah_part_watermark remembers each shard's last swept height. The sweeper resumes there after</text>
+    <a href="#safety"><text x="170" y="282" fill="#9fb0cc" font-size="13" style="cursor:pointer">a restart and never re-scans old ground. (It can also be rewound — see §9.)</text></a>
+  </svg>
+  <figcaption>Tag heights cheaply now → decide deletion calmly later → delete trivially.</figcaption>
+  </figure>
+
+  <h3>What the sweeper actually does: fold, don’t recount</h3>
+  <p>
+    The sweeper walks the new <code>spends</code> rows in height order, and for each one flips the matching
+    bit in the parent transaction’s <code>spent_bits</code> bitmap. That’s the whole trick: the answer to
+    “is this transaction fully spent?” is <em>carried forward on the transaction’s own row</em>, one cheap bit
+    at a time, instead of being re-derived by re-reading its whole spend history. Earlier versions of this store
+    re-counted a transaction’s spend rows at stamping time — for an old transaction spent over years, those rows
+    are scattered across cold disk, and that re-reading is exactly what fell behind on real networks. It is gone:
+    <strong>no stage of stamping ever re-reads spend history.</strong>
+  </p>
+  <p>
+    Flipping a bit twice is harmless (it’s already set) — so if a reorg forces the sweeper to re-process a height
+    range, nothing drifts and nothing double-counts. That one property (idempotence) is what makes the whole
+    scheme safe to re-run at any time.
+  </p>
+  <p>For a transaction to get a <code>delete_at_height</code> sticky note, <strong>all</strong> of these must be true:</p>
+  <ul>
+    <li><strong>It’s mined</strong> (it’s in at least one block).</li>
+    <li><strong>It’s on the main chain</strong> (<code>unmined_since</code> is empty).</li>
+    <li><strong>It’s fully spent</strong> — every spendable output’s bit is set (<code>bit_count(spent_bits) = spendable_count</code>) — a single-row check.</li>
+    <li><strong>It isn’t preserved</strong> (<code>preserve_until</code> is empty).</li>
+  </ul>
+  <p>If so, the note is set to:</p>
+  <div class="panel key">
+    <code>delete_at_height = completion_height + 1 + retention</code><br>
+    <span class="muted">where <code>completion_height</code> = the latest of (its spends’ heights, its mined height),
+    and <code>retention</code> is a safety buffer of blocks (so we keep things around well past the point of any
+    realistic chain reorganisation). If a transaction stops qualifying, the sweeper <strong>clears</strong> the note again.</span>
+  </div>
+
+  <h3>How the sweeper finds work without scanning everything</h3>
+  <p>
+    Spend rows are written in roughly increasing height order, and an index on
+    <code>(spent_at_height, …)</code> lets the sweeper read them back in exactly that order. It works in
+    <strong>bands sized by row count</strong> (200,000 spends at a time by default), not by height: a band is a
+    fixed amount of work whether the chain is sparse or one block carries millions of spends — a single dense
+    block is simply drained as one band of its own. Each band’s sorting memory is pinned so the work never spills
+    to temporary files, and each band commits atomically (fold + stamp + bookmark advance in one transaction), so
+    an interruption costs at most one band.
+  </p>
+  <div class="panel tip">
+    <strong>A safety net underneath:</strong> a “reconciler” loop re-derives <code>spent_bits</code> from the
+    actual <code>spends</code> rows for a bounded slice of transactions at a time — and it drains the
+    <code>dah_dirty_parents</code> queue <em>first</em>, so anything a reorg touched is re-checked within seconds
+    rather than whenever the slow rotation happens to arrive. It normally finds nothing — it exists so that
+    “we’ll get to it eventually” is a guarantee, not a hope.
+  </div>
+
+  <div class="panel why">
+    <strong>Why is this unusual / worth calling out?</strong> Most stores decide “delete-ability” at the moment a
+    coin is spent (synchronously). This store deliberately <em>splits</em> that into a cheap “write down the height”
+    step on the hot path and a separate, batched, rate-controlled “decide &amp; stamp” step in the background. The
+    result is that the validator’s spend path stays a lean append, while the expensive bookkeeping happens off to
+    the side — and the final deletion is a trivial range delete.
+  </div>
+
+  <!-- ============================================================= -->
+  <h2 id="workers">8. The three workers, summarised</h2>
+  <div class="grid2">
+    <div class="panel"><span class="tag hot">HOT PATH</span><h3 style="margin-top:8px">Validator operations</h3>
+      Create, Spend, mark-as-mined, lock/unlock. Runs constantly, batched for speed. Only ever <em>tags heights</em>;
+      never computes delete-ability.</div>
+    <div class="panel"><span class="tag bg">BACKGROUND</span><h3 style="margin-top:8px">The DAH sweeper (“Worker 2”)</h3>
+      One loop per shard: folds each new spend into the parent’s <code>spent_bits</code> bitmap in row-bounded
+      bands, stamps <code>delete_at_height</code> the moment a mined transaction’s bitmap is full, feeds
+      <code>pending_deletes</code>, and advances its bookmark — all in one atomic step per band. Plus the
+      reconciler safety net.</div>
+    <div class="panel"><span class="tag bg">BACKGROUND</span><h3 style="margin-top:8px">The pruner</h3>
+      Reads its to-do list (<code>pending_deletes</code>) and deletes every transaction whose
+      <code>delete_at_height</code> has arrived, removing its <code>spends</code> rows alongside it, in bounded
+      set-based batches, all shards in parallel. Intentionally simple so it’s fast.</div>
+    <div class="panel"><span class="tag">DESIGN</span><h3 style="margin-top:8px">The contract between them</h3>
+      The pruner <strong>trusts</strong> the sticky note. So the responsibility for “only set the note when it’s
+      truly safe” lives with the sweeper and the height-tagging steps — not the pruner.</div>
+  </div>
+
+  <!-- ============================================================= -->
+  <h2 id="safety">9. Staying correct: reorgs and crashes</h2>
+  <p>Two things could threaten the “sticky note” being right:</p>
+  <h3>Chain reorganisations (a block gets undone)</h3>
+  <p>If history changes, a transaction that looked finished might become un-spent or fall off the main chain. The store handles this:</p>
+  <ul>
+    <li><strong>Un-spend</strong> removes the <code>spends</code> rows, <strong>clears exactly those bits</strong> in the parent’s <code>spent_bits</code>, <strong>clears</strong> <code>delete_at_height</code>, removes the parent from <code>pending_deletes</code> — and queues the parent in <code>dah_dirty_parents</code>, all in one database transaction, so the safety net re-verifies it from ground truth within seconds.</li>
+    <li><strong>Falling off the main chain</strong> sets <code>unmined_since</code> and <strong>clears</strong> <code>delete_at_height</code> (and the <code>pending_deletes</code> entry) — a transaction that’s no longer on the main chain must not be pruned at its old note.</li>
+    <li><strong>Rewinding the bookmark</strong>: after a reorg the watermark is moved back so the affected height range gets swept again with fresh facts. Because folding is idempotent (setting a set bit changes nothing), re-sweeping the surviving history is completely harmless — this used to be a genuine drift hazard in the counter-based design, and the bitmap removed it by construction. The sweeper’s bookmark advance is also a compare-and-swap, so a rewind that lands mid-band makes the band roll back and re-run rather than being silently overwritten.</li>
+  </ul>
+  <div class="panel tip">This is the key rule that keeps the “dumb, fast pruner” safe: whenever a transaction stops being eligible, the <em>setters</em> clear its note. The pruner never has to second-guess.</div>
+
+  <h3>Crashes</h3>
+  <ul>
+    <li>All tables are durable (<code>LOGGED</code>) and commits are synchronous, so a crash never loses confirmed data.</li>
+    <li>The sweeper’s bookmark is itself stored in the database, so after a restart it picks up exactly where it left off. Re-doing a little work is harmless because stamping the same note twice changes nothing.</li>
+  </ul>
+
+  <!-- ============================================================= -->
+  <h2 id="partitions">10. Partitioning &amp; speed</h2>
+  <p>
+    Both <code>txs</code> and <code>spends</code> are split into <strong>8 shards</strong> (“hash partitions”) on the
+    transaction hash, using the <em>same</em> rule for both. That means a transaction and its spend records always
+    live in the matching shard pair (<code>txs_p03</code> ↔ <code>spends_p03</code>). Benefits:
+  </p>
+  <ul>
+    <li><strong>Parallel cleanup:</strong> the sweeper and pruner can work shard-by-shard at the same time, and deleting a transaction and its spends touches only one shard pair — no cross-shard contention.</li>
+    <li><strong>Vacuum keeps up:</strong> PostgreSQL’s background tidying runs per shard, so it doesn’t fall behind on one giant table.</li>
+  </ul>
+  <p>Other speed/robustness choices:</p>
+  <ul>
+    <li><strong>Batching:</strong> creates, spends, reads and unlocks are grouped and sent to the database in bulk (fewer round-trips, bigger set-based queries).</li>
+    <li><strong>One-row reads:</strong> validating a spend reads a single row (thanks to the folded outputs).</li>
+    <li><strong>Append-only spends:</strong> spending never rewrites the transaction row.</li>
+    <li><strong>Shard-exact lookups:</strong> batch statements address the sharded tables through a join that
+      lets PostgreSQL route each hash to exactly its own shard’s index — the naive form probed all 8 shard
+      indexes per lookup (measured: ~5 index descents per row where 1 suffices).</li>
+    <li><strong>No index on anything the background writers update:</strong> the fold/stamp columns are
+      deliberately unindexed so those updates stay cheap in-page operations (an index there measurably
+      collapsed update performance).</li>
+  </ul>
+
+  <div class="panel key">
+    <strong>The one-line mental model:</strong> two tables (transactions + spends), outputs folded into the
+    transaction row, spending is a cheap insert guarded by a unique index, and deletion is <em>deferred</em> —
+    tag heights now, let a background worker decide the “delete after” height, then delete trivially.
+  </div>
+
+  <!-- ============================================================= -->
+  <h2 id="fewtables">11. Why so few tables? (the performance story)</h2>
+  <p class="lead">
+    If you’ve done database design before, the two-table layout probably looks <em>wrong</em>. The textbook
+    approach — and what Teranode’s older <strong>SQL UTXO store</strong> does — is to <strong>normalise</strong>:
+    a table for transactions, a table for outputs, a table for inputs, a table for block links, tied together
+    with foreign keys. That’s great for general-purpose databases. Here it’s the slow path. This section explains
+    why.
+  </p>
+
+  <div class="panel why">
+    <strong>The core insight:</strong> this store has exactly <em>one</em> demanding job — validate spends and
+    reclaim old coins, at tens of thousands of transactions per second, written durably to disk. At that speed the
+    thing that hurts most is <strong>how many random disk writes each transaction causes</strong>. Every extra
+    table, every extra index, and every “update a row in place” turns into more random writes. So the design works
+    backwards from that: <strong>do the fewest writes possible per transaction.</strong>
+  </div>
+
+  <h3>What a normalised design costs at high speed</h3>
+  <p>In a fully normalised schema, a single transaction with, say, 3 outputs and 2 inputs becomes
+  <strong>many rows across several tables</strong> (1 transaction + 3 outputs + 2 inputs + block links). Multiply by
+  tens of thousands of transactions per second and you get:</p>
+  <ul>
+    <li><strong>Row explosion → write amplification.</strong> Each of those rows is inserted into a table whose
+      index lives in a different place on disk, scattering the writes. The single biggest cost in this workload is
+      exactly this: random-position index inserts. More rows per transaction = proportionally more random writes.</li>
+    <li><strong>Every index is a tax on every write.</strong> A separate <code>outputs</code> table needs its own
+      big index keyed on a (random) hash — a second scattered B-tree to maintain on every insert. The SQL store
+      also keeps a special “is this output still unspent?” index that gets disturbed on <em>every spend</em> — a
+      known cause of multi-second disk stalls under load.</li>
+    <li><strong>“Mark as spent” rewrites a row.</strong> The normalised way to spend a coin is to <em>update</em>
+      the output row (fill in who spent it). Updating a row leaves a dead copy behind that the database must later
+      vacuum, and it disturbs that unspent-index. That’s churn on the busiest path in the system.</li>
+    <li><strong>Reads need JOINs.</strong> To validate a spend you’d join transactions ⋈ outputs (and maybe inputs).
+      JOINs mean touching multiple tables and indexes for one answer.</li>
+    <li><strong>Deletion is a multi-table cascade.</strong> Removing one old transaction means cascading deletes
+      across all those child tables via foreign keys.</li>
+    <li><strong>More bytes in the write-ahead log.</strong> Everything is written durably first to a log (the WAL).
+      More rows + in-place updates = more log bytes per transaction, and WAL volume is a first-class cost here.</li>
+  </ul>
+
+  <h3>How the folded, two-table design avoids each cost</h3>
+  <table>
+    <tr><th>Dimension</th><th>Normalised (SQL store)</th><th>This store (folded)</th></tr>
+    <tr><td>Rows per transaction</td><td>1 + one per output + one per input + block links</td><td><strong>1</strong> tx row (+ one <code>spends</code> row per <em>spent</em> output, later)</td></tr>
+    <tr><td>Big random-write indexes</td><td>transactions PK + outputs PK + “unspent” index + …</td><td><strong>just two</strong>: the <code>txs</code> primary key and the <code>spends</code> uniqueness index</td></tr>
+    <tr><td>Marking a coin spent</td><td>UPDATE the output row (rewrite + vacuum churn)</td><td><strong>INSERT</strong> a <code>spends</code> row (append-only, no rewrite)</td></tr>
+    <tr><td>Validating a spend</td><td>JOIN across tables</td><td><strong>one</strong> single-row read (outputs are folded in)</td></tr>
+    <tr><td>Deleting an old tx</td><td>foreign-key cascade across 4–5 tables</td><td>delete the tx row + its <code>spends</code> rows (two aligned shards)</td></tr>
+    <tr><td>“Is it spent?”</td><td>a nullable column + a partial index that churns</td><td>row present in <code>spends</code> = spent (no extra index churn)</td></tr>
+  </table>
+
+  <div class="panel tip">
+    <strong>“Folding” in one line:</strong> instead of a separate row per output, a transaction’s outputs are packed
+    into a few columns <em>on the transaction’s own row</em> (a flat blob of output IDs + small bitmaps + counts).
+    The result: one read returns everything needed to validate a spend, and creating a transaction writes one row
+    instead of many.
+  </div>
+
+  <h3>The payoff — and the price</h3>
+  <p>
+    Concretely (on a developer laptop, so treat as indicative, not production figures): the older normalised SQL
+    store handles on the order of <strong>~9,000</strong> transactions/second; this store sustains roughly
+    <strong>~99,000</strong>/second <em>while the sweeper and pruner run continuously and hold the table
+    bounded</em> — creation, spending, mining, stamping and reclaim all at once. Most of that gap is simply
+    <em>not</em> paying the row-explosion and index-churn costs above; the rest came from measuring where the
+    database spent its time (write-ahead-log volume per transaction, wasted shard probes) and removing each cost.
+  </p>
+  <div class="panel why">
+    <strong>This is a deliberate trade, not a free win.</strong> Denormalising costs flexibility: you can’t easily
+    run ad-hoc relational queries (“show me all outputs over 1 BSV”), the layout is special-purpose, and packing
+    outputs into one row creates a ceiling for transactions with <em>huge</em> numbers of outputs
+    (see <a href="#limits">§12</a>). We accept those because this store isn’t a general-purpose database — it’s a
+    purpose-built engine for one hot loop (validate spends, prune coins) where raw write throughput is everything.
+  </div>
+
+  <!-- ============================================================= -->
+  <h2 id="limits">12. How big can a transaction be? (size limits)</h2>
+  <p class="lead">
+    This store is tuned for ordinary transactions. It will still accept unusually large ones — up to some hard
+    ceilings — but performance falls off well before those ceilings. Here’s exactly what limits what, and why.
+  </p>
+
+  <div class="panel key">
+    <strong>The one rule that drives almost everything:</strong> in PostgreSQL, a <em>single column value</em>
+    (one field in one row) can be at most <strong>1 GB</strong>. This is a fixed, built-in limit —
+    <strong>there is no setting to raise it.</strong> Two of this store’s columns can grow with the transaction,
+    so they hit that 1 GB wall first.
+  </div>
+
+  <h3>The hard ceilings</h3>
+  <table>
+    <tr><th>What</th><th>Hard ceiling</th><th>What sets it</th></tr>
+    <tr>
+      <td><strong>Whole transaction size</strong> (serialized bytes)</td>
+      <td><strong>~1 GB</strong></td>
+      <td>The entire transaction is stored in the <code>raw_tx</code> column. One field ≤ 1 GB, so a transaction whose serialized form is bigger simply cannot be inserted — the write fails. (The stored “extended” form is a bit larger than the wire form, so the real limit is a little under 1 GB.)</td>
+    </tr>
+    <tr>
+      <td><strong>All script bytes</strong> (every input + output script, combined)</td>
+      <td>fits inside that ~1 GB</td>
+      <td>Scripts aren’t stored separately — they live inside <code>raw_tx</code>. So one giant script, or many big ones, are limited by the same ~1 GB transaction ceiling. There is no separate “max script size” in the store.</td>
+    </tr>
+    <tr>
+      <td><strong>Number of outputs</strong></td>
+      <td><strong>~33.5 million</strong></td>
+      <td>Output IDs are packed into the single <code>utxo_hashes</code> field at 32 bytes each. 1 GB ÷ 32 bytes ≈ 33,554,432 outputs, then the write fails. (The matching spendable/frozen bitmaps are tiny by comparison, so <code>utxo_hashes</code> is what runs out first.)</td>
+    </tr>
+    <tr>
+      <td><strong>Number of inputs</strong></td>
+      <td>no fixed field limit</td>
+      <td>Inputs aren’t stored on the transaction’s row. Each input that spends a coin becomes its own row in the <code>spends</code> table. So input count is bounded only by (a) the ~1 GB <code>raw_tx</code> (which holds all the unlocking scripts) and (b) the practical cost of inserting that many rows — not by any single-field ceiling.</td>
+    </tr>
+    <tr>
+      <td><strong>An output’s index</strong> (vout number)</td>
+      <td>up to ~2.1 billion</td>
+      <td>Stored as a 32-bit integer (<code>prev_output_idx</code>). Never the binding limit — you’d hit the 33.5 M output cap long before this.</td>
+    </tr>
+    <tr>
+      <td><strong>Blocks a transaction is recorded in</strong></td>
+      <td>tens of millions</td>
+      <td>The <code>block_ids</code> list. Normally 1 (a few across a reorg). Never a real concern.</td>
+    </tr>
+  </table>
+
+  <div class="panel why">
+    <strong>The soft limits bite long before the hard ones.</strong> Because PostgreSQL can only read a big field
+    <em>all at once</em> (it can’t fetch part of it):
+    <ul style="margin:8px 0 0">
+      <li><strong>Reading one output re-reads <em>all</em> of them.</strong> To check output #500,000 of a million-output transaction, the database must pull the entire <code>utxo_hashes</code> blob (here, ~32 MB) and the bitmaps. Spending such a transaction’s outputs one by one gets slower and slower (roughly quadratic). So the <em>practical</em> output limit is far below 33.5 million.</li>
+      <li><strong>Reading one script re-parses the whole transaction.</strong> Output scripts/amounts come from <code>raw_tx</code>, so fetching any single output’s script means decompressing and parsing the entire transaction. Fine for normal sizes; expensive for multi-megabyte transactions.</li>
+    </ul>
+    In short: a near-ceiling transaction is stored <em>correctly</em>, just <em>slowly</em>. The design targets normal transactions.
+  </div>
+
+  <h3>Which PostgreSQL settings matter here</h3>
+  <table>
+    <tr><th>Setting</th><th>Effect on this</th></tr>
+    <tr><td><strong>The 1 GB field limit</strong></td><td><strong>Not configurable.</strong> It’s compiled into PostgreSQL. You cannot turn it up to store a &gt;1 GB transaction. The only way past it would be a schema change (e.g. splitting <code>raw_tx</code> into chunks) — not a setting.</td></tr>
+    <tr><td><code>block_size</code></td><td>The page size (default 8 KB), set when PostgreSQL is built. It does <em>not</em> change the 1 GB field cap — big values are moved out-of-line (“TOASTed”) automatically regardless of page size.</td></tr>
+    <tr><td><code>work_mem</code> / <code>maintenance_work_mem</code></td><td>Memory a query may use to build, sort, or aggregate values. Operations that materialise a huge output blob or many big rows need more; too little spills to disk and slows down.</td></tr>
+    <tr><td><code>shared_buffers</code></td><td>The cache. Large transactions evict more useful pages; a workload full of big transactions wants a bigger cache.</td></tr>
+    <tr><td><code>max_wal_size</code> and WAL settings</td><td>Every insert is written to the write-ahead log. A near-1 GB transaction produces a correspondingly large WAL record — worth accounting for in checkpoint/WAL sizing.</td></tr>
+    <tr><td><code>statement_timeout</code></td><td>A query that touches a giant row (or a huge spend batch) can take a long time; a tight timeout may cut it off.</td></tr>
+    <tr><td>Column <code>STORAGE</code> / <code>COMPRESSION</code></td><td>Controls how big values are stored and compressed. This store already sets <code>raw_tx</code> to LZ4 compression, which shrinks the on-disk size (and the effective room before the 1 GB wall) but doesn’t change the limit itself.</td></tr>
+  </table>
+
+  <div class="panel tip">
+    <strong>Want a smaller limit on purpose?</strong> The store doesn’t impose its own maximum — it accepts whatever
+    it’s given, up to PostgreSQL’s ceilings. If a deployment wants to reject oversized transactions earlier (for
+    safety or predictability), that cap belongs <em>upstream</em> (consensus/policy rules), before the transaction
+    ever reaches the store — so a pathological transaction is refused cleanly rather than failing mid-insert at the
+    1 GB wall.
+  </div>
+
+  <!-- ============================================================= -->
+  <h2 id="glossary">13. Glossary</h2>
+  <table>
+    <tr><th>Term</th><th>Plain meaning</th></tr>
+    <tr><td><strong>UTXO</strong></td><td>An unspent coin — an output that hasn’t been used as an input yet.</td></tr>
+    <tr><td><strong>UTXO set</strong></td><td>All the coins that currently exist and can be spent.</td></tr>
+    <tr><td><strong>DAH / <code>delete_at_height</code></strong></td><td>“Delete-At-Height.” The block height at which a transaction becomes safe to delete. The “sticky note.”</td></tr>
+    <tr><td><strong>Deferred</strong></td><td>Done later, on purpose — the delete-ability decision is moved off the busy path to a background worker.</td></tr>
+    <tr><td><strong>retention</strong></td><td>A safety buffer of blocks kept beyond completion, so nothing is deleted before a reorg could realistically undo it.</td></tr>
+    <tr><td><strong>completion_height</strong></td><td>The latest height among a transaction’s spends and its mined height — when it truly “finished.”</td></tr>
+    <tr><td><strong>watermark</strong></td><td>The bookmark (<code>dah_part_watermark</code>, one per shard) recording how far the sweeper has processed.</td></tr>
+    <tr><td><strong>fold / <code>spent_bits</code></strong></td><td>The sweeper “folds” each new spend into a per-output bitmap on the parent transaction’s row. Full bitmap = fully spent — decided without ever re-reading the spend history.</td></tr>
+    <tr><td><strong>reconciler</strong></td><td>The safety-net loop that re-derives <code>spent_bits</code> from the actual spend rows (dirty-queue first, then a slow rotation) and un-stamps anything wrong.</td></tr>
+    <tr><td><strong>reorg</strong></td><td>A chain reorganisation: recent blocks are undone and replaced, so some transactions change status.</td></tr>
+    <tr><td><strong>mined / on the main chain</strong></td><td>“Mined” = included in a block. “On the main chain” = on the agreed-upon longest history (tracked by <code>unmined_since</code> being empty).</td></tr>
+    <tr><td><strong>coinbase maturity</strong></td><td>Block-reward coins can’t be spent until a number of blocks have passed.</td></tr>
+    <tr><td><strong>hash partition / shard</strong></td><td>The tables are split into 8 pieces by transaction hash, for parallelism.</td></tr>
+    <tr><td><strong>BRIN index</strong></td><td>A compact index that works well for columns whose values increase over time (like block heights).</td></tr>
+    <tr><td><strong>fully spent</strong></td><td>Every spendable output of a transaction has a matching row in <code>spends</code>.</td></tr>
+  </table>
+
+  <hr>
+  <p class="muted" style="font-size:13px">
+    This is a conceptual overview of the <code>stores/utxo/postgres</code> package. The authoritative source is the
+    code itself — start with <code>schema.go</code> (the tables), <code>spend.go</code> / <code>create.go</code> /
+    <code>get.go</code> (the hot path), <code>dah_sweep_proc.go</code> (the fold/stamp sweeper),
+    <code>dah_reconcile.go</code> (the safety net) and <code>pruner_provider.go</code> (the pruner).
+    Tuning notes live in <code>TUNING.md</code>. Requires PostgreSQL 14+.
+  </p>
+
+</div>
+</body>
+</html>

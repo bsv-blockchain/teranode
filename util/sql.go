@@ -31,7 +31,11 @@ const (
 // If servicePoolSettings is provided, it will override the global PostgreSQL pool settings.
 func InitSQLDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings, servicePoolSettings ...*settings.PostgresSettings) (*usql.DB, error) {
 	switch storeURL.Scheme {
-	case "postgres":
+	// "sqlpostgres" is an alias for the PostgreSQL backend: the UTXO-store factory
+	// re-registered the SQL Postgres store under "sqlpostgres" so the native
+	// postgres store could claim the bare "postgres" scheme. Both must initialise
+	// the same Postgres connection here.
+	case "postgres", "sqlpostgres":
 		var poolSettings *settings.PostgresSettings
 		if len(servicePoolSettings) > 0 && servicePoolSettings[0] != nil {
 			poolSettings = servicePoolSettings[0]
