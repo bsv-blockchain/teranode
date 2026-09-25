@@ -172,3 +172,90 @@ func TestRewindblockchainRegistration(t *testing.T) {
 		require.Empty(t, fs.Args(), "a well-formed invocation leaves no positionals for the guard to reject")
 	})
 }
+
+// TestRepairMissingParentsRegistration mirrors TestRewindblockchainRegistration for
+// the repair-missing-parents command. It never calls Execute: that opens real stores.
+func TestRepairMissingParentsRegistration(t *testing.T) {
+	t.Run("listed in commandHelp so printUsage shows it", func(t *testing.T) {
+		desc, ok := commandHelp["repair-missing-parents"]
+		require.True(t, ok)
+		require.Contains(t, desc, "node must be stopped")
+	})
+
+	t.Run("not gated pre-parse as a dangerous command", func(t *testing.T) {
+		require.False(t, dangerousCommands["repair-missing-parents"])
+	})
+
+	t.Run("defaults", func(t *testing.T) {
+		fs := flag.NewFlagSet("repair-missing-parents", flag.ContinueOnError)
+		fs.SetOutput(&nopWriter{})
+
+		f := registerRepairMissingParentsFlags(fs)
+		require.NoError(t, fs.Parse(nil))
+
+		_, err := f.options()
+		require.Error(t, err, "--peer is required")
+		require.Contains(t, err.Error(), "--peer")
+	})
+
+	t.Run("requires txids or scan", func(t *testing.T) {
+		fs := flag.NewFlagSet("repair-missing-parents", flag.ContinueOnError)
+		fs.SetOutput(&nopWriter{})
+
+		f := registerRepairMissingParentsFlags(fs)
+		require.NoError(t, fs.Parse([]string{"--peer", "http://peer:8090"}))
+
+		_, err := f.options()
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "--txids")
+		require.Contains(t, err.Error(), "--scan")
+	})
+
+	t.Run("parses every flag into Options", func(t *testing.T) {
+		fs := flag.NewFlagSet("repair-missing-parents", flag.ContinueOnError)
+		fs.SetOutput(&nopWriter{})
+
+		f := registerRepairMissingParentsFlags(fs)
+		require.NoError(t, fs.Parse([]string{
+			"--peer", "http://peer:8090/",
+			"--txids", "c42cdee0b76ee5c1f0475a37bf9df2cd77021e3a9b74441c5cc6862ceaf50236, eb10a6e6eb10a6e6eb10a6e6eb10a6e6eb10a6e6eb10a6e6eb10a6e6eb10a6e6",
+			"--scan",
+			"--dry-run",
+			"--force-live",
+		}))
+
+		opts, err := f.options()
+		require.NoError(t, err)
+		require.Equal(t, "http://peer:8090/", opts.PeerURL)
+		require.Len(t, opts.TxIDs, 2)
+		require.Equal(t, "c42cdee0b76ee5c1f0475a37bf9df2cd77021e3a9b74441c5cc6862ceaf50236", opts.TxIDs[0].String())
+		require.True(t, opts.Scan)
+		require.True(t, opts.DryRun)
+		require.True(t, opts.ForceLive)
+		require.NotNil(t, opts.Stdout)
+	})
+
+	t.Run("rejects a malformed txid", func(t *testing.T) {
+		fs := flag.NewFlagSet("repair-missing-parents", flag.ContinueOnError)
+		fs.SetOutput(&nopWriter{})
+
+		f := registerRepairMissingParentsFlags(fs)
+		require.NoError(t, fs.Parse([]string{"--peer", "http://peer:8090", "--txids", "nothex"}))
+
+		_, err := f.options()
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "nothex")
+	})
+
+	t.Run("Execute rejects positional arguments before opening any store", func(t *testing.T) {
+		fs := flag.NewFlagSet("repair-missing-parents", flag.ContinueOnError)
+		fs.SetOutput(&nopWriter{})
+
+		f := registerRepairMissingParentsFlags(fs)
+		require.NoError(t, fs.Parse([]string{"--peer", "http://peer:8090", "c42cdee0"}))
+
+		err := repairMissingParentsExecute(ulogger.TestLogger{}, nil, f)(fs.Args())
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "positional")
+	})
+}
