@@ -10,7 +10,6 @@
 | RetrySleep | time.Duration | 1s | blockValidationRetrySleep | Retry delay timing |
 | GRPCAddress | string | "localhost:8088" | blockvalidation_grpcAddress | Client connection address |
 | GRPCListenAddress | string | ":8088" | blockvalidation_grpcListenAddress | **CRITICAL** - gRPC server binding (service skipped if empty) |
-| KafkaWorkers | int | 0 | blockvalidation_kafkaWorkers | Kafka consumer parallelism |
 | LocalSetTxMinedConcurrency | int | 8 | blockvalidation_localSetTxMinedConcurrency | Transaction mining concurrency |
 | MaxPreviousBlockHeadersToCheck | uint64 | 100 | blockvalidation_maxPreviousBlockHeadersToCheck | Block header validation depth |
 | MissingTransactionsBatchSize | int | 5000 | blockvalidation_missingTransactionsBatchSize | Missing transaction batch size |
@@ -201,7 +200,7 @@ blockvalidation_useCatchupWhenBehind=false
 
 ```bash
 blockvalidation_validateBlockSubtreesConcurrency=16
-blockvalidation_processTxMetaUsingStoreBatchSize=2048
+blockvalidation_processTxMetaUsingStore_BatchSize=2048
 blockvalidation_catchupConcurrency=8
 blockvalidation_fetch_num_workers=32
 blockvalidation_subtree_batch_size=32

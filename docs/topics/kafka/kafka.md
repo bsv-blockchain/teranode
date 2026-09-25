@@ -387,7 +387,7 @@ These services require exactly-once processing guarantees:
 
 ### Kafka Consumer Concurrency
 
-**Important**: Unlike what the service-specific `kafkaWorkers` settings might suggest, Kafka consumer concurrency in Teranode is actually controlled through the `consumer_ratio` URL parameter for each topic. The actual number of consumers is calculated as:
+**Important**: Kafka consumer concurrency in Teranode is controlled through the `consumer_ratio` URL parameter for each topic. The actual number of consumers is calculated as:
 
 ```text
 consumerCount = partitions / consumer_ratio
@@ -407,13 +407,6 @@ Common consumer ratios in use:
     - **Default**: 1048576 (1MB)
     - **Usage**: Large transactions routed via HTTP to avoid Kafka message size limits
 
-#### Validator Service Settings
-
-- **`validator_kafkaWorkers`**: Number of concurrent Kafka processing workers
-    - **Purpose**: Controls parallel transaction processing capacity
-    - **Tuning**: Should match CPU cores and expected transaction volume
-    - **Integration**: Works with Block Assembly via direct gRPC (not Kafka)
-
 ### Configuration Examples by Service
 
 #### High-Throughput Service (Propagation)
@@ -427,7 +420,6 @@ validator_kafka_maxMessageBytes=1048576  # 1MB threshold
 
 ```text
 kafka_blocksConfig=kafka://localhost:9092/blocks?partitions=4&consumer_ratio=1&replay=0
-blockvalidation_kafkaWorkers=4
 autoCommit=false  # Manual commit for reliability
 ```
 

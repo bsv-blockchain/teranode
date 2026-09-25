@@ -117,6 +117,33 @@ This hierarchy exists because file-level operations are the foundation of blob s
 | PostgresCheckAddress | string | "localhost:5432" | postgres_check_address | PostgreSQL connection check address |
 | GlobalBlockHeightRetention | uint32 | 288 | global_blockHeightRetention | **CRITICAL** - Block height retention (2 days default) |
 
+#### PostgreSQL Connection Pool
+
+Default connection pool and resilience settings for every service's PostgreSQL store. A service can
+override the first seven with its own `<service>_postgres_*` settings (see e.g. [Blockchain
+Settings](services/blockchain_settings.md) and [UTXO Store Settings](stores/utxo_settings.md)); there is
+no per-service override for the circuit breaker settings.
+
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| MaxOpenConns | int | 50 | postgres_maxOpenConns | Maximum number of open database connections |
+| MaxIdleConns | int | 10 | postgres_maxIdleConns | Maximum number of idle connections in pool |
+| ConnMaxLifetime | time.Duration | 5m | postgres_connMaxLifetime | Maximum time a connection can be reused |
+| ConnMaxIdleTime | time.Duration | 1m | postgres_connMaxIdleTime | Maximum time a connection can remain idle |
+| RetryMaxAttempts | int | 3 | postgres_retryMaxAttempts | Maximum retry attempts for transient errors |
+| RetryBaseDelay | time.Duration | 100ms | postgres_retryBaseDelay | Base delay for retry backoff |
+| RetryEnabled | bool | false | postgres_retryEnabled | Enable retries for transient errors |
+| CircuitBreakerEnabled | bool | false | postgres_circuitBreakerEnabled | Enable circuit breaker for database operations |
+| CircuitBreakerFailureThreshold | int | 5 | postgres_circuitBreakerFailureThreshold | Consecutive failures before opening circuit |
+| CircuitBreakerHalfOpenMax | int | 3 | postgres_circuitBreakerHalfOpenMax | Successful probes required to close circuit |
+| CircuitBreakerCooldown | time.Duration | 30s | postgres_circuitBreakerCooldown | Duration circuit stays open before testing |
+| CircuitBreakerFailureWindow | time.Duration | 10s | postgres_circuitBreakerFailureWindow | Time window for counting consecutive failures |
+
+**Note**: the five `CircuitBreakerEnabled`/`CircuitBreakerFailureThreshold`/`CircuitBreakerHalfOpenMax`/
+`CircuitBreakerCooldown`/`CircuitBreakerFailureWindow` settings are not currently wired to any loader in
+`settings.go` - `Postgres.CircuitBreakerEnabled` is permanently `false` regardless of this setting, so the
+circuit breaker cannot currently be enabled via configuration. Tracked for a code fix in a separate PR.
+
 ### Performance and Optimization
 
 | Setting | Type | Default | Environment Variable | Usage |
