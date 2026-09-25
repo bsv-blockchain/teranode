@@ -309,6 +309,7 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, blockchainStore 
 
 	var (
 		headersProcessed uint64
+		recordsRead      uint64
 		txCount          uint64
 	)
 
@@ -332,6 +333,8 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, blockchainStore 
 			return errors.NewProcessingError("failed to read UTXO", err)
 		}
 
+		recordsRead++
+
 		if blockIndex.Height == 0 {
 			// The genesis block is already in the store
 			continue
@@ -352,9 +355,14 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, blockchainStore 
 			blockchainoptions.WithSubtreesSet(true),
 			blockchainoptions.WithPersistedAt(), // Mark as persisted now, since we're seeding and the block persister won't be able to do it later
 		)
-		if err != nil {
+		if err != nil && !errors.Is(err, errors.ErrBlockExists) {
 			return errors.NewProcessingError("failed to add block", err)
 		}
+		// errors.ErrBlockExists is not fatal: it means a prior run already
+		// stored this block (e.g. -force re-running the header pass to fill in
+		// blocks a truncated file previously left missing, on top of blocks an
+		// earlier pass already stored successfully). Treat it as an idempotent
+		// replay rather than failing the whole re-run.
 
 		headersProcessed++
 		txCount += blockIndex.TxCount
@@ -362,6 +370,21 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, blockchainStore 
 		if blockIndex.Height%10000 == 0 {
 			fmt.Printf("Processed to block height %d\n", blockIndex.Height)
 		}
+	}
+
+	// The read loop above only knows the record stream ended - it cannot tell a
+	// clean end-of-records boundary apart from a file truncated mid-record: a
+	// short read surfaces as io.ErrUnexpectedEOF, which (*errors.Error).Is
+	// matches against io.EOF via its substring fallback ("EOF" is a substring of
+	// "unexpected EOF"). Unlike utxo-set files, utxo-headers files carry no
+	// trailing footer, but WriteHeadersToStore always writes exactly one record
+	// per height from genesis (0) up to the tip height already read above, so
+	// that tip height is an independent ground truth we can validate the read
+	// count against without any file format change.
+	if recordsRead != uint64(height)+1 {
+		return errors.NewProcessingError(
+			"utxo-headers file %s record count mismatch (likely truncated): expected %d header records (heights 0..%d), read %d; the %d blocks read so far have already been persisted",
+			headersFile, uint64(height)+1, height, recordsRead, recordsRead)
 	}
 
 	logger.Infof("FINISHED  %16s headers with %16s transactions", formatNumber(headersProcessed), formatNumber(txCount))
@@ -397,33 +420,36 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 	}
 
 	if !force {
-		var exists bool
+		var skip bool
 
-		exists, err = blockStore.Exists(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename("lastProcessed"), bloboptions.WithNoHashPrefix())
+		skip, err = checkSkipUTXOImport(ctx, blockStore, blockchainStore)
 		if err != nil {
-			return nil, errors.NewStorageError("failed to check if lastProcessed.dat exists", err)
+			return nil, err
 		}
 
-		if exists {
+		if skip {
 			// The store has already been fully seeded. Skip idempotently and
 			// leave any existing BlockAssembler checkpoint untouched (returning a
 			// nil tip signals the caller not to write state).
 			logger.Errorf("lastProcessed.dat exists, skipping UTXOs")
 			return nil, nil
 		}
+	} else {
+		// Even under -force, don't blindly re-import: if lastProcessed.dat is
+		// present (proof a prior run's UTXO import already completed in full)
+		// and only the BlockAssembler checkpoint is missing, the tip can be
+		// recovered by reading the existing utxo-set file's own preamble -
+		// instant, versus hours to re-import an already-complete UTXO set.
+		var recoverable bool
 
-		// No seed marker, but if a BlockAssembler checkpoint already exists then
-		// this UTXO store is owned by a running/seeded assembler. Overwriting its
-		// UTXO set would corrupt live state, so refuse unless explicitly forced.
-		var stateExists bool
-
-		stateExists, err = blockAssemblerStateExists(ctx, blockchainStore)
+		recoverable, err = checkpointRecoverable(ctx, blockStore, blockchainStore, utxoFile)
 		if err != nil {
-			return nil, errors.NewStorageError("failed to check BlockAssembler state", err)
+			return nil, err
 		}
 
-		if stateExists {
-			return nil, errors.NewProcessingError("BlockAssembler state already exists in the blockchain store — refusing to seed UTXOs over a store already owned by a block assembler; use -force to override")
+		if recoverable {
+			logger.Infof("lastProcessed.dat exists but no BlockAssembler checkpoint was found; recovering the checkpoint from the existing utxo-set file without re-importing")
+			return readUTXOSetTip(utxoFile)
 		}
 	}
 
@@ -443,9 +469,16 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 	// the output-only representation rather than failing the whole import.
 	coinbaseTxs, err := loadCoinbaseTxs(logger, headersFile)
 	if err != nil {
-		logger.Warnf("[processUTXOs] could not load coinbase transactions from %s; coinbases will be stored without their input: %v", headersFile, err)
+		// loadCoinbaseTxs still returns whatever it managed to read (e.g. a
+		// truncated file yields the coinbases up to the truncation point);
+		// keep that partial map rather than discarding it, so a damaged
+		// headers file degrades to "most coinbases restored" instead of none.
+		if coinbaseTxs == nil {
+			coinbaseTxs = map[chainhash.Hash]*bt.Tx{}
+		}
 
-		coinbaseTxs = map[chainhash.Hash]*bt.Tx{}
+		logger.Warnf("[processUTXOs] could not fully load coinbase transactions from %s; %s coinbases recovered, the rest will be stored without their input: %v",
+			headersFile, formatNumber(uint64(len(coinbaseTxs))), err)
 	}
 
 	logger.Infof("[processUTXOs] loaded %s coinbase transactions for input restoration", formatNumber(uint64(len(coinbaseTxs))))
@@ -482,26 +515,9 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 
 	reader := bufio.NewReader(f)
 
-	var header fileformat.Header
-
-	header, err = fileformat.ReadHeader(reader)
+	hash, height, err := readUTXOSetPreamble(reader)
 	if err != nil {
-		return nil, errors.NewProcessingError(errMsgFailedToReadUTXO, err)
-	}
-
-	if header.FileType() != fileformat.FileTypeUtxoSet {
-		return nil, errors.NewProcessingError("invalid file type: %s", header.FileType)
-	}
-
-	var hash chainhash.Hash
-
-	if err = binary.Read(reader, binary.LittleEndian, &hash); err != nil {
-		return nil, errors.NewProcessingError(errMsgFailedToReadUTXO, err)
-	}
-
-	var height uint32
-	if err = binary.Read(reader, binary.LittleEndian, &height); err != nil {
-		return nil, errors.NewProcessingError(errMsgFailedToReadUTXO, err)
+		return nil, err
 	}
 
 	// With UTXOSets, we also read the previous block hash before we start reading the UTXOs
@@ -524,7 +540,14 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 
 	heightStr := fmt.Sprintf("%d\n", height)
 
-	if err = blockStore.Set(ctx, nil, fileformat.FileTypeDat, []byte(heightStr), bloboptions.WithFilename("lastProcessed"), bloboptions.WithNoHashPrefix()); err != nil {
+	// WithAllowOverwrite is required here: processUTXOs only runs when
+	// checkpointRecoverable's cheap path was not taken - lastProcessed.dat may
+	// not exist yet, but it may also already be present and simply not apply
+	// to this utxoFile (a different recorded height, or a BlockAssembler
+	// checkpoint that already exists) - so a full re-import can find
+	// lastProcessed.dat from an earlier run already present, and the marker
+	// write must not itself be the reason that re-import fails.
+	if err = blockStore.Set(ctx, nil, fileformat.FileTypeDat, []byte(heightStr), bloboptions.WithFilename("lastProcessed"), bloboptions.WithNoHashPrefix(), bloboptions.WithAllowOverwrite(true)); err != nil {
 		return nil, errors.NewStorageError("failed to write height of %d to lastProcessed.dat", height, err)
 	}
 
@@ -611,6 +634,105 @@ OUTER:
 	logger.Infof("FINISHED  %16s transactions with %16s utxos", formatNumber(txProcessed), formatNumber(utxosProcessed))
 
 	return nil
+}
+
+// readUTXOSetPreamble reads the fixed-size preamble of an already-opened
+// .utxo-set file - file header, tip hash, tip height - and leaves the reader
+// positioned at the following previous-block-hash field. Shared by
+// processUTXOs (which goes on to import every UTXO record) and readUTXOSetTip
+// (which reads only this preamble to recover a tip cheaply).
+func readUTXOSetPreamble(reader *bufio.Reader) (chainhash.Hash, uint32, error) {
+	header, err := fileformat.ReadHeader(reader)
+	if err != nil {
+		return chainhash.Hash{}, 0, errors.NewProcessingError(errMsgFailedToReadUTXO, err)
+	}
+
+	if header.FileType() != fileformat.FileTypeUtxoSet {
+		return chainhash.Hash{}, 0, errors.NewProcessingError("invalid file type: %s", header.FileType())
+	}
+
+	var hash chainhash.Hash
+
+	if err = binary.Read(reader, binary.LittleEndian, &hash); err != nil {
+		return chainhash.Hash{}, 0, errors.NewProcessingError(errMsgFailedToReadUTXO, err)
+	}
+
+	var height uint32
+	if err = binary.Read(reader, binary.LittleEndian, &height); err != nil {
+		return chainhash.Hash{}, 0, errors.NewProcessingError(errMsgFailedToReadUTXO, err)
+	}
+
+	return hash, height, nil
+}
+
+// readUTXOSetTip reads just the preamble of a .utxo-set file - not the UTXO
+// records that follow it - to recover the tip hash and height cheaply. Used
+// to recover a missing BlockAssembler checkpoint when a prior run's UTXO
+// import already completed in full (see checkpointRecoverable): the tip this
+// import produced is exactly this same preamble, so re-reading a handful of
+// bytes stands in for hours of re-importing the whole (already complete)
+// UTXO set.
+func readUTXOSetTip(utxoFile string) (*utxoSetTip, error) {
+	f, err := os.Open(utxoFile)
+	if err != nil {
+		return nil, errors.NewStorageError("failed to open file", err)
+	}
+
+	defer func() {
+		_ = f.Close()
+	}()
+
+	hash, height, err := readUTXOSetPreamble(bufio.NewReader(f))
+	if err != nil {
+		return nil, err
+	}
+
+	return &utxoSetTip{hash: hash, height: height}, nil
+}
+
+// checkpointRecoverable reports whether the store is in the specific state a
+// prior run's failure to write the BlockAssembler checkpoint after a complete
+// UTXO import leaves behind: lastProcessed.dat present - proof *an* import
+// finished, since processUTXOs only writes it after every worker has finished
+// successfully - with its recorded height matching utxoFile's own preamble
+// height, proving the marker belongs to this same UTXO set rather than some
+// other snapshot - but no checkpoint. In this state -force must not re-import
+// the (already complete) UTXO set; the caller recovers the tip cheaply via
+// readUTXOSetTip instead.
+//
+// A marker present but recording a different height falls through to a full
+// re-import: it proves some import finished, but not that it was of
+// utxoFile, so utxoFile itself has not necessarily been imported at all.
+func checkpointRecoverable(ctx context.Context, blockStore blob.Store, blockchainStore blockchain.Store, utxoFile string) (bool, error) {
+	b, err := blockStore.Get(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename("lastProcessed"), bloboptions.WithNoHashPrefix())
+	if err != nil {
+		if errors.Is(err, errors.ErrNotFound) {
+			return false, nil
+		}
+
+		return false, errors.NewStorageError("failed to read lastProcessed.dat", err)
+	}
+
+	markerHeight, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 32)
+	if err != nil {
+		return false, errors.NewProcessingError("failed to parse height from lastProcessed.dat", err)
+	}
+
+	tip, err := readUTXOSetTip(utxoFile)
+	if err != nil {
+		return false, err
+	}
+
+	if uint64(tip.height) != markerHeight {
+		return false, nil
+	}
+
+	stateExists, err := blockAssemblerStateExists(ctx, blockchainStore)
+	if err != nil {
+		return false, errors.NewStorageError("failed to check BlockAssembler state", err)
+	}
+
+	return !stateExists, nil
 }
 
 // worker processes UTXOWrapper messages from the channel and stores them in the UTXO store.
@@ -739,6 +861,12 @@ func restoreCoinbaseInput(tx *bt.Tx, coinbaseTx *bt.Tx, txid *chainhash.Hash) {
 // txid to the coinbase transaction. Legacy V1 files carry no coinbase
 // transactions and yield an empty map, as does an absent file: coinbase input
 // restoration is best-effort and never blocks the UTXO import.
+//
+// Contract: on error the returned map is still usable and holds every coinbase
+// read before the failure - callers must keep it rather than discarding it,
+// since coinbase input restoration is best-effort and a damaged file should
+// degrade to "most coinbases restored", not "none". The map is nil only when
+// the file could not be opened or its header failed validation.
 func loadCoinbaseTxs(logger ulogger.Logger, headersFile string) (map[chainhash.Hash]*bt.Tx, error) {
 	coinbaseTxs := make(map[chainhash.Hash]*bt.Tx)
 
@@ -776,12 +904,24 @@ func loadCoinbaseTxs(logger ulogger.Logger, headersFile string) (map[chainhash.H
 		return coinbaseTxs, nil
 	}
 
-	// Skip the tip hash (32 bytes) and height (4 bytes) preamble that precedes
-	// the per-block BlockIndex entries.
-	var preamble [36]byte
-	if _, err = io.ReadFull(reader, preamble[:]); err != nil {
+	// Skip the tip hash (32 bytes) preamble, then read the tip height: unlike
+	// utxo-set files, utxo-headers files carry no trailing footer, so this tip
+	// height - which WriteHeadersToStore always sets to exactly one record per
+	// height from genesis (0) up to the tip - is the only independent ground
+	// truth available to validate the read loop against below.
+	var tipHashBytes [32]byte
+	if _, err = io.ReadFull(reader, tipHashBytes[:]); err != nil {
 		return nil, errors.NewProcessingError(errMsgFailedToReadUTXO, err)
 	}
+
+	var tipHeightBytes [4]byte
+	if _, err = io.ReadFull(reader, tipHeightBytes[:]); err != nil {
+		return nil, errors.NewProcessingError(errMsgFailedToReadUTXO, err)
+	}
+
+	tipHeight := binary.LittleEndian.Uint32(tipHeightBytes[:])
+
+	var recordsRead uint64
 
 	for {
 		var blockIndex *utxopersister.BlockIndex
@@ -792,12 +932,32 @@ func loadCoinbaseTxs(logger ulogger.Logger, headersFile string) (map[chainhash.H
 				break
 			}
 
-			return nil, errors.NewProcessingError("failed to read UTXO header", err)
+			// Same rationale as the record-count mismatch below: the caller
+			// treats any error here as "restore no coinbase inputs at all", so
+			// hand back what was read rather than discarding it.
+			return coinbaseTxs, errors.NewProcessingError("failed to read UTXO header", err)
 		}
+
+		recordsRead++
 
 		if blockIndex.CoinbaseTx != nil {
 			coinbaseTxs[*blockIndex.CoinbaseTx.TxIDChainHash()] = blockIndex.CoinbaseTx
 		}
+	}
+
+	// The read loop above only knows the record stream ended - it cannot tell a
+	// clean end-of-records boundary apart from a file truncated mid-record: a
+	// short read surfaces as io.ErrUnexpectedEOF, which (*errors.Error).Is
+	// matches against io.EOF via its substring fallback ("EOF" is a substring of
+	// "unexpected EOF"). Validate against the tip height read above so a
+	// genuinely truncated headers file is reported as an error rather than
+	// silently yielding a partial coinbase map.
+	if recordsRead != uint64(tipHeight)+1 {
+		// Return the partial map alongside the error rather than discarding it -
+		// see the contract documented on this function's doc comment.
+		return coinbaseTxs, errors.NewProcessingError(
+			"utxo-headers file %s record count mismatch (likely truncated): expected %d header records (heights 0..%d), read %d",
+			headersFile, uint64(tipHeight)+1, tipHeight, recordsRead)
 	}
 
 	return coinbaseTxs, nil
@@ -817,6 +977,46 @@ func newBlockchainStore(logger ulogger.Logger, appSettings *settings.Settings) (
 	blockchainStoreURL.RawQuery = q.Encode()
 
 	return blockchain.NewStore(logger, blockchainStoreURL, appSettings)
+}
+
+// checkSkipUTXOImport decides, for a non-forced run, whether the UTXO import
+// should be skipped because it was already completed by an earlier run.
+//
+//   - No lastProcessed.dat: this is a fresh seed. If a BlockAssembler checkpoint
+//     already exists, this UTXO store is owned by a running/seeded assembler and
+//     overwriting its UTXO set would corrupt live state, so refuse.
+//   - lastProcessed.dat present and a checkpoint exists: the prior run completed
+//     cleanly. Skip idempotently.
+//   - lastProcessed.dat present but no checkpoint exists: an earlier run
+//     imported the full UTXO set but failed before the checkpoint was written
+//     (e.g. the header pass rejected a truncated headers file after the UTXO
+//     pass had already finished). Returning "skip" here would report success on
+//     a half-seeded store that boots with no BlockAssembler checkpoint, so
+//     refuse instead and name -force as the recovery.
+func checkSkipUTXOImport(ctx context.Context, blockStore blob.Store, blockchainStore blockchain.Store) (bool, error) {
+	exists, err := blockStore.Exists(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename("lastProcessed"), bloboptions.WithNoHashPrefix())
+	if err != nil {
+		return false, errors.NewStorageError("failed to check if lastProcessed.dat exists", err)
+	}
+
+	stateExists, err := blockAssemblerStateExists(ctx, blockchainStore)
+	if err != nil {
+		return false, errors.NewStorageError("failed to check BlockAssembler state", err)
+	}
+
+	if !exists {
+		if stateExists {
+			return false, errors.NewProcessingError("BlockAssembler state already exists in the blockchain store — refusing to seed UTXOs over a store already owned by a block assembler; use -force to override")
+		}
+
+		return false, nil
+	}
+
+	if !stateExists {
+		return false, errors.NewProcessingError("lastProcessed.dat exists but no BlockAssembler checkpoint was found in the blockchain store — a previous run likely imported the UTXO set but failed before the checkpoint was written; re-run with -force to recover the checkpoint from the existing UTXO import (no UTXO re-import is needed). If that run failed on a truncated headers file, -force alone hits the same header check again: replace the headers file with a complete one first")
+	}
+
+	return true, nil
 }
 
 // blockAssemblerStateExists reports whether a BlockAssembler checkpoint is
