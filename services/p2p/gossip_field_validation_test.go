@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
+	"github.com/bsv-blockchain/teranode/util/rejectedtx"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -786,9 +787,11 @@ func TestHandleSubtreeNotification_PublishesSanitizedValidatedMessage(t *testing
 	require.NoError(t, msg.validateFields(), "published subtree message must pass our own ingress validation")
 }
 
-// An internal rejection (empty peer_id) is re-broadcast with the validator's
-// reason truncated to its bound, under the topic cap.
-func TestRejectedTxHandler_InternalRejectionPublishesTruncatedReason(t *testing.T) {
+// An internal rejection (empty peer_id) is re-broadcast under the topic cap
+// with its reason held to util/rejectedtx's grammar: free text of any length
+// (what a pre-upgrade validator publishes) leaves the node as the fallback
+// code, never truncated text.
+func TestRejectedTxHandler_InternalRejectionReplacesFreeTextReason(t *testing.T) {
 	s, published := capturePublishServer(t)
 
 	value, err := proto.Marshal(&kafkamessage.KafkaRejectedTxTopicMessage{
@@ -807,7 +810,7 @@ func TestRejectedTxHandler_InternalRejectionPublishesTruncatedReason(t *testing.
 
 	var msg RejectedTxMessage
 	require.NoError(t, json.Unmarshal(captured, &msg))
-	require.Len(t, msg.Reason, maxGossipReasonLen, "validator reason must be truncated on egress")
+	require.Equal(t, rejectedtx.Fallback, msg.Reason, "free-text validator reason must be replaced by the fallback code on egress")
 	require.NoError(t, msg.validateFields(), "published rejected_tx message must pass our own ingress validation")
 }
 

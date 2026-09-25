@@ -155,9 +155,11 @@ func (m *RejectedTxMessage) validateFields() error {
 }
 
 // sanitizeFields bounds the display-only free-text fields of a rejected-tx
-// message in place. The reason is validator error text and may legitimately
-// be long, so it gets a larger bound than other display strings and is
-// truncated rather than treated as a violation.
+// message in place. On ingress the reason may be validator error text from a
+// pre-upgrade peer and legitimately long, so it gets a larger bound than other
+// display strings and is truncated rather than treated as a violation. What
+// this node sends is narrower: rejectedTxHandler holds its own reason to the
+// closed grammar in util/rejectedtx before this runs.
 func (m *RejectedTxMessage) sanitizeFields() {
 	m.ClientName = sanitizePeerDisplayString(m.ClientName, maxPeerDisplayStringLen)
 	m.Reason = sanitizePeerDisplayString(m.Reason, maxGossipReasonLen)
