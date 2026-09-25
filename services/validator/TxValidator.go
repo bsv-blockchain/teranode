@@ -109,6 +109,11 @@ type TxValidator struct {
 func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ...TxValidatorOption) *TxValidator {
 	options := NewTxValidatorOptions(opts...)
 
+	// checkScriptTieredFees counts rejections and exemptions; make sure the
+	// counters exist even when the TxValidator is constructed without a
+	// surrounding Validator or Server (initialization is once-only).
+	initPrometheusMetrics()
+
 	return &TxValidator{
 		logger:   logger,
 		settings: tSettings,
@@ -221,10 +226,23 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 		return nil
 	}
 
-	// Fee enforcement (including the consolidation-fee exemption) is performed by
-	// BDK's ValidateTransaction in policy mode. Setters pushed at startup carry
-	// MinMiningTxFee plus the four consolidation-policy values into BDK.
-	// SkipPolicyChecks is equivalent to BDK consensus=true.
+	// The per-script fee tiers (minminingtxfeebyscriptsize and
+	// minminingtxfeebyscriptops) are Teranode-owned policies layered above
+	// BDK's MinMiningTxFee floor: BDK has no per-script fee API, so the
+	// marginal tier schedules are enforced here, before script validation,
+	// and only in policy mode. The free-consolidation exemption BDK applies
+	// to its own floor is honoured (isFreeConsolidationTxn), and empty
+	// schedules (the default) make this a no-op.
+	if !validationOptions.SkipPolicyChecks {
+		if err := tv.checkScriptTieredFees(tx, blockHeight, utxoHeights); err != nil {
+			return err
+		}
+	}
+
+	// Fee-floor enforcement (including the consolidation-fee exemption) is
+	// performed by BDK's ValidateTransaction in policy mode. Setters pushed at
+	// startup carry MinMiningTxFee plus the four consolidation-policy values
+	// into BDK. SkipPolicyChecks is equivalent to BDK consensus=true.
 	// https://github.com/bsv-blockchain/teranode/issues/2367
 	return tv.bdk.ValidateTransaction(tx, blockHeight, validationOptions.SkipPolicyChecks, utxoHeights)
 }
