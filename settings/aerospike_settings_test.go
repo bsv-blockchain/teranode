@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -56,4 +57,32 @@ func TestAerospikeEnableClientMetrics_Default(t *testing.T) {
 			"If this fails the loader in settings.go is missing the "+
 			`getBool("aerospike_enable_client_metrics", true, alternativeContext...)`+
 			" entry and Aerospike stats collection is silently disabled in prod.")
+}
+
+// TestAerospikeEnablePreserveFilterExpressions_LoaderReadsKey guards the same
+// loader-vs-struct-tag class of bug for the PreserveTransactions expression
+// path: the field carries a `key:` and `default:"false"` struct tag, but a
+// missing loader entry leaves it permanently false regardless of what an
+// operator sets, since a default-only assertion cannot distinguish "wired at
+// false" from "never read". Only an override away from the default proves
+// the loader actually reads the key.
+func TestAerospikeEnablePreserveFilterExpressions_LoaderReadsKey(t *testing.T) {
+	t.Run("default is false", func(t *testing.T) {
+		tSettings := NewSettings()
+
+		require.NotNil(t, tSettings)
+		require.False(t, tSettings.Aerospike.EnablePreserveFilterExpressions,
+			"default EnablePreserveFilterExpressions must be false")
+	})
+
+	t.Run("loader reads override", func(t *testing.T) {
+		gocore.Config().Set("aerospike_enable_preserve_filter_expressions", "true")
+		t.Cleanup(func() { gocore.Config().Set("aerospike_enable_preserve_filter_expressions", "") })
+
+		tSettings := NewSettings()
+
+		require.True(t, tSettings.Aerospike.EnablePreserveFilterExpressions,
+			"loader must read aerospike_enable_preserve_filter_expressions; otherwise the "+
+				"PreserveTransactions expression path can never be enabled")
+	})
 }
