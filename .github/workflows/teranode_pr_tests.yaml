@@ -64,6 +64,47 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  test-teraslab:
+    name: test-teraslab
+    runs-on: teranode-runner-16-core-arm
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      # Only login to Docker Hub for internal PRs to avoid rate limits.
+      # Fork PRs won't have access to secrets and will skip this step.
+      - name: Login to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+
+      # TeraSlab integration tests run behind the `teraslab` build tag and start a
+      # testcontainer per test, so they live in their own job with a longer timeout
+      # rather than blowing the default `test` job's 10m per-package budget.
+      - name: Run TeraSlab integration tests
+        run: make test-teraslab
+
+      # The tagged suite is the only coverage for the client-coupled TeraSlab
+      # store code; upload it so sonar-pr-analyze unions it into the Sonar
+      # coverage report (sonar-project.properties reportPaths).
+      - name: Upload TeraSlab coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-teraslab-report
+          path: coverage-teraslab.out
+          if-no-files-found: warn
+          retention-days: 1
+
   test:
     name: test
     runs-on: teranode-runner-16-core-arm
@@ -203,7 +244,6 @@ jobs:
           path: sonar_filename_report.json
           if-no-files-found: error
           retention-days: 1
-
   # Fixed producer names keep the legacy downstream compatible during rollout.
   # Failed-job reruns also rerun dependents, so this job reselects each newest
   # producer artifact and seals the effective set into the current-attempt bundle.
@@ -212,6 +252,7 @@ jobs:
     needs:
       - golangci-lint
       - test
+      - test-teraslab
       - filename-check-report
     if: always()
     runs-on: ubuntu-latest
@@ -232,12 +273,45 @@ jobs:
           run-id: ${{ github.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # TeraSlab integration coverage (test-teraslab job) is the only coverage for
+      # the client-coupled TeraSlab store code. It is merged into coverage.out in
+      # the step below rather than shipped as a separate report: the Sonar scan
+      # reads sonar.go.coverage.reportPaths from the *trusted base* copy of
+      # sonar-project.properties (coverage.out only), so a PR-side second report
+      # path is never honored.
+      - name: Download TeraSlab coverage report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: coverage-teraslab-report
+          run-id: ${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Download filename check report
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: sonar-filename-report
           run-id: ${{ github.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Union the tagged TeraSlab profile into coverage.out (max hit-count per
+      # block). Because the scanner reads reportPaths from the trusted base
+      # (coverage.out only), the TeraSlab coverage must live inside coverage.out
+      # to count — the client-coupled store methods are ~0% in the untagged
+      # profile and would otherwise sink new-code coverage. Go coverage profiles
+      # share the block "file:start,end" key, so max-count is a correct union.
+      - name: Merge TeraSlab coverage into coverage.out
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in coverage.out coverage-teraslab.out; do
+            [ -f "$f" ] || { echo "::error::Missing coverage input: $f"; exit 1; }
+          done
+          awk '
+            FNR==1 && $1=="mode:" { mode=$2; next }
+            { v=$3+0; if (!($1 in c) || v > c[$1]) c[$1]=v; s[$1]=$2 }
+            END { print "mode: " (mode=="" ? "set" : mode); for (k in c) print k, s[k], c[k] }
+          ' coverage.out coverage-teraslab.out > coverage.merged.out
+          mv coverage.merged.out coverage.out
 
       # Presence-only validation: never execute or parse artifact contents.
       - name: Validate required Sonar inputs
