@@ -92,6 +92,12 @@ var (
 	// below-checkpoint outpoint-only path is active (setting on, height ≤ highest
 	// checkpoint). A rising rate indicates the fast path is in use during IBD.
 	prometheusBlockValidationOutpointOnlyBlocks prometheus.Counter
+
+	// prometheusQuickValidatePostCommitUnlockFailures counts quick-validated
+	// blocks that were committed but whose release of the create-phase lock
+	// failed. Each one leaves records locked with nothing to release them, so
+	// any increase needs an operator; the block hash is in the log line.
+	prometheusQuickValidatePostCommitUnlockFailures prometheus.Counter
 )
 
 var (
@@ -333,6 +339,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockvalidation",
 			Name:      "catchup_prefetch_oversized_blocks_total",
 			Help:      "Total number of blocks whose declared size exceeded blockvalidation_catchup_prefetch_budget_bytes (including a declared size too large to represent as an int64) and which therefore parsed their subtrees one at a time. A rising rate means the budget is routinely smaller than the blocks being synced, which slows catchup; the block hash is recorded in the logs.",
+		},
+	)
+
+	prometheusQuickValidatePostCommitUnlockFailures = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_validate_post_commit_unlock_failures_total",
+			Help:      "Quick-validated blocks that were committed but whose release of the create-phase lock failed; the affected records stay locked and the block hash is in the logs",
 		},
 	)
 

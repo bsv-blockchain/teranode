@@ -11,6 +11,8 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
@@ -18,6 +20,8 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	testutil "github.com/bsv-blockchain/teranode/util/test"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -136,6 +140,85 @@ func TestCommitBlock_AddsBlockAndSetsExists(t *testing.T) {
 	mined, err := u.blockchainClient.GetBlockIsMined(ctx, block.Hash())
 	require.NoError(t, err)
 	require.True(t, mined, "commitBlock must AddBlock with MinedSet=true")
+}
+
+// TestCommitBlock_UnlockFailureStillFinishesTheCommit pins the post-commit
+// unlock rule: once AddBlock has stored the block, a failed release of the
+// create-phase lock is logged and counted, and the commit tail still runs. The
+// caller must not see a stored block as a failed one, and the block-exists
+// cache, which runs after the unlock, must still be set.
+func TestCommitBlock_UnlockFailureStillFinishesTheCommit(t *testing.T) {
+	u, block, ctx := newCommitBlockHarness(t)
+
+	// One subtree: the coinbase placeholder plus one transaction, so the
+	// unlock pass has a record to release.
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.NoError(t, subtree.AddNode(chainhash.HashH([]byte("locked-tx")), 1, 1))
+
+	block.SubtreeSlices = []*subtreepkg.Subtree{subtree}
+
+	mockUTXO, ok := u.utxoStore.(*utxo.MockUtxostore)
+	require.True(t, ok)
+	mockUTXO.On("SetLocked", mock.Anything, mock.Anything, false).Return(errors.NewStorageError("store overloaded"))
+
+	initPrometheusMetrics()
+	before := promtestutil.ToFloat64(prometheusQuickValidatePostCommitUnlockFailures)
+
+	require.NoError(t, u.commitBlock(ctx, block, "test-peer", "commitBlock"),
+		"a failed unlock after AddBlock must not fail the committed block")
+
+	mockUTXO.AssertNumberOfCalls(t, "SetLocked", postCommitUnlockAttempts)
+	require.Equal(t, float64(1), promtestutil.ToFloat64(prometheusQuickValidatePostCommitUnlockFailures)-before)
+
+	_, cached := u.blockExistsCache.Get(*block.Hash())
+	require.True(t, cached, "the commit tail after the unlock still ran")
+
+	exists, err := u.blockchainClient.GetBlockExists(ctx, block.Hash())
+	require.NoError(t, err)
+	require.True(t, exists)
+}
+
+// TestCommitBlock_UnlockRetriesDetachedFromCallerContext pins why the
+// post-commit unlock can swallow its error: nothing re-runs it, so it retries
+// on its own, on a context the caller cannot cancel. The caller's context is
+// cancelled while the first attempt is in flight and that attempt fails; the
+// retry must still reach the store on a live context and release the lock.
+func TestCommitBlock_UnlockRetriesDetachedFromCallerContext(t *testing.T) {
+	u, block, baseCtx := newCommitBlockHarness(t)
+
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.NoError(t, subtree.AddNode(chainhash.HashH([]byte("locked-tx")), 1, 1))
+
+	block.SubtreeSlices = []*subtreepkg.Subtree{subtree}
+
+	ctx, cancel := context.WithCancel(baseCtx)
+	defer cancel()
+
+	mockUTXO, ok := u.utxoStore.(*utxo.MockUtxostore)
+	require.True(t, ok)
+
+	var retryCtxErr error
+
+	mockUTXO.On("SetLocked", mock.Anything, mock.Anything, false).
+		Run(func(mock.Arguments) { cancel() }).
+		Return(errors.NewStorageError("shutdown raced the commit")).Once()
+	mockUTXO.On("SetLocked", mock.Anything, mock.Anything, false).
+		Run(func(args mock.Arguments) { retryCtxErr = args.Get(0).(context.Context).Err() }).
+		Return(nil).Once()
+
+	initPrometheusMetrics()
+	before := promtestutil.ToFloat64(prometheusQuickValidatePostCommitUnlockFailures)
+
+	require.NoError(t, u.commitBlock(ctx, block, "test-peer", "commitBlock"))
+
+	mockUTXO.AssertNumberOfCalls(t, "SetLocked", 2)
+	require.NoError(t, retryCtxErr, "the retry must not inherit the caller's cancellation")
+	require.Zero(t, promtestutil.ToFloat64(prometheusQuickValidatePostCommitUnlockFailures)-before,
+		"a retry that succeeds is not a failure")
 }
 
 // countingSubtreesSetClient is the real local client with SetBlockSubtreesSet counted. Every

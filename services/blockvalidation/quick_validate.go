@@ -524,8 +524,23 @@ func (u *BlockValidation) commitBlock(ctx context.Context, block *model.Block, p
 	}
 
 	// Unlock all UTXOs - final commit point (no-op when the lock was never taken; #1103).
+	//
+	// A failure here is logged and counted, not returned. AddBlock above has
+	// already committed the block, so returning made the caller treat a stored
+	// block as a failed one, and it also skipped the two steps below: the
+	// subtree DAH update (so BlockSubtreesSet never fired and the subtrees were
+	// never given a DAH) and the block-exists cache. None of that re-runs the
+	// unlock, so returning bought nothing. Because nothing re-runs it,
+	// unlockSubtreeTransactions detaches from ctx and retries each subtree
+	// itself before giving up, as the legacy route's unlockBlockTransactions
+	// does for HandleBlockDirect.
 	if err := u.unlockSubtreeTransactionsIfNeeded(ctx, block, caller); err != nil {
-		return err
+		if prometheusQuickValidatePostCommitUnlockFailures != nil {
+			prometheusQuickValidatePostCommitUnlockFailures.Inc()
+		}
+
+		u.logger.Errorf("[%s][%s] block is committed but releasing the create-phase lock on its transactions failed; the affected records stay locked: %v",
+			caller, block.Hash().String(), err)
 	}
 
 	// No updateSubtreesDAH here. The AddBlock above writes subtrees_set and mined_set in the
@@ -1250,14 +1265,33 @@ func (u *BlockValidation) unlockSubtreeTransactionsIfNeeded(ctx context.Context,
 	return nil
 }
 
+// Post-commit unlock retry budget. The values match the legacy route's
+// unlockBlockTransactions (services/legacy/netsync), which faces the same
+// problem: the block is committed and nothing re-runs the unlock.
+const (
+	postCommitUnlockAttempts = 3
+	postCommitUnlockBackoff  = 100 * time.Millisecond
+	postCommitUnlockTimeout  = 2 * time.Minute
+)
+
 // unlockSubtreeTransactions unlocks all transactions in the given subtrees in parallel.
 // It skips the coinbase placeholder at index 0 of the first subtree.
+//
+// It runs after AddBlock has committed the block, and commitBlock logs a
+// failure rather than returning it, so nothing re-runs this pass: a subtree
+// that fails here leaves its records locked for good, and every later spend of
+// their outputs is refused. So each subtree runs on a context detached from the
+// caller's, bounded by its own timeout, with its own retries, and one subtree's
+// failure does not cancel the others.
 func (u *BlockValidation) unlockSubtreeTransactions(ctx context.Context, subtrees []*subtreepkg.Subtree) error {
 	if len(subtrees) == 0 {
 		return nil
 	}
 
-	g, gCtx := errgroup.WithContext(ctx)
+	unlockCtx, cancelUnlock := context.WithTimeout(context.WithoutCancel(ctx), postCommitUnlockTimeout)
+	defer cancelUnlock()
+
+	g := new(errgroup.Group)
 	util.SafeSetLimit(u.logger, g, 128)
 
 	for subtreeIdx, subtree := range subtrees {
@@ -1284,7 +1318,24 @@ func (u *BlockValidation) unlockSubtreeTransactions(ctx context.Context, subtree
 			for i := start; i < len(nodes); i++ {
 				txHashes[i-start] = nodes[i].Hash
 			}
-			return u.utxoStore.SetLocked(gCtx, txHashes, false)
+
+			var err error
+
+			for attempt := 0; attempt < postCommitUnlockAttempts; attempt++ {
+				if attempt > 0 {
+					select {
+					case <-unlockCtx.Done():
+						return errors.NewProcessingError("gave up unlocking %d transactions of a committed block", len(txHashes), err)
+					case <-time.After(postCommitUnlockBackoff * time.Duration(attempt)):
+					}
+				}
+
+				if err = u.utxoStore.SetLocked(unlockCtx, txHashes, false); err == nil {
+					return nil
+				}
+			}
+
+			return errors.NewProcessingError("failed to unlock %d transactions of a committed block after %d attempts", len(txHashes), postCommitUnlockAttempts, err)
 		})
 	}
 
@@ -1582,9 +1633,17 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 	// resource usage, allowing multiple batches to be in flight simultaneously.
 	util.SafeSetLimit(u.logger, createG, u.settings.UtxoStore.StoreBatcherSize*8)
 
-	// Track transactions that already exist so we can update their mined info
+	// Track transactions that already exist so we can update their mined info.
+	// They are also the ones the compensating delete below must NOT touch: this
+	// block did not create them.
 	var existingTxsMu sync.Mutex
 	var existingTxHashes []*chainhash.Hash
+
+	// writtenTxSet holds exactly the records phase 1 wrote. It is not "every
+	// transaction that did not already exist": a transaction
+	// shouldSkipUnspendableCreate leaves out was never written, and filing it as
+	// written would tell the store and the compensation it is this attempt's own.
+	writtenTxSet := make(map[chainhash.Hash]struct{})
 
 	minedBlockInfo := utxo.MinedBlockInfo{
 		BlockID:     block.ID,
@@ -1622,6 +1681,11 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 					}
 					return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] failed to create UTXO for tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
 				}
+
+				existingTxsMu.Lock()
+				writtenTxSet[*tx.TxIDChainHash()] = struct{}{}
+				existingTxsMu.Unlock()
+
 				return nil
 			})
 		}
@@ -1629,6 +1693,30 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 
 	if err := createG.Wait(); err != nil {
 		return err
+	}
+
+	// Records an earlier attempt at this block wrote and never finished with are
+	// ours, not pre-existing: they are still locked (utxo.LeftoversAmong). Read
+	// before phase 1.5, which clears the lock, and left out of it, since
+	// AssignBlockID is idempotent per block hash so they already carry this
+	// block's id.
+	leftovers, err := utxo.LeftoversAmong(ctx, u.utxoStore, existingTxHashes, block.ID)
+	if err != nil {
+		return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] failed to classify %d existing txs", block.Hash().String(), len(existingTxHashes), err)
+	}
+
+	if len(leftovers) > 0 {
+		u.logger.Warnf("[createAndSpendUTXOsForBatch][%s] %d of %d existing transactions are locked leftovers of an earlier attempt at this block", block.Hash().String(), len(leftovers), len(existingTxHashes))
+
+		kept := existingTxHashes[:0]
+
+		for _, txHash := range existingTxHashes {
+			if _, leftover := leftovers[*txHash]; !leftover {
+				kept = append(kept, txHash)
+			}
+		}
+
+		existingTxHashes = kept
 	}
 
 	// Phase 1.5: Update mined info for transactions that already existed
@@ -1652,12 +1740,67 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 	// permanently attributed to a non-canonical tx. Hard-fail instead (fail-closed).
 	// Dirty-restart replay does not need conflict tolerance: re-spending an output
 	// with the same spender is the store's idempotent success path.
-	return u.spendBatchWithRetry(ctx, block, batch.batchTxs, outpointOnly)
+	// createdHere answers "did phase 1 write this record?": the spend phase tells
+	// the store so for every such transaction, because a record this attempt
+	// wrote is not proof of prior validation, and the compensation below only
+	// removes dependents this attempt wrote.
+	createdHere := func(txHash *chainhash.Hash) bool {
+		if _, leftover := leftovers[*txHash]; leftover {
+			return true
+		}
+
+		_, written := writtenTxSet[*txHash]
+
+		return written
+	}
+
+	prunedReplays, err := u.spendBatchWithRetry(ctx, block, batch.batchTxs, outpointOnly, createdHere)
+	if err != nil {
+		// Compensate phase 1 for the ghosts a pruned replay leaves behind: the
+		// transactions the store rejected on a replay marker, plus anything in
+		// this batch that spends one of them and that this attempt created. What
+		// qualifies, and why a rejected transaction is removed even when the
+		// create phase found it already present, is set out on
+		// utxo.PrunedReplayGhosts. Create never consults the markers, so the
+		// records got written and are only rejected here; stored mined with no
+		// delete_at_height, nothing else reclaims them and the block can never
+		// validate.
+		//
+		// Deliberately NOT the whole batch. Every other transaction the create
+		// phase wrote may be perfectly valid and wanted by a concurrently
+		// validating sibling block, which would have taken ErrTxExists on it and
+		// recorded it as pre-existing; deleting those out from under that block
+		// would break it. Only this batch is walked: a later batch's create
+		// phase has not run, so it left nothing behind.
+		ghosts := utxo.PrunedReplayGhosts(batch.batchTxs, prunedReplays, createdHere)
+
+		// Detached from ctx on purpose. ctx is the batch's errgroup context,
+		// shared with the sibling subtree-write goroutine, so a write failure
+		// landing at the same moment as this hard-fail would cancel the
+		// compensation and leave the ghost (locked, so the next attempt would
+		// reclassify it as its own, but only with the catch-up lock on). The
+		// delete gets its own bounded budget instead.
+		deleteCtx, cancelDelete := context.WithTimeout(context.WithoutCancel(ctx), compensatingDeleteTimeout)
+		defer cancelDelete()
+
+		if deleteErr := utxo.DeleteCreated(deleteCtx, u.logger, u.utxoStore, ghosts,
+			u.settings.UtxoStore.StoreBatcherSize*8); deleteErr != nil {
+			return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] spend phase failed and the recreated pruned transactions could not be removed", block.Hash().String(), errors.Join(err, deleteErr))
+		}
+
+		return err
+	}
+
+	return nil
 }
 
 // spendRetryBackoffDefault is the pause between spend retry attempts. Matches the
 // legacy path's retryBackoff (services/legacy/netsync PreValidateTransactions).
 const spendRetryBackoffDefault = 2 * time.Second
+
+// compensatingDeleteTimeout bounds the compensating delete after a failed spend
+// phase, which runs detached from the batch context (see the call site).
+const compensatingDeleteTimeout = 2 * time.Minute
 
 // spendBatchWithRetry spends txs in parallel with bounded retries. Per attempt:
 // retryable errors (transient store overload) queue the tx for the next attempt;
@@ -1667,7 +1810,18 @@ const spendRetryBackoffDefault = 2 * time.Second
 // makes no progress. Retry cadence mirrors the legacy path's PreValidateTransactions
 // (maxRetries=10, 2s backoff) so both below-checkpoint implementations converge
 // identically after dirty restarts.
-func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.Block, txs []*bt.Tx, outpointOnly bool) error {
+// It also returns the transactions the store identified as replays of pruned
+// transactions, which are the records phase 1 recreated and the caller has to
+// delete again, since Create does not consult the replay markers. Two answers
+// qualify: the marker rejection (ErrUtxoSpendingTxPruned), and a missing parent
+// (ErrTxNotFound) for a transaction phase 1 created. Below the checkpoint a
+// parent record is absent only because it was fully spent and buried, so a
+// transaction this attempt had to create in order to spend it is a replay of a
+// chain the pruner removed end to end; the stores' "already blessed" fallback
+// is switched off for those transactions (WithSpenderCreatedByCaller) so the
+// missing parent surfaces at all instead of being blessed by the record this
+// attempt just wrote.
+func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.Block, txs []*bt.Tx, outpointOnly bool, createdHere func(*chainhash.Hash) bool) ([]*chainhash.Hash, error) {
 	const maxRetries = 10
 
 	backoff := u.spendRetryBackoff
@@ -1678,9 +1832,11 @@ func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.
 	pending := txs
 	total := len(txs)
 
+	var prunedReplays []*chainhash.Hash
+
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if ctx.Err() != nil {
-			return errors.NewProcessingError("[spendBatchWithRetry][%s] context cancelled", block.Hash().String())
+			return prunedReplays, errors.NewProcessingError("[spendBatchWithRetry][%s] context cancelled", block.Hash().String())
 		}
 
 		if attempt > 0 {
@@ -1701,9 +1857,21 @@ func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.
 		for _, tx := range pending {
 			tx := tx
 			spendG.Go(func() error {
+				txHash := tx.TxIDChainHash()
+				created := createdHere != nil && createdHere(txHash)
+
 				if _, _, err := u.utxoStore.SpendAndCreate(spendCtx, tx, block.Height, utxo.WithSpendOnly(),
-					utxo.WithIgnoreLocked(true), utxo.WithSkipUTXOHashCheck(outpointOnly)); err != nil {
-					if errors.IsRetryableError(err) {
+					utxo.WithIgnoreLocked(true), utxo.WithSkipUTXOHashCheck(outpointOnly),
+					utxo.WithSpenderCreatedByCaller(created)); err != nil {
+					// A pruned-replay rejection is classified before the retry test.
+					// It is deterministic, so retrying cannot change it, and the store
+					// joins every input's error into one: a sibling input that failed
+					// on a transient ERR_STORAGE_ERROR makes the whole error retryable,
+					// and if that lasted through every attempt the replay was never
+					// recorded and its recreated record was never removed.
+					pruned := utxo.IsPrunedReplayRejection(err, created)
+
+					if !pruned && errors.IsRetryableError(err) {
 						mu.Lock()
 						retryable = append(retryable, tx)
 						lastErr = err
@@ -1711,6 +1879,9 @@ func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.
 						return nil
 					}
 					mu.Lock()
+					if pruned {
+						prunedReplays = append(prunedReplays, txHash)
+					}
 					hardFail = errors.NewProcessingError("[spendBatchWithRetry][%s] failed to spend tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
 					mu.Unlock()
 				}
@@ -1721,24 +1892,24 @@ func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.
 		_ = spendG.Wait()
 
 		if hardFail != nil {
-			return hardFail
+			return prunedReplays, hardFail
 		}
 
 		if len(retryable) == 0 {
 			if attempt > 0 {
 				u.logger.Infof("[spendBatchWithRetry][%s] all spends succeeded after %d retries", block.Hash().String(), attempt)
 			}
-			return nil
+			return nil, nil
 		}
 
 		if attempt > 0 && len(retryable) >= len(pending) {
-			return errors.NewProcessingError("[spendBatchWithRetry][%s] %d of %d spends failed with no progress, giving up", block.Hash().String(), len(retryable), total, lastErr)
+			return prunedReplays, errors.NewProcessingError("[spendBatchWithRetry][%s] %d of %d spends failed with no progress, giving up", block.Hash().String(), len(retryable), total, lastErr)
 		}
 
 		pending = retryable
 	}
 
-	return errors.NewProcessingError("[spendBatchWithRetry][%s] %d of %d spends still failing after %d retries", block.Hash().String(), len(pending), total, maxRetries)
+	return prunedReplays, errors.NewProcessingError("[spendBatchWithRetry][%s] %d of %d spends still failing after %d retries", block.Hash().String(), len(pending), total, maxRetries)
 }
 
 // writeSubtreeFilesForBatch writes the full subtree files (.subtree) for a batch.

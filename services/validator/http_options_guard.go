@@ -90,5 +90,17 @@ func nonDefaultValidationOptions(req *validator_api.ValidateTransactionRequest) 
 		return "outpointOnlySpend"
 	}
 
+	// Both switch off a store-side safety check for the create-first block paths:
+	// spenderCreatedByCaller withdraws the missing-parent bless, and ignoreLocked
+	// lets a spend pass a locked parent record. Only the block paths may ask for
+	// either, and they reach the validator over gRPC.
+	if req.SpenderCreatedByCaller != nil && *req.SpenderCreatedByCaller {
+		return "spenderCreatedByCaller"
+	}
+
+	if req.IgnoreLocked != nil && *req.IgnoreLocked {
+		return "ignoreLocked"
+	}
+
 	return ""
 }

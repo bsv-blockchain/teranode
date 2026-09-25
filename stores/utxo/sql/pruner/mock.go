@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"io"
 	"sync"
 	"time"
 
@@ -230,6 +231,11 @@ func (m *MockConn) Begin() (driver.Tx, error) {
 	return &MockTx{}, nil
 }
 
+// BeginTx supports the isolation requested by the atomic pruning transaction.
+func (m *MockConn) BeginTx(_ context.Context, _ driver.TxOptions) (driver.Tx, error) {
+	return &MockTx{}, nil
+}
+
 // MockStmt is a mock statement
 type MockStmt struct {
 	mockDB *MockDB
@@ -268,7 +274,31 @@ func (m *MockStmt) Exec(args []driver.Value) (driver.Result, error) {
 }
 
 func (m *MockStmt) Query(args []driver.Value) (driver.Rows, error) {
-	return nil, nil
+	// One row holding a single zero, which is what the pruner's only query,
+	// the held-back count, reads. A nil driver.Rows panics inside database/sql
+	// while it holds the connection's lock, and the deferred Rollback then
+	// waits on that lock forever.
+	return &mockCountRows{}, nil
+}
+
+// mockCountRows yields one row with one column whose value is zero.
+type mockCountRows struct {
+	done bool
+}
+
+func (r *mockCountRows) Columns() []string { return []string{"count"} }
+
+func (r *mockCountRows) Close() error { return nil }
+
+func (r *mockCountRows) Next(dest []driver.Value) error {
+	if r.done {
+		return io.EOF
+	}
+
+	r.done = true
+	dest[0] = int64(0)
+
+	return nil
 }
 
 // MockTx is a mock transaction
