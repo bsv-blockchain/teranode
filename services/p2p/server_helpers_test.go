@@ -954,6 +954,42 @@ func TestIsUnsafeIP(t *testing.T) {
 		// Unspecified addresses
 		{"unspecified_ipv4", "0.0.0.0", "unspecified address"},
 		{"unspecified_ipv6", "::", "unspecified address"},
+
+		// Shared address space (RFC 6598): carrier NAT and Tailscale overlays.
+		{"shared_low", "100.64.0.1", "shared address space (RFC 6598)"},
+		{"shared_mid", "100.100.100.100", "shared address space (RFC 6598)"},
+		{"shared_high", "100.127.255.255", "shared address space (RFC 6598)"},
+		{"shared_ipv4_mapped", "::ffff:100.64.0.1", "shared address space (RFC 6598)"},
+		{"just_below_shared_is_public", "100.63.255.255", ""},
+		{"just_above_shared_is_public", "100.128.0.0", ""},
+
+		// Other IANA special-purpose IPv4 blocks.
+		{"this_network", "0.0.0.1", "this-network address"},
+		{"ietf_assignment", "192.0.0.1", "IETF protocol assignment address"},
+		{"just_above_ietf_is_public", "192.0.1.1", ""},
+		{"test_net_1", "192.0.2.1", "documentation address"},
+		{"test_net_2", "198.51.100.7", "documentation address"},
+		{"test_net_3", "203.0.113.9", "documentation address"},
+		{"benchmarking_low", "198.18.0.1", "benchmarking address"},
+		{"benchmarking_high", "198.19.255.255", "benchmarking address"},
+		{"just_below_benchmarking_is_public", "198.17.255.255", ""},
+		{"reserved_240", "240.0.0.1", "reserved address"},
+		{"six_to_four_relay_anycast", "192.88.99.1", "6to4 relay anycast address"},
+		{"multicast_ipv4", "224.0.1.1", "multicast address"},
+		{"multicast_ipv4_high", "239.255.255.250", "multicast address"},
+		{"broadcast", "255.255.255.255", "broadcast address"},
+
+		// IPv6 special-purpose blocks.
+		{"multicast_ipv6", "ff0e::1", "multicast address"},
+		{"nat64", "64:ff9b::7f00:1", "NAT64 address"},
+		{"nat64_local", "64:ff9b:1::1", "local-use NAT64 address"},
+		{"discard_only", "100::1", "discard-only address"},
+		{"teredo", "2001::1", "Teredo address"},
+		{"doc_ipv6", "2001:db8::1", "documentation address"},
+		{"six_to_four", "2002:a00:1::1", "6to4 address"},
+		{"ipv4_compatible_embeds_private", "::a00:1", "IPv4-compatible address"},
+		{"ipv4_compatible_embeds_public", "::808:808", "IPv4-compatible address"},
+		{"public_ipv6_next_to_teredo", "2001:1::1", ""},
 	}
 
 	for _, tt := range tests {
@@ -1005,6 +1041,12 @@ func TestValidateDataHubURL(t *testing.T) {
 		{"valid_with_port", "http://example.com:8080/api", false, ""},
 		{"valid_public_ip", "http://8.8.8.8/api", false, ""},
 		{"valid_public_ipv6", "http://[2607:f8b0:4004:800::200e]/api", false, ""},
+
+		// Shared address space / carrier NAT (RFC 6598) is not IsPrivate, but
+		// is where a Tailscale-style overlay lives.
+		{"shared_address_space", "http://100.100.100.100:8090/api/v1", true, "shared address space"},
+		{"benchmarking_range", "http://198.18.0.1/api", true, "benchmarking"},
+		{"multicast_literal", "http://224.0.1.1/api", true, "multicast"},
 
 		// Empty URL
 		{"empty_url", "", true, "empty"},
@@ -1150,6 +1192,46 @@ func TestServerHelpers_SanitizeAdvertisedTip_ClampsAndOverflow(t *testing.T) {
 		require.Nil(t, hash)
 		require.Equal(t, uint32(0), height)
 	})
+
+	// chainhash.NewHashFromStr zero-pads anything shorter than 64 hex chars
+	// (the empty string decodes to the all-zero hash with a nil error), so
+	// without an explicit length check an omitted best_block_hash would
+	// register the peer with a "known" tip of 0000...00.
+	t.Run("empty hash is rejected", func(t *testing.T) {
+		s, _ := newServerWithLocalRegistry(t)
+		_, hash, ok := s.sanitizeAdvertisedTip(pid, 100, "", 100)
+		require.False(t, ok)
+		require.Nil(t, hash)
+	})
+
+	t.Run("short hash is rejected", func(t *testing.T) {
+		s, _ := newServerWithLocalRegistry(t)
+		_, hash, ok := s.sanitizeAdvertisedTip(pid, 100, validHash[:63], 100)
+		require.False(t, ok)
+		require.Nil(t, hash)
+	})
+}
+
+// parseHash must enforce the full 64-hex-char form for the same reason as
+// sanitizeAdvertisedTip: chainhash.NewHashFromStr silently zero-pads.
+func TestServerHelpers_ParseHash_RequiresFullLength(t *testing.T) {
+	s, _ := newServerWithLocalRegistry(t)
+
+	const validHash = "0000000000000000000000000000000000000000000000000000000000000001"
+
+	hash, err := s.parseHash(validHash, "test")
+	require.NoError(t, err)
+	require.Equal(t, validHash, hash.String())
+
+	// Sanity-check the premise this guard exists for.
+	padded, err := chainhash.NewHashFromStr("")
+	require.NoError(t, err, "premise: chainhash accepts the empty string")
+	require.Equal(t, chainhash.Hash{}, *padded, "premise: it decodes to the all-zero hash")
+
+	for _, bad := range []string{"", "0", validHash[:63], strings.Repeat("0", 65)} {
+		_, err := s.parseHash(bad, "test")
+		require.Error(t, err, "hash of length %d must be rejected", len(bad))
+	}
 }
 
 // TestHandleBlockTopic_RejectsBlacklistedDataHubURL guards the fix for block

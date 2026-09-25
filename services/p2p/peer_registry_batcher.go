@@ -48,9 +48,15 @@ const (
 
 	// registryFlushTimeout bounds a single flush cycle so a wedged registry
 	// cannot hang the flush goroutine forever. Updates still pending after a
-	// timeout are dropped; the next cycle starts from the freshly coalesced
-	// state.
+	// timeout are requeued (subject to the pending cap and tombstones) so a
+	// transient stall does not silently lose coalesced heights, freshness and
+	// storage intents; under sustained saturation the cap drops the excess.
 	registryFlushTimeout = 30 * time.Second
+
+	// registryCompensateTimeout bounds the compensating RemovePeer issued for
+	// a peer whose removal raced its in-flight RegisterPeer, when the flush
+	// budget itself is already spent.
+	registryCompensateTimeout = 5 * time.Second
 )
 
 // pendingPeerUpdate accumulates every registry-affecting observation for one
@@ -159,6 +165,13 @@ type peerRegistryBatcher struct {
 	// fresh post-removal data flushes next cycle. Nil when no flush is
 	// running; reset at the end of each cycle.
 	removedDuringFlush map[string]struct{}
+	// reenqueuedDuringFlush records peers that received a fresh observation
+	// while a flush cycle is running. A peer that was forgotten and then
+	// re-enqueued inside one cycle has a legitimate pending registration for
+	// the next cycle, so the compensating RemovePeer for its raced
+	// RegisterPeer must be skipped. Nil when no flush is running; reset at
+	// the end of each cycle. Bounded at registryBatcherMaxPending.
+	reenqueuedDuringFlush map[string]struct{}
 	// assertForgottenDuringFlush records forgetAssertState calls that arrive
 	// while a flush cycle is processing its snapshot, so the cycle's re-record
 	// step does not resurrect the pre-forget assert state it read earlier.
@@ -260,6 +273,9 @@ func (b *peerRegistryBatcher) enqueue(peerID string, from *pendingPeerUpdate) bo
 	u.merge(from)
 	// A fresh observation supersedes a pending removal tombstone.
 	delete(b.removed, peerID)
+	if b.reenqueuedDuringFlush != nil && len(b.reenqueuedDuringFlush) < registryBatcherMaxPending {
+		b.reenqueuedDuringFlush[peerID] = struct{}{}
+	}
 	b.mu.Unlock()
 
 	if b.flushInterval <= 0 {
@@ -333,6 +349,10 @@ func (b *peerRegistryBatcher) forget(peerID string) {
 	b.mu.Lock()
 	delete(b.lastAsserted, peerID)
 	delete(b.pending, peerID)
+	// A forget supersedes an earlier re-enqueue in the same flush cycle: the
+	// pending registration that justified skipping the compensating
+	// RemovePeer is gone with it. Delete on a nil map is a no-op.
+	delete(b.reenqueuedDuringFlush, peerID)
 	if _, exists := b.removed[peerID]; !exists && len(b.removed) >= registryBatcherMaxPending {
 		// Sweep expired tombstones to make room; if the map is still full the
 		// tombstone is skipped — bounded memory wins, and the lastAsserted
@@ -374,6 +394,7 @@ func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 		// persistent tombstone, but must not let this loop push the peer's
 		// stale pre-removal snapshot.
 		b.removedDuringFlush = make(map[string]struct{})
+		b.reenqueuedDuringFlush = make(map[string]struct{})
 		b.assertForgottenDuringFlush = make(map[string]struct{})
 	}
 	b.mu.Unlock()
@@ -381,6 +402,7 @@ func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 	defer func() {
 		b.mu.Lock()
 		b.removedDuringFlush = nil
+		b.reenqueuedDuringFlush = nil
 		b.assertForgottenDuringFlush = nil
 		b.mu.Unlock()
 	}()
@@ -399,20 +421,28 @@ func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 
 	now := time.Now()
 	rpcErrs := 0
-	unflushed := len(pending)
+	timedOut := false
+	requeued := 0
 
 	for peerID, u := range pending {
-		if ctx.Err() != nil {
-			b.logger.Warnf("[peerRegistryBatcher] flush cut short (%v) with updates for %d of %d peers unflushed", ctx.Err(), unflushed, len(pending))
-			return
+		// Once the budget is spent, put every remaining update back rather
+		// than dropping it: the entries were already swapped out of b.pending,
+		// so returning here would lose them. requeue honours tombstones and
+		// the pending cap, and newer observations win on merge.
+		if !timedOut && ctx.Err() != nil {
+			timedOut = true
+		}
+		if timedOut {
+			if b.requeue(peerID, u) {
+				requeued++
+			}
+			continue
 		}
 
 		b.mu.Lock()
 		isRemoved := b.isRemovedLocked(peerID)
 		st := b.lastAsserted[peerID]
 		b.mu.Unlock()
-
-		unflushed--
 
 		// The peer was removed after these updates were coalesced; pushing
 		// them now would resurrect it in the registry.
@@ -481,29 +511,51 @@ func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 			b.requeue(peerID, failed)
 		}
 
-		if sendRegister || sendConnected {
-			b.mu.Lock()
-			// Re-check the tombstones: a forget() may have raced the RPCs
-			// above, and recording the assertion would suppress the peer's
-			// re-registration for registryReassertTTL after its next message.
-			if !b.isRemovedLocked(peerID) {
-				// A forgetAssertState() may also have raced the RPCs. Zero the
-				// whole snapshot, including the halves this cycle sent: the
-				// reconciler's clear may have landed AFTER this cycle's
-				// UpdateConnectionState(true), in which case the registry holds
-				// false and keeping connectedAt would suppress the re-assert on
-				// the peer's next message for registryReassertTTL. The batcher
-				// cannot tell from inside the cycle which write landed last, so
-				// forgetting everything is the only safe reading; the cost is
-				// one redundant RegisterPeer + UpdateConnectionState on the
-				// peer's next message, bounded by real reconciler clears.
-				if _, forgotten := b.assertForgottenDuringFlush[peerID]; forgotten {
-					st = registryAssertState{}
-				}
-				b.recordAssertStateLocked(peerID, st)
+		// Re-check the tombstones under one lock hold: a forget() may have
+		// raced the RPCs above. Recording the assertion would suppress the
+		// peer's re-registration for registryReassertTTL after its next
+		// message, and a RegisterPeer issued before the tombstone may have
+		// been applied by the registry after removePeer's own RemovePeer,
+		// resurrecting the peer as a live entry that no later message will
+		// reconcile (a banned peer's gossip is dropped). Only RegisterPeer can
+		// resurrect: the follow-up RPCs no-op on an unknown peer.
+		b.mu.Lock()
+		removedMidFlight := b.isRemovedLocked(peerID)
+		_, reenqueued := b.reenqueuedDuringFlush[peerID]
+		if !removedMidFlight && (sendRegister || sendConnected) {
+			// A forgetAssertState() may also have raced the RPCs. Zero the
+			// whole snapshot, including the halves this cycle sent: the
+			// reconciler's clear may have landed AFTER this cycle's
+			// UpdateConnectionState(true), in which case the registry holds
+			// false and keeping connectedAt would suppress the re-assert on
+			// the peer's next message for registryReassertTTL. The batcher
+			// cannot tell from inside the cycle which write landed last, so
+			// forgetting everything is the only safe reading; the cost is
+			// one redundant RegisterPeer + UpdateConnectionState on the
+			// peer's next message, bounded by real reconciler clears.
+			if _, forgotten := b.assertForgottenDuringFlush[peerID]; forgotten {
+				st = registryAssertState{}
 			}
-			b.mu.Unlock()
+			b.recordAssertStateLocked(peerID, st)
 		}
+		b.mu.Unlock()
+
+		// Skip the compensation when a fresh observation for the peer arrived
+		// during the cycle: it re-registers next cycle anyway, and removing
+		// it now would also wipe any registry write another path (catchup
+		// penalties, sync coordinator peer info) made in the meantime.
+		if removedMidFlight && sendRegister && !reenqueued {
+			if err := b.compensateRemove(ctx, peerID); err != nil {
+				rpcErrs++
+				b.logger.Warnf("[peerRegistryBatcher] compensating RemovePeer %s after mid-flush removal failed: %v", peerID, err)
+			} else {
+				b.logger.Infof("[peerRegistryBatcher] removed peer %s again: its removal raced this cycle's RegisterPeer", peerID)
+			}
+		}
+	}
+
+	if timedOut {
+		b.logger.Warnf("[peerRegistryBatcher] flush cut short (%v): requeued updates for %d of %d peers", ctx.Err(), requeued, len(pending))
 	}
 
 	if rpcErrs > 0 {
@@ -511,6 +563,22 @@ func (b *peerRegistryBatcher) flushOnce(ctx context.Context) {
 	}
 
 	b.pruneAssertState()
+}
+
+// compensateRemove re-issues RemovePeer for a peer whose forget() raced this
+// cycle's RegisterPeer. Ordering is what makes it correct: the RegisterPeer
+// has returned, so the registry has applied it, and this RemovePeer is
+// therefore ordered after it regardless of how removePeer's own RemovePeer
+// interleaved. The RPC gets at least registryCompensateTimeout of budget: the
+// flush ctx is used only while that much remains on it, otherwise a detached
+// budget, so a flush that is about to expire cannot leave the ghost behind.
+func (b *peerRegistryBatcher) compensateRemove(ctx context.Context, peerID string) error {
+	if dl, ok := ctx.Deadline(); !ok || time.Until(dl) < registryCompensateTimeout {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), registryCompensateTimeout)
+		defer cancel()
+	}
+	return b.registry.RemovePeer(ctx, peerID)
 }
 
 // isRemovedLocked reports whether the peer has a removal tombstone, either
@@ -528,22 +596,24 @@ func (b *peerRegistryBatcher) isRemovedLocked(peerID string) bool {
 }
 
 // requeue puts the failed portion of a peer's coalesced update back into the
-// pending map — the whole update after a failed RegisterPeer, or just the
-// failed intents when individual follow-up RPCs error — so accumulated bytes,
-// last-message freshness, and storage intents are retried on the next flush
-// instead of being silently dropped. Called from flushOnce only; must not
-// trigger a synchronous flush.
-func (b *peerRegistryBatcher) requeue(peerID string, u *pendingPeerUpdate) {
+// pending map — the whole update after a failed RegisterPeer, just the
+// failed intents when individual follow-up RPCs error, or the untouched
+// update when the flush budget expired — so accumulated bytes, last-message
+// freshness, and storage intents are retried on the next flush instead of
+// being silently dropped. Returns false when nothing was kept (the peer is
+// tombstoned, or the pending map is full and the update was counted as
+// dropped). Called from flushOnce only; must not trigger a synchronous flush.
+func (b *peerRegistryBatcher) requeue(peerID string, u *pendingPeerUpdate) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.isRemovedLocked(peerID) {
-		return
+		return false
 	}
 	existing, ok := b.pending[peerID]
 	if !ok {
 		if len(b.pending) >= registryBatcherMaxPending {
 			b.dropped++
-			return
+			return false
 		}
 		existing = &pendingPeerUpdate{}
 		b.pending[peerID] = existing
@@ -555,6 +625,7 @@ func (b *peerRegistryBatcher) requeue(peerID string, u *pendingPeerUpdate) {
 	merged.merge(u)
 	merged.merge(existing)
 	*existing = *merged
+	return true
 }
 
 // recordAssertStateLocked stores a peer's assert state, enforcing the count

@@ -3,7 +3,9 @@ package p2p
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/model"
@@ -511,10 +513,169 @@ func TestGossipFieldBoundaries(t *testing.T) {
 	require.Error(t, checkGossipString("url", strings.Repeat("u", maxGossipURLLen+1), maxGossipURLLen))
 }
 
+// A block announcement whose hash is present but short passes the hex bound
+// in validateFields, yet must still be dropped and scored: chainhash would
+// otherwise zero-pad it into a well-formed-looking tip.
+func TestHandleBlockTopic_ShortHashRejectedAndScored(t *testing.T) {
+	server, remotePeerID, reg, banScore := newGossipFieldTestServer(t)
+	info, _ := reg.Get(remotePeerID.String())
+	baseline := info.LastMessageTime
+
+	msgBytes, err := json.Marshal(BlockMessage{
+		PeerID:     remotePeerID.String(),
+		Hash:       testBlockHashHex[:40],
+		Height:     1,
+		DataHubURL: "http://example.com:8090",
+	})
+	require.NoError(t, err)
+
+	server.handleBlockTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	requireNoNotification(t, server, "block message with short hash must not reach WebSocket clients")
+	assertNoMessageTimeAdvance(t, reg, remotePeerID.String(), baseline, "short-hash block message must not advance LastMessageTime")
+	require.Positive(t, banScore(), "short hash must be scored as a protocol violation")
+}
+
+// The subtree hash is mandatory: an empty one used to decode to the all-zero
+// hash and be forwarded to WebSocket subscribers and the subtree peer map.
+func TestHandleSubtreeTopic_EmptyHashRejectedAndScored(t *testing.T) {
+	server, remotePeerID, reg, banScore := newGossipFieldTestServer(t)
+	info, _ := reg.Get(remotePeerID.String())
+	baseline := info.LastMessageTime
+
+	msgBytes, err := json.Marshal(SubtreeMessage{
+		PeerID:     remotePeerID.String(),
+		Hash:       "",
+		DataHubURL: "http://example.com:8090",
+	})
+	require.NoError(t, err)
+
+	server.handleSubtreeTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	requireNoNotification(t, server, "subtree message with empty hash must not reach WebSocket clients")
+	assertNoMessageTimeAdvance(t, reg, remotePeerID.String(), baseline, "empty-hash subtree message must not advance LastMessageTime")
+	require.Positive(t, banScore(), "empty hash must be scored as a protocol violation")
+	require.Zero(t, server.subtreePeerMap.Len(), "zero hash must not enter the subtree peer map")
+}
+
+// node_status is telemetry, so a missing best_block_hash is not scored, but
+// it must not register the peer at the advertised height with the all-zero
+// hash, which would satisfy the sync coordinator's "tip is known" gates.
+func TestHandleNodeStatusTopic_EmptyBestBlockHashDoesNotRegisterTip(t *testing.T) {
+	server, remotePeerID, reg, banScore := newGossipFieldTestServer(t)
+
+	msgBytes, err := json.Marshal(NodeStatusMessage{
+		PeerID:        remotePeerID.String(),
+		BestHeight:    5,
+		BestBlockHash: "",
+	})
+	require.NoError(t, err)
+
+	server.handleNodeStatusTopic(context.Background(), msgBytes, remotePeerID.String())
+
+	select {
+	case n := <-server.notificationCh:
+		require.Equal(t, "node_status", n.Type)
+		require.Zero(t, n.BestHeight, "unverifiable tip must be blanked in the notification")
+		require.Empty(t, n.BestBlockHash)
+	default:
+		t.Fatal("node_status telemetry must still be forwarded")
+	}
+
+	info, ok := reg.Get(remotePeerID.String())
+	require.True(t, ok)
+	require.Zero(t, info.Height, "peer must not be registered at an advertised height without a real hash")
+	require.Nil(t, info.BlockHash, "all-zero hash must not be recorded as the peer's tip")
+	require.Zero(t, banScore(), "node_status telemetry is not scored")
+}
+
+// Garbage inside a valid message-bus envelope is only ever seen by this
+// layer (the bus scores the outer envelope alone), so it must be charged as a
+// protocol violation or a flood of it costs the sender nothing.
+func TestHandleTopics_MalformedInnerJSONScored(t *testing.T) {
+	garbage := []byte(`{"peer_id": 12345, "hash": ["not", "a", "string"]`)
+
+	handlers := map[string]func(*Server, context.Context, []byte, string){
+		"block":       (*Server).handleBlockTopic,
+		"subtree":     (*Server).handleSubtreeTopic,
+		"rejected_tx": (*Server).handleRejectedTxTopic,
+		"node_status": (*Server).handleNodeStatusTopic,
+	}
+
+	for name, handler := range handlers {
+		t.Run(name, func(t *testing.T) {
+			server, remotePeerID, _, banScore := newGossipFieldTestServer(t)
+
+			handler(server, context.Background(), garbage, remotePeerID.String())
+
+			requireNoNotification(t, server, "malformed inner JSON must not reach WebSocket clients")
+			require.Positive(t, banScore(), "malformed inner JSON must be scored as a protocol violation")
+		})
+
+		t.Run(name+"_own_message_not_self_scored", func(t *testing.T) {
+			server, _, reg, _ := newGossipFieldTestServer(t)
+			self := server.P2PClient.GetID()
+
+			handler(server, context.Background(), garbage, self)
+
+			requireNoNotification(t, server, "malformed own message must be dropped")
+			if info, registered := reg.Get(self); registered {
+				require.Zero(t, info.BanScore, "own malformed message must not be self-scored")
+			}
+		})
+
+		// Valid JSON that merely mismatches a field type (another
+		// implementation encoding an ignored field differently) is dropped
+		// but must not be scored, or a benign wire divergence bans a peer.
+		t.Run(name+"_field_type_mismatch_not_scored", func(t *testing.T) {
+			server, remotePeerID, _, banScore := newGossipFieldTestServer(t)
+			// Field names match case-insensitively: Hash/TxID hit the block,
+			// subtree and rejected-tx structs, fee_policy the node_status one.
+			mismatch := []byte(`{"PeerID":"` + remotePeerID.String() + `","Hash":["x"],"TxID":["x"],"fee_policy":"flat"}`)
+			require.True(t, json.Valid(mismatch), "test fixture must be structurally valid JSON")
+
+			handler(server, context.Background(), mismatch, remotePeerID.String())
+
+			requireNoNotification(t, server, "type-mismatched message must be dropped")
+			require.Zero(t, banScore(), "field type mismatch must not be scored")
+		})
+
+		// The unscored half must not echo the payload: an UnmarshalTypeError
+		// carries the offending literal verbatim, up to the topic message cap.
+		t.Run(name+"_field_type_mismatch_not_echoed_to_log", func(t *testing.T) {
+			server, remotePeerID, _, _ := newGossipFieldTestServer(t)
+			capture := &errorCaptureLogger{}
+			server.logger = capture
+			marker := strings.Repeat("7", 4000)
+			mismatch := []byte(`{"PeerID":"` + remotePeerID.String() + `","Hash":` + marker + `,"TxID":` + marker + `,"fee_policy":` + marker + `}`)
+			require.True(t, json.Valid(mismatch))
+
+			handler(server, context.Background(), mismatch, remotePeerID.String())
+
+			require.NotContains(t, capture.errors(), marker[:64], "type-mismatch log must not echo peer-controlled bytes")
+		})
+
+		// The banned-peer skip must run before decoding so a banned peer's
+		// garbage does not keep triggering AddBanScore RPCs.
+		t.Run(name+"_banned_peer_not_rescored", func(t *testing.T) {
+			server, remotePeerID, reg, banScore := newGossipFieldTestServer(t)
+			banRemotePeer(t, reg, remotePeerID.String())
+			before := banScore()
+
+			handler(server, context.Background(), garbage, remotePeerID.String())
+
+			requireNoNotification(t, server, "banned peer's garbage must be dropped")
+			require.Equal(t, before, banScore(), "banned peer must be skipped before decoding and scoring")
+		})
+	}
+}
+
 // Empty optional protocol-format values must never be scored: a node with no
-// best block legitimately sends "", and older peers omit fields entirely. This
-// pins the empty-allowed rule against any future "make the bounds exact"
-// refactor, which would otherwise ban the whole network.
+// best block legitimately sends "" in node_status, and older peers omit fields
+// entirely. This pins the empty-allowed rule for node_status against any
+// future "make the bounds exact" refactor, which would otherwise ban the
+// whole network. (Block and subtree announcements are the exception: their
+// hash is mandatory and an empty one is scored, see the tests above.)
 func TestHandleNodeStatusTopic_EmptyOptionalFieldsNotScored(t *testing.T) {
 	server, remotePeerID, _, banScore := newGossipFieldTestServer(t)
 
@@ -1010,4 +1171,24 @@ func TestInit_TrimsStaticURLConfig(t *testing.T) {
 	require.Equal(t, "http://example.com:8090", s.AssetHTTPAddressURL)
 	require.Equal(t, "http://example.com:8091", s.PropagationURL)
 	require.NoError(t, checkGossipString("base_url", s.AssetHTTPAddressURL, maxGossipURLLen))
+}
+
+// errorCaptureLogger records Errorf lines so tests can assert on what a
+// handler writes to the log for peer-controlled input.
+type errorCaptureLogger struct {
+	ulogger.TestLogger
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *errorCaptureLogger) Errorf(format string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+
+func (l *errorCaptureLogger) errors() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.Join(l.lines, "\n")
 }
