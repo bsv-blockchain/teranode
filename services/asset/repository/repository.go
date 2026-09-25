@@ -699,6 +699,35 @@ func (repo *Repository) GetBlocksByHeight(ctx context.Context, startHeight, endH
 	return blocks, nil
 }
 
+// openValidatedSubtree opens a subtree file for reading, and only the validated one.
+//
+// FileTypeSubtreeToCheck is deliberately NOT a fallback here. That file type is the
+// pre-validation copy written when this node fetches a subtree from a peer during
+// catch-up; Asset is the public HTTP surface, so serving it would publish, under a hash a
+// peer chose, bytes this node has not finished checking (bitcoin-sv/teranode#4842). The
+// catch-up fetch now verifies that the peer's bytes hash to the requested subtree root
+// before it writes them, so the file is no longer arbitrary attacker-supplied content, but
+// a route that promises a validated subtree still must not answer with an unvalidated one.
+//
+// The cost: between fetching a subtree and validating it, this node answers 404 for that
+// subtree. That window is not confined to catch-up. A fully synced node receiving a tip
+// block writes FileTypeSubtreeToCheck for every subtree of that block it does not already
+// hold (services/subtreevalidation/check_block_subtrees.go), and only promotes it to
+// FileTypeSubtree once ValidateSubtreeInternal finishes, so for the seconds to minutes a
+// large tip block takes to validate, this node 404s on those subtrees. Every path that
+// accepts a block writes FileTypeSubtree first -- quick validation in
+// services/blockvalidation/quick_validate.go, full validation in
+// services/subtreevalidation/SubtreeValidation.go -- so once a block is accepted its
+// subtrees are served exactly as before; the 404 only covers blocks this node has fetched
+// and not yet accepted.
+//
+// Every read of a subtree file in this package goes through here, so the rule lives in one
+// place rather than being restated at each call site, which is how the fallback came to be
+// duplicated five times in the first place.
+func (repo *Repository) openValidatedSubtree(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
+	return repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
+}
+
 // GetSubtreeBytes retrieves the raw bytes of a subtree.
 //
 // Parameters:
@@ -709,12 +738,9 @@ func (repo *Repository) GetBlocksByHeight(ctx context.Context, startHeight, endH
 //   - []byte: Subtree data
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
-	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
+	subtreeReader, err := repo.openValidatedSubtree(ctx, hash)
 	if err != nil {
-		subtreeReader, err = repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeToCheck)
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 
 	defer func() {
@@ -741,12 +767,9 @@ func (repo *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Has
 //   - io.ReadCloser: Reader for subtree data
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtreeTxIDsReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
-	reader, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
+	reader, err := repo.openValidatedSubtree(ctx, hash)
 	if err != nil {
-		reader, err = repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeToCheck)
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 
 	return reader, nil
@@ -779,12 +802,9 @@ func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*
 		tracing.WithDebugLogMessage(repo.logger, "[Repository] GetSubtree: %s", hash.String()),
 	)
 
-	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
+	subtreeReader, err := repo.openValidatedSubtree(ctx, hash)
 	if err != nil {
-		subtreeReader, err = repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeToCheck)
-		if err != nil {
-			return nil, errors.NewServiceError("error in GetSubtree Get method", err)
-		}
+		return nil, errors.NewServiceError("error in GetSubtree Get method", err)
 	}
 
 	defer func() {
@@ -829,6 +849,8 @@ func (repo *Repository) getSubtreeDataInternal(ctx context.Context, hash *chainh
 		return nil, err
 	}
 
+	// The GetSubtree call above goes through openValidatedSubtree, so a subtree that has not been
+	// validated is refused before its FileTypeSubtreeData is read.
 	r, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeData)
 	if err != nil {
 		return nil, errors.NewServiceError("[GetSubtreeData][%s] error in GetSubtreeData Get method", hash.String(), err)
@@ -905,11 +927,14 @@ func (repo *Repository) GetSubtreeExists(ctx context.Context, hash *chainhash.Ha
 	}
 	defer releaseSemaphorePermit(repo.semGetSubtreeExists)
 
-	if exists, err := repo.SubtreeStore.Exists(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree); err == nil {
-		return exists, nil
-	}
-
-	return repo.SubtreeStore.Exists(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeToCheck)
+	// Validated subtrees only, for the reason given on openValidatedSubtree: this gates
+	// public routes, so a pending peer-fetched subtree must read as absent.
+	//
+	// The removed fallback here was reached on a store ERROR, not on a miss -- the old code
+	// returned (false, nil) straight away when the validated check simply found nothing. So
+	// the only behaviour that changes for a caller is that a failing subtree store now
+	// surfaces its error instead of being silently re-asked about the pending file type.
+	return repo.SubtreeStore.Exists(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
 }
 
 // GetSubtreeHead retrieves only the head portion of a subtree, containing fees and size information.
@@ -930,12 +955,9 @@ func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash
 
 	repo.logger.Debugf("[Repository] GetSubtree: %s", hash.String())
 
-	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
+	subtreeReader, err := repo.openValidatedSubtree(ctx, hash)
 	if err != nil {
-		subtreeReader, err = repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeToCheck)
-		if err != nil {
-			return nil, 0, errors.NewServiceError("error in GetSubtree GetHead method", err)
-		}
+		return nil, 0, errors.NewServiceError("error in GetSubtree GetHead method", err)
 	}
 
 	defer func() {

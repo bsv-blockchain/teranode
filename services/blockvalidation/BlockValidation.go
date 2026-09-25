@@ -2461,8 +2461,9 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					// It does not hold forever: FileTypeSubtree is written with a finite delete-at
 					// height and can also be removed by the catch-up cleanup, and once it lapses the
 					// hash is missing again and the fallback IS consulted — so a delete performed here
-					// would cost a later attempt a local read it could have had. Block assembly, the
-					// block persister and the asset service also read SubtreeToCheck directly.
+					// would cost a later attempt a local read it could have had. Block assembly and
+					// the block persister also read SubtreeToCheck directly. The asset service does
+					// not: it serves validated subtrees only (bitcoin-sv/teranode#4842).
 					return err
 				}
 

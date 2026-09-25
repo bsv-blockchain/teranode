@@ -128,6 +128,8 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 		defer putAssetArena(arena)
 
 		for subtreeIdx, subtreeHash := range block.Subtrees {
+			// FileTypeSubtreeData is read without a validation check; GetSubtreeDataReader in
+			// GetSubtreeData.go explains why that is safe.
 			subtreeDataExists, err = repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 			if err == nil && subtreeDataExists {
 				subtreeDataReader, err = repo.SubtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
