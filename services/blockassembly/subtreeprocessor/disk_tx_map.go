@@ -1,6 +1,7 @@
 package subtreeprocessor
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"sync"
@@ -10,7 +11,10 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/tempstore"
+	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	cuckoo "github.com/seiflotfy/cuckoofilter"
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 )
 
 const (
@@ -33,6 +37,7 @@ type writeEntry struct {
 	key       chainhash.Hash
 	inpoints  *subtreepkg.TxInpoints
 	flushDone chan struct{} // non-nil = flush request
+	batch     *[]writeEntry // non-nil = several writes in one message (pointer keeps the channel element small)
 }
 
 // diskShard is one Badger instance on a single disk, with its own writer goroutine.
@@ -45,6 +50,11 @@ type diskShard struct {
 	path         string
 	prefix       string
 	bytesWritten int64 // written by this disk's writerLoop, read concurrently by Stats(); access via sync/atomic
+
+	// pending bounds entries sent by SetBatch and not yet written; released
+	// by the writer. Set is bounded by writeCh's capacity instead.
+	pending    *semaphore.Weighted
+	pendingCap int64
 }
 
 // DiskTxMap implements TxInpointsMap using sharded cuckoo filters for fast
@@ -76,6 +86,12 @@ type DiskTxMapOptions struct {
 	BasePath       string
 	Prefix         string
 	FilterCapacity uint
+
+	// MaxPendingWrites bounds the entries SetBatch has queued for the disk
+	// writers across all disks (0 = default): SetBatch waits for room before
+	// sending. It doesn't bound the caller's own batch, which SetBatch groups
+	// by disk before sending.
+	MaxPendingWrites int
 }
 
 // NewDiskTxMap creates a new DiskTxMap with N Badger disk shards.
@@ -94,6 +110,16 @@ func NewDiskTxMap(opts DiskTxMapOptions) (*DiskTxMap, error) {
 	paths := opts.BasePaths
 	if len(paths) == 0 {
 		paths = []string{opts.BasePath}
+	}
+
+	maxPending := opts.MaxPendingWrites
+	if maxPending <= 0 {
+		maxPending = writeChBuffer
+	}
+
+	pendingPerDisk := int64(maxPending / len(paths))
+	if pendingPerDisk < 1 {
+		pendingPerDisk = 1
 	}
 
 	m := &DiskTxMap{
@@ -126,6 +152,9 @@ func NewDiskTxMap(opts DiskTxMapOptions) (*DiskTxMap, error) {
 			done:    make(chan struct{}),
 			path:    path,
 			prefix:  fmt.Sprintf("%s-disk%d", prefix, i),
+
+			pending:    semaphore.NewWeighted(pendingPerDisk),
+			pendingCap: pendingPerDisk,
 		}
 	}
 
@@ -164,10 +193,22 @@ func (m *DiskTxMap) writerLoop(diskIdx int) {
 			continue
 		}
 
-		value := serializeTxMapValue(entry.inpoints)
-		_ = d.batch.Set(entry.key[:], value)
-		atomic.AddInt64(&d.bytesWritten, int64(chainhash.HashSize+len(value)))
-		pending++
+		if entry.batch != nil {
+			entries := *entry.batch
+			for i := range entries {
+				value := serializeTxMapValue(entries[i].inpoints)
+				_ = d.batch.Set(entries[i].key[:], value)
+				atomic.AddInt64(&d.bytesWritten, int64(chainhash.HashSize+len(value)))
+			}
+
+			pending += len(entries)
+			d.pending.Release(int64(len(entries)))
+		} else {
+			value := serializeTxMapValue(entry.inpoints)
+			_ = d.batch.Set(entry.key[:], value)
+			atomic.AddInt64(&d.bytesWritten, int64(chainhash.HashSize+len(value)))
+			pending++
+		}
 
 		if pending >= writerFlushThreshold {
 			_ = d.batch.Flush()
@@ -313,6 +354,49 @@ func (m *DiskTxMap) Set(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints) {
 	m.disks[m.diskOf(hash)].writeCh <- writeEntry{key: hash, inpoints: inpoints}
 }
 
+// SetBatch stores each tx's inpoints like Set, sending one message per disk
+// instead of one per tx. It marks the whole batch as recently written before
+// sending any of it, so it must not run concurrently with SetIfNotExists for
+// the same hashes (AddNodesDirectly, its caller, runs alone).
+func (m *DiskTxMap) SetBatch(txs []*utxostore.UnminedTransaction) {
+	perDisk := make([][]writeEntry, m.numDisks)
+
+	var added int64
+
+	for _, tx := range txs {
+		hash := tx.Hash
+		s := &m.shards[shardOf(hash)]
+
+		s.mu.Lock()
+		if !s.filter.Lookup(hash[:]) {
+			s.filter.Insert(hash[:])
+			added++
+		}
+		s.recent[hash] = struct{}{}
+		s.mu.Unlock()
+
+		d := m.diskOf(hash)
+		perDisk[d] = append(perDisk[d], writeEntry{key: hash, inpoints: tx.TxInpoints})
+	}
+
+	m.count.Add(added)
+
+	for d, entries := range perDisk {
+		disk := &m.disks[d]
+
+		for len(entries) > 0 {
+			n := min(int64(len(entries)), disk.pendingCap)
+
+			// Background never cancels, so Acquire only waits for the writer.
+			_ = disk.pending.Acquire(context.Background(), n)
+
+			chunk := entries[:n]
+			disk.writeCh <- writeEntry{batch: &chunk}
+			entries = entries[n:]
+		}
+	}
+}
+
 // Clear removes all entries and recreates filters and stores.
 // Clear is all-or-nothing: either every disk shard rotates onto a fresh Badger
 // generation and the filters reset with it, or nothing changes at all.
@@ -413,6 +497,75 @@ func (m *DiskTxMap) UpdateSubtreeIndex(hash chainhash.Hash, subtreeIndex int16) 
 	}
 
 	return errors.NewProcessingError("value too short for hash %s", hash.String())
+}
+
+// UpdateSubtreeIndexBatch sets the SubtreeIndex of every node's entry, like one
+// UpdateSubtreeIndex call per node, but with a single flush and, per disk, one
+// read transaction and one write batch. Nodes without an entry are skipped.
+//
+// Like UpdateSubtreeIndex, it rewrites each value it read, so the caller must
+// not write these entries concurrently (the subtree processor goroutine owns
+// the map).
+func (m *DiskTxMap) UpdateSubtreeIndexBatch(nodes []subtreepkg.Node, subtreeIndex int16) error {
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	perDisk := make([][]int32, m.numDisks)
+	for i := range nodes {
+		d := m.diskOf(nodes[i].Hash)
+		perDisk[d] = append(perDisk[d], int32(i)) //nolint:gosec // subtree node counts fit in int32
+	}
+
+	m.flushAllDisks()
+
+	var g errgroup.Group
+
+	for diskIdx, idxs := range perDisk {
+		if len(idxs) == 0 {
+			continue
+		}
+
+		g.Go(func() error {
+			return m.updateSubtreeIndexOnDisk(diskIdx, nodes, idxs, subtreeIndex)
+		})
+	}
+
+	return g.Wait()
+}
+
+func (m *DiskTxMap) updateSubtreeIndexOnDisk(diskIdx int, nodes []subtreepkg.Node, idxs []int32, subtreeIndex int16) error {
+	store := m.disks[diskIdx].store
+	wb := store.NewWriteBatch()
+
+	// Always release the batch: tempstore's Flush opens a fresh Badger batch,
+	// and an abandoned one pins Badger's read watermark for the life of the
+	// store, retaining every later commit's conflict keys.
+	defer wb.Cancel()
+
+	err := store.GetEach(len(idxs), func(i int) []byte {
+		return nodes[idxs[i]].Hash[:]
+	}, func(i int, val []byte) error {
+		if len(val) < 2 {
+			return nil
+		}
+
+		// The value is only valid during the callback and the batch keeps it.
+		updated := make([]byte, len(val))
+		copy(updated, val)
+		binary.LittleEndian.PutUint16(updated[:2], uint16(subtreeIndex)) //nolint:gosec // stored as the raw int16 bits, as in UpdateSubtreeIndex
+
+		return wb.Set(nodes[idxs[i]].Hash[:], updated)
+	})
+	if err != nil {
+		return errors.NewStorageError("updating subtree index on disk %d", diskIdx, err)
+	}
+
+	if err = wb.Flush(); err != nil {
+		return errors.NewStorageError("flushing subtree index on disk %d", diskIdx, err)
+	}
+
+	return nil
 }
 
 // flushDisk sends a flush request to a single disk shard and waits for completion.

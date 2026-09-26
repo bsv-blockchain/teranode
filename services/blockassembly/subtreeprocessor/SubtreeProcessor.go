@@ -367,6 +367,10 @@ type SubtreeProcessor struct {
 	// UpdateSubtreeIndex bookkeeping must address.
 	diskTxMap *DiskTxMap
 
+	// subtreeIndexesPredicted is set while AddNodesDirectly appends txs whose
+	// DiskTxMap entries already carry their subtree index.
+	subtreeIndexesPredicted atomic.Bool
+
 	// diskTxMapShadow is the inactive half of the double-buffered disk-backed
 	// currentTxMap, mirroring currentTxMapShadow for the in-memory path. It is
 	// always empty while inactive: resetSubtreeState swaps it in, and the commit
@@ -2467,11 +2471,9 @@ func (stp *SubtreeProcessor) processCompleteSubtree(skipNotification bool) (err 
 
 	// Update SubtreeIndex for all txs in this subtree so removeTxFromSubtrees can do O(1) lookup.
 	// Store chainedIdx+1 so that 0 (zero value) means "unassigned" and is safe across serialization.
-	if stp.diskTxMap != nil {
-		idx := int16(chainedIdx + 1)
-		for _, node := range currentSubtree.Nodes {
-			_ = stp.diskTxMap.UpdateSubtreeIndex(node.Hash, idx)
-		}
+	// AddNodesDirectly already wrote the index with each entry.
+	if stp.diskTxMap != nil && !stp.subtreeIndexesPredicted.Load() {
+		_ = stp.diskTxMap.UpdateSubtreeIndexBatch(currentSubtree.Nodes, int16(chainedIdx+1))
 	}
 
 	stp.subtreesInBlock++ // Track number of subtrees in current block
@@ -2572,10 +2574,8 @@ func (stp *SubtreeProcessor) bulkBuildSubtrees(ctx context.Context, nodes []subt
 
 			// Update SubtreeIndex for diskTxMap bookkeeping
 			if stp.diskTxMap != nil {
-				idx := int16(len(stp.chainedSubtrees)) // chainedSubtrees just grew by 1
-				for _, node := range currentSt.Nodes {
-					_ = stp.diskTxMap.UpdateSubtreeIndex(node.Hash, idx)
-				}
+				// chainedSubtrees just grew by 1
+				_ = stp.diskTxMap.UpdateSubtreeIndexBatch(currentSt.Nodes, int16(len(stp.chainedSubtrees)))
 			}
 
 			newSt, err := stp.newSubtree(subtreeSize)
@@ -2637,10 +2637,8 @@ func (stp *SubtreeProcessor) bulkBuildSubtrees(ctx context.Context, nodes []subt
 		baseIdx := len(stp.chainedSubtrees)
 		if stp.diskTxMap != nil {
 			for i, st := range fullSubtrees {
-				idx := int16(baseIdx + i + 1) // +1 so 0 means "unassigned"
-				for _, node := range st.Nodes {
-					_ = stp.diskTxMap.UpdateSubtreeIndex(node.Hash, idx)
-				}
+				// +1 so 0 means "unassigned"
+				_ = stp.diskTxMap.UpdateSubtreeIndexBatch(st.Nodes, int16(baseIdx+i+1))
 			}
 		}
 
@@ -2753,40 +2751,6 @@ func (stp *SubtreeProcessor) AddNodesDirectly(txs []*utxostore.UnminedTransactio
 		return nil
 	}
 
-	// Phase 1: Parallel insertion into currentTxMap using 1024 batches
-	const numWorkers = 1024
-	currentTxMap := stp.currentTxMap
-	txCount := len(txs)
-
-	if txCount > 0 {
-		var filterWg sync.WaitGroup
-
-		// Calculate batch size per worker
-		batchSize := (txCount + numWorkers - 1) / numWorkers
-
-		for w := 0; w < numWorkers; w++ {
-			start := w * batchSize
-			if start >= txCount {
-				break
-			}
-			end := start + batchSize
-			if end > txCount {
-				end = txCount
-			}
-
-			filterWg.Add(1)
-			go func(startIdx, endIdx int) {
-				defer filterWg.Done()
-				for i := startIdx; i < endIdx; i++ {
-					currentTxMap.Set(txs[i].Hash, txs[i].TxInpoints)
-				}
-			}(start, end)
-		}
-
-		filterWg.Wait()
-	}
-
-	// Phase 2: Sequential insertion into subtrees (single-threaded)
 	currentItemsPerFile := int(stp.currentItemsPerFile.Load())
 	currentSubtree := stp.currentSubtree.Load()
 	addedCount := uint64(0)
@@ -2808,6 +2772,59 @@ func (stp *SubtreeProcessor) AddNodesDirectly(txs []*utxostore.UnminedTransactio
 	}
 
 	capSize := currentSubtree.Size()
+
+	// Phase 1: Parallel insertion into currentTxMap using 1024 batches
+	const numWorkers = 1024
+	currentTxMap := stp.currentTxMap
+	txCount := len(txs)
+
+	// With a DiskTxMap, every tx's subtree index is known before it is placed
+	// (fill and size are fixed for the whole call), so it is written with the
+	// entry instead of being read back and rewritten when its subtree completes.
+	diskMap, _ := currentTxMap.(*DiskTxMap)
+	if diskMap != nil {
+		predictSubtreeIndexes(txs, len(stp.chainedSubtrees), len(currentSubtree.Nodes), capSize)
+	}
+
+	if txCount > 0 {
+		var filterWg sync.WaitGroup
+
+		// Calculate batch size per worker
+		batchSize := (txCount + numWorkers - 1) / numWorkers
+
+		for w := 0; w < numWorkers; w++ {
+			start := w * batchSize
+			if start >= txCount {
+				break
+			}
+			end := start + batchSize
+			if end > txCount {
+				end = txCount
+			}
+
+			filterWg.Add(1)
+			go func(startIdx, endIdx int) {
+				defer filterWg.Done()
+
+				if diskMap != nil {
+					diskMap.SetBatch(txs[startIdx:endIdx])
+					return
+				}
+
+				for i := startIdx; i < endIdx; i++ {
+					currentTxMap.Set(txs[i].Hash, txs[i].TxInpoints)
+				}
+			}(start, end)
+		}
+
+		filterWg.Wait()
+	}
+
+	// Phase 2: Sequential insertion into subtrees (single-threaded)
+	if diskMap != nil {
+		stp.subtreeIndexesPredicted.Store(true)
+		defer stp.subtreeIndexesPredicted.Store(false)
+	}
 
 	for _, tx := range txs {
 		// Add to current subtree
@@ -2833,6 +2850,22 @@ func (stp *SubtreeProcessor) AddNodesDirectly(txs []*utxostore.UnminedTransactio
 	}
 
 	return nil
+}
+
+// predictSubtreeIndexes stamps each tx's TxInpoints.SubtreeIndex with the
+// chained subtree it will land in when appended in order (stored as
+// chainedIdx+1, the DiskTxMap convention): the current subtree holds fill of
+// capSize nodes and becomes chained index chained. Txs landing in the subtree
+// left incomplete get that subtree's future index. It is a hint, verified on
+// use, so a later change to the chain only costs a fallback scan.
+func predictSubtreeIndexes(txs []*utxostore.UnminedTransaction, chained, fill, capSize int) {
+	for i, tx := range txs {
+		if tx.TxInpoints == nil {
+			continue
+		}
+
+		tx.TxInpoints.SubtreeIndex = int16(chained + (fill+i)/capSize + 1) //nolint:gosec // wraps like the per-subtree update's int16 conversion
+	}
 }
 
 // Remove prevents a transaction from being processed from the queue into a subtree, and removes it if already present.
@@ -5940,10 +5973,7 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 		stp.chainedSubtreesTotalSize.Add(oldSubtree.SizeInBytes)
 
 		if stp.diskTxMap != nil {
-			idx := int16(chainedIdx + 1)
-			for _, node := range oldSubtree.Nodes {
-				_ = stp.diskTxMap.UpdateSubtreeIndex(node.Hash, idx)
-			}
+			_ = stp.diskTxMap.UpdateSubtreeIndexBatch(oldSubtree.Nodes, int16(chainedIdx+1))
 		}
 
 		stp.subtreesInBlock++
