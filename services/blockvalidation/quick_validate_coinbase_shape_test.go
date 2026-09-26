@@ -63,7 +63,7 @@ func TestQuickValidateBlock_BoundNonCoinbaseBodyRejected(t *testing.T) {
 		suite.MockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 		suite.MockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 
-		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, buildBoundNonCoinbaseBody(t), "test", "")
+		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, buildBoundNonCoinbaseBody(t), "test", "", nil)
 
 		require.Error(t, err, "a bound body whose only transaction is not a coinbase must be rejected")
 		require.True(t, errors.Is(err, errors.ErrBlockInvalid),

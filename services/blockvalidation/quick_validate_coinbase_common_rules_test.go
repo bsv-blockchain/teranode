@@ -36,7 +36,7 @@ func TestQuickValidate_CoinbaseCommonRules(t *testing.T) {
 		block.CoinbaseTx.Outputs = nil
 		block.Header.HashMerkleRoot = block.CoinbaseTx.TxIDChainHash()
 
-		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "")
+		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "", nil)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrBlockInvalid), "a bound coinbase with no outputs must condemn invalid, got: %v", err)
 		require.False(t, errors.IsBlockCorrupt(err), "must NOT be corrupt")
@@ -111,7 +111,7 @@ func TestQuickValidate_CoinbaseCommonRules(t *testing.T) {
 		block.Header.HashMerkleRoot, err = subtree.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, 0)
 		require.NoError(t, err)
 
-		err = suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "")
+		err = suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "", nil)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrBlockInvalid), "a bound coinbase with no outputs must condemn invalid, got: %v", err)
 		require.False(t, errors.IsBlockCorrupt(err), "must NOT be corrupt")

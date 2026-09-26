@@ -400,10 +400,12 @@ func NewSettings(alternativeContext ...string) *Settings {
 			CatchupCheckpointHeight:               getInt32("blockvalidation_catchup_checkpoint_height", 0, alternativeContext...),
 			QuickValidateSkipUtxoLock:             getBool("blockvalidation_quick_validate_skip_utxo_lock", false, alternativeContext...),
 			SkipUnspendableTxStorageDuringCatchup: getBool("blockvalidation_skipUnspendableTxStorageDuringCatchup", false, alternativeContext...),
+			QuickValidateCreateConcurrency:        getInt("blockvalidation_quick_validate_create_concurrency", 0, alternativeContext...),
+			QuickWindowBlocks:                     getInt("blockvalidation_quick_window_blocks", 1, alternativeContext...),
+			QuickWindowBudgetMiB:                  getInt("blockvalidation_quick_window_budget_mib", 0, alternativeContext...),
 			CatchupAllowQuickValidation:           getBool("blockvalidation_catchup_allow_quick_validation", true, alternativeContext...),
 			OutpointOnlyBelowCheckpoint:           getBool("blockvalidation_outpoint_only_below_checkpoint", false, alternativeContext...),
 			LegacyUnifiedBelowCheckpoint:          getBool("blockvalidation_legacy_unified_below_checkpoint", false, alternativeContext...),
-			LegacyBelowCheckpointFailClosed:       getBool("blockvalidation_legacy_below_checkpoint_fail_closed", false, alternativeContext...),
 			// Catchup circuit breaker configuration
 			CircuitBreakerFailureThreshold: getInt("blockvalidation_circuit_breaker_failure_threshold", 5, alternativeContext...),
 			CircuitBreakerSuccessThreshold: getInt("blockvalidation_circuit_breaker_success_threshold", 2, alternativeContext...),
@@ -732,10 +734,20 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PeerProcessingTimeout:            getDuration("legacy_peerProcessingTimeout", 3*time.Minute, alternativeContext...), // processing a block will be the largest message to process
 			BlockFailureBackoffBase:          getDuration("legacy_blockFailureBackoffBase", 5*time.Second, alternativeContext...),
 			BlockFailureBackoffMaxDuration:   getDuration("legacy_blockFailureBackoffMaxDuration", 150*time.Second, alternativeContext...),
-			BlockPrefetchBufferBytes:         getInt64("legacy_blockPrefetchBufferBytes", 256*1024*1024, alternativeContext...),
-			PeerRegistryEnabled:              getBool("legacy_peerRegistryEnabled", true, alternativeContext...),
-			PeerRegistrySyncInterval:         getDuration("legacy_peerRegistrySyncInterval", 10*time.Second, alternativeContext...),
-			Upnp:                             getBool("legacy_upnp", false, alternativeContext...),
+			BlockFailureAttemptCeiling:       getInt("legacy_blockFailureAttemptCeiling", 20, alternativeContext...),
+
+			BlockDownloadTimeoutBasePercent:    getInt64("legacy_blockDownloadTimeoutBasePercent", 100, alternativeContext...),
+			BlockDownloadTimeoutBaseIBDPercent: getInt64("legacy_blockDownloadTimeoutBaseIBDPercent", 600, alternativeContext...),
+			BlockDownloadTimeoutPerPeerPercent: getInt64("legacy_blockDownloadTimeoutPerPeerPercent", 50, alternativeContext...),
+
+			MultiPeerBlockDownload:    getBool("legacy_multiPeerBlockDownload", true, alternativeContext...),
+			MaxBlocksInTransitPerPeer: getInt("legacy_maxBlocksInTransitPerPeer", 16, alternativeContext...),
+			BlockDownloadWindow:       getInt("legacy_blockDownloadWindow", 1024, alternativeContext...),
+
+			ParkStoreTimeout:         getDuration("legacy_parkStoreTimeout", 10*time.Second, alternativeContext...),
+			PeerRegistryEnabled:      getBool("legacy_peerRegistryEnabled", true, alternativeContext...),
+			PeerRegistrySyncInterval: getDuration("legacy_peerRegistrySyncInterval", 10*time.Second, alternativeContext...),
+			Upnp:                     getBool("legacy_upnp", false, alternativeContext...),
 		},
 		Propagation: PropagationSettings{
 			IPv6Addresses:         getString("ipv6_addresses", "", alternativeContext...),

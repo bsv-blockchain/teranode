@@ -698,6 +698,9 @@ func (s *Server) banPeer(peerAddr string, until int64) error {
 //   - ctx: Context that controls when logging should stop
 func (s *Server) logPeerStats(ctx context.Context) {
 	ctxLogger := s.logger.WithTraceContext(ctx)
+
+	var gapWatch slotGapWatch
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -717,6 +720,26 @@ func (s *Server) logPeerStats(ctx context.Context) {
 				lastRecvElapsed := time.Since(time.Unix(p.GetLastRecv(), 0))
 				ctxLogger.Infof("[Legacy Server] Peer %s (ID: %d) - Services: %s, Inbound: %t, Bytes Sent: %d, Bytes Received: %d, Ping: %dµs, Last Send: %v ago, Last Recv: %v ago, Height: %d, BanScore: %d",
 					p.GetAddr(), p.GetId(), p.GetServices(), p.GetInbound(), p.GetBytesSent(), p.GetBytesReceived(), p.GetPingTime(), lastSendElapsed, lastRecvElapsed, p.GetCurrentHeight(), p.GetBanscore())
+			}
+
+			// The connection manager's own count against the outbound peers
+			// actually connected: a gap that lasts is a leaked slot, which stops
+			// the node dialling and leaves it syncing on fewer peers.
+			if s.server != nil && s.server.connManager != nil {
+				outbound := 0
+
+				for _, p := range peers {
+					if !p.GetInbound() {
+						outbound++
+					}
+				}
+
+				counted := s.server.connManager.AutomaticOutboundCount()
+				ctxLogger.Infof("[Legacy Server] outbound: %d slots counted by the connection manager, %d outbound peers connected", counted, outbound)
+
+				if gap := gapWatch.observe(counted, outbound); gap > 0 {
+					ctxLogger.Warnf("[Legacy Server] %d outbound slots are counted with no peer behind them, for over a minute: the connection manager will not dial to replace them", gap)
+				}
 			}
 
 			state, err := s.blockchainClient.GetFSMCurrentState(ctx)

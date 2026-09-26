@@ -127,7 +127,7 @@ func TestQuickValidateBlock_LooseCoinbaseRejectedOnRoute(t *testing.T) {
 	block.Header.Nonce = 0
 	testhelpers.MineHeader(block.Header)
 
-	err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "")
+	err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "", nil)
 
 	require.Error(t, err, "the route must apply the consensus predicate, not go-bt's looser one")
 	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "the body is bound: got %v", err)
@@ -284,13 +284,14 @@ func TestQuickValidateBlock_SubtreeInvalidVerdictNotShadowed(t *testing.T) {
 
 	suite.MockUTXOStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return((*meta.Data)(nil), errors.NewNotFoundError("not found"))
 	suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCreateOnly()).Return(&meta.Data{}, nil, nil)
+	suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCombined()).Return(&meta.Data{}, []*utxo.Spend{}, nil).Maybe()
 	suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).Return(nil, []*utxo.Spend{}, nil)
 	// Optional: the block is rejected before the post-AddBlock unlock, so this must not
 	// be an unmet expectation — the point of the test is that it never gets that far.
 	suite.MockUTXOStore.On("SetLocked", mock.Anything, mock.Anything, false).Return(nil).Maybe()
 	suite.MockValidator.Errors = []error{nil, nil, nil}
 
-	err = suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "")
+	err = suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "", nil)
 
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "got %v", err)

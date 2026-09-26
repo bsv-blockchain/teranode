@@ -21,7 +21,7 @@ func TestQuickValidateBlockRejectsOutdatedVersion(t *testing.T) {
 		block.Height = 200_000_000
 		block.Header.Version = 1
 
-		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "")
+		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "", nil)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "bad-version")
 	})
