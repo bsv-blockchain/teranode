@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/tempstore"
 	cuckoo "github.com/seiflotfy/cuckoofilter"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -413,6 +414,75 @@ func (m *DiskTxMap) UpdateSubtreeIndex(hash chainhash.Hash, subtreeIndex int16) 
 	}
 
 	return errors.NewProcessingError("value too short for hash %s", hash.String())
+}
+
+// UpdateSubtreeIndexBatch sets the SubtreeIndex of every node's entry, like one
+// UpdateSubtreeIndex call per node, but with a single flush and, per disk, one
+// read transaction and one write batch. Nodes without an entry are skipped.
+//
+// Like UpdateSubtreeIndex, it rewrites each value it read, so the caller must
+// not write these entries concurrently (the subtree processor goroutine owns
+// the map).
+func (m *DiskTxMap) UpdateSubtreeIndexBatch(nodes []subtreepkg.Node, subtreeIndex int16) error {
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	perDisk := make([][]int32, m.numDisks)
+	for i := range nodes {
+		d := m.diskOf(nodes[i].Hash)
+		perDisk[d] = append(perDisk[d], int32(i)) //nolint:gosec // subtree node counts fit in int32
+	}
+
+	m.flushAllDisks()
+
+	var g errgroup.Group
+
+	for diskIdx, idxs := range perDisk {
+		if len(idxs) == 0 {
+			continue
+		}
+
+		g.Go(func() error {
+			return m.updateSubtreeIndexOnDisk(diskIdx, nodes, idxs, subtreeIndex)
+		})
+	}
+
+	return g.Wait()
+}
+
+func (m *DiskTxMap) updateSubtreeIndexOnDisk(diskIdx int, nodes []subtreepkg.Node, idxs []int32, subtreeIndex int16) error {
+	store := m.disks[diskIdx].store
+	wb := store.NewWriteBatch()
+
+	// Always release the batch: tempstore's Flush opens a fresh Badger batch,
+	// and an abandoned one pins Badger's read watermark for the life of the
+	// store, retaining every later commit's conflict keys.
+	defer wb.Cancel()
+
+	err := store.GetEach(len(idxs), func(i int) []byte {
+		return nodes[idxs[i]].Hash[:]
+	}, func(i int, val []byte) error {
+		if len(val) < 2 {
+			return nil
+		}
+
+		// The value is only valid during the callback and the batch keeps it.
+		updated := make([]byte, len(val))
+		copy(updated, val)
+		binary.LittleEndian.PutUint16(updated[:2], uint16(subtreeIndex)) //nolint:gosec // stored as the raw int16 bits, as in UpdateSubtreeIndex
+
+		return wb.Set(nodes[idxs[i]].Hash[:], updated)
+	})
+	if err != nil {
+		return errors.NewStorageError("updating subtree index on disk %d", diskIdx, err)
+	}
+
+	if err = wb.Flush(); err != nil {
+		return errors.NewStorageError("flushing subtree index on disk %d", diskIdx, err)
+	}
+
+	return nil
 }
 
 // flushDisk sends a flush request to a single disk shard and waits for completion.

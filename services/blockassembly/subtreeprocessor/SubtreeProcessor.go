@@ -2468,10 +2468,7 @@ func (stp *SubtreeProcessor) processCompleteSubtree(skipNotification bool) (err 
 	// Update SubtreeIndex for all txs in this subtree so removeTxFromSubtrees can do O(1) lookup.
 	// Store chainedIdx+1 so that 0 (zero value) means "unassigned" and is safe across serialization.
 	if stp.diskTxMap != nil {
-		idx := int16(chainedIdx + 1)
-		for _, node := range currentSubtree.Nodes {
-			_ = stp.diskTxMap.UpdateSubtreeIndex(node.Hash, idx)
-		}
+		_ = stp.diskTxMap.UpdateSubtreeIndexBatch(currentSubtree.Nodes, int16(chainedIdx+1))
 	}
 
 	stp.subtreesInBlock++ // Track number of subtrees in current block
@@ -2572,10 +2569,8 @@ func (stp *SubtreeProcessor) bulkBuildSubtrees(ctx context.Context, nodes []subt
 
 			// Update SubtreeIndex for diskTxMap bookkeeping
 			if stp.diskTxMap != nil {
-				idx := int16(len(stp.chainedSubtrees)) // chainedSubtrees just grew by 1
-				for _, node := range currentSt.Nodes {
-					_ = stp.diskTxMap.UpdateSubtreeIndex(node.Hash, idx)
-				}
+				// chainedSubtrees just grew by 1
+				_ = stp.diskTxMap.UpdateSubtreeIndexBatch(currentSt.Nodes, int16(len(stp.chainedSubtrees)))
 			}
 
 			newSt, err := stp.newSubtree(subtreeSize)
@@ -2637,10 +2632,8 @@ func (stp *SubtreeProcessor) bulkBuildSubtrees(ctx context.Context, nodes []subt
 		baseIdx := len(stp.chainedSubtrees)
 		if stp.diskTxMap != nil {
 			for i, st := range fullSubtrees {
-				idx := int16(baseIdx + i + 1) // +1 so 0 means "unassigned"
-				for _, node := range st.Nodes {
-					_ = stp.diskTxMap.UpdateSubtreeIndex(node.Hash, idx)
-				}
+				// +1 so 0 means "unassigned"
+				_ = stp.diskTxMap.UpdateSubtreeIndexBatch(st.Nodes, int16(baseIdx+i+1))
 			}
 		}
 
@@ -5940,10 +5933,7 @@ func (stp *SubtreeProcessor) parallelBuildRemainderSubtrees(ctx context.Context,
 		stp.chainedSubtreesTotalSize.Add(oldSubtree.SizeInBytes)
 
 		if stp.diskTxMap != nil {
-			idx := int16(chainedIdx + 1)
-			for _, node := range oldSubtree.Nodes {
-				_ = stp.diskTxMap.UpdateSubtreeIndex(node.Hash, idx)
-			}
+			_ = stp.diskTxMap.UpdateSubtreeIndexBatch(oldSubtree.Nodes, int16(chainedIdx+1))
 		}
 
 		stp.subtreesInBlock++
