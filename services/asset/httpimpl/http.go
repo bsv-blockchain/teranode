@@ -134,8 +134,21 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	// fail loudly rather than silently falling back to "trust all private
 	// ranges" — operator typos must not weaken the trust boundary.
 	if tSettings.Asset.TrustedProxyCIDRs != "" {
-		var trustOpts []echo.TrustOption
-		var parseErrors []string
+		// echo.TrustIPRange is additive: link-local and private networks stay
+		// trusted unless explicitly disabled, which would leave an explicit
+		// allowlist trusting every RFC1918 source. Loopback stays trusted: a
+		// loopback peer is same-host by definition and cannot be a remote
+		// attacker forging X-Forwarded-For, and dropping it would collapse
+		// RealIP to 127.0.0.1 for every request in a sidecar deployment.
+		trustOpts := []echo.TrustOption{
+			echo.TrustLinkLocal(false),
+			echo.TrustPrivateNet(false),
+		}
+
+		var (
+			parseErrors []string
+			validCIDRs  int
+		)
 		for _, cidrStr := range strings.Split(tSettings.Asset.TrustedProxyCIDRs, "|") {
 			cidrStr = strings.TrimSpace(cidrStr)
 			if cidrStr == "" {
@@ -147,8 +160,9 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 				continue
 			}
 			trustOpts = append(trustOpts, echo.TrustIPRange(ipNet))
+			validCIDRs++
 		}
-		if len(trustOpts) == 0 {
+		if validCIDRs == 0 {
 			return nil, errors.NewConfigurationError(
 				"[Asset] asset_trustedProxyCIDRs is set but no valid CIDRs were parsed: %s",
 				strings.Join(parseErrors, ", "),
@@ -180,19 +194,20 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		e.Use(banlist.CreateEchoMiddleware(banList))
 	}
 
-	// Default CORS config for non-dashboard endpoints
-	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		// Use AllowOriginFunc instead of AllowOrigins to dynamically approve origins
-		AllowOriginFunc: func(origin string) (bool, error) {
-			// Allow any origin to access the dashboard
-			return true, nil
-		},
-		AllowMethods:     []string{echo.GET, echo.HEAD, echo.PUT, echo.PATCH, echo.POST, echo.DELETE, echo.OPTIONS},
-		AllowHeaders:     []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization, echo.HeaderXRequestedWith},
-		ExposeHeaders:    []string{echo.HeaderContentLength, echo.HeaderContentType},
-		AllowCredentials: true,
-		MaxAge:           86400,
-	}))
+	// One CORS middleware for the whole listener. Echo's CORS middleware
+	// answers a preflight with 204 and never calls next, so a second
+	// registration would be unreachable for OPTIONS; the single config
+	// therefore carries the union of the headers, including the dashboard's
+	// X-CSRF-Token.
+	corsAllowedOrigins, err := parseCORSAllowedOrigins(tSettings.Asset.CORSAllowedOrigins)
+	if err != nil {
+		return nil, err
+	}
+	if len(corsAllowedOrigins) == 0 {
+		logger.Warnf("[Asset] asset_corsAllowedOrigins is empty: every browser origin is reflected and credentialed cross-origin responses are refused; list the operator origins that need cookie or Authorization access")
+	}
+
+	e.Use(middleware.CORSWithConfig(assetCORSConfig(corsAllowedOrigins)))
 
 	e.Use(middleware.GzipWithConfig(middleware.GzipConfig{
 		Skipper: shouldSkipGzipForLargeBinaryAssetResponse,
@@ -222,9 +237,6 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		e.Use(peerAuth.Middleware())
 	}
 
-	// Always-on access logging with Prometheus metrics.
-	e.Use(accessLogMiddleware(logger))
-
 	// Global tiered rate limiting. Unverified clients are IP-keyed (IPv6 to
 	// /64) in a bounded LRU; authenticated peers are peer-ID-keyed.
 	// Rate limiters are created here; cleanup goroutines are started in Start() with a context.
@@ -239,6 +251,12 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		e.Use(globalRL.Middleware())
 		rateLimiters = append(rateLimiters, globalRL)
 	}
+
+	// Always-on access logging with Prometheus metrics. Registered *after* the
+	// global limiter so a rejected request is counted once, by
+	// http_rate_limited_total, instead of also minting request-histogram
+	// children that are never evicted.
+	e.Use(accessLogMiddleware(logger))
 
 	// Heavy-endpoint rate limiter (applied per-route below).
 	var heavyRateLimiter echo.MiddlewareFunc
@@ -426,12 +444,24 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	// Create auth handler for protecting admin endpoints (used regardless of dashboard state)
 	authHandler := dashboard.NewAuthHandler(h.logger, h.settings)
 
+	// POST credential enforcement for the API group. This used to be an
+	// apiGroup.Use inside the dashboard branch, which Echo snapshots at route
+	// registration time, so it never applied to any of the POST routes above.
+	// Registering on the root instance applies it regardless of registration
+	// order, and gating on asset_enforcePostAuth decouples it from
+	// dashboard_enabled: turning the dashboard on must not silently start
+	// rejecting protocol traffic.
+	if tSettings.Asset.EnforcePostAuth {
+		if apiPrefix == "" {
+			return nil, errors.NewConfigurationError("[Asset] asset_enforcePostAuth requires a non-empty asset_apiPrefix to scope the check to")
+		}
+
+		e.Use(postAuthMiddleware(apiPrefix, authHandler.PostAuthMiddleware))
+	}
+
 	if h.settings.Dashboard.Enabled {
 		// Initialize dashboard with settings
 		dashboard.InitDashboard(h.settings)
-
-		// Apply authentication middleware for all POST endpoints
-		apiGroup.Use(authHandler.PostAuthMiddleware)
 
 		// Register dashboard-compatible API routes that need auth protection
 		// The dashboard's SvelteKit +server.ts endpoints don't work in production (adapter-static)
@@ -443,21 +473,6 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 
 		apiCatchupGroup := e.Group("/api/catchup")
 		apiCatchupGroup.GET("/status", h.GetCatchupStatus)
-
-		dashboardConfig := middleware.CORSConfig{
-			// Use AllowOriginFunc instead of AllowOrigins to dynamically approve origins
-			AllowOriginFunc: func(origin string) (bool, error) {
-				// Allow any origin to access the dashboard
-				return true, nil
-			},
-			AllowMethods:     []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodPost, http.MethodDelete, http.MethodOptions},
-			AllowHeaders:     []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization, echo.HeaderXRequestedWith, "X-CSRF-Token"},
-			ExposeHeaders:    []string{echo.HeaderContentLength, echo.HeaderContentType},
-			AllowCredentials: true,
-			MaxAge:           86400,
-		}
-		// Apply CORS middleware to the entire Echo instance
-		e.Use(middleware.CORSWithConfig(dashboardConfig))
 
 		// Register handlers for all HTTP methods to support API endpoints
 		e.GET("*", dashboard.AppHandler)
@@ -580,6 +595,20 @@ func (h *HTTP) Init(_ context.Context) error {
 	return nil
 }
 
+// warnOnInsecureAdminAuth logs the transport risks around the authenticated admin
+// routes. Neither default is flipped here: TLS-by-default and the Secure cookie
+// attribute would both break existing plaintext deployments on upgrade, so they stay
+// opt-in and this only names the exposure and the setting that closes it.
+func (h *HTTP) warnOnInsecureAdminAuth(mode string) {
+	if mode == "HTTP" {
+		h.logger.Warnf("[Asset] SECURITY: admin routes are served over plaintext HTTP, so Basic credentials and the auth cookie cross the network in cleartext - terminate TLS in front of the listener, or set securityLevelHTTP to a non-zero value")
+	}
+
+	if h.settings.Dashboard.Enabled && !h.settings.Asset.SecureCookies {
+		h.logger.Warnf("[Asset] SECURITY: the dashboard auth cookie is set without the Secure attribute - set asset_secureCookies=true once the dashboard is reached over HTTPS")
+	}
+}
+
 func (h *HTTP) Start(ctx context.Context, addr string) error {
 	// Start background goroutines (all stop when ctx is cancelled).
 	if h.peerAuth != nil {
@@ -602,6 +631,8 @@ func (h *HTTP) Start(ctx context.Context, addr string) error {
 	if level := h.settings.SecurityLevelHTTP; level == 0 {
 		mode = "HTTP"
 	}
+
+	h.warnOnInsecureAdminAuth(mode)
 
 	// Get listener using util.GetListener
 	listener, address, _, err := util.GetListener(h.settings.Context, "asset", "http://", addr)
@@ -665,20 +696,201 @@ func (h *HTTP) AddHTTPHandler(pattern string, handler http.Handler) error {
 	return nil
 }
 
+// signatureScopeResourceIdentifier is the value of the X-Signature-Scope
+// header. It states exactly what X-Signature covers so no client mistakes it
+// for response-body integrity.
+const signatureScopeResourceIdentifier = "resource-identifier"
+
+// Sign signs the supplied resource identifier (a transaction, subtree, block
+// or proof hash) with the node's Ed25519 key and sets X-Signature.
+//
+// Scope: the signature covers the identifier bytes and nothing else. The HTTP
+// status, content type, pagination metadata and serialized body are NOT
+// covered, and the same signature accompanies the JSON, hex and binary
+// representations of one resource. Callers therefore sign before the first
+// body write, because Echo commits headers at that point; authenticating the
+// body would require buffering the whole response or emitting a trailer.
+// X-Signature-Scope states this on the wire.
 func (h *HTTP) Sign(resp *echo.Response, hash []byte) error {
-	// sign the response
+	// sign the resource identifier
 	if h.privKey != nil {
-		// sign the response
 		signature, err := h.privKey.Sign(hash)
 		if err != nil {
 			return err
 		}
 
-		// add the signature to the response
+		// add the signature and its scope to the response
 		resp.Header().Set("X-Signature", hex.EncodeToString(signature))
+		resp.Header().Set("X-Signature-Scope", signatureScopeResourceIdentifier)
 	}
 
 	return nil
+}
+
+// parseCORSAllowedOrigins splits the pipe-separated asset_corsAllowedOrigins
+// list, using the same convention as asset_trustedProxyCIDRs. Each entry is
+// normalised (see normalizeCORSOrigin) and validated; a malformed entry fails
+// loudly at startup rather than being silently accepted or dropped, matching
+// how asset_trustedProxyCIDRs already treats an unparseable CIDR.
+func parseCORSAllowedOrigins(raw string) ([]string, error) {
+	var (
+		origins     []string
+		invalidErrs []string
+	)
+
+	for _, origin := range strings.Split(raw, "|") {
+		if origin = strings.TrimSpace(origin); origin == "" {
+			continue
+		}
+
+		normalized, err := normalizeCORSOrigin(origin)
+		if err != nil {
+			invalidErrs = append(invalidErrs, fmt.Sprintf("%q (%v)", origin, err))
+			continue
+		}
+
+		origins = append(origins, normalized)
+	}
+
+	if len(invalidErrs) > 0 {
+		return nil, errors.NewConfigurationError(
+			"[Asset] asset_corsAllowedOrigins has invalid entries: %s",
+			strings.Join(invalidErrs, ", "),
+		)
+	}
+
+	return origins, nil
+}
+
+// normalizeCORSOrigin lower-cases the scheme and host and trims a trailing
+// slash, so an operator typo like "HTTPS://Ops.Example.com/" still matches
+// the canonical "https://ops.example.com" a browser sends. It rejects the
+// literal "null" origin (never a legitimate operator origin) and any entry
+// carrying a path, query or fragment: an origin is scheme+host[+port] only.
+func normalizeCORSOrigin(origin string) (string, error) {
+	if strings.EqualFold(origin, "null") {
+		return "", errors.NewConfigurationError("the null origin can never be a legitimate operator origin")
+	}
+
+	u, err := url.Parse(origin)
+	if err != nil {
+		return "", err
+	}
+
+	if u.Scheme == "" || u.Host == "" {
+		return "", errors.NewConfigurationError("must be an absolute origin (scheme://host[:port])")
+	}
+
+	if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return "", errors.NewConfigurationError("must not include a path, query or fragment")
+	}
+
+	if u.User != nil {
+		return "", errors.NewConfigurationError("must not include userinfo")
+	}
+
+	// Matching is exact, so a wildcard host could only match itself literally,
+	// which no browser sends: refuse it rather than accept an entry that
+	// silently matches nothing.
+	if strings.Contains(u.Host, "*") {
+		return "", errors.NewConfigurationError("must not contain a wildcard; list each origin exactly")
+	}
+
+	scheme := strings.ToLower(u.Scheme)
+	host := strings.ToLower(u.Hostname())
+	port := u.Port()
+
+	// Browsers omit the scheme's default port from the Origin header, so keep it
+	// out of the canonical form or the entry could never match.
+	if (scheme == "https" && port == "443") || (scheme == "http" && port == "80") {
+		port = ""
+	}
+
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+
+	if port != "" {
+		host += ":" + port
+	}
+
+	return scheme + "://" + host, nil
+}
+
+// assetCORSConfig builds the single CORS policy for the Asset listener.
+//
+// With an explicit allowlist, only those origins are matched and credentialed
+// cross-origin responses are permitted. With an empty allowlist the legacy
+// reflect-any behaviour is kept, but without credentials: reflecting an
+// arbitrary origin *and* allowing credentials is what let a hostile same-site
+// origin ride an operator's ambient cookie into the admin routes on this
+// listener.
+func assetCORSConfig(allowedOrigins []string) middleware.CORSConfig {
+	cfg := middleware.CORSConfig{
+		AllowMethods: []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodPost, http.MethodDelete, http.MethodOptions},
+		// X-CSRF-Token is the dashboard's header. It is listed here rather
+		// than in a second, dashboard-only middleware because Echo's CORS
+		// middleware terminates every preflight itself, so only the first
+		// registered config is ever consulted for OPTIONS.
+		AllowHeaders: []string{
+			echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept,
+			echo.HeaderAuthorization, echo.HeaderXRequestedWith, "X-CSRF-Token",
+		},
+		ExposeHeaders: []string{echo.HeaderContentLength, echo.HeaderContentType},
+		MaxAge:        86400,
+	}
+
+	if len(allowedOrigins) == 0 {
+		cfg.AllowOriginFunc = func(origin string) (bool, error) { return true, nil }
+		return cfg
+	}
+
+	// Echo's AllowOrigins matching honours "*"/"?" globs, subdomain matching
+	// and the literal "null", and grants Access-Control-Allow-Credentials to
+	// anything it matches. An operator-supplied allowlist entry must only
+	// ever match itself, so this is an exact set lookup instead.
+	allowed := make(map[string]struct{}, len(allowedOrigins))
+	for _, origin := range allowedOrigins {
+		allowed[origin] = struct{}{}
+	}
+
+	cfg.AllowOriginFunc = func(origin string) (bool, error) {
+		_, ok := allowed[origin]
+		return ok, nil
+	}
+	cfg.AllowCredentials = true
+
+	return cfg
+}
+
+// catchupTxsRoute is the peer-catchup POST that subtree validation uses to
+// fetch a subtree's transactions. It is machine-to-machine protocol traffic:
+// the catchup client never attaches dashboard credentials, so requiring them
+// here would 401 every peer catching up from this node. It is governed by peer
+// auth and the heavy rate limiter instead, and is exempt unconditionally.
+const catchupTxsRoute = "/subtree/:hash/txs"
+
+// postAuthMiddleware applies the dashboard POST credential check to POST routes
+// under the API prefix, minus the peer-catchup route.
+//
+// It is installed on the root Echo instance rather than on the API group:
+// echo.Group.Use copies the group's middleware into each route at registration
+// time, so a Use call placed after the POST routes protects nothing.
+func postAuthMiddleware(apiPrefix string, check echo.MiddlewareFunc) echo.MiddlewareFunc {
+	catchupPath := apiPrefix + catchupTxsRoute
+
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		guarded := check(next)
+
+		return func(c echo.Context) error {
+			path := c.Path()
+			if c.Request().Method != http.MethodPost || !strings.HasPrefix(path, apiPrefix) || path == catchupPath {
+				return next(c)
+			}
+
+			return guarded(c)
+		}
+	}
 }
 
 // customHTTPErrorHandler creates a custom error handler that logs all errors before returning them to the client
@@ -721,6 +933,33 @@ func customHTTPErrorHandler(logger ulogger.Logger) echo.HTTPErrorHandler {
 	}
 }
 
+// otherHTTPMethod is the bucket for any method token outside knownHTTPMethods.
+const otherHTTPMethod = "other"
+
+// knownHTTPMethods bounds the Prometheus "method" label. net/http accepts any
+// RFC 7230 token as a request method and histogram children are never evicted,
+// so a raw method label is permanent, attacker-driven memory growth.
+var knownHTTPMethods = map[string]struct{}{
+	http.MethodGet:     {},
+	http.MethodHead:    {},
+	http.MethodPost:    {},
+	http.MethodPut:     {},
+	http.MethodPatch:   {},
+	http.MethodDelete:  {},
+	http.MethodConnect: {},
+	http.MethodOptions: {},
+	http.MethodTrace:   {},
+}
+
+// normalizeHTTPMethod maps a request method onto the bounded label domain.
+func normalizeHTTPMethod(method string) string {
+	if _, ok := knownHTTPMethods[method]; ok {
+		return method
+	}
+
+	return otherHTTPMethod
+}
+
 // accessLogMiddleware logs every HTTP request with real client IP, duration, status,
 // response size, and peer tier. It also records Prometheus histogram metrics.
 func accessLogMiddleware(logger ulogger.Logger) echo.MiddlewareFunc {
@@ -742,8 +981,8 @@ func accessLogMiddleware(logger ulogger.Logger) echo.MiddlewareFunc {
 			duration := time.Since(start)
 			status := c.Response().Status
 			size := c.Response().Size
-			method := c.Request().Method
-			path := c.Path() // route pattern, not full URI — keeps Prometheus cardinality bounded
+			method := normalizeHTTPMethod(c.Request().Method) // bounded label domain, see normalizeHTTPMethod
+			path := c.Path()                                  // route pattern, not full URI — keeps Prometheus cardinality bounded
 			ip := c.RealIP()
 			statusStr := strconv.Itoa(status)
 
