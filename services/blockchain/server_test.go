@@ -540,6 +540,7 @@ func Test_getBlockHeadersToCommonAncestor(t *testing.T) {
 				tt.targetHash,
 				tt.locatorHashes,
 				tt.maxHeaders,
+				0,
 			)
 
 			if tt.expectError {

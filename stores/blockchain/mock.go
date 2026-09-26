@@ -451,7 +451,7 @@ func (m *MockStore) GetHashOfAncestorBlock(ctx context.Context, blockHash *chain
 	return currentHash, nil
 }
 
-func (m *MockStore) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+func (m *MockStore) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, bool, error) {
 	panic(implementMe)
 }
 

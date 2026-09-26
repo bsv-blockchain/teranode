@@ -688,8 +688,15 @@ func (x *DataPoint) GetTxCount() uint64 {
 
 // swagger:model BlockDataPoints
 type BlockDataPoints struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	DataPoints    []*DataPoint           `protobuf:"bytes,1,rep,name=data_points,json=dataPoints,proto3" json:"data_points,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	DataPoints []*DataPoint           `protobuf:"bytes,1,rep,name=data_points,json=dataPoints,proto3" json:"data_points,omitempty"`
+	// bucket_seconds is the bucket size, in seconds, the store already grouped
+	// data_points into. 0 means the series is per-block resolution (or too
+	// short to bucket) and has not been aggregated. A consumer that would
+	// otherwise re-derive a bucket size from data_points' own timestamp range
+	// must skip that step whenever this is non-zero, since re-bucketing
+	// already-bucketed endpoints is not always idempotent.
+	BucketSeconds int64 `protobuf:"varint,2,opt,name=bucket_seconds,json=bucketSeconds,proto3" json:"bucket_seconds,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -729,6 +736,13 @@ func (x *BlockDataPoints) GetDataPoints() []*DataPoint {
 		return x.DataPoints
 	}
 	return nil
+}
+
+func (x *BlockDataPoints) GetBucketSeconds() int64 {
+	if x != nil {
+		return x.BucketSeconds
+	}
+	return 0
 }
 
 // swagger:model ChainTip
@@ -865,10 +879,11 @@ const file_model_model_proto_rawDesc = "" +
 	"chain_work\x18\b \x01(\fR\tchainWork\"D\n" +
 	"\tDataPoint\x12\x1c\n" +
 	"\ttimestamp\x18\x01 \x01(\rR\ttimestamp\x12\x19\n" +
-	"\btx_count\x18\x02 \x01(\x04R\atxCount\"D\n" +
+	"\btx_count\x18\x02 \x01(\x04R\atxCount\"k\n" +
 	"\x0fBlockDataPoints\x121\n" +
 	"\vdata_points\x18\x01 \x03(\v2\x10.model.DataPointR\n" +
-	"dataPoints\"l\n" +
+	"dataPoints\x12%\n" +
+	"\x0ebucket_seconds\x18\x02 \x01(\x03R\rbucketSeconds\"l\n" +
 	"\bChainTip\x12\x16\n" +
 	"\x06height\x18\x01 \x01(\rR\x06height\x12\x12\n" +
 	"\x04hash\x18\x02 \x01(\tR\x04hash\x12\x1c\n" +

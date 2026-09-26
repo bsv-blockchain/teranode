@@ -56,16 +56,18 @@ import (
 //   - ChainWork: Cumulative proof-of-work up to this block (critical for consensus)
 //   - SizeInBytes: Total size of the block
 //   - Miner: Identification of the miner who produced the block (when available)
+//   - bool: whether bestBlockHash is itself on the main chain (the fast path was taken);
+//     false means bestBlockHash is a stale/fork tip and the recursive CTE fallback was used
 //   - error: Any error encountered during retrieval, specifically:
 //   - BlockNotFoundError if the block does not exist in the database
 //   - StorageError for database connection or query execution errors
 //   - ProcessingError for data conversion or parsing errors
-func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, bool, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetLatestBlockHeaderFromBlockLocator")
 	defer deferFn()
 
 	if len(blockLocator) == 0 {
-		return nil, nil, errors.NewProcessingError("blockLocator cannot be empty")
+		return nil, nil, false, errors.NewProcessingError("blockLocator cannot be empty")
 	}
 
 	// Try to get from response cache using derived cache key
@@ -79,10 +81,12 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 
 	cached := cacheOp.Get()
 	if cached != nil {
-		if result, ok := cached.Value().([2]interface{}); ok {
+		if result, ok := cached.Value().([3]interface{}); ok {
 			if header, ok := result[0].(*model.BlockHeader); ok {
 				if meta, ok := result[1].(*model.BlockHeaderMeta); ok {
-					return header, meta, nil
+					if onMain, ok := result[2].(bool); ok {
+						return header, meta, onMain, nil
+					}
 				}
 			}
 		}
@@ -251,33 +255,33 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 		&blockHeaderMeta.MedianTimePast,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil, errors.NewBlockNotFoundError("error in GetBlockHeader", errors.ErrNotFound)
+			return nil, nil, false, errors.NewBlockNotFoundError("error in GetBlockHeader", errors.ErrNotFound)
 		}
 
-		return nil, nil, errors.NewStorageError("error in GetBlockHeader", err)
+		return nil, nil, false, errors.NewStorageError("error in GetBlockHeader", err)
 	}
 
 	bits, err := model.NewNBitFromSlice(nBits)
 	if err != nil {
-		return nil, nil, errors.NewStorageError("error in GetLatestBlockHeaderFromBlockLocator: malformed n_bits (length %d, expected 4) for block height %d", len(nBits), blockHeaderMeta.Height, err)
+		return nil, nil, false, errors.NewStorageError("error in GetLatestBlockHeaderFromBlockLocator: malformed n_bits (length %d, expected 4) for block height %d", len(nBits), blockHeaderMeta.Height, err)
 	}
 
 	blockHeader.Bits = *bits
 
 	blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 	if err != nil {
-		return nil, nil, errors.NewProcessingError("failed to convert hashPrevBlock", err)
+		return nil, nil, false, errors.NewProcessingError("failed to convert hashPrevBlock", err)
 	}
 
 	blockHeader.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 	if err != nil {
-		return nil, nil, errors.NewProcessingError("failed to convert hashMerkleRoot", err)
+		return nil, nil, false, errors.NewProcessingError("failed to convert hashMerkleRoot", err)
 	}
 
 	if len(coinbaseBytes) > 0 {
 		coinbaseTx, err := bt.NewTxFromBytes(coinbaseBytes)
 		if err != nil {
-			return nil, nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
+			return nil, nil, false, errors.NewProcessingError("failed to convert coinbaseTx", err)
 		}
 
 		miner, err := util.ExtractCoinbaseMinerRaw(coinbaseTx, s.rawMinerTag)
@@ -289,7 +293,7 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 	}
 
 	// Cache the result in response cache
-	cacheOp.Set([2]interface{}{blockHeader, blockHeaderMeta}, s.cacheTTL)
+	cacheOp.Set([3]interface{}{blockHeader, blockHeaderMeta, bestOnMain}, s.cacheTTL)
 
-	return blockHeader, blockHeaderMeta, nil
+	return blockHeader, blockHeaderMeta, bestOnMain, nil
 }
