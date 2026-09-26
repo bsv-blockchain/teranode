@@ -24,6 +24,36 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// legacyBlockReaderPeerPoolCtxKey is the context key WithLegacyBlockReaderPeerPool
+// and LegacyBlockReaderUsesPeerPool use to pass the HTTP boundary's pool decision
+// into GetLegacyBlockReader without changing its signature.
+type legacyBlockReaderPeerPoolCtxKey struct{}
+
+// WithLegacyBlockReaderPeerPool marks ctx so a subsequent GetLegacyBlockReader call
+// draws from semGetLegacyBlockReaderPeer (the internal legacy-peer-server budget)
+// instead of semGetLegacyBlockReader (the anonymous-HTTP budget).
+//
+// Callers must only pass usePeerPool=true once they have verified the request
+// truly originates from this node's own legacy peer server. The wire-format query
+// parameter alone (?wire=1) is not sufficient: any anonymous caller can set it.
+// httpimpl.GetLegacyBlock only sets this after checking asset_legacyPeerPoolToken:
+// a shared secret the request must present in the X-Teranode-Internal-Token
+// header, compared with a constant-time comparison. An empty (default) token
+// makes the pool unreachable regardless of what any caller presents.
+func WithLegacyBlockReaderPeerPool(ctx context.Context, usePeerPool bool) context.Context {
+	return context.WithValue(ctx, legacyBlockReaderPeerPoolCtxKey{}, usePeerPool)
+}
+
+// LegacyBlockReaderUsesPeerPool reports whether ctx was marked by
+// WithLegacyBlockReaderPeerPool. An unmarked ctx (the common case: anonymous HTTP
+// clients, and any test that does not opt in) defaults to false, i.e. the
+// anonymous-HTTP pool. Exported so callers (and tests, including outside this
+// package) can observe the same decision GetLegacyBlockReader acts on.
+func LegacyBlockReaderUsesPeerPool(ctx context.Context) bool {
+	usePeerPool, _ := ctx.Value(legacyBlockReaderPeerPoolCtxKey{}).(bool)
+	return usePeerPool
+}
+
 // chunkResult holds the result of fetching a chunk of transactions from the UTXO store.
 // Used for ordered fan-in: chunks are fetched in parallel but written in order.
 type chunkResult struct {
@@ -45,29 +75,45 @@ type chunkResult struct {
 //   - *io.PipeReader: Reader for streaming block data
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhash.Hash, wireBlock ...bool) (*io.PipeReader, error) {
-	if err := acquireSemaphorePermit(ctx, repo.semGetLegacyBlockReader, "GetLegacyBlockReader"); err != nil {
+	returnWireBlock := len(wireBlock) > 0 && wireBlock[0]
+
+	// Which pool this call draws from is decided at the HTTP boundary (see
+	// httpimpl.GetLegacyBlock), not here: ?wire=1 alone is not a trust signal, since
+	// any anonymous caller can set it. The boundary verifies the request's direct TCP
+	// peer is loopback before marking ctx, so a request that merely asks for wire
+	// format without actually originating from this node's own legacy peer server
+	// still draws from the anonymous pool.
+	sem := repo.semGetLegacyBlockReader
+	semName := "GetLegacyBlockReader"
+
+	if LegacyBlockReaderUsesPeerPool(ctx) {
+		sem = repo.semGetLegacyBlockReaderPeer
+		semName = "GetLegacyBlockReaderPeer"
+	}
+
+	if err := acquireSemaphorePermit(ctx, sem, semName); err != nil {
 		return nil, err
 	}
 
-	returnWireBlock := len(wireBlock) > 0 && wireBlock[0]
-
 	block, err := repo.GetBlockByHash(ctx, hash)
 	if err != nil {
-		releaseSemaphorePermit(repo.semGetLegacyBlockReader)
+		releaseSemaphorePermit(sem)
 		return nil, err
 	}
 
 	r, w := io.Pipe()
 
-	// Release semaphore after initial setup is complete but before streaming begins.
-	// The semaphore protects the database query (GetBlockByHash) and pipe creation,
-	// but streaming is I/O-bound and doesn't need CPU-based concurrency limiting.
-	// File operations have their own semaphore protection (readSemaphore with 768 slots).
-	// This allows unlimited concurrent streams while protecting database/initialization.
-	releaseSemaphorePermit(repo.semGetLegacyBlockReader)
-
 	g, gCtx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
+		// Hold the permit for the whole producer, not just for setup. The expensive
+		// part of a legacy block read happens here, after this function has returned:
+		// subtree reads, UTXO reconstruction, serialization and pipe writes, all paced
+		// by the client reading the other end. A blocked producer keeps an arena and,
+		// on the stored-subtree branch, one of the file store's global read permits.
+		// Releasing at setup left the configured concurrency bounding nothing. This
+		// defer is registered first so it runs last, after the pipe has been closed.
+		defer releaseSemaphorePermit(sem)
+
 		// This goroutine outlives the request: the caller gets the pipe reader back
 		// and reads from it after GetLegacyBlockReader has returned, so nothing in
 		// the HTTP layer can recover a panic in here. Fail the pipe on panic too,
@@ -632,6 +678,20 @@ func (repo *Repository) getTxs(ctx context.Context, txHashes []chainhash.Hash, t
 			default:
 				for _, data := range missingTxHashesCompacted {
 					if data.Data == nil || data.Err != nil {
+						missed.Add(1)
+						continue
+					}
+
+					// A record reconstructed from a UTXO-set snapshot is non-nil and
+					// carries no per-item error, so the miss counter above never sees
+					// it — but it has no inputs and may have nil output holes, so it
+					// either panics in WriteTo or serializes into a short transaction
+					// that does not hash to the requested txid. Either way it must not
+					// reach the writer: the subtree-data path finalises whatever it
+					// streams, and a bad blob is sticky until DAH pruning. Same gate as
+					// the single-transaction boundary (isRequestedTransaction) and as
+					// blockpersister.CreateSubtreeDataFileStreaming.
+					if !isRequestedTransaction(data.Data, &data.Hash) {
 						missed.Add(1)
 						continue
 					}

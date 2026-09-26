@@ -33,8 +33,10 @@ func (m *Mock) GetTxMeta(_ context.Context, hash *chainhash.Hash) (*meta.Data, e
 	return args.Get(0).(*meta.Data), args.Error(1)
 }
 
-func (m *Mock) GetLegacyBlockReader(_ context.Context, hash *chainhash.Hash, _ ...bool) (*io.PipeReader, error) {
-	args := m.Called(hash)
+func (m *Mock) GetLegacyBlockReader(ctx context.Context, hash *chainhash.Hash, _ ...bool) (*io.PipeReader, error) {
+	// ctx is passed through (not discarded) so tests can observe whether the
+	// caller marked it with repository.WithLegacyBlockReaderPeerPool.
+	args := m.Called(ctx, hash)
 
 	if args.Error(1) != nil {
 		return nil, args.Error(1)

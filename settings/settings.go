@@ -226,20 +226,44 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PeerMinerReputationThreshold: getFloat64("asset_peerMinerReputationThreshold", 50.0, alternativeContext...),
 
 			// Concurrency limits for repository methods (0 = unlimited, -1 = NumCPU(), anything else is the specific limit)
-			ConcurrencyGetTransaction:         getInt("asset_concurrency_get_transaction", 0, alternativeContext...),
-			ConcurrencyGetTransactionMeta:     getInt("asset_concurrency_get_transaction_meta", 0, alternativeContext...),
-			ConcurrencyGetSubtreeData:         getInt("asset_concurrency_get_subtree_data", 2, alternativeContext...),
-			ConcurrencyGetSubtreeDataReader:   getInt("asset_concurrency_get_subtree_data_reader", 4, alternativeContext...),
-			ConcurrencySubtreeDataCreate:      getInt("asset_concurrency_subtree_data_create", 4, alternativeContext...),
-			ConcurrencyGetSubtreeTransactions: getInt("asset_concurrency_get_subtree_transactions", 2, alternativeContext...),
-			ConcurrencyGetSubtreeExists:       getInt("asset_concurrency_get_subtree_exists", 0, alternativeContext...),
-			ConcurrencyGetSubtreeHead:         getInt("asset_concurrency_get_subtree_head", 0, alternativeContext...),
-			ConcurrencyGetUtxo:                getInt("asset_concurrency_get_utxo", 0, alternativeContext...),
-			ConcurrencyGetLegacyBlockReader:   getInt("asset_concurrency_get_legacy_block_reader", -1, alternativeContext...), // -1 = NumCPU()
+			ConcurrencyGetTransaction:           getInt("asset_concurrency_get_transaction", 0, alternativeContext...),
+			ConcurrencyGetTransactionMeta:       getInt("asset_concurrency_get_transaction_meta", 0, alternativeContext...),
+			ConcurrencyGetSubtreeData:           getInt("asset_concurrency_get_subtree_data", 2, alternativeContext...),
+			ConcurrencyGetSubtreeDataReader:     getInt("asset_concurrency_get_subtree_data_reader", 4, alternativeContext...),
+			ConcurrencySubtreeDataCreate:        getInt("asset_concurrency_subtree_data_create", 4, alternativeContext...),
+			ConcurrencyGetSubtreeTransactions:   getInt("asset_concurrency_get_subtree_transactions", 2, alternativeContext...),
+			ConcurrencyGetSubtreeExists:         getInt("asset_concurrency_get_subtree_exists", 0, alternativeContext...),
+			ConcurrencyGetSubtreeHead:           getInt("asset_concurrency_get_subtree_head", 0, alternativeContext...),
+			ConcurrencyGetUtxo:                  getInt("asset_concurrency_get_utxo", 0, alternativeContext...),
+			ConcurrencyGetLegacyBlockReader:     getInt("asset_concurrency_get_legacy_block_reader", -1, alternativeContext...),      // -1 = NumCPU()
+			ConcurrencyGetLegacyBlockReaderPeer: getInt("asset_concurrency_get_legacy_block_reader_peer", -1, alternativeContext...), // -1 = NumCPU()
 
 			// Streaming configuration
+			LegacyPeerPoolToken:             getString("asset_legacyPeerPoolToken", "", alternativeContext...),
 			SubtreeDataStreamingChunkSize:   getInt("asset_subtreeDataStreamingChunkSize", 10000, alternativeContext...),
 			SubtreeDataStreamingConcurrency: getInt("asset_subtreeDataStreamingConcurrency", 2, alternativeContext...),
+
+			// Batch and response admission budgets (warn-only prep; enforcement lands in a later release)
+			MaxBatchRecords:          getInt("asset_maxBatchRecords", 0, alternativeContext...),
+			MaxBatchResponseBytes:    getInt64("asset_maxBatchResponseBytes", 0, alternativeContext...),
+			MaxUTXOsPerTx:            getInt("asset_maxUTXOsPerTx", 0, alternativeContext...),
+			MaxBlockHeaders:          getInt("asset_maxBlockHeaders", 0, alternativeContext...),
+			MaxLastNBlocks:           getInt("asset_maxLastNBlocks", 0, alternativeContext...),
+			MaxNBlocks:               getInt("asset_maxNBlocks", 0, alternativeContext...),
+			RequireAuthCredentials:   getBool("asset_requireAuthCredentials", false, alternativeContext...),
+			SecureCookies:            getBool("asset_secureCookies", false, alternativeContext...),
+			CORSAllowedOrigins:       getString("asset_corsAllowedOrigins", "", alternativeContext...),
+			EnforcePostAuth:          getBool("asset_enforcePostAuth", false, alternativeContext...),
+			MaxWebsocketConnections:  getInt("asset_maxWebsocketConnections", 0, alternativeContext...),
+			WebsocketReadLimit:       getInt64("asset_websocketReadLimit", 0, alternativeContext...),
+			SubtreeStreamConcurrency: getInt("asset_subtreeStreamConcurrency", 0, alternativeContext...),
+			PublicErrorDetail:        getBool("asset_publicErrorDetail", true, alternativeContext...),
+			PublicHealthDetail:       getBool("asset_publicHealthDetail", true, alternativeContext...),
+			HealthStrictStatus:       getBool("asset_healthStrictStatus", false, alternativeContext...),
+			PublicPeersDetail:        getBool("asset_publicPeersDetail", true, alternativeContext...),
+			TxMetaRawEnabled:         getBool("asset_txMetaRawEnabled", true, alternativeContext...),
+			MaxBlockGraphPoints:      getInt("asset_maxBlockGraphPoints", 0, alternativeContext...),
+			MaxLocatorWalkDepth:      getInt("asset_maxLocatorWalkDepth", 0, alternativeContext...),
 		},
 		Block: BlockSettings{
 			MinedCacheMaxMB:                       getInt("blockMinedCacheMaxMB", 256, alternativeContext...),
