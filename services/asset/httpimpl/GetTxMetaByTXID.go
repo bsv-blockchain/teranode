@@ -1,9 +1,11 @@
 package httpimpl
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	aero "github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -11,6 +13,33 @@ import (
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/labstack/echo/v4"
 )
+
+// rawReadPolicyTimeout is the fallback TotalTimeout applied when the configured
+// aerospike_readPolicy leaves TotalTimeout at zero and the request carries no context
+// deadline. Asset HTTP requests don't get one by default: net/http does not derive a
+// context deadline from Server.ReadTimeout/WriteTimeout, and there is no Echo timeout
+// middleware on this chain. Without a bound, the shared Aerospike semaphore's
+// acquirePermit falls onto its uncancelable blocking-send path and a public caller
+// waits forever for a permit. 5s matches the other Asset-handler-level RPC timeouts
+// (get_catchup_status.go, get_peers.go, get_service_heights.go).
+const rawReadPolicyTimeout = 5 * time.Second
+
+// applyReadPolicyTimeout bounds policy.TotalTimeout by the request's context deadline
+// when it has one, or by rawReadPolicyTimeout as a floor when it doesn't and the
+// configured policy would otherwise leave TotalTimeout at zero (or negative).
+func applyReadPolicyTimeout(ctx context.Context, policy *aero.BasePolicy) {
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining > 0 {
+			policy.TotalTimeout = remaining
+		}
+
+		return
+	}
+
+	if policy.TotalTimeout <= 0 {
+		policy.TotalTimeout = rawReadPolicyTimeout
+	}
+}
 
 // swagger:model aerospikeRecord
 type aerospikeRecord struct {
@@ -21,6 +50,31 @@ type aerospikeRecord struct {
 	Node       string                 `json:"node"`
 	Bins       map[string]interface{} `json:"bins"`
 	Generation uint32                 `json:"generation"`
+}
+
+// newAerospikeRecord builds the JSON view of a store record.
+//
+// Node is nil whenever the client did not attribute the record to a cluster
+// node (a cached or client-side-constructed record), and dereferencing it here
+// panicked on an unauthenticated route.
+func newAerospikeRecord(response *aero.Record) aerospikeRecord {
+	record := aerospikeRecord{
+		Bins:       response.Bins,
+		Generation: response.Generation,
+	}
+
+	if response.Key != nil {
+		record.Key = response.Key.String()
+		record.Digest = hex.EncodeToString(response.Key.Digest())
+		record.Namespace = response.Key.Namespace()
+		record.SetName = response.Key.SetName()
+	}
+
+	if response.Node != nil {
+		record.Node = response.Node.GetName()
+	}
+
+	return record
 }
 
 // GetTxMetaByTxID creates an HTTP handler for retrieving transaction metadata directly
@@ -87,13 +141,13 @@ type aerospikeRecord struct {
 // Example Usage:
 //
 //	# Get metadata in JSON format
-//	GET /tx/meta/<txid>
+//	GET /txmeta_raw/<txid>/json
 //
 //	# Get metadata in hex format
-//	GET /tx/meta/<txid>/hex
+//	GET /txmeta_raw/<txid>/hex
 //
 //	# Get metadata in binary format
-//	GET /tx/meta/<txid>/raw
+//	GET /txmeta_raw/<txid>
 //
 // Notes:
 //   - Requires Aerospike database connection
@@ -101,11 +155,19 @@ type aerospikeRecord struct {
 //   - Direct access to underlying storage system
 func (h *HTTP) GetTxMetaByTxID(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
-		_, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetTxMetaByTxID_http",
+		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetTxMetaByTxID_http",
 			tracing.WithParentStat(AssetStat),
 		)
 
 		defer deferFn()
+
+		// This route serves the raw store record. An operator who does not need
+		// it can take it off the public surface without a redeploy. Answer with
+		// echo's own not-found error so a disabled route can't be told apart
+		// from an unregistered one.
+		if !h.settings.Asset.TxMetaRawEnabled {
+			return echo.ErrNotFound
+		}
 
 		// get
 		storeURL := h.settings.UtxoStore.UtxoStore
@@ -146,7 +208,18 @@ func (h *HTTP) GetTxMetaByTxID(mode ReadMode) func(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 
-		response, err := client.Get(nil, key)
+		// A typed-nil policy leaves TotalTimeout at zero, which sends the shared
+		// Aerospike semaphore acquire down its uncancelable blocking-send path:
+		// a public caller then waits forever for a permit while internal
+		// callers, which do pass a timeout, fail. Use the configured
+		// aerospike_readPolicy so this route follows the same policy as every
+		// other read, then bound it by the request deadline when the caller
+		// supplied one, or by a fallback when it doesn't and the configured
+		// policy would otherwise leave TotalTimeout at zero.
+		policy := util.GetAerospikeReadPolicy(h.settings)
+		applyReadPolicyTimeout(ctx, policy)
+
+		response, err := client.Get(policy, key)
 		if err != nil {
 			h.logger.Errorf("[Asset_http] GetUTXOsByTXID error getting transaction meta data: %s", err.Error())
 
@@ -160,15 +233,7 @@ func (h *HTTP) GetTxMetaByTxID(mode ReadMode) func(c echo.Context) error {
 			if tx, ok := response.Bins["tx"].([]byte); ok {
 				response.Bins["tx"] = hex.EncodeToString(tx)
 			}
-			record := aerospikeRecord{
-				Key:        response.Key.String(),
-				Digest:     hex.EncodeToString(response.Key.Digest()),
-				Namespace:  response.Key.Namespace(),
-				SetName:    response.Key.SetName(),
-				Node:       response.Node.GetName(),
-				Bins:       response.Bins,
-				Generation: response.Generation,
-			}
+			record := newAerospikeRecord(response)
 
 			b, err := json.MarshalIndent(record, "", "  ")
 			if err != nil {

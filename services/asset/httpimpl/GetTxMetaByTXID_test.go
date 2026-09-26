@@ -1,11 +1,13 @@
 package httpimpl
 
 import (
+	"context"
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	aero "github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -59,6 +61,24 @@ func TestGetTxMetaByTxID(t *testing.T) {
 		// Check response status code
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 		assert.Contains(t, echoErr.Message, "no utxostore setting found")
+	})
+
+	t.Run("route disabled returns 404", func(t *testing.T) {
+		httpServer, _, echoContext, _ := GetMockHTTP(t, nil)
+
+		httpServer.settings.Asset.TxMetaRawEnabled = false
+
+		echoContext.SetPath("/tx/meta/:hash")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues("9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995")
+
+		err := httpServer.GetTxMetaByTxID(JSON)(echoContext)
+		echoErr := &echo.HTTPError{}
+		require.True(t, errors.As(err, &echoErr))
+
+		assert.Equal(t, http.StatusNotFound, echoErr.Code)
+		// Indistinguishable from an unregistered route: echo's own not-found error.
+		require.Equal(t, echo.ErrNotFound.Message, echoErr.Message)
 	})
 
 	t.Run("invalid utxostore URL - GetAerospikeClient error", func(t *testing.T) {
@@ -466,5 +486,43 @@ func TestResponseFormatting(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Equal(t, testData, rec.Body.Bytes())
 		assert.Equal(t, echo.MIMEOctetStream, rec.Header().Get("Content-Type"))
+	})
+}
+
+// TestApplyReadPolicyTimeout pins the permit-wait fix for the case the bot thread on
+// GetTxMetaByTXID.go flagged. aero.NewPolicy() itself defaults TotalTimeout to 1s, not 0
+// - but util.GetAerospikeReadPolicy can still resolve to a zero TotalTimeout (e.g.
+// aerospike_useDefaultBasePolicies leaves the package-level read-policy fields at their
+// Go zero value, or an explicit TotalTimeout=0 in aerospike_readPolicy), and Asset HTTP
+// requests carry no context deadline by default. Without a bound in that combination,
+// acquirePermit falls onto its uncancelable blocking-send path.
+func TestApplyReadPolicyTimeout(t *testing.T) {
+	t.Run("no ctx deadline and zero TotalTimeout gets the fallback", func(t *testing.T) {
+		policy := &aero.BasePolicy{}
+
+		applyReadPolicyTimeout(context.Background(), policy)
+
+		require.Greater(t, policy.TotalTimeout, time.Duration(0),
+			"TotalTimeout must be non-zero so acquirePermit cannot block forever")
+	})
+
+	t.Run("no ctx deadline and a configured non-zero TotalTimeout is left alone", func(t *testing.T) {
+		policy := &aero.BasePolicy{TotalTimeout: 42 * time.Second}
+
+		applyReadPolicyTimeout(context.Background(), policy)
+
+		require.Equal(t, 42*time.Second, policy.TotalTimeout)
+	})
+
+	t.Run("ctx deadline bounds TotalTimeout to the remaining time", func(t *testing.T) {
+		policy := &aero.BasePolicy{}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		applyReadPolicyTimeout(ctx, policy)
+
+		require.Greater(t, policy.TotalTimeout, time.Duration(0))
+		require.LessOrEqual(t, policy.TotalTimeout, 3*time.Second)
 	})
 }

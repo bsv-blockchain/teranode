@@ -894,7 +894,9 @@ These endpoints require authentication.
 
 ### Authentication
 
-The service supports response signing. When enabled, responses include an `X-Signature` header containing an Ed25519 signature of the response data.
+The service supports resource-identifier signing. When enabled, responses include an `X-Signature` header containing an Ed25519 signature and an `X-Signature-Scope` header stating what that signature covers.
+
+The only scope currently emitted is `resource-identifier`: the signature covers the requested transaction, subtree, block or proof identifier and nothing else. It does **not** cover the HTTP status, the content type, pagination metadata or the serialized response body, and the same signature accompanies the JSON, hex and binary representations of one resource. Clients must not treat `X-Signature` as response-body integrity; for the content-addressed routes, recompute the object hash instead. Transport integrity is TLS's job.
 
 ### Common Headers
 
@@ -906,7 +908,8 @@ The service supports response signing. When enabled, responses include an `X-Sig
 #### Response Headers
 
 - `Content-Type`: Indicates the format of response data
-- `X-Signature`: Ed25519 signature (when response signing is enabled)
+- `X-Signature`: Ed25519 signature over the requested resource identifier (when response signing is enabled)
+- `X-Signature-Scope`: what `X-Signature` covers; always `resource-identifier`
 
 ### Pagination
 

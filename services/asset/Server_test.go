@@ -6,13 +6,17 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/asset/httpimpl"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -620,4 +624,36 @@ func TestServerStart_FSMContextCancellation(t *testing.T) {
 	require.Error(t, startErr)
 	require.True(t, errors.IsContextError(startErr), "expected context error, got %v", startErr)
 	mockBlockchainClient.AssertExpectations(t)
+}
+
+// TestHealth_HTTPServerCheckProbesAlive pins that the service's own HTTP
+// connectivity check targets the static liveness route. Probing /health would
+// feed the dependency readiness result back into itself once /health starts
+// propagating a 503, marking the service unhealthy because a store is degraded.
+func TestHealth_HTTPServerCheckProbesAlive(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		paths []string
+	)
+
+	probe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer probe.Close()
+
+	server := testSetup(t).server
+	server.httpServer = &httpimpl.HTTP{}
+	server.httpAddr = strings.TrimPrefix(probe.URL, "http://")
+
+	_, _, err := server.Health(context.Background(), false)
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Equal(t, []string{"/alive"}, paths, "the HTTP self-check must probe /alive, not /health")
 }
