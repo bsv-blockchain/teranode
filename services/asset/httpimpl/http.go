@@ -665,6 +665,33 @@ func (h *HTTP) AddHTTPHandler(pattern string, handler http.Handler) error {
 	return nil
 }
 
+// ClientIP returns r's client IP using the same extraction echo.Context.RealIP uses:
+// h.e.IPExtractor when set (honouring asset_trustedProxyCIDRs), falling back to
+// X-Forwarded-For, then X-Real-IP, then RemoteAddr. Handlers mounted via
+// AddHTTPHandler receive a raw http.Handler with no echo.Context, so they call this
+// instead of c.RealIP() to derive the same client IP.
+func (h *HTTP) ClientIP(r *http.Request) string {
+	if h.e != nil && h.e.IPExtractor != nil {
+		return h.e.IPExtractor(r)
+	}
+
+	if ip := r.Header.Get(echo.HeaderXForwardedFor); ip != "" {
+		if i := strings.IndexAny(ip, ","); i > 0 {
+			return strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(ip[:i]), "["), "]")
+		}
+
+		return ip
+	}
+
+	if ip := r.Header.Get(echo.HeaderXRealIP); ip != "" {
+		return strings.TrimSuffix(strings.TrimPrefix(ip, "["), "]")
+	}
+
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+
+	return host
+}
+
 func (h *HTTP) Sign(resp *echo.Response, hash []byte) error {
 	// sign the response
 	if h.privKey != nil {
