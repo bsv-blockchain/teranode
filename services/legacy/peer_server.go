@@ -2321,6 +2321,29 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 	return nil
 }
 
+// legacyInternalTokenHeader carries asset_legacyPeerPoolToken to Asset's
+// GET /block_legacy/:hash?wire=1, so it can tell this node's own legacy peer
+// server apart from an anonymous caller who also sets ?wire=1 and admit this
+// request to its internal legacy-peer-server pool instead of the anonymous one.
+// Must match services/asset/httpimpl's legacyInternalTokenHeader - the two
+// services aren't in an import relationship, so this is duplicated by name, not
+// shared by reference.
+const legacyInternalTokenHeader = "X-Teranode-Internal-Token"
+
+// legacyPeerPoolHeaders returns the headers pushBlockMsg's internal ?wire=1
+// request to Asset should carry: the internal token header when
+// asset_legacyPeerPoolToken is configured, or nil when it is empty (the
+// default), in which case Asset falls back to the anonymous pool for this
+// request too - today's single-pool behaviour.
+func legacyPeerPoolHeaders(tSettings *settings.Settings) map[string]string {
+	token := tSettings.Asset.LegacyPeerPoolToken
+	if token == "" {
+		return nil
+	}
+
+	return map[string]string{legacyInternalTokenHeader: token}
+}
+
 // pushBlockMsg sends a block message for the provided block hash to the
 // connected peer.  An error is returned if the block hash is not known.
 func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<- struct{},
@@ -2333,7 +2356,7 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 	url := fmt.Sprintf("%s/block_legacy/%s?wire=1", s.assetHTTPAddress, hash.String())
 	// asset_httpAddress is this node's own asset service, from settings, and is routinely
 	// localhost or a private container address. The peer-URL client refuses both.
-	reader, err := util.DoLocalServiceHTTPRequestBodyReader(s.ctx, url)
+	reader, err := util.DoLocalServiceHTTPRequestBodyReader(s.ctx, url, legacyPeerPoolHeaders(s.settings))
 	if err != nil {
 		sp.server.logger.Errorf("Unable to fetch requested block %v: %v", hash, err)
 

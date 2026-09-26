@@ -781,8 +781,8 @@ func (m *MockRepositoryForMerkleProof) GetSubtreeData(ctx context.Context, hash 
 	return nil, nil
 }
 
-func (m *MockRepositoryForMerkleProof) GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, error) {
-	return nil, nil
+func (m *MockRepositoryForMerkleProof) GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, func(), error) {
+	return nil, func() {}, nil
 }
 
 func (m *MockRepositoryForMerkleProof) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {

@@ -109,6 +109,26 @@ func (h *HTTP) GetUTXOs(mode ReadMode) func(c echo.Context) error {
 			return writeUTXOsResponse(c, mode, nil)
 		}
 
+		// Admission budgets. Both default to 0 (unlimited), which is today's
+		// behaviour. Unlike POST /subtree/:hash/txs these routes are not on the
+		// peer-catchup path, so no floor is applied to the record budget.
+		if maxRecords := h.settings.Asset.MaxBatchRecords; maxRecords > 0 && numRecords > maxRecords {
+			return errBatchRecords(maxRecords)
+		}
+
+		h.observeBatchRecords("GetUTXOs", numRecords)
+
+		// The response is a fixed 48 bytes per record (doubled again by the hex
+		// mode), so the whole budget can be charged before any lookup runs.
+		responseBytes := int64(numRecords) * utxosResponseRecordSize
+		if mode == HEX {
+			responseBytes *= 2
+		}
+
+		if err := h.enforceBatchResponseBytes("GetUTXOs", responseBytes, h.settings.Asset.MaxBatchResponseBytes); err != nil {
+			return err
+		}
+
 		// Each goroutine writes its own slot — slice indexing is the
 		// happens-before barrier, no mutex required.
 		results := make([]*utxo.SpendResponse, numRecords)
