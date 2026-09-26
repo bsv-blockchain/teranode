@@ -240,6 +240,28 @@ func NewSettings(alternativeContext ...string) *Settings {
 			// Streaming configuration
 			SubtreeDataStreamingChunkSize:   getInt("asset_subtreeDataStreamingChunkSize", 10000, alternativeContext...),
 			SubtreeDataStreamingConcurrency: getInt("asset_subtreeDataStreamingConcurrency", 2, alternativeContext...),
+
+			// Batch and response admission budgets (warn-only prep; enforcement lands in a later release)
+			MaxBatchRecords:          getInt("asset_maxBatchRecords", 0, alternativeContext...),
+			MaxBatchResponseBytes:    getInt64("asset_maxBatchResponseBytes", 0, alternativeContext...),
+			MaxUTXOsPerTx:            getInt("asset_maxUTXOsPerTx", 0, alternativeContext...),
+			MaxBlockHeaders:          getInt("asset_maxBlockHeaders", 0, alternativeContext...),
+			MaxLastNBlocks:           getInt("asset_maxLastNBlocks", 0, alternativeContext...),
+			MaxNBlocks:               getInt("asset_maxNBlocks", 0, alternativeContext...),
+			RequireAuthCredentials:   getBool("asset_requireAuthCredentials", true, alternativeContext...),
+			SecureCookies:            getBool("asset_secureCookies", false, alternativeContext...),
+			CORSAllowedOrigins:       getString("asset_corsAllowedOrigins", "", alternativeContext...),
+			EnforcePostAuth:          getBool("asset_enforcePostAuth", false, alternativeContext...),
+			MaxWebsocketConnections:  getInt("asset_maxWebsocketConnections", 0, alternativeContext...),
+			WebsocketReadLimit:       getInt64("asset_websocketReadLimit", 0, alternativeContext...),
+			SubtreeStreamConcurrency: getInt("asset_subtreeStreamConcurrency", 0, alternativeContext...),
+			PublicErrorDetail:        getBool("asset_publicErrorDetail", true, alternativeContext...),
+			PublicHealthDetail:       getBool("asset_publicHealthDetail", true, alternativeContext...),
+			HealthStrictStatus:       getBool("asset_healthStrictStatus", false, alternativeContext...),
+			PublicPeersDetail:        getBool("asset_publicPeersDetail", true, alternativeContext...),
+			TxMetaRawEnabled:         getBool("asset_txMetaRawEnabled", true, alternativeContext...),
+			MaxBlockGraphPoints:      getInt("asset_maxBlockGraphPoints", 0, alternativeContext...),
+			MaxLocatorWalkDepth:      getInt("asset_maxLocatorWalkDepth", 0, alternativeContext...),
 		},
 		Block: BlockSettings{
 			MinedCacheMaxMB:                       getInt("blockMinedCacheMaxMB", 256, alternativeContext...),

@@ -580,6 +580,20 @@ func (h *HTTP) Init(_ context.Context) error {
 	return nil
 }
 
+// warnOnInsecureAdminAuth logs the transport risks around the authenticated admin
+// routes. Neither default is flipped here: TLS-by-default and the Secure cookie
+// attribute would both break existing plaintext deployments on upgrade, so they stay
+// opt-in and this only names the exposure and the setting that closes it.
+func (h *HTTP) warnOnInsecureAdminAuth(mode string) {
+	if mode == "HTTP" {
+		h.logger.Warnf("[Asset] SECURITY: admin routes are served over plaintext HTTP, so Basic credentials and the auth cookie cross the network in cleartext - terminate TLS in front of the listener, or set securityLevelHTTP to a non-zero value")
+	}
+
+	if h.settings.Dashboard.Enabled && !h.settings.Asset.SecureCookies {
+		h.logger.Warnf("[Asset] SECURITY: the dashboard auth cookie is set without the Secure attribute - set asset_secureCookies=true once the dashboard is reached over HTTPS")
+	}
+}
+
 func (h *HTTP) Start(ctx context.Context, addr string) error {
 	// Start background goroutines (all stop when ctx is cancelled).
 	if h.peerAuth != nil {
@@ -602,6 +616,8 @@ func (h *HTTP) Start(ctx context.Context, addr string) error {
 	if level := h.settings.SecurityLevelHTTP; level == 0 {
 		mode = "HTTP"
 	}
+
+	h.warnOnInsecureAdminAuth(mode)
 
 	// Get listener using util.GetListener
 	listener, address, _, err := util.GetListener(h.settings.Context, "asset", "http://", addr)

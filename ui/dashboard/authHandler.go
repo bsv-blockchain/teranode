@@ -92,10 +92,11 @@ func NewAuthHandler(logger ulogger.Logger, settings *settings.Settings) *AuthHan
 		auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(login))
 		authsha = sha256.Sum256([]byte(auth))
 
-		logger.Debugf("Auth initialized with user: %s", rpcUser)
+		logger.Debugf("Auth initialized")
+	} else if settings.Asset.RequireAuthCredentials {
+		logger.Warnf("rpc_user/rpc_pass are not both set: admin routes (FSM state, block invalidate/revalidate, settings) will reject every request until they are configured")
 	} else {
-		logger.Warnf("RPC authentication not configured properly. User set: %v, Pass set: %v",
-			rpcUser != "", rpcPass != "")
+		logger.Warnf("SECURITY: asset_requireAuthCredentials is false and rpc_user/rpc_pass are not both set, so admin routes (FSM state, block invalidate/revalidate, settings) accept unauthenticated requests - set rpc_user and rpc_pass")
 	}
 
 	return &AuthHandler{
@@ -107,9 +108,16 @@ func NewAuthHandler(logger ulogger.Logger, settings *settings.Settings) *AuthHan
 
 // CheckAuth checks if the request has valid authentication credentials
 func (h *AuthHandler) CheckAuth(r *http.Request) bool {
-	// If no auth is configured, allow all requests
+	// No usable credential pair is configured. Fail closed when asked to, otherwise
+	// keep the historic fail-open behaviour (the startup warning names the risk).
 	if h.settings.RPC.RPCUser == "" || h.settings.RPC.RPCPass == "" {
-		h.logger.Infof("No auth configured, allowing request")
+		if h.settings.Asset.RequireAuthCredentials {
+			h.logger.Debugf("Rejecting admin request: rpc_user/rpc_pass are not both set")
+			return false
+		}
+
+		h.logger.Debugf("SECURITY: allowing an unauthenticated admin request because rpc_user/rpc_pass are unset and asset_requireAuthCredentials is false")
+
 		return true
 	}
 
@@ -249,6 +257,7 @@ func (h *AuthHandler) LoginHandler(c echo.Context) error {
 			cookie.Value = authHeader
 			cookie.Path = "/"
 			cookie.HttpOnly = true
+			cookie.Secure = h.settings.Asset.SecureCookies
 			cookie.SameSite = http.SameSiteStrictMode
 			cookie.Domain = ""    // Use the domain from the request
 			cookie.MaxAge = 86400 // 24 hours
@@ -280,6 +289,7 @@ func (h *AuthHandler) LoginHandler(c echo.Context) error {
 		cookie.Value = authHeader
 		cookie.Path = "/"
 		cookie.HttpOnly = true
+		cookie.Secure = h.settings.Asset.SecureCookies
 		cookie.SameSite = http.SameSiteStrictMode
 		cookie.Domain = ""    // Use the domain from the request
 		cookie.MaxAge = 86400 // 24 hours
@@ -311,6 +321,7 @@ func (h *AuthHandler) LogoutHandler(c echo.Context) error {
 	cookie.Path = "/"
 	cookie.MaxAge = -1
 	cookie.HttpOnly = true
+	cookie.Secure = h.settings.Asset.SecureCookies
 	c.SetCookie(cookie)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
@@ -327,10 +338,9 @@ func (h *AuthHandler) CheckAuthHandler(c echo.Context) error {
 		h.logger.Debugf("Cookie found: %s", cookie.Name)
 	}
 
-	// Log auth header if present
-	authHeader := c.Request().Header.Get("Authorization")
-	if authHeader != "" {
-		h.logger.Debugf("Auth header found: %s", authHeader[:10]+"...")
+	// Log only whether an auth header is present; the value is credential material.
+	if c.Request().Header.Get("Authorization") != "" {
+		h.logger.Debugf("Auth header found")
 	} else {
 		h.logger.Debugf("No auth header found")
 	}
