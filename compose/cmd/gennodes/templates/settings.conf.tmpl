@@ -4,6 +4,11 @@
 # /app/settings_local.conf. Stacks on top of /app/settings.conf via the
 # context-layered settings system.
 
+# Fixed admin credentials for this throwaway rig only. settings.conf no longer
+# ships a pair, so generate-blocks.sh and multinode.sh need one here.
+rpc_user = bitcoin
+rpc_pass = bitcoin
+
 {{- range .Nodes }}
 
 # === teranode{{ .Index }} ===

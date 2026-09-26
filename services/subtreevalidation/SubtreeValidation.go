@@ -51,6 +51,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/validator"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -254,6 +255,18 @@ func (u *Server) DelTxMetaCacheMulti(ctx context.Context, hash *chainhash.Hash) 
 	return nil
 }
 
+// missingTransactionsFetchTimeout resolves the bound on one getMissingTransactionsBatch
+// call. A non-positive configured value (unset, or explicitly zero/negative) falls back
+// to the default rather than being treated as unbounded, and a nil settings object is
+// tolerated the same way.
+func missingTransactionsFetchTimeout(tSettings *settings.Settings) time.Duration {
+	if tSettings == nil || tSettings.SubtreeValidation.MissingTransactionsFetchTimeout <= 0 {
+		return 5 * time.Minute
+	}
+
+	return tSettings.SubtreeValidation.MissingTransactionsFetchTimeout
+}
+
 // getMissingTransactionsBatch retrieves a batch of transactions from the network.
 // Note: The returned transactions may not be in the same order as the input hashes.
 //
@@ -300,8 +313,39 @@ func (u *Server) getMissingTransactionsBatch(ctx context.Context, subtreeHash ch
 	// do a POST http request to baseUrl + subtree hash + txs endpoint
 	u.logger.Debugf("[getMissingTransactionsBatch][%s] getting %d txs from peer %s", subtreeHash.String(), len(txHashes), txsURL)
 
-	body, err := util.DoHTTPRequestBodyReader(ctx, txsURL, txIDBytes)
+	// Retrying helper, not the plain one: the peer's asset service rate-limits
+	// (429) and sheds load (503), and both are recoverable. Without the ladder a
+	// single rejection lands in publishInvalidSubtree below and degrades the
+	// reputation of a peer that was behaving correctly. Re-sending the body on each
+	// attempt is safe here — the request is a list of txids and the endpoint is a
+	// pure read, so every attempt asks for exactly the same transactions.
+	//
+	// One deadline is set around the whole call rather than left to the caller's ctx:
+	// without it, the retry helper's ctx.Done() abort can never fire (this ctx has no
+	// deadline of its own), so the retry loop always runs to its attempt limit, and
+	// each attempt sees no deadline and installs a fresh HTTP streaming timeout of its
+	// own — a peer that stalls and then answers 429/503 can hold a single batch for
+	// attempts x streaming-timeout instead of one bounded window.
+	fetchCtx, cancel := context.WithTimeout(ctx, missingTransactionsFetchTimeout(u.settings))
+	defer cancel()
+
+	// A failure caused by OUR OWN cancellation - a sibling batch failing in the same
+	// errgroup, or service shutdown - is not the peer's fault and must not be reported
+	// as one. Checked explicitly against the caller's ctx, both before the fetch (an
+	// already-cancelled ctx must not even reach the peer) and after a failed one
+	// (cancellation mid-flight), and again on a failed body read below. Nothing
+	// downstream suppresses the report: blockchain.Client.GetFSMCurrentState returns a
+	// cached state without looking at ctx.
+	if ctx.Err() != nil {
+		return nil, errors.NewContextCanceledError("[getMissingTransactionsBatch][%s] aborted", subtreeHash.String(), ctx.Err())
+	}
+
+	body, err := util.DoHTTPRequestBodyReaderWithRetry(fetchCtx, txsURL, txIDBytes)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, errors.NewContextCanceledError("[getMissingTransactionsBatch][%s] aborted", subtreeHash.String(), ctx.Err())
+		}
+
 		// Peer cannot provide requested transactions - report as invalid subtree
 		u.publishInvalidSubtree(ctx, subtreeHash.String(), baseURL, peerID, "peer_cannot_provide_transactions")
 		return nil, errors.NewExternalError("[getMissingTransactionsBatch][%s] failed to do http request", subtreeHash.String(), err)
@@ -320,6 +364,20 @@ func (u *Server) getMissingTransactionsBatch(ctx context.Context, subtreeHash ch
 			if errors.Is(err, io.EOF) {
 				break
 			}
+
+			// Our own cancellation can also surface here, mid-body-read; that is not
+			// the peer serving bad data.
+			if ctx.Err() != nil {
+				return nil, errors.NewContextCanceledError("[getMissingTransactionsBatch][%s] aborted", subtreeHash.String(), ctx.Err())
+			}
+
+			// Our own fetch deadline expiring mid-body means the peer was too slow to
+			// serve the batch, not that it served bad data.
+			if fetchCtx.Err() != nil {
+				u.publishInvalidSubtree(ctx, subtreeHash.String(), baseURL, peerID, "peer_cannot_provide_transactions")
+				return nil, errors.NewExternalError("[getMissingTransactionsBatch][%s] fetch deadline exceeded reading the response", subtreeHash.String(), err)
+			}
+
 			// Malformed transaction data from peer - report as invalid subtree
 			u.publishInvalidSubtree(ctx, subtreeHash.String(), baseURL, peerID, "malformed_transaction_data")
 			// Not recoverable, returning processing error

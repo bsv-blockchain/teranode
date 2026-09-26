@@ -73,9 +73,10 @@ const (
 	ERR_TX_CREATING             ERR = 41
 	ERR_TX_ERROR                ERR = 49
 	// Service errors 50-59
-	ERR_SERVICE_UNAVAILABLE ERR = 50
-	ERR_SERVICE_NOT_STARTED ERR = 51
-	ERR_SERVICE_ERROR       ERR = 59
+	ERR_SERVICE_UNAVAILABLE  ERR = 50
+	ERR_SERVICE_NOT_STARTED  ERR = 51
+	ERR_SERVICE_RATE_LIMITED ERR = 52
+	ERR_SERVICE_ERROR        ERR = 59
 	// Storage errors 60-69
 	ERR_STORAGE_UNAVAILABLE ERR = 60
 	ERR_STORAGE_NOT_STARTED ERR = 61
@@ -162,6 +163,7 @@ var (
 		49:  "TX_ERROR",
 		50:  "SERVICE_UNAVAILABLE",
 		51:  "SERVICE_NOT_STARTED",
+		52:  "SERVICE_RATE_LIMITED",
 		59:  "SERVICE_ERROR",
 		60:  "STORAGE_UNAVAILABLE",
 		61:  "STORAGE_NOT_STARTED",
@@ -237,6 +239,7 @@ var (
 		"TX_ERROR":                      49,
 		"SERVICE_UNAVAILABLE":           50,
 		"SERVICE_NOT_STARTED":           51,
+		"SERVICE_RATE_LIMITED":          52,
 		"SERVICE_ERROR":                 59,
 		"STORAGE_UNAVAILABLE":           60,
 		"STORAGE_NOT_STARTED":           61,
@@ -402,7 +405,7 @@ const file_errors_error_proto_rawDesc = "" +
 	"\fwrappedError\x18\x04 \x01(\v2\x0e.errors.TErrorR\fwrappedError\x12\x12\n" +
 	"\x04file\x18\x05 \x01(\tR\x04file\x12\x12\n" +
 	"\x04line\x18\x06 \x01(\x05R\x04line\x12\x1a\n" +
-	"\bfunction\x18\a \x01(\tR\bfunction*\x8d\f\n" +
+	"\bfunction\x18\a \x01(\tR\bfunction*\xa7\f\n" +
 	"\x03ERR\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x14\n" +
 	"\x10INVALID_ARGUMENT\x10\x01\x12\x16\n" +
@@ -448,7 +451,8 @@ const file_errors_error_proto_rawDesc = "" +
 	"\vTX_CREATING\x10)\x12\f\n" +
 	"\bTX_ERROR\x101\x12\x17\n" +
 	"\x13SERVICE_UNAVAILABLE\x102\x12\x17\n" +
-	"\x13SERVICE_NOT_STARTED\x103\x12\x11\n" +
+	"\x13SERVICE_NOT_STARTED\x103\x12\x18\n" +
+	"\x14SERVICE_RATE_LIMITED\x104\x12\x11\n" +
 	"\rSERVICE_ERROR\x10;\x12\x17\n" +
 	"\x13STORAGE_UNAVAILABLE\x10<\x12\x17\n" +
 	"\x13STORAGE_NOT_STARTED\x10=\x12\x11\n" +

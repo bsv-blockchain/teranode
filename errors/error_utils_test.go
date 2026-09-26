@@ -43,6 +43,13 @@ func TestIsRetryableError(t *testing.T) {
 			expected: true,
 		},
 		{
+			// A 429 is the definitional retryable failure: the request was well
+			// formed and the server asked us to come back later.
+			name:     "service rate limited",
+			err:      NewServiceRateLimitedError("429 from peer"),
+			expected: true,
+		},
+		{
 			name:     "malicious peer - not retryable",
 			err:      NewNetworkPeerMaliciousError("invalid block header"),
 			expected: false,
@@ -108,6 +115,11 @@ func TestIsTransientLocalError(t *testing.T) {
 		{name: "malicious peer - not local", err: NewNetworkPeerMaliciousError("bad header"), expected: false},
 		{name: "network timeout - not local", err: NewNetworkTimeoutError("timed out"), expected: false},
 		{name: "plain processing error - not local", err: NewProcessingError("invalid block"), expected: false},
+		// A remote peer rate-limiting us is a peer-side admission decision, not a
+		// fault in this node's stack. Including it here would let a 429 from a
+		// peer's asset service change netsync's peer-retention decisions.
+		{name: "service rate limited - remote, not local", err: NewServiceRateLimitedError("429 from peer"), expected: false},
+		{name: "wrapped service rate limited - remote, not local", err: NewProcessingError("outer", NewServiceRateLimitedError("429 from peer")), expected: false},
 	}
 
 	for _, tt := range tests {

@@ -772,22 +772,26 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 	return executeHTTPRequestWithClient(ctx, cancelFn, httpClient, rawURL, requestBody...)
 }
 
-// executeHTTPRequestWithClient performs the request through client, which decides what
-// addresses may be reached.
-func executeHTTPRequestWithClient(ctx context.Context, cancelFn context.CancelFunc, client *http.Client, rawURL string, requestBody ...[]byte) (io.ReadCloser, context.CancelFunc, error) {
-
+// buildOutboundRequest constructs the http.Request shared by every path that talks to a
+// peer over HTTP: a GET by default, or a POST with an octet-stream body when requestBody
+// is supplied, signed by the configured request signer. Content-Type is
+// application/octet-stream because every internal POST that goes through this helper
+// sends raw bytes (e.g. /api/v1/subtree/{hash}/txs streams packed 32-byte tx hashes).
+// Tagging it as application/json caused a WAF in front of asset (ModSecurity) to run the
+// JSON body parser, fail on the binary payload, and reject the request with HTTP 400 —
+// degrading peer catchup reputation across the network.
+//
+// Kept as one function so the retry path (doHTTPRequestForStreamingWithRetryAfter) cannot
+// drift from the plain path (executeHTTPRequestWithClient) on content-type or signing, the
+// way it once did: the retry path used to build its own request and sent unsigned
+// application/json bodies, undoing both the WAF fix and peer-request signing on every
+// retried attempt.
+func buildOutboundRequest(ctx context.Context, rawURL string, requestBody ...[]byte) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, cancelFn, errors.NewServiceError("failed to create http request", err)
+		return nil, errors.NewServiceError("failed to create http request", err)
 	}
 
-	// If there is a request body assume we want a POST and write request body.
-	// Content-Type is application/octet-stream because every internal POST that
-	// goes through this helper sends raw bytes (e.g. /api/v1/subtree/{hash}/txs
-	// streams packed 32-byte tx hashes). Tagging it as application/json caused a
-	// WAF in front of asset (ModSecurity) to run the JSON body parser, fail on
-	// the binary payload, and reject the request with HTTP 400 — degrading peer
-	// catchup reputation across the network.
 	if len(requestBody) > 0 && requestBody[0] != nil {
 		req.Body = io.NopCloser(bytes.NewReader(requestBody[0]))
 		req.Method = http.MethodPost
@@ -797,6 +801,17 @@ func executeHTTPRequestWithClient(ctx context.Context, cancelFn context.CancelFu
 	// Sign the request if a signer is configured (silently skip on error)
 	if signer := loadHTTPRequestSigner(); signer != nil {
 		_ = signer.SignRequest(req)
+	}
+
+	return req, nil
+}
+
+// executeHTTPRequestWithClient performs the request through client, which decides what
+// addresses may be reached.
+func executeHTTPRequestWithClient(ctx context.Context, cancelFn context.CancelFunc, client *http.Client, rawURL string, requestBody ...[]byte) (io.ReadCloser, context.CancelFunc, error) {
+	req, err := buildOutboundRequest(ctx, rawURL, requestBody...)
+	if err != nil {
+		return nil, cancelFn, err
 	}
 
 	var resp *http.Response
@@ -939,8 +954,14 @@ func drainErrorBody(body io.ReadCloser) {
 //
 // The error type is chosen to let callers branch with errors.Is:
 //   - 404 → ErrNotFound
+//   - 429 → ErrServiceRateLimited (retryable; see DoHTTPRequestBodyReaderWithRetry)
 //   - 503 → ErrServiceUnavailable (typically retryable; see DoHTTPRequestBodyReaderWithRetry)
 //   - other → generic ServiceError
+//
+// 429 gets its own code rather than sharing ErrServiceUnavailable: that sentinel is
+// in errors.IsTransientLocalError, which legacy block sync reads as "a fault in this
+// node's own stack, so keep the delivering peer". A remote rate limit is neither a
+// local fault nor a peer fault, and must not perturb those decisions.
 //
 // The body is read up to maxHTTPErrorBodyBytes; anything beyond that is discarded
 // rather than retained in the error string, and the message says so. The snippet is
@@ -959,6 +980,8 @@ func buildHTTPError(resp *http.Response, rawURL string) error {
 		errFn = errors.NewNotFoundError
 	case http.StatusServiceUnavailable:
 		errFn = errors.NewServiceUnavailableError
+	case http.StatusTooManyRequests:
+		errFn = errors.NewServiceRateLimitedError
 	}
 
 	if resp.Body != nil {
@@ -1030,17 +1053,22 @@ var defaultRetryConfig = retryConfig{
 }
 
 // DoHTTPRequestBodyReaderWithRetry behaves like DoHTTPRequestBodyReader but retries on
-// HTTP 503 (Service Unavailable) with exponential backoff. Used for endpoints where the
-// server signals admission-control rejection (e.g. asset /subtree_data) and the right
-// behavior is to back off and retry rather than fail the caller.
+// HTTP 503 (Service Unavailable) and HTTP 429 (Too Many Requests) with exponential
+// backoff. Used for endpoints where the server signals admission-control rejection
+// (e.g. asset /subtree_data, or the tiered rate limiter in front of the asset service)
+// and the right behavior is to back off and retry rather than fail the caller.
 //
 // Behavior:
-//   - Retries only on errors satisfying errors.Is(err, errors.ErrServiceUnavailable).
+//   - Retries only on errors satisfying errors.Is(err, errors.ErrServiceUnavailable) or
+//     errors.Is(err, errors.ErrServiceRateLimited).
 //   - Other errors (404, 500, network errors) are returned immediately — they are not
 //     transient admission rejections.
-//   - Backoff is exponential starting at 250ms, doubling, capped at 5s. Up to 6 attempts.
-//   - Honors the server's Retry-After header on each 503 (clamped to maxDelay).
+//   - Backoff is exponential starting at 250ms, doubling, capped at 5s. Up to 6 attempts,
+//     so a server that never relents costs ~7.75s of backoff before the final error.
+//   - Honors the server's Retry-After header on each rejection (clamped to maxDelay).
 //   - ctx cancellation aborts the retry loop and returns the parent ctx error.
+//   - The final error keeps the classification of the last rejection, so a caller can
+//     still tell a rate limit apart from an unavailable server after the ladder runs out.
 //
 // Each attempt is a fresh GET — for POST callers passing requestBody, the body is re-sent
 // each time. Make sure that's idempotent before using this helper for non-GET workloads.
@@ -1057,7 +1085,7 @@ func doHTTPRequestBodyReaderWithRetry(ctx context.Context, url string, cfg retry
 		if err == nil {
 			return body, nil
 		}
-		if !errors.Is(err, errors.ErrServiceUnavailable) {
+		if !errors.Is(err, errors.ErrServiceUnavailable) && !errors.Is(err, errors.ErrServiceRateLimited) {
 			return nil, err
 		}
 		lastErr = err
@@ -1083,11 +1111,20 @@ func doHTTPRequestBodyReaderWithRetry(ctx context.Context, url string, cfg retry
 		}
 	}
 
-	return nil, errors.NewServiceUnavailableError("http request [%s] still 503 after %d attempts: %v", url, cfg.maxAttempts, lastErr)
+	// Preserve the classification of the last rejection: collapsing a 429 into
+	// ErrServiceUnavailable here would reintroduce exactly the local-vs-remote
+	// confusion the separate code exists to avoid.
+	errFn := errors.NewServiceUnavailableError
+	if errors.Is(lastErr, errors.ErrServiceRateLimited) {
+		errFn = errors.NewServiceRateLimitedError
+	}
+
+	return nil, errFn("http request [%s] still rejected after %d attempts: %v", url, cfg.maxAttempts, lastErr)
 }
 
 // doHTTPRequestForStreamingWithRetryAfter is doHTTPRequestForStreaming + extracts
-// the Retry-After header on non-OK responses. On success returns (body, 0, nil).
+// the Retry-After header on non-OK responses. The extraction is status-agnostic, so
+// it covers 429 as well as 503. On success returns (body, 0, nil).
 func doHTTPRequestForStreamingWithRetryAfter(ctx context.Context, rawURL string, requestBody ...[]byte) (io.ReadCloser, time.Duration, error) {
 	cancelFn := func() {}
 	if _, ok := ctx.Deadline(); !ok {
@@ -1099,15 +1136,10 @@ func doHTTPRequestForStreamingWithRetryAfter(ctx context.Context, rawURL string,
 		return nil, 0, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	req, err := buildOutboundRequest(ctx, rawURL, requestBody...)
 	if err != nil {
 		cancelFn()
-		return nil, 0, errors.NewServiceError("failed to create http request", err)
-	}
-	if len(requestBody) > 0 && requestBody[0] != nil {
-		req.Body = io.NopCloser(bytes.NewReader(requestBody[0]))
-		req.Method = http.MethodPost
-		req.Header.Set("Content-Type", "application/json")
+		return nil, 0, err
 	}
 
 	resp, err := httpClient.Do(req)

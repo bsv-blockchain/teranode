@@ -2,6 +2,7 @@ package util
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"io"
 	"net"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1588,4 +1590,197 @@ func TestSharedAndSafeClientsShareRedirectRule(t *testing.T) {
 			require.Equal(t, sharedErr.Error(), safeErr.Error(), "both clients must give the same reason")
 		})
 	}
+}
+
+func TestBuildHTTPError_429MapsToRateLimited(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte("rate limit exceeded"))
+	}))
+	defer server.Close()
+
+	_, err := DoHTTPRequestBodyReader(context.Background(), server.URL)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrServiceRateLimited),
+		"429 must classify as ErrServiceRateLimited so callers can back off; got %v", err)
+	require.False(t, errors.Is(err, errors.ErrServiceUnavailable),
+		"429 must NOT be ErrServiceUnavailable - that sentinel means a fault in this node's own stack")
+	require.False(t, errors.IsTransientLocalError(err),
+		"a peer rate-limiting us is not a transient LOCAL error; netsync peer-retention keys on this")
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_RetriesOn429ThenSucceeds(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n < 3 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte("rate limit exceeded"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok-after-429"))
+	}))
+	defer server.Close()
+
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig)
+	require.NoError(t, err)
+	defer body.Close()
+
+	got, err := io.ReadAll(body)
+	require.NoError(t, err)
+	require.Equal(t, "ok-after-429", string(got))
+	require.Equal(t, int32(3), atomic.LoadInt32(&attempts), "exactly two retries before success")
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_ExhaustsAttemptsOnPersistent429(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	_, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrServiceRateLimited),
+		"final error must stay ErrServiceRateLimited, not collapse to ErrServiceUnavailable; got %v", err)
+	require.False(t, errors.IsTransientLocalError(err))
+	require.Equal(t, int32(testRetryConfig.maxAttempts), atomic.LoadInt32(&attempts))
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_Honors429RetryAfter(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	cfg := retryConfig{maxAttempts: 4, initialDelay: 10 * time.Millisecond, maxDelay: 5 * time.Second}
+
+	start := time.Now()
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, cfg)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	defer body.Close()
+	require.GreaterOrEqual(t, elapsed, time.Second-100*time.Millisecond,
+		"Retry-After=1 on a 429 must be honored over the much smaller initialDelay")
+	require.Less(t, elapsed, 3*time.Second)
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_ResendsPOSTBodyEachAttempt(t *testing.T) {
+	var attempts int32
+	bodies := make(chan string, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ := io.ReadAll(r.Body)
+		bodies <- string(got)
+
+		if atomic.AddInt32(&attempts, 1) < 3 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig, []byte("payload"))
+	require.NoError(t, err)
+	defer body.Close()
+
+	close(bodies)
+
+	seen := 0
+	for b := range bodies {
+		require.Equal(t, "payload", b, "the request body must be re-sent in full on every attempt")
+		seen++
+	}
+
+	require.Equal(t, 3, seen)
+}
+
+// TestDoHTTPRequestBodyReaderWithRetry_ContentTypeOctetStreamOnEveryAttempt pins #829 on
+// the retry path: a POST body sent through the retry helper must carry
+// application/octet-stream, not application/json, on every attempt including after a
+// 429/503 - a WAF in front of asset runs its JSON body parser on a application/json
+// request and 400s on a binary payload like a packed txid batch.
+func TestDoHTTPRequestBodyReaderWithRetry_ContentTypeOctetStreamOnEveryAttempt(t *testing.T) {
+	var attempts int32
+	contentTypes := make(chan string, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		contentTypes <- r.Header.Get("Content-Type")
+
+		if atomic.AddInt32(&attempts, 1) < 3 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig, []byte("payload"))
+	require.NoError(t, err)
+	defer body.Close()
+
+	close(contentTypes)
+
+	seen := 0
+	for ct := range contentTypes {
+		require.Equal(t, "application/octet-stream", ct)
+		seen++
+	}
+
+	require.Equal(t, 3, seen)
+}
+
+// TestDoHTTPRequestBodyReaderWithRetry_SignsEveryAttempt pins the other half of the same
+// defect: the retry path built its request without going through loadHTTPRequestSigner, so
+// a signed catchup POST went out unsigned and an allowlisted peer dropped to the unverified
+// rate tier.
+func TestDoHTTPRequestBodyReaderWithRetry_SignsEveryAttempt(t *testing.T) {
+	privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	require.NoError(t, err)
+
+	SetHTTPRequestSigner(NewEd25519RequestSigner(privKey))
+	defer SetHTTPRequestSigner(NewEd25519RequestSigner(nil))
+
+	var attempts int32
+	signatures := make(chan string, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		signatures <- r.Header.Get("X-Peer-Signature")
+
+		if atomic.AddInt32(&attempts, 1) < 3 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig, []byte("payload"))
+	require.NoError(t, err)
+	defer body.Close()
+
+	close(signatures)
+
+	seen := 0
+	for sig := range signatures {
+		require.NotEmpty(t, sig, "every attempt must be signed")
+		seen++
+	}
+
+	require.Equal(t, 3, seen)
 }

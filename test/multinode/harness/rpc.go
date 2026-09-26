@@ -14,7 +14,7 @@ import (
 )
 
 // RPCClient talks JSON-RPC to a single teranode's host-exposed RPC port using
-// the default bitcoin:bitcoin credentials baked into settings.conf.
+// the fixed credentials the generated rig sets in its settings_local.conf.
 //
 // It deliberately speaks raw HTTP rather than importing the teranode RPC
 // client package to keep the harness decoupled from in-process types and to

@@ -35,6 +35,11 @@ func IsRetryableError(err error) bool {
 		case ERR_NETWORK_TIMEOUT,
 			ERR_NETWORK_ERROR,
 			ERR_SERVICE_UNAVAILABLE,
+			// A remote 429 is the definitional retryable failure: the request was
+			// well formed and the server asked us to come back later. Note it is
+			// deliberately absent from IsTransientLocalError — it is a peer-side
+			// decision, not a fault in this node's stack.
+			ERR_SERVICE_RATE_LIMITED,
 			ERR_STORAGE_UNAVAILABLE,
 			ERR_STORAGE_ERROR:
 			return true
