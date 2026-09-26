@@ -351,6 +351,10 @@ npm run dev --prefix ./ui/dashboard
 
 The dashboard will be available at `http://localhost:5173` by default.
 
+The dev server sends credentialed cross-origin requests to the Asset listener on
+`:8090`. Set `asset_corsAllowedOrigins = http://localhost:5173` (or the Vite port
+you use) on the node it points at, or those requests fail CORS.
+
 ### Production Build
 
 ```bash

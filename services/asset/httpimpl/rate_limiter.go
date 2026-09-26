@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/ulogger"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/labstack/echo/v4"
 	"golang.org/x/time/rate"
@@ -37,6 +38,11 @@ type limiterEntry struct {
 //     behind one egress IP get independent buckets.
 //   - tierMiner:      either fully exempt (minerRate == 0, the legacy
 //     behaviour) or bucket keyed by libp2p peer ID at minerRate.
+//
+// Burst is decoupled from rate via minBurst. The rate governs sustained
+// throughput; the burst governs how many requests may legitimately arrive at
+// once. A protocol client that is designed to fan out N concurrent requests
+// needs a burst of at least N, whatever the sustained rate is.
 type tieredRateLimiter struct {
 	unverifiedLimiters *lru.Cache[string, *limiterEntry]
 	peerLimiters       sync.Map // map[peerID]*limiterEntry
@@ -44,13 +50,15 @@ type tieredRateLimiter struct {
 	defaultRate        int
 	peerMultiplier     int
 	minerRate          int
+	minBurst           int
 	tierLabel          string
 }
 
 // newTieredRateLimiter creates a tiered rate limiter. defaultRate <= 0 disables
 // the limiter entirely. peerMultiplier is clamped to a minimum of 1.
-// minerRate <= 0 means miner-tier requests are fully exempt.
-func newTieredRateLimiter(defaultRate, peerMultiplier, minerRate int, tierLabel string) *tieredRateLimiter {
+// minerRate <= 0 means miner-tier requests are fully exempt. minBurst <= 0
+// means the bucket depth equals the rate.
+func newTieredRateLimiter(defaultRate, peerMultiplier, minerRate, minBurst int, tierLabel string) *tieredRateLimiter {
 	if peerMultiplier < 1 {
 		peerMultiplier = 1
 	}
@@ -63,6 +71,7 @@ func newTieredRateLimiter(defaultRate, peerMultiplier, minerRate int, tierLabel 
 		defaultRate:        defaultRate,
 		peerMultiplier:     peerMultiplier,
 		minerRate:          minerRate,
+		minBurst:           minBurst,
 		tierLabel:          tierLabel,
 	}
 }
@@ -154,7 +163,7 @@ func (rl *tieredRateLimiter) unverifiedBucket(key string, ratePerSec int) *rate.
 		entry.lastSeen.Store(time.Now().Unix())
 		return entry.limiter
 	}
-	newEntry := &limiterEntry{limiter: rate.NewLimiter(rate.Limit(ratePerSec), ratePerSec)}
+	newEntry := &limiterEntry{limiter: rate.NewLimiter(rate.Limit(ratePerSec), rl.burstFor(ratePerSec))}
 	newEntry.lastSeen.Store(time.Now().Unix())
 	// Add returns true if an existing entry was evicted; we don't care, the
 	// LRU handles eviction internally.
@@ -177,12 +186,62 @@ func (rl *tieredRateLimiter) peerBucket(m *sync.Map, peerID string, ratePerSec i
 		entry.lastSeen.Store(time.Now().Unix())
 		return entry.limiter
 	}
-	newEntry := &limiterEntry{limiter: rate.NewLimiter(rate.Limit(ratePerSec), ratePerSec)}
+	newEntry := &limiterEntry{limiter: rate.NewLimiter(rate.Limit(ratePerSec), rl.burstFor(ratePerSec))}
 	newEntry.lastSeen.Store(time.Now().Unix())
 	actual, _ := m.LoadOrStore(peerID, newEntry)
 	entry := actual.(*limiterEntry)
 	entry.lastSeen.Store(time.Now().Unix())
 	return entry.limiter
+}
+
+// burstFor returns the bucket depth for a bucket running at ratePerSec. It is
+// the rate, raised to minBurst when one is configured, so a client that fans
+// out minBurst concurrent requests is not rejected before the sustained rate
+// has had a chance to bind.
+func (rl *tieredRateLimiter) burstFor(ratePerSec int) int {
+	return max(ratePerSec, rl.minBurst)
+}
+
+// maxHeavyBurstRateMultiple bounds the derived catchup-route floor (see
+// resolveHeavyBurst) at a multiple of the sustained heavy rate. Without a
+// cap, raising subtreevalidation_getMissingTransactions silently raises the
+// anonymous per-IP burst on the Asset listener with no ceiling.
+const maxHeavyBurstRateMultiple = 4
+
+// resolveHeavyBurst returns the burst the catchup-route heavy limiter should
+// use, and whether it warned about the configured value.
+//
+// floor is the concurrent fan-out a catching-up peer performs
+// (subtreevalidation_getMissingTransactions), clamped to at most
+// maxHeavyBurstRateMultiple times rate. A burst below the (clamped) floor
+// makes honest catchup traffic collide with the limiter: the resulting 429 is
+// never retried and subtree validation reports the serving peer as invalid.
+//
+// An explicit, non-zero asset_httpHeavyRateBurst is always respected, even
+// when it is below the floor: an operator's configured value is never
+// overridden. A single-line warning is logged instead, naming the risk. The
+// same warning is logged when the clamp itself lowers the burst below the
+// fan-out, which happens on auto-configured hosts with many cores.
+func resolveHeavyBurst(logger ulogger.Logger, configured, floor, rate int) (int, bool) {
+	clampedFloor := floor
+	if maxFloor := rate * maxHeavyBurstRateMultiple; rate > 0 && clampedFloor > maxFloor {
+		clampedFloor = maxFloor
+	}
+
+	if configured > 0 {
+		if configured < clampedFloor {
+			logger.Warnf("[Asset] asset_httpHeavyRateBurst %d is below the catchup fan-out floor %d (subtreevalidation_getMissingTransactions, clamped to %dx the heavy rate); keeping the configured value because it was set explicitly - honest peer catchup may be rejected with 429", configured, clampedFloor, maxHeavyBurstRateMultiple)
+			return configured, true
+		}
+		return configured, false
+	}
+
+	if clampedFloor < floor {
+		logger.Warnf("[Asset] catchup-route heavy burst clamped to %d (%dx asset_httpHeavyRateLimit), below the catchup fan-out of %d (subtreevalidation_getMissingTransactions) - honest peer catchup may be rejected with 429; raise asset_httpHeavyRateLimit or set asset_httpHeavyRateBurst explicitly", clampedFloor, maxHeavyBurstRateMultiple, floor)
+		return clampedFloor, true
+	}
+
+	return clampedFloor, false
 }
 
 // unverifiedKey normalises the source identifier for unverified buckets. For
