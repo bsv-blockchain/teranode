@@ -286,6 +286,42 @@ func TestGetBlockByHeightRouteRegistered(t *testing.T) {
 	})
 }
 
+// TestNew_PeerAuthBodyCapTracksBatchSize — http.go must wire the peer-auth
+// verifier's signed-body cap to subtreevalidation_missingTransactionsBatchSize
+// via resolveMaxSignedBodyBytes, not construct it with the package default.
+// Reverting that wiring back to a plain newPeerAuthVerifier(...) call leaves
+// every other test in this package green, since none of them raise the batch
+// size, so this exercises the actual New()/peerAuth construction path.
+func TestNew_PeerAuthBodyCapTracksBatchSize(t *testing.T) {
+	logger := ulogger.TestLogger{}
+
+	const batchSize = 65536 // 65536*32 = 2MiB, above the 1MiB default floor
+
+	testSettings := &settings.Settings{
+		Asset: settings.AssetSettings{
+			APIPrefix: "/api/v1",
+		},
+		SubtreeValidation: settings.SubtreeValidationSettings{
+			MissingTransactionsBatchSize: batchSize,
+		},
+		Dashboard:         settings.DashboardSettings{Enabled: false},
+		SecurityLevelHTTP: 0,
+	}
+
+	repo, err := repository.NewRepository(logger, testSettings, nil, nil, nil, nil, nil, nil, &registryStubP2PClient{}, nil)
+	require.NoError(t, err)
+
+	httpServer, err := New(logger, testSettings, repo, nil)
+	require.NoError(t, err)
+	require.NotNil(t, httpServer)
+
+	require.NotNil(t, httpServer.peerAuth, "a non-nil P2P client must produce a peer-auth verifier")
+	require.Equal(t, resolveMaxSignedBodyBytes(batchSize), httpServer.peerAuth.maxSignedBodyBytes,
+		"New() must resolve the signed-body cap from subtreevalidation_missingTransactionsBatchSize, not the package default")
+	require.Greater(t, httpServer.peerAuth.maxSignedBodyBytes, int64(defaultMaxSignedBodyBytes),
+		"a raised batch size must actually grow the cap past the default floor")
+}
+
 // TestNewWithSigningEnabled tests the New function with response signing enabled
 func TestNewWithSigningEnabled(t *testing.T) {
 	// Create a test logger

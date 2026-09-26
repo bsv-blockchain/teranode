@@ -3,6 +3,7 @@ package httpimpl
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -46,6 +48,41 @@ const replayCacheTTL = 15 * time.Second
 // replayCacheCapacity bounds memory usage under a signature-flood attack.
 // At ~70 bytes per entry (key + ttlcache overhead) this is ~7 MB worst case.
 const replayCacheCapacity = 100_000
+
+// defaultMaxSignedBodyBytes is the floor for the cap on how much request body
+// the verifier will buffer and hash on behalf of a signed request. Asset does
+// serve signed POST routes with non-trivial bodies — notably
+// POST /subtree/:hash/txs, which peer catchup uses to fetch missing
+// transactions (services/subtreevalidation/SubtreeValidation.go) — so the
+// effective cap is resolved per-instance from subtreevalidation's batch size
+// (see resolveMaxSignedBodyBytes) rather than fixed at this floor. It exists
+// so that the digest step can never be turned into an unbounded allocation,
+// including when asset_httpBodyLimit is left empty and the Echo body-limit
+// middleware is skipped entirely.
+const defaultMaxSignedBodyBytes = 1 << 20
+
+// signedBodyCapHeadroom is added on top of the raw catchup payload size
+// (32 bytes per requested tx hash) when deriving the signed-body cap, to
+// leave room for header/framing overhead without having to track it exactly.
+const signedBodyCapHeadroom = 4096
+
+// resolveMaxSignedBodyBytes derives the signed-body cap from
+// subtreevalidation_missingTransactionsBatchSize: POST /subtree/:hash/txs
+// carries 32 bytes per requested tx hash, up to that batch size, so a cap
+// fixed below 32*batchSize would 413 a legitimate allowlisted peer's catchup
+// request. The cap never drops below defaultMaxSignedBodyBytes.
+func resolveMaxSignedBodyBytes(missingTransactionsBatchSize int) int64 {
+	if missingTransactionsBatchSize <= 0 {
+		return defaultMaxSignedBodyBytes
+	}
+
+	needed := 32*int64(missingTransactionsBatchSize) + signedBodyCapHeadroom
+	if needed > defaultMaxSignedBodyBytes {
+		return needed
+	}
+
+	return defaultMaxSignedBodyBytes
+}
 
 // peerAuthHeaderTimestamp / Signature / PubKey are the request headers a
 // signed peer must set. The body-digest header is util.PeerAuthBodyDigestHeader.
@@ -156,19 +193,33 @@ type peerAuthVerifier struct {
 	replayCache *ttlcache.Cache[string, struct{}]
 
 	// allowlist is the set of peer IDs eligible for tierPeer/tierMiner. An
-	// empty allowlist means **no peer is eligible** — every authenticated
-	// peer is treated as tierUnverified for rate-limit purposes. Operators
-	// opt in by setting asset_peerAuthAllowlist.
+	// empty allowlist means no peer is eligible: a signed request is rejected
+	// at the membership check, before the replay claim, the signature
+	// verification and the body digest, and stays at tierUnverified.
+	// Operators opt in by setting asset_peerAuthAllowlist.
 	allowlist map[peer.ID]struct{}
+
+	// maxSignedBodyBytes is the resolved cap for this verifier instance; see
+	// resolveMaxSignedBodyBytes.
+	maxSignedBodyBytes int64
 }
 
 // newPeerAuthVerifier constructs a verifier with its own replay cache and the
-// parsed allowlist of peer IDs eligible for tier elevation.
+// parsed allowlist of peer IDs eligible for tier elevation, using the default
+// signed-body cap. Production wiring should use newPeerAuthVerifierWithBodyCap
+// so the cap tracks subtreevalidation's batch size.
 func newPeerAuthVerifier(logger ulogger.Logger, tierCache *peerTierCache, allowlist map[peer.ID]struct{}) *peerAuthVerifier {
+	return newPeerAuthVerifierWithBodyCap(logger, tierCache, allowlist, defaultMaxSignedBodyBytes)
+}
+
+// newPeerAuthVerifierWithBodyCap is like newPeerAuthVerifier but takes an
+// explicit signed-body cap (see resolveMaxSignedBodyBytes).
+func newPeerAuthVerifierWithBodyCap(logger ulogger.Logger, tierCache *peerTierCache, allowlist map[peer.ID]struct{}, maxSignedBodyBytes int64) *peerAuthVerifier {
 	return &peerAuthVerifier{
-		logger:    logger,
-		tierCache: tierCache,
-		allowlist: allowlist,
+		logger:             logger,
+		tierCache:          tierCache,
+		allowlist:          allowlist,
+		maxSignedBodyBytes: maxSignedBodyBytes,
 		replayCache: ttlcache.New[string, struct{}](
 			ttlcache.WithTTL[string, struct{}](replayCacheTTL),
 			ttlcache.WithCapacity[string, struct{}](replayCacheCapacity),
@@ -219,7 +270,12 @@ const (
 	peerAuthResultReplay         = "replay"
 	peerAuthResultUnknownKey     = "unknown_key"
 	peerAuthResultNotAllowlisted = "not_allowlisted"
+	peerAuthResultBodyTooLarge   = "body_too_large"
 )
+
+// errSignedBodyTooLarge is returned by digestRequestBody when a signed request
+// declares or streams more than the verifier's resolved signed-body cap.
+var errSignedBodyTooLarge = errors.NewInvalidArgumentError("signed request body exceeds configured limit")
 
 // recordAuthResult increments the auth-result counter, tolerating an uninitialised
 // metric (some tests skip metrics setup).
@@ -246,10 +302,12 @@ func recordAuthResult(result string) {
 //     different bodies
 //   - X-Peer-Signature   — hex-encoded Ed25519 signature over the payload
 //
-// All error paths fall through with tierUnverified (fail open) and increment
-// prometheusAssetHTTPPeerAuthResult with the specific failure reason. NTP
-// drift outside the freshness window is treated as an auth failure;
-// operators should keep clocks within ±5s of UTC.
+// Error paths fall through with tierUnverified (fail open) and increment
+// prometheusAssetHTTPPeerAuthResult with the specific failure reason. The one
+// exception is a signed body over maxSignedBodyBytes, which is answered with
+// 413 because the body was deliberately not buffered and so cannot be passed
+// on intact. NTP drift outside the freshness window is treated as an auth
+// failure; operators should keep clocks within ±5s of UTC.
 func (v *peerAuthVerifier) Middleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -260,6 +318,12 @@ func (v *peerAuthVerifier) Middleware() echo.MiddlewareFunc {
 				// No auth attempted — this is the common path for
 				// unauthenticated public traffic; no metric increment.
 				return next(c)
+			}
+			if result == peerAuthResultBodyTooLarge {
+				// The only hard rejection in this middleware: the body has not
+				// been buffered, so it cannot be handed on intact.
+				recordAuthResult(result)
+				return echo.NewHTTPError(http.StatusRequestEntityTooLarge, "signed request body too large")
 			}
 			if result != peerAuthResultOK {
 				recordAuthResult(result)
@@ -305,32 +369,58 @@ func (v *peerAuthVerifier) verifySignedRequest(c echo.Context) (peer.ID, string,
 		return "", "", false
 	}
 
+	// Cheap fixed-size checks first. Nothing below may touch the request body
+	// until the request has been shown to be worth that work.
 	if !checkFreshness(req.Header.Get(peerAuthHeaderTimestamp)) {
 		return "", peerAuthResultExpired, true
 	}
 
-	pubKey, ok := decodeEd25519PublicKey(pubKeyHex)
+	pubKeyRaw, pubKey, ok := decodeEd25519PublicKey(pubKeyHex)
 	if !ok {
 		return "", peerAuthResultBadSig, true
 	}
 
-	sigHex := req.Header.Get(peerAuthHeaderSignature)
-	sigBytes, err := hex.DecodeString(sigHex)
+	sigBytes, err := hex.DecodeString(req.Header.Get(peerAuthHeaderSignature))
+	if err != nil || len(sigBytes) != ed25519.SignatureSize {
+		return "", peerAuthResultBadSig, true
+	}
+
+	peerID, err := peer.IDFromPublicKey(pubKey)
 	if err != nil {
 		return "", peerAuthResultBadSig, true
 	}
 
-	// Replay check before any expensive work (signature verify, body read).
-	replayKey := replayCacheKey(pubKeyHex, sigHex)
-	if v.replayCache.Has(replayKey) {
+	// Anyone can mint an Ed25519 key, so a valid signature is not what makes a
+	// request worth spending resources on — allowlist membership is. Check it
+	// before the replay claim, the signature check and the body read.
+	if _, ok := v.allowlist[peerID]; !ok {
+		v.logger.Debugf("[PeerAuth] authenticated peer %s not in allowlist; staying unverified", peerID)
+		return peerID, peerAuthResultNotAllowlisted, true
+	}
+
+	// Claim the (pubkey, signature) pair in one locked operation so racing
+	// copies of a single signed request cannot all pass. The key is built from
+	// the decoded bytes, so hex case variants collapse onto the same entry.
+	replayKey := replayCacheKey(pubKeyRaw, sigBytes)
+	if _, seen := v.replayCache.GetOrSet(replayKey, struct{}{}, ttlcache.WithTTL[string, struct{}](replayCacheTTL)); seen {
 		return "", peerAuthResultReplay, true
 	}
 
+	// Release the claim unless the request actually authenticates, so a flood
+	// of malformed submissions can't burn a peer's signature or evict live
+	// entries from the cache.
+	authenticated := false
+
+	defer func() {
+		if !authenticated {
+			v.replayCache.Delete(replayKey)
+		}
+	}()
+
+	// The signature covers the *declared* digest header, not the computed one,
+	// so it can be verified before a single body byte is read. The body is
+	// then checked against that same declared digest below.
 	declaredDigest := strings.ToLower(req.Header.Get(util.PeerAuthBodyDigestHeader))
-	actualDigest, err := digestRequestBody(req)
-	if err != nil || declaredDigest != actualDigest {
-		return "", peerAuthResultBadDigest, true
-	}
 
 	payload := "v2:" + req.Header.Get(peerAuthHeaderTimestamp) + ":" + req.Host + ":" + req.Method + ":" + req.URL.RequestURI() + ":" + declaredDigest
 	verified, err := pubKey.Verify([]byte(payload), sigBytes)
@@ -338,20 +428,20 @@ func (v *peerAuthVerifier) verifySignedRequest(c echo.Context) (peer.ID, string,
 		return "", peerAuthResultBadSig, true
 	}
 
-	// Signature is valid AND fresh — record so a re-submit within the window
-	// is rejected. Recorded only after verify so a flood of invalid sigs
-	// doesn't pollute the cache.
-	v.replayCache.Set(replayKey, struct{}{}, ttlcache.DefaultTTL)
-
-	peerID, err := peer.IDFromPublicKey(pubKey)
+	actualDigest, err := v.digestRequestBody(req)
 	if err != nil {
-		return "", peerAuthResultBadSig, true
+		if errors.Is(err, errSignedBodyTooLarge) {
+			return peerID, peerAuthResultBodyTooLarge, true
+		}
+
+		return "", peerAuthResultBadDigest, true
 	}
 
-	if _, ok := v.allowlist[peerID]; !ok {
-		v.logger.Debugf("[PeerAuth] authenticated peer %s not in allowlist; staying unverified", peerID)
-		return peerID, peerAuthResultNotAllowlisted, true
+	if declaredDigest != actualDigest {
+		return "", peerAuthResultBadDigest, true
 	}
+
+	authenticated = true
 
 	return peerID, peerAuthResultOK, true
 }
@@ -366,39 +456,56 @@ func checkFreshness(tsStr string) bool {
 	return math.Abs(float64(time.Now().Unix()-ts)) <= freshnessWindowSeconds
 }
 
-// decodeEd25519PublicKey decodes a hex-encoded Ed25519 public key.
-func decodeEd25519PublicKey(hexStr string) (crypto.PubKey, bool) {
+// decodeEd25519PublicKey decodes a hex-encoded Ed25519 public key, returning
+// both the decoded bytes (for canonical replay-cache keying) and the key.
+func decodeEd25519PublicKey(hexStr string) ([]byte, crypto.PubKey, bool) {
 	raw, err := hex.DecodeString(hexStr)
 	if err != nil {
-		return nil, false
+		return nil, nil, false
 	}
 	pubKey, err := crypto.UnmarshalEd25519PublicKey(raw)
 	if err != nil {
-		return nil, false
+		return nil, nil, false
 	}
-	return pubKey, true
+	return raw, pubKey, true
 }
 
 // replayCacheKey returns a short fixed-length key for the (pubkey, signature)
-// pair. Using SHA-256 keeps the map keys bounded regardless of input size.
-func replayCacheKey(pubKeyHex, sigHex string) string {
-	sum := sha256.Sum256([]byte(pubKeyHex + ":" + sigHex))
-	return string(sum[:])
+// pair. It hashes the *decoded* bytes, not the hex headers: hex is
+// case-insensitive, so keying on the header text would let an attacker mint a
+// fresh replay identity for one captured signature just by changing case.
+func replayCacheKey(pubKeyRaw, sigBytes []byte) string {
+	h := sha256.New()
+	_, _ = h.Write(pubKeyRaw)
+	_, _ = h.Write([]byte{':'})
+	_, _ = h.Write(sigBytes)
+	return string(h.Sum(nil))
 }
 
 // digestRequestBody computes the lowercase hex SHA-256 of the request body and
 // replaces req.Body so handlers downstream still see it. For requests with no
 // body (GET/HEAD typically) it returns util.EmptyBodySHA256Hex without reading.
-func digestRequestBody(req *http.Request) (string, error) {
+// Bodies over v.maxSignedBodyBytes are refused on the declared length where one
+// is available, and otherwise as soon as the cap is crossed.
+func (v *peerAuthVerifier) digestRequestBody(req *http.Request) (string, error) {
 	if req.Body == nil || req.Body == http.NoBody {
 		return util.EmptyBodySHA256Hex, nil
 	}
 
-	buf, err := io.ReadAll(req.Body)
+	if req.ContentLength > v.maxSignedBodyBytes {
+		return "", errSignedBodyTooLarge
+	}
+
+	buf, err := io.ReadAll(io.LimitReader(req.Body, v.maxSignedBodyBytes+1))
+	_ = req.Body.Close()
+
 	if err != nil {
 		return "", err
 	}
-	_ = req.Body.Close()
+
+	if int64(len(buf)) > v.maxSignedBodyBytes {
+		return "", errSignedBodyTooLarge
+	}
 
 	if len(buf) == 0 {
 		req.Body = http.NoBody

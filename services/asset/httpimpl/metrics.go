@@ -62,7 +62,7 @@ var (
 	prometheusAssetHTTPRateLimited *prometheus.CounterVec
 
 	// prometheusAssetHTTPPeerAuthResult counts the outcome of peer-auth attempts.
-	// Labels: "ok" | "expired" | "bad_sig" | "bad_digest" | "replay" | "unknown_key" | "not_allowlisted".
+	// Labels: "ok" | "expired" | "bad_sig" | "bad_digest" | "replay" | "unknown_key" | "not_allowlisted" | "body_too_large".
 	// Operators watch the non-ok rates to spot clock drift, key rotation, or
 	// flooding attacks; absence of "ok" counts after deploy means no signed
 	// peers are reaching the middleware.
@@ -319,7 +319,7 @@ func _initPrometheusMetrics() {
 			Name:      "http_peer_auth_result_total",
 			Help:      "Outcome of peer-auth attempts on the asset HTTP API",
 		},
-		[]string{"result"}, // ok | expired | bad_sig | bad_digest | replay | unknown_key | not_allowlisted
+		[]string{"result"}, // ok | expired | bad_sig | bad_digest | replay | unknown_key | not_allowlisted | body_too_large
 	)
 
 	prometheusAssetHTTPInFlight = promauto.NewGauge(
