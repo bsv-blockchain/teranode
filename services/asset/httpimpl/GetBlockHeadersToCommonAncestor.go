@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -133,16 +134,17 @@ func (h *HTTP) GetBlockHeadersToCommonAncestor(mode ReadMode) func(c echo.Contex
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 
-		if numberOfHeaders > 10_000 {
-			numberOfHeaders = 10_000
-		}
-
 		var (
 			headers     []*model.BlockHeader
 			headerMetas []*model.BlockHeaderMeta
 		)
 
-		headers, headerMetas, err = h.repository.GetBlockHeadersToCommonAncestor(ctx, hash, hashes, uint32(numberOfHeaders)) // nolint:gosec
+		numberOfHeadersUint32, err := safeconversion.IntToUint32(numberOfHeaders)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid number of headers", err).Error())
+		}
+
+		headers, headerMetas, err = h.repository.GetBlockHeadersToCommonAncestor(ctx, hash, hashes, numberOfHeadersUint32)
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
@@ -168,6 +170,10 @@ func (h *HTTP) parseBlockLocatorHashes(hashesStr string) ([]*chainhash.Hash, err
 	}
 
 	numHashes := len(hashesStr) / 64
+	if numHashes > maxBlockLocatorHashes {
+		return nil, errors.NewInvalidArgumentError("too many block locator hashes")
+	}
+
 	hashes := make([]*chainhash.Hash, numHashes)
 
 	for i := 0; i < numHashes; i++ {
@@ -184,23 +190,36 @@ func (h *HTTP) parseBlockLocatorHashes(hashesStr string) ([]*chainhash.Hash, err
 	return hashes, nil
 }
 
-// parseNumberOfHeaders parses and validates the 'n' parameter for number of headers
+// parseNumberOfHeaders parses and validates the 'n' parameter for number of headers.
+// The default (an absent or zero 'n') is subject to the same cap as an explicit
+// value: it is never returned before Asset.MaxBlockHeaders has had a chance to
+// tighten it.
 func (h *HTTP) parseNumberOfHeaders(nStr string) (int, error) {
-	if nStr == "" {
-		return 100, nil
-	}
+	n := 100
 
-	n, err := strconv.Atoi(nStr)
-	if err != nil {
-		return 0, errors.NewInvalidArgumentError("invalid number of headers")
+	if nStr != "" {
+		var err error
+
+		n, err = strconv.Atoi(nStr)
+		if err != nil {
+			return 0, errors.NewInvalidArgumentError("invalid number of headers")
+		}
+
+		if n < 0 {
+			return 0, errors.NewInvalidArgumentError("number of headers must not be negative")
+		}
 	}
 
 	if n == 0 {
-		return 100, nil
+		n = 100
 	}
 
 	if n > 10_000 {
-		return 10_000, nil
+		n = 10_000
+	}
+
+	if maxHeaders := h.settings.Asset.MaxBlockHeaders; maxHeaders > 0 && n > maxHeaders {
+		n = maxHeaders
 	}
 
 	return n, nil
