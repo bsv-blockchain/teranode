@@ -3,6 +3,7 @@ package blockchain
 import (
 	"container/ring"
 	"context"
+	"math"
 	"net/url"
 	"testing"
 
@@ -93,6 +94,7 @@ type countingStore struct {
 
 	headerCalls   int
 	headersServed int
+	headersAsked  uint64 // the largest numberOfHeaders any single call requested
 	otherCalls    int
 }
 
@@ -101,6 +103,10 @@ func (c *countingStore) GetBlockHeaders(ctx context.Context, blockHash *chainhas
 
 	c.headerCalls++
 	c.headersServed += len(headers)
+
+	if numberOfHeaders > c.headersAsked {
+		c.headersAsked = numberOfHeaders
+	}
 
 	return headers, metas, err
 }
@@ -145,6 +151,14 @@ func newChainStore(t *testing.T, numberOfBlocks int) (blockchain_store.Store, []
 func chainOfBlocks(t *testing.T, genesisHash *chainhash.Hash, numberOfBlocks int) []*model.Block {
 	t.Helper()
 
+	return chainOfBlocksFrom(t, genesisHash, numberOfBlocks, 0)
+}
+
+// chainOfBlocksFrom builds a chain on top of parentHash. salt shifts the timestamps so a
+// side branch built from the same parent does not collide with the main chain's hashes.
+func chainOfBlocksFrom(t *testing.T, parentHash *chainhash.Hash, numberOfBlocks int, salt uint32) []*model.Block {
+	t.Helper()
+
 	coinbase, err := bt.NewTxFromString(model.CoinbaseHex)
 	require.NoError(t, err)
 
@@ -155,7 +169,7 @@ func chainOfBlocks(t *testing.T, genesisHash *chainhash.Hash, numberOfBlocks int
 	nBits, err := model.NewNBitFromString("207fffff")
 	require.NoError(t, err)
 
-	hashPrevBlock := genesisHash
+	hashPrevBlock := parentHash
 	blocks := make([]*model.Block, 0, numberOfBlocks)
 
 	for i := 0; i < numberOfBlocks; i++ {
@@ -163,7 +177,7 @@ func chainOfBlocks(t *testing.T, genesisHash *chainhash.Hash, numberOfBlocks int
 			Header: &model.BlockHeader{
 				Version: 1,
 				// nolint:gosec // test heights are small.
-				Timestamp:      1231469665 + uint32(i),
+				Timestamp:      1231469665 + salt + uint32(i),
 				Nonce:          2573394689,
 				HashPrevBlock:  hashPrevBlock,
 				HashMerkleRoot: subtree.RootHash(),
@@ -233,7 +247,7 @@ func TestGetBlockHeadersToCommonAncestor_MatchesTheWalk(t *testing.T) {
 }
 
 // TestGetBlockHeadersToCommonAncestor_AbsentLocatorCostsAFixedNumberOfReads is the
-// regression test for bitcoin-sv/teranode#4894. An absent locator used to walk the chain
+// regression test for the defect this replaced. An absent locator used to walk the chain
 // to its start, so the store work grew with chain height for a response of at most
 // maxHeaders. The lookup must now cost a small fixed number of reads.
 func TestGetBlockHeadersToCommonAncestor_AbsentLocatorCostsAFixedNumberOfReads(t *testing.T) {
@@ -318,4 +332,74 @@ func TestGetBlockHeadersToCommonAncestor_RejectsEmptyInput(t *testing.T) {
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrNotFound))
 	})
+}
+
+// TestGetBlockHeadersToCommonAncestor_ClampsMaxHeaders pins the cap that keeps the
+// single header read proportional to the response rather than to the chain. The asset
+// handler casts a negative n straight to uint32, so a caller reaches this function with
+// maxHeaders of 4,294,967,295 through one query parameter; without the clamp that reads
+// and ships every header between the locator and the target.
+func TestGetBlockHeadersToCommonAncestor_ClampsMaxHeaders(t *testing.T) {
+	inner, blocks := newChainStore(t, 2_500)
+	target := blocks[len(blocks)-1].Hash()
+
+	original := maxHeadersToCommonAncestor
+	maxHeadersToCommonAncestor = 100
+
+	t.Cleanup(func() { maxHeadersToCommonAncestor = original })
+
+	counted := &countingStore{Store: inner}
+
+	headers, metas, err := getBlockHeadersToCommonAncestor(t.Context(), counted, target, []*chainhash.Hash{blocks[0].Hash()}, math.MaxUint32)
+	require.NoError(t, err)
+
+	require.Len(t, headers, 100)
+	require.Len(t, metas, 100)
+	require.Equal(t, uint64(100), counted.headersAsked, "the store must never be asked for more than the cap")
+	require.Equal(t, 100, counted.headersServed)
+}
+
+// TestGetBlockHeadersToCommonAncestor_ForkTargetMatchesTheWalk covers the input the
+// indexed path does not serve: a target that is not on the main chain, where the store
+// falls back to a recursive walk over the target's ancestry. The answer must still match
+// the old walk, including when the locator is on the side branch itself.
+func TestGetBlockHeadersToCommonAncestor_ForkTargetMatchesTheWalk(t *testing.T) {
+	store, blocks := newChainStore(t, 30)
+
+	// A shorter side branch off block 19, so the main chain stays the longest.
+	branch := chainOfBlocksFrom(t, blocks[19].Hash(), 3, 777)
+	for _, block := range branch {
+		_, _, storeErr := store.StoreBlock(t.Context(), block, "")
+		require.NoError(t, storeErr)
+	}
+
+	forkTip := branch[len(branch)-1].Hash()
+
+	// The side branch must really be a fork, otherwise the store answers from the
+	// main-chain index and this test covers the same path as the one above.
+	bestHeader, _, err := store.GetBestBlockHeader(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, blocks[len(blocks)-1].Hash().String(), bestHeader.Hash().String(), "the main chain must stay the best chain")
+
+	for _, tc := range []struct {
+		name    string
+		locator *chainhash.Hash
+	}{
+		{name: "locator below the branch point", locator: blocks[5].Hash()},
+		{name: "locator at the branch point", locator: blocks[19].Hash()},
+		{name: "locator on the branch", locator: branch[0].Hash()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			locator := []*chainhash.Hash{tc.locator}
+
+			wantHeaders, wantMetas, wantErr := getBlockHeadersToCommonAncestorByWalk(t.Context(), store, forkTip, locator, 10)
+			require.NoError(t, wantErr)
+
+			gotHeaders, gotMetas, err := getBlockHeadersToCommonAncestor(t.Context(), store, forkTip, locator, 10)
+			require.NoError(t, err)
+
+			require.Equal(t, headerHashes(t, wantHeaders), headerHashes(t, gotHeaders))
+			require.Equal(t, wantMetas, gotMetas)
+		})
+	}
 }

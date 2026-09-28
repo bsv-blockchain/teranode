@@ -12,13 +12,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestCommonAncestorRoutesAreHeavyRateLimited pins the mitigation for
-// bitcoin-sv/teranode#4894. A locator that matches nothing makes the blockchain
-// service walk back from the target in 1,000-header pages until it hits a match
-// or the start of the chain, so one unauthenticated request costs work
-// proportional to chain height. The global limiter (1024 req/s by default) does
-// not price that; the heavy limiter (10 req/s) is what the equally expensive
-// block and subtree routes already carry.
+// TestCommonAncestorRoutesAreHeavyRateLimited pins which of the common-ancestor
+// routes the heavy limiter covers.
+//
+// headers_to_common_ancestor is unauthenticated and resolves an ancestor that a
+// fork or stale target can still make expensive, so it is charged the heavy
+// limit (10 req/s) like the block and subtree routes.
+//
+// headers_from_common_ancestor is deliberately left out. Peer catch-up calls it
+// every iteration, and the heavy bucket is shared with the /blocks and /subtree
+// fetches of the same round, so charging it starves those and fails catch-up
+// against healthy peers.
 func TestCommonAncestorRoutesAreHeavyRateLimited(t *testing.T) {
 	const (
 		heavyLimit = 1
@@ -33,9 +37,6 @@ func TestCommonAncestorRoutesAreHeavyRateLimited(t *testing.T) {
 		"/api/v1/headers_to_common_ancestor/" + someHash,
 		"/api/v1/headers_to_common_ancestor/" + someHash + "/hex",
 		"/api/v1/headers_to_common_ancestor/" + someHash + "/json",
-		"/api/v1/headers_from_common_ancestor/" + someHash,
-		"/api/v1/headers_from_common_ancestor/" + someHash + "/hex",
-		"/api/v1/headers_from_common_ancestor/" + someHash + "/json",
 	}
 
 	for _, target := range heavy {
@@ -45,12 +46,22 @@ func TestCommonAncestorRoutesAreHeavyRateLimited(t *testing.T) {
 		})
 	}
 
-	// Control: a cheap single-header lookup keeps only the global limit, so the
-	// test above is detecting the heavy limiter rather than the global one.
-	t.Run("cheap header route keeps only the global limit", func(t *testing.T) {
-		require.False(t, sawTooManyRequests(t, "/api/v1/header/"+someHash, heavyLimit, requests),
-			"the heavy limiter must not be attached to the single-header route")
-	})
+	// The catch-up route, and a cheap single-header lookup as a control: both keep
+	// only the global limit, which also shows the cases above are detecting the
+	// heavy limiter rather than the global one.
+	notHeavy := []string{
+		"/api/v1/headers_from_common_ancestor/" + someHash,
+		"/api/v1/headers_from_common_ancestor/" + someHash + "/hex",
+		"/api/v1/headers_from_common_ancestor/" + someHash + "/json",
+		"/api/v1/header/" + someHash,
+	}
+
+	for _, target := range notHeavy {
+		t.Run("not throttled: "+target, func(t *testing.T) {
+			require.False(t, sawTooManyRequests(t, target, heavyLimit, requests),
+				"the heavy limiter must not be attached to this route")
+		})
+	}
 }
 
 // sawTooManyRequests issues n requests from one IP against a server whose heavy

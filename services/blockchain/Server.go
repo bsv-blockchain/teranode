@@ -3361,25 +3361,45 @@ func getBlockLocatorByWalk(ctx context.Context, store blockchain_store.Store, st
 	return locator, nil
 }
 
+// maxHeadersToCommonAncestor caps the response, and so the single header read that
+// serves it, for every entry point: the gRPC handler, LocalClient and the asset
+// service's route all reach getBlockHeadersToCommonAncestor, and only the HTTP handler
+// caps its own n. It matches that handler's cap, so no in-tree request changes shape; a
+// direct gRPC caller asking for more is capped by design. A var so tests can lower it.
+var maxHeadersToCommonAncestor uint32 = 10_000
+
 // getBlockHeadersToCommonAncestor returns up to maxHeaders headers on hashTarget's
 // chain ending at the newest block the locator and that chain share, ordered from the
 // highest height down to that common ancestor.
 //
-// It resolves the ancestor with a single indexed lookup rather than walking. The
-// previous implementation read the chain backwards in 1,000-header pages until a
-// locator hash turned up, so a locator matching nothing (which any unauthenticated
-// caller of the asset service's /headers_to_common_ancestor route can send) cost work
-// proportional to chain height: around 900 store reads and 900k headers materialised at
-// present mainnet height, for a response of at most maxHeaders
-// (bitcoin-sv/teranode#4894). This shape costs at most four reads whatever the distance.
+// It resolves the ancestor through GetLatestBlockHeaderFromBlockLocator rather than
+// walking. The previous implementation read the chain backwards in 1,000-header pages
+// until a locator hash turned up, so a locator matching nothing, which any
+// unauthenticated caller of the asset service's /headers_to_common_ancestor route can
+// send, cost work proportional to chain height: around 900 store reads and 900k headers
+// materialised at present mainnet height, for a response of at most maxHeaders.
 //
 // GetLatestBlockHeaderFromBlockLocator picks the highest-height locator entry on
 // hashTarget's chain, which is the same block the backward walk stopped at, since the
 // walk stopped at the first locator hash it met coming down from the target. The
 // sibling getBlockHeadersFromCommonAncestor already resolves its ancestor this way.
+//
+// Cost: for a target on the main chain this is at most four store reads whatever the
+// distance to the locator. For a fork or stale target, or while the main chain is being
+// rebuilt, the store answers the ancestor lookup with a recursive walk over the target's
+// whole ancestry instead, which is still proportional to its height. That walk is inside
+// the store and shared with the sibling function, so bounding it belongs there.
 func getBlockHeadersToCommonAncestor(ctx context.Context, store blockchain_store.Store, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	if maxHeaders == 0 || len(blockLocatorHashes) == 0 {
 		return nil, nil, errors.NewNotFoundError("common ancestor hash not found")
+	}
+
+	// Without this, a caller asking for more headers than the chain is long turns the
+	// single read below into a read of the whole span: the asset handler casts a
+	// negative n straight to uint32, so maxHeaders of 4,294,967,295 is reachable from
+	// one query parameter.
+	if maxHeaders > maxHeadersToCommonAncestor {
+		maxHeaders = maxHeadersToCommonAncestor
 	}
 
 	locator := make([]chainhash.Hash, len(blockLocatorHashes))
