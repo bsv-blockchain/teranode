@@ -4276,6 +4276,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#trust-model-and-network-isolation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trust Model and Network Isolation
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -7469,6 +7480,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#trust-model-and-network-isolation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trust Model and Network Isolation
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -7873,6 +7895,7 @@
 </li>
 <li><a href="#4-configuration">Configuration</a><ul>
 <li><a href="#tls-and-authentication">TLS and Authentication</a></li>
+<li><a href="#trust-model-and-network-isolation">Trust Model and Network Isolation</a></li>
 </ul>
 </li>
 <li><a href="#5-operational-guidelines">Operational Guidelines</a><ul>
@@ -7901,19 +7924,21 @@
 <p>In the Teranode ecosystem, Kafka plays a crucial role in facilitating communication between various components, such as the Validator, BlockValidation, and Blockchain. It enables these components to exchange messages, notifications, and data reliably and efficiently, ensuring smooth operation of the entire system.</p>
 <p>It's important to note that Kafka is a third-party dependency in Teranode. As such, there is no specific installation or configuration process provided within the Teranode framework. Users are expected to have a properly configured Kafka setup running before initiating the Teranode services. This approach allows for flexibility in Kafka configuration based on specific deployment needs and existing infrastructure.</p>
 <p><strong>Development Mode</strong>: Development and test contexts use in-memory Kafka by default (<code>KAFKA_SCHEMA.dev = memory</code>), requiring no external Kafka setup. For production-like testing with Docker Kafka, see <a href="../../../references/settings/kafka_settings/">Kafka Settings Reference</a>.</p>
+<p><strong>Choosing Kafka vs. gRPC for a new path</strong>: see <a href="../../architecture/teranode-microservices-overview/#61-choosing-grpc-vs-kafka-for-a-new-communication-path">§6.1 Choosing gRPC vs. Kafka for a New Communication Path</a> in the microservices overview.</p>
 <h2 id="2-use-cases">2. Use Cases<a class="headerlink" href="#2-use-cases" title="Permanent link">&para;</a></h2>
 <h3 id="propagation-service">Propagation Service<a class="headerlink" href="#propagation-service" title="Permanent link">&para;</a></h3>
-<p>After initial sanity check tests, the propagation service endorses transactions to the validator. This is done by sending transaction notifications to the validator via the <code>kafka_validatortxsConfig</code> topic.</p>
+<p>After initial sanity check tests, the propagation service endorses transactions to the validator. When <code>kafka_validatortxsConfig</code> is configured, this is done by publishing a transaction notification to that topic. The topic is empty in the committed <code>settings.conf</code> defaults and populated only in the <code>.operator</code> context; when it is empty, no producer and no consumer group are created and Propagation invokes the Validator directly instead. With <code>useLocalValidator = true</code> — also the committed default — that direct invocation is an in-process call into an embedded <code>*Validator</code>, not a network hop. See <a href="../../architecture/teranode-microservices-overview/#61-choosing-grpc-vs-kafka-for-a-new-communication-path">§6.1 Choosing gRPC vs. Kafka for a New Communication Path</a>.</p>
+<p>The diagram below shows the Kafka form of this handoff, i.e. the <code>.operator</code> configuration:</p>
 <p><img alt="kafka_propagation_validator.svg" src="../img/plantuml/kafka_propagation_validator.svg" /></p>
 <ul>
-<li><strong>kafka_validatortxsConfig</strong>: This Kafka topic is used to transmit new transaction notifications from the Propagation component to the Validator.</li>
+<li><strong>kafka_validatortxsConfig</strong>: When set, this Kafka topic transmits new transaction notifications from the Propagation component to the Validator. Empty by default outside the <code>.operator</code> context.</li>
 </ul>
 <h3 id="validator-component">Validator Component<a class="headerlink" href="#validator-component" title="Permanent link">&para;</a></h3>
 <p><img alt="kafka_validator_to_other_services.svg" src="../img/plantuml/kafka_validator_to_other_services.svg" /></p>
 <p>This diagram illustrates the central role of the Validator in processing new transactions, and how it uses Kafka:</p>
 <ol>
 <li>
-<p>The Validator receives new transactions from the Propagation component via the <code>kafka_validatortxsConfig</code> topic.</p>
+<p>The Validator receives new transactions from the Propagation component via the <code>kafka_validatortxsConfig</code> topic, when that topic is configured. It is empty by default outside the <code>.operator</code> context, in which case Propagation invokes the Validator directly (in-process under the default <code>useLocalValidator = true</code>) and no Kafka leg exists on this hop.</p>
 </li>
 <li>
 <p>Valid transactions are forwarded to the Block Assembly component using <strong>direct gRPC calls</strong> (not Kafka). The Validator uses the <code>blockAssembler.Store()</code> method for synchronous transaction processing required for mining candidate generation.</p>
@@ -8035,14 +8060,116 @@
 </span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="na">KAFKA_TLS_CERT_FILE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">/etc/teranode/certs/client-cert.pem</span>
 </span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="na">KAFKA_TLS_KEY_FILE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">/etc/teranode/certs/client-key.pem</span>
 </span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="c1"># Kafka broker URLs (using TLS port)</span>
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="na">KAFKA_HOSTS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">kafka1.example.com:9093,kafka2.example.com:9093</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="c1"># Kafka broker URLs. 9093 here is a conventional external TLS listener, not the</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="c1"># deployment shipped in this repository — there, 9093 is pandaproxy and the broker</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="c1"># listens PLAINTEXT-only on 9092. See "Trust Model and Network Isolation" below.</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="na">KAFKA_HOSTS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">kafka1.example.com:9093,kafka2.example.com:9093</span>
 </span></code></pre></div>
 <p>Development/testing configuration (skip certificate verification):</p>
 <div class="language-properties highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="na">KAFKA_ENABLE_TLS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">true</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="na">KAFKA_TLS_SKIP_VERIFY</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">true  # Only for testing!</span>
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="na">kafka_enable_debug_logging</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">true  # For troubleshooting</span>
 </span></code></pre></div>
+<h3 id="trust-model-and-network-isolation">Trust Model and Network Isolation<a class="headerlink" href="#trust-model-and-network-isolation" title="Permanent link">&para;</a></h3>
+<p>The manifests and compose files shipped in this repository (<code>deploy/kubernetes/kafka/</code>,
+<code>deploy/docker/base/</code>) run Kafka/Redpanda with <strong>no broker ACLs, no SASL, and a plaintext
+listener by default</strong>. <code>KAFKA_ENABLE_TLS</code> is <code>false</code> out of the box, so client-side mTLS
+(described above) is available but not active until an operator turns it on. Nothing in the
+default deployment restricts <em>who</em> can connect to the broker or <em>which</em> topics a connected
+client may write to.</p>
+<p>This means the security boundary for Kafka, as shipped, is <strong>network isolation, not
+authentication</strong>: any workload with network reach to the Kafka Service can publish or
+consume on any topic, including forging messages onto topics other services trust.</p>
+<ul>
+<li><code>deploy/kubernetes/kafka/kafka-shared-networkpolicy.yaml</code> restricts ingress to the Kafka
+  pods to same-namespace traffic only, as a default-deny boundary against workloads outside
+  the namespace <strong>on clusters whose CNI plugin enforces NetworkPolicy</strong>. This is a real
+  prerequisite, and it fails open silently: any apiserver accepts and stores the object
+  regardless, <code>kubectl get networkpolicy</code> shows it as present either way, and a cluster whose
+  CNI does not implement NetworkPolicy simply ignores it with no error. Verify enforcement
+  before relying on it — the manifest carries a probe command in its header comment. The
+  policy is also intentionally a coarse, same-namespace allowlist rather than a per-service
+  one: there is no consistent pod-label scheme shared across every producer/consumer service
+  and deployment style (docker-compose-derived manifests vs. the operator-managed CRs in
+  <code>deploy/kubernetes/teranode/</code>) to key a tighter selector off. Treat it as a floor, not a
+  substitute for proper multi-tenant segmentation.</li>
+<li>For non-Kubernetes deployments, <code>deploy/docker/base/docker-services.yml</code> already publishes
+  the broker (<code>9092</code>), pandaproxy (<code>9093</code>) and schema registry (host <code>9096</code> → container
+  <code>8081</code>) bound to <code>127.0.0.1</code>, so they are not reachable off-host by default. Two residual
+  gaps: any container on the <code>teranode-network</code> bridge still reaches the broker directly on
+  <code>kafka-shared:9092</code>, and the stacks under <code>compose/</code> do not all have that loopback binding
+  (<code>docker-compose-ss.yml</code> publishes <code>9092</code>/<code>9093</code> on all interfaces). On bare metal, restrict
+  those ports with a firewall rule.</li>
+<li>Not every topic carries the same trust weight if that boundary is breached. The
+  characterisation below covers every topic wired into the Go code, and holds only under the
+  default settings shipped in <code>settings.conf</code>.<ul>
+<li><code>blocks</code>, <code>subtrees</code>, <code>invalid-blocks</code>, <code>invalid-subtrees</code>, <code>rejectedtx</code>,
+  <code>tx-policy-rejected</code> and <code>legacy-inv</code> carry pointers or advisory data that downstream
+  services re-validate or treat as unblessed input, so forged messages cannot inject data.
+  Two qualifications: the <code>URL</code> field on <code>blocks</code> and <code>subtrees</code> is attacker-chosen and
+  only scheme-checked (<code>http</code>/<code>https</code>, plus the literal <code>legacy</code>) with no restriction on
+  the host, so produce access gives an outbound-fetch primitive from the validating pods,
+  aimed at any host and driven at any rate the producer chooses; and <code>legacy-inv</code> messages
+  are dropped unless they name a currently connected peer, in which case they drive
+  getdata requests for attacker-chosen hashes to that peer.</li>
+<li><code>txmeta</code> message contents are written directly into the in-memory tx-metadata cache, and
+  a cache hit makes subtree validation treat the transaction as already known — it is
+  never fetched or validated at all. The cached <code>fee</code>, <code>sizeInBytes</code> and parent inpoints
+  are then written into the subtree and subtree-meta files this node stores and serves,
+  where they feed the block fee/reward check and the order-and-blessed check. Proof-of-work
+  and the authoritative UTXO store still bound what can ultimately get confirmed —
+  forged <code>txmeta</code> entries cannot forge transactions or double-spend — but the reachable
+  surface is wider than a single skipped signature check.</li>
+<li><code>validatortxs</code> (empty by default, populated in the <code>.operator</code> context, i.e. exactly the
+  Kubernetes deployment this NetworkPolicy targets) carries the raw transaction <em>and</em> the
+  validation options applied to it — <code>skipPolicyChecks</code>, <code>skipUtxoCreation</code>,
+  <code>addTXToBlockAssembly</code>, <code>createConflicting</code>. The Validator takes all four from the
+  message as-is, with no check that the producer was entitled to request them, so produce
+  access to this topic means choosing the validation mode a transaction is processed
+  under (<code>skipPolicyChecks</code> maps to consensus-mode validation, bypassing local policy).
+  The <code>options</code> field itself is optional-presence on the wire; a message that omits it
+  falls back to the validator's own defaults (<code>services/validator/Server.go</code>,
+  <code>optionsFromKafkaMessage</code>) — the same defaults the in-tree Propagation producer already
+  sends — rather than crashing or silently becoming more permissive. More generally, the
+  Kafka consumer now recovers a panic in any topic's handler instead of letting it take
+  down the process (<code>util/kafka/kafka_consumer.go</code>), so a malformed message on this or any
+  other topic is a logged, counted event, not an outage.</li>
+<li><code>blocks-final</code> is the one topic whose contents leave the node. The legacy sync manager
+  relays each message's hash and 80-byte header to every connected legacy P2P peer without
+  checking proof-of-work, without consulting the blockchain store, and without verifying
+  that the header hashes to the hash in the message key. The bound on this is real:
+  forged messages cannot get an invalid block accepted anywhere, because receiving peers
+  still check proof-of-work and chain connectivity, and this node cannot serve a block it
+  does not have. What they do is turn this node into a source of junk block announcements,
+  at whatever rate the producer chooses — grounds for peer misbehaviour scoring or a ban.
+  Treat write access to <code>txmeta</code>, <code>validatortxs</code> and <code>blocks-final</code> as the topics that carry
+  real weight.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Operators running Kafka in a shared or multi-tenant cluster, or subject to compliance
+requirements, should not rely on network isolation alone.</strong> On top of the NetworkPolicy:</p>
+<ul>
+<li>Enable <code>KAFKA_ENABLE_TLS</code> (and provide <code>KAFKA_TLS_CA_FILE</code>/<code>KAFKA_TLS_CERT_FILE</code>/
+  <code>KAFKA_TLS_KEY_FILE</code> for mutual TLS) as documented above — the client side is wired into
+  every producer and consumer path already, it is simply off by default. <strong>The client flag on
+  its own is not enough.</strong> The Redpanda instance shipped here starts with
+  <code>--kafka-addr PLAINTEXT://0.0.0.0:9092</code> and nothing else
+  (<code>deploy/kubernetes/kafka/kafka-shared-deployment.yaml</code>, <code>deploy/docker/base/docker-services.yml</code>),
+  so turning client TLS on against it breaks connectivity rather than securing anything.
+  Enabling mTLS also requires configuring a broker TLS listener with broker certificates, and
+  adding that listener's port to <code>kafka-shared-networkpolicy.yaml</code> — the policy hard-codes
+  <code>9092</code>/<code>9093</code>/<code>8081</code>, so a TLS listener on a fourth port is silently blocked by it.</li>
+<li>Configure broker-side ACLs restricting write access to the weighty topics to the identity
+  of their legitimate producer — <code>txmeta</code> and <code>validatortxs</code> to the Validator and Propagation
+  services respectively, <code>blocks-final</code> to the Blockchain service — and, more generally,
+  restricting produce/consume per topic to the services that need it. Teranode does not implement or configure broker ACLs itself —
+  this is a Kafka/Redpanda broker-side configuration and certificate-distribution decision
+  that has to be made per deployment, and is out of scope for the client library to enforce.</li>
+<li>There is currently no SASL/SCRAM support in the Kafka client (<code>util/kafka/</code>). Where broker
+  ACLs require SASL rather than mTLS-based identity, that is a gap requiring further client
+  work, not something enabled by an existing setting.</li>
+</ul>
 <h2 id="5-operational-guidelines">5. Operational Guidelines<a class="headerlink" href="#5-operational-guidelines" title="Permanent link">&para;</a></h2>
 <h3 id="performance-tuning">Performance Tuning<a class="headerlink" href="#performance-tuning" title="Permanent link">&para;</a></h3>
 <ol>
