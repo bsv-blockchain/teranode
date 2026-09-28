@@ -7497,6 +7497,13 @@
 <td>p2p_websocket_trusted_source_cidrs</td>
 <td>Source CIDRs exempt from the /p2p-ws connection caps; loopback only by design - broader trust would void the caps behind an L7 ingress or NAT (see longdesc). Sentinel <code>none</code> disables the bypass (empty falls back to the default)</td>
 </tr>
+<tr>
+<td>HTTPRateLimit</td>
+<td>int</td>
+<td>100</td>
+<td>p2p_httpRateLimit</td>
+<td>Per-source req/s cap on the P2P HTTP server (/health, /p2p-ws); 0 or negative disables it</td>
+</tr>
 </tbody>
 </table>
 <h2 id="configuration-dependencies">Configuration Dependencies<a class="headerlink" href="#configuration-dependencies" title="Permanent link">&para;</a></h2>
