@@ -2888,6 +2888,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#36-health-check-status-codes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.6. Health Check Status Codes
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -7155,6 +7166,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#36-health-check-status-codes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.6. Health Check Status Codes
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -7286,6 +7308,7 @@
 <li><a href="#342-fsm-event-catch-up-blocks">3.4.2. FSM Event: Catch up Blocks</a></li>
 <li><a href="#343-fsm-event-stop">3.4.3. FSM Event: Stop</a></li>
 <li><a href="#35-waiting-on-state-machine-transitions">3.5. Waiting on State Machine Transitions</a></li>
+<li><a href="#36-health-check-status-codes">3.6. Health Check Status Codes</a></li>
 </ul>
 </li>
 <li><a href="#4-other-resources">Other Resources</a></li>
@@ -7485,6 +7508,43 @@ allow-list (e.g. from a newer blockchain service) also fall back to
 <li>UTXO Persister</li>
 <li>Validator</li>
 </ul>
+<h3 id="36-health-check-status-codes">3.6. Health Check Status Codes<a class="headerlink" href="#36-health-check-status-codes" title="Permanent link">&para;</a></h3>
+<p>Each service's own <code>/health</code> HTTP route does not consult the FSM. Propagation's (<code>services/propagation/Server.go</code>) is a hardcoded 200; the asset server's (<code>services/asset/httpimpl/http.go</code>) returns its repository's readiness JSON with a 200 status code, and since <code>health.CheckAll</code> never returns a non-nil error the 500 branch there is unreachable, so the body can report <code>"status": "503"</code> under a 200 code. The FSM state is checked by the <em>daemon's</em> aggregated health server instead: the daemon (<code>daemon/daemon.go</code>) starts a separate HTTP listener on <code>HealthCheckHTTPListenAddress</code> (default <code>:8000</code>) that exposes <code>/health/readiness</code> and <code>/health/liveness</code> for every service running in the process, plus a legacy <code>/health</code> alias of <code>/health/readiness</code>. Thirteen services register <code>CheckFSM</code> (<code>services/blockchain/fsm.go</code>) as one of their <em>readiness</em> checks — notably <em>not</em> the blockchain service itself, which owns the FSM and builds its readiness set from the gRPC server, HTTP server, Kafka and <code>BlockchainStore</code> only (<code>services/blockchain/Server.go</code>), so a blockchain pod's <code>/health/readiness</code> has no FSM row at all. <code>health.CheckGRPCServerWithSettings</code> (a plain TCP/gRPC connectivity probe, not a gRPC health-check protocol implementation) may be registered alongside it. The same readiness set is also reachable over gRPC, for some services: eight servers implement a <code>HealthGRPC</code> RPC and answer it by calling their own <code>Health(ctx, false)</code>, and seven of those eight (alert, block assembly, block validation, propagation, pruner, subtree validation, validator) register <code>CheckFSM</code>, so their gRPC health response folds in the FSM state exactly as <code>/health/readiness</code> does; asset, block persister, legacy, p2p, RPC and UTXO persister register the check but expose no <code>HealthGRPC</code>, and the blockchain service is the reverse — it has <code>HealthGRPC</code> but does not register the check for itself. <code>/health/liveness</code> reaches every service: the daemon's handler calls <code>ServiceManager.HealthHandler(ctx, true)</code>, which loops over all services and invokes each one's <code>Health(ctx, true)</code>. The short-circuit is inside those implementations — on the liveness path a service returns <code>health.CheckAll(ctx, checkLiveness, nil)</code> with no checks, so the FSM check is never built or run and the FSM state never affects liveness. <code>CheckFSM</code> maps the FSM state to an HTTP status code as follows:</p>
+<table>
+<thead>
+<tr>
+<th>FSM State</th>
+<th>HTTP Status</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Idle</code></td>
+<td>200 <code>StatusOK</code></td>
+<td>Healthy, but not yet processing transactions/blocks.</td>
+</tr>
+<tr>
+<td><code>Running</code></td>
+<td>200 <code>StatusOK</code></td>
+<td>Healthy and actively participating in the network.</td>
+</tr>
+<tr>
+<td><code>CatchingBlocks</code></td>
+<td>200 <code>StatusOK</code></td>
+<td>Healthy and catching up on blocks.</td>
+</tr>
+<tr>
+<td>Unknown/unlisted</td>
+<td>503 <code>StatusServiceUnavailable</code></td>
+<td>Unrecognized FSM state, or the FSM state query itself failed.</td>
+</tr>
+</tbody>
+</table>
+<p>The mapping above is for the FSM check in isolation: <code>/health/readiness</code> runs all of a service's registered <code>health.Check</code> entries through <code>health.CheckAll</code> (<code>util/health/health.go</code>), and the endpoint returns 503 if <em>any</em> check fails, so the FSM state is only one contributor to the overall status.</p>
+<p>The state a non-blockchain service reports is also normally the value its blockchain client last received over the notification subscription, not a fresh query — <code>Client.GetFSMCurrentState</code> (<code>services/blockchain/Client.go</code>) returns the cached value whenever it is populated, and a live query happens only in the window before that cache is first filled. If the subscription drops (no heartbeat, or a stale one) the client deliberately pins the cache to <code>IDLE</code>, and a failed post-reconnect refetch does the same "for safety". So <code>Idle</code> + 200 from this check can also mean "lost contact with the blockchain service" rather than "not yet sent <code>Run</code>" — it is the co-registered <code>BlockchainClient</code> check, not this one, that turns that case into a 503 on <code>/health/readiness</code>.</p>
+<p>Note that <code>Idle</code> reports 200, not 503: an idle node is healthy, just not yet running. <code>CheckFSM</code> takes a <code>checkLiveness</code> parameter but ignores it, since it is registered as a readiness check and each service omits its readiness checks when answering a liveness probe, so this one is never reached on that path; the parameter exists only so the function matches the shared <code>health.Check</code> signature. The reason <code>Idle</code> still needs to report 200 rather than 503 is the readiness/liveness split itself: if an operator wires the same path to both the readiness and the liveness probe (instead of the dedicated <code>/health/readiness</code> and <code>/health/liveness</code> routes), a 503 readiness result would then also fail the liveness probe and cause the orchestrator to restart-loop a node that is intentionally idle (for example, before its operator issues the <code>Run</code> event). Wired correctly — readiness to <code>/health/readiness</code>, liveness to <code>/health/liveness</code> — a failing readiness check only pulls the pod out of service endpoints; it does not restart anything.</p>
+<p>For the services listed in <a href="#35-waiting-on-state-machine-transitions">3.5. Waiting on State Machine Transitions</a>, readiness for actual work is enforced separately by their <code>WaitUntilFSMTransitionFromIdleState</code> startup gate, not by the health-check status code. Services outside that list either gate individual operations on the FSM state instead (block assembly checks <code>IsFSMCurrentState(RUNNING)</code> before serving a mining candidate) or do not gate on the FSM at all (alert, RPC) — registering <code>CheckFSM</code> as a readiness check does not by itself imply a startup gate. An operator monitoring only the <code>/health/readiness</code> status code should not read "200 while idle" as "the node is doing work" — check the reported FSM state string alongside the status code to distinguish <code>Idle</code> from <code>Running</code>/<code>CatchingBlocks</code>.</p>
 <hr />
 <h2 id="4-other-resources">4. Other Resources<a class="headerlink" href="#4-other-resources" title="Permanent link">&para;</a></h2>
 <h3 id="how-to-guides">How-to Guides<a class="headerlink" href="#how-to-guides" title="Permanent link">&para;</a></h3>
