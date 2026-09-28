@@ -8,7 +8,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	sdkscript "github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/transaction"
-	"github.com/bsv-blockchain/go-sdk/transaction/sighash"
+	sighash "github.com/bsv-blockchain/go-sdk/transaction/sighash"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/services/legacy/bsvec"
 	"github.com/stretchr/testify/require"
