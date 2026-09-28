@@ -4234,6 +4234,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="6. How to Run">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#checksum-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checksum verification
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -6936,6 +6953,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="6. How to Run">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#checksum-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checksum verification
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -7219,6 +7253,30 @@
 <li><code>-skipHeaders</code>: (Optional) Skip processing of headers.</li>
 <li><code>-skipUTXOs</code>: (Optional) Skip processing of UTXOs.</li>
 </ul>
+<h3 id="checksum-verification">Checksum verification<a class="headerlink" href="#checksum-verification" title="Permanent link">&para;</a></h3>
+<p>Before reading the headers file and/or the UTXO-set file, the seeder checks
+for a <code>&lt;file&gt;.sha256</code> checksum sidecar next to it — the same format the UTXO
+Persister's blob file store, and <code>bitcointoutxoset</code>, write alongside every
+snapshot: a hex-encoded SHA-256 digest, optionally followed by the snapshot's
+filename.</p>
+<ul>
+<li>If a sidecar is present and matches, the import proceeds.</li>
+<li>If a sidecar is present and does <strong>not</strong> match (wrong checksum, or a
+  filename field naming a different snapshot), the seeder refuses to import
+  and returns an error — a corrupted-but-otherwise-well-formed snapshot must
+  never be silently seeded.</li>
+<li>If no sidecar is present, the import proceeds with only a warning logged;
+  mandating a sidecar for every possible snapshot source isn't realistic, so
+  this is not a fatal condition.</li>
+</ul>
+<p>This applies to the headers file even when <code>-skipHeaders</code> is set: the UTXO
+pass still reads the headers file back to recover coinbase inputs, so it is
+verified whenever it will be consumed, not only when the header-import pass
+itself runs.</p>
+<p>This check is a defense against transfer/storage corruption, not tampering:
+the sidecar itself is unauthenticated, so it cannot detect a snapshot and its
+sidecar being modified together. There is no flag to make the sidecar
+mandatory; a missing sidecar always falls back to a warning.</p>
 <h2 id="7-configuration-options">7. Configuration Options<a class="headerlink" href="#7-configuration-options" title="Permanent link">&para;</a></h2>
 <p>The Seeder uses various configuration options, which can be set through a configuration system:</p>
 <ul>

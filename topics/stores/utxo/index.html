@@ -4110,10 +4110,49 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#10-other-resources" class="md-nav__link">
+  <a href="#10-utxo-store-write-access-surface" class="md-nav__link">
     <span class="md-ellipsis">
       
-        10. Other Resources
+        10. UTXO Store Write-Access Surface
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="10. UTXO Store Write-Access Surface">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#services" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Services
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cli-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI tools
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-other-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Other Resources
       
     </span>
   </a>
@@ -7467,10 +7506,49 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#10-other-resources" class="md-nav__link">
+  <a href="#10-utxo-store-write-access-surface" class="md-nav__link">
     <span class="md-ellipsis">
       
-        10. Other Resources
+        10. UTXO Store Write-Access Surface
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="10. UTXO Store Write-Access Surface">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#services" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Services
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cli-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI tools
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-other-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Other Resources
       
     </span>
   </a>
@@ -7602,7 +7680,8 @@
 </ul>
 </li>
 <li><a href="#9-configuration-and-settings">Configuration and Settings</a></li>
-<li><a href="#10-other-resources">Other Resources</a></li>
+<li><a href="#10-utxo-store-write-access-surface">UTXO Store Write-Access Surface</a></li>
+<li><a href="#11-other-resources">Other Resources</a></li>
 </ol>
 <h2 id="1-description">1. Description<a class="headerlink" href="#1-description" title="Permanent link">&para;</a></h2>
 <p>The UTXO set represents the current state of ownership of all Satoshi tokens in existence. Except for Coinbase transactions, every other valid transaction spends at least one UTXO and creates zero or more new UTXOs, plus zero or more locked outputs. The UTXOs that are being ‘spent’ come from previously successful transactions, and these may be recorded in the current or a previous block. An unspent output may be created and spent in a few milliseconds, or it may remain unspent for decades, meaning that the unspent outputs must persist for as long as they remain unspent.</p>
@@ -7860,7 +7939,7 @@
 <ol>
 <li>Obtain the current block height from the <strong>UTXO Store</strong>.</li>
 <li>Mark a UTXO as spent. If needed, it can also request to unspend (revert) a UTXO.</li>
-<li>Store and delete new UTXOs.</li>
+<li>Store new UTXOs (the Validator never deletes UTXOs — see §10).</li>
 <li>Retrieve previous outputs UTXO data.</li>
 </ol>
 <p>When marking a UTXO as spent, the store will check if the UTXO is known (by its hash), and whether it is spent or not. If it is spent, we will return one response message or another depending on whether the spending tx_id matches. See here:</p>
@@ -8150,7 +8229,100 @@ The primary language used for implementing the service's logic.</p>
 <p>Please refer to the <a href="../../../howto/locallyRunningServices/">Locally Running Services Documentation</a> document for more information on running services locally.</p>
 <h2 id="9-configuration-and-settings">9. Configuration and Settings<a class="headerlink" href="#9-configuration-and-settings" title="Permanent link">&para;</a></h2>
 <p>For comprehensive configuration documentation including all settings, defaults, and interactions, see the <a href="../../../references/settings/stores/utxo_settings/">UTXO Store Settings Reference</a>.</p>
-<h2 id="10-other-resources">10. Other Resources<a class="headerlink" href="#10-other-resources" title="Permanent link">&para;</a></h2>
+<h2 id="10-utxo-store-write-access-surface">10. UTXO Store Write-Access Surface<a class="headerlink" href="#10-utxo-store-write-access-surface" title="Permanent link">&para;</a></h2>
+<p>The UTXO Store's <code>Store</code> interface (<code>stores/utxo/Interface.go</code>) is shared by every service and CLI tool that links against <code>stores/utxo</code>, but only some of them ever mutate it — either through a mutating method on the interface (<code>SpendAndCreate</code>, <code>Unspend</code>, <code>Delete</code>, <code>SetMinedMulti</code>, <code>FreezeUTXOs</code>, <code>UnFreezeUTXOs</code>, <code>ReAssignUTXO</code>, <code>SetLocked</code>, <code>SetConflicting</code>, <code>BeginConflictIntent</code>/<code>CompleteConflictIntent</code>, <code>MarkTransactionsOnLongestChain</code>, <code>RemoveBlockIDs</code>, <code>RemoveFromConflictingChildren</code>, <code>PreserveTransactions</code>/<code>ProcessExpiredPreservations</code>) or through one of the package-level helpers that take a <code>Store</code> as an argument and mutate through it (<code>utxo.SetMinedMultiChunked</code>, <code>utxo.ProcessConflicting</code>/<code>utxo.ReverseProcessConflicting</code>). Everything else (Asset Server, Block Persister, the Blockchain service's health check) only reads (<code>Get</code>, <code>GetMeta</code>, <code>BatchDecorate</code>, <code>GetBlockHeight</code>, <code>Health</code>, …): none of them touches the UTXO set, though any of them built through <code>stores/utxo/factory.NewStore</code> does write the chain-tip snapshot described below.</p>
+<p><strong>Write access follows the process, not the service.</strong> <code>useLocalValidator = true</code> is the committed default (<code>settings.conf:1302</code>). With that default, <code>daemon/daemon_stores.go</code>'s <code>GetValidatorClient</code> hands every consumer an in-process <code>*Validator</code> wired directly to the shared UTXO store, instead of a gRPC stub — see the call sites in <code>daemon/daemon_services.go</code> for Propagation, the shared Subtree-Validation/Block-Validation startup path, and Legacy. Concretely: Subtree Validation's own code (<code>services/subtreevalidation/SubtreeValidation.go:431</code>, <code>validatorClient.ValidateWithOptions</code>) only ever calls into that embedded Validator, but the Validator it is calling issues <code>SpendAndCreate</code> and <code>SetLocked</code> against the store. So under the default configuration, Subtree Validation <em>is</em> a writer — via the process it runs in, not via any store call in its own package. Do not scope a store role, DB credential, or network policy to "Subtree Validation reads, so give it read-only access": on a default-configured node that breaks transaction validation at startup, not gracefully. The same applies to Propagation and Legacy, which get the same embedded Validator.</p>
+<p><code>SetBlockHeight</code>/<code>SetMedianBlockTime</code>/<code>SetBlockState</code> are deliberately left out of the mutating-method list above. They publish the process's local chain-tip snapshot (<code>stores/utxo/block_state.go</code>) — the Aerospike store additionally mirrors it into its external blob store for delete-at-height bookkeeping — but they do not touch the UTXO set itself. Every store built through <code>stores/utxo/factory.NewStore</code> calls <code>SetBlockState</code> on construction and again on every subsequent block via its blockchain subscription (<code>factory/utxo.go:153</code>, <code>:182</code>) — unless the caller opts out by passing <code>startBlockchainListener=false</code>, which defaults to true — so counting them as writes would make every "reader" below a writer by this document's own definition.</p>
+<p>The current writers, re-derived directly from the code (not from the settings/deployment topology), are:</p>
+<h3 id="services">Services<a class="headerlink" href="#services" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Service</th>
+<th>File(s)</th>
+<th>Writes</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Validator</strong></td>
+<td><code>services/validator/Validator.go</code></td>
+<td><code>SpendAndCreate</code> (creates the tx's outputs, spends its inputs), <code>SetLocked</code></td>
+<td>Core transaction validation: on accepting a new transaction it atomically creates its UTXOs and spends the ones it consumes. <code>SetLocked</code> completes a two-phase commit on the tx's own hash: when the tx is queued for block assembly its outputs are created locked (<code>WithLocked(true)</code>), and unlocked only once it has been added successfully (<code>twoPhaseCommitTransaction</code>) — a crash in between leaves them unspendable rather than spendable.</td>
+</tr>
+<tr>
+<td><strong>Block Validation</strong></td>
+<td><code>services/blockvalidation/BlockValidation.go</code>, <code>services/blockvalidation/quick_validate.go</code></td>
+<td><code>SpendAndCreate</code> (<code>WithCreateOnly</code>/<code>WithSpendOnly</code>, quick-validate replay), <code>SetMinedMulti</code> (steady state, via <code>model.UpdateTxMinedStatus</code> in <code>setTxMined</code>), <code>utxo.SetMinedMultiChunked</code> (→ <code>SetMinedMulti</code>, quick-validate replay), <code>SetLocked</code></td>
+<td>Validates incoming blocks: creates/spends UTXOs for transactions not already known, marks the block's transactions as mined (records <code>BlockID</code>/<code>SubtreeIdx</code>), then — unless <code>quickValidateSkipsUtxoLock</code> applies to this block — unlocks the block's own subtree transactions at the end of quick-validate (<code>unlockSubtreeTransactions</code>).</td>
+</tr>
+<tr>
+<td><strong>Block Assembly</strong></td>
+<td><code>services/blockassembly/BlockAssembler.go</code>, <code>services/blockassembly/subtreeprocessor/SubtreeProcessor.go</code></td>
+<td><code>SpendAndCreate</code> (<code>WithCreateOnly</code> — creates the coinbase UTXOs, <code>processCoinbaseUtxos</code>), <code>Delete</code> (coinbase and its child spends on reorg, <code>removeCoinbaseUtxos</code> — Block Assembly is the only service that calls <code>Delete</code> directly), <code>MarkTransactionsOnLongestChain</code>, <code>SetLocked</code> (unlocks unmined transactions reloaded at startup; unlocks conflict-locked parents when healing a stale conflict intent), <code>utxo.ProcessConflicting</code> / <code>utxo.ReverseProcessConflicting</code> (→ <code>SetConflicting</code>, <code>Unspend</code>, <code>SpendAndCreate</code>, <code>BeginConflictIntent</code>/<code>CompleteConflictIntent</code>)</td>
+<td>Owns chain-tip bookkeeping during block building and reorgs: creates the coinbase UTXO and deletes it (with its child spends) on reorg, flags which transactions sit on the currently-longest chain, unlocks unmined transactions reloaded at startup and conflict-locked parents when healing a stale intent, and drives the conflicting-transaction state machine (marking/unmarking double-spends and reversing that on reorg).</td>
+</tr>
+<tr>
+<td><strong>Legacy (p2p sync)</strong></td>
+<td><code>services/legacy/netsync/handle_block.go</code></td>
+<td><code>SpendAndCreate</code>, <code>utxo.SetMinedMultiChunked</code> (→ <code>SetMinedMulti</code>)</td>
+<td>The legacy Bitcoin-protocol block-sync path validates and applies blocks received from legacy peers the same way Block Validation does for the native protocol — same create/spend/set-mined writes, different ingestion path.</td>
+</tr>
+<tr>
+<td><strong>Alert System</strong></td>
+<td><code>services/alert/node.go</code></td>
+<td><code>FreezeUTXOs</code>, <code>UnFreezeUTXOs</code>, <code>ReAssignUTXO</code></td>
+<td>Executes alert-network directives (court orders / network alerts) to freeze, unfreeze, or reassign specific UTXOs.</td>
+</tr>
+<tr>
+<td><strong>RPC</strong></td>
+<td><code>services/rpc/handlers.go</code></td>
+<td><code>FreezeUTXOs</code>, <code>UnFreezeUTXOs</code>, <code>ReAssignUTXO</code></td>
+<td>Exposes the same freeze/unfreeze/reassign operations as operator-facing RPC calls (e.g. for manual intervention), independent of the Alert System's automated path.</td>
+</tr>
+<tr>
+<td><strong>Pruner</strong></td>
+<td><code>services/pruner/worker.go</code>, <code>services/pruner/server.go</code></td>
+<td><code>PreserveTransactions</code> (phase 1, via <code>utxo.PreserveParentsOfOldUnminedTransactions</code>), <code>ProcessExpiredPreservations</code> (phase 1b), plus record deletion via the store-provided <code>pruner.Service.Prune</code> (obtained through <code>PrunerServiceProvider.GetPrunerService()</code>)</td>
+<td>Background cleanup: protects parent transactions of old unmined transactions from premature deletion, expires now-unneeded preservation holds, and deletes UTXO records once their <code>DeleteAtHeight</code> has passed.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="cli-tools">CLI tools<a class="headerlink" href="#cli-tools" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>File(s)</th>
+<th>Writes</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong><code>seeder</code></strong></td>
+<td><code>cmd/seeder/seeder.go</code></td>
+<td><code>SpendAndCreate</code></td>
+<td>Bulk-loads a UTXO set from an external source (e.g. a snapshot) directly into the store to bootstrap a node.</td>
+</tr>
+<tr>
+<td><strong><code>seedimport</code></strong></td>
+<td><code>cmd/seedimport/seedimport/seedimport.go</code></td>
+<td><code>SpendAndCreate</code> (<code>WithCreateOnly</code> — creates only, never spends), <code>Delete</code> (rollback of the current run only, <code>rollback()</code>)</td>
+<td>Imports a UTXO set dump; on failure it rolls back by deleting only the records it created during that run.</td>
+</tr>
+<tr>
+<td><strong><code>rewindblockchain</code></strong></td>
+<td><code>cmd/rewindblockchain/rewindblockchain/rewind.go</code>, <code>phase2_blocks.go</code>, <code>tx_delete.go</code>, <code>phase1_unmined.go</code></td>
+<td><code>SetBlockHeight</code>, <code>Delete</code>, <code>Unspend</code>, <code>RemoveBlockIDs</code>, <code>RemoveFromConflictingChildren</code></td>
+<td>Rewinds a node's chain state to an earlier block height for recovery/operational purposes: unwinds block-height/state, deletes transactions that no longer exist at the target height, un-spends UTXOs consumed by rewound transactions, and trims block-ID/conflicting-children bookkeeping that referenced rewound blocks.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Note on <code>teranodecli loadunminedbench</code>:</strong> <code>cmd/teranodecli/teranodecli/loadunminedbench.go</code> also calls <code>SpendAndCreate</code>, but it is a benchmarking subcommand that by default spins up its own ephemeral Aerospike TestContainer; it only writes to a real, shared UTXO store if explicitly pointed at one via its <code>-aerospike-url</code> flag. It is listed here for completeness but is not part of the normal production write path.</p>
+<p>This list reflects the write-access surface as implemented today. It is descriptive, not prescriptive — it does not assign ownership of the store to any single team or service.</p>
+<h2 id="11-other-resources">11. Other Resources<a class="headerlink" href="#11-other-resources" title="Permanent link">&para;</a></h2>
 <p><a href="../../../references/stores/utxo_reference/">UTXO Store Reference</a></p>
 
 
