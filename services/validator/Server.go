@@ -8,7 +8,7 @@ accepted into the mempool and blocks.
 
 Key features of the validator package include:
 - Comprehensive transaction validation against Bitcoin consensus rules
-- Multiple script execution engines (GoBDK, GoSDK, GoBT) for script verification
+- Script verification through GoBDK (bitcoin-sv's script interpreter)
 - Integration with UTXO store for input/output tracking and double-spend prevention
 - Batch processing capability for efficient validation of transaction groups
 - Support for both synchronous (RPC) and asynchronous (Kafka) validation paths
