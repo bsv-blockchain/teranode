@@ -193,11 +193,9 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store
 func (ba *BlockAssembly) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Liveness answers one question: is this service WEDGED, such that a
-		// restart is the only way out? It must never fail for a dependency
-		// being down (that is readiness) nor for the node simply being idle —
-		// a spurious restart of a healthy node is worse than the stall this
-		// exists to catch, which is why the timeout is opt-in and defaults to
-		// disabled (issue 1447).
+		// restart is the only way out? A dependency being down is readiness,
+		// and an idle node still beats. Opt-in, off by default: see the
+		// blockassembly_livenessStallTimeout long description (issue 1447).
 		if ba.blockAssembler != nil {
 			stallTimeout := ba.settings.BlockAssembly.LivenessStallTimeout
 			if age, stalled := ba.blockAssembler.heartbeat.Stalled(stallTimeout); stalled {
