@@ -4345,6 +4345,8 @@
       
         
       
+        
+      
     
     
     
@@ -4509,6 +4511,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../references/protoVersioning/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proto Versioning Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../references/networkConsensusRules/" class="md-nav__link">
         
   
@@ -4574,10 +4604,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2_6" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2_7" >
         
           
-          <label class="md-nav__link" for="__nav_4_2_6" id="__nav_4_2_6_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_2_7" id="__nav_4_2_7_label" tabindex="0">
             
   
   
@@ -4595,8 +4625,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_4_2_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_2_6">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_4_2_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2_7">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -6951,6 +6981,7 @@
 </span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="p">}</span>
 </span></code></pre></div>
 <p><strong>Note:</strong> All service names in Teranode use the <code>API</code> suffix (e.g., <code>SubtreeValidationAPI</code>, <code>ValidatorAPI</code>, <code>BlockchainAPI</code>).</p>
+<p><strong>Note:</strong> If your change to an existing <code>.proto</code> file breaks wire compatibility (removing/renumbering a field, removing an RPC, etc.), see the <a href="../../references/protoVersioning/">Proto Versioning Policy</a> before touching the <code>package</code> declaration.</p>
 <p>You can also define a completely new service and corresponding messages in a new <code>.proto</code> file, such as <code>services/newservice/newservice_api/newservice_api.proto</code>.</p>
 <h2 id="step-2-update-the-makefile">Step 2: Update the <code>Makefile</code><a class="headerlink" href="#step-2-update-the-makefile" title="Permanent link">&para;</a></h2>
 <p>Once your new or modified <code>.proto</code> file is ready, you need to update the <code>Makefile</code> to ensure the file is included in the Protobuf generation process.</p>
