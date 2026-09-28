@@ -2753,10 +2753,60 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#9-related-resources" class="md-nav__link">
+  <a href="#9-end-to-end-architecture-reference" class="md-nav__link">
     <span class="md-ellipsis">
       
-        9. Related Resources
+        9. End-to-End Architecture Reference
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. End-to-End Architecture Reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#91-the-transaction-and-block-journey" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.1 The Transaction and Block Journey
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#92-reorganization-conflicts-and-catchup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.2 Reorganization, Conflicts and Catchup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#93-synchronous-vs-asynchronous-boundaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.3 Synchronous vs Asynchronous Boundaries
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-related-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Related Resources
       
     </span>
   </a>
@@ -7075,10 +7125,60 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#9-related-resources" class="md-nav__link">
+  <a href="#9-end-to-end-architecture-reference" class="md-nav__link">
     <span class="md-ellipsis">
       
-        9. Related Resources
+        9. End-to-End Architecture Reference
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. End-to-End Architecture Reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#91-the-transaction-and-block-journey" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.1 The Transaction and Block Journey
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#92-reorganization-conflicts-and-catchup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.2 Reorganization, Conflicts and Catchup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#93-synchronous-vs-asynchronous-boundaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.3 Synchronous vs Asynchronous Boundaries
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-related-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Related Resources
       
     </span>
   </a>
@@ -7176,7 +7276,13 @@
 <li><a href="#6-scalability-and-performance">Scalability and Performance</a></li>
 <li><a href="#7-impact-on-end-users-and-developers">Impact on End-Users and Developers</a></li>
 <li><a href="#8-glossary-of-terms">Glossary of Terms</a></li>
-<li><a href="#9-related-resources">Related Resources</a></li>
+<li><a href="#9-end-to-end-architecture-reference">End-to-End Architecture Reference</a><ul>
+<li><a href="#91-the-transaction-and-block-journey">9.1 The Transaction and Block Journey</a></li>
+<li><a href="#92-reorganization-conflicts-and-catchup">9.2 Reorganization, Conflicts and Catchup</a></li>
+<li><a href="#93-synchronous-vs-asynchronous-boundaries">9.3 Synchronous vs Asynchronous Boundaries</a></li>
+</ul>
+</li>
+<li><a href="#10-related-resources">Related Resources</a></li>
 </ol>
 <h2 id="1-introduction">1. Introduction<a class="headerlink" href="#1-introduction" title="Permanent link">&para;</a></h2>
 <p>In the early stages of Bitcoin's development, a block size limit of 1 megabyte per block was introduced as a temporary measure. This limit effectively restricts the network's capacity to approximately 3.3 to 7 transactions per second. As Bitcoin's adoption has expanded, this constraint has increasingly led to transaction processing bottlenecks, causing delays and higher transaction fees. These issues have highlighted the critical need for scalable solutions within the Bitcoin network.</p>
@@ -7441,7 +7547,110 @@ When a block is found, its validation is expedited due to the continuous process
 <li><strong>Merkle root</strong>: A single hash representing a set of transactions in a subtree or block.</li>
 </ul>
 <p>Please check the <a href="../../../references/glossary/">Teranode BSV Glossary</a> for more terms and definitions.</p>
-<h2 id="9-related-resources">9. Related Resources<a class="headerlink" href="#9-related-resources" title="Permanent link">&para;</a></h2>
+<h2 id="9-end-to-end-architecture-reference">9. End-to-End Architecture Reference<a class="headerlink" href="#9-end-to-end-architecture-reference" title="Permanent link">&para;</a></h2>
+<p>The sections above, the <a href="../teranode-microservices-overview/">Teranode Microservices Overview</a>, and the individual service docs each cover part of the system in detail. None of them, on its own, walks the full path a transaction or block takes from ingress to long-term storage, or says which document to open for a given stage. This section is that index — connective tissue, not a replacement for the detailed docs it links to.</p>
+<h3 id="91-the-transaction-and-block-journey">9.1 The Transaction and Block Journey<a class="headerlink" href="#91-the-transaction-and-block-journey" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Primary service(s)</th>
+<th>Detail doc(s)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Transaction ingress (gRPC/HTTP/UDP)</td>
+<td>Propagation Service</td>
+<td><a href="../../services/propagation/">Propagation</a></td>
+</tr>
+<tr>
+<td>Consensus validation, UTXO create/spend</td>
+<td>Validator Service</td>
+<td><a href="../../services/validator/">Validator</a></td>
+</tr>
+<tr>
+<td>Subtree assembly and announcement, block template, mining candidates</td>
+<td>Block Assembly Service</td>
+<td><a href="../../services/blockAssembly/">Block Assembly</a></td>
+</tr>
+<tr>
+<td>Subtree validation (subtrees received from peers)</td>
+<td>Subtree Validation Service</td>
+<td><a href="../../services/subtreeValidation/">Subtree Validation</a></td>
+</tr>
+<tr>
+<td>Block and subtree ingress from peers (Kafka hand-off to validation)</td>
+<td>P2P Service</td>
+<td><a href="../../services/p2p/">P2P</a></td>
+</tr>
+<tr>
+<td>Peer discovery, connection management, message transport</td>
+<td>P2P Service</td>
+<td><a href="../../services/p2p/">P2P</a></td>
+</tr>
+<tr>
+<td>Block validation</td>
+<td>Block Validation Service</td>
+<td><a href="../../services/blockValidation/">Block Validation</a></td>
+</tr>
+<tr>
+<td>Chain state, FSM, reorg coordination</td>
+<td>Blockchain Service</td>
+<td><a href="../../services/blockchain/">Blockchain</a>, <a href="../stateManagement/">State Management</a></td>
+</tr>
+<tr>
+<td>Long-term block/tx persistence</td>
+<td>Block Persister Service</td>
+<td><a href="../../services/blockPersister/">Block Persister</a></td>
+</tr>
+<tr>
+<td>UTXO set snapshotting</td>
+<td>UTXO Persister Service</td>
+<td><a href="../../services/utxoPersister/">UTXO Persister</a></td>
+</tr>
+<tr>
+<td>UTXO pruning (bounding store growth)</td>
+<td>Pruner Service</td>
+<td><a href="../../services/pruner/">Pruner</a></td>
+</tr>
+<tr>
+<td>Bridging to pre-Teranode BSV nodes</td>
+<td>Legacy Service</td>
+<td><a href="../../services/legacy/">Legacy</a></td>
+</tr>
+<tr>
+<td>External data access (HTTP/WebSocket, Bitcoin RPC)</td>
+<td>Asset Server, RPC Service</td>
+<td><a href="../../services/assetServer/">Asset Server</a>, <a href="../../services/rpc/">RPC</a></td>
+</tr>
+<tr>
+<td>Network-wide alerts, freeze/unfreeze, ban/invalidate</td>
+<td>Alert Service</td>
+<td><a href="../../services/alert/">Alert</a></td>
+</tr>
+<tr>
+<td>Service startup/dependency ordering</td>
+<td>Daemon</td>
+<td><a href="../../../references/teranodeDaemonReference/">Daemon Reference</a></td>
+</tr>
+</tbody>
+</table>
+<p>Blocks and subtrees announced by peers enter through the P2P Service, which hands them to Block Validation and Subtree Validation asynchronously over Kafka (<code>kafka_blocksConfig</code>, <code>kafka_subtreesConfig</code>). Blocks also enter through the Legacy Service from pre-Teranode peers; that path calls Block Validation directly rather than going through Kafka, but joins the same validation stage.</p>
+<p>Transactions normally enter via the Propagation Service, but the RPC Service's <code>sendrawtransaction</code> calls the Validator directly, bypassing Propagation and its Kafka hand-off, and applies its own absurd-fee ceiling that no other ingress path enforces. The Legacy Service is a third transaction ingress.</p>
+<p>For the storage layer underneath these services, see the <a href="../../stores/blob/">Blob Store</a> and <a href="../../stores/utxo/">UTXO Store</a> docs, and for the messaging layer see <a href="../../kafka/kafka/">Kafka</a>.</p>
+<h3 id="92-reorganization-conflicts-and-catchup">9.2 Reorganization, Conflicts and Catchup<a class="headerlink" href="#92-reorganization-conflicts-and-catchup" title="Permanent link">&para;</a></h3>
+<p>Chain reorganization and double-spend/conflict handling are cross-cutting: they involve Block Validation, the Blockchain Service's FSM, Subtree Validation, and the UTXO Store together, rather than a single service. Rather than duplicate that detail here:</p>
+<ul>
+<li><a href="../understandingDoubleSpends/">Understanding Double Spends and Conflict Resolution</a> covers first-seen detection, conflicting-transaction tracking, and the five reorg phases (mark original as conflicting → unspend original → process double spend → update double-spend status → cleanup).</li>
+<li><a href="../stateManagement/">State Management in Teranode</a> covers the FSM states (<code>Idle</code>, <code>Running</code>, <code>CatchingBlocks</code>) that drive catchup after a missing parent block, and how services wait on state transitions.</li>
+</ul>
+<h3 id="93-synchronous-vs-asynchronous-boundaries">9.3 Synchronous vs Asynchronous Boundaries<a class="headerlink" href="#93-synchronous-vs-asynchronous-boundaries" title="Permanent link">&para;</a></h3>
+<p>Services communicate through a mix of synchronous gRPC calls and asynchronous Kafka topics; the <a href="../teranode-microservices-overview/#6-interaction-patterns">Interaction Patterns</a> and <a href="../teranode-microservices-overview/#51-kafka-message-broker">Kafka Message Broker</a> sections describe which hops use which mechanism.</p>
+<p>One open documentation gap: there is no stated <strong>maximum</strong> synchronous call-chain length across services — a guardrail against runaway synchronous fan-out during a single protocol operation. This document deliberately does not invent one; a maximum like that is an architectural decision the team should make and justify explicitly, not a number a doc should assert unilaterally.</p>
+<p>As an observation only (not a policy): tracing the current pipeline, the longest synchronous, in-request chain occurs when Block Validation checks a block's subtrees and encounters transactions it hasn't validated yet — Block Validation → Subtree Validation → Validator → Block Assembly — four services deep before the outermost call returns. The last hop exists because validated transactions are added to block assembly while the FSM is <code>Running</code> (<code>services/subtreevalidation/check_block_subtrees.go</code> computes <code>addTXToBlockAssembly</code> as "not <code>CatchingBlocks</code>", and the Validator's <code>Store</code> call into Block Assembly blocks on the batch completing); while <code>CatchingBlocks</code> that step is skipped and the chain is three deep. The Validator also reaches the Blockchain Service synchronously on this path, for median-time-past.</p>
+<p>The Subtree Validation → Validator boundary is an in-process call rather than a network hop under <code>useLocalValidator</code>, which the committed <code>settings.conf</code> enables by default: with that default, the daemon's <code>GetValidatorClient</code> hands every consumer — Propagation, the shared Subtree-Validation/Block-Validation startup path, and Legacy — an in-process <code>*Validator</code> wired directly to the shared UTXO store instead of a gRPC stub. The logical dependency chain is unchanged either way, and the Validator → Block Assembly hop stays a network call regardless. This is noted here as a data point for that future decision, not as an established rule or limit.</p>
+<h2 id="10-related-resources">10. Related Resources<a class="headerlink" href="#10-related-resources" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="../teranode-microservices-overview/">Teranode Microservices Overview</a></li>
 <li><a href="../../datamodel/transaction_data_model/">Extended Transactions</a>: Include additional metadata to facilitate processing.</li>

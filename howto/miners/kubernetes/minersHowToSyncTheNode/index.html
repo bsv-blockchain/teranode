@@ -2175,6 +2175,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#why-seeding-instead-of-full-ibd" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why Seeding Instead of Full IBD
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#synchronization-methods-comparison" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7545,6 +7556,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#why-seeding-instead-of-full-ibd" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why Seeding Instead of Full IBD
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#synchronization-methods-comparison" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -8515,6 +8537,7 @@
 <h2 id="table-of-contents">Table of Contents<a class="headerlink" href="#table-of-contents" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="#overview">Overview</a></li>
+<li><a href="#why-seeding-instead-of-full-ibd">Why Seeding Instead of Full IBD</a></li>
 <li><a href="#synchronization-methods-comparison">Synchronization Methods Comparison</a></li>
 <li><a href="#method-1-default-network-sync-p2p">Method 1: Default Network Sync (P2P)</a></li>
 <li><a href="#method-2-seeding-from-legacy-sv-node">Method 2: Seeding from Legacy SV Node</a></li>
@@ -8525,6 +8548,12 @@
 </ul>
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
 <p>This guide covers the different methods available for synchronizing a Teranode instance with the BSV Blockchain using Kubernetes. Whether you're setting up a fresh node or recovering from downtime, this document will help you choose the most appropriate synchronization method for your situation.</p>
+<hr />
+<h2 id="why-seeding-instead-of-full-ibd">Why Seeding Instead of Full IBD<a class="headerlink" href="#why-seeding-instead-of-full-ibd" title="Permanent link">&para;</a></h2>
+<p>Legacy Bitcoin node implementations bootstrap by performing a full Initial Block Download (IBD): downloading and validating every block and every transaction back to the Genesis block. Teranode still supports this as Method 1 below, for compatibility with existing node implementations, but it does not scale as the primary bootstrap strategy for a Teranode-sized chain.</p>
+<p>The chain of block headers alone (80 bytes each) is sufficient to prove a node is following the correct Proof-of-Work chain back to Genesis; it does not require replaying every historical transaction to do so. Because Teranode targets a much higher block size and transaction throughput than legacy implementations, replaying the full transaction history from Genesis takes on the order of days (see the timeline under Method 1) and consumes proportionally more bandwidth and storage as the chain grows.</p>
+<p>Seeding instead bootstraps a node's UTXO set directly from a snapshot — exported from a Legacy SV Node or from an existing, already-synchronized Teranode instance — which reconstructs the current UTXO state in hours rather than days (see the per-method Expected Timeline tables under Methods 2 and 3). This is why Methods 2 and 3 are recommended for production deployments, while full P2P sync (Method 1) remains available for cases without an existing data source to seed from.</p>
+<p>Note the trust boundary. The export tooling checks its own output against the source node's chainstate tip and writes a <code>.sha256</code> sidecar next to each artifact, but the seeder imports whatever it is given: it checks that each header links to a previously stored block, but performs no proof-of-work check on the imported headers, never reads the <code>.sha256</code> sidecars, and does not re-derive the UTXO set from the chain. A self-consistent forged chain still passes the linkage check, and nothing in the import path can detect a snapshot whose UTXO set does not match the chain, because a block header commits to the block's transactions, not to the resulting UTXO state. Seed only from artifacts you exported yourself or from an operator you trust, and verify them against the <code>.sha256</code> files before importing. Method 1 is the option that requires no such trust.</p>
 <hr />
 <h2 id="synchronization-methods-comparison">Synchronization Methods Comparison<a class="headerlink" href="#synchronization-methods-comparison" title="Permanent link">&para;</a></h2>
 <p>Choose the synchronization method that best fits your situation:</p>
@@ -8551,14 +8580,14 @@
 <td>Have existing BSV node</td>
 <td>• Faster than P2P<br>• Proven data source<br>• Reduced bandwidth</td>
 <td>• Requires SV Node setup<br>• Additional export steps</td>
-<td>1 Hour<br>(assumes SV node<br>already in sync)</td>
+<td>6.5-12.5 hours<br>(assumes SV node<br>already in sync)</td>
 </tr>
 <tr>
 <td><strong>Teranode Data Seeding</strong></td>
 <td>Have existing Teranode</td>
 <td>• Fastest method<br>• Direct data transfer<br>• Minimal processing</td>
 <td>• Requires access to existing data<br>• Version compatibility needed</td>
-<td>1 Hour</td>
+<td>3.25-7.25 hours</td>
 </tr>
 </tbody>
 </table>
@@ -8822,6 +8851,11 @@ checkpoint is refused and leaves an IDLE node parked.</p>
 </ul>
 <p><strong>How to find it:</strong> Extract the hash from your exported filenames (the part before <code>.utxo-headers</code> or <code>.utxo-set</code>)</p>
 </div>
+<div class="admonition warning">
+<p class="admonition-title">The hash is not validated against file contents</p>
+<p><code>-hash</code> only selects the two files by name. The seeder does not compare it against the tip hash recorded inside either file, and it does not compare the headers file and the UTXO set against each other. It also does not read the <code>.sha256</code> sidecars written by the export tooling.</p>
+<p>Confirm both artifacts come from the same export, and verify them against their <code>.sha256</code> files, before running the seeder. A mismatched or partially transferred pair has two possible outcomes: it imports with no complaint, or it fails at the final step — after the entire UTXO set has been written and <code>lastProcessed.dat</code> created — in which case a re-run needs <code>-force</code>.</p>
+</div>
 <h4 id="step-3-run-seeder">Step 3: Run Seeder<a class="headerlink" href="#step-3-run-seeder" title="Permanent link">&para;</a></h4>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Create a temporary seeder pod with proper configmap and volume mounts</span>
 </span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="c1"># Instead of latest, you could use a specific version of teranode.</span>
@@ -8923,7 +8957,7 @@ the operator configmap before the first start.</p>
 </tr>
 <tr>
 <td><strong>Total</strong></td>
-<td>1-12 hours</td>
+<td>6.5-12.5 hours</td>
 <td>Complete process</td>
 </tr>
 </tbody>
@@ -8966,6 +9000,11 @@ the operator configmap before the first start.</p>
 </div>
 <h3 id="step-3-run-seeder_1">Step 3: Run Seeder<a class="headerlink" href="#step-3-run-seeder_1" title="Permanent link">&para;</a></h3>
 <p>Use the same seeder process as described in Method 2:</p>
+<div class="admonition warning">
+<p class="admonition-title">The hash is not validated against file contents</p>
+<p><code>-hash</code> only selects the two files by name. The seeder does not compare it against the tip hash recorded inside either file, and it does not compare the headers file and the UTXO set against each other. It also does not read the <code>.sha256</code> sidecars written by the export tooling.</p>
+<p>Confirm both artifacts come from the same export, and verify them against their <code>.sha256</code> files, before running the seeder. A mismatched or partially transferred pair has two possible outcomes: it imports with no complaint, or it fails at the final step — after the entire UTXO set has been written and <code>lastProcessed.dat</code> created — in which case a re-run needs <code>-force</code>.</p>
+</div>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1"># Scale down services</span>
 </span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>cluster<span class="w"> </span>teranode-cluster<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span>-p<span class="w"> </span><span class="s1">'{"spec":{"enabled":false}}'</span>
 </span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>
@@ -9036,7 +9075,7 @@ the operator configmap before the first start.</p>
 </tr>
 <tr>
 <td><strong>Total</strong></td>
-<td>1-6 hours</td>
+<td>3.25-7.25 hours</td>
 <td>Complete process</td>
 </tr>
 </tbody>

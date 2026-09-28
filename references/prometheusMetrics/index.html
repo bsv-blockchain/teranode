@@ -7401,11 +7401,6 @@
 <td>Histogram of SubmitMiningSolution in the blockassembly service</td>
 </tr>
 <tr>
-<td><code>teranode_blockassembly_update_subtrees_dah</code></td>
-<td>Histogram</td>
-<td>Histogram of updating subtrees DAH in the blockassembly service</td>
-</tr>
-<tr>
 <td><code>teranode_blockassembly_block_assembler_get_mining_candidate</code></td>
 <td>Counter</td>
 <td>Number of calls to GetMiningCandidate in the block assembler</td>
@@ -7589,6 +7584,36 @@
 <td><code>teranode_blockassembly_queue_head_age_seconds</code></td>
 <td>Gauge</td>
 <td>How long the oldest queued batch has been waiting (0 when the queue is empty). The signal the validator's Kafka backpressure controller reads</td>
+</tr>
+<tr>
+<td><code>teranode_blockassembly_tip_lag_blocks</code></td>
+<td>Gauge</td>
+<td>Number of blocks block assembly is behind the blockchain tip, recomputed on each new-block announcement and reset to 0 on a successful advance. Two caveats for alert authors: it reads 0 for an equal-height reorg stall (tip hash differs but height matches), and it holds its last value if announcements stop arriving — pair it with <code>teranode_blockassembly_processing_stuck_total</code> for stall alerting</td>
+</tr>
+<tr>
+<td><code>teranode_blockassembly_processing_stuck_total</code></td>
+<td>CounterVec</td>
+<td>Count of block-assembly failures that left the assembler behind the tip. <code>reason</code> is one of <code>reorg_blocks_fetch</code> (fetching the blocks for the reorg/catch-up decision failed), <code>catchup</code> (forward-only catch-up failed), <code>reorg</code> (reorg failed; an expected <code>ErrBlockAssemblyReset</code> is logged as a warning and deliberately not counted), <code>get_block</code> (fetching the announced block failed), <code>moveforward</code> (subtree processor <code>MoveForwardBlock</code> failed)</td>
+</tr>
+<tr>
+<td><code>teranode_blockassembly_catchup</code></td>
+<td>Counter</td>
+<td>Number of forward-only catch-ups (moveBack=0) handled in block assembler</td>
+</tr>
+<tr>
+<td><code>teranode_blockassembly_coinbase_divergence_total</code></td>
+<td>CounterVec</td>
+<td>Coinbase-divergence events by outcome (label: <code>outcome</code>); every detection records exactly one follow-up outcome, so <code>detected == repaired + no_gap + escalated + aborted</code></td>
+</tr>
+<tr>
+<td><code>teranode_blockassembly_conflict_intents_pending</code></td>
+<td>Gauge</td>
+<td>Number of pending conflict-resolution WAL intents found at startup (interrupted ProcessConflicting/ReverseProcessConflicting operations awaiting replay)</td>
+</tr>
+<tr>
+<td><code>teranode_blockassembly_conflict_intent_replay_total</code></td>
+<td>CounterVec</td>
+<td>Total conflict-resolution WAL intent replays at startup, by result (label: <code>result</code>)</td>
 </tr>
 </tbody>
 </table>
