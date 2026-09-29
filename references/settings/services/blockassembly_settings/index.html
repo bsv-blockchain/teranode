@@ -7485,11 +7485,11 @@
 <td>Use columnar batch format for data layout</td>
 </tr>
 <tr>
-<td>UnminedTxDiskSortPath</td>
-<td>string</td>
-<td>""</td>
+<td>UnminedTxDiskSortPaths</td>
+<td>[]string</td>
+<td>[]</td>
 <td>blockassembly_unminedTxDiskSortPath</td>
-<td>Path for unmined transaction disk sorting</td>
+<td>Pipe-separated directories for disk-sorted unmined reload runs (OS temp dir if empty)</td>
 </tr>
 <tr>
 <td>UnminedTxDiskSortEnabled</td>
@@ -7504,6 +7504,13 @@
 <td>10485760</td>
 <td>blockassembly_unminedLoadingBatchSize</td>
 <td>Batch size for loading unmined transactions</td>
+</tr>
+<tr>
+<td>UnminedTxSortBufferRecords</td>
+<td>int</td>
+<td>33554432</td>
+<td>blockassembly_unminedTxSortBufferRecords</td>
+<td>Records buffered before the disk-sorted reload spills a sorted run</td>
 </tr>
 <tr>
 <td>ParallelSetIfNotExistsThreshold</td>
