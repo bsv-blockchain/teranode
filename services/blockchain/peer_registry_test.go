@@ -1343,3 +1343,61 @@ func TestCentralizedPeerRegistry_Register_BannedPeerExemptFromEviction(t *testin
 	_, ok = r.Get("newcomer")
 	require.True(t, ok, "newcomer must be registered successfully after evicting an idle peer")
 }
+
+// TestCentralizedPeerRegistry_Register_CapDrainsOverCapRegistry verifies that
+// when the registry is already above cap (e.g. Load ran before StartCleanup),
+// the loop in Register drains it to within the cap on subsequent inserts rather
+// than leaving it at cap+N-1.
+func TestCentralizedPeerRegistry_Register_CapDrainsOverCapRegistry(t *testing.T) {
+	const maxSize = 3
+
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	// Pre-fill the registry above cap directly (simulates Load restoring
+	// persisted state before StartCleanup is called).
+	r.mu.Lock()
+	for i := 0; i < maxSize+5; i++ {
+		id := fmt.Sprintf("pre-%04d", i)
+		now := time.Now().Add(time.Duration(i) * time.Millisecond)
+		r.peers[id] = &PeerInfo{ID: id, LastSeen: now}
+	}
+	r.mu.Unlock()
+
+	require.Equal(t, maxSize+5, r.Count(), "pre-condition: registry is above cap")
+
+	// Wire up the cap after the fact (matches Server.go start order).
+	r.StartCleanup(context.Background(), 0, 24*time.Hour, maxSize)
+
+	// A single Register should drain the over-cap state.
+	r.Register(&PeerInfo{ID: "new-after-load"})
+
+	require.LessOrEqual(t, r.Count(), maxSize,
+		"Register must drain an over-cap registry down to cap, not just cap+N-1")
+	_, ok := r.Get("new-after-load")
+	require.True(t, ok, "newly registered peer must be present after drain")
+}
+
+// TestCentralizedPeerRegistry_Register_AllExemptSoftCap verifies the soft-cap
+// property: when every peer in the registry is exempt (all connected), Register
+// inserts past the cap rather than refusing, so a flooder cannot block honest
+// peers by pre-filling every exempt slot.
+func TestCentralizedPeerRegistry_Register_AllExemptSoftCap(t *testing.T) {
+	const maxSize = 3
+
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	r.StartCleanup(context.Background(), 0, 24*time.Hour, maxSize)
+
+	for i := 0; i < maxSize; i++ {
+		id := fmt.Sprintf("connected-%04d", i)
+		r.Register(&PeerInfo{ID: id})
+		r.UpdateConnectionState(id, true)
+	}
+	require.Equal(t, maxSize, r.Count(), "pre-condition: registry full with exempt peers")
+
+	// Inserting one more must succeed (soft cap) because eviction cannot touch
+	// the exempt connected peers.
+	r.Register(&PeerInfo{ID: "extra"})
+	_, ok := r.Get("extra")
+	require.True(t, ok, "Register must not refuse when all existing peers are exempt")
+	require.Equal(t, maxSize+1, r.Count(), "count may exceed cap when all non-exempt slots are taken")
+}
