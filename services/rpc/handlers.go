@@ -2691,7 +2691,7 @@ func handleGetMiningInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 // flexible UTXO management based on changing circumstances or investigation outcomes.
 //
 // Security considerations:
-// - Requires admin privileges to execute
+// - Admin-only: rpcMethodPolicy classifies it rpcAccessAdmin, so rpc_limit_user is rejected before dispatch
 // - Changes persist across node restarts
 // - Affects transaction validation and mempool acceptance
 // - Should be used carefully to avoid disrupting legitimate transactions
@@ -2699,7 +2699,7 @@ func handleGetMiningInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 // Parameters:
 //   - ctx: Context for cancellation and tracing
 //   - s: The RPC server instance providing access to service clients
-//   - cmd: The parsed command arguments (bsvjson.FreezeCmd with TxID and Vout)
+//   - cmd: The parsed command arguments (bsvjson.FreezeCmd with TxID, Vout and UTXOHash)
 //   - _: Unused channel for close notification
 //
 // Returns:
@@ -2715,18 +2715,39 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 
 	c := cmd.(*bsvjson.FreezeCmd)
 
-	var err error
-
-	h, err := chainhash.NewHashFromStr(c.TxID)
+	spend, err := alertSpendFromArgs(c.TxID, c.Vout, c.UTXOHash)
 	if err != nil {
 		return nil, err
 	}
 
-	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
+	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spend}, s.settings); err != nil {
 		return nil, err
 	}
 
 	return nil, nil
+}
+
+// alertSpendFromArgs builds the utxo.Spend the alert-system store methods expect
+// from the RPC's positional txid, vout and utxohash arguments. The UTXO hash is
+// the caller-supplied commitment, never synthesised from the txid: the Aerospike
+// backend verifies it against the stored output and a txid would never match,
+// while the SQL backend ignores it, so synthesising hid a backend divergence.
+func alertSpendFromArgs(txID string, vout int, utxoHash string) (*utxo.Spend, error) {
+	txHash, err := chainhash.NewHashFromStr(txID)
+	if err != nil {
+		return nil, err
+	}
+
+	if vout < 0 {
+		return nil, errors.NewInvalidArgumentError("vout must not be negative, got %d", vout)
+	}
+
+	hash, err := chainhash.NewHashFromStr(utxoHash)
+	if err != nil {
+		return nil, err
+	}
+
+	return &utxo.Spend{TxID: txHash, Vout: uint32(vout), UTXOHash: hash}, nil // nolint:gosec
 }
 
 // handleUnfreeze implements the unfreeze command, which removes the frozen status from
@@ -2740,7 +2761,7 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 // management process.
 //
 // Security considerations:
-// - Requires admin privileges to execute
+// - Admin-only: rpcMethodPolicy classifies it rpcAccessAdmin, so rpc_limit_user is rejected before dispatch
 // - May trigger transaction reordering in the transaction processing system
 // - Changes persist across node restarts
 // - Should be used carefully to avoid disrupting legitimate transactions
@@ -2748,7 +2769,7 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 // Parameters:
 //   - ctx: Context for cancellation and tracing
 //   - s: The RPC server instance providing access to service clients
-//   - cmd: The parsed command arguments (bsvjson.UnfreezeCmd with TxID and Vout)
+//   - cmd: The parsed command arguments (bsvjson.UnfreezeCmd with TxID, Vout and UTXOHash)
 //   - _: Unused channel for close notification
 //
 // Returns:
@@ -2764,14 +2785,12 @@ func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 	c := cmd.(*bsvjson.UnfreezeCmd)
 
-	var err error
-
-	h, err := chainhash.NewHashFromStr(c.TxID)
+	spend, err := alertSpendFromArgs(c.TxID, c.Vout, c.UTXOHash)
 	if err != nil {
 		return nil, err
 	}
 
-	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
+	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{spend}, s.settings); err != nil {
 		return nil, err
 	}
 
@@ -2790,7 +2809,7 @@ func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 // The reassign operation is used to correct mistakes in the UTXO management process.
 //
 // Security considerations:
-// - Requires admin privileges to execute
+// - Admin-only: rpcMethodPolicy classifies it rpcAccessAdmin, so rpc_limit_user is rejected before dispatch
 // - May trigger transaction reordering in the transaction processing system
 // - Changes persist across node restarts
 // - Should be used carefully to avoid disrupting legitimate transactions
@@ -2814,14 +2833,7 @@ func handleReassign(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 	c := cmd.(*bsvjson.ReassignCmd)
 
-	var err error
-
-	oldTXIDHash, err := chainhash.NewHashFromStr(c.OldTxID)
-	if err != nil {
-		return nil, err
-	}
-
-	oldUTXOHash, err := chainhash.NewHashFromStr(c.OldUTXOHash)
+	oldSpend, err := alertSpendFromArgs(c.OldTxID, c.OldVout, c.OldUTXOHash)
 	if err != nil {
 		return nil, err
 	}
@@ -2831,9 +2843,7 @@ func handleReassign(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, err
 	}
 
-	if err = s.utxoStore.ReAssignUTXO(ctx,
-		&utxo.Spend{TxID: oldTXIDHash, Vout: uint32(c.OldVout), UTXOHash: oldUTXOHash}, // nolint:gosec
-		&utxo.Spend{UTXOHash: newUTXOHash}, s.settings); err != nil {
+	if err = s.utxoStore.ReAssignUTXO(ctx, oldSpend, &utxo.Spend{UTXOHash: newUTXOHash}, s.settings); err != nil {
 		return nil, err
 	}
 

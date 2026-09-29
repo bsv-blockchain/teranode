@@ -176,24 +176,26 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
       }
       ```
 
-4. `freeze`: Freezes a specific UTXO, preventing it from being spent
-    - Parameters:
+4. `freeze`: Freezes a specific UTXO, preventing it from being spent. Admin-only.
+    - Parameters (positional, in this order):
 
         - `txid` (string, required): The transaction ID of the UTXO
         - `vout` (numeric, required): The output index
+        - `utxohash` (string, required): The UTXO commitment of the output, as a hex hash
 
-    - Returns: Boolean `true` if successful
+    - Returns: `null` on success; an error if hash parsing or the store operation fails
     - Note: Frozen UTXOs remain frozen until explicitly unfrozen
 
-5. `unfreeze`: Unfreezes a previously frozen UTXO, allowing it to be spent
-    - Parameters:
+5. `unfreeze`: Unfreezes a previously frozen UTXO, allowing it to be spent. Admin-only.
+    - Parameters (positional, in this order):
 
         - `txid` (string, required): The transaction ID of the frozen UTXO
         - `vout` (numeric, required): The output index
+        - `utxohash` (string, required): The UTXO commitment of the output, as a hex hash
 
-    - Returns: Boolean `true` if successful
+    - Returns: `null` on success; an error if hash parsing or the store operation fails
 
-6. `reassign`: Replaces a frozen UTXO's commitment using its outpoint and the old and new hashes
+6. `reassign`: Replaces a frozen UTXO's commitment using its outpoint and the old and new hashes. Admin-only.
     - **Known regression:** do not reassign to a different owner. A successful result can leave the output unspendable by both owners, even after maturity. See the [reassignment limitation](../../topics/services/alert.md#24-utxo-reassignment) and [issue 1725](https://github.com/bsv-blockchain/teranode/issues/1725).
     - Parameters (positional, in this order):
 
@@ -357,7 +359,7 @@ Common error codes include:
 The RPC server uses HTTP Basic Authentication. Credentials are configured in the settings (see the section 4.1 for details). There are two levels of access:
 
 1. Admin access: Full access to all RPC methods.
-2. Limited access: Access to a subset of RPC methods defined in `rpcLimited`.
+2. Limited access: Access to the methods classified as limited-read or limited-write in `rpcMethodPolicy` (`services/rpc/Server.go`). Anything else, including `freeze`, `unfreeze` and `reassign`, is admin-only. See the [RPC reference](../../references/services/rpc_reference.md#admin-vs-limited-access) for the full lists.
 
 ### GRPC API Key Authentication
 
