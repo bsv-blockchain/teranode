@@ -112,7 +112,7 @@ The `<txid>` must be a valid 64-character transaction ID.
 Inspect data files:
 
 ```bash
-SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli filereader [path] [options]
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli filereader [options] [path]
 ```
 
 Options:
