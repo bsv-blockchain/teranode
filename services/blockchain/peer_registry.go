@@ -247,6 +247,16 @@ type CentralizedPeerRegistry struct {
 	// protect. The flag is one-way: once set, the only way to clear it is
 	// to construct a fresh registry.
 	saveDisabled atomic.Bool
+
+	// capMaxSize is the insert-time cap enforced inline by Register. 0 means
+	// uncapped (TTL-only mode). Set by StartCleanup; must be set before the
+	// first gossip-driven Register call to be effective.
+	capMaxSize atomic.Int32
+
+	// capTTL is the TTL used to determine connected-peer exemption during
+	// inline eviction in Register. Stored as int64 nanoseconds. 0 means no
+	// TTL-based connected exemption (ban-only exemption applies).
+	capTTL atomic.Int64
 }
 
 // NewCentralizedPeerRegistry creates an empty peer registry with the given ban configuration.
@@ -313,6 +323,16 @@ func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 
 	existing, exists := r.peers[info.ID]
 	if !exists {
+		// Enforce the insert-time size cap before allocating the new entry.
+		// Evict rather than refuse: refusing new keys would let a flooder
+		// pre-fill every slot and suppress registration of honest peers.
+		// The eviction mirrors Cleanup's LRU+exemption logic so that banned
+		// and connected+active peers are never displaced by a flood of new IDs.
+		if cap := int(r.capMaxSize.Load()); cap > 0 && len(r.peers) >= cap {
+			ttl := time.Duration(r.capTTL.Load())
+			r.evictOldestNonBannedLocked(now, ttl)
+		}
+
 		entry := clonePeerInfo(info)
 		// Strip dangerous characters out of the peer-supplied client name so
 		// it can't break logs / dashboards / JSON consumers.
@@ -984,8 +1004,18 @@ func (r *CentralizedPeerRegistry) StartPeriodicSave(ctx context.Context, interva
 // OR Close().
 //
 // A zero or negative interval disables the loop (caller's choice — useful
-// when the operator only wants TTL-on-load semantics).
+// when the operator only wants TTL-on-load semantics). The insert-time cap
+// (maxSize) is always stored so Register can enforce it regardless of the
+// interval — the two are independent controls.
 func (r *CentralizedPeerRegistry) StartCleanup(ctx context.Context, interval, ttl time.Duration, maxSize int) {
+	// Store the cap so Register enforces it inline even when the sweep is
+	// disabled. Negative maxSize means uncapped; coerce to 0.
+	if maxSize < 0 {
+		maxSize = 0
+	}
+	r.capMaxSize.Store(int32(maxSize))
+	r.capTTL.Store(int64(ttl))
+
 	if interval <= 0 {
 		return
 	}
@@ -1465,4 +1495,31 @@ func peerActivity(info *PeerInfo) time.Time {
 		return info.LastSeen
 	}
 	return info.LastMessageTime
+}
+
+// evictOldestNonBannedLocked removes the least-recently-active non-exempt peer
+// from r.peers to make room for a new insert. Mirrors isCleanupExempt: banned
+// peers and connected+recently-active peers (within ttl) are skipped. If every
+// peer is exempt, nothing is removed and the function returns false.
+// Caller must hold r.mu (write lock).
+func (r *CentralizedPeerRegistry) evictOldestNonBannedLocked(now time.Time, ttl time.Duration) bool {
+	var victimID string
+	var victimAt time.Time
+
+	for id, info := range r.peers {
+		if isCleanupExempt(info, now, ttl) {
+			continue
+		}
+		last := peerActivity(info)
+		if victimID == "" || last.Before(victimAt) {
+			victimID = id
+			victimAt = last
+		}
+	}
+
+	if victimID == "" {
+		return false
+	}
+	delete(r.peers, victimID)
+	return true
 }
