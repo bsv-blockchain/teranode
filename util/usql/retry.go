@@ -60,12 +60,9 @@ func isRetriable(err error) bool {
 	}
 
 	// SQLite errors
-	if sqliteErr, ok := err.(*sqlite.Error); ok {
-		code := sqliteErr.Code()
-		return code == sqlite3.SQLITE_BUSY ||
-			code == sqlite3.SQLITE_LOCKED ||
-			code == sqlite3.SQLITE_IOERR ||
-			code == sqlite3.SQLITE_CANTOPEN
+	var sqliteErr *sqlite.Error
+	if errors.As(err, &sqliteErr) {
+		return isRetriableSQLiteCode(sqliteErr.Code())
 	}
 
 	// Check error message for common retriable patterns
@@ -93,6 +90,30 @@ func isRetriable(err error) bool {
 	}
 
 	return false
+}
+
+// isRetriableSQLiteCode reports whether a SQLite result code is worth retrying.
+// modernc.org/sqlite enables extended result codes on every connection, so the
+// primary code (the low byte) is compared, e.g. SQLITE_BUSY_SNAPSHOT (517) is
+// SQLITE_BUSY (5) with a detail in the high bits. Extended codes that report
+// corruption or a bad path are excluded, since backing off cannot fix them.
+func isRetriableSQLiteCode(code int) bool {
+	switch code {
+	case sqlite3.SQLITE_IOERR_DATA,
+		sqlite3.SQLITE_IOERR_CORRUPTFS,
+		sqlite3.SQLITE_CANTOPEN_ISDIR,
+		sqlite3.SQLITE_CANTOPEN_FULLPATH,
+		sqlite3.SQLITE_CANTOPEN_CONVPATH,
+		sqlite3.SQLITE_CANTOPEN_SYMLINK:
+		return false
+	}
+
+	primary := code & 0xff
+
+	return primary == sqlite3.SQLITE_BUSY ||
+		primary == sqlite3.SQLITE_LOCKED ||
+		primary == sqlite3.SQLITE_IOERR ||
+		primary == sqlite3.SQLITE_CANTOPEN
 }
 
 // calculateBackoff calculates the backoff duration with jitter

@@ -106,8 +106,8 @@ func TestIsRetriable(t *testing.T) {
 			err:      &pq.Error{Code: "42601"},
 			expected: false,
 		},
-		// Note: SQLite error tests removed due to unexported fields in sqlite.Error
-		// These error types are covered through string-based error checking
+		// SQLite errors are covered in retry_sqlite_test.go, which gets real
+		// *sqlite.Error values from the driver (its fields are unexported)
 		{
 			name:     "generic application error (non-retriable)",
 			err:      errors.New(errors.ERR_INVALID_ARGUMENT, "invalid input"),
