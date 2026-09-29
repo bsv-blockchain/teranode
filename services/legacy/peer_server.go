@@ -190,6 +190,12 @@ type broadcastInventoryDel *wire.InvVect
 type relayMsg struct {
 	invVect *wire.InvVect
 	data    interface{}
+
+	// requeue re-announces a tx inv to peers that are already known to
+	// have it. Set only by the rebroadcast path: the first announce puts
+	// the inv in each peer's known inventory, so without it a rebroadcast
+	// never reaches a peer that stayed connected.
+	requeue bool
 }
 
 // updatePeerHeightsMsg is a message sent from the blockmanager to the server
@@ -2315,25 +2321,6 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 	return nil
 }
 
-func (s *server) getTxFromStore(hash *chainhash.Hash) (*bsvutil.Tx, int64, error) {
-	txMeta, err := s.utxoStore.Get(s.ctx, hash, fields.Tx)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	fee, err := util.GetFees(txMeta.Tx)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	tx, err := bsvutil.NewTxFromBytes(txMeta.Tx.Bytes())
-	if err != nil {
-		return nil, 0, err
-	}
-
-	return tx, int64(fee), nil // nolint:gosec
-}
-
 // pushBlockMsg sends a block message for the provided block hash to the
 // connected peer.  An error is returned if the block hash is not known.
 func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<- struct{},
@@ -2814,6 +2801,7 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 
 type serverPeerQueueInventory interface {
 	QueueInventory(*wire.InvVect)
+	RequeueInventory(*wire.InvVect)
 }
 
 func (s *server) handleRelayTxMsg(sp serverPeerQueueInventory, msg relayMsg, feeFilter int64) {
@@ -2846,6 +2834,13 @@ func (s *server) handleRelayTxMsg(sp serverPeerQueueInventory, msg relayMsg, fee
 		if feePerKB < feeFilter {
 			return
 		}
+	}
+
+	// A rebroadcast must reach peers that already saw the first announce
+	// and then rejected or dropped the tx.
+	if msg.requeue {
+		sp.RequeueInventory(msg.invVect)
+		return
 	}
 
 	// Queue the inventory to be relayed with the next batch.
@@ -3488,6 +3483,19 @@ func (s *server) canRelayTx() bool {
 // Note: not gated by `listen_mode`. See AnnounceNewTransactions for the
 // rationale.
 func (s *server) RelayInventory(invVect *wire.InvVect, data interface{}) {
+	s.relayInventory(relayMsg{invVect: invVect, data: data})
+}
+
+// rebroadcastInventory relays a tx inv from the rebroadcast queue to all
+// connected peers, including those already known to have it. See
+// relayMsg.requeue.
+func (s *server) rebroadcastInventory(invVect *wire.InvVect, data interface{}) {
+	s.relayInventory(relayMsg{invVect: invVect, data: data, requeue: true})
+}
+
+func (s *server) relayInventory(msg relayMsg) {
+	invVect := msg.invVect
+
 	// Suppress tx invs while the node is not in RUNNING state. Block invs
 	// are still relayed (block sync is gated separately in netsync.manager).
 	if invVect != nil && invVect.Type == wire.InvTypeTx && !s.canRelayTx() {
@@ -3495,9 +3503,9 @@ func (s *server) RelayInventory(invVect *wire.InvVect, data interface{}) {
 	}
 
 	// dont' block on inv relay, losing invs on restart is fine.
-	go func(invVect *wire.InvVect, data interface{}) {
-		s.relayInv <- relayMsg{invVect: invVect, data: data}
-	}(invVect, data)
+	go func(msg relayMsg) {
+		s.relayInv <- msg
+	}(msg)
 }
 
 // BroadcastMessage sends msg to all peers currently connected to the server
@@ -3674,8 +3682,9 @@ func (s *server) RebroadcastDropCounts() (adds, capHits uint64) {
 // rebroadcastHandler keeps track of inventories announced via
 // AnnounceNewTransactions that have not yet made it into a block. It
 // periodically re-emits them so a tx that hit a transient miss on first
-// announce (peer not yet handshaken, brief disconnect) still reaches the
-// network.
+// announce (peer not yet handshaken, brief disconnect, or a temporary reject
+// by the peer) still reaches the network. Re-emits bypass each peer's known
+// inventory, so peers that stayed connected are offered the tx again.
 //
 // Bounded because no TransactionConfirmed hook calls RemoveRebroadcastInventory
 // in this codebase — entries are aged out by attempt count, and new adds are
@@ -3708,7 +3717,7 @@ out:
 			}
 
 		case <-timer.C:
-			processRebroadcastTick(pendingInvs, maxRebroadcastAttempts, s.RelayInventory)
+			processRebroadcastTick(pendingInvs, maxRebroadcastAttempts, s.rebroadcastInventory)
 
 			// Process at a random time up to 30mins (in seconds)
 			// in the future.

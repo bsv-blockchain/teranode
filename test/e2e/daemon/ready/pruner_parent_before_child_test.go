@@ -201,8 +201,10 @@ func TestPrunerParentNotDeletedBeforeChildren(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("Current height: %d (child1 DAH ~%d)", meta.Height, grandchildMinedHeight+blockHeightRetention)
 
-	// Wait for the pruner to complete a cycle before asserting what survived.
-	node.WaitForPruner(t, 15*time.Second)
+	// Wait for the pruner to complete a cycle covering at least the current height,
+	// so a stale completion queued from an earlier (already-superseded) prune cycle
+	// can't satisfy the wait before the relevant pruning has actually happened.
+	node.WaitForPruner(t, 15*time.Second, meta.Height)
 
 	// ========== Verify: Parent must NOT be deleted ==========
 	// The parent still has output 4 unspent, and child2 is not fully spent.
@@ -385,15 +387,16 @@ func TestPrunerParentFullySpentNotDeletedBeforeChildren(t *testing.T) {
 	PrintRawTx(t, "Raw parentTx", rawParentTx.(map[string]interface{}))
 
 	triggerBlock := node.MineAndWait(t, 1)
-	node.MineAndWait(t, 2)
+	lastBlock := node.MineAndWait(t, 2)
 
 	err = node.WaitForBlockPersisted(triggerBlock.Hash(), 10*time.Second)
 	require.NoError(t, err)
 
-	// Earlier pruning cycles may still have queued callbacks, so wait for the
-	// parent record itself to be deleted after its retention height.
-	require.Eventually(t, func() bool {
-		_, err := node.UtxoStore.Get(node.Ctx, parentHash, fields.DeleteAtHeight)
-		return errors.Is(err, errors.ErrTxNotFound)
-	}, 10*time.Second, 100*time.Millisecond, "fully spent parent should be pruned")
+	// Wait for the pruner to complete a cycle covering at least the current height,
+	// so a stale completion queued from an earlier (already-superseded) prune cycle
+	// can't satisfy the wait before the parent's deletion has actually happened.
+	node.WaitForPruner(t, 10*time.Second, lastBlock.Height)
+
+	_, err = node.UtxoStore.Get(node.Ctx, parentHash)
+	require.ErrorIs(t, err, errors.ErrTxNotFound)
 }

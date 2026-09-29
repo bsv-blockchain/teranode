@@ -133,8 +133,8 @@ github.com/bsv-blockchain/go-chaincfg v1.6.2 h1:BoBm2eLvXioMyf39B5A6LxhddmTV/9VY
 github.com/bsv-blockchain/go-chaincfg v1.6.2/go.mod h1:tmKOKZkvIZNhh5GwpcrKTYTXLac1+IGpSFRMSZt/8Gc=
 github.com/bsv-blockchain/go-lockfree-queue v1.0.0 h1:rizOsTImw2Gk/iSTQRHqB+2OcJWBl5qN6pbIHqDWxRw=
 github.com/bsv-blockchain/go-lockfree-queue v1.0.0/go.mod h1:NS0Zfkaz8G3jDQNNr1rtvjeH45rxK7pVH4iV7xy4o4U=
-github.com/bsv-blockchain/go-p2p-message-bus v0.1.23 h1:JitBGy9N/lRXaixGneo+UCmVR+nw+zbTWAQsv2CiLVM=
-github.com/bsv-blockchain/go-p2p-message-bus v0.1.23/go.mod h1:ysf6HtQ+6CFM3R97H6OcOtrcfc28iL/ZUVdHijchu2M=
+github.com/bsv-blockchain/go-p2p-message-bus v0.1.28 h1:xJRvRxGJSqjxaXITMGScP9emxPsxXhZQwWb6GZnT8DU=
+github.com/bsv-blockchain/go-p2p-message-bus v0.1.28/go.mod h1:2pvrS51mabnjjzvksuqucd4jQNeqEidg9/OD/iCyifc=
 github.com/bsv-blockchain/go-safe-conversion v1.2.0 h1:HwLWaxqm2OyU5/2BRQ8kwdn25QyX2HXr0JkfSyTG3DU=
 github.com/bsv-blockchain/go-safe-conversion v1.2.0/go.mod h1:62Eq2980j4BygfqJhd/ObGRHET8ubEy2rBdGi4k6nsw=
 github.com/bsv-blockchain/go-sdk v1.4.1 h1:J2hECn17QkLXq8K8O0m0qA7yih4YmWFTX6o9Ox72Tf8=
@@ -573,8 +573,8 @@ github.com/libp2p/go-libp2p v0.49.0 h1:ibXuYPIHmMIPShob1BktQvSuFQkq/MemhQOLKfGuj
 github.com/libp2p/go-libp2p v0.49.0/go.mod h1:lzjVcOBk5fCn1QD2XbSOKLZesB6gEsry8SLjCsAAGT4=
 github.com/libp2p/go-libp2p-asn-util v0.4.1 h1:xqL7++IKD9TBFMgnLPZR6/6iYhawHKHl950SO9L6n94=
 github.com/libp2p/go-libp2p-asn-util v0.4.1/go.mod h1:d/NI6XZ9qxw67b4e+NgpQexCIiFYJjErASrYW4PFDN8=
-github.com/libp2p/go-libp2p-kad-dht v0.42.1 h1:b560sbk3L2WIgkY08VgQQSqXJfHgBTr6tmymfW+GaZY=
-github.com/libp2p/go-libp2p-kad-dht v0.42.1/go.mod h1:WgImeG7wsNVtUkHVBQSSVaQ4IJR2NUVlSdn5scSI49Y=
+github.com/libp2p/go-libp2p-kad-dht v0.42.2 h1:5RtESYeBbjaF+KIPmU47xz2DOb2iLqvoRCZcsjxCS48=
+github.com/libp2p/go-libp2p-kad-dht v0.42.2/go.mod h1:oLGZ7xq317zXmoeJe0dwgUdOeWeJ85MDJ/+fbKqFoK0=
 github.com/libp2p/go-libp2p-kbucket v0.9.0 h1:9kTf74R8CHGIk3QK+gwEOnJ/t+JzuxqQSfAAASl1VhM=
 github.com/libp2p/go-libp2p-kbucket v0.9.0/go.mod h1:lKhHVjRq1z/Cl/bFzB2vPzYY0KCdmON6HlBwEAanqjk=
 github.com/libp2p/go-libp2p-pubsub v0.17.0 h1:SNdvB6V0eYMXLRR95n+4vpxJKbFsbHhgjPdDiTpGoo0=

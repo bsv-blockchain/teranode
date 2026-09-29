@@ -2,6 +2,7 @@ package settings
 
 import (
 	"encoding/json"
+	"net/url"
 	"reflect"
 )
 
@@ -10,8 +11,10 @@ import (
 // consistent marker.
 
 // Redact returns a deep clone of s with every field tagged `redact:"true"`
-// replaced by a placeholder. The clone is safe to marshal to JSON for logging.
-// A nil input returns nil with no error.
+// replaced by a placeholder, and the credentials inside every URL-typed field
+// and every string (or string-slice element) that holds a URL removed by the
+// same structural redaction the settings portal uses. The clone is safe to
+// marshal to JSON for logging. A nil input returns nil with no error.
 //
 // Implementation note: the deep clone uses a JSON round-trip, so any fields
 // that do not survive json.Marshal/Unmarshal — function pointers, channels,
@@ -47,6 +50,34 @@ func redactValue(v reflect.Value) {
 
 	switch v.Kind() {
 	case reflect.Struct:
+		// A url.URL keeps its credentials in two places, and the JSON round-trip above handles
+		// neither well (bitcoin-sv/teranode#4844). The userinfo PASSWORD vanishes by accident,
+		// because url.Userinfo's fields are all unexported - but what comes back is a non-nil
+		// EMPTY Userinfo, which URL.String() renders as a stray "//@host". RawQuery, by contrast,
+		// is an exported string, so a credential carried as a query parameter survives the
+		// round-trip intact. Apply the same structural redaction the settings portal uses, drop
+		// the empty userinfo, and do not descend into the struct's own fields.
+		if v.Type() == reflect.TypeOf(url.URL{}) {
+			if v.CanSet() {
+				original, ok := v.Interface().(url.URL)
+				if !ok {
+					return
+				}
+
+				redacted := redactURL(&original)
+				if redacted.User != nil {
+					password, _ := redacted.User.Password()
+					if redacted.User.Username() == "" && password == "" {
+						redacted.User = nil
+					}
+				}
+
+				v.Set(reflect.ValueOf(*redacted))
+			}
+
+			return
+		}
+
 		t := v.Type()
 		for i := 0; i < v.NumField(); i++ {
 			f := t.Field(i)
@@ -60,6 +91,14 @@ func redactValue(v reflect.Value) {
 			}
 
 			redactValue(v.Field(i))
+		}
+	case reflect.String:
+		// A connection string held as a plain string (Coinbase.DB) carries its credentials in the
+		// same positions a url.URL does (bitcoin-sv/teranode#4844). Tagged fields never reach here:
+		// the struct case above sends them to zeroSecret first. Slice elements reach this case
+		// through the slice loop below.
+		if v.CanSet() {
+			v.SetString(redactURLString(v.String()))
 		}
 	case reflect.Pointer, reflect.Interface:
 		if !v.IsNil() {

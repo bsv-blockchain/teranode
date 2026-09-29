@@ -3,11 +3,13 @@ package blockvalidation
 import (
 	"context"
 	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -27,9 +29,7 @@ import (
 //   - a BlockValidation wired to the LocalClient
 //   - a mined block chained from genesis with a valid proof-of-work and block.ID pre-assigned
 //
-// The block has no subtrees so unlockSubtreeTransactionsIfNeeded is a no-op and
-// updateSubtreesDAH only calls SetBlockSubtreesSet, which succeeds once AddBlock
-// has committed the block.
+// The block has no subtrees so unlockSubtreeTransactionsIfNeeded is a no-op.
 func newCommitBlockHarness(t *testing.T) (*BlockValidation, *model.Block, context.Context) {
 	t.Helper()
 
@@ -136,4 +136,39 @@ func TestCommitBlock_AddsBlockAndSetsExists(t *testing.T) {
 	mined, err := u.blockchainClient.GetBlockIsMined(ctx, block.Hash())
 	require.NoError(t, err)
 	require.True(t, mined, "commitBlock must AddBlock with MinedSet=true")
+}
+
+// countingSubtreesSetClient is the real local client with SetBlockSubtreesSet counted. Every
+// other call goes straight to the sqlitememory store, so the block row read back below is the
+// store's own answer, not a mock's.
+type countingSubtreesSetClient struct {
+	blockchain.ClientI
+	subtreesSetCalls atomic.Int32
+}
+
+func (c *countingSubtreesSetClient) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	c.subtreesSetCalls.Add(1)
+
+	return c.ClientI.SetBlockSubtreesSet(ctx, blockHash)
+}
+
+// TestCommitBlock_WritesSubtreesSetOnceAtInsert pins that the quick commit sets subtrees_set
+// through AddBlock alone. The insert already writes the column, so a second SetBlockSubtreesSet
+// call would re-UPDATE a row that is already true, commit on its own, clear the blockchain
+// response cache and notify every subscriber, all inside the one stage every block passes
+// through in order: 2.6 ms a block measured on a mainnet sync.
+func TestCommitBlock_WritesSubtreesSetOnceAtInsert(t *testing.T) {
+	u, block, ctx := newCommitBlockHarness(t)
+
+	counting := &countingSubtreesSetClient{ClientI: u.blockchainClient}
+	u.blockchainClient = counting
+
+	require.NoError(t, u.commitBlock(ctx, block, "test-peer", "commitBlock"))
+
+	require.Equal(t, int32(0), counting.subtreesSetCalls.Load(), "the quick commit must not send SetBlockSubtreesSet")
+
+	_, meta, err := u.blockchainClient.GetBlockHeader(ctx, block.Hash())
+	require.NoError(t, err)
+	require.True(t, meta.SubtreesSet, "AddBlock writes subtrees_set at insert")
+	require.True(t, meta.MinedSet, "and mined_set with it")
 }

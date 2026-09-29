@@ -145,18 +145,21 @@ func TestSeederImport_RoundTripsRealSnapshotFile(t *testing.T) {
 	gotB, err := store.Get(ctx, &txB)
 	require.NoError(t, err)
 	require.NotNil(t, gotB.Tx)
-	// txB's only UTXO is at index 2; the store keeps only real (non-nil)
-	// outputs, so the padded holes at indices 0 and 1 (PadUTXOsWithNil) are
-	// not themselves stored - only the surviving output's value and script
-	// round-trip. Content alone isn't enough to prove this: the store's
-	// compacted read view would return the same slice whether the UTXO was
-	// written at index 2 (correct) or index 0 (an index-computation bug), so
-	// assert against the actual on-disk index directly via GetSpend, which
-	// queries by (txid, vout) rather than by position in a compacted slice.
-	require.Len(t, gotB.Tx.Outputs, 1)
-	require.Equal(t, uint64(999999), gotB.Tx.Outputs[0].Satoshis)
-	require.Equal(t, []byte{0x6a, 0x01, 0x02, 0x03}, gotB.Tx.Outputs[0].LockingScript.Bytes())
+	// txB's only UTXO is at index 2, so the two padded holes PadUTXOsWithNil
+	// left at 0 and 1 are not stored as rows. The read still indexes by vout,
+	// so the slice comes back three long with nils in the holes and the real
+	// output at its own index. Assert the shape as well as the content: a slice
+	// whose survivor sits at 2 is the whole point, and a compacted read would
+	// put it at 0 while looking otherwise identical.
+	require.Len(t, gotB.Tx.Outputs, 3)
+	require.Nil(t, gotB.Tx.Outputs[0], "vout 0 is a padded hole, not an output")
+	require.Nil(t, gotB.Tx.Outputs[1], "vout 1 is a padded hole, not an output")
+	require.NotNil(t, gotB.Tx.Outputs[2])
+	require.Equal(t, uint64(999999), gotB.Tx.Outputs[2].Satoshis)
+	require.Equal(t, []byte{0x6a, 0x01, 0x02, 0x03}, gotB.Tx.Outputs[2].LockingScript.Bytes())
 
+	// And confirm the same thing against the on-disk rows, which GetSpend
+	// queries by (txid, vout) rather than by position in the returned slice.
 	spendAtCorrectIndex, err := store.GetSpend(ctx, &utxo.Spend{TxID: &txB, Vout: 2})
 	require.NoError(t, err)
 	require.Equal(t, int(utxo.Status_OK), spendAtCorrectIndex.Status,

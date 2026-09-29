@@ -711,9 +711,19 @@ func (u *Server) GetCatchupStatus(ctx context.Context, _ *blockvalidation_api.Em
 func isUnvalidatablePeerError(err error) bool {
 	// A corrupt block body (bitcoin-sv/teranode#4692) is explicitly NOT unvalidatable: the received
 	// body is not bound to the header, so we must not give up on alternative sources —
-	// re-download from another peer instead. It already fails the ErrBlockInvalid check
-	// below (dedicated ERR_BLOCK_CORRUPT sentinel, no match), but guard explicitly so the
-	// don't-give-up intent survives future edits to this predicate.
+	// re-download from another peer instead.
+	//
+	// That deliberately includes the unbound invalid-transaction verdict (isUnboundTxInvalidVerdict,
+	// bitcoin-sv/teranode#4844). Its subtree list came from the primary and was never reconciled to
+	// the header's merkle root, so a primary that named its own subtrees produces exactly this error,
+	// and another peer's copy is how the honest body is recovered. Stopping here would hide it: peers
+	// absorbed into catchupAlternatives do not announce again. For a block whose real body is invalid,
+	// each alternative re-validates and fails, and the cycle counts once toward
+	// CatchupMaxAttemptsPerBlock, so the repeats stop at cooldown.
+	//
+	// A plain corrupt verdict would also fail the ErrBlockInvalid check below (dedicated
+	// ERR_BLOCK_CORRUPT sentinel, no match). This one would not, because it wraps ErrTxInvalid, so this
+	// guard is load-bearing for it.
 	if errors.IsBlockCorrupt(err) {
 		return false
 	}
@@ -1635,8 +1645,8 @@ func deriveBlockHeight(claimed, parentHeight uint32) (uint32, error) {
 // for this block (bitcoin-sv/teranode#4692). Optimistic mining is permitted on those paths ONLY
 // when BOTH the global OptimisticMining flag AND the dedicated OptimisticMiningPeerBlocks opt-in
 // are set, so the global opt-out always wins and the new peer-blocks flag can never bypass it.
-// Written explicitly at the gate rather than relying on the downstream useOptimisticMining seed
-// (belt-and-suspenders). Revalidation of an already-stored block (RevalidateBlock) is never
+// The downstream useOptimisticMining seed in ValidateBlockWithOptions applies the same conjunction
+// on every validation path; it is repeated here at the gate (belt-and-suspenders). Revalidation of an already-stored block (RevalidateBlock) is never
 // optimistic and does not use this gate.
 //
 // Blocks arriving over the legacy sync route (baseURL == "legacy") are unconditionally
@@ -2161,8 +2171,11 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 	}
 
 	// Check if peer is bad or malicious before attempting catchup
-	if u.isPeerBad(c.peerID) || u.isPeerMalicious(ctx, c.peerID) {
-		u.logger.Warnf("[catchup][%s] peer %s (%s) is marked as bad or malicious, trying alternative peers", c.block.Hash().String(), c.peerID, c.baseURL)
+	if bad, badReason := u.isPeerBad(c.peerID); bad || u.isPeerMalicious(ctx, c.peerID) {
+		malicious := !bad
+		reason := classifyPeerRefusalReason(badReason, malicious)
+		prometheusCatchupPeerHealthGate.WithLabelValues(reason).Inc()
+		u.logger.Warnf("[catchup][%s] peer %s (%s) refused as catchup source (%s), trying alternative peers", c.block.Hash().String(), c.peerID, c.baseURL, reason)
 
 		// Try alternative peers from P2P service instead of just skipping
 		if !u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID) {

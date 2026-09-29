@@ -94,7 +94,7 @@ Block validation receives new blocks through two distinct paths:
 
 ##### Optimistic Mining Mode
 
-The `optimisticMining` setting provides a validation strategy that prioritizes block propagation speed over immediate validation completion, reversing the normal validate-then-add sequence. On the peer-served validation path it is **off unless the operator opts in** by setting BOTH `blockvalidation_optimistic_mining` (default `true`) AND `blockvalidation_optimistic_mining_peer_blocks` (default `false`); the global flag being false always wins, so the peer-blocks flag can never bypass it (bitcoin-sv/teranode#4692). The shipped default `(true, false)` therefore keeps the peer-served path non-optimistic. The catch-up path is **always** non-optimistic regardless of both flags: it validates against a cached header run holding only the block's in-batch predecessors, which cannot carry the median-time-past window the optimistic branch checks synchronously (issue 1499). Revalidation of an already-stored block is always non-optimistic regardless of these flags.
+The `optimisticMining` setting provides a validation strategy that prioritizes block propagation speed over immediate validation completion, reversing the normal validate-then-add sequence. On every validation path it is **off unless the operator opts in** by setting BOTH `blockvalidation_optimistic_mining` (default `true`) AND `blockvalidation_optimistic_mining_peer_blocks` (default `false`); the requirement is applied where each validation chooses its mode, not only at the peer entry gate (bitcoin-sv/teranode#4844), and the global flag being false always wins, so the peer-blocks flag can never bypass it (bitcoin-sv/teranode#4692). The shipped default `(true, false)` therefore keeps every validation path non-optimistic. The catch-up path is **always** non-optimistic regardless of both flags: it validates against a cached header run holding only the block's in-batch predecessors, which cannot carry the median-time-past window the optimistic branch checks synchronously (issue 1499). Revalidation of an already-stored block is always non-optimistic regardless of these flags.
 
 **Normal Mode (validate-then-add):**
 
@@ -105,7 +105,7 @@ The `optimisticMining` setting provides a validation strategy that prioritizes b
 4. Notify other services
 ```
 
-**Optimistic Mining Mode (opt-in on the peer-served path):**
+**Optimistic Mining Mode (opt-in):**
 
 ```text
 1. Add block to blockchain immediately (before full validation)
@@ -130,9 +130,10 @@ The optimistic path is implemented in `ValidateBlock()` (services/blockvalidatio
 
 **Configuration:**
 
-- **Settings**: `blockvalidation_optimistic_mining` (default: `true`) AND, on the peer-served
-  path, `blockvalidation_optimistic_mining_peer_blocks` (default: `false`) — BOTH must be
-  set for optimistic mining to engage on that path (bitcoin-sv/teranode#4692)
+- **Settings**: `blockvalidation_optimistic_mining` (default: `true`) AND
+  `blockvalidation_optimistic_mining_peer_blocks` (default: `false`) — BOTH must be set for
+  optimistic mining to engage on any validation path (bitcoin-sv/teranode#4692,
+  bitcoin-sv/teranode#4844)
 - **Catch-up**: never optimistic, whatever the two settings are — the cached header run it
   validates against cannot carry the median-time-past window (issue 1499)
 - **Runtime Override**: Can be disabled per-block via `ValidateBlockOptions.DisableOptimisticMining`
@@ -142,6 +143,11 @@ The optimistic path is implemented in `ValidateBlock()` (services/blockvalidatio
   path is already added before background validation runs, so it takes the *invalidate route*
   (invalidated/poisoned rather than re-downloaded) until the `block.Valid` integrity-floor split
   lands and removes that path
+- **Known exposure under the opt-in**: a received body that carries subtrees is still added before
+  it is bound to its header, and when it is invalidated its coinbase is persisted with the invalid
+  record (bitcoin-sv/teranode#4844). A body carrying no subtrees is bound by the coinbase-only rule
+  and rejected before the add. Keep `blockvalidation_optimistic_mining_peer_blocks` off until the
+  `block.Valid` split lands
 
 **Performance Benefits:**
 
@@ -177,9 +183,9 @@ The optimistic path is implemented in `ValidateBlock()` (services/blockvalidatio
 
 **Enabling / disabling Optimistic Mining:**
 
-On the peer-served path optimistic mining is off by default and must be opted into. Where the risk tradeoffs above are acceptable and low peer-block latency is required:
+Optimistic mining is off by default on every validation path and must be opted into. Where the risk tradeoffs above are acceptable and low peer-block latency is required:
 
-- **Enable on the peer-served path**: set BOTH `blockvalidation_optimistic_mining` (default `true`)
+- **Enable**: set BOTH `blockvalidation_optimistic_mining` (default `true`)
   and `blockvalidation_optimistic_mining_peer_blocks` (default `false`) to `true`. This does not
   enable it during catch-up, which is always non-optimistic
 - **Disable globally**: set `blockvalidation_optimistic_mining` to `false` (the global opt-out
@@ -588,7 +594,17 @@ To decide whether a transaction's parents already exist on the current chain (th
 
 - **Current-chain ID set**: validation builds a map of the current chain's block-header IDs (`currentBlockHeaderIDsMap`). The IDs come from `GetBlockHeaderIDs` on the optimistic-mining path and from `GetBlockHeaders` metadata on the normal and revalidation paths; in every case the set is a bounded window of recent headers (100 by default), not the whole chain. Membership is exact, so a hit is a sound positive.
 - **Old-parent resolution**: parents that resolve to blocks outside the prefetched set are collected per transaction (`oldBlockIDsMap`) and confirmed by the Block Validation service in `checkOldBlockIDs`, which prefetches a window of up to 10,000 recent current-chain block-header IDs via `GetBlockHeaderIDs`. Because that window is truncated, any block ID not found in it falls back to the authoritative `CheckBlockIsInCurrentChain` RPC — the bounded window is the reason the fallback exists.
-- **In-memory chain-check route**: when `blockchain_use_in_memory_chain_check` is enabled, Block Validation holds no local prefetched ID set and defers every distinct parent-block-ID set to the authoritative `CheckBlockIsInCurrentChain`. The store applies `maxBlockID` as an in-memory upper-bound reject for uncommitted / too-new IDs, then confirms the remaining committed candidates in SQL — an `on_main_chain` flag query, with the recursive `parent_id` CTE as the fallback on the about-to-reject path and while the store's main-chain state (the `on_main_chain` flags and off-chain block-ID set) is rebuilding.
+- **Forked-set route**: when `blockchain_use_in_memory_chain_check` is enabled, Block Validation holds no local prefetched ID set and defers every distinct parent-block-ID set to `CheckBlockIsInCurrentChain`. The store answers from two in-memory structures and normally issues no SQL at all. An ID above `maxBlockID` is rejected outright: it has been assigned but not yet committed. An ID at or below `maxBlockID` that is absent from the off-chain (forked) set is accepted as on-chain. The toggle picks how the verdict is reached, not what it is, on every ID that belongs to a committed block AND is classified in the forked set at the time of the call. Those two qualifiers are the whole of the difference, and there are two inputs where they do not hold. A gap ID, an ID at or below `maxBlockID` with no committed `blocks` row, is rejected by SQL and accepted by the forked-set route. And a block that has just moved on or off the main chain is inside the ID range before the forked set has caught up, which the `mainChainRebuilding` guard is there to cover. See below for how much each one costs.
+
+    Two cases still fall through to SQL. An ID that *is* in the forked set is confirmed against the authoritative `on_main_chain` query, with the recursive `parent_id` CTE behind it, before anything is rejected — the forked set is rebuilt from the `on_main_chain` flags, so a transiently-false flag would otherwise turn into a permanent block invalidation. And while the store's main-chain state is rebuilding, or before `maxBlockID` has been initialised, the whole route defers to SQL because neither structure is trustworthy yet.
+
+    Accepting on absence from the forked set relies on every ID at or below `maxBlockID` belonging to a committed block. That does not hold, and it is worth knowing exactly how it fails before enabling the toggle. Measured on the Hetzner boxes on 2026-09-01, mainnet held 184 IDs below `MAX(id)` with no `blocks` row, testnet and teratestnet none. They arrive in runs, one run per node restart, each as long as the number of blocks in flight at the time. Block heights are unbroken across every run, so no block is missing; only IDs were burned.
+
+    What makes the accept safe is that nothing references those IDs. Decoding the packed block membership stored against each transaction, across all 12 runs and all 8 partitions, gave 381,599 stamps and zero pointing at an ID with no block. The failure that burns an ID lands before any transaction is stamped with it, so the wrong answer exists and nothing can ask for it.
+
+    Two paths could change that, and neither has fired: `storeInvalidBlock` re-commits a pre-assigned block under a fresh ID and abandons the one already stamped on its transactions, and the gRPC `AddBlock` handler accepts a caller-supplied ID with no bound. Re-check with `SELECT (SELECT MAX(id) FROM blocks) + 1 - (SELECT COUNT(*) FROM blocks);` rather than by re-arguing block-ID assignment, which is not where the risk is. While `blockchain_chain_check_shadow_compare` is enabled, every forked-set accept and 1 in 1024 `maxBlockID` rejects are also computed the authoritative way and any disagreement is logged and counted, which is how that assumption is measured rather than assumed. The comparison never changes the answer and never turns a failed query into an error; turning it off is what makes this route fast.
+
+    Two things to know before enabling the toggle. First, with the shadow comparison on, which is its default, every accept still runs the authoritative query, so a node that enables the route and leaves the comparison on saves no round trip on accepts. Second, on a forked-set node `StoreBlock` holds `mainChainRebuilding` for its whole length, so while a block is being stored this route and the other `on_main_chain` readers take their SQL or flag-free walks instead. With no concurrent ingest the route is far faster than SQL; under sustained high `StoreBlock` rates it is slower, and the crossover shrinks as the chain gets deeper. The `StoreBlock` duty cycle of a real catch-up, the number that decides which side a node sits on, has not been measured, so do not enable the toggle during initial sync or catch-up until it has.
 
 ##### The validOrderAndBlessed Mechanism
 

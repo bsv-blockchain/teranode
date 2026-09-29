@@ -59,7 +59,10 @@ type P2PClientI interface {
 
 	// IsPeerUnhealthy checks if a peer is considered unhealthy based on their performance.
 	// A peer is considered unhealthy if they have poor performance metrics or low reputation.
-	IsPeerUnhealthy(ctx context.Context, peerID string) (bool, string, float32, error)
+	// The unknown return value is true when the peer is absent from the registry: this is an
+	// absence of information, not a verdict, and callers must not treat it the same as a
+	// positive unhealthy finding.
+	IsPeerUnhealthy(ctx context.Context, peerID string) (isUnhealthy bool, reason string, reputationScore float32, unknown bool, err error)
 
 	// RecordBytesDownloaded records the number of bytes downloaded via HTTP from a peer.
 	// This is called after downloading data (blocks, subtrees, etc.) from a peer's DataHub URL.

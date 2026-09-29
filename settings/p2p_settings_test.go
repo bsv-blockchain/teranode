@@ -244,3 +244,51 @@ func TestP2PPeerScoreIPColocationThreshold_LoaderReadsKey(t *testing.T) {
 
 	require.Equal(t, 3, NewSettings().P2P.PeerScoreIPColocationThreshold, "loader must read %s under context %q", key, ctx)
 }
+
+// TestP2PAllowedPublisherIDs_LoaderReadsKey guards the pubsub authorship
+// allowlist wiring: p2p_allowed_publisher_ids must round-trip into
+// P2P.AllowedPublisherIDs, including the pipe-separated multi-value case, and
+// the default must be empty so no existing deployment's behaviour changes
+// until it opts in.
+func TestP2PAllowedPublisherIDs_LoaderReadsKey(t *testing.T) {
+	const settingName = "p2p_allowed_publisher_ids"
+	ctx := gocore.Config().GetContext()
+	winName := settingName
+	if ctx != "" {
+		winName = settingName + "." + ctx
+	}
+
+	t.Run("default is empty", func(t *testing.T) {
+		gocore.Config().Set(winName, "")
+
+		require.Empty(t, NewSettings().P2P.AllowedPublisherIDs, "empty allowlist must be the default so existing deployments see no behaviour change")
+	})
+
+	t.Run("loader reads a single value", func(t *testing.T) {
+		gocore.Config().Set(winName, "12D3KooWA1b2C3")
+		t.Cleanup(func() { gocore.Config().Set(winName, "") })
+
+		require.Equal(t, []string{"12D3KooWA1b2C3"}, NewSettings().P2P.AllowedPublisherIDs, "loader must read %s under context %q", settingName, ctx)
+	})
+
+	t.Run("loader reads pipe-separated multiple values", func(t *testing.T) {
+		gocore.Config().Set(winName, "12D3KooWA1b2C3|12D3KooWD4e5F6")
+		t.Cleanup(func() { gocore.Config().Set(winName, "") })
+
+		require.Equal(t, []string{"12D3KooWA1b2C3", "12D3KooWD4e5F6"}, NewSettings().P2P.AllowedPublisherIDs, "loader must split %s on '|' under context %q", settingName, ctx)
+	})
+
+	t.Run("trailing separator does not produce an empty entry", func(t *testing.T) {
+		gocore.Config().Set(winName, "12D3KooWA1b2C3|")
+		t.Cleanup(func() { gocore.Config().Set(winName, "") })
+
+		require.Equal(t, []string{"12D3KooWA1b2C3"}, NewSettings().P2P.AllowedPublisherIDs, "a trailing '|' must not leave an empty entry, or the allowlist fails client construction over a typo")
+	})
+
+	t.Run("doubled separator does not produce an empty entry", func(t *testing.T) {
+		gocore.Config().Set(winName, "12D3KooWA1b2C3||12D3KooWD4e5F6")
+		t.Cleanup(func() { gocore.Config().Set(winName, "") })
+
+		require.Equal(t, []string{"12D3KooWA1b2C3", "12D3KooWD4e5F6"}, NewSettings().P2P.AllowedPublisherIDs, "a doubled '|' must not leave an empty entry, or the allowlist fails client construction over a typo")
+	})
+}

@@ -125,6 +125,7 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic_UOM(t *test
 	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything, mock.Anything).Return(nil).Once()
 
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 	bv := &testBlockValidation{
 		BlockValidation: NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient, mockHandler),
 		waitFunc: func(ctx context.Context, block *model.Block, headers []*model.BlockHeader) error {

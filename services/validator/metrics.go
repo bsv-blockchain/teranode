@@ -43,6 +43,12 @@ var (
 	// or fails structural validation checks. High values may indicate network attacks or client issues.
 	prometheusInvalidTransactions prometheus.Counter
 
+	// prometheusMissingParentTransactions counts Kafka-sourced transactions rejected only because
+	// their parent UTXO has not been seen yet (ErrTxMissingParent). Kept separate from
+	// prometheusInvalidTransactions because this is an ordering artifact of the validatortxs
+	// topic's concurrent per-partition consumption, not a genuinely invalid or attack transaction.
+	prometheusMissingParentTransactions prometheus.Counter
+
 	// prometheusValidatorParentCommitRetries counts retries spent waiting for a parent
 	// transaction to finish its own commit, labelled by condition (TX_LOCKED or
 	// TX_CREATING). Paired with prometheusValidatorParentCommitExhausted, this gives the
@@ -267,6 +273,16 @@ func _initPrometheusMetrics() {
 			Subsystem: "validator",
 			Name:      "invalid_transactions",
 			Help:      "Number of transactions found invalid by the validator service",
+		},
+	)
+
+	// Missing-parent transactions counter (Kafka intake only)
+	prometheusMissingParentTransactions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "missing_parent_transactions",
+			Help:      "Number of Kafka-sourced transactions rejected because their parent UTXO had not been seen yet (ordering artifact, not necessarily invalid)",
 		},
 	)
 

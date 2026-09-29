@@ -622,6 +622,7 @@ func (s *Server) IsPeerUnhealthy(ctx context.Context, req *p2p_api.IsPeerUnhealt
 			IsUnhealthy:     true,
 			Reason:          "unknown peer",
 			ReputationScore: 0,
+			Unknown:         true,
 		}, nil
 	}
 

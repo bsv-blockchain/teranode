@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"io"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -375,4 +376,55 @@ func TestMetaHeaderWireContract(t *testing.T) {
 
 	require.Equal(t, uint32(subtree.Length()), binary.LittleEndian.Uint32(metaBytes[chainhash.HashSize:subtreeMetaHeaderSize]),
 		"the entry count must be a little-endian uint32 of Length(), immediately after the root hash")
+}
+
+// readCountingReader counts Read calls on the underlying source, standing in for
+// a file handle where every Read is a syscall.
+type readCountingReader struct {
+	r     io.Reader
+	reads int
+}
+
+func (c *readCountingReader) Read(p []byte) (int, error) {
+	c.reads++
+	return c.r.Read(p)
+}
+
+// TestValidatedReaderBuffersSource pins that the meta body is not decoded
+// straight off the caller's reader. go-subtree decodes each entry with several
+// small io.ReadFull calls, and both production callers hand over a raw file
+// handle from the subtree store, so an unbuffered source costs a read syscall
+// per field: on a 473M-tx block that was ~37% of validOrderAndBlessed's CPU.
+func TestValidatedReaderBuffersSource(t *testing.T) {
+	const leaves = 1024
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(leaves)
+	require.NoError(t, err)
+
+	for i := 0; i < leaves; i++ {
+		require.NoError(t, subtree.AddNode(chainhash.HashH([]byte{byte(i), byte(i >> 8), 0xaa}), 1, 0))
+	}
+
+	meta := subtreepkg.NewSubtreeMeta(subtree)
+
+	for i := 0; i < leaves; i++ {
+		parent := chainhash.HashH([]byte{byte(i), byte(i >> 8), 0xbb})
+		require.NoError(t, meta.SetTxInpoints(i, subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{parent}, []uint32{1, 0})))
+	}
+
+	metaBytes, err := meta.Serialize()
+	require.NoError(t, err)
+
+	src := &readCountingReader{r: bytes.NewReader(metaBytes)}
+
+	got, err := NewSubtreeMetaFromValidatedReader(*subtree.RootHash(), subtree, src)
+	require.NoError(t, err)
+
+	parents, err := got.GetParentTxHashes(leaves - 1)
+	require.NoError(t, err)
+	require.Len(t, parents, 1)
+
+	// The whole fixture fits in one buffer fill; a handful of reads allows for
+	// the header, the body and the EOF probe. Unbuffered this is several per leaf.
+	require.LessOrEqual(t, src.reads, 8, "meta must be read through a buffer, got %d reads for %d bytes", src.reads, len(metaBytes))
 }

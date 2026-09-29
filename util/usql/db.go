@@ -195,3 +195,36 @@ func (db *DB) recordCircuitBreakerResult(err error) {
 	}
 	// Non-retriable errors (business logic errors) are ignored by the circuit breaker
 }
+
+// RetryTx runs fn inside one transaction and treats the whole transaction as the
+// retriable unit. A statement that fails inside a PostgreSQL transaction aborts it,
+// so retrying that statement alone cannot work; on a retriable error the transaction
+// is rolled back and fn runs again from BeginTx. The circuit breaker is consulted once
+// before the first attempt and records the final outcome, the same as a single
+// QueryContext or ExecContext on the pool.
+//
+// fn must not commit or roll back tx, and must be safe to run more than once: any
+// state it builds outside the database is discarded when an attempt fails.
+func (db *DB) RetryTx(ctx context.Context, opts *sql.TxOptions, fn func(tx *sql.Tx) error) error {
+	if db.circuitBreaker != nil && !db.circuitBreaker.Allow() {
+		return ErrCircuitOpen
+	}
+
+	err := retryOperation(ctx, db.retryConfig, func() error {
+		tx, beginErr := db.DB.BeginTx(normalizeContext(ctx), opts)
+		if beginErr != nil {
+			return beginErr
+		}
+
+		if fnErr := fn(tx); fnErr != nil {
+			_ = tx.Rollback()
+			return fnErr
+		}
+
+		return tx.Commit()
+	})
+
+	db.recordCircuitBreakerResult(err)
+
+	return err
+}

@@ -210,7 +210,10 @@ type ClientI interface {
 
 	// IsPeerUnhealthy checks if a peer is considered unhealthy based on their performance.
 	// A peer is considered unhealthy if they have poor performance metrics or low reputation.
-	IsPeerUnhealthy(ctx context.Context, peerID string) (bool, string, float32, error)
+	// The unknown return value is true when the peer is absent from the registry: this is an
+	// absence of information, not a verdict, and callers must not treat it the same as a
+	// positive unhealthy finding.
+	IsPeerUnhealthy(ctx context.Context, peerID string) (isUnhealthy bool, reason string, reputationScore float32, unknown bool, err error)
 
 	// GetPeerRegistry retrieves the comprehensive peer registry data.
 	// Returns all peers in the registry with the subset of PeerInfo carried by

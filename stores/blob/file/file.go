@@ -549,16 +549,31 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 
 	var path string
 	if storeURL.Host == "." {
-		path = storeURL.Path[1:] // relative path
+		path = strings.TrimPrefix(storeURL.Path, "/") // relative path
 	} else {
 		path = storeURL.Path // absolute path
 	}
 
+	// An empty path would resolve to the working directory below, and MkdirAll accepts that
+	// without complaint, so a misconfigured URL such as "file://./" or "file:" would quietly put
+	// blobs wherever the process started. Reject it instead.
+	if path == "" {
+		return nil, errors.NewConfigurationError("[File] store URL %q has no path", storeURL.String())
+	}
+
+	// Resolve the base path once, here, rather than on every read and write. ConstructFilename
+	// checks each filename it builds against the base, and with a relative base that check went
+	// through filepath.Abs and so os.Getwd, which stats "." and $PWD on every call: 11% of
+	// teranode CPU in a 30 s profile of a mainnet sync. An absolute base also pins the store to
+	// the directory it was created in, whatever the process later does to its working directory.
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return nil, errors.NewStorageError("[File] failed to resolve directory", err)
+	}
+
 	// create the path if necessary
-	if len(path) > 0 {
-		if err := os.MkdirAll(path, 0755); err != nil {
-			return nil, errors.NewStorageError("[File] failed to create directory", err)
-		}
+	if err := os.MkdirAll(path, 0755); err != nil {
+		return nil, errors.NewStorageError("[File] failed to create directory", err)
 	}
 
 	storeOpts := options.NewStoreOptions(opts...)

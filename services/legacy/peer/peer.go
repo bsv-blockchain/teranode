@@ -2517,6 +2517,18 @@ func (p *Peer) QueueInventory(invVect *wire.InvVect) {
 	p.outputInvChan <- invVect
 }
 
+// RequeueInventory is QueueInventory for an inv that must be re-announced
+// even though the peer is already known to have it, such as a tx rebroadcast
+// after the peer rejected or dropped it. It forgets the inv from the peer's
+// known inventory first, so neither QueueInventory nor the trickle drain
+// filters it out.
+//
+// This function is safe for concurrent access.
+func (p *Peer) RequeueInventory(invVect *wire.InvVect) {
+	p.knownInventory.Delete(invVect)
+	p.QueueInventory(invVect)
+}
+
 // Connected returns whether or not the peer is currently connected.
 //
 // This function is safe for concurrent access.

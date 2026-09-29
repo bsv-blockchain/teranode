@@ -146,7 +146,10 @@ func (u *Server) reportCatchupFailure(ctx context.Context, peerID string) {
 }
 
 func (u *Server) reportCatchupFailureForError(ctx context.Context, peerID string, err error) {
-	if errors.IsBlockCorrupt(err) {
+	// An unbound invalid-transaction verdict is corrupt by class but a consensus rejection on
+	// catch-up (see isUnboundTxInvalidVerdict), so it is charged like a consensus-invalid block
+	// rather than exempted as a corrupt body (bitcoin-sv/teranode#4844).
+	if errors.IsBlockCorrupt(err) && !isUnboundTxInvalidVerdict(err) {
 		// releaseCatchupLock already charged this cycle for the corrupt body, once, at the site
 		// that classified it. A corrupt verdict is deliberately not "unvalidatable" and is not
 		// wrapped as ErrExternal, so it reaches processCatchupChItem's generic tail and would be
@@ -315,6 +318,22 @@ func shouldReportConsensusMalicious(err error) bool {
 	return errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid)
 }
 
+// isUnboundTxInvalidVerdict reports whether a failed block validation is the corrupt verdict
+// ValidateBlockWithOptions returns for an invalid transaction in a subtree list that nothing has
+// bound to the header yet (its subtree invalid-transaction branch, the single producer). The
+// verdict is corrupt so the direct peer path re-downloads under the corrupt-attempt cap, but on
+// catch-up it must be handled as a consensus rejection (bitcoin-sv/teranode#4844): the subtree
+// blobs were verified against their names, every peer serves the same bytes for a fault in the
+// miner's real body, so deleting them and re-downloading would loop with no record, and the
+// malicious report would never fire.
+//
+// No other corrupt producer on the catch-up route matches: the subtree-validation corrupt
+// verdicts (SubtreeValidation.go), the quick_validate.go corrupt sites and model's bindErr wrap no
+// ErrTxInvalid. A local fault is excluded exactly as in shouldReportConsensusMalicious.
+func isUnboundTxInvalidVerdict(err error) bool {
+	return !isLocalCatchupFault(err) && errors.IsBlockCorrupt(err) && errors.Is(err, errors.ErrTxInvalid)
+}
+
 // isLocalCatchupFault reports whether a catchup failure is this node's own doing
 // rather than anything the serving peer did, so no reputation charge is warranted.
 //
@@ -435,27 +454,58 @@ func (u *Server) isPeerMalicious(ctx context.Context, peerID string) bool {
 //
 // Returns:
 //   - bool: True if peer has bad reputation
-func (u *Server) isPeerBad(peerID string) bool {
+//   - string: The reason the peer was judged bad, empty when it was not
+func (u *Server) isPeerBad(peerID string) (bool, string) {
 	if peerID == "" {
-		return false
+		return false, ""
 	}
 
 	// Query P2P service for peer health status
 	if u.p2pClient != nil {
 		// Use context.Background() since the old method didn't require context
-		isUnhealthy, reason, reputationScore, err := u.p2pClient.IsPeerUnhealthy(context.Background(), peerID)
+		isUnhealthy, reason, reputationScore, unknown, err := u.p2pClient.IsPeerUnhealthy(context.Background(), peerID)
 		if err != nil {
 			u.logger.Warnf("[isPeerBad] Failed to check if peer %s is unhealthy: %v", peerID, err)
 			// On error, assume peer is not bad to avoid false positives
-			return false
+			return false, ""
+		}
+		if unknown {
+			// Absence of information, not a verdict: a peer absent from the registry (e.g. its
+			// first announcement, raced against the peer-registry batcher flush) must not be
+			// refused as a catchup source. Fail open, matching the empty-ID and error branches
+			// above. Warn (not Debug) because this should be transient and worth noticing if
+			// it isn't; the counter makes a sustained rate visible without grepping logs.
+			u.logger.Warnf("[isPeerBad] Peer %s is unknown to the registry; treating as healthy", peerID)
+			prometheusCatchupPeerHealthGate.WithLabelValues("unknown").Inc()
+			return false, ""
 		}
 		if isUnhealthy {
 			u.logger.Debugf("[isPeerBad] Peer %s is unhealthy (reputation: %.2f): %s", peerID, reputationScore, reason)
 		}
-		return isUnhealthy
+		return isUnhealthy, reason
 	}
 
-	return false
+	return false, ""
+}
+
+// classifyPeerRefusalReason maps a catchup-source refusal to one of a fixed set of metric label
+// values. The label set is closed deliberately: reason comes from badReason (a message built from
+// interpolated numeric scores, e.g. "low reputation score: 12.34") or from the malicious flag,
+// neither of which is safe to use as a Prometheus label directly (unbounded cardinality from a
+// value that is effectively caller-influenced, since it moves with the peer's own behaviour).
+func classifyPeerRefusalReason(badReason string, malicious bool) string {
+	if malicious {
+		return "malicious"
+	}
+
+	switch {
+	case strings.HasPrefix(badReason, "low reputation score"):
+		return "low_reputation"
+	case strings.HasPrefix(badReason, "low success rate"):
+		return "low_success_rate"
+	default:
+		return "other"
+	}
 }
 
 // reportValidBlockForPeers reports a successfully validated block to the P2P service

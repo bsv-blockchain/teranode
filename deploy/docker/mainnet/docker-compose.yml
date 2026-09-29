@@ -113,6 +113,13 @@ services:
       file: ../base/docker-services.yml
       service: prometheus
 
+  # Required: base/prometheus.yml points its `alerting` section at this host, so
+  # without it Prometheus logs unresolvable-alertmanager errors on every reload.
+  alertmanager:
+    extends:
+      file: ../base/docker-services.yml
+      service: alertmanager
+
   grafana:
     extends:
       file: ../base/docker-services.yml

@@ -338,18 +338,14 @@ func QueryToFileOptions(query url.Values) []FileOption {
 // path traversal attacks. It resolves both paths to absolute form and checks that
 // the target path is a subdirectory of the base path.
 func validatePathWithinBase(basePath, targetPath string) error {
-	absBase, err := filepath.Abs(basePath)
+	absBase, err := absolutePath(basePath)
 	if err != nil {
 		return err
 	}
-	absTarget, err := filepath.Abs(targetPath)
+	absTarget, err := absolutePath(targetPath)
 	if err != nil {
 		return err
 	}
-
-	// Clean paths to remove any . or .. components
-	absBase = filepath.Clean(absBase)
-	absTarget = filepath.Clean(absTarget)
 
 	// Ensure target is within base (with proper separator handling)
 	// The target must either equal the base or start with base + separator
@@ -358,6 +354,20 @@ func validatePathWithinBase(basePath, targetPath string) error {
 	}
 
 	return nil
+}
+
+// absolutePath cleans a path that is already absolute, removing any . or .. components, and
+// resolves a relative one against the working directory. filepath.Abs behaves the same way on
+// unix, but only as an implementation detail; spelling the split out here makes the guarantee
+// local. The file store hands ConstructFilename an absolute base and joins every target onto
+// it, so on the read and write path neither call reaches os.Getwd, which stats "." and $PWD
+// each time. Only a relative base, such as the null store's empty one, still pays for that.
+func absolutePath(path string) (string, error) {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path), nil
+	}
+
+	return filepath.Abs(path)
 }
 
 func (o *Options) ConstructFilename(basePath string, key []byte, fileType fileformat.FileType) (string, error) {

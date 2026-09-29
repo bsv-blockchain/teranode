@@ -151,6 +151,39 @@ func TestOptionsConstructFilename(t *testing.T) {
 	}
 }
 
+func TestValidatePathWithinBase(t *testing.T) {
+	absBase := t.TempDir()
+
+	tests := []struct {
+		name    string
+		base    string
+		target  string
+		wantErr bool
+	}{
+		{name: "absolute base, target inside", base: absBase, target: absBase + "/sub/file.testing"},
+		{name: "absolute base, target is base", base: absBase, target: absBase},
+		{name: "absolute base, dot-dot escape", base: absBase, target: absBase + "/../outside", wantErr: true},
+		{name: "absolute base, escape through a subdirectory", base: absBase, target: absBase + "/sub/../../outside", wantErr: true},
+		{name: "absolute base, sibling sharing the prefix", base: absBase, target: absBase + "2/file.testing", wantErr: true},
+		{name: "relative base, target inside", base: "data", target: "data/sub/file.testing"},
+		{name: "relative base, dot-dot escape", base: "data", target: "data/../outside", wantErr: true},
+		{name: "empty base, target inside the working directory", base: "", target: "sub/file.testing"},
+		{name: "empty base, dot-dot escape", base: "", target: "../outside", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePathWithinBase(tt.base, tt.target)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestNewFileOptions(t *testing.T) {
 	t.Run("Empty options", func(t *testing.T) {
 		opts := NewFileOptions()

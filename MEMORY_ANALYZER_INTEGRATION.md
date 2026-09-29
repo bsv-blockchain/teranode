@@ -2,17 +2,28 @@
 
 ## Overview
 
-The memory analyzer is now integrated into Teranode and available on all services that have the profiler enabled.
+The memory analyzer is integrated into Teranode and available on all services that have the profiler enabled **on a loopback-bound address**.
 
 ## Where It's Used
 
-The memory analyzer handler is registered in `daemon/daemon_services.go` in the `startProfilerAndMetrics` function (line 189):
+The memory analyzer handler is registered in `daemon/daemon_services.go` in `newProfilerMux`, and only when `profilerAddr` is loopback-bound:
 
 ```go
-// memory analyzer support (includes mmap, non-heap memory)
-logger.Infof("Memory analyzer available on http://%s/debug/memory", profilerAddr)
-mux.HandleFunc("/debug/memory", profiling.MemoryProfileHandler)
+// memory analyzer support (includes mmap, non-heap memory) - loopback only
+if util.IsLoopbackListenAddress(profilerAddr) {
+    logger.Infof("Memory analyzer available on http://%s/debug/memory", profilerAddr)
+    mux.HandleFunc("/debug/memory", profiling.MemoryProfileHandler)
+}
 ```
+
+### Why loopback only
+
+The analyzer output lists the exact virtual-address range of every large mapping in the
+process (the Teranode binary, shared libraries, heap and stack regions, named mmaps).
+That defeats ASLR, which is the prerequisite for turning any later memory-corruption bug
+into a reliable exploit. The default non-dev `profilerAddr` is `:${PROFILE_PORT}` (all
+interfaces, so Prometheus can scrape `/metrics`), and on that bind `/debug/memory`
+answers 404. The `.dev` context binds `localhost:${PROFILE_PORT}` and keeps the route.
 
 ## How to Access
 
@@ -20,7 +31,7 @@ mux.HandleFunc("/debug/memory", profiling.MemoryProfileHandler)
 
 The memory analyzer is available when:
 
-1. `ProfilerAddr` is set in settings (e.g., `:6060`)
+1. `ProfilerAddr` is set in settings to a loopback address (e.g., `localhost:6060`); on `:6060` or any interface bind the route is not registered
 2. The service has started successfully
 3. You're running on Linux (requires `/proc/[pid]/smaps`)
 
@@ -41,6 +52,20 @@ curl http://localhost:6060/debug/memory?top=100
 
 ### Example: Accessing from Kubernetes
 
+Preferred: run the CLI inside the pod, which needs no profiler change. The binary is
+not part of the image, so build it for linux and copy it in:
+
+```bash
+GOOS=linux GOARCH=amd64 go build -o memanalyzer ./cmd/memanalyzer
+kubectl cp memanalyzer subtree-validator-pod:/tmp/memanalyzer
+kubectl exec subtree-validator-pod -- /tmp/memanalyzer -pid 1 -top 50 > memory_analysis.txt
+```
+
+Alternative: set `profilerAddr` to `localhost:6060` on that pod and port-forward
+(port-forward reaches loopback inside the pod's network namespace). Note this also
+moves `/metrics` and pprof to loopback for that process, so Prometheus scraping of the
+pod stops until you revert it.
+
 ```bash
 # Port-forward to a pod
 kubectl port-forward subtree-validator-pod 6060:6060
@@ -52,13 +77,15 @@ curl http://localhost:6060/debug/memory > memory_analysis.txt
 ### Example: Accessing from Docker Compose
 
 ```bash
-# If service exposes port 6060
-curl http://localhost:6060/debug/memory
+# Only when the service's profilerAddr is loopback-bound and reached from inside
+# the container; a published port on a wildcard bind answers 404.
+docker compose exec <service> curl -s http://localhost:6060/debug/memory
 ```
 
 ## Which Services Have It
 
-The memory analyzer is available on **all services** that have the profiler enabled, including:
+The memory analyzer is available on all services that have the profiler enabled **on a
+loopback-bound `profilerAddr`**, including:
 
 - Blockchain
 - Block Assembly
@@ -139,7 +166,7 @@ ADDRESS            PERMS  RSS        PRIVATE    SHARED     NAME
 
 1. **`daemon/daemon_services.go`**
    - Added import: `"github.com/bsv-blockchain/teranode/internal/profiling"`
-   - Registered handler in `startProfilerAndMetrics` function
+   - Registered handler in `newProfilerMux`, gated on a loopback-bound `profilerAddr`
 
 ## Other Debug Endpoints
 
@@ -150,8 +177,13 @@ The memory analyzer joins other debugging endpoints available on the same port:
 - `/debug/pprof/heap` - Heap profile
 - `/debug/pprof/goroutine` - Goroutine dump
 - `/debug/fgprof` - Full goroutine profiler
-- `/debug/memory` - **Complete memory analyzer (NEW)**
+- `/debug/memory` - Complete memory analyzer (loopback-bound `profilerAddr` only; 404 otherwise)
 - `/metrics` - Prometheus metrics (if enabled)
+
+Only `/debug/memory` is gated on the bind address. The pprof routes above are served on
+any bind; note that Go's pprof proto profiles embed the `/proc/self/maps` mapping table,
+so the gate narrows the address-map disclosure rather than eliminating it. Moving pprof
+off network-reachable listeners is tracked separately.
 
 ## Typical Workflow
 
@@ -163,10 +195,12 @@ The memory analyzer joins other debugging endpoints available on the same port:
    kubectl top pod subtree-validator-pod
    ```
 
-2. **Get complete breakdown:**
+2. **Get complete breakdown** (inside the pod; the HTTP route answers 404 on the
+   default wildcard `profilerAddr`):
 
    ```bash
-   curl http://localhost:6060/debug/memory > memory.txt
+   # after copying the CLI in, see "Accessing from Kubernetes" above
+   kubectl exec subtree-validator-pod -- /tmp/memanalyzer -pid 1 > memory.txt
    ```
 
 3. **Compare with heap profile:**
@@ -183,18 +217,10 @@ The memory analyzer joins other debugging endpoints available on the same port:
 
 ### Monitoring in Production
 
-Add to monitoring dashboards:
-
-```bash
-# Cron job or monitoring script
-while true; do
-  curl -s http://localhost:6060/debug/memory | \
-    grep "RSS (Resident)" | \
-    awk '{print $3}' | \
-    send_to_metrics_system
-  sleep 60
-done
-```
+Do not poll `/debug/memory` from a monitoring system: it is not served on the default
+wildcard `profilerAddr`, and it is not meant to be network-reachable. For continuous
+RSS tracking use the Prometheus process metrics on `/metrics`, or call
+`profiling.GetCompleteMemoryProfile()` in-process and export the totals you need.
 
 ## Platform Notes
 

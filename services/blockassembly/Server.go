@@ -36,6 +36,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -191,9 +192,29 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store
 //   - error: Any error encountered during health check
 func (ba *BlockAssembly) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
-		// Add liveness checks here. Don't include dependency checks.
-		// If the service is stuck return http.StatusServiceUnavailable
-		// to indicate a restart is needed
+		// Liveness answers one question: is this service WEDGED, such that a
+		// restart is the only way out? It must never fail for a dependency
+		// being down (that is readiness) nor for the node simply being idle —
+		// a spurious restart of a healthy node is worse than the stall this
+		// exists to catch, which is why the timeout is opt-in and defaults to
+		// disabled (issue 1447).
+		if ba.blockAssembler != nil {
+			stallTimeout := ba.settings.BlockAssembly.LivenessStallTimeout
+			if age, stalled := ba.blockAssembler.heartbeat.Stalled(stallTimeout); stalled {
+				// The state names the select case the loop is stuck in
+				// (resetting, reorging, reconciling, ...). The 503 body lands
+				// nested in the daemon's aggregate JSON, which the kubelet event
+				// truncates, so the same line goes to the log as well: it is the
+				// trace an operator reads after the restart.
+				state := StateStrings[ba.blockAssembler.GetCurrentRunningState()]
+				msg := fmt.Sprintf("block assembly main loop has not made progress for %s (limit %s, state %s)", age, stallTimeout, state)
+
+				ba.logger.Warnf("[BlockAssembly][Health] liveness failing: %s", msg)
+
+				return http.StatusServiceUnavailable, msg, nil
+			}
+		}
+
 		return http.StatusOK, "OK", nil
 	}
 
@@ -311,6 +332,11 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				// stall-state computation, and its unit tests mock only the reads
 				// that computation makes.
 				prometheusBlockAssemblyQueueHeadAge.Set(ba.blockAssembler.QueueHeadAge().Seconds())
+
+				// Published whether or not the liveness timeout is set, so an
+				// operator can measure the worst case the documented rollout asks
+				// for before choosing a timeout.
+				prometheusBlockAssemblerLivenessHeartbeatAge.Set(ba.blockAssembler.heartbeat.Age().Seconds())
 			}
 		}
 	}()
@@ -2037,14 +2063,31 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	bestBlockHeader, _ = ba.blockAssembler.CurrentBlock()
 	ba.logger.Debugf("[BlockAssembly][%s][%s] time since previous block: %s", jobID, block.Header.Hash(), time.Since(time.Unix(int64(bestBlockHeader.Timestamp), 0)).String())
 
-	// add the new block to the blockchain
-	if err = ba.blockchainClient.AddBlock(callerCtx, block, ""); err != nil {
+	// Add the new block to the blockchain with subtrees_set already true:
+	// block.Valid() above already ran synchronously and passed, so — unlike a
+	// peer block accepted via optimistic mining, whose equivalent background
+	// integrity check (blockvalidation's block.Valid goroutine) has not run
+	// yet at AddBlock time — there is no outstanding validation this node
+	// still owes the network for this block. Without this, p2p would defer
+	// announcing a locally mined block until the SetBlockSubtreesSet call
+	// below fires its own notification, delaying the announcement by one
+	// extra RPC round trip for no reason.
+	if err = ba.blockchainClient.AddBlock(callerCtx, block, "", blockchainoptions.WithSubtreesSet(true)); err != nil {
 		return nil, errors.NewProcessingError("[BlockAssembly][%s][%s] failed to add block", jobID, block.Hash().String(), err)
 	}
 
-	// Mark subtrees as set — block assembly built and validated these subtrees,
-	// so they are ready for setTxMined processing. Without this, locally mined
-	// blocks would never complete the mining lifecycle.
+	// Still call SetBlockSubtreesSet even though subtrees_set is already true:
+	// it is the trigger blockvalidation's setMined listener waits on
+	// (BlockValidation.go's setMined subscription loop only acts on
+	// NotificationType_BlockSubtreesSet, never on NotificationType_Block), so
+	// without this call a locally mined block would never complete the mining
+	// lifecycle. The store update is idempotent on an already-true flag
+	// (SetBlockSubtreesSet.go: an UPDATE ... SET subtrees_set = true that
+	// matches the row still reports rows affected), so this costs one extra
+	// UPDATE and notification, not a second real state change. p2p's
+	// announceBlock dedupes the resulting second notification against the one
+	// already sent by AddBlock above, so this does not double-announce the
+	// block either.
 	if err = ba.blockchainClient.SetBlockSubtreesSet(callerCtx, block.Hash()); err != nil {
 		ba.logger.Errorf("[BlockAssembly][%s][%s] failed to set block subtrees_set: %v", jobID, block.Header.Hash(), err)
 	}

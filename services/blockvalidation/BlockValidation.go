@@ -29,7 +29,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
-	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
 	p2pconstants "github.com/bsv-blockchain/teranode/interfaces/p2p"
 	"github.com/bsv-blockchain/teranode/model"
@@ -401,7 +400,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 ) *BlockValidation {
 	logger.Infof("optimisticMining = %v", tSettings.BlockValidation.OptimisticMining)
 	if tSettings.BlockValidation.OptimisticMining && !tSettings.BlockValidation.OptimisticMiningPeerBlocks {
-		logger.Warnf("optimistic mining is enabled but disabled on peer-served and catch-up blocks; set blockvalidation_optimistic_mining_peer_blocks to restore it (bitcoin-sv/teranode#4692)")
+		logger.Warnf("optimistic mining is enabled but stays off on every validation path until blockvalidation_optimistic_mining_peer_blocks is also set (bitcoin-sv/teranode#4692)")
 	}
 	// Initialize Kafka producer for invalid blocks if configured
 	var invalidBlockKafkaProducer kafka.KafkaAsyncProducerI
@@ -536,14 +535,14 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 							// IMPORTANT: We listen for BlockSubtreesSet, NOT NotificationType_Block.
 							//
 							// HOW THIS NOTIFICATION IS TRIGGERED:
-							// Both validation paths call updateSubtreesDAH() after validation completes:
+							// The full-validation paths call updateSubtreesDAH() after validation completes:
 							//
 							// Normal Validation (ValidateBlock):
 							//   ValidateBlock() → updateSubtreesDAH() → SetBlockSubtreesSet() → notification
 							//
-							// Quick Validation (Catchup):
-							//   quickValidateBlock() → goroutines complete via errgroup.Wait()
-							//   → updateSubtreesDAH() → SetBlockSubtreesSet() → notification
+							// Quick Validation (Catchup) sends no BlockSubtreesSet: its commitBlock inserts
+							// the block with subtrees_set and mined_set already true, so this worker would
+							// skip the block on its MinedSet guard anyway.
 							//
 							// TIMING GUARANTEES:
 							// BlockSubtreesSet is sent AFTER:
@@ -1108,10 +1107,51 @@ func (u *BlockValidation) processSubtreesNotSet(ctx context.Context, g *errgroup
 	if len(blocksSubtreesNotSet) > 0 {
 		u.logger.Infof("[BlockValidation:start] found %d blocks subtrees not set", len(blocksSubtreesNotSet))
 
+		// Best-effort current height, used only to tell a block whose missing subtree file is an
+		// anomaly worth surfacing (Warn) from one whose files are certainly gone for good (Debug):
+		// see the comment at the Warnf/Debugf choice below. A failure here just leaves haveHeight
+		// false, so every miss stays at Warn - the safe default.
+		currentHeight, haveHeight := uint32(0), false
+		if _, meta, bhErr := u.blockchainClient.GetBestBlockHeader(ctx); bhErr == nil && meta != nil {
+			currentHeight, haveHeight = meta.Height, true
+		}
+
 		for _, block := range blocksSubtreesNotSet {
 			block := block
 
 			g.Go(func() error {
+				// See subtreeFilesReady for why the sweep, and only the sweep, needs this check.
+				ready, missing, err := u.subtreeFilesReady(ctx, block)
+				if err != nil {
+					u.logger.Errorf("[BlockValidation:start][%s] failed to check subtree files, leaving subtrees_set false: %s", block.Hash().String(), err)
+					return nil
+				}
+
+				if !ready {
+					// Subtree files are written with a DAH of block.Height +
+					// subtreeBlockHeightRetention (quick_validate.go) or of the UTXO store's
+					// height at write time + the same retention (subtreevalidation's
+					// storeSubtreeFiles, where that height is normally below block.Height), so
+					// once currentHeight passes block.Height + retention the DAH sweeper has
+					// normally already deleted the file and this block can never satisfy
+					// subtreeFilesReady - it is stuck, not merely slow, and Warn every minute
+					// forever for it would be noise. The one exception is a lower-height fork
+					// block validated while the UTXO store is ahead of it; its files expire a
+					// little later, so a miss there is logged at Debug slightly early. Below that height a
+					// missing file is unexpected (every path that reaches here writes its
+					// subtree files before the block itself is even added - see
+					// subtreeFilesReady), so it is still worth a Warn: most likely a transient
+					// storage error, or a write genuinely still in flight.
+					logf := u.logger.Warnf
+					if haveHeight && currentHeight > block.Height+u.subtreeBlockHeightRetention {
+						logf = u.logger.Debugf
+					}
+
+					logf("[BlockValidation:start][%s] %d of %d subtree files missing, leaving subtrees_set false for a later sweep", block.Hash().String(), missing, len(block.Subtrees))
+
+					return nil
+				}
+
 				u.logger.Infof("[BlockValidation:start] processing block subtrees DAH not set: %s", block.Hash().String())
 
 				if err := u.updateSubtreesDAH(ctx, block); err != nil {
@@ -1122,6 +1162,50 @@ func (u *BlockValidation) processSubtreesNotSet(ctx context.Context, g *errgroup
 			})
 		}
 	}
+}
+
+// subtreeFilesReady reports whether every subtree file referenced by block already exists in
+// subtreeStore. processSubtreesNotSet calls this before calling updateSubtreesDAH; the three
+// callers that reach updateSubtreesDAH directly (ValidateBlock, its optimistic-mining background
+// goroutine, and quick-validation's commitBlock) do not need it because they call immediately
+// after their own validation has confirmed the subtrees - an extra Exists check there would cost
+// a syscall per subtree per block for no new information. The sweep has no such guarantee: it
+// runs on its own ticker, including after a restart, independently of whatever put the block at
+// subtrees_set=false.
+//
+// This restores a guarantee PR #506 ("make block persister the authority for permanent file
+// promotion") removed as a side effect: before that PR, updateSubtreesDAH looped over
+// block.Subtrees calling subtreeStore.SetDAH(..., 0), which failed with ErrNotFound for a missing
+// file and so implicitly blocked subtrees_set until every file existed. PR #506 removed that loop
+// (it was leaking permanent files for orphaned blocks) and, with it, the implicit check.
+// subtrees_set=true is what setMined (and, soon, p2p block announcement) trust as proof the files
+// exist, so do not remove this on the assumption updateSubtreesDAH still guards it - it no longer
+// does.
+//
+// This is a defensive backstop, not a gate on background validation: every path that inserts a
+// non-invalid block with subtrees_set=false (ValidateBlock, both optimistic and not; the
+// legacy-sync route, which is always non-optimistic; block-assembly's own insert) writes the
+// subtree files synchronously, BEFORE the block is added, so they are normally already present
+// the instant the sweep would see the block. What optimistic mining defers to a background
+// goroutine is the later, heavier block.Valid() consensus check, not subtree file writing - so a
+// missing file here almost always means a genuine anomaly (crash mid-write, storage error,
+// expired retention), not "still validating." See the KNOWN LIMITATION note on updateSubtreesDAH
+// for the real, still-open gap this does NOT close: the sweep can still set subtrees_set true
+// while block.Valid() is running in the background, because the files it checks already exist by
+// then.
+func (u *BlockValidation) subtreeFilesReady(ctx context.Context, block *model.Block) (ready bool, missing int, err error) {
+	for _, hash := range block.Subtrees {
+		exists, existsErr := u.subtreeStore.Exists(ctx, hash[:], fileformat.FileTypeSubtree)
+		if existsErr != nil {
+			return false, 0, errors.NewStorageError("[subtreeFilesReady][%s] failed to check subtree file %s", block.Hash().String(), hash.String(), existsErr)
+		}
+
+		if !exists {
+			missing++
+		}
+	}
+
+	return missing == 0, missing, nil
 }
 
 // SetBlockExists marks a block as existing in the validation system's cache.
@@ -1706,6 +1790,60 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			return errors.NewBlockIncompleteError("[ValidateBlock][%s] coinbase tx is nil or empty", block.Header.Hash().String())
 		}
 
+		// Header-only proof-of-work gates, run FIRST. HasMetPowLimit and HasMetTargetDifficulty are
+		// pure functions of the 80 header bytes — no height, no parent, no chain state, no store
+		// access — so they are hoisted above the checkpoint, parent-invalid and expected-nBits
+		// checks below (bitcoin-sv/teranode#4844). Those checks are more expensive, and the
+		// parent-invalid one persists a peer-supplied body when it is bound; a header nobody paid for
+		// must never reach them.
+		//
+		// The header hash must meet the target its OWN nBits declares. This is enforced for
+		// every block, including below-checkpoint ones: it is what makes the chainwork the
+		// block contributes (computed from those same declared bits in
+		// getCumulativeChainWork) honestly earned, and it is the cheap gate that stops a
+		// peer buying (fail-open) subtree validation with a garbage header. The subtree-validation
+		// path sets the fail-open WithUnconfirmedParentsAtCandidateHeight validator option, whose
+		// contract requires the tx to come from a locally-held, PoW-checked block — so the
+		// difficulty checks must run before it. Unlike the expected-nBits rule below there is no
+		// historical exception to it — no block on any chain has ever been valid without meeting
+		// its own target — so enforcing it here cannot reject a real block. model.Block.Valid
+		// step 1 runs the identical check on every route that permanently accepts a block, so the
+		// accepted-block set is unchanged; running it here only moves the rejection earlier, ahead
+		// of the optimistic-mining AddBlock that would otherwise put the block on the chain first.
+		// This matters because BelowCheckpoint is true for EVERY height in 1..highestCheckpoint,
+		// not just the checkpoint heights themselves.
+		//
+		// Bound the target the header DECLARES before checking the hash against it.
+		// HasMetTargetDifficulty alone only asks whether the hash meets the target the
+		// header chose for itself, which a fabricated header answers in about two
+		// hashes by declaring nBits=0x207fffff (GHSA-gggq-8f59-4jm9).
+		//
+		// NOT A STRONG WORK GATE, and nothing below may assume it is: HasMetPowLimit bounds the
+		// DECLARED target by the network's EASIEST permitted target, so a header that clears both
+		// gates costs difficulty 1 — seconds on commodity hardware, far less on an ASIC. It stops
+		// free fabrication; it is not mainnet-strength.
+		if limitErr := block.Header.HasMetPowLimit(u.settings.ChainCfgParams); limitErr != nil {
+			if !opts.IsRevalidation {
+				u.rejectFinalHeaderVerdict(block, opts.PeerID, baseURL, "block declares a target easier than the network proof-of-work limit")
+			}
+
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] block declares a target easier than the network proof-of-work limit", block.Header.Hash().String(), limitErr)
+		}
+
+		headerValid, _, err := block.Header.HasMetTargetDifficulty()
+		if !headerValid {
+			reason := "block does not meet target difficulty"
+			if err != nil {
+				reason = fmt.Sprintf("block does not meet target difficulty: %s", err.Error())
+			}
+
+			if !opts.IsRevalidation {
+				u.rejectFinalHeaderVerdict(block, opts.PeerID, baseURL, reason)
+			}
+
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] block does not meet target difficulty: %s", block.Header.Hash().String(), err)
+		}
+
 		// The bad-coinbase-length check used to also run here, on the unbound body, before
 		// block.Valid ever ran — but that intercepted every bad-length body, including a
 		// merkle-bound one whose coinbase is the miner's own committed (and thus genuinely
@@ -1729,7 +1867,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// non-checkpoint heights — the fork-depth rule — is a separate, broader change.)
 		if err = catchup.ValidateHeaderAgainstCheckpoints(block.Header, block.Height, u.settings.ChainCfgParams.Checkpoints); err != nil {
 			if !opts.IsRevalidation {
-				u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, err.Error())
+				u.rejectFinalHeaderVerdict(block, opts.PeerID, baseURL, err.Error())
 			}
 
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] block conflicts with hardcoded checkpoint", block.Hash().String(), err)
@@ -1751,7 +1889,11 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// re-enters after a header-context failure (ReValidateBlockFromScratch) deliberately drops
 		// CachedHeaders instead. A new caller must do one or the other, or first make the cache top
 		// up short windows from the store — see issue #1499.
-		var blockHeaders []*model.BlockHeader
+		var (
+			blockHeaders []*model.BlockHeader
+			parentMeta   *model.BlockHeaderMeta
+		)
+
 		if opts.CachedHeaders != nil && len(opts.CachedHeaders) > 0 {
 			// Use provided cached headers
 			blockHeaders = opts.CachedHeaders
@@ -1761,20 +1903,14 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				ctxLogger.Infof("[ValidateBlock][%s] using %d cached headers", block.Header.Hash().String(), len(blockHeaders))
 			}
 
-			// Check if parent block is invalid - if so, child is automatically invalid
-			// This optimization skips expensive validation when parent is already invalid
 			// For catchup mode with cached headers, we need to query parent metadata
-			_, parentMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
-			if err != nil {
-				ctxLogger.Warnf("[ValidateBlock][%s] failed to get parent block metadata: %v, continuing with validation", block.Hash().String(), err)
+			_, cachedParentMeta, parentMetaErr := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
+			if parentMetaErr != nil {
+				ctxLogger.Warnf("[ValidateBlock][%s] failed to get parent block metadata: %v, continuing with validation", block.Hash().String(), parentMetaErr)
 				// Continue with validation - this is defensive programming
 			}
-			if u.checkParentInvalid(parentMeta) {
-				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, fmt.Sprintf("parent block %s is invalid", block.Header.HashPrevBlock.String()))
-				}
-				return errors.NewBlockInvalidError("[ValidateBlock][%s] parent block is invalid", block.Hash().String())
-			}
+
+			parentMeta = cachedParentMeta
 		} else {
 			// Fetch headers from blockchain service
 			if opts.IsCatchupMode {
@@ -1795,17 +1931,114 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				return errors.NewServiceError("[ValidateBlock][%s] failed to get block headers", block.String(), err)
 			}
 
-			// Check if parent block is invalid using the metadata we just got
-			var parentMeta *model.BlockHeaderMeta
+			// Take the parent's metadata from the run we just got
 			if len(parentBlockHeadersMeta) > 0 {
 				parentMeta = parentBlockHeadersMeta[0]
 			}
-			if u.checkParentInvalid(parentMeta) {
-				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, fmt.Sprintf("parent block %s is invalid", block.Header.HashPrevBlock.String()))
-				}
-				return errors.NewBlockInvalidError("[ValidateBlock][%s] parent block is invalid", block.Hash().String())
+		}
+
+		// Expected-nBits, for EVERY block and every caller. Height is settled against the parent
+		// before this function runs.
+		//
+		// This runs ONCE, above the parent-invalid check below, on both header sources
+		// (bitcoin-sv/teranode#4844). It is the only thing that closes the cheapest mass-spam
+		// route to a persisted body: a header that clears the two proof-of-work gates above still
+		// only costs difficulty 1, and built on the current tip it carries the wrong nBits — so it
+		// is rejected here, persisting nothing, instead of reaching the parent-invalid check, which
+		// must keep the real body for reconsideration and would otherwise be spammable at that
+		// price.
+		//
+		// THE CHECKPOINT-PREFIX SHORTCUT THAT USED TO GUARD THIS IS GONE, and it must not come back
+		// in any height-only form. It skipped this rule for a block sitting below the highest
+		// CONFIGURED checkpoint while the node was still building that prefix. Height below a
+		// checkpoint does not establish that a block is ON the checkpointed chain — BelowCheckpoint
+		// is true for EVERY height in 1..highest — and the two places that were supposed to cover
+		// the gap do not:
+		//
+		//   - Catch-up's header precheck (validateCatchupHeaderDifficulty) deliberately DEFERS every
+		//     header whose full 144-block window is not inside the fetched run — the first header
+		//     and roughly its first 146 successors — plus every pre-DAA header, and it returns
+		//     immediately on chains with no difficulty adjustment. Its own doc comment names this
+		//     check as the downstream cover for exactly those headers, so skipping here removed the
+		//     only check they ever got.
+		//   - Catch-up routes blocks certified by a checkpoint verified IN THIS RUN to
+		//     quickValidateBlock, which gates on catchupCtx.highestCheckpointHeight — the verified
+		//     height, not the configured one. That routing is not absolute: tryQuickValidation falls
+		//     back to full validation when block assembly is not ready, or when quick validation
+		//     itself fails. So a certified block CAN arrive here, and the shortcut still could not
+		//     tell it apart from an uncertified one, because the predicate only ever saw height.
+		//
+		// A block's own proof-of-work floor is no substitute for this rule: it bounds how easy a
+		// declared target may be, not whether it is the correct one for that chain position
+		// (GHSA-gggq-8f59-4jm9). Running it unconditionally costs one GetNextWorkRequired per block
+		// — a parent header read plus the DAA's ancestor walk, against whatever store the node is
+		// configured with. That is ordinary per-block validation work, of the same kind this node
+		// already does for every block above the highest checkpoint and for every block once synced,
+		// and it is not worth a hole a peer can walk a difficulty-1 chain through.
+		//
+		// GetNextWorkRequired reads the parent's stored row and follows parent_id ancestry without
+		// filtering invalid rows, so it is safe for a block whose parent is marked invalid — which
+		// only this ordering makes reachable — and for an operator reconsidering a block whose
+		// ancestors were invalidated. It does not consume opts.CachedHeaders, so the catchup branch
+		// above needs nothing more than the parent's header row, which sequential catchup has
+		// already stored by the time this runs.
+		expectedNBits, nBitsErr := u.blockchainClient.GetNextWorkRequired(ctx, block.Header.HashPrevBlock, int64(block.Header.Timestamp))
+		if nBitsErr != nil {
+			return errors.NewServiceError("[ValidateBlock][%s] failed to get expected work required", block.Header.Hash().String(), nBitsErr)
+		}
+
+		// Compare the block's nBits with the expected nBits
+		if expectedNBits != nil && block.Header.Bits != *expectedNBits {
+			reason := fmt.Sprintf("incorrect difficulty bits: got %v, expected %v", block.Header.Bits, *expectedNBits)
+			if !opts.IsRevalidation {
+				u.rejectFinalHeaderVerdict(block, opts.PeerID, baseURL, reason)
 			}
+
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] block has incorrect difficulty bits: got %v, expected %v",
+				block.Header.Hash().String(), block.Header.Bits, expectedNBits)
+		}
+
+		// Check if parent block is invalid - if so, child is automatically invalid.
+		// This optimization skips expensive validation when parent is already invalid.
+		//
+		// Parent-invalid is inherited and reversible, and RevalidateBlock reloads the stored block, so
+		// a record is only reconsiderable if it keeps the real body. But the record is written only
+		// when that body is BOUND to the header (bitcoin-sv/teranode#4844): a coinbase-only body,
+		// whose merkle root must be its coinbase txid. A body carrying subtrees cannot be bound
+		// before its subtrees are fetched, so no record is written for it — otherwise replaying an
+		// honest header under a condemned parent would let a peer persist its own coinbase for free.
+		// The cheap spam route into this site is closed by the expected-nBits check hoisted above it.
+		//
+		// What skipping the record costs, exactly:
+		//   - checkParentInvalid sees only the immediate parent's metadata, so a grandchild whose
+		//     parent is the unstored child does NOT get this cheap verdict.
+		//   - The direct path instead finds that parent missing and queues catch-up. Catch-up walks
+		//     the peer's headers back to the last stored one, which is the stored invalid ancestor,
+		//     and aborts on its invalid common ancestor; if that ancestor sits above the local tip,
+		//     validating it fails as "already exists as invalid". Either way the chain is rejected
+		//     without a new row.
+		//   - So each such descendant announcement costs one catch-up header round instead of one
+		//     parent-row lookup, charged to the announcing peer through the catch-up consensus
+		//     failure path, and only for chains built on a block this node already condemned.
+		//   - Once the parent is reconsidered, the child returns through normal sync; it is not
+		//     available from the local store for an operator reconsider.
+		if u.checkParentInvalid(parentMeta) {
+			if !opts.IsRevalidation {
+				reason := fmt.Sprintf("parent block %s is invalid", block.Header.HashPrevBlock.String())
+
+				// CoinbaseTx is non-nil here: the precheck at the top of this function rejects a
+				// block without one.
+				if len(block.Subtrees) == 0 && block.CheckCoinbaseOnlyBodyBound() == nil {
+					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
+				} else {
+					// Not rejectFinalHeaderVerdict: that one states the verdict is final, and this
+					// one is not — it is lifted if the parent is reconsidered.
+					u.logger.Warnf("[ValidateBlock][%s] not persisting parent-invalid verdict: body not bound to header: %s", block.Hash().String(), reason)
+					u.kafkaNotifyBlockInvalid(block, reason, opts.PeerID, baseURL)
+				}
+			}
+
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] parent block is invalid", block.Hash().String())
 		}
 
 		// Wait for reValidationBlock to do its thing
@@ -1817,79 +2050,6 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			if err = u.waitForPreviousBlocksToBeProcessed(ctx, block, blockHeaders); err != nil {
 				// Give up, the parent block isn't being fully validated
 				return errors.NewBlockError("[ValidateBlock][%s] given up waiting on previous blocks to be ready %s", block.Hash().String(), block.Header.HashPrevBlock.String())
-			}
-		}
-
-		// Verify the header's proof-of-work BEFORE the (expensive) subtree validation
-		// below. The subtree-validation path sets the fail-open
-		// WithUnconfirmedParentsAtCandidateHeight validator option, whose contract
-		// requires the tx to come from a locally-held, PoW-checked block — so the
-		// difficulty checks must run first. It also means a peer cannot make us do
-		// full tx validation for a garbage header at zero cost.
-		//
-		// The header hash must meet the target its OWN nBits declares. This is enforced for
-		// every block, including below-checkpoint ones: it is what makes the chainwork the
-		// block contributes (computed from those same declared bits in
-		// getCumulativeChainWork) honestly earned, and it is the cheap gate that stops a
-		// peer buying (fail-open) subtree validation with a garbage header. Unlike the
-		// expected-nBits rule below there is no historical exception to it — no block on any
-		// chain has ever been valid without meeting its own target — so enforcing it here
-		// cannot reject a real block. model.Block.Valid step 1 runs the identical check on
-		// every route that permanently accepts a block, so the accepted-block set is
-		// unchanged; running it here only moves the rejection earlier, ahead of the
-		// optimistic-mining AddBlock that would otherwise put the block on the chain first.
-		// This matters because BelowCheckpoint is true for EVERY height in
-		// 1..highestCheckpoint, not just the checkpoint heights themselves.
-		// Bound the target the header DECLARES before checking the hash against it.
-		// HasMetTargetDifficulty alone only asks whether the hash meets the target the
-		// header chose for itself, which a fabricated header answers in about two
-		// hashes by declaring nBits=0x207fffff (GHSA-gggq-8f59-4jm9). Runs here, ahead
-		// of the UTXO-mutating subtree validation below.
-		if limitErr := block.Header.HasMetPowLimit(u.settings.ChainCfgParams); limitErr != nil {
-			if !opts.IsRevalidation {
-				u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, "block declares a target easier than the network proof-of-work limit")
-			}
-
-			return errors.NewBlockInvalidError("[ValidateBlock][%s] block declares a target easier than the network proof-of-work limit", block.Header.Hash().String(), limitErr)
-		}
-
-		headerValid, _, err := block.Header.HasMetTargetDifficulty()
-		if !headerValid {
-			reason := "block does not meet target difficulty"
-			if err != nil {
-				reason = fmt.Sprintf("block does not meet target difficulty: %s", err.Error())
-			}
-			if !opts.IsRevalidation {
-				u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
-			}
-
-			return errors.NewBlockInvalidError("[ValidateBlock][%s] block does not meet target difficulty: %s", block.Header.Hash().String(), err)
-		}
-
-		// Historical targets are always checked here, including during initial sync.
-		// Later blocks retain the existing checkpoint-prefix shortcut. Height is settled
-		// against the parent before this function runs.
-		skipDifficultyCheck := u.skipExpectedDifficulty(ctx, block)
-
-		if skipDifficultyCheck {
-			ctxLogger.Debugf("[ValidateBlock][%s] skipping expected-nBits validation for block at height %d (at or below highest checkpoint height %d)",
-				block.Header.Hash().String(), block.Height, blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints))
-		} else {
-			// Check that the nBits (difficulty target) is correct for this block
-			expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, block.Header.HashPrevBlock, int64(block.Header.Timestamp))
-			if err != nil {
-				return errors.NewServiceError("[ValidateBlock][%s] failed to get expected work required", block.Header.Hash().String(), err)
-			}
-
-			// Compare the block's nBits with the expected nBits
-			if expectedNBits != nil && block.Header.Bits != *expectedNBits {
-				reason := fmt.Sprintf("incorrect difficulty bits: got %v, expected %v", block.Header.Bits, *expectedNBits)
-				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
-				}
-
-				return errors.NewBlockInvalidError("[ValidateBlock][%s] block has incorrect difficulty bits: got %v, expected %v",
-					block.Header.Hash().String(), block.Header.Bits, expectedNBits)
 			}
 		}
 
@@ -1937,14 +2097,53 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				return err
 			}
 
-			// Genuine consensus violation — a transaction in the block is invalid. Persist invalid.
+			// An invalid transaction in the received subtrees. This CANNOT condemn the hash
+			// (bitcoin-sv/teranode#4844): subtree validation runs above block.Valid, so nothing has
+			// reconciled block.Subtrees against Header.HashMerkleRoot and the body is still whatever
+			// the serving peer chose. Relaying a genuine fresh header with a doctored subtree list
+			// costs nothing, and persisting on it both stores the peer's coinbase and poisons a real
+			// block hash so the honest body is later refused as already-invalid.
+			//
+			// The binding is not computable here either, so this is unconditional rather than gated:
+			// CheckBlockSubtrees batches the MISSING subtrees and pipelines the load of batch N+1
+			// against the UTXO-mutating process of batch N, a structure that exists to bound memory,
+			// so an early-batch failure leaves later subtrees unfetched. A binding attempt would
+			// report "not bound" for a genuinely bound consensus-invalid block and misclassify it.
+			//
+			// Cost of this, stated plainly: a consensus-invalid block whose fault is an invalid
+			// transaction is no longer REMEMBERED as invalid. On the direct peer path the verdict is
+			// corrupt, so the block is re-downloaded on re-announcement, bounded by the
+			// corrupt-attempt counter. Catch-up classifies this verdict as a consensus rejection
+			// instead (isUnboundTxInvalidVerdict): it reports the primary malicious and keeps the
+			// verified subtree blobs. It then walks the alternative peers (processCatchupChItem),
+			// each fetching its own copy of the block and subtree list, because the list is unbound
+			// and may be the primary's own, while another peer's may validate. That walk is bounded
+			// by CatchupMaxAttemptsPerBlock. Either way a block whose real body is invalid is
+			// rejected every time, and the hash is not remembered.
 			if errors.Is(err, errors.ErrTxInvalid) {
-				ctxLogger.Warnf("[ValidateBlock][%s] block contains invalid transactions, marking as invalid: %s", block.Hash().String(), err)
-				reason := fmt.Sprintf("block contains invalid transactions: %s", err.Error())
-				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
+				// Infrastructure first, and inside this branch rather than ahead of it:
+				// processTransactionsInLevels wraps its failures in a processing error, so a blanket
+				// ErrProcessing test placed above ErrTxInvalid would swallow every genuine verdict. A
+				// storage failure or a cancelled context is not evidence of peer misconduct, so it
+				// must neither strike the peer nor produce a corrupt verdict — return it retryable.
+				if errors.Is(err, context.Canceled) ||
+					errors.Is(err, context.DeadlineExceeded) ||
+					errors.Is(err, errors.ErrStorageError) ||
+					errors.Is(err, errors.ErrServiceError) {
+					ctxLogger.Warnf("[ValidateBlock][%s] local failure during subtree transaction validation, will retry: %s", block.Hash().String(), err)
+
+					return err
 				}
-				return errors.NewBlockInvalidError("[ValidateBlock][%s] block contains invalid transactions: %s", block.Hash().String(), err)
+
+				ctxLogger.Warnf("[ValidateBlock][%s] invalid transaction in an unbound subtree list, rejecting without persisting: %s", block.Hash().String(), err)
+
+				// Skip the strike on revalidation (stale announcing-peer ID), mirroring the corrupt
+				// branch above.
+				if !opts.IsRevalidation {
+					u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, "invalid transaction in an unbound subtree list")
+				}
+
+				return errors.NewBlockCorruptError("[ValidateBlock][%s] block contains invalid transactions", block.Hash().String(), err)
 			}
 
 			// Catchup-state errors: a parent transaction is not yet in our store because we
@@ -1964,7 +2163,10 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 		ctxLogger.Infof("[ValidateBlock][%s] validating %d subtrees DONE", block.Hash().String(), len(block.Subtrees))
 
-		useOptimisticMining := u.settings.BlockValidation.OptimisticMining
+		// Both flags, here and not only at the peer entry gate (bitcoin-sv/teranode#4844): a caller
+		// that passes no override (the ValidateBlock wrapper, the revalidation worker) must not turn
+		// optimistic on the default-true global flag alone.
+		useOptimisticMining := u.settings.BlockValidation.OptimisticMining && u.settings.BlockValidation.OptimisticMiningPeerBlocks
 		if opts.DisableOptimisticMining {
 			// if the disableOptimisticMining is set to true, then we don't use optimistic mining, even if it is enabled
 			useOptimisticMining = false
@@ -1989,8 +2191,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// checks use the same blockHeaders snapshot the background Valid() consumes.
 			if err = block.CheckHeaderContextual(blockHeaders, u.settings, ctxLogger); err != nil {
 				if errors.Is(err, errors.ErrBlockInvalid) {
+					// Persist nothing (bitcoin-sv/teranode#4844). This is a header-only verdict on a
+					// body that has not been bound to the header, and the 2-hours-in-the-future rule
+					// it can fail is TIME-DEPENDENT: persisting it invalid would mean a block that
+					// becomes valid on the wall clock could never be accepted afterwards.
 					if !opts.IsRevalidation {
-						u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, err.Error())
+						u.rejectFinalHeaderVerdict(block, opts.PeerID, baseURL, err.Error())
 					}
 
 					return errors.NewBlockInvalidError("[ValidateBlock][%s] block header failed contextual validation", block.Header.Hash().String(), err)
@@ -2010,6 +2216,20 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				// clear a stale batched answer; the hash walk above is what does that.
 				if shouldRequeueForHeaderContext(err, opts) {
 					u.ReValidateBlockFromScratch(block, baseURL, opts)
+				}
+
+				return err
+			}
+
+			// Bind a subtree-less body before it is published (bitcoin-sv/teranode#4844). The check
+			// is pure (header plus coinbase) and returns nil for any body carrying subtrees, so an
+			// honest multi-transaction block is never rejected here. Nothing has been added yet, so
+			// this matches the non-optimistic corrupt branch: strike the serving peer and return
+			// corrupt for re-download, under the corrupt-attempt cap. The residual under the opt-in
+			// is a body carrying subtrees, which cannot be bound until block.Valid is split.
+			if err = block.CheckCoinbaseOnlyBodyBound(); err != nil {
+				if !opts.IsRevalidation {
+					u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, err.Error())
 				}
 
 				return err
@@ -2204,7 +2424,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// Create meta regenerator with peer URL for potential meta file recovery
 			metaRegenerator := u.createMetaRegenerator([]string{baseURL})
 			block.SetCheckpointConfirmedAncestor(u.checkpointConfirmedAncestor(ctx, block))
-			if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
+			if ok, bodyBoundToHeader, err := block.ValidWithBinding(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 				reason := "unknown"
 				if err != nil {
 					reason = err.Error()
@@ -2288,8 +2508,20 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					return errors.NewBlockIncompleteTransientError("[ValidateBlock][%s] block validation hit transient missing-data state: %s", block.Hash().String(), err)
 				}
 
+				// Persist only when THIS Valid invocation bound the body to the header
+				// (bitcoin-sv/teranode#4844). Valid runs its contextual header checks BEFORE the
+				// merkle binding, so a contextual failure reaches this catch-all with a body the
+				// serving peer still chose freely; persisting it would store that body's coinbase and
+				// condemn a hash on evidence about the delivery rather than about the block. A bound
+				// body IS the miner's committed body, so the record is correct and keeps its full
+				// body for RevalidateBlock to reconsider. The returned error class is unchanged
+				// either way.
 				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
+					if bodyBoundToHeader {
+						u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
+					} else {
+						u.logger.Warnf("[ValidateBlock][%s] not persisting invalid verdict: this validation did not bind the body to the header: %s", block.Hash().String(), reason)
+					}
 				}
 
 				return errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err)
@@ -2446,8 +2678,17 @@ func (u *BlockValidation) markBlockAsInvalid(ctx context.Context, block *model.B
 func (u *BlockValidation) storeInvalidBlock(ctx context.Context, block *model.Block, peerID string, peerURL string, reason string) {
 	u.logger.Warnf("[ValidateBlock][%s] storing block as invalid: %s", block.Hash().String(), reason)
 
-	// Store the block marked as invalid so we have a record of it
-	if storeErr := u.blockchainClient.AddBlock(ctx, block, peerID, blockchainoptions.WithInvalid(true)); storeErr != nil {
+	// Store the block marked as invalid so we have a record of it. A block that
+	// already had an id reserved (quick validation, or legacy sync handing one
+	// over) may have transactions stamped with that id in the UTXO store, so the
+	// row must be written under it. Without WithID the store would allocate a
+	// fresh id and those transactions would point at an id with no blocks row.
+	storeOpts := []blockchainoptions.StoreBlockOption{blockchainoptions.WithInvalid(true)}
+	if block.ID != 0 {
+		storeOpts = append(storeOpts, blockchainoptions.WithID(uint64(block.ID)))
+	}
+
+	if storeErr := u.blockchainClient.AddBlock(ctx, block, peerID, storeOpts...); storeErr != nil {
 		u.logger.Errorf("[ValidateBlock][%s] failed to store invalid block: %v", block.Hash().String(), storeErr)
 	} else {
 		// Update cache to reflect that block exists
@@ -2456,6 +2697,22 @@ func (u *BlockValidation) storeInvalidBlock(ctx context.Context, block *model.Bl
 		}
 	}
 
+	u.kafkaNotifyBlockInvalid(block, reason, peerID, peerURL)
+}
+
+// rejectFinalHeaderVerdict handles a FINAL verdict reached before the body is bound to the
+// header: the header declares a target easier than the network limit, fails to meet the target
+// it declares, conflicts with a hardcoded checkpoint, carries the wrong difficulty bits for its
+// parent, or fails a contextual header rule. Two properties make persisting the wrong choice.
+// The verdict is final, so there is nothing a later state change could recover — no record is
+// needed for reconsideration. And a header that satisfies only the network proof-of-work LIMIT
+// (difficulty 1, not the chain's expected difficulty) is cheap enough to fabricate at scale that
+// a database row per announcement is itself the denial of service, and that row would carry the
+// peer's chosen coinbase as presentation data (bitcoin-sv/teranode#4844).
+// Re-deriving the verdict on each delivery is cheaper than the row we decline to write; repeat
+// delivery is bounded by the peer strike the invalid-block notification drives.
+func (u *BlockValidation) rejectFinalHeaderVerdict(block *model.Block, peerID, peerURL, reason string) {
+	u.logger.Warnf("[ValidateBlock][%s] rejecting without persisting: %s", block.Hash().String(), reason)
 	u.kafkaNotifyBlockInvalid(block, reason, peerID, peerURL)
 }
 
@@ -2973,35 +3230,10 @@ func (u *BlockValidation) enqueueRevalidation(data revalidateBlockData) {
 	}
 }
 
-// skipExpectedDifficulty retains the checkpoint-prefix shortcut only after DAA
-// activation. Historical blocks must reach the calculator because the native
-// catchup precheck defers them to full-block validation.
-//
-// Fail-closed: if the best height cannot be read we cannot show we are still
-// building the prefix, so the real rule runs. That is the safe direction; on a
-// syncing node the block is re-fetched and retried, whereas skipping wrongly
-// hands a peer free proof-of-work.
-func (u *BlockValidation) skipExpectedDifficulty(ctx context.Context, block *model.Block) bool {
-	if block.Height <= u.settings.ChainCfgParams.DaaForkHeight && u.settings.ChainCfgParams.Net != wire.STN {
-		return false
-	}
-
-	checkpoints := u.settings.ChainCfgParams.Checkpoints
-
-	if !model.BelowCheckpoint(checkpoints, block.Height) {
-		return false
-	}
-
-	_, bestMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
-	if err != nil || bestMeta == nil {
-		u.logger.Warnf("[skipExpectedDifficulty][%s] could not read best block header, applying the expected-nBits rule: %v", block.Hash().String(), err)
-		return false
-	}
-
-	// Invalidation removes descendants from the best chain, so reconsidering
-	// post-DAA blocks within the checkpoint prefix retains the syncing shortcut.
-	return model.SkipExpectedDifficulty(checkpoints, block.Height, bestMeta.Height)
-}
+// The checkpoint-prefix shortcut for the expected-nBits rule used to live here, as
+// skipExpectedDifficulty, over a model.SkipExpectedDifficulty height predicate. Both have been
+// REMOVED (bitcoin-sv/teranode#4844) and the rule must not be made conditional again on height
+// alone; the reasoning is recorded on the expected-nBits block in ValidateBlockWithOptions.
 
 // checkpointConfirmedAncestor reports whether block b is provably part of the main
 // chain that has already reached and matched the highest hardcoded checkpoint hash. It
@@ -3090,24 +3322,18 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 		return errors.NewBlockInvalidError("[reValidateBlock][%s] block does not meet target difficulty: %s", blockData.block.Header.Hash().String(), err)
 	}
 
-	// Apply the same historical and checkpoint policy as ordinary validation.
-	skipDifficultyCheck := u.skipExpectedDifficulty(ctx, blockData.block)
+	// Apply the same expected-nBits policy as ordinary validation: it runs for every block, with
+	// no checkpoint-prefix shortcut (bitcoin-sv/teranode#4844). See the matching block in
+	// ValidateBlockWithOptions for why a height-only exemption is not safe here either.
+	expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, blockData.block.Header.HashPrevBlock, int64(blockData.block.Header.Timestamp))
+	if err != nil {
+		return errors.NewServiceError("[reValidateBlock][%s] failed to get expected work required", blockData.block.Header.Hash().String(), err)
+	}
 
-	if skipDifficultyCheck {
-		u.logger.Debugf("[reValidateBlock][%s] skipping expected-nBits validation for block at height %d (at or below highest checkpoint height %d)",
-			blockData.block.Header.Hash().String(), blockData.block.Height, blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints))
-	} else {
-		// Check that the nBits (difficulty target) is correct for this block
-		expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, blockData.block.Header.HashPrevBlock, int64(blockData.block.Header.Timestamp))
-		if err != nil {
-			return errors.NewServiceError("[reValidateBlock][%s] failed to get expected work required", blockData.block.Header.Hash().String(), err)
-		}
-
-		// Compare the block's nBits with the expected nBits
-		if expectedNBits != nil && blockData.block.Header.Bits != *expectedNBits {
-			return errors.NewBlockInvalidError("[reValidateBlock][%s] block has incorrect difficulty bits: got %v, expected %v",
-				blockData.block.Header.Hash().String(), blockData.block.Header.Bits, expectedNBits)
-		}
+	// Compare the block's nBits with the expected nBits
+	if expectedNBits != nil && blockData.block.Header.Bits != *expectedNBits {
+		return errors.NewBlockInvalidError("[reValidateBlock][%s] block has incorrect difficulty bits: got %v, expected %v",
+			blockData.block.Header.Hash().String(), blockData.block.Header.Bits, expectedNBits)
 	}
 
 	// get all X previous block headers, 100 is the default
@@ -3230,9 +3456,28 @@ func (u *BlockValidation) quickValidateOutpointOnly(block *model.Block) bool {
 	return model.OutpointOnlyEligible(u.settings, u.utxoStore, u.settings.ChainCfgParams, block.Height)
 }
 
-// updateSubtreesDAH marks block subtrees as properly set in the blockchain.
-// Subtrees retain their finite DAH from assembly/validation — the block persister
-// will promote them to permanent (DAH=0) when the block is confirmed on the main chain.
+// updateSubtreesDAH sets block.subtrees_set to true, which fires the BlockSubtreesSet
+// notification that setMined (and, soon, p2p block announcement) treat as proof the
+// block's subtree files are on disk. Subtrees themselves keep their finite DAH from
+// assembly/validation here - no DAH update happens in this function; the block
+// persister promotes them to permanent (DAH=0) when the block is confirmed on the main
+// chain.
+//
+// PRECONDITION: the caller must already know every file the block's Subtrees hashes name
+// exists in subtreeStore - this function no longer checks that itself. See subtreeFilesReady
+// for why, and for the PR #506 history behind that precondition.
+//
+// KNOWN LIMITATION: "files exist" is not "block.Valid() has finished." Under optimistic mining
+// the subtree files are already on disk (written before the block is even added - see
+// subtreeFilesReady) while the heavier block.Valid() consensus check still runs in a background
+// goroutine, so the periodic sweep (processSubtreesNotSet) can satisfy subtreeFilesReady and call
+// in here - setting subtrees_set true and firing setMined - before that background check
+// completes, exactly as it could before PR #506. Neither existing in-memory tracking set covers
+// that window: blockHashesCurrentlyValidated only tracks setMined finalization, and
+// blocksCurrentlyValidating's entry for a block is deleted ~100ms after ValidateBlockWithOptions
+// returns, which under optimistic mining happens right after the block is added, well before
+// block.Valid() in the background goroutine returns. Closing this gap needs a new marker
+// spanning that goroutine's lifetime; this PR does not add one.
 //
 // Parameters:
 //   - ctx: Context for the operation
@@ -3245,9 +3490,6 @@ func (u *BlockValidation) updateSubtreesDAH(ctx context.Context, block *model.Bl
 	)
 
 	defer deferFn()
-
-	// Subtrees already have finite DAH from assembly/validation — no DAH update needed.
-	// The block persister will promote to permanent (DAH=0) when the block is confirmed.
 
 	// update block subtrees_set to true
 	u.logger.Debugf("[updateSubtreesDAH][%s] setting block subtrees_set to true", block.Hash().String())
@@ -3493,13 +3735,19 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 // absent from the off-chain set yet has no on_main_chain row, so a
 // useInMemoryChainCheck=on node ACCEPTED a dangling id the authoritative store
 // route (and an off node) REJECTS: a chain-split. The off-chain (negative) set
-// can never prove on-chain membership, so it cannot drive a sound local accept.
+// cannot drive a sound accept HERE, in this service, because a prefetched copy
+// of it is a snapshot with no guard over it.
 //
-// CheckBlockIsInCurrentChain is the single authority: it applies the store's
-// in-memory off-chain set + maxBlockID as a fast negative filter AND confirms
-// survivors against the on_main_chain flag in one self-consistent snapshot
-// (stores/blockchain/sql/CheckBlockIsInCurrentChain.go), so it cannot diverge
-// from the always-SQL route. Deferring every decision to it — rather than
+// CheckBlockIsInCurrentChain is the single authority. Note what that does and
+// does not buy: the store applies the same absence-means-on-chain rule, but it
+// applies it against a set and a maxBlockID from one self-consistent snapshot,
+// under mainChainRebuilding, and with the shadow comparison available to measure
+// it (stores/blockchain/sql/CheckBlockIsInCurrentChain.go). So the two routes CAN
+// still diverge on a gap id, an id at or below maxBlockID with no committed row.
+// That divergence is documented and measured at
+// TestCheckBlockIsInCurrentChain_GapIDDivergesBetweenRoutes; read that before
+// concluding anything about it. What deferring to the store removes is this
+// service holding a stale copy, not the underlying rule. Deferring every decision to it — rather than
 // caching a prefetched set in this service and deciding locally — also avoids
 // the snapshot-skew window a local decision would carry across a concurrent
 // reorg (a stale "off-chain" classification could wrongly reject, the more

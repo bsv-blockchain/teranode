@@ -147,14 +147,18 @@ func launchPartitionIteratorWithMode(store *Store, numPartitionQueries int, prun
 	partitionsPerQuery := totalPartitions / numPartitionQueries
 	remainingPartitions := totalPartitions % numPartitionQueries
 
-	policy := util.GetAerospikeQueryPolicy(store.settings)
-	policy.IncludeBinData = true
-	policy.RecordQueueSize = 512
+	policy := partitionScanPolicy(util.GetAerospikeQueryPolicy(store.settings))
 
 	workerCtx, cancel := context.WithCancel(context.Background())
 	resultChanSize := numPartitionQueries * 2
 
 	queryIdleTimeout := time.Duration(store.settings.UtxoStore.QueryIdleTimeoutSeconds) * time.Second
+
+	// With no TotalTimeout on the scan, these are the only ways a dead
+	// connection is detected.
+	if queryIdleTimeout <= 0 && policy.SocketTimeout <= 0 {
+		store.logger.Warnf("[launchPartitionIterator] utxostore_queryIdleTimeoutSeconds and the query policy SocketTimeout are both 0: a stalled Aerospike connection will hang this scan indefinitely")
+	}
 
 	it := &unminedTxIterator{
 		store:            store,
@@ -187,6 +191,20 @@ func launchPartitionIteratorWithMode(store *Store, numPartitionQueries int, prun
 	}()
 
 	return it, nil
+}
+
+// partitionScanPolicy derives the policy for the partition-parallel scans from
+// the configured query policy. TotalTimeout is dropped: a full scan of a large
+// unmined set runs for hours, and a total cap aborts it at the same point on
+// every attempt. Dead connections are still caught by SocketTimeout and by the
+// iterator's idle watchdog.
+func partitionScanPolicy(base *as.QueryPolicy) *as.QueryPolicy {
+	policy := *base
+	policy.TotalTimeout = 0
+	policy.IncludeBinData = true
+	policy.RecordQueueSize = 512
+
+	return &policy
 }
 
 // partitionWorker processes a range of Aerospike partitions and writes batches directly to resultChan
@@ -279,8 +297,10 @@ func (it *unminedTxIterator) partitionWorker(ctx context.Context, policy *as.Que
 // processRecordset processes records from a recordset and writes batches to resultChan
 func (it *unminedTxIterator) processRecordset(ctx context.Context, results <-chan *as.Result) {
 	const (
-		batchSize          = 16 * 1024
-		contextCheckPeriod = 16 * 1024
+		batchSize = 16 * 1024
+		// The fast path does not watch ctx, so this bounds how many records a
+		// worker decodes after cancellation.
+		contextCheckPeriod = 1024
 	)
 
 	// Pre-compute field names to avoid repeated String() calls
@@ -333,36 +353,25 @@ func (it *unminedTxIterator) processRecordset(ctx context.Context, results <-cha
 			}
 		}
 
-		// Read from result channel with idle timeout to detect stalled Aerospike connections.
-		// A hard timeout would be wrong since large scans can take hours, but if no record
-		// arrives within the idle timeout the connection is likely dead (e.g. Aerospike node restart).
+		// Fast path: take an already-buffered record with a single-channel
+		// non-blocking receive. A multi-case select locks every channel it names,
+		// including the ctx.Done channel shared by all partition workers, and the
+		// idle timer had to be reset and stopped per record; together that was the
+		// scan's largest CPU cost. The waiting path runs only when the client has
+		// nothing buffered for this worker.
 		var rec *as.Result
 		var ok bool
-		if idleTimer != nil {
-			idleTimer.Reset(it.queryIdleTimeout)
-			select {
-			case rec, ok = <-results:
-				if !idleTimer.Stop() {
-					<-idleTimer.C
-				}
-				if !ok || rec == nil {
-					return
-				}
-			case <-ctx.Done():
-				return
-			case <-idleTimer.C:
-				it.store.logger.Errorf("[processRecordset] no records received from Aerospike partition query in %v — connection may be stalled, aborting worker", it.queryIdleTimeout)
-				select {
-				case it.errorChan <- errors.NewProcessingError("Aerospike partition query stalled: no records received in %v", it.queryIdleTimeout):
-				default:
-				}
+		select {
+		case rec, ok = <-results:
+		default:
+			var abort bool
+			if rec, ok, abort = it.waitForRecord(ctx, results, idleTimer); abort {
 				return
 			}
-		} else {
-			rec, ok = <-results
-			if !ok || rec == nil {
-				return
-			}
+		}
+
+		if !ok || rec == nil {
+			return
 		}
 
 		if rec.Err != nil {
@@ -483,6 +492,41 @@ func (it *unminedTxIterator) processRecordset(ctx context.Context, results <-cha
 	}
 }
 
+// waitForRecord blocks until the next record arrives, the context is cancelled,
+// or the idle timeout fires. A hard timeout would be wrong since large scans can
+// take hours, but if no record arrives within the idle timeout the connection is
+// likely dead (e.g. Aerospike node restart). abort is true when the worker must
+// stop; a stall is also reported on errorChan.
+func (it *unminedTxIterator) waitForRecord(ctx context.Context, results <-chan *as.Result, idleTimer *time.Timer) (rec *as.Result, ok bool, abort bool) {
+	if idleTimer == nil {
+		select {
+		case rec, ok = <-results:
+			return rec, ok, false
+		case <-ctx.Done():
+			return nil, false, true
+		}
+	}
+
+	// Since Go 1.23 Reset discards any expiry that fired while the worker was on
+	// the fast path, so the timer needs no Stop/drain between waits.
+	idleTimer.Reset(it.queryIdleTimeout)
+
+	select {
+	case rec, ok = <-results:
+		return rec, ok, false
+	case <-ctx.Done():
+		return nil, false, true
+	case <-idleTimer.C:
+		it.store.logger.Errorf("[processRecordset] no records received from Aerospike partition query in %v — connection may be stalled, aborting worker", it.queryIdleTimeout)
+		select {
+		case it.errorChan <- errors.NewProcessingError("Aerospike partition query stalled: no records received in %v", it.queryIdleTimeout):
+		default:
+		}
+
+		return nil, false, true
+	}
+}
+
 // processRecord processes a single Aerospike record and returns the unmined transaction
 func (it *unminedTxIterator) processRecord(ctx context.Context, bins map[string]interface{}) (*utxo.UnminedTransaction, error) {
 	// Extract transaction data from the record
@@ -496,16 +540,17 @@ func (it *unminedTxIterator) processRecord(ctx context.Context, bins map[string]
 		return nil, errors.NewProcessingError("invalid block IDs for %s", txData.hash.String(), err)
 	}
 
-	// Process external transaction if needed
-	var txInpoints subtree.TxInpoints
+	// Inpoints get their own allocation: the subtree processor keeps the
+	// pointer in its tx map for as long as the tx is held, and an interior
+	// pointer into a combined allocation would retain the whole record.
+	txInpoints := &subtree.TxInpoints{}
+
+	// Process external transaction if needed; otherwise the inpoints stay empty
 	if it.store.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
-		txInpoints, err = it.processTransactionInpoints(ctx, txData, bins)
+		*txInpoints, err = it.processTransactionInpoints(ctx, &txData, bins)
 		if err != nil {
 			return nil, errors.NewProcessingError("failed to process transaction inpoints for %s", txData.hash.String(), err)
 		}
-	} else {
-		// If not storing inpoints, return empty
-		txInpoints = subtree.TxInpoints{}
 	}
 
 	// Extract createdAt timestamp
@@ -519,18 +564,31 @@ func (it *unminedTxIterator) processRecord(ctx context.Context, bins map[string]
 		return nil, errors.NewProcessingError("invalid locked status for %s", txData.hash.String(), err)
 	}
 
-	return &utxo.UnminedTransaction{
-		Node: &subtree.Node{
-			Hash:        *txData.hash,
-			Fee:         txData.fee,
-			SizeInBytes: txData.size,
-		},
+	// The transaction and its node share one allocation; the node is copied
+	// into the subtree, so neither outlives the load.
+	rec := &unminedRecord{}
+	rec.node = subtree.Node{
+		Hash:        txData.hash,
+		Fee:         txData.fee,
+		SizeInBytes: txData.size,
+	}
+	rec.tx = utxo.UnminedTransaction{
+		Node:         &rec.node,
 		UnminedSince: txData.unminedSince,
-		TxInpoints:   &txInpoints,
+		TxInpoints:   txInpoints,
 		CreatedAt:    createdAt,
 		Locked:       locked,
 		BlockIDs:     blockIDs,
-	}, nil
+	}
+
+	return &rec.tx, nil
+}
+
+// unminedRecord backs one yielded UnminedTransaction together with the Node it
+// points at, so the pair costs a single heap allocation.
+type unminedRecord struct {
+	tx   utxo.UnminedTransaction
+	node subtree.Node
 }
 
 // processPrunerRecord processes a single Aerospike record in pruner mode.
@@ -549,7 +607,7 @@ func (it *unminedTxIterator) processPrunerRecord(ctx context.Context, bins map[s
 
 	return &utxo.UnminedTransaction{
 		Node: &subtree.Node{
-			Hash: *hash,
+			Hash: hash,
 		},
 		UnminedSince: unminedSince,
 		TxInpoints:   &txInpoints,
@@ -619,7 +677,7 @@ func (it *unminedTxIterator) Next(ctx context.Context) ([]*utxo.UnminedTransacti
 
 // transactionData holds the basic transaction data extracted from a record
 type transactionData struct {
-	hash         *chainhash.Hash
+	hash         chainhash.Hash
 	fee          uint64
 	size         uint64
 	unminedSince int
@@ -634,20 +692,21 @@ func (it *unminedTxIterator) closeWithLogging() {
 
 // extractTxIDAndUnminedSince extracts the txID hash and unminedSince from record bins.
 // Shared by both the full record processor and the pruner record processor.
-func extractTxIDAndUnminedSince(bins map[string]interface{}) (*chainhash.Hash, int, error) {
+func extractTxIDAndUnminedSince(bins map[string]interface{}) (chainhash.Hash, int, error) {
+	var hash chainhash.Hash
+
 	txidVal := bins[fields.TxID.String()]
 	if txidVal == nil {
-		return nil, 0, errors.NewProcessingError("txid not found")
+		return hash, 0, errors.NewProcessingError("txid not found")
 	}
 
 	txidValBytes, ok := txidVal.([]byte)
 	if !ok {
-		return nil, 0, errors.NewProcessingError("txid not []byte")
+		return hash, 0, errors.NewProcessingError("txid not []byte")
 	}
 
-	hash, err := chainhash.NewHash(txidValBytes)
-	if err != nil {
-		return nil, 0, err
+	if err := hash.SetBytes(txidValBytes); err != nil {
+		return hash, 0, err
 	}
 
 	unminedSince, _ := bins[fields.UnminedSince.String()].(int)
@@ -656,30 +715,30 @@ func extractTxIDAndUnminedSince(bins map[string]interface{}) (*chainhash.Hash, i
 }
 
 // extractTransactionData extracts basic transaction data from Aerospike record bins
-func (it *unminedTxIterator) extractTransactionData(bins map[string]interface{}) (*transactionData, error) {
+func (it *unminedTxIterator) extractTransactionData(bins map[string]interface{}) (transactionData, error) {
 	hash, unminedSince, err := extractTxIDAndUnminedSince(bins)
 	if err != nil {
-		return nil, err
+		return transactionData{}, err
 	}
 
 	feeVal := bins[fields.Fee.String()]
 	if feeVal == nil {
-		return nil, errors.NewProcessingError("fee not found")
+		return transactionData{}, errors.NewProcessingError("fee not found")
 	}
 
 	fee, err := toUint64(feeVal)
 	if err != nil {
-		return nil, errors.NewProcessingError("Failed to convert fee")
+		return transactionData{}, errors.NewProcessingError("Failed to convert fee")
 	}
 
 	sizeVal := bins[fields.SizeInBytes.String()]
 	if sizeVal == nil {
-		return nil, errors.NewProcessingError("size not found")
+		return transactionData{}, errors.NewProcessingError("size not found")
 	}
 
 	size, _ := toUint64(sizeVal)
 
-	return &transactionData{
+	return transactionData{
 		hash:         hash,
 		fee:          fee,
 		size:         size,
@@ -694,7 +753,7 @@ func (it *unminedTxIterator) processTransactionInpoints(ctx context.Context, txD
 		return it.processInternalTransactionInpoints(bins)
 	}
 
-	return it.processExternalTransactionInpoints(ctx, txData.hash)
+	return it.processExternalTransactionInpoints(ctx, &txData.hash)
 }
 
 // processExternalTransactionInpoints processes inputs for external transactions

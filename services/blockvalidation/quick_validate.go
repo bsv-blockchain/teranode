@@ -506,8 +506,8 @@ func (u *BlockValidation) checkQuickValidationCoinbase(block *model.Block, calle
 
 // commitBlock performs the shared final commit for the quick-validation path:
 // add the block to the blockchain (subtrees + mined already set), unlock any
-// locked UTXOs, update subtree DAH (which fires BlockSubtreesSet), and mark the
-// block present in cache. Extracted verbatim from quickValidateBlock /
+// locked UTXOs, and mark the block present in cache. It sends no
+// BlockSubtreesSet notification, because the insert already wrote subtrees_set. Extracted verbatim from quickValidateBlock /
 // quickValidateBlockAsync so both share one commit tail; it is also the per-block
 // commit unit the Step-8 parallel window's ordered committer calls in height order.
 // caller labels logs to preserve each call site's existing text.
@@ -528,10 +528,12 @@ func (u *BlockValidation) commitBlock(ctx context.Context, block *model.Block, p
 		return err
 	}
 
-	// Update subtrees DAH and send BlockSubtreesSet notification.
-	if err := u.updateSubtreesDAH(ctx, block); err != nil {
-		return errors.NewProcessingError("[%s][%s] failed to update subtrees DAH", caller, block.Hash().String(), err)
-	}
+	// No updateSubtreesDAH here. The AddBlock above writes subtrees_set and mined_set in the
+	// insert itself, so a SetBlockSubtreesSet call would re-UPDATE a row that is already true,
+	// commit on its own, clear the blockchain response cache and notify every subscriber. The
+	// one subscriber that acts on BlockSubtreesSet, the setMined worker, skips a block whose
+	// mined_set is already true. The full-validation paths insert with subtrees_set false and
+	// still make the call.
 
 	// Mark block as existing in cache.
 	if err := u.SetBlockExists(block.Hash()); err != nil {

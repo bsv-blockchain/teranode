@@ -84,6 +84,9 @@ var (
 
 	// prometheusBlockAssemblyQueueHeadAge tracks how long the oldest queued batch has been waiting
 	prometheusBlockAssemblyQueueHeadAge prometheus.Gauge
+
+	// prometheusBlockAssemblerLivenessHeartbeatAge tracks how long since the main select loop last beat
+	prometheusBlockAssemblerLivenessHeartbeatAge prometheus.Gauge
 )
 
 var (
@@ -561,6 +564,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockassembly",
 			Name:      "queue_head_age_seconds",
 			Help:      "Age in seconds of the oldest batch still in the ingest queue (0 when empty). A rising value indicates the dispatcher has stopped draining.",
+		},
+	)
+
+	prometheusBlockAssemblerLivenessHeartbeatAge = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "liveness_heartbeat_age_seconds",
+			Help:      "Seconds since the block assembler main select loop last beat its liveness heartbeat (0 before the loop starts and after it stops). This is the number blockassembly_livenessStallTimeout is compared against, so alert on it and learn its worst case before arming a restart on it (issue 1447).",
 		},
 	)
 }
