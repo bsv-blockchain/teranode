@@ -69,6 +69,14 @@ func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uin
 		}
 
 		hasValidated := p.ValidatedBlockHash != nil && len(p.ValidatedChainWork) > 0
+		// When localChainWork is nil (blockchain client unavailable or returned no
+		// chain work), we cannot compare, so aheadByValidatedWork is always false.
+		// Peers with validated history are then excluded by both gates: the work gate
+		// requires a non-empty local operand, and the probe path requires !hasValidated.
+		// This is intentional — if our own chain work is unknown, we cannot safely
+		// confirm a peer is ahead. Unvalidated peers with plausible heights still pass
+		// via the probe path, and the next catchup retry will likely recover local
+		// chain work from the blockchain client.
 		aheadByValidatedWork := hasValidated && len(localChainWork) > 0 &&
 			work.CompareChainWork(p.ValidatedChainWork, localChainWork) > 0
 
