@@ -91,7 +91,7 @@ func TestStartup_RefusesWhenIteratorConstructionFails(t *testing.T) {
 
 	ba := newRecoveryTestAssembler(t, store, bc)
 
-	err := ba.loadUnminedTransactions(context.Background())
+	err := ba.loadUnminedTransactions(context.Background(), false)
 	require.Error(t, err, "BA-STARTUP-004: iterator construction failure must abort recovery")
 	require.ErrorContains(t, err, "error getting unmined tx iterator")
 
@@ -119,7 +119,7 @@ func TestStartup_RefusesOnMidIterationFailure(t *testing.T) {
 
 	ba := newRecoveryTestAssembler(t, store, bc)
 
-	err := ba.loadUnminedTransactions(context.Background())
+	err := ba.loadUnminedTransactions(context.Background(), false)
 	require.Error(t, err, "BA-STARTUP-004: a mid-iteration store failure must abort recovery")
 	require.ErrorContains(t, err, "error getting unmined transaction")
 
@@ -141,7 +141,7 @@ func TestStartup_RefusesWhenBestChainHeaderIDsUnavailable(t *testing.T) {
 
 	ba := newRecoveryTestAssembler(t, store, bc)
 
-	err := ba.loadUnminedTransactions(context.Background())
+	err := ba.loadUnminedTransactions(context.Background(), false)
 	require.Error(t, err, "BA-STARTUP-004: inability to read the best-chain header IDs must abort recovery")
 	require.ErrorContains(t, err, "error getting best block headers")
 
@@ -187,7 +187,7 @@ func TestStartup_RefusesWhenPostLoadReconciliationFails(t *testing.T) {
 
 	ba := newRecoveryTestAssembler(t, store, bc)
 
-	err := ba.loadUnminedTransactions(context.Background())
+	err := ba.loadUnminedTransactions(context.Background(), false)
 	require.Error(t, err, "BA-STARTUP-004: a post-load reconciliation write failure must abort recovery")
 	require.ErrorContains(t, err, "error marking transactions as mined on longest chain")
 

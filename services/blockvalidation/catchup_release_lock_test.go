@@ -905,6 +905,53 @@ func TestShouldReportConsensusMalicious(t *testing.T) {
 	}
 }
 
+// TestIsUnboundTxInvalidVerdict pins the predicate the catch-up classifiers test ahead of their
+// corrupt branches (bitcoin-sv/teranode#4844). Only the corrupt-wrapping-tx-invalid shape that
+// ValidateBlockWithOptions returns for an invalid transaction in an unbound subtree list matches;
+// either code alone, or that shape carrying a local cause, does not.
+func TestIsUnboundTxInvalidVerdict(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "corrupt wrapping tx-invalid is the unbound invalid-transaction verdict",
+			err: errors.NewBlockCorruptError("block contains invalid transactions",
+				errors.NewTxInvalidError("transaction in subtree is invalid")),
+			want: true,
+		},
+		{
+			name: "corrupt alone is a corrupt body",
+			err:  errors.NewBlockCorruptError("body carries no subtrees but the header merkle root is not the coinbase txid"),
+			want: false,
+		},
+		{
+			name: "tx-invalid alone is an ordinary consensus rejection",
+			err:  errors.NewTxInvalidError("transaction in subtree is invalid"),
+			want: false,
+		},
+		{
+			name: "the verdict wrapping our own context cancellation is ours",
+			err: errors.NewBlockCorruptError("block contains invalid transactions",
+				errors.NewTxInvalidError("invalid tx", errors.NewContextCanceledError("catchup context cancelled on shutdown"))),
+			want: false,
+		},
+		{
+			name: "the verdict wrapping a storage fault is ours",
+			err: errors.NewBlockCorruptError("block contains invalid transactions",
+				errors.NewTxInvalidError("invalid tx", errors.NewStorageError("could not read input"))),
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, isUnboundTxInvalidVerdict(tc.err))
+		})
+	}
+}
+
 // TestIsLocalCatchupFault pins the union predicate processCatchupChItem uses to
 // decide that a terminal catchup error is this node's own fault. The union is the
 // point: errors.IsLocalError misses the *Unavailable codes and

@@ -45,6 +45,16 @@ import (
 // getBlocksWithQuery helper method to handle the common block reconstruction logic used
 // across multiple query methods in the package.
 //
+// invalid blocks are excluded (invalid = false). storeInvalidBlock (blockvalidation)
+// persists a rejected block with subtrees_set=false and invalid=true purely as a record;
+// its subtree files are usually never written, or are removed shortly after by
+// removePeerSuppliedSubtreeToCheck. Without this filter such a block can never satisfy
+// blockvalidation's subtreeFilesReady check, so it would stay in this result set and be
+// re-fetched by the periodic sweep forever. This does not require changing
+// idx_subtrees_set_height (WHERE subtrees_set = false): both Postgres and SQLite can use
+// a partial index whose predicate is implied by the query's WHERE clause, so the extra
+// "AND invalid = false" here is just an additional filter step on the same indexed rows.
+//
 // Parameters:
 //   - ctx: Context for the database operation, allowing for cancellation and timeouts
 //
@@ -76,6 +86,7 @@ func (s *SQL) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, erro
 		,b.height
 		FROM blocks b
 		WHERE subtrees_set = false
+		  AND invalid = false
 		ORDER BY height ASC
 	`
 

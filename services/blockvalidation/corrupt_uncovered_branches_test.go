@@ -399,6 +399,85 @@ func TestValidateBlocksOnChannel_CorruptBody_CleansUpAndPreservesClassification(
 	}
 }
 
+// TestValidateBlocksOnChannel_UnboundTxInvalidKeepsBlobsAndReportsMalicious is a regression for
+// bitcoin-sv/teranode#4844. An invalid transaction in an unbound subtree list comes back from
+// ValidateBlockWithOptions as corrupt, so the direct peer path re-downloads it under the
+// corrupt-attempt cap. On catch-up it used to take the corrupt branch too: the verified subtree
+// blobs were deleted, the hash was recorded as a corrupt body, the cycle aborted for a re-download
+// of identical bytes, and the malicious report never fired. It is now a consensus rejection: the
+// blobs stay, no corrupt hash is recorded, the primary is reported malicious, and the error still
+// aborts the cycle.
+func TestValidateBlocksOnChannel_UnboundTxInvalidKeepsBlobsAndReportsMalicious(t *testing.T) {
+	suite := NewCatchupTestSuite(t)
+	defer suite.Cleanup()
+
+	rec := &catchupReportRecorder{}
+	suite.Server.p2pClient = rec
+
+	suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
+	suite.MockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
+		Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil).Maybe()
+	suite.MockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).
+		Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 99, MinedSet: true}, nil).Maybe()
+	suite.MockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	easyNBits, _ := model.NewNBitFromString("207fffff")
+	suite.MockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(easyNBits, nil).Maybe()
+
+	// Subtree validation reports an invalid transaction, which ValidateBlockWithOptions turns into
+	// the unbound invalid-transaction verdict.
+	subtreeVal := &subtreevalidation.MockSubtreeValidation{}
+	subtreeVal.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(errors.NewTxInvalidError("transaction in subtree is invalid"))
+	suite.Server.blockValidation.subtreeValidationClient = subtreeVal
+
+	block := buildOneSubtreeBlock(t, suite, 100)
+	// Re-mine: buildOneSubtreeBlock sets the merkle root after mining, and the full path checks PoW
+	// before subtree validation.
+	for {
+		if ok, _, _ := block.Header.HasMetTargetDifficulty(); ok {
+			break
+		}
+		block.Header.Nonce++
+	}
+	subtreeHash := block.Subtrees[0]
+
+	catchupCtx := &CatchupContext{
+		blockUpTo:          block,
+		baseURL:            "http://peer",
+		peerID:             "peer-primary",
+		startTime:          time.Now(),
+		useQuickValidation: false,
+	}
+
+	freshlyWritten := map[chainhash.Hash]map[fileformat.FileType]struct{}{
+		*subtreeHash: {
+			fileformat.FileTypeSubtreeToCheck: {},
+			fileformat.FileTypeSubtreeData:    {},
+		},
+	}
+
+	validateBlocksChan := make(chan blockForValidation, 1)
+	validateBlocksChan <- blockForValidation{block: block, freshlyWritten: freshlyWritten}
+	close(validateBlocksChan)
+
+	var size atomic.Int64
+	size.Store(1)
+
+	err := suite.Server.validateBlocksOnChannel(validateBlocksChan, context.Background(), catchupCtx, &size, nil)
+	require.Error(t, err, "the verdict must still abort the cycle")
+	require.True(t, isUnboundTxInvalidVerdict(err), "got: %v", err)
+
+	require.Empty(t, catchupCtx.corruptBlockHash, "a consensus rejection must not be recorded as a corrupt body")
+	require.Equal(t, []string{"peer-primary"}, rec.maliciousReported(),
+		"the primary must be reported malicious for an invalid transaction in its subtree list")
+
+	for _, ft := range []fileformat.FileType{fileformat.FileTypeSubtreeToCheck, fileformat.FileTypeSubtreeData} {
+		stillThere, existsErr := suite.Server.subtreeStore.Exists(suite.Ctx, subtreeHash[:], ft)
+		require.NoError(t, existsErr)
+		require.True(t, stillThere, "%s was verified against its name and must be kept", ft)
+	}
+}
+
 // TestValidateBlocksOnChannel_CommittedSubtreeSurvivesLaterCorruptCleanup pins the run-scoped
 // committed-dependency guard end to end (bitcoin-sv/teranode#4692). Two blocks arrive in one catchup
 // run naming the SAME subtree hash — the shape a doctored body gets for free, since it only has to
@@ -544,15 +623,16 @@ func (l *warnCaptureLogger) warned() []string {
 }
 
 // TestNewBlockValidation_OptimisticMiningPeerDisabled_WarnsAtStartup pins the F5 startup warning
-// (bitcoin-sv/teranode#4692): when optimistic mining is globally enabled but disabled on peer-served
-// and catch-up blocks (OptimisticMining && !OptimisticMiningPeerBlocks), NewBlockValidation must emit
-// a single warning naming the restore knob. The warning is logged synchronously at construction, so a
-// cancelled context tears down the background workers immediately.
+// (bitcoin-sv/teranode#4692): when optimistic mining is globally enabled but the peer-blocks opt-in is
+// not set (OptimisticMining && !OptimisticMiningPeerBlocks), optimistic mining stays off on every
+// validation path, and NewBlockValidation must emit a single warning naming the restore knob. The
+// warning is logged synchronously at construction, so a cancelled context tears down the background
+// workers immediately.
 //
 // Mutation proof: deleting the Warnf guard in NewBlockValidation drops the message, reddening the
 // positive case; the negative controls confirm it is not emitted otherwise.
 func TestNewBlockValidation_OptimisticMiningPeerDisabled_WarnsAtStartup(t *testing.T) {
-	const wantPhrase = "optimistic mining is enabled but disabled on peer-served"
+	const wantPhrase = "optimistic mining is enabled but stays off on every validation path"
 
 	newWith := func(t *testing.T, optimistic, peerBlocks bool) *warnCaptureLogger {
 		t.Helper()
@@ -585,7 +665,7 @@ func TestNewBlockValidation_OptimisticMiningPeerDisabled_WarnsAtStartup(t *testi
 
 	t.Run("optimistic on, peer-blocks off: warns", func(t *testing.T) {
 		require.True(t, warnedFor(newWith(t, true, false)),
-			"must warn that optimistic mining is disabled on peer-served/catch-up blocks")
+			"must warn that optimistic mining stays off on every validation path")
 	})
 
 	t.Run("optimistic on, peer-blocks on: no warning", func(t *testing.T) {

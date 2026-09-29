@@ -748,7 +748,7 @@ func TestHandleBlockNotification_PublishesSanitizedValidatedMessage(t *testing.T
 	s, published := capturePublishServer(t)
 
 	mockBlockchain := &blockchain.Mock{}
-	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 42}, nil)
+	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 42, SubtreesSet: true}, nil)
 	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(nil, assert.AnError).Maybe()
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, assert.AnError).Maybe()
 	mockBlockchain.On("GetState", mock.Anything, mock.Anything).Return(nil, assert.AnError).Maybe()
@@ -935,7 +935,7 @@ func TestHandleBlockNotification_InvalidDataHubURLFailsLoudly(t *testing.T) {
 	s.AssetHTTPAddressURL = "http://example.com/" + strings.Repeat("p", maxGossipURLLen)
 
 	mockBlockchain := &blockchain.Mock{}
-	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 42}, nil)
+	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 42, SubtreesSet: true}, nil)
 	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(nil, assert.AnError).Maybe()
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, assert.AnError).Maybe()
 	mockBlockchain.On("GetState", mock.Anything, mock.Anything).Return(nil, assert.AnError).Maybe()

@@ -1,6 +1,6 @@
 module github.com/bsv-blockchain/teranode
 
-go 1.26.0
+go 1.27.0
 
 replace github.com/in-toto/in-toto-golang => github.com/in-toto/in-toto-golang v0.9.0
 
@@ -10,7 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.12
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.97.3
 	github.com/bitcoin-sv/bdk/module/gobdk v1.2.5-0.20260918043653-4eab3acdbbb9
-	github.com/bsv-blockchain/aerospike-client-go/v8 v8.7.1-bsv5
+	github.com/bsv-blockchain/aerospike-client-go/v8 v8.7.1-bsv6
 	github.com/bsv-blockchain/go-bt/v2 v2.7.1
 	github.com/bsv-blockchain/go-chaincfg v1.6.2
 	github.com/bsv-blockchain/go-sdk v1.4.1
@@ -32,7 +32,7 @@ require (
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/lib/pq v1.10.9
 	github.com/libp2p/go-libp2p v0.49.0
-	github.com/libp2p/go-libp2p-kad-dht v0.42.1 // indirect
+	github.com/libp2p/go-libp2p-kad-dht v0.42.2 // indirect
 	github.com/libp2p/go-libp2p-pubsub v0.17.0
 	github.com/looplab/fsm v1.0.2
 	github.com/mrz1836/go-datastore v1.3.7
@@ -199,7 +199,7 @@ require (
 	github.com/bsv-blockchain/go-bc v1.1.8
 	github.com/bsv-blockchain/go-bn v1.1.7
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
-	github.com/bsv-blockchain/go-p2p-message-bus v0.1.23
+	github.com/bsv-blockchain/go-p2p-message-bus v0.1.28
 	github.com/bsv-blockchain/go-safe-conversion v1.2.0
 	github.com/bsv-blockchain/go-tx-map v1.4.1
 	github.com/bsv-blockchain/go-wire v1.2.11

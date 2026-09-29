@@ -46,6 +46,7 @@ var (
 	prometheusCatchupHeadersFetched *prometheus.CounterVec
 	prometheusCatchupErrors         *prometheus.CounterVec
 	prometheusCatchupActive         prometheus.Gauge
+	prometheusCatchupPeerHealthGate *prometheus.CounterVec
 
 	// catch-up subtree-data prefetch budget metrics. Aggregate counters with no block-hash
 	// label, for the cardinality reason recorded below; the block hash is in the log line
@@ -343,6 +344,16 @@ func _initPrometheusMetrics() {
 			Name:      "catchup_prefetch_undeclared_size_blocks_total",
 			Help:      "Total number of blocks that declared no size (SizeInBytes 0) and were therefore not trusted with the configured subtree fetch concurrency. Blocks served by a healthy peer carry a declared size, so a sustained rise points at a peer supplying undeclared sizes; the block hash is recorded in the logs.",
 		},
+	)
+
+	prometheusCatchupPeerHealthGate = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "catchup_peer_health_gate_total",
+			Help:      "Total number of times the pre-catchup peer health gate produced a signal, by reason. malicious/low_reputation/low_success_rate/other refuse the peer as a catchup source; unknown means the peer is absent from the registry and is NOT refused (fail open) — a rising unknown rate points at registry-population lag (e.g. after a blockchain-service restart), not at bad peers.",
+		},
+		[]string{"reason"},
 	)
 
 	// Initialize priority queue metrics

@@ -188,18 +188,31 @@ func TestStoreBlock_WithCustomID(t *testing.T) {
 	require.NoError(t, err)
 	defer s.Close(context.Background())
 
+	// A caller-supplied id must be the one reserved for the hash. Burn a few
+	// ids first so the reserved ids are not what auto-increment would pick.
+	for i := 0; i < 3; i++ {
+		_, err = s.GetNextBlockID(context.Background())
+		require.NoError(t, err)
+	}
+
+	reserved1, err := s.AssignBlockID(context.Background(), block1.Hash())
+	require.NoError(t, err)
+
 	// Store first block with custom ID
 	blockID, height, err := s.StoreBlock(context.Background(), block1, "test-peer",
-		options.WithID(50))
+		options.WithID(reserved1))
 	require.NoError(t, err)
-	assert.Equal(t, uint64(50), blockID)
+	assert.Equal(t, reserved1, blockID)
 	assert.Equal(t, uint32(1), height)
+
+	reserved2, err := s.AssignBlockID(context.Background(), block2.Hash())
+	require.NoError(t, err)
 
 	// Store second block with custom ID
 	blockID2, height2, err := s.StoreBlock(context.Background(), block2, "test-peer",
-		options.WithID(100))
+		options.WithID(reserved2))
 	require.NoError(t, err)
-	assert.Equal(t, uint64(100), blockID2)
+	assert.Equal(t, reserved2, blockID2)
 	assert.Equal(t, uint32(2), height2)
 }
 

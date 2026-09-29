@@ -11,7 +11,6 @@ Settings are organized under the `BlockPersister` struct in `settings.Settings`.
 | Store | *url.URL | "file://./data/blockstore" | blockpersister_store | **CRITICAL** - Block data storage location |
 | HTTPListenAddress | string | ":8083" | blockpersister_httpListenAddress | HTTP server for blob store access |
 | Concurrency | int | 8 | blockpersister_concurrency | **CRITICAL** - Parallel subtree processing, reduced by half in all-in-one mode |
-| BatchMissingTransactions | bool | true | blockpersister_batchMissingTransactions | Enable batched transaction metadata retrieval |
 | SkipUTXODelete | bool | false | blockpersister_skipUTXODelete | Skip UTXO deletion processing |
 | PersistSleep | time.Duration | 10s | blockpersister_persistSleep | Sleep duration when no blocks available or after errors |
 | ProcessUTXOFiles | bool | true | blockpersister_processUTXOFiles | Enable UTXO additions/deletions file generation |
@@ -42,7 +41,7 @@ Settings are organized under the `BlockPersister` struct in `settings.Settings`.
 
 ### Transaction Processing
 
-- When `BatchMissingTransactions` is true, uses `ProcessTxMetaUsingStoreBatchSize`
+- Transaction metadata is always fetched in batches, sized by `ProcessTxMetaUsingStoreBatchSize`
 - **Note**: `ProcessTxMetaUsingStoreBatchSize` uses the `blockvalidation_` prefix (not `blockpersister_`) as it's a shared setting with the Block Validation service. Both services use the same batch size for consistent transaction metadata processing.
 
 ### UTXO File Processing
@@ -80,7 +79,6 @@ blockpersister_persistSleep=10s
 
 ```bash
 blockpersister_concurrency=16
-blockpersister_batchMissingTransactions=true
 blockvalidation_processTxMetaUsingStore_BatchSize=2048
 ```
 

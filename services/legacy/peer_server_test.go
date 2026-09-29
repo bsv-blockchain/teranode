@@ -2,6 +2,7 @@ package legacy
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -193,6 +194,10 @@ func (m *mockServerPeer) QueueInventory(invVect *wire.InvVect) {
 	m.Called(invVect)
 }
 
+func (m *mockServerPeer) RequeueInventory(invVect *wire.InvVect) {
+	m.Called(invVect)
+}
+
 // TestHandleRelayBlockInvMsg verifies that a newly-relayed block is announced
 // via a plain inventory message to peers that have NOT negotiated sendheaders.
 // handleRelayInvMsg only special-cases InvTypeBlock when sp.WantsHeaders() is
@@ -236,21 +241,51 @@ func (c *tcpAddrConn) RemoteAddr() net.Addr { return c.remote }
 // fallback branch, a non-sendheaders peer gets no announcement for the block at
 // all and no inv is ever written.
 func TestHandleRelayInvMsgBlockToNonSendHeadersPeer(t *testing.T) {
+	invReceived := make(chan *wire.MsgInv, 1)
+
+	s, state, sp := newRelayTestServerPeer(t, func(_ *peer.Peer, msg *wire.MsgInv) {
+		select {
+		case invReceived <- msg:
+		default:
+		}
+	})
+
+	// Precondition for the fallback: this peer did not negotiate sendheaders.
+	require.False(t, sp.WantsHeaders())
+	require.True(t, sp.Connected())
+
+	blockHash := chainhash.Hash{0x0a, 0x0b, 0x0c}
+	invVect := wire.NewInvVect(wire.InvTypeBlock, &blockHash)
+
+	// No msg.data: a non-sendheaders peer must be announced the block by
+	// inventory, which needs nothing but the inv vector. If the dispatch ever
+	// routes this peer to handleRelayBlockMsg instead, that path bails out on the
+	// missing block header and nothing is sent.
+	s.handleRelayInvMsg(state, relayMsg{invVect: invVect})
+
+	select {
+	case msg := <-invReceived:
+		require.Len(t, msg.InvList, 1)
+		require.Equal(t, wire.InvTypeBlock, msg.InvList[0].Type)
+		require.Equal(t, blockHash, msg.InvList[0].Hash)
+	case <-time.After(10 * time.Second):
+		t.Fatal("no inv message relayed to the non-sendheaders peer")
+	}
+}
+
+// newRelayTestServerPeer connects a serverPeer to a real remote peer over a
+// pipe, waits for the version handshake, and registers it in a peerState.
+// onInv receives every inv message the remote end is sent. Neither side sends
+// "sendheaders", so WantsHeaders() stays false on both peers.
+func newRelayTestServerPeer(t *testing.T, onInv func(*peer.Peer, *wire.MsgInv)) (*server, *peerState, *serverPeer) {
+	t.Helper()
+
 	tSettings := test.CreateBaseTestSettings(t)
 	logger := ulogger.TestLogger{}
 
-	invReceived := make(chan *wire.MsgInv, 1)
-
-	// The remote end records the inv messages it receives. Neither side sends
-	// "sendheaders", so WantsHeaders() stays false on both peers.
 	remoteCfg := &peer.Config{
 		Listeners: peer.MessageListeners{
-			OnInv: func(_ *peer.Peer, msg *wire.MsgInv) {
-				select {
-				case invReceived <- msg:
-				default:
-				}
-			},
+			OnInv: onInv,
 		},
 		UserAgentName:          "remote",
 		UserAgentVersion:       "1.0",
@@ -294,17 +329,13 @@ func TestHandleRelayInvMsgBlockToNonSendHeadersPeer(t *testing.T) {
 			remotePeer.VersionKnown() && remotePeer.VerAckReceived()
 	}, 10*time.Second, 10*time.Millisecond, "peers did not complete the version handshake")
 
-	s := &server{logger: logger}
+	s := &server{logger: logger, relayInv: make(chan relayMsg, 16)}
 
 	sp := &serverPeer{
 		Peer:   localPeer,
 		server: s,
 		quit:   make(chan struct{}),
 	}
-
-	// Precondition for the fallback: this peer did not negotiate sendheaders.
-	require.False(t, sp.WantsHeaders())
-	require.True(t, sp.Connected())
 
 	state := &peerState{
 		inboundPeers:    txmap.NewSyncedMap[int32, *serverPeer](),
@@ -314,23 +345,106 @@ func TestHandleRelayInvMsgBlockToNonSendHeadersPeer(t *testing.T) {
 	}
 	state.inboundPeers.Set(1, sp)
 
-	blockHash := chainhash.Hash{0x0a, 0x0b, 0x0c}
-	invVect := wire.NewInvVect(wire.InvTypeBlock, &blockHash)
+	return s, state, sp
+}
 
-	// No msg.data: a non-sendheaders peer must be announced the block by
-	// inventory, which needs nothing but the inv vector. If the dispatch ever
-	// routes this peer to handleRelayBlockMsg instead, that path bails out on the
-	// missing block header and nothing is sent.
-	s.handleRelayInvMsg(state, relayMsg{invVect: invVect})
+// TestRebroadcastTickReachesPeerThatAlreadySawInv covers issue 1825. The first
+// announce adds the inv to the peer's known inventory, and a plain
+// QueueInventory drops any later attempt, so a rebroadcast used to reach only
+// peers that connected after the first announce. Drives the real announce and
+// rebroadcast paths (RelayInventory, processRebroadcastTick with
+// rebroadcastInventory, handleRelayInvMsg) over a real connected peer.
+func TestRebroadcastTickReachesPeerThatAlreadySawInv(t *testing.T) {
+	invReceived := make(chan *wire.MsgInv, 10)
 
-	select {
-	case msg := <-invReceived:
-		require.Len(t, msg.InvList, 1)
-		require.Equal(t, wire.InvTypeBlock, msg.InvList[0].Type)
-		require.Equal(t, blockHash, msg.InvList[0].Hash)
-	case <-time.After(10 * time.Second):
-		t.Fatal("no inv message relayed to the non-sendheaders peer")
+	s, state, _ := newRelayTestServerPeer(t, func(_ *peer.Peer, msg *wire.MsgInv) {
+		invReceived <- msg
+	})
+
+	txHash := chainhash.Hash{0xde, 0xad}
+	iv := wire.NewInvVect(wire.InvTypeTx, &txHash)
+	data := &netsync.TxHashAndFee{TxHash: txHash, Fee: 1, Size: 100}
+
+	// deliver plays the peerHandler's part: take what the relay entry points
+	// queued on relayInv and dispatch it to the connected peers.
+	deliver := func() {
+		t.Helper()
+		select {
+		case msg := <-s.relayInv:
+			s.handleRelayInvMsg(state, msg)
+		case <-time.After(time.Second):
+			t.Fatal("nothing queued on relayInv")
+		}
 	}
+
+	expectInv := func(msg string) {
+		t.Helper()
+		select {
+		case got := <-invReceived:
+			require.Len(t, got.InvList, 1, msg)
+			require.Equal(t, *iv, *got.InvList[0], msg)
+		case <-time.After(5 * time.Second):
+			t.Fatal(msg)
+		}
+	}
+
+	expectNoInv := func(msg string) {
+		t.Helper()
+		select {
+		case got := <-invReceived:
+			t.Fatalf("%s: unexpected inv %v", msg, got.InvList)
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+
+	s.RelayInventory(iv, data)
+	deliver()
+	expectInv("first announce not received")
+
+	// A second plain relay is filtered by the peer's known inventory.
+	s.RelayInventory(iv, data)
+	deliver()
+	expectNoInv("plain relay re-sent a known inv")
+
+	pending := map[wire.InvVect]*rebroadcastEntry{*iv: {data: data}}
+
+	for tick := 1; tick <= 2; tick++ {
+		require.Equal(t, 1, processRebroadcastTick(pending, maxRebroadcastAttempts, s.rebroadcastInventory))
+		deliver()
+		expectInv(fmt.Sprintf("rebroadcast tick %d did not reach the peer", tick))
+	}
+}
+
+// TestHandleRelayTxMsgRequeue checks that a rebroadcast relay bypasses the
+// peer's known-inventory filter but still honours its fee filter.
+func TestHandleRelayTxMsgRequeue(t *testing.T) {
+	txHash := chainhash.Hash{0x01, 0x02, 0x03}
+	invVect := wire.NewInvVect(wire.InvTypeTx, &txHash)
+	s := &server{}
+
+	t.Run("requeues", func(t *testing.T) {
+		sp := &mockServerPeer{}
+		sp.Mock.On("RequeueInventory", invVect).Return()
+
+		s.handleRelayTxMsg(sp, relayMsg{invVect: invVect, requeue: true}, 0)
+
+		sp.AssertCalled(t, "RequeueInventory", invVect)
+		sp.AssertNotCalled(t, "QueueInventory", invVect)
+	})
+
+	t.Run("fee filter still applies", func(t *testing.T) {
+		sp := &mockServerPeer{}
+
+		msg := relayMsg{
+			invVect: invVect,
+			data:    &netsync.TxHashAndFee{Fee: 1000, Size: 1000},
+			requeue: true,
+		}
+		s.handleRelayTxMsg(sp, msg, 2000)
+
+		sp.AssertNotCalled(t, "RequeueInventory", invVect)
+		sp.AssertNotCalled(t, "QueueInventory", invVect)
+	})
 }
 
 // TestHandleRelayTxMsg tests the handleRelayTxMsg function's behavior with various fee filter scenarios
@@ -1274,14 +1388,6 @@ func TestServerTransactionConfirmed(t *testing.T) {
 
 	// The method primarily removes from rebroadcast inventory
 	// Since we don't have full setup, we just test it doesn't panic
-}
-
-// TestServerGetTxFromStoreExists tests the getTxFromStore method exists
-func TestServerGetTxFromStoreExists(t *testing.T) {
-	// This method requires complex setup with stores and blockchain state
-	// We'll just verify the method exists on server
-	s := &server{}
-	assert.NotNil(t, s.getTxFromStore)
 }
 
 // TestServerUpdatePeerHeights tests the UpdatePeerHeights method

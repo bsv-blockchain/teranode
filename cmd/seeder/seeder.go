@@ -19,8 +19,10 @@ package seeder
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -57,6 +59,12 @@ import (
 
 const (
 	errMsgFailedToReadUTXO = "failed to read UTXO set header"
+
+	// checksumSidecarExtension matches the sidecar extension the blob file
+	// store writes alongside every blob it stores (stores/blob/file), so a
+	// snapshot produced by the UTXO persister and copied into inputDir
+	// carries its checksum sidecar with it.
+	checksumSidecarExtension = ".sha256"
 )
 
 // utxoSetTip identifies the block at which an imported UTXO set is complete.
@@ -135,12 +143,31 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 		if _, err := os.Stat(headerFile); os.IsNotExist(err) {
 			usage(fmt.Sprintf("Headers file %s does not exist", headerFile))
 		}
+
+		if err := verifyChecksum(logger, headerFile); err != nil {
+			return errors.NewProcessingError("checksum verification failed for headers file %s", headerFile, err)
+		}
+	} else if !skipUTXOs {
+		// The header pass itself is skipped, but processUTXOs still reads
+		// headerFile back (via loadCoinbaseTxs) to recover coinbase inputs, so a
+		// corrupted headers file must not be silently consumed just because
+		// -skipHeaders was passed. Unlike the pass above, absence is fine here —
+		// loadCoinbaseTxs already tolerates a missing headers file.
+		if _, err := os.Stat(headerFile); err == nil {
+			if err := verifyChecksum(logger, headerFile); err != nil {
+				return errors.NewProcessingError("checksum verification failed for headers file %s", headerFile, err)
+			}
+		}
 	}
 
 	if !skipUTXOs {
 		// Check the UTXO file exists
 		if _, err := os.Stat(utxoFile); os.IsNotExist(err) {
 			usage(fmt.Sprintf("UTXO file %s does not exist", utxoFile))
+		}
+
+		if err := verifyChecksum(logger, utxoFile); err != nil {
+			return errors.NewProcessingError("checksum verification failed for UTXO file %s", utxoFile, err)
 		}
 	}
 
@@ -851,6 +878,97 @@ func writeBlockAssemblerState(ctx context.Context, logger ulogger.Logger, store 
 	}
 
 	logger.Infof("Set BlockAssembler state to utxo-set tip %s at height %d", tip.hash.String(), tip.height)
+
+	return nil
+}
+
+// verifyChecksum checks a snapshot file against its "<file>.sha256" checksum
+// sidecar, matching the sidecar format the blob file store (stores/blob/file)
+// writes alongside every blob: hex-encoded SHA-256, optionally followed by
+// whitespace and the filename (the standard sha256sum layout).
+//
+// If no sidecar is present — e.g. an older snapshot predating checksum
+// sidecars, or one fetched from a source that doesn't produce one — the
+// import proceeds with only a warning logged: mandating a sidecar for every
+// possible snapshot source is not realistic. If a sidecar IS present but
+// doesn't match the file's actual content, the import is refused: a
+// corrupted-but-count-consistent file must never be silently imported.
+func verifyChecksum(logger ulogger.Logger, filePath string) error {
+	sidecarPath := filePath + checksumSidecarExtension
+
+	// maxSidecarSize bounds the sidecar read: a genuine sidecar is a hex digest
+	// plus an optional filename, well under 1KB. Anything larger is not a
+	// sidecar (e.g. the snapshot file itself, copied to the wrong name), and
+	// reading it in full would pull an arbitrarily large file into memory.
+	const maxSidecarSize = 4096
+
+	f, err := os.Open(sidecarPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			logger.Warnf("[verifyChecksum] no checksum sidecar %s found for %s; proceeding without checksum verification", sidecarPath, filePath)
+			return nil
+		}
+
+		return errors.NewStorageError("failed to read checksum sidecar %s", sidecarPath, err)
+	}
+
+	sidecar, err := io.ReadAll(io.LimitReader(f, maxSidecarSize))
+	_ = f.Close()
+
+	if err != nil {
+		return errors.NewStorageError("failed to read checksum sidecar %s", sidecarPath, err)
+	}
+
+	fields := strings.Fields(string(sidecar))
+	if len(fields) == 0 {
+		return errors.NewProcessingError("checksum sidecar %s is empty", sidecarPath)
+	}
+
+	expected := strings.ToLower(fields[0])
+
+	if len(expected) != sha256.Size*2 {
+		return errors.NewProcessingError("checksum sidecar %s is malformed: %q is not a hex-encoded SHA-256 digest", sidecarPath, fields[0])
+	}
+
+	if _, err := hex.DecodeString(expected); err != nil {
+		return errors.NewProcessingError("checksum sidecar %s is malformed: %q is not a hex-encoded SHA-256 digest", sidecarPath, fields[0])
+	}
+
+	// The standard sha256sum layout names the file the checksum belongs to as
+	// the second field. When present, it must match filePath's own basename —
+	// otherwise the sidecar was paired with the wrong snapshot, and reporting
+	// that as a checksum mismatch would misdirect the operator.
+	if len(fields) > 1 && fields[1] != filepath.Base(filePath) {
+		return errors.NewProcessingError("checksum sidecar %s belongs to %q, not to %s", sidecarPath, fields[1], filepath.Base(filePath))
+	}
+
+	if st, statErr := os.Stat(filePath); statErr == nil {
+		logger.Infof("[verifyChecksum] verifying %s (%s bytes) against %s; this reads the whole file", filePath, formatNumber(uint64(st.Size())), sidecarPath)
+	}
+
+	sf, err := os.Open(filePath)
+	if err != nil {
+		return errors.NewStorageError("failed to open %s for checksum verification", filePath, err)
+	}
+
+	defer func() {
+		_ = sf.Close()
+	}()
+
+	h := sha256.New()
+
+	if _, err = io.Copy(h, sf); err != nil {
+		return errors.NewStorageError("failed to read %s for checksum verification", filePath, err)
+	}
+
+	actual := hex.EncodeToString(h.Sum(nil))
+
+	if actual != expected {
+		return errors.NewProcessingError("checksum mismatch for %s: sidecar %s says %s, actual content hashes to %s (file may be corrupted)",
+			filePath, sidecarPath, expected, actual)
+	}
+
+	logger.Infof("[verifyChecksum] checksum verified for %s against %s", filePath, sidecarPath)
 
 	return nil
 }

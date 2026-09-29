@@ -1,0 +1,160 @@
+name: fuzz
+
+# Go fuzz targets only mutate inputs when invoked with `-fuzz`. Under a plain
+# `go test` they replay their committed seed corpus as ordinary table tests and
+# can never discover a new crashing input — which is what every other workflow
+# in this repo does with them. This workflow is the only place the targets are
+# actually fuzzed.
+#
+# Keep the matrix below in sync with FUZZ_TARGETS in the Makefile; `make fuzz`
+# runs the same list locally with a smaller budget.
+
+on:
+  schedule:
+    # 04:00 UTC — two hours after nightly_tests.yaml, so the two do not
+    # contend for the self-hosted runner pool.
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: 'Per-target budget passed to -fuzztime (e.g. 5m, 30m, 2h)'
+        default: '5m'
+        required: false
+      timeout_minutes:
+        description: 'Per-target job timeout. Must exceed fuzztime plus build time.'
+        default: '45'
+        required: false
+  # Path-filtered smoke run: a change to the fuzz plumbing proves itself in the
+  # PR that makes it, at a budget small enough to stay off the critical path.
+  # Without this the workflow is unverifiable until after it merges, because
+  # workflow_dispatch is only triggerable for workflows already on the default
+  # branch.
+  pull_request:
+    paths:
+      - '.github/workflows/fuzz.yaml'
+      - 'Makefile'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: '1.26.0'
+  # 20s on a pull_request smoke run, the dispatch input when given, else the
+  # nightly default.
+  FUZZTIME: ${{ github.event_name == 'pull_request' && '20s' || github.event.inputs.fuzztime || '5m' }}
+  # Minimization is unbounded by default: after a hit, Go can spend the rest of
+  # the job shrinking the input and get killed by the job timeout before it
+  # writes the crasher out. Cap it so a failure is always reported.
+  FUZZMINIMIZETIME: '60s'
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }}
+    runs-on: teranode-runner-8-core
+    timeout-minutes: ${{ fromJSON(github.event.inputs.timeout_minutes || '45') }}
+    strategy:
+      # One target finding a crasher must not cancel the others — each is an
+      # independent parser and we want every result from a given night.
+      fail-fast: false
+      matrix:
+        include:
+          - pkg: model
+            target: FuzzNewBlockFromBytes
+          - pkg: model
+            target: FuzzReadBlockFromReader
+          - pkg: model
+            target: FuzzDiskParentSpendsMap_Parity
+          - pkg: pkg/fileformat
+            target: FuzzHeaderParsersAgree
+          - pkg: pkg/fileformat
+            target: FuzzReadHeaderFromBytes
+          - pkg: services/utxopersister
+            target: FuzzUTXOWrapperFromBytes
+          - pkg: services/legacy/peer
+            target: FuzzReadWireMessage
+          - pkg: services/legacy/peer
+            target: FuzzStreamingBlockFraming
+          - pkg: services/rpc/bsvjson
+            target: FuzzParseRPCRequest
+          - pkg: services/rpc/bsvjson
+            target: FuzzUnmarshalCmd
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: 'false'
+
+      # No -race here (it costs ~10x the exec rate, and exec rate is the whole
+      # point), so the build cache would be near-useless — module cache only.
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
+
+      - name: Locate fuzz corpus directory
+        shell: bash
+        run: |
+          corpus="$(go env GOCACHE)/fuzz/github.com/bsv-blockchain/teranode/${{ matrix.pkg }}/${{ matrix.target }}"
+          mkdir -p "$corpus"
+          echo "FUZZ_CORPUS=$corpus" >> "$GITHUB_ENV"
+
+      # Go writes the inputs it discovers to GOCACHE, not to the repo. Without
+      # restoring that between runs every night restarts from the committed
+      # seeds and re-explores the same shallow frontier forever — the workflow
+      # would look like it was fuzzing while finding nothing it had not already
+      # found on night one. The corpus is small (all six targets together were
+      # 436K after a 15s baseline run each), so this costs almost nothing
+      # against the 10 GB repo cache budget.
+      #
+      # Deliberately a separate cache entry from the Go build cache: the
+      # main-branch test job trims ~/.cache/go-build by mtime before saving,
+      # which would evict corpus entries that had not been hit recently.
+      - name: Restore fuzz corpus
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.FUZZ_CORPUS }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
+
+      - name: Fuzz ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -run='^$' -fuzz='^${{ matrix.target }}$' \
+            -fuzztime="${FUZZTIME}" -fuzzminimizetime="${FUZZMINIMIZETIME}" \
+            ./${{ matrix.pkg }}/ 2>&1 | tee fuzz-${{ matrix.target }}.log
+
+      # always(), not success(): the inputs found on the way to a crash are the
+      # most valuable ones in the corpus, so a failing run must still save.
+      - name: Save fuzz corpus
+        if: always()
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.FUZZ_CORPUS }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+
+      # On a crash `go test` writes the failing input to
+      # <pkg>/testdata/fuzz/<Target>/<hash> and prints a `go test -run=...`
+      # reproducer. Uploading that file plus the log is what makes a red
+      # nightly actionable: download it, drop it into the package, and the
+      # crash reproduces deterministically. testdata/fuzz/ is not gitignored,
+      # so promoting a crasher to a permanent regression seed is a `git add`.
+      - name: Upload crashers and log
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-crashers-${{ matrix.target }}
+          path: |
+            ${{ matrix.pkg }}/testdata/fuzz/
+            fuzz-${{ matrix.target }}.log
+          if-no-files-found: warn
+          retention-days: 30

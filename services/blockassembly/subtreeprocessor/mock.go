@@ -8,6 +8,7 @@ package subtreeprocessor
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -36,6 +37,12 @@ var _ Interface = (*MockSubtreeProcessor)(nil)
 //   - Validating transaction processing workflows
 type MockSubtreeProcessor struct {
 	mock.Mock
+
+	// ResetRequested backs TakeResetRequested without testify expectations:
+	// the BlockAssembler main loop polls TakeResetRequested every heartbeat,
+	// so tests set it directly. TakeResetRequested reads and clears, like the
+	// real code.
+	ResetRequested atomic.Bool
 }
 
 func (m *MockSubtreeProcessor) GetCurrentTxMap() TxInpointsMap {
@@ -69,7 +76,19 @@ func (m *MockSubtreeProcessor) Start(ctx context.Context) {
 
 func (m *MockSubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, useFastForwardReset bool, postProcess func() error) ResetResponse {
 	args := m.Called(blockHeader, moveBackBlocks, moveForwardBlocks, useFastForwardReset, postProcess)
+
+	// A func return value computes each call's response.
+	if fn, ok := args.Get(0).(func() ResetResponse); ok {
+		return fn()
+	}
+
 	return args.Get(0).(ResetResponse)
+}
+
+// TakeResetRequested implements Interface.TakeResetRequested: read and clear
+// ResetRequested.
+func (m *MockSubtreeProcessor) TakeResetRequested() bool {
+	return m.ResetRequested.Swap(false)
 }
 
 func (m *MockSubtreeProcessor) GetCurrentBlockHeader() *model.BlockHeader {
@@ -212,9 +231,42 @@ func (m *MockSubtreeProcessor) AddDirectly(node *subtree.Node, txInpoints *subtr
 	return args.Error(0)
 }
 
+// AddDirectlyReportOnly implements Interface.AddDirectlyReportOnly
+func (m *MockSubtreeProcessor) AddDirectlyReportOnly(node *subtree.Node, txInpoints *subtree.TxInpoints, skipNotification bool) error {
+	args := m.Called(node, txInpoints, skipNotification)
+
+	if args.Get(0) == nil {
+		return nil
+	}
+
+	return args.Error(0)
+}
+
 // AddNodesDirectly implements Interface.AddNodesDirectly
 func (m *MockSubtreeProcessor) AddNodesDirectly(txs []*utxostore.UnminedTransaction, skipNotification bool) error {
 	args := m.Called(txs, skipNotification)
+
+	if args.Get(0) == nil {
+		return nil
+	}
+
+	return args.Error(0)
+}
+
+// AddNodesDirectlyReportOnly implements Interface.AddNodesDirectlyReportOnly
+func (m *MockSubtreeProcessor) AddNodesDirectlyReportOnly(txs []*utxostore.UnminedTransaction, skipNotification bool) error {
+	args := m.Called(txs, skipNotification)
+
+	if args.Get(0) == nil {
+		return nil
+	}
+
+	return args.Error(0)
+}
+
+// FlushDiskTxMapForLoad implements Interface.FlushDiskTxMapForLoad
+func (m *MockSubtreeProcessor) FlushDiskTxMapForLoad(where string, isReload bool) error {
+	args := m.Called(where, isReload)
 
 	if args.Get(0) == nil {
 		return nil

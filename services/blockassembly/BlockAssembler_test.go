@@ -2071,7 +2071,7 @@ func TestBlockAssembly_LoadUnminedTransactions_ReseedsMinedTx_WhenUnminedSinceNo
 	require.NoError(t, items.utxoStore.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*txHash}, false))
 
 	// Now force the assembler to reload unmined transactions
-	err = items.blockAssembler.loadUnminedTransactions(ctx)
+	err = items.blockAssembler.loadUnminedTransactions(ctx, false)
 	require.NoError(t, err)
 
 	// Verify the transaction was (incorrectly) re-added to the assembler
@@ -2118,7 +2118,7 @@ func TestBlockAssembly_LoadUnminedTransactions_ReorgCornerCase_MisUnsetMinedStat
 	}
 
 	// Reload unmined transactions as would happen after reset/reorg
-	err = items.blockAssembler.loadUnminedTransactions(ctx)
+	err = items.blockAssembler.loadUnminedTransactions(ctx, false)
 	require.NoError(t, err)
 
 	// The mined tx should now be present in the assembler due to the incorrect flip
@@ -2190,7 +2190,7 @@ func TestBlockAssembly_LoadUnminedTransactions_SkipsTransactionsOnCurrentChain(t
 	items.blockAssembler.subtreeProcessor.SetCurrentBlockHeader(blockHeader1)
 
 	// Load unmined transactions
-	err = items.blockAssembler.loadUnminedTransactions(ctx)
+	err = items.blockAssembler.loadUnminedTransactions(ctx, false)
 	require.NoError(t, err)
 
 	// Verify results
@@ -2326,7 +2326,7 @@ func TestLoadUnminedTransactionsCoverage(t *testing.T) {
 		ba := testItems.blockAssembler
 
 		// Test loadUnminedTransactions
-		_ = ba.loadUnminedTransactions(t.Context())
+		_ = ba.loadUnminedTransactions(t.Context(), false)
 
 		// Should complete loading
 		assert.True(t, true, "loadUnminedTransactions should complete successfully")
@@ -2338,7 +2338,7 @@ func TestLoadUnminedTransactionsCoverage(t *testing.T) {
 		ba := testItems.blockAssembler
 
 		// Test loadUnminedTransactions with validateInputs=true
-		_ = ba.loadUnminedTransactions(t.Context(), true)
+		_ = ba.loadUnminedTransactions(t.Context(), false, true)
 
 		// Should complete loading with input validation
 		assert.True(t, true, "loadUnminedTransactions should handle validateInputs flag")
@@ -2353,7 +2353,7 @@ func TestLoadUnminedTransactionsCoverage(t *testing.T) {
 		cancel() // Cancel immediately
 
 		// Test loadUnminedTransactions with cancelled context
-		_ = ba.loadUnminedTransactions(ctx)
+		_ = ba.loadUnminedTransactions(ctx, false)
 
 		// Should handle cancellation gracefully
 		assert.True(t, true, "loadUnminedTransactions should handle cancelled context")

@@ -6,6 +6,7 @@
 
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
+| AllowedPublisherIDs | []string | [] | p2p_allowed_publisher_ids | Opt-in allowlist of peer IDs whose pubsub messages this node acts on; empty (default) accepts all. Bare peer IDs, not multiaddrs. Applies to every subscribed topic, so filtered peers also stop refreshing the peer registry and the monitoring feed |
 | BootstrapPeers | []string | [] (settings.conf ships with `/dnsaddr/${network}.bootstrap.teranode.bsvb.tech`) | p2p_bootstrap_peers | Peer discovery entry points (required for dht_mode "off" and "client") |
 | GRPCAddress | string | "" | p2p_grpcAddress | gRPC client connections |
 | GRPCListenAddress | string | "localhost:9906" (Go default; overridden to `localhost:9904` by `settings.conf` via `P2P_GRPC_PORT`, and widened to `:9904` in the `docker.m`, `docker.ss` and `operator` contexts, plus the generated split-mode compose contexts) | p2p_grpcListenAddress | **CRITICAL** - gRPC server binding; loopback by default |
@@ -50,6 +51,7 @@
 | WebSocketMaxConnectionsPerSource | int | 0 | p2p_websocket_max_connections_per_source | Per-source /p2p-ws cap: 0 = auto (max(4, cap/20)), -1 disables (needed behind a proxy/NAT) |
 | WebSocketAllowedOrigins | []string | (empty) | p2p_websocket_allowed_origins | Allowed browser origins for /p2p-ws upgrades and HTTP CORS (empty allows all) |
 | WebSocketTrustedSourceCIDRs | []string | 127.0.0.1/32\|::1/128 | p2p_websocket_trusted_source_cidrs | Source CIDRs exempt from the /p2p-ws connection caps; loopback only by design - broader trust would void the caps behind an L7 ingress or NAT (see longdesc). Sentinel `none` disables the bypass (empty falls back to the default) |
+| HTTPRateLimit | int | 100 | p2p_httpRateLimit | Per-source req/s cap on the P2P HTTP server (/health, /p2p-ws); 0 or negative disables it |
 
 ## Configuration Dependencies
 

@@ -3322,15 +3322,32 @@ func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
 	require.NoError(t, subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 	subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
 
+	// The header must be MINED to its own (regtest-easy) target: the two header-only
+	// proof-of-work gates now run above the parent-header fetch, so an unmined header would be
+	// rejected there and the header-fetch error under test would never be reached
+	// (bitcoin-sv/teranode#4844).
+	powNBits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
+		Bits:           *powNBits,
+		Nonce:          0,
+	}
+
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+
+		blockHeader.Nonce++
+	}
+
 	block := &model.Block{
-		Header: &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
-			Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
-			Bits:           model.NBit{},
-			Nonce:          0,
-		},
+		Header:           blockHeader,
 		CoinbaseTx:       coinbaseTx,
 		TransactionCount: 1,
 		SizeInBytes:      uint64(coinbaseTx.Size()), //nolint:gosec
@@ -3835,6 +3852,7 @@ func TestBlockValidation_OptimisticMining_RejectsFutureTimestampSynchronously(t 
 	defer cancel()
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
@@ -3881,9 +3899,11 @@ func TestBlockValidation_OptimisticMining_RejectsFutureTimestampSynchronously(t 
 
 	mockBlockchain := &blockchain.Mock{}
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil)
-	// storeInvalidBlock persists the rejected block with WithInvalid(true); the accept-path AddBlock
-	// must never fire. Both would match here, so we additionally assert the background path never runs.
-	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, mock.Anything).Return(nil)
+	// No AddBlock at all is expected: a contextual header failure is a FINAL verdict on the header,
+	// reached before the body is bound to it, so nothing is persisted (bitcoin-sv/teranode#4844) —
+	// and the accept-path AddBlock must never fire either. Registered so a regression surfaces as
+	// the assertion below rather than a missing-mock panic.
+	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, mock.Anything).Return(nil).Maybe()
 	// GetBlockHeaderIDs is only reached inside the optimistic background goroutine, which must not
 	// start when the header is rejected synchronously — mark it Maybe so a regression (block added
 	// optimistically) surfaces via the AssertNotCalled check below rather than a missing-mock panic.
@@ -3919,6 +3939,11 @@ func TestBlockValidation_OptimisticMining_RejectsFutureTimestampSynchronously(t 
 	// The optimistic background goroutine (which alone calls GetBlockHeaderIDs) must never start,
 	// confirming the rejection happened before the optimistic AddBlock.
 	mockBlockchain.AssertNotCalled(t, "GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything)
+
+	// And nothing is persisted: the two-hours-in-the-future rule is time-dependent, so a stored
+	// invalid record would make a block that later becomes valid permanently unacceptable
+	// (bitcoin-sv/teranode#4844).
+	mockBlockchain.AssertNotCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestBlockValidation_DirectPath_RejectsCheckpointHashMismatch verifies checkpoint
@@ -3934,6 +3959,7 @@ func TestBlockValidation_DirectPath_RejectsCheckpointHashMismatch(t *testing.T) 
 	defer cancel()
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
@@ -3979,16 +4005,19 @@ func TestBlockValidation_DirectPath_RejectsCheckpointHashMismatch(t *testing.T) 
 	require.False(t, block.Hash().IsEqual(otherHash))
 	tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: checkpointHeight, Hash: otherHash}}
 
-	// Matches only the storeInvalidBlock write (AddBlock with WithInvalid(true)), so it cannot
-	// be satisfied by an accept-path write. The mock hands the variadic options to testify as a
-	// single []StoreBlockOption arg, which ProcessStoreBlockOptions resolves.
+	// Matches only an invalid write (AddBlock with WithInvalid(true)), so it cannot be satisfied by
+	// an accept-path write. The mock hands the variadic options to testify as a single
+	// []StoreBlockOption arg, which ProcessStoreBlockOptions resolves. Registered so a regression
+	// surfaces as the assertion below rather than a missing-mock panic — the checkpoint verdict is
+	// final and reached before the body is bound, so it must write nothing at all
+	// (bitcoin-sv/teranode#4844).
 	invalidStore := mock.MatchedBy(func(opts []blockchainoptions.StoreBlockOption) bool {
 		return blockchainoptions.ProcessStoreBlockOptions(opts...).Invalid
 	})
 
 	mockBlockchain := &blockchain.Mock{}
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil).Maybe()
-	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, invalidStore).Return(nil).Once()
+	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, invalidStore).Return(nil).Maybe()
 	// GetBlockHeaderIDs is only reached inside the optimistic background goroutine, which must
 	// not start when the header is rejected synchronously.
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil).Maybe()
@@ -4016,9 +4045,13 @@ func TestBlockValidation_DirectPath_RejectsCheckpointHashMismatch(t *testing.T) 
 	require.True(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "conflicts with hardcoded checkpoint")
 
-	// The block was persisted invalid (storeInvalidBlock -> AddBlock with WithInvalid(true)),
-	// proven by the invalidStore matcher; the accept path never ran (GetBlockHeaderIDs unused).
-	mockBlockchain.AssertCalled(t, "AddBlock", mock.Anything, block, mock.Anything, invalidStore)
+	// Nothing was persisted — not even an invalid record. A checkpoint conflict is a verdict on the
+	// header alone, reached before any body/header binding, and it is final, so there is nothing a
+	// later state change could recover; writing a row per fabricated announcement would itself be
+	// the denial of service, and that row would carry the peer's chosen coinbase
+	// (bitcoin-sv/teranode#4844). The accept path never ran either (GetBlockHeaderIDs unused).
+	mockBlockchain.AssertNotCalled(t, "AddBlock", mock.Anything, block, mock.Anything, invalidStore)
+	mockBlockchain.AssertNotCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockBlockchain.AssertNotCalled(t, "GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -4252,6 +4285,12 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 		1, 1,
 	)
 	require.NoError(t, err)
+
+	// A pre-assigned block id must be the one reserved for the hash; the store
+	// refuses any other. On a fresh store the first reservation is id 1.
+	reservedID, err := blockchainClient.AssignBlockID(ctx, block.Hash())
+	require.NoError(t, err)
+	require.Equal(t, uint64(block.ID), reservedID)
 
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 	err = blockValidation.ValidateBlock(context.Background(), block, "test")
@@ -4931,10 +4970,15 @@ func TestBlockValidation_SubtreeError_Classification(t *testing.T) {
 			wantPersisted: false,
 		},
 		{
-			name:          "tx invalid is a consensus violation, persisted",
+			// Subtree validation runs ABOVE block.Valid, so nothing has reconciled the block's
+			// subtree list against the header's merkle root when this verdict is reached: the body
+			// is still whatever the serving peer chose. It is a verdict on the DELIVERY, so the peer
+			// is struck, the body is re-downloaded, and the hash is not condemned
+			// (bitcoin-sv/teranode#4844).
+			name:          "tx invalid on an unbound subtree list is corrupt, not persisted",
 			subtreeErr:    errors.NewTxInvalidError("tx fails script validation"),
-			wantContains:  "BLOCK_INVALID",
-			wantPersisted: true,
+			wantContains:  "BLOCK_CORRUPT",
+			wantPersisted: false,
 		},
 	}
 

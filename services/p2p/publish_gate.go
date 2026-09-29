@@ -142,7 +142,14 @@ func (s *Server) canSendToNetwork(ctx context.Context, kind topicKind) bool {
 // drives peer switching during catchup rather than outbound gossip.
 func (s *Server) shouldSkipNotification(ctx context.Context, notificationType model.NotificationType) bool {
 	switch notificationType {
-	case model.NotificationType_Block:
+	case model.NotificationType_Block, model.NotificationType_BlockSubtreesSet:
+		// Both notification types can trigger a block-topic publish
+		// (announceBlock), gated the same way: BlockSubtreesSet is what
+		// announces a block whose Block notification arrived before
+		// blockvalidation's background block.Valid check finished — for an
+		// optimistically-mined peer block — or before the normal validation
+		// path finished (both defer AddBlock's SubtreesSet option to after
+		// validation completes).
 		return !s.canSendToNetwork(ctx, topicKindBlock)
 	case model.NotificationType_Subtree:
 		return !s.canSendToNetwork(ctx, topicKindSubtree)

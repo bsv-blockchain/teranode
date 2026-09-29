@@ -1,0 +1,43 @@
+# PREREQUISITE: this policy is enforced only on clusters whose CNI plugin
+# implements NetworkPolicy. A cluster whose CNI does not will accept this
+# object and ignore it - no error is raised. Confirm enforcement before
+# relying on it, e.g. from a pod in another namespace:
+#   kubectl run np-probe --rm -it --image=busybox -n default -- \
+#     nc -vz -w3 kafka-shared.teranode-operator.svc.cluster.local 9092
+# The connection must fail. If it succeeds, your CNI is not enforcing policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    io.kompose.service: kafka-shared
+  name: kafka-shared
+spec:
+  podSelector:
+    matchLabels:
+      io.kompose.service: kafka-shared
+  policyTypes:
+    - Ingress
+  ingress:
+    # Only workloads already scheduled in this namespace may reach the
+    # broker/pandaproxy/schema-registry ports. This is the network half of
+    # the Kafka trust boundary described in docs/topics/kafka/kafka.md:
+    # Kafka runs without broker ACLs or mTLS by default, so namespace
+    # isolation is the only enforced control, not an optional hardening
+    # extra. There is no consistent pod-label scheme shared by every
+    # Teranode producer/consumer service across deployment styles
+    # (docker-compose-derived manifests here vs. the operator-managed
+    # CRs in deploy/kubernetes/teranode/), so this policy allows same-
+    # namespace traffic rather than a narrower per-service allowlist.
+    # Operators who deploy Teranode services into their own namespace(s)
+    # should either place Kafka in that same namespace, or replace this
+    # rule with a namespaceSelector/podSelector allowlist scoped to the
+    # actual producer/consumer pods.
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 9092
+        - protocol: TCP
+          port: 9093
+        - protocol: TCP
+          port: 8081

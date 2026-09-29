@@ -1,6 +1,7 @@
 package model
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"io"
@@ -68,6 +69,9 @@ func ValidateSubtreeMatchesKey(subtree *subtreepkg.Subtree, key *chainhash.Hash)
 // Every producer writes the count as the subtree's node count keyed by its root,
 // so any mismatch means a torn or foreign file. Callers with a regenerator behind
 // them should rebuild rather than trust the file.
+//
+// reader is read through a buffer, so it can be consumed past the end of the
+// meta; callers must not read from it afterwards.
 func NewSubtreeMetaFromValidatedReader(subtreeHash chainhash.Hash, subtree *subtreepkg.Subtree, reader io.Reader) (*subtreepkg.Meta, error) {
 	if subtree == nil {
 		return nil, errors.NewProcessingError("cannot validate subtree meta for %s: subtree is nil", subtreeHash.String())
@@ -80,6 +84,18 @@ func NewSubtreeMetaFromValidatedReader(subtreeHash chainhash.Hash, subtree *subt
 	if err := ValidateSubtreeMatchesKey(subtree, &subtreeHash); err != nil {
 		return nil, errors.NewProcessingError("cannot validate subtree meta for %s", subtreeHash.String(), err)
 	}
+
+	// go-subtree decodes each entry with several small reads, and callers pass
+	// raw subtree-store file handles, so read through the same pooled buffer the
+	// .subtree load uses instead of paying a syscall per field.
+	bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
+	bufferedReader.Reset(reader)
+	defer func() {
+		bufferedReader.Reset(nil)
+		bufioReaderPool.Put(bufferedReader)
+	}()
+
+	reader = bufferedReader
 
 	var metaHeader [subtreeMetaHeaderSize]byte
 	if _, err := io.ReadFull(reader, metaHeader[:]); err != nil {

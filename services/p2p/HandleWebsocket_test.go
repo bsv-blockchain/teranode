@@ -1602,8 +1602,13 @@ func TestHandleWebSocket_InitialStatusPrecedesBroadcasts(t *testing.T) {
 
 	wsURL, notificationCh := newWebSocketTestServer(t, s)
 
-	// Broadcast remote node_status messages continuously while the client
-	// connects; the first message it reads must still be our own node's.
+	// Broadcast remote node_status messages for as long as the client
+	// connects, so broadcasts race its registration; the first message it
+	// reads must still be our own node's. The fan-out is non-blocking, so on a
+	// slow runner the flood can fill the client's buffer before its write pump
+	// drains it, and the client is evicted by design before it reads anything.
+	// That is not what this test checks, so an eviction before the first read
+	// is a retry, not a failure.
 	stopFlood := make(chan struct{})
 	defer close(stopFlood)
 
@@ -1617,15 +1622,24 @@ func TestHandleWebSocket_InitialStatusPrecedesBroadcasts(t *testing.T) {
 		}
 	}()
 
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	require.NoError(t, err)
+	var data []byte
 
-	defer ws.Close()
+	require.Eventually(t, func() bool {
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			return false
+		}
 
-	require.NoError(t, ws.SetReadDeadline(time.Now().Add(2*time.Second)))
+		defer ws.Close()
 
-	_, data, err := ws.ReadMessage()
-	require.NoError(t, err)
+		if err = ws.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			return false
+		}
+
+		_, data, err = ws.ReadMessage()
+
+		return err == nil // evicted before the first read: try again
+	}, 10*time.Second, 10*time.Millisecond, "never read a first message from a connection that wasn't evicted")
 
 	var msg notificationMsg
 	require.NoError(t, json.Unmarshal(data, &msg))

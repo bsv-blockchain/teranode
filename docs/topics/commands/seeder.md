@@ -147,6 +147,33 @@ Options:
 - `-skipHeaders`: (Optional) Skip processing of headers.
 - `-skipUTXOs`: (Optional) Skip processing of UTXOs.
 
+### Checksum verification
+
+Before reading the headers file and/or the UTXO-set file, the seeder checks
+for a `<file>.sha256` checksum sidecar next to it — the same format the UTXO
+Persister's blob file store, and `bitcointoutxoset`, write alongside every
+snapshot: a hex-encoded SHA-256 digest, optionally followed by the snapshot's
+filename.
+
+- If a sidecar is present and matches, the import proceeds.
+- If a sidecar is present and does **not** match (wrong checksum, or a
+  filename field naming a different snapshot), the seeder refuses to import
+  and returns an error — a corrupted-but-otherwise-well-formed snapshot must
+  never be silently seeded.
+- If no sidecar is present, the import proceeds with only a warning logged;
+  mandating a sidecar for every possible snapshot source isn't realistic, so
+  this is not a fatal condition.
+
+This applies to the headers file even when `-skipHeaders` is set: the UTXO
+pass still reads the headers file back to recover coinbase inputs, so it is
+verified whenever it will be consumed, not only when the header-import pass
+itself runs.
+
+This check is a defense against transfer/storage corruption, not tampering:
+the sidecar itself is unauthenticated, so it cannot detect a snapshot and its
+sidecar being modified together. There is no flag to make the sidecar
+mandatory; a missing sidecar always falls back to a warning.
+
 ## 7. Configuration Options
 
 The Seeder uses various configuration options, which can be set through a configuration system:

@@ -665,6 +665,7 @@ func TestIsPeerUnhealthy_LowReputation(t *testing.T) {
 	resp, err := s.IsPeerUnhealthy(context.Background(), &p2p_api.IsPeerUnhealthyRequest{PeerId: pid.String()})
 	require.NoError(t, err)
 	require.True(t, resp.IsUnhealthy)
+	require.False(t, resp.Unknown, "a registered peer with low reputation is a real verdict, not an absence of information")
 }
 
 func TestIsPeerUnhealthy_UnknownPeer(t *testing.T) {
@@ -673,6 +674,19 @@ func TestIsPeerUnhealthy_UnknownPeer(t *testing.T) {
 	resp, err := s.IsPeerUnhealthy(context.Background(), &p2p_api.IsPeerUnhealthyRequest{PeerId: pid.String()})
 	require.NoError(t, err)
 	require.True(t, resp.IsUnhealthy)
+}
+
+// TestIsPeerUnhealthy_UnknownPeerSetsUnknownField pins the distinction the callers need: a peer
+// absent from the registry sets Unknown alongside the conservative IsUnhealthy=true, so callers can
+// tell "no information about this peer" apart from an actual unhealthy verdict (e.g. low reputation
+// or low success rate, neither of which set Unknown).
+func TestIsPeerUnhealthy_UnknownPeerSetsUnknownField(t *testing.T) {
+	s, _, pid := freshTestServer(t)
+
+	resp, err := s.IsPeerUnhealthy(context.Background(), &p2p_api.IsPeerUnhealthyRequest{PeerId: pid.String()})
+	require.NoError(t, err)
+	require.True(t, resp.IsUnhealthy)
+	require.True(t, resp.Unknown)
 }
 
 func TestRecordCatchupSuccess_InvalidPeerID(t *testing.T) {
