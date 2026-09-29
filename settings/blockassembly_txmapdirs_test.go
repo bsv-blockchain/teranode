@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -92,29 +93,11 @@ func TestSubtreeMmapDir_DefaultEmpty(t *testing.T) {
 // blockassembly_subtreeMmapDir and blockvalidation_subtreeMmapDir -- the subtree
 // half of the same mmap feature -- were on this list and are now wired up.
 //
-// This list must only ever shrink. Delete an entry when you wire the key up.
+// This list must only ever shrink. Delete an entry when you wire the key up
+// (TestKnownDeadKeysAreStillDead fails until you do).
 var knownDeadKeys = map[string]struct{}{
-	"postgres_circuitBreakerEnabled":               {},
-	"postgres_circuitBreakerFailureThreshold":      {},
-	"postgres_circuitBreakerHalfOpenMax":           {},
-	"postgres_circuitBreakerCooldown":              {},
-	"postgres_circuitBreakerFailureWindow":         {},
-	"aerospike_enable_preserve_filter_expressions": {},
-	"blockchain_postgres_pool":                     {},
-	"blockchain_raw_miner_tag":                     {},
-	"blockchain_subscription_timeout":              {},
-	"blockchain_peerRegistryStore":                 {},
-	"blockchain_peerRegistrySaveInterval":          {},
-	"utxostore_postgres_pool":                      {},
-	"p2p_peer_map_max_size":                        {},
-	"p2p_peer_map_ttl":                             {},
-	"p2p_peer_map_cleanup_interval":                {},
-	"p2p_peer_registry_max_size":                   {},
-	"p2p_peer_registry_ttl":                        {},
-	"p2p_peer_registry_cleanup_interval":           {},
-	"legacy_upnp":                                  {},
-	"pruner_skipDuringCatchup":                     {},
-	"pruner_force_ignore_block_persister_height":   {},
+	"blockchain_postgres_pool": {},
+	"utxostore_postgres_pool":  {},
 }
 
 // Guard against the whole class of bug rather than this one instance: every
@@ -146,6 +129,32 @@ func TestNoNewDeadSettingKeys(t *testing.T) {
 
 	require.Empty(t, dead,
 		"these keys are declared on Settings but never read by NewSettings, so configuring them does nothing: %v", dead)
+}
+
+// knownDeadKeys must only ever shrink, but nothing made anyone shrink it: keys
+// were wired up and left on the list, where they would hide the key going dead
+// again. Every entry must still be declared on Settings and still be unread.
+func TestKnownDeadKeysAreStillDead(t *testing.T) {
+	src, err := readSettingsPackageSource()
+	require.NoError(t, err)
+
+	declared := map[string]bool{}
+	for _, key := range collectKeyTags(reflect.TypeOf(Settings{}), map[reflect.Type]bool{}) {
+		declared[key] = true
+	}
+
+	var stale []string
+
+	for key := range knownDeadKeys {
+		if !declared[key] || strings.Contains(src, `("`+key+`"`) {
+			stale = append(stale, key)
+		}
+	}
+
+	sort.Strings(stale)
+
+	require.Empty(t, stale,
+		"these knownDeadKeys entries are read by the settings package or no longer declared on Settings; delete them from the list: %v", stale)
 }
 
 // readSettingsPackageSource concatenates the non-test Go source of this package,
