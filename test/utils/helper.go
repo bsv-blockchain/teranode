@@ -1106,8 +1106,7 @@ func CreateTransactionObject(ctx context.Context, node TeranodeTestClient, addre
 	return CreateTransaction(u, address, amount, privateKey)
 }
 
-//nolint:govet // this needs to be refactored to pass
-func FreezeUtxos(ctx context.Context, testenv TeranodeTestEnv, tx *bt.Tx, logger ulogger.Logger, tSettings *settings.Settings) error {
+func FreezeUtxos(ctx context.Context, testenv *TeranodeTestEnv, tx *bt.Tx, logger ulogger.Logger, tSettings *settings.Settings) error {
 	utxoHash, _ := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
 	spend := &utxo.Spend{
 		TxID:     tx.TxIDChainHash(),
@@ -1125,8 +1124,7 @@ func FreezeUtxos(ctx context.Context, testenv TeranodeTestEnv, tx *bt.Tx, logger
 	return nil
 }
 
-//nolint:govet // this needs to be refactored to pass
-func ReassignUtxo(ctx context.Context, testenv TeranodeTestEnv, firstTx, reassignTx *bt.Tx, logger ulogger.Logger, tSettings *settings.Settings) error {
+func ReassignUtxo(ctx context.Context, testenv *TeranodeTestEnv, firstTx, reassignTx *bt.Tx, logger ulogger.Logger, tSettings *settings.Settings) error {
 	publicKey, err := extractPublicKey(reassignTx.Inputs[0].UnlockingScript.Bytes())
 	if err != nil {
 		return err

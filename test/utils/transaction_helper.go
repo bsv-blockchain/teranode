@@ -179,8 +179,7 @@ func GenerateNewValidMultiInputOutputTransaction(node *TeranodeTestClient, numbe
 }
 
 // GenerateDoubleSpendTransactions generates two transactions spending same input, i.e. double spend transaction
-func GenerateDoubleSpendTransactions(node *TeranodeTestClient) (*[]bt.Tx, error) {
-	transactions := make([]bt.Tx, 2)
+func GenerateDoubleSpendTransactions(node *TeranodeTestClient) ([]*bt.Tx, error) {
 
 	txBuildingKeys, err := GetTxBuildingKeysFromConfig("coinbase_wallet_private_key")
 	if err != nil {
@@ -228,10 +227,7 @@ func GenerateDoubleSpendTransactions(node *TeranodeTestClient) (*[]bt.Tx, error)
 		return nil, errors.NewProcessingError("Error filling transaction inputs: %v", err)
 	}
 
-	transactions[0] = *tx            //nolint:govet // this needs to be refactored to avoid this
-	transactions[1] = *txDoubleSpend //nolint:govet // this needs to be refactored to avoid this
-
-	return &transactions, nil
+	return []*bt.Tx{tx, txDoubleSpend}, nil
 }
 
 // GenerateNewManyInputsSingleOutputTransaction generates a new valid transaction with many inputs and a single output
