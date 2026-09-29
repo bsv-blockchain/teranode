@@ -1597,8 +1597,15 @@ type PeerInfoForCatchup struct {
 	CatchupAttempts        int64                  `protobuf:"varint,6,opt,name=catchup_attempts,json=catchupAttempts,proto3" json:"catchup_attempts,omitempty"`
 	CatchupSuccesses       int64                  `protobuf:"varint,7,opt,name=catchup_successes,json=catchupSuccesses,proto3" json:"catchup_successes,omitempty"`
 	CatchupFailures        int64                  `protobuf:"varint,8,opt,name=catchup_failures,json=catchupFailures,proto3" json:"catchup_failures,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// Locally validated chain progress for this peer. Populated only when
+	// the peer has had header work validated locally via
+	// ReportValidatedChainProgress. Used by the catchup peer gate to prefer
+	// validated work over self-reported height.
+	ValidatedHeight    uint32 `protobuf:"varint,9,opt,name=validated_height,json=validatedHeight,proto3" json:"validated_height,omitempty"`
+	ValidatedBlockHash string `protobuf:"bytes,10,opt,name=validated_block_hash,json=validatedBlockHash,proto3" json:"validated_block_hash,omitempty"`
+	ValidatedChainWork []byte `protobuf:"bytes,11,opt,name=validated_chain_work,json=validatedChainWork,proto3" json:"validated_chain_work,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *PeerInfoForCatchup) Reset() {
@@ -1685,6 +1692,27 @@ func (x *PeerInfoForCatchup) GetCatchupFailures() int64 {
 		return x.CatchupFailures
 	}
 	return 0
+}
+
+func (x *PeerInfoForCatchup) GetValidatedHeight() uint32 {
+	if x != nil {
+		return x.ValidatedHeight
+	}
+	return 0
+}
+
+func (x *PeerInfoForCatchup) GetValidatedBlockHash() string {
+	if x != nil {
+		return x.ValidatedBlockHash
+	}
+	return ""
+}
+
+func (x *PeerInfoForCatchup) GetValidatedChainWork() []byte {
+	if x != nil {
+		return x.ValidatedChainWork
+	}
+	return nil
 }
 
 type GetPeersForCatchupResponse struct {
@@ -2418,8 +2446,14 @@ type PeerRegistryInfo struct {
 	BlocksReceived       int64 `protobuf:"varint,30,opt,name=blocks_received,json=blocksReceived,proto3" json:"blocks_received,omitempty"`
 	SubtreesReceived     int64 `protobuf:"varint,31,opt,name=subtrees_received,json=subtreesReceived,proto3" json:"subtrees_received,omitempty"`
 	TransactionsReceived int64 `protobuf:"varint,32,opt,name=transactions_received,json=transactionsReceived,proto3" json:"transactions_received,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Locally validated chain progress for this peer, populated by
+	// ReportValidatedChainProgress. Zero/empty when no headers have been
+	// validated locally from this peer.
+	ValidatedHeight    uint32 `protobuf:"varint,33,opt,name=validated_height,json=validatedHeight,proto3" json:"validated_height,omitempty"`
+	ValidatedBlockHash string `protobuf:"bytes,34,opt,name=validated_block_hash,json=validatedBlockHash,proto3" json:"validated_block_hash,omitempty"`
+	ValidatedChainWork []byte `protobuf:"bytes,35,opt,name=validated_chain_work,json=validatedChainWork,proto3" json:"validated_chain_work,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *PeerRegistryInfo) Reset() {
@@ -2660,6 +2694,27 @@ func (x *PeerRegistryInfo) GetTransactionsReceived() int64 {
 		return x.TransactionsReceived
 	}
 	return 0
+}
+
+func (x *PeerRegistryInfo) GetValidatedHeight() uint32 {
+	if x != nil {
+		return x.ValidatedHeight
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetValidatedBlockHash() string {
+	if x != nil {
+		return x.ValidatedBlockHash
+	}
+	return ""
+}
+
+func (x *PeerRegistryInfo) GetValidatedChainWork() []byte {
+	if x != nil {
+		return x.ValidatedChainWork
+	}
+	return nil
 }
 
 type GetPeerRegistryResponse struct {
@@ -3006,7 +3061,7 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x1f\n" +
 	"\vpeers_reset\x18\x02 \x01(\x05R\n" +
 	"peersReset\"\x1b\n" +
-	"\x19GetPeersForCatchupRequest\"\xba\x02\n" +
+	"\x19GetPeersForCatchupRequest\"\xc9\x03\n" +
 	"\x12PeerInfoForCatchup\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06height\x18\x02 \x01(\rR\x06height\x12\x1d\n" +
@@ -3017,7 +3072,11 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\x18catchup_reputation_score\x18\x05 \x01(\x01R\x16catchupReputationScore\x12)\n" +
 	"\x10catchup_attempts\x18\x06 \x01(\x03R\x0fcatchupAttempts\x12+\n" +
 	"\x11catchup_successes\x18\a \x01(\x03R\x10catchupSuccesses\x12)\n" +
-	"\x10catchup_failures\x18\b \x01(\x03R\x0fcatchupFailures\"O\n" +
+	"\x10catchup_failures\x18\b \x01(\x03R\x0fcatchupFailures\x12)\n" +
+	"\x10validated_height\x18\t \x01(\rR\x0fvalidatedHeight\x120\n" +
+	"\x14validated_block_hash\x18\n" +
+	" \x01(\tR\x12validatedBlockHash\x120\n" +
+	"\x14validated_chain_work\x18\v \x01(\fR\x12validatedChainWork\"O\n" +
 	"\x1aGetPeersForCatchupResponse\x121\n" +
 	"\x05peers\x18\x01 \x03(\v2\x1b.p2p_api.PeerInfoForCatchupR\x05peers\"W\n" +
 	"\x19ReportValidSubtreeRequest\x12\x17\n" +
@@ -3061,7 +3120,7 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\fis_unhealthy\x18\x01 \x01(\bR\visUnhealthy\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12)\n" +
 	"\x10reputation_score\x18\x03 \x01(\x02R\x0freputationScore\x12\x18\n" +
-	"\aunknown\x18\x04 \x01(\bR\aunknown\"\xf2\t\n" +
+	"\aunknown\x18\x04 \x01(\bR\aunknown\"\x81\v\n" +
 	"\x10PeerRegistryInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06height\x18\x02 \x01(\rR\x06height\x12\x1d\n" +
@@ -3096,7 +3155,10 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\x10catchup_failures\x18\x1d \x01(\x03R\x0fcatchupFailures\x12'\n" +
 	"\x0fblocks_received\x18\x1e \x01(\x03R\x0eblocksReceived\x12+\n" +
 	"\x11subtrees_received\x18\x1f \x01(\x03R\x10subtreesReceived\x123\n" +
-	"\x15transactions_received\x18  \x01(\x03R\x14transactionsReceived\"J\n" +
+	"\x15transactions_received\x18  \x01(\x03R\x14transactionsReceived\x12)\n" +
+	"\x10validated_height\x18! \x01(\rR\x0fvalidatedHeight\x120\n" +
+	"\x14validated_block_hash\x18\" \x01(\tR\x12validatedBlockHash\x120\n" +
+	"\x14validated_chain_work\x18# \x01(\fR\x12validatedChainWork\"J\n" +
 	"\x17GetPeerRegistryResponse\x12/\n" +
 	"\x05peers\x18\x01 \x03(\v2\x19.p2p_api.PeerRegistryInfoR\x05peers\"b\n" +
 	"\x1cRecordBytesDownloadedRequest\x12\x17\n" +

@@ -3351,6 +3351,11 @@ func peerInfoToP2PProto(p *blockchain.PeerInfo) *p2p_api.PeerRegistryInfo {
 		blockHashStr = p.BlockHash.String()
 	}
 
+	validatedBlockHashStr := ""
+	if p.ValidatedBlockHash != nil {
+		validatedBlockHashStr = p.ValidatedBlockHash.String()
+	}
+
 	return &p2p_api.PeerRegistryInfo{
 		Id:                     p.ID,
 		Height:                 p.Height,
@@ -3382,6 +3387,9 @@ func peerInfoToP2PProto(p *blockchain.PeerInfo) *p2p_api.PeerRegistryInfo {
 		BlocksReceived:         p.BlocksReceived,
 		SubtreesReceived:       p.SubtreesReceived,
 		TransactionsReceived:   p.TransactionsReceived,
+		ValidatedHeight:        p.ValidatedHeight,
+		ValidatedBlockHash:     validatedBlockHashStr,
+		ValidatedChainWork:     append([]byte(nil), p.ValidatedChainWork...),
 	}
 }
 

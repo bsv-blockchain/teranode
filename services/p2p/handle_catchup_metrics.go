@@ -314,6 +314,11 @@ func (s *Server) GetPeersForCatchup(ctx context.Context, _ *p2p_api.GetPeersForC
 			blockHashStr = p.BlockHash.String()
 		}
 
+		validatedBlockHashStr := ""
+		if p.ValidatedBlockHash != nil {
+			validatedBlockHashStr = p.ValidatedBlockHash.String()
+		}
+
 		protoPeers = append(protoPeers, &p2p_api.PeerInfoForCatchup{
 			Id:                     p.ID,
 			Height:                 p.Height,
@@ -323,6 +328,9 @@ func (s *Server) GetPeersForCatchup(ctx context.Context, _ *p2p_api.GetPeersForC
 			CatchupAttempts:        p.CatchupAttempts,
 			CatchupSuccesses:       p.CatchupSuccesses,
 			CatchupFailures:        p.CatchupFailures,
+			ValidatedHeight:        p.ValidatedHeight,
+			ValidatedBlockHash:     validatedBlockHashStr,
+			ValidatedChainWork:     append([]byte(nil), p.ValidatedChainWork...),
 		})
 	}
 
