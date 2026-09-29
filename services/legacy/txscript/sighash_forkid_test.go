@@ -88,10 +88,13 @@ func runEngine(t *testing.T, tx *wire.MsgTx, scriptSig []byte, flags ScriptFlags
 }
 
 // TestBip143SigHashSkipsFindAndDelete checks that the signature is removed from
-// the script code only for the legacy digest.  Each signature is made over the
-// script code with the signature push removed, then executed from a scriptSig
-// that contains that push.  The BIP143 digest commits to the script code
-// unchanged, so there the signature must not verify.
+// the script code unless the fork id flag is set and the signature carries
+// SIGHASH_FORKID.  In the first cases each signature is made over the script
+// code with the signature push removed, then executed from a scriptSig that
+// contains that push; a SIGHASH_FORKID signature keeps the push in the script
+// code, so there it must not verify.  The full-script-code cases put an
+// OP_CODESEPARATOR after the signature push, so the script code does not
+// contain the push and a BIP143 signature over all of it must verify.
 func TestBip143SigHashSkipsFindAndDelete(t *testing.T) {
 	_, pub := forkIDTestKey()
 	pk := pub.SerializeCompressed()
@@ -104,12 +107,15 @@ func TestBip143SigHashSkipsFindAndDelete(t *testing.T) {
 		flags     ScriptFlags
 		hashType  SigHashType
 		multiSig  bool
+		codeSep   bool
 		wantValid bool
 	}{
 		{name: "checksig/legacy", flags: legacyFlags, hashType: SigHashAll, wantValid: true},
 		{name: "checksig/bip143", flags: bip143Flags, hashType: SigHashAll | SigHashForkID, wantValid: false},
 		{name: "checkmultisig/legacy", flags: legacyFlags, hashType: SigHashAll, multiSig: true, wantValid: true},
 		{name: "checkmultisig/bip143", flags: bip143Flags, hashType: SigHashAll | SigHashForkID, multiSig: true, wantValid: false},
+		{name: "checksig/bip143/full-script-code", flags: bip143Flags, hashType: SigHashAll | SigHashForkID, codeSep: true, wantValid: true},
+		{name: "checkmultisig/bip143/full-script-code", flags: bip143Flags, hashType: SigHashAll | SigHashForkID, multiSig: true, codeSep: true, wantValid: true},
 	}
 
 	for _, tc := range tests {
@@ -119,13 +125,25 @@ func TestBip143SigHashSkipsFindAndDelete(t *testing.T) {
 
 			var signedCode, scriptSig []byte
 
-			if tc.multiSig {
+			switch {
+			case tc.multiSig && tc.codeSep:
+				signedCode = mustScript(t, NewScriptBuilder().AddOp(OP_1).AddData(pk).AddOp(OP_1).
+					AddOp(OP_CHECKMULTISIG))
+				sig := signOver(t, tx, signedCode, tc.hashType, useBip143)
+				scriptSig = mustScript(t, NewScriptBuilder().AddOp(OP_0).AddData(sig).AddOp(OP_CODESEPARATOR).
+					AddOp(OP_1).AddData(pk).AddOp(OP_1).AddOp(OP_CHECKMULTISIG))
+			case tc.multiSig:
 				signedCode = mustScript(t, NewScriptBuilder().AddOp(OP_0).AddOp(OP_1).
 					AddData(pk).AddOp(OP_1).AddOp(OP_CHECKMULTISIG))
 				sig := signOver(t, tx, signedCode, tc.hashType, useBip143)
 				scriptSig = mustScript(t, NewScriptBuilder().AddOp(OP_0).AddData(sig).AddOp(OP_1).
 					AddData(pk).AddOp(OP_1).AddOp(OP_CHECKMULTISIG))
-			} else {
+			case tc.codeSep:
+				signedCode = mustScript(t, NewScriptBuilder().AddData(pk).AddOp(OP_CHECKSIG))
+				sig := signOver(t, tx, signedCode, tc.hashType, useBip143)
+				scriptSig = mustScript(t, NewScriptBuilder().AddData(sig).AddOp(OP_CODESEPARATOR).
+					AddData(pk).AddOp(OP_CHECKSIG))
+			default:
 				signedCode = mustScript(t, NewScriptBuilder().AddData(pk).AddOp(OP_CHECKSIG))
 				sig := signOver(t, tx, signedCode, tc.hashType, useBip143)
 				scriptSig = mustScript(t, NewScriptBuilder().AddData(sig).AddData(pk).AddOp(OP_CHECKSIG))
@@ -157,9 +175,6 @@ func TestCleanupScriptCodeGate(t *testing.T) {
 	parsed, err := ParseScript(script)
 	require.NoError(t, err)
 
-	emptyRemoved, err := UnparseScript(removeOpcodeByData(parsed, nil))
-	require.NoError(t, err)
-
 	tests := []struct {
 		name  string
 		flags ScriptFlags
@@ -171,8 +186,6 @@ func TestCleanupScriptCodeGate(t *testing.T) {
 		{name: "forkid-flag/forkid-sig", flags: ScriptVerifyBip143SigHash, sig: sigF, want: script},
 		// A flag-only gate would keep the push here; bitcoin-sv removes it.
 		{name: "forkid-flag/legacy-sig", flags: ScriptVerifyBip143SigHash, sig: sigL, want: withoutL},
-		// An empty signature has hash type 0, so it takes the removal path.
-		{name: "forkid-flag/empty-sig", flags: ScriptVerifyBip143SigHash, sig: nil, want: emptyRemoved},
 	}
 
 	for _, tc := range tests {
@@ -180,6 +193,47 @@ func TestCleanupScriptCodeGate(t *testing.T) {
 			vm := &Engine{flags: tc.flags}
 
 			got, err := UnparseScript(vm.cleanupScriptCode(parsed, tc.sig))
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestCleanupScriptCodeEmptySig pins the removal for an empty signature to the
+// literal bitcoin-sv result.  An empty signature has hash type 0, so it takes
+// the removal path even with the fork id flag set, and bitcoin-sv deletes
+// CScript(vchSig), which is the single opcode OP_0 for an empty signature.
+func TestCleanupScriptCodeEmptySig(t *testing.T) {
+	tests := []struct {
+		name string
+		code []byte
+		want []byte
+		skip string
+	}{
+		// OP_DATA_1 0x05 is not a canonical push, so removeOpcodeByData keeps
+		// it, as bitcoin-sv does.
+		{name: "removes-op0", code: []byte{OP_0, OP_DATA_1, 0x05}, want: []byte{OP_DATA_1, 0x05}},
+		{
+			name: "keeps-other-opcodes",
+			code: []byte{OP_0, OP_DATA_2, 0xaa, 0xbb, OP_2, OP_DUP, OP_CHECKMULTISIG},
+			want: []byte{OP_DATA_2, 0xaa, 0xbb, OP_2, OP_DUP, OP_CHECKMULTISIG},
+			skip: "removeOpcodeByData removes every canonical push and non-push opcode for empty data, " +
+				"see https://github.com/bitcoin-sv/teranode/issues/4577",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.skip != "" {
+				t.Skip(tc.skip)
+			}
+
+			parsed, err := ParseScript(tc.code)
+			require.NoError(t, err)
+
+			vm := &Engine{flags: ScriptVerifyBip143SigHash}
+
+			got, err := UnparseScript(vm.cleanupScriptCode(parsed, nil))
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})

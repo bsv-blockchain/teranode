@@ -2387,12 +2387,11 @@ func opcodeCodeSeparator(op *parsedOpcode, vm *Engine) error {
 }
 
 // cleanupScriptCode returns the script code with every push of the passed
-// signature removed, since a signature cannot sign itself.  The removal is
-// skipped when the signature is checked with the BIP143 (SIGHASH_FORKID)
-// digest, which commits to the script code unchanged.  Like CleanupScriptCode
-// in bitcoin-sv src/script/interpreter.cpp, the removal is skipped only when
-// the fork id is enabled AND the signature's own hash type carries
-// SIGHASH_FORKID; an empty signature has hash type 0.
+// signature removed, unless the ScriptVerifyBip143SigHash flag is set and the
+// signature's own hash type carries SIGHASH_FORKID, in which case the script
+// code is returned unchanged.  This is the rule of CleanupScriptCode in
+// bitcoin-sv src/script/interpreter.cpp.  An empty signature has hash type 0,
+// so it always takes the removal path.
 func (vm *Engine) cleanupScriptCode(script []parsedOpcode, sig []byte) []parsedOpcode {
 	var hashType SigHashType
 	if len(sig) > 0 {
@@ -2472,8 +2471,8 @@ func opcodeCheckSig(op *parsedOpcode, vm *Engine) error {
 	// Generate the signature hash based on the signature hash type.
 	var hash []byte
 
-	// Remove the signature from the script code unless it is signed with the
-	// BIP143 digest (see cleanupScriptCode).
+	// Remove the signature from the script code unless the fork id flag is
+	// set and the signature carries SIGHASH_FORKID (see cleanupScriptCode).
 	subScript = vm.cleanupScriptCode(subScript, fullSigBytes)
 
 	sigHashes := NewTxSigHashes(&vm.tx)
