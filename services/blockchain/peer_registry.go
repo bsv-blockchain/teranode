@@ -328,7 +328,7 @@ func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 		// pre-fill every slot and suppress registration of honest peers.
 		// The eviction mirrors Cleanup's LRU+exemption logic so that banned
 		// and connected+active peers are never displaced by a flood of new IDs.
-		if cap := int(r.capMaxSize.Load()); cap > 0 && len(r.peers) >= cap {
+		if maxCap := int(r.capMaxSize.Load()); maxCap > 0 && len(r.peers) >= maxCap {
 			ttl := time.Duration(r.capTTL.Load())
 			r.evictOldestNonBannedLocked(now, ttl)
 		}
