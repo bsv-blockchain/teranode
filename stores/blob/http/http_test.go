@@ -459,3 +459,17 @@ func TestNew_ExplicitEmptyTokenSuppressesFallback(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "leak", store.authToken)
 }
+
+// TestNew_FallbackTokenIsTrimmed pins that the standalone-tool fallback trims the token the
+// same way Settings.BlobHTTPAuthToken does, so it still matches a server that read the same
+// secret file.
+func TestNew_FallbackTokenIsTrimmed(t *testing.T) {
+	t.Setenv("blob_httpAuthToken", "  fallback-token\n")
+
+	storeURL, err := url.Parse("http://localhost:8080")
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, storeURL)
+	require.NoError(t, err)
+	require.Equal(t, "fallback-token", store.authToken)
+}

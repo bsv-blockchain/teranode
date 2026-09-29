@@ -47,7 +47,9 @@ func Redact(s *Settings) (*Settings, error) {
 // RedactConfigStats masks the value of every sensitive key in the text produced by
 // gocore.Config().Stats(). That dump lists every settings-file key, one per line as
 // "key=value" or "key[context]=value", and masks only encrypted values on its own, so a
-// secret set in a settings file would otherwise reach the log in clear. Every other line
+// secret set in a settings file would otherwise reach the log in clear. The value of every
+// other line is passed through the same structural URL redaction the settings portal uses,
+// so credentials inside a URL-valued setting are masked too; a line with nothing to redact
 // is returned unchanged.
 func RedactConfigStats(stats string) string {
 	sensitive := extractSensitiveKeys()
@@ -66,7 +68,12 @@ func RedactConfigStats(stats string) string {
 
 		if sensitive[key] {
 			lines[i] = line[:eq+1] + redactedValue
+			continue
 		}
+
+		// A store URL carries its credentials where no key name can flag them
+		// (postgres://user:pass@host/db, aerospike userinfo, a credential query parameter).
+		lines[i] = line[:eq+1] + redactURLString(line[eq+1:])
 	}
 
 	return strings.Join(lines, "\n")
@@ -74,8 +81,10 @@ func RedactConfigStats(stats string) string {
 
 // RedactConfigMap returns a copy of m, as produced by gocore.Config().GetAll(), with the
 // value of every sensitive key masked. Map keys carry the settings context after the first
-// dot ("rpc_pass.docker"), so the part before it is what is matched. The input is not
-// modified.
+// dot ("rpc_pass.docker"), so the part before it is what is matched. Every other value is
+// passed through the same structural URL redaction the settings portal uses, so credentials
+// inside a URL-valued setting are masked too; a value with nothing to redact is copied
+// unchanged. The input is not modified.
 func RedactConfigMap(m map[string]string) map[string]string {
 	sensitive := extractSensitiveKeys()
 
@@ -84,6 +93,8 @@ func RedactConfigMap(m map[string]string) map[string]string {
 		base, _, _ := strings.Cut(k, ".")
 		if sensitive[base] {
 			v = redactedValue
+		} else {
+			v = redactURLString(v)
 		}
 
 		out[k] = v

@@ -37,6 +37,9 @@ import (
 const (
 	blobURLFormat        = "%s/blob/%s?%s"
 	blobURLFormatWithDAH = blobURLFormat + "&dah=%d"
+
+	// bearerScheme prefixes the shared secret in the Authorization header of every mutating request.
+	bearerScheme = "Bearer "
 )
 
 // HTTPStore implements the blob.Store interface by making HTTP requests to a remote
@@ -96,7 +99,9 @@ func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) 
 	if !storeOpts.HTTPAuthTokenSet {
 		// Fallback for the standalone tools that build a store without passing the option. It
 		// reads the process context only, which is the context those tools build settings with.
+		// Trimmed as Settings.BlobHTTPAuthToken is, so both sides agree on a token read from a file.
 		authToken, _ = gocore.Config().Get("blob_httpAuthToken", "")
+		authToken = strings.TrimSpace(authToken)
 	}
 
 	// A token in the URL would be logged: store URLs are printed verbatim by callers. Refuse
@@ -300,7 +305,7 @@ func (s *HTTPStore) SetFromReader(ctx context.Context, key []byte, fileType file
 	req.Header.Set("Content-Type", "application/octet-stream")
 
 	if s.authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+s.authToken)
+		req.Header.Set("Authorization", bearerScheme+s.authToken)
 	}
 
 	resp, err := s.httpClient.Do(req)
@@ -345,7 +350,7 @@ func (s *HTTPStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.
 	}
 
 	if s.authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+s.authToken)
+		req.Header.Set("Authorization", bearerScheme+s.authToken)
 	}
 
 	resp, err := s.httpClient.Do(req)
@@ -384,7 +389,7 @@ func (s *HTTPStore) Del(ctx context.Context, key []byte, fileType fileformat.Fil
 	}
 
 	if s.authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+s.authToken)
+		req.Header.Set("Authorization", bearerScheme+s.authToken)
 	}
 
 	resp, err := s.httpClient.Do(req)
