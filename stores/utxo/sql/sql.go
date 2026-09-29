@@ -1424,10 +1424,9 @@ func (s *Store) updateParentConflictingChildren(ctx context.Context, transaction
 func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
 	// GetMeta reads one transaction and is called infrequently, so it goes
 	// straight to the unbatched path rather than waiting out a batcher window.
-	// The two paths now return the same shape for utxo.MetaFields: neither
-	// attaches Data.Tx for fields.TxInpoints. The one difference left is that
-	// getUnbatched returns a NewTxInpointsFromInputs error where
-	// batchDecorateChunk discards it.
+	// The two paths return the same shape for utxo.MetaFields: neither
+	// attaches Data.Tx for fields.TxInpoints, and both report a
+	// NewTxInpointsFromInputs error.
 	result, err := s.getUnbatched(ctx, hash, utxo.MetaFields)
 	if err != nil {
 		return err
@@ -1826,7 +1825,7 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 	}
 
 	if contains(bins, fields.TxInpoints) {
-		data.TxInpoints, err = subtree.NewTxInpointsFromInputs(tx.Inputs)
+		data.TxInpoints, err = newTxInpointsFromInputs(tx.Inputs)
 		if err != nil {
 			return nil, errors.NewProcessingError("failed to create tx inpoints from inputs", err)
 		}
@@ -3829,6 +3828,10 @@ type batchDecorateTxRow struct {
 	hash     chainhash.Hash
 }
 
+// newTxInpointsFromInputs is subtree.NewTxInpointsFromInputs, shared by both
+// read paths; a variable so tests can make it fail.
+var newTxInpointsFromInputs = subtree.NewTxInpointsFromInputs
+
 // batchDecorateChunk fetches metadata for a chunk of transactions using bulk queries.
 // It runs one query per table (transactions, inputs, block_ids, outputs) rather than
 // one query per transaction per table.
@@ -3970,7 +3973,18 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 		}
 
 		if contains(bins, fields.TxInpoints) && row.data.Tx != nil && len(row.data.Tx.Inputs) > 0 {
-			row.data.TxInpoints, _ = subtree.NewTxInpointsFromInputs(row.data.Tx.Inputs)
+			txInpoints, err := newTxInpointsFromInputs(row.data.Tx.Inputs)
+			if err != nil {
+				// Fail the items the way getUnbatched fails the call, rather
+				// than returning empty TxInpoints with no error.
+				for _, item := range matchedItems {
+					item.Err = errors.NewProcessingError("failed to create tx inpoints from inputs", err)
+				}
+
+				continue
+			}
+
+			row.data.TxInpoints = txInpoints
 		}
 
 		// Replaces the scratch Tx that batchDecorateInputs and
