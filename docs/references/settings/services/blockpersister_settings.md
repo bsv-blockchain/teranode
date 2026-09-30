@@ -125,17 +125,20 @@ POST, PATCH and DELETE on the blob HTTP API now return 401 until `blockpersister
 is set on the server and the same value is set as `blob_httpAuthToken` on each client. Reads
 (GET, HEAD, `/health`) are unaffected.
 
+The HTTP blob client reports a 401 as a configuration error. The pruner keeps deletions for that
+store queued and logs an error on each pass until the tokens match, instead of retrying and
+dropping them.
+
 ### Overwrite over the HTTP blob API
 
-`allowOverwrite` is neither sent by the HTTP blob client nor honoured by the blob server:
-whether an existing blob may be replaced is the receiving store's policy. A client write that
-requests overwrite fails with a configuration error before anything is sent, and a write to a
-key that already exists is returned as `ErrBlobAlreadyExists`.
+`allowOverwrite` is sent only on a POST (`options.WithAllowOverwrite(true)`) and honoured only
+for a caller presenting the matching token. An unauthenticated caller cannot write at all.
+Without the flag, a write to a key that already exists is answered 409 and returned as
+`ErrBlobAlreadyExists`.
 
-Consequence: the UTXO persister, and any other caller that replaces an existing blob (the
-`lastProcessed` marker, the set-hash sidecar, checkpoints, seed packages, subtree re-writes,
-the peer registry snapshot), cannot run against an `http://` blob store. Point it at the store
-directly.
+Callers that replace blobs (the UTXO persister's `lastProcessed` marker, the set-hash sidecar,
+checkpoints, seed packages, subtree re-writes, the peer registry snapshot) work over an
+`http://` blob store once both tokens are set.
 
 ### Settings Reorganization
 

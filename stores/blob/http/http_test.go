@@ -383,17 +383,40 @@ func TestHTTPStore_SendsTokenOnWritesOnly(t *testing.T) {
 	require.Empty(t, seen[http.MethodHead], "reads must not carry the credential")
 }
 
-// TestHTTPStore_SetWithAllowOverwriteIsConfigurationError pins that an overwrite request fails
-// loudly before anything is sent, rather than being dropped on the way to a server that would
-// accept the first write and refuse every later one.
-func TestHTTPStore_SetWithAllowOverwriteIsConfigurationError(t *testing.T) {
-	var hits atomic.Int64
+// TestHTTPStore_AllowOverwriteSentOnPostOnly pins where the overwrite flag goes on the wire: on
+// a POST that asked for it, and nowhere else. The server honours it only for an authenticated
+// caller.
+func TestHTTPStore_AllowOverwriteSentOnPostOnly(t *testing.T) {
+	var mu sync.Mutex
+
+	seen := map[string]string{}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
-		w.WriteHeader(http.StatusCreated)
+		mu.Lock()
+		seen[r.Method] = r.URL.Query().Get(options.AllowOverwriteQueryParam)
+		mu.Unlock()
+
+		switch r.Method {
+		case http.MethodPost:
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("test data"))
+		}
 	}))
 	defer server.Close()
+
+	seenFor := func(method string) (string, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		value, ok := seen[method]
+		delete(seen, method)
+
+		return value, ok
+	}
 
 	storeURL, err := url.Parse(server.URL)
 	require.NoError(t, err)
@@ -401,9 +424,71 @@ func TestHTTPStore_SetWithAllowOverwriteIsConfigurationError(t *testing.T) {
 	store, err := New(ulogger.TestLogger{}, storeURL, options.WithHTTPAuthToken("t"))
 	require.NoError(t, err)
 
-	err = store.Set(context.Background(), []byte("k"), fileformat.FileTypeTesting, []byte("v"), options.WithAllowOverwrite(true))
-	require.ErrorIs(t, err, errors.ErrConfiguration)
-	require.Zero(t, hits.Load(), "nothing must be sent for a write that cannot be honoured")
+	ctx := context.Background()
+	key := []byte("k")
+	overwrite := options.WithAllowOverwrite(true)
+
+	require.NoError(t, store.Set(ctx, key, fileformat.FileTypeTesting, []byte("v"), overwrite))
+
+	value, ok := seenFor(http.MethodPost)
+	require.True(t, ok)
+	require.Equal(t, "true", value, "a POST that asks for overwrite must carry the flag")
+
+	require.NoError(t, store.Set(ctx, key, fileformat.FileTypeTesting, []byte("v")))
+
+	value, ok = seenFor(http.MethodPost)
+	require.True(t, ok)
+	require.Empty(t, value, "a POST that does not ask for overwrite must not carry the flag")
+
+	_, err = store.Get(ctx, key, fileformat.FileTypeTesting, overwrite)
+	require.NoError(t, err)
+
+	_, err = store.Exists(ctx, key, fileformat.FileTypeTesting, overwrite)
+	require.NoError(t, err)
+
+	require.NoError(t, store.SetDAH(ctx, key, fileformat.FileTypeTesting, 1000, overwrite))
+	require.NoError(t, store.Del(ctx, key, fileformat.FileTypeTesting, overwrite))
+
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPatch, http.MethodDelete} {
+		value, ok := seenFor(method)
+		require.True(t, ok, "%s must have reached the server", method)
+		require.Empty(t, value, "%s must never carry the overwrite flag", method)
+	}
+}
+
+// TestHTTPStore_UnauthorizedIsConfigurationError pins that a 401 is classifiable: it means this
+// client and the server do not share a token, which no retry can fix. The token never appears in
+// the error.
+func TestHTTPStore_UnauthorizedIsConfigurationError(t *testing.T) {
+	const token = "secret-value"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	storeURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, storeURL, options.WithHTTPAuthToken(token))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	key := []byte("k")
+
+	calls := map[string]func() error{
+		"Set":    func() error { return store.Set(ctx, key, fileformat.FileTypeTesting, []byte("v")) },
+		"SetDAH": func() error { return store.SetDAH(ctx, key, fileformat.FileTypeTesting, 1000) },
+		"Del":    func() error { return store.Del(ctx, key, fileformat.FileTypeTesting) },
+	}
+
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			err := call()
+			require.ErrorIs(t, err, errors.ErrConfiguration)
+			require.NotContains(t, err.Error(), token, "the error must not echo the credential")
+		})
+	}
 }
 
 // TestHTTPStore_ConflictIsBlobAlreadyExists pins that a 409 is classifiable by callers.
@@ -441,6 +526,7 @@ func TestHTTPStore_StatusErrorHasNoStrayParam(t *testing.T) {
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), "EXTRA")
 	require.Contains(t, err.Error(), "500")
+	require.False(t, errors.Is(err, errors.ErrConfiguration), "only a 401 is a configuration error")
 }
 
 // TestNew_ExplicitEmptyTokenSuppressesFallback pins that the blob_httpAuthToken fallback only

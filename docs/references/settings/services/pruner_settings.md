@@ -283,7 +283,7 @@ Limits deletions per cycle to prevent overwhelming the blob store. Remaining del
 
 **Environment Variable**: `pruner_blobDeletionMaxRetries`
 
-**Description**: Maximum retry attempts for failed blob deletions
+**Description**: Maximum retry attempts for failed blob deletions. A deletion refused as a configuration error (for example an HTTP blob store answering 401) is not counted against this limit: it stays queued and is logged as an error until the configuration is fixed.
 
 ### pruner_skipPreserveParents
 

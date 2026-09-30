@@ -16,7 +16,7 @@
 // provides a RESTful API that follows standard HTTP conventions:
 //   - GET /blob/{key}.{fileType} - Retrieve a blob
 //   - HEAD /blob/{key}.{fileType} - Check if a blob exists
-//   - POST /blob/{key}.{fileType} - Store a new blob (requires Authorization: Bearer)
+//   - POST /blob/{key}.{fileType} - Store a blob (requires Authorization: Bearer; replaces an existing one only when the request sets allowOverwrite=true)
 //   - PATCH /blob/{key}.{fileType} - Update blob's Delete-At-Height value (requires Authorization: Bearer)
 //   - DELETE /blob/{key}.{fileType} - Delete a blob (requires Authorization: Bearer)
 //   - GET /health - Health check endpoint
@@ -131,7 +131,7 @@ func (s *HTTPBlobServer) Start(ctx context.Context, addr string) error {
 // - GET /health: Health check endpoint
 // - GET /blob/{key}.{fileType}: Retrieve a blob
 // - HEAD /blob/{key}.{fileType}: Check if a blob exists
-// - POST /blob/{key}.{fileType}: Store a new blob
+// - POST /blob/{key}.{fileType}: Store a blob; replaces an existing one only for an authenticated request that sets allowOverwrite=true
 // - PATCH /blob/{key}.{fileType}: Update blob's Delete-At-Height value
 // - DELETE /blob/{key}.{fileType}: Delete a blob
 //
@@ -567,7 +567,10 @@ func parseRangePosition(s string) (int64, bool) {
 // The function handles errors by returning appropriate HTTP status codes:
 // - 201 Created for successful storage operations
 // - 400 Bad Request if the key cannot be extracted from the path
+// - 409 Conflict if the blob exists and no authenticated overwrite was requested
 // - 500 Internal Server Error for storage failures
+//
+// A 401 Unauthorized is answered by ServeHTTP before this handler runs.
 //
 // Parameters:
 //   - w: HTTP response writer for sending the storage operation response
@@ -578,6 +581,14 @@ func (s *HTTPBlobServer) handleSet(w http.ResponseWriter, r *http.Request, opts 
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	// Overwrite is the one option read here rather than in QueryToFileOptions, because it is
+	// honoured only for a caller holding the shared secret. That grants nothing the secret does
+	// not already grant - the same caller may DELETE the blob and POST it again. The token is
+	// checked again so this does not depend on the gate in ServeHTTP staying in front of it.
+	if r.URL.Query().Get(options.AllowOverwriteQueryParam) == "true" && s.authorizeMutation(r) {
+		opts = append(opts, options.WithAllowOverwrite(true))
 	}
 
 	// The opts from QueryToFileOptions intentionally do not include DAH from the sender.

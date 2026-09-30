@@ -800,7 +800,18 @@ func executeHTTPRequestWithClient(ctx context.Context, cancelFn context.CancelFu
 	// the binary payload, and reject the request with HTTP 400 — degrading peer
 	// catchup reputation across the network.
 	if len(requestBody) > 0 && requestBody[0] != nil {
-		req.Body = io.NopCloser(bytes.NewReader(requestBody[0]))
+		body := requestBody[0]
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		// GetBody lets net/http resend the body on a fresh connection when an HTTP/2 stream is
+		// refused or its connection goes away, or when a reused HTTP/1.1 connection fails before
+		// anything was written - failures a caller would otherwise charge to the peer. It would
+		// equally let net/http replay the body across a 307 or 308, which ssrfCheckRedirect refuses
+		// for every request that is not a plain read, unconditionally; httpClient is the only client
+		// that reaches here with a body. It is set here, where the body is built, and not by the
+		// signer: signing must not change what the client does with the request.
+		req.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(body)), nil
+		}
 		req.Method = http.MethodPost
 		req.Header.Set("Content-Type", "application/octet-stream")
 	}

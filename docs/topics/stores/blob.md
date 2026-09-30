@@ -209,15 +209,15 @@ The Blob Store includes a comprehensive HTTP REST API server implementation (`HT
 - **GET /health**: Health check endpoint returning server status
 - **HEAD /blob/{key}.{fileType}**: Check if a blob exists without retrieving content
 - **GET /blob/{key}.{fileType}**: Retrieve blob by key with optional Range header support for partial content
-- **POST /blob/{key}.{fileType}**: Store new blob data with streaming support
+- **POST /blob/{key}.{fileType}**: Store blob data with streaming support; replaces an existing blob only for an authenticated request that sets `allowOverwrite=true`
 - **PATCH /blob/{key}.{fileType}**: Update blob's Delete-At-Height value via `dah` query parameter
 - **DELETE /blob/{key}.{fileType}**: Delete blob by key
 
 POST, PATCH and DELETE require an `Authorization: Bearer <token>` header matching the shared
 secret the server was constructed with. An empty secret leaves the server read-only and refuses
-all three with 401. Reads and the health endpoint need no credential. Overwrite is not available
-over this API: an existing blob is answered with 409, and an HTTP client write that asks for
-overwrite fails with a configuration error before anything is sent.
+all three with 401. Reads and the health endpoint need no credential. An existing blob is
+answered with 409 unless an authenticated POST sets `allowOverwrite=true`. The HTTP client
+returns a 409 as `ErrBlobAlreadyExists` and a 401 as a configuration error.
 
 #### Usage Example
 

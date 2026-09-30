@@ -65,6 +65,13 @@ func refuseBlobRedirect(req *http.Request, _ []*http.Request) error {
 	return errors.NewInvalidArgumentError("blob http store: refusing to follow a redirect to %s", req.URL.Redacted())
 }
 
+// errUnauthorized reports a 401 from the blob server. It sends one only when this client and
+// the server do not share a token - none configured on the server, or none or a different one
+// here - so it is a configuration error, never a transient failure a caller should retry.
+func errUnauthorized(op string) error {
+	return errors.NewConfigurationError("[HTTPStore] %s refused with status code 401: blob_httpAuthToken must match the blob server's blockpersister_httpAuthToken", op)
+}
+
 // New creates a new HTTP blob store client that connects to a remote blob server.
 //
 // The HTTP blob store translates blob operations into HTTP requests to the specified
@@ -252,9 +259,9 @@ func (s *HTTPStore) GetIoReader(ctx context.Context, key []byte, fileType filefo
 //   - value: The blob data to store
 //   - opts: Optional file options
 //
-// Overwrite is not available over the HTTP blob API: a call with WithAllowOverwrite(true) fails
-// with a configuration error before anything is sent, and a blob that already exists is
-// reported as ErrBlobAlreadyExists. See SetFromReader.
+// WithAllowOverwrite(true) asks the server to replace an existing blob, and the server honours
+// it only for an authenticated caller. Without it, a 409 is returned as ErrBlobAlreadyExists;
+// a 401 is returned as a configuration error. See SetFromReader.
 //
 // Returns:
 //   - error: Any error that occurred during the operation
@@ -277,24 +284,25 @@ func (s *HTTPStore) Set(ctx context.Context, key []byte, fileType fileformat.Fil
 //   - value: Reader providing the blob data
 //   - opts: Optional file options
 //
-// The server does not take an overwrite request from the caller: whether an existing blob may be
-// replaced is the receiving store's policy. Rather than drop WithAllowOverwrite(true) silently -
-// which lets the first write succeed and refuses every later one - this returns a configuration
-// error before anything is sent. A 409 from the server is returned as ErrBlobAlreadyExists.
+// WithAllowOverwrite(true) asks the server to replace an existing blob, and the server honours
+// it only for an authenticated caller. Without it, a 409 from the server is returned as
+// ErrBlobAlreadyExists. A 401 - this client and the server do not share a token - is returned
+// as a configuration error.
 //
 // Returns:
 //   - error: Any error that occurred during the operation
 func (s *HTTPStore) SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, value io.ReadCloser, opts ...options.FileOption) error {
-	if options.NewFileOptions(opts...).AllowOverwrite {
-		return errors.NewConfigurationError("[HTTPStore] overwrite is not available over the HTTP blob API: whether an existing blob may be replaced is the receiving store's policy")
-	}
-
 	encodedKey := base64.URLEncoding.EncodeToString(key) + "." + fileType.String()
 
 	// NOTE: Any WithDeleteAt(dah) in opts is serialized as the "dah" query param for
 	// diagnostics only. The receiving node does NOT use the sender's DAH — it applies its
 	// own retention policy via its local BlockHeightRetention setting. See QueryToFileOptions.
 	query := options.FileOptionsToQuery(fileType, opts...)
+	if options.NewFileOptions(opts...).AllowOverwrite {
+		// Only a POST carries it, and the server honours it only for an authenticated caller.
+		query.Set(options.AllowOverwriteQueryParam, "true")
+	}
+
 	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode())
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, value)
@@ -316,6 +324,10 @@ func (s *HTTPStore) SetFromReader(ctx context.Context, key []byte, fileType file
 
 	if resp.StatusCode == http.StatusConflict {
 		return errors.NewBlobAlreadyExistsError("[HTTPStore] SetFromReader: blob already exists")
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return errUnauthorized("SetFromReader")
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
@@ -359,6 +371,10 @@ func (s *HTTPStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		return errUnauthorized("SetDAH")
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return errors.NewStorageError("[HTTPStore] SetTTL failed with status code %d", resp.StatusCode)
 	}
@@ -368,6 +384,8 @@ func (s *HTTPStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.
 
 // Del deletes a blob from the remote blob store.
 // This operation is idempotent - deleting a non-existent blob (404) is treated as success.
+// A 401 - this client and the server do not share a token - is returned as a configuration
+// error, not a storage error: retrying cannot fix it.
 //
 // Parameters:
 //   - ctx: Context for the operation
@@ -401,6 +419,10 @@ func (s *HTTPStore) Del(ctx context.Context, key []byte, fileType fileformat.Fil
 	// Treat 404 Not Found as success (idempotent deletion)
 	if resp.StatusCode == http.StatusNotFound {
 		return nil
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return errUnauthorized("Del")
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {

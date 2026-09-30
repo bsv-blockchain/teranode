@@ -3,6 +3,7 @@ package util
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -19,15 +20,6 @@ import (
 // error comes back at all, and any other failure mode carries a different message.
 const redirectRefusal = "refusing to follow a redirect of a POST"
 
-// status307 is the substring buildHTTPError produces when net/http hands back the original
-// 307 response instead of following it. Every branch of buildHTTPError formats
-// "http request [%s] returned status code [%d]", so this is the whole status-code clause.
-const status307 = "returned status code [307]"
-
-// notReplayableReason explains what the 307 subtests below actually pin, so they are not
-// "simplified" into duplicates of the 302 ones.
-const notReplayableReason = "a 307 must fail on the unreplayable body before CheckRedirect is reached, not via the redirect policy"
-
 // TestDoHTTPRequestBodyReader_POSTRedirectNotReplayedToOtherOrigin is the regression test
 // issue 4841 asks for: the missing-transaction helper posts a body built from peer-supplied
 // data, and a peer answering with a redirect must not get that body delivered to an origin of
@@ -35,19 +27,11 @@ const notReplayableReason = "a 307 must fail on the unreplayable body before Che
 // signing must not change what the client does with the request - and with SSRF protection
 // turned off, which is how test topologies reach loopback.
 //
-// Two statuses are covered because they exercise two independent defences, and neither
-// substitutes for the other:
-//
-//   - 302 exercises ssrfCheckRedirect. The default client follows a 302, converting the POST
-//     to a GET, so CheckRedirect is consulted and its POST refusal is what stops the hop.
-//     A 307 would prove nothing about the redirect policy here.
-//   - 307 exercises the no-GetBody defence. This path builds the body with
-//     req.Body = io.NopCloser(...) and leaves GetBody nil, and net/http's redirectBehavior
-//     declines a 307 outright when GetBody == nil && outgoingLength() != 0
-//     (net/http/client.go, "case 307, 308"), returning the 307 response rather than
-//     consulting CheckRedirect at all. The 307 subtests assert exactly that shape - the
-//     status-code error, and NOT the redirect-policy message - so they fail if anything ever
-//     reinstalls GetBody on this path, which is the regression issue 4841 closes.
+// This path sets GetBody on the request, so net/http consults CheckRedirect for 301, 302 and
+// 303 and also for 307 and 308 (net/http/client.go, redirectBehavior). Every status is
+// therefore stopped by ssrfCheckRedirect's refusal of a redirect of a request that is not a
+// plain read. The 307 and 308 subtests are the ones that would replay the body verbatim to the
+// redirect target if that refusal were removed.
 func TestDoHTTPRequestBodyReader_POSTRedirectNotReplayedToOtherOrigin(t *testing.T) {
 	var victimHits atomic.Int64
 
@@ -72,6 +56,11 @@ func TestDoHTTPRequestBodyReader_POSTRedirectNotReplayedToOtherOrigin(t *testing
 		http.Redirect(w, r, victim.URL+"/blob/x", http.StatusTemporaryRedirect)
 	}))
 	defer redirector307.Close()
+
+	redirector308 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, victim.URL+"/blob/x", http.StatusPermanentRedirect)
+	}))
+	defer redirector308.Close()
 
 	const directBody = "direct-answer"
 
@@ -116,77 +105,46 @@ func TestDoHTTPRequestBodyReader_POSTRedirectNotReplayedToOtherOrigin(t *testing
 		require.Equal(t, directBody, string(read), "the harness must reach a POST handler at all")
 	})
 
-	t.Run("302 without signer", func(t *testing.T) {
-		// Installed explicitly rather than assuming a clean start: other tests in this
-		// package install a real signer permanently.
-		SetHTTPRequestSigner(NewEd25519RequestSigner(nil))
+	redirectors := []struct {
+		status int
+		server *httptest.Server
+	}{
+		{status: http.StatusFound, server: redirector},
+		{status: http.StatusTemporaryRedirect, server: redirector307},
+		{status: http.StatusPermanentRedirect, server: redirector308},
+	}
 
-		victimHits.Store(0)
+	for _, redirect := range redirectors {
+		for _, withSigner := range []bool{false, true} {
+			name := fmt.Sprintf("%d without signer", redirect.status)
+			if withSigner {
+				name = fmt.Sprintf("%d with signer", redirect.status)
+			}
 
-		reader, err := DoHTTPRequestBodyReader(context.Background(), redirector.URL+"/txs", body)
-		if reader != nil {
-			_ = reader.Close()
+			t.Run(name, func(t *testing.T) {
+				if withSigner {
+					privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+					require.NoError(t, err)
+
+					SetHTTPRequestSigner(NewEd25519RequestSigner(privKey))
+				} else {
+					// Installed explicitly rather than assuming a clean start: other tests in
+					// this package install a real signer permanently.
+					SetHTTPRequestSigner(NewEd25519RequestSigner(nil))
+				}
+
+				victimHits.Store(0)
+
+				reader, err := DoHTTPRequestBodyReader(context.Background(), redirect.server.URL+"/txs", body)
+				if reader != nil {
+					_ = reader.Close()
+				}
+
+				require.Error(t, err)
+				require.Contains(t, err.Error(), redirectRefusal, "the redirect policy must be what rejected this, not an incidental transport failure")
+				require.Zero(t, victimHits.Load(), "the redirect target must never be contacted")
+				require.Nil(t, victimBody.Load(), "the body must never reach the redirect target")
+			})
 		}
-
-		require.Error(t, err)
-		require.Contains(t, err.Error(), redirectRefusal, "the redirect policy must be what rejected this, not an incidental transport failure")
-		require.Zero(t, victimHits.Load(), "the redirect target must never be contacted")
-		require.Nil(t, victimBody.Load(), "the body must never reach the redirect target")
-	})
-
-	t.Run("307 without signer", func(t *testing.T) {
-		SetHTTPRequestSigner(NewEd25519RequestSigner(nil))
-
-		victimHits.Store(0)
-
-		reader, err := DoHTTPRequestBodyReader(context.Background(), redirector307.URL+"/txs", body)
-		if reader != nil {
-			_ = reader.Close()
-		}
-
-		require.Error(t, err)
-		require.Contains(t, err.Error(), status307, notReplayableReason)
-		require.NotContains(t, err.Error(), redirectRefusal, notReplayableReason)
-		require.Zero(t, victimHits.Load(), "the redirect target must never be contacted")
-		require.Nil(t, victimBody.Load(), "the body must never reach the redirect target")
-	})
-
-	t.Run("302 with signer", func(t *testing.T) {
-		privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
-		require.NoError(t, err)
-
-		SetHTTPRequestSigner(NewEd25519RequestSigner(privKey))
-
-		victimHits.Store(0)
-
-		reader, err := DoHTTPRequestBodyReader(context.Background(), redirector.URL+"/txs", body)
-		if reader != nil {
-			_ = reader.Close()
-		}
-
-		require.Error(t, err)
-		require.Contains(t, err.Error(), redirectRefusal, "the redirect policy must be what rejected this, not an incidental transport failure")
-		require.Zero(t, victimHits.Load(), "installing a signer must not change redirect semantics")
-		require.Nil(t, victimBody.Load(), "the signed body must never reach the redirect target")
-	})
-
-	t.Run("307 with signer", func(t *testing.T) {
-		privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
-		require.NoError(t, err)
-
-		SetHTTPRequestSigner(NewEd25519RequestSigner(privKey))
-
-		victimHits.Store(0)
-
-		reader, err := DoHTTPRequestBodyReader(context.Background(), redirector307.URL+"/txs", body)
-		if reader != nil {
-			_ = reader.Close()
-		}
-
-		require.Error(t, err)
-		require.Contains(t, err.Error(), status307, notReplayableReason)
-		require.NotContains(t, err.Error(), redirectRefusal, notReplayableReason)
-		require.Zero(t, victimHits.Load(), "the redirect target must never be contacted")
-		require.Nil(t, victimBody.Load(), "the signed body must never reach the redirect target")
-	})
+	}
 }

@@ -274,6 +274,12 @@ func MergeOptions(storeOpts *Options, fileOpts []FileOption) *Options {
 	return options
 }
 
+// AllowOverwriteQueryParam is the query key an HTTP blob client sets on a POST that asks to
+// replace an existing blob. Only HTTPBlobServer.handleSet reads it, and only for a caller that
+// presented the shared secret; FileOptionsToQuery never emits it and QueryToFileOptions never
+// reads it, so no other request can carry or honour it.
+const AllowOverwriteQueryParam = "allowOverwrite"
+
 // FileOptionsToQuery converts FileOptions to URL query parameters
 // FileOptionsToQuery converts FileOptions to URL query parameters.
 // This is useful for transmitting blob options over HTTP or other URL-based protocols.
@@ -321,12 +327,10 @@ func FileOptionsToQuery(fileType fileformat.FileType, opts ...FileOption) url.Va
 // treated as an absolute DAH value (not a relative retention window). It is not sent in
 // normal peer-to-peer blob transfers; it exists for explicit override scenarios only.
 //
-// Overwrite is deliberately NOT reconstructed from the query. Whether an existing blob may be
-// replaced is the receiving store's policy, never the caller's - honouring it from a query string
-// let anyone who could reach this endpoint replace any object it holds. The HTTP client refuses an
-// overwrite request with a configuration error rather than dropping it silently (see
-// HTTPStore.SetFromReader). The "filename" key is
-// still honoured; sanitising it is tracked separately in #4847.
+// Overwrite is deliberately NOT reconstructed here: this runs for every method, before the
+// caller is known. HTTPBlobServer.handleSet reads AllowOverwriteQueryParam itself and honours
+// it only for a caller that passed the bearer-token check. The "filename" key is still
+// honoured; sanitising it is tracked separately in #4847.
 //
 // Parameters:
 //   - query: URL query parameters to convert

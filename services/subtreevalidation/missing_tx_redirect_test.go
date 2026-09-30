@@ -3,6 +3,7 @@ package subtreevalidation
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -40,15 +41,6 @@ const redirectRefusal = "refusing to follow a redirect of a POST"
 // anyone tempted to reduce these checks to "an error came back".
 const assertRefusalReason = "the redirect policy must be what rejected this, not an incidental transport failure"
 
-// status307 is the substring util's buildHTTPError produces when net/http hands back the
-// original 307 response instead of following it: every branch of that function formats
-// "http request [%s] returned status code [%d]".
-const status307 = "returned status code [307]"
-
-// notReplayableReason explains what the 307 subtests actually pin, so they are not
-// "simplified" into duplicates of the 302 ones.
-const notReplayableReason = "a 307 must fail on the unreplayable body before CheckRedirect is reached, not via the redirect policy"
-
 // newRedirectTestServer builds the Server fixture the missing-transaction helper needs.
 // invalidSubtreeKafkaProducer is required because the failure path publishes an
 // invalid-subtree message.
@@ -73,21 +65,11 @@ func newRedirectTestServer(t *testing.T) *Server {
 // delivered to an origin of its choosing. Real httptest servers are used rather than a mock
 // transport because redirect handling is the thing under test.
 //
-// Two statuses are covered because they exercise two independent defences:
-//
-//   - 302 exercises ssrfCheckRedirect. The default client follows a 302, converting the POST
-//     to a GET, so CheckRedirect is consulted and its POST refusal is what stops the hop. A
-//     307 would prove nothing about the redirect policy here. Delete that refusal and the
-//     302 subtests fail three ways: the victim is hit, no error comes back from the
-//     transport, and the helper ends on a tx-count mismatch (a processing error, not
-//     ErrExternal).
-//   - 307 exercises the no-GetBody defence. executeHTTPRequestWithClient builds the POST body
-//     with req.Body = io.NopCloser(...) and never sets GetBody, and net/http's
-//     redirectBehavior declines a 307 outright when GetBody == nil && outgoingLength() != 0
-//     (net/http/client.go, "case 307, 308"), returning the 307 response rather than
-//     consulting CheckRedirect at all. The 307 subtests assert that shape - the status-code
-//     error, and NOT the redirect-policy message - so they fail if anything ever reinstalls
-//     GetBody on this path.
+// executeHTTPRequestWithClient sets GetBody on the POST, so net/http consults CheckRedirect for
+// 301, 302 and 303 and also for 307 and 308 (net/http/client.go, redirectBehavior). Every
+// status is therefore stopped by ssrfCheckRedirect's refusal of a redirect of a request that
+// is not a plain read. The 307 and 308 subtests are the ones that would replay the body
+// verbatim to the redirect target if that refusal were removed.
 func TestGetMissingTransactionsBatch_DoesNotFollowRedirectToAnotherOrigin(t *testing.T) {
 	var victimHits atomic.Int64
 
@@ -118,6 +100,11 @@ func TestGetMissingTransactionsBatch_DoesNotFollowRedirectToAnotherOrigin(t *tes
 	}))
 	defer redirecting307.Close()
 
+	redirecting308 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, victim.URL+"/subtree/"+subtreeHash.String()+"/txs", http.StatusPermanentRedirect)
+	}))
+	defer redirecting308.Close()
+
 	origProtection := util.SSRFProtectionEnabled()
 
 	// Both servers are on loopback, which the dial policy always refuses; running with SSRF
@@ -143,63 +130,41 @@ func TestGetMissingTransactionsBatch_DoesNotFollowRedirectToAnotherOrigin(t *tes
 		require.Len(t, txs, 1, "the harness must reach the helper's success path")
 	})
 
-	t.Run("302 without signer", func(t *testing.T) {
-		util.SetHTTPRequestSigner(util.NewEd25519RequestSigner(nil))
+	redirectors := []struct {
+		status int
+		server *httptest.Server
+	}{
+		{status: http.StatusFound, server: redirecting},
+		{status: http.StatusTemporaryRedirect, server: redirecting307},
+		{status: http.StatusPermanentRedirect, server: redirecting308},
+	}
 
-		server := newRedirectTestServer(t)
-		victimHits.Store(0)
+	for _, redirect := range redirectors {
+		for _, withSigner := range []bool{false, true} {
+			name := fmt.Sprintf("%d without signer", redirect.status)
+			if withSigner {
+				name = fmt.Sprintf("%d with signer", redirect.status)
+			}
 
-		_, err := server.getMissingTransactionsBatch(context.Background(), subtreeHash, missing, redirecting.URL, "")
-		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrExternal))
-		require.Contains(t, err.Error(), redirectRefusal, assertRefusalReason)
-		require.Zero(t, victimHits.Load(), "the redirect target must never see the POST")
-	})
+			t.Run(name, func(t *testing.T) {
+				if withSigner {
+					privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+					require.NoError(t, err)
 
-	t.Run("307 without signer", func(t *testing.T) {
-		util.SetHTTPRequestSigner(util.NewEd25519RequestSigner(nil))
+					util.SetHTTPRequestSigner(util.NewEd25519RequestSigner(privKey))
+				} else {
+					util.SetHTTPRequestSigner(util.NewEd25519RequestSigner(nil))
+				}
 
-		server := newRedirectTestServer(t)
-		victimHits.Store(0)
+				server := newRedirectTestServer(t)
+				victimHits.Store(0)
 
-		_, err := server.getMissingTransactionsBatch(context.Background(), subtreeHash, missing, redirecting307.URL, "")
-		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrExternal))
-		require.Contains(t, err.Error(), status307, notReplayableReason)
-		require.NotContains(t, err.Error(), redirectRefusal, notReplayableReason)
-		require.Zero(t, victimHits.Load(), "the redirect target must never see the POST")
-	})
-
-	t.Run("302 with signer", func(t *testing.T) {
-		privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
-		require.NoError(t, err)
-
-		util.SetHTTPRequestSigner(util.NewEd25519RequestSigner(privKey))
-
-		server := newRedirectTestServer(t)
-		victimHits.Store(0)
-
-		_, err = server.getMissingTransactionsBatch(context.Background(), subtreeHash, missing, redirecting.URL, "")
-		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrExternal))
-		require.Contains(t, err.Error(), redirectRefusal, assertRefusalReason)
-		require.Zero(t, victimHits.Load(), "signing must not change redirect semantics")
-	})
-
-	t.Run("307 with signer", func(t *testing.T) {
-		privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
-		require.NoError(t, err)
-
-		util.SetHTTPRequestSigner(util.NewEd25519RequestSigner(privKey))
-
-		server := newRedirectTestServer(t)
-		victimHits.Store(0)
-
-		_, err = server.getMissingTransactionsBatch(context.Background(), subtreeHash, missing, redirecting307.URL, "")
-		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrExternal))
-		require.Contains(t, err.Error(), status307, notReplayableReason)
-		require.NotContains(t, err.Error(), redirectRefusal, notReplayableReason)
-		require.Zero(t, victimHits.Load(), "the redirect target must never see the POST")
-	})
+				_, err := server.getMissingTransactionsBatch(context.Background(), subtreeHash, missing, redirect.server.URL, "")
+				require.Error(t, err)
+				require.True(t, errors.Is(err, errors.ErrExternal))
+				require.Contains(t, err.Error(), redirectRefusal, assertRefusalReason)
+				require.Zero(t, victimHits.Load(), "the redirect target must never see the POST")
+			})
+		}
+	}
 }

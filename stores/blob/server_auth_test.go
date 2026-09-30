@@ -211,25 +211,65 @@ func TestHTTPBlobServer_BearerSchemeIsCaseInsensitive(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, status, "a scheme with no space before the token must be refused")
 }
 
-// TestHTTPBlobServer_QueryAllowOverwriteDoesNotOverwrite is the other regression test issue
-// 4841 asks for: allowOverwrite in the query string must not let a caller replace a blob the
-// store already holds, even with a valid credential.
-func TestHTTPBlobServer_QueryAllowOverwriteDoesNotOverwrite(t *testing.T) {
+// TestHTTPBlobServer_AllowOverwriteOnlyForAuthenticatedPost is the other regression test issue
+// 4841 asks for: an unauthenticated caller cannot replace a blob, with or without
+// allowOverwrite in the query string. An authenticated caller can, which grants nothing its
+// DELETE access does not already grant. Only a POST reads the flag.
+func TestHTTPBlobServer_AllowOverwriteOnlyForAuthenticatedPost(t *testing.T) {
 	const token = "overwrite-token"
 
 	server, store := newAuthTestServer(t, token)
 
 	key := []byte("overwrite-key")
+	overwritePath := blobPath(key) + "?allowOverwrite=true"
+
+	requireStored := func(t *testing.T, store Store, key []byte, want string, msgAndArgs ...interface{}) {
+		t.Helper()
+
+		stored, err := store.Get(context.Background(), key, fileformat.FileTypeTesting)
+		require.NoError(t, err)
+		require.Equal(t, []byte(want), stored, msgAndArgs...)
+	}
 
 	status := doBlobRequest(t, server, http.MethodPost, blobPath(key), "Bearer "+token, bytes.NewReader([]byte("first")))
 	require.Equal(t, http.StatusCreated, status)
 
-	status = doBlobRequest(t, server, http.MethodPost, blobPath(key)+"?allowOverwrite=true", "Bearer "+token, bytes.NewReader([]byte("second")))
-	require.Equal(t, http.StatusConflict, status, "allowOverwrite from the query must not be honoured")
+	status = doBlobRequest(t, server, http.MethodPost, overwritePath, "", bytes.NewReader([]byte("second")))
+	require.Equal(t, http.StatusUnauthorized, status, "an unauthenticated overwrite must be refused")
+	requireStored(t, store, key, "first", "an unauthenticated overwrite must not replace the blob")
 
-	stored, err := store.Get(context.Background(), key, fileformat.FileTypeTesting)
-	require.NoError(t, err)
-	require.Equal(t, []byte("first"), stored, "the original blob must survive")
+	status = doBlobRequest(t, server, http.MethodPost, overwritePath, "Bearer wrong", bytes.NewReader([]byte("second")))
+	require.Equal(t, http.StatusUnauthorized, status, "an overwrite with the wrong token must be refused")
+	requireStored(t, store, key, "first", "an overwrite with the wrong token must not replace the blob")
+
+	status = doBlobRequest(t, server, http.MethodPost, blobPath(key), "Bearer "+token, bytes.NewReader([]byte("second")))
+	require.Equal(t, http.StatusConflict, status, "an authenticated POST without the flag must not replace the blob")
+	requireStored(t, store, key, "first", "an authenticated POST without the flag must not replace the blob")
+
+	status = doBlobRequest(t, server, http.MethodPost, overwritePath, "Bearer "+token, bytes.NewReader([]byte("second")))
+	require.Equal(t, http.StatusCreated, status, "an authenticated POST with the flag must replace the blob")
+	requireStored(t, store, key, "second", "an authenticated POST with the flag must replace the blob")
+
+	t.Run("read-only server refuses the flag", func(t *testing.T) {
+		readOnlyServer, readOnlyStore := newAuthTestServer(t, "")
+
+		readOnlyKey := []byte("read-only-overwrite-key")
+		require.NoError(t, readOnlyStore.Set(context.Background(), readOnlyKey, fileformat.FileTypeTesting, []byte("fixture")))
+
+		status := doBlobRequest(t, readOnlyServer, http.MethodPost, blobPath(readOnlyKey)+"?allowOverwrite=true", "Bearer anything", bytes.NewReader([]byte("replaced")))
+		require.Equal(t, http.StatusUnauthorized, status)
+		requireStored(t, readOnlyStore, readOnlyKey, "fixture", "a read-only server must not replace the blob")
+	})
+
+	t.Run("other methods ignore the flag", func(t *testing.T) {
+		status := doBlobRequest(t, server, http.MethodPatch, blobPath(key)+"?dah=1000&allowOverwrite=true", "Bearer "+token, bytes.NewReader([]byte("third")))
+		require.Equal(t, http.StatusOK, status)
+		requireStored(t, store, key, "second", "PATCH must not write its body even with the flag")
+
+		require.Equal(t, http.StatusOK, doBlobRequest(t, server, http.MethodGet, overwritePath, "", nil))
+		require.Equal(t, http.StatusOK, doBlobRequest(t, server, http.MethodHead, overwritePath, "", nil))
+		requireStored(t, store, key, "second", "GET and HEAD must not change the blob")
+	})
 }
 
 // warnCapturingLogger records every Warnf message. The handler runs on the server's

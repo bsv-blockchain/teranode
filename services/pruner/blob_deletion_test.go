@@ -3,6 +3,7 @@ package pruner
 import (
 	"context"
 	"crypto/rand"
+	"net/http/httptest"
 	"net/url"
 	"path/filepath"
 	"testing"
@@ -15,8 +16,11 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
+	blockchainsql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -528,4 +532,213 @@ func TestBlobDeletionIdempotency(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, len(deletions), "Queue should be empty after processing")
 	t.Log("✓ Pruner handled already-deleted blob gracefully")
+}
+
+// blobDeletionServiceClient hands the pruner's two batch calls to a real blockchain service
+// over a sqlitememory store, so retry counting and dropping are the store's own. The
+// embedded client only satisfies the rest of ClientI; the pruner calls nothing else here.
+type blobDeletionServiceClient struct {
+	*blockchain.Mock
+	service *blockchain.Blockchain
+}
+
+func (c *blobDeletionServiceClient) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
+	resp, err := c.service.AcquireBlobDeletionBatch(ctx, &blockchain_api.AcquireBlobDeletionBatchRequest{
+		Height:             height,
+		Limit:              int32(limit),
+		LockTimeoutSeconds: int32(lockTimeoutSeconds),
+	})
+	if err != nil {
+		return "", nil, err
+	}
+
+	return resp.BatchToken, resp.Deletions, nil
+}
+
+func (c *blobDeletionServiceClient) CompleteBlobDeletionBatch(ctx context.Context, batchToken string, completedIDs []int64, failedIDs []int64, maxRetries int) error {
+	_, err := c.service.CompleteBlobDeletionBatch(ctx, &blockchain_api.CompleteBlobDeletionBatchRequest{
+		BatchToken:   batchToken,
+		CompletedIds: completedIDs,
+		FailedIds:    failedIDs,
+		MaxRetries:   int32(maxRetries),
+	})
+
+	return err
+}
+
+// newBlobDeletionServiceHarness builds a pruner Server whose batch calls go to a real
+// blockchain service over sqlitememory, and returns it with the SQL store the deletions are
+// scheduled in and read back from.
+func newBlobDeletionServiceHarness(t *testing.T, blobStores map[storetypes.BlobStoreType]blob.Store) (*Server, *blockchainsql.SQL, *testBlobDeletionObserver) {
+	t.Helper()
+
+	initPrometheusMetrics()
+
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Pruner.SkipBlobDeletion = false
+	tSettings.Pruner.BlobDeletionSafetyWindow = 0
+	tSettings.Pruner.BlobDeletionBatchSize = 100
+	tSettings.Pruner.BlobDeletionMaxRetries = 3
+
+	sqlURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	sqlStore, err := blockchainsql.New(logger, sqlURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlStore.Close(context.Background()) })
+
+	bcServer, err := blockchain.New(ctx, logger, tSettings, sqlStore, nil)
+	require.NoError(t, err)
+
+	observer := &testBlobDeletionObserver{
+		t:        t,
+		complete: make(chan blobDeletionEvent, 10),
+	}
+
+	server := &Server{
+		ctx:                  ctx,
+		logger:               logger,
+		settings:             tSettings,
+		blobStores:           blobStores,
+		blockchainClient:     &blobDeletionServiceClient{Mock: &blockchain.Mock{}, service: bcServer},
+		blobDeletionObserver: observer,
+	}
+
+	return server, sqlStore, observer
+}
+
+// TestBlobDeletion_UnauthorizedHTTPStoreKeepsDeletionQueued pins what the pruner does when an
+// HTTP blob store answers 401 - no token configured here, or a different one from the
+// server's. Retrying cannot fix that, so the deletion must stay queued with its retry count
+// untouched, rather than be counted as a failure and dropped after maxRetries while the blob
+// stays on the server forever. Once the tokens match, the next pass deletes it.
+func TestBlobDeletion_UnauthorizedHTTPStoreKeepsDeletionQueued(t *testing.T) {
+	const token = "pruner-token"
+
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+
+	memoryURL, err := url.Parse("memory://")
+	require.NoError(t, err)
+
+	blobServer, err := blob.NewHTTPBlobServer(logger, memoryURL, token)
+	require.NoError(t, err)
+
+	httpServer := httptest.NewServer(blobServer)
+	t.Cleanup(httpServer.Close)
+
+	serverURL, err := url.Parse(httpServer.URL)
+	require.NoError(t, err)
+
+	authed, err := blob.NewStore(logger, serverURL, bloboptions.WithHTTPAuthToken(token))
+	require.NoError(t, err)
+
+	// The shipped default: no token configured.
+	unauthed, err := blob.NewStore(logger, serverURL, bloboptions.WithHTTPAuthToken(""))
+	require.NoError(t, err)
+
+	key := []byte("pruner-unauthorized-key")
+	require.NoError(t, authed.Set(ctx, key, fileformat.FileTypeTesting, []byte("blob held on the server")))
+
+	server, sqlStore, observer := newBlobDeletionServiceHarness(t, map[storetypes.BlobStoreType]blob.Store{
+		storetypes.TXSTORE: unauthed,
+	})
+
+	_, err = sqlStore.ScheduleBlobDeletion(ctx, &blockchainsql.ScheduleRequest{
+		BlobKey:        key,
+		FileType:       string(fileformat.FileTypeTesting),
+		StoreType:      int32(storetypes.TXSTORE),
+		DeleteAtHeight: 10,
+	})
+	require.NoError(t, err)
+
+	maxRetries := server.settings.Pruner.BlobDeletionMaxRetries
+
+	for pass := 1; pass <= maxRetries+1; pass++ {
+		server.processBlobDeletionsAtHeight(10, chainhash.Hash{})
+
+		event, err := observer.waitFor(5 * time.Second)
+		require.NoError(t, err)
+		require.Zero(t, event.successCount, "pass %d: a refused deletion is not a success", pass)
+		require.Zero(t, event.failCount, "pass %d: a refused deletion is not counted as a failure", pass)
+	}
+
+	pending, err := sqlStore.GetPendingBlobDeletions(ctx, 10, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "the deletion must still be queued after more passes than maxRetries")
+	require.Zero(t, pending[0].RetryCount, "a configuration error must not use up the retry budget")
+
+	exists, err := authed.Exists(ctx, key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+	require.True(t, exists, "the blob must still be on the server")
+
+	// Fix the configuration: the next pass deletes the blob and empties the queue.
+	server.blobStores[storetypes.TXSTORE] = authed
+
+	server.processBlobDeletionsAtHeight(10, chainhash.Hash{})
+
+	event, err := observer.waitFor(5 * time.Second)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), event.successCount)
+
+	exists, err = authed.Exists(ctx, key, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+	require.False(t, exists, "the blob must be deleted once the tokens match")
+
+	pending, err = sqlStore.GetPendingBlobDeletions(ctx, 10, 10)
+	require.NoError(t, err)
+	require.Empty(t, pending)
+}
+
+// TestBlobDeletion_StoreConstructionConfigErrorKeepsDeletionQueued pins that a blob store the
+// pruner cannot even build - here a store type with no URL configured - is held the same way
+// as a 401: the configuration error survives the wrap in processOneDeletion, and the deletion
+// stays queued with its retry count untouched.
+func TestBlobDeletion_StoreConstructionConfigErrorKeepsDeletionQueued(t *testing.T) {
+	ctx := context.Background()
+
+	server, sqlStore, observer := newBlobDeletionServiceHarness(t, map[storetypes.BlobStoreType]blob.Store{})
+
+	// GetBlobStoreURL then returns (nil, nil), which getBlobStore reports as a configuration error.
+	server.settings.Block.TxStore = nil
+
+	_, err := sqlStore.ScheduleBlobDeletion(ctx, &blockchainsql.ScheduleRequest{
+		BlobKey:        []byte("pruner-no-store-key"),
+		FileType:       string(fileformat.FileTypeTesting),
+		StoreType:      int32(storetypes.TXSTORE),
+		DeleteAtHeight: 10,
+	})
+	require.NoError(t, err)
+
+	maxRetries := server.settings.Pruner.BlobDeletionMaxRetries
+
+	for pass := 1; pass <= maxRetries+1; pass++ {
+		server.processBlobDeletionsAtHeight(10, chainhash.Hash{})
+
+		event, err := observer.waitFor(5 * time.Second)
+		require.NoError(t, err)
+		require.Zero(t, event.successCount, "pass %d", pass)
+		require.Zero(t, event.failCount, "pass %d", pass)
+	}
+
+	pending, err := sqlStore.GetPendingBlobDeletions(ctx, 10, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "the deletion must still be queued after more passes than maxRetries")
+	require.Zero(t, pending[0].RetryCount, "a configuration error must not use up the retry budget")
+
+	row := pending[0]
+
+	_, err = server.processOneDeletion(ctx, &blockchain_api.ScheduledDeletion{
+		Id:             row.ID,
+		BlobKey:        row.BlobKey,
+		FileType:       row.FileType,
+		StoreType:      row.StoreType,
+		DeleteAtHeight: row.DeleteAtHeight,
+	}, "", 10)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrConfiguration), "the store-construction configuration error must stay classifiable")
+	require.NotContains(t, err.Error(), "MISSING", "the wrapped error must not leave a formatting artefact")
 }

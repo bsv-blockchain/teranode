@@ -38,6 +38,9 @@
   in those dumps but held in clear in the file
 - Never place it in a store URL: a URL carrying an `authToken` query parameter is rejected, as
   store URLs are logged verbatim
+- A 401 from the server (no token on the server, or none or a different one here) is returned
+  as a configuration error, not a storage error. The pruner keeps the affected deletions queued
+  rather than retrying and dropping them
 
 ## Configuration Dependencies
 
