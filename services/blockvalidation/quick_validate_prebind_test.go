@@ -2413,6 +2413,26 @@ func TestCombineSweepMismatchError_JoinsUnrelatedReadFailure(t *testing.T) {
 		require.True(t, isUnquarantinedLocalSubtree(out))
 		require.ElementsMatch(t, refs, subtreeKeyMismatchRefs(out))
 	})
+
+	// Pins what the combineSweepMismatchError doc states: the join reaches IsBlockCorrupt.
+	t.Run("a corrupt sibling makes the combined error corrupt", func(t *testing.T) {
+		// A fresh mismatch: marking mutates the error in place.
+		fresh := markSubtreeKeyMismatch(
+			errors.NewProcessingError("subtree %s does not match its key", hashA.String()),
+			refs[0],
+		)
+
+		corrupt := errors.NewBlockCorruptError("subtree %s carries the coinbase placeholder outside block position [0][0]",
+			chainhash.HashH([]byte("sweep-join-corrupt")).String())
+
+		out := combineSweepMismatchError(fresh, refs, false, corrupt)
+
+		require.True(t, errors.IsBlockCorrupt(out),
+			"a joined corrupt verdict must stay reachable, so catch-up routes the combined error to its corrupt branch")
+		require.ElementsMatch(t, refs, subtreeKeyMismatchRefs(out),
+			"the quarantine refs must still be read from the top of the chain")
+		require.False(t, isUnquarantinedLocalSubtree(out))
+	})
 }
 
 // orderedMismatchStore serializes two subtree reads so the ordinary mismatch is the
@@ -2986,8 +3006,8 @@ func TestBindSubtreeBodyToHeader_MismatchFirstThenReadFailure_BothSurvive(t *tes
 	bindErr := h.bv.bindSubtreeBodyToHeader(h.ctx, block)
 	require.Error(t, bindErr)
 
-	// The mismatch stays the outer verdict, so nothing about the existing routing or
-	// the quarantine changes.
+	// The mismatch stays the outer verdict, so the quarantine refs are still read from
+	// the top of the chain.
 	require.ElementsMatch(t,
 		[]subtreeBlobRef{{hash: forgedKey, fileType: fileformat.FileTypeSubtreeToCheck}},
 		subtreeKeyMismatchRefs(bindErr),
@@ -3469,6 +3489,56 @@ func TestQuickValidate_SubtreeDataSweep_ClassifiesLaterBodyFaults(t *testing.T) 
 				"the run must fail closed exactly when a body on disk could not be judged, got %v", err)
 		})
 	}
+}
+
+// TestSweepSubtreeDataMismatches_StructureRefDoesNotSkipBody pins that the sweep skips
+// only a subtree whose subtree_data is already named. The batch collector can join a
+// structure mismatch on one subtree with a body mismatch on another; the structure ref
+// says nothing about the first subtree's body, so the sweep must still judge it.
+// Subtrees 1 and 3 have forged bodies and honest structures.
+//
+// Mutation target: keying named on the hash alone drops subtree 1's subtree_data ref;
+// removing the structure-only short-circuit names bodies 1 and 3 in the second sub-test.
+func TestSweepSubtreeDataMismatches_StructureRefDoesNotSkipBody(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+	h.bv.settings.BlockValidation.SubtreeBatchSize = 2
+
+	f := h.forgedBodies(0x2f, 0x60, 1, 3)
+
+	t.Run("a structure ref does not skip that subtree's body", func(t *testing.T) {
+		// The collector joining a promoted-blob mismatch on subtree 1 with a body mismatch
+		// on subtree 3. Subtree 1 has no promoted blob on disk, so the sweep's re-read
+		// anchors its honest structure and reaches the body.
+		in := markSubtreeKeyMismatch(errors.NewProcessingError("batch verdict"),
+			subtreeBlobRef{hash: *f.roots[1], fileType: fileformat.FileTypeSubtree},
+			subtreeBlobRef{hash: *f.roots[3], fileType: fileformat.FileTypeSubtreeData},
+		)
+
+		out := h.bv.sweepSubtreeDataMismatches(h.ctx, f.block, in)
+
+		require.ElementsMatch(t,
+			[]subtreeBlobRef{
+				{hash: *f.roots[1], fileType: fileformat.FileTypeSubtree},
+				{hash: *f.roots[1], fileType: fileformat.FileTypeSubtreeData},
+				{hash: *f.roots[3], fileType: fileformat.FileTypeSubtreeData},
+			},
+			subtreeKeyMismatchRefs(out),
+			"subtree 1's forged body must be named even though a structure ref already names subtree 1")
+		require.False(t, isUnquarantinedLocalSubtree(out))
+	})
+
+	t.Run("a structure-only ref set does not start the sweep", func(t *testing.T) {
+		in := markSubtreeKeyMismatch(errors.NewProcessingError("binding verdict"),
+			subtreeBlobRef{hash: *f.roots[1], fileType: fileformat.FileTypeSubtreeToCheck},
+		)
+
+		out := h.bv.sweepSubtreeDataMismatches(h.ctx, f.block, in)
+
+		require.ElementsMatch(t,
+			[]subtreeBlobRef{{hash: *f.roots[1], fileType: fileformat.FileTypeSubtreeToCheck}},
+			subtreeKeyMismatchRefs(out),
+			"a structure-only verdict must not start the sweep, so forged bodies 1 and 3 stay unnamed")
+	})
 }
 
 // TestPrefetchSubtreeBatch_MismatchAndMissingBody_BothSurvive pins that the collector

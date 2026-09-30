@@ -442,6 +442,23 @@ For blocks that are below known checkpoints in the blockchain, the Block Validat
 
 The quick validation system operates in two distinct phases implemented in `quickValidateBlock()` in `services/blockvalidation/quick_validate.go`:
 
+**Body Binding (precondition):**
+
+Before either phase, the peer-supplied body is bound to the checkpoint-certified header. No block ID is assigned and no UTXO is created or spent until this succeeds:
+
+1. **Subtree-Carrying Body**: Bound by `bindSubtreeBodyToHeader()` in `services/blockvalidation/quick_validate_bind.go`
+    - Reads every subtree structure, one `SubtreeBatchSize` chunk at a time
+    - Recomputes each subtree's root from its own nodes and checks it against the subtree's key, instead of trusting the root the file claims
+    - Checks the subtree shape and scans the whole block for duplicate transactions (CVE-2012-2459)
+    - Composes the subtree roots and compares the result with the header's merkle root
+    - Reads structures only, never transaction data
+2. **Coinbase-Only Body**: Bound by `block.CheckCoinbaseOnlyBodyBound()`
+3. **Failure Classes**: Each failure keeps its own class
+    - A body whose subtrees do not compose to the header's merkle root, or that breaks the subtree shape or duplicate rules, is classified `ERR_BLOCK_CORRUPT`
+    - A local subtree blob that does not hash to its own key is a local fault instead, not a verdict on the peer's body: the blob is quarantined (deleted and the deletion confirmed), and if the deletion cannot be confirmed the attempt fails closed
+    - Storage and other infrastructure errors keep their own class
+    - A body that binds but whose coinbase is not a consensus coinbase is `ERR_BLOCK_INVALID`
+
 **Phase 1: UTXO Creation (`createAllUTXOs()`)**
 
 All UTXOs for the block's transactions are created in parallel before validation:
@@ -503,11 +520,14 @@ For each subtree in the block, the system:
 
 1. **Reads `.subtreeToCheck`**: Fetches subtree structure with transaction IDs
 2. **Reads `.subtreeData`**: Fetches raw transaction data
-3. **Validates Coinbase**: Ensures first transaction in first subtree is coinbase
-4. **Reconstructs `.subtree`**: If missing, creates full subtree with fee and size information
+3. **Checks Every Transaction Against Its Node**: Each transaction in `.subtreeData`, other than the coinbase at block position `[0][0]`, must hash to the node it occupies
+    - A structure or body that does not match its key is treated as a damaged local blob
+    - Before the attempt returns, the blob is quarantined: it is deleted and the deletion confirmed. If the deletion cannot be confirmed, the attempt fails closed and catch-up aborts without falling back to normal validation
+4. **Validates Coinbase**: Ensures first transaction in first subtree is coinbase
+5. **Reconstructs `.subtree`**: If missing, creates full subtree with fee and size information
     - Adds each transaction node with metadata from transaction
     - Stores complete subtree for future use
-5. **Generates `.subtreeMeta`**: If missing, creates metadata file with transaction inpoints
+6. **Generates `.subtreeMeta`**: If missing, creates metadata file with transaction inpoints
     - Stores input relationships for efficient lookups
     - Used by subtree validation service
 
@@ -527,25 +547,28 @@ Transactions in standard Bitcoin format are extended in-memory for validation:
 
 **Merkle Root Verification:**
 
-After processing all transactions, the system verifies:
+The merkle root is checked twice, and the first check is the one that gates mutation:
 
-```go
-if err := block.CheckMerkleRoot(ctx); err != nil {
-    return errors.NewProcessingError("merkle root mismatch")
-}
-```
+1. **Before Any Mutation**: The body binding described above
+2. **After Processing**: `validateSubtrees()` re-runs the same rules through `checkSubtreeBodyBinding()` on the subtrees rebuilt from the transactions actually read
+    - Subtree sizes, `block.CheckMerkleRoot(ctx)`, the coinbase placeholder at `[0][0]`, the duplicate-transaction scan and the coinbase shape
 
-This ensures the transactions match the block header before proceeding.
+A merkle-root mismatch is `ERR_BLOCK_CORRUPT`, not an invalid block: a body that does not bind to the header says nothing about the header's hash. The subtree-shape, coinbase-placeholder and duplicate-transaction failures are `ERR_BLOCK_CORRUPT` for the same reason. The coinbase-shape check is the exception: it runs only once the body binds, so a failure there is `ERR_BLOCK_INVALID`. See the failure classes under Body Binding.
 
 **Error Handling:**
 
-If quick validation encounters any errors:
+During catch-up, `tryQuickValidation()` in `services/blockvalidation/catchup.go` routes a failure by its class:
 
-- Removes `.subtree` files to force reprocessing
-- Falls back to normal validation automatically
-- Normal validation re-creates UTXOs and validates with full script execution
+- **Incomplete Block** (`ERR_BLOCK_INCOMPLETE`, e.g. no coinbase): Catch-up from this peer aborts. Fetched subtree files are kept for reuse
+- **Corrupt Body** (`ERR_BLOCK_CORRUPT`): The catch-up peer is penalised, every subtree file this attempt wrote (fetched and built) is removed, and catch-up aborts so the block is re-downloaded. Normal validation is not run on the same body
+- **Local Blob That Does Not Match Its Key and Could Not Be Deleted**: Catch-up aborts without falling back to normal validation and without a ban score. This attempt's own `.subtree` files are removed
+- **Any Other Failure**, including a mismatching local blob that was deleted: This attempt's own `.subtree` files are removed, and the block falls back to normal validation, which reuses the fetched `.subtreeToCheck` and `.subtreeData`
 
-For implementation details, see `quick_validate.go` in `services/blockvalidation/`.
+The removal is attempted only once this block's queued subtree writes have settled, and it is skipped if the catch-up context is cancelled first. In the corrupt and could-not-be-deleted cases a failed removal is logged and the verdict stands. In the last case a failed removal is returned instead, so catch-up aborts rather than falling back to normal validation.
+
+Nothing is rolled back. A failure after the pipeline has started leaves the UTXOs it created in the store, locked unless `blockvalidation_quick_validate_skip_utxo_lock` applies. Recovery is by retry convergence: on retry, creation returns `ErrTxExists` and the mined info is updated to the correct block ID.
+
+For implementation details, see `quick_validate.go` and `quick_validate_bind.go` in `services/blockvalidation/`.
 
 #### 2.2.4. Validating the Subtrees
 

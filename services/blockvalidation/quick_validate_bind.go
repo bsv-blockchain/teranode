@@ -573,7 +573,15 @@ func (v *subtreeReadVerdicts) err() error {
 // It runs only when err already names a FileTypeSubtreeData blob, so the success path
 // and ordinary failures pay nothing. It walks the block one SubtreeBatchSize chunk at a
 // time, anchor-only, releasing every structure before the next chunk, so its residency
-// is one batch, as in the pipeline. Each failure is classified:
+// is one batch, as in the pipeline.
+//
+// It bounds residency, not work: at worst it parses every other body in the block
+// once. That is deliberately not capped. A cap would have to fail the run closed on
+// the bodies it left unread, turning one damaged body into an aborted catch-up; as it
+// is, a clean quarantine lets the attempt fall through to normal validation, which
+// reads every body anyway, so the sweep at most doubles one pass on a failure path.
+//
+// Each failure is classified:
 //
 //   - a key mismatch is merged into err's quarantine refs;
 //   - a context or storage error prevents a verdict, so err is marked unquarantined and
@@ -587,19 +595,19 @@ func (v *subtreeReadVerdicts) err() error {
 func (u *BlockValidation) sweepSubtreeDataMismatches(ctx context.Context, block *model.Block, err error) error {
 	refs := subtreeKeyMismatchRefs(err)
 
+	// Only a subtree whose BODY is already named is skipped. A structure ref names a
+	// different blob: the batch collector can join a structure mismatch on one subtree
+	// with a body mismatch on another, and the first subtree's body is still unjudged.
 	named := make(map[chainhash.Hash]struct{}, len(refs))
-	anyData := false
 
 	for _, ref := range refs {
-		named[ref.hash] = struct{}{}
-
 		if ref.fileType == fileformat.FileTypeSubtreeData {
-			anyData = true
+			named[ref.hash] = struct{}{}
 		}
 	}
 
 	// Structure mismatches are already swept whole-block by the binding pass.
-	if !anyData {
+	if len(named) == 0 {
 		return err
 	}
 
@@ -731,8 +739,19 @@ func (u *BlockValidation) sweepReadPreventsVerdict(ctx context.Context, hash *ch
 // one preferred as the outer error because it is what carries the quarantine. Dropping
 // the other left an ErrNotFound invisible to both the log and any errors.Is
 // classification downstream, so an attempt that was partly an infrastructure failure
-// read as a pure blob forgery. The mismatch stays outermost, so nothing about the
-// existing routing changes; the other becomes a reachable cause.
+// read as a pure blob forgery. The mismatch stays outermost, so the quarantine refs
+// and the fail-closed marker are still read from the top of the chain; the other
+// becomes a reachable cause.
+//
+// Reachable by every errors.Is classification, IsBlockCorrupt included. When the
+// other failure is itself a corrupt-body verdict — readSubtree rejects a coinbase
+// placeholder outside [0][0] that way — the combined error is corrupt, and
+// tryQuickValidation, which tests IsBlockCorrupt before isUnquarantinedLocalSubtree,
+// takes its corrupt branch: the catch-up primary is struck and the run aborts for a
+// re-download. That is the disposition the corrupt fault gets on its own, the
+// quarantine has already run at the entry point's boundary, and both branches abort,
+// so the join can change attribution but never lets a run fall through that would
+// otherwise have aborted.
 func combineSweepMismatchError(firstMismatch error, refs []subtreeBlobRef, anyUnquarantined bool, otherErr error) error {
 	combined := markSubtreeKeyMismatch(firstMismatch, refs...)
 

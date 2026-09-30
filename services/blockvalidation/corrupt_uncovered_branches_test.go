@@ -172,6 +172,8 @@ func TestQuickValidateBlockAsync_CorruptSubtreeVerdictUnwrapped(t *testing.T) {
 // These two fixtures no longer reach the build phase (the body fails at the whole-block
 // binding pass), so the cleanup they drive has nothing of quick validation's OWN to delete.
 // Coverage for removeCatchupSubtreeFiles deleting a freshly built FileTypeSubtree now lives in
+// TestTryQuickValidation_LateCorruptPath_WaitsForDelayedWriteBeforeCleanup (the corrupt branch,
+// via a late corrupt verdict after the build phase), and in
 // TestTryQuickValidation_LaterBatchFailure_SweepsOwnSubtreeFiles and
 // TestTryQuickValidation_UnquarantinedAbort_SweepsOwnSubtreeFiles, which use a body that binds
 // cleanly and fails in a later batch (bitcoin-sv/teranode#4838).
@@ -258,6 +260,8 @@ func TestTryQuickValidation_CorruptPath(t *testing.T) {
 // These two fixtures no longer reach the build phase (the body fails at the whole-block
 // binding pass), so the cleanup they drive has nothing of quick validation's OWN to delete.
 // Coverage for removeCatchupSubtreeFiles deleting a freshly built FileTypeSubtree now lives in
+// TestTryQuickValidation_LateCorruptPath_WaitsForDelayedWriteBeforeCleanup (the corrupt branch,
+// via a late corrupt verdict after the build phase), and in
 // TestTryQuickValidation_LaterBatchFailure_SweepsOwnSubtreeFiles and
 // TestTryQuickValidation_UnquarantinedAbort_SweepsOwnSubtreeFiles, which use a body that binds
 // cleanly and fails in a later batch (bitcoin-sv/teranode#4838).
