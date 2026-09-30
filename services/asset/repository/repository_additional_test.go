@@ -611,7 +611,8 @@ func TestRepository_80PercentCoverage_ErrorPaths(t *testing.T) {
 	}
 
 	// Test GetSubtreeTransactions error path
-	txMap, err := repo.GetSubtreeTransactions(ctx, nonExistentHash)
+	txMap, releaseSubtreeTxs, err := repo.GetSubtreeTransactions(ctx, nonExistentHash)
+	defer releaseSubtreeTxs()
 	assert.Error(t, err)
 	assert.NotNil(t, txMap)
 	assert.Len(t, txMap, 0)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/mock"
@@ -69,6 +70,10 @@ func TestGetTransactions_PanicInErrgroupGoroutineDoesNotCrashProcess(t *testing.
 	initPrometheusMetrics()
 
 	httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
+
+	subtreeHash := chainhash.HashH([]byte("panicInErrgroupGoroutine"))
+	setSubtreeRoute(echoContext, &subtreeHash)
+	mockGetSubtreeTransactions(mockRepo)
 
 	mockRepo.On("GetTransaction", mock.Anything).Run(func(mock.Arguments) {
 		panic(panicMessage)
