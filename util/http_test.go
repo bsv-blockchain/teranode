@@ -2,6 +2,7 @@ package util
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"io"
 	"net"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1588,4 +1590,250 @@ func TestSharedAndSafeClientsShareRedirectRule(t *testing.T) {
 			require.Equal(t, sharedErr.Error(), safeErr.Error(), "both clients must give the same reason")
 		})
 	}
+}
+
+func TestBuildHTTPError_429MapsToRateLimited(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte("rate limit exceeded"))
+	}))
+	defer server.Close()
+
+	_, err := DoHTTPRequestBodyReader(context.Background(), server.URL)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrServiceRateLimited),
+		"429 must classify as ErrServiceRateLimited so callers can back off; got %v", err)
+	require.False(t, errors.Is(err, errors.ErrServiceUnavailable),
+		"429 must NOT be ErrServiceUnavailable - that sentinel means a fault in this node's own stack")
+	require.False(t, errors.IsTransientLocalError(err),
+		"a peer rate-limiting us is not a transient LOCAL error; netsync peer-retention keys on this")
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_RetriesOn429ThenSucceeds(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n < 3 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte("rate limit exceeded"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok-after-429"))
+	}))
+	defer server.Close()
+
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig)
+	require.NoError(t, err)
+	defer body.Close()
+
+	got, err := io.ReadAll(body)
+	require.NoError(t, err)
+	require.Equal(t, "ok-after-429", string(got))
+	require.Equal(t, int32(3), atomic.LoadInt32(&attempts), "exactly two retries before success")
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_ExhaustsAttemptsOnPersistent429(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	_, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrServiceRateLimited),
+		"final error must stay ErrServiceRateLimited, not collapse to ErrServiceUnavailable; got %v", err)
+	require.False(t, errors.IsTransientLocalError(err))
+	require.Equal(t, int32(testRetryConfig.maxAttempts), atomic.LoadInt32(&attempts))
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_Honors429RetryAfter(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	cfg := retryConfig{maxAttempts: 4, initialDelay: 10 * time.Millisecond, maxDelay: 5 * time.Second}
+
+	start := time.Now()
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, cfg)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	defer body.Close()
+	require.GreaterOrEqual(t, elapsed, time.Second-100*time.Millisecond,
+		"Retry-After=1 on a 429 must be honored over the much smaller initialDelay")
+	require.Less(t, elapsed, 3*time.Second)
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_ResendsPOSTBodyEachAttempt(t *testing.T) {
+	var attempts int32
+	bodies := make(chan string, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ := io.ReadAll(r.Body)
+		bodies <- string(got)
+
+		if atomic.AddInt32(&attempts, 1) < 3 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig, []byte("payload"))
+	require.NoError(t, err)
+	defer body.Close()
+
+	close(bodies)
+
+	seen := 0
+	for b := range bodies {
+		require.Equal(t, "payload", b, "the request body must be re-sent in full on every attempt")
+		seen++
+	}
+
+	require.Equal(t, 3, seen)
+}
+
+// TestDoHTTPRequestBodyReaderWithRetry_ContentTypeOctetStreamOnEveryAttempt pins #829 on
+// the retry path: a POST body sent through the retry helper must carry
+// application/octet-stream, not application/json, on every attempt including after a
+// 429/503 - a WAF in front of asset runs its JSON body parser on a application/json
+// request and 400s on a binary payload like a packed txid batch.
+func TestDoHTTPRequestBodyReaderWithRetry_ContentTypeOctetStreamOnEveryAttempt(t *testing.T) {
+	var attempts int32
+	contentTypes := make(chan string, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		contentTypes <- r.Header.Get("Content-Type")
+
+		if atomic.AddInt32(&attempts, 1) < 3 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig, []byte("payload"))
+	require.NoError(t, err)
+	defer body.Close()
+
+	close(contentTypes)
+
+	seen := 0
+	for ct := range contentTypes {
+		require.Equal(t, "application/octet-stream", ct)
+		seen++
+	}
+
+	require.Equal(t, 3, seen)
+}
+
+// TestDoHTTPRequestBodyReaderWithRetry_SignsEveryAttempt pins the other half of the same
+// defect: the retry path built its request without going through loadHTTPRequestSigner, so
+// a signed catchup POST went out unsigned and an allowlisted peer dropped to the unverified
+// rate tier.
+func TestDoHTTPRequestBodyReaderWithRetry_SignsEveryAttempt(t *testing.T) {
+	privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	require.NoError(t, err)
+
+	SetHTTPRequestSigner(NewEd25519RequestSigner(privKey))
+	defer SetHTTPRequestSigner(NewEd25519RequestSigner(nil))
+
+	var attempts int32
+	type attemptAuth struct {
+		signature string
+		timestamp string
+	}
+	signatures := make(chan attemptAuth, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		signatures <- attemptAuth{
+			signature: r.Header.Get("X-Peer-Signature"),
+			timestamp: r.Header.Get("X-Peer-Timestamp"),
+		}
+
+		if atomic.AddInt32(&attempts, 1) < 3 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig, []byte("payload"))
+	require.NoError(t, err)
+	defer body.Close()
+
+	close(signatures)
+
+	seenSignatures := make(map[string]struct{})
+	seenTimestamps := make(map[string]struct{})
+	seen := 0
+	for a := range signatures {
+		require.NotEmpty(t, a.signature, "every attempt must be signed")
+		seenSignatures[a.signature] = struct{}{}
+		seenTimestamps[a.timestamp] = struct{}{}
+		seen++
+	}
+
+	require.Equal(t, 3, seen)
+	// A retry sent in the same Unix second as the previous attempt would be
+	// byte-identical (Ed25519 is deterministic, and the signed timestamp has
+	// one-second resolution), so the receiver's replay cache would reject it.
+	// Every retried attempt must therefore carry a distinct signed timestamp
+	// (and therefore a distinct signature).
+	require.Len(t, seenTimestamps, 3, "each retry must be signed with a distinct timestamp")
+	require.Len(t, seenSignatures, 3, "each retry must produce a distinct signature")
+}
+
+// TestSignerSignsRequests pins which installed signers make the retry loop
+// wait out the current second: only one that actually signs. A signer with
+// no key installs cleanly but adds no signature, so there is nothing to
+// replay and no reason to delay its retries.
+func TestSignerSignsRequests(t *testing.T) {
+	require.False(t, signerSignsRequests(nil))
+	require.False(t, signerSignsRequests(NewEd25519RequestSigner(nil)))
+
+	priv, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	require.NoError(t, err)
+	require.True(t, signerSignsRequests(NewEd25519RequestSigner(priv)))
+}
+
+// TestWaitOutRetrySecondHonoursCancellationAndBackwardSteps pins two branches of
+// the same-second wait: a previous second that is not behind the clock (the same
+// second, or one ahead after a backwards clock step) makes it wait, and a
+// cancelled context ends that wait with the context's error instead of sleeping.
+func TestWaitOutRetrySecondHonoursCancellationAndBackwardSteps(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	err := waitOutRetrySecond(ctx, time.Now().Unix()+1)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Less(t, time.Since(start), 500*time.Millisecond, "a cancelled context must not sleep out the second")
+
+	require.NoError(t, waitOutRetrySecond(context.Background(), time.Now().Unix()-5), "a second already behind the clock needs no wait")
+
+	// A previous second far ahead of the clock (a large backwards step) is beyond
+	// maxRetrySecondWait: nothing signed recently can collide, so don't sleep it out.
+	start = time.Now()
+	require.NoError(t, waitOutRetrySecond(context.Background(), time.Now().Unix()+5))
+	require.Less(t, time.Since(start), 500*time.Millisecond, "a large backwards step must not be slept out")
 }

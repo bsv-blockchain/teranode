@@ -1323,8 +1323,8 @@ func TestFetchAndStoreSubtreeData_DetachedFetchIsBounded(t *testing.T) {
 	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
 
-	// 503 is the only status the retry loop iterates on, so this is the shape that
-	// reaches all six attempts.
+	// 503 is retried (as is 429), so a peer that keeps answering 503 is the shape
+	// that reaches all six attempts.
 	url := fmt.Sprintf("http://test-peer/subtree_data/%s", subtreeHash.String())
 	httpmock.RegisterResponder("GET", url, httpmock.NewStringResponder(503, "unavailable"))
 

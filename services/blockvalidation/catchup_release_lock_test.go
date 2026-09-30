@@ -1005,6 +1005,13 @@ func TestIsLocalCatchupFault(t *testing.T) {
 			want: false,
 		},
 		{
+			// A 429 was ErrServiceError, and so local, on main; the dedicated
+			// rate-limited code must not turn it into a peer charge.
+			name: "a peer's HTTP 429 is a local catchup fault",
+			err:  errors.NewServiceRateLimitedError("http request [http://peer/blocks/abc] returned status code [429]"),
+			want: true,
+		},
+		{
 			name: "bare tx-invalid is the peer's, not ours",
 			err:  errors.NewTxInvalidError("previous tx has no output at index 3"),
 			want: false,

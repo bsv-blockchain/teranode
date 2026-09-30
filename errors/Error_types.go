@@ -37,6 +37,7 @@ var (
 	ErrServiceError               = New(ERR_SERVICE_ERROR, "service error")
 	ErrServiceNotStarted          = New(ERR_SERVICE_NOT_STARTED, "service not started")
 	ErrServiceUnavailable         = New(ERR_SERVICE_UNAVAILABLE, "service unavailable")
+	ErrServiceRateLimited         = New(ERR_SERVICE_RATE_LIMITED, "service rate limited")
 	ErrFrozen                     = New(ERR_UTXO_FROZEN, "tx is frozen")
 	ErrNonFinal                   = New(ERR_UTXO_NON_FINAL, "tx is non-final")
 	ErrSpent                      = New(ERR_UTXO_SPENT, "utxo already spent")
@@ -385,6 +386,17 @@ func NewTxError(message string, params ...interface{}) *Error {
 // NewServiceUnavailableError creates a new error with the service unavailable error code.
 func NewServiceUnavailableError(message string, params ...interface{}) *Error {
 	return New(ERR_SERVICE_UNAVAILABLE, message, params...)
+}
+
+// NewServiceRateLimitedError creates a new error with the service rate limited error code.
+//
+// This is a REMOTE admission decision: the server we called answered 429 because we
+// exceeded its rate limit. It is deliberately distinct from ERR_SERVICE_UNAVAILABLE,
+// which IsTransientLocalError treats as a fault in this node's own stack and which
+// legacy block sync uses to decide whether to keep a delivering peer. Retry with
+// backoff; do not blame the peer.
+func NewServiceRateLimitedError(message string, params ...interface{}) *Error {
+	return New(ERR_SERVICE_RATE_LIMITED, message, params...)
 }
 
 // NewServiceNotStartedError creates a new error with the service not started error code.

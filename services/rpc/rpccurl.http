@@ -13,6 +13,7 @@
 
 @hostname = localhost
 @port = 9292
+# Set these to the rpc_user/rpc_pass configured for the node you are hitting.
 @credentials = bitcoin:bitcoin
 
 ### Get Best Block Hash

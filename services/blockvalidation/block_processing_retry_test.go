@@ -259,6 +259,11 @@ func TestProcessCatchupChItem(t *testing.T) {
 		"context cancellation (shutdown or catchup deadline)": errors.NewContextCanceledError("catchup context cancelled"),
 		"a local service outage (aerospike batch timeout)":    errors.NewServiceUnavailableError("aerospike get batch did not complete within"),
 		"an unavailable store":                                errors.NewStorageUnavailableError("disk below threshold"),
+		// A /blocks 429 during catchup: the serving peer's per-IP bucket is shared
+		// with this node's own subtree fan-out, so the collision is ours. On main a
+		// 429 mapped to ErrServiceError and was local; the dedicated rate-limited
+		// code must stay local here too, or one 429 charges and rotates the peer.
+		"a peer's rate limit on /blocks (HTTP 429)": errors.NewServiceRateLimitedError("http request [http://peer/blocks/abc] returned status code [429]"),
 	} {
 		t.Run(name+" is local: counts toward cap, never blames the peer", func(t *testing.T) {
 			u, _ := newServer(3, localErr)
