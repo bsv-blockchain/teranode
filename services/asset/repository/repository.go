@@ -105,6 +105,15 @@ type Repository struct {
 	semGetSubtreeHead         *semaphore.Weighted
 	semGetUtxo                *semaphore.Weighted
 	semGetLegacyBlockReader   *semaphore.Weighted
+	// semGetLegacyBlockReaderPeer bounds legacy-block streams requested internally by
+	// this node's own legacy peer server (services/legacy/peer_server.go's pushBlockMsg,
+	// which serves SV peers), separately from semGetLegacyBlockReader's anonymous-HTTP
+	// budget. Both consumers reach GetLegacyBlockReader through the same HTTP route
+	// (/block_legacy/:hash); pushBlockMsg is the only caller that requests the wire
+	// format (?wire=1), so a shared pool cannot let slow anonymous clients starve SV
+	// peer block serving.
+	semGetLegacyBlockReaderPeer *semaphore.Weighted
+	semSubtreeStream            *semaphore.Weighted
 }
 
 // NewRepository creates a new Repository instance with the provided dependencies.
@@ -166,6 +175,8 @@ func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStor
 	repo.semGetSubtreeHead = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeHead, "GetSubtreeHead")
 	repo.semGetUtxo = initSemaphore(tSettings.Asset.ConcurrencyGetUtxo, "GetUtxo")
 	repo.semGetLegacyBlockReader = initSemaphore(tSettings.Asset.ConcurrencyGetLegacyBlockReader, "GetLegacyBlockReader")
+	repo.semGetLegacyBlockReaderPeer = initSemaphore(tSettings.Asset.ConcurrencyGetLegacyBlockReaderPeer, "GetLegacyBlockReaderPeer")
+	repo.semSubtreeStream = initSemaphore(tSettings.Asset.SubtreeStreamConcurrency, "SubtreeStream")
 
 	return repo, nil
 }

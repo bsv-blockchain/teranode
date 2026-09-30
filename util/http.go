@@ -484,13 +484,22 @@ var localServiceHTTPClient = &http.Client{
 		t.MaxIdleConnsPerHost = 100
 		return t
 	}(),
+	// A redirect target is not necessarily loopback or TLS-protected, and this client's
+	// requests can carry the legacy peer pool's internal token header. Don't follow: return
+	// the redirect response as-is so the token never reaches whatever the target is.
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
 }
 
 // DoLocalServiceHTTPRequestBodyReader streams a GET from one of this node's own services,
 // such as the legacy service reading blocks from the local asset service. The URL must come
 // from this node's settings, never from a peer: unlike DoHTTPRequestBodyReader it does not
 // refuse loopback or private addresses. The default timeout matches DoHTTPRequestBodyReader.
-func DoLocalServiceHTTPRequestBodyReader(ctx context.Context, url string) (io.ReadCloser, error) {
+//
+// headers is optional (existing callers pass none) and, when given, is set on the outgoing
+// request as-is - e.g. the legacy peer server's internal pool token header.
+func DoLocalServiceHTTPRequestBodyReader(ctx context.Context, url string, headers ...map[string]string) (io.ReadCloser, error) {
 	cancelFn := func() {
 		// noop
 	}
@@ -499,7 +508,20 @@ func DoLocalServiceHTTPRequestBodyReader(ctx context.Context, url string) (io.Re
 		ctx, cancelFn = context.WithTimeout(ctx, time.Duration(httpStreamingTimeout)*time.Millisecond)
 	}
 
-	bodyReaderCloser, cancelFn, err := executeHTTPRequestWithClient(ctx, cancelFn, localServiceHTTPClient, url)
+	// Merge every map passed; a later map wins on a duplicate key.
+	var reqHeaders map[string]string
+
+	for _, h := range headers {
+		for k, v := range h {
+			if reqHeaders == nil {
+				reqHeaders = make(map[string]string, len(h))
+			}
+
+			reqHeaders[k] = v
+		}
+	}
+
+	bodyReaderCloser, cancelFn, err := executeHTTPRequestWithClient(ctx, cancelFn, localServiceHTTPClient, url, reqHeaders)
 	if err != nil {
 		cancelFn()
 		return nil, err
@@ -769,12 +791,13 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 		return nil, cancelFn, err
 	}
 
-	return executeHTTPRequestWithClient(ctx, cancelFn, httpClient, rawURL, requestBody...)
+	return executeHTTPRequestWithClient(ctx, cancelFn, httpClient, rawURL, nil, requestBody...)
 }
 
 // executeHTTPRequestWithClient performs the request through client, which decides what
-// addresses may be reached.
-func executeHTTPRequestWithClient(ctx context.Context, cancelFn context.CancelFunc, client *http.Client, rawURL string, requestBody ...[]byte) (io.ReadCloser, context.CancelFunc, error) {
+// addresses may be reached. headers, when non-nil, are set on the request after Content-Type
+// (so a caller can override it) and before signing (so a signer that covers headers sees them).
+func executeHTTPRequestWithClient(ctx context.Context, cancelFn context.CancelFunc, client *http.Client, rawURL string, headers map[string]string, requestBody ...[]byte) (io.ReadCloser, context.CancelFunc, error) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -792,6 +815,10 @@ func executeHTTPRequestWithClient(ctx context.Context, cancelFn context.CancelFu
 		req.Body = io.NopCloser(bytes.NewReader(requestBody[0]))
 		req.Method = http.MethodPost
 		req.Header.Set("Content-Type", "application/octet-stream")
+	}
+
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 
 	// Sign the request if a signer is configured (silently skip on error)

@@ -159,6 +159,7 @@ func TestSensitiveKeysDerivedMatchesExpected(t *testing.T) {
 		"coinbaseDBUserPwd":           true,
 		"slack_token":                 true,
 		"grpc_admin_api_key":          true,
+		"asset_legacyPeerPoolToken":   true,
 	}
 
 	got := extractSensitiveKeys()
