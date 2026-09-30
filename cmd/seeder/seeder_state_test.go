@@ -9,13 +9,37 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
+	"github.com/bsv-blockchain/teranode/stores/blob"
+	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
+
+// newTestBlobStore builds a fresh in-memory blob store for lastProcessed.dat checks.
+func newTestBlobStore(t *testing.T) blob.Store {
+	t.Helper()
+
+	storeURL, err := url.Parse("memory://")
+	require.NoError(t, err)
+
+	store, err := blob.NewStore(ulogger.TestLogger{}, storeURL)
+	require.NoError(t, err)
+
+	return store
+}
+
+func markLastProcessed(t *testing.T, ctx context.Context, blockStore blob.Store) {
+	t.Helper()
+
+	err := blockStore.Set(ctx, nil, fileformat.FileTypeDat, []byte("1\n"),
+		bloboptions.WithFilename("lastProcessed"), bloboptions.WithNoHashPrefix())
+	require.NoError(t, err)
+}
 
 // newTestBlockchainStore builds a fresh in-memory blockchain store. The store
 // auto-initialises with the genesis block.
@@ -144,6 +168,61 @@ func TestWriteBlockAssemblerState_MissingHeader(t *testing.T) {
 
 	// And nothing should have been persisted.
 	exists, err := blockAssemblerStateExists(ctx, store)
+	require.NoError(t, err)
+	require.False(t, exists)
+}
+
+// TestCheckSkipUTXOImport_NoMarker_ProceedsWithImport covers the common case:
+// no lastProcessed.dat means this is a fresh seed, so the UTXO pass must run.
+func TestCheckSkipUTXOImport_NoMarker_ProceedsWithImport(t *testing.T) {
+	ctx := context.Background()
+	blockchainStore := newTestBlockchainStore(t)
+	blockStore := newTestBlobStore(t)
+
+	skip, err := checkSkipUTXOImport(ctx, blockStore, blockchainStore)
+	require.NoError(t, err)
+	require.False(t, skip)
+}
+
+// TestCheckSkipUTXOImport_MarkerWithCheckpoint_SkipsIdempotently covers a
+// cleanly completed prior seed: lastProcessed.dat and the BlockAssembler
+// checkpoint are both present, so re-running must skip idempotently.
+func TestCheckSkipUTXOImport_MarkerWithCheckpoint_SkipsIdempotently(t *testing.T) {
+	ctx := context.Background()
+	blockchainStore := newTestBlockchainStore(t)
+	blockStore := newTestBlobStore(t)
+
+	markLastProcessed(t, ctx, blockStore)
+
+	block := storeBlockAboveGenesis(t, ctx, blockchainStore)
+	require.NoError(t, writeBlockAssemblerState(ctx, ulogger.TestLogger{}, blockchainStore, &utxoSetTip{hash: *block.Hash(), height: 1}))
+
+	skip, err := checkSkipUTXOImport(ctx, blockStore, blockchainStore)
+	require.NoError(t, err)
+	require.True(t, skip)
+}
+
+// TestCheckSkipUTXOImport_MarkerWithoutCheckpoint_RefusesWithForceHint is the
+// ChiR1 regression: lastProcessed.dat present but no BlockAssembler checkpoint
+// means an earlier run imported the UTXO set but failed before the checkpoint
+// was written (e.g. the header pass rejected a truncated headers file after
+// the UTXO pass had already finished). Silently skipping here would report
+// success on a half-seeded store with no checkpoint; the seeder must refuse
+// instead and name -force as the recovery.
+func TestCheckSkipUTXOImport_MarkerWithoutCheckpoint_RefusesWithForceHint(t *testing.T) {
+	ctx := context.Background()
+	blockchainStore := newTestBlockchainStore(t)
+	blockStore := newTestBlobStore(t)
+
+	markLastProcessed(t, ctx, blockStore)
+
+	skip, err := checkSkipUTXOImport(ctx, blockStore, blockchainStore)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "-force")
+	require.False(t, skip)
+
+	// And it must not have silently written a checkpoint either.
+	exists, err := blockAssemblerStateExists(ctx, blockchainStore)
 	require.NoError(t, err)
 	require.False(t, exists)
 }
