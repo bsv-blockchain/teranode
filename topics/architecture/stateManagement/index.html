@@ -7373,7 +7373,7 @@
 <ul>
 <li><strong>Run</strong>: Transitions to <em>Running</em> from <em>Idle</em> or <em>CatchingBlocks</em></li>
 <li><strong>CatchupBlocks</strong>: Transitions to <em>CatchingBlocks</em> from <em>Running</em> or <em>Idle</em></li>
-<li><strong>Stop</strong>: Transitions to <em>Idle</em> from <em>Running</em></li>
+<li><strong>Stop</strong>: Transitions to <em>Idle</em> from <em>Running</em> or <em>CatchingBlocks</em></li>
 </ul>
 <p>Teranode provides a visualizer tool to generate and visualize the state machine diagram. To run the visualizer, use the command <code>go run services/blockchain/fsm_visualizer/main.go</code>. The generated <code>docs/state-machine.diagram.md</code> can be visualized using <a href="https://mermaid.live/">https://mermaid.live/</a>.</p>
 <h2 id="3-functionality">3. Functionality<a class="headerlink" href="#3-functionality" title="Permanent link">&para;</a></h2>
@@ -7422,7 +7422,7 @@ known retired <code>LEGACYSYNCING</code> name is migrated automatically.</p>
 </ul>
 <h3 id="33-state-machine-states">3.3. State Machine States<a class="headerlink" href="#33-state-machine-states" title="Permanent link">&para;</a></h3>
 <h4 id="331-fsm-idle-state">3.3.1. FSM: Idle State<a class="headerlink" href="#331-fsm-idle-state" title="Permanent link">&para;</a></h4>
-<p>A node reaches <code>Idle</code> by being stopped from <code>Running</code>, by restoring persisted
+<p>A node reaches <code>Idle</code> by being stopped from <code>Running</code> or <code>CatchingBlocks</code>, by restoring persisted
 <code>Idle</code>, or by starting fresh under a context configured to park there (production
 deployments do; see section 3.1). In this state:</p>
 <ul>
@@ -7446,8 +7446,8 @@ deployments do; see section 3.1). In this state:</p>
 </ul>
 <p>Services wait for the FSM to leave <code>Idle</code> before starting their operations — any
 non-Idle state, including <code>CatchingBlocks</code>, releases them (see section 3.5). As
-such, the node should see no activity for as long as the FSM stays in <code>Idle</code>.</p>
-<p>The node can also return back to the <code>Idle</code> state from <code>Running</code>, however this can only be triggered by a manual / external request.</p>
+such, a node that boots into <code>Idle</code> sees no activity until it leaves <code>Idle</code>.</p>
+<p>The node can also return to <code>Idle</code> from <code>Running</code> or <code>CatchingBlocks</code>, but only on a manual / external request. Services that have already started keep running; <code>Idle</code> records the operator's intent and blocks automatic promotion, it is not a drain barrier. In particular, a STOP from <code>CatchingBlocks</code> does not cancel the catchup batch in progress: it keeps validating blocks under <code>Idle</code> and its final promotion to <code>Running</code> is refused. The catchup safeguards (no block-assembly feeding, no peer-subtree validation, no rejected-transaction or invalid-subtree publishing, pruner <code>SkipDuringCatchup</code>) apply in every state except <code>Running</code>, so they stay in force under <code>Idle</code>. In legacy sync mode, block download is not FSM-gated and continues. Stop the services before destructive recovery such as <code>rewindblockchain</code>.</p>
 <h4 id="332-fsm-running-state">3.3.2. FSM: Running State<a class="headerlink" href="#332-fsm-running-state" title="Permanent link">&para;</a></h4>
 <p>The <code>Running</code> state represents the node actively participating in the network. In this state:</p>
 <p>Allowed Operations in Running State:</p>

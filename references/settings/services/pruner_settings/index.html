@@ -8326,7 +8326,7 @@
 <p><strong>Default</strong>: <code>false</code></p>
 <p><strong>Environment Variable</strong>: <code>pruner_skipDuringCatchup</code></p>
 <p><strong>Description</strong>: Skip pruning during blockchain catchup</p>
-<p>When enabled, the pruner checks FSM state and skips all deletion operations during catchup. This prevents race conditions where block validation marks transactions as mined faster than the pruner can preserve their parents.</p>
+<p>When enabled, the pruner checks FSM state and skips all deletion operations unless the node is RUNNING, which covers catchup and IDLE after an operator STOP mid-catchup. This prevents race conditions where block validation marks transactions as mined faster than the pruner can preserve their parents.</p>
 <p><strong>Values:</strong></p>
 <ul>
 <li><code>false</code> (default): Normal pruning during catchup (safe with retention &gt;= 288 blocks)</li>

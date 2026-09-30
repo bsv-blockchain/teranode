@@ -1560,6 +1560,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#resuming-from-idle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resuming from IDLE
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -7099,6 +7110,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#resuming-from-idle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resuming from IDLE
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -7391,11 +7413,9 @@ notification to retry; this does not guarantee immediate replay of queued work.<
 <li>CATCHINGBLOCKS</li>
 </ul>
 <h3 id="when-a-transition-is-refused">When a transition is refused<a class="headerlink" href="#when-a-transition-is-refused" title="Permanent link">&para;</a></h3>
-<p>Two rules constrain which transitions are accepted, and both surface as errors
-rather than silent no-ops:</p>
+<p>One rule constrains which transitions are accepted, and it surfaces as an error
+rather than a silent no-op:</p>
 <ul>
-<li><strong>Only RUN may leave CATCHINGBLOCKS.</strong> A node that is catching up cannot be
-  moved to IDLE; it must finish catching up first.</li>
 <li><strong>RUN is refused while the chain tip is below the network's highest hard-coded
   checkpoint.</strong> Mainnet and testnet both have checkpoints; regtest has none. The
   error names both your tip height and the checkpoint it must reach. From IDLE,
@@ -7424,9 +7444,28 @@ IDLE, explicitly enter CATCHINGBLOCKS to start synchronization. From
 CATCHINGBLOCKS, RUN is refused until catchup completes. If you are looking for
 an override to force a below-checkpoint node into RUNNING, it no longer exists
 — that was the hole this rule closes. Let the node catch up.</p>
-<p><strong>Getting back to IDLE:</strong> there is no <code>CATCHINGBLOCKS -&gt; IDLE</code> transition. Once
-a node is catching up, the only way out is RUN.</p>
+<p><strong>Getting back to IDLE:</strong> <code>setfsmstate --fsmstate idle</code> works from both RUNNING
+and CATCHINGBLOCKS. From CATCHINGBLOCKS it records the operator's intent to park
+the node; it does not cancel the catchup batch already in progress. That batch
+keeps validating blocks under IDLE with the catchup safeguards still in force,
+since they apply in every state except RUNNING: nothing is fed to block
+assembly, peer subtrees are ignored, and rejected-transaction messages are not
+published. Its final automatic promotion to RUNNING is refused, so the node
+stays in IDLE. In legacy sync mode
+block download is not FSM-gated and continues. Stop the services promptly, and
+always before destructive recovery such as <code>rewindblockchain</code>: IDLE alone does
+not guarantee that no work is in flight.</p>
 </blockquote>
+<h3 id="resuming-from-idle">Resuming from IDLE<a class="headerlink" href="#resuming-from-idle" title="Permanent link">&para;</a></h3>
+<p>Choose the resume path by how far the node is behind:</p>
+<ul>
+<li><strong>Needs to synchronize</strong> (below the highest checkpoint, or behind its peers):
+  <code>setfsmstate --fsmstate catchingblocks</code>. The node promotes itself to RUNNING
+  once catchup completes.</li>
+<li><strong>Already at the tip</strong>: <code>setfsmstate --fsmstate running</code>. Resuming an at-tip
+  node with <code>catchingblocks</code> can leave it in CATCHINGBLOCKS with no catchup work
+  to trigger the promotion to RUNNING.</li>
+</ul>
 <h2 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h2>
 <p>After each state change, verify the new state:</p>
 <ol>

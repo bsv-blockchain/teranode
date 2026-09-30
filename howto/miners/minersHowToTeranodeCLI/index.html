@@ -8206,10 +8206,9 @@ not fully enforce — the node stopped, the FSM state in the blockchain DB readi
 <code>IDLE</code>, and the subtree blobs for the deleted range still unpruned. <code>--dry-run</code>
 reports the tip, target, and block count without mutating anything, but it
 returns before the subtree store is touched, so it cannot confirm that last one.</p>
-<p>Note that <code>IDLE</code> is only reachable from <code>RUNNING</code>: the FSM has no
-<code>CATCHINGBLOCKS</code> → <code>IDLE</code> transition, so on a node stuck catching blocks
-<code>setfsmstate --fsmstate=idle</code> fails and the state has to be moved via <code>running</code>
-first.</p>
+<p><code>setfsmstate --fsmstate=idle</code> reaches <code>IDLE</code> from both <code>RUNNING</code> and
+<code>CATCHINGBLOCKS</code>. From <code>CATCHINGBLOCKS</code> it does not cancel a catchup already in
+progress, so stop the services before rewinding.</p>
 <p>A step-by-step operator runbook is not published yet. Until it is, do not run
 this against a production node without working through those preconditions
 yourself.</p>

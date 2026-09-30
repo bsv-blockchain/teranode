@@ -8956,8 +8956,8 @@ state. Under the <code>operator</code> context, the first start therefore parks 
 snapshot, and that all services can reach their stores. Then start catch-up:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.items[0].metadata.name}'</span><span class="k">)</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>catchingblocks
 </span></code></pre></div>
-<p>There is no transition from <code>CATCHINGBLOCKS</code> back to <code>IDLE</code>, so perform these
-checks before issuing the command. To skip the verification window on an
+<p><code>setfsmstate --fsmstate idle</code> can park the node again, but it does not stop a
+catchup already in progress, so perform these checks before issuing the command. To skip the verification window on an
 unattended node, set <code>blockchain_initializeNodeInState: "CATCHINGBLOCKS"</code> in
 the operator configmap before the first start.</p>
 <h3 id="expected-timeline_1">Expected Timeline<a class="headerlink" href="#expected-timeline_1" title="Permanent link">&para;</a></h3>

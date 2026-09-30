@@ -7909,7 +7909,7 @@
 <li><code>block_assembly_timeout</code> - Timed out or errored waiting for Block Assembly to be ready</li>
 <li><code>below_min_height</code> - Block height at or below <code>pruner_minBlockHeight</code></li>
 <li><code>fsm_error</code> - Failed to read the blockchain FSM state</li>
-<li><code>catchup_mode</code> - Node is in the CATCHINGBLOCKS FSM state and <code>pruner_skipDuringCatchup</code> is set</li>
+<li><code>catchup_mode</code> - Node is not in the RUNNING FSM state (CATCHINGBLOCKS, or IDLE after an operator STOP) and <code>pruner_skipDuringCatchup</code> is set</li>
 </ul>
 </li>
 </ul>
