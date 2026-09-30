@@ -391,7 +391,7 @@ Responses are JSON objects containing the following fields:
 
 ## Example Request
 
-The default credentials are `bitcoin:bitcoin`. The default credentials can be changed via settings.
+Credentials come from the `rpc_user` and `rpc_pass` settings. Teranode ships with both unset, so set them in `settings_local.conf` before using the RPC service. The example below uses `bitcoin:bitcoin`, the pair the throwaway compose rigs configure; substitute your own.
 
 ```bash
 curl --user bitcoin:bitcoin --data-binary '{"jsonrpc":"1.0","id":"curltext","method":"version","params":[]}' -H 'content-type: text/plain;' http://localhost:9292/

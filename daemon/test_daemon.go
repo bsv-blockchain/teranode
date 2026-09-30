@@ -195,6 +195,14 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	appSettings = settings.NewSettings() // This reads gocore.Config and applies sensible defaults
 
+	// The test daemon drives its own RPC endpoint over Basic auth, and the RPC server
+	// fails closed when either credential is unset. Production no longer ships a default
+	// pair, so supply a throwaway one for the in-process node instead of depending on it.
+	if appSettings.RPC.RPCUser == "" || appSettings.RPC.RPCPass == "" {
+		appSettings.RPC.RPCUser = "testdaemon"
+		appSettings.RPC.RPCPass = "testdaemon"
+	}
+
 	// Generate a unique context for this TestDaemon to ensure util.GetListener
 	// creates unique listeners instead of returning cached ones from another TestDaemon.
 	// The counter ensures uniqueness even when tests run in quick succession.

@@ -309,7 +309,7 @@ func _initPrometheusMetrics() {
 			Name:      "http_rate_limited_total",
 			Help:      "Number of rate-limited HTTP requests",
 		},
-		[]string{"scope"}, // "global" or "heavy" — identifies which rate limiter triggered
+		[]string{"scope"}, // "global", "heavy" or "heavy_catchup" — identifies which rate limiter triggered
 	)
 
 	prometheusAssetHTTPPeerAuthResult = promauto.NewCounterVec(
