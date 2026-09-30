@@ -1,4 +1,7 @@
 @startuml
+' Rendered with PlantUML 1.2024.7 (the version the committed SVGs in this
+' directory were produced with). Regenerate with:
+'   java -jar plantuml-1.2024.7.jar -tsvg kafka_blockchain_to_others.puml
 skinparam backgroundColor #F0F8FF
 skinparam defaultFontColor #333333
 skinparam arrowColor #666666
@@ -22,9 +25,16 @@ skinparam participant {
 
 
 participant Blockchain as BC
-participant Blockpersister as BP
+participant "Legacy P2P\n(netsync.SyncManager)" as LP2P
+participant "Block Assembly" as BA
+participant "Block Persister" as BP
 
-BC -> BP: New Block (kafka_blocksFinalConfig)
+BC -> LP2P: New Block (kafka_blocksFinalConfig)\nonly Kafka consumer of blocks-final
+
+BA -> BC: Subscribe (gRPC)
+BC --> BA: finalized block notification
+
+BP -> BC: GetBlocksNotPersisted (gRPC poll)\nevery blockpersister_persistSleep (default 10s)
 
 left footer Last Modified On: %date("dd-MMM-yyyy")
 @enduml

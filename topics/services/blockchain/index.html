@@ -7912,9 +7912,9 @@ Explanation of the sequences:</p>
 </li>
 </ol>
 <h3 id="23-sending-new-block-notifications-to-the-block-persister">2.3. Sending new block notifications to the Block Persister<a class="headerlink" href="#23-sending-new-block-notifications-to-the-block-persister" title="Permanent link">&para;</a></h3>
-<p>The Blockchain service, after adding a new block, emits a Kafka notification which is received by the Block Persister service. The Block Persister service is responsible for post-processing the block and storing it in a file format, in a persistent data store (such as S3).</p>
+<p>The Blockchain service, after adding a new block, emits a <code>blocks-final</code> Kafka notification. The Block Persister service does <strong>not</strong> consume this topic — the only Kafka consumer of <code>blocks-final</code> is the Legacy P2P service (<code>netsync.SyncManager</code>), which uses it to announce new blocks to legacy (pre-libp2p) peers. The Block Persister instead polls the Blockchain service over gRPC (<code>GetBlocksNotPersisted</code>), waking every <code>blockpersister_persistSleep</code> (default 10s), and post-processes each returned block into a file format in a persistent data store (such as S3).</p>
 <p><img alt="blockchain_send_to_block_persister.svg" src="../img/plantuml/blockchain/blockchain_send_to_block_persister.svg" /></p>
-<p>The Blockchain service, based on standard practices, will retry sending the message until Kafka receives it. In case of Kafka downtime, the service will keep retrying for as long as the message is not sent.</p>
+<p>The Blockchain service, based on standard practices, will retry sending the <code>blocks-final</code> message until Kafka receives it. In case of Kafka downtime, the service will keep retrying for as long as the message is not sent.</p>
 <h3 id="24-getting-a-block-from-the-blockchain">2.4. Getting a block from the blockchain<a class="headerlink" href="#24-getting-a-block-from-the-blockchain" title="Permanent link">&para;</a></h3>
 <p><img alt="blockchain_get_block.svg" src="../img/plantuml/blockchain/blockchain_get_block.svg" /></p>
 <p>Explanation of the sequence:</p>
@@ -8497,7 +8497,7 @@ Explanation of the sequences:</p>
 </ul>
 <h4 id="topics">Topics<a class="headerlink" href="#topics" title="Permanent link">&para;</a></h4>
 <ul>
-<li><strong>Blocks-Final</strong>: Used for finalized block notifications, consumed by the Block Persister service.</li>
+<li><strong>Blocks-Final</strong>: Used for finalized block notifications, consumed by the Legacy P2P service (<code>netsync.SyncManager</code>) — not the Block Persister, which has no Kafka consumer and instead polls the Blockchain service over gRPC.</li>
 </ul>
 <h4 id="error-handling">Error Handling<a class="headerlink" href="#error-handling" title="Permanent link">&para;</a></h4>
 <ul>
