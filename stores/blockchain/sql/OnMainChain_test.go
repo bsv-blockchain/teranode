@@ -451,12 +451,13 @@ func TestGetLatestBlockHeaderFromBlockLocator_ForkTipFallback(t *testing.T) {
 	// = blockAlternative2. The fast path would instead return block2 (same height,
 	// on main chain, in locator) — semantically wrong.
 	locator := []chainhash.Hash{*blockAlternative2.Hash(), *block1.Hash()}
-	header, meta, err := s.GetLatestBlockHeaderFromBlockLocator(context.Background(), blockAlternative2.Hash(), locator)
+	header, meta, onMainChain, err := s.GetLatestBlockHeaderFromBlockLocator(context.Background(), blockAlternative2.Hash(), locator)
 	require.NoError(t, err)
 	require.NotNil(t, header)
 	require.Equal(t, blockAlternative2.Hash().String(), header.Hash().String(),
 		"fork-tip caller must receive the fork block, not a main-chain block at the same height")
 	require.EqualValues(t, 2, meta.Height)
+	require.False(t, onMainChain, "a fork-tip bestBlockHash must report the CTE fallback, not the fast path")
 }
 
 // TestGetLatestBlockHeaderFromBlockLocator_MainChainTipFastPath verifies the fast
@@ -466,11 +467,12 @@ func TestGetLatestBlockHeaderFromBlockLocator_MainChainTipFastPath(t *testing.T)
 	storeBlocks(t, s, block1, block2, block3)
 
 	locator := []chainhash.Hash{*block3.Hash(), *block2.Hash(), *block1.Hash()}
-	header, meta, err := s.GetLatestBlockHeaderFromBlockLocator(context.Background(), block3.Hash(), locator)
+	header, meta, onMainChain, err := s.GetLatestBlockHeaderFromBlockLocator(context.Background(), block3.Hash(), locator)
 	require.NoError(t, err)
 	require.NotNil(t, header)
 	require.Equal(t, block3.Hash().String(), header.Hash().String(), "highest locator match must be returned")
 	require.EqualValues(t, 3, meta.Height)
+	require.True(t, onMainChain, "a main-chain bestBlockHash must report the fast path")
 }
 
 // TestCheckBlockIsInCurrentChainSQL_SingleQueryMultipleIDs verifies the new
@@ -761,7 +763,7 @@ func TestGetLatestBlockHeaderFromBlockLocator_PreflightErrorFallsBackToCTE(t *te
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, _, err := s.GetLatestBlockHeaderFromBlockLocator(canceledCtx, block1.Hash(), []chainhash.Hash{*block1.Hash()})
+	_, _, _, err := s.GetLatestBlockHeaderFromBlockLocator(canceledCtx, block1.Hash(), []chainhash.Hash{*block1.Hash()})
 	require.Error(t, err, "canceled context must surface as an error via the CTE path")
 }
 

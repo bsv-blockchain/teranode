@@ -179,8 +179,10 @@ type Store interface {
 	//   - ctx: Context for the operation
 	//   - bestBlockHash: The best block hash to start the search from, backwards through the blockchain
 	//   - blockLocator: Slice of block hashes representing the locator
-	// Returns: BlockHeader, BlockHeaderMeta, and any error encountered
-	GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error)
+	// Returns: BlockHeader, BlockHeaderMeta, whether bestBlockHash is itself on the main chain
+	// (as opposed to a stale/fork tip, in which case the returned ancestor was found via the
+	// recursive CTE fallback rather than the on_main_chain fast path), and any error encountered
+	GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, bool, error)
 
 	// GetBlockHeadersFromOldest retrieves block headers starting from the oldest block.
 	// This method is used to retrieve headers in a chain from the oldest block to the newest.

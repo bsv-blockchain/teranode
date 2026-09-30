@@ -233,8 +233,18 @@ func (c *LocalClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.
 	return c.store.GetBlockHeaders(ctx, blockHash, numberOfHeaders)
 }
 
+// localMaxLocatorWalkDepth returns the configured common-ancestor walk budget,
+// tolerating the nil settings used by some tests.
+func (c *LocalClient) localMaxLocatorWalkDepth() int {
+	if c.settings == nil {
+		return 0
+	}
+
+	return c.settings.Asset.MaxLocatorWalkDepth
+}
+
 func (c *LocalClient) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return getBlockHeadersToCommonAncestor(ctx, c.store, hashTarget, blockLocatorHashes, maxHeaders)
+	return getBlockHeadersToCommonAncestor(ctx, c.store, hashTarget, blockLocatorHashes, maxHeaders, c.localMaxLocatorWalkDepth())
 }
 
 func (c *LocalClient) GetBlockHeadersFromCommonAncestor(ctx context.Context, chainTipHash *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
@@ -245,7 +255,8 @@ func (c *LocalClient) GetBlockHeadersFromCommonAncestor(ctx context.Context, cha
 
 // GetLatestBlockHeaderFromBlockLocator retrieves the latest block header from a block locator.
 func (c *LocalClient) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	return c.store.GetLatestBlockHeaderFromBlockLocator(ctx, bestBlockHash, blockLocator)
+	header, meta, _, err := c.store.GetLatestBlockHeaderFromBlockLocator(ctx, bestBlockHash, blockLocator)
+	return header, meta, err
 }
 
 // GetBlockHeadersFromOldest retrieves block headers starting from the oldest block.

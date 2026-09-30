@@ -654,9 +654,9 @@ func (e *errorStore) GetLatestBlockHeaderFromBlockLocator(
 	ctx context.Context,
 	bestBlockHash *chainhash.Hash,
 	locator []chainhash.Hash,
-) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+) (*model.BlockHeader, *model.BlockHeaderMeta, bool, error) {
 	args := e.Called(ctx, bestBlockHash, locator)
-	return nil, nil, args.Error(2)
+	return nil, nil, false, args.Error(2)
 }
 
 type fakeStoreOldest struct {

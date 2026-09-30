@@ -25,7 +25,7 @@ func TestSQLGetLatestBlockHeaderFromBlockLocator(t *testing.T) {
 		genesisHash := tSettings.ChainCfgParams.GenesisHash
 		blockLocator := []chainhash.Hash{}
 
-		header, meta, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), genesisHash, blockLocator)
+		header, meta, _, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), genesisHash, blockLocator)
 		require.Error(t, err, "blockLocator cannot be empty")
 		require.Nil(t, header)
 		require.Nil(t, meta)
@@ -41,7 +41,7 @@ func TestSQLGetLatestBlockHeaderFromBlockLocator(t *testing.T) {
 		genesisHash := tSettings.ChainCfgParams.GenesisHash
 		blockLocator := []chainhash.Hash{*genesisHash}
 
-		header, meta, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), genesisHash, blockLocator)
+		header, meta, _, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), genesisHash, blockLocator)
 		require.NoError(t, err)
 		require.NotNil(t, header)
 		require.NotNil(t, meta)
@@ -72,7 +72,7 @@ func TestSQLGetLatestBlockHeaderFromBlockLocator(t *testing.T) {
 		// Locator contains both blocks - should return the latest (block2)
 		blockLocator := []chainhash.Hash{*block1.Hash(), *block2.Hash()}
 
-		header, meta, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), block2.Hash(), blockLocator)
+		header, meta, _, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), block2.Hash(), blockLocator)
 		require.NoError(t, err)
 		require.NotNil(t, header)
 		require.NotNil(t, meta)
@@ -104,7 +104,7 @@ func TestSQLGetLatestBlockHeaderFromBlockLocator(t *testing.T) {
 		// Locator contains only block1 - should return block1
 		blockLocator := []chainhash.Hash{*block1.Hash()}
 
-		header, meta, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), block2.Hash(), blockLocator)
+		header, meta, _, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), block2.Hash(), blockLocator)
 		require.NoError(t, err)
 		require.NotNil(t, header)
 		require.NotNil(t, meta)
@@ -141,7 +141,7 @@ func TestSQLGetLatestBlockHeaderFromBlockLocator(t *testing.T) {
 		// Locator from alternative chain should find common ancestor (block1)
 		blockLocator := []chainhash.Hash{*altBlock2.Hash(), *block1.Hash()}
 
-		header, meta, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), block2.Hash(), blockLocator)
+		header, meta, _, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), block2.Hash(), blockLocator)
 		require.NoError(t, err)
 		require.NotNil(t, header)
 		require.NotNil(t, meta)
@@ -149,6 +149,60 @@ func TestSQLGetLatestBlockHeaderFromBlockLocator(t *testing.T) {
 		// Should return block1 as it's the latest common ancestor in the main chain
 		assert.Equal(t, uint32(1), meta.Height)
 		assert.Equal(t, block1.Header.Version, header.Version)
+	})
+
+	t.Run("bestBlockHash on the main chain reports the fast path was used", func(t *testing.T) {
+		storeURL, err := url.Parse("sqlitememory:///")
+		require.NoError(t, err)
+
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		require.NoError(t, err)
+
+		_, _, err = s.StoreBlock(t.Context(), block1, "test_peer")
+		require.NoError(t, err)
+		err = s.SetBlockProcessedAt(t.Context(), block1.Hash())
+		require.NoError(t, err)
+
+		_, _, err = s.StoreBlock(t.Context(), block2, "test_peer")
+		require.NoError(t, err)
+		err = s.SetBlockProcessedAt(t.Context(), block2.Hash())
+		require.NoError(t, err)
+
+		blockLocator := []chainhash.Hash{*block1.Hash()}
+
+		_, _, onMainChain, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), block2.Hash(), blockLocator)
+		require.NoError(t, err)
+		assert.True(t, onMainChain, "block2 is on the main chain, so the fast path must be reported")
+	})
+
+	t.Run("bestBlockHash on a fork tip reports the CTE fallback was used", func(t *testing.T) {
+		storeURL, err := url.Parse("sqlitememory:///")
+		require.NoError(t, err)
+
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		require.NoError(t, err)
+
+		// Store main chain: genesis -> block1 -> block2
+		_, _, err = s.StoreBlock(t.Context(), block1, "test_peer")
+		require.NoError(t, err)
+		err = s.SetBlockProcessedAt(t.Context(), block1.Hash())
+		require.NoError(t, err)
+
+		_, _, err = s.StoreBlock(t.Context(), block2, "test_peer")
+		require.NoError(t, err)
+		err = s.SetBlockProcessedAt(t.Context(), block2.Hash())
+		require.NoError(t, err)
+
+		// altBlock2 is a known hash but stays off the main chain (block2 has the work).
+		altBlock2 := createAlternativeBlock2()
+		_, _, err = s.StoreBlock(t.Context(), altBlock2, "test_peer")
+		require.NoError(t, err)
+
+		blockLocator := []chainhash.Hash{*block1.Hash()}
+
+		_, _, onMainChain, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), altBlock2.Hash(), blockLocator)
+		require.NoError(t, err)
+		assert.False(t, onMainChain, "altBlock2 is a fork tip, so the CTE fallback must be reported, not the fast path")
 	})
 
 	t.Run("no matching blocks in locator", func(t *testing.T) {
@@ -170,7 +224,7 @@ func TestSQLGetLatestBlockHeaderFromBlockLocator(t *testing.T) {
 
 		blockLocator := []chainhash.Hash{*randomHash}
 
-		header, meta, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), block1.Hash(), blockLocator)
+		header, meta, _, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), block1.Hash(), blockLocator)
 		require.Error(t, err, "no matching blocks found in locator")
 		require.Nil(t, header)
 		require.Nil(t, meta)
@@ -205,7 +259,7 @@ func TestSQLGetLatestBlockHeaderFromBlockLocator(t *testing.T) {
 		genesisHash := tSettings.ChainCfgParams.GenesisHash
 		blockLocator := []chainhash.Hash{*genesisHash, *block1.Hash(), *block2.Hash(), *block3OnMain.Hash()}
 
-		header, meta, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), block3OnMain.Hash(), blockLocator)
+		header, meta, _, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), block3OnMain.Hash(), blockLocator)
 		require.NoError(t, err)
 		require.NotNil(t, header)
 		require.NotNil(t, meta)
@@ -233,7 +287,7 @@ func TestSQLGetLatestBlockHeaderFromBlockLocator(t *testing.T) {
 		genesisHash := tSettings.ChainCfgParams.GenesisHash
 		blockLocator := []chainhash.Hash{*genesisHash}
 
-		header, meta, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), randomHash, blockLocator)
+		header, meta, _, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), randomHash, blockLocator)
 		require.Error(t, err, "no matching blocks found in locator")
 		require.Nil(t, header)
 		require.Nil(t, meta)
@@ -273,7 +327,7 @@ func TestSQLGetLatestBlockHeaderFromBlockLocator(t *testing.T) {
 		blockLocator[98] = *block1.Hash()
 		blockLocator[99] = *block2.Hash()
 
-		header, meta, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), block2.Hash(), blockLocator)
+		header, meta, _, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), block2.Hash(), blockLocator)
 		require.NoError(t, err)
 		require.NotNil(t, header)
 		require.NotNil(t, meta)
@@ -339,7 +393,7 @@ func TestSQLGetLatestBlockHeaderFromBlockLocatorPostgreSQL(t *testing.T) {
 
 		blockLocator := []chainhash.Hash{*block1.Hash(), *block2.Hash()}
 
-		header, meta, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), block2.Hash(), blockLocator)
+		header, meta, _, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), block2.Hash(), blockLocator)
 		require.NoError(t, err)
 		require.NotNil(t, header)
 		require.NotNil(t, meta)
@@ -364,7 +418,7 @@ func TestSQLGetLatestBlockHeaderFromBlockLocatorPostgreSQL(t *testing.T) {
 		// Locator from alternative chain should find common ancestor (block1)
 		blockLocator := []chainhash.Hash{*altBlock2.Hash(), *block1.Hash()}
 
-		header, meta, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), block2.Hash(), blockLocator)
+		header, meta, _, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), block2.Hash(), blockLocator)
 		require.NoError(t, err)
 		require.NotNil(t, header)
 		require.NotNil(t, meta)
@@ -397,7 +451,7 @@ func TestSQLGetLatestBlockHeaderFromBlockLocatorPostgreSQL(t *testing.T) {
 		blockLocator[498] = *block1.Hash()
 		blockLocator[499] = *block2.Hash()
 
-		header, meta, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), block2.Hash(), blockLocator)
+		header, meta, _, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), block2.Hash(), blockLocator)
 		require.NoError(t, err)
 		require.NotNil(t, header)
 		require.NotNil(t, meta)
@@ -415,7 +469,7 @@ func TestSQLGetLatestBlockHeaderFromBlockLocatorPostgreSQL(t *testing.T) {
 		genesisHash := tSettings.ChainCfgParams.GenesisHash
 		blockLocator := []chainhash.Hash{}
 
-		header, meta, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), genesisHash, blockLocator)
+		header, meta, _, err := s.GetLatestBlockHeaderFromBlockLocator(t.Context(), genesisHash, blockLocator)
 		require.Error(t, err, "blockLocator cannot be empty")
 		require.Nil(t, header)
 		require.Nil(t, meta)
@@ -447,7 +501,7 @@ func BenchmarkGetLatestBlockHeaderFromBlockLocator(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _, err = s.GetLatestBlockHeaderFromBlockLocator(ctx, block2.Hash(), blockLocator)
+		_, _, _, err = s.GetLatestBlockHeaderFromBlockLocator(ctx, block2.Hash(), blockLocator)
 		require.NoError(b, err)
 	}
 }
