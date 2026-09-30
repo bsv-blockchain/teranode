@@ -136,6 +136,24 @@ func TestGetLastNBlocks(t *testing.T) {
 		assert.Equal(t, "STORAGE_ERROR (69): error getting last N blocks", echoErr.Message)
 	})
 
+	t.Run("n above the cap is clamped before reaching the repository", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
+
+		// The repository must never see the caller-supplied n once it exceeds
+		// defaultMaxLastNBlocks: an unauthenticated caller must not be able to
+		// force a whole-chain materialisation of BlockInfo structs.
+		mockRepo.On("GetLastNBlocks", mock.MatchedBy(func(n int64) bool { return n == defaultMaxLastNBlocks }), mock.Anything, mock.Anything).
+			Return([]*model.BlockInfo{testBlockInfo}, nil)
+
+		echoContext.SetPath("/blocks/last")
+		echoContext.QueryParams().Set("n", "1000000")
+
+		err := httpServer.GetLastNBlocks(echoContext)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, responseRecorder.Code)
+		mockRepo.AssertExpectations(t)
+	})
+
 	t.Run("No blocks found", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
 

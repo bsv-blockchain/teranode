@@ -73,8 +73,9 @@ func (s *SQL) GetForkedBlockHeaders(ctx context.Context, blockHashFrom *chainhas
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	blockHeaders := make([]*model.BlockHeader, 0, numberOfHeaders)
-	blockHeaderMetas := make([]*model.BlockHeaderMeta, 0, numberOfHeaders)
+	capacity := preallocFor(numberOfHeaders)
+	blockHeaders := make([]*model.BlockHeader, 0, capacity)
+	blockHeaderMetas := make([]*model.BlockHeaderMeta, 0, capacity)
 
 	// No on_main_chain fast path is possible here. This query's semantic is
 	// "all blocks NOT in the ancestor set of blockHashFrom", which has no

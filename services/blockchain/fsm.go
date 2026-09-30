@@ -4,6 +4,7 @@ package blockchain
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -11,6 +12,9 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/looplab/fsm"
 )
+
+// Bound notification delivery while the FSM transition mutex is held.
+const fsmNotificationTimeout = 5 * time.Second
 
 // FSMTransitions is the single source of truth for blockchain FSM transitions.
 // Used by NewFiniteStateMachine and by AvailableEventsForState.
@@ -83,13 +87,19 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 			}
 			b.fsmPersistenceUncertain = false
 		},
-		"enter_state": func(_ context.Context, e *fsm.Event) {
+		"enter_state": func(ctx context.Context, e *fsm.Event) {
 			metadata := map[string]string{
 				"event":       e.Event,
 				"destination": e.Dst,
 			}
 
-			if _, err := b.SendNotification(context.Background(), &blockchain_api.Notification{
+			notificationParent := b.AppCtx
+			if notificationParent == nil {
+				notificationParent = ctx
+			}
+			notificationCtx, cancel := context.WithTimeout(notificationParent, fsmNotificationTimeout)
+			defer cancel()
+			if _, err := b.SendNotification(notificationCtx, &blockchain_api.Notification{
 				Type:     model.NotificationType_FSMState,
 				Hash:     (&chainhash.Hash{})[:], // not relevant for FSMEvent notifications
 				Base_URL: "",                     // not relevant for FSMEvent notifications
