@@ -186,6 +186,17 @@ longtest:
 	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache longtest" -count=1 -timeout=10m -run '^TestLegacyHistoricalTestnetSync$$' ./services/legacy/netsync
 	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"
 
+# run the soak test: the in-process daemon under steady tx load for SOAK_DURATION, failing if heap or goroutine
+# counts trend upward. No -race: the detector skews memory and throughput, which is what this test measures.
+# SOAK_TIMEOUT must exceed SOAK_DURATION by at least 10m. Other knobs (SOAK_WARMUP, SOAK_SAMPLE_INTERVAL,
+# SOAK_TXS_PER_CYCLE, SOAK_UTXO_STORE, SOAK_OUTPUT_DIR, SOAK_INJECT_LEAK) are read from the environment.
+# Example: make soaktest SOAK_DURATION=2h SOAK_TIMEOUT=150m
+SOAK_DURATION ?= 30m
+SOAK_TIMEOUT ?= 60m
+.PHONY: soaktest
+soaktest:
+	SETTINGS_CONTEXT=test SOAK_DURATION=$(SOAK_DURATION) go test -v -count=1 -tags "soak testtxmetacache" -timeout=$(SOAK_TIMEOUT) -run '^TestSoakSteadyLoad$$' ./test/soak/...
+
 # run tests in the test/sequentialtest directory in order, one by one
 # Environment variables:
 #   TEST_RETRY_COUNT - Number of retry attempts for failed tests (default: 3)
