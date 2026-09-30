@@ -8703,6 +8703,26 @@ unaffected as long as ranges continue to span checkpoints.</p>
 <p><img alt="quick_validation.svg" src="../img/plantuml/blockvalidation/quick_validation.svg" /></p>
 <h5 id="quick-validation-process">Quick Validation Process<a class="headerlink" href="#quick-validation-process" title="Permanent link">&para;</a></h5>
 <p>The quick validation system operates in two distinct phases implemented in <code>quickValidateBlock()</code> in <code>services/blockvalidation/quick_validate.go</code>:</p>
+<p><strong>Body Binding (precondition):</strong></p>
+<p>Before either phase, the peer-supplied body is bound to the checkpoint-certified header. No block ID is assigned and no UTXO is created or spent until this succeeds:</p>
+<ol>
+<li><strong>Subtree-Carrying Body</strong>: Bound by <code>bindSubtreeBodyToHeader()</code> in <code>services/blockvalidation/quick_validate_bind.go</code><ul>
+<li>Reads every subtree structure, one <code>SubtreeBatchSize</code> chunk at a time</li>
+<li>Recomputes each subtree's root from its own nodes and checks it against the subtree's key, instead of trusting the root the file claims</li>
+<li>Checks the subtree shape and scans the whole block for duplicate transactions (CVE-2012-2459)</li>
+<li>Composes the subtree roots and compares the result with the header's merkle root</li>
+<li>Reads structures only, never transaction data</li>
+</ul>
+</li>
+<li><strong>Coinbase-Only Body</strong>: Bound by <code>block.CheckCoinbaseOnlyBodyBound()</code></li>
+<li><strong>Failure Classes</strong>: Each failure keeps its own class<ul>
+<li>A body whose subtrees do not compose to the header's merkle root, or that breaks the subtree shape or duplicate rules, is classified <code>ERR_BLOCK_CORRUPT</code></li>
+<li>A local subtree blob that does not hash to its own key is a local fault instead, not a verdict on the peer's body: the blob is quarantined (deleted and the deletion confirmed), and if the deletion cannot be confirmed the attempt fails closed</li>
+<li>Storage and other infrastructure errors keep their own class</li>
+<li>A body that binds but whose coinbase is not a consensus coinbase is <code>ERR_BLOCK_INVALID</code></li>
+</ul>
+</li>
+</ol>
 <p><strong>Phase 1: UTXO Creation (<code>createAllUTXOs()</code>)</strong></p>
 <p>All UTXOs for the block's transactions are created in parallel before validation:</p>
 <ol>
@@ -8761,12 +8781,17 @@ unaffected as long as ranges continue to span checkpoints.</p>
 <li><strong>Reduced Memory</strong>: On-demand transaction extension minimizes memory footprint</li>
 </ul>
 <h5 id="subtree-and-transaction-processing">Subtree and Transaction Processing<a class="headerlink" href="#subtree-and-transaction-processing" title="Permanent link">&para;</a></h5>
-<p>During quick validation, the system reconstructs subtree files and extends transactions on-demand (implemented in <code>getBlockTransactions()</code>):</p>
+<p>During quick validation, the system reconstructs subtree files and extends transactions on-demand (implemented in <code>readSubtree()</code> and <code>processSubtreeBatch()</code>):</p>
 <p><strong>Subtree File Generation:</strong></p>
 <p>For each subtree in the block, the system:</p>
 <ol>
 <li><strong>Reads <code>.subtreeToCheck</code></strong>: Fetches subtree structure with transaction IDs</li>
 <li><strong>Reads <code>.subtreeData</code></strong>: Fetches raw transaction data</li>
+<li><strong>Checks Every Transaction Against Its Node</strong>: Each transaction in <code>.subtreeData</code>, other than the coinbase at block position <code>[0][0]</code>, must hash to the node it occupies<ul>
+<li>A structure or body that does not match its key is treated as a damaged local blob</li>
+<li>Before the attempt returns, the blob is quarantined: it is deleted and the deletion confirmed. If the deletion cannot be confirmed, the attempt fails closed and catch-up aborts without falling back to normal validation</li>
+</ul>
+</li>
 <li><strong>Validates Coinbase</strong>: Ensures first transaction in first subtree is coinbase</li>
 <li><strong>Reconstructs <code>.subtree</code></strong>: If missing, creates full subtree with fee and size information<ul>
 <li>Adds each transaction node with metadata from transaction</li>
@@ -8797,20 +8822,26 @@ unaffected as long as ranges continue to span checkpoints.</p>
 <li><strong>Concurrency Control</strong>: Uses errgroup with configurable limits (<code>GetBlockTransactionsConcurrency</code>)</li>
 </ol>
 <p><strong>Merkle Root Verification:</strong></p>
-<p>After processing all transactions, the system verifies:</p>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">CheckMerkleRoot</span><span class="p">(</span><span class="nx">ctx</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">NewProcessingError</span><span class="p">(</span><span class="s">"merkle root mismatch"</span><span class="p">)</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="p">}</span>
-</span></code></pre></div>
-<p>This ensures the transactions match the block header before proceeding.</p>
-<p><strong>Error Handling:</strong></p>
-<p>If quick validation encounters any errors:</p>
-<ul>
-<li>Removes <code>.subtree</code> files to force reprocessing</li>
-<li>Falls back to normal validation automatically</li>
-<li>Normal validation re-creates UTXOs and validates with full script execution</li>
+<p>The merkle root is checked twice, and the first check is the one that gates mutation:</p>
+<ol>
+<li><strong>Before Any Mutation</strong>: The body binding described above</li>
+<li><strong>After Processing</strong>: <code>validateSubtrees()</code> re-runs the same rules through <code>checkSubtreeBodyBinding()</code> on the subtrees rebuilt from the transactions actually read<ul>
+<li>Subtree sizes, <code>block.CheckMerkleRoot(ctx)</code>, the coinbase placeholder at <code>[0][0]</code>, the duplicate-transaction scan and the coinbase shape</li>
 </ul>
-<p>For implementation details, see <code>quick_validate.go</code> in <code>services/blockvalidation/</code>.</p>
+</li>
+</ol>
+<p>A merkle-root mismatch is <code>ERR_BLOCK_CORRUPT</code>, not an invalid block: a body that does not bind to the header says nothing about the header's hash. The subtree-shape, coinbase-placeholder and duplicate-transaction failures are <code>ERR_BLOCK_CORRUPT</code> for the same reason. The coinbase-shape check is the exception: it runs only once the body binds, so a failure there is <code>ERR_BLOCK_INVALID</code>. See the failure classes under Body Binding.</p>
+<p><strong>Error Handling:</strong></p>
+<p>During catch-up, <code>tryQuickValidation()</code> in <code>services/blockvalidation/catchup.go</code> routes a failure by its class:</p>
+<ul>
+<li><strong>Incomplete Block</strong> (<code>ERR_BLOCK_INCOMPLETE</code>, e.g. no coinbase): Catch-up from this peer aborts. Fetched subtree files are kept for reuse</li>
+<li><strong>Corrupt Body</strong> (<code>ERR_BLOCK_CORRUPT</code>): The catch-up peer is penalised, every subtree file this attempt wrote (fetched and built) is removed, and catch-up aborts so the block is re-downloaded. Normal validation is not run on the same body</li>
+<li><strong>Local Blob That Does Not Match Its Key and Could Not Be Deleted</strong>: Catch-up aborts without falling back to normal validation and without a ban score. This attempt's own <code>.subtree</code> files are removed</li>
+<li><strong>Any Other Failure</strong>, including a mismatching local blob that was deleted: This attempt's own <code>.subtree</code> files are removed, and the block falls back to normal validation, which reuses the fetched <code>.subtreeToCheck</code> and <code>.subtreeData</code></li>
+</ul>
+<p>The removal is attempted only once this block's queued subtree writes have settled, and it is skipped if the catch-up context is cancelled first. In the corrupt and could-not-be-deleted cases a failed removal is logged and the verdict stands. In the last case a failed removal is returned instead, so catch-up aborts rather than falling back to normal validation.</p>
+<p>Nothing is rolled back. A failure after the pipeline has started leaves the UTXOs it created in the store, locked unless <code>blockvalidation_quick_validate_skip_utxo_lock</code> applies. Recovery is by retry convergence: on retry, creation returns <code>ErrTxExists</code> and the mined info is updated to the correct block ID.</p>
+<p>For implementation details, see <code>quick_validate.go</code> and <code>quick_validate_bind.go</code> in <code>services/blockvalidation/</code>.</p>
 <h4 id="224-validating-the-subtrees">2.2.4. Validating the Subtrees<a class="headerlink" href="#224-validating-the-subtrees" title="Permanent link">&para;</a></h4>
 <p>Should the validation process for a block encounter a subtree it does not know about, it can request its processing off the Subtree Validation service.</p>
 <p><img alt="block_validation_subtree_validation_request.svg" src="../img/plantuml/subtreevalidation/block_validation_subtree_validation_request.svg" /></p>
@@ -8927,12 +8958,12 @@ unaffected as long as ranges continue to span checkpoints.</p>
 <li><strong>BlockProcessingGuard</strong>: Automatic cleanup mechanism using Go finalizers to ensure processing locks are always released</li>
 </ul>
 <p>The guard pattern ensures that even if a panic occurs, the processing lock is released:</p>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nx">guard</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">forkManager</span><span class="p">.</span><span class="nx">MarkBlockProcessing</span><span class="p">(</span><span class="nx">blockHash</span><span class="p">)</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span><span class="c1">// Handle error</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="p">}</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="k">defer</span><span class="w"> </span><span class="nx">guard</span><span class="p">.</span><span class="nx">Release</span><span class="p">()</span>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="c1">// Process block</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nx">guard</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">forkManager</span><span class="p">.</span><span class="nx">MarkBlockProcessing</span><span class="p">(</span><span class="nx">blockHash</span><span class="p">)</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="c1">// Handle error</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="p">}</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="k">defer</span><span class="w"> </span><span class="nx">guard</span><span class="p">.</span><span class="nx">Release</span><span class="p">()</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c1">// Process block</span>
 </span></code></pre></div>
 <h5 id="fork-resolution">Fork Resolution<a class="headerlink" href="#fork-resolution" title="Permanent link">&para;</a></h5>
 <p>Forks are resolved when:</p>
@@ -9029,11 +9060,11 @@ unaffected as long as ranges continue to span checkpoints.</p>
 <li>Fork depth exceeds expected values for honest mining</li>
 </ul>
 <p>When detected:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>1. Log security warning with peer ID and reason
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>2. Record malicious attempt in peer metrics
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>3. Update circuit breaker for that peer
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>4. Reject the catchup operation
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>5. Ban peer (when banning implemented)
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>1. Log security warning with peer ID and reason
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>2. Record malicious attempt in peer metrics
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>3. Update circuit breaker for that peer
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>4. Reject the catchup operation
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>5. Ban peer (when banning implemented)
 </span></code></pre></div>
 <p><strong>Coinbase Maturity Violation:</strong></p>
 <p>During catchup, the service validates that:</p>
@@ -9070,7 +9101,7 @@ unaffected as long as ranges continue to span checkpoints.</p>
 </ol>
 <h5 id="peer-banning">Peer Banning<a class="headerlink" href="#peer-banning" title="Permanent link">&para;</a></h5>
 <p>When catchup detects malicious behavior it reports the peer to the P2P service. The report records a malicious flag in the centralized peer registry (which makes the peer immediately ineligible for catchup via <code>IsPeerMalicious</code>) and raises the peer's ban score, so repeated offenses cross the ban threshold and trigger an automatic ban:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>SECURITY: Peer &lt;ID&gt; attempted secret mining - reported as malicious for ban scoring
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>SECURITY: Peer &lt;ID&gt; attempted secret mining - reported as malicious for ban scoring
 </span></code></pre></div>
 <p>The log lines remain an audit trail for operators, who can also ban peers manually.</p>
 <p>For implementation details, see <code>malicious_peer_handling_test.go</code> and peer tracking code in <code>catchup.go</code>.</p>
@@ -9105,10 +9136,10 @@ unaffected as long as ranges continue to span checkpoints.</p>
 <li><strong>Topic Configuration</strong>: Controlled by <code>kafka_InvalidBlocks</code> setting</li>
 <li>
 <p><strong>Message Format</strong>:</p>
-<div class="language-protobuf highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kd">message</span><span class="w"> </span><span class="nc">KafkaInvalidBlockTopicMessage</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">    </span><span class="kt">string</span><span class="w"> </span><span class="na">block_hash</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">    </span><span class="kt">string</span><span class="w"> </span><span class="na">reason</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="p">}</span>
+<div class="language-protobuf highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kd">message</span><span class="w"> </span><span class="nc">KafkaInvalidBlockTopicMessage</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">    </span><span class="kt">string</span><span class="w"> </span><span class="na">block_hash</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">    </span><span class="kt">string</span><span class="w"> </span><span class="na">reason</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="p">}</span>
 </span></code></pre></div>
 </li>
 <li>
@@ -9125,7 +9156,7 @@ unaffected as long as ranges continue to span checkpoints.</p>
 <p>For blocks that fail validation due to recoverable errors, the service queues them for revalidation:</p>
 <p><strong>Revalidation Trigger:</strong></p>
 <p>When <code>ValidateBlock()</code> encounters non-consensus errors:</p>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nx">u</span><span class="p">.</span><span class="nx">ReValidateBlock</span><span class="p">(</span><span class="nx">block</span><span class="p">,</span><span class="w"> </span><span class="nx">baseURL</span><span class="p">)</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nx">u</span><span class="p">.</span><span class="nx">ReValidateBlock</span><span class="p">(</span><span class="nx">block</span><span class="p">,</span><span class="w"> </span><span class="nx">baseURL</span><span class="p">)</span>
 </span></code></pre></div>
 <p>This queues the block to the <code>revalidateBlockChan</code> channel.</p>
 <p><strong>Revalidation Worker:</strong></p>
@@ -9349,63 +9380,63 @@ unaffected as long as ranges continue to span checkpoints.</p>
 </li>
 </ol>
 <h2 id="6-directory-structure-and-main-files">6. Directory Structure and Main Files<a class="headerlink" href="#6-directory-structure-and-main-files" title="Permanent link">&para;</a></h2>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>./services/blockvalidation
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>│
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>├── BlockValidation.go                      - Core block validation logic and state management.
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>├── BlockValidation_test.go                 - Unit tests for BlockValidation core logic.
-</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>├── BlockValidation_difficulty_test.go      - Difficulty validation tests.
-</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>├── BlockValidation_error_test.go           - Error handling tests for block validation.
-</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>├── block_priority.go                       - Block priority queue management with retry logic.
-</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>├── block_priority_test.go                  - Tests for priority queue functionality.
-</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a>├── block_priority_get_test.go              - Tests for priority queue retrieval operations.
-</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a>├── block_priority_coverage_test.go         - Coverage tests for priority queue.
-</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a>├── block_processing_retry_test.go          - Tests for block processing retry mechanisms.
-</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a>├── catchup.go                              - Main catchup orchestration with 11-step process.
-</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a>├── catchup_test.go                         - Comprehensive catchup tests.
-</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a>├── catchup_consolidated_test.go            - Consolidated catchup scenario tests.
-</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a>├── catchup_fork_handling_test.go           - Fork handling during catchup tests.
-</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a>├── catchup_get_block_headers.go            - Block header fetching for catchup.
-</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a>├── catchup_helpers_test.go                 - Helper functions for catchup tests.
-</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18" href="#__codelineno-12-18"></a>├── catchup_malicious_peer_test.go          - Malicious peer detection tests.
-</span><span id="__span-12-19"><a id="__codelineno-12-19" name="__codelineno-12-19" href="#__codelineno-12-19"></a>├── catchup_network_resilience_test.go      - Network resilience during catchup tests.
-</span><span id="__span-12-20"><a id="__codelineno-12-20" name="__codelineno-12-20" href="#__codelineno-12-20"></a>├── catchup_quickvalidation_test.go         - Quick validation during catchup tests.
-</span><span id="__span-12-21"><a id="__codelineno-12-21" name="__codelineno-12-21" href="#__codelineno-12-21"></a>├── catchup_resource_exhaustion_test.go     - Resource exhaustion scenario tests.
-</span><span id="__span-12-22"><a id="__codelineno-12-22" name="__codelineno-12-22" href="#__codelineno-12-22"></a>├── catchup_test_suite.go                   - Catchup test suite infrastructure.
-</span><span id="__span-12-23"><a id="__codelineno-12-23" name="__codelineno-12-23" href="#__codelineno-12-23"></a>├── catchup.md                              - Catchup process documentation.
-</span><span id="__span-12-24"><a id="__codelineno-12-24" name="__codelineno-12-24" href="#__codelineno-12-24"></a>├── catchup/                                - Catchup implementation package.
-</span><span id="__span-12-25"><a id="__codelineno-12-25" name="__codelineno-12-25" href="#__codelineno-12-25"></a>│   └── (catchup helper functions)
-</span><span id="__span-12-26"><a id="__codelineno-12-26" name="__codelineno-12-26" href="#__codelineno-12-26"></a>├── Client.go                               - Client-side API for block validation service.
-</span><span id="__span-12-27"><a id="__codelineno-12-27" name="__codelineno-12-27" href="#__codelineno-12-27"></a>├── Client_test.go                          - Client tests.
-</span><span id="__span-12-28"><a id="__codelineno-12-28" name="__codelineno-12-28" href="#__codelineno-12-28"></a>├── fork_manager.go                         - Fork tracking and chain reorganization management.
-</span><span id="__span-12-29"><a id="__codelineno-12-29" name="__codelineno-12-29" href="#__codelineno-12-29"></a>├── fork_manager_test.go                    - Fork manager tests.
-</span><span id="__span-12-30"><a id="__codelineno-12-30" name="__codelineno-12-30" href="#__codelineno-12-30"></a>├── fork_manager_atomic_counter_test.go     - Atomic counter tests for fork tracking.
-</span><span id="__span-12-31"><a id="__codelineno-12-31" name="__codelineno-12-31" href="#__codelineno-12-31"></a>├── fork_manager_coverage_test.go           - Coverage tests for fork manager.
-</span><span id="__span-12-32"><a id="__codelineno-12-32" name="__codelineno-12-32" href="#__codelineno-12-32"></a>├── fork_manager_metrics_test.go            - Fork manager metrics tests.
-</span><span id="__span-12-33"><a id="__codelineno-12-33" name="__codelineno-12-33" href="#__codelineno-12-33"></a>├── get_blocks.go                           - Block retrieval and fetching logic.
-</span><span id="__span-12-34"><a id="__codelineno-12-34" name="__codelineno-12-34" href="#__codelineno-12-34"></a>├── get_blocks_test.go                      - Block retrieval tests.
-</span><span id="__span-12-35"><a id="__codelineno-12-35" name="__codelineno-12-35" href="#__codelineno-12-35"></a>├── integration_retry_test.go               - Integration tests for retry logic.
-</span><span id="__span-12-36"><a id="__codelineno-12-36" name="__codelineno-12-36" href="#__codelineno-12-36"></a>├── Interface.go                            - Block validation service interface definition.
-</span><span id="__span-12-37"><a id="__codelineno-12-37" name="__codelineno-12-37" href="#__codelineno-12-37"></a>├── InvalidBlocksKafkaProducer_test.go      - Tests for Kafka invalid block notifications.
-</span><span id="__span-12-38"><a id="__codelineno-12-38" name="__codelineno-12-38" href="#__codelineno-12-38"></a>├── malicious_peer_handling_test.go         - Malicious peer tracking and banning tests.
-</span><span id="__span-12-39"><a id="__codelineno-12-39" name="__codelineno-12-39" href="#__codelineno-12-39"></a>├── metrics.go                              - Prometheus metrics for monitoring.
-</span><span id="__span-12-40"><a id="__codelineno-12-40" name="__codelineno-12-40" href="#__codelineno-12-40"></a>├── mock.go                                 - Mock implementations for testing.
-</span><span id="__span-12-41"><a id="__codelineno-12-41" name="__codelineno-12-41" href="#__codelineno-12-41"></a>├── quick_validate.go                       - Optimized validation for checkpointed blocks.
-</span><span id="__span-12-42"><a id="__codelineno-12-42" name="__codelineno-12-42" href="#__codelineno-12-42"></a>├── quick_validate_test.go                  - Quick validation tests.
-</span><span id="__span-12-43"><a id="__codelineno-12-43" name="__codelineno-12-43" href="#__codelineno-12-43"></a>├── Server.go                               - Server-side implementation of block validation.
-</span><span id="__span-12-44"><a id="__codelineno-12-44" name="__codelineno-12-44" href="#__codelineno-12-44"></a>├── Server_test.go                          - Server tests.
-</span><span id="__span-12-45"><a id="__codelineno-12-45" name="__codelineno-12-45" href="#__codelineno-12-45"></a>├── blockvalidation_api/
-</span><span id="__span-12-46"><a id="__codelineno-12-46" name="__codelineno-12-46" href="#__codelineno-12-46"></a>│   ├── blockvalidation_api.pb.go           - Auto-generated protobuf Go bindings.
-</span><span id="__span-12-47"><a id="__codelineno-12-47" name="__codelineno-12-47" href="#__codelineno-12-47"></a>│   ├── blockvalidation_api.proto           - Protocol Buffers API definition.
-</span><span id="__span-12-48"><a id="__codelineno-12-48" name="__codelineno-12-48" href="#__codelineno-12-48"></a>│   └── blockvalidation_api_grpc.pb.go      - gRPC-specific generated code.
-</span><span id="__span-12-49"><a id="__codelineno-12-49" name="__codelineno-12-49" href="#__codelineno-12-49"></a>├── testdata/                               - Test fixtures and data.
-</span><span id="__span-12-50"><a id="__codelineno-12-50" name="__codelineno-12-50" href="#__codelineno-12-50"></a>├── testhelpers/                            - Test helper utilities.
-</span><span id="__span-12-51"><a id="__codelineno-12-51" name="__codelineno-12-51" href="#__codelineno-12-51"></a>├── ttl_queue.go                            - TTL queue for caching with time-based expiration.
-</span><span id="__span-12-52"><a id="__codelineno-12-52" name="__codelineno-12-52" href="#__codelineno-12-52"></a>├── txmetacache.go                          - Transaction metadata cache for performance.
-</span><span id="__span-12-53"><a id="__codelineno-12-53" name="__codelineno-12-53" href="#__codelineno-12-53"></a>└── txmetacache_test.go                     - Transaction metadata cache tests.
+<div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>./services/blockvalidation
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>│
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>├── BlockValidation.go                      - Core block validation logic and state management.
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>├── BlockValidation_test.go                 - Unit tests for BlockValidation core logic.
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>├── BlockValidation_difficulty_test.go      - Difficulty validation tests.
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>├── BlockValidation_error_test.go           - Error handling tests for block validation.
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>├── block_priority.go                       - Block priority queue management with retry logic.
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>├── block_priority_test.go                  - Tests for priority queue functionality.
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>├── block_priority_get_test.go              - Tests for priority queue retrieval operations.
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>├── block_priority_coverage_test.go         - Coverage tests for priority queue.
+</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>├── block_processing_retry_test.go          - Tests for block processing retry mechanisms.
+</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>├── catchup.go                              - Main catchup orchestration with 11-step process.
+</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a>├── catchup_test.go                         - Comprehensive catchup tests.
+</span><span id="__span-11-14"><a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a>├── catchup_consolidated_test.go            - Consolidated catchup scenario tests.
+</span><span id="__span-11-15"><a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a>├── catchup_fork_handling_test.go           - Fork handling during catchup tests.
+</span><span id="__span-11-16"><a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a>├── catchup_get_block_headers.go            - Block header fetching for catchup.
+</span><span id="__span-11-17"><a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a>├── catchup_helpers_test.go                 - Helper functions for catchup tests.
+</span><span id="__span-11-18"><a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a>├── catchup_malicious_peer_test.go          - Malicious peer detection tests.
+</span><span id="__span-11-19"><a id="__codelineno-11-19" name="__codelineno-11-19" href="#__codelineno-11-19"></a>├── catchup_network_resilience_test.go      - Network resilience during catchup tests.
+</span><span id="__span-11-20"><a id="__codelineno-11-20" name="__codelineno-11-20" href="#__codelineno-11-20"></a>├── catchup_quickvalidation_test.go         - Quick validation during catchup tests.
+</span><span id="__span-11-21"><a id="__codelineno-11-21" name="__codelineno-11-21" href="#__codelineno-11-21"></a>├── catchup_resource_exhaustion_test.go     - Resource exhaustion scenario tests.
+</span><span id="__span-11-22"><a id="__codelineno-11-22" name="__codelineno-11-22" href="#__codelineno-11-22"></a>├── catchup_test_suite.go                   - Catchup test suite infrastructure.
+</span><span id="__span-11-23"><a id="__codelineno-11-23" name="__codelineno-11-23" href="#__codelineno-11-23"></a>├── catchup.md                              - Catchup process documentation.
+</span><span id="__span-11-24"><a id="__codelineno-11-24" name="__codelineno-11-24" href="#__codelineno-11-24"></a>├── catchup/                                - Catchup implementation package.
+</span><span id="__span-11-25"><a id="__codelineno-11-25" name="__codelineno-11-25" href="#__codelineno-11-25"></a>│   └── (catchup helper functions)
+</span><span id="__span-11-26"><a id="__codelineno-11-26" name="__codelineno-11-26" href="#__codelineno-11-26"></a>├── Client.go                               - Client-side API for block validation service.
+</span><span id="__span-11-27"><a id="__codelineno-11-27" name="__codelineno-11-27" href="#__codelineno-11-27"></a>├── Client_test.go                          - Client tests.
+</span><span id="__span-11-28"><a id="__codelineno-11-28" name="__codelineno-11-28" href="#__codelineno-11-28"></a>├── fork_manager.go                         - Fork tracking and chain reorganization management.
+</span><span id="__span-11-29"><a id="__codelineno-11-29" name="__codelineno-11-29" href="#__codelineno-11-29"></a>├── fork_manager_test.go                    - Fork manager tests.
+</span><span id="__span-11-30"><a id="__codelineno-11-30" name="__codelineno-11-30" href="#__codelineno-11-30"></a>├── fork_manager_atomic_counter_test.go     - Atomic counter tests for fork tracking.
+</span><span id="__span-11-31"><a id="__codelineno-11-31" name="__codelineno-11-31" href="#__codelineno-11-31"></a>├── fork_manager_coverage_test.go           - Coverage tests for fork manager.
+</span><span id="__span-11-32"><a id="__codelineno-11-32" name="__codelineno-11-32" href="#__codelineno-11-32"></a>├── fork_manager_metrics_test.go            - Fork manager metrics tests.
+</span><span id="__span-11-33"><a id="__codelineno-11-33" name="__codelineno-11-33" href="#__codelineno-11-33"></a>├── get_blocks.go                           - Block retrieval and fetching logic.
+</span><span id="__span-11-34"><a id="__codelineno-11-34" name="__codelineno-11-34" href="#__codelineno-11-34"></a>├── get_blocks_test.go                      - Block retrieval tests.
+</span><span id="__span-11-35"><a id="__codelineno-11-35" name="__codelineno-11-35" href="#__codelineno-11-35"></a>├── integration_retry_test.go               - Integration tests for retry logic.
+</span><span id="__span-11-36"><a id="__codelineno-11-36" name="__codelineno-11-36" href="#__codelineno-11-36"></a>├── Interface.go                            - Block validation service interface definition.
+</span><span id="__span-11-37"><a id="__codelineno-11-37" name="__codelineno-11-37" href="#__codelineno-11-37"></a>├── InvalidBlocksKafkaProducer_test.go      - Tests for Kafka invalid block notifications.
+</span><span id="__span-11-38"><a id="__codelineno-11-38" name="__codelineno-11-38" href="#__codelineno-11-38"></a>├── malicious_peer_handling_test.go         - Malicious peer tracking and banning tests.
+</span><span id="__span-11-39"><a id="__codelineno-11-39" name="__codelineno-11-39" href="#__codelineno-11-39"></a>├── metrics.go                              - Prometheus metrics for monitoring.
+</span><span id="__span-11-40"><a id="__codelineno-11-40" name="__codelineno-11-40" href="#__codelineno-11-40"></a>├── mock.go                                 - Mock implementations for testing.
+</span><span id="__span-11-41"><a id="__codelineno-11-41" name="__codelineno-11-41" href="#__codelineno-11-41"></a>├── quick_validate.go                       - Optimized validation for checkpointed blocks.
+</span><span id="__span-11-42"><a id="__codelineno-11-42" name="__codelineno-11-42" href="#__codelineno-11-42"></a>├── quick_validate_test.go                  - Quick validation tests.
+</span><span id="__span-11-43"><a id="__codelineno-11-43" name="__codelineno-11-43" href="#__codelineno-11-43"></a>├── Server.go                               - Server-side implementation of block validation.
+</span><span id="__span-11-44"><a id="__codelineno-11-44" name="__codelineno-11-44" href="#__codelineno-11-44"></a>├── Server_test.go                          - Server tests.
+</span><span id="__span-11-45"><a id="__codelineno-11-45" name="__codelineno-11-45" href="#__codelineno-11-45"></a>├── blockvalidation_api/
+</span><span id="__span-11-46"><a id="__codelineno-11-46" name="__codelineno-11-46" href="#__codelineno-11-46"></a>│   ├── blockvalidation_api.pb.go           - Auto-generated protobuf Go bindings.
+</span><span id="__span-11-47"><a id="__codelineno-11-47" name="__codelineno-11-47" href="#__codelineno-11-47"></a>│   ├── blockvalidation_api.proto           - Protocol Buffers API definition.
+</span><span id="__span-11-48"><a id="__codelineno-11-48" name="__codelineno-11-48" href="#__codelineno-11-48"></a>│   └── blockvalidation_api_grpc.pb.go      - gRPC-specific generated code.
+</span><span id="__span-11-49"><a id="__codelineno-11-49" name="__codelineno-11-49" href="#__codelineno-11-49"></a>├── testdata/                               - Test fixtures and data.
+</span><span id="__span-11-50"><a id="__codelineno-11-50" name="__codelineno-11-50" href="#__codelineno-11-50"></a>├── testhelpers/                            - Test helper utilities.
+</span><span id="__span-11-51"><a id="__codelineno-11-51" name="__codelineno-11-51" href="#__codelineno-11-51"></a>├── ttl_queue.go                            - TTL queue for caching with time-based expiration.
+</span><span id="__span-11-52"><a id="__codelineno-11-52" name="__codelineno-11-52" href="#__codelineno-11-52"></a>├── txmetacache.go                          - Transaction metadata cache for performance.
+</span><span id="__span-11-53"><a id="__codelineno-11-53" name="__codelineno-11-53" href="#__codelineno-11-53"></a>└── txmetacache_test.go                     - Transaction metadata cache tests.
 </span></code></pre></div>
 <h2 id="7-how-to-run">7. How to run<a class="headerlink" href="#7-how-to-run" title="Permanent link">&para;</a></h2>
 <p>To run the Block Validation Service locally, you can execute the following command:</p>
-<div class="language-shell highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-blockvalidation<span class="o">=</span><span class="m">1</span>
+<div class="language-shell highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-blockvalidation<span class="o">=</span><span class="m">1</span>
 </span></code></pre></div>
 <p>Please refer to the <a href="../../../howto/locallyRunningServices/">Locally Running Services Documentation</a> document for more information on running the Block Validation Service locally.</p>
 <h2 id="8-configuration-options-settings-flags">8. Configuration options (settings flags)<a class="headerlink" href="#8-configuration-options-settings-flags" title="Permanent link">&para;</a></h2>
