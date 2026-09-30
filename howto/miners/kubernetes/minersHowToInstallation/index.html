@@ -7601,14 +7601,12 @@ credentials and connection strings — plus <code>grpc_admin_api_key</code>) are
 the ConfigMap. They are supplied through a Kubernetes Secret named
 <code>teranode-operator-secrets</code>, which the Cluster CR references via <code>spec.envFrom</code>. This
 Secret is intentionally not committed to the repository — you must create it yourself.</p>
-<p><code>grpc_admin_api_key</code> is <strong>required</strong> for a working node. It authenticates every
-state-mutating P2P <code>PeerService</code> RPC, including the peer-reputation and
-validated-chain-progress reports that decide which peer this node syncs from, and the
-<code>operator</code> context binds that gRPC port on all interfaces. It is deliberately not
-committed to this repository, and well-known placeholders such as <code>testkey</code> are
-rejected and ignored — the server then uses a random key, so every protected RPC,
-including the internal reporters, fails with <code>Unauthenticated</code>. Generate a strong
-random value, for example <code>openssl rand -hex 32</code>.</p>
+<p><code>grpc_admin_api_key</code> is <strong>required</strong> for Blockchain startup and all of its clients,
+including reads and subscriptions. Empty, placeholder and weak keys cause a startup
+configuration error. It also authenticates protected P2P/Legacy operations. Generate
+one random value with <code>openssl rand -hex 32</code> and supply it to every service and CLI
+client through the Secret. For upgrades, deploy credential-capable callers first
+and Blockchain last; see <a href="../../../../topics/services/blockchainAuthentication/">Blockchain authentication</a>.</p>
 <p>Create it with a manifest (replace the example values with your own credentials):</p>
 <div class="language-yaml highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># teranode-secret.yaml — DO NOT commit this file</span>
 </span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
@@ -7620,9 +7618,10 @@ random value, for example <code>openssl rand -hex 32</code>.</p>
 </span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="nt">stringData</span><span class="p">:</span>
 </span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">  </span><span class="nt">blockchain_store</span><span class="p">:</span><span class="w"> </span><span class="s">"postgres://POSTGRES_EXAMPLE_URI_CHANGE_ME"</span>
 </span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">  </span><span class="nt">utxostore</span><span class="p">:</span><span class="w"> </span><span class="s">"aerospike://AEROSPIKE_EXAMPLE_URI_CHANGE_ME"</span>
-</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">  </span><span class="c1"># Required. Authenticates the state-mutating P2P PeerService RPCs.</span>
-</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="w">  </span><span class="c1"># Generate with: openssl rand -hex 32</span>
-</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="w">  </span><span class="nt">grpc_admin_api_key</span><span class="p">:</span><span class="w"> </span><span class="s">"GRPC_ADMIN_API_KEY_CHANGE_ME"</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">  </span><span class="c1"># Required. Blockchain refuses to start without it. Every service and CLI client</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="w">  </span><span class="c1"># uses it to call Blockchain and the protected P2P/Legacy RPCs.</span>
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="w">  </span><span class="c1"># Generate with: openssl rand -hex 32</span>
+</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="w">  </span><span class="nt">grpc_admin_api_key</span><span class="p">:</span><span class="w"> </span><span class="s">""</span><span class="w"> </span><span class="c1"># REQUIRED: paste the generated shared secret before applying</span>
 </span></code></pre></div>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>teranode-secret.yaml<span class="w"> </span>-n<span class="w"> </span>teranode-operator
 </span></code></pre></div>

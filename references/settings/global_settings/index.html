@@ -7754,7 +7754,14 @@
 <td>string</td>
 <td>""</td>
 <td>grpc_admin_api_key</td>
-<td>Admin API authentication key</td>
+<td>Required shared credential for Blockchain and its clients; empty or invalid keys prevent Blockchain startup</td>
+</tr>
+<tr>
+<td>GRPCEnableReflection</td>
+<td>bool</td>
+<td>false</td>
+<td>grpc_enable_reflection</td>
+<td>Opt in to gRPC reflection for development diagnostics; Blockchain reflection requires authentication</td>
 </tr>
 </tbody>
 </table>

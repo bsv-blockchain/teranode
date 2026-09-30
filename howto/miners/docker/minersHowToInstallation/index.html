@@ -7177,22 +7177,23 @@ credentials, and writes the local <code>.env</code> file.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>less<span class="w"> </span>docs/NETWORKS.md
 </span></code></pre></div>
 <h3 id="set-the-grpc-admin-api-key">Set the gRPC admin API key<a class="headerlink" href="#set-the-grpc-admin-api-key" title="Permanent link">&para;</a></h3>
-<p>The Docker deployment runs <code>peer</code>, <code>blockvalidation</code> and <code>subtreevalidation</code> as
-separate containers, so their gRPC calls cross the auth interceptor. Set
-<code>grpc_admin_api_key</code> in <code>settings_local.conf</code> to the <strong>same</strong> strong random value
-for every service:</p>
+<p>Blockchain refuses to start without <code>grpc_admin_api_key</code>, and every other
+service needs the <strong>same</strong> value to call it. The compose files read the key from
+the environment and pass it to every service. Generate a strong random value:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>openssl<span class="w"> </span>rand<span class="w"> </span>-hex<span class="w"> </span><span class="m">32</span>
 </span></code></pre></div>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a># settings_local.conf
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>grpc_admin_api_key.docker.m = &lt;the generated value&gt;
+<p>Put it in the quickstart <code>.env</code> file (never commit it):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># .env</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nv">grpc_admin_api_key</span><span class="o">=</span>&lt;the<span class="w"> </span>generated<span class="w"> </span>value&gt;
 </span></code></pre></div>
-<p>This is required for a working node, not only for admin operations. Besides the
-admin RPCs (ban/unban, connect/disconnect peer, reset reputation), the key gates
-the P2P reporters that block and subtree validation use to record validated chain
-progress and block delivery. Leave it unset and those reports are rejected: no
-peer ever becomes a proven sync candidate, catchup stays in the budget-gated probe
-tier, and the node never settles on a good sync peer. The service logs this at
-<code>ERROR</code> on startup. Never commit the value.</p>
+<p>If it is missing, <code>docker compose</code> refuses to render the stack. If it is empty,
+a known placeholder, or shorter than 16 characters, Blockchain exits with a
+<code>grpc_admin_api_key is required</code> configuration error. A service started with a
+different key fails at startup, and turns its readiness check red if the key
+stops matching later.</p>
+<p>If you previously set <code>grpc_admin_api_key.docker.m</code> in <code>settings_local.conf</code>,
+move that same value into <code>.env</code> and delete the line. The environment value
+takes precedence, so the old line becomes dead config.</p>
 <h2 id="start">Start<a class="headerlink" href="#start" title="Permanent link">&para;</a></h2>
 <p>Start the stack from the quickstart repository root:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>./start.sh
