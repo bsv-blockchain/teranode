@@ -7183,15 +7183,23 @@
 <p>If UTXO processing is not skipped:</p>
 <ol>
 <li>The service initializes a connection to the UTXO store.</li>
-<li>It sets up a channel for UTXO processing and spawns multiple worker goroutines.</li>
 <li>The UTXO file is opened and its header is verified.</li>
-<li>UTXOs are read from the file and sent to the processing channel.</li>
+<li>The file is imported in two concurrent passes, each with its own reader,
+   channel and worker goroutines: one creates the transactions that fit a
+   single UTXO store record, the other those spanning multiple records
+   (highest unspent output index at or above <code>utxostore_utxoBatchSize</code>),
+   which take a much slower create path. The first error in either pass
+   stops both.</li>
+<li>Each pass's reader cuts the file into raw records and sends only the
+   records of its kind to its workers; an output index no valid transaction
+   can have fails the import.</li>
 <li>
-<p>Worker goroutines process UTXOs in parallel:</p>
+<p>Worker goroutines decode records in parallel:</p>
 <ul>
-<li>Each UTXO is converted to a Bitcoin transaction format.</li>
+<li>Each record is converted to a Bitcoin transaction format.</li>
 <li>The transaction is stored in the UTXO store.</li>
-<li>The service tracks the number of transactions and UTXOs processed.</li>
+<li>Each pass counts every transaction and UTXO in the file and checks the
+   totals against the file's footer, so a truncated file fails the import.</li>
 </ul>
 </li>
 </ol>
@@ -7274,7 +7282,7 @@
 </span></code></pre></div>
 <h2 id="6-how-to-run">6. How to Run<a class="headerlink" href="#6-how-to-run" title="Permanent link">&para;</a></h2>
 <p>To run the Seeder command, use the following command:</p>
-<div class="language-shell highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>teranode-cli<span class="w"> </span>seeder<span class="w"> </span>-inputDir<span class="w"> </span>&lt;folder&gt;<span class="w"> </span>-hash<span class="w"> </span>&lt;hash&gt;<span class="w"> </span><span class="o">[</span>-skipHeaders<span class="o">]</span><span class="w"> </span><span class="o">[</span>-skipUTXOs<span class="o">]</span>
+<div class="language-shell highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>teranode-cli<span class="w"> </span>seeder<span class="w"> </span>-inputDir<span class="w"> </span>&lt;folder&gt;<span class="w"> </span>-hash<span class="w"> </span>&lt;hash&gt;<span class="w"> </span><span class="o">[</span>-skipHeaders<span class="o">]</span><span class="w"> </span><span class="o">[</span>-skipUTXOs<span class="o">]</span><span class="w"> </span><span class="o">[</span>-force<span class="o">]</span><span class="w"> </span><span class="o">[</span>-skipChecksum<span class="o">]</span>
 </span></code></pre></div>
 <p>Options:</p>
 <ul>
@@ -7282,6 +7290,8 @@
 <li><code>-hash</code>: Hash of the UTXO set / headers to process.</li>
 <li><code>-skipHeaders</code>: (Optional) Skip processing of headers.</li>
 <li><code>-skipUTXOs</code>: (Optional) Skip processing of UTXOs.</li>
+<li><code>-force</code>: (Optional) Process even if <code>lastProcessed.dat</code> or BlockAssembler state already exists.</li>
+<li><code>-skipChecksum</code>: (Optional) Skip checksum verification (see below). Only for callers that have already verified the files against their sidecars.</li>
 </ul>
 <h3 id="checksum-verification">Checksum verification<a class="headerlink" href="#checksum-verification" title="Permanent link">&para;</a></h3>
 <p>Before reading the headers file and/or the UTXO-set file, the seeder checks
@@ -7303,6 +7313,13 @@ filename.</p>
 pass still reads the headers file back to recover coinbase inputs, so it is
 verified whenever it will be consumed, not only when the header-import pass
 itself runs.</p>
+<p>Verification reads each file in full (7m38s for a 569 GB mainnet UTXO set).
+A caller that has already verified the same files, such as a fetch script
+that checks the sidecars after download, can pass <code>-skipChecksum</code> to avoid
+reading them twice; the seeder logs a warning when it does. Checking during
+the import instead is not offered: a mismatch found partway through would
+leave corrupt records in the UTXO store that a re-run keeps as already
+present.</p>
 <p>This check is a defense against transfer/storage corruption, not tampering:
 the sidecar itself is unauthenticated, so it cannot detect a snapshot and its
 sidecar being modified together. There is no flag to make the sidecar
@@ -7312,10 +7329,20 @@ mandatory; a missing sidecar always falls back to a warning.</p>
 <ul>
 <li><code>blockchain_store</code>: URL for the blockchain store.</li>
 <li><code>utxostore</code>: URL for the UTXO store.</li>
-<li><code>channelSize</code>: Size of the channel for UTXO processing (default: 1000).</li>
-<li><code>workerCount</code>: Number of worker goroutines for UTXO processing (default: 500).</li>
+<li><code>channelSize</code>: Buffer between each pass's reader and its workers (default: 1000).</li>
+<li><code>workerCount</code>: Worker goroutines in the single-record pass (default: 16384, range 1 to 1,048,576). Each
+  blocks until its create is written, so this is the number of transactions in
+  flight; it must comfortably exceed <code>utxostore_storeBatcherSize</code>.</li>
+<li><code>multiRecordWorkerCount</code>: Worker goroutines in the multi-record pass (range 1 to 1,048,576; default:
+  <code>seeder_externalStoreConcurrency</code>, or 1024 when that is 0 or less).</li>
+<li><code>seeder_externalStoreConcurrency</code>: Replaces <code>utxostore_externalStoreConcurrency</code>
+  for the seeder run (default: 256; 0 or less means unlimited).</li>
+<li><code>seeder_externalStoreFsyncMode</code>: fsync mode for a <code>file://</code> external store whose
+  URL does not set <code>fsyncMode</code> (default: <code>data</code>). See <code>cmd/seeder/README.md</code> for
+  the durability trade-off of <code>none</code>.</li>
 <li><code>skipStore</code>: Boolean flag to skip storing UTXOs (for testing purposes).</li>
 </ul>
+<p><code>cmd/seeder/README.md</code> has the same settings with more detail.</p>
 <h2 id="8-known-limitations">8. Known Limitations<a class="headerlink" href="#8-known-limitations" title="Permanent link">&para;</a></h2>
 <h3 id="missing-miner-information-in-v1-format">Missing Miner Information in V1 Format<a class="headerlink" href="#missing-miner-information-in-v1-format" title="Permanent link">&para;</a></h3>
 <p><strong>Current Behavior (V1 format - U-H-1.0):</strong></p>
