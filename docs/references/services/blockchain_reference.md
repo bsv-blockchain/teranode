@@ -722,7 +722,7 @@ Completes multiple blob deletions in a single call. More efficient than calling 
 func (b *Blockchain) AcquireBlobDeletionBatch(ctx context.Context, req *blockchain_api.AcquireBlobDeletionBatchRequest) (*blockchain_api.AcquireBlobDeletionBatchResponse, error)
 ```
 
-Acquires a batch of deletions with locking for processing. Uses `SELECT...FOR UPDATE SKIP LOCKED` to ensure only one pruner instance processes each batch.
+Acquires a batch of deletions with locking for processing. Uses `SELECT...FOR UPDATE SKIP LOCKED` to ensure only one pruner instance processes each batch. Store types listed in `exclude_store_types` are left out of the batch, so the pruner can skip a store whose deletions it is holding without those rows filling every batch.
 
 ### CompleteBlobDeletionBatch
 

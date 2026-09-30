@@ -1380,8 +1380,8 @@ func (m *Mock) CompleteBlobDeletions(ctx context.Context, completedIDs, failedID
 }
 
 // AcquireBlobDeletionBatch mocks the AcquireBlobDeletionBatch method
-func (m *Mock) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, timeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
-	args := m.Called(ctx, height, limit, timeoutSeconds)
+func (m *Mock) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, timeoutSeconds int, excludeStoreTypes []storetypes.BlobStoreType) (string, []*blockchain_api.ScheduledDeletion, error) {
+	args := m.Called(ctx, height, limit, timeoutSeconds, excludeStoreTypes)
 	if args.Error(2) != nil {
 		return "", nil, args.Error(2)
 	}

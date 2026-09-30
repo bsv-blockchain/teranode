@@ -227,7 +227,7 @@ returns a 409 as `ErrBlobAlreadyExists` and a 401 as a configuration error.
 httpServer, err := blob.NewHTTPBlobServer(logger, storeURL, authToken)
 
 // Start HTTP server
-http.Handle("/blob/", http.StripPrefix("/blob", httpServer))
+http.Handle("/blob/", httpServer)
 log.Fatal(http.ListenAndServe(":8080", nil))
 ```
 

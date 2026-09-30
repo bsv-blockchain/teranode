@@ -40,7 +40,7 @@
   store URLs are logged verbatim
 - A 401 from the server (no token on the server, or none or a different one here) is returned
   as a configuration error, not a storage error. The pruner keeps the affected deletions queued
-  rather than retrying and dropping them
+  rather than retrying and dropping them, and keeps deleting from the other blob stores
 
 ## Configuration Dependencies
 

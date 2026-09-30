@@ -877,7 +877,7 @@ func (m *MockBlockchainClient) CompleteBlobDeletions(ctx context.Context, comple
 	return 0, 0, nil
 }
 
-func (m *MockBlockchainClient) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
+func (m *MockBlockchainClient) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int, excludeStoreTypes []storetypes.BlobStoreType) (string, []*blockchain_api.ScheduledDeletion, error) {
 	return "", nil, nil
 }
 

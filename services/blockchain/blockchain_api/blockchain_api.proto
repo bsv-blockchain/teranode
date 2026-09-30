@@ -1138,6 +1138,7 @@ message AcquireBlobDeletionBatchRequest {
   uint32 height = 1;
   int32 limit = 2;
   int32 lock_timeout_seconds = 3;  // Optional: how long to hold the lock (default: 300s)
+  repeated int32 exclude_store_types = 4;  // Optional: store types to leave out of the batch
 }
 
 message AcquireBlobDeletionBatchResponse {

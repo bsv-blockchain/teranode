@@ -1096,12 +1096,13 @@ type ClientI interface {
 	// - height: Current blockchain height
 	// - limit: Maximum number of deletions to acquire
 	// - lockTimeoutSeconds: How long to hold the lock (0 = default 300s)
+	// - excludeStoreTypes: store types to leave out of the batch (nil = none); a service that predates this parameter ignores it, so a caller must still cope with rows of an excluded type
 	//
 	// Returns:
 	// - batchToken: Token to use when completing the batch
 	// - deletions: Array of scheduled deletions to process
 	// - Error if acquisition fails
-	AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error)
+	AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int, excludeStoreTypes []storetypes.BlobStoreType) (string, []*blockchain_api.ScheduledDeletion, error)
 
 	// CompleteBlobDeletionBatch completes a previously acquired batch.
 	//

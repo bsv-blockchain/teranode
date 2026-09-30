@@ -127,7 +127,7 @@ is set on the server and the same value is set as `blob_httpAuthToken` on each c
 
 The HTTP blob client reports a 401 as a configuration error. The pruner keeps deletions for that
 store queued and logs an error on each pass until the tokens match, instead of retrying and
-dropping them.
+dropping them. Deletions for the other blob stores carry on.
 
 ### Overwrite over the HTTP blob API
 

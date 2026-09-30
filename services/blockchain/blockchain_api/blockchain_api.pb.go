@@ -7026,7 +7026,8 @@ type AcquireBlobDeletionBatchRequest struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	Height             uint32                 `protobuf:"varint,1,opt,name=height,proto3" json:"height,omitempty"`
 	Limit              int32                  `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
-	LockTimeoutSeconds int32                  `protobuf:"varint,3,opt,name=lock_timeout_seconds,json=lockTimeoutSeconds,proto3" json:"lock_timeout_seconds,omitempty"` // Optional: how long to hold the lock (default: 300s)
+	LockTimeoutSeconds int32                  `protobuf:"varint,3,opt,name=lock_timeout_seconds,json=lockTimeoutSeconds,proto3" json:"lock_timeout_seconds,omitempty"`     // Optional: how long to hold the lock (default: 300s)
+	ExcludeStoreTypes  []int32                `protobuf:"varint,4,rep,packed,name=exclude_store_types,json=excludeStoreTypes,proto3" json:"exclude_store_types,omitempty"` // Optional: store types to leave out of the batch
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -7080,6 +7081,13 @@ func (x *AcquireBlobDeletionBatchRequest) GetLockTimeoutSeconds() int32 {
 		return x.LockTimeoutSeconds
 	}
 	return 0
+}
+
+func (x *AcquireBlobDeletionBatchRequest) GetExcludeStoreTypes() []int32 {
+	if x != nil {
+		return x.ExcludeStoreTypes
+	}
+	return nil
 }
 
 type AcquireBlobDeletionBatchResponse struct {
@@ -7842,11 +7850,12 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"maxRetries\"|\n" +
 	"\x1dCompleteBlobDeletionsResponse\x12#\n" +
 	"\rremoved_count\x18\x01 \x01(\x05R\fremovedCount\x126\n" +
-	"\x17retry_incremented_count\x18\x02 \x01(\x05R\x15retryIncrementedCount\"\x81\x01\n" +
+	"\x17retry_incremented_count\x18\x02 \x01(\x05R\x15retryIncrementedCount\"\xb1\x01\n" +
 	"\x1fAcquireBlobDeletionBatchRequest\x12\x16\n" +
 	"\x06height\x18\x01 \x01(\rR\x06height\x12\x14\n" +
 	"\x05limit\x18\x02 \x01(\x05R\x05limit\x120\n" +
-	"\x14lock_timeout_seconds\x18\x03 \x01(\x05R\x12lockTimeoutSeconds\"\x84\x01\n" +
+	"\x14lock_timeout_seconds\x18\x03 \x01(\x05R\x12lockTimeoutSeconds\x12.\n" +
+	"\x13exclude_store_types\x18\x04 \x03(\x05R\x11excludeStoreTypes\"\x84\x01\n" +
 	" AcquireBlobDeletionBatchResponse\x12\x1f\n" +
 	"\vbatch_token\x18\x01 \x01(\tR\n" +
 	"batchToken\x12?\n" +

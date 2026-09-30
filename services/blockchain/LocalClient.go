@@ -586,7 +586,7 @@ func (c *LocalClient) CompleteBlobDeletions(ctx context.Context, completedIDs []
 }
 
 // AcquireBlobDeletionBatch acquires a batch of deletions with locking.
-func (c *LocalClient) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
+func (c *LocalClient) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int, excludeStoreTypes []storetypes.BlobStoreType) (string, []*blockchain_api.ScheduledDeletion, error) {
 	return "", nil, errors.NewProcessingError(errNotImplemented)
 }
 

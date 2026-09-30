@@ -2495,11 +2495,20 @@ func (c *Client) CompleteBlobDeletions(ctx context.Context, completedIDs []int64
 }
 
 // AcquireBlobDeletionBatch acquires a batch of deletions with locking.
-func (c *Client) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
+func (c *Client) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int, excludeStoreTypes []storetypes.BlobStoreType) (string, []*blockchain_api.ScheduledDeletion, error) {
+	var excluded []int32
+	if len(excludeStoreTypes) > 0 {
+		excluded = make([]int32, len(excludeStoreTypes))
+		for i, storeType := range excludeStoreTypes {
+			excluded[i] = int32(storeType)
+		}
+	}
+
 	resp, err := c.client.AcquireBlobDeletionBatch(ctx, &blockchain_api.AcquireBlobDeletionBatchRequest{
 		Height:             height,
 		Limit:              int32(limit),
 		LockTimeoutSeconds: int32(lockTimeoutSeconds),
+		ExcludeStoreTypes:  excluded,
 	})
 	if err != nil {
 		return "", nil, errors.UnwrapGRPC(err)

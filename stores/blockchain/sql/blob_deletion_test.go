@@ -249,14 +249,63 @@ func TestAcquireBlobDeletionBatch(t *testing.T) {
 	}
 
 	// Acquire everything due at or below height 200, ordered, honouring the limit.
-	batch, err := s.AcquireBlobDeletionBatch(ctx, 200, 10, 30)
+	batch, err := s.AcquireBlobDeletionBatch(ctx, 200, 10, 30, nil)
 	require.NoError(t, err)
 	require.Len(t, batch, 2)
 	assert.Equal(t, uint32(100), batch[0].DeleteAtHeight)
 	assert.Equal(t, uint32(150), batch[1].DeleteAtHeight)
 
 	// Nothing due below the earliest height.
-	empty, err := s.AcquireBlobDeletionBatch(ctx, 50, 10, 30)
+	empty, err := s.AcquireBlobDeletionBatch(ctx, 50, 10, 30, nil)
 	require.NoError(t, err)
 	assert.Empty(t, empty)
+}
+
+func TestAcquireBlobDeletionBatchExcludesStoreTypes(t *testing.T) {
+	s := newBlobDeletionTestStore(t)
+	ctx := context.Background()
+
+	seed := []*ScheduleRequest{
+		{BlobKey: []byte("s1h100"), FileType: "subtree", StoreType: 1, DeleteAtHeight: 100},
+		{BlobKey: []byte("s2h110"), FileType: "subtree", StoreType: 2, DeleteAtHeight: 110},
+		{BlobKey: []byte("s3h120"), FileType: "subtree", StoreType: 3, DeleteAtHeight: 120},
+		{BlobKey: []byte("s1h130"), FileType: "subtree", StoreType: 1, DeleteAtHeight: 130},
+		{BlobKey: []byte("s2h140"), FileType: "subtree", StoreType: 2, DeleteAtHeight: 140},
+		{BlobKey: []byte("s4h150"), FileType: "subtree", StoreType: 4, DeleteAtHeight: 150},
+	}
+	for _, r := range seed {
+		_, err := s.ScheduleBlobDeletion(ctx, r)
+		require.NoError(t, err)
+	}
+
+	heights := func(batch []*ScheduledDeletion) []uint32 {
+		result := make([]uint32, len(batch))
+		for i, d := range batch {
+			result[i] = d.DeleteAtHeight
+		}
+
+		return result
+	}
+
+	// Excluded store types are left out; the rest keep their order.
+	batch, err := s.AcquireBlobDeletionBatch(ctx, 200, 10, 30, []int32{1, 2})
+	require.NoError(t, err)
+	require.Equal(t, []uint32{120, 150}, heights(batch))
+
+	// The limit still binds to $2 although the exclusion placeholders come earlier in the query.
+	batch, err = s.AcquireBlobDeletionBatch(ctx, 200, 1, 30, []int32{1, 2})
+	require.NoError(t, err)
+	require.Equal(t, []uint32{120}, heights(batch))
+
+	// No exclusion, nil or empty: every due row, in order.
+	for _, exclude := range [][]int32{nil, {}} {
+		batch, err = s.AcquireBlobDeletionBatch(ctx, 200, 10, 30, exclude)
+		require.NoError(t, err)
+		require.Equal(t, []uint32{100, 110, 120, 130, 140, 150}, heights(batch))
+	}
+
+	// Every store type excluded: nothing, and no error.
+	batch, err = s.AcquireBlobDeletionBatch(ctx, 200, 10, 30, []int32{1, 2, 3, 4})
+	require.NoError(t, err)
+	require.Empty(t, batch)
 }
