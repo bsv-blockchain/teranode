@@ -97,6 +97,13 @@ type SyncCoordinator struct {
 	stopOnce sync.Once
 	drained  chan struct{} // closed by Stop's single watcher once wg fully drains
 	wg       sync.WaitGroup
+	// lifecycleMu orders wg.Add against Stop's wg.Wait for goroutines spawned
+	// from libp2p callbacks (see goTracked): stopping is set under it before
+	// Wait begins, so a late callback can never Add to a WaitGroup that is
+	// already draining. Start's own monitor goroutines are not guarded: the
+	// service wires Start strictly before Stop.
+	lifecycleMu sync.Mutex
+	stopping    bool
 }
 
 // NewSyncCoordinator creates a new sync coordinator
@@ -149,6 +156,11 @@ const (
 	// surfaces as a logged error instead of wedging
 	// monitorFSM/periodicEvaluation forever.
 	defaultRPCTimeout = 5 * time.Second
+
+	// syncPeerReselectDelay is how long HandlePeerDisconnected waits before
+	// re-running sync peer selection after the current sync peer drops, so
+	// other peers' node_status updates can land first.
+	syncPeerReselectDelay = 1 * time.Second
 
 	// reputationRecoveryMinInterval rate-limits ReconsiderBadPeers RPCs issued
 	// from the 2s monitor tick; recovery cooldowns are minutes, so a 30s
@@ -565,6 +577,10 @@ func (sc *SyncCoordinator) Start(ctx context.Context) {
 // exists to bound.
 func (sc *SyncCoordinator) Stop(ctx context.Context) {
 	sc.stopOnce.Do(func() {
+		sc.lifecycleMu.Lock()
+		sc.stopping = true
+		sc.lifecycleMu.Unlock()
+
 		close(sc.stopCh)
 		sc.ctxCancel()
 		go func() {
@@ -702,12 +718,47 @@ func (sc *SyncCoordinator) HandlePeerDisconnected(peerID peer.ID) {
 	if isSyncPeer {
 		sc.logger.Infof("[SyncCoordinator] Sync peer %s disconnected", idStr)
 
-		// Trigger selection of new sync peer
-		go func() {
-			time.Sleep(1 * time.Second) // Brief delay to allow other peers to update
+		// Trigger selection of a new sync peer after a brief delay so other
+		// peers' status updates can land first. Tracked and cancellable like
+		// every other coordinator goroutine: a bare sleep would outlive Stop's
+		// drain and re-run a full select-and-activate on a stopped coordinator.
+		if !sc.goTracked(func() {
+			timer := time.NewTimer(syncPeerReselectDelay)
+			defer timer.Stop()
+
+			select {
+			case <-timer.C:
+			case <-sc.stopCh:
+				return
+			case <-sc.ctx.Done():
+				return
+			}
+
 			_ = sc.TriggerSync()
-		}()
+		}) {
+			sc.logger.Debugf("[SyncCoordinator] coordinator stopping, not re-selecting a sync peer after %s disconnected", idStr)
+		}
 	}
+}
+
+// goTracked runs fn on a wg-tracked goroutine so Stop's drain waits for it.
+// It refuses (returning false) once Stop has begun: the check and the Add are
+// atomic under lifecycleMu, which Stop takes before it starts waiting, so a
+// late libp2p callback cannot race wg.Add against wg.Wait.
+func (sc *SyncCoordinator) goTracked(fn func()) bool {
+	sc.lifecycleMu.Lock()
+	defer sc.lifecycleMu.Unlock()
+
+	if sc.stopping {
+		return false
+	}
+
+	sc.wg.Add(1)
+	go func() {
+		defer sc.wg.Done()
+		fn()
+	}()
+	return true
 }
 
 // HandleCatchupFailure handles catchup failures

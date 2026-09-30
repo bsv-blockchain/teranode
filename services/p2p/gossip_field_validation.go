@@ -52,8 +52,9 @@ func checkGossipString(field, value string, maxLen int) error {
 }
 
 // checkGossipHex rejects a peer-supplied string that exceeds maxLen bytes or
-// contains a non-hexadecimal character. Empty values pass: hash fields are
-// optional in gossip messages.
+// contains a non-hexadecimal character. Empty and short values pass here;
+// handlers whose hash is mandatory (block, subtree) enforce the exact
+// 64-character form themselves via parseHash / sanitizeAdvertisedTip.
 func checkGossipHex(field, value string, maxLen int) error {
 	if len(value) > maxLen {
 		return errors.NewInvalidArgumentError("%s length %d exceeds max %d", field, len(value), maxLen)
