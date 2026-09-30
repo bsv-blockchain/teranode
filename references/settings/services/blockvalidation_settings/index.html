@@ -7727,16 +7727,23 @@
 </ul>
 <h3 id="optimistic-mining">Optimistic Mining<a class="headerlink" href="#optimistic-mining" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>OptimisticMining = true</code>: enables background validation for performance on paths that opt in</li>
-<li>Block validation proceeds while subtree validation runs in the background</li>
+<li><code>OptimisticMining</code> defaults to <code>true</code>: once the block's subtrees have been validated
+  (transaction and script checks, synchronously), the block is added to the chain and mining can
+  start on it, before the remaining block-level checks have run</li>
+<li>Those block-level checks continue in the background - merkle root, coinbase and BIP34 checks,
+  duplicate transactions, transaction ordering and parent-spend checks, and the old-block-ID
+  double-spend scan. If a background check proves the block invalid it is invalidated and its
+  UTXO effects are rolled back; a transient storage or processing failure instead schedules a
+  re-validation and leaves the block on the chain in the meantime</li>
 <li>Can be overridden per-validation via the <code>DisableOptimisticMining</code> option</li>
 <li><strong>On every validation path optimistic mining is OFF unless BOTH
   <code>blockvalidation_optimistic_mining</code> AND <code>blockvalidation_optimistic_mining_peer_blocks</code> are set</strong>
   (default <code>(true, false)</code> = off). The requirement is applied where each validation chooses its
   mode, not only at the peer entry gate, so an internal caller cannot turn optimistic on the global
   flag alone (bitcoin-sv/teranode#4844). The global flag being false always wins, so the peer-blocks
-  flag can never bypass it (bitcoin-sv/teranode#4692). Revalidation of an already-stored block is always
-  non-optimistic regardless of these flags.</li>
+  flag can never bypass it (bitcoin-sv/teranode#4692). Revalidation of an already-stored block, and
+  blocks arriving over the legacy sync route (<code>baseURL == "legacy"</code>), are always non-optimistic
+  regardless of these flags.</li>
 <li><strong>The catch-up path is always non-optimistic</strong>, whatever these two flags are set to. It validates
   against a cached header run holding only the block's in-batch predecessors, which cannot carry the
   median-time-past window the optimistic branch checks synchronously; lifting this requires the
@@ -7751,6 +7758,8 @@
   record (bitcoin-sv/teranode#4844). A body carrying no subtrees is bound by the coinbase-only rule
   and rejected before the add. Keep <code>blockvalidation_optimistic_mining_peer_blocks</code> off until the
   <code>block.Valid</code> split lands.</li>
+<li>Checkpoint-verified blocks take the quick-validation pipeline instead, which never consults this
+  setting.</li>
 </ul>
 <h3 id="corrupt-body-re-download-cap">Corrupt-body re-download cap<a class="headerlink" href="#corrupt-body-re-download-cap" title="Permanent link">&para;</a></h3>
 <ul>
