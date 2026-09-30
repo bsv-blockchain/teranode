@@ -50,6 +50,31 @@ func TestTieredRateLimiter_UnverifiedGetsLimited(t *testing.T) {
 	}
 }
 
+// TestTieredRateLimiter_429SetsRetryAfter — a rate-limited 429 must carry a
+// Retry-After header so backing-off clients (e.g. block-validation catchup) can
+// pace their retries instead of re-bursting and re-tripping the limiter (#1174).
+func TestTieredRateLimiter_429SetsRetryAfter(t *testing.T) {
+	e := echo.New()
+	e.Use(setTierMiddleware(tierUnverified, ""))
+	e.Use(newTieredRateLimiter(2, 1, 0, "test").Middleware())
+	e.GET("/test", func(c echo.Context) error {
+		return c.String(http.StatusOK, "ok")
+	})
+
+	var limited *httptest.ResponseRecorder
+	for i := 0; i < 3; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		e.ServeHTTP(rec, req)
+		if rec.Code == http.StatusTooManyRequests {
+			limited = rec
+		}
+	}
+
+	require.NotNil(t, limited, "expected at least one 429")
+	require.Equal(t, "1", limited.Header().Get("Retry-After"), "429 must advertise Retry-After")
+}
+
 // TestTieredRateLimiter_MinerExempt — minerRate=0 preserves the original
 // fully-exempt behaviour for miners.
 func TestTieredRateLimiter_MinerExempt(t *testing.T) {

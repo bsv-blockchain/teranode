@@ -939,7 +939,7 @@ func TestSubtreeMetaRegenerator_RejectsInternalPeer(t *testing.T) {
 	tests := map[string]string{
 		// A hostname: passes the static check (no DNS there), refused at dial time once
 		// resolution reveals the loopback address. This is the case the guard exists for.
-		"http://localhost:" + port + "/api/v1": "loopback address",
+		"http://localhost:" + port + "/api/v1": "transport failure",
 		// A literal cloud metadata endpoint, refused earlier by the static ValidateURL
 		// pre-check without a connection being attempted at all.
 		"http://169.254.169.254/api/v1": "blocked IP address",

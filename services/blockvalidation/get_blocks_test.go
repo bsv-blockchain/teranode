@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -44,6 +45,603 @@ import (
 	"go.uber.org/goleak"
 	"golang.org/x/sync/semaphore"
 )
+
+type trackedBlockResponseBody struct {
+	data      []byte
+	offset    int
+	bytesRead atomic.Int64
+	closed    atomic.Bool
+}
+
+type stallingBlockResponseBody struct {
+	ctx     context.Context
+	data    []byte
+	offset  int
+	started chan struct{}
+	once    sync.Once
+	closed  atomic.Bool
+}
+
+func (b *stallingBlockResponseBody) Read(p []byte) (int, error) {
+	if b.offset < len(b.data) {
+		n := copy(p, b.data[b.offset:])
+		b.offset += n
+		if b.offset == len(b.data) {
+			b.once.Do(func() { close(b.started) })
+		}
+		return n, nil
+	}
+
+	<-b.ctx.Done()
+	return 0, b.ctx.Err()
+}
+
+func (b *stallingBlockResponseBody) Close() error {
+	b.closed.Store(true)
+	return nil
+}
+
+func (b *trackedBlockResponseBody) Read(p []byte) (int, error) {
+	if b.offset >= len(b.data) {
+		return 0, io.EOF
+	}
+	n := copy(p, b.data[b.offset:])
+	b.offset += n
+	b.bytesRead.Add(int64(n))
+	return n, nil
+}
+
+func (b *trackedBlockResponseBody) Close() error {
+	b.closed.Store(true)
+	return nil
+}
+
+func blockHTTPResponse(body io.ReadCloser) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       body,
+		Header:     http.Header{},
+	}
+}
+
+// decodeBoundedBlockTest wraps r in the shared transport LimitedReader that decodeBoundedBlock now
+// expects the caller to own (production hoists it per response for an aggregate batch budget).
+func decodeBoundedBlockTest(r io.Reader, limits blockResponseLimits) (*model.Block, error) {
+	limited := &io.LimitedReader{R: r, N: limits.maxTransportBytes}
+	return decodeBoundedBlock(bufio.NewReaderSize(limited, blockStreamReadBufferMinSize), limited, limits)
+}
+
+// TestDecodeBoundedBlock_TruncationIsExternalNotInvalid is the F1 regression: an honest peer whose
+// block response is truncated mid-stream must classify as ErrExternal (catchup fails over), NOT
+// ErrBlockInvalid — which catchup.go turns into a malicious-peer report that pins the peer's
+// reputation. The model emits BlockInvalidError wrapping io.ErrUnexpectedEOF on a short read, and
+// (*Error).Is matches by code anywhere in the chain, so decodeBoundedBlock must return a FRESH,
+// unwrapped error for truncation rather than wrapping the BlockInvalid cause.
+func TestDecodeBoundedBlock_TruncationIsExternalNotInvalid(t *testing.T) {
+	block := testhelpers.CreateTestBlockChain(t, 2)[1]
+	full, err := block.Bytes()
+	require.NoError(t, err)
+	require.Greater(t, len(full), 90, "need a block longer than its 80-byte header to truncate mid-body")
+
+	// Cut mid-body (past the header) so the model fails on a short read, not a bad header.
+	truncated := full[:len(full)*3/4]
+	// Cap well above the truncated length so limited.N > 0 (this is NOT the oversized-block path).
+	limits := blockResponseLimits{maxTransportBytes: int64(len(full) + 1024)}
+
+	_, decodeErr := decodeBoundedBlockTest(bytes.NewReader(truncated), limits)
+	require.Error(t, decodeErr)
+	require.True(t, errors.Is(decodeErr, errors.ErrExternal),
+		"a truncated response must be external (peer fail-over): %v", decodeErr)
+	require.False(t, errors.Is(decodeErr, errors.ErrBlockInvalid),
+		"truncation must NOT carry ErrBlockInvalid — catchup.go would report the honest peer malicious: %v", decodeErr)
+}
+
+func TestBatchFetchAndDistribute_RespectsAggregateBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		batchSize        int
+		aggregateRatio   int64
+		belowMessageCap  bool
+		wantRequestSizes []int
+	}{
+		{name: "split batch", batchSize: 5, aggregateRatio: 2, wantRequestSizes: []int{2, 2, 1}},
+		{name: "equal caps", batchSize: 5, aggregateRatio: 1, wantRequestSizes: []int{1, 1, 1, 1, 1}},
+		{name: "aggregate below message cap", batchSize: 5, belowMessageCap: true, wantRequestSizes: []int{1, 1, 1, 1, 1}},
+		{name: "configured smaller batch", batchSize: 1, aggregateRatio: 2, wantRequestSizes: []int{1, 1, 1, 1, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := &Server{settings: test.CreateBaseTestSettings(t), logger: ulogger.TestLogger{}}
+			blocks := testhelpers.CreateTestBlockChain(t, 6)
+			headers := make([]*model.BlockHeader, 0, 5)
+			payloads := make([][]byte, len(blocks))
+			indices := make(map[string]int)
+			var largestMessage int64
+			for i := 1; i < len(blocks); i++ {
+				payload, err := blocks[i].Bytes()
+				require.NoError(t, err)
+				payloads[i] = payload
+				largestMessage = max(largestMessage, int64(len(payload)))
+				headers = append(headers, blocks[i].Header)
+				indices[blocks[i].Hash().String()] = i
+			}
+			messageCap := largestMessage + 16
+			aggregateCap := tc.aggregateRatio * messageCap
+			if tc.belowMessageCap {
+				aggregateCap = largestMessage
+			}
+			server.settings.BlockValidation.MaxIncomingBlockBytes = aggregateCap
+			server.settings.BlockValidation.MaxIncomingBlockMessageBytes = messageCap
+			server.settings.BlockValidation.PerPeerFetchRate = 0
+			httpmock.ActivateNonDefault(util.HTTPClient())
+			defer httpmock.DeactivateAndReset()
+			var requestSizes []int
+			httpmock.RegisterNoResponder(func(req *http.Request) (*http.Response, error) {
+				n, err := strconv.Atoi(req.URL.Query().Get("n"))
+				require.NoError(t, err)
+				require.Positive(t, n)
+				index, ok := indices[strings.TrimPrefix(req.URL.Path, "/blocks/")]
+				require.True(t, ok)
+				require.GreaterOrEqual(t, index, n)
+				requestSizes = append(requestSizes, n)
+				var response []byte
+				for i := index; i > index-n; i-- {
+					response = append(response, payloads[i]...)
+				}
+				return httpmock.NewBytesResponse(http.StatusOK, response), nil
+			})
+			queue := make(chan workItem, len(headers))
+			const startingHeight = uint32(800000)
+			err := server.batchFetchAndDistribute(context.Background(), headers, queue, "peer", "http://peer", blocks[5], tc.batchSize, startingHeight)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantRequestSizes, requestSizes)
+			require.Len(t, queue, len(headers))
+			for i, header := range headers {
+				item := <-queue
+				require.Equal(t, i, item.index)
+				require.Equal(t, header.Hash(), item.block.Hash())
+				require.Equal(t, startingHeight+uint32(i), item.block.Height)
+			}
+			require.Equal(t, aggregateCap, server.settings.BlockValidation.MaxIncomingBlockBytes)
+			require.Equal(t, messageCap, server.settings.BlockValidation.MaxIncomingBlockMessageBytes)
+		})
+	}
+}
+
+func TestBatchFetchAndDistribute_InvalidReceiveLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		aggregate int64
+		message   int64
+	}{
+		{name: "zero aggregate", message: 1024},
+		{name: "negative aggregate", aggregate: -1, message: 1024},
+		{name: "zero message", aggregate: 1024},
+		{name: "negative message", aggregate: 1024, message: -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := &Server{settings: test.CreateBaseTestSettings(t), logger: ulogger.TestLogger{}}
+			blocks := testhelpers.CreateTestBlockChain(t, 2)
+			server.settings.BlockValidation.MaxIncomingBlockBytes = tc.aggregate
+			server.settings.BlockValidation.MaxIncomingBlockMessageBytes = tc.message
+			queue := make(chan workItem, 1)
+			err := server.batchFetchAndDistribute(context.Background(), []*model.BlockHeader{blocks[1].Header}, queue, "peer", "http://peer", blocks[1], 1, 1)
+			require.Error(t, err)
+			require.True(t, errors.Is(err, errors.ErrConfiguration), "%v", err)
+			require.Empty(t, queue)
+		})
+	}
+}
+
+func TestPeerBlockFetches_StreamAndBoundResponses(t *testing.T) {
+	t.Run("single rejects trailing oversized body without reading it all", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		block := testhelpers.CreateTestBlockChain(t, 2)[1]
+		blockBytes, err := block.Bytes()
+		require.NoError(t, err)
+		suite.Server.settings.Policy.ExcessiveBlockSize = len(blockBytes)
+
+		body := &trackedBlockResponseBody{data: append(append([]byte{}, blockBytes...), bytes.Repeat([]byte{0xaa}, 1<<20)...)}
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+		httpmock.RegisterResponder("GET", fmt.Sprintf("http://peer/block/%s", block.Hash()),
+			func(*http.Request) (*http.Response, error) { return blockHTTPResponse(body), nil })
+
+		_, err = suite.Server.fetchSingleBlock(suite.Ctx, block.Hash(), "peer", "http://peer")
+		require.Error(t, err)
+		require.Less(t, body.bytesRead.Load(), int64(len(body.data)), "stream decoder must not buffer the full hostile response")
+		require.True(t, body.closed.Load(), "response body must close on rejection")
+	})
+
+	t.Run("single rejects block larger than acceptance limit", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		block := testhelpers.CreateTestBlockChain(t, 2)[1]
+		block.TransactionCount = 1
+		block.SizeInBytes = 80 + util.VarintSize(block.TransactionCount) + uint64(block.CoinbaseTx.Size())
+		blockBytes, err := block.Bytes()
+		require.NoError(t, err)
+		suite.Server.settings.Policy.ExcessiveBlockSize = int(block.SizeInBytes) - 1
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+		httpmock.RegisterResponder("GET", fmt.Sprintf("http://peer/block/%s", block.Hash()), httpmock.NewBytesResponder(http.StatusOK, blockBytes))
+
+		_, err = suite.Server.fetchSingleBlock(suite.Ctx, block.Hash(), "peer", "http://peer")
+		require.Error(t, err)
+		require.ErrorIs(t, err, errors.ErrBlockPolicyDeclined)
+		require.NotErrorIs(t, err, errors.ErrExternal)
+		require.NotErrorIs(t, err, errors.ErrBlockInvalid)
+	})
+
+	t.Run("batch ignores extra blocks without draining hostile body", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		blocks := testhelpers.CreateTestBlockChain(t, 3)
+		first, err := blocks[1].Bytes()
+		require.NoError(t, err)
+		second, err := blocks[2].Bytes()
+		require.NoError(t, err)
+		suite.Server.settings.Policy.ExcessiveBlockSize = max(len(first), len(second))
+
+		body := &trackedBlockResponseBody{data: append(first, second...)}
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+		httpmock.RegisterResponder("GET", fmt.Sprintf("http://peer/blocks/%s?n=1", blocks[1].Hash()),
+			func(*http.Request) (*http.Response, error) { return blockHTTPResponse(body), nil })
+
+		// Upstream treats padding as a diagnostic (proxy/version skew), while the
+		// count, per-message cap and aggregate cap still bound accepted data.
+		got, err := suite.Server.fetchBlocksBatch(suite.Ctx, blocks[1].Hash(), 1, "peer", "http://peer")
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		require.True(t, body.closed.Load(), "response body must close after oversend probe")
+	})
+
+	t.Run("batch rejects truncated response and huge requested count without preallocation", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+		suite.Server.settings.Policy.ExcessiveBlockSize = 1024
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+		httpmock.RegisterResponder("GET", fmt.Sprintf("http://peer/blocks/%s?n=%d", (&chainhash.Hash{}).String(), uint32(math.MaxUint32)),
+			httpmock.NewBytesResponder(http.StatusOK, nil))
+
+		_, err := suite.Server.fetchBlocksBatch(suite.Ctx, &chainhash.Hash{}, math.MaxUint32, "peer", "http://peer")
+		require.Error(t, err)
+	})
+
+	t.Run("zero count returns without request", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+		var requests atomic.Int32
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+		httpmock.RegisterNoResponder(func(*http.Request) (*http.Response, error) {
+			requests.Add(1)
+			return httpmock.NewStringResponse(http.StatusInternalServerError, "unexpected"), nil
+		})
+
+		blocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, &chainhash.Hash{}, 0, "peer", "http://peer")
+		require.NoError(t, err)
+		require.Empty(t, blocks)
+		require.Zero(t, requests.Load())
+	})
+
+	t.Run("zero acceptance limit permits a valid peer block", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		block := testhelpers.CreateTestBlockChain(t, 2)[1]
+		blockBytes, err := block.Bytes()
+		require.NoError(t, err)
+		suite.Server.settings.Policy.ExcessiveBlockSize = 0
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+		httpmock.RegisterResponder("GET", fmt.Sprintf("http://peer/block/%s", block.Hash()),
+			httpmock.NewBytesResponder(http.StatusOK, blockBytes))
+
+		got, err := suite.Server.fetchSingleBlock(suite.Ctx, block.Hash(), "peer", "http://peer")
+		require.NoError(t, err)
+		require.Equal(t, block.Hash(), got.Hash())
+	})
+
+	t.Run("negative acceptance limit fails locally before request", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+		suite.Server.settings.Policy.ExcessiveBlockSize = -1
+		var requests atomic.Int32
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+		httpmock.RegisterNoResponder(func(*http.Request) (*http.Response, error) {
+			requests.Add(1)
+			return httpmock.NewStringResponse(http.StatusOK, "unexpected"), nil
+		})
+
+		_, err := suite.Server.fetchSingleBlock(suite.Ctx, &chainhash.Hash{}, "peer", "http://peer")
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrServiceError) || errors.IsLocalError(err),
+			"invalid local policy config must not be classified as a peer failure: %v", err)
+		require.Zero(t, requests.Load())
+	})
+
+	t.Run("non-positive transport envelope fails locally before request", func(t *testing.T) {
+		for _, limit := range []int64{0, -1} {
+			t.Run(fmt.Sprintf("limit_%d", limit), func(t *testing.T) {
+				suite := NewCatchupTestSuite(t)
+				defer suite.Cleanup()
+				suite.Server.settings.Policy.ExcessiveBlockSize = 1024
+				suite.Server.settings.BlockValidation.MaxIncomingBlockBytes = limit
+				var requests atomic.Int32
+
+				httpmock.ActivateNonDefault(util.HTTPClient())
+				defer httpmock.DeactivateAndReset()
+				httpmock.RegisterNoResponder(func(*http.Request) (*http.Response, error) {
+					requests.Add(1)
+					return httpmock.NewStringResponse(http.StatusOK, "unexpected"), nil
+				})
+
+				_, err := suite.Server.fetchSingleBlock(suite.Ctx, &chainhash.Hash{}, "peer", "http://peer")
+				require.Error(t, err)
+				require.True(t, errors.Is(err, errors.ErrServiceError) || errors.IsLocalError(err),
+					"invalid local transport config must not be classified as a peer failure: %v", err)
+				require.Zero(t, requests.Load())
+			})
+		}
+	})
+
+	t.Run("transport envelope rejects oversized serialized block without unbounded read", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		block := testhelpers.CreateTestBlockChain(t, 2)[1]
+		blockBytes, err := block.Bytes()
+		require.NoError(t, err)
+		suite.Server.settings.Policy.ExcessiveBlockSize = 0
+		// Budget well under the serialized size: the decoder tolerates a byte or two of
+		// trailing-framing truncation, so an off-by-one cap would still decode. Halving the
+		// budget guarantees the block cannot fit and the transport envelope must reject it.
+		suite.Server.settings.BlockValidation.MaxIncomingBlockBytes = int64(len(blockBytes) / 2)
+		body := &trackedBlockResponseBody{data: append(append([]byte{}, blockBytes...), bytes.Repeat([]byte{0xaa}, 1<<20)...)}
+		var requests atomic.Int32
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+		httpmock.RegisterResponder("GET", fmt.Sprintf("http://peer/block/%s", block.Hash()),
+			func(*http.Request) (*http.Response, error) {
+				requests.Add(1)
+				return blockHTTPResponse(body), nil
+			})
+
+		_, err = suite.Server.fetchSingleBlock(suite.Ctx, block.Hash(), "peer", "http://peer")
+		require.Error(t, err)
+		require.Equal(t, int32(1), requests.Load(), "valid transport config must reach HTTP")
+		require.True(t, errors.Is(err, errors.ErrExternal), "transport overflow is peer-classified: %v", err)
+		// bufio.Reader may prefetch its 16-byte minimum buffer past the logical
+		// LimitedReader boundary, but must never drain the hostile tail.
+		require.LessOrEqual(t, body.bytesRead.Load(), suite.Server.settings.BlockValidation.MaxIncomingBlockBytes+16)
+		require.True(t, body.closed.Load())
+	})
+
+	t.Run("declared policy permits transport framing overhead", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		block := testhelpers.CreateTestBlockChain(t, 2)[1]
+		block.TransactionCount = 1
+		block.SizeInBytes = 80 + util.VarintSize(block.TransactionCount) + uint64(block.CoinbaseTx.Size())
+		blockBytes, err := block.Bytes()
+		require.NoError(t, err)
+		require.Greater(t, len(blockBytes), int(block.SizeInBytes), "fixture must carry Teranode framing beyond declared Bitcoin size")
+		suite.Server.settings.Policy.ExcessiveBlockSize = int(block.SizeInBytes)
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+		httpmock.RegisterResponder("GET", fmt.Sprintf("http://peer/block/%s", block.Hash()),
+			httpmock.NewBytesResponder(http.StatusOK, blockBytes))
+
+		got, err := suite.Server.fetchSingleBlock(suite.Ctx, block.Hash(), "peer", "http://peer")
+		require.NoError(t, err)
+		require.Equal(t, block.SizeInBytes, got.SizeInBytes)
+	})
+
+	t.Run("valid streamed batch remains accepted", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		blocks := testhelpers.CreateTestBlockChain(t, 3)
+		first, err := blocks[1].Bytes()
+		require.NoError(t, err)
+		second, err := blocks[2].Bytes()
+		require.NoError(t, err)
+		suite.Server.settings.Policy.ExcessiveBlockSize = max(len(first), len(second))
+		p2pClient := &catchupPeersP2PMock{}
+		suite.Server.p2pClient = p2pClient
+
+		body := &trackedBlockResponseBody{data: append(first, second...)}
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+		httpmock.RegisterResponder("GET", fmt.Sprintf("http://peer/blocks/%s?n=2", blocks[1].Hash()),
+			func(*http.Request) (*http.Response, error) { return blockHTTPResponse(body), nil })
+
+		got, err := suite.Server.fetchBlocksBatch(suite.Ctx, blocks[1].Hash(), 2, "peer", "http://peer")
+		require.NoError(t, err)
+		require.Len(t, got, 2)
+		require.Equal(t, blocks[1].Hash(), got[0].Hash())
+		require.Equal(t, blocks[2].Hash(), got[1].Hash())
+		require.Equal(t, int64(len(body.data)), body.bytesRead.Load())
+		require.True(t, body.closed.Load())
+		require.Equal(t, uint64(len(body.data)), p2pClient.recordedBytes("peer"))
+	})
+}
+
+func TestPeerBlockFetches_ClassifyStreamStalls(t *testing.T) {
+	tests := []struct {
+		name        string
+		bodyData    func([]byte) []byte
+		cancel      bool
+		batch       bool
+		wantLocal   bool
+		wantNetwork bool
+	}{
+		{
+			name:        "mid-block deadline is a peer timeout",
+			bodyData:    func(blockBytes []byte) []byte { return blockBytes[:40] },
+			wantNetwork: true,
+		},
+		{
+			name:        "complete block without EOF is a peer timeout",
+			bodyData:    func(blockBytes []byte) []byte { return blockBytes },
+			wantNetwork: true,
+		},
+		{
+			name:      "caller cancellation remains local",
+			bodyData:  func(blockBytes []byte) []byte { return blockBytes[:40] },
+			cancel:    true,
+			wantLocal: true,
+		},
+		{
+			name:      "batch caller cancellation remains local",
+			bodyData:  func(blockBytes []byte) []byte { return blockBytes[:40] },
+			cancel:    true,
+			batch:     true,
+			wantLocal: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			suite := NewCatchupTestSuite(t)
+			defer suite.Cleanup()
+
+			block := testhelpers.CreateTestBlockChain(t, 2)[1]
+			blockBytes, err := block.Bytes()
+			require.NoError(t, err)
+			suite.Server.settings.Policy.ExcessiveBlockSize = 1024
+
+			var (
+				ctx    context.Context
+				cancel context.CancelFunc
+			)
+			if tt.cancel {
+				ctx, cancel = context.WithCancel(context.Background())
+			} else {
+				ctx, cancel = context.WithTimeout(context.Background(), 75*time.Millisecond)
+			}
+			defer cancel()
+
+			var body *stallingBlockResponseBody
+			httpmock.ActivateNonDefault(util.HTTPClient())
+			defer httpmock.DeactivateAndReset()
+			requestURL := fmt.Sprintf("http://peer/block/%s", block.Hash())
+			if tt.batch {
+				requestURL = fmt.Sprintf("http://peer/blocks/%s?n=1", block.Hash())
+			}
+			httpmock.RegisterResponder("GET", requestURL,
+				func(req *http.Request) (*http.Response, error) {
+					body = &stallingBlockResponseBody{
+						ctx:     req.Context(),
+						data:    tt.bodyData(blockBytes),
+						started: make(chan struct{}),
+					}
+					if tt.cancel {
+						go func() {
+							<-body.started
+							cancel()
+						}()
+					}
+					return blockHTTPResponse(body), nil
+				})
+
+			if tt.batch {
+				_, err = suite.Server.fetchBlocksBatch(ctx, block.Hash(), 1, "peer", "http://peer")
+			} else {
+				_, err = suite.Server.fetchSingleBlock(ctx, block.Hash(), "peer", "http://peer")
+			}
+			require.Error(t, err)
+			require.Equal(t, tt.wantLocal, errors.IsLocalError(err), "unexpected local classification: %v", err)
+			require.Equal(t, tt.wantNetwork, errors.IsNetworkError(err), "unexpected network classification: %v", err)
+			if tt.wantLocal {
+				require.False(t, errors.Is(err, errors.ErrBlockInvalid), "cancellation must not retain the decoder's invalid-block verdict: %v", err)
+				require.False(t, errors.Is(err, errors.ErrExternal), "cancellation must not retain the decoder's external verdict: %v", err)
+			}
+			if tt.wantNetwork {
+				require.False(t, errors.Is(err, context.DeadlineExceeded), "peer timeout must not retain infectious deadline sentinel: %v", err)
+			}
+			require.NotNil(t, body)
+			require.True(t, body.closed.Load(), "response body must close after stream failure")
+		})
+	}
+}
+
+func TestDecodeBoundedBlock_RejectsCoinbaseAllocationAmplification(t *testing.T) {
+	hostile := hostileCoinbaseBlock(t, 0, 16<<20)
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, err := decodeBoundedBlockTest(bytes.NewReader(hostile), blockResponseLimits{maxTransportBytes: 1024})
+	runtime.ReadMemStats(&after)
+
+	require.Error(t, err)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(4<<20),
+		"a tiny hostile response must not allocate its advertised 16 MiB script")
+}
+
+func TestDecodeBoundedBlock_RejectsDeterministicallyInvalidCoinbaseBeforeBuffering(t *testing.T) {
+	hostile := hostileCoinbaseBlock(t, 2048, uint64(bt.MaxArenaAlloc)+1)
+
+	_, err := decodeBoundedBlockTest(bytes.NewReader(hostile), blockResponseLimits{
+		maxTransportBytes: 8 << 30,
+		maxDeclaredBytes:  1024,
+		enforceDeclared:   true,
+	})
+
+	require.ErrorContains(t, err, "declared size 2048 exceeds limit 1024",
+		"declared policy must reject before scanning the hostile coinbase")
+	require.ErrorIs(t, err, errors.ErrBlockPolicyDeclined)
+	require.NotErrorIs(t, err, errors.ErrExternal)
+	require.NotErrorIs(t, err, errors.ErrBlockInvalid)
+
+	hostile = hostileCoinbaseBlock(t, 0, uint64(bt.MaxArenaAlloc)+1)
+	_, err = decodeBoundedBlockTest(bytes.NewReader(hostile), blockResponseLimits{maxTransportBytes: 8 << 30})
+	require.ErrorContains(t, err, "MaxArenaAlloc", "go-bt's deterministic script limit must reject before buffering")
+}
+
+func hostileCoinbaseBlock(t *testing.T, declaredSize, scriptLength uint64) []byte {
+	t.Helper()
+	block := testhelpers.CreateTestBlockChain(t, 1)[0]
+	if declaredSize > 0 {
+		block.SizeInBytes = declaredSize
+	}
+	blockBytes, err := block.Bytes()
+	require.NoError(t, err)
+
+	reader := bytes.NewReader(blockBytes[80:])
+	var value bt.VarInt
+	for i := 0; i < 3; i++ {
+		_, err = value.ReadFrom(reader)
+		require.NoError(t, err)
+	}
+	_, err = reader.Seek(int64(uint64(value)*chainhash.HashSize), io.SeekCurrent) //nolint:gosec // tiny test fixture
+	require.NoError(t, err)
+	coinbaseOffset := len(blockBytes) - reader.Len()
+
+	var hostileCoinbase bytes.Buffer
+	hostileCoinbase.Write([]byte{1, 0, 0, 0})
+	_, err = bt.VarInt(1).WriteTo(&hostileCoinbase)
+	require.NoError(t, err)
+	hostileCoinbase.Write(make([]byte, 36))
+	_, err = bt.VarInt(scriptLength).WriteTo(&hostileCoinbase)
+	require.NoError(t, err)
+	return append(append([]byte{}, blockBytes[:coinbaseOffset]...), hostileCoinbase.Bytes()...)
+}
 
 // TestFetchBlocksConcurrently_CurrentImplementation tests the existing fetchBlocksConcurrently function behavior
 func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
@@ -578,6 +1176,10 @@ func TestFetchBlocksConcurrently_PerformanceCharacteristics(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
 		defer suite.Cleanup()
 
+		// These ~180-byte fixtures exercise 100-block batching and worker ordering.
+		// A 1 MiB message cap keeps that batch within the aggregate receive allowance.
+		suite.Server.settings.BlockValidation.MaxIncomingBlockMessageBytes = 1 << 20
+
 		numBlocks := 100
 		blocks := testhelpers.CreateTestBlockChain(t, numBlocks+1)
 		targetBlock := blocks[numBlocks]
@@ -944,7 +1546,7 @@ func TestBatchFetchAndDistribute_BoundsPeerFetchDeadline(t *testing.T) {
 
 	require.True(t, sawDeadline, "peer block-batch fetch must run under a bounded context deadline, not an unbounded one")
 	require.Greater(t, remaining, time.Duration(0))
-	require.LessOrEqual(t, remaining, peerBlockFetchTimeout+time.Second, "peer fetch deadline must not silently widen to the http_streaming_timeout fallback")
+	require.LessOrEqual(t, remaining, suite.Server.settings.BlockValidation.BlockFetchTimeout+time.Second, "peer fetch deadline must not silently widen to the http_streaming_timeout fallback")
 }
 
 // overSendP2PClient records UpdateCatchupError calls (the diagnostic path fetchBlocksBatch's
@@ -1331,7 +1933,7 @@ func TestFetchAndStoreSubtreeData_DetachedFetchIsBounded(t *testing.T) {
 	start := time.Now()
 	// subtree is nil because the fetch fails before it is used; the parameter only
 	// matters once bytes come back.
-	err := suite.Server.fetchAndStoreSubtreeData(suite.Ctx, blocks[0], subtreeHash, nil, "test-peer-id", "http://test-peer", false, nil)
+	err := suite.Server.fetchAndStoreSubtreeData(suite.Ctx, suite.Ctx, blocks[0], subtreeHash, nil, "test-peer-id", "http://test-peer", false, nil)
 	elapsed := time.Since(start)
 
 	require.Error(t, err)
@@ -1352,8 +1954,8 @@ func TestFetchAndStoreSubtreeData_DetachedFetchIsBounded(t *testing.T) {
 	// ErrServiceUnavailable, which is attributable, so losing that would be a regression
 	// in exactly the case the bound exists to contain.
 	require.False(t, errors.IsLocalError(err), "a peer that exhausts the bound must stay attributable, not read as a local failure")
-	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
-	require.Contains(t, err.Error(), "exceeded the")
+	require.ErrorIs(t, err, errors.ErrNetworkTimeout)
+	require.Contains(t, err.Error(), "timed out")
 }
 
 // Phase 2: Tests for optimized batch fetching and ordered delivery
@@ -1520,6 +2122,10 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
 		defer suite.Cleanup()
 
+		// These ~180-byte fixtures exercise 100-block batching and worker ordering.
+		// A 1 MiB message cap keeps that batch within the aggregate receive allowance.
+		suite.Server.settings.BlockValidation.MaxIncomingBlockMessageBytes = 1 << 20
+
 		// Create test blockchain with 100 blocks
 		blocks := testhelpers.CreateTestBlockChain(t, 101) // +1 for genesis
 
@@ -1557,7 +2163,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 		}
 
 		err := suite.Server.fetchBlocksConcurrently(ctx, catchupCtx, validateBlocksChan, size)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Wait for completion
 		// err = errorGroup.Wait()
@@ -1592,6 +2198,10 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 	t.Run("Multiple_Large_Batches_250_Blocks", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
 		defer suite.Cleanup()
+
+		// These ~180-byte fixtures exercise 100-block batching and worker ordering.
+		// A 1 MiB message cap keeps that batch within the aggregate receive allowance.
+		suite.Server.settings.BlockValidation.MaxIncomingBlockMessageBytes = 1 << 20
 
 		// Create test blockchain with 250 blocks
 		blocks := testhelpers.CreateTestBlockChain(t, 251) // +1 for genesis
@@ -1641,7 +2251,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 		}
 
 		err := suite.Server.fetchBlocksConcurrently(ctx, catchupCtx, validateBlocksChan, size)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Wait for completion
 		// err = errorGroup.Wait()
@@ -1817,6 +2427,10 @@ func TestFetchBlocksConcurrently_WorkerPoolArchitecture(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
 		defer suite.Cleanup()
 
+		// These ~180-byte fixtures exercise 100-block batching and worker ordering.
+		// A 1 MiB message cap keeps that batch within the aggregate receive allowance.
+		suite.Server.settings.BlockValidation.MaxIncomingBlockMessageBytes = 1 << 20
+
 		// Create test blockchain with 100 blocks
 		blocks := testhelpers.CreateTestBlockChain(t, 101) // +1 for genesis
 
@@ -1854,7 +2468,7 @@ func TestFetchBlocksConcurrently_WorkerPoolArchitecture(t *testing.T) {
 		}
 
 		err := suite.Server.fetchBlocksConcurrently(ctx, catchupCtx, validateBlocksChan, size)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Wait for completion
 		// err = errorGroup.Wait()
@@ -1981,7 +2595,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			fmt.Sprintf("http://test-peer/subtree_data/%s", subtreeHash.String()),
 			httpmock.NewBytesResponder(200, expectedData))
 
-		reader, err := suite.Server.fetchSubtreeDataFromPeer(suite.Ctx, subtreeHash, "test-peer-id", "http://test-peer", false)
+		reader, err := suite.Server.fetchSubtreeDataFromPeer(suite.Ctx, subtreeHash, "test-peer-id", "http://test-peer", nil, false)
 		assert.NoError(t, err)
 		assert.NotNil(t, reader)
 		defer reader.Close()
@@ -2005,7 +2619,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			fmt.Sprintf("http://test-peer/subtree_data/%s", subtreeHash.String()),
 			httpmock.NewStringResponder(404, "Not Found"))
 
-		result, err := suite.Server.fetchSubtreeDataFromPeer(suite.Ctx, subtreeHash, "test-peer-id", "http://test-peer", false)
+		result, err := suite.Server.fetchSubtreeDataFromPeer(suite.Ctx, subtreeHash, "test-peer-id", "http://test-peer", nil, false)
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "failed to fetch subtree data from")
@@ -2024,7 +2638,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			fmt.Sprintf("http://test-peer/subtree_data/%s", subtreeHash.String()),
 			httpmock.NewBytesResponder(200, []byte{}))
 
-		reader, err := suite.Server.fetchSubtreeDataFromPeer(suite.Ctx, subtreeHash, "test-peer-id", "http://test-peer", false)
+		reader, err := suite.Server.fetchSubtreeDataFromPeer(suite.Ctx, subtreeHash, "test-peer-id", "http://test-peer", nil, false)
 		// Empty response is not an error for the fetcher - it just returns an empty reader
 		assert.NoError(t, err)
 		assert.NotNil(t, reader)
@@ -2067,7 +2681,7 @@ func TestSubtreeFunctions(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		_, err = suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", nil)
+		_, err = suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", nil, nil)
 		assert.NoError(t, err)
 
 		// Verify both were stored in subtreeStore
@@ -2119,7 +2733,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			Height: 100,
 		}
 
-		_, err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", nil)
+		_, err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", nil, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree from")
 	})
@@ -2161,7 +2775,7 @@ func TestSubtreeFunctions(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		_, err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", nil)
+		_, err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", nil, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree data from")
 	})
@@ -2660,6 +3274,20 @@ func TestFetchSubtreeDataForBlock_SiblingFailureDoesNotCancelInFlight(t *testing
 }
 
 // TestFetchAndStoreSubtreeAndSubtreeData tests the fetchAndStoreSubtreeAndSubtreeData function comprehensively
+// cancelOnSetSubtreeStore delegates to an embedded store but, on Set, cancels the supplied context
+// (simulating node shutdown / catchup-cancel arriving mid-write) and returns the resulting cancel
+// error, so tests can exercise the Set-path error classification.
+type cancelOnSetSubtreeStore struct {
+	blob.Store
+	cancel context.CancelFunc
+}
+
+func (s *cancelOnSetSubtreeStore) SetFromReader(ctx context.Context, _ []byte, _ fileformat.FileType, _ io.ReadCloser, _ ...options.FileOption) error {
+	s.cancel()
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 func TestFetchAndStoreSubtreeData(t *testing.T) {
 	baseURL := "http://test-peer:8080"
 	ctx := context.Background()
@@ -2726,8 +3354,34 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL, nil)
+		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL, nil, nil)
 		assert.NoError(t, err)
+	})
+
+	t.Run("SetCancelIsNotStorageError", func(t *testing.T) {
+		// A shutdown/catchup cancel arriving during subtreeStore.Set must classify local, not as a
+		// loud ErrStorageError that would trip the "node may fall behind" gate on a clean shutdown.
+		logger := ulogger.TestLogger{}
+		settings := test.CreateBaseTestSettings(t)
+		shutdownCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		server := &Server{
+			logger:       logger,
+			subtreeStore: &cancelOnSetSubtreeStore{Store: memory.New(), cancel: cancel},
+			settings:     settings,
+		}
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+		httpmock.RegisterResponder("GET",
+			fmt.Sprintf("%s/subtree_data/%s", baseURL, subtreeHash.String()),
+			httpmock.NewBytesResponder(200, subtreeDataBytes))
+
+		testBlock := &model.Block{Height: 100}
+		err := server.fetchAndStoreSubtreeData(ctx, shutdownCtx, testBlock, subtreeHash, subtree, "peer", baseURL, false, nil)
+		require.Error(t, err)
+		require.False(t, errors.Is(err, errors.ErrStorageError),
+			"a shutdown cancel during Set must not raise a loud storage error; got %T: %v", err, err)
+		require.True(t, errors.IsLocalError(err), "it must classify local (clean shutdown, no storage/peer blame)")
 	})
 
 	t.Run("SubtreeFetchError", func(t *testing.T) {
@@ -2759,7 +3413,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL, nil)
+		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL, nil, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree")
 	})
@@ -2801,7 +3455,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL, nil)
+		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL, nil, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree data from")
 	})
@@ -2855,7 +3509,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL, nil)
+		_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL, nil, nil)
 		assert.Error(t, err)
 	})
 
@@ -2906,7 +3560,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		_, err := server.fetchAndStoreSubtreeAndSubtreeData(cancelCtx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL, nil)
+		_, err := server.fetchAndStoreSubtreeAndSubtreeData(cancelCtx, cancelCtx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL, nil, nil)
 		assert.Error(t, err)
 		// Check for either context canceled or the wrapped error containing context cancellation
 		assert.True(t,
@@ -3091,7 +3745,7 @@ func TestFetchSubtreeDataFromPeer(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeDataURL,
 			httpmock.NewBytesResponder(200, expectedData))
 
-		reader, err := server.fetchSubtreeDataFromPeer(ctx, subtreeHash, "test-peer-id", baseURL, false)
+		reader, err := server.fetchSubtreeDataFromPeer(ctx, subtreeHash, "test-peer-id", baseURL, nil, false)
 		assert.NoError(t, err)
 		assert.NotNil(t, reader)
 		defer reader.Close()
@@ -3109,7 +3763,7 @@ func TestFetchSubtreeDataFromPeer(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeDataURL,
 			httpmock.NewErrorResponder(errors.NewNetworkError("HTTP request failed")))
 
-		data, err := server.fetchSubtreeDataFromPeer(ctx, subtreeHash, "test-peer-id", baseURL, false)
+		data, err := server.fetchSubtreeDataFromPeer(ctx, subtreeHash, "test-peer-id", baseURL, nil, false)
 		assert.Error(t, err)
 		assert.Nil(t, data)
 		assert.Contains(t, err.Error(), "failed to fetch subtree data from")
@@ -3122,7 +3776,7 @@ func TestFetchSubtreeDataFromPeer(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeDataURL,
 			httpmock.NewBytesResponder(200, []byte{})) // Empty response
 
-		reader, err := server.fetchSubtreeDataFromPeer(ctx, subtreeHash, "test-peer-id", baseURL, false)
+		reader, err := server.fetchSubtreeDataFromPeer(ctx, subtreeHash, "test-peer-id", baseURL, nil, false)
 		// Empty response is not an error for the fetcher - it just returns an empty reader
 		assert.NoError(t, err)
 		assert.NotNil(t, reader)
@@ -3154,7 +3808,7 @@ func TestFetchSubtreeDataFromPeer(t *testing.T) {
 		cancelCtx, cancel := context.WithCancel(ctx)
 		cancel() // Cancel immediately
 
-		data, err := server.fetchSubtreeDataFromPeer(cancelCtx, subtreeHash, "test-peer-id", baseURL, false)
+		data, err := server.fetchSubtreeDataFromPeer(cancelCtx, subtreeHash, "test-peer-id", baseURL, nil, false)
 		assert.Error(t, err)
 		assert.Nil(t, data)
 		// Check for either context canceled or the wrapped error containing context cancellation
@@ -3456,10 +4110,10 @@ func TestFetchBlocksConcurrently_ErrorHandling(t *testing.T) {
 		// Call fetchBlocksBatch directly to test EOF handling
 		fetchedBlocks, err := suite.Server.fetchBlocksBatch(context.Background(), blocks[1].Header.Hash(), 2, "test-peer-id", "http://test-peer")
 
-		// Should succeed and return only the first block (EOF handled gracefully)
-		assert.NoError(t, err)
-		assert.Len(t, fetchedBlocks, 1)
-		assert.Equal(t, blocks[1].Header.Hash().String(), fetchedBlocks[0].Header.Hash().String())
+		// A peer must return exactly the requested count; clean EOF after one block is truncation.
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "truncated batch")
+		require.Nil(t, fetchedBlocks)
 	})
 }
 
@@ -4089,7 +4743,7 @@ func TestFetchAndStoreSubtreeDataEdgeCases(t *testing.T) {
 		}
 
 		// This should skip fetching since data already exists
-		err = suite.Server.fetchAndStoreSubtreeData(suite.Ctx, testBlock, &subtreeHash, subtree, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", false, nil)
+		err = suite.Server.fetchAndStoreSubtreeData(suite.Ctx, suite.Ctx, testBlock, &subtreeHash, subtree, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer", false, nil)
 		assert.NoError(t, err)
 	})
 }
@@ -4302,7 +4956,7 @@ func TestFetchAndStoreSubtreeData_PoisonedResponses(t *testing.T) {
 
 		httpmock.RegisterResponder("GET", subtreeDataURL, httpmock.NewBytesResponder(200, []byte{}))
 
-		err := server.fetchAndStoreSubtreeData(ctx, testBlock, subtreeHash, subtree, peerID, baseURL, false, nil)
+		err := server.fetchAndStoreSubtreeData(ctx, ctx, testBlock, subtreeHash, subtree, peerID, baseURL, false, nil)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "served empty subtree_data")
 		require.Contains(t, err.Error(), peerID)
@@ -4324,7 +4978,7 @@ func TestFetchAndStoreSubtreeData_PoisonedResponses(t *testing.T) {
 
 		httpmock.RegisterResponder("GET", subtreeDataURL, httpmock.NewBytesResponder(200, truncated))
 
-		err := server.fetchAndStoreSubtreeData(ctx, testBlock, subtreeHash, subtree, peerID, baseURL, false, nil)
+		err := server.fetchAndStoreSubtreeData(ctx, ctx, testBlock, subtreeHash, subtree, peerID, baseURL, false, nil)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "served incomplete subtree_data")
 		require.True(t, isCacheBypassRetryable(err))
@@ -4347,7 +5001,7 @@ func TestFetchAndStoreSubtreeData_PoisonedResponses(t *testing.T) {
 			fmt.Sprintf("%s/subtree_data/%s", baseURL, coinbaseHash.String()),
 			httpmock.NewBytesResponder(200, []byte{}))
 
-		err = server.fetchAndStoreSubtreeData(ctx, testBlock, coinbaseHash, coinbaseOnly, peerID, baseURL, false, nil)
+		err = server.fetchAndStoreSubtreeData(ctx, ctx, testBlock, coinbaseHash, coinbaseOnly, peerID, baseURL, false, nil)
 		require.NoError(t, err)
 	})
 
@@ -4377,7 +5031,7 @@ func TestFetchAndStoreSubtreeData_PoisonedResponses(t *testing.T) {
 			httpmock.NewBytesResponder(200, []byte{}))
 
 		require.NotPanics(t, func() {
-			err = server.fetchAndStoreSubtreeData(ctx, testBlock, oneNodeHash, oneNode, peerID, baseURL, false, nil)
+			err = server.fetchAndStoreSubtreeData(ctx, ctx, testBlock, oneNodeHash, oneNode, peerID, baseURL, false, nil)
 		})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "served empty subtree_data")
@@ -4439,7 +5093,7 @@ func TestFetchAndStoreSubtreeAndSubtreeData_CacheBypassRetry(t *testing.T) {
 	httpmock.RegisterResponder("GET", poisonedURL, httpmock.NewBytesResponder(200, []byte{}))
 	httpmock.RegisterResponder("GET", bustedURL, httpmock.NewBytesResponder(200, subtreeDataBytes))
 
-	servingPeer, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, &model.Block{Height: 100}, subtreeHash, peerID, baseURL, nil)
+	servingPeer, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, ctx, &model.Block{Height: 100}, subtreeHash, peerID, baseURL, nil, nil)
 	require.NoError(t, err, "the cache-busted retry must recover without any alternative peer")
 	require.Equal(t, peerID, servingPeer)
 
@@ -4473,7 +5127,7 @@ func TestFetchAndStoreSubtreeAndSubtreeData_AllPeersFailedErrorNamesEveryPeer(t 
 		fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String()),
 		httpmock.NewStringResponder(404, `{"message":"NOT_FOUND (3): subtree not found"}`))
 
-	_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, &model.Block{Height: 100}, &subtreeHash, peerID, baseURL, nil)
+	_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, ctx, &model.Block{Height: 100}, &subtreeHash, peerID, baseURL, nil, nil)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrExternal))
 	require.Contains(t, err.Error(), "primary "+peerID, "the primary attempt must be named in the summary")
@@ -4662,7 +5316,7 @@ func TestTryPeerForSubtree_MalformedSubtreeRecoversViaCacheBypass(t *testing.T) 
 	})
 	httpmock.RegisterResponder("GET", f.subtreeDatURL, httpmock.NewBytesResponder(200, f.honestData))
 
-	require.NoError(t, server.tryPeerForSubtree(ctx, testBlock, f.hash, peerID, baseURL, nil),
+	require.NoError(t, server.tryPeerForSubtree(ctx, ctx, testBlock, f.hash, peerID, baseURL, nil),
 		"the cache-busted retry must recover the subtree")
 
 	mu.Lock()
@@ -4725,7 +5379,7 @@ func TestTryPeerForSubtree_WrongRootSubtreeStrikesOnlyAfterCacheBypass(t *testin
 			return httpmock.NewBytesResponse(200, f.wrongRootNodes()), nil
 		})
 
-		err := server.tryPeerForSubtree(ctx, testBlock, f.hash, peerID, baseURL, nil)
+		err := server.tryPeerForSubtree(ctx, ctx, testBlock, f.hash, peerID, baseURL, nil)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrProcessing))
 		require.True(t, isCacheBypassRetryable(err))
@@ -4757,7 +5411,7 @@ func TestTryPeerForSubtree_WrongRootSubtreeStrikesOnlyAfterCacheBypass(t *testin
 		})
 		httpmock.RegisterResponder("GET", f.subtreeDatURL, httpmock.NewBytesResponder(200, f.honestData))
 
-		require.NoError(t, server.tryPeerForSubtree(ctx, testBlock, f.hash, peerID, baseURL, nil))
+		require.NoError(t, server.tryPeerForSubtree(ctx, ctx, testBlock, f.hash, peerID, baseURL, nil))
 
 		require.Empty(t, rec.struck(),
 			"a peer whose cache-busted response is honest was never at fault: the cache was, so it must not be charged")
@@ -5621,7 +6275,7 @@ func TestFetchAndStoreSubtreeData_ExtendedFormatExceedsDeclaredSize(t *testing.T
 
 	// (a) The parser does not distinguish the formats: the over-declared payload is
 	// accepted and stored.
-	require.NoError(t, server.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, peerID, baseURL, false, freshness))
+	require.NoError(t, server.fetchAndStoreSubtreeData(ctx, ctx, block, subtreeHash, subtree, peerID, baseURL, false, freshness))
 
 	stored, err := server.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 	require.NoError(t, err)
@@ -5727,7 +6381,7 @@ func TestFetchAndStoreSubtreeData_StoredBytesMatchSerialize(t *testing.T) {
 	ctx := context.Background()
 	freshness := newSubtreeFreshness()
 
-	require.NoError(t, server.fetchAndStoreSubtreeData(ctx, &model.Block{Height: 100}, subtreeHash, subtree,
+	require.NoError(t, server.fetchAndStoreSubtreeData(ctx, ctx, &model.Block{Height: 100}, subtreeHash, subtree,
 		peerID, baseURL, false, freshness))
 
 	stored, err := server.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
@@ -5777,7 +6431,7 @@ func runStoreFailureScenario(t *testing.T, readBytes int64) {
 	ctx := context.Background()
 	freshness := newSubtreeFreshness()
 
-	err := server.fetchAndStoreSubtreeData(ctx, &model.Block{Height: 100}, subtreeHash, subtree,
+	err := server.fetchAndStoreSubtreeData(ctx, ctx, &model.Block{Height: 100}, subtreeHash, subtree,
 		peerID, baseURL, false, freshness)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "injected store failure")
@@ -5908,6 +6562,16 @@ func TestSubtreeDataWriteFailure_Classification(t *testing.T) {
 			expectLocal: false,
 		},
 		{
+			name:        "peer producer text cannot impersonate cancellation",
+			writeErr:    fmt.Errorf("invalid transaction: context canceled"), //nolint:forbidigo // Emulate a foreign serializer error without teranode wrapping.
+			expectLocal: false,
+		},
+		{
+			name:        "peer producer text cannot impersonate deadline",
+			writeErr:    fmt.Errorf("invalid transaction: context deadline exceeded"), //nolint:forbidigo // Emulate a foreign serializer error without teranode wrapping.
+			expectLocal: false,
+		},
+		{
 			name:        "a producer write failure over a non-pipe cause is the peer's",
 			writeErr:    newTwoVerbWrap(subtreepkg.ErrTransactionWrite, 1, io.ErrShortWrite),
 			storeErr:    storeErr,
@@ -5970,7 +6634,7 @@ func TestFetchAndStoreSubtreeData_StoreAbortMidStreamStaysLocal(t *testing.T) {
 	httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree_data/%s", baseURL, subtreeHash.String()),
 		httpmock.NewBytesResponder(200, body))
 
-	err := server.fetchAndStoreSubtreeData(context.Background(), &model.Block{Height: 100}, subtreeHash,
+	err := server.fetchAndStoreSubtreeData(context.Background(), context.Background(), &model.Block{Height: 100}, subtreeHash,
 		subtree, peerID, baseURL, false, newSubtreeFreshness())
 	require.Error(t, err)
 	require.True(t, errors.IsLocalError(err),
@@ -6095,4 +6759,35 @@ type failingWriter struct{}
 
 func (failingWriter) Write(_ []byte) (int, error) {
 	return 0, io.ErrClosedPipe
+}
+
+// Foreign parser errors can reflect peer-controlled strings. Context sentinel text
+// must neither stop alternative-peer failover nor suppress failure attribution.
+func TestFetchAndStoreSubtreeData_ParserSentinelTextStaysPeerFailure(t *testing.T) {
+	for _, message := range []string{"context canceled", "context deadline exceeded"} {
+		t.Run(message, func(t *testing.T) {
+			subtree, _, _ := newStreamingSubtreeDataFixture(t)
+			subtreeHash := subtree.RootHash()
+			store := memory.New()
+			t.Cleanup(func() { require.NoError(t, store.Close(context.Background())) })
+			server := &Server{
+				logger: ulogger.TestLogger{}, subtreeStore: store,
+				settings: test.CreateBaseTestSettings(t),
+			}
+			httpmock.ActivateNonDefault(util.HTTPClient())
+			defer httpmock.DeactivateAndReset()
+			httpmock.RegisterResponder("GET", fmt.Sprintf("http://peer/subtree_data/%s", subtreeHash),
+				func(*http.Request) (*http.Response, error) {
+					return blockHTTPResponse(io.NopCloser(iotest.ErrReader(fmt.Errorf("invalid peer payload: %s", message)))), nil //nolint:forbidigo // Emulate a foreign parser error without teranode wrapping.
+				})
+			ctx := context.Background()
+			err := server.fetchAndStoreSubtreeData(ctx, ctx, &model.Block{Height: 100}, subtreeHash,
+				subtree, "peer", "http://peer", false, nil)
+			require.Error(t, err)
+			require.True(t, errors.Is(err, errors.ErrProcessing))
+			require.False(t, errors.IsLocalError(err), "foreign parser text must remain peer-attributable: %v", err)
+			require.False(t, shouldStopPeerFailover(ctx, err))
+			require.NotContains(t, err.Error(), message)
+		})
+	}
 }

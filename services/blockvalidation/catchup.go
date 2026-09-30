@@ -833,9 +833,10 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 // from the caller. Two properties define the limits of that read, and both are worth
 // re-checking before changing anything on this path.
 //
-// A catchup cycle outlives every fetch it starts. fetchAndStoreSubtreeData detaches
-// its context (context.WithoutCancel) so an aborted fetch still finishes writing,
-// but the goroutine stays inside the errgroup fetchSubtreeDataForBlock waits on,
+// A catchup cycle outlives every fetch it starts. fetchAndStoreSubtreeData derives
+// its context from the catchup parent so a sibling subtree failure does not abort
+// its download or write, while catchup cancellation still does. The goroutine stays
+// inside the errgroup fetchSubtreeDataForBlock waits on,
 // which blockWorker waits on, which catchup waits on before releaseCatchupLock
 // clears the context. A slow peer can therefore delay the end of its cycle but can
 // never outlive it. That delay is not a single subtree_data fetch timeout: the

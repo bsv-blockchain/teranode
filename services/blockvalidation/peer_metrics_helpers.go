@@ -162,7 +162,7 @@ func (u *Server) reportCatchupFailureForError(ctx context.Context, peerID string
 		return
 	}
 
-	if errors.Is(err, errors.ErrBlockIncomplete) {
+	if err == nil || errors.IsLocalError(err) || errors.Is(err, errors.ErrBlockIncomplete) {
 		return
 	}
 

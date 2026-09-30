@@ -243,7 +243,14 @@ func IsContextError(err error) bool {
 		}
 	}
 
-	// Check if the wrapped error is a context error
+	// Check if the wrapped error is a context error. This includes a strings.Contains fallback in
+	// (*Error).Is for the stdlib sentinels, which is load-bearing: gRPC surfaces cancellation as
+	// `rpc error: code = Canceled desc = context canceled` that is frequently STRINGIFIED into a
+	// teranode error carrying neither ERR_CONTEXT nor a live gRPC status, so only the message text
+	// remains, and service shutdown gates rely on detecting it to exit cleanly. This is a
+	// compatibility heuristic, not a trust boundary: callers handling peer input must use fixed
+	// error messages and classify real cancellation before dropping unsafe transport/parser
+	// causes. Redacting the URL alone does not sanitize a cause that quotes response headers.
 	if Is(err, context.Canceled) || Is(err, context.DeadlineExceeded) {
 		return true
 	}
@@ -307,6 +314,11 @@ func IsLocalError(err error) bool {
 
 	// Storage errors indicate local resource issues
 	if Is(err, ErrStorageError) {
+		return true
+	}
+
+	// Configuration errors originate from this node, never from a peer.
+	if Is(err, ErrConfiguration) {
 		return true
 	}
 
