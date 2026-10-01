@@ -442,6 +442,11 @@ type Interface interface {
 	//   - error: Any error encountered while waiting
 	WaitForPendingBlocks(ctx context.Context) error
 
+	// RequestBlockMaxSizeCheck asks the processing goroutine to check the first queued
+	// subtree against blockmaxsize on its next iteration, resizing the queued subtrees if
+	// it no longer fits. Used after subtrees were built outside the processing loop.
+	RequestBlockMaxSizeCheck()
+
 	// Stop gracefully shuts down the SubtreeProcessor.
 	// This method cancels the processor's internal context, which triggers the main
 	// processing goroutine to stop and clean up resources (such as the announcement ticker).

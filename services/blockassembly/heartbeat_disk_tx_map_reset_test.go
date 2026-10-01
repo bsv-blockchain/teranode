@@ -46,6 +46,7 @@ func resetTestMock(onReset func(m *subtreeprocessor.MockSubtreeProcessor) subtre
 	m.On("GetCurrentBlockHeader").Return(model.GenesisBlockHeader)
 	m.On("InitCurrentBlockHeader", mock.Anything).Return()
 	m.On("FlushDiskTxMapForLoad", mock.Anything, mock.Anything).Return(nil)
+	m.On("RequestBlockMaxSizeCheck").Return()
 
 	return m, resets
 }

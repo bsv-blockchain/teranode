@@ -84,7 +84,7 @@ func Test_DeserializeHashesFromReaderIntoBuckets(t *testing.T) {
 
 func Test_AddTx(t *testing.T) {
 	t.Run("Process transaction into subtrees and currentTxMap", func(t *testing.T) {
-		stp, _, _ := initSubtreeProcessor(t)
+		stp, _, _, _ := initSubtreeProcessor(t)
 
 		waitForSubtreeProcessorQueueToEmpty(t, stp)
 		assert.Equal(t, uint64(1), stp.TxCount(), "Expected tx count to be 1 at startup")
@@ -110,7 +110,7 @@ func Test_AddTx(t *testing.T) {
 
 func Test_MoveBlock(t *testing.T) {
 	t.Run("Move blocks and check if the subtree processor is in the correct state", func(t *testing.T) {
-		stp, subtreeStore, subtrees, nrTransactions, subtreeSize, expectedSubtrees := initMoveBlock(t)
+		stp, blockchainClient, subtreeStore, subtrees, nrTransactions, subtreeSize, expectedSubtrees := initMoveBlock(t)
 
 		txMap := stp.GetCurrentTxMap()
 		assert.Equal(t, nrTransactions, txMap.Length())
@@ -123,11 +123,11 @@ func Test_MoveBlock(t *testing.T) {
 			Subtrees:   subtreeHashes,
 		}
 
-		checkMoveBlockProcessing(t, stp, block, nrTransactions, subtreeSize, expectedSubtrees)
+		checkMoveBlockProcessing(t, stp, blockchainClient, block, nrTransactions, subtreeSize, expectedSubtrees)
 	})
 
 	t.Run("Move blocks with different subtrees", func(t *testing.T) {
-		stp, subtreeStore, subtrees, nrTransactions, subtreeSize, expectedSubtrees := initMoveBlock(t)
+		stp, blockchainClient, subtreeStore, subtrees, nrTransactions, subtreeSize, expectedSubtrees := initMoveBlock(t)
 
 		txMap := stp.GetCurrentTxMap()
 		assert.Equal(t, nrTransactions, txMap.Length())
@@ -157,7 +157,7 @@ func Test_MoveBlock(t *testing.T) {
 			Subtrees:   newSubtreeHashes,
 		}
 
-		checkMoveBlockProcessing(t, stp, block, nrTransactions, subtreeSize, expectedSubtrees)
+		checkMoveBlockProcessing(t, stp, blockchainClient, block, nrTransactions, subtreeSize, expectedSubtrees)
 	})
 }
 
@@ -194,7 +194,7 @@ func storeMoveBlockSubtrees(t *testing.T, subtreeStore *memory.Memory, subtrees 
 	return subtreeHashes
 }
 
-func checkMoveBlockProcessing(t *testing.T, stp *subtreeprocessor.SubtreeProcessor, block *model.Block, nrTransactions int, subtreeSize int, expectedSubtrees int) {
+func checkMoveBlockProcessing(t *testing.T, stp *subtreeprocessor.SubtreeProcessor, blockchainClient blockchain.ClientI, block *model.Block, nrTransactions int, subtreeSize int, expectedSubtrees int) {
 	coinbaseTx2 := block.CoinbaseTx.Clone()
 	coinbaseTx2.Version = 2
 
@@ -202,6 +202,22 @@ func checkMoveBlockProcessing(t *testing.T, stp *subtreeprocessor.SubtreeProcess
 		Height:     123,
 		CoinbaseTx: coinbaseTx2,
 		Subtrees:   []*chainhash.Hash{},
+	}
+
+	// block and block2 are siblings on top of the processor's current block, so the
+	// reorgs below swap one for the other; both must exist in the blockchain store
+	parent := stp.GetCurrentBlockHeader()
+	for i, b := range []*model.Block{block, block2} {
+		b.Header = &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  parent.Hash(),
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      parent.Timestamp + 1,
+			Bits:           parent.Bits,
+			Nonce:          uint32(i), //nolint:gosec
+		}
+
+		require.NoError(t, blockchainClient.AddBlock(t.Context(), b, ""))
 	}
 
 	err := stp.MoveForwardBlock(block)
@@ -239,8 +255,13 @@ func checkMoveBlockProcessing(t *testing.T, stp *subtreeprocessor.SubtreeProcess
 	require.NoError(t, stp.CheckSubtreeProcessor())
 }
 
-func initMoveBlock(t *testing.T) (*subtreeprocessor.SubtreeProcessor, *memory.Memory, []*subtreepkg.Subtree, int, int, int) {
-	stp, subtreeStore, newSubtreeChan := initSubtreeProcessor(t)
+func initMoveBlock(t *testing.T) (*subtreeprocessor.SubtreeProcessor, blockchain.ClientI, *memory.Memory, []*subtreepkg.Subtree, int, int, int) {
+	stp, blockchainClient, subtreeStore, newSubtreeChan := initSubtreeProcessor(t)
+
+	// the moved blocks build on the store's genesis block
+	genesisHeader, _, err := blockchainClient.GetBestBlockHeader(t.Context())
+	require.NoError(t, err)
+	stp.InitCurrentBlockHeader(genesisHeader)
 	subtrees := make([]*subtreepkg.Subtree, 0)
 
 	gotAllSubtrees := make(chan bool)
@@ -303,7 +324,7 @@ func initMoveBlock(t *testing.T) (*subtreeprocessor.SubtreeProcessor, *memory.Me
 	assert.Equal(t, 7, len(subtrees))
 	assert.Equal(t, uint64(nrTransactions+1), stp.TxCount(), "Expected tx count to be + 1 for the new coinbase tx") //nolint:gosec
 
-	return stp, subtreeStore, subtrees, nrTransactions, subtreeSize, expectedSubtrees
+	return stp, blockchainClient, subtreeStore, subtrees, nrTransactions, subtreeSize, expectedSubtrees
 }
 
 func waitForSubtreeProcessorQueueToEmpty(t *testing.T, stp *subtreeprocessor.SubtreeProcessor) {
@@ -324,7 +345,7 @@ func waitForSubtreeProcessorQueueToEmpty(t *testing.T, stp *subtreeprocessor.Sub
 	time.Sleep(100 * time.Millisecond) // Give some time for the queue to process
 }
 
-func initSubtreeProcessor(t *testing.T) (*subtreeprocessor.SubtreeProcessor, *memory.Memory, chan subtreeprocessor.NewSubtreeRequest) {
+func initSubtreeProcessor(t *testing.T) (*subtreeprocessor.SubtreeProcessor, blockchain.ClientI, *memory.Memory, chan subtreeprocessor.NewSubtreeRequest) {
 	blobStore, utxoStore, tSettings, blockchainClient, _, err := initStores(t)
 	require.NoError(t, err)
 
@@ -335,7 +356,7 @@ func initSubtreeProcessor(t *testing.T) (*subtreeprocessor.SubtreeProcessor, *me
 	require.NoError(t, err)
 	subtreeProcessor.Start(ctx)
 
-	return subtreeProcessor, blobStore, newSubtreeChan
+	return subtreeProcessor, blockchainClient, blobStore, newSubtreeChan
 }
 
 func initStores(t *testing.T) (*memory.Memory, utxo.Store, *settings.Settings, blockchain.ClientI, *blockassembly.BlockAssembly, error) {

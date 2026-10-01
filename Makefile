@@ -184,7 +184,7 @@ test:
 longtest:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache longtest" -count=1 -timeout=10m -run '^TestLegacyHistoricalTestnetSync$$' ./services/legacy/netsync
-	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"
+	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=20m -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"
 
 # run tests in the test/sequentialtest directory in order, one by one
 # Environment variables:

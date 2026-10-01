@@ -68,17 +68,29 @@ func TestMoveForwardBlockLarge(t *testing.T) {
 
 	wg.Add(4) // we are expecting 4 subtrees
 
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+
 	go func() {
 		for {
 			// just read the subtrees of the processor
-			subtreeRequest := <-newSubtreeChan
+			var subtreeRequest st.NewSubtreeRequest
+			select {
+			case subtreeRequest = <-newSubtreeChan:
+			case <-done:
+				return
+			}
 
 			// Send success response to prevent deadlock
 			if subtreeRequest.ErrChan != nil {
 				subtreeRequest.ErrChan <- nil
 			}
 
-			wg.Done()
+			// only count completed subtrees; the periodic announcement also sends
+			// incomplete snapshots, which would drive the WaitGroup negative
+			if subtreeRequest.Subtree.IsComplete() {
+				wg.Done()
+			}
 		}
 	}()
 
@@ -110,6 +122,7 @@ func TestMoveForwardBlockLarge(t *testing.T) {
 		newSubtreeChan,
 	)
 	stp.Start(context.Background())
+	t.Cleanup(func() { stp.Stop(context.Background()) })
 
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)

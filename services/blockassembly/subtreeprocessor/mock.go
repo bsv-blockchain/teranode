@@ -340,6 +340,11 @@ func (m *MockSubtreeProcessor) WaitForPendingBlocks(ctx context.Context) error {
 	return args.Error(0)
 }
 
+// RequestBlockMaxSizeCheck implements Interface.RequestBlockMaxSizeCheck
+func (m *MockSubtreeProcessor) RequestBlockMaxSizeCheck() {
+	m.Called()
+}
+
 // Stop implements Interface.Stop
 func (m *MockSubtreeProcessor) Stop(ctx context.Context) {
 	m.Called(ctx)

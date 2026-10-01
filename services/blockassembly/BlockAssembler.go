@@ -1322,6 +1322,10 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 		return errors.NewStorageError("[BlockAssembler] failed to load un-mined transactions: %v", err)
 	}
 
+	// the unmined txs were added outside the processing loop, so the loop has not yet
+	// checked the resulting subtrees against blockmaxsize
+	b.subtreeProcessor.RequestBlockMaxSizeCheck()
+
 	// AddTx is already enqueueing on the gRPC side. If loadUnminedTransactions
 	// flagged any tx as conflicting (and cascaded its descendants), drain the
 	// input queue with that set as a drop filter before the event-loop
