@@ -95,7 +95,8 @@ func TestQuickValidationAuthenticatesBodyBeforeMutation(t *testing.T) {
 					err = u.quickValidateBlock(ctx, block, "peer", "")
 				}
 				if mutation == "duplicate" || mutation == "late duplicate" {
-					require.ErrorContains(t, err, "duplicate transaction")
+					// The duplicated tail reproduces the honest root, so the node-list check rejects it.
+					require.ErrorContains(t, err, "equal sibling leaves")
 				} else {
 					require.ErrorContains(t, err, "body does not match header merkle root")
 				}

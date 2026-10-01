@@ -232,3 +232,15 @@ func TestDiskTxMapUint64_Stats(t *testing.T) {
 	// Each entry = 32B hash key + 8B uint64 value = 40B
 	require.Equal(t, int64(n*40), stats.DiskBytesWritten)
 }
+
+// Block.releaseTxMap reports Stats on error paths while writer goroutines are
+// still draining, so Stats must not race the writers (run with -race).
+func TestDiskTxMapUint64_StatsDuringWrites(t *testing.T) {
+	m := newTestDiskTxMapUint64(t)
+	for i := 0; i < 2_000; i++ {
+		require.NoError(t, m.Put(makeHash(i), uint64(i)))
+		_ = m.Stats()
+	}
+	require.NoError(t, m.Flush())
+	require.EqualValues(t, 2_000*(chainhash.HashSize+8), m.Stats().DiskBytesWritten)
+}

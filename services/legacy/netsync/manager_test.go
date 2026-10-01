@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -418,7 +419,7 @@ func setupQueueInvTests() (chan interface{}, chan *kafka.Message, *SyncManager, 
 func TestSendDuringShutdown(t *testing.T) {
 	t.Run("open channel delivers", func(t *testing.T) {
 		ch := make(chan int, 1)
-		require.True(t, sendDuringShutdown(ch, 7))
+		require.True(t, sendDuringShutdown(ch, 7, nil))
 		require.Equal(t, 7, <-ch)
 	})
 
@@ -426,9 +427,43 @@ func TestSendDuringShutdown(t *testing.T) {
 		ch := make(chan int)
 		close(ch)
 		require.NotPanics(t, func() {
-			require.False(t, sendDuringShutdown(ch, 1))
+			require.False(t, sendDuringShutdown(ch, 1, nil))
 		})
 	})
+}
+
+func TestReplyDuringShutdownClosedChannel(t *testing.T) {
+	ch := make(chan struct{})
+	close(ch)
+	quit := make(chan struct{})
+	close(quit)
+	require.NotPanics(t, func() {
+		require.False(t, replyDuringShutdown(ch, struct{}{}, quit))
+	})
+}
+
+// Completion replies are a contract: a caller may wait only on its done
+// channel. Once quit is closed, a send that can complete must still win the
+// select, which picks at random among ready cases.
+func TestShutdownRepliesAreDelivered(t *testing.T) {
+	quit := make(chan struct{})
+	close(quit)
+	sm := &SyncManager{quit: quit, logger: ulogger.TestLogger{}}
+	atomic.StoreInt32(&sm.shutdown, 1)
+	for i := 0; i < 200; i++ {
+		blockDone := make(chan error, 1)
+		sm.QueueBlock(nil, nil, blockDone)
+		require.Len(t, blockDone, 1, "QueueBlock reply dropped on iteration %d", i)
+		for name, queue := range map[string]func(chan struct{}){
+			"QueueTx":  func(done chan struct{}) { sm.QueueTx(nil, nil, done) },
+			"NewPeer":  func(done chan struct{}) { sm.NewPeer(nil, done) },
+			"DonePeer": func(done chan struct{}) { sm.DonePeer(nil, done) },
+		} {
+			done := make(chan struct{}, 1)
+			queue(done)
+			require.Len(t, done, 1, "%s reply dropped on iteration %d", name, i)
+		}
+	}
 }
 
 // TestQueueInv_NoPanicWhenChannelsClosedDuringShutdown reproduces the shutdown
