@@ -8687,6 +8687,16 @@
 <td>Counter</td>
 <td>Number of errors setting tx meta cache from kafka</td>
 </tr>
+<tr>
+<td><code>teranode_subtreevalidation_kafka_malformed_messages_total</code></td>
+<td>Counter</td>
+<td>Malformed Kafka subtree messages dropped, labelled by <code>reason</code> (<code>nil_message</code>, <code>too_short</code>, <code>unmarshal_failure</code>, <code>bad_hash</code>, <code>bad_url</code>)</td>
+</tr>
+<tr>
+<td><code>teranode_subtreevalidation_subtree_already_exists_skipped_total</code></td>
+<td>Counter</td>
+<td>Subtree Kafka messages skipped because the subtree already exists. Benign individually; the per-message log line is at DEBUG, so watch this rate instead</td>
+</tr>
 </tbody>
 </table>
 <h2 id="validator-service-metrics">Validator Service Metrics<a class="headerlink" href="#validator-service-metrics" title="Permanent link">&para;</a></h2>
