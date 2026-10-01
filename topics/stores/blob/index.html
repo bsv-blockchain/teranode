@@ -7586,17 +7586,23 @@
 <li><strong>GET /health</strong>: Health check endpoint returning server status</li>
 <li><strong>HEAD /blob/{key}.{fileType}</strong>: Check if a blob exists without retrieving content</li>
 <li><strong>GET /blob/{key}.{fileType}</strong>: Retrieve blob by key with optional Range header support for partial content</li>
-<li><strong>POST /blob/{key}.{fileType}</strong>: Store new blob data with streaming support</li>
+<li><strong>POST /blob/{key}.{fileType}</strong>: Store blob data with streaming support; replaces an existing blob only for an authenticated request that sets <code>allowOverwrite=true</code></li>
 <li><strong>PATCH /blob/{key}.{fileType}</strong>: Update blob's Delete-At-Height value via <code>dah</code> query parameter</li>
 <li><strong>DELETE /blob/{key}.{fileType}</strong>: Delete blob by key</li>
 </ul>
+<p>POST, PATCH and DELETE require an <code>Authorization: Bearer &lt;token&gt;</code> header matching the shared
+secret the server was constructed with. An empty secret leaves the server read-only and refuses
+all three with 401. Reads and the health endpoint need no credential. An existing blob is
+answered with 409 unless an authenticated POST sets <code>allowOverwrite=true</code>. The HTTP client
+returns a 409 as <code>ErrBlobAlreadyExists</code> and a 401 as a configuration error.</p>
 <h4 id="usage-example">Usage Example<a class="headerlink" href="#usage-example" title="Permanent link">&para;</a></h4>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1">// Create HTTP blob server</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nx">httpServer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">NewHTTPBlobServer</span><span class="p">(</span><span class="nx">blobStore</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="p">)</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1">// Start HTTP server</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="nx">http</span><span class="p">.</span><span class="nx">Handle</span><span class="p">(</span><span class="s">"/blob/"</span><span class="p">,</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">StripPrefix</span><span class="p">(</span><span class="s">"/blob"</span><span class="p">,</span><span class="w"> </span><span class="nx">httpServer</span><span class="p">))</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="nx">log</span><span class="p">.</span><span class="nx">Fatal</span><span class="p">(</span><span class="nx">http</span><span class="p">.</span><span class="nx">ListenAndServe</span><span class="p">(</span><span class="s">":8080"</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span><span class="p">))</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1">// Create HTTP blob server. The third argument is the shared secret required for writes;</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1">// pass "" to serve reads only.</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nx">httpServer</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">NewHTTPBlobServer</span><span class="p">(</span><span class="nx">logger</span><span class="p">,</span><span class="w"> </span><span class="nx">storeURL</span><span class="p">,</span><span class="w"> </span><span class="nx">authToken</span><span class="p">)</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1">// Start HTTP server</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="nx">http</span><span class="p">.</span><span class="nx">Handle</span><span class="p">(</span><span class="s">"/blob/"</span><span class="p">,</span><span class="w"> </span><span class="nx">httpServer</span><span class="p">)</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="nx">log</span><span class="p">.</span><span class="nx">Fatal</span><span class="p">(</span><span class="nx">http</span><span class="p">.</span><span class="nx">ListenAndServe</span><span class="p">(</span><span class="s">":8080"</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span><span class="p">))</span>
 </span></code></pre></div>
 <p>The HTTP server is particularly useful for external integrations, debugging, and providing web-based access to blob storage functionality.</p>
 <h2 id="4-data-model">4. Data Model<a class="headerlink" href="#4-data-model" title="Permanent link">&para;</a></h2>

@@ -6155,6 +6155,39 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#listen-address-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Listen Address Default
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#blob-api-writes-require-a-token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Blob API writes require a token
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#overwrite-over-the-http-blob-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overwrite over the HTTP blob API
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#settings-reorganization" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7114,6 +7147,39 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#listen-address-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Listen Address Default
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#blob-api-writes-require-a-token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Blob API writes require a token
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#overwrite-over-the-http-blob-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overwrite over the HTTP blob API
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#settings-reorganization" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7269,9 +7335,16 @@
 <tr>
 <td>HTTPListenAddress</td>
 <td>string</td>
-<td>":8083"</td>
+<td>"127.0.0.1:8083"</td>
 <td>blockpersister_httpListenAddress</td>
 <td>HTTP server for blob store access</td>
+</tr>
+<tr>
+<td>HTTPAuthToken</td>
+<td>string</td>
+<td>""</td>
+<td>blockpersister_httpAuthToken</td>
+<td><strong>CRITICAL</strong> - bearer token required for blob HTTP writes; unset means read-only</td>
 </tr>
 <tr>
 <td>Concurrency</td>
@@ -7336,6 +7409,13 @@
 <ul>
 <li>When <code>HTTPListenAddress</code> is not empty, HTTP server starts</li>
 <li>Requires valid <code>Block.BlockStore</code> URL or returns configuration error</li>
+<li>The blob API it exposes requires <code>Authorization: Bearer &lt;HTTPAuthToken&gt;</code> on POST, PATCH and
+  DELETE. With <code>HTTPAuthToken</code> unset the API serves GET and HEAD only and refuses every
+  mutating request with 401</li>
+<li>The endpoint is plain HTTP with no TLS, so the token crosses the wire in the clear. It
+  binds to loopback by default for that reason; publish it only on a trusted segment</li>
+<li>Clients configure the same value with <code>blob_httpAuthToken</code>, never in the store URL — store
+  URLs are logged verbatim</li>
 </ul>
 <h3 id="concurrency-management">Concurrency Management<a class="headerlink" href="#concurrency-management" title="Permanent link">&para;</a></h3>
 <ul>
@@ -7410,6 +7490,11 @@
 <td>Must be valid URL format</td>
 <td>Store creation failure</td>
 </tr>
+<tr>
+<td>HTTPAuthToken</td>
+<td>Required for any blob write over HTTP; unset leaves the API read-only</td>
+<td>HTTP 401 Unauthorized</td>
+</tr>
 </tbody>
 </table>
 <h2 id="configuration-examples">Configuration Examples<a class="headerlink" href="#configuration-examples" title="Permanent link">&para;</a></h2>
@@ -7422,13 +7507,39 @@
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nv">blockvalidation_processTxMetaUsingStore_BatchSize</span><span class="o">=</span><span class="m">2048</span>
 </span></code></pre></div>
 <h3 id="http-server-configuration">HTTP Server Configuration<a class="headerlink" href="#http-server-configuration" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nv">blockpersister_httpListenAddress</span><span class="o">=</span>:8083
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nv">blockpersister_httpListenAddress</span><span class="o">=</span><span class="m">127</span>.0.0.1:8083
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nv">blockstore</span><span class="o">=</span>file://./data/blockstore
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Required for writes. Set both in the environment and configure the same value on the</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># client side. Values in settings files are masked in the startup dump but held in clear</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="c1"># in the file; never put them in the committed settings.conf.</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="nv">blockpersister_httpAuthToken</span><span class="o">=</span>&lt;shared-secret&gt;
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="nv">blob_httpAuthToken</span><span class="o">=</span>&lt;shared-secret&gt;
 </span></code></pre></div>
 <h3 id="disable-utxo-file-processing">Disable UTXO File Processing<a class="headerlink" href="#disable-utxo-file-processing" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nv">blockpersister_processUTXOFiles</span><span class="o">=</span><span class="nb">false</span>
 </span></code></pre></div>
 <h2 id="migration-notes">Migration Notes<a class="headerlink" href="#migration-notes" title="Permanent link">&para;</a></h2>
+<h3 id="listen-address-default">Listen Address Default<a class="headerlink" href="#listen-address-default" title="Permanent link">&para;</a></h3>
+<p><code>blockpersister_httpListenAddress</code> now defaults to <code>127.0.0.1:8083</code> instead of <code>:8083</code>. The
+endpoint is plain HTTP and its blob API accepts writes, so it no longer binds every interface
+by default. A deployment that reaches this endpoint from another host must set the address
+explicitly.</p>
+<h3 id="blob-api-writes-require-a-token">Blob API writes require a token<a class="headerlink" href="#blob-api-writes-require-a-token" title="Permanent link">&para;</a></h3>
+<p>POST, PATCH and DELETE on the blob HTTP API now return 401 until <code>blockpersister_httpAuthToken</code>
+is set on the server and the same value is set as <code>blob_httpAuthToken</code> on each client. Reads
+(GET, HEAD, <code>/health</code>) are unaffected.</p>
+<p>The HTTP blob client reports a 401 as a configuration error. The pruner keeps deletions for that
+store queued and logs an error on each pass until the tokens match, instead of retrying and
+dropping them. Deletions for the other blob stores carry on.</p>
+<h3 id="overwrite-over-the-http-blob-api">Overwrite over the HTTP blob API<a class="headerlink" href="#overwrite-over-the-http-blob-api" title="Permanent link">&para;</a></h3>
+<p><code>allowOverwrite</code> is sent only on a POST (<code>options.WithAllowOverwrite(true)</code>) and honoured only
+for a caller presenting the matching token. An unauthenticated caller cannot write at all.
+Without the flag, a write to a key that already exists is answered 409 and returned as
+<code>ErrBlobAlreadyExists</code>.</p>
+<p>Callers that replace blobs (the UTXO persister's <code>lastProcessed</code> marker, the set-hash sidecar,
+checkpoints, seed packages, subtree re-writes, the peer registry snapshot) work over an
+<code>http://</code> blob store once both tokens are set.</p>
 <h3 id="settings-reorganization">Settings Reorganization<a class="headerlink" href="#settings-reorganization" title="Permanent link">&para;</a></h3>
 <p>The Block Persister settings have been reorganized into a dedicated <code>BlockPersisterSettings</code> struct. The following environment variable names have changed:</p>
 <table>

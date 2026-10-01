@@ -6347,6 +6347,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#http-client-token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTTP Client Token
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6863,6 +6891,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#http-client-token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTTP Client Token
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7203,6 +7259,45 @@
 </tr>
 </tbody>
 </table>
+<h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Environment Variable</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>BlobHTTPAuthToken</td>
+<td>string</td>
+<td>""</td>
+<td>blob_httpAuthToken</td>
+<td>Token the HTTP blob store client presents on POST, PATCH and DELETE; must match the server's <code>blockpersister_httpAuthToken</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="http-client-token">HTTP Client Token<a class="headerlink" href="#http-client-token" title="Permanent link">&para;</a></h3>
+<ul>
+<li>A top-level <code>Settings</code> field, so stores built by the daemon and its services (tx, subtree,
+  temp, block, block-persister, pruner-resolved and Aerospike external stores) resolve it per
+  settings context and pass it with <code>options.WithHTTPAuthToken</code></li>
+<li>Standalone tools that do not pass the option fall back to reading <code>blob_httpAuthToken</code> in
+  the process settings context. A caller that builds its settings with an alternative context
+  must pass <code>options.WithHTTPAuthToken</code> itself</li>
+<li>An explicit <code>options.WithHTTPAuthToken("")</code> sends no token and suppresses the fallback</li>
+<li>Tagged <code>redact</code>, so it is masked in the startup settings dumps (SETTINGS JSON, STATS and the
+  CONFIG diagnostics payload). Set it in the environment: a value in a settings file is masked
+  in those dumps but held in clear in the file</li>
+<li>Never place it in a store URL: a URL carrying an <code>authToken</code> query parameter is rejected, as
+  store URLs are logged verbatim</li>
+<li>A 401 from the server (no token on the server, or none or a different one here) is returned
+  as a configuration error, not a storage error. The pruner keeps the affected deletions queued
+  rather than retrying and dropping them, and keeps deleting from the other blob stores</li>
+</ul>
 <h2 id="configuration-dependencies">Configuration Dependencies<a class="headerlink" href="#configuration-dependencies" title="Permanent link">&para;</a></h2>
 <h3 id="batch-processing">Batch Processing<a class="headerlink" href="#batch-processing" title="Permanent link">&para;</a></h3>
 <ul>

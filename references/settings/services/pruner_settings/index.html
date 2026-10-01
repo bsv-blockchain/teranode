@@ -8427,7 +8427,7 @@ or replication issues.</p>
 <p><strong>Type</strong>: Integer</p>
 <p><strong>Default</strong>: <code>3</code></p>
 <p><strong>Environment Variable</strong>: <code>pruner_blobDeletionMaxRetries</code></p>
-<p><strong>Description</strong>: Maximum retry attempts for failed blob deletions</p>
+<p><strong>Description</strong>: Maximum retry attempts for failed blob deletions. A deletion refused as a configuration error (for example an HTTP blob store answering 401) is not counted against this limit: it stays queued and is logged as an error until the configuration is fixed. Deletions for other store types keep being processed.</p>
 <h3 id="pruner_skippreserveparents">pruner_skipPreserveParents<a class="headerlink" href="#pruner_skippreserveparents" title="Permanent link">&para;</a></h3>
 <p><strong>Type</strong>: Boolean</p>
 <p><strong>Default</strong>: <code>false</code></p>
