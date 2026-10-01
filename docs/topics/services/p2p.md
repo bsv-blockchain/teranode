@@ -132,7 +132,7 @@ The startup process of the node involves the `main.go` file calling the `p2p.New
 2. **Configuration Retrieval and Topic Registration**:
 
     - Retrieves required configuration settings like `p2p_listen_addresses` and `p2p_port`.
-    - It registers specific topic names derived from the configuration, such as `p2p_block_topic`, `p2p_subtree_topic`, `p2p_bestblock_topic`, `p2p_mining_on_topic`, and `p2p_rejected_tx_topic`.
+    - It registers specific topic names derived from the configuration, such as `p2p_block_topic`, `p2p_subtree_topic`, and `p2p_rejected_tx_topic`.
 
 3. **P2P Node Initialization**:
 

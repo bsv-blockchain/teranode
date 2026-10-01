@@ -30,7 +30,6 @@ func init() {
 	// Initialize test settings
 	gocore.Config().Set("network", "regtest")
 	gocore.Config().Set("use_cgo_verifier", "false")
-	gocore.Config().Set("use_cgo_signer", "false")
 	gocore.Config().Set("profilerAddr", "")
 	gocore.Config().Set("prometheusEndpoint", "")
 }
