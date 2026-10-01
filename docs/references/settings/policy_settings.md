@@ -65,7 +65,21 @@ Policy settings control BSV Blockchain consensus rules and transaction validatio
 | Setting | Type | Default | Environment Variable | Usage |
 | --------- | ------ | --------- | --------------------- | ------- |
 | MinMiningTxFee | float64 | 0.00000500 | minminingtxfee | Minimum transaction fee for mining |
+| MinMiningTxFeeByScriptSize | []FeeTier | (empty) | minminingtxfeebyscriptsize | Optional marginal fee tiers for large executed scripts |
+| MinMiningTxFeeByScriptOps | []FeeTier | (empty) | minminingtxfeebyscriptops | Optional marginal fee tiers for op-dense executed scripts |
 | AcceptNonStdOutputs | bool | true | acceptnonstdoutputs | **CRITICAL** - Accept non-standard output scripts |
+
+The two fee-tier settings price the metrics their policy caps gate: `minminingtxfeebyscriptsize` pairs with `maxscriptsizepolicy` (script bytes) and `minminingtxfeebyscriptops` pairs with `maxopsperscriptpolicy` (counted ops: every opcode above OP_16, pushes free). Each is a pipe-separated list of `<threshold>:<satoshisPerK>` pairs (for example `500000:10`), applied marginally per executed script, like tax brackets: units below the first threshold cost nothing extra, units beyond each threshold must pay at least that tier's rate per 1000 units. Executed scripts are each input's unlocking script, the locking script it spends, and a legacy P2SH redeem script (only for coins created before Genesis, matching BDK's era gate); a transaction's own output scripts are priced when they are later spent. The surcharges add on top of the `minminingtxfee` floor, which BDK keeps enforcing unchanged. Empty (the default) disables a setting, leaving fee policy exactly as before.
+
+The counted-ops metric matches svnode's executed op count for every script that reaches BDK. That includes the key count svnode charges on top of `OP_CHECKMULTISIG` and `OP_CHECKMULTISIGVERIFY`, which is added wherever it is statically certain: the opcode must be reached with execution still active (at IF-depth zero, and before any `OP_RETURN` nested in a conditional, which stops svnode executing while it keeps counting), and the key count must come from the literal push immediately before it. That covers a bare n-of-m multisig lock, the densest shape this setting exists to price, which would otherwise be charged for a single operation.
+
+Where the key count is not statically certain, inside a conditional or computed at runtime, the opcode counts as one. That under-counts, which is the containment direction: the metric can only ever charge less than svnode, never reject a script svnode would accept cheaply.
+
+A script whose count exceeds `maxopsperscriptpolicy` (or whose size exceeds `maxscriptsizepolicy`) is left unpriced, so BDK's own cap rejection is reported rather than a misleading insufficient-fee error. For a coin created before Genesis those policy caps do not apply; BDK enforces the fixed pre-Genesis limits of 500 ops and 10000 bytes instead, and the same rule uses those.
+
+The free-consolidation exemption is honoured for the `minminingtxfee` floor only; the per-script surcharge is always due. The exemption exists to encourage cleanup of many small UTXOs, and a genuine such consolidation never triggers a surcharge (its scripts are far below any threshold), so a large-script output cannot be created cheaply and then "consolidated" to escape the surcharge.
+
+Neither schedule is advertised on `/v1/policy` (the ARC schema is closed to additional properties) or the P2P `fee_policy` message, so wallets and propagation peers cannot discover the rule: a node can reject a transaction for a fee schedule its peers cannot see. An operator enabling this must communicate the schedule out of band; extending the Teranode-owned P2P policy message is a planned follow-up.
 
 ### Consolidation Transaction Settings
 
@@ -144,6 +158,8 @@ The settings allow operators to configure policy rules while maintaining consens
 | MaxStackMemoryUsagePolicy | Policy enforcement | Script execution limits |
 | MaxStackMemoryUsageConsensus | Consensus enforcement | Block validation limits |
 | MinMiningTxFee | Minimum fee threshold | Mining inclusion criteria |
+| MinMiningTxFeeByScriptSize | Sorted, unique thresholds; non-decreasing rates | Marginal fee requirement for large scripts |
+| MinMiningTxFeeByScriptOps | Sorted, unique thresholds; non-decreasing rates | Marginal fee requirement for op-dense scripts |
 
 ## Configuration Examples
 
