@@ -515,12 +515,18 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	result := s.resolveSpendCompletions(ctx, tx, items, false)
 
 	if len(spends) != len(result.spentSpends) { // there must have been failures
-		// Only rollback successful spends when the transaction is genuinely invalid
-		// (double-spend, frozen, conflicting, hash mismatch). For transient infrastructure
-		// errors (DEVICE_OVERLOAD, timeout, etc.), skip the rollback — the Lua spend
-		// script is idempotent for the same spender, so successful spends can safely
-		// remain and will be silently skipped on retry.
-		if result.rollbackNeeded {
+		// Roll back the successful spends when the transaction is genuinely invalid
+		// (double-spend, frozen, conflicting, hash mismatch), and also whenever the
+		// spending tx has no record in the store, whatever the failure class
+		// (issue 1214). A spend that stands with no spender record is a dangling
+		// reference: the parent says "spent by X" while X does not exist, and every
+		// later counter-conflicting walk dereferences it to TX_NOT_FOUND. The retry
+		// this branch used to rely on is not guaranteed — the legacy orphan pool
+		// drops a tx whose parent never arrives — and the Lua spend script is
+		// idempotent for the same spender, so a retry simply re-applies the spends.
+		// When the spender record does exist (a resubmit of a live tx that hit a
+		// locked parent) the spends belong to that record and must stand.
+		if len(result.spentSpends) > 0 && (result.rollbackNeeded || (!result.spenderExists && s.spenderRecordAbsent(ctx, tx))) {
 			if unspendErr := s.Unspend(context.Background(), result.spentSpends); unspendErr != nil {
 				s.logger.Errorf("error in aerospike unspend (batched mode): %v", unspendErr)
 			}
@@ -554,6 +560,26 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 type spendCompletionResult struct {
 	spentSpends    []*utxo.Spend
 	rollbackNeeded bool
+	spenderExists  bool
+}
+
+// spenderRecordAbsent reports whether the store definitely holds no record for
+// the spending tx. Only a definite not-found answers true: a read failure keeps
+// the successful spends in place, because unspending the inputs of a record
+// that may exist is the worse outcome.
+func (s *Store) spenderRecordAbsent(ctx context.Context, tx *bt.Tx) bool {
+	_, err := s.Get(ctx, tx.TxIDChainHash(), fields.Locked)
+	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, errors.ErrTxNotFound) {
+		return true
+	}
+
+	s.logger.Warnf("[SPEND][%s] could not confirm whether the spending tx exists after a partial spend failure, leaving the successful spends in place: %v", tx.TxID(), err)
+
+	return false
 }
 
 // resolveSpendCompletions applies the ErrTxNotFound "already blessed"
@@ -595,6 +621,7 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 
 				spend.Err = nil
 				txAlreadyExists = true
+				result.spenderExists = true
 			}
 		}
 
