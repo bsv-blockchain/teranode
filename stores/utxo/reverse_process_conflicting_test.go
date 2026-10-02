@@ -90,6 +90,8 @@ func TestReverseProcessConflicting_RestoresOriginalSpender(t *testing.T) {
 
 	// Step 3 — Unspend the demoted tx's input spends so the parent UTXO
 	// no longer claims demoted as its spender.
+	mockStore.On("SpendsMadeBy", mock.Anything, demotedHash).
+		Return([]*Spend{{TxID: &parentHash, Vout: 0}}, nil).Once()
 	mockStore.On("Unspend", mock.Anything, mock.AnythingOfType("[]*utxo.Spend"), mock.Anything).
 		Return(nil).Once()
 
@@ -195,6 +197,8 @@ func TestReverseProcessConflicting_PartialStateRetryCompletes(t *testing.T) {
 	// at the store level, but the helper still issues the calls).
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{demotedHash}, true).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
+	mockStore.On("SpendsMadeBy", mock.Anything, demotedHash).
+		Return([]*Spend{{TxID: &parentHash, Vout: 0}}, nil).Once()
 	mockStore.On("Unspend", mock.Anything, mock.AnythingOfType("[]*utxo.Spend"), mock.Anything).
 		Return(nil).Once()
 
@@ -252,6 +256,8 @@ func TestReverseProcessConflicting_DConflictingButParentStillPointsToD(t *testin
 
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{demotedHash}, true).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
+	mockStore.On("SpendsMadeBy", mock.Anything, demotedHash).
+		Return([]*Spend{{TxID: &parentHash, Vout: 0}}, nil).Once()
 	mockStore.On("Unspend", mock.Anything, mock.AnythingOfType("[]*utxo.Spend"), mock.Anything).
 		Return(nil).Once()
 	mockStore.On("Get", mock.Anything, &counterHash, mock.Anything).
@@ -288,7 +294,7 @@ func TestIsReverseFullyApplied(t *testing.T) {
 		mockStore.On("Get", mock.Anything, &otherSpenderHash, mock.Anything).
 			Return(&meta.Data{Conflicting: false}, nil).Once()
 
-		got, err := isReverseFullyApplied(context.Background(), mockStore, demotedTx, demotedHash)
+		got, err := isReverseFullyApplied(context.Background(), mockStore, inpointsOf(t, demotedTx), demotedHash)
 		require.NoError(t, err)
 		assert.True(t, got)
 		mockStore.AssertExpectations(t)
@@ -305,7 +311,7 @@ func TestIsReverseFullyApplied(t *testing.T) {
 		mockStore.On("Get", mock.Anything, &otherSpenderHash, mock.Anything).
 			Return(&meta.Data{Conflicting: true}, nil).Once()
 
-		got, err := isReverseFullyApplied(context.Background(), mockStore, demotedTx, demotedHash)
+		got, err := isReverseFullyApplied(context.Background(), mockStore, inpointsOf(t, demotedTx), demotedHash)
 		require.NoError(t, err)
 		assert.False(t, got, "a still-conflicting recorded spender means the reverse must re-run to finish Unmark(C)")
 		mockStore.AssertExpectations(t)
@@ -320,7 +326,7 @@ func TestIsReverseFullyApplied(t *testing.T) {
 		mockStore.On("Get", mock.Anything, &otherSpenderHash, mock.Anything).
 			Return((*meta.Data)(nil), nil).Once()
 
-		got, err := isReverseFullyApplied(context.Background(), mockStore, demotedTx, demotedHash)
+		got, err := isReverseFullyApplied(context.Background(), mockStore, inpointsOf(t, demotedTx), demotedHash)
 		require.NoError(t, err)
 		assert.False(t, got, "cannot confirm full application when the spender record is missing")
 		mockStore.AssertExpectations(t)
@@ -335,7 +341,7 @@ func TestIsReverseFullyApplied(t *testing.T) {
 		mockStore.On("Get", mock.Anything, &otherSpenderHash, mock.Anything).
 			Return((*meta.Data)(nil), errors.NewProcessingError("spender get failed")).Once()
 
-		_, err := isReverseFullyApplied(context.Background(), mockStore, demotedTx, demotedHash)
+		_, err := isReverseFullyApplied(context.Background(), mockStore, inpointsOf(t, demotedTx), demotedHash)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "error getting recorded spender")
 		mockStore.AssertExpectations(t)
@@ -346,7 +352,7 @@ func TestIsReverseFullyApplied(t *testing.T) {
 		mockStore.On("Get", mock.Anything, &parentHash, mock.Anything).
 			Return(&meta.Data{SpendingDatas: []*spendpkg.SpendingData{nil}}, nil).Once()
 
-		got, err := isReverseFullyApplied(context.Background(), mockStore, demotedTx, demotedHash)
+		got, err := isReverseFullyApplied(context.Background(), mockStore, inpointsOf(t, demotedTx), demotedHash)
 		require.NoError(t, err)
 		assert.False(t, got)
 		mockStore.AssertExpectations(t)
@@ -359,7 +365,7 @@ func TestIsReverseFullyApplied(t *testing.T) {
 				{TxID: &demotedHash, Vin: 0},
 			}}, nil).Once()
 
-		got, err := isReverseFullyApplied(context.Background(), mockStore, demotedTx, demotedHash)
+		got, err := isReverseFullyApplied(context.Background(), mockStore, inpointsOf(t, demotedTx), demotedHash)
 		require.NoError(t, err)
 		assert.False(t, got)
 		mockStore.AssertExpectations(t)
@@ -370,7 +376,7 @@ func TestIsReverseFullyApplied(t *testing.T) {
 		mockStore.On("Get", mock.Anything, &parentHash, mock.Anything).
 			Return(&meta.Data{SpendingDatas: []*spendpkg.SpendingData{}}, nil).Once()
 
-		got, err := isReverseFullyApplied(context.Background(), mockStore, demotedTx, demotedHash)
+		got, err := isReverseFullyApplied(context.Background(), mockStore, inpointsOf(t, demotedTx), demotedHash)
 		require.NoError(t, err)
 		assert.False(t, got)
 		mockStore.AssertExpectations(t)
@@ -381,7 +387,7 @@ func TestIsReverseFullyApplied(t *testing.T) {
 		mockStore.On("Get", mock.Anything, &parentHash, mock.Anything).
 			Return((*meta.Data)(nil), nil).Once()
 
-		got, err := isReverseFullyApplied(context.Background(), mockStore, demotedTx, demotedHash)
+		got, err := isReverseFullyApplied(context.Background(), mockStore, inpointsOf(t, demotedTx), demotedHash)
 		require.NoError(t, err)
 		assert.False(t, got, "missing parent must not be treated as fully-reversed evidence")
 		mockStore.AssertExpectations(t)
@@ -392,7 +398,7 @@ func TestIsReverseFullyApplied(t *testing.T) {
 		mockStore.On("Get", mock.Anything, &parentHash, mock.Anything).
 			Return((*meta.Data)(nil), errors.NewProcessingError("parent get failed")).Once()
 
-		_, err := isReverseFullyApplied(context.Background(), mockStore, demotedTx, demotedHash)
+		_, err := isReverseFullyApplied(context.Background(), mockStore, inpointsOf(t, demotedTx), demotedHash)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "error getting parent")
 		mockStore.AssertExpectations(t)
@@ -435,6 +441,8 @@ func TestReverseProcessConflicting_FiltersCounterWithMismatchedOutput(t *testing
 	demotedSpends := []*Spend{{TxID: &demotedHash, Vout: 0}}
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{demotedHash}, true).
 		Return(demotedSpends, []chainhash.Hash{}, nil).Once()
+	mockStore.On("SpendsMadeBy", mock.Anything, demotedHash).
+		Return([]*Spend{{TxID: &parentHash, Vout: 0}}, nil).Once()
 	mockStore.On("Unspend", mock.Anything, mock.AnythingOfType("[]*utxo.Spend"), mock.Anything).
 		Return(nil).Once()
 
@@ -475,6 +483,8 @@ func TestReverseProcessConflicting_NoCounterToPromote(t *testing.T) {
 	demotedSpends := []*Spend{{TxID: &demotedHash, Vout: 0}}
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{demotedHash}, true).
 		Return(demotedSpends, []chainhash.Hash{}, nil).Once()
+	mockStore.On("SpendsMadeBy", mock.Anything, demotedHash).
+		Return([]*Spend{{TxID: &parentHash, Vout: 0}}, nil).Once()
 	mockStore.On("Unspend", mock.Anything, mock.AnythingOfType("[]*utxo.Spend"), mock.Anything).
 		Return(nil).Once()
 
@@ -518,6 +528,8 @@ func TestReverseProcessConflicting_SkipsCounterAlreadyNonConflicting(t *testing.
 	demotedSpends := []*Spend{{TxID: &demotedHash, Vout: 0}}
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{demotedHash}, true).
 		Return(demotedSpends, []chainhash.Hash{}, nil).Once()
+	mockStore.On("SpendsMadeBy", mock.Anything, demotedHash).
+		Return([]*Spend{{TxID: &parentHash, Vout: 0}}, nil).Once()
 	mockStore.On("Unspend", mock.Anything, mock.AnythingOfType("[]*utxo.Spend"), mock.Anything).
 		Return(nil).Once()
 
@@ -618,6 +630,8 @@ func TestReverseProcessConflicting_PicksOldestCounterByCreatedAt(t *testing.T) {
 	demotedSpends := []*Spend{{TxID: &demotedHash, Vout: 0}}
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{demotedHash}, true).
 		Return(demotedSpends, []chainhash.Hash{}, nil).Once()
+	mockStore.On("SpendsMadeBy", mock.Anything, demotedHash).
+		Return([]*Spend{{TxID: &parentHash, Vout: 0}}, nil).Once()
 	mockStore.On("Unspend", mock.Anything, mock.AnythingOfType("[]*utxo.Spend"), mock.Anything).
 		Return(nil).Once()
 
@@ -677,6 +691,8 @@ func TestReverseProcessConflicting_TiebreakOnEqualCreatedAtByHash(t *testing.T) 
 	demotedSpends := []*Spend{{TxID: &demotedHash, Vout: 0}}
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{demotedHash}, true).
 		Return(demotedSpends, []chainhash.Hash{}, nil).Once()
+	mockStore.On("SpendsMadeBy", mock.Anything, demotedHash).
+		Return([]*Spend{{TxID: &parentHash, Vout: 0}}, nil).Once()
 	mockStore.On("Unspend", mock.Anything, mock.AnythingOfType("[]*utxo.Spend"), mock.Anything).
 		Return(nil).Once()
 
@@ -845,6 +861,8 @@ func TestReverseProcessConflicting_UnspendErrorPropagates(t *testing.T) {
 		Return(&meta.Data{ConflictingChildren: []chainhash.Hash{}}, nil).Once()
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{demotedHash}, true).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
+	mockStore.On("SpendsMadeBy", mock.Anything, demotedHash).
+		Return([]*Spend{{TxID: &parentHash, Vout: 0}}, nil).Once()
 	mockStore.On("Unspend", mock.Anything, mock.AnythingOfType("[]*utxo.Spend"), mock.Anything).
 		Return(errors.NewProcessingError("unspend failed")).Once()
 
@@ -881,6 +899,8 @@ func TestReverseProcessConflicting_CounterMetaNilSkipsCounter(t *testing.T) {
 
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{demotedHash}, true).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
+	mockStore.On("SpendsMadeBy", mock.Anything, demotedHash).
+		Return([]*Spend{{TxID: &parentHash, Vout: 0}}, nil).Once()
 	mockStore.On("Unspend", mock.Anything, mock.AnythingOfType("[]*utxo.Spend"), mock.Anything).
 		Return(nil).Once()
 
@@ -923,6 +943,8 @@ func TestReverseProcessConflicting_CounterSpendErrorPropagates(t *testing.T) {
 
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{demotedHash}, true).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
+	mockStore.On("SpendsMadeBy", mock.Anything, demotedHash).
+		Return([]*Spend{{TxID: &parentHash, Vout: 0}}, nil).Once()
 	mockStore.On("Unspend", mock.Anything, mock.AnythingOfType("[]*utxo.Spend"), mock.Anything).
 		Return(nil).Once()
 
@@ -963,6 +985,8 @@ func TestReverseProcessConflicting_CounterUnmarkErrorPropagates(t *testing.T) {
 
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{demotedHash}, true).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
+	mockStore.On("SpendsMadeBy", mock.Anything, demotedHash).
+		Return([]*Spend{{TxID: &parentHash, Vout: 0}}, nil).Once()
 	mockStore.On("Unspend", mock.Anything, mock.AnythingOfType("[]*utxo.Spend"), mock.Anything).
 		Return(nil).Once()
 	mockStore.On("Get", mock.Anything, &counterHash, mock.Anything).
@@ -994,7 +1018,7 @@ func TestSelectCountersForDemotedTx_ParentMetaNilSkips(t *testing.T) {
 	mockStore.On("Get", mock.Anything, &parentHash, mock.Anything).
 		Return((*meta.Data)(nil), nil).Once()
 
-	got, err := selectCountersForDemotedTx(ctx, mockStore, demotedTx, map[chainhash.Hash]struct{}{})
+	got, err := selectCountersForDemotedTx(ctx, mockStore, inpointsOf(t, demotedTx), map[chainhash.Hash]struct{}{})
 	require.NoError(t, err)
 	assert.Empty(t, got, "nil parent meta must not contribute counters but must not error")
 	mockStore.AssertExpectations(t)
@@ -1018,7 +1042,7 @@ func TestSelectCountersForDemotedTx_CandidateGetErrorPropagates(t *testing.T) {
 	mockStore.On("Get", mock.Anything, &candidateHash, mock.Anything).
 		Return((*meta.Data)(nil), errors.NewProcessingError("candidate lookup failed")).Once()
 
-	_, err := selectCountersForDemotedTx(ctx, mockStore, demotedTx, map[chainhash.Hash]struct{}{})
+	_, err := selectCountersForDemotedTx(ctx, mockStore, inpointsOf(t, demotedTx), map[chainhash.Hash]struct{}{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "error getting candidate counter")
 	mockStore.AssertExpectations(t)
@@ -1046,7 +1070,7 @@ func TestSelectCountersForDemotedTx_CandidateMetaNilSkipsCandidate(t *testing.T)
 	mockStore.On("Get", mock.Anything, &liveHash, mock.Anything).
 		Return(&meta.Data{Tx: liveTx, Conflicting: true, CreatedAt: 100}, nil).Once()
 
-	got, err := selectCountersForDemotedTx(ctx, mockStore, demotedTx, map[chainhash.Hash]struct{}{})
+	got, err := selectCountersForDemotedTx(ctx, mockStore, inpointsOf(t, demotedTx), map[chainhash.Hash]struct{}{})
 	require.NoError(t, err)
 	require.Equal(t, []chainhash.Hash{liveHash}, got,
 		"pruned candidate must be skipped, live one promoted")
@@ -1064,7 +1088,7 @@ func TestSpendsForTx(t *testing.T) {
 		parentHash := createTestHash("spends-single-parent")
 		tx := createSpendableTestTransaction(parentHash, 7)
 
-		got, err := spendsForTx(tx)
+		got, err := SpendsForTx(tx)
 		require.NoError(t, err)
 		require.Len(t, got, 1)
 
@@ -1087,7 +1111,7 @@ func TestSpendsForTx(t *testing.T) {
 		merged.Inputs = append(merged.Inputs, txA.Inputs[0], txB.Inputs[0])
 		merged.Outputs = append(merged.Outputs, txA.Outputs[0])
 
-		got, err := spendsForTx(merged)
+		got, err := SpendsForTx(merged)
 		require.NoError(t, err)
 		require.Len(t, got, 2)
 
@@ -1112,7 +1136,7 @@ func TestSpendsForTx(t *testing.T) {
 		tx := createSpendableTestTransaction(parentHash, 0)
 		tx.Inputs[0].PreviousTxScript = nil
 
-		got, err := spendsForTx(tx)
+		got, err := SpendsForTx(tx)
 		require.Error(t, err)
 		assert.Nil(t, got, "error path must return nil slice — partial results would mask the bad input downstream")
 		assert.Contains(t, err.Error(), "locking script is nil")
@@ -1122,8 +1146,21 @@ func TestSpendsForTx(t *testing.T) {
 		// Idempotent guard. A tx with zero inputs should not happen in
 		// production (coinbase has one input), but the helper must not
 		// panic and must not over-allocate.
-		got, err := spendsForTx(bt.NewTx())
+		got, err := SpendsForTx(bt.NewTx())
 		require.NoError(t, err)
 		assert.Empty(t, got)
 	})
+}
+
+// inpointsOf gives the outpoints a transaction spends, which is what the reverse-conflict
+// helpers now take. They stopped taking the transaction itself because a store that bounds how
+// long it keeps transactions returns none for an old one, while keeping a transaction that lost
+// a double-spend indefinitely.
+func inpointsOf(t *testing.T, tx *bt.Tx) []subtree.Inpoint {
+	t.Helper()
+
+	ip, err := subtree.NewTxInpointsFromTx(tx)
+	require.NoError(t, err)
+
+	return ip.GetTxInpoints()
 }

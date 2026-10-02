@@ -1578,12 +1578,14 @@ func TestSubtreeProcessor_ReorgThroughRealSubtrees(t *testing.T) {
 		// doubleSpendTx appears in BOTH the moved-back and moved-forward blocks
 		// (a competing spend across the reorg fork). backOnly only appears in
 		// the moved-back block; forwardOnly only in the moved-forward block.
-		doubleSpendTx, err := chainhash.NewHashFromStr("d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4")
-		require.NoError(t, err)
-		backOnlyTx, err := chainhash.NewHashFromStr("e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5")
-		require.NoError(t, err)
-		forwardOnlyTx, err := chainhash.NewHashFromStr("f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6")
-		require.NoError(t, err)
+		//
+		// These are real rows in the UTXO store, not bare hashes: the reorg now records
+		// the moved-forward block as the block that mined its transactions, and
+		// SetMinedMulti is fail-closed on every backend, so a transaction of the winning
+		// block that the store has never heard of fails the reorg — as it should.
+		doubleSpendTx := createReorgTestTx(t, ctx, utxoStore, 2001, 11).TxIDChainHash()
+		backOnlyTx := createReorgTestTx(t, ctx, utxoStore, 2002, 11).TxIDChainHash()
+		forwardOnlyTx := createReorgTestTx(t, ctx, utxoStore, 2003, 11).TxIDChainHash()
 
 		backSubtreeHash := storeReorgSubtree(t, ctx, blobStore, []subtree.Node{
 			{Hash: *doubleSpendTx, Fee: 100, SizeInBytes: 250},
