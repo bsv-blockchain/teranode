@@ -183,9 +183,10 @@ func TestGetMerkleProof(t *testing.T) {
 		subtreeHash, err := chainhash.NewHashFromStr(subtreeHashStr)
 		require.NoError(t, err, "Failed to parse subtreeHash")
 
-		merkleRootStr := "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321"
-		merkleRoot, err := chainhash.NewHashFromStr(merkleRootStr)
-		require.NoError(t, err, "Failed to parse merkleRoot")
+		// Single-subtree block with no coinbase tx: the block's merkle root is the subtree's own
+		// root, unmodified, so the header must carry subtreeHash for the reconstructed-root check
+		// to pass.
+		merkleRoot := subtreeHash
 
 		// Create mock transaction metadata
 		txMeta := &meta.Data{
@@ -440,10 +441,13 @@ func TestGetMerkleProof(t *testing.T) {
 		subtreeHash, _ := chainhash.NewHashFromStr(subtreeHashStr)
 
 		bits, _ := model.NewNBitFromString("1d00ffff")
+		// Single-subtree block with no coinbase tx: the block's merkle root is the subtree's own
+		// root, unmodified, so the header must carry subtreeHash for the reconstructed-root check
+		// to pass.
 		mockBlock := &model.Block{
 			Header: &model.BlockHeader{
 				HashPrevBlock:  &chainhash.Hash{},
-				HashMerkleRoot: &chainhash.Hash{},
+				HashMerkleRoot: subtreeHash,
 				Timestamp:      1234567890,
 				Bits:           *bits,
 				Nonce:          12345,
@@ -461,7 +465,7 @@ func TestGetMerkleProof(t *testing.T) {
 
 		mockBlockHeader := &model.BlockHeader{
 			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
+			HashMerkleRoot: subtreeHash,
 			Timestamp:      1234567890,
 			Bits:           *bits,
 			Nonce:          12345,

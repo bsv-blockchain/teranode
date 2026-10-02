@@ -41,9 +41,9 @@ func TestGetMerkleProofBUMPFormats(t *testing.T) {
 	subtreeHash, err := chainhash.NewHashFromStr(subtreeHashStr)
 	require.NoError(t, err)
 
-	merkleRootStr := "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321"
-	merkleRoot, err := chainhash.NewHashFromStr(merkleRootStr)
-	require.NoError(t, err)
+	// Single-subtree block with no coinbase tx: the block's merkle root is the subtree's own root,
+	// unmodified, so the header must carry subtreeHash for the reconstructed-root check to pass.
+	merkleRoot := subtreeHash
 
 	// Create mock transaction metadata
 	txMeta := &meta.Data{
