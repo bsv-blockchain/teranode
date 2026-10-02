@@ -287,6 +287,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	p2pPort, err := getFreePort()
 	require.NoError(t, err)
 	appSettings.P2P.StaticPeers = nil
+	appSettings.P2P.BootstrapPeers = nil
 	appSettings.P2P.ListenAddresses = []string{"0.0.0.0"}
 	appSettings.P2P.Port = p2pPort
 
