@@ -1828,7 +1828,7 @@ func TestGetHashOfAncestorBlock(t *testing.T) {
 	})
 }
 
-func TestGetLatestBlockHeaderFromBlockLocatorRequest(t *testing.T) {
+func TestGetLatestBlockHeaderFromBlockLocator(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -1852,14 +1852,14 @@ func TestGetLatestBlockHeaderFromBlockLocatorRequest(t *testing.T) {
 			BlockLocatorHashes: [][]byte{(&locator).CloneBytes()},
 		}
 
-		resp, err := server.GetLatestBlockHeaderFromBlockLocatorRequest(ctx, req)
+		resp, err := server.GetLatestBlockHeaderFromBlockLocator(ctx, req)
 		require.Error(t, err)
 		require.Nil(t, resp)
 		assert.Contains(t, err.Error(), "forced error")
 	})
 }
 
-func TestGetBlockHeadersFromOldestRequest(t *testing.T) {
+func TestGetBlockHeadersFromOldest(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -1900,7 +1900,7 @@ func TestGetBlockHeadersFromOldestRequest(t *testing.T) {
 			NumberOfHeaders: 1,
 		}
 
-		resp, err := server.GetBlockHeadersFromOldestRequest(ctx, req)
+		resp, err := server.GetBlockHeadersFromOldest(ctx, req)
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 		require.Len(t, resp.BlockHeaders, 1)
@@ -1925,7 +1925,7 @@ func TestGetBlockHeadersFromOldestRequest(t *testing.T) {
 			NumberOfHeaders: 1,
 		}
 
-		resp, err := server.GetBlockHeadersFromOldestRequest(ctx, req)
+		resp, err := server.GetBlockHeadersFromOldest(ctx, req)
 		require.Error(t, err)
 		require.Nil(t, resp)
 	})
