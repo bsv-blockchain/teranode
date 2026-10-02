@@ -1783,6 +1783,14 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		return errors.NewServiceError("[processBlockFound][%s] failed to check if parent block %s exists", hash.String(), block.Header.HashPrevBlock.String(), err)
 	}
 
+	// A legacy block on the unified route must never take the catch-up divert: legacy sync
+	// resolves its own orphans with a getblocks, and the divert returns nil, which legacy
+	// records as an accepted block with nothing stored. Legacy hands a block over only once its
+	// parent is in the chain, so a missing parent here is a local fault, re-delivered later.
+	if !parentExists && baseURL == "legacy" && u.legacyUnifiedRoute(block, baseURL) {
+		return errors.NewServiceError("[processBlockFound][%s] legacy block on the unified route has no stored parent %s", hash.String(), block.Header.HashPrevBlock.String())
+	}
+
 	if !parentExists {
 		// add to catchup channel, which will block processing any new blocks until we have caught up
 		go func() {
@@ -1802,9 +1810,9 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		return nil
 	}
 
-	// Settle the peer-supplied height against the on-chain parent before anything reads
-	// block.Height (block-assembly gating and the unified-route decision below, and downstream
-	// the checkpoint guard, difficulty skip and coinbase subsidy in ValidateBlockWithOptions).
+	// Settle the peer-supplied height against the parent before anything reads block.Height
+	// (block-assembly gating and the unified-route decision below, and downstream the
+	// checkpoint guard, difficulty skip and coinbase subsidy in ValidateBlockWithOptions).
 	// See deriveBlockHeight.
 	_, parentMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
 	if err != nil {
@@ -1818,22 +1826,33 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		return errors.NewServiceError("[processBlockFound][%s] nil metadata for parent header %s", hash.String(), block.Header.HashPrevBlock.String())
 	}
 
-	settledHeight, err := deriveBlockHeight(block.Height, parentMeta.Height)
+	parentHeight := parentMeta.Height
+
+	settledHeight, err := deriveBlockHeight(block.Height, parentHeight)
 	if err != nil {
 		return errors.NewBlockInvalidError("[processBlockFound][%s] rejecting block with peer-inconsistent height", hash.String(), err)
 	}
 
 	block.Height = settledHeight
 
+	// Unified below-checkpoint route: legacy blocks go through the same quick-validation
+	// machinery as native catchup (default off). Re-evaluated on the settled height, which is
+	// what every consumer downstream reads.
+	unifiedRoute := u.legacyUnifiedRoute(block, baseURL)
+
 	// Wait for block assembly to be ready before processing the block
 	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height, u.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
+		if unifiedRoute {
+			// A parked gate is a local condition. Wrap so legacy sync neither rejects the
+			// block nor rotates the peer.
+			return errors.NewServiceError("[processBlockFound][%s] block assembly not ready for height %d on the unified route", hash.String(), block.Height, err)
+		}
+
 		// block-assembly is still behind, so we cannot process this block
 		return err
 	}
 
-	// Unified below-checkpoint route: legacy blocks go through the same
-	// quick-validation machinery as native catchup (default off).
-	if u.legacyUnifiedRoute(block, baseURL) {
+	if unifiedRoute {
 		u.logger.Debugf("[processBlockFound][%s] unified route: quick-validating legacy block at height %d", block.Hash().String(), block.Height)
 
 		// A corrupt result here (bitcoin-sv/teranode#4692) is returned to the legacy caller and struck at

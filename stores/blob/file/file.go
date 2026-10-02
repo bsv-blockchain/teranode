@@ -940,11 +940,25 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 	}
 	file = nil
 
-	// rename the file to remove the .tmp extension
-	if err = s.renameTempFile(tmpFilename, filename, merged.AllowOverwrite); err != nil {
+	if err = s.publishTempFile(tmpFilename, filename, merged, hasher); err != nil {
 		return err
 	}
 	cleanupTmpFile = false
+
+	s.debugf("[File] SetFromReader completed key=%s type=%s filename=%s", keyHex, fileType, filename)
+	return nil
+}
+
+// publishTempFile renames a finished, synced and closed temporary file to its final name and
+// publishes or clears its checksum sidecar. It is the last step of every streamed write, shared by
+// SetFromReader and a pending file's Commit so the two publish a blob identically. Once it has
+// renamed the file the temporary name no longer exists, so a caller must not remove it after a
+// nil return.
+func (s *File) publishTempFile(tmpFilename, filename string, merged *options.Options, hasher hash.Hash) error {
+	// rename the file to remove the .tmp extension
+	if err := s.renameTempFile(tmpFilename, filename, merged.AllowOverwrite); err != nil {
+		return err
+	}
 
 	if !s.checksum {
 		// A blob written while checksums were enabled leaves a sidecar behind; republishing the
@@ -974,7 +988,7 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 	}
 
 	// Write SHA256 hash file
-	if err = s.writeHashFile(hasher, filename); err != nil {
+	if err := s.writeHashFile(hasher, filename); err != nil {
 		if removeErr := s.removeStorePath(filename); removeErr != nil && !os.IsNotExist(removeErr) {
 			s.logger.Warnf("[File][SetFromReader] failed to remove blob file %s after hash write error: %v", filename, removeErr)
 		}
@@ -982,7 +996,6 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 		return errors.NewStorageError("[File][SetFromReader] failed to write hash file", err)
 	}
 
-	s.debugf("[File] SetFromReader completed key=%s type=%s filename=%s", keyHex, fileType, filename)
 	return nil
 }
 

@@ -26,7 +26,6 @@ var peerServerMetricHandlers = []string{
 	"OnProtoconf",    // Protocol configuration message handler metrics
 	"OnMemPool",      // Memory pool query handler metrics
 	"OnTx",           // Transaction message handler metrics
-	"OnBlock",        // Block message handler metrics
 	"OnInv",          // Inventory message handler metrics
 	"OnHeaders",      // Headers message handler metrics
 	"OnGetData",      // GetData message handler metrics

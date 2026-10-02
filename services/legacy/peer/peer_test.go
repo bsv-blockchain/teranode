@@ -1647,3 +1647,123 @@ func TestPeerRequeueInventory(t *testing.T) {
 	outPeer.RequeueInventory(iv)
 	expectInv("second RequeueInventory did not re-send the known inv")
 }
+
+// blockStreamingPair connects two peers with the streaming block path installed
+// and the given gate, and returns the receiving peer plus a channel of pings it
+// receives.
+func blockStreamingPair(t *testing.T, gate func(chainhash.Hash, *wire.BlockHeader) error) (sender, receiver *peer.Peer, pings chan struct{}) {
+	t.Helper()
+
+	peer.RegisterStreamingBlockHandler()
+	peer.SetBlockBodyStreaming(
+		func(chainhash.Hash, *wire.BlockHeader, io.Reader, int64) (bool, error) { return true, nil },
+		gate,
+		func(chainhash.Hash, bool) error { return nil },
+	)
+
+	verack := make(chan struct{}, 2)
+	pings = make(chan struct{}, 1)
+
+	cfg := &peer.Config{
+		Listeners: peer.MessageListeners{
+			OnVerAck: func(*peer.Peer, *wire.MsgVerAck) { verack <- struct{}{} },
+			OnPing:   func(*peer.Peer, *wire.MsgPing) { pings <- struct{}{} },
+		},
+		UserAgentName:          "peer",
+		UserAgentVersion:       "1.0",
+		ChainParams:            &chaincfg.MainNetParams,
+		TstAllowSelfConnection: true,
+	}
+
+	inConn, outConn := pipe(
+		&conn{laddr: "10.0.0.1:9108", raddr: "10.0.0.2:9108"},
+		&conn{laddr: "10.0.0.2:9108", raddr: "10.0.0.1:9108"},
+	)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	sender, err := peer.NewOutboundPeer(ulogger.TestLogger{}, tSettings, cfg, inConn.laddr)
+	require.NoError(t, err)
+	sender.AssociateConnection(outConn)
+
+	receiver = peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, cfg)
+	receiver.AssociateConnection(inConn)
+
+	// The streaming hooks are package globals, so they are cleared only once
+	// both peers have stopped reading, or the next test's install races this
+	// test's read loops.
+	t.Cleanup(func() {
+		sender.DisconnectWithInfo("test done")
+		receiver.DisconnectWithInfo("test done")
+		sender.WaitForDisconnect()
+		receiver.WaitForDisconnect()
+		peer.SetBlockBodyStreaming(nil, nil, nil)
+	})
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-verack:
+		case <-time.After(time.Second):
+			t.Fatal("verack timeout")
+		}
+	}
+
+	return sender, receiver, pings
+}
+
+// streamingTestBlock is a one-transaction block, enough for the streaming path
+// to read a header and a body.
+func streamingTestBlock() *wire.MsgBlock {
+	prev := chainhash.Hash{0x01}
+	merkle := chainhash.Hash{0x02}
+	block := wire.NewMsgBlock(wire.NewBlockHeader(1, &prev, &merkle, 0x1d00ffff, 0))
+
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Index: 0xffffffff}, SignatureScript: []byte{0x00}, Sequence: 0xffffffff})
+	tx.AddTxOut(&wire.TxOut{Value: 1, PkScript: []byte{0x51}})
+	_ = block.AddTransaction(tx)
+
+	return block
+}
+
+// TestPeer_AnUnrequestedBlockKeepsTheConnection pins SV Node's rule end to end:
+// a peer that sends a block this node did not ask for stays connected, and the
+// next message on the same connection is read and handled.
+func TestPeer_AnUnrequestedBlockKeepsTheConnection(t *testing.T) {
+	sender, receiver, pings := blockStreamingPair(t, func(hash chainhash.Hash, _ *wire.BlockHeader) error {
+		return &peer.BlockNotRequestedError{Hash: hash}
+	})
+
+	sender.QueueMessage(streamingTestBlock(), nil)
+	sender.QueueMessage(wire.NewMsgPing(42), nil)
+
+	select {
+	case <-pings:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the message after the unrequested block was never handled")
+	}
+
+	require.True(t, receiver.Connected(), "a peer must not be disconnected for a block this node did not ask for")
+}
+
+// TestPeer_AForgedBlockStillDisconnects keeps every other refusal what it was: a
+// header that fails the gate for any reason but "not asked for" is the peer's
+// doing, and the peer is disconnected.
+func TestPeer_AForgedBlockStillDisconnects(t *testing.T) {
+	sender, receiver, _ := blockStreamingPair(t, func(chainhash.Hash, *wire.BlockHeader) error {
+		return errors.New("declared target is easier than the chain limit")
+	})
+
+	sender.QueueMessage(streamingTestBlock(), nil)
+
+	disconnected := make(chan struct{})
+	go func() {
+		receiver.WaitForDisconnect()
+		close(disconnected)
+	}()
+
+	select {
+	case <-disconnected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a peer sending a forged block must be disconnected")
+	}
+}

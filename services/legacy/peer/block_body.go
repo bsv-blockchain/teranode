@@ -1,0 +1,142 @@
+package peer
+
+import (
+	"fmt"
+	"io"
+
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-wire"
+	"github.com/bsv-blockchain/teranode/errors"
+)
+
+// BlockBody describes a block whose transactions were streamed straight to the
+// park's blob store rather than decoded into memory.
+//
+// It exists because nothing between the wire and the park reads a transaction.
+// The park's stateless check needs the header, to see the block hashes to what
+// we asked for and meets its own target difficulty, and needs the transaction
+// count to be non-zero. The park's byte budget needs the size, which the wire
+// message declares. The arrival path needs the previous block hash, which is in
+// the header. On mainnet 91% of blocks arrive out of order and take exactly that
+// path, so for those the four-gigabyte object was built only to be serialised
+// straight back out.
+type BlockBody struct {
+	// Header is the block's own 80-byte header, read off the wire.
+	Header wire.BlockHeader
+
+	// TxCount is the transaction count varint that followed it.
+	TxCount uint64
+
+	// Size is the serialized block size, taken from the wire message's declared
+	// payload length rather than by walking anything.
+	Size int64
+
+	// Hash is Header.BlockHash(), computed once when the header was read.
+	Hash chainhash.Hash
+
+	// Converted reports whether the sink that accepted this body actually
+	// converted it — wrote a park record derived from its subtrees, as the
+	// pipeline sink does — rather than merely writing the whole body
+	// byte-for-byte. It comes straight from the sink's own return value, set
+	// at the one place that genuinely knows: the sink call itself. Nothing
+	// downstream should ever try to answer this question by inference (for
+	// example, by checking whether some blob happens to exist for this hash),
+	// because a blob that exists for another reason — a stale leftover, a
+	// racing duplicate delivery of the same hash — looks identical to one this
+	// delivery actually produced.
+	Converted bool
+}
+
+// MsgBlockOnDisk is a block message whose body was streamed to the park rather
+// than decoded. It satisfies wire.Message so go-wire's external handler can
+// return it in place of a *wire.MsgBlock.
+//
+// Its encode and decode methods are never called: this message is produced by
+// streamingBlockHandler and consumed inside this process, never re-read from or
+// written to a peer. They return an error rather than doing nothing quietly, so
+// a caller that starts using them finds out immediately.
+type MsgBlockOnDisk struct {
+	BlockBody
+}
+
+// Bsvdecode is not supported. See the type comment.
+func (m *MsgBlockOnDisk) Bsvdecode(io.Reader, uint32, wire.MessageEncoding) error {
+	return errors.NewProcessingError("MsgBlockOnDisk cannot be decoded: its body is on disk, not on the wire")
+}
+
+// BsvEncode is not supported. See the type comment.
+func (m *MsgBlockOnDisk) BsvEncode(io.Writer, uint32, wire.MessageEncoding) error {
+	return errors.NewProcessingError("MsgBlockOnDisk cannot be encoded: its body is on disk, not in memory")
+}
+
+// Command reports the same wire command a decoded block does, so anything
+// switching on the command string treats the two alike.
+func (m *MsgBlockOnDisk) Command() string { return wire.CmdBlock }
+
+// MaxPayloadLength defers to the decoded block's answer.
+func (m *MsgBlockOnDisk) MaxPayloadLength(pver uint32) uint64 {
+	return (&wire.MsgBlock{}).MaxPayloadLength(pver)
+}
+
+// BlockNotRequestedError is what a block body gate returns for a block this node
+// did not ask for. It is not the peer's fault: SV Node never disconnects or scores
+// a peer for an unrequested block, it just does not keep it. The streaming handler
+// reads this type, by type and not by message, and discards the body instead of
+// failing the message, so the connection carries on. Any other gate refusal is
+// still an error and still disconnects the peer.
+type BlockNotRequestedError struct {
+	Hash chainhash.Hash
+}
+
+func (e *BlockNotRequestedError) Error() string {
+	return fmt.Sprintf("[streamingBlockGate][%s] this node did not ask for this block", e.Hash)
+}
+
+// MsgBlockDiscarded is a block message whose body was read off the wire and thrown
+// away, because this node did not ask for the block. It carries only what a log
+// line needs.
+type MsgBlockDiscarded struct {
+	Hash chainhash.Hash
+	Size int64
+}
+
+// Bsvdecode always fails: the body was discarded, not kept.
+func (m *MsgBlockDiscarded) Bsvdecode(io.Reader, uint32, wire.MessageEncoding) error {
+	return errors.NewProcessingError("MsgBlockDiscarded cannot be decoded: its body was discarded")
+}
+
+// BsvEncode always fails: there is no body to send.
+func (m *MsgBlockDiscarded) BsvEncode(io.Writer, uint32, wire.MessageEncoding) error {
+	return errors.NewProcessingError("MsgBlockDiscarded cannot be encoded: its body was discarded")
+}
+
+// Command returns the protocol command the message arrived as.
+func (m *MsgBlockDiscarded) Command() string { return wire.CmdBlock }
+
+// MaxPayloadLength is the same bound a block message has.
+func (m *MsgBlockDiscarded) MaxPayloadLength(pver uint32) uint64 {
+	return (&wire.MsgBlock{}).MaxPayloadLength(pver)
+}
+
+// SetBlockBodyStreaming installs all three callbacks the streaming path needs,
+// or clears all three when any of them is nil.
+//
+// One call rather than several because the three callbacks are only safe
+// together. A sink with no gate is a store anybody can fill; a sink with no
+// delete leaves an orphaned body behind on every write that fails after it.
+// The handler already refuses to stream unless a sink and a gate are both
+// present, and this makes the same rule true of how they are installed rather
+// than only of how they are read.
+func SetBlockBodyStreaming(
+	sink func(hash chainhash.Hash, header *wire.BlockHeader, r io.Reader, n int64) (bool, error),
+	gate func(hash chainhash.Hash, header *wire.BlockHeader) error,
+	del func(hash chainhash.Hash, converted bool) error,
+) {
+	if sink == nil || gate == nil || del == nil {
+		blockBodySink, blockBodyGate, blockBodyDelete = nil, nil, nil
+
+		return
+	}
+
+	blockBodySink, blockBodyGate, blockBodyDelete = sink, gate, del
+}

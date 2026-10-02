@@ -8,32 +8,20 @@ import (
 )
 
 var (
-	prometheusLegacyNetsyncBlockHeight                    prometheus.Gauge
-	prometheusLegacyNetsyncHandleTxMsg                    prometheus.Histogram
-	prometheusLegacyNetsyncHandleTxMsgValidate            prometheus.Histogram
-	prometheusLegacyNetsyncProcessOrphanTransactions      prometheus.Histogram
-	prometheusLegacyNetsyncHandleBlockDirect              prometheus.Histogram
-	prometheusLegacyNetsyncProcessBlock                   prometheus.Histogram
-	prometheusLegacyNetsyncPrepareSubtrees                prometheus.Histogram
-	prometheusLegacyNetsyncValidateTransactionsLegacyMode prometheus.Histogram
-	prometheusLegacyNetsyncPreValidateTransactions        prometheus.Histogram
-	prometheusLegacyNetsyncValidateTransactions           prometheus.Histogram
-	prometheusLegacyNetsyncExtendTransactions             prometheus.Histogram
-	prometheusLegacyNetsyncCreateUtxos                    prometheus.Histogram
-	prometheusLegacyNetsyncBlockTxSize                    prometheus.Histogram
-	prometheusLegacyNetsyncBlockTxNrInputs                prometheus.Histogram
-	prometheusLegacyNetsyncBlockTxNrOutputs               prometheus.Histogram
-	prometheusLegacyNetsyncBlockTxValidate                prometheus.Histogram
-	prometheusLegacyNetsyncOrphans                        prometheus.Gauge
-	prometheusLegacyNetsyncOrphanTime                     prometheus.Histogram
+	prometheusLegacyNetsyncBlockHeight               prometheus.Gauge
+	prometheusLegacyNetsyncHandleTxMsg               prometheus.Histogram
+	prometheusLegacyNetsyncHandleTxMsgValidate       prometheus.Histogram
+	prometheusLegacyNetsyncProcessOrphanTransactions prometheus.Histogram
+	prometheusLegacyNetsyncHandleBlockDirect         prometheus.Histogram
+	prometheusLegacyNetsyncProcessBlock              prometheus.Histogram
+	prometheusLegacyNetsyncOrphans                   prometheus.Gauge
+	prometheusLegacyNetsyncParkedBlocks              prometheus.Gauge
+	prometheusLegacyNetsyncParkedBytes               prometheus.Gauge
+	prometheusLegacyNetsyncOrphanTime                prometheus.Histogram
 
-	// prometheusLegacyNetsyncPrewarmErrors counts validator errors observed during the
-	// pre-warm path in validateTransactions, labelled by error class. The pre-warm runs
-	// before full subtree validation and intentionally drops errors (real validation
-	// catches consensus violations on its own), but ops still need a signal so they
-	// can detect bursts of service/processing failures that would otherwise be silent.
-	// Class labels: tx_invalid, service, processing, policy, other.
-	prometheusLegacyNetsyncPrewarmErrors *prometheus.CounterVec
+	// prometheusLegacyNetsyncFrontierRaces counts blocks asked of a second peer because the
+	// chain was about to wait on them from a slow one. See frontier_race.go.
+	prometheusLegacyNetsyncFrontierRaces prometheus.Counter
 
 	prometheusMetricsInitOnce sync.Once
 )
@@ -43,6 +31,14 @@ func initPrometheusMetrics() {
 }
 
 func _initPrometheusMetrics() {
+	prometheusLegacyNetsyncFrontierRaces = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "teranode",
+		Subsystem: "legacy_netsync",
+		Name:      "frontier_races_total",
+		Help:      "Blocks asked of a second peer because the chain was about to wait on them from a slow one",
+	})
+	prometheus.MustRegister(prometheusLegacyNetsyncFrontierRaces)
+
 	prometheusLegacyNetsyncBlockHeight = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "teranode",
 		Subsystem: "legacy_netsync",
@@ -96,96 +92,6 @@ func _initPrometheusMetrics() {
 	})
 	prometheus.MustRegister(prometheusLegacyNetsyncProcessBlock)
 
-	prometheusLegacyNetsyncPrepareSubtrees = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Namespace: "teranode",
-		Subsystem: "legacy_netsync",
-		Name:      "prepare_subtrees",
-		Help:      "The time taken to prepare the subtrees",
-		Buckets:   util.MetricsBucketsMilliLongSeconds,
-	})
-	prometheus.MustRegister(prometheusLegacyNetsyncPrepareSubtrees)
-
-	prometheusLegacyNetsyncValidateTransactionsLegacyMode = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Namespace: "teranode",
-		Subsystem: "legacy_netsync",
-		Name:      "validate_transactions_legacy_mode",
-		Help:      "The time taken to validate transactions in legacy mode",
-		Buckets:   util.MetricsBucketsMilliLongSeconds,
-	})
-	prometheus.MustRegister(prometheusLegacyNetsyncValidateTransactionsLegacyMode)
-
-	prometheusLegacyNetsyncExtendTransactions = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Namespace: "teranode",
-		Subsystem: "legacy_netsync",
-		Name:      "extend_transactions",
-		Help:      "The time taken to extend transactions",
-		Buckets:   util.MetricsBucketsMilliLongSeconds,
-	})
-	prometheus.MustRegister(prometheusLegacyNetsyncExtendTransactions)
-
-	prometheusLegacyNetsyncPreValidateTransactions = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Namespace: "teranode",
-		Subsystem: "legacy_netsync",
-		Name:      "pre_validate_transactions",
-		Help:      "The time taken to pre-validate transactions",
-		Buckets:   util.MetricsBucketsMilliLongSeconds,
-	})
-	prometheus.MustRegister(prometheusLegacyNetsyncPreValidateTransactions)
-
-	prometheusLegacyNetsyncValidateTransactions = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Namespace: "teranode",
-		Subsystem: "legacy_netsync",
-		Name:      "validate_transactions",
-		Help:      "The time taken to validate transactions",
-		Buckets:   util.MetricsBucketsMilliLongSeconds,
-	})
-	prometheus.MustRegister(prometheusLegacyNetsyncValidateTransactions)
-
-	prometheusLegacyNetsyncCreateUtxos = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Namespace: "teranode",
-		Subsystem: "legacy_netsync",
-		Name:      "create_utxos",
-		Help:      "The time taken to create UTXOs",
-		Buckets:   util.MetricsBucketsMilliLongSeconds,
-	})
-	prometheus.MustRegister(prometheusLegacyNetsyncCreateUtxos)
-
-	prometheusLegacyNetsyncBlockTxSize = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Namespace: "teranode",
-		Subsystem: "legacy_netsync",
-		Name:      "block_tx_size",
-		Help:      "The size of the transactions in the block being processed",
-		Buckets:   prometheus.ExponentialBuckets(1, 2, 20),
-	})
-	prometheus.MustRegister(prometheusLegacyNetsyncBlockTxSize)
-
-	prometheusLegacyNetsyncBlockTxNrInputs = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Namespace: "teranode",
-		Subsystem: "legacy_netsync",
-		Name:      "block_tx_nr_inputs",
-		Help:      "The number of inputs in the block being processed",
-		Buckets:   prometheus.ExponentialBuckets(1, 2, 20),
-	})
-	prometheus.MustRegister(prometheusLegacyNetsyncBlockTxNrInputs)
-
-	prometheusLegacyNetsyncBlockTxNrOutputs = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Namespace: "teranode",
-		Subsystem: "legacy_netsync",
-		Name:      "block_tx_nr_outputs",
-		Help:      "The number of outputs in the block being processed",
-		Buckets:   prometheus.ExponentialBuckets(1, 2, 20),
-	})
-	prometheus.MustRegister(prometheusLegacyNetsyncBlockTxNrOutputs)
-
-	prometheusLegacyNetsyncBlockTxValidate = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Namespace: "teranode",
-		Subsystem: "legacy_netsync",
-		Name:      "block_tx_validate",
-		Help:      "The time taken to validate a transaction",
-		Buckets:   util.MetricsBucketsMilliSeconds,
-	})
-	prometheus.MustRegister(prometheusLegacyNetsyncBlockTxValidate)
-
 	prometheusLegacyNetsyncOrphans = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "teranode",
 		Subsystem: "legacy_netsync",
@@ -193,6 +99,22 @@ func _initPrometheusMetrics() {
 		Help:      "The number of orphan transactions",
 	})
 	prometheus.MustRegister(prometheusLegacyNetsyncOrphans)
+
+	prometheusLegacyNetsyncParkedBlocks = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "teranode",
+		Subsystem: "legacy_netsync",
+		Name:      "parked_blocks",
+		Help:      "The number of downloaded blocks held on disk waiting for their parent",
+	})
+	prometheus.MustRegister(prometheusLegacyNetsyncParkedBlocks)
+
+	prometheusLegacyNetsyncParkedBytes = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "teranode",
+		Subsystem: "legacy_netsync",
+		Name:      "parked_bytes",
+		Help:      "The serialized bytes of downloaded blocks held on disk waiting for their parent",
+	})
+	prometheus.MustRegister(prometheusLegacyNetsyncParkedBytes)
 
 	prometheusLegacyNetsyncOrphanTime = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "teranode",
@@ -203,11 +125,4 @@ func _initPrometheusMetrics() {
 	})
 	prometheus.MustRegister(prometheusLegacyNetsyncOrphanTime)
 
-	prometheusLegacyNetsyncPrewarmErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "teranode",
-		Subsystem: "legacy_netsync",
-		Name:      "prewarm_validation_errors_total",
-		Help:      "Number of validator errors observed during the pre-warm path in validateTransactions, by class",
-	}, []string{"class"})
-	prometheus.MustRegister(prometheusLegacyNetsyncPrewarmErrors)
 }
