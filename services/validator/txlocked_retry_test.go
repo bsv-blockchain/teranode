@@ -7,7 +7,6 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -133,12 +132,18 @@ func TestValidateWithOptions_RetryPredicateByErrorType(t *testing.T) {
 
 			mockStore := &utxo.MockUtxostore{}
 			mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 1, MedianTime: 1700000000})
-			// One parent per input; validateInternal always fetches block-height
-			// fields for the parent, extended or not, and re-extends from the
+			// One parent per input; validateInternal always fetches the parent's
+			// height and outputs in one call, extended or not, and re-extends from the
 			// parent's outputs rather than trusting the supplied ones
 			// (GHSA-v76m-6vc7-g7c7), so the parent must carry them.
-			mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).
-				Return(&meta.Data{BlockHeights: []uint32{100}, Tx: txs[0]}, nil)
+			parentOutput := txs[0].Outputs[childTx.Inputs[0].PreviousTxOutIndex]
+			mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).
+				Return([]utxo.ParentOutput{{
+					Status:        utxo.ParentOutputMined,
+					Height:        100,
+					Satoshis:      parentOutput.Satoshis,
+					LockingScript: parentOutput.LockingScript,
+				}}, nil)
 			mockStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 				Return(nil, tc.returnSpends, tc.returnErr)
 

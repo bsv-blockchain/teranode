@@ -297,6 +297,20 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 	return err
 }
 
+func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	results, err := s.store.SpendAndCreateMulti(ctx, txs, blockHeight, opts...)
+	s.logger.Debugf("[UTXOStore][logger][SpendAndCreateMulti] txCount=%d blockHeight=%d err=%v : %s", len(txs), blockHeight, err, caller())
+
+	return results, err
+}
+
+func (s *Store) ParentOutputsForValidation(ctx context.Context, outpoints []utxo.Outpoint, opts ...utxo.ParentOutputOption) ([]utxo.ParentOutput, error) {
+	answers, err := s.store.ParentOutputsForValidation(ctx, outpoints, opts...)
+	s.logger.Debugf("[UTXOStore][logger][ParentOutputsForValidation] outpoints=%d err=%v : %s", len(outpoints), err, caller())
+
+	return answers, err
+}
+
 func (s *Store) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
 	err := s.store.BatchPreviousOutputsDecorate(ctx, txs)
 	s.logger.Debugf("[UTXOStore][logger][BatchPreviousOutputsDecorate] txCount=%d err=%v : %s", len(txs), err, caller())

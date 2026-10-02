@@ -36,6 +36,7 @@ import (
 	"sort"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -242,6 +243,7 @@ type CreateOption func(*CreateOptions)
 type CreateOptions struct {
 	MinedBlockInfos    []MinedBlockInfo
 	TxID               *chainhash.Hash
+	TxIDs              []chainhash.Hash // SpendAndCreateMulti only: one txid per transaction of the list
 	IsCoinbase         *bool
 	Frozen             bool
 	Conflicting        bool
@@ -270,6 +272,15 @@ func WithMinedBlockInfo(minedBlockInfos ...MinedBlockInfo) CreateOption {
 func WithTXID(txID *chainhash.Hash) CreateOption {
 	return func(o *CreateOptions) {
 		o.TxID = txID
+	}
+}
+
+// WithTXIDs supplies the txids of a SpendAndCreateMulti list, in the same order,
+// so the store does not rehash each transaction. It is the list form of WithTXID
+// and has no effect on SpendAndCreate.
+func WithTXIDs(txIDs []chainhash.Hash) CreateOption {
+	return func(o *CreateOptions) {
+		o.TxIDs = txIDs
 	}
 }
 
@@ -354,6 +365,51 @@ func WithSpendOnly() CreateOption {
 		o.SpendOnly = true
 	}
 }
+
+// Outpoint names one output of one transaction.
+type Outpoint struct {
+	TxID chainhash.Hash
+	Vout uint32
+}
+
+// ParentOutputStatus says what ParentOutputsForValidation found for one outpoint.
+type ParentOutputStatus uint8
+
+const (
+	// ParentOutputUnknown is the zero value and never a valid answer: a slot left
+	// at it must carry an Err.
+	ParentOutputUnknown ParentOutputStatus = iota
+	// ParentOutputMined means Satoshis, LockingScript and Height are set.
+	ParentOutputMined
+	// ParentOutputNotMined means Satoshis and LockingScript are set, and the store
+	// has no block recorded for the parent at all. Height is not set.
+	ParentOutputNotMined
+	// ParentOutputTxNotFound means the store looked and holds no such transaction.
+	// It is never used for a transient fault; those come back as Err.
+	ParentOutputTxNotFound
+	// ParentOutputNoSuchIndex means the store holds the parent and its output list
+	// proves there is no spendable output at Vout. Callers treat it as an invalid
+	// spend.
+	ParentOutputNoSuchIndex
+)
+
+// ParentOutput is ParentOutputsForValidation's answer for one outpoint.
+type ParentOutput struct {
+	Status        ParentOutputStatus
+	Satoshis      uint64
+	LockingScript *bscript.Script
+	// Height is the creation height, valid only when Status is ParentOutputMined.
+	Height uint32
+	// Err is set when this outpoint could not be answered; Status is then Unknown.
+	Err error
+}
+
+// ParentOutputOptions holds the options of ParentOutputsForValidation. It has no
+// fields yet; the parameter naming the chain being validated will arrive here.
+type ParentOutputOptions struct{}
+
+// ParentOutputOption configures a ParentOutputsForValidation call.
+type ParentOutputOption func(*ParentOutputOptions)
 
 type MinedBlockInfo struct {
 	BlockID        uint32
@@ -453,6 +509,33 @@ type Store interface {
 	//     zero-input tx is undefined.
 	SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, []*Spend, error)
 
+	// SpendAndCreateMulti is SpendAndCreate for an ordered list of transactions,
+	// parents before children, that have already passed every consensus and
+	// script check. It spends every input and creates every record, applying
+	// opts to every transaction exactly as SpendAndCreate applies them to one;
+	// with no WithMinedBlockInfo each record is created unmined. WithTXID and
+	// WithSetCoinbase describe one transaction and are refused; WithTXIDs is the
+	// list form of WithTXID. WithCreateOnly and WithSpendOnly are refused: the
+	// results cannot report half a write.
+	//
+	// It returns one result per transaction, in list order. The call is not
+	// atomic across the list: each transaction succeeds or fails on its own, a
+	// failed transaction's descendants in the list are not written
+	// (MultiTxParentFailed), and a transaction whose create finds its record
+	// already there (ErrTxExists) is reported MultiTxExisted. Callers drop
+	// transactions that already have a record before calling, as the
+	// per-transaction block path does. A repeat after a crash is safe for the
+	// same reasons it is there: a spend repeated by the same spender is accepted
+	// as the same spend, and SpendAndCreate spends before it creates, so a
+	// record that exists has made its spends.
+	//
+	// A list that breaks the caller's guarantees (a transaction spending a later
+	// one or an outpoint spent twice, an output index past the end of a parent
+	// in the list, a coinbase) is refused with nothing written; see
+	// IsSpendAndCreateMultiRefused. Stores without a faster implementation
+	// delegate to DefaultSpendAndCreateMulti.
+	SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...CreateOption) ([]SpendAndCreateMultiResult, error)
+
 	// Unspend reverses a previous spend operation, marking UTXOs as unspent.
 	// This is used during blockchain reorganizations.
 	Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error
@@ -508,6 +591,34 @@ type Store interface {
 
 	// PreviousOutputsDecorate fetches information about transaction inputs' previous outputs.
 	PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error
+
+	// ParentOutputsForValidation returns, for each outpoint, the output's value and
+	// locking script and the height of the block that created it. It is read-only:
+	// it never modifies its argument or any transaction, and callers assign the
+	// values they need themselves.
+	//
+	// The result has one entry per outpoint, in the same order; duplicate outpoints
+	// get identical answers. Answers come only from the parent's own stored outputs,
+	// never from a child's stored copy of an input. The returned error covers the
+	// whole call only (a cancelled context, a store unreachable before any work);
+	// anything that affects some outpoints goes in that entry's Err.
+	//
+	// Height is the lowest height among the blocks recorded for the parent. The
+	// contract is the height on the chain being validated, but nothing tells the
+	// store which chain that is yet, so a parent recorded in two forks reports the
+	// lower of the two. The validator reads the height for two things: the script
+	// era (Genesis, Chronicle), and BIP68 sequence locks, which TxValidator only
+	// enforces below Genesis. On a fork above the highest checkpoint the choice
+	// cannot change a verdict while both activation heights sit below that
+	// checkpoint, as they do on mainnet and testnet. A side chain forking below
+	// the checkpoint can never become the best chain, but blocks on it are not
+	// yet refused outright, so a verdict on one below Genesis can still read the
+	// wrong fork's height. The chain-blind read it replaces, the first recorded
+	// height, had the same limit.
+	//
+	// Parent flags (frozen, conflicting, locked, creating, spendable-in, coinbase
+	// maturity) are not reported: the spend checks them.
+	ParentOutputsForValidation(ctx context.Context, outpoints []Outpoint, opts ...ParentOutputOption) ([]ParentOutput, error)
 
 	// BatchPreviousOutputsDecorate fetches previous output information for inputs across
 	// multiple transactions in bulk. This is more efficient than calling PreviousOutputsDecorate

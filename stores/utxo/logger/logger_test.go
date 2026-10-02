@@ -2,6 +2,7 @@ package logger
 
 import (
 	"context"
+	"net/url"
 	"testing"
 	"time"
 
@@ -14,7 +15,10 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
+	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -182,6 +186,24 @@ func (m *MockStore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice [
 func (m *MockStore) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 	args := m.Called(ctx, tx)
 	return args.Error(0)
+}
+
+func (m *MockStore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	args := m.Called(ctx, txs, blockHeight, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]utxo.SpendAndCreateMultiResult), args.Error(1)
+}
+
+func (m *MockStore) ParentOutputsForValidation(ctx context.Context, outpoints []utxo.Outpoint, opts ...utxo.ParentOutputOption) ([]utxo.ParentOutput, error) {
+	args := m.Called(ctx, outpoints)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]utxo.ParentOutput), args.Error(1)
 }
 
 func (m *MockStore) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
@@ -1085,4 +1107,59 @@ func TestInterfaceCompliance(t *testing.T) {
 	loggerStore, ok := store.(*Store)
 	require.True(t, ok)
 	require.NotNil(t, loggerStore)
+}
+
+// newLoggedSQLiteStore wraps a sqlitememory UTXO store in the logger store.
+func newLoggedSQLiteStore(t *testing.T) (utxo.Store, utxo.Store) {
+	t.Helper()
+
+	ctx := context.Background()
+	tSettings := test.CreateBaseTestSettings(t)
+
+	storeURL, err := url.Parse("sqlitememory:///" + t.Name())
+	require.NoError(t, err)
+
+	base, err := sql.New(ctx, ulogger.NewErrorTestLogger(t), tSettings, storeURL)
+	require.NoError(t, err)
+
+	return New(ctx, ulogger.TestLogger{}, base), base
+}
+
+// The logger store forwards a list to the inner store's SpendAndCreateMulti,
+// which writes every record, and forwards parent reads, which return what the
+// inner store holds.
+func TestSpendAndCreateMulti_Forwards(t *testing.T) {
+	ctx := context.Background()
+	s, base := newLoggedSQLiteStore(t)
+
+	w := tests.BuildMultiWorkload(t, 0x01, 2, 2)
+	w.StoreRoots(t, base, 6)
+
+	results, err := s.SpendAndCreateMulti(ctx, w.Txs, 7, utxo.WithIgnoreLocked(true))
+	require.NoError(t, err)
+	require.Len(t, results, len(w.Txs))
+
+	for i, r := range results {
+		require.Equal(t, utxo.MultiTxCreated, r.Status, "tx %d: %v", i, r.Err)
+
+		_, err := base.Get(ctx, w.Txs[i].TxIDChainHash())
+		require.NoError(t, err, "tx %d must be in the inner store", i)
+	}
+}
+
+func TestParentOutputsForValidation_Forwards(t *testing.T) {
+	ctx := context.Background()
+	s, base := newLoggedSQLiteStore(t)
+
+	w := tests.BuildMultiWorkload(t, 0x02, 0, 1)
+	w.StoreRoots(t, base, 6)
+
+	root := w.Roots[0]
+	answers, err := s.ParentOutputsForValidation(ctx, []utxo.Outpoint{{TxID: *root.TxIDChainHash(), Vout: 1}, {TxID: chainhash.Hash{0x0e}, Vout: 0}})
+	require.NoError(t, err)
+	require.Len(t, answers, 2)
+	require.Equal(t, utxo.ParentOutputNotMined, answers[0].Status)
+	require.Equal(t, root.Outputs[1].Satoshis, answers[0].Satoshis)
+	require.Equal(t, root.Outputs[1].LockingScript.Bytes(), answers[0].LockingScript.Bytes())
+	require.Equal(t, utxo.ParentOutputTxNotFound, answers[1].Status)
 }

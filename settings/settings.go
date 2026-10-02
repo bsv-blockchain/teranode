@@ -692,6 +692,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			CheckBlockSubtreesConcurrency:             getInt("subtreevalidation_check_block_subtrees_concurrency", 32, alternativeContext...),
 			PauseTimeout:                              getDuration("subtreevalidation_pauseTimeout", 5*time.Minute, alternativeContext...),
 			TxBatchSize:                               getInt("subtreevalidation_check_block_subtrees_tx_batch_size", 1048576, alternativeContext...),
+			SpendAndCreateMultiMaxTxs:                 getInt("subtreevalidation_spendAndCreateMultiMaxTxs", 1048576, alternativeContext...),
 			UseOrderedLevelAlgorithm:                  getBool("subtreevalidation_useOrderedLevelAlgorithm", true, alternativeContext...),
 			BlocksOnly:                                getBool("subtreevalidation_blocks_only", false, alternativeContext...),
 			TxPolicyRejectedCacheEnabled:              getBool("subtreevalidation_txPolicyRejectedCacheEnabled", true, alternativeContext...),

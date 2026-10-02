@@ -234,11 +234,27 @@ func (it *batchGetItem) complete(data batchGetItemData) {
 // batchOutpoint represents a single outpoint in a batch previous output operation.
 // It is used to efficiently retrieve previous output data for transaction inputs
 // by batching multiple requests together to optimize database access.
+//
+// An item is one of two kinds. A decorate item (PreviousOutputsDecorate) sets
+// outpoint, and the batch writes the parent's value and script into that input.
+// A parent-output item (ParentOutputsForValidation) sets parent instead, and the
+// batch writes its answer into answer, touching nothing the caller holds.
 type batchOutpoint struct {
-	outpoint  *bt.Input         // The previous output to retrieve data for
+	outpoint  *bt.Input         // decorate item: the input to fill from its previous output
+	parent    *utxo.Outpoint    // parent-output item: the outpoint to answer
+	answer    utxo.ParentOutput // parent-output item: written before complete, read after the group wait
 	group     *completion.Group // Shared completion group for the submitting decorate call
 	completed atomic.Bool       // guards exactly-once completion
 	result    error             // written by the CAS winner, after the CAS and before group.Done(); see complete
+}
+
+// parentTxID returns the txid of the parent this item reads.
+func (it *batchOutpoint) parentTxID() chainhash.Hash {
+	if it.parent != nil {
+		return it.parent.TxID
+	}
+
+	return *it.outpoint.PreviousTxIDChainHash()
 }
 
 // complete writes err into the item's result slot and marks the shared group's
@@ -1728,7 +1744,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 	// this is done by using a map of txHashes
 	uniqueTxHashes := make(map[chainhash.Hash]struct{})
 	for _, item := range batch {
-		uniqueTxHashes[*item.outpoint.PreviousTxIDChainHash()] = struct{}{}
+		uniqueTxHashes[item.parentTxID()] = struct{}{}
 	}
 
 	// Create a batch of records to read from the txHashes
@@ -1742,9 +1758,11 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 			return
 		}
 
-		// BlockHeights is read so external parents can be reconstructed with the
-		// era-aware unspendable rule keyed to their creation height.
-		bins := []fields.FieldName{fields.Version, fields.LockTime, fields.Inputs, fields.Outputs, fields.External, fields.BlockHeights}
+		// Only the outputs are ever used. BlockHeights is read so external parents
+		// can be reconstructed with the era-aware unspendable rule keyed to their
+		// creation height, and so parent-output items can report it. The parent's
+		// inputs, version and locktime are not read: nothing on this path uses them.
+		bins := []fields.FieldName{fields.Outputs, fields.External, fields.BlockHeights}
 		record := aerospike.NewBatchRead(policy, key, fields.FieldNamesToStrings(bins))
 
 		// Add to batch records
@@ -1764,6 +1782,12 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 	txs := make(map[chainhash.Hash]*bt.Tx, len(batchRecords))
 	txErrors := make(map[chainhash.Hash]error)
+	// Per parent: whether its output list came from an external blob, and the
+	// block heights recorded for it (nil when the bin could not be parsed; see
+	// heightErrors).
+	txExternal := make(map[chainhash.Hash]bool, len(batchRecords))
+	txHeights := make(map[chainhash.Hash][]uint32, len(batchRecords))
+	heightErrors := make(map[chainhash.Hash]error)
 
 	// Process the batch records
 	for idx, batchRecordIfc := range batchRecords {
@@ -1784,13 +1808,21 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 		var previousTx *bt.Tx
 
+		blockHeights, heightsErr := processBlockHeights(bins)
+		if heightsErr != nil {
+			heightErrors[previousTxHash] = heightsErr
+		} else {
+			txHeights[previousTxHash] = blockHeights
+		}
+
 		external, ok := bins[fields.External.String()].(bool)
 		if ok && external {
+			txExternal[previousTxHash] = true
+
 			// Resolve the parent's creation-height era so the reconstruction
 			// applies the same unspendable rule create used. A missing/empty
 			// BlockHeights (unmined parent) yields the Genesis activation height
 			// (post-Genesis), which only ever over-retains — never over-excludes.
-			blockHeights, _ := processBlockHeights(bins)
 			creationHeight := creationHeightFromBlockHeights(blockHeights, s.settings.ChainCfgParams.GenesisActivationHeight)
 
 			if previousTx, err = s.GetOutpointsFromExternalStore(s.ctx, previousTxHash, creationHeight); err != nil {
@@ -1799,7 +1831,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 				continue
 			}
 		} else {
-			previousTx, err = s.getTxFromBins(bins)
+			previousTx, err = outputsFromBins(bins)
 			if err != nil {
 				txErrors[previousTxHash] = classifyRecordError("invalid tx", err)
 
@@ -1812,9 +1844,19 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 	// Now we have all the txs, we can decorate the outpoints
 	for _, batchItem := range batch {
-		previousTx := txs[*batchItem.outpoint.PreviousTxIDChainHash()]
+		parentTxID := batchItem.parentTxID()
+
+		if batchItem.parent != nil {
+			batchItem.answer = parentOutputAnswer(batchItem.parent.Vout, txs[parentTxID], txErrors[parentTxID],
+				txExternal[parentTxID], txHeights[parentTxID], heightErrors[parentTxID])
+			batchItem.complete(nil)
+
+			continue
+		}
+
+		previousTx := txs[parentTxID]
 		if previousTx == nil {
-			if err, ok := txErrors[*batchItem.outpoint.PreviousTxIDChainHash()]; ok {
+			if err, ok := txErrors[parentTxID]; ok {
 				batchItem.complete(err)
 			} else {
 				batchItem.complete(errors.NewTxNotFoundError("previous tx not found: %v", batchItem.outpoint.PreviousTxID))

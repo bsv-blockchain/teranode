@@ -56,7 +56,7 @@ func Test_getUtxoBlockHeightsAndExtendTx_Prefetched(t *testing.T) {
 	require.Equal(t, []uint32{125, unconfirmedParentHeight, 768}, utxoHeights,
 		"prefetched heights must match the per-parent store path exactly")
 
-	mockUtxoStore.AssertNotCalled(t, "Get", mock.Anything, mock.Anything, mock.Anything)
+	mockUtxoStore.AssertNotCalled(t, "ParentOutputsForValidation", mock.Anything, mock.Anything)
 }
 
 // Test_getUtxoBlockHeightsAndExtendTx_PartialPrefetchFallsBackToStore proves the
@@ -86,73 +86,38 @@ func Test_getUtxoBlockHeightsAndExtendTx_PartialPrefetchFallsBackToStore(t *test
 	v := &Validator{settings: settings.NewSettings(), utxoStore: mockUtxoStore}
 
 	// Only parent1 should ever be read from the store.
-	mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
-		return hash.IsEqual(parent1)
-	}), mock.Anything).Return(&meta.Data{BlockHeights: []uint32{}, Tx: prefetchParentTx(2000000)}, nil).Once()
+	mockUtxoStore.On("ParentOutputsForValidation", mock.Anything, mock.MatchedBy(func(ops []utxostore.Outpoint) bool {
+		return len(ops) == 1 && ops[0].TxID.IsEqual(parent1)
+	})).Return([]utxostore.ParentOutput{{Status: utxostore.ParentOutputNotMined, Satoshis: 2000000, LockingScript: bscript.NewFromBytes([]byte{0x51})}}, nil).Once()
 
 	utxoHeights, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), prefetched)
 	require.NoError(t, err)
 
 	require.Equal(t, []uint32{125, unconfirmedParentHeight, 768}, utxoHeights)
 	// parent0 and parent2 came from the prefetch; only parent1 hit the store.
-	mockUtxoStore.AssertNumberOfCalls(t, "Get", 1)
+	mockUtxoStore.AssertNumberOfCalls(t, "ParentOutputsForValidation", 1)
 }
 
-// Test_getUtxoBlockHeightAndExtendForParentTx_InputIndexOutOfBounds guards the
-// bounds check: an input index >= len(tx.Inputs) must return an out-of-bounds
-// error rather than panic. The check is hoisted to the top of the function so
-// it fires before the utxoHeights[idx] height-write loops (utxoHeights is sized
-// to len(tx.Inputs) by the caller, so an out-of-range idx would otherwise panic
-// there, before the extend path).
-func Test_getUtxoBlockHeightAndExtendForParentTx_InputIndexOutOfBounds(t *testing.T) {
-	ctx := context.Background()
-
-	// Child tx with a single input, so len(tx.Inputs) == 1.
-	childTx := &bt.Tx{Inputs: []*bt.Input{{}}}
-
-	// utxoHeights sized exactly as the real caller does
-	// (make([]uint32, len(tx.Inputs))), so the test exercises the true call
-	// shape rather than an artificially oversized slice.
-	utxoHeights := make([]uint32, len(childTx.Inputs))
-
-	// Parent supplied via prefetch (Tx non-nil so the extend path would be
-	// reached) with a recorded block height, so no store Get is needed.
-	parentHash := chainhash.Hash{}
-	prefetched := map[chainhash.Hash]*meta.Data{
-		parentHash: {BlockHeights: []uint32{100}, Tx: &bt.Tx{Outputs: []*bt.Output{{}}}},
-	}
-
-	v := &Validator{}
-
-	// idx == len(childTx.Inputs) would panic in the height-write loop
-	// (utxoHeights[idx]) without the up-front guard.
-	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentHash, []int{1}, utxoHeights, childTx, prefetched)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "out of bounds")
-}
-
-// Test_getUtxoBlockHeightAndExtendForParentTx_VoutOutOfRange guards the extend
+// Test_getUtxoBlockHeightsAndExtendTx_PrefetchedVoutOutOfRange guards the extend
 // path against an out-of-range PreviousTxOutIndex. The vout comes from the
 // (untrusted) child transaction; a raw tx that references a real parent but a
 // vout beyond that parent's output count must be rejected with a clean error
-// rather than panicking on txMeta.Tx.Outputs[vout] and crashing the validator.
-func Test_getUtxoBlockHeightAndExtendForParentTx_VoutOutOfRange(t *testing.T) {
+// rather than panicking on the parent's Outputs[vout].
+func Test_getUtxoBlockHeightsAndExtendTx_PrefetchedVoutOutOfRange(t *testing.T) {
 	ctx := context.Background()
 
-	// Child tx with a single, validly-indexed input (idx 0) whose
-	// PreviousTxOutIndex points past the parent's outputs.
+	parentHash := chainhash.Hash{}
 	childTx := &bt.Tx{Inputs: []*bt.Input{{PreviousTxOutIndex: 99}}}
-	utxoHeights := make([]uint32, len(childTx.Inputs))
+	require.NoError(t, childTx.Inputs[0].PreviousTxIDAdd(&parentHash))
 
 	// Parent exists and is confirmed, but has only 2 outputs (vouts 0 and 1).
-	parentHash := chainhash.Hash{}
 	prefetched := map[chainhash.Hash]*meta.Data{
 		parentHash: {BlockHeights: []uint32{100}, Tx: &bt.Tx{Outputs: []*bt.Output{{}, {}}}},
 	}
 
 	v := &Validator{}
 
-	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentHash, []int{0}, utxoHeights, childTx, prefetched)
+	_, err := v.getUtxoBlockHeightsAndExtendTx(ctx, childTx, "child", prefetched)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "has no output for index")
 }

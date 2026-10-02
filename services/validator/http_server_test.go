@@ -44,23 +44,23 @@ func TestHTTPEndpoints(t *testing.T) {
 		// Create a mock UTXO store with expectations
 		utxoMock := &utxo.MockUtxostore{}
 		utxoMock.On("GetBlockState").Return(utxo.BlockState{Height: 1000, MedianTime: 1625097600})
-		utxoMock.On("PreviousOutputsDecorate", mock.Anything, mock.Anything).Return(nil)
 
-		// Add expectation for the Get method which may be called regardless of skipUtxoCreation.
-		// BlockHeights must be non-empty so the validator does not take the fallback path
+		// Add expectation for the parent read, which may happen regardless of skipUtxoCreation.
+		// The parent must be reported as mined so the validator does not take the fallback path
 		// (which stamps the unconfirmedParentHeight sentinel — BDK then rejects with
 		// bad-txns-unconfirmed-input-in-block in consensus mode); this mock represents
 		// a parent that is already confirmed in a real block.
 		metaData := &meta.Data{
-			Fee:          32279815860,
-			SizeInBytes:  245,
-			BlockHeights: []uint32{999},
-			// The validator re-extends from the parent's own outputs rather than
-			// trusting the ones the submitter supplied (GHSA-v76m-6vc7-g7c7), so
-			// the mocked parent must carry the output sampleTxHex spends.
-			Tx: sampleTxParent(),
+			Fee:         32279815860,
+			SizeInBytes: 245,
 		}
-		utxoMock.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(metaData, nil)
+		// The parent read is one ParentOutputsForValidation call per transaction.
+		utxoMock.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return([]utxo.ParentOutput{{
+			Status:        utxo.ParentOutputMined,
+			Height:        999,
+			Satoshis:      sampleTxParent().Outputs[1].Satoshis,
+			LockingScript: sampleTxParent().Outputs[1].LockingScript,
+		}}, nil)
 
 		// SpendAndCreate must return the transaction's metadata: without the
 		// skipUtxoCreation option the validator no longer derives it from the
@@ -106,23 +106,23 @@ func TestHTTPEndpoints(t *testing.T) {
 		// Create a mock UTXO store
 		utxoMock := &utxo.MockUtxostore{}
 		utxoMock.On("GetBlockState").Return(utxo.BlockState{Height: 1000, MedianTime: 1625097600})
-		utxoMock.On("PreviousOutputsDecorate", mock.Anything, mock.Anything).Return(nil)
 
-		// Add expectation for the Get method. BlockHeights must be non-empty so the
+		// Add expectation for the parent read. The parent must be reported as mined so the
 		// validator does not take the fallback path (which stamps the
 		// unconfirmedParentHeight sentinel — BDK then rejects with
 		// bad-txns-unconfirmed-input-in-block in consensus mode); this mock represents
 		// a parent that is already confirmed in a real block.
 		metaData := &meta.Data{
-			Fee:          32279815860,
-			SizeInBytes:  245,
-			BlockHeights: []uint32{999},
-			// The validator re-extends from the parent's own outputs rather than
-			// trusting the ones the submitter supplied (GHSA-v76m-6vc7-g7c7), so
-			// the mocked parent must carry the output sampleTxHex spends.
-			Tx: sampleTxParent(),
+			Fee:         32279815860,
+			SizeInBytes: 245,
 		}
-		utxoMock.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(metaData, nil)
+		// The parent read is one ParentOutputsForValidation call per transaction.
+		utxoMock.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return([]utxo.ParentOutput{{
+			Status:        utxo.ParentOutputMined,
+			Height:        999,
+			Satoshis:      sampleTxParent().Outputs[1].Satoshis,
+			LockingScript: sampleTxParent().Outputs[1].LockingScript,
+		}}, nil)
 
 		// SpendAndCreate must return the transaction's metadata — see the single-tx
 		// case above for why.

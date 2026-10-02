@@ -2111,6 +2111,16 @@ func (b *Block) getAndValidateSubtreesBound(ctx context.Context, logger ulogger.
 		func(first, last *subtreepkg.Subtree) error { return b.checkBodyBoundToHeader(blockLabel, first, last) }, nil)
 }
 
+// CheckBodyBoundToHeader checks the block's subtree list against the header's
+// merkle root when only the first and last subtrees' node lists are at hand,
+// with the coinbase substituted into the first. Every other subtree contributes
+// only its key, so the caller must have bound each node list to its key when
+// it obtained it. An unbound or repeated subtree list is BlockCorrupt. Catch-up uses it to
+// prove the body is the miner's committed body before writing anything.
+func (b *Block) CheckBodyBoundToHeader(first, last *subtreepkg.Subtree) error {
+	return b.checkBodyBoundToHeader(b.Hash().String(), first, last)
+}
+
 // checkBodyBoundToHeader is CheckMerkleRoot for a body of which only the first
 // and last subtrees are loaded. The middle entries contribute their keys, which
 // every loaded subtree is later bound to, and their lengths are checked by

@@ -2254,7 +2254,21 @@ func isDeadlock(err error) bool {
 	if errors.As(err, &pgErr) && pgErr.Code == usql.PgErrDeadlockDetected {
 		return true
 	}
-	return strings.Contains(err.Error(), "database is locked")
+	// SQLite's shared cache, which sqlitememory uses, locks whole tables and
+	// reports a lock cycle between connections as SQLITE_LOCKED ("database table
+	// is locked: database is deadlocked"), not SQLITE_BUSY. Concurrent validation
+	// reads form that cycle with a spend transaction often enough to fail
+	// Test_handleMultipleTx in services/propagation once the validator reads every
+	// parent in one joined statement. SQLite's remedy is to roll back and retry,
+	// which is what a true return here does.
+	var sqliteErr *sqlite.Error
+	if errors.As(err, &sqliteErr) {
+		if code := sqliteErr.Code() & 0xff; code == sqlite3.SQLITE_BUSY || code == sqlite3.SQLITE_LOCKED {
+			return true
+		}
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "database table is locked")
 }
 
 // sendSpendBatch is the batcher callback that processes a batch of spend operations
@@ -2310,6 +2324,26 @@ func (s *Store) trySendSpendBatch(batch []*batchSpend) (retryable bool) {
 		return s.trySendSpendBatchBulk(batch)
 	}
 	return s.trySendSpendBatchPerRow(batch)
+}
+
+// spendUpdateRow is one output row the bulk spend UPDATE sets spending data on.
+type spendUpdateRow struct {
+	batchIdx      int
+	transactionID int
+	vout          uint32
+	spendingData  []byte
+}
+
+// sortSpendUpdateRows orders rows by (transaction_id, idx), the order every bulk
+// spend takes its row locks in.
+func sortSpendUpdateRows(rows []spendUpdateRow) {
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].transactionID != rows[j].transactionID {
+			return rows[i].transactionID < rows[j].transactionID
+		}
+
+		return rows[i].vout < rows[j].vout
+	})
 }
 
 // spendSelectResult holds the result of a bulk SELECT for a single spend item.
@@ -2400,13 +2434,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 
 	// Phase 2: Validate each item and build the bulk UPDATE set
 	validationErrors := make(map[int]error, len(batch))
-	type updateItem struct {
-		batchIdx      int
-		transactionID int
-		vout          uint32
-		spendingData  []byte
-	}
-	var toUpdate []updateItem
+	var toUpdate []spendUpdateRow
 	// Parent tx IDs from idempotent re-spends (output already carries matching
 	// spending_data). The CTE-based DAH recompute below only covers parents
 	// touched by the bulk UPDATE, so it would miss these. Recording them here
@@ -2478,7 +2506,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			continue
 		}
 
-		toUpdate = append(toUpdate, updateItem{
+		toUpdate = append(toUpdate, spendUpdateRow{
 			batchIdx:      i,
 			transactionID: r.transactionID,
 			vout:          spend.Vout,
@@ -2501,7 +2529,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 		spendingData []byte
 	}
 	seenKeys := make(map[utxoKey]seenEntry, len(toUpdate)) // key -> first entry
-	var dedupedUpdate []updateItem
+	var dedupedUpdate []spendUpdateRow
 	for _, u := range toUpdate {
 		key := utxoKey{u.transactionID, u.vout}
 		if entry, seen := seenKeys[key]; seen {
@@ -2522,6 +2550,14 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			dedupedUpdate = append(dedupedUpdate, u)
 		}
 	}
+
+	// Take the rows in one consistent order, so two batches that update
+	// overlapping outputs lock them in the same order instead of each waiting on
+	// the other. Postgres does not promise to visit an UPDATE ... FROM (VALUES)
+	// in list order, so this makes a deadlock less likely rather than impossible,
+	// and sendSpendBatch keeps its deadlock retries. The dedup above has already
+	// settled first-arrival-wins, so sorting here changes no outcome.
+	sortSpendUpdateRows(dedupedUpdate)
 
 	// Bulk UPDATE with optimistic locking.
 	// When retention > 0, the UPDATE is wrapped in a CTE that also runs a DAH

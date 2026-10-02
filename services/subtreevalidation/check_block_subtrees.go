@@ -90,142 +90,9 @@ func (u *Server) loadSubtreeBatch(ctx, fetchCtx context.Context, request *subtre
 		subtreeIdx := subtreeIdx
 
 		g.Go(func() (err error) {
-			// A subtree may be available locally under either:
-			//   - FileTypeSubtreeToCheck — fetched from a peer, pending validation
-			//   - FileTypeSubtree        — already validated (e.g. legacy catch-up's
-			//                               quickValidationMode validated txs inline
-			//                               before writing the subtree)
-			// We must consult both before falling back to an HTTP fetch. Otherwise
-			// CheckBlockSubtrees will try to HTTP-download a subtree we already have
-			// — and for baseURL="legacy" the synthetic URL has no scheme, so the
-			// request fails outright.
-			localFileType, localExists, err := u.findLocalSubtreeFile(gCtx, subtreeHash)
+			subtreeToCheck, err := u.getSubtreeToCheck(gCtx, request, subtreeHash, peerID, dah)
 			if err != nil {
-				return errors.NewStorageError("[CheckBlockSubtrees][%s] failed to check if subtree exists in store", subtreeHash.String(), err)
-			}
-
-			var subtreeToCheck *subtreepkg.Subtree
-
-			if localExists {
-				// read from whichever local file we found
-				subtreeReader, err := u.subtreeStore.GetIoReader(gCtx, subtreeHash[:], localFileType)
-				if err != nil {
-					return errors.NewStorageError("[CheckBlockSubtrees][%s] failed to get subtree from store", subtreeHash.String(), err)
-				}
-				defer subtreeReader.Close()
-
-				// Use pooled bufio.Reader to reduce allocations (eliminates 50% of GC pressure)
-				bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
-				bufferedReader.Reset(subtreeReader)
-				defer func() {
-					bufferedReader.Reset(nil) // Clear reference before returning to pool
-					bufioReaderPool.Put(bufferedReader)
-				}()
-
-				subtreeToCheck, err = subtreepkg.NewSubtreeFromReader(bufferedReader)
-				if err != nil {
-					return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to deserialize subtree", subtreeHash.String(), err)
-				}
-			} else {
-				// get the subtree from the peer
-				url, joinErr := util.JoinPeerURL(request.BaseUrl, "subtree", subtreeHash.String())
-				if joinErr != nil {
-					return errors.NewServiceError("[CheckBlockSubtrees][%s] invalid peer base URL", subtreeHash.String(), joinErr)
-				}
-
-				// Bound the body at the receive-side policy cap (MaxIncomingSubtreeBytes) so a
-				// malicious peer can't OOM us by streaming oversized responses. This must be
-				// independent of local BlockAssembly.MaximumMerkleItemsPerSubtree, which only
-				// controls what *this node* assembles; peers may legitimately produce larger subtrees.
-				maxSubtreeBytes := u.settings.SubtreeValidation.MaxIncomingSubtreeBytes
-
-				subtreeNodeBytes, err := util.DoHTTPRequestBounded(gCtx, url, maxSubtreeBytes)
-				if err != nil {
-					return errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree from %s", subtreeHash.String(), url, err)
-				}
-
-				// Track bytes downloaded from peer
-				if u.p2pClient != nil && peerID != "" {
-					if err := u.p2pClient.RecordBytesDownloaded(gCtx, peerID, uint64(len(subtreeNodeBytes))); err != nil {
-						u.logger.Warnf("[CheckBlockSubtrees][%s] failed to record %d bytes downloaded from peer %s: %v", subtreeHash.String(), len(subtreeNodeBytes), peerID, err)
-					}
-				}
-
-				// Bound the leaf count by the receive-side cap (same rationale as the body cap above):
-				// peers may legitimately produce subtrees larger than the local assembly policy. The
-				// bounded HTTP read already enforces this, but we keep the explicit check as a guard
-				// before subtreepkg.NewIncompleteTreeByLeafCount allocates against the count.
-				leafCount := len(subtreeNodeBytes) / chainhash.HashSize
-				maxIncomingLeaves := int(maxSubtreeBytes / int64(chainhash.HashSize))
-				if err := validateSubtreeLeafCount(subtreeHash, leafCount, maxIncomingLeaves); err != nil {
-					return err
-				}
-
-				subtreeToCheck, err = subtreepkg.NewIncompleteTreeByLeafCount(leafCount)
-				if err != nil {
-					return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to create subtree structure", subtreeHash.String(), err)
-				}
-
-				var nodeHash chainhash.Hash
-				for i := 0; i < len(subtreeNodeBytes)/chainhash.HashSize; i++ {
-					copy(nodeHash[:], subtreeNodeBytes[i*chainhash.HashSize:(i+1)*chainhash.HashSize])
-
-					if nodeHash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-						if err = subtreeToCheck.AddCoinbaseNode(); err != nil {
-							return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to add coinbase node to subtree", subtreeHash.String(), err)
-						}
-					} else {
-						if err = subtreeToCheck.AddNode(nodeHash, 0, 0); err != nil {
-							return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to add node to subtree", subtreeHash.String(), err)
-						}
-					}
-				}
-
-				if !subtreeHash.Equal(*subtreeToCheck.RootHash()) {
-					return errors.NewProcessingError("[CheckBlockSubtrees][%s] subtree root hash mismatch: %s", subtreeHash.String(), subtreeToCheck.RootHash().String())
-				}
-
-				subtreeBytes, err := subtreeToCheck.Serialize()
-				if err != nil {
-					return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to serialize subtree", subtreeHash.String(), err)
-				}
-
-				// Store the subtreeToCheck marker for later processing, with a DAH of
-				// current block height + subtree-validation retention (set above).
-				if err = u.subtreeStore.Set(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck, subtreeBytes, options.WithDeleteAt(dah)); err != nil {
-					// ErrBlobAlreadyExists is benign HERE: the filename is the merkle
-					// root of the nodes (verified above), so an existing file holds the
-					// same transaction list, which is all this call site needs. This
-					// happens when the same block is validated concurrently (announced by
-					// two peers) or retried after a partial attempt — racing on this
-					// write must not fail the block. Mirrors the same handling for
-					// FileTypeSubtree/FileTypeSubtreeMeta in ValidateSubtreeInternal.
-					//
-					// Do NOT generalise this to "the file is content-addressed, so the
-					// bytes are identical". The ConflictingNodes trailer sits after the
-					// merkle-committed nodes and is NOT covered by the root hash, and
-					// markConflictingTxsInSubtrees rewrites it in place afterwards. Two
-					// files under one subtree key can therefore disagree about which
-					// transactions are conflicting — which is why that trailer is treated
-					// as a candidate index and re-checked against the candidate chain,
-					// never trusted as a per-block fact.
-					if errors.Is(err, errors.ErrBlobAlreadyExists) {
-						u.logger.Warnf("[CheckBlockSubtrees][%s] subtreeToCheck already exists in store", subtreeHash.String())
-					} else {
-						return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to store subtreeToCheck", subtreeHash.String(), err)
-					}
-				}
-			}
-
-			// Reject a zero-node subtree however it was obtained (bitcoin-sv/teranode#4692). The fetch
-			// branch above already errors on a zero-leaf count before storing, but a zero-node blob
-			// already sitting on disk reaches this point through the local-read branch with no other
-			// check. A subtree always carries at least one node, so an empty one here is junk; abort
-			// this subtree's worker so the block never reaches block.Valid with an empty subtree. This
-			// keeps the model-side "emptied first subtree" case reachable only via our own concurrent
-			// node release, not via peer-supplied data.
-			if subtreeToCheck.Length() == 0 {
-				return errors.NewProcessingError("[CheckBlockSubtrees][%s] subtree has zero nodes", subtreeHash.String())
+				return err
 			}
 
 			// Adaptive-fetch gate: when optimistic, skip subtreeData entirely.
@@ -384,6 +251,153 @@ func (u *Server) loadSubtreeBatch(ctx, fetchCtx context.Context, request *subtre
 	}
 
 	return allTransactions, batchArenas, nil
+}
+
+// getSubtreeToCheck returns the node list of subtreeHash: from a local subtree
+// file when one exists (FileTypeSubtreeToCheck or FileTypeSubtree), otherwise
+// fetched from the peer, checked against its root, and stored as
+// FileTypeSubtreeToCheck with the given DAH. A subtree with zero nodes is
+// refused however it was obtained.
+func (u *Server) getSubtreeToCheck(ctx context.Context, request *subtreevalidation_api.CheckBlockSubtreesRequest, subtreeHash chainhash.Hash, peerID string, dah uint32) (*subtreepkg.Subtree, error) {
+	// A subtree may be available locally under either:
+	//   - FileTypeSubtreeToCheck — fetched from a peer, pending validation
+	//   - FileTypeSubtree        — already validated (e.g. legacy catch-up's
+	//                               quickValidationMode validated txs inline
+	//                               before writing the subtree)
+	// We must consult both before falling back to an HTTP fetch. Otherwise
+	// CheckBlockSubtrees will try to HTTP-download a subtree we already have
+	// — and for baseURL="legacy" the synthetic URL has no scheme, so the
+	// request fails outright.
+	localFileType, localExists, err := u.findLocalSubtreeFile(ctx, subtreeHash)
+	if err != nil {
+		return nil, errors.NewStorageError("[CheckBlockSubtrees][%s] failed to check if subtree exists in store", subtreeHash.String(), err)
+	}
+
+	var subtreeToCheck *subtreepkg.Subtree
+
+	if localExists {
+		// read from whichever local file we found
+		subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], localFileType)
+		if err != nil {
+			return nil, errors.NewStorageError("[CheckBlockSubtrees][%s] failed to get subtree from store", subtreeHash.String(), err)
+		}
+		defer subtreeReader.Close()
+
+		// Use pooled bufio.Reader to reduce allocations (eliminates 50% of GC pressure)
+		bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
+		bufferedReader.Reset(subtreeReader)
+		defer func() {
+			bufferedReader.Reset(nil) // Clear reference before returning to pool
+			bufioReaderPool.Put(bufferedReader)
+		}()
+
+		subtreeToCheck, err = subtreepkg.NewSubtreeFromReader(bufferedReader)
+		if err != nil {
+			return nil, errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to deserialize subtree", subtreeHash.String(), err)
+		}
+	} else {
+		// get the subtree from the peer
+		url, joinErr := util.JoinPeerURL(request.BaseUrl, "subtree", subtreeHash.String())
+		if joinErr != nil {
+			return nil, errors.NewServiceError("[CheckBlockSubtrees][%s] invalid peer base URL", subtreeHash.String(), joinErr)
+		}
+
+		// Bound the body at the receive-side policy cap (MaxIncomingSubtreeBytes) so a
+		// malicious peer can't OOM us by streaming oversized responses. This must be
+		// independent of local BlockAssembly.MaximumMerkleItemsPerSubtree, which only
+		// controls what *this node* assembles; peers may legitimately produce larger subtrees.
+		maxSubtreeBytes := u.settings.SubtreeValidation.MaxIncomingSubtreeBytes
+
+		subtreeNodeBytes, err := util.DoHTTPRequestBounded(ctx, url, maxSubtreeBytes)
+		if err != nil {
+			return nil, errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree from %s", subtreeHash.String(), url, err)
+		}
+
+		// Track bytes downloaded from peer
+		if u.p2pClient != nil && peerID != "" {
+			if err := u.p2pClient.RecordBytesDownloaded(ctx, peerID, uint64(len(subtreeNodeBytes))); err != nil {
+				u.logger.Warnf("[CheckBlockSubtrees][%s] failed to record %d bytes downloaded from peer %s: %v", subtreeHash.String(), len(subtreeNodeBytes), peerID, err)
+			}
+		}
+
+		// Bound the leaf count by the receive-side cap (same rationale as the body cap above):
+		// peers may legitimately produce subtrees larger than the local assembly policy. The
+		// bounded HTTP read already enforces this, but we keep the explicit check as a guard
+		// before subtreepkg.NewIncompleteTreeByLeafCount allocates against the count.
+		leafCount := len(subtreeNodeBytes) / chainhash.HashSize
+		maxIncomingLeaves := int(maxSubtreeBytes / int64(chainhash.HashSize))
+		if err := validateSubtreeLeafCount(subtreeHash, leafCount, maxIncomingLeaves); err != nil {
+			return nil, err
+		}
+
+		subtreeToCheck, err = subtreepkg.NewIncompleteTreeByLeafCount(leafCount)
+		if err != nil {
+			return nil, errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to create subtree structure", subtreeHash.String(), err)
+		}
+
+		var nodeHash chainhash.Hash
+		for i := 0; i < len(subtreeNodeBytes)/chainhash.HashSize; i++ {
+			copy(nodeHash[:], subtreeNodeBytes[i*chainhash.HashSize:(i+1)*chainhash.HashSize])
+
+			if nodeHash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+				if err = subtreeToCheck.AddCoinbaseNode(); err != nil {
+					return nil, errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to add coinbase node to subtree", subtreeHash.String(), err)
+				}
+			} else {
+				if err = subtreeToCheck.AddNode(nodeHash, 0, 0); err != nil {
+					return nil, errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to add node to subtree", subtreeHash.String(), err)
+				}
+			}
+		}
+
+		if !subtreeHash.Equal(*subtreeToCheck.RootHash()) {
+			return nil, errors.NewProcessingError("[CheckBlockSubtrees][%s] subtree root hash mismatch: %s", subtreeHash.String(), subtreeToCheck.RootHash().String())
+		}
+
+		subtreeBytes, err := subtreeToCheck.Serialize()
+		if err != nil {
+			return nil, errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to serialize subtree", subtreeHash.String(), err)
+		}
+
+		// Store the subtreeToCheck marker for later processing, with a DAH of
+		// current block height + subtree-validation retention (set above).
+		if err = u.subtreeStore.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck, subtreeBytes, options.WithDeleteAt(dah)); err != nil {
+			// ErrBlobAlreadyExists is benign HERE: the filename is the merkle
+			// root of the nodes (verified above), so an existing file holds the
+			// same transaction list, which is all this call site needs. This
+			// happens when the same block is validated concurrently (announced by
+			// two peers) or retried after a partial attempt — racing on this
+			// write must not fail the block. Mirrors the same handling for
+			// FileTypeSubtree/FileTypeSubtreeMeta in ValidateSubtreeInternal.
+			//
+			// Do NOT generalise this to "the file is content-addressed, so the
+			// bytes are identical". The ConflictingNodes trailer sits after the
+			// merkle-committed nodes and is NOT covered by the root hash, and
+			// markConflictingTxsInSubtrees rewrites it in place afterwards. Two
+			// files under one subtree key can therefore disagree about which
+			// transactions are conflicting — which is why that trailer is treated
+			// as a candidate index and re-checked against the candidate chain,
+			// never trusted as a per-block fact.
+			if errors.Is(err, errors.ErrBlobAlreadyExists) {
+				u.logger.Warnf("[CheckBlockSubtrees][%s] subtreeToCheck already exists in store", subtreeHash.String())
+			} else {
+				return nil, errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to store subtreeToCheck", subtreeHash.String(), err)
+			}
+		}
+	}
+
+	// Reject a zero-node subtree however it was obtained (bitcoin-sv/teranode#4692). The fetch
+	// branch above already errors on a zero-leaf count before storing, but a zero-node blob
+	// already sitting on disk reaches this point through the local-read branch with no other
+	// check. A subtree always carries at least one node, so an empty one here is junk; abort
+	// this subtree's worker so the block never reaches block.Valid with an empty subtree. This
+	// keeps the model-side "emptied first subtree" case reachable only via our own concurrent
+	// node release, not via peer-supplied data.
+	if subtreeToCheck.Length() == 0 {
+		return nil, errors.NewProcessingError("[CheckBlockSubtrees][%s] subtree has zero nodes", subtreeHash.String())
+	}
+
+	return subtreeToCheck, nil
 }
 
 func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidation_api.CheckBlockSubtreesRequest) (*subtreevalidation_api.CheckBlockSubtreesResponse, error) {
@@ -569,6 +583,18 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 
 	dah := u.utxoStore.GetBlockHeight() + u.settings.GetSubtreeValidationBlockHeightRetention()
 
+	// During catch-up above the checkpoint, with the validator in this process,
+	// each load batch is checked on all cores and written with
+	// SpendAndCreateMulti (processTransactionsBatched). That path writes before
+	// block.Valid runs, so it first proves the body is the one the header
+	// commits to.
+	checker, batched := u.batchChecker(*currentState, block.Height)
+	if batched {
+		if err = u.checkBlockBodyBound(ctx, request, block, peerID, dah); err != nil {
+			return nil, errors.WrapGRPC(err)
+		}
+	}
+
 	// Calculate batch size dynamically based on configured transaction batch size
 	totalSubtrees := len(missingSubtrees)
 	totalProcessedTxs := 0
@@ -644,7 +670,14 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 			u.logger.Debugf("[CheckBlockSubtrees] Batch %d/%d loaded %d transactions for block %s, now processing", batchIdx+1, numBatches, batchTxCount, block.Hash().String())
 
 			if batchTxCount > 0 {
-				if procErr := u.processTransactionsInLevels(ctx, allTransactions, *block.Hash(), chainhash.Hash{}, block.Height, candidateBlockTime, candidateParentMedianTime, blockIds, addTXToBlockAssembly); procErr != nil {
+				var procErr error
+				if batched {
+					procErr = u.processTransactionsBatched(ctx, checker, allTransactions, *block.Hash(), block.Height, candidateBlockTime, candidateParentMedianTime, blockIds)
+				} else {
+					procErr = u.processTransactionsInLevels(ctx, allTransactions, *block.Hash(), chainhash.Hash{}, block.Height, candidateBlockTime, candidateParentMedianTime, blockIds, addTXToBlockAssembly)
+				}
+
+				if procErr != nil {
 					return errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to process transactions in batch %d", batchIdx+1, procErr)
 				}
 

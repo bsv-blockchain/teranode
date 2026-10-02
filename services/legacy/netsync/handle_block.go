@@ -623,7 +623,15 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 
 	// In quickValidationMode the transactions and subtree files have already been
 	// produced locally, so we can skip the round-trip through subtreeValidation.
-	if !quickValidationMode {
+	//
+	// While the node is catching up, full validation is left to block validation:
+	// its CheckBlockSubtrees finds these subtrees still unchecked and validates the
+	// whole block through the batch path (checks on all cores, then
+	// SpendAndCreateMulti), the same path peer-to-peer catch-up takes, followed by
+	// the per-subtree validation this loop would have run. Checking each subtree
+	// here first would validate every transaction one level at a time and leave
+	// CheckBlockSubtrees nothing to do.
+	if !quickValidationMode && !sm.blockValidationChecksSubtrees(ctx) {
 		for i := 0; i < numSubtrees; i++ {
 			if err = sm.checkSubtreeFromBlock(ctx, bi, slices[i]); err != nil {
 				return nil, nil, 0, err
@@ -638,6 +646,25 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	}
 
 	return subtrees, subtreeSlices, blockID, nil
+}
+
+// blockValidationChecksSubtrees reports whether a fully validated block's
+// subtrees are left for block validation's CheckBlockSubtrees rather than
+// checked here one at a time. Only while the node is catching up: outside
+// CATCHINGBLOCKS the per-subtree check stays, including in IDLE, which the
+// cached FSM state also reports when it simply does not know the state, and when
+// the state cannot be read at all.
+func (sm *SyncManager) blockValidationChecksSubtrees(ctx context.Context) bool {
+	if sm.blockchainClient == nil {
+		return false
+	}
+
+	state, err := sm.blockchainClient.GetFSMCurrentState(ctx)
+	if err != nil || state == nil {
+		return false
+	}
+
+	return *state == blockchain.FSMStateCATCHINGBLOCKS
 }
 
 // quickValidationAllowed reports whether this block may skip script validation,
