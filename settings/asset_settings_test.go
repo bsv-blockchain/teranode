@@ -94,3 +94,114 @@ func TestAssetSettings_LoaderReadsAllRateLimitKeys(t *testing.T) {
 		})
 	}
 }
+
+// TestAssetSettings_BatchAndResponseBudgets is the P0 prep PR guard: every new
+// admission-budget key added ahead of the follow-up security PRs must (a) parse
+// into the struct via NewSettings(), the same class of bug as above, and (b)
+// default to today's behaviour (unlimited/fail-open/verbose) so this PR is a
+// pure no-op at runtime.
+func TestAssetSettings_BatchAndResponseBudgets(t *testing.T) {
+	t.Run("defaults preserve current behaviour", func(t *testing.T) {
+		s := NewSettings()
+
+		require.Equal(t, 0, s.Asset.MaxBatchRecords)
+		require.Equal(t, int64(0), s.Asset.MaxBatchResponseBytes)
+		require.Equal(t, 0, s.Asset.MaxUTXOsPerTx)
+		require.Equal(t, 0, s.Asset.MaxBlockHeaders)
+		require.Equal(t, 0, s.Asset.MaxLastNBlocks)
+		require.Equal(t, 0, s.Asset.MaxNBlocks)
+		require.False(t, s.Asset.RequireAuthCredentials)
+		require.False(t, s.Asset.SecureCookies)
+		require.Equal(t, "", s.Asset.CORSAllowedOrigins)
+		require.False(t, s.Asset.EnforcePostAuth)
+		require.Equal(t, 0, s.Asset.MaxWebsocketConnections)
+		require.Equal(t, int64(0), s.Asset.WebsocketReadLimit)
+		require.Equal(t, 0, s.Asset.SubtreeStreamConcurrency)
+		require.True(t, s.Asset.PublicErrorDetail)
+		require.True(t, s.Asset.PublicHealthDetail)
+		require.False(t, s.Asset.HealthStrictStatus)
+		require.True(t, s.Asset.PublicPeersDetail)
+		require.True(t, s.Asset.TxMetaRawEnabled)
+		require.Equal(t, 0, s.Asset.MaxBlockGraphPoints)
+		require.Equal(t, 0, s.Asset.MaxLocatorWalkDepth)
+	})
+
+	type kv struct {
+		key      string
+		override string
+		check    func(t *testing.T, s *Settings)
+	}
+
+	cases := []kv{
+		{"asset_maxBatchRecords", "5000", func(t *testing.T, s *Settings) {
+			require.Equal(t, 5000, s.Asset.MaxBatchRecords)
+		}},
+		{"asset_maxBatchResponseBytes", "104857600", func(t *testing.T, s *Settings) {
+			require.Equal(t, int64(104857600), s.Asset.MaxBatchResponseBytes)
+		}},
+		{"asset_maxUTXOsPerTx", "1000", func(t *testing.T, s *Settings) {
+			require.Equal(t, 1000, s.Asset.MaxUTXOsPerTx)
+		}},
+		{"asset_maxBlockHeaders", "2000", func(t *testing.T, s *Settings) {
+			require.Equal(t, 2000, s.Asset.MaxBlockHeaders)
+		}},
+		{"asset_maxLastNBlocks", "500", func(t *testing.T, s *Settings) {
+			require.Equal(t, 500, s.Asset.MaxLastNBlocks)
+		}},
+		{"asset_maxNBlocks", "500", func(t *testing.T, s *Settings) {
+			require.Equal(t, 500, s.Asset.MaxNBlocks)
+		}},
+		{"asset_requireAuthCredentials", "true", func(t *testing.T, s *Settings) {
+			require.True(t, s.Asset.RequireAuthCredentials)
+		}},
+		{"asset_secureCookies", "true", func(t *testing.T, s *Settings) {
+			require.True(t, s.Asset.SecureCookies)
+		}},
+		{"asset_corsAllowedOrigins", "https://dashboard.example.com", func(t *testing.T, s *Settings) {
+			require.Equal(t, "https://dashboard.example.com", s.Asset.CORSAllowedOrigins)
+		}},
+		{"asset_enforcePostAuth", "true", func(t *testing.T, s *Settings) {
+			require.True(t, s.Asset.EnforcePostAuth)
+		}},
+		{"asset_maxWebsocketConnections", "250", func(t *testing.T, s *Settings) {
+			require.Equal(t, 250, s.Asset.MaxWebsocketConnections)
+		}},
+		{"asset_websocketReadLimit", "1048576", func(t *testing.T, s *Settings) {
+			require.Equal(t, int64(1048576), s.Asset.WebsocketReadLimit)
+		}},
+		{"asset_subtreeStreamConcurrency", "8", func(t *testing.T, s *Settings) {
+			require.Equal(t, 8, s.Asset.SubtreeStreamConcurrency)
+		}},
+		{"asset_publicErrorDetail", "false", func(t *testing.T, s *Settings) {
+			require.False(t, s.Asset.PublicErrorDetail)
+		}},
+		{"asset_publicHealthDetail", "false", func(t *testing.T, s *Settings) {
+			require.False(t, s.Asset.PublicHealthDetail)
+		}},
+		{"asset_healthStrictStatus", "true", func(t *testing.T, s *Settings) {
+			require.True(t, s.Asset.HealthStrictStatus)
+		}},
+		{"asset_publicPeersDetail", "false", func(t *testing.T, s *Settings) {
+			require.False(t, s.Asset.PublicPeersDetail)
+		}},
+		{"asset_txMetaRawEnabled", "false", func(t *testing.T, s *Settings) {
+			require.False(t, s.Asset.TxMetaRawEnabled)
+		}},
+		{"asset_maxBlockGraphPoints", "3000", func(t *testing.T, s *Settings) {
+			require.Equal(t, 3000, s.Asset.MaxBlockGraphPoints)
+		}},
+		{"asset_maxLocatorWalkDepth", "1500", func(t *testing.T, s *Settings) {
+			require.Equal(t, 1500, s.Asset.MaxLocatorWalkDepth)
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			gocore.Config().Set(tc.key, tc.override)
+			t.Cleanup(func() { gocore.Config().Set(tc.key, "") })
+
+			s := NewSettings()
+			tc.check(t, s)
+		})
+	}
+}
