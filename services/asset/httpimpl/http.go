@@ -210,15 +210,21 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	// Start() when a context is available.
 	//
 	// Tier elevation requires explicit operator opt-in via asset_peerAuthAllowlist.
-	// An empty allowlist (the default) means signatures are still verified
-	// (replay cache + body digest + freshness window all apply) but every
-	// authenticated peer is treated as tierUnverified for rate-limit purposes.
+	// An empty allowlist (the default) means a signed request is rejected at
+	// the allowlist membership check, before the replay claim, the signature
+	// verification and the body digest; every authenticated peer stays
+	// tierUnverified. See the asset_peerAuthAllowlist longdesc for detail.
+	//
+	// The signed-body cap tracks subtreevalidation's catchup batch size so a
+	// large but legitimate POST /subtree/:hash/txs from an allowlisted peer
+	// isn't rejected with 413 (see resolveMaxSignedBodyBytes).
 	var peerAuth *peerAuthVerifier
 	p2pClient := repo.GetP2PClient()
 	if p2pClient != nil {
 		peerCache := newPeerTierCache(logger, p2pClient, tSettings.Asset.PeerMinerReputationThreshold)
 		allowlist := parsePeerAuthAllowlist(logger, tSettings.Asset.PeerAuthAllowlist)
-		peerAuth = newPeerAuthVerifier(logger, peerCache, allowlist)
+		maxSignedBodyBytes := resolveMaxSignedBodyBytes(tSettings.SubtreeValidation.MissingTransactionsBatchSize)
+		peerAuth = newPeerAuthVerifierWithBodyCap(logger, peerCache, allowlist, maxSignedBodyBytes)
 		e.Use(peerAuth.Middleware())
 	}
 
