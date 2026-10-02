@@ -31,13 +31,13 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
-	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka" //nolint:gci
 	"github.com/bsv-blockchain/teranode/util/test"
+	teranodetestutil "github.com/bsv-blockchain/teranode/util/testutil"
 	"github.com/jarcoal/httpmock"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -153,13 +153,13 @@ func setup(t *testing.T) (utxo.Store, *validator.MockValidator, blob.Store, blob
 
 	validatorClient := &validator.MockValidator{UtxoStore: utxoStore}
 
-	mockBlockChainStore := &blockchainstore.MockStore{}
-
-	// Create LocalClient properly using the constructor to ensure all fields are initialized
-	blockchainClient, err := blockchain.NewLocalClient(logger, tSettings, mockBlockChainStore, subtreeStore, utxoStore)
-	if err != nil {
-		panic(err)
-	}
+	// Real sqlitememory-backed blockchain client (per repo testing convention:
+	// don't mock the blockchain client/store). Unlike blockchainstore.MockStore,
+	// this store has a genesis best block from creation, so New()'s
+	// updateBestBlock/blockchainSubscriptionListener never hits the
+	// "no best block set" retry loop that MockStore left running for the
+	// lifetime of the test binary.
+	blockchainClient := teranodetestutil.NewMemorySQLiteBlockchainClient(logger, tSettings, t)
 
 	return utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, func() {
 		httpmock.DeactivateAndReset()

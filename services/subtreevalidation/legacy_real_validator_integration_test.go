@@ -13,7 +13,6 @@ import (
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
-	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
@@ -21,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -92,8 +92,11 @@ func TestLegacyUnconfirmedParent_RealValidatorIntegration(t *testing.T) {
 	txStore := blobmemory.New()
 	subtreeStore := blobmemory.New()
 
-	localClient, err := blockchain.NewLocalClient(logger, tSettings, &blockchainstore.MockStore{}, subtreeStore, utxoStore)
-	require.NoError(t, err)
+	// Real sqlitememory-backed blockchain client (per repo testing convention:
+	// don't mock the blockchain client/store). blockchainstore.MockStore has no
+	// genesis best block, so New()'s blockchainSubscriptionListener retried
+	// Subscribe/GetBestBlockHeader every 5s for the life of the test binary.
+	localClient := testutil.NewMemorySQLiteBlockchainClient(logger, tSettings, t)
 
 	// The legacy branch's option pairing is FSM-gated; LocalClient always
 	// reports RUNNING, so pin the state this scenario lives in.

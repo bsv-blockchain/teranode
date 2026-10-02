@@ -185,6 +185,7 @@ func TestSubtreesHandler(t *testing.T) {
 
 			// we only need the httpClient, txMetaStore and validatorClient when blessing a transaction
 			httpmock.ActivateNonDefault(util.HTTPClient())
+			defer httpmock.DeactivateAndReset()
 			httpmock.RegisterResponder(
 				"GET",
 				`=~subtree_data.*`,
