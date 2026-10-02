@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -283,12 +284,11 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	appSettings.Validator.HTTPListenAddress = listenAddr
 	appSettings.Validator.HTTPAddress, _ = url.Parse(clientAddr)
 
-	// P2P - allocate port for libp2p (doesn't support pre-created listeners)
-	p2pPort, err := getFreePort()
-	require.NoError(t, err)
+	// P2P - libp2p doesn't support pre-created listeners, so its port is
+	// drawn (and, if it collides, redrawn) immediately before the daemon
+	// actually starts. See attemptP2PPort in NewTestDaemon below.
 	appSettings.P2P.StaticPeers = nil
 	appSettings.P2P.ListenAddresses = []string{"0.0.0.0"}
-	appSettings.P2P.Port = p2pPort
 
 	// P2P gRPC
 	if opts.EnableP2P {
@@ -481,8 +481,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		t.Logf("Initialized %s container with URL: %s", opts.UTXOStoreType, utxoStoreURL.String())
 	}
 
-	readyCh := make(chan struct{})
-
 	var (
 		logger        ulogger.Logger
 		loggerFactory Option
@@ -512,52 +510,77 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		})
 	}
 
-	// d := New(loggerFactory, WithContext(ctx))
-	d := New(loggerFactory, WithContext(ctx))
+	var d *Daemon
 
-	services := []string{
-		"-all=0",
-		"-blockchain=1",
-		"-subtreevalidation=1",
-		"-blockvalidation=1",
-		"-blockassembly=1",
-		"-asset=1",
-		"-propagation=1",
-	}
+	// Start the daemon, retrying with a freshly drawn p2p port when the one
+	// picked by getFreePort() loses the TOCTOU race against libp2p's later
+	// bind (see attemptP2PPort). Every other setup step above is stable
+	// across attempts (listeners already open via util.GetListener, data
+	// dir already created), so only the p2p port and the daemon start need
+	// to be redone.
+	startErr := attemptP2PPort(maxP2PPortAttempts, func(p2pPort int) error {
+		appSettings.P2P.Port = p2pPort
 
-	if opts.EnableRPC {
-		services = append(services, "-rpc=1")
-	}
+		d = New(loggerFactory, WithContext(ctx))
 
-	if opts.EnableP2P {
-		services = append(services, "-p2p=1")
-	}
+		services := []string{
+			"-all=0",
+			"-blockchain=1",
+			"-subtreevalidation=1",
+			"-blockvalidation=1",
+			"-blockassembly=1",
+			"-asset=1",
+			"-propagation=1",
+		}
 
-	if opts.EnableValidator {
-		services = append(services, "-validator=1")
-	}
+		if opts.EnableRPC {
+			services = append(services, "-rpc=1")
+		}
 
-	if opts.EnableLegacy {
-		services = append(services, "-legacy=1")
-	}
+		if opts.EnableP2P {
+			services = append(services, "-p2p=1")
+		}
 
-	if opts.EnableBlockPersister {
-		services = append(services, "-blockpersister=1")
-	}
+		if opts.EnableValidator {
+			services = append(services, "-validator=1")
+		}
 
-	if opts.EnablePruner {
-		services = append(services, "-pruner=1")
-	}
+		if opts.EnableLegacy {
+			services = append(services, "-legacy=1")
+		}
 
-	go d.Start(logger, services, appSettings, readyCh)
+		if opts.EnableBlockPersister {
+			services = append(services, "-blockpersister=1")
+		}
 
-	select {
-	case <-readyCh:
-		t.Logf("Daemon %s started successfully", appSettings.ClientName)
-	case <-time.After(30 * time.Second):
-		servicesNotReady := d.ServiceManager.ServicesNotReady()
-		t.Fatalf("Daemon %s failed to start within 30s. Waiting on: %v", appSettings.ClientName, servicesNotReady)
-	}
+		if opts.EnablePruner {
+			services = append(services, "-pruner=1")
+		}
+
+		readyCh := make(chan struct{})
+
+		go d.Start(logger, services, appSettings, readyCh)
+
+		select {
+		case <-readyCh:
+			t.Logf("Daemon %s started successfully", appSettings.ClientName)
+			return nil
+		case <-d.stopCh:
+			// startServices already failed and Start() ran its own teardown
+			// before closing stopCh; Stop() here is a defensive, idempotent
+			// pass over the same state so a retry never inherits a listener
+			// or service left behind by this attempt.
+			attemptErr := d.startError()
+			t.Logf("Daemon %s failed to start on p2p port %d: %v", appSettings.ClientName, p2pPort, attemptErr)
+			_ = d.Stop()
+
+			return attemptErr
+		case <-time.After(30 * time.Second):
+			servicesNotReady := d.ServiceManager.ServicesNotReady()
+			return errors.NewProcessingError("daemon %s failed to start within 30s. Waiting on: %v", appSettings.ClientName, servicesNotReady)
+		}
+	})
+	require.NoError(t, startErr, "Daemon %s failed to start", appSettings.ClientName)
 
 	ports := []int{getPortFromString(appSettings.HealthCheckHTTPListenAddress)}
 	if opts.WaitForHealthReadiness {
@@ -863,6 +886,58 @@ func getFreePort() (int, error) {
 	defer func() { _ = l.Close() }()
 
 	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
+// maxP2PPortAttempts bounds how many times attemptP2PPort will redraw the
+// libp2p port after a bind collision before giving up. Random free-port
+// draws colliding more than a couple of times in a row is not expected in
+// practice; this exists so a persistent, genuine failure still fails rather
+// than retrying indefinitely.
+const maxP2PPortAttempts = 5
+
+// isAddrInUse reports whether err represents a TCP bind collision (the port
+// getFreePort() handed back was taken by something else before the later
+// bind that actually uses it - e.g. libp2p, in a parallel CI shard). It
+// deliberately does not match on anything else, so a genuine, unrelated
+// startup failure is not swallowed by the retry in attemptP2PPort.
+//
+// errors.Is(err, syscall.EADDRINUSE) is used rather than a hand-rolled
+// string match: when err unwraps to a real *net.OpError/*os.SyscallError
+// wrapping EADDRINUSE, stdlib unwrapping (which teranode/errors.Is defers
+// to) finds it directly. Our own error chain instead wraps the syscall error
+// inside plain fmt.Errorf("...: %w", ...) calls (see the vendored
+// go-p2p-message-bus client and services/p2p/Server.go), so by the time it
+// reaches here the top-level error is a *teranode/errors.Error whose target
+// is a bare syscall.Errno; (*errors.Error).Is falls back to matching the
+// errno's rendered text ("address already in use") against the error's own
+// full rendered message in that case, which still finds it. Both paths are
+// covered by the single errors.Is call.
+func isAddrInUse(err error) bool {
+	return err != nil && errors.Is(err, syscall.EADDRINUSE)
+}
+
+// attemptP2PPort draws a free port via getFreePort and passes it to fn.
+// If fn fails because that port lost the TOCTOU race against a later bind
+// (isAddrInUse), it draws a fresh port and retries, up to maxAttempts times.
+// Any other error - or exhausting maxAttempts - returns immediately with
+// fn's error, so a genuine startup failure still fails fast instead of being
+// retried blindly.
+func attemptP2PPort(maxAttempts int, fn func(port int) error) error {
+	var err error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		port, portErr := getFreePort()
+		if portErr != nil {
+			return portErr
+		}
+
+		err = fn(port)
+		if err == nil || !isAddrInUse(err) {
+			return err
+		}
+	}
+
+	return err
 }
 
 // getPortFromString extracts the port number from a string address.
