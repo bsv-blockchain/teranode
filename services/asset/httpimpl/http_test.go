@@ -210,10 +210,14 @@ func TestNew(t *testing.T) {
 
 		e.ServeHTTP(optionsRec, optionsReq)
 
-		// Test CORS headers
+		// Test CORS headers. With no asset_corsAllowedOrigins configured the
+		// origin is still reflected, but credentials are refused: reflecting an
+		// arbitrary origin and allowing credentials is what exposed the admin
+		// routes on this listener to a hostile same-site origin. See
+		// TestAssetCORSConfig_ExplicitAllowlistIsStrict for the credentialed case.
 		corsHeaders := optionsRec.Header()
 		assert.Equal(t, "http://localhost:8090", corsHeaders.Get("Access-Control-Allow-Origin"))
-		assert.Equal(t, "true", corsHeaders.Get("Access-Control-Allow-Credentials"))
+		assert.Empty(t, corsHeaders.Get("Access-Control-Allow-Credentials"))
 		assert.Contains(t, corsHeaders.Get("Access-Control-Allow-Methods"), "GET")
 		assert.Contains(t, corsHeaders.Get("Access-Control-Allow-Headers"), "Authorization")
 
@@ -472,7 +476,7 @@ func (l *captureLogger) Errorf(format string, args ...interface{}) {
 // the values you don't want in logs (auth tokens in URLs, search terms, etc.).
 func TestCustomHTTPErrorHandler_DoesNotLogQueryString(t *testing.T) {
 	logger := &captureLogger{}
-	handler := customHTTPErrorHandler(logger)
+	handler := customHTTPErrorHandler(logger, &settings.Settings{})
 
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=SECRET_QUERY_STRING&token=DEADBEEF", nil)
