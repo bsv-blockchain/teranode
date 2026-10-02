@@ -26,22 +26,27 @@ configured RUNNING directly.
 
 ### PostgreSQL Connection Pool (PostgresPool)
 
-When using PostgreSQL as the blockchain store, these nested settings configure connection pooling and resilience. All settings are prefixed with `blockchain_postgres_pool_`.
+When using PostgreSQL as the blockchain store, these settings override the [global Postgres pool
+settings](../global_settings.md#postgresql-connection-pool) for this service only. Each is read directly
+(not through `PostgresPool`'s own struct tags, which only describe the opaque `blockchain_postgres_pool`
+field as a whole) via `getPostgresPoolSettings("blockchain", ...)`, and all default to the zero value.
+The family is six numeric/duration settings plus `RetryEnabled`: `PostgresPool` stays `nil` unless one of
+the six (`MaxOpenConns`, `MaxIdleConns`, `ConnMaxLifetime`, `ConnMaxIdleTime`, `RetryMaxAttempts`,
+`RetryBaseDelay`) is non-zero - `RetryEnabled` alone does not create the pool. `RetryEnabled` also has no
+global fallback: once the pool exists (because one of the six is set), it replaces the global
+`RetryEnabled` value outright, `false` included - setting only `blockchain_postgres_retryEnabled = true`
+with no other per-service pool setting does nothing. There is no per-service override for the circuit
+breaker settings - those are global only.
 
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
-| MaxOpenConns | int | 50 | blockchain_postgres_pool_postgres_maxOpenConns | Maximum concurrent database connections |
-| MaxIdleConns | int | 10 | blockchain_postgres_pool_postgres_maxIdleConns | Maximum idle connections in pool |
-| ConnMaxLifetime | time.Duration | 5m | blockchain_postgres_pool_postgres_connMaxLifetime | Maximum connection reuse duration |
-| ConnMaxIdleTime | time.Duration | 1m | blockchain_postgres_pool_postgres_connMaxIdleTime | Maximum idle time before closing |
-| RetryEnabled | bool | false | blockchain_postgres_pool_postgres_retryEnabled | Enable retries for transient errors |
-| RetryMaxAttempts | int | 3 | blockchain_postgres_pool_postgres_retryMaxAttempts | Maximum retry attempts |
-| RetryBaseDelay | time.Duration | 100ms | blockchain_postgres_pool_postgres_retryBaseDelay | Base delay for retry backoff |
-| CircuitBreakerEnabled | bool | false | blockchain_postgres_pool_postgres_circuitBreakerEnabled | Enable circuit breaker for database operations |
-| CircuitBreakerFailureThreshold | int | 5 | blockchain_postgres_pool_postgres_circuitBreakerFailureThreshold | Consecutive failures before opening circuit |
-| CircuitBreakerHalfOpenMax | int | 3 | blockchain_postgres_pool_postgres_circuitBreakerHalfOpenMax | Successful probes required to close circuit |
-| CircuitBreakerCooldown | time.Duration | 30s | blockchain_postgres_pool_postgres_circuitBreakerCooldown | Duration circuit stays open before testing |
-| CircuitBreakerFailureWindow | time.Duration | 10s | blockchain_postgres_pool_postgres_circuitBreakerFailureWindow | Time window for counting consecutive failures |
+| MaxOpenConns | int | 0 (falls back to global if unset) | blockchain_postgres_maxOpenConns | Maximum concurrent database connections |
+| MaxIdleConns | int | 0 (falls back to global if unset) | blockchain_postgres_maxIdleConns | Maximum idle connections in pool |
+| ConnMaxLifetime | time.Duration | 0 (falls back to global if unset) | blockchain_postgres_connMaxLifetime | Maximum connection reuse duration |
+| ConnMaxIdleTime | time.Duration | 0 (falls back to global if unset) | blockchain_postgres_connMaxIdleTime | Maximum idle time before closing |
+| RetryEnabled | bool | false (no global fallback; see above) | blockchain_postgres_retryEnabled | Enable retries for transient errors |
+| RetryMaxAttempts | int | 0 (falls back to global if unset) | blockchain_postgres_retryMaxAttempts | Maximum retry attempts |
+| RetryBaseDelay | time.Duration | 0 (falls back to global if unset) | blockchain_postgres_retryBaseDelay | Base delay for retry backoff |
 
 ## Configuration Dependencies
 
