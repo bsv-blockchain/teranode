@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"crypto/rand"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,13 @@ import (
 	"github.com/bsv-blockchain/teranode/cmd/teranodedev/internal/config"
 	"github.com/bsv-blockchain/teranode/errors"
 )
+
+// rpcPassChars are the characters used to build a generated dev RPC password.
+// URL-safe so the value can be used unescaped in settings files and URLs.
+const rpcPassChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+// rpcPassLength is the length of a generated dev RPC password.
+const rpcPassLength = 32
 
 const settingsFile = "settings_local.conf"
 
@@ -30,7 +38,6 @@ func Generate(projectRoot string, cfg *config.Config) error {
 		return errors.NewProcessingError("failed to read %s", settingsFile, err)
 	}
 
-	block := generateBlock(cfg)
 	content := string(existing)
 
 	start := markerStart(cfg.DevName)
@@ -38,6 +45,16 @@ func Generate(projectRoot string, cfg *config.Config) error {
 
 	startIdx := strings.Index(content, start)
 	endIdx := strings.Index(content, end)
+
+	var existingBlock string
+	if startIdx >= 0 && endIdx >= 0 {
+		existingBlock = content[startIdx : endIdx+len(end)]
+	}
+
+	block, err := generateBlock(cfg, existingBlock)
+	if err != nil {
+		return err
+	}
 
 	if startIdx >= 0 && endIdx >= 0 {
 		// Replace existing block
@@ -66,7 +83,7 @@ func HasEntries(projectRoot, devName string) bool {
 	return strings.Contains(string(data), markerStart(devName))
 }
 
-func generateBlock(cfg *config.Config) string {
+func generateBlock(cfg *config.Config, existingBlock string) (string, error) {
 	ctx := "dev." + cfg.DevName
 
 	// Capitalize first letter for clientName
@@ -95,9 +112,58 @@ func generateBlock(cfg *config.Config) string {
 	}
 
 	lines = append(lines, fmt.Sprintf("local_test_start_from_state.%s = RUNNING", ctx))
+
+	rpcPass := existingRPCPass(existingBlock, ctx)
+	if rpcPass == "" {
+		var err error
+
+		rpcPass, err = randomRPCPass()
+		if err != nil {
+			return "", err
+		}
+	}
+
+	lines = append(lines,
+		fmt.Sprintf("rpc_user.%s = %s", ctx, cfg.DevName),
+		fmt.Sprintf("rpc_pass.%s = %s", ctx, rpcPass),
+	)
+
 	lines = append(lines, markerEnd(cfg.DevName))
 
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), nil
+}
+
+// existingRPCPass extracts the rpc_pass value for ctx from a previously generated
+// block, so re-running init doesn't rotate the developer's RPC password.
+func existingRPCPass(block, ctx string) string {
+	if block == "" {
+		return ""
+	}
+
+	prefix := fmt.Sprintf("rpc_pass.%s = ", ctx)
+
+	for _, line := range strings.Split(block, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimPrefix(line, prefix)
+		}
+	}
+
+	return ""
+}
+
+// randomRPCPass generates a random URL-safe RPC password for a fresh dev context.
+func randomRPCPass() (string, error) {
+	buf := make([]byte, rpcPassLength)
+
+	if _, err := rand.Read(buf); err != nil {
+		return "", errors.NewProcessingError("failed to generate dev RPC password", err)
+	}
+
+	for i, b := range buf {
+		buf[i] = rpcPassChars[int(b)%len(rpcPassChars)]
+	}
+
+	return string(buf), nil
 }
 
 func utxoConnectionString(cfg *config.Config) string {
