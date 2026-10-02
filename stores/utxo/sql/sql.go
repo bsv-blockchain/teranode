@@ -5904,13 +5904,15 @@ func isLockError(err error) bool {
 	}
 
 	// PostgreSQL deadlock/lock errors (lib/pq fallback)
-	if pqErr, ok := err.(*pq.Error); ok {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
 		return pqErr.Code == usql.PgErrSerializationFail || pqErr.Code == usql.PgErrDeadlockDetected || pqErr.Code == usql.PgErrLockNotAvailable
 	}
 
-	// SQLite busy/locked errors
-	if sqliteErr, ok := err.(*sqlite.Error); ok {
-		return sqliteErr.Code() == sqlite3.SQLITE_BUSY || sqliteErr.Code() == sqlite3.SQLITE_LOCKED
+	// SQLite busy/locked errors, including extended result codes (e.g. 517
+	// SQLITE_BUSY_SNAPSHOT); errors.As so a wrapped error still matches.
+	if usql.IsSQLiteLockError(err) {
+		return true
 	}
 
 	// Check error message for common lock patterns

@@ -116,6 +116,23 @@ func isRetriableSQLiteCode(code int) bool {
 		primary == sqlite3.SQLITE_CANTOPEN
 }
 
+// IsSQLiteLockError reports whether err is, or wraps, a SQLite BUSY or LOCKED
+// error. Like isRetriableSQLiteCode it compares the primary result code (the low
+// byte), so extended codes such as SQLITE_BUSY_SNAPSHOT (517) and
+// SQLITE_LOCKED_SHAREDCACHE (262) are recognised where a bare "== SQLITE_BUSY"
+// check misses them. It is scoped to locks only (not the broader retriable set)
+// for callers that retry specifically on lock contention.
+func IsSQLiteLockError(err error) bool {
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+
+	primary := sqliteErr.Code() & 0xff
+
+	return primary == sqlite3.SQLITE_BUSY || primary == sqlite3.SQLITE_LOCKED
+}
+
 // calculateBackoff calculates the backoff duration with jitter
 // Uses exponential backoff: baseDelay * 2^attempt
 // Adds random jitter of ±25% to prevent thundering herd
