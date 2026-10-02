@@ -181,3 +181,9 @@ func testSameChainGrandparentDoubleSpend(t *testing.T, utxoStore string) {
 	t.Log("  - Invalid child (spending already-spent grandparent output) is rejected")
 	t.Log("  - Valid child (spending unspent grandparent outputs) is accepted")
 }
+
+func TestSameChainGrandparentDoubleSpendSqlPostgres(t *testing.T) {
+	t.Run("same_chain_grandparent_double_spend", func(t *testing.T) {
+		testSameChainGrandparentDoubleSpend(t, "sqlpostgres")
+	})
+}
