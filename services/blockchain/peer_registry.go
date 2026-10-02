@@ -247,6 +247,17 @@ type CentralizedPeerRegistry struct {
 	// protect. The flag is one-way: once set, the only way to clear it is
 	// to construct a fresh registry.
 	saveDisabled atomic.Bool
+
+	// capMaxSize is the insert-time cap enforced inline by Register. 0 means
+	// uncapped (TTL-only mode). Set by StartCleanup; must be set before the
+	// first gossip-driven Register call to be effective. Stored as Int64 to
+	// avoid int32 truncation of large operator-supplied values.
+	capMaxSize atomic.Int64
+
+	// capTTL is the TTL used to determine connected-peer exemption during
+	// inline eviction in Register. Stored as int64 nanoseconds. 0 means no
+	// TTL-based connected exemption (ban-only exemption applies).
+	capTTL atomic.Int64
 }
 
 // NewCentralizedPeerRegistry creates an empty peer registry with the given ban configuration.
@@ -313,6 +324,28 @@ func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 
 	existing, exists := r.peers[info.ID]
 	if !exists {
+		// Enforce the insert-time size cap before allocating the new entry.
+		// Evict rather than refuse: refusing new keys would let a flooder
+		// pre-fill every slot and suppress registration of honest peers.
+		// The eviction mirrors Cleanup's LRU+exemption logic so that banned
+		// and connected+active peers are never displaced by a flood of new IDs.
+		//
+		// Loop until under cap or every remaining peer is exempt: the registry
+		// may already be above cap (e.g. Load ran before StartCleanup and
+		// interval is 0), and a single eviction would leave it at cap+N-1.
+		//
+		// The cap is soft only when all non-exempt slots are taken: we insert
+		// rather than refuse so a flooder cannot block honest peers by filling
+		// every exempt slot ahead of time.
+		if maxCap := int(r.capMaxSize.Load()); maxCap > 0 {
+			ttl := time.Duration(r.capTTL.Load())
+			for len(r.peers) >= maxCap {
+				if !r.evictOldestNonBannedLocked(now, ttl) {
+					break // all remaining peers are exempt; insert anyway
+				}
+			}
+		}
+
 		entry := clonePeerInfo(info)
 		// Strip dangerous characters out of the peer-supplied client name so
 		// it can't break logs / dashboards / JSON consumers.
@@ -984,8 +1017,18 @@ func (r *CentralizedPeerRegistry) StartPeriodicSave(ctx context.Context, interva
 // OR Close().
 //
 // A zero or negative interval disables the loop (caller's choice — useful
-// when the operator only wants TTL-on-load semantics).
+// when the operator only wants TTL-on-load semantics). The insert-time cap
+// (maxSize) is always stored so Register can enforce it regardless of the
+// interval — the two are independent controls.
 func (r *CentralizedPeerRegistry) StartCleanup(ctx context.Context, interval, ttl time.Duration, maxSize int) {
+	// Store the cap so Register enforces it inline even when the sweep is
+	// disabled. Negative maxSize means uncapped; coerce to 0.
+	if maxSize < 0 {
+		maxSize = 0
+	}
+	r.capMaxSize.Store(int64(maxSize))
+	r.capTTL.Store(int64(ttl))
+
 	if interval <= 0 {
 		return
 	}
@@ -1465,4 +1508,38 @@ func peerActivity(info *PeerInfo) time.Time {
 		return info.LastSeen
 	}
 	return info.LastMessageTime
+}
+
+// evictOldestNonBannedLocked removes the least-recently-active non-exempt peer
+// from r.peers to make room for a new insert. Mirrors Cleanup's exemption
+// logic: expired bans are normalised first (same as Cleanup's expireBansLocked
+// call) so a stale IsBanned flag cannot permanently shield an idle peer from
+// eviction. Banned peers and connected+recently-active peers (within ttl) are
+// then skipped. If every peer is exempt, nothing is removed and false is
+// returned. Caller must hold r.mu (write lock).
+func (r *CentralizedPeerRegistry) evictOldestNonBannedLocked(now time.Time, ttl time.Duration) bool {
+	// Normalise expired bans so IsBanned reflects current ban state, matching
+	// what Cleanup does before its own eviction scan. Without this a peer whose
+	// ban window has elapsed would be incorrectly treated as exempt.
+	r.expireBansLocked()
+
+	var victimID string
+	var victimAt time.Time
+
+	for id, info := range r.peers {
+		if isCleanupExempt(info, now, ttl) {
+			continue
+		}
+		last := peerActivity(info)
+		if victimID == "" || last.Before(victimAt) {
+			victimID = id
+			victimAt = last
+		}
+	}
+
+	if victimID == "" {
+		return false
+	}
+	delete(r.peers, victimID)
+	return true
 }

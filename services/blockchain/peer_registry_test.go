@@ -1265,3 +1265,139 @@ func TestCentralizedPeerRegistry_List_SortByStorage(t *testing.T) {
 	require.Equal(t, "pruned-high", peers[1].ID)
 	require.Equal(t, "unknown", peers[2].ID)
 }
+
+// TestCentralizedPeerRegistry_Register_CapEnforcedAtInsert verifies that
+// Register never allows Count() to exceed the configured cap, even when N
+// distinct peer IDs are registered well above the cap — without waiting for a
+// Cleanup sweep.
+func TestCentralizedPeerRegistry_Register_CapEnforcedAtInsert(t *testing.T) {
+	const maxSize = 10
+	const numPeers = 50
+
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	r.StartCleanup(context.Background(), 0, 24*time.Hour, maxSize) // 0 interval = no sweep
+
+	for i := 0; i < numPeers; i++ {
+		r.Register(&PeerInfo{ID: fmt.Sprintf("peer-%04d", i)})
+		count := r.Count()
+		require.LessOrEqual(t, count, maxSize,
+			"Count() must never exceed the cap after Register (at peer %d)", i)
+	}
+}
+
+// TestCentralizedPeerRegistry_Register_ConnectedPeerExemptFromEviction verifies
+// that a connected+active peer is never chosen as the eviction victim when the
+// cap is enforced inline at insert. The exemption mirrors Cleanup's
+// isCleanupExempt logic: connected peers with recent activity within the TTL
+// are skipped, so a flooder's inserts can never displace an active live peer.
+func TestCentralizedPeerRegistry_Register_ConnectedPeerExemptFromEviction(t *testing.T) {
+	const maxSize = 5
+	const ttl = 24 * time.Hour
+
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	r.StartCleanup(context.Background(), 0, ttl, maxSize)
+
+	// "connected" is registered first (oldest activity of everyone) and marked
+	// as connected. An activity-blind implementation would evict it first; it
+	// must survive purely because it is exempt, not because of recency.
+	r.Register(&PeerInfo{ID: "connected"})
+	r.UpdateConnectionState("connected", true)
+
+	// Fill remaining slots with idle flooder IDs.
+	for i := 0; i < maxSize-1; i++ {
+		r.Register(&PeerInfo{ID: fmt.Sprintf("flood-%04d", i)})
+	}
+	require.Equal(t, maxSize, r.Count(), "registry must be exactly at cap before the overflow insert")
+
+	// One more insert past cap: the eviction must pick among the idle flooder
+	// entries, never the connected peer, even though it has the oldest activity.
+	r.Register(&PeerInfo{ID: "flood-extra"})
+
+	require.Equal(t, maxSize, r.Count(), "Count must not exceed cap after overflow insert")
+	_, ok := r.Get("connected")
+	require.True(t, ok, "connected+active peer must be exempt from insert-time eviction")
+}
+
+// TestCentralizedPeerRegistry_Register_BannedPeerExemptFromEviction confirms
+// that a banned peer is never chosen as the eviction victim, so ban state
+// survives insert-time cap enforcement.
+func TestCentralizedPeerRegistry_Register_BannedPeerExemptFromEviction(t *testing.T) {
+	const maxSize = 3
+
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	r.StartCleanup(context.Background(), 0, 24*time.Hour, maxSize)
+
+	r.Register(&PeerInfo{ID: "idle-a"})
+	r.Register(&PeerInfo{ID: "idle-b"})
+	r.Register(&PeerInfo{ID: "banned"})
+	r.AddBanScore("banned", "spam", 200) // exceeds threshold — now banned
+
+	require.Equal(t, maxSize, r.Count())
+
+	// Overflow: one of the idle peers must be evicted, not the banned one.
+	r.Register(&PeerInfo{ID: "newcomer"})
+
+	require.Equal(t, maxSize, r.Count())
+	_, ok := r.Get("banned")
+	require.True(t, ok, "banned peer must never be evicted by the insert-time cap")
+	_, ok = r.Get("newcomer")
+	require.True(t, ok, "newcomer must be registered successfully after evicting an idle peer")
+}
+
+// TestCentralizedPeerRegistry_Register_CapDrainsOverCapRegistry verifies that
+// when the registry is already above cap (e.g. Load ran before StartCleanup),
+// the loop in Register drains it to within the cap on subsequent inserts rather
+// than leaving it at cap+N-1.
+func TestCentralizedPeerRegistry_Register_CapDrainsOverCapRegistry(t *testing.T) {
+	const maxSize = 3
+
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+
+	// Pre-fill the registry above cap directly (simulates Load restoring
+	// persisted state before StartCleanup is called).
+	r.mu.Lock()
+	for i := 0; i < maxSize+5; i++ {
+		id := fmt.Sprintf("pre-%04d", i)
+		now := time.Now().Add(time.Duration(i) * time.Millisecond)
+		r.peers[id] = &PeerInfo{ID: id, LastSeen: now}
+	}
+	r.mu.Unlock()
+
+	require.Equal(t, maxSize+5, r.Count(), "pre-condition: registry is above cap")
+
+	// Wire up the cap after the fact (matches Server.go start order).
+	r.StartCleanup(context.Background(), 0, 24*time.Hour, maxSize)
+
+	// A single Register should drain the over-cap state.
+	r.Register(&PeerInfo{ID: "new-after-load"})
+
+	require.LessOrEqual(t, r.Count(), maxSize,
+		"Register must drain an over-cap registry down to cap, not just cap+N-1")
+	_, ok := r.Get("new-after-load")
+	require.True(t, ok, "newly registered peer must be present after drain")
+}
+
+// TestCentralizedPeerRegistry_Register_AllExemptSoftCap verifies the soft-cap
+// property: when every peer in the registry is exempt (all connected), Register
+// inserts past the cap rather than refusing, so a flooder cannot block honest
+// peers by pre-filling every exempt slot.
+func TestCentralizedPeerRegistry_Register_AllExemptSoftCap(t *testing.T) {
+	const maxSize = 3
+
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	r.StartCleanup(context.Background(), 0, 24*time.Hour, maxSize)
+
+	for i := 0; i < maxSize; i++ {
+		id := fmt.Sprintf("connected-%04d", i)
+		r.Register(&PeerInfo{ID: id})
+		r.UpdateConnectionState(id, true)
+	}
+	require.Equal(t, maxSize, r.Count(), "pre-condition: registry full with exempt peers")
+
+	// Inserting one more must succeed (soft cap) because eviction cannot touch
+	// the exempt connected peers.
+	r.Register(&PeerInfo{ID: "extra"})
+	_, ok := r.Get("extra")
+	require.True(t, ok, "Register must not refuse when all existing peers are exempt")
+	require.Equal(t, maxSize+1, r.Count(), "count may exceed cap when all non-exempt slots are taken")
+}
