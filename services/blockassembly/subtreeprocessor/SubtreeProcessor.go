@@ -6491,6 +6491,24 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 	return nil
 }
 
+// remainderWorkers is how many goroutines the lookup phase of the leftover
+// pass runs at once: GOMAXPROCS less a tenth (at least one), and never more
+// than configured (blockassembly_processRemainderTxHashesConcurrency, when
+// set). The phase is CPU- and memory-bound, so more goroutines than Ps adds
+// no throughput; it only makes every other runnable goroutine - the gRPC
+// goroutines that ingest transactions above all - queue behind them. The Ps
+// left free keep ingest running while a block is applied.
+func remainderWorkers(configured int) int {
+	procs := runtime.GOMAXPROCS(0)
+	workers := max(1, procs-max(1, procs/10))
+
+	if configured > 0 {
+		workers = min(workers, configured)
+	}
+
+	return workers
+}
+
 // processRemainderTxHashes processes remaining transaction hashes after reorganization.
 //
 // Parameters:
@@ -6504,133 +6522,106 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 //   - error: Any error encountered during processing
 func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chainedSubtrees []*subtreepkg.Subtree,
 	transactionMap *SplitSwissMap, losingTxHashesMap txmap.TxMap, currentTxMap TxInpointsMap, skipNotification bool) error {
-	var hashCount atomic.Int64
-
 	// clean out the transactions from the old current subtree that were in the block
-	// and add the remainderSubtreeNodes to the new current subtree
-	g, _ := errgroup.WithContext(ctx)
-	util.SafeSetLimit(stp.logger, g, stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency)
+	// and add the remainderSubtreeNodes to the new current subtree, in order.
+	//
+	// Pack 3 boolean flags per element into a single byte array:
+	// bit 0 = existedInTxMap, bit 1 = existsInLosingMap, bit 2 = isRemoveMap
+	// Saves ~66% memory vs three separate []bool arrays
+	const (
+		flagExistedInTxMap    = 1 << 0
+		flagExistsInLosingMap = 1 << 1
+		flagIsRemoveMap       = 1 << 2
 
-	// we need to process this in order, so we first process all subtrees in parallel, but keeping the order
-	remainderSubtrees := make([][]subtreepkg.Node, len(chainedSubtrees))
+		// lookupChunk is how many nodes one lookup task covers: big enough to
+		// keep task overhead negligible, small enough to spread a few large
+		// subtrees over every worker.
+		lookupChunk = 16 << 10
+	)
+
+	workers := remainderWorkers(stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency)
 	removeMapLength := stp.removeMap.Length()
 
-	for idx, subtree := range chainedSubtrees {
-		idx := idx
-		st := subtree
+	// Phase 1: parallel lookups, flagging each node. All subtrees' chunks go
+	// through one pool of workers goroutines; errgroup.Go blocks once the
+	// limit is reached, so no more than that ever exist.
+	nodeFlags := make([][]byte, len(chainedSubtrees))
 
-		g.Go(func() error {
-			nodes := st.Nodes
-			n := len(nodes)
+	g, _ := errgroup.WithContext(ctx)
+	g.SetLimit(workers)
 
-			// Small subtree optimization: skip parallelization overhead
-			if n < 1024 {
-				remainderSubtrees[idx] = make([]subtreepkg.Node, 0, n/10)
+	for idx, st := range chainedSubtrees {
+		nodes := st.Nodes
+		flags := make([]byte, len(nodes))
+		nodeFlags[idx] = flags
 
-				for _, node := range nodes {
+		for start := 0; start < len(nodes); start += lookupChunk {
+			end := min(start+lookupChunk, len(nodes))
+
+			g.Go(func() error {
+				for i := start; i < end; i++ {
+					node := nodes[i]
 					if node.Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
 						continue
 					}
 
 					if removeMapLength > 0 && stp.removeMap.Exists(node.Hash) {
-						_ = stp.removeMap.Delete(node.Hash)
+						flags[i] = flagIsRemoveMap
 						continue
 					}
 
-					existed := transactionMap.Exists(node.Hash)
-					if !existed && (losingTxHashesMap == nil || !losingTxHashesMap.Exists(node.Hash)) {
-						remainderSubtrees[idx] = append(remainderSubtrees[idx], node)
+					if transactionMap.Exists(node.Hash) {
+						flags[i] = flagExistedInTxMap
+					} else if losingTxHashesMap != nil && losingTxHashesMap.Exists(node.Hash) {
+						flags[i] = flagExistsInLosingMap
 					}
 				}
-
-				hashCount.Add(int64(len(remainderSubtrees[idx])))
 
 				return nil
-			}
+			})
+		}
+	}
 
-			// Pack 3 boolean flags per element into a single byte array:
-			// bit 0 = existedInTxMap, bit 1 = existsInLosingMap, bit 2 = isRemoveMap
-			// Saves ~66% memory vs three separate []bool arrays
-			const (
-				flagExistedInTxMap    = 1 << 0
-				flagExistsInLosingMap = 1 << 1
-				flagIsRemoveMap       = 1 << 2
-			)
-			nodeFlags := make([]byte, n)
+	if err := g.Wait(); err != nil {
+		return errors.NewProcessingError("error getting remainder tx difference", err)
+	}
 
-			// Phase 1 of processRemainderTxHashes scales linearly with input
-			// size; the previous literal 16-worker cap left ~170-core pods
-			// massively idle on 30M-tx remainders. Cap only at NumCPU so the
-			// kernel scheduler can make the call, with a floor of 2 workers and
-			// a minimum chunk of 1024 nodes per worker to keep coordination
-			// overhead down on small inputs.
-			numWorkers := min(runtime.NumCPU(), n/1024)
-			if numWorkers < 2 {
-				numWorkers = 2
-			}
+	// Phase 2: collect each subtree's remainder in order, subtrees in
+	// parallel on the same bound.
+	remainderSubtrees := make([][]subtreepkg.Node, len(chainedSubtrees))
 
-			chunkSize := (n + numWorkers - 1) / numWorkers
+	g, _ = errgroup.WithContext(ctx)
+	g.SetLimit(workers)
 
-			// Phase 1: Parallel SetIfExists + Exists lookups
-			var wg sync.WaitGroup
-			for w := 0; w < numWorkers; w++ {
-				start := w * chunkSize
-				end := min(start+chunkSize, n)
-				if start >= n {
-					break
-				}
+	for idx, st := range chainedSubtrees {
+		g.Go(func() error {
+			nodes, flags := st.Nodes, nodeFlags[idx]
+			remainder := make([]subtreepkg.Node, 0, len(nodes)/10)
 
-				wg.Add(1)
-				go func(start, end int) {
-					defer wg.Done()
-					for i := start; i < end; i++ {
-						node := nodes[i]
-						if node.Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
-							continue
-						}
-
-						if removeMapLength > 0 && stp.removeMap.Exists(node.Hash) {
-							nodeFlags[i] = flagIsRemoveMap
-							continue
-						}
-
-						// SetIfExists: atomic check + set (1 lock instead of 2)
-						existed := transactionMap.Exists(node.Hash)
-						if existed {
-							nodeFlags[i] = flagExistedInTxMap
-						} else if losingTxHashesMap != nil && losingTxHashesMap.Exists(node.Hash) {
-							nodeFlags[i] = flagExistsInLosingMap
-						}
-					}
-				}(start, end)
-			}
-			wg.Wait()
-
-			// Phase 2: Sequential collection (preserves order)
-			remainderSubtrees[idx] = make([]subtreepkg.Node, 0, n/10)
 			for i, node := range nodes {
 				if node.Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
 					continue
 				}
 
-				f := nodeFlags[i]
+				f := flags[i]
 				if f&flagIsRemoveMap != 0 {
 					_ = stp.removeMap.Delete(node.Hash)
 					continue
 				}
 
 				if f&(flagExistedInTxMap|flagExistsInLosingMap) == 0 {
-					remainderSubtrees[idx] = append(remainderSubtrees[idx], node)
+					remainder = append(remainder, node)
 				}
 			}
 
-			hashCount.Add(int64(len(remainderSubtrees[idx])))
+			remainderSubtrees[idx] = remainder
+
 			return nil
 		})
 	}
 
 	if err := g.Wait(); err != nil {
-		return errors.NewProcessingError("error getting remainder tx difference", err)
+		return errors.NewProcessingError("error collecting remainder txs", err)
 	}
 
 	// Calculate total nodes for threshold check
