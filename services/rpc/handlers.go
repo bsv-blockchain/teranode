@@ -36,6 +36,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +44,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -1348,6 +1350,10 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 	return infos, nil
 }
 
+// coinbasePlaceholderTxID is the string form of the coinbase placeholder node
+// that block assembly puts at the start of the first subtree.
+var coinbasePlaceholderTxID = subtreepkg.CoinbasePlaceholderHashValue.String()
+
 // handleGetRawMempool implements the getrawmempool command.
 // Returns transaction IDs currently in the memory pool.
 func handleGetRawMempool(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
@@ -1367,6 +1373,12 @@ func handleGetRawMempool(ctx context.Context, s *RPCServer, cmd interface{}, _ <
 			Message: "Error retrieving raw mempool: " + err.Error(),
 		}
 	}
+
+	// Block assembly lists every subtree node, including the coinbase
+	// placeholder at the start of the first subtree. It is not a transaction.
+	txs = slices.DeleteFunc(txs, func(txID string) bool {
+		return txID == coinbasePlaceholderTxID
+	})
 
 	if verbose != nil && *verbose {
 		miningCandidate, err := s.blockAssemblyClient.GetMiningCandidate(ctx)
