@@ -29,6 +29,10 @@ const (
 	UTXOStorePostgres UTXOStoreType = "postgres"
 	// UTXOStoreSQLite uses SQLite as the UTXO store backend (no container needed)
 	UTXOStoreSQLite UTXOStoreType = "sqlite"
+	// UTXOStoreTeraslab uses TeraSlab as the UTXO store backend. The container
+	// startup logic lives in build-tagged files (container_manager_teraslab.go);
+	// it is only compiled in when the binary is built with `-tags teraslab`.
+	UTXOStoreTeraslab UTXOStoreType = "teraslab"
 )
 
 // ContainerManager manages test container lifecycle for various store backends
@@ -71,6 +75,11 @@ func (cm *ContainerManager) Initialize(ctx context.Context) (*url.URL, error) {
 		return cm.initializePostgres(ctx)
 	case UTXOStoreSQLite:
 		return cm.initializeSQLite()
+	case UTXOStoreTeraslab:
+		// Implemented in container_manager_teraslab.go (build tag `teraslab`);
+		// the stub in container_manager_teraslab_stub.go returns a clear error
+		// when the binary was not built with that tag.
+		return cm.initializeTeraslab(ctx)
 	default:
 		return nil, errors.NewInvalidArgumentError("unsupported UTXO store type: %s", cm.storeType)
 	}
