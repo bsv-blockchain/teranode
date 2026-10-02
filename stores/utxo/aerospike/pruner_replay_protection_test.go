@@ -16,10 +16,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestPrunerReplayProtection: pruning a fully-spent child whose parent still
+// TestPrunerReplayProtectionLinearChain (from #1706): pruning a fully-spent child whose parent still
 // has another output must leave deletedChildren on that parent, so
 // SpendAndCreate cannot recreate the child as unmined.
-func TestPrunerReplayProtection(t *testing.T) {
+func TestPrunerReplayProtectionLinearChain(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	s := test.CreateBaseTestSettings(t)
 	s.UtxoStore.DisableDAHCleaner = false

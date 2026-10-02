@@ -35,6 +35,12 @@ var (
 	// Class labels: tx_invalid, service, processing, policy, other.
 	prometheusLegacyNetsyncPrewarmErrors *prometheus.CounterVec
 
+	// prometheusLegacyNetsyncUnlockFailures counts committed blocks whose
+	// post-commit unlock of the create-phase lock failed past its retries. Each
+	// one leaves records locked with nothing to release them, so any increase
+	// needs an operator.
+	prometheusLegacyNetsyncUnlockFailures prometheus.Counter
+
 	prometheusMetricsInitOnce sync.Once
 )
 
@@ -50,6 +56,14 @@ func _initPrometheusMetrics() {
 		Help:      "The height of the block being processed",
 	})
 	prometheus.MustRegister(prometheusLegacyNetsyncBlockHeight)
+
+	prometheusLegacyNetsyncUnlockFailures = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "teranode",
+		Subsystem: "legacy_netsync",
+		Name:      "post_commit_unlock_failures_total",
+		Help:      "Committed blocks whose post-commit release of the create-phase lock failed; the affected records stay locked",
+	})
+	prometheus.MustRegister(prometheusLegacyNetsyncUnlockFailures)
 
 	prometheusLegacyNetsyncHandleTxMsg = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "teranode",

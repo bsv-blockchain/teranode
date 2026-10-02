@@ -456,7 +456,7 @@ func TestSyncManager_createUtxos(t *testing.T) {
 	block.SetHeight(100)
 
 	// Test createUtxos
-	err := sm.createUtxos(context.Background(), txMap, testBlockIdent(block), 0, false)
+	_, err := sm.createUtxos(context.Background(), txMap, testBlockIdent(block), 0, false)
 	assert.NoError(t, err)
 }
 
@@ -911,7 +911,7 @@ func TestPreValidateTransactions_AllSucceed(t *testing.T) {
 
 	txMap := makeTxMap(t, 10)
 
-	err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 100, 0, 0, false, false)
+	_, err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 100, 0, 0, false, false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, int64(10), cv.callCount.Load(), "all 10 transactions should be validated")
 }
@@ -938,7 +938,7 @@ func TestPreValidateTransactions_PartialFailure_RetriesSucceed(t *testing.T) {
 
 	txMap := makeTxMap(t, 10)
 
-	err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 100, 0, 0, false, false)
+	_, err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 100, 0, 0, false, false, nil)
 	require.NoError(t, err, "should succeed after retrying the 3 failed transactions")
 
 	// 10 in first pass + 3 retried = 13 total calls
@@ -966,7 +966,7 @@ func TestPreValidateTransactions_AllFail_NoProgress_GivesUp(t *testing.T) {
 
 	txMap := makeTxMap(t, 5)
 
-	err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 100, 0, 0, false, false)
+	_, err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 100, 0, 0, false, false, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no progress")
 
@@ -995,7 +995,7 @@ func TestPreValidateTransactions_NonRetryableError_FailsImmediately(t *testing.T
 
 	txMap := makeTxMap(t, 5)
 
-	err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 100, 0, 0, false, false)
+	_, err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 100, 0, 0, false, false, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "non-retryable")
 
@@ -1023,7 +1023,7 @@ func TestPreValidateTransactions_ParentContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	err := sm.PreValidateTransactions(ctx, txMap, chainhash.Hash{}, 100, 0, 0, false, false)
+	_, err := sm.PreValidateTransactions(ctx, txMap, chainhash.Hash{}, 100, 0, 0, false, false, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "context cancelled")
 }
@@ -1078,12 +1078,79 @@ func TestSyncManager_createUtxos_MergesBlockIDsForExistingTxs(t *testing.T) {
 	block.SetHeight(100)
 
 	const expectedBlockID uint32 = 42
-	require.NoError(t, sm.createUtxos(ctx, txMap, testBlockIdent(block), expectedBlockID, false))
+	created, createErr := sm.createUtxos(ctx, txMap, testBlockIdent(block), expectedBlockID, false)
+	require.NoError(t, createErr)
 
 	post, err := utxoStore.Get(ctx, &txHash, fields.BlockIDs)
 	require.NoError(t, err)
 	require.Contains(t, post.BlockIDs, expectedBlockID,
 		"createUtxos must merge blockID %d into the pre-existing tx", expectedBlockID)
+
+	require.Empty(t, created,
+		"a tx that was already in the store was not created by this block and must never be handed to the compensating delete")
+}
+
+// TestSyncManager_createUtxos_ReportsWhatItCreated pins the input to the
+// compensating delete: createUtxos must report the transactions it actually
+// wrote, so that when PreValidateTransactions then rejects the block those
+// records can be removed. Deleting a transaction this block did not create would
+// destroy someone else's record, which is why the pre-existing ones are excluded
+// (covered by TestSyncManager_createUtxos_MergesBlockIDsForExistingTxs).
+func TestSyncManager_createUtxos_ReportsWhatItCreated(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	storeURL, err := url.Parse("sqlitememory:///test_create_utxos_reports")
+	require.NoError(t, err)
+
+	utxoStore, err := utxosql.New(ctx, logger, tSettings, storeURL)
+	require.NoError(t, err)
+
+	sm := &SyncManager{settings: tSettings, logger: logger, utxoStore: utxoStore}
+
+	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](2)
+	wanted := make(map[chainhash.Hash]struct{}, 2)
+
+	for i := 0; i < 2; i++ {
+		tx := bt.NewTx()
+		tx.Version = 1
+		require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", uint64(1000+i)))
+		txMap.Set(*tx.TxIDChainHash(), &TxMapWrapper{Tx: tx})
+		wanted[*tx.TxIDChainHash()] = struct{}{}
+	}
+
+	block := bsvutil.NewBlock(&wire.MsgBlock{Header: wire.BlockHeader{Version: 1}})
+	block.SetHeight(100)
+
+	created, err := sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false)
+	require.NoError(t, err)
+	require.Len(t, created, len(wanted))
+
+	got := make(map[chainhash.Hash]struct{}, len(created))
+	for _, hash := range created {
+		got[*hash] = struct{}{}
+	}
+
+	require.Equal(t, wanted, got)
+
+	// End state: handing that list through the ghost walk to DeleteCreated, the
+	// way validateTransactionsLegacyMode does, leaves nothing behind.
+	ghosts := utxo.PrunedReplayGhosts(blockTransactions(txMap), created, func(h *chainhash.Hash) bool {
+		_, ok := got[*h]
+
+		return ok
+	})
+	require.Len(t, ghosts, len(wanted))
+	require.NoError(t, utxo.DeleteCreated(ctx, logger, utxoStore, ghosts, 4))
+
+	for hash := range wanted {
+		hash := hash
+		_, getErr := utxoStore.Get(ctx, &hash)
+		require.ErrorIs(t, getErr, errors.ErrTxNotFound, "compensation must remove every created record")
+	}
 }
 
 // newChunkingTestSetup builds the boilerplate shared by the createUtxos chunking
@@ -1122,6 +1189,13 @@ func newChunkingTestSetup(t *testing.T, totalTxs, batchSize, routines int) (
 	mockStore.On("SpendAndCreate",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 	).Return((*meta.Data)(nil), nil, errors.ErrTxExists)
+
+	// None of the existing records is a locked leftover of an earlier attempt.
+	mockStore.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		for _, item := range args.Get(1).([]*utxo.UnresolvedMetaData) {
+			item.Data = &meta.Data{}
+		}
+	}).Return(nil).Maybe()
 
 	sm := &SyncManager{
 		settings:  tSettings,
@@ -1191,7 +1265,8 @@ func TestSyncManager_createUtxos_ChunksExistingTxs(t *testing.T) {
 	)
 	recordChunksOnMock(mockStore, &callMu, &callChunks)
 
-	require.NoError(t, sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false))
+	_, createErr := sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false)
+	require.NoError(t, createErr)
 
 	// Assert 1: at least 2 calls (proves chunking happens).
 	require.GreaterOrEqual(t, len(callChunks), 2,
@@ -1228,7 +1303,7 @@ func TestSyncManager_createUtxos_ChunkErrorReturnsWrappedProcessingError(t *test
 		errors.NewStorageError("synthetic chunk failure"),
 	)
 
-	err := sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false)
+	_, err := sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to merge blockID into 20 pre-existing txs",
 		"expected wrapped ProcessingError, got: %v", err)
@@ -1297,7 +1372,7 @@ func TestSyncManager_createUtxos_ChunkFailureCancelsSiblings(t *testing.T) {
 		postTriggerMu.Unlock()
 	}).Return(map[chainhash.Hash][]uint32{}, errors.NewStorageError("SetMinedMulti must not be called after mergeCtx cancellation")).Maybe()
 
-	err := sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false)
+	_, err := sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false)
 	require.Error(t, err, "cancelled mergeCtx should propagate an error out of createUtxos")
 
 	postTriggerMu.Lock()
@@ -1326,7 +1401,8 @@ func TestSyncManager_createUtxos_ExactBatchSize(t *testing.T) {
 	)
 	recordChunksOnMock(mockStore, &callMu, &callChunks)
 
-	require.NoError(t, sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false))
+	_, createErr := sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false)
+	require.NoError(t, createErr)
 
 	require.Len(t, callChunks, 1, "expected exactly 1 chunk for n == batchSize")
 	require.Len(t, callChunks[0], totalTxs, "single chunk must cover all txs")
@@ -1351,7 +1427,8 @@ func TestSyncManager_createUtxos_OneOverBatchSize(t *testing.T) {
 	)
 	recordChunksOnMock(mockStore, &callMu, &callChunks)
 
-	require.NoError(t, sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false))
+	_, createErr := sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false)
+	require.NoError(t, createErr)
 
 	require.Len(t, callChunks, 2, "expected 2 chunks for n == batchSize+1 with 2 workers")
 	for i, chunk := range callChunks {
@@ -1380,7 +1457,8 @@ func TestSyncManager_createUtxos_BatchSizeZeroClamped(t *testing.T) {
 	recordChunksOnMock(mockStore, &callMu, &callChunks)
 
 	require.NotPanics(t, func() {
-		require.NoError(t, sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false))
+		_, createErr := sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false)
+		require.NoError(t, createErr)
 	}, "batchSize=0 must be clamped to avoid divide-by-zero")
 
 	require.Len(t, callChunks, totalTxs, "with batchSize clamped to 1, expected one chunk per tx")
@@ -1409,7 +1487,8 @@ func TestSyncManager_createUtxos_RoutinesZeroClamped(t *testing.T) {
 	recordChunksOnMock(mockStore, &callMu, &callChunks)
 
 	require.NotPanics(t, func() {
-		require.NoError(t, sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false))
+		_, createErr := sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false)
+		require.NoError(t, createErr)
 	}, "numRoutines=0 must be clamped so the merge actually runs")
 
 	require.Len(t, callChunks, 3, "with routines clamped to 1, expected 3 chunks (ceil(10/4))")

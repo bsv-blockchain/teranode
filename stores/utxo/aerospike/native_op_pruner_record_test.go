@@ -29,6 +29,9 @@ func nativeStoreWithSharedPolicy(t *testing.T) *Store {
 
 	s := &Store{nativeOpBatchWritePolicy: policy, logger: ulogger.TestLogger{}}
 	s.useNativeTeranodeOps.Store(true)
+	// A dispatcher that proved replay protection, so the replay-protection
+	// sub-ops (addDeletedChildren among them) are native too.
+	s.nativeReplayProtection.Store(true)
 
 	return s
 }
@@ -142,9 +145,12 @@ func TestPrunerObserverDemotesOnParameterError(t *testing.T) {
 	// The exact callback the provider passes as Options.ObserveNativeOpError.
 	var observe func(error) = s.demoteNativeOnUnsupported
 
+	s.nativeReplayProtection.Store(true)
+
 	observe(aerospike.ErrInvalidParam)
 
 	require.False(t, s.useNativeTeranodeOps.Load(), "PARAMETER_ERROR must demote the store")
+	require.False(t, s.nativeReplayProtection.Load(), "demotion must also clear the replay-protection verdict")
 
 	// After: UDF, without the pruner knowing anything about result codes.
 	rec = s.teranodeBatchRecord(aerospike.NewBatchUDFPolicy(), LuaPackage, key,

@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/stretchr/testify/require"
 )
 
@@ -77,4 +78,57 @@ func TestResolveSpendCompletions_OnlyReadsPublished(t *testing.T) {
 
 	require.Len(t, res.spentSpends, 1, "only the published successful spend must be counted; the unpublished item must be skipped")
 	require.Same(t, a.spend, res.spentSpends[0])
+}
+
+// TestAbortPathNeverReversesAnIdempotentMatchWhileAnInputIsUnanswered: tx C
+// spends A:0 (a marker, still in flight when the wait aborts), B:0 (already
+// records C, so an idempotent match: the confirmed spend) and D:0 (fresh), and
+// E:0 answers ErrSpent so a rollback is warranted. The abort path used to decide
+// "historical" by reading every slot, including A's in-flight one, which reads
+// Err==nil. It then reversed B:0 and handed a confirmed output to anyone. An
+// unanswered input must count as a possible marker hit. Reproduced by review.
+func TestAbortPathNeverReversesAnIdempotentMatchWhileAnInputIsUnanswered(t *testing.T) {
+	s := newTestStoreForGet(t)
+
+	a := mkSpendItem(1, nil) // in flight: not published
+
+	b := mkSpendItem(2, nil)
+	b.idempotent = true
+	b.completed.Store(true)
+	b.published.Store(true)
+
+	d := mkSpendItem(3, nil)
+	d.completed.Store(true)
+	d.published.Store(true)
+
+	e := mkSpendItem(4, nil)
+	e.spend.Err = errors.NewUtxoSpentError(*e.spend.TxID, e.spend.Vout, *e.spend.UTXOHash, spendpkg.NewSpendingData(e.spend.TxID, 0))
+	e.completed.Store(true)
+	e.published.Store(true)
+
+	res := s.resolveSpendCompletions(context.Background(), bt.NewTx(), []*batchSpend{a, b, d, e}, true)
+
+	require.True(t, res.rollbackNeeded, "fixture: E's ErrSpent warrants a rollback")
+	require.Equal(t, 1, res.unresolved, "A is still in flight")
+	require.False(t, res.prunedRejection, "no resolved input hit a marker")
+
+	rollback := res.rollbackSet()
+	require.Equal(t, []*utxo.Spend{d.spend}, rollback, "only the fresh write is reversed; B:0's confirmed spend stays")
+
+	// Once every input is answered and none hit a marker, the idempotent match
+	// is reversible again: it may be an orphan of an earlier failed attempt, and
+	// a call whose only successful input was that match is still healed.
+	a.completed.Store(true)
+	a.published.Store(true)
+	a.spend.Err = errors.NewUtxoSpentError(*a.spend.TxID, a.spend.Vout, *a.spend.UTXOHash, spendpkg.NewSpendingData(a.spend.TxID, 0))
+
+	res = s.resolveSpendCompletions(context.Background(), bt.NewTx(), []*batchSpend{a, b, e}, true)
+	require.Zero(t, res.unresolved)
+	require.Equal(t, []*utxo.Spend{b.spend}, res.rollbackSet())
+
+	// And a resolved marker hit makes it historical.
+	a.spend.Err = errors.NewUtxoSpendingTxPrunedError("pruned")
+	res = s.resolveSpendCompletions(context.Background(), bt.NewTx(), []*batchSpend{a, b, e}, true)
+	require.True(t, res.prunedRejection)
+	require.Empty(t, res.rollbackSet())
 }
