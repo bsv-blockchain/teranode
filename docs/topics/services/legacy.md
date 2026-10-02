@@ -350,6 +350,14 @@ This process effectively bridges the gap between Teranode's subtree-based archit
 
 #### 4.2.2. Transaction rebroadcast retry
 
+New txs reach the Legacy Service on the txmeta Kafka topic. That topic is
+spread over partitions, so a child tx can be read before its parent. SV Node
+only accepts a child once it has the parent, so each announce batch is sorted
+parents first, using the parent hashes the txmeta message carries, and sent
+to peers as one ordered batch. A child whose parent arrives in a later batch
+is not held back; the peer's orphan pool and the rebroadcast retry below
+cover it.
+
 The immediate INV dispatch for a newly-announced tx is best-effort: a peer
 that has not finished its version handshake at the instant of relay, or
 that is briefly disconnected, will silently drop the inv, and an SV Node

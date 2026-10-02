@@ -1,4 +1,4 @@
-package legacy
+package netsync
 
 import (
 	"testing"
@@ -64,16 +64,15 @@ func TestParentsFirst(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := parentsFirst(tc.hashes, func(i int) []chainhash.Hash { return tc.parents[tc.hashes[i]] })
+			got := ParentsFirst(tc.hashes, func(i int) []chainhash.Hash { return tc.parents[tc.hashes[i]] })
 			require.Equal(t, tc.want, got)
 		})
 	}
 }
 
-// TestParentsFirst_LongChain checks a chain as deep as the rebroadcast queue
-// can hold, queued child-first.
+// TestParentsFirst_LongChain checks a long chain queued child-first.
 func TestParentsFirst_LongChain(t *testing.T) {
-	const n = maxRebroadcastInventory
+	const n = 4096
 
 	hashes := make([]chainhash.Hash, n)
 	for i := range hashes {
@@ -81,7 +80,7 @@ func TestParentsFirst_LongChain(t *testing.T) {
 	}
 
 	// hashes[i]'s parent is hashes[i+1], so the input is fully reversed.
-	order := parentsFirst(hashes, func(i int) []chainhash.Hash {
+	order := ParentsFirst(hashes, func(i int) []chainhash.Hash {
 		if i+1 < n {
 			return []chainhash.Hash{hashes[i+1]}
 		}

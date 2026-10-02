@@ -476,6 +476,11 @@ type server struct {
 	// their retry safety net (their immediate RelayInventory still ran).
 	droppedRebroadcastCapHits atomic.Uint64
 
+	// relayTxBatchTail is closed when the most recently started relayTxBatch
+	// send finishes. Each new batch waits on it, so batches go out in order.
+	relayTxBatchMu   sync.Mutex
+	relayTxBatchTail chan struct{}
+
 	// rebroadcastTipDelay is how long rebroadcastHandler waits after a new
 	// block before retrying, so peers have connected it first. A field
 	// rather than the constant so tests can shorten it.
@@ -2129,12 +2134,19 @@ func (sp *serverPeer) OnWrite(_ *peer.Peer, bytesWritten int, msg wire.Message, 
 // reason. The rebroadcastHandler replays the queue after each new block so
 // the tx still reaches peers once they're ready, instead of rotting in the
 // local mempool with no retry path.
+//
+// txns arrive parents first (see netsync's orderAnnounceBatch) and are sent
+// as one batch, so each peer is offered a parent before its children.
 func (s *server) relayTransactions(txns []*netsync.TxHashAndFee) {
+	batch := make([]relayMsg, 0, len(txns))
+
 	for _, txHashAndFee := range txns {
 		iv := wire.NewInvVect(wire.InvTypeTx, &txHashAndFee.TxHash)
-		s.RelayInventory(iv, txHashAndFee)
+		batch = append(batch, relayMsg{invVect: iv, data: txHashAndFee})
 		s.AddRebroadcastInventory(iv, txHashAndFee)
 	}
+
+	s.relayTxBatch(batch)
 }
 
 // AnnounceNewTransactions generates and relays inventory vectors and notifies
@@ -3407,6 +3419,58 @@ func (s *server) canRelayTx() bool {
 // rationale.
 func (s *server) RelayInventory(invVect *wire.InvVect, data interface{}) {
 	s.relayInventory(relayMsg{invVect: invVect, data: data})
+}
+
+// relayTxBatch hands a batch of tx invs to the peerHandler in order, so each
+// peer is offered them in batch order. Unlike RelayInventory, which starts a
+// goroutine per inv, one goroutine sends the whole batch, and it waits for the
+// previous batch to finish first, so batches never interleave. It never blocks
+// the caller. Like RelayInventory, it checks canRelayTx before each send and
+// stops once the node has left RUNNING; a send already blocked on relayInv is
+// only interrupted by quit.
+//
+// The ordering has a cost: announce and rebroadcast batches share this one
+// chain, so a batch stuck on relayInv holds up every later batch until it
+// drains or the server quits. peerHandler is the only reader of relayInv, so
+// if it stalls no inv gets through either way; the per-inv goroutines
+// RelayInventory used to start all waited on the same channel. What changes
+// is that later batches wait in order behind the stuck one, one goroutine per
+// batch rather than one per inv.
+func (s *server) relayTxBatch(batch []relayMsg) {
+	if len(batch) == 0 {
+		return
+	}
+
+	done := make(chan struct{})
+
+	s.relayTxBatchMu.Lock()
+	prev := s.relayTxBatchTail
+	s.relayTxBatchTail = done
+	s.relayTxBatchMu.Unlock()
+
+	go func() {
+		defer close(done)
+
+		if prev != nil {
+			select {
+			case <-prev:
+			case <-s.quit:
+				return
+			}
+		}
+
+		for _, msg := range batch {
+			if !s.canRelayTx() {
+				return
+			}
+
+			select {
+			case s.relayInv <- msg:
+			case <-s.quit:
+				return
+			}
+		}
+	}()
 }
 
 func (s *server) relayInventory(msg relayMsg) {

@@ -513,6 +513,13 @@ type SyncManager struct {
 	txAnnounceMu     sync.RWMutex
 	txAnnounceClosed bool
 
+	// announceParents holds the parent tx hashes of txs waiting in
+	// txAnnounceBatcher, which cannot carry them itself: its items must be
+	// comparable for deduplication. orderAnnounceBatch consumes the entries.
+	// Bounded; an entry lost to eviction, or left behind by a deduplicated
+	// Put, only costs that tx its place in the ordering.
+	announceParents *txmap.SyncedMap[chainhash.Hash, []chainhash.Hash]
+
 	// These fields should only be accessed from the blockHandler thread
 	// (except syncPeer/syncPeerState which are protected by syncPeerMu).
 	rejectedTxns    *txmap.SyncedMap[chainhash.Hash, struct{}]
@@ -3539,13 +3546,69 @@ func (sm *SyncManager) Stop() error {
 // the txmeta Kafka listener goroutine (not joined by Stop), so the read lock
 // pairs with the write lock in closeTxAnnounceBatcher to make a post-close Put a
 // safe no-op.
-func (sm *SyncManager) announceTx(item *TxHashAndFee) {
+func (sm *SyncManager) announceTx(item *TxHashAndFee, parents ...chainhash.Hash) {
 	sm.txAnnounceMu.RLock()
 	defer sm.txAnnounceMu.RUnlock()
 
 	if !sm.txAnnounceClosed && sm.txAnnounceBatcher != nil {
+		if len(parents) > 0 && sm.announceParents != nil {
+			sm.announceParents.Set(item.TxHash, parents)
+		}
+
 		sm.txAnnounceBatcher.Put(item)
 	}
+}
+
+// newTxAnnounceBatcher builds the batcher that announces new txs to peers,
+// parents first within each batch.
+//
+// It runs with background=false, so the batcher's worker flushes one batch
+// at a time, in order. With background=true go-batcher starts a goroutine
+// per flush, so a child in one batch could reach peers before its parent in
+// the previous one. The callback does not block: AnnounceNewTransactions
+// hands each batch to an ordered sender and returns.
+func (sm *SyncManager) newTxAnnounceBatcher(size int, timeout time.Duration) *batcher.BatcherWithDedup[TxHashAndFee] {
+	return batcher.NewWithDeduplicationAndPool[TxHashAndFee](size, timeout, func(batch []*TxHashAndFee) {
+		sm.logger.Debugf("announcing %d transactions to peers", len(batch))
+
+		// process the batch, parents first
+		sm.peerNotifier.AnnounceNewTransactions(sm.orderAnnounceBatch(batch))
+	}, false,
+		batcher.WithName("netsync_tx_announce"),
+		batcher.WithLogger(sm.logger),
+		batcher.WithMetrics(batchermetrics.Provider()),
+		batcher.WithTracer(tracing.Tracer("SyncManager").OTelTracer()),
+	)
+}
+
+// orderAnnounceBatch reorders a batch from txAnnounceBatcher so every tx
+// comes after any of its parents in the same batch. The txmeta topic is
+// spread over partitions, so a child can be read, and batched, before its
+// parent; SV Node only accepts a child once it has the parent. A child whose
+// parent is in a later batch is not held back: the peer's orphan pool and the
+// rebroadcast queue cover that. Returns a new slice, since the batcher reuses
+// the one it passes in.
+func (sm *SyncManager) orderAnnounceBatch(batch []*TxHashAndFee) []*TxHashAndFee {
+	hashes := make([]chainhash.Hash, len(batch))
+	parents := make([][]chainhash.Hash, len(batch))
+
+	for i, item := range batch {
+		hashes[i] = item.TxHash
+
+		if sm.announceParents != nil {
+			if p, ok := sm.announceParents.Get(item.TxHash); ok {
+				parents[i] = p
+				sm.announceParents.Delete(item.TxHash)
+			}
+		}
+	}
+
+	ordered := make([]*TxHashAndFee, 0, len(batch))
+	for _, i := range ParentsFirst(hashes, func(i int) []chainhash.Hash { return parents[i] }) {
+		ordered = append(ordered, batch[i])
+	}
+
+	return ordered
 }
 
 // closeTxAnnounceBatcher marks the tx-announce batcher closed (so further
@@ -3659,17 +3722,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	// create the transaction announcement batcher
-	sm.txAnnounceBatcher = batcher.NewWithDeduplicationAndPool[TxHashAndFee](maxRequestedTxns, 1*time.Second, func(batch []*TxHashAndFee) {
-		sm.logger.Debugf("announcing %d transactions to peers", len(batch))
-
-		// process the batch
-		sm.peerNotifier.AnnounceNewTransactions(batch)
-	}, true,
-		batcher.WithName("netsync_tx_announce"),
-		batcher.WithLogger(logger),
-		batcher.WithMetrics(batchermetrics.Provider()),
-		batcher.WithTracer(tracing.Tracer("SyncManager").OTelTracer()),
-	)
+	sm.announceParents = txmap.NewSyncedMap[chainhash.Hash, []chainhash.Hash](2 * maxRequestedTxns)
+	sm.txAnnounceBatcher = sm.newTxAnnounceBatcher(maxRequestedTxns, 1*time.Second)
 
 	// set an eviction function for orphan transactions
 	// this will be called when an orphan transaction is evicted from the map
@@ -4084,7 +4138,7 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 				TxHash: hash,
 				Fee:    txMeta.Fee,
 				Size:   txMeta.SizeInBytes,
-			})
+			}, txMeta.TxInpoints.ParentTxHashes...)
 		} else {
 			offset += int(contentLen)
 			continue
