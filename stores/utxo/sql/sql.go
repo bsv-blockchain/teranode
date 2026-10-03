@@ -2556,6 +2556,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			newDAH := int64(s.GetBlockHeight() + 1 + retention)
 			dahIdx := pidx
 			updateArgs = append(updateArgs, newDAH)
+			flooredDAH := flooredDAHSQL("t.id", fmt.Sprintf("$%d", dahIdx), retention)
 			// Postgres CTEs share a snapshot, so the count(*) over outputs inside
 			// dah_upd sees the PRE-update state. "unspent-before == spent_in_batch"
 			// ⇔ this batch just drained the tx's last unspent output.
@@ -2605,7 +2606,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 				GROUP BY o.transaction_id
 			),
 			dah_upd AS (
-				UPDATE transactions t SET delete_at_height = $%d
+				UPDATE transactions t SET delete_at_height = %s
 				FROM parents p
 				LEFT JOIN unspent_before u ON u.transaction_id = p.transaction_id
 				WHERE t.id = p.transaction_id
@@ -2614,12 +2615,12 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 				  AND NOT t.conflicting
 				  AND EXISTS (SELECT 1 FROM block_ids bi WHERE bi.transaction_id = t.id)
 				  AND COALESCE(u.n_unspent, 0) = p.spent_in_batch
-				  AND (t.delete_at_height IS NULL OR t.delete_at_height < $%d)
+				  AND (t.delete_at_height IS NULL OR t.delete_at_height < %s)
 				RETURNING 1
 			)
 			SELECT batch_idx FROM upd_spent
 			UNION ALL
-			SELECT batch_idx FROM upd_idem`, dahIdx, dahIdx))
+			SELECT batch_idx FROM upd_idem`, flooredDAH, flooredDAH))
 		} else {
 			ub.WriteString(`) AS v(transaction_id,idx,spending_data,batch_idx)
 			WHERE o.transaction_id = v.transaction_id AND o.idx = v.idx
@@ -3093,6 +3094,25 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 	return false
 }
 
+// minedFloorSQL returns a SQL expression for the lowest delete_at_height a row may
+// carry once it has been mined: its highest block height plus retention. It is NULL
+// for a row with no block_ids rows, so a comparison against it is never true and
+// callers fall through to their unfloored branch. retention is an integer, not user
+// input, so it is formatted in rather than bound.
+func minedFloorSQL(txIDExpr string, retention uint32) string {
+	return fmt.Sprintf("(SELECT MAX(bi.block_height) + %d FROM block_ids bi WHERE bi.transaction_id = %s)", retention, txIDExpr)
+}
+
+// flooredDAHSQL wraps a delete_at_height stamp so it is never below the row's mined
+// floor. A stamp taken from the store's cached tip lags the block being processed,
+// and the pruner deletes purely on the stamp, so a record could be pruned inside the
+// retention window of the block it was mined in. The floor only ever raises a stamp.
+func flooredDAHSQL(txIDExpr, newDAHExpr string, retention uint32) string {
+	floor := minedFloorSQL(txIDExpr, retention)
+
+	return fmt.Sprintf("CASE WHEN %[1]s > %[2]s THEN %[1]s ELSE %[2]s END", floor, newDAHExpr)
+}
+
 func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) error {
 	if s.settings.GetUtxoStoreBlockHeightRetention() == 0 {
 		return nil
@@ -3105,7 +3125,8 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 		SELECT count(o.idx), t.conflicting, t.preserve_until IS NOT NULL,
 		       EXISTS(SELECT 1 FROM block_ids WHERE transaction_id = t.id) AS has_blocks,
 		       t.unmined_since IS NULL AS is_on_longest_chain,
-		       t.delete_at_height
+		       t.delete_at_height,
+		       (SELECT MAX(bi.block_height) FROM block_ids bi WHERE bi.transaction_id = t.id) AS max_block_height
 		FROM transactions t
 		LEFT JOIN outputs o ON t.id = o.transaction_id
 		   AND o.spending_data IS NULL
@@ -3120,10 +3141,11 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 		hasBlocks            bool
 		isOnLongestChain     bool
 		existingDAH          sql.NullInt64
+		maxBlockHeight       sql.NullInt64
 		deleteAtHeightOrNull sql.NullInt64
 	)
 
-	if err := txn.QueryRowContext(ctx, qUnspent, transactionID).Scan(&unspent, &conflicting, &hasPreserveUntil, &hasBlocks, &isOnLongestChain, &existingDAH); err != nil {
+	if err := txn.QueryRowContext(ctx, qUnspent, transactionID).Scan(&unspent, &conflicting, &hasPreserveUntil, &hasBlocks, &isOnLongestChain, &existingDAH, &maxBlockHeight); err != nil {
 		return errors.NewStorageError("[setDAH] error checking for unspent outputs for %d", transactionID, err)
 	}
 
@@ -3137,10 +3159,23 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 	// and lags behind during block processing (mirrors aerospike set_mined.go:162)
 	newDAH := int64(s.GetBlockHeight() + 1 + retention)
 
+	// never stamp a mined record below its highest block height + retention: the cached
+	// tip above lags the block being processed and the pruner deletes purely on the stamp
+	minedFloor := int64(-1)
+	if maxBlockHeight.Valid {
+		minedFloor = maxBlockHeight.Int64 + int64(retention)
+		if minedFloor > newDAH {
+			newDAH = minedFloor
+		}
+	}
+
 	if conflicting {
-		// Conflicting: set DAH only if not already set (mirrors aerospike line 944-951)
+		// Conflicting: set DAH only if not already set (mirrors aerospike line 944-951),
+		// but raise one stamped from a lagging tip before the record was mined
 		if !existingDAH.Valid {
 			_ = deleteAtHeightOrNull.Scan(newDAH)
+		} else if existingDAH.Int64 < minedFloor {
+			_ = deleteAtHeightOrNull.Scan(minedFloor)
 		} else {
 			// Keep existing DAH
 			deleteAtHeightOrNull = existingDAH
@@ -3560,23 +3595,24 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 			// 3. If DAH is NULL and all UTXOs are spent -> set DAH for the first time
 			// 4. Otherwise -> leave DAH unchanged
 			inClause3, inArgs3 := buildINClause(existingHashBytes, 2)
+			flooredDAH := flooredDAHSQL("transactions.id", "$1", retention)
 			qUpdate := fmt.Sprintf(`
 				UPDATE transactions
 				SET locked = false
 				   ,unmined_since = NULL
 				   ,delete_at_height = CASE
 				        WHEN preserve_until IS NOT NULL THEN delete_at_height
-				        WHEN delete_at_height IS NOT NULL AND delete_at_height < $1 THEN $1
+				        WHEN delete_at_height IS NOT NULL AND delete_at_height < %[1]s THEN %[1]s
 				        WHEN delete_at_height IS NULL
 				             AND NOT EXISTS (
 				                 SELECT 1 FROM outputs o
 				                 WHERE o.transaction_id = transactions.id AND o.spending_data IS NULL
 				             )
-				             THEN $1
+				             THEN %[1]s
 				        ELSE delete_at_height
 				    END
-				WHERE hash IN %s
-			`, inClause3)
+				WHERE hash IN %[2]s
+			`, flooredDAH, inClause3)
 			args := append([]interface{}{newDAH}, inArgs3...)
 			if _, err = txn.ExecContext(ctx, qUpdate, args...); err != nil {
 				return nil, errors.NewStorageError(errSQLUpdatingTransactions, err)
@@ -3692,7 +3728,16 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 }
 
 func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
+	return s.getSpend(ctx, s.db, spend)
+}
 
+// rowQuerier is satisfied by both *sql.DB and *sql.Tx, so a read can run on the
+// caller's open transaction instead of waiting for a second pool connection.
+type rowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func (s *Store) getSpend(ctx context.Context, db rowQuerier, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	q := `
 		SELECT
 		 o.utxo_hash
@@ -3718,7 +3763,7 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 		locked                 bool
 	)
 
-	err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&utxoHash, &coinbaseSpendingHeight, &spendingDataBytes, &frozen, &spendableIn, &conflicting, &locked)
+	err := db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&utxoHash, &coinbaseSpendingHeight, &spendingDataBytes, &frozen, &spendableIn, &conflicting, &locked)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// Match aerospike behavior: return NOT_FOUND status instead of error
@@ -4518,8 +4563,11 @@ func (s *Store) GetCounterConflicting(ctx context.Context, hash chainhash.Hash) 
 
 	// unbounded: this is the conflict-demotion path (ProcessConflicting), which
 	// must always walk the full descendant set to completion — a budget failure
-	// here would wedge block assembly on the block forever (issue 1391)
-	return utxo.GetCounterConflictingTxHashes(ctx, s, hash, 0)
+	// here would wedge block assembly on the block forever (issue 1391).
+	// Retention 0 disables the dangling-spender guard: tolerating an absent
+	// counter here would leave its spend on the parent slot, so the winner's
+	// spend in step 3 would fail UTXO_SPENT after steps 1 and 2 had mutated.
+	return utxo.GetCounterConflictingTxHashes(ctx, s, hash, 0, 0)
 }
 
 // GetConflictingChildren returns a list of conflicting transactions for a given transaction hash.
@@ -4555,16 +4603,33 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 	// When clearing conflicting: clear DAH (conditions for deletion no longer met).
 	var qUpdate string
 	if setValue {
-		qUpdate = `
-			UPDATE transactions SET
-			 conflicting = $2
-			,delete_at_height = CASE
-			     WHEN preserve_until IS NOT NULL THEN delete_at_height
-			     ELSE COALESCE(delete_at_height, $3)
-			 END
-			WHERE hash = $1
-			RETURNING id
-		`
+		if retention := s.settings.GetUtxoStoreBlockHeightRetention(); retention > 0 {
+			// the stamp is never below the row's highest block height + retention, and a
+			// stamp written earlier from a lagging tip is raised once the record is mined
+			qUpdate = fmt.Sprintf(`
+				UPDATE transactions SET
+				 conflicting = $2
+				,delete_at_height = CASE
+				     WHEN preserve_until IS NOT NULL THEN delete_at_height
+				     WHEN delete_at_height IS NULL THEN %[1]s
+				     WHEN delete_at_height < %[2]s THEN %[2]s
+				     ELSE delete_at_height
+				 END
+				WHERE hash = $1
+				RETURNING id
+			`, flooredDAHSQL("transactions.id", "$3", retention), minedFloorSQL("transactions.id", retention))
+		} else {
+			qUpdate = `
+				UPDATE transactions SET
+				 conflicting = $2
+				,delete_at_height = CASE
+				     WHEN preserve_until IS NOT NULL THEN delete_at_height
+				     ELSE COALESCE(delete_at_height, $3)
+				 END
+				WHERE hash = $1
+				RETURNING id
+			`
+		}
 	} else {
 		qUpdate = `
 			UPDATE transactions SET
@@ -4649,8 +4714,9 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 				UTXOHash: utxoHash,
 			}
 
-			// optimize to get all in 1 query
-			spendResponse, err := s.GetSpend(ctx, spend)
+			// read on the open transaction: the pool call waits for a connection the
+			// transaction holds, which deadlocks a single-connection store
+			spendResponse, err := s.getSpend(ctx, txn, spend)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -4836,17 +4902,18 @@ func (s *Store) setUnlockedBulk(ctx context.Context, txHashes []chainhash.Hash) 
 				SET locked = false,
 				    delete_at_height = CASE
 				        WHEN s.has_preserve THEN t.delete_at_height
-				        WHEN s.conflicting AND t.delete_at_height IS NULL THEN $1
+				        WHEN s.conflicting AND t.delete_at_height IS NULL THEN %[2]s
+				        WHEN s.conflicting AND t.delete_at_height < %[3]s THEN %[3]s
 				        WHEN s.conflicting THEN t.delete_at_height
 				        WHEN s.unspent = 0 AND s.has_blocks AND s.on_longest_chain
-				             AND (t.delete_at_height IS NULL OR t.delete_at_height < $1) THEN $1
+				             AND (t.delete_at_height IS NULL OR t.delete_at_height < %[2]s) THEN %[2]s
 				        WHEN s.unspent = 0 AND s.has_blocks AND s.on_longest_chain THEN t.delete_at_height
 				        WHEN t.delete_at_height IS NOT NULL THEN NULL
 				        ELSE t.delete_at_height
 				    END
 				FROM tx_state s
 				WHERE t.id = s.id
-			`, inClause)
+			`, inClause, flooredDAHSQL("t.id", "$1", retention), minedFloorSQL("t.id", retention))
 
 			if _, err := s.db.ExecContext(ctx, q, args...); err != nil {
 				return errors.NewStorageError("failed to bulk unlock+DAH transactions", err)
@@ -5746,16 +5813,17 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 	query := `
 		UPDATE transactions
 		SET delete_at_height = CASE
-			WHEN conflicting THEN $1
+			WHEN conflicting THEN %[1]s
 			WHEN unmined_since IS NULL
 			     AND EXISTS(SELECT 1 FROM block_ids b WHERE b.transaction_id = transactions.id)
 			     AND NOT EXISTS(SELECT 1 FROM outputs o WHERE o.transaction_id = transactions.id AND o.spending_data IS NULL)
-			THEN $1
+			THEN %[1]s
 			ELSE NULL
 		END,
 		preserve_until = NULL
 		WHERE preserve_until IS NOT NULL AND preserve_until <= $2
 	`
+	query = fmt.Sprintf(query, flooredDAHSQL("transactions.id", "$1", retention))
 
 	result, err := s.db.ExecContext(ctx, query, deleteAtHeight, currentHeight)
 	if err != nil {

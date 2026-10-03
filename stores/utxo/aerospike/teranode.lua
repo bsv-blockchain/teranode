@@ -987,11 +987,36 @@ function setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
     local existingDeleteAtHeight = rec[BIN_DELETE_AT_HEIGHT]
     local newDeleteHeight = currentBlockHeight + blockHeightRetention
 
+    -- A record that was mined must outlive its highest block by the retention window,
+    -- whatever height the caller passes. The caller's height can be the node's cached
+    -- tip, which lags the block being processed, and the pruner deletes purely on the
+    -- stamp. minedFloor is that lower bound; it only ever raises a stamp.
+    local minedFloor = nil
+    local heights = rec[BIN_BLOCK_HEIGHTS]
+    if heights then
+        for i = 1, #heights do
+            local f = heights[i] + blockHeightRetention
+            if not minedFloor or f > minedFloor then
+                minedFloor = f
+            end
+        end
+    end
+
+    if minedFloor and minedFloor > newDeleteHeight then
+        newDeleteHeight = minedFloor
+    end
+
     -- Handle conflicting transactions first
     if rec[BIN_CONFLICTING] then
         if not existingDeleteAtHeight then
             -- Set the deleteAtHeight for the record
             rec[BIN_DELETE_AT_HEIGHT] = newDeleteHeight
+            if rec[BIN_EXTERNAL] then
+                return SIGNAL_DELETE_AT_HEIGHT_SET, totalExtraRecs
+            end
+        elseif minedFloor and existingDeleteAtHeight < minedFloor then
+            -- stamped earlier from a lagging tip, before the record was mined: raise it
+            rec[BIN_DELETE_AT_HEIGHT] = minedFloor
             if rec[BIN_EXTERNAL] then
                 return SIGNAL_DELETE_AT_HEIGHT_SET, totalExtraRecs
             end
