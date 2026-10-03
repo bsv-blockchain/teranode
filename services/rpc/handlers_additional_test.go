@@ -4832,7 +4832,12 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 		assert.Equal(t, true, infoMap["stn"])      // STN network
 	})
 
-	t.Run("legacy skipped when not subscribed", func(t *testing.T) {
+	t.Run("legacy peers counted though no service registers as SubscriberLegacy", func(t *testing.T) {
+		// Nothing in the tree ever calls Subscribe(ctx, blockchain.SubscriberLegacy)
+		// — the legacy netsync manager was the only producer and it was removed.
+		// So this is the subscriber list every real node reports. getinfo must
+		// still count legacy peers; if it consults the subscriber list to decide
+		// whether to call legacy GetPeers, it will silently report 0 here.
 		clearRPCCallCache()
 		nBits, _ := model.NewNBitFromString("180f9ff5")
 		mockBlockchainClient := &blockchain.Mock{}
@@ -4841,9 +4846,8 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 			&model.BlockHeaderMeta{Height: 100000},
 			nil,
 		)
-		// No legacy subscriber in the list
 		mockBlockchainClient.On("GetSubscribers", mock.Anything).Return(
-			[]string{blockchain.SubscriberP2P},
+			[]string{blockchain.SubscriberP2P, blockchain.SubscriberBlockAssembler},
 			nil,
 		)
 
@@ -4879,63 +4883,14 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		assert.False(t, legacyCalled, "legacy GetPeers should not be called when legacy is not subscribed")
-		infoMap := result.(map[string]interface{})
-		assert.Equal(t, 0, infoMap["connections"])
-	})
-
-	t.Run("legacy called when subscribed", func(t *testing.T) {
-		clearRPCCallCache()
-		nBits, _ := model.NewNBitFromString("180f9ff5")
-		mockBlockchainClient := &blockchain.Mock{}
-		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
-			&model.BlockHeader{Bits: *nBits},
-			&model.BlockHeaderMeta{Height: 100000},
-			nil,
-		)
-		mockBlockchainClient.On("GetSubscribers", mock.Anything).Return(
-			[]string{blockchain.SubscriberLegacy},
-			nil,
-		)
-
-		legacyCalled := false
-		mockLegacyPeerClient := &mockLegacyPeerClient{
-			getPeersFunc: func(ctx context.Context) (*peer_api.GetPeersResponse, error) {
-				legacyCalled = true
-				return &peer_api.GetPeersResponse{
-					Peers: []*peer_api.Peer{{Id: 1, Addr: "127.0.0.1:8335"}},
-				}, nil
-			},
-		}
-
-		s := &RPCServer{
-			logger:           logger,
-			blockchainClient: mockBlockchainClient,
-			legacyP2PClient:  mockLegacyPeerClient,
-			settings: &settings.Settings{
-				ChainCfgParams: &chaincfg.MainNetParams,
-				RPC: settings.RPCSettings{
-					ClientCallTimeout: 5 * time.Second,
-				},
-				Policy: &settings.PolicySettings{
-					ExcessiveBlockSize:           4294967296,
-					BlockMaxSize:                 2000000000,
-					MaxStackMemoryUsagePolicy:    104857600,
-					MaxStackMemoryUsageConsensus: 0,
-				},
-			},
-		}
-
-		result, err := handleGetInfo(context.Background(), s, nil, nil)
-		require.NoError(t, err)
-		require.NotNil(t, result)
-
-		assert.True(t, legacyCalled, "legacy GetPeers should be called when legacy is subscribed")
+		assert.True(t, legacyCalled, "legacy GetPeers must be called whenever a legacy client exists")
 		infoMap := result.(map[string]interface{})
 		assert.Equal(t, 1, infoMap["connections"])
 	})
 
-	t.Run("legacy skipped when GetSubscribers fails", func(t *testing.T) {
+	t.Run("legacy counted when blockchain subscriber lookup fails", func(t *testing.T) {
+		// The subscriber lookup is not a liveness signal the handler depends on, so
+		// a blockchain error must not suppress the legacy leg either.
 		clearRPCCallCache()
 		nBits, _ := model.NewNBitFromString("180f9ff5")
 		mockBlockchainClient := &blockchain.Mock{}
@@ -4981,9 +4936,9 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		assert.False(t, legacyCalled, "legacy GetPeers should not be called when GetSubscribers fails")
+		assert.True(t, legacyCalled, "legacy GetPeers must be called regardless of the subscriber lookup result")
 		infoMap := result.(map[string]interface{})
-		assert.Equal(t, 0, infoMap["connections"])
+		assert.Equal(t, 1, infoMap["connections"])
 	})
 }
 

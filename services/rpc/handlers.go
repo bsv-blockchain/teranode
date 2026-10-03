@@ -1621,25 +1621,6 @@ func calculateMedianTime(ctx context.Context, blockchainClient blockchain.Client
 	return medianTimestampUint32, nil
 }
 
-// isSubscriberActive checks whether a blockchain subscriber whose source
-// contains substr is currently registered. This lets RPC handlers skip
-// expensive calls to services that are not running.
-// isSubscriberActive checks whether source is present in the blockchain
-// subscriber list. This lets RPC handlers skip expensive calls to services
-// that are not running.
-func isSubscriberActive(ctx context.Context, s *RPCServer, source string) bool {
-	subs, err := s.blockchainClient.GetSubscribers(ctx)
-	if err != nil {
-		return false
-	}
-	for _, src := range subs {
-		if src == source {
-			return true
-		}
-	}
-	return false
-}
-
 // handleGetInfo returns a JSON object containing various state info.
 func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetInfo",
@@ -1695,8 +1676,18 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 		}
 	}
 
+	// The legacy leg is gated only on the client existing. It used to also
+	// require isSubscriberActive(blockchain.SubscriberLegacy), but nothing has
+	// ever called Subscribe(ctx, SubscriberLegacy) — the legacy netsync manager
+	// was the only producer and it was removed — so GetSubscribers can never
+	// contain that source and the gate was silently false on every node. getinfo
+	// therefore dropped legacy peers from `connections` everywhere.
+	//
+	// Instead, rely on the ClientCallTimeout wrapper below, matching how the p2p
+	// leg and the ban handlers (see #1242) treat an absent-but-configured legacy
+	// service: bounded wait, then log and continue with the other leg's answer.
 	var legacyConnections *peer_api.GetPeersResponse
-	if s.legacyP2PClient != nil && isSubscriberActive(ctx, s, blockchain.SubscriberLegacy) {
+	if s.legacyP2PClient != nil {
 		peerCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
 		defer cancel()
 
