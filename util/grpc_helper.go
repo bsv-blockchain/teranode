@@ -342,6 +342,17 @@ func RegisterPrometheusMetrics() {
 // for transient errors. It retries requests that fail with codes.Unavailable or
 // codes.DeadlineExceeded, with a fixed backoff delay between attempts.
 //
+// Retries stop as soon as the caller's context is cancelled or its deadline passes.
+// Callers bound their own deadlines (for example settings.RPC.ClientCallTimeout, 5s by
+// default), and those deadlines are not ours to override: without this check the loop
+// spent grpc_max_retries * grpc_retry_backoff — 40 * 250ms = ~10s at the defaults —
+// retrying a call whose caller had already given up (#1538). The error returned in that
+// case is a gRPC status derived from the context error, so callers that branch on
+// status.Code(err) see DeadlineExceeded/Canceled exactly as they would from a direct call.
+//
+// A codes.DeadlineExceeded raised by the *server* on a context that still has time left
+// is still retried: that is a genuine transient failure, not the caller's own deadline.
+//
 // Parameters:
 //   - maxAttempts: Total number of attempts including the initial call (e.g. 3 means 1 initial + 2 retries).
 //     The grpc_client_retries_total metric increments only for actual retries (up to maxAttempts-1 per call).
@@ -362,6 +373,13 @@ func retryInterceptor(maxAttempts int, retryBackoff time.Duration, callerName st
 		var err error
 
 		for i := 0; i < maxAttempts; i++ {
+			// A previous attempt exhausted the caller's deadline, or the caller
+			// gave up between attempts. Report that rather than the last transient
+			// status, which would misreport a local timeout as a remote failure.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return status.FromContextError(ctxErr).Err()
+			}
+
 			err = invoker(ctx, method, req, reply, cc, opts...)
 			if err == nil {
 				return nil
@@ -375,7 +393,18 @@ func retryInterceptor(maxAttempts int, retryBackoff time.Duration, callerName st
 			// Only count and sleep if there is a subsequent attempt
 			if i < maxAttempts-1 {
 				grpcClientRetriesTotal.WithLabelValues(callerName, status.Code(err).String()).Inc()
-				time.Sleep(retryBackoff)
+
+				// Back off, but return promptly if the caller's context ends during
+				// the wait. A bare time.Sleep ignores cancellation, so it kept the
+				// retry loop alive for its full budget past the deadline.
+				timer := time.NewTimer(retryBackoff)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+
+					return status.FromContextError(ctx.Err()).Err()
+				case <-timer.C:
+				}
 			}
 		}
 

@@ -715,6 +715,88 @@ func TestRetryInterceptorMaxRetriesExceeded(t *testing.T) {
 	assert.Equal(t, maxRetries, callCount, "Should call invoker exactly maxRetries times")
 }
 
+func TestRetryInterceptorStopsWhenCallerDeadlineExpires(t *testing.T) {
+	// The production settings are 40 attempts x 250ms backoff (~10s), while
+	// callers bound their own deadline (rpc_client_call_timeout, 5s by default).
+	// The retry loop must not keep spending attempts after that deadline, or the
+	// caller's own timeout is silently stretched (#1538).
+	const maxAttempts = 40
+	backoff := 250 * time.Millisecond
+	interceptor := retryInterceptor(maxAttempts, backoff, "test")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	callCount := 0
+	mockInvoker := func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+		callCount++
+		return status.Error(codes.Unavailable, "service unavailable")
+	}
+
+	start := time.Now()
+	err := interceptor(ctx, "/test.service/TestMethod", "request", "reply", nil, mockInvoker)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Equal(t, codes.DeadlineExceeded, status.Code(err),
+		"must report the caller's deadline, not the last transient status")
+	assert.Less(t, elapsed, backoff*3,
+		"must give up promptly after the deadline instead of running the full retry budget")
+
+	// 300ms deadline against a 250ms backoff allows at most 2 attempts.
+	assert.LessOrEqual(t, callCount, 2, "should not retry past the caller's deadline")
+}
+
+func TestRetryInterceptorReturnsPromptlyOnCancel(t *testing.T) {
+	const maxAttempts = 40
+	backoff := 250 * time.Millisecond
+	interceptor := retryInterceptor(maxAttempts, backoff, "test")
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	callCount := 0
+	mockInvoker := func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+		callCount++
+		return status.Error(codes.Unavailable, "service unavailable")
+	}
+
+	// Cancel from another goroutine part-way through the first backoff.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	err := interceptor(ctx, "/test.service/TestMethod", "request", "reply", nil, mockInvoker)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Equal(t, codes.Canceled, status.Code(err))
+	assert.Less(t, elapsed, backoff,
+		"a cancel during backoff must interrupt the wait, not sleep it out")
+	assert.Equal(t, 1, callCount)
+}
+
+func TestRetryInterceptorDoesNotInvokeAfterDeadlineAlreadyPassed(t *testing.T) {
+	interceptor := retryInterceptor(40, time.Millisecond, "test")
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	<-ctx.Done()
+
+	callCount := 0
+	mockInvoker := func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+		callCount++
+		return nil
+	}
+
+	err := interceptor(ctx, "/test.service/TestMethod", "request", "reply", nil, mockInvoker)
+
+	require.Error(t, err)
+	assert.Equal(t, codes.DeadlineExceeded, status.Code(err))
+	assert.Zero(t, callCount, "must not dial at all once the caller's deadline has passed")
+}
+
 func TestRetryInterceptorBackoffTiming(t *testing.T) {
 	backoff := 50 * time.Millisecond
 	interceptor := retryInterceptor(3, backoff, "test")
