@@ -92,6 +92,8 @@ All metrics are CounterVec type with labels: `function` (handler function name),
 | `teranode_blockassembly_queue_shed_total`                                 | Counter      | Number of ingest batches shed because the queue stayed full past `blockassembly_queueFullWaitTimeout`. Only possible when `blockassembly_maxQueueItems` is positive — **alert on this** |
 | `teranode_blockassembly_queue_wait_seconds`                               | Histogram    | Time an ingest handler waited for queue room before the batch was accepted or shed |
 | `teranode_blockassembly_queue_head_age_seconds`                           | Gauge        | How long the oldest queued batch has been waiting (0 when the queue is empty). The signal the validator's Kafka backpressure controller reads |
+| `teranode_blockassembly_tx_ingress_full`                                   | Gauge        | 1 while block assembly holds `blockassembly_maxTransactionsInMemory` transactions and refuses more, 0 otherwise. **Alert on this staying at 1** — it means blocks are not being produced fast enough to drain the memory budget |
+| `teranode_blockassembly_tx_ingress_shed_total`                            | Counter      | Number of ingest batches refused because block assembly holds `blockassembly_maxTransactionsInMemory` transactions. Each is unwound by the validator and retryable |
 | `teranode_blockassembly_tip_lag_blocks`                                   | Gauge        | Number of blocks block assembly is behind the blockchain tip, recomputed on each new-block announcement and reset to 0 on a successful advance. Two caveats for alert authors: it reads 0 for an equal-height reorg stall (tip hash differs but height matches), and it holds its last value if announcements stop arriving — pair it with `teranode_blockassembly_processing_stuck_total` for stall alerting |
 | `teranode_blockassembly_processing_stuck_total`                            | CounterVec   | Count of block-assembly failures that left the assembler behind the tip. `reason` is one of `reorg_blocks_fetch` (fetching the blocks for the reorg/catch-up decision failed), `catchup` (forward-only catch-up failed), `reorg` (reorg failed; an expected `ErrBlockAssemblyReset` is logged as a warning and deliberately not counted), `get_block` (fetching the announced block failed), `moveforward` (subtree processor `MoveForwardBlock` failed) |
 | `teranode_blockassembly_catchup`                                          | Counter      | Number of forward-only catch-ups (moveBack=0) handled in block assembler        |
@@ -272,6 +274,8 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_legacy_netsync_block_tx_validate`                 | Histogram | The time taken to validate a transaction                  |
 | `teranode_legacy_netsync_orphans`                           | Gauge     | The number of orphan transactions                         |
 | `teranode_legacy_netsync_orphan_time`                       | Histogram | The time taken to process an orphan transaction           |
+| `teranode_legacy_netsync_tx_dropped_block_assembly_full`    | Counter   | The number of transactions dropped because block assembly reached its in-memory transaction limit |
+| `teranode_legacy_netsync_tx_invs_skipped_block_assembly_full` | Counter | The number of announced transactions not requested because block assembly reached its in-memory transaction limit |
 
 ## Propagation Service Metrics
 
@@ -284,6 +288,7 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_propagation_handle_multiple_tx`        | Histogram | Histogram of multiple transaction processing by the propagation service using HTTP       |
 | `teranode_propagation_transactions_size`         | Histogram | Size of transactions processed by the propagation service                                |
 | `teranode_propagation_invalid_transactions`      | Counter   | Number of transactions found invalid by the propagation service                          |
+| `teranode_propagation_transactions_rejected_block_assembly_full` | Counter | Number of transactions refused because block assembly reached its in-memory transaction limit |
 
 ## RPC Service Metrics
 
@@ -318,6 +323,7 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_rpc_unfreeze`               | Histogram | Histogram of calls to handleUnfreeze in the rpc service             |
 | `teranode_rpc_reassign`               | Histogram | Histogram of calls to handleReassign in the rpc service             |
 | `teranode_rpc_get_chaintips`          | Histogram | Histogram of calls to handleGetChainTips in the rpc service         |
+| `teranode_rpc_transactions_rejected_block_assembly_full` | Counter | Number of `sendrawtransaction` submissions refused because block assembly reached its in-memory transaction limit |
 
 ## Subtree Validation Service Metrics
 
@@ -336,6 +342,7 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_subtreevalidation_set_tx_meta_cache_kafka_errors` | Counter   | Number of errors setting tx meta cache from kafka |
 | `teranode_subtreevalidation_kafka_malformed_messages_total` | Counter   | Malformed Kafka subtree messages dropped, labelled by `reason` (`nil_message`, `too_short`, `unmarshal_failure`, `bad_hash`, `bad_url`) |
 | `teranode_subtreevalidation_subtree_already_exists_skipped_total` | Counter | Subtree Kafka messages skipped because the subtree already exists. Benign individually; the per-message log line is at DEBUG, so watch this rate instead |
+| `teranode_subtreevalidation_subtrees_skipped_block_assembly_full` | Counter | Peer-announced subtrees skipped whole because block assembly reached its in-memory transaction limit. They are validated later if a block carries them |
 
 ## Validator Service Metrics
 

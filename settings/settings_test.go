@@ -223,3 +223,23 @@ func TestPostgresCircuitBreaker_EnvOverride(t *testing.T) {
 	require.Equal(t, 45*time.Second, tSettings.Postgres.CircuitBreakerCooldown)
 	require.Equal(t, 20*time.Second, tSettings.Postgres.CircuitBreakerFailureWindow)
 }
+
+func TestBlockAssemblyMaxTransactionsInMemory_DefaultIsDisabled(t *testing.T) {
+	tSettings := NewSettings()
+
+	require.Zero(t, tSettings.BlockAssembly.MaxTransactionsInMemory, "the limit must default to disabled")
+	require.Zero(t, tSettings.BlockAssembly.MaxTransactionsInMemoryResume)
+}
+
+// The key names are read from settings.conf and the environment, so a typo in either the key or
+// the field it fills leaves the feature dead in every real deployment while every other test, which
+// sets the struct fields directly, stays green.
+func TestBlockAssemblyMaxTransactionsInMemory_EnvOverride(t *testing.T) {
+	t.Setenv("blockassembly_maxTransactionsInMemory", "123456")
+	t.Setenv("blockassembly_maxTransactionsInMemoryResume", "100000")
+
+	tSettings := NewSettings()
+
+	require.Equal(t, uint64(123456), tSettings.BlockAssembly.MaxTransactionsInMemory)
+	require.Equal(t, uint64(100000), tSettings.BlockAssembly.MaxTransactionsInMemoryResume)
+}

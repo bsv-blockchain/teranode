@@ -206,6 +206,18 @@ type Options struct {
 	// The checkpoint gate is enforced by the caller (Stage C task C2); this
 	// option simply honours the flag.
 	OutpointOnlySpend bool
+
+	// LockUnmined creates the transaction's UTXO record Locked even when it is not handed to block
+	// assembly (AddTXToBlockAssembly=false). Locked records cannot be spent by an ordinary child
+	// (ErrTxLocked), and processing the block that mines the transaction clears the flag.
+	//
+	// Block-context validation sets it while block assembly is at its in-memory transaction limit.
+	// Those transactions are deliberately kept out of the mining template, but until their block is
+	// processed they exist unmined. If that block loses a fork race they stay that way, and an
+	// unlocked parent outside the template lets a child enter the template without it, producing a
+	// block every peer rejects for a missing parent. Locked closes that. Descendants that arrive in
+	// blocks spend with IgnoreLocked and are unaffected. Ignored with SkipUtxoCreation.
+	LockUnmined bool
 }
 
 // Option defines a function type for setting options
@@ -396,6 +408,14 @@ func WithCandidateParentMedianTime(mtp uint32) Option {
 func WithUnconfirmedParentsAtCandidateHeight(enabled bool) Option {
 	return func(o *Options) {
 		o.UnconfirmedParentsAtCandidateHeight = enabled
+	}
+}
+
+// WithLockUnmined creates the transaction's record Locked even when it is not added to block
+// assembly. See Options.LockUnmined.
+func WithLockUnmined(b bool) Option {
+	return func(o *Options) {
+		o.LockUnmined = b
 	}
 }
 

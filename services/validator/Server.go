@@ -665,6 +665,10 @@ func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) (
 		opts.OutpointOnlySpend = *req.OutpointOnlySpend
 	}
 
+	if req.LockUnmined != nil {
+		opts.LockUnmined = *req.LockUnmined
+	}
+
 	return opts, nil
 }
 

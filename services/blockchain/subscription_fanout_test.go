@@ -312,3 +312,96 @@ func TestStartSubscriptions_PerSubscriberOrderPreserved(t *testing.T) {
 			i, indices[i-1], indices[i], indices)
 	}
 }
+
+// A subscriber that connects while block assembly is refusing ingress must be told so on
+// connect. Without the replay it holds the default "not full" until the next heartbeat, so a
+// restarted or evicted-and-reconnected ingress point admits work against a block assembly that
+// is already at its limit.
+func TestStartSubscriptions_ReplaysBlockAssemblyFullToNewSubscriber(t *testing.T) {
+	tc := setup(t)
+	go tc.server.startSubscriptions()
+	waitForSubscriptionManagerReady(t, tc.server)
+
+	tc.server.notifications <- NewBlockAssemblyFullNotification(true)
+
+	require.Eventually(t, func() bool { return tc.server.lastBlockAssemblyFull.Load() != nil }, time.Second, 5*time.Millisecond)
+
+	late := newSlowMockSubscribeServer()
+	defer late.Cancel()
+
+	tc.server.newSubscriptions <- subscriber{
+		subscription: late,
+		done:         make(chan struct{}),
+		source:       "late",
+		pending:      make(chan *blockchain_api.Notification, subscriberBufferSize),
+	}
+
+	require.Eventually(t, func() bool {
+		for _, n := range late.Received() {
+			if n.GetType() == model.NotificationType_BlockAssemblyFull && blockAssemblyFullFromNotification(n) {
+				return true
+			}
+		}
+
+		return false
+	}, 2*time.Second, 5*time.Millisecond, "a new subscriber must be told that block assembly is full")
+}
+
+// Not-full is the client default, so it is not replayed.
+func TestStartSubscriptions_DoesNotReplayNotFull(t *testing.T) {
+	tc := setup(t)
+	go tc.server.startSubscriptions()
+	waitForSubscriptionManagerReady(t, tc.server)
+
+	tc.server.notifications <- NewBlockAssemblyFullNotification(false)
+
+	require.Eventually(t, func() bool { return tc.server.lastBlockAssemblyFull.Load() != nil }, time.Second, 5*time.Millisecond)
+
+	late := newSlowMockSubscribeServer()
+	defer late.Cancel()
+
+	tc.server.newSubscriptions <- subscriber{
+		subscription: late,
+		done:         make(chan struct{}),
+		source:       "late",
+		pending:      make(chan *blockchain_api.Notification, subscriberBufferSize),
+	}
+
+	waitForSubscriberCount(t, tc.server, 1, time.Second)
+	time.Sleep(100 * time.Millisecond)
+
+	for _, n := range late.Received() {
+		require.NotEqual(t, model.NotificationType_BlockAssemblyFull, n.GetType())
+	}
+}
+
+// A refusal the server heard long ago must not be replayed. Block assembly may have been killed
+// while full, or restarted with the limit off, in which case nothing will ever publish the clear,
+// and a replay would stamp the stale refusal with the current time at the client.
+func TestStartSubscriptions_DoesNotReplayAStaleRefusal(t *testing.T) {
+	tc := setup(t)
+	go tc.server.startSubscriptions()
+	waitForSubscriptionManagerReady(t, tc.server)
+
+	tc.server.lastBlockAssemblyFull.Store(&heardBlockAssemblyFull{
+		notification: NewBlockAssemblyFullNotification(true),
+		at:           time.Now().Add(-2 * blockAssemblyFullTTL),
+	})
+
+	late := newSlowMockSubscribeServer()
+	defer late.Cancel()
+
+	tc.server.newSubscriptions <- subscriber{
+		subscription: late,
+		done:         make(chan struct{}),
+		source:       "late",
+		pending:      make(chan *blockchain_api.Notification, subscriberBufferSize),
+	}
+
+	waitForSubscriberCount(t, tc.server, 1, time.Second)
+	time.Sleep(100 * time.Millisecond)
+
+	for _, n := range late.Received() {
+		require.NotEqual(t, model.NotificationType_BlockAssemblyFull, n.GetType(), "a stale refusal must not be replayed")
+	}
+}

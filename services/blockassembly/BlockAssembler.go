@@ -232,6 +232,33 @@ type BlockAssembler struct {
 	// unminedTransactionsLoading; must not be touched concurrently.
 	unminedDropHashes map[chainhash.Hash]struct{}
 
+	// txIngressFull indicates block assembly holds as many transactions in RAM as it is allowed to,
+	// and that the ingress points should stop accepting new transactions
+	txIngressFull atomic.Bool
+
+	// txIngressStartupPending is set for the whole of Start, until the unmined reload returns, and
+	// only then. What this assembler holds during that window does not describe what it is about to
+	// hold. The zero value is false, so an assembler driven directly rather than through Start
+	// measures normally. It is deliberately not set by reset(): a reorg reload is measured like
+	// any other moment.
+	txIngressStartupPending atomic.Bool
+
+	// txIngressStartupEnded is set once when startup finishes. The first evaluation after it
+	// decides against the high watermark instead of inheriting the startup refusal.
+	txIngressStartupEnded atomic.Bool
+
+	// txIngressLimit is the high watermark at which txIngressFull is set. 0 disables the limit.
+	txIngressLimit uint64
+
+	// txIngressResume is the low watermark at which txIngressFull is cleared
+	txIngressResume uint64
+
+	// txIngressEvaluateInterval is how often the monitor compares what it holds against the limit,
+	// and txIngressHeartbeatInterval how often it re-announces a standing refusal. They are fields
+	// rather than constants so tests can drive the monitor without waiting on wall clock.
+	txIngressEvaluateInterval  time.Duration
+	txIngressHeartbeatInterval time.Duration
+
 	// wg tracks background goroutines for clean shutdown
 	wg sync.WaitGroup
 }
@@ -313,6 +340,35 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 		reconcileCh:         make(chan struct{}, 1),
 		currentRunningState: atomic.Value{},
 		heartbeatInterval:   defaultHeartbeatInterval,
+	}
+
+	configuredLimit := tSettings.BlockAssembly.MaxTransactionsInMemory
+
+	var adjusted bool
+
+	b.txIngressLimit, adjusted = normalizeTxIngressLimit(configuredLimit)
+	if adjusted {
+		logger.Warnf("[BlockAssembler] blockassembly_maxTransactionsInMemory=%d is too small to have a resume watermark, using %d instead",
+			configuredLimit, b.txIngressLimit)
+	}
+
+	b.txIngressResume = resumeWatermark(b.txIngressLimit, tSettings.BlockAssembly.MaxTransactionsInMemoryResume)
+
+	// Say so when a configured resume watermark was discarded. Silently substituting a derived value
+	// for an operator's explicit setting is how a misconfiguration survives to production: the node
+	// behaves sanely, so nothing draws attention to the ignored value.
+	if configuredResume := tSettings.BlockAssembly.MaxTransactionsInMemoryResume; b.txIngressLimit > 0 &&
+		configuredResume > 0 && configuredResume != b.txIngressResume {
+		logger.Warnf("[BlockAssembler] ignoring blockassembly_maxTransactionsInMemoryResume=%d, it must be at least 1 and below blockassembly_maxTransactionsInMemory=%d, using %d instead",
+			configuredResume, b.txIngressLimit, b.txIngressResume)
+	}
+
+	b.txIngressEvaluateInterval = txIngressEvaluateInterval
+	b.txIngressHeartbeatInterval = txIngressHeartbeatInterval
+
+	if b.txIngressLimit > 0 {
+		logger.Infof("[BlockAssembler] limiting transactions held in memory to %d, resuming ingress at %d",
+			b.txIngressLimit, b.txIngressResume)
 	}
 
 	b.setCurrentRunningState(StateStarting)
@@ -1310,6 +1366,29 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 		return errors.NewProcessingError("[BlockAssembler] failed to initialize state: %v", err)
 	}
 
+	// Refuse ingress for the whole of startup, and start watching how many transactions we hold in
+	// memory before the slow parts of it rather than after them.
+	//
+	// AddTx is already enqueueing on the gRPC side by the time Start runs, and the ingress points
+	// expire a cached refusal once block assembly stops re-announcing it. A process that restarted
+	// while full comes up holding nothing, so measuring it says there is room right up until the
+	// reload has refilled past the limit. WaitForPendingBlocks and the conflict intent replay below
+	// run before the reload even begins.
+	//
+	// The pending flag makes evaluateTxIngressFull report full for that whole window, so the first
+	// evaluate tick re-establishes the refusal instead of waiting for the count to climb. It is
+	// cleared once the reload returns, on the error paths too, so a failed start cannot leave
+	// ingress refused. It does nothing unless a limit is configured.
+	b.txIngressStartupPending.Store(true)
+
+	defer func() {
+		if b.txIngressStartupPending.Swap(false) {
+			b.txIngressStartupEnded.Store(true)
+		}
+	}()
+
+	b.startTxIngressLimitMonitor(ctx)
+
 	// Wait for any pending blocks to be processed before loading unmined transactions
 	if !b.skipWaitForPendingBlocks {
 		if err = b.subtreeProcessor.WaitForPendingBlocks(ctx); err != nil {
@@ -1329,6 +1408,13 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 	if err = b.loadUnminedTransactions(ctx, false); err != nil {
 		// we cannot start block assembly if we have not loaded unmined transactions successfully
 		return errors.NewStorageError("[BlockAssembler] failed to load un-mined transactions: %v", err)
+	}
+
+	// The reload is the last thing that makes the in-memory count misleading, so from here the
+	// monitor can measure normally. The deferred clear above stays as the backstop for the error
+	// paths.
+	if b.txIngressStartupPending.Swap(false) {
+		b.txIngressStartupEnded.Store(true)
 	}
 
 	// AddTx is already enqueueing on the gRPC side. If loadUnminedTransactions

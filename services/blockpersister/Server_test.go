@@ -802,6 +802,9 @@ func (m *MockBlockchainClient) IsFSMCurrentState(ctx context.Context, state bloc
 	defer m.mu.RUnlock()
 	return m.fsmState == state, nil
 }
+func (m *MockBlockchainClient) IsBlockAssemblyFull() bool {
+	return false
+}
 func (m *MockBlockchainClient) WaitForFSMtoTransitionToGivenState(context.Context, blockchain.FSMStateType) error {
 	return nil
 }
