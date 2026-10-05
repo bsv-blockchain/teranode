@@ -7346,6 +7346,8 @@
 <h2 id="bsv-cpu-miner-setup">BSV CPU Miner Setup<a class="headerlink" href="#bsv-cpu-miner-setup" title="Permanent link">&para;</a></h2>
 <p>The recommended CPU miner for Teranode is the BSV CPU miner available as a Docker container.</p>
 <h3 id="basic-configuration">Basic Configuration<a class="headerlink" href="#basic-configuration" title="Permanent link">&para;</a></h3>
+<p><code>--userpass</code> must match the <code>rpc_user</code>/<code>rpc_pass</code> you configured on the node. Teranode
+ships with both unset; <code>bitcoin:bitcoin</code> below is a placeholder, not a default.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--network<span class="w"> </span>my-teranode-network<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>ghcr.io/bitcoin-sv/cpuminer:latest<span class="w"> </span><span class="se">\</span>
@@ -7531,7 +7533,7 @@
 <p><strong>Solution</strong>:</p>
 <ul>
 <li>Verify RPC credentials in Teranode configuration</li>
-<li>Default credentials are <code>bitcoin:bitcoin</code></li>
+<li>Credentials come from <code>rpc_user</code>/<code>rpc_pass</code>; nothing ships by default, so both must be set in <code>settings_local.conf</code></li>
 <li>Check userpass format: <code>username:password</code></li>
 </ul>
 <p><strong>Issue</strong>: Invalid address errors</p>

@@ -7635,7 +7635,7 @@
 <li><code>id</code>: The id of the request.</li>
 </ul>
 <h2 id="example-request">Example Request<a class="headerlink" href="#example-request" title="Permanent link">&para;</a></h2>
-<p>The default credentials are <code>bitcoin:bitcoin</code>. The default credentials can be changed via settings.</p>
+<p>Credentials come from the <code>rpc_user</code> and <code>rpc_pass</code> settings. Teranode ships with both unset, so set them in <code>settings_local.conf</code> before using the RPC service. The example below uses <code>bitcoin:bitcoin</code>, the pair the throwaway compose rigs configure; substitute your own.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>curl<span class="w"> </span>--user<span class="w"> </span>bitcoin:bitcoin<span class="w"> </span>--data-binary<span class="w"> </span><span class="s1">'{"jsonrpc":"1.0","id":"curltext","method":"version","params":[]}'</span><span class="w"> </span>-H<span class="w"> </span><span class="s1">'content-type: text/plain;'</span><span class="w"> </span>http://localhost:9292/
 </span></code></pre></div>
 <p>For detailed information on each method's parameters and return values, refer to the Bitcoin protocol documentation or the specific Teranode <a href="../../../references/services/rpc_reference/">RPC Reference</a>.</p>

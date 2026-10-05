@@ -7833,7 +7833,7 @@
 <li><a href="#32-recommended-use-a-python-virtual-environment-to-install-pyyaml">3.2 (Recommended) Use a Python Virtual Environment to install PyYAML</a></li>
 <li><a href="#33-install-dependencies-within-the-virtual-environment">3.3 Install Dependencies Within the Virtual Environment</a></li>
 <li><a href="#34-verify-installation">3.4 Verify Installation</a></li>
-<li><a href="#alternative-use-pipx-for-cli-tools-not-recommended-for-teranode-development">Alternative: Use pipx for CLI tools - NOT recommended for Teranode Development</a></li>
+<li><a href="#alternative-use-pipx-for-cli-tools---not-recommended-for-teranode-development">Alternative: Use pipx for CLI tools - NOT recommended for Teranode Development</a></li>
 </ul>
 </li>
 <li><a href="#4-clone-the-project-and-install-dependencies">Clone the Project and Install Dependencies</a></li>
@@ -8242,6 +8242,7 @@ If you receive an error <code>ModuleNotFoundError: No module named 'yaml'</code>
 </span></code></pre></div>
 <h3 id="re-running-init">Re-running init<a class="headerlink" href="#re-running-init" title="Permanent link">&para;</a></h3>
 <p>Running <code>init</code> again presents your previous choices as defaults - just press enter to keep them. This is useful for changing a single setting (e.g. switching from sqlite to postgres) without re-entering everything.</p>
+<p><code>init</code> also generates <code>rpc_user.dev.&lt;name&gt;</code> and <code>rpc_pass.dev.&lt;name&gt;</code> in <code>settings_local.conf</code>, because <code>settings.conf</code> no longer ships an RPC credential pair for dev contexts. If your dev block was written by an older <code>init</code>, <code>teranode-dev rpc</code> and <code>teranode-dev generate</code> get <code>401 Unauthorized</code> until you re-run <code>init</code>; <code>teranode-dev doctor</code> reports the missing pair. Re-running keeps an existing password. The generated pair overrides any <code>rpc_user</code>/<code>rpc_pass</code> you set without a context suffix, so scripts calling the node directly should use it.</p>
 <h2 id="next-steps">Next Steps<a class="headerlink" href="#next-steps" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="../../references/gitCommitSigningSetupGuide/">Check our Git Commit Signing Setup Guide for Contributors</a></li>
