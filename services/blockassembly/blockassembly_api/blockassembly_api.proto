@@ -265,6 +265,7 @@ message StateMessage {
   uint32 removeMapCount = 9; // the number of transactions in the remove map
   repeated string subtrees = 10; // the hashes of the current subtrees
   int64 queueHeadAgeMillis = 11; // how long the oldest queued batch has been waiting, in milliseconds (0 when empty)
+  bool txIngressFull = 12; // whether block assembly is refusing transactions because it reached its in-memory transaction limit
 }
 
 // Slim, atomic-only view of the block-assembly ingest queue, intended for

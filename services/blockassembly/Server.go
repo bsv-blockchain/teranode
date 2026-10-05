@@ -1277,6 +1277,16 @@ const queueFullPollInterval = 5 * time.Millisecond
 // The wait is strictly bounded so it can never wedge the validator, whose
 // block-assembly client honours the caller's context (group.Wait(ctx, 0)).
 func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) error {
+	// The in-memory transaction limit is a hard bound enforced here, where every validator handoff
+	// passes. It sheds like a full queue, and the validator unwinds its UTXO work for the shed
+	// transactions, so a resubmit is an ordinary first submission. There is no wait: the queue
+	// draining does not make room against this limit, only mining does.
+	if ba.blockAssembler.RefusesTransactions() {
+		prometheusBlockAssemblyTxIngressShed.Inc()
+
+		return errors.WrapGRPC(ba.blockAssembler.errTxIngressFull())
+	}
+
 	if ba.blockAssembler.AddTxBatchIfRoom(nodes, txInpoints) {
 		return nil
 	}
@@ -2486,6 +2496,7 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 		RemoveMapCount:        removeMapLen32,
 		Subtrees:              subtreeHashesStrings,
 		QueueHeadAgeMillis:    ba.blockAssembler.QueueHeadAge().Milliseconds(),
+		TxIngressFull:         ba.blockAssembler.IsTxIngressFull(),
 	}, nil
 }
 

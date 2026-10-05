@@ -560,7 +560,7 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 							if _, err := ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
 								Tx: txb,
 							}); err != nil {
-								ps.logger.Errorf("error processing transaction: %v", err)
+								ps.logTxProcessingError(ps.logger, err, "error processing transaction: %v", err)
 							}
 						}(txBytes.Bytes())
 					default:
@@ -973,9 +973,12 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 		// outcome that classifies as success (e.g. a duplicate submission ->
 		// StatusOK) is not a failure: skip it from both the body and the status,
 		// mirroring handleSingleTx which returns OK for those. Among the genuine
-		// failures the precedence is: a server fault (5xx, e.g. a storage error)
-		// dominates and forces 500 — the client cannot fix it by resubmitting;
-		// otherwise the first client-error (4xx) status in submission order wins,
+		// failures the precedence is: a hard server fault (5xx other than 503,
+		// e.g. a storage error) dominates and forces 500 — the client cannot fix
+		// it by resubmitting; then 503, which says the node is temporarily at
+		// capacity and the client should back off and retry, so it outranks a
+		// client error; otherwise the first client-error (4xx) status in
+		// submission order wins,
 		// so a batch of pure tx rejections is a client error (e.g. 400) rather
 		// than a misleading 500.
 		aggStatus := http.StatusOK
@@ -995,6 +998,12 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 			errMsgs = append(errMsgs, failureLine(txSlots[i], err))
 
 			switch {
+			case txStatus == http.StatusServiceUnavailable:
+				// Retryable backpressure. Do not let it mask a hard fault that
+				// resubmitting cannot fix.
+				if aggStatus != http.StatusInternalServerError {
+					aggStatus = http.StatusServiceUnavailable
+				}
 			case txStatus >= http.StatusInternalServerError:
 				aggStatus = http.StatusInternalServerError
 			case aggStatus < http.StatusBadRequest:
@@ -1170,7 +1179,7 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 	ctxLogger.Debugf("[ProcessTransaction] processing transaction request")
 
 	if _, err := ps.processTransaction(ctx, req); err != nil {
-		ctxLogger.Errorf("[ProcessTransaction] failed to process transaction: %v", err)
+		ps.logTxProcessingError(ctxLogger, err, "[ProcessTransaction] failed to process transaction: %v", err)
 
 		return nil, errors.WrapGRPCPublic(err)
 	}
@@ -1261,7 +1270,8 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 				Tx: tx,
 			}); err != nil {
 				// Use context-aware logger for trace correlation
-				ps.logger.WithTraceContext(txCtx).Errorf("[ProcessTransactionBatch] failed to process transaction %d: %v", idx, err)
+				ps.logTxProcessingError(ps.logger.WithTraceContext(txCtx), err,
+					"[ProcessTransactionBatch] failed to process transaction %d: %v", idx, err)
 
 				response.Errors[idx] = errors.WrapPublic(err)
 			} else {
@@ -1392,6 +1402,18 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 		return err
 	}
 
+	// Refuse new transactions while block assembly holds its configured maximum in memory.
+	// This is checked before we store the transaction, so a refused transaction costs no storage
+	// and creates no UTXO. The flag is eventually consistent, so a few transactions can still get
+	// through; block assembly enforces the limit itself and sheds those, and the validator unwinds
+	// them. The error is the same threshold class the ingest queue bound sheds with, so every
+	// consumer already treats it as retryable overload: HTTP 503, gRPC ResourceExhausted.
+	if ps.blockchainClient != nil && ps.blockchainClient.IsBlockAssemblyFull() {
+		prometheusTransactionsRejectedBlockAssemblyFull.Inc()
+
+		return errors.NewThresholdExceededError("[ProcessTransaction][%s] block assembly holds its maximum number of transactions in memory, not accepting new transactions", btTx.TxIDChainHash())
+	}
+
 	// Serialize once and reuse everywhere downstream to avoid redundant allocations
 	txBytes := btTx.SerializeBytes()
 
@@ -1427,11 +1449,60 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 		// All transactions entering Teranode can be assumed to be after Genesis activation height
 		// but we pass in no block height, and just use the block height set in the utxo store
 		if _, err = ps.validator.Validate(ctx, btTx, 0); err != nil {
+			// A block assembly shed keeps its class: wrapped, it would log at error level per
+			// transaction and answer gRPC callers Internal while HTTP callers get 503.
+			if errors.Is(err, errors.ErrThresholdExceeded) {
+				return err
+			}
+
 			return errors.NewProcessingError("[ProcessTransaction][%s] failed to validate transaction", btTx.TxID(), err)
 		}
 	}
 
 	return nil
+}
+
+// isTransientBackpressure reports whether err is this node refusing work because it is at
+// capacity, rather than a fault in the transaction, in a store, or in a downstream service.
+//
+// The refusal is ERR_THRESHOLD_EXCEEDED, the class both the ingest queue bound and the in-memory
+// transaction limit shed with. It is matched on the top-level code and not with errors.Is, which
+// walks the whole wrap chain: a downstream error that merely wraps a threshold error would be
+// demoted to a debug line. The validator returns a shed unwrapped, specifically so it keeps its
+// class, so the code arrives here at the top level.
+//
+// The UDP worker calls ProcessTransaction and so receives the flattened gRPC status, where the same
+// class is ResourceExhausted.
+func (ps *PropagationServer) isTransientBackpressure(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Fast path: the error as raised in this process. One type assertion and an integer compare, with
+	// no chain walk and no status conversion, because this runs once per refused transaction at
+	// full inbound rate on a node that is already short of memory.
+	if tErr, ok := err.(*errors.Error); ok {
+		return tErr.Code() == errors.ERR_THRESHOLD_EXCEEDED
+	}
+
+	return status.Code(err) == codes.ResourceExhausted
+}
+
+// logTxProcessingError logs a transaction processing failure at a level appropriate to the cause.
+//
+// A refusal because block assembly is at capacity is transient backpressure rather than a fault,
+// and while the condition lasts it happens once per inbound transaction. Logging that at error
+// level would amplify the very overload the in-memory limit exists to contain, and would bury real
+// errors in the noise. Those refusals go to debug instead; the rejection counter and block
+// assembly's transition-level warning carry the operator signal.
+func (ps *PropagationServer) logTxProcessingError(logger ulogger.Logger, err error, format string, args ...interface{}) {
+	if ps.isTransientBackpressure(err) {
+		logger.Debugf(format, args...)
+
+		return
+	}
+
+	logger.Errorf(format, args...)
 }
 
 func (ps *PropagationServer) txSanityChecks(btTx *bt.Tx) error {

@@ -136,6 +136,10 @@ type Blockchain struct {
 	// responseCache is wiped per StoreBlock, so committed-block MTPs there have
 	// near-zero hit rate during sync.
 	mtpCache *mtpCache
+
+	// lastBlockAssemblyFull is the most recent BlockAssemblyFull notification and when it arrived,
+	// replayed to new subscribers while it is fresh.
+	lastBlockAssemblyFull atomic.Pointer[heardBlockAssemblyFull]
 }
 
 // blobDeletionBatchToken represents an acquired batch of deletions with a lock.
@@ -833,6 +837,10 @@ func (b *Blockchain) startSubscriptions() {
 		case notification := <-b.notifications:
 			start := gocore.CurrentTime()
 
+			if notification.GetType() == model.NotificationType_BlockAssemblyFull {
+				b.lastBlockAssemblyFull.Store(&heardBlockAssemblyFull{notification: notification, at: time.Now()})
+			}
+
 			func() {
 				b.logger.Debugf("[Blockchain Server] Sending notification: %s", notification)
 
@@ -1038,6 +1046,24 @@ func (b *Blockchain) sendInitialNotification(sub subscriber) {
 	case sub.pending <- initialNotification:
 	default:
 		b.logger.Warnf("[Blockchain][startSubscriptions] Pending buffer full on initial notification for %s, dropping", sub.source)
+	}
+
+	// A subscriber that starts, or reconnects after being evicted, would otherwise hold the
+	// default "not full" until block assembly's next heartbeat. Replay the last announcement so
+	// an ingress point never admits work against a block assembly that is already refusing.
+	// Only a refusal is replayed: not-full is the client default.
+	//
+	// Only a fresh one. Block assembly may have been killed while full, or restarted with the limit
+	// off, in which case nothing will ever publish the clear. Replaying that stale refusal would
+	// stamp it with the current time at the client and refuse for another full TTL, on every
+	// reconnect, for as long as this server runs.
+	if last := b.lastBlockAssemblyFull.Load(); last != nil &&
+		time.Since(last.at) <= blockAssemblyFullTTL && blockAssemblyFullFromNotification(last.notification) {
+		select {
+		case sub.pending <- last.notification:
+		default:
+			b.logger.Warnf("[Blockchain][startSubscriptions] Pending buffer full on block assembly full replay for %s, dropping", sub.source)
+		}
 	}
 }
 

@@ -2147,6 +2147,10 @@ func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, bl
 	} else if addToBlockAssembly {
 		// mark the tx as locked, since we are going to add it to the block assembly
 		opts = append(opts, utxo.WithLocked(true))
+	} else if validationOptions.LockUnmined {
+		// not going to block assembly, but still unmined and outside the template: keep it
+		// unspendable by an ordinary child until the block that mines it is processed
+		opts = append(opts, utxo.WithLocked(true))
 	}
 
 	txMetaData, spends, err := v.utxoStore.SpendAndCreate(ctx, tx, blockHeight, opts...)

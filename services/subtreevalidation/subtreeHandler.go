@@ -124,6 +124,28 @@ func (u *Server) subtreesHandler(ctx context.Context, hash *chainhash.Hash, base
 	)
 	defer deferFn()
 
+	// While block assembly holds its configured maximum in memory, skip a peer-announced subtree
+	// whole: nothing is validated, nothing is stored and no UTXO is created.
+	//
+	// It must be all or nothing. Validating the subtree while withholding its transactions from the
+	// mining template would create their UTXOs unmined and unlocked, and a child arriving later
+	// through any ingress point would then spend a parent that is in neither the template nor a
+	// block. The template would hold a child without its parent and the block we mine from it would
+	// fail the parent-existence check at every peer. Skipping whole creates no such parent.
+	//
+	// Nothing is lost. A peer-announced subtree is one that might become part of a future block, and
+	// if it does the block path (CheckBlockSubtrees) fetches and validates it from the peer that
+	// sent the block, so its transactions enter the node then. Until then they are simply not held.
+	// The block path itself creates its records Locked while block assembly is full; see
+	// validator.Options.LockUnmined.
+	if u.blockchainClient != nil && u.blockchainClient.IsBlockAssemblyFull() {
+		prometheusSubtreeValidationSubtreesSkippedBlockAssemblyFull.Inc()
+
+		u.logger.Debugf("[subtreesHandler] skipping subtree %s, block assembly is full", hash.String())
+
+		return nil
+	}
+
 	blockIDsMap := u.currentBlockIDsMap.Load()
 	if blockIDsMap == nil {
 		return errors.NewProcessingError("[subtreesHandler] failed to get block IDs map during subtree validation")

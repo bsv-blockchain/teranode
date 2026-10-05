@@ -554,7 +554,12 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 
 	// Only RUNNING feeds block assembly. IDLE can follow an operator STOP while
 	// a catchup batch is still validating historical blocks.
-	addTXToBlockAssembly := *currentState == blockchain.FSMStateRUNNING
+	//
+	// While block assembly holds its configured maximum in memory nothing more is added to it
+	// either. The subtrees of a block still validate, because blocks must, and their transactions
+	// are mined by the block, so none of them needs a place in the mining template.
+	blockAssemblyFull := u.blockchainClient.IsBlockAssemblyFull()
+	addTXToBlockAssembly := *currentState == blockchain.FSMStateRUNNING && !blockAssemblyFull
 
 	// BATCHED SUBTREE LOADING: Get blockIds once before batching
 	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2))
@@ -644,7 +649,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 			u.logger.Debugf("[CheckBlockSubtrees] Batch %d/%d loaded %d transactions for block %s, now processing", batchIdx+1, numBatches, batchTxCount, block.Hash().String())
 
 			if batchTxCount > 0 {
-				if procErr := u.processTransactionsInLevels(ctx, allTransactions, *block.Hash(), chainhash.Hash{}, block.Height, candidateBlockTime, candidateParentMedianTime, blockIds, addTXToBlockAssembly); procErr != nil {
+				if procErr := u.processTransactionsInLevels(ctx, allTransactions, *block.Hash(), chainhash.Hash{}, block.Height, candidateBlockTime, candidateParentMedianTime, blockIds, addTXToBlockAssembly, blockAssemblyFull); procErr != nil {
 					return errors.NewProcessingError("[CheckBlockSubtreesRequest] Failed to process transactions in batch %d", batchIdx+1, procErr)
 				}
 
@@ -711,7 +716,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	// Reuse the FSM state captured once at the top of CheckBlockSubtrees so this
 	// closure and processTransactionsInLevels cannot diverge across a transition.
 	if !addTXToBlockAssembly {
-		subtreeValidatorOptions = append(subtreeValidatorOptions, validator.WithAddTXToBlockAssembly(false))
+		subtreeValidatorOptions = append(subtreeValidatorOptions, validator.WithAddTXToBlockAssembly(false), validator.WithLockUnmined(blockAssemblyFull))
 	}
 
 	validateSubtree := func(validateCtx context.Context, subtreeHash chainhash.Hash) (*subtreepkg.Subtree, error) {
@@ -1193,7 +1198,7 @@ func (u *Server) readTransactionsFromSubtreeDataStream(subtree *subtreepkg.Subtr
 // the candidate block height before BDK/BIP68 consume the heights. See the
 // consensus-safety discussion on the validateSubtree closure in
 // CheckBlockSubtrees — the same three contract conditions apply here.
-func (u *Server) processTransactionsInLevels(ctx context.Context, allTransactions []*bt.Tx, blockHash chainhash.Hash, subtreeHash chainhash.Hash, blockHeight uint32, candidateBlockTime uint32, candidateParentMedianTime uint32, blockIds map[uint32]bool, addTXToBlockAssembly bool) error {
+func (u *Server) processTransactionsInLevels(ctx context.Context, allTransactions []*bt.Tx, blockHash chainhash.Hash, subtreeHash chainhash.Hash, blockHeight uint32, candidateBlockTime uint32, candidateParentMedianTime uint32, blockIds map[uint32]bool, addTXToBlockAssembly bool, lockUnmined bool) error {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "processTransactionsInLevels",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[processTransactionsInLevels] Processing %d transactions at block height %d", len(allTransactions), blockHeight),
@@ -1295,7 +1300,7 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 	// diverge across an FSM transition. While catching up blocks it is false,
 	// disabling adding transactions to block assembly.
 	if !addTXToBlockAssembly {
-		validatorOptions = append(validatorOptions, validator.WithAddTXToBlockAssembly(false))
+		validatorOptions = append(validatorOptions, validator.WithAddTXToBlockAssembly(false), validator.WithLockUnmined(lockUnmined))
 	}
 
 	// Pre-process validation options

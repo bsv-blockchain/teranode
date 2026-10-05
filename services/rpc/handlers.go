@@ -859,6 +859,37 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 
 	s.logger.Debugf("tx to send: %v", tx)
 
+	// Refuse new transactions while block assembly holds its configured maximum in memory.
+	//
+	// This handler stores the transaction and calls the validator directly, so it is an
+	// ingress point of its own, alongside propagation and legacy netsync, and needs the same gate.
+	// Without it a full node keeps growing past the configured limit through the RPC surface, and
+	// pays the storage cost the propagation gate exists to avoid.
+	//
+	// The check sits before the txStore write for the same reason it does in propagation: a refused
+	// transaction should cost no storage. It is logged at debug rather than error, because while the
+	// condition lasts it fires once per submission and is transient backpressure, not a fault.
+	//
+	// The error deliberately does not use txRejectedPrefix or ErrRPCInternal. Both say the wrong
+	// thing: the transaction was not rejected, it was not looked at, and the node is not broken. A
+	// broadcaster that reads "TX rejected" treats the verdict as final and drops the transaction
+	// rather than resubmitting, which is the opposite of what the HTTP surface is told, where the
+	// same refusal maps to 503 precisely so the client backs off and retries.
+	//
+	// ErrRPCOutOfMemory (-7) is SVNode's code for a node that ran out of room during an
+	// operation. It is a node-resource condition rather than a transaction verdict, which is exactly
+	// what this is, and it is already in the set of codes existing clients understand.
+	if s.blockchainClient != nil && s.blockchainClient.IsBlockAssemblyFull() {
+		prometheusTransactionsRejectedBlockAssemblyFull.Inc()
+
+		s.logger.Debugf("[handleSendRawTransaction] refusing %s, block assembly is full", tx.TxID())
+
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCOutOfMemory,
+			Message: "block assembly is full, not accepting new transactions, please retry",
+		}
+	}
+
 	// Store the transaction in blob store first (following the pattern from propagation service)
 	if s.txStore != nil {
 		err = s.txStore.Set(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, tx.SerializeBytes())
@@ -924,6 +955,19 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	// This will validate scripts, check UTXOs, spend them, create new UTXOs, and send to block assembly
 	_, err = s.validatorClient.Validate(ctx, tx, 0)
 	if err != nil {
+		// Block assembly shed the transaction at its in-memory limit. The flag that gates the check
+		// above lags by up to a second, and does not exist during startup or after its cached
+		// refusal expired, so a shed can still arrive here. It is the same condition as the early
+		// refusal, so it gets the same answer: not a verdict on the transaction.
+		if errors.Is(err, errors.ErrThresholdExceeded) {
+			prometheusTransactionsRejectedBlockAssemblyFull.Inc()
+
+			return nil, &bsvjson.RPCError{
+				Code:    bsvjson.ErrRPCOutOfMemory,
+				Message: "block assembly is full, not accepting new transactions, please retry",
+			}
+		}
+
 		return nil, &bsvjson.RPCError{
 			Code:    bsvjson.ErrRPCVerify,
 			Message: txRejectedPrefix + err.Error(),

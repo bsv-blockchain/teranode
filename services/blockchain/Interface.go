@@ -818,6 +818,47 @@ type ClientI interface {
 	// - Error if the state check fails
 	IsFSMCurrentState(ctx context.Context, state FSMStateType) (bool, error)
 
+	// IsBlockAssemblyFull reports whether block assembly has reached its in-memory transaction limit.
+	//
+	// Block assembly measures how many transactions it holds in RAM and broadcasts a
+	// BlockAssemblyFull notification when it crosses the configured limit, and again when it drops
+	// back to the resume watermark. Implementations cache that value locally, so this call is an
+	// atomic read with no RPC and is safe on the per-transaction ingress path.
+	//
+	// Transaction ingress points call this to stop feeding block assembly while it is full:
+	// propagation, legacy netsync, the sendrawtransaction RPC and peer-announced subtree
+	// validation. Every refusal happens before anything is stored or validated, so no UTXO is
+	// created and no transaction can later spend a refused parent. Peer-announced subtrees, which
+	// are not yet in a block, are skipped whole for the same reason. Subtrees that arrive inside
+	// a block are never refused, because blocks must validate regardless of block assembly
+	// pressure, but while this reports true their transactions are not added to block assembly
+	// and their UTXO records are created Locked until the block is processed.
+	// Block assembly also enforces the limit itself, so a path that is missed here is shed there
+	// and its UTXO work is unwound. If you add another path that reaches block assembly, gate it
+	// here too, and add it to the table in the blockassembly_maxTransactionsInMemory setting
+	// documentation.
+	//
+	// A refusal is returned to the sender, which retries and is accepted once there is room. The
+	// legacy netsync path is the exception: it drops the transaction, and a legacy peer does not
+	// announce the same transaction again.
+	//
+	// It is deliberately not part of the FSM, because fullness is orthogonal to the node lifecycle:
+	// a full node stays RUNNING and keeps syncing.
+	//
+	// The flag is eventually consistent and defaults to false, so transactions can still arrive
+	// after block assembly reports full. That is expected: block assembly checks the limit itself
+	// on every batch, so the count is bounded by the limit plus the batches passing that check at
+	// the same moment, not by the length of the validator's Kafka backlog.
+	//
+	// A refusal expires. Implementations honour a cached full=true only while block assembly keeps
+	// re-announcing it, so a block assembly reconfigured without a limit, or stopped altogether,
+	// releases the ingress points instead of leaving them refusing until they restart. A new
+	// subscriber is told the current refusal when it connects.
+	//
+	// Returns:
+	// - Boolean indicating whether block assembly is currently refusing new transactions
+	IsBlockAssemblyFull() bool
+
 	// WaitForFSMtoTransitionToGivenState blocks until the FSM transitions to the specified state.
 	//
 	// This method waits synchronously until the blockchain FSM reaches the specified state.

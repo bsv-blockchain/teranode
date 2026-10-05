@@ -16,6 +16,8 @@
 | LocalDAHCache                        | string        | ""               | blockassembly_localDAHCache                        | **UNUSED** - Reserved for future DAH caching                                         |
 | MaxBlockReorgCatchup                 | int           | 100              | blockassembly_maxBlockReorgCatchup                 | Map capacity for current chain tracking                                              |
 | MaxBlockReorgRollback                | int           | 100              | blockassembly_maxBlockReorgRollback                | **UNUSED** - Defined but not referenced in code                                      |
+| MaxTransactionsInMemory              | uint64        | 0                | blockassembly_maxTransactionsInMemory              | Hard limit on transactions held in memory (queued plus subtree-held). 0 disables. At the limit block assembly sheds validator batches (retryable, unwound by the validator) and the ingress points refuse. See [Transaction Memory Limit](#transaction-memory-limit) |
+| MaxTransactionsInMemoryResume        | uint64        | 0                | blockassembly_maxTransactionsInMemoryResume        | Count at which ingress resumes. 0 derives 90% of the limit, never below 1 |
 | MoveBackBlockConcurrency             | int           | 375              | blockassembly_moveBackBlockConcurrency             | Concurrency limit for reorg processing (SubtreeProcessor)                            |
 | ProcessRemainderTxHashesConcurrency  | int           | 375              | blockassembly_processRemainderTxHashesConcurrency  | Concurrency limit for remainder tx hash processing                                   |
 | SendBatchSize                        | int           | 100              | blockassembly_sendBatchSize                        | Client batch size for sending transactions                                           |
@@ -249,3 +251,24 @@ blockassembly_subtreeRetryChanBuffer=2000
 blockassembly_SubmitMiningSolution_waitForResponse=true
 miner_wallet_private_keys=key1|key2
 ```
+
+## Transaction Memory Limit
+
+`blockassembly_maxTransactionsInMemory` bounds the transactions block assembly holds in RAM. It is separate from `blockassembly_maxQueueItems`, which bounds the ingest queue alone.
+
+| Path | While at the limit |
+|------|--------------------|
+| Batch handed to block assembly by the validator (hard bound) | Shed with a retryable `ResourceExhausted` error; the validator unwinds its UTXO work |
+| Propagation (gRPC, HTTP, UDP) | Refused before storing anything, HTTP 503 |
+| `sendrawtransaction` RPC | Refused before storing anything, error code -7 |
+| Legacy netsync | Dropped; a legacy peer does not announce the same transaction again |
+| Peer-announced subtree, not yet in a block | Skipped whole: nothing is validated or stored, so no UTXO is created |
+| Subtree inside a block | Never refused; its transactions are not added to block assembly, and their UTXO records are created Locked until the block is processed |
+
+The early refusals use a flag block assembly publishes on the blockchain notification bus. Each ingress point caches it, a refusal expires after 60 seconds without a re-announcement, and a new subscriber is told the current refusal when it connects. Block assembly refuses for the whole of startup and, when startup finishes, measures against the limit.
+
+The startup reload of the unmined set is not capped.
+
+### Known limitation: a transaction can be lost
+
+On the Kafka ingest path propagation acknowledges a transaction (HTTP 200) before the validator hands it to block assembly. If the limit is reached in that gap, the validator retries the handoff for a short bounded time, then unwinds its UTXO work and drops the transaction. Nothing re-presents it, so the sender must resubmit once the node reports room again. The same applies to the backlog the validator holds when the limit trips. Only mempool admission is lost, never consensus or stored chain data.

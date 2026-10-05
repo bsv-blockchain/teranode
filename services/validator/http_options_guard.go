@@ -90,5 +90,11 @@ func nonDefaultValidationOptions(req *validator_api.ValidateTransactionRequest) 
 		return "outpointOnlySpend"
 	}
 
+	// Locks a record the caller chose to create, so an untrusted caller gains nothing from it, but
+	// it is a block-context option and the guard's rule is that the public listener carries none.
+	if req.LockUnmined != nil && *req.LockUnmined {
+		return "lockUnmined"
+	}
+
 	return ""
 }

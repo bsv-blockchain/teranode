@@ -43,7 +43,9 @@ var (
 	prometheusProcessedHandleMultipleTx prometheus.Histogram
 	prometheusTransactionSize           prometheus.Histogram
 	prometheusInvalidTransactions       prometheus.Counter
-	prometheusBatchHandlerRejections    prometheus.Counter
+
+	prometheusTransactionsRejectedBlockAssemblyFull prometheus.Counter
+	prometheusBatchHandlerRejections                prometheus.Counter
 )
 
 // Synchronization primitive for ensuring metrics are initialized exactly once.
@@ -129,6 +131,14 @@ func _initPrometheusMetrics() {
 			Subsystem: "propagation",
 			Name:      "invalid_transactions",
 			Help:      "Number of transactions found invalid by the propagation service",
+		},
+	)
+	prometheusTransactionsRejectedBlockAssemblyFull = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "propagation",
+			Name:      "transactions_rejected_block_assembly_full",
+			Help:      "Number of transactions refused because block assembly reached its in-memory transaction limit",
 		},
 	)
 	prometheusBatchHandlerRejections = promauto.NewCounter(

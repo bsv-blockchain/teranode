@@ -923,8 +923,16 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		// RUNNING, assembly stays enabled so txs from a legacy-bridge tip
 		// block survive in the mempool if the block loses a reorg.
 		// IDLE is included: an operator STOP can land while catchup is running.
-		if *currentState != blockchain.FSMStateRUNNING {
-			validatorOptions = append(validatorOptions, validator.WithAddTXToBlockAssembly(false))
+		//
+		// The same applies while block assembly holds its configured maximum in memory: the
+		// transactions of a block are mined by it and need no place in the template.
+		//
+		// In that case the records are created Locked as well. They are mined by a block, but
+		// until it is processed they exist unmined and outside the template, and if the block
+		// loses a fork race an unlocked parent would let a child enter the template without it.
+		blockAssemblyFull := u.blockchainClient.IsBlockAssemblyFull()
+		if *currentState != blockchain.FSMStateRUNNING || blockAssemblyFull {
+			validatorOptions = append(validatorOptions, validator.WithAddTXToBlockAssembly(false), validator.WithLockUnmined(blockAssemblyFull))
 		}
 
 		// Call the validateSubtreeInternal method

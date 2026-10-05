@@ -41,6 +41,7 @@ var (
 	prometheusBlockAssemblerSubtreeCreated              prometheus.Counter
 	prometheusBlockAssemblerTransactions                prometheus.Gauge
 	prometheusBlockAssemblerQueuedTransactions          prometheus.Gauge
+	prometheusBlockAssemblerTxIngressFull               prometheus.Gauge
 	prometheusBlockAssemblerSubtrees                    prometheus.Gauge
 	prometheusBlockAssemblerTxMetaGetDuration           prometheus.Histogram
 	prometheusBlockAssemblerReorg                       prometheus.Counter
@@ -78,6 +79,9 @@ var (
 
 	// prometheusBlockAssemblyQueueShed counts transactions shed because the ingest queue was full past the bounded wait
 	prometheusBlockAssemblyQueueShed prometheus.Counter
+
+	// prometheusBlockAssemblyTxIngressShed counts ingest batches refused because block assembly holds its configured maximum of transactions in memory
+	prometheusBlockAssemblyTxIngressShed prometheus.Counter
 
 	// prometheusBlockAssemblyQueueWait measures how long an ingest handler waited for queue room before succeeding or shedding
 	prometheusBlockAssemblyQueueWait prometheus.Histogram
@@ -239,6 +243,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockassembly",
 			Name:      "queued_transactions",
 			Help:      "Number of transactions currently queued in the block assembler subtree processor",
+		},
+	)
+
+	prometheusBlockAssemblerTxIngressFull = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "tx_ingress_full",
+			Help:      "1 while block assembly holds its configured maximum of transactions in memory and refuses new transactions, 0 otherwise",
 		},
 	)
 
@@ -543,6 +556,15 @@ func _initPrometheusMetrics() {
 			Name:      "add_directly_batch_seconds",
 			Help:      "Time taken to add all unmined transactions to subtree processor",
 			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockAssemblyTxIngressShed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "tx_ingress_shed_total",
+			Help:      "Total ingest batches refused because block assembly holds its configured maximum of transactions in memory (blockassembly_maxTransactionsInMemory)",
 		},
 	)
 

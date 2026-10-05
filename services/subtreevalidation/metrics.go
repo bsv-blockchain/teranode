@@ -28,6 +28,10 @@ import (
 // All histogram metrics use standard duration buckets appropriate for blockchain
 // validation operations, typically ranging from milliseconds to seconds.
 var (
+	// prometheusSubtreeValidationSubtreesSkippedBlockAssemblyFull counts peer-announced subtrees skipped
+	// whole because block assembly had reached its in-memory transaction limit.
+	prometheusSubtreeValidationSubtreesSkippedBlockAssemblyFull prometheus.Counter
+
 	// prometheusHealth tracks the duration of health check operations.
 	// This histogram measures how long health checks take to complete,
 	// which is important for monitoring service responsiveness.
@@ -110,6 +114,15 @@ func InitPrometheusMetrics() {
 }
 
 func _initPrometheusMetrics() {
+	prometheusSubtreeValidationSubtreesSkippedBlockAssemblyFull = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "subtrees_skipped_block_assembly_full",
+			Help:      "Number of peer-announced subtrees skipped whole because block assembly reached its in-memory transaction limit",
+		},
+	)
+
 	prometheusHealth = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
