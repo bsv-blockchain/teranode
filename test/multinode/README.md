@@ -21,6 +21,22 @@ Prereqs:
 - Passwordless sudo for the scenarios that use `chaos isolate` / `chaos slow`
   (those scenarios skip when sudo is unavailable)
 
+### Crash-consistency failpoint scenarios
+
+Scenarios 04 and 05 crash a node at a named seam in its own code (see
+`util/failpoint`). They are tagged `network_chaos && failpoints` and need a
+`teranode:latest` image built with the `failpoints` Go build tag:
+
+```bash
+make network-chaos-failpoint-test   # rebuilds the image with EXTRA_BUILD_TAGS=failpoints, runs TestFailpoint*
+```
+
+A seam is armed per node by recreating its container with
+`TERANODE<N>_FAILPOINTS=<seam>` (`Stack.RecreateNode`). When the seam is hit
+the node writes `FAILPOINT HIT: <seam>` to stderr and exits 1 without running
+deferred functions. The images built by `make build` and the default
+Dockerfile leave out the `failpoints` tag, so `Inject` compiles to a no-op.
+
 ## Lifecycle model
 
 **One shared stack, many scenarios.** `TestMain` provisions a single 5-node
@@ -57,8 +73,10 @@ doesn't matter.
 | `scenario_01_split_brain_test.go` | all 5 nodes | yes | A partitioned node forks off, heals, and reorgs onto the majority chain. |
 | `scenario_02_crash_recovery_test.go` | nodes 1-3 | no | A killed node rejoins and catches up to tip. |
 | `scenario_03_blast_under_latency_test.go` | nodes 1-3 | yes | Added latency on one node does not stall propagation or create persistent forks. |
+| `scenario_04_failpoint_spend_test.go` | nodes 1-3 | no | A crash between the UTXO spend and the child-tx create leaves a half-applied spend that resubmitting the tx heals. Needs `failpoints`. |
+| `scenario_05_failpoint_persist_announce_test.go` | nodes 1-3 | no | A crash after the subtrees are persisted but before `AddBlock` announces nothing, and later blocks' subtrees are retrievable. Needs `failpoints`. |
 
-All three scenarios currently mine via `generate` RPC rather than the
+Scenarios 01-03 mine via `generate` RPC rather than the
 coinbase-blaster, so the chaos mechanics are isolated from tx-load
 confounds. A follow-up can layer the blaster on top of the same shared
 stack once these baselines are stable.
