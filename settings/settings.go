@@ -226,6 +226,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			// Rate limiting and access control
 			HTTPRateLimit:                getInt("asset_httpRateLimit", 1024, alternativeContext...),
 			HTTPHeavyRateLimit:           getInt("asset_httpHeavyRateLimit", 10, alternativeContext...),
+			HTTPHeavyRateBurst:           getInt("asset_httpHeavyRateBurst", 0, alternativeContext...),
 			HTTPPeerRateMultiplier:       getInt("asset_httpPeerRateMultiplier", 5, alternativeContext...),
 			HTTPMinerRateLimit:           getInt("asset_httpMinerRateLimit", 0, alternativeContext...),
 			HTTPBodyLimit:                getString("asset_httpBodyLimit", "100MB", alternativeContext...),

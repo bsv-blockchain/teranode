@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,6 +43,10 @@ type AuthHandler struct {
 	logger   ulogger.Logger
 	settings *settings.Settings
 	authsha  [sha256.Size]byte
+
+	// trustedOrigins are the browser origins, besides the node's own, allowed to
+	// send cookie-authenticated state-changing requests (see SetTrustedOrigins).
+	trustedOrigins map[string]struct{}
 }
 
 func startLoginCleanup() {
@@ -106,6 +111,94 @@ func NewAuthHandler(logger ulogger.Logger, settings *settings.Settings) *AuthHan
 	}
 }
 
+// SetTrustedOrigins sets the browser origins, in addition to the node's own, that
+// may send cookie-authenticated state-changing requests. Entries must already be
+// normalised (lower-case scheme://host[:port], no default port), as the Asset
+// server's asset_corsAllowOrigins parser produces them. Call it before serving.
+func (h *AuthHandler) SetTrustedOrigins(origins []string) {
+	h.trustedOrigins = make(map[string]struct{}, len(origins))
+
+	for _, o := range origins {
+		h.trustedOrigins[o] = struct{}{}
+	}
+}
+
+// isStateChanging reports whether method can change server state.
+func isStateChanging(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	default:
+		return true
+	}
+}
+
+// stripDefaultPort drops :80 and :443, which browsers omit from Origin.
+func stripDefaultPort(host string) string {
+	return strings.TrimSuffix(strings.TrimSuffix(host, ":80"), ":443")
+}
+
+// firstHeaderValue returns the first comma-separated value of header, as a chain
+// of proxies appends its own.
+func firstHeaderValue(r *http.Request, header string) string {
+	v, _, _ := strings.Cut(r.Header.Get(header), ",")
+
+	return strings.TrimSpace(v)
+}
+
+// requestIsHTTPS reports whether the client reached the node over TLS, directly
+// or through a TLS-terminating proxy.
+func requestIsHTTPS(r *http.Request) bool {
+	return r.TLS != nil || strings.EqualFold(firstHeaderValue(r, "X-Forwarded-Proto"), "https")
+}
+
+// fromForeignOrigin reports whether the browser marks r as sent by a page from a
+// different origin than this node and not in trustedOrigins. The auth cookie is
+// SameSite=Strict, which stops cross-site requests but not a no-cors POST from
+// another origin on the same site, and such a request needs no preflight. A
+// request carrying neither Origin nor Sec-Fetch-Site does not come from a
+// browser, so it cannot be a forged one.
+func (h *AuthHandler) fromForeignOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		switch r.Header.Get("Sec-Fetch-Site") {
+		case "same-site", "cross-site":
+			return true
+		default:
+			return false
+		}
+	}
+
+	u, err := url.Parse(strings.ToLower(origin))
+	if err != nil || u.Host == "" {
+		return true // "null" and malformed origins
+	}
+
+	// A plain-http page must not drive an https node: an active network attacker
+	// can inject one on the node's own hostname.
+	if u.Scheme == "http" && requestIsHTTPS(r) {
+		return true
+	}
+
+	// Same host as the request, or as the public host a reverse proxy forwarded
+	// (nginx and Apache rewrite Host by default). Neither a no-cors request nor a
+	// preflighted credentialed one can carry a page-set X-Forwarded-Host, so
+	// trusting it here gives a hostile page nothing.
+	originHost := stripDefaultPort(u.Host)
+
+	if originHost == stripDefaultPort(strings.ToLower(r.Host)) {
+		return false
+	}
+
+	if fwd := firstHeaderValue(r, "X-Forwarded-Host"); fwd != "" && originHost == stripDefaultPort(strings.ToLower(fwd)) {
+		return false
+	}
+
+	_, trusted := h.trustedOrigins[u.Scheme+"://"+originHost]
+
+	return !trusted
+}
+
 // CheckAuth checks if the request has valid authentication credentials
 func (h *AuthHandler) CheckAuth(r *http.Request) bool {
 	// No usable credential pair is configured. Fail closed when asked to, otherwise
@@ -128,6 +221,13 @@ func (h *AuthHandler) CheckAuth(r *http.Request) bool {
 		cookie, err := r.Cookie(cookieName)
 		if err != nil || cookie.Value == "" {
 			h.logger.Debugf("No auth header or cookie found")
+			return false
+		}
+
+		// The browser attaches the cookie on its own, so a state-changing request
+		// authenticated by it must come from this node's own pages.
+		if isStateChanging(r.Method) && h.fromForeignOrigin(r) {
+			h.logger.Debugf("Rejecting cookie-authenticated %s from a foreign origin", r.Method)
 			return false
 		}
 
