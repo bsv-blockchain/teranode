@@ -60,6 +60,21 @@ func newRPCClient(node int) *RPCClient {
 	}
 }
 
+// Call issues an arbitrary JSON-RPC request and decodes its "result" into out.
+func (c *RPCClient) Call(ctx context.Context, method string, params []any, out any) error {
+	return c.call(ctx, method, params, out)
+}
+
+// SendRawTransaction submits a hex-encoded transaction via sendrawtransaction
+// and returns the txid the node reports.
+func (c *RPCClient) SendRawTransaction(ctx context.Context, txHex string) (string, error) {
+	var txid string
+	if err := c.call(ctx, "sendrawtransaction", []any{txHex}, &txid); err != nil {
+		return "", err
+	}
+	return txid, nil
+}
+
 // call issues a single JSON-RPC request and decodes its "result" field into
 // out. Errors from the RPC response surface as Go errors.
 func (c *RPCClient) call(ctx context.Context, method string, params []any, out any) error {
