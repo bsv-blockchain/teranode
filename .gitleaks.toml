@@ -42,9 +42,8 @@ regexes = [
   '''postgres://[^@\s"'`]+@(localhost|postgres|postgrest|toxiproxy|127\.0\.0\.1)([:/]|$)''',
   # ${ENV_VAR} placeholders resolved at runtime (not literal secrets).
   '''\$\{[A-Za-z0-9_]+\}''',
-  # Alert genesis keys are public keys, and the p2p shared key is a dev-default
-  # network PSK; neither is a node identity secret.
-  '''(alert_genesis_keys|p2p_shared_key)\b''',
+  # Alert genesis keys are public keys, not a node identity secret.
+  '''alert_genesis_keys\b''',
   # Known public P2P test fixtures, allowlisted by VALUE, not key name, so a
   # real key committed under any *_private_key setting is still caught by the
   # rule above. Per-value provenance is documented on the allowedFixtures map
