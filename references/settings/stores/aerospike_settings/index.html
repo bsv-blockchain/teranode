@@ -7508,9 +7508,9 @@
 <tr>
 <td>StoreBatcherDuration</td>
 <td>time.Duration</td>
-<td>10ms</td>
+<td>0 (unset)</td>
 <td>aerospike_storeBatcherDuration</td>
-<td>Store batcher flush duration</td>
+<td>DEPRECATED: overrides <code>utxostore_storeBatcherDurationMillis</code> when set</td>
 </tr>
 <tr>
 <td>StatsRefreshDuration</td>
@@ -7651,12 +7651,15 @@
 <h3 id="batcher-configuration">Batcher Configuration<a class="headerlink" href="#batcher-configuration" title="Permanent link">&para;</a></h3>
 <ul>
 <li>
-<p><code>StoreBatcherDuration</code> controls flush frequency:</p>
+<p>The store (Create) batcher timeout is <code>utxostore_storeBatcherDurationMillis</code>, the same key family as the get, spend and locked batchers:</p>
 <ul>
 <li>Lower values (1-10ms): Lower latency, more frequent writes</li>
 <li>Higher values (50-100ms): Better batching, higher throughput</li>
 <li>Trade-off between latency and throughput</li>
 </ul>
+</li>
+<li>
+<p><code>aerospike_storeBatcherDuration</code> is deprecated. When set it still overrides <code>utxostore_storeBatcherDurationMillis</code> and logs a warning at startup.</p>
 </li>
 <li>
 <p>Works in conjunction with UTXO store batcher settings</p>
@@ -7786,12 +7789,11 @@
 </span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>aerospike_batchPolicy = aerospike:///?MaxRetries=5&amp;SleepBetweenRetries=500ms&amp;TotalTimeout=64s&amp;SocketTimeout=10s&amp;ConcurrentNodes=4
 </span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>aerospike_readPolicy = aerospike:///?MaxRetries=3&amp;SleepBetweenRetries=250ms&amp;TotalTimeout=2s&amp;SocketTimeout=1s
 </span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>aerospike_writePolicy = aerospike:///?MaxRetries=3&amp;SleepBetweenRetries=250ms&amp;TotalTimeout=2s&amp;SocketTimeout=1s
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>aerospike_storeBatcherDuration = 10ms
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>aerospike_statsRefresh = 5s
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>aerospike_statsRefresh = 5s
 </span></code></pre></div>
 <h3 id="high-performance-configuration">High-Performance Configuration<a class="headerlink" href="#high-performance-configuration" title="Permanent link">&para;</a></h3>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>aerospike_warmUp = true
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>aerospike_storeBatcherDuration = 5ms
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>utxostore_storeBatcherDurationMillis = 5
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>aerospike_batchPolicy = aerospike:///?MaxRetries=5&amp;TotalTimeout=30s&amp;SocketTimeout=5s&amp;ConcurrentNodes=8
 </span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>aerospike_statsRefresh = 10s
 </span></code></pre></div>
@@ -7827,14 +7829,14 @@
 <h2 id="performance-tuning-guidelines">Performance Tuning Guidelines<a class="headerlink" href="#performance-tuning-guidelines" title="Permanent link">&para;</a></h2>
 <h3 id="latency-optimized-configuration">Latency-Optimized Configuration<a class="headerlink" href="#latency-optimized-configuration" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Lower <code>StoreBatcherDuration</code> (5-10ms)</li>
+<li>Lower <code>utxostore_storeBatcherDurationMillis</code> (5-10)</li>
 <li>Lower policy timeouts (1-2s total)</li>
 <li>Higher <code>MinConnectionsPerNode</code> (8-16)</li>
 <li>Enable <code>WarmUp</code></li>
 </ul>
 <h3 id="throughput-optimized-configuration">Throughput-Optimized Configuration<a class="headerlink" href="#throughput-optimized-configuration" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Higher <code>StoreBatcherDuration</code> (50-100ms)</li>
+<li>Higher <code>utxostore_storeBatcherDurationMillis</code> (50-100)</li>
 <li>Higher policy timeouts (5-10s total)</li>
 <li>Higher <code>ConnectionQueueSize</code> (512-1024)</li>
 <li>Higher <code>ConcurrentNodes</code> in batch policy (8-16)</li>
@@ -7843,7 +7845,7 @@
 <ul>
 <li>Lower <code>ConnectionQueueSize</code> (64-128)</li>
 <li>Lower <code>MinConnectionsPerNode</code> (2-4)</li>
-<li>Higher <code>StoreBatcherDuration</code> (reduce write frequency)</li>
+<li>Higher <code>utxostore_storeBatcherDurationMillis</code> (reduce write frequency)</li>
 <li>Lower <code>ConcurrentNodes</code> (1-2)</li>
 </ul>
 <h2 id="monitoring-and-debugging">Monitoring and Debugging<a class="headerlink" href="#monitoring-and-debugging" title="Permanent link">&para;</a></h2>

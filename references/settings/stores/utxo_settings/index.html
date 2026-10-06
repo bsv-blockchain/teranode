@@ -7229,7 +7229,7 @@
 <td>int</td>
 <td>32</td>
 <td>utxostore_spendBatcherConcurrency</td>
-<td>Spend batch concurrency</td>
+<td>SQL per-transaction input-spend cap (<code>SpendBatcherSize</code> × this); also caps quick-validation concurrent transactions (<code>SpendBatcherSize</code> × this × 2)</td>
 </tr>
 <tr>
 <td>SpendWaitTimeout</td>
@@ -7262,9 +7262,9 @@
 <tr>
 <td>StoreBatcherDurationMillis</td>
 <td>int</td>
-<td>100</td>
+<td>10</td>
 <td>utxostore_storeBatcherDurationMillis</td>
-<td>Store batch duration</td>
+<td>Store batch duration (SQL and Aerospike)</td>
 </tr>
 <tr>
 <td>StoreBatcherSize</td>
