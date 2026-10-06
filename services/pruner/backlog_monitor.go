@@ -344,14 +344,47 @@ func (m *BacklogMonitor) evaluateLocked() BacklogEvent {
 	return event
 }
 
-// logEventLocked is filled in by Task 3.
-func (m *BacklogMonitor) logEventLocked(_ BacklogEvent) {}
+// logEventLocked writes the event at a severity matching the state: BEHIND is
+// ERROR, AT_RISK is WARN, recovery is INFO.
+func (m *BacklogMonitor) logEventLocked(event BacklogEvent) {
+	if m.logger == nil {
+		return
+	}
 
-// publishMetricsLocked is filled in by Task 3.
-func (m *BacklogMonitor) publishMetricsLocked() {}
+	msg := m.snapshotLocked().Message()
 
-// onIncompleteRunLocked is filled in by Task 3.
-func (m *BacklogMonitor) onIncompleteRunLocked() {}
+	switch {
+	case event == BacklogEventRecovered:
+		m.logger.Infof("[pruner] backlog recovered: %s", msg)
+	case m.state == BacklogBehind:
+		m.logger.Errorf("[pruner] %s", msg)
+	case m.state == BacklogAtRisk:
+		m.logger.Warnf("[pruner] %s", msg)
+	}
+}
+
+// publishMetricsLocked mirrors the snapshot into Prometheus. Metrics are
+// registered in Server.Init; before that (or in tests that never call
+// initPrometheusMetrics) they are nil and this is a no-op.
+func (m *BacklogMonitor) publishMetricsLocked() {
+	if prunerBacklogState == nil {
+		return
+	}
+
+	s := m.snapshotLocked()
+	prunerBacklogState.Set(float64(s.State))
+	prunerLagBlocks.Set(float64(s.LagBlocks))
+	prunerLastCompletedHeight.Set(float64(s.LastCompletedHeight))
+	prunerHeadroomRatio.Set(s.HeadroomRatio)
+	prunerLastRunRecordsPerSecond.Set(s.RecordsPerSecond())
+}
+
+// onIncompleteRunLocked counts a failed phase-2 run.
+func (m *BacklogMonitor) onIncompleteRunLocked() {
+	if prunerIncompleteRunsTotal != nil {
+		prunerIncompleteRunsTotal.Inc()
+	}
+}
 
 func pushWindow(w []time.Duration, d time.Duration, size int) []time.Duration {
 	w = append(w, d)

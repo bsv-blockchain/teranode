@@ -1,12 +1,15 @@
 package pruner
 
 import (
+	"fmt"
 	"math"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -276,4 +279,98 @@ func TestBacklogSnapshot_MessageHasNoDoubleQuotes(t *testing.T) {
 	require.Contains(t, msg, "3 consecutive incomplete runs")
 	require.InDelta(t, 2_000_000_000.0/1800.0, s.RecordsPerSecond(), 1e-6)
 	require.Equal(t, 0.0, BacklogSnapshot{}.RecordsPerSecond())
+}
+
+// recordingLogger captures Infof/Warnf/Errorf lines by level.
+type recordingLogger struct {
+	ulogger.TestLogger
+	mu    sync.Mutex
+	lines map[string][]string
+}
+
+func newRecordingLogger() *recordingLogger {
+	return &recordingLogger{lines: map[string][]string{}}
+}
+
+func (l *recordingLogger) add(level, format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines[level] = append(l.lines[level], fmt.Sprintf(format, args...))
+}
+
+func (l *recordingLogger) Infof(format string, args ...interface{})  { l.add("INFO", format, args...) }
+func (l *recordingLogger) Warnf(format string, args ...interface{})  { l.add("WARN", format, args...) }
+func (l *recordingLogger) Errorf(format string, args ...interface{}) { l.add("ERROR", format, args...) }
+
+func (l *recordingLogger) count(level string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.lines[level])
+}
+
+func TestBacklogMonitor_LogsBehindAtErrorWithRepeatCadence(t *testing.T) {
+	log := newRecordingLogger()
+	clk := &fakeClock{t: time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)}
+	m := NewBacklogMonitor(defaultTestConfig(), log, clk.now) // repeat 5m
+
+	m.OnPruneRequested(100)
+	m.OnRunStarted(100)
+	for h := uint32(101); h <= 104; h++ {
+		clk.advance(time.Minute)
+		m.OnPruneRequested(h)
+	}
+	require.Equal(t, 1, log.count("ERROR"), "rising edge logs once")
+	require.Contains(t, log.lines["ERROR"][0], "pruner BEHIND")
+
+	clk.advance(time.Minute) // 1m after the edge: no repeat yet
+	m.OnPruneRequested(105)
+	require.Equal(t, 1, log.count("ERROR"))
+
+	clk.advance(5 * time.Minute) // past the 5m cadence
+	require.Equal(t, BacklogEventContinues, m.OnPruneRequested(106))
+	require.Equal(t, 2, log.count("ERROR"))
+
+	m.OnRunFinished(106, 1, time.Second, true)
+	require.Equal(t, 1, log.count("INFO"), "recovery logs at INFO")
+	require.Contains(t, log.lines["INFO"][0], "recovered")
+}
+
+func TestBacklogMonitor_AtRiskLogsAtWarn(t *testing.T) {
+	log := newRecordingLogger()
+	cfg := defaultTestConfig()
+	cfg.HeadroomWindow = 1
+	clk := &fakeClock{t: time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)}
+	m := NewBacklogMonitor(cfg, log, clk.now)
+
+	m.OnPruneRequested(100)
+	clk.advance(10 * time.Minute)
+	m.OnRunFinished(100, 1, 9*time.Minute, true)
+	m.OnPruneRequested(101) // interval 10m, duration 9m -> 0.9
+	require.Equal(t, BacklogAtRisk, m.Snapshot().State)
+	require.Equal(t, 1, log.count("WARN"))
+	require.Equal(t, 0, log.count("ERROR"))
+}
+
+func TestBacklogMonitor_PublishesMetrics(t *testing.T) {
+	initPrometheusMetrics()
+	m, clk := newTestMonitor(defaultTestConfig())
+
+	m.OnPruneRequested(100)
+	m.OnRunStarted(100)
+	for h := uint32(101); h <= 104; h++ {
+		clk.advance(time.Minute)
+		m.OnPruneRequested(h)
+	}
+	require.Equal(t, 2.0, testutil.ToFloat64(prunerBacklogState))
+	require.Equal(t, 5.0, testutil.ToFloat64(prunerLagBlocks))
+	require.Equal(t, 99.0, testutil.ToFloat64(prunerLastCompletedHeight))
+
+	before := testutil.ToFloat64(prunerIncompleteRunsTotal)
+	m.OnRunFinished(104, 0, time.Second, false)
+	require.Equal(t, before+1, testutil.ToFloat64(prunerIncompleteRunsTotal))
+
+	m.OnRunFinished(104, 3600, time.Hour, true)
+	require.Equal(t, 0.0, testutil.ToFloat64(prunerBacklogState))
+	require.Equal(t, 104.0, testutil.ToFloat64(prunerLastCompletedHeight))
+	require.InDelta(t, 1.0, testutil.ToFloat64(prunerLastRunRecordsPerSecond), 1e-9)
 }
