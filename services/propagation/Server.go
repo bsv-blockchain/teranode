@@ -1223,6 +1223,12 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 		Errors: make([]*errors.TError, len(req.Items)),
 	}
 
+	// Batched validation on the direct path (no validator Kafka topic, in-process
+	// validator): see processTransactionBatchDirect.
+	if batchValidator, ok := ps.directBatchValidator(); ok {
+		return ps.processTransactionBatchDirect(ctx, req, response, batchValidator)
+	}
+
 	g, gCtx := errgroup.WithContext(ctx)
 
 	for idx, item := range req.Items {
@@ -1281,6 +1287,130 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 	return response, nil
 }
 
+// directBatchValidator returns the validator's batch entry point when
+// ProcessTransactionBatch should validate through it: propagation_batchValidation is
+// on, transactions are validated directly rather than published to Kafka, and the
+// validator is one that implements validator.BatchValidator (the in-process
+// *validator.Validator; the gRPC client does not).
+func (ps *PropagationServer) directBatchValidator() (validator.BatchValidator, bool) {
+	if ps.settings == nil || !ps.settings.Propagation.BatchValidation || ps.validatorKafkaProducerClient != nil {
+		return nil, false
+	}
+
+	batchValidator, ok := ps.validator.(validator.BatchValidator)
+
+	return batchValidator, ok
+}
+
+// processTransactionBatchDirect is ProcessTransactionBatch for the direct
+// validation path when batched validation is enabled.
+//
+// Phase A runs, per item and under the same batchWorkerPool semaphore as the
+// per-transaction path, exactly the pre-validation steps processTransaction runs:
+// size limit, parse, hash caching, coinbase and sanity checks, blob store. Phase B
+// validates every transaction that passed in one validator.ValidateBatch call. Each
+// response item carries the error the per-transaction path would have returned for
+// it, wrapped the same way.
+//
+// Differences from the per-transaction path, by design: the worker-pool slot is
+// released after Phase A (holding it across Phase B would deadlock a batch larger
+// than propagation_batchConcurrencyLimit), the validation runs under the batch
+// context rather than each item's propagated trace context, and a child whose parent
+// is in the same batch is validated after that parent instead of racing it.
+func (ps *PropagationServer) processTransactionBatchDirect(ctx context.Context, req *propagation_api.ProcessTransactionBatchRequest,
+	response *propagation_api.ProcessTransactionBatchResponse, batchValidator validator.BatchValidator) (*propagation_api.ProcessTransactionBatchResponse, error) {
+	parsed := make([]*bt.Tx, len(req.Items))
+	starts := make([]time.Time, len(req.Items))
+
+	// Phase A: parse, check and store every item.
+	g, gCtx := errgroup.WithContext(ctx)
+
+	for idx, item := range req.Items {
+		if ps.batchWorkerPool != nil {
+			select {
+			case ps.batchWorkerPool <- struct{}{}:
+			case <-ctx.Done():
+				response.Errors[idx] = errors.WrapPublic(ctx.Err())
+				continue
+			}
+		}
+
+		g.Go(func() error {
+			if ps.batchWorkerPool != nil {
+				defer func() { <-ps.batchWorkerPool }()
+			}
+
+			txCtx := gCtx
+			if len(item.TraceContext) > 0 {
+				txCtx = otel.GetTextMapPropagator().Extract(gCtx, propagation.MapCarrier(item.TraceContext))
+			}
+
+			starts[idx] = time.Now()
+
+			btTx, err := ps.parseTransaction(txCtx, item.Tx)
+			if err == nil {
+				_, err = ps.prepareTransaction(txCtx, btTx)
+			}
+
+			if err != nil {
+				ps.logger.WithTraceContext(txCtx).Errorf("[ProcessTransactionBatch] failed to process transaction %d: %v", idx, err)
+
+				response.Errors[idx] = errors.WrapPublic(err)
+
+				return nil
+			}
+
+			parsed[idx] = btTx
+
+			return nil
+		})
+	}
+
+	// never returns an error: every goroutine records its own failure
+	_ = g.Wait()
+
+	var (
+		batchTxs     = make([]*bt.Tx, 0, len(parsed))
+		batchIndices = make([]int, 0, len(parsed))
+	)
+
+	for idx, btTx := range parsed {
+		if btTx != nil {
+			batchTxs = append(batchTxs, btTx)
+			batchIndices = append(batchIndices, idx)
+		}
+	}
+
+	if len(batchTxs) == 0 {
+		return response, nil
+	}
+
+	// Phase B: validate everything that passed Phase A in one call. The options are
+	// the ones the per-transaction path's Validate(ctx, tx, 0) uses.
+	_, validationErrs := batchValidator.ValidateBatch(ctx, batchTxs, 0, validator.ProcessOptions())
+
+	for j, validationErr := range validationErrs {
+		idx := batchIndices[j]
+
+		if validationErr != nil {
+			err := wrapDirectValidationError(batchTxs[j], validationErr)
+
+			ps.logger.WithTraceContext(ctx).Errorf("[ProcessTransactionBatch] failed to process transaction %d: %v", idx, err)
+
+			response.Errors[idx] = errors.WrapPublic(err)
+
+			continue
+		}
+
+		// Same observations processTransaction makes for an accepted transaction:
+		// its raw size, and the time from the start of its processing.
+		prometheusTransactionSize.Observe(float64(len(req.Items[idx].Tx)))
+		prometheusProcessedTransactions.Observe(float64(time.Since(starts[idx]).Microseconds()) / 1_000_000)
+	}
+
+	return response, nil
+}
+
 // processTransaction handles the core transaction processing logic.
 // It validates, stores, and triggers async validation of a transaction,
 // updating metrics throughout the process.
@@ -1304,35 +1434,9 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 	timeStart := time.Now()
 	txSize := len(req.Tx)
 
-	// Check transaction size BEFORE parsing to avoid wasting CPU on oversized transactions
-	if ps.settings != nil && ps.settings.Policy != nil {
-		maxTxSize := ps.settings.Policy.GetMaxTxSizePolicy()
-		if maxTxSize > 0 && txSize > maxTxSize {
-			prometheusInvalidTransactions.Inc()
-			err := errors.NewTxInvalidError("[ProcessTransaction] transaction size %d exceeds maximum allowed size %d", txSize, maxTxSize)
-			span.RecordError(err)
-			return nil, err
-		}
-	}
-
-	var btTx *bt.Tx
-	var err error
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				err = errors.NewProcessingError("transaction parsing panic: %v", r)
-				ps.logger.WithTraceContext(ctx).Errorf("Recovered from panic in bt.NewTxFromBytes: %v", r)
-			}
-		}()
-		btTx, err = bt.NewTxFromBytes(req.Tx)
-	}()
-
+	btTx, err := ps.parseTransaction(ctx, req.Tx)
 	if err != nil {
-		prometheusInvalidTransactions.Inc()
-
-		err = errors.NewProcessingError("[ProcessTransaction] failed to parse transaction from bytes", err)
 		span.RecordError(err)
-
 		return nil, err
 	}
 
@@ -1343,6 +1447,41 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 
 	prometheusTransactionSize.Observe(float64(txSize))
 	prometheusProcessedTransactions.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
+
+	return btTx, nil
+}
+
+// parseTransaction applies the pre-parse size limit and parses raw transaction
+// bytes, recovering from a parser panic. Failures are counted in
+// prometheusInvalidTransactions. Shared by the per-transaction and the batched
+// paths so both reject a malformed item with the same error.
+func (ps *PropagationServer) parseTransaction(ctx context.Context, rawTx []byte) (btTx *bt.Tx, err error) {
+	txSize := len(rawTx)
+
+	// Check transaction size BEFORE parsing to avoid wasting CPU on oversized transactions
+	if ps.settings != nil && ps.settings.Policy != nil {
+		maxTxSize := ps.settings.Policy.GetMaxTxSizePolicy()
+		if maxTxSize > 0 && txSize > maxTxSize {
+			prometheusInvalidTransactions.Inc()
+			return nil, errors.NewTxInvalidError("[ProcessTransaction] transaction size %d exceeds maximum allowed size %d", txSize, maxTxSize)
+		}
+	}
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err = errors.NewProcessingError("transaction parsing panic: %v", r)
+				ps.logger.WithTraceContext(ctx).Errorf("Recovered from panic in bt.NewTxFromBytes: %v", r)
+			}
+		}()
+		btTx, err = bt.NewTxFromBytes(rawTx)
+	}()
+
+	if err != nil {
+		prometheusInvalidTransactions.Inc()
+
+		return nil, errors.NewProcessingError("[ProcessTransaction] failed to parse transaction from bytes", err)
+	}
 
 	return btTx, nil
 }
@@ -1372,6 +1511,19 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 	)
 	defer endSpan(err)
 
+	txBytes, err := ps.prepareTransaction(ctx, btTx)
+	if err != nil {
+		return err
+	}
+
+	return ps.routeTransactionForValidation(ctx, btTx, txBytes)
+}
+
+// prepareTransaction runs the per-transaction work that precedes validation:
+// hash caching, the coinbase and sanity checks and the blob-store write. It returns
+// the serialized transaction for reuse downstream. Shared by the per-transaction and
+// the batched paths.
+func (ps *PropagationServer) prepareTransaction(ctx context.Context, btTx *bt.Tx) ([]byte, error) {
 	// Cache the hash on the transaction. bt.Tx.TxIDChainHash re-serializes and
 	// double-hashes on every call unless SetTxHash has been used, and every
 	// ingest path asks for the txid repeatedly: the coinbase check below, the
@@ -1384,21 +1536,29 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 	// Do not allow propagation of coinbase transactions
 	if btTx.IsCoinbase() {
 		prometheusInvalidTransactions.Inc()
-		return errors.NewTxInvalidError("[ProcessTransaction][%s] received coinbase transaction", btTx.TxID())
+		return nil, errors.NewTxInvalidError("[ProcessTransaction][%s] received coinbase transaction", btTx.TxID())
 	}
 
 	// do some very simple sanity checks on the transaction
-	if err = ps.txSanityChecks(btTx); err != nil {
-		return err
+	if err := ps.txSanityChecks(btTx); err != nil {
+		return nil, err
 	}
 
 	// Serialize once and reuse everywhere downstream to avoid redundant allocations
 	txBytes := btTx.SerializeBytes()
 
 	// we should store all transactions, if this fails we should not validate the transaction
-	if err = ps.storeTransaction(ctx, btTx, txBytes); err != nil {
-		return errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction", btTx.TxIDChainHash(), err)
+	if err := ps.storeTransaction(ctx, btTx, txBytes); err != nil {
+		return nil, errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction", btTx.TxIDChainHash(), err)
 	}
+
+	return txBytes, nil
+}
+
+// routeTransactionForValidation hands a prepared transaction to validation: Kafka
+// (or the HTTP fallback for oversized transactions) when a validator topic is
+// configured, otherwise a direct, synchronous validator call.
+func (ps *PropagationServer) routeTransactionForValidation(ctx context.Context, btTx *bt.Tx, txBytes []byte) (err error) {
 
 	// This branch decides whether the submitter is ever told the verdict.
 	//
@@ -1427,11 +1587,18 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 		// All transactions entering Teranode can be assumed to be after Genesis activation height
 		// but we pass in no block height, and just use the block height set in the utxo store
 		if _, err = ps.validator.Validate(ctx, btTx, 0); err != nil {
-			return errors.NewProcessingError("[ProcessTransaction][%s] failed to validate transaction", btTx.TxID(), err)
+			return wrapDirectValidationError(btTx, err)
 		}
 	}
 
 	return nil
+}
+
+// wrapDirectValidationError wraps a validator error on the direct (Kafka-less)
+// path. Shared by the per-transaction and the batched paths so a client sees the
+// same error for the same rejection.
+func wrapDirectValidationError(btTx *bt.Tx, err error) error {
+	return errors.NewProcessingError("[ProcessTransaction][%s] failed to validate transaction", btTx.TxID(), err)
 }
 
 func (ps *PropagationServer) txSanityChecks(btTx *bt.Tx) error {

@@ -87,6 +87,20 @@ type TxValidatorI interface {
 	// Returns:
 	//   - error: Validation error if sequence locks are not satisfied, nil on success
 	ValidateBIP68(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32) error
+
+	// ValidateTransactionBatch is the batched form of ValidateTransaction. It runs
+	// the same checks for every transaction, but hands the BDK part to the engine
+	// in sub-batches (validator_scriptBatchThreads in parallel) rather than one
+	// CGO call per transaction.
+	//
+	// Parameters:
+	//   - txs: The extended transactions to validate
+	//   - blockHeights: Per-transaction block height, parallel to txs
+	//   - utxoHeights: Per-transaction input UTXO heights, parallel to txs
+	//   - validationOptions: Validation options shared by every transaction in the batch
+	// Returns:
+	//   - []error: Parallel to txs; errs[i] is exactly what ValidateTransaction returns for txs[i]
+	ValidateTransactionBatch(txs []*bt.Tx, blockHeights []uint32, utxoHeights [][]uint32, validationOptions *Options) []error
 }
 
 // TxValidator implements transaction validation logic
@@ -134,14 +148,109 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 		validationOptions = NewDefaultOptions()
 	}
 
+	needsBDK, err := tv.validateBeforeBDK(tx, blockHeight, utxoHeights, validationOptions)
+	if err != nil || !needsBDK {
+		return err
+	}
+
+	// Fee enforcement (including the consolidation-fee exemption) is performed by
+	// BDK's ValidateTransaction in policy mode. Setters pushed at startup carry
+	// MinMiningTxFee plus the four consolidation-policy values into BDK.
+	// SkipPolicyChecks is equivalent to BDK consensus=true.
+	// https://github.com/bsv-blockchain/teranode/issues/2367
+	return tv.bdk.ValidateTransaction(tx, blockHeight, validationOptions.SkipPolicyChecks, utxoHeights)
+}
+
+// ValidateTransactionBatch is the batched form of ValidateTransaction: the
+// Teranode-owned checks run per transaction exactly as in ValidateTransaction, and
+// the transactions that still need BDK are handed to the engine in sub-batches
+// (validator_scriptBatchThreads of them in parallel) instead of one CGO call each.
+//
+// blockHeights and utxoHeights are parallel to txs, so every transaction keeps the
+// height it resolved for itself. The result is parallel to txs: errs[i] is
+// exactly the error ValidateTransaction would have returned for txs[i].
+func (tv *TxValidator) ValidateTransactionBatch(txs []*bt.Tx, blockHeights []uint32, utxoHeights [][]uint32, validationOptions *Options) []error {
+	n := len(txs)
+	errs := make([]error, n)
+
+	if n == 0 {
+		return errs
+	}
+
+	if len(blockHeights) != n || len(utxoHeights) != n {
+		argErr := errors.NewInvalidArgumentError("batch validation input lengths differ: txs=%d blockHeights=%d utxoHeights=%d", n, len(blockHeights), len(utxoHeights))
+		for i := range errs {
+			errs[i] = argErr
+		}
+
+		return errs
+	}
+
+	if validationOptions == nil {
+		validationOptions = NewDefaultOptions()
+	}
+
+	var (
+		bdkTxs     = make([]*bt.Tx, 0, n)
+		bdkHeights = make([]uint32, 0, n)
+		bdkUtxos   = make([][]uint32, 0, n)
+		bdkIndices = make([]int, 0, n)
+	)
+
+	for i, tx := range txs {
+		needsBDK, err := tv.validateBeforeBDK(tx, blockHeights[i], utxoHeights[i], validationOptions)
+		if err != nil {
+			errs[i] = err
+			continue
+		}
+
+		if !needsBDK {
+			continue
+		}
+
+		bdkTxs = append(bdkTxs, tx)
+		bdkHeights = append(bdkHeights, blockHeights[i])
+		bdkUtxos = append(bdkUtxos, utxoHeights[i])
+		bdkIndices = append(bdkIndices, i)
+	}
+
+	if len(bdkTxs) == 0 {
+		return errs
+	}
+
+	consensus := validationOptions.SkipPolicyChecks
+
+	batcher, ok := tv.bdk.(bdkBatchValidator)
+	if !ok {
+		for j, tx := range bdkTxs {
+			errs[bdkIndices[j]] = tv.bdk.ValidateTransaction(tx, bdkHeights[j], consensus, bdkUtxos[j])
+		}
+
+		return errs
+	}
+
+	bdkErrs := batcher.ValidateTransactionBatch(bdkTxs, bdkHeights, consensus, bdkUtxos, tv.settings.Validator.ScriptBatchThreads)
+
+	for j, err := range bdkErrs {
+		errs[bdkIndices[j]] = err
+	}
+
+	return errs
+}
+
+// validateBeforeBDK runs the Teranode-owned part of ValidateTransaction: the
+// coinbase rejection, the input checks and, when SkipScriptValidation is set, the
+// Go-side money-range / inflation backstop that replaces BDK. needsBDK reports
+// whether the transaction must still be handed to BDK.
+func (tv *TxValidator) validateBeforeBDK(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) (needsBDK bool, err error) {
 	// BDK rejects coinbase transactions in both modes. Keep coinbase routing
 	// outside BDK so the adapter only sees regular transactions.
 	if tx.IsCoinbase() {
-		return errors.NewTxInvalidError("coinbase transactions are not supported")
+		return false, errors.NewTxInvalidError("coinbase transactions are not supported")
 	}
 
 	if err := tv.checkInputs(tx, blockHeight, validationOptions); err != nil {
-		return err
+		return false, err
 	}
 
 	// Legacy catchup below the highest hard-coded checkpoint sets this: PoW +
@@ -159,7 +268,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 		// for why (bdk/core/txvalidator.cpp).
 		totalOut, err := tv.checkOutputValues(tx)
 		if err != nil {
-			return err
+			return false, err
 		}
 
 		// The unconfirmed-parent sentinel guard mirrors BDK's UnconfirmedInputInBlock
@@ -204,29 +313,24 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 		// the Genesis comparison used in sequenceLocks.
 		if blockHeight < tv.settings.ChainCfgParams.GenesisActivationHeight {
 			if err := sentinelGuard(); err != nil {
-				return err
+				return false, err
 			}
 			if err := inflationGuard(); err != nil {
-				return err
+				return false, err
 			}
 		} else {
 			if err := inflationGuard(); err != nil {
-				return err
+				return false, err
 			}
 			if err := sentinelGuard(); err != nil {
-				return err
+				return false, err
 			}
 		}
 
-		return nil
+		return false, nil
 	}
 
-	// Fee enforcement (including the consolidation-fee exemption) is performed by
-	// BDK's ValidateTransaction in policy mode. Setters pushed at startup carry
-	// MinMiningTxFee plus the four consolidation-policy values into BDK.
-	// SkipPolicyChecks is equivalent to BDK consensus=true.
-	// https://github.com/bsv-blockchain/teranode/issues/2367
-	return tv.bdk.ValidateTransaction(tx, blockHeight, validationOptions.SkipPolicyChecks, utxoHeights)
+	return true, nil
 }
 
 // checkOutputValues enforces the per-output and total-output money-range
