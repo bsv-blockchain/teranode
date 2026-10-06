@@ -87,6 +87,7 @@ type BacklogSnapshot struct {
 	LastRunDuration     time.Duration
 	Suspended           bool
 	SuspendReason       string
+	IncompleteReason    string
 }
 
 // RecordsPerSecond is the throughput of the last finished run, 0 if unknown.
@@ -104,6 +105,10 @@ func (s BacklogSnapshot) Message() string {
 	msg := fmt.Sprintf("pruner %s: %d blocks behind (requested %d, last completed %d), %d consecutive incomplete runs, last run %d records in %s (%.0f rec/s), headroom %.2fx block interval",
 		s.State, s.LagBlocks, s.RequestedHeight, s.LastCompletedHeight, s.IncompleteStreak,
 		s.LastRunRecords, s.LastRunDuration.Round(time.Second), s.RecordsPerSecond(), s.HeadroomRatio)
+
+	if s.IncompleteStreak > 0 && s.IncompleteReason != "" {
+		msg += fmt.Sprintf(", last incomplete cause %s", s.IncompleteReason)
+	}
 
 	if s.Suspended {
 		msg += fmt.Sprintf(", lag check suspended (%s)", s.SuspendReason)
@@ -130,8 +135,14 @@ type BacklogMonitor struct {
 	streak        int
 	suspended     bool
 	suspendReason string
-	lastRecords   int64
-	lastDuration  time.Duration
+	// catchingUp is set while the FSM is not RUNNING. With the default
+	// pruner_skipDuringCatchup=false the pruner keeps running during catchup,
+	// so this suspends the lag check independently of skip-suspension.
+	catchingUp bool
+	// lastIncompleteReason names what ended the current incomplete streak.
+	lastIncompleteReason string
+	lastRecords          int64
+	lastDuration         time.Duration
 
 	state     BacklogState
 	lastLogAt time.Time
@@ -171,7 +182,9 @@ func (m *BacklogMonitor) OnPruneRequested(height uint32) BacklogEvent {
 		if height > 0 {
 			m.lastCompleted = height - 1
 		}
-	} else {
+	} else if !m.lagSuspendedLocked() {
+		// Catchup and deliberate skips produce request bursts that say nothing
+		// about the steady-state block interval; keep them out of the window.
 		m.intervals = pushWindow(m.intervals, now.Sub(m.lastRequestAt), m.window())
 	}
 
@@ -184,8 +197,11 @@ func (m *BacklogMonitor) OnPruneRequested(height uint32) BacklogEvent {
 	return m.evaluateLocked()
 }
 
-// OnSkipped records a deliberate skip (catchup, below min height, ...). The
-// lag check is suspended until the next OnRunStarted.
+// OnSkipped records that the worker did not prune height. Deliberate skips
+// (below_min_height, catchup_mode) suspend the lag check until the next
+// OnRunStarted. Any other reason (block_assembly_timeout, mined_status_timeout,
+// fsm_error) is a failure: the pruner wanted to run and could not, so it counts
+// toward the incomplete-run streak instead of hiding a pruner that never runs.
 func (m *BacklogMonitor) OnSkipped(_ uint32, reason string) BacklogEvent {
 	if !m.active() {
 		return BacklogEventNone
@@ -194,21 +210,64 @@ func (m *BacklogMonitor) OnSkipped(_ uint32, reason string) BacklogEvent {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.suspended = true
-	m.suspendReason = reason
+	if isDeliberateSkip(reason) {
+		m.suspended = true
+		m.suspendReason = reason
+	} else {
+		m.streak++
+		m.lastIncompleteReason = reason
+		m.onIncompleteRunLocked()
+	}
 
 	return m.evaluateLocked()
 }
 
-// OnRunStarted records that the worker passed every skip check for height and
-// is about to run the prune phases. It lifts any skip suspension.
-func (m *BacklogMonitor) OnRunStarted(_ uint32) BacklogEvent {
+// OnCatchupState records whether the node is catching up (FSM not RUNNING).
+// While catching up the lag check is suspended; on leaving catchup the
+// completed height is re-seeded so the catchup backlog does not page.
+func (m *BacklogMonitor) OnCatchupState(catchingUp bool) BacklogEvent {
 	if !m.active() {
 		return BacklogEventNone
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if catchingUp {
+		m.catchingUp = true
+	} else if m.catchingUp {
+		m.catchingUp = false
+		m.reseedLocked(m.requested)
+	}
+
+	return m.evaluateLocked()
+}
+
+func isDeliberateSkip(reason string) bool {
+	return reason == "below_min_height" || reason == "catchup_mode"
+}
+
+// reseedLocked moves lastCompleted up to height-1 so that lag accumulated while
+// the check was suspended (through no fault of the pruner) is not reported.
+func (m *BacklogMonitor) reseedLocked(height uint32) {
+	if height > 0 && height-1 > m.lastCompleted {
+		m.lastCompleted = height - 1
+	}
+}
+
+// OnRunStarted records that the worker passed every skip check for height and
+// is about to run the prune phases. It lifts any skip suspension.
+func (m *BacklogMonitor) OnRunStarted(height uint32) BacklogEvent {
+	if !m.active() {
+		return BacklogEventNone
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.suspended {
+		m.reseedLocked(height)
+	}
 
 	m.suspended = false
 	m.suspendReason = ""
@@ -230,6 +289,7 @@ func (m *BacklogMonitor) OnRunFinished(height uint32, records int64, duration ti
 
 	if ok {
 		m.streak = 0
+		m.lastIncompleteReason = ""
 		m.lastRecords = records
 		m.lastDuration = duration
 		m.seeded = true
@@ -239,6 +299,7 @@ func (m *BacklogMonitor) OnRunFinished(height uint32, records int64, duration ti
 		}
 	} else {
 		m.streak++
+		m.lastIncompleteReason = "phase2_error"
 		m.onIncompleteRunLocked()
 	}
 
@@ -283,6 +344,10 @@ func (m *BacklogMonitor) window() int {
 	return m.cfg.HeadroomWindow
 }
 
+func (m *BacklogMonitor) lagSuspendedLocked() bool {
+	return m.suspended || m.catchingUp
+}
+
 func (m *BacklogMonitor) lagLocked() uint32 {
 	if m.requested > m.lastCompleted {
 		return m.requested - m.lastCompleted
@@ -305,7 +370,7 @@ func (m *BacklogMonitor) headroomLocked() float64 {
 }
 
 func (m *BacklogMonitor) computeStateLocked() BacklogState {
-	if !m.suspended && m.cfg.MaxLagBlocks > 0 && m.lagLocked() > m.cfg.MaxLagBlocks {
+	if !m.lagSuspendedLocked() && m.cfg.MaxLagBlocks > 0 && m.lagLocked() > m.cfg.MaxLagBlocks {
 		return BacklogBehind
 	}
 
@@ -323,6 +388,11 @@ func (m *BacklogMonitor) computeStateLocked() BacklogState {
 }
 
 func (m *BacklogMonitor) snapshotLocked() BacklogSnapshot {
+	reason := m.suspendReason
+	if reason == "" && m.catchingUp {
+		reason = "catchup_in_progress"
+	}
+
 	return BacklogSnapshot{
 		State:               m.state,
 		RequestedHeight:     m.requested,
@@ -332,8 +402,9 @@ func (m *BacklogMonitor) snapshotLocked() BacklogSnapshot {
 		HeadroomRatio:       m.headroomLocked(),
 		LastRunRecords:      m.lastRecords,
 		LastRunDuration:     m.lastDuration,
-		Suspended:           m.suspended,
-		SuspendReason:       m.suspendReason,
+		Suspended:           m.lagSuspendedLocked(),
+		SuspendReason:       reason,
+		IncompleteReason:    m.lastIncompleteReason,
 	}
 }
 

@@ -160,24 +160,32 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 				continue
 			}
 
-			// Check FSM state - skip during CATCHINGBLOCKS if configured.
+			// Check FSM state: skip during CATCHINGBLOCKS if configured, and tell the
+			// backlog monitor whether we are catching up (it must not report BEHIND
+			// for catchup lag even when pruning keeps running, the default).
 			// Guard against a nil blockchainClient (e.g. in tests) the same
 			// way the blockAssemblyClient check below does.
-			if s.settings.Pruner.SkipDuringCatchup && s.blockchainClient != nil {
+			if s.blockchainClient != nil && (s.settings.Pruner.SkipDuringCatchup || s.backlog.active()) {
 				fsmState, err := s.blockchainClient.GetFSMCurrentState(ctx)
 				if err != nil {
-					s.logger.Warnf("Failed to get FSM state, skipping pruner: %v", err)
-					prunerSkipped.WithLabelValues("fsm_error").Inc()
-					s.backlog.OnSkipped(blockHeight, "fsm_error")
-					continue
-				}
-				// Only RUNNING proves no catchup is in flight: an operator STOP
-				// parks a catching-up node in IDLE while its batch still runs.
-				if fsmState == nil || *fsmState != blockchain.FSMStateRUNNING {
-					s.logger.Debugf("[pruner][%s:%d] skipping during catchup", blockHashStr, blockHeight)
-					prunerSkipped.WithLabelValues("catchup_mode").Inc()
-					s.backlog.OnSkipped(blockHeight, "catchup_mode")
-					continue
+					if s.settings.Pruner.SkipDuringCatchup {
+						s.logger.Warnf("Failed to get FSM state, skipping pruner: %v", err)
+						prunerSkipped.WithLabelValues("fsm_error").Inc()
+						s.backlog.OnSkipped(blockHeight, "fsm_error")
+						continue
+					}
+				} else {
+					// Only RUNNING proves no catchup is in flight: an operator STOP
+					// parks a catching-up node in IDLE while its batch still runs.
+					running := fsmState != nil && *fsmState == blockchain.FSMStateRUNNING
+					s.backlog.OnCatchupState(!running)
+
+					if s.settings.Pruner.SkipDuringCatchup && !running {
+						s.logger.Debugf("[pruner][%s:%d] skipping during catchup", blockHashStr, blockHeight)
+						prunerSkipped.WithLabelValues("catchup_mode").Inc()
+						s.backlog.OnSkipped(blockHeight, "catchup_mode")
+						continue
+					}
 				}
 			}
 

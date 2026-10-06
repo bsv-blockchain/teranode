@@ -586,6 +586,12 @@ func (f *fakePrunerService) AddObserver(pruner.Observer) {}
 // nil) adjusts pruner settings BEFORE the goroutine starts, so tests never write
 // settings the processor is concurrently reading (-race).
 func newWiredServer(t *testing.T, svc *fakePrunerService, mutate func(*settings.PrunerSettings)) (*Server, context.CancelFunc) {
+	return newWiredServerWith(t, svc, mutate, nil)
+}
+
+// newWiredServerWith is newWiredServer plus a hook to set Server fields (e.g. a
+// blockchain mock) before the processor goroutine starts.
+func newWiredServerWith(t *testing.T, svc *fakePrunerService, mutate func(*settings.PrunerSettings), setup func(*Server)) (*Server, context.CancelFunc) {
 	t.Helper()
 	initPrometheusMetrics()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -602,6 +608,9 @@ func newWiredServer(t *testing.T, svc *fakePrunerService, mutate func(*settings.
 		settings:      &settings.Settings{Pruner: ps},
 	}
 	s.backlog = NewBacklogMonitor(BacklogConfig{Enabled: true, MaxLagBlocks: 3, MaxIncompleteRuns: 2, HeadroomWindow: 6}, s.logger, nil)
+	if setup != nil {
+		setup(s)
+	}
 	go s.prunerProcessor(ctx)
 	return s, cancel
 }
@@ -653,4 +662,59 @@ func TestNew_ConstructsBacklogMonitorFromSettings(t *testing.T) {
 	s := New(context.Background(), ulogger.TestLogger{}, tSettings, nil, nil, nil)
 	require.NotNil(t, s.backlog)
 	require.Equal(t, uint32(9), s.backlog.cfg.MaxLagBlocks)
+}
+
+func fsmMock(state blockchain.FSMStateType, err error) *blockchain.Mock {
+	m := &blockchain.Mock{}
+	if err != nil {
+		m.On("GetFSMCurrentState", mock.Anything).Return((*blockchain.FSMStateType)(nil), err)
+	} else {
+		m.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+	}
+	return m
+}
+
+// With the default pruner_skipDuringCatchup=false the pruner still runs during
+// catchup; the worker must tell the monitor so the lag check is suspended.
+func TestPrunerProcessor_CatchupWithoutSkipSuspendsBacklogLag(t *testing.T) {
+	svc := &fakePrunerService{calls: make(chan uint32, 1)}
+	s, cancel := newWiredServerWith(t, svc, nil, func(s *Server) {
+		s.blockchainClient = fsmMock(blockchain.FSMStateCATCHINGBLOCKS, nil)
+	})
+	defer cancel()
+
+	s.backlog.OnPruneRequested(400)
+	s.pruneNotify <- pruneSignal{blockHeight: 400}
+	require.Equal(t, uint32(400), <-svc.calls, "pruning must still run when skipDuringCatchup=false")
+
+	require.Eventually(t, func() bool { return s.backlog.Snapshot().Suspended }, 2*time.Second, 10*time.Millisecond)
+	require.Equal(t, "catchup_in_progress", s.backlog.Snapshot().SuspendReason)
+}
+
+func TestPrunerProcessor_CatchupModeSkipReportedToBacklog(t *testing.T) {
+	svc := &fakePrunerService{calls: make(chan uint32, 1)}
+	s, cancel := newWiredServerWith(t, svc, func(p *settings.PrunerSettings) { p.SkipDuringCatchup = true }, func(s *Server) {
+		s.blockchainClient = fsmMock(blockchain.FSMStateCATCHINGBLOCKS, nil)
+	})
+	defer cancel()
+
+	s.backlog.OnPruneRequested(410)
+	s.pruneNotify <- pruneSignal{blockHeight: 410}
+
+	require.Eventually(t, func() bool { return s.backlog.Snapshot().SuspendReason == "catchup_mode" }, 2*time.Second, 10*time.Millisecond)
+	require.Equal(t, BacklogOK, s.backlog.Snapshot().State)
+}
+
+func TestPrunerProcessor_FSMErrorCountsAsIncomplete(t *testing.T) {
+	svc := &fakePrunerService{calls: make(chan uint32, 1)}
+	s, cancel := newWiredServerWith(t, svc, func(p *settings.PrunerSettings) { p.SkipDuringCatchup = true }, func(s *Server) {
+		s.blockchainClient = fsmMock(0, errors.NewServiceError("blockchain unavailable"))
+	})
+	defer cancel()
+
+	s.backlog.OnPruneRequested(420)
+	s.pruneNotify <- pruneSignal{blockHeight: 420}
+
+	require.Eventually(t, func() bool { return s.backlog.Snapshot().IncompleteStreak == 1 }, 2*time.Second, 10*time.Millisecond)
+	require.False(t, s.backlog.Snapshot().Suspended)
 }

@@ -175,11 +175,100 @@ func TestBacklogMonitor_SkipsSuspendLagCheck(t *testing.T) {
 	require.Equal(t, uint32(20), s.LagBlocks, "lag is still reported while suspended")
 	require.Equal(t, 0, s.IncompleteStreak)
 
-	// Leaving catchup: the next real run lifts the suspension and lag counts again.
-	require.Equal(t, BacklogEventEntered, m.OnRunStarted(120))
-	require.False(t, m.Snapshot().Suspended)
-	require.Equal(t, BacklogBehind, m.Snapshot().State)
-	require.Equal(t, BacklogEventRecovered, m.OnRunFinished(120, 1, time.Second, true))
+	// Leaving the skip: the next real run lifts the suspension WITHOUT paging for
+	// the lag that built up while skipping (nothing was the pruner's fault), and
+	// re-seeds so a genuine stall afterwards is still detected.
+	require.Equal(t, BacklogEventNone, m.OnRunStarted(120))
+	s = m.Snapshot()
+	require.False(t, s.Suspended)
+	require.Equal(t, BacklogOK, s.State)
+	require.Equal(t, uint32(119), s.LastCompletedHeight)
+
+	for h := uint32(121); h <= 122; h++ {
+		clk.advance(time.Minute)
+		m.OnPruneRequested(h)
+	}
+	require.Equal(t, BacklogOK, m.Snapshot().State) // lag 3
+	clk.advance(time.Minute)
+	require.Equal(t, BacklogEventEntered, m.OnPruneRequested(123)) // lag 4 > 3
+}
+
+// A fresh chain with pruner_min_block_height=300 must not page at height 301
+// just because the first 300 heights were (deliberately) never pruned.
+func TestBacklogMonitor_MinHeightFreshChainDoesNotPage(t *testing.T) {
+	m, clk := newTestMonitor(defaultTestConfig())
+	for h := uint32(1); h <= 300; h++ {
+		clk.advance(10 * time.Second)
+		m.OnPruneRequested(h)
+		m.OnSkipped(h, "below_min_height")
+	}
+	clk.advance(10 * time.Second)
+	m.OnPruneRequested(301)
+	require.Equal(t, BacklogEventNone, m.OnRunStarted(301))
+	require.Equal(t, BacklogOK, m.Snapshot().State)
+	require.Equal(t, BacklogEventNone, m.OnRunFinished(301, 0, time.Millisecond, true))
+	require.Equal(t, BacklogOK, m.Snapshot().State)
+}
+
+// With the default pruner_skipDuringCatchup=false the pruner keeps running
+// during catchup, so requests race ahead of completions and arrive at
+// sub-second intervals. Neither may produce BEHIND or poison the headroom
+// window; once RUNNING again, a real stall must still be detected.
+func TestBacklogMonitor_CatchupSuspendsLagAndHeadroom(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.HeadroomWindow = 2
+	m, clk := newTestMonitor(cfg)
+	m.OnPruneRequested(100)
+	m.OnCatchupState(true)
+	m.OnRunStarted(100)
+	for h := uint32(101); h <= 500; h++ {
+		clk.advance(100 * time.Millisecond)
+		m.OnPruneRequested(h)
+	}
+	m.OnRunFinished(100, 1, time.Minute, true)
+	s := m.Snapshot()
+	require.Equal(t, BacklogOK, s.State)
+	require.True(t, s.Suspended)
+	require.Equal(t, "catchup_in_progress", s.SuspendReason)
+	require.Equal(t, 0.0, s.HeadroomRatio, "catchup intervals must not enter the headroom window")
+
+	require.Equal(t, BacklogEventNone, m.OnCatchupState(false))
+	s = m.Snapshot()
+	require.False(t, s.Suspended)
+	require.Equal(t, BacklogOK, s.State)
+	require.Equal(t, uint32(499), s.LastCompletedHeight)
+
+	m.OnRunStarted(500)
+	for h := uint32(501); h <= 503; h++ {
+		clk.advance(10 * time.Minute)
+		m.OnPruneRequested(h)
+	}
+	require.Equal(t, BacklogBehind, m.Snapshot().State) // 503-499 = 4 > 3
+}
+
+// Timeouts are failures, not deliberate skips: a pruner that can never run
+// because block assembly is wedged must go BEHIND, not stay silently OK.
+func TestBacklogMonitor_TimeoutSkipsCountAsIncomplete(t *testing.T) {
+	for _, reason := range []string{"block_assembly_timeout", "mined_status_timeout", "fsm_error"} {
+		t.Run(reason, func(t *testing.T) {
+			m, clk := newTestMonitor(defaultTestConfig())
+			m.OnPruneRequested(100)
+			require.Equal(t, BacklogEventNone, m.OnSkipped(100, reason))
+			s := m.Snapshot()
+			require.False(t, s.Suspended)
+			require.Equal(t, 1, s.IncompleteStreak)
+			clk.advance(10 * time.Minute)
+			m.OnPruneRequested(101)
+			require.Equal(t, BacklogEventEntered, m.OnSkipped(101, reason))
+			s = m.Snapshot()
+			require.Equal(t, BacklogBehind, s.State)
+			require.Contains(t, s.Message(), reason)
+
+			m.OnRunStarted(102)
+			require.Equal(t, BacklogEventRecovered, m.OnRunFinished(102, 1, time.Second, true))
+			require.Equal(t, 0, m.Snapshot().IncompleteStreak)
+		})
+	}
 }
 
 func TestBacklogMonitor_DisabledChecks(t *testing.T) {
