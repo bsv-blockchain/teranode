@@ -412,7 +412,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/subtree_data/:hash", h.GetSubtreeData(), catchupHeavyMW()...)
 	apiGroup.POST(catchupTxsRoute, h.GetTransactions(), catchupHeavyMW()...) // BINARY_STREAM only
 
-	apiGroup.GET("/subtree/:hash/txs/json", h.GetSubtreeTxs(JSON))
+	apiGroup.GET("/subtree/:hash/txs/json", h.GetSubtreeTxs(JSON), heavyMW()...)
 
 	apiGroup.GET("/headers/:hash", h.GetBlockHeaders(BINARY_STREAM))
 	apiGroup.GET("/headers/:hash/hex", h.GetBlockHeaders(HEX))
@@ -463,7 +463,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 
 	apiGroup.GET("/search", h.Search)
 	apiGroup.GET("/blockstats", h.GetBlockStats)
-	apiGroup.GET("/blockgraphdata/:period", h.GetBlockGraphData)
+	apiGroup.GET("/blockgraphdata/:period", h.GetBlockGraphData, heavyMW()...)
 	apiGroup.GET("/chainparams", h.GetChainParams)
 
 	// ARC-compatible policy endpoint (https://bitcoin-sv.github.io/arc/api.html)
@@ -475,7 +475,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/utxo/:hash/hex", h.GetUTXO(HEX))
 	apiGroup.GET("/utxo/:hash/json", h.GetUTXO(JSON))
 
-	apiGroup.GET("/utxos/:hash/json", h.GetUTXOsByTxID(JSON))
+	apiGroup.GET("/utxos/:hash/json", h.GetUTXOsByTxID(JSON), heavyMW()...)
 
 	// Bulk UTXO spend-status lookup. All three modes accept the same 36-byte
 	// binary request body; only the response format differs. Routed through
@@ -491,9 +491,9 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/bestblockheader/hex", h.GetBestBlockHeader(HEX))
 	apiGroup.GET("/bestblockheader/json", h.GetBestBlockHeader(JSON))
 
-	apiGroup.GET("/merkle_proof/:hash", h.GetMerkleProof(BINARY_STREAM))
-	apiGroup.GET("/merkle_proof/:hash/hex", h.GetMerkleProof(HEX))
-	apiGroup.GET("/merkle_proof/:hash/json", h.GetMerkleProof(JSON))
+	apiGroup.GET("/merkle_proof/:hash", h.GetMerkleProof(BINARY_STREAM), heavyMW()...)
+	apiGroup.GET("/merkle_proof/:hash/hex", h.GetMerkleProof(HEX), heavyMW()...)
+	apiGroup.GET("/merkle_proof/:hash/json", h.GetMerkleProof(JSON), heavyMW()...)
 
 	// Create auth handler for protecting admin endpoints (used regardless of dashboard state)
 	authHandler := dashboard.NewAuthHandler(h.logger, h.settings)

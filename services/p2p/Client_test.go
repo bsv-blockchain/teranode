@@ -1016,6 +1016,25 @@ func TestSimpleClientRecordBytesDownloaded(t *testing.T) {
 		err := client.RecordBytesDownloaded(context.Background(), "peer1", 0)
 		require.Contains(t, err.Error(), "failed to record bytes downloaded")
 	})
+	// Callers detach this call from their own cancellation (it runs as a fetch
+	// is closed), so a stuck p2p service must not hold them past a short bound.
+	t.Run("stuck_server_is_bounded", func(t *testing.T) {
+		defer func(d time.Duration) { recordBytesDownloadedTimeout = d }(recordBytesDownloadedTimeout)
+		recordBytesDownloadedTimeout = 50 * time.Millisecond
+
+		client := newClientWithMock(&MockPeerServiceClient{
+			RecordBytesDownloadedFunc: func(ctx context.Context, in *p2p_api.RecordBytesDownloadedRequest, opts ...grpc.CallOption) (*p2p_api.RecordBytesDownloadedResponse, error) {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+		})
+
+		start := time.Now()
+		err := client.RecordBytesDownloaded(context.WithoutCancel(context.Background()), "peer1", 0)
+
+		require.Error(t, err)
+		require.Less(t, time.Since(start), 5*time.Second)
+	})
 }
 
 func TestSimpleClientGetPeer(t *testing.T) {

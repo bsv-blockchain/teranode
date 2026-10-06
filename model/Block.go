@@ -108,17 +108,12 @@ type Block struct {
 	subtreeLength   uint64
 	subtreeSlicesMu sync.RWMutex
 	txMap           txmap.TxMap
-	// txMapCount is the entry count txMap was sized from, and the pool key it
-	// must be returned with. Never the peer-supplied TransactionCount: the
-	// separate pass derives it from the loaded body by txMapEntryCount, and the
-	// in-memory load path from len(Subtrees) x subtree 0 once the subtree list
-	// is bound to the header (getAndValidateSubtreesWithDedup). Stashed so the
-	// release key cannot drift from the one used at GetTxMap time.
+	// txMapCount is the entry count txMap was sized from. Never the
+	// peer-supplied TransactionCount: the separate pass derives it from the
+	// loaded body by txMapEntryCount, and the in-memory load path from
+	// len(Subtrees) x subtree 0 once the subtree list is bound to the header
+	// (getAndValidateSubtreesWithDedup).
 	txMapCount uint64
-	// txMapFresh records whether txMap was allocated for this block rather than
-	// reused from the pool, which decides whether an underfilled map is kept on
-	// release (txMapPoolable).
-	txMapFresh bool
 	// firstRootMemo caches subtree 0's coinbase-substituted root from the early
 	// binding check, so CheckMerkleRoot does not recompute it for the same
 	// subtree (a full merkle store over up to 1M leaves).
@@ -922,11 +917,10 @@ func (b *Block) ValidWithBinding(ctx context.Context, logger ulogger.Logger, sub
 	//
 	// b.txMap is allocated inside checkDuplicateTransactions or, on the in-memory
 	// path, during the subtree load above (possibly mid-execution when a worker
-	// fails). The deferred releaseTxMap below ensures the pooled
-	// in-memory variant is returned to the pool on *every* exit path — including
-	// errors from checkDuplicateTransactions, the flush below, and
+	// fails). The deferred releaseTxMap below lets it go on *every* exit path —
+	// including errors from checkDuplicateTransactions, the flush below, and
 	// validOrderAndBlessed. releaseTxMap is nil-safe, idempotent, and handles
-	// all three b.txMap variants (disk-backed, pooled in-memory, generic Closer).
+	// all three b.txMap variants (disk-backed, in-memory, generic Closer).
 	// Installing the defer earlier than it used to be is inert: a defer runs at function
 	// exit wherever it was installed.
 	defer b.releaseTxMap()
@@ -959,8 +953,7 @@ func (b *Block) ValidWithBinding(ctx context.Context, logger ulogger.Logger, sub
 	// validation nodes. The errgroup.Wait of whichever phase wrote the map
 	// (checkDuplicateTransactions or getAndValidateSubtrees) is the
 	// happens-before edge that guarantees all writes precede this Freeze.
-	// releaseTxMap resets the freeze on its way back to the pool (in-memory Clear)
-	// or discards the map (disk Close). The checks between here and step 12 read only
+	// releaseTxMap drops the map afterwards (and Closes a disk-backed one). The checks between here and step 12 read only
 	// the coinbase and the subtree fee totals, never b.txMap, so the frozen map is
 	// still written-then-read in that order.
 	if b.txMap != nil {
@@ -1222,10 +1215,10 @@ func (b *Block) CheckCoinbaseOnlyBodyBound() error {
 	return nil
 }
 
-// releaseTxMap returns b.txMap to the pool (in-memory variant) or closes the
-// disk-backed map, then nils b.txMap. Idempotent and nil-safe: safe to call
-// multiple times or before b.txMap is ever assigned. Invoked via defer from
-// Block.Valid so the pooled map is reclaimed on every exit path, including
+// releaseTxMap closes the disk-backed map if that is what b.txMap is, then nils
+// b.txMap so the in-memory map can be collected. Idempotent and nil-safe: safe
+// to call multiple times or before b.txMap is ever assigned. Invoked via defer
+// from Block.Valid so the map is let go on every exit path, including
 // errors during the subtree load, checkDuplicateTransactions or
 // validOrderAndBlessed.
 func (b *Block) releaseTxMap() {
@@ -1237,17 +1230,6 @@ func (b *Block) releaseTxMap() {
 		ReportTxMapStats(diskMap.Stats())
 		_ = diskMap.Close()
 		ClearTxMapStats()
-	} else if poolable, ok := b.txMap.(*txmap.SplitSwissMapUint64); ok {
-		// Return the pooled in-memory map for reuse on the next block. The
-		// invariant this relies on is narrow and local: both allocation sites
-		// (checkDuplicateTransactions, and onFirst in getAndValidateSubtreesWithDedup)
-		// assign b.txMapCount immediately before GetTxMap and nothing between
-		// there and here writes it, so the Put key equals the Get key and the map
-		// lands in the pool it came from (counts above every size class, and maps
-		// whose fill falls outside their class, are dropped by PutTxMap). Deliberately not stated in terms of
-		// b.TransactionCount, which GetAndValidateSubtrees only recomputes when
-		// Valid took the `subtreeStore != nil && len(b.Subtrees) > 0` branch.
-		putTxMap(poolable, b.txMapCount, b.txMapFresh)
 	} else if closer, ok := b.txMap.(io.Closer); ok {
 		_ = closer.Close()
 	}
@@ -1477,12 +1459,10 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 		}
 		b.txMap = diskMap
 	} else {
-		// Draw the txMap from a size-class pool so the (potentially multi-GB)
-		// backing storage is reused across blocks. PutTxMap is called at
-		// release time below, keyed by the same 64-bit count held in
-		// b.txMapCount — counts above every size class allocate fresh with a
-		// bounded preallocation hint instead of failing the block (issue 1428).
-		b.txMap, b.txMapFresh = getTxMap(b.txMapCount)
+		// Sized to b.txMapCount bucket by bucket and allocated for this block
+		// only. Counts beyond maxTxMapPrealloc get a capped preallocation and
+		// grow on insert rather than failing the block (issue 1428).
+		b.txMap = newBlockTxMap(b.txMapCount)
 	}
 	for subIdx := 0; subIdx < len(b.SubtreeSlices); subIdx++ {
 		subIdx := subIdx
@@ -1610,9 +1590,7 @@ func (b *Block) putSubtreeInTxMap(blockLabel string, subtree *subtreepkg.Subtree
 // overflow the product on its own. The multiplier can: it is operator-supplied
 // (block_parentSpendsCapacityMultiplier) and unvalidated. On overflow this
 // returns entryCount unmultiplied — losing the headroom but keeping a real
-// number — because NewSplitSyncedParentMap computes
-// uint32((e + e/5) / nrOfBuckets), which turns a wrapped or saturated hint into
-// an arbitrary per-bucket size rather than merely a small one.
+// number — rather than a wrapped or saturated value.
 func parentSpendsCapacity(entryCount, multiplier uint64) uint64 {
 	if multiplier == 0 {
 		multiplier = 1
@@ -1649,11 +1627,12 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 		return errors.NewStorageError("[validOrderAndBlessed][%s] txMap is nil, cannot check transaction order", b.String())
 	}
 
-	// Size the parent-spends map at transaction count * multiplier (assumed
-	// average inputs/tx). For the disk-backed map this is a hard cap, so the
-	// multiplier is configurable (block_parentSpendsCapacityMultiplier); a
-	// consolidation-heavy block exceeding it overflows a segment and halts
-	// (fail-safe). 0 is treated as 1.
+	// Size the disk-backed parent-spends map at transaction count * multiplier
+	// (assumed average inputs/tx, block_parentSpendsCapacityMultiplier). It
+	// grows when a block exceeds that, but a grow stalls every insert while the
+	// table rehashes. The in-memory map is sized from the inputs per tx recent
+	// blocks measured, with the multiplier as its ceiling, and grows by an eighth
+	// per full bucket (inMemoryParentSpendsCapacity). 0 is treated as 1.
 	//
 	// The transaction count comes from the loaded block body, not from the
 	// peer-supplied b.TransactionCount — see txMapEntryCount for why (issue
@@ -1669,9 +1648,13 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	// first) would otherwise size from a zero. Recomputing is one len() per
 	// subtree and keeps this method self-contained — please do not "tidy" it into
 	// reading the field.
-	expectedInpoints := parentSpendsCapacity(b.txMapEntryCount(), parentSpendsCapacityMultiplier)
+	entryCount := b.txMapEntryCount()
+	expectedInpoints := parentSpendsCapacity(entryCount, parentSpendsCapacityMultiplier)
 
-	var psMap ParentSpendsMap
+	var (
+		psMap    ParentSpendsMap
+		inMemory *SplitSyncedParentMap
+	)
 	if len(diskMapDirs) > 0 {
 		diskMap, diskErr := NewDiskParentSpendsMap(DiskParentSpendsMapOptions{
 			BasePaths:      diskMapDirs,
@@ -1688,11 +1671,10 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 			ClearParentSpendsMapStats()
 		}()
 	} else {
-		// Draw the parent-spends map from a size-class pool. Released via
-		// defer below, keyed by the same expectedInpoints value.
-		pooled := GetParentSpendsMap(expectedInpoints)
-		psMap = pooled
-		defer PutParentSpendsMap(pooled, expectedInpoints)
+		// Sized from the inputs per tx recent blocks measured; allocated for this
+		// block only and dropped when it returns.
+		inMemory = newBlockParentSpendsMap(b.inMemoryParentSpendsCapacity(parentSpendsCapacityMultiplier))
+		psMap = inMemory
 	}
 
 	validationCtx := &validationContext{
@@ -1715,7 +1697,17 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	}
 
 	// do not wrap the error again, the error is already wrapped
-	return g.Wait()
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	// Every input of every transaction went through the map, so its length is
+	// the block's input count.
+	if inMemory != nil {
+		recordInpointsPerTx(inMemory.Length(), entryCount)
+	}
+
+	return nil
 }
 
 func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps *validationDependencies,
@@ -2179,8 +2171,7 @@ func (b *Block) checkBodyBoundToHeader(blockLabel string, first, last *subtreepk
 // block afterwards. The first and last subtrees are loaded first; once the
 // subtree list is bound to the header's merkle root, the txMap is sized from
 // the body as len(Subtrees) x subtree 0's length, and the index scheme is
-// checkDuplicateTransactions' own. A map that ends up far from its size class
-// is dropped rather than pooled on release (PutTxMap).
+// checkDuplicateTransactions' own.
 //
 // deduped reports whether the check ran. It is false when the subtrees were
 // already loaded (nothing is fetched) or the block has none; the caller then
@@ -2194,13 +2185,13 @@ func (b *Block) getAndValidateSubtreesWithDedup(ctx context.Context, logger ulog
 	onFirst := func(first, last *subtreepkg.Subtree) error {
 		// Bind the subtree list to the header before it sizes anything: until
 		// then len(Subtrees) is a peer claim, and the product below could draw
-		// the largest size class for a body that is about to fail CheckMerkleRoot.
+		// a preallocation for a body that is about to fail CheckMerkleRoot.
 		if err := b.checkBodyBoundToHeader(blockLabel, first, last); err != nil {
 			return err
 		}
 
 		b.txMapCount = uint64(len(b.Subtrees)) * uint64(first.Length()) // nolint: gosec
-		b.txMap, b.txMapFresh = getTxMap(b.txMapCount)
+		b.txMap = newBlockTxMap(b.txMapCount)
 		subtreeSize = first.Size()
 		deduped = true
 
