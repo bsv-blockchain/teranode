@@ -9570,7 +9570,8 @@ Transactions found only in orphan blocks return HTTP 404 with
 </li>
 </ul>
 <h3 id="authentication">Authentication<a class="headerlink" href="#authentication" title="Permanent link">&para;</a></h3>
-<p>The service supports response signing. When enabled, responses include an <code>X-Signature</code> header containing an Ed25519 signature of the response data.</p>
+<p>The service supports resource-identifier signing. When enabled, responses include an <code>X-Signature</code> header containing an Ed25519 signature and an <code>X-Signature-Scope</code> header stating what that signature covers.</p>
+<p>The only scope currently emitted is <code>resource-identifier</code>: the signature covers the requested transaction, subtree, block or proof identifier and nothing else. It does <strong>not</strong> cover the HTTP status, the content type, pagination metadata or the serialized response body, and the same signature accompanies the JSON, hex and binary representations of one resource. Clients must not treat <code>X-Signature</code> as response-body integrity; for the content-addressed routes, recompute the object hash instead. Transport integrity is TLS's job.</p>
 <h3 id="common-headers">Common Headers<a class="headerlink" href="#common-headers" title="Permanent link">&para;</a></h3>
 <h4 id="request-headers">Request Headers<a class="headerlink" href="#request-headers" title="Permanent link">&para;</a></h4>
 <ul>
@@ -9580,7 +9581,8 @@ Transactions found only in orphan blocks return HTTP 404 with
 <h4 id="response-headers">Response Headers<a class="headerlink" href="#response-headers" title="Permanent link">&para;</a></h4>
 <ul>
 <li><code>Content-Type</code>: Indicates the format of response data</li>
-<li><code>X-Signature</code>: Ed25519 signature (when response signing is enabled)</li>
+<li><code>X-Signature</code>: Ed25519 signature over the requested resource identifier (when response signing is enabled)</li>
+<li><code>X-Signature-Scope</code>: what <code>X-Signature</code> covers; always <code>resource-identifier</code></li>
 </ul>
 <h3 id="pagination">Pagination<a class="headerlink" href="#pagination" title="Permanent link">&para;</a></h3>
 <p>Endpoints that return lists support pagination through query parameters:</p>

@@ -7845,6 +7845,18 @@
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>npm<span class="w"> </span>run<span class="w"> </span>dev<span class="w"> </span>--prefix<span class="w"> </span>./ui/dashboard
 </span></code></pre></div>
 <p>The dashboard will be available at <code>http://localhost:5173</code> by default.</p>
+<p>The dev server sends credentialed cross-origin requests to the Asset listener on
+<code>:8090</code>. Set <code>asset_corsAllowOrigins = http://localhost:5173</code> (or the Vite port
+you use) on the node it points at, or those requests fail CORS, and its logged-in
+POSTs (FSM changes, block invalidation, peer actions) get 401: a cookie-authenticated
+state-changing request is accepted only from the node's own host or a listed origin.</p>
+<p>Behind a reverse proxy the node compares the browser's origin with <code>Host</code> and with
+<code>X-Forwarded-Host</code>. nginx rewrites <code>Host</code> by default and sends no
+<code>X-Forwarded-Host</code>, so the dashboard's logged-in POSTs get 401 until you add
+<code>proxy_set_header Host $host;</code> or <code>proxy_set_header X-Forwarded-Host $host;</code>.
+Apache's <code>mod_proxy</code> adds <code>X-Forwarded-Host</code> by default. When the proxy terminates
+TLS, also forward <code>X-Forwarded-Proto</code>: the node then refuses a plain-http page
+driving it.</p>
 <h3 id="production-build">Production Build<a class="headerlink" href="#production-build" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Build for production</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>npm<span class="w"> </span>run<span class="w"> </span>build<span class="w"> </span>--prefix<span class="w"> </span>./ui/dashboard

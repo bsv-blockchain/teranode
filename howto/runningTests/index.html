@@ -847,6 +847,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#soak-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Soak Test
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#smoke-tests" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6782,6 +6793,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#soak-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Soak Test
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#smoke-tests" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6900,34 +6922,92 @@
 <h2 id="long-running-tests">Long-Running Tests<a class="headerlink" href="#long-running-tests" title="Permanent link">&para;</a></h2>
 <div class="language-shell highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>make<span class="w"> </span>longtest<span class="w">  </span><span class="c1"># Executes long-running tests in test/longtest/ with a 10-minute timeout.</span>
 </span></code></pre></div>
+<h2 id="soak-test">Soak Test<a class="headerlink" href="#soak-test" title="Permanent link">&para;</a></h2>
+<p>The soak test runs the in-process daemon under steady transaction load for a long wall-clock duration and fails if heap or goroutine counts trend upward, which is how slow leaks and unbounded caches show up. It samples <code>runtime.ReadMemStats</code> (after a forced GC) and <code>runtime.NumGoroutine()</code> at a fixed interval, discards a warm-up window, and fails a metric only when both its least-squares growth across the run and its last-quarter-minus-first-quarter mean exceed the tolerance. It is behind the <code>soak</code> build tag, so no other suite runs it. The nightly workflow runs it for two hours.</p>
+<div class="language-shell highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>make<span class="w"> </span>soaktest<span class="w">                                          </span><span class="c1"># 30 minute run (default)</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>make<span class="w"> </span>soaktest<span class="w"> </span><span class="nv">SOAK_DURATION</span><span class="o">=</span>2h<span class="w"> </span><span class="nv">SOAK_TIMEOUT</span><span class="o">=</span>150m<span class="w">       </span><span class="c1"># nightly length; SOAK_TIMEOUT must exceed SOAK_DURATION by 10m+</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>make<span class="w"> </span>soaktest<span class="w"> </span><span class="nv">SOAK_DURATION</span><span class="o">=</span>4m<span class="w"> </span><span class="nv">SOAK_TIMEOUT</span><span class="o">=</span>20m<span class="w"> </span><span class="nv">SOAK_WARMUP</span><span class="o">=</span>1m<span class="w"> </span><span class="nv">SOAK_SAMPLE_INTERVAL</span><span class="o">=</span>10s<span class="w"> </span><span class="nv">SOAK_INJECT_LEAK</span><span class="o">=</span><span class="m">1</span><span class="w">  </span><span class="c1"># confirm a leak fails it</span>
+</span></code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SOAK_DURATION</code></td>
+<td><code>30m</code></td>
+<td>How long to drive load</td>
+</tr>
+<tr>
+<td><code>SOAK_WARMUP</code></td>
+<td>larger of 5m and 20% of the duration, at most half of it</td>
+<td>Samples before this are ignored</td>
+</tr>
+<tr>
+<td><code>SOAK_SAMPLE_INTERVAL</code></td>
+<td><code>30s</code></td>
+<td>Time between samples</td>
+</tr>
+<tr>
+<td><code>SOAK_TXS_PER_CYCLE</code></td>
+<td><code>500</code></td>
+<td>Transactions sent and mined per cycle</td>
+</tr>
+<tr>
+<td><code>SOAK_UTXO_STORE</code></td>
+<td>sqlite</td>
+<td><code>aerospike</code> or <code>postgres</code> run the store in a container, so its memory is not measured</td>
+</tr>
+<tr>
+<td><code>SOAK_HEAP_TOLERANCE</code> / <code>SOAK_GOROUTINE_TOLERANCE</code></td>
+<td><code>0.10</code> / <code>0.05</code></td>
+<td>Allowed growth as a fraction of the mean (floors of 16 MiB and 20 goroutines)</td>
+</tr>
+<tr>
+<td><code>SOAK_OUTPUT_DIR</code></td>
+<td>a temp dir</td>
+<td>Where <code>soak-samples.csv</code> and, on failure, heap and goroutine profiles are written</td>
+</tr>
+<tr>
+<td><code>SOAK_INJECT_LEAK</code></td>
+<td><code>false</code></td>
+<td>Retain 1 MiB and one goroutine per cycle, to check that the test fails</td>
+</tr>
+</tbody>
+</table>
+<p>Only the Go heap is measured: memory held outside it, such as C allocations or containerised stores, is not.</p>
 <h2 id="smoke-tests">Smoke Tests<a class="headerlink" href="#smoke-tests" title="Permanent link">&para;</a></h2>
-<div class="language-shell highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>make<span class="w"> </span>smoketest<span class="w">  </span><span class="c1"># Runs E2E smoke tests in test/e2e/daemon/ready/ focused on basic functionality.</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1"># With retry support (TEST_RETRY_DELAY is seconds between retries):</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>make<span class="w"> </span>smoketest<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">3</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>make<span class="w"> </span>smoketest<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">3</span><span class="w"> </span><span class="nv">TEST_RETRY_DELAY</span><span class="o">=</span><span class="m">5</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1"># Disable retries:</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>make<span class="w"> </span>smoketest<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">1</span>
+<div class="language-shell highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>make<span class="w"> </span>smoketest<span class="w">  </span><span class="c1"># Runs E2E smoke tests in test/e2e/daemon/ready/ focused on basic functionality.</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1"># With retry support (TEST_RETRY_DELAY is seconds between retries):</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>make<span class="w"> </span>smoketest<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">3</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>make<span class="w"> </span>smoketest<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">3</span><span class="w"> </span><span class="nv">TEST_RETRY_DELAY</span><span class="o">=</span><span class="m">5</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="c1"># Disable retries:</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>make<span class="w"> </span>smoketest<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">1</span>
 </span></code></pre></div>
 <h2 id="sequential-tests">Sequential Tests<a class="headerlink" href="#sequential-tests" title="Permanent link">&para;</a></h2>
-<div class="language-shell highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>make<span class="w"> </span>sequentialtest<span class="w">  </span><span class="c1"># Executes tests in test/sequentialtest/ sequentially.</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1"># With retry support:</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>make<span class="w"> </span>sequentialtest<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">5</span><span class="w"> </span><span class="nv">TEST_RETRY_DELAY</span><span class="o">=</span><span class="m">3</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="c1"># Database-backend-specific variants:</span>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>make<span class="w"> </span>sequentialtest-sqlite
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>make<span class="w"> </span>sequentialtest-postgres
-</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>make<span class="w"> </span>sequentialtest-aerospike
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>
-</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="c1"># Database variants also support retry flags:</span>
-</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>make<span class="w"> </span>sequentialtest-aerospike<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">5</span>
-</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>make<span class="w"> </span>sequentialtest-postgres<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">3</span>
-</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>make<span class="w"> </span>sequentialtest-sqlite<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">3</span>
+<div class="language-shell highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>make<span class="w"> </span>sequentialtest<span class="w">  </span><span class="c1"># Executes tests in test/sequentialtest/ sequentially.</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="c1"># With retry support:</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>make<span class="w"> </span>sequentialtest<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">5</span><span class="w"> </span><span class="nv">TEST_RETRY_DELAY</span><span class="o">=</span><span class="m">3</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="c1"># Database-backend-specific variants:</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>make<span class="w"> </span>sequentialtest-sqlite
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>make<span class="w"> </span>sequentialtest-postgres
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>make<span class="w"> </span>sequentialtest-aerospike
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="c1"># Database variants also support retry flags:</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>make<span class="w"> </span>sequentialtest-aerospike<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">5</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>make<span class="w"> </span>sequentialtest-postgres<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">3</span>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>make<span class="w"> </span>sequentialtest-sqlite<span class="w"> </span><span class="nv">TEST_RETRY_COUNT</span><span class="o">=</span><span class="m">3</span>
 </span></code></pre></div>
 <h2 id="single-test">Single Test<a class="headerlink" href="#single-test" title="Permanent link">&para;</a></h2>
-<div class="language-shell highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-race<span class="w"> </span>-tags<span class="w"> </span><span class="s2">"testtxmetacache"</span><span class="w"> </span>-run<span class="w"> </span>TestNameHere<span class="w"> </span>./path/to/package
+<div class="language-shell highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-race<span class="w"> </span>-tags<span class="w"> </span><span class="s2">"testtxmetacache"</span><span class="w"> </span>-run<span class="w"> </span>TestNameHere<span class="w"> </span>./path/to/package
 </span></code></pre></div>
 
 

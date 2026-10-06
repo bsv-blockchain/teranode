@@ -7350,6 +7350,7 @@
 <li><strong>sequentialtest-postgres</strong>: Runs sequential tests using the PostgreSQL database backend only.</li>
 <li><strong>sequentialtest-aerospike</strong>: Runs sequential tests using the Aerospike database backend only.</li>
 <li><strong>longtest</strong>: Executes long-running tests in the <code>test/longtest/</code> directory with 10-minute timeout.</li>
+<li><strong>soaktest</strong>: Runs the <code>soak</code>-tagged endurance test in <code>test/soak/</code>: the in-process daemon under steady tx load for <code>SOAK_DURATION</code> (default 30m), failing if heap or goroutine counts trend upward. See <a href="../runningTests/#soak-test">Running Tests</a>.</li>
 <li><strong>testall</strong>: Runs all test suites: <code>test</code>, <code>longtest</code>, and <code>sequentialtest</code>.</li>
 <li><strong>nightly-tests</strong>: Runs comprehensive tests typically scheduled for nightly builds. Builds Docker images and uses CTRF JSON reporter for results.</li>
 <li><strong>smoketest</strong>: Runs smoke tests in the <code>test/e2e/daemon/ready/</code> directory focused on basic functionality.</li>
