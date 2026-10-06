@@ -430,7 +430,7 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	}
 
 	// READINESS: Can the service handle requests?
-	checks := make([]health.Check, 0, 5)
+	checks := make([]health.Check, 0, 6)
 
 	// Check gRPC server is listening
 	if s.settings.Pruner.GRPCListenAddress != "" {
@@ -468,6 +468,14 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		checks = append(checks, health.Check{
 			Name:  "UTXOStore",
 			Check: s.utxoStore.Health,
+		})
+	}
+
+	// Pruner backlog: readiness 503 while the pruner is falling behind due records
+	if s.backlog != nil {
+		checks = append(checks, health.Check{
+			Name:  "PrunerBacklog",
+			Check: s.backlog.HealthCheck,
 		})
 	}
 

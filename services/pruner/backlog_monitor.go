@@ -1,10 +1,13 @@
 package pruner
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
@@ -252,6 +255,24 @@ func (m *BacklogMonitor) Snapshot() BacklogSnapshot {
 	defer m.mu.Unlock()
 
 	return m.snapshotLocked()
+}
+
+// HealthCheck reports the backlog state for the pruner readiness probe. Only
+// readiness can fail, only while BEHIND, and only if FailReadiness is set:
+// being behind must never get the pod killed by a liveness probe.
+func (m *BacklogMonitor) HealthCheck(_ context.Context, checkLiveness bool) (int, string, error) {
+	if !m.active() {
+		return http.StatusOK, "pruner backlog monitor disabled", nil
+	}
+
+	s := m.Snapshot()
+	msg := s.Message()
+
+	if !checkLiveness && s.State == BacklogBehind && m.cfg.FailReadiness {
+		return http.StatusServiceUnavailable, msg, errors.NewServiceUnavailableError(msg)
+	}
+
+	return http.StatusOK, msg, nil
 }
 
 func (m *BacklogMonitor) window() int {
