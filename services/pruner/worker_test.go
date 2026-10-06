@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -563,4 +564,93 @@ func TestProcessExpiredPreservationsPhaseSkipped(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 		// expected: ProcessExpiredPreservations was not called
 	}
+}
+
+// fakePrunerService is a pruner.Service whose Prune result is scripted.
+type fakePrunerService struct {
+	records int64
+	err     error
+	calls   chan uint32
+}
+
+func (f *fakePrunerService) Start(context.Context) {}
+func (f *fakePrunerService) Prune(_ context.Context, height uint32, _ string) (int64, error) {
+	if f.calls != nil {
+		f.calls <- height
+	}
+	return f.records, f.err
+}
+func (f *fakePrunerService) AddObserver(pruner.Observer) {}
+
+// newWiredServer starts a prunerProcessor with a backlog monitor. mutate (may be
+// nil) adjusts pruner settings BEFORE the goroutine starts, so tests never write
+// settings the processor is concurrently reading (-race).
+func newWiredServer(t *testing.T, svc *fakePrunerService, mutate func(*settings.PrunerSettings)) (*Server, context.CancelFunc) {
+	t.Helper()
+	initPrometheusMetrics()
+	ctx, cancel := context.WithCancel(context.Background())
+	ps := settings.PrunerSettings{SkipPreserveParents: true, SkipProcessExpiredPreservations: true}
+	if mutate != nil {
+		mutate(&ps)
+	}
+	s := &Server{
+		ctx:           ctx,
+		logger:        ulogger.TestLogger{},
+		pruneNotify:   make(chan pruneSignal, 1),
+		blobNotify:    make(chan pruneSignal, 1),
+		prunerService: svc,
+		settings:      &settings.Settings{Pruner: ps},
+	}
+	s.backlog = NewBacklogMonitor(BacklogConfig{Enabled: true, MaxLagBlocks: 3, MaxIncompleteRuns: 2, HeadroomWindow: 6}, s.logger, nil)
+	go s.prunerProcessor(ctx)
+	return s, cancel
+}
+
+func TestPrunerProcessor_ReportsSuccessToBacklogMonitor(t *testing.T) {
+	svc := &fakePrunerService{records: 42, calls: make(chan uint32, 1)}
+	s, cancel := newWiredServer(t, svc, nil)
+	defer cancel()
+
+	s.backlog.OnPruneRequested(200)
+	s.pruneNotify <- pruneSignal{blockHeight: 200}
+	<-svc.calls
+
+	require.Eventually(t, func() bool { return s.backlog.Snapshot().LastCompletedHeight == 200 }, 2*time.Second, 10*time.Millisecond)
+	require.Equal(t, int64(42), s.backlog.Snapshot().LastRunRecords)
+	require.Equal(t, 0, s.backlog.Snapshot().IncompleteStreak)
+}
+
+func TestPrunerProcessor_ReportsFailureToBacklogMonitor(t *testing.T) {
+	svc := &fakePrunerService{err: errors.NewProcessingError("max retries (10) exceeded"), calls: make(chan uint32, 2)}
+	s, cancel := newWiredServer(t, svc, nil)
+	defer cancel()
+
+	s.backlog.OnPruneRequested(300)
+	s.pruneNotify <- pruneSignal{blockHeight: 300}
+	<-svc.calls
+	s.pruneNotify <- pruneSignal{blockHeight: 301}
+	<-svc.calls
+
+	require.Eventually(t, func() bool { return s.backlog.Snapshot().IncompleteStreak == 2 }, 2*time.Second, 10*time.Millisecond)
+	require.Equal(t, BacklogBehind, s.backlog.Snapshot().State)
+	require.Equal(t, uint32(299), s.backlog.Snapshot().LastCompletedHeight, "failed runs must not advance last completed")
+}
+
+func TestPrunerProcessor_BelowMinHeightSuspendsBacklogLag(t *testing.T) {
+	svc := &fakePrunerService{calls: make(chan uint32, 1)}
+	s, cancel := newWiredServer(t, svc, func(p *settings.PrunerSettings) { p.MinBlockHeight = 1000 })
+	defer cancel()
+
+	s.backlog.OnPruneRequested(10)
+	s.pruneNotify <- pruneSignal{blockHeight: 10}
+
+	require.Eventually(t, func() bool { return s.backlog.Snapshot().Suspended }, 2*time.Second, 10*time.Millisecond)
+	require.Equal(t, "below_min_height", s.backlog.Snapshot().SuspendReason)
+}
+
+func TestNew_ConstructsBacklogMonitorFromSettings(t *testing.T) {
+	tSettings := &settings.Settings{Pruner: settings.PrunerSettings{BacklogMonitorEnabled: true, BacklogMaxLagBlocks: 9}}
+	s := New(context.Background(), ulogger.TestLogger{}, tSettings, nil, nil, nil)
+	require.NotNil(t, s.backlog)
+	require.Equal(t, uint32(9), s.backlog.cfg.MaxLagBlocks)
 }
