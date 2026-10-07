@@ -29,7 +29,7 @@ type subtreeStreamHeader struct {
 	numLeaves   uint64
 }
 
-func readSubtreeStreamHeader(buf *bufio.Reader) (subtreeStreamHeader, error) {
+func readSubtreeStreamHeader(buf io.Reader) (subtreeStreamHeader, error) {
 	var byteBuffer [subtreeStreamHeaderSize]byte
 	if _, err := io.ReadFull(buf, byteBuffer[:]); err != nil {
 		return subtreeStreamHeader{}, errors.NewProcessingError("unable to read subtree root information", err)
@@ -78,6 +78,50 @@ func readSubtreeHashChunk(ctx context.Context, buf *bufio.Reader, chunkSize int)
 	return chunkHashes, nil
 }
 
+// skipToPageOffset positions the stream at the first record of the requested
+// page. Reading and discarding every preceding 48-byte record turned a one-row
+// request near the end of a million-node subtree into a full sequential scan, so
+// seek past them when the store reader supports it — the local file store does,
+// through its semaphoreReadCloser. Stores that hand back a non-seekable reader
+// (memory, HTTP) fall back to a bulk bufio discard, which still avoids a
+// per-record read call.
+//
+// The header must already have been consumed directly from reader, not through a
+// bufio wrapper, or the seek would be relative to the wrong position. That is why
+// the buffered reader is created here rather than by the caller.
+func skipToPageOffset(ctx context.Context, reader io.Reader, offset int) (*bufio.Reader, error) {
+	if offset > 0 {
+		if seeker, ok := reader.(io.Seeker); ok {
+			if _, err := seeker.Seek(int64(offset)*subtreeNodeRecordSize, io.SeekCurrent); err == nil {
+				offset = 0
+			}
+		}
+	}
+
+	buf := bufio.NewReaderSize(reader, subtreeStreamBufferSize)
+
+	remaining := offset * subtreeNodeRecordSize
+	for remaining > 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		chunk := remaining
+		if chunk > subtreeStreamBufferSize {
+			chunk = subtreeStreamBufferSize
+		}
+
+		discarded, err := buf.Discard(chunk)
+		if err != nil {
+			return nil, errors.NewProcessingError(errUnableToReadSubtreeNode, err)
+		}
+
+		remaining -= discarded
+	}
+
+	return buf, nil
+}
+
 func readSubtreeNodesPageFromReader(ctx context.Context, reader io.Reader, offset, limit int) ([]subtreepkg.Node, int, error) {
 	if offset < 0 {
 		return nil, 0, errors.NewInvalidArgumentError("offset cannot be negative: %d", offset)
@@ -89,8 +133,7 @@ func readSubtreeNodesPageFromReader(ctx context.Context, reader io.Reader, offse
 		limit = subtreePageMaxNodes
 	}
 
-	buf := bufio.NewReaderSize(reader, subtreeStreamBufferSize)
-	header, err := readSubtreeStreamHeader(buf)
+	header, err := readSubtreeStreamHeader(reader)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -104,13 +147,9 @@ func readSubtreeNodesPageFromReader(ctx context.Context, reader io.Reader, offse
 		return []subtreepkg.Node{}, totalNodes, nil
 	}
 
-	for i := 0; i < offset; i++ {
-		if err = ctx.Err(); err != nil {
-			return nil, 0, err
-		}
-		if _, err = readSubtreeNodeRecord(buf); err != nil {
-			return nil, 0, err
-		}
+	buf, err := skipToPageOffset(ctx, reader, offset)
+	if err != nil {
+		return nil, 0, err
 	}
 
 	pageSize := limit
@@ -145,8 +184,7 @@ func readSubtreePageFromReader(ctx context.Context, reader io.Reader, offset, li
 		limit = subtreePageMaxNodes
 	}
 
-	buf := bufio.NewReaderSize(reader, subtreeStreamBufferSize)
-	header, err := readSubtreeStreamHeader(buf)
+	header, err := readSubtreeStreamHeader(reader)
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -176,13 +214,9 @@ func readSubtreePageFromReader(ctx context.Context, reader io.Reader, offset, li
 		pageSize = totalNodes - offset
 	}
 
-	for i := 0; i < offset; i++ {
-		if err = ctx.Err(); err != nil {
-			return nil, 0, 0, err
-		}
-		if _, err = readSubtreeNodeRecord(buf); err != nil {
-			return nil, 0, 0, err
-		}
+	buf, err := skipToPageOffset(ctx, reader, offset)
+	if err != nil {
+		return nil, 0, 0, err
 	}
 
 	nodes := make([]subtreepkg.Node, 0, pageSize)
@@ -320,13 +354,33 @@ func (r *subtreeNodeHashesReadCloser) Close() error {
 	return r.source.Close()
 }
 
+// GetSubtreeNodeHashesReader streams the node hashes of a subtree. The response is
+// paced by the client, so the store reader behind it stays open for as long as the
+// consumer takes — the same shape as GetSubtreeDataReader. Take a stream permit for
+// that whole lifetime when the operator has configured one; the default of 0 keeps
+// today's unlimited behaviour so peer catchup, which runs many concurrent unsigned
+// fetches of this route, is unaffected unless an operator opts in.
 func (repo *Repository) GetSubtreeNodeHashesReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
-	reader, err := repo.GetSubtreeTxIDsReader(ctx, hash)
-	if err != nil {
+	if err := acquireSemaphorePermit(ctx, repo.semSubtreeStream, "GetSubtreeNodeHashesReader"); err != nil {
 		return nil, err
 	}
 
-	return newSubtreeNodeHashesReadCloser(ctx, reader)
+	reader, err := repo.GetSubtreeTxIDsReader(ctx, hash)
+	if err != nil {
+		releaseSemaphorePermit(repo.semSubtreeStream)
+		return nil, err
+	}
+
+	nodeHashesReader, err := newSubtreeNodeHashesReadCloser(ctx, reader)
+	if err != nil {
+		releaseSemaphorePermit(repo.semSubtreeStream)
+		return nil, err
+	}
+
+	return &semaphoreReadCloser{
+		ReadCloser: nodeHashesReader,
+		sem:        repo.semSubtreeStream,
+	}, nil
 }
 
 func (repo *Repository) GetSubtreeNodesPage(ctx context.Context, hash *chainhash.Hash, offset, limit int) ([]subtreepkg.Node, int, error) {

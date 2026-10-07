@@ -235,18 +235,20 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PeerMinerReputationThreshold: getFloat64("asset_peerMinerReputationThreshold", 50.0, alternativeContext...),
 
 			// Concurrency limits for repository methods (0 = unlimited, -1 = NumCPU(), anything else is the specific limit)
-			ConcurrencyGetTransaction:         getInt("asset_concurrency_get_transaction", 0, alternativeContext...),
-			ConcurrencyGetTransactionMeta:     getInt("asset_concurrency_get_transaction_meta", 0, alternativeContext...),
-			ConcurrencyGetSubtreeData:         getInt("asset_concurrency_get_subtree_data", 2, alternativeContext...),
-			ConcurrencyGetSubtreeDataReader:   getInt("asset_concurrency_get_subtree_data_reader", 4, alternativeContext...),
-			ConcurrencySubtreeDataCreate:      getInt("asset_concurrency_subtree_data_create", 4, alternativeContext...),
-			ConcurrencyGetSubtreeTransactions: getInt("asset_concurrency_get_subtree_transactions", 2, alternativeContext...),
-			ConcurrencyGetSubtreeExists:       getInt("asset_concurrency_get_subtree_exists", 0, alternativeContext...),
-			ConcurrencyGetSubtreeHead:         getInt("asset_concurrency_get_subtree_head", 0, alternativeContext...),
-			ConcurrencyGetUtxo:                getInt("asset_concurrency_get_utxo", 0, alternativeContext...),
-			ConcurrencyGetLegacyBlockReader:   getInt("asset_concurrency_get_legacy_block_reader", -1, alternativeContext...), // -1 = NumCPU()
+			ConcurrencyGetTransaction:           getInt("asset_concurrency_get_transaction", 0, alternativeContext...),
+			ConcurrencyGetTransactionMeta:       getInt("asset_concurrency_get_transaction_meta", 0, alternativeContext...),
+			ConcurrencyGetSubtreeData:           getInt("asset_concurrency_get_subtree_data", 2, alternativeContext...),
+			ConcurrencyGetSubtreeDataReader:     getInt("asset_concurrency_get_subtree_data_reader", 4, alternativeContext...),
+			ConcurrencySubtreeDataCreate:        getInt("asset_concurrency_subtree_data_create", 4, alternativeContext...),
+			ConcurrencyGetSubtreeTransactions:   getInt("asset_concurrency_get_subtree_transactions", 2, alternativeContext...),
+			ConcurrencyGetSubtreeExists:         getInt("asset_concurrency_get_subtree_exists", 0, alternativeContext...),
+			ConcurrencyGetSubtreeHead:           getInt("asset_concurrency_get_subtree_head", 0, alternativeContext...),
+			ConcurrencyGetUtxo:                  getInt("asset_concurrency_get_utxo", 0, alternativeContext...),
+			ConcurrencyGetLegacyBlockReader:     getInt("asset_concurrency_get_legacy_block_reader", 0, alternativeContext...),      // 0 = unlimited (opt-in cap)
+			ConcurrencyGetLegacyBlockReaderPeer: getInt("asset_concurrency_get_legacy_block_reader_peer", 0, alternativeContext...), // 0 = unlimited (opt-in cap)
 
 			// Streaming configuration
+			LegacyPeerPoolToken:             getString("asset_legacyPeerPoolToken", "", alternativeContext...),
 			SubtreeDataStreamingChunkSize:   getInt("asset_subtreeDataStreamingChunkSize", 10000, alternativeContext...),
 			SubtreeDataStreamingConcurrency: getInt("asset_subtreeDataStreamingConcurrency", 2, alternativeContext...),
 

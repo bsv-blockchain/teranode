@@ -30,7 +30,9 @@
 | ConcurrencyGetSubtreeExists | int | 0 | asset_concurrency_get_subtree_exists | Rate limit for GetSubtreeExists |
 | ConcurrencyGetSubtreeHead | int | 0 | asset_concurrency_get_subtree_head | Rate limit for GetSubtreeHead |
 | ConcurrencyGetUtxo | int | 0 | asset_concurrency_get_utxo | Rate limit for GetUtxo |
-| ConcurrencyGetLegacyBlockReader | int | -1 | asset_concurrency_get_legacy_block_reader | Rate limit for GetLegacyBlockReader (default: NumCPU) |
+| ConcurrencyGetLegacyBlockReader | int | 0 | asset_concurrency_get_legacy_block_reader | Concurrent legacy block streams for anonymous callers (default: unlimited; the cap is opt-in because the permit is held for the whole stream) |
+| ConcurrencyGetLegacyBlockReaderPeer | int | 0 | asset_concurrency_get_legacy_block_reader_peer | Concurrent legacy block streams for this node's own legacy peer server (pushBlockMsg); only used when asset_legacyPeerPoolToken is set (default: unlimited) |
+| LegacyPeerPoolToken | string | "" | asset_legacyPeerPoolToken | Shared secret the legacy service sends in X-Teranode-Internal-Token to use the peer pool; set the same value on legacy and Asset. Empty disables the peer pool. Redacted in settings output |
 | SubtreeDataStreamingChunkSize | int | 10000 | asset_subtreeDataStreamingChunkSize | Records per subtree data streaming chunk |
 | SubtreeDataStreamingConcurrency | int | 2 | asset_subtreeDataStreamingConcurrency | Parallel workers for subtree data streaming |
 

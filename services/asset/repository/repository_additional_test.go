@@ -204,7 +204,10 @@ func TestRepository_PendingSubtreeIsNotServed(t *testing.T) {
 	st, err := subtree.NewTreeByLeafCount(2)
 	require.NoError(t, err)
 
-	tx := &bt.Tx{Version: 1, LockTime: 0}
+	// A real (coinbase) transaction: regeneration only streams records that serialize back
+	// to the requested txid, and an input-less tx is the UTXO-snapshot shape that gate refuses.
+	tx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff0100000000000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac00000000")
+	require.NoError(t, err)
 	require.NoError(t, st.AddNode(*tx.TxIDChainHash(), 0, 0))
 	require.NoError(t, st.AddNode(*tx.TxIDChainHash(), 0, 0))
 

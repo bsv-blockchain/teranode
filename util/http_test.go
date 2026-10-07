@@ -1948,3 +1948,26 @@ func TestDoHTTPRequestBoundedWithRetry_UsesTheRequestTimeoutPerAttempt(t *testin
 	require.Error(t, err)
 	require.Less(t, time.Since(start), 5*time.Second, "the attempt must time out at the request timeout")
 }
+
+func TestDoLocalServiceHTTPRequestBodyReader_DoesNotFollowRedirects(t *testing.T) {
+	var targetReceivedToken atomic.Bool
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Teranode-Internal-Token") != "" {
+			targetReceivedToken.Store(true)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	_, err := DoLocalServiceHTTPRequestBodyReader(context.Background(), redirector.URL,
+		map[string]string{"X-Teranode-Internal-Token": "secret"})
+
+	require.Error(t, err, "the redirect response is not a 2xx, so the caller must see an error rather than the followed body")
+	require.False(t, targetReceivedToken.Load(), "the internal token header must never reach the redirect target")
+}

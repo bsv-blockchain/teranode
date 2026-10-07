@@ -205,3 +205,49 @@ func TestAssetSettings_BatchAndResponseBudgets(t *testing.T) {
 		})
 	}
 }
+
+// TestAssetSettings_ConcurrencyGetLegacyBlockReaderPeer covers the peer-pool
+// counterpart to asset_concurrency_get_legacy_block_reader: same default and
+// independently settable, so the anonymous and internal legacy-peer pools can be
+// sized separately. Both default to 0 (unlimited): the permit is held for the
+// whole stream, so a NumCPU default would make a stock node serving IBD to more
+// SV peers than it has cores fail block requests, which the pre-hardening code
+// never did. The cap is opt-in.
+func TestAssetSettings_ConcurrencyGetLegacyBlockReaderPeer(t *testing.T) {
+	t.Run("defaults to 0 (unlimited, opt-in cap) for both pools", func(t *testing.T) {
+		s := NewSettings()
+
+		require.Equal(t, 0, s.Asset.ConcurrencyGetLegacyBlockReader)
+		require.Equal(t, 0, s.Asset.ConcurrencyGetLegacyBlockReaderPeer)
+	})
+
+	t.Run("is settable independently of the anonymous pool", func(t *testing.T) {
+		gocore.Config().Set("asset_concurrency_get_legacy_block_reader_peer", "8")
+		t.Cleanup(func() { gocore.Config().Set("asset_concurrency_get_legacy_block_reader_peer", "") })
+
+		s := NewSettings()
+
+		require.Equal(t, 8, s.Asset.ConcurrencyGetLegacyBlockReaderPeer)
+		require.Equal(t, 0, s.Asset.ConcurrencyGetLegacyBlockReader)
+	})
+}
+
+// TestAssetSettings_LegacyPeerPoolToken covers the shared secret gating
+// asset_concurrency_get_legacy_block_reader_peer: empty by default (today's
+// single-pool behaviour), and settable.
+func TestAssetSettings_LegacyPeerPoolToken(t *testing.T) {
+	t.Run("defaults to empty", func(t *testing.T) {
+		s := NewSettings()
+
+		require.Equal(t, "", s.Asset.LegacyPeerPoolToken)
+	})
+
+	t.Run("is settable", func(t *testing.T) {
+		gocore.Config().Set("asset_legacyPeerPoolToken", "a-shared-secret")
+		t.Cleanup(func() { gocore.Config().Set("asset_legacyPeerPoolToken", "") })
+
+		s := NewSettings()
+
+		require.Equal(t, "a-shared-secret", s.Asset.LegacyPeerPoolToken)
+	})
+}

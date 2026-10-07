@@ -96,7 +96,7 @@ func TestExecuteHTTPRequestWithClient_POSTBodyIsRewindable(t *testing.T) {
 
 		client, captured := capturingClient()
 
-		reader, _, err := executeHTTPRequestWithClient(context.Background(), func() {}, client, rawURL, body)
+		reader, _, err := executeHTTPRequestWithClient(context.Background(), func() {}, client, rawURL, nil, body)
 		require.NoError(t, err)
 		require.NoError(t, reader.Close())
 
@@ -117,7 +117,7 @@ func TestExecuteHTTPRequestWithClient_POSTBodyIsRewindable(t *testing.T) {
 
 		client, captured := capturingClient()
 
-		reader, _, err := executeHTTPRequestWithClient(context.Background(), func() {}, client, rawURL, body)
+		reader, _, err := executeHTTPRequestWithClient(context.Background(), func() {}, client, rawURL, nil, body)
 		require.NoError(t, err)
 		require.NoError(t, reader.Close())
 
@@ -138,7 +138,7 @@ func TestExecuteHTTPRequestWithClient_POSTBodyIsRewindable(t *testing.T) {
 
 		client, captured := capturingClient()
 
-		reader, _, err := executeHTTPRequestWithClient(context.Background(), func() {}, client, rawURL)
+		reader, _, err := executeHTTPRequestWithClient(context.Background(), func() {}, client, rawURL, nil)
 		require.NoError(t, err)
 		require.NoError(t, reader.Close())
 
