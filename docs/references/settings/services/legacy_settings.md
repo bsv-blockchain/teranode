@@ -29,6 +29,7 @@
 | BlockFailureBackoffMaxDuration | time.Duration | 150s | legacy_blockFailureBackoffMaxDuration | Cap on the per-block backoff window and the failure-tracking map TTL, kept below the 180s sync-peer stall window (0 disables) |
 | BlockPrefetchBufferBytes | int64 | 268435456 | legacy_blockPrefetchBufferBytes | Byte budget for blocks downloaded ahead of processing during sync (0 disables prefetch) |
 | Upnp | bool | false | legacy_upnp | Enable UPnP for automatic port mapping |
+| AdvertiseFullNode | bool | false | legacy_advertiseFullNode | Advertise NODE_NETWORK to legacy peers regardless of block persister state |
 | MaxFeelerPeers | int | 1 | legacy_maxFeelerPeers | Peer slots reserved for short-lived feeler probes (0 disables feelers and the reservation together) |
 | FeelerInterval | time.Duration | 120s | legacy_feelerInterval | Mean of the randomised gap between feeler probes (not a disable lever; a non-positive value falls back to the default) |
 | FeelerHandshakeTimeout | time.Duration | 25s | legacy_feelerHandshakeTimeout | How long a feeler waits for a version message; must stay under the 30s peer negotiate timeout |

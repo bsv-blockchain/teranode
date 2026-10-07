@@ -3898,8 +3898,15 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	}
 
 	storage := util.DetermineStorageMode(blockPersisterHeight, bestHeight, retentionWindow, prunerBlockTrigger)
-	logger.Infof("Legacy service determined storage mode: %s (persisterHeight=%d, bestHeight=%d, retention=%d)",
-		storage, blockPersisterHeight, bestHeight, retentionWindow)
+	if tSettings != nil && tSettings.Legacy.AdvertiseFullNode {
+		// Operator override: SV Node peers only sync from NODE_NETWORK peers, and the mode is
+		// decided once at start-up, so a fresh node with nothing persisted yet would never be
+		// used as a sync source. Block bodies are served from the blockchain, subtree and UTXO
+		// stores regardless of the persister.
+		storage = "full"
+	}
+	logger.Infof("Legacy service determined storage mode: %s (persisterHeight=%d, bestHeight=%d, retention=%d, advertiseFullNode=%v)",
+		storage, blockPersisterHeight, bestHeight, retentionWindow, tSettings != nil && tSettings.Legacy.AdvertiseFullNode)
 
 	if storage == "full" {
 		// Advertise as full node
