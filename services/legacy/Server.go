@@ -393,17 +393,20 @@ func (s *Server) Init(ctx context.Context) error {
 	// on streamingBlockHandler for the full rationale.
 	legacypeer.RegisterStreamingBlockHandler()
 
-	// get the public IP and listen on it
-	ip, err := GetOutboundIP()
-	if err != nil {
-		return err
-	}
-
-	defaultListenAddresses := []string{ip.String() + ":" + activeNetParams.DefaultPort}
+	// Listen on the configured addresses. Only when none are configured do we need the
+	// outbound IP to build the default listener; GetOutboundIP needs a default route, which a
+	// container on an internal (egress-free) network does not have, so it must not be a
+	// precondition for an explicitly configured listener.
 	// TODO not setting any listen addresses triggers upnp, which does not seem to work yet
 	listenAddresses := s.settings.Legacy.ListenAddresses
 	if len(listenAddresses) == 0 {
-		listenAddresses = defaultListenAddresses
+		// get the public IP and listen on it
+		ip, err := GetOutboundIP()
+		if err != nil {
+			return err
+		}
+
+		listenAddresses = []string{ip.String() + ":" + activeNetParams.DefaultPort}
 	}
 
 	assetHTTPAddress := s.settings.Asset.HTTPAddress
