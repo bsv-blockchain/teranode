@@ -16,6 +16,8 @@ package blockvalidation
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -324,6 +326,7 @@ type Server struct {
 
 	// cacheBustCounter produces the unique token appended to a peer request URL when
 	// a previous response from that peer looked poisoned. See peer_cache_bypass.go.
+	// New seeds it randomly so tokens are not reused across restarts.
 	cacheBustCounter atomic.Uint64
 
 	// previousCatchupAttempt stores details about the last failed catchup attempt.
@@ -498,6 +501,13 @@ func New(
 
 	bVal.fetchSubtreeDataForBlockFn = bVal.fetchSubtreeDataForBlock
 	bVal.catchupFunc = bVal.catchup
+
+	// Seed the cache-bust token randomly so a restarted node does not request
+	// "?cachebust=1" again and get back an entry the peer cached under that URL
+	// before the restart (#1373). crypto/rand.Read never returns an error.
+	var cacheBustSeed [8]byte
+	_, _ = rand.Read(cacheBustSeed[:])
+	bVal.cacheBustCounter.Store(binary.LittleEndian.Uint64(cacheBustSeed[:]))
 
 	// 0 disables rather than falling back to a default: an explicit operator opt-out that
 	// turns off the byte budget AND the oversized-block subtree-concurrency rule
