@@ -2544,6 +2544,43 @@ func TestHandleGetRawMempoolComprehensive(t *testing.T) {
 			_, _ = handleGetRawMempool(context.Background(), s, cmd, nil)
 		})
 	})
+
+	t.Run("coinbase placeholder is not reported", func(t *testing.T) {
+		// #1819: block assembly includes the coinbase placeholder (all 0xff) in
+		// its node list, and getrawmempool reported it as a transaction.
+		placeholder := subtree.CoinbasePlaceholderHashValue.String()
+		txHashes := []string{"abc123def456"}
+
+		mockClient := &mockBlockAssemblyClient{
+			getTransactionHashesFunc: func(ctx context.Context) ([]string, error) {
+				return append([]string{placeholder}, txHashes...), nil
+			},
+			getMiningCandidateFunc: func(ctx context.Context, includeSubtreeHashes ...bool) (*model.MiningCandidate, error) {
+				return &model.MiningCandidate{}, nil
+			},
+		}
+
+		s := &RPCServer{
+			logger:              logger,
+			blockAssemblyClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+		}
+
+		result, err := handleGetRawMempool(context.Background(), s, &bsvjson.GetRawMempoolCmd{}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, txHashes, result)
+
+		verbose := true
+		result, err = handleGetRawMempool(context.Background(), s, &bsvjson.GetRawMempoolCmd{Verbose: &verbose}, nil)
+		require.NoError(t, err)
+
+		verboseResult, ok := result.(bsvjson.GetRawMempoolVerboseResult)
+		require.True(t, ok)
+		assert.Equal(t, int32(1), verboseResult.Size)
+		assert.Equal(t, txHashes, verboseResult.Depends)
+	})
 }
 
 // TestHandleGetblockchaininfoComprehensive tests the handleGetblockchaininfo handler
