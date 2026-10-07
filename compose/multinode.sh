@@ -132,6 +132,30 @@ assert_known_service() {
   fi
 }
 
+# clean_blaster_state removes the embedded coinbase's sqlite DB.
+#
+# This MUST happen whenever the chain is destroyed. The coinbase records the
+# UTXOs it owns in that DB; pointed at a new chain it keeps trying to spend
+# outputs of transactions that chain has never seen, and every funding attempt
+# fails with TX_MISSING_PARENT on a transaction no node can produce. The
+# symptom is remote from the cause - the blaster reports 100% fund errors and
+# logs the reason only to an in-memory buffer headless mode never prints.
+#
+# The DB does not live where you would expect: the coinbase derives its path
+# by prefixing "data/" to the snapshot's directory, so an absolute
+# --snapshot-path yields data/Users/<you>/.../coinbase.db.db and a relative one
+# yields data/data/... Neither is under data/multinode-blaster/, so clean all
+# the shapes rather than guessing which one this blaster build produces.
+clean_blaster_state() {
+  local stale
+  for stale in "$REPO_ROOT/data/Users" "$REPO_ROOT/data/data" "$REPO_ROOT/data/tmp"; do
+    if [[ -d "$stale" ]]; then
+      rm -rf "$stale"
+      echo "cleaned stray coinbase DB: $stale"
+    fi
+  done
+}
+
 compose() {
   docker compose -f "$COMPOSE_FILE" "$@"
 }
@@ -248,6 +272,11 @@ cmd_up() {
   fi
   local topology="all-in-one"
   [[ "$allinone" -eq 0 ]] && topology="split-per-service"
+  # A new stack means a new chain, which invalidates everything the embedded
+  # coinbase recorded about the old one. Clean it here too, not just on 'down',
+  # so an 'up' after a crash or a killed test does not inherit a poisoned DB.
+  clean_blaster_state
+
   echo "generating $n-node stack (topology: $topology, retention: $retention${limits:+, limits: $limits})..."
   (cd "$REPO_ROOT" && go run ./compose/cmd/gennodes \
     -n "$n" -allinone="$allinone" -retention "$retention" -limits "$limits" -o compose/generated)
@@ -304,6 +333,7 @@ cmd_down() {
   # Wipe blaster local state so a subsequent 'blast' against a fresh chain
   # doesn't try to spend UTXOs that no longer exist.
   local blaster_data_dir="$REPO_ROOT/data/multinode-blaster"
+  clean_blaster_state
   if [[ -d "$blaster_data_dir" ]]; then
     rm -rf "$blaster_data_dir"
     echo "cleaned blaster state: $blaster_data_dir"
