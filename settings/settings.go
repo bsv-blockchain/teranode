@@ -757,6 +757,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			GRPCListenAddress:                getString("legacy_grpcListenAddress", "", alternativeContext...),
 			SavePeers:                        getBool("legacy_savePeers", false, alternativeContext...), // by default we do not save the peers
 			AllowSyncCandidateFromLocalPeers: getBool("legacy_allowSyncCandidateFromLocalPeers", false, alternativeContext...),
+			AdvertiseFullNode:                getBool("legacy_advertiseFullNode", false, alternativeContext...),
 			TempStore:                        getURL("temp_store", "file://./data/tempstore", alternativeContext...),
 			PeerIdleTimeout:                  getDuration("legacy_peerIdleTimeout", 125*time.Second, alternativeContext...), // ping/pong interval is 2 mins, so we set this to 125s to be sure
 			MaxAddnodePeers:                  getInt("legacy_maxAddnodePeers", 8, alternativeContext...),
