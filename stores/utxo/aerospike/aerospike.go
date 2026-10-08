@@ -138,10 +138,10 @@ const shutdownPanicText = "send on closed channel"
 //
 // Matching is on the rendered text, not the concrete type: the runtime panics
 // with a runtime.plainError, so a type switch would pass in tests that fake the
-// panic with a string and miss in production. Rendering also has to happen before
-// the value reaches errors.New, which consumes a trailing error argument as the
-// wrapped error instead of formatting it — orphaning the %v verb and mislabelling
-// the result as wrapping an UNKNOWN (0).
+// panic with a string and miss in production. Rendering also has to happen
+// before the value reaches errors.New, which consumes a trailing error argument
+// as the wrapped error instead of formatting it — orphaning the %v verb and
+// leaving the value in the wrap chain rather than in the message.
 //
 // ERR_SERVICE_UNAVAILABLE is deliberate — it keeps this inside
 // errors.IsTransientLocalError so a shutdown is not reported to peers as an

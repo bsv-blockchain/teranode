@@ -117,7 +117,7 @@ func TestGetUTXOsByTxID(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "INVALID_ARGUMENT (1): invalid transaction hash format -> UNKNOWN (0): encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid transaction hash format -> encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
 	})
 
 	t.Run("Repository error", func(t *testing.T) {
