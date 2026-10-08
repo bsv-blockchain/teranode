@@ -192,6 +192,29 @@ func TestExportMetadata_SecretRedaction(t *testing.T) {
 	require.NotEqual(t, redactedValue, logLevel.CurrentValue)
 }
 
+// TestExportMetadata_SkipsSettingsGroups pins that struct-typed group fields
+// are not advertised as settable keys. blockchain_postgres_pool and
+// utxostore_postgres_pool were advertised but could never be read (gocore reads
+// scalars only), so configuring them did nothing — see #1811. Their children
+// must still be exported exactly once, from the unkeyed global instance;
+// exporting them from each group would show pool values under keys
+// (postgres_*) that cannot set them.
+func TestExportMetadata_SkipsSettingsGroups(t *testing.T) {
+	registry := (&Settings{}).ExportMetadata()
+
+	keys := make(map[string]int, len(registry.Settings))
+	for _, s := range registry.Settings {
+		keys[s.Key]++
+	}
+
+	require.NotContains(t, keys, "blockchain_postgres_pool",
+		"group keys must not be advertised to operators")
+	require.NotContains(t, keys, "utxostore_postgres_pool",
+		"group keys must not be advertised to operators")
+	require.Equal(t, 1, keys["postgres_maxOpenConns"],
+		"group children must be exported exactly once, from the global instance")
+}
+
 func mustParseURL(rawURL string) *url.URL {
 	u, err := url.Parse(rawURL)
 	if err != nil {
