@@ -958,7 +958,7 @@ cmd_blast() {
     prop_addrs+="localhost:${prop}"
   done
   local rpc_port=$((20000 + (first - 1) * 2000 + 1292))
-  local rpc_url="http://localhost:${rpc_port}"
+  local rpc_url_default="http://localhost:${rpc_port}"
 
   # Wait for each target node's RPC to answer before launching the blaster.
   # Without this, gRPC dials to propagation can race container startup and
@@ -1029,7 +1029,7 @@ cmd_blast() {
   echo "blaster:     $blaster_bin"
   echo "nodes:       ${nodes[*]}"
   echo "propagation: $prop_addrs"
-  echo "rpc:         $rpc_url  (funding source for embedded coinbase)"
+  echo "rpc:         $rpc_url_default  (funding source for embedded coinbase)"
   if ! $user_snapshot; then
     echo "snapshot:    $snapshot_path  (wiped by '$0 down')"
     echo "logs:        $blaster_data_dir/blaster.log  (blaster writes service logs here in TUI mode)"
@@ -1051,9 +1051,30 @@ cmd_blast() {
     trap 'if [[ -n "'"$miner_pid"'" ]]; then kill '"$miner_pid"' 2>/dev/null || true; wait '"$miner_pid"' 2>/dev/null || true; fi' EXIT INT TERM
   fi
 
+  # rpc_url / rpc_user / rpc_pass (gocore keys, resolved from the environment
+  # before any settings file) point the embedded coinbase's BLOCK MONITOR at
+  # the node. They are NOT the same thing as the --rpc-url flag below: that
+  # one is used for broadcasting funding transactions, while the monitor
+  # reads gocore's "rpc_url", whose default is http://localhost:8332.
+  #
+  # Without these the monitor silently talks to nothing, so the coinbase never
+  # learns which coinbase outputs it owns, its DB stays empty, and every
+  # funding attempt fails with "sql: no rows in result set" while the blaster
+  # reports 100% fund errors and sends zero transactions.
+  #
+  # Note the monitor only records blocks mined WHILE IT IS RUNNING, and a
+  # coinbase needs 100 confirmations before it is spendable. So a chain mined
+  # entirely before the blaster starts yields no funds: mine at least ~100
+  # blocks with the blaster up (e.g. --auto-mine) before expecting throughput.
+  export rpc_url="${rpc_url:-$rpc_url_default}"
+  export rpc_user="${rpc_user:-bitcoin}"
+  export rpc_pass="${rpc_pass:-bitcoin}"
+  echo "monitor rpc: $rpc_url  (embedded coinbase block monitor)"
+  echo ""
+
   "$blaster_bin" \
     --propagation-addr "$prop_addrs" \
-    --rpc-url "$rpc_url" \
+    --rpc-url "$rpc_url_default" \
     ${passthrough[@]+"${passthrough[@]}"}
 }
 
