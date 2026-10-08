@@ -5937,8 +5937,10 @@ func isLockError(err error) bool {
 		return pgErr.Code == usql.PgErrSerializationFail || pgErr.Code == usql.PgErrDeadlockDetected || pgErr.Code == usql.PgErrLockNotAvailable
 	}
 
-	// PostgreSQL deadlock/lock errors (lib/pq fallback)
-	if pqErr, ok := err.(*pq.Error); ok {
+	// PostgreSQL deadlock/lock errors (lib/pq fallback). errors.As (not a
+	// direct assert) so the match survives a NewStorageError wrap.
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
 		return pqErr.Code == usql.PgErrSerializationFail || pqErr.Code == usql.PgErrDeadlockDetected || pqErr.Code == usql.PgErrLockNotAvailable
 	}
 

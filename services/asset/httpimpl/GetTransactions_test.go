@@ -129,7 +129,7 @@ func TestGetTransactions(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "PROCESSING (4): error reading request body -> UNKNOWN (0): unexpected EOF", echoErr.Message)
+		assert.Equal(t, "PROCESSING (4): error reading request body -> unexpected EOF", echoErr.Message)
 	})
 
 	t.Run("Transaction not found", func(t *testing.T) {

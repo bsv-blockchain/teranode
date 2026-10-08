@@ -62,8 +62,11 @@ func TestFmtErrorCustomError(t *testing.T) {
 	secondErr := New(ERR_INVALID_ARGUMENT, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_teststring_", fmtError)
 	require.NotNil(t, secondErr)
 
-	// If we FMT Err, then they won't be recognized as equal
-	require.False(t, secondErr.Is(err))
+	// A fmt-wrapped *Error keeps its identity through the chain: New preserves
+	// the foreign wrapper and Is digs through it to the inner *Error. The
+	// historical behaviour flattened the wrapper into a synthetic *Error and
+	// the inner code was lost.
+	require.True(t, secondErr.Is(err))
 
 	altErr := New(ERR_INVALID_ARGUMENT, "invalid argument", err)
 	altSecondErr := New(ERR_INVALID_ARGUMENT, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_teststring_", fmtError)
@@ -449,7 +452,9 @@ func TestErrorString(t *testing.T) {
 
 	thisErr := NewStorageError("failed to set data from reader [%s:%s]", "bucket", "key", err)
 
-	assert.Equal(t, "STORAGE_ERROR (69): failed to set data from reader [bucket:key] -> UNKNOWN (0): some error", thisErr.Error())
+	// The trailing foreign error is preserved in the chain, so it renders its
+	// own message rather than a synthetic UNKNOWN (0): wrapper.
+	assert.Equal(t, "STORAGE_ERROR (69): failed to set data from reader [bucket:key] -> some error", thisErr.Error())
 }
 
 // TestVariousChainedErrorsWithWrapUnwrapGRPC tests various chained errors with wrapping and unwrapping using gRPC.

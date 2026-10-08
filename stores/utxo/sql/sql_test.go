@@ -62,6 +62,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -2168,6 +2169,21 @@ func TestIsLockError(t *testing.T) {
 		{
 			name:     "connection error",
 			err:      errors.New(errors.ERR_ERROR, "connection refused"),
+			expected: false,
+		},
+		{
+			// Reproduces the #1913 scenario: a driver error (pgx serialization
+			// failure, SQLSTATE 40001) wrapped through a New* constructor must
+			// still be classified by type, not only by message text. Before the
+			// errors.New fix the wrap flattened the *pgconn.PgError into a
+			// synthetic *Error and this typed match never fired.
+			name:     "wrapped pgx serialization failure",
+			err:      errors.NewStorageError("failed to insert transaction", &pgconn.PgError{Code: "40001", Message: "could not serialize access due to concurrent update"}),
+			expected: true,
+		},
+		{
+			name:     "wrapped pgx connection failure is not a lock",
+			err:      errors.NewServiceError("query failed", &pgconn.PgError{Code: "08003", Message: "connection does not exist"}),
 			expected: false,
 		},
 	}
