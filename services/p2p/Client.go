@@ -838,15 +838,23 @@ func convertFromAPIPeerInfo(apiPeer interface{}) (*PeerInfo, error) {
 			return nil, err
 		}
 
+		validatedBlockHash, err := parseOptionalBlockHash(p.ValidatedBlockHash, p.Id)
+		if err != nil {
+			return nil, err
+		}
+
 		return &PeerInfo{
-			ID:               peerID,
-			Height:           p.Height,
-			BlockHash:        blockHash,
-			DataHubURL:       p.DataHubUrl,
-			ReputationScore:  p.CatchupReputationScore,
-			CatchupAttempts:  p.CatchupAttempts,
-			CatchupSuccesses: p.CatchupSuccesses,
-			CatchupFailures:  p.CatchupFailures,
+			ID:                 peerID,
+			Height:             p.Height,
+			BlockHash:          blockHash,
+			DataHubURL:         p.DataHubUrl,
+			ReputationScore:    p.CatchupReputationScore,
+			CatchupAttempts:    p.CatchupAttempts,
+			CatchupSuccesses:   p.CatchupSuccesses,
+			CatchupFailures:    p.CatchupFailures,
+			ValidatedHeight:    p.ValidatedHeight,
+			ValidatedBlockHash: validatedBlockHash,
+			ValidatedChainWork: append([]byte(nil), p.ValidatedChainWork...),
 		}, nil
 
 	case *p2p_api.PeerRegistryInfo:
@@ -856,6 +864,11 @@ func convertFromAPIPeerInfo(apiPeer interface{}) (*PeerInfo, error) {
 		}
 
 		blockHash, err := parseOptionalBlockHash(p.BlockHash, p.Id)
+		if err != nil {
+			return nil, err
+		}
+
+		validatedBlockHash, err := parseOptionalBlockHash(p.ValidatedBlockHash, p.Id)
 		if err != nil {
 			return nil, err
 		}
@@ -891,6 +904,9 @@ func convertFromAPIPeerInfo(apiPeer interface{}) (*PeerInfo, error) {
 			BlocksReceived:         p.BlocksReceived,
 			SubtreesReceived:       p.SubtreesReceived,
 			TransactionsReceived:   p.TransactionsReceived,
+			ValidatedHeight:        p.ValidatedHeight,
+			ValidatedBlockHash:     validatedBlockHash,
+			ValidatedChainWork:     append([]byte(nil), p.ValidatedChainWork...),
 		}, nil
 
 	default:

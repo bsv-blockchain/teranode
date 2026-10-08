@@ -341,6 +341,9 @@ Represents peer information relevant for catchup operations.
 | catchup_attempts | [int64](#int64) |  | Number of catchup attempts with this peer |
 | catchup_successes | [int64](#int64) |  | Number of successful catchup operations |
 | catchup_failures | [int64](#int64) |  | Number of failed catchup operations |
+| validated_height | [uint32](#uint32) |  | Height of the most recently locally-validated header from this peer (0 if none) |
+| validated_block_hash | [string](#string) |  | Hash of the most recently locally-validated header from this peer (empty if none) |
+| validated_chain_work | [bytes](#bytes) |  | Cumulative chainwork at the most recently locally-validated header from this peer (empty if none) |
 
 <a name="PeerRegistryInfo"></a>
 
@@ -380,6 +383,9 @@ Represents comprehensive peer information with all registry metadata.
 | blocks_received | [int64](#int64) |  | Number of blocks received from this peer |
 | subtrees_received | [int64](#int64) |  | Number of subtrees received from this peer |
 | transactions_received | [int64](#int64) |  | Number of transactions received from this peer |
+| validated_height | [uint32](#uint32) |  | Height of the most recently locally-validated header from this peer (0 if none) |
+| validated_block_hash | [string](#string) |  | Hash of the most recently locally-validated header from this peer (empty if none) |
+| validated_chain_work | [bytes](#bytes) |  | Cumulative chainwork at the most recently locally-validated header from this peer (empty if none) |
 
 <a name="RecordBytesDownloadedRequest"></a>
 

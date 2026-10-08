@@ -176,6 +176,13 @@ message AddBanScoreRequest {
     int64 catchup_attempts = 6;
     int64 catchup_successes = 7;
     int64 catchup_failures = 8;
+    // Locally validated chain progress for this peer. Populated only when
+    // the peer has had header work validated locally via
+    // ReportValidatedChainProgress. Used by the catchup peer gate to prefer
+    // validated work over self-reported height.
+    uint32 validated_height = 9;
+    string validated_block_hash = 10;
+    bytes  validated_chain_work = 11;
   }
 
   message GetPeersForCatchupResponse {
@@ -293,6 +300,13 @@ message AddBanScoreRequest {
     int64 blocks_received = 30;
     int64 subtrees_received = 31;
     int64 transactions_received = 32;
+
+    // Locally validated chain progress for this peer, populated by
+    // ReportValidatedChainProgress. Zero/empty when no headers have been
+    // validated locally from this peer.
+    uint32 validated_height = 33;
+    string validated_block_hash = 34;
+    bytes  validated_chain_work = 35;
   }
 
   message GetPeerRegistryResponse {
