@@ -172,3 +172,9 @@ func testMarkAsConflictingChainsExternalTx(t *testing.T, utxoStore string) {
 
 	t.Log("Successfully verified conflicting external transaction chains")
 }
+
+func TestMarkAsConflictingChainsExternalTxSqlPostgres(t *testing.T) {
+	t.Run("conflicting_external_transaction_chains", func(t *testing.T) {
+		testMarkAsConflictingChainsExternalTx(t, "sqlpostgres")
+	})
+}

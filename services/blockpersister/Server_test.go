@@ -974,6 +974,8 @@ func (m *MockUTXOStore) Close(context.Context) error { return nil }
 // Required interface methods for utxo.Store
 func (m *MockUTXOStore) SupportsOutpointOnlySpend() bool { return false }
 
+func (m *MockUTXOStore) PoolMaxConns() int { return 0 }
+
 func (m *MockUTXOStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	return nil, nil
 }

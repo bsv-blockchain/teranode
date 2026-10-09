@@ -148,6 +148,15 @@ func TestMaxRawTxFee_EnvZeroDisables(t *testing.T) {
 	require.Equal(t, uint64(0), tSettings.Policy.MaxRawTxFee)
 }
 
+// Pin Phase C settings defaults: EarlyDAHBelowCheckpoint and PruneDeleteMarginBlocks
+func TestUtxoStore_PhaseC_Defaults(t *testing.T) {
+	tSettings := NewSettings()
+	require.Equal(t, false, tSettings.UtxoStore.EarlyDAHBelowCheckpoint,
+		"EarlyDAHBelowCheckpoint default must be false")
+	require.Equal(t, int32(32), tSettings.UtxoStore.PruneDeleteMarginBlocks,
+		"PruneDeleteMarginBlocks default must be 32")
+}
+
 // Pin the script-size policy default. This is the ceiling on an individual
 // locking or unlocking script and is pushed into the BDK script engine at
 // validator startup; it matches maxtxsizepolicy (100MB) so the script limit is

@@ -307,3 +307,15 @@ func testWideTreeConflictResolution(t *testing.T, utxoStore string) {
 
 	t.Log("Successfully verified wide tree conflict resolution (12 transactions)")
 }
+
+func TestDeepChainConflictResolutionSqlPostgres(t *testing.T) {
+	t.Run("deep_chain_conflict_resolution", func(t *testing.T) {
+		testDeepChainConflictResolution(t, "sqlpostgres")
+	})
+}
+
+func TestWideTreeConflictResolutionSqlPostgres(t *testing.T) {
+	t.Run("wide_tree_conflict_resolution", func(t *testing.T) {
+		testWideTreeConflictResolution(t, "sqlpostgres")
+	})
+}
