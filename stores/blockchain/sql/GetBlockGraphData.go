@@ -14,11 +14,37 @@ package sql
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 )
+
+// graphBucketSeconds returns the bucket size in seconds used to aggregate the
+// block graph series for a given total timestamp range, or 0 for per-block
+// resolution. The asset HTTP handler holds the same ladder, but re-deriving a
+// rung from an already-bucketed series is not always idempotent (30d buckets
+// are not a multiple of 1w buckets), so this store reports the rung it used
+// via BlockDataPoints.BucketSeconds and the handler must not re-aggregate when
+// that is non-zero. Keep the two ladders in step regardless.
+func graphBucketSeconds(rangeSeconds int64) int64 {
+	switch {
+	case rangeSeconds <= 86400: // <= 24h: per-block resolution
+		return 0
+	case rangeSeconds <= 604800: // <= 1w: 1h buckets
+		return 3600
+	case rangeSeconds <= 7776000: // <= 3m (90d): 6h buckets
+		return 21600
+	case rangeSeconds <= 31536000: // <= 1y: 1d buckets
+		return 86400
+	case rangeSeconds <= 157680000: // <= 5y: 1w buckets
+		return 604800
+	default: // > 5y: 30d buckets
+		return 2592000
+	}
+}
 
 // GetBlockGraphData retrieves time-series data about blocks for visualization and analytics.
 // This implements the blockchain.Store.GetBlockGraphData interface method.
@@ -55,9 +81,13 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 	// The query starts from both genesis (id=0) and the best block, walking back
 	// through parent links. The final WHERE clause filters to only blocks within
 	// the requested time period.
-	var q string
+	// prefix carries the recursive CTE (rebuild path only); source is the
+	// FROM/WHERE shared by the range pre-query and the data query, so both
+	// always select over exactly the same set of blocks.
+	var prefix, source string
+
 	if s.mainChainRebuilding.Load() > 0 {
-		q = `
+		prefix = `
 		WITH RECURSIVE ChainBlocks AS (
 			SELECT
 			 id
@@ -81,9 +111,10 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 			WHERE b.parent_id != 0
 			  AND b.block_time >= $1
 		)
-		SELECT block_time, tx_count FROM ChainBlocks
+	`
+		source = `
+		FROM ChainBlocks
 		WHERE block_time >= $1
-		ORDER BY block_time ASC
 	`
 	} else {
 		// Mirror the original CTE exactly. The CTE's anchor is `id IN (0, best)`
@@ -92,19 +123,52 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 		// self-references to 0) which inadvertently drops the height-1 block
 		// (whose parent_id equals genesis's id, 0). So: keep genesis, keep
 		// anything with parent_id != 0, drop the height-1 block.
-		q = `
-		SELECT block_time, tx_count
+		source = `
 		FROM blocks
 		WHERE on_main_chain = true
 		  AND (id = 0 OR parent_id != 0)
 		  AND block_time >= $1
-		ORDER BY block_time ASC
 	`
 	}
 
-	blockDataPoints := &model.BlockDataPoints{}
+	// Remember, periodMillis is in milliseconds, but block_time is in seconds.
+	periodSeconds := periodMillis / 1000
 
-	rows, err := s.db.QueryContext(ctx, q, periodMillis/1000) // Remember, periodMillis is in milliseconds, but block_time is in seconds
+	// Pre-query the timestamp range so the bucket size can be chosen before any
+	// row is materialised. This is an aggregate-only scan: no per-block row
+	// leaves the database.
+	var (
+		minTS, maxTS sql.NullInt64
+		rowCount     int64
+	)
+
+	if err := s.db.QueryRowContext(ctx, prefix+`SELECT MIN(block_time), MAX(block_time), COUNT(*)`+source, periodSeconds).Scan(
+		&minTS, &maxTS, &rowCount,
+	); err != nil {
+		return nil, errors.NewStorageError("failed to get block data range", err)
+	}
+
+	bucketSeconds := int64(0)
+	if rowCount > 1 && minTS.Valid && maxTS.Valid {
+		bucketSeconds = graphBucketSeconds(maxTS.Int64 - minTS.Int64)
+	}
+
+	q := prefix + `SELECT block_time, tx_count` + source + `ORDER BY block_time ASC`
+
+	if bucketSeconds > 0 {
+		// bucketSeconds comes from graphBucketSeconds, never from the caller,
+		// so interpolating it keeps the expression portable across engines
+		// (repeating a positional placeholder is not).
+		bucketExpr := fmt.Sprintf("(block_time / %d) * %d", bucketSeconds, bucketSeconds)
+		// CAST keeps the sum a BIGINT: Postgres widens SUM(bigint) to numeric,
+		// which will not scan into the uint64 data point.
+		q = prefix + `SELECT ` + bucketExpr + `, CAST(SUM(tx_count) AS BIGINT)` + source +
+			`GROUP BY ` + bucketExpr + ` ORDER BY 1 ASC`
+	}
+
+	blockDataPoints := &model.BlockDataPoints{BucketSeconds: bucketSeconds}
+
+	rows, err := s.db.QueryContext(ctx, q, periodSeconds)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to get block data", err)
 	}

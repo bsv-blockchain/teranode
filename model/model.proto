@@ -93,6 +93,13 @@ message DataPoint {
 // swagger:model BlockDataPoints
 message BlockDataPoints {
   repeated DataPoint data_points = 1;
+  // bucket_seconds is the bucket size, in seconds, the store already grouped
+  // data_points into. 0 means the series is per-block resolution (or too
+  // short to bucket) and has not been aggregated. A consumer that would
+  // otherwise re-derive a bucket size from data_points' own timestamp range
+  // must skip that step whenever this is non-zero, since re-bucketing
+  // already-bucketed endpoints is not always idempotent.
+  int64 bucket_seconds = 2;
 }
 
 // swagger:model ChainTip
