@@ -1310,8 +1310,10 @@ func (u *Server) fetchSubtreeFromPeer(ctx context.Context, subtreeHash *chainhas
 	// only controls what *this node* assembles; peers may legitimately produce larger subtrees.
 	maxSubtreeBytes := u.settings.SubtreeValidation.MaxIncomingSubtreeBytes
 
-	// Use the existing HTTP utility to fetch subtree
-	subtreeBytes, err := util.DoHTTPRequestBounded(ctx, url, maxSubtreeBytes)
+	// Retry on 429/503 with backoff: a catch-up fans subtree fetches out concurrently, and
+	// failing on the first rate-limit rejection re-issued the whole fan-out straight back into
+	// the peer's limiter (issue 1174).
+	subtreeBytes, err := util.DoHTTPRequestBoundedWithRetry(ctx, url, maxSubtreeBytes)
 	if err != nil {
 		return nil, errors.NewServiceError("[catchup:fetchSubtreeFromPeer] failed to fetch subtree from %s", url, err)
 	}
@@ -1440,7 +1442,10 @@ func (u *Server) fetchBlocksBatch(ctx context.Context, hash *chainhash.Hash, n u
 	reqCtx, reqCancel := context.WithCancel(ctx)
 	defer reqCancel()
 
-	bodyReader, err := util.DoHTTPRequestBodyReader(reqCtx, url)
+	// Retry on 429/503, as fetchSubtreeFromPeer does: /blocks shares the peer's catch-up rate
+	// limit with the subtree endpoints (issue 1174). The retries share the caller's fetch
+	// deadline, and spend at most half of it.
+	bodyReader, err := util.DoHTTPRequestBodyReaderWithRetry(reqCtx, url)
 	if err != nil {
 		return nil, errors.NewProcessingError("[catchup:fetchBlocksBatch][%s] failed to get blocks from peer", hash.String(), err)
 	}

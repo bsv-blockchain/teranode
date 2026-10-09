@@ -1355,7 +1355,10 @@ func TestFetchAndStoreSubtreeData_DetachedFetchIsBounded(t *testing.T) {
 	// in exactly the case the bound exists to contain.
 	require.False(t, errors.IsLocalError(err), "a peer that exhausts the bound must stay attributable, not read as a local failure")
 	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
-	require.Contains(t, err.Error(), "exceeded the")
+	// The retry loop stops on its own budget (half the bound) or reports the deadline as
+	// the peer's rejection, so the error names the rejection rather than a context error
+	// for the caller to rewrite.
+	require.Contains(t, err.Error(), "still rejected after")
 }
 
 // Phase 2: Tests for optimized batch fetching and ordered delivery

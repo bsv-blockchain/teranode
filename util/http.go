@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
@@ -1140,7 +1141,14 @@ var defaultRetryConfig = retryConfig{
 //     ignored and the ladder delay is used instead. Retry-After is not a ceiling on top
 //     of the ladder — a compliant peer sending Retry-After: 5 on every rejection costs
 //     5 x 5s = 25s, well above the Retry-After-free worst case above.
-//   - ctx cancellation aborts the retry loop and returns the parent ctx error.
+//   - Every wait is jittered upwards by up to half, so requests rejected together do not
+//     retry together. The worst cases above grow by up to that half.
+//   - With a ctx deadline, the ladder spends at most half of the time left when it starts,
+//     leaving the rest for the response that is finally served; past that it stops early
+//     with the last rejection.
+//   - ctx cancellation aborts the retry loop and returns the parent ctx error. A deadline
+//     that runs out after a rejection returns that rejection instead, so the failure stays
+//     a rejection rather than reading as a local context error.
 //   - The final error keeps the classification of the last rejection, so a caller can
 //     still tell a rate limit apart from an unavailable server after the ladder runs out.
 //
@@ -1186,12 +1194,24 @@ func doHTTPRequestWithRetry(ctx context.Context, url string, cfg retryConfig, ti
 	var lastErr error
 	lastAttemptSecond := int64(-1)
 
+	// With a caller deadline, the ladder may spend at most half of what is left of it, so
+	// a request that is finally served still has the other half to stream its body. Past
+	// that point the loop stops and reports the last rejection rather than sleeping on.
+	var budgetEnd time.Time
+	if deadline, ok := ctx.Deadline(); ok {
+		budgetEnd = time.Now().Add(time.Until(deadline) / 2)
+	}
+
+	attempts := 0
+
 	for attempt := 1; attempt <= cfg.maxAttempts; attempt++ {
 		if attempt > 1 && signerSignsRequests(loadHTTPRequestSigner()) {
 			if err := waitOutRetrySecond(ctx, lastAttemptSecond); err != nil {
-				return nil, err
+				return nil, rejectionOrContextError(ctx, url, attempts, lastErr, err)
 			}
 		}
+
+		attempts = attempt
 
 		body, retryAfter, err := doHTTPRequestWithRetryAfter(ctx, timeoutMs, url, requestBody...)
 		// Read the clock after the attempt, not before it: the signer takes its
@@ -1204,7 +1224,7 @@ func doHTTPRequestWithRetry(ctx context.Context, url string, cfg retryConfig, ti
 			return body, nil
 		}
 		if !errors.Is(err, errors.ErrServiceUnavailable) && !errors.Is(err, errors.ErrServiceRateLimited) {
-			return nil, err
+			return nil, rejectionOrContextError(ctx, url, attempts, lastErr, err)
 		}
 		lastErr = err
 
@@ -1217,9 +1237,17 @@ func doHTTPRequestWithRetry(ctx context.Context, url string, cfg retryConfig, ti
 			sleepFor = retryAfter
 		}
 
+		// Jitter upwards only, so a Retry-After is never undercut, and so a fan-out of
+		// requests rejected together does not come back together and trip the limiter again.
+		sleepFor += rand.N(sleepFor/2 + 1)
+
+		if !budgetEnd.IsZero() && time.Now().Add(sleepFor).After(budgetEnd) {
+			break
+		}
+
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, rejectionOrContextError(ctx, url, attempts, lastErr, ctx.Err())
 		case <-time.After(sleepFor):
 		}
 
@@ -1229,15 +1257,32 @@ func doHTTPRequestWithRetry(ctx context.Context, url string, cfg retryConfig, ti
 		}
 	}
 
-	// Preserve the classification of the last rejection: collapsing a 429 into
-	// ErrServiceUnavailable here would reintroduce exactly the local-vs-remote
-	// confusion the separate code exists to avoid.
+	return nil, rejectedError(url, attempts, lastErr)
+}
+
+// rejectedError is the error for a server that was still rejecting us when the ladder gave up.
+// It preserves the classification of the last rejection: collapsing a 429 into
+// ErrServiceUnavailable here would reintroduce exactly the local-vs-remote confusion the
+// separate code exists to avoid.
+func rejectedError(url string, attempts int, lastErr error) error {
 	errFn := errors.NewServiceUnavailableError
 	if errors.Is(lastErr, errors.ErrServiceRateLimited) {
 		errFn = errors.NewServiceRateLimitedError
 	}
 
-	return nil, errFn("http request [%s] still rejected after %d attempts", url, cfg.maxAttempts, lastErr)
+	return errFn("http request [%s] still rejected after %d attempts", url, attempts, lastErr)
+}
+
+// rejectionOrContextError returns err, unless the caller's deadline ran out after the server
+// had already rejected us. Then the server's rejection is what used up the time, so that is
+// what is reported: a bare deadline reads as a local fault to catch-up, which would neither
+// fail over nor attribute it. A cancellation is ours and is returned as is.
+func rejectionOrContextError(ctx context.Context, url string, attempts int, lastErr, err error) error {
+	if lastErr != nil && ctx.Err() == context.DeadlineExceeded {
+		return rejectedError(url, attempts, lastErr)
+	}
+
+	return err
 }
 
 // doHTTPRequestWithRetryAfter performs one attempt of the retry loop, applying timeoutMs
