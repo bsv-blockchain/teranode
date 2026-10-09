@@ -63,35 +63,12 @@ func (u *Server) CreateSubtreeDataFileStreaming(ctx context.Context, subtreeHash
 	}
 
 	if subtreeDataExists {
-		// verify that the subtreeData file is valid (non-zero size) and all transactions can be read
-		subtreeDataReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeData)
+		kept, err := u.keepExistingSubtreeData(ctx, subtreeHash, subtree)
 		if err != nil {
-			return errors.NewStorageError("[BlockPersister] error getting existing subtree data for %s", subtreeHash.String(), err)
+			return err
 		}
-		defer subtreeDataReader.Close()
 
-		subtreeDataBufferedReader := bufio.NewReaderSize(subtreeDataReader, 32*1024) // 32KB buffer
-
-		if _, err = subtreepkg.NewSubtreeDataFromReader(subtree, subtreeDataBufferedReader); err != nil {
-			// something failed reading the subtreeData, we need to recreate it
-			u.logger.Warnf("[BlockPersister] existing subtree data for %s is invalid, recreating: %v", subtreeHash.String(), err)
-
-			// delete the invalid file
-			if err = u.subtreeStore.Del(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeData); err != nil {
-				return errors.NewStorageError("[BlockPersister] error deleting invalid subtree data for %s", subtreeHash.String(), err)
-			}
-		} else {
-			// File exists and is correct, just update DAH and return
-			err = u.subtreeStore.SetDAH(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeData, 0)
-			if err != nil {
-				return errors.NewStorageError("[BlockPersister] error setting subtree data DAH for %s", subtreeHash.String(), err)
-			}
-
-			// Also promote .subtree to permanent alongside .subtreeData
-			if err = u.subtreeStore.SetDAH(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtree, 0); err != nil {
-				return errors.NewStorageError("[BlockPersister] error setting subtree DAH for %s", subtreeHash.String(), err)
-			}
-
+		if kept {
 			u.logger.Debugf("[BlockPersister] Subtree data for %s already exists, skipping creation", subtreeHash.String())
 
 			return nil
@@ -221,7 +198,38 @@ func (u *Server) CreateSubtreeDataFileStreaming(ctx context.Context, subtreeHash
 
 	// 7. Close writer to flush buffers and finalize file
 	if err = writer.Close(ctx); err != nil {
-		return errors.NewStorageError("[BlockPersister] error closing subtree data writer for %s", subtreeHash.String(), err)
+		if !errors.Is(err, errors.ErrBlobAlreadyExists) {
+			return errors.NewStorageError("[BlockPersister] error closing subtree data writer for %s", subtreeHash.String(), err)
+		}
+
+		// Another writer (block validation's processSubtreeDataStream, or the asset service's
+		// on-demand GetSubtreeDataReader) published this subtreeData after this service found
+		// none, and the store refused ours with ErrBlobAlreadyExists (on the file store, at
+		// its pre-write check, which a body that fits the writer's buffer meets at Close).
+		// Theirs is judged exactly as a file found before the write is: read back, kept and
+		// made permanent if it holds the subtree's transactions, removed if not. The two
+		// writers do not produce identical bytes for a block's first subtree (this service
+		// writes the coinbase at the placeholder slot, the others do not), which is why the
+		// read-back is not skipped.
+		u.logger.Infof("[BlockPersister] subtreeData for %s was published by another writer while this one streamed", subtreeHash.String())
+
+		// Nothing of ours is on disk under the name, so the deferred abort has nothing to discard.
+		writeSucceeded = true
+
+		kept, keepErr := u.keepExistingSubtreeData(ctx, subtreeHash, subtree)
+		if keepErr != nil {
+			return keepErr
+		}
+
+		if !kept {
+			// Deliberately not wrapping the ErrBlobAlreadyExists from Close: the persister's
+			// loop reads that code on a block's error as "block already persisted" and would
+			// mark the block done. A plain storage error makes it retry the block, and the
+			// retry finds no file and writes its own.
+			return errors.NewStorageError("[BlockPersister] subtreeData for %s published by another writer did not hold the subtree's transactions and was removed", subtreeHash.String())
+		}
+
+		return nil
 	}
 
 	// Mark as successful so defer doesn't abort
@@ -233,6 +241,45 @@ func (u *Server) CreateSubtreeDataFileStreaming(ctx context.Context, subtreeHash
 	}
 
 	return nil
+}
+
+// keepExistingSubtreeData judges a subtreeData file this service did not write: a file found
+// before the write, or one another writer published while this service was streaming its own.
+// If the file reads back as the subtree's transactions (go-subtree accepts the coinbase at the
+// placeholder slot present or absent), it and the structure file are made permanent and true is
+// returned. Otherwise the file is deleted and false is returned, so the caller can write its own.
+func (u *Server) keepExistingSubtreeData(ctx context.Context, subtreeHash chainhash.Hash, subtree *subtreepkg.Subtree) (bool, error) {
+	subtreeDataReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeData)
+	if err != nil {
+		return false, errors.NewStorageError("[BlockPersister] error getting existing subtree data for %s", subtreeHash.String(), err)
+	}
+	defer subtreeDataReader.Close()
+
+	subtreeDataBufferedReader := bufio.NewReaderSize(subtreeDataReader, 32*1024) // 32KB buffer
+
+	if _, err = subtreepkg.NewSubtreeDataFromReader(subtree, subtreeDataBufferedReader); err != nil {
+		// something failed reading the subtreeData, we need to recreate it
+		u.logger.Warnf("[BlockPersister] existing subtree data for %s is invalid, recreating: %v", subtreeHash.String(), err)
+
+		// delete the invalid file
+		if err = u.subtreeStore.Del(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeData); err != nil {
+			return false, errors.NewStorageError("[BlockPersister] error deleting invalid subtree data for %s", subtreeHash.String(), err)
+		}
+
+		return false, nil
+	}
+
+	// File exists and is correct, just update DAH and return
+	if err = u.subtreeStore.SetDAH(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeData, 0); err != nil {
+		return false, errors.NewStorageError("[BlockPersister] error setting subtree data DAH for %s", subtreeHash.String(), err)
+	}
+
+	// Also promote .subtree to permanent alongside .subtreeData
+	if err = u.subtreeStore.SetDAH(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtree, 0); err != nil {
+		return false, errors.NewStorageError("[BlockPersister] error setting subtree DAH for %s", subtreeHash.String(), err)
+	}
+
+	return true, nil
 }
 
 // ProcessSubtreeUTXOStreaming processes UTXO changes by streaming through an existing subtreeData file.

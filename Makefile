@@ -567,7 +567,7 @@ lint: lint-tracing-info
 # Change TRACING_INFO_SITES in the same commit as the site, and say why.
 # Only production code counts: test files are excluded so that deleting a test
 # cannot silently free a slot for a new production INFO site.
-TRACING_INFO_SITES := 61
+TRACING_INFO_SITES := 59
 
 .PHONY: lint-tracing-info
 lint-tracing-info:

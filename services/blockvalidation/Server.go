@@ -1518,7 +1518,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("invalid base URL", err))
 	}
 
-	if err = u.processBlockFound(ctx, block.Header.Hash(), request.PeerId, baseURL, block); err != nil {
+	if err = u.processBlockFound(ctx, block.Header.Hash(), request.PeerId, baseURL, request.HeaderProven, block); err != nil {
 		// error from processBlockFound is already wrapped
 		return nil, errors.WrapGRPC(err)
 	}
@@ -1675,10 +1675,12 @@ func optimisticMiningDisabledForPeerPath(s *settings.Settings, baseURL string) b
 //   - ctx: Context for tracing and operation management
 //   - hash: Hash of the block to process
 //   - baseURL: Base URL for block retrieval operations
+//   - headerProven: the caller's ancestry proof for a below-checkpoint block (see
+//     legacyUnifiedRoute). Only legacy netsync can supply it; every other caller passes false.
 //   - useBlock: Optional pre-loaded block to avoid retrieval (variadic parameter)
 //
 // Returns an error if block processing, validation, or dependency management fails
-func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, peerID, baseURL string, useBlock ...*model.Block) error {
+func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, peerID, baseURL string, headerProven bool, useBlock ...*model.Block) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "processBlockFound",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationProcessBlockFound),
@@ -1713,11 +1715,11 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	// the hash, and once the window expires an honest body flows through. GetBlockExists returned
 	// false just above, so the block is NOT stored: returning nil here would be read by a caller as
 	// "accepted" for a block that was never stored (bitcoin-sv/teranode#4692). Return a
-	// CORRUPT-CLASSIFIED, non-poisoning error instead. Corrupt routes through the already-safe path:
-	// it is not ErrBlockInvalid (never poisons), it does not disconnect the peer
-	// (shouldDisconnectOnBlockErr is false for corrupt) and the legacy netsync corrupt branch returns
-	// before recentlyFailedBlocks.Set, so it cannot suppress descendants — and no caller can mistake
-	// it for acceptance.
+	// CORRUPT-CLASSIFIED, non-poisoning error instead: it is not ErrBlockInvalid, so it never
+	// poisons, and no caller can mistake it for acceptance. It never fires for a legacy block,
+	// because accountCorruptAttempt records nothing for baseURL "legacy"; netsync's own corrupt
+	// row (parkCommitFailure, services/legacy/netsync/block_park_policy.go) neither marks the hash
+	// failed nor blames the peer.
 	if u.corruptAttemptsExhausted(hash, peerID) {
 		u.logger.Warnf("[processBlockFound][%s] corrupt re-download cap reached for peer %s; suppressing this re-download until the cooldown window expires", hash.String(), peerID)
 		return errors.NewBlockCorruptError("[processBlockFound][%s] corrupt re-download cap reached for peer %s; re-download suppressed until the cooldown window expires (block not stored, not invalid)", hash.String(), peerID)
@@ -1783,6 +1785,18 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		return errors.NewServiceError("[processBlockFound][%s] failed to check if parent block %s exists", hash.String(), block.Header.HashPrevBlock.String(), err)
 	}
 
+	// A legacy block on the unified route must never take the catch-up divert: legacy sync
+	// resolves its own orphans with a getblocks, and the divert returns nil, which legacy
+	// records as an accepted block with nothing stored. Legacy hands a block over only once its
+	// parent is in the chain, so a missing parent here is a local fault, re-delivered later.
+	//
+	// Judged on eligibility, not on the proven route: an UNPROVEN eligible block is still a
+	// legacy block whose parent legacy promised to have committed, so it is refused the same
+	// way rather than diverted to catch-up and reported as nil.
+	if !parentExists && baseURL == "legacy" && u.legacyUnifiedEligible(block, baseURL) {
+		return errors.NewServiceError("[processBlockFound][%s] legacy block on the unified route has no stored parent %s", hash.String(), block.Header.HashPrevBlock.String())
+	}
+
 	if !parentExists {
 		// add to catchup channel, which will block processing any new blocks until we have caught up
 		go func() {
@@ -1802,9 +1816,9 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		return nil
 	}
 
-	// Settle the peer-supplied height against the on-chain parent before anything reads
-	// block.Height (block-assembly gating and the unified-route decision below, and downstream
-	// the checkpoint guard, difficulty skip and coinbase subsidy in ValidateBlockWithOptions).
+	// Settle the peer-supplied height against the parent before anything reads block.Height
+	// (block-assembly gating and the unified-route decision below, and downstream the
+	// checkpoint guard, difficulty skip and coinbase subsidy in ValidateBlockWithOptions).
 	// See deriveBlockHeight.
 	_, parentMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
 	if err != nil {
@@ -1818,30 +1832,71 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		return errors.NewServiceError("[processBlockFound][%s] nil metadata for parent header %s", hash.String(), block.Header.HashPrevBlock.String())
 	}
 
-	settledHeight, err := deriveBlockHeight(block.Height, parentMeta.Height)
+	parentHeight := parentMeta.Height
+
+	settledHeight, err := deriveBlockHeight(block.Height, parentHeight)
 	if err != nil {
 		return errors.NewBlockInvalidError("[processBlockFound][%s] rejecting block with peer-inconsistent height", hash.String(), err)
 	}
 
 	block.Height = settledHeight
 
+	// Unified below-checkpoint route: legacy blocks go through the same quick-validation
+	// machinery as native catchup (default off). Re-evaluated on the settled height, which is
+	// what every consumer downstream reads.
+	unifiedRoute := u.legacyUnifiedRoute(block, baseURL, headerProven)
+
+	// Reaching full validation for an eligible block is meant to be rare: netsync refuses to
+	// commit an unproven eligible record before it makes this call (HandleConvertedBlock), so
+	// this is the cache-replace race, a direct RPC, or a netsync whose route flags disagree
+	// with this service's. It is logged because it is the slow, correct path, and an operator
+	// seeing it at volume has a provenance problem to look at, not a validation one.
+	if !unifiedRoute && !headerProven && u.legacyUnifiedEligible(block, baseURL) {
+		u.logger.Warnf("[processBlockFound][%s] legacy block at height %d is eligible for the unified route but carries no header proof; taking full validation", hash.String(), block.Height)
+	}
+
 	// Wait for block assembly to be ready before processing the block
 	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height, u.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
+		if u.legacyUnifiedEligible(block, baseURL) {
+			// A parked gate is a local condition for every eligible legacy block, proven or
+			// not, so this keys on eligibility rather than on the route taken: the wait
+			// returns a ProcessingError, which legacy sync's park reads as a rejection and
+			// answers by deleting its only copy of the block. Wrap so legacy sync neither
+			// rejects the block nor rotates the peer.
+			return errors.NewServiceError("[processBlockFound][%s] block assembly not ready for height %d on the unified route", hash.String(), block.Height, err)
+		}
+
 		// block-assembly is still behind, so we cannot process this block
 		return err
 	}
 
-	// Unified below-checkpoint route: legacy blocks go through the same
-	// quick-validation machinery as native catchup (default off).
-	if u.legacyUnifiedRoute(block, baseURL) {
+	if unifiedRoute {
 		u.logger.Debugf("[processBlockFound][%s] unified route: quick-validating legacy block at height %d", block.Hash().String(), block.Height)
 
-		// A corrupt result here (bitcoin-sv/teranode#4692) is returned to the legacy caller and struck at
-		// the legacy peer layer (peer_server.addBanScore via sp.blockProcessed), which owns the
-		// serving peer identity — the netsync ProcessBlock path carries no usable peerID here, so
-		// attributing the strike at that layer is the only correct attribution.
+		// A corrupt result here is returned to the legacy caller, whose parkCommitFailure
+		// (services/legacy/netsync/block_park_policy.go) classifies it as a local record fault:
+		// the record is dropped and downloaded again, with no strike and no mark, because the
+		// body was verified against the header at the pipeline sink before the record existed.
 		qErr := u.blockValidation.quickValidateBlock(ctx, block, peerID, baseURL)
-		u.accountCorruptAttempt(hash, peerID, qErr)
+		u.accountCorruptAttempt(hash, peerID, baseURL, qErr)
+
+		// A structure or data file that does not hash to the key it is stored under comes back
+		// as a bare ProcessingError carrying only a data marker, which the legacy caller's table
+		// cannot key on and would read as a judgement on the block. The route is legacy here
+		// (legacyUnifiedEligible requires it), so the file is this node's own and the sink has
+		// already verified the bytes it was written from. When the quarantine confirmed the blob
+		// removed, the record is corrupt and a re-download rewrites the file, so say so with the
+		// code the caller's corrupt row reads. When the blob could NOT be confirmed removed, a
+		// re-download cannot repair it (subtreeWriter.put never rewrites an existing key) and a
+		// corrupt drop would loop every wanted-range pass, so that case is a local fault to
+		// retry later, which the caller reads as keep.
+		if qErr != nil && len(subtreeKeyMismatchRefs(qErr)) > 0 {
+			if isUnquarantinedLocalSubtree(qErr) {
+				return errors.NewServiceError("[processBlockFound][%s] a subtree file this node wrote does not hash to its key and could not be confirmed removed; retrying later", hash.String(), qErr)
+			}
+
+			return errors.NewBlockCorruptError("[processBlockFound][%s] a subtree file this node wrote does not hash to its key; it has been removed so the block can be downloaded again", hash.String(), qErr)
+		}
 
 		return qErr
 	}
@@ -1868,26 +1923,65 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	}
 
 	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, baseURL, opts)
-	u.accountCorruptAttempt(hash, peerID, err)
+	u.accountCorruptAttempt(hash, peerID, baseURL, err)
 
 	if err != nil {
+		// A verdict on the block goes back as itself. The ServiceError wrap below is for
+		// everything else (a store that did not answer, a fetch that failed), which a caller
+		// reads as retry-later; wrapping a genuine rejection or a corrupt body in it made the
+		// legacy caller's table read every full-route rejection as a transient local fault, so
+		// the block was kept and retried on every sweep for as long as it stayed parked.
+		if errors.Is(err, errors.ErrBlockInvalid) || errors.IsBlockCorrupt(err) {
+			return err
+		}
+
 		return errors.NewServiceError("failed block validation BlockFound [%s]", block.String(), err)
 	}
 
 	return nil
 }
 
-// legacyUnifiedRoute reports whether this block should take the unified
-// below-checkpoint route: legacy-sourced, operator opted into both the
-// outpoint-only fast path and the unified route, and the shared eligibility
-// gate holds (store capability + hardcoded checkpoint boundary via
-// model.OutpointOnlyEligible — never the operator catchup override). When true,
-// processBlockFound hands the block to quickValidateBlock — the same machinery
-// the native catchup path uses below checkpoints — instead of full validation.
-// Netsync has already written the subtree files, verified PoW and the merkle
-// root, and waited for block assembly; quickValidateBlock does UTXO
-// create+spend, AddBlock(MinedSet+SubtreesSet) and DAH.
-func (u *Server) legacyUnifiedRoute(block *model.Block, baseURL string) bool {
+// legacyUnifiedRoute reports whether this block takes the unified
+// below-checkpoint route: legacyUnifiedEligible holds AND the caller has proved
+// the block's ancestry. When true, processBlockFound hands the block to
+// quickValidateBlock, the same machinery the native catchup path uses below
+// checkpoints, instead of full validation. Netsync has already written the
+// subtree files, verified PoW and the merkle root, and waited for block
+// assembly; quickValidateBlock does UTXO create+spend,
+// AddBlock(MinedSet+SubtreesSet) and DAH.
+//
+// Height is the weaker conjunct and headerProven is the hash half. The hardcoded
+// checkpoints certify ONE CHAIN, not a height range, so a block's height alone
+// says nothing about whether it belongs to that chain: a peer can fabricate a
+// block claiming any height in the certified prefix. quickValidateBlock runs no
+// header or chain-membership rule beyond the version floor, so it must never see
+// a block nobody has tied to a pinned checkpoint hash. headerProven is that tie,
+// computed by netsync's header cache (headerCache.Proven: the hash sits in an
+// internally linked header run at or below a height a matched pinned checkpoint
+// commits) and carried on the request because block bytes cannot carry it. This
+// is the block-validation half of GHSA-gggq-8f59-4jm9; netsync's
+// quickValidationAllowed is the other half.
+//
+// An eligible block without the proof falls to ValidateBlockWithOptions. That is
+// correct for a legacy record because netsync writes its structure files as
+// FileTypeSubtreeToCheck, which full validation treats as unvalidated: subtree
+// validation creates the transactions and rebuilds the fees before the reward
+// check reads them. It is also slow, which is why netsync refuses to commit an
+// unproven eligible record before it makes this RPC and re-offers it once the
+// header walk has proven it.
+func (u *Server) legacyUnifiedRoute(block *model.Block, baseURL string, headerProven bool) bool {
+	return headerProven && u.legacyUnifiedEligible(block, baseURL)
+}
+
+// legacyUnifiedEligible is the settings-and-height half of legacyUnifiedRoute:
+// legacy-sourced, operator opted into both the outpoint-only fast path and the
+// unified route, and the shared eligibility gate holds (store capability +
+// hardcoded checkpoint boundary via model.OutpointOnlyEligible, never the
+// operator catchup override). It says nothing about which chain the block is on;
+// legacyUnifiedRoute adds that. The parent-missing guard in processBlockFound
+// reads this one on purpose, so an unproven legacy orphan is refused rather than
+// diverted to catch-up.
+func (u *Server) legacyUnifiedEligible(block *model.Block, baseURL string) bool {
 	if !u.settings.BlockValidation.LegacyUnifiedBelowCheckpoint {
 		return false
 	}
@@ -2591,7 +2685,7 @@ func (u *Server) recordCorruptAttempt(blockHash *chainhash.Hash, peerID string) 
 
 // accountCorruptAttempt records or clears the per-(hash, peerID) corrupt re-download counter from a
 // block-validation OUTCOME in processBlockFound (bitcoin-sv/teranode#4692). This is the SINGLE
-// accounting point for every RUNNING delivery route: both the block-processing worker
+// accounting point for every peer-served delivery route: both the block-processing worker
 // (processBlockWithPriority) and the direct ProcessBlock gRPC handler funnel through
 // processBlockFound, so a corrupt delivery is counted exactly once regardless of route and the cap
 // cannot be bypassed by hammering ProcessBlock directly. A corrupt result records toward the cap; a
@@ -2601,9 +2695,21 @@ func (u *Server) recordCorruptAttempt(blockHash *chainhash.Hash, peerID string) 
 // this function's own peerID=="" fail-open guard is what actually keeps it from recording under an
 // unidentified delivery. Non-corrupt errors (transient / service / invalid) leave the counter
 // untouched.
-func (u *Server) accountCorruptAttempt(blockHash *chainhash.Hash, peerID string, validationErr error) {
+//
+// Nothing is recorded for a block whose baseURL is "legacy". A legacy block arrives converted:
+// netsync's pipeline sink verified the body against the header before anything was written, so
+// a corrupt verdict here is this node's own record or files, never the peer's bytes. Counting it
+// would trip corruptAttemptsExhausted after MaxCorruptAttemptsPerBlock and hand netsync a
+// corrupt error for a block nobody did anything wrong with. Keyed on the route rather than on
+// the LegacyPeerIDPrefix of peerID because the fact that justifies the skip is the route (a
+// sink-verified body), not the identity string.
+func (u *Server) accountCorruptAttempt(blockHash *chainhash.Hash, peerID, baseURL string, validationErr error) {
 	if validationErr == nil {
 		u.clearCorruptAttempts(blockHash, peerID)
+		return
+	}
+
+	if baseURL == "legacy" {
 		return
 	}
 
@@ -2632,7 +2738,9 @@ func (u *Server) clearCorruptAttempts(blockHash *chainhash.Hash, peerID string) 
 // bound (re-opens the corrupt-body bandwidth DoS). Nil-safe: a nil settings or nil cache (Server
 // literals in tests that don't wire them) behaves as CAP DISABLED — it returns false (never
 // "exhausted"), so a missing config can never silently drop honest blocks. Returns a bool — never
-// an error — so the gate can never emit a poisoning result.
+// an error — so the gate can never emit a poisoning result. It cannot trip for a legacy block:
+// accountCorruptAttempt records nothing for baseURL "legacy", so the counter it reads is never
+// written for one.
 func (u *Server) corruptAttemptsExhausted(blockHash *chainhash.Hash, peerID string) bool {
 	if u.settings == nil || u.blockCorruptAttempts == nil {
 		return false
@@ -2960,7 +3068,8 @@ func (u *Server) processBlockWithPriority(ctx context.Context, blockFound proces
 	}
 
 	// Try to process with the primary source
-	err := u.processBlockFound(ctx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
+	// The block-found queue never carries a header proof: only legacy netsync holds one.
+	err := u.processBlockFound(ctx, blockFound.hash, blockFound.peerID, blockFound.baseURL, false)
 
 	// A corrupt body (bitcoin-sv/teranode#4692) is NOT a fetch failure: the peer served bytes that
 	// failed a body-integrity check. Do not walk alternative sources here (that loop is for
@@ -2986,7 +3095,7 @@ func (u *Server) processBlockWithPriority(ctx context.Context, blockFound proces
 			u.logger.Infof("[processBlockWithPriority] Trying alternative source for block %s from %s (peer: %s)", blockFound.hash.String(), alternative.baseURL, alternative.peerID)
 
 			// Try with alternative source
-			altErr := u.processBlockFound(ctx, alternative.hash, alternative.peerID, alternative.baseURL)
+			altErr := u.processBlockFound(ctx, alternative.hash, alternative.peerID, alternative.baseURL, false)
 			if altErr == nil {
 				// Success with alternative source
 				return nil

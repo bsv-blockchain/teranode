@@ -127,6 +127,7 @@ func TestQuickValidateBlock(t *testing.T) {
 		// Setup UTXO store expectations for creating all transactions (including coinbase)
 		// Use mock.Anything for the transaction since the order may vary
 		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCreateOnly()).Return(&meta.Data{}, nil, nil)
+		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCombined()).Return(&meta.Data{}, []*utxo.Spend{}, nil).Maybe()
 
 		// Setup UTXO store expectations for spending transactions
 		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).Return(nil, []*utxo.Spend{}, nil)
@@ -326,6 +327,11 @@ func TestCreateAndSpendUTXOsForBatch_UpdatesExistingTransactions(t *testing.T) {
 		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCreateOnly()).
 			Return((*meta.Data)(nil), nil, errors.ErrTxExists).Maybe()
 
+		// Mock the spend phase. The mined-info stamp now runs after both waves rather than
+		// between them, so the spend happens before the error under test is reached.
+		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).
+			Return(nil, []*utxo.Spend{}, nil).Maybe()
+
 		// Mock SetMinedMulti to return an error
 		suite.MockUTXOStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
 			Return(map[chainhash.Hash][]uint32{}, errors.NewProcessingError("database error")).Once()
@@ -363,9 +369,10 @@ func TestExtendTxFromSameBlockParents(t *testing.T) {
 	t.Run("in-range vout extends the input", func(t *testing.T) {
 		child := childWithVout(t, 1, parentHash)
 
-		needsExternal, err := extendTxFromSameBlockParents(child, parents)
+		needsExternal, hasSameBlockParent, err := extendTxFromSameBlockParents(child, parents)
 		require.NoError(t, err)
 		require.False(t, needsExternal)
+		require.True(t, hasSameBlockParent, "the parent is in this block")
 		require.Equal(t, uint64(2000), child.Inputs[0].PreviousTxSatoshis)
 		require.NotNil(t, child.Inputs[0].PreviousTxScript)
 	})
@@ -373,7 +380,7 @@ func TestExtendTxFromSameBlockParents(t *testing.T) {
 	t.Run("out-of-range vout returns error, no panic", func(t *testing.T) {
 		child := childWithVout(t, 2, parentHash) // parent only has outputs 0 and 1
 
-		_, err := extendTxFromSameBlockParents(child, parents)
+		_, _, err := extendTxFromSameBlockParents(child, parents)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "non-existent output")
 	})
@@ -381,9 +388,10 @@ func TestExtendTxFromSameBlockParents(t *testing.T) {
 	t.Run("parent absent from map needs external lookup", func(t *testing.T) {
 		child := childWithVout(t, 0, parentHash)
 
-		needsExternal, err := extendTxFromSameBlockParents(child, map[chainhash.Hash]*bt.Tx{})
+		needsExternal, hasSameBlockParent, err := extendTxFromSameBlockParents(child, map[chainhash.Hash]*bt.Tx{})
 		require.NoError(t, err)
 		require.True(t, needsExternal)
+		require.False(t, hasSameBlockParent, "no parent of this block was found")
 	})
 
 	t.Run("parent with no outputs returns error", func(t *testing.T) {
@@ -391,7 +399,7 @@ func TestExtendTxFromSameBlockParents(t *testing.T) {
 		emptyHash := *emptyParent.TxIDChainHash()
 		child := childWithVout(t, 0, emptyHash)
 
-		_, err := extendTxFromSameBlockParents(child, map[chainhash.Hash]*bt.Tx{emptyHash: emptyParent})
+		_, _, err := extendTxFromSameBlockParents(child, map[chainhash.Hash]*bt.Tx{emptyHash: emptyParent})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "non-existent output")
 	})
@@ -570,6 +578,17 @@ func matchSpendOnly() interface{} {
 	return mock.MatchedBy(func(opts []utxo.CreateOption) bool { return parseCreateOptions(opts).SpendOnly })
 }
 
+// matchCombined matches the one-wave SpendAndCreate call: neither half suppressed, so the
+// store spends the transaction's inputs and creates its outputs in one go. Transactions with
+// no parent in this block take this call instead of the create/spend pair.
+func matchCombined() interface{} {
+	return mock.MatchedBy(func(opts []utxo.CreateOption) bool {
+		o := parseCreateOptions(opts)
+
+		return !o.CreateOnly && !o.SpendOnly
+	})
+}
+
 // countCreatePhaseCalls counts recorded SpendAndCreate calls that carried WithCreateOnly.
 func countCreatePhaseCalls(m *utxo.MockUtxostore) int {
 	count := 0
@@ -647,13 +666,13 @@ func assertCreatedLocked(t *testing.T, m *utxo.MockUtxostore, wantLocked bool) {
 		opts, ok := c.Arguments.Get(3).([]utxo.CreateOption)
 		require.True(t, ok, "SpendAndCreate 4th arg should be []utxo.CreateOption")
 		o := parseCreateOptions(opts)
-		if !o.CreateOnly {
-			continue
+		if o.SpendOnly {
+			continue // this call creates nothing
 		}
 		require.Equal(t, wantLocked, o.Locked, "SpendAndCreate WithLocked flag mismatch")
 		found = true
 	}
-	require.True(t, found, "expected at least one create-phase SpendAndCreate call")
+	require.True(t, found, "expected at least one SpendAndCreate call that creates")
 }
 
 // assertCreatedSkipExtended asserts every Create call carried WithSkipExtendedInputs(want).
@@ -669,13 +688,13 @@ func assertCreatedSkipExtended(t *testing.T, m *utxo.MockUtxostore, want bool) {
 		opts, ok := c.Arguments.Get(3).([]utxo.CreateOption)
 		require.True(t, ok, "SpendAndCreate 4th arg should be []utxo.CreateOption")
 		o := parseCreateOptions(opts)
-		if !o.CreateOnly {
-			continue
+		if o.SpendOnly {
+			continue // this call creates nothing
 		}
 		require.Equal(t, want, o.SkipExtendedInputs, "SpendAndCreate WithSkipExtendedInputs flag mismatch")
 		found = true
 	}
-	require.True(t, found, "expected at least one create-phase SpendAndCreate call")
+	require.True(t, found, "expected at least one SpendAndCreate call that creates")
 }
 
 // assertSpentSkipUTXOHashCheck asserts every Spend call carried IgnoreFlags.SkipUTXOHashCheck(want).
@@ -691,13 +710,13 @@ func assertSpentSkipUTXOHashCheck(t *testing.T, m *utxo.MockUtxostore, want bool
 		opts, ok := c.Arguments.Get(3).([]utxo.CreateOption)
 		require.True(t, ok, "SpendAndCreate 4th arg should be []utxo.CreateOption")
 		o := parseCreateOptions(opts)
-		if !o.SpendOnly {
-			continue
+		if o.CreateOnly {
+			continue // this call spends nothing
 		}
 		require.Equal(t, want, o.IgnoreFlags.SkipUTXOHashCheck, "SpendAndCreate SkipUTXOHashCheck flag mismatch")
 		found = true
 	}
-	require.True(t, found, "expected at least one spend-phase SpendAndCreate call")
+	require.True(t, found, "expected at least one SpendAndCreate call that spends")
 }
 
 // buildOneSubtreeBlock builds a block with one subtree (coinbase + 2 txs) and stores its
@@ -752,6 +771,7 @@ func setupQuickValidateMocks(s *CatchupTestSuite) {
 	s.MockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 	s.MockUTXOStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return((*meta.Data)(nil), errors.NewNotFoundError("not found"))
 	s.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchCreateOnly()).Return(&meta.Data{}, nil, nil)
+	s.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchCombined()).Return(&meta.Data{}, []*utxo.Spend{}, nil).Maybe()
 	s.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).Return(nil, []*utxo.Spend{}, nil)
 	s.MockUTXOStore.On("SetLocked", mock.Anything, mock.Anything, false).Return(nil).Maybe()
 	s.MockValidator.Errors = []error{nil, nil, nil}

@@ -19,7 +19,7 @@ type recordingBlockValidation struct {
 	peerIDs []string
 }
 
-func (r *recordingBlockValidation) ProcessBlock(_ context.Context, _ *model.Block, _ uint32, peerID, _ string, _ uint32) error {
+func (r *recordingBlockValidation) ProcessBlock(_ context.Context, _ *model.Block, _ uint32, peerID, _ string, _ uint32, _ bool) error {
 	r.peerIDs = append(r.peerIDs, peerID)
 	return nil
 }
@@ -57,8 +57,8 @@ func TestSyncManager_ProcessBlock_PlumbsServingPeerIdentity(t *testing.T) {
 		Height: 100,
 	}
 
-	require.NoError(t, sm.ProcessBlock(context.Background(), block, "peer-A:8333"))
-	require.NoError(t, sm.ProcessBlock(context.Background(), block, "peer-B:8333"))
+	require.NoError(t, sm.ProcessBlock(context.Background(), block, "peer-A:8333", blockRequestOrigin{}))
+	require.NoError(t, sm.ProcessBlock(context.Background(), block, "peer-B:8333", blockRequestOrigin{}))
 
 	require.Equal(t, []string{"peer-A:8333", "peer-B:8333"}, spy.peerIDs,
 		"the legacy route must plumb each serving peer's identity to block validation, not a shared empty string")

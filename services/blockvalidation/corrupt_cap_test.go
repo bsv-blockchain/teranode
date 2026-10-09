@@ -50,6 +50,11 @@ func TestOptimisticMiningDisabledForPeerPath(t *testing.T) {
 		"nil settings must report disabled")
 }
 
+// capTestBaseURL is a peer-served (p2p) source. The corrupt cap serves that route only:
+// accountCorruptAttempt records nothing for baseURL "legacy", whose body the legacy pipeline
+// sink verified against the header before block validation saw it.
+const capTestBaseURL = "http://peer.test"
+
 // newCorruptCapServer builds a Server with just the corrupt-cap machinery wired, mirroring the
 // NewServer construction (fixed-window ttlcache, no touch-on-hit).
 func newCorruptCapServer(t *testing.T, cap int) *Server {
@@ -142,18 +147,18 @@ func TestAccountCorruptAttempt(t *testing.T) {
 
 	// Corrupt outcomes accumulate toward the cap (this is the direct-ProcessBlock route that the
 	// worker-only increment used to miss).
-	u.accountCorruptAttempt(&h, capTestPeer, errors.NewBlockCorruptError("corrupt body"))
-	u.accountCorruptAttempt(&h, capTestPeer, errors.NewBlockCorruptError("corrupt body"))
+	u.accountCorruptAttempt(&h, capTestPeer, capTestBaseURL, errors.NewBlockCorruptError("corrupt body"))
+	u.accountCorruptAttempt(&h, capTestPeer, capTestBaseURL, errors.NewBlockCorruptError("corrupt body"))
 	require.False(t, u.corruptAttemptsExhausted(&h, capTestPeer), "2/3 is below the cap")
-	u.accountCorruptAttempt(&h, capTestPeer, errors.NewBlockCorruptError("corrupt body"))
+	u.accountCorruptAttempt(&h, capTestPeer, capTestBaseURL, errors.NewBlockCorruptError("corrupt body"))
 	require.True(t, u.corruptAttemptsExhausted(&h, capTestPeer), "3/3 reaches the cap")
 
 	// A non-corrupt error must not touch the counter (stays exhausted).
-	u.accountCorruptAttempt(&h, capTestPeer, errors.NewProcessingError("transient"))
+	u.accountCorruptAttempt(&h, capTestPeer, capTestBaseURL, errors.NewProcessingError("transient"))
 	require.True(t, u.corruptAttemptsExhausted(&h, capTestPeer), "a non-corrupt error must not change the corrupt counter")
 
 	// A genuine success clears it.
-	u.accountCorruptAttempt(&h, capTestPeer, nil)
+	u.accountCorruptAttempt(&h, capTestPeer, capTestBaseURL, nil)
 	require.False(t, u.corruptAttemptsExhausted(&h, capTestPeer), "a validation success clears the corrupt counter")
 	require.Nil(t, u.blockCorruptAttempts.Get(ck(h, capTestPeer)))
 }
@@ -268,7 +273,7 @@ func TestCorruptAttemptCap_EmptyPeerIDUncapped(t *testing.T) {
 
 	// accountCorruptAttempt must not record under an empty key...
 	for i := 0; i < 5; i++ {
-		u.accountCorruptAttempt(&h, "", errors.NewBlockCorruptError("corrupt body"))
+		u.accountCorruptAttempt(&h, "", capTestBaseURL, errors.NewBlockCorruptError("corrupt body"))
 	}
 	require.Nil(t, u.blockCorruptAttempts.Get(ck(h, "")), "accountCorruptAttempt must never record the empty key")
 
@@ -390,4 +395,25 @@ func TestExcessiveBlockSizeDeclined(t *testing.T) {
 
 	require.False(t, excessiveBlockSizeDeclined(nil, block), "nil settings never declines")
 	require.False(t, excessiveBlockSizeDeclined(tSettings, nil), "nil block never declines")
+}
+
+// TestAccountCorruptAttempt_RecordsNothingForALegacyBlock pins the route skip: a corrupt verdict
+// on a block whose baseURL is "legacy" records nothing, so corruptAttemptsExhausted can never trip
+// for one, while the same verdict on a peer-served block records as before. A legacy block arrives
+// converted, its body verified against the header at the pipeline sink before anything was
+// written, so a corrupt verdict there is this node's own record or files; counting it would, after
+// MaxCorruptAttemptsPerBlock, hand netsync a corrupt error for a block nobody did anything wrong
+// with.
+func TestAccountCorruptAttempt_RecordsNothingForALegacyBlock(t *testing.T) {
+	u := newCorruptCapServer(t, 1)
+	h := chainhash.HashH([]byte("legacy-not-recorded"))
+
+	const legacyPeer = LegacyPeerIDPrefix + "1.2.3.4:8333"
+
+	u.accountCorruptAttempt(&h, legacyPeer, "legacy", errors.NewBlockCorruptError("a record this node wrote is corrupt"))
+	require.False(t, u.corruptAttemptsExhausted(&h, legacyPeer), "a legacy block's corrupt verdict must not count toward the cap")
+	require.Nil(t, u.blockCorruptAttempts.Get(ck(h, legacyPeer)), "nothing may be recorded for a legacy block")
+
+	u.accountCorruptAttempt(&h, legacyPeer, capTestBaseURL, errors.NewBlockCorruptError("corrupt body"))
+	require.True(t, u.corruptAttemptsExhausted(&h, legacyPeer), "the same verdict on a peer-served block records as before")
 }

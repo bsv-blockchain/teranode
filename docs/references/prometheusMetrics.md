@@ -208,6 +208,10 @@ CounterVec and HistogramVec metrics use labels: `peer_id`, `success`, `error_typ
 | `teranode_blockvalidation_fork_average_lifetime_seconds`     | Gauge        | Average lifetime of active forks in seconds                      |
 | `teranode_blockvalidation_queue_skip_count`                  | Histogram    | Number of times blocks were skipped before processing            |
 | `teranode_blockvalidation_queue_wait_seconds`                | Histogram    | Time blocks spend in queue before processing                     |
+| `teranode_blockvalidation_outpoint_only_blocks_total` | Counter | Blocks that entered the below-checkpoint outpoint-only fast path, counted once on entry; a block that later falls back to normal validation is still counted |
+| `teranode_blockvalidation_quick_commit_add_block_seconds` | Histogram | AddBlock duration in the quick-validation commit tail |
+| `teranode_blockvalidation_quick_commit_unlock_seconds` | Histogram | Unlock pass duration in the quick-validation commit tail |
+| `teranode_blockvalidation_quick_commit_block_exists_seconds` | Histogram | SetBlockExists duration in the quick-validation commit tail |
 
 ## P2P Service Metrics
 
@@ -233,7 +237,7 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_legacy_peer_server_OnProtoconf`  | Histogram | The time taken to handle OnProtoconf  |
 | `teranode_legacy_peer_server_OnMemPool`    | Histogram | The time taken to handle OnMemPool    |
 | `teranode_legacy_peer_server_OnTx`         | Histogram | The time taken to handle OnTx         |
-| `teranode_legacy_peer_server_OnBlock`      | Histogram | The time taken to handle OnBlock      |
+| `teranode_legacy_peer_server_OnBlockOnDisk` | Histogram | The time taken to hand a streamed block to the sync manager's queue |
 | `teranode_legacy_peer_server_OnInv`        | Histogram | The time taken to handle OnInv        |
 | `teranode_legacy_peer_server_OnHeaders`    | Histogram | The time taken to handle OnHeaders    |
 | `teranode_legacy_peer_server_OnGetData`    | Histogram | The time taken to handle OnGetData    |
@@ -251,27 +255,35 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 
 ## Legacy NetSync Service Metrics
 
-| Metric Name                                                 | Type      | Description                                               |
-|-------------------------------------------------------------|-----------|-----------------------------------------------------------|
-| `teranode_legacy_netsync_block_height`                      | Gauge     | The height of the block being processed                   |
-| `teranode_legacy_netsync_handle_tx_msg`                     | Histogram | The time taken to handle a tx message                     |
-| `teranode_legacy_netsync_handle_tx_msg_validate`            | Histogram | The time taken to validate a tx message                   |
-| `teranode_legacy_netsync_process_orphan_transactions`       | Histogram | The time taken to process orphan transactions             |
-| `teranode_legacy_netsync_handle_block_direct`               | Histogram | The time taken to handle a block directly                 |
-| `teranode_legacy_netsync_process_block`                     | Histogram | The time taken to process a block                         |
-| `teranode_legacy_netsync_prepare_subtrees`                  | Histogram | The time taken to prepare the subtrees                    |
-| `teranode_legacy_netsync_validate_transactions_legacy_mode` | Histogram | The time taken to validate transactions in legacy mode    |
-| `teranode_legacy_netsync_pre_validate_transactions`         | Histogram | The time taken to pre-validate transactions               |
-| `teranode_legacy_netsync_validate_transactions`             | Histogram | The time taken to validate transactions                   |
-| `teranode_legacy_netsync_extend_transactions`               | Histogram | The time taken to extend transactions                     |
-| `teranode_legacy_netsync_create_utxos`                      | Histogram | The time taken to create UTXOs                            |
-| `teranode_legacy_netsync_block_tx_size`                     | Histogram | The size of the transactions in the block being processed |
-| `teranode_legacy_netsync_block_tx_nr_inputs`                | Histogram | The number of inputs in the block being processed         |
-| `teranode_legacy_netsync_block_tx_nr_outputs`               | Histogram | The number of outputs in the block being processed        |
-| `teranode_legacy_netsync_block_tx_extend`                   | Histogram | The time taken to extend a transaction                    |
-| `teranode_legacy_netsync_block_tx_validate`                 | Histogram | The time taken to validate a transaction                  |
-| `teranode_legacy_netsync_orphans`                           | Gauge     | The number of orphan transactions                         |
-| `teranode_legacy_netsync_orphan_time`                       | Histogram | The time taken to process an orphan transaction           |
+The download gauges and the `download_*_total` counters are published from the 30-second download queue report, so they lag by up to 30 seconds and the counters move in steps.
+
+| Metric Name | Type | Description |
+|-------------|------|-------------|
+| `teranode_legacy_netsync_block_height` | Gauge | The height of the block being processed |
+| `teranode_legacy_netsync_handle_tx_msg` | Histogram | The time taken to handle a tx message |
+| `teranode_legacy_netsync_handle_tx_msg_validate` | Histogram | The time taken to validate a tx message |
+| `teranode_legacy_netsync_process_orphan_transactions` | Histogram | The time taken to process orphan transactions |
+| `teranode_legacy_netsync_handle_block_direct` | Histogram | The time taken to commit a converted block (HandleConvertedBlock); the name predates the converted-record route |
+| `teranode_legacy_netsync_process_block` | Histogram | The time taken to process a block |
+| `teranode_legacy_netsync_orphans` | Gauge | The number of orphan transactions |
+| `teranode_legacy_netsync_orphan_time` | Histogram | The time taken to process an orphan transaction |
+| `teranode_legacy_netsync_parked_blocks` | Gauge | The number of downloaded blocks held on disk waiting for their parent |
+| `teranode_legacy_netsync_parked_bytes` | Gauge | Bytes the park bills for the blocks it holds: a block parked off the wire at its wire size, a block recovered from disk after a restart at its converted record's size; `bytes_ahead` is what the backstop reads |
+| `teranode_legacy_netsync_frontier_races_total` | Counter | Blocks asked of a second peer because the chain was about to wait on them from a slow one |
+| `teranode_legacy_netsync_blocks_owed` | Gauge | Blocks asked of peers and not yet delivered, every peer together, including blocks arriving now |
+| `teranode_legacy_netsync_header_cache_heights` | Gauge | Heights the headers-first header cache names, the header run the download pass picks blocks from below the last checkpoint |
+| `teranode_legacy_netsync_bytes_ahead` | Gauge | Block bytes held ahead of the chain, parked plus arriving, which the download measures against `park_backstop_bytes` |
+| `teranode_legacy_netsync_park_backstop_bytes` | Gauge | The `bytes_ahead` figure at which no block further ahead is asked for until the chain catches up; a constant (100 GiB) |
+| `teranode_legacy_netsync_download_received_bytes_total` | Counter | Block body bytes read off the wire |
+| `teranode_legacy_netsync_download_duplicate_copies_drained_total` | Counter | Block copies drained unwritten because another copy of the same block was converting |
+| `teranode_legacy_netsync_download_duplicate_copies_converted_total` | Counter | Block copies converted in full for a block already parked |
+| `teranode_legacy_netsync_download_local_fault_copies_drained_total` | Counter | Block copies drained because this node failed to store the block; the peer was kept and the block asked for again |
+| `teranode_legacy_netsync_download_streams_cut_total` | Counter | Block bodies cut part way through |
+| `teranode_legacy_netsync_download_bytes_wasted_total` | Counter | Bytes of block bodies cut part way through and of every copy drained unwritten, duplicate or local fault |
+| `teranode_legacy_netsync_download_peers_dropped_owing_total` | Counter | Peers that left while still owing blocks |
+| `teranode_legacy_netsync_download_blocks_owed_at_drop_total` | Counter | Blocks the peers counted by `download_peers_dropped_owing_total` still owed when they left |
+| `teranode_legacy_netsync_download_blocks_reasked_total` | Counter | Blocks made askable of another peer because the peers owing them sent no block bytes for the retry window |
+| `teranode_legacy_netsync_park_dispositions_total` | CounterVec | Every disposition applied to a parked block, by the park policy row's name (label `disposition`): a commit, a read or commit failure, a record whose files are gone, and a sweep or recovery eviction. One series per row exists from start-up at zero |
 
 ## Propagation Service Metrics
 

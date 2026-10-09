@@ -107,16 +107,23 @@ func Pipe(addr1, addr2 net.Addr) (net.Conn, net.Conn) {
 // is used in the network addresses of the peers to create peers with unique
 // IPs.
 func MakeConnectedPeers(t *testing.T, inboundCfg peer.Config, outboundCfg peer.Config, index uint8) (*peer.Peer, *peer.Peer, error) {
+	conn1, conn2 := Pipe(
+		&SimpleAddr{net: "tcp", addr: fmt.Sprintf("10.0.0.%d:8333", index)},
+		&SimpleAddr{net: "tcp", addr: fmt.Sprintf("10.0.1.%d:8333", index)},
+	)
+
+	return makeConnectedPeersOn(t, inboundCfg, outboundCfg, conn1, conn2)
+}
+
+// makeConnectedPeersOn is MakeConnectedPeers over connections the caller built,
+// so a test can put something between a peer and its pipe: the inbound peer
+// reads and writes conn1, the outbound peer conn2.
+func makeConnectedPeersOn(t *testing.T, inboundCfg peer.Config, outboundCfg peer.Config, conn1, conn2 net.Conn) (*peer.Peer, *peer.Peer, error) {
 	// Must enable this in tests to avoid automatic disconnection.
 	inboundCfg.TstAllowSelfConnection = true
 	outboundCfg.TstAllowSelfConnection = true
 
 	tSettings := test.CreateBaseTestSettings(t)
-
-	conn1, conn2 := Pipe(
-		&SimpleAddr{net: "tcp", addr: fmt.Sprintf("10.0.0.%d:8333", index)},
-		&SimpleAddr{net: "tcp", addr: fmt.Sprintf("10.0.1.%d:8333", index)},
-	)
 
 	inboundPeer := peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &inboundCfg)
 	inboundPeer.AssociateConnection(conn1)

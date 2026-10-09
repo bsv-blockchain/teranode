@@ -247,7 +247,7 @@ func TestExtendTxFromSameBlockParents_NilOutput(t *testing.T) {
 	hash := *parent.TxIDChainHash()
 	parent.Outputs[0] = nil
 	require.NotPanics(t, func() {
-		_, err := extendTxFromSameBlockParents(child, map[chainhash.Hash]*bt.Tx{hash: parent})
+		_, _, err := extendTxFromSameBlockParents(child, map[chainhash.Hash]*bt.Tx{hash: parent})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "non-existent output")
 	})

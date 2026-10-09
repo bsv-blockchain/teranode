@@ -60,4 +60,8 @@ type Config struct {
 	// MinSyncPeerNetworkSpeed defines the minimum network speed (in bytes per second)
 	// required for a peer to be considered suitable for blockchain synchronization.
 	MinSyncPeerNetworkSpeed uint64
+
+	// DataDir is the legacy service's absolute data directory, where peers.json is. The sync
+	// manager keeps each peer address's download rate there (peerRatesFile). Empty keeps no rates.
+	DataDir string
 }

@@ -5056,7 +5056,7 @@ func (m *mockBlockValidationClient) BlockFound(ctx context.Context, blockHash *c
 	return nil
 }
 
-func (m *mockBlockValidationClient) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32) error {
+func (m *mockBlockValidationClient) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32, headerProven bool) error {
 	if m.processBlockFunc != nil {
 		return m.processBlockFunc(ctx, block, blockHeight)
 	}

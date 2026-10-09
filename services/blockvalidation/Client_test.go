@@ -329,11 +329,25 @@ func TestClient_ProcessBlock(t *testing.T) {
 	t.Run("successful process block", func(t *testing.T) {
 		mockClient.ExpectedCalls = nil
 		mockClient.On("ProcessBlock", ctx, mock.MatchedBy(func(req *blockvalidation_api.ProcessBlockRequest) bool {
-			return req.Height == 100 && len(req.Block) > 0
+			return req.Height == 100 && len(req.Block) > 0 && !req.HeaderProven
 		}), mock.Anything).Return(&blockvalidation_api.EmptyMessage{}, nil)
 
-		err := client.ProcessBlock(ctx, block, 100, "", "legacy", 0)
+		err := client.ProcessBlock(ctx, block, 100, "", "legacy", 0, false)
 		assert.NoError(t, err)
+		mockClient.AssertExpectations(t)
+	})
+
+	// The header proof travels as its own request field, because block.Bytes()
+	// does not carry it: a client that dropped it would deny every legacy block
+	// the below-checkpoint quick route silently.
+	t.Run("forwards header_proven", func(t *testing.T) {
+		mockClient.ExpectedCalls = nil
+		mockClient.On("ProcessBlock", ctx, mock.MatchedBy(func(req *blockvalidation_api.ProcessBlockRequest) bool {
+			return req.HeaderProven && req.BlockId == 7 && req.BaseUrl == "legacy"
+		}), mock.Anything).Return(&blockvalidation_api.EmptyMessage{}, nil)
+
+		err := client.ProcessBlock(ctx, block, 100, "", "legacy", 7, true)
+		require.NoError(t, err)
 		mockClient.AssertExpectations(t)
 	})
 
@@ -342,7 +356,7 @@ func TestClient_ProcessBlock(t *testing.T) {
 		mockClient.On("ProcessBlock", ctx, mock.Anything, mock.Anything).Return(
 			nil, status.Error(codes.Internal, "processing error"))
 
-		err := client.ProcessBlock(ctx, block, 100, "", "legacy", 0)
+		err := client.ProcessBlock(ctx, block, 100, "", "legacy", 0, false)
 		assert.Error(t, err)
 		mockClient.AssertExpectations(t)
 	})
@@ -356,7 +370,7 @@ func TestClient_ProcessBlock(t *testing.T) {
 			Header: nil, // This should cause serialization to fail
 		}
 
-		err := client.ProcessBlock(ctx, invalidBlock, 100, "", "legacy", 0)
+		err := client.ProcessBlock(ctx, invalidBlock, 100, "", "legacy", 0, false)
 		assert.Error(t, err)
 		mockClient.AssertExpectations(t)
 	})

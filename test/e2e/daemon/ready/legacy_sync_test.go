@@ -1776,7 +1776,7 @@ func TestFloatingBlock_SubmitToTeranodeFirst(t *testing.T) {
 	// tx) to the subtree store for validation to reach the transaction.
 	td.StoreSubtreeForBlock(t, []*bt.Tx{tx}, expectedHeight+1000)
 
-	err = td.BlockValidationClient.ProcessBlock(ctx, modelBlock, expectedHeight, "test", "", 0)
+	err = td.BlockValidationClient.ProcessBlock(ctx, modelBlock, expectedHeight, "test", "", 0, false)
 	require.NoError(t, err, "Teranode should accept the floating block")
 	t.Logf("Submitted floating block to Teranode at height %d", expectedHeight)
 

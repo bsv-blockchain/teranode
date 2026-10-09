@@ -4,6 +4,18 @@
 
 ## Configuration Settings
 
+The Default column is the loader fallback in `settings/settings.go`. A node uses
+it only when no configuration file sets the key. A node that runs on the
+repository configuration uses the base value in the committed `settings.conf`
+when that file sets the key, unless `settings_local.conf` or a context-specific
+key (`key.<context>`) sets another. `settings.conf` sets
+`blockvalidation_quick_validate_create_concurrency`,
+`blockvalidation_outpoint_only_below_checkpoint` and
+`blockvalidation_legacy_unified_below_checkpoint` to the same values as the
+loader (0, false and false), so for these keys the two agree. The
+`blockvalidation_isParentMined_retry_*` keys and
+`blockvalidation_catchup_prefetch_budget_bytes` have no line in `settings.conf`.
+
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
 | MaxRetries | int | 3 | blockValidationMaxRetries | General retry behavior |
@@ -32,7 +44,7 @@
 | MaxCorruptAttemptsPerBlock | int | 3 | blockvalidation_max_corrupt_attempts_per_block | Ban-score-independent per-(block hash, serving peerID) cap on corrupt re-downloads; also sizes the separate local-policy decline cap (0 disables, re-opening the DoS) |
 | CorruptAttemptCooldown | time.Duration | 10m | blockvalidation_corrupt_attempt_cooldown | Fixed cooldown window after which a capped (hash, peerID) is admitted again, for both caps |
 | IsParentMinedRetryMaxRetry | int | 45 | blockvalidation_isParentMined_retry_max_retry | Parent mining check retries |
-| IsParentMinedRetryBackoffMultiplier | int | 4 | blockvalidation_isParentMined_retry_backoff_multiplier | Parent mining retry backoff multiplier |
+| IsParentMinedRetryBackoffMultiplier | int | 4 | blockvalidation_isParentMined_retry_backoff_multiplier | Slope of the linear backoff between parent-mined retries: the wait before retry i, counting from 0, is (multiplier x i + 1) x base |
 | IsParentMinedRetryBackoffDuration | time.Duration | 20ms | blockvalidation_isParentMined_retry_backoff_duration | Parent mining retry backoff base duration |
 | SubtreeGroupConcurrency | int | 1 | blockvalidation_subtreeGroupConcurrency | Subtree group processing concurrency |
 | BlockFoundChBufferSize | int | 1000 | blockvalidation_blockFoundCh_buffer_size | Block discovery pipeline buffer |
@@ -74,6 +86,9 @@
 | CatchupMinThroughputKBps | int | 100 | blockvalidation_catchup_min_throughput_kbps | Minimum throughput (KB/s) before switching peers |
 | CatchupParallelFetchEnabled | bool | true | blockvalidation_catchup_parallel_fetch_enabled | Enable parallel fetching from multiple peers |
 | CatchupParallelFetchWorkers | int | 3 | blockvalidation_catchup_parallel_fetch_workers | Number of parallel fetch workers |
+| QuickValidateCreateConcurrency | int | 0 | blockvalidation_quick_validate_create_concurrency | Callers allowed in flight at once in each of quick validation's two creating waves (the one-wave apply and the chained create wave), so a batch can put up to twice this many on the store. 0 derives it as max(utxostore_storeBatcherSize x utxostore_batcherMaxConcurrent, utxostore_storeBatcherSize x 8) |
+| OutpointOnlyBelowCheckpoint | bool | false | blockvalidation_outpoint_only_below_checkpoint | Below the hardcoded checkpoint, quick validation spends by outpoint and skips parent reads, fees and the UTXO-hash checksum. Only on stores that support outpoint-only spends (SQL); Aerospike keeps reading parent outputs |
+| LegacyUnifiedBelowCheckpoint | bool | false | blockvalidation_legacy_unified_below_checkpoint | Legacy below-checkpoint blocks are quick-validated through the native catchup path's machinery instead of fully validated. Requires the setting above, a store that supports outpoint-only spends and a header run proven to end at a pinned checkpoint; legacy and block validation must agree on both settings. Off, every legacy block is fully validated |
 
 ## Configuration Dependencies
 

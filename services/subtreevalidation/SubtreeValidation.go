@@ -915,8 +915,9 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	// only set this on no errors
 	prometheusSubtreeValidationValidateSubtreeDuration.Observe(float64(time.Since(startTotal).Microseconds()) / 1_000_000)
 
-	// Increase peer's reputation for providing a valid subtree
-	if u.p2pClient != nil && v.PeerID != "" {
+	// Increase peer's reputation for providing a valid subtree, never a legacy peer's: see
+	// reportsValidSubtreeTo.
+	if u.p2pClient != nil && reportsValidSubtreeTo(v.PeerID) {
 		if err := u.p2pClient.ReportValidSubtree(ctx, v.PeerID, v.SubtreeHash.String()); err != nil {
 			u.logger.Warnf("[ValidateSubtreeInternal][%s] failed to report valid subtree to peer %s: %v", v.SubtreeHash.String(), v.PeerID, err)
 		}
@@ -1475,7 +1476,16 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 									fileformat.FileTypeSubtreeData,
 									subtreeDataBytes,
 									options.WithDeleteAt(dah),
-								); subtreeDataErr != nil {
+								); subtreeDataErr != nil && errors.Is(subtreeDataErr, errors.ErrBlobAlreadyExists) {
+									// Between the Exists check above and this Set a whole subtree_data fetch
+									// went by, and another writer of this key (processSubtreeDataStream for a
+									// sibling block, the block persister, the asset service's on-demand
+									// writer) published first, so the store refused this Set. Their file
+									// holds this subtree's transactions, so it is read below like a file
+									// found at the Exists check; the per-transaction fallback is not taken.
+									u.logger.Infof("[validateSubtree][%s] subtree data from %s was published by another writer first; reading theirs", subtreeHash.String(), url)
+									subtreeDataExists = true
+								} else if subtreeDataErr != nil {
 									u.logger.Errorf("[validateSubtree][%s] failed to store subtree data: %v", subtreeHash.String(), subtreeDataErr)
 								} else {
 									u.logger.Infof("[validateSubtree][%s] stored subtree data from %s", subtreeHash.String(), url)

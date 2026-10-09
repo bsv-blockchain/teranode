@@ -12,6 +12,7 @@ var (
 	ErrBlobError                  = New(ERR_BLOB_ERROR, "blob error")
 	ErrBlobNotFound               = New(ERR_BLOB_NOT_FOUND, "blob not found")
 	ErrBlockAssemblyReset         = New(ERR_BLOCK_ASSEMBLY_RESET, "block assembly reset")
+	ErrBlockBodyMismatch          = New(ERR_BLOCK_BODY_MISMATCH, "the body is not the body its header commits to")
 	ErrBlockCoinbaseMissingHeight = New(ERR_BLOCK_COINBASE_MISSING_HEIGHT, "the coinbase signature script doesn't have the block height")
 	ErrBlockCorrupt               = New(ERR_BLOCK_CORRUPT, "block corrupt")
 	ErrBlockPolicyDeclined        = New(ERR_BLOCK_POLICY_DECLINED, "block declined by local policy")
@@ -284,6 +285,29 @@ func sanitizeCorruptParams(params []interface{}) []interface{} {
 // the trap ERR_BLOCK_CORRUPT fell into and needed an early-out for.
 func NewBlockPolicyDeclinedError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_POLICY_DECLINED, message, params...)
+}
+
+// IsBlockBodyMismatch reports whether err carries ERR_BLOCK_BODY_MISMATCH anywhere
+// in its chain: a block body that was read to its declared end and cannot be the
+// block its header names (wrong merkle root, duplicate transaction, no coinbase).
+//
+// The code is a marker, not a verdict of its own. The sites that raise it (the
+// legacy pipeline sink and its stream builder and transaction stream,
+// services/legacy/netsync) wrap ErrBlockBodyMismatch inside their
+// NewBlockInvalidError, so the outermost code stays ERR_BLOCK_INVALID and every
+// reader of that verdict is unchanged; this marker is what lets the legacy peer
+// server tell those three refusals, which SV Node scores DoS(100), from every
+// other invalid verdict, which it does not ban for. A delivery that ended early
+// never carries it: those sites judge only a body that parsed to its end. The
+// marker alone is not grounds for a ban: SV Node scores those three only after
+// the message checksum passed, and the legacy streaming path cannot check that
+// checksum yet (peer.BlockBodyRejectedError.ProvenBad).
+func IsBlockBodyMismatch(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return Is(err, ErrBlockBodyMismatch)
 }
 
 // IsBlockCorrupt reports whether err (or anything it wraps, including across a gRPC
