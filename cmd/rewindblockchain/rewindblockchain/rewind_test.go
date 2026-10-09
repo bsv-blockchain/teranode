@@ -18,6 +18,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
@@ -1514,6 +1515,11 @@ func newFileStoreSettings(t *testing.T, subtreeQuery string) (*settings.Settings
 	require.NoError(t, err)
 	tSettings.SubtreeValidation.SubtreeStore = subtreeURL
 
+	// resolveStores also opens the block store; keep it out of the package dir.
+	blockURL, err := url.Parse("file://" + t.TempDir())
+	require.NoError(t, err)
+	tSettings.Block.BlockStore = blockURL
+
 	return tSettings, subtreeURL
 }
 
@@ -1668,4 +1674,165 @@ func TestNewSubtreeStore_RejectsNilURL(t *testing.T) {
 	_, err := newSubtreeStore(logger(), tSettings)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not configured")
+}
+
+// writeLastProcessed stores the UTXO persister's marker the way the persister
+// does (services/utxopersister/Server.go): nil key, LastProcessedFilename, no
+// hash prefix.
+func writeLastProcessed(t *testing.T, ctx context.Context, store blob.Store, height string) {
+	t.Helper()
+	require.NoError(t, store.Set(ctx, nil, fileformat.FileTypeDat, []byte(height),
+		options.WithFilename(utxopersister.LastProcessedFilename), options.WithNoHashPrefix(),
+		options.WithAllowOverwrite(true)))
+}
+
+func lastProcessedExists(t *testing.T, ctx context.Context, store blob.Store) bool {
+	t.Helper()
+	exists, err := store.Exists(ctx, nil, fileformat.FileTypeDat,
+		options.WithFilename(utxopersister.LastProcessedFilename), options.WithNoHashPrefix())
+	require.NoError(t, err)
+
+	return exists
+}
+
+// #1353: Phase 3 must delete the marker where the persister wrote it. It used
+// to address the subtree store as lastProcessed.dat.dat, so it never deleted
+// anything and the persister resumed from the pre-rewind height.
+func TestRewind_DeletesUTXOPersisterMarker(t *testing.T) {
+	// The marker is only stale when it sits above the rewind target. A marker at
+	// or below the target still matches the blocks the rewind kept and must
+	// survive, or the persister rebuilds from genesis for no reason.
+	cases := []struct {
+		name        string
+		markerValue string
+		wantDeleted bool
+	}{
+		{"marker above target is deleted", "100", true},
+		{"marker at target is kept", "4", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+			blockStore := memory.New()
+
+			bits, err := model.NewNBitFromString("207fffff")
+			require.NoError(t, err)
+
+			blocks := buildLinearChain(t, ctx, bcStore, 4, bits, tSettings.ChainCfgParams.GenesisHash)
+			require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+			require.NoError(t, setBlockAssemblerState(ctx, bcStore, 4, blocks[3].Header))
+
+			writeLastProcessed(t, ctx, blockStore, tc.markerValue)
+			// A marker-shaped blob in the subtree store must be left alone.
+			writeLastProcessed(t, ctx, subtreeStore, tc.markerValue)
+
+			_, err = Rewind(ctx, logger(), tSettings, Options{
+				TargetHeight: 4,
+				AssumeYes:    true,
+				Stores: &Stores{
+					Blockchain: bcStore,
+					UTXO:       utxoStore,
+					Subtree:    subtreeStore,
+					Block:      blockStore,
+				},
+			})
+			require.NoError(t, err)
+
+			if tc.wantDeleted {
+				require.False(t, lastProcessedExists(t, ctx, blockStore),
+					"Phase 3 must delete a marker above the target from the block store")
+			} else {
+				require.True(t, lastProcessedExists(t, ctx, blockStore),
+					"Phase 3 must keep a marker at/below the target")
+			}
+			require.True(t, lastProcessedExists(t, ctx, subtreeStore),
+				"Phase 3 must not touch the subtree store for this marker")
+		})
+	}
+}
+
+// The production path: the store resolveStores opens must address the same file
+// the node's persister wrote under the configured blockstore directory.
+func TestResolveStores_BlockStoreDeletesTheMarkerThePersisterWrote(t *testing.T) {
+	ctx := context.Background()
+	tSettings, _ := newFileStoreSettings(t, "")
+	blockDir := tSettings.Block.BlockStore.Path
+
+	// Written through a store opened the way the daemon opens the block store
+	// (daemon/daemon_stores.go GetBlockStore: default hashPrefix -2).
+	nodeStore, err := blob.NewStore(logger(), tSettings.Block.BlockStore, options.WithHashPrefix(-2))
+	require.NoError(t, err)
+	writeLastProcessed(t, ctx, nodeStore, "123")
+
+	markerPath := filepath.Join(blockDir, "lastProcessed.dat")
+	require.FileExists(t, markerPath, "fixture: the persister's marker is <blockstore>/lastProcessed.dat")
+
+	stores, _, err := resolveStores(ctx, logger(), tSettings, Options{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, stores.Subtree.Close(ctx))
+		require.NoError(t, stores.Block.Close(ctx))
+	})
+
+	e := &env{logger: logger(), blockStore: stores.Block}
+	// Marker 123 is above the target, so it is deleted.
+	pf := &preflightResult{target: 4}
+	require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, pf))
+	require.NoFileExists(t, markerPath)
+
+	// A second run finds nothing to delete and is still not an error.
+	require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, pf))
+}
+
+// Opening the block store is best-effort: without it the rewind still runs and
+// only the marker delete is skipped.
+func TestResolveStores_UnopenableBlockStoreIsNotFatal(t *testing.T) {
+	ctx := context.Background()
+	tSettings, _ := newFileStoreSettings(t, "")
+	tSettings.Block.BlockStore = nil
+
+	stores, _, err := resolveStores(ctx, logger(), tSettings, Options{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, stores.Subtree.Close(ctx)) })
+	require.Nil(t, stores.Block)
+
+	e := &env{logger: logger(), blockStore: stores.Block}
+	require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, &preflightResult{target: 4}))
+}
+
+// The log is what the operator relies on, and Del succeeds for a missing file
+// on every backend, so "deleted" must only be reported when a marker existed.
+func TestDeleteUTXOPersisterLastProcessed_LogsWhatHappened(t *testing.T) {
+	ctx := context.Background()
+	blockStore := memory.New()
+
+	// Nothing there: Del succeeds for a missing file on every backend, so
+	// "deleted" must not be reported, and nothing is logged at Warn.
+	log := &capturingLogger{}
+	e := &env{logger: log, blockStore: blockStore}
+	require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, &preflightResult{target: 4}))
+	require.NotContains(t, log.warnText(), "deleted the utxo-persister lastProcessed marker",
+		"nothing was there, so nothing may be reported as deleted")
+	require.Empty(t, log.warnText())
+
+	// Marker at/below the target is kept, quietly, at Info.
+	writeLastProcessed(t, ctx, blockStore, "4")
+	log = &capturingLogger{}
+	e = &env{logger: log, blockStore: blockStore}
+	require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, &preflightResult{target: 4}))
+	require.True(t, lastProcessedExists(t, ctx, blockStore), "a marker at/below the target is kept")
+	require.Contains(t, log.infoText(), "leaving it untouched")
+	require.Empty(t, log.warnText())
+
+	// Marker above the target is deleted, reported at Warn, and the operator is
+	// told it means a rebuild from genesis.
+	writeLastProcessed(t, ctx, blockStore, "7")
+	log = &capturingLogger{}
+	e = &env{logger: log, blockStore: blockStore}
+	require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, &preflightResult{target: 4}))
+	require.False(t, lastProcessedExists(t, ctx, blockStore))
+	require.Contains(t, log.warnText(), "deleted the utxo-persister lastProcessed marker")
+	require.Contains(t, log.warnText(), "genesis")
 }

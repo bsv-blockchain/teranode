@@ -29,13 +29,16 @@ type Stats struct {
 	Duration               time.Duration
 }
 
-// Stores bundles the three backend stores used by Rewind. Tests can pass
+// Stores bundles the backend stores used by Rewind. Tests can pass
 // pre-constructed stores via Options.Stores; production callers leave it nil
 // and Rewind opens stores from settings.
 type Stores struct {
 	Blockchain blockchain.Store
 	UTXO       utxo.Store
 	Subtree    blob.Store
+	// Block is where the UTXO persister keeps its lastProcessed marker, which
+	// Phase 3 deletes. Optional when Stores is supplied: nil skips the delete.
+	Block blob.Store
 }
 
 // Rewind executes all four phases.
@@ -63,6 +66,7 @@ func Rewind(ctx context.Context, logger ulogger.Logger, s *settings.Settings, op
 		blockchainStore: stores.Blockchain,
 		utxoStore:       stores.UTXO,
 		subtreeStore:    stores.Subtree,
+		blockStore:      stores.Block,
 		opts:            opts,
 		stats:           stats,
 		concurrency:     concurrency,
@@ -147,11 +151,38 @@ func resolveStores(ctx context.Context, logger ulogger.Logger, s *settings.Setti
 		return nil, false, err
 	}
 
+	// Best-effort, like the delete it serves: a block store the tool cannot
+	// open must not stop a rewind that does not otherwise need it.
+	blockStore, err := newBlockStore(logger, s)
+	if err != nil {
+		logger.Warnf("could not open the block store, so the utxo-persister lastProcessed marker will not be deleted (delete <blockstore>/lastProcessed.dat by hand): %v", err)
+		blockStore = nil
+	}
+
 	return &Stores{
 		Blockchain: blockchainStore,
 		UTXO:       utxoStore,
 		Subtree:    subtreeStore,
+		Block:      blockStore,
 	}, true, nil
+}
+
+// newBlockStore opens the block blob store at the node's configured URL. The
+// tool only uses it for the UTXO persister's lastProcessed marker, which is
+// read and written with options.WithNoHashPrefix(), so the hashPrefix the node
+// applies to block files does not affect it; the daemon's block-height tracker
+// and deletion scheduler are not needed while the node is stopped.
+func newBlockStore(logger ulogger.Logger, s *settings.Settings) (blob.Store, error) {
+	if s.Block.BlockStore == nil {
+		return nil, errors.NewConfigurationError("blockstore config not found")
+	}
+
+	blockStore, err := blob.NewStore(logger, s.Block.BlockStore)
+	if err != nil {
+		return nil, errors.NewConfigurationError("failed to open block store", err)
+	}
+
+	return blockStore, nil
 }
 
 // defaultSubtreeHashPrefix matches daemon.GetSubtreeStore's default
@@ -224,6 +255,7 @@ type env struct {
 	blockchainStore blockchain.Store
 	utxoStore       utxo.Store
 	subtreeStore    blob.Store
+	blockStore      blob.Store
 	opts            Options
 	stats           *Stats
 	concurrency     int
