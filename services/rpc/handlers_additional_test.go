@@ -6111,6 +6111,9 @@ func (m *mockBlockAssemblyClient) Health(ctx context.Context, checkLiveness bool
 func (m *mockBlockAssemblyClient) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints) (bool, error) {
 	return true, nil
 }
+func (m *mockBlockAssemblyClient) StoreBatch(_ context.Context, _ []blockassembly.BatchItem) error {
+	return nil
+}
 func (m *mockBlockAssemblyClient) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
