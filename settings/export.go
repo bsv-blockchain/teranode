@@ -129,6 +129,19 @@ func extractFields(typ reflect.Type, path []int, entries *[]metadataEntry) {
 			continue
 		}
 
+		// A struct-typed field carrying a key tag is a settings GROUP (e.g.
+		// blockchain_postgres_pool), not a settable setting: gocore reads only
+		// scalars, so the key can never be read, and advertising it would offer
+		// operators a key that does nothing. Recursing instead would export the
+		// group's shared child tags (postgres_*) once per instance, under keys
+		// that cannot set the values shown (the real per-service keys are read
+		// by getPostgresPoolSettings, e.g. blockchain_postgres_maxOpenConns).
+		// Skip the group entirely; its children are exported from the unkeyed
+		// global instance of the same type.
+		if isSettingsGroup(field.Type) {
+			continue
+		}
+
 		// Extract all metadata from tags
 		entry := metadataEntry{
 			FieldName:       field.Name,
@@ -150,6 +163,25 @@ func extractFields(typ reflect.Type, path []int, entries *[]metadataEntry) {
 
 		*entries = append(*entries, entry)
 	}
+}
+
+// isSettingsGroup reports whether t is a struct type containing key-tagged
+// fields — the signature of a nested settings group such as *PostgresSettings.
+// Leaf structs used as single setting values (url.URL, chaincfg.Params) contain
+// no key-tagged fields and return false, so they are still exported normally.
+func isSettingsGroup(t reflect.Type) bool {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return false
+	}
+	for i := 0; i < t.NumField(); i++ {
+		if key := t.Field(i).Tag.Get("key"); key != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // fieldNameToDisplayName returns the field name as-is for the display name.

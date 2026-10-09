@@ -82,47 +82,18 @@ func TestSubtreeMmapDir_DefaultEmpty(t *testing.T) {
 		"default must be empty so heap-allocated Nodes stay the default behaviour")
 }
 
-// knownDeadKeys are settings that are declared on Settings (and therefore
-// advertised to operators by ExportMetadata) but never read by NewSettings, so
-// configuring them does nothing at all. They are recorded here rather than
-// fixed because each needs its own judgement — some may be deliberately
-// retired, others are live bugs. blockassembly_txMapDirs was one of these until
-// it cost ~100 GB of block-assembly heap per node on dev-ovh-1.
-//
-// blockassembly_subtreeMmapDir and blockvalidation_subtreeMmapDir -- the subtree
-// half of the same mmap feature -- were on this list and are now wired up.
-//
-// This list must only ever shrink. Delete an entry when you wire the key up.
-var knownDeadKeys = map[string]struct{}{
-	"postgres_circuitBreakerEnabled":               {},
-	"postgres_circuitBreakerFailureThreshold":      {},
-	"postgres_circuitBreakerHalfOpenMax":           {},
-	"postgres_circuitBreakerCooldown":              {},
-	"postgres_circuitBreakerFailureWindow":         {},
-	"aerospike_enable_preserve_filter_expressions": {},
-	"blockchain_postgres_pool":                     {},
-	"blockchain_raw_miner_tag":                     {},
-	"blockchain_subscription_timeout":              {},
-	"blockchain_peerRegistryStore":                 {},
-	"blockchain_peerRegistrySaveInterval":          {},
-	"utxostore_postgres_pool":                      {},
-	"p2p_peer_map_max_size":                        {},
-	"p2p_peer_map_ttl":                             {},
-	"p2p_peer_map_cleanup_interval":                {},
-	"p2p_peer_registry_max_size":                   {},
-	"p2p_peer_registry_ttl":                        {},
-	"p2p_peer_registry_cleanup_interval":           {},
-	"legacy_upnp":                                  {},
-	"pruner_skipDuringCatchup":                     {},
-	"pruner_force_ignore_block_persister_height":   {},
-}
-
 // Guard against the whole class of bug rather than this one instance: every
 // field carrying a `key:"..."` struct tag is advertised to operators as
 // configurable, so every such key must actually be read somewhere in the
 // settings package. A tag with no corresponding lookup is a setting that
 // silently does nothing — which is strictly worse than not offering it, because
 // operators configure it, observe no effect, and go hunting elsewhere.
+//
+// This check once parked unfixable keys in a knownDeadKeys allowlist (added
+// with this test in #1803, emptied by #1811). The allowlist is gone: a scalar
+// key is either wired up or its tag is deleted, and a struct-typed key is a
+// settings group (see isSettingsGroup in export.go), which neither export nor
+// this check treats as a setting.
 func TestNoNewDeadSettingKeys(t *testing.T) {
 	src, err := readSettingsPackageSource()
 	require.NoError(t, err)
@@ -134,10 +105,6 @@ func TestNoNewDeadSettingKeys(t *testing.T) {
 		// `key:"..."` struct tag that declared it. Searching for the bare
 		// quoted key matches the tag itself and makes this test vacuous.
 		if strings.Contains(src, `("`+key+`"`) {
-			continue
-		}
-
-		if _, known := knownDeadKeys[key]; known {
 			continue
 		}
 
@@ -175,7 +142,10 @@ func readSettingsPackageSource() (string, error) {
 }
 
 // collectKeyTags walks Settings (including nested and pointer-to-struct fields)
-// and returns every `key:"..."` tag value.
+// and returns every `key:"..."` tag value that names a settable setting.
+// Struct-typed keys are settings groups (isSettingsGroup): they are not
+// exported as settings and cannot be read as scalars, so they are not
+// collected here — their child fields still are.
 func collectKeyTags(typ reflect.Type, seen map[reflect.Type]bool) []string {
 	for typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
@@ -192,7 +162,7 @@ func collectKeyTags(typ reflect.Type, seen map[reflect.Type]bool) []string {
 	for i := 0; i < typ.NumField(); i++ {
 		field := typ.Field(i)
 
-		if key, ok := field.Tag.Lookup("key"); ok && key != "" {
+		if key, ok := field.Tag.Lookup("key"); ok && key != "" && !isSettingsGroup(field.Type) {
 			keys = append(keys, key)
 		}
 
