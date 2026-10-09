@@ -150,9 +150,14 @@ func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		if strings.HasPrefix(addr, ":") {
 			addr = "localhost" + addr
 		}
+		// Probe the static liveness route, not /health. /health runs this very
+		// dependency inventory, so pointing the check at it makes a degraded
+		// store mark the HTTP server itself unhealthy once /health propagates
+		// the computed 503, and makes every readiness poll re-run the
+		// dependency checks through an extra HTTP hop.
 		checks = append(checks, health.Check{
 			Name:  "HTTP Server",
-			Check: health.CheckHTTPServer(fmt.Sprintf("http://%s", addr), "/health"),
+			Check: health.CheckHTTPServer(fmt.Sprintf("http://%s", addr), "/alive"),
 		})
 	}
 
