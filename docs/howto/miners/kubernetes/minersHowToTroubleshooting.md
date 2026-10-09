@@ -1,6 +1,6 @@
 # How to Troubleshoot Teranode (Kubernetes Operator)
 
-Last modified: 6-March-2025
+Last modified: 21-October-2025
 
 ## Index
 
