@@ -29,7 +29,9 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/testdata"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/validator"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -117,6 +119,25 @@ func testBlockIdent(block *bsvutil.Block) blockIdent {
 		height:    uint32(block.Height()), //nolint:gosec // test helper, heights are small
 		timestamp: block.MsgBlock().Header.Timestamp,
 	}
+}
+
+// newTestChainClient returns a blockchain client over a real sqlitememory blockchain
+// store holding only the genesis block, and the genesis hash. Genesis is the best
+// block, so a block whose PrevBlock is that hash extends the best chain.
+func newTestChainClient(t *testing.T, tSettings *settings.Settings) (blockchain.ClientI, chainhash.Hash) {
+	t.Helper()
+
+	store, err := blockchainstore.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close(context.Background()) })
+
+	client, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, store, nil, nil)
+	require.NoError(t, err)
+
+	best, _, err := client.GetBestBlockHeader(context.Background())
+	require.NoError(t, err)
+
+	return client, *best.Hash()
 }
 
 func TestSyncManager_createTxMap(t *testing.T) {
@@ -1065,16 +1086,21 @@ func TestSyncManager_createUtxos_MergesBlockIDsForExistingTxs(t *testing.T) {
 
 	// Wire up a SyncManager just enough for createUtxos. createUtxos only
 	// touches utxoStore, settings, logger and the txMap — no need for full DI.
+	// The merge stamp also asks the blockchain store for the best block; this block's
+	// parent is genesis, the only block there, so it extends the best chain.
+	chainClient, genesisHash := newTestChainClient(t, tSettings)
+
 	sm := &SyncManager{
-		settings:  tSettings,
-		logger:    logger,
-		utxoStore: utxoStore,
+		settings:         tSettings,
+		logger:           logger,
+		utxoStore:        utxoStore,
+		blockchainClient: chainClient,
 	}
 
 	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](1)
 	txMap.Set(txHash, &TxMapWrapper{Tx: tx})
 
-	block := bsvutil.NewBlock(&wire.MsgBlock{Header: wire.BlockHeader{Version: 1}})
+	block := bsvutil.NewBlock(&wire.MsgBlock{Header: wire.BlockHeader{Version: 1, PrevBlock: genesisHash}})
 	block.SetHeight(100)
 
 	const expectedBlockID uint32 = 42
@@ -1084,6 +1110,201 @@ func TestSyncManager_createUtxos_MergesBlockIDsForExistingTxs(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, post.BlockIDs, expectedBlockID,
 		"createUtxos must merge blockID %d into the pre-existing tx", expectedBlockID)
+}
+
+// TestSyncManager_createUtxos_StampsLongestChainFromBestBlock covers the OnLongestChain
+// flag createUtxos stamps on transactions that were already in the UTXO store. It used to
+// be hard-coded true, which told the store that a transaction mined only by a losing block
+// was settled on the main chain.
+//
+// Both the UTXO store and the blockchain store are real sqlitememory stores, so the
+// assertions read the effect the flag has on the SQL store: true clears the transaction's
+// unmined_since, false leaves it set. Each transaction is created unmined first, the way
+// one that arrived by propagation before its block would be, so unmined_since starts set.
+func TestSyncManager_createUtxos_StampsLongestChainFromBestBlock(t *testing.T) {
+	const preCreateHeight = uint32(100)
+
+	newFixture := func(t *testing.T) (context.Context, *SyncManager, *utxosql.Store, blockchain.ClientI, chainhash.Hash) {
+		t.Helper()
+
+		ctx := context.Background()
+		tSettings := test.CreateBaseTestSettings(t)
+
+		storeURL, err := url.Parse("sqlitememory:///test_create_utxos_longest_chain")
+		require.NoError(t, err)
+
+		utxoStore, err := utxosql.New(ctx, ulogger.TestLogger{}, tSettings, storeURL)
+		require.NoError(t, err)
+
+		chainClient, genesisHash := newTestChainClient(t, tSettings)
+
+		sm := &SyncManager{
+			settings:         tSettings,
+			logger:           ulogger.TestLogger{},
+			utxoStore:        utxoStore,
+			blockchainClient: chainClient,
+		}
+
+		return ctx, sm, utxoStore, chainClient, genesisHash
+	}
+
+	// preExistingTx creates a transaction in the UTXO store with no block, and returns a
+	// txMap holding it, so createUtxos finds it already there and stamps it.
+	preExistingTx := func(t *testing.T, ctx context.Context, utxoStore *utxosql.Store, satoshis uint64) (chainhash.Hash, *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper]) {
+		t.Helper()
+
+		tx := bt.NewTx()
+		tx.Version = 1
+		require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", satoshis))
+		txHash := *tx.TxIDChainHash()
+
+		_, err := utxoStore.Create(ctx, tx, preCreateHeight)
+		require.NoError(t, err)
+
+		pre, err := utxoStore.Get(ctx, &txHash, fields.BlockIDs, fields.UnminedSince)
+		require.NoError(t, err)
+		require.Empty(t, pre.BlockIDs)
+		require.Equal(t, preCreateHeight, pre.UnminedSince, "the transaction must start unmined")
+
+		txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](1)
+		txMap.Set(txHash, &TxMapWrapper{Tx: tx})
+
+		return txHash, txMap
+	}
+
+	t.Run("parent is the best block: stamped on the longest chain", func(t *testing.T) {
+		ctx, sm, utxoStore, chainClient, genesisHash := newFixture(t)
+		txHash, txMap := preExistingTx(t, ctx, utxoStore, 1000)
+
+		blockHash := chainhash.HashH([]byte("block extending genesis"))
+
+		// The block being applied is not in the blockchain store: createUtxos runs before
+		// AddBlock. Only its parent can answer which chain it is on.
+		exists, err := chainClient.GetBlockExists(ctx, &blockHash)
+		require.NoError(t, err)
+		require.False(t, exists)
+
+		const blockID = uint32(42)
+
+		bi := blockIdent{hash: blockHash, prevBlock: genesisHash, height: 1}
+		require.NoError(t, sm.createUtxos(ctx, txMap, bi, blockID, false))
+
+		post, err := utxoStore.Get(ctx, &txHash, fields.BlockIDs, fields.UnminedSince)
+		require.NoError(t, err)
+		require.Contains(t, post.BlockIDs, blockID)
+		require.Zero(t, post.UnminedSince, "a block extending the best block settles its transactions on the main chain")
+	})
+
+	t.Run("same-height sibling arriving after the winner: not on the longest chain", func(t *testing.T) {
+		ctx, sm, utxoStore, chainClient, genesisHash := newFixture(t)
+
+		// The winner at height 1 is applied first and becomes the best block.
+		addWinner(t, ctx, chainClient, genesisHash)
+
+		// The sibling shares the winner's parent, which is still on the current chain, so
+		// a parent-is-on-the-chain test would wrongly answer true for it.
+		txHash, txMap := preExistingTx(t, ctx, utxoStore, 2000)
+
+		const siblingBlockID = uint32(43)
+
+		bi := blockIdent{hash: chainhash.HashH([]byte("sibling at height 1")), prevBlock: genesisHash, height: 1}
+		require.NoError(t, sm.createUtxos(ctx, txMap, bi, siblingBlockID, false))
+
+		post, err := utxoStore.Get(ctx, &txHash, fields.BlockIDs, fields.UnminedSince)
+		require.NoError(t, err)
+		require.Contains(t, post.BlockIDs, siblingBlockID, "the sibling is still recorded as a block that mined the transaction")
+		require.Equal(t, preCreateHeight, post.UnminedSince,
+			"a losing sibling must not settle its transactions on the main chain")
+	})
+
+	t.Run("transaction the winner already settled stays settled when the sibling stamps false", func(t *testing.T) {
+		ctx, sm, utxoStore, chainClient, genesisHash := newFixture(t)
+
+		// Competing blocks usually share most of their transactions. The winner is applied
+		// first, while genesis is still the best block, so it settles the shared one.
+		txHash, txMap := preExistingTx(t, ctx, utxoStore, 4000)
+
+		const (
+			winnerBlockID  = uint32(42)
+			siblingBlockID = uint32(43)
+		)
+
+		winnerBi := blockIdent{hash: chainhash.HashH([]byte("winner at height 1")), prevBlock: genesisHash, height: 1}
+		require.NoError(t, sm.createUtxos(ctx, txMap, winnerBi, winnerBlockID, false))
+
+		settled, err := utxoStore.Get(ctx, &txHash, fields.UnminedSince)
+		require.NoError(t, err)
+		require.Zero(t, settled.UnminedSince, "precondition: the winner settled the transaction")
+
+		addWinner(t, ctx, chainClient, genesisHash)
+
+		// The sibling stamps false. False must leave the winner's settlement alone rather
+		// than mark the transaction unmined again.
+		siblingBi := blockIdent{hash: chainhash.HashH([]byte("sibling at height 1")), prevBlock: genesisHash, height: 1}
+		require.NoError(t, sm.createUtxos(ctx, txMap, siblingBi, siblingBlockID, false))
+
+		post, err := utxoStore.Get(ctx, &txHash, fields.BlockIDs, fields.UnminedSince)
+		require.NoError(t, err)
+		require.ElementsMatch(t, []uint32{winnerBlockID, siblingBlockID}, post.BlockIDs)
+		require.Zero(t, post.UnminedSince, "the sibling's false stamp must not un-settle a transaction the winner mined")
+	})
+
+	t.Run("best block cannot be read: the block fails and nothing is stamped", func(t *testing.T) {
+		ctx, sm, utxoStore, _, genesisHash := newFixture(t)
+		txHash, txMap := preExistingTx(t, ctx, utxoStore, 3000)
+
+		// Wrap the real client so only GetBestBlockHeader fails.
+		sm.blockchainClient = failingBestBlockClient{ClientI: sm.blockchainClient}
+
+		bi := blockIdent{hash: chainhash.HashH([]byte("block extending genesis")), prevBlock: genesisHash, height: 1}
+		require.Error(t, sm.createUtxos(ctx, txMap, bi, 44, false))
+
+		post, err := utxoStore.Get(ctx, &txHash, fields.BlockIDs, fields.UnminedSince)
+		require.NoError(t, err)
+		require.Empty(t, post.BlockIDs, "no stamp may be written on a guess")
+		require.Equal(t, preCreateHeight, post.UnminedSince)
+	})
+}
+
+// failingBestBlockClient wraps a real blockchain client and fails only
+// GetBestBlockHeader, for the case where the best block cannot be read.
+type failingBestBlockClient struct {
+	blockchain.ClientI
+}
+
+func (failingBestBlockClient) GetBestBlockHeader(context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return nil, nil, errors.NewServiceError("blockchain unavailable")
+}
+
+// addWinner adds a block at height 1 on genesis to the blockchain store and checks it
+// became the best block. A same-height sibling arriving after it shares its parent but
+// does not extend the best block.
+func addWinner(t *testing.T, ctx context.Context, chainClient blockchain.ClientI, genesisHash chainhash.Hash) {
+	t.Helper()
+
+	coinbase, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030100002f6d312d65752f29c267ffea1adb87f33b398fffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+	require.NoError(t, err)
+
+	bits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+
+	winner := &model.Block{
+		Header: &model.BlockHeader{
+			Version:        1,
+			Timestamp:      1729259727,
+			HashPrevBlock:  &genesisHash,
+			HashMerkleRoot: coinbase.TxIDChainHash(),
+			Bits:           *bits,
+		},
+		Height:           1,
+		CoinbaseTx:       coinbase,
+		TransactionCount: 1,
+	}
+	require.NoError(t, chainClient.AddBlock(ctx, winner, "test"))
+
+	best, _, err := chainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	require.Equal(t, *winner.Hash(), *best.Hash(), "precondition: the winner is the best block")
 }
 
 // newChunkingTestSetup builds the boilerplate shared by the createUtxos chunking
@@ -1123,10 +1344,16 @@ func newChunkingTestSetup(t *testing.T, totalTxs, batchSize, routines int) (
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 	).Return((*meta.Data)(nil), nil, errors.ErrTxExists)
 
+	// The merge stamp asks the blockchain store for the best block. These fixtures
+	// all drive a block that extends it, which is not what the chunking assertions
+	// are about but is the common case.
+	chainClient, genesisHash := newTestChainClient(t, tSettings)
+
 	sm := &SyncManager{
-		settings:  tSettings,
-		logger:    logger,
-		utxoStore: mockStore,
+		settings:         tSettings,
+		logger:           logger,
+		utxoStore:        mockStore,
+		blockchainClient: chainClient,
 	}
 
 	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](totalTxs)
@@ -1134,7 +1361,7 @@ func newChunkingTestSetup(t *testing.T, totalTxs, batchSize, routines int) (
 		txMap.Set(h, &TxMapWrapper{Tx: txs[i]})
 	}
 
-	block := bsvutil.NewBlock(&wire.MsgBlock{Header: wire.BlockHeader{Version: 1}})
+	block := bsvutil.NewBlock(&wire.MsgBlock{Header: wire.BlockHeader{Version: 1, PrevBlock: genesisHash}})
 	block.SetHeight(100)
 
 	return sm, txMap, block, mockStore, hashes
