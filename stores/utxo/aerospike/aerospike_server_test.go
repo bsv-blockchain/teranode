@@ -1698,6 +1698,13 @@ func TestSmokeTests(t *testing.T) {
 		tests.SpendAndCreateSpendErrorSurfacesPerInput(t, store)
 	})
 
+	t.Run("aerospike_spend_partial_failure_rolls_back", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendPartialFailureRollsBack(t, store)
+	})
+
 	t.Run("aerospike_spend_and_create_invalid_options", func(t *testing.T) {
 		err := store.Delete(ctx, tests.TXHash)
 		require.NoError(t, err)
