@@ -53,7 +53,8 @@ Commands:
                              several). Use it to put a service under
                              deterministic pressure rather than relying on
                              load alone, e.g. --limits blockassembly=2:8g.
-                           --retention aggressive: shrink the pruner retention
+                           --retention aggressive|prod-scaling: aggressive
+                             shrinks the pruner retention
                              windows (288/144/1440 -> 20/10/40) so pruning is
                              observable within tens of blocks on a fresh
                              regtest chain. Default 'production' inherits
@@ -231,9 +232,9 @@ cmd_up() {
     done
   fi
   case "$retention" in
-    production|aggressive) ;;
+    production|aggressive|prod-scaling) ;;
     *)
-      echo "error: --retention must be production or aggressive, got '$retention'" >&2
+      echo "error: --retention must be production, aggressive or prod-scaling, got '$retention'" >&2
       exit 2
       ;;
   esac
