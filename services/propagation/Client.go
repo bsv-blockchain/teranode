@@ -44,6 +44,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/propagation/propagation_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -214,7 +215,9 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		return nil, errors.NewServiceError("invalid propagation HTTP address configured")
 	}
 
-	logger.Infof("Using propagation HTTP address: %s", propagationHTTPAddr)
+	// Userinfo in this address is a working credential: http.Client.Do turns
+	// it into a Basic Authorization header on every /tx and /txs post.
+	logger.Infof("Using propagation HTTP address: %s", urlutil.Redact(propagationHTTPAddr))
 
 	c := &Client{
 		client:              client,

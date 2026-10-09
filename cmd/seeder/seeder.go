@@ -44,6 +44,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -55,6 +56,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	utxofactory "github.com/bsv-blockchain/teranode/stores/utxo/factory"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
@@ -113,7 +115,7 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 		go func() {
 			logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)
 
-			gocore.RegisterStatsHandlers()
+			util.RegisterGocoreStatsHandlers(nil)
 
 			prefix := appSettings.StatsPrefix
 			logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, prefix)
@@ -232,7 +234,7 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 			defer wg.Done()
 
 			logger.Infof("Processing headers...")
-			logger.Infof("Blockchain store: %s", appSettings.BlockChain.StoreURL)
+			logger.Infof("Blockchain store: %s", urlutil.Redact(appSettings.BlockChain.StoreURL))
 
 			// Process the headers
 			if err := processHeaders(ctx, logger, blockchainStore, headerFile); err != nil {
@@ -253,7 +255,7 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 			defer wg.Done()
 
 			logger.Infof("Processing UTXOs...")
-			logger.Infof("UTXO store: %s", appSettings.UtxoStore.UtxoStore.String())
+			logger.Infof("UTXO store: %s", urlutil.Redact(appSettings.UtxoStore.UtxoStore))
 
 			// Process the UTXOs
 			tip, err := processUTXOs(ctx, logger, appSettings, blockchainStore, utxoFile, headerFile, force)
@@ -426,7 +428,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		}
 	}
 
-	logger.Infof("Using blockStore at %s with hashPrefix %d", blockStoreURL, hashPrefix)
+	logger.Infof("Using blockStore at %s with hashPrefix %d", urlutil.Redact(blockStoreURL), hashPrefix)
 
 	blockStore, err := blob.NewStore(logger, blockStoreURL, options.WithHashPrefix(hashPrefix))
 	if err != nil {
@@ -486,7 +488,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 	externalStoreConcurrency, _ := gocore.Config().GetInt("seeder_externalStoreConcurrency", 256)
 	appSettings.UtxoStore.ExternalStoreConcurrency = externalStoreConcurrency
 
-	logger.Infof("Using utxostore at %s with external store concurrency %d", appSettings.UtxoStore.UtxoStore, externalStoreConcurrency)
+	logger.Infof("Using utxostore at %s with external store concurrency %d", urlutil.Redact(appSettings.UtxoStore.UtxoStore), externalStoreConcurrency)
 
 	var utxoStore utxo.Store
 
@@ -766,7 +768,9 @@ func seedingExternalStoreURL(utxoStoreURL *url.URL, fsyncMode string) (*url.URL,
 
 	externalURL, err := url.Parse(raw)
 	if err != nil {
-		return nil, "", errors.NewConfigurationError("invalid externalStore URL %q", raw, err)
+		// raw is a whole blob store URL and can carry a working credential, and
+		// url.Parse's error quotes it, so neither goes into the message.
+		return nil, "", errors.NewConfigurationError("invalid externalStore URL", urlutil.ParseErrorReason(err))
 	}
 
 	if externalURL.Scheme != "file" {

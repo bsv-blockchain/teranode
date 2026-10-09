@@ -195,7 +195,14 @@ func formatValue(val reflect.Value) string {
 	case reflect.String:
 		return redactURLString(val.String())
 	case reflect.Struct:
-		// Special handling for url.URL struct
+		// Special handling for url.URL struct.
+		//
+		// This is the branch every URL setting reaches, even though they are
+		// declared *url.URL: getValueAtPath dereferences every pointer on the
+		// field path, including the last, so formatValue is handed a url.URL
+		// value, and a *url.URL that does arrive is sent here through Elem by
+		// the reflect.Pointer case below. TestExportMetadata_URLUserinfoRedaction
+		// covers this branch and fails if it stops redacting.
 		if val.Type() == reflect.TypeOf(url.URL{}) {
 			u := val.Interface().(url.URL)
 			return redactURL(&u).String()

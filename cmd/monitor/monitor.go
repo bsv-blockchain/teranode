@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
@@ -1046,7 +1047,7 @@ func (m Model) renderSettingsView() string {
 	lines = append(lines, m.renderSettingRow(labelGRPCListen, m.settings.BlockChain.GRPCListenAddress))
 	lines = append(lines, m.renderSettingRow("HTTP Listen", m.settings.BlockChain.HTTPListenAddress))
 	if m.settings.BlockChain.StoreURL != nil {
-		lines = append(lines, m.renderSettingRow("Store", m.settings.BlockChain.StoreURL.String()))
+		lines = append(lines, m.renderSettingRow("Store", urlutil.Redact(m.settings.BlockChain.StoreURL)))
 	}
 
 	// P2P settings

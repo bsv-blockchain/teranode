@@ -90,6 +90,24 @@ func TestSeedingExternalStoreURL(t *testing.T) {
 		require.Empty(t, syncPath, "an operator-set FULL is full")
 	})
 
+	// externalStore is a whole blob store URL, and an http blob store sends its
+	// userinfo as a Basic header, so the value is a working credential. net/url
+	// ends the authority at the raw "/" in this password and then quotes
+	// ":canary-seed" as an invalid port, so "canary-seed" is the fragment that
+	// a leaking error carries. teranodecli prints this error to stdout.
+	t.Run("an unparseable external store URL is rejected without echoing it", func(t *testing.T) {
+		in := &url.URL{Scheme: "aerospike", Host: "h:3000", Path: "/test"}
+		q := url.Values{}
+		q.Set("externalStore", "http://blob:canary-seed/url-password@blob.example:8080/x")
+		in.RawQuery = q.Encode()
+
+		_, _, err := seedingExternalStoreURL(in, "data")
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), "canary-seed", "the error quotes the external store password")
+		require.NotContains(t, err.Error(), "url-password", "the error echoes the external store URL")
+		require.Contains(t, err.Error(), "invalid externalStore URL")
+	})
+
 	t.Run("an invalid seeding mode is rejected", func(t *testing.T) {
 		_, _, err := seedingExternalStoreURL(parse("aerospike://h/test?externalStore=file:///d"), "sometimes")
 		require.Error(t, err)

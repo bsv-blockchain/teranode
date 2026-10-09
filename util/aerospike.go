@@ -11,6 +11,7 @@ import (
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/safemap"
@@ -150,7 +151,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 			return nil, errors.NewConfigurationError("no aerospike_readPolicy found")
 		}
 
-		logger.Infof("[Aerospike] readPolicy url %s", redactURL(readPolicyURL))
+		logger.Infof("[Aerospike] readPolicy url %s", urlutil.Redact(readPolicyURL))
 
 		var err error
 
@@ -189,7 +190,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 			return nil, errors.NewConfigurationError("no aerospike_writePolicy setting found")
 		}
 
-		logger.Infof("[Aerospike] writePolicy url %s", redactURL(writePolicyURL))
+		logger.Infof("[Aerospike] writePolicy url %s", urlutil.Redact(writePolicyURL))
 
 		writeMaxRetries, err = getQueryInt(writePolicyURL, "MaxRetries", aerospike.NewWritePolicy(0, 0).MaxRetries, logger)
 		if err != nil {
@@ -227,7 +228,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 			return nil, errors.NewConfigurationError("no aerospike_batchPolicy setting found")
 		}
 
-		logger.Infof("[Aerospike] batchPolicy url %s", redactURL(batchPolicyURL))
+		logger.Infof("[Aerospike] batchPolicy url %s", urlutil.Redact(batchPolicyURL))
 
 		batchTotalTimeout, err = getQueryDuration(batchPolicyURL, "TotalTimeout", aerospike.NewBatchPolicy().TotalTimeout, logger)
 		if err != nil {
@@ -274,7 +275,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 			querySleepBetweenRetries = aerospike.NewQueryPolicy().SleepBetweenRetries
 			querySleepMultiplier = aerospike.NewQueryPolicy().SleepMultiplier
 		} else {
-			logger.Infof("[Aerospike] queryPolicy url %s", redactURL(queryPolicyURL))
+			logger.Infof("[Aerospike] queryPolicy url %s", urlutil.Redact(queryPolicyURL))
 
 			queryMaxRetries, err = getQueryInt(queryPolicyURL, "MaxRetries", aerospike.NewQueryPolicy().MaxRetries, logger)
 			if err != nil {
@@ -305,7 +306,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 		// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
 		// todo optimize read policies
 		// todo optimize write policies
-		logger.Infof("[Aerospike] base/connection policy url %s", redactURL(url))
+		logger.Infof("[Aerospike] base/connection policy url %s", urlutil.Redact(url))
 
 		policy.LimitConnectionsToQueueSize, err = getQueryBool(url, "LimitConnectionsToQueueSize", policy.LimitConnectionsToQueueSize, logger)
 		if err != nil {
@@ -399,7 +400,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 		}
 	}
 
-	logger.Debugf("url %s policy %s\n", redactURL(url), aerospikePolicySummary(policy))
+	logger.Debugf("url %s policy %s\n", urlutil.Redact(url), aerospikePolicySummary(policy))
 
 	// Apply the aerospike_semaphore_multiplier setting to the in-process
 	// uaerospike connection-semaphore. 1.0 (default) preserves prior
@@ -439,31 +440,6 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 	initStats(logger, client, tSettings)
 
 	return client, nil
-}
-
-// redactURL returns the URL string with the userinfo password component
-// masked. It does not mutate the input. A nil input returns "<nil>".
-//
-// The placeholder "REDACTED" is intentionally URL-safe; "***" would be
-// percent-encoded as %2A%2A%2A by url.UserPassword because '*' is a
-// reserved character in the userinfo subcomponent (RFC 3986).
-func redactURL(u *url.URL) string {
-	if u == nil {
-		return "<nil>"
-	}
-
-	if u.User == nil {
-		return u.String()
-	}
-
-	if _, hasPwd := u.User.Password(); !hasPwd {
-		return u.String()
-	}
-
-	clone := *u
-	clone.User = url.UserPassword(u.User.Username(), "REDACTED")
-
-	return clone.String()
 }
 
 // aerospikePolicySummary returns a log-safe summary of an aerospike.ClientPolicy.

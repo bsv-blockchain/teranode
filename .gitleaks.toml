@@ -60,6 +60,11 @@ regexes = [
   '''1d6a9c8963fdbb86eabc4d10cb1efdf418197cfc3f9779e3c8229663411ae5c8''',
   # Dev test wallet key for the docker blaster stacks (overridden per-deploy).
   '''COINBASE_WALLET_PRIVATE_KEY''',
+  # The x-coordinate of the secp256k1 generator point G, published in SEC 2
+  # v2.0 section 2.4.1. It is a public constant, not a key anyone holds, and
+  # tests use it (02/03/04-prefixed) wherever they need any valid public key.
+  # generic-api-key flags it when it is assigned to a name containing "key".
+  '''79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798''',
 ]
 paths = [
   # Generated dev libp2p peer keys for local multi-node docker setups, and the

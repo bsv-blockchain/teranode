@@ -329,7 +329,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		setName = "txmeta"
 	}
 
-	externalStoreURL, err := url.Parse(aerospikeURL.Query().Get("externalStore"))
+	externalStoreURL, err := parseExternalStoreURL(aerospikeURL.Query().Get("externalStore"))
 	if err != nil {
 		return nil, err
 	}

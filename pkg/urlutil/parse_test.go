@@ -159,3 +159,34 @@ func TestParseMultiHostURL_MultipleHostsMixedPorts(t *testing.T) {
 	assert.Equal(t, "broker1:9092", hosts[0])
 	assert.Equal(t, "broker2", hosts[1])
 }
+
+// RFC 3986 allows a raw "," in the userinfo. Splitting the authority on commas
+// before removing the userinfo started the host list inside the password, so
+// the parsed URL lost the credential that real connections are built from.
+func TestParseMultiHostURL_CommaInPassword(t *testing.T) {
+	tests := []struct {
+		name     string
+		in       string
+		wantHost string
+		wantPass string
+	}{
+		{"multi-host", "kafka://user:hun,ter2@h1:9092,h2:9092/t", "h1:9092,h2:9092", "hun,ter2"},
+		{"single host", "kafka://user:hun,ter2@h1:9092/t", "h1:9092", "hun,ter2"},
+		{"raw @ and comma", "aerospike://user:se@c,ret@h1:3000,h2:3000/ns?set=x", "h1:3000,h2:3000", "se@c,ret"},
+		{"comma only in query", "aerospike://user:secret@h1:3000/ns?hosts=a,b", "h1:3000", "secret"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			u, err := ParseMultiHostURL(tc.in)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantHost, u.Host)
+			require.NotNil(t, u.User)
+			require.Equal(t, "user", u.User.Username())
+
+			pass, ok := u.User.Password()
+			require.True(t, ok)
+			require.Equal(t, tc.wantPass, pass)
+		})
+	}
+}
