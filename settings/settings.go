@@ -251,12 +251,15 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SubtreeDataStreamingConcurrency: getInt("asset_subtreeDataStreamingConcurrency", 2, alternativeContext...),
 
 			// Batch and response admission budgets (warn-only prep; enforcement lands in a later release)
-			MaxBatchRecords:          getInt("asset_maxBatchRecords", 0, alternativeContext...),
-			MaxBatchResponseBytes:    getInt64("asset_maxBatchResponseBytes", 0, alternativeContext...),
-			MaxUTXOsPerTx:            getInt("asset_maxUTXOsPerTx", 0, alternativeContext...),
-			MaxBlockHeaders:          getInt("asset_maxBlockHeaders", 0, alternativeContext...),
-			MaxLastNBlocks:           getInt("asset_maxLastNBlocks", 0, alternativeContext...),
-			MaxNBlocks:               getInt("asset_maxNBlocks", 0, alternativeContext...),
+			MaxBatchRecords:       getInt("asset_maxBatchRecords", 0, alternativeContext...),
+			MaxBatchResponseBytes: getInt64("asset_maxBatchResponseBytes", 0, alternativeContext...),
+			MaxUTXOsPerTx:         getInt("asset_maxUTXOsPerTx", 0, alternativeContext...),
+			MaxBlockHeaders:       getInt("asset_maxBlockHeaders", 0, alternativeContext...),
+			MaxLastNBlocks:        getInt("asset_maxLastNBlocks", 0, alternativeContext...),
+			// Floored at 100, the default blockvalidation_fetch_large_batch_size: the
+			// catchup client rejects any batch shorter than it asked for, so a lower cap
+			// breaks every batch of peer catchup from this node.
+			MaxNBlocks:               getIntFloorUnlessZero("asset_maxNBlocks", 0, 100, "blockvalidation_fetch_large_batch_size", alternativeContext...),
 			RequireAuthCredentials:   getBool("asset_requireAuthCredentials", true, alternativeContext...),
 			SecureCookies:            getBool("asset_secureCookies", false, alternativeContext...),
 			CORSAllowOrigins:         getString("asset_corsAllowOrigins", "", alternativeContext...),

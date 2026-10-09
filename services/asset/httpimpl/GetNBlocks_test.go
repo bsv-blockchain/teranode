@@ -200,6 +200,73 @@ func TestGetNBlocks(t *testing.T) {
 		}
 	})
 
+	t.Run("Asset.MaxNBlocks tightens the cap below 1000", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
+		httpServer.settings.Asset.MaxNBlocks = 10
+
+		mockRepo.On("GetBlocks", mock.Anything, uint32(10)).Return(blocks, nil)
+
+		echoContext.SetPath("/blocks/n/:hash")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+		echoContext.QueryParams().Set("n", "500")
+
+		err := httpServer.GetNBlocks(JSON)(echoContext)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, responseRecorder.Code)
+
+		mockRepo.AssertExpectations(t)
+	})
+
+	t.Run("Asset.MaxNBlocks tightens the cap below 1000 for an absent n", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
+		httpServer.settings.Asset.MaxNBlocks = 10
+
+		mockRepo.On("GetBlocks", mock.Anything, uint32(10)).Return(blocks, nil)
+
+		echoContext.SetPath("/blocks/n/:hash")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+
+		err := httpServer.GetNBlocks(JSON)(echoContext)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, responseRecorder.Code)
+
+		mockRepo.AssertExpectations(t)
+	})
+
+	t.Run("Asset.MaxNBlocks default of 0 preserves the 1000 catchup ceiling", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
+
+		mockRepo.On("GetBlocks", mock.Anything, uint32(1000)).Return(blocks, nil)
+
+		echoContext.SetPath("/blocks/n/:hash")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+		echoContext.QueryParams().Set("n", "5000")
+
+		err := httpServer.GetNBlocks(JSON)(echoContext)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, responseRecorder.Code)
+
+		mockRepo.AssertExpectations(t)
+	})
+
+	t.Run("Negative number of blocks is rejected before preallocation", func(t *testing.T) {
+		httpServer, _, echoContext, _ := GetMockHTTP(t, nil)
+
+		echoContext.SetPath("/blocks/n/:hash")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+		echoContext.QueryParams().Set("n", "-1")
+
+		err := httpServer.GetNBlocks(JSON)(echoContext)
+		echoErr := &echo.HTTPError{}
+		require.True(t, errors.As(err, &echoErr))
+
+		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
+	})
+
 	t.Run("Invalid hash", func(t *testing.T) {
 		httpServer, _, echoContext, _ := GetMockHTTP(t, nil)
 
@@ -316,4 +383,22 @@ func TestGetNBlocks(t *testing.T) {
 		// Check response body
 		assert.Equal(t, "INVALID_ARGUMENT (1): bad read mode", echoErr.Message)
 	})
+}
+
+// TestConcatBlockBytesAllocatesExactly guards against a speculative preallocation
+// sized from the block count rather than the serialized length. Reserving a fixed
+// 32KB per block let a 1000-block request reserve ~32MB before a single byte was
+// serialized, which an unauthenticated caller could trigger at will.
+func TestConcatBlockBytesAllocatesExactly(t *testing.T) {
+	blocks := []*model.Block{testBlock, testBlock, testBlock}
+
+	concatenated, err := concatBlockBytes(blocks)
+	require.NoError(t, err)
+
+	expected, err := testBlock.Bytes()
+	require.NoError(t, err)
+	require.Len(t, concatenated, len(expected)*len(blocks))
+
+	require.Equal(t, len(concatenated), cap(concatenated),
+		"capacity must match the serialized length, not a per-block reservation")
 }
