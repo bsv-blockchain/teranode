@@ -19,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
@@ -1157,6 +1158,69 @@ func TestSkipUnspendableTxStorageDuringCatchup_EndToEnd(t *testing.T) {
 		require.NoError(t, getErr, "GetSpend for parent output 0 must not error")
 		require.Equal(t, int(utxo.Status_SPENT), spendResp.Status,
 			"parent output 0 (spent by op_return tx input) must be marked SPENT")
+	})
+
+	// A retry after a failed first attempt that got only as far as the OP_RETURN transaction,
+	// storing it unmined. The retry skips it, creates the spendable one fresh and finds nothing
+	// already stored. Nothing else would ever mark the skipped one mined, so the retry must.
+	t.Run("retry: a skipped transaction an earlier attempt stored is marked mined", func(t *testing.T) {
+		bv, store, cleanup := newBlockValidationWithRealStore(t)
+		defer cleanup()
+
+		const blockHeight = uint32(100)
+		const checkpointHeight = uint32(1000)
+
+		bv.settings.BlockValidation.QuickValidateSkipUtxoLock = true
+		bv.settings.BlockValidation.SkipUnspendableTxStorageDuringCatchup = true
+		setCheckpointsOnBV(t, bv, checkpointHeight)
+
+		ctx := context.Background()
+
+		privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("SKIP_UNSPENDABLE_RETRY_TEST_KEY"))
+		parentTx := transactions.Create(t,
+			transactions.WithCoinbaseData(1, "/genesis/"),
+			transactions.WithP2PKHOutputs(2, 5000, publicKey),
+		)
+		_, _, err := store.SpendAndCreate(ctx, parentTx, 0, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 1}), utxo.WithCreateOnly())
+		require.NoError(t, err)
+
+		opReturnTx := bt.NewTx()
+		require.NoError(t, opReturnTx.FromUTXOs(&bt.UTXO{
+			TxIDHash:      parentTx.TxIDChainHash(),
+			Vout:          0,
+			LockingScript: parentTx.Outputs[0].LockingScript,
+			Satoshis:      parentTx.Outputs[0].Satoshis,
+		}))
+		opReturnTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x00})
+		require.NoError(t, opReturnTx.AddOpReturnOutput([]byte("stored-by-a-failed-attempt")))
+
+		spendableTx := transactions.Create(t,
+			transactions.WithPrivateKey(privateKey),
+			transactions.WithInput(parentTx, 1),
+			transactions.WithP2PKHOutputs(1, 4000, publicKey),
+		)
+
+		// The failed first attempt stored only the OP_RETURN transaction, unmined.
+		_, _, err = store.SpendAndCreate(ctx, opReturnTx, blockHeight, utxo.WithCreateOnly())
+		require.NoError(t, err)
+
+		pre, err := store.Get(ctx, opReturnTx.TxIDChainHash(), fields.BlockIDs)
+		require.NoError(t, err)
+		require.Empty(t, pre.BlockIDs, "the earlier attempt left it unmined")
+
+		block := &model.Block{Height: blockHeight, ID: 99}
+		batch := &SubtreeProcessingBatch{
+			batchTxs:   []*bt.Tx{opReturnTx, spendableTx},
+			txRanges:   [][2]int{{0, 1}, {1, 2}},
+			batchStart: 0,
+			batchEnd:   2,
+		}
+
+		require.NoError(t, bv.createAndSpendUTXOsForBatch(ctx, block, batch))
+
+		txMeta, err := store.Get(ctx, opReturnTx.TxIDChainHash(), fields.BlockIDs)
+		require.NoError(t, err)
+		require.Contains(t, txMeta.BlockIDs, uint32(99), "the skipped transaction is recorded in the block that mined it")
 	})
 
 	// Negative case: with QuickValidateSkipUtxoLock=false the skip is gated out;

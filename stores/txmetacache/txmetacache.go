@@ -899,6 +899,14 @@ func (t *TxMetaCache) SupportsOutpointOnlySpend() bool {
 	return t.utxoStore.SupportsOutpointOnlySpend()
 }
 
+var _ utxo.StoredTxProber = (*TxMetaCache)(nil)
+
+// StoredTxs implements utxo.StoredTxProber by asking the wrapped store, so a store that can
+// answer it cheaply is not hidden behind this wrapper.
+func (t *TxMetaCache) StoredTxs(ctx context.Context, hashes []*chainhash.Hash) ([]chainhash.Hash, error) {
+	return utxo.ForwardStoredTxs(ctx, t.utxoStore, hashes)
+}
+
 // Close delegates to the wrapped UTXO store so its in-flight batched writes
 // are drained on shutdown. The cache itself holds only in-memory state; no
 // extra teardown is required here beyond letting it be garbage-collected

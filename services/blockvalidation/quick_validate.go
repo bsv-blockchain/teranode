@@ -2028,6 +2028,10 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 	var existingTxsMu sync.Mutex
 	var existingTxHashes []*chainhash.Hash
 
+	// skippedTxHashes are the transactions with no spendable outputs left out of the create
+	// wave. See the retry handling after the wave.
+	var skippedTxHashes []*chainhash.Hash
+
 	minedBlockInfo := utxo.MinedBlockInfo{
 		BlockID:     block.ID,
 		BlockHeight: block.Height,
@@ -2042,6 +2046,8 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 
 			if shouldSkipUnspendableCreate(lockUTXOs, u.settings, tx, block.Height) {
 				// Not written to the store; its inputs are still spent in Phase 2.
+				skippedTxHashes = append(skippedTxHashes, tx.TxIDChainHash())
+
 				continue
 			}
 
@@ -2071,6 +2077,21 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 
 	if err := createG.Wait(); err != nil {
 		return err
+	}
+
+	// A skipped transaction can still be in the store: an earlier attempt at this block may have
+	// stored it as unmined, and nothing else would ever mark it mined. That cannot be inferred
+	// from the rest of the batch, because the earlier attempt may have got only as far as the
+	// skipped ones, so they are always asked about, in one batched read. A first attempt finds
+	// none and stamps nothing.
+	storedSkipped, err := utxo.StoredSubset(ctx, u.utxoStore, skippedTxHashes)
+	if err != nil {
+		return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] failed to look up skipped txs", block.Hash().String(), err)
+	}
+
+	if len(storedSkipped) > 0 {
+		u.logger.Infof("[createAndSpendUTXOsForBatch][%s] marking %d skipped transactions mined that an earlier attempt had stored", block.Hash().String(), len(storedSkipped))
+		existingTxHashes = append(existingTxHashes, storedSkipped...)
 	}
 
 	// Phase 1.5: Update mined info for transactions that already existed

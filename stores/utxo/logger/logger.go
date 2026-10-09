@@ -135,6 +135,14 @@ func (s *Store) SupportsOutpointOnlySpend() bool {
 	return s.store.SupportsOutpointOnlySpend()
 }
 
+var _ utxo.StoredTxProber = (*Store)(nil)
+
+// StoredTxs implements utxo.StoredTxProber by asking the wrapped store, so a store that can
+// answer it cheaply is not hidden behind this wrapper.
+func (s *Store) StoredTxs(ctx context.Context, hashes []*chainhash.Hash) ([]chainhash.Hash, error) {
+	return utxo.ForwardStoredTxs(ctx, s.store, hashes)
+}
+
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	s.logger.Debugf("[UTXOStore][logger][Health] : %s", caller())
 	return s.store.Health(ctx, checkLiveness)

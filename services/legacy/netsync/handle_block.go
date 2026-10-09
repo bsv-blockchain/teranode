@@ -1305,9 +1305,32 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[c
 		existingTxHashes []*chainhash.Hash
 	)
 
+	// A transaction with no spendable outputs can never be spent, so below the checkpoint on a
+	// node with no block persister there is nothing to store for it: SV Node keeps no record of
+	// such a transaction at all. Its inputs are still spent in the validation phase, so the
+	// UTXO set is unaffected. The same setting already governs the quick-validation path; this
+	// is the legacy block path, which is how a mainnet node receives its blocks, and without
+	// this the setting changed nothing there. Gated on outpointOnly, which is the
+	// below-checkpoint test, and on the setting, which documents its incompatibility with a
+	// running block persister.
+	skipUnspendable := outpointOnly && sm.settings.BlockValidation.SkipUnspendableTxStorageDuringCatchup
+	genesisHeight := sm.settings.ChainCfgParams.GenesisActivationHeight
+
+	// skipped are the transactions left out of the create wave. See the retry handling below.
+	var skipped []*chainhash.Hash
+
 	// create all the utxos first
 	for _, txHash := range txMap.Keys() {
 		txHash := txHash
+
+		if skipUnspendable {
+			if txWrapper, ok := txMap.Get(txHash); ok &&
+				utxo.HasNoSpendableOutputs(txWrapper.Tx, txWrapper.Tx.IsCoinbase(), blockHeightUint32, genesisHeight) {
+				skipped = append(skipped, &txHash)
+
+				continue // never spendable, never stored; its inputs are still spent below
+			}
+		}
 
 		g.Go(func() error {
 			txWrapper, ok := txMap.Get(txHash)
@@ -1341,6 +1364,21 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[c
 	// wait for all utxos to be created
 	if err = g.Wait(); err != nil {
 		return errors.NewProcessingError("failed to create utxos", err)
+	}
+
+	// A skipped transaction can still be in the store: an earlier attempt at this block may have
+	// stored it as unmined, and nothing else would ever mark it mined. That cannot be inferred
+	// from the rest of the block, because the earlier attempt may have got only as far as the
+	// skipped ones, so they are always asked about, in one batched read. A first attempt finds
+	// none and stamps nothing.
+	storedSkipped, err := utxo.StoredSubset(ctx, sm.utxoStore, skipped)
+	if err != nil {
+		return errors.NewProcessingError("[createUtxos][%s] failed to look up skipped transactions", bi.hash.String(), err)
+	}
+
+	if len(storedSkipped) > 0 {
+		sm.logger.Infof("[createUtxos][%s] marking %d skipped transactions mined that an earlier attempt had stored", bi.hash.String(), len(storedSkipped))
+		existingTxHashes = append(existingTxHashes, storedSkipped...)
 	}
 
 	// Merge our blockID into any tx that already existed. Without this, those txs
