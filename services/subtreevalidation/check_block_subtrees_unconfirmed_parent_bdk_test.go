@@ -15,16 +15,15 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
-	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
-	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -106,8 +105,11 @@ func newRealBDKServer(t *testing.T, dbName string) (*Server, utxo.Store, *bt.Tx,
 	subtreeStore := blobmemory.New()
 	txStore := blobmemory.New()
 
-	blockchainClient, err := blockchain.NewLocalClient(logger, tSettings, &blockchainstore.MockStore{}, subtreeStore, utxoStore)
-	require.NoError(t, err)
+	// Real sqlitememory-backed blockchain client (per repo testing convention:
+	// don't mock the blockchain client/store). blockchainstore.MockStore has no
+	// genesis best block, so New()'s blockchainSubscriptionListener retried
+	// Subscribe/GetBestBlockHeader every 5s for the life of the test binary.
+	blockchainClient := testutil.NewMemorySQLiteBlockchainClient(logger, tSettings, t)
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
 	server, err := New(ctx, logger, tSettings, subtreeStore, txStore, utxoStore, realValidator, blockchainClient, nilConsumer, nilConsumer, nil, nil)
