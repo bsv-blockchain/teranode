@@ -27,6 +27,19 @@ var (
 	blobDeletionDurationSeconds *prometheus.HistogramVec
 	blobDeletionPendingGauge    prometheus.Gauge
 
+	// Stamp worker metrics. Section 12 of the block-facts design names each one.
+	stampDrains           *prometheus.CounterVec // by outcome
+	stampWakesSkipped     *prometheus.CounterVec // by reason
+	stampAncestryRejected *prometheus.CounterVec // by the check that failed
+	stampDrainsAbandoned  prometheus.Counter
+	stampStaleAnchorHints prometheus.Counter
+	stampTimerDrains      prometheus.Counter
+	stampResidualLag      prometheus.Gauge
+	stampDrainStarted     prometheus.Gauge
+	stampWindowsPerDrain  prometheus.Histogram
+	stampPagesPerDrain    prometheus.Histogram
+	stampDrainDuration    prometheus.Histogram
+
 	prometheusMetricsInitOnce sync.Once
 )
 
@@ -178,6 +191,89 @@ func _initPrometheusMetrics() {
 			Subsystem: "pruner",
 			Name:      "blob_deletion_pending",
 			Help:      "Number of pending deletions in queue",
+		},
+	)
+
+	stampDrains = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pruner_stamp_drains_total",
+			Help: "Stamp drains run by the pruner's stamp worker, by how each one ended",
+		},
+		[]string{"outcome"}, // completed, nothing_stampable, abandoned, ancestry_rejected, error
+	)
+
+	stampWakesSkipped = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pruner_stamp_wakes_skipped_total",
+			Help: "Stamp worker wakes that ran no drain, by reason",
+		},
+		[]string{"reason"}, // no_chain_client, lock_held, below_min_height, catchup_mode, fsm_error, block_assembly_timeout
+	)
+
+	stampAncestryRejected = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pruner_stamp_ancestry_rejected_total",
+			Help: "Chain answers the stamp worker could not prove, by the check that failed",
+		},
+		[]string{"check"},
+	)
+
+	stampDrainsAbandoned = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "pruner_stamp_drains_abandoned_total",
+			Help: "Stamp drains abandoned mid-drain because the best chain switched branches",
+		},
+	)
+
+	stampStaleAnchorHints = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "pruner_stamp_stale_anchor_hints_total",
+			Help: "Notifications whose block was no longer on the best chain when the drain started",
+		},
+	)
+
+	stampTimerDrains = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "pruner_stamp_timer_drains_total",
+			Help: "Stamp drains started by the retry timer rather than a notification; healthy value at the tip is zero",
+		},
+	)
+
+	stampResidualLag = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "pruner_stamp_residual_lag_windows",
+			Help: "Windows stampable at the live tip with no completion record, read as the last drain exited",
+		},
+	)
+
+	stampDrainStarted = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "pruner_stamp_drain_started_seconds",
+			Help: "Unix time the drain in progress started, or zero when no drain is open",
+		},
+	)
+
+	stampWindowsPerDrain = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "pruner_stamp_windows_per_drain",
+			Help:    "Windows completed by one drain",
+			Buckets: prometheus.ExponentialBuckets(1, 2, 8), // 1 to 128
+		},
+	)
+
+	stampPagesPerDrain = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "pruner_stamp_pages_per_drain",
+			Help:    "Pages committed by one drain",
+			Buckets: prometheus.ExponentialBuckets(1, 4, 8), // 1 to 16384
+		},
+	)
+
+	stampDrainDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "pruner_stamp_drain_seconds",
+			Help:    "Wall time of one drain, open to close",
+			Buckets: prometheus.ExponentialBuckets(0.1, 2, 14), // 0.1s to ~14 minutes
 		},
 	)
 }

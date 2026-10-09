@@ -8,7 +8,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -35,8 +34,8 @@ func TestAddToConsensusBlacklist_UsesRequestedTxidForUtxoHash(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	// A stored transaction carrying the right output but hashing to a different
-	// txid than the one being blacklisted — what a snapshot reconstruction looks
-	// like from this call site's point of view.
+	// txid than the one being blacklisted, which is what a snapshot reconstruction
+	// looks like from this call site's point of view.
 	storedTx := &bt.Tx{
 		Version: 1,
 		Inputs:  []*bt.Input{{PreviousTxOutIndex: 0}},
@@ -49,9 +48,16 @@ func TestAddToConsensusBlacklist_UsesRequestedTxidForUtxoHash(t *testing.T) {
 	require.False(t, storedTx.TxIDChainHash().IsEqual(requested),
 		"fixture must have a stored txid that differs from the requested one")
 
+	// The node reads only the output, so the store's answer carries no txid of
+	// its own; the hash must still come out under the requested one.
 	mockStore := &utxo.MockUtxostore{}
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).
-		Return(&meta.Data{Tx: storedTx}, nil)
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).
+		Return([]utxo.ParentOutput{{
+			Status:        utxo.ParentOutputMined,
+			Satoshis:      storedTx.Outputs[0].Satoshis,
+			LockingScript: storedTx.Outputs[0].LockingScript,
+			Height:        100,
+		}}, nil)
 	mockStore.On("GetBlockHeight").Return(uint32(101))
 
 	var frozen []*utxo.Spend

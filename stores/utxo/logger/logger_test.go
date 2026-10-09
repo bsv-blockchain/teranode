@@ -1109,6 +1109,11 @@ func TestInterfaceCompliance(t *testing.T) {
 	require.NotNil(t, loggerStore)
 }
 
+// SpendsMadeBy returns nothing: no test here drives the conflict-undo path.
+func (m *MockStore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	return nil, nil
+}
+
 // newLoggedSQLiteStore wraps a sqlitememory UTXO store in the logger store.
 func newLoggedSQLiteStore(t *testing.T) (utxo.Store, utxo.Store) {
 	t.Helper()

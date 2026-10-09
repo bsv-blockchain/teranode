@@ -25,7 +25,6 @@ import (
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -292,25 +291,17 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 			continue
 		}
 
-		// get the parent tx, to get the utxo hash of the spend
-		parentTxMeta, err := n.utxoStore.Get(ctx, txHash, fields.Tx)
-		if err != nil {
-			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
-			continue
-		}
-
 		vout, err := safeconversion.IntToUint32(fund.TxOut.Vout)
 		if err != nil {
 			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
 			continue
 		}
 
-		// guard against a nil parent tx, an out-of-range vout, or a nil output element before
-		// indexing the outputs (external outputs-only parents can have nil holes at in-range indices)
-		if parentTxMeta.Tx == nil ||
-			uint64(vout) >= uint64(len(parentTxMeta.Tx.Outputs)) ||
-			parentTxMeta.Tx.Outputs[vout] == nil {
-			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, errors.NewError("parent tx output %d not found", vout))...)
+		// The output's script and satoshis are all a freeze needs, read without the
+		// parent's body: see parentOutput.
+		parentOutput, err := n.parentOutput(ctx, txHash, vout)
+		if err != nil {
+			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
 			continue
 		}
 
@@ -322,7 +313,7 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 		// else entirely; the UTXO hash derived from them matches nothing in the
 		// store, and the freeze then reports success while blacklisting nothing.
 		// The Spend below is filed under txHash, so the hash must be too.
-		utxoHash, err := util.UTXOHashFromOutput(txHash, parentTxMeta.Tx.Outputs[vout], vout)
+		utxoHash, err := util.UTXOHashFromOutput(txHash, parentOutput, vout)
 		if err != nil {
 			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
 			continue
@@ -350,6 +341,52 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 	}
 
 	return response, nil
+}
+
+// parentOutput returns the satoshis and locking script of one output, which is all the
+// alert operations need from a parent: the UTXO hash is computed from them, and a
+// re-assignment keeps the satoshis.
+//
+// It reads through ParentOutputsForValidation rather than Get(fields.Tx) because a
+// store may hold a live output without its transaction's body. The utxoset store drops
+// bodies 288 blocks behind the pruner's height and, with utxostore_skipTxBodyBelowCheckpoint,
+// never writes them below the checkpoint, while every unspent output keeps its value and
+// script on its coin row. Reading the body refused every freeze, unfreeze and re-assignment
+// of a coin older than that, although the coin was still there. The method does not filter
+// on frozen state in any store, so a frozen output (the one a re-assignment acts on) answers
+// like any other.
+//
+// The answer carries no txid, so the caller hashes under the txid it asked about, which is
+// the one the Spend is filed under.
+func (n *Node) parentOutput(ctx context.Context, txHash *chainhash.Hash, vout uint32) (*bt.Output, error) {
+	answers, err := n.utxoStore.ParentOutputsForValidation(ctx, []utxo.Outpoint{{TxID: *txHash, Vout: vout}})
+	if err != nil {
+		return nil, err
+	}
+
+	if len(answers) != 1 {
+		return nil, errors.NewStorageError("parent output read for %s:%d returned %d answers", txHash.String(), vout, len(answers))
+	}
+
+	answer := answers[0]
+	if answer.Err != nil {
+		return nil, answer.Err
+	}
+
+	switch answer.Status {
+	case utxo.ParentOutputMined, utxo.ParentOutputNotMined:
+		if answer.LockingScript == nil {
+			return nil, errors.NewError("parent tx output %d not found", vout)
+		}
+
+		return &bt.Output{Satoshis: answer.Satoshis, LockingScript: answer.LockingScript}, nil
+	case utxo.ParentOutputTxNotFound:
+		return nil, errors.NewTxNotFoundError("parent tx %s not found", txHash.String())
+	case utxo.ParentOutputNoSuchIndex:
+		return nil, errors.NewError("parent tx output %d not found", vout)
+	default:
+		return nil, errors.NewStorageError("parent output read for %s:%d gave no answer", txHash.String(), vout)
+	}
 }
 
 // getAddToConsensusBlacklistResponse creates a standardized response for failed blacklist operations.
@@ -417,30 +454,21 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 
 		// get the parent txs of all the inputs of this transaction
 		for _, txIn := range tx.Inputs {
-			// get the parent tx, to get the utxo hash of the spend
-			parentTxMeta, err := n.utxoStore.Get(ctx, txIn.PreviousTxIDChainHash(), fields.Tx)
+			// the parent output's script and satoshis, read without the parent's body: see parentOutput
+			parentOutput, err := n.parentOutput(ctx, txIn.PreviousTxIDChainHash(), txIn.PreviousTxOutIndex)
 			if err != nil {
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err)...)
 				continue
 			}
 
-			// guard against a nil parent tx, an out-of-range input index, or a nil output element before
-			// indexing the outputs (external outputs-only parents can have nil holes at in-range indices)
-			if parentTxMeta.Tx == nil ||
-				uint64(txIn.PreviousTxOutIndex) >= uint64(len(parentTxMeta.Tx.Outputs)) ||
-				parentTxMeta.Tx.Outputs[txIn.PreviousTxOutIndex] == nil {
-				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), errors.NewError("parent tx output %d not found", txIn.PreviousTxOutIndex))...)
-				continue
-			}
-
 			// check the satoshis are equal of the new input and the parent output
-			if txIn.PreviousTxSatoshis > parentTxMeta.Tx.Outputs[txIn.PreviousTxOutIndex].Satoshis {
+			if txIn.PreviousTxSatoshis > parentOutput.Satoshis {
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), errors.NewError("new input satoshis are greater than parent output satoshis"))...)
 				continue
 			}
 
 			// calculate the original utxo hash from the parent output script
-			oldUtxoHash, err := util.UTXOHashFromOutput(txIn.PreviousTxIDChainHash(), parentTxMeta.Tx.Outputs[txIn.PreviousTxOutIndex], txIn.PreviousTxOutIndex)
+			oldUtxoHash, err := util.UTXOHashFromOutput(txIn.PreviousTxIDChainHash(), parentOutput, txIn.PreviousTxOutIndex)
 			if err != nil {
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err)...)
 				continue
@@ -471,8 +499,8 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 
 			// create a new output with the same satoshis and the new locking script
 			amendedOutputScript := &bt.Output{
-				Satoshis:      parentTxMeta.Tx.Outputs[txIn.PreviousTxOutIndex].Satoshis, // same satoshis
-				LockingScript: newLockingScript,                                          // new locking script
+				Satoshis:      parentOutput.Satoshis, // same satoshis
+				LockingScript: newLockingScript,      // new locking script
 			}
 
 			// Calculate the replacement commitment. ReAssignUTXO does not persist

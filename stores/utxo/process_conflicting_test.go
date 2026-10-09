@@ -1040,3 +1040,32 @@ func TestGetCounterConflictingTxHashes_DedupesSpenderWalks(t *testing.T) {
 	// unique counter-spender — not one walk per input
 	mockStore.AssertNumberOfCalls(t, "Get", 3)
 }
+
+// TestProcessConflicting_WinnerWithNoBodyIsRefusedBeforeAnythingChanges pins a double-spend
+// exposure. A store may return a winner's record without its body: utxoset drops bodies after
+// 288 blocks and then answers Get with Tx nil and no error. The spend step then handed nil to
+// SpendAndCreate, utxoset read that as a transaction with nothing to spend and reported
+// success, and the winner was promoted without its inputs being spent, leaving the parent
+// UTXOs the earlier unspend had handed back live for anyone.
+//
+// It is refused while the operation is still gathering, so nothing has been mutated: no
+// counter-conflicting read, no demotion, no unspend. The mock fails the test on any call it was
+// not told to expect.
+func TestProcessConflicting_WinnerWithNoBodyIsRefusedBeforeAnythingChanges(t *testing.T) {
+	ctx := context.Background()
+	mockStore := &MockUtxostore{}
+
+	winner := createTestHash("winner-with-no-body")
+
+	mockStore.On("Get", mock.Anything, &winner, mock.Anything).Return(&meta.Data{
+		Tx:          nil,
+		Conflicting: true,
+	}, nil)
+
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, []chainhash.Hash{winner}, map[chainhash.Hash]struct{}{}, NoAncestryGuard)
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no stored body")
+	mockStore.AssertExpectations(t)
+}

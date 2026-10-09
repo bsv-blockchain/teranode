@@ -27,6 +27,7 @@ import (
 	blockchainsql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	utxofields "github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -1668,4 +1669,65 @@ func TestNewSubtreeStore_RejectsNilURL(t *testing.T) {
 	_, err := newSubtreeStore(logger(), tSettings)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not configured")
+}
+
+// stampedUTXOStore stands in for a UTXO store that writes blocks permanently at a fixed depth,
+// for the boundary the preflight refuses to cross. The sql store underneath answers everything
+// else; only the two boundary answers are supplied here.
+type stampedUTXOStore struct {
+	utxo.Store
+
+	fence uint32
+	depth uint32
+}
+
+func (s stampedUTXOStore) Floors(context.Context) (pruner.StampFloors, error) {
+	return pruner.StampFloors{StampFence: s.fence, StampCompleteFloor: s.fence}, nil
+}
+
+func (s stampedUTXOStore) StampDepth() uint32 { return s.depth }
+
+// TestRewindBlockchain_RefusesToExposeAStampedHeight: with a stamp fence of 96 and a stamp depth
+// of 96, the highest stamped height is 95 and the lowest safe target is 191. A target below
+// that is refused with no override, --force-deep included; the boundary target is accepted (and
+// short-circuits through DryRun). The numbers are a third of mainnet's because the chain
+// builder here holds at most 255 blocks; the rule is the same arithmetic.
+func TestRewindBlockchain_RefusesToExposeAStampedHeight(t *testing.T) {
+	const chainHeight = 200
+
+	run := func(t *testing.T, target int64) error {
+		ctx := context.Background()
+		bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+		bits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+		buildLinearChain(t, ctx, bcStore, chainHeight, bits, tSettings.ChainCfgParams.GenesisHash)
+		require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+
+		_, err = Rewind(ctx, logger(), tSettings, Options{
+			TargetHeight: target,
+			DryRun:       true,
+			AssumeYes:    true,
+			ForceDeep:    true,
+			Stores: &Stores{
+				Blockchain: bcStore,
+				UTXO:       stampedUTXOStore{Store: utxoStore, fence: 96, depth: 96},
+				Subtree:    subtreeStore,
+			},
+		})
+
+		return err
+	}
+
+	t.Run("refused one below the boundary", func(t *testing.T) {
+		err := run(t, 190)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "highest stamped height 95")
+		require.Contains(t, err.Error(), "lowest safe target is 191")
+		require.NotContains(t, err.Error(), "--force-deep", "there is no override")
+	})
+
+	t.Run("accepted at the boundary", func(t *testing.T) {
+		require.NoError(t, run(t, 191))
+	})
 }

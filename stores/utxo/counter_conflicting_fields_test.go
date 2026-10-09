@@ -90,20 +90,20 @@ func TestCandidateSpendsOutputMatchesOnOutpoint(t *testing.T) {
 
 	inpoints := inpointsFromTx(t, tx)
 
-	require.True(t, candidateSpendsOutput(&inpoints, &parent, 1))
-	require.True(t, candidateSpendsOutput(&inpoints, &parent, 4))
-	require.True(t, candidateSpendsOutput(&inpoints, &other, 0))
+	require.True(t, candidateSpendsOutput(inpoints.GetTxInpoints(), &parent, 1))
+	require.True(t, candidateSpendsOutput(inpoints.GetTxInpoints(), &parent, 4))
+	require.True(t, candidateSpendsOutput(inpoints.GetTxInpoints(), &other, 0))
 
 	// Right parent, wrong vout.
-	require.False(t, candidateSpendsOutput(&inpoints, &parent, 0))
-	require.False(t, candidateSpendsOutput(&inpoints, &parent, 2))
+	require.False(t, candidateSpendsOutput(inpoints.GetTxInpoints(), &parent, 0))
+	require.False(t, candidateSpendsOutput(inpoints.GetTxInpoints(), &parent, 2))
 
 	// Right vout, wrong parent.
-	require.False(t, candidateSpendsOutput(&inpoints, &other, 1))
+	require.False(t, candidateSpendsOutput(inpoints.GetTxInpoints(), &other, 1))
 
 	// A parent that is not spent at all.
 	unrelated := chainhash.HashH([]byte("unrelated"))
-	require.False(t, candidateSpendsOutput(&inpoints, &unrelated, 0))
+	require.False(t, candidateSpendsOutput(inpoints.GetTxInpoints(), &unrelated, 0))
 }
 
 // inpointsFromTx derives the inpoints the way every real store does, so these
@@ -218,7 +218,7 @@ func TestSelectCountersForDemotedTxAsksForOutpointsNotTheWholeTx(t *testing.T) {
 			Conflicting: true,
 		}, nil)
 
-	result, err := selectCountersForDemotedTx(ctx, mockStore, demotedTx, map[chainhash.Hash]struct{}{})
+	result, err := selectCountersForDemotedTx(ctx, mockStore, inpointsOf(t, demotedTx), map[chainhash.Hash]struct{}{})
 	require.NoError(t, err)
 	require.Equal(t, []chainhash.Hash{candidateHash}, result)
 
