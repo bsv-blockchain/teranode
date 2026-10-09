@@ -4,6 +4,9 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-subtree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -256,6 +259,83 @@ func TestClassifyParentUpdateResult(t *testing.T) {
 		require.NoError(t, classifyErr)
 		require.Equal(t, parentUpdateOK, outcome)
 	})
+
+	// A record the batch never got an answer for keeps the NO_RESPONSE the client
+	// prepared it with and a nil Err: the client stamps Err only while parsing a
+	// response. On the plain MapPutItems path that used to read as success, so a
+	// node-level BatchOperate failure deleted every child with no marker.
+	t.Run("a record with no answer fails closed on both contracts", func(t *testing.T) {
+		key, err := aerospike.NewKey("test", "utxo", []byte("parent"))
+		require.NoError(t, err)
+
+		for _, usesModTeranode := range []bool{true, false} {
+			outcome, classifyErr := classifyParentUpdateResult(
+				&aerospike.BatchRecord{Key: key, ResultCode: types.NO_RESPONSE}, usesModTeranode)
+			require.Equalf(t, parentUpdateFailed, outcome, "usesModTeranode=%v", usesModTeranode)
+			require.ErrorContains(t, classifyErr, "no answer")
+		}
+	})
+}
+
+// spentUtxoElement builds one utxos-bin element recording spender as the
+// transaction that spent it: a 32-byte utxo hash (zero here) followed by the
+// 36 bytes of spending data, txid then vin.
+func spentUtxoElement(spender *chainhash.Hash) []byte {
+	element := make([]byte, 68)
+	copy(element[32:64], spender[:])
+
+	return element
+}
+
+// TestNamesSpender pins the rule that decides whether a pruned child may be
+// marked on a parent record: the output its input names must record that child
+// as the spender. A conflicting loser names the same outpoint and never held it.
+func TestNamesSpender(t *testing.T) {
+	var winner, loser chainhash.Hash
+	winner[0] = 0xAA
+	loser[0] = 0xBB
+
+	spentBy := func(spender chainhash.Hash) []byte {
+		element := make([]byte, 68)
+		copy(element[32:64], spender[:])
+
+		return element
+	}
+
+	unspent := make([]byte, 32)
+	utxos := []interface{}{spentBy(winner), unspent}
+
+	require.True(t, namesSpender(utxos, []uint32{0}, &winner), "the holder of the output is marked")
+	require.False(t, namesSpender(utxos, []uint32{0}, &loser), "a loser that never held the output is not")
+	require.False(t, namesSpender(utxos, []uint32{1}, &winner), "an unspent output names nobody")
+	require.False(t, namesSpender(utxos, []uint32{7}, &winner), "an offset past the page names nobody")
+	require.True(t, namesSpender(utxos, []uint32{1, 0}, &winner), "any claimed offset that names the child is enough")
+	require.False(t, namesSpender(nil, []uint32{0}, &winner), "a record with no utxos bin names nobody")
+}
+
+// TestSpendHolderFrozenOutputIsUnverified: spendHolder is the one place that
+// decides a child may be deleted with no marker (holderNamesOther, a
+// conflicting loser). A frozen output stores the 36-byte all-0xFF sentinel
+// where the spending data goes, which names no transaction, so it must hold the
+// child back like any other output that says nothing about it, not read as
+// "spent by someone else".
+func TestSpendHolderFrozenOutputIsUnverified(t *testing.T) {
+	var child, other chainhash.Hash
+	child[0] = 0xAA
+	other[0] = 0xBB
+
+	frozen := make([]byte, 68)
+	copy(frozen[32:], subtree.FrozenBytes[:])
+
+	spentByOther := make([]byte, 68)
+	copy(spentByOther[32:64], other[:])
+
+	require.Equal(t, holderUnverified, spendHolder([]interface{}{frozen}, []uint32{0}, &child),
+		"a frozen output names no spender, so the child is held back")
+	require.Equal(t, holderUnverified, spendHolder([]interface{}{spentByOther, frozen}, []uint32{0, 1}, &child),
+		"one frozen output among the claimed ones is enough to hold the child back")
+	require.Equal(t, holderNamesOther, spendHolder([]interface{}{spentByOther}, []uint32{0}, &child),
+		"control: an output spent by a different, well-formed spender is still a conflicting loser")
 }
 
 // okRecord / notFoundRecord / brokenRecord build the three parent-update results
@@ -277,16 +357,16 @@ func brokenRecord(t *testing.T) aerospike.BatchRecordIfc {
 		aerospike.BinMap{"SUCCESS": "not-a-map"})}
 }
 
-// TestTallyParentUpdateResults covers the aggregation the combined and two-call
-// cleanup paths both run over their parent-update region — previously inline in
-// executeBatchCleanupCombined and therefore only reachable with a live client.
+// TestTallyParentUpdateResults covers the aggregation executeBatchParentUpdates
+// runs over its batch response. It was once inline in the caller and so only
+// reachable with a live client; as a free function it is unit-testable.
 func TestTallyParentUpdateResults(t *testing.T) {
 	t.Run("counts each outcome independently", func(t *testing.T) {
 		records := []aerospike.BatchRecordIfc{
 			okRecord(t), okRecord(t), notFoundRecord(t), brokenRecord(t),
 		}
 
-		tally := tallyParentUpdateResults(records, true, nil)
+		tally := tallyParentUpdateResults(records, nil, true, nil)
 
 		require.Equal(t, 2, tally.success)
 		require.Equal(t, 1, tally.notFound)
@@ -298,7 +378,7 @@ func TestTallyParentUpdateResults(t *testing.T) {
 	// the routine shape when the pruner already deleted the parents.
 	t.Run("all-skipped is not a failure", func(t *testing.T) {
 		tally := tallyParentUpdateResults(
-			[]aerospike.BatchRecordIfc{notFoundRecord(t), notFoundRecord(t)}, true, nil)
+			[]aerospike.BatchRecordIfc{notFoundRecord(t), notFoundRecord(t)}, nil, true, nil)
 
 		require.Zero(t, tally.failed)
 		require.Equal(t, 2, tally.notFound)
@@ -310,49 +390,19 @@ func TestTallyParentUpdateResults(t *testing.T) {
 			aerospike.BinMap{"SUCCESS": map[interface{}]interface{}{"status": "FIRST_FAILURE"}})}
 
 		tally := tallyParentUpdateResults(
-			[]aerospike.BatchRecordIfc{unknownStatus, brokenRecord(t)}, true, nil)
+			[]aerospike.BatchRecordIfc{unknownStatus, brokenRecord(t)}, nil, true, nil)
 
 		require.Equal(t, 2, tally.failed)
 		require.ErrorContains(t, tally.firstErr, "FIRST_FAILURE")
 	})
 
 	t.Run("empty region tallies nothing", func(t *testing.T) {
-		tally := tallyParentUpdateResults(nil, true, nil)
+		tally := tallyParentUpdateResults(nil, nil, true, nil)
 
 		require.Zero(t, tally.success)
 		require.Zero(t, tally.notFound)
 		require.Zero(t, tally.failed)
 		require.NoError(t, tally.firstErr)
-	})
-}
-
-// TestTallyChildDeletionResults locks the idempotency rule: a child that is
-// already gone is the outcome the deletion asked for, not an error.
-func TestTallyChildDeletionResults(t *testing.T) {
-	t.Run("KEY_NOT_FOUND is success", func(t *testing.T) {
-		deleteErrors, firstErr := tallyChildDeletionResults(
-			[]aerospike.BatchRecordIfc{notFoundRecord(t), notFoundRecord(t)})
-
-		require.Zero(t, deleteErrors)
-		require.Nil(t, firstErr)
-	})
-
-	t.Run("real errors are counted", func(t *testing.T) {
-		failing := &aerospike.BatchWrite{BatchRecord: *batchRecordWithErr(t, aerospike.ErrTimeout)}
-
-		deleteErrors, firstErr := tallyChildDeletionResults(
-			[]aerospike.BatchRecordIfc{notFoundRecord(t), failing, failing})
-
-		require.Equal(t, 2, deleteErrors)
-		require.NotNil(t, firstErr)
-	})
-
-	t.Run("clean batch reports nothing", func(t *testing.T) {
-		deleteErrors, firstErr := tallyChildDeletionResults(
-			[]aerospike.BatchRecordIfc{okRecord(t)})
-
-		require.Zero(t, deleteErrors)
-		require.Nil(t, firstErr)
 	})
 }
 
@@ -373,7 +423,7 @@ func TestTallyParentUpdateResultsObservesErrors(t *testing.T) {
 			notFoundRecord(t),
 		}
 
-		tally := tallyParentUpdateResults(records, true, func(err error) { seen = append(seen, err) })
+		tally := tallyParentUpdateResults(records, nil, true, func(err error) { seen = append(seen, err) })
 
 		// Both failing records are reported; the successful one is not. Filtering
 		// by result code is the store's job, so KEY_NOT_FOUND is passed on too.
@@ -391,7 +441,7 @@ func TestTallyParentUpdateResultsObservesErrors(t *testing.T) {
 			&aerospike.BatchWrite{BatchRecord: *batchRecordWithErr(t, aerospike.ErrInvalidParam)},
 		}
 
-		tallyParentUpdateResults(records, false, func(error) { called = true })
+		tallyParentUpdateResults(records, nil, false, func(error) { called = true })
 
 		require.False(t, called, "non-mod-teranode records must not reach the native-op observer")
 	})
@@ -401,13 +451,13 @@ func TestTallyParentUpdateResultsObservesErrors(t *testing.T) {
 			&aerospike.BatchWrite{BatchRecord: *batchRecordWithErr(t, aerospike.ErrInvalidParam)},
 		}
 
-		require.NotPanics(t, func() { tallyParentUpdateResults(records, true, nil) })
+		require.NotPanics(t, func() { tallyParentUpdateResults(records, nil, true, nil) })
 	})
 
 	t.Run("successful batches report nothing", func(t *testing.T) {
 		called := false
 
-		tallyParentUpdateResults([]aerospike.BatchRecordIfc{okRecord(t)}, true, func(error) { called = true })
+		tallyParentUpdateResults([]aerospike.BatchRecordIfc{okRecord(t)}, nil, true, func(error) { called = true })
 
 		require.False(t, called)
 	})

@@ -769,7 +769,11 @@ func httpStatusForTxError(err error) int {
 		errors.Is(err, errors.ErrTxConflicting),
 		errors.Is(err, errors.ErrSpent),
 		errors.Is(err, errors.ErrTxLocked),
-		errors.Is(err, errors.ErrTxCreating):
+		errors.Is(err, errors.ErrTxCreating),
+		// The spending transaction was mined, fully spent and pruned. A
+		// permanent, deterministic rejection about chain state, exactly like
+		// ErrSpent beside it, so it answers 409 rather than falling to 500.
+		errors.Is(err, errors.ErrUtxoSpendingTxPruned):
 		return http.StatusConflict
 	case errors.Is(err, errors.ErrTxMissingParent):
 		return http.StatusUnprocessableEntity

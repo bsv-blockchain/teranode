@@ -245,6 +245,10 @@ type Store struct {
 	// runtime PARAMETER_ERROR demotes it back to false while batch goroutines
 	// read it concurrently (see demoteNativeOnUnsupported in native_op.go).
 	useNativeTeranodeOps atomic.Bool
+	// nativeReplayProtection records whether the native dispatcher proved the
+	// replay-protection semantics (probeNativeReplayProtection). When false the
+	// sub-ops that carry them stay on the UDF path; see useNativeForSubOp.
+	nativeReplayProtection atomic.Bool
 
 	// utxo.BlockStateFields supplies the chain-tip height and median block time
 	// as one atomic snapshot, and with them the Store interface's six

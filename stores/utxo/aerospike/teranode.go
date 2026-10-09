@@ -74,7 +74,7 @@ import (
 var teranodeLUA []byte
 
 var (
-	LuaPackage      = "teranode_v61" // N.B. Do not have any "." in this string
+	LuaPackage      = "teranode_v65" // N.B. Do not have any "." in this string
 	LuaPackageMined = LuaPackage + "_mined"
 )
 
@@ -275,6 +275,12 @@ type LuaMapResponse struct {
 	BlockIDs   []int                `json:"blockIDs,omitempty"`
 	Errors     map[int]LuaErrorInfo `json:"errors,omitempty"`
 	ChildCount int                  `json:"childCount,omitempty"`
+	// Idempotent lists the spend indexes whose utxo already recorded exactly this
+	// spend, so the Lua wrote nothing for them. They succeed, but a rollback must
+	// leave them alone: the spend they matched is the confirmed, historical one.
+	// Absent from responses produced by a native-op server that predates it, in
+	// which case every success is treated as a fresh spend, as before.
+	Idempotent []int `json:"idempotent,omitempty"`
 	// Debug      string               `json:"debug,omitempty"`
 }
 
@@ -297,6 +303,7 @@ type LuaMapResponse struct {
 // scalar fields rather than relying on r.Errors == nil semantics.
 func (r *LuaMapResponse) Reset() {
 	r.Status = ""
+	r.Idempotent = nil
 	r.ErrorCode = ""
 	r.Message = ""
 	r.Signal = ""
@@ -387,7 +394,7 @@ func (s *Store) parseLuaMapResponseInto(response interface{}, result *LuaMapResp
 	// — yields a non-nil result.BlockIDs (the helper returns make([]int, 0)
 	// for an empty input), matching the existing observable contract.
 	if blockIDs, ok := respMap["blockIDs"]; ok {
-		ids, err := luaResponseIntSlice(blockIDs)
+		ids, err := luaResponseIntSlice("blockIDs", blockIDs)
 		if err != nil {
 			return err
 		}
@@ -439,6 +446,20 @@ func (s *Store) parseLuaMapResponseInto(response interface{}, result *LuaMapResp
 		}
 	}
 
+	// Parse idempotent list for spendMulti
+	// Parsed like blockIDs, through luaResponseIntSlice, because the native
+	// dispatcher may encode it as a typed integer slice such as []int64. A bare
+	// []interface{} assertion failed that shape, and a parse failure completes
+	// every spend in the record with an error and demotes the native path.
+	if idempotentField, ok := respMap["idempotent"]; ok {
+		offsets, err := luaResponseIntSlice("idempotent", idempotentField)
+		if err != nil {
+			return errors.NewProcessingError("invalid idempotent list (%T)", idempotentField, err)
+		}
+
+		result.Idempotent = append(result.Idempotent[:0], offsets...)
+	}
+
 	// Parse childCount
 	if childCount, ok := respMap["childCount"]; ok {
 		if count, ok := luaResponseInt(childCount); ok {
@@ -473,24 +494,27 @@ func luaResponseMap(v interface{}) (map[interface{}]interface{}, bool) {
 	}
 }
 
-func luaResponseIntSlice(v interface{}) ([]int, error) {
-	// Reject byte slices explicitly: a msgpack `bin`-encoded blockIDs would
-	// otherwise decode byte-by-byte into garbage block IDs and return success.
-	// blockIDs must arrive as a list of integers on both transports.
+// luaResponseIntSlice parses one integer-list field of a Lua or native
+// response. field is the response key being parsed, so a malformed payload
+// names the field that is actually wrong.
+func luaResponseIntSlice(field string, v interface{}) ([]int, error) {
+	// Reject byte slices explicitly: a msgpack `bin`-encoded list would
+	// otherwise decode byte-by-byte into garbage integers and return success.
+	// These fields must arrive as a list of integers on both transports.
 	if _, isBytes := v.([]byte); isBytes {
-		return nil, errors.NewProcessingError("invalid blockIDs type: %T", v)
+		return nil, errors.NewProcessingError("invalid %s type: %T", field, v)
 	}
 
 	rv := reflect.ValueOf(v)
 	if !rv.IsValid() || (rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array) {
-		return nil, errors.NewProcessingError("invalid blockIDs type: %T", v)
+		return nil, errors.NewProcessingError("invalid %s type: %T", field, v)
 	}
 
 	result := make([]int, rv.Len())
 	for i := 0; i < rv.Len(); i++ {
 		idInt, ok := luaResponseInt(rv.Index(i).Interface())
 		if !ok {
-			return nil, errors.NewProcessingError("invalid blockID at index %d", i)
+			return nil, errors.NewProcessingError("invalid %s entry at index %d", field, i)
 		}
 		result[i] = idInt
 	}

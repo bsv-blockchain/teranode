@@ -1429,7 +1429,11 @@ func MinedThenSpendAllPrunes(t *testing.T, db utxostore.Store, prunerSvc pruner.
 	// real production flow (tx arrives, gets validated, later a block includes it).
 	// Creating directly with WithMinedBlockInfo would skip the mined-transition path
 	// that the disk-bloat bug was observed under.
-	_, _, err = db.SpendAndCreate(ctx, Tx, mineHeight, utxostore.WithCreateOnly())
+	//
+	// Tx spends its parent's output as well as being created, as every production
+	// path does. The pruner holds back a transaction whose claimed parent output
+	// is present but unspent, because it could write no replay marker for it.
+	_, _, err = db.SpendAndCreate(ctx, Tx, mineHeight)
 	require.NoError(t, err)
 	defer func() { _ = db.Delete(ctx, Tx.TxIDChainHash()) }()
 

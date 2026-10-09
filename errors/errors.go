@@ -779,6 +779,12 @@ var publicCauseCodes = map[ERR]struct{}{
 	ERR_TX_CONFLICTING:          {},
 	ERR_UTXO_SPENT:              {},
 	ERR_TX_LOCKED:               {},
+	// ERR_UTXO_SPENDING_TX_PRUNED is the same kind of verdict as ERR_UTXO_SPENT:
+	// this transaction was mined, fully spent and pruned, so the output it is
+	// reaching for is long consumed and no resubmission can change that. The
+	// message names the transaction and the outpoint the submitter already sent
+	// and carries no node-internal state.
+	ERR_UTXO_SPENDING_TX_PRUNED: {},
 	// ERR_TX_CREATING is the same kind of verdict as ERR_TX_LOCKED: the parent
 	// tx this one spends from is still completing its own commit. It carries no
 	// node-internal state and is actionable by the submitter (resubmit shortly),
@@ -1093,7 +1099,7 @@ func ErrorCodeToGRPCCode(code ERR) codes.Code {
 	// asked. The HTTP layer answers 403 for the same error and the two maps are
 	// independent by design; see httpStatusForTxError in services/propagation.
 	case ERR_TX_INVALID_DOUBLE_SPEND, ERR_TX_CONFLICTING, ERR_UTXO_SPENT, ERR_TX_LOCKED, ERR_TX_CREATING,
-		ERR_UTXO_FROZEN, ERR_TX_MISSING_PARENT:
+		ERR_UTXO_FROZEN, ERR_TX_MISSING_PARENT, ERR_UTXO_SPENDING_TX_PRUNED:
 		return codes.FailedPrecondition
 	default:
 		return codes.Internal
