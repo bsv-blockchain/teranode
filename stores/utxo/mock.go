@@ -267,8 +267,14 @@ func (m *MockUtxostore) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) 
 	return args.Error(0)
 }
 
-// SpendAndCreateMulti mocks the list form of SpendAndCreate.
+// SpendAndCreateMulti mocks the list form of SpendAndCreate. A test that sets no expectation for
+// it gets what the SQL and Aerospike stores do: the per-transaction default, one transaction at a
+// time, through this mock's SpendAndCreate and whatever expectations the test set on that.
 func (m *MockUtxostore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...CreateOption) ([]SpendAndCreateMultiResult, error) {
+	if !m.expects("SpendAndCreateMulti") {
+		return DefaultSpendAndCreateMulti(ctx, m, 1, txs, blockHeight, opts...)
+	}
+
 	args := m.Called(ctx, txs, blockHeight, opts)
 
 	if args.Get(0) == nil {
@@ -481,4 +487,15 @@ func (m *MockConsistencyScanIterator) Err() error {
 func (m *MockConsistencyScanIterator) Close() error {
 	args := m.Called()
 	return args.Error(0)
+}
+
+// expects reports whether the test set an expectation for method.
+func (m *MockUtxostore) expects(method string) bool {
+	for _, c := range m.ExpectedCalls {
+		if c.Method == method {
+			return true
+		}
+	}
+
+	return false
 }
