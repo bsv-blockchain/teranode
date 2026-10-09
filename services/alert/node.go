@@ -305,10 +305,20 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 			continue
 		}
 
-		// guard against a nil parent tx, an out-of-range vout, or a nil output element before
+		// A record with no serialized body is a legal answer from the UTXO store: the
+		// body window has aged out, or utxostore_skipTxBodyBelowCheckpoint meant the
+		// bytes were never written for a transaction mined at or below the checkpoint.
+		// Freezing genuinely needs the output's locking script, so this cannot proceed
+		// — but it must say so rather than report the output as absent, which would
+		// point an operator at the wrong thing entirely.
+		if parentTxMeta.Tx == nil {
+			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, errors.NewError("parent tx %s is in the store but its body is not retained by this node (aged out, or below the utxostore_skipTxBodyBelowCheckpoint boundary), so output %d cannot be hashed", txHash.String(), vout))...)
+			continue
+		}
+
+		// guard against an out-of-range vout, or a nil output element before
 		// indexing the outputs (external outputs-only parents can have nil holes at in-range indices)
-		if parentTxMeta.Tx == nil ||
-			uint64(vout) >= uint64(len(parentTxMeta.Tx.Outputs)) ||
+		if uint64(vout) >= uint64(len(parentTxMeta.Tx.Outputs)) ||
 			parentTxMeta.Tx.Outputs[vout] == nil {
 			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, errors.NewError("parent tx output %d not found", vout))...)
 			continue
@@ -424,10 +434,17 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 				continue
 			}
 
-			// guard against a nil parent tx, an out-of-range input index, or a nil output element before
+			// Same as AddToConsensusBlacklist: a body-less record is a legal answer, and
+			// the re-assignment needs the parent's output script, so name the reason
+			// rather than claiming the output does not exist.
+			if parentTxMeta.Tx == nil {
+				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), errors.NewError("parent tx %s is in the store but its body is not retained by this node (aged out, or below the utxostore_skipTxBodyBelowCheckpoint boundary), so output %d cannot be hashed", txIn.PreviousTxIDChainHash().String(), txIn.PreviousTxOutIndex))...)
+				continue
+			}
+
+			// guard against an out-of-range input index, or a nil output element before
 			// indexing the outputs (external outputs-only parents can have nil holes at in-range indices)
-			if parentTxMeta.Tx == nil ||
-				uint64(txIn.PreviousTxOutIndex) >= uint64(len(parentTxMeta.Tx.Outputs)) ||
+			if uint64(txIn.PreviousTxOutIndex) >= uint64(len(parentTxMeta.Tx.Outputs)) ||
 				parentTxMeta.Tx.Outputs[txIn.PreviousTxOutIndex] == nil {
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), errors.NewError("parent tx output %d not found", txIn.PreviousTxOutIndex))...)
 				continue

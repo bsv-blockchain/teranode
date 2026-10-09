@@ -1061,6 +1061,10 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			return txMetaData, nil
 		}
 
+		if known, ok := v.knownTxResubmission(decoupledCtx, tx, spentUtxos); ok {
+			return known, nil
+		}
+
 		if errors.Is(err, errors.ErrUtxoError) {
 			saveAsConflicting := false
 
@@ -2930,4 +2934,58 @@ func (v *Validator) readMTPsLocked(blockMTPHeight uint32, utxoHeights []uint32) 
 	}
 
 	return utxoMTPs, v.mtpStore[blockMTPHeight], nil
+}
+
+// knownTxResubmission recognises a transaction the store already holds when its spend fails
+// because every coin it asks for is gone and no other spender is known.
+//
+// That is what a resubmission looks like to a store that deletes a coin when it is spent: the
+// coins are gone because this same transaction took them. A double spend is a different
+// transaction, with a different txid, so looking this one up by its own txid tells the two
+// apart. The utxoset store keeps an unmined transaction's identity row while it waits and a
+// mined one's block on its unspent coins, so the lookup answers for a transaction submitted
+// again weeks later, long after the undo journal has dropped the spends. The journal used to be
+// kept for 1440 blocks for exactly this and no longer needs to be.
+//
+// It answers the way the ErrTxExists path above does, because that is the answer the same
+// resubmission gets while the journal still has the spends (the store reads them as a replay
+// and the create then finds the record): a success that does not re-drive block assembly and
+// leaves lock state alone. It is narrower in one respect. A record marked conflicting is not
+// taken as a resubmission, so a transaction that lost its coins to another is still rejected.
+//
+// Any other kind of spend failure, or a spend the store attributes to a named other
+// transaction, is left to the handling below.
+func (v *Validator) knownTxResubmission(ctx context.Context, tx *bt.Tx, spends []*utxo.Spend) (*meta.Data, bool) {
+	failed := 0
+
+	for _, spend := range spends {
+		if spend == nil || spend.Err == nil {
+			continue
+		}
+
+		if !errors.Is(spend.Err, errors.ErrSpent) || spend.ConflictingTxID != nil {
+			return nil, false
+		}
+
+		failed++
+	}
+
+	if failed == 0 {
+		return nil, false
+	}
+
+	existing := &meta.Data{}
+	if err := v.utxoStore.GetMeta(ctx, tx.TxIDChainHash(), existing); err != nil || existing.Conflicting {
+		return nil, false
+	}
+
+	v.logger.Debugf("[Validate][%s] inputs already spent by this same transaction, which the store holds; treating it as a resubmission", tx.TxIDChainHash())
+
+	if existing.Locked && len(existing.BlockIDs) == 0 {
+		prometheusValidatorExistingTxLockedUnmined.Inc()
+
+		v.logger.Warnf("[Validate][%s] resubmit of an existing transaction that is locked and unmined; returning success, recovery is the unmined reload's unlock", tx.TxIDChainHash())
+	}
+
+	return existing, true
 }

@@ -2883,6 +2883,13 @@ type txFailingUtxoStore struct {
 	failTxID chainhash.Hash
 }
 
+// SpendAndCreateMulti runs the list one transaction at a time through this store's
+// SpendAndCreate, so the wrapper sees every call quick validation makes when it applies a
+// batch as one list.
+func (s *txFailingUtxoStore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	return utxo.DefaultSpendAndCreateMulti(ctx, s, 1, txs, blockHeight, opts...)
+}
+
 func (s *txFailingUtxoStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
 	if tx.TxIDChainHash().IsEqual(&s.failTxID) {
 		return nil, nil, errors.NewProcessingError("simulated utxo failure for %s", s.failTxID.String())

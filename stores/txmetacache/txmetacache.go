@@ -899,6 +899,11 @@ func (t *TxMetaCache) SupportsOutpointOnlySpend() bool {
 	return t.utxoStore.SupportsOutpointOnlySpend()
 }
 
+// NetsBelowCheckpoint forwards the wrapped store's answer.
+func (t *TxMetaCache) NetsBelowCheckpoint() bool {
+	return utxo.NetsBelowCheckpoint(t.utxoStore)
+}
+
 // Close delegates to the wrapped UTXO store so its in-flight batched writes
 // are drained on shutdown. The cache itself holds only in-memory state; no
 // extra teardown is required here beyond letting it be garbage-collected
@@ -1266,4 +1271,11 @@ func (t *TxMetaCache) PreserveTransactions(ctx context.Context, txIDs []chainhas
 // The cache doesn't directly manage preservation expiry, so this is a pass-through operation.
 func (t *TxMetaCache) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
 	return t.utxoStore.ProcessExpiredPreservations(ctx, currentHeight)
+}
+
+// SpendsMadeBy passes through. There is nothing to cache: it is asked only when undoing a
+// conflict resolution, which is a reorg or a crash replay, and the answer describes coins whose
+// state the same operation is about to change.
+func (t *TxMetaCache) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	return t.utxoStore.SpendsMadeBy(ctx, txHash)
 }

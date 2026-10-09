@@ -1846,6 +1846,13 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		return qErr
 	}
 
+	if u.blockValidation.mustStayOnQuickValidation(block) {
+		// Below the checkpoint a netting UTXO store may already hold part of this block
+		// without spend-journal rows, which full validation would read. Wait for the header
+		// proof that sends the block to quick validation instead.
+		return errors.NewServiceError("[processBlockFound][%s] block at height %d is below the hardcoded checkpoint on a netting UTXO store and can only be quick validated; it has no header proof yet", hash.String(), block.Height)
+	}
+
 	// validate the block
 	u.logger.Infof("[processBlockFound][%s] validate block from %s", hash.String(), baseURL)
 

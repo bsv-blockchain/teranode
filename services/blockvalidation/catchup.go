@@ -1866,6 +1866,10 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 
 	// If block is not eligible for quick validation, use normal validation
 	if !canUseQuickValidation {
+		if u.blockValidation.mustStayOnQuickValidation(block) {
+			return false, errors.NewProcessingError("[tryQuickValidation][%s] block at height %d is below the hardcoded checkpoint on a netting UTXO store and can only be quick validated, but quick validation is not enabled for it in this catch-up", block.Hash().String(), block.Height)
+		}
+
 		return true, nil
 	}
 
@@ -1880,6 +1884,10 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 		block.Height,
 		u.settings.BlockValidation.MaxBlocksBehindBlockAssembly,
 	); err != nil {
+		if u.blockValidation.mustStayOnQuickValidation(block) {
+			return false, errors.NewServiceError("[tryQuickValidation][%s] block assembly not ready for a block that can only be quick validated; retry", block.Hash().String(), err)
+		}
+
 		u.logger.Warnf("[tryQuickValidation][%s] block assembly not ready, falling back to normal validation: %v",
 			block.Hash().String(), err)
 		return true, nil // Fall back to normal validation
@@ -2069,6 +2077,12 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s: catch-up context cancelled while waiting for subtree writes to settle, skipping cleanup",
 				catchupCtx.blockUpTo.Hash().String(), block.Hash().String())
 		}
+		if u.blockValidation.mustStayOnQuickValidation(block) {
+			// Normal validation would read spend-journal rows the netting store did not
+			// write for the part of this block it applied. Retry quick validation instead.
+			return false, errors.NewServiceError("[tryQuickValidation][%s] quick validation of a block below the checkpoint on a netting UTXO store failed; it is retried, not validated another way", block.Hash().String(), err)
+		}
+
 		// Quick validation failed, try normal validation
 		return true, nil
 	}

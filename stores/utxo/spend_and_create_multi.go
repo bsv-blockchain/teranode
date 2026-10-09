@@ -128,51 +128,16 @@ type SpendAndCreateMultiStore interface {
 // and transactions never reached are MultiTxNotAttempted.
 func DefaultSpendAndCreateMulti(ctx context.Context, s SpendAndCreateMultiStore, concurrency int, txs []*bt.Tx,
 	blockHeight uint32, opts ...CreateOption) ([]SpendAndCreateMultiResult, error) {
-	options, err := ParseCreateOptions(opts...)
+	list, err := PrepareSpendAndCreateMulti(txs, opts...)
 	if err != nil {
-		return nil, newSpendAndCreateMultiRefusedError("invalid options", err)
-	}
-
-	if options.TxID != nil {
-		return nil, newSpendAndCreateMultiRefusedError("WithTXID describes one transaction; use WithTXIDs")
-	}
-
-	if options.IsCoinbase != nil {
-		return nil, newSpendAndCreateMultiRefusedError("WithSetCoinbase describes one transaction; a coinbase never belongs in a list")
-	}
-
-	// The results report a record created or existing, with its spends made;
-	// neither half on its own fits that, and a child level would read a parent
-	// as created that has no record.
-	if options.CreateOnly || options.SpendOnly {
-		return nil, newSpendAndCreateMultiRefusedError("WithCreateOnly and WithSpendOnly describe half a write; a list writes both halves")
-	}
-
-	if options.TxIDs != nil && len(options.TxIDs) != len(txs) {
-		return nil, newSpendAndCreateMultiRefusedError("WithTXIDs has %d txids for %d transactions", len(options.TxIDs), len(txs))
+		return nil, err
 	}
 
 	if len(txs) == 0 {
 		return []SpendAndCreateMultiResult{}, nil
 	}
 
-	txids := options.TxIDs
-	if txids == nil {
-		txids = make([]chainhash.Hash, len(txs))
-		for i, tx := range txs {
-			if tx == nil {
-				return nil, newSpendAndCreateMultiRefusedError("transaction %d is nil", i)
-			}
-
-			txids[i] = *tx.TxIDChainHash()
-		}
-	}
-
-	// parentsInList[i] holds the positions of tx i's parents that are in the list.
-	parentsInList, err := checkSpendAndCreateMultiList(txs, txids)
-	if err != nil {
-		return nil, err
-	}
+	txids, parentsInList := list.TxIDs, list.ParentsInList
 
 	results := make([]SpendAndCreateMultiResult, len(txs))
 
@@ -217,9 +182,9 @@ func DefaultSpendAndCreateMulti(ctx context.Context, s SpendAndCreateMultiStore,
 			}
 
 			g.Go(func() error {
-				callOpts := make([]CreateOption, 0, len(opts)+1)
+				callOpts := make([]CreateOption, 0, len(opts)+2)
 				callOpts = append(callOpts, opts...)
-				callOpts = append(callOpts, WithTXID(&txids[i]))
+				callOpts = append(callOpts, withListItem(i), WithTXID(&txids[i]))
 
 				md, spends, err := s.SpendAndCreate(ctx, txs[i], blockHeight, callOpts...)
 
@@ -242,6 +207,79 @@ func DefaultSpendAndCreateMulti(ctx context.Context, s SpendAndCreateMultiStore,
 	}
 
 	return results, nil
+}
+
+// SpendAndCreateMultiList is a list SpendAndCreateMulti has accepted: its
+// parsed options, every transaction's txid, and for each transaction the
+// positions of its parents earlier in the list.
+type SpendAndCreateMultiList struct {
+	Options       *CreateOptions
+	TxIDs         []chainhash.Hash
+	ParentsInList [][]int
+}
+
+// PrepareSpendAndCreateMulti runs SpendAndCreateMulti's refusal checks with
+// nothing written, and returns what a store needs to write the list. A store
+// with its own SpendAndCreateMulti calls it first so it refuses exactly the lists
+// DefaultSpendAndCreateMulti refuses. An empty list is accepted and gives an
+// empty SpendAndCreateMultiList.
+func PrepareSpendAndCreateMulti(txs []*bt.Tx, opts ...CreateOption) (*SpendAndCreateMultiList, error) {
+	options, err := ParseCreateOptions(opts...)
+	if err != nil {
+		return nil, newSpendAndCreateMultiRefusedError("invalid options", err)
+	}
+
+	if options.TxID != nil {
+		return nil, newSpendAndCreateMultiRefusedError("WithTXID describes one transaction; use WithTXIDs")
+	}
+
+	if options.IsCoinbase != nil {
+		return nil, newSpendAndCreateMultiRefusedError("WithSetCoinbase describes one transaction; a coinbase never belongs in a list")
+	}
+
+	// The results report a record created or existing, with its spends made;
+	// neither half on its own fits that, and a child level would read a parent
+	// as created that has no record.
+	if options.CreateOnly || options.SpendOnly {
+		return nil, newSpendAndCreateMultiRefusedError("WithCreateOnly and WithSpendOnly describe half a write; a list writes both halves")
+	}
+
+	if options.TxIDs != nil && len(options.TxIDs) != len(txs) {
+		return nil, newSpendAndCreateMultiRefusedError("WithTXIDs has %d txids for %d transactions", len(options.TxIDs), len(txs))
+	}
+
+	if options.SubtreeIdxs != nil {
+		if len(options.MinedBlockInfos) == 0 {
+			return nil, newSpendAndCreateMultiRefusedError("WithSubtreeIdxs needs WithMinedBlockInfo: the indexes are positions in that block")
+		}
+
+		if len(options.SubtreeIdxs) != len(txs) {
+			return nil, newSpendAndCreateMultiRefusedError("WithSubtreeIdxs has %d indexes for %d transactions", len(options.SubtreeIdxs), len(txs))
+		}
+	}
+
+	if len(txs) == 0 {
+		return &SpendAndCreateMultiList{Options: options}, nil
+	}
+
+	txids := options.TxIDs
+	if txids == nil {
+		txids = make([]chainhash.Hash, len(txs))
+		for i, tx := range txs {
+			if tx == nil {
+				return nil, newSpendAndCreateMultiRefusedError("transaction %d is nil", i)
+			}
+
+			txids[i] = *tx.TxIDChainHash()
+		}
+	}
+
+	parentsInList, err := checkSpendAndCreateMultiList(txs, txids)
+	if err != nil {
+		return nil, err
+	}
+
+	return &SpendAndCreateMultiList{Options: options, TxIDs: txids, ParentsInList: parentsInList}, nil
 }
 
 func failedParent(results []SpendAndCreateMultiResult, parents []int) bool {
@@ -315,4 +353,21 @@ func checkSpendAndCreateMultiList(txs []*bt.Tx, txids []chainhash.Hash) ([][]int
 	}
 
 	return parentsInList, nil
+}
+
+// BelowCheckpointNetter is implemented by a store whose SpendAndCreateMulti nets a list below
+// the highest hardcoded checkpoint itself, with outpoint-only spends and no spend-journal rows,
+// as utxoset does. Quick validation then hands such a store fixed ranges of transaction
+// positions, keeps unspendable transactions in the list, and never spends an existing
+// transaction's inputs a second time, because no journal row would accept the repeat.
+type BelowCheckpointNetter interface {
+	NetsBelowCheckpoint() bool
+}
+
+// NetsBelowCheckpoint reports whether s, or the store it wraps, is a BelowCheckpointNetter that
+// says yes.
+func NetsBelowCheckpoint(s any) bool {
+	n, ok := s.(BelowCheckpointNetter)
+
+	return ok && n.NetsBelowCheckpoint()
 }

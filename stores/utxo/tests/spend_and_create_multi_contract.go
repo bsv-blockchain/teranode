@@ -478,3 +478,50 @@ func SpendAndCreateMultiParentsDeduplicated(t *testing.T, db utxostore.Store) {
 	requireSpentBy(t, db, a, 1, child, 5)
 	requireSpentBy(t, db, child, 0, grandchild, 0)
 }
+
+// SpendAndCreateMultiSubtreeIdxs: WithSubtreeIdxs gives each transaction of the list its own
+// subtree index on the block it is mined in, as a block applied in one list spans several
+// subtrees. It needs a block to carry the indexes and one index per transaction.
+func SpendAndCreateMultiSubtreeIdxs(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	const height = 760
+
+	t.Run("each transaction carries its own subtree index", func(t *testing.T) {
+		w := BuildMultiWorkload(t, 0x9a, 3, 2)
+		w.StoreRoots(t, db, height-1)
+
+		idxs := make([]int, len(w.Txs))
+		for i := range idxs {
+			idxs[i] = 2 + i
+		}
+
+		results, err := db.SpendAndCreateMulti(ctx, w.Txs, height, utxostore.WithIgnoreLocked(true),
+			utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 8, BlockHeight: height, SubtreeIdx: 0}),
+			utxostore.WithSubtreeIdxs(idxs))
+		require.NoError(t, err)
+		requireAllStatus(t, results, utxostore.MultiTxCreated)
+
+		for i, tx := range w.Txs {
+			md, err := db.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs, fields.SubtreeIdxs)
+			require.NoError(t, err, "tx %d", i)
+			require.Equal(t, []uint32{8}, md.BlockIDs, "tx %d", i)
+			require.Equal(t, []int{idxs[i]}, md.SubtreeIdxs, "tx %d carries its own subtree index", i)
+		}
+	})
+
+	t.Run("refused without a block or with the wrong count", func(t *testing.T) {
+		w := BuildMultiWorkload(t, 0x9b, 1, 2)
+		w.StoreRoots(t, db, height-1)
+
+		_, err := db.SpendAndCreateMulti(ctx, w.Txs, height, utxostore.WithSubtreeIdxs([]int{0, 1}))
+		require.True(t, utxostore.IsSpendAndCreateMultiRefused(err), "no block to carry the indexes: %v", err)
+
+		_, err = db.SpendAndCreateMulti(ctx, w.Txs, height,
+			utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 8, BlockHeight: height}),
+			utxostore.WithSubtreeIdxs([]int{0}))
+		require.True(t, utxostore.IsSpendAndCreateMultiRefused(err), "one index for two transactions: %v", err)
+
+		requireNotStored(t, db, w.Txs...)
+	})
+}

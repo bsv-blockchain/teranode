@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -30,10 +31,12 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	teranodeaerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
+	"github.com/bsv-blockchain/teranode/stores/utxo/utxoset"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/test"
 	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
+	"github.com/jackc/pgx/v5"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -64,7 +67,12 @@ func BenchmarkBlockShapes(b *testing.B) {
 		b.Skip("set TERANODE_BLOCK_BENCH=1 to run the block-shape bench (starts containers)")
 	}
 
-	for _, storeName := range []string{"aerospike", "postgres"} {
+	storeNames := []string{"aerospike", "postgres"}
+	if v := os.Getenv("TERANODE_BLOCK_BENCH_STORES"); v != "" {
+		storeNames = strings.Split(v, ",")
+	}
+
+	for _, storeName := range storeNames {
 		for _, shape := range blockShapes {
 			b.Run(storeName+"/"+shape.name, func(b *testing.B) {
 				runBlockShape(b, storeName, shape)
@@ -167,7 +175,12 @@ func benchStoreURL(b *testing.B, storeName string) *url.URL {
 		waitForBenchAerospike(b, host, port)
 
 		raw = fmt.Sprintf("aerospike://%s:%d/test?set=bench&externalStore=file://./data/externalStore", host, port)
-	case "postgres":
+	case "postgres", "utxoset", "utxoset-pertx":
+		if u, ok := benchStoreURLs["postgres"]; ok {
+			benchStoreURLs[storeName] = u
+			return u
+		}
+
 		c, err := postgres.Run(ctx, "postgres:16",
 			postgres.WithDatabase("bench"), postgres.WithUsername("bench"), postgres.WithPassword("bench"),
 			testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(5*time.Minute)),
@@ -182,6 +195,9 @@ func benchStoreURL(b *testing.B, storeName string) *url.URL {
 	require.NoError(b, err)
 
 	benchStoreURLs[storeName] = u
+	if storeName != "aerospike" {
+		benchStoreURLs["postgres"] = u
+	}
 
 	return u
 }
@@ -250,6 +266,17 @@ func newBenchNode(b *testing.B, storeName string) *benchNode {
 		require.NoError(b, err)
 
 		store = s
+	case "utxoset", "utxoset-pertx":
+		// The two share one database, so each node starts from empty tables.
+		resetBenchUtxoset(b, storeURL)
+
+		s, err := utxoset.New(ctx, logger, tSettings, storeURL)
+		require.NoError(b, err)
+
+		store = s
+		if storeName == "utxoset-pertx" {
+			store = &perTxMulti{Store: s, concurrency: utxo.SpendAndCreateMultiConcurrency(tSettings)}
+		}
 	}
 
 	b.Cleanup(func() { _ = store.Close(context.Background()) })
@@ -277,6 +304,29 @@ func newBenchNode(b *testing.B, storeName string) *benchNode {
 	require.NoError(b, err)
 
 	return &benchNode{server: server, store: store, key: key, lock: lock}
+}
+
+// perTxMulti is the utxoset store writing a list one transaction at a time through the shared
+// default, which is what the netted write replaces. Everything else is the same store.
+type perTxMulti struct {
+	*utxoset.Store
+	concurrency int
+}
+
+func (p *perTxMulti) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	return utxo.DefaultSpendAndCreateMulti(ctx, p.Store, p.concurrency, txs, blockHeight, opts...)
+}
+
+func resetBenchUtxoset(b *testing.B, storeURL *url.URL) {
+	ctx := context.Background()
+
+	conn, err := pgx.Connect(ctx, storeURL.String())
+	require.NoError(b, err)
+
+	defer func() { _ = conn.Close(ctx) }()
+
+	_, err = conn.Exec(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public;`)
+	require.NoError(b, err)
 }
 
 var benchSettingsLogged sync.Once

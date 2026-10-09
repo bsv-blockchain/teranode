@@ -244,6 +244,7 @@ type CreateOptions struct {
 	MinedBlockInfos    []MinedBlockInfo
 	TxID               *chainhash.Hash
 	TxIDs              []chainhash.Hash // SpendAndCreateMulti only: one txid per transaction of the list
+	SubtreeIdxs        []int            // SpendAndCreateMulti only: one subtree index per transaction of the list
 	IsCoinbase         *bool
 	Frozen             bool
 	Conflicting        bool
@@ -272,6 +273,44 @@ func WithMinedBlockInfo(minedBlockInfos ...MinedBlockInfo) CreateOption {
 func WithTXID(txID *chainhash.Hash) CreateOption {
 	return func(o *CreateOptions) {
 		o.TxID = txID
+	}
+}
+
+// WithSubtreeIdxs supplies the subtree index of each transaction of a SpendAndCreateMulti list,
+// in the same order, so a list that spans several subtrees of one block records each
+// transaction where it is. Each index replaces SubtreeIdx on the list's mined-block info for that
+// transaction only. It needs WithMinedBlockInfo and has no effect on SpendAndCreate.
+func WithSubtreeIdxs(idxs []int) CreateOption {
+	return func(o *CreateOptions) {
+		o.SubtreeIdxs = idxs
+	}
+}
+
+// ItemOptions returns the options transaction i of a SpendAndCreateMulti list is written with: a
+// copy carrying its own subtree index on the mined-block info, with the list-only fields, which
+// describe the whole list, cleared.
+func (o *CreateOptions) ItemOptions(i int) *CreateOptions {
+	c := *o
+	c.TxIDs = nil
+	c.SubtreeIdxs = nil
+
+	if o.SubtreeIdxs != nil && i < len(o.SubtreeIdxs) && len(o.MinedBlockInfos) > 0 {
+		c.MinedBlockInfos = make([]MinedBlockInfo, len(o.MinedBlockInfos))
+		copy(c.MinedBlockInfos, o.MinedBlockInfos)
+
+		for k := range c.MinedBlockInfos {
+			c.MinedBlockInfos[k].SubtreeIdx = o.SubtreeIdxs[i]
+		}
+	}
+
+	return &c
+}
+
+// withListItem applies ItemOptions(i) as an option, for a list written one SpendAndCreate at a
+// time.
+func withListItem(i int) CreateOption {
+	return func(o *CreateOptions) {
+		*o = *o.ItemOptions(i)
 	}
 }
 
@@ -539,6 +578,26 @@ type Store interface {
 	// Unspend reverses a previous spend operation, marking UTXOs as unspent.
 	// This is used during blockchain reorganizations.
 	Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error
+
+	// SpendsMadeBy returns the coins this transaction consumed, as records its own
+	// Unspend can restore. Undoing a conflict resolution uses it to put those coins
+	// back.
+	//
+	// The store answers rather than the caller working it out from the transaction,
+	// because a coin's identity is computed from the amount and locking script of the
+	// output being spent, and a transaction only records those when it is stored in
+	// extended form. A store that keeps transactions in the plain form cannot answer
+	// the question that way and has to answer it from what it does keep.
+	//
+	// Only what the store can still speak for is returned. An input whose coin was
+	// never actually spent, or whose record has passed out of retention, is omitted
+	// rather than guessed at, because a record that cannot be restored fails the whole
+	// restore on a store that checks.
+	//
+	// Called only when undoing a conflict resolution, which happens during a chain
+	// reorganisation or when replaying an operation a crash interrupted. It is never on
+	// the path an ordinary transaction takes, so it may be as expensive as it needs to be.
+	SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*Spend, error)
 
 	// SetMinedMulti marks transactions as mined in the block described by minedBlockInfo.
 	//

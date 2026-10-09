@@ -19,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
@@ -126,10 +127,11 @@ func TestQuickValidateBlock(t *testing.T) {
 
 		// Setup UTXO store expectations for creating all transactions (including coinbase)
 		// Use mock.Anything for the transaction since the order may vary
-		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCreateOnly()).Return(&meta.Data{}, nil, nil)
+		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCreateOnly()).Return(&meta.Data{}, nil, nil).Maybe()
+		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCombined()).Return(&meta.Data{}, []*utxo.Spend{}, nil).Maybe()
 
 		// Setup UTXO store expectations for spending transactions
-		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).Return(nil, []*utxo.Spend{}, nil)
+		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).Return(nil, []*utxo.Spend{}, nil).Maybe()
 
 		// Setup SetLocked expectation for unlocking UTXOs after AddBlock
 		suite.MockUTXOStore.On("SetLocked", mock.Anything, mock.Anything, false).Return(nil)
@@ -239,21 +241,18 @@ func TestCreateAndSpendUTXOsForBatch_UpdatesExistingTransactions(t *testing.T) {
 			batchEnd:   2,
 		}
 
-		// Mock the create phase to succeed (no ErrTxExists)
-		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCreateOnly()).
-			Return(&meta.Data{}, nil, nil).Maybe()
-
-		// Mock the spend phase
-		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).
-			Return(nil, []*utxo.Spend{}, nil).Maybe()
+		// The batch is one list; through the mock's per-transaction default each
+		// transaction is one combined call, which succeeds (no ErrTxExists).
+		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCombined()).
+			Return(&meta.Data{}, []*utxo.Spend{}, nil).Maybe()
 
 		// SetMinedMulti should NOT be called since all txs are new
 
 		err := suite.Server.blockValidation.createAndSpendUTXOsForBatch(suite.Ctx, block, batch)
 		require.NoError(t, err)
 
-		// Verify the create phase ran for each transaction
-		require.Equal(t, 2, countCreatePhaseCalls(suite.MockUTXOStore))
+		// Verify each transaction was applied
+		require.Equal(t, 2, countCombinedCalls(suite.MockUTXOStore))
 		// Verify SetMinedMulti was NOT called
 		suite.MockUTXOStore.AssertNotCalled(t, "SetMinedMulti", mock.Anything, mock.Anything, mock.Anything)
 	})
@@ -279,8 +278,8 @@ func TestCreateAndSpendUTXOsForBatch_UpdatesExistingTransactions(t *testing.T) {
 			batchEnd:   2,
 		}
 
-		// Mock the create phase to return ErrTxExists for all transactions
-		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCreateOnly()).
+		// Every transaction already exists
+		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCombined()).
 			Return((*meta.Data)(nil), nil, errors.ErrTxExists).Maybe()
 
 		// Mock SetMinedMulti - should be called with both transaction hashes
@@ -322,9 +321,13 @@ func TestCreateAndSpendUTXOsForBatch_UpdatesExistingTransactions(t *testing.T) {
 			batchEnd:   1,
 		}
 
-		// Mock the create phase to return ErrTxExists
-		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCreateOnly()).
+		// The transaction already exists
+		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCombined()).
 			Return((*meta.Data)(nil), nil, errors.ErrTxExists).Maybe()
+
+		// The existing transaction's inputs are spent again, as the spend phase always did
+		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).
+			Return(nil, []*utxo.Spend{}, nil).Maybe()
 
 		// Mock SetMinedMulti to return an error
 		suite.MockUTXOStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
@@ -565,17 +568,30 @@ func matchCreateOnly() interface{} {
 	return mock.MatchedBy(func(opts []utxo.CreateOption) bool { return parseCreateOptions(opts).CreateOnly })
 }
 
+// matchCombined matches a SpendAndCreate call that both spends and creates, as the batch
+// list's per-transaction default makes.
+func matchCombined() interface{} {
+	return mock.MatchedBy(func(opts []utxo.CreateOption) bool {
+		o := parseCreateOptions(opts)
+		return !o.CreateOnly && !o.SpendOnly
+	})
+}
+
 // matchSpendOnly matches the spend-phase SpendAndCreate call (WithSpendOnly).
 func matchSpendOnly() interface{} {
 	return mock.MatchedBy(func(opts []utxo.CreateOption) bool { return parseCreateOptions(opts).SpendOnly })
 }
 
-// countCreatePhaseCalls counts recorded SpendAndCreate calls that carried WithCreateOnly.
-func countCreatePhaseCalls(m *utxo.MockUtxostore) int {
+// countCombinedCalls counts recorded SpendAndCreate calls with neither half suppressed.
+func countCombinedCalls(m *utxo.MockUtxostore) int {
 	count := 0
 
 	for _, c := range m.Calls {
-		if c.Method == "SpendAndCreate" && parseCreateOptions(c.Arguments.Get(3).([]utxo.CreateOption)).CreateOnly {
+		if c.Method != "SpendAndCreate" {
+			continue
+		}
+
+		if o := parseCreateOptions(c.Arguments.Get(3).([]utxo.CreateOption)); !o.CreateOnly && !o.SpendOnly {
 			count++
 		}
 	}
@@ -647,7 +663,8 @@ func assertCreatedLocked(t *testing.T, m *utxo.MockUtxostore, wantLocked bool) {
 		opts, ok := c.Arguments.Get(3).([]utxo.CreateOption)
 		require.True(t, ok, "SpendAndCreate 4th arg should be []utxo.CreateOption")
 		o := parseCreateOptions(opts)
-		if !o.CreateOnly {
+		// A create-phase call, or a list's combined call, which creates too.
+		if o.SpendOnly {
 			continue
 		}
 		require.Equal(t, wantLocked, o.Locked, "SpendAndCreate WithLocked flag mismatch")
@@ -669,7 +686,8 @@ func assertCreatedSkipExtended(t *testing.T, m *utxo.MockUtxostore, want bool) {
 		opts, ok := c.Arguments.Get(3).([]utxo.CreateOption)
 		require.True(t, ok, "SpendAndCreate 4th arg should be []utxo.CreateOption")
 		o := parseCreateOptions(opts)
-		if !o.CreateOnly {
+		// A create-phase call, or a list's combined call, which creates too.
+		if o.SpendOnly {
 			continue
 		}
 		require.Equal(t, want, o.SkipExtendedInputs, "SpendAndCreate WithSkipExtendedInputs flag mismatch")
@@ -691,7 +709,8 @@ func assertSpentSkipUTXOHashCheck(t *testing.T, m *utxo.MockUtxostore, want bool
 		opts, ok := c.Arguments.Get(3).([]utxo.CreateOption)
 		require.True(t, ok, "SpendAndCreate 4th arg should be []utxo.CreateOption")
 		o := parseCreateOptions(opts)
-		if !o.SpendOnly {
+		// A spend-phase call, or a list's combined call, which spends too.
+		if o.CreateOnly {
 			continue
 		}
 		require.Equal(t, want, o.IgnoreFlags.SkipUTXOHashCheck, "SpendAndCreate SkipUTXOHashCheck flag mismatch")
@@ -751,8 +770,9 @@ func setupQuickValidateMocks(s *CatchupTestSuite) {
 	s.MockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	s.MockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 	s.MockUTXOStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return((*meta.Data)(nil), errors.NewNotFoundError("not found"))
-	s.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchCreateOnly()).Return(&meta.Data{}, nil, nil)
-	s.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).Return(nil, []*utxo.Spend{}, nil)
+	s.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchCreateOnly()).Return(&meta.Data{}, nil, nil).Maybe()
+	s.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchCombined()).Return(&meta.Data{}, []*utxo.Spend{}, nil).Maybe()
+	s.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).Return(nil, []*utxo.Spend{}, nil).Maybe()
 	s.MockUTXOStore.On("SetLocked", mock.Anything, mock.Anything, false).Return(nil).Maybe()
 	s.MockValidator.Errors = []error{nil, nil, nil}
 }
@@ -1157,6 +1177,69 @@ func TestSkipUnspendableTxStorageDuringCatchup_EndToEnd(t *testing.T) {
 		require.NoError(t, getErr, "GetSpend for parent output 0 must not error")
 		require.Equal(t, int(utxo.Status_SPENT), spendResp.Status,
 			"parent output 0 (spent by op_return tx input) must be marked SPENT")
+	})
+
+	// A retry after a failed first attempt. The first attempt stored both transactions as
+	// unmined, as subtree validation does before a block commits. The retry skips the
+	// OP_RETURN transaction, so it used to stay marked unmined for good: on 2026-09-24 that
+	// left 352 mined data transactions unmined on mainnet. Finding the block's transactions
+	// already stored is what a retry looks like, and then the skipped one is marked mined too.
+	t.Run("retry: a skipped transaction an earlier attempt stored is marked mined", func(t *testing.T) {
+		bv, store, cleanup := newBlockValidationWithRealStore(t)
+		defer cleanup()
+
+		const blockHeight = uint32(100)
+		const checkpointHeight = uint32(1000)
+
+		bv.settings.BlockValidation.QuickValidateSkipUtxoLock = true
+		bv.settings.BlockValidation.SkipUnspendableTxStorageDuringCatchup = true
+		setCheckpointsOnBV(t, bv, checkpointHeight)
+
+		ctx := context.Background()
+
+		privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("SKIP_UNSPENDABLE_RETRY_TEST_KEY"))
+		parentTx := transactions.Create(t,
+			transactions.WithCoinbaseData(1, "/genesis/"),
+			transactions.WithP2PKHOutputs(2, 5000, publicKey),
+		)
+		_, _, err := store.SpendAndCreate(ctx, parentTx, 0, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 1}), utxo.WithCreateOnly())
+		require.NoError(t, err)
+
+		opReturnTx := bt.NewTx()
+		require.NoError(t, opReturnTx.FromUTXOs(&bt.UTXO{
+			TxIDHash:      parentTx.TxIDChainHash(),
+			Vout:          0,
+			LockingScript: parentTx.Outputs[0].LockingScript,
+			Satoshis:      parentTx.Outputs[0].Satoshis,
+		}))
+		opReturnTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x00})
+		require.NoError(t, opReturnTx.AddOpReturnOutput([]byte("stored-by-a-failed-attempt")))
+
+		spendableTx := transactions.Create(t,
+			transactions.WithPrivateKey(privateKey),
+			transactions.WithInput(parentTx, 1),
+			transactions.WithP2PKHOutputs(1, 4000, publicKey),
+		)
+
+		// The failed first attempt: both stored, neither mined.
+		for _, tx := range []*bt.Tx{opReturnTx, spendableTx} {
+			_, _, err = store.SpendAndCreate(ctx, tx, blockHeight, utxo.WithCreateOnly())
+			require.NoError(t, err)
+		}
+
+		block := &model.Block{Height: blockHeight, ID: 99}
+		batch := &SubtreeProcessingBatch{
+			batchTxs:   []*bt.Tx{opReturnTx, spendableTx},
+			txRanges:   [][2]int{{0, 1}, {1, 2}},
+			batchStart: 0,
+			batchEnd:   2,
+		}
+
+		require.NoError(t, bv.createAndSpendUTXOsForBatch(ctx, block, batch))
+
+		txMeta, err := store.Get(ctx, opReturnTx.TxIDChainHash(), fields.BlockIDs)
+		require.NoError(t, err)
+		require.Contains(t, txMeta.BlockIDs, uint32(99), "the skipped transaction is recorded in the block that mined it")
 	})
 
 	// Negative case: with QuickValidateSkipUtxoLock=false the skip is gated out;

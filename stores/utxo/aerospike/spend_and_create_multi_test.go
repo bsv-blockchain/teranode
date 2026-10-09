@@ -26,6 +26,7 @@ func TestSpendAndCreateMulti(t *testing.T) {
 	t.Run("concurrency bound", func(t *testing.T) { tests.SpendAndCreateMultiConcurrencyBound(t, store) })
 	t.Run("result mapping", func(t *testing.T) { tests.SpendAndCreateMultiResultMapping(t, store) })
 	t.Run("options pass through", func(t *testing.T) { tests.SpendAndCreateMultiOptionsPassThrough(t, store) })
+	t.Run("subtree indexes", func(t *testing.T) { tests.SpendAndCreateMultiSubtreeIdxs(t, store) })
 	t.Run("cancelled between levels", func(t *testing.T) { tests.SpendAndCreateMultiCancelledBetweenLevels(t, store) })
 	t.Run("parents deduplicated", func(t *testing.T) { tests.SpendAndCreateMultiParentsDeduplicated(t, store) })
 }

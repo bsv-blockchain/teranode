@@ -10,7 +10,16 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 )
+
+// stampedStore is what a UTXO store that writes blocks permanently onto its UTXOs at a fixed
+// depth offers the tool. The utxoset store implements it; the aerospike and sql stores do not
+// and have nothing a rewind could expose.
+type stampedStore interface {
+	Floors(ctx context.Context) (pruner.StampFloors, error)
+	StampDepth() uint32
+}
 
 // preflightResult holds everything the phases need to know up-front.
 type preflightResult struct {
@@ -78,6 +87,16 @@ func (e *env) preflight(ctx context.Context) (*preflightResult, error) {
 		return nil, errors.NewProcessingError("rewind depth %d exceeds coinbase maturity (%d); pass --force-deep to override", tip-target, coinbaseMaturity)
 	}
 
+	// 4b. The stamp boundary, with NO override. A store whose UTXOs carry their block permanently
+	// once a window is stamped can never take that write back, and its undo copies and preserved
+	// parents carry the same pairs. Deleting blocks down to a target that leaves a stamped height
+	// less than the stamp depth below the new tip would let the chain change beneath those pairs
+	// with nothing to correct them; the only recovery from that state is a resync, so the tool
+	// refuses before it starts.
+	if err := e.refuseBelowStampBoundary(ctx, target); err != nil {
+		return nil, err
+	}
+
 	// 5. Capture the pre-run block persister height. Reading it here means a
 	// genuine storage failure aborts before Phase 0 mutates anything.
 	persisterHeight, persisterHeightKnown, err := e.readBlockPersisterHeight(ctx)
@@ -128,6 +147,34 @@ func (e *env) preflight(ctx context.Context) (*preflightResult, error) {
 	}
 
 	return res, nil
+}
+
+// refuseBelowStampBoundary refuses a target that would leave the highest stamped height less
+// than the stamp depth below the new tip. The highest stamped height is one below the stamp
+// fence, so the rule is target >= fence - 1 + depth. A store with no stamp fence has nothing
+// stamped and is not refused.
+func (e *env) refuseBelowStampBoundary(ctx context.Context, target uint32) error {
+	st, ok := e.utxoStore.(stampedStore)
+	if !ok {
+		return nil
+	}
+
+	floors, err := st.Floors(ctx)
+	if err != nil {
+		return errors.NewStorageError("failed to read the UTXO store's stamp floors", err)
+	}
+
+	if floors.StampFence == 0 {
+		return nil
+	}
+
+	lowest := floors.StampFence - 1 + st.StampDepth()
+	if target >= lowest {
+		return nil
+	}
+
+	return errors.NewProcessingError("target %d would leave the UTXO store's highest stamped height %d less than %d blocks below the tip; the stamped pairs can never be taken back and there is no override, the lowest safe target is %d and anything deeper needs a resync",
+		target, floors.StampFence-1, st.StampDepth(), lowest)
 }
 
 // warnOnPersisterAnomalies cross-checks the state key against the persister's

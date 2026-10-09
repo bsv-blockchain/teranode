@@ -590,7 +590,7 @@ type subtreeResult struct {
 func (u *BlockValidation) processBlockSubtrees(ctx context.Context, block *model.Block, outpointOnly bool) (uint64, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "processBlockSubtrees",
 		tracing.WithParentStat(u.stats),
-		tracing.WithLogMessage(u.logger, "[processBlockSubtrees][%s] processing %d subtrees in batches of %d", block.Hash().String(), len(block.Subtrees), u.settings.BlockValidation.SubtreeBatchSize),
+		tracing.WithLogMessage(u.logger, "[processBlockSubtrees][%s] processing %d subtrees in batches of %d", block.Hash().String(), len(block.Subtrees), u.quickSubtreeBatchSize(block, outpointOnly)),
 	)
 	defer deferFn()
 
@@ -619,7 +619,7 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 	extendedTxs := make(map[chainhash.Hash]*bt.Tx)
 
 	// Process subtrees in batches
-	subtreeBatchSize := u.settings.BlockValidation.SubtreeBatchSize
+	subtreeBatchSize := u.quickSubtreeBatchSize(block, outpointOnly)
 	for batchStart := 0; batchStart < numSubtrees; batchStart += subtreeBatchSize {
 		batchEnd := batchStart + subtreeBatchSize
 		if batchEnd > numSubtrees {
@@ -704,7 +704,7 @@ func (u *BlockValidation) startPrefetchAndExtendStages(gCtx context.Context, g *
 	// Stage 1: Reader - prefetch batches from disk
 	g.Go(func() error {
 		defer close(prefetchChan)
-		subtreeBatchSize := u.settings.BlockValidation.SubtreeBatchSize
+		subtreeBatchSize := u.quickSubtreeBatchSize(block, outpointOnly)
 		for batchStart := 0; batchStart < numSubtrees; batchStart += subtreeBatchSize {
 			batchEnd := batchStart + subtreeBatchSize
 			if batchEnd > numSubtrees {
@@ -2017,84 +2017,176 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 
 	lockUTXOs := !u.quickValidateSkipsUtxoLock(block)
 
-	// Phase 1: Create UTXOs in parallel, collecting any that already exist
-	createG, createCtx := errgroup.WithContext(ctx)
-	// Set concurrency to 8x StoreBatcherSize to allow sufficient parallelism while the
-	// UTXO store batches operations internally. This multiplier balances throughput with
-	// resource usage, allowing multiple batches to be in flight simultaneously.
-	util.SafeSetLimit(u.logger, createG, u.settings.UtxoStore.StoreBatcherSize*8)
+	// The batch goes to the store as ONE list, in block order, through SpendAndCreateMulti. A
+	// batch spans several subtrees, so each transaction carries its own subtree index. The list
+	// is ordered parents first because a block is. What the store does with the list is up to
+	// the store: the SQL and Aerospike stores apply it through DefaultSpendAndCreateMulti, one
+	// SpendAndCreate per transaction, a dependency level at a time, so a parent's outputs are
+	// created as UTXOs and its child in the list spends them a level later. Each level waits for
+	// the one before it, so a chain of N dependent transactions in the batch costs N rounds of
+	// store calls there. A store with its own SpendAndCreateMulti may instead net the list and
+	// never write an output the list also spends.
+	//
+	// A transaction whose create is skipped as unspendable stays out of the list and has its
+	// inputs spent afterwards, as before: it has no output anything can spend, so it is nobody's
+	// parent in the list, and the spend-only call it needs is not something a list models.
+	// A store that nets below the checkpoint (utxoset) writes no spend-journal rows there. It
+	// is handed fixed ranges of transaction positions, the same lists on every attempt whatever
+	// subtree size the block arrived with; unspendable transactions stay in the list, because
+	// their spends need the list's claim to be repeatable; and an existing transaction is only
+	// stamped, never spent again. See netsBelowCheckpoint.
+	nets := u.netsBelowCheckpoint(block, outpointOnly)
 
-	// Track transactions that already exist so we can update their mined info
-	var existingTxsMu sync.Mutex
-	var existingTxHashes []*chainhash.Hash
-
-	minedBlockInfo := utxo.MinedBlockInfo{
-		BlockID:     block.ID,
-		BlockHeight: block.Height,
+	var subtreeSize, netRange int
+	if nets {
+		subtreeSize = netSubtreeSize(block)
+		netRange = u.netRange()
 	}
+
+	var (
+		txs             []*bt.Tx
+		txids           []chainhash.Hash
+		subtreeIdxs     []int
+		rangeOf         []int
+		unspendableTxs  []*bt.Tx
+		skippedTxHashes []*chainhash.Hash
+	)
 
 	batchSize := batch.batchEnd - batch.batchStart
 	for i := 0; i < batchSize; i++ {
 		globalSubtreeIdx := batch.batchStart + i
 		txRange := batch.txRanges[i]
+
+		// Position of the subtree's first transaction in the block. Subtree 0's first
+		// position is the coinbase, which is not in the batch.
+		first := 0
+		if nets {
+			first = globalSubtreeIdx * subtreeSize
+			if globalSubtreeIdx == 0 {
+				first = 1
+			}
+
+			if err := checkNetSubtreeShape(block, globalSubtreeIdx, txRange[1]-txRange[0], subtreeSize); err != nil {
+				return err
+			}
+		}
+
 		for txIdx := txRange[0]; txIdx < txRange[1]; txIdx++ {
 			tx := batch.batchTxs[txIdx]
 
-			if shouldSkipUnspendableCreate(lockUTXOs, u.settings, tx, block.Height) {
-				// Not written to the store; its inputs are still spent in Phase 2.
+			if !nets && shouldSkipUnspendableCreate(lockUTXOs, u.settings, tx, block.Height) {
+				unspendableTxs = append(unspendableTxs, tx)
+				skippedTxHashes = append(skippedTxHashes, tx.TxIDChainHash())
+
 				continue
 			}
 
-			sIdx := globalSubtreeIdx
-			createG.Go(func() error {
-				_, _, err := u.utxoStore.SpendAndCreate(createCtx, tx, block.Height, utxo.WithCreateOnly(),
-					utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
-						BlockID:     block.ID,
-						BlockHeight: block.Height,
-						SubtreeIdx:  sIdx,
-					}), utxo.WithLocked(lockUTXOs), utxo.WithSkipExtendedInputs(outpointOnly))
-				if err != nil {
-					if errors.Is(err, errors.ErrTxExists) {
-						// Transaction already exists - collect it for mined info update
-						txHash := tx.TxIDChainHash()
-						existingTxsMu.Lock()
-						existingTxHashes = append(existingTxHashes, txHash)
-						existingTxsMu.Unlock()
-						return nil
-					}
-					return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] failed to create UTXO for tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
-				}
-				return nil
-			})
+			txs = append(txs, tx)
+			txids = append(txids, *tx.TxIDChainHash())
+			subtreeIdxs = append(subtreeIdxs, globalSubtreeIdx)
+
+			if nets {
+				rangeOf = append(rangeOf, (first+txIdx-txRange[0])/netRange)
+			}
 		}
 	}
 
-	if err := createG.Wait(); err != nil {
-		return err
+	// Track transactions that already exist so we can update their mined info, and spend
+	// their inputs again below.
+	var (
+		existingTxHashes []*chainhash.Hash
+		existingTxs      []*bt.Tx
+	)
+
+	collectExisting := func(tx *bt.Tx) {
+		existingTxHashes = append(existingTxHashes, tx.TxIDChainHash())
+		existingTxs = append(existingTxs, tx)
 	}
 
-	// Phase 1.5: Update mined info for transactions that already existed
-	// This handles the case where a previous attempt created UTXOs with a different
-	// block ID. Chunked via the shared helper (issue 936): on a fat-batch retry every tx
-	// in the batch already exists, and a single unchunked SetMinedMulti call would
-	// overrun the aerospike client connection pool.
+	start := time.Now()
+
+	var applyErr error
+
+	if nets {
+		// One list per range, in order. A range never spans two batches: the batch is cut
+		// to whole ranges (quickSubtreeBatchSize).
+		for lo := 0; lo < len(txs) && applyErr == nil; {
+			hi := lo
+			for hi < len(txs) && rangeOf[hi] == rangeOf[lo] {
+				hi++
+			}
+
+			applyErr = u.applyList(ctx, block, txs[lo:hi], txids[lo:hi], subtreeIdxs[lo:hi], lockUTXOs, outpointOnly, collectExisting)
+			lo = hi
+		}
+
+		// Existing transactions are stamped below and never spent again: their spends
+		// committed with their mined record, and no journal row would accept a repeat.
+		existingTxs = nil
+	} else {
+		applyErr = u.applyList(ctx, block, txs, txids, subtreeIdxs, lockUTXOs, outpointOnly, collectExisting)
+	}
+
+	listDuration := time.Since(start)
+
+	// Spend the unspendable transactions' inputs once every create of the batch has committed,
+	// since they may spend an output the list created. A transaction the store reported as
+	// already existing is spent again too, as the separate spend phase always spent every
+	// transaction: an earlier attempt that stored it is not proof it made its spends, and a
+	// repeat spend by the same spender is the store's idempotent success path. Conflicts are NOT
+	// tolerated here: the quick path never writes conflicting subtree nodes and has no resolver
+	// for a loser, so a spend attributed to a non-canonical transaction would stay that way.
+	if applyErr == nil {
+		applyErr = u.spendBatchWithRetry(ctx, block, append(unspendableTxs, existingTxs...), outpointOnly)
+	}
+
+	// Logged on the failure path too: how long the list ran for is the first thing anyone
+	// reading the log wants.
+	u.logger.Infof("[createAndSpendUTXOsForBatch][%s] batch %d-%d applied: listed=%d unspendable=%d existing=%d (list=%v, total=%v, err=%v)",
+		block.Hash().String(), batch.batchStart, batch.batchEnd, len(txs), len(unspendableTxs), len(existingTxHashes), listDuration, time.Since(start), applyErr)
+
+	if applyErr != nil {
+		if nets {
+			u.noteNetFailure(block, applyErr)
+		}
+
+		return applyErr
+	}
+
+	if nets {
+		u.netFailures.Delete(*block.Hash())
+	}
+
+	// Update mined info for transactions that already existed. This handles the case where a
+	// previous attempt created UTXOs with a different block ID. Chunked via the shared helper
+	// (issue 936): on a fat-batch retry every tx in the batch already exists, and a single
+	// unchunked SetMinedMulti call would overrun the aerospike client connection pool.
 	if len(existingTxHashes) > 0 {
+		minedBlockInfo := utxo.MinedBlockInfo{
+			BlockID:     block.ID,
+			BlockHeight: block.Height,
+		}
+
 		if err := utxo.SetMinedMultiChunked(ctx, u.logger, u.utxoStore, existingTxHashes, minedBlockInfo,
 			u.settings.UtxoStore.MaxMinedBatchSize, u.settings.UtxoStore.MaxMinedRoutines); err != nil {
 			return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] failed to update mined info for %d existing txs", block.Hash().String(), len(existingTxHashes), err)
 		}
+
+		// Transactions already stored mean an earlier attempt at this block got part way,
+		// and it may have stored the skipped ones as unmined too. Nothing else would ever
+		// mark those mined. A first attempt finds nothing stored and pays nothing here.
+		marked, err := utxo.SetMinedIfPresent(ctx, u.utxoStore, skippedTxHashes, minedBlockInfo, u.settings.UtxoStore.MaxMinedRoutines)
+		if err != nil {
+			return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] failed to mark skipped txs mined", block.Hash().String(), err)
+		}
+
+		if marked > 0 {
+			u.logger.Infof("[createAndSpendUTXOsForBatch][%s] marked %d skipped transactions mined that an earlier attempt had stored", block.Hash().String(), marked)
+		}
+
 	}
 
-	// Phase 2: Spend all transactions, retrying transient store errors the way the
-	// legacy path does (services/legacy/netsync PreValidateTransactions). Unlike
-	// legacy, conflicts are NOT tolerated here: legacy runs the validator with
-	// WithCreateConflicting so block assembly's ProcessConflicting later reconciles
-	// the loser, but the quick path never writes conflicting subtree nodes and has
-	// no such resolver — tolerating ErrTxConflicting would leave an output's spend
-	// permanently attributed to a non-canonical tx. Hard-fail instead (fail-closed).
-	// Dirty-restart replay does not need conflict tolerance: re-spending an output
-	// with the same spender is the store's idempotent success path.
-	return u.spendBatchWithRetry(ctx, block, batch.batchTxs, outpointOnly)
+	return nil
 }
 
 // spendRetryBackoffDefault is the pause between spend retry attempts. Matches the
@@ -2181,6 +2273,178 @@ func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.
 	}
 
 	return errors.NewProcessingError("[spendBatchWithRetry][%s] %d of %d spends still failing after %d retries", block.Hash().String(), len(pending), total, maxRetries)
+}
+
+// applyList writes a batch's list through SpendAndCreateMulti, repeating the whole list on a
+// store fault: a repeat is safe because the store reports a transaction it finds again as
+// existing rather than writing it twice. A transaction that exists is collected for the
+// mined-info stamp and for a second spend of its inputs, as the separate phases did. A transaction the
+// store fails, or whose parent in the list failed, fails the batch closed unless the failure is
+// retryable, which the per-transaction default reports per transaction rather than as an error.
+func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs []*bt.Tx, txids []chainhash.Hash,
+	subtreeIdxs []int, lockUTXOs, outpointOnly bool, collectExisting func(*bt.Tx)) error {
+	const maxRetries = 10
+
+	if len(txs) == 0 {
+		return nil
+	}
+
+	backoff := u.spendRetryBackoff
+	if backoff <= 0 {
+		backoff = spendRetryBackoffDefault
+	}
+
+	opts := []utxo.CreateOption{
+		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: block.ID, BlockHeight: block.Height}),
+		utxo.WithSubtreeIdxs(subtreeIdxs),
+		utxo.WithTXIDs(txids),
+		utxo.WithLocked(lockUTXOs),
+		utxo.WithIgnoreLocked(true),
+		utxo.WithSkipExtendedInputs(outpointOnly),
+		utxo.WithSkipUTXOHashCheck(outpointOnly),
+	}
+
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			u.logger.Infof("[applyList][%s] retry %d/%d of a list of %d transactions: %v", block.Hash().String(), attempt, maxRetries, len(txs), lastErr)
+			sleepUnlessDone(ctx, backoff)
+		}
+
+		if ctx.Err() != nil {
+			return errors.NewProcessingError("[applyList][%s] context cancelled", block.Hash().String())
+		}
+
+		results, err := u.utxoStore.SpendAndCreateMulti(ctx, txs, block.Height, opts...)
+
+		switch {
+		case utxo.IsSpendAndCreateMultiRefused(err):
+			// The list's shape is wrong: a transaction twice, an outpoint spent twice, or a
+			// spend of a later transaction. In a block each is a verdict on the block, and the
+			// store wrote nothing. Applied one transaction at a time, in block order, the block
+			// meets the same outcome and error class it always did: a duplicate comes back as
+			// existing and the duplicate check condemns the block later, a double spend fails
+			// as a spend.
+			if u.netsBelowCheckpoint(block, outpointOnly) {
+				// Below the checkpoint a netting store writes no spend-journal rows, so a
+				// transaction-at-a-time write could not accept a repeat of a spend the list
+				// already made. A checkpointed block cannot be malformed; this is a fault.
+				return errors.NewProcessingError("[applyList][%s] the store refused a list of %d transactions of a block below the checkpoint, which a checkpointed block cannot cause", block.Hash().String(), len(txs), err)
+			}
+
+			u.logger.Warnf("[applyList][%s] the store refused the list of %d transactions, applying them one at a time: %v", block.Hash().String(), len(txs), err)
+
+			return u.applyOneByOne(ctx, block, txs, subtreeIdxs, lockUTXOs, outpointOnly, collectExisting)
+		case err != nil:
+			lastErr = err
+			continue
+		case len(results) != len(txs):
+			return errors.NewProcessingError("[applyList][%s] SpendAndCreateMulti returned %d results for %d transactions", block.Hash().String(), len(results), len(txs))
+		}
+
+		// Any retryable failure repeats the whole list, including the children it failed as
+		// ParentFailed, which are not retryable on their own; a hard failure elsewhere in the
+		// list shows up again on the repeat. With no retryable failure, the first hard one fails
+		// the batch.
+		var retryable, hard error
+
+		for i, r := range results {
+			if r.Status == utxo.MultiTxCreated || r.Status == utxo.MultiTxExisted {
+				continue
+			}
+
+			if r.Err != nil && errors.IsRetryableError(r.Err) {
+				retryable = r.Err
+				continue
+			}
+
+			if hard == nil {
+				hard = errors.NewProcessingError("[applyList][%s] transaction %s could not be applied (status %d)", block.Hash().String(), txids[i].String(), r.Status, r.Err)
+			}
+		}
+
+		if retryable != nil {
+			lastErr = retryable
+			continue
+		}
+
+		if hard != nil {
+			return hard
+		}
+
+		for i, r := range results {
+			if r.Status == utxo.MultiTxExisted {
+				collectExisting(txs[i])
+			}
+		}
+
+		return nil
+	}
+
+	return errors.NewProcessingError("[applyList][%s] a list of %d transactions still failing after %d retries", block.Hash().String(), len(txs), maxRetries, lastErr)
+}
+
+// applyOneByOne applies txs one SpendAndCreate at a time, in block order: the path for a list the
+// store refused as malformed. A transaction that already exists is collected for the mined-info
+// stamp; any other failure fails the batch with the store's own error class.
+func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block, txs []*bt.Tx, subtreeIdxs []int,
+	lockUTXOs, outpointOnly bool, collectExisting func(*bt.Tx)) error {
+	const maxRetries = 10
+
+	backoff := u.spendRetryBackoff
+	if backoff <= 0 {
+		backoff = spendRetryBackoffDefault
+	}
+
+	for i, tx := range txs {
+		var err error
+
+		// A transient store error is retried, as the per-transaction waves retried it; a
+		// repeat of the same transaction is accepted as the same spends and create.
+		for attempt := 0; attempt <= maxRetries; attempt++ {
+			if attempt > 0 {
+				sleepUnlessDone(ctx, backoff)
+			}
+
+			if ctx.Err() != nil {
+				return errors.NewProcessingError("[applyOneByOne][%s] context cancelled", block.Hash().String())
+			}
+
+			_, _, err = u.utxoStore.SpendAndCreate(ctx, tx, block.Height,
+				utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: block.ID, BlockHeight: block.Height, SubtreeIdx: subtreeIdxs[i]}),
+				utxo.WithLocked(lockUTXOs),
+				utxo.WithIgnoreLocked(true),
+				utxo.WithSkipExtendedInputs(outpointOnly),
+				utxo.WithSkipUTXOHashCheck(outpointOnly))
+
+			if err == nil || !errors.IsRetryableError(err) {
+				break
+			}
+		}
+
+		switch {
+		case err == nil:
+		case errors.Is(err, errors.ErrTxExists):
+			collectExisting(tx)
+		default:
+			return errors.NewProcessingError("[applyOneByOne][%s] failed to apply tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
+		}
+	}
+
+	return nil
+}
+
+// sleepUnlessDone waits for d, or until ctx is done if that comes first. The caller checks ctx
+// afterwards, so a cancelled block stops retrying at once instead of sleeping out its backoff.
+func sleepUnlessDone(ctx context.Context, d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
 }
 
 // writeSubtreeFilesForBatch writes the full subtree files (.subtree) for a batch.
@@ -2549,4 +2813,110 @@ func (u *BlockValidation) extendBatch(
 	}
 
 	return nil
+}
+
+// netsBelowCheckpoint reports whether this block's UTXO writes go to a store that nets a
+// below-checkpoint list itself and writes no spend-journal rows there (utxoset). It holds only
+// on the outpoint-only fast path with the UTXO lock skipped, which together mean the block is at
+// or below the highest hardcoded checkpoint.
+func (u *BlockValidation) netsBelowCheckpoint(block *model.Block, outpointOnly bool) bool {
+	return outpointOnly && u.quickValidateSkipsUtxoLock(block) && utxo.NetsBelowCheckpoint(u.utxoStore)
+}
+
+// defaultNetRange is the default of blockvalidation_quick_validate_net_range.
+const defaultNetRange = 65536
+
+// netRange is the number of transaction positions in one list handed to a netting store: the
+// setting when it is a positive power of two, the default otherwise.
+func (u *BlockValidation) netRange() int {
+	r := u.settings.BlockValidation.QuickValidateNetRange
+	if r <= 0 || !subtreepkg.IsPowerOfTwo(r) {
+		return defaultNetRange
+	}
+
+	return r
+}
+
+// netSubtreeSize is the capacity of a block's subtrees, which is the same for every subtree of
+// the block and a power of two. Every subtree but the last is full, so the capacity is the
+// smallest power of two at or above the average subtree size. A block of one subtree returns 0:
+// its positions need no subtree size.
+func netSubtreeSize(block *model.Block) int {
+	k := len(block.Subtrees)
+	if k <= 1 {
+		return 0
+	}
+
+	avg := int((block.TransactionCount + uint64(k) - 1) / uint64(k)) //nolint:gosec // a block's transaction count fits int
+
+	return subtreepkg.CeilPowerOfTwo(avg)
+}
+
+// checkNetSubtreeShape checks the premise of the position arithmetic: every subtree of the block
+// but the last holds exactly the subtree capacity. inBatch is the number of the subtree's
+// transactions in the batch, which leaves out the coinbase of subtree 0.
+func checkNetSubtreeShape(block *model.Block, idx, inBatch, size int) error {
+	if size == 0 {
+		return nil
+	}
+
+	n := inBatch
+	if idx == 0 {
+		n++
+	}
+
+	last := idx == len(block.Subtrees)-1
+	if n == size || (last && n <= size) {
+		return nil
+	}
+
+	return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] subtree %d holds %d transactions, not the block's subtree size %d; the fixed position ranges cannot be computed",
+		block.Hash().String(), idx, n, size)
+}
+
+// quickSubtreeBatchSize is how many subtrees quick validation reads and writes as one batch. For
+// a netting store below the checkpoint it is cut to whole position ranges, so a range never spans
+// two batches: netRange / subtree size subtrees, or one subtree when a subtree is a range or
+// larger. Otherwise it is the setting.
+func (u *BlockValidation) quickSubtreeBatchSize(block *model.Block, outpointOnly bool) int {
+	if !u.netsBelowCheckpoint(block, outpointOnly) {
+		return u.settings.BlockValidation.SubtreeBatchSize
+	}
+
+	size := netSubtreeSize(block)
+	if size == 0 || size >= u.netRange() {
+		return 1
+	}
+
+	return u.netRange() / size
+}
+
+// netFailureLimit is how many failed UTXO writes of one block below the checkpoint, on a netting
+// store, are taken as transient before each further failure is reported as needing an operator.
+const netFailureLimit = 10
+
+// noteNetFailure counts a failed UTXO write of a block that a netting store applies below the
+// checkpoint, and reports a block that keeps failing. Such a block has no other way to be written:
+// normal validation and a transaction-at-a-time write both need spend-journal rows the store did
+// not write. So a fault that repeats every time is a stop, and it says so.
+func (u *BlockValidation) noteNetFailure(block *model.Block, err error) {
+	n := 1
+
+	if v, loaded := u.netFailures.LoadOrStore(*block.Hash(), 1); loaded {
+		n = v.(int) + 1
+		u.netFailures.Store(*block.Hash(), n)
+	}
+
+	if n >= netFailureLimit {
+		u.logger.Errorf("[createAndSpendUTXOsForBatch][%s] block %d below the checkpoint has failed its UTXO write %d times; it cannot be applied another way, and an operator must look at it: %v",
+			block.Hash().String(), block.Height, n, err)
+	}
+}
+
+// mustStayOnQuickValidation reports whether this block may only be validated through quick
+// validation: a netting store below the checkpoint wrote it, or may have written part of it,
+// without spend-journal rows, and normal validation or a transaction-at-a-time write would read
+// those rows. Callers return an error instead of falling through.
+func (u *BlockValidation) mustStayOnQuickValidation(block *model.Block) bool {
+	return u.netsBelowCheckpoint(block, u.quickValidateOutpointOnly(block))
 }

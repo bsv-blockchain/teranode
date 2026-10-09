@@ -135,6 +135,11 @@ func (s *Store) SupportsOutpointOnlySpend() bool {
 	return s.store.SupportsOutpointOnlySpend()
 }
 
+// NetsBelowCheckpoint forwards the wrapped store's answer.
+func (s *Store) NetsBelowCheckpoint() bool {
+	return utxo.NetsBelowCheckpoint(s.store)
+}
+
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	s.logger.Debugf("[UTXOStore][logger][Health] : %s", caller())
 	return s.store.Health(ctx, checkLiveness)
@@ -414,4 +419,13 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 	s.logger.Debugf("[UTXOStore][logger][ProcessExpiredPreservations] currentHeight %d err %v : %s", currentHeight, err, caller())
 
 	return err
+}
+
+// SpendsMadeBy passes through, with the record count logged. The records themselves are not
+// logged: undoing a conflict on a wide transaction would produce thousands.
+func (s *Store) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	spends, err := s.store.SpendsMadeBy(ctx, txHash)
+	s.logger.Debugf("[UTXOStore][logger][SpendsMadeBy] %s returned %d spends, err %v", txHash.String(), len(spends), err)
+
+	return spends, err
 }
