@@ -1857,7 +1857,7 @@ func TestCreateZeroSat(t *testing.T) {
 	assert.NotNil(t, response)
 	assert.Equal(t, 2, response.Bins["totalUtxos"])
 	assert.Equal(t, 2, response.Bins["spentUtxos"])
-	assert.Equal(t, 11, response.Bins[fields.DeleteAtHeight.String()])
+	assert.Equal(t, 133, response.Bins[fields.DeleteAtHeight.String()])
 }
 
 // TestAerospikeOutpointBatcherDrainMode is a happy-path smoke test for the

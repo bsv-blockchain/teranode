@@ -55,6 +55,20 @@ var (
 		},
 	)
 
+	// prometheusDanglingSpenderRefTolerated counts absent counter-conflicting records
+	// that the parent-depth guard in GetCounterConflictingTxHashes tolerated (excluded
+	// from the counter set) instead of hard-erroring. A non-zero value means the store
+	// carries dangling spender references (a never-created loser, #1214) that would
+	// otherwise have wedged block validation — surface it so the inconsistency is visible.
+	prometheusDanglingSpenderRefTolerated = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "utxo",
+			Name:      "dangling_spender_ref_tolerated_total",
+			Help:      "Number of absent counter-conflicting records tolerated by the parent-depth guard in the counter-conflicting walk",
+		},
+	)
+
 	// prometheusUtxoConflictingWalkDuration replaces the store-method duration
 	// histogram (e.g. aerospike txmeta_get_conflicting) for the walks that
 	// GetCounterConflictingTxHashes now runs via the package-level function —
@@ -1230,7 +1244,12 @@ func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash, m
 // counter-conflicting transaction) and that spender's full descendant set.
 // maxNodes bounds each descendant walk (see GetConflictingChildren); <= 0
 // means unbounded.
-func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhash.Hash, maxNodes int) ([]chainhash.Hash, error) {
+//
+// retention is the UTXO store block-height retention window. It gates the
+// parent-depth guard that tolerates an absent counter-conflicting record (see
+// parentDepthInfo); pass 0 to disable the guard and fail closed on every absent
+// record.
+func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhash.Hash, maxNodes int, retention uint32) ([]chainhash.Hash, error) {
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "GetCounterConflictingTxHashes")
 
 	defer deferFn()
@@ -1259,10 +1278,18 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 		parentTxs[parentHash] = nil
 	}
 
+	// parentDepth records, per parent, the confirmation depth used to gate tolerance
+	// of an absent counter-conflicting record (see the absent-counter branch below).
+	// Captured from the parent record we already fetch, so no extra round trip.
+	parentDepth := make(map[chainhash.Hash]parentDepthInfo, len(parentTxs))
+
 	for parentTx := range parentTxs {
 		parentTxHash := &parentTx
 
-		parentTxMeta, err := s.Get(ctx, parentTxHash, fields.Utxos)
+		// fields.BlockIDs is requested alongside fields.BlockHeights so that a mined
+		// record with no heights (an older record or a restore) is told apart from an
+		// unmined one; newParentDepthInfo fails closed on the former.
+		parentTxMeta, err := s.Get(ctx, parentTxHash, fields.Utxos, fields.BlockHeights, fields.BlockIDs, fields.UnminedSince)
 		if err != nil {
 			return nil, err
 		}
@@ -1286,6 +1313,7 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 		}
 
 		parentTxs[*parentTxHash] = spendingTxIDs
+		parentDepth[*parentTxHash] = newParentDepthInfo(parentTxMeta)
 	}
 
 	// Walk the inpoints, not txMeta.Tx.Inputs. The Get above asks for
@@ -1311,8 +1339,15 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 	seenSpenders := make(map[chainhash.Hash]struct{}, len(inpoints))
 	uniqueSpendingTxIDs := make([]chainhash.Hash, 0, len(inpoints))
 
+	// spenderParents records every parent output slot that names a given spender.
+	// The absent-record guard below needs all of them: one slot it cannot prove
+	// recent is enough to fail closed for that spender.
+	spenderParents := make(map[chainhash.Hash][]chainhash.Hash, len(inpoints))
+
 	for _, inpoint := range inpoints {
-		parenTxIDS, ok := parentTxs[inpoint.Hash]
+		parentHash := inpoint.Hash
+
+		parenTxIDS, ok := parentTxs[parentHash]
 		if ok {
 			// check the length of the spending txs, if it's less than the index, then the input is not spent
 			if len(parenTxIDS) <= int(inpoint.Index) {
@@ -1322,7 +1357,7 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 
 			spendingTxID := parenTxIDS[inpoint.Index]
 			if spendingTxID != nil {
-				counterConflictingMap[*spendingTxID] = struct{}{}
+				spenderParents[*spendingTxID] = append(spenderParents[*spendingTxID], parentHash)
 
 				if _, ok := seenSpenders[*spendingTxID]; !ok {
 					seenSpenders[*spendingTxID] = struct{}{}
@@ -1332,13 +1367,71 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 		}
 	}
 
+	// tipHeight is resolved lazily; nil means "not yet read from the store"
+	var tipHeight *uint32
+
 	for _, spendingTxID := range uniqueSpendingTxIDs {
 		// call the package-level walk directly (not the Store method) so the
 		// caller-chosen maxNodes budget flows into the BFS
 		childHashes, err := GetConflictingChildren(ctx, s, spendingTxID, maxNodes)
 		if err != nil {
+			// A counter-conflicting record that is absent from the store has no
+			// BlockIDs, so it is definitionally not mined on our chain. Tolerate it
+			// (exclude from the counter set) only when every parent output slot it
+			// occupies is confirmed within the retention window of tip: there, no
+			// counter mined on that slot could yet have been pruned, so the absence
+			// must be a never-created loser — a spend recorded on the parent whose
+			// own record was never written (#1214). The block is valid; legacy
+			// SVNode-following peers accept it. Below that window we cannot rule out
+			// a mined-then-pruned counter, so we fail closed: SVNode would reject a
+			// block double-spending a confirmed output.
+			//
+			// Residual risk, unproven: the premise holds for stamps written under the
+			// store-level floor. A record stamped before the floor existed may carry a
+			// low delete-at-height and be pruned inside the window, and a reaped record
+			// is indistinguishable from a never-created one. Either would be tolerated
+			// here. There is no backfill; the tip lag margin is the only slack.
+			if isRecordAbsent(err) {
+				// the walk also reports a missing descendant of a present spender;
+				// tolerate only when the spender record itself is the absent one
+				if !spenderRecordAbsent(ctx, s, spendingTxID) {
+					return nil, err
+				}
+
+				// the tip height is read only on this path, so a store that never
+				// carries a dangling reference is never asked for it
+				if tipHeight == nil {
+					h := s.GetBlockHeight()
+					tipHeight = &h
+				}
+
+				// height zero is the unset value of a store that was never given a
+				// tip, so recency cannot be proven against it
+				tolerable := *tipHeight != 0
+
+				for _, parentHash := range spenderParents[spendingTxID] {
+					if !tolerable {
+						break
+					}
+
+					if !parentDepth[parentHash].withinRetention(*tipHeight, retention) {
+						tolerable = false
+						break
+					}
+				}
+
+				if tolerable && len(spenderParents[spendingTxID]) > 0 {
+					prometheusDanglingSpenderRefTolerated.Inc()
+					continue
+				}
+			}
+
 			return nil, err
 		}
+
+		// admitted only once its record was readable; a tolerated absent spender is
+		// deliberately left out of the counter set
+		counterConflictingMap[spendingTxID] = struct{}{}
 
 		for _, childHash := range childHashes {
 			if childHash.Equal(subtree.FrozenBytesTxHash) {
@@ -1358,4 +1451,110 @@ func GetCounterConflictingTxHashes(ctx context.Context, s Store, txHash chainhas
 	// fmt.Printf("counterConflicting: %v\n", counterConflicting)
 
 	return counterConflicting, nil
+}
+
+// isRecordAbsent reports whether err itself reports a missing record. It reads
+// only the outermost error code: errors.Is walks the whole wrap chain, so a
+// StorageError wrapping a blob not-found, such as an unreadable external
+// transaction, would pass for an absent record and hide a data-availability fault.
+func isRecordAbsent(err error) bool {
+	var e *errors.Error
+	if !errors.As(err, &e) {
+		return false
+	}
+
+	return e.Code() == errors.ERR_TX_NOT_FOUND || e.Code() == errors.ERR_NOT_FOUND
+}
+
+// spenderRecordAbsent reports whether the store holds no record for the spender
+// itself. Any other outcome, including a read error, reports false so the caller
+// fails closed.
+func spenderRecordAbsent(ctx context.Context, s Store, spendingTxID chainhash.Hash) bool {
+	txMeta, err := s.Get(ctx, &spendingTxID, fields.Utxos)
+	if err != nil {
+		return isRecordAbsent(err)
+	}
+
+	return txMeta == nil
+}
+
+// tipLagMargin is the number of blocks the guard assumes the cached tip may trail
+// the height the pruner works from. The validator reads the tip from a cache that
+// refreshes on block notifications, while the pruner runs on its own, so a lagging
+// tip makes a parent look more recent than it is. Counting the tip this many blocks
+// higher shrinks the tolerated window by the same amount, which is the safe
+// direction.
+const tipLagMargin uint32 = 10
+
+// parentDepthInfo captures a parent tx's confirmation depth relative to the
+// pruning horizon, so the counter-conflicting walk can decide whether an absent
+// spender of that parent is provably a never-created loser (safe to tolerate) or
+// a possibly mined-then-pruned counter (must fail closed).
+type parentDepthInfo struct {
+	// unmined is true when the parent carries no mined height (UnminedSince set),
+	// so it is trivially at the top of the chain — no mined spender of it could
+	// yet have been pruned.
+	unmined bool
+	// minHeight is the lowest block height the parent is mined at (valid only when
+	// mined is true).
+	minHeight uint32
+	// mined is true when a concrete mined height is known for the parent.
+	mined bool
+}
+
+func newParentDepthInfo(parent *meta.Data) parentDepthInfo {
+	if parent == nil {
+		return parentDepthInfo{}
+	}
+
+	if len(parent.BlockHeights) == 0 {
+		// BlockIDs without heights is a mined record from an older node version or a
+		// restore: mined at an unknown height, so recency cannot be proven even if a
+		// reorg later stamped UnminedSince
+		if len(parent.BlockIDs) > 0 {
+			return parentDepthInfo{}
+		}
+
+		if parent.UnminedSince != 0 {
+			return parentDepthInfo{unmined: true}
+		}
+
+		return parentDepthInfo{}
+	}
+
+	// A mined height outranks UnminedSince: a reorg stamps UnminedSince on a
+	// record without clearing its BlockHeights, so a buried parent can carry both.
+
+	minHeight := parent.BlockHeights[0]
+	for _, h := range parent.BlockHeights[1:] {
+		if h < minHeight {
+			minHeight = h
+		}
+	}
+
+	return parentDepthInfo{minHeight: minHeight, mined: true}
+}
+
+// withinRetention reports whether the parent is confirmed within retention blocks
+// of tipHeight (or is unmined). When true, no counter-conflicting tx mined on the
+// parent's output slot could yet be prune-eligible — a mined spender's delete-at-height
+// is mined_height + retention, and mined_height >= parent_height — so an absent spender
+// must be a never-created loser. When we cannot prove recency (no mined height known
+// and not flagged unmined), or retention is 0, we return false and fail closed.
+func (d parentDepthInfo) withinRetention(tipHeight, retention uint32) bool {
+	if retention == 0 {
+		return false
+	}
+
+	if d.unmined {
+		return true
+	}
+
+	if !d.mined {
+		return false
+	}
+
+	// Equivalent to minHeight > tipHeight + tipLagMargin - retention, written as
+	// addition to avoid unsigned underflow when tipHeight < retention.
+	return d.minHeight+retention > tipHeight+tipLagMargin
 }

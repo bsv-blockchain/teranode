@@ -1248,10 +1248,12 @@ func TestSetTTL(t *testing.T) {
 	// Now DAH should be set: all outputs spent AND mined AND on longest chain
 	assert.NotNil(t, tombstoneMillis)
 
-	// Verify the exact DAH value: blockHeight + 1 + retention (mirrors aerospike set_mined.go:162)
+	// The tx is mined at height 100 while the cached tip is still 0, so the stamp is floored at
+	// the mined height + retention rather than the lagging tip + 1 + retention.
 	retention := store.settings.GetUtxoStoreBlockHeightRetention()
-	expectedDAH := int64(store.GetBlockHeight() + 1 + retention)
-	require.Equal(t, expectedDAH, *tombstoneMillis, "DAH should be blockHeight + 1 + retention")
+	expectedDAH := int64(100 + retention)
+	require.Greater(t, expectedDAH, int64(store.GetBlockHeight()+1+retention), "setup: the mined height must be above the cached tip")
+	require.Equal(t, expectedDAH, *tombstoneMillis, "DAH should be mined height + retention when the cached tip lags")
 
 	// Verify DAH bump: advance block height, re-run setDAH — DAH should increase
 	oldDAH := *tombstoneMillis
