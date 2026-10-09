@@ -138,6 +138,48 @@ func TestAnalyzeSingleSpikeIsFlat(t *testing.T) {
 	require.False(t, heap.Leaking, heap.String())
 }
 
+func TestAnalyzeToleranceUsesFirstQuarterBaseline(t *testing.T) {
+	// A steady rise lifts the whole-window mean, so a tolerance taken from that mean would grow with the leak. With
+	// a 50% relative tolerance this 85 MiB rise on a 100 MiB base slips under half the window mean but not under
+	// half the first-quarter mean.
+	tol := Tolerance{HeapRel: 0.5, GoroutineRel: 1, GoroutineAbs: 1e9}
+	samples := series(100, func(i int) float64 { return 100*mib + float64(i)*85*mib/99 }, constGoroutines)
+
+	r, err := Analyze(samples, 0, tol)
+	require.NoError(t, err)
+
+	heap := metric(t, r, "heap_inuse")
+	require.Less(t, heap.QuarterDelta(), tol.HeapRel*heap.Mean, "a mean-based tolerance would have passed this leak")
+	require.True(t, heap.Leaking, heap.String())
+}
+
+func TestAnalyzeMinDetectablePerHour(t *testing.T) {
+	// 101 samples 36s apart: a one-hour window.
+	hourly := func(ratePerHour float64) []Sample {
+		out := make([]Sample, 101)
+		for i := range out {
+			h := uint64(200*mib + ratePerHour*float64(i)/100)
+			out[i] = Sample{Elapsed: time.Duration(i) * 36 * time.Second, HeapInuse: h, HeapAlloc: h, NumGoroutine: 300}
+		}
+
+		return out
+	}
+
+	r, err := Analyze(hourly(0), 0, DefaultTolerance())
+	require.NoError(t, err)
+
+	floor := metric(t, r, "heap_inuse").MinDetectablePerHour
+	require.InDelta(t, 20*mib/0.75, floor, mib, "10%% of 200 MiB over a one-hour window, divided by 0.75")
+
+	r, err = Analyze(hourly(1.2*floor), 0, DefaultTolerance())
+	require.NoError(t, err)
+	require.True(t, metric(t, r, "heap_inuse").Leaking, "a leak 20%% above the floor must fail: %s", r)
+
+	r, err = Analyze(hourly(0.8*floor), 0, DefaultTolerance())
+	require.NoError(t, err)
+	require.False(t, metric(t, r, "heap_inuse").Leaking, "a leak 20%% below the floor must pass: %s", r)
+}
+
 func TestAnalyzeTooFewSamples(t *testing.T) {
 	samples := series(20, func(int) float64 { return 200 * mib }, constGoroutines)
 
