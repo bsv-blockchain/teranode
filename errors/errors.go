@@ -267,10 +267,29 @@ func (e *Error) SetWrappedErr(err error) {
 
 		if errors.As(lastErr.wrappedErr, &lastWrappedErr) {
 			lastErr = lastWrappedErr
-		} else {
-			// this will set lastErr.wrappedErr to nil
-			lastErr = NewError(lastWrappedErr.Error())
+			continue
 		}
+
+		// Foreign leaf: no *Error is reachable through this link, so nothing
+		// below it can carry the new link. A foreign type has no settable
+		// parent, so when the new link is an *Error it is spliced in front of
+		// the leaf — the foreign error stays in the chain (reachable via
+		// Unwrap/errors.As) and the new error becomes the *Error tail. The
+		// historical code instead rebuilt a node from a stale lastWrappedErr,
+		// which could dereference nil and, worse, never attached the appended
+		// error to the chain at all.
+		if errPtr, ok := err.(*Error); ok {
+			foreign := lastErr.wrappedErr
+			lastErr.wrappedErr = errPtr
+			errPtr.wrappedErr = foreign
+			return
+		}
+
+		// Appending a second foreign error under an existing foreign leaf is
+		// unreachable from current callers (Join converts foreigns to *Error
+		// first); attach it here, where it still becomes the tail.
+		lastErr.wrappedErr = err
+		return
 	}
 
 	// Final check: don't add if err already exists in our chain
@@ -346,6 +365,22 @@ func (e *Error) GetData(key string) interface{} {
 	return e.data.GetData(key)
 }
 
+// canAttachWrap reports whether wErr may be attached as the wrapped error of
+// returnErr. A nil wErr, or an *Error that is returnErr itself (or already
+// wraps it), would form a cycle. Foreign (non-*Error) errors cannot take part
+// in an *Error cycle, so they are always attachable.
+func canAttachWrap(wErr error, returnErr *Error) bool {
+	if wErr == nil {
+		return false
+	}
+
+	if errPtr, ok := wErr.(*Error); ok {
+		return errPtr != returnErr && !errPtr.contains(returnErr)
+	}
+
+	return true
+}
+
 // New creates a new Error instance with the specified code, message, and optional parameters.
 //
 // Pass the causing error as the final argument to wrap it; do NOT use a %w verb
@@ -354,7 +389,7 @@ func (e *Error) GetData(key string) interface{} {
 // error is rendered by Error() via " -> " instead. Any orphaned %w is stripped
 // defensively, but the errors.New* format strings should simply omit it.
 func New(code ERR, message string, params ...interface{}) *Error {
-	var wErr *Error
+	var wErr error
 
 	// Extract the wrapped error, if present
 	if len(params) > 0 {
@@ -365,7 +400,11 @@ func New(code ERR, message string, params ...interface{}) *Error {
 			wErr = err
 			params = params[:len(params)-1]
 		case error:
-			wErr = &Error{message: err.Error()}
+			// Keep the foreign error verbatim in the chain instead of flattening
+			// it into a synthetic *Error. The conversion dropped the original
+			// type, so errors.As could never classify driver errors (e.g.
+			// *pgconn.PgError, *sqlite.Error) wrapped through New.
+			wErr = err
 			params = params[:len(params)-1]
 		}
 	}
@@ -400,7 +439,7 @@ func New(code ERR, message string, params ...interface{}) *Error {
 			function: parts[len(parts)-1],
 		}
 		// Only wrap if wErr exists and won't create a cycle
-		if wErr != nil && wErr != returnErr && !wErr.contains(returnErr) {
+		if canAttachWrap(wErr, returnErr) {
 			returnErr.wrappedErr = wErr
 		}
 
@@ -416,7 +455,7 @@ func New(code ERR, message string, params ...interface{}) *Error {
 	}
 
 	// Only wrap if wErr exists and won't create a cycle
-	if wErr != nil && wErr != returnErr && !wErr.contains(returnErr) {
+	if canAttachWrap(wErr, returnErr) {
 		returnErr.wrappedErr = wErr
 	}
 
@@ -708,7 +747,40 @@ func WrapGRPC(err error) error {
 
 					wrappedErrDetails = append(wrappedErrDetails, details)
 					currWrappedErr = err.wrappedErr
+					continue
 				}
+
+				// Foreign tail with no *Error reachable beneath it. Serialize
+				// its message as an unknown-code detail — byte-for-byte the
+				// detail New's historical synthetic *Error produced on the wire
+				// — then stop. The loop cannot advance past a non-*Error link:
+				// before foreign errors were preserved in the chain this branch
+				// was unreachable and the missing advance would have spun
+				// forever.
+				foreignDetails, pbError := anypb.New(&TError{
+					Code:    ERR_UNKNOWN,
+					Message: RemoveInvalidUTF8(currWrappedErr.Error()),
+				})
+				if pbError != nil {
+					pc, file, line, _ := runtime.Caller(1)
+					fn := runtime.FuncForPC(pc)
+					parts := strings.Split(fn.Name(), "/")
+
+					err2 := &Error{
+						// TODO: add grpc construction error type
+						code:       ERR_ERROR,
+						message:    "error serializing foreign error to protobuf Any",
+						file:       file,
+						line:       line,
+						function:   parts[len(parts)-1],
+						wrappedErr: currWrappedErr,
+					}
+
+					return err2
+				}
+
+				wrappedErrDetails = append(wrappedErrDetails, foreignDetails)
+				break
 			}
 		}
 

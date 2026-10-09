@@ -210,7 +210,7 @@ func TestGetSubtree(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "PROCESSING (4): unable to read subtree root information -> UNKNOWN (0): unexpected EOF", echoErr.Message)
+		assert.Equal(t, "PROCESSING (4): unable to read subtree root information -> unexpected EOF", echoErr.Message)
 	})
 
 	t.Run("Invalid hash length", func(t *testing.T) {
@@ -250,7 +250,7 @@ func TestGetSubtree(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "INVALID_ARGUMENT (1): invalid hash string -> UNKNOWN (0): encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid hash string -> encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
 	})
 
 	t.Run("Invalid read mode", func(t *testing.T) {

@@ -417,7 +417,11 @@ func rootCause(err error) string {
 
 		var inner *errors.Error
 		if !errors.As(wrapped, &inner) || inner == nil {
-			return tErr.Message()
+			// The link below is a foreign error preserved in the chain (a
+			// driver error, say): surface its message as the reason. This
+			// matches the historical output, where New flattened the foreign
+			// error into a synthetic *Error whose message was this text.
+			return wrapped.Error()
 		}
 
 		tErr = inner

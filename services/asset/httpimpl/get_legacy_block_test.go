@@ -79,7 +79,7 @@ func TestGetLegacyBlock(t *testing.T) {
 
 		// Check response status code
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
-		assert.Equal(t, "INVALID_ARGUMENT (1): invalid block hash format -> UNKNOWN (0): encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid block hash format -> encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
 	})
 
 	t.Run("Block not found", func(t *testing.T) {
@@ -192,7 +192,7 @@ func TestGetRestLegacyBlock(t *testing.T) {
 
 		// Check response status code
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
-		assert.Equal(t, "INVALID_ARGUMENT (1): invalid block hash string -> UNKNOWN (0): encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid block hash string -> encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
 	})
 
 	t.Run("Invalid hash extension", func(t *testing.T) {

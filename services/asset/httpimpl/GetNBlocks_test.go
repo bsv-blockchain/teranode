@@ -238,7 +238,7 @@ func TestGetNBlocks(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "INVALID_ARGUMENT (1): invalid number of blocks -> UNKNOWN (0): strconv.Atoi: parsing \"invalid\": invalid syntax", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid number of blocks -> strconv.Atoi: parsing \"invalid\": invalid syntax", echoErr.Message)
 	})
 
 	t.Run("Repository error", func(t *testing.T) {
