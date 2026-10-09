@@ -69,6 +69,7 @@ type Server struct {
 	prunerService       pruner.Service
 	lastProcessedHeight atomic.Uint32
 	lastPersistedHeight atomic.Uint32
+	backlog             *BacklogMonitor
 	pruneNotify         chan pruneSignal
 	stats               *gocore.Stat
 
@@ -96,6 +97,7 @@ func New(
 		utxoStore:           utxoStore,
 		blockchainClient:    blockchainClient,
 		blockAssemblyClient: blockAssemblyClient,
+		backlog:             NewBacklogMonitor(BacklogConfigFromSettings(tSettings.Pruner), logger, nil),
 		blobStores:          make(map[storetypes.BlobStoreType]blob.Store),
 		pruneNotify:         make(chan pruneSignal, 1),
 		blobNotify:          make(chan pruneSignal, 1),
@@ -185,6 +187,7 @@ func (s *Server) Init(ctx context.Context) error {
 								sig := pruneSignal{blockHeight: height, blockHash: *blockHash}
 
 								s.logger.Infof("[pruner][%s:%d] notified from BlockPersisted notification", blockHash.String(), height)
+								s.backlog.OnPruneRequested(height)
 
 								// Drain old signal (if any) and replace with latest
 								select {
@@ -234,6 +237,7 @@ func (s *Server) Init(ctx context.Context) error {
 					sig := pruneSignal{blockHeight: height, blockHash: *blockHash}
 
 					s.logger.Infof("[pruner][%s:%d] notified from Block notification", blockHash.String(), height)
+					s.backlog.OnPruneRequested(height)
 
 					// Drain old signal (if any) and replace with latest
 					select {
@@ -384,6 +388,7 @@ func (s *Server) triggerInitialPruning(ctx context.Context) {
 	}
 
 	sig := pruneSignal{blockHeight: currentHeight, blockHash: blockHash}
+	s.backlog.OnPruneRequested(currentHeight)
 	select {
 	case s.pruneNotify <- sig:
 		s.logger.Infof("[pruner][%s:%d] triggered initial pruning on startup (mode: %s)", blockHash.String(), currentHeight, blockTrigger)
@@ -425,7 +430,7 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	}
 
 	// READINESS: Can the service handle requests?
-	checks := make([]health.Check, 0, 5)
+	checks := make([]health.Check, 0, 6)
 
 	// Check gRPC server is listening
 	if s.settings.Pruner.GRPCListenAddress != "" {
@@ -463,6 +468,14 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		checks = append(checks, health.Check{
 			Name:  "UTXOStore",
 			Check: s.utxoStore.Health,
+		})
+	}
+
+	// Pruner backlog: readiness 503 while the pruner is falling behind due records
+	if s.backlog != nil {
+		checks = append(checks, health.Check{
+			Name:  "PrunerBacklog",
+			Check: s.backlog.HealthCheck,
 		})
 	}
 

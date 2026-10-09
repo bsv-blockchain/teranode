@@ -688,6 +688,13 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SkipDeletions:                   getBool("pruner_skipDeletions", false, alternativeContext...),                        // Skip deletions for performance
 			MinBlockHeight:                  getUint32("pruner_min_block_height", 0, alternativeContext...),                       // Do not prune blocks at or below this height
 			UTXOPrunedSetMaxEntries:         getInt("pruner_utxoPrunedSetMaxEntries", 10_000_000, alternativeContext...),          // Soft cap on PrunedTxSet entries; 0 = use built-in 2B default (NOT unlimited)
+			BacklogMonitorEnabled:           getBool("pruner_backlogMonitorEnabled", true, alternativeContext...),                 // Falling-behind detection on by default
+			BacklogMaxLagBlocks:             getUint32("pruner_backlogMaxLagBlocks", 3, alternativeContext...),                    // BEHIND when > 3 blocks behind
+			BacklogMaxIncompleteRuns:        getInt("pruner_backlogMaxIncompleteRuns", 2, alternativeContext...),                  // BEHIND after 2 failed runs in a row
+			BacklogHeadroomWarnRatio:        getFloat64("pruner_backlogHeadroomWarnRatio", 0.8, alternativeContext...),            // AT_RISK at 80% of block interval
+			BacklogHeadroomWindow:           getInt("pruner_backlogHeadroomWindow", 6, alternativeContext...),                     // Rolling-mean sample count
+			BacklogFailReadiness:            getBool("pruner_backlogFailReadiness", true, alternativeContext...),                  // Readiness 503 while BEHIND
+			BacklogLogRepeatInterval:        getDuration("pruner_backlogLogRepeatInterval", 5*time.Minute, alternativeContext...), // Re-log non-OK state every 5m
 		},
 		SubtreeValidation: SubtreeValidationSettings{
 			QuorumAbsoluteTimeout:                     getDuration("subtree_quorum_absolute_timeout", 30*time.Second, alternativeContext...),
