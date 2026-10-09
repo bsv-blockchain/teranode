@@ -9,7 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.12
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.97.3
-	github.com/bitcoin-sv/bdk/module/gobdk v1.2.5-0.20260918043653-4eab3acdbbb9
+	github.com/bitcoin-sv/bdk/module/gobdk v1.2.5-0.20261007164306-d887d55768fc
 	github.com/bsv-blockchain/aerospike-client-go/v8 v8.7.1-bsv6
 	github.com/bsv-blockchain/go-bt/v2 v2.7.1
 	github.com/bsv-blockchain/go-chaincfg v1.6.2
