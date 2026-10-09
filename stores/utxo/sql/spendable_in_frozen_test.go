@@ -49,9 +49,10 @@ func TestSpendSpendableInHoldYieldsFrozenNotLocked(t *testing.T) {
 	err = utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spends[0]}, utxoStore.settings)
 	require.NoError(t, err)
 
-	// Reassign to the same UTXOHash: this is what stamps spendableIn (and
+	// Reassign to the same output (script and satoshis unchanged, so the
+	// derived UTXO hash is identical): this is what stamps spendableIn (and
 	// clears frozen) without altering which UTXO the real spendTx matches.
-	err = utxoStore.ReAssignUTXO(ctx, spends[0], spends[0], utxoStore.settings)
+	err = utxoStore.ReAssignUTXO(ctx, spends[0], tx.Outputs[0], utxoStore.settings)
 	require.NoError(t, err)
 
 	// spendableIn = GetBlockHeight() (0, unset by this test) + the default
@@ -96,7 +97,7 @@ func TestSpendableInHoldRollsBackSiblingSpends(t *testing.T) {
 	require.Len(t, spends, 2)
 
 	require.NoError(t, utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spends[1]}, utxoStore.settings))
-	require.NoError(t, utxoStore.ReAssignUTXO(ctx, spends[1], spends[1], utxoStore.settings))
+	require.NoError(t, utxoStore.ReAssignUTXO(ctx, spends[1], tx.Outputs[1], utxoStore.settings))
 
 	_, err = utxoStore.Spend(ctx, spendTx, 1)
 	require.Error(t, err)
