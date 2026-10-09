@@ -13,7 +13,8 @@ import (
 const MinAnalysisSamples = 8
 
 // Tolerance bounds how much a metric may grow across the analysis window before it counts as leaking. For each
-// metric the allowed growth is max(Rel * post-warm-up mean, Abs).
+// metric the allowed growth is max(Rel * first-quarter mean, Abs). The first quarter is the baseline so that growth
+// during the window cannot raise its own tolerance.
 type Tolerance struct {
 	HeapRel      float64
 	HeapAbs      float64 // bytes
@@ -40,7 +41,10 @@ type MetricResult struct {
 	FirstQuarterMean float64
 	LastQuarterMean  float64
 	Allowed          float64
-	Leaking          bool
+	// MinDetectablePerHour is the slowest steady leak, in units per hour, that this window and tolerance fail. See
+	// minDetectablePerHour.
+	MinDetectablePerHour float64
+	Leaking              bool
 }
 
 // QuarterDelta is the difference between the last and first quarter means.
@@ -54,9 +58,9 @@ func (m MetricResult) String() string {
 		verdict = "LEAKING"
 	}
 
-	return fmt.Sprintf("%s: %s mean=%.0f slope=%.3f/s projected=%.0f quarters=%.0f->%.0f (delta %.0f) allowed=%.0f",
+	return fmt.Sprintf("%s: %s mean=%.0f slope=%.3f/s projected=%.0f quarters=%.0f->%.0f (delta %.0f) allowed=%.0f min_detectable=%.0f/h",
 		m.Name, verdict, m.Mean, m.SlopePerSecond, m.ProjectedGrowth, m.FirstQuarterMean, m.LastQuarterMean,
-		m.QuarterDelta(), m.Allowed)
+		m.QuarterDelta(), m.Allowed, m.MinDetectablePerHour)
 }
 
 // Result is the outcome of analysing a soak run.
@@ -147,10 +151,23 @@ func analyzeMetric(name string, xs, ys []float64, window time.Duration, rel, abs
 	}
 
 	m.ProjectedGrowth = m.SlopePerSecond * window.Seconds()
-	m.Allowed = math.Max(rel*m.Mean, abs)
+	m.Allowed = math.Max(rel*m.FirstQuarterMean, abs)
+	m.MinDetectablePerHour = minDetectablePerHour(m.Allowed, window)
 	m.Leaking = m.ProjectedGrowth > m.Allowed && m.QuarterDelta() > m.Allowed
 
 	return m
+}
+
+// minDetectablePerHour returns the slowest steady leak rate that fails a window with the given allowed growth. A
+// leak at rate r over window w raises the least-squares projection by r*w but the last-quarter mean over the
+// first-quarter mean by only about 0.75*r*w, since the quarters' midpoints are 3/4 of the window apart. Both must
+// exceed allowed, so the quarter condition binds: r > allowed / (0.75 * w).
+func minDetectablePerHour(allowed float64, window time.Duration) float64 {
+	if window <= 0 {
+		return math.Inf(1)
+	}
+
+	return allowed / (0.75 * window.Hours())
 }
 
 // Slope returns the ordinary least-squares slope of ys against xs, or 0 when xs has no spread.
