@@ -415,44 +415,7 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) (retErr err
 	}()
 
 	kafkaMessageHandler := func(msg *kafka.KafkaMessage) error {
-		var kafkaMsg kafkamessage.KafkaTxValidationTopicMessage
-		if err := proto.Unmarshal(msg.Value, &kafkaMsg); err != nil {
-			v.logger.Errorf("Failed to unmarshal kafka message: %v", err)
-
-			return err
-		}
-
-		tx, err := bt.NewTxFromBytes(kafkaMsg.Tx)
-		if err != nil {
-			prometheusInvalidTransactions.Inc()
-			v.logger.Errorf("[Validator] failed to parse transaction from bytes: %v", err)
-
-			return err
-		}
-
-		height := kafkaMsg.Height
-
-		options := kafkaValidationOptions(kafkaMsg.Options)
-
-		// should not pass in a height when validating from Kafka, should just be current utxo store height
-		if _, err = v.validator.ValidateWithOptions(consumerCtx, tx, height, options); err != nil {
-			// ErrTxMissingParent here means the tx merely arrived before its
-			// parent on this Kafka topic's 32 concurrent partitions - it is not
-			// evidence of an attack or a malformed tx, so count it separately
-			// from prometheusInvalidTransactions to keep that counter usable as
-			// a signal for genuinely invalid/attack traffic.
-			if errors.Is(err, errors.ErrTxMissingParent) {
-				prometheusMissingParentTransactions.Inc()
-			} else {
-				prometheusInvalidTransactions.Inc()
-			}
-
-			v.logger.Errorf("[Validator] Invalid tx: %s", err)
-
-			return err
-		}
-
-		return nil
+		return v.handleKafkaTxMessage(consumerCtx, msg)
 	}
 
 	if v.consumerClient != nil {
@@ -484,6 +447,54 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) (retErr err
 		validator_api.RegisterValidatorAPIServer(server, v)
 		closeOnce.Do(func() { close(readyCh) })
 	}, nil); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// handleKafkaTxMessage validates one transaction taken from the validator Kafka topic.
+func (v *Server) handleKafkaTxMessage(consumerCtx context.Context, msg *kafka.KafkaMessage) error {
+	var kafkaMsg kafkamessage.KafkaTxValidationTopicMessage
+	if err := proto.Unmarshal(msg.Value, &kafkaMsg); err != nil {
+		v.logger.Errorf("Failed to unmarshal kafka message: %v", err)
+
+		return err
+	}
+
+	tx, err := bt.NewTxFromBytes(kafkaMsg.Tx)
+	if err != nil {
+		prometheusInvalidTransactions.Inc()
+		v.logger.Errorf("[Validator] failed to parse transaction from bytes: %v", err)
+
+		return err
+	}
+
+	height := kafkaMsg.Height
+
+	options := kafkaValidationOptions(kafkaMsg.Options)
+
+	// should not pass in a height when validating from Kafka, should just be current utxo store height
+	if _, err = v.validator.ValidateWithOptions(consumerCtx, tx, height, options); err != nil {
+		// The tx was accepted, spent and created; only the unlock failed. It is already
+		// logged and counted in the validator, and the lock heals when the tx is mined.
+		if errors.Is(err, errors.ErrTxUnlockFailed) {
+			return nil
+		}
+
+		// ErrTxMissingParent here means the tx merely arrived before its
+		// parent on this Kafka topic's 32 concurrent partitions - it is not
+		// evidence of an attack or a malformed tx, so count it separately
+		// from prometheusInvalidTransactions to keep that counter usable as
+		// a signal for genuinely invalid/attack traffic.
+		if errors.Is(err, errors.ErrTxMissingParent) {
+			prometheusMissingParentTransactions.Inc()
+		} else {
+			prometheusInvalidTransactions.Inc()
+		}
+
+		v.logger.Errorf("[Validator] Invalid tx: %s", err)
+
 		return err
 	}
 
@@ -732,7 +743,10 @@ func (v *Server) validateTransaction(ctx context.Context, req *validator_api.Val
 
 	txMetaData, err := v.validator.ValidateWithOptions(ctx, tx, req.BlockHeight, validationOptions)
 	if err != nil {
-		prometheusInvalidTransactions.Inc()
+		// an accepted tx whose unlock failed is not an invalid tx
+		if !errors.Is(err, errors.ErrTxUnlockFailed) {
+			prometheusInvalidTransactions.Inc()
+		}
 
 		return &validator_api.ValidateTransactionResponse{
 			Valid: false,
@@ -990,6 +1004,10 @@ func (v *Server) handleSingleTx(ctx context.Context) echo.HandlerFunc {
 		// public code and message across instead, and leaves the status and body
 		// untouched for callers that predate it.
 		response, err := v.validateTransaction(ctx, req)
+		if errors.Is(err, errors.ErrTxUnlockFailed) {
+			return c.String(http.StatusOK, "OK")
+		}
+
 		if err != nil {
 			errors.AttachHTTPError(c.Response().Header(), err)
 			return c.String(httpStatusForTxError(err), "[handleSingleTx] Failed to process transaction: "+err.Error())
@@ -1054,6 +1072,10 @@ func (v *Server) handleMultipleTx(ctx context.Context) echo.HandlerFunc {
 			req := buildValidateTxRequest(tx.SerializeBytes(), 0, opts)
 
 			response, err := v.validateTransaction(ctx, req)
+			if errors.Is(err, errors.ErrTxUnlockFailed) {
+				continue
+			}
+
 			if err != nil {
 				return c.String(httpStatusForTxError(err), "[handleMultipleTx] Failed to process transaction: "+err.Error())
 			}

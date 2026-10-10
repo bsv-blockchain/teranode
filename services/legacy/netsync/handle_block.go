@@ -1542,6 +1542,11 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 						return nil
 					}
 
+					// the tx was accepted and only its unlock failed; the lock heals when it is mined
+					if errors.Is(validateErr, errors.ErrTxUnlockFailed) {
+						return nil
+					}
+
 					if errors.IsRetryableError(validateErr) {
 						mu.Lock()
 						retryableTxs = append(retryableTxs, txHash)
@@ -1599,6 +1604,9 @@ func classifyAndCountPrewarmError(logger ulogger.Logger, err error) {
 	case errors.Is(err, errors.ErrServiceError):
 		prometheusLegacyNetsyncPrewarmErrors.WithLabelValues("service").Inc()
 		logger.Warnf("[validateTransactions][prewarm] service error (transient): %v", err)
+	case errors.Is(err, errors.ErrTxUnlockFailed):
+		prometheusLegacyNetsyncPrewarmErrors.WithLabelValues("unlock_failed").Inc()
+		logger.Debugf("[validateTransactions][prewarm] accepted, unlock failed: %v", err)
 	case errors.Is(err, errors.ErrTxConflicting), errors.Is(err, errors.ErrTxExists):
 		prometheusLegacyNetsyncPrewarmErrors.WithLabelValues("policy").Inc()
 		logger.Debugf("[validateTransactions][prewarm] expected: %v", err)

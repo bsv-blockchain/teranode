@@ -69,6 +69,7 @@ var (
 	ErrTxPolicy                   = New(ERR_TX_POLICY, "tx policy error")
 	ErrTxLocked                   = New(ERR_TX_LOCKED, "tx locked")
 	ErrTxCreating                 = New(ERR_TX_CREATING, "tx creating")
+	ErrTxUnlockFailed             = New(ERR_TX_UNLOCK_FAILED, "tx unlock failed")
 	ErrUnknown                    = New(ERR_UNKNOWN, "unknown error")
 	ErrNetworkError               = New(ERR_NETWORK_ERROR, "network error")
 	ErrNetworkTimeout             = New(ERR_NETWORK_TIMEOUT, "network timeout")
@@ -371,6 +372,13 @@ func NewTxLockedError(message string, params ...interface{}) *Error {
 // NewTxCreatingError creates a new error with the transaction creating error code.
 func NewTxCreatingError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_CREATING, message, params...)
+}
+
+// NewTxUnlockFailedError creates a new error with the transaction unlock failed error code.
+// It marks a transaction that was accepted, spent and created, but whose two-phase-commit
+// unlock did not complete, so the record stays locked until it is mined.
+func NewTxUnlockFailedError(message string, params ...interface{}) *Error {
+	return New(ERR_TX_UNLOCK_FAILED, message, params...)
 }
 
 // NewTxCoinbaseImmatureError creates a new error with the transaction coinbase immature error code.

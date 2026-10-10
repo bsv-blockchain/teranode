@@ -923,7 +923,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	// Validate the transaction synchronously
 	// This will validate scripts, check UTXOs, spend them, create new UTXOs, and send to block assembly
 	_, err = s.validatorClient.Validate(ctx, tx, 0)
-	if err != nil {
+	if err != nil && !errors.Is(err, errors.ErrTxUnlockFailed) {
 		return nil, &bsvjson.RPCError{
 			Code:    bsvjson.ErrRPCVerify,
 			Message: txRejectedPrefix + err.Error(),

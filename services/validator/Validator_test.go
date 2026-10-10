@@ -1526,6 +1526,7 @@ func TestValidator_UnlockLockedTxOnExit_NoopWhenNotLocked(t *testing.T) {
 // the in-memory Locked flag untouched (it stays true) since the store record
 // was never actually unlocked.
 func TestValidator_UnlockLockedTxOnExit_SetsErrOnUnlockFailure(t *testing.T) {
+	initPrometheusMetrics()
 	tracing.SetupMockTracer()
 
 	tx, err := bt.NewTxFromString("010000000000000000ef01b136c673a9b815af2bfdeccc9479deec3273ee98a188c26d3c14b5e6bfcbca0b010000006b48304502200241ac9536c536f21e522dec152e69674094b371b14c26edf706e1db0e6487190221008ee66bdafc7d39ee041e1425a7b2df780702e9b066c3a1e9715b03b23fbd99be41210373c9cb2feaa59dd208ad90dc4c8f32dac7a30a65e590fa16e2a421637927ae63feffffff4004fb0b000000001976a91471902a65346b0d951358ec9a1b306ecd36d284ae88ac0280969800000000001976a914dd37ee4ce93278fbc398abcda001d1d855841e0788ac3cd35d0b000000001976a914d04ad25d93764cf83aca0ca0c7cbb7ba8850f75888ac00000000")
@@ -1554,6 +1555,7 @@ func TestValidator_UnlockLockedTxOnExit_SetsErrOnUnlockFailure(t *testing.T) {
 	v.unlockLockedTxOnExit(ctx, tx, tx.TxID(), txMetaData, &deferredErr, &delivered)
 
 	require.Error(t, deferredErr, "the unlock failure must be surfaced via the deferred error")
+	require.ErrorIs(t, deferredErr, errors.ErrTxUnlockFailed)
 	require.True(t, txMetaData.Locked, "the in-memory Locked flag must not be cleared when the unlock itself fails")
 }
 
@@ -1588,6 +1590,7 @@ func NewFailingUtxoStore(t *testing.T) *FailingUtxoStore {
 }
 
 func TestValidator_TwoPhaseCommitTransaction_SetLockedFails(t *testing.T) {
+	initPrometheusMetrics()
 	tracing.SetupMockTracer()
 
 	ctx := t.Context()
@@ -1685,6 +1688,7 @@ func TestValidator_LockedFlagChangedIfBlockAssemblyStoreSucceeds(t *testing.T) {
 // even if that plumbing were broken (e.g. the signature changed to unnamed
 // returns), which would silently swallow unlock failures on the success path.
 func TestValidator_ValidateWithOptions_ReturnsUnlockFailureError(t *testing.T) {
+	initPrometheusMetrics()
 	tracing.SetupMockTracer()
 
 	ctx := context.Background()
@@ -1725,6 +1729,7 @@ func TestValidator_ValidateWithOptions_ReturnsUnlockFailureError(t *testing.T) {
 
 	_, err = v.ValidateWithOptions(ctx, txs[1], 2, opts)
 	require.Error(t, err, "the unlock failure must be surfaced through the real named-return/defer path, not swallowed")
+	require.ErrorIs(t, err, errors.ErrTxUnlockFailed, "the unlock failure must be typed so callers can tell accepted-but-locked from a real failure")
 
 	metaData := &meta.Data{}
 	err = utxoStore.GetMeta(ctx, txs[1].TxIDChainHash(), metaData)

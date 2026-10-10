@@ -82,6 +82,10 @@ var (
 	// which is an important aspect of subtree validation.
 	prometheusSubtreeValidationBlessMissingTransaction prometheus.Histogram
 
+	// prometheusSubtreeValidationBlessUnlockFailed counts transactions that were accepted
+	// but whose two-phase-commit unlock failed, and were blessed anyway.
+	prometheusSubtreeValidationBlessUnlockFailed prometheus.Counter
+
 	// prometheusSubtreeValidationSetTXMetaCacheKafkaBatch tracks the duration of processing one
 	// SetCacheMulti batch from a Kafka message. One observation per Kafka message that contained
 	// at least one ADD entry, regardless of how many entries the batch held.
@@ -235,6 +239,15 @@ func _initPrometheusMetrics() {
 			Name:      "bless_missing_transaction",
 			Help:      "Duration of bless missing transaction",
 			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusSubtreeValidationBlessUnlockFailed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "bless_unlock_failed",
+			Help:      "Accepted transactions blessed although their two-phase-commit unlock failed",
 		},
 	)
 

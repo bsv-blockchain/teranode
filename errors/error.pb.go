@@ -71,6 +71,7 @@ const (
 	ERR_TX_POLICY               ERR = 39
 	ERR_TX_CONSENSUS            ERR = 40
 	ERR_TX_CREATING             ERR = 41
+	ERR_TX_UNLOCK_FAILED        ERR = 42
 	ERR_TX_ERROR                ERR = 49
 	// Service errors 50-59
 	ERR_SERVICE_UNAVAILABLE  ERR = 50
@@ -160,6 +161,7 @@ var (
 		39:  "TX_POLICY",
 		40:  "TX_CONSENSUS",
 		41:  "TX_CREATING",
+		42:  "TX_UNLOCK_FAILED",
 		49:  "TX_ERROR",
 		50:  "SERVICE_UNAVAILABLE",
 		51:  "SERVICE_NOT_STARTED",
@@ -236,6 +238,7 @@ var (
 		"TX_POLICY":                     39,
 		"TX_CONSENSUS":                  40,
 		"TX_CREATING":                   41,
+		"TX_UNLOCK_FAILED":              42,
 		"TX_ERROR":                      49,
 		"SERVICE_UNAVAILABLE":           50,
 		"SERVICE_NOT_STARTED":           51,
@@ -405,7 +408,7 @@ const file_errors_error_proto_rawDesc = "" +
 	"\fwrappedError\x18\x04 \x01(\v2\x0e.errors.TErrorR\fwrappedError\x12\x12\n" +
 	"\x04file\x18\x05 \x01(\tR\x04file\x12\x12\n" +
 	"\x04line\x18\x06 \x01(\x05R\x04line\x12\x1a\n" +
-	"\bfunction\x18\a \x01(\tR\bfunction*\xa7\f\n" +
+	"\bfunction\x18\a \x01(\tR\bfunction*\xbd\f\n" +
 	"\x03ERR\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x14\n" +
 	"\x10INVALID_ARGUMENT\x10\x01\x12\x16\n" +
@@ -448,7 +451,8 @@ const file_errors_error_proto_rawDesc = "" +
 	"\x14TX_COINBASE_IMMATURE\x10&\x12\r\n" +
 	"\tTX_POLICY\x10'\x12\x10\n" +
 	"\fTX_CONSENSUS\x10(\x12\x0f\n" +
-	"\vTX_CREATING\x10)\x12\f\n" +
+	"\vTX_CREATING\x10)\x12\x14\n" +
+	"\x10TX_UNLOCK_FAILED\x10*\x12\f\n" +
 	"\bTX_ERROR\x101\x12\x17\n" +
 	"\x13SERVICE_UNAVAILABLE\x102\x12\x17\n" +
 	"\x13SERVICE_NOT_STARTED\x103\x12\x18\n" +

@@ -1325,6 +1325,7 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	timeStart := time.Now()
 	// passing in block height 0, which will default to utxo store block height in validator
 	txMeta, err = sm.validationClient.Validate(ctx, btTx, 0)
+	txMeta, err = sm.acceptedMetaOnUnlockFailure(ctx, btTx, txMeta, err)
 
 	prometheusLegacyNetsyncHandleTxMsgValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
@@ -1393,6 +1394,27 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	}
 }
 
+// acceptedMetaOnUnlockFailure turns the validator's ErrTxUnlockFailed into a success. The transaction was
+// accepted, spent and created, and only its unlock failed, so it must not be rejected or dropped. The
+// response metadata does not survive a gRPC error, so it is read back from the UTXO store. Any other
+// result is returned unchanged.
+func (sm *SyncManager) acceptedMetaOnUnlockFailure(ctx context.Context, tx *bt.Tx, txMeta *meta.Data, err error) (*meta.Data, error) {
+	if err == nil || !errors.Is(err, errors.ErrTxUnlockFailed) {
+		return txMeta, err
+	}
+
+	if txMeta != nil {
+		return txMeta, nil
+	}
+
+	stored := &meta.Data{}
+	if getErr := sm.utxoStore.GetMeta(ctx, tx.TxIDChainHash(), stored); getErr != nil {
+		return nil, errors.NewProcessingError("[acceptedMetaOnUnlockFailure][%s] failed to read meta of accepted transaction", tx.TxID(), getErr)
+	}
+
+	return stored, nil
+}
+
 // processOrphanTransactions recursively processes orphan transactions that were waiting for a transaction to be accepted
 func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *chainhash.Hash, acceptedTxs *[]*TxHashAndFee) {
 	// check whether any transaction in the orphan pool has this transaction as a parent
@@ -1416,6 +1438,7 @@ func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *ch
 		// validate the orphan transaction
 		// passing in block height 0, which will default to utxo store block height in validator
 		txMeta, err := sm.validationClient.Validate(ctx, orphanTx.tx, 0)
+		txMeta, err = sm.acceptedMetaOnUnlockFailure(ctx, orphanTx.tx, txMeta, err)
 		if err != nil {
 			if errors.Is(err, errors.ErrTxMissingParent) || errors.Is(err, errors.ErrTxLocked) || errors.Is(err, errors.ErrTxCreating) {
 				// silently exit, we will accept this transaction when the other parent(s) comes in

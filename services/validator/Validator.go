@@ -1611,7 +1611,9 @@ func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, tx
 	// so we can now mark it as spendable again
 	if err := v.utxoStore.SetLocked(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, false); err != nil {
 		// this is not a fatal error, since the transaction will we marked as spendable on the next block it's mined into
-		err = errors.NewProcessingError("[Validate][%s] error marking tx as spendable", txID, err)
+		prometheusValidatorUnlockFailed.Inc()
+
+		err = errors.NewTxUnlockFailedError("[Validate][%s] error marking tx as spendable", txID, err)
 		span.RecordError(err)
 
 		return err
