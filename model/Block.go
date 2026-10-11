@@ -107,7 +107,7 @@ type Block struct {
 	hash            atomic.Pointer[chainhash.Hash]
 	subtreeLength   uint64
 	subtreeSlicesMu sync.RWMutex
-	txMap           txmap.TxMap
+	txMap           blockTxMap
 	// txMapCount is the entry count txMap was sized from. Never the
 	// peer-supplied TransactionCount: the separate pass derives it from the
 	// loaded body by txMapEntryCount, and the in-memory load path from
@@ -1459,10 +1459,11 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 		}
 		b.txMap = diskMap
 	} else {
-		// Sized to b.txMapCount bucket by bucket and allocated for this block
-		// only. Counts beyond maxTxMapPrealloc get a capped preallocation and
-		// grow on insert rather than failing the block (issue 1428).
-		b.txMap = newBlockTxMap(b.txMapCount)
+		// An index over the block's own node arrays (6 bytes a tx), allocated for
+		// this block only. Counts beyond maxTxMapPrealloc get a capped
+		// preallocation and grow on insert rather than failing the block (issue
+		// 1428); indexes beyond 32 bits get the 64-bit map.
+		b.txMap = newInMemoryBlockTxMap(b.txMapCount, len(b.SubtreeSlices), subtreeSize, maxTxIndex(b.SubtreeSlices, subtreeSize))
 	}
 	for subIdx := 0; subIdx < len(b.SubtreeSlices); subIdx++ {
 		subIdx := subIdx
@@ -1546,6 +1547,21 @@ func (b *Block) putSubtreeInTxMap(blockLabel string, subtree *subtreepkg.Subtree
 		return errors.NewProcessingError("[checkDuplicateTransactionsInSubtree][%s] subtree %d reached the duplicate check with no txMap", blockLabel, subIdx)
 	}
 
+	// An in-memory index reads the hashes it holds from the subtrees' own node
+	// arrays, so register this one before its first Put. One snapshot of Nodes
+	// serves both, whatever a concurrent release does to the field.
+	nodes := subtree.Nodes
+
+	if m, ok := b.txMap.(*blockNodeIndex); ok {
+		if err = m.register(subIdx, nodes); err != nil {
+			if errors.IsBlockCorrupt(err) {
+				return errors.NewBlockCorruptError("[BLOCK][%s] %s", blockLabel, err.Error())
+			}
+
+			return errors.NewProcessingError("[BLOCK][%s] cannot index subtree %d", blockLabel, subIdx, err)
+		}
+	}
+
 	var idx64 uint64
 
 	// All subtrees before subIdx are full-size (the per-block invariant enforced by
@@ -1556,12 +1572,12 @@ func (b *Block) putSubtreeInTxMap(blockLabel string, subtree *subtreepkg.Subtree
 	// pins every worker on atomic ops instead of doing useful dedup work.
 	baseIdx := subIdx * subtreeSize
 
-	for txIdx := 0; txIdx < len(subtree.Nodes); txIdx++ {
-		if subIdx == 0 && txIdx == 0 && subtree.Nodes[txIdx].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+	for txIdx := 0; txIdx < len(nodes); txIdx++ {
+		if subIdx == 0 && txIdx == 0 && nodes[txIdx].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 			continue
 		}
 
-		subtreeNode := subtree.Nodes[txIdx]
+		subtreeNode := nodes[txIdx]
 
 		idx64, err = safeconversion.IntToUint64(baseIdx + txIdx)
 		if err != nil {
@@ -2191,8 +2207,13 @@ func (b *Block) getAndValidateSubtreesWithDedup(ctx context.Context, logger ulog
 		}
 
 		b.txMapCount = uint64(len(b.Subtrees)) * uint64(first.Length()) // nolint: gosec
-		b.txMap = newBlockTxMap(b.txMapCount)
 		subtreeSize = first.Size()
+
+		// The highest index is that of the last subtree's last node. A subtree in
+		// between that is too long for its slot fails register.
+		limit := txIndexEnd(len(b.Subtrees)-1, subtreeSize, last.Length())
+
+		b.txMap = newInMemoryBlockTxMap(b.txMapCount, len(b.Subtrees), subtreeSize, limit)
 		deduped = true
 
 		return nil
