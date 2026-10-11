@@ -2567,7 +2567,15 @@ func (stp *SubtreeProcessor) InitCurrentBlockHeader(blockHeader *model.BlockHead
 func (stp *SubtreeProcessor) addNode(node subtreepkg.Node, parents *subtreepkg.TxInpoints, skipNotification bool) (err error) {
 	// parents can only be set to nil, when they are already in the map
 	if parents == nil {
-		if _, ok := stp.currentTxMap.Get(node.Hash); !ok {
+		var held bool
+
+		if split, ok := stp.currentTxMap.(*SplitTxInpointsMap); ok {
+			held = split.Exists(node.Hash) // no need to decode the inpoints to know
+		} else {
+			_, held = stp.currentTxMap.Get(node.Hash)
+		}
+
+		if !held {
 			return errors.NewProcessingError("error adding node to subtree: txInpoints not found in currentTxMap for %s", node.Hash.String())
 		}
 	} else {
@@ -3705,12 +3713,31 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 		found   bool
 	)
 
+	// The in-memory map appends a record for every insert and only reclaims them at
+	// Clear, so a rechain that removed and re-added every tx would copy the whole
+	// tail of the map each time. The txs are all in the map already: addNode is
+	// given no inpoints, which it takes to mean "already in the map", and nothing
+	// is removed, so there is no window for the deletedTxs backup to cover either.
+	_, inMemory := stp.currentTxMap.(*SplitTxInpointsMap)
+
 	// Process nodes directly from original subtrees without intermediate storage
 	// We temporarily remove from currentTxMap and immediately re-add to avoid
 	// addNode's duplicate detection while minimizing memory overhead
 	for _, subtree := range originalSubtrees {
 		for _, node := range subtree.Nodes {
 			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+				continue
+			}
+
+			if inMemory {
+				if !stp.currentTxMap.Exists(node.Hash) {
+					return errors.NewProcessingError("error getting txInpoints from currentTxMap for %s", node.Hash.String())
+				}
+
+				if err = stp.addNode(node, nil, true); err != nil {
+					return errors.NewProcessingError(errAddingNodeToSubtree, err)
+				}
+
 				continue
 			}
 

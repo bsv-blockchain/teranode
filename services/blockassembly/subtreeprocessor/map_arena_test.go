@@ -1,6 +1,7 @@
 package subtreeprocessor
 
 import (
+	"context"
 	"encoding/binary"
 	"math"
 	"math/rand"
@@ -37,11 +38,24 @@ const (
 	shapeInt16Max
 	shapeInt16Min
 	shapeNegativeIndex
+	shapeTrailingWords    // a parent with a vout count of 1 and an extra word after it
+	shapeSharedBufferWide // vouts sub-sliced from a shared buffer, count claims more words than len
+	shapeShortVouts       // fewer packed words than the walk needs, but at least one per parent
+	shapeSharedBufferOK   // well-formed vouts sub-sliced from a shared buffer (cap runs into the neighbour)
+	shapeZeroParentsVouts // no parents but packed vouts: Serialize refuses it
 	numShapes
 )
 
-func (s inpointsShape) serializable() bool {
-	return s != shapeNilPointer && s != shapeNoVouts
+// serializable reports whether TxInpoints.Serialize accepts p, which is what
+// the stored wire bytes must agree with.
+func serializable(p *subtreepkg.TxInpoints) bool {
+	if p == nil {
+		return false
+	}
+
+	_, err := p.Serialize()
+
+	return err == nil
 }
 
 func buildInpoints(shape inpointsShape, seed uint64) *subtreepkg.TxInpoints {
@@ -122,6 +136,26 @@ func buildInpoints(shape inpointsShape, seed uint64) *subtreepkg.TxInpoints {
 		p.SubtreeIndex = -1
 
 		return p
+	case shapeTrailingWords:
+		p := subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{parent(0)}, []uint32{1, 7, 9})
+		return &p
+	case shapeSharedBufferWide:
+		// the tx's slice ends after 2 words, the next tx follows in the same buffer
+		buf := []uint32{2, 7, 1, 5, 1, 6}
+		p := subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{parent(0)}, buf[0:2])
+
+		return &p
+	case shapeShortVouts:
+		p := subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{parent(0), parent(1)}, []uint32{1, 5})
+		return &p
+	case shapeSharedBufferOK:
+		buf := []uint32{1, 7, 2, 5, 6, 1, 9}
+		p := subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{parent(0)}, buf[0:2])
+
+		return &p
+	case shapeZeroParentsVouts:
+		p := subtreepkg.NewTxInpointsFromPacked(nil, []uint32{1, 2})
+		return &p
 	default:
 		panic("unknown shape")
 	}
@@ -129,6 +163,10 @@ func buildInpoints(shape inpointsShape, seed uint64) *subtreepkg.TxInpoints {
 
 func randomInpoints(r *rand.Rand, seed uint64) (*subtreepkg.TxInpoints, inpointsShape) {
 	shape := inpointsShape(r.Intn(int(numShapes)))
+	if shape == shapeZeroParentsVouts {
+		shape = shapeOneParent // the stray vouts are not representable, see the dedicated test
+	}
+
 	// the huge shapes are expensive, keep them rare
 	if (shape == shapeManyVouts || shape == shapeHugeParentCount) && r.Intn(20) != 0 {
 		shape = shapeThreeParents
@@ -165,6 +203,9 @@ func TestSplitTxInpointsMap_RoundTripsEveryShape(t *testing.T) {
 
 			if want == nil {
 				require.Nil(t, got, "a stored nil pointer is returned as nil, found")
+			} else if shape == shapeZeroParentsVouts {
+				// stray vouts without parents cannot be serialized and are not kept
+				require.Empty(t, got.ParentTxHashes)
 			} else {
 				require.Equal(t, want, got, "shape %d buckets %d", shape, buckets)
 			}
@@ -264,7 +305,7 @@ func TestSplitTxInpointsMap_AppendSerializedMatchesSerialize(t *testing.T) {
 		got, found, err := m.AppendSerialized([]byte{0xEE}, h)
 		require.True(t, found, "shape %d", shape)
 
-		if !shape.serializable() {
+		if !serializable(p) {
 			require.Error(t, err, "shape %d", shape)
 			require.Equal(t, []byte{0xEE}, got, "dst is returned untouched on error")
 
@@ -298,7 +339,7 @@ func TestSplitTxInpointsMap_AppendMetaInpointsRefusesUnsetParents(t *testing.T) 
 		_, found, err := m.AppendMetaInpoints(nil, h)
 		require.True(t, found)
 
-		wantErr := p == nil || p.ParentTxHashes == nil || !shape.serializable()
+		wantErr := p == nil || p.ParentTxHashes == nil || !serializable(p)
 		if wantErr {
 			require.Error(t, err, "shape %d", shape)
 		} else {
@@ -313,7 +354,7 @@ func TestSplitTxInpointsMap_MoveTo(t *testing.T) {
 
 	for i := uint64(0); i < 2000; i++ {
 		p := buildInpoints(inpointsShape(i%uint64(numShapes)), i)
-		if p == nil {
+		if p == nil || i%uint64(numShapes) == uint64(shapeZeroParentsVouts) {
 			p = buildInpoints(shapeOneParent, i)
 		}
 
@@ -782,7 +823,7 @@ func FuzzSplitTxInpointsMapModel(f *testing.F) {
 			op, key, shape := data[0]%7, arenaHash(uint64(data[1]%16)), inpointsShape(int(data[2])%int(numShapes))
 			data = data[3:]
 
-			if shape == shapeManyVouts || shape == shapeHugeParentCount {
+			if shape == shapeManyVouts || shape == shapeHugeParentCount || shape == shapeZeroParentsVouts {
 				shape = shapeThreeParents
 			}
 
@@ -835,4 +876,206 @@ func FuzzSplitTxInpointsMapModel(f *testing.F) {
 			require.Equal(t, len(model), m.Length())
 		}
 	})
+}
+
+// TestSplitTxInpointsMap_EncodingMatchesSerializeOnMalformedPackedVouts pins the
+// stored wire bytes to TxInpoints.Serialize for packed vouts that break the
+// NewTxInpointsFromPacked contract: slices of a shared buffer whose cap runs
+// into the next tx, trailing words, too few words, and vouts without parents.
+// Whatever Serialize returns, bytes or error, is what AppendSerialized returns,
+// and the neighbour's words never leak into the record.
+func TestSplitTxInpointsMap_EncodingMatchesSerializeOnMalformedPackedVouts(t *testing.T) {
+	for _, shape := range []inpointsShape{shapeTrailingWords, shapeSharedBufferWide, shapeShortVouts, shapeSharedBufferOK, shapeZeroParentsVouts, shapeNoVouts} {
+		for _, parents := range []int{0, 1, txInpointsInPlaceParents, txInpointsInPlaceParents + 1} {
+			m := NewSplitTxInpointsMap(4)
+			h := arenaHash(uint64(shape))
+			p := buildInpoints(shape, 1)
+
+			if parents > 1 && len(p.ParentTxHashes) == 1 && shape != shapeNoVouts {
+				// many parents, the same malformed words: pad the hashes
+				for k := 1; k < parents; k++ {
+					p.ParentTxHashes = append(p.ParentTxHashes, arenaHash(uint64(100+k)))
+				}
+			}
+
+			m.Set(h, p)
+
+			want, serErr := p.Serialize()
+			got, found, err := m.AppendSerialized(nil, h)
+			require.True(t, found)
+
+			if serErr != nil {
+				require.Error(t, err, "shape %d parents %d: Serialize fails so AppendSerialized must", shape, parents)
+				continue
+			}
+
+			require.NoError(t, err, "shape %d parents %d", shape, parents)
+			require.Equal(t, want, got, "shape %d parents %d", shape, parents)
+
+			// and it reads back as what was stored
+			back, ok := m.Get(h)
+			require.True(t, ok)
+			wantAgain, _ := back.Serialize()
+			require.Equal(t, want, wantAgain, "shape %d parents %d", shape, parents)
+		}
+	}
+}
+
+// TestSplitTxInpointsMap_SharedBufferNeighbourDoesNotLeak stores a tx whose
+// vouts are a slice of a buffer shared with the next tx, then changes the
+// neighbour: the stored record must not move.
+func TestSplitTxInpointsMap_SharedBufferNeighbourDoesNotLeak(t *testing.T) {
+	m := NewSplitTxInpointsMap(4)
+	buf := []uint32{2, 7, 1, 5, 1, 6}
+	p := subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{arenaHash(1)}, buf[0:2])
+
+	m.Set(arenaHash(0), &p)
+
+	before, _, err := m.AppendSerialized(nil, arenaHash(0))
+	require.NoError(t, err)
+
+	buf[2], buf[3] = 99, 98
+
+	after, _, err := m.AppendSerialized(nil, arenaHash(0))
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+
+	want, err := p.Serialize()
+	require.NoError(t, err)
+	require.Equal(t, want, before[:len(want)], "the record is what Serialize wrote when it was stored")
+}
+
+// TestSplitTxInpointsMap_ClearTrimsToTheLastFill pins that a half does not keep
+// the arena of a past spike for ever: a big fill and Clear keeps what the fill
+// used, a small fill and Clear after it drops the rest.
+func TestSplitTxInpointsMap_ClearTrimsToTheLastFill(t *testing.T) {
+	m := NewSplitTxInpointsMap(8)
+
+	fill := func(from, to int) {
+		for i := from; i < to; i++ {
+			m.Set(arenaHash(uint64(i)), buildInpoints(shapeThreeParents, uint64(i)))
+		}
+	}
+
+	fill(0, 20_000)
+	big := m.retainedBytes()
+	require.Greater(t, big, 1<<20)
+
+	m.Clear()
+	require.Equal(t, 0, m.usedBytes())
+	require.GreaterOrEqual(t, m.retainedBytes(), big/2, "the generation that was just used is kept for the next fill")
+
+	fill(0, 100)
+	m.Clear()
+	small := m.retainedBytes()
+	require.Less(t, small, big/10, "chunks the last generation did not touch are released")
+
+	// and the map still works after trimming, including a record bigger than any chunk
+	m.Set(arenaHash(1), buildInpoints(shapeManyVouts, 1))
+	got, ok := m.Get(arenaHash(1))
+	require.True(t, ok)
+	require.Equal(t, buildInpoints(shapeManyVouts, 1), got)
+
+	m.Clear()
+	m.Clear()
+
+	for i := range m.buckets {
+		for _, c := range m.buckets[i].chunks {
+			require.LessOrEqual(t, cap(c), txInpointsMaxChunk, "an oversized single-record chunk is not kept")
+		}
+	}
+
+	fill(0, 5000)
+
+	for i := 0; i < 5000; i++ {
+		got, ok := m.Get(arenaHash(uint64(i)))
+		require.True(t, ok)
+		require.Equal(t, buildInpoints(shapeThreeParents, uint64(i)), got)
+	}
+}
+
+// TestReChainSubtrees_DoesNotGrowTheArena pins that rebuilding the chain re-uses
+// the stored records, so the arena stays the size it was whatever is rechained.
+func TestReChainSubtrees_DoesNotGrowTheArena(t *testing.T) {
+	stp, _, newSubtreeChan := newDeferredDrainProcessor(t, nil)
+
+	go func() {
+		for req := range newSubtreeChan {
+			if req.ErrChan != nil {
+				req.ErrChan <- nil
+			}
+		}
+	}()
+
+	const txs = 200
+
+	want := make(map[chainhash.Hash]*subtreepkg.TxInpoints)
+
+	for i := uint64(0); i < txs; i++ {
+		p := buildInpoints(shapeThreeParents, i)
+		h := arenaHash(i)
+		want[h] = p
+
+		require.NoError(t, stp.addNode(subtreepkg.Node{Hash: h, Fee: 1, SizeInBytes: 250}, p, true))
+	}
+
+	require.Greater(t, len(stp.chainedSubtrees), 4)
+
+	split := stp.currentTxMap.(*SplitTxInpointsMap)
+	before := split.usedBytes()
+	require.Positive(t, before)
+
+	for _, from := range []int{3, 0, 1} {
+		require.NoError(t, stp.reChainSubtrees(from))
+		require.Equal(t, before, split.usedBytes(), "rechain from %d must not add records", from)
+		require.Equal(t, txs, split.Length())
+	}
+
+	// the same txs in the same order are in the subtrees and the map still has their inpoints
+	require.Len(t, subtreeHashes(stp), txs+1) // + the coinbase placeholder
+
+	for h, p := range want {
+		got, ok := split.Get(h)
+		require.True(t, ok)
+		require.Equal(t, p, got)
+	}
+
+	// K removals rechain K times: still nothing added
+	for i := uint64(0); i < 10; i++ {
+		require.NoError(t, stp.removeTxFromSubtrees(context.Background(), arenaHash(i*7)))
+		require.Equal(t, before, split.usedBytes(), "removal %d must not add records", i)
+	}
+
+	require.Equal(t, txs-10, split.Length())
+}
+
+// TestMoveBucketFrom_FailureLeavesNothingBehindAfterSwapBack pins the rollback
+// contract: a move that stops at a hash the source lacks may have inserted the
+// hashes before it, and the reset path then drops the whole half.
+func TestMoveBucketFrom_FailureLeavesNothingBehindAfterSwapBack(t *testing.T) {
+	stp := newRemainderFanOutProcessor(t)
+
+	src := stp.currentTxMap.(*SplitTxInpointsMap)
+	for i := uint64(0); i < 50; i++ {
+		src.Set(arenaHash(i), buildInpoints(shapeOneParent, i))
+	}
+
+	// resetSubtreeState's swap: the filled half becomes the shadow
+	stp.currentTxMap, stp.currentTxMapShadow = stp.currentTxMapShadow, src
+
+	nodes := []subtreepkg.Node{}
+	for i := uint64(0); i < 50; i++ {
+		nodes = append(nodes, subtreepkg.Node{Hash: arenaHash(i)})
+	}
+
+	nodes = append(nodes, subtreepkg.Node{Hash: arenaHash(1 << 50)}) // not in the source
+
+	err := stp.parallelGetAndSetIfNotExists(nodes, src, 0, 4, make([]bool, len(nodes)))
+	require.Error(t, err)
+
+	stp.swapCurrentTxMapBack()
+
+	require.Same(t, src, stp.currentTxMap, "the pre-reset half is current again")
+	require.Equal(t, 50, src.Length())
+	require.Zero(t, stp.currentTxMapShadow.Length(), "the half the failed move wrote into is dropped")
 }

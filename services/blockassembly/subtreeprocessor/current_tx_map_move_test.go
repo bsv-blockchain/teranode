@@ -239,7 +239,7 @@ func TestMoveForwardBlock_RemainderKeepsInpointsExactly(t *testing.T) {
 
 			for i := uint64(0); i < 60; i++ {
 				shape := inpointsShape(1 + i%uint64(numShapes-1)) // nil pointers are not valid for addNode
-				if shape == shapeNilPointer || shape == shapeManyVouts || shape == shapeHugeParentCount {
+				if shape == shapeNilPointer || shape == shapeManyVouts || shape == shapeHugeParentCount || shape == shapeZeroParentsVouts {
 					shape = shapeThreeParents
 				}
 

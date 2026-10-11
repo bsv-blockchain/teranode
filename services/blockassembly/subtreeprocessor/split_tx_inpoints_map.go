@@ -2,6 +2,7 @@ package subtreeprocessor
 
 import (
 	"encoding/binary"
+	"reflect"
 	"runtime"
 	"sync"
 
@@ -31,8 +32,9 @@ import (
 //
 // Records are append-only. Set over an existing hash and Delete only touch the
 // index and leave the old record behind; Clear reclaims all of it, keeping the
-// chunks for reuse. Clear runs on each half of the double buffer once per block,
-// so the garbage is bounded by one block's churn.
+// chunks the last fill used for reuse. Clear runs on each half of the double
+// buffer once per block, so the garbage is bounded by one block's churn, provided
+// callers do not re-put records they already hold (reChainSubtrees does not).
 //
 // Lifetime: no method hands out arena bytes. Every read copies the record under
 // the bucket lock, into a fresh TxInpoints (Get), into the caller's buffer
@@ -202,8 +204,29 @@ func (b *txInpointsBucket) index() *swiss.Map[chainhash.Hash, uint64] {
 	return b.m
 }
 
-// payloadOf returns the payload length and the flags of inpoints, and for a tx
-// with many parents the serialized payload.
+// voutIdxsField is where TxInpoints keeps its packed vouts, which only the
+// package go-subtree can read. The encoder needs its length to tell inpoints it
+// can walk from inpoints it has to serialize. If go-subtree ever renames the
+// field, voutIdxsLen reports false and every record goes through Serialize.
+var voutIdxsField, hasVoutIdxsField = reflect.TypeOf(subtreepkg.TxInpoints{}).FieldByName("voutIdxs")
+
+func voutIdxsLen(inpoints *subtreepkg.TxInpoints) (int, bool) {
+	if !hasVoutIdxsField || voutIdxsField.Type.Kind() != reflect.Slice {
+		return 0, false
+	}
+
+	return reflect.ValueOf(inpoints).Elem().FieldByIndex(voutIdxsField.Index).Len(), true
+}
+
+// payloadOf returns the payload length and the flags of inpoints, and when the
+// payload cannot be written in place the serialized payload.
+//
+// The payload is always what TxInpoints.Serialize returns, byte for byte. Inpoints
+// with few parents, whose packed vouts are exactly what the walk over the parents
+// consumes, are written in place without Serialize's buffer. Anything else (many
+// parents, trailing or missing words, vouts without parents, vouts that are a
+// slice of a shared buffer and extend into the next tx) takes Serialize, and if
+// that refuses them the record keeps only the parent hashes and says so.
 func payloadOf(inpoints *subtreepkg.TxInpoints) (payload int, flags byte, serialized []byte) {
 	if inpoints == nil {
 		return 0, recordNil, nil
@@ -219,26 +242,34 @@ func payloadOf(inpoints *subtreepkg.TxInpoints) (payload int, flags byte, serial
 		if size, ok := inPlaceSize(inpoints); ok {
 			return size, flags, nil
 		}
-	} else if wire, err := inpoints.Serialize(); err == nil {
+	}
+
+	if wire, err := inpoints.Serialize(); err == nil {
 		return len(wire), flags, wire
 	}
 
-	// parent hashes without matching vouts: Serialize refuses these, so keep the
-	// hashes and say so
+	// Serialize refuses these: keep the hashes and say so
 	return 4 + 32*parents, flags | recordNoVouts, nil
 }
 
 // inPlaceSize is the length of inpoints in TxInpoints.Serialize's wire format:
 // the parent count, the parent hashes, then per parent a vout count and the
-// vouts. It reports false when the vouts do not match the parents, which makes
-// the accessors panic.
+// vouts. It reports false unless the walk over the parents consumes exactly the
+// packed vouts there are: the accessors read up to the capacity of the slice,
+// not its length, and panic on a walk that starts past the end.
 func inPlaceSize(inpoints *subtreepkg.TxInpoints) (size int, ok bool) {
+	words, ok := voutIdxsLen(inpoints)
+	if !ok {
+		return 0, false
+	}
+
 	defer func() {
 		if recover() != nil {
 			size, ok = 0, false
 		}
 	}()
 
+	consumed := 0
 	size = 4 + 32*len(inpoints.ParentTxHashes)
 
 	for i := range inpoints.ParentTxHashes {
@@ -247,7 +278,12 @@ func inPlaceSize(inpoints *subtreepkg.TxInpoints) (size int, ok bool) {
 			return 0, false
 		}
 
+		consumed += 1 + len(vouts)
 		size += 4 + 4*len(vouts)
+	}
+
+	if consumed != words {
+		return 0, false
 	}
 
 	return size, true
@@ -502,6 +538,12 @@ func (s *SplitTxInpointsMap) putRecordIfNotExists(hash chainhash.Hash, rec []byt
 // src in order and sets inserted[i] to whether s took hashes[i]. It stops at the
 // first hash src does not have and returns its position, or -1 when src had
 // them all; the hashes before it have been moved.
+//
+// On a missing hash s is left holding some of the bucket, and inserted is only
+// filled up to that position: the contents of s are undefined after an error and
+// the caller must drop s. The processor does: a failed moveForwardBlock goes
+// through swapCurrentTxMapBack, which clears the half that was being written
+// before it becomes the retired half again.
 func (s *SplitTxInpointsMap) MoveBucketFrom(src *SplitTxInpointsMap, bucket uint16, hashes []chainhash.Hash, inserted []bool) int {
 	var scratch [txInpointsScratch]byte
 
@@ -529,9 +571,14 @@ func (s *SplitTxInpointsMap) MoveBucketFrom(src *SplitTxInpointsMap, bucket uint
 }
 
 // Clear empties every bucket in place, keeping the index capacity and the arena
-// chunks for the next time the map is filled. That avoids re-growing and
-// re-allocating on every block, which matters because Clear is on the
-// currentTxMap double-buffer reuse path.
+// chunks the last fill used for the next time the map is filled. That avoids
+// re-growing and re-allocating on every block, which matters because Clear is on
+// the currentTxMap double-buffer reuse path.
+//
+// The arena is trimmed to what the generation being cleared touched: chunks it
+// never reached are released, and so are oversized chunks that were made for a
+// single big record. A spike is therefore held for one more generation, not for
+// the life of the process.
 func (s *SplitTxInpointsMap) Clear() {
 	for i := range s.buckets {
 		b := &s.buckets[i]
@@ -542,13 +589,66 @@ func (s *SplitTxInpointsMap) Clear() {
 			b.m.Clear()
 		}
 
-		for c := range b.chunks {
-			b.chunks[c] = b.chunks[c][:0]
-		}
-
-		b.cur = 0
+		b.trimChunks()
 		b.mu.Unlock()
 	}
+}
+
+// trimChunks empties the chunks the last generation used and drops the rest and
+// the oversized ones; the caller holds the bucket lock and has cleared the
+// index, so no handle into the chunks survives.
+func (b *txInpointsBucket) trimChunks() {
+	used := min(b.cur+1, len(b.chunks))
+	kept := 0
+
+	for c := 0; c < used; c++ {
+		if cap(b.chunks[c]) <= txInpointsMaxChunk {
+			b.chunks[kept] = b.chunks[c][:0]
+			kept++
+		}
+	}
+
+	clear(b.chunks[kept:])
+	b.chunks = b.chunks[:kept]
+	b.cur = 0
+}
+
+// usedBytes is the size of the records in the arena, live or not.
+func (s *SplitTxInpointsMap) usedBytes() int {
+	n := 0
+
+	for i := range s.buckets {
+		b := &s.buckets[i]
+
+		b.mu.Lock()
+
+		for _, c := range b.chunks {
+			n += len(c)
+		}
+
+		b.mu.Unlock()
+	}
+
+	return n
+}
+
+// retainedBytes is the capacity of the chunks the map holds.
+func (s *SplitTxInpointsMap) retainedBytes() int {
+	n := 0
+
+	for i := range s.buckets {
+		b := &s.buckets[i]
+
+		b.mu.Lock()
+
+		for _, c := range b.chunks {
+			n += cap(c)
+		}
+
+		b.mu.Unlock()
+	}
+
+	return n
 }
 
 // ParallelBulkSetIfNotExists inserts multiple entries in parallel, grouped by bucket.
