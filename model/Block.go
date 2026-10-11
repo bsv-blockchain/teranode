@@ -1552,14 +1552,15 @@ func (b *Block) putSubtreeInTxMap(blockLabel string, subtree *subtreepkg.Subtree
 	// serves both, whatever a concurrent release does to the field.
 	nodes := subtree.Nodes
 
-	if m, ok := b.txMap.(*blockNodeIndex); ok {
-		if err = m.register(subIdx, nodes); err != nil {
-			if errors.IsBlockCorrupt(err) {
-				return errors.NewBlockCorruptError("[BLOCK][%s] %s", blockLabel, err.Error())
-			}
+	nodeIdx, _ := b.txMap.(*blockNodeIndex)
+	overflowing := false
 
+	if nodeIdx != nil {
+		if err = nodeIdx.register(subIdx, nodes); err != nil {
 			return errors.NewProcessingError("[BLOCK][%s] cannot index subtree %d", blockLabel, subIdx, err)
 		}
+
+		overflowing = nodeIdx.overflows(subIdx)
 	}
 
 	var idx64 uint64
@@ -1585,7 +1586,13 @@ func (b *Block) putSubtreeInTxMap(blockLabel string, subtree *subtreepkg.Subtree
 		}
 
 		// in a tx map, Put is mutually exclusive, can only be called once per key
-		if err = b.txMap.Put(subtreeNode.Hash, idx64); err != nil {
+		if overflowing {
+			err = nodeIdx.putOverflow(subtreeNode.Hash, idx64)
+		} else {
+			err = b.txMap.Put(subtreeNode.Hash, idx64)
+		}
+
+		if err != nil {
 			if errors.Is(err, errors.ErrTxExists) || strings.Contains(err.Error(), "hash already exists in map") {
 				return errors.NewBlockCorruptError("[BLOCK][%s] block contains duplicate transaction %s", blockLabel, subtreeNode.Hash.String())
 			}

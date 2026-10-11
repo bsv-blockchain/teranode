@@ -271,6 +271,17 @@ type blockNodeIndex struct {
 	// one of its txs. A reader only reaches it through an entry found under a shard
 	// lock, or after Freeze, both of which order it after that write.
 	nodes [][]subtreepkg.Node
+
+	// A subtree other than the last that is longer than subtreeSize overlaps the index space
+	// of the next, so its txs can't be found through hashAt. Such a block is invalid and the
+	// load reports it once every loader has finished, but the old map took those txs, so the
+	// duplicate check must too: they are kept in overflow under the index they had there. It
+	// is empty for any block that isn't malformed. overflowing[s] is written by register
+	// and read by the goroutine that owns subtree s only.
+	overflowing []bool
+	hasOverflow atomic.Bool
+	overflowMu  sync.Mutex
+	overflow    map[chainhash.Hash]uint64
 }
 
 // newBlockNodeIndex returns an index for numSubtrees subtrees whose index space is
@@ -279,6 +290,7 @@ func newBlockNodeIndex(capacity uint64, numSubtrees, subtreeSize int) *blockNode
 	m := &blockNodeIndex{
 		subtreeSize: uint64(subtreeSize), // nolint: gosec
 		nodes:       make([][]subtreepkg.Node, numSubtrees),
+		overflowing: make([]bool, numSubtrees),
 	}
 
 	seed := maphash.MakeSeed()
@@ -298,21 +310,65 @@ func (m *blockNodeIndex) hashAt(idx uint32) *chainhash.Hash {
 }
 
 // register makes the nodes of subtree sIdx readable through the index. It must run before
-// the first Put of one of them. A subtree other than the last that is longer than the
-// first one's capacity would overlap the index space of the next, and is the same
-// body corruption GetAndValidateSubtrees reports after the load.
+// the first Put of one of them. It never judges the block: a subtree other than the last that
+// is longer than the first one's capacity is only marked (overflows), and reported by the load
+// after all subtrees are in, like any other length mismatch.
 func (m *blockNodeIndex) register(sIdx int, nodes []subtreepkg.Node) error {
 	if sIdx < 0 || sIdx >= len(m.nodes) {
 		return errors.NewProcessingError("subtree %d is outside the %d subtrees of the block", sIdx, len(m.nodes))
 	}
 
-	if sIdx != len(m.nodes)-1 && uint64(len(nodes)) > m.subtreeSize {
-		return errors.NewBlockCorruptError("subtree %d has length %d, expected %d", sIdx, len(nodes), m.subtreeSize)
-	}
-
+	m.overflowing[sIdx] = sIdx != len(m.nodes)-1 && uint64(len(nodes)) > m.subtreeSize
 	m.nodes[sIdx] = nodes
 
 	return nil
+}
+
+// overflows reports whether subtree sIdx was registered too long for its slot, so its txs go
+// through putOverflow.
+func (m *blockNodeIndex) overflows(sIdx int) bool {
+	return m.overflowing[sIdx]
+}
+
+// putOverflow is Put for a tx of an overflowing subtree. idx is the index the old map gave it,
+// which may overlap another subtree's.
+func (m *blockNodeIndex) putOverflow(hash chainhash.Hash, idx uint64) error {
+	m.overflowMu.Lock()
+
+	if m.overflow == nil {
+		m.overflow = make(map[chainhash.Hash]uint64)
+	}
+
+	if _, dup := m.overflow[hash]; dup {
+		m.overflowMu.Unlock()
+
+		return errors.NewTxExistsError("hash already exists in map")
+	}
+
+	m.overflow[hash] = idx
+	m.hasOverflow.Store(true)
+	m.overflowMu.Unlock()
+
+	// Put checks overflow after inserting and this checks the index after inserting, so
+	// whichever of two equal hashes comes second sees the other.
+	if _, dup := m.idx.Get(hash); dup {
+		return errors.NewTxExistsError("hash already exists in map")
+	}
+
+	return nil
+}
+
+func (m *blockNodeIndex) inOverflow(hash chainhash.Hash) (uint64, bool) {
+	if !m.hasOverflow.Load() {
+		return 0, false
+	}
+
+	m.overflowMu.Lock()
+	defer m.overflowMu.Unlock()
+
+	idx, ok := m.overflow[hash]
+
+	return idx, ok
 }
 
 // Put adds hash at idx. An idx above the 32-bit range is an error, never wrapped.
@@ -321,21 +377,36 @@ func (m *blockNodeIndex) Put(hash chainhash.Hash, idx uint64) error {
 		return errors.NewProcessingError("tx index %d does not fit the 32-bit in-memory tx index", idx)
 	}
 
-	return m.idx.Put(hash, uint32(idx))
+	if err := m.idx.Put(hash, uint32(idx)); err != nil {
+		return err
+	}
+
+	if _, dup := m.inOverflow(hash); dup {
+		return errors.NewTxExistsError("hash already exists in map")
+	}
+
+	return nil
 }
 
 // Get returns the index of hash.
 func (m *blockNodeIndex) Get(hash chainhash.Hash) (uint64, bool) {
-	idx, ok := m.idx.Get(hash)
+	if idx, ok := m.idx.Get(hash); ok {
+		return uint64(idx), true
+	}
 
-	return uint64(idx), ok
+	return m.inOverflow(hash)
 }
 
 // Freeze makes the index read-only so Get takes no lock.
 func (m *blockNodeIndex) Freeze() { m.idx.Freeze() }
 
 // Length is the number of txs in the index.
-func (m *blockNodeIndex) Length() int { return m.idx.Length() }
+func (m *blockNodeIndex) Length() int {
+	m.overflowMu.Lock()
+	defer m.overflowMu.Unlock()
+
+	return m.idx.Length() + len(m.overflow)
+}
 
 // txIndexEnd is one above the index of the last of length nodes of subtree sIdx, whose
 // index space starts at sIdx*subtreeSize. It saturates at MaxUint64.

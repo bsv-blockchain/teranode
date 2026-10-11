@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/rand"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +26,9 @@ import (
 
 // shapeBlock builds a block from subtrees of the given node counts (all with the capacity of
 // the first) whose node hashes come from hashFor(global index).
+// hexRe matches the random hashes of a generated fixture.
+var hexRe = regexp.MustCompile("[0-9a-f]{64}")
+
 func shapeBlock(t *testing.T, size int, lens []int, hashFor func(g int) chainhash.Hash) *Block {
 	t.Helper()
 
@@ -230,15 +234,128 @@ func TestCheckDuplicateTransactions_VerdictIndependentOfWorkers(t *testing.T) {
 	}
 }
 
-// A subtree other than the last that is longer than the first overlaps the next one's indices; it
-// is rejected as the same corruption GetAndValidateSubtrees reports.
-func TestCheckDuplicateTransactions_OversizedMiddleSubtree(t *testing.T) {
-	b := shapeBlock(t, 4, []int{4, 8, 4}, seqHashAt)
+// shapeBlockUnique is shapeBlock with hashes that stay distinct when a subtree overlaps the next
+// one's index range.
+func shapeBlockUnique(t *testing.T, size int, lens []int) *Block {
+	t.Helper()
 
-	err := b.checkDuplicateTransactions(context.Background(), ulogger.TestLogger{}, 2, nil)
-	require.Error(t, err)
-	require.True(t, errors.IsBlockCorrupt(err), "got %v", err)
-	require.Contains(t, err.Error(), "subtree 1 has length 8, expected 4")
+	b := shapeBlock(t, size, lens, func(g int) chainhash.Hash { return seqHashAt(g) })
+	for s, st := range b.SubtreeSlices {
+		for i := range st.Nodes {
+			if s != 0 || i != 0 {
+				st.Nodes[i].Hash = seqHashAt(s*1000 + i)
+			}
+		}
+	}
+
+	return b
+}
+
+// A subtree other than the last that is longer than the first overlaps the next one's indices. The
+// old map took it (and the load reports it afterwards); the index keeps those txs apart and
+// accepts and deduplicates exactly the same.
+func TestCheckDuplicateTransactions_OversizedMiddleSubtree(t *testing.T) {
+	newBlock := shapeBlockUnique(t, 4, []int{4, 8, 4})
+	oldBlock := shapeBlockUnique(t, 4, []int{4, 8, 4})
+
+	require.NoError(t, newBlock.checkDuplicateTransactions(context.Background(), ulogger.TestLogger{}, 2, nil))
+	require.NoError(t, legacyDedup(oldBlock))
+	newBlock.txMap.Freeze()
+
+	require.Equal(t, oldBlock.txMap.Length(), newBlock.txMap.Length())
+
+	for s, st := range oldBlock.SubtreeSlices {
+		for _, n := range st.Nodes {
+			want, wantOK := oldBlock.txMap.Get(n.Hash)
+			got, gotOK := newBlock.txMap.Get(n.Hash)
+			require.Equal(t, wantOK, gotOK, "subtree %d", s)
+			require.Equal(t, want, got, "subtree %d", s)
+		}
+	}
+
+	// a hash repeated between the oversized subtree and a regular one is still a duplicate
+	for _, pos := range [][2]int{{1, 2}, {2, 1}} {
+		b := shapeBlockUnique(t, 4, []int{4, 8, 4})
+		b.SubtreeSlices[pos[1]].Nodes[2].Hash = b.SubtreeSlices[pos[0]].Nodes[6%len(b.SubtreeSlices[pos[0]].Nodes)].Hash
+
+		err := b.checkDuplicateTransactions(context.Background(), ulogger.TestLogger{}, 3, nil)
+		require.Error(t, err)
+		require.True(t, errors.IsBlockCorrupt(err))
+		require.Contains(t, err.Error(), "block contains duplicate transaction")
+	}
+}
+
+// With an oversized middle subtree and a loader that fails, the load reports exactly what it did
+// before the index: the loader's error, whatever the number of workers, and without the loader
+// failing, the length check after the load with its original text.
+func TestGetAndValidateSubtreesWithDedup_OversizedMiddleSubtreeIsReportedAsBefore(t *testing.T) {
+	const n = 6
+
+	build := func(t *testing.T, dropLoader bool) (*Block, *countingSubtreeStore) {
+		t.Helper()
+
+		b, subtrees, store := dedupLoadFixtureN(t, nil, n, nil)
+
+		// a middle subtree of 8 leaves in a body of 4-leaf ones, bound to the header by hash
+		big, err := subtreepkg.NewTreeByLeafCount(8)
+		require.NoError(t, err)
+
+		for i := 0; i < 8; i++ {
+			require.NoError(t, big.AddNode(randCorruptTestHash(t), 1, 0))
+		}
+
+		raw, ok := store.inner.(*rawSubtreeStore)
+		require.True(t, ok)
+		raw.put(t, big)
+
+		// rebind the header to the body with the oversized subtree in it
+		hashes := append([]*chainhash.Hash(nil), b.Subtrees...)
+		hashes[2] = big.RootHash()
+
+		root := testBodyMerkleRoot(t, b.CoinbaseTx, hashes, subtrees[0])
+		header := minedHeaderOnParent(t, 1, root, regtestGenesisHeader(t).Hash())
+
+		b, err = NewBlock(header, b.CoinbaseTx, hashes, uint64(4*n), 123, 0, 0) // nolint: gosec
+		require.NoError(t, err)
+
+		if dropLoader {
+			delete(raw.data, *b.Subtrees[4])
+		}
+
+		return b, store
+	}
+
+	// reference: what the load reports without an oversized subtree and a failing loader
+	b, store := build(t, true)
+	refErr := func() error {
+		defer b.releaseTxMap()
+		_, err := b.getAndValidateSubtreesWithDedup(context.Background(), ulogger.TestLogger{}, store, 1)
+
+		return err
+	}()
+	require.Error(t, refErr)
+	require.False(t, errors.IsBlockCorrupt(refErr), "a missing subtree is not corruption, got %v", refErr)
+
+	for _, workers := range []int{1, 2, 8} {
+		for run := 0; run < 3; run++ {
+			b, store := build(t, true)
+			_, err := b.getAndValidateSubtreesWithDedup(context.Background(), ulogger.TestLogger{}, store, workers)
+			require.Error(t, err)
+			require.Equal(t, hexRe.ReplaceAllString(refErr.Error(), "H"), hexRe.ReplaceAllString(err.Error(), "H"), "workers=%d run=%d", workers, run)
+			require.Equal(t, errors.IsBlockCorrupt(refErr), errors.IsBlockCorrupt(err))
+			b.releaseTxMap()
+		}
+	}
+
+	// all loaders succeed: the post-load length check reports it, with the block id in its text
+	for _, workers := range []int{1, 2, 8} {
+		b, store := build(t, false)
+		_, err := b.getAndValidateSubtreesWithDedup(context.Background(), ulogger.TestLogger{}, store, workers)
+		require.Error(t, err)
+		require.True(t, errors.IsBlockCorrupt(err), "got %v", err)
+		require.Contains(t, err.Error(), "][ID 0] subtree 2 has length 8, expected 4", "workers=%d", workers)
+		b.releaseTxMap()
+	}
 }
 
 // A block with a nil (released) subtree fails transiently, never with a corrupt verdict or a panic.
