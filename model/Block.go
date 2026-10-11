@@ -2217,7 +2217,8 @@ func (b *Block) getAndValidateSubtreesWithDedup(ctx context.Context, logger ulog
 		subtreeSize = first.Size()
 
 		// The highest index is that of the last subtree's last node. A subtree in
-		// between that is too long for its slot fails register.
+		// between that is too long for its slot is indexed apart (putOverflow) and
+		// reported by the length check after the load.
 		limit := txIndexEnd(len(b.Subtrees)-1, subtreeSize, last.Length())
 
 		b.txMap = newInMemoryBlockTxMap(b.txMapCount, len(b.Subtrees), subtreeSize, limit)

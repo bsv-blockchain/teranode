@@ -24,10 +24,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// shapeBlock builds a block from subtrees of the given node counts (all with the capacity of
-// the first) whose node hashes come from hashFor(global index).
 // hexRe matches the random hashes of a generated fixture.
 var hexRe = regexp.MustCompile("[0-9a-f]{64}")
+
+// shapeBlock builds a block from subtrees of the given node counts (all with the capacity of
+// the first) whose node hashes come from hashFor(global index).
 
 func shapeBlock(t *testing.T, size int, lens []int, hashFor func(g int) chainhash.Hash) *Block {
 	t.Helper()
@@ -325,7 +326,8 @@ func TestGetAndValidateSubtreesWithDedup_OversizedMiddleSubtreeIsReportedAsBefor
 		return b, store
 	}
 
-	// reference: what the load reports without an oversized subtree and a failing loader
+	// reference: a single-worker load of the same block (oversized subtree 2, missing subtree 4),
+	// which must report the missing subtree as a storage error, as origin/main does
 	b, store := build(t, true)
 	refErr := func() error {
 		defer b.releaseTxMap()
@@ -335,6 +337,7 @@ func TestGetAndValidateSubtreesWithDedup_OversizedMiddleSubtreeIsReportedAsBefor
 	}()
 	require.Error(t, refErr)
 	require.False(t, errors.IsBlockCorrupt(refErr), "a missing subtree is not corruption, got %v", refErr)
+	require.ErrorIs(t, refErr, errors.ErrStorageError)
 
 	for _, workers := range []int{1, 2, 8} {
 		for run := 0; run < 3; run++ {

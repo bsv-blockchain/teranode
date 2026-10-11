@@ -602,7 +602,7 @@ func TestBlockNodeIndex_OversizedNonLastSubtreeIsKeptApart(t *testing.T) {
 
 func TestBlockNodeIndex_OverflowDeduplicates(t *testing.T) {
 	// subtree 0 (cap 2) holds 5 nodes, subtree 1 is the last
-	subs, byIdx := buildLayout(t, 2, []int{5, 2})
+	subs, _ := buildLayout(t, 2, []int{5, 2})
 
 	for _, overflowFirst := range []bool{true, false} {
 		m := newBlockNodeIndex(0, 2, 2)
@@ -637,18 +637,18 @@ func TestBlockNodeIndex_OverflowDeduplicates(t *testing.T) {
 			require.Equal(t, uint64(i), got, "the index the old map gave it")
 		}
 
-		_ = byIdx
-
-		// the same hash again, from either side, is a duplicate whoever came first
-		m2 := newBlockNodeIndex(0, 2, 2)
-		require.NoError(t, m2.register(0, subs[0].Nodes))
-		require.NoError(t, m2.register(1, subs[1].Nodes))
-		require.NoError(t, m2.putOverflow(subs[0].Nodes[3].Hash, 3))
-		require.ErrorIs(t, m2.putOverflow(subs[0].Nodes[3].Hash, 9), errors.ErrTxExists)
-		require.NoError(t, m2.Put(subs[1].Nodes[0].Hash, 2))
-		require.ErrorIs(t, m2.putOverflow(subs[1].Nodes[0].Hash, 9), errors.ErrTxExists)
-		require.ErrorIs(t, m2.Put(subs[0].Nodes[3].Hash, 3), errors.ErrTxExists)
 	}
+
+	// the same hash again, from either side, is a duplicate whoever came first
+	m2 := newBlockNodeIndex(0, 2, 2)
+	require.NoError(t, m2.register(0, subs[0].Nodes))
+	require.NoError(t, m2.register(1, subs[1].Nodes))
+	require.NoError(t, m2.putOverflow(subs[0].Nodes[3].Hash, 3))
+	require.ErrorIs(t, m2.putOverflow(subs[0].Nodes[3].Hash, 9), errors.ErrTxExists)
+	require.NoError(t, m2.Put(subs[1].Nodes[0].Hash, 2))
+	require.ErrorIs(t, m2.putOverflow(subs[1].Nodes[0].Hash, 9), errors.ErrTxExists)
+	require.NoError(t, m2.putOverflow(subs[1].Nodes[1].Hash, 9))
+	require.ErrorIs(t, m2.Put(subs[1].Nodes[1].Hash, 3), errors.ErrTxExists)
 }
 
 // Which map checkDuplicateTransactions and the load path build.
