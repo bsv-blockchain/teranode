@@ -160,7 +160,7 @@ func TestDiskParentSpendsMap_MultiDisk(t *testing.T) {
 
 func TestDiskParentSpendsMap_ImplementsInterface(t *testing.T) {
 	var _ ParentSpendsMap = (*DiskParentSpendsMap)(nil)
-	var _ ParentSpendsMap = (*SplitSyncedParentMap)(nil)
+	var _ ParentSpendsMap = (*testParentSpendsMap)(nil)
 }
 
 func TestDiskParentSpendsMap_NoPaths(t *testing.T) {
@@ -260,7 +260,7 @@ func inpointSeed(i uint64) subtreepkg.Inpoint {
 // through the in-memory SplitSyncedParentMap and the disk-backed map and
 // asserts identical SetIfNotExists return sequences.
 func TestDiskParentSpendsMap_ParityWithInMemory(t *testing.T) {
-	mem := NewSplitSyncedParentMap(256, 20000)
+	mem := newTestParentSpendsMap(256, 20000)
 	disk, err := NewDiskParentSpendsMap(DiskParentSpendsMapOptions{
 		BasePaths:      []string{t.TempDir(), t.TempDir()},
 		FilterCapacity: 20000,
@@ -290,7 +290,7 @@ func TestDiskParentSpendsMap_ParityWithInMemory(t *testing.T) {
 func FuzzDiskParentSpendsMap_Parity(f *testing.F) {
 	f.Add([]byte{1, 2, 3, 1, 2, 3})
 	f.Fuzz(func(t *testing.T, data []byte) {
-		mem := NewSplitSyncedParentMap(16, 256)
+		mem := newTestParentSpendsMap(16, 256)
 		disk, err := NewDiskParentSpendsMap(DiskParentSpendsMapOptions{
 			BasePaths:      []string{t.TempDir()},
 			FilterCapacity: 1024,

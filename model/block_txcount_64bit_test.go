@@ -31,12 +31,8 @@ func TestPreallocCaps64Bit(t *testing.T) {
 		require.Equal(t, bucketCapacity(maxTxMapPrealloc, txMapBuckets), bucketCapacity(min(n, maxTxMapPrealloc), txMapBuckets), "tx count %d", n)
 	}
 
-	for _, n := range []uint64{maxParentSpendsPrealloc + 1, 1 << 40, math.MaxUint64} {
-		require.Equal(t, bucketCapacity(maxParentSpendsPrealloc, parentSpendsBuckets), bucketCapacity(min(n, maxParentSpendsPrealloc), parentSpendsBuckets), "inpoint count %d", n)
-	}
-
-	// The caps stay far below the per-bucket uint32 saturation point.
-	require.Less(t, bucketCapacity(maxParentSpendsPrealloc, parentSpendsBuckets), uint32(math.MaxUint32/2))
+	// The cap stays far below the per-bucket uint32 saturation point.
+	require.Less(t, bucketCapacity(maxTxMapPrealloc, txMapBuckets), uint32(math.MaxUint32/2))
 }
 
 // TestNewBlockTxMap64BitCount pins allocation with the uint64 count a block
@@ -101,7 +97,7 @@ func TestCheckDuplicateTransactionsUsesFullCount(t *testing.T) {
 // restore is mandatory and this test must not run in parallel, since it mutates
 // package state.
 func TestCheckDuplicateTransactionsAboveUint32(t *testing.T) {
-	withPreallocCaps(t, 1<<12, 1<<12)
+	withPreallocCaps(t, 1<<12)
 
 	subtree, err := subtreepkg.NewTreeByLeafCount(4)
 	require.NoError(t, err)
@@ -152,12 +148,11 @@ func TestParentSpendsCapacity(t *testing.T) {
 		"an overflowing multiplier must fall back to the unmultiplied count")
 	require.Equal(t, uint64(entryCount), parentSpendsCapacity(entryCount, math.MaxUint64/2))
 
-	// Every value the helper can return must survive the constructor's per-bucket
-	// arithmetic without truncating, which is the property the fallback protects.
+	// Every value the helper can return must survive the disk table's capacity
+	// arithmetic (a uint), which is the property the fallback protects.
 	for _, m := range []uint64{0, 1, 2, 16, math.MaxUint64 / 2, math.MaxUint64} {
 		c := parentSpendsCapacity(entryCount, m)
-		require.Equal(t, (c+c/5)/uint64(parentSpendsBuckets), uint64(uint32((c+c/5)/uint64(parentSpendsBuckets))),
-			"capacity %d (multiplier %d) truncates in the constructor", c, m)
+		require.Equal(t, uint64(uint(c)), c, "capacity %d (multiplier %d) truncates", c, m)
 	}
 }
 

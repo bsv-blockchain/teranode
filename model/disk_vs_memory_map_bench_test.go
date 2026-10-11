@@ -108,7 +108,7 @@ func newBenchParentSpendsMap(b *testing.B, n, disks int) (ParentSpendsMap, func(
 	b.Helper()
 
 	if disks == 0 {
-		return NewSplitSyncedParentMap(parentSpendsBuckets, uint64(n)), func() {}
+		return newTestParentSpendsMap(0), func() {}
 	}
 
 	dirs := make([]string, disks)
