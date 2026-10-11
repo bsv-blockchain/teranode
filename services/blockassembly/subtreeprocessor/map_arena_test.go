@@ -886,7 +886,7 @@ func FuzzSplitTxInpointsMapModel(f *testing.F) {
 // and the neighbour's words never leak into the record.
 func TestSplitTxInpointsMap_EncodingMatchesSerializeOnMalformedPackedVouts(t *testing.T) {
 	for _, shape := range []inpointsShape{shapeTrailingWords, shapeSharedBufferWide, shapeShortVouts, shapeSharedBufferOK, shapeZeroParentsVouts, shapeNoVouts} {
-		for _, parents := range []int{0, 1, txInpointsInPlaceParents, txInpointsInPlaceParents + 1} {
+		for _, parents := range []int{0, 1, 16, 17, 100} {
 			m := NewSplitTxInpointsMap(4)
 			h := arenaHash(uint64(shape))
 			p := buildInpoints(shape, 1)
@@ -943,6 +943,40 @@ func TestSplitTxInpointsMap_SharedBufferNeighbourDoesNotLeak(t *testing.T) {
 	want, err := p.Serialize()
 	require.NoError(t, err)
 	require.Equal(t, want, before[:len(want)], "the record is what Serialize wrote when it was stored")
+}
+
+// TestSplitTxInpointsMap_SetEncodesInPlace pins that a record is written straight
+// into the arena whatever the parent count: no Serialize buffer per tx. Chunk
+// growth is amortized: a 64-parent record is ~2.6 KB, so a 64 KiB chunk
+// (txInpointsMaxChunk) holds ~25 of them and AllocsPerRun's integer average is
+// 0, where a Serialize buffer per Set makes it at least 1.
+func TestSplitTxInpointsMap_SetEncodesInPlace(t *testing.T) {
+	for _, parents := range []int{1, 3, 64} {
+		hashes := make([]chainhash.Hash, parents)
+		vouts := make([]uint32, 0, 2*parents)
+
+		for k := range hashes {
+			hashes[k] = arenaHash(uint64(1000 + k))
+			vouts = append(vouts, 1, uint32(k)) //nolint:gosec // test data
+		}
+
+		p := subtreepkg.NewTxInpointsFromPacked(hashes, vouts)
+		m := NewSplitTxInpointsMap(1)
+		h := arenaHash(1)
+
+		m.Set(h, &p)
+
+		allocs := testing.AllocsPerRun(1000, func() { m.Set(h, &p) })
+		require.Zero(t, allocs, "parents %d", parents)
+
+		want, err := p.Serialize()
+		require.NoError(t, err)
+
+		got, found, err := m.AppendSerialized(nil, h)
+		require.True(t, found)
+		require.NoError(t, err)
+		require.Equal(t, want, got, "parents %d", parents)
+	}
 }
 
 // TestSplitTxInpointsMap_ClearTrimsToTheLastFill pins that a half does not keep
@@ -1080,12 +1114,28 @@ func TestMoveBucketFrom_FailureLeavesNothingBehindAfterSwapBack(t *testing.T) {
 	require.Zero(t, stp.currentTxMapShadow.Length(), "the half the failed move wrote into is dropped")
 }
 
-// The in-place encoder reads go-subtree's unexported packed vouts; if the field is
-// renamed or retyped every record silently falls back to Serialize.
-func TestVoutIdxsFieldIsReadable(t *testing.T) {
-	p := subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{{1}}, []uint32{2, 7, 9})
+// TestWriteRecord_PanicsWhenInpointsChangedAfterSizing pins that a record whose
+// inpoints changed between payloadOf and writeRecord is never stored silently.
+func TestWriteRecord_PanicsWhenInpointsChangedAfterSizing(t *testing.T) {
+	small := subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{arenaHash(1)}, []uint32{1, 0})
+	large := subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{arenaHash(1), arenaHash(2)}, []uint32{1, 0, 2, 1, 2})
+	invalid := subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{arenaHash(1)}, nil)
 
-	n, ok := voutIdxsLen(&p)
-	require.True(t, ok, "go-subtree TxInpoints.voutIdxs is no longer a []uint32")
-	require.Equal(t, 3, n)
+	payload, flags := payloadOf(&small)
+
+	for name, changed := range map[string]*subtreepkg.TxInpoints{"grown": &large, "invalid": &invalid} {
+		rec := make([]byte, txInpointsRecordHeader+payload, 1024)
+		require.Panics(t, func() { writeRecord(rec, changed, flags) }, name)
+	}
+
+	payload, flags = payloadOf(&large)
+	rec := make([]byte, txInpointsRecordHeader+payload)
+	require.Panics(t, func() { writeRecord(rec, &small, flags) }, "shrunk")
+
+	rec = make([]byte, txInpointsRecordHeader+payload)
+	require.NotPanics(t, func() { writeRecord(rec, &large, flags) })
+
+	want, err := large.Serialize()
+	require.NoError(t, err)
+	require.Equal(t, want, rec[txInpointsRecordHeader:])
 }

@@ -2,7 +2,6 @@ package subtreeprocessor
 
 import (
 	"encoding/binary"
-	"reflect"
 	"runtime"
 	"sync"
 
@@ -73,12 +72,6 @@ const (
 	// txInpointsIndexHint is the capacity the index of a bucket starts with. The
 	// index grows on demand.
 	txInpointsIndexHint = 8
-
-	// txInpointsInPlaceParents is how many parents a record is encoded in place
-	// for. Finding the vouts of a parent is linear in the parent count (the packed
-	// layout is not indexable), so a tx with many parents would be quadratic;
-	// those take one TxInpoints.Serialize instead.
-	txInpointsInPlaceParents = 16
 
 	// txInpointsScratch is the stack buffer a read copies a record into before it
 	// releases the lock; bigger records spill to the heap.
@@ -189,10 +182,10 @@ func (b *txInpointsBucket) putRecord(hash chainhash.Hash, rec []byte) {
 // put encodes inpoints into the arena and indexes them under hash; the caller
 // holds the bucket lock.
 func (b *txInpointsBucket) put(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints) {
-	payload, flags, serialized := payloadOf(inpoints)
+	payload, flags := payloadOf(inpoints)
 
 	h, rec := b.alloc(txInpointsRecordHeader + payload)
-	writeRecord(rec, inpoints, flags, serialized)
+	writeRecord(rec, inpoints, flags)
 	b.index().Put(hash, h)
 }
 
@@ -204,95 +197,31 @@ func (b *txInpointsBucket) index() *swiss.Map[chainhash.Hash, uint64] {
 	return b.m
 }
 
-// voutIdxsField is where TxInpoints keeps its packed vouts, which only the
-// package go-subtree can read. The encoder needs its length to tell inpoints it
-// can walk from inpoints it has to serialize. If go-subtree ever renames the
-// field or changes its type, voutIdxsLen reports false and every record goes
-// through Serialize; TestVoutIdxsFieldIsReadable fails so that doesn't go unnoticed.
-var voutIdxsField, hasVoutIdxsField = reflect.TypeOf(subtreepkg.TxInpoints{}).FieldByName("voutIdxs")
-
-func voutIdxsLen(inpoints *subtreepkg.TxInpoints) (int, bool) {
-	if !hasVoutIdxsField || voutIdxsField.Type != reflect.TypeFor[[]uint32]() {
-		return 0, false
-	}
-
-	return reflect.ValueOf(inpoints).Elem().FieldByIndex(voutIdxsField.Index).Len(), true
-}
-
-// payloadOf returns the payload length and the flags of inpoints, and when the
-// payload cannot be written in place the serialized payload.
+// payloadOf returns the payload length and the flags of inpoints.
 //
-// The payload is always what TxInpoints.Serialize returns, byte for byte. Inpoints
-// with few parents, whose packed vouts are exactly what the walk over the parents
-// consumes, are written in place without Serialize's buffer. Anything else (many
-// parents, trailing or missing words, vouts without parents, vouts that are a
-// slice of a shared buffer and extend into the next tx) takes Serialize, and if
-// that refuses them the record keeps only the parent hashes and says so.
-func payloadOf(inpoints *subtreepkg.TxInpoints) (payload int, flags byte, serialized []byte) {
+// The payload is what TxInpoints.Serialize returns, byte for byte, sized by
+// SerializedSize. If Serialize refuses the inpoints, the record keeps only the
+// parent hashes and says so.
+func payloadOf(inpoints *subtreepkg.TxInpoints) (payload int, flags byte) {
 	if inpoints == nil {
-		return 0, recordNil, nil
+		return 0, recordNil
 	}
 
 	if inpoints.ParentTxHashes != nil {
 		flags |= recordParentsSet
 	}
 
-	parents := len(inpoints.ParentTxHashes)
-
-	if parents <= txInpointsInPlaceParents {
-		if size, ok := inPlaceSize(inpoints); ok {
-			return size, flags, nil
-		}
-	}
-
-	if wire, err := inpoints.Serialize(); err == nil {
-		return len(wire), flags, wire
+	if size, err := inpoints.SerializedSize(); err == nil {
+		return size, flags
 	}
 
 	// Serialize refuses these: keep the hashes and say so
-	return 4 + 32*parents, flags | recordNoVouts, nil
-}
-
-// inPlaceSize is the length of inpoints in TxInpoints.Serialize's wire format:
-// the parent count, the parent hashes, then per parent a vout count and the
-// vouts. It reports false unless the walk over the parents consumes exactly the
-// packed vouts there are: the accessors read up to the capacity of the slice,
-// not its length, and panic on a walk that starts past the end.
-func inPlaceSize(inpoints *subtreepkg.TxInpoints) (size int, ok bool) {
-	words, ok := voutIdxsLen(inpoints)
-	if !ok {
-		return 0, false
-	}
-
-	defer func() {
-		if recover() != nil {
-			size, ok = 0, false
-		}
-	}()
-
-	consumed := 0
-	size = 4 + 32*len(inpoints.ParentTxHashes)
-
-	for i := range inpoints.ParentTxHashes {
-		vouts, err := inpoints.GetParentVoutsAtIndex(i)
-		if err != nil {
-			return 0, false
-		}
-
-		consumed += 1 + len(vouts)
-		size += 4 + 4*len(vouts)
-	}
-
-	if consumed != words {
-		return 0, false
-	}
-
-	return size, true
+	return 4 + 32*len(inpoints.ParentTxHashes), flags | recordNoVouts
 }
 
 // writeRecord writes the record of inpoints into rec, which is exactly as long
 // as payloadOf said.
-func writeRecord(rec []byte, inpoints *subtreepkg.TxInpoints, flags byte, serialized []byte) {
+func writeRecord(rec []byte, inpoints *subtreepkg.TxInpoints, flags byte) {
 	var subtreeIndex int16
 	if inpoints != nil {
 		subtreeIndex = inpoints.SubtreeIndex
@@ -307,32 +236,24 @@ func writeRecord(rec []byte, inpoints *subtreepkg.TxInpoints, flags byte, serial
 	switch {
 	case flags&recordNil != 0:
 		return
-	case serialized != nil:
-		copy(w, serialized)
-		return
-	}
-
-	binary.LittleEndian.PutUint32(w, uint32(len(inpoints.ParentTxHashes))) //nolint:gosec // bounded by the tx size
-	w = w[4:]
-
-	for i := range inpoints.ParentTxHashes {
-		w = w[copy(w, inpoints.ParentTxHashes[i][:]):]
-	}
-
-	if flags&recordNoVouts != 0 {
-		return
-	}
-
-	for i := range inpoints.ParentTxHashes {
-		vouts, _ := inpoints.GetParentVoutsAtIndex(i)
-
-		binary.LittleEndian.PutUint32(w, uint32(len(vouts))) //nolint:gosec // bounded by the tx size
+	case flags&recordNoVouts != 0:
+		binary.LittleEndian.PutUint32(w, uint32(len(inpoints.ParentTxHashes))) //nolint:gosec // bounded by the tx size
 		w = w[4:]
 
-		for _, v := range vouts {
-			binary.LittleEndian.PutUint32(w, v)
-			w = w[4:]
+		for i := range inpoints.ParentTxHashes {
+			w = w[copy(w, inpoints.ParentTxHashes[i][:]):]
 		}
+
+		return
+	}
+
+	// w is exactly SerializedSize long and capped there, so this fills it in place
+	// and never writes past the record. Anything else means inpoints changed since
+	// payloadOf sized it (a caller race): fail loudly rather than keep a record
+	// that is not what Serialize returns.
+	out, err := inpoints.AppendSerialized(w[:0:len(w)])
+	if err != nil || len(out) != len(w) || (len(w) > 0 && &out[0] != &w[0]) {
+		panic("SplitTxInpointsMap: inpoints modified while being stored")
 	}
 }
 

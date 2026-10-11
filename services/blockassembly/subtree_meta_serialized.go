@@ -85,12 +85,10 @@ func buildSubtreeMetaBytes(subtree *subtreepkg.Subtree, parents serializedInpoin
 			return nil, errors.NewProcessingError("parent tx hashes are not set for node %s", node.Hash.String())
 		}
 
-		wire, err := deleted.Serialize()
+		out, err = deleted.AppendSerialized(out)
 		if err != nil {
 			return nil, errors.NewProcessingError("inpoints of node %s cannot be serialized", node.Hash.String(), err)
 		}
-
-		out = append(out, wire...)
 	}
 
 	return out, nil
