@@ -1700,8 +1700,10 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(logger, g, concurrency)
 
-	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
-		subtree := b.SubtreeSlices[sIdx]
+	// the snapshot, not b.SubtreeSlices: subtreeBase and the dedup runs were sized
+	// from it, and a concurrent replacement must not shift the tx indexes
+	for sIdx := 0; sIdx < len(subtrees); sIdx++ {
+		subtree := subtrees[sIdx]
 		sIdx := sIdx
 
 		g.Go(func() error {
@@ -1914,7 +1916,13 @@ func (b *Block) detectDuplicateInputs(ctx context.Context, logger ulogger.Logger
 	sIdx := subtreeOf(tx)
 	snIdx := int(tx - base[sIdx]) //nolint:gosec // within a subtree
 
-	return b.duplicateInputsError(subtrees[sIdx].RootHash(), sIdx, snIdx, subtrees[sIdx].Nodes[snIdx])
+	// the nodes of a loaded subtree can be released while the check runs
+	subtree := subtrees[sIdx]
+	if rootHash := subtree.RootHash(); rootHash == nil || snIdx >= len(subtree.Nodes) {
+		return errors.NewProcessingError("[validOrderAndBlessed][%s] subtree %d was released during the duplicate input check", b.String(), sIdx)
+	}
+
+	return b.duplicateInputsError(subtree.RootHash(), sIdx, snIdx, subtree.Nodes[snIdx])
 }
 
 // loadSubtreeMeta reads the subtree's meta from the store, regenerating it when it

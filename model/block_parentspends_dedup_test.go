@@ -494,3 +494,69 @@ func TestParentSpends_RandomBlocksVsReference(t *testing.T) {
 		require.Contains(t, err.Error(), p.hashOf(want).String(), "iter %d", iter)
 	}
 }
+
+// releasingStore serves the subtree meta and, once a meta was read a second time
+// (the re-read of the duplicate check), drops the nodes of every subtree of the
+// block as a concurrent release of the loaded body would.
+type releasingStore struct {
+	*mockSubtreeStore
+	mu       sync.Mutex
+	reads    map[string]int
+	subtrees []*subtreepkg.Subtree
+}
+
+type releasingReader struct {
+	io.ReadCloser
+	release func()
+}
+
+func (r releasingReader) Close() error {
+	err := r.ReadCloser.Close()
+	r.release()
+
+	return err
+}
+
+func (r *releasingStore) GetIoReader(ctx context.Context, key []byte, ft fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
+	rc, err := r.mockSubtreeStore.GetIoReader(ctx, key, ft, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	r.mu.Lock()
+	r.reads[string(key)]++
+	second := r.reads[string(key)] > 1
+	r.mu.Unlock()
+
+	if !second {
+		return rc, nil
+	}
+
+	return releasingReader{rc, func() {
+		for _, st := range r.subtrees {
+			st.Nodes = nil
+		}
+	}}, nil
+}
+
+// TestParentSpends_NodesReleasedDuringDetect pins that a subtree whose nodes are
+// released between finding the duplicate and naming its transaction yields an
+// error, not an index out of range panic.
+func TestParentSpends_NodesReleasedDuringDetect(t *testing.T) {
+	prev := inpointDedupHash
+	inpointDedupHash = func(subtreepkg.Inpoint) uint64 { return 3 }
+
+	t.Cleanup(func() { inpointDedupHash = prev })
+
+	txs := pvValidBlock(16)
+	txs[2] = append(txs[2], txs[2][0]) // one tx spending an outpoint twice
+
+	p := buildPVBlock(t, txs, 4)
+	p.deps.subtreeStore = &releasingStore{mockSubtreeStore: p.store, reads: map[string]int{}, subtrees: p.block.SubtreeSlices}
+
+	var err error
+
+	require.NotPanics(t, func() { err = p.validate(nil, 4) })
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrProcessing), "%v", err)
+}

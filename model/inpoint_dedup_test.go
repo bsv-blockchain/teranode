@@ -564,3 +564,220 @@ func sizeName(n int) string {
 		return "txs=16K"
 	}
 }
+
+// offsFootprint is the number of partition offsets held across all runs.
+func offsFootprint(d inpointDedupper) int {
+	n := 0
+	for _, r := range d.(*dedupImpl[uint32]).runs {
+		n += len(r.offs)
+	}
+
+	return n
+}
+
+// TestInpointDedup_ManyTinyRuns pins that the per-run bookkeeping scales with
+// the inputs, not with runs x partitions: a block cut into very many small
+// subtrees must not pay for the partition count of a big block per subtree.
+func TestInpointDedup_ManyTinyRuns(t *testing.T) {
+	const runs, perRun = 50_000, 3 // 150K inputs
+
+	for _, k := range []uint64{1, 2, 4, 64} { // estimate = k x the real inputs
+		expected := k * runs * perRun
+		d := newInpointDedup(runs, expected, runs, nil)
+
+		for r := 0; r < runs; r++ {
+			rb := d.newRun(r, perRun)
+			rb.addTx(uint64(r), []subtreepkg.Inpoint{dedupInpoint(uint32(r), 0), dedupInpoint(uint32(r), 1), dedupInpoint(uint32(r), 2)})
+			rb.finish()
+		}
+
+		require.LessOrEqualf(t, uint64(offsFootprint(d)), expected, "estimate x%d: offsets must stay within the estimated entries", k)
+
+		_, found, err := d.detect(context.Background(), 4, func() func(uint64) ([]subtreepkg.Inpoint, error) { return nil })
+		require.NoError(t, err)
+		require.False(t, found)
+	}
+
+	// runs without inputs cost nothing
+	d := newInpointDedup(1000, 1<<30, 1000, nil)
+	for r := 0; r < 1000; r++ {
+		rb := d.newRun(r, 0)
+		rb.addTx(uint64(r), nil)
+		rb.finish()
+	}
+
+	require.Zero(t, offsFootprint(d))
+}
+
+// TestInpointDedup_PartitionsFollowActualInputs pins that an overestimated input
+// count does not leave the work in a swarm of empty partitions, and that an
+// exact answer is still given when partitions are coarsened.
+func TestInpointDedup_PartitionsFollowActualInputs(t *testing.T) {
+	txs := uniqueTxs(40, 2)
+	txs[33][1] = txs[3][0]
+
+	for _, expected := range []uint64{0, 80, 1 << 24, 1 << 40} {
+		requireMatchesReference(t, txs, dedupCase{expected: expected, runs: 4, workers: 8})
+	}
+}
+
+// TestInpointDedup_ResolverErrorPrecedence pins that when a group's real
+// inpoints cannot be read, the result for a given block and store state does
+// not depend on which worker finishes first: a confirmed duplicate below every
+// failing group's lowest possible tx wins, otherwise the error of the failing
+// group with the lowest possible tx does.
+func TestInpointDedup_ResolverErrorPrecedence(t *testing.T) {
+	in := dedupInpoint
+
+	type result struct {
+		tx    uint64
+		found bool
+		err   string
+	}
+
+	tests := []struct {
+		name string
+		txs  [][]subtreepkg.Inpoint
+		fail map[uint64]string // tx -> error text when asked for its inpoints
+		want result
+	}{
+		{
+			name: "confirmed duplicate below the failing group wins",
+			// dup of in(1) between 5 and 20; group in(2) = txs 8,30 fails
+			txs:  pvTxs(40, map[int][]subtreepkg.Inpoint{5: {in(1, 0)}, 20: {in(1, 0)}, 8: {in(2, 0)}, 30: {in(2, 0)}}),
+			fail: map[uint64]string{8: "e8", 30: "e30"},
+			want: result{tx: 20, found: true},
+		},
+		{
+			name: "failing group below the duplicate wins",
+			txs:  pvTxs(60, map[int][]subtreepkg.Inpoint{5: {in(1, 0)}, 40: {in(1, 0)}, 8: {in(2, 0)}, 30: {in(2, 0)}}),
+			fail: map[uint64]string{8: "e8", 30: "e30"},
+			want: result{err: "e8"},
+		},
+		{
+			name: "duplicate equal to the failing group's lowest tx wins",
+			txs:  pvTxs(200, map[int][]subtreepkg.Inpoint{5: {in(1, 0)}, 30: {in(1, 0)}, 8: {in(2, 0)}, 30 + 100: {in(2, 0)}}),
+			fail: map[uint64]string{8: "e8"},
+			want: result{tx: 30, found: true},
+		},
+		{
+			name: "of several failing groups the lowest one is reported",
+			txs: pvTxs(90, map[int][]subtreepkg.Inpoint{
+				4: {in(1, 0)}, 70: {in(1, 0)},
+				10: {in(2, 0)}, 50: {in(2, 0)},
+				12: {in(3, 0)}, 25: {in(3, 0)},
+				14: {in(4, 0)}, 80: {in(4, 0)},
+			}),
+			fail: map[uint64]string{4: "g1", 10: "g2", 12: "g3", 14: "g4"},
+			want: result{err: "g3"},
+		},
+		{
+			name: "no duplicate, failing group",
+			txs:  pvTxs(40, map[int][]subtreepkg.Inpoint{8: {in(2, 0)}, 30: {in(2, 0)}}),
+			fail: map[uint64]string{30: "e30"},
+			want: result{err: "e30"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rng := rand.New(rand.NewSource(9))
+
+			for rep := 0; rep < 60; rep++ {
+				workers := []int{1, 2, 3, 8, 32}[rep%5]
+				runs := 1 + rng.Intn(9)
+
+				d := newInpointDedup(runs, uint64(rng.Intn(1<<22)), uint64(len(tc.txs)), nil)
+
+				bounds := make([]int, runs+1)
+				for r := 0; r <= runs; r++ {
+					bounds[r] = r * len(tc.txs) / runs
+				}
+
+				order := rng.Perm(runs)
+
+				var wg sync.WaitGroup
+
+				for _, r := range order {
+					wg.Add(1)
+
+					go func() {
+						defer wg.Done()
+
+						rb := d.newRun(r, 0)
+						for i := bounds[r]; i < bounds[r+1]; i++ {
+							rb.addTx(uint64(i), tc.txs[i])
+						}
+
+						rb.finish()
+					}()
+				}
+
+				wg.Wait()
+
+				tx, found, err := d.detect(context.Background(), workers, func() func(uint64) ([]subtreepkg.Inpoint, error) {
+					return func(tx uint64) ([]subtreepkg.Inpoint, error) {
+						if msg, ok := tc.fail[tx]; ok {
+							return nil, tererrors.NewProcessingError(msg)
+						}
+
+						return tc.txs[tx], nil
+					}
+				})
+
+				got := result{tx: tx, found: found}
+				if err != nil {
+					got.err = err.Error()
+				}
+
+				if tc.want.err != "" {
+					require.Errorf(t, err, "rep %d workers %d", rep, workers)
+					require.Containsf(t, err.Error(), tc.want.err, "rep %d workers %d", rep, workers)
+					require.False(t, found)
+
+					continue
+				}
+
+				require.NoErrorf(t, err, "rep %d workers %d", rep, workers)
+				require.Equalf(t, tc.want, got, "rep %d workers %d", rep, workers)
+			}
+		})
+	}
+}
+
+// pvTxs builds n txs, tx i spending a unique inpoint, with the given overrides
+// (replacing the tx's inputs).
+func pvTxs(n int, override map[int][]subtreepkg.Inpoint) [][]subtreepkg.Inpoint {
+	txs := uniqueTxs(n, 1)
+	for i := range txs {
+		for j := range txs[i] {
+			txs[i][j] = dedupInpoint(1_000_000+uint32(i), 0) //nolint:gosec // test
+		}
+	}
+
+	for i, ins := range override {
+		txs[i] = ins
+	}
+
+	return txs
+}
+
+func BenchmarkInpointDedup_TinyRuns(b *testing.B) {
+	const runs, perRun = 100_000, 2
+
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		d := newInpointDedup(runs, runs*perRun, runs, nil)
+
+		for r := 0; r < runs; r++ {
+			rb := d.newRun(r, perRun)
+			rb.addTx(uint64(r), []subtreepkg.Inpoint{dedupInpoint(uint32(r), 0), dedupInpoint(uint32(r), 1)})
+			rb.finish()
+		}
+
+		if _, found, err := d.detect(context.Background(), 8, func() func(uint64) ([]subtreepkg.Inpoint, error) { return nil }); err != nil || found {
+			b.Fatal("unexpected result")
+		}
+	}
+}

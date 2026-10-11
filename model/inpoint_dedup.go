@@ -6,10 +6,11 @@ import (
 	"hash/maphash"
 	"math"
 	"slices"
+	"sync"
 	"sync/atomic"
 
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
-	"golang.org/x/sync/errgroup"
+	"github.com/bsv-blockchain/teranode/errors"
 )
 
 // Duplicate input detection for block validation.
@@ -55,10 +56,10 @@ type dedupEntry[T dedupTxIndex] struct {
 func (e dedupEntry[T]) key() uint64 { return uint64(e.hi)<<32 | uint64(e.lo) }
 
 // dedupRun holds the entries of one run grouped by partition: partition p is
-// entries[offs[p]:offs[p+1]].
+// entries[offs[p]:offs[p+1]]. A run without entries has nil offs.
 type dedupRun[T dedupTxIndex] struct {
 	entries []dedupEntry[T]
-	offs    []int
+	offs    []uint32 // a run holds fewer than 2^32 entries, see finish
 }
 
 // inpointRunBuilder collects the inputs of one run. It is not safe for
@@ -85,8 +86,10 @@ type inpointDedupper interface {
 
 type dedupImpl[T dedupTxIndex] struct {
 	hash  func(subtreepkg.Inpoint) uint64
-	pbits uint
+	pbits uint // runs are grouped into 1<<pbits partitions; detect may merge neighbours
 	runs  []dedupRun[T]
+
+	tooBig atomic.Bool // a run had 2^32 entries or more
 }
 
 // newInpointDedup prepares for numRuns runs, about expectedInputs inputs in total
@@ -98,9 +101,17 @@ func newInpointDedup(numRuns int, expectedInputs, totalTxs uint64, hash func(sub
 		hash = func(in subtreepkg.Inpoint) uint64 { return maphash.Comparable(seed, in) }
 	}
 
-	// partition count only affects cache behaviour, so a wild estimate is harmless
+	// Every run is grouped into 1<<pbits partitions at finish time, before the
+	// real input count is known, so pbits is an upper bound taken from the
+	// estimate: about 64K entries per partition, at most 4096, and few enough
+	// that the per-run offsets stay a fraction of the entries (a block of very
+	// many small subtrees gets few partitions). detect merges neighbouring
+	// partitions when the real input count turns out lower, so an overestimate
+	// costs nothing; an underestimate leaves fewer, larger partitions than ideal,
+	// which only costs parallelism and cache behaviour, never correctness.
 	pbits := uint(0)
-	for pbits < dedupMaxPartitionBits && expectedInputs>>pbits > 1<<16 {
+	for pbits < dedupMaxPartitionBits && expectedInputs>>pbits > 1<<16 &&
+		uint64(numRuns)*(1<<(pbits+1)+1) <= expectedInputs {
 		pbits++
 	}
 
@@ -138,10 +149,22 @@ func (rb *dedupBuilder[T]) addTx(tx uint64, inpoints []subtreepkg.Inpoint) {
 
 func (rb *dedupBuilder[T]) finish() {
 	d := rb.d
-	np := 1 << d.pbits
-	offs := make([]int, np+1)
+	entries := rb.entries
+	rb.entries = nil
 
-	for _, e := range rb.entries {
+	if len(entries) == 0 {
+		return
+	}
+
+	if uint64(len(entries)) > math.MaxUint32 {
+		d.tooBig.Store(true) // detect reports it; no subtree has this many inputs
+		return
+	}
+
+	np := 1 << d.pbits
+	offs := make([]uint32, np+1)
+
+	for _, e := range entries {
 		offs[d.partition(e.key())+1]++
 	}
 
@@ -149,49 +172,98 @@ func (rb *dedupBuilder[T]) finish() {
 		offs[p+1] += offs[p]
 	}
 
-	grouped := make([]dedupEntry[T], len(rb.entries))
+	grouped := make([]dedupEntry[T], len(entries))
 	next := slices.Clone(offs[:np])
 
-	for _, e := range rb.entries {
+	for _, e := range entries {
 		p := d.partition(e.key())
 		grouped[next[p]] = e
 		next[p]++
 	}
 
 	d.runs[rb.run] = dedupRun[T]{entries: grouped, offs: offs}
-	rb.entries = nil
 }
 
+// detect works on partitions of the key space: the finished runs' partitions
+// merged down to what the real number of entries calls for.
+//
+// The outcome depends only on the block and on what the resolver returns, never
+// on scheduling. A group of equal hashes can only yield a duplicate at a tx at or
+// above its second smallest tx, its lower bound. The answer is the confirmed
+// duplicate D with the lowest tx unless a group whose resolver failed has a lower
+// bound below D (it might hold an earlier duplicate), in which case it is the
+// error of the failing group with the lowest bound. Any group with a bound below
+// the final D, or at or below the lowest failing bound, is always evaluated,
+// whatever the order the workers get to it in, so both are fixed; the pruning
+// below only skips groups that cannot change this.
 func (d *dedupImpl[T]) detect(ctx context.Context, workers int, newResolver func() func(tx uint64) ([]subtreepkg.Inpoint, error)) (uint64, bool, error) {
 	const none = ^uint64(0) // no block has 2^64-1 transactions
 
+	if d.tooBig.Load() {
+		return 0, false, errors.NewProcessingError("duplicate input check: a subtree has 2^32 inputs or more")
+	}
+
+	var total uint64
+	for r := range d.runs {
+		total += uint64(len(d.runs[r].entries))
+	}
+
+	// merge partitions to ~64K entries each, never beyond what the runs hold
+	gbits := uint(0)
+	for gbits < d.pbits && total>>gbits > 1<<16 {
+		gbits++
+	}
+
+	shift := d.pbits - gbits
+	partitions := 1 << gbits
+	workers = max(1, min(workers, partitions))
+
 	var (
-		earliest atomic.Uint64
+		earliest atomic.Uint64 // lowest confirmed duplicate tx
+		errBound atomic.Uint64 // lowest bound of a failing group
 		next     atomic.Int64
+		cancel   atomic.Bool
+		errMu    sync.Mutex
+		errKey   uint64
+		firstErr error
+		wg       sync.WaitGroup
 	)
 
 	earliest.Store(none)
+	errBound.Store(none)
 
-	partitions := 1 << d.pbits
-	workers = max(1, min(workers, partitions))
+	// failGroup records a failing group; the one with the lowest (bound, key)
+	// is kept. The key (the group's hash) is unique, so the choice is total.
+	failGroup := func(bound, key uint64, err error) {
+		errMu.Lock()
+		defer errMu.Unlock()
 
-	g, gCtx := errgroup.WithContext(ctx)
+		if firstErr == nil || bound < errBound.Load() || (bound == errBound.Load() && key < errKey) {
+			firstErr, errKey = err, key
+			errBound.Store(bound)
+		}
+	}
 
 	for w := 0; w < workers; w++ {
-		g.Go(func() error {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
 			var (
 				buf     []dedupEntry[T]
 				resolve func(tx uint64) ([]subtreepkg.Inpoint, error)
 			)
 
-			for {
+			for !cancel.Load() {
 				p := int(next.Add(1)) - 1
 				if p >= partitions {
-					return nil
+					return
 				}
 
-				if err := gCtx.Err(); err != nil {
-					return err
+				if ctx.Err() != nil {
+					cancel.Store(true)
+					return
 				}
 
 				buf = buf[:0]
@@ -199,10 +271,10 @@ func (d *dedupImpl[T]) detect(ctx context.Context, workers int, newResolver func
 				for r := range d.runs {
 					run := &d.runs[r]
 					if run.offs == nil {
-						continue // run never finished: no entries
+						continue // no entries, or never finished
 					}
 
-					buf = append(buf, run.entries[run.offs[p]:run.offs[p+1]]...)
+					buf = append(buf, run.entries[run.offs[p<<shift]:run.offs[(p+1)<<shift]]...)
 				}
 
 				slices.SortFunc(buf, func(a, b dedupEntry[T]) int {
@@ -219,21 +291,21 @@ func (d *dedupImpl[T]) detect(ctx context.Context, workers int, newResolver func
 						j++
 					}
 
-					// A group of equal hashes is a duplicate or a collision. Its
-					// answer is at least its second smallest tx, so a group that
-					// cannot beat what is already known is skipped; this only
-					// prunes groups that could not change the minimum.
-					if j-i >= 2 && uint64(buf[i+1].tx) < earliest.Load() {
+					// A group of equal hashes is a duplicate or a collision; its
+					// answer is at least its second smallest tx. Skip it when that
+					// cannot beat a confirmed duplicate, or when it lies above a
+					// failing group (which then outranks it, see above).
+					if bound := uint64(buf[min(i+1, len(buf)-1)].tx); j-i >= 2 && bound < earliest.Load() && bound <= errBound.Load() {
 						if resolve == nil {
 							resolve = newResolver()
 						}
 
 						tx, found, err := d.verifyGroup(buf[i:j], resolve)
-						if err != nil {
-							return err
-						}
 
-						if found {
+						switch {
+						case err != nil:
+							failGroup(bound, buf[i].key(), err)
+						case found:
 							for {
 								cur := earliest.Load()
 								if tx >= cur || earliest.CompareAndSwap(cur, tx) {
@@ -246,14 +318,23 @@ func (d *dedupImpl[T]) detect(ctx context.Context, workers int, newResolver func
 					i = j
 				}
 			}
-		})
+		}()
 	}
 
-	if err := g.Wait(); err != nil {
+	wg.Wait()
+
+	if err := ctx.Err(); err != nil {
 		return 0, false, err
 	}
 
-	if e := earliest.Load(); e != none {
+	e := earliest.Load()
+
+	// the failing group wins only when it could hold a duplicate below e
+	if firstErr != nil && (e == none || errBound.Load() < e) {
+		return 0, false, firstErr
+	}
+
+	if e != none {
 		return e, true, nil
 	}
 
