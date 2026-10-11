@@ -224,7 +224,7 @@ func (d *dedupImpl[T]) detect(ctx context.Context, workers int, newResolver func
 		next     atomic.Int64
 		cancel   atomic.Bool
 		errMu    sync.Mutex
-		errKey   uint64
+		errFirst uint64 // smallest tx of the kept failing group
 		firstErr error
 		wg       sync.WaitGroup
 	)
@@ -232,14 +232,16 @@ func (d *dedupImpl[T]) detect(ctx context.Context, workers int, newResolver func
 	earliest.Store(none)
 	errBound.Store(none)
 
-	// failGroup records a failing group; the one with the lowest (bound, key)
-	// is kept. The key (the group's hash) is unique, so the choice is total.
-	failGroup := func(bound, key uint64, err error) {
+	// failGroup records a failing group; the one with the lowest (bound, smallest
+	// tx, error text) is kept. All three are functions of the block and the
+	// resolver, not of the hash seed, so the choice is the same on every run.
+	failGroup := func(bound, first uint64, err error) {
 		errMu.Lock()
 		defer errMu.Unlock()
 
-		if firstErr == nil || bound < errBound.Load() || (bound == errBound.Load() && key < errKey) {
-			firstErr, errKey = err, key
+		if firstErr == nil || bound < errBound.Load() ||
+			(bound == errBound.Load() && (first < errFirst || (first == errFirst && err.Error() < firstErr.Error()))) {
+			firstErr, errFirst = err, first
 			errBound.Store(bound)
 		}
 	}
@@ -304,7 +306,7 @@ func (d *dedupImpl[T]) detect(ctx context.Context, workers int, newResolver func
 
 						switch {
 						case err != nil:
-							failGroup(bound, buf[i].key(), err)
+							failGroup(bound, uint64(buf[i].tx), err)
 						case found:
 							for {
 								cur := earliest.Load()

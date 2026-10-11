@@ -656,7 +656,9 @@ func TestInpointDedup_ResolverErrorPrecedence(t *testing.T) {
 		},
 		{
 			name: "duplicate equal to the failing group's lowest tx wins",
-			txs:  pvTxs(200, map[int][]subtreepkg.Inpoint{5: {in(1, 0)}, 30: {in(1, 0)}, 8: {in(2, 0)}, 30 + 100: {in(2, 0)}}),
+			// dup of in(1) between 5 and 30; group in(2) = txs 8,30 fails on 8 and
+			// has bound 30, the same tx as the duplicate
+			txs:  pvTxs(60, map[int][]subtreepkg.Inpoint{5: {in(1, 0)}, 30: {in(1, 0), in(2, 0)}, 8: {in(2, 0)}}),
 			fail: map[uint64]string{8: "e8"},
 			want: result{tx: 30, found: true},
 		},
@@ -670,6 +672,14 @@ func TestInpointDedup_ResolverErrorPrecedence(t *testing.T) {
 			}),
 			fail: map[uint64]string{4: "g1", 10: "g2", 12: "g3", 14: "g4"},
 			want: result{err: "g3"},
+		},
+		{
+			name: "failing groups with equal bounds: lowest first tx, whatever the seed",
+			txs: pvTxs(90, map[int][]subtreepkg.Inpoint{
+				4: {in(1, 0)}, 6: {in(2, 0)}, 50: {in(1, 0), in(2, 0)},
+			}),
+			fail: map[uint64]string{4: "g4", 6: "g6"},
+			want: result{err: "g4"},
 		},
 		{
 			name: "no duplicate, failing group",

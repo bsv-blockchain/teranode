@@ -1917,12 +1917,21 @@ func (b *Block) detectDuplicateInputs(ctx context.Context, logger ulogger.Logger
 	snIdx := int(tx - base[sIdx]) //nolint:gosec // within a subtree
 
 	// the nodes of a loaded subtree can be released while the check runs
-	subtree := subtrees[sIdx]
-	if rootHash := subtree.RootHash(); rootHash == nil || snIdx >= len(subtree.Nodes) {
+	// (read once: a release between a check and the index would still panic)
+	var (
+		rootHash *chainhash.Hash
+		nodes    []subtreepkg.Node
+	)
+
+	if subtree := subtrees[sIdx]; subtree != nil {
+		rootHash, nodes = subtree.RootHash(), subtree.Nodes
+	}
+
+	if rootHash == nil || snIdx >= len(nodes) {
 		return errors.NewProcessingError("[validOrderAndBlessed][%s] subtree %d was released during the duplicate input check", b.String(), sIdx)
 	}
 
-	return b.duplicateInputsError(subtree.RootHash(), sIdx, snIdx, subtree.Nodes[snIdx])
+	return b.duplicateInputsError(rootHash, sIdx, snIdx, nodes[snIdx])
 }
 
 // loadSubtreeMeta reads the subtree's meta from the store, regenerating it when it
