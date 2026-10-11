@@ -175,7 +175,7 @@ type RemainderTransactionParams struct {
 	Block             *model.Block
 	ChainedSubtrees   []*subtreepkg.Subtree
 	CurrentSubtree    *subtreepkg.Subtree
-	TransactionMap    *SplitSwissMap
+	TransactionMap    *SortedHashSet
 	LosingTxHashesMap txmap.TxMap
 	// ConflictingHashes is the transient set of every tx hash flagged
 	// Conflicting=true by the cascade that triggered this drain (immediate
@@ -449,20 +449,6 @@ type SubtreeProcessor struct {
 	// of the reset running now, for runReset to return with it (see reset).
 	lastResetStorageFailed atomic.Bool
 	lastResetRotated       atomic.Bool
-
-	// txMapPool is a reusable transactionMap built in CreateTransactionMap.
-	// Allocated lazily on the first call (sized for that block) and Clear()ed
-	// between calls to avoid per-block ~600M-entry allocations that dominate
-	// GC in profiling. Owned exclusively by the Start() goroutine — no
-	// concurrent access, no locking beyond what SplitSwissMap already provides.
-	txMapPool *SplitSwissMap
-
-	// txMapPoolCapacity tracks the (per-bucket × buckets) sizing the pool was
-	// last allocated for. When a block's estimated map size exceeds this,
-	// the pool is reallocated at the new high-water mark rather than
-	// suffering swiss.Map's internal auto-rehash mid-fill — which would
-	// allocate inside the hot path and defeat much of the pooling win.
-	txMapPoolCapacity int
 
 	// currentTxMapShadow is the inactive half of a double-buffered currentTxMap
 	// used to avoid per-block 4096-shard SyncedMap allocations in
@@ -4587,7 +4573,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	}
 
 	var (
-		transactionMap     *SplitSwissMap
+		transactionMap     *SortedHashSet
 		losingTxHashesMap  txmap.TxMap
 		markOnLongestChain = make([]chainhash.Hash, 0, 1024)
 		winningTxSet       = make(map[chainhash.Hash]struct{})
@@ -4605,7 +4591,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		}
 
 		if transactionMap != nil {
-			transactionMap.Iter(func(hash chainhash.Hash, _ struct{}) bool {
+			transactionMap.Iter(func(hash chainhash.Hash) bool {
 				if !hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 					winningTxSet[hash] = struct{}{}
 					if _, ok := movedBackBlockTxMap[hash]; !ok {
@@ -5393,7 +5379,7 @@ func (stp *SubtreeProcessor) processBlockSubtrees(block *model.Block) (map[chain
 }
 
 // createTransactionMapIfNeeded creates a transaction map from block subtrees if needed
-func (stp *SubtreeProcessor) createTransactionMapIfNeeded(ctx context.Context, block *model.Block, blockSubtreesMap map[chainhash.Hash]int) (*SplitSwissMap, []chainhash.Hash, error) {
+func (stp *SubtreeProcessor) createTransactionMapIfNeeded(ctx context.Context, block *model.Block, blockSubtreesMap map[chainhash.Hash]int) (*SortedHashSet, []chainhash.Hash, error) {
 	_, _, deferFn := tracing.Tracer("subtreeprocessor").Start(ctx, "createTransactionMapIfNeeded",
 		tracing.WithParentStat(stp.stats),
 		tracing.WithLogMessage(stp.logger, "[moveForwardBlock][%s] processing subtrees into transaction map", block.String()),
@@ -5403,7 +5389,7 @@ func (stp *SubtreeProcessor) createTransactionMapIfNeeded(ctx context.Context, b
 
 	var (
 		err              error
-		transactionMap   *SplitSwissMap
+		transactionMap   *SortedHashSet
 		conflictingNodes []chainhash.Hash
 	)
 
@@ -6004,7 +5990,7 @@ func (stp *SubtreeProcessor) finalizeBlockProcessing(ctx context.Context, block 
 // moveForwardBlock cleans out all transactions that are in the current subtrees and also in the block
 // given. It is akin to moving up the blockchain to the next block.
 func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.Block, skipNotification bool,
-	processedConflictingHashesMap map[chainhash.Hash]struct{}, skipDequeue bool, createProperlySizedSubtrees bool) (transactionMap *SplitSwissMap, losingTxHashesMap txmap.TxMap, err error) {
+	processedConflictingHashesMap map[chainhash.Hash]struct{}, skipDequeue bool, createProperlySizedSubtrees bool) (transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap, err error) {
 	transactionMap, losingTxHashesMap, _, err = stp.moveForwardBlockDeferringDrain(ctx, block, skipNotification,
 		processedConflictingHashesMap, skipDequeue, createProperlySizedSubtrees, false)
 
@@ -6018,7 +6004,7 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 // no longer leave drained batches behind (#852).
 func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context, block *model.Block, skipNotification bool,
 	processedConflictingHashesMap map[chainhash.Hash]struct{}, skipDequeue bool, createProperlySizedSubtrees bool,
-	deferDrain bool) (transactionMap *SplitSwissMap, losingTxHashesMap txmap.TxMap, drain *deferredBlockDrain, err error) {
+	deferDrain bool) (transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap, drain *deferredBlockDrain, err error) {
 	// A failed call must never leave its own disk tx map errors pending for
 	// whatever succeeds next to have them misattributed.
 	// Registered before the nil-block guard so even that early return drains.
@@ -6405,7 +6391,7 @@ func (stp *SubtreeProcessor) DrainQueue(dropHashes map[chainhash.Hash]struct{}) 
 //
 // Returns:
 //   - error: Any error encountered during processing
-func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SplitSwissMap, losingTxHashesMap txmap.TxMap, conflictingHashes map[chainhash.Hash]struct{}, skipNotification bool) (err error) {
+func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap, conflictingHashes map[chainhash.Hash]struct{}, skipNotification bool) (err error) {
 	return stp.forEachDrainChunk(1, func(batches []*TxBatch) error {
 		for _, batch := range batches {
 			// Process all transactions in this batch
@@ -6629,7 +6615,7 @@ func remainderWorkers(configured int) int {
 // Returns:
 //   - error: Any error encountered during processing
 func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chainedSubtrees []*subtreepkg.Subtree,
-	transactionMap *SplitSwissMap, losingTxHashesMap txmap.TxMap, currentTxMap TxInpointsMap, skipNotification bool) error {
+	transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap, currentTxMap TxInpointsMap, skipNotification bool) error {
 	// clean out the transactions from the old current subtree that were in the block
 	// and add the remainderSubtreeNodes to the new current subtree, in order.
 	//
@@ -7276,7 +7262,7 @@ func (stp *SubtreeProcessor) legacyParallelGetAndSetIfNotExists(
 // Returns:
 //   - util.TxMap: Created transaction map
 //   - error: Any error encountered during map creation
-func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubtreesMap map[chainhash.Hash]int, totalSubtreesInBlock int, estimatedTxCount uint64) (*SplitSwissMap, []chainhash.Hash, error) {
+func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubtreesMap map[chainhash.Hash]int, totalSubtreesInBlock int, estimatedTxCount uint64) (*SortedHashSet, []chainhash.Hash, error) {
 	startTime := time.Now()
 
 	prometheusSubtreeProcessorCreateTransactionMap.Inc()
@@ -7306,39 +7292,16 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 		mapSize = len(blockSubtreesMap) * avgTxPerSubtree
 	}
 
-	// Reuse a pooled transactionMap across blocks to eliminate the per-block
-	// ~600M-entry allocation that dominated GC in profiling. The pool is owned
-	// by the single Start() goroutine, so no locking beyond what SplitSwissMap
-	// already provides. swiss.Map.Clear is in-place and retains capacity.
-	//
-	// Sizing policy: high-water mark. The pool is reallocated when a block
-	// requests more capacity than the pool was last sized for, otherwise the
-	// existing buckets are Clear()ed and reused in place. Reallocating on
-	// growth avoids swiss.Map's internal auto-rehash firing mid-fill — that
-	// would allocate inside the hot path and defeat most of the pooling win
-	// when the first observed block is smaller than later ones (e.g. node
-	// started during a low-traffic window).
-	switch {
-	case stp.txMapPool == nil:
-		stp.logger.Debugf("Allocating pooled transaction map with size: %d", mapSize)
-		stp.txMapPool = NewSplitSwissMap(1024, mapSize) // 1024 buckets
-		stp.txMapPoolCapacity = mapSize
-	case mapSize > stp.txMapPoolCapacity:
-		stp.logger.Debugf("Growing pooled transaction map from %d to %d", stp.txMapPoolCapacity, mapSize)
-		stp.txMapPool = NewSplitSwissMap(1024, mapSize)
-		stp.txMapPoolCapacity = mapSize
-	default:
-		stp.logger.Debugf("Reusing pooled transaction map (clearing prior contents, requested size: %d, pool capacity: %d)", mapSize, stp.txMapPoolCapacity)
-		stp.txMapPool.Clear()
-	}
-
-	transactionMap := stp.txMapPool
+	// The set is built per block and frozen: its sorted layout needs every hash before
+	// it can be laid out, so there is nothing to clear and reuse. The partition count
+	// only follows mapSize; a wrong estimate costs speed, never correctness.
+	transactionMap := NewSortedHashSet(mapSize)
 
 	conflictingNodesPerSubtree := make([][]chainhash.Hash, totalSubtreesInBlock)
 
-	// Single-writer-per-bucket insert pipeline: the subtree goroutines below
-	// only deserialize and submit; each bucket is written by exactly one
-	// inserter worker, so the per-bucket mutex is never contended (the old
+	// Single-writer-per-partition insert pipeline: the subtree goroutines below
+	// only deserialize and submit; each partition is written by exactly one
+	// inserter worker, so the per-partition mutex is never contended (the old
 	// shape — every subtree goroutine spawning one goroutine per bucket —
 	// serialized on the 1024 bucket mutexes and plateaued at ~15M inserts/s
 	// on a 192-core node).
@@ -7371,7 +7334,7 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 			}()
 
 			// Calculate expected bucket size with better distribution
-			nBuckets := transactionMap.Buckets()
+			nBuckets := transactionMap.Partitions()
 
 			// Estimate per-bucket fill from the block-level hint so we only
 			// pre-allocate when the amortized cost is worth paying. The old
@@ -7382,15 +7345,15 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 			expectedPerBucket := 0
 			if estimatedTxCount > 0 && totalSubtreesInBlock > 0 {
 				expectedPerSubtree := (int(estimatedTxCount) + totalSubtreesInBlock - 1) / totalSubtreesInBlock
-				expectedPerBucket = expectedPerSubtree / int(nBuckets)
+				expectedPerBucket = expectedPerSubtree / nBuckets
 			}
 
 			txHashBuckets := make(map[uint16][]chainhash.Hash, nBuckets)
 			if expectedPerBucket > 4 {
 				// Big-block path: buckets will be meaningfully filled, so
 				// pre-allocate exact size and skip the append-grow doublings.
-				for i := uint16(0); i < nBuckets; i++ {
-					txHashBuckets[i] = make([]chainhash.Hash, 0, expectedPerBucket)
+				for i := 0; i < nBuckets; i++ {
+					txHashBuckets[uint16(i)] = make([]chainhash.Hash, 0, expectedPerBucket)
 				}
 			}
 			// else: leave map empty. append-to-nil-slice in the deserializer
@@ -7401,9 +7364,9 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 			conflictingNodes := make([]chainhash.Hash, 0, 32)
 
 			// read leaves
-			if err = DeserializeHashesFromReaderIntoBuckets(
+			if err = deserializeHashesIntoBuckets(
 				subtreeReader,
-				nBuckets,
+				func(h chainhash.Hash) uint16 { return uint16(transactionMap.Partition(h)) }, //nolint:gosec // at most 65536 partitions
 				stp.settings.SubtreeValidation.MaxIncomingSubtreeBytes,
 				&txHashBuckets,
 				&conflictingNodes,
@@ -7435,11 +7398,12 @@ func (stp *SubtreeProcessor) CreateTransactionMap(ctx context.Context, blockSubt
 		return nil, nil, errors.NewProcessingError("error putting hashes into transaction map", insertErr)
 	}
 
-	// The map is fully built and has no further writers until the next
-	// block's Clear(): freeze it so the ~hundreds of millions of Exists
-	// probes in processRemainderTxHashes and dequeueDuringBlockMovement
-	// skip the per-bucket read lock.
-	transactionMap.Freeze()
+	// The set is fully built and has no further writers: freeze it, which lays
+	// the hashes out sorted for the ~hundreds of millions of Exists probes in
+	// processRemainderTxHashes and dequeueDuringBlockMovement.
+	if err = transactionMap.Freeze(runtime.GOMAXPROCS(0)); err != nil {
+		return nil, nil, errors.NewProcessingError("error freezing transaction map", err)
+	}
 
 	conflictingNodesPerSubtreeCount := 0
 	for _, subtreeConflictingNodes := range conflictingNodesPerSubtree {
@@ -7700,6 +7664,21 @@ func DeserializeHashesFromReaderIntoBuckets(
 	hashes *map[uint16][]chainhash.Hash,
 	conflictingNodes *[]chainhash.Hash,
 ) (err error) {
+	return deserializeHashesIntoBuckets(reader, func(h chainhash.Hash) uint16 {
+		return txmap.Bytes2Uint16Buckets(h, nBuckets)
+	}, maxSubtreeBodyBytes, hashes, conflictingNodes)
+}
+
+// deserializeHashesIntoBuckets is DeserializeHashesFromReaderIntoBuckets with the
+// bucket of a hash chosen by bucketOf, which CreateTransactionMap uses to hand
+// hashes to the SortedHashSet partition they belong to.
+func deserializeHashesIntoBuckets(
+	reader io.Reader,
+	bucketOf func(chainhash.Hash) uint16,
+	maxSubtreeBodyBytes int64,
+	hashes *map[uint16][]chainhash.Hash,
+	conflictingNodes *[]chainhash.Hash,
+) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = errors.NewProcessingError("recovered in DeserializeHashesFromReaderIntoBuckets: %v", r)
@@ -7776,7 +7755,7 @@ func DeserializeHashesFromReaderIntoBuckets(
 			// the trailing 16 bytes (fee + size) are not needed for the
 			// transaction-map build and are skipped via the slice index.
 			h := chainhash.Hash(buf[off : off+subtreeHashBytes])
-			bucket := txmap.Bytes2Uint16Buckets(h, nBuckets)
+			bucket := bucketOf(h)
 			(*hashes)[bucket] = append((*hashes)[bucket], h)
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"runtime"
 	"sort"
 	"sync/atomic"
 	"testing"
@@ -34,7 +35,7 @@ func BenchmarkRemainderLookupPhase(b *testing.B) {
 	b.Run(fmt.Sprintf("%dx%dM", subtrees, perSubtree>>20), func(b *testing.B) {
 		stp := newRemainderLookupBenchProcessor(b)
 
-		transactionMap := NewSplitSwissMap(1024, subtrees*perSubtree)
+		transactionMap := NewSortedHashSet(subtrees * perSubtree)
 		chained := make([]*subtreepkg.Subtree, 0, subtrees)
 
 		var h chainhash.Hash
@@ -53,7 +54,7 @@ func BenchmarkRemainderLookupPhase(b *testing.B) {
 			chained = append(chained, st)
 		}
 
-		transactionMap.Freeze()
+		require.NoError(b, transactionMap.Freeze(runtime.GOMAXPROCS(0)))
 
 		var (
 			stop  atomic.Bool

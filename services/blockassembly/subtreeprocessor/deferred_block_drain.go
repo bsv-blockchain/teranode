@@ -26,7 +26,7 @@ import (
 // holds.
 type deferredBlockDrain struct {
 	drainQueue        bool // false on the own-block path, which never drains
-	transactionMap    *SplitSwissMap
+	transactionMap    *SortedHashSet
 	losingTxHashesMap txmap.TxMap
 	conflictingHashes map[chainhash.Hash]struct{}
 }
@@ -138,7 +138,7 @@ func (stp *SubtreeProcessor) addDrainedBatches(ctx context.Context, batches []*T
 // addDrainedNodesSequentially is dequeueDuringBlockMovement's per-tx loop
 // for nodes already taken from the queue, without conflicting hashes.
 func (stp *SubtreeProcessor) addDrainedNodesSequentially(nodes []subtreepkg.Node, inpoints []*subtreepkg.TxInpoints,
-	transactionMap *SplitSwissMap, losingTxHashesMap txmap.TxMap) error {
+	transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap) error {
 	for i, node := range nodes {
 		if transactionMap != nil && transactionMap.Exists(node.Hash) {
 			continue
@@ -160,7 +160,7 @@ func (stp *SubtreeProcessor) addDrainedNodesSequentially(nodes []subtreepkg.Node
 
 // filterDrainedNodes reports, per node, whether it is neither in the block
 // nor on the losing side of a conflict. Both maps are read-only here.
-func filterDrainedNodes(nodes []subtreepkg.Node, transactionMap *SplitSwissMap, losingTxHashesMap txmap.TxMap) []bool {
+func filterDrainedNodes(nodes []subtreepkg.Node, transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap) []bool {
 	keep := make([]bool, len(nodes))
 
 	forEachChunk(len(nodes), func(start, end int) {
