@@ -135,8 +135,8 @@ func TestSplitTxInpointsMap_PutMultiBucketTxInpointsRespectsExistingEntries(t *t
 
 	hashA := makeHash(1)
 	hashB := makeHash(2)
-	inpointsA := &subtreepkg.TxInpoints{}
-	inpointsB := &subtreepkg.TxInpoints{}
+	inpointsA := &subtreepkg.TxInpoints{SubtreeIndex: 1}
+	inpointsB := &subtreepkg.TxInpoints{SubtreeIndex: 2}
 
 	// Pre-existing entry for hashA to verify duplicate handling.
 	_, ok := m.SetIfNotExists(hashA, inpointsA)
@@ -166,11 +166,11 @@ func TestSplitTxInpointsMap_PutMultiBucketTxInpointsRespectsExistingEntries(t *t
 
 	gotA, foundA := m.Get(hashA)
 	require.True(t, foundA)
-	require.Same(t, inpointsA, gotA, "bulk path must not overwrite an existing entry")
+	require.Equal(t, inpointsA, gotA, "bulk path must not overwrite an existing entry")
 
 	gotB, foundB := m.Get(hashB)
 	require.True(t, foundB)
-	require.Same(t, inpointsB, gotB, "bulk path must insert new entries")
+	require.Equal(t, inpointsB, gotB, "bulk path must insert new entries")
 }
 
 func TestSplitTxInpointsMap_ClearPreservesBucketStructure(t *testing.T) {
@@ -246,7 +246,7 @@ func TestSplitTxInpointsMap_BucketDistribution(t *testing.T) {
 	for i := uint16(0); i < 16; i++ {
 		b := &m.buckets[i]
 		b.mu.Lock()
-		if b.m.Count() > 0 {
+		if b.m != nil && b.m.Count() > 0 {
 			bucketsUsed++
 		}
 		b.mu.Unlock()

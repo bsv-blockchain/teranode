@@ -1,0 +1,838 @@
+package subtreeprocessor
+
+import (
+	"encoding/binary"
+	"math"
+	"math/rand"
+	"sync"
+	"sync/atomic"
+	"testing"
+
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/stretchr/testify/require"
+)
+
+// arenaHash is a deterministic hash for key i whose first two bytes (the bucket
+// selector) are spread out.
+func arenaHash(i uint64) chainhash.Hash {
+	return chainhash.HashH(binary.LittleEndian.AppendUint64(nil, i))
+}
+
+// inpointsShape builds the inpoints used for key i. The shape cycles through
+// everything the map has to round-trip exactly.
+type inpointsShape int
+
+const (
+	shapeNilPointer  inpointsShape = iota
+	shapeZeroValue                 // &TxInpoints{}: nil parents
+	shapeEmptyNonNil               // NewTxInpoints(): empty but non-nil parents
+	shapeOneParent
+	shapeThreeParents
+	shapeManyVouts       // one parent, 70000 vouts
+	shapeManyParents     // 40 parents, above the in-place encoding limit
+	shapeHugeParentCount // 3000 parents
+	shapeZeroVoutCount   // a parent whose vout count is 0
+	shapeNoVouts         // parents but no packed vouts (how many existing tests build inpoints)
+	shapeInt16Max
+	shapeInt16Min
+	shapeNegativeIndex
+	numShapes
+)
+
+func (s inpointsShape) serializable() bool {
+	return s != shapeNilPointer && s != shapeNoVouts
+}
+
+func buildInpoints(shape inpointsShape, seed uint64) *subtreepkg.TxInpoints {
+	parent := func(k uint64) chainhash.Hash { return arenaHash(1<<40 + seed*7919 + k) }
+
+	pack := func(n int, vouts func(k int) []uint32) *subtreepkg.TxInpoints {
+		parents := make([]chainhash.Hash, n)
+
+		var packed []uint32
+
+		for k := range parents {
+			parents[k] = parent(uint64(k))
+			v := vouts(k)
+			packed = append(packed, uint32(len(v)))
+			packed = append(packed, v...)
+		}
+
+		p := subtreepkg.NewTxInpointsFromPacked(parents, packed)
+
+		return &p
+	}
+
+	oneVout := func(k int) []uint32 { return []uint32{uint32(k) + 1} }
+
+	switch shape {
+	case shapeNilPointer:
+		return nil
+	case shapeZeroValue:
+		return &subtreepkg.TxInpoints{}
+	case shapeEmptyNonNil:
+		p := subtreepkg.NewTxInpoints()
+		return &p
+	case shapeOneParent:
+		return pack(1, oneVout)
+	case shapeThreeParents:
+		return pack(3, func(k int) []uint32 {
+			if k%2 == 0 {
+				return []uint32{1, uint32(k)}
+			}
+
+			return []uint32{2, uint32(k), uint32(k + 10), math.MaxUint32}
+		})
+	case shapeManyVouts:
+		return pack(1, func(int) []uint32 {
+			v := make([]uint32, 70000)
+			for i := range v {
+				v[i] = uint32(i)
+			}
+
+			return v
+		})
+	case shapeManyParents:
+		return pack(40, oneVout)
+	case shapeHugeParentCount:
+		return pack(3000, oneVout)
+	case shapeZeroVoutCount:
+		return pack(2, func(k int) []uint32 {
+			if k == 0 {
+				return nil
+			}
+
+			return []uint32{5}
+		})
+	case shapeNoVouts:
+		return &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{parent(0)}}
+	case shapeInt16Max:
+		p := pack(1, oneVout)
+		p.SubtreeIndex = math.MaxInt16
+
+		return p
+	case shapeInt16Min:
+		p := pack(2, oneVout)
+		p.SubtreeIndex = math.MinInt16
+
+		return p
+	case shapeNegativeIndex:
+		p := pack(1, oneVout)
+		p.SubtreeIndex = -1
+
+		return p
+	default:
+		panic("unknown shape")
+	}
+}
+
+func randomInpoints(r *rand.Rand, seed uint64) (*subtreepkg.TxInpoints, inpointsShape) {
+	shape := inpointsShape(r.Intn(int(numShapes)))
+	// the huge shapes are expensive, keep them rare
+	if (shape == shapeManyVouts || shape == shapeHugeParentCount) && r.Intn(20) != 0 {
+		shape = shapeThreeParents
+	}
+
+	p := buildInpoints(shape, seed)
+	if p != nil && r.Intn(3) == 0 {
+		p.SubtreeIndex = int16(r.Intn(1 << 16)) //nolint:gosec // wraps on purpose, covering the whole int16 range
+	}
+
+	return p, shape
+}
+
+// TestSplitTxInpointsMap_RoundTripsEveryShape pins that Get returns exactly what
+// was stored, for every shape of inpoints, through Set and SetIfNotExists.
+func TestSplitTxInpointsMap_RoundTripsEveryShape(t *testing.T) {
+	for _, buckets := range []uint16{1, 16, 16384} {
+		m := NewSplitTxInpointsMap(buckets)
+
+		for shape := inpointsShape(0); shape < numShapes; shape++ {
+			want := buildInpoints(shape, uint64(shape))
+			h := arenaHash(uint64(shape))
+
+			if shape%2 == 0 {
+				m.Set(h, want)
+			} else {
+				got, set := m.SetIfNotExists(h, want)
+				require.True(t, set)
+				require.Same(t, want, got, "a newly inserted value is returned as passed")
+			}
+
+			got, ok := m.Get(h)
+			require.True(t, ok, "shape %d", shape)
+
+			if want == nil {
+				require.Nil(t, got, "a stored nil pointer is returned as nil, found")
+			} else {
+				require.Equal(t, want, got, "shape %d buckets %d", shape, buckets)
+			}
+
+			require.True(t, m.Exists(h))
+		}
+
+		require.Equal(t, int(numShapes), m.Length())
+	}
+}
+
+func TestSplitTxInpointsMap_SetIfNotExistsKeepsFirstAndReturnsIt(t *testing.T) {
+	m := NewSplitTxInpointsMap(16)
+	h := arenaHash(1)
+	first := buildInpoints(shapeThreeParents, 1)
+	second := buildInpoints(shapeOneParent, 2)
+
+	_, set := m.SetIfNotExists(h, first)
+	require.True(t, set)
+
+	got, set := m.SetIfNotExists(h, second)
+	require.False(t, set)
+	require.Equal(t, first, got)
+
+	got, _ = m.Get(h)
+	require.Equal(t, first, got, "a failed SetIfNotExists must not change the stored value")
+	require.Equal(t, 1, m.Length())
+}
+
+func TestSplitTxInpointsMap_SetOverwritesDeleteRemovesReinsert(t *testing.T) {
+	m := NewSplitTxInpointsMap(16)
+	h := arenaHash(1)
+
+	for round := 0; round < 3; round++ {
+		a := buildInpoints(shapeThreeParents, uint64(round))
+		b := buildInpoints(shapeManyParents, uint64(round))
+
+		m.Set(h, a)
+		m.Set(h, b)
+
+		got, ok := m.Get(h)
+		require.True(t, ok)
+		require.Equal(t, b, got, "Set overwrites")
+		require.Equal(t, 1, m.Length())
+
+		require.True(t, m.Delete(h))
+		require.False(t, m.Delete(h))
+		require.False(t, m.Exists(h))
+
+		_, ok = m.Get(h)
+		require.False(t, ok)
+
+		_, set := m.SetIfNotExists(h, a)
+		require.True(t, set, "a deleted key can be inserted again")
+
+		got, _ = m.Get(h)
+		require.Equal(t, a, got)
+		require.True(t, m.Delete(h))
+		require.Equal(t, 0, m.Length())
+	}
+}
+
+// TestSplitTxInpointsMap_GetReturnsIndependentCopies pins that a returned value
+// does not alias the arena: mutating it, or the value that was stored, must not
+// change the map.
+func TestSplitTxInpointsMap_GetReturnsIndependentCopies(t *testing.T) {
+	m := NewSplitTxInpointsMap(16)
+	h := arenaHash(1)
+	stored := buildInpoints(shapeThreeParents, 1)
+	pristine := buildInpoints(shapeThreeParents, 1)
+
+	m.Set(h, stored)
+
+	stored.ParentTxHashes[0] = chainhash.Hash{0xff}
+	stored.SubtreeIndex = 99
+
+	got, _ := m.Get(h)
+	require.Equal(t, pristine, got, "mutating the stored value must not reach the map")
+
+	got.ParentTxHashes[1] = chainhash.Hash{0xee}
+
+	got2, _ := m.Get(h)
+	require.Equal(t, pristine, got2, "mutating a returned value must not reach the map")
+}
+
+// TestSplitTxInpointsMap_AppendSerializedMatchesSerialize pins the stored wire
+// bytes to TxInpoints.Serialize, including the error for inpoints that cannot
+// be serialized.
+func TestSplitTxInpointsMap_AppendSerializedMatchesSerialize(t *testing.T) {
+	m := NewSplitTxInpointsMap(16)
+
+	for shape := inpointsShape(0); shape < numShapes; shape++ {
+		p := buildInpoints(shape, uint64(shape))
+		h := arenaHash(uint64(shape))
+		m.Set(h, p)
+
+		got, found, err := m.AppendSerialized([]byte{0xEE}, h)
+		require.True(t, found, "shape %d", shape)
+
+		if !shape.serializable() {
+			require.Error(t, err, "shape %d", shape)
+			require.Equal(t, []byte{0xEE}, got, "dst is returned untouched on error")
+
+			continue
+		}
+
+		require.NoError(t, err, "shape %d", shape)
+
+		want, err := p.Serialize()
+		require.NoError(t, err)
+		require.Equal(t, append([]byte{0xEE}, want...), got, "shape %d", shape)
+	}
+
+	got, found, err := m.AppendSerialized([]byte{1}, arenaHash(1<<50))
+	require.False(t, found)
+	require.NoError(t, err)
+	require.Equal(t, []byte{1}, got)
+}
+
+// TestSplitTxInpointsMap_AppendMetaInpointsRefusesUnsetParents pins the rule
+// subtreepkg.Meta.Serialize applies to every node but the first: parent tx
+// hashes that were never set (nil) are an error, an empty non-nil slice is not.
+func TestSplitTxInpointsMap_AppendMetaInpointsRefusesUnsetParents(t *testing.T) {
+	m := NewSplitTxInpointsMap(16)
+
+	for shape := inpointsShape(0); shape < numShapes; shape++ {
+		p := buildInpoints(shape, uint64(shape))
+		h := arenaHash(uint64(shape))
+		m.Set(h, p)
+
+		_, found, err := m.AppendMetaInpoints(nil, h)
+		require.True(t, found)
+
+		wantErr := p == nil || p.ParentTxHashes == nil || !shape.serializable()
+		if wantErr {
+			require.Error(t, err, "shape %d", shape)
+		} else {
+			require.NoError(t, err, "shape %d", shape)
+		}
+	}
+}
+
+func TestSplitTxInpointsMap_MoveTo(t *testing.T) {
+	src, dst := NewSplitTxInpointsMap(16), NewSplitTxInpointsMap(64)
+	want := make(map[chainhash.Hash]*subtreepkg.TxInpoints)
+
+	for i := uint64(0); i < 2000; i++ {
+		p := buildInpoints(inpointsShape(i%uint64(numShapes)), i)
+		if p == nil {
+			p = buildInpoints(shapeOneParent, i)
+		}
+
+		src.Set(arenaHash(i), p)
+		want[arenaHash(i)] = p
+	}
+
+	existing := buildInpoints(shapeOneParent, 777)
+	dst.Set(arenaHash(3), existing)
+
+	for i := uint64(0); i < 2000; i++ {
+		moved, found := src.MoveTo(dst, arenaHash(i))
+		require.True(t, found)
+		require.Equal(t, i != 3, moved, "tx %d", i)
+	}
+
+	_, found := src.MoveTo(dst, arenaHash(1<<50))
+	require.False(t, found)
+
+	for i := uint64(0); i < 2000; i++ {
+		got, ok := dst.Get(arenaHash(i))
+		require.True(t, ok)
+
+		if i == 3 {
+			require.Equal(t, existing, got, "MoveTo must not overwrite")
+		} else {
+			require.Equal(t, want[arenaHash(i)], got, "tx %d", i)
+		}
+	}
+
+	require.Equal(t, 2000, src.Length(), "MoveTo copies, the source keeps its entries")
+
+	// moving into itself is a no-op that reports the hash as found and not moved
+	moved, found := src.MoveTo(src, arenaHash(5))
+	require.True(t, found)
+	require.False(t, moved)
+}
+
+func TestSplitTxInpointsMap_MoveBucketFrom(t *testing.T) {
+	const buckets = 32
+
+	src, dst := NewSplitTxInpointsMap(buckets), NewSplitTxInpointsMap(buckets)
+	byBucket := make(map[uint16][]chainhash.Hash)
+
+	for i := uint64(0); i < 3000; i++ {
+		h := arenaHash(i)
+		src.Set(h, buildInpoints(shapeThreeParents, i))
+		byBucket[dst.BucketFor(h)] = append(byBucket[dst.BucketFor(h)], h)
+	}
+
+	dst.Set(arenaHash(0), buildInpoints(shapeOneParent, 9))
+
+	for b, hashes := range byBucket {
+		inserted := make([]bool, len(hashes))
+		missing := dst.MoveBucketFrom(src, b, hashes, inserted)
+		require.Equal(t, -1, missing)
+
+		for j, h := range hashes {
+			require.Equal(t, h != arenaHash(0), inserted[j])
+		}
+	}
+
+	require.Equal(t, 3000, dst.Length())
+
+	// the first missing hash is reported by position, and the ones before it moved
+	b := dst.BucketFor(arenaHash(1))
+	absent := chainhash.Hash{}
+	absent[0], absent[1] = arenaHash(1)[0], arenaHash(1)[1] // same bucket as tx 1
+	absent[31] = 0xAB
+
+	dst2 := NewSplitTxInpointsMap(buckets)
+	inserted := make([]bool, 2)
+	require.Equal(t, 1, dst2.MoveBucketFrom(src, b, []chainhash.Hash{arenaHash(1), absent}, inserted))
+	require.True(t, inserted[0])
+	require.True(t, dst2.Exists(arenaHash(1)))
+}
+
+func TestSplitTxInpointsMap_ClearReusesArenaWithoutLeakingOldBytes(t *testing.T) {
+	m := NewSplitTxInpointsMap(4) // few buckets: every bucket sees every generation
+
+	for gen := uint64(0); gen < 6; gen++ {
+		// alternate large and small records so reused chunks hold stale bytes of other sizes
+		for i := uint64(0); i < 3000; i++ {
+			shape := shapeOneParent
+			if (i+gen)%7 == 0 {
+				shape = shapeManyParents
+			}
+
+			m.Set(arenaHash(i), buildInpoints(shape, gen*10_000+i))
+		}
+
+		for i := uint64(0); i < 3000; i++ {
+			shape := shapeOneParent
+			if (i+gen)%7 == 0 {
+				shape = shapeManyParents
+			}
+
+			got, ok := m.Get(arenaHash(i))
+			require.True(t, ok)
+			require.Equal(t, buildInpoints(shape, gen*10_000+i), got, "gen %d tx %d", gen, i)
+		}
+
+		m.Clear()
+		require.Equal(t, 0, m.Length())
+		require.False(t, m.Exists(arenaHash(1)))
+
+		_, ok := m.Get(arenaHash(1))
+		require.False(t, ok, "a cleared record is gone")
+
+		_, found, _ := m.AppendSerialized(nil, arenaHash(1))
+		require.False(t, found)
+	}
+}
+
+// TestSplitTxInpointsMap_MatchesReferenceModel drives random operations against
+// the map and a plain Go map holding the same values, and requires the same
+// answer from every operation.
+func TestSplitTxInpointsMap_MatchesReferenceModel(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		buckets uint16
+		keys    uint64
+		hash    func(uint64) chainhash.Hash
+	}{
+		{"one bucket", 1, 300, arenaHash},
+		{"spread", 257, 3000, arenaHash},
+		{"all keys in one bucket", 16384, 400, func(i uint64) chainhash.Hash {
+			h := arenaHash(i)
+			h[0], h[1] = 0x12, 0x34 // identical bucket selector, the keys differ in the rest
+
+			return h
+		}},
+		{"keys differing in the last byte only", 64, 256, func(i uint64) chainhash.Hash {
+			return chainhash.Hash{31: byte(i)}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := rand.New(rand.NewSource(int64(tc.keys)))
+			m := NewSplitTxInpointsMap(tc.buckets)
+			model := make(map[chainhash.Hash]*subtreepkg.TxInpoints)
+
+			for step := 0; step < 20_000; step++ {
+				key := tc.hash(uint64(r.Intn(int(tc.keys))))
+				p, _ := randomInpoints(r, uint64(step))
+
+				switch op := r.Intn(100); {
+				case op < 30:
+					m.Set(key, p)
+					model[key] = p
+				case op < 55:
+					got, set := m.SetIfNotExists(key, p)
+
+					old, had := model[key]
+					require.Equal(t, !had, set)
+
+					if had {
+						require.Equal(t, old, got)
+					} else {
+						require.Same(t, p, got)
+						model[key] = p
+					}
+				case op < 70:
+					_, had := model[key]
+					require.Equal(t, had, m.Delete(key))
+					delete(model, key)
+				case op < 90:
+					got, ok := m.Get(key)
+					old, had := model[key]
+					require.Equal(t, had, ok)
+
+					if had {
+						require.Equal(t, old, got)
+					}
+				case op < 99:
+					_, had := model[key]
+					require.Equal(t, had, m.Exists(key))
+				default:
+					m.Clear()
+					clear(model)
+				}
+
+				if step%997 == 0 {
+					require.Equal(t, len(model), m.Length())
+				}
+			}
+
+			require.Equal(t, len(model), m.Length())
+
+			for key, want := range model {
+				got, ok := m.Get(key)
+				require.True(t, ok)
+				require.Equal(t, want, got)
+			}
+		})
+	}
+}
+
+// TestSplitTxInpointsMap_ResultsIndependentOfBucketsAndOrder pins that the
+// observable contents do not depend on the bucket count or the insertion order.
+func TestSplitTxInpointsMap_ResultsIndependentOfBucketsAndOrder(t *testing.T) {
+	const n = 2000
+
+	keys := make([]uint64, n)
+	for i := range keys {
+		keys[i] = uint64(i)
+	}
+
+	var reference map[chainhash.Hash][]byte
+
+	for _, buckets := range []uint16{1, 3, 64, 16384, 65535} {
+		for seed := int64(0); seed < 3; seed++ {
+			r := rand.New(rand.NewSource(seed))
+			r.Shuffle(n, func(i, j int) { keys[i], keys[j] = keys[j], keys[i] })
+
+			m := NewSplitTxInpointsMap(buckets)
+
+			for _, k := range keys {
+				m.Set(arenaHash(k), buildInpoints(shapeThreeParents, k))
+			}
+
+			got := make(map[chainhash.Hash][]byte, n)
+
+			for k := uint64(0); k < n; k++ {
+				b, found, err := m.AppendSerialized(nil, arenaHash(k))
+				require.True(t, found)
+				require.NoError(t, err)
+
+				got[arenaHash(k)] = b
+			}
+
+			require.Equal(t, n, m.Length())
+
+			if reference == nil {
+				reference = got
+			} else {
+				require.Equal(t, reference, got, "buckets %d seed %d", buckets, seed)
+			}
+		}
+	}
+}
+
+func TestSplitTxInpointsMap_BulkInsertsMatchSetIfNotExists(t *testing.T) {
+	const n = 5000
+
+	hashes := make([]chainhash.Hash, n)
+	values := make([]*subtreepkg.TxInpoints, n)
+
+	for i := range hashes {
+		hashes[i] = arenaHash(uint64(i % 4000)) // 1000 duplicates
+		values[i] = buildInpoints(shapeThreeParents, uint64(i))
+	}
+
+	bulk := NewSplitTxInpointsMap(64)
+	wasSet := make([]bool, n)
+	bulk.ParallelBulkSetIfNotExists(hashes, values, wasSet)
+
+	seq := NewSplitTxInpointsMap(64)
+
+	for i := range hashes {
+		_, set := seq.SetIfNotExists(hashes[i], values[i])
+		require.Equal(t, set, wasSet[i], "index %d", i)
+	}
+
+	for i := 0; i < 4000; i++ {
+		a, _ := bulk.Get(arenaHash(uint64(i)))
+		b, _ := seq.Get(arenaHash(uint64(i)))
+		require.Equal(t, b, a)
+	}
+
+	// PutMultiBucketTxInpoints: same bucket, with a duplicate and a pre-existing key
+	multi := NewSplitTxInpointsMap(64)
+
+	var keys []chainhash.Hash
+
+	var vals []*subtreepkg.TxInpoints
+
+	bucket := multi.BucketFor(arenaHash(0))
+
+	for i := uint64(0); len(keys) < 50; i++ {
+		if multi.BucketFor(arenaHash(i)) == bucket {
+			keys = append(keys, arenaHash(i))
+			vals = append(vals, buildInpoints(shapeOneParent, i))
+		}
+	}
+
+	keys = append(keys, keys[0])
+	vals = append(vals, buildInpoints(shapeOneParent, 12345))
+
+	got := multi.PutMultiBucketTxInpoints(bucket, keys, vals)
+	require.Len(t, got, len(keys))
+
+	for i := 0; i < 50; i++ {
+		require.True(t, got[i])
+	}
+
+	require.False(t, got[50], "the duplicate in the batch is not inserted")
+
+	first, _ := multi.Get(keys[0])
+	require.Equal(t, vals[0], first)
+}
+
+// TestSplitTxInpointsMap_ConcurrentReadersNeverSeeAClearedRecord is the
+// lifetime proof for the arena. Readers that the map does not synchronize with
+// the owner (the subtree meta builder holds a captured half while the owner
+// moves to the next block and clears the retired half) run against Clear and
+// refill cycles. Every read must return either "not found" or exactly the
+// record of the key it asked for, never bytes of another record, a torn mix, or
+// a panic. Run with -race.
+func TestSplitTxInpointsMap_ConcurrentReadersNeverSeeAClearedRecord(t *testing.T) {
+	const (
+		keys        = 4000
+		generations = 40
+	)
+
+	m := NewSplitTxInpointsMap(8) // few buckets so records of different generations share chunks
+
+	// the record of key i is a pure function of i, so any generation must return the same
+	valueOf := func(i uint64) *subtreepkg.TxInpoints {
+		if i%5 == 0 {
+			return buildInpoints(shapeManyParents, i)
+		}
+
+		return buildInpoints(shapeThreeParents, i)
+	}
+
+	wire := func(i uint64) []byte {
+		b, err := valueOf(i).Serialize()
+		require.NoError(t, err)
+
+		return b
+	}
+
+	var (
+		stop       atomic.Bool
+		reads      atomic.Int64
+		wg         sync.WaitGroup
+		dstMu      sync.Mutex
+		failedOnce sync.Once
+	)
+
+	fail := func(msg string, args ...any) {
+		failedOnce.Do(func() { t.Errorf(msg, args...) })
+		stop.Store(true)
+	}
+
+	dst := NewSplitTxInpointsMap(8)
+
+	for w := 0; w < 4; w++ {
+		wg.Add(1)
+
+		go func(w int) {
+			defer wg.Done()
+
+			r := rand.New(rand.NewSource(int64(w)))
+
+			for !stop.Load() {
+				i := uint64(r.Intn(keys))
+
+				switch r.Intn(3) {
+				case 0:
+					if got, ok := m.Get(arenaHash(i)); ok {
+						reads.Add(1)
+
+						if want := valueOf(i); !equalInpoints(want, got) {
+							fail("Get returned a foreign or torn record for key %d", i)
+						}
+					}
+				case 1:
+					if b, found, err := m.AppendMetaInpoints(nil, arenaHash(i)); found {
+						reads.Add(1)
+
+						if err != nil || string(b) != string(wire(i)) {
+							fail("AppendMetaInpoints returned a foreign or torn record for key %d (err %v)", i, err)
+						}
+					}
+				default:
+					dstMu.Lock()
+					dst.Clear()
+					dstMu.Unlock()
+
+					if moved, found := m.MoveTo(dst, arenaHash(i)); found && moved {
+						reads.Add(1)
+
+						if got, ok := dst.Get(arenaHash(i)); ok && !equalInpoints(valueOf(i), got) {
+							fail("MoveTo copied a foreign or torn record for key %d", i)
+						}
+					}
+				}
+			}
+		}(w)
+	}
+
+	for gen := 0; gen < generations; gen++ {
+		for i := uint64(0); i < keys; i++ {
+			m.Set(arenaHash(i), valueOf(i))
+		}
+
+		m.Clear()
+	}
+
+	stop.Store(true)
+	wg.Wait()
+
+	require.NotZero(t, reads.Load(), "the readers never hit a record, the test proves nothing")
+}
+
+func equalInpoints(a, b *subtreepkg.TxInpoints) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+
+	x, errX := a.Serialize()
+	y, errY := b.Serialize()
+
+	return errX == nil && errY == nil && string(x) == string(y) && a.SubtreeIndex == b.SubtreeIndex
+}
+
+// TestSplitTxInpointsMap_ConcurrentWritersAndReaders covers the ingest path:
+// writers insert disjoint and overlapping keys while readers look them up.
+func TestSplitTxInpointsMap_ConcurrentWritersAndReaders(t *testing.T) {
+	m := NewSplitTxInpointsMap(256)
+
+	var (
+		wg       sync.WaitGroup
+		inserted atomic.Int64
+	)
+
+	for w := uint64(0); w < 8; w++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for i := uint64(0); i < 5000; i++ { // every writer tries every key
+				if _, set := m.SetIfNotExists(arenaHash(i), buildInpoints(shapeThreeParents, i)); set {
+					inserted.Add(1)
+				}
+
+				if got, ok := m.Get(arenaHash(i)); ok {
+					if !equalInpoints(buildInpoints(shapeThreeParents, i), got) {
+						t.Errorf("wrong record for key %d", i)
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	require.Equal(t, int64(5000), inserted.Load(), "exactly one writer wins each key")
+	require.Equal(t, 5000, m.Length())
+}
+
+// FuzzSplitTxInpointsMapModel compares the map with a Go map under an operation
+// sequence taken from the fuzz input.
+func FuzzSplitTxInpointsMapModel(f *testing.F) {
+	f.Add([]byte{0, 1, 3, 1, 2, 4, 2, 1, 0, 5, 0, 0, 6, 1, 1})
+	f.Add([]byte{1, 0, 5, 1, 0, 6, 2, 0, 0, 3, 0, 0, 4, 0, 0})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		m := NewSplitTxInpointsMap(3)
+		model := make(map[chainhash.Hash]*subtreepkg.TxInpoints)
+
+		for len(data) >= 3 {
+			op, key, shape := data[0]%7, arenaHash(uint64(data[1]%16)), inpointsShape(int(data[2])%int(numShapes))
+			data = data[3:]
+
+			if shape == shapeManyVouts || shape == shapeHugeParentCount {
+				shape = shapeThreeParents
+			}
+
+			p := buildInpoints(shape, uint64(len(data)))
+
+			switch op {
+			case 0:
+				m.Set(key, p)
+				model[key] = p
+			case 1:
+				_, set := m.SetIfNotExists(key, p)
+				_, had := model[key]
+				require.Equal(t, !had, set)
+
+				if !had {
+					model[key] = p
+				}
+			case 2:
+				_, had := model[key]
+				require.Equal(t, had, m.Delete(key))
+				delete(model, key)
+			case 3:
+				got, ok := m.Get(key)
+				want, had := model[key]
+				require.Equal(t, had, ok)
+
+				if had {
+					require.Equal(t, want, got)
+				}
+			case 4:
+				_, had := model[key]
+				require.Equal(t, had, m.Exists(key))
+			case 5:
+				m.Clear()
+				clear(model)
+			case 6:
+				dst := NewSplitTxInpointsMap(5)
+				moved, found := m.MoveTo(dst, key)
+				want, had := model[key]
+				require.Equal(t, had, found)
+				require.Equal(t, had, moved)
+
+				if had {
+					got, ok := dst.Get(key)
+					require.True(t, ok)
+					require.Equal(t, want, got)
+				}
+			}
+
+			require.Equal(t, len(model), m.Length())
+		}
+	})
+}

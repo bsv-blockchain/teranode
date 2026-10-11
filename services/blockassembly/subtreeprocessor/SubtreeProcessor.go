@@ -7118,6 +7118,26 @@ func (stp *SubtreeProcessor) bucketShardedGetAndSetIfNotExists(
 		bucketIdx := b
 
 		g.Go(func() error {
+			// Between two in-memory maps the stored records are copied as they
+			// are, instead of decoded by Get and encoded again by the insert.
+			if srcSplit, ok := currentTxMap.(*SplitTxInpointsMap); ok {
+				hashes := make([]chainhash.Hash, len(indices))
+				for j, origIdx := range indices {
+					hashes[j] = nodes[origIdx].Hash
+				}
+
+				moved := make([]bool, len(indices))
+				if missing := splitMap.MoveBucketFrom(srcSplit, bucketIdx, hashes, moved); missing >= 0 {
+					return errors.NewProcessingError("node %s not found in currentTxMap", hashes[missing].String())
+				}
+
+				for j, origIdx := range indices {
+					wasInserted[origIdx] = moved[j]
+				}
+
+				return nil
+			}
+
 			keys := make([]chainhash.Hash, len(indices))
 			vals := make([]*subtreepkg.TxInpoints, len(indices))
 
