@@ -4599,8 +4599,8 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 					}
 				}
 
-				// The swiss Iter callback returns "stop", not "continue":
-				// returning true here would visit one tx per bucket.
+				// The Iter callback returns "stop", not "continue":
+				// returning true here would stop after the first tx.
 				return false
 			})
 		}
