@@ -66,7 +66,7 @@ func collect(s *SortedHashSet) []chainhash.Hash {
 
 	s.Iter(func(h chainhash.Hash) bool {
 		out = append(out, h)
-		return true
+		return false
 	})
 
 	return out
@@ -285,7 +285,7 @@ func TestSortedHashSet_FrozenContract(t *testing.T) {
 	// reads before Freeze must not silently answer
 	require.PanicsWithValue(t, errNotFrozen, func() { s.Exists(h) })
 	require.PanicsWithValue(t, errNotFrozen, func() { s.Length() })
-	require.PanicsWithValue(t, errNotFrozen, func() { s.Iter(func(chainhash.Hash) bool { return true }) })
+	require.PanicsWithValue(t, errNotFrozen, func() { s.Iter(func(chainhash.Hash) bool { return false }) })
 
 	require.NoError(t, s.Freeze(1))
 
@@ -316,21 +316,57 @@ func TestSortedHashSet_IterStopsEarly(t *testing.T) {
 	n := 0
 	s.Iter(func(chainhash.Hash) bool {
 		n++
-		return n < 10
+		return n >= 10
 	})
 	require.Equal(t, 10, n)
 }
 
-func TestSortedHashSet_CapacityLimit(t *testing.T) {
-	require.NoError(t, checkSortedHashSetSize(math.MaxUint32))
-	err := checkSortedHashSetSize(math.MaxUint32 + 1)
+func TestSortedHashSet_NoGlobalCap(t *testing.T) {
+	// More than 2^32-1 hashes in total is fine as long as each partition fits uint32
+	// offsets. Fake the counts: nothing of this size can be allocated in a test.
+	parts := make([]sortedHashPart, 65536)
+	for i := range parts {
+		parts[i].n = 1 << 20 // 2^36 hashes in total
+	}
+
+	bases, total, err := partitionBases(parts)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1)<<36, total)
+	require.Equal(t, uint64(0), bases[0])
+	require.Equal(t, uint64(1)<<20, bases[1])
+	require.Equal(t, uint64(65535)<<20, bases[65535])
+}
+
+func TestSortedHashSet_PartitionLimit(t *testing.T) {
+	parts := make([]sortedHashPart, 2)
+	parts[1].n = math.MaxUint32
+	_, _, err := partitionBases(parts)
+	require.NoError(t, err)
+
+	parts[1].n = math.MaxUint32 + 1
+	_, _, err = partitionBases(parts)
 	require.Error(t, err)
+	require.Contains(t, err.Error(), "partition 1")
 	require.Contains(t, err.Error(), "4294967295")
 
-	// Freeze must refuse before allocating anything
+	// Freeze must refuse before allocating anything and stay unfrozen
 	s := NewSortedHashSet(0)
 	s.parts[0].n = math.MaxUint32 + 1
 	require.Error(t, s.Freeze(1))
+	require.False(t, s.frozen.Load())
+}
+
+// partitions laid out at non-zero bases must still answer exactly: many partitions with
+// uneven fill, including empty ones.
+func TestSortedHashSet_ManyPartitionsUneven(t *testing.T) {
+	hashes := randHashes(300000, 21)
+	for i := 0; i < 100000; i++ { // pile a third into one partition
+		hashes[i][0], hashes[i][1] = 0x12, 0x34
+	}
+
+	s := buildSet(t, hashes, 4_000_000, 4) // 64+ partitions
+	require.Greater(t, s.Partitions(), 32)
+	assertMatchesReference(t, s, hashes)
 }
 
 func FuzzSortedHashSet(f *testing.F) {

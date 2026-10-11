@@ -119,7 +119,7 @@ func TestCreateTransactionMap_MatchesReferenceSet(t *testing.T) {
 
 			visited++
 
-			return true
+			return false
 		})
 		require.Equal(t, len(ref), visited, "Iter must visit every distinct hash")
 
