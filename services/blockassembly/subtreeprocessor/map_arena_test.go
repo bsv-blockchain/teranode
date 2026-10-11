@@ -1079,3 +1079,13 @@ func TestMoveBucketFrom_FailureLeavesNothingBehindAfterSwapBack(t *testing.T) {
 	require.Equal(t, 50, src.Length())
 	require.Zero(t, stp.currentTxMapShadow.Length(), "the half the failed move wrote into is dropped")
 }
+
+// The in-place encoder reads go-subtree's unexported packed vouts; if the field is
+// renamed or retyped every record silently falls back to Serialize.
+func TestVoutIdxsFieldIsReadable(t *testing.T) {
+	p := subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{{1}}, []uint32{2, 7, 9})
+
+	n, ok := voutIdxsLen(&p)
+	require.True(t, ok, "go-subtree TxInpoints.voutIdxs is no longer a []uint32")
+	require.Equal(t, 3, n)
+}

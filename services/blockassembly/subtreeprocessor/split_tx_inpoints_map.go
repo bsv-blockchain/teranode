@@ -207,11 +207,12 @@ func (b *txInpointsBucket) index() *swiss.Map[chainhash.Hash, uint64] {
 // voutIdxsField is where TxInpoints keeps its packed vouts, which only the
 // package go-subtree can read. The encoder needs its length to tell inpoints it
 // can walk from inpoints it has to serialize. If go-subtree ever renames the
-// field, voutIdxsLen reports false and every record goes through Serialize.
+// field or changes its type, voutIdxsLen reports false and every record goes
+// through Serialize; TestVoutIdxsFieldIsReadable fails so that doesn't go unnoticed.
 var voutIdxsField, hasVoutIdxsField = reflect.TypeOf(subtreepkg.TxInpoints{}).FieldByName("voutIdxs")
 
 func voutIdxsLen(inpoints *subtreepkg.TxInpoints) (int, bool) {
-	if !hasVoutIdxsField || voutIdxsField.Type.Kind() != reflect.Slice {
+	if !hasVoutIdxsField || voutIdxsField.Type != reflect.TypeFor[[]uint32]() {
 		return 0, false
 	}
 

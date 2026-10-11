@@ -3721,8 +3721,8 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 	_, inMemory := stp.currentTxMap.(*SplitTxInpointsMap)
 
 	// Process nodes directly from original subtrees without intermediate storage
-	// We temporarily remove from currentTxMap and immediately re-add to avoid
-	// addNode's duplicate detection while minimizing memory overhead
+	// The disk map path temporarily removes each tx from currentTxMap and
+	// immediately re-adds it, to avoid addNode's duplicate detection
 	for _, subtree := range originalSubtrees {
 		for _, node := range subtree.Nodes {
 			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
