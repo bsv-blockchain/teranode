@@ -1280,6 +1280,10 @@ func (b *Block) closeDeferredLocked() error {
 	var closeErrs []error
 
 	for _, st := range b.deferredCloses {
+		// detach before unmapping, as the release paths do; the array is dropped,
+		// not pooled: the index that read it has only just gone
+		_ = st.ReleaseNodes()
+
 		if err := st.Close(); err != nil {
 			closeErrs = append(closeErrs, err)
 		}
@@ -2661,8 +2665,9 @@ func (b *Block) releaseSubtreeNodesLocked(put func([]subtreepkg.Node)) error {
 
 	// A live node index reads its hashes from these arrays: a pooled one would be
 	// overwritten by the next subtree load and an unmapped one would fault. Detach
-	// them all the same, but drop the heap arrays instead of returning them to the
-	// pool (the GC frees them once the index is gone) and leave the closes to
+	// the subtrees from the block all the same, but leave their Nodes attached (a
+	// dedup goroutine that captured one still reads them) and leave the release,
+	// which drops the heap arrays instead of pooling them, and the closes to
 	// releaseTxMap.
 	pinned := b.nodeIndexPins.Load() > 0
 
@@ -2671,14 +2676,14 @@ func (b *Block) releaseSubtreeNodesLocked(put func([]subtreepkg.Node)) error {
 			continue
 		}
 
-		nodes := st.ReleaseNodes()
-
 		if pinned {
 			b.deferredCloses = append(b.deferredCloses, st)
 			b.SubtreeSlices[i] = nil
 
 			continue
 		}
+
+		nodes := st.ReleaseNodes()
 
 		if nodes != nil && put != nil && !st.IsMmapBacked() {
 			put(nodes)
@@ -2741,17 +2746,17 @@ func (b *Block) closeMmapSubtreesLocked() error {
 			continue
 		}
 
+		// a live node index still reads the region: releaseTxMap detaches and unmaps it
+		if b.nodeIndexPins.Load() > 0 {
+			b.deferredCloses = append(b.deferredCloses, st)
+			continue
+		}
+
 		// Detach Nodes before unmapping, the same order releaseSubtreeNodesLocked
 		// uses. Close leaves st.Nodes pointing at the region it just unmapped, so
 		// anything that still holds this subtree would be reading freed memory.
 		// The slice is dropped, never pooled: its backing IS the mapped region.
 		_ = st.ReleaseNodes()
-
-		// a live node index still reads the region: releaseTxMap unmaps it
-		if b.nodeIndexPins.Load() > 0 {
-			b.deferredCloses = append(b.deferredCloses, st)
-			continue
-		}
 
 		if err := st.Close(); err != nil {
 			closeErrs = append(closeErrs, errors.NewProcessingError("subtree %d", i, err))

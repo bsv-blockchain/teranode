@@ -191,3 +191,33 @@ func TestCheckDuplicateTransactions_ReplacedIndexDoesNotLeakPin(t *testing.T) {
 	require.Zero(t, mmapFiles(t, mmapDir))
 	requireUnpinned(t, b)
 }
+
+// A pinned release detaches the subtrees from the block but leaves their Nodes
+// attached until releaseTxMap: the separate dedup pass reads subtree.Nodes from
+// subtrees it captured, and a nil there would skip the subtree's duplicate check
+// without an error.
+func TestReleaseSubtreeNodes_PinnedKeepsNodesAttached(t *testing.T) {
+	b, _ := nodeIndexBlockWithMmap(t)
+
+	captured := append([]*subtreepkg.Subtree(nil), b.SubtreeSlices...)
+	lens := make([]int, len(captured))
+
+	for i, st := range captured {
+		lens[i] = len(st.Nodes)
+	}
+
+	require.NoError(t, b.ReleaseSubtreeNodes(nil))
+
+	for i, st := range captured {
+		require.Nil(t, b.SubtreeSlices[i])
+		require.Len(t, st.Nodes, lens[i], "subtree %d", i)
+	}
+
+	b.releaseTxMap()
+
+	for i, st := range captured {
+		require.Empty(t, st.Nodes, "subtree %d is detached once the index is gone", i)
+	}
+
+	requireUnpinned(t, b)
+}
