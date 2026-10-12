@@ -980,10 +980,10 @@ func TestSplitTxInpointsMap_SetEncodesInPlace(t *testing.T) {
 	}
 }
 
-// TestSplitTxInpointsMap_ClearTrimsToTheLastFill pins that a half does not keep
-// the arena of a past spike for ever: a big fill and Clear keeps what the fill
-// used, a small fill and Clear after it drops the rest.
-func TestSplitTxInpointsMap_ClearTrimsToTheLastFill(t *testing.T) {
+// TestSplitTxInpointsMap_ClearReleasesTheArena pins that a cleared half holds no
+// arena: the retired half of the double buffer would otherwise keep a whole
+// block's records alive next to the current one (~2x the map at steady state).
+func TestSplitTxInpointsMap_ClearReleasesTheArena(t *testing.T) {
 	m := NewSplitTxInpointsMap(8)
 
 	fill := func(from, to int) {
@@ -993,19 +993,14 @@ func TestSplitTxInpointsMap_ClearTrimsToTheLastFill(t *testing.T) {
 	}
 
 	fill(0, 20_000)
-	big := m.retainedBytes()
-	require.Greater(t, big, 1<<20)
+	require.Greater(t, m.retainedBytes(), 1<<20)
 
 	m.Clear()
-	require.Equal(t, 0, m.usedBytes())
-	require.GreaterOrEqual(t, m.retainedBytes(), big/2, "the generation that was just used is kept for the next fill")
+	require.Zero(t, m.usedBytes())
+	require.Zero(t, m.retainedBytes(), "a cleared half keeps no chunks")
+	require.Zero(t, m.Length())
 
-	fill(0, 100)
-	m.Clear()
-	small := m.retainedBytes()
-	require.Less(t, small, big/10, "chunks the last generation did not touch are released")
-
-	// and the map still works after trimming, including a record bigger than any chunk
+	// and the map still works after clearing, including a record bigger than any chunk
 	m.Set(arenaHash(1), buildInpoints(shapeManyVouts, 1))
 	got, ok := m.Get(arenaHash(1))
 	require.True(t, ok)
@@ -1013,12 +1008,7 @@ func TestSplitTxInpointsMap_ClearTrimsToTheLastFill(t *testing.T) {
 
 	m.Clear()
 	m.Clear()
-
-	for i := range m.buckets {
-		for _, c := range m.buckets[i].chunks {
-			require.LessOrEqual(t, cap(c), txInpointsMaxChunk, "an oversized single-record chunk is not kept")
-		}
-	}
+	require.Zero(t, m.retainedBytes())
 
 	fill(0, 5000)
 

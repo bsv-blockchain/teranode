@@ -30,9 +30,9 @@ import (
 // stored for the shapes the wire format cannot tell apart (see the flag consts).
 //
 // Records are append-only. Set over an existing hash and Delete only touch the
-// index and leave the old record behind; Clear reclaims all of it, keeping the
-// chunks the last fill used for reuse. Clear runs on each half of the double
-// buffer once per block, so the garbage is bounded by one block's churn, provided
+// index and leave the old record behind; Clear releases all of it, so the retired
+// half of the double buffer holds no arena next to the current one. Clear runs on
+// each half of the double buffer once per block, so the garbage is bounded by one block's churn, provided
 // callers do not re-put records they already hold (reChainSubtrees does not).
 //
 // Lifetime: no method hands out arena bytes. Every read copies the record under
@@ -54,7 +54,7 @@ type txInpointsBucket struct {
 	// created by the first insert, so a map that holds nothing (a small node, or
 	// the retired half) does not pay for 16384 empty indexes.
 	m      *swiss.Map[chainhash.Hash, uint64]
-	chunks [][]byte // kept across Clear for reuse
+	chunks [][]byte // released by Clear
 	cur    int      // chunk being filled
 }
 
@@ -149,20 +149,10 @@ func (b *txInpointsBucket) alloc(size int) (uint64, []byte) {
 
 		if len(b.chunks) > 0 {
 			next = min(2*cap(b.chunks[b.cur]), txInpointsMaxChunk)
-			b.cur++
 		}
 
-		if b.cur < len(b.chunks) && cap(b.chunks[b.cur]) >= size {
-			b.chunks[b.cur] = b.chunks[b.cur][:0] // reuse a chunk kept by Clear
-		} else {
-			chunk := make([]byte, 0, max(next, size))
-
-			if b.cur < len(b.chunks) {
-				b.chunks[b.cur] = chunk
-			} else {
-				b.chunks = append(b.chunks, chunk)
-			}
-		}
+		b.chunks = append(b.chunks, make([]byte, 0, max(next, size)))
+		b.cur = len(b.chunks) - 1
 	}
 
 	off := len(b.chunks[b.cur])
@@ -506,15 +496,12 @@ func (s *SplitTxInpointsMap) MoveBucketFrom(src *SplitTxInpointsMap, bucket uint
 	return -1
 }
 
-// Clear empties every bucket in place, keeping the index capacity and the arena
-// chunks the last fill used for the next time the map is filled. That avoids
-// re-growing and re-allocating on every block, which matters because Clear is on
-// the currentTxMap double-buffer reuse path.
-//
-// The arena is trimmed to what the generation being cleared touched: chunks it
-// never reached are released, and so are oversized chunks that were made for a
-// single big record. A spike is therefore held for one more generation, not for
-// the life of the process.
+// Clear empties every bucket, keeping the index capacity (the swiss maps hold no
+// pointers to records, and re-growing them every block is what the capacity
+// saves) but releasing the arena chunks. Clear retires a half of the
+// currentTxMap double buffer, and a retired half that kept its chunks held a
+// whole block's records next to the current half's: about twice the map at
+// steady state. Chunks hold no pointers, so the GC frees them without scanning.
 func (s *SplitTxInpointsMap) Clear() {
 	for i := range s.buckets {
 		b := &s.buckets[i]
@@ -525,28 +512,10 @@ func (s *SplitTxInpointsMap) Clear() {
 			b.m.Clear()
 		}
 
-		b.trimChunks()
+		b.chunks = nil
+		b.cur = 0
 		b.mu.Unlock()
 	}
-}
-
-// trimChunks empties the chunks the last generation used and drops the rest and
-// the oversized ones; the caller holds the bucket lock and has cleared the
-// index, so no handle into the chunks survives.
-func (b *txInpointsBucket) trimChunks() {
-	used := min(b.cur+1, len(b.chunks))
-	kept := 0
-
-	for c := 0; c < used; c++ {
-		if cap(b.chunks[c]) <= txInpointsMaxChunk {
-			b.chunks[kept] = b.chunks[c][:0]
-			kept++
-		}
-	}
-
-	clear(b.chunks[kept:])
-	b.chunks = b.chunks[:kept]
-	b.cur = 0
 }
 
 // usedBytes is the size of the records in the arena, live or not.
