@@ -639,7 +639,11 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
         if onLongestChain then
             rec[BIN_UNMINED_SINCE] = nil
         end
-    else
+    elseif rec[BIN_UNMINED_SINCE] == nil then
+        -- Mined -> unmined (the last block was removed): stamp only when absent, keeping an
+        -- earlier unmined_since. For unsetMined the caller passes a backdated currentBlockHeight
+        -- (utxo.BackdatedUnminedSince, issue 1768) so the pruner's parent-preservation scan
+        -- picks the tx up on its next cycle.
         rec[BIN_UNMINED_SINCE] = currentBlockHeight
     end
 
@@ -659,7 +663,7 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
     -- cached tip lags behind the block being validated during catchup/sync; using
     -- it stamped the DAH too low and let the pruner delete the record before the
     -- retention window elapsed. currentBlockHeight is still used above for the
-    -- unmined_since marker, which legitimately wants the current height.
+    -- unmined_since marker only.
     local signal, childCount = setDeleteAtHeight(rec, blockHeight, blockHeightRetention)
 
     -- Update the record to save changes

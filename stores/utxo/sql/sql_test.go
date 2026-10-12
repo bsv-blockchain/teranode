@@ -641,7 +641,7 @@ func TestSetMinedMulti(t *testing.T) {
 		assert.Zero(t, txMeta.UnminedSince)
 	})
 
-	t.Run("unset last block_id sets unmined_since to current block height", func(t *testing.T) {
+	t.Run("unset last block_id keeps the existing unmined_since", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
@@ -680,12 +680,14 @@ func TestSetMinedMulti(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// Verify: tx should have zero block_ids and unmined_since set to current block height (501 = 500+1)
+		// Verify: tx should have zero block_ids and keep the unmined_since it was created with. A
+		// mined -> unmined transition (no prior unmined_since) is covered by
+		// TestUnsetMinedBackdatesUnminedSince.
 		txMeta, err = utxoStore.Get(ctx, tx.TxIDChainHash(), append(utxo.MetaFields, fields.UnminedSince)...)
 		require.NoError(t, err)
 		assert.Len(t, txMeta.BlockIDs, 0, "tx should have no block_ids after unsetting the only one")
-		assert.Equal(t, uint32(501), txMeta.UnminedSince,
-			"unmined_since should be set to current block height (store height + 1), not the invalidated block's height")
+		assert.Equal(t, uint32(100), txMeta.UnminedSince,
+			"an existing unmined_since must not be overwritten")
 		assert.False(t, txMeta.Locked, "tx should be unlocked after unset mined")
 	})
 
