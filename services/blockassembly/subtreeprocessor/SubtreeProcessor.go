@@ -633,6 +633,7 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 	}
 
 	maxQueueItems := normalizeMaxQueueItems(logger, tSettings.BlockAssembly.MaxQueueItems, tSettings.BlockAssembly.SendBatchSize)
+	maxTransactionsInMemory := normalizeMaxTransactionsInMemory(logger, tSettings.BlockAssembly.MaxTransactionsInMemory, tSettings.BlockAssembly.SendBatchSize)
 	queue := NewLockFreeQueueWithLimit(maxQueueItems)
 
 	// Calculate subtree sample size based on expected block time
@@ -770,6 +771,9 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 	if stp.diskTxMap == nil {
 		stp.currentTxMapShadow = NewSplitTxInpointsMap(splitBuckets)
 	}
+
+	// The in-memory limit counts what the queue holds plus what has reached a subtree.
+	queue.setHeldLimit(maxTransactionsInMemory, func() int64 { return int64(stp.txCount.Load()) }) // nolint:gosec
 
 	// Goroutine does not start automatically - Start(ctx) must be called explicitly
 	// This ensures proper initialization order and avoids race conditions during loadUnminedTransactions
@@ -2327,6 +2331,16 @@ func (stp *SubtreeProcessor) ConsumerExited() bool {
 //   - int64: The enforced item cap (<= 0 when unbounded)
 func (stp *SubtreeProcessor) QueueMaxItems() int64 {
 	return stp.queue.MaxItems()
+}
+
+// MaxTransactionsInMemory returns the enforced (normalized) limit on transactions
+// held in memory, queued plus already in subtrees, or a value <= 0 when there is
+// no limit. It is reported in the shed message.
+//
+// Returns:
+//   - int64: The enforced limit (<= 0 when unlimited)
+func (stp *SubtreeProcessor) MaxTransactionsInMemory() int64 {
+	return stp.queue.maxHeld
 }
 
 // QueueHeadAge returns how long the oldest batch still in the ingest queue has

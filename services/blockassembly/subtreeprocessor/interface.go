@@ -382,6 +382,14 @@ type Interface interface {
 	//   - int64: The enforced item cap (<= 0 when unbounded)
 	QueueMaxItems() int64
 
+	// MaxTransactionsInMemory returns the enforced (normalized) limit on
+	// transactions held in memory, queued plus already in subtrees, or a value
+	// <= 0 when there is no limit. It is reported in the shed message.
+	//
+	// Returns:
+	//   - int64: The enforced limit (<= 0 when unlimited)
+	MaxTransactionsInMemory() int64
+
 	// QueueHeadAge returns how long the oldest queued batch has been waiting.
 	// It is a diagnostic gauge for dispatcher-stall visibility and returns 0
 	// when the queue is empty.

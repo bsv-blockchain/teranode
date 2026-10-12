@@ -1325,8 +1325,8 @@ func (ba *BlockAssembly) shed(start time.Time) error {
 	prometheusBlockAssemblyQueueShed.Inc()
 
 	return errors.WrapGRPC(errors.NewThresholdExceededError(
-		"block assembly queue full: %d items queued, limit %d",
-		ba.blockAssembler.QueueLength(), ba.blockAssembler.QueueMaxItems()))
+		"block assembly queue full: %d items queued, limit %d; in-memory transaction limit %d",
+		ba.blockAssembler.QueueLength(), ba.blockAssembler.QueueMaxItems(), ba.blockAssembler.MaxTransactionsInMemory()))
 }
 
 // contextCancelledDuringIngest maps a cancelled/deadline-exceeded ingest wait to

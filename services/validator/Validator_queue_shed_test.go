@@ -335,6 +335,25 @@ func outpointSpent(t *testing.T, store utxostore.Store, tx *bt.Tx, vout uint32) 
 	return resp.Status == int(utxostore.Status_SPENT)
 }
 
+// outpointHasSpender reports whether a spend is recorded against the output,
+// whatever the output's status. GetSpend reports LOCKED ahead of SPENT, so a
+// spent output of a Locked record cannot be told apart by status alone.
+func outpointHasSpender(t *testing.T, store utxostore.Store, tx *bt.Tx, vout uint32) bool {
+	t.Helper()
+
+	utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[vout], vout)
+	require.NoError(t, err)
+
+	resp, err := store.GetSpend(context.Background(), &utxostore.Spend{
+		TxID:     tx.TxIDChainHash(),
+		Vout:     vout,
+		UTXOHash: utxoHash,
+	})
+	require.NoError(t, err)
+
+	return resp.SpendingData != nil
+}
+
 // requireTxAbsent asserts the transaction has no record left in the store.
 func requireTxAbsent(t *testing.T, store utxostore.Store, hash *chainhash.Hash) {
 	t.Helper()
@@ -1923,10 +1942,14 @@ func TestValidate_InBlockShedIsAcceptedWithoutUnwind(t *testing.T) {
 
 	require.GreaterOrEqual(t, baStore.calls, 1, "the hand-off was still attempted")
 
-	// Fully accepted: record present, unlocked by the two-phase commit, inputs spent.
-	require.NotNil(t, metaLocked(t, realStore, childTx.TxIDChainHash()), "the record survives")
-	require.False(t, txMeta.Locked, "the two-phase commit ran, so the transaction is spendable")
-	require.Equal(t, 1, spy.unlockCalls, "the 2PC unlock ran exactly once")
+	// Accepted but kept Locked: the record is outside the template, so an ordinary
+	// child must not be able to spend it and enter the template without its parent.
+	// setMined clears the lock when the block connects.
+	stored := metaLocked(t, realStore, childTx.TxIDChainHash())
+	require.NotNil(t, stored, "the record survives")
+	require.True(t, stored.Locked, "the store record stays Locked after Validate returns")
+	require.True(t, txMeta.Locked, "the returned meta agrees with the store")
+	require.Equal(t, 0, spy.unlockCalls, "the 2PC unlock must not run for a transaction outside the template")
 	require.True(t, parentOutpointSpent(t, realStore, parentTx), "the parent's output stays spent by this transaction")
 
 	require.Equal(t, 0, spy.unspendCalls, "nothing is unspent on the block-context arm")
@@ -1974,7 +1997,7 @@ func TestValidate_InBlockShedDoesNotDeleteAParentADescendantSpent(t *testing.T) 
 
 	require.NotNil(t, metaLocked(t, realStore, childTx.TxIDChainHash()),
 		"the parent a descendant spent must still exist")
-	require.True(t, outpointSpent(t, realStore, childTx, 0),
+	require.True(t, outpointHasSpender(t, realStore, childTx, 0),
 		"the descendant's spend of the parent's output must survive")
 	require.True(t, parentOutpointSpent(t, realStore, parentTx))
 }

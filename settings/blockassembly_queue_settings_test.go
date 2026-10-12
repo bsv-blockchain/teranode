@@ -35,3 +35,16 @@ func TestBlockAssemblyQueueSettings_LoaderReadsKeys(t *testing.T) {
 	require.Equal(t, 250*time.Millisecond, tSettings.BlockAssembly.QueueFullWaitTimeout,
 		"loader must read blockassembly_queueFullWaitTimeout")
 }
+
+// TestBlockAssemblyMaxTransactionsInMemory pins the default (0, disabled) and proves
+// NewSettings reads the key: the field's zero value equals its default, so only a
+// non-zero override read back shows the loader is wired.
+func TestBlockAssemblyMaxTransactionsInMemory(t *testing.T) {
+	require.Equal(t, uint64(0), NewSettings().BlockAssembly.MaxTransactionsInMemory,
+		"default must be 0 (disabled) so an upgraded node keeps its current behaviour")
+
+	t.Setenv("blockassembly_maxTransactionsInMemory", "1000000000")
+
+	require.Equal(t, uint64(1_000_000_000), NewSettings().BlockAssembly.MaxTransactionsInMemory,
+		"loader must read blockassembly_maxTransactionsInMemory")
+}

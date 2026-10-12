@@ -368,7 +368,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// so children of a shed parent exhaust their retries many times over and are lost
 	// with no mempool to hold them. Gated on a positive cap because only then can a
 	// shed happen at all. A startup check, no behaviour change.
-	if tSettings.BlockAssembly.MaxQueueItems > 0 {
+	if tSettings.BlockAssembly.MaxQueueItems > 0 || tSettings.BlockAssembly.MaxTransactionsInMemory > 0 {
 		window := v.shedRetryTimeout() - v.handoffFloor()
 		budget := childLockBudget(tSettings.Validator.TxLockedMaxRetries)
 
@@ -1193,7 +1193,15 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// function exists to prevent.
 	persistedMeta := txMetaData
 	delivered := !addToBlockAssembly
-	defer v.unlockLockedTxOnExit(decoupledCtx, tx, txID, persistedMeta, &err, &delivered)
+	keptLockedOutsideTemplate := false
+
+	defer func() {
+		if keptLockedOutsideTemplate {
+			return
+		}
+
+		v.unlockLockedTxOnExit(decoupledCtx, tx, txID, persistedMeta, &err, &delivered)
+	}()
 
 	if validationOptions.SkipUtxoCreation {
 		// create the tx meta needed for the block assembly
@@ -1322,12 +1330,16 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 					// ignore-locked spend, and returning the shed would fail an
 					// otherwise valid block on local ingest pressure. Recovery: mined if
 					// the block is accepted; re-added by moveBackBlock from the block's
-					// own subtrees if it is later reorged out; otherwise valid, unlocked
-					// and unmined, but absent from this node's template until the next
-					// block-assembly start or reset, which nothing schedules.
+					// own subtrees if it is later reorged out. Until then the record stays
+					// Locked: it is outside the template, and an unlocked record there
+					// would let an ordinary child spend it and enter the template without
+					// its parent, which peers reject as an invalid block. Block-context
+					// spends pass IgnoreLocked, setMined clears the lock when the block
+					// connects, and the unmined reload unlocks it otherwise.
 					prometheusValidatorShedInBlockDroppedTotal.Inc()
-					v.logger.Warnf("[Validate][%s] block-assembly queue full on a block-context handoff; accepted without a template entry, not unwound", txID)
+					v.logger.Debugf("[Validate][%s] block-assembly queue full on a block-context handoff; accepted locked without a template entry, not unwound", txID)
 
+					keptLockedOutsideTemplate = true
 					err = nil
 				} else {
 					// A shed leaves no trace: the transaction is either fully accepted
@@ -1394,7 +1406,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			}
 		}
 
-		delivered = true
+		delivered = !keptLockedOutsideTemplate
 	}
 
 	// Serialize and enqueue txmeta for the subtree validation kafka topic.
