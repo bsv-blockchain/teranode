@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -156,17 +157,46 @@ func (w *failOnceWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// TestUTXOSetWrite_ReportsWriteError checks that a write error is not lost.
-// The write callback records its error and returns stop; if the split map kept
-// iterating after stop, the next successful write would reset err to nil.
-func TestUTXOSetWrite_ReportsWriteError(t *testing.T) {
-	us := &UTXOSet{Current: newUTXOMap()}
+// TestWrite_ReportsTheWriteError checks that UTXOSet.Write and UTXOMap.Write
+// return the write error itself, wherever it happens: a key or a value write, in
+// the middle or on the last UTXO. The write callback records the error and
+// returns stop; if the split map kept iterating after stop, the next successful
+// write would reset it (UTXOSet.Write then returned nil, UTXOMap.Write a count
+// mismatch instead of the cause).
+func TestWrite_ReportsTheWriteError(t *testing.T) {
+	newMap := func() UTXOMap {
+		m := newUTXOMap()
 
-	for i := uint64(0); i < 200; i++ {
-		us.Current.Put(iterTestKey(i), &UTXOValue{Value: i, Script: []byte{0x51}})
+		for i := uint64(0); i < 200; i++ {
+			m.Put(iterTestKey(i), &UTXOValue{Value: i, Script: []byte{0x51}})
+		}
+
+		return m
 	}
 
-	// Calls 1 and 2 write the block hash and the count; fail one in the middle of the UTXOs.
-	err := us.Write(&failOnceWriter{failAt: 50})
-	require.Error(t, err)
+	writers := map[string]func(w io.Writer) error{
+		"UTXOSet": func(w io.Writer) error {
+			us := &UTXOSet{Current: newMap()}
+			return us.Write(w)
+		},
+		"UTXOMap": func(w io.Writer) error {
+			m := newMap()
+			return m.Write(w)
+		},
+	}
+
+	for name, write := range writers {
+		t.Run(name, func(t *testing.T) {
+			all := &failOnceWriter{}
+			require.NoError(t, write(all))
+			require.Greater(t, all.calls, 10)
+
+			// early, middle, a neighbouring call (key vs value), and the last write
+			for _, failAt := range []int{3, all.calls / 2, all.calls/2 + 1, all.calls} {
+				err := write(&failOnceWriter{failAt: failAt})
+				// the cause itself: teranode's errors.Is matches any ProcessingError
+				require.ErrorContains(t, err, errWriteFailed.Error(), "write call %d of %d", failAt, all.calls)
+			}
+		})
+	}
 }
