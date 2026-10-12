@@ -114,6 +114,13 @@ type Block struct {
 	// len(Subtrees) x subtree 0 once the subtree list is bound to the header
 	// (getAndValidateSubtreesWithDedup).
 	txMapCount uint64
+	// nodeIndexPins counts the live in-memory node indexes over this block's
+	// node arrays (pinNodeIndex). While it is above zero a release of the
+	// subtrees neither pools a node array nor unmaps one: the index reads its
+	// hashes from them. The subtrees released meanwhile wait in deferredCloses,
+	// guarded by subtreeSlicesMu, until releaseTxMap lets the index go.
+	nodeIndexPins  atomic.Int32
+	deferredCloses []*subtreepkg.Subtree
 	// firstRootMemo caches subtree 0's coinbase-substituted root from the early
 	// binding check, so CheckMerkleRoot does not recompute it for the same
 	// subtree (a full merkle store over up to 1M leaves).
@@ -1231,10 +1238,48 @@ func (b *Block) releaseTxMap() {
 		_ = diskMap.Close()
 		ClearTxMapStats()
 	} else if closer, ok := b.txMap.(io.Closer); ok {
-		_ = closer.Close()
+		_ = closer.Close() // a blockNodeIndex unpins the node arrays here
 	}
 
 	b.txMap = nil
+
+	// Close what a release deferred while the index was live. Like the disk map's
+	// Close above, a failure here has no logger to go to.
+	b.subtreeSlicesMu.Lock()
+	_ = b.closeDeferredLocked()
+	b.subtreeSlicesMu.Unlock()
+}
+
+// pinNodeIndex pins the block's node arrays for m if it is the in-memory node
+// index, which reads its hashes from them, and returns m. The index's Close
+// (releaseTxMap) unpins them.
+func (b *Block) pinNodeIndex(m blockTxMap) blockTxMap {
+	if idx, ok := m.(*blockNodeIndex); ok {
+		b.nodeIndexPins.Add(1)
+		idx.unpin = func() { b.nodeIndexPins.Add(-1) }
+	}
+
+	return m
+}
+
+// closeDeferredLocked closes the subtrees released while a node index was live,
+// once none is. The caller must hold b.subtreeSlicesMu for writing.
+func (b *Block) closeDeferredLocked() error {
+	if b.nodeIndexPins.Load() > 0 || len(b.deferredCloses) == 0 {
+		return nil
+	}
+
+	var closeErrs []error
+
+	for _, st := range b.deferredCloses {
+		if err := st.Close(); err != nil {
+			closeErrs = append(closeErrs, err)
+		}
+	}
+
+	b.deferredCloses = nil
+
+	return errors.Join(closeErrs...)
 }
 
 // skipOrderAndBlessedBelowCheckpoint reports whether validOrderAndBlessed may be
@@ -1463,7 +1508,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 		// this block only. Counts beyond maxTxMapPrealloc get a capped
 		// preallocation and grow on insert rather than failing the block (issue
 		// 1428); indexes beyond 32 bits get the 64-bit map.
-		b.txMap = newInMemoryBlockTxMap(b.txMapCount, len(b.SubtreeSlices), subtreeSize, maxTxIndex(b.SubtreeSlices, subtreeSize))
+		b.txMap = b.pinNodeIndex(newInMemoryBlockTxMap(b.txMapCount, len(b.SubtreeSlices), subtreeSize, maxTxIndex(b.SubtreeSlices, subtreeSize)))
 	}
 	for subIdx := 0; subIdx < len(b.SubtreeSlices); subIdx++ {
 		subIdx := subIdx
@@ -2221,7 +2266,7 @@ func (b *Block) getAndValidateSubtreesWithDedup(ctx context.Context, logger ulog
 		// reported by the length check after the load.
 		limit := txIndexEnd(len(b.Subtrees)-1, subtreeSize, last.Length())
 
-		b.txMap = newInMemoryBlockTxMap(b.txMapCount, len(b.Subtrees), subtreeSize, limit)
+		b.txMap = b.pinNodeIndex(newInMemoryBlockTxMap(b.txMapCount, len(b.Subtrees), subtreeSize, limit))
 		deduped = true
 
 		return nil
@@ -2597,12 +2642,26 @@ func (b *Block) TryReleaseSubtreeNodes(put func([]subtreepkg.Node)) (bool, error
 func (b *Block) releaseSubtreeNodesLocked(put func([]subtreepkg.Node)) error {
 	var closeErrs []error
 
+	// A live node index reads its hashes from these arrays: a pooled one would be
+	// overwritten by the next subtree load and an unmapped one would fault. Detach
+	// them all the same, but leave the heap arrays to the GC and the closes to
+	// releaseTxMap.
+	pinned := b.nodeIndexPins.Load() > 0
+
 	for i, st := range b.SubtreeSlices {
 		if st == nil {
 			continue
 		}
 
 		nodes := st.ReleaseNodes()
+
+		if pinned {
+			b.deferredCloses = append(b.deferredCloses, st)
+			b.SubtreeSlices[i] = nil
+
+			continue
+		}
+
 		if nodes != nil && put != nil && !st.IsMmapBacked() {
 			put(nodes)
 		}
@@ -2669,6 +2728,12 @@ func (b *Block) closeMmapSubtreesLocked() error {
 		// anything that still holds this subtree would be reading freed memory.
 		// The slice is dropped, never pooled: its backing IS the mapped region.
 		_ = st.ReleaseNodes()
+
+		// a live node index still reads the region: releaseTxMap unmaps it
+		if b.nodeIndexPins.Load() > 0 {
+			b.deferredCloses = append(b.deferredCloses, st)
+			continue
+		}
 
 		if err := st.Close(); err != nil {
 			closeErrs = append(closeErrs, errors.NewProcessingError("subtree %d", i, err))

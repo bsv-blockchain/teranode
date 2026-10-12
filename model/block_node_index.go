@@ -261,10 +261,15 @@ func (x *nodeIndex) slots() int {
 // blockNodeIndex is the in-memory blockTxMap: a nodeIndex over the node arrays of the
 // block's own subtrees. It stores no hashes, so a node array registered with it must
 // stay readable until the map is dropped. The arrays are the subtrees' Nodes slices,
-// which Block.Valid holds loaded (heap or mmap) for the whole validation, and the map
-// lives no longer than Valid (releaseTxMap). Registering keeps a heap array reachable
-// for the GC; only an mmap-backed one can disappear under the map, by Close.
+// and the map lives no longer than Valid (releaseTxMap). Registering keeps a heap
+// array reachable for the GC, but a release of the block's subtrees during Valid
+// would otherwise pool it, and the next subtree load overwrite it, or unmap an mmap
+// one. The block is pinned while the map is live (Block.pinNodeIndex), which stops
+// both, and Close unpins it.
 type blockNodeIndex struct {
+	unpin     func()
+	unpinOnce sync.Once
+
 	idx         *nodeIndex
 	subtreeSize uint64
 	// nodes[s] is subtree s's node array, set once by register before any Put of
@@ -399,6 +404,18 @@ func (m *blockNodeIndex) Get(hash chainhash.Hash) (uint64, bool) {
 
 // Freeze makes the index read-only so Get takes no lock.
 func (m *blockNodeIndex) Freeze() { m.idx.Freeze() }
+
+// Close unpins the block's node arrays; the map must not be read after it.
+// Idempotent.
+func (m *blockNodeIndex) Close() error {
+	m.unpinOnce.Do(func() {
+		if m.unpin != nil {
+			m.unpin()
+		}
+	})
+
+	return nil
+}
 
 // Length is the number of txs in the index.
 func (m *blockNodeIndex) Length() int {
