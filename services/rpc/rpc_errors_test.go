@@ -586,6 +586,58 @@ func TestHandleSendRawTransaction_MissingParentThroughValidateIsNotALookupMiss(t
 	require.Equal(t, "TX rejected: Missing inputs", rpcErr.Message)
 }
 
+// TestHandleSendRawTransaction_BatchedValidatorErrorIsTrimmed covers the wire form
+// of a remote validator that batches. Its response carries each item's chain as
+// *errors.TError (validator Server.go encodes with errors.Wrap), which is not an
+// *errors.Error, so the boundary used to treat it as a foreign error and put the
+// whole rendered chain on the wire - internal codes and breadcrumbs for a
+// rejection, and the store's own text for a node fault.
+func TestHandleSendRawTransaction_BatchedValidatorErrorIsTrimmed(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err       error
+		message   string
+		errorLog  bool
+		leaksWhat string
+	}{
+		"rejection": {
+			err:       errors.Wrap(validatorRejectionChain()),
+			message:   "TX rejected: bad-txns-inputs-duplicate",
+			errorLog:  false,
+			leaksWhat: "PROCESSING (4)",
+		},
+		"node fault": {
+			err: errors.Wrap(errors.NewProcessingError("[Validate][%s] error spending utxos", "abcd1234",
+				errors.NewStorageError("aerospike get failed",
+					fmt.Errorf("dial tcp 10.0.0.5:3000: i/o timeout")))),
+			message:   "TX rejected: " + genericErrorMessage,
+			errorLog:  true,
+			leaksWhat: "10.0.0.5:3000",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			logger := newCapturingLogger()
+			s := newRPCServerForAbsurdFeeTest(t, 10_000_000, 100_000_000, failingValidator{err: tc.err})
+			s.logger = logger
+
+			_, err := handleSendRawTransaction(context.Background(), s, buildSendRawTxCmd(t, 99_999_000, nil), nil)
+			require.Error(t, err)
+
+			rpcErr, ok := err.(*bsvjson.RPCError)
+			require.True(t, ok)
+			require.Equal(t, bsvjson.ErrRPCVerify, rpcErr.Code)
+			require.Equal(t, tc.message, rpcErr.Message)
+			require.NotContains(t, rpcErr.Message, tc.leaksWhat)
+
+			if tc.errorLog {
+				require.NotEmpty(t, logger.errorf, "a node fault is logged at error level")
+			} else {
+				require.Empty(t, logger.errorf, "a routine rejection is not a node fault")
+				require.NotEmpty(t, logger.debugf)
+			}
+		})
+	}
+}
+
 // TestCreateMarshalledReply_DoesNotReclassify is the getbestblockhash case.
 // That handler returns its error bare, and GetBestBlockHeader reports an empty
 // header table as BLOCK_NOT_FOUND. Mapping here answered -5 "Block not found"

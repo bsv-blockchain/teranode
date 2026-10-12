@@ -1026,45 +1026,84 @@ func UnwrapGRPC(err error) *Error {
 		}
 	}
 
-	var prevErr, currErr *Error
+	links := make([]*TError, 0, len(st.Details()))
 
-	for i := len(st.Details()) - 1; i >= 0; i-- {
+	for _, detail := range st.Details() {
 		// Cast the protoadapt.MessageV1 to *anypb.Any, which is what we need to unmarshal
-		detail := st.Details()[i]
 		detailAny, ok := detail.(*anypb.Any)
-
 		if !ok {
 			// TODO: This should not happen, detail is not of type anypb.Any. What to do here?
 			continue // If the detail isn't of the expected type, skip it
 		}
 
-		var customDetails TError
-		if err = anypb.UnmarshalTo(detailAny, &customDetails, proto.UnmarshalOptions{}); err == nil {
-			currErr = New(customDetails.Code, customDetails.Message)
-
-			if customDetails.Data != nil {
-				// get the data
-				data, errorGettingData := GetErrorData(customDetails.Code, customDetails.Data)
-				if errorGettingData != nil {
-					// TODO (GOKHAN) CHECK OPTION OF LOGGING / PRINTING HERE
-					currErr.data = nil
-				} else {
-					currErr.data = data
-				}
-			}
-
-			// Set file, line and function information from the TError
-			currErr.file = customDetails.File
-			currErr.line = int(customDetails.Line)
-			currErr.function = customDetails.Function
-
-			// if we moved up higher in the hierarchy
-			if prevErr != nil {
-				currErr.wrappedErr = prevErr
-			}
-
-			prevErr = currErr
+		customDetails := &TError{}
+		if err = anypb.UnmarshalTo(detailAny, customDetails, proto.UnmarshalOptions{}); err == nil {
+			links = append(links, customDetails)
 		}
+	}
+
+	return chainFromTErrors(links)
+}
+
+// UnwrapTError converts a *TError chain into the equivalent *Error chain.
+//
+// A *TError is the protobuf form of an error, and it reaches callers without a
+// gRPC status around it wherever a response message carries errors as a field -
+// the validator's batch response does, one per transaction. Handing it on
+// unconverted leaves every consumer that reads a Teranode error with As seeing a
+// foreign one, so this is the same conversion UnwrapGRPC applies to a status.
+//
+// Returns nil for a nil or empty *TError.
+func UnwrapTError(t *TError) *Error {
+	if t.IsNil() {
+		return nil
+	}
+
+	// Iterative, not recursive: a mass spend failure builds a chain tens of
+	// thousands of links deep, and Wrap already recursed once to encode it.
+	links := make([]*TError, 0, 4)
+	for cur := t; cur != nil; cur = cur.WrappedError {
+		links = append(links, cur)
+	}
+
+	return chainFromTErrors(links)
+}
+
+// chainFromTErrors rebuilds an *Error chain from its protobuf links, given
+// outermost first. Code, message, data and source location are carried across
+// link by link, and the result's wrapping order matches the input order.
+//
+// Returns nil when links is empty.
+func chainFromTErrors(links []*TError) *Error {
+	var prevErr, currErr *Error
+
+	for i := len(links) - 1; i >= 0; i-- {
+		link := links[i]
+
+		currErr = New(link.Code, link.Message)
+
+		if link.Data != nil {
+			// get the data
+			data, errorGettingData := GetErrorData(link.Code, link.Data)
+			if errorGettingData != nil {
+				// TODO (GOKHAN) CHECK OPTION OF LOGGING / PRINTING HERE
+				currErr.data = nil
+			} else {
+				currErr.data = data
+			}
+		}
+
+		// Set file, line and function information from the TError
+		currErr.file = link.File
+		currErr.line = int(link.Line)
+		currErr.function = link.Function
+
+		// if we moved up higher in the hierarchy
+		if prevErr != nil {
+			currErr.wrappedErr = prevErr
+		}
+
+		prevErr = currErr
 	}
 
 	return currErr

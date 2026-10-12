@@ -434,8 +434,29 @@ const (
 	scopeSubmit
 )
 
+// asTeranodeError converts the protobuf form of a Teranode error into the chain
+// this file reads.
+//
+// *errors.TError is what a response message carries when errors travel as a field
+// rather than as a gRPC status, as the validator's batch response does. It is not
+// an *errors.Error, so without this every class check below would see a foreign
+// error and publicErrorMessage would put its rendered chain on the wire. The
+// validator client converts at source; this is the boundary refusing to fail open
+// on a type the system produces, wherever it next comes from.
+func asTeranodeError(err error) error {
+	if t, ok := err.(*errors.TError); ok {
+		if converted := errors.UnwrapTError(t); converted != nil {
+			return converted
+		}
+	}
+
+	return err
+}
+
 // buildRPCError is the pure half of the boundary: no logging, no server.
 func buildRPCError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string, scope rpcRequestScope) *bsvjson.RPCError {
+	err = asTeranodeError(err)
+
 	switch scope {
 	case scopeBlockLookup:
 		// The request named an object, so a not-found is about that object.
@@ -518,6 +539,9 @@ func isCallerFault(err error, scope rpcRequestScope) bool {
 // of the ten original sites returned without logging - a blob store failing
 // with AccessDenied reached neither the caller nor the log.
 func (s *RPCServer) logAndBuild(err error, fallbackCode bsvjson.RPCErrorCode, prefix string, scope rpcRequestScope) *bsvjson.RPCError {
+	// Converted once here as well as in buildRPCError, because isCallerFault reads
+	// the chain too and would otherwise log every batched rejection as a node fault.
+	err = asTeranodeError(err)
 	rpcErr := buildRPCError(err, fallbackCode, prefix, scope)
 
 	if s != nil && s.logger != nil {
