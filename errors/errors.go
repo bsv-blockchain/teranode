@@ -881,9 +881,7 @@ func DeepestPublicCause(err error) *Error {
 // public_cause_allowlist_test.go gets bypassed: the widening happens somewhere
 // the test does not look.
 func IsPublicCause(code ERR) bool {
-	_, ok := publicCauseCodes[code]
-
-	return ok
+	return isPublicCause(code)
 }
 
 // UserMessage returns a concise, user-facing error message without wrapped error chains or data.
