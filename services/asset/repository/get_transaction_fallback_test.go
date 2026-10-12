@@ -2,7 +2,6 @@ package repository_test
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"strings"
 	"testing"
@@ -32,6 +31,12 @@ type failingGetUtxoStore struct {
 func (f failingGetUtxoStore) Get(context.Context, *chainhash.Hash, ...fields.FieldName) (*meta.Data, error) {
 	return nil, f.err
 }
+
+// rawStoreError stands in for an aerospike client error, which reaches the
+// repository as a plain error rather than a Teranode one.
+type rawStoreError string
+
+func (e rawStoreError) Error() string { return string(e) }
 
 func repositoryWithUtxoGetError(t *testing.T, utxoErr error) *repository.Repository {
 	t.Helper()
@@ -91,7 +96,7 @@ func TestRepository_GetTransaction_AFailingUtxoStoreIsNotAMiss(t *testing.T) {
 		// several of their texts contain the phrase: a misconfigured namespace
 		// answers "Namespace not found". It is not a miss, and its words must not
 		// reach the HTTP layer's string match.
-		repo := repositoryWithUtxoGetError(t, fmt.Errorf("ResultCode: INVALID_NAMESPACE, Iteration: 0, InDoubt: false, Node: BB9...: Namespace not found"))
+		repo := repositoryWithUtxoGetError(t, rawStoreError("ResultCode: INVALID_NAMESPACE, Iteration: 0, InDoubt: false, Node: BB9...: Namespace not found"))
 
 		_, err := repo.GetTransaction(context.Background(), &hash)
 		require.Error(t, err)
