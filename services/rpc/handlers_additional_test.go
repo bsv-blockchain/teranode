@@ -2899,6 +2899,7 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 		expectedHash, _ := chainhash.NewHashFromStr("00000000000000000007878ec04bb2b2e12317804810f4c26033585b3f81ffaa")
 
 		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Invalid: true}, nil)
 		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		mockBlockValidationClient := &mockBlockValidationClient{
@@ -2930,6 +2931,7 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 
 	t.Run("invalid block hash format", func(t *testing.T) {
 		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Invalid: true}, nil)
 		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		s := &RPCServer{
@@ -2959,6 +2961,7 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 		expectedError := errors.New(errors.ERR_ERROR, "validation failed")
 
 		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Invalid: true}, nil)
 		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		mockBlockValidationClient := &mockBlockValidationClient{
@@ -2993,6 +2996,7 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 
 	t.Run("nil validation client", func(t *testing.T) {
 		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Invalid: true}, nil)
 		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		s := &RPCServer{
@@ -3021,6 +3025,7 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 
 	t.Run("context cancellation", func(t *testing.T) {
 		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Invalid: true}, nil)
 		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		mockBlockValidationClient := &mockBlockValidationClient{
@@ -3072,6 +3077,7 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 				HashPrevBlock: &chainhash.Hash{},
 			},
 		}, nil)
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Invalid: true}, nil)
 		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		mockBlockValidationClient := &mockBlockValidationClient{
@@ -3110,6 +3116,7 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 				HashPrevBlock: &chainhash.Hash{},
 			},
 		}, nil)
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Invalid: true}, nil)
 		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		mockBlockValidationClient := &mockBlockValidationClient{
@@ -3140,6 +3147,7 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 
 	t.Run("malformed command type", func(t *testing.T) {
 		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Invalid: true}, nil)
 		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		s := &RPCServer{

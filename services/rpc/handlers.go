@@ -1950,19 +1950,36 @@ func handleReconsiderBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 		}
 	}
 
-	// Revalidate the block - this will fetch it, validate it, and update its status
-	s.logger.Infof("[handleReconsiderBlock] revalidating block %s", ch)
-	err = s.blockValidationClient.RevalidateBlock(ctx, *ch)
+	// Resolve the named block before revalidating anything, as svnode does. This is
+	// the only lookup on this path that is about the block the caller named, so it
+	// is the only one allowed to answer "Block not found": a not-found inside a
+	// revalidation failure is about an ancestor or a descendant.
+	_, meta, err := s.blockchainClient.GetBlockHeader(ctx, ch)
 	if err != nil {
-		return nil, s.rpcLookupError(err, bsvjson.ErrRPCVerify, "Block failed revalidation: ")
+		return nil, s.rpcLookupError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
 
-	s.logger.Infof("[handleReconsiderBlock] block %s successfully reconsidered and validated", ch)
+	if meta == nil || meta.Invalid {
+		// Revalidate the block - this will fetch it, validate it, and update its status
+		s.logger.Infof("[handleReconsiderBlock] revalidating block %s", ch)
+
+		err = s.blockValidationClient.RevalidateBlock(ctx, *ch)
+		if err != nil {
+			return nil, s.rpcError(err, bsvjson.ErrRPCVerify, "Block failed revalidation: ")
+		}
+
+		s.logger.Infof("[handleReconsiderBlock] block %s successfully reconsidered and validated", ch)
+	} else {
+		// Not marked invalid, so there is nothing to clear on the block itself and
+		// BlockValidation would refuse to revalidate it. bitcoind answers success
+		// here, and its ResetBlockFailureFlags still clears every descendant, so the
+		// children are reconsidered below either way.
+		s.logger.Infof("[handleReconsiderBlock] block %s is not marked invalid, reconsidering its invalid descendants only", ch)
+	}
 
 	// Now recursively clear invalid status for all invalid child blocks
 	err = s.reconsiderInvalidChildren(ctx, ch)
 	if err != nil {
-		s.logger.Errorf("[handleReconsiderBlock] failed to reconsider child blocks: %v", err)
 		return nil, s.rpcError(err, bsvjson.ErrRPCInternal.Code,
 			fmt.Sprintf("Block %s was reconsidered but failed to reconsider children: ", ch))
 	}

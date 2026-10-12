@@ -462,11 +462,78 @@ func TestLogAndBuild_DoesNotLogRoutineRejectionsAtErrorLevel(t *testing.T) {
 // Before this mapping the handler answered -25 with four levels of internal
 // error chain, so a caller could not distinguish "no such block" from "that
 // block is bad", and was told which storage engine had missed.
+//
+// The handler resolves the named block before revalidating anything, as svnode's
+// reconsiderblock does (mapBlockIndex lookup first). The store's not-found is the
+// one fixture here: GetBlockHeader distinguishes a missing row from a storage
+// failure (stores/blockchain/sql/GetBlockHeader.go), and the blockchain server
+// passes that through.
 func TestHandleReconsiderBlock_UnknownBlockMatchesBitcoind(t *testing.T) {
-	rpcErr := reconsiderBlockRPCError(t, blockNotFoundChain())
+	revalidated := false
 
+	_, err := reconsiderFixture{
+		headerErr: errors.NewBlockNotFoundError("error in GetBlockHeader", errors.ErrNotFound),
+		revalidate: func(chainhash.Hash) error {
+			revalidated = true
+			return nil
+		},
+	}.run(t)
+
+	rpcErr := requireRPCError(t, err)
 	require.Equal(t, bsvjson.RPCErrorCode(-5), rpcErr.Code)
 	require.Equal(t, "Block not found", rpcErr.Message)
+	require.False(t, revalidated, "an unknown block is answered before anything tries to revalidate it")
+}
+
+// TestHandleReconsiderBlock_MissingAncestorIsNotAnUnknownBlock pins that a
+// not-found inside a revalidation failure is not about the block the caller
+// named. Revalidation asks for the parent's work (BlockValidation.go,
+// GetNextWorkRequired on HashPrevBlock), and that miss used to answer -5 "Block
+// not found" about a block that had just been fetched.
+func TestHandleReconsiderBlock_MissingAncestorIsNotAnUnknownBlock(t *testing.T) {
+	rpcErr := reconsiderBlockRPCError(t,
+		errors.NewServiceError("[RevalidateBlock][%s] failed block re-validation", "0abc",
+			errors.NewServiceError("[ValidateBlock][%s] failed to get expected work required", "0abc",
+				errors.NewBlockNotFoundError("[Blockchain][GetNextWorkRequired] request's block hash is not valid",
+					errors.ErrNotFound))))
+
+	require.Equal(t, bsvjson.ErrRPCVerify, rpcErr.Code, "the named block exists; its revalidation failed")
+	require.NotEqual(t, blockNotFoundMessage, rpcErr.Message)
+	require.True(t, strings.HasPrefix(rpcErr.Message, "Block failed revalidation: "), rpcErr.Message)
+}
+
+// TestHandleReconsiderBlock_ValidBlockIsANoOpButItsChildrenAreReconsidered pins
+// bitcoind's answer for a block that is not marked invalid: success. svnode's
+// reconsiderblock calls ResetBlockFailureFlags, which clears the flag on the block
+// and on every descendant, so a valid block's invalid children are still
+// reconsidered. Revalidating the named block itself is what used to fail here:
+// BlockValidation refuses a block that is not marked invalid, and the boundary
+// rendered that refusal as "internal error".
+func TestHandleReconsiderBlock_ValidBlockIsANoOpButItsChildrenAreReconsidered(t *testing.T) {
+	named := chainhash.Hash{}
+	child := &model.BlockHeader{Version: 1, HashPrevBlock: &named, HashMerkleRoot: &chainhash.Hash{}, Timestamp: 1}
+
+	var revalidated []chainhash.Hash
+
+	result, err := reconsiderFixture{
+		valid: true,
+		revalidate: func(h chainhash.Hash) error {
+			revalidated = append(revalidated, h)
+
+			if h == named {
+				return errors.NewServiceError("[RevalidateBlock][%s] failed block re-validation", h.String(),
+					errors.NewProcessingError("[ValidateBlock][%s] cannot revalidate block that is not marked as invalid", h.String()))
+			}
+
+			return nil
+		},
+		invalidBlocks: []*model.BlockInfo{{BlockHeader: child.Bytes()}},
+	}.run(t)
+
+	require.NoError(t, err, "reconsiderblock on a valid block succeeds, as it does in bitcoind")
+	require.Nil(t, result)
+	require.Equal(t, []chainhash.Hash{*child.Hash()}, revalidated,
+		"the named block is not revalidated, its invalid child is")
 }
 
 func TestHandleReconsiderBlock_InvalidBlockKeepsItsReason(t *testing.T) {
@@ -479,35 +546,86 @@ func TestHandleReconsiderBlock_InvalidBlockKeepsItsReason(t *testing.T) {
 	require.NotContains(t, rpcErr.Message, "RevalidateBlock")
 }
 
-func reconsiderBlockRPCError(t *testing.T, revalidateErr error) *bsvjson.RPCError {
+// reconsiderFixture is the state reconsiderblock reads: whether the block the
+// caller names exists and is marked invalid, what revalidating a block answers,
+// and which invalid blocks the store holds for the children walk.
+type reconsiderFixture struct {
+	headerErr     error                      // GetBlockHeader's answer for the named block; nil means it exists
+	valid         bool                       // the named block is NOT marked invalid
+	revalidate    func(chainhash.Hash) error // nil revalidates everything successfully
+	invalidBlocks []*model.BlockInfo
+	logger        ulogger.Logger
+}
+
+// reconsideredHash is the block every reconsiderFixture names.
+const reconsideredHash = "0000000000000000000000000000000000000000000000000000000000000000"
+
+func (f reconsiderFixture) run(t *testing.T) (interface{}, error) {
 	t.Helper()
 
 	mockClient := &blockchain.Mock{}
-	mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
+
+	if f.headerErr != nil {
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(nil, nil, f.headerErr)
+	} else {
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).
+			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Invalid: !f.valid}, nil)
+	}
+
+	invalidBlocks := f.invalidBlocks
+	if invalidBlocks == nil {
+		invalidBlocks = []*model.BlockInfo{}
+	}
+
+	mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return(invalidBlocks, nil)
+
+	revalidate := f.revalidate
+	if revalidate == nil {
+		revalidate = func(chainhash.Hash) error { return nil }
+	}
+
+	logger := f.logger
+	if logger == nil {
+		logger = ulogger.TestLogger{}
+	}
 
 	s := &RPCServer{
-		logger:           ulogger.TestLogger{},
+		logger:           logger,
 		blockchainClient: mockClient,
 		blockValidationClient: &mockBlockValidationClient{
-			revalidateBlockFunc: func(_ context.Context, _ chainhash.Hash) error {
-				return revalidateErr
+			revalidateBlockFunc: func(_ context.Context, h chainhash.Hash) error {
+				return revalidate(h)
 			},
 		},
 		settings: &settings.Settings{ChainCfgParams: &chaincfg.MainNetParams},
 	}
 
-	cmd := &bsvjson.ReconsiderBlockCmd{
-		BlockHash: "0000000000000000000000000000000000000000000000000000000000000000",
-	}
+	return handleReconsiderBlock(context.Background(), s, &bsvjson.ReconsiderBlockCmd{BlockHash: reconsideredHash}, nil)
+}
 
-	result, err := handleReconsiderBlock(context.Background(), s, cmd, nil)
+// requireRPCError asserts a handler failed with a typed RPC error.
+func requireRPCError(t *testing.T, err error) *bsvjson.RPCError {
+	t.Helper()
+
 	require.Error(t, err)
-	require.Nil(t, result)
 
 	rpcErr, ok := err.(*bsvjson.RPCError)
 	require.True(t, ok, "handlers must return a typed RPC error, not a bare Go error")
 
 	return rpcErr
+}
+
+// reconsiderBlockRPCError runs reconsiderblock on a block that exists and is
+// marked invalid, with its revalidation answering revalidateErr.
+func reconsiderBlockRPCError(t *testing.T, revalidateErr error) *bsvjson.RPCError {
+	t.Helper()
+
+	result, err := reconsiderFixture{
+		revalidate: func(chainhash.Hash) error { return revalidateErr },
+	}.run(t)
+	require.Nil(t, result)
+
+	return requireRPCError(t, err)
 }
 
 // failingDecorateStore fails PreviousOutputsDecorate, which is how a submitted
@@ -901,11 +1019,14 @@ func TestRejectionReasonBoundIsIndependentlyPinned(t *testing.T) {
 }
 
 // TestBlockLookupDoesNotAnswerAboutTransactions pins the scope split. One shared
-// lookup scope mapped both not-found classes, so reconsiderblock - which names a
-// block and nothing else - answered "No such mempool or blockchain transaction"
-// whenever a revalidation failure carried an ErrTxNotFound underneath it, and
-// discarded its own prefix doing so. That is reachable: BlockValidation raises a
-// transient incomplete-block error wrapping a missing transaction.
+// lookup scope mapped both not-found classes, so a request naming a block and
+// nothing else answered "No such mempool or blockchain transaction" whenever its
+// failure carried an ErrTxNotFound underneath it, and discarded its own prefix
+// doing so. The fixture is the shape that first exposed it: BlockValidation
+// raises a transient incomplete-block error wrapping a missing transaction.
+// reconsiderblock no longer reaches it through a lookup site (it resolves the
+// named block first), but the split is a property of the scope, not of one
+// handler.
 func TestBlockLookupDoesNotAnswerAboutTransactions(t *testing.T) {
 	logger := newCapturingLogger()
 	s := &RPCServer{logger: logger}

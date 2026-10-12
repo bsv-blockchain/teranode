@@ -571,8 +571,8 @@ func (s *RPCServer) rpcError(err error, fallbackCode bsvjson.RPCErrorCode, prefi
 // Use it only where the request genuinely names the object. "The block you
 // asked for does not exist" must not be the answer to a request that named no
 // block (getbestblockhash), nor to one whose named block was found and whose
-// DESCENDANT was not (the reconsiderblock children branch). Both of those keep
-// rpcError.
+// ANCESTOR or DESCENDANT was not (reconsiderblock's revalidation and children
+// branches, which resolve the named block first and use this only for that).
 //
 // prefix applies to the fallback branch only; the mapped branch returns
 // bitcoind's text alone. Do not pass a prefix carrying a fact the caller needs
