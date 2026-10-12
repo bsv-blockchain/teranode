@@ -556,6 +556,60 @@ func Test_ScriptVerificationGoBDK_invalid(t *testing.T) {
 	}
 }
 
+// TestScriptVerifierGoBDKRejectsInt64ScriptNumOverflow pins a consensus rule from
+// bitcoin-sv 1.2.3: a script number that does not fit in int64 is rejected with
+// SCRIPT_ERR_SCRIPTNUM_OVERFLOW. OP_LEFT reads its length operand as a non-big-int
+// script number, and GoBDK builds against earlier bitcoin-sv versions truncated a
+// 9-byte operand instead, so a later GoBDK pin cannot quietly undo the rule.
+func TestScriptVerifierGoBDKRejectsInt64ScriptNumOverflow(t *testing.T) {
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams)
+
+	chronicle := chaincfg.MainNetParams.ChronicleActivationHeight
+	blockHeight := chronicle + 10
+	// OP_LEFT is only active when the spent output was created after Chronicle
+	utxoHeights := []uint32{chronicle + 1}
+
+	// Each unlocking script pushes "abc" and an OP_LEFT length; the locking script
+	// is OP_LEFT OP_DROP OP_1.
+	newTx := func(t *testing.T, unlockingScript []byte) *bt.Tx {
+		t.Helper()
+
+		tx := bt.NewTx()
+		in := &bt.Input{
+			PreviousTxOutIndex: 0,
+			SequenceNumber:     bt.DefaultSequenceNumber,
+			PreviousTxSatoshis: 1000,
+			PreviousTxScript:   bscript.NewFromBytes([]byte{0xb4, 0x75, 0x51}),
+			UnlockingScript:    bscript.NewFromBytes(unlockingScript),
+		}
+		require.NoError(t, in.PreviousTxIDAddStr(testTxs[0].TxID))
+
+		tx.Inputs = append(tx.Inputs, in)
+		tx.Outputs = append(tx.Outputs, &bt.Output{
+			Satoshis:      500,
+			LockingScript: bscript.NewFromBytes([]byte{0x76, 0xa9, 0x88, 0xac}),
+		})
+
+		return tx
+	}
+
+	t.Run("length that fits int64", func(t *testing.T) {
+		tx := newTx(t, []byte{0x03, 'a', 'b', 'c', 0x51})
+
+		require.NoError(t, verifier.ValidateTransaction(tx, blockHeight, true, utxoHeights))
+	})
+
+	t.Run("9-byte length", func(t *testing.T) {
+		// 2^64 + 1, minimally encoded
+		tx := newTx(t, []byte{0x03, 'a', 'b', 'c', 0x09, 0x01, 0, 0, 0, 0, 0, 0, 0, 0x01})
+
+		err := verifier.ValidateTransaction(tx, blockHeight, true, utxoHeights)
+		require.ErrorIs(t, err, errors.ErrTxInvalid)
+		require.False(t, errors.Is(err, errors.ErrTxPolicy), "an int64 overflow is a consensus failure: %v", err)
+		require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW).Error())
+	})
+}
+
 func Test_Uint2Int(t *testing.T) {
 	tests := []struct {
 		name     string
