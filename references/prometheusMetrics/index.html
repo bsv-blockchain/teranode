@@ -8668,6 +8668,21 @@
 <td>Duration of bless missing transaction</td>
 </tr>
 <tr>
+<td><code>teranode_subtreevalidation_bless_unlock_failed</code></td>
+<td>Counter</td>
+<td>Accepted transactions blessed although their two-phase-commit unlock failed</td>
+</tr>
+<tr>
+<td><code>teranode_subtreevalidation_bless_unlock_recovered</code></td>
+<td>Counter</td>
+<td>Subset of <code>bless_unlock_failed</code> that the per-level unlock retry made spendable</td>
+</tr>
+<tr>
+<td><code>teranode_subtreevalidation_bless_unlock_retry_failed_batches</code></td>
+<td>Counter</td>
+<td>Unlock retry calls that returned an error; counted per call, not per transaction, because the store reports no per-record result</td>
+</tr>
+<tr>
 <td><code>teranode_subtreevalidation_set_tx_meta_cache_kafka_batch</code></td>
 <td>Histogram</td>
 <td>Duration of one SetCacheMulti batch from a Kafka txmeta message (per Kafka message, not per entry)</td>
@@ -8798,6 +8813,11 @@
 <td><code>teranode_validator_parent_commit_exhausted</code></td>
 <td>Counter</td>
 <td>Transactions rejected because the parent-commit retry budget ran out, by <code>condition</code> (<code>TX_LOCKED</code>, <code>TX_CREATING</code>)</td>
+</tr>
+<tr>
+<td><code>teranode_validator_unlock_failed</code></td>
+<td>Counter</td>
+<td>Accepted transactions whose two-phase-commit unlock failed or timed out; they stay locked until mined, so their descendants are answered <code>TX_LOCKED</code> until then. Subtree validation retries them (<code>teranode_subtreevalidation_bless_unlock_*</code>)</td>
 </tr>
 <tr>
 <td><code>teranode_validator_shed_unwind_total</code></td>

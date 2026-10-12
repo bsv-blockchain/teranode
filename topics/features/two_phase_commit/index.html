@@ -3016,6 +3016,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#324-caller-retry-of-the-primary-path-subtree-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2.4. Caller Retry of the Primary Path: Subtree Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -7109,6 +7120,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#324-caller-retry-of-the-primary-path-subtree-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2.4. Caller Retry of the Primary Path: Subtree Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -7385,6 +7407,7 @@
 <li><a href="#321-normal-path-after-successful-addition-to-block-assembly">3.2.1. Normal Path: After Successful Addition to Block Assembly</a></li>
 <li><a href="#322-fallback-path-when-mined-in-a-block">3.2.2. Fallback Path: When Mined in a Block</a></li>
 <li><a href="#323-quick-validation-path-checkpointed-blocks">3.2.3. Quick Validation Path: Checkpointed Blocks</a></li>
+<li><a href="#324-caller-retry-of-the-primary-path-subtree-validation">3.2.4. Caller Retry of the Primary Path: Subtree Validation</a></li>
 </ul>
 </li>
 <li><a href="#33-special-case-transactions-from-blocks">3.3. Special Case: Transactions from Blocks</a></li>
@@ -7476,7 +7499,7 @@
 </li>
 </ol>
 <h3 id="32-phase-2-unsetting-the-locked-flag">3.2. Phase 2: Unsetting the Locked Flag<a class="headerlink" href="#32-phase-2-unsetting-the-locked-flag" title="Permanent link">&para;</a></h3>
-<p>The locked flag is unset in two key scenarios:</p>
+<p>The locked flag is unset through the four paths below (Primary, Fallback, Quick Validation, Recovery — see 7.1). A fifth actor, subtree validation, re-runs step 5 of the primary path for transactions the Validator accepted but could not unlock; it is described in 3.2.4 because it is a caller retry of the primary path rather than a separate recovery mechanism.</p>
 <h4 id="321-normal-path-after-successful-addition-to-block-assembly">3.2.1. Normal Path: After Successful Addition to Block Assembly<a class="headerlink" href="#321-normal-path-after-successful-addition-to-block-assembly" title="Permanent link">&para;</a></h4>
 <p>This is the primary unlock mechanism that occurs during normal transaction processing:</p>
 <ol>
@@ -7492,6 +7515,7 @@
 <li>The unlock happens AFTER successful Block Assembly addition and Kafka publishing, not immediately after</li>
 <li>This is implemented in the <code>Validator.twoPhaseCommitTransaction()</code> function in <code>services/validator/Validator.go</code></li>
 <li>If this step fails, it's logged but not considered fatal since the transaction will be unlocked when mined (fallback mechanism)</li>
+<li>When it fails the Validator returns the typed <code>ERR_TX_UNLOCK_FAILED</code> (<code>errors.ErrTxUnlockFailed</code>), which means <strong>accepted, still locked</strong>: the spend, the record and the delivery to block assembly all succeeded and only the unlock did. Callers that only need acceptance — propagation, RPC <code>sendrawtransaction</code>, the Validator's own Kafka intake and legacy sync — treat that code as success and must not treat a non-nil error as a rejection without checking it. <code>teranode_validator_unlock_failed</code> counts these transactions</li>
 <li>Once unlocked, transaction outputs can be spent even before the transaction is mined in a block</li>
 </ul>
 <h4 id="322-fallback-path-when-mined-in-a-block">3.2.2. Fallback Path: When Mined in a Block<a class="headerlink" href="#322-fallback-path-when-mined-in-a-block" title="Permanent link">&para;</a></h4>
@@ -7543,6 +7567,18 @@
 <li>Implemented in <code>Block Validation.quickValidateBlock()</code> in <code>services/blockvalidation/quick_validate.go</code></li>
 </ul>
 <p><strong>When Used</strong>: Only for blocks below checkpoints during initial blockchain synchronization or when catching up from far behind</p>
+<h4 id="324-caller-retry-of-the-primary-path-subtree-validation">3.2.4. Caller Retry of the Primary Path: Subtree Validation<a class="headerlink" href="#324-caller-retry-of-the-primary-path-subtree-validation" title="Permanent link">&para;</a></h4>
+<p>Subtree validation blesses missing ancestors of a subtree level by level, parents before children, and a locked parent answers the children in the next level with <code>TX_LOCKED</code>. So when the Validator returns <code>ERR_TX_UNLOCK_FAILED</code> for a transaction it blesses, subtree validation does not treat the bless as failed — the transaction was accepted, spent, created and delivered to block assembly. It collects those transactions and re-runs step 5 of the primary path on their behalf:</p>
+<ol>
+<li><code>blessMissing</code> recognises <code>errors.ErrTxUnlockFailed</code>, counts it in <code>teranode_subtreevalidation_bless_unlock_failed</code>, and reads the accepted record back from the UTXO store (the response metadata does not survive a gRPC error)</li>
+<li>The hash is queued. Where the unlock runs depends on the path:</li>
+<li><code>blessMissingTransactions</code>, reached from the Kafka subtree path (<code>subtreesHandler</code>), validates without <code>IgnoreLocked</code>. A locked parent answers its child in the next level with <code>TX_LOCKED</code>, so <code>unlockAcceptedTransactions</code> calls <code>SetLocked(txHashes, false)</code> for the whole level in one batch before the next level starts. The <code>CheckSubtree</code> gRPC paths reach the same function with <code>IgnoreLocked</code> set, where this per-level unlock is not needed to avoid <code>TX_LOCKED</code> but still leaves the record spendable</li>
+<li><code>processTransactionsInLevels</code>, the Phase-3 blessing of a subtree arriving inside a block, validates with <code>IgnoreLocked</code>, so children never meet a locked parent. It queues across all levels and runs the one batch when the function returns, including on an error return, so the retry adds at most one <code>validator_twoPhaseCommitTimeout</code> per subtree, not per level</li>
+<li>The batch is bounded by <code>validator_twoPhaseCommitTimeout</code> (falling back to the Validator's own compiled default, not a separate figure), on a context derived from the caller's rather than the level errgroup's, so a sibling transaction failing does not cancel the retry</li>
+<li>The outcome is counted in <code>teranode_subtreevalidation_bless_unlock_recovered</code> or <code>teranode_subtreevalidation_bless_unlock_retry_failed_batches</code> (per failed call, not per transaction, because <code>SetLocked</code> reports no per-record result); records of a failed call may stay locked, which is exactly the state before the retry, so the fallback in 3.2.2 still applies</li>
+</ol>
+<p>This is not a new recovery mechanism and the four paths in 7.1 still describe the system: subtree validation performs the Validator's primary-path unlock for transactions the Validator could not, at the point where it matters most — immediately before the children that would otherwise be answered <code>TX_LOCKED</code>. It runs once per level on the peer path and once per subtree on the block path, so a transaction whose retry fails waits for the fallback rather than being retried indefinitely.</p>
+<p>Implemented in <code>blessMissing</code> and <code>unlockAcceptedTransactions</code> in <code>services/subtreevalidation/SubtreeValidation.go</code>, called from <code>blessMissingTransactions</code> there and from <code>processTransactionsInLevels</code> in <code>services/subtreevalidation/check_block_subtrees.go</code>.</p>
 <h3 id="33-special-case-transactions-from-blocks">3.3. Special Case: Transactions from Blocks<a class="headerlink" href="#33-special-case-transactions-from-blocks" title="Permanent link">&para;</a></h3>
 <p>For transactions that are received as part of a block (rather than through the transaction validation process):</p>
 <ol>
@@ -7566,7 +7602,7 @@
 <li><strong>Phase 1 (Lock)</strong>: Validating incoming transactions against consensus rules and creating UTXOs with <code>locked=true</code> in the UTXO store</li>
 <li><strong>Transaction Forwarding</strong>: Sending validated transactions to Block Assembly via the <code>Store()</code> method and publishing transaction metadata to Kafka</li>
 <li><strong>Phase 2 (Unlock)</strong>: Calling <code>twoPhaseCommitTransaction()</code> to unset the locked flag after successful Block Assembly addition and Kafka publishing</li>
-<li><strong>Error Handling</strong>: Logging but not treating unlock failures as fatal, since the fallback mechanism (SetMinedMulti) will unlock the transaction when mined</li>
+<li><strong>Error Handling</strong>: Unlock failure is logged and returned as the typed <code>errors.ErrTxUnlockFailed</code> ("accepted, still locked") rather than swallowed or reported as a rejection, so a caller can tell an accepted transaction from a refused one. It is still not fatal: the fallback mechanism (<code>SetMinedMulti</code>) unlocks the transaction when mined, and subtree validation retries the unlock for the transactions it blesses (see 3.2.4)</li>
 <li><strong>Special Case</strong>: Ignoring the locked flag when validating transactions that are already part of a received block (controlled via <code>WithIgnoreLocked</code> option)</li>
 </ul>
 <p>The Validator orchestrates the complete two-phase commit flow for transactions entering the system through the validation pipeline. See <code>services/validator/Validator.go</code> for implementation details.</p>
