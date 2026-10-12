@@ -104,12 +104,35 @@ func TestRepository_GetTransaction_AFailingUtxoStoreIsNotAMiss(t *testing.T) {
 		require.False(t, strings.Contains(err.Error(), "not found"), err.Error())
 	})
 
-	t.Run("a miss in both is still a miss", func(t *testing.T) {
-		repo := repositoryWithUtxoGetError(t, errors.NewTxNotFoundError("%s not found", hash.String()))
+	t.Run("a store fault over a missing blob is still a fault", func(t *testing.T) {
+		// aerospike's GetTxFromExternalStore, for a record marked external whose tx
+		// and outputs blobs are both gone: the store's own verdict is STORAGE_ERROR,
+		// and the blob store's not-found sentinel is only what it wraps. A chain-wide
+		// not-found match read that as a miss, so getrawtransaction answered -5 for a
+		// transaction this node holds a record of.
+		repo := repositoryWithUtxoGetError(t, errors.NewStorageError(
+			"[GetTxFromExternalStore][%s] could not get tx from external store", hash.String(), errors.ErrNotFound))
 
 		_, err := repo.GetTransaction(context.Background(), &hash)
 		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found"),
-			"the HTTP layer must still answer 404: %v", err)
+		require.ErrorIs(t, err, errors.ErrServiceError, "a node fault, answered as one")
+		require.False(t, strings.Contains(err.Error(), "not found"), err.Error())
 	})
+
+	// Both stores' real misses. Neither carries a STORAGE_ERROR link, which is what
+	// lets the fault test above key on that class anywhere in the chain; a miss that
+	// wrapped one would count as a fault.
+	for name, miss := range map[string]error{
+		"aerospike miss": errors.NewTxNotFoundError("%v not found", hash.String()),
+		"sql miss":       errors.NewTxNotFoundError("transaction %s not found", hash.String(), rawStoreError("sql: no rows in result set")),
+	} {
+		t.Run("a miss in both is still a miss, "+name, func(t *testing.T) {
+			repo := repositoryWithUtxoGetError(t, miss)
+
+			_, err := repo.GetTransaction(context.Background(), &hash)
+			require.Error(t, err)
+			require.True(t, errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found"),
+				"the HTTP layer must still answer 404: %v", err)
+		})
+	}
 }

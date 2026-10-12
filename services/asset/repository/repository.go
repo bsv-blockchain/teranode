@@ -345,7 +345,11 @@ func (repo *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash
 	var utxoFault error
 
 	if err != nil {
-		if !errors.Is(err, errors.ErrTxNotFound) && !errors.Is(err, errors.ErrNotFound) {
+		// The store's own fault class first. A not-found anywhere in the chain is not
+		// a miss when the store has called it a storage failure: aerospike reports an
+		// external transaction whose blobs are gone as a STORAGE_ERROR wrapping the
+		// blob store's not-found.
+		if errors.Is(err, errors.ErrStorageError) || (!errors.Is(err, errors.ErrTxNotFound) && !errors.Is(err, errors.ErrNotFound)) {
 			utxoFault = err
 		}
 
