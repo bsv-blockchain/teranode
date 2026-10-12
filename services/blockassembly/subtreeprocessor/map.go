@@ -160,8 +160,17 @@ func (s *SplitSwissMap) PutMultiBucket(bucket uint16, hashes []chainhash.Hash) e
 }
 
 func (s *SplitSwissMap) Iter(f func(hash chainhash.Hash, v struct{}) bool) {
+	stopped := false
+
 	for _, swissMap := range s.m {
-		swissMap.Iter(f)
+		swissMap.Iter(func(hash chainhash.Hash, v struct{}) bool {
+			stopped = f(hash, v)
+			return stopped
+		})
+
+		if stopped {
+			return
+		}
 	}
 }
 
