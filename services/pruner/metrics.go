@@ -62,7 +62,7 @@ func _initPrometheusMetrics() {
 			Name:      "skipped_total",
 			Help:      "Number of pruner operations skipped",
 		},
-		[]string{"reason"}, // "block_assembly_timeout", "below_min_height", "fsm_error", "catchup_mode"
+		[]string{"reason"}, // "block_assembly_timeout", "below_min_height", "fsm_error", "catchup_mode", "preserve_parents_failed"
 	)
 
 	prunerErrors = promauto.NewCounterVec(

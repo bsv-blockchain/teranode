@@ -209,14 +209,16 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 
 			// Phase 1: Preserve parents of old unmined transactions
 			// This must run before Phase 2 to protect parents from deletion
+			phase1Failed := false
 			if s.utxoStore != nil && !s.settings.Pruner.SkipPreserveParents {
 				s.logger.Debugf("[pruner][%s:%d] phase 1: preserving parents", blockHashStr, blockHeight)
 				startTime := time.Now()
 				if recordsProcessed, err := utxo.PreserveParentsOfOldUnminedTransactions(
 					ctx, s.utxoStore, blockHeight, blockHashStr, s.settings, s.logger,
 				); err != nil {
-					s.logger.Warnf("[pruner][%s:%d] phase 1: failed to preserve parents: %v", blockHashStr, blockHeight, err)
+					s.logger.Errorf("[pruner][%s:%d] phase 1: failed to preserve parents: %v", blockHashStr, blockHeight, err)
 					prunerErrors.WithLabelValues("preserve_parents").Inc()
+					phase1Failed = true
 				} else {
 					prunerDuration.WithLabelValues("preserve_parents").Observe(time.Since(startTime).Seconds())
 					if recordsProcessed > 0 {
@@ -248,7 +250,18 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 			}
 
 			// Phase 2: DAH pruning (deletion)
-			// Deletes transactions marked for deletion at or before the current height
+			// Deletes transactions marked for deletion at or before the current height.
+			// Never runs in a cycle where Phase 1 failed: a stale DeleteAtHeight on a parent of an old
+			// unmined transaction would not have been cleared, so Phase 2 could delete it.
+			if phase1Failed {
+				s.logger.Errorf("[pruner][%s:%d] phase 2: skipped because phase 1 failed, height will be retried on the next trigger", blockHashStr, blockHeight)
+				prunerSkipped.WithLabelValues("preserve_parents_failed").Inc()
+				prunerActive.Set(0)
+
+				// Do not update lastProcessedHeight: the next notification must be processed
+				continue
+			}
+
 			if s.prunerService != nil {
 				startTime := time.Now()
 				recordsProcessed, err := s.prunerService.Prune(ctx, blockHeight, blockHashStr)

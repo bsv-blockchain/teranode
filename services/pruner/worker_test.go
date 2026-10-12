@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	prunerstore "github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -563,4 +564,66 @@ func TestProcessExpiredPreservationsPhaseSkipped(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 		// expected: ProcessExpiredPreservations was not called
 	}
+}
+
+// failingIterator is a typed nil used only as the (ignored) iterator return value
+// of a mocked GetPrunableUnminedTxIterator call that fails.
+type failingIterator struct{ utxo.UnminedTxIterator }
+
+// recordingPruner records Prune calls so tests can assert whether Phase 2 ran.
+type recordingPruner struct {
+	prunerstore.Service
+	calls chan uint32
+}
+
+func (r *recordingPruner) Prune(_ context.Context, height uint32, _ string) (int64, error) {
+	r.calls <- height
+	return 0, nil
+}
+
+// TestPhase1FailureSkipsPhase2 verifies that when Phase 1 (parent preservation) fails, Phase 2
+// (DAH deletion) does not run in that cycle, the error is counted, the cycle is counted as
+// skipped, and lastProcessedHeight is not advanced so the height is retried on the next trigger.
+func TestPhase1FailureSkipsPhase2(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("GetPrunableUnminedTxIterator", mock.Anything).
+		Return((*failingIterator)(nil), errors.NewStorageError("boom"))
+	mockStore.On("ProcessExpiredPreservations", mock.Anything, mock.Anything).Return(nil)
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 2)}
+
+	server := &Server{
+		ctx:           ctx,
+		logger:        ulogger.New("test"),
+		pruneNotify:   make(chan pruneSignal, 1),
+		blobNotify:    make(chan pruneSignal, 1),
+		utxoStore:     mockStore,
+		prunerService: pruneSvc,
+		settings: &settings.Settings{
+			UtxoStore: settings.UtxoStoreSettings{
+				UnminedTxRetention:       10,
+				ParentPreservationBlocks: 100,
+			},
+		},
+	}
+
+	errsBefore := getCounterValue(t, prunerErrors, "preserve_parents")
+	skippedBefore := getCounterValue(t, prunerSkipped, "preserve_parents_failed")
+
+	go server.prunerProcessor(ctx)
+	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
+
+	require.Eventually(t, func() bool {
+		return getCounterValue(t, prunerSkipped, "preserve_parents_failed") == skippedBefore+1
+	}, 2*time.Second, 10*time.Millisecond, "cycle should be counted as skipped when Phase 1 fails")
+
+	require.Equal(t, errsBefore+1, getCounterValue(t, prunerErrors, "preserve_parents"))
+	require.Empty(t, pruneSvc.calls, "Phase 2 must not run when Phase 1 failed")
+	require.Equal(t, uint32(0), server.lastProcessedHeight.Load(),
+		"lastProcessedHeight must not advance so the height is retried")
 }
