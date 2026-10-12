@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -317,6 +318,7 @@ func TestDeserializeHashesFromReaderIntoBuckets_ConflictingCountVsLeaves(t *test
 			out, err := run(tc.leaves, tc.conflicting)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "exceeds leaf count")
+			require.ErrorIs(t, err, subtreepkg.ErrConflictingCountExceedsLeaves, "the same sentinel go-subtree's readers return")
 			require.Empty(t, out, "nothing is read from a rejected trailer")
 		})
 	}
