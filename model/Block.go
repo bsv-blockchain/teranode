@@ -1717,7 +1717,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	}
 
 	if dedup != nil {
-		return b.detectDuplicateInputs(ctx, logger, deps, validationCtx, subtrees)
+		return b.detectDuplicateInputs(ctx, logger, deps, validationCtx, subtrees, concurrency)
 	}
 
 	return nil
@@ -1868,7 +1868,7 @@ func (b *Block) duplicateInputsError(subtreeHash *chainhash.Hash, sIdx, snIdx in
 // transaction (or input) already spent. Real inpoints are only read back, from
 // the subtree meta, for transactions whose input hashes collide.
 func (b *Block) detectDuplicateInputs(ctx context.Context, logger ulogger.Logger, deps *validationDependencies,
-	validationCtx *validationContext, subtrees []*subtreepkg.Subtree) error {
+	validationCtx *validationContext, subtrees []*subtreepkg.Subtree, concurrency int) error {
 	base := validationCtx.subtreeBase
 
 	// subtreeOf returns the subtree holding block index tx
@@ -1904,7 +1904,9 @@ func (b *Block) detectDuplicateInputs(ctx context.Context, logger ulogger.Logger
 		}
 	}
 
-	tx, found, err := validationCtx.dedup.detect(ctx, runtime.GOMAXPROCS(0), newResolver)
+	// block_validOrderAndBlessedConcurrency bounds this phase too; the result does
+	// not depend on the worker count
+	tx, found, err := validationCtx.dedup.detect(ctx, concurrency, newResolver)
 	if err != nil {
 		return errors.NewProcessingError("[validOrderAndBlessed][%s] duplicate input check failed", b.String(), err)
 	}
