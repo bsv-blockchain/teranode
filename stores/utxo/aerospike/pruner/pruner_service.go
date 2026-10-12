@@ -81,6 +81,14 @@ func (e *TimeoutError) Unwrap() error {
 	return e.cause
 }
 
+// prometheusUtxoRecordsSkippedUnmined counts records the pruner kept because they are currently unmined.
+// It is registered at package init, outside the metrics Once, so it is never nil in tests that
+// initialise the other collectors themselves. Distinct from the defensive-mode skip count.
+var prometheusUtxoRecordsSkippedUnmined = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "utxo_pruner_records_skipped_unmined_total",
+	Help: "Total number of records kept by the pruner because they are currently unmined and not conflicting",
+})
+
 var (
 	prometheusMetricsInitOnce                 sync.Once
 	prometheusUtxoCleanupBatch                prometheus.Histogram
@@ -231,6 +239,9 @@ type Service struct {
 	fieldTxID, fieldUtxos, fieldInputs, fieldDeletedChildren, fieldExternal        string
 	fieldDeleteAtHeight, fieldTotalExtraRecs, fieldUnminedSince, fieldBlockHeights string
 	fieldConflicting                                                               string
+
+	// readMastersFn overrides readMasters; tests only.
+	readMastersFn func(keys []*aerospike.Key) ([]masterRead, error)
 
 	// Internally reused variables
 	queryPolicy *aerospike.QueryPolicy
@@ -967,10 +978,11 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 		return 0, 0, nil
 	}
 
-	// Never delete a record that is currently unmined, unless it is conflicting.
-	chunk, unminedSkipped := s.dropUnminedRecords(chunk)
+	// Do not delete a record that is currently unmined, unless it is conflicting. Counted separately
+	// from the defensive skip count.
+	chunk, _ = s.dropUnminedRecords(chunk)
 	if len(chunk) == 0 {
-		return 0, unminedSkipped, nil
+		return 0, 0, nil
 	}
 
 	// Defensive child verification is conditional on the UTXODefensiveEnabled setting
@@ -1074,7 +1086,7 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 	allDeletions := make([]*aerospike.Key, 0, 1000)      // Accumulate all deletions for chunk
 	allExternalFiles := make([]*externalFileInfo, 0, 10) // Accumulate external files (<1%)
 	processedCount := 0
-	skippedCount := unminedSkipped
+	skippedCount := 0
 
 	// Add this chunk's record TXIDs to prunedSet UP FRONT, before any
 	// CheckAndRemove fires. This makes the TXIDs visible to concurrent
@@ -1226,17 +1238,61 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 	return processedCount, skippedCount, nil
 }
 
+// masterRead is the result of reading one master record's unminedSince and conflicting bins.
+type masterRead struct {
+	record *aerospike.Record
+	err    error
+}
+
+// readMasters reads the unminedSince and conflicting bins of the given master keys in one batch.
+// A returned error means the whole batch failed.
+func (s *Service) readMasters(keys []*aerospike.Key) ([]masterRead, error) {
+	if s.readMastersFn != nil {
+		return s.readMastersFn(keys)
+	}
+
+	readPolicy := aerospike.NewBatchReadPolicy()
+	readPolicy.ReadModeSC = aerospike.ReadModeSCSession
+
+	batchRecords := make([]aerospike.BatchRecordIfc, len(keys))
+	for i, key := range keys {
+		batchRecords[i] = aerospike.NewBatchRead(readPolicy, key, []string{s.fieldUnminedSince, s.fieldConflicting})
+	}
+
+	if err := s.client.BatchOperate(s.batchPolicy, batchRecords); err != nil {
+		return nil, err
+	}
+
+	reads := make([]masterRead, len(keys))
+	for i := range batchRecords {
+		br := batchRecords[i].BatchRec()
+		reads[i] = masterRead{record: br.Record, err: br.Err}
+	}
+
+	return reads, nil
+}
+
 // dropUnminedRecords removes from the chunk every record that is currently unmined (unminedSince set)
 // and not conflicting, and returns the remaining records plus the number dropped.
 //
-// A transaction marked unmined by MarkTransactionsOnLongestChain(false) keeps its deleteAtHeight, so the
-// DAH query can return it. Deleting it would lose a transaction that may be mined again. Conflicting
-// transactions get a DAH while unmined and must stay prunable.
+// This is defence in depth, not a guarantee. A transaction marked unmined by
+// MarkTransactionsOnLongestChain(false) keeps its deleteAtHeight, so the DAH query can return it.
+// Deleting it would lose a transaction that may be mined again. Conflicting transactions get a DAH
+// while unmined and must stay prunable. The state is read from the query stream and the deletes are
+// unconditional, so a transaction that becomes unmined between the query and the delete can still be
+// deleted. TTL-based deletion (utxoSetTTL) is likewise not covered once a record has been touched.
+//
+// A protected record keeps its DAH, so it is returned again by every prune cycle until it is mined
+// again or its DAH is cleared.
+//
+// Masters are identified by the totalExtraRecs bin. A master written without that bin is also handled:
+// it is the record stored under the bare txid, found by comparing key digests.
 //
 // Pagination records of large transactions carry their own deleteAtHeight but have no unminedSince bin,
 // so they are judged by their master record, which is read in one batch. Otherwise the pagination
-// records would be deleted from under a protected master. When the master cannot be read the record is
-// kept; the next prune cycle retries it.
+// records would be deleted from under a protected master. The page is kept whenever the answer is
+// uncertain (batch failure, per-record error other than key-not-found, empty result, key build error);
+// the next prune cycle retries it. A page whose master does not exist (orphan) is deleted.
 func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Result, int) {
 	isProtected := func(bins aerospike.BinMap) bool {
 		if v, ok := bins[s.fieldUnminedSince]; !ok || v == nil {
@@ -1258,6 +1314,11 @@ func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Re
 	protected := make([]bool, len(chunk))
 	dropped := 0
 
+	protect := func(i int) {
+		protected[i] = true
+		dropped++
+	}
+
 	for i, rec := range chunk {
 		if rec.Err != nil || rec.Record == nil || rec.Record.Bins == nil {
 			continue
@@ -1267,8 +1328,7 @@ func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Re
 
 		if _, isMaster := bins[s.fieldTotalExtraRecs]; isMaster {
 			if isProtected(bins) {
-				protected[i] = true
-				dropped++
+				protect(i)
 			}
 
 			continue
@@ -1282,8 +1342,7 @@ func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Re
 		}
 
 		if isProtected(bins) {
-			protected[i] = true
-			dropped++
+			protect(i)
 
 			continue
 		}
@@ -1294,7 +1353,14 @@ func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Re
 		}
 
 		masterKey, err := aerospike.NewKey(s.namespace, s.set, uaerospike.CalculateKeySourceInternal(txHash, 0))
-		if err != nil || bytes.Equal(masterKey.Digest(), rec.Record.Key.Digest()) {
+		if err != nil {
+			// cannot tell whether this is the master or a page, so keep it
+			protect(i)
+
+			continue
+		}
+
+		if bytes.Equal(masterKey.Digest(), rec.Record.Key.Digest()) {
 			continue // this record is the master and is not protected
 		}
 
@@ -1302,35 +1368,35 @@ func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Re
 	}
 
 	if len(pages) > 0 {
-		readPolicy := aerospike.NewBatchReadPolicy()
-		readPolicy.ReadModeSC = aerospike.ReadModeSCSession
-
-		batchRecords := make([]aerospike.BatchRecordIfc, len(pages))
+		keys := make([]*aerospike.Key, len(pages))
 		for i, p := range pages {
-			batchRecords[i] = aerospike.NewBatchRead(readPolicy, p.masterKey, []string{s.fieldUnminedSince, s.fieldConflicting})
+			keys[i] = p.masterKey
 		}
 
-		batchErr := s.client.BatchOperate(s.batchPolicy, batchRecords)
+		reads, batchErr := s.readMasters(keys)
 		if batchErr != nil {
 			s.logger.Errorf("[pruner] failed to read master records of %d pagination records, keeping them: %v", len(pages), batchErr)
 		}
 
 		for i, p := range pages {
-			br := batchRecords[i].BatchRec()
+			keep := batchErr != nil || len(reads) != len(pages)
+			if !keep {
+				r := reads[i]
 
-			keep := batchErr != nil
-			if !keep && br.Err != nil {
-				var asErr aerospike.Error
-				keep = !(errors.As(br.Err, &asErr) && asErr.Matches(types.KEY_NOT_FOUND_ERROR))
-			}
-
-			if !keep && br.Err == nil && br.Record != nil && br.Record.Bins != nil {
-				keep = isProtected(br.Record.Bins)
+				switch {
+				case r.err != nil:
+					var asErr aerospike.Error
+					// only a missing master (orphan page) may be deleted
+					keep = !(errors.As(r.err, &asErr) && asErr.Matches(types.KEY_NOT_FOUND_ERROR))
+				case r.record == nil || r.record.Bins == nil:
+					keep = true // neither an error nor a record: ambiguous
+				default:
+					keep = isProtected(r.record.Bins)
+				}
 			}
 
 			if keep {
-				protected[p.idx] = true
-				dropped++
+				protect(p.idx)
 			}
 		}
 	}
@@ -1338,6 +1404,8 @@ func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Re
 	if dropped == 0 {
 		return chunk, 0
 	}
+
+	prometheusUtxoRecordsSkippedUnmined.Add(float64(dropped))
 
 	kept := make([]*aerospike.Result, 0, len(chunk)-dropped)
 	for i, rec := range chunk {

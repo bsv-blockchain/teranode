@@ -128,9 +128,11 @@ func (s *Service) Prune(ctx context.Context, blockHeight uint32, blockHashStr st
 
 // deleteTombstoned removes transactions that have passed their expiration time.
 // Only deletes parent transactions if their last spending child is mined and stable.
-// Records that are currently unmined (unmined_since set) are never deleted unless they are
-// conflicting, even if they still carry a delete_at_height: MarkTransactionsOnLongestChain(false)
-// does not clear it.
+// Records that are currently unmined (unmined_since set) are skipped unless they are conflicting,
+// even if they still carry a delete_at_height: MarkTransactionsOnLongestChain(false) does not clear
+// it. This is defence in depth: the check and the delete are one statement, but a record that becomes
+// unmined concurrently with the delete is not covered. A skipped record keeps its delete_at_height
+// and is matched again by every prune cycle until it is mined again or its DAH is cleared.
 func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (int64, error) {
 	// Use configured safety window from settings
 	safetyWindow := s.safetyWindow
