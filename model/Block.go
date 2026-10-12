@@ -1223,7 +1223,9 @@ func (b *Block) CheckCoinbaseOnlyBodyBound() error {
 }
 
 // releaseTxMap closes the disk-backed map if that is what b.txMap is, then nils
-// b.txMap so the in-memory map can be collected. Idempotent and nil-safe: safe
+// b.txMap so the in-memory map can be collected. Closing the in-memory node
+// index unpins the block's node arrays, and the subtrees released while it was
+// pinned are closed here. Idempotent and nil-safe: safe
 // to call multiple times or before b.txMap is ever assigned. Invoked via defer
 // from Block.Valid so the map is let go on every exit path, including
 // errors during the subtree load, checkDuplicateTransactions or
@@ -1251,9 +1253,15 @@ func (b *Block) releaseTxMap() {
 }
 
 // pinNodeIndex pins the block's node arrays for m if it is the in-memory node
-// index, which reads its hashes from them, and returns m. The index's Close
-// (releaseTxMap) unpins them.
+// index, which reads its hashes from them, and returns m to be stored in b.txMap.
+// The index's Close (releaseTxMap) unpins them. A node index m replaces is
+// closed here, so its pin cannot outlive it. The caller must hold
+// b.subtreeSlicesMu for writing, so that a release sees the pin.
 func (b *Block) pinNodeIndex(m blockTxMap) blockTxMap {
+	if old, ok := b.txMap.(*blockNodeIndex); ok {
+		_ = old.Close()
+	}
+
 	if idx, ok := m.(*blockNodeIndex); ok {
 		b.nodeIndexPins.Add(1)
 		idx.unpin = func() { b.nodeIndexPins.Add(-1) }
@@ -1508,7 +1516,16 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 		// this block only. Counts beyond maxTxMapPrealloc get a capped
 		// preallocation and grow on insert rather than failing the block (issue
 		// 1428); indexes beyond 32 bits get the 64-bit map.
-		b.txMap = b.pinNodeIndex(newInMemoryBlockTxMap(b.txMapCount, len(b.SubtreeSlices), subtreeSize, maxTxIndex(b.SubtreeSlices, subtreeSize)))
+		//
+		// Pinned under the subtree mutex, so a release that holds it either ran
+		// before (the entries it nil-ed are reported below as released) or sees
+		// the pin; one already running would otherwise pool arrays the index is
+		// about to register.
+		m := newInMemoryBlockTxMap(b.txMapCount, len(b.SubtreeSlices), subtreeSize, maxTxIndex(b.SubtreeSlices, subtreeSize))
+
+		b.subtreeSlicesMu.Lock()
+		b.txMap = b.pinNodeIndex(m)
+		b.subtreeSlicesMu.Unlock()
 	}
 	for subIdx := 0; subIdx < len(b.SubtreeSlices); subIdx++ {
 		subIdx := subIdx
@@ -2644,7 +2661,8 @@ func (b *Block) releaseSubtreeNodesLocked(put func([]subtreepkg.Node)) error {
 
 	// A live node index reads its hashes from these arrays: a pooled one would be
 	// overwritten by the next subtree load and an unmapped one would fault. Detach
-	// them all the same, but leave the heap arrays to the GC and the closes to
+	// them all the same, but drop the heap arrays instead of returning them to the
+	// pool (the GC frees them once the index is gone) and leave the closes to
 	// releaseTxMap.
 	pinned := b.nodeIndexPins.Load() > 0
 

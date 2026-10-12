@@ -82,6 +82,7 @@ func TestReleaseSubtreeNodes_WhileNodeIndexLive(t *testing.T) {
 	b.releaseTxMap()
 
 	require.Zero(t, mmapFiles(t, mmapDir), "releasing the index closes the subtrees whose close was deferred")
+	requireUnpinned(t, b)
 
 	// with no live index the release pools again
 	fresh := shapeBlock(t, 4, []int{4, 4, 3}, seqHashAt)
@@ -143,31 +144,50 @@ func TestGetAndValidateSubtreesWithDedup_ReleaseWhileNodeIndexLive(t *testing.T)
 	require.NoError(t, b.ReleaseSubtreeNodes(func([]subtreepkg.Node) { pooled++ }))
 	require.Zero(t, pooled)
 
+	b.subtreeSlicesMu.Lock()
+	require.Len(t, b.deferredCloses, 2)
+	b.subtreeSlicesMu.Unlock()
+
 	b.releaseTxMap()
+	requireUnpinned(t, b)
+}
+
+// requireUnpinned checks nothing pins the block's node arrays and nothing waits to be closed.
+func requireUnpinned(t *testing.T, b *Block) {
+	t.Helper()
+
+	require.Zero(t, b.nodeIndexPins.Load())
+
+	b.subtreeSlicesMu.Lock()
+	defer b.subtreeSlicesMu.Unlock()
+
+	require.Empty(t, b.deferredCloses)
 }
 
 // releaseTxMap is idempotent: a second call neither unpins twice nor closes twice.
 func TestReleaseTxMap_NodeIndexTwice(t *testing.T) {
 	b, mmapDir := nodeIndexBlockWithMmap(t)
+	require.Equal(t, int32(1), b.nodeIndexPins.Load())
 
 	require.NoError(t, b.ReleaseSubtreeNodes(nil))
 	b.releaseTxMap()
 	b.releaseTxMap()
 
 	require.Zero(t, mmapFiles(t, mmapDir))
+	requireUnpinned(t, b)
+}
 
-	// a second index on the same block pins and releases on its own
-	b2, mmapDir2 := nodeIndexBlockWithMmap(t)
-	b.SubtreeSlices = b2.SubtreeSlices
-	b2.SubtreeSlices = nil
-	b.txMap = nil
+// An index replaced without releaseTxMap must not leave the block pinned for
+// good, or every later release would skip pooling and never close an mmap.
+func TestCheckDuplicateTransactions_ReplacedIndexDoesNotLeakPin(t *testing.T) {
+	b, mmapDir := nodeIndexBlockWithMmap(t)
 
 	require.NoError(t, b.checkDuplicateTransactions(context.Background(), ulogger.TestLogger{}, 4, nil))
+	require.Equal(t, int32(1), b.nodeIndexPins.Load(), "the replaced index unpinned")
+
 	require.NoError(t, b.ReleaseSubtreeNodes(nil))
-	require.Equal(t, 1, mmapFiles(t, mmapDir2))
-
 	b.releaseTxMap()
-	require.Zero(t, mmapFiles(t, mmapDir2))
 
-	b2.releaseTxMap()
+	require.Zero(t, mmapFiles(t, mmapDir))
+	requireUnpinned(t, b)
 }
