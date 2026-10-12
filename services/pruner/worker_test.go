@@ -15,6 +15,7 @@ import (
 	prunerstore "github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -626,4 +627,95 @@ func TestPhase1FailureSkipsPhase2(t *testing.T) {
 	require.Empty(t, pruneSvc.calls, "Phase 2 must not run when Phase 1 failed")
 	require.Equal(t, uint32(0), server.lastProcessedHeight.Load(),
 		"lastProcessedHeight must not advance so the height is retried")
+	require.Equal(t, float64(1), testutil.ToFloat64(prunerPreserveParentsFailing), "one consecutive Phase 1 failure")
+	mockStore.AssertCalled(t, "ProcessExpiredPreservations", mock.Anything, uint32(101))
+}
+
+// emptyIterator is an unmined tx iterator with nothing in it.
+type emptyIterator struct{ utxo.UnminedTxIterator }
+
+func (emptyIterator) Next(context.Context) ([]*utxo.UnminedTransaction, error) { return nil, nil }
+func (emptyIterator) Err() error                                               { return nil }
+func (emptyIterator) Close() error                                             { return nil }
+
+func newPhase1TestServer(ctx context.Context, store *utxo.MockUtxostore, pruneSvc *recordingPruner, skipPreserve bool) *Server {
+	return &Server{
+		ctx:           ctx,
+		logger:        ulogger.New("test"),
+		pruneNotify:   make(chan pruneSignal, 1),
+		blobNotify:    make(chan pruneSignal, 1),
+		utxoStore:     store,
+		prunerService: pruneSvc,
+		settings: &settings.Settings{
+			UtxoStore: settings.UtxoStoreSettings{
+				UnminedTxRetention:       10,
+				ParentPreservationBlocks: 100,
+			},
+			Pruner: settings.PrunerSettings{SkipPreserveParents: skipPreserve},
+		},
+	}
+}
+
+// A cycle skipped because Phase 1 failed does not wedge pruning: the next block
+// runs Phase 1 again and, once it succeeds, Phase 2 and the height advance.
+func TestPhase1FailureThenSuccessPrunes(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("GetPrunableUnminedTxIterator", mock.Anything).
+		Return((*failingIterator)(nil), errors.NewStorageError("boom")).Once()
+	mockStore.On("GetPrunableUnminedTxIterator", mock.Anything).Return(emptyIterator{}, nil)
+	mockStore.On("ProcessExpiredPreservations", mock.Anything, mock.Anything).Return(nil)
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 2)}
+	server := newPhase1TestServer(ctx, mockStore, pruneSvc, false)
+
+	go server.prunerProcessor(ctx)
+
+	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
+	require.Eventually(t, func() bool { return testutil.ToFloat64(prunerPreserveParentsFailing) == 1 },
+		2*time.Second, 10*time.Millisecond)
+
+	server.pruneNotify <- pruneSignal{blockHeight: 102, blockHash: chainhash.Hash{}}
+
+	select {
+	case h := <-pruneSvc.calls:
+		require.Equal(t, uint32(102), h)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Phase 2 did not run after Phase 1 succeeded again")
+	}
+
+	require.Eventually(t, func() bool { return server.lastProcessedHeight.Load() == 102 },
+		2*time.Second, 10*time.Millisecond)
+	require.Equal(t, float64(0), testutil.ToFloat64(prunerPreserveParentsFailing), "a success resets the failure streak")
+}
+
+// With pruner_skipPreserveParents set, Phase 1 is skipped on purpose, not failed:
+// Phase 2 still runs.
+func TestSkipPreserveParentsStillPrunes(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("ProcessExpiredPreservations", mock.Anything, mock.Anything).Return(nil)
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 2)}
+	server := newPhase1TestServer(ctx, mockStore, pruneSvc, true)
+
+	go server.prunerProcessor(ctx)
+	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
+
+	select {
+	case h := <-pruneSvc.calls:
+		require.Equal(t, uint32(101), h)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Phase 2 did not run with pruner_skipPreserveParents set")
+	}
+
+	mockStore.AssertNotCalled(t, "GetPrunableUnminedTxIterator", mock.Anything)
 }
