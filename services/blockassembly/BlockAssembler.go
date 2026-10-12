@@ -676,6 +676,57 @@ func (b *BlockAssembler) reset(ctx context.Context, validateInputs ...bool) erro
 	return err
 }
 
+// resetExistenceChunkSize bounds one BatchDecorate call in dropPrunedTxs.
+const resetExistenceChunkSize = 10_000
+
+// dropPrunedTxs returns hashes without the ones the UTXO store reports as not
+// found (pruned), in order. Any other per-tx error is no evidence the record is
+// gone, so that hash is kept: dropping a live tx would leave it flagged mined while
+// its block is off the chain, and nothing repairs that later. A failing lookup
+// call, or a cancelled ctx, returns an error.
+func (b *BlockAssembler) dropPrunedTxs(ctx context.Context, hashes []chainhash.Hash) ([]chainhash.Hash, error) {
+	kept := make([]chainhash.Hash, 0, len(hashes))
+	pruned, unverified := 0, 0
+
+	for start := 0; start < len(hashes); start += resetExistenceChunkSize {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		b.heartbeat.BeatIfStarted()
+
+		chunk := hashes[start:min(start+resetExistenceChunkSize, len(hashes))]
+
+		unresolved := make([]*utxo.UnresolvedMetaData, len(chunk))
+		for i := range chunk {
+			unresolved[i] = &utxo.UnresolvedMetaData{Hash: chunk[i], Idx: i}
+		}
+
+		if err := b.utxoStore.BatchDecorate(ctx, unresolved, fields.UnminedSince); err != nil {
+			return nil, err
+		}
+
+		for i, u := range unresolved {
+			switch {
+			case u.Err == nil:
+				kept = append(kept, chunk[i])
+			case errors.Is(u.Err, errors.ErrTxNotFound):
+				pruned++
+			default:
+				unverified++
+
+				kept = append(kept, chunk[i])
+			}
+		}
+	}
+
+	if pruned > 0 || unverified > 0 {
+		b.logger.Warnf("[BlockAssembler][Reset] moveBack transactions before the unmined mark: %d pruned (no record) left out, %d with a lookup error kept", pruned, unverified)
+	}
+
+	return kept, nil
+}
+
 // resetWithResponse is reset, also returning the subtree processor's reset
 // response for onResetDone: the zero value when reset failed before reaching
 // the subtree processor, so before the tx map rotation.
@@ -860,6 +911,25 @@ func (b *BlockAssembler) resetWithResponse(ctx context.Context, validateInputs .
 						}
 					}
 				}
+			}
+
+			// Leave out moveBack txs the UTXO store has already pruned. A moveBack block can
+			// sit deeper than the retention window, so its fully spent txs may be gone, and
+			// the store treats marking a missing record as fatal. A pruned tx was mined
+			// deeper than the retention window and has no record left to re-add to assembly;
+			// its live children stay protected by the pruner's parent preservation.
+			kept, existsErr := b.dropPrunedTxs(ctx, moveBackTxs)
+
+			switch {
+			case existsErr == nil:
+				moveBackTxs = kept
+			case ctx.Err() != nil:
+				return resp, existsErr
+			default:
+				// Cannot tell pruned from live: mark them all, as before the lookup existed.
+				// Leaving them out would strand live txs flagged mined with their block off
+				// the chain; a pruned tx among them still hits the store's fatal, as before.
+				b.logger.Errorf("[BlockAssembler][Reset] error checking moveBack transactions exist, marking all %d: %v", len(moveBackTxs), existsErr)
 			}
 
 			// Mark net unmined transactions as NOT on longest chain (set unmined_since)
