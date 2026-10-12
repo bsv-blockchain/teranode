@@ -1965,7 +1965,7 @@ func handleReconsiderBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 
 		err = s.blockValidationClient.RevalidateBlock(ctx, *ch)
 		if err != nil {
-			return nil, s.rpcError(err, bsvjson.ErrRPCVerify, "Block failed revalidation: ")
+			return nil, s.rpcRevalidationError(err, bsvjson.ErrRPCVerify, "Block failed revalidation: ")
 		}
 
 		s.logger.Infof("[handleReconsiderBlock] block %s successfully reconsidered and validated", ch)
@@ -1980,7 +1980,7 @@ func handleReconsiderBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 	// Now recursively clear invalid status for all invalid child blocks
 	err = s.reconsiderInvalidChildren(ctx, ch)
 	if err != nil {
-		return nil, s.rpcError(err, bsvjson.ErrRPCInternal.Code,
+		return nil, s.rpcRevalidationError(err, bsvjson.ErrRPCInternal.Code,
 			fmt.Sprintf("Block %s was reconsidered but failed to reconsider children: ", ch))
 	}
 

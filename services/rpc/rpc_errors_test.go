@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // The fixtures below are the shapes this tree actually produces. Each names
@@ -198,11 +199,11 @@ func TestRejectionReason_StartsAtTheVerdictNotTheBreadcrumb(t *testing.T) {
 	breadcrumb := errors.NewProcessingError("[Validate][%s] error validating transaction", "abcd1234",
 		errors.NewTxInvalidError(validator.ErrMsgInvalidTx, fmt.Errorf("bad-txns-inputs-duplicate")))
 
-	require.True(t, isRejection(breadcrumb), "the chain-wide test matches the breadcrumb link too")
+	require.True(t, isRejection(breadcrumb, localRejectionCodes), "the chain-wide test matches the breadcrumb link too")
 
 	var tErr *errors.Error
 	require.ErrorAs(t, breadcrumb, &tErr)
-	require.False(t, linkIsRejection(tErr), "the per-link test must not")
+	require.False(t, linkIsRejection(tErr, localRejectionCodes), "the per-link test must not")
 
 	require.NotContains(t, publicErrorMessage(breadcrumb), "error validating transaction")
 }
@@ -310,7 +311,7 @@ func TestRejectionDepthCapsAgree(t *testing.T) {
 		err = errors.NewProcessingError("wrapper", err)
 	}
 
-	require.False(t, isRejection(err),
+	require.False(t, isRejection(err, localRejectionCodes),
 		"a verdict past the depth cap is not reachable, and must not be claimed as one")
 
 	msg := publicErrorMessage(err)
@@ -544,6 +545,140 @@ func TestHandleReconsiderBlock_InvalidBlockKeepsItsReason(t *testing.T) {
 	require.Equal(t, bsvjson.ErrRPCVerify, rpcErr.Code, "a block that exists and fails is not a lookup miss")
 	require.Equal(t, "Block failed revalidation: bad-blk-txns-inputs-missingorspent", rpcErr.Message)
 	require.NotContains(t, rpcErr.Message, "RevalidateBlock")
+}
+
+// overGRPC sends err across the encoding a real service boundary uses: WrapGRPC on
+// the server, the status's wire bytes, UnwrapGRPC on the client. Not a live
+// connection, but the same trailer the blockvalidation client decodes.
+func overGRPC(t *testing.T, err error) error {
+	t.Helper()
+
+	st, ok := status.FromError(errors.WrapGRPC(err))
+	require.True(t, ok, "WrapGRPC produces a status")
+
+	wire := st.Proto()
+
+	bytes, mErr := proto.Marshal(wire)
+	require.NoError(t, mErr)
+
+	proto.Reset(wire)
+	require.NoError(t, proto.Unmarshal(bytes, wire))
+
+	return errors.UnwrapGRPC(status.FromProto(wire).Err())
+}
+
+// revalidationFailure is how the blockvalidation server wraps every revalidation
+// failure (Server.go, RevalidateBlock): a SERVICE_ERROR whose breadcrumb carries
+// the rendered block, internal store id included.
+func revalidationFailure(inner error) error {
+	return errors.NewServiceError("[RevalidateBlock][%s] failed block re-validation",
+		"Block 0000000000000000045a7e1b (height: 884212, id: 77123, txCount: 120000, size: 2400000000)", inner)
+}
+
+// blockVerdicts are the block-level failures a revalidation can return, each in
+// the shape its producer builds, with the reason a caller should be shown.
+func blockVerdicts() map[string]struct {
+	err    error
+	reason string
+} {
+	return map[string]struct {
+		err    error
+		reason string
+	}{
+		"invalid": {
+			err:    errors.NewBlockInvalidError("[ValidateBlock][0abc] bad-blk-txns-inputs-missingorspent"),
+			reason: "bad-blk-txns-inputs-missingorspent",
+		},
+		"policy declined": { // BlockValidation.go, excessiveblocksize
+			err: errors.NewBlockPolicyDeclinedError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d (local policy)",
+				"0abc", 2400000000, 1000000000),
+			reason: "block size 2400000000 exceeds excessiveblocksize 1000000000 (local policy)",
+		},
+		"corrupt, merkle root": { // model/Block.go
+			err:    errors.NewBlockCorruptError("[BLOCK][%s] merkle root does not match", "0abc"),
+			reason: "merkle root does not match",
+		},
+		"corrupt, subtree shape with the store id in a breadcrumb": { // model/Block.go
+			err: errors.NewBlockCorruptError("[BLOCK][%s][ID %d] subtree %d has length %d, expected %d",
+				"0abc", 77123, 3, 2, 4),
+			reason: "subtree 3 has length 2, expected 4",
+		},
+		"corrupt over a transaction verdict": { // BlockValidation.go, unbound subtree list
+			err: errors.NewBlockCorruptError("[ValidateBlock][%s] block contains invalid transactions", "0abc",
+				errors.NewProcessingError("[processTransactionsInLevels] failed to process level",
+					errors.NewTxInvalidError("[Validate][%s] error validating transaction", "9f2c",
+						errors.New(errors.ERR_TX_INVALID, "bad-txns-inputs-duplicate")))),
+			reason: "block contains invalid transactions: error validating transaction: bad-txns-inputs-duplicate",
+		},
+	}
+}
+
+// TestHandleReconsiderBlock_BlockVerdictsKeepTheirReasonAcrossGRPC covers every
+// block-level class a revalidation returns, at both reconsiderblock sites, after
+// the gRPC hop the blockvalidation client really makes. Main added
+// BLOCK_POLICY_DECLINED and BLOCK_CORRUPT after this boundary was written, and
+// both answered "internal error" - with the corrupt-over-transaction case logged
+// only at debug, since its transaction verdict made it look like a caller fault.
+func TestHandleReconsiderBlock_BlockVerdictsKeepTheirReasonAcrossGRPC(t *testing.T) {
+	for name, tc := range blockVerdicts() {
+		t.Run(name+", named block", func(t *testing.T) {
+			logger := newCapturingLogger()
+
+			_, err := reconsiderFixture{
+				logger:     logger,
+				revalidate: func(chainhash.Hash) error { return overGRPC(t, revalidationFailure(tc.err)) },
+			}.run(t)
+
+			rpcErr := requireRPCError(t, err)
+			require.Equal(t, bsvjson.ErrRPCVerify, rpcErr.Code)
+			require.Equal(t, "Block failed revalidation: "+tc.reason, rpcErr.Message)
+			require.NotContains(t, rpcErr.Message, "77123", "the store's internal block id must not reach the wire")
+			require.NotEmpty(t, logger.errorf, "a failed revalidation leaves an error-level trace")
+			require.Empty(t, logger.debugf, "and is not mistaken for a routine caller fault")
+		})
+
+		t.Run(name+", child", func(t *testing.T) {
+			named := chainhash.Hash{}
+			child := &model.BlockHeader{Version: 1, HashPrevBlock: &named, HashMerkleRoot: &chainhash.Hash{}, Timestamp: 1}
+
+			_, err := reconsiderFixture{
+				revalidate: func(h chainhash.Hash) error {
+					if h == named {
+						return nil
+					}
+
+					return overGRPC(t, revalidationFailure(tc.err))
+				},
+				invalidBlocks: []*model.BlockInfo{{BlockHeader: child.Bytes()}},
+			}.run(t)
+
+			rpcErr := requireRPCError(t, err)
+			require.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code, "the site's own code: the named block succeeded")
+			require.Equal(t, "Block "+named.String()+" was reconsidered but failed to reconsider children: "+tc.reason,
+				rpcErr.Message)
+		})
+	}
+}
+
+// TestSubmitMiningSolution_CorruptBlockStaysInternal pins why BLOCK_CORRUPT is
+// surfaced at the reconsiderblock sites only. submitminingsolution is open to
+// limited callers and returns the blockassembly error bare; blockassembly wraps
+// every non-invalid block.Valid failure in PROCESSING (blockassembly/Server.go),
+// and for a block this node assembled a corrupt body is the node's own fault, not
+// a verdict on what the miner sent.
+func TestSubmitMiningSolution_CorruptBlockStaysInternal(t *testing.T) {
+	s := &RPCServer{logger: newCapturingLogger()}
+
+	reply, err := s.createMarshalledReply(1, nil, overGRPC(t,
+		errors.NewProcessingError("[BlockAssembly][%s] block is not valid", "0abc",
+			errors.NewBlockCorruptError("[BLOCK][%s] merkle root does not match", "0abc"))))
+	require.NoError(t, err)
+
+	var parsed bsvjson.Response
+	require.NoError(t, json.Unmarshal(reply, &parsed))
+	require.NotNil(t, parsed.Error)
+	require.Equal(t, bsvjson.ErrRPCInternal.Code, parsed.Error.Code)
+	require.Equal(t, genericErrorMessage, parsed.Error.Message)
 }
 
 // reconsiderFixture is the state reconsiderblock reads: whether the block the
@@ -895,7 +1030,7 @@ func TestRejectionMembershipFollowsTheSharedAllowlist(t *testing.T) {
 			errors.ERR_TX_LOCKED, errors.ERR_UTXO_NON_FINAL, errors.ERR_TX_COINBASE_IMMATURE,
 			errors.ERR_PROCESSING, errors.ERR_SERVICE_ERROR,
 		} {
-			require.Equal(t, errors.IsPublicCause(code), linkIsRejection(errors.New(code, "x")),
+			require.Equal(t, errors.IsPublicCause(code), linkIsRejection(errors.New(code, "x"), localRejectionCodes),
 				"code %v must be surfaced here exactly when the shared allowlist says so", code)
 		}
 	})
@@ -962,13 +1097,23 @@ func TestRejectionMembershipFollowsTheSharedAllowlist(t *testing.T) {
 		require.NotContains(t, msg, "TX_INVALID")
 	})
 
-	t.Run("the one local addition is block invalid", func(t *testing.T) {
-		// reconsiderblock needs the block-level reject reason and the shared list
-		// is scoped to transaction verdicts. It is admin-only, so this does not
-		// widen the unprivileged surface.
-		require.False(t, errors.IsPublicCause(errors.ERR_BLOCK_INVALID))
-		require.True(t, linkIsRejection(errors.NewBlockInvalidError("x")))
-		require.Len(t, localRejectionClasses, 1, "a second local addition needs its own justification")
+	t.Run("the local additions are block-level, and corrupt is revalidation-only", func(t *testing.T) {
+		// The shared list is scoped to transaction verdicts. These are what this
+		// surface adds, and each one is justified in localRejectionClasses for every
+		// caller that can reach it - limited-tier submitminingsolution included.
+		for _, code := range []errors.ERR{errors.ERR_BLOCK_INVALID, errors.ERR_BLOCK_POLICY_DECLINED, errors.ERR_BLOCK_CORRUPT} {
+			require.False(t, errors.IsPublicCause(code), "code %v is local to this surface", code)
+		}
+
+		require.True(t, linkIsRejection(errors.NewBlockInvalidError("x"), localRejectionCodes))
+		require.True(t, linkIsRejection(errors.NewBlockPolicyDeclinedError("x"), localRejectionCodes))
+		require.Len(t, localRejectionClasses, 2, "a further global addition needs its own justification")
+
+		// BLOCK_CORRUPT is a verdict on reconsiderblock only. On
+		// submitminingsolution it describes a block this node built.
+		require.False(t, linkIsRejection(errors.NewBlockCorruptError("x"), localRejectionCodes))
+		require.True(t, linkIsRejection(errors.NewBlockCorruptError("x"), scopeBlockRevalidation.verdicts()))
+		require.Len(t, revalidationRejectionClasses, 1, "a further revalidation-only addition needs its own justification")
 	})
 }
 
@@ -1014,7 +1159,7 @@ func TestRejectionReasonBoundIsIndependentlyPinned(t *testing.T) {
 	var tErr *errors.Error
 	require.ErrorAs(t, err, &tErr)
 
-	require.NotContains(t, rejectionReason(tErr), reason,
+	require.NotContains(t, rejectionReason(tErr, localRejectionCodes), reason,
 		"a verdict 100 links down must not be reached by a walk bounded at 32")
 }
 

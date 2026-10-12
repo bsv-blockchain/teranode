@@ -33,6 +33,8 @@ import (
 //	rpcLookupError - the request NAMES an object; a not-found is that object.
 //	rpcSubmitError - the request SUBMITS a transaction; a not-found is one of
 //	                 its inputs, which is a rejection and not a lookup miss.
+//	rpcRevalidationError - the request REVALIDATES a block already resolved;
+//	                 no mapping, and a corrupt body is a verdict on that block.
 //
 // # The message is a disclosure
 //
@@ -70,27 +72,61 @@ const (
 	genericErrorMessage = "internal error"
 )
 
-// localRejectionClasses are the codes this surface treats as verdicts that the
-// shared public-cause allowlist does not carry.
+// localRejectionClasses are the codes every site on this surface treats as
+// verdicts that the shared public-cause allowlist does not carry. The shared list
+// is scoped to transaction verdicts; these are block-level.
 //
-// Exactly one, and it needs recording rather than merely allowing: the shared
-// list is scoped to transaction verdicts, and reconsiderblock needs the
-// block-level reject reason. It is admin-only - absent from rpcLimited, enforced
-// at Server.go's authorisation check - so widening the surface here does not
-// widen it for an unprivileged caller.
+// The list applies wherever this boundary runs, limited-tier methods included,
+// so each entry is justified for any caller that can reach it:
+//
+//   - ErrBlockInvalid: a consensus verdict. reconsiderblock (admin) needs it, and
+//     submitminingsolution (rpcLimited) reaches it through blockassembly's
+//     block.Valid, where its text is the miner's own consensus failure.
+//   - ErrBlockPolicyDeclined: this node's excessiveblocksize refusal. Its only
+//     producers are in blockvalidation, which only reconsiderblock consumes, and
+//     the text names a limit the operator configured.
+//
+// ErrBlockCorrupt is deliberately absent; see revalidationRejectionClasses.
 var localRejectionClasses = []*errors.Error{
 	errors.ErrBlockInvalid,
+	errors.ErrBlockPolicyDeclined,
 }
 
-// localRejectionCodes is localRejectionClasses indexed by code.
-var localRejectionCodes = func() map[errors.ERR]struct{} {
-	m := make(map[errors.ERR]struct{}, len(localRejectionClasses))
-	for _, class := range localRejectionClasses {
+// revalidationRejectionClasses are verdicts only the block-revalidation scope
+// surfaces.
+//
+// ErrBlockCorrupt says a body does not bind to its header. On reconsiderblock that
+// is a verdict on the named block (or a damaged local copy of it) and the admin
+// needs to know which check failed. On submitminingsolution it is not: the
+// block is one this node assembled, so a corrupt body is the node's own fault,
+// and blockassembly says as much. A global entry would present that fault to a
+// limited caller as though it were a verdict on what they sent.
+var revalidationRejectionClasses = []*errors.Error{
+	errors.ErrBlockCorrupt,
+}
+
+// verdictCodes is a set of codes a site treats as verdicts on top of the shared
+// allowlist. Which set applies is a property of the call site; see
+// rpcRequestScope.verdicts.
+type verdictCodes map[errors.ERR]struct{}
+
+func newVerdictCodes(classes ...*errors.Error) verdictCodes {
+	m := make(verdictCodes, len(classes))
+	for _, class := range classes {
 		m[class.Code()] = struct{}{}
 	}
 
 	return m
-}()
+}
+
+var (
+	// localRejectionCodes is localRejectionClasses indexed by code.
+	localRejectionCodes = newVerdictCodes(localRejectionClasses...)
+
+	// revalidationRejectionCodes is what the block-revalidation scope surfaces.
+	revalidationRejectionCodes = newVerdictCodes(append(append([]*errors.Error{},
+		localRejectionClasses...), revalidationRejectionClasses...)...)
+)
 
 // isRejection reports whether err is a refusal of what the caller submitted, as
 // opposed to a fault in the node. Chain-wide: a verdict wrapped in a service
@@ -101,14 +137,14 @@ var localRejectionCodes = func() map[errors.ERR]struct{} {
 // list costs eleven traversals - and this is called twice per error, from
 // publicErrorMessage and from isCallerFault. Walking once and testing each link
 // against a code set is the same answer for a fraction of the work.
-func isRejection(err error) bool {
+func isRejection(err error, local verdictCodes) bool {
 	var tErr *errors.Error
 	if !errors.As(err, &tErr) {
 		return false
 	}
 
 	for cur, depth := tErr, 0; cur != nil && depth < maxMessageChainDepth; depth++ {
-		if linkIsRejection(cur) {
+		if linkIsRejection(cur, local) {
 			return true
 		}
 
@@ -138,18 +174,18 @@ func isRejection(err error) bool {
 // breadcrumb wrapping a verdict as readily as for the verdict itself. Using it to
 // pick where the reason starts therefore started at the outermost link every time
 // and put "error validating transaction" on the wire.
-func linkIsRejection(e *errors.Error) bool {
+func linkIsRejection(e *errors.Error, local verdictCodes) bool {
 	if e == nil {
 		return false
 	}
 
-	// The shared allowlist is the authority; see localRejectionClasses for the one
-	// code this surface adds and why.
+	// The shared allowlist is the authority; local is what the site adds, see
+	// localRejectionClasses and revalidationRejectionClasses for which and why.
 	if errors.IsPublicCause(e.Code()) {
 		return true
 	}
 
-	_, ok := localRejectionCodes[e.Code()]
+	_, ok := local[e.Code()]
 
 	return ok
 }
@@ -199,7 +235,7 @@ var uninformativeVerdictText = map[string]struct{}{
 // So take both and let the caller read them. The walk starts at the outermost
 // link that is itself a rejection class, which skips the service breadcrumbs
 // above it without needing to recognise them by shape.
-func rejectionReason(e *errors.Error) string {
+func rejectionReason(e *errors.Error, local verdictCodes) string {
 	parts := make([]string, 0, maxRejectionReasonParts)
 	seen := make(map[string]struct{}, maxRejectionReasonParts)
 
@@ -234,7 +270,7 @@ func rejectionReason(e *errors.Error) string {
 		// immature-coinbase one surfaced the coinbase message and with it the
 		// store's internal batch id, and a verdict wrapping a StorageError or a
 		// NetworkError put an S3 bucket name or an internal host:port on the wire.
-		if linkIsRejection(cur) && !add(cur.Message()) {
+		if linkIsRejection(cur, local) && !add(cur.Message()) {
 			break
 		}
 
@@ -373,6 +409,12 @@ func carriesReason(msg string) bool {
 //
 // Returns "" only when err is nil, which callers must not pass.
 func publicErrorMessage(err error) string {
+	return publicErrorMessageFor(err, scopeOpaque)
+}
+
+// publicErrorMessageFor is publicErrorMessage for a site whose scope widens what
+// counts as a verdict.
+func publicErrorMessageFor(err error, scope rpcRequestScope) string {
 	if err == nil {
 		return ""
 	}
@@ -385,9 +427,11 @@ func publicErrorMessage(err error) string {
 		return err.Error()
 	}
 
+	verdicts := scope.verdicts()
+
 	switch {
-	case isRejection(tErr):
-		return sanitised(rejectionReason(tErr))
+	case isRejection(tErr, verdicts):
+		return sanitised(rejectionReason(tErr, verdicts))
 
 	case errors.Is(tErr, errors.ErrInvalidArgument):
 		// The caller's own input was wrong, and the topmost message says how.
@@ -432,7 +476,25 @@ const (
 
 	// scopeSubmit is a request that submits a transaction for acceptance.
 	scopeSubmit
+
+	// scopeBlockRevalidation is a revalidation of a block already known to exist:
+	// reconsiderblock's named block and its descendants.
+	//
+	// No not-found mapping, because the block was resolved before this site ran,
+	// so a not-found in the chain is an ancestor or a descendant. It surfaces
+	// revalidationRejectionClasses as verdicts, which no other scope does.
+	scopeBlockRevalidation
 )
+
+// verdicts is the set of codes this scope surfaces as verdicts on top of the
+// shared allowlist.
+func (s rpcRequestScope) verdicts() verdictCodes {
+	if s == scopeBlockRevalidation {
+		return revalidationRejectionCodes
+	}
+
+	return localRejectionCodes
+}
 
 // asTeranodeError converts the protobuf form of a Teranode error into the chain
 // this file reads.
@@ -488,10 +550,10 @@ func buildRPCError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string, 
 			return &bsvjson.RPCError{Code: fallbackCode, Message: prefix + missingInputsMessage}
 		}
 
-	case scopeOpaque:
+	case scopeOpaque, scopeBlockRevalidation:
 	}
 
-	return &bsvjson.RPCError{Code: fallbackCode, Message: prefix + publicErrorMessage(err)}
+	return &bsvjson.RPCError{Code: fallbackCode, Message: prefix + publicErrorMessageFor(err, scope)}
 }
 
 // isCallerFault reports whether err describes something wrong with the request
@@ -500,17 +562,21 @@ func buildRPCError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string, 
 // sendrawtransaction rejections are routine enough that logging them louder
 // would be a noise problem of its own.
 func isCallerFault(err error, scope rpcRequestScope) bool {
-	// A block failing revalidation is rare, admin-invoked and operationally
-	// significant, so it is not a caller fault for logging purposes even though it
-	// is a rejection for message purposes. reconsiderblock is absent from
-	// rpcLimited, so it cannot be a noise source - and without this the only
-	// record of the failure is a Debugf, which is off at default levels, leaving
-	// the trimmed response as the whole story.
-	if errors.Is(err, errors.ErrBlockInvalid) {
+	// A block-level failure is rare and operationally significant, so it is not a
+	// caller fault for logging purposes even when it is a rejection for message
+	// purposes: without this the only record of a failed reconsiderblock is a
+	// Debugf, off at default levels, leaving the trimmed response as the whole
+	// story. All three classes, in every scope. BLOCK_CORRUPT over a transaction
+	// verdict is the case that needs the explicit entry: its TX_INVALID link makes
+	// it a rejection below. Log-only, so applying it where submitminingsolution
+	// also sees these classes changes nothing on the wire.
+	if errors.Is(err, errors.ErrBlockInvalid) ||
+		errors.Is(err, errors.ErrBlockCorrupt) ||
+		errors.Is(err, errors.ErrBlockPolicyDeclined) {
 		return false
 	}
 
-	if isRejection(err) || errors.Is(err, errors.ErrInvalidArgument) {
+	if isRejection(err, scope.verdicts()) || errors.Is(err, errors.ErrInvalidArgument) {
 		return true
 	}
 
@@ -526,7 +592,7 @@ func isCallerFault(err error, scope rpcRequestScope) bool {
 		return errors.Is(err, errors.ErrTxNotFound)
 	case scopeSubmit:
 		return errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrTxMissingParent)
-	case scopeOpaque:
+	case scopeOpaque, scopeBlockRevalidation:
 	}
 
 	return false
@@ -580,6 +646,14 @@ func (s *RPCServer) rpcError(err error, fallbackCode bsvjson.RPCErrorCode, prefi
 // lookup site.
 func (s *RPCServer) rpcLookupError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string) *bsvjson.RPCError {
 	return s.logAndBuild(err, fallbackCode, prefix, scopeBlockLookup)
+}
+
+// rpcRevalidationError is rpcError for a revalidation of a block already resolved:
+// reconsiderblock's named block and its descendants. No not-found mapping, and
+// BLOCK_CORRUPT is surfaced as the verdict it is on this path; see
+// revalidationRejectionClasses for why nowhere else.
+func (s *RPCServer) rpcRevalidationError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string) *bsvjson.RPCError {
+	return s.logAndBuild(err, fallbackCode, prefix, scopeBlockRevalidation)
 }
 
 // rpcTxLookupError is rpcLookupError for a request that names a TRANSACTION.
