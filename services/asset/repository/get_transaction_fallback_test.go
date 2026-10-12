@@ -2,6 +2,7 @@ package repository_test
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"strings"
 	"testing"
@@ -78,10 +79,23 @@ func TestRepository_GetTransaction_AFailingUtxoStoreIsNotAMiss(t *testing.T) {
 
 		_, err := repo.GetTransaction(context.Background(), &hash)
 		require.Error(t, err)
-		require.ErrorIs(t, err, errors.ErrStorageError, "the UTXO store's failure is the answer")
+		require.ErrorIs(t, err, errors.ErrServiceError, "a node fault, answered as one")
 		require.NotErrorIs(t, err, errors.ErrNotFound)
 		require.NotErrorIs(t, err, errors.ErrBlobNotFound)
 		// The HTTP layer tells 404 from 500 by this phrase as well as by class.
+		require.False(t, strings.Contains(err.Error(), "not found"), err.Error())
+	})
+
+	t.Run("an outage whose own text says not found is still an outage", func(t *testing.T) {
+		// aerospike passes every result code but KEY_NOT_FOUND through raw, and
+		// several of their texts contain the phrase: a misconfigured namespace
+		// answers "Namespace not found". It is not a miss, and its words must not
+		// reach the HTTP layer's string match.
+		repo := repositoryWithUtxoGetError(t, fmt.Errorf("ResultCode: INVALID_NAMESPACE, Iteration: 0, InDoubt: false, Node: BB9...: Namespace not found"))
+
+		_, err := repo.GetTransaction(context.Background(), &hash)
+		require.Error(t, err)
+		require.NotErrorIs(t, err, errors.ErrNotFound)
 		require.False(t, strings.Contains(err.Error(), "not found"), err.Error())
 	})
 

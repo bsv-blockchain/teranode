@@ -365,9 +365,11 @@ func (repo *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash
 	tx, err := repo.TxStore.Get(ctx, hash.CloneBytes(), fileformat.FileTypeTx)
 	if err != nil {
 		if utxoFault != nil && (errors.Is(err, errors.ErrNotFound) || errors.Is(err, errors.ErrBlobNotFound)) {
-			// Worded without "not found": the HTTP layer matches that phrase to
-			// answer 404.
-			return nil, errors.NewServiceError("[Repository] GetTransaction: %s: the utxo store failed and the tx store has no copy", hash.String(), utxoFault)
+			// The fault itself is logged above and deliberately not wrapped here:
+			// the HTTP layer answers 404 for any error whose text says "not found",
+			// and a store fault can say exactly that ("Namespace not found" from a
+			// misconfigured aerospike) without being a miss.
+			return nil, errors.NewServiceError("[Repository] GetTransaction: %s: the utxo store failed and the tx store has no copy", hash.String())
 		}
 
 		return nil, err
