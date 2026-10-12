@@ -338,7 +338,17 @@ func (repo *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash
 		return txMeta.Tx.ExtendedBytes(), nil
 	}
 
+	// A UTXO store failure that is not a miss has to survive the fallback below.
+	// Otherwise an outage on a transaction held only in the UTXO store - any
+	// transaction seen inside a block rather than submitted here - comes back as
+	// the tx store's "not found", and callers deny a transaction this node holds.
+	var utxoFault error
+
 	if err != nil {
+		if !errors.Is(err, errors.ErrTxNotFound) && !errors.Is(err, errors.ErrNotFound) {
+			utxoFault = err
+		}
+
 		repo.logger.Warnf("[Repository] GetTransaction: %s not found in txmeta store: %v", hash.String(), err)
 	} else {
 		// The record exists but does not carry the transaction we were asked for
@@ -354,6 +364,12 @@ func (repo *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash
 
 	tx, err := repo.TxStore.Get(ctx, hash.CloneBytes(), fileformat.FileTypeTx)
 	if err != nil {
+		if utxoFault != nil && (errors.Is(err, errors.ErrNotFound) || errors.Is(err, errors.ErrBlobNotFound)) {
+			// Worded without "not found": the HTTP layer matches that phrase to
+			// answer 404.
+			return nil, errors.NewServiceError("[Repository] GetTransaction: %s: the utxo store failed and the tx store has no copy", hash.String(), utxoFault)
+		}
+
 		return nil, err
 	}
 

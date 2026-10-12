@@ -604,25 +604,17 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 	}
 	defer resp.Body.Close()
 
-	// A 404 is the asset service saying it does not hold this transaction, which
-	// is the same verdict reconsiderblock's missing block is and deserves the same
-	// answer: bitcoind reports an unknown txid as -5 with this text, not as an
-	// internal error. Collapsing every non-200 into a SERVICE_ERROR lost that
-	// distinction, so a wallet polling for a transaction that is not mined yet
-	// could not tell it apart from the asset service being down.
-	if resp.StatusCode == http.StatusNotFound {
-		// Log the URL that produced it. -5 is the strongest answer this API has,
-		// and it is derived from one remote status code with no corroboration: the
-		// path is built with an absolute reference, so it replaces any path on
-		// assetHTTPURL rather than appending, and a misrouted endpoint 404s every
-		// request. Without this line the node denies every transaction while
-		// looking healthy, because the caller-fault classification logs at debug.
-		// Nil-guarded like logAndBuild's: this package's tests build an RPCServer
-		// without one, and a diagnostic line must not be the thing that panics.
-		if s.logger != nil {
-			s.logger.Warnf("[handleGetRawTransaction] asset service reported 404 at %s", fullURL.String())
-		}
-
+	// A 404 the asset handler marks as its own is the asset service saying it does
+	// not hold this transaction, which bitcoind reports as -5 with this text, not
+	// as an internal error. A wallet polling for a transaction that is not mined
+	// yet needs to tell that apart from the asset service being down.
+	//
+	// Only a marked one. -5 is the strongest answer this API has, and an unmarked
+	// 404 is a route that did not match: the path below is an absolute reference,
+	// so it replaces any path on assetHTTPURL, and a misconfigured URL 404s every
+	// request. That falls through to the non-200 branch, which answers it as the
+	// node fault it is and logs it, with the URL, at error.
+	if resp.StatusCode == http.StatusNotFound && resp.Header.Get(util.AssetNotFoundHeader) == util.AssetNotFoundTx {
 		return nil, s.rpcTxLookupError(
 			errors.NewTxNotFoundError("tx %s not found in asset service", txHash.String()),
 			bsvjson.ErrRPCInvalidAddressOrKey, "")
@@ -630,7 +622,7 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, s.rpcError(
-			errors.NewServiceError("unexpected status code %d from asset service", resp.StatusCode),
+			errors.NewServiceError("unexpected status code %d from asset service at %s", resp.StatusCode, fullURL.String()),
 			bsvjson.ErrRPCInternal.Code, "")
 	}
 

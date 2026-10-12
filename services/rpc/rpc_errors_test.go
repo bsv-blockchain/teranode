@@ -26,6 +26,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/stretchr/testify/mock"
@@ -611,6 +612,58 @@ func TestHandleGetRawTransaction_MalformedTxidIsRefusedBeforeAnyRequest(t *testi
 			require.Equal(t, tc.message, rpcErr.Message)
 			require.Equal(t, before, requests.Load(), "nothing is sent to the asset service")
 			require.Empty(t, logger.all(), "and nothing caller-supplied reaches a log line")
+		})
+	}
+}
+
+// TestHandleGetRawTransaction_OnlyAMarkedNotFoundIsAnUnknownTx pins how a 404 from
+// the asset service is read. -5 is the strongest answer this API has, so it needs
+// the asset handler's own word that the transaction is absent
+// (util.AssetNotFoundHeader). An unmarked 404 is a route that did not match - a
+// misconfigured asset URL answers every request that way - and answering -5 for
+// it denied every transaction while the node looked healthy. With the mark there
+// to tell them apart, a routine unknown-txid poll no longer needs a WARN per
+// request.
+func TestHandleGetRawTransaction_OnlyAMarkedNotFoundIsAnUnknownTx(t *testing.T) {
+	for name, tc := range map[string]struct {
+		marked  bool
+		code    bsvjson.RPCErrorCode
+		message string
+	}{
+		"marked by the asset handler": {true, bsvjson.ErrRPCInvalidAddressOrKey, txNotFoundMessage},
+		"unmarked":                    {false, bsvjson.ErrRPCInternal.Code, genericErrorMessage},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if tc.marked {
+					w.Header().Set(util.AssetNotFoundHeader, util.AssetNotFoundTx)
+				}
+
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer server.Close()
+
+			assetURL, err := url.Parse(server.URL)
+			require.NoError(t, err)
+
+			logger := newCapturingLogger()
+			s := &RPCServer{logger: logger, assetHTTPURL: assetURL}
+			verbose := 0
+
+			_, err = handleGetRawTransaction(context.Background(), s,
+				&bsvjson.GetRawTransactionCmd{Txid: strings.Repeat("ab", 32), Verbose: &verbose}, nil)
+
+			rpcErr := requireRPCError(t, err)
+			require.Equal(t, tc.code, rpcErr.Code)
+			require.Equal(t, tc.message, rpcErr.Message)
+
+			if tc.marked {
+				require.Empty(t, logger.warnf, "an unknown txid is routine, not worth a WARN per request")
+				require.Empty(t, logger.errorf)
+			} else {
+				require.NotEmpty(t, logger.errorf, "an unmarked 404 is a node fault")
+				require.Contains(t, logger.all(), "404")
+			}
 		})
 	}
 }

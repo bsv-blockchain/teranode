@@ -33,6 +33,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
@@ -406,8 +407,10 @@ func TestHandleGetRawTransactionEdgeCases(t *testing.T) {
 	})
 
 	t.Run("HTTP server returns 404", func(t *testing.T) {
-		// Create test server that returns 404
+		// A 404 the asset handler marks as its verdict on the transaction, as the
+		// real one does; an unmarked 404 is a routing failure and not this case.
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(util.AssetNotFoundHeader, util.AssetNotFoundTx)
 			w.WriteHeader(http.StatusNotFound)
 		}))
 		defer server.Close()
