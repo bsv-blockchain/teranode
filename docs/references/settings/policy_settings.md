@@ -21,7 +21,7 @@ Policy settings control BSV Blockchain consensus rules and transaction validatio
 | MaxOrphanTxSize | int | 1000000 (1MB) | maxorphantxsize | Maximum orphan transaction size |
 | MaxScriptSizePolicy | int | 100000000 (100MB) | maxscriptsizepolicy | **CRITICAL** - Maximum script size policy |
 | MaxScriptNumLengthPolicy | int | 10000 | maxscriptnumlengthpolicy | Maximum script number length |
-| MaxOpsPerScriptPolicy | int64 | 1000000 | maxopsperscriptpolicy | Maximum operations per script |
+| MaxOpsPerScriptPolicy | int64 | 4294967295 (UINT32_MAX, matches bitcoin-sv) | maxopsperscriptpolicy | Maximum non-push operations per script |
 
 ### Multisig and Signature Limits
 
