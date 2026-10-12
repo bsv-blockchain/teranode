@@ -137,32 +137,57 @@ func (s *Store) parseBlockIDsFromSlice(v []interface{}) []uint32 {
 	return result
 }
 
-// buildDeleteAtHeightExpression creates an Aerospike expression that calculates and returns
-// the deleteAtHeight value based on record state. The expression evaluates the same logic
-// as the Lua setDeleteAtHeight function.
+// buildDeleteAtHeightExpression creates an Aerospike expression that calculates the
+// deleteAtHeight value based on record state. It mirrors the Lua setDeleteAtHeight
+// function (teranode.lua) branch by branch, and reads the CURRENT deleteAtHeight bin, so
+// callers must not null the bin before the expression runs.
 //
 // The expression returns:
-//   - newDeleteHeight (int): When DAH should be set
-//   - nil: When DAH should be cleared (with ExpWriteFlagAllowDelete this deletes the bin)
-//   - ExpUnknown: When no change is needed (with ExpWriteFlagEvalNoFail this is a no-op)
+//   - newDeleteHeight (int): DAH should be set (or raised)
+//   - ExpUnknown: no change needed (with ExpWriteFlagEvalNoFail this is a no-op)
 //
-// Logic implemented:
-//  1. If preserveUntil is set → no change (unless ignorePreserveUntil is true)
-//  2. If conflicting AND no existing DAH → set DAH
-//  3. If master record (totalExtraRecs not nil) AND allSpent AND hasBlocks AND isOnLongestChain → set DAH
-//  4. If master record AND NOT (allSpent AND hasBlocks AND isOnLongestChain) AND has existing DAH → clear DAH
-//  5. Otherwise → no change
+// It never deletes the bin: Aerospike rejects a conditional that mixes int and nil branches
+// (PARAMETER_ERROR), so clearing a stale DAH (step 5) is a separate expression,
+// buildClearDeleteAtHeightExpression, written by a second ExpWriteOp.
 //
-// Note: Pagination records (totalExtraRecs is nil) only update lastSpentState, not DAH.
-// The lastSpentState logic is handled separately via ExpWriteOp for that bin.
+// Logic implemented (same order as Lua):
+//  1. If preserveUntil is set -> no change (unless ignorePreserveUntil is true)
+//  2. If conflicting -> set DAH if there is none, otherwise no change
+//  3. If pagination record (totalExtraRecs not set) -> no change (Lua only signals here)
+//  4. If allSpent AND hasBlocks AND isOnLongestChain -> set DAH if none, raise it if lower;
+//     never lower an existing higher DAH
+//  5. Otherwise, clear an existing DAH (see buildClearDeleteAtHeightExpression)
+//
+// The retention == 0 guard is the caller's: the expression is only added when retention > 0.
+// The Lua DAHSET/DAHUNSET signals cannot be emitted from an expression; callers detect a DAH
+// change by reading the bin before and after (see processBatchResultsForSetMinedExpressions).
+//
+// The lastSpentState logic for pagination records is handled separately via ExpWriteOp for that bin.
 //
 // ignorePreserveUntil drops the preserveUntil guard (step 1). It is set only by the
 // expired-preservation path (ProcessExpiredPreservations), which clears preserveUntil in the
 // same operate call — but expressions read the pre-operate record, so the guard would otherwise
 // still see the (about-to-be-cleared) bin and short-circuit. Dropping the guard there lets the
-// eligibility check (steps 2-4) decide the DAH, restoring the "DAH set ⟹ safe to delete"
+// eligibility check (steps 2-5) decide the DAH, restoring the "DAH set => safe to delete"
 // invariant for expiring preservations.
 func (s *Store) buildDeleteAtHeightExpression(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool, ignorePreserveUntil bool) *aerospike.Expression {
+	setExp, _ := s.buildDeleteAtHeightExpressions(currentBlockHeight, blockHeightRetention, onLongestChain, ignorePreserveUntil)
+
+	return setExp
+}
+
+// buildClearDeleteAtHeightExpression returns the expression that deletes a stale
+// deleteAtHeight bin (step 5 of buildDeleteAtHeightExpression). Write it with
+// ExpWriteFlagAllowDelete|ExpWriteFlagEvalNoFail after the set expression.
+func (s *Store) buildClearDeleteAtHeightExpression(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool, ignorePreserveUntil bool) *aerospike.Expression {
+	_, clearExp := s.buildDeleteAtHeightExpressions(currentBlockHeight, blockHeightRetention, onLongestChain, ignorePreserveUntil)
+
+	return clearExp
+}
+
+// buildDeleteAtHeightExpressions builds the set/raise expression and the clear expression
+// from the same branch conditions so the two can never disagree.
+func (s *Store) buildDeleteAtHeightExpressions(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool, ignorePreserveUntil bool) (*aerospike.Expression, *aerospike.Expression) {
 	newDeleteHeight := int64(currentBlockHeight + blockHeightRetention)
 
 	// Helper expressions for readability
@@ -180,11 +205,16 @@ func (s *Store) buildDeleteAtHeightExpression(currentBlockHeight uint32, blockHe
 		preserveUntilNotSet = aerospike.ExpBoolVal(true)
 	}
 
-	// Condition: conflicting is true
-	isConflicting := aerospike.ExpEq(conflictingBin, aerospike.ExpBoolVal(true))
+	// Condition: conflicting is true. Lua treats a missing bin as false, so guard the read.
+	isConflicting := aerospike.ExpCond(
+		aerospike.ExpBinExists(fields.Conflicting.String()), aerospike.ExpEq(conflictingBin, aerospike.ExpBoolVal(true)),
+		aerospike.ExpBoolVal(false),
+	)
 
-	// Condition: existing DAH is NOT set
-	dahNotExists := aerospike.ExpNot(aerospike.ExpBinExists(fields.DeleteAtHeight.String()))
+	// Condition: existing DAH is set / NOT set
+	dahExists := aerospike.ExpBinExists(fields.DeleteAtHeight.String())
+	dahNotExists := aerospike.ExpNot(dahExists)
+	existingDAH := aerospike.ExpIntBin(fields.DeleteAtHeight.String())
 
 	// Condition: is master record (totalExtraRecs bin exists)
 	isMasterRecord := aerospike.ExpBinExists(fields.TotalExtraRecs.String())
@@ -218,29 +248,54 @@ func (s *Store) buildDeleteAtHeightExpression(currentBlockHeight uint32, blockHe
 		isOnLongestChainExp = aerospike.ExpNot(aerospike.ExpBinExists(fields.UnminedSince.String()))
 	}
 
-	// Condition: should set DAH for master record
+	// Condition: should set DAH for master record (master-ness is already established by the
+	// pagination-record branch preceding it in the conditional below)
 	shouldSetDAHMaster := aerospike.ExpAnd(
-		isMasterRecord,
 		allSpent,
 		hasBlocks,
 		isOnLongestChainExp,
 	)
 
-	// Build the main conditional expression
-	// Order matters: check most specific conditions first
-	return aerospike.ExpCond(
+	newDAH := aerospike.ExpIntVal(newDeleteHeight)
+
+	// Build the main conditional expression, in the same order as Lua setDeleteAtHeight.
+	// ExpCond evaluates its conditions lazily and in order, so bins are only read once the
+	// preceding branches have established they exist.
+	setExp := aerospike.ExpCond(
 		// If preserveUntil is set, no change
 		aerospike.ExpNot(preserveUntilNotSet), aerospike.ExpUnknown(),
 
-		// If conflicting and no existing DAH, set DAH
-		aerospike.ExpAnd(isConflicting, dahNotExists), aerospike.ExpIntVal(newDeleteHeight),
+		// Conflicting: set DAH if none, otherwise leave it alone
+		isConflicting, aerospike.ExpCond(
+			dahNotExists, newDAH,
+			aerospike.ExpUnknown(),
+		),
 
-		// If master record and should set DAH
-		shouldSetDAHMaster, aerospike.ExpIntVal(newDeleteHeight),
+		// Pagination record: no DAH change
+		aerospike.ExpNot(isMasterRecord), aerospike.ExpUnknown(),
 
-		// Default: no change
+		// Master record, eligible: set if none, raise if lower, never lower
+		shouldSetDAHMaster, aerospike.ExpCond(
+			dahNotExists, newDAH,
+			aerospike.ExpLess(existingDAH, newDAH), newDAH,
+			aerospike.ExpUnknown(),
+		),
+
+		// Default (including a stale DAH on an ineligible master): no change
 		aerospike.ExpUnknown(),
 	)
+
+	// Clear: a master record, not preserved, not conflicting, not eligible, with a DAH present.
+	clearExp := aerospike.ExpCond(
+		aerospike.ExpNot(preserveUntilNotSet), aerospike.ExpUnknown(),
+		isConflicting, aerospike.ExpUnknown(),
+		aerospike.ExpNot(isMasterRecord), aerospike.ExpUnknown(),
+		shouldSetDAHMaster, aerospike.ExpUnknown(),
+		dahExists, aerospike.ExpNilValue(),
+		aerospike.ExpUnknown(),
+	)
+
+	return setExp, clearExp
 }
 
 // SetMinedMultiWithExpressions is the batch version of SetMinedWithExpressions.
@@ -294,10 +349,10 @@ func (s *Store) SetMinedMultiWithExpressions(ctx context.Context, hashes []*chai
 		ops = append(ops, aerospike.PutOp(aerospike.NewBin(fields.UnminedSince.String(), nil)))
 	}
 
-	// Set deleteAtHeight to nil initially (will be updated by expression if needed)
-	ops = append(ops, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), nil)))
-
-	// Add deleteAtHeight expression if retention is enabled.
+	// Add deleteAtHeight expression if retention is enabled. The bin is deliberately NOT
+	// nulled first: the expression reads the existing DAH so it can raise but never lower
+	// it, clear it when no longer eligible, and leave it untouched for preserveUntil and
+	// retention 0 (matching the Lua setDeleteAtHeight).
 	// Stamp the DAH relative to the height of the block the tx is mined into
 	// (minedBlockInfo.BlockHeight), NOT the store's cached chain tip (thisBlockHeight).
 	// The cached tip lags behind the block being validated during catchup/sync; using
@@ -306,11 +361,21 @@ func (s *Store) SetMinedMultiWithExpressions(ctx context.Context, hashes []*chai
 	blockHeightRetention := s.settings.GetUtxoStoreBlockHeightRetention()
 	if blockHeightRetention > 0 {
 		dahExp := s.buildDeleteAtHeightExpression(minedBlockInfo.BlockHeight, blockHeightRetention, minedBlockInfo.OnLongestChain, false)
-		ops = append(ops, aerospike.ExpWriteOp(
-			fields.DeleteAtHeight.String(),
-			dahExp,
-			aerospike.ExpWriteFlagAllowDelete|aerospike.ExpWriteFlagEvalNoFail,
-		))
+		clearExp := s.buildClearDeleteAtHeightExpression(minedBlockInfo.BlockHeight, blockHeightRetention, minedBlockInfo.OnLongestChain, false)
+		ops = append(ops,
+			aerospike.ExpWriteOp(
+				fields.DeleteAtHeight.String(),
+				dahExp,
+				aerospike.ExpWriteFlagAllowDelete|aerospike.ExpWriteFlagEvalNoFail,
+			),
+			// A stale DAH on a no-longer-eligible master is deleted separately (see
+			// buildDeleteAtHeightExpression for why this is a second expression).
+			aerospike.ExpWriteOp(
+				fields.DeleteAtHeight.String(),
+				clearExp,
+				aerospike.ExpWriteFlagAllowDelete|aerospike.ExpWriteFlagEvalNoFail,
+			),
+		)
 	}
 
 	// Read final values after modifications (blockIDs and DAH)
@@ -368,6 +433,11 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 
 	// Collect follow-up actions for external transactions (child record DAH updates)
 	dahSetItems := make([]struct {
+		TxID           *chainhash.Hash
+		ChildCount     int
+		DeleteAtHeight uint32
+	}, 0)
+	dahUnsetItems := make([]struct {
 		TxID           *chainhash.Hash
 		ChildCount     int
 		DeleteAtHeight uint32
@@ -462,6 +532,14 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 						ChildCount     int
 						DeleteAtHeight uint32
 					}{TxID: hash, ChildCount: *state.TotalExtraRecs, DeleteAtHeight: *state.NewDeleteAtHeight})
+				} else {
+					// DAH was cleared on the master: clear it on the child records too
+					// (the Lua path does this on the DAHUNSET signal).
+					dahUnsetItems = append(dahUnsetItems, struct {
+						TxID           *chainhash.Hash
+						ChildCount     int
+						DeleteAtHeight uint32
+					}{TxID: hash, ChildCount: *state.TotalExtraRecs, DeleteAtHeight: 0})
 				}
 
 				// Update blob storage DAH (handles both set and clear cases)
@@ -539,6 +617,12 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 
 	if len(dahSetItems) > 0 {
 		if err := s.SetDAHForChildRecordsMulti(dahSetItems); err != nil {
+			postErr = errors.Join(postErr, err)
+		}
+	}
+
+	if len(dahUnsetItems) > 0 {
+		if err := s.SetDAHForChildRecordsMulti(dahUnsetItems); err != nil {
 			postErr = errors.Join(postErr, err)
 		}
 	}
