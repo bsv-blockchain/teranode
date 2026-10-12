@@ -677,10 +677,174 @@ func TestHandleGetRawTransaction_OnlyAMarkedNotFoundIsAnUnknownTx(t *testing.T) 
 // job branch, a limited-tier path miners hit routinely. It put the whole rendered
 // chain on the wire: "NOT_FOUND (3): [BlockAssembly][<jobid>] job not found".
 func TestHandleSubmitMiningSolution_StaleJobKeepsInternalsOffTheWire(t *testing.T) {
-	baMock := &blockassembly.Mock{}
-	baMock.On("SubmitMiningSolution", mock.Anything, mock.Anything).Return(overGRPC(t,
-		errors.NewNotFoundError("[BlockAssembly][%s] job not found", "cafe")))
+	rpcErr := requireRPCError(t, submitSolution(t, newCapturingLogger(), overGRPC(t,
+		errors.NewNotFoundError("[BlockAssembly][%s] job not found", miningJobID))))
+	require.Equal(t, bsvjson.ErrRPCMisc, rpcErr.Code)
+	require.Equal(t, "job not found", rpcErr.Message)
+}
 
+// miningJobID is a well-formed job id: blockassembly keys its jobs by a 32-byte hash.
+const miningJobID = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+
+// submitSolution runs handleSubmitMiningSolution against a block assembly that
+// answers err.
+func submitSolution(t *testing.T, logger ulogger.Logger, err error) error {
+	t.Helper()
+
+	baMock := &blockassembly.Mock{}
+	baMock.On("SubmitMiningSolution", mock.Anything, mock.Anything).Return(err)
+
+	s := &RPCServer{logger: logger, blockAssemblyClient: baMock}
+
+	_, handlerErr := handleSubmitMiningSolution(context.Background(), s, &bsvjson.SubmitMiningSolutionCmd{
+		MiningSolution: bsvjson.MiningSolution{ID: miningJobID, Coinbase: "00"},
+	}, nil)
+
+	return handlerErr
+}
+
+// minerFaults are blockassembly's refusals of what a miner submitted, each in the
+// shape submitMiningSolution builds (blockassembly/Server.go), with the reason the
+// miner should be shown and, where the chain carries more, text that must stay
+// off the wire.
+func minerFaults(t *testing.T) map[string]struct {
+	err    error
+	reason string
+	hidden string
+} {
+	_, parseErr := bt.NewTxFromBytes([]byte{0x01})
+	require.Error(t, parseErr)
+
+	return map[string]struct {
+		err    error
+		reason string
+		hidden string
+	}{
+		"stale candidate": {
+			err:    errors.NewProcessingError("[BlockAssembly][%s] candidate is stale: chain has already advanced past its parent", miningJobID),
+			reason: "candidate is stale: chain has already advanced past its parent",
+		},
+		"nTime below the median-time-past floor": {
+			err: errors.NewProcessingError("[BlockAssembly][%s] submitted nTime %d is below the parent chain's median-time-past floor %d, so every peer would reject the block",
+				miningJobID, 1700000000, 1700000600),
+			reason: "submitted nTime 1700000000 is below the parent chain's median-time-past floor 1700000600, so every peer would reject the block",
+		},
+		"unparseable coinbase": {
+			err:    errors.NewProcessingError("[BlockAssembly][%s] failed to convert coinbaseTx", miningJobID, parseErr),
+			reason: "failed to convert coinbaseTx",
+			hidden: parseErr.Error(),
+		},
+		"coinbase with two inputs": {
+			err:    errors.NewProcessingError("[BlockAssembly][%s] coinbase transaction must have exactly one input, got %d", miningJobID, 2),
+			reason: "coinbase transaction must have exactly one input, got 2",
+		},
+		"coinbase script length": {
+			err:    errors.NewProcessingError("[BlockAssembly][%s] bad coinbase length", miningJobID),
+			reason: "bad coinbase length",
+		},
+		"not a consensus coinbase": {
+			err:    errors.NewProcessingError("[BlockAssembly][%s] submitted coinbase transaction is not a valid coinbase", miningJobID),
+			reason: "submitted coinbase transaction is not a valid coinbase",
+		},
+		"coinbase pays to P2SH": { // validateCoinbaseForSubmission
+			err:    errors.NewBlockPolicyDeclinedError("[BlockAssembly][%s] bad-txns-vout-p2sh: coinbase pays to a P2SH output", miningJobID),
+			reason: "bad-txns-vout-p2sh: coinbase pays to a P2SH output",
+		},
+		"proof of work above target": { // model/Block.go ValidWithBinding, under the reset branch
+			err: errors.NewProcessingError("[BlockAssembly][%s][%s] invalid block", miningJobID, "0abc",
+				errors.NewProcessingError("[BLOCK][%s] error checking target difficulty", "0abc",
+					errors.NewProcessingError("block header does not meet target %d: %032x >? %032x", 1, []byte{1}, []byte{2}))),
+			reason: "invalid block",
+			hidden: "error checking target difficulty",
+		},
+		"consensus failure from block.Valid": { // the branch that keeps assembly running
+			err: errors.NewProcessingError("[BlockAssembly][%s][%s] invalid block", miningJobID, "0abc",
+				errors.NewBlockInvalidError("[BLOCK][%s] block timestamp is more than two hours in the future", "0abc")),
+			reason: "block timestamp is more than two hours in the future",
+		},
+	}
+}
+
+// TestHandleSubmitMiningSolution_MinersOwnFaultsKeepTheirReason covers every
+// refusal blockassembly makes of what a miner sent, after the gRPC hop the block
+// assembly client really makes. They are PROCESSING, which fails closed at an
+// opaque site, so the boundary answered "internal error" to a stale candidate - an
+// outcome a pool hits routinely and has to act on. Main rendered the chain.
+func TestHandleSubmitMiningSolution_MinersOwnFaultsKeepTheirReason(t *testing.T) {
+	for name, tc := range minerFaults(t) {
+		t.Run(name, func(t *testing.T) {
+			logger := newCapturingLogger()
+
+			rpcErr := requireRPCError(t, submitSolution(t, logger, overGRPC(t, tc.err)))
+			require.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code, "main's code")
+			require.Equal(t, tc.reason, rpcErr.Message)
+
+			if tc.hidden != "" {
+				require.NotContains(t, rpcErr.Message, tc.hidden, "blockassembly's own words, not what it wraps")
+			}
+
+			require.NotEmpty(t, logger.errorf,
+				"the class cannot tell a refusal from a node condition, so the chain is logged as main logged it")
+		})
+	}
+}
+
+// TestHandleSubmitMiningSolution_NodeFaultsStayInternal is the other side: a
+// blockassembly wrapper over something that is the node's fault, not the miner's.
+func TestHandleSubmitMiningSolution_NodeFaultsStayInternal(t *testing.T) {
+	for name, err := range map[string]error{
+		"storage failure adding the block": overGRPC(t,
+			errors.NewProcessingError("[BlockAssembly][%s][%s] failed to add block", miningJobID, "0abc",
+				errors.NewStorageError("error storing block at 10.4.2.17:5432"))),
+		"blockchain service unreachable adding the block": overGRPC(t,
+			errors.NewProcessingError("[BlockAssembly][%s][%s] failed to add block", miningJobID, "0abc",
+				detaillessGRPCChain())),
+		"block assembly unreachable": detaillessGRPCChain(),
+		"block assembly not ready": overGRPC(t,
+			errors.NewServiceUnavailableError("[SubmitMiningSolution] block submission listener not running")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			logger := newCapturingLogger()
+
+			rpcErr := requireRPCError(t, submitSolution(t, logger, err))
+			require.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+			require.Equal(t, genericErrorMessage, rpcErr.Message)
+			require.NotEmpty(t, logger.errorf)
+		})
+	}
+}
+
+// TestMiningSubmission_FailsClosedOnWhatItCannotRead drives the boundary directly
+// with two shapes no producer builds today, so that the scope's guards are pinned
+// rather than assumed.
+func TestMiningSubmission_FailsClosedOnWhatItCannotRead(t *testing.T) {
+	// Deeper than the walk, with the node's fault at the bottom: the scope cannot
+	// see what lies beneath, so it cannot say the chain is blockassembly's alone.
+	var deep error = errors.NewStorageError("error storing block at 10.4.2.17:5432")
+	for i := 0; i <= maxMessageChainDepth; i++ {
+		deep = errors.NewProcessingError("[BlockAssembly][%s] failed to add block", miningJobID, deep)
+	}
+
+	for name, err := range map[string]error{
+		// Only a PROCESSING top message crosses. An unclassified link is a
+		// library's text, which fails closed everywhere else; the scope allows one
+		// only beneath blockassembly's own wrapper, where it is not shown.
+		"unclassified error on top": errors.New(errors.ERR_UNKNOWN, "dial tcp 10.4.2.17:8085: connect: connection refused"),
+		"chain deeper than the walk": deep,
+	} {
+		t.Run(name, func(t *testing.T) {
+			rpcErr := buildRPCError(err, bsvjson.ErrRPCInternal.Code, "", scopeMiningSubmission)
+			require.Equal(t, genericErrorMessage, rpcErr.Message)
+		})
+	}
+}
+
+// TestHandleSubmitMiningSolution_JobIDMustBeAHash: blockassembly keys jobs by a
+// 32-byte hash and refused any other length with chainhash's bare error, which
+// fails closed. The handler checks it before the hop, as getrawtransaction checks
+// its txid.
+func TestHandleSubmitMiningSolution_JobIDMustBeAHash(t *testing.T) {
+	baMock := &blockassembly.Mock{}
 	s := &RPCServer{logger: newCapturingLogger(), blockAssemblyClient: baMock}
 
 	_, err := handleSubmitMiningSolution(context.Background(), s, &bsvjson.SubmitMiningSolutionCmd{
@@ -688,8 +852,32 @@ func TestHandleSubmitMiningSolution_StaleJobKeepsInternalsOffTheWire(t *testing.
 	}, nil)
 
 	rpcErr := requireRPCError(t, err)
-	require.Equal(t, bsvjson.ErrRPCMisc, rpcErr.Code)
-	require.Equal(t, "job not found", rpcErr.Message)
+	require.Equal(t, bsvjson.ErrRPCInvalidParameter, rpcErr.Code)
+	require.Equal(t, "id must be of length 64 (not 4)", rpcErr.Message)
+	baMock.AssertNotCalled(t, "SubmitMiningSolution", mock.Anything, mock.Anything)
+}
+
+// TestGenerate_P2SHPayoutKeepsItsReason covers generatetoaddress to a P2SH
+// address, which blockassembly's mining guard refuses under GenerateBlocks' own
+// PROCESSING wrappers (blockassembly/Server.go, generateBlock and GenerateBlocks).
+// Main rendered the chain and so carried the reason; failing closed dropped it.
+// The guard's class is a per-link verdict, so it crosses at any depth.
+func TestGenerate_P2SHPayoutKeepsItsReason(t *testing.T) {
+	bc, ba := &blockchain.Mock{}, &blockassembly.Mock{}
+	bc.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1}, nil)
+	ba.On("GenerateBlocks", mock.Anything, mock.Anything).Return(overGRPC(t,
+		errors.NewProcessingError("error generating block %d of %d", 1, 1,
+			errors.NewProcessingError("error submitting block",
+				errors.NewBlockPolicyDeclinedError("[BlockAssembly][%s] bad-txns-vout-p2sh: coinbase pays to a P2SH output", miningJobID)))))
+
+	s := &RPCServer{logger: newCapturingLogger(), blockchainClient: bc, blockAssemblyClient: ba}
+
+	address := "2N2JD6wb56AfK4tfmM6PwdVmoYk2dCKf4Br"
+	_, err := s.generateBlocksAndReturnHashes(context.Background(), 1, &address, nil)
+
+	rpcErr := requireRPCError(t, err)
+	require.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+	require.Equal(t, "bad-txns-vout-p2sh: coinbase pays to a P2SH output", rpcErr.Message)
 }
 
 // TestGenerateBlocks_FailuresKeepInternalsOffTheWire covers the three failure
@@ -1035,20 +1223,15 @@ func TestHandleReconsiderBlock_BlockVerdictsKeepTheirReasonAcrossGRPC(t *testing
 // limited callers and returns the blockassembly error bare; blockassembly wraps
 // every non-invalid block.Valid failure in PROCESSING (blockassembly/Server.go),
 // and for a block this node assembled a corrupt body is the node's own fault, not
-// a verdict on what the miner sent.
+// a verdict on what the miner sent. Its wrapper is PROCESSING like a miner's
+// refusal, so this also pins that the submission scope does not take a wrapper's
+// class for the whole chain's.
 func TestSubmitMiningSolution_CorruptBlockStaysInternal(t *testing.T) {
-	s := &RPCServer{logger: newCapturingLogger()}
-
-	reply, err := s.createMarshalledReply(1, nil, overGRPC(t,
-		errors.NewProcessingError("[BlockAssembly][%s] block is not valid", "0abc",
-			errors.NewBlockCorruptError("[BLOCK][%s] merkle root does not match", "0abc"))))
-	require.NoError(t, err)
-
-	var parsed bsvjson.Response
-	require.NoError(t, json.Unmarshal(reply, &parsed))
-	require.NotNil(t, parsed.Error)
-	require.Equal(t, bsvjson.ErrRPCInternal.Code, parsed.Error.Code)
-	require.Equal(t, genericErrorMessage, parsed.Error.Message)
+	rpcErr := requireRPCError(t, submitSolution(t, newCapturingLogger(), overGRPC(t,
+		errors.NewProcessingError("[BlockAssembly][%s][%s] invalid block", miningJobID, "0abc",
+			errors.NewBlockCorruptError("[BLOCK][%s] merkle root does not match", "0abc")))))
+	require.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+	require.Equal(t, genericErrorMessage, rpcErr.Message)
 }
 
 // reconsiderFixture is the state reconsiderblock reads: whether the block the

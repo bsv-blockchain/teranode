@@ -1815,6 +1815,14 @@ func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface
 		return nil, rpcDecodeHexError(c.MiningSolution.ID)
 	}
 
+	// Jobs are keyed by a 32-byte hash. Any other length names no job, and
+	// blockassembly refused it with chainhash's bare error, which reads as a node
+	// fault once it crosses back.
+	if len(id) != chainhash.HashSize {
+		return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInvalidParameter,
+			fmt.Sprintf("id must be of length %d (not %d)", chainhash.MaxHashStringSize, len(c.MiningSolution.ID)))
+	}
+
 	coinbase, err := hex.DecodeString(c.MiningSolution.Coinbase)
 	if err != nil {
 		return nil, rpcDecodeHexError(c.MiningSolution.Coinbase)
@@ -1839,7 +1847,8 @@ func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface
 			// breadcrumb, and this is a limited-tier path miners hit routinely.
 			return nil, bsvjson.NewRPCError(bsvjson.ErrRPCMisc, "job not found")
 		}
-		return nil, err
+
+		return nil, s.rpcMiningSubmissionError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	return true, nil

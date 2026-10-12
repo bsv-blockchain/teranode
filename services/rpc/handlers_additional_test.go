@@ -6054,9 +6054,15 @@ func TestHandleSubmitMiningSolutionComprehensive(t *testing.T) {
 			},
 		}
 
+		// The site classifies the failure itself (rpcMiningSubmissionError): a
+		// service error is the node's, so its text stays off the wire.
 		_, err := handleSubmitMiningSolution(context.Background(), s, cmd, nil)
 		require.Error(t, err)
-		assert.Equal(t, expectedError, err)
+
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		require.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		require.Equal(t, genericErrorMessage, rpcErr.Message)
 	})
 
 	t.Run("nil block assembly client", func(t *testing.T) {

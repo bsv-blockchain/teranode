@@ -85,9 +85,12 @@ const (
 //   - ErrBlockInvalid: a consensus verdict. reconsiderblock (admin) needs it, and
 //     submitminingsolution (rpcLimited) reaches it through blockassembly's
 //     block.Valid, where its text is the miner's own consensus failure.
-//   - ErrBlockPolicyDeclined: this node's excessiveblocksize refusal. Its only
-//     producers are in blockvalidation, which only reconsiderblock consumes, and
-//     the text names a limit the operator configured.
+//   - ErrBlockPolicyDeclined: a refusal under this node's local policy. In
+//     blockvalidation it is the excessiveblocksize limit, which only
+//     reconsiderblock consumes, and the text names a limit the operator
+//     configured. In blockassembly it is the mining guard against a coinbase
+//     that pays to P2SH, reached by submitminingsolution and generatetoaddress,
+//     and the text names the submitter's own payout.
 //
 // ErrBlockCorrupt is deliberately absent; see revalidationRejectionClasses.
 var localRejectionClasses = []*errors.Error{
@@ -454,6 +457,9 @@ func publicErrorMessageFor(err error, scope rpcRequestScope) string {
 		// producer ever nests one, this must move to a per-link test or it will
 		// read a wrapper's text instead.
 		return sanitised(tErr.Message())
+
+	case scope == scopeMiningSubmission && isAssemblyRefusal(tErr):
+		return sanitised(tErr.Message())
 	}
 
 	// A fault in the node. None of it is the caller's business, and this is
@@ -504,6 +510,14 @@ const (
 	// so a not-found in the chain is an ancestor or a descendant. It surfaces
 	// revalidationRejectionClasses as verdicts, which no other scope does.
 	scopeBlockRevalidation
+
+	// scopeMiningSubmission is a mining solution handed to blockassembly. Its
+	// refusals of what the miner sent - a stale candidate, an nTime below the
+	// floor, a malformed coinbase, a proof of work above target - are PROCESSING
+	// errors in blockassembly's own words, which every other scope treats as the
+	// node's fault. Here, and only while nothing beneath says otherwise, the top
+	// message is shown; see isAssemblyRefusal.
+	scopeMiningSubmission
 )
 
 // verdicts is the set of codes this scope surfaces as verdicts on top of the
@@ -514,6 +528,43 @@ func (s rpcRequestScope) verdicts() verdictCodes {
 	}
 
 	return localRejectionCodes
+}
+
+// isAssemblyRefusal reports whether err is blockassembly refusing a submission in
+// its own words: a PROCESSING error with nothing beneath it but more of its own
+// breadcrumbs and unclassified library errors.
+//
+// The class cannot tell a refusal of the miner's input from a node condition such
+// as "no current best block yet" - both are PROCESSING, and main showed both - so
+// this decides what is safe to show, not whose fault it was. The top message is
+// blockassembly's, built from the job id, a block hash and numbers. What it wraps
+// is not shown, and any other class beneath it means something else failed: a
+// corrupt body on a block this node assembled, a storage or network fault, or a
+// gRPC status with no details, whose text carries the dial target.
+func isAssemblyRefusal(e *errors.Error) bool {
+	if e.Code() != errors.ERR_PROCESSING {
+		return false
+	}
+
+	for cur, depth := e, 0; depth < maxMessageChainDepth; depth++ {
+		if code := cur.Code(); code != errors.ERR_PROCESSING && code != errors.ERR_UNKNOWN {
+			return false
+		}
+
+		wrapped := cur.WrappedErr()
+		if wrapped == nil {
+			return true
+		}
+
+		next, ok := wrapped.(*errors.Error)
+		if !ok {
+			return false
+		}
+
+		cur = next
+	}
+
+	return false
 }
 
 // asTeranodeError converts the protobuf form of a Teranode error into the chain
@@ -575,7 +626,7 @@ func buildRPCError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string, 
 			return &bsvjson.RPCError{Code: fallbackCode, Message: prefix + missingInputsMessage}
 		}
 
-	case scopeOpaque, scopeCallerInput, scopeBlockRevalidation:
+	case scopeOpaque, scopeCallerInput, scopeBlockRevalidation, scopeMiningSubmission:
 	}
 
 	return &bsvjson.RPCError{Code: fallbackCode, Message: prefix + publicErrorMessageFor(err, scope)}
@@ -635,6 +686,10 @@ func isCallerFault(err error, scope rpcRequestScope) bool {
 		// The site parsed the caller's argument and nothing else.
 		return true
 	case scopeOpaque, scopeBlockRevalidation:
+	case scopeMiningSubmission:
+		// Error, as main logged it: the class that lets a refusal's text cross is
+		// shared with node conditions, and a proof of work above target resets
+		// block assembly.
 	}
 
 	return false
@@ -724,6 +779,13 @@ func (s *RPCServer) rpcTxLookupError(err error, fallbackCode bsvjson.RPCErrorCod
 // as bitcoind reports it: the site's rejection code with "Missing inputs".
 func (s *RPCServer) rpcSubmitError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string) *bsvjson.RPCError {
 	return s.logAndBuild(err, fallbackCode, prefix, scopeSubmit)
+}
+
+// rpcMiningSubmissionError is rpcError for submitminingsolution: blockassembly's
+// own reason for refusing the solution is shown, and nothing it wraps; see
+// scopeMiningSubmission.
+func (s *RPCServer) rpcMiningSubmissionError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string) *bsvjson.RPCError {
+	return s.logAndBuild(err, fallbackCode, prefix, scopeMiningSubmission)
 }
 
 // rpcInputError is rpcError for a site that parses the caller's own argument with

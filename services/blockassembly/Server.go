@@ -1772,8 +1772,14 @@ func validateCoinbaseForSubmission(jobID string, coinbaseTx *bt.Tx) error {
 	// pool branch: bitcoin-sv's generateBlocks carries the identical guard on the
 	// generate/generatetoaddress path (rpc/mining.cpp:199), so guarding here keeps
 	// GenerateBlocks in parity with upstream rather than making Teranode stricter.
+	//
+	// Classed as a local policy refusal, which is what it is, rather than PROCESSING,
+	// which reads as this node's own fault: the RPC boundary shows a policy refusal's
+	// reason to the submitter at any depth, and on generatetoaddress this arrives
+	// under two of GenerateBlocks' wrappers. Nothing branches on the class of a
+	// submission error, and both classes map to the same gRPC status.
 	if coinbaseHasP2SHOutput(coinbaseTx) {
-		return errors.NewProcessingError("[BlockAssembly][%s] bad-txns-vout-p2sh: coinbase pays to a P2SH output", jobID)
+		return errors.NewBlockPolicyDeclinedError("[BlockAssembly][%s] bad-txns-vout-p2sh: coinbase pays to a P2SH output", jobID)
 	}
 
 	return nil
