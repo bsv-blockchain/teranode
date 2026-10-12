@@ -3738,23 +3738,24 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 			}
 		}
 	} else {
-		// Not on longest chain: clear delete_at_height, set locked = false
+		// Not on longest chain. Aerospike's setMined always runs setDeleteAtHeight after
+		// updating the block list and unmined_since, so the DAH is re-evaluated rather than
+		// nulled: a fully spent tx that is still mined on the main chain (unmined_since NULL)
+		// keeps/bumps its DAH, anything else loses it. With retention 0 Lua leaves the DAH alone.
 		if minedBlockInfo.UnsetMined {
-			// UnsetMined path (block invalidation): unlock and clear delete_at_height
-			// for all affected transactions, then set unmined_since only for those
-			// with zero remaining block_ids.
+			// UnsetMined path (block invalidation): unlock, then set unmined_since only for
+			// those with zero remaining block_ids.
 			// This mirrors the aerospike Lua which sets unmined_since = currentBlockHeight
 			// when #blocks == 0 after removing the block_id.
 			// Use the store's current block height (not the invalidated block's height)
 			// to match Aerospike's setMined UDF behavior.
 			currentBlockHeight := s.GetBlockHeight() + 1
 
-			// Step 1: Unlock and clear delete_at_height for all affected transactions
+			// Step 1: Unlock all affected transactions
 			inClause3, inArgs3 := buildINClause(existingHashBytes, 1)
 			qUpdate := fmt.Sprintf(`
 				UPDATE transactions
 				SET locked = false
-				   ,delete_at_height = NULL
 				WHERE hash IN %s
 			`, inClause3)
 			if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
@@ -3785,10 +3786,42 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 			inClause3, inArgs3 := buildINClause(existingHashBytes, 1)
 			qUpdate := fmt.Sprintf(`
 				UPDATE transactions
-				SET locked = false, delete_at_height = NULL
+				SET locked = false
 				WHERE hash IN %s
 			`, inClause3)
 			if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
+				return nil, errors.NewStorageError(errSQLUpdatingTransactions, err)
+			}
+		}
+
+		if retention > 0 {
+			// Mirrors aerospike Lua setDeleteAtHeight for a tx that is not (newly) on the longest chain:
+			// 1. If preserve_until is set -> don't touch DAH
+			// 2. If unmined_since is NULL (mined on the main chain) and all UTXOs are spent ->
+			//    set the DAH, or bump it forward if it is lower than the new value
+			// 3. Otherwise -> clear DAH
+			// The tx has at least one block here, except after UnsetMined removed its last one;
+			// that case has just been given an unmined_since above, so it falls into 3.
+			inClause3c, inArgs3c := buildINClause(existingHashBytes, 2)
+			qDAH := fmt.Sprintf(`
+				UPDATE transactions
+				SET delete_at_height = CASE
+				        WHEN preserve_until IS NOT NULL THEN delete_at_height
+				        WHEN unmined_since IS NULL
+				             AND NOT EXISTS (
+				                 SELECT 1 FROM outputs o
+				                 WHERE o.transaction_id = transactions.id AND o.spending_data IS NULL
+				             )
+				             THEN CASE
+				                 WHEN delete_at_height IS NULL OR delete_at_height < $1 THEN $1
+				                 ELSE delete_at_height
+				             END
+				        ELSE NULL
+				    END
+				WHERE hash IN %s
+			`, inClause3c)
+			args := append([]interface{}{newDAH}, inArgs3c...)
+			if _, err = txn.ExecContext(ctx, qDAH, args...); err != nil {
 				return nil, errors.NewStorageError(errSQLUpdatingTransactions, err)
 			}
 		}
