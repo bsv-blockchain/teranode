@@ -56,6 +56,10 @@ type txInpointsBucket struct {
 	m      *swiss.Map[chainhash.Hash, uint64]
 	chunks [][]byte // released by Clear
 	cur    int      // chunk being filled
+	// hint is the bytes the last cleared generation used; the first chunk of the
+	// next fill takes that size, so a refill of about the same size fits in one
+	// chunk instead of a doubling series that holds up to twice what it uses
+	hint int
 }
 
 const (
@@ -145,7 +149,7 @@ func (b *txInpointsBucket) copyRecord(dst []byte, hash chainhash.Hash) ([]byte, 
 // to write them to; the caller holds the bucket lock.
 func (b *txInpointsBucket) alloc(size int) (uint64, []byte) {
 	if len(b.chunks) == 0 || len(b.chunks[b.cur])+size > cap(b.chunks[b.cur]) {
-		next := txInpointsFirstChunk
+		next := max(txInpointsFirstChunk, b.hint)
 
 		if len(b.chunks) > 0 {
 			next = min(2*cap(b.chunks[b.cur]), txInpointsMaxChunk)
@@ -502,6 +506,8 @@ func (s *SplitTxInpointsMap) MoveBucketFrom(src *SplitTxInpointsMap, bucket uint
 // currentTxMap double buffer, and a retired half that kept its chunks held a
 // whole block's records next to the current half's: about twice the map at
 // steady state. Chunks hold no pointers, so the GC frees them without scanning.
+// Each bucket keeps only how many bytes it used, to size the next fill's first
+// chunk (see txInpointsBucket.hint).
 func (s *SplitTxInpointsMap) Clear() {
 	for i := range s.buckets {
 		b := &s.buckets[i]
@@ -510,6 +516,11 @@ func (s *SplitTxInpointsMap) Clear() {
 
 		if b.m != nil {
 			b.m.Clear()
+		}
+
+		b.hint = 0
+		for _, c := range b.chunks {
+			b.hint += len(c)
 		}
 
 		b.chunks = nil

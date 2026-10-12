@@ -1204,3 +1204,40 @@ func TestSplitTxInpointsMap_PanicWhileStoringReleasesTheBucket(t *testing.T) {
 		})
 	}
 }
+
+// TestSplitTxInpointsMap_RefillAfterClearHasLittleSlack pins that a half refilled
+// after Clear sizes its arena from the generation before: a bucket that grew by
+// doubling chunks held up to twice what it used, which at steady state cost more
+// than the pointer map this replaced.
+func TestSplitTxInpointsMap_RefillAfterClearHasLittleSlack(t *testing.T) {
+	m := NewSplitTxInpointsMap(64)
+
+	fill := func() {
+		for i := uint64(0); i < 64_000; i++ {
+			m.Set(arenaHash(i), buildInpoints(shapeThreeParents, i))
+		}
+	}
+
+	fill()
+	m.Clear()
+	fill()
+
+	used, retained := m.usedBytes(), m.retainedBytes()
+	require.LessOrEqual(t, float64(retained), 1.1*float64(used), "retained %d for %d used", retained, used)
+
+	// a smaller generation after it: the hint follows the last generation, so the
+	// spike is not held beyond one more fill
+	m.Clear()
+
+	for i := uint64(0); i < 640; i++ {
+		m.Set(arenaHash(i), buildInpoints(shapeThreeParents, i))
+	}
+
+	m.Clear()
+
+	for i := uint64(0); i < 640; i++ {
+		m.Set(arenaHash(i), buildInpoints(shapeThreeParents, i))
+	}
+
+	require.Less(t, m.retainedBytes(), used/20)
+}
