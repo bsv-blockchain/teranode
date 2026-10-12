@@ -7340,9 +7340,23 @@
 <tr>
 <td>ConcurrencyGetLegacyBlockReader</td>
 <td>int</td>
-<td>-1</td>
+<td>0</td>
 <td>asset_concurrency_get_legacy_block_reader</td>
-<td>Rate limit for GetLegacyBlockReader (default: NumCPU)</td>
+<td>Concurrent legacy block streams for anonymous callers (default: unlimited; the cap is opt-in because the permit is held for the whole stream)</td>
+</tr>
+<tr>
+<td>ConcurrencyGetLegacyBlockReaderPeer</td>
+<td>int</td>
+<td>0</td>
+<td>asset_concurrency_get_legacy_block_reader_peer</td>
+<td>Concurrent legacy block streams for this node's own legacy peer server (pushBlockMsg); only used when asset_legacyPeerPoolToken is set (default: unlimited)</td>
+</tr>
+<tr>
+<td>LegacyPeerPoolToken</td>
+<td>string</td>
+<td>""</td>
+<td>asset_legacyPeerPoolToken</td>
+<td>Shared secret the legacy service sends in X-Teranode-Internal-Token to use the peer pool; set the same value on legacy and Asset. Empty disables the peer pool. Redacted in settings output</td>
 </tr>
 <tr>
 <td>SubtreeDataStreamingChunkSize</td>
