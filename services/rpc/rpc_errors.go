@@ -31,6 +31,8 @@ import (
 //
 //	rpcError       - no reclassification, the site's code stands. The default.
 //	rpcLookupError - the request NAMES an object; a not-found is that object.
+//	                 rpcTxLookupError and rpcHeightLookupError name a
+//	                 transaction and a height.
 //	rpcSubmitError - the request SUBMITS a transaction; a not-found is one of
 //	                 its inputs, which is a rejection and not a lookup miss.
 //	rpcRevalidationError - the request REVALIDATES a block already resolved;
@@ -63,6 +65,7 @@ const maxMessageChainDepth = 32
 // implementations.
 const (
 	blockNotFoundMessage = "Block not found"
+	heightOutOfRange     = "Block height out of range"
 	txNotFoundMessage    = "No such mempool or blockchain transaction"
 	missingInputsMessage = "Missing inputs"
 
@@ -471,6 +474,10 @@ const (
 	// scopeBlockLookup is a request that names a BLOCK to fetch or act on.
 	scopeBlockLookup
 
+	// scopeHeightLookup is a request that names a block by HEIGHT. A height with
+	// no block is a parameter out of range in svnode, not an unknown block.
+	scopeHeightLookup
+
 	// scopeTxLookup is a request that names a TRANSACTION.
 	//
 	// Split from the block case rather than sharing one lookup scope. A single
@@ -545,6 +552,11 @@ func buildRPCError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string, 
 			return &bsvjson.RPCError{Code: bsvjson.ErrRPCInvalidAddressOrKey, Message: blockNotFoundMessage}
 		}
 
+	case scopeHeightLookup:
+		if errors.Is(err, errors.ErrBlockNotFound) {
+			return &bsvjson.RPCError{Code: bsvjson.ErrRPCInvalidParameter, Message: heightOutOfRange}
+		}
+
 	case scopeTxLookup:
 		if errors.Is(err, errors.ErrTxNotFound) {
 			return &bsvjson.RPCError{Code: bsvjson.ErrRPCInvalidAddressOrKey, Message: txNotFoundMessage}
@@ -611,6 +623,8 @@ func isCallerFault(err error, scope rpcRequestScope) bool {
 		// revalidation failures with no error-level trace at all.
 		return errors.Is(err, errors.ErrBlockNotFound)
 
+	case scopeHeightLookup:
+		return errors.Is(err, errors.ErrBlockNotFound)
 	case scopeTxLookup:
 		return errors.Is(err, errors.ErrTxNotFound)
 	case scopeSubmit:
@@ -689,6 +703,13 @@ func (s *RPCServer) rpcLookupError(err error, fallbackCode bsvjson.RPCErrorCode,
 // revalidationRejectionClasses for why nowhere else.
 func (s *RPCServer) rpcRevalidationError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string) *bsvjson.RPCError {
 	return s.logAndBuild(err, fallbackCode, prefix, scopeBlockRevalidation)
+}
+
+// rpcHeightLookupError is rpcLookupError for a request that names a block by
+// HEIGHT: a height with no block is answered as svnode answers it, -8 "Block
+// height out of range".
+func (s *RPCServer) rpcHeightLookupError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string) *bsvjson.RPCError {
+	return s.logAndBuild(err, fallbackCode, prefix, scopeHeightLookup)
 }
 
 // rpcTxLookupError is rpcLookupError for a request that names a TRANSACTION.

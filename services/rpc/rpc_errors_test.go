@@ -516,6 +516,56 @@ func TestLookupError_NotFoundMatchesBitcoind(t *testing.T) {
 		"the mapped message is verbatim so callers porting from bitcoind match on it")
 }
 
+// TestHandleGetBlockByHeight_AnswersAsSvnode pins getblockbyheight's two
+// outcomes. A height with no block is a parameter out of range in svnode
+// (blockchain.cpp, -8 "Block height out of range"), not an unknown block: the
+// caller named a height, not a block. A failing store is the node's fault and
+// says so.
+func TestHandleGetBlockByHeight_AnswersAsSvnode(t *testing.T) {
+	verbosity := uint32(1)
+
+	for name, tc := range map[string]struct {
+		err      error
+		code     bsvjson.RPCErrorCode
+		message  string
+		errorLog bool
+	}{
+		"no block at that height": {
+			err: errors.NewBlockNotFoundError("[Blockchain] block not found at height",
+				errors.NewBlockNotFoundError("failed to get block by height for height %d", 1_000_000)),
+			code:    bsvjson.ErrRPCInvalidParameter,
+			message: "Block height out of range",
+		},
+		"store failing": {
+			err:      errors.NewStorageError("failed to get block by height", fmt.Errorf("dial tcp 10.0.3.4:5432: connect: connection refused")),
+			code:     bsvjson.ErrRPCInternal.Code,
+			message:  genericErrorMessage,
+			errorLog: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mockClient := &blockchain.Mock{}
+			mockClient.On("GetBlockByHeight", mock.Anything, mock.Anything).Return(nil, overGRPC(t, tc.err))
+
+			logger := newCapturingLogger()
+			s := &RPCServer{logger: logger, blockchainClient: mockClient}
+
+			_, err := handleGetBlockByHeight(context.Background(), s,
+				&bsvjson.GetBlockByHeightCmd{Height: 1_000_000, Verbosity: &verbosity}, nil)
+
+			rpcErr := requireRPCError(t, err)
+			require.Equal(t, tc.code, rpcErr.Code)
+			require.Equal(t, tc.message, rpcErr.Message)
+
+			if tc.errorLog {
+				require.NotEmpty(t, logger.errorf)
+			} else {
+				require.Empty(t, logger.errorf, "a height above the tip is the caller's mistake")
+			}
+		})
+	}
+}
+
 func TestLookupError_TxNotFoundMatchesBitcoind(t *testing.T) {
 	rpcErr := buildRPCError(errors.NewTxNotFoundError("no tx"), bsvjson.ErrRPCVerify, "", scopeTxLookup)
 

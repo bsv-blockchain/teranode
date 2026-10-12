@@ -1345,7 +1345,16 @@ func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_a
 
 	block, err := b.store.GetBlockByHeight(ctx, request.Height)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] block not found at height", err))
+		// Only a genuine miss is reported as one. The store already tells a height
+		// with no block (BLOCK_NOT_FOUND) from a failing query (STORAGE_ERROR), and
+		// rewrapping both as not-found made a database outage read as a missing
+		// block to every caller. The miss keeps this wrapper's text because the
+		// asset service tells 404 from 500 by matching "not found" in it.
+		if errors.Is(err, errors.ErrBlockNotFound) {
+			return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] block not found at height", err))
+		}
+
+		return nil, errors.WrapGRPC(err)
 	}
 
 	subtreeHashes := make([][]byte, len(block.Subtrees))

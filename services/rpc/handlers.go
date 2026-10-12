@@ -187,7 +187,7 @@ func handleGetBlockByHeight(ctx context.Context, s *RPCServer, cmd interface{}, 
 	// Load the raw block bytes from the database.
 	b, err := s.blockchainClient.GetBlockByHeight(ctx, c.Height)
 	if err != nil {
-		return nil, s.rpcLookupError(err, bsvjson.ErrRPCInternal.Code, "")
+		return nil, s.rpcHeightLookupError(err, bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	return s.blockToJSON(ctx, b, *c.Verbosity)
