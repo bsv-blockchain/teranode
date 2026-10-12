@@ -413,41 +413,72 @@ func TestPersistBlock_TwoPhaseStreaming(t *testing.T) {
 
 // TestCreateSubtreeDataFileStreaming_RecreatesInvalidExistingFile covers the reject side of
 // validateSubtreeData: an existing subtreeData file that fails validation is deleted and rebuilt
-// from the UTXO store, not reused.
+// from the UTXO store, not reused. A short file is one of them (issue 1917): reused, it would get
+// DAH 0 and phase 2 would fail on its missing tail on every attempt.
 func TestCreateSubtreeDataFileStreaming_RecreatesInvalidExistingFile(t *testing.T) {
-	block, _, extendedTxs, mockUTXOStore, subtreeStore, blockStore, blockchainClient, tSettings := setup(t)
+	cases := []struct {
+		name string
+		cut  func(t *testing.T, good []byte, extendedTxs []*bt.Tx) []byte
+	}{
+		{
+			name: "cut inside the last transaction's lock time",
+			cut: func(_ *testing.T, good []byte, _ []*bt.Tx) []byte {
+				return good[:len(good)-3]
+			},
+		},
+		{
+			name: "cut on the last transaction's boundary",
+			cut: func(t *testing.T, good []byte, extendedTxs []*bt.Tx) []byte {
+				last := extendedTxs[len(extendedTxs)-1].ExtendedBytes()
+				require.True(t, bytes.HasSuffix(good, last), "subtreeData should end with the last extended transaction")
 
-	key := block.Subtrees[0][:]
+				return good[:len(good)-len(last)]
+			},
+		},
+		{
+			name: "empty file",
+			cut: func(_ *testing.T, _ []byte, _ []*bt.Tx) []byte {
+				return []byte{}
+			},
+		},
+	}
 
-	good, err := subtreeStore.Get(t.Context(), key, fileformat.FileTypeSubtreeData)
-	require.NoError(t, err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			block, _, extendedTxs, mockUTXOStore, subtreeStore, blockStore, blockchainClient, tSettings := setup(t)
 
-	// Cut inside the last transaction's lock time, which validation rejects.
-	require.NoError(t, subtreeStore.Del(t.Context(), key, fileformat.FileTypeSubtreeData))
-	require.NoError(t, subtreeStore.Set(t.Context(), key, fileformat.FileTypeSubtreeData, good[:len(good)-3]))
+			key := block.Subtrees[0][:]
 
-	persister := New(t.Context(), ulogger.TestLogger{}, tSettings, blockStore, subtreeStore, mockUTXOStore, blockchainClient)
+			good, err := subtreeStore.Get(t.Context(), key, fileformat.FileTypeSubtreeData)
+			require.NoError(t, err)
 
-	require.NoError(t, persister.CreateSubtreeDataFileStreaming(t.Context(), *block.Subtrees[0], block, 0))
+			require.NoError(t, subtreeStore.Del(t.Context(), key, fileformat.FileTypeSubtreeData))
+			require.NoError(t, subtreeStore.Set(t.Context(), key, fileformat.FileTypeSubtreeData, tc.cut(t, good, extendedTxs)))
 
-	mockUTXOStore.AssertCalled(t, "BatchDecorate", mock.Anything, mock.Anything, mock.Anything)
+			persister := New(t.Context(), ulogger.TestLogger{}, tSettings, blockStore, subtreeStore, mockUTXOStore, blockchainClient)
 
-	rebuilt, err := subtreeStore.Get(t.Context(), key, fileformat.FileTypeSubtreeData)
-	require.NoError(t, err)
+			require.NoError(t, persister.CreateSubtreeDataFileStreaming(t.Context(), *block.Subtrees[0], block, 0))
 
-	subtreeBytes, err := subtreeStore.Get(t.Context(), key, fileformat.FileTypeSubtree)
-	require.NoError(t, err)
+			mockUTXOStore.AssertCalled(t, "BatchDecorate", mock.Anything, mock.Anything, mock.Anything)
 
-	subtree, err := subtreepkg.NewSubtreeFromBytes(subtreeBytes)
-	require.NoError(t, err)
+			rebuilt, err := subtreeStore.Get(t.Context(), key, fileformat.FileTypeSubtreeData)
+			require.NoError(t, err)
 
-	subtreeData, err := subtreepkg.NewSubtreeDataFromBytes(subtree, rebuilt)
-	require.NoError(t, err)
-	require.Len(t, subtreeData.Txs, len(extendedTxs))
+			subtreeBytes, err := subtreeStore.Get(t.Context(), key, fileformat.FileTypeSubtree)
+			require.NoError(t, err)
 
-	for i, tx := range subtreeData.Txs {
-		require.NotNil(t, tx, "transaction at index %d should not be nil", i)
-		require.Equal(t, extendedTxs[i].TxIDChainHash().String(), tx.TxIDChainHash().String())
+			subtree, err := subtreepkg.NewSubtreeFromBytes(subtreeBytes)
+			require.NoError(t, err)
+
+			subtreeData, err := subtreepkg.NewSubtreeDataFromBytes(subtree, rebuilt)
+			require.NoError(t, err)
+			require.Len(t, subtreeData.Txs, len(extendedTxs))
+
+			for i, tx := range subtreeData.Txs {
+				require.NotNil(t, tx, "transaction at index %d should not be nil", i)
+				require.Equal(t, extendedTxs[i].TxIDChainHash().String(), tx.TxIDChainHash().String())
+			}
+		})
 	}
 }
 
@@ -529,11 +560,15 @@ func smallTx(t *testing.T, prevHash chainhash.Hash, prevIndex uint32, seed byte)
 	return tx
 }
 
-// TestValidateSubtreeData_MatchesGoSubtree pins validateSubtreeData to the accept/reject
-// behaviour of subtreepkg.NewSubtreeDataFromReader, which it replaces on the existing-file
-// path. A divergence either way changes which subtreeData files the persister deletes and
-// recreates.
-func TestValidateSubtreeData_MatchesGoSubtree(t *testing.T) {
+// TestValidateSubtreeData_MatchesGoSubtreePlusMissingTxs pins validateSubtreeData to the
+// accept/reject behaviour of subtreepkg.NewSubtreeDataFromReader, which it replaces on the
+// existing-file path, followed by model.MissingSubtreeDataTxs with the placeholder at index 0
+// exempt, as the catchup fetcher runs them. A divergence either way changes which subtreeData
+// files the persister deletes and recreates.
+//
+// Rows marked short are the ones the reader alone accepts and the completeness check rejects:
+// a file that ends on a transaction or field boundary before the last node (issue 1917).
+func TestValidateSubtreeData_MatchesGoSubtreePlusMissingTxs(t *testing.T) {
 	coinbase := smallTx(t, chainhash.Hash{}, 0xffffffff, 0xcb)
 
 	txs := make([]*bt.Tx, 4)
@@ -586,6 +621,7 @@ func TestValidateSubtreeData_MatchesGoSubtree(t *testing.T) {
 		data    []byte
 		readErr error // returned by the reader once data is exhausted, in place of io.EOF
 		valid   bool
+		short   bool // the go-subtree reader accepts it, MissingSubtreeDataTxs does not
 	}{
 		{name: "valid extended", subtree: plain, data: full, valid: true},
 		{name: "valid non-extended", subtree: plain, data: concat(false, txs...), valid: true},
@@ -605,15 +641,23 @@ func TestValidateSubtreeData_MatchesGoSubtree(t *testing.T) {
 		{name: "unexpected EOF on a transaction boundary", subtree: plain, data: concat(true, txs[0]), readErr: io.ErrUnexpectedEOF, valid: false},
 		{name: "no nodes", subtree: &subtreepkg.Subtree{}, data: full, valid: false},
 
-		// Shared go-subtree behaviour, pinned rather than endorsed. Issue 1917 tracks rejecting
-		// a file that ends before the last node.
-		{name: "truncated on a transaction boundary", subtree: plain, data: concat(true, txs[0], txs[1]), valid: true},
-		{name: "empty file", subtree: plain, valid: true},
-		{name: "ends inside a transaction on a field boundary", subtree: plain, data: []byte{0x01, 0x00, 0x00, 0x00, 0xff}, valid: true},
+		// go-bt returns a clean io.EOF when the stream ends where a transaction or a field
+		// starts, so the reader stops there without having seen every node.
+		{name: "truncated on a transaction boundary", subtree: plain, data: concat(true, txs[0], txs[1]), short: true},
+		{name: "empty file", subtree: plain, short: true},
+		{name: "ends inside a transaction on a field boundary", subtree: plain, data: []byte{0x01, 0x00, 0x00, 0x00, 0xff}, short: true},
 		// go-bt wraps this EOF (script length read, no script bytes) with pkg/errors.
-		{name: "ends after a script length", subtree: plain, data: append(append([]byte{0x01, 0x00, 0x00, 0x00, 0x01}, make([]byte, 36)...), 0x05), valid: true},
+		{name: "ends after a script length", subtree: plain, data: append(append([]byte{0x01, 0x00, 0x00, 0x00, 0x01}, make([]byte, 36)...), 0x05), short: true},
+		{name: "placeholder with an empty file", subtree: withPlaceholder, short: true},
+		{name: "placeholder with only the coinbase in file", subtree: withPlaceholder, data: concat(true, coinbase), short: true},
+		{name: "placeholder without coinbase, last node missing", subtree: withPlaceholder, data: concat(true, txs[1], txs[2]), short: true},
+
+		// Shared go-subtree behaviour, pinned rather than endorsed.
+		// Every node is seen before the clean EOF. Phase 2 reads Length() transactions and never
+		// reaches the partial one.
+		{name: "complete, then ends inside a trailing transaction on a field boundary", subtree: plain, data: append(concat(true, txs...), 0x01, 0x00, 0x00, 0x00, 0xff), valid: true},
 		// The coinbase skip keys on txIndex == 1, not on node 0 being the placeholder.
-		{name: "coinbase second without a placeholder", subtree: plain, data: concat(true, txs[0], coinbase), valid: true},
+		{name: "coinbase second without a placeholder", subtree: plain, data: concat(true, txs[0], coinbase, txs[1], txs[2], txs[3]), valid: true},
 	}
 
 	for _, tc := range cases {
@@ -626,10 +670,16 @@ func TestValidateSubtreeData_MatchesGoSubtree(t *testing.T) {
 				return io.MultiReader(bytes.NewReader(tc.data), iotest.ErrReader(tc.readErr))
 			}
 
-			_, refErr := subtreepkg.NewSubtreeDataFromReader(tc.subtree, newReader())
+			data, refErr := subtreepkg.NewSubtreeDataFromReader(tc.subtree, newReader())
 			err := validateSubtreeData(tc.subtree, newReader())
 
-			require.Equal(t, tc.valid, refErr == nil, "go-subtree reference: %v", refErr)
+			require.Equal(t, tc.valid || tc.short, refErr == nil, "go-subtree reader: %v", refErr)
+
+			if refErr == nil {
+				missing := model.MissingSubtreeDataTxs(tc.subtree, data, true)
+				require.Equal(t, tc.valid, missing == 0, "model.MissingSubtreeDataTxs: %d missing", missing)
+			}
+
 			require.Equal(t, tc.valid, err == nil, "validateSubtreeData: %v", err)
 		})
 	}

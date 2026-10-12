@@ -65,7 +65,7 @@ func (u *Server) CreateSubtreeDataFileStreaming(ctx context.Context, subtreeHash
 	}
 
 	if subtreeDataExists {
-		// verify that the transactions in the existing subtreeData file decode and match their node hashes
+		// verify that the existing subtreeData file holds every node's transaction, each decoding and matching its node hash
 		subtreeDataReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeData)
 		if err != nil {
 			return errors.NewStorageError("[BlockPersister] error getting existing subtree data for %s", subtreeHash.String(), err)
@@ -340,18 +340,25 @@ func (u *Server) ProcessSubtreeUTXOStreaming(ctx context.Context, subtreeHash ch
 	return nil
 }
 
-// validateSubtreeData checks that r holds subtreeData that subtreepkg.NewSubtreeDataFromReader
-// would accept for subtree, without keeping the transactions. NewSubtreeDataFromReader decodes
+// validateSubtreeData checks that r holds complete subtreeData for subtree, without keeping the
+// transactions. subtreepkg.NewSubtreeDataFromReader, which this replaces here, decodes
 // the whole subtree into memory, which for one multi-GiB subtree is enough to OOM the persister
 // just to learn that the file parses. Here each transaction is decoded into a pooled arena,
 // checked against its node hash and dropped, so memory follows the largest transaction instead.
 //
-// It accepts and rejects exactly what NewSubtreeDataFromReader does. The decoder is the same one:
-// go-bt's Tx.ReadFrom is ReadFromWithArena(r, nil), and the arena only changes where script bytes
-// are allocated, after the same length checks. The loop mirrors go-subtree's serializeFromReader,
-// quirks included: a coinbase is skipped whenever it is decoded at node index 1, and a file that
-// ends on a transaction or field boundary before the last node is accepted (issue 1917).
-// TestValidateSubtreeData_MatchesGoSubtree pins both implementations against the same table.
+// It accepts and rejects what NewSubtreeDataFromReader followed by model.MissingSubtreeDataTxs
+// does, with the coinbase placeholder at index 0 exempt. The decoder is the same one: go-bt's
+// Tx.ReadFrom is ReadFromWithArena(r, nil), and the arena only changes where script bytes are
+// allocated, after the same length checks. The loop mirrors go-subtree's serializeFromReader,
+// including its quirk of skipping a coinbase whenever one is decoded at node index 1.
+//
+// The reader alone accepts a file that ends on a transaction or field boundary before the last
+// node, an empty file included, because go-bt returns a clean io.EOF there. Reused, such a file
+// gets DAH 0 and phase 2, which reads every node, fails on it on every attempt (issue 1917). So a
+// clean EOF is accepted only once every node has been seen. The placeholder is exempt because
+// txIndex starts past it: phase 2 reads the file with or without the coinbase, deciding by the
+// node's hash rather than by the subtree's position in the block.
+// TestValidateSubtreeData_MatchesGoSubtreePlusMissingTxs runs both against one table.
 func validateSubtreeData(subtree *subtreepkg.Subtree, r io.Reader) error {
 	if subtree == nil || len(subtree.Nodes) == 0 {
 		return errors.NewProcessingError("subtree has no nodes", subtreepkg.ErrSubtreeNodesEmpty)
@@ -377,6 +384,10 @@ func validateSubtreeData(subtree *subtreepkg.Subtree, r io.Reader) error {
 			// gRPC status errors by message, which would read an "EOF" in one as the
 			// end of the file.
 			if stderrors.Is(err, io.EOF) {
+				if txIndex < len(subtree.Nodes) {
+					return errors.NewProcessingError("subtreeData is incomplete (%d of %d txs missing)", len(subtree.Nodes)-txIndex, len(subtree.Nodes))
+				}
+
 				return nil
 			}
 
