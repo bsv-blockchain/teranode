@@ -626,6 +626,41 @@ func TestScriptVerifierGoBDKRejectsInt64ScriptNumOverflow(t *testing.T) {
 	}
 }
 
+// TestScriptVerifierGoBDKRejectsSplitPastInt32Max covers OP_SPLIT with a position
+// above INT32_MAX. bitcoin-sv 1.2.3 bounds the position by INT32_MAX as well as by
+// the element size, which only changes the outcome for elements longer than
+// INT32_MAX bytes; bitcoin-sv's op_split_int32_max covers that with a 2 GiB stack
+// element. On an ordinary element both bounds reject the position, so this test
+// passes against earlier GoBDK pins too.
+func TestScriptVerifierGoBDKRejectsSplitPastInt32Max(t *testing.T) {
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, test.CreateBaseTestSettings(t).Policy, &chaincfg.MainNetParams)
+
+	// Each unlocking script pushes "abc" and a split position; the locking script
+	// is OP_SPLIT OP_2DROP OP_1.
+	lockingScript := []byte{0x7f, 0x6d, 0x51}
+
+	for _, consensus := range []bool{true, false} {
+		t.Run(fmt.Sprintf("consensus_%t", consensus), func(t *testing.T) {
+			t.Run("position inside the element", func(t *testing.T) {
+				tx, blockHeight, utxoHeights := newPostChronicleSpendTx(t, lockingScript, []byte{0x03, 'a', 'b', 'c', 0x51})
+
+				require.NoError(t, verifier.ValidateTransaction(tx, blockHeight, consensus, utxoHeights))
+			})
+
+			t.Run("position 2^31", func(t *testing.T) {
+				// INT32_MAX + 1, minimally encoded; the trailing 0x00 keeps it positive
+				tx, blockHeight, utxoHeights := newPostChronicleSpendTx(t, lockingScript,
+					[]byte{0x03, 'a', 'b', 'c', 0x05, 0, 0, 0, 0x80, 0})
+
+				err := verifier.ValidateTransaction(tx, blockHeight, consensus, utxoHeights)
+				require.ErrorIs(t, err, errors.ErrTxInvalid)
+				require.False(t, errors.Is(err, errors.ErrTxPolicy))
+				require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_INVALID_SPLIT_RANGE).Error())
+			})
+		})
+	}
+}
+
 func Test_Uint2Int(t *testing.T) {
 	tests := []struct {
 		name     string
