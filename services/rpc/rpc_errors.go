@@ -209,10 +209,12 @@ const maxRejectionReasonParts = 4
 // the BDK policy chain, one more wrap anywhere above the verdict would have
 // pushed the reason off the end silently, which is the failure ChiR6 described
 // relocated from the depth cap to the part cap.
-// Referencing the constants rather than copying their text means a RENAME is a
-// compile error. A REWORD is not - this map keys on the value - so the reword
-// case is covered by TestRPCError_TrimsTheRealValidatorChain, which builds its
-// input from the same constants and fails if the suppression stops matching.
+//
+// The map reads the validator's own constants, the ones mapBDKValidationError
+// builds the chain from, so a rename is a compile error here and a reword changes
+// both sides together. What the tests pin is that the suppression works on the
+// real chains: TestRPCError_TrimsTheRealValidatorChain and
+// TestRPCError_TrimsTheRealPolicyChain fail if either entry is dropped.
 var uninformativeVerdictText = map[string]struct{}{
 	validator.ErrMsgInvalidTx: {},
 	validator.ErrMsgPolicy:    {},

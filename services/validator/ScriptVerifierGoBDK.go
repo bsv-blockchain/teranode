@@ -26,9 +26,9 @@ const (
 	// transaction, and the error code already carries what they carry. See
 	// uninformativeVerdictText in services/rpc/rpc_errors.go.
 	//
-	// Exporting makes a RENAME a compile error there. It does not make a REWORD
-	// one, since that map keys on the value - so if you change the text, expect
-	// TestRPCError_TrimsTheRealValidatorChain to fail, and that is deliberate.
+	// Exporting makes a rename a compile error there, and since the map reads
+	// these constants, rewording one changes both sides together. Do not copy
+	// the text anywhere: a copy is what would drift.
 	ErrMsgInvalidTx = "GoBDK fail to ValidateTransaction"
 	ErrMsgPolicy    = "GoBDK fail to ValidateTransaction by policy settings"
 

@@ -18,11 +18,15 @@ import (
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
+	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
@@ -1581,4 +1585,179 @@ func TestBlockLookupDoesNotAnswerAboutTransactions(t *testing.T) {
 
 	require.NotEmpty(t, logger.errorf,
 		"an admin-invoked reconsiderblock failure that is not a missing block leaves an error-level trace")
+}
+
+// policyRejectionChain is what reaches handleSendRawTransaction for every BDK
+// policy rejection - NOT_STANDARD, SIGOPS, NOT_FREE_CONSOLIDATION and the
+// policy-class script errors. mapBDKValidationError puts errMsgPolicy under
+// errMsgInvalidTx above the reason (services/validator/ScriptVerifierGoBDK.go),
+// and validateInternal adds its breadcrumb on top: four links, two of them
+// constants naming the adapter.
+func policyRejectionChain() error {
+	return errors.NewProcessingError("[Validate][%s] error validating transaction", "abcd1234",
+		errors.NewTxInvalidError(validator.ErrMsgInvalidTx,
+			errors.NewTxPolicyError(validator.ErrMsgPolicy,
+				errors.New(errors.ERR_TX_POLICY, "%s",
+					"non-mandatory-script-verify-flag (Operation not valid with the current stack size)"))))
+}
+
+// TestRPCError_TrimsTheRealPolicyChain covers the deepest real verdict chain. Its
+// two adapter constants are what uninformativeVerdictText suppresses, and the
+// chain is exactly as deep as the part cap allows, so dropping either constant
+// from the map or lowering the cap changes what a policy rejection says.
+func TestRPCError_TrimsTheRealPolicyChain(t *testing.T) {
+	rpcErr := buildRPCError(policyRejectionChain(), bsvjson.ErrRPCVerify, txRejectedPrefix, scopeSubmit)
+
+	require.Equal(t, bsvjson.ErrRPCVerify, rpcErr.Code)
+	require.Equal(t,
+		"TX rejected: non-mandatory-script-verify-flag (Operation not valid with the current stack size)",
+		rpcErr.Message,
+		"the reason alone: no breadcrumb and neither adapter constant")
+}
+
+// TestRejectionDepthCaps_BindAtTheBoundary pins both chain walks at the exact
+// depth they stop, from both sides. TestRejectionDepthCapsAgree buries the verdict
+// far past the cap, so it only notices a walk that goes too far; a walk cut short,
+// or one stretched to just past the cap, survived it.
+func TestRejectionDepthCaps_BindAtTheBoundary(t *testing.T) {
+	buried := func(wrappers int) error {
+		var err error = errors.NewTxInvalidError("bad-txns-inputs-duplicate")
+		for i := 0; i < wrappers; i++ {
+			err = errors.NewProcessingError("wrapper %d", i, err)
+		}
+
+		return err
+	}
+
+	t.Run("the last reachable link", func(t *testing.T) {
+		err := buried(maxMessageChainDepth - 1)
+
+		require.True(t, isRejection(err, localRejectionCodes), "a verdict at the last walked link is reachable")
+		require.Equal(t, "bad-txns-inputs-duplicate", publicErrorMessage(err),
+			"and the message walk reaches it too")
+	})
+
+	t.Run("the first unreachable link", func(t *testing.T) {
+		err := buried(maxMessageChainDepth)
+
+		require.False(t, isRejection(err, localRejectionCodes), "one link further is past the cap")
+		require.Equal(t, genericErrorMessage, publicErrorMessage(err))
+	})
+}
+
+// failingTxStore fails every Set the way the file blob store does, with the path
+// in the message.
+type failingTxStore struct {
+	blob.Store
+}
+
+func (failingTxStore) Set(context.Context, []byte, fileformat.FileType, []byte, ...options.FileOption) error {
+	return errors.NewStorageError("[File][Set] failed to write /var/teranode/txstore/ab/cd/abcd.tx",
+		fmt.Errorf("open /var/teranode/txstore/ab/cd/abcd.tx: no space left on device"))
+}
+
+// TestHandleSendRawTransaction_TxStoreFailureIsInternal covers the blob store
+// site. Every other handler test leaves txStore nil, so reverting this site to
+// splicing the error left the suite green - and the file store's errors carry
+// paths.
+func TestHandleSendRawTransaction_TxStoreFailureIsInternal(t *testing.T) {
+	logger := newCapturingLogger()
+	s := newRPCServerForAbsurdFeeTest(t, 10_000_000, 100_000_000, acceptingValidator{})
+	s.logger = logger
+	s.txStore = failingTxStore{Store: blobmemory.New()}
+
+	_, err := handleSendRawTransaction(context.Background(), s, buildSendRawTxCmd(t, 99_999_000, nil), nil)
+
+	rpcErr := requireRPCError(t, err)
+	require.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+	require.Equal(t, "Failed to store transaction: "+genericErrorMessage, rpcErr.Message)
+	require.NotEmpty(t, logger.errorf)
+	require.Contains(t, logger.all(), "no space left on device", "the cause goes to the log")
+}
+
+// TestBlockLookupHandlers_AnswerAnUnknownBlockAsBitcoind pins the -5 mapping at
+// each handler that names a block by hash. The handler tests fed a generic error,
+// so swapping any of these sites back to rpcError left the suite green.
+func TestBlockLookupHandlers_AnswerAnUnknownBlockAsBitcoind(t *testing.T) {
+	hash := strings.Repeat("00", 31) + "ab"
+	verbosity := uint32(1)
+	verbose := true
+
+	notFound := func(t *testing.T) error {
+		return overGRPC(t, errors.NewBlockNotFoundError("error in GetBlockHeader", errors.ErrNotFound))
+	}
+
+	for name, tc := range map[string]struct {
+		mock func(*testing.T, *blockchain.Mock)
+		call func(*RPCServer) (interface{}, error)
+	}{
+		"getblock": {
+			mock: func(t *testing.T, m *blockchain.Mock) {
+				m.On("GetBlock", mock.Anything, mock.Anything).Return(nil, notFound(t))
+			},
+			call: func(s *RPCServer) (interface{}, error) {
+				return handleGetBlock(context.Background(), s, &bsvjson.GetBlockCmd{Hash: hash, Verbosity: &verbosity}, nil)
+			},
+		},
+		"getblockheader": {
+			mock: func(t *testing.T, m *blockchain.Mock) {
+				m.On("GetBlockHeader", mock.Anything, mock.Anything).Return(nil, nil, notFound(t))
+			},
+			call: func(s *RPCServer) (interface{}, error) {
+				return handleGetBlockHeader(context.Background(), s, &bsvjson.GetBlockHeaderCmd{Hash: hash, Verbose: &verbose}, nil)
+			},
+		},
+		"invalidateblock": {
+			mock: func(t *testing.T, m *blockchain.Mock) {
+				m.On("InvalidateBlock", mock.Anything, mock.Anything).Return(([]chainhash.Hash)(nil), notFound(t))
+			},
+			call: func(s *RPCServer) (interface{}, error) {
+				return handleInvalidateBlock(context.Background(), s, &bsvjson.InvalidateBlockCmd{BlockHash: hash}, nil)
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := &blockchain.Mock{}
+			tc.mock(t, m)
+
+			s := &RPCServer{
+				logger:           newCapturingLogger(),
+				blockchainClient: m,
+				settings:         &settings.Settings{ChainCfgParams: &chaincfg.MainNetParams},
+			}
+
+			_, err := tc.call(s)
+
+			rpcErr := requireRPCError(t, err)
+			require.Equal(t, bsvjson.ErrRPCInvalidAddressOrKey, rpcErr.Code)
+			require.Equal(t, blockNotFoundMessage, rpcErr.Message)
+		})
+	}
+}
+
+// TestHandleReconsiderBlock_MissingDescendantIsNotAnUnknownBlock pins the children
+// branch's scope at the handler. The named block was reconsidered; a descendant
+// whose revalidation finds something missing must not answer "Block not found"
+// about the block the caller named, and the prefix saying which block succeeded
+// has to survive.
+func TestHandleReconsiderBlock_MissingDescendantIsNotAnUnknownBlock(t *testing.T) {
+	named := chainhash.Hash{}
+	child := &model.BlockHeader{Version: 1, HashPrevBlock: &named, HashMerkleRoot: &chainhash.Hash{}, Timestamp: 1}
+
+	_, err := reconsiderFixture{
+		revalidate: func(h chainhash.Hash) error {
+			if h == named {
+				return nil
+			}
+
+			return overGRPC(t, revalidationFailure(childNotFoundChain()))
+		},
+		invalidBlocks: []*model.BlockInfo{{BlockHeader: child.Bytes()}},
+	}.run(t)
+
+	rpcErr := requireRPCError(t, err)
+	require.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+	require.NotEqual(t, bsvjson.ErrRPCInvalidAddressOrKey, rpcErr.Code)
+	require.True(t, strings.HasPrefix(rpcErr.Message,
+		"Block "+named.String()+" was reconsidered but failed to reconsider children: "), rpcErr.Message)
 }
