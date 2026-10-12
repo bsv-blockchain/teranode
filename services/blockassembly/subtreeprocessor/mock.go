@@ -184,6 +184,13 @@ func (m *MockSubtreeProcessor) QueueMaxItems() int64 {
 	return args.Get(0).(int64)
 }
 
+// MaxTransactionsInMemory implements Interface.MaxTransactionsInMemory. It reports no
+// limit without consulting the mock expectations, so tests that stub only the queue
+// values keep working.
+func (m *MockSubtreeProcessor) MaxTransactionsInMemory() int64 {
+	return 0
+}
+
 // QueueHeadAge implements Interface.QueueHeadAge
 func (m *MockSubtreeProcessor) QueueHeadAge() time.Duration {
 	args := m.Called()
