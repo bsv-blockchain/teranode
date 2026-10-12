@@ -1,6 +1,7 @@
 package sql
 
 import (
+	"context"
 	"net/url"
 	"testing"
 
@@ -46,7 +47,7 @@ func TestGenesisHashNewChain(t *testing.T) {
 			// Create new SQL store - this should insert the genesis block
 			store, err := New(logger, dbURL, tc.settings)
 			require.NoError(t, err)
-			defer store.Close()
+			defer store.Close(context.Background())
 
 			// Query the genesis block hash from the database
 			var hash []byte
@@ -104,7 +105,7 @@ func TestGenesisHashWrongParams(t *testing.T) {
 			// First create a store with initial params
 			store, err := New(logger, dbURL, s)
 			require.NoError(t, err)
-			defer store.Close()
+			defer store.Close(context.Background())
 
 			// Pass wrong params explicitly. Avoids racing with background
 			// goroutines that read store.chainParams.

@@ -105,6 +105,37 @@ func TestSqlGetChainTip(t *testing.T) {
 	// TestEqualChainworkTiebreaker verifies that when two chains have equal chainwork,
 	// the tiebreaker uses peer_id ASC (lower peer_id wins, representing "first-seen").
 	// This tests the ORDER BY clause: chain_work DESC, peer_id ASC, id ASC
+	// TestMalformedNBits verifies that a corrupted n_bits column (wrong byte length,
+	// e.g. ASCII-encoded hex stored as bytea) makes GetBestBlockHeader return a clean
+	// storage error instead of panicking with a nil-pointer dereference. See issue #884.
+	t.Run("malformed n_bits returns error instead of panicking", func(t *testing.T) {
+		storeURL, err := url.Parse("sqlitememory:///")
+		require.NoError(t, err)
+
+		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+		require.NoError(t, err)
+
+		_, _, err = s.StoreBlock(context.Background(), block1, "test_peer")
+		require.NoError(t, err)
+
+		_, _, err = s.StoreBlock(context.Background(), block2, "test_peer")
+		require.NoError(t, err)
+
+		// Corrupt the tip's n_bits to 8 bytes (the length the affected operator's bad
+		// hex-as-ASCII restore produced), mirroring the malformed-bytea condition.
+		_, err = s.db.ExecContext(context.Background(),
+			"UPDATE blocks SET n_bits = ? WHERE height = 2",
+			[]byte{0xff, 0xff, 0x7f, 0x20, 0x00, 0x00, 0x00, 0x00})
+		require.NoError(t, err)
+
+		// Invalidate the response cache so the corrupted row is actually read back.
+		s.responseCache.DeleteAll()
+
+		_, _, err = s.GetBestBlockHeader(context.Background())
+		require.Error(t, err, "GetBestBlockHeader must return an error for malformed n_bits, not panic")
+		require.Contains(t, err.Error(), "n_bits")
+	})
+
 	t.Run("equal chainwork prefers lower peer_id (first-seen rule)", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)

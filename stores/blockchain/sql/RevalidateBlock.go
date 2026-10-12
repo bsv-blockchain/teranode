@@ -61,7 +61,7 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 	}
 
 	if s.useInMemoryChainCheck {
-		if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+		if rebuildErr := s.triggerRebuildOffChainSetAfterWrite(rebuildCtx); rebuildErr != nil {
 			s.logger.Errorf("RevalidateBlock: %v", rebuildErr)
 		} else {
 			s.lastSuccessfulRebuild.Store(time.Now().Unix())

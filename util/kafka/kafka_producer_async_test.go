@@ -136,13 +136,46 @@ func TestNewKafkaAsyncProducerFromURLDefaultValues(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.NotNil(t, producer)
-	assert.Equal(t, int32(1), producer.Config.Partitions)            // default
-	assert.Equal(t, int16(1), producer.Config.ReplicationFactor)     // default
-	assert.Equal(t, "600000", producer.Config.RetentionPeriodMillis) // default 10 minutes
-	assert.Equal(t, "1073741824", producer.Config.SegmentBytes)      // default 1GB
-	assert.Equal(t, 1024*1024, producer.Config.FlushBytes)           // default 1MB
-	assert.Equal(t, 50_000, producer.Config.FlushMessages)           // default
-	assert.Equal(t, 10*time.Second, producer.Config.FlushFrequency)  // default
+	assert.Equal(t, int32(1), producer.Config.Partitions)                          // default
+	assert.Equal(t, int16(1), producer.Config.ReplicationFactor)                   // default
+	assert.Equal(t, "600000", producer.Config.RetentionPeriodMillis)               // default 10 minutes
+	assert.Equal(t, "1073741824", producer.Config.SegmentBytes)                    // default 1GB
+	assert.Equal(t, 1024*1024, producer.Config.FlushBytes)                         // default 1MB
+	assert.Equal(t, 50_000, producer.Config.FlushMessages)                         // default
+	assert.Equal(t, 10*time.Second, producer.Config.FlushFrequency)                // default
+	assert.Equal(t, defaultOuterBatcherLinger, producer.Config.OuterBatcherLinger) // default 10ms
+}
+
+// TestNewKafkaAsyncProducerFromURLOuterBatcherLinger verifies the
+// outer_batcher_linger URL query param is plumbed through and is
+// fully decoupled from flush_frequency — the regression that caused
+// the dev-scale-1/2 txmeta latency.
+func TestNewKafkaAsyncProducerFromURLOuterBatcherLinger(t *testing.T) {
+	logger := &mockAsyncLogger{}
+	ctx := context.Background()
+
+	t.Run("explicit value is read", func(t *testing.T) {
+		kafkaURL, err := url.Parse("memory://localhost/test-topic?outer_batcher_linger=250ms")
+		require.NoError(t, err)
+		producer, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL, nil)
+		require.NoError(t, err)
+		assert.Equal(t, 250*time.Millisecond, producer.Config.OuterBatcherLinger)
+	})
+
+	t.Run("flush_frequency does NOT influence outer linger", func(t *testing.T) {
+		// This is the core decoupling assertion. Pre-fix, FlushFrequency
+		// silently drove the outer batcher's straggler timer too, so
+		// flush_frequency=1s gave an outer linger of 1s as a side effect.
+		// After the fix, flush_frequency only configures kgo.ProducerLinger;
+		// the outer linger stays at its own default.
+		kafkaURL, err := url.Parse("memory://localhost/test-topic?flush_frequency=1s")
+		require.NoError(t, err)
+		producer, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL, nil)
+		require.NoError(t, err)
+		assert.Equal(t, time.Second, producer.Config.FlushFrequency, "flush_frequency parses unchanged")
+		assert.Equal(t, defaultOuterBatcherLinger, producer.Config.OuterBatcherLinger,
+			"outer batcher linger must not inherit from flush_frequency")
+	})
 }
 
 func TestNewKafkaAsyncProducerFromURLInvalidConversion(t *testing.T) {

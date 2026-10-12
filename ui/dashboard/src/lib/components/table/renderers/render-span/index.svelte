@@ -1,16 +1,17 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  export let value = ''
-  export let className = ''
+  let { value = '', className = '' }: { value?: any; className?: string } = $props()
 
-  let props: any = {}
-
-  $: {
+  const spanProps = $derived.by(() => {
+    const p: any = {}
     if (className) {
-      props.class = className
+      p.class = className
     }
-  }
+    return p
+  })
 </script>
 
 {#if value || value === 0}
-  <span {...props}>{value}</span>
+  <span {...spanProps}>{value}</span>
 {/if}

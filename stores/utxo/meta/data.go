@@ -82,6 +82,13 @@ type Data struct {
 	// Locked is a flag indicating if the transaction is locked and not spendable
 	Locked bool `json:"locked"`
 
+	// InBlock is a flag indicating the metadata was produced while validating a
+	// transaction that arrived as part of a block or announced subtree (block
+	// validation, subtree validation, legacy sync) rather than via mempool
+	// submission. Relay consumers of the txmeta Kafka topic must not announce
+	// these transactions to peers.
+	InBlock bool `json:"inBlock"`
+
 	// Creating indicates the transaction is still being created (multi-record 2-phase commit)
 	// When true, the transaction is incomplete and should trigger re-processing for auto-recovery
 	Creating bool `json:"creating"`
@@ -97,9 +104,10 @@ type Data struct {
 // The binary format is as follows:
 //   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
 //   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
-//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked)
-//   - [17:25] - 8 bytes for number of ParentTxHashes (uint64, little-endian)
-//   - [25+]   - 32 bytes for each ParentTxHash
+//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked, bit 4: InBlock)
+//   - [17:21] - 4 bytes for number of ParentTxHashes (uint32, little-endian)
+//   - [21+]   - 32 bytes for each ParentTxHash, then per parent a 4-byte
+//     vout-count followed by 4 bytes per vout (uint32, little-endian)
 //
 // Parameters:
 //   - dataBytes: Pointer to a byte slice containing the serialized metadata
@@ -119,6 +127,7 @@ func NewMetaDataFromBytes(dataBytes []byte, d *Data) (err error) {
 	d.Frozen = (dataBytes[16] & 0b10) == 0b10
 	d.Conflicting = (dataBytes[16] & 0b100) == 0b100
 	d.Locked = (dataBytes[16] & 0b1000) == 0b1000
+	d.InBlock = (dataBytes[16] & 0b10000) == 0b10000
 
 	d.TxInpoints, err = subtree.NewTxInpointsFromBytes(dataBytes[17:])
 
@@ -132,9 +141,10 @@ func NewMetaDataFromBytes(dataBytes []byte, d *Data) (err error) {
 // The binary format is as follows:
 //   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
 //   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
-//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked)
-//   - [17:25] - 8 bytes for number of ParentTxHashes (uint64, little-endian)
-//   - [25+]   - 32 bytes for each ParentTxHash
+//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked, bit 4: InBlock)
+//   - [17:21] - 4 bytes for number of ParentTxHashes (uint32, little-endian)
+//   - [21+]   - 32 bytes for each ParentTxHash, then per parent a 4-byte
+//     vout-count followed by 4 bytes per vout (uint32, little-endian)
 //   - [...]   - Variable-length transaction data (full transaction)
 //   - [...]   - Remainder: block IDs as 4-byte integers (uint32, little-endian)
 //
@@ -165,6 +175,7 @@ func NewDataFromBytes(dataBytes []byte) (d *Data, err error) {
 	d.Frozen = dataBytes[16]&0b10 == 0b10
 	d.Conflicting = dataBytes[16]&0b100 == 0b100
 	d.Locked = dataBytes[16]&0b1000 == 0b1000
+	d.InBlock = dataBytes[16]&0b10000 == 0b10000
 
 	buf := bytes.NewReader(dataBytes[17:])
 
@@ -202,6 +213,45 @@ func NewDataFromBytes(dataBytes []byte) (d *Data, err error) {
 	return d, nil
 }
 
+// TxIsSerializable reports whether d.Tx can safely be turned back into bytes.
+//
+// It is false for a transaction reconstructed from a UTXO-set snapshot. A node
+// bootstrapped by cmd/seeder stores such transactions with no inputs and with
+// nil outputs at every index that was not a live UTXO at snapshot time, and the
+// UTXO store hands that shape straight back out — from the external .outputs
+// blob (stores/utxo/aerospike/get.go getExternalTransaction) or from the inline
+// bins (getTxFromBins). Serializing it panics inside go-bt, whose Output.Size()
+// and Output.appendTo() dereference the nil *Output; Tx.TxIDChainHash() and
+// Tx.MarshalJSON() reach the same fault.
+//
+// nil is the store's deliberate encoding of "not a live UTXO", and callers that
+// only read specific output indices rely on it — see the guards at
+// stores/utxo/aerospike/get.go and services/validator/Validator.go, which error
+// out rather than fabricate a placeholder. So this predicate is for the callers
+// that serialize, and it must not be used to decide whether the transaction is
+// the one that was asked for: the snapshot blob retains no inputs, version or
+// locktime, so a reconstruction never hashes back to its own txid even when
+// every output survived. Callers that need that guarantee must compare
+// TxIDChainHash() against the requested hash — gated by this predicate, since
+// TxIDChainHash() panics on the same shape.
+func (d *Data) TxIsSerializable() bool {
+	// An input-less transaction is the snapshot signature: every real
+	// transaction, coinbase included, carries at least one input. Test the
+	// length, not nil-ness — getTxFromBins allocates a non-nil empty slice,
+	// which is enough to make bt.Tx.IsExtended() report true.
+	if d == nil || d.Tx == nil || len(d.Tx.Inputs) == 0 {
+		return false
+	}
+
+	for _, output := range d.Tx.Outputs {
+		if output == nil || output.LockingScript == nil {
+			return false
+		}
+	}
+
+	return true
+}
+
 // Bytes returns the Data object as a byte slice.
 // This method provides a binary serialization of the complete Data object,
 // including the transaction data and all metadata. It's the inverse operation
@@ -210,9 +260,10 @@ func NewDataFromBytes(dataBytes []byte) (d *Data, err error) {
 // The binary format is as follows:
 //   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
 //   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
-//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked)
-//   - [17:25] - 8 bytes for number of ParentTxHashes (uint64, little-endian)
-//   - [25+]   - 32 bytes for each ParentTxHash
+//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked, bit 4: InBlock)
+//   - [17:21] - 4 bytes for number of ParentTxHashes (uint32, little-endian)
+//   - [21+]   - 32 bytes for each ParentTxHash, then per parent a 4-byte
+//     vout-count followed by 4 bytes per vout (uint32, little-endian)
 //   - [...]   - Variable-length transaction data (full transaction)
 //   - [...]   - Remainder: block IDs as 4-byte integers (uint32, little-endian)
 //
@@ -241,6 +292,10 @@ func (d *Data) Bytes() ([]byte, error) {
 
 	if d.Locked {
 		buf[16] |= 0b1000
+	}
+
+	if d.InBlock {
+		buf[16] |= 0b10000
 	}
 
 	txInpointsBytes, err := d.TxInpoints.Serialize()
@@ -272,9 +327,10 @@ func (d *Data) Bytes() ([]byte, error) {
 // The binary format is as follows:
 //   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
 //   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
-//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked)
-//   - [17:25] - 8 bytes for number of ParentTxHashes (uint64, little-endian)
-//   - [25+]   - 32 bytes for each ParentTxHash
+//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked, bit 4: InBlock)
+//   - [17:21] - 4 bytes for number of ParentTxHashes (uint32, little-endian)
+//   - [21+]   - 32 bytes for each ParentTxHash, then per parent a 4-byte
+//     vout-count followed by 4 bytes per vout (uint32, little-endian)
 //
 // Returns:
 //   - Byte slice containing the serialized metadata (without transaction or block IDs)
@@ -282,10 +338,46 @@ func (d *Data) Bytes() ([]byte, error) {
 // Use this method when you need to efficiently store or transmit just the
 // metadata portion of a transaction record.
 func (d *Data) MetaBytes() ([]byte, error) {
-	buf := make([]byte, 17, 1024) // 8 for Fee, 8 for SizeInBytes, 1 for flags
+	return d.MetaBytesInto(nil)
+}
+
+// MetaBytesInto is MetaBytes that serializes into the caller-provided buffer's
+// backing array when it is large enough, reusing its capacity instead of
+// allocating a fresh slice. The caller passes dst[:0] (any length is reset) and
+// uses the returned slice; dst may be nil (equivalent to MetaBytes). This lets a
+// hot caller — notably the txmetacache cache-repopulate path, which serializes
+// one buffer per transaction and discards it after the cache copies it — recycle
+// the buffer through a sync.Pool and avoid the per-tx outer-buffer allocation.
+//
+// The returned slice's length bounds exactly the bytes written, so stale
+// capacity from a recycled buffer never leaks into the result.
+func (d *Data) MetaBytesInto(dst []byte) ([]byte, error) {
+	// Serialize the TxInpoints first so we can size the outer buffer exactly.
+	// The previous fixed cap of 1024 over-allocated ~10x for the common case
+	// (single-parent tx) and dominated allocator pressure on hot paths (profile
+	// attributed several TB / 45 s to this function). Calling Serialize up
+	// front also surfaces an inconsistent TxInpoints (e.g.
+	// ErrParentTxHashesMismatch from test fixtures) without us having to walk
+	// the packed vout layout ourselves and risk a bounds-check panic.
+	txInpointsBytes, err := d.TxInpoints.Serialize()
+	if err != nil {
+		return nil, err
+	}
+
+	need := 17 + len(txInpointsBytes)
+
+	buf := dst[:0]
+	if cap(buf) < need {
+		buf = make([]byte, 0, need)
+	}
+
+	buf = buf[:17]
 
 	binary.LittleEndian.PutUint64(buf[:8], d.Fee)
 	binary.LittleEndian.PutUint64(buf[8:16], d.SizeInBytes)
+
+	// Reset the flags byte: a recycled buffer may carry stale bits here.
+	buf[16] = 0
 
 	if d.IsCoinbase {
 		buf[16] |= 0b01
@@ -303,9 +395,8 @@ func (d *Data) MetaBytes() ([]byte, error) {
 		buf[16] |= 0b1000
 	}
 
-	txInpointsBytes, err := d.TxInpoints.Serialize()
-	if err != nil {
-		return nil, err
+	if d.InBlock {
+		buf[16] |= 0b10000
 	}
 
 	buf = append(buf, txInpointsBytes...)

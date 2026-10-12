@@ -45,18 +45,3 @@ export function validateUrl(url: string): string | null {
   console.warn('Invalid redirect URL detected:', url)
   return null
 }
-
-/**
- * Sanitizes a URL by removing potentially dangerous characters
- *
- * @param url The URL to sanitize
- * @returns The sanitized URL
- */
-export function sanitizeUrl(url: string): string {
-  if (!url) {
-    return ''
-  }
-
-  // Remove any script tags, HTML entities, or other potentially dangerous content
-  return url.replace(/<script.*?>.*?<\/script>/gi, '').replace(/[<>"']/g, '')
-}

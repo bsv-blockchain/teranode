@@ -3,6 +3,7 @@ package httpimpl
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -164,10 +165,13 @@ func TestGetMerkleProof(t *testing.T) {
 	t.Run("successful merkle proof generation", func(t *testing.T) {
 		// Create mock repository
 		mockRepo := new(MockRepositoryForMerkleProof)
+		bcMock := &blockchain.Mock{}
+		bcMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
 		h := &HTTP{
-			logger:     logger,
-			settings:   tSettings,
-			repository: mockRepo,
+			logger:         logger,
+			settings:       tSettings,
+			repository:     mockRepo,
+			mainChainCache: newMainChainCache(bcMock, ulogger.TestLogger{}, 0),
 		}
 
 		// Create test data
@@ -179,9 +183,10 @@ func TestGetMerkleProof(t *testing.T) {
 		subtreeHash, err := chainhash.NewHashFromStr(subtreeHashStr)
 		require.NoError(t, err, "Failed to parse subtreeHash")
 
-		merkleRootStr := "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321"
-		merkleRoot, err := chainhash.NewHashFromStr(merkleRootStr)
-		require.NoError(t, err, "Failed to parse merkleRoot")
+		// Single-subtree block with no coinbase tx: the block's merkle root is the subtree's own
+		// root, unmodified, so the header must carry subtreeHash for the reconstructed-root check
+		// to pass.
+		merkleRoot := subtreeHash
 
 		// Create mock transaction metadata
 		txMeta := &meta.Data{
@@ -236,6 +241,9 @@ func TestGetMerkleProof(t *testing.T) {
 		mockRepo.On("GetBlockByID", mock.Anything, uint64(1)).Return(mockBlock, nil)
 		mockRepo.On("GetSubtree", mock.Anything, subtreeHash).Return(mockSubtree, nil)
 		mockRepo.On("GetBlockHeader", mock.Anything, mock.AnythingOfType("*chainhash.Hash")).Return(mockBlockHeader, mockBlockHeaderMeta, nil)
+		// Repository's blockchain client is unused when mainChainCache is wired,
+		// but Maybe() keeps the mock satisfied if any code path falls through.
+		mockRepo.On("GetBlockchainClient").Return(bcMock).Maybe()
 
 		// Create request
 		e := echo.New()
@@ -333,9 +341,6 @@ func TestGetMerkleProof(t *testing.T) {
 		// Setup mock to return not found error
 		mockRepo.On("GetTxMeta", mock.Anything, txHash).Return(nil, errors.ErrNotFound)
 
-		// Also mock the subtree fallback attempt
-		mockRepo.On("FindBlocksContainingSubtree", mock.Anything, txHash).Return(nil, nil, nil, errors.ErrNotFound)
-
 		// Create request
 		e := echo.New()
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/merkle_proof/"+txHashStr+"/json", nil)
@@ -352,7 +357,7 @@ func TestGetMerkleProof(t *testing.T) {
 		httpErr, ok := err.(*echo.HTTPError)
 		require.True(t, ok)
 		assert.Equal(t, http.StatusNotFound, httpErr.Code)
-		assert.Contains(t, httpErr.Message, "hash not found as transaction or subtree")
+		require.Equal(t, "mined transaction not found; BUMP proofs require a mined transaction ID", httpErr.Message)
 
 		mockRepo.AssertExpectations(t)
 	})
@@ -380,9 +385,6 @@ func TestGetMerkleProof(t *testing.T) {
 		// Setup mock to return transaction with no blocks
 		mockRepo.On("GetTxMeta", mock.Anything, txHash).Return(txMeta, nil)
 
-		// Mock the subtree fallback to return the same error
-		mockRepo.On("FindBlocksContainingSubtree", mock.Anything, txHash).Return(nil, nil, nil, errors.NewProcessingError("transaction not in any block"))
-
 		// Create request
 		e := echo.New()
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/merkle_proof/"+txHashStr+"/json", nil)
@@ -398,18 +400,21 @@ func TestGetMerkleProof(t *testing.T) {
 		// Assert
 		httpErr, ok := err.(*echo.HTTPError)
 		require.True(t, ok)
-		assert.Equal(t, http.StatusInternalServerError, httpErr.Code)
-		assert.Contains(t, httpErr.Message, "transaction not in any block")
+		require.Equal(t, http.StatusNotFound, httpErr.Code)
+		require.Equal(t, "mined transaction not found; BUMP proofs require a mined transaction ID", httpErr.Message)
 
 		mockRepo.AssertExpectations(t)
 	})
 
 	t.Run("binary stream mode", func(t *testing.T) {
 		mockRepo := new(MockRepositoryForMerkleProof)
+		bcMock := &blockchain.Mock{}
+		bcMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
 		h := &HTTP{
-			logger:     logger,
-			settings:   tSettings,
-			repository: mockRepo,
+			logger:         logger,
+			settings:       tSettings,
+			repository:     mockRepo,
+			mainChainCache: newMainChainCache(bcMock, ulogger.TestLogger{}, 0),
 		}
 
 		// Create request
@@ -436,10 +441,13 @@ func TestGetMerkleProof(t *testing.T) {
 		subtreeHash, _ := chainhash.NewHashFromStr(subtreeHashStr)
 
 		bits, _ := model.NewNBitFromString("1d00ffff")
+		// Single-subtree block with no coinbase tx: the block's merkle root is the subtree's own
+		// root, unmodified, so the header must carry subtreeHash for the reconstructed-root check
+		// to pass.
 		mockBlock := &model.Block{
 			Header: &model.BlockHeader{
 				HashPrevBlock:  &chainhash.Hash{},
-				HashMerkleRoot: &chainhash.Hash{},
+				HashMerkleRoot: subtreeHash,
 				Timestamp:      1234567890,
 				Bits:           *bits,
 				Nonce:          12345,
@@ -457,7 +465,7 @@ func TestGetMerkleProof(t *testing.T) {
 
 		mockBlockHeader := &model.BlockHeader{
 			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
+			HashMerkleRoot: subtreeHash,
 			Timestamp:      1234567890,
 			Bits:           *bits,
 			Nonce:          12345,
@@ -468,6 +476,7 @@ func TestGetMerkleProof(t *testing.T) {
 		mockRepo.On("GetBlockByID", mock.Anything, uint64(1)).Return(mockBlock, nil)
 		mockRepo.On("GetSubtree", mock.Anything, subtreeHash).Return(mockSubtree, nil)
 		mockRepo.On("GetBlockHeader", mock.Anything, mock.AnythingOfType("*chainhash.Hash")).Return(mockBlockHeader, mockBlockHeaderMeta, nil)
+		mockRepo.On("GetBlockchainClient").Return(bcMock).Maybe()
 
 		// Execute handler with binary mode
 		handler := h.GetMerkleProof(BINARY_STREAM)
@@ -479,6 +488,175 @@ func TestGetMerkleProof(t *testing.T) {
 		assert.Equal(t, "application/octet-stream", rec.Header().Get("Content-Type"))
 		assert.NotEmpty(t, rec.Body.Bytes())
 	})
+}
+
+func TestGetMerkleProof_OrphanOnly_Returns404(t *testing.T) {
+	initPrometheusMetrics()
+	mockRepo := &MockRepositoryForMerkleProof{}
+
+	// Tx exists, but only in an orphan block (ID=42).
+	txHash, _ := chainhash.NewHashFromStr("1111111111111111111111111111111111111111111111111111111111111111")
+	mockRepo.On("GetTxMeta", mock.Anything, mock.Anything).Return(&meta.Data{
+		BlockIDs:     []uint32{42},
+		BlockHeights: []uint32{100},
+		SubtreeIdxs:  []int{0},
+	}, nil)
+
+	bcMock := &blockchain.Mock{}
+	bcMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{42}).Return(false, nil)
+	mockRepo.On("GetBlockchainClient").Return(bcMock).Maybe()
+
+	httpServer := &HTTP{
+		logger:         ulogger.TestLogger{},
+		settings:       &settings.Settings{},
+		repository:     mockRepo,
+		mainChainCache: newMainChainCache(bcMock, ulogger.TestLogger{}, 0),
+	}
+	e := echo.New()
+	req, _ := http.NewRequest("GET", "/api/v1/merkle_proof/"+txHash.String()+"/json", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/api/v1/merkle_proof/:hash/json")
+	c.SetParamNames("hash")
+	c.SetParamValues(txHash.String())
+
+	err := httpServer.GetMerkleProof(JSON)(c)
+	echoErr := &echo.HTTPError{}
+	require.True(t, errors.As(err, &echoErr))
+	assert.Equal(t, http.StatusNotFound, echoErr.Code)
+	assert.Contains(t, echoErr.Message.(string), "not in main chain")
+
+	mockRepo.AssertNotCalled(t, "FindBlocksContainingSubtree", mock.Anything, mock.Anything)
+}
+
+// A known subtree root must never be returned as a successful BUMP (issue 1500).
+// Keep the old fallback's data available so this fails with HTTP 200 before the fix.
+func TestGetMerkleProof_SubtreeHash_ReturnsNotFound(t *testing.T) {
+	initPrometheusMetrics()
+	for _, tc := range []struct {
+		mode   ReadMode
+		suffix string
+	}{{JSON, "/json"}, {HEX, "/hex"}, {BINARY_STREAM, ""}} {
+		mode := tc.mode
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			mockRepo := &MockRepositoryForMerkleProof{}
+
+			// The queried hash is actually a subtree hash; the UTXO store has no tx for it.
+			queriedHash, _ := chainhash.NewHashFromStr("2222222222222222222222222222222222222222222222222222222222222222")
+			otherSubtreeHash, _ := chainhash.NewHashFromStr("3333333333333333333333333333333333333333333333333333333333333333")
+
+			// REAL store behaviour for unknown hashes (stores/utxo/sql, stores/utxo/aerospike).
+			mockRepo.On("GetTxMeta", mock.Anything, queriedHash).
+				Return(nil, errors.NewTxNotFoundError("transaction not found"))
+
+			// Subtree path: the hash is a genuine subtree in a main-chain block with two
+			// subtrees (>=2 so the BUMP path is non-empty and passes bump.Validate).
+			mockRepo.On("FindBlocksContainingSubtree", mock.Anything, queriedHash).
+				Return([]uint32{1}, []uint32{100}, []int{0}, nil).Maybe()
+
+			bits, _ := model.NewNBitFromString("1d00ffff")
+			mockBlock := &model.Block{
+				Header: &model.BlockHeader{
+					HashPrevBlock:  &chainhash.Hash{},
+					HashMerkleRoot: &chainhash.Hash{},
+					Timestamp:      1234567890,
+					Bits:           *bits,
+					Nonce:          12345,
+					Version:        1,
+				},
+				Subtrees: []*chainhash.Hash{queriedHash, otherSubtreeHash},
+				Height:   100,
+			}
+			mockRepo.On("GetBlockByID", mock.Anything, uint64(1)).Return(mockBlock, nil).Maybe()
+			mockRepo.On("GetBlockHeader", mock.Anything, mock.AnythingOfType("*chainhash.Hash")).
+				Return(mockBlock.Header, &model.BlockHeaderMeta{Height: 100}, nil).Maybe()
+
+			httpServer := &HTTP{
+				logger:     ulogger.TestLogger{},
+				settings:   &settings.Settings{},
+				repository: mockRepo,
+			}
+			e := echo.New()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/merkle_proof/"+queriedHash.String()+tc.suffix, nil)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetParamNames("hash")
+			c.SetParamValues(queriedHash.String())
+
+			err := httpServer.GetMerkleProof(mode)(c)
+			require.Error(t, err)
+			e.HTTPErrorHandler(err, c)
+			require.Equal(t, http.StatusNotFound, rec.Code)
+			var response map[string]string
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+			require.Equal(t, "mined transaction not found; BUMP proofs require a mined transaction ID", response["message"])
+			mockRepo.AssertNotCalled(t, "FindBlocksContainingSubtree", mock.Anything, mock.Anything)
+			mockRepo.AssertExpectations(t)
+		})
+	}
+}
+
+func TestGetMerkleProof_ForkPlusMain_ReturnsMainChainProof(t *testing.T) {
+	initPrometheusMetrics()
+	mockRepo := &MockRepositoryForMerkleProof{}
+
+	coinbaseHash, _ := chainhash.NewHashFromStr("abc1234567890123456789012345678901234567890123456789012345678901")
+	txHash, _ := chainhash.NewHashFromStr("1111111111111111111111111111111111111111111111111111111111111111")
+
+	st, err := subtree.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	st.Nodes = []subtree.Node{
+		{Hash: *coinbaseHash},
+		{Hash: *txHash},
+	}
+	subtreeRoot := st.RootHash()
+
+	mainBlock := &model.Block{
+		Header: &model.BlockHeader{
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: subtreeRoot,
+		},
+		Subtrees: []*chainhash.Hash{subtreeRoot},
+	}
+
+	mockRepo.On("GetTxMeta", mock.Anything, mock.Anything).Return(&meta.Data{
+		BlockIDs:     []uint32{42, 99}, // BlockIDs[0] is the orphan — must not be picked
+		BlockHeights: []uint32{100, 101},
+		SubtreeIdxs:  []int{0, 0},
+	}, nil)
+	mockRepo.On("GetBlockByID", mock.Anything, uint64(99)).Return(mainBlock, nil)
+	mockRepo.On("GetSubtree", mock.Anything, mock.Anything).Return(st, nil)
+	mockRepo.On("GetBlockHeader", mock.Anything, mock.Anything).Return(mainBlock.Header, &model.BlockHeaderMeta{}, nil)
+
+	bcMock := &blockchain.Mock{}
+	bcMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{42}).Return(false, nil)
+	bcMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{99}).Return(true, nil)
+	mockRepo.On("GetBlockchainClient").Return(bcMock).Maybe()
+
+	httpServer := &HTTP{
+		logger:         ulogger.TestLogger{},
+		settings:       &settings.Settings{},
+		repository:     mockRepo,
+		mainChainCache: newMainChainCache(bcMock, ulogger.TestLogger{}, 0),
+	}
+	e := echo.New()
+	req, _ := http.NewRequest("GET", "/api/v1/merkle_proof/"+txHash.String()+"/json", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/api/v1/merkle_proof/:hash/json")
+	c.SetParamNames("hash")
+	c.SetParamValues(txHash.String())
+
+	err = httpServer.GetMerkleProof(JSON)(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var response map[string]interface{}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+	assert.Equal(t, float64(101), response["blockHeight"], "must return main-chain block height (101), not orphan (100)")
+
+	bcMock.AssertCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, []uint32{42})
+	bcMock.AssertCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, []uint32{99})
 }
 
 // TestMerkleProofAdapter tests the adapter that allows using merkleproof package with the repository
@@ -519,8 +697,9 @@ func TestMerkleProofAdapter(t *testing.T) {
 		mockRepo.On("GetBlockHeader", ctx, blockHash).Return(blockHeader, (*model.BlockHeaderMeta)(nil), nil)
 		mockRepo.On("GetSubtree", ctx, subtreeHash).Return(st, nil)
 
-		// Create adapter
-		adapter := newMerkleProofAdapter(ctx, mockRepo)
+		// Create adapter (nil cache: adapter falls back to direct gRPC, which keeps
+		// this test focused on the data-conversion logic).
+		adapter := newMerkleProofAdapter(ctx, mockRepo, nil)
 
 		// Test GetTxMeta conversion
 		txMetaSimple, err := adapter.GetTxMeta(txHash)
@@ -574,6 +753,14 @@ func (m *MockRepositoryForMerkleProof) GetSubtreeTxIDsReader(ctx context.Context
 	return nil, nil
 }
 
+func (m *MockRepositoryForMerkleProof) GetSubtreeNodeHashesReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
+	return nil, nil
+}
+
+func (m *MockRepositoryForMerkleProof) GetSubtreeNodesPage(ctx context.Context, hash *chainhash.Hash, offset, limit int) ([]subtree.Node, int, error) {
+	return nil, 0, nil
+}
+
 func (m *MockRepositoryForMerkleProof) GetSubtreeDataReaderFromBlockPersister(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
 	return nil, nil
 }
@@ -590,12 +777,16 @@ func (m *MockRepositoryForMerkleProof) GetSubtree(ctx context.Context, hash *cha
 	return args.Get(0).(*subtree.Subtree), args.Error(1)
 }
 
+func (m *MockRepositoryForMerkleProof) GetSubtreePage(ctx context.Context, hash *chainhash.Hash, offset, limit int) (*subtree.Subtree, int, int, error) {
+	return nil, 0, 0, nil
+}
+
 func (m *MockRepositoryForMerkleProof) GetSubtreeData(ctx context.Context, hash *chainhash.Hash) (*subtree.Data, error) {
 	return nil, nil
 }
 
-func (m *MockRepositoryForMerkleProof) GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, error) {
-	return nil, nil
+func (m *MockRepositoryForMerkleProof) GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, func(), error) {
+	return nil, func() {}, nil
 }
 
 func (m *MockRepositoryForMerkleProof) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
@@ -627,7 +818,8 @@ func (m *MockRepositoryForMerkleProof) GetBlockLocator(ctx context.Context, bloc
 }
 
 func (m *MockRepositoryForMerkleProof) GetBlockchainClient() blockchain.ClientI {
-	return nil
+	args := m.Called()
+	return args.Get(0).(blockchain.ClientI)
 }
 
 func (m *MockRepositoryForMerkleProof) GetBlockvalidationClient() blockvalidation.Interface {
@@ -635,5 +827,9 @@ func (m *MockRepositoryForMerkleProof) GetBlockvalidationClient() blockvalidatio
 }
 
 func (m *MockRepositoryForMerkleProof) GetP2PClient() p2p.ClientI {
+	return nil
+}
+
+func (m *MockRepositoryForMerkleProof) GetPeerRegistryClient() blockchain.PeerRegistryClientI {
 	return nil
 }

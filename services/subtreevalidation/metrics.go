@@ -58,15 +58,59 @@ var (
 	// validation logic, separate from handler overhead.
 	prometheusSubtreeValidationValidateSubtreeDuration prometheus.Histogram
 
+	// prometheusSubtreeValidationBatchStep times each step of the catch-up batch
+	// path (precheck, resolve, check, check_after_reads, write, fallback) per
+	// load batch. resolve and check overlap, so their sum overstates the time;
+	// check_after_reads is the check time left once every parent read is back.
+	prometheusSubtreeValidationBatchStep *prometheus.HistogramVec
+
+	// prometheusSubtreeValidationBatchTxs counts the catch-up batch path's
+	// transactions by outcome: created by SpendAndCreateMulti, or sent through
+	// the per-transaction path.
+	prometheusSubtreeValidationBatchTxs *prometheus.CounterVec
+
+	// prometheusSubtreeValidationBatchParentOutputs counts previous outputs the
+	// catch-up batch path resolved, by source: memory (a parent in the same load
+	// batch) or store (ParentOutputsForValidation).
+	prometheusSubtreeValidationBatchParentOutputs *prometheus.CounterVec
+
+	// prometheusSubtreeValidationBatchLists counts SpendAndCreateMulti lists.
+	prometheusSubtreeValidationBatchLists prometheus.Counter
+
 	// prometheusSubtreeValidationBlessMissingTransaction tracks the duration of bless missing transaction operations.
 	// This histogram measures the time taken to handle missing transactions,
 	// which is an important aspect of subtree validation.
 	prometheusSubtreeValidationBlessMissingTransaction prometheus.Histogram
 
-	// prometheusSubtreeValidationSetTXMetaCacheKafka tracks the duration of setting tx meta cache from kafka operations.
-	// This histogram measures the time taken to update the transaction metadata cache
-	// from Kafka messages, which is a critical step in subtree validation.
-	prometheusSubtreeValidationSetTXMetaCacheKafka prometheus.Histogram
+	// prometheusSubtreeValidationBlessUnlockFailed counts transactions that were accepted
+	// but whose two-phase-commit unlock failed, and were blessed anyway.
+	prometheusSubtreeValidationBlessUnlockFailed prometheus.Counter
+
+	// prometheusSubtreeValidationBlessUnlockRecovered counts transactions in that set that
+	// the per-level retry in unlockAcceptedTransactions did manage to unlock.
+	prometheusSubtreeValidationBlessUnlockRecovered prometheus.Counter
+
+	// prometheusSubtreeValidationBlessUnlockRetryFailedBatches counts unlock retry calls that
+	// returned an error. SetLocked reports the first error without per-record results, so the
+	// unit is one call, not one transaction: on a failed call some or all of its hashes stay
+	// locked until they are mined. The same goes for a retry left unrun because the unlock
+	// context was already done.
+	prometheusSubtreeValidationBlessUnlockRetryFailedBatches prometheus.Counter
+
+	// prometheusSubtreeValidationSetTXMetaCacheKafkaBatch tracks the duration of processing one
+	// SetCacheMulti batch from a Kafka message. One observation per Kafka message that contained
+	// at least one ADD entry, regardless of how many entries the batch held.
+	prometheusSubtreeValidationSetTXMetaCacheKafkaBatch prometheus.Histogram
+
+	// prometheusSubtreeValidationSetTXMetaCacheKafkaCount counts individual ADD entries
+	// processed from Kafka (attempts, not successes — failures are tracked separately by
+	// prometheusSubtreeValidationSetTXMetaCacheKafkaErrors, matching the pre-batching
+	// behaviour where the histogram was observed regardless of cache write outcome).
+	// Pre-batching this was the auto-emitted "set_tx_meta_cache_kafka_count" of the
+	// duration histogram; the batched dispatch path emits one histogram observation per
+	// Kafka message, so the per-entry rate moved to this explicit counter to keep
+	// `rate(set_tx_meta_cache_kafka_count[…])` reading entries/sec.
+	prometheusSubtreeValidationSetTXMetaCacheKafkaCount prometheus.Counter
 
 	// prometheusSubtreeValidationDelTXMetaCacheKafka tracks the duration of deleting tx meta cache from kafka operations.
 	// This histogram measures the time taken to remove transaction metadata from the cache
@@ -84,6 +128,11 @@ var (
 	// need a signal so they can detect malformed-message bursts that would otherwise be invisible.
 	// Reason labels: nil_message, too_short, unmarshal_failure, bad_hash, bad_url.
 	prometheusSubtreeKafkaMalformed *prometheus.CounterVec
+
+	// prometheusSubtreeAlreadyExistsSkipped counts subtree Kafka messages skipped because the
+	// subtree already exists. This is individually benign (best-effort, no retries), but without
+	// a metric a spike in the rate would be invisible.
+	prometheusSubtreeAlreadyExistsSkipped prometheus.Counter
 )
 
 var (
@@ -154,6 +203,46 @@ func _initPrometheusMetrics() {
 		},
 	)
 
+	prometheusSubtreeValidationBatchStep = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "batch_step",
+			Help:      "Duration of each step of the catch-up batch path, per load batch; resolve and check overlap, check_after_reads is the check time after the last parent read",
+			Buckets:   util.MetricsBucketsMilliLongSeconds,
+		},
+		[]string{"step"},
+	)
+
+	prometheusSubtreeValidationBatchTxs = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "batch_txs",
+			Help:      "Transactions handled by the catch-up batch path, by outcome",
+		},
+		[]string{"outcome"},
+	)
+
+	prometheusSubtreeValidationBatchParentOutputs = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "batch_parent_outputs",
+			Help:      "Previous outputs resolved by the catch-up batch path, by source",
+		},
+		[]string{"source"},
+	)
+
+	prometheusSubtreeValidationBatchLists = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "batch_lists",
+			Help:      "SpendAndCreateMulti lists written by the catch-up batch path",
+		},
+	)
+
 	prometheusSubtreeValidationBlessMissingTransaction = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
@@ -164,13 +253,49 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusSubtreeValidationSetTXMetaCacheKafka = promauto.NewHistogram(
+	prometheusSubtreeValidationBlessUnlockFailed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "bless_unlock_failed",
+			Help:      "Accepted transactions blessed although their two-phase-commit unlock failed",
+		},
+	)
+
+	prometheusSubtreeValidationBlessUnlockRecovered = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "bless_unlock_recovered",
+			Help:      "Accepted transactions the per-level unlock retry unlocked, subset of bless_unlock_failed",
+		},
+	)
+
+	prometheusSubtreeValidationBlessUnlockRetryFailedBatches = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "bless_unlock_retry_failed_batches",
+			Help:      "Unlock retry calls that returned an error, per call not per transaction, the unlocked set of such a call is unknown",
+		},
+	)
+
+	prometheusSubtreeValidationSetTXMetaCacheKafkaBatch = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
 			Subsystem: "subtreevalidation",
-			Name:      "set_tx_meta_cache_kafka",
-			Help:      "Duration of setting tx meta cache from kafka",
+			Name:      "set_tx_meta_cache_kafka_batch",
+			Help:      "Duration of one SetCacheMulti batch from a Kafka txmeta message (per Kafka message, not per entry)",
 			Buckets:   util.MetricsBucketsMicroSeconds,
+		},
+	)
+
+	prometheusSubtreeValidationSetTXMetaCacheKafkaCount = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "set_tx_meta_cache_kafka_count",
+			Help:      "Number of ADD entries processed from Kafka (per-entry; attempts, not successes — failures separately in *_errors)",
 		},
 	)
 
@@ -201,5 +326,14 @@ func _initPrometheusMetrics() {
 			Help:      "Number of malformed Kafka subtree messages dropped, by reason",
 		},
 		[]string{"reason"},
+	)
+
+	prometheusSubtreeAlreadyExistsSkipped = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "subtree_already_exists_skipped_total",
+			Help:      "Number of subtree Kafka messages skipped because the subtree already exists",
+		},
 	)
 }

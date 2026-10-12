@@ -3,6 +3,7 @@ package blockassembly
 import (
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/stretchr/testify/assert"
@@ -28,20 +29,23 @@ func TestData_Bytes(t *testing.T) {
 	})
 
 	t.Run("should return the correct bytes, with parents", func(t *testing.T) {
+		mkIn := func(parent *chainhash.Hash, vout uint32) *bt.Input {
+			in := &bt.Input{PreviousTxOutIndex: vout}
+			require.NoError(t, in.PreviousTxIDAdd(parent))
+			return in
+		}
+
+		ti, err := subtree.NewTxInpointsFromInputs([]*bt.Input{
+			mkIn(hash1, 1), mkIn(hash1, 2),
+			mkIn(hash2, 3), mkIn(hash2, 4),
+		})
+		require.NoError(t, err)
+
 		d := &Data{
 			TxIDChainHash: *hash0,
 			Fee:           1,
 			Size:          2,
-			TxInpoints: subtree.TxInpoints{
-				ParentTxHashes: []chainhash.Hash{
-					*hash1,
-					*hash2,
-				},
-				Idxs: [][]uint32{
-					{1, 2},
-					{3, 4},
-				},
-			},
+			TxInpoints:    ti,
 		}
 
 		b := d.Bytes()

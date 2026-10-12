@@ -54,6 +54,7 @@ func ValidateBlockTemplate(logger ulogger.Logger, settings *settings.Settings) (
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = blockAssemblyClient.Close() }()
 
 	// create a new blockchain validation client
 	var blockValidationClient *blockvalidation.Client
@@ -62,6 +63,7 @@ func ValidateBlockTemplate(logger ulogger.Logger, settings *settings.Settings) (
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = blockValidationClient.Close() }()
 
 	// create a new block template
 	var blockTemplate *model.Block

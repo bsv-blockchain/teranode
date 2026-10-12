@@ -231,7 +231,7 @@ func newMTPTestStore(t *testing.T) *SQL {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { s.Close(context.Background()) })
 	return s
 }
 
@@ -396,7 +396,7 @@ func TestMTPCache_BelowCSVHeight_NoCache(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	ctx := context.Background()
 

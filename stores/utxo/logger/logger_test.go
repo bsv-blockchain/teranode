@@ -2,6 +2,7 @@ package logger
 
 import (
 	"context"
+	"net/url"
 	"testing"
 	"time"
 
@@ -14,7 +15,10 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
+	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -23,6 +27,10 @@ import (
 // MockStore implements utxo.Store interface for testing
 type MockStore struct {
 	mock.Mock
+
+	// SupportsOutpointOnlySpendResult is returned by SupportsOutpointOnlySpend so a
+	// delegation test can assert the logger decorator forwards the wrapped value.
+	SupportsOutpointOnlySpendResult bool
 }
 
 func (m *MockStore) SetBlockHeight(blockHeight uint32) error {
@@ -45,6 +53,11 @@ func (m *MockStore) GetMedianBlockTime() uint32 {
 	return args.Get(0).(uint32)
 }
 
+func (m *MockStore) SetBlockState(height, medianTime uint32) error {
+	args := m.Called(height, medianTime)
+	return args.Error(0)
+}
+
 func (m *MockStore) GetBlockState() utxo.BlockState {
 	return utxo.BlockState{
 		Height:     m.GetBlockHeight(),
@@ -57,9 +70,22 @@ func (m *MockStore) Health(ctx context.Context, checkLiveness bool) (int, string
 	return args.Int(0), args.String(1), args.Error(2)
 }
 
-func (m *MockStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
-	args := m.Called(ctx, tx, blockHeight, opts)
-	return args.Get(0).(*meta.Data), args.Error(1)
+func (m *MockStore) Close(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+func (m *MockStore) SupportsOutpointOnlySpend() bool { return m.SupportsOutpointOnlySpendResult }
+
+// TestSupportsOutpointOnlySpend_Delegates verifies the logger decorator forwards the
+// wrapped store's fast-path capability in both directions (so a SQL store wrapped by the
+// logger still reports true, and the gates that query through the decorator engage).
+func TestSupportsOutpointOnlySpend_Delegates(t *testing.T) {
+	for _, want := range []bool{true, false} {
+		inner := &MockStore{SupportsOutpointOnlySpendResult: want}
+		s := New(context.Background(), ulogger.TestLogger{}, inner)
+		require.Equal(t, want, s.SupportsOutpointOnlySpend(), "logger must delegate SupportsOutpointOnlySpend to the wrapped store")
+	}
 }
 
 func (m *MockStore) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
@@ -75,9 +101,20 @@ func (m *MockStore) Get(ctx context.Context, hash *chainhash.Hash, fieldsArg ...
 	return args.Get(0).(*meta.Data), args.Error(1)
 }
 
-func (m *MockStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
-	args := m.Called(ctx, tx, ignoreFlags)
-	return args.Get(0).([]*utxo.Spend), args.Error(1)
+func (m *MockStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
+	args := m.Called(ctx, tx, blockHeight, opts)
+
+	var md *meta.Data
+	if args.Get(0) != nil {
+		md = args.Get(0).(*meta.Data)
+	}
+
+	var spends []*utxo.Spend
+	if args.Get(1) != nil {
+		spends = args.Get(1).([]*utxo.Spend)
+	}
+
+	return md, spends, args.Error(2)
 }
 
 func (m *MockStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
@@ -86,6 +123,11 @@ func (m *MockStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLoc
 }
 
 func (m *MockStore) Delete(ctx context.Context, hash *chainhash.Hash) error {
+	args := m.Called(ctx, hash)
+	return args.Error(0)
+}
+
+func (m *MockStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
 	args := m.Called(ctx, hash)
 	return args.Error(0)
 }
@@ -113,6 +155,24 @@ func (m *MockStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo
 	return args.Get(0).(utxo.UnminedTxIterator), args.Error(1)
 }
 
+func (m *MockStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(utxo.UnminedTxIterator), args.Error(1)
+}
+
+func (m *MockStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
+	args := m.Called(ctx, removals)
+	return args.Error(0)
+}
+
+func (m *MockStore) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockIDsRemoval) error {
+	args := m.Called(ctx, removals)
+	return args.Error(0)
+}
+
 func (m *MockStore) GetSpend(ctx context.Context, spendArg *utxo.Spend) (*utxo.SpendResponse, error) {
 	args := m.Called(ctx, spendArg)
 	return args.Get(0).(*utxo.SpendResponse), args.Error(1)
@@ -126,6 +186,24 @@ func (m *MockStore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice [
 func (m *MockStore) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 	args := m.Called(ctx, tx)
 	return args.Error(0)
+}
+
+func (m *MockStore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	args := m.Called(ctx, txs, blockHeight, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]utxo.SpendAndCreateMultiResult), args.Error(1)
+}
+
+func (m *MockStore) ParentOutputsForValidation(ctx context.Context, outpoints []utxo.Outpoint, opts ...utxo.ParentOutputOption) ([]utxo.ParentOutput, error) {
+	args := m.Called(ctx, outpoints)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]utxo.ParentOutput), args.Error(1)
 }
 
 func (m *MockStore) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
@@ -168,6 +246,24 @@ func (m *MockStore) SetLocked(ctx context.Context, txHashes []chainhash.Hash, se
 	return args.Error(0)
 }
 
+func (m *MockStore) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
+	args := m.Called(ctx, intent)
+	return args.Error(0)
+}
+
+func (m *MockStore) CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error {
+	args := m.Called(ctx, intentID)
+	return args.Error(0)
+}
+
+func (m *MockStore) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]utxo.ConflictIntent), args.Error(1)
+}
+
 func (m *MockStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
 	args := m.Called(ctx, txHashes, onLongestChain)
 	return args.Error(0)
@@ -185,29 +281,6 @@ func (m *MockStore) PreserveTransactions(ctx context.Context, txIDs []chainhash.
 
 func (m *MockStore) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
 	args := m.Called(ctx, currentHeight)
-	return args.Error(0)
-}
-
-// MockIterator implements utxo.UnminedTxIterator for testing
-type MockIterator struct {
-	mock.Mock
-}
-
-func (m *MockIterator) Next(ctx context.Context) ([]*utxo.UnminedTransaction, error) {
-	args := m.Called(ctx)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]*utxo.UnminedTransaction), args.Error(1)
-}
-
-func (m *MockIterator) Err() error {
-	args := m.Called()
-	return args.Error(0)
-}
-
-func (m *MockIterator) Close() error {
-	args := m.Called()
 	return args.Error(0)
 }
 
@@ -385,7 +458,7 @@ func TestHealth(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
-func TestCreate(t *testing.T) {
+func TestSpendAndCreate(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	mockStore := &MockStore{}
 	store := New(context.Background(), logger, mockStore).(*Store)
@@ -394,35 +467,16 @@ func TestCreate(t *testing.T) {
 	tx := createTestTx(1)
 	blockHeight := uint32(100)
 	expectedData := createTestMetaData()
-	expectedErr := errors.NewError("create error")
+	expectedSpends := []*utxo.Spend{createTestSpend(1), createTestSpend(2)}
+	expectedErr := errors.NewError("spend and create error")
 
-	mockStore.On("Create", ctx, tx, blockHeight, mock.Anything).Return(expectedData, expectedErr)
+	mockStore.On("SpendAndCreate", ctx, tx, blockHeight, mock.Anything).Return(expectedData, expectedSpends, expectedErr)
 
-	data, err := store.Create(ctx, tx, blockHeight)
+	data, spends, err := store.SpendAndCreate(ctx, tx, blockHeight)
 
 	assert.Equal(t, expectedData, data)
+	assert.Equal(t, expectedSpends, spends)
 	assert.Equal(t, expectedErr, err)
-	mockStore.AssertExpectations(t)
-}
-
-func TestCreate_SkipLogging(t *testing.T) {
-	logger := ulogger.TestLogger{}
-	mockStore := &MockStore{}
-	store := New(context.Background(), logger, mockStore).(*Store)
-
-	ctx := context.Background()
-	tx := createTestTx(1)
-	// Create a transaction with nil output to trigger skipLogging
-	tx.Outputs[0] = nil
-	blockHeight := uint32(100)
-	expectedData := createTestMetaData()
-
-	mockStore.On("Create", ctx, tx, blockHeight, mock.Anything).Return(expectedData, nil)
-
-	data, err := store.Create(ctx, tx, blockHeight)
-
-	assert.Equal(t, expectedData, data)
-	assert.NoError(t, err)
 	mockStore.AssertExpectations(t)
 }
 
@@ -466,44 +520,50 @@ func TestGet(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
-func TestSpend(t *testing.T) {
-	logger := ulogger.TestLogger{}
-	mockStore := &MockStore{}
-	store := New(context.Background(), logger, mockStore).(*Store)
-
-	ctx := context.Background()
-	tx := createTestTx(1)
-	ignoreFlags := []utxo.IgnoreFlags{{IgnoreConflicting: true, IgnoreLocked: false}}
-	expectedSpends := []*utxo.Spend{createTestSpend(1), createTestSpend(2)}
-	expectedErr := errors.NewError("spend error")
-
-	mockStore.On("GetBlockHeight").Return(uint32(100))
-	mockStore.On("Spend", ctx, tx, ignoreFlags).Return(expectedSpends, expectedErr)
-
-	spends, err := store.Spend(ctx, tx, store.GetBlockHeight()+1, ignoreFlags...)
-
-	assert.Equal(t, expectedSpends, spends)
-	assert.Equal(t, expectedErr, err)
-	mockStore.AssertExpectations(t)
-}
-
+// TestUnspend proves the decorator forwards flagAsLocked unchanged (#1154).
+// Dropping it and hardcoding false defeats the SQL fix on the ?logging=true path
+// (a no-flag rollback would still write locked=false) and inverts
+// ProcessConflicting's Unspend(..., true) lock-set into a lock-clear.
 func TestUnspend(t *testing.T) {
-	logger := ulogger.TestLogger{}
-	mockStore := &MockStore{}
-	store := New(context.Background(), logger, mockStore).(*Store)
-
 	ctx := context.Background()
 	spends := []*utxo.Spend{createTestSpend(1), createTestSpend(2)}
 	expectedErr := errors.NewError("unspend error")
 
-	// Note: The implementation always passes false as the third argument (ignoring variadic parameter)
-	// The mock receives it as []bool{false} due to variadic expansion
-	mockStore.On("Unspend", ctx, spends, []bool{false}).Return(expectedErr)
+	t.Run("no flag is forwarded as no flag", func(t *testing.T) {
+		mockStore := &MockStore{}
+		store := New(ctx, ulogger.TestLogger{}, mockStore).(*Store)
 
-	err := store.Unspend(ctx, spends, true) // flagAsLocked is ignored in implementation
+		mockStore.On("Unspend", ctx, spends, []bool(nil)).Return(expectedErr)
 
-	assert.Equal(t, expectedErr, err)
-	mockStore.AssertExpectations(t)
+		err := store.Unspend(ctx, spends)
+
+		assert.Equal(t, expectedErr, err)
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("explicit true is forwarded unchanged", func(t *testing.T) {
+		mockStore := &MockStore{}
+		store := New(ctx, ulogger.TestLogger{}, mockStore).(*Store)
+
+		mockStore.On("Unspend", ctx, spends, []bool{true}).Return(expectedErr)
+
+		err := store.Unspend(ctx, spends, true)
+
+		assert.Equal(t, expectedErr, err)
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("explicit false is forwarded unchanged", func(t *testing.T) {
+		mockStore := &MockStore{}
+		store := New(ctx, ulogger.TestLogger{}, mockStore).(*Store)
+
+		mockStore.On("Unspend", ctx, spends, []bool{false}).Return(expectedErr)
+
+		err := store.Unspend(ctx, spends, false)
+
+		assert.Equal(t, expectedErr, err)
+		mockStore.AssertExpectations(t)
+	})
 }
 
 func TestDelete(t *testing.T) {
@@ -551,7 +611,7 @@ func TestGetUnminedTxIterator(t *testing.T) {
 	mockStore := &MockStore{}
 	store := New(context.Background(), logger, mockStore).(*Store)
 
-	mockIterator := &MockIterator{}
+	mockIterator := &utxo.MockUnminedTxIterator{}
 	expectedErr := errors.NewError("iterator error")
 
 	mockStore.On("GetUnminedTxIterator").Return(mockIterator, expectedErr)
@@ -821,7 +881,7 @@ func TestLoggerIntegration(t *testing.T) {
 	// Setup expectations
 	mockStore.On("SetBlockHeight", blockHeight).Return(nil)
 	mockStore.On("GetBlockHeight").Return(blockHeight)
-	mockStore.On("Create", ctx, tx, blockHeight, mock.Anything).Return(metaData, nil)
+	mockStore.On("SpendAndCreate", ctx, tx, blockHeight, mock.Anything).Return(metaData, nil, nil)
 	mockStore.On("GetMeta", ctx, hash, mock.Anything).Return(metaData, nil)
 
 	// Execute operations
@@ -831,7 +891,7 @@ func TestLoggerIntegration(t *testing.T) {
 	retrievedHeight := store.GetBlockHeight()
 	assert.Equal(t, blockHeight, retrievedHeight)
 
-	createdData, err := store.Create(ctx, tx, blockHeight)
+	createdData, _, err := store.SpendAndCreate(ctx, tx, blockHeight)
 	require.NoError(t, err)
 	assert.Equal(t, metaData, createdData)
 
@@ -897,9 +957,9 @@ func TestLoggerWithComplexData(t *testing.T) {
 	blockHeight := uint32(200)
 	expectedData := createTestMetaData()
 
-	mockStore.On("Create", ctx, tx, blockHeight, mock.Anything).Return(expectedData, nil)
+	mockStore.On("SpendAndCreate", ctx, tx, blockHeight, mock.Anything).Return(expectedData, nil, nil)
 
-	data, err := store.Create(ctx, tx, blockHeight)
+	data, _, err := store.SpendAndCreate(ctx, tx, blockHeight)
 
 	require.NoError(t, err)
 	assert.Equal(t, expectedData, data)
@@ -994,9 +1054,9 @@ func TestCreateWithNilOutputs(t *testing.T) {
 	blockHeight := uint32(100)
 	expectedData := createTestMetaData()
 
-	mockStore.On("Create", ctx, tx, blockHeight, mock.Anything).Return(expectedData, nil)
+	mockStore.On("SpendAndCreate", ctx, tx, blockHeight, mock.Anything).Return(expectedData, nil, nil)
 
-	data, err := store.Create(ctx, tx, blockHeight)
+	data, _, err := store.SpendAndCreate(ctx, tx, blockHeight)
 
 	require.NoError(t, err)
 	assert.Equal(t, expectedData, data)
@@ -1024,7 +1084,7 @@ func TestGetUnminedTxIteratorPassthrough(t *testing.T) {
 	mockStore := &MockStore{}
 	store := New(context.Background(), logger, mockStore).(*Store)
 
-	mockIterator := &MockIterator{}
+	mockIterator := &utxo.MockUnminedTxIterator{}
 	mockStore.On("GetUnminedTxIterator").Return(mockIterator, nil)
 
 	iterator, err := store.GetUnminedTxIterator()
@@ -1047,4 +1107,59 @@ func TestInterfaceCompliance(t *testing.T) {
 	loggerStore, ok := store.(*Store)
 	require.True(t, ok)
 	require.NotNil(t, loggerStore)
+}
+
+// newLoggedSQLiteStore wraps a sqlitememory UTXO store in the logger store.
+func newLoggedSQLiteStore(t *testing.T) (utxo.Store, utxo.Store) {
+	t.Helper()
+
+	ctx := context.Background()
+	tSettings := test.CreateBaseTestSettings(t)
+
+	storeURL, err := url.Parse("sqlitememory:///" + t.Name())
+	require.NoError(t, err)
+
+	base, err := sql.New(ctx, ulogger.NewErrorTestLogger(t), tSettings, storeURL)
+	require.NoError(t, err)
+
+	return New(ctx, ulogger.TestLogger{}, base), base
+}
+
+// The logger store forwards a list to the inner store's SpendAndCreateMulti,
+// which writes every record, and forwards parent reads, which return what the
+// inner store holds.
+func TestSpendAndCreateMulti_Forwards(t *testing.T) {
+	ctx := context.Background()
+	s, base := newLoggedSQLiteStore(t)
+
+	w := tests.BuildMultiWorkload(t, 0x01, 2, 2)
+	w.StoreRoots(t, base, 6)
+
+	results, err := s.SpendAndCreateMulti(ctx, w.Txs, 7, utxo.WithIgnoreLocked(true))
+	require.NoError(t, err)
+	require.Len(t, results, len(w.Txs))
+
+	for i, r := range results {
+		require.Equal(t, utxo.MultiTxCreated, r.Status, "tx %d: %v", i, r.Err)
+
+		_, err := base.Get(ctx, w.Txs[i].TxIDChainHash())
+		require.NoError(t, err, "tx %d must be in the inner store", i)
+	}
+}
+
+func TestParentOutputsForValidation_Forwards(t *testing.T) {
+	ctx := context.Background()
+	s, base := newLoggedSQLiteStore(t)
+
+	w := tests.BuildMultiWorkload(t, 0x02, 0, 1)
+	w.StoreRoots(t, base, 6)
+
+	root := w.Roots[0]
+	answers, err := s.ParentOutputsForValidation(ctx, []utxo.Outpoint{{TxID: *root.TxIDChainHash(), Vout: 1}, {TxID: chainhash.Hash{0x0e}, Vout: 0}})
+	require.NoError(t, err)
+	require.Len(t, answers, 2)
+	require.Equal(t, utxo.ParentOutputNotMined, answers[0].Status)
+	require.Equal(t, root.Outputs[1].Satoshis, answers[0].Satoshis)
+	require.Equal(t, root.Outputs[1].LockingScript.Bytes(), answers[0].LockingScript.Bytes())
+	require.Equal(t, utxo.ParentOutputTxNotFound, answers[1].Status)
 }

@@ -1,68 +1,104 @@
-<script lang="ts">
-  import { createEventDispatcher } from 'svelte'
+<svelte:options runes={true} />
 
+<script lang="ts">
   import { mediaSize, MediaSize } from '../../../../stores/media'
   import { Button, Checkbox, Icon, Pager } from '$lib/components'
   import { getDisplay, SortOrder } from '../../utils'
   import type { ColDef } from '../../types'
 
-  const dispatch = createEventDispatcher()
-
-  export let name
-  export let colDefs: ColDef[] = []
-  export let data = []
-  export let idField
-  export let renderCells = {}
-  export let renderTypes = {}
-  export let disabled = false
-  export let expandUp = false
-  export let i18n
-  export let maxHeight = -1
-  export let fullWidth
-  export let bgColorTable
-  export let bgColorHead
-  export let selectable
-  export let selectedRowIds = []
-  export let filtersEnabled
-  export let filtersState
-  export let sortEnabled
-  export let sortState
-  export let paginationEnabled
-  export let paginationState
-  export let totalItems = -1
-  export let hasBoundaryRight = true
-  export let pager = true
-  export let alignPager = 'center'
-  export let getRowIconActions
-  export let getRenderProps
-  // export let getRowClassName
-  export let wrapTitles = true
+  let {
+    name,
+    colDefs = [],
+    data = [],
+    idField,
+    renderCells = {},
+    renderTypes = {},
+    disabled = false,
+    expandUp = false,
+    i18n,
+    maxHeight = -1,
+    fullWidth,
+    bgColorTable,
+    bgColorHead,
+    selectable,
+    selectedRowIds = [],
+    filtersEnabled,
+    filtersState,
+    sortEnabled,
+    sortState,
+    paginationEnabled,
+    paginationState,
+    totalItems = -1,
+    hasBoundaryRight = true,
+    pager = true,
+    alignPager = 'center',
+    getRowIconActions,
+    getRenderProps,
+    wrapTitles = true,
+    onfilter,
+    onheader,
+    onselect,
+    onpaginate,
+    onaction,
+  }: {
+    name?: any
+    colDefs?: ColDef[]
+    data?: any[]
+    idField?: any
+    renderCells?: any
+    renderTypes?: any
+    disabled?: boolean
+    expandUp?: boolean
+    i18n?: any
+    maxHeight?: number
+    fullWidth?: any
+    bgColorTable?: any
+    bgColorHead?: any
+    selectable?: any
+    selectedRowIds?: any[]
+    filtersEnabled?: any
+    filtersState?: any
+    sortEnabled?: any
+    sortState?: any
+    paginationEnabled?: any
+    paginationState?: any
+    totalItems?: number
+    hasBoundaryRight?: boolean
+    pager?: boolean
+    alignPager?: string
+    getRowIconActions?: any
+    getRenderProps?: any
+    wrapTitles?: boolean
+    onfilter?: (e: { colId: string }) => void
+    onheader?: (e: { colId: string }) => void
+    onselect?: (e: { id: any }) => void
+    onpaginate?: (e: any) => void
+    onaction?: (e: { name: any; type: any; value: any }) => void
+  } = $props()
 
   function onFilterClick(colId) {
-    dispatch('filter', { colId })
+    onfilter?.({ colId })
   }
 
   function onHeaderClick(colId) {
-    dispatch('header', { colId })
+    onheader?.({ colId })
   }
 
   function onRowSelect(id) {
-    dispatch('select', { id })
+    onselect?.({ id })
   }
 
   function onPage(e) {
-    dispatch('paginate', { ...e.detail })
+    onpaginate?.({ ...e })
   }
 
   function onActionIcon(type, value) {
-    dispatch('action', { name, type, value })
+    onaction?.({ name, type, value })
   }
 
-  let gutter = 32
-  let iconsW = 0
+  let gridGap = 0
 
-  $: {
-    iconsW = 0
+  const iconsW = $derived.by(() => {
     let maxIconsW = 0
     data.forEach((item) => {
       const icons = getRowIconActions ? getRowIconActions(name, item, idField) || [] : []
@@ -72,15 +108,14 @@
       }
     })
     // table cell has padding-left of 15px
-    iconsW = maxIconsW === 0 ? 0 : $mediaSize <= MediaSize.sm ? 56 : maxIconsW + 48
-  }
+    return maxIconsW === 0 ? 0 : $mediaSize <= MediaSize.sm ? 56 : maxIconsW + 48
+  })
 
-  let gridGap = 0
-  $: fixedWidth =
-    iconsW + (selectable ? 32 : 0) + (colDefs.length > 0 ? (colDefs.length - 1) * gridGap : 0)
-  let grid = ''
+  const fixedWidth = $derived(
+    iconsW + (selectable ? 32 : 0) + (colDefs.length > 0 ? (colDefs.length - 1) * gridGap : 0),
+  )
 
-  $: {
+  const grid = $derived.by(() => {
     let gridItems = selectable ? ['32px'] : []
     if ($mediaSize <= MediaSize.sm) {
       gridItems.push(`calc(100% - ${selectable ? '80px' : iconsW > 0 ? '48px' : '0'})`)
@@ -99,8 +134,8 @@
         gridItems.push(`${iconsW}px`)
       }
     }
-    grid = gridItems.join(' ')
-  }
+    return gridItems.join(' ')
+  })
 
   function getStyleProps(colDef) {
     if (colDef?.props?.style) {
@@ -113,24 +148,21 @@
     return {}
   }
 
-  let cssVars: string[] = []
-  $: {
-    cssVars = [
-      `--max-height-local:${maxHeight + 'px'}`,
-      `--bg-col-head-local:${
-        bgColorHead
-          ? bgColorHead
-          : bgColorTable
-            ? bgColorTable
-            : 'var(--table-th-bg-color, #ffffff)'
-      }`,
-      `--row-col-local:${bgColorTable ? bgColorTable : 'var(--table-bg-color, none)'}`,
-      `--align-pager-local:${alignPager}`,
-      `--grid-local:${grid}`,
-      `--grid-gap-local:${gridGap + 'px'}`,
-      `--header-wrap-titles:${wrapTitles ? 'wrap' : 'nowrap'}`,
-    ]
-  }
+  const cssVars: string[] = $derived([
+    `--max-height-local:${maxHeight + 'px'}`,
+    `--bg-col-head-local:${
+      bgColorHead
+        ? bgColorHead
+        : bgColorTable
+          ? bgColorTable
+          : 'var(--table-th-bg-color, #ffffff)'
+    }`,
+    `--row-col-local:${bgColorTable ? bgColorTable : 'var(--table-bg-color, none)'}`,
+    `--align-pager-local:${alignPager}`,
+    `--grid-local:${grid}`,
+    `--grid-gap-local:${gridGap + 'px'}`,
+    `--header-wrap-titles:${wrapTitles ? 'wrap' : 'nowrap'}`,
+  ])
 </script>
 
 <div class="table-and-tools" style={`${cssVars.join(';')}`}>
@@ -151,13 +183,13 @@
         <section class="thead">
           <div class="tr">
             {#if selectable}
-              <div class="th" />
+              <div class="th"></div>
             {/if}
             {#each colDefs as colDef, i (colDef.id)}
-              <!-- svelte-ignore a11y-click-events-have-key-events -->
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
               <button
                 class="th"
-                on:click={() => onHeaderClick(colDef.id)}
+                onclick={() => onHeaderClick(colDef.id)}
                 class:right={i > 0 && colDef?.type === 'number'}
                 type="button"
               >
@@ -173,14 +205,14 @@
                   {/if}
                   {#if filtersEnabled && filtersState[colDef.id]}
                     <div class="header-icon">
-                      <Icon name="filters" size={18} on:click={() => onFilterClick(colDef.id)} />
+                      <Icon name="filters" size={18} onclick={() => onFilterClick(colDef.id)} />
                     </div>
                   {/if}
                 </div>
               </button>
             {/each}
             {#if getRowIconActions}
-              <div class="th" />
+              <div class="th"></div>
             {/if}
           </div>
         </section>
@@ -193,23 +225,23 @@
                 <Checkbox
                   name={item[idField]}
                   checked={selectedRowIds.includes(item[idField])}
-                  on:change={() => onRowSelect(item[idField])}
+                  onchange={() => onRowSelect(item[idField])}
                 />
               </div>
             {/if}
             {#if $mediaSize > MediaSize.sm}
               {#each colDefs as colDef, i (colDef.id)}
+                {@const display = getDisplay(renderCells, renderTypes, colDef, idField, item)}
                 <div class="td" class:left={i === 0}>
-                  {#if getDisplay(renderCells, renderTypes, colDef, idField, item).component}
-                    <svelte:component
-                      this={getDisplay(renderCells, renderTypes, colDef, idField, item).component}
+                  {#if display.component}
+                    {@const CellComponent = display.component}
+                    <CellComponent
                       {...{
-                        ...getDisplay(renderCells, renderTypes, colDef, idField, item).props,
+                        ...display.props,
                         ...(getRenderProps ? getRenderProps(name, colDef, idField, item) : {}),
-                      }}
-                    />
+                      }} />
                   {:else}
-                    {getDisplay(renderCells, renderTypes, colDef, idField, item).value}
+                    {display.value}
                   {/if}
                 </div>
               {/each}
@@ -217,11 +249,12 @@
               <div class="td">
                 <div class="inner-grid">
                   {#each colDefs as colDef (colDef.id)}
+                    {@const display = getDisplay(renderCells, renderTypes, colDef, idField, item)}
                     <div class="inner-grid-item" {...getStyleProps(colDef)}>
-                      <!-- svelte-ignore a11y-click-events-have-key-events -->
+                      <!-- svelte-ignore a11y_click_events_have_key_events -->
                       <button
                         class="inner-grid-item-label"
-                        on:click={() => onHeaderClick(colDef.id)}
+                        onclick={() => onHeaderClick(colDef.id)}
                         type="button"
                       >
                         <div class="table-cell-row">
@@ -241,26 +274,24 @@
                               <Icon
                                 name="filters"
                                 size={18}
-                                on:click={() => onFilterClick(colDef.id)}
+                                onclick={() => onFilterClick(colDef.id)}
                               />
                             </div>
                           {/if}
                         </div>
                       </button>
                       <div class="inner-grid-item-value">
-                        {#if getDisplay(renderCells, renderTypes, colDef, idField, item).component}
-                          <svelte:component
-                            this={getDisplay(renderCells, renderTypes, colDef, idField, item)
-                              .component}
+                        {#if display.component}
+                          {@const CellComponent = display.component}
+                          <CellComponent
                             {...{
-                              ...getDisplay(renderCells, renderTypes, colDef, idField, item).props,
+                              ...display.props,
                               ...(getRenderProps
                                 ? getRenderProps(name, colDef, idField, item)
                                 : {}),
-                            }}
-                          />
+                            }} />
                         {:else}
-                          {getDisplay(renderCells, renderTypes, colDef, idField, item).value}
+                          {display.value}
                         {/if}
                       </div>
                     </div>
@@ -273,11 +304,11 @@
                 {#if !disabled}
                   <div class="table-cell-row">
                     {#each getRowIconActions(name, item, idField) || [] as actionItem (actionItem.icon)}
-                      <!-- svelte-ignore a11y-click-events-have-key-events -->
+                      <!-- svelte-ignore a11y_click_events_have_key_events -->
                       <button
                         class="action"
                         class:disabled={actionItem.disabled}
-                        on:click={actionItem.disabled
+                        onclick={actionItem.disabled
                           ? null
                           : () => onActionIcon(actionItem.type, item)}
                         disabled={actionItem.disabled}
@@ -317,7 +348,7 @@
         {totalItems}
         value={paginationState}
         {hasBoundaryRight}
-        on:change={onPage}
+        onchange={onPage}
       />
     </div>
   {/if}

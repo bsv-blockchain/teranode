@@ -98,15 +98,15 @@ func TestReverseProcessConflicting_RestoresOriginalSpender(t *testing.T) {
 		Return(&meta.Data{Tx: counterTx}, nil).Once()
 
 	// Re-spend parent UTXO with counter.
-	mockStore.On("Spend", mock.Anything, counterTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, counterTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 
 	// Step 5 — UnmarkConflictingRecursively([counter]) flips counter +
 	// descendants back to Conflicting=false.
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{counterHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
 
-	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 100,
+	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 100, chainhash.Hash{},
 		[]chainhash.Hash{demotedHash})
 
 	require.NoError(t, err)
@@ -143,7 +143,12 @@ func TestReverseProcessConflicting_SkipsAlreadyReversedDemoted(t *testing.T) {
 			{TxID: &counterSpenderHash, Vin: 0},
 		}}, nil).Once()
 
-	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 100,
+	// isReverseFullyApplied also confirms the recorded spender is no longer
+	// conflicting — the Unmark(C) step completed (#861).
+	mockStore.On("Get", mock.Anything, &counterSpenderHash, mock.Anything).
+		Return(&meta.Data{Conflicting: false}, nil).Once()
+
+	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 100, chainhash.Hash{},
 		[]chainhash.Hash{demotedHash})
 
 	require.NoError(t, err)
@@ -197,12 +202,12 @@ func TestReverseProcessConflicting_PartialStateRetryCompletes(t *testing.T) {
 	// Unmark counter.
 	mockStore.On("Get", mock.Anything, &counterHash, mock.Anything).
 		Return(&meta.Data{Tx: counterTx}, nil).Once()
-	mockStore.On("Spend", mock.Anything, counterTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, counterTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{counterHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
 
-	cascade, touched, err := ReverseProcessConflicting(ctx, mockStore, 1,
+	cascade, touched, err := ReverseProcessConflicting(ctx, mockStore, 1, chainhash.Hash{},
 		[]chainhash.Hash{demotedHash})
 	require.NoError(t, err)
 
@@ -251,12 +256,12 @@ func TestReverseProcessConflicting_DConflictingButParentStillPointsToD(t *testin
 		Return(nil).Once()
 	mockStore.On("Get", mock.Anything, &counterHash, mock.Anything).
 		Return(&meta.Data{Tx: counterTx}, nil).Once()
-	mockStore.On("Spend", mock.Anything, counterTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, counterTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{counterHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
 
-	_, _, err := ReverseProcessConflicting(ctx, mockStore, 1,
+	_, _, err := ReverseProcessConflicting(ctx, mockStore, 1, chainhash.Hash{},
 		[]chainhash.Hash{demotedHash})
 	require.NoError(t, err)
 	mockStore.AssertExpectations(t)
@@ -273,16 +278,66 @@ func TestIsReverseFullyApplied(t *testing.T) {
 
 	demotedTx := createSpendableTestTransaction(parentHash, 0)
 
-	t.Run("parent.SpendingDatas[vout] points to non-D non-nil spender -> true", func(t *testing.T) {
+	t.Run("parent.SpendingDatas[vout] points to non-D non-conflicting spender -> true", func(t *testing.T) {
 		mockStore := &MockUtxostore{}
 		mockStore.On("Get", mock.Anything, &parentHash, mock.Anything).
 			Return(&meta.Data{SpendingDatas: []*spendpkg.SpendingData{
 				{TxID: &otherSpenderHash, Vin: 0},
 			}}, nil).Once()
+		// The recorded spender must also be non-conflicting (Unmark completed).
+		mockStore.On("Get", mock.Anything, &otherSpenderHash, mock.Anything).
+			Return(&meta.Data{Conflicting: false}, nil).Once()
 
 		got, err := isReverseFullyApplied(context.Background(), mockStore, demotedTx, demotedHash)
 		require.NoError(t, err)
 		assert.True(t, got)
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("recorded spender still conflicting -> false (crash between Spend(C) and Unmark(C))", func(t *testing.T) {
+		mockStore := &MockUtxostore{}
+		mockStore.On("Get", mock.Anything, &parentHash, mock.Anything).
+			Return(&meta.Data{SpendingDatas: []*spendpkg.SpendingData{
+				{TxID: &otherSpenderHash, Vin: 0},
+			}}, nil).Once()
+		// Spender C points at parent[vout] but is still Conflicting=true — the
+		// final Unmark(C) never ran (#861). Reverse is NOT fully applied.
+		mockStore.On("Get", mock.Anything, &otherSpenderHash, mock.Anything).
+			Return(&meta.Data{Conflicting: true}, nil).Once()
+
+		got, err := isReverseFullyApplied(context.Background(), mockStore, demotedTx, demotedHash)
+		require.NoError(t, err)
+		assert.False(t, got, "a still-conflicting recorded spender means the reverse must re-run to finish Unmark(C)")
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("recorded spender meta missing -> false", func(t *testing.T) {
+		mockStore := &MockUtxostore{}
+		mockStore.On("Get", mock.Anything, &parentHash, mock.Anything).
+			Return(&meta.Data{SpendingDatas: []*spendpkg.SpendingData{
+				{TxID: &otherSpenderHash, Vin: 0},
+			}}, nil).Once()
+		mockStore.On("Get", mock.Anything, &otherSpenderHash, mock.Anything).
+			Return((*meta.Data)(nil), nil).Once()
+
+		got, err := isReverseFullyApplied(context.Background(), mockStore, demotedTx, demotedHash)
+		require.NoError(t, err)
+		assert.False(t, got, "cannot confirm full application when the spender record is missing")
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("recorded spender get error propagates", func(t *testing.T) {
+		mockStore := &MockUtxostore{}
+		mockStore.On("Get", mock.Anything, &parentHash, mock.Anything).
+			Return(&meta.Data{SpendingDatas: []*spendpkg.SpendingData{
+				{TxID: &otherSpenderHash, Vin: 0},
+			}}, nil).Once()
+		mockStore.On("Get", mock.Anything, &otherSpenderHash, mock.Anything).
+			Return((*meta.Data)(nil), errors.NewProcessingError("spender get failed")).Once()
+
+		_, err := isReverseFullyApplied(context.Background(), mockStore, demotedTx, demotedHash)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "error getting recorded spender")
 		mockStore.AssertExpectations(t)
 	})
 
@@ -383,7 +438,7 @@ func TestReverseProcessConflicting_FiltersCounterWithMismatchedOutput(t *testing
 	mockStore.On("Unspend", mock.Anything, mock.AnythingOfType("[]*utxo.Spend"), mock.Anything).
 		Return(nil).Once()
 
-	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 100,
+	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 100, chainhash.Hash{},
 		[]chainhash.Hash{demotedHash})
 
 	require.NoError(t, err)
@@ -423,7 +478,7 @@ func TestReverseProcessConflicting_NoCounterToPromote(t *testing.T) {
 	mockStore.On("Unspend", mock.Anything, mock.AnythingOfType("[]*utxo.Spend"), mock.Anything).
 		Return(nil).Once()
 
-	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 100,
+	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 100, chainhash.Hash{},
 		[]chainhash.Hash{demotedHash})
 
 	require.NoError(t, err)
@@ -466,7 +521,7 @@ func TestReverseProcessConflicting_SkipsCounterAlreadyNonConflicting(t *testing.
 	mockStore.On("Unspend", mock.Anything, mock.AnythingOfType("[]*utxo.Spend"), mock.Anything).
 		Return(nil).Once()
 
-	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 100,
+	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 100, chainhash.Hash{},
 		[]chainhash.Hash{demotedHash})
 
 	require.NoError(t, err)
@@ -483,7 +538,7 @@ func TestReverseProcessConflicting_CoinbasePlaceholderSkipped(t *testing.T) {
 
 	// No expectations set — the placeholder branch should short-circuit
 	// without touching the store.
-	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 1,
+	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 1, chainhash.Hash{},
 		[]chainhash.Hash{subtree.CoinbasePlaceholderHashValue})
 
 	require.NoError(t, err)
@@ -497,7 +552,7 @@ func TestReverseProcessConflicting_EmptyInput(t *testing.T) {
 	ctx := context.Background()
 	mockStore := &MockUtxostore{}
 
-	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 1, nil)
+	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, nil)
 
 	require.NoError(t, err)
 	assert.Nil(t, touched)
@@ -516,7 +571,7 @@ func TestReverseProcessConflicting_PropagatesGetError(t *testing.T) {
 	mockStore.On("Get", mock.Anything, &demotedHash, mock.Anything).
 		Return((*meta.Data)(nil), errors.NewProcessingError("aerospike unavailable")).Once()
 
-	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 1,
+	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 1, chainhash.Hash{},
 		[]chainhash.Hash{demotedHash})
 
 	require.Error(t, err)
@@ -569,12 +624,12 @@ func TestReverseProcessConflicting_PicksOldestCounterByCreatedAt(t *testing.T) {
 	// Only the oldest counter gets the Spend + Unmark sequence.
 	mockStore.On("Get", mock.Anything, &oldestHash, mock.Anything).
 		Return(&meta.Data{Tx: oldestTx}, nil).Once()
-	mockStore.On("Spend", mock.Anything, oldestTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, oldestTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{oldestHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
 
-	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 100,
+	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 100, chainhash.Hash{},
 		[]chainhash.Hash{demotedHash})
 
 	require.NoError(t, err)
@@ -627,12 +682,12 @@ func TestReverseProcessConflicting_TiebreakOnEqualCreatedAtByHash(t *testing.T) 
 
 	mockStore.On("Get", mock.Anything, &lowerHashCounter, mock.Anything).
 		Return(&meta.Data{Tx: lowerCounterTx}, nil).Once()
-	mockStore.On("Spend", mock.Anything, lowerCounterTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, lowerCounterTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{lowerHashCounter}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
 
-	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 100,
+	_, touched, err := ReverseProcessConflicting(ctx, mockStore, 100, chainhash.Hash{},
 		[]chainhash.Hash{demotedHash})
 
 	require.NoError(t, err)
@@ -711,7 +766,7 @@ func TestReverseProcessConflicting_DemotedMetaNilSkipsTx(t *testing.T) {
 	mockStore.On("Get", mock.Anything, &missingHash, mock.Anything).
 		Return((*meta.Data)(nil), nil).Once()
 
-	cascade, touched, err := ReverseProcessConflicting(ctx, mockStore, 1,
+	cascade, touched, err := ReverseProcessConflicting(ctx, mockStore, 1, chainhash.Hash{},
 		[]chainhash.Hash{missingHash})
 
 	require.NoError(t, err)
@@ -738,7 +793,7 @@ func TestReverseProcessConflicting_SelectCountersErrorPropagates(t *testing.T) {
 	mockStore.On("Get", mock.Anything, &parentHash, mock.Anything).
 		Return((*meta.Data)(nil), errors.NewProcessingError("parent lookup failed")).Once()
 
-	_, _, err := ReverseProcessConflicting(ctx, mockStore, 1, []chainhash.Hash{demotedHash})
+	_, _, err := ReverseProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, []chainhash.Hash{demotedHash})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "error getting parent meta")
@@ -764,7 +819,7 @@ func TestReverseProcessConflicting_MarkConflictingErrorPropagates(t *testing.T) 
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{demotedHash}, true).
 		Return([]*Spend{}, []chainhash.Hash{}, errors.NewProcessingError("setConflicting failed")).Once()
 
-	_, _, err := ReverseProcessConflicting(ctx, mockStore, 1, []chainhash.Hash{demotedHash})
+	_, _, err := ReverseProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, []chainhash.Hash{demotedHash})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "error marking demoted tx + descendants conflicting")
@@ -793,7 +848,7 @@ func TestReverseProcessConflicting_UnspendErrorPropagates(t *testing.T) {
 	mockStore.On("Unspend", mock.Anything, mock.AnythingOfType("[]*utxo.Spend"), mock.Anything).
 		Return(errors.NewProcessingError("unspend failed")).Once()
 
-	_, _, err := ReverseProcessConflicting(ctx, mockStore, 1, []chainhash.Hash{demotedHash})
+	_, _, err := ReverseProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, []chainhash.Hash{demotedHash})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "error unspending demoted tx inputs")
@@ -833,7 +888,7 @@ func TestReverseProcessConflicting_CounterMetaNilSkipsCounter(t *testing.T) {
 	mockStore.On("Get", mock.Anything, &counterHash, mock.Anything).
 		Return((*meta.Data)(nil), nil).Once()
 
-	cascade, touched, err := ReverseProcessConflicting(ctx, mockStore, 1,
+	cascade, touched, err := ReverseProcessConflicting(ctx, mockStore, 1, chainhash.Hash{},
 		[]chainhash.Hash{demotedHash})
 	require.NoError(t, err)
 
@@ -873,10 +928,10 @@ func TestReverseProcessConflicting_CounterSpendErrorPropagates(t *testing.T) {
 
 	mockStore.On("Get", mock.Anything, &counterHash, mock.Anything).
 		Return(&meta.Data{Tx: counterTx}, nil).Once()
-	mockStore.On("Spend", mock.Anything, counterTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, errors.NewProcessingError("spend failed")).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, counterTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, errors.NewProcessingError("spend failed")).Once()
 
-	_, _, err := ReverseProcessConflicting(ctx, mockStore, 1, []chainhash.Hash{demotedHash})
+	_, _, err := ReverseProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, []chainhash.Hash{demotedHash})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "error spending counter")
@@ -912,12 +967,12 @@ func TestReverseProcessConflicting_CounterUnmarkErrorPropagates(t *testing.T) {
 		Return(nil).Once()
 	mockStore.On("Get", mock.Anything, &counterHash, mock.Anything).
 		Return(&meta.Data{Tx: counterTx}, nil).Once()
-	mockStore.On("Spend", mock.Anything, counterTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, counterTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{counterHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, errors.NewProcessingError("unmark failed")).Once()
 
-	_, _, err := ReverseProcessConflicting(ctx, mockStore, 1, []chainhash.Hash{demotedHash})
+	_, _, err := ReverseProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, []chainhash.Hash{demotedHash})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "error un-marking counter")

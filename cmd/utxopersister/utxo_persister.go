@@ -7,6 +7,7 @@
 //
 // Functions:
 //   - RunUtxoPersister: The main entry point for initializing and running the UTXO persister service.
+//   - RunUtxoPersisterToHeight: A one-shot entry point that builds the UTXO set up to a specific height and returns.
 //
 // Side effects:
 //
@@ -20,6 +21,7 @@ import (
 	_ "net/http/pprof" // nolint:gosec
 	"strconv"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	utxopersisterservice "github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -161,4 +163,51 @@ func RunUtxoPersister(logger ulogger.Logger, settings *settings.Settings) {
 	}
 
 	<-readyCh
+}
+
+// RunUtxoPersisterToHeight performs a one-shot UTXO-set build from startHeight
+// (0 = genesis) up to endHeight and returns. It requires direct mode (a
+// configured blockchain_store), because it resolves block hashes and writes the
+// utxo-headers file directly against the blockchain store. When
+// updateLastProcessed is true it advances lastProcessed.dat to endHeight.
+func RunUtxoPersisterToHeight(logger ulogger.Logger, settings *settings.Settings, startHeight, endHeight uint32, updateLastProcessed bool) error {
+	if !settings.Block.UTXOPersisterDirect || settings.BlockChain.StoreURL == nil {
+		return errors.NewConfigurationError("[UTXOPersister] --end-height requires direct mode: set utxopersister 'direct' true and configure blockchain_store")
+	}
+
+	ctx, _, endFn := tracing.Tracer("utxopersister").Start(context.Background(), "RunUtxoPersisterToHeight")
+	defer endFn()
+
+	blockStoreURL := settings.Block.BlockStore
+	if blockStoreURL == nil {
+		return errors.NewConfigurationError("[UTXOPersister] blockstore URL not found in config")
+	}
+
+	hashPrefix := -2
+
+	if blockStoreURL.Query().Get("hashPrefix") != "" {
+		hp, err := strconv.Atoi(blockStoreURL.Query().Get("hashPrefix"))
+		if err != nil {
+			return errors.NewConfigurationError("[UTXOPersister] invalid hashPrefix", err)
+		}
+
+		hashPrefix = hp
+	}
+
+	blockStore, err := blob.NewStore(logger, blockStoreURL, options.WithHashPrefix(hashPrefix))
+	if err != nil {
+		return errors.NewStorageError("[UTXOPersister] failed to create blockStore", err)
+	}
+
+	blockchainStore, err := blockchainstore.NewStore(logger, settings.BlockChain.StoreURL, settings)
+	if err != nil {
+		return errors.NewStorageError("[UTXOPersister] failed to create blockchainStore", err)
+	}
+
+	service, err := utxopersisterservice.NewDirect(ctx, logger, settings, blockStore, blockchainStore)
+	if err != nil {
+		return errors.NewProcessingError("[UTXOPersister] failed to create utxopersister service", err)
+	}
+
+	return service.BuildUTXOSetToHeight(ctx, startHeight, endHeight, updateLastProcessed)
 }

@@ -11,7 +11,6 @@ import (
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
-	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -46,7 +45,7 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 	missingTxThreshold := u.settings.SubtreeValidation.ProcessTxMetaUsingCacheMissingTxThreshold
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, validateSubtreeInternalConcurrency)
+	util.SafeSetLimit(u.logger, g, validateSubtreeInternalConcurrency)
 
 	cache, ok := u.utxoStore.(*txmetacache.TxMetaCache)
 	if !ok {
@@ -96,14 +95,6 @@ type TxMetaProcessor struct {
 }
 
 func (p *TxMetaProcessor) processTxMetaUsingCache(i int) error {
-	var (
-		err   error
-		found bool
-	)
-
-	txMeta := meta.Data{}
-	cachedBytes := make([]byte, 0, 1024)
-
 	for j := 0; j < subtree.Min(p.batchSize, len(p.txHashes)-i); j++ {
 		if p.txMetaSlice[i+j].isSet {
 			continue
@@ -121,12 +112,13 @@ func (p *TxMetaProcessor) processTxMetaUsingCache(i int) error {
 			continue
 		}
 
-		cachedBytes, found, err = p.cache.GetMetaCachedWithBuffer(p.ctx, txHash, &txMeta, cachedBytes)
-		if err != nil && !errors.Is(err, errors.ErrNotFound) {
-			p.logger.Warnf("[processTxMetaUsingCache] error retrieving txMeta for %s: %v", txHash.String(), err)
-		}
-
-		if found {
+		txMeta, found := p.cache.GetMetaCached(p.ctx, txHash)
+		// Defensively reject a partial cache entry: a non-coinbase tx with no
+		// parent tx hashes is incomplete (TxInpoints was never populated) and
+		// would later fail subtree-meta serialization and wedge the block. Treat
+		// it as a miss so the store fallback — which can reconstruct inpoints from
+		// the tx inputs — resolves it and self-heals the cache.
+		if found && (txMeta.IsCoinbase || len(txMeta.TxInpoints.ParentTxHashes) > 0) {
 			p.txMetaSlice[i+j] = metaSliceItem{
 				fee:         txMeta.Fee,
 				sizeInBytes: txMeta.SizeInBytes,

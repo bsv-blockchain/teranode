@@ -5,10 +5,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
@@ -30,6 +33,9 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	utxometa "github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
+	"github.com/jarcoal/httpmock"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -106,7 +112,7 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		require.NoError(t, err)
 
 		// Mark the subtree as already validated to avoid calling ValidateSubtreeInternal
-		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, []byte("validated"))
+		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
 		require.NoError(t, err)
 
 		// Create a block with subtrees using proper model construction
@@ -127,12 +133,12 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		require.NoError(t, err)
 
 		// Mock UTXO store Create method
-		server.utxoStore.(*utxo.MockUtxostore).On("Create",
+		server.utxoStore.(*utxo.MockUtxostore).On("SpendAndCreate",
 			mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-			Return(&utxometa.Data{}, nil)
+			Return(&utxometa.Data{}, nil, nil)
 
 		// Mock validator to return success - set up the validator client to succeed
-		mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+		mockValidator := server.validatorClient.(*validator.MockValidator)
 		mockValidator.UtxoStore = server.utxoStore
 
 		// Mock blockchain client
@@ -282,7 +288,7 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		require.Error(t, err)
 		assert.Nil(t, response)
 		// The error message will vary depending on network conditions, but it should be a processing error
-		assert.Contains(t, err.Error(), "CheckBlockSubtreesRequest")
+		assert.Contains(t, err.Error(), "failed to load subtree batch")
 	})
 
 	t.Run("SubtreeExistsError", func(t *testing.T) {
@@ -394,12 +400,12 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		require.NoError(t, err)
 
 		// Mock UTXO store Create method
-		server.utxoStore.(*utxo.MockUtxostore).On("Create",
+		server.utxoStore.(*utxo.MockUtxostore).On("SpendAndCreate",
 			mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-			Return(&utxometa.Data{}, nil)
+			Return(&utxometa.Data{}, nil, nil)
 
 		// Mock validator and blockchain client
-		mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+		mockValidator := server.validatorClient.(*validator.MockValidator)
 		mockValidator.UtxoStore = server.utxoStore
 
 		server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
@@ -418,8 +424,466 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		response, err := server.CheckBlockSubtrees(context.Background(), request)
 		require.Error(t, err)
 		assert.Nil(t, response)
-		assert.Contains(t, err.Error(), "Failed to get subtree tx hashes")
+		assert.Contains(t, err.Error(), "failed to load subtree transactions")
 	})
+}
+
+// gatedStreamingBody is an io.ReadCloser that returns a body in two halves. The first
+// half is yielded immediately; the second half blocks on `release` and is sensitive to
+// `ctx` cancellation in between. This emulates an upstream that is mid-stream when a
+// sibling failure happens — letting the test prove that the in-flight body is (or is
+// not) cancelled depending on which context the HTTP request was constructed with.
+type gatedStreamingBody struct {
+	ctx      context.Context
+	release  <-chan struct{}
+	first    []byte
+	second   []byte
+	deadline time.Time
+	sent     int // bytes already returned to the reader
+}
+
+func (g *gatedStreamingBody) Read(p []byte) (int, error) {
+	// Phase 1: drain first half synchronously.
+	if g.sent < len(g.first) {
+		n := copy(p, g.first[g.sent:])
+		g.sent += n
+		return n, nil
+	}
+	// Phase 2: wait for the gate or for the request context to die.
+	if g.sent == len(g.first) {
+		select {
+		case <-g.release:
+		case <-g.ctx.Done():
+			return 0, g.ctx.Err()
+		case <-time.After(time.Until(g.deadline)):
+			return 0, errors.NewProcessingError("gatedStreamingBody: gate never released")
+		}
+		// One more chance for the context to have cancelled — pre-fix code sets
+		// req.Context() = gCtx, which is cancelled as soon as the sibling fails.
+		// We yield to the scheduler so the cancellation, if propagated, is observed
+		// here instead of racing the subsequent copy.
+		runtime.Gosched()
+		if err := g.ctx.Err(); err != nil {
+			return 0, err
+		}
+	}
+	// Phase 3: drain second half.
+	offset := g.sent - len(g.first)
+	if offset >= len(g.second) {
+		return 0, io.EOF
+	}
+	n := copy(p, g.second[offset:])
+	g.sent += n
+	return n, nil
+}
+
+func (g *gatedStreamingBody) Close() error { return nil }
+
+// TestCheckBlockSubtrees_SiblingFailureDoesNotCancelInFlight is a regression test for the
+// "catchup avalanche" reported in scale-1: when one subtree_data fetch failed, the
+// errgroup cancelled gCtx and every other in-flight subtree_data fetch had its HTTP body
+// truncated mid-stream. On the peer side this manifested as an avalanche of
+// "io: read/write on closed pipe" warnings and storer.Abort, throwing away Aerospike
+// work that had already been paid for.
+//
+// The fix passes the parent ctx (not gCtx) to the subtree_data HTTP fetch and the
+// stream processor, so a sibling failure no longer cancels in-flight peers. This test
+// pins that behaviour: with subtree B's /subtree_data deliberately returning 500,
+// subtree A's /subtree_data response must still be delivered and stored locally.
+// Pre-fix, A's FileTypeSubtreeData file was missing because the parser failed on a
+// truncated body.
+func TestCheckBlockSubtrees_SiblingFailureDoesNotCancelInFlight(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
+		mock.Anything, mock.Anything, mock.Anything).
+		Return([]uint32{1, 2, 3}, nil)
+	server.blockchainClient.(*blockchain.Mock).On("IsFSMCurrentState",
+		mock.Anything, blockchain.FSMStateRUNNING).
+		Return(true, nil).Maybe()
+
+	// Build two real subtrees so their hashes match their contents and
+	// readTransactionsFromSubtreeDataStream's hash check passes.
+	txA, err := createTestTransaction("tx1")
+	require.NoError(t, err)
+	txB, err := createTestTransaction("tx2")
+	require.NoError(t, err)
+
+	buildSubtree := func(tx *bt.Tx) (*subtreepkg.Subtree, []byte, []byte) {
+		s, err := subtreepkg.NewIncompleteTreeByLeafCount(2)
+		require.NoError(t, err)
+		require.NoError(t, s.AddCoinbaseNode())
+		require.NoError(t, s.AddNode(*tx.TxIDChainHash(), 0, 0))
+		serialized, err := s.Serialize()
+		require.NoError(t, err)
+		// SubtreeData stream omits the coinbase placeholder; first tx is the non-coinbase.
+		return s, serialized, tx.Bytes()
+	}
+
+	subtreeA, subtreeASer, subtreeDataA := buildSubtree(txA)
+	subtreeB, subtreeBSer, _ := buildSubtree(txB)
+
+	// Pre-store both as FileTypeSubtreeToCheck so the code path skips the /subtree fetch
+	// and goes straight to /subtree_data (which is what the regression is about).
+	require.NoError(t, server.subtreeStore.Set(context.Background(),
+		subtreeA.RootHash()[:], fileformat.FileTypeSubtreeToCheck, subtreeASer))
+	require.NoError(t, server.subtreeStore.Set(context.Background(),
+		subtreeB.RootHash()[:], fileformat.FileTypeSubtreeToCheck, subtreeBSer))
+
+	baseURL := testPeerURL
+
+	// B fails immediately with a non-503 (503 would be retried). bFailed signals when
+	// the errgroup is about to cancel gCtx.
+	bFailed := make(chan struct{})
+	httpmock.RegisterResponder("GET",
+		fmt.Sprintf("%s/subtree_data/%s", baseURL, subtreeB.RootHash().String()),
+		func(req *http.Request) (*http.Response, error) {
+			close(bFailed)
+			return httpmock.NewStringResponse(http.StatusInternalServerError, "boom"), nil
+		})
+
+	// A's body is delivered as a STREAM via a custom ReadCloser. The first read returns
+	// the first half of the body; the second read blocks until B has failed, then either
+	// (a) honours req.Context() cancellation by returning ctx.Err() — simulating the
+	// pre-fix behaviour where gCtx propagation truncates the body, or (b) delivers the
+	// rest of the body when the context is NOT cancelled. With the fix, req.Context()
+	// is the outer ctx so cancellation never arrives.
+	httpmock.RegisterResponder("GET",
+		fmt.Sprintf("%s/subtree_data/%s", baseURL, subtreeA.RootHash().String()),
+		func(req *http.Request) (*http.Response, error) {
+			body := &gatedStreamingBody{
+				ctx:      req.Context(),
+				release:  bFailed,
+				first:    subtreeDataA[:len(subtreeDataA)/2],
+				second:   subtreeDataA[len(subtreeDataA)/2:],
+				deadline: time.Now().Add(2 * time.Second),
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       body,
+				Header:     http.Header{},
+			}, nil
+		})
+
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           model.NBit{},
+		Nonce:          0,
+	}
+	coinbaseTx := &bt.Tx{Version: 1}
+	block, err := model.NewBlock(header, coinbaseTx,
+		[]*chainhash.Hash{subtreeA.RootHash(), subtreeB.RootHash()}, 4, 500, 0, 0)
+	require.NoError(t, err)
+	blockBytes, err := block.Bytes()
+	require.NoError(t, err)
+
+	request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+		Block:   blockBytes,
+		BaseUrl: baseURL,
+	}
+
+	// The overall call MUST fail because B failed — that is correct behaviour.
+	_, err = server.CheckBlockSubtrees(context.Background(), request)
+	require.Error(t, err)
+
+	// The regression: with the fix, A's body completed and was written to disk despite
+	// the sibling failure. Pre-fix this assertion failed because gCtx cancellation
+	// truncated A's body and the parser returned an error.
+	require.Eventually(t, func() bool {
+		exists, existsErr := server.subtreeStore.Exists(context.Background(),
+			subtreeA.RootHash()[:], fileformat.FileTypeSubtreeData)
+		return existsErr == nil && exists
+	}, 2*time.Second, 20*time.Millisecond,
+		"subtreeA's FileTypeSubtreeData must be stored even after sibling B's failure cancelled the batch")
+}
+
+// TestCheckBlockSubtrees_Optimistic_SkipsFetchSubtreeData verifies that when the
+// adaptive-fetch gate is in optimistic mode the per-subtree subtreeData prewarm
+// fetch (GET /subtree_data/<hash>) is skipped. This is the subtreevalidation
+// analogue of blockvalidation's TestBlockWorker_Optimistic_SkipsFetchSubtreeData
+// and is the coverage the PR #745 review asked for: the optimistic branch at
+// check_block_subtrees.go must actually be exercised.
+//
+// Discriminator design: the /subtree_data endpoint is hit both by the pessimistic
+// PREWARM and by the downstream on-demand RECOVERY (getSubtreeMissingTxs) when a
+// subtree has genuinely-missing txs. So a subtree with missing txs would fetch in
+// BOTH modes (prewarm vs recovery) and prove nothing. We therefore use a
+// coinbase-only subtree: the missing-tx scan skips the coinbase placeholder, so
+// there are zero missing txs and recovery never runs. The only thing that can
+// fetch /subtree_data is then the prewarm itself — present in pessimistic, absent
+// in optimistic. The test runs BOTH modes against identical inputs and asserts
+// pessimistic fetches while optimistic does not, so it cannot pass trivially.
+func TestCheckBlockSubtrees_Optimistic_SkipsFetchSubtreeData(t *testing.T) {
+	run := func(t *testing.T, bootstrap adaptivefetch.Mode) int32 {
+		t.Helper()
+
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		// New starts pessimistic regardless of bootstrap; Arm applies the intent.
+		afCfg := adaptivefetch.DefaultConfig()
+		afCfg.BootstrapMode = bootstrap
+		af, err := adaptivefetch.New(afCfg, "test-"+bootstrap.String(), prometheus.NewRegistry())
+		require.NoError(t, err)
+		af.Arm()
+		require.Equal(t, bootstrap, af.Mode(), "armed mode must match bootstrap")
+		server.adaptiveFetch = af
+
+		server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
+			mock.Anything, mock.Anything, mock.Anything).
+			Return([]uint32{1, 2, 3}, nil).Maybe()
+		server.blockchainClient.(*blockchain.Mock).On("IsFSMCurrentState",
+			mock.Anything, blockchain.FSMStateRUNNING).
+			Return(true, nil).Maybe()
+
+		// Coinbase-only subtree (no recoverable txs). Pre-store as
+		// FileTypeSubtreeToCheck so the /subtree fetch is skipped and we reach
+		// the prewarm gate; do NOT store FileTypeSubtreeData so a pessimistic
+		// prewarm must fetch it over HTTP.
+		s, err := subtreepkg.NewIncompleteTreeByLeafCount(2)
+		require.NoError(t, err)
+		require.NoError(t, s.AddCoinbaseNode())
+		subtreeSer, err := s.Serialize()
+		require.NoError(t, err)
+		require.NoError(t, server.subtreeStore.Set(context.Background(),
+			s.RootHash()[:], fileformat.FileTypeSubtreeToCheck, subtreeSer))
+
+		baseURL := testPeerURL
+
+		var subtreeDataFetches atomic.Int32
+		httpmock.RegisterResponder("GET",
+			fmt.Sprintf("%s/subtree_data/%s", baseURL, s.RootHash().String()),
+			func(_ *http.Request) (*http.Response, error) {
+				subtreeDataFetches.Add(1)
+				return httpmock.NewBytesResponse(http.StatusOK, []byte{}), nil
+			})
+
+		header := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      uint32(time.Now().Unix()),
+			Bits:           model.NBit{},
+			Nonce:          0,
+		}
+		coinbaseTx := &bt.Tx{Version: 1}
+		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{s.RootHash()}, 1, 500, 0, 0)
+		require.NoError(t, err)
+		blockBytes, err := block.Bytes()
+		require.NoError(t, err)
+
+		request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+			Block:   blockBytes,
+			BaseUrl: baseURL,
+		}
+
+		// Result intentionally ignored — the skip is the contract under test.
+		_, _ = server.CheckBlockSubtrees(context.Background(), request)
+		return subtreeDataFetches.Load()
+	}
+
+	// Control: pessimistic mode MUST prewarm-fetch the subtreeData, proving the
+	// setup actually reaches the gate (guards against a trivially-passing test).
+	pessimisticFetches := run(t, adaptivefetch.ModePessimistic)
+	require.Positive(t, pessimisticFetches,
+		"pessimistic control must fetch subtree_data (gate reached)")
+
+	// Subject: optimistic mode MUST skip the prewarm fetch.
+	optimisticFetches := run(t, adaptivefetch.ModeOptimistic)
+	require.Zero(t, optimisticFetches,
+		"optimistic mode must skip the subtree_data prewarm fetch")
+}
+
+// TestCheckBlockSubtrees_OversizedBody verifies that the peer-fetch fallback at
+// check_block_subtrees.go refuses to allocate a response body larger than
+// SubtreeValidation.MaxIncomingSubtreeBytes. Pre-fix a malicious peer could OOM the node by
+// streaming oversized bytes inside the request window; post-fix the chain surfaces ErrExternal.
+func TestCheckBlockSubtrees_OversizedBody(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	server.settings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 // tiny cap
+
+	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
+		mock.Anything, mock.Anything, mock.Anything).
+		Return([]uint32{1, 2, 3}, nil)
+
+	// Hash that doesn't exist in subtreeStore — forces the peer HTTP-fetch fallback.
+	subtreeHash := chainhash.HashH([]byte("test-oversized-checkblock-subtree"))
+
+	baseURL := testPeerURL
+	subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+	oversized := bytes.Repeat([]byte{0xab}, 4*1024) // 4 KB — far over the 128-byte cap
+	httpmock.RegisterResponder("GET", subtreeURL,
+		httpmock.NewBytesResponder(http.StatusOK, oversized))
+
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           model.NBit{},
+		Nonce:          0,
+	}
+
+	coinbaseTx := &bt.Tx{Version: 1}
+	block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 1, 400, 0, 0)
+	require.NoError(t, err)
+
+	blockBytes, err := block.Bytes()
+	require.NoError(t, err)
+
+	request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+		Block:   blockBytes,
+		BaseUrl: baseURL,
+	}
+
+	response, err := server.CheckBlockSubtrees(context.Background(), request)
+	require.Error(t, err)
+	assert.Nil(t, response)
+	assert.True(t, errors.Is(err, errors.ErrExternal), "expected ErrExternal in chain, got %v", err)
+}
+
+// TestCheckBlockSubtrees_RetriesSubtreeFetchOn429 — a peer that rate-limits the GET /subtree
+// fetch on the block-validation path is retried instead of failing the block. The retried
+// response is the oversized body from TestCheckBlockSubtrees_OversizedBody, so reaching
+// ErrExternal on the second attempt proves the retry happened and the size bound still holds.
+func TestCheckBlockSubtrees_RetriesSubtreeFetchOn429(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	server.settings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 // tiny cap
+
+	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
+		mock.Anything, mock.Anything, mock.Anything).
+		Return([]uint32{1, 2, 3}, nil)
+
+	// Hash that doesn't exist in subtreeStore — forces the peer HTTP-fetch fallback.
+	subtreeHash := chainhash.HashH([]byte("test-429-checkblock-subtree"))
+
+	var attempts atomic.Int32
+
+	baseURL := testPeerURL
+	subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+	oversized := bytes.Repeat([]byte{0xab}, 4*1024)
+	httpmock.RegisterResponder("GET", subtreeURL,
+		func(req *http.Request) (*http.Response, error) {
+			if attempts.Add(1) == 1 {
+				return httpmock.NewStringResponse(http.StatusTooManyRequests, "rate limit exceeded"), nil
+			}
+
+			return httpmock.NewBytesResponse(http.StatusOK, oversized), nil
+		})
+
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           model.NBit{},
+		Nonce:          0,
+	}
+
+	coinbaseTx := &bt.Tx{Version: 1}
+	block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 1, 400, 0, 0)
+	require.NoError(t, err)
+
+	blockBytes, err := block.Bytes()
+	require.NoError(t, err)
+
+	request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+		Block:   blockBytes,
+		BaseUrl: baseURL,
+	}
+
+	_, err = server.CheckBlockSubtrees(context.Background(), request)
+	require.Error(t, err)
+	require.Equal(t, int32(2), attempts.Load(), "the 429 must have been retried")
+	require.True(t, errors.Is(err, errors.ErrExternal), "expected the retried over-cap body to fail as ErrExternal, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrServiceRateLimited), "the 429 must not have been the final answer")
+}
+
+// TestCheckBlockSubtrees_LocalAssemblyPolicyIgnored is a regression test for issue #905.
+// The peer-fetch fallback in CheckBlockSubtrees gates the response twice: first by the
+// HTTP body size, then by the derived leaf count. Pre-fix both gates used the local
+// BlockAssembly.MaximumMerkleItemsPerSubtree, so a docker-quickstart node (32k cap) rejected
+// every peer subtree larger than 1 MiB even though the body cap was generous. Post-fix both
+// gates are governed by SubtreeValidation.MaxIncomingSubtreeBytes; the local assembly cap
+// no longer rejects legitimate peer responses.
+func TestCheckBlockSubtrees_LocalAssemblyPolicyIgnored(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	// Docker quickstart profile: small local assembly cap, generous receive cap.
+	server.settings.BlockAssembly.MaximumMerkleItemsPerSubtree = 32768
+	server.settings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 * 1024 * 1024
+
+	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
+		mock.Anything, mock.Anything, mock.Anything).
+		Return([]uint32{1, 2, 3}, nil)
+
+	// Hash that doesn't exist in subtreeStore — forces the peer HTTP-fetch fallback.
+	subtreeHash := chainhash.HashH([]byte("test-large-peer-checkblock-subtree"))
+	baseURL := testPeerURL
+	subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+
+	// 65,536 32-byte hashes = 2 MiB. This is 2x the docker assembly cap (32k * 32 = 1 MiB)
+	// but well below the receive cap (128 MiB). Pre-fix the leaf-count gate rejected this
+	// with "exceeds policy max"; post-fix it must pass that gate. The synthesized hashes
+	// won't compute back to subtreeHash so the call still fails downstream — we assert only
+	// that the failure is NOT the policy-max gate.
+	const leafCount = 65536
+	payload := make([]byte, leafCount*chainhash.HashSize)
+	for i := range payload {
+		payload[i] = byte(i % 256)
+	}
+	httpmock.RegisterResponder("GET", subtreeURL,
+		httpmock.NewBytesResponder(http.StatusOK, payload))
+
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           model.NBit{},
+		Nonce:          0,
+	}
+
+	coinbaseTx := &bt.Tx{Version: 1}
+	block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 1, 400, 0, 0)
+	require.NoError(t, err)
+
+	blockBytes, err := block.Bytes()
+	require.NoError(t, err)
+
+	request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+		Block:   blockBytes,
+		BaseUrl: baseURL,
+	}
+
+	_, err = server.CheckBlockSubtrees(context.Background(), request)
+	require.Error(t, err, "expected the synthesized payload's root to mismatch subtreeHash")
+	require.NotContains(t, err.Error(), "exceeds policy max",
+		"leaf-count gate rejected a peer subtree larger than the local assembly cap — see issue #905")
 }
 
 func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
@@ -443,7 +907,7 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 		subtreeHash := chainhash.Hash{}
 		copy(subtreeHash[:], []byte("quorum_test_subtree_exists__"))
 
-		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, []byte("validated"))
+		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
 		require.NoError(t, err)
 
 		header := &model.BlockHeader{
@@ -522,7 +986,7 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 		// from http://127.0.0.1:0, which fails deterministically because nothing listens there. The important thing is it detected missing via quorum.
 		_, err = server.CheckBlockSubtrees(context.Background(), request)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "Failed to get subtree tx hashes")
+		assert.Contains(t, err.Error(), "failed to load subtree transactions")
 	})
 
 	t.Run("QuorumTimeout_TreatsAsMissing", func(t *testing.T) {
@@ -596,7 +1060,7 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 		_, err = server.CheckBlockSubtrees(context.Background(), request)
 		require.Error(t, err)
 		// The error should be from the HTTP fetch, not from quorum timeout
-		assert.Contains(t, err.Error(), "Failed to get subtree tx hashes")
+		assert.Contains(t, err.Error(), "failed to load subtree transactions")
 		assert.NotContains(t, err.Error(), "quorum lock")
 	})
 
@@ -692,7 +1156,7 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 		// and release the lock file. TryLockIfNotExistsWithTimeout will retry and see exists=true.
 		go func() {
 			time.Sleep(50 * time.Millisecond)
-			_ = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, []byte("validated"))
+			_ = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
 			os.Remove(lockFilePath)
 		}()
 
@@ -754,7 +1218,7 @@ func TestExtractAndCollectTransactions(t *testing.T) {
 		// Test extraction
 		var allTransactions []*bt.Tx
 
-		err = server.extractAndCollectTransactions(context.Background(), subtree, &allTransactions)
+		err = server.extractAndCollectTransactions(context.Background(), subtree, &allTransactions, nil)
 		require.NoError(t, err)
 
 		assert.Len(t, allTransactions, 2)
@@ -780,7 +1244,7 @@ func TestExtractAndCollectTransactions(t *testing.T) {
 
 		var allTransactions []*bt.Tx
 
-		err = server.extractAndCollectTransactions(context.Background(), subtree, &allTransactions)
+		err = server.extractAndCollectTransactions(context.Background(), subtree, &allTransactions, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to get subtreeData from store")
 	})
@@ -804,7 +1268,7 @@ func TestExtractAndCollectTransactions(t *testing.T) {
 
 		var allTransactions []*bt.Tx
 
-		err = server.extractAndCollectTransactions(context.Background(), subtree, &allTransactions)
+		err = server.extractAndCollectTransactions(context.Background(), subtree, &allTransactions, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to read transactions from subtreeData")
 	})
@@ -840,7 +1304,7 @@ func TestProcessSubtreeDataStream(t *testing.T) {
 
 		var allTransactions []*bt.Tx
 
-		err = server.processSubtreeDataStream(context.Background(), subtree, body, &allTransactions, 100)
+		err = server.processSubtreeDataStream(context.Background(), subtree, body, &allTransactions, 100, nil)
 		require.NoError(t, err)
 
 		// Verify transactions were collected
@@ -884,7 +1348,7 @@ func TestProcessSubtreeDataStream(t *testing.T) {
 
 		var allTransactions []*bt.Tx
 
-		err = server.processSubtreeDataStream(context.Background(), subtree, body, &allTransactions, 100)
+		err = server.processSubtreeDataStream(context.Background(), subtree, body, &allTransactions, 100, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to store subtree data")
 		// With streaming approach, if storage fails, no transactions are collected
@@ -912,7 +1376,7 @@ func TestProcessSubtreeDataStream(t *testing.T) {
 
 		var allTransactions []*bt.Tx
 
-		err = server.processSubtreeDataStream(context.Background(), subtree, body, &allTransactions, 100)
+		err = server.processSubtreeDataStream(context.Background(), subtree, body, &allTransactions, 100, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "error reading transaction")
 	})
@@ -944,7 +1408,7 @@ func TestReadTransactionsFromSubtreeDataStream(t *testing.T) {
 
 		var allTransactions []*bt.Tx
 
-		count, err := server.readTransactionsFromSubtreeDataStream(subtree, &subtreeData, &allTransactions)
+		count, err := server.readTransactionsFromSubtreeDataStream(subtree, &subtreeData, &allTransactions, nil)
 		require.NoError(t, err)
 
 		assert.Equal(t, 3, count)         // includes coinbase in the count
@@ -964,7 +1428,7 @@ func TestReadTransactionsFromSubtreeDataStream(t *testing.T) {
 		// Don't add any nodes - this means 0 transactions expected
 		var allTransactions []*bt.Tx
 
-		count, err := server.readTransactionsFromSubtreeDataStream(subtree, &emptyBuffer, &allTransactions)
+		count, err := server.readTransactionsFromSubtreeDataStream(subtree, &emptyBuffer, &allTransactions, nil)
 		require.NoError(t, err)
 
 		assert.Equal(t, 0, count)
@@ -1010,7 +1474,7 @@ func TestReadTransactionsFromSubtreeDataStream(t *testing.T) {
 		subtreeData.Write(tx1.Bytes())
 
 		var allTransactions []*bt.Tx
-		count, err := server.readTransactionsFromSubtreeDataStream(subtree, &subtreeData, &allTransactions)
+		count, err := server.readTransactionsFromSubtreeDataStream(subtree, &subtreeData, &allTransactions, nil)
 		require.NoError(t, err)
 
 		// Should succeed — the coinbase placeholder at index 0 is allowed when the tx is coinbase
@@ -1041,7 +1505,7 @@ func TestReadTransactionsFromSubtreeDataStream(t *testing.T) {
 		subtreeData.Write(tx2.Bytes())
 
 		var allTransactions []*bt.Tx
-		_, err = server.readTransactionsFromSubtreeDataStream(subtree, &subtreeData, &allTransactions)
+		_, err = server.readTransactionsFromSubtreeDataStream(subtree, &subtreeData, &allTransactions, nil)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "transaction hash mismatch")
 	})
@@ -1210,7 +1674,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		var allTransactions []*bt.Tx
 		blockIds := make(map[uint32]bool)
 
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
 		require.NoError(t, err)
 	})
 
@@ -1226,7 +1690,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		blockIds := make(map[uint32]bool)
 
 		// Mock validator to return success - set up the validator client to succeed
-		mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+		mockValidator := server.validatorClient.(*validator.MockValidator)
 		mockValidator.UtxoStore = server.utxoStore
 
 		// Mock blockchain client
@@ -1234,7 +1698,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(true, nil)
 
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
 		require.NoError(t, err)
 	})
 
@@ -1250,7 +1714,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		blockIds := make(map[uint32]bool)
 
 		// Mock validator to return validation errors
-		mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+		mockValidator := server.validatorClient.(*validator.MockValidator)
 		mockValidator.UtxoStore = server.utxoStore
 		// Add an error to the validator to simulate validation failure
 		mockValidator.Errors = []error{errors.NewTxInvalidError("invalid transaction for testing")}
@@ -1261,7 +1725,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			Return(true, nil)
 
 		// Should fail with validation errors (errors are logged but not returned)
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
 		require.Error(t, err)
 	})
 
@@ -1277,88 +1741,68 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		blockIds := make(map[uint32]bool)
 
 		// Mock validator to return missing parent errors
-		mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+		mockValidator := server.validatorClient.(*validator.MockValidator)
 		mockValidator.UtxoStore = server.utxoStore
 		// Add missing parent error
 		mockValidator.Errors = []error{errors.NewTxMissingParentError("missing parent for testing")}
 
-		// Mock blockchain client to return running state
+		// Missing-parent errors are deferred (not fatal) so the caller's
+		// sequential revalidation pass can re-run the failed subtrees in
+		// block order and resolve cross-subtree parent dependencies.
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		require.NoError(t, err)
+	})
+
+	t.Run("WalkLimitExceededFailsFast", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		tx1, err := createTestTransaction("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
+		require.NoError(t, err)
+
+		allTransactions := []*bt.Tx{tx1}
+		blockIds := make(map[uint32]bool)
+
+		mockValidator := server.validatorClient.(*validator.MockValidator)
+		mockValidator.UtxoStore = server.utxoStore
+		mockValidator.Errors = []error{errors.NewUtxoWalkLimitExceededError("walk limit exceeded for testing")}
+
 		server.blockchainClient.(*blockchain.Mock).On("IsFSMCurrentState",
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(true, nil)
 
-		// Missing-parent errors are deferred (not fatal) so the caller's
-		// sequential revalidation pass can re-run the failed subtrees in
-		// block order and resolve cross-subtree parent dependencies. The tx
-		// is still recorded in the orphanage.
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
-		require.NoError(t, err)
-
-		// Verify transaction was added to orphanage for the caller to retry
-		assert.Equal(t, 1, server.orphanage.Len())
+		// The walk-limit error is deterministic for the block: it must fail the
+		// level immediately and keep its distinct code through the wrapping, not
+		// be swallowed into a countless summary error.
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		require.Error(t, err)
+		require.ErrorIs(t, err, errors.ErrUtxoWalkLimitExceeded)
 	})
 
-	t.Run("BlockchainNotRunning", func(t *testing.T) {
+	t.Run("SummaryChainsFirstError", func(t *testing.T) {
 		server, cleanup := setupTestServer(t)
 		defer cleanup()
 
-		// Create test transactions
 		tx1, err := createTestTransaction("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
 		require.NoError(t, err)
 
 		allTransactions := []*bt.Tx{tx1}
 		blockIds := make(map[uint32]bool)
 
-		// Mock validator to return missing parent errors
-		mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+		mockValidator := server.validatorClient.(*validator.MockValidator)
 		mockValidator.UtxoStore = server.utxoStore
-		mockValidator.Errors = []error{errors.NewTxMissingParentError("missing parent for testing")}
+		mockValidator.Errors = []error{errors.NewStorageError("distinctive storage failure for testing")}
 
-		// Mock blockchain client to return NOT running state
 		server.blockchainClient.(*blockchain.Mock).On("IsFSMCurrentState",
 			mock.Anything, blockchain.FSMStateRUNNING).
-			Return(false, nil)
+			Return(true, nil)
 
-		// Missing-parent errors are deferred to the sequential revalidation
-		// pass. The orphanage is skipped because FSM isn't RUNNING, but the
-		// caller still gets a chance to retry.
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
-		require.NoError(t, err)
-
-		// Verify transaction was NOT added to orphanage (blockchain not running)
-		assert.Equal(t, 0, server.orphanage.Len())
-	})
-
-	t.Run("BlockchainClientError", func(t *testing.T) {
-		server, cleanup := setupTestServer(t)
-		defer cleanup()
-
-		// Create test transactions
-		tx1, err := createTestTransaction("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
-		require.NoError(t, err)
-
-		allTransactions := []*bt.Tx{tx1}
-		blockIds := make(map[uint32]bool)
-
-		// Mock validator to return missing parent errors
-		mockValidator := server.validatorClient.(*validator.MockValidatorClient)
-		mockValidator.UtxoStore = server.utxoStore
-		mockValidator.Errors = []error{errors.NewTxMissingParentError("missing parent for testing")}
-
-		// Mock blockchain client to return error
-		server.blockchainClient.(*blockchain.Mock).On("IsFSMCurrentState",
-			mock.Anything, blockchain.FSMStateRUNNING).
-			Return(false, errors.NewServiceError("blockchain client error"))
-
-		// Missing-parent errors are deferred even when the FSM check fails.
-		// The orphanage is skipped (conservative when we can't confirm running
-		// state) but the caller's sequential revalidation pass still gets a
-		// chance to retry.
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
-		require.NoError(t, err)
-
-		// Verify transaction was NOT added to orphanage (blockchain client error)
-		assert.Equal(t, 0, server.orphanage.Len())
+		// Generic per-tx errors are counted and deferred, but the summary error
+		// must chain the first cause instead of reporting bare counts.
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
+		require.Error(t, err)
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.Contains(t, err.Error(), "distinctive storage failure for testing")
 	})
 
 	t.Run("NilTransaction", func(t *testing.T) {
@@ -1370,7 +1814,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		blockIds := make(map[uint32]bool)
 
 		// Should fail with nil transaction
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "transaction is nil")
 	})
@@ -1397,7 +1841,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		blockIds := make(map[uint32]bool)
 
 		// Mock validator to return success
-		mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+		mockValidator := server.validatorClient.(*validator.MockValidator)
 		mockValidator.UtxoStore = server.utxoStore
 
 		// Mock blockchain client
@@ -1405,7 +1849,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(true, nil)
 
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
 		require.NoError(t, err)
 	})
 
@@ -1424,7 +1868,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		blockIds := make(map[uint32]bool)
 
 		// Mock validator to return errors for some transactions
-		mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+		mockValidator := server.validatorClient.(*validator.MockValidator)
 		mockValidator.UtxoStore = server.utxoStore
 		// Set up errors for specific transactions
 		mockValidator.Errors = []error{
@@ -1438,9 +1882,10 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			Return(true, nil)
 
 		// Should return error even some validation failures
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, blockIds, true)
 		require.Error(t, err)
 	})
+
 }
 
 // Helper function to create test transaction
@@ -1712,52 +2157,12 @@ func TestBlessMissingTransaction(t *testing.T) {
 		blockIds[1] = true
 
 		// Mock validator to return success
-		mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+		mockValidator := server.validatorClient.(*validator.MockValidator)
 		mockValidator.UtxoStore = server.utxoStore
 
 		// Call blessMissingTransaction
 		validatorOptions := validator.ProcessOptions()
 		_, _ = server.blessMissingTransaction(context.Background(), blockHash, blockHash, tx, 100, blockIds, validatorOptions)
-	})
-}
-
-func TestProcessOrphans(t *testing.T) {
-	t.Run("NoOrphans", func(t *testing.T) {
-		server, cleanup := setupTestServer(t)
-		defer cleanup()
-
-		blockHash := chainhash.Hash{}
-		copy(blockHash[:], []byte("test_block_hash_32_bytes_long___!"))
-
-		blockIds := make(map[uint32]bool)
-
-		// Process orphans with empty orphanage
-		server.processOrphans(context.Background(), blockHash, 100, blockIds)
-
-		// Verify orphanage is still empty
-		assert.Equal(t, 0, server.orphanage.Len())
-	})
-
-	t.Run("WithOrphans", func(t *testing.T) {
-		server, cleanup := setupTestServer(t)
-		defer cleanup()
-
-		// Add orphaned transaction
-		tx, err := createTestTransaction("orphan")
-		require.NoError(t, err)
-		server.orphanage.Set(*tx.TxIDChainHash(), tx)
-
-		blockHash := chainhash.Hash{}
-		copy(blockHash[:], []byte("test_block_hash_32_bytes_long___!"))
-
-		blockIds := make(map[uint32]bool)
-
-		// Mock validator to return success
-		mockValidator := server.validatorClient.(*validator.MockValidatorClient)
-		mockValidator.UtxoStore = server.utxoStore
-
-		// Process orphans
-		server.processOrphans(context.Background(), blockHash, 100, blockIds)
 	})
 }
 
@@ -1783,7 +2188,7 @@ func TestCheckBlockSubtrees_ConcurrentProcessing(t *testing.T) {
 		require.NoError(t, err)
 
 		// Mark as validated to avoid HTTP calls
-		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, []byte("validated"))
+		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
 		require.NoError(t, err)
 	}
 
@@ -1832,7 +2237,7 @@ func TestCheckBlockSubtrees_ConcurrentProcessing(t *testing.T) {
 		Return(true, nil)
 
 	// Mock validator
-	mockValidator := server.validatorClient.(*validator.MockValidatorClient)
+	mockValidator := server.validatorClient.(*validator.MockValidator)
 	mockValidator.UtxoStore = server.utxoStore
 
 	request := &subtreevalidation_api.CheckBlockSubtreesRequest{
@@ -1885,13 +2290,13 @@ func TestExtractAndCollectTransactions_ConcurrentAccess(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		err := server.extractAndCollectTransactions(context.Background(), subtree1, &transactions1)
+		err := server.extractAndCollectTransactions(context.Background(), subtree1, &transactions1, nil)
 		assert.NoError(t, err)
 	}()
 
 	go func() {
 		defer wg.Done()
-		err := server.extractAndCollectTransactions(context.Background(), subtree2, &transactions2)
+		err := server.extractAndCollectTransactions(context.Background(), subtree2, &transactions2, nil)
 		assert.NoError(t, err)
 	}()
 
@@ -1982,6 +2387,28 @@ func (m *MockBlobStore) Close(ctx context.Context) error {
 }
 
 // Helper function to setup test server
+// blessedSubtreeBytes returns a serialized subtree carrying no conflicting
+// transactions.
+//
+// Tests that only need the "already validated" marker to be present must still
+// write a parseable subtree. CheckBlockSubtrees reads each cached subtree's
+// conflicting-node trailer and re-checks it against the candidate chain, and it
+// fails closed on bytes it cannot read — a placeholder payload is
+// indistinguishable from a corrupt or truncated file, and treating it as "no
+// conflicts" would be exactly the bypass that check exists to prevent.
+func blessedSubtreeBytes(t *testing.T) []byte {
+	t.Helper()
+
+	st, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, st.AddCoinbaseNode())
+
+	b, err := st.Serialize()
+	require.NoError(t, err)
+
+	return b
+}
+
 func setupTestServer(t *testing.T) (*Server, func()) {
 	logger := &ulogger.TestLogger{}
 
@@ -1996,9 +2423,9 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 	// Mock UTXO store
 	mockUtxoStore := &utxo.MockUtxostore{}
 	// Set up default mock for Create method
-	mockUtxoStore.On("Create",
+	mockUtxoStore.On("SpendAndCreate",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(&utxometa.Data{}, nil).Maybe()
+		Return(&utxometa.Data{}, nil, nil).Maybe()
 	// Set up default mock for BatchDecorate method
 	mockUtxoStore.On("BatchDecorate",
 		mock.Anything, mock.Anything, mock.Anything).
@@ -2012,7 +2439,7 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 		Return(&utxometa.Data{}, nil).Maybe()
 
 	// Mock validator client
-	mockValidatorClient := &validator.MockValidatorClient{}
+	mockValidatorClient := &validator.MockValidator{}
 
 	// Mock blockchain client
 	mockBlockchainClient := &blockchain.Mock{}
@@ -2041,9 +2468,11 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).
 		Return(&currentState, nil).Maybe()
 
-	// Create orphanage to avoid nil pointer dereference
-	orphanage, err := NewOrphanage(time.Minute*10, 100, logger)
+	afCfg := adaptivefetch.DefaultConfig()
+	afCfg.BootstrapMode = adaptivefetch.ModePessimistic
+	af, err := adaptivefetch.New(afCfg, "test", prometheus.NewRegistry())
 	require.NoError(t, err)
+	require.NotNil(t, af)
 
 	server := &Server{
 		logger:           logger,
@@ -2053,7 +2482,7 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 		utxoStore:        mockUtxoStore,
 		validatorClient:  mockValidatorClient,
 		blockchainClient: mockBlockchainClient,
-		orphanage:        orphanage,
+		adaptiveFetch:    af,
 	}
 
 	return server, func() {
@@ -2104,6 +2533,11 @@ func TestCheckBlockSubtrees_DifferentFork(t *testing.T) {
 			blockBytes, _ := block.Bytes()
 
 			// Create server
+			testAfCfg := adaptivefetch.DefaultConfig()
+			testAfCfg.BootstrapMode = adaptivefetch.ModePessimistic
+			testAf, err := adaptivefetch.New(testAfCfg, "test", prometheus.NewRegistry())
+			require.NoError(t, err)
+			require.NotNil(t, testAf)
 			server := &Server{
 				settings:         testSettings,
 				logger:           ulogger.TestLogger{},
@@ -2111,6 +2545,7 @@ func TestCheckBlockSubtrees_DifferentFork(t *testing.T) {
 				subtreeStore:     mockSubtreeStore,
 				txStore:          mockTxStore,
 				utxoStore:        mockUTXOStore,
+				adaptiveFetch:    testAf,
 			}
 
 			// Create request
@@ -2356,7 +2791,7 @@ func TestCheckBlockSubtrees_LargeBlock_MemoryConsumption(t *testing.T) {
 			require.NoError(t, err)
 
 			// Mark the subtree as already validated to avoid HTTP fetching
-			err = server.subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, []byte("validated"))
+			err = server.subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
 			require.NoError(t, err)
 		}
 
@@ -2440,151 +2875,85 @@ func TestCheckBlockSubtrees_LargeBlock_MemoryConsumption(t *testing.T) {
 	t.Logf("  GC Pause Total: %.2f ms", float64(memAfter.PauseTotalNs-memBefore.PauseTotalNs)/(1000*1000))
 }
 
-func TestBuildParentMetadata(t *testing.T) {
-	t.Run("EmptyInput", func(t *testing.T) {
-		result := buildParentMetadata(nil, 100, nil)
-		assert.Nil(t, result)
+// TestFindLocalSubtreeFile verifies that findLocalSubtreeFile locates a subtree
+// under either FileTypeSubtreeToCheck (the download-from-peer marker) or
+// FileTypeSubtree (the already-validated marker). The FileTypeSubtree case is
+// the important regression guard for the legacy catch-up / quickValidationMode
+// path, where we must not fall back to HTTP (baseURL="legacy" has no scheme).
+func TestFindLocalSubtreeFile(t *testing.T) {
+	ctx := context.Background()
 
-		result = buildParentMetadata([]missingTx{}, 100, make(map[chainhash.Hash]bool))
-		assert.Nil(t, result)
+	var hash chainhash.Hash
+	copy(hash[:], []byte("find_local_subtree_hash_32_bytes"))
+
+	t.Run("FileTypeSubtreeToCheck present", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		require.NoError(t, server.subtreeStore.Set(ctx, hash[:], fileformat.FileTypeSubtreeToCheck, []byte("payload")))
+
+		ft, exists, err := server.findLocalSubtreeFile(ctx, hash)
+		require.NoError(t, err)
+		require.True(t, exists)
+		assert.Equal(t, fileformat.FileTypeSubtreeToCheck, ft)
 	})
 
-	t.Run("EmptySuccessSet", func(t *testing.T) {
-		tx := bt.NewTx()
-		require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000000", 0, "76a914000000000000000000000000000000000000000088ac", 1000))
-		require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 900))
+	t.Run("FileTypeSubtree only (quickValidationMode/legacy)", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
 
-		missingTxs := []missingTx{{tx: tx, idx: 0}}
-		successMap := make(map[chainhash.Hash]bool)
+		// Only the "already validated" marker exists — no FileTypeSubtreeToCheck.
+		require.NoError(t, server.subtreeStore.Set(ctx, hash[:], fileformat.FileTypeSubtree, []byte("payload")))
 
-		result := buildParentMetadata(missingTxs, 100, successMap)
-		assert.Nil(t, result)
+		ft, exists, err := server.findLocalSubtreeFile(ctx, hash)
+		require.NoError(t, err)
+		require.True(t, exists, "must find the subtree under FileTypeSubtree so CheckBlockSubtrees does not fall back to HTTP")
+		assert.Equal(t, fileformat.FileTypeSubtree, ft)
 	})
 
-	t.Run("FiltersBySuccessfulTransactions", func(t *testing.T) {
-		// Create test transactions
-		tx1 := bt.NewTx()
-		require.NoError(t, tx1.From("0000000000000000000000000000000000000000000000000000000000000000", 0, "76a914000000000000000000000000000000000000000088ac", 1000))
-		require.NoError(t, tx1.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 900))
+	t.Run("neither present", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
 
-		tx2 := bt.NewTx()
-		require.NoError(t, tx2.From("1111111111111111111111111111111111111111111111111111111111111111", 0, "76a914000000000000000000000000000000000000000088ac", 2000))
-		require.NoError(t, tx2.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1900))
-
-		tx3 := bt.NewTx()
-		require.NoError(t, tx3.From("2222222222222222222222222222222222222222222222222222222222222222", 0, "76a914000000000000000000000000000000000000000088ac", 3000))
-		require.NoError(t, tx3.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 2900))
-
-		missingTxs := []missingTx{
-			{tx: tx1, idx: 0},
-			{tx: tx2, idx: 1},
-			{tx: tx3, idx: 2},
-		}
-
-		// Only tx1 and tx3 succeeded
-		successMap := map[chainhash.Hash]bool{
-			*tx1.TxIDChainHash(): true,
-			*tx3.TxIDChainHash(): true,
-		}
-
-		blockHeight := uint32(12345)
-		result := buildParentMetadata(missingTxs, blockHeight, successMap)
-
-		// Should only include tx1 and tx3
-		assert.NotNil(t, result)
-		assert.Equal(t, 2, len(result))
-
-		// Check tx1 is included
-		meta1, exists := result[*tx1.TxIDChainHash()]
-		assert.True(t, exists)
-		assert.Equal(t, blockHeight, meta1.BlockHeight)
-
-		// Check tx2 is NOT included (failed validation)
-		_, exists = result[*tx2.TxIDChainHash()]
+		ft, exists, err := server.findLocalSubtreeFile(ctx, hash)
+		require.NoError(t, err)
 		assert.False(t, exists)
+		assert.Equal(t, fileformat.FileTypeUnknown, ft)
+	})
+}
 
-		// Check tx3 is included
-		meta3, exists := result[*tx3.TxIDChainHash()]
-		assert.True(t, exists)
-		assert.Equal(t, blockHeight, meta3.BlockHeight)
+func TestValidateSubtreeLeafCount(t *testing.T) {
+	subtreeHash := chainhash.Hash{0x01, 0x02, 0x03}
+
+	t.Run("UnderCap", func(t *testing.T) {
+		require.NoError(t, validateSubtreeLeafCount(subtreeHash, 3, 4))
 	})
 
-	t.Run("AllTransactionsSuccessful", func(t *testing.T) {
-		// Create test transactions
-		tx1 := bt.NewTx()
-		require.NoError(t, tx1.From("0000000000000000000000000000000000000000000000000000000000000000", 0, "76a914000000000000000000000000000000000000000088ac", 1000))
-		require.NoError(t, tx1.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 900))
-
-		tx2 := bt.NewTx()
-		require.NoError(t, tx2.From("1111111111111111111111111111111111111111111111111111111111111111", 0, "76a914000000000000000000000000000000000000000088ac", 2000))
-		require.NoError(t, tx2.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1900))
-
-		missingTxs := []missingTx{
-			{tx: tx1, idx: 0},
-			{tx: tx2, idx: 1},
-		}
-
-		// All transactions succeeded
-		successMap := map[chainhash.Hash]bool{
-			*tx1.TxIDChainHash(): true,
-			*tx2.TxIDChainHash(): true,
-		}
-
-		blockHeight := uint32(54321)
-		result := buildParentMetadata(missingTxs, blockHeight, successMap)
-
-		// Should include both transactions
-		assert.NotNil(t, result)
-		assert.Equal(t, 2, len(result))
-
-		// Verify both are present with correct block height
-		meta1, exists := result[*tx1.TxIDChainHash()]
-		assert.True(t, exists)
-		assert.Equal(t, blockHeight, meta1.BlockHeight)
-
-		meta2, exists := result[*tx2.TxIDChainHash()]
-		assert.True(t, exists)
-		assert.Equal(t, blockHeight, meta2.BlockHeight)
+	t.Run("AtCap", func(t *testing.T) {
+		require.NoError(t, validateSubtreeLeafCount(subtreeHash, 4, 4))
 	})
 
-	t.Run("NoTransactionsSuccessful", func(t *testing.T) {
-		tx1 := bt.NewTx()
-		require.NoError(t, tx1.From("0000000000000000000000000000000000000000000000000000000000000000", 0, "76a914000000000000000000000000000000000000000088ac", 1000))
-		require.NoError(t, tx1.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 900))
-
-		missingTxs := []missingTx{{tx: tx1, idx: 0}}
-
-		// No transactions succeeded
-		successMap := make(map[chainhash.Hash]bool)
-
-		result := buildParentMetadata(missingTxs, 100, successMap)
-
-		// Should return nil since no successful transactions
-		assert.Nil(t, result)
+	t.Run("OverCap", func(t *testing.T) {
+		err := validateSubtreeLeafCount(subtreeHash, 5, 4)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrProcessing))
+		require.Contains(t, err.Error(), subtreeHash.String())
+		require.Contains(t, err.Error(), "exceeds policy max")
 	})
 
-	t.Run("NilTransactionInSlice", func(t *testing.T) {
-		tx1 := bt.NewTx()
-		require.NoError(t, tx1.From("0000000000000000000000000000000000000000000000000000000000000000", 0, "76a914000000000000000000000000000000000000000088ac", 1000))
-		require.NoError(t, tx1.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 900))
+	t.Run("ZeroLeaves", func(t *testing.T) {
+		// A subtree always carries at least one node; a zero leaf count is now rejected explicitly
+		// (bitcoin-sv/teranode#4692) rather than left to the downstream constructor's incidental error.
+		err := validateSubtreeLeafCount(subtreeHash, 0, 4)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrProcessing))
+		require.Contains(t, err.Error(), subtreeHash.String())
+		require.Contains(t, err.Error(), "subtree has zero nodes")
+	})
 
-		missingTxs := []missingTx{
-			{tx: tx1, idx: 0},
-			{tx: nil, idx: 1}, // Nil transaction
-		}
-
-		successMap := map[chainhash.Hash]bool{
-			*tx1.TxIDChainHash(): true,
-		}
-
-		result := buildParentMetadata(missingTxs, 100, successMap)
-
-		// Should only include tx1 (nil transaction is skipped)
-		assert.NotNil(t, result)
-		assert.Equal(t, 1, len(result))
-
-		meta, exists := result[*tx1.TxIDChainHash()]
-		assert.True(t, exists)
-		assert.Equal(t, uint32(100), meta.BlockHeight)
+	t.Run("LargeOverflow", func(t *testing.T) {
+		err := validateSubtreeLeafCount(subtreeHash, 1<<30, 1<<20)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrProcessing))
 	})
 }

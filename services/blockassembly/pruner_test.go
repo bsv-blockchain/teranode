@@ -33,7 +33,7 @@ func TestCleanupDuringStartup(t *testing.T) {
 		var iteratorCalled bool
 
 		// Then iterator should be called
-		mockIterator := new(MockUnminedTxIterator)
+		mockIterator := new(utxo.MockUnminedTxIterator)
 		mockStore.On("GetUnminedTxIterator").
 			Return(mockIterator, nil).
 			Run(func(args mock.Arguments) {
@@ -51,6 +51,7 @@ func TestCleanupDuringStartup(t *testing.T) {
 
 		subtreeProcessor := &subtreeprocessor.MockSubtreeProcessor{}
 		subtreeProcessor.On("GetCurrentBlockHeader").Return(blockHeader1, nil)
+		subtreeProcessor.On("FlushDiskTxMapForLoad", mock.Anything, false).Return(nil).Once()
 
 		// Create BlockAssembler with mocked dependencies
 		ba := &BlockAssembler{
@@ -66,38 +67,13 @@ func TestCleanupDuringStartup(t *testing.T) {
 		ba.setBestBlockHeader(nil, 100)
 
 		// Call loadUnminedTransactions which includes cleanup
-		err := ba.loadUnminedTransactions(ctx)
+		err := ba.loadUnminedTransactions(ctx, false)
 
 		require.NoError(t, err)
 		assert.True(t, iteratorCalled)
 		mockStore.AssertExpectations(t)
 		mockIterator.AssertExpectations(t)
 	})
-}
-
-// Mock types for testing
-
-type MockUnminedTxIterator struct {
-	mock.Mock
-}
-
-func (m *MockUnminedTxIterator) Next(ctx context.Context) ([]*utxo.UnminedTransaction, error) {
-	args := m.Called(ctx)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-
-	return args.Get(0).([]*utxo.UnminedTransaction), args.Error(1)
-}
-
-func (m *MockUnminedTxIterator) Err() error {
-	args := m.Called()
-	return args.Error(0)
-}
-
-func (m *MockUnminedTxIterator) Close() error {
-	args := m.Called()
-	return args.Error(0)
 }
 
 // TestLoadUnminedTransactionsExcludesConflicting tests that loadUnminedTransactions excludes conflicting transactions
@@ -126,7 +102,7 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 		}}
 
 		// Setup iterator expectations - iterator should only return non-conflicting transactions
-		mockIterator := new(MockUnminedTxIterator)
+		mockIterator := new(utxo.MockUnminedTxIterator)
 		mockStore.On("GetUnminedTxIterator").
 			Return(mockIterator, nil).
 			Once()
@@ -150,6 +126,7 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 		}), true).Return(nil).Once()
 		// GetCurrentBlockHeader may be called multiple times during loading
 		mockSubtreeProcessor.On("GetCurrentBlockHeader").Return(blockHeader1, nil).Maybe()
+		mockSubtreeProcessor.On("FlushDiskTxMapForLoad", mock.Anything, false).Return(nil).Once()
 
 		blockchainClient := &blockchain.Mock{}
 		blockchainClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{0}, nil)
@@ -167,7 +144,7 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 		ba.setBestBlockHeader(nil, 100)
 
 		// Call loadUnminedTransactions
-		err := ba.loadUnminedTransactions(ctx)
+		err := ba.loadUnminedTransactions(ctx, false)
 
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)

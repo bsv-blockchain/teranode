@@ -24,7 +24,7 @@
 
 ## 1. Overview
 
-The Lock Record Pattern is a distributed consistency mechanism used by Teranode's UTXO store to safely handle transactions with more than 20,000 outputs. When a transaction exceeds the Aerospike record size limit, it must be split across multiple records. The lock record pattern ensures these multi-record operations complete atomically, preventing data corruption from partial writes or concurrent access.
+The Lock Record Pattern is a distributed consistency mechanism used by Teranode's UTXO store to safely handle transactions with more outputs than `utxostore_utxoBatchSize` (default 128). Such a transaction is split into records of `utxoBatchSize` UTXOs each, so a record never grows unbounded with the output count; this is a batching choice, not a record-size limit (record-size overflow is handled separately, see [Storage Implementation](../datamodel/utxo_data_model.md#storage-implementation)). The lock record pattern ensures these multi-record operations complete atomically, preventing data corruption from partial writes or concurrent access.
 
 The pattern uses two key mechanisms:
 
@@ -65,10 +65,10 @@ The Lock Record Pattern addresses several critical challenges in handling large 
 
 ### 3.1. Lock Record Structure
 
-Lock records are special Aerospike records identified by a unique index (`0xFFFFFFFF`) that cannot conflict with actual sub-records:
+Lock records are special Aerospike records identified by a unique index (`0xFFFFFFFE`) that cannot conflict with actual sub-records:
 
 ```go
-const LockRecordIndex = uint32(0xFFFFFFFF)
+const LockRecordIndex = uint32(0xFFFFFFFE)
 ```
 
 **Lock Record Bins:**
@@ -80,6 +80,7 @@ const LockRecordIndex = uint32(0xFFFFFFFF)
 | `process_id` | `int` | OS process ID that holds the lock |
 | `hostname` | `string` | Host where lock was acquired |
 | `expected_recs` | `int` | Number of records to be created |
+| `lock_token` | `string` | Random token (at least 128 bits) identifying this acquisition |
 
 ### 3.2. Creating Flag
 
@@ -99,27 +100,27 @@ end
 
 ### 3.3. Record Layout
 
-For a transaction with >20,000 outputs, records are organized as:
+For a transaction with more outputs than `utxostore_utxoBatchSize` (default 128), records are organized as:
 
 ```text
 Transaction with N batches:
 
 ┌─────────────────────┐
-│   Lock Record       │  Index: 0xFFFFFFFF (temporary)
+│   Lock Record       │  Index: 0xFFFFFFFE (temporary)
 │   TTL: 30-300s      │
 └─────────────────────┘
 
 ┌─────────────────────┐
 │   Master Record     │  Index: 0
 │   - Metadata        │  - TxID, version, fees, etc.
-│   - UTXOs 0-19999   │  - First batch of outputs
+│   - UTXOs 0-127     │  - First batch of outputs (utxoBatchSize)
 │   - TotalExtraRecs  │  - Count of additional records
 │   - Creating flag   │
 └─────────────────────┘
 
 ┌─────────────────────┐
 │   Child Record 1    │  Index: 1
-│   - UTXOs 20000+    │  - Second batch of outputs
+│   - UTXOs 128+      │  - Second batch of outputs
 │   - Creating flag   │
 └─────────────────────┘
 
@@ -138,6 +139,7 @@ The first phase creates all transaction records with the `creating` flag set to 
 
 1. **Acquire Lock**
 
+    - Generate a fresh random `lock_token` identifying this acquisition
     - Create lock record with CREATE_ONLY policy
     - If lock exists, return `TxExistsError` (another process is creating)
     - Calculate dynamic TTL based on number of records
@@ -156,7 +158,10 @@ The first phase creates all transaction records with the `creating` flag set to 
 
 4. **Release Lock**
 
-    - Delete lock record (always, even on partial failure)
+    - Attempt the lock-record delete on every path, including partial failure,
+      gated by a filter expression on `lock_token` so a release that arrives
+      after the lock expired and was re-acquired by another writer is a no-op
+      rather than evicting the new holder's lock
     - Partial records remain for next attempt to complete
 
 ### 4.2. Phase 2: Flag Clearing
@@ -331,9 +336,10 @@ The lock record pattern uses these configuration settings:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `utxo_store_batch_size` | 20000 | UTXOs per record (triggers multi-record) |
-| `utxo_store_externalize_all_transactions` | false | Force external storage for all transactions |
-| `utxo_store_max_tx_size_in_store` | 1MB | Size threshold for external storage |
+| `utxostore_utxoBatchSize` | 128 | UTXOs per record (more outputs than this triggers multi-record) |
+| `utxostore_externalizeAllTransactions` | false | Force external storage for all transactions |
+
+Note: the external-storage size threshold is not configurable — it's a compile-time constant, `MaxTxSizeInStoreInBytes = 32 * 1024` in `stores/utxo/aerospike/aerospike.go`.
 
 **Batch Size Impact:**
 

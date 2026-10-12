@@ -48,7 +48,7 @@ func TestProcessConflicting_Success(t *testing.T) {
 	mockStore.On("Unspend", mock.Anything, affectedSpends, mock.Anything).Return(nil)
 
 	// Mock Spend call for winning transaction
-	mockStore.On("Spend", mock.Anything, testTx, mock.Anything, mock.Anything).Return([]*Spend{}, nil)
+	mockStore.On("SpendAndCreate", mock.Anything, testTx, mock.Anything, mock.Anything).Return(nil, []*Spend{}, nil)
 
 	// Mock SetConflicting call for marking winning txs as not conflicting
 	mockStore.On("SetConflicting", mock.Anything, conflictingTxHashes, false).
@@ -58,7 +58,7 @@ func TestProcessConflicting_Success(t *testing.T) {
 	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).Return(nil)
 
 	// Execute test
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, conflictingTxHashes, map[chainhash.Hash]struct{}{}, NoAncestryGuard)
 
 	// Assertions
 	require.NoError(t, err)
@@ -75,7 +75,7 @@ func TestProcessConflicting_FrozenTxError(t *testing.T) {
 	conflictingTxHashes := []chainhash.Hash{subtree.CoinbasePlaceholderHashValue}
 
 	// Execute test
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, conflictingTxHashes, map[chainhash.Hash]struct{}{}, NoAncestryGuard)
 
 	// Assertions
 	assert.Nil(t, result)
@@ -98,7 +98,7 @@ func TestProcessConflicting_TxNotConflictingError(t *testing.T) {
 	}, nil)
 
 	// Execute test
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, conflictingTxHashes, map[chainhash.Hash]struct{}{}, NoAncestryGuard)
 
 	// Assertions
 	assert.Nil(t, result)
@@ -118,7 +118,7 @@ func TestProcessConflicting_GetTxError(t *testing.T) {
 	mockStore.On("Get", mock.Anything, &conflictingTxHash, mock.Anything).Return(nil, errors.NewProcessingError("database error"))
 
 	// Execute test
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, conflictingTxHashes, map[chainhash.Hash]struct{}{}, NoAncestryGuard)
 
 	// Assertions
 	assert.Nil(t, result)
@@ -145,7 +145,7 @@ func TestProcessConflicting_GetCounterConflictingError(t *testing.T) {
 		Return([]chainhash.Hash{}, errors.NewProcessingError("counter conflicting error"))
 
 	// Execute test
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, conflictingTxHashes, map[chainhash.Hash]struct{}{}, NoAncestryGuard)
 
 	// Assertions
 	assert.Nil(t, result)
@@ -179,12 +179,32 @@ func TestProcessConflicting_UnspendError(t *testing.T) {
 	mockStore.On("Unspend", mock.Anything, mock.Anything, mock.Anything).
 		Return(errors.NewProcessingError("unspend failed"))
 
-	// step 2 failed → rollback only undoes step 1 (clear conflicting flag).
+	// A failed step 2 is treated as PARTIALLY committed, so the rollback attempts
+	// the step-2 undo as well as step 1. Unspend is best-effort-over-all: it tries
+	// every spend and returns an aggregate, so an error means "some, possibly
+	// nearly all, spends were reverted" — skipping the compensating re-spend would
+	// leave the most uncompensated state precisely when it failed. The re-spend is
+	// idempotent for the caller that owns these spends.
+	mockStore.On("Get", mock.Anything, &losingTxHash, mock.Anything).Return(&meta.Data{
+		Tx: createTestTransaction(),
+	}, nil)
+
+	mockStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil)
+
+	// rollback then clears the conflicting flag (undo of step 1)
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{losingTxHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil)
 
+	// and unlocks the parents the failed step 2 may have locked. NOT .Maybe(): with
+	// markedAsNotSpendable built only after the error return, this arm could never
+	// fire, so the assertion passed whether or not SetLocked was called. The gap is
+	// latent only because aerospike drops flagAsLocked (#1291) and sql Unspend is one
+	// transaction; it goes live the day #1291 makes flagAsLocked real.
+	mockStore.On("SetLocked", mock.Anything, mock.Anything, false).Return(nil).Once()
+
 	// Execute test
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, conflictingTxHashes, map[chainhash.Hash]struct{}{}, NoAncestryGuard)
 
 	// Assertions
 	assert.Nil(t, result)
@@ -226,22 +246,22 @@ func TestProcessConflicting_SpendError(t *testing.T) {
 		Vout: 0,
 		Err:  errors.NewProcessingError("spend error"),
 	}
-	mockStore.On("Spend", mock.Anything, testTx, mock.Anything, mock.Anything).
-		Return([]*Spend{spendWithError}, errors.NewTxInvalidError("spend failed"))
+	mockStore.On("SpendAndCreate", mock.Anything, testTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{spendWithError}, errors.NewTxInvalidError("spend failed"))
 
 	// step-3 failure rollback path: re-fetch losing tx body, re-spend it, clear conflicting,
 	// unlock parents. (No partial successful step-3 spends — the only spend has Err != nil.)
 	mockStore.On("Get", mock.Anything, &losingTxHash, mock.Anything).Return(&meta.Data{
 		Tx: losingTx,
 	}, nil).Once()
-	mockStore.On("Spend", mock.Anything, losingTx, mock.Anything, mock.Anything).
-		Return([]*Spend{}, nil).Once()
+	mockStore.On("SpendAndCreate", mock.Anything, losingTx, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil).Once()
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{losingTxHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil)
 	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).Return(nil)
 
 	// Execute test
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, conflictingTxHashes, map[chainhash.Hash]bool{})
+	result, _, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, conflictingTxHashes, map[chainhash.Hash]struct{}{}, NoAncestryGuard)
 
 	// Assertions
 	assert.Nil(t, result)
@@ -545,7 +565,7 @@ func TestGetConflictingChildren_Success(t *testing.T) {
 		Return(&meta.Data{}, nil)
 
 	// Execute test
-	result, err := GetConflictingChildren(ctx, mockStore, parentHash)
+	result, err := GetConflictingChildren(ctx, mockStore, parentHash, 0)
 
 	// Assertions
 	require.NoError(t, err)
@@ -562,7 +582,7 @@ func TestGetConflictingChildren_CoinbasePlaceholder(t *testing.T) {
 	coinbaseHash := subtree.CoinbasePlaceholderHashValue
 
 	// Execute test
-	result, err := GetConflictingChildren(ctx, mockStore, coinbaseHash)
+	result, err := GetConflictingChildren(ctx, mockStore, coinbaseHash, 0)
 
 	// Assertions
 	require.NoError(t, err)
@@ -581,7 +601,7 @@ func TestGetConflictingChildren_GetError(t *testing.T) {
 		Return(nil, errors.NewProcessingError("get error"))
 
 	// Execute test
-	result, err := GetConflictingChildren(ctx, mockStore, txHash)
+	result, err := GetConflictingChildren(ctx, mockStore, txHash, 0)
 
 	// Assertions
 	assert.Nil(t, result)
@@ -609,7 +629,7 @@ func TestGetConflictingChildren_ChildGetError(t *testing.T) {
 		Return(nil, errors.NewProcessingError("child get error"))
 
 	// Execute test
-	result, err := GetConflictingChildren(ctx, mockStore, parentHash)
+	result, err := GetConflictingChildren(ctx, mockStore, parentHash, 0)
 
 	// Assertions
 	assert.Nil(t, result)
@@ -639,7 +659,7 @@ func TestGetConflictingChildren_CycleDetection(t *testing.T) {
 		}, nil)
 
 	// Execute test - should complete without infinite loop
-	result, err := GetConflictingChildren(ctx, mockStore, parentHash)
+	result, err := GetConflictingChildren(ctx, mockStore, parentHash, 0)
 
 	// Assertions
 	require.NoError(t, err)
@@ -671,12 +691,18 @@ func TestGetCounterConflictingTxHashes_Success(t *testing.T) {
 			SpendingDatas: []*spend.SpendingData{spendingData},
 		}, nil)
 
-	// Mock GetConflictingChildren call
-	mockStore.On("GetConflictingChildren", mock.Anything, conflictingTxHash).
-		Return([]chainhash.Hash{childTxHash}, nil)
+	// Mock the descendant walk of the conflicting tx: it has one spending child,
+	// which itself has no descendants
+	childSpendingData := &spend.SpendingData{TxID: &childTxHash}
+	mockStore.On("Get", mock.Anything, &conflictingTxHash, mock.Anything).
+		Return(&meta.Data{
+			SpendingDatas: []*spend.SpendingData{childSpendingData},
+		}, nil)
+	mockStore.On("Get", mock.Anything, &childTxHash, mock.Anything).
+		Return(&meta.Data{}, nil)
 
 	// Execute test
-	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash)
+	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
 
 	// Assertions
 	require.NoError(t, err)
@@ -697,7 +723,7 @@ func TestGetCounterConflictingTxHashes_GetTxError(t *testing.T) {
 		Return(nil, errors.NewProcessingError("get tx error"))
 
 	// Execute test
-	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash)
+	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
 
 	// Assertions
 	assert.Nil(t, result)
@@ -725,7 +751,7 @@ func TestGetCounterConflictingTxHashes_GetParentError(t *testing.T) {
 		Return(nil, errors.NewProcessingError("get parent error"))
 
 	// Execute test
-	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash)
+	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
 
 	// Assertions
 	assert.Nil(t, result)
@@ -756,7 +782,7 @@ func TestGetCounterConflictingTxHashes_OutOfRangeError(t *testing.T) {
 		}, nil)
 
 	// Execute test
-	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash)
+	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
 
 	// Assertions
 	assert.Nil(t, result)
@@ -788,12 +814,19 @@ func TestGetCounterConflictingTxHashes_FrozenChildError(t *testing.T) {
 			SpendingDatas: []*spend.SpendingData{spendingData},
 		}, nil)
 
-	// Mock GetConflictingChildren call returning frozen child
-	mockStore.On("GetConflictingChildren", mock.Anything, conflictingTxHash).
-		Return([]chainhash.Hash{subtree.FrozenBytesTxHash}, nil)
+	// Mock the descendant walk of the conflicting tx: one of its outputs is
+	// frozen, i.e. its spending data carries the frozen sentinel tx hash
+	frozenSpendingData := &spend.SpendingData{TxID: &subtree.FrozenBytesTxHash}
+	mockStore.On("Get", mock.Anything, &conflictingTxHash, mock.Anything).
+		Return(&meta.Data{
+			SpendingDatas: []*spend.SpendingData{frozenSpendingData},
+		}, nil)
+	// the sentinel is not a real record: Aerospike Get returns (nil, nil) for it
+	mockStore.On("Get", mock.Anything, &subtree.FrozenBytesTxHash, mock.Anything).
+		Return(nil, nil).Maybe()
 
 	// Execute test
-	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash)
+	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
 
 	// Assertions
 	assert.Nil(t, result)
@@ -824,12 +857,12 @@ func TestGetCounterConflictingTxHashes_GetConflictingChildrenError(t *testing.T)
 			SpendingDatas: []*spend.SpendingData{spendingData},
 		}, nil)
 
-	// Mock GetConflictingChildren call returning error
-	mockStore.On("GetConflictingChildren", mock.Anything, conflictingTxHash).
-		Return([]chainhash.Hash{}, errors.NewProcessingError("get conflicting children error"))
+	// Mock the descendant walk of the conflicting tx failing on its root read
+	mockStore.On("Get", mock.Anything, &conflictingTxHash, mock.Anything).
+		Return(nil, errors.NewProcessingError("get conflicting children error"))
 
 	// Execute test
-	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash)
+	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
 
 	// Assertions
 	assert.Nil(t, result)
@@ -859,7 +892,7 @@ func TestGetCounterConflictingTxHashes_NilSpendingData(t *testing.T) {
 		}, nil)
 
 	// Execute test
-	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash)
+	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
 
 	// Assertions
 	require.NoError(t, err)
@@ -911,4 +944,185 @@ func createTestTransactionWithInputs(parentTxHash chainhash.Hash, inputIndex uin
 	tx.Outputs = append(tx.Outputs, output)
 
 	return tx
+}
+
+func TestGetConflictingChildren_BudgetExceeded(t *testing.T) {
+	// linear chain: root -> childA -> childB (3 visited nodes including root)
+	rootHash := createTestHash("budget-root")
+	childAHash := createTestHash("budget-child-a")
+	childBHash := createTestHash("budget-child-b")
+
+	newMockChain := func() *MockUtxostore {
+		mockStore := &MockUtxostore{}
+		mockStore.On("Get", mock.Anything, &rootHash, mock.Anything).
+			Return(&meta.Data{
+				SpendingDatas: []*spend.SpendingData{{TxID: &childAHash}},
+			}, nil)
+		mockStore.On("Get", mock.Anything, &childAHash, mock.Anything).
+			Return(&meta.Data{
+				SpendingDatas: []*spend.SpendingData{{TxID: &childBHash}},
+			}, nil).Maybe()
+		mockStore.On("Get", mock.Anything, &childBHash, mock.Anything).
+			Return(&meta.Data{}, nil).Maybe()
+		return mockStore
+	}
+
+	t.Run("cone equal to budget passes", func(t *testing.T) {
+		result, err := GetConflictingChildren(context.Background(), newMockChain(), rootHash, 3)
+		require.NoError(t, err)
+		assert.Len(t, result, 2) // root excluded from result
+	})
+
+	t.Run("cone exceeding budget fails closed with distinct error", func(t *testing.T) {
+		result, err := GetConflictingChildren(context.Background(), newMockChain(), rootHash, 2)
+		require.Error(t, err)
+		assert.Nil(t, result)
+
+		require.ErrorIs(t, err, errors.ErrUtxoWalkLimitExceeded)
+
+		// must never be classified as an invalid tx (permanent block poison) or a
+		// missing tx (block-incomplete retry loop)
+		assert.NotErrorIs(t, err, errors.ErrTxInvalid)
+		assert.NotErrorIs(t, err, errors.ErrTxNotFound)
+
+		// remains detectable through the processTxMetaUsingStore context-canceled wrap
+		wrapped := errors.NewContextCanceledError("wrapped", err)
+		assert.ErrorIs(t, wrapped, errors.ErrUtxoWalkLimitExceeded)
+	})
+}
+
+func TestGetConflictingChildren_FrozenSentinelNotWalked(t *testing.T) {
+	// root has a frozen output (sentinel spending data) and a real child; the
+	// sentinel must be returned in the result set for the callers' frozen checks
+	// but must not itself be walked (it is not a real record)
+	rootHash := createTestHash("frozen-root")
+	childHash := createTestHash("frozen-sibling-child")
+
+	mockStore := &MockUtxostore{}
+	mockStore.On("Get", mock.Anything, &rootHash, mock.Anything).
+		Return(&meta.Data{
+			SpendingDatas: []*spend.SpendingData{
+				{TxID: &subtree.FrozenBytesTxHash},
+				{TxID: &childHash},
+			},
+		}, nil)
+	mockStore.On("Get", mock.Anything, &childHash, mock.Anything).
+		Return(&meta.Data{}, nil)
+	// tolerated pre-fix behavior stub; the assertion below requires it unused
+	mockStore.On("Get", mock.Anything, &subtree.FrozenBytesTxHash, mock.Anything).
+		Return(nil, nil).Maybe()
+
+	result, err := GetConflictingChildren(context.Background(), mockStore, rootHash, 0)
+	require.NoError(t, err)
+
+	assert.Contains(t, result, subtree.FrozenBytesTxHash)
+	assert.Contains(t, result, childHash)
+	mockStore.AssertNotCalled(t, "Get", mock.Anything, &subtree.FrozenBytesTxHash, mock.Anything)
+}
+
+func TestGetCounterConflictingTxHashes_DedupesSpenderWalks(t *testing.T) {
+	ctx := context.Background()
+	mockStore := &MockUtxostore{}
+
+	txHash := createTestHash("dedupe-tx")
+	parentTxHash := createTestHash("dedupe-parent")
+	spenderHash := createTestHash("dedupe-spender")
+
+	// tx spends three outputs of the same parent, all counter-spent by the same tx
+	testTx := bt.NewTx()
+	for vout := uint32(0); vout < 3; vout++ {
+		input := &bt.Input{PreviousTxOutIndex: vout}
+		_ = input.PreviousTxIDAdd(&parentTxHash)
+		testTx.Inputs = append(testTx.Inputs, input)
+	}
+	testTx.Outputs = append(testTx.Outputs, &bt.Output{Satoshis: 1000})
+
+	mockStore.On("Get", mock.Anything, &txHash, mock.Anything).
+		Return(&meta.Data{Tx: testTx}, nil)
+	mockStore.On("Get", mock.Anything, &parentTxHash, mock.Anything).
+		Return(&meta.Data{
+			SpendingDatas: []*spend.SpendingData{
+				{TxID: &spenderHash},
+				{TxID: &spenderHash},
+				{TxID: &spenderHash},
+			},
+		}, nil)
+	mockStore.On("Get", mock.Anything, &spenderHash, mock.Anything).
+		Return(&meta.Data{}, nil)
+
+	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
+	require.NoError(t, err)
+	assert.Contains(t, result, txHash)
+	assert.Contains(t, result, spenderHash)
+	assert.Len(t, result, 2)
+
+	// one Get for the tx, one for the unique parent, and exactly ONE walk of the
+	// unique counter-spender — not one walk per input
+	mockStore.AssertNumberOfCalls(t, "Get", 3)
+}
+
+// TestProcessConflicting_CompensationSurvivesDeadContext pins that the step-2
+// compensation does not run on the context that killed step 2.
+//
+// Aerospike's unspend stops early only on ctx.Done, so a cancelled or expired ctx
+// is precisely the failure mode that leaves the most mixed state — and it is the
+// path reported from production. Passing that same dead ctx to the compensation
+// makes every re-spend fail at its Get, so the undo enabled for a failed step 2
+// does nothing exactly when it is needed most.
+//
+// The mocks here ignore ctx, so the assertion is on the context the compensation
+// is handed: it must still be live.
+func TestProcessConflicting_CompensationSurvivesDeadContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	mockStore := &MockUtxostore{}
+
+	conflictingTxHash := createTestHash("conflicting-tx-dead-ctx")
+	losingTxHash := createTestHash("losing-tx-dead-ctx")
+
+	mockStore.On("Get", mock.Anything, &conflictingTxHash, mock.Anything).Return(&meta.Data{
+		Tx:          createTestTransaction(),
+		Conflicting: true,
+	}, nil)
+
+	mockStore.On("GetCounterConflicting", mock.Anything, conflictingTxHash).
+		Return([]chainhash.Hash{losingTxHash}, nil)
+
+	affectedSpends := []*Spend{{TxID: &losingTxHash, Vout: 0}}
+	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{losingTxHash}, true).
+		Return(affectedSpends, []chainhash.Hash{}, nil)
+
+	// Step 2 fails because the caller's context died mid-flight.
+	mockStore.On("Unspend", mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { cancel() }).
+		Return(errors.NewProcessingError("context cancelled un-spending"))
+
+	// Capture rather than match on the context, so a regression fails with a
+	// readable assertion instead of an unmatched-call panic.
+	var compensationCtxErr error
+
+	compensationCtxSeen := false
+
+	mockStore.On("Get", mock.Anything, &losingTxHash, mock.Anything).
+		Run(func(args mock.Arguments) {
+			compensationCtxSeen = true
+			compensationCtxErr = args.Get(0).(context.Context).Err()
+		}).
+		Return(&meta.Data{Tx: createTestTransaction()}, nil)
+
+	mockStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, []*Spend{}, nil)
+	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{losingTxHash}, false).
+		Return([]*Spend{}, []chainhash.Hash{}, nil)
+	mockStore.On("SetLocked", mock.Anything, mock.Anything, false).Return(nil).Once()
+
+	_, _, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, []chainhash.Hash{conflictingTxHash},
+		map[chainhash.Hash]struct{}{}, NoAncestryGuard)
+
+	require.Error(t, err)
+	require.True(t, compensationCtxSeen, "the step-2 compensation must run at all")
+	require.NoError(t, compensationCtxErr,
+		"the compensation must not run on the context that killed step 2: on a dead ctx every re-spend fails at its Get and the undo is a no-op")
+
+	mockStore.AssertExpectations(t)
 }

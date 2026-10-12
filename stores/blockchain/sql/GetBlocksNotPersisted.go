@@ -89,7 +89,11 @@ func (s *SQL) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Bl
 			return nil, errors.NewStorageError("error scanning block row", err)
 		}
 
-		bits, _ := model.NewNBitFromSlice(nBits)
+		bits, nBitsErr := model.NewNBitFromSlice(nBits)
+		if nBitsErr != nil {
+			return nil, errors.NewStorageError("error in GetBlocksNotPersisted: malformed n_bits (length %d, expected 4) for block height %d", len(nBits), height, nBitsErr)
+		}
+
 		block.Header.Bits = *bits
 
 		block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)

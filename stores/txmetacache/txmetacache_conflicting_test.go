@@ -127,8 +127,7 @@ func TestGetMeta_ShouldNotCacheConflictingTransactions(t *testing.T) {
 	// Now check whether the conflicting entry leaked into the cache.
 	// It should NOT be in the cache (like Create() enforces), so
 	// GetMetaCached should return found=false.
-	cached := &meta.Data{}
-	found, _ := cache.GetMetaCached(ctx, hash, cached)
+	_, found := cache.GetMetaCached(ctx, hash)
 
 	// The cache should not contain conflicting transactions.
 	// Either found=false or an ErrNotFound error — both mean "not in cache".
@@ -165,8 +164,7 @@ func TestBatchDecorate_ShouldNotCacheConflictingTransactions(t *testing.T) {
 	require.True(t, items[0].Data.Conflicting, "store should return conflicting metadata")
 
 	// Verify the conflicting entry should NOT be in the cache
-	cached := &meta.Data{}
-	found, _ := cache.GetMetaCached(ctx, hash, cached)
+	_, found := cache.GetMetaCached(ctx, hash)
 
 	// Conflicting transactions must not be cached by BatchDecorate.
 	// Either found=false or an ErrNotFound error — both mean "not in cache".
@@ -206,9 +204,7 @@ func TestSetConflicting_ShouldInvalidateCache(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the tx is in the cache with Conflicting=false
-	cached := &meta.Data{}
-	found, err := cache.GetMetaCached(ctx, hash, cached)
-	require.NoError(t, err)
+	cached, found := cache.GetMetaCached(ctx, hash)
 	require.True(t, found, "tx should be in cache after SetCache")
 	require.False(t, cached.Conflicting, "cached tx should be non-conflicting initially")
 
@@ -223,8 +219,7 @@ func TestSetConflicting_ShouldInvalidateCache(t *testing.T) {
 
 	// Now read from cache — this is what subtree validation's
 	// processTxMetaUsingCache does.
-	cachedAfter := &meta.Data{}
-	found, _ = cache.GetMetaCached(ctx, hash, cachedAfter)
+	cachedAfter, found := cache.GetMetaCached(ctx, hash)
 
 	// After SetConflicting, the cache should either not contain the entry
 	// or should reflect the updated Conflicting=true value.
@@ -297,4 +292,18 @@ func TestSetConflicting_ForwardsReturnValues(t *testing.T) {
 		"wrapper must forward spending-children from underlying store, not echo the input")
 	require.Equal(t, []chainhash.Hash{parentHash}, store.lastInput,
 		"underlying store should have received exactly the input hashes")
+}
+
+// TestTxMetaCache_SupportsOutpointOnlySpend_Delegates verifies the cache decorator forwards
+// the wrapped store's below-checkpoint fast-path capability in both directions. In production
+// the SQL store is wrapped by the TxMetaCache, so if this did not delegate, the fast-path
+// gates (which query capability through the wrapper) would see false and stay off.
+func TestTxMetaCache_SupportsOutpointOnlySpend_Delegates(t *testing.T) {
+	for _, want := range []bool{true, false} {
+		inner := &utxo.MockUtxostore{SupportsOutpointOnlySpendResult: want}
+		c, err := NewTxMetaCache(context.Background(), test.CreateBaseTestSettings(t), ulogger.TestLogger{}, inner, Unallocated)
+		require.NoError(t, err)
+		require.Equal(t, want, c.SupportsOutpointOnlySpend(),
+			"TxMetaCache must delegate SupportsOutpointOnlySpend to the wrapped store")
+	}
 }

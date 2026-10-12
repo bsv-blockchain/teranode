@@ -21,7 +21,7 @@ case "$ACTION" in
     up|down|restart)
         ;;
     *)
-        echo "Error: Invalid action '$ACTION'"
+        echo "Error: Invalid action '$ACTION'" >&2
         usage
         ;;
 esac

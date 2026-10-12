@@ -27,7 +27,7 @@ func TestGetBlockByID(t *testing.T) {
 		store, err := New(logger, dbURL, s)
 		require.NoError(t, err)
 
-		defer store.Close()
+		defer store.Close(context.Background())
 
 		// Genesis block should have ID 0
 		genesisBlock, err := store.GetBlockByID(context.Background(), 0)
@@ -86,7 +86,7 @@ func TestGetBlockByID(t *testing.T) {
 		store, err := New(logger, dbURL, s)
 		require.NoError(t, err)
 
-		defer store.Close()
+		defer store.Close(context.Background())
 
 		// Attempt to retrieve a block with a non-existent ID
 		blockID := uint64(999)

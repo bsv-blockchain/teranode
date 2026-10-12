@@ -3,6 +3,13 @@ syntax = "proto3";
 option go_package = "./;blockchain_api";
 
 // Package blockchain_api defines the gRPC service interface for blockchain operations.
+//
+// Version: v1 (implicit). No version suffix; the unsuffixed name IS v1. This
+// package has already had a breaking change handled via `reserved` enum
+// values without a version bump (see FSMEventType / FSMStateType below) --
+// reserving prevents wire corruption but is not the same as version
+// coexistence. A version bump (v2) is for changes reserved values can't
+// express -- see docs/references/protoVersioning.md.
 package blockchain_api;
 
 import "google/protobuf/timestamp.proto";
@@ -32,6 +39,11 @@ service BlockchainAPI {
 
   // GetNextBlockID retrieves the next available block ID.
   rpc GetNextBlockID (google.protobuf.Empty) returns (GetNextBlockIDResponse) {}
+
+  // AssignBlockID returns a stable block ID for a given block hash (idempotent
+  // per hash). Used by ingestion paths so UTXO mined-info and the committed
+  // block share one id.
+  rpc AssignBlockID (AssignBlockIDRequest) returns (AssignBlockIDResponse) {}
 
   // GetBlockStats retrieves statistical information about the blockchain.
   rpc GetBlockStats (google.protobuf.Empty) returns (model.BlockStats) {}
@@ -166,9 +178,6 @@ service BlockchainAPI {
   // GetFSMCurrentState retrieves the current state of the FSM.
   rpc GetFSMCurrentState(google.protobuf.Empty) returns (GetFSMStateResponse) {}
 
-  // WaitFSMToTransitionToGivenState waits for FSM to reach a specific state.
-  rpc WaitFSMToTransitionToGivenState(WaitFSMToTransitionRequest) returns (google.protobuf.Empty) {}
-
   // WaitUntilFSMTransitionFromIdleState waits for FSM to transition from IDLE state.
   rpc WaitUntilFSMTransitionFromIdleState(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 
@@ -177,9 +186,6 @@ service BlockchainAPI {
 
   // CatchUpBlocks initiates block catch-up process.
   rpc CatchUpBlocks(google.protobuf.Empty) returns (google.protobuf.Empty) {}
-
-  // LegacySync initiates legacy synchronization process.
-  rpc LegacySync(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 
   // Idle marks the service as idle.
   rpc Idle(google.protobuf.Empty) returns (google.protobuf.Empty) {}
@@ -283,6 +289,16 @@ message GetBlockByIDRequest {
 // GetNextBlockIDResponse represents the response containing the next available block ID.
 message GetNextBlockIDResponse {
   uint64 next_block_id = 1;  // Next available block ID
+}
+
+// AssignBlockIDRequest carries the block hash to assign/reserve an id for.
+message AssignBlockIDRequest {
+  bytes block_hash = 1; // 32-byte block hash
+}
+
+// AssignBlockIDResponse carries the stable block ID for the requested hash.
+message AssignBlockIDResponse {
+  uint64 block_id = 1;
 }
 
 // GetBlockInChainByHeightHashRequest represents a request to retrieve a block by height in a specific chain.
@@ -638,11 +654,6 @@ message GetFSMStateResponse {
   FSMStateType state = 1;  // Current FSM state
 }
 
-// WaitFSMToTransitionRequest specifies target FSM state.
-message WaitFSMToTransitionRequest {
-  FSMStateType state = 1;  // Target FSM state
-}
-
 // SendFSMEventRequest triggers an FSM event.
 message SendFSMEventRequest {
   FSMEventType event = 1;  // FSM event to trigger
@@ -653,7 +664,318 @@ enum FSMEventType {
   STOP = 0;
   RUN = 1;
   CATCHUPBLOCKS = 2;
-  LEGACYSYNC = 3;
+  reserved 3;
+  reserved "LEGACYSYNC";
+}
+
+// TransportType distinguishes how to communicate with a peer during catchup.
+enum TransportType {
+  TRANSPORT_HTTP = 0;          // Peer reachable via HTTP DataHub URL (P2P service)
+  TRANSPORT_WIRE_PROTOCOL = 1; // Peer reachable via Bitcoin wire protocol (Legacy service)
+}
+
+// PeerRegistryService manages a centralized registry of all known peers,
+// accessible to both P2P and Legacy services. The blockchain service hosts
+// this registry as it is always running and owns the chain state.
+service PeerRegistryService {
+  // RegisterPeer adds or updates a peer in the centralized registry.
+  rpc RegisterPeer(RegisterPeerRequest) returns (google.protobuf.Empty) {}
+
+  // UpdatePeerMetrics updates runtime metrics for a registered peer.
+  rpc UpdatePeerMetrics(UpdatePeerMetricsRequest) returns (google.protobuf.Empty) {}
+
+  // RemovePeer removes a peer from the registry (e.g. on disconnect).
+  rpc RemovePeer(RemovePeerRequest) returns (google.protobuf.Empty) {}
+
+  // ListPeers returns all peers matching the given filters, sorted by reputation descending.
+  rpc ListPeers(ListPeersRequest) returns (ListPeersResponse) {}
+
+  // GetPeer retrieves a single peer by ID.
+  rpc GetPeer(GetPeerRequest) returns (GetPeerResponse) {}
+
+  // AddBanScore adds penalty points for a peer and returns the new score and ban status.
+  rpc AddBanScore(AddBanScoreRequest) returns (AddBanScoreResponse) {}
+
+  // IsPeerBanned checks if a peer is currently banned.
+  rpc IsPeerBanned(IsPeerBannedRequest) returns (IsPeerBannedResponse) {}
+
+  // ListBannedPeers returns all currently banned peer IDs.
+  rpc ListBannedPeers(google.protobuf.Empty) returns (ListBannedPeersResponse) {}
+
+  // ClearBannedPeers removes all bans.
+  rpc ClearBannedPeers(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+
+  // UpdateConnectionState flips a peer's IsConnected flag (libp2p connect/disconnect).
+  rpc UpdateConnectionState(UpdateConnectionStateRequest) returns (google.protobuf.Empty) {}
+
+  // UpdateLastMessageTime sets the peer's last message time to now.
+  rpc UpdateLastMessageTime(UpdateLastMessageTimeRequest) returns (google.protobuf.Empty) {}
+
+  // UpdateStorage sets the peer's storage mode (full, pruned, etc.).
+  rpc UpdateStorage(UpdateStorageRequest) returns (google.protobuf.Empty) {}
+
+  // RecordSyncAttempt records a sync attempt against the peer for backoff tracking.
+  rpc RecordSyncAttempt(RecordSyncAttemptRequest) returns (google.protobuf.Empty) {}
+
+  // ClearAllSyncAttempts resets sync attempt counters for all peers and returns the cleared count.
+  rpc ClearAllSyncAttempts(google.protobuf.Empty) returns (ClearAllSyncAttemptsResponse) {}
+
+  // RecordBlockReceived increments the peer's BlocksReceived counter, sets LastBlockTime,
+  // and records a successful interaction with the given response time.
+  rpc RecordBlockReceived(RecordReceivedRequest) returns (google.protobuf.Empty) {}
+
+  // RecordSubtreeReceived increments the peer's SubtreesReceived counter and records a successful interaction.
+  rpc RecordSubtreeReceived(RecordReceivedRequest) returns (google.protobuf.Empty) {}
+
+  // RecordTransactionReceived increments the peer's TransactionsReceived counter.
+  rpc RecordTransactionReceived(RecordReceivedRequest) returns (google.protobuf.Empty) {}
+
+  // RecordCatchupError stores the peer's most recent catchup error for diagnostics.
+  rpc RecordCatchupError(RecordCatchupErrorRequest) returns (google.protobuf.Empty) {}
+
+  // RecordCatchupAttempt increments the peer's catchup-attempt counter and updates
+  // sync backoff tracking (LastSyncAttempt / SyncAttemptCount).
+  rpc RecordCatchupAttempt(RecordCatchupAttemptRequest) returns (google.protobuf.Empty) {}
+
+  // RecordCatchupSuccess increments the peer's catchup-success counter and records
+  // a successful interaction with the given response time.
+  rpc RecordCatchupSuccess(RecordCatchupSuccessRequest) returns (google.protobuf.Empty) {}
+
+  // RecordCatchupFailure increments the peer's catchup-failure counter and records a failed interaction.
+  rpc RecordCatchupFailure(RecordCatchupFailureRequest) returns (google.protobuf.Empty) {}
+
+  // ResetReputation resets reputation for the given peer (or all peers when peer_id is empty)
+  // to the recovery baseline and returns the count of peers reset.
+  rpc ResetReputation(ResetReputationRequest) returns (ResetReputationResponse) {}
+
+  // ReconsiderBadPeers resets reputation for peers whose last failure is older than the cooldown
+  // and returns the count of peers reconsidered.
+  rpc ReconsiderBadPeers(ReconsiderBadPeersRequest) returns (ReconsiderBadPeersResponse) {}
+
+  // RecordValidatedPeerProgress stores locally validated peer chain progress.
+  rpc RecordValidatedPeerProgress(RecordValidatedPeerProgressRequest) returns (google.protobuf.Empty) {}
+}
+
+// PeerRegistryInfo holds all information about a peer in the centralized registry.
+message PeerRegistryInfo {
+  string peer_id = 1;                         // Unique peer identifier (libp2p ID or address string)
+  TransportType transport_type = 2;           // How to communicate with this peer
+  string client_name = 3;                     // Human-readable client software name
+  uint32 height = 4;                          // Last known block height
+  string data_hub_url = 5;                    // DataHub URL (HTTP transport only)
+  string network_address = 6;                 // Network address (wire protocol transport only)
+  bool is_banned = 7;                         // Whether this peer is banned
+  int32 ban_score = 8;                        // Ban score accumulator
+  string storage = 9;                         // Storage mode: "full", "pruned", or empty
+
+  // Bytes tracking
+  uint64 bytes_sent = 10;                     // Total bytes sent to this peer
+  uint64 bytes_received = 11;                 // Total bytes received from this peer
+
+  // Interaction metrics
+  int64 interaction_attempts = 12;            // Total interaction attempts
+  int64 interaction_successes = 13;           // Successful interactions
+  int64 interaction_failures = 14;            // Failed interactions
+  int64 malicious_count = 15;                 // Malicious behavior detections
+  double reputation_score = 16;              // Reputation score (0-100)
+  int64 avg_response_time_ms = 17;            // Average response time in milliseconds
+
+  // Timestamps
+  google.protobuf.Timestamp connected_at = 18;
+  google.protobuf.Timestamp last_message_time = 19;
+  google.protobuf.Timestamp last_interaction_attempt = 20;
+  google.protobuf.Timestamp last_interaction_success = 21;
+  google.protobuf.Timestamp last_interaction_failure = 22;
+  google.protobuf.Timestamp last_seen = 23;   // Used for TTL-based cleanup on load
+  bytes block_hash = 24;                      // Best block hash last advertised by this peer (optional)
+
+  // P2P-domain fields (libp2p connection lifecycle, sync backoff, breakdown metrics, catchup error)
+  bool is_connected = 25;                     // Whether the peer is directly connected (libp2p)
+  google.protobuf.Timestamp last_block_time = 26;
+  int64 blocks_received = 27;
+  int64 subtrees_received = 28;
+  int64 transactions_received = 29;
+  int64 catchup_blocks = 30;
+  google.protobuf.Timestamp last_sync_attempt = 31;
+  int32 sync_attempt_count = 32;
+  google.protobuf.Timestamp last_reputation_reset = 33;
+  int32 reputation_reset_count = 34;
+  string last_catchup_error = 35;
+  google.protobuf.Timestamp last_catchup_error_time = 36;
+  uint32 validated_height = 37;               // Highest locally validated height attributed to this peer
+  bytes validated_block_hash = 38;            // Block hash for validated_height
+  bytes validated_chain_work = 39;            // Locally validated cumulative chain work
+  google.protobuf.Timestamp last_validated_at = 40;
+  int64 full_storage_contradictions = 41;     // Count of observed contradictions to full-storage claims
+  google.protobuf.Timestamp full_storage_penalty_until = 42;
+
+  // Catchup-specific counters, maintained via RecordCatchupAttempt/Success/Failure.
+  // Distinct from the generic interaction counters, which mix in blocks/subtrees/txs.
+  int64 catchup_attempts = 43;
+  int64 catchup_successes = 44;
+  int64 catchup_failures = 45;
+
+  // Wire-protocol-only fields. Absent (nil) for libp2p peers.
+  LegacyPeerInfo legacy = 46;
+}
+
+// RegisterPeerRequest registers or updates a peer in the centralized registry.
+message RegisterPeerRequest {
+  PeerRegistryInfo peer = 1;
+}
+
+// RecordValidatedPeerProgressRequest records locally validated progress for a peer.
+message RecordValidatedPeerProgressRequest {
+  string peer_id = 1;
+  uint32 height = 2;
+  bytes block_hash = 3;
+  bytes chain_work = 4;
+}
+
+// UpdatePeerMetricsRequest updates runtime metrics for an existing peer.
+message UpdatePeerMetricsRequest {
+  string peer_id = 1;
+  uint32 height = 2;                          // Updated block height (0 = no update)
+  uint64 bytes_sent_delta = 3;                // Bytes sent since last update (added to total)
+  uint64 bytes_received_delta = 4;            // Bytes received since last update (added to total)
+  bool record_success = 5;                    // Record a successful interaction
+  bool record_failure = 6;                    // Record a failed interaction
+  bool record_malicious = 7;                  // Record malicious behavior
+  int64 response_time_ms = 8;                 // Response time for this interaction (0 = not applicable)
+}
+
+// RemovePeerRequest removes a peer from the registry.
+message RemovePeerRequest {
+  string peer_id = 1;
+}
+
+// ListPeersRequest filters peers returned by ListPeers.
+message ListPeersRequest {
+  TransportType transport_filter = 1;         // Filter by transport type (0 = no filter — use filter_transport to distinguish)
+  bool filter_transport = 2;                  // Whether to apply transport_filter
+  double min_reputation = 3;                  // Minimum reputation score (0 = no minimum)
+  uint32 min_height = 4;                      // Minimum block height (0 = no minimum)
+  bool exclude_banned = 5;                    // Exclude banned peers
+  bool sort_by_storage = 6;                   // After reputation sort, prefer "full" storage peers over "pruned" / unknown
+}
+
+// ListPeersResponse contains the filtered and sorted list of peers.
+message ListPeersResponse {
+  repeated PeerRegistryInfo peers = 1;
+}
+
+// GetPeerRequest retrieves a single peer by ID.
+message GetPeerRequest {
+  string peer_id = 1;
+}
+
+// GetPeerResponse contains the peer info (or not_found=true).
+message GetPeerResponse {
+  PeerRegistryInfo peer = 1;
+  bool not_found = 2;
+}
+
+// AddBanScoreRequest adds penalty points to a peer's ban score.
+message AddBanScoreRequest {
+  string peer_id = 1;     // Peer identifier
+  string reason = 2;      // Reason for the penalty (e.g., "invalid_block", "protocol_violation")
+  int32 points = 3;       // Number of penalty points to add
+}
+
+// AddBanScoreResponse contains the updated ban state after adding points.
+message AddBanScoreResponse {
+  int32 score = 1;        // Current total ban score after adding points
+  bool banned = 2;        // Whether the peer is now banned (score exceeded threshold)
+}
+
+// IsPeerBannedRequest checks ban status of a peer.
+message IsPeerBannedRequest {
+  string peer_id = 1;
+}
+
+// IsPeerBannedResponse contains the ban status.
+message IsPeerBannedResponse {
+  bool banned = 1;
+}
+
+// ListBannedPeersResponse contains all currently banned peer IDs.
+message ListBannedPeersResponse {
+  repeated string peer_ids = 1;
+}
+
+// UpdateConnectionStateRequest flips a peer's IsConnected flag.
+message UpdateConnectionStateRequest {
+  string peer_id = 1;
+  bool connected = 2;
+}
+
+// UpdateLastMessageTimeRequest sets LastMessageTime for a peer to now.
+message UpdateLastMessageTimeRequest {
+  string peer_id = 1;
+}
+
+// UpdateStorageRequest sets the peer's storage mode.
+message UpdateStorageRequest {
+  string peer_id = 1;
+  string storage = 2;
+}
+
+// RecordSyncAttemptRequest records a sync attempt against a peer.
+message RecordSyncAttemptRequest {
+  string peer_id = 1;
+}
+
+// ClearAllSyncAttemptsResponse contains the count of peers whose attempts were reset.
+message ClearAllSyncAttemptsResponse {
+  int32 cleared = 1;
+}
+
+// RecordReceivedRequest records a unit of work received from a peer.
+message RecordReceivedRequest {
+  string peer_id = 1;
+  int64 response_time_ms = 2;                 // Response time for this delivery (0 = not applicable)
+}
+
+// RecordCatchupErrorRequest stores a peer's most recent catchup error.
+message RecordCatchupErrorRequest {
+  string peer_id = 1;
+  string error_message = 2;
+}
+
+// RecordCatchupAttemptRequest records a catchup attempt against a peer.
+message RecordCatchupAttemptRequest {
+  string peer_id = 1;
+}
+
+// RecordCatchupSuccessRequest records a successful catchup from a peer.
+message RecordCatchupSuccessRequest {
+  string peer_id = 1;
+  int64 response_time_ms = 2;                 // Duration of the catchup operation (0 = not applicable)
+}
+
+// RecordCatchupFailureRequest records a failed catchup attempt against a peer.
+message RecordCatchupFailureRequest {
+  string peer_id = 1;
+}
+
+// ResetReputationRequest resets reputation for a single peer or all peers when peer_id is empty.
+message ResetReputationRequest {
+  string peer_id = 1;
+}
+
+// ResetReputationResponse contains the count of peers whose reputation was reset.
+message ResetReputationResponse {
+  int32 reset = 1;
+}
+
+// ReconsiderBadPeersRequest resets reputation for peers whose last failure is older than cooldown_seconds.
+message ReconsiderBadPeersRequest {
+  int64 cooldown_seconds = 1;
+}
+
+// ReconsiderBadPeersResponse contains the count of peers reconsidered.
+message ReconsiderBadPeersResponse {
+  int32 reconsidered = 1;
 }
 
 // FSMStateType defines possible states of the blockchain FSM.
@@ -661,7 +983,8 @@ enum FSMStateType {
   IDLE = 0;           // Service is idle
   RUNNING = 1;        // Service is running normally
   CATCHINGBLOCKS = 2; // Service is catching up blocks
-  LEGACYSYNCING = 3;  // Service is in legacy sync mode
+  reserved 3;
+  reserved "LEGACYSYNCING";
 }
 
 // GetBlockLocatorRequest requests a block locator.
@@ -815,6 +1138,7 @@ message AcquireBlobDeletionBatchRequest {
   uint32 height = 1;
   int32 limit = 2;
   int32 lock_timeout_seconds = 3;  // Optional: how long to hold the lock (default: 300s)
+  repeated int32 exclude_store_types = 4;  // Optional: store types to leave out of the batch
 }
 
 message AcquireBlobDeletionBatchResponse {
@@ -834,4 +1158,17 @@ message BatchTokenInfo {
   int64 acquired_at = 2;  // Unix timestamp
   int32 deletion_count = 3;
   repeated int64 deletion_ids = 4;
+}
+
+// LegacyPeerInfo holds fields that only a Bitcoin wire-protocol (legacy) peer
+// supplies. It is absent for libp2p peers.
+message LegacyPeerInfo {
+  bool inbound = 1;                             // The peer dialled us
+  uint32 protocol_version = 2;                  // Wire protocol version, e.g. 70016
+  uint64 service_flags = 3;                     // wire.ServiceFlag bits
+  int64 ping_micros = 4;                        // Last ping round trip, microseconds
+  int64 time_offset_secs = 5;                   // Peer clock offset from ours, seconds
+  int32 starting_height = 6;                    // Peer height at handshake
+  bool is_sync_peer = 7;                        // The legacy sync manager selected this peer
+  google.protobuf.Timestamp time_connected = 8; // When the wire connection opened
 }

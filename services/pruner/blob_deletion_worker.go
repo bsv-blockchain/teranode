@@ -2,6 +2,7 @@ package pruner
 
 import (
 	"context"
+	"slices"
 	"strconv"
 	"time"
 
@@ -82,16 +83,26 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 	maxRetries := s.settings.Pruner.BlobDeletionMaxRetries
 
 	// Track totals across all batches
-	var totalDeleted, totalNotFound, totalFail int64
+	var totalDeleted, totalNotFound, totalFail, totalHeld int64
 	var batchNum int
 	overallStartTime := time.Now()
+
+	// Store types whose blob store refused a deletion as a configuration error during this pass
+	// (an HTTP blob store answering 401, for one). Their deletions stay queued untouched: retrying
+	// cannot fix a missing or mismatched token, and counting them as failures would drop every one
+	// of them after maxRetries while the blobs stay on disk. They are also left out of every later
+	// acquisition in this pass, so they cannot fill the batches that deletions for other stores need.
+	misconfigured := make(map[storetypes.BlobStoreType]struct{})
 
 	// Loop through batches until no more deletions available
 	for {
 		batchNum++
 
+		// Snapshot of the store types held so far, as sent with this acquisition
+		excluded := heldStoreTypes(misconfigured)
+
 		// Acquire batch with locking from blockchain service (uses SELECT...FOR UPDATE SKIP LOCKED)
-		batchToken, deletions, err := s.blockchainClient.AcquireBlobDeletionBatch(ctx, safeHeight, int(batchSize), lockTimeout)
+		batchToken, deletions, err := s.blockchainClient.AcquireBlobDeletionBatch(ctx, safeHeight, int(batchSize), lockTimeout, excluded)
 		if err != nil {
 			s.logger.Errorf("[pruner][%s:%d] blob deletion: failed to acquire batch %d: %v", blockHashStr, blockHeight, batchNum, err)
 			blobDeletionErrorsTotal.WithLabelValues("acquisition").Inc()
@@ -105,6 +116,15 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 			break
 		}
 
+		// Rows of a type that was already excluded: a blockchain service that predates
+		// excludeStoreTypes returns them anyway
+		var alreadyHeld int
+		for _, d := range deletions {
+			if _, held := misconfigured[storetypes.BlobStoreType(d.StoreType)]; held {
+				alreadyHeld++
+			}
+		}
+
 		batchStartTime := time.Now()
 		s.logger.Infof("[pruner][%s:%d] blob deletion: acquired batch %d with %s deletions", blockHashStr, blockHeight, batchNum, util.FormatComma(int64(len(deletions))))
 
@@ -112,17 +132,32 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 		completedIDs := make([]int64, 0, len(deletions))
 		failedIDs := make([]int64, 0, len(deletions))
 
-		var deletedCount, notFoundCount, failCount int64
+		var deletedCount, notFoundCount, failCount, heldCount int64
 
 		// Process all deletions in the batch
 		for i, deletion := range deletions {
 			storeType := storetypes.BlobStoreType(deletion.StoreType)
+
+			if _, refused := misconfigured[storeType]; refused {
+				heldCount++
+				continue
+			}
 
 			s.logger.Debugf("[pruner][%s:%d] blob deletion: processing deletion %s/%s (id=%d, key=%x)",
 				blockHashStr, blockHeight, util.FormatComma(int64(i+1)), util.FormatComma(int64(len(deletions))), deletion.Id, deletion.BlobKey)
 
 			result, err := s.processOneDeletion(ctx, deletion, blockHashStr, blockHeight)
 			if err != nil {
+				if errors.Is(err, errors.ErrConfiguration) {
+					misconfigured[storeType] = struct{}{}
+					heldCount++
+					blobDeletionErrorsTotal.WithLabelValues("configuration").Inc()
+					s.logger.Errorf("[pruner][%s:%d] blob deletion: %s store refused deleting blob %x as a configuration error, keeping its deletions queued until that is fixed: %v",
+						blockHashStr, blockHeight, storeType.String(), deletion.BlobKey, err)
+
+					continue
+				}
+
 				s.logger.Warnf("[pruner][%s:%d] blob deletion: failed to delete blob %x from %s (attempt %d/%d): %v",
 					blockHashStr, blockHeight, deletion.BlobKey, storeType.String(),
 					int(deletion.RetryCount)+1, maxRetries, err)
@@ -183,20 +218,28 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 		}
 
 		duration := time.Since(batchStartTime).Round(time.Second)
-		s.logger.Infof("[pruner][%s:%d] blob deletion: batch %d complete - %s deleted, %s not found, %s failed (took %s)",
-			blockHashStr, blockHeight, batchNum, util.FormatComma(deletedCount), util.FormatComma(notFoundCount), util.FormatComma(failCount), duration)
+		s.logger.Infof("[pruner][%s:%d] blob deletion: batch %d complete - %s deleted, %s not found, %s failed, %s held (took %s)",
+			blockHashStr, blockHeight, batchNum, util.FormatComma(deletedCount), util.FormatComma(notFoundCount), util.FormatComma(failCount), util.FormatComma(heldCount), duration)
 
 		// Update totals
 		totalDeleted += deletedCount
 		totalNotFound += notFoundCount
 		totalFail += failCount
+		totalHeld += heldCount
+
+		// A blockchain service that predates excludeStoreTypes hands held deletions straight back. Once a
+		// batch is nothing but those, stop: the next trigger tries again.
+		if alreadyHeld == len(deletions) {
+			s.logger.Warnf("[pruner][%s:%d] blob deletion: blockchain service returned only deletions for held store types %v, stopping this pass", blockHashStr, blockHeight, excluded)
+			break
+		}
 	}
 
 	// Log overall summary if we processed multiple batches
 	if batchNum > 2 {
 		totalDuration := time.Since(overallStartTime).Round(time.Second)
-		s.logger.Infof("[pruner][%s:%d] blob deletion: processed %d batches - %s total deleted, %s total not found, %s total failed (took %s)",
-			blockHashStr, blockHeight, batchNum-1, util.FormatComma(totalDeleted), util.FormatComma(totalNotFound), util.FormatComma(totalFail), totalDuration)
+		s.logger.Infof("[pruner][%s:%d] blob deletion: processed %d batches - %s total deleted, %s total not found, %s total failed, %s total held (took %s)",
+			blockHashStr, blockHeight, batchNum-1, util.FormatComma(totalDeleted), util.FormatComma(totalNotFound), util.FormatComma(totalFail), util.FormatComma(totalHeld), totalDuration)
 	}
 
 	// Notify observer if registered (for testing)
@@ -205,13 +248,26 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 	}
 }
 
+// heldStoreTypes returns the store types in misconfigured as a sorted slice, so the exclusion sent
+// to the blockchain service and the logs that name it are deterministic.
+func heldStoreTypes(misconfigured map[storetypes.BlobStoreType]struct{}) []storetypes.BlobStoreType {
+	held := make([]storetypes.BlobStoreType, 0, len(misconfigured))
+	for storeType := range misconfigured {
+		held = append(held, storeType)
+	}
+
+	slices.Sort(held)
+
+	return held
+}
+
 func (s *Server) processOneDeletion(ctx context.Context, deletion *blockchain_api.ScheduledDeletion, blockHashStr string, blockHeight uint32) (deletionResult, error) {
 	storeType := storetypes.BlobStoreType(deletion.StoreType)
 
 	// Get or create blob store for this store type
 	blobStore, err := s.getBlobStore(storeType)
 	if err != nil {
-		return deletionNotFound, errors.NewNotFoundError("failed to get blob store for %s: %v", storeType.String(), err)
+		return deletionNotFound, errors.NewNotFoundError("failed to get blob store for %s", storeType.String(), err)
 	}
 
 	// Convert file type string to FileType
@@ -283,7 +339,8 @@ func (s *Server) getBlobStore(storeType storetypes.BlobStoreType) (blob.Store, e
 	}
 
 	// Create new store instance with hash prefix to match daemon store layout
-	store, err := blob.NewStore(s.logger, storeURL, bloboptions.WithHashPrefix(hashPrefix))
+	store, err := blob.NewStore(s.logger, storeURL, bloboptions.WithHashPrefix(hashPrefix),
+		bloboptions.WithHTTPAuthToken(s.settings.BlobHTTPAuthToken))
 	if err != nil {
 		return nil, errors.NewStorageError("failed to create blob store for %s", storeType.String(), err)
 	}

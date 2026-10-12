@@ -71,7 +71,6 @@ Valid states you can issue are:
 - `running` - Normal operation mode (processes transactions and creates blocks)
 - `idle` - Idle mode (default startup state)
 - `catchingblocks` - Catching up on blocks from the network
-- `legacysyncing` - Syncing via legacy peer connections
 
 Example to switch to RUNNING state:
 
@@ -113,7 +112,7 @@ The `<txid>` must be a valid 64-character transaction ID.
 Inspect data files:
 
 ```bash
-SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli filereader [path] [options]
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli filereader [options] [path]
 ```
 
 Options:

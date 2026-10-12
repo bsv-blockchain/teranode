@@ -57,7 +57,7 @@ func (s *SQL) GetForkedBlockHeaders(ctx context.Context, blockHashFrom *chainhas
 	// Try to get from response cache using derived cache key
 	// Use operation-prefixed key to be consistent with other operations
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetForkedBlockHeaders-%s-%d", blockHashFrom.String(), numberOfHeaders)))
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := s.responseCache.NewOp(cacheID)
 
 	cached := cacheOp.Get()
 	if cached != nil {
@@ -76,6 +76,16 @@ func (s *SQL) GetForkedBlockHeaders(ctx context.Context, blockHashFrom *chainhas
 	blockHeaders := make([]*model.BlockHeader, 0, numberOfHeaders)
 	blockHeaderMetas := make([]*model.BlockHeaderMeta, 0, numberOfHeaders)
 
+	// No on_main_chain fast path is possible here. This query's semantic is
+	// "all blocks NOT in the ancestor set of blockHashFrom", which has no
+	// equivalent on_main_chain predicate:
+	//   - NOT on_main_chain is wrong when blockHashFrom is a main-chain tip:
+	//     it would exclude the main-chain ancestors of blockHashFrom.
+	//   - on_main_chain = false is wrong when blockHashFrom is a fork tip:
+	//     the fork's own ancestors also have on_main_chain = false.
+	// The recursive CTE is the only correct way to compute the complement of the
+	// ancestor set, so it is retained deliberately (unlike the locator/height
+	// lookups in this package, which the #1018 fast path covers).
 	q := `
 		SELECT
 			 b.version
@@ -154,7 +164,11 @@ func (s *SQL) GetForkedBlockHeaders(ctx context.Context, blockHashFrom *chainhas
 			return nil, nil, errors.NewStorageError("failed to scan row", err)
 		}
 
-		bits, _ := model.NewNBitFromSlice(nBits)
+		bits, nBitsErr := model.NewNBitFromSlice(nBits)
+		if nBitsErr != nil {
+			return nil, nil, errors.NewStorageError("error in GetForkedBlockHeaders: malformed n_bits (length %d, expected 4) for block height %d", len(nBits), blockHeaderMeta.Height, nBitsErr)
+		}
+
 		blockHeader.Bits = *bits
 
 		blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)

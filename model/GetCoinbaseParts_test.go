@@ -3,9 +3,12 @@ package model
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -439,6 +442,35 @@ func TestMakeCoinbase1_EdgeCases(t *testing.T) {
 		// The difference should be less than the full long text length
 		assert.Less(t, resultLongDiff, len(longText))
 	})
+}
+
+// TestMakeCoinbase1HeightRoundTrip verifies that the height Teranode encodes into its own coinbase
+// (via makeCoinbase1 → GetCoinbaseParts → BuildCoinbase) is decoded back to the same value by the
+// coinbase-height extractor, across the small-int, single-byte, multi-byte and sign-pad encoding
+// boundaries. This is the producer/consumer contract the strict (SV Node parity) extractor depends
+// on: a non-minimal producer would make Teranode reject its own mined blocks.
+func TestMakeCoinbase1HeightRoundTrip(t *testing.T) {
+	const walletAddress = "1DkmRkb5iQFkDu4NBysog5bugnsyx7kwtn"
+
+	heights := []uint32{1, 2, 16, 17, 100, 127, 128, 255, 256, 1000, 12345, 32767, 32768, 518847, 4294967295}
+
+	for _, h := range heights {
+		t.Run(fmt.Sprintf("height_%d", h), func(t *testing.T) {
+			c1, c2, err := GetCoinbaseParts(h, 5000000000, "/teranode/", []string{walletAddress})
+			require.NoError(t, err)
+
+			// 12 bytes of extra nonce, matching the space makeCoinbase1 reserves in the scriptSig length.
+			coinbase := BuildCoinbase(c1, c2, "0000000000000000", "00000000")
+
+			tx, err := bt.NewTxFromBytes(coinbase)
+			require.NoError(t, err)
+			require.True(t, tx.IsCoinbase())
+
+			height, err := util.ExtractCoinbaseHeight(tx)
+			require.NoError(t, err)
+			require.Equal(t, h, height)
+		})
+	}
 }
 
 func TestMakeCoinbase2_Comprehensive(t *testing.T) {

@@ -1,5 +1,7 @@
 package errors
 
+import stderrors "errors"
+
 // Error type usage guidelines:
 //
 //	storage error -> error returned from processing a file on s3, aerospike.
@@ -11,8 +13,11 @@ var (
 	ErrBlobNotFound               = New(ERR_BLOB_NOT_FOUND, "blob not found")
 	ErrBlockAssemblyReset         = New(ERR_BLOCK_ASSEMBLY_RESET, "block assembly reset")
 	ErrBlockCoinbaseMissingHeight = New(ERR_BLOCK_COINBASE_MISSING_HEIGHT, "the coinbase signature script doesn't have the block height")
+	ErrBlockCorrupt               = New(ERR_BLOCK_CORRUPT, "block corrupt")
+	ErrBlockPolicyDeclined        = New(ERR_BLOCK_POLICY_DECLINED, "block declined by local policy")
 	ErrBlockError                 = New(ERR_BLOCK_ERROR, "block error")
 	ErrBlockExists                = New(ERR_BLOCK_EXISTS, "block exists")
+	ErrBlockHeaderContext         = New(ERR_BLOCK_HEADER_CONTEXT, "block header context invalid")
 	ErrBlockIncomplete            = New(ERR_BLOCK_INCOMPLETE, "block incomplete")
 	ErrBlockInvalid               = New(ERR_BLOCK_INVALID, "block invalid")
 	ErrBlockInvalidFormat         = New(ERR_BLOCK_INVALID_FORMAT, "block format is invalid")
@@ -32,11 +37,14 @@ var (
 	ErrServiceError               = New(ERR_SERVICE_ERROR, "service error")
 	ErrServiceNotStarted          = New(ERR_SERVICE_NOT_STARTED, "service not started")
 	ErrServiceUnavailable         = New(ERR_SERVICE_UNAVAILABLE, "service unavailable")
+	ErrServiceRateLimited         = New(ERR_SERVICE_RATE_LIMITED, "service rate limited")
 	ErrFrozen                     = New(ERR_UTXO_FROZEN, "tx is frozen")
 	ErrNonFinal                   = New(ERR_UTXO_NON_FINAL, "tx is non-final")
 	ErrSpent                      = New(ERR_UTXO_SPENT, "utxo already spent")
 	ErrUtxoHashMismatch           = New(ERR_UTXO_MISMATCH, "utxo hash mismatch")
 	ErrUtxoInvalidSize            = New(ERR_UTXO_INVALID_SIZE, "utxo invalid size")
+	ErrUtxoUnspent                = New(ERR_UTXO_UNSPENT, "utxo is unspent")
+	ErrUtxoWalkLimitExceeded      = New(ERR_UTXO_WALK_LIMIT_EXCEEDED, "utxo walk limit exceeded")
 	ErrUtxoError                  = New(ERR_UTXO_ERROR, "utxo error")
 	ErrStateError                 = New(ERR_STATE_ERROR, "error in state")
 	ErrStateInitialization        = New(ERR_STATE_INITIALIZATION, "error initializing state")
@@ -60,6 +68,8 @@ var (
 	ErrTxNotFound                 = New(ERR_TX_NOT_FOUND, "tx not found")
 	ErrTxPolicy                   = New(ERR_TX_POLICY, "tx policy error")
 	ErrTxLocked                   = New(ERR_TX_LOCKED, "tx locked")
+	ErrTxCreating                 = New(ERR_TX_CREATING, "tx creating")
+	ErrTxUnlockFailed             = New(ERR_TX_UNLOCK_FAILED, "tx unlock failed")
 	ErrUnknown                    = New(ERR_UNKNOWN, "unknown error")
 	ErrNetworkError               = New(ERR_NETWORK_ERROR, "network error")
 	ErrNetworkTimeout             = New(ERR_NETWORK_TIMEOUT, "network timeout")
@@ -97,6 +107,44 @@ func NewProcessingError(message string, params ...interface{}) *Error {
 	return New(ERR_PROCESSING, message, params...)
 }
 
+// NewBlockHeaderContextError creates a new error for a block whose header could not be evaluated
+// because the CHAIN CONTEXT supplied alongside it was wrong — the parent-header run was not
+// anchored at the block's parent, was not a linked chain, or was too short to hold the
+// median-time-past window. It says nothing about the block itself, so it must never be turned
+// into a block-invalid verdict or charged to the peer that served the block.
+//
+// It wraps ErrProcessing so the existing transient/infrastructure handling (which matches on
+// ErrProcessing) keeps treating it as retryable, while callers that need to distinguish a local
+// context failure from a generic processing error can match this code specifically.
+func NewBlockHeaderContextError(message string, params ...interface{}) *Error {
+	// New() takes the LAST param as the wrapped cause, so the ErrProcessing tail cannot be
+	// appended to params — that would displace a caller-supplied cause into a format argument
+	// and render it as %!(EXTRA ...). Build the error first so the caller's cause is wrapped
+	// normally, then attach the tail. The tail is a fresh instance, never the ErrProcessing
+	// singleton: SetWrappedErr and Join walk to the tail and assign, so sharing the global
+	// would let a later Join mutate process-wide state.
+	e := New(ERR_BLOCK_HEADER_CONTEXT, message, params...)
+	tail := New(ERR_PROCESSING, "error processing")
+
+	// Attaching the tail with SetWrappedErr is only safe when nothing is wrapped yet, because it
+	// assigns to the LAST *Error in the chain — which, when the caller supplied a cause, is the
+	// caller's own object. Every Err* here is a process-wide singleton, so
+	// NewBlockHeaderContextError("...", ErrServiceError) would write this tail into the global
+	// ErrServiceError permanently, making Is(ErrServiceError, ErrProcessing) true for every
+	// caller in the process. Splice the tail in above the caller's cause instead: the cause stays
+	// reachable, both predicates still hold, and no object we do not own is touched.
+	if e.wrappedErr == nil {
+		e.SetWrappedErr(tail)
+
+		return e
+	}
+
+	tail.wrappedErr = e.wrappedErr
+	e.wrappedErr = tail
+
+	return e
+}
+
 // NewConfigurationError creates a new error with the configuration error code.
 func NewConfigurationError(message string, params ...interface{}) *Error {
 	return New(ERR_CONFIGURATION, message, params...)
@@ -132,9 +180,123 @@ func NewBlockIncompleteError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_INCOMPLETE, message, params...)
 }
 
+const (
+	incompleteKindDataKey        = "block_incomplete_kind"
+	incompleteKindTransientLocal = "transient_local"
+)
+
+// NewBlockIncompleteTransientError builds a block-incomplete error attributable to a
+// local, transient missing-data condition (e.g. a not-yet-absorbed parent during catchup
+// ordering), NOT to the serving peer. It keeps the ERR_BLOCK_INCOMPLETE code so existing
+// errors.Is retry/abort checks keep working unchanged, but IsTransientBlockIncomplete
+// reports true so callers can skip peer-reputation penalties for it.
+func NewBlockIncompleteTransientError(message string, params ...interface{}) *Error {
+	e := New(ERR_BLOCK_INCOMPLETE, message, params...)
+	e.SetData(incompleteKindDataKey, incompleteKindTransientLocal)
+	return e
+}
+
+// IsTransientBlockIncomplete reports whether err (or anything it wraps) is a
+// block-incomplete error marked transient-local rather than peer-attributable.
+// stderrors.As locates the next *Error link (walking through any foreign wrappers); Unwrap
+// then advances past each checked link so every *Error in the chain is inspected.
+func IsTransientBlockIncomplete(err error) bool {
+	for cur := err; cur != nil; {
+		var e *Error
+		if !stderrors.As(cur, &e) {
+			return false
+		}
+		if v := e.GetData(incompleteKindDataKey); v == incompleteKindTransientLocal {
+			return true
+		}
+		cur = e.Unwrap()
+	}
+	return false
+}
+
 // NewBlockInvalidError creates a new error with the block invalid error code.
 func NewBlockInvalidError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_INVALID, message, params...)
+}
+
+// NewBlockCorruptError creates a new error for a block whose received body fails a
+// body-derived check before the body is bound to its header (see bitcoin-sv/teranode#4692). A
+// corrupt body is insufficient evidence to permanently condemn the block hash: it
+// cannot distinguish an honestly-mined block corrupted in transit from an attacker's
+// junk, so unlike NewBlockInvalidError it must NOT persist invalid=true. Callers
+// re-download from another peer and strike the serving connection, mirroring svnode's
+// CorruptionOrDoS stance (bitcoin-sv/src/consensus/validation.h). A dedicated code,
+// not ERR_BLOCK_INVALID, so it never matches errors.Is(err, ErrBlockInvalid) on the
+// poison paths (extends the transient-vs-invalid split from PR #1036 / a0790830b).
+func NewBlockCorruptError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOCK_CORRUPT, message, sanitizeCorruptParams(params)...)
+}
+
+// sanitizeCorruptParams guards against a call site wrapping an invalid-classified cause
+// into a corrupt error: New's trailing-error handling would chain it as wrappedErr, and
+// since (*Error).Is walks that chain, the resulting corrupt error would also satisfy
+// errors.Is(_, ErrBlockInvalid) and could slip past a poisoning branch that gates
+// specifically on IsBlockCorrupt (bitcoin-sv/teranode#4692). No call site does this today;
+// this is a runtime backstop for a programming error, not a condition to route around. Silent by
+// design (this package does not otherwise log): it replaces the offending argument with a plain
+// error carrying the same message text — New still wraps it (preserving the "cause -> message"
+// rendering) but as a bare error rather than an *Error, so the resulting chain never carries
+// ERR_BLOCK_INVALID.
+//
+// Never mutates the caller's slice: params is variadic, so a caller passing an existing slice
+// via NewBlockCorruptError(msg, args...) still owns it. A substitution copies first, on the
+// (expected-empty) slow path only.
+func sanitizeCorruptParams(params []interface{}) []interface{} {
+	var sanitized []interface{} // allocated lazily, only once a substitution is actually needed
+
+	for i, p := range params {
+		if err, ok := p.(error); ok && Is(err, ErrBlockInvalid) {
+			if sanitized == nil {
+				sanitized = make([]interface{}, len(params))
+				copy(sanitized, params)
+			}
+
+			sanitized[i] = stderrors.New(err.Error())
+		}
+	}
+
+	if sanitized != nil {
+		return sanitized
+	}
+
+	return params
+}
+
+// NewBlockPolicyDeclinedError creates a new error for a block this node declined under its own
+// local policy — an excessiveblocksize above the configured limit, say. It is a statement about
+// this node's configuration, not about the block and not about the peer that served it: the rest
+// of the network may well accept the block, so unlike NewBlockInvalidError it must NOT persist
+// invalid=true (that would cascade to every descendant and fork this node off the chain), and
+// unlike NewBlockCorruptError it must not charge the peer or spend the corrupt budget. A
+// dedicated code, not ERR_BLOCK_ERROR, so callers can end the catch-up cycle on it without also
+// ending it on the retryable "given up waiting on previous blocks" timeout, which keeps
+// ERR_BLOCK_ERROR (bitcoin-sv/teranode#4692).
+//
+// No sanitizing wrapper is needed here: unlike NewBlockCorruptError this code carries no
+// mutual-exclusion obligation against ERR_BLOCK_INVALID, it simply never matches it. And the
+// rendered name "BLOCK_POLICY_DECLINED" contains none of IsMaliciousResponseError's substrings
+// (invalid header, malformed, corrupt, attack, malicious, invalid format, protocol violation),
+// so the substring fallback over the rendered text cannot mis-classify a decline as malicious —
+// the trap ERR_BLOCK_CORRUPT fell into and needed an early-out for.
+func NewBlockPolicyDeclinedError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOCK_POLICY_DECLINED, message, params...)
+}
+
+// IsBlockCorrupt reports whether err (or anything it wraps, including across a gRPC
+// boundary) is a block-corrupt error. Callers gate the re-download / peer-strike path
+// on this and must check it BEFORE any generic ErrBlockInvalid handling so a corrupt
+// body is never routed onto a poison path.
+func IsBlockCorrupt(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return Is(err, ErrBlockCorrupt)
 }
 
 // NewBlockExistsError creates a new error with the block exists error code.
@@ -212,6 +374,13 @@ func NewTxCreatingError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_CREATING, message, params...)
 }
 
+// NewTxUnlockFailedError creates a new error with the transaction unlock failed error code.
+// It marks a transaction that was accepted, spent and created, but whose two-phase-commit
+// unlock did not complete, so the record stays locked until it is mined.
+func NewTxUnlockFailedError(message string, params ...interface{}) *Error {
+	return New(ERR_TX_UNLOCK_FAILED, message, params...)
+}
+
 // NewTxCoinbaseImmatureError creates a new error with the transaction coinbase immature error code.
 func NewTxCoinbaseImmatureError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_COINBASE_IMMATURE, message, params...)
@@ -225,6 +394,17 @@ func NewTxError(message string, params ...interface{}) *Error {
 // NewServiceUnavailableError creates a new error with the service unavailable error code.
 func NewServiceUnavailableError(message string, params ...interface{}) *Error {
 	return New(ERR_SERVICE_UNAVAILABLE, message, params...)
+}
+
+// NewServiceRateLimitedError creates a new error with the service rate limited error code.
+//
+// This is a REMOTE admission decision: the server we called answered 429 because we
+// exceeded its rate limit. It is deliberately distinct from ERR_SERVICE_UNAVAILABLE,
+// which IsTransientLocalError treats as a fault in this node's own stack and which
+// legacy block sync uses to decide whether to keep a delivering peer. A single 429 is
+// not the peer's fault; retry with backoff.
+func NewServiceRateLimitedError(message string, params ...interface{}) *Error {
+	return New(ERR_SERVICE_RATE_LIMITED, message, params...)
 }
 
 // NewServiceNotStartedError creates a new error with the service not started error code.
@@ -280,6 +460,24 @@ func NewUtxoHashMismatchError(message string, params ...interface{}) *Error {
 // NewUtxoInvalidSize creates a new error with the utxo invalid size error code.
 func NewUtxoInvalidSize(message string, params ...interface{}) *Error {
 	return New(ERR_UTXO_INVALID_SIZE, message, params...)
+}
+
+// NewUtxoUnspentError creates a new error indicating the UTXO is unspent.
+// Returned by Unspend when the caller's expected SpendingData does not match
+// the stored value because the row is already cleared. Treated as idempotent
+// success by retry-safe callers like validator.reverseSpends.
+func NewUtxoUnspentError(message string, params ...interface{}) *Error {
+	return New(ERR_UTXO_UNSPENT, message, params...)
+}
+
+// NewUtxoWalkLimitExceededError creates a new error indicating a UTXO
+// descendant-graph walk exceeded its node budget. Fail-closed guard on the
+// conflicting-children BFS (issue 1391): the walk is aborted deterministically
+// instead of stalling for the lifetime of the request context. Deliberately
+// distinct from ERR_THRESHOLD_EXCEEDED (missing-tx retry semantics) and never
+// matched by ErrTxInvalid/ErrTxNotFound classification.
+func NewUtxoWalkLimitExceededError(message string, params ...interface{}) *Error {
+	return New(ERR_UTXO_WALK_LIMIT_EXCEEDED, message, params...)
 }
 
 // NewUtxoError creates a new generic utxo error.

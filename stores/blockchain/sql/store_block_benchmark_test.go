@@ -81,7 +81,7 @@ func benchStoreBlocks(b *testing.B, csvHeight uint32) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	ctx := context.Background()
 	genesisHeader, _, err := s.GetBestBlockHeader(ctx)

@@ -91,9 +91,15 @@ func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 // with high per-operation costs like network or disk I/O.
 //
 // The batcher is configured through URL query parameters:
-//   - batchSize: Maximum number of operations in a batch (default: 1000)
-//   - batchInterval: Maximum time in milliseconds before a batch is processed (default: 100ms)
-//   - batchWorkers: Number of worker goroutines for processing batches (default: 10)
+//   - sizeInBytes: Size threshold in bytes at which the accumulated batch is flushed
+//     (default: 4194304, i.e. 4MiB). Must be greater than 0: the batcher preallocates
+//     buffers with this capacity, so a negative value would panic in make(), and zero
+//     would flush after every single item rather than batching anything.
+//   - writeKeys: "true" to also write a per-batch index of keys and their offsets
+//     within the batch data (default: false)
+//
+// There is no batch interval and no worker pool: a single background goroutine
+// accumulates items and flushes only on the size threshold or on Close.
 //
 // Parameters:
 //   - storeURL: URL containing batch configuration parameters
@@ -114,6 +120,10 @@ func createBatchedStore(storeURL *url.URL, store Store, logger ulogger.Logger) (
 		sizeInBytes, err = strconv.Atoi(sizeString)
 		if err != nil {
 			return nil, errors.NewConfigurationError("error parsing batch size", err)
+		}
+
+		if sizeInBytes <= 0 {
+			return nil, errors.NewConfigurationError("batch sizeInBytes must be greater than 0, got %d", sizeInBytes)
 		}
 	}
 

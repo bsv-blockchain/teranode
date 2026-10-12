@@ -165,46 +165,9 @@ Retrieves a single block by its hash.
 
 - **URL**: `/block/:hash` (with `/hex`, `/json` variants)
 - **Method**: GET
-- **Response Format**: JSON
-- **Content**: Block header data including previous block ID and metadata
-
-![asset_server_http_get_block_header.svg](img/plantuml/assetserver/asset_server_http_get_block_header.svg)
-
-### 4.1.5. GetBlockByHash(), GetBlocks and GetLastNBlocks()
-
-**GetBlockByHash** - Get a single block by hash:
-
-- **URL**: `/api/v1/block/:hash` (also available: `/api/v1/block/:hash/hex`, `/api/v1/block/:hash/json`)
-- **Method**: GET
 - **URL Parameters**: `hash` - Block hash (64-character hex string)
 - **Response Format**: Binary (default), Hex, or JSON
 - **Content**: Complete block data with subtree identifiers
-
-**GetBlocks** - Get paginated list of blocks:
-
-- **URL**: `/api/v1/blocks`
-- **Method**: GET
-- **Query Parameters**:
-
-    - `offset` (integer, optional, default: 0) - Number of blocks to skip from tip
-    - `limit` (integer, optional, default: 20, max: 100) - Maximum blocks to return
-    - `includeOrphans` (boolean, optional, default: false) - Include orphaned blocks
-
-- **Response Format**: JSON with pagination metadata
-- **Content**: Block list with pagination information
-
-**GetLastNBlocks** - Get most recent N blocks:
-
-- **URL**: `/api/v1/lastblocks`
-- **Method**: GET
-- **Query Parameters**:
-
-    - `n` (integer, optional, default: 10) - Number of blocks to retrieve
-    - `fromHeight` (unsigned integer, optional, default: 0) - Starting block height
-    - `includeOrphans` (boolean, optional, default: false) - Include orphaned blocks
-
-- **Response Format**: JSON
-- **Content**: Array of recent blocks in descending order (newest first)
 
 ![asset_server_http_get_block.svg](img/plantuml/assetserver/asset_server_http_get_block.svg)
 
@@ -216,8 +179,8 @@ Retrieves a paginated list of blocks.
 
 - **URL**: `/blocks`
 - **Method**: GET
-- **Response Format**: JSON
-- **Content**: Paginated list of blocks with metadata
+- **Response Format**: JSON with pagination metadata
+- **Content**: Paginated list of blocks with pagination information and metadata
 - **Query Parameters**:
 
     - `offset`: Number of blocks to skip from the tip (default: 0)
@@ -507,8 +470,9 @@ The Asset Server provides real-time blockchain event notifications through WebSo
 
 - **WebSocket URL**: `/connection/websocket`
     - Protocol: WebSocket (ws:// or wss://)
-    - Default port: 8892 (configurable via `asset_centrifugeListenAddress`)
-    - Authentication: Automatic credential assignment on connection
+    - Served on the Asset HTTP server (`asset_httpListenAddress`, default port 8090). `asset_centrifugeListenAddress` only enables the socket and is not bound as a separate listener
+    - Authentication: none. Each connection is assigned a random user ID. The socket carries the same public, read-only telemetry the P2P service gossips
+    - Origin check: browser connections must come from the same hostname as the request or from `asset_centrifugeAllowOrigins`; cross-site origins get HTTP 403
     - Connection requirements: Asset service must have cached current node status from P2P
 
 #### Subscription Management
@@ -539,19 +503,53 @@ Clients can receive real-time updates on the following channels:
 
 #### Message Format
 
-Messages are published in JSON format with event-specific structure. Example block notification:
+The endpoint speaks the bidirectional Centrifuge protocol. Clients open the
+session by sending a connect command and receive replies / pushes in
+Centrifuge envelopes.
+
+Client → server (connect command):
+
+```json
+{ "id": 1, "connect": {} }
+```
+
+Server → client (connect command reply):
 
 ```json
 {
-  "hash": "0000000000000000...",
-  "height": 800000,
-  "header": {...},
-  "coinbaseTx": "...",
-  "subtrees": [...],
-  "baseUrl": "http://localhost:8090/api/v1",
-  "miner": "Miner Name"
+  "id": 1,
+  "connect": {
+    "client": "<uuid>",
+    "subs": { "ping": {}, "block": {}, "subtree": {}, "mining_on": {}, "node_status": {} },
+    "ping": 25,
+    "session": "<session-id>"
+  }
 }
 ```
+
+Channel publications are wrapped in a push envelope; the event-specific
+payload lives at `push.pub.data`:
+
+```json
+{
+  "push": {
+    "channel": "block",
+    "pub": {
+      "data": {
+        "hash": "0000000000000000...",
+        "height": 800000,
+        "header": {...},
+        "coinbaseTx": "...",
+        "subtrees": [...],
+        "baseUrl": "http://localhost:8090/api/v1",
+        "miner": "Miner Name"
+      }
+    }
+  }
+}
+```
+
+Any centrifuge-compatible client (`centrifuge-go`, `centrifuge-js`, `centrifuge-python`) connects against this endpoint without custom framing.
 
 #### Connection Behavior
 
@@ -719,12 +717,17 @@ The Asset Server can be configured using various settings that control its behav
     - Impact: When `true`, disables real-time WebSocket functionality entirely
     - Code Usage: Controls conditional Centrifuge server creation (Server.go line 204)
 
-- **Asset Centrifuge Listen Address (`asset_centrifugeListenAddress`)**: WebSocket server listen address.
+- **Asset Centrifuge Listen Address (`asset_centrifugeListenAddress`)**: Enables the Centrifuge WebSocket when non-empty.
     - Type: `string`
     - Default: `":8892"`
     - Environment Variable: `TERANODE_ASSET_CENTRIFUGELISTENADDRESS`
-    - Impact: Determines Centrifuge WebSocket server listening address when enabled
-    - Code Usage: Used for Centrifuge server address configuration
+    - Impact: The address is **not bound**. The WebSocket is served on Asset HTTP at `/connection/websocket`, so restricting this address does not protect it
+    - Code Usage: An empty value skips Centrifuge creation; otherwise the value is only logged at startup
+
+- **Asset Centrifuge Allow Origins (`asset_centrifugeAllowOrigins`)**: Extra browser origins allowed to open the WebSocket.
+    - Type: `string` (pipe-separated `scheme://host[:port]` origins; `*` allows all)
+    - Default: `""` (same-host origins and non-browser clients only)
+    - Impact: Needed only when a reverse proxy rewrites the Host header seen by the Asset service
 
 **Centrifuge Subscription Channels:**
 
@@ -788,8 +791,8 @@ Centrifuge supports the following subscription channels:
 **Centrifuge Real-time Updates:**
 
 - **Primary Setting**: `asset_centrifuge_disable` (controls feature)
-- **Dependencies**: `asset_centrifugeListenAddress`, `asset_httpAddress`
-- **Interaction**: When enabled, requires valid HTTP address and listen address; URL validation performed
+- **Dependencies**: `asset_centrifugeListenAddress` (non-empty enables), `asset_httpAddress`, `asset_centrifugeAllowOrigins`
+- **Interaction**: When enabled, requires a valid HTTP address; URL validation performed. The WebSocket shares the Asset HTTP listener
 
 Centrifuge supports the following subscription channels:
 
@@ -834,6 +837,53 @@ Error: "server_keyFile is required for HTTPS"
 Cause: Missing server_keyFile when securityLevelHTTP is non-zero
 ```
 
+#### 7.2.5.1 Deployment: Upstream Rate Limiting Required
+
+The subtree HTTP endpoints — `/subtree/:hash` (binary/hex), `/subtree/:hash/txs` (binary/hex), and `/subtree_data/:hash` — stream large payloads and **deliberately skip gzip compression**. Gzip on these endpoints would force the response to be fully buffered server-side and yield negligible compression on near-incompressible hash/transaction bytes. Streaming without compression preserves the memory-bound design of the asset service.
+
+Trade-off: these unauthenticated GET endpoints can emit hundreds of MB per request uncompressed, which is a bandwidth amplification surface if abused. The asset service mitigates with:
+
+- the ban-list middleware;
+- per-method concurrency semaphores (`asset_concurrency_get_subtree_data`, `asset_concurrency_get_subtree_data_reader`, `asset_concurrency_get_subtree_transactions`, `asset_subtreeDataStreamingConcurrency`) — bounded by default (`2 / 4 / 2 / 2`);
+- a tiered in-process rate limiter (see below).
+
+These mitigations are **not** sufficient on their own for public-facing deployments. Operators MUST front the asset service with a reverse proxy (nginx, HAProxy, Envoy, CloudFront, Cloudflare, etc.) configured to enforce:
+
+1. **Per-IP request rate limiting** on the `/subtree*` paths (e.g. nginx `limit_req_zone` keyed by `$binary_remote_addr`).
+2. **Per-IP concurrent connection limits** (e.g. nginx `limit_conn_zone`).
+3. **An ACL** restricting these endpoints to known peers/clients when public exposure is not required.
+
+##### In-process rate limiting
+
+The asset service enforces a tiered rate limit as defense in depth (it does **not** replace the reverse-proxy layer above). Three tiers, in increasing trust:
+
+- **Unverified** — requests with no peer signature, or with a signature that fails any verification step. Bucketed by source IP (IPv6 normalised to `/64` so a single allocation can't be split into millions of buckets). Held in a bounded LRU (capacity 50,000 entries) so an attacker rotating IPv6 addresses can't grow the table without limit. Rate: `asset_httpRateLimit` req/s, default `1024`.
+- **Peer** — requests with a valid Ed25519 signature, where the peer ID is listed in `asset_peerAuthAllowlist`. Bucketed by libp2p peer ID (not IP), so two authenticated peers behind one NAT or CDN egress get independent buckets. Rate: `asset_httpRateLimit × asset_httpPeerRateMultiplier` req/s, default `1024 × 5 = 5120`.
+- **Miner** — authenticated peers whose `BlocksReceived > 0` and `ReputationScore ≥ asset_peerMinerReputationThreshold` (default `50.0`), and who are in `asset_peerAuthAllowlist`. Either **fully exempt** (default, `asset_httpMinerRateLimit = 0`) or bucketed per peer ID at `asset_httpMinerRateLimit` req/s when set. Setting an explicit cap is recommended as defense in depth.
+
+Heavy endpoints (`/subtree*`, `/blocks/:hash`, `/block/:hash`, `/block_legacy/:hash`, `/rest/block/:hash.bin`, `POST /subtree/:hash/txs`, and the `/headers_to_common_ancestor/:hash` variants) carry an additional, stricter limiter at `asset_httpHeavyRateLimit` req/s (default `10`). The global and heavy limiters stack — a request must pass both.
+
+**Allowlist is opt-in.** When `asset_peerAuthAllowlist` is empty (the default), peer signatures are still cryptographically verified (replay cache, body digest, freshness window all apply) but no tier elevation is granted — every authenticated peer is treated as `tierUnverified` for rate-limit purposes. Operators must explicitly list peer IDs they want to trust before any peer benefits from the elevated rate.
+
+##### Peer authentication protocol
+
+Clients sign each outbound request with their libp2p Ed25519 private key. The signature covers:
+
+```text
+v2:<unix_ts>:<host>:<method>:<request_uri>:<sha256_body_hex>
+```
+
+Headers required on every signed request:
+
+- `X-Peer-PubKey` — hex-encoded Ed25519 public key
+- `X-Peer-Timestamp` — Unix seconds; must be within ±10s of the verifier's clock
+- `X-Peer-Body-Digest` — lowercase hex SHA-256 of the request body; the verifier recomputes the digest from the actual bytes and rejects on mismatch
+- `X-Peer-Signature` — hex-encoded Ed25519 signature over the canonical payload
+
+The verifier additionally maintains a bounded in-memory replay cache of `(pubkey, signature)` pairs (capacity 100,000, TTL 15s) so a captured signature cannot be re-used within the freshness window. Operators MUST keep clocks within ±5s of UTC (NTP); persistent drift will be visible in the `teranode_asset_http_peer_auth_result_total{result="expired"}` Prometheus counter.
+
+See `docs/references/settings/services/asset_settings.md` for the full list of rate-limit and auth settings.
+
 #### 7.2.6 Environment Variables
 
 **Standard Environment Variables:**
@@ -843,7 +893,7 @@ Cause: Missing server_keyFile when securityLevelHTTP is non-zero
 - `TERANODE_ASSET_HTTPPUBLICADDRESS` - Public-facing URL
 - `TERANODE_ASSET_APIPREFIX` - API URL prefix
 - `TERANODE_ASSET_CENTRIFUGE_DISABLE` - Disable Centrifuge service
-- `TERANODE_ASSET_CENTRIFUGELISTENADDRESS` - Centrifuge listen address
+- `TERANODE_ASSET_CENTRIFUGELISTENADDRESS` - Enables the Centrifuge WebSocket when non-empty; not bound as a listener (the socket is served on Asset HTTP)
 - `TERANODE_ASSET_SIGN_HTTP_RESPONSES` - Enable response signing
 - `TERANODE_SECURITYLEVELHTTP` - HTTP security level
 - `TERANODE_SERVER_CERTFILE` - TLS certificate file

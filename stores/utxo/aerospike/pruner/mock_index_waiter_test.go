@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aerospike/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 )

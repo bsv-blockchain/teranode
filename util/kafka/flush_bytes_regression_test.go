@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"sync"
@@ -13,6 +14,9 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -30,9 +34,17 @@ func startRedpanda(t *testing.T, ctx context.Context) (brokerAddr string, cleanu
 	port, err := getFreePort()
 	require.NoError(t, err)
 
+	portStr := fmt.Sprintf("%d/tcp", port)
 	req := testcontainers.ContainerRequest{
 		Image:        fmt.Sprintf("%s:%s", redpandaImage, redpandaVersion),
-		ExposedPorts: []string{fmt.Sprintf("%d:%d/tcp", port, port)},
+		ExposedPorts: []string{portStr},
+		HostConfigModifier: func(hc *container.HostConfig) {
+			hc.PortBindings = network.PortMap{
+				network.MustParsePort(portStr): []network.PortBinding{
+					{HostIP: netip.IPv4Unspecified(), HostPort: fmt.Sprintf("%d", port)},
+				},
+			}
+		},
 		Cmd: []string{
 			"redpanda", "start",
 			"--overprovisioned",
@@ -47,7 +59,7 @@ func startRedpanda(t *testing.T, ctx context.Context) (brokerAddr string, cleanu
 		ContainerRequest: req,
 		Started:          true,
 	})
-	require.NoError(t, err)
+	test.SkipIfContainerUnavailable(t, err)
 
 	return fmt.Sprintf("localhost:%d", port), func() {
 		_ = container.Terminate(context.Background())

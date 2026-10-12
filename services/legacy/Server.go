@@ -27,6 +27,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -37,6 +38,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
+	legacypeer "github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer_api"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/validator"
@@ -114,6 +116,46 @@ type Server struct {
 	// blockAssemblyClient handles block assembly operations
 	// Used for mining and block template generation
 	blockAssemblyClient *blockassembly.Client
+
+	// peerRegistry mirrors connected legacy peers into the centralized peer
+	// registry for dashboard visibility. It is nil when the registry is
+	// unavailable, which disables the mirror without affecting the service.
+	peerRegistry blockchain.PeerRegistryClientI
+}
+
+// Dependencies holds the service clients and stores the legacy server needs.
+// It exists so New keeps a manageable parameter list as the server grows.
+//
+// Every field is required unless its own comment says otherwise.
+type Dependencies struct {
+	// BlockchainClient queries blockchain state and submits new blocks.
+	BlockchainClient blockchain.ClientI
+
+	// ValidationClient validates incoming transactions before relay.
+	ValidationClient validator.Interface
+
+	// SubtreeStore holds merkle subtree data.
+	SubtreeStore blob.Store
+
+	// TempStore holds ephemeral data produced during processing.
+	TempStore blob.Store
+
+	// UtxoStore is the UTXO set, used for validation and queries.
+	UtxoStore utxo.Store
+
+	// SubtreeValidation verifies merkle proofs and block structure.
+	SubtreeValidation subtreevalidation.Interface
+
+	// BlockValidation validates incoming blocks before acceptance.
+	BlockValidation blockvalidation.Interface
+
+	// BlockAssemblyClient serves mining and block template generation.
+	BlockAssemblyClient *blockassembly.Client
+
+	// PeerRegistry mirrors connected legacy peers into the centralized peer
+	// registry for dashboard visibility. It may be nil, which disables the
+	// mirror without otherwise affecting the service.
+	PeerRegistry blockchain.PeerRegistryClientI
 }
 
 // New creates and returns a new Server instance with the provided dependencies.
@@ -126,42 +168,129 @@ type Server struct {
 // Parameters:
 //   - logger: Provides structured logging capabilities for the server
 //   - tSettings: Contains all configuration settings for the server and its components
-//   - blockchainClient: Interface to the blockchain service for querying and submitting blocks
-//   - validationClient: Interface to the transaction validation service
-//   - subtreeStore: Blob storage interface for merkle subtree data
-//   - tempStore: Temporary blob storage for ephemeral data
-//   - utxoStore: Interface to the UTXO (Unspent Transaction Output) database
-//   - subtreeValidation: Interface to the subtree validation service
-//   - blockValidation: Interface to the block validation service
-//   - blockAssemblyClient: Client for the block assembly service (used for mining)
+//   - deps: The service clients and stores the server depends on; see Dependencies
 //
 // Returns a properly configured Server instance that is ready to be initialized and started.
-func New(logger ulogger.Logger,
-	tSettings *settings.Settings,
-	blockchainClient blockchain.ClientI,
-	validationClient validator.Interface,
-	subtreeStore blob.Store,
-	tempStore blob.Store,
-	utxoStore utxo.Store,
-	subtreeValidation subtreevalidation.Interface,
-	blockValidation blockvalidation.Interface,
-	blockAssemblyClient *blockassembly.Client,
-) *Server {
+func New(logger ulogger.Logger, tSettings *settings.Settings, deps Dependencies) *Server {
 	initPrometheusMetrics()
 
 	return &Server{
 		logger:              logger,
 		settings:            tSettings,
 		stats:               gocore.NewStat("legacy"),
-		blockchainClient:    blockchainClient,
-		validationClient:    validationClient,
-		subtreeStore:        subtreeStore,
-		tempStore:           tempStore,
-		utxoStore:           utxoStore,
-		subtreeValidation:   subtreeValidation,
-		blockValidation:     blockValidation,
-		blockAssemblyClient: blockAssemblyClient,
+		blockchainClient:    deps.BlockchainClient,
+		validationClient:    deps.ValidationClient,
+		subtreeStore:        deps.SubtreeStore,
+		tempStore:           deps.TempStore,
+		utxoStore:           deps.UtxoStore,
+		subtreeValidation:   deps.SubtreeValidation,
+		blockValidation:     deps.BlockValidation,
+		blockAssemblyClient: deps.BlockAssemblyClient,
+		peerRegistry:        deps.PeerRegistry,
 	}
+}
+
+// legacyPeerStats is the read-only view of a legacy peer that the registry
+// mirror needs. *serverPeer satisfies it through its embedded *peer.Peer; the
+// interface exists so the field mapping can be tested without a live server.
+type legacyPeerStats interface {
+	ID() int32
+	Addr() string
+	UserAgent() string
+	LastBlock() int32
+	BytesSent() uint64
+	BytesReceived() uint64
+	LastRecv() time.Time
+	Inbound() bool
+	ProtocolVersion() uint32
+	Services() wire.ServiceFlag
+	LastPingMicros() int64
+	TimeOffset() int64
+	StartingHeight() int32
+	TimeConnected() time.Time
+	IsStreamPeer() bool
+}
+
+// peerSnapshotFrom maps one legacy peer onto the registry sync view. It reports
+// false for a peer that must not produce a registry entry: a secondary
+// multistream peer (which shares its primary's address), or one whose address
+// cannot be split into host and port.
+func peerSnapshotFrom(sp legacyPeerStats, syncPeerID int32) (peerSnapshot, bool) {
+	// Secondary multistream peers share their primary's address and are not
+	// tracked in the main peer lists. Skip them so one connection produces one
+	// registry entry.
+	if sp.IsStreamPeer() {
+		return peerSnapshot{}, false
+	}
+
+	addr := sp.Addr()
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		return peerSnapshot{}, false
+	}
+
+	var height uint32
+	if lastBlock := sp.LastBlock(); lastBlock > 0 {
+		height = uint32(lastBlock)
+	}
+
+	return peerSnapshot{
+		id:            legacyRegistryID(addr),
+		addr:          addr,
+		userAgent:     sp.UserAgent(),
+		height:        height,
+		bytesSent:     sp.BytesSent(),
+		bytesReceived: sp.BytesReceived(),
+		lastRecv:      sp.LastRecv(),
+		legacy: blockchain.LegacyPeerInfo{
+			Inbound:         sp.Inbound(),
+			ProtocolVersion: sp.ProtocolVersion(),
+			ServiceFlags:    uint64(sp.Services()),
+			PingMicros:      sp.LastPingMicros(),
+			TimeOffsetSecs:  sp.TimeOffset(),
+			StartingHeight:  sp.StartingHeight(),
+			// Peer IDs come from an atomic counter that starts at 1, so a zero
+			// syncPeerID (no sync peer) can never match a real peer.
+			IsSyncPeer:    syncPeerID != 0 && sp.ID() == syncPeerID,
+			TimeConnected: sp.TimeConnected(),
+		},
+	}, true
+}
+
+// legacyPeerSnapshots adapts the internal peer list to the registry sync view.
+// A nil return means the internal server could not answer, and the caller must
+// not read that as "no peers connected". An empty slice does mean "no peers".
+func (s *Server) legacyPeerSnapshots() []peerSnapshot {
+	if s.server == nil {
+		return nil
+	}
+
+	serverPeers := s.server.getPeers()
+	if serverPeers == nil {
+		return nil
+	}
+
+	var syncPeerID int32
+	if s.server.syncManager != nil {
+		syncPeerID = s.server.syncManager.SyncPeerID()
+	}
+
+	snapshots := make([]peerSnapshot, 0, len(serverPeers))
+
+	for _, sp := range serverPeers {
+		if sp == nil || sp.Peer == nil {
+			continue
+		}
+
+		snapshot, ok := peerSnapshotFrom(sp, syncPeerID)
+		if !ok {
+			s.logger.Debugf("[LegacyPeerRegistry] skipping peer %q", sp.Addr())
+			continue
+		}
+
+		snapshots = append(snapshots, snapshot)
+	}
+
+	return snapshots
 }
 
 // Health performs health checks on the server and its dependencies.
@@ -251,7 +380,18 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 func (s *Server) Init(ctx context.Context) error {
 	var err error
 
-	wire.SetLimits(4000000000)
+	wire.SetLimits(maxWireBlockPayload)
+
+	// Stream-decode incoming "block" messages straight from the socket
+	// instead of buffering the full payload first. On multi-GB blocks the
+	// default ReadMessageWithEncodingN path allocated a fresh []byte the
+	// size of the entire block, ~2.86 GB of inuse heap at peak per the
+	// 2026-05-16 fat-block capture. The wire-level DoubleHash checksum
+	// is not preserved on this path; payload integrity is enforced by
+	// the existing downstream validation in netsync.HandleBlockDirect
+	// (PoW, merkle reconstruction, per-tx parse). See the doc comment
+	// on streamingBlockHandler for the full rationale.
+	legacypeer.RegisterStreamingBlockHandler()
 
 	// get the public IP and listen on it
 	ip, err := GetOutboundIP()
@@ -390,6 +530,22 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetP
 	}
 
 	return resp, nil
+}
+
+// RebroadcastDropCounts exposes the rebroadcast queue's drop counters for
+// operator observability. Returns (adds, capHits): `adds` counts
+// AddRebroadcastInventory sends that were dropped because
+// modifyRebroadcastInv was full; `capHits` counts in-handler adds that
+// were dropped because the queue was full of already-retried entries. Both are
+// also exported as Prometheus counters, see metrics.go.
+//
+// Both counters are cumulative since process start and are never reset.
+// Returns (0, 0) when the internal server is not initialised.
+func (s *Server) RebroadcastDropCounts() (adds, capHits uint64) {
+	if s.server == nil {
+		return 0, 0
+	}
+	return s.server.RebroadcastDropCounts()
 }
 
 // IsBanned checks if a specific IP address or subnet is currently banned.
@@ -564,7 +720,7 @@ func (s *Server) logPeerStats(ctx context.Context) {
 					p.GetAddr(), p.GetId(), p.GetServices(), p.GetInbound(), p.GetBytesSent(), p.GetBytesReceived(), p.GetPingTime(), lastSendElapsed, lastRecvElapsed, p.GetCurrentHeight(), p.GetBanscore())
 			}
 
-			state, err := s.blockchainClient.GetFSMCurrentState(context.Background())
+			state, err := s.blockchainClient.GetFSMCurrentState(ctx)
 			if err != nil {
 				ctxLogger.Debugf("Peer stats - Connected: %d, Current FSM State: unknown, error: %v", len(peers), err)
 			} else {
@@ -621,16 +777,31 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	go s.logPeerStats(ctx)
 	s.logger.Infof("[Legacy Server] Started peer statistics logging")
 
+	if s.settings.Legacy.PeerRegistryEnabled && s.peerRegistry != nil {
+		registrySync := newPeerRegistrySync(s.logger, s.settings, s.peerRegistry, s.legacyPeerSnapshots)
+		go registrySync.run(ctx)
+	} else {
+		s.logger.Infof("[Legacy Server] Peer registry mirror disabled")
+	}
+
 	apiKey := s.settings.GRPCAdminAPIKey
+	if util.ValidateAdminAPIKey(s.logger, "Legacy", apiKey, s.settings.Legacy.GRPCListenAddress, s.settings.SecurityLevelGRPC) {
+		// Configured key is a well-known placeholder; ignore it and fall back to
+		// the random-key path below rather than trusting a world-readable value.
+		apiKey = ""
+	}
+
 	if apiKey == "" {
 		// Generate a random API key if not provided
 		key := make([]byte, 32)
 		if _, err := rand.Read(key); err != nil {
-			return errors.WrapGRPC(errors.NewServiceNotStartedError("[P2P] failed to generate API key", err))
+			return errors.WrapGRPC(errors.NewServiceNotStartedError("[Legacy] failed to generate API key", err))
 		}
 
 		apiKey = hex.EncodeToString(key)
-		s.logger.Infof("[Legacy] Generated admin API key: %s", apiKey)
+		// Never log the key itself; a random key means admin RPCs are
+		// intentionally unreachable until an operator configures one.
+		s.logger.Warnf("[Legacy] grpc_admin_api_key is not set; a random key was generated so admin RPCs (ban, unban) are unreachable until a key is configured")
 	}
 
 	// Define protected methods - use the full gRPC method path
@@ -672,7 +843,13 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // Parameters:
 //   - _: Context parameter (unused in the current implementation)
 //
-// Returns an error if the shutdown process encounters problems, or nil on successful shutdown
+// Returns an error if the shutdown process encounters problems, or nil on successful shutdown.
+// Returns nil immediately if the inner server was never initialized (e.g. when Init failed
+// before newServer succeeded), so the daemon error path cannot dereference a nil server.
 func (s *Server) Stop(_ context.Context) error {
+	if s.server == nil {
+		return nil
+	}
+
 	return s.server.Stop()
 }

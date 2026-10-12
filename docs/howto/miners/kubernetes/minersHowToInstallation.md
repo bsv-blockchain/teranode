@@ -14,6 +14,7 @@ Last modified: 29-October-2025
     - [Deploy Teranode](#deploy-teranode)
 - [Verifying the Deployment](#verifying-the-deployment)
 - [Production Considerations](#production-considerations)
+    - [Scaling the Propagation Service](#scaling-the-propagation-service)
 - [Other Resources](#other-resources)
 
 ## Introduction
@@ -166,6 +167,50 @@ helm upgrade --install teranode-operator oci://ghcr.io/bsv-blockchain/helm/teran
     -f deploy/kubernetes/teranode/teranode-operator.yaml
 ```
 
+#### Create the Teranode Secret
+
+Sensitive settings (`blockchain_store` and `utxostore` — they contain database
+credentials and connection strings — plus `grpc_admin_api_key`) are **not** stored in
+the ConfigMap. They are supplied through a Kubernetes Secret named
+`teranode-operator-secrets`, which the Cluster CR references via `spec.envFrom`. This
+Secret is intentionally not committed to the repository — you must create it yourself.
+
+`grpc_admin_api_key` is **required** for Blockchain startup and all of its clients,
+including reads and subscriptions. Empty, placeholder and weak keys cause a startup
+configuration error. It also authenticates protected P2P/Legacy operations. Generate
+one random value with `openssl rand -hex 32` and supply it to every service and CLI
+client through the Secret. For upgrades, deploy credential-capable callers first
+and Blockchain last; see [Blockchain authentication](../../../topics/services/blockchainAuthentication.md).
+
+Create it with a manifest (replace the example values with your own credentials):
+
+```yaml
+# teranode-secret.yaml — DO NOT commit this file
+apiVersion: v1
+kind: Secret
+metadata:
+  name: teranode-operator-secrets
+  namespace: teranode-operator
+type: Opaque
+stringData:
+  blockchain_store: "postgres://POSTGRES_EXAMPLE_URI_CHANGE_ME"
+  utxostore: "aerospike://AEROSPIKE_EXAMPLE_URI_CHANGE_ME"
+  # Required. Blockchain refuses to start without it. Every service and CLI client
+  # uses it to call Blockchain and the protected P2P/Legacy RPCs.
+  # Generate with: openssl rand -hex 32
+  grpc_admin_api_key: "" # REQUIRED: paste the generated shared secret before applying
+```
+
+```bash
+kubectl apply -f teranode-secret.yaml -n teranode-operator
+```
+
+The keys in the Secret are injected into the Teranode pods as environment variables,
+overriding the corresponding settings. Keep the Secret out of version control and
+rotate the database credentials for production deployments.
+
+If you manage your keys via different secret providers ([1password](https://github.com/1Password/onepassword-operator), [External Secrets](https://github.com/external-secrets/external-secrets), [Vault](https://github.com/hashicorp/vault-secrets-operator)), please make sure that the secret passed to Teranode Operator is ready.
+
 #### Apply Teranode Configuration
 
 Apply the Teranode configuration and custom resources:
@@ -199,6 +244,13 @@ By default, this configuration deploys Teranode to connect to the **teratestnet*
               memory: 256Mi
     ```
 
+    The `imagePullPolicy: Never` and `cpu: 100m` / `memory: 256Mi` values above
+    are Minikube/local-dev defaults — the legacy service scans the full
+    historical chain and needs far more than that in practice. For testnet or
+    mainnet, size resources from the shipped mainnet CR instead, which requests
+    `cpu: 2` / `memory: 64Gi` for legacy: see
+    [teranode-cr-mainnet.yaml](https://github.com/bsv-blockchain/teranode/blob/main/deploy/kubernetes/teranode/teranode-cr-mainnet.yaml).
+
 3. Apply the updated configuration:
 
     ```bash
@@ -208,10 +260,11 @@ By default, this configuration deploys Teranode to connect to the **teratestnet*
 
 #### Start Syncing Process
 
-A fresh Teranode starts up in IDLE state by default. To start syncing from the network, you can run:
+A fresh Teranode under the `operator` context starts in IDLE. After checking the
+deployment, start synchronization explicitly:
 
 ```bash
-kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate -fsmstate running
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate catchingblocks
 ```
 
 To know more about the syncing process, please refer to the [Teranode Sync Guide](minersHowToSyncTheNode.md)
@@ -239,11 +292,52 @@ For production deployments, consider:
 
 - Deploying dependencies (Aerospike, PostgreSQL, Kafka) in separate clusters or using managed services
 - Implementing proper security measures (network policies, RBAC, etc.)
-- Setting up monitoring and alerting
+- Setting up [monitoring and alerting](../minersHowToMonitoring.md)
 - Configuring appropriate resource requests and limits
 - Setting up proper backup and disaster recovery procedures
 
 An example CR for a mainnet deployment is available in [kubernetes/teranode/teranode-cr-mainnet.yaml](https://github.com/bsv-blockchain/teranode/blob/main/deploy/kubernetes/teranode/teranode-cr-mainnet.yaml).
+
+### Scaling the Propagation Service
+
+The propagation service is stateless and horizontally scalable: set
+`propagation.enabled: true` (both shipped example CRs ship it disabled) and
+`propagation.spec.deploymentOverrides.replicas` in `teranode-cr.yaml` (or
+`teranode-cr-mainnet.yaml`) to the desired pod count, then re-apply the CR. If
+the propagation spec has no `deploymentOverrides` block yet — as in
+`teranode-cr.yaml` — add one.
+
+Not every service in the Cluster CR can be scaled this way. The validator can:
+`teranode-cr-mainnet.yaml` runs it with 8 replicas (`teranode-cr.yaml` ships the
+validator disabled, with an empty spec). Services such as block assembly and
+blockchain are single-instance — block assembly holds the mining jobs handed to
+miners and its assembler state per process, so a second replica would lose
+solved blocks and clobber that state. That is why every
+`deploymentOverrides.replicas` entry in both example CRs is `1`, the one
+exception being the validator in `teranode-cr-mainnet.yaml`.
+
+A `HorizontalPodAutoscaler` that targets the `Propagation` custom resource's
+`/scale` endpoint will not work. The Teranode Operator's `Propagation` CR does
+declare a Kubernetes `/scale` subresource, with its `specReplicasPath` pointing
+at `.spec.deploymentOverrides.replicas`, which is the mechanism an HPA would
+normally use to target a custom resource directly. In practice this doesn't hold
+up: the parent `Cluster` controller reconciles every child resource, including
+`Propagation`, both on a fixed one-minute timer and whenever the `Propagation`
+object's spec changes (which an HPA writing to `/scale` would trigger). On each
+of those reconciles it overwrites the entire `Propagation` spec — including the
+replica count — with whatever is stored in the `Cluster` CR itself. Any replica
+count an HPA writes to `/scale` gets reverted within at most a minute, so
+autoscaling against that endpoint silently flaps rather than converging.
+
+Until the operator changes this reconcile behavior (e.g. by leaving
+externally-managed replica counts alone), manual scaling via
+`deploymentOverrides.replicas` in the `Cluster` CR remains the supported way to
+size the propagation service.
+
+## Related Documentation
+
+- [Monitoring Teranode](../minersHowToMonitoring.md)
+- [Prometheus Metrics Reference](../../../references/prometheusMetrics.md)
 
 ## Resetting Teranode
 

@@ -1,0 +1,18 @@
+{
+  "hash": "0000000000000000000004aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "height": 800004,
+  "version": 1,
+  "previousblockhash": "0000000000000000000003bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "merkleroot": "ababababababababababababababababababababababababababababababab01",
+  "time": 1748426400,
+  "timestamp": "2026-05-28T11:00:00Z",
+  "bits": "1d00ffff",
+  "nonce": 123456,
+  "miner": "smoke-miner",
+  "transactionCount": 2480,
+  "txCount": 2480,
+  "coinbaseValue": 312500000,
+  "size": 1480123,
+  "subtreeCount": 0,
+  "subtrees": []
+}

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	as "github.com/aerospike/aerospike-client-go/v8"
+	as "github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -438,6 +438,7 @@ func Test_launchConsistencyScan(t *testing.T) {
 
 		// Drain — wait for channels to close (all workers done)
 		for range it.resultChan {
+			// drain until closed
 		}
 		require.Equal(t, int32(4096), workerCount.Load())
 		it.Close()

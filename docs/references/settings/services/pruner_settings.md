@@ -139,12 +139,14 @@ pruner_grpcListenAddress.docker.host = localhost:${PORT_PREFIX}${PRUNER_GRPC_POR
 
 **Description**: Skip pruning during blockchain catchup
 
-When enabled, the pruner checks FSM state and skips all deletion operations during catchup. This prevents race conditions where block validation marks transactions as mined faster than the pruner can preserve their parents.
+When enabled, the pruner checks FSM state and skips all deletion operations unless the node is RUNNING, which covers catchup and IDLE after an operator STOP mid-catchup. This prevents race conditions where block validation marks transactions as mined faster than the pruner can preserve their parents.
 
 **Values:**
 
 - `false` (default): Normal pruning during catchup (safe with retention >= 288 blocks)
 - `true`: Skip all pruning during catchup state
+
+Note: this defers rather than eliminates the prune burst - a node that skips a long catchup hits one much larger DAH sweep on entering the RUNNING state.
 
 ### pruner_blockAssemblyWaitTimeout
 
@@ -185,17 +187,7 @@ When Aerospike connection pool utilization exceeds this threshold, the pruner au
 - `OnBlockPersisted` (default): Triggers on BlockPersisted notifications (coordinated with Block Persister)
 - `OnBlockMined`: Triggers on Block notifications with mined_set=true
 
-### pruner_force_ignore_block_persister_height
-
-**Type**: Boolean
-
-**Default**: `false`
-
-**Environment Variable**: `pruner_force_ignore_block_persister_height`
-
-**Description**: Force ignore block persister height tracking
-
-When enabled, uses Block notifications with mined_set=true instead of BlockPersisted notifications from Block Persister for determining safe prune height.
+To use Block notifications with mined_set=true instead of BlockPersisted notifications from Block Persister for determining safe prune height, set `pruner_block_trigger=OnBlockMined`.
 
 ### pruner_utxoSetTTL
 
@@ -208,6 +200,44 @@ When enabled, uses Block notifications with mined_set=true instead of BlockPersi
 **Description**: Use TTL expiration instead of hard delete for UTXO records
 
 When enabled, sets Aerospike record TTL to 1 second instead of hard deleting. This produces optimized tombstones and reduces write amplification.
+
+### pruner_relaxRemovalCommitLevel
+
+**Type**: Boolean
+
+**Default**: `true`
+
+**Environment Variable**: `pruner_relaxRemovalCommitLevel`
+
+**Description**: Acknowledge the pruner's own record removals from the master replica only
+
+Controls the Aerospike commit level for the pruner's record removals — hard deletes, and
+the 1-second TTL touches used when `pruner_utxoSetTTL` is enabled.
+
+| Value | Behaviour |
+|-------|-----------|
+| `true` (default) | `COMMIT_MASTER` — the call returns once the master replica has the removal; replicas catch up asynchronously. |
+| `false` | `COMMIT_ALL` — wait for every replica, the same as every other Teranode write. |
+
+Relaxing is safe here because pruning is idempotent and self-healing: the pruner only
+removes records that are already provably safe to drop, and a replica that misses a
+removal is re-found by the `delete_at_height` partition scan on the next session and
+re-pruned. Waiting for a full-replication ACK buys no correctness, only latency in the
+per-block removal burst.
+
+**Scope** — record removal only:
+
+- Pruner **parent updates** (the `deletedChildren` map writes and the `addDeletedChildren`
+  UDF) mutate records that survive the prune and always use `COMMIT_ALL`.
+- Every write **outside** the pruner always uses `COMMIT_ALL`. There is no cluster-wide
+  commit-level setting: UTXO record creation, the transaction-creation lock, the conflict
+  WAL, setMined, unspend and the preserve / delete-at-height writes are none of them
+  self-healing, so relaxing them would trade a resync for throughput.
+- Only has an effect on namespaces with `replication-factor` > 1. On a single-copy
+  namespace both values behave identically.
+
+**When to set `false`**: only to rule the relaxation out while diagnosing missing-record
+or replication issues.
 
 ### pruner_skipBlobDeletion
 
@@ -253,7 +283,7 @@ Limits deletions per cycle to prevent overwhelming the blob store. Remaining del
 
 **Environment Variable**: `pruner_blobDeletionMaxRetries`
 
-**Description**: Maximum retry attempts for failed blob deletions
+**Description**: Maximum retry attempts for failed blob deletions. A deletion refused as a configuration error (for example an HTTP blob store answering 401) is not counted against this limit: it stays queued and is logged as an error until the configuration is fixed. Deletions for other store types keep being processed.
 
 ### pruner_skipPreserveParents
 
@@ -266,6 +296,18 @@ Limits deletions per cycle to prevent overwhelming the blob store. Remaining del
 **Description**: Skip Phase 1 - preserve parents of unmined transactions
 
 When enabled, parent transactions will not be protected from deletion even if they have unmined children.
+
+### pruner_skipProcessExpiredPreservations
+
+**Type**: Boolean
+
+**Default**: `false`
+
+**Environment Variable**: `pruner_skipProcessExpiredPreservations`
+
+**Description**: Skip Phase 1b - expire old parent preservations
+
+When disabled (default), each pruner cycle clears expired PreserveUntil markers and re-stamps DeleteAtHeight on preserved parents that have become safe to prune (mined, on the longest chain, and fully spent, or conflicting). When enabled, preserved parents keep PreserveUntil set and DeleteAtHeight cleared indefinitely and are never pruned. Intended as an emergency kill-switch only.
 
 ### pruner_skipDeletions
 
@@ -312,7 +354,7 @@ pruner_jobTimeout = 10m
 - Too short: Frequent timeouts logged
 - Too long: Blocks other operations unnecessarily
 
-**Metrics**: Monitor `pruner_duration_seconds` to determine appropriate timeout
+**Metrics**: Monitor `teranode_pruner_duration_seconds` to determine appropriate timeout
 
 ## UTXO Store Settings
 
@@ -793,9 +835,9 @@ export UTXOSTORE_PARENTPRESERVATIONBLOCKS=20000
 
 While not configuration settings, these Prometheus metrics should be monitored:
 
-- `pruner_duration_seconds`: Adjust `jobTimeout` if consistently near timeout
-- `pruner_skipped_total{reason="not_running"}`: Indicates Block Assembly issues
-- `pruner_errors_total`: Indicates database or connectivity issues
+- `teranode_pruner_duration_seconds`: Adjust `jobTimeout` if consistently near timeout
+- `teranode_pruner_skipped_total{reason="block_assembly_timeout"}`: Indicates Block Assembly issues
+- `teranode_pruner_errors_total`: Indicates database or connectivity issues
 - `utxo_cleanup_batch_duration_seconds`: Indicates Aerospike performance
 
 ## Troubleshooting Configuration Issues
@@ -830,7 +872,7 @@ pruner_jobTimeout = 20m  # or higher
 
 ### Slow Pruning
 
-**Symptoms**: High `pruner_duration_seconds` values
+**Symptoms**: High `teranode_pruner_duration_seconds` values
 
 **Solutions:**
 
@@ -864,13 +906,13 @@ pruner_jobTimeout = 20m  # or higher
 1. Verify pruner running:
 
     ```bash
-    curl http://localhost:8096/metrics | grep pruner_processed_total
+    curl http://localhost:8096/metrics | grep teranode_pruner_active
     ```
 
-2. Check `pruner_skipped_total` reasons:
+2. Check `teranode_pruner_skipped_total` reasons:
 
     ```bash
-    curl http://localhost:8096/metrics | grep pruner_skipped_total
+    curl http://localhost:8096/metrics | grep teranode_pruner_skipped_total
     ```
 
 3. Verify Block Assembly in RUNNING state

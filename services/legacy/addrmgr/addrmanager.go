@@ -84,21 +84,25 @@ import (
 // The manager uses cryptographic randomization to prevent address correlation
 // attacks and implements various anti-DoS measures to maintain network health.
 type AddrManager struct {
-	logger         ulogger.Logger
-	mtx            sync.Mutex
-	peersFile      string
-	lookupFunc     func(string) ([]net.IP, error)
-	rand           *rand.Rand
-	key            [32]byte
-	addrIndex      map[string]*KnownAddress // address key to ka for all addrs.
-	addrNew        [newBucketCount]map[string]*KnownAddress
-	addrTried      [triedBucketCount]*list.List
-	started        int32
-	shutdown       int32
-	wg             sync.WaitGroup
-	quit           chan struct{}
-	nTried         int
-	nNew           int
+	logger     ulogger.Logger
+	mtx        sync.Mutex
+	peersFile  string
+	lookupFunc func(string) ([]net.IP, error)
+	rand       *rand.Rand
+	key        [32]byte
+	addrIndex  map[string]*KnownAddress // address key to ka for all addrs.
+	addrNew    [newBucketCount]map[string]*KnownAddress
+	addrTried  [triedBucketCount]*list.List
+	started    int32
+	shutdown   int32
+	wg         sync.WaitGroup
+	quit       chan struct{}
+	nTried     int
+	nNew       int
+	// lastGood is when any address was last confirmed good. Failures are
+	// counted at most once per address per interval between successes, so a
+	// spell of broken connectivity cannot condemn the whole book: see Attempt.
+	lastGood       time.Time
 	lamtx          sync.Mutex
 	localAddresses map[string]*localAddress
 }
@@ -847,6 +851,16 @@ func (a *AddrManager) AddressCache() []*wire.NetAddress {
 func (a *AddrManager) reset() {
 	a.addrIndex = make(map[string]*KnownAddress)
 
+	// Started just off zero so that "never counted" is strictly worse than
+	// "never succeeded". Attempt only counts a failure when the address's
+	// lastCountAttempt is BEFORE lastGood, and a zero lastGood is not after a
+	// zero lastCountAttempt — so leaving it zero would silently swallow every
+	// failure until the node's first successful version exchange, which is
+	// exactly the window in which the address book most needs to learn that
+	// its seeds are dead. svnode sets nLastGood = 1 in CAddrMan::Clear
+	// (addrman.h:505) for this reason.
+	a.lastGood = time.Unix(1, 0)
+
 	// fill key with bytes from a good random source.
 	io.ReadFull(crand.Reader, a.key[:])
 
@@ -958,40 +972,107 @@ func (a *AddrManager) GetAddress() *KnownAddress {
 
 			factor *= 1.2
 		}
-	} else {
-		// new node.
-		// XXX use a closure/function to avoid repeating this.
-		large := 1 << 30
-		factor := 1.0
+	}
 
-		for {
-			// Pick a random bucket.
-			bucket := a.rand.IntN(len(a.addrNew))
-			if len(a.addrNew[bucket]) == 0 {
-				continue
-			}
+	return a.selectNew()
+}
 
-			// Then, a random entry in it.
-			var ka *KnownAddress
+// UnverifiedAddress is what one new-table entry looks like from outside the
+// address manager: the fields that decide whether an address is worth dialling,
+// copied out under a.mtx.
+//
+// It exists because *KnownAddress cannot safely leave the manager. None of its
+// accessors takes a lock (knownaddress.go), while Attempt and Good write the
+// same fields under a.mtx from peer goroutines, so a caller that held the entry
+// and read it afterwards would race them. Handing back values read inside the
+// lock removes the hazard rather than documenting it.
+//
+// NetAddress is still a pointer, and holding it is safe: the manager never
+// mutates a published wire.NetAddress in place. Every update copies the struct,
+// changes the copy and swaps ka.na, in updateAddress, Connected and SetServices
+// alike, two of which say so in a comment. The struct this points at therefore
+// cannot change under the caller.
+type UnverifiedAddress struct {
+	// NetAddress is the address itself, and is what the caller passes back to
+	// Attempt or Good.
+	NetAddress *wire.NetAddress
 
-			nth := a.rand.IntN(len(a.addrNew[bucket]))
-			for _, value := range a.addrNew[bucket] {
-				if nth == 0 {
-					ka = value
-				}
+	// LastAttempt is when a connection to it was last attempted, zero if never.
+	// It is the field the feeler's freshness filter judges.
+	LastAttempt time.Time
 
-				nth--
-			}
+	// Attempts is how many failures have been counted against the address.
+	Attempts int
+}
 
-			randval := a.rand.IntN(large)
-			if float64(randval) < (factor * ka.chance() * float64(large)) {
-				a.logger.Debugf("Selected %v from new bucket",
-					NetAddressKey(ka.na))
-				return ka
-			}
+// UnverifiedAddress returns a routable address drawn only from the new table:
+// addresses the node has been told about but has never itself confirmed.
+//
+// This is svnode's Select(newOnly=true) (addrman.cpp:337), and it exists for
+// the feeler probe. GetAddress tosses a coin between the tried and new tables,
+// which is the wrong draw for a probe: the whole purpose of probing is to move
+// addresses INTO tried, and re-verifying one that is already there accomplishes
+// nothing.
+//
+// The whole answer is assembled before the mutex is released, which is the
+// point: see the type's own comment. An earlier version returned the
+// *KnownAddress and left the caller to read it, and the feeler's selection pass
+// then raced Attempt and Good on ka.lastattempt.
+//
+// Returns nil when the new table is empty. That guard is load-bearing rather
+// than defensive: selectNew's bucket loop has no termination condition of its
+// own and would spin forever if every new bucket were empty.
+func (a *AddrManager) UnverifiedAddress() *UnverifiedAddress {
+	a.mtx.Lock()
+	defer a.mtx.Unlock()
 
-			factor *= 1.2
+	if a.nNew == 0 {
+		return nil
+	}
+
+	ka := a.selectNew()
+
+	return &UnverifiedAddress{
+		NetAddress:  ka.na,
+		LastAttempt: ka.lastattempt,
+		Attempts:    ka.attempts,
+	}
+}
+
+// selectNew picks a random address from the new table, weighted by chance().
+// The caller must hold a.mtx and must have established that the new table is
+// not empty, because the loop below only ends when it finds an address.
+func (a *AddrManager) selectNew() *KnownAddress {
+	large := 1 << 30
+	factor := 1.0
+
+	for {
+		// Pick a random bucket.
+		bucket := a.rand.IntN(len(a.addrNew))
+		if len(a.addrNew[bucket]) == 0 {
+			continue
 		}
+
+		// Then, a random entry in it.
+		var ka *KnownAddress
+
+		nth := a.rand.IntN(len(a.addrNew[bucket]))
+		for _, value := range a.addrNew[bucket] {
+			if nth == 0 {
+				ka = value
+			}
+
+			nth--
+		}
+
+		randval := a.rand.IntN(large)
+		if float64(randval) < (factor * ka.chance() * float64(large)) {
+			a.logger.Debugf("Selected %v from new bucket",
+				NetAddressKey(ka.na))
+			return ka
+		}
+
+		factor *= 1.2
 	}
 }
 
@@ -999,9 +1080,27 @@ func (a *AddrManager) find(addr *wire.NetAddress) *KnownAddress {
 	return a.addrIndex[NetAddressKey(addr)]
 }
 
-// Attempt increases the given address' attempt counter and updates
-// the last attempt time.
-func (a *AddrManager) Attempt(addr *wire.NetAddress) {
+// Attempt records that a connection to the given address was attempted, and
+// counts the attempt against the address when countFailure says the attempt
+// deserves the blame.
+//
+// The distinction matters because attempts are what demote an address:
+// KnownAddress.chance divides its selection weight by 1.5 per attempt, and
+// isBad condemns an address that has failed three times without ever
+// succeeding. A node whose own link is down would otherwise walk its entire
+// book, fail against every address for reasons that are nothing to do with any
+// of them, and mark the lot bad — arriving back online with nowhere to dial.
+//
+// Two guards keep that from happening, both taken from svnode (CAddrMan::
+// Attempt_, addrman.cpp:316). The caller passes countFailure false unless the
+// node is demonstrably connected to other peers, so a failure only counts when
+// there is evidence the fault is at the far end. And an address is counted at
+// most once between successes anywhere, via lastGood, so one bad spell costs
+// each address a single strike rather than one per retry.
+//
+// The last-attempt time is always recorded: it feeds the "tried very recently"
+// term in chance, which is about pacing retries rather than judging addresses.
+func (a *AddrManager) Attempt(addr *wire.NetAddress, countFailure bool) {
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
 
@@ -1012,8 +1111,12 @@ func (a *AddrManager) Attempt(addr *wire.NetAddress) {
 		return
 	}
 
+	if countFailure && ka.lastCountAttempt.Before(a.lastGood) {
+		ka.lastCountAttempt = time.Now()
+		ka.attempts++
+	}
+
 	// set last tried time to now
-	ka.attempts++
 	ka.lastattempt = time.Now()
 }
 
@@ -1046,6 +1149,12 @@ func (a *AddrManager) Connected(addr *wire.NetAddress) {
 func (a *AddrManager) Good(addr *wire.NetAddress) {
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
+
+	// Recorded before the lookup, and even for an address we do not know,
+	// because it is evidence about the NETWORK rather than about one address:
+	// connectivity is working, so failures from here on say something about the
+	// peer that failed.
+	a.lastGood = time.Now()
 
 	ka := a.find(addr)
 	if ka == nil {

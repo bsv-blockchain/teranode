@@ -20,8 +20,7 @@ func TestGetSubtreeTxs(t *testing.T) {
 	t.Run("Valid JSON mode", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
-		mockRepo.On("GetSubtree", mock.Anything, mock.Anything).Return(testSubtree, nil)
-		mockRepo.On("GetSubtreeData", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+		mockRepo.On("GetSubtreeNodesPage", mock.Anything, mock.Anything, mock.Anything).Return(testSubtree.Nodes, testSubtree.Length(), nil)
 		mockRepo.On("GetTransactionMeta", mock.Anything, mock.Anything).Return(testTxMeta, nil)
 
 		echoContext.SetPath("/subtree/txs/:hash")
@@ -124,7 +123,7 @@ func TestGetSubtreeTxs(t *testing.T) {
 	t.Run("Subtree not found", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
 
-		mockRepo.On("GetSubtree", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+		mockRepo.On("GetSubtreeNodesPage", mock.Anything, mock.Anything, mock.Anything).Return(nil, 0, errors.ErrNotFound)
 
 		echoContext.SetPath("/subtree/txs/:hash")
 		echoContext.SetParamNames("hash")
@@ -141,8 +140,7 @@ func TestGetSubtreeTxs(t *testing.T) {
 	t.Run("Transaction meta not found", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
-		mockRepo.On("GetSubtree", mock.Anything, mock.Anything).Return(testSubtree, nil)
-		mockRepo.On("GetSubtreeData", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+		mockRepo.On("GetSubtreeNodesPage", mock.Anything, mock.Anything, mock.Anything).Return(testSubtree.Nodes, testSubtree.Length(), nil)
 		mockRepo.On("GetTransactionMeta", mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
 
 		echoContext.SetPath("/subtree/txs/:hash")
@@ -184,7 +182,7 @@ func TestGetSubtreeTxs(t *testing.T) {
 	t.Run("Repository error", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
 
-		mockRepo.On("GetSubtree", mock.Anything, mock.Anything).Return(nil, errors.NewProcessingError("error getting subtree transactions"))
+		mockRepo.On("GetSubtreeNodesPage", mock.Anything, mock.Anything, mock.Anything).Return(nil, 0, errors.NewProcessingError("error getting subtree transactions"))
 
 		echoContext.SetPath("/subtree/txs/:hash")
 		echoContext.SetParamNames("hash")

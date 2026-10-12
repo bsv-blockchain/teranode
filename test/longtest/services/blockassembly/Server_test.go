@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
@@ -54,10 +55,11 @@ func TestServer_Performance_1_million_txs_1_by_1(t *testing.T) {
 		go func(bytesN []byte) {
 			defer wg.Done()
 
-			txInpoints := subtreepkg.TxInpoints{
-				ParentTxHashes: []chainhash.Hash{{}},
-				Idxs:           [][]uint32{{0}},
-			}
+			emptyParent := chainhash.Hash{}
+			emptyParentInput := &bt.Input{PreviousTxOutIndex: 0}
+			_ = emptyParentInput.PreviousTxIDAdd(&emptyParent)
+
+			txInpoints, _ := subtreepkg.NewTxInpointsFromInputs([]*bt.Input{emptyParentInput})
 			txInpointsBytes, _ := txInpoints.Serialize()
 
 			txid := make([]byte, 32)
@@ -120,10 +122,11 @@ func TestServer_Performance_1_million_txs_1_by_1_with_sync_pool(t *testing.T) {
 		go func(bytesN []byte) {
 			defer wg.Done()
 
-			txInpoints := subtreepkg.TxInpoints{
-				ParentTxHashes: []chainhash.Hash{{}},
-				Idxs:           [][]uint32{{0}},
-			}
+			emptyParent := chainhash.Hash{}
+			emptyParentInput := &bt.Input{PreviousTxOutIndex: 0}
+			_ = emptyParentInput.PreviousTxIDAdd(&emptyParent)
+
+			txInpoints, _ := subtreepkg.NewTxInpointsFromInputs([]*bt.Input{emptyParentInput})
 			txInpointsBytes, _ := txInpoints.Serialize()
 
 			txid := make([]byte, 32)
@@ -182,10 +185,11 @@ func TestServer_Performance_1_million_txs_in_batches(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			txInpoints := subtreepkg.TxInpoints{
-				ParentTxHashes: []chainhash.Hash{{}},
-				Idxs:           [][]uint32{{0}},
-			}
+			emptyParent := chainhash.Hash{}
+			emptyParentInput := &bt.Input{PreviousTxOutIndex: 0}
+			_ = emptyParentInput.PreviousTxIDAdd(&emptyParent)
+
+			txInpoints, _ := subtreepkg.NewTxInpointsFromInputs([]*bt.Input{emptyParentInput})
 			txInpointsBytes, _ := txInpoints.Serialize()
 
 			requests := make([]*blockassembly_api.AddTxRequest, 0, 1_024)
@@ -242,10 +246,11 @@ func TestServer_Performance_1_million_txs_in_batches_with_sync_pool(t *testing.T
 		go func() {
 			defer wg.Done()
 
-			txInpoints := subtreepkg.TxInpoints{
-				ParentTxHashes: []chainhash.Hash{{}},
-				Idxs:           [][]uint32{{0}},
-			}
+			emptyParent := chainhash.Hash{}
+			emptyParentInput := &bt.Input{PreviousTxOutIndex: 0}
+			_ = emptyParentInput.PreviousTxIDAdd(&emptyParent)
+
+			txInpoints, _ := subtreepkg.NewTxInpointsFromInputs([]*bt.Input{emptyParentInput})
 			txInpointsBytes, _ := txInpoints.Serialize()
 
 			requests := make([]*blockassembly_api.AddTxRequest, 0, 1_024)

@@ -1,0 +1,234 @@
+package blockvalidation
+
+import (
+	"context"
+	"testing"
+
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/stretchr/testify/require"
+)
+
+// failureCountingP2PClient counts recorded catchup failures; every other
+// P2PClientI method is inherited as a no-op from maliciousAbortP2PClient.
+// reportCatchupFailure routes through RecordCatchupFailureWithKind, so both
+// entry points are counted.
+type failureCountingP2PClient struct {
+	maliciousAbortP2PClient
+	failures int
+}
+
+func (f *failureCountingP2PClient) RecordCatchupFailure(_ context.Context, _ string) error {
+	f.failures++
+	return nil
+}
+
+func (f *failureCountingP2PClient) RecordCatchupFailureWithKind(_ context.Context, _, _, _ string) error {
+	f.failures++
+	return nil
+}
+
+// isPeerMaliciousCallRecorder is a P2PClientI whose IsPeerMalicious records that it was called
+// and always answers true; every other method hits the nil embedded interface and panics. Used to
+// prove a gated peerID never reaches the p2p client at all (bitcoin-sv/teranode#4692).
+type isPeerMaliciousCallRecorder struct {
+	P2PClientI
+	called bool
+}
+
+func (r *isPeerMaliciousCallRecorder) IsPeerMalicious(_ context.Context, _ string) (bool, string, error) {
+	r.called = true
+	return true, "should never be reached for a gated peerID", nil
+}
+
+// TestIsPeerMalicious_GatesEmptyAndLegacyPeerIDs pins the legacy-peerID gate (bitcoin-sv/teranode#4692):
+// a "legacy:"-namespaced peerID must be treated exactly like an empty one — isPeerMalicious returns
+// false without ever querying the p2p client, removing the per-block gRPC round-trip on the legacy
+// hot path. A real (non-legacy, non-empty) peerID must still be queried, proving the gate is
+// specific to the legacy namespace rather than disabling the check entirely.
+func TestIsPeerMalicious_GatesEmptyAndLegacyPeerIDs(t *testing.T) {
+	t.Run("empty peerID: gated, no client call", func(t *testing.T) {
+		rec := &isPeerMaliciousCallRecorder{}
+		u := &Server{logger: ulogger.TestLogger{}, p2pClient: rec}
+
+		require.False(t, u.isPeerMalicious(context.Background(), ""))
+		require.False(t, rec.called, "an empty peerID must never reach the p2p client")
+	})
+
+	t.Run("legacy-prefixed peerID: gated, no client call", func(t *testing.T) {
+		rec := &isPeerMaliciousCallRecorder{}
+		u := &Server{logger: ulogger.TestLogger{}, p2pClient: rec}
+
+		require.False(t, u.isPeerMalicious(context.Background(), LegacyPeerIDPrefix+"1.2.3.4:8333"))
+		require.False(t, rec.called, "a legacy-prefixed peerID must never reach the p2p client")
+	})
+
+	t.Run("real peerID: not gated, client is queried", func(t *testing.T) {
+		rec := &isPeerMaliciousCallRecorder{}
+		u := &Server{logger: ulogger.TestLogger{}, p2pClient: rec}
+
+		require.True(t, u.isPeerMalicious(context.Background(), "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"))
+		require.True(t, rec.called, "a genuine libp2p peerID must still be queried")
+	})
+}
+
+// TestReportCatchupFailureForError_SkipsAlreadyReported guards the
+// one-failure-per-attempt invariant: when a lower layer (the header-fetch
+// stage) has already recorded the failure, the top-level handler must not
+// record a second one for the same propagated error.
+func TestReportCatchupFailureForError_SkipsAlreadyReported(t *testing.T) {
+	newServer := func() (*Server, *failureCountingP2PClient) {
+		client := &failureCountingP2PClient{}
+		return &Server{p2pClient: client, logger: ulogger.TestLogger{}}, client
+	}
+
+	t.Run("unmarked error is reported", func(t *testing.T) {
+		u, client := newServer()
+		u.reportCatchupFailureForError(context.Background(), "peer-1", errors.NewNetworkTimeoutError("peer timed out"))
+		require.Equal(t, 1, client.failures)
+	})
+
+	t.Run("marked error is skipped", func(t *testing.T) {
+		u, client := newServer()
+		err := markCatchupFailureReported(errors.NewNetworkTimeoutError("peer timed out"))
+		u.reportCatchupFailureForError(context.Background(), "peer-1", err)
+		require.Equal(t, 0, client.failures)
+	})
+
+	t.Run("marker survives teranode error wrapping", func(t *testing.T) {
+		u, client := newServer()
+		// Same shape fetchHeaders produces: ProcessingError wrapping the marked error.
+		err := errors.NewProcessingError("failed to get block headers",
+			markCatchupFailureReported(errors.NewServiceError("http request returned status code [429]")))
+		u.reportCatchupFailureForError(context.Background(), "peer-1", err)
+		require.Equal(t, 0, client.failures)
+	})
+
+	t.Run("block incomplete is still skipped", func(t *testing.T) {
+		u, client := newServer()
+		u.reportCatchupFailureForError(context.Background(), "peer-1", errors.ErrBlockIncomplete)
+		require.Equal(t, 0, client.failures)
+	})
+}
+
+// TestReportCatchupFailureForError_SkipsCorrupt pins this helper's exemptions
+// (bitcoin-sv/teranode#4692). The corrupt-body one is about DOUBLE charging: releaseCatchupLock
+// already charges the primary once for the corrupt cycle, and the corrupt error reaches
+// processCatchupChItem's generic tail unwrapped, so charging again here would be the third charge
+// for one body. The local-policy-decline one is about charging AT ALL: the limit is this node's, so
+// no peer earns a reputation failure for it on any path.
+//
+// A generic error must still be charged, so both exemptions are specific to their sentinels rather
+// than a blanket suppression — that positive control is what keeps the "0 failures" rows meaningful.
+func TestReportCatchupFailureForError_SkipsCorrupt(t *testing.T) {
+	newServer := func() (*Server, *failureCountingP2PClient) {
+		client := &failureCountingP2PClient{}
+		return &Server{p2pClient: client, logger: ulogger.TestLogger{}}, client
+	}
+
+	t.Run("corrupt block body is skipped", func(t *testing.T) {
+		u, client := newServer()
+		u.reportCatchupFailureForError(context.Background(), "peer-1", errors.NewBlockCorruptError("[BLOCK] body is corrupt"))
+		require.Equal(t, 0, client.failures)
+	})
+
+	t.Run("wrapped corrupt block body is skipped", func(t *testing.T) {
+		u, client := newServer()
+		err := errors.NewProcessingError("catchup failed",
+			errors.NewBlockCorruptError("[BLOCK] body is corrupt"))
+		u.reportCatchupFailureForError(context.Background(), "peer-1", err)
+		require.Equal(t, 0, client.failures)
+	})
+
+	// A local policy decline (excessiveblocksize) is OUR configuration, so no peer may be charged for
+	// it (bitcoin-sv/teranode#4692). The exemption lives HERE, at the shared chokepoint, rather than
+	// only at the terminal branch in processCatchupChItem — which is what makes the invariant hold on
+	// the ALTERNATIVE paths: tryAlternativePeersForCatchup (reached from both the per-(hash, peerID)
+	// decline pre-empt and the bad/malicious branch) and the generic tail's cached-alternatives loop
+	// all route their per-candidate failures through this helper. On a genuinely over-limit block
+	// every candidate declines identically, so without this each honest peer would be charged and
+	// pushed toward the reputation floor that GetPeersAtMaxHeight filters on.
+	t.Run("local policy decline is skipped", func(t *testing.T) {
+		u, client := newServer()
+		u.reportCatchupFailureForError(context.Background(), "peer-1",
+			errors.NewBlockPolicyDeclinedError("[ValidateBlock] block size 5 exceeds excessiveblocksize 4 (local policy)"))
+		require.Equal(t, 0, client.failures)
+	})
+
+	t.Run("wrapped local policy decline is skipped", func(t *testing.T) {
+		u, client := newServer()
+		err := errors.NewProcessingError("catchup failed",
+			errors.NewBlockPolicyDeclinedError("block size exceeds excessiveblocksize"))
+		u.reportCatchupFailureForError(context.Background(), "peer-1", err)
+		require.Equal(t, 0, client.failures)
+	})
+
+	t.Run("generic processing error is still charged", func(t *testing.T) {
+		u, client := newServer()
+		u.reportCatchupFailureForError(context.Background(), "peer-1", errors.NewProcessingError("something else failed"))
+		require.Equal(t, 1, client.failures)
+	})
+
+	// Corrupt by class, but a consensus rejection on catch-up (bitcoin-sv/teranode#4844), so it is
+	// charged like a consensus-invalid block instead of taking the corrupt exemption.
+	t.Run("unbound invalid-transaction verdict is charged like a consensus rejection", func(t *testing.T) {
+		u, client := newServer()
+		u.reportCatchupFailureForError(context.Background(), "peer-1",
+			errors.NewBlockCorruptError("[ValidateBlock] block contains invalid transactions",
+				errors.NewTxInvalidError("transaction in subtree is invalid")))
+
+		control, controlClient := newServer()
+		control.reportCatchupFailureForError(context.Background(), "peer-1",
+			errors.NewBlockInvalidError("[BLOCK] block violates consensus"))
+
+		require.Equal(t, 1, client.failures)
+		require.Equal(t, controlClient.failures, client.failures)
+	})
+
+	t.Run("block incomplete is still skipped", func(t *testing.T) {
+		u, client := newServer()
+		u.reportCatchupFailureForError(context.Background(), "peer-1", errors.ErrBlockIncomplete)
+		require.Equal(t, 0, client.failures)
+	})
+}
+
+// TestMarkCatchupFailureReported_TransparentToErrorCodes proves the marker does
+// not break teranode error-code matching, which the top-level catchup dispatch
+// in Server.go relies on (ErrServiceError, malicious classification, etc.).
+func TestMarkCatchupFailureReported_TransparentToErrorCodes(t *testing.T) {
+	require.Nil(t, markCatchupFailureReported(nil))
+
+	// ProcessingError → marker → ServiceError: the ServiceError code must still
+	// match through the foreign marker link (the top-level ErrServiceError
+	// branch routes on this).
+	err := errors.NewProcessingError("wrap",
+		markCatchupFailureReported(errors.NewServiceError("http 429")))
+	require.True(t, errors.Is(err, errors.ErrServiceError))
+	require.True(t, catchupFailureAlreadyReported(err))
+
+	// Malicious classification survives the marker too.
+	malicious := errors.NewProcessingError("wrap",
+		markCatchupFailureReported(errors.NewNetworkPeerMaliciousError("bad headers")))
+	require.True(t, errors.Is(malicious, errors.ErrNetworkPeerMalicious))
+
+	// An unmarked error must not read as already-reported.
+	require.False(t, catchupFailureAlreadyReported(errors.NewServiceError("http 429")))
+}
+
+// TestMarkedExternalError_SurvivesProductionWrapChain guards issue-1368 review
+// finding 3: catchupFailureAlreadyReported bails at the first non-native link, so
+// this pins that the exact production wrap chain — ErrExternal marked at the
+// source (fetchAndStoreSubtreeAndSubtreeData), then re-wrapped as ServiceError
+// (fetchSubtreeDataForBlock) and ProcessingError (orderedDelivery), both native
+// *errors.Error links — still carries the marker AND still matches ErrExternal by
+// the time it reaches releaseCatchupLock's switch and Server.go's dispatch. A
+// future refactor swapping in a foreign (non-native) wrapper anywhere in this
+// chain would silently break both and restore the primary-charging bug.
+func TestMarkedExternalError_SurvivesProductionWrapChain(t *testing.T) {
+	marked := markCatchupFailureReported(errors.NewExternalError("all peer attempts failed to fetch subtree abc"))
+	svcWrap := errors.NewServiceError("failed to fetch subtree data for block bb", marked)
+	chain := errors.NewProcessingError("worker failed for block bb", svcWrap)
+
+	require.True(t, errors.Is(chain, errors.ErrExternal), "ErrExternal classification must survive the production wrap chain")
+	require.True(t, catchupFailureAlreadyReported(chain), "the already-reported marker must survive the production wrap chain")
+}

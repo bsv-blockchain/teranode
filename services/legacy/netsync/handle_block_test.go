@@ -27,8 +27,10 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/services/legacy/testdata"
+	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
@@ -37,6 +39,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/ordishs/go-bitcoin"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -76,7 +79,7 @@ func TestSyncManager_HandleBlockDirect(t *testing.T) {
 
 	utxoStore := &nullstore.NullStore{}
 
-	validationClient := &validator.MockValidatorClient{
+	validationClient := &validator.MockValidator{
 		UtxoStore: utxoStore,
 	}
 
@@ -101,8 +104,19 @@ func TestSyncManager_HandleBlockDirect(t *testing.T) {
 	err = msgBlock.Deserialize(bytes.NewReader(blockBytes))
 	require.NoError(t, err)
 
-	err = sm.HandleBlockDirect(t.Context(), &peer.Peer{}, *blockHash, msgBlock)
+	err = sm.HandleBlockDirect(t.Context(), &peer.Peer{}, *blockHash, msgBlock, blockRequestOrigin{headerProven: true})
 	require.NoError(t, err)
+}
+
+// testBlockIdent builds the scalar blockIdent for a test block, mirroring
+// what prepareSubtrees derives before dropping the decoded block.
+func testBlockIdent(block *bsvutil.Block) blockIdent {
+	return blockIdent{
+		hash:      *block.Hash(),
+		prevBlock: block.MsgBlock().Header.PrevBlock,
+		height:    uint32(block.Height()), //nolint:gosec // test helper, heights are small
+		timestamp: block.MsgBlock().Header.Timestamp,
+	}
 }
 
 func TestSyncManager_createTxMap(t *testing.T) {
@@ -143,79 +157,11 @@ func TestSyncManager_createTxMap(t *testing.T) {
 
 			txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
 
-			err = sm.createTxMap(context.Background(), block, txMap)
+			txOrder, err := sm.createTxMap(context.Background(), block, txMap)
 			require.NoError(t, err)
 			require.Equal(t, txMap.Length(), tc.expectedTxMapLen)
-		})
-	}
-}
-
-func TestSyncManager_prepareTxsPerLevel(t *testing.T) {
-	testCases := []struct {
-		name             string
-		blockFilePath    string
-		expectedLevels   uint32
-		expectedTxMapLen int
-	}{
-		{
-			name:             "Block1",
-			blockFilePath:    "../testdata/00000000000000000ad4cd15bbeaf6cb4583c93e13e311f9774194aadea87386.bin",
-			expectedLevels:   15,
-			expectedTxMapLen: 563,
-		},
-		// {
-		// 	name:             "Block2",
-		// 	blockFilePath:    "../testdata/00000000000000000488eecd93d6f3767b1ba38668200a6a5349af2e0d4fad3f.bin",
-		// 	expectedTxMapLen: 1355,
-		// },
-		// {
-		// 	name:             "Block3",
-		// 	blockFilePath:    "../testdata/000000000000000009631dd3dd7357675d8a1f8925be5e7851c68255531ac5fb.bin",
-		// 	expectedTxMapLen: 900,
-		// },
-		// {
-		// 	name:             "Block4",
-		// 	blockFilePath:    "../testdata/0000000000000000015594853418b4093c4be4ad8b77fec88b5400feb3268fc4.bin",
-		// 	expectedTxMapLen: 484,
-		// },
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			block, err := testdata.ReadBlockFromFile(tc.blockFilePath)
-			require.NoError(t, err)
-
-			sm := &SyncManager{}
-			txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
-
-			err = sm.createTxMap(context.Background(), block, txMap)
-			require.NoError(t, err)
-			require.Equal(t, txMap.Length(), tc.expectedTxMapLen)
-
-			for _, wireTx := range block.Transactions() {
-				txHash := *wireTx.Hash()
-				// extend transaction
-				if txWrapper, found := txMap.Get(txHash); found {
-					tx := txWrapper.Tx
-
-					for _, input := range tx.Inputs {
-						prevTxHash := *input.PreviousTxIDChainHash()
-						if _, found := txMap.Get(prevTxHash); found {
-							txWrapper.SomeParentsInBlock = true
-						}
-					}
-				}
-			}
-
-			maxLevel, blockTXsPerLevel := sm.prepareTxsPerLevel(context.Background(), block, txMap)
-			assert.Equal(t, tc.expectedLevels, maxLevel)
-
-			allParents := 0
-			for i := range blockTXsPerLevel {
-				allParents += len(blockTXsPerLevel[i])
-			}
-
-			assert.Equal(t, tc.expectedTxMapLen, allParents)
+			require.Len(t, txOrder, len(block.Transactions()), "txOrder should include every tx (coinbase included)")
+			require.Equal(t, *block.Transactions()[0].Hash(), txOrder[0], "txOrder[0] should be the coinbase")
 		})
 	}
 }
@@ -253,7 +199,7 @@ func BenchmarkCreateTxMap(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		err = sm.createTxMap(context.Background(), block, txMap)
+		_, err = sm.createTxMap(context.Background(), block, txMap)
 		require.NoError(b, err)
 	}
 }
@@ -296,7 +242,102 @@ func Test_calculateTransactionFee(t *testing.T) {
 	}
 }
 
-func Benchmark_createSubtree(b *testing.B) {
+// TestSyncManager_createSubtrees_MultiSubtreeDistribution exercises the
+// multi-subtree fill path: a 6-tx block (1 coinbase + 5 regular) partitioned
+// per the [4, 2] shape lands as subtree 0 = coinbase placeholder + 3 regular
+// (Length 4, complete) and subtree 1 = 2 regular (Length 2, complete).
+func TestSyncManager_createSubtrees_MultiSubtreeDistribution(t *testing.T) {
+	initPrometheusMetrics()
+
+	msgBlock := &wire.MsgBlock{
+		Header: wire.BlockHeader{
+			Version:   1,
+			PrevBlock: chainhash.Hash{},
+			Timestamp: time.Now(),
+			Bits:      0x1d00ffff,
+			Nonce:     0,
+		},
+	}
+
+	coinbaseMsgTx := wire.NewMsgTx(1)
+	coinbaseMsgTx.AddTxIn(&wire.TxIn{
+		PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{}, Index: 0xffffffff},
+		SignatureScript:  []byte{0x00},
+		Sequence:         0xffffffff,
+	})
+	coinbaseMsgTx.AddTxOut(&wire.TxOut{Value: 50 * 100000000, PkScript: []byte{0x76, 0xa9, 0x14}})
+	msgBlock.Transactions = append(msgBlock.Transactions, coinbaseMsgTx)
+
+	parentHash := chainhash.Hash{0x01}
+
+	for i := 0; i < 5; i++ {
+		regularMsgTx := wire.NewMsgTx(1)
+		regularMsgTx.AddTxIn(&wire.TxIn{
+			PreviousOutPoint: wire.OutPoint{Hash: parentHash, Index: uint32(i)},
+			SignatureScript:  []byte{0x00, byte(i)},
+			Sequence:         0xffffffff,
+		})
+		regularMsgTx.AddTxOut(&wire.TxOut{Value: 1000 + int64(i), PkScript: []byte{0x76, 0xa9, 0x14, byte(i)}})
+		msgBlock.Transactions = append(msgBlock.Transactions, regularMsgTx)
+	}
+
+	block := bsvutil.NewBlock(msgBlock)
+	block.SetHeight(100)
+
+	require.Equal(t, 6, len(block.Transactions()))
+
+	sm := &SyncManager{logger: ulogger.TestLogger{}}
+
+	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
+	txOrder, err := sm.createTxMap(context.Background(), block, txMap)
+	require.NoError(t, err)
+	require.Equal(t, 5, txMap.Length(), "createTxMap should skip the coinbase")
+	require.Len(t, txOrder, 6, "txOrder should include the coinbase")
+
+	for _, wrapper := range txMap.Range() {
+		for _, in := range wrapper.Tx.Inputs {
+			in.PreviousTxSatoshis = 5_000
+			in.PreviousTxScript = &bscript.Script{0x76, 0xa9, 0x14}
+		}
+	}
+
+	subtreeSize, numSubtrees, finalLeafCount, err := partitionLegacyBlock(len(block.Transactions()), 4)
+	require.NoError(t, err)
+	require.Equal(t, 4, subtreeSize)
+	require.Equal(t, 2, numSubtrees)
+	require.Equal(t, 2, finalLeafCount)
+
+	subtreeSlices := make([]*subtreepkg.Subtree, numSubtrees)
+	subtreeDatas := make([]*subtreepkg.Data, numSubtrees)
+	subtreeMetas := make([]*subtreepkg.Meta, numSubtrees)
+
+	for i := 0; i < numSubtrees; i++ {
+		capacity := subtreeSize
+		if i == numSubtrees-1 && finalLeafCount < subtreeSize {
+			capacity = finalLeafCount
+		}
+
+		st, terr := subtreepkg.NewIncompleteTreeByLeafCount(capacity)
+		require.NoError(t, terr)
+
+		if i == 0 {
+			require.NoError(t, st.AddCoinbaseNode())
+		}
+
+		subtreeSlices[i] = st
+		subtreeDatas[i] = subtreepkg.NewSubtreeData(st)
+		subtreeMetas[i] = subtreepkg.NewSubtreeMeta(st)
+	}
+
+	require.NoError(t, sm.createSubtrees(context.Background(), testBlockIdent(block), txOrder, txMap, subtreeSlices, subtreeDatas, subtreeMetas, false))
+
+	require.Equal(t, 4, subtreeSlices[0].Length(), "subtree 0 should hold coinbase + 3 regular txs")
+	require.True(t, subtreeSlices[0].IsComplete())
+	require.Equal(t, 2, subtreeSlices[1].Length(), "subtree 1 should hold 2 regular txs")
+	require.True(t, subtreeSlices[1].IsComplete())
+}
+
+func Benchmark_createSubtrees(b *testing.B) {
 	block, err := testdata.ReadBlockFromFile("../testdata/00000000000000000488eecd93d6f3767b1ba38668200a6a5349af2e0d4fad3f.bin")
 	require.NoError(b, err)
 
@@ -304,7 +345,7 @@ func Benchmark_createSubtree(b *testing.B) {
 
 	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
 
-	err = sm.createTxMap(b.Context(), block, txMap)
+	txOrder, err := sm.createTxMap(b.Context(), block, txMap)
 	require.NoError(b, err)
 
 	b.ResetTimer()
@@ -316,47 +357,80 @@ func Benchmark_createSubtree(b *testing.B) {
 		subtreeData := subtreepkg.NewSubtreeData(subtree)
 		subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 
-		_ = sm.createSubtree(b.Context(), block, txMap, subtree, subtreeData, subtreeMeta)
+		_ = sm.createSubtrees(b.Context(), testBlockIdent(block), txOrder, txMap,
+			[]*subtreepkg.Subtree{subtree},
+			[]*subtreepkg.Data{subtreeData},
+			[]*subtreepkg.Meta{subtreeMeta},
+			false,
+		)
 	}
 }
 
 // Test extendTransactions to increase coverage
 func TestSyncManager_extendTransactions(t *testing.T) {
-	t.Skip("Skipping test due to nil pointer issue")
+	initPrometheusMetrics()
+
 	block, err := testdata.ReadBlockFromFile("../testdata/000000000000000009631dd3dd7357675d8a1f8925be5e7851c68255531ac5fb.bin")
 	require.NoError(t, err)
 
 	sm := &SyncManager{
-		settings: test.CreateBaseTestSettings(t),
-		logger:   ulogger.TestLogger{},
+		settings:  test.CreateBaseTestSettings(t),
+		logger:    ulogger.TestLogger{},
+		utxoStore: &nullstore.NullStore{},
 	}
 
 	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](len(block.Transactions()))
-	err = sm.createTxMap(context.Background(), block, txMap)
+	txOrder, err := sm.createTxMap(context.Background(), block, txMap)
 	require.NoError(t, err)
 
-	// Test extending transactions
-	err = sm.extendTransactions(context.Background(), block, txMap)
-	assert.NoError(t, err)
+	// Test extending transactions: with a real block, non-coinbase txs whose
+	// inputs reference same-block parents get extended via phase 1 (txMap
+	// lookup); the rest fall through to phase 2's BatchPreviousOutputsDecorate.
+	err = sm.extendTransactions(context.Background(), testBlockIdent(block), txOrder, txMap, false)
+	require.NoError(t, err)
+
+	// Assert on SomeParentsInBlock rather than on PreviousTxScript: it is set
+	// only by phase 1 (extendFromTxMap) when a parent is found in the same
+	// block via txMap, and phase 2 never touches it. PreviousTxScript is not a
+	// valid signal here because NullStore.PreviousOutputsDecorate (invoked by
+	// phase 2's BatchPreviousOutputsDecorate) unconditionally overwrites it on
+	// every input regardless of what phase 1 did, so checking it would pass
+	// even if phase 1 were completely broken.
+	sawInBlockParent := false
+
+	for _, txHash := range txOrder[1:] {
+		wrapper, found := txMap.Get(txHash)
+		require.True(t, found)
+
+		if wrapper.SomeParentsInBlock {
+			sawInBlockParent = true
+		}
+	}
+
+	assert.True(t, sawInBlockParent, "at least one transaction should have had an in-block parent resolved via phase 1 (extendFromTxMap)")
 }
 
 // Test createUtxos to increase coverage
 func TestSyncManager_createUtxos(t *testing.T) {
-	t.Skip("Skipping test due to nil pointer issue")
 	sm := &SyncManager{
-		settings: test.CreateBaseTestSettings(t),
-		logger:   ulogger.TestLogger{},
+		settings:  test.CreateBaseTestSettings(t),
+		logger:    ulogger.TestLogger{},
+		utxoStore: &nullstore.NullStore{},
 	}
 
-	// Create a simple coinbase transaction
+	// Create a simple coinbase transaction. IsCoinbase() (called by
+	// util.GetFees via NullStore.Create) requires a zeroed PreviousTxID, so it
+	// must be set explicitly rather than left as the input's nil default.
+	coinbaseInput := &bt.Input{
+		PreviousTxSatoshis: 0,
+		PreviousTxOutIndex: 0xffffffff,
+		SequenceNumber:     0xffffffff,
+	}
+	require.NoError(t, coinbaseInput.PreviousTxIDAdd(&chainhash.Hash{}))
+
 	coinbaseTx := &bt.Tx{
 		Version: 1,
-		Inputs: []*bt.Input{
-			{
-				PreviousTxSatoshis: 0,
-				PreviousTxOutIndex: 0xffffffff,
-			},
-		},
+		Inputs:  []*bt.Input{coinbaseInput},
 		Outputs: []*bt.Output{
 			{
 				Satoshis:      50 * 100000000,
@@ -382,21 +456,21 @@ func TestSyncManager_createUtxos(t *testing.T) {
 	block.SetHeight(100)
 
 	// Test createUtxos
-	utxos := sm.createUtxos(context.Background(), txMap, block, 0)
-	assert.NotNil(t, utxos)
+	err := sm.createUtxos(context.Background(), txMap, testBlockIdent(block), 0, false)
+	assert.NoError(t, err)
 }
 
 // Test validateTransactions to increase coverage
 func TestSyncManager_validateTransactions(t *testing.T) {
-	t.Skip("Skipping test due to nil pointer issue")
 	initPrometheusMetrics()
 
-	validationClient := &validator.MockValidatorClient{}
+	validationClient := &validator.MockValidator{}
 
 	sm := &SyncManager{
 		settings:         test.CreateBaseTestSettings(t),
 		logger:           ulogger.TestLogger{},
 		validationClient: validationClient,
+		chainParams:      &chaincfg.RegressionNetParams,
 	}
 
 	// Create transaction levels map
@@ -412,26 +486,33 @@ func TestSyncManager_validateTransactions(t *testing.T) {
 	}
 	txsPerLevel[0] = []*bt.Tx{tx}
 
-	// Create a block
+	// Create a block. Timestamp must be non-zero: candidateFinalityTimesForBlock
+	// converts it to a uint32 Unix time, which fails closed on the zero-value
+	// time.Time's large-negative Unix seconds.
 	msgBlock := &wire.MsgBlock{
+		Header: wire.BlockHeader{
+			Timestamp: time.Now(),
+		},
 		Transactions: []*wire.MsgTx{},
 	}
 	block := bsvutil.NewBlock(msgBlock)
+	// Below chainParams.CSVHeight (576 on regtest) so candidateFinalityTimesForBlock
+	// takes the pre-CSV branch and doesn't need a blockchainClient to resolve MTP.
+	block.SetHeight(100)
 
 	// Test validateTransactions - it should handle validation gracefully even without mocks
-	err := sm.validateTransactions(context.Background(), 1, txsPerLevel, block)
-	// We expect this to succeed since MockValidatorClient has default behavior
+	err := sm.validateTransactions(context.Background(), 1, txsPerLevel, testBlockIdent(block))
+	// We expect this to succeed since MockValidator has default behavior
 	assert.NoError(t, err)
 }
 
 // Test prepareSubtrees with simple block
 func TestSyncManager_prepareSubtrees(t *testing.T) {
-	t.Skip("Skipping test due to nil pointer issue")
 	initPrometheusMetrics()
 
-	// Create a simple block with one transaction
-	msgTx := wire.NewMsgTx(1)
-	msgTx.AddTxIn(&wire.TxIn{
+	// Coinbase transaction (index 0).
+	coinbaseMsgTx := wire.NewMsgTx(1)
+	coinbaseMsgTx.AddTxIn(&wire.TxIn{
 		PreviousOutPoint: wire.OutPoint{
 			Hash:  chainhash.Hash{},
 			Index: 0xffffffff,
@@ -439,8 +520,23 @@ func TestSyncManager_prepareSubtrees(t *testing.T) {
 		SignatureScript: []byte{0x00},
 		Sequence:        0xffffffff,
 	})
-	msgTx.AddTxOut(&wire.TxOut{
+	coinbaseMsgTx.AddTxOut(&wire.TxOut{
 		Value:    50 * 100000000,
+		PkScript: []byte{0x76, 0xa9, 0x14},
+	})
+
+	// A second, regular transaction so the block has more than one tx: a
+	// single-tx block exits prepareSubtrees early (txCount <= 1) without
+	// touching chainParams/quickValidationAllowed/subtreeValidation at all,
+	// which is what hid the nil-pointer bugs this test exists to catch.
+	regularMsgTx := wire.NewMsgTx(1)
+	regularMsgTx.AddTxIn(&wire.TxIn{
+		PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{0x01}, Index: 0},
+		SignatureScript:  []byte{0x00},
+		Sequence:         0xffffffff,
+	})
+	regularMsgTx.AddTxOut(&wire.TxOut{
+		Value:    1000,
 		PkScript: []byte{0x76, 0xa9, 0x14},
 	})
 
@@ -452,71 +548,45 @@ func TestSyncManager_prepareSubtrees(t *testing.T) {
 			Bits:      0x1d00ffff,
 			Nonce:     0,
 		},
-		Transactions: []*wire.MsgTx{msgTx},
+		Transactions: []*wire.MsgTx{coinbaseMsgTx, regularMsgTx},
 	}
 
+	setBodyMerkleRoot(msgBlock)
 	block := bsvutil.NewBlock(msgBlock)
 	block.SetHeight(100)
 
-	blockchainClient := &blockchain.Mock{}
-	blockchainClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(false, nil)
+	validationClient := &validator.MockValidator{}
 
-	validationClient := &validator.MockValidatorClient{}
+	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
+	subtreeValidationClient.On("CheckSubtreeFromBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-	sm := &SyncManager{
-		settings:         test.CreateBaseTestSettings(t),
-		logger:           ulogger.TestLogger{},
-		blockchainClient: blockchainClient,
-		validationClient: validationClient,
-		subtreeStore:     memory.New(),
-		ctx:              context.Background(),
-	}
-
-	// For single transaction blocks, prepareSubtrees returns empty
-	subtrees, blockID, err := sm.prepareSubtrees(context.Background(), block)
-	assert.NoError(t, err)
-	assert.NotNil(t, subtrees)
-	assert.Equal(t, uint32(0), blockID) // single-tx block exits early, IsFSMCurrentState=false → blockID stays 0
-
-	blockchainClient.AssertExpectations(t)
-}
-
-// Test ExtendTransaction
-func TestSyncManager_ExtendTransaction(t *testing.T) {
-	t.Skip("Skipping test due to nil pointer issue")
 	sm := &SyncManager{
 		settings: test.CreateBaseTestSettings(t),
 		logger:   ulogger.TestLogger{},
+		// Regtest has no checkpoints, so quickValidationAllowed is false and
+		// prepareSubtrees is forced down the non-quick path, which is what
+		// exercises checkSubtreeFromBlock / sm.subtreeValidation below.
+		chainParams:       &chaincfg.RegressionNetParams,
+		validationClient:  validationClient,
+		utxoStore:         &nullstore.NullStore{},
+		subtreeStore:      memory.New(),
+		subtreeValidation: subtreeValidationClient,
+		ctx:               context.Background(),
 	}
 
-	// Create a transaction with inputs
-	tx := &bt.Tx{
-		Version: 1,
-		Inputs: []*bt.Input{
-			{
-				PreviousTxSatoshis: 0,
-				PreviousTxOutIndex: 0,
-			},
-		},
-		Outputs: []*bt.Output{
-			{
-				Satoshis:      100,
-				LockingScript: &bscript.Script{},
-			},
-		},
-	}
+	subtrees, subtreeSlices, blockID, err := sm.prepareSubtrees(context.Background(), block, headerProven, bodyCommitment(t, block))
+	require.NoError(t, err)
+	assert.Len(t, subtrees, 1, "2 txs fit in a single subtree")
+	assert.Equal(t, uint32(0), blockID, "non-quick-validation path never assigns a block ID")
+	// legacyUnified is off by default, so the in-memory slices aren't returned.
+	assert.Nil(t, subtreeSlices)
 
-	// Create a transaction map
-	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](1)
-
-	// Test ExtendTransaction
-	err := sm.ExtendTransaction(context.Background(), tx, txMap)
-	assert.NoError(t, err)
+	subtreeValidationClient.AssertExpectations(t)
 }
 
 // buildOOBFixture constructs a parent (2 outputs) and a child whose only input
-// references PreviousTxOutIndex == 5, plus a txMap containing both. Shared by
-// the ExtendTransaction and extendFromTxMap regression tests for issue #4564.
+// references PreviousTxOutIndex == 5, plus a txMap containing both. Used by the
+// extendFromTxMap OOB regression test for issue #4564.
 func buildOOBFixture(t *testing.T) (*chainhash.Hash, *bt.Tx, *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper]) {
 	t.Helper()
 
@@ -546,31 +616,14 @@ func buildOOBFixture(t *testing.T) (*chainhash.Hash, *bt.Tx, *txmap.SyncedMap[ch
 	}
 	require.NoError(t, child.Inputs[0].PreviousTxIDAdd(parentHash))
 
-	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](2)
+	// No size limit: callers (e.g. the _NilParentTx test) re-Set an existing
+	// key, and txmap.SyncedMap evicts a random entry on update once len == limit,
+	// which can drop the child and turn the test into a flake.
+	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper]()
 	txMap.Set(*parentHash, &TxMapWrapper{Tx: parent})
 	txMap.Set(*child.TxIDChainHash(), &TxMapWrapper{Tx: child})
 
 	return parentHash, child, txMap
-}
-
-// TestSyncManager_ExtendTransaction_OOB verifies that ExtendTransaction returns
-// a TxInvalidError (rather than panicking) when a child input references a
-// parent output index that exceeds the parent's number of outputs. Regression
-// test for issue #4564.
-func TestSyncManager_ExtendTransaction_OOB(t *testing.T) {
-	initPrometheusMetrics()
-
-	sm := &SyncManager{
-		settings: test.CreateBaseTestSettings(t),
-		logger:   ulogger.TestLogger{},
-	}
-
-	parentHash, child, txMap := buildOOBFixture(t)
-
-	err := sm.ExtendTransaction(context.Background(), child, txMap)
-	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrTxInvalid), "expected TxInvalid error, got %v", err)
-	require.Contains(t, err.Error(), parentHash.String())
 }
 
 // TestSyncManager_extendFromTxMap_OOB verifies the same OOB guard on the
@@ -589,6 +642,113 @@ func TestSyncManager_extendFromTxMap_OOB(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrTxInvalid), "expected TxInvalid error, got %v", err)
 	require.Contains(t, err.Error(), parentHash.String())
+}
+
+// buildInRangeFixture constructs a parent (2 outputs) and a child whose only
+// input references PreviousTxOutIndex == 0 (in range), plus a txMap containing
+// both. Used by the nil-deref regression tests so the bounds-check passes and
+// the nil-check is the one that must fire.
+func buildInRangeFixture(t *testing.T) (*chainhash.Hash, *bt.Tx, *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper]) {
+	t.Helper()
+
+	parentScript := &bscript.Script{}
+	parent := &bt.Tx{
+		Version: 1,
+		Inputs:  []*bt.Input{},
+		Outputs: []*bt.Output{
+			{Satoshis: 100, LockingScript: parentScript},
+			{Satoshis: 200, LockingScript: parentScript},
+		},
+	}
+	parent.SetExtended(true)
+	parentHash := parent.TxIDChainHash()
+
+	child := &bt.Tx{
+		Version: 1,
+		Inputs: []*bt.Input{
+			{
+				UnlockingScript:    &bscript.Script{},
+				PreviousTxOutIndex: 0,
+			},
+		},
+		Outputs: []*bt.Output{
+			{Satoshis: 50, LockingScript: &bscript.Script{}},
+		},
+	}
+	require.NoError(t, child.Inputs[0].PreviousTxIDAdd(parentHash))
+
+	// No size limit: callers (e.g. the NilParentTx tests) re-Set entries on this
+	// map, and SyncedMap's limit semantics evict a *random* key when len >= limit,
+	// which would non-deterministically drop the child and turn the test flaky.
+	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper]()
+	txMap.Set(*parentHash, &TxMapWrapper{Tx: parent})
+	txMap.Set(*child.TxIDChainHash(), &TxMapWrapper{Tx: child})
+
+	return parentHash, child, txMap
+}
+
+// TestSyncManager_extendFromTxMap_NilParentTx verifies that extendFromTxMap
+// returns a TxInvalidError (rather than panicking) when the parent's
+// TxMapWrapper carries a nil Tx pointer.
+func TestSyncManager_extendFromTxMap_NilParentTx(t *testing.T) {
+	initPrometheusMetrics()
+
+	sm := &SyncManager{
+		settings: test.CreateBaseTestSettings(t),
+		logger:   ulogger.TestLogger{},
+	}
+
+	parentHash, child, txMap := buildInRangeFixture(t)
+	// Replace the parent wrapper with one that has a nil Tx — the child's hash
+	// is already keyed before this mutation, so the child lookup still succeeds.
+	txMap.Set(*parentHash, &TxMapWrapper{Tx: nil})
+
+	err := sm.extendFromTxMap(context.Background(), child, txMap)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrTxInvalid), "expected TxInvalid error, got %v", err)
+	require.Contains(t, err.Error(), "missing previous transaction")
+	require.Contains(t, err.Error(), parentHash.String())
+}
+
+// TestSyncManager_extendFromTxMap_NilOutput verifies that extendFromTxMap
+// returns a TxInvalidError when the referenced parent output is nil.
+func TestSyncManager_extendFromTxMap_NilOutput(t *testing.T) {
+	initPrometheusMetrics()
+
+	sm := &SyncManager{
+		settings: test.CreateBaseTestSettings(t),
+		logger:   ulogger.TestLogger{},
+	}
+
+	parentHash, child, txMap := buildInRangeFixture(t)
+	parentWrapper, _ := txMap.Get(*parentHash)
+	parentWrapper.Tx.Outputs[0] = nil
+
+	err := sm.extendFromTxMap(context.Background(), child, txMap)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrTxInvalid), "expected TxInvalid error, got %v", err)
+	require.Contains(t, err.Error(), "nil or has nil locking script")
+}
+
+// TestSyncManager_extendFromTxMap_NilLockingScript verifies that extendFromTxMap
+// returns a TxInvalidError when the referenced parent output's locking script
+// is nil (which would otherwise panic on the deref into bscript.NewFromBytes).
+func TestSyncManager_extendFromTxMap_NilLockingScript(t *testing.T) {
+	initPrometheusMetrics()
+
+	sm := &SyncManager{
+		settings: test.CreateBaseTestSettings(t),
+		logger:   ulogger.TestLogger{},
+	}
+
+	parentHash, child, txMap := buildInRangeFixture(t)
+	parentWrapper, _ := txMap.Get(*parentHash)
+	parentWrapper.Tx.Outputs[0].LockingScript = nil
+
+	err := sm.extendFromTxMap(context.Background(), child, txMap)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrTxInvalid), "expected TxInvalid error, got %v", err)
+	require.Contains(t, err.Error(), "nil or has nil locking script")
 }
 
 // countingValidator tracks how many times Validate is called and optionally fails
@@ -751,7 +911,7 @@ func TestPreValidateTransactions_AllSucceed(t *testing.T) {
 
 	txMap := makeTxMap(t, 10)
 
-	err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 100)
+	err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 100, 0, 0, false, false)
 	require.NoError(t, err)
 	assert.Equal(t, int64(10), cv.callCount.Load(), "all 10 transactions should be validated")
 }
@@ -778,7 +938,7 @@ func TestPreValidateTransactions_PartialFailure_RetriesSucceed(t *testing.T) {
 
 	txMap := makeTxMap(t, 10)
 
-	err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 100)
+	err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 100, 0, 0, false, false)
 	require.NoError(t, err, "should succeed after retrying the 3 failed transactions")
 
 	// 10 in first pass + 3 retried = 13 total calls
@@ -806,7 +966,7 @@ func TestPreValidateTransactions_AllFail_NoProgress_GivesUp(t *testing.T) {
 
 	txMap := makeTxMap(t, 5)
 
-	err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 100)
+	err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 100, 0, 0, false, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no progress")
 
@@ -835,7 +995,7 @@ func TestPreValidateTransactions_NonRetryableError_FailsImmediately(t *testing.T
 
 	txMap := makeTxMap(t, 5)
 
-	err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 100)
+	err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 100, 0, 0, false, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "non-retryable")
 
@@ -863,7 +1023,7 @@ func TestPreValidateTransactions_ParentContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	err := sm.PreValidateTransactions(ctx, txMap, chainhash.Hash{}, 100)
+	err := sm.PreValidateTransactions(ctx, txMap, chainhash.Hash{}, 100, 0, 0, false, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "context cancelled")
 }
@@ -918,12 +1078,346 @@ func TestSyncManager_createUtxos_MergesBlockIDsForExistingTxs(t *testing.T) {
 	block.SetHeight(100)
 
 	const expectedBlockID uint32 = 42
-	require.NoError(t, sm.createUtxos(ctx, txMap, block, expectedBlockID))
+	require.NoError(t, sm.createUtxos(ctx, txMap, testBlockIdent(block), expectedBlockID, false))
 
 	post, err := utxoStore.Get(ctx, &txHash, fields.BlockIDs)
 	require.NoError(t, err)
 	require.Contains(t, post.BlockIDs, expectedBlockID,
 		"createUtxos must merge blockID %d into the pre-existing tx", expectedBlockID)
+}
+
+// newChunkingTestSetup builds the boilerplate shared by the createUtxos chunking
+// tests: a SyncManager wired to a MockUtxostore that returns ErrTxExists for every
+// Create call (so every tx routes through the merge path), a populated txMap and
+// hashes slice, and a block at height 100. Callers wire up SetMinedMulti
+// expectations on the returned mock to drive the scenario under test.
+func newChunkingTestSetup(t *testing.T, totalTxs, batchSize, routines int) (
+	*SyncManager,
+	*txmap.SyncedMap[chainhash.Hash, *TxMapWrapper],
+	*bsvutil.Block,
+	*utxo.MockUtxostore,
+	[]chainhash.Hash,
+) {
+	t.Helper()
+
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.MaxMinedBatchSize = batchSize
+	tSettings.UtxoStore.MaxMinedRoutines = routines
+
+	mockStore := &utxo.MockUtxostore{}
+
+	txs := make([]*bt.Tx, totalTxs)
+	hashes := make([]chainhash.Hash, totalTxs)
+	for i := 0; i < totalTxs; i++ {
+		tx := bt.NewTx()
+		tx.Version = 1
+		require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", uint64(1000+i)))
+		txs[i] = tx
+		hashes[i] = *tx.TxIDChainHash()
+	}
+
+	// Every Create returns ErrTxExists so every hash flows into existingTxHashes
+	// and the merge path executes — that's what we're exercising.
+	mockStore.On("SpendAndCreate",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return((*meta.Data)(nil), nil, errors.ErrTxExists)
+
+	sm := &SyncManager{
+		settings:  tSettings,
+		logger:    logger,
+		utxoStore: mockStore,
+	}
+
+	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](totalTxs)
+	for i, h := range hashes {
+		txMap.Set(h, &TxMapWrapper{Tx: txs[i]})
+	}
+
+	block := bsvutil.NewBlock(&wire.MsgBlock{Header: wire.BlockHeader{Version: 1}})
+	block.SetHeight(100)
+
+	return sm, txMap, block, mockStore, hashes
+}
+
+// recordChunksOnMock installs a SetMinedMulti expectation that records the hash
+// slice passed on every call into the supplied accumulator (caller owns the mutex).
+// Returns nil error for every call.
+func recordChunksOnMock(mockStore *utxo.MockUtxostore, callMu *sync.Mutex, callChunks *[][]chainhash.Hash) {
+	mockStore.On("SetMinedMulti",
+		mock.Anything, mock.Anything, mock.Anything,
+	).Run(func(args mock.Arguments) {
+		chunk := args.Get(1).([]*chainhash.Hash)
+		copied := make([]chainhash.Hash, len(chunk))
+		for i, h := range chunk {
+			copied[i] = *h
+		}
+		callMu.Lock()
+		*callChunks = append(*callChunks, copied)
+		callMu.Unlock()
+	}).Return(map[chainhash.Hash][]uint32{}, nil)
+}
+
+// assertUnionCovers asserts that the union of every recorded chunk exactly equals
+// the supplied hash set (no drops, no duplicates).
+func assertUnionCovers(t *testing.T, callChunks [][]chainhash.Hash, hashes []chainhash.Hash) {
+	t.Helper()
+	seen := make(map[chainhash.Hash]int, len(hashes))
+	for _, chunk := range callChunks {
+		for _, h := range chunk {
+			seen[h]++
+		}
+	}
+	require.Len(t, seen, len(hashes), "expected %d unique hashes across chunks, got %d", len(hashes), len(seen))
+	for _, h := range hashes {
+		require.Equalf(t, 1, seen[h], "hash %s missing or duplicated across chunks", h)
+	}
+}
+
+// TestSyncManager_createUtxos_ChunksExistingTxs verifies that when many pre-existing
+// transactions need their blockID merged, createUtxos splits the merge across multiple
+// SetMinedMulti calls bounded by MaxMinedBatchSize, instead of submitting a single
+// monolithic slice that exhausts the aerospike client connection pool. See issue #936.
+func TestSyncManager_createUtxos_ChunksExistingTxs(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const totalTxs = 10 // 2 workers × ceil(5/4) chunks each = 4 chunks of sizes (4, 1, 4, 1)
+	sm, txMap, block, mockStore, hashes := newChunkingTestSetup(t, totalTxs, 4, 2)
+
+	var (
+		callMu     sync.Mutex
+		callChunks [][]chainhash.Hash
+	)
+	recordChunksOnMock(mockStore, &callMu, &callChunks)
+
+	require.NoError(t, sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false))
+
+	// Assert 1: at least 2 calls (proves chunking happens).
+	require.GreaterOrEqual(t, len(callChunks), 2,
+		"expected multiple SetMinedMulti calls; got %d (monolithic call regression)", len(callChunks))
+
+	// Assert 2: every chunk respects MaxMinedBatchSize.
+	for i, chunk := range callChunks {
+		require.LessOrEqual(t, len(chunk), sm.settings.UtxoStore.MaxMinedBatchSize,
+			"chunk %d size %d exceeds MaxMinedBatchSize=%d", i, len(chunk), sm.settings.UtxoStore.MaxMinedBatchSize)
+	}
+
+	// Assert 3: union of all chunks equals the input set (no duplicates, no drops).
+	assertUnionCovers(t, callChunks, hashes)
+}
+
+// TestSyncManager_createUtxos_ChunkErrorReturnsWrappedProcessingError verifies that
+// a failing chunked SetMinedMulti causes createUtxos to return a wrapped
+// ProcessingError whose message carries the count of pre-existing txs that the
+// merge attempted to mark. Short-circuit semantics are covered separately by
+// TestSyncManager_createUtxos_ChunkFailureCancelsSiblings.
+func TestSyncManager_createUtxos_ChunkErrorReturnsWrappedProcessingError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const totalTxs = 20
+	sm, txMap, block, mockStore, _ := newChunkingTestSetup(t, totalTxs, 4, 2)
+
+	// Every SetMinedMulti call fails. We only care that the error round-trips
+	// through createUtxos wrapped as a ProcessingError carrying the tx count.
+	mockStore.On("SetMinedMulti",
+		mock.Anything, mock.Anything, mock.Anything,
+	).Return(
+		map[chainhash.Hash][]uint32{},
+		errors.NewStorageError("synthetic chunk failure"),
+	)
+
+	err := sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to merge blockID into 20 pre-existing txs",
+		"expected wrapped ProcessingError, got: %v", err)
+}
+
+// TestSyncManager_createUtxos_ChunkFailureCancelsSiblings is a deterministic
+// proof that the loop-top short-circuit in createUtxos —
+//
+//	if mergeCtx.Err() != nil { return mergeCtx.Err() }
+//
+// — stops a worker from issuing further SetMinedMulti calls once the merge
+// context is cancelled.
+//
+// Why single-worker (the original 2-worker version flaked under CI load):
+// errgroup cancels mergeCtx only AFTER the failing worker's func returns, so a
+// sibling worker keeps passing its loop-top check and draining iterations until
+// cancellation propagates. That window is timing-dependent and produced up to 4
+// post-trigger calls under load, breaking the old "<= 1" bound.
+//
+// Topology: totalTxs=20, batchSize=4, routines=1 → 5 chunks, one worker, 5 loop
+// iterations. The first SetMinedMulti call cancels the parent ctx (mergeCtx
+// derives from it via errgroup.WithContext) and returns success. Because the
+// single worker runs sequentially, iteration 2's loop-top mergeCtx.Err() check
+// always observes the cancellation and returns — so no call happens after the
+// trigger.
+//
+// The trigger MUST come from a successful call, not an error: a failing call
+// would stop the loop via the existing `if err != nil { return err }` regardless
+// of the short-circuit, letting the mutation survive. Cancelling from a
+// successful call makes the loop-top mergeCtx.Err() check the ONLY thing that can
+// stop iteration 2.
+//
+// Short-circuit intact: iteration 2's check returns mergeCtx.Err() before any
+// further call, so postTriggerCount == 0.
+// Short-circuit removed: iteration 2 issues a SetMinedMulti call (postTriggerCount
+// becomes 1, then that call's error stops the loop) — the count assertion fails
+// with "expected 0, got 1", pinpointing the regression.
+func TestSyncManager_createUtxos_ChunkFailureCancelsSiblings(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const totalTxs = 20 // batchSize 4, routines 1 → 5 chunks handled by one worker
+	sm, txMap, block, mockStore, _ := newChunkingTestSetup(t, totalTxs, 4, 1)
+
+	var (
+		postTriggerMu    sync.Mutex
+		postTriggerCount int
+	)
+
+	// First call cancels the parent ctx (cascades to mergeCtx) and succeeds.
+	mockStore.On("SetMinedMulti",
+		mock.Anything, mock.Anything, mock.Anything,
+	).Run(func(args mock.Arguments) {
+		cancel()
+	}).Return(map[chainhash.Hash][]uint32{}, nil).Once()
+
+	// Any further call is post-trigger and must not happen while the short-circuit
+	// is intact. It returns an error so that under the mutation the loop still exits
+	// with an error (require.Error stays satisfied) and the count assertion below —
+	// not require.Error — is what catches the regression (count 1, expected 0).
+	mockStore.On("SetMinedMulti",
+		mock.Anything, mock.Anything, mock.Anything,
+	).Run(func(args mock.Arguments) {
+		postTriggerMu.Lock()
+		postTriggerCount++
+		postTriggerMu.Unlock()
+	}).Return(map[chainhash.Hash][]uint32{}, errors.NewStorageError("SetMinedMulti must not be called after mergeCtx cancellation")).Maybe()
+
+	err := sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false)
+	require.Error(t, err, "cancelled mergeCtx should propagate an error out of createUtxos")
+
+	postTriggerMu.Lock()
+	finalCount := postTriggerCount
+	postTriggerMu.Unlock()
+
+	require.Equal(t, 0, finalCount,
+		"loop-top mergeCtx short-circuit should suppress every iteration after "+
+			"cancellation; observed %d post-trigger call(s). Removing the short-circuit "+
+			"lets at least one through.", finalCount)
+}
+
+// TestSyncManager_createUtxos_ExactBatchSize covers n == MaxMinedBatchSize.
+// With totalTxs=4 and batchSize=4: numChunks = ceil(4/4) = 1, numWorkers =
+// min(2, 1) = 1 — one worker performs one SetMinedMulti call of size 4.
+func TestSyncManager_createUtxos_ExactBatchSize(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const totalTxs = 4
+	sm, txMap, block, mockStore, hashes := newChunkingTestSetup(t, totalTxs, 4, 2)
+
+	var (
+		callMu     sync.Mutex
+		callChunks [][]chainhash.Hash
+	)
+	recordChunksOnMock(mockStore, &callMu, &callChunks)
+
+	require.NoError(t, sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false))
+
+	require.Len(t, callChunks, 1, "expected exactly 1 chunk for n == batchSize")
+	require.Len(t, callChunks[0], totalTxs, "single chunk must cover all txs")
+	assertUnionCovers(t, callChunks, hashes)
+}
+
+// TestSyncManager_createUtxos_OneOverBatchSize covers n == MaxMinedBatchSize + 1,
+// the off-by-one boundary. With totalTxs=5 and batchSize=4: numChunks =
+// ceil(5/4) = 2, numWorkers = min(2, 2) = 2, rangeSize = ceil(5/2) = 3 — two
+// workers each emit a single chunk, sizes sum to 5. We don't pin the exact split
+// (3,2) so the test is not brittle to range-balancing refactors.
+func TestSyncManager_createUtxos_OneOverBatchSize(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const totalTxs = 5
+	sm, txMap, block, mockStore, hashes := newChunkingTestSetup(t, totalTxs, 4, 2)
+
+	var (
+		callMu     sync.Mutex
+		callChunks [][]chainhash.Hash
+	)
+	recordChunksOnMock(mockStore, &callMu, &callChunks)
+
+	require.NoError(t, sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false))
+
+	require.Len(t, callChunks, 2, "expected 2 chunks for n == batchSize+1 with 2 workers")
+	for i, chunk := range callChunks {
+		require.LessOrEqual(t, len(chunk), sm.settings.UtxoStore.MaxMinedBatchSize,
+			"chunk %d size %d exceeds batchSize", i, len(chunk))
+	}
+	assertUnionCovers(t, callChunks, hashes)
+}
+
+// TestSyncManager_createUtxos_BatchSizeZeroClamped exercises the defensive clamp
+// at handle_block.go:749-752. A misconfigured MaxMinedBatchSize=0 must be
+// clamped to 1 — without the clamp the divide-by-zero in
+// (len + batchSize - 1) / batchSize would panic. With clamp: batchSize=1,
+// numChunks=3, numWorkers=min(2,3)=2.
+func TestSyncManager_createUtxos_BatchSizeZeroClamped(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const totalTxs = 3
+	sm, txMap, block, mockStore, hashes := newChunkingTestSetup(t, totalTxs, 0, 2)
+
+	var (
+		callMu     sync.Mutex
+		callChunks [][]chainhash.Hash
+	)
+	recordChunksOnMock(mockStore, &callMu, &callChunks)
+
+	require.NotPanics(t, func() {
+		require.NoError(t, sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false))
+	}, "batchSize=0 must be clamped to avoid divide-by-zero")
+
+	require.Len(t, callChunks, totalTxs, "with batchSize clamped to 1, expected one chunk per tx")
+	for i, chunk := range callChunks {
+		require.Len(t, chunk, 1, "chunk %d size: clamped batchSize=1 must produce chunks of size 1", i)
+	}
+	assertUnionCovers(t, callChunks, hashes)
+}
+
+// TestSyncManager_createUtxos_RoutinesZeroClamped exercises the defensive clamp
+// at handle_block.go:754-757. A misconfigured MaxMinedRoutines=0 must be clamped
+// to 1 — without the clamp, the for-loop guarded by `w < numWorkers` would never
+// execute and SetMinedMulti would never be called, silently dropping the merge.
+// With clamp: numWorkers=1, single worker emits ceil(10/4)=3 chunks.
+func TestSyncManager_createUtxos_RoutinesZeroClamped(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const totalTxs = 10
+	sm, txMap, block, mockStore, hashes := newChunkingTestSetup(t, totalTxs, 4, 0)
+
+	var (
+		callMu     sync.Mutex
+		callChunks [][]chainhash.Hash
+	)
+	recordChunksOnMock(mockStore, &callMu, &callChunks)
+
+	require.NotPanics(t, func() {
+		require.NoError(t, sm.createUtxos(ctx, txMap, testBlockIdent(block), 42, false))
+	}, "numRoutines=0 must be clamped so the merge actually runs")
+
+	require.Len(t, callChunks, 3, "with routines clamped to 1, expected 3 chunks (ceil(10/4))")
+	for i, chunk := range callChunks {
+		require.LessOrEqual(t, len(chunk), sm.settings.UtxoStore.MaxMinedBatchSize,
+			"chunk %d size %d exceeds batchSize", i, len(chunk))
+	}
+	assertUnionCovers(t, callChunks, hashes)
 }
 
 func TestSyncManager_quickValidationAllowed(t *testing.T) {
@@ -948,10 +1442,14 @@ func TestSyncManager_quickValidationAllowed(t *testing.T) {
 			want:        false,
 		},
 		{
-			name:        "mainnet height 0 is covered",
+			// Height 0 is fail-closed since the gates collapsed onto
+			// model.BelowCheckpoint: genesis carries only a coinbase and never flows
+			// through the legacy fast path, so excluding it costs nothing and keeps
+			// one boundary definition everywhere.
+			name:        "mainnet height 0 fail-closed",
 			chainParams: &chaincfg.MainNetParams,
 			height:      0,
-			want:        true,
+			want:        false,
 		},
 		{
 			name:        "mainnet height equal to highest checkpoint is covered",
@@ -970,7 +1468,63 @@ func TestSyncManager_quickValidationAllowed(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sm := &SyncManager{chainParams: tt.chainParams}
-			require.Equal(t, tt.want, sm.quickValidationAllowed(tt.height))
+			require.Equal(t, tt.want, sm.quickValidationAllowed(headerProven, tt.height))
+		})
+	}
+}
+
+// TestClassifyAndCountPrewarmError verifies that classifyAndCountPrewarmError routes
+// each validator error class to the correct prometheusLegacyNetsyncPrewarmErrors label,
+// preserving the silent-drop semantics flagged by issue #4590 while restoring observability.
+func TestClassifyAndCountPrewarmError(t *testing.T) {
+	initPrometheusMetrics()
+
+	tests := []struct {
+		name  string
+		err   error
+		label string
+	}{
+		{
+			name:  "tx_invalid",
+			err:   errors.NewTxInvalidError("script failed"),
+			label: "tx_invalid",
+		},
+		{
+			name:  "service",
+			err:   errors.NewServiceError("validator unavailable"),
+			label: "service",
+		},
+		{
+			name:  "processing",
+			err:   errors.NewProcessingError("transient processing error"),
+			label: "processing",
+		},
+		{
+			name:  "policy_conflicting",
+			err:   errors.NewTxConflictingError("double-spend in mempool"),
+			label: "policy",
+		},
+		{
+			name:  "policy_already_exists",
+			err:   errors.NewTxExistsError("already in mempool"),
+			label: "policy",
+		},
+		{
+			name:  "other",
+			err:   errors.NewStorageError("disk full"),
+			label: "other",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			counter := prometheusLegacyNetsyncPrewarmErrors.WithLabelValues(tt.label)
+			before := testutil.ToFloat64(counter)
+
+			classifyAndCountPrewarmError(ulogger.TestLogger{}, tt.err)
+
+			after := testutil.ToFloat64(counter)
+			require.Equal(t, before+1, after, "counter for label %q must increment by 1", tt.label)
 		})
 	}
 }

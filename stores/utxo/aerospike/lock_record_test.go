@@ -47,16 +47,22 @@ func TestCalculateLockTTL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// We need to access the unexported function, so we'll test via the store
+			// We need to access the unexported function, so we'll test via the store.
+			// The batch size here is arbitrary for this assertion: the test only verifies
+			// the ceiling-division records = ⌈outputs/batchSize⌉. Using 20 instead of the
+			// production 20000 exercises the identical code path while building a few
+			// thousand outputs instead of up to 4,000,000 (#1051: the 200-record row built
+			// a 4M-output tx, ~0.8-1.6G under -race, purely to divide back to 200).
+			const batchSize = 20
 			s := teranodeaerospike.Store{}
-			s.SetUtxoBatchSize(20000)
+			s.SetUtxoBatchSize(batchSize)
 
 			// Create a transaction with the specified number of outputs
-			tx := createTransactionWithOutputs(tt.numRecords * 20000)
+			tx := createTransactionWithOutputs(tt.numRecords * batchSize)
 
 			// The TTL calculation is internal, but we can verify the behavior
 			// by checking that the lock record is created with appropriate TTL
-			assert.Equal(t, tt.numRecords, (len(tx.Outputs)+19999)/20000)
+			assert.Equal(t, tt.numRecords, (len(tx.Outputs)+batchSize-1)/batchSize)
 		})
 	}
 }

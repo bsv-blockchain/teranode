@@ -46,8 +46,37 @@ var bufioReaderPool = sync.Pool{
 
 const GenesisBlockID = 0
 
-// LastV1Block https://github.com/bitcoin/bips/blob/master/bip-0034.mediawiki
-const LastV1Block = 227_835
+// heightAtOrAfterActivation reports whether block height h is at or after an activation height
+// taken from chaincfg. chaincfg activation heights are int32 and non-negative for BIP34/65/66; a
+// negative value (should not occur) is treated as "never active" so it can never wrongly reject.
+func heightAtOrAfterActivation(h uint32, activation int32) bool {
+	if activation < 0 {
+		return false
+	}
+
+	return h >= uint32(activation)
+}
+
+// CheckBlockVersion enforces the BIP34/66/65 mandatory version floors, mirroring bitcoin-sv
+// ContextualCheckBlockHeader (validation.cpp:5918-5924). version is compared as a SIGNED int32
+// exactly as svnode compares CBlockHeader::nVersion, so a high-bit version (e.g. 0xffffffff -> -1)
+// is treated as below the floor. Genesis (height 0) is exempt, matching svnode which never runs
+// this check on the genesis block. Returns a BlockInvalidError carrying the bad-version token.
+func CheckBlockVersion(version uint32, height uint32, params *chaincfg.Params) error {
+	if height == 0 {
+		return nil
+	}
+
+	v := int32(version)
+	if (v < 2 && heightAtOrAfterActivation(height, params.BIP0034Height)) ||
+		(v < 3 && heightAtOrAfterActivation(height, params.BIP0066Height)) ||
+		(v < 4 && heightAtOrAfterActivation(height, params.BIP0065Height)) {
+		return errors.NewBlockInvalidError(
+			"bad-version(0x%08x) rejected nVersion=0x%08x block", version, version)
+	}
+
+	return nil
+}
 
 var (
 	emptyTX = &bt.Tx{}
@@ -78,8 +107,66 @@ type Block struct {
 	hash            atomic.Pointer[chainhash.Hash]
 	subtreeLength   uint64
 	subtreeSlicesMu sync.RWMutex
-	txMap           txmap.TxMap
+	txMap           blockTxMap
+	// txMapCount is the entry count txMap was sized from. Never the
+	// peer-supplied TransactionCount: the separate pass derives it from the
+	// loaded body by txMapEntryCount, and the in-memory load path from
+	// len(Subtrees) x subtree 0 once the subtree list is bound to the header
+	// (getAndValidateSubtreesWithDedup).
+	txMapCount uint64
+	// nodeIndexPins counts the live in-memory node indexes over this block's
+	// node arrays (pinNodeIndex). While it is above zero a release of the
+	// subtrees neither pools a node array nor unmaps one: the index reads its
+	// hashes from them. The subtrees released meanwhile wait in deferredCloses,
+	// guarded by subtreeSlicesMu, until releaseTxMap lets the index go.
+	nodeIndexPins  atomic.Int32
+	deferredCloses []*subtreepkg.Subtree
+	// firstRootMemo caches subtree 0's coinbase-substituted root from the early
+	// binding check, so CheckMerkleRoot does not recompute it for the same
+	// subtree (a full merkle store over up to 1M leaves).
+	firstRootMemo   atomic.Pointer[firstRootMemo]
 	medianTimestamp uint32
+	// nodeAllocator, if non-nil, supplies pooled backing slices for the
+	// per-subtree Node arrays during GetAndValidateSubtrees. Only the
+	// blockvalidation service sets this (via SetNodeAllocator); model-internal
+	// callers leave it nil and behaviour matches legacy make() allocation.
+	nodeAllocator subtreepkg.NodeAllocator
+	// checkpointConfirmedAncestor records whether this block is provably on the main
+	// chain that has already reached and matched the highest hardcoded checkpoint. It is
+	// the caller-supplied ancestry predicate that, together with store fast-path support,
+	// gates the below-checkpoint coinbase no-inflation skip in checkBlockRewardAndFees.
+	// Only the blockvalidation service sets it (via SetCheckpointConfirmedAncestor); it
+	// defaults false so any caller that does not set it gets full no-inflation enforcement
+	// (fail-safe).
+	checkpointConfirmedAncestor bool
+}
+
+// SetNodeAllocator installs a caller-supplied allocator that
+// GetAndValidateSubtrees will pass to subtree.DeserializeFromReaderWithAllocator
+// for each fetched subtree. The blockvalidation service uses this to pool the
+// large per-subtree []Node arrays across blocks. Passing nil restores default
+// (make-backed) allocation. Safe to call before any goroutine reads the block.
+func (b *Block) SetNodeAllocator(alloc subtreepkg.NodeAllocator) {
+	b.subtreeSlicesMu.Lock()
+	b.nodeAllocator = alloc
+	b.subtreeSlicesMu.Unlock()
+}
+
+// NodeAllocator returns the currently-installed NodeAllocator (or nil).
+func (b *Block) NodeAllocator() subtreepkg.NodeAllocator {
+	b.subtreeSlicesMu.RLock()
+	defer b.subtreeSlicesMu.RUnlock()
+	return b.nodeAllocator
+}
+
+// SetCheckpointConfirmedAncestor records whether this block is provably part of the
+// main chain that has already reached and matched the highest hardcoded checkpoint.
+// Only the blockvalidation service sets this (from BlockValidation.checkpointConfirmed-
+// Ancestor); it is the caller-supplied ancestry predicate that gates the below-checkpoint
+// coinbase no-inflation skip in checkBlockRewardAndFees. Leaving it unset (false) forces
+// full no-inflation enforcement. Safe to call before any goroutine reads the block.
+func (b *Block) SetCheckpointConfirmedAncestor(v bool) {
+	b.checkpointConfirmedAncestor = v
 }
 
 func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, transactionCount uint64, sizeInBytes uint64, blockHeight uint32, id uint32) (*Block, error) {
@@ -95,7 +182,13 @@ func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, 
 	}, nil
 }
 
-// NewBlockFromMsgBlock creates a new model.Block from a wire.MsgBlock
+// NewBlockFromMsgBlock creates a new model.Block from a wire.MsgBlock.
+//
+// All non-coinbase transactions are packed into a single subtree sized to the
+// transaction count. This is intended for the genesis block and the small
+// offline/test blocks that are this constructor's only callers; it is NOT
+// subtree-size-limit aware and must not be used to assemble real, full-sized
+// blocks (which split transactions across multiple bounded subtrees).
 func NewBlockFromMsgBlock(msgBlock *wire.MsgBlock, optionalSettings *settings.Settings) (*Block, error) {
 	if msgBlock == nil {
 		return nil, errors.NewInvalidArgumentError("msgBlock is nil")
@@ -159,15 +252,59 @@ func NewBlockFromMsgBlock(msgBlock *wire.MsgBlock, optionalSettings *settings.Se
 	if err = subtree.AddCoinbaseNode(); err != nil {
 		return nil, errors.NewSubtreeError("failed to add coinbase placeholder", err)
 	}
-	// TODO: support more than coinbase tx in the subtree
-	// if txCount > 1 {
-	// 	// loop through the transactions ignoring the first coinbase tx and add them to the subtrees list
 
-	// 	// subtrees = append(subtrees, subtree.RootHash())
-	// }
+	// Add every non-coinbase transaction to the subtree so the resulting block
+	// exposes its full transaction set, not just the coinbase. Without this,
+	// block.Valid() and the block-validation service skip all per-transaction
+	// checks for a block built from a wire.MsgBlock, because they gate those
+	// checks on the block carrying at least one subtree root.
+	//
+	// Transaction input values are not available from a raw (non-extended) block,
+	// so the per-node fee is recorded as 0 here. That is enough to place the
+	// transaction in the subtree and to validate consensus rules that do not depend
+	// on fees (e.g. sequence locks): the subtree-validation/store path recomputes and
+	// rewrites fee metadata when it persists and validates the subtree. Note that
+	// model.Block.Valid()'s block-reward check sums the SubtreeSlices fees directly
+	// and does not recompute them, so validating a block in memory straight from this
+	// constructor is only sound for offline blocks whose coinbase claims no fees
+	// (subsidy only). A single subtree holds the whole block, which is sufficient for
+	// the offline blocks this constructor handles.
+	for i := 1; i < len(msgBlock.Transactions); i++ {
+		// The transaction hash is the canonical double-SHA256 of the wire
+		// serialization, identical to the value the subtree/merkle path expects.
+		hash := msgBlock.Transactions[i].TxHash()
 
-	// Create and return the new Block
-	return NewBlock(header, coinbaseTx, subtrees, txCount, sizeInBytes, 0, 0)
+		txSize, sizeErr := safeconversion.IntToUint64(msgBlock.Transactions[i].SerializeSize())
+		if sizeErr != nil {
+			return nil, errors.NewProcessingError("failed to compute size for transaction %d", i, sizeErr)
+		}
+
+		if addErr := subtree.AddNode(hash, 0, txSize); addErr != nil {
+			return nil, errors.NewSubtreeError("failed to add transaction %d to subtree", i, addErr)
+		}
+	}
+
+	// Only a block that carries transactions beyond the coinbase gets a subtree
+	// root recorded on the block. A coinbase-only block (e.g. the genesis block)
+	// keeps an empty subtree list, preserving the historical behaviour of this
+	// function and its callers.
+	var subtreeSlices []*subtreepkg.Subtree
+
+	if txCount > 1 {
+		subtrees = append(subtrees, subtree.RootHash())
+		subtreeSlices = []*subtreepkg.Subtree{subtree}
+	}
+
+	// Create the new Block. NewBlock never returns an error, so the result is
+	// used directly.
+	block, _ := NewBlock(header, coinbaseTx, subtrees, txCount, sizeInBytes, 0, 0)
+
+	// Retain the in-memory subtree so in-process callers can validate the block
+	// without a subtree-store round trip. This field is not serialised, so it is
+	// dropped when the block is sent over the wire.
+	block.SubtreeSlices = subtreeSlices
+
+	return block, nil
 }
 
 func NewBlockFromBytes(blockBytes []byte) (block *Block, err error) {
@@ -257,7 +394,10 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 		subtreeHash *chainhash.Hash
 	)
 
-	block.Subtrees = make([]*chainhash.Hash, 0, block.subtreeLength)
+	// subtreeLength is an untrusted varint from the wire. Cap the speculative
+	// pre-allocation and rely on the append below: a bogus count then errors on
+	// the first missing hash instead of forcing a multi-GB allocation up front.
+	block.Subtrees = make([]*chainhash.Hash, 0, min(block.subtreeLength, 1024))
 
 	for i := uint64(0); i < block.subtreeLength; i++ {
 		_, err = io.ReadFull(buf, hashBytes[:])
@@ -377,46 +517,198 @@ type SubtreeStore interface {
 	GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error)
 }
 
-func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, txMetaStore utxo.Store, oldBlockIDsMap *txmap.SyncedMap[chainhash.Hash, []uint32],
-	currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, settings *settings.Settings, metaRegenerator SubtreeMetaRegeneratorI) (bool, error) {
-	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "Valid",
-		tracing.WithHistogram(prometheusBlockValid),
-		tracing.WithLogMessage(logger, "[Block:Valid] called for %s", b.Header.String()),
+// medianTimeBlocks is the number of blocks the median-time-past rule is evaluated over —
+// svnode's CBlockIndex::nMedianTimeSpan (src/block_index.h). It is a consensus constant, not a
+// tunable: changing it forks the chain.
+//
+// The same value is the floor on blockvalidation_previous_block_header_count, which is what
+// block validation fetches for this check. Both read it from one declaration so they cannot
+// drift, and that declaration lives in settings because settings cannot import model without an
+// import cycle.
+const medianTimeBlocks = settings.MedianTimeSpan
+
+// verifyMedianWindowLinkage checks that window is a contiguous run of headers, each linked to
+// the next by hash. window is ordered newest-first when newestFirst is true, oldest-first
+// otherwise. svnode gets this for free by walking pprev pointers; here the headers arrive as a
+// caller-supplied slice, so an unlinked run has to be detected explicitly.
+func verifyMedianWindowLinkage(window []*BlockHeader, newestFirst bool) error {
+	for i := 0; i < len(window)-1; i++ {
+		childIdx, parentIdx := i, i+1
+		if !newestFirst {
+			childIdx, parentIdx = i+1, i
+		}
+
+		child, parent := window[childIdx], window[parentIdx]
+
+		// Both headers get hashed below, and BlockHeader.Bytes clones HashPrevBlock and
+		// HashMerkleRoot without guarding either, so a header missing one panics. Report the
+		// position instead — the offending header cannot be named by hash.
+		if !hashableHeader(child) {
+			return errors.NewProcessingError("header at window position %d is missing a hash field", childIdx)
+		}
+
+		if !hashableHeader(parent) {
+			return errors.NewProcessingError("header at window position %d is missing a hash field", parentIdx)
+		}
+
+		if !child.HashPrevBlock.IsEqual(parent.Hash()) {
+			return errors.NewProcessingError("header %s does not follow %s", child.Hash().String(), parent.Hash().String())
+		}
+	}
+
+	return nil
+}
+
+// hashableHeader reports whether bh can be hashed without panicking. BlockHeader.Bytes clones
+// HashPrevBlock and HashMerkleRoot with no nil guard, so a hand-built header missing either
+// takes down the caller. Headers from NewBlockHeaderFromBytes and from the store always
+// populate both; this covers everything else.
+func hashableHeader(bh *BlockHeader) bool {
+	return bh != nil && bh.HashPrevBlock != nil && bh.HashMerkleRoot != nil
+}
+
+// MedianTimeWindow selects the median-time-past window out of a caller-supplied run of ancestor
+// headers and verifies it is fit to measure the rule over, returning the selected headers in the
+// order they were supplied.
+//
+// svnode's CBlockIndex::GetMedianTimePast walks pprev pointers from the parent, which makes three
+// properties structural. Here the headers arrive as a slice, so all three are checked, and a run
+// that fails any of them yields ErrBlockHeaderContext — the supplied context is wrong, which is
+// not evidence the block is bad, and block validation persists invalid verdicts:
+//
+//   - the run must be anchored at the block's parent (issue #1467 — the old tail-slice selection
+//     measured the oldest headers of a newest-first run, ~90 blocks below the parent);
+//   - the selected window must be a linked chain, so that a forward-ordered run starting at the
+//     parent cannot yield a median over the parent's descendants;
+//   - a window shorter than 11 must reach genesis, so that a caller simply holding fewer headers
+//     cannot shrink the window while the chain behind it is long.
+//
+// Exported so a caller can establish that a run is usable BEFORE committing to it. That matters
+// because the cheapest source of these runs, blockchainClient.GetBlockHeaders, memoizes its answer
+// per (startHash, count) key: a caller that discovers the problem only when the check fails cannot
+// fix it by asking the same question again, and needs to re-derive the run by hash instead.
+//
+// Callers must not pass an empty run: with no ancestors there is no window, which is the caller's
+// signal to skip the rule (as CheckHeaderContextual and Valid do) rather than a shape this can
+// report on.
+func (b *Block) MedianTimeWindow(currentChain []*BlockHeader) ([]*BlockHeader, error) {
+	currentChainLength := len(currentChain)
+	if currentChainLength == 0 {
+		return nil, errors.NewBlockHeaderContextError("[BLOCK] no ancestor headers supplied, cannot evaluate median time past")
+	}
+
+	pruneLength := medianTimeBlocks
+	if currentChainLength < pruneLength {
+		pruneLength = currentChainLength
+	}
+
+	// The window is anchored by parent hash, so a header with no parent hash cannot be anchored
+	// at all. Reject before the switch: the fall-through error below formats the block, and
+	// hashing a header whose HashPrevBlock is nil panics.
+	if b.Header.HashPrevBlock == nil {
+		return nil, errors.NewBlockHeaderContextError("[BLOCK] block header carries no parent hash, cannot evaluate median time past")
+	}
+
+	// The window must be the headers ADJACENT to the parent, so anchor it on whichever end of the
+	// run the parent sits at rather than assuming an order.
+	var (
+		window      []*BlockHeader
+		newestFirst bool
 	)
-	defer deferFn()
 
-	// 1. Check that the block header hash is less than the target difficulty.
-	headerValid, _, err := b.Header.HasMetTargetDifficulty()
-	if err != nil {
-		return false, errors.NewProcessingError("[BLOCK][%s] error checking target difficulty", b.String(), err)
+	switch {
+	case hashableHeader(currentChain[0]) && currentChain[0].Hash().IsEqual(b.Header.HashPrevBlock):
+		// newest-first (GetBlockHeaders order): the parent and its predecessors lead the run
+		window = currentChain[:pruneLength]
+		newestFirst = true
+	case hashableHeader(currentChain[currentChainLength-1]) && currentChain[currentChainLength-1].Hash().IsEqual(b.Header.HashPrevBlock):
+		// oldest-first: the parent and its predecessors end the run
+		window = currentChain[currentChainLength-pruneLength:]
+	default:
+		// The supplied run is not this block's parent chain: a context error on the caller's
+		// side, not proof the block is invalid — do not mark the block bad for it.
+		return nil, errors.NewBlockHeaderContextError("[BLOCK][%s] currentChain (%d headers) is not anchored at the block's parent %s, cannot evaluate median time past", b.String(), currentChainLength, b.Header.HashPrevBlock.String())
 	}
 
-	if !headerValid {
-		return false, errors.NewBlockInvalidError("[BLOCK][%s] block header hash is not less than the target difficulty", b.String())
+	for _, bh := range window {
+		if bh == nil {
+			return nil, errors.NewBlockHeaderContextError("[BLOCK][%s] nil header in the median-time-past window", b.String())
+		}
 	}
 
+	// Anchoring fixes only which END of the run is used. svnode walks pprev pointers, so its
+	// window is a linked chain by construction and is shorter than 11 only when the chain
+	// itself ends at genesis. Both guarantees have to be re-established here, because
+	// currentChain is caller-supplied: without them a forward-ordered run starting at the
+	// parent yields a median over the parent's descendants, and a short run from a caller that
+	// simply held fewer headers yields a median over fewer than 11 blocks while the chain
+	// behind it is long. Either way the median silently stops being the consensus one.
+	if err := verifyMedianWindowLinkage(window, newestFirst); err != nil {
+		return nil, errors.NewBlockHeaderContextError("[BLOCK][%s] median-time-past window is not a linked chain", b.String(), err)
+	}
+
+	if pruneLength < medianTimeBlocks {
+		oldest := window[pruneLength-1]
+		if !newestFirst {
+			oldest = window[0]
+		}
+
+		if oldest.HashPrevBlock == nil || !oldest.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
+			return nil, errors.NewBlockHeaderContextError("[BLOCK][%s] median-time-past window holds only %d headers and does not reach genesis, cannot evaluate median time past", b.String(), pruneLength)
+		}
+	}
+
+	return window, nil
+}
+
+// CheckHeaderContextual runs the header checks whose outcome depends on wall-clock time
+// (time.Now()) or on the current chain: the 2-hours-in-the-future timestamp bound, the
+// median-time-past rule, and the mandatory block-version floor (BIP34/66/65). It mirrors the
+// timestamp/version portion of bitcoin-sv's ContextualCheckBlockHeader (proof-of-work and nBits
+// are checked separately by the block-validation service, so they are not repeated here).
+//
+// It is the subset of Valid()'s header checks that must be evaluated at block-receipt time. Under
+// optimistic mining Valid() runs in a background goroutine after the block has already been added,
+// so evaluating the 2-hours-in-the-future check there uses a drifted time.Now() and can transiently
+// accept a too-far-future block; the block-validation service calls this synchronously before the
+// optimistic AddBlock to close that gap (issue #1149). Valid() also calls it so the check remains a
+// single source of truth.
+//
+// currentChain is a run of this block's ancestor headers with the block's parent at one end:
+// newest-first with the parent at index 0 — the order both block-validation header sources
+// produce, blockchainClient.GetBlockHeaders and the catchup HeaderChainCache — or oldest-first
+// with the parent last. The median-time-past window is anchored on whichever end carries the
+// parent.
+//
+// Selecting that window and establishing it is fit to measure the rule over is MedianTimeWindow's
+// job; a run it rejects fails here with ErrBlockHeaderContext rather than a block-invalid error,
+// because the supplied context being wrong is not evidence the block is bad and block validation
+// persists invalid verdicts.
+//
+// When currentChain is empty the median-time-past rule is skipped (same as Valid()). Returns nil
+// when the header passes.
+func (b *Block) CheckHeaderContextual(currentChain []*BlockHeader, settings *settings.Settings, logger ulogger.Logger) error {
 	// 2. Check that the block timestamp is not more than two hours in the future.
 	twoHoursToTheFutureTimestampUint32, err := safeconversion.Int64ToUint32(time.Now().Add(2 * time.Hour).Unix())
 	if err != nil {
-		return false, errors.NewProcessingError("[BLOCK][%s] failed to convert two hours to the future timestamp to uint32", b.String(), err)
+		return errors.NewProcessingError("[BLOCK][%s] failed to convert two hours to the future timestamp to uint32", b.String(), err)
 	}
 
 	if b.Header.Timestamp > twoHoursToTheFutureTimestampUint32 {
-		return false, errors.NewBlockInvalidError("[BLOCK][%s] block timestamp is more than two hours in the future", b.String())
+		return errors.NewBlockInvalidError("[BLOCK][%s] block timestamp is more than two hours in the future", b.String())
 	}
 
-	// 3. Check that the median time past of the block is after the median time past of the last 11 blocks.
-	// if we don't have 11 blocks then use what we have
-	pruneLength := 11
-	currentChainLength := len(currentChain)
+	// 3. Check that the block's timestamp is strictly after the median timestamp of the 11
+	// blocks ending at its parent (fewer only when the chain itself ends at genesis, as in
+	// svnode).
 	// if the current chain length is 0 skip this test
-	if currentChainLength > 0 {
-		if currentChainLength < pruneLength {
-			pruneLength = currentChainLength
+	if len(currentChain) > 0 {
+		lastTimeStamps, err := b.MedianTimeWindow(currentChain)
+		if err != nil {
+			return err
 		}
 
-		// prune the last few timestamps from the current chain
-		lastTimeStamps := currentChain[currentChainLength-pruneLength:]
+		pruneLength := len(lastTimeStamps)
 		prevTimeStamps := make([]time.Time, pruneLength)
 
 		for i, bh := range lastTimeStamps {
@@ -426,138 +718,631 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		// calculate the median timestamp
 		medianTimestamp, err := CalculateMedianTimestamp(prevTimeStamps)
 		if err != nil {
-			return false, err
+			return err
 		}
 
 		b.medianTimestamp, err = safeconversion.Int64ToUint32(medianTimestamp.Unix())
 		if err != nil {
-			return false, err
+			return err
 		}
 
 		// validate that the block's timestamp is after the median timestamp
 		if b.Header.Timestamp <= b.medianTimestamp {
 			// if we're not on a chain that allows blocks to be generated quickly then return an error
 			if !settings.ChainCfgParams.GenerateSupported {
-				return false, errors.NewBlockInvalidError("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, medianTimestamp.Unix())
+				return errors.NewBlockInvalidError("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, medianTimestamp.Unix())
 			}
 			// otherwise just warn
 			logger.Warnf("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, medianTimestamp.Unix())
 		}
 	}
 
+	// 3b. Reject outdated block versions once the matching upgrade has activated (BIP34/66/65).
+	// Parity with bitcoin-sv ContextualCheckBlockHeader; must run before body/coinbase checks to
+	// match svnode's bad-version error priority.
+	if err := CheckBlockVersion(b.Header.Version, b.Height, settings.ChainCfgParams); err != nil {
+		return errors.NewBlockInvalidError("[BLOCK][%s] outdated block version", b.String(), err)
+	}
+
+	return nil
+}
+
+// Valid runs this function's consensus checks over the block — the header's own proof of work, the
+// contextual header rules, and the coinbase, duplicate-transaction, reward and ordering checks
+// below. It ATTEMPTS the body/header binding, but only completes it when the supplied subtree data
+// permits: a block carrying subtrees with a nil subtreeStore passes through unbound, and Valid
+// discards that distinction. Callers that need to know must use ValidWithBinding.
+//
+// It is not the whole of a block's validation. The expected difficulty bits, checkpoint agreement
+// and the subtree pipeline are not performed here at all: they belong to the block-validation
+// service around this call, and block assembly calls this function without them.
+//
+// It is a thin wrapper over ValidWithBinding for the callers that do not need to know whether
+// this invocation bound the body to the header.
+func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, txMetaStore utxo.Store, oldBlockIDsMap *txmap.SyncedMap[chainhash.Hash, []uint32],
+	currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, settings *settings.Settings, metaRegenerator SubtreeMetaRegeneratorI) (bool, error) {
+	ok, _, err := b.ValidWithBinding(ctx, logger, subtreeStore, txMetaStore, oldBlockIDsMap, currentChain, currentBlockHeaderIDs, settings, metaRegenerator)
+
+	return ok, err
+}
+
+// ValidWithBinding is Valid, and additionally reports whether THIS invocation reconciled the
+// block's body to the header's merkle root — by CheckMerkleRoot over the loaded subtrees, or by
+// the coinbase-only binding. The fact is invocation-local: it describes this call and nothing
+// else, and no state is left on the block. That matters because Valid genuinely runs
+// concurrently, both from block validation's optimistic background goroutine and from block
+// assembly, so a field on Block would let one invocation observe another's result.
+//
+// A caller may treat a consensus failure as a verdict on the block HASH only when
+// bodyBoundToHeader is true; on an unbound body the failure is equally consistent with a
+// doctored delivery (bitcoin-sv/teranode#4844).
+func (b *Block) ValidWithBinding(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, txMetaStore utxo.Store, oldBlockIDsMap *txmap.SyncedMap[chainhash.Hash, []uint32],
+	currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, settings *settings.Settings, metaRegenerator SubtreeMetaRegeneratorI) (bool, bool, error) {
+	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "Valid",
+		tracing.WithHistogram(prometheusBlockValid),
+		tracing.WithDebugLogMessage(logger, "[Block:Valid] called for %s", b.Header.String()),
+	)
+	defer deferFn()
+
+	// 1. Check that the block header hash is less than the target difficulty.
+	headerValid, _, err := b.Header.HasMetTargetDifficulty()
+	if err != nil {
+		return false, false, errors.NewProcessingError("[BLOCK][%s] error checking target difficulty", b.String(), err)
+	}
+
+	if !headerValid {
+		return false, false, errors.NewBlockInvalidError("[BLOCK][%s] block header hash is not less than the target difficulty", b.String())
+	}
+
+	// 2, 3, 3b: contextual header checks (2h-future timestamp, median-time-past, block-version
+	// floor). These depend on time.Now() and the current chain, so under optimistic mining they
+	// must be evaluated at block-receipt time rather than only in the background Valid() goroutine
+	// where time.Now() has drifted past receipt. Factored into CheckHeaderContextual so the
+	// optimistic path can run them synchronously before AddBlock (issue #1149).
+	if err := b.CheckHeaderContextual(currentChain, settings, logger); err != nil {
+		return false, false, err
+	}
+
 	// 4. Check that the coinbase transaction is valid (reward checked later).
+	// A missing coinbase in an unbound received body is a body-integrity failure, not a
+	// verdict on the block hash — and it is indistinguishable from transport corruption or
+	// attacker junk. Classify it corrupt (tier-2) like the body-derived checks that follow so
+	// it is re-downloaded and the serving peer struck, never poisoned (bitcoin-sv/teranode#4692).
+	// This also keeps ErrBlockIncomplete meaning only "floater" at the block.Valid handlers, so
+	// their "floater: parent not in block" reason string stays accurate.
 	if b.CoinbaseTx == nil {
-		return false, errors.NewBlockInvalidError("[BLOCK][%s] block has no coinbase tx", b.String())
+		return false, false, errors.NewBlockCorruptError("[BLOCK][%s] block has no coinbase tx", b.String())
 	}
 
-	if !b.CoinbaseTx.IsCoinbase() {
-		return false, errors.NewBlockInvalidError("[BLOCK][%s] block coinbase tx is not a valid coinbase tx", b.String())
-	}
+	// From here the subtree/merkle checks are body-derived: on an unbound body they cannot
+	// distinguish an honest block corrupted in transit from an attacker's junk, so they classify
+	// corrupt (re-download + strike), never invalid=true. See bitcoin-sv/teranode#4692 and
+	// svnode's CorruptionOrDoS stance (bitcoin-sv/src/validation.cpp). The coinbase-shape check
+	// itself now runs below the binding, with the other coinbase checks.
+	//
+	// merkleRootChecked records that the block body was bound to the header — either by
+	// CheckMerkleRoot (step 8) over the loaded subtrees, or by the coinbase-only binding
+	// below. Block.Valid enforces this as a precondition for skipping validOrderAndBlessed
+	// below the checkpoint (step 12): the skip's safety rests entirely on that binding, so
+	// a caller that did not obtain it (nil subtreeStore with subtrees present) must never
+	// take the skip. It also selects the classification of every body-derived consensus
+	// failure below, via bindErr.
+	merkleRootChecked := false
+	dedupedDuringLoad := false
 
-	// We can only calculate the height from coinbase transactions in block versions 2 and higher
+	if len(b.Subtrees) == 0 {
+		// The coinbase-only binding. Factored into CheckCoinbaseOnlyBodyBound so the
+		// quick-validation path, which never reaches this function, enforces the identical rule at
+		// its own entry points instead of carrying a copy (bitcoin-sv/teranode#4692).
+		if err = b.CheckCoinbaseOnlyBodyBound(); err != nil {
+			return false, merkleRootChecked, err
+		}
 
-	// https://en.bitcoin.it/wiki/BIP_0034
-	// BIP-34 was created to force miners to add the block height to the coinbase tx.
-	// This BIP came into effect at block 227,835, which is after the first halving
-	// at block 210,000.  Therefore, until this happened, we do not know the actual
-	// height of the block we are checking for.
+		merkleRootChecked = true
+	} else if subtreeStore != nil {
+		// only do the subtree checks if we have a subtree store
+		// missing the subtreeStore should only happen when we are validating an internal block
+		//
+		// 6. Get and validate any missing subtrees. With the in-memory txMap the
+		// duplicate check runs on each subtree as it loads rather than as a second
+		// pass afterwards; any txMap it allocates is released by the defer below.
+		// Both paths bind the subtree list to the header's merkle root once the
+		// first and last subtrees are loaded, before fetching the rest; the dedup's
+		// only verdict is BlockCorrupt, the same class as the merkle checks.
+		defer b.releaseTxMap()
 
-	// TODO - do this another way, if necessary
+		if len(settings.Block.DiskMapDirs) == 0 {
+			dedupedDuringLoad, err = b.getAndValidateSubtreesWithDedup(ctx, logger, subtreeStore, settings.Block.GetAndValidateSubtreesConcurrency)
+		} else {
+			err = b.getAndValidateSubtreesBound(ctx, logger, subtreeStore, settings.Block.GetAndValidateSubtreesConcurrency)
+		}
 
-	// 5. Check that the coinbase transaction includes the correct block height.
-	if b.Header.Version > 1 && b.Height > LastV1Block {
-		height, err := b.ExtractCoinbaseHeight()
 		if err != nil {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] error extracting coinbase height", b.String(), err)
-		}
-
-		if height != b.Height {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] block height in coinbase tx (%d) does not match block height in block header (%d)", b.String(), height, b.Height)
-		}
-	}
-
-	// only do the subtree checks if we have a subtree store
-	// missing the subtreeStore should only happen when we are validating an internal block
-	if subtreeStore != nil && len(b.Subtrees) > 0 {
-		// 6. Get and validate any missing subtrees.
-		if err = b.GetAndValidateSubtrees(ctx, logger, subtreeStore, settings.Block.GetAndValidateSubtreesConcurrency); err != nil {
-			return false, err
+			return false, merkleRootChecked, err
 		}
 
 		// Verify that we have at least one subtree and that it has at least one node
-		if len(b.SubtreeSlices) == 0 || len(b.SubtreeSlices[0].Nodes) == 0 {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] first subtree has no nodes", b.String())
+		if len(b.SubtreeSlices) == 0 {
+			// Body-derived: the reloaded body carried no subtrees at all. This is genuine
+			// corruption of the received body, so keep it corrupt (re-download, strike the
+			// serving peer). Distinct from the emptied-first-subtree case below.
+			return false, merkleRootChecked, errors.NewBlockCorruptError("[BLOCK][%s] block has no subtrees", b.String())
+		}
+
+		// Capture the entry once. Nothing here holds subtreeSlicesMu, so a
+		// concurrent release (cache eviction, TTL cleaner) can nil it between
+		// any two reads — see the header comment on ReleaseSubtreeNodes.
+		firstSubtree := b.SubtreeSlices[0]
+		if firstSubtree == nil {
+			return false, merkleRootChecked, errors.NewProcessingError("[BLOCK][%s] first subtree was released during validation", b.String())
+		}
+
+		if len(firstSubtree.Nodes) == 0 {
+			// The first subtree was present and non-empty when CheckBlockSubtrees admitted it, but
+			// its Nodes slice was emptied afterwards by a concurrent release (the same window the
+			// nil sibling above guards). A peer-supplied zero-node subtree cannot reach here: on
+			// every peer-striking / invalid-persisting path CheckBlockSubtrees runs before
+			// block.Valid and rejects a zero-node subtree upstream (bitcoin-sv/teranode#4692). So
+			// this is a transient LOCAL condition, not peer corruption — return a processing error
+			// (retryable) like the released-first-subtree sibling, never a corrupt verdict that
+			// would strike an innocent peer.
+			return false, merkleRootChecked, errors.NewProcessingError("[BLOCK][%s] first subtree emptied (released) during validation", b.String())
 		}
 
 		// 7. Check that the first transaction in the first subtree is a coinbase placeholder (zeros)
-		if !b.SubtreeSlices[0].Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholder) {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.String(), b.SubtreeSlices[0].Nodes[0].Hash.String())
+		if !firstSubtree.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholder) {
+			return false, merkleRootChecked, errors.NewBlockCorruptError("[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.String(), firstSubtree.Nodes[0].Hash.String())
 		}
 
 		// 8. Calculate the merkle root of the list of subtrees and check it matches the MR in the block header.
 		//    making sure to replace the coinbase placeholder with the coinbase tx hash in the first subtree
 		if err = b.CheckMerkleRoot(ctx); err != nil {
-			return false, err
+			return false, merkleRootChecked, err
+		}
+
+		merkleRootChecked = true
+	}
+
+	// bindErr is the single classifier for every body-derived consensus failure from here on:
+	// a bound body IS the miner's committed body, so the failure is genuine invalidity and the
+	// hash can be condemned once; an unbound body is equally consistent with transport corruption
+	// or attacker junk, so it stays corrupt (re-download, strike the serving peer, never poison).
+	bindErr := func(format string, args ...interface{}) error {
+		return bindClassifiedError(merkleRootChecked, format, args...)
+	}
+
+	// 11. Check that there are no duplicate transactions in the block.
+	// CVE-2012-2459 guard — runs on every path so future callers passing nil subtreeStore
+	// don't silently skip dedup: during the subtree load above on the in-memory path
+	// (dedupedDuringLoad), otherwise as the separate checkDuplicateTransactions pass below,
+	// which iterates SubtreeSlices in memory and does not need the subtree store directly. Deliberately ordered BEFORE the coinbase
+	// and fee checks below (bitcoin-sv/teranode#4692): svnode runs the
+	// mutation check in CheckBlock, ahead of the coinbase checks and ahead of
+	// ContextualCheckBlock's height and fee arithmetic. A body that is both mutated and
+	// fee-wrong is then classified by the stronger of the two rules (corrupt, re-download)
+	// rather than by the weaker one.
+	//
+	// b.txMap is allocated inside checkDuplicateTransactions or, on the in-memory
+	// path, during the subtree load above (possibly mid-execution when a worker
+	// fails). The deferred releaseTxMap below lets it go on *every* exit path —
+	// including errors from checkDuplicateTransactions, the flush below, and
+	// validOrderAndBlessed. releaseTxMap is nil-safe, idempotent, and handles
+	// all three b.txMap variants (disk-backed, in-memory, generic Closer).
+	// Installing the defer earlier than it used to be is inert: a defer runs at function
+	// exit wherever it was installed.
+	defer b.releaseTxMap()
+
+	// Already done during the subtree load unless that path did not run: a
+	// disk-backed map, subtrees that were already loaded, or no subtree store.
+	if !dedupedDuringLoad {
+		err = b.checkDuplicateTransactions(ctx, logger, settings.Block.CheckDuplicateTransactionsConcurrency, settings.Block.DiskMapDirs)
+		if err != nil {
+			return false, merkleRootChecked, err
+		}
+	}
+
+	// flush disk-backed txMap so all writes are readable before phase 2
+	if flusher, ok := b.txMap.(interface{ Flush() error }); ok {
+		if flushErr := flusher.Flush(); flushErr != nil {
+			return false, merkleRootChecked, errors.NewProcessingError("[Block:Valid][%s] failed to flush txMap", b.String(), flushErr)
+		}
+	}
+
+	if diskMap, ok := b.txMap.(*DiskTxMapUint64); ok {
+		ReportTxMapStats(diskMap.Stats())
+	}
+
+	// The duplicate-check write phase (checkDuplicateTransactions, or the subtree
+	// load on the in-memory path) is complete and flushed; validOrderAndBlessed below only reads b.txMap — one Get per tx plus
+	// one per parent, fanned out across every core. Freeze it so those reads skip
+	// the per-bucket RWMutex.RLock, whose reader-counter atomic otherwise
+	// cache-line ping-pongs across cores and dominates the read phase on many-core
+	// validation nodes. The errgroup.Wait of whichever phase wrote the map
+	// (checkDuplicateTransactions or getAndValidateSubtrees) is the
+	// happens-before edge that guarantees all writes precede this Freeze.
+	// releaseTxMap drops the map afterwards (and Closes a disk-backed one). The checks between here and step 12 read only
+	// the coinbase and the subtree fee totals, never b.txMap, so the frozen map is
+	// still written-then-read in that order.
+	if b.txMap != nil {
+		b.txMap.Freeze()
+	}
+
+	// 4a. Check that the first transaction really is a coinbase.
+	// Deliberately AFTER the merkle binding (bitcoin-sv/teranode#4692), for the same reason as the
+	// scriptSig-length and BIP34 checks below: a bound body's first transaction IS the one the
+	// miner committed to, so a non-coinbase there is genuine consensus invalidity and the hash can
+	// be condemned once. The coinbase-only binding compares the header merkle root to the coinbase
+	// txid, so a body whose root correctly commits a first transaction that is not a coinbase is
+	// constructible — above the binding it returned corrupt forever and the hash could never be
+	// condemned. On an unbound body the failure still stays corrupt, so it is re-downloaded and
+	// never poisoned.
+	//
+	// Ordering constraint: this must stay ABOVE CoinbaseScriptSigLengthInBounds, which indexes
+	// Inputs[0] unconditionally and documents this check as its "at least one input" guarantee —
+	// IsConsensusCoinbase requires exactly one input, so that guarantee still holds.
+	//
+	// IsConsensusCoinbase rather than go-bt's Tx.IsCoinbase: the latter accepts a null prevout
+	// hash with EITHER a 0xFFFFFFFF index OR a 0xFFFFFFFF sequence number, so it admits a shape
+	// svnode rejects. This is where the verdict is actually decided — above the checkpoint it is
+	// the only check that runs, and on catch-up a quick-route rejection that is neither corrupt
+	// nor incomplete comes back through here — so a looser test here overrules the strict one on
+	// the quick route.
+	if !IsConsensusCoinbase(b.CoinbaseTx) {
+		return false, merkleRootChecked, bindErr("[BLOCK][%s] block coinbase tx is not a valid coinbase tx", b.String())
+	}
+
+	// bitcoin-sv's CheckTransactionCommon on the coinbase: non-empty inputs and outputs, the
+	// consensus size limit, the output money range and the pre-Genesis sigop limit
+	// (bitcoin-sv/teranode#4835). Regular transactions get these from BDK; the coinbase does not go
+	// through BDK, so they are applied here. Same position as in bitcoin-sv's CheckCoinbase (after
+	// the is-coinbase check, before bad-cb-length) and the same binding-aware classification as the
+	// checks either side of it. Factored into CoinbaseCommonRuleViolation so the quick-validation
+	// path enforces the identical rules.
+	if reason := CoinbaseCommonRuleViolation(b.CoinbaseTx, b.Height, settings.ChainCfgParams); reason != "" {
+		return false, merkleRootChecked, bindErr("[BLOCK][%s] coinbase breaks a transaction rule: %s", b.String(), reason)
+	}
+
+	// 4b. Check that the coinbase scriptSig (unlocking script) length is within consensus bounds.
+	// Deliberately AFTER the merkle binding (bitcoin-sv/teranode#4692): a bound
+	// body's coinbase IS the miner's committed coinbase, so a bad length on it is genuine consensus
+	// invalidity and condemnable once (svnode marks the block index failed); on an unbound body it
+	// stays corrupt so it is re-downloaded, never poisoned. Ordered before the BIP34 height check so
+	// a truncated scriptSig is reported as bad-cb-length rather than as a coinbase-height extraction
+	// failure. The bound itself is factored into CoinbaseScriptSigLengthInBounds below so the
+	// quick-validation path (services/blockvalidation/quick_validate.go), which never calls Valid,
+	// can enforce the identical rule instead of carrying its own copy.
+	if !CoinbaseScriptSigLengthInBounds(b.CoinbaseTx, settings.ChainCfgParams) {
+		return false, merkleRootChecked, bindErr("[BLOCK][%s] bad coinbase length", b.String())
+	}
+
+	// BIP34 (https://en.bitcoin.it/wiki/BIP_0034) forces miners to encode the block height in the
+	// coinbase tx; it activates per network at ChainCfgParams.BIP0034Height (skipped below that
+	// height). This check deliberately runs AFTER the merkle binding above (bitcoin-sv/teranode#4692): the coinbase is committed by the merkle root, so only once the body is
+	// merkle-bound is a wrong BIP34 height genuine consensus invalidity, condemnable once. An attacker
+	// cannot forge a merkle-matching body with a bad coinbase (the root commits the exact coinbase
+	// bytes); a transit-corrupted coinbase changes the coinbase txid so CheckMerkleRoot fails first
+	// (corrupt -> re-download). On an UNBOUND body (coinbase-only / no subtrees, merkleRootChecked
+	// false) the failure stays corrupt so it is re-downloaded, never poisoned — preserving the
+	// bound-before-poisoning rule. This mirrors svnode, where bad-cb-height lives in
+	// ContextualCheckBlock, after the merkle binding in CheckBlock. BIP34 depends only on the coinbase
+	// (checked above) and b.Height, so it evaluates correctly in this position. "Unbound" here means
+	// a caller that supplied subtrees with no subtree store; a body carrying no subtrees at all IS
+	// bound, by the coinbase-txid rule applied at the binding block.
+	//
+	// Persistence: a merkle-bound bad-BIP34 block is condemned invalid and IS persisted. The
+	// blockchain store's own coinbase-height guard (StoreBlock.validateCoinbaseHeight,
+	// stores/blockchain/sql/StoreBlock.go) re-derives the height and rejects exactly this condition,
+	// but it is deliberately skipped when a block is written as invalid: storing invalid=true is the
+	// act of recording that the block failed a consensus rule, so re-applying that same rule as a
+	// precondition on the write would make the failure unrecordable. The downstream storeInvalidBlock
+	// -> AddBlock therefore succeeds, and a re-announcement of the same hash is answered from the
+	// stored invalid verdict instead of a full re-validation (bitcoin-sv/teranode#4692).
+	//
+	// The explicit b.Height > 0 guard is MANDATORY: on teratestnet/tstn BIP0034Height == 0, so
+	// heightAtOrAfterActivation(0, 0) is true and a height-0 (genesis-like) block would otherwise
+	// attempt ExtractCoinbaseHeight — contradicting the genesis exemption CheckBlockVersion applies.
+	// Version < 2 blocks are already rejected above (bad-version), so no version sub-condition here.
+	if b.Height > 0 && heightAtOrAfterActivation(b.Height, settings.ChainCfgParams.BIP0034Height) {
+		height, err := b.ExtractCoinbaseHeight()
+		if err != nil {
+			// Pass the cause's TEXT, not the typed *Error, so the classifier's verdict is driven ONLY
+			// by merkleRootChecked (bitcoin-sv/teranode#4692). bindClassifiedError wraps its args into
+			// the result, and (*Error).Is walks that chain — so wrapping any error whose chain is (or
+			// ever becomes) ErrBlockInvalid would make an UNBOUND corrupt verdict also satisfy
+			// errors.Is(err, ErrBlockInvalid), re-opening the poisoning branches downstream. Today every
+			// reachable cause here is a coinbase-height-decode failure (BlockCoinbaseMissingHeight),
+			// which is not ErrBlockInvalid — the two NewBlockInvalidError branches in
+			// (*Block).ExtractCoinbaseHeight are unreachable at this call site, since the coinbase checks
+			// above guarantee a non-nil coinbase with exactly one input. Not wrapping the typed error
+			// keeps that true regardless of the cause's type; the BIP34 height-mismatch return below is
+			// the template — it wraps no typed error.
+			return false, merkleRootChecked, bindErr("[BLOCK][%s] error extracting coinbase height: %s", b.String(), err.Error())
+		}
+
+		if height != b.Height {
+			return false, merkleRootChecked, bindErr("[BLOCK][%s] block height in coinbase tx (%d) does not match block height in block header (%d)", b.String(), height, b.Height)
 		}
 	}
 
 	// 9. Check that the total fees of the block are less than or equal to the block reward.
 	// 10. Check that the coinbase transaction includes the correct block reward.
 	if b.Height > 0 {
-		err = b.checkBlockRewardAndFees(settings.ChainCfgParams)
+		// The below-checkpoint fee=0 skip is only tolerated on a store that can actually
+		// produce those blocks (the outpoint-only fast path); every other store keeps full
+		// no-inflation enforcement below the checkpoint. Computed here because model cannot
+		// see the store type directly. checkpointConfirmedAncestor is the caller-supplied
+		// ancestry predicate (SetCheckpointConfirmedAncestor); it defaults false, so a caller
+		// that does not set it gets full enforcement.
+		storeSupportsOutpointOnly := txMetaStore != nil && txMetaStore.SupportsOutpointOnlySpend()
+
+		err = b.checkBlockRewardAndFees(settings.ChainCfgParams, storeSupportsOutpointOnly, b.checkpointConfirmedAncestor, merkleRootChecked)
 		if err != nil {
-			return false, err
+			return false, merkleRootChecked, err
 		}
-	}
-
-	// 11. Check that there are no duplicate transactions in the block.
-	// CVE-2012-2459 guard — runs unconditionally so future callers passing nil subtreeStore
-	// don't silently skip dedup. checkDuplicateTransactions iterates SubtreeSlices in memory
-	// and does not need the subtree store directly.
-	err = b.checkDuplicateTransactions(ctx, logger, settings.Block.CheckDuplicateTransactionsConcurrency, settings.Block.DiskMapDirs)
-	if err != nil {
-		return false, err
-	}
-
-	// flush disk-backed txMap so all writes are readable before phase 2
-	if flusher, ok := b.txMap.(interface{ Flush() error }); ok {
-		if flushErr := flusher.Flush(); flushErr != nil {
-			return false, errors.NewProcessingError("[Block:Valid][%s] failed to flush txMap", b.String(), flushErr)
-		}
-	}
-
-	if diskMap, ok := b.txMap.(*DiskTxMapUint64); ok {
-		ReportTxMapStats(diskMap.Stats())
 	}
 
 	// 12. Check that all transactions are in the valid order and blessed
 	//     Can only be done with a valid texMetaStore passed in
+	//     Skipped for a confirmed-ancestor block below the hardcoded checkpoint on
+	//     the outpoint-only fast path: the checkpoint-anchored chain already
+	//     certifies order/blessing. The integrity floor still runs earlier in this
+	//     function (steps 1-11): PoW and checkDuplicateTransactions unconditionally.
+	//     The skip additionally REQUIRES merkleRootChecked — the body must have been
+	//     bound to the checkpoint-certified header, either by CheckMerkleRoot (step 8)
+	//     or by the coinbase-txid rule for a body with no subtrees — so it is never
+	//     taken on a nil-subtreeStore caller with subtrees present, where that binding
+	//     is absent (see skipOrderAndBlessedBelowCheckpoint, which shares the fee
+	//     skip's safety contract but additionally requires the
+	//     OutpointOnlyBelowCheckpoint opt-in, so it engages on a subset of the
+	//     fee-skip blocks).
 	if txMetaStore != nil {
-		deps := &validationDependencies{
-			txMetaStore:           txMetaStore,
-			subtreeStore:          subtreeStore,
-			currentChain:          currentChain,
-			currentBlockHeaderIDs: currentBlockHeaderIDs,
-			oldBlockIDsMap:        oldBlockIDsMap,
-			metaRegenerator:       metaRegenerator,
-		}
-		err = b.validOrderAndBlessed(ctx, logger, deps, settings.Block.ValidOrderAndBlessedConcurrency, settings.Block.DiskMapDirs)
-		if err != nil {
-			return false, err
+		if merkleRootChecked && b.skipOrderAndBlessedBelowCheckpoint(settings, txMetaStore) {
+			logger.Debugf("[Block:Valid][%s] skipping validOrderAndBlessed for block at height %d at or below hardcoded checkpoint (outpoint-only fast path)", b.String(), b.Height)
+		} else {
+			deps := &validationDependencies{
+				txMetaStore:           txMetaStore,
+				subtreeStore:          subtreeStore,
+				currentChain:          currentChain,
+				currentBlockHeaderIDs: currentBlockHeaderIDs,
+				oldBlockIDsMap:        oldBlockIDsMap,
+				metaRegenerator:       metaRegenerator,
+			}
+			err = b.validOrderAndBlessed(ctx, logger, deps, settings.Block.ValidOrderAndBlessedConcurrency, settings.Block.DiskMapDirs, settings.Block.ParentSpendsCapacityMultiplier)
+			if err != nil {
+				return false, merkleRootChecked, err
+			}
 		}
 	}
 
-	// close and release the txMap
+	return true, merkleRootChecked, nil
+}
+
+// bindClassifiedError classifies a body-derived consensus failure by whether the body was
+// merkle-bound to the header. A bound body IS the miner's committed body, so the failure is
+// genuine invalidity and the hash can be condemned once. An unbound body is equally consistent
+// with transport corruption or attacker junk, so it stays corrupt: re-download, strike the
+// serving peer, never poison (bitcoin-sv/teranode#4692; svnode's CorruptionOrDoS stance in
+// bitcoin-sv/src/validation.cpp).
+//
+// This is the single definition of the rule. Callers must NOT instead wrap an invalid error
+// inside a corrupt one: (*Error).Is walks the wrapped chain, so a corrupt error wrapping an
+// invalid one would still satisfy errors.Is(err, ErrBlockInvalid) and would re-open every
+// poisoning branch downstream.
+func bindClassifiedError(merkleRootChecked bool, format string, args ...interface{}) error {
+	if merkleRootChecked {
+		return errors.NewBlockInvalidError(format, args...)
+	}
+
+	return errors.NewBlockCorruptError(format, args...)
+}
+
+// IsConsensusCoinbase reports whether tx has the coinbase shape consensus requires:
+// exactly one input whose previous outpoint is NULL — a zero hash AND an index of
+// 0xFFFFFFFF. This is svnode's CTransaction::IsCoinBase (vin.size() == 1 &&
+// vin[0].prevout.IsNull(), where COutPoint::IsNull() is hash.IsNull() && n == uint32(-1)).
+//
+// Deliberately NOT go-bt's Tx.IsCoinbase, which accepts a null hash plus EITHER a
+// 0xFFFFFFFF prevout index OR a 0xFFFFFFFF sequence number. The sequence number says
+// nothing about coinbase-ness, so that disjunction admits a transaction svnode rejects:
+// prevout (0x00..00, 0) with sequence 0xFFFFFFFF. Anywhere the answer decides a consensus
+// verdict, the looser predicate is a chain-split shape, so use this one.
+func IsConsensusCoinbase(tx *bt.Tx) bool {
+	if tx == nil || len(tx.Inputs) != 1 {
+		return false
+	}
+
+	in := tx.Inputs[0]
+	if in.PreviousTxOutIndex != 0xFFFFFFFF {
+		return false
+	}
+
+	var nullHash [32]byte
+
+	return bytes.Equal(in.PreviousTxID(), nullHash[:])
+}
+
+// CoinbaseScriptSigLengthInBounds reports whether the coinbase scriptSig (unlocking script)
+// length is within the consensus bound: parity with bitcoin-sv CheckCoinbase (bad-cb-length),
+// inclusive 2 <= size <= params.MaxCoinbaseScriptSigSize. The caller must guarantee coinbaseTx has
+// at least one input before calling (Valid's step 4b above relies on IsCoinbase() for that; the
+// quick-validation path's own nil/empty check gives the same guarantee) — Inputs[0] is indexed
+// unconditionally. A nil UnlockingScript is treated as length 0 and fails the lower bound,
+// matching an empty scriptSig.
+//
+// Deliberately a predicate rather than an error-returning check: the verdict for a breach is
+// bound-vs-unbound and belongs to the caller, so there is no classification for this function to
+// pick. Valid's step 4b above turns a false into bindErr's binding-aware verdict, and the
+// quick-validation path (services/blockvalidation/quick_validate.go) — which never calls Valid,
+// and so would otherwise never enforce this rule at all — applies its own binding determination
+// for that route.
+func CoinbaseScriptSigLengthInBounds(coinbaseTx *bt.Tx, params *chaincfg.Params) bool {
+	scriptSigLen := 0
+	if us := coinbaseTx.Inputs[0].UnlockingScript; us != nil {
+		scriptSigLen = len(*us)
+	}
+
+	return scriptSigLen >= 2 && scriptSigLen <= int(params.MaxCoinbaseScriptSigSize)
+}
+
+// CheckCoinbaseOnlyBodyBound binds a body that carries NO subtrees to its header. It is a no-op for
+// a body that carries subtrees — those are bound by CheckMerkleRoot instead.
+//
+// A body with no subtrees claims the block holds only the coinbase. That claim is checkable against
+// the header with no subtree store at all: for a single-transaction block the merkle root IS the
+// coinbase txid (svnode BlockMerkleRoot over a one-element vector). So this is a real merkle
+// binding, and it is what closes the truncated-subtree-list hole (bitcoin-sv/teranode#4692): an
+// honest multi-transaction hash served with an emptied subtree list fails here as CORRUPT and is
+// re-downloaded, instead of reaching the fee arithmetic (which would poison the honest hash) or
+// passing it (which would accept a body with no transactions at all).
+//
+// This is the single definition of the rule, factored out for the same reason as
+// CoinbaseScriptSigLengthInBounds above: Valid calls it at its binding block, and the
+// quick-validation path (services/blockvalidation/quick_validate.go), which never calls Valid, calls
+// it at both of its entry points — so the three routes cannot drift.
+//
+// The caller must guarantee a non-nil CoinbaseTx: Valid's step 4 and quick validation's own
+// nil/empty coinbase precheck both do.
+func (b *Block) CheckCoinbaseOnlyBodyBound() error {
+	if len(b.Subtrees) != 0 {
+		return nil
+	}
+
+	if !b.Header.HashMerkleRoot.IsEqual(b.CoinbaseTx.TxIDChainHash()) {
+		return errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees but the header merkle root is not the coinbase txid", b.String())
+	}
+
+	// Defence in depth: a self-contradictory body (no subtrees but a transaction count above one).
+	// This is NOT the bound — TransactionCount is the same untrusted wire varint the emptied subtree
+	// list came from, so an attacker can simply set it to 1 — but it is a free consistency check on
+	// a shape that can never be honest.
+	if b.TransactionCount > 1 {
+		return errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees but claims %d transactions", b.String(), b.TransactionCount)
+	}
+
+	return nil
+}
+
+// releaseTxMap closes the disk-backed map if that is what b.txMap is, then nils
+// b.txMap so the in-memory map can be collected. Closing the in-memory node
+// index unpins the block's node arrays, and the subtrees released while it was
+// pinned are closed here. Idempotent and nil-safe: safe
+// to call multiple times or before b.txMap is ever assigned. Invoked via defer
+// from Block.Valid so the map is let go on every exit path, including
+// errors during the subtree load, checkDuplicateTransactions or
+// validOrderAndBlessed.
+func (b *Block) releaseTxMap() {
+	if b.txMap == nil {
+		return
+	}
+
 	if diskMap, ok := b.txMap.(*DiskTxMapUint64); ok {
 		ReportTxMapStats(diskMap.Stats())
 		_ = diskMap.Close()
 		ClearTxMapStats()
 	} else if closer, ok := b.txMap.(io.Closer); ok {
-		_ = closer.Close()
+		_ = closer.Close() // a blockNodeIndex unpins the node arrays here
 	}
+
 	b.txMap = nil
 
-	return true, nil
+	// Close what a release deferred while the index was live. Like the disk map's
+	// Close above, a failure here has no logger to go to.
+	b.subtreeSlicesMu.Lock()
+	_ = b.closeDeferredLocked()
+	b.subtreeSlicesMu.Unlock()
+}
+
+// pinNodeIndex pins the block's node arrays for m if it is the in-memory node
+// index, which reads its hashes from them, and returns m to be stored in b.txMap.
+// The index's Close (releaseTxMap) unpins them. A node index m replaces is
+// closed here, so its pin cannot outlive it. The caller must hold
+// b.subtreeSlicesMu for writing, so that a release sees the pin.
+func (b *Block) pinNodeIndex(m blockTxMap) blockTxMap {
+	if old, ok := b.txMap.(*blockNodeIndex); ok {
+		_ = old.Close()
+	}
+
+	if idx, ok := m.(*blockNodeIndex); ok {
+		b.nodeIndexPins.Add(1)
+		idx.unpin = func() { b.nodeIndexPins.Add(-1) }
+	}
+
+	return m
+}
+
+// closeDeferredLocked closes the subtrees released while a node index was live,
+// once none is. The caller must hold b.subtreeSlicesMu for writing.
+func (b *Block) closeDeferredLocked() error {
+	if b.nodeIndexPins.Load() > 0 || len(b.deferredCloses) == 0 {
+		return nil
+	}
+
+	var closeErrs []error
+
+	for _, st := range b.deferredCloses {
+		// detach before unmapping, as the release paths do; the array is dropped,
+		// not pooled: the index that read it has only just gone
+		_ = st.ReleaseNodes()
+
+		if err := st.Close(); err != nil {
+			closeErrs = append(closeErrs, err)
+		}
+	}
+
+	b.deferredCloses = nil
+
+	return errors.Join(closeErrs...)
+}
+
+// skipOrderAndBlessedBelowCheckpoint reports whether validOrderAndBlessed may be
+// skipped for this block. It shares the same checkpoint safety contract as the
+// below-checkpoint fee skip in checkBlockRewardAndFees, but adds one conjunct the
+// fee skip deliberately omits — the OutpointOnlyBelowCheckpoint opt-in — so this
+// skip engages on a strict subset of the fee-skip blocks (flag-on only). The fee
+// skip cannot depend on the flag because a fast-path block persists fee=0 and would
+// be wrongly rejected on flag-off revalidation; validOrderAndBlessed has no such
+// hazard (it reads persisted subtree meta and parent existence, not fees), so
+// gating it on the opt-in is safe and strictly more conservative. True only when
+// ALL of the following hold:
+//
+//   - the operator has opted into the below-checkpoint outpoint-only fast path
+//     (OutpointOnlyBelowCheckpoint);
+//   - the UTXO store can actually run that fast path
+//     (txMetaStore.SupportsOutpointOnlySpend()) — the capability check that
+//     replaced the old SQL-store restriction;
+//   - the block is a confirmed ancestor of the pinned checkpoint
+//     (b.checkpointConfirmedAncestor, set only by the blockvalidation service via
+//     SetCheckpointConfirmedAncestor; defaults false). This closes the forward /
+//     optimistic-checkpoint window and the detached-fork-reconsider window that a
+//     height-only gate would leave open;
+//   - the network defines a hardcoded checkpoint and 0 < b.Height <= that
+//     checkpoint.
+//
+// On a confirmed-ancestor block below a hardcoded checkpoint the pinned block
+// hash already certifies transaction order, uniqueness and blessing: a block
+// whose transactions differed in any way would produce a different merkle root
+// and could not carry the checkpoint-anchored header chain. PoW and
+// checkDuplicateTransactions (CVE-2012-2459) run unconditionally. The merkle
+// binding is NOT unconditional: it is CheckMerkleRoot (step 8) when subtrees are
+// present and a subtree store was supplied, and the coinbase-txid rule when the
+// body carries no subtrees, but a caller that supplies subtrees with no subtree
+// store obtains no binding at all. Block.Valid therefore enforces "the body was
+// bound" (merkleRootChecked) as a precondition of taking this skip, and never
+// skips validOrderAndBlessed unless the local bytes have been bound to the
+// certified chain. This mirrors the native catchup path (quickValidateBlock), which never
+// runs Valid() below the checkpoint at all. All below-checkpoint gates now share
+// OutpointOnlyEligible/BelowCheckpoint, which excludes height 0 everywhere.
+func (b *Block) skipOrderAndBlessedBelowCheckpoint(tSettings *settings.Settings, txMetaStore utxo.Store) bool {
+	if !b.checkpointConfirmedAncestor {
+		return false
+	}
+
+	var params *chaincfg.Params
+	if tSettings != nil {
+		params = tSettings.ChainCfgParams
+	}
+
+	return OutpointOnlyEligible(tSettings, txMetaStore, params, b.Height)
 }
 
 // https://en.bitcoin.it/wiki/BIP_0034
@@ -567,27 +1352,109 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 // height of the block we are checking for.
 
 // TODO - do this another way, if necessary
-func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params) error {
+//
+// merkleRootChecked selects the classification of every verdict this function returns, via
+// bindClassifiedError: the fee/reward arithmetic reads the coinbase outputs and the per-subtree
+// fee totals, both of which come from the received body, so on an unbound body a mismatch is
+// evidence of a broken download rather than of an invalid block (bitcoin-sv/teranode#4692). It is a parameter rather than a wrap at the call site because
+// wrapping would leave errors.Is(err, ErrBlockInvalid) true on a corrupt error.
+func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params, storeSupportsOutpointOnly, checkpointConfirmedAncestor, merkleRootChecked bool) error {
 	if b.Height == 0 {
 		return nil // Skip this check
 	}
 
+	// Skip the coinbase no-inflation check (coinbaseOutput <= subsidy + fees) only when ALL
+	// FOUR conditions hold: the block is at/below the highest HARDCODED checkpoint, the store
+	// can actually produce the fee=0 subtrees this skip exists to tolerate, the block is a
+	// confirmed ancestor of the pinned checkpoint, and its body was bound to the header.
+	// Each condition answers a distinct concern:
+	//
+	//  1. NOT gated on the OutpointOnlyBelowCheckpoint setting. The outpoint-only fast path
+	//     persists subtree fees as 0. A block synced that way must still revalidate on
+	//     reconsiderblock/RevalidateBlock even after the operator restores the default (flag
+	//     off) — a flag-gated skip would recompute coinbaseOutput (subsidy+realFees) >
+	//     subtreeFees(0)+subsidy and wrongly reject a genuinely-valid, checkpoint-pinned block
+	//     as BLOCK_INVALID. The read side cannot distinguish a fast-path fee=0 block from a
+	//     default one, so the skip cannot depend on live config.
+	//  2. GATED on store support (storeSupportsOutpointOnly). On a store that cannot run the
+	//     fast path (Aerospike, or the unconfigured default) real fees are always written, no
+	//     fee=0 block can exist, and there is nothing to tolerate — so full no-inflation
+	//     enforcement is retained. Without this gate the skip would silently disable the check
+	//     on nodes where the feature is a documented no-op. Computed at the Block.Valid call
+	//     site, which holds the store; model cannot see the store type directly.
+	//  3. GATED on confirmed ancestry (checkpointConfirmedAncestor). The skip fires only for a
+	//     block PROVEN to be on the main chain that has already reached and matched the pinned
+	//     checkpoint hash — so the checkpoint transitively commits its coinbase, making the
+	//     arithmetic redundant. This closes the two windows a height-only skip leaves open:
+	//     (a) the forward/optimistic-checkpoint window (a below-checkpoint block validated
+	//     before the chain has reached the pinned hash) and (b) a detached fork block below the
+	//     checkpoint reconsidered via reconsiderblock. In both the predicate is false, so the
+	//     check runs — correctly, because non-fast-path blocks carry real fees. The predicate is
+	//     caller-supplied (BlockValidation.checkpointConfirmedAncestor, threaded via
+	//     SetCheckpointConfirmedAncestor) because it needs blockchain state model cannot see; it
+	//     is fail-safe (any lookup error or ambiguity yields false → the check runs).
+	//
+	//  4. GATED on merkleRootChecked, exactly as the sibling validOrderAndBlessed skip is.
+	//     Conjunct 3's reasoning — "the checkpoint transitively commits the coinbase" — only
+	//     holds once the body has been hashed against the header: the checkpoint commits the
+	//     header, the header commits the merkle root, the merkle root commits the coinbase.
+	//     Without that last step the checkpoint says nothing about the coinbase, and skipping
+	//     the arithmetic would leave its value unchecked. merkleRootChecked is already a
+	//     parameter here (it classifies the verdicts below); this makes it gate the skip too.
+	//     The two below-checkpoint skips are still not congruent: skipOrderAndBlessedBelowCheckpoint
+	//     additionally requires the OutpointOnlyBelowCheckpoint opt-in (via OutpointOnlyEligible),
+	//     which this skip deliberately does NOT — see conjunct 1. So it engages on a subset of the
+	//     blocks this one does; the binding is the precondition they share, not the whole predicate.
+	//
+	// HighestCheckpointHeight is the single source of truth shared with the fast-path write
+	// side, so the fee-write boundary and this fee-skip boundary cannot diverge (invariant
+	// I3); see model/checkpoint.go.
+	if merkleRootChecked && storeSupportsOutpointOnly && checkpointConfirmedAncestor && b.Height <= HighestCheckpointHeight(params.Checkpoints) {
+		return nil
+	}
+
+	// Accumulate with overflow detection. A uint64 wraparound in any of these
+	// sums could make the no-inflation comparison below pass on a block that is
+	// actually inflating supply, so a sum that overflows is itself invalid.
+	// These overflows cannot occur in a valid block (total value is far below
+	// 2^64 satoshis), so this only rejects impossible values and does not change
+	// the result for any real block.
 	coinbaseOutputSatoshis := uint64(0)
+
 	for _, tx := range b.CoinbaseTx.Outputs {
-		coinbaseOutputSatoshis += tx.Satoshis
+		sum := coinbaseOutputSatoshis + tx.Satoshis
+		if sum < coinbaseOutputSatoshis {
+			return bindClassifiedError(merkleRootChecked, "[checkBlockRewardAndFees][%s] coinbase output satoshis overflow uint64", b.String())
+		}
+
+		coinbaseOutputSatoshis = sum
 	}
 
 	subtreeFees := uint64(0)
 
 	for i := 0; i < len(b.SubtreeSlices); i++ {
 		subtree := b.SubtreeSlices[i]
-		subtreeFees += subtree.Fees
+		if subtree == nil {
+			return errors.NewProcessingError("[checkBlockRewardAndFees][%s] subtree %d of %d was released during validation", b.String(), i, len(b.SubtreeSlices))
+		}
+
+		sum := subtreeFees + subtree.Fees
+		if sum < subtreeFees {
+			return bindClassifiedError(merkleRootChecked, "[checkBlockRewardAndFees][%s] subtree fees overflow uint64", b.String())
+		}
+
+		subtreeFees = sum
 	}
 
 	coinbaseReward := util.GetBlockSubsidyForHeight(b.Height, params)
 
-	if coinbaseOutputSatoshis > subtreeFees+coinbaseReward {
-		return errors.NewBlockInvalidError("[checkBlockRewardAndFees][%s] coinbase output (%d) is greater than the fees + block subsidy (%d)", b.String(), coinbaseOutputSatoshis, subtreeFees+coinbaseReward)
+	allowedReward := subtreeFees + coinbaseReward
+	if allowedReward < subtreeFees {
+		return bindClassifiedError(merkleRootChecked, "[checkBlockRewardAndFees][%s] fees + block subsidy overflow uint64", b.String())
+	}
+
+	if coinbaseOutputSatoshis > allowedReward {
+		return bindClassifiedError(merkleRootChecked, "[checkBlockRewardAndFees][%s] coinbase output (%d) is greater than the fees + block subsidy (%d)", b.String(), coinbaseOutputSatoshis, allowedReward)
 	}
 
 	return nil
@@ -614,47 +1481,101 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 	}
 
 	g := new(errgroup.Group)
-	util.SafeSetLimit(g, concurrency)
-
-	transactionCountUint32, err := safeconversion.Uint64ToUint32(b.TransactionCount)
-	if err != nil {
-		return errors.NewProcessingError("[checkDuplicateTransactions][%s] failed to convert transaction count to int", b.String(), err)
-	}
+	util.SafeSetLimit(logger, g, concurrency)
 
 	// set the expected subtree size based on the first subtree in the block
 	subtreeSize := 0
+
 	if len(b.SubtreeSlices) > 0 {
-		subtreeSize = b.SubtreeSlices[0].Size()
+		firstSubtree := b.SubtreeSlices[0]
+		if firstSubtree == nil {
+			return errors.NewProcessingError("[checkDuplicateTransactions][%s] first subtree was released during validation", b.String())
+		}
+
+		subtreeSize = firstSubtree.Size()
 	}
 
+	// Size both map variants from the loaded block body rather than the
+	// peer-supplied TransactionCount, and keep the value for the release key.
+	b.txMapCount = b.txMapEntryCount()
+
 	if len(diskMapDirs) > 0 {
+		// An empty (coinbase-only) block inserts nothing, but the mmap-backed
+		// table rejects a zero capacity — clamp to 1.
+		filterCapacity := b.txMapCount
+		if filterCapacity == 0 {
+			filterCapacity = 1
+		}
 		diskMap, diskErr := NewDiskTxMapUint64(DiskTxMapUint64Options{
 			BasePaths:      diskMapDirs,
 			Prefix:         "bv-txmap",
-			FilterCapacity: uint(b.TransactionCount),
+			FilterCapacity: uint(filterCapacity),
 		})
 		if diskErr != nil {
 			return errors.NewProcessingError("[checkDuplicateTransactions][%s] failed to create disk tx map", b.String(), diskErr)
 		}
 		b.txMap = diskMap
 	} else {
-		b.txMap = txmap.NewSplitSwissMapUint64(transactionCountUint32)
+		// An index over the block's own node arrays (6 bytes a tx), allocated for
+		// this block only. Counts beyond maxTxMapPrealloc get a capped
+		// preallocation and grow on insert rather than failing the block (issue
+		// 1428); indexes beyond 32 bits get the 64-bit map.
+		//
+		// Pinned under the subtree mutex, so a release that holds it either ran
+		// before (the entries it nil-ed are reported below as released) or sees
+		// the pin; one already running would otherwise pool arrays the index is
+		// about to register.
+		m := newInMemoryBlockTxMap(b.txMapCount, len(b.SubtreeSlices), subtreeSize, maxTxIndex(b.SubtreeSlices, subtreeSize))
+
+		b.subtreeSlicesMu.Lock()
+		b.txMap = b.pinNodeIndex(m)
+		b.subtreeSlicesMu.Unlock()
 	}
 	for subIdx := 0; subIdx < len(b.SubtreeSlices); subIdx++ {
 		subIdx := subIdx
 		subtree := b.SubtreeSlices[subIdx]
 
+		// Hand the captured pointer to the goroutine. A nil entry is reported
+		// through the group rather than by returning here, so the goroutines
+		// already in flight are still waited on before we unwind.
 		g.Go(func() (err error) {
 			return b.checkDuplicateTransactionsInSubtree(subtree, subIdx, subtreeSize)
 		})
 	}
 
-	if err = g.Wait(); err != nil {
+	if err := g.Wait(); err != nil {
 		// return the error from above without wrapping it
 		return err
 	}
 
 	return nil
+}
+
+// txMapEntryCount returns the number of entries the duplicate check will insert,
+// summed over the loaded subtree bodies. It is exact bar one:
+// checkDuplicateTransactionsInSubtree skips the coinbase placeholder at
+// subIdx 0/txIdx 0 and nothing else.
+//
+// This deliberately does NOT use b.TransactionCount. That field is read straight
+// off a wire varint by readBlockFromReader, and GetAndValidateSubtrees only
+// recomputes it from the real subtree contents inside the
+// `subtreeStore != nil && len(b.Subtrees) > 0` guard in Valid, while the
+// duplicate check runs unconditionally. Sizing an allocation from it therefore
+// trusts a peer-chosen integer on paths where nothing has reconciled it against
+// the body (issue 1501). The slices below are already loaded by the time any
+// caller needs this, so the honest count costs one len() per subtree: for a
+// truthful block the derived number *is* TransactionCount, and for a block
+// claiming more than it carries the map is sized for what it actually carries.
+func (b *Block) txMapEntryCount() uint64 {
+	var n uint64
+
+	for _, subtree := range b.SubtreeSlices {
+		if subtree != nil {
+			n += uint64(len(subtree.Nodes))
+		}
+	}
+
+	return n
 }
 
 // checkDuplicateTransactionsInSubtree checks for duplicate transactions in a subtree.
@@ -669,40 +1590,111 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 // Returns:
 // - error: if a duplicate transaction is found or if there is an error adding the transaction to the txMap
 func (b *Block) checkDuplicateTransactionsInSubtree(subtree *subtreepkg.Subtree, subIdx, subtreeSize int) (err error) {
-	var idx64 uint64
+	return b.putSubtreeInTxMap(b.String(), subtree, subIdx, subtreeSize)
+}
 
-	// Calculate the base index for this subtree by summing sizes of all previous subtrees.
-	// We cannot use (subIdx * subtreeSize) because the last subtree may be smaller.
-	// Per Block.go:1192: "all subtrees need to be the same size as the first tree, except the last one"
-	baseIdx := 0
-	for i := 0; i < subIdx; i++ {
-		baseIdx += b.SubtreeSlices[i].Size()
+// putSubtreeInTxMap is checkDuplicateTransactionsInSubtree with the block label
+// supplied by the caller. getAndValidateSubtreesWithDedup runs it while
+// GetAndValidateSubtrees holds subtreeSlicesMu, and b.String() takes that same
+// mutex, so formatting an error there would deadlock instead of failing.
+func (b *Block) putSubtreeInTxMap(blockLabel string, subtree *subtreepkg.Subtree, subIdx, subtreeSize int) (err error) {
+	// The caller reads SubtreeSlices without holding subtreeSlicesMu, so the
+	// entry it captured may have been nil-ed by a concurrent release. Transient
+	// — the block is requeued and reloaded, never invalidated.
+	if subtree == nil {
+		return errors.NewProcessingError("[checkDuplicateTransactionsInSubtree][%s] subtree %d was released during validation", blockLabel, subIdx)
 	}
 
-	for txIdx := 0; txIdx < len(subtree.Nodes); txIdx++ {
-		if subIdx == 0 && txIdx == 0 && subtree.Nodes[txIdx].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+	// The load-time dedup allocates the map in onFirst, which only runs because
+	// getAndValidateSubtrees reloads every subtree including subtree 0. Guard the
+	// dependency rather than nil-deref inside an errgroup goroutine if that ever
+	// changes: a missing map is a node fault, so fail transient, never the block.
+	if b.txMap == nil {
+		return errors.NewProcessingError("[checkDuplicateTransactionsInSubtree][%s] subtree %d reached the duplicate check with no txMap", blockLabel, subIdx)
+	}
+
+	// An in-memory index reads the hashes it holds from the subtrees' own node
+	// arrays, so register this one before its first Put. One snapshot of Nodes
+	// serves both, whatever a concurrent release does to the field.
+	nodes := subtree.Nodes
+
+	nodeIdx, _ := b.txMap.(*blockNodeIndex)
+	overflowing := false
+
+	if nodeIdx != nil {
+		if err = nodeIdx.register(subIdx, nodes); err != nil {
+			return errors.NewProcessingError("[BLOCK][%s] cannot index subtree %d", blockLabel, subIdx, err)
+		}
+
+		overflowing = nodeIdx.overflows(subIdx)
+	}
+
+	var idx64 uint64
+
+	// All subtrees before subIdx are full-size (the per-block invariant enforced by
+	// validateAndSetTransactionCount allows only the last subtree to be smaller), so the
+	// base index is subIdx*subtreeSize. Summing the prior subtree sizes via Size() would
+	// be O(N) per subtree and O(N^2) per block, with every Size() call taking the
+	// subtree's RWMutex; on blocks with hundreds of thousands of subtrees that contention
+	// pins every worker on atomic ops instead of doing useful dedup work.
+	baseIdx := subIdx * subtreeSize
+
+	for txIdx := 0; txIdx < len(nodes); txIdx++ {
+		if subIdx == 0 && txIdx == 0 && nodes[txIdx].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 			continue
 		}
 
-		subtreeNode := subtree.Nodes[txIdx]
+		subtreeNode := nodes[txIdx]
 
-		// Calculate the global transaction index as baseIdx + txIdx
 		idx64, err = safeconversion.IntToUint64(baseIdx + txIdx)
 		if err != nil {
-			return errors.NewProcessingError("[BLOCK][%s] failed to convert index to uint64", b.String(), err)
+			return errors.NewProcessingError("[BLOCK][%s] failed to convert index to uint64", blockLabel, err)
 		}
 
 		// in a tx map, Put is mutually exclusive, can only be called once per key
-		if err = b.txMap.Put(subtreeNode.Hash, idx64); err != nil {
+		if overflowing {
+			err = nodeIdx.putOverflow(subtreeNode.Hash, idx64)
+		} else {
+			err = b.txMap.Put(subtreeNode.Hash, idx64)
+		}
+
+		if err != nil {
 			if errors.Is(err, errors.ErrTxExists) || strings.Contains(err.Error(), "hash already exists in map") {
-				return errors.NewBlockInvalidError("[BLOCK][%s] block contains duplicate transaction %s", b.String(), subtreeNode.Hash.String())
+				return errors.NewBlockCorruptError("[BLOCK][%s] block contains duplicate transaction %s", blockLabel, subtreeNode.Hash.String())
 			}
 
-			return errors.NewStorageError("[BLOCK][%s] error adding transaction %s to txMap", b.String(), subtreeNode.Hash.String(), err)
+			return errors.NewStorageError("[BLOCK][%s] error adding transaction %s to txMap", blockLabel, subtreeNode.Hash.String(), err)
 		}
 	}
 
 	return nil
+}
+
+// parentSpendsCapacity returns the capacity hint for the parent-spends map:
+// entryCount (taken from the loaded block body) times the assumed average
+// inputs per transaction. A multiplier of 0 is treated as 1, and the result is
+// never 0 because the mmap-backed table rejects a zero capacity.
+//
+// entryCount is bounded by the subtrees actually held in memory, so it cannot
+// overflow the product on its own. The multiplier can: it is operator-supplied
+// (block_parentSpendsCapacityMultiplier) and unvalidated. On overflow this
+// returns entryCount unmultiplied — losing the headroom but keeping a real
+// number — rather than a wrapped or saturated value.
+func parentSpendsCapacity(entryCount, multiplier uint64) uint64 {
+	if multiplier == 0 {
+		multiplier = 1
+	}
+
+	capacity := entryCount * multiplier
+	if capacity/multiplier != entryCount {
+		capacity = entryCount
+	}
+
+	if capacity == 0 {
+		return 1
+	}
+
+	return capacity
 }
 
 type validationDependencies struct {
@@ -714,7 +1706,7 @@ type validationDependencies struct {
 	metaRegenerator       SubtreeMetaRegeneratorI // optional: nil means no regeneration
 }
 
-func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, deps *validationDependencies, validOrderAndBlessedConcurrency int, diskMapDirs []string) error {
+func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, deps *validationDependencies, validOrderAndBlessedConcurrency int, diskMapDirs []string, parentSpendsCapacityMultiplier uint64) error {
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "validOrderAndBlessed",
 		tracing.WithLogMessage(logger, "[validOrderAndBlessed][%s] called", b.String()),
 	)
@@ -724,12 +1716,39 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 		return errors.NewStorageError("[validOrderAndBlessed][%s] txMap is nil, cannot check transaction order", b.String())
 	}
 
-	var psMap ParentSpendsMap
+	// Size the disk-backed parent-spends map at transaction count * multiplier
+	// (assumed average inputs/tx, block_parentSpendsCapacityMultiplier). It
+	// grows when a block exceeds that, but a grow stalls every insert while the
+	// table rehashes. The in-memory map is sized from the inputs per tx recent
+	// blocks measured, with the multiplier as its ceiling, and grows by an eighth
+	// per full bucket (inMemoryParentSpendsCapacity). 0 is treated as 1.
+	//
+	// The transaction count comes from the loaded block body, not from the
+	// peer-supplied b.TransactionCount — see txMapEntryCount for why (issue
+	// 1501). That alone bounds this product: the node count is limited by the
+	// subtrees actually held in memory, so a claimed count can no longer drive
+	// it. The remaining overflow route is the multiplier itself, which is
+	// operator-supplied (block_parentSpendsCapacityMultiplier) and unvalidated.
+	//
+	// Recomputed here rather than read from b.txMapCount, deliberately: that
+	// field is only set by the duplicate check (checkDuplicateTransactions or the
+	// in-memory load path), and callers that invoke
+	// this method directly (rather than through Valid, which always runs step 11
+	// first) would otherwise size from a zero. Recomputing is one len() per
+	// subtree and keeps this method self-contained — please do not "tidy" it into
+	// reading the field.
+	entryCount := b.txMapEntryCount()
+	expectedInpoints := parentSpendsCapacity(entryCount, parentSpendsCapacityMultiplier)
+
+	var (
+		psMap    ParentSpendsMap
+		inMemory *SplitSyncedParentMap
+	)
 	if len(diskMapDirs) > 0 {
 		diskMap, diskErr := NewDiskParentSpendsMap(DiskParentSpendsMapOptions{
 			BasePaths:      diskMapDirs,
 			Prefix:         "bv-parentspends",
-			FilterCapacity: uint(b.TransactionCount * 3),
+			FilterCapacity: uint(expectedInpoints),
 		})
 		if diskErr != nil {
 			return errors.NewProcessingError("[validOrderAndBlessed][%s] failed to create disk parent spends map", b.String(), diskErr)
@@ -741,7 +1760,10 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 			ClearParentSpendsMapStats()
 		}()
 	} else {
-		psMap = NewSplitSyncedParentMap(4096, b.TransactionCount*3)
+		// Sized from the inputs per tx recent blocks measured; allocated for this
+		// block only and dropped when it returns.
+		inMemory = newBlockParentSpendsMap(b.inMemoryParentSpendsCapacity(parentSpendsCapacityMultiplier))
+		psMap = inMemory
 	}
 
 	validationCtx := &validationContext{
@@ -752,7 +1774,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 	concurrency := b.getValidationConcurrency(validOrderAndBlessedConcurrency)
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, concurrency)
+	util.SafeSetLimit(logger, g, concurrency)
 
 	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
 		subtree := b.SubtreeSlices[sIdx]
@@ -764,38 +1786,88 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	}
 
 	// do not wrap the error again, the error is already wrapped
-	return g.Wait()
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	// Every input of every transaction went through the map, so its length is
+	// the block's input count.
+	if inMemory != nil {
+		recordInpointsPerTx(inMemory.Length(), entryCount)
+	}
+
+	return nil
 }
 
 func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps *validationDependencies,
 	validationCtx *validationContext, subtree *subtreepkg.Subtree, sIdx int) error {
+	// Guard before the tracing call below, which dereferences the subtree's
+	// root hash: Subtree.RootHash() returns a nil *chainhash.Hash on a nil
+	// receiver and chainhash.Hash.String() has a value receiver, so a nil entry
+	// here panics — in an errgroup goroutine with no recover, killing the node.
+	// The caller reads SubtreeSlices without holding subtreeSlicesMu, so a
+	// concurrent release can nil the entry it captured.
+	if subtree == nil {
+		return errors.NewProcessingError("[validateSubtree][%s] subtree %d was released during validation", b.String(), sIdx)
+	}
+
+	// Resolved before the tracer because RootHash() is nil for a zero-node subtree
+	// and chainhash.Hash.String() has a value receiver, so naming it in the span's
+	// log message panics inside an errgroup goroutine. It also keeps the span and
+	// the errors below naming the same subtree.
+	//
+	// This is the .subtree file's cached root, which GetAndValidateSubtrees has
+	// already compared against the key it was fetched under.
+	subtreeHash := subtree.RootHash()
+	if subtreeHash == nil {
+		return errors.NewProcessingError("[validateSubtree][%s] subtree %d has no root hash", b.String(), sIdx)
+	}
+
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "validateSubtree",
-		tracing.WithLogMessage(logger, "[validateSubtree][%s][%s:%d] called", b.String(), subtree.RootHash().String(), sIdx),
+		tracing.WithDebugLogMessage(logger, "[validateSubtree][%s][%s:%d] called", b.String(), subtreeHash.String(), sIdx),
 	)
 	defer deferFn()
 
 	var (
 		subtreeMetaSlice    *subtreepkg.Meta
-		subtreeHash         = subtree.RootHash()
 		checkParentTxHashes = make([]missingParentTx, 0, len(subtree.Nodes)/16)
 		err                 error
 	)
 
 	subtreeMetaSlice, err = b.getSubtreeMetaSlice(ctx, deps.subtreeStore, *subtreeHash, subtree)
 
-	// Attempt regeneration if meta not found and regenerator is available
-	if err != nil && deps.metaRegenerator != nil {
-		logger.Warnf("[validateSubtree][%s][%s:%d] subtree meta not found, attempting regeneration", b.String(), subtreeHash.String(), sIdx)
+	// Attempt regeneration if the meta is missing or invalid and a regenerator is
+	// available. The read error is included in the log line: it carries the
+	// header-validation verdict (root-hash or entry-count mismatch, issue 1425),
+	// and regeneration succeeding would otherwise discard the only trace of a
+	// torn or foreign file.
+	// ctx errors are excluded: regeneration reads the whole .subtreeData and, on a
+	// miss, fetches from every peer behind blockvalidation_subtree_meta_peer_fetch_timeout
+	// (10m as shipped, and a peer serving an unusable body gets a second fetch with a
+	// fresh budget). At shutdown that fires for every subtree of the in-flight block,
+	// to rebuild a file nothing will use.
+	if err != nil && deps.metaRegenerator != nil && ctx.Err() == nil {
+		// "subtree meta not found" is preserved as a substring because that is what
+		// existing queries match on for regeneration bursts. Note the line itself
+		// changed — anything pinned to the exact previous message needs updating.
+		logger.Warnf("[validateSubtree][%s][%s:%d] subtree meta not found or unusable (%v), attempting regeneration", b.String(), subtreeHash.String(), sIdx, err)
 
-		subtreeMetaSlice, err = deps.metaRegenerator.RegenerateMeta(ctx, subtreeHash, subtree)
+		subtreeMetaSlice, err = deps.metaRegenerator.RegenerateMeta(ctx, subtreeHash, subtree, sIdx == 0)
 		if err == nil {
-			logger.Warnf("[validateSubtree][%s][%s:%d] successfully regenerated subtree meta", b.String(), subtreeHash.String(), sIdx)
+			// Scoped to this validation on purpose. RegenerateMeta returns only the
+			// meta, so this level cannot tell whether the rebuild also replaced the
+			// file on disk; the regenerator emits that verdict itself on the line
+			// immediately before this one. Claiming a repair here would be the same
+			// overstatement storeRegeneratedMeta used to make.
+			logger.Warnf("[validateSubtree][%s][%s:%d] regenerated subtree meta for this validation", b.String(), subtreeHash.String(), sIdx)
 		}
 	}
 
 	// a subtreeMetaSlice is required for further block validation, so if we cannot get it, we return an error
 	if err != nil {
-		return errors.NewProcessingError("[validOrderAndBlessed][%s][%s:%d] error getting subtree meta slice: %v", b.String(), subtreeHash.String(), sIdx, err)
+		// No %v for err: errors.New consumes a trailing error param and wraps it, so an
+		// explicit verb here prints %!v(MISSING) in front of the real cause.
+		return errors.NewProcessingError("[validOrderAndBlessed][%s][%s:%d] error getting subtree meta slice", b.String(), subtreeHash.String(), sIdx, err)
 	}
 
 	for snIdx := 0; snIdx < len(subtree.Nodes); snIdx++ {
@@ -830,13 +1902,13 @@ func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps
 func (b *Block) checkParentsExistOnChain(ctx context.Context, logger ulogger.Logger, deps *validationDependencies,
 	validationCtx *validationContext, checkParentTxHashes []missingParentTx) error {
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "checkParentsExistOnChain",
-		tracing.WithLogMessage(logger, "[validateSubtree][%s] called to check %d parent tx hashes", b.String(), len(checkParentTxHashes)),
+		tracing.WithDebugLogMessage(logger, "[validateSubtree][%s] called to check %d parent tx hashes", b.String(), len(checkParentTxHashes)),
 	)
 	defer deferFn()
 
 	// check all the parent transactions in parallel, this allows us to batch read from the txMetaStore
 	parentG := new(errgroup.Group)
-	util.SafeSetLimit(parentG, 1024*32)
+	util.SafeSetLimit(logger, parentG, 1024*32)
 
 	for _, parentTxStruct := range checkParentTxHashes {
 		parentTxStruct := parentTxStruct
@@ -909,7 +1981,11 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 	}
 
 	if len(parentTxMeta.BlockIDs) > 0 && parentTxMeta.BlockIDs[0] == GenesisBlockID {
-		// when blockIds[0] is GenesisBlockID, it means the transaction was imported from a restore and is on a valid chain
+		// Safe to index [0] without a main-chain filter: the restore path appends
+		// GenesisBlockID FIRST, and any subsequent real confirmations are appended
+		// after. Genesis cannot be in a fork, so BlockIDs[0] == GenesisBlockID
+		// uniquely identifies a tx imported from a restore and known to be on a
+		// valid chain. See #967.
 		return oldBlockIDs, nil
 	}
 
@@ -1007,7 +2083,12 @@ func (b *Block) checkDuplicateInputs(subtreeMetaSlice *subtreepkg.Meta, validati
 	}
 
 	for _, txInpoint := range txInpoints {
-		if valueSet := validationCtx.parentSpendsMap.SetIfNotExists(txInpoint); !valueSet {
+		valueSet, err := validationCtx.parentSpendsMap.SetIfNotExists(txInpoint)
+		if err != nil {
+			return errors.NewProcessingError("[validOrderAndBlessed][%s][%s:%d]:%d parent-spends map error",
+				b.String(), subtreeHash.String(), sIdx, snIdx, err)
+		}
+		if !valueSet {
 			return errors.NewBlockInvalidError("[validOrderAndBlessed][%s][%s:%d]:%d transaction %s has duplicate inputs",
 				b.String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())
 		}
@@ -1061,14 +2142,20 @@ func getParentTxMetaBlockIDs(gCtx context.Context, txMetaStore utxo.Store, paren
 	parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxStruct.parentTxHash, fields.BlockIDs)
 	if err != nil {
 		if errors.Is(err, errors.ErrTxNotFound) {
-			return nil, errors.NewBlockInvalidError("parent transaction %s of tx %s not found in txMetaStore", parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String())
+			// Parent tx is not in our store yet. During catchup this is a transient ordering
+			// state (we have not absorbed the parent's block), NOT a consensus violation.
+			// Return incomplete so callers retry instead of persisting the block as invalid.
+			// See issue #1031.
+			return nil, errors.NewBlockIncompleteError("parent transaction %s of tx %s not found in txMetaStore", parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String())
 		}
 
 		return nil, errors.NewStorageError("error getting parent transaction %s from txMetaStore", parentTxStruct.parentTxHash.String(), err)
 	}
 
 	if len(parentTxMeta.BlockIDs) == 0 {
-		return nil, errors.NewBlockInvalidError("parent transaction %s of tx %s has no block IDs", parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String())
+		// Parent tx exists but is not yet mined into a block we know about — also a
+		// catchup-ordering state, not a consensus violation. See issue #1031.
+		return nil, errors.NewBlockIncompleteError("parent transaction %s of tx %s has no block IDs", parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String())
 	}
 
 	return parentTxMeta, nil
@@ -1089,9 +2176,182 @@ func (b *Block) GetSubtrees(ctx context.Context, logger ulogger.Logger, subtreeS
 }
 
 func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, getAndValidateSubtreesConcurrency int) error {
+	return b.getAndValidateSubtrees(ctx, logger, subtreeStore, getAndValidateSubtreesConcurrency, nil, nil)
+}
+
+// getAndValidateSubtreesBound is GetAndValidateSubtrees that checks the subtree
+// list against the header's merkle root as soon as the first and last subtrees
+// are loaded, before fetching the rest. Block.Valid uses it when the duplicate
+// check is not done during the load, so an unbound body fails after two
+// fetches instead of after all of them. CheckMerkleRoot still runs afterwards.
+func (b *Block) getAndValidateSubtreesBound(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, getAndValidateSubtreesConcurrency int) error {
+	// b.Hash(), not b.String(): the hook runs under subtreeSlicesMu.
+	blockLabel := b.Hash().String()
+
+	return b.getAndValidateSubtrees(ctx, logger, subtreeStore, getAndValidateSubtreesConcurrency,
+		func(first, last *subtreepkg.Subtree) error { return b.checkBodyBoundToHeader(blockLabel, first, last) }, nil)
+}
+
+// CheckBodyBoundToHeader checks the block's subtree list against the header's
+// merkle root when only the first and last subtrees' node lists are at hand,
+// with the coinbase substituted into the first. Every other subtree contributes
+// only its key, so the caller must have bound each node list to its key when
+// it obtained it. An unbound or repeated subtree list is BlockCorrupt. Catch-up uses it to
+// prove the body is the miner's committed body before writing anything.
+func (b *Block) CheckBodyBoundToHeader(first, last *subtreepkg.Subtree) error {
+	return b.checkBodyBoundToHeader(b.Hash().String(), first, last)
+}
+
+// checkBodyBoundToHeader is CheckMerkleRoot for a body of which only the first
+// and last subtrees are loaded. The middle entries contribute their keys, which
+// every loaded subtree is later bound to, and their lengths are checked by
+// CheckMerkleRoot once they are loaded. Same verdicts and error classes: an
+// unbound or repeated subtree list is BlockCorrupt.
+func (b *Block) checkBodyBoundToHeader(blockLabel string, first, last *subtreepkg.Subtree) error {
+	// The same guards Block.Valid runs on the first subtree before its own
+	// CheckMerkleRoot, in the same order and classes. In particular an emptied
+	// first subtree is a transient local condition: computing a root over it
+	// would report a corrupt body and strike an innocent peer.
+	if first == nil {
+		return errors.NewProcessingError("[BLOCK][%s] first subtree was released during validation", blockLabel)
+	}
+
+	if len(first.Nodes) == 0 {
+		return errors.NewProcessingError("[BLOCK][%s] first subtree emptied (released) during validation", blockLabel)
+	}
+
+	if !first.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholder) {
+		return errors.NewBlockCorruptError("[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", blockLabel, first.Nodes[0].Hash.String())
+	}
+
+	hashes := make([]chainhash.Hash, len(b.Subtrees))
+	slices := make([]*subtreepkg.Subtree, len(b.Subtrees))
+
+	rootHash, err := first.RootHashWithReplaceRootNode(b.CoinbaseTx.TxIDChainHash(), 0, uint64(b.CoinbaseTx.Size())) // nolint: gosec
+	if err != nil {
+		return errors.NewProcessingError("[BLOCK][%s] error replacing root node in subtree", blockLabel, err)
+	}
+
+	hashes[0] = *rootHash
+
+	for i := 1; i < len(b.Subtrees); i++ {
+		hashes[i] = *b.Subtrees[i]
+	}
+
+	slices[0] = first
+	slices[len(slices)-1] = last
+
+	b.firstRootMemo.Store(&firstRootMemo{subtree: first, coinbase: *b.CoinbaseTx.TxIDChainHash(), root: *rootHash})
+
+	calculated, err := blockMerkleRoot(func() string { return blockLabel }, hashes, slices, false)
+	if err != nil {
+		return err
+	}
+
+	if !b.Header.HashMerkleRoot.IsEqual(calculated) {
+		return errors.NewBlockCorruptError("[BLOCK][%s] merkle root does not match", blockLabel)
+	}
+
+	return nil
+}
+
+// getAndValidateSubtreesWithDedup loads the subtrees and runs the duplicate
+// check on each one as it lands, instead of in a second pass over the whole
+// block afterwards. The first and last subtrees are loaded first; once the
+// subtree list is bound to the header's merkle root, the txMap is sized from
+// the body as len(Subtrees) x subtree 0's length, and the index scheme is
+// checkDuplicateTransactions' own.
+//
+// deduped reports whether the check ran. It is false when the subtrees were
+// already loaded (nothing is fetched) or the block has none; the caller then
+// falls back to checkDuplicateTransactions.
+func (b *Block) getAndValidateSubtreesWithDedup(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, getAndValidateSubtreesConcurrency int) (deduped bool, err error) {
+	var subtreeSize int
+
+	// b.Hash(), not b.String(): the hooks run under subtreeSlicesMu.
+	blockLabel := b.Hash().String()
+
+	onFirst := func(first, last *subtreepkg.Subtree) error {
+		// Bind the subtree list to the header before it sizes anything: until
+		// then len(Subtrees) is a peer claim, and the product below could draw
+		// a preallocation for a body that is about to fail CheckMerkleRoot.
+		if err := b.checkBodyBoundToHeader(blockLabel, first, last); err != nil {
+			return err
+		}
+
+		b.txMapCount = uint64(len(b.Subtrees)) * uint64(first.Length()) // nolint: gosec
+		subtreeSize = first.Size()
+
+		// The highest index is that of the last subtree's last node. A subtree in
+		// between that is too long for its slot is indexed apart (putOverflow) and
+		// reported by the length check after the load.
+		limit := txIndexEnd(len(b.Subtrees)-1, subtreeSize, last.Length())
+
+		b.txMap = b.pinNodeIndex(newInMemoryBlockTxMap(b.txMapCount, len(b.Subtrees), subtreeSize, limit))
+		deduped = true
+
+		return nil
+	}
+
+	onLoaded := func(sIdx int, subtree *subtreepkg.Subtree) error {
+		return b.putSubtreeInTxMap(blockLabel, subtree, sIdx, subtreeSize)
+	}
+
+	if err = b.getAndValidateSubtrees(ctx, logger, subtreeStore, getAndValidateSubtreesConcurrency, onFirst, onLoaded); err != nil {
+		return false, err
+	}
+
+	return deduped, nil
+}
+
+// loadBoundarySubtrees loads the first and last subtrees in parallel, then runs
+// onFirst on them and onLoaded on each, in that order. A single-subtree body
+// loads it once.
+func loadBoundarySubtrees(loaders []func() error, onFirst func(first, last *subtreepkg.Subtree) error,
+	onLoaded func(sIdx int, subtree *subtreepkg.Subtree) error, slices []*subtreepkg.Subtree) error {
+	lastIdx := len(loaders) - 1
+
+	var boundary errgroup.Group
+
+	boundary.Go(loaders[0])
+
+	if lastIdx > 0 {
+		boundary.Go(loaders[lastIdx])
+	}
+
+	if err := boundary.Wait(); err != nil {
+		return err
+	}
+
+	if err := onFirst(slices[0], slices[lastIdx]); err != nil {
+		return err
+	}
+
+	if onLoaded == nil {
+		return nil
+	}
+
+	if err := onLoaded(0, slices[0]); err != nil {
+		return err
+	}
+
+	if lastIdx > 0 {
+		return onLoaded(lastIdx, slices[lastIdx])
+	}
+
+	return nil
+}
+
+// getAndValidateSubtrees is GetAndValidateSubtrees with optional load hooks.
+// When onFirst is set, the first and last subtrees are loaded before the rest
+// start and onFirst runs on them; onLoaded then runs on every subtree (those two
+// included, after onFirst) straight after it is loaded and bound to its key.
+// Both run while subtreeSlicesMu is held.
+func (b *Block) getAndValidateSubtrees(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, getAndValidateSubtreesConcurrency int,
+	onFirst func(first, last *subtreepkg.Subtree) error, onLoaded func(sIdx int, subtree *subtreepkg.Subtree) error) error {
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "GetAndValidateSubtrees",
 		tracing.WithHistogram(prometheusBlockGetAndValidateSubtrees),
-		tracing.WithLogMessage(logger, "[GetAndValidateSubtrees][%s] fetching and validating subtrees", b.String()),
+		tracing.WithDebugLogMessage(logger, "[GetAndValidateSubtrees][%s] fetching and validating subtrees", b.String()),
 	)
 	defer deferFn()
 
@@ -1104,7 +2364,12 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 		missing := false
 
 		for i := range b.Subtrees {
-			if b.SubtreeSlices[i] == nil {
+			// A non-nil *Subtree with zero Nodes is not loaded: ReleaseNodes
+			// (via blockvalidation's node pooling) strips the Nodes backing
+			// slice while the pointer stays in SubtreeSlices. Trusting it here
+			// made requeued revalidations fail "first subtree has no nodes" on
+			// valid blocks instead of reloading from the store.
+			if b.SubtreeSlices[i] == nil || len(b.SubtreeSlices[i].Nodes) == 0 {
 				missing = true
 				break
 			}
@@ -1116,7 +2381,47 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 		}
 	}
 
+	// Close the mmap-backed survivors before dropping the slice. Reallocating
+	// over one would leak its mapping and its backing file, since nothing else
+	// holds a reference once the slice header is replaced.
+	//
+	// Heap-backed survivors are deliberately left alone: the block does not
+	// exclusively own them. blockvalidation's quick_validate puts the same
+	// *Subtree into both block.SubtreeSlices and the SubtreeWriteJob it queues
+	// on the shared write channel, and blockassembly aliases the processor's
+	// live job.Subtrees into a model.Block. Releasing one of those under a write
+	// worker races its Nodes and makes Serialize write a 0-leaf .subtree over a
+	// good one. Nothing is lost by leaving them: a heap subtree needs no Close,
+	// and dropping the reference is all the reallocation below has to do.
+	//
+	// For quick_validate that is airtight: it builds the shared subtree with
+	// AddNode, and its mmap-capable branch queues a job carrying no Subtree at
+	// all, so the entry it shares is always heap-backed.
+	//
+	// blockassembly is NOT airtight. With blockassembly_subtreeMmapDir set the
+	// processor's chained subtrees come from SubtreeProcessor.newSubtree, which
+	// returns NewTreeByLeafCountMmap — so a job subtree aliased into a Block can
+	// be mmap-backed, and Closing it would unmap and delete a file the live
+	// processor is still using. What saves that path today is that it never
+	// reaches here: its SubtreeSlices are always fully loaded and the same
+	// length as its Subtrees, so the "already loaded" check above returns first.
+	//
+	// Anything that tightens that check has to give blockassembly ownership of
+	// what it hands over, and copying the slice is not enough to do that: Close
+	// acts on the *Subtree, so a cloned array still holds the same pointers and
+	// unmapping one still tears down the mapping the processor is reading. It
+	// needs either subtrees of its own or a way to tell this release the entries
+	// are not the block's to close.
+	if closeErr := b.closeMmapSubtreesLocked(); closeErr != nil {
+		logger.Warnf("[BLOCK][%s][ID %d] failed closing mmap subtrees before reload: %v", b.Hash().String(), b.ID, closeErr)
+	}
+
 	b.SubtreeSlices = make([]*subtreepkg.Subtree, len(b.Subtrees))
+
+	// Snapshot the node allocator under the lock we already hold so deserialize
+	// goroutines can read it without further synchronisation. nodeAlloc may be
+	// nil, in which case DeserializeFromReaderWithAllocator falls back to make.
+	nodeAlloc := b.nodeAllocator
 
 	var (
 		sizeInBytes atomic.Uint64
@@ -1129,7 +2434,10 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, concurrency)
+	util.SafeSetLimit(logger, g, concurrency)
+
+	loaders := make([]func() error, len(b.Subtrees))
+
 	// we have the hashes. Get the actual subtrees from the subtree store
 	for i, subtreeHash := range b.Subtrees {
 		i := i
@@ -1138,7 +2446,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 			blockID := b.ID
 			subtreeHash := subtreeHash
 
-			g.Go(func() error {
+			loadSubtree := func() error {
 				// retry to get the subtree from the store 3 times, there are instances when we get an EOF error,
 				// probably when being moved to permanent storage in another service
 				subtree := &subtreepkg.Subtree{}
@@ -1188,24 +2496,79 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 					bufioReaderPool.Put(bufferedReader)
 				}()
 
-				if err = subtree.DeserializeFromReader(bufferedReader); err != nil {
-					_, err = retry.Retry(gCtx, logger, func() (struct{}, error) {
-						return struct{}{}, subtree.DeserializeFromReader(bufferedReader)
-					}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s][ID %d] failed to deserialize subtree %s", blockHash, blockID, subtreeHash)))
-
-					if err != nil {
-						return errors.NewStorageError("[BLOCK][%s][ID %d] failed to deserialize subtree %s", blockHash, blockID, subtreeHash, err)
-					}
+				// No retry here. It used to re-run the deserialize on the same
+				// partially-consumed bufferedReader with no re-fetch and no reset, so
+				// it read leftover bytes as a fresh root hash, fees and numLeaves: it
+				// could not recover a truncated read, and could ask nodeAlloc for a
+				// second array sized from garbage while never returning the first. The
+				// transient EOF the old comment described is already covered by
+				// findSubtree above, which retries the fetch and genuinely re-opens
+				// the blob.
+				if err = subtree.DeserializeFromReaderWithAllocator(bufferedReader, nodeAlloc); err != nil {
+					return errors.NewStorageError("[BLOCK][%s][ID %d] failed to deserialize subtree %s", blockHash, blockID, subtreeHash, err)
 				}
 
+				// Stored before the check below, not after. The reload path can only
+				// close what it finds in SubtreeSlices, so returning an error with the
+				// entry still nil orphans a backing array the allocator handed out —
+				// and a peer able to trigger repeated rejections turns that into
+				// sustained pool churn. Returning the error with the entry set matches
+				// what the size checks further down already do.
 				b.SubtreeSlices[i] = subtree
+
+				// Bind the file to its key, once, for every later consumer of
+				// RootHash(). DeserializeFromReaderWithAllocator caches the .subtree
+				// header's root for anything read from storage, and CheckMerkleRoot does
+				// not close the gap either —
+				// for sIdx 0 it recomputes via RootHashWithReplaceRootNode, so the
+				// cached root is never compared. This compares the file's claim, not
+				// the tree, so it catches the wrong file under the right key rather
+				// than a rewritten header.
+				if err := ValidateSubtreeMatchesKey(subtree, subtreeHash); err != nil {
+					return errors.NewStorageError("[BLOCK][%s][ID %d] subtree %s", blockHash, blockID, subtreeHash, err)
+				}
 
 				sizeInBytes.Add(subtree.SizeInBytes)
 				txCount.Add(uint64(subtree.Length())) // nolint: gosec
 
 				return nil
-			})
+			}
+
+			loaders[i] = loadSubtree
 		}
+	}
+
+	lastIdx := len(loaders) - 1
+
+	if onFirst != nil && lastIdx >= 0 {
+		// Nothing else is in flight yet, so load the boundary subtrees here and let
+		// onFirst see them before any other subtree is fetched or reaches
+		// onLoaded. Wait is still called on failure: only Wait cancels gCtx, which
+		// otherwise stays registered on ctx.
+		if err := loadBoundarySubtrees(loaders, onFirst, onLoaded, b.SubtreeSlices); err != nil {
+			_ = g.Wait()
+			return err
+		}
+	}
+
+	for i, load := range loaders {
+		if load == nil || (onFirst != nil && (i == 0 || i == lastIdx)) {
+			continue
+		}
+
+		i, load := i, load
+
+		g.Go(func() error {
+			if err := load(); err != nil {
+				return err
+			}
+
+			if onLoaded != nil {
+				return onLoaded(i, b.SubtreeSlices[i])
+			}
+
+			return nil
+		})
 	}
 
 	if err := g.Wait(); err != nil {
@@ -1221,13 +2584,27 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
 		subtree := b.SubtreeSlices[sIdx]
 		if subtree == nil {
-			return errors.NewBlockInvalidError("[BLOCK][%s][ID %d] subtree %d of %d was loaded but is nil", b.String(), b.ID, sIdx, nrOfSubtrees)
+			// Use b.Hash() rather than b.String(): String() takes subtreeSlicesMu, which is
+			// already held for the whole of this function, and sync.RWMutex is not reentrant
+			// (a second Lock on an already-held RWMutex deadlocks).
+			//
+			// A processing error, NOT a corrupt-body verdict: a nil survivor here can never be
+			// peer data. SubtreeSlices is reallocated all-nil above, so every index gets a
+			// loader: the boundary subtrees run inline when onFirst is set, the rest in
+			// goroutines. Each loader either assigns its slice or returns an error, and every
+			// error returns before this loop. subtreeSlicesMu is held
+			// for the whole function, so nothing can nil an entry mid-flight either. A nil left
+			// here is therefore a local invariant break, and classifying it corrupt would strike
+			// the serving peer for our own bug. Matches how Valid and CheckMerkleRoot classify the
+			// identical phenomenon (bitcoin-sv/teranode#4692). The length mismatch below stays
+			// corrupt — that one IS body-derived.
+			return errors.NewProcessingError("[BLOCK][%s][ID %d] subtree %d of %d was loaded but is nil", b.Hash().String(), b.ID, sIdx, nrOfSubtrees)
 		}
 		if sIdx == 0 {
 			subtreeSize = subtree.Length()
 		} else if subtree.Length() != subtreeSize && sIdx != nrOfSubtrees-1 {
 			// all subtrees need to be the same size as the first tree, except the last one
-			return errors.NewBlockInvalidError("[BLOCK][%s][ID %d] subtree %d has length %d, expected %d", b.String(), b.ID, sIdx, subtree.Length(), subtreeSize)
+			return errors.NewBlockCorruptError("[BLOCK][%s][ID %d] subtree %d has length %d, expected %d", b.Hash().String(), b.ID, sIdx, subtree.Length(), subtreeSize)
 		}
 	}
 
@@ -1238,6 +2615,155 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	// TODO something with conflicts
 
 	return nil
+}
+
+// ReleaseSubtreeNodes releases every loaded subtree under the block's subtree
+// mutex: each heap-backed subtree's Nodes backing slice is handed to put
+// (mmap-backed subtrees are skipped — their backing is the mapped region, and
+// pooling it after munmap would be a use-after-free), each subtree is Closed
+// (unmapping and removing the backing file for mmap-backed subtrees; a no-op
+// for heap-backed ones), and each SubtreeSlices entry is nil-ed so every
+// loaded-check sees the subtree as missing and a later revalidation reloads
+// from the store. Safe to call multiple times; nil entries are skipped.
+//
+// Returns the joined Close errors, if any. A failed Close means a mapping was
+// not torn down (or its backing file not removed), which grows the address
+// space with no other signal — model.Block has no logger, so the caller is
+// expected to log it.
+func (b *Block) ReleaseSubtreeNodes(put func([]subtreepkg.Node)) error {
+	b.subtreeSlicesMu.Lock()
+	defer b.subtreeSlicesMu.Unlock()
+
+	return b.releaseSubtreeNodesLocked(put)
+}
+
+// TryReleaseSubtreeNodes is ReleaseSubtreeNodes for callers that must not block.
+// It reports whether the release happened: false means the block's subtree mutex
+// was held by someone else and nothing was touched.
+//
+// For callers running underneath another lock. blockvalidation's
+// lastValidatedBlocks eviction function runs inside expiringmap.clean(), which
+// holds the map's own write lock for the whole sweep, while
+// GetAndValidateSubtrees holds a block's subtree mutex across store reads with
+// retries and backoff. Blocking there parks the cleaner under the map lock and
+// queues every Get/Set/Delete on the cache behind a single block's I/O. Such a
+// caller should decline the eviction instead and let the next tick retry it —
+// clean() leaves a vetoed entry in place with its expiry unchanged.
+func (b *Block) TryReleaseSubtreeNodes(put func([]subtreepkg.Node)) (bool, error) {
+	if !b.subtreeSlicesMu.TryLock() {
+		return false, nil
+	}
+	defer b.subtreeSlicesMu.Unlock()
+
+	return true, b.releaseSubtreeNodesLocked(put)
+}
+
+// releaseSubtreeNodesLocked is ReleaseSubtreeNodes' body. The caller must hold
+// b.subtreeSlicesMu for writing.
+func (b *Block) releaseSubtreeNodesLocked(put func([]subtreepkg.Node)) error {
+	var closeErrs []error
+
+	// A live node index reads its hashes from these arrays: a pooled one would be
+	// overwritten by the next subtree load and an unmapped one would fault. Detach
+	// the subtrees from the block all the same, but leave their Nodes attached (a
+	// dedup goroutine that captured one still reads them) and leave the release,
+	// which drops the heap arrays instead of pooling them, and the closes to
+	// releaseTxMap.
+	pinned := b.nodeIndexPins.Load() > 0
+
+	for i, st := range b.SubtreeSlices {
+		if st == nil {
+			continue
+		}
+
+		if pinned {
+			b.deferredCloses = append(b.deferredCloses, st)
+			b.SubtreeSlices[i] = nil
+
+			continue
+		}
+
+		nodes := st.ReleaseNodes()
+
+		if nodes != nil && put != nil && !st.IsMmapBacked() {
+			put(nodes)
+		}
+
+		if err := st.Close(); err != nil {
+			closeErrs = append(closeErrs, errors.NewProcessingError("subtree %d", i, err))
+		}
+
+		b.SubtreeSlices[i] = nil
+	}
+
+	return errors.Join(closeErrs...)
+}
+
+// ReplaceSubtreeSlices swaps in a freshly built set of subtree slices under the
+// block's subtree mutex.
+//
+// Callers that reload a block's subtrees must build the replacement in a local
+// slice and hand it over here, rather than assigning SubtreeSlices and then
+// filling its entries. A block can be reachable from blockvalidation's
+// lastValidatedBlocks while it is being reloaded, and that cache's TTL cleaner
+// runs ReleaseSubtreeNodes on it under this same mutex — so an unlocked reload
+// races the release on both the slice header and its elements, and entries the
+// reload has just filled get nil-ed underneath it.
+func (b *Block) ReplaceSubtreeSlices(slices []*subtreepkg.Subtree) {
+	b.subtreeSlicesMu.Lock()
+	defer b.subtreeSlicesMu.Unlock()
+
+	b.SubtreeSlices = slices
+}
+
+// closeMmapSubtreesLocked Closes every mmap-backed subtree in SubtreeSlices,
+// leaving heap-backed subtrees untouched. The caller must hold
+// b.subtreeSlicesMu for writing.
+//
+// Used where the block is about to drop its references to the subtrees but may
+// not be their only holder. Closing is only needed for mmap-backed subtrees —
+// it unmaps the region and removes the backing file, which no finalizer would
+// ever do.
+//
+// Callers must satisfy themselves that the block's mmap-backed entries are its
+// own. That holds for every caller today, but not because mmap-backed subtrees
+// are inherently unshared: see the note in GetAndValidateSubtrees on
+// blockassembly, whose job subtrees are mmap-backed whenever
+// blockassembly_subtreeMmapDir is set and are only ever safe here because that
+// path returns before reaching this function.
+//
+// The array itself is not written to, deliberately. SubtreeSlices can be the
+// caller's own slice: blockassembly builds a model.Block with
+// SubtreeSlices: job.Subtrees and calls Valid on it, sharing the backing array
+// with the live subtree processor. Nil-ing an element there would reach into the
+// processor's state to no purpose, since the only caller replaces the slice
+// header immediately afterwards. Returns the joined Close errors, if any.
+func (b *Block) closeMmapSubtreesLocked() error {
+	var closeErrs []error
+
+	for i, st := range b.SubtreeSlices {
+		if st == nil || !st.IsMmapBacked() {
+			continue
+		}
+
+		// a live node index still reads the region: releaseTxMap detaches and unmaps it
+		if b.nodeIndexPins.Load() > 0 {
+			b.deferredCloses = append(b.deferredCloses, st)
+			continue
+		}
+
+		// Detach Nodes before unmapping, the same order releaseSubtreeNodesLocked
+		// uses. Close leaves st.Nodes pointing at the region it just unmapped, so
+		// anything that still holds this subtree would be reading freed memory.
+		// The slice is dropped, never pooled: its backing IS the mapped region.
+		_ = st.ReleaseNodes()
+
+		if err := st.Close(); err != nil {
+			closeErrs = append(closeErrs, errors.NewProcessingError("subtree %d", i, err))
+		}
+	}
+
+	return errors.Join(closeErrs...)
 }
 
 // SubtreesLoaded checks if subtrees are loaded and valid.
@@ -1268,6 +2794,14 @@ func (b *Block) GetSubtreeSlicesCount() int {
 }
 
 func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore SubtreeStore, subtreeHash chainhash.Hash, subtree *subtreepkg.Subtree) (*subtreepkg.Meta, error) {
+	// An internal-block caller can reach validOrderAndBlessed with no subtree store at all (subtrees
+	// declared, nil store — the one shape that leaves the body unbound to the header). Report that as
+	// an error rather than dereferencing a nil interface, so the caller can fall back to the meta
+	// regenerator and, failing that, surface a diagnosable failure instead of a panic.
+	if subtreeStore == nil {
+		return nil, errors.NewProcessingError("[BLOCK][%s][%s] failed to get subtree meta: no subtree store", b.String(), subtreeHash.String())
+	}
+
 	// get subtree meta
 	subtreeMetaReader, err := subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeMeta)
 	if err != nil {
@@ -1278,8 +2812,11 @@ func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore SubtreeSto
 		_ = subtreeMetaReader.Close()
 	}()
 
-	// no need to check whether this fails or not, it's just a cache file and not critical
-	subtreeMetaSlice, err := subtreepkg.NewSubtreeMetaFromReader(subtree, subtreeMetaReader)
+	// Validate the file's fixed header against the subtree being checked before
+	// any body deserialization (issue 1425); a mismatch fails loudly here and
+	// routes the caller into meta regeneration. See
+	// NewSubtreeMetaFromValidatedReader for the three torn-file failure shapes.
+	subtreeMetaSlice, err := NewSubtreeMetaFromValidatedReader(subtreeHash, subtree, subtreeMetaReader)
 	if err != nil {
 		return nil, errors.NewProcessingError("[BLOCK][%s][%s] failed to deserialize subtree meta", b.String(), subtreeHash.String(), err)
 	}
@@ -1306,6 +2843,14 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 		}
 
 		if sIdx == 0 {
+			// Reuse the early binding check's result when it was computed for this
+			// same subtree and coinbase. Swap consumes it, so the memo never keeps a
+			// released subtree alive.
+			if memo := b.firstRootMemo.Swap(nil); memo != nil && memo.subtree == subtree && memo.coinbase.IsEqual(b.CoinbaseTx.TxIDChainHash()) {
+				hashes[sIdx] = memo.root
+				continue
+			}
+
 			// We need to inject the coinbase tx id into the first position of the first subtree
 			rootHash, err := subtree.RootHashWithReplaceRootNode(b.CoinbaseTx.TxIDChainHash(), 0, uint64(b.CoinbaseTx.Size())) // nolint: gosec
 			if err != nil {
@@ -1325,46 +2870,130 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 
 	var calculatedMerkleRootHash *chainhash.Hash
 
-	switch {
-	case len(hashes) == 1:
-		calculatedMerkleRootHash = &hashes[0]
-	case len(hashes) > 0:
-		// Create a new subtree with the hashes of the subtrees
-		st, err := subtreepkg.NewIncompleteTreeByLeafCount(len(b.Subtrees))
+	if len(hashes) > 0 {
+		calculatedMerkleRootHash, err = blockMerkleRoot(b.String, hashes, b.SubtreeSlices, true)
 		if err != nil {
-			return errors.NewProcessingError("[BLOCK][%s] error creating new root tree", b.String(), err)
+			return err
 		}
-
-		seen := make(map[chainhash.Hash]struct{}, len(hashes))
-
-		for _, hash := range hashes {
-			if _, dup := seen[hash]; dup {
-				return errors.NewBlockInvalidError("[BLOCK][%s] duplicate subtree root hash in top-level merkle tree: %s", b.String(), hash.String())
-			}
-
-			seen[hash] = struct{}{}
-
-			err = st.AddNode(hash, 1, 0)
-			if err != nil {
-				return errors.NewProcessingError("[BLOCK][%s] error adding node to root tree", b.String(), err)
-			}
-		}
-
-		calculatedMerkleRoot := st.RootHash()
-
-		calculatedMerkleRootHash, err = chainhash.NewHash(calculatedMerkleRoot[:])
-		if err != nil {
-			return errors.NewProcessingError("[BLOCK][%s] error creating calculated merkle root hash", b.String(), err)
-		}
-	default:
+	} else {
 		calculatedMerkleRootHash = b.CoinbaseTx.TxIDChainHash()
 	}
 
 	if !b.Header.HashMerkleRoot.IsEqual(calculatedMerkleRootHash) {
-		return errors.NewBlockInvalidError("[BLOCK][%s] merkle root does not match", b.String())
+		// The received body's subtrees do not hash to the header's merkle root: the body
+		// is not bound to the header, so this cannot condemn the hash — classify corrupt
+		// and re-download, never invalid=true (bitcoin-sv/teranode#4692).
+		return errors.NewBlockCorruptError("[BLOCK][%s] merkle root does not match", b.String())
 	}
 
 	return nil
+}
+
+// firstRootMemo is subtree 0's coinbase-substituted root, keyed by the subtree
+// and coinbase it was computed from.
+type firstRootMemo struct {
+	subtree  *subtreepkg.Subtree
+	coinbase chainhash.Hash
+	root     chainhash.Hash
+}
+
+// blockMerkleRoot computes the header merkle root of a subtree-backed body from
+// its top-level subtree roots. hashes[0] must already carry the coinbase
+// substitution. slices supplies the subtrees whose shape the top tree depends
+// on: the first (target length and height) and the last (lifted when short).
+// With allLoaded every entry must be present, as CheckMerkleRoot needs; the
+// early binding check passes only the first and last, and the middle lengths
+// are checked once the rest are loaded.
+//
+// label is called at most once per multi-subtree body, and never while the caller
+// holds subtreeSlicesMu: CheckMerkleRoot passes b.String, which takes it, and the
+// load hooks, which run under it, pass a precomputed hash string instead.
+func blockMerkleRoot(label func() string, hashes []chainhash.Hash, slices []*subtreepkg.Subtree, allLoaded bool) (*chainhash.Hash, error) {
+	if len(hashes) == 1 {
+		return &hashes[0], nil
+	}
+
+	// The first subtree must be complete (production invariant under Strategy A).
+	// Its Length() therefore equals its serialized leaf count both in-memory and
+	// after a disk round-trip, making it a stable signal for the block's
+	// intended subtree capacity. Subtree.Height is correct for the lift step
+	// because for a complete subtree Height = Ceil(Log2(Length)) and that
+	// relationship is preserved by deserialization (which re-derives Height
+	// from numLeaves).
+	// Re-read rather than reuse the loop above: without subtreeSlicesMu a
+	// concurrent release can nil an entry between the two passes.
+	firstSubtree := slices[0]
+	if firstSubtree == nil {
+		return nil, errors.NewProcessingError("[BLOCK][%s] first subtree was released during validation", label())
+	}
+
+	targetLength := firstSubtree.Length()
+	targetHeight := firstSubtree.Height
+
+	// The bracketed site prefix these messages have always carried. Built once and
+	// handed to the shared helpers so their text stays byte-identical to what this
+	// function produced inline, block label included.
+	siteLabel := "BLOCK][" + label()
+
+	// Lift correctness depends on the first subtree's leaf count being a power
+	// of two — that's what makes the partitioned top-tree composition match
+	// the canonical flat merkle root. Without this guard a peer can craft a
+	// non-power-of-two first subtree (e.g. lengths [3, 2]) and produce a
+	// merkle root that a canonical SV Node validator would not agree with.
+	//
+	// That guard and the per-subtree length rules now live in
+	// model.CheckSubtreeShape, so the quick-validation binding pass — which walks the
+	// block in chunks and therefore can never call this function — runs the same
+	// arithmetic instead of a second copy of it. Reached only when len(hashes) > 1:
+	// the single-subtree early exit above stays deliberately ahead of it, because one
+	// subtree with a non-power-of-two leaf count is a legitimate body. The guard runs
+	// on index 0, which is always present here, so it still precedes every length
+	// rule.
+	for i, sub := range slices {
+		isLast := i == len(slices)-1
+
+		if sub == nil {
+			if !allLoaded && !isLast {
+				// The early binding check has only the first and last subtree
+				// loaded; the middle lengths are checked once the rest are.
+				continue
+			}
+
+			return nil, errors.NewProcessingError("[%s] subtree %d of %d was released during validation", siteLabel, i, len(slices))
+		}
+
+		if err := CheckSubtreeShape(siteLabel, i, sub.Length(), targetLength, isLast); err != nil {
+			return nil, err
+		}
+	}
+
+	// If the final subtree is shorter than the target length, lift its root
+	// to the target height so it occupies the slot of a same-capacity subtree
+	// in the top-level merkle tree. The final subtree's leaf count does NOT
+	// need to be a power of two: BuildMerkleTreeStoreFromBytes already applies
+	// the duplicate-when-odd rule at every internal level, so the subtree's
+	// own RootHash() naturally lives at height ceil(log2(Length)) and matches
+	// what the canonical flat tree produces for that segment. Allowing
+	// non-power-of-two final subtrees is what lets the legacy-block
+	// partitioner stay at maxItems instead of degenerating to tiny subtrees
+	// for adversarial transaction counts — see issue #901.
+	last := slices[len(slices)-1]
+	if last == nil {
+		return nil, errors.NewProcessingError("[%s] final subtree was released during validation", siteLabel)
+	}
+
+	if last.Length() < targetLength {
+		liftedRoot, err := last.RootHashPadded(targetHeight)
+		if err != nil {
+			return nil, errors.NewProcessingError("[%s] failed lifting final subtree", siteLabel, err)
+		}
+
+		hashes[len(hashes)-1] = *liftedRoot
+	}
+
+	// Shared with the chunked binding pass, for the same reason as the shape rules:
+	// one implementation of the duplicate-root scan and the top-tree build.
+	return ComposeSubtreeRootsToMerkleRoot(siteLabel, hashes)
 }
 
 // ExtractCoinbaseHeight attempts to extract the height of the block from the

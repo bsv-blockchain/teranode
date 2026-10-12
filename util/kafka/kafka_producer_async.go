@@ -42,9 +42,46 @@ type KafkaAsyncProducerI interface {
 
 	// Publish sends a message to the producer's channel
 	Publish(msg *Message)
+
+	// TryPublish performs a non-blocking send to the producer's channel. It returns
+	// false (dropping the message) if the channel is full or the producer is shutting
+	// down. Use for best-effort topics where blocking the caller's hot path on Kafka
+	// back-pressure is worse than losing a message.
+	TryPublish(msg *Message) bool
 }
 
+// defaultOuterBatcherLinger is the default time the outer async batcher
+// waits for stragglers to join the buffer before draining into franz-go.
+// It is intentionally short — the outer batcher exists only to amortise
+// channel reads, NOT to batch records at the broker level (franz-go's
+// per-partition batcher does that). See KafkaProducerConfig.OuterBatcherLinger.
+const defaultOuterBatcherLinger = 10 * time.Millisecond
+
 // KafkaProducerConfig holds configuration for the async Kafka producer.
+//
+// The three URL params named after Sarama's Flush.* triggers no longer map
+// cleanly onto a single knob each — set them with intent, not by analogy
+// to Sarama:
+//
+//   - FlushFrequency → kgo.ProducerLinger only. This is franz-go's
+//     PER-PARTITION linger: how long franz-go waits for a partition's
+//     batch to fill before sending it to the broker. It does NOT drive
+//     the outer batcher's drain timer any more — see OuterBatcherLinger.
+//   - FlushMessages has TWO effects, both keyed on the same value:
+//     (1) kgo.MaxBufferedRecords — global back-pressure cap; once
+//     exceeded Produce() blocks; (2) outer-batcher flush-size trigger
+//     via currentBatchSize(): when the wrapper's pending buffer reaches
+//     this length, it drains into franz-go without waiting for the
+//     linger. So it IS a (coarse) flush trigger, just not at the
+//     broker level.
+//   - FlushBytes → kgo.ProducerBatchMaxBytes (per-partition batch hard
+//     cap; clamped to ≥1 MiB). Not a flush trigger.
+//
+// OuterBatcherLinger is the outer drain goroutine's straggler-flush
+// timer. It used to be derived from FlushFrequency, which silently
+// stacked a second linger on every record and caused the dev-scale-1/2
+// txmeta regression at 1.2M TPS. It is now decoupled and defaults to
+// defaultOuterBatcherLinger (10ms); operators should rarely change it.
 type KafkaProducerConfig struct {
 	Logger                ulogger.Logger // Logger instance
 	URL                   *url.URL       // Kafka URL
@@ -54,9 +91,10 @@ type KafkaProducerConfig struct {
 	ReplicationFactor     int16          // Replication factor for topic
 	RetentionPeriodMillis string         // Message retention period
 	SegmentBytes          string         // Segment size in bytes
-	FlushBytes            int            // Flush threshold in bytes
-	FlushMessages         int            // Number of messages before flush
-	FlushFrequency        time.Duration  // Time between flushes
+	FlushBytes            int            // → kgo.ProducerBatchMaxBytes (per-partition batch hard cap, clamped ≥1 MiB). See doc above.
+	FlushMessages         int            // Dual use: kgo.MaxBufferedRecords AND outer-batcher flush-size trigger via currentBatchSize(). See doc above.
+	FlushFrequency        time.Duration  // → kgo.ProducerLinger only (per-partition broker-side linger). Outer batcher now uses OuterBatcherLinger. See doc above.
+	OuterBatcherLinger    time.Duration  // Straggler-flush timer for the outer drain goroutine; defaults to defaultOuterBatcherLinger when zero/negative
 
 	// TLS/Authentication configuration
 	EnableTLS     bool   // Enable TLS for Kafka connection
@@ -70,6 +108,13 @@ type KafkaProducerConfig struct {
 
 	// Transfer rate monitoring
 	SlowTransfer SlowTransferConfig // Thresholds for slow-send detection (zero value uses defaults)
+
+	// ManualPartitioning routes every record to Message.Partition without any
+	// hashing or sticky-batching by franz-go. Callers MUST set Partition on
+	// every Message they publish — there is no fallback. Used by the validator
+	// when emitting v2-format txmeta messages so each Kafka message lands on a
+	// partition aligned with the receiver's cache bucket range.
+	ManualPartitioning bool
 }
 
 // MessageStatus represents the status of a produced message.
@@ -80,9 +125,18 @@ type MessageStatus struct {
 }
 
 // Message represents a Kafka message with key and value.
+//
+// Partition is honored only when the producer was created with
+// KafkaProducerConfig.ManualPartitioning=true. In that mode the producer is
+// registered with kgo.ManualPartitioner, which writes the record to exactly
+// the partition number specified — there is no fallback, so callers MUST set
+// Partition explicitly for every Message. With ManualPartitioning=false the
+// field is ignored (franz-go's default StickyKeyPartitioner picks the
+// partition from Key).
 type Message struct {
-	Key   []byte
-	Value []byte
+	Key       []byte
+	Value     []byte
+	Partition int32
 }
 
 // KafkaAsyncProducer implements asynchronous Kafka producer functionality using franz-go.
@@ -96,13 +150,51 @@ type KafkaAsyncProducer struct {
 	channelMu      sync.RWMutex        // Mutex to protect publishChannel access
 	publishWg      sync.WaitGroup      // WaitGroup to track publish goroutine
 
+	// lifecycleMu serialises Start against Stop. Without it the two interleave: a Stop that
+	// runs before Start has stored the publish channel sees a nil field, closes nothing, and
+	// then blocks in publishWg.Wait() on a publish goroutine whose channel is never closed.
+	//
+	// Lock order is lifecycleMu -> channelMu; nothing acquires them the other way round, and
+	// the goroutines Start goes on to spawn never take lifecycleMu before signalling Start,
+	// so there is no cycle. It is NOT held for a bounded time though: Stop keeps it across
+	// publishWg.Wait() and an untimed client.Flush(), which is why Stop's idempotent fast
+	// path deliberately sits in front of this mutex rather than behind it.
+	lifecycleMu sync.Mutex
+
+	// stopped marks a producer whose Stop() has run. Stop closes the underlying client
+	// (franz-go's Close, or InMemoryAsyncProducer.Close, which closes its input channel under
+	// a sync.Once) — both terminal. Start must refuse a stopped producer rather than reset
+	// shuttingDown/closed and hand the publish loop a corpse whose first send panics with
+	// "send on closed channel".
+	stopped atomic.Bool
+
 	// For in-memory support
 	inMemoryProducer *inmemorykafka.InMemoryAsyncProducer
 	isInMemory       bool
+
+	// produceHook, when non-nil, replaces the real client.Produce call in the
+	// flush path. Test-only seam: lets a test capture what the batching loop
+	// emits — including the final drain on Stop — without a live broker. It is
+	// nil in production.
+	produceHook func(*Message)
+}
+
+// ProducerOption mutates the KafkaProducerConfig built from a URL before the
+// underlying client is constructed. Use with NewKafkaAsyncProducerFromURL to
+// override flags that aren't expressible in the URL (e.g. ManualPartitioning).
+type ProducerOption func(*KafkaProducerConfig)
+
+// WithManualPartitioning switches the producer to franz-go's ManualPartitioner.
+// Every Message.Partition is honored verbatim; there is no fallback for
+// records without an explicit partition. Use when the caller wants strict
+// control over partition routing (e.g. the validator emitting v2 txmeta
+// messages aligned to receiver-side cache bucket ranges).
+func WithManualPartitioning() ProducerOption {
+	return func(c *KafkaProducerConfig) { c.ManualPartitioning = true }
 }
 
 // NewKafkaAsyncProducerFromURL creates a new async producer from a URL configuration.
-func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, url *url.URL, kafkaSettings *settings.KafkaSettings) (*KafkaAsyncProducer, error) {
+func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, url *url.URL, kafkaSettings *settings.KafkaSettings, opts ...ProducerOption) (*KafkaAsyncProducer, error) {
 	partitionsInt32, err := safeconversion.IntToInt32(util.GetQueryParamInt(url, "partitions", 1))
 	if err != nil {
 		return nil, err
@@ -136,12 +228,17 @@ func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, ur
 		FlushBytes:            util.GetQueryParamInt(url, "flush_bytes", 1024*1024),
 		FlushMessages:         util.GetQueryParamInt(url, "flush_messages", 50_000),
 		FlushFrequency:        util.GetQueryParamDuration(url, "flush_frequency", 10*time.Second),
+		OuterBatcherLinger:    util.GetQueryParamDuration(url, "outer_batcher_linger", defaultOuterBatcherLinger),
 		EnableTLS:             enableTLS,
 		TLSSkipVerify:         tlsSkipVerify,
 		TLSCAFile:             tlsCAFile,
 		TLSCertFile:           tlsCertFile,
 		TLSKeyFile:            tlsKeyFile,
 		EnableDebugLogging:    enableDebugLogging,
+	}
+
+	for _, opt := range opts {
+		opt(&producerConfig)
 	}
 
 	producer, err := retry.Retry(ctx, logger, func() (*KafkaAsyncProducer, error) {
@@ -207,7 +304,9 @@ func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*Kaf
 		logger.Warnf("flush_bytes=%d for topic %s clamped to %d for franz-go compatibility", cfg.FlushBytes, cfg.Topic, batchMaxBytes)
 	}
 
-	// Build franz-go client options
+	// Build franz-go client options. The mapping between the URL's flush_*
+	// query params and franz-go options is documented on KafkaProducerConfig;
+	// read those comments before changing any of these settings.
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(cfg.BrokersURL...),
 		kgo.DefaultProduceTopic(cfg.Topic),
@@ -215,6 +314,10 @@ func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*Kaf
 		kgo.ProducerLinger(cfg.FlushFrequency),
 		kgo.MaxBufferedRecords(cfg.FlushMessages),
 		kgo.DisableIdempotentWrite(),
+	}
+
+	if cfg.ManualPartitioning {
+		opts = append(opts, kgo.RecordPartitioner(kgo.ManualPartitioner()))
 	}
 
 	// Configure TLS if enabled
@@ -264,21 +367,35 @@ func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*Kaf
 	return producer, nil
 }
 
+// currentBatchLinger returns the straggler-flush timeout for the outer
+// drain goroutine — how long a non-empty buffer waits for more records
+// before being drained into franz-go. This is decoupled from
+// FlushFrequency: that field is the franz-go per-partition linger
+// (kgo.ProducerLinger), a separate concern.
+//
+// Note on the adaptive-slow bounds [50ms, 500ms]: when this function
+// was driven by FlushFrequency (default 10s, scale-1/2 setting 1s) the
+// bounds were [200ms, 5s] — i.e. 10× larger. They were compressed by
+// the same factor when the base switched to OuterBatcherLinger
+// (default 10ms). The bounds still serve their original purpose
+// (don't drop below "a few base lingers", don't sit above "a small
+// multiple of base") at the new scale.
 func (c *KafkaAsyncProducer) currentBatchLinger() time.Duration {
+	base := c.Config.OuterBatcherLinger
+	if base <= 0 {
+		base = defaultOuterBatcherLinger
+	}
 	if c.adaptiveSlow.Load() {
-		linger := c.Config.FlushFrequency * 4
-		if linger < 200*time.Millisecond {
-			linger = 200 * time.Millisecond
+		linger := base * 4
+		if linger < 50*time.Millisecond {
+			linger = 50 * time.Millisecond
 		}
-		if linger > 5*time.Second {
-			linger = 5 * time.Second
+		if linger > 500*time.Millisecond {
+			linger = 500 * time.Millisecond
 		}
 		return linger
 	}
-	if c.Config.FlushFrequency <= 0 {
-		return 10 * time.Second
-	}
-	return c.Config.FlushFrequency
+	return base
 }
 
 func (c *KafkaAsyncProducer) currentBatchSize() int {
@@ -310,15 +427,33 @@ func (c *KafkaAsyncProducer) currentBackpressureThreshold() int {
 	return threshold
 }
 
+// flushBuffered produces the buffered messages. It gates only on `closed` (the
+// client is gone), deliberately NOT on `shuttingDown`: Stop sets shuttingDown
+// before closing the publish channel but closes the client only after the
+// worker goroutine has returned (publishWg.Wait precedes client.Close), so
+// producing while shutting-down is always safe — and is exactly what the final
+// drain on Stop relies on to avoid silently dropping the last buffered batch.
+// An earlier shuttingDown gate here defeated that drain and also lost any batch
+// cleared after a size/linger flush during shutdown.
 func (c *KafkaAsyncProducer) flushBuffered(internalCtx context.Context, buffered []*Message) {
 	for _, msgBytes := range buffered {
-		if c.closed.Load() || c.shuttingDown.Load() {
+		if c.closed.Load() {
 			return
 		}
+
+		// Test seam: capture instead of producing to a real broker.
+		if c.produceHook != nil {
+			c.produceHook(msgBytes)
+			continue
+		}
+
 		record := &kgo.Record{
 			Topic: c.Config.Topic,
 			Key:   msgBytes.Key,
 			Value: msgBytes.Value,
+		}
+		if c.Config.ManualPartitioning {
+			record.Partition = msgBytes.Partition
 		}
 		c.client.Produce(internalCtx, record, func(r *kgo.Record, err error) {
 			if err != nil {
@@ -330,11 +465,158 @@ func (c *KafkaAsyncProducer) flushBuffered(internalCtx context.Context, buffered
 	}
 }
 
+// runProducerWorker is the async producer's batching loop: it accumulates
+// messages from ch into a local buffer and flushes them on batch-size or linger
+// timeout. On shutdown it relies on Stop closing ch: the close drains any
+// channel-resident messages into the buffer and the final drain produces them,
+// so a graceful Stop does not silently drop buffered messages. (It deliberately
+// does NOT break out of the loop merely because shuttingDown is set, which would
+// strand messages still queued in ch.)
+func (c *KafkaAsyncProducer) runProducerWorker(internalCtx context.Context, ch chan *Message) {
+	buffered := make([]*Message, 0, 256)
+	backpressureLogged := false
+	bufferedGauge := prometheusBufferedMessages.WithLabelValues(c.Config.Topic)
+	backpressureCounter := prometheusBackpressureSignals.WithLabelValues(c.Config.Topic)
+	bufferedGauge.Set(0)
+
+	slowMode := c.adaptiveSlow.Load()
+	linger := c.currentBatchLinger()
+	maxBatch := c.currentBatchSize()
+	backpressureThreshold := c.currentBackpressureThreshold()
+
+	const metricsUpdateInterval = 64
+	metricTick := 0
+
+	var lingerTimer *time.Timer
+	var lingerCh <-chan time.Time
+	defer func() {
+		if lingerTimer == nil {
+			return
+		}
+		if !lingerTimer.Stop() {
+			select {
+			case <-lingerTimer.C:
+			default:
+			}
+		}
+	}()
+
+	resetLingerTimer := func(d time.Duration) {
+		if lingerTimer == nil {
+			lingerTimer = time.NewTimer(d)
+		} else {
+			if !lingerTimer.Stop() {
+				select {
+				case <-lingerTimer.C:
+				default:
+				}
+			}
+			lingerTimer.Reset(d)
+		}
+		lingerCh = lingerTimer.C
+	}
+
+	flushBufferedFinal := func() {
+		if len(buffered) == 0 {
+			return
+		}
+		// Use a fresh context so final drain still runs after parent cancellation.
+		flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer flushCancel()
+		c.flushBuffered(flushCtx, buffered)
+		buffered = buffered[:0]
+		bufferedGauge.Set(0)
+	}
+
+	for {
+		// A fully-closed producer cannot produce, so just exit. Shutdown-in-
+		// progress is intentionally NOT an exit condition here: the worker
+		// keeps draining until Stop closes ch (handled by the receive paths
+		// below), so messages still queued in ch are not stranded.
+		if c.closed.Load() {
+			break
+		}
+
+		newSlowMode := c.adaptiveSlow.Load()
+		if newSlowMode != slowMode {
+			slowMode = newSlowMode
+			linger = c.currentBatchLinger()
+			maxBatch = c.currentBatchSize()
+			backpressureThreshold = c.currentBackpressureThreshold()
+		}
+
+		metricTick++
+		if metricTick >= metricsUpdateInterval {
+			bufferedGauge.Set(float64(len(buffered)))
+			metricTick = 0
+		}
+
+		if len(buffered) > backpressureThreshold {
+			if !backpressureLogged {
+				backpressureLogged = true
+				backpressureCounter.Inc()
+				c.Config.Logger.Warnf("[kafka] producer backpressure on topic %s: buffered=%d threshold=%d",
+					c.Config.Topic, len(buffered), backpressureThreshold)
+			}
+		} else {
+			backpressureLogged = false
+		}
+
+		if len(buffered) == 0 {
+			msgBytes, ok := <-ch
+			if !ok {
+				break
+			}
+			if msgBytes != nil {
+				buffered = append(buffered, msgBytes)
+			}
+			continue
+		}
+
+		if len(buffered) >= maxBatch {
+			c.flushBuffered(internalCtx, buffered)
+			buffered = buffered[:0]
+			bufferedGauge.Set(0)
+			continue
+		}
+
+		resetLingerTimer(linger)
+
+		select {
+		case msgBytes, ok := <-ch:
+			if !ok {
+				flushBufferedFinal()
+				return
+			}
+			if msgBytes != nil {
+				buffered = append(buffered, msgBytes)
+			}
+		case <-lingerCh:
+			lingerCh = nil
+			c.flushBuffered(internalCtx, buffered)
+			buffered = buffered[:0]
+			bufferedGauge.Set(0)
+		case <-internalCtx.Done():
+			flushBufferedFinal()
+			return
+		}
+	}
+}
+
 // Start begins the async producer operation.
 func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 	if c == nil {
 		return
 	}
+
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+
+	if c.stopped.Load() {
+		c.Config.Logger.Errorf("[kafka] Start called on a producer already stopped for topic %s, ignoring", c.Config.Topic)
+		return
+	}
+
 	c.shuttingDown.Store(false)
 	c.closed.Store(false)
 
@@ -360,135 +642,11 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 			defer c.publishWg.Done()
 			wg.Done()
 
-			c.channelMu.RLock()
-			ch := c.publishChannel
-			c.channelMu.RUnlock()
-
-			buffered := make([]*Message, 0, 256)
-			backpressureLogged := false
-			bufferedGauge := prometheusBufferedMessages.WithLabelValues(c.Config.Topic)
-			backpressureCounter := prometheusBackpressureSignals.WithLabelValues(c.Config.Topic)
-			bufferedGauge.Set(0)
-
-			slowMode := c.adaptiveSlow.Load()
-			linger := c.currentBatchLinger()
-			maxBatch := c.currentBatchSize()
-			backpressureThreshold := c.currentBackpressureThreshold()
-
-			const metricsUpdateInterval = 64
-			metricTick := 0
-
-			var lingerTimer *time.Timer
-			var lingerCh <-chan time.Time
-			defer func() {
-				if lingerTimer == nil {
-					return
-				}
-				if !lingerTimer.Stop() {
-					select {
-					case <-lingerTimer.C:
-					default:
-					}
-				}
-			}()
-
-			resetLingerTimer := func(d time.Duration) {
-				if lingerTimer == nil {
-					lingerTimer = time.NewTimer(d)
-				} else {
-					if !lingerTimer.Stop() {
-						select {
-						case <-lingerTimer.C:
-						default:
-						}
-					}
-					lingerTimer.Reset(d)
-				}
-				lingerCh = lingerTimer.C
-			}
-
-			flushBufferedFinal := func() {
-				if len(buffered) == 0 {
-					return
-				}
-				// Use a fresh context so final drain still runs after parent cancellation.
-				flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer flushCancel()
-				c.flushBuffered(flushCtx, buffered)
-				buffered = buffered[:0]
-				bufferedGauge.Set(0)
-			}
-
-			for {
-				if c.closed.Load() || c.shuttingDown.Load() {
-					break
-				}
-
-				newSlowMode := c.adaptiveSlow.Load()
-				if newSlowMode != slowMode {
-					slowMode = newSlowMode
-					linger = c.currentBatchLinger()
-					maxBatch = c.currentBatchSize()
-					backpressureThreshold = c.currentBackpressureThreshold()
-				}
-
-				metricTick++
-				if metricTick >= metricsUpdateInterval {
-					bufferedGauge.Set(float64(len(buffered)))
-					metricTick = 0
-				}
-
-				if len(buffered) > backpressureThreshold {
-					if !backpressureLogged {
-						backpressureLogged = true
-						backpressureCounter.Inc()
-						c.Config.Logger.Warnf("[kafka] producer backpressure on topic %s: buffered=%d threshold=%d",
-							c.Config.Topic, len(buffered), backpressureThreshold)
-					}
-				} else {
-					backpressureLogged = false
-				}
-
-				if len(buffered) == 0 {
-					msgBytes, ok := <-ch
-					if !ok {
-						break
-					}
-					if msgBytes != nil {
-						buffered = append(buffered, msgBytes)
-					}
-					continue
-				}
-
-				if len(buffered) >= maxBatch {
-					c.flushBuffered(internalCtx, buffered)
-					buffered = buffered[:0]
-					bufferedGauge.Set(0)
-					continue
-				}
-
-				resetLingerTimer(linger)
-
-				select {
-				case msgBytes, ok := <-ch:
-					if !ok {
-						flushBufferedFinal()
-						return
-					}
-					if msgBytes != nil {
-						buffered = append(buffered, msgBytes)
-					}
-				case <-lingerCh:
-					lingerCh = nil
-					c.flushBuffered(internalCtx, buffered)
-					buffered = buffered[:0]
-					bufferedGauge.Set(0)
-				case <-internalCtx.Done():
-					flushBufferedFinal()
-					return
-				}
-			}
-
+			// Range over the ch we were handed, not c.publishChannel: Stop() nils that field
+			// under the write lock, so re-reading it here races Stop() and can yield nil — a
+			// nil channel never ranges, so publishWg.Done() never runs and Stop() blocks
+			// forever in publishWg.Wait().
+			c.runProducerWorker(internalCtx, ch)
 		}()
 
 		signals := make(chan os.Signal, 1)
@@ -513,6 +671,23 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 	wg.Wait()
 }
 
+// runInMemoryPublishLoop drains ch into the in-memory broker until ch is closed or the
+// producer is marked closed.
+//
+// It ranges over the ch it is handed, never over c.publishChannel. Stop() nils that field
+// under the write lock, so re-reading it here would race Stop() and could yield nil — and a
+// nil channel never ranges, so the caller's deferred publishWg.Done() would never run and
+// Stop() would block forever in publishWg.Wait().
+func (c *KafkaAsyncProducer) runInMemoryPublishLoop(ch chan *Message) {
+	for msgBytes := range ch {
+		if c.closed.Load() {
+			return
+		}
+
+		c.inMemoryProducer.Produce(c.Config.Topic, msgBytes.Key, msgBytes.Value)
+	}
+}
+
 // startInMemory handles the in-memory producer case
 func (c *KafkaAsyncProducer) startInMemory(ctx context.Context, ch chan *Message) {
 	wg := sync.WaitGroup{}
@@ -531,17 +706,7 @@ func (c *KafkaAsyncProducer) startInMemory(ctx context.Context, ch chan *Message
 			defer c.publishWg.Done()
 			wg.Done()
 
-			c.channelMu.RLock()
-			ch := c.publishChannel
-			c.channelMu.RUnlock()
-
-			for msgBytes := range ch {
-				if c.closed.Load() {
-					break
-				}
-
-				c.inMemoryProducer.Produce(c.Config.Topic, msgBytes.Key, msgBytes.Value)
-			}
+			c.runInMemoryPublishLoop(ch)
 		}()
 
 		// Handle successes
@@ -581,11 +746,26 @@ func (c *KafkaAsyncProducer) Stop() error {
 		return nil
 	}
 
+	// Check shuttingDown BEFORE taking lifecycleMu, not just under it. StopProducerCtx
+	// abandons a Stop that outruns its deadline, and that orphan keeps running — holding
+	// lifecycleMu across publishWg.Wait() and an untimed client.Flush(). If the idempotent
+	// fast path sat behind the mutex, every later Stop() and Start() would block on that
+	// orphan forever. The re-check under the lock is what actually serialises; this one only
+	// keeps a second Stop cheap. It does not weaken the Start/Stop ordering fix: in that race
+	// the flag is still false here, so Stop goes on to take the mutex.
+	if c.shuttingDown.Load() {
+		return nil
+	}
+
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+
 	if c.shuttingDown.Load() {
 		return nil
 	}
 
 	c.shuttingDown.Store(true)
+	c.stopped.Store(true)
 
 	if c.closed.Load() {
 		return nil
@@ -647,6 +827,21 @@ func (c *KafkaAsyncProducer) Publish(msg *Message) {
 	if c.publishChannel != nil {
 		util.SafeSend(c.publishChannel, msg)
 	}
+}
+
+// TryPublish performs a non-blocking send to the producer's publish channel. It returns
+// false if the producer is shutting down or the channel buffer is full, dropping the
+// message rather than blocking the caller. Best-effort callers should treat a false
+// return as "not published" and fall back accordingly.
+func (c *KafkaAsyncProducer) TryPublish(msg *Message) bool {
+	c.channelMu.RLock()
+	defer c.channelMu.RUnlock()
+
+	if c.shuttingDown.Load() || c.closed.Load() || c.publishChannel == nil {
+		return false
+	}
+
+	return util.TrySend(c.publishChannel, msg)
 }
 
 // createTopicWithFranz creates a new Kafka topic with the specified configuration.

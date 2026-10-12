@@ -25,11 +25,17 @@ type InMemoryBroker struct {
 	mu     sync.RWMutex
 }
 
-// Topic holds messages and consumer channels for a specific topic.
+// Topic holds the consumer channels for a specific topic and the next offset to assign.
+//
+// It holds no messages. It used to keep every message ever produced, in a history nothing read,
+// so on a node running Kafka in memory each message stayed on the heap for good: on mainnet on
+// 2026-09-30 that was 6.9 GB of transaction metadata, 88% of the live heap, with the garbage
+// collector taking 68% of the CPU. A message is delivered to the consumers there are when it is
+// produced, exactly as before, and is then free to be collected.
 type Topic struct {
-	messages  []*Message
-	consumers []chan *Message
-	mu        sync.RWMutex
+	nextOffset int64
+	consumers  []chan *Message
+	mu         sync.RWMutex
 }
 
 // NewInMemoryBroker creates a new instance of the in-memory broker.
@@ -49,7 +55,6 @@ func (b *InMemoryBroker) Produce(ctx context.Context, topic string, key []byte, 
 		b.mu.Lock()
 		if _, exists := b.topics[topic]; !exists {
 			b.topics[topic] = &Topic{
-				messages:  make([]*Message, 0),
 				consumers: make([]chan *Message, 0),
 			}
 		}
@@ -64,11 +69,11 @@ func (b *InMemoryBroker) Produce(ctx context.Context, topic string, key []byte, 
 		Topic:     topic,
 		Key:       key,
 		Value:     value,
-		Offset:    int64(len(t.messages)),
+		Offset:    t.nextOffset,
 		Partition: 0,
 		Timestamp: time.Now(),
 	}
-	t.messages = append(t.messages, msg)
+	t.nextOffset++
 
 	// Broadcast to all consumers
 	for _, ch := range t.consumers {
@@ -79,6 +84,29 @@ func (b *InMemoryBroker) Produce(ctx context.Context, topic string, key []byte, 
 	}
 
 	return nil
+}
+
+// DropTopic removes the topic entirely from the broker.
+func (b *InMemoryBroker) DropTopic(topic string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.topics, topic)
+}
+
+// HasConsumer reports whether at least one consumer has registered for the
+// given topic. Tests use this to wait for consumer-group registration to
+// complete before publishing; the broker silently drops messages produced to
+// a topic with zero consumers, which otherwise manifests as flaky timeouts.
+func (b *InMemoryBroker) HasConsumer(topic string) bool {
+	b.mu.RLock()
+	t, ok := b.topics[topic]
+	b.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return len(t.consumers) > 0
 }
 
 // Topics returns a list of topic names managed by the broker.
@@ -270,7 +298,6 @@ type InMemoryConsumerGroup struct {
 	errors        chan error
 	closeOnce     sync.Once
 	cancelConsume context.CancelFunc
-	wg            sync.WaitGroup
 	closed        chan struct{}
 	isRunning     bool
 	isPaused      bool
@@ -293,7 +320,8 @@ func (mcg *InMemoryConsumerGroup) Errors() <-chan error {
 	return mcg.errors
 }
 
-// Close stops the consumer group.
+// Close cancels the consume context and marks the group closed. It does not wait for
+// the consume goroutine to finish — see the comment inside.
 func (mcg *InMemoryConsumerGroup) Close() error {
 	mcg.mu.Lock()
 	if !mcg.isRunning {
@@ -307,7 +335,10 @@ func (mcg *InMemoryConsumerGroup) Close() error {
 		if mcg.cancelConsume != nil {
 			mcg.cancelConsume()
 		}
-		mcg.wg.Wait()
+		// Close cancels and marks the group closed; it does NOT join the consume
+		// goroutine. That goroutine is parked in `range claim.Messages()` and only
+		// unwinds once a further message arrives and its handler fails, so there is
+		// nothing here that can wait for it without risking a wait that never ends.
 		close(mcg.errors)
 		close(mcg.closed)
 		mcg.isRunning = false
@@ -355,7 +386,6 @@ func (mcg *InMemoryConsumerGroup) Consume(ctx context.Context, topics []string, 
 		mcg.broker.mu.Lock()
 		if _, exists := mcg.broker.topics[topicToConsume]; !exists {
 			mcg.broker.topics[topicToConsume] = &Topic{
-				messages:  make([]*Message, 0),
 				consumers: make([]chan *Message, 0),
 			}
 		}

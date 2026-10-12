@@ -2,6 +2,7 @@ package util
 
 import (
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"os"
@@ -35,6 +36,9 @@ const (
 
 	// Default retry configuration
 	defaultRetryBackoff = 100 * time.Millisecond
+
+	errMsgReadKeyPair    = "failed to read key pair"
+	errMsgReadCaCertFile = "failed to read ca cert file"
 )
 
 // contextKey is a custom type for context keys to avoid collisions.
@@ -69,7 +73,7 @@ func (PasswordCredentials) RequireTransportSecurity() bool {
 // including security settings, authentication, retries, and message size limits.
 type ConnectionOptions struct {
 	MaxMessageSize   int                 // Max message size in bytes
-	SecurityLevel    int                 // 0 = insecure, 1 = secure, 2 = secure with client cert
+	SecurityLevel    int                 // 0 = insecure, 1 = TLS without server cert verification (client side: MITM-vulnerable), 2 = secure with client cert
 	CertFile         string              // CA cert file if SecurityLevel > 0
 	CaCertFile       string              // CA cert file if SecurityLevel > 0
 	KeyFile          string              // Client key file if SecurityLevel > 1
@@ -382,7 +386,9 @@ func retryInterceptor(maxAttempts int, retryBackoff time.Duration, callerName st
 // loadTLSCredentials configures TLS transport credentials based on the specified security level.
 // Supports four security levels:
 //   - Level 0: No security (insecure connection)
-//   - Level 1: TLS with no client certificate required
+//   - Level 1: TLS with no client certificate required. NOTE: on the client side this enables
+//     InsecureSkipVerify, so the server certificate is NOT verified (vulnerable to MITM). Use only
+//     in trusted/controlled networks where an operator has explicitly opted in via security_level_grpc.
 //   - Level 2: TLS with any client certificate accepted
 //   - Level 3: TLS with client certificate required and verified
 //
@@ -407,7 +413,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 		if isServer {
 			cert, err := tls.LoadX509KeyPair(connectionData.CertFile, connectionData.KeyFile)
 			if err != nil {
-				return nil, errors.NewConfigurationError("failed to read key pair", err)
+				return nil, errors.NewConfigurationError(errMsgReadKeyPair, err)
 			}
 
 			return credentials.NewTLS(&tls.Config{
@@ -416,8 +422,11 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 				MinVersion:   tls.VersionTLS12,
 			}), nil
 		} else {
+			// SecurityLevel 1 (client): encrypt the channel without verifying the server
+			// certificate. This is a deliberate, operator-opted-in mode (security_level_grpc=1,
+			// not the default) for trusted/controlled networks; it is MITM-exploitable by design.
 			return credentials.NewTLS(&tls.Config{
-				//nolint:gosec // G402: TLS InsecureSkipVerify set true. (gosec)
+				//nolint:gosec // G402: InsecureSkipVerify is an intentional, config-gated security level. (gosec)
 				InsecureSkipVerify: true,
 			}), nil
 		}
@@ -426,7 +435,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 		if isServer {
 			cert, err := tls.LoadX509KeyPair(connectionData.CertFile, connectionData.KeyFile)
 			if err != nil {
-				return nil, errors.NewConfigurationError("failed to read key pair", err)
+				return nil, errors.NewConfigurationError(errMsgReadKeyPair, err)
 			}
 
 			return credentials.NewTLS(&tls.Config{
@@ -438,7 +447,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 			// Load the server's CA certificate from disk
 			caCert, err := os.ReadFile(connectionData.CaCertFile)
 			if err != nil {
-				return nil, errors.NewConfigurationError("failed to read ca cert file", err)
+				return nil, errors.NewConfigurationError(errMsgReadCaCertFile, err)
 			}
 
 			caCertPool := x509.NewCertPool()
@@ -446,7 +455,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 
 			cert, err := tls.LoadX509KeyPair(connectionData.CertFile, connectionData.KeyFile)
 			if err != nil {
-				return nil, errors.NewConfigurationError("failed to read key pair", err)
+				return nil, errors.NewConfigurationError(errMsgReadKeyPair, err)
 			}
 
 			return credentials.NewTLS(&tls.Config{
@@ -461,7 +470,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 			// Load the server's CA certificate from disk
 			caCert, err := os.ReadFile(connectionData.CaCertFile)
 			if err != nil {
-				return nil, errors.NewConfigurationError("failed to read ca cert file", err)
+				return nil, errors.NewConfigurationError(errMsgReadCaCertFile, err)
 			}
 
 			caCertPool := x509.NewCertPool()
@@ -469,7 +478,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 
 			cert, err := tls.LoadX509KeyPair(connectionData.CertFile, connectionData.KeyFile)
 			if err != nil {
-				return nil, errors.NewConfigurationError("failed to read key pair", err)
+				return nil, errors.NewConfigurationError(errMsgReadKeyPair, err)
 			}
 
 			return credentials.NewTLS(&tls.Config{
@@ -482,7 +491,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 			// Load the server's CA certificate from disk
 			caCert, err := os.ReadFile(connectionData.CaCertFile)
 			if err != nil {
-				return nil, errors.NewConfigurationError("failed to read ca cert file", err)
+				return nil, errors.NewConfigurationError(errMsgReadCaCertFile, err)
 			}
 
 			caCertPool := x509.NewCertPool()
@@ -490,7 +499,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 
 			cert, err := tls.LoadX509KeyPair(connectionData.CertFile, connectionData.KeyFile)
 			if err != nil {
-				return nil, errors.NewConfigurationError("failed to read key pair", err)
+				return nil, errors.NewConfigurationError(errMsgReadKeyPair, err)
 			}
 
 			return credentials.NewTLS(&tls.Config{
@@ -551,7 +560,7 @@ func CreateAuthInterceptor(apiKey string, protectedMethods map[string]bool) grpc
 		}
 
 		// Validate API key
-		if keys[0] != apiKey {
+		if subtle.ConstantTimeCompare([]byte(keys[0]), []byte(apiKey)) != 1 {
 			return nil, status.Error(codes.Unauthenticated, "invalid API key")
 		}
 

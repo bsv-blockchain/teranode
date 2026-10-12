@@ -20,9 +20,11 @@ func TestStoreBlockWithID_SQLite(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
-		customID := uint64(42)
+		// A caller-supplied id must be the one reserved for the hash.
+		customID, err := s.AssignBlockID(context.Background(), block1.Hash())
+		require.NoError(t, err)
 
 		// Store block1 with custom ID
 		id1, height1, err := s.StoreBlock(context.Background(), block1, "", options.WithID(customID))
@@ -44,7 +46,7 @@ func TestStoreBlockWithID_SQLite(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Store block1 without custom ID (should use auto-increment)
 		// Note: Genesis block is auto-inserted during initialization with ID=0,
@@ -68,10 +70,11 @@ func TestStoreBlockWithID_SQLite(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
-		// Store first block with custom ID 100
-		customID1 := uint64(100)
+		// Store first block with its reserved id
+		customID1, err := s.AssignBlockID(context.Background(), block1.Hash())
+		require.NoError(t, err)
 		id1, _, err := s.StoreBlock(context.Background(), block1, "", options.WithID(customID1))
 		require.NoError(t, err)
 		assert.Equal(t, customID1, id1)
@@ -83,7 +86,8 @@ func TestStoreBlockWithID_SQLite(t *testing.T) {
 		assert.Greater(t, id2, uint64(0))
 
 		// Store third block with another custom ID
-		customID3 := uint64(500)
+		customID3, err := s.AssignBlockID(context.Background(), block3.Hash())
+		require.NoError(t, err)
 		id3, _, err := s.StoreBlock(context.Background(), block3, "", options.WithID(customID3))
 		require.NoError(t, err)
 		assert.Equal(t, customID3, id3)
@@ -109,9 +113,10 @@ func TestStoreBlockWithID_SQLite(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
-		customID := uint64(42)
+		customID, err := s.AssignBlockID(context.Background(), block1.Hash())
+		require.NoError(t, err)
 
 		// Store first block with custom ID
 		_, _, err = s.StoreBlock(context.Background(), block1, "", options.WithID(customID))
@@ -130,7 +135,7 @@ func TestStoreBlockWithID_SQLite(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Store block with WithID(0) should behave like no WithID option
 		// Genesis block is auto-inserted with ID=0, so first user block gets ID=1
@@ -151,9 +156,10 @@ func TestStoreBlockWithID_SQLite(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
-		customID := uint64(999)
+		customID, err := s.AssignBlockID(context.Background(), block1.Hash())
+		require.NoError(t, err)
 
 		// Store block with custom ID and other options
 		id1, _, err := s.StoreBlock(context.Background(), block1, "",
@@ -177,7 +183,7 @@ func TestStoreBlockWithID_SQLite(t *testing.T) {
 
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Since the genesis block is automatically inserted when the table is created,
 		// we need to retrieve it from the database to get the exact same block

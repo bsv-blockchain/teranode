@@ -1,17 +1,21 @@
 package txmetacache
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 func init() {
@@ -142,6 +146,144 @@ func BenchmarkImprovedCache_SetMulti_Small(b *testing.B) {
 	}
 }
 
+// BenchmarkImprovedCache_SetMulti_BucketPath exercises the bucket-batching
+// path (batch > smallSetMultiBatchThreshold). The Small variant above stays on
+// the per-key fast path and does not exercise the per-bucket scatter.
+func BenchmarkImprovedCache_SetMulti_BucketPath(b *testing.B) {
+	for _, n := range []int{64, 256, 1024} {
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			cache, err := New(256*1024*1024, Unallocated)
+			require.NoError(b, err)
+			defer cache.Reset()
+
+			keys := make([][]byte, n)
+			values := make([][]byte, n)
+			for i := range keys {
+				keys[i] = make([]byte, 32)
+				binary.LittleEndian.PutUint32(keys[i][:4], uint32(i))
+				values[i] = []byte("v")
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				if err := cache.SetMulti(keys, values); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// TestImprovedCache_SetMulti_BucketPathRoundTrip exercises the bucket-batching
+// path: it Sets a batch large enough to trip every per-bucket allocation site
+// in SetMulti, then verifies every (k, v) pair is retrievable. This is the
+// regression guard for the two-pass / pre-sized / pooled scratch refactor —
+// any aliasing or off-by-one in the bucket-scatter loop will surface here as
+// either missing keys or values landing in the wrong bucket.
+func TestImprovedCache_SetMulti_BucketPathRoundTrip(t *testing.T) {
+	cache, err := New(64*1024*1024, Unallocated)
+	require.NoError(t, err)
+	defer cache.Reset()
+
+	// Comfortably above smallSetMultiBatchThreshold (32) to force the
+	// bucket-batching path. Keep this large enough that multiple buckets
+	// receive >1 key under both BucketsCount=8192 (large) and =8 (test tag).
+	const n = 4096
+	keys := make([][]byte, n)
+	values := make([][]byte, n)
+
+	for i := range keys {
+		keys[i] = make([]byte, 32)
+		binary.LittleEndian.PutUint32(keys[i][:4], uint32(i))
+		values[i] = make([]byte, 16)
+		binary.LittleEndian.PutUint32(values[i][:4], uint32(i+1))
+	}
+
+	require.NoError(t, cache.SetMulti(keys, values))
+
+	// Read every key back twice in a row — the second pass catches any case
+	// where a pooled scratch entry would corrupt subsequent calls.
+	for pass := 0; pass < 2; pass++ {
+		for i, key := range keys {
+			var got []byte
+
+			require.NoError(t, cache.Get(&got, key), "pass=%d key idx %d", pass, i)
+			require.Equal(t, values[i], got, "pass=%d key idx %d", pass, i)
+		}
+	}
+
+	// Run a second SetMulti with overwritten values to confirm scratch reuse
+	// (Phase 2) does not leak keys/values across calls.
+	newValues := make([][]byte, n)
+	for i := range newValues {
+		newValues[i] = make([]byte, 16)
+		binary.LittleEndian.PutUint32(newValues[i][:4], uint32(i+1_000_000))
+	}
+
+	require.NoError(t, cache.SetMulti(keys, newValues))
+
+	for i, key := range keys {
+		var got []byte
+		require.NoError(t, cache.Get(&got, key))
+		require.Equal(t, newValues[i], got, "overwrite key idx %d", i)
+	}
+}
+
+// TestImprovedCache_SetMulti_BucketPathConcurrent runs many SetMulti calls in
+// parallel to exercise the sync.Pool scratch reuse across goroutines. With a
+// broken pool (aliased scratch, missed nil-out on Put), keys from one call
+// would leak into another and the post-condition would fail.
+func TestImprovedCache_SetMulti_BucketPathConcurrent(t *testing.T) {
+	cache, err := New(64*1024*1024, Unallocated)
+	require.NoError(t, err)
+	defer cache.Reset()
+
+	const goroutines = 8
+	const perGoroutine = 512
+
+	// require.*/t.FailNow may only be called from the test goroutine. Workers
+	// return their first error and we assert in the main goroutine.
+	var g errgroup.Group
+
+	for gi := 0; gi < goroutines; gi++ {
+		gi := gi
+
+		g.Go(func() error {
+			keys := make([][]byte, perGoroutine)
+			values := make([][]byte, perGoroutine)
+
+			for i := range keys {
+				keys[i] = make([]byte, 32)
+				// Disjoint key space per goroutine to make ownership unambiguous.
+				binary.LittleEndian.PutUint32(keys[i][:4], uint32(gi*perGoroutine+i))
+				values[i] = make([]byte, 16)
+				binary.LittleEndian.PutUint32(values[i][:4], uint32(gi))
+			}
+
+			if err := cache.SetMulti(keys, values); err != nil {
+				return errors.NewProcessingError("goroutine=%d SetMulti", gi, err)
+			}
+
+			for i, key := range keys {
+				var got []byte
+				if err := cache.Get(&got, key); err != nil {
+					return errors.NewProcessingError("goroutine=%d idx=%d Get", gi, i, err)
+				}
+
+				if !bytes.Equal(got, values[i]) {
+					return errors.NewProcessingError("goroutine=%d idx=%d: got %x, want %x", gi, i, got, values[i])
+				}
+			}
+
+			return nil
+		})
+	}
+
+	require.NoError(t, g.Wait())
+}
+
 // TestImprovedCache_New tests the New function with various configurations
 func TestImprovedCache_New(t *testing.T) {
 	tests := []struct {
@@ -259,6 +401,31 @@ func TestImprovedCache_SetAndGet(t *testing.T) {
 			require.Equal(t, tc.value, dst)
 		})
 	}
+}
+
+// TestImprovedCache_GetMissReturnsSentinel pins the cache-miss contract: the
+// returned error must satisfy errors.Is(err, errors.ErrNotFound) and must not
+// allocate per call. The previous formatted error accounted for ~10% of CPU
+// under load via fmt.Errorf + runtime.Caller.
+func TestImprovedCache_GetMissReturnsSentinel(t *testing.T) {
+	cache, err := New(64*1024, Unallocated)
+	require.NoError(t, err)
+	defer cache.Reset()
+
+	var buf []byte
+	err1 := cache.Get(&buf, []byte("absent-key-1"))
+	err2 := cache.Get(&buf, []byte("absent-key-2"))
+
+	require.Error(t, err1)
+	require.Error(t, err2)
+	require.True(t, errors.Is(err1, errors.ErrNotFound), "miss must satisfy errors.Is(err, ErrNotFound)")
+	require.True(t, errors.Is(err2, errors.ErrNotFound))
+
+	key := []byte("absent-key-1")
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = cache.Get(&buf, key)
+	})
+	require.Zero(t, allocs, "cache miss must not allocate; got %.2f allocs/op", allocs)
 }
 
 // TestImprovedCache_Has tests the Has function
@@ -810,6 +977,97 @@ func TestImprovedCache_CleanLockedMapUnallocated(t *testing.T) {
 
 	t.Logf("Unallocated cache stats - ValidEntriesCount: %d, TotalElementsAdded: %d",
 		stats.ValidEntriesCount, stats.TotalElementsAdded)
+}
+
+// TestImprovedCache_New_TrimRatio verifies that New threads an explicit
+// trimRatio through to the Preallocated bucket's Init call (the bug fixed
+// here: the value used to come from an untagged gocore.Config() read that
+// bypassed the typed settings system).
+func TestImprovedCache_New_TrimRatio(t *testing.T) {
+	t.Run("explicit trimRatio is honoured", func(t *testing.T) {
+		cache, err := New(16*1024, Preallocated, 7)
+		require.NoError(t, err)
+		defer cache.Reset()
+
+		require.Equal(t, 7, cache.trimRatio)
+
+		for i := range cache.buckets {
+			bp, ok := cache.buckets[i].(*bucketPreallocated)
+			require.True(t, ok, "bucket %d should be a bucketPreallocated", i)
+			require.Equal(t, 7, bp.trimRatio)
+		}
+	})
+
+	t.Run("omitted trimRatio falls back to defaultTrimRatio", func(t *testing.T) {
+		cache, err := New(16*1024, Preallocated)
+		require.NoError(t, err)
+		defer cache.Reset()
+
+		require.Equal(t, defaultTrimRatio, cache.trimRatio)
+	})
+
+	t.Run("trimRatio is ignored by non-preallocated bucket types", func(t *testing.T) {
+		cache, err := New(16*1024, Unallocated, 99)
+		require.NoError(t, err)
+		defer cache.Reset()
+
+		// Unallocated buckets never read c.trimRatio; the field on the
+		// top-level cache stays at its zero value.
+		require.Equal(t, 0, cache.trimRatio)
+	})
+}
+
+// TestBucketPreallocated_CleanLockedMap_TrimRatioAffectsRetainedEntries proves
+// trimRatio actually changes eviction behaviour for the Preallocated bucket
+// type. On every chunk-arena rotation, bucketPreallocated.Set computes
+// numOfChunksToRemove = ceil(len(chunks) * trimRatio / 100) and discards that
+// many chunks from the front of the arena via cleanLockedMap. A higher
+// trimRatio therefore discards a larger fraction of the arena per rotation:
+// given the same populated map, cleanLockedMap must retain fewer entries for
+// the higher trimRatio's (larger) starting offset.
+func TestBucketPreallocated_CleanLockedMap_TrimRatioAffectsRetainedEntries(t *testing.T) {
+	const chunksPerBucket = 8
+	const numEntries = 1000
+
+	numOfChunksToRemove := func(trimRatio int) int {
+		return int(math.Ceil(float64(chunksPerBucket*trimRatio) / 100))
+	}
+
+	newPopulatedBucket := func(t *testing.T, trimRatio int) *bucketPreallocated {
+		t.Helper()
+
+		b := &bucketPreallocated{}
+		require.NoError(t, b.Init(uint64(chunksPerBucket*ChunkSize), trimRatio))
+
+		// Populate the index map with entries spread evenly across the
+		// full chunk-arena byte range, independent of Set/hashing, so
+		// both buckets start from an identical, deterministic map.
+		arenaBytes := uint64(chunksPerBucket * ChunkSize)
+		span := arenaBytes / numEntries
+
+		b.m = make(map[uint64]uint64, numEntries)
+		for i := uint64(0); i < numEntries; i++ {
+			b.m[i] = i * span
+		}
+
+		return b
+	}
+
+	lowRatioBucket := newPopulatedBucket(t, 2)
+	highRatioBucket := newPopulatedBucket(t, 80)
+
+	lowRatioRemoved := numOfChunksToRemove(2)
+	highRatioRemoved := numOfChunksToRemove(80)
+	require.Less(t, lowRatioRemoved, highRatioRemoved, "test setup: trimRatio=80 must remove more chunks than trimRatio=2")
+
+	lowRatioBucket.cleanLockedMap(lowRatioRemoved * ChunkSize)
+	highRatioBucket.cleanLockedMap(highRatioRemoved * ChunkSize)
+
+	t.Logf("trimRatio=2: removed %d chunks, retained %d entries", lowRatioRemoved, len(lowRatioBucket.m))
+	t.Logf("trimRatio=80: removed %d chunks, retained %d entries", highRatioRemoved, len(highRatioBucket.m))
+
+	require.Less(t, len(highRatioBucket.m), len(lowRatioBucket.m),
+		"a higher trimRatio should retain fewer live entries after cleanLockedMap")
 }
 
 // TestImprovedCache_CleanLockedMapPreallocated tests cleanLockedMap for preallocated buckets

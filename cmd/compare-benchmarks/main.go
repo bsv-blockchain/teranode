@@ -17,6 +17,11 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 )
 
+const (
+	secOpUnit   = "sec/op"
+	vsBaseLabel = "vs base"
+)
+
 type comparison struct {
 	Name          string
 	BaselineValue string
@@ -120,21 +125,21 @@ func parseBenchstat(output string, threshold, alpha float64) []comparison {
 	noChangeRe := regexp.MustCompile(`~\s+\(p=(\d+\.?\d*)\s+n=\d+\)`)
 
 	scanner := bufio.NewScanner(strings.NewReader(output))
-	currentMetric := "sec/op"
+	currentMetric := secOpUnit
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
 		// Detect metric headers (sec/op, B/op, allocs/op)
-		if strings.Contains(line, "sec/op") && strings.Contains(line, "vs base") {
-			currentMetric = "sec/op"
+		if strings.Contains(line, secOpUnit) && strings.Contains(line, vsBaseLabel) {
+			currentMetric = secOpUnit
 			continue
 		}
-		if strings.Contains(line, "B/op") && strings.Contains(line, "vs base") {
+		if strings.Contains(line, "B/op") && strings.Contains(line, vsBaseLabel) {
 			currentMetric = "B/op"
 			continue
 		}
-		if strings.Contains(line, "allocs/op") && strings.Contains(line, "vs base") {
+		if strings.Contains(line, "allocs/op") && strings.Contains(line, vsBaseLabel) {
 			currentMetric = "allocs/op"
 			continue
 		}
@@ -205,7 +210,7 @@ func parseBenchstat(output string, threshold, alpha float64) []comparison {
 			comp.PValue, _ = strconv.ParseFloat(m[2], 64)
 			comp.HasPValue = true
 
-			if currentMetric == "sec/op" {
+			if currentMetric == secOpUnit {
 				comp.Degraded = comp.PValue < alpha && comp.PercentChange > threshold
 				comp.Improved = comp.PValue < alpha && comp.PercentChange < -threshold
 			}
@@ -218,7 +223,7 @@ func parseBenchstat(output string, threshold, alpha float64) []comparison {
 			pctRe := regexp.MustCompile(`([+-]?\d+\.?\d*)%`)
 			if m := pctRe.FindStringSubmatch(line); m != nil {
 				comp.PercentChange, _ = strconv.ParseFloat(m[1], 64)
-				if currentMetric == "sec/op" {
+				if currentMetric == secOpUnit {
 					comp.Degraded = math.Abs(comp.PercentChange) > threshold && comp.PercentChange > 0
 					comp.Improved = math.Abs(comp.PercentChange) > threshold && comp.PercentChange < 0
 				}
@@ -265,7 +270,7 @@ func generateReport(comparisons []comparison, threshold, alpha float64, baseline
 	// Filter to sec/op only for summary
 	var secComps []comparison
 	for _, c := range comparisons {
-		if c.Metric == "sec/op" {
+		if c.Metric == secOpUnit {
 			secComps = append(secComps, c)
 		}
 	}

@@ -6,40 +6,71 @@
 
 | Parameter | Type | Default | Usage | Impact |
 |-----------|------|---------|-------|--------|
-| batch | bool | false | `storeURL.Query().Get("batch") == "true"` | **CRITICAL** - Enables batch wrapper for performance |
-| sizeInBytes | int64 | 4194304 | `storeURL.Query().Get("sizeInBytes")` | **CRITICAL** - Controls batch memory usage |
-| writeKeys | bool | false | `storeURL.Query().Get("writeKeys") == "true"` | Enables key-based retrieval from batches |
+| batch | bool | false | `storeURL.Query().Get("batch") == "true"` | **WRITE-ONLY, EXPERIMENTAL** - see the warning below before enabling |
+| sizeInBytes | int | 4194304 | `storeURL.Query().Get("sizeInBytes")` | **CRITICAL** - Controls batch memory usage. Must be greater than 0 |
+| writeKeys | bool | false | `storeURL.Query().Get("writeKeys") == "true"` | Writes a per-batch index of keys and offsets. Nothing in Teranode reads it back |
 | localDAHStore | string | "" | `storeURL.Query().Get("localDAHStore") != ""` | **CRITICAL** - Enables Delete-At-Height functionality |
 | localDAHStorePath | string | "/tmp/localDAH" | `storeURL.Query().Get("localDAHStorePath")` | DAH metadata storage directory |
 | logger | bool | false | `storeURL.Query().Get("logger") == "true"` | **CRITICAL** - Enables debug logging wrapper |
 | hashPrefix | int | 0 | `storeURL.Query().Get("hashPrefix")` | **CRITICAL** - Hash-based directory structure (first N chars) |
 | hashSuffix | int | 0 | `storeURL.Query().Get("hashSuffix")` | **CRITICAL** - Hash-based directory structure (last N chars) |
-| checksum | bool | false | File backend parameter | **CRITICAL** - SHA256 checksumming for data integrity |
+| checksum | bool | true | File backend parameter | Writes a `<blob>.sha256` sidecar alongside every blob. No read path verifies it, so this is a write-cost parameter, not an integrity one. Accepted values are `true`/`1`/`yes`/`on`/`enabled` and `false`/`0`/`no`/`off`/`disabled`; anything else fails at startup |
+| fsyncMode | string | full | File backend parameter | `full` fsyncs the temp file and then the parent directory after the rename. `data` skips the parent-directory fsync, so a freshly published filename can be lost across a crash while already-published content survives. `none` skips both |
 | header | string | "" | File backend parameter | Custom header prepended to blobs |
+
+## Settings
+
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| BlobHTTPAuthToken | string | "" | blob_httpAuthToken | Token the HTTP blob store client presents on POST, PATCH and DELETE; must match the server's `blockpersister_httpAuthToken` |
+
+### HTTP Client Token
+
+- A top-level `Settings` field, so stores built by the daemon and its services (tx, subtree,
+  temp, block, block-persister, pruner-resolved and Aerospike external stores) resolve it per
+  settings context and pass it with `options.WithHTTPAuthToken`
+- Standalone tools that do not pass the option fall back to reading `blob_httpAuthToken` in
+  the process settings context. A caller that builds its settings with an alternative context
+  must pass `options.WithHTTPAuthToken` itself
+- An explicit `options.WithHTTPAuthToken("")` sends no token and suppresses the fallback
+- Tagged `redact`, so it is masked in the startup settings dumps (SETTINGS JSON, STATS and the
+  CONFIG diagnostics payload). Set it in the environment: a value in a settings file is masked
+  in those dumps but held in clear in the file
+- Never place it in a store URL: a URL carrying an `authToken` query parameter is rejected, as
+  store URLs are logged verbatim
+- A 401 from the server (no token on the server, or none or a different one here) is returned
+  as a configuration error, not a storage error. The pruner keeps the affected deletions queued
+  rather than retrying and dropping them, and keeps deleting from the other blob stores
 
 ## Configuration Dependencies
 
 ### Batch Processing
+
 - When `batch = true`, uses `sizeInBytes` for memory control
 - `writeKeys` enables key indexing when batching enabled
 - Creates batcher wrapper with configured size and key options
 
 ### Delete-At-Height (DAH)
+
 - When `localDAHStore` is set, enables DAH functionality
 - Uses `localDAHStorePath` for metadata storage location
 - Creates DAH wrapper with file-based cache store
 
 ### Hash-based Directory Organization
+
 - `hashPrefix` uses first N characters of hash for directories
 - `hashSuffix` uses last N characters of hash for directories
 - Negative hashPrefix value uses suffix behavior
 
 ### Data Integrity
+
 - When `checksum = true`, creates .sha256 files alongside blobs
-- Validates checksums during read operations
+- When `checksum = false`, no digest and no sidecar is written, and the store *attempts* to unlink any sidecar an earlier write left behind. This is best-effort: the attempt happens after the blob is already published, a failure is logged rather than failing the write, and a stale sidecar can therefore survive
+- There is no backfill in either direction: switching `checksum` back to `true` restores a sidecar only for keys written after the change, and out-of-band tooling that verifies sidecars loses its inputs for any store switched to `false`
 - Removes checksum files during deletion
 
 ### Debug Logging
+
 - When `logger = true`, wraps store with logging functionality
 - Logs all store operations at DEBUG level
 - Enables detailed operation debugging
@@ -50,7 +81,7 @@
 |---------|--------|---------------------|
 | null | null:// | logger (localDAHStore blocked) |
 | memory | memory:// | All common parameters |
-| file | file:// | All parameters including checksum, header |
+| file | file:// | All parameters including checksum, fsyncMode, header |
 | http | http:// | All common parameters |
 | s3 | s3:// | All common parameters |
 
@@ -59,7 +90,7 @@
 | Parameter | Validation | Impact | When Checked |
 |-----------|------------|--------|-------------|
 | batch | Boolean string check | Batch wrapper creation | During store initialization |
-| sizeInBytes | ParseInt validation | Batch memory allocation | During batcher creation |
+| sizeInBytes | Atoi validation, must be greater than 0 | Batch memory allocation; a non-positive value is rejected at startup | During batcher creation |
 | writeKeys | Boolean string check | Key indexing behavior | During batcher creation |
 | localDAHStore | Non-empty string check | DAH functionality | During store initialization |
 | hashPrefix | ParseInt validation | Directory structure | During file store creation |
@@ -73,11 +104,21 @@
 file:///data/store
 ```
 
-### Batched Store with DAH
+### Batched Store (write-only — read the warning first)
 
 ```text
-file:///data/store?batch=true&sizeInBytes=8388608&localDAHStore=memory://
+file:///data/store?batch=true&sizeInBytes=8388608
 ```
+
+> **Warning.** The batch wrapper is write-only. Reads (`Get`, `GetIoReader`, `Exists`),
+> deletion (`Del`) and `SetDAH` all return an unsupported-operation error, and nothing in
+> Teranode parses the batch files it writes — so batched data cannot be read back. Do not
+> use `batch=true` where Delete-At-Height matters: `SetCurrentBlockHeight` is a no-op on a
+> batched store, so the wrapped store's height never advances and its DAH bookkeeping
+> stalls. Writes are also asynchronous, and a batch is held in memory until adding the next
+> item would take it past `sizeInBytes`, or until the store is closed. Keys must be exactly
+> 32 bytes: a batched store rejects anything else, so it cannot back a store that uses
+> non-hash keys.
 
 ### Hash-organized Store
 

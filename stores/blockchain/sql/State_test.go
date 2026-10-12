@@ -31,7 +31,7 @@ func TestSQLGetState(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []byte("test data"), state)
 
-		err = s.Close()
+		err = s.Close(context.Background())
 		require.NoError(t, err)
 	})
 }

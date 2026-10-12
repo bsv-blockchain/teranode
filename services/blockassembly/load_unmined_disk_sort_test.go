@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"net/url"
-	"sort"
 	"testing"
 	"time"
 
@@ -36,7 +35,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		transactions := generateTestTransactionsForDiskSort(t, 10)
 
 		for _, tx := range transactions {
-			_, err := utxoStore.Create(ctx, tx, 1)
+			_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 
@@ -45,7 +44,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		ba.settings.BlockAssembly.OnRestartValidateParentChain = false
 
 		// Run the disk sort function
-		err := ba.loadUnminedTransactionsWithDiskSort(ctx)
+		err := ba.loadUnminedTransactionsWithDiskSort(ctx, false)
 		require.NoError(t, err)
 
 		// Verify transactions were added to subtree processor
@@ -63,7 +62,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		transactions := generateTestTransactionsForDiskSort(t, 5)
 
 		for i, tx := range transactions {
-			_, err := utxoStore.Create(ctx, tx, 1)
+			_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 			require.NoError(t, err)
 			// Sleep a tiny bit to ensure different CreatedAt timestamps
 			if i < len(transactions)-1 {
@@ -74,7 +73,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		ba.settings.BlockAssembly.UnminedTxDiskSortEnabled = true
 		ba.settings.BlockAssembly.OnRestartValidateParentChain = false
 
-		err := ba.loadUnminedTransactionsWithDiskSort(ctx)
+		err := ba.loadUnminedTransactionsWithDiskSort(ctx, false)
 		require.NoError(t, err)
 	})
 
@@ -90,17 +89,17 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		for i, tx := range transactions {
 			if i%2 == 0 {
 				// Unmined
-				_, err := utxoStore.Create(ctx, tx, 1)
+				_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 				require.NoError(t, err)
 			} else {
 				// Mined in a block on the main chain (block ID 0 is genesis)
-				_, err := utxoStore.Create(ctx, tx, 1, utxo.WithMinedBlockInfo(
+				_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithMinedBlockInfo(
 					utxo.MinedBlockInfo{
 						BlockID:     0,
 						BlockHeight: 0,
 						SubtreeIdx:  1,
 					},
-				))
+				), utxo.WithCreateOnly())
 				require.NoError(t, err)
 			}
 		}
@@ -108,7 +107,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		ba.settings.BlockAssembly.UnminedTxDiskSortEnabled = true
 		ba.settings.BlockAssembly.OnRestartValidateParentChain = false
 
-		err := ba.loadUnminedTransactionsWithDiskSort(ctx)
+		err := ba.loadUnminedTransactionsWithDiskSort(ctx, false)
 		require.NoError(t, err)
 	})
 
@@ -123,7 +122,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		// Create all as unmined
 		var txHashes []chainhash.Hash
 		for _, tx := range transactions {
-			meta, err := utxoStore.Create(ctx, tx, 1)
+			meta, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 			require.NoError(t, err)
 			txHashes = append(txHashes, *meta.Tx.TxIDChainHash())
 		}
@@ -135,7 +134,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		ba.settings.BlockAssembly.UnminedTxDiskSortEnabled = true
 		ba.settings.BlockAssembly.OnRestartValidateParentChain = false
 
-		err = ba.loadUnminedTransactionsWithDiskSort(ctx)
+		err = ba.loadUnminedTransactionsWithDiskSort(ctx, false)
 		require.NoError(t, err)
 
 		// Verify locked transactions were unlocked after load
@@ -156,7 +155,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		ba.settings.BlockAssembly.OnRestartValidateParentChain = false
 
 		// Should handle empty store gracefully
-		err := ba.loadUnminedTransactionsWithDiskSort(ctx)
+		err := ba.loadUnminedTransactionsWithDiskSort(ctx, false)
 		require.NoError(t, err)
 	})
 
@@ -169,14 +168,14 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		transactions := generateTestTransactionsForDiskSort(t, 5)
 
 		for _, tx := range transactions {
-			_, err := utxoStore.Create(ctx, tx, 1)
+			_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 
 		ba.settings.BlockAssembly.UnminedTxDiskSortEnabled = true
 		ba.settings.BlockAssembly.OnRestartValidateParentChain = false
 
-		err := ba.loadUnminedTransactionsWithDiskSort(ctx)
+		err := ba.loadUnminedTransactionsWithDiskSort(ctx, false)
 		require.NoError(t, err)
 	})
 
@@ -190,7 +189,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		transactions := generateTestTransactionsForDiskSort(t, 3)
 
 		for _, tx := range transactions {
-			_, err := utxoStore.Create(ctx, tx, 1)
+			_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 
@@ -201,7 +200,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		cancel()
 
 		// Should handle cancellation gracefully
-		_ = ba.loadUnminedTransactionsWithDiskSort(ctx)
+		_ = ba.loadUnminedTransactionsWithDiskSort(ctx, false)
 		// We don't assert on error since behavior depends on timing
 	})
 
@@ -214,7 +213,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		transactions := generateTestTransactionsForDiskSort(t, 5)
 
 		for _, tx := range transactions {
-			_, err := utxoStore.Create(ctx, tx, 1)
+			_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 
@@ -223,7 +222,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		ba.settings.BlockAssembly.OnRestartValidateParentChain = false
 
 		// Call the main loadUnminedTransactions - should dispatch to disk sort
-		err := ba.loadUnminedTransactions(ctx)
+		err := ba.loadUnminedTransactions(ctx, false)
 		require.NoError(t, err)
 	})
 
@@ -236,7 +235,7 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		transactions := generateTestTransactionsForDiskSort(t, 5)
 
 		for _, tx := range transactions {
-			_, err := utxoStore.Create(ctx, tx, 1)
+			_, _, err := utxoStore.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 			require.NoError(t, err)
 		}
 
@@ -245,31 +244,9 @@ func TestLoadUnminedTransactionsWithDiskSort(t *testing.T) {
 		ba.settings.BlockAssembly.UnminedTxDiskSortEnabled = true
 		ba.settings.BlockAssembly.OnRestartValidateParentChain = true
 
-		err := ba.loadUnminedTransactions(ctx)
+		err := ba.loadUnminedTransactions(ctx, false)
 		require.NoError(t, err)
 	})
-}
-
-func TestSortEntryOrdering(t *testing.T) {
-	// Test that sortEntry slice sorts correctly by CreatedAt
-	entries := []sortEntry{
-		{CreatedAt: 300, Sequence: 2},
-		{CreatedAt: 100, Sequence: 0},
-		{CreatedAt: 200, Sequence: 1},
-		{CreatedAt: 500, Sequence: 4},
-		{CreatedAt: 400, Sequence: 3},
-	}
-
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].CreatedAt < entries[j].CreatedAt
-	})
-
-	// Verify sorted order
-	assert.Equal(t, 100, entries[0].CreatedAt)
-	assert.Equal(t, 200, entries[1].CreatedAt)
-	assert.Equal(t, 300, entries[2].CreatedAt)
-	assert.Equal(t, 400, entries[3].CreatedAt)
-	assert.Equal(t, 500, entries[4].CreatedAt)
 }
 
 // setupDiskSortTest creates a BlockAssembler configured for disk sort testing

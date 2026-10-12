@@ -3,7 +3,7 @@ package consensus
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -269,7 +269,7 @@ func TestLoadJSONTests(t *testing.T) {
 
 	// This shows how you would load tests from a JSON file
 	testFile := filepath.Join("testdata", "script_tests.json")
-	data, err := ioutil.ReadFile(testFile)
+	data, err := os.ReadFile(testFile)
 	if err != nil {
 		t.Skipf("Test file not found: %v", err)
 		return

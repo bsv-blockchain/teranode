@@ -77,7 +77,7 @@ func configureGOMEMLIMIT(ratio float64) {
 	memlimit := int64(memlimitFloat)
 	prev := debug.SetMemoryLimit(memlimit)
 	fmt.Printf("GC tuning: GOMEMLIMIT set to %s (%.0f%% of %s cgroup limit, was %s)\n",
-		formatBytes(memlimit), ratio*100, formatBytes(int64(limit)), formatBytes(prev))
+		formatBytes(uint64(memlimit)), ratio*100, formatBytes(limit), formatBytes(uint64(prev)))
 }
 
 // detectCgroupMemoryLimit reads the memory limit from cgroup v2 or v1.
@@ -140,7 +140,7 @@ func parseCgroupMemoryValue(s string) (uint64, error) {
 }
 
 // formatBytes formats a byte count as a human-readable string.
-func formatBytes(b int64) string {
+func formatBytes(b uint64) string {
 	const (
 		mib = 1024 * 1024
 		gib = 1024 * mib

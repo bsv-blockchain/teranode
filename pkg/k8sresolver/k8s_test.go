@@ -36,12 +36,6 @@ func (m *MockLogger) Warnf(format string, args ...interface{}) {
 	m.Called(format, args)
 }
 
-// MockKubernetesInterface for testing serviceClient without real K8s cluster
-type MockKubernetesInterface struct {
-	mock.Mock
-	kubernetes.Interface
-}
-
 // Helper to create test serviceClient
 func createTestServiceClient(k8s kubernetes.Interface, namespace string) *serviceClient {
 	logger := &MockLogger{}

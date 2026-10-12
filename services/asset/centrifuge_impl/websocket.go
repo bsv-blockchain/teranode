@@ -3,11 +3,16 @@
 package centrifuge_impl
 
 import (
-	"encoding/json"
+	"context"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/centrifugal/centrifuge"
 	"github.com/gorilla/websocket"
 )
@@ -44,7 +49,7 @@ type WebsocketConfig struct {
 	MessageSizeLimit int
 
 	// CheckOrigin func to provide custom origin check logic.
-	// nil means allow all origins.
+	// nil means same-host origins only (see checkOrigin).
 	CheckOrigin func(r *http.Request) bool
 
 	// PingInterval sets interval server will send ping messages to clients.
@@ -62,6 +67,20 @@ type WebsocketConfig struct {
 	// says that server will try to negotiate it with client.
 	Compression bool
 
+	// MaxConnections caps the number of concurrently live websocket connections.
+	// Zero means unlimited.
+	MaxConnections int
+
+	// MaxConnectionsPerIP caps the number of concurrently live websocket connections
+	// held by a single client IP, so MaxConnections cannot be exhausted by one
+	// client. Zero means unlimited. Ignored when ClientIP is nil and the request
+	// has no usable RemoteAddr.
+	MaxConnectionsPerIP int
+
+	// ClientIP extracts the client IP from a request for the MaxConnectionsPerIP
+	// budget. nil falls back to the request's RemoteAddr.
+	ClientIP func(r *http.Request) string
+
 	// UseWriteBufferPool enables using buffer pool for writes.
 	UseWriteBufferPool bool
 }
@@ -73,7 +92,18 @@ type WebsocketHandler struct {
 	node    *centrifuge.Node
 	upgrade *websocket.Upgrader
 	config  WebsocketConfig
+
+	liveConnections    atomic.Int64 // connections currently holding a slot
+	refusedConnections atomic.Int64 // upgrades refused because the cap was full
+	capWarnedAt        atomic.Int64 // UnixNano of the last cap-reached WARN, 0 = never
+
+	perIPMu    sync.Mutex     // guards perIPConns
+	perIPConns map[string]int // live connection count per client IP, only touched when MaxConnectionsPerIP > 0
 }
+
+// connCapWarnInterval bounds how often a refused upgrade is logged at WARN, so a client
+// retrying in a loop cannot flood the log.
+const connCapWarnInterval = 1 * time.Minute
 
 var writeBufferPool = &sync.Pool{}
 
@@ -89,6 +119,12 @@ func NewWebsocketHandler(n *centrifuge.Node, c WebsocketConfig) *WebsocketHandle
 	upgrade := &websocket.Upgrader{
 		ReadBufferSize:    c.ReadBufferSize,
 		EnableCompression: c.Compression,
+		// Advertise the Centrifuge protobuf subprotocol so a client requesting it
+		// (Sec-WebSocket-Protocol: centrifuge-protobuf) negotiates protobuf rather
+		// than being silently served JSON. Clients that request no subprotocol
+		// (e.g. the dashboard's raw WebSocket) continue to use JSON. Matches the
+		// upstream centrifuge WebsocketHandler.
+		Subprotocols: []string{"centrifuge-protobuf"},
 	}
 	if c.UseWriteBufferPool {
 		upgrade.WriteBufferPool = writeBufferPool
@@ -99,31 +135,15 @@ func NewWebsocketHandler(n *centrifuge.Node, c WebsocketConfig) *WebsocketHandle
 	if c.CheckOrigin != nil {
 		upgrade.CheckOrigin = c.CheckOrigin
 	} else {
-		upgrade.CheckOrigin = sameHostOriginCheck()
+		upgrade.CheckOrigin = originCheck(nil)
 	}
 
 	return &WebsocketHandler{
-		node:    n,
-		config:  c,
-		upgrade: upgrade,
+		node:       n,
+		config:     c,
+		upgrade:    upgrade,
+		perIPConns: make(map[string]int),
 	}
-}
-
-// ConnectRequest represents the initial connection request from a client.
-// It contains authentication and subscription information.
-type ConnectRequest struct {
-	Token   string                       `json:"token,omitempty"`
-	Data    json.RawMessage              `json:"data,omitempty"`
-	Subs    map[string]*SubscribeRequest `json:"subs,omitempty"`
-	Name    string                       `json:"name,omitempty"`
-	Version string                       `json:"version,omitempty"`
-}
-
-// SubscribeRequest represents a subscription request to a specific channel.
-type SubscribeRequest struct {
-	Recover bool   `json:"recover,omitempty"`
-	Epoch   string `json:"epoch,omitempty"`
-	Offset  uint64 `json:"offset,omitempty"`
 }
 
 // ServeHTTP implements the http.Handler interface for WebSocket connections.
@@ -137,9 +157,23 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	compressionLevel := s.config.CompressionLevel
 	compressionMinSize := s.config.CompressionMinSize
 
+	ip := s.clientIP(r)
+
+	// Take an admission slot before the upgrade: an upgrade that is accepted and then
+	// closed still costs a handshake and leaves the client believing it is connected.
+	if ok, capSetting, capLimit := s.acquireConnection(ip); !ok {
+		s.logConnectionRefused(capSetting, capLimit)
+		rw.Header().Set("Retry-After", "1")
+		http.Error(rw, "Asset websocket connection limit reached", http.StatusServiceUnavailable)
+
+		return
+	}
+
 	conn, err := s.upgrade.Upgrade(rw, r, nil)
 	if err != nil {
+		s.releaseConnection(ip)
 		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "[Centrifuge] websocket upgrade error", map[string]any{"error": err.Error()}))
+
 		return
 	}
 
@@ -178,13 +212,26 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Negotiate the protocol from the subprotocol the upgrader selected. Defaults
+	// to JSON (no/other subprotocol); protobuf only when the client requested and
+	// the upgrader echoed "centrifuge-protobuf". The transport then reads AND
+	// writes in the matching codec — hardcoding JSON here would decode a protobuf
+	// client's frames as JSON, disconnecting it with "bad request".
+	protoType := centrifuge.ProtocolTypeJSON
+	if conn.Subprotocol() == "centrifuge-protobuf" {
+		protoType = centrifuge.ProtocolTypeProtobuf
+	}
+
 	// Separate goroutine for better GC of caller's data.
 	go func() {
+		// This goroutine owns the connection lifetime, so it also owns the slot.
+		defer s.releaseConnection(ip)
+
 		opts := websocketTransportOptions{
 			pingInterval:       pingInterval,
 			writeTimeout:       writeTimeout,
 			compressionMinSize: compressionMinSize,
-			protoType:          centrifuge.ProtocolTypeJSON,
+			protoType:          protoType,
 		}
 
 		graceCh := make(chan struct{})
@@ -200,7 +247,13 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		ctxCh := make(chan struct{})
 		defer close(ctxCh)
 
-		c, closeFn, err := centrifuge.NewClient(r.Context(), s.node, transport)
+		// Detach cancellation: r.Context() is cancelled when ServeHTTP returns,
+		// which is right after this goroutine launches. The centrifuge core
+		// checks ctx.Done() inside HandleCommand and aborts every frame if the
+		// context is dead — so we keep request-scoped values (notably the
+		// Credentials set by readinessMiddleware) but strip the cancellation signal.
+		// The connection lifetime is owned by closeFn / the read loop below.
+		c, closeFn, err := centrifuge.NewClient(context.WithoutCancel(r.Context()), s.node, transport)
 		if err != nil {
 			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "[Centrifuge] error creating client", map[string]any{"transport": transport.Name()}))
 			return
@@ -214,41 +267,13 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "[Centrifuge] client connection completed", map[string]any{"client": c.ID(), "transport": transport.Name(), "duration": time.Since(started)}))
 		}(time.Now())
 
-		_, data, err := conn.ReadMessage()
-		if err != nil {
-			return
-		}
-
-		var req ConnectRequest
-
-		err = json.Unmarshal(data, &req)
-		if err != nil {
-			return
-		}
-
-		connectRequest := centrifuge.ConnectRequest{
-			Token:   req.Token,
-			Data:    req.Data,
-			Name:    req.Name,
-			Version: req.Version,
-		}
-
-		if req.Subs != nil {
-			subs := make(map[string]centrifuge.SubscribeRequest)
-			for k, v := range connectRequest.Subs {
-				subs[k] = centrifuge.SubscribeRequest{
-					Recover: v.Recover,
-					Offset:  v.Offset,
-					Epoch:   v.Epoch,
-				}
-			}
-		}
-
-		c.Connect(connectRequest)
-
 		for {
-			_, _, err := conn.ReadMessage()
+			_, reader, err := conn.NextReader()
 			if err != nil {
+				break
+			}
+
+			if proceed := centrifuge.HandleReadFrame(c, reader); !proceed {
 				break
 			}
 		}
@@ -266,6 +291,115 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
+}
+
+// clientIP extracts the client IP for the MaxConnectionsPerIP budget, using
+// s.config.ClientIP when set (so it inherits the same trusted-proxy configuration
+// as the rest of the Asset HTTP server) and falling back to the request's
+// RemoteAddr otherwise.
+func (s *WebsocketHandler) clientIP(r *http.Request) string {
+	if s.config.ClientIP != nil {
+		return s.config.ClientIP(r)
+	}
+
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+
+	return host
+}
+
+// acquireConnection takes a slot from the concurrent-connection budget and, if
+// MaxConnectionsPerIP is set, from ip's own share of it, reporting whether both were
+// available and, on refusal, which setting's cap fired and its limit. A
+// MaxConnections/MaxConnectionsPerIP of zero means unlimited, which is the shipped
+// default and today's behaviour.
+func (s *WebsocketHandler) acquireConnection(ip string) (ok bool, capSetting string, capLimit int) {
+	limit := s.config.MaxConnections
+	if limit > 0 {
+		if s.liveConnections.Add(1) > int64(limit) {
+			s.liveConnections.Add(-1)
+			s.refusedConnections.Add(1)
+
+			return false, "asset_maxWebsocketConnections", limit
+		}
+	}
+
+	if !s.acquirePerIP(ip) {
+		if limit > 0 {
+			s.liveConnections.Add(-1)
+		}
+
+		s.refusedConnections.Add(1)
+
+		return false, "asset_maxWebsocketConnectionsPerIP", s.config.MaxConnectionsPerIP
+	}
+
+	return true, "", 0
+}
+
+// acquirePerIP takes a slot from ip's share of MaxConnectionsPerIP, reporting whether
+// one was available. A MaxConnectionsPerIP of zero, or an empty ip, means unlimited.
+func (s *WebsocketHandler) acquirePerIP(ip string) bool {
+	limit := s.config.MaxConnectionsPerIP
+	if limit <= 0 || ip == "" {
+		return true
+	}
+
+	s.perIPMu.Lock()
+	defer s.perIPMu.Unlock()
+
+	if s.perIPConns[ip] >= limit {
+		return false
+	}
+
+	s.perIPConns[ip]++
+
+	return true
+}
+
+// releaseConnection returns a slot taken by acquireConnection, including ip's
+// per-IP share. It is called exactly once per accepted upgrade, from whichever path
+// ends that connection.
+func (s *WebsocketHandler) releaseConnection(ip string) {
+	if s.config.MaxConnections > 0 {
+		s.liveConnections.Add(-1)
+	}
+
+	s.releasePerIP(ip)
+}
+
+// releasePerIP returns a slot taken by acquirePerIP.
+func (s *WebsocketHandler) releasePerIP(ip string) {
+	if s.config.MaxConnectionsPerIP <= 0 || ip == "" {
+		return
+	}
+
+	s.perIPMu.Lock()
+	defer s.perIPMu.Unlock()
+
+	if n := s.perIPConns[ip]; n <= 1 {
+		delete(s.perIPConns, ip)
+	} else {
+		s.perIPConns[ip] = n - 1
+	}
+}
+
+// logConnectionRefused reports a refused upgrade, at WARN at most once per
+// connCapWarnInterval and at DEBUG in between, so the cap being reached is always
+// visible without a retrying client being able to flood the log.
+func (s *WebsocketHandler) logConnectionRefused(capSetting string, capLimit int) {
+	fields := map[string]any{"limit": capLimit, "refused": s.refusedConnections.Load()}
+	msg := "[Centrifuge] websocket upgrade refused: " + capSetting + " reached"
+
+	last, now := s.capWarnedAt.Load(), time.Now().UnixNano()
+	if now-last >= int64(connCapWarnInterval) && s.capWarnedAt.CompareAndSwap(last, now) {
+		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelWarn, msg, fields))
+		return
+	}
+
+	s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, msg, fields))
 }
 
 // websocketTransport implements the transport layer for WebSocket connections.
@@ -345,9 +479,12 @@ func (t *websocketTransport) ProtocolVersion() centrifuge.ProtocolVersion {
 	return centrifuge.ProtocolVersion2
 }
 
-// Unidirectional returns whether transport is unidirectional.
+// Unidirectional returns whether transport is unidirectional. WebSocket is
+// inherently bidirectional, so this returns false — the centrifuge core then
+// emits connect replies in the command-reply envelope (with the client's
+// command Id) rather than as Push frames. See issue #938.
 func (t *websocketTransport) Unidirectional() bool {
-	return true
+	return false
 }
 
 // Emulation ...
@@ -465,41 +602,80 @@ func (t *websocketTransport) Close(_ centrifuge.Disconnect) error {
 	return t.conn.Close()
 }
 
-// sameHostOriginCheck creates a function to verify the origin of WebSocket connections.
+// originCheck returns a websocket upgrader CheckOrigin func backed by checkOrigin.
+//
+// Parameters:
+//   - allowedOrigins: extra origins accepted besides the same host; "*" accepts any origin
 //
 // Returns:
 //   - func(r *http.Request) bool: Origin checking function
-func sameHostOriginCheck() func(r *http.Request) bool {
+func originCheck(allowedOrigins []string) func(r *http.Request) bool {
 	return func(r *http.Request) bool {
-		err := checkSameHost(r)
-		return err != nil
+		return checkOrigin(r, allowedOrigins) == nil
 	}
 }
 
-// checkSameHost verifies that the WebSocket connection originates from the same host.
+// checkOrigin guards the websocket upgrade against cross-site browser connections.
+//
+// A request is accepted when:
+//   - it carries no Origin header (non-browser clients do not send one),
+//   - the Origin hostname equals the request Host hostname, ignoring scheme and port
+//     (the dashboard dev server and a TLS reverse proxy both serve the page from a
+//     different port than the Asset HTTP socket),
+//   - both hostnames are loopback (localhost, 127.0.0.0/8, ::1), which are the same
+//     machine however they are spelled, or
+//   - the Origin matches an entry in allowedOrigins, or allowedOrigins contains "*".
+//
+// This is not authentication: a non-browser client can omit or forge Origin. It stops
+// a third-party web page from opening the socket from a visitor's browser. It does not
+// survive DNS rebinding: a page on a name the attacker controls that resolves to this
+// node sends a matching Host and Origin.
 //
 // Parameters:
 //   - r: HTTP request to check
+//   - allowedOrigins: extra origins accepted besides the same host, already normalised
+//     by parseAllowedOrigins (trimmed, no trailing slash)
 //
 // Returns:
 //   - error: Error if origin check fails
-func checkSameHost(_ *http.Request) error {
-	return nil
-	// origin := r.Header.Get("Origin")
-	//
-	//	if origin == "" {
-	//		return nil
-	//	}
-	//
-	// u, err := url.Parse(origin)
-	//
-	//	if err != nil {
-	//		return errors.NewConfigurationError("failed to parse Origin header %q", origin, err)
-	//	}
-	//
-	//	if strings.EqualFold(r.Host, u.Host) {
-	//		return nil
-	//	}
-	//
-	// return errors.NewServiceError("request Origin %q is not authorized for Host %q", origin, r.Host)
+func checkOrigin(r *http.Request, allowedOrigins []string) error {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return nil
+	}
+
+	for _, allowed := range allowedOrigins {
+		if allowed == "*" || strings.EqualFold(allowed, origin) {
+			return nil
+		}
+	}
+
+	u, err := url.Parse(origin)
+	if err != nil || u.Hostname() == "" {
+		return errors.NewServiceError("request Origin %q is not a valid origin", origin)
+	}
+
+	requestHost := r.Host
+	if h, _, splitErr := net.SplitHostPort(requestHost); splitErr == nil {
+		requestHost = h
+	}
+
+	requestHost = strings.TrimSuffix(strings.TrimPrefix(requestHost, "["), "]")
+
+	if requestHost != "" && (strings.EqualFold(u.Hostname(), requestHost) || isLoopbackHost(u.Hostname()) && isLoopbackHost(requestHost)) {
+		return nil
+	}
+
+	return errors.NewServiceError("request Origin %q is not authorized for Host %q", origin, r.Host)
+}
+
+// isLoopbackHost reports whether host is "localhost" or a loopback IP literal.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+
+	return ip != nil && ip.IsLoopback()
 }

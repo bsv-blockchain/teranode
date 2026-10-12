@@ -78,7 +78,7 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 	// Try to get from response cache using derived cache key
 	// Use operation-prefixed key to be consistent with other operations
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeadersFromHeight-%d-%d", height, limit)))
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := s.responseCache.NewOp(cacheID)
 
 	cached := cacheOp.Get()
 	if cached != nil {
@@ -160,7 +160,11 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 			return nil, nil, errors.NewStorageError("failed to scan row", err)
 		}
 
-		bits, _ := model.NewNBitFromSlice(nBits)
+		bits, nBitsErr := model.NewNBitFromSlice(nBits)
+		if nBitsErr != nil {
+			return nil, nil, errors.NewStorageError("error in GetBlockHeadersFromHeight: malformed n_bits (length %d, expected 4) for block height %d", len(nBits), blockHeaderMeta.Height, nBitsErr)
+		}
+
 		blockHeader.Bits = *bits
 
 		blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)

@@ -41,8 +41,13 @@ type FileStorer struct {
 	// writer is the pipe writer for streaming data to storage
 	writer *io.PipeWriter
 
-	// bufferedWriter provides buffered writing capabilities
+	// bufferedWriter provides buffered writing capabilities. It is owned by this FileStorer
+	// until releaseWriter hands it back to the pool, at which point the field is nil.
 	bufferedWriter *bufio.Writer
+
+	// releaseOnce ensures the buffered writer is returned to the pool exactly once,
+	// whichever of Close and Abort gets there first
+	releaseOnce sync.Once
 
 	// wg tracks the background goroutine
 	wg sync.WaitGroup
@@ -91,8 +96,9 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	// Create pipe for streaming data to blob storage
 	reader, writer := io.Pipe()
 
-	// Create buffered writer for efficient I/O
-	bufferedWriter := bufio.NewWriterSize(writer, bufferSize.Int())
+	// Create buffered writer for efficient I/O, reusing a pooled buffer when one of the
+	// configured size is free. Close or Abort hands it back.
+	bufferedWriter := acquireWriter(writer, bufferSize.Int())
 
 	fs := &FileStorer{
 		logger:         logger,
@@ -137,6 +143,8 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 // Write writes the provided bytes to the pipe via the buffered writer.
 // Returns the number of bytes written and any error encountered.
 // If the background reader has encountered an error, it will be returned here.
+// A write after Close or Abort returns an error rather than panicking, because the
+// buffer has gone back to the pool by then and is no longer this storer's to write to.
 // This method is safe for concurrent use.
 func (f *FileStorer) Write(b []byte) (n int, err error) {
 	f.mu.Lock()
@@ -146,17 +154,33 @@ func (f *FileStorer) Write(b []byte) (n int, err error) {
 		return 0, f.readerError
 	}
 
+	if f.bufferedWriter == nil {
+		return 0, errors.NewProcessingError("write to %s.%s after the file storer was closed or aborted", util.ReverseAndHexEncodeSlice(f.key), f.fileType)
+	}
+
 	return f.bufferedWriter.Write(b)
 }
 
 // Close finalizes the file storage operation.
 // It flushes the buffer, closes the pipe writer, and waits for the background goroutine to complete.
 // Callers are responsible for setting DAH after Close() if needed.
-// Returns any error encountered during the closing process.
+// Returns any error encountered during the closing process. Called after Abort it reports the
+// background reader's error, there being no buffer left to fail a flush.
 func (f *FileStorer) Close(ctx context.Context) error {
-	// Flush the buffered writer to ensure all data is written to the pipe
+	// The buffer goes back to the pool on every return path, including the two error
+	// returns below. releaseWriter takes f.mu itself and is idempotent, so a concurrent
+	// Abort that got there first simply makes this a no-op.
+	defer f.releaseWriter()
+
+	// Flush the buffered writer to ensure all data is written to the pipe. A nil writer
+	// means Abort already released it, and there is nothing buffered left to flush.
 	f.mu.Lock()
-	flushErr := f.bufferedWriter.Flush()
+
+	var flushErr error
+	if f.bufferedWriter != nil {
+		flushErr = f.bufferedWriter.Flush()
+	}
+
 	f.mu.Unlock()
 
 	if flushErr != nil {
@@ -205,6 +229,31 @@ func (f *FileStorer) Abort(err error) {
 
 	// Wait for the background goroutine to complete
 	f.wg.Wait()
+
+	// Only now can the buffer be recycled: until the background goroutine is gone, a Write
+	// blocked in the pipe still owns it. Neither the signal above nor this wait is gated by
+	// the release, so one caller's Abort can never be held up behind another's.
+	f.releaseWriter()
+}
+
+// releaseWriter returns the buffered writer to the pool exactly once. The sync.Once is the
+// whole point: a second Put would hand one buffer to two owners, and both Close and Abort
+// reach here, in either order and possibly from different goroutines. The field is nil'd
+// under f.mu before the Put, so every accessor holding f.mu sees either a live buffer or
+// nil, never a recycled one. It is safe to call when the buffer is already gone.
+func (f *FileStorer) releaseWriter() {
+	f.releaseOnce.Do(func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+
+		bufferedWriter := f.bufferedWriter
+		f.bufferedWriter = nil
+
+		if bufferedWriter != nil {
+			resetForPool(bufferedWriter)
+			writerPool.Put(bufferedWriter)
+		}
+	})
 }
 
 // waitUntilFileIsAvailable waits for the file to become available in storage.

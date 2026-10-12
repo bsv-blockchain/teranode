@@ -6,8 +6,8 @@
 //
 // The implementation uses a combination of Aerospike Key-Value store and Lua scripts
 // for atomic operations. Transactions are stored with the following structure:
-//   - Main Record: Contains transaction metadata and up to 20,000 UTXOs
-//   - Pagination Records: Additional records for transactions with >20,000 outputs
+//   - Main Record: Contains transaction metadata and up to utxostore_utxoBatchSize UTXOs (default 128)
+//   - Pagination Records: Additional records for transactions with more outputs than utxostore_utxoBatchSize (default 128)
 //   - External Storage: Optional blob storage for large transactions
 //
 // # Features
@@ -45,7 +45,7 @@
 // Large Transaction with External Storage:
 //   - Same as normal but with external=true
 //   - Transaction data stored in blob storage
-//   - Multiple records for >20k outputs
+//   - Multiple records when outputs exceed utxostore_utxoBatchSize
 //
 // # Thread Safety
 //
@@ -58,7 +58,7 @@ package aerospike
 import (
 	"context"
 
-	"github.com/aerospike/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util"
@@ -96,7 +96,9 @@ import (
 //   - Handles concurrent unspend operations
 //   - Coordinates with external storage
 func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) (err error) {
-	return s.unspend(ctx, spends, flagAsLocked...)
+	_, err = s.unspend(ctx, spends, flagAsLocked...)
+
+	return err
 }
 
 // unspend implements the core unspend logic.
@@ -105,28 +107,86 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 //  2. Logs operation details
 //  3. Executes Lua script
 //  4. Handles response
-func (s *Store) unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) (err error) {
+//
+// This is a best-effort-over-all rollback: a failure on one spend does not
+// abort the loop, because every subsequent spend in the batch is a dangling
+// spender reference that also needs unwinding. Aborting on the first error
+// (as this used to do) leaves those later spends applied with no record to
+// point at - the exact "ghost spender" condition this rollback exists to
+// prevent. Failures are collected and returned together at the end; only a
+// cancelled/expired context stops the loop early, since further Lua calls
+// would just fail too.
+//
+// Note for the OTHER callers, whose contract this changed without their asking:
+// a returned error now means "some, possibly nearly all, spends were reverted",
+// where it used to mean "the first k were". ProcessConflicting's step 2 relied on
+// the old reading — it set step2Committed only on full success and gated its
+// compensating re-spend on that flag, so a partial failure skipped the undo in
+// exactly the case that left the most uncompensated state. It now treats a failed
+// step 2 as partially committed for that reason. Any future caller deciding
+// "did this happen?" from the error alone needs the same treatment.
+// unspend returns how many spends could NOT be reverted alongside the aggregated
+// error, so the partial-spend rollback can count dangling refs rather than failed
+// calls — the sql store's counter of the same name is a ref count, and a fleet
+// dashboard summing the two must not mix units.
+// failed counts SPENDS that could not be reverted, not errors. The two differ on
+// the ctx.Done arm, which abandons every spend from the abort index onward after
+// appending a single marker error: those spends are still applied, so counting
+// errors there under-reports dangling refs by the whole remainder — in exactly the
+// deadline-truncation case this counter exists to measure. The marker itself is
+// not a spend, so len(errs) is wrong in the other direction too.
+func (s *Store) unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) (failed int, err error) {
+	var errs []error
+
+loop:
 	for i, spend := range spends {
 		select {
 		case <-ctx.Done():
+			// A cancelled/expired context is the one case that still stops the
+			// loop early: further Lua calls would just fail too, so there is no
+			// rollback value in continuing. Say so clearly in the aggregated
+			// error rather than reporting it as an ordinary per-spend failure.
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return errors.NewStorageError("timeout un-spending %d of %d utxos", i, len(spends))
+				errs = append(errs, errors.NewStorageError("timeout un-spending %d of %d utxos, aborting remaining unspends early", i, len(spends)))
+			} else {
+				errs = append(errs, errors.NewStorageError("context cancelled un-spending %d of %d utxos, aborting remaining unspends early", i, len(spends)))
 			}
 
-			return errors.NewStorageError("context cancelled un-spending %d of %d utxos", i, len(spends))
+			// Everything from here on is never attempted, so it stays applied.
+			failed += len(spends) - i
+
+			break loop
 		default:
 			if spend != nil {
-				s.logger.Warnf("un-spending utxo %s of tx %s:%d, spending data: %v", spend.UTXOHash.String(), spend.TxID.String(), spend.Vout, spend.SpendingData)
+				// Debug, not Warn: rollback now fires on every error class
+				// (including the ErrTxLocked retry path), so a single wide
+				// transaction retried a few times can emit tens of thousands
+				// of these lines. The operator-facing signal is now the
+				// aggregate error returned below plus the caller's rollback
+				// counters in spend.go, so no signal is lost. This log line is
+				// shared with ProcessConflicting - kept as a deliberate,
+				// commented change rather than a silent one.
+				s.logger.Debugf("un-spending utxo %s of tx %s:%d, spending data: %v", spend.UTXOHash.String(), spend.TxID.String(), spend.Vout, spend.SpendingData)
 
 				if err = s.unspendLua(ctx, spend); err != nil {
-					// just return the raw error, should already be wrapped
-					return err
+					failed++
+
+					errs = append(errs, err)
 				}
 			}
 		}
 	}
 
-	return nil
+	if len(errs) == 0 {
+		return 0, nil
+	}
+
+	// Best-effort-over-all: every spend in the batch is attempted (unless the
+	// context aborts) even after an earlier one fails, because a spend past a
+	// failed index is exactly the dangling "ghost spender" reference this
+	// rollback exists to unwind. Aggregate with a hard cap so a mass failure
+	// on a wide transaction doesn't build an O(N^2) error chain.
+	return failed, errors.NewStorageError("error un-spending %d of %d utxos", failed, len(spends), errors.JoinCapped(maxAggregatedSpendErrs, errs...))
 }
 
 // unspendLua executes the Lua script for a single UTXO unspend.
@@ -161,11 +221,25 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 
 	offset := s.calculateOffsetForOutput(spend.Vout)
 
-	ret, aErr := s.client.Execute(policy, key, LuaPackage, "unspend",
-		aerospike.NewIntegerValue(int(offset)), // vout adjusted for utxoBatchSize
-		aerospike.NewValue(spend.UTXOHash[:]),  // utxo hash
-		aerospike.NewIntegerValue(int(s.blockHeight.Load())),
-		aerospike.NewValue(s.settings.GetUtxoStoreBlockHeightRetention()),
+	// SpendingData is mandatory after #766 — unspend uses it to verify ownership
+	// before reversing the spend. It is forwarded verbatim as arg index 2.
+	//
+	// Unspend is FENCED to the UDF/Lua path: executeTeranodeOp routes subOpUnspend
+	// through the UDF executor even when aerospike_use_native_teranode_ops is on
+	// (see useNativeForSubOp). The UDF path always enforces the #766 ownership
+	// comparison, whereas the native subOpUnspend=3 dispatcher's enforcement cannot
+	// be verified from the client (#899) — so reversing a spend never depends on an
+	// unverifiable server build. The other sub-ops keep the native operate-path.
+	if spend.SpendingData == nil {
+		return errors.NewProcessingError("[Unspend] SpendingData is required for %s:%d", spend.TxID, spend.Vout)
+	}
+
+	ret, aErr := s.executeTeranodeOp(policy, key, subOpUnspend, "unspend",
+		int(offset),                // vout adjusted for utxoBatchSize
+		spend.UTXOHash[:],          // utxo hash
+		spend.SpendingData.Bytes(), // expected stored spending data (mandatory ownership check; #766)
+		int(s.GetBlockHeight()),
+		s.settings.GetUtxoStoreBlockHeightRetention(),
 	)
 	if aErr != nil {
 		if e, ok := aErr.(*aerospike.AerospikeError); ok {
@@ -179,7 +253,7 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 	res, err := s.ParseLuaMapResponse(ret)
 	if err != nil {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "error parsing response").Inc()
-		return errors.NewProcessingError("error parsing response", err)
+		return errors.NewProcessingError("[unspend][%s] error parsing response (value %s): %s", describeUTXOSpend(spend), describeAerospikeValue(ret), err.Error(), err)
 	}
 
 	if res.Status == LuaStatusOK {
@@ -188,12 +262,20 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 			// Decrement spentExtraRecs on the master record since this child
 			// record transitioned from ALLSPENT back to NOTALLSPENT.
 			// This mirrors the +1 increment done in handleSpendSignal for ALLSPENT.
-			if err := s.handleExtraRecords(ctx, spend.TxID, -1); err != nil {
+			// Pass 0 so the DAH height falls back to the current block height; a
+			// decrement clears the DAH (tx no longer all-spent) rather than setting
+			// it, so the height is not actually used here.
+			if err := s.handleExtraRecords(ctx, spend.TxID, -1, 0); err != nil {
 				return err
 			}
 		}
 	} else if res.Status == LuaStatusError {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "error response").Inc()
+
+		if res.ErrorCode == LuaErrorCodeTxNotFound {
+			return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
+		}
+
 		return errors.NewStorageError("error in aerospike unspend record: %s", res.Message)
 	}
 

@@ -2,18 +2,24 @@ package legacy
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/legacy/addrmgr"
 	"github.com/bsv-blockchain/teranode/services/legacy/netsync"
+	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -187,6 +193,263 @@ type mockServerPeer struct {
 
 func (m *mockServerPeer) QueueInventory(invVect *wire.InvVect) {
 	m.Called(invVect)
+}
+
+func (m *mockServerPeer) RequeueInventory(invVect *wire.InvVect) {
+	m.Called(invVect)
+}
+
+// TestHandleRelayBlockInvMsg verifies that a newly-relayed block is announced
+// via a plain inventory message to peers that have NOT negotiated sendheaders.
+// handleRelayInvMsg only special-cases InvTypeBlock when sp.WantsHeaders() is
+// true (sending a headers message via handleRelayBlockMsg); peers that never
+// sent "sendheaders" must still get the block via QueueInventory, or they get
+// no announcement for the block at all.
+func TestHandleRelayBlockInvMsg(t *testing.T) {
+	sp := &mockServerPeer{}
+
+	blockHash := chainhash.Hash{0x0a, 0x0b, 0x0c}
+	invVect := wire.NewInvVect(wire.InvTypeBlock, &blockHash)
+
+	msg := relayMsg{invVect: invVect}
+
+	s := &server{}
+
+	sp.Mock.On("QueueInventory", invVect).Return()
+
+	s.handleRelayBlockInvMsg(sp, msg)
+
+	sp.AssertCalled(t, "QueueInventory", invVect)
+}
+
+// tcpAddrConn wraps a net.Pipe end so both sides report a *net.TCPAddr. peer.Peer
+// builds a wire.NetAddress from the connection's remote address, which only works
+// for TCP (or socks) addresses, and net.Pipe reports a "pipe" address.
+type tcpAddrConn struct {
+	net.Conn
+
+	local  *net.TCPAddr
+	remote *net.TCPAddr
+}
+
+func (c *tcpAddrConn) LocalAddr() net.Addr  { return c.local }
+func (c *tcpAddrConn) RemoteAddr() net.Addr { return c.remote }
+
+// TestHandleRelayInvMsgBlockToNonSendHeadersPeer drives handleRelayInvMsg itself -
+// not just the extracted helper - over a real, fully handshaked peer that never
+// sent "sendheaders", and asserts the block reaches the wire as a plain inv
+// message. This pins the dispatch in handleRelayInvMsg: without the InvTypeBlock
+// fallback branch, a non-sendheaders peer gets no announcement for the block at
+// all and no inv is ever written.
+func TestHandleRelayInvMsgBlockToNonSendHeadersPeer(t *testing.T) {
+	invReceived := make(chan *wire.MsgInv, 1)
+
+	s, state, sp := newRelayTestServerPeer(t, func(_ *peer.Peer, msg *wire.MsgInv) {
+		select {
+		case invReceived <- msg:
+		default:
+		}
+	})
+
+	// Precondition for the fallback: this peer did not negotiate sendheaders.
+	require.False(t, sp.WantsHeaders())
+	require.True(t, sp.Connected())
+
+	blockHash := chainhash.Hash{0x0a, 0x0b, 0x0c}
+	invVect := wire.NewInvVect(wire.InvTypeBlock, &blockHash)
+
+	// No msg.data: a non-sendheaders peer must be announced the block by
+	// inventory, which needs nothing but the inv vector. If the dispatch ever
+	// routes this peer to handleRelayBlockMsg instead, that path bails out on the
+	// missing block header and nothing is sent.
+	s.handleRelayInvMsg(state, relayMsg{invVect: invVect})
+
+	select {
+	case msg := <-invReceived:
+		require.Len(t, msg.InvList, 1)
+		require.Equal(t, wire.InvTypeBlock, msg.InvList[0].Type)
+		require.Equal(t, blockHash, msg.InvList[0].Hash)
+	case <-time.After(10 * time.Second):
+		t.Fatal("no inv message relayed to the non-sendheaders peer")
+	}
+}
+
+// newRelayTestServerPeer connects a serverPeer to a real remote peer over a
+// pipe, waits for the version handshake, and registers it in a peerState.
+// onInv receives every inv message the remote end is sent. Neither side sends
+// "sendheaders", so WantsHeaders() stays false on both peers.
+func newRelayTestServerPeer(t *testing.T, onInv func(*peer.Peer, *wire.MsgInv)) (*server, *peerState, *serverPeer) {
+	t.Helper()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	logger := ulogger.TestLogger{}
+
+	remoteCfg := &peer.Config{
+		Listeners: peer.MessageListeners{
+			OnInv: onInv,
+		},
+		UserAgentName:          "remote",
+		UserAgentVersion:       "1.0",
+		ChainParams:            &chaincfg.MainNetParams,
+		Services:               wire.SFNodeNetwork,
+		TrickleInterval:        10 * time.Millisecond,
+		TstAllowSelfConnection: true,
+	}
+
+	localCfg := &peer.Config{
+		UserAgentName:          "local",
+		UserAgentVersion:       "1.0",
+		ChainParams:            &chaincfg.MainNetParams,
+		Services:               wire.SFNodeNetwork,
+		TrickleInterval:        10 * time.Millisecond,
+		TstAllowSelfConnection: true,
+	}
+
+	remoteEnd, localEnd := net.Pipe()
+
+	remoteAddr := &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 8333}
+	localAddr := &net.TCPAddr{IP: net.ParseIP("10.0.0.2"), Port: 8333}
+
+	remotePeer := peer.NewInboundPeer(logger, tSettings, remoteCfg)
+	remotePeer.AssociateConnection(&tcpAddrConn{Conn: remoteEnd, local: remoteAddr, remote: localAddr})
+
+	localPeer, err := peer.NewOutboundPeer(logger, tSettings, localCfg, remoteAddr.String())
+	require.NoError(t, err)
+
+	localPeer.AssociateConnection(&tcpAddrConn{Conn: localEnd, local: localAddr, remote: remoteAddr})
+
+	t.Cleanup(func() {
+		localPeer.DisconnectWithInfo("test cleanup")
+		remotePeer.DisconnectWithInfo("test cleanup")
+		localPeer.WaitForDisconnect()
+		remotePeer.WaitForDisconnect()
+	})
+
+	// The inv is dropped by the peer's queue handler until the version handshake
+	// has completed, so wait for both sides to finish negotiating.
+	require.Eventually(t, func() bool {
+		return localPeer.VersionKnown() && localPeer.VerAckReceived() &&
+			remotePeer.VersionKnown() && remotePeer.VerAckReceived()
+	}, 10*time.Second, 10*time.Millisecond, "peers did not complete the version handshake")
+
+	s := &server{logger: logger, relayInv: make(chan relayMsg, 16)}
+
+	sp := &serverPeer{
+		Peer:   localPeer,
+		server: s,
+		quit:   make(chan struct{}),
+	}
+
+	state := &peerState{
+		inboundPeers:    txmap.NewSyncedMap[int32, *serverPeer](),
+		outboundPeers:   txmap.NewSyncedMap[int32, *serverPeer](),
+		persistentPeers: txmap.NewSyncedMap[int32, *serverPeer](),
+		banned:          txmap.NewSyncedMap[string, time.Time](),
+	}
+	state.inboundPeers.Set(1, sp)
+
+	return s, state, sp
+}
+
+// TestRebroadcastTickReachesPeerThatAlreadySawInv covers issue 1825. The first
+// announce adds the inv to the peer's known inventory, and a plain
+// QueueInventory drops any later attempt, so a rebroadcast used to reach only
+// peers that connected after the first announce. Drives the real announce and
+// rebroadcast paths (RelayInventory, rebroadcastQueue.retry with
+// relayTxBatch, handleRelayInvMsg) over a real connected peer.
+func TestRebroadcastTickReachesPeerThatAlreadySawInv(t *testing.T) {
+	invReceived := make(chan *wire.MsgInv, 10)
+
+	s, state, _ := newRelayTestServerPeer(t, func(_ *peer.Peer, msg *wire.MsgInv) {
+		invReceived <- msg
+	})
+
+	txHash := chainhash.Hash{0xde, 0xad}
+	iv := wire.NewInvVect(wire.InvTypeTx, &txHash)
+	data := &netsync.TxHashAndFee{TxHash: txHash, Fee: 1, Size: 100}
+
+	// deliver plays the peerHandler's part: take what the relay entry points
+	// queued on relayInv and dispatch it to the connected peers.
+	deliver := func() {
+		t.Helper()
+		select {
+		case msg := <-s.relayInv:
+			s.handleRelayInvMsg(state, msg)
+		case <-time.After(time.Second):
+			t.Fatal("nothing queued on relayInv")
+		}
+	}
+
+	expectInv := func(msg string) {
+		t.Helper()
+		select {
+		case got := <-invReceived:
+			require.Len(t, got.InvList, 1, msg)
+			require.Equal(t, *iv, *got.InvList[0], msg)
+		case <-time.After(5 * time.Second):
+			t.Fatal(msg)
+		}
+	}
+
+	expectNoInv := func(msg string) {
+		t.Helper()
+		select {
+		case got := <-invReceived:
+			t.Fatalf("%s: unexpected inv %v", msg, got.InvList)
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+
+	s.RelayInventory(iv, data)
+	deliver()
+	expectInv("first announce not received")
+
+	// A second plain relay is filtered by the peer's known inventory.
+	s.RelayInventory(iv, data)
+	deliver()
+	expectNoInv("plain relay re-sent a known inv")
+
+	queue := newRebroadcastQueue(maxRebroadcastInventory)
+	mustAdd(t, queue, *iv, data)
+
+	for retry := 1; retry <= 2; retry++ {
+		relayed, _ := queue.retry(maxRebroadcastTips, s.relayTxBatch)
+		require.Equal(t, 1, relayed)
+		deliver()
+		expectInv(fmt.Sprintf("rebroadcast retry %d did not reach the peer", retry))
+	}
+}
+
+// TestHandleRelayTxMsgRequeue checks that a rebroadcast relay bypasses the
+// peer's known-inventory filter but still honours its fee filter.
+func TestHandleRelayTxMsgRequeue(t *testing.T) {
+	txHash := chainhash.Hash{0x01, 0x02, 0x03}
+	invVect := wire.NewInvVect(wire.InvTypeTx, &txHash)
+	s := &server{}
+
+	t.Run("requeues", func(t *testing.T) {
+		sp := &mockServerPeer{}
+		sp.Mock.On("RequeueInventory", invVect).Return()
+
+		s.handleRelayTxMsg(sp, relayMsg{invVect: invVect, requeue: true}, 0)
+
+		sp.AssertCalled(t, "RequeueInventory", invVect)
+		sp.AssertNotCalled(t, "QueueInventory", invVect)
+	})
+
+	t.Run("fee filter still applies", func(t *testing.T) {
+		sp := &mockServerPeer{}
+
+		msg := relayMsg{
+			invVect: invVect,
+			data:    &netsync.TxHashAndFee{Fee: 1000, Size: 1000},
+			requeue: true,
+		}
+		s.handleRelayTxMsg(sp, msg, 2000)
+
+		sp.AssertNotCalled(t, "RequeueInventory", invVect)
+		sp.AssertNotCalled(t, "QueueInventory", invVect)
+	})
 }
 
 // TestHandleRelayTxMsg tests the handleRelayTxMsg function's behavior with various fee filter scenarios
@@ -402,6 +665,72 @@ func TestServerNetTotals(t *testing.T) {
 }
 
 // TestEnforceNodeBloomFlagBasic tests the enforceNodeBloomFlag method exists
+// TestShouldDisconnectOnBlockErr_CorruptDoesNotDisconnect pins the legacy-sync
+// behaviour for a corrupt block body (bitcoin-sv/teranode#4692): the serving peer must NOT be
+// disconnected (a body can be corrupted in transit by an honest relay), so the block
+// is dropped and re-requested without churning an otherwise-healthy sync peer.
+// Genuine consensus failures still disconnect; transient local infra errors, and a
+// local-policy decline, do not.
+func TestShouldDisconnectOnBlockErr_CorruptDoesNotDisconnect(t *testing.T) {
+	// Corrupt body — must NOT disconnect.
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewBlockCorruptError("corrupt body")))
+	// Even wrapped, the corrupt cause must be detected and not disconnect.
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewProcessingError("outer", errors.NewBlockCorruptError("corrupt body"))))
+
+	// Local policy decline (excessiveblocksize) — must NOT disconnect
+	// (bitcoin-sv/teranode#4692). It is our own configuration, not the peer's conduct: every peer
+	// serves the same block, so rotating only churns the fleet while the replacement is declined
+	// identically. It is not transient-local either, so it needs its own exemption rather than
+	// falling under IsTransientLocalError.
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewBlockPolicyDeclinedError("block size 5 exceeds excessiveblocksize 4 (local policy)")))
+	// And behind a generic wrapper, since errors.Is walks the chain (the gRPC round trip itself is
+	// pinned by errors/block_policy_declined_test.go's WrapGRPC/UnwrapGRPC coverage).
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewProcessingError("outer", errors.NewBlockPolicyDeclinedError("declined"))))
+
+	// Genuine consensus failure — must disconnect (rotate the peer).
+	require.True(t, shouldDisconnectOnBlockErr(errors.NewBlockInvalidError("invalid")))
+	// The two shapes a catch-up block gets back from block validation's batch path,
+	// each wrapped twice as block validation and netsync's ProcessBlock wrap them:
+	// a consensus failure over an invalid transaction disconnects, a parent read
+	// that failed on the store does not.
+	require.True(t, shouldDisconnectOnBlockErr(errors.NewProcessingError("failed to process block",
+		errors.NewBlockInvalidError("block invalid", errors.NewTxInvalidError("spends output 7 of a parent that has 1")))))
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewProcessingError("failed to process block",
+		errors.NewProcessingError("failed to read parent output", errors.NewStorageError("aerospike timeout")))))
+	// Transient local infra — must NOT disconnect (existing behaviour, guarded here too).
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewServiceError("service down")))
+	require.False(t, shouldDisconnectOnBlockErr(nil))
+}
+
+// TestServerPeer_StrikeCorruptBlockBody is the targeted regression for the peer
+// attribution of a corrupt block body (bitcoin-sv/teranode#4692). It would FAIL if the strike were
+// wired to an out-of-band (empty) peer identity that no-ops — the previous bug — because
+// here the penalty lands on THIS concrete serving peer and its ban score must increase.
+func TestServerPeer_StrikeCorruptBlockBody(t *testing.T) {
+	prevCfg := cfg
+	cfg = &config{BanThreshold: 100}
+	defer func() { cfg = prevCfg }()
+
+	sp := &serverPeer{server: &server{logger: ulogger.TestLogger{}}}
+	require.Equal(t, uint32(0), sp.banScore.Int(), "fresh peer starts unstruck")
+
+	// A corrupt block body strikes THIS serving peer: non-zero, non-empty attribution.
+	require.True(t, sp.strikeIfCorruptBlockBody(errors.NewBlockCorruptError("merkle root does not match")))
+	struck := sp.banScore.Int()
+	require.Greater(t, struck, uint32(0), "the serving peer must actually be penalised for a corrupt body")
+	require.Less(t, struck, cfg.BanThreshold, "a single corrupt body must not cross the ban/disconnect threshold")
+
+	// A corrupt cause wrapped across the ProcessBlock boundary is still attributed here.
+	require.True(t, sp.strikeIfCorruptBlockBody(errors.NewProcessingError("failed to process block", errors.NewBlockCorruptError("corrupt"))))
+	require.Greater(t, sp.banScore.Int(), struck, "wrapped corrupt must accumulate further")
+
+	// A genuine consensus failure is NOT a corrupt-body strike (it is handled by the
+	// disconnect path instead), so it must not add the corrupt score.
+	before := sp.banScore.Int()
+	require.False(t, sp.strikeIfCorruptBlockBody(errors.NewBlockInvalidError("invalid")))
+	require.Equal(t, before, sp.banScore.Int(), "non-corrupt error must not apply the corrupt strike")
+}
+
 func TestEnforceNodeBloomFlagBasic(t *testing.T) {
 	// This function requires a fully initialized peer, which is complex to set up
 	// We'll just test that the method exists on serverPeer
@@ -457,12 +786,31 @@ func newTestServerForRelay(t *testing.T, fsmState blockchain.FSMStateType, fsmEr
 		Return(fsmState == blockchain.FSMStateRUNNING, fsmErr)
 
 	s := &server{
-		ctx:              context.Background(),
-		settings:         &settings.Settings{},
-		blockchainClient: mockBC,
-		relayInv:         make(chan relayMsg, 16),
+		ctx:                  context.Background(),
+		settings:             &settings.Settings{},
+		blockchainClient:     mockBC,
+		relayInv:             make(chan relayMsg, 16),
+		modifyRebroadcastInv: make(chan interface{}, 16),
 	}
 	return s, mockBC
+}
+
+// drainModifyRebroadcastInv collects up to `want` entries from modifyRebroadcastInv
+// or returns whatever arrived by the deadline. AddRebroadcastInventory dispatches
+// directly (no goroutine), so a short timeout is enough.
+func drainModifyRebroadcastInv(t *testing.T, ch chan interface{}, want int, timeout time.Duration) []interface{} {
+	t.Helper()
+	var got []interface{}
+	deadline := time.After(timeout)
+	for len(got) < want {
+		select {
+		case m := <-ch:
+			got = append(got, m)
+		case <-deadline:
+			return got
+		}
+	}
+	return got
 }
 
 // drain reports how many relayMsg entries arrived on relayInv within the
@@ -483,9 +831,8 @@ func drain(ch chan relayMsg, timeout time.Duration) []relayMsg {
 
 // TestCanRelayTx_FSMStates verifies the FSM-state gate that determines
 // whether the legacy server may emit transaction inventory. The node must
-// only relay tx when the blockchain FSM is RUNNING; LEGACYSYNCING and
-// CATCHINGBLOCKS both suppress relay. Any error reading the FSM also
-// suppresses relay (fail closed).
+// only relay tx when the blockchain FSM is RUNNING; CATCHINGBLOCKS suppresses
+// relay. Any error reading the FSM also suppresses relay (fail closed).
 func TestCanRelayTx_FSMStates(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -494,7 +841,6 @@ func TestCanRelayTx_FSMStates(t *testing.T) {
 		want     bool
 	}{
 		{name: "RUNNING permits relay", state: blockchain.FSMStateRUNNING, want: true},
-		{name: "LEGACYSYNCING suppresses relay", state: blockchain.FSMStateLEGACYSYNCING, want: false},
 		{name: "CATCHINGBLOCKS suppresses relay", state: blockchain.FSMStateCATCHINGBLOCKS, want: false},
 		{name: "IDLE suppresses relay", state: blockchain.FSMStateIDLE, want: false},
 		{name: "FSM error fails closed", state: blockchain.FSMStateRUNNING, stateErr: errors.NewError("boom"), want: false},
@@ -551,7 +897,6 @@ func TestRelayInventory_AlwaysRelaysBlockInvs(t *testing.T) {
 	for _, state := range []blockchain.FSMStateType{
 		blockchain.FSMStateRUNNING,
 		blockchain.FSMStateCATCHINGBLOCKS,
-		blockchain.FSMStateLEGACYSYNCING,
 	} {
 		t.Run(state.String(), func(t *testing.T) {
 			s, _ := newTestServerForRelay(t, state, nil)
@@ -561,6 +906,160 @@ func TestRelayInventory_AlwaysRelaysBlockInvs(t *testing.T) {
 			require.Len(t, drain(s.relayInv, 200*time.Millisecond), 1, "block inv must always relay")
 		})
 	}
+}
+
+// TestAnnounceNewTransactions_EnqueuesForRebroadcast closes the gap from
+// issue #942: AddRebroadcastInventory was defined but never called, so any
+// tx that hit a transient relay miss (peer not yet connected, FSM flapping
+// in/out of RUNNING, etc.) was stuck in the local mempool with no retry.
+//
+// AnnounceNewTransactions must enqueue every relayed tx for periodic
+// rebroadcast so the existing rebroadcastHandler can re-attempt delivery
+// when conditions change.
+func TestAnnounceNewTransactions_EnqueuesForRebroadcast(t *testing.T) {
+	s, _ := newTestServerForRelay(t, blockchain.FSMStateRUNNING, nil)
+
+	h1 := chainhash.Hash{0xaa, 0x11}
+	h2 := chainhash.Hash{0xbb, 0x22}
+	s.AnnounceNewTransactions([]*netsync.TxHashAndFee{
+		{TxHash: h1, Fee: 1, Size: 100},
+		{TxHash: h2, Fee: 2, Size: 200},
+	})
+
+	got := drainModifyRebroadcastInv(t, s.modifyRebroadcastInv, 2, 200*time.Millisecond)
+	require.Len(t, got, 2, "each tx must be queued for rebroadcast")
+
+	seen := map[chainhash.Hash]bool{}
+	for _, msg := range got {
+		add, ok := msg.(broadcastInventoryAdd)
+		require.True(t, ok, "expected broadcastInventoryAdd, got %T", msg)
+		require.NotNil(t, add.invVect)
+		require.Equal(t, wire.InvTypeTx, add.invVect.Type)
+		seen[add.invVect.Hash] = true
+	}
+	require.True(t, seen[h1], "h1 missing from rebroadcast queue")
+	require.True(t, seen[h2], "h2 missing from rebroadcast queue")
+}
+
+// TestAnnounceNewTransactions_DoesNotEnqueueWhenFSMNotRunning verifies the
+// inverse of the rebroadcast wiring on the legitimate FSM gate: if the
+// relay path bails because the chain isn't synced (canRelayTx=false), we
+// must not silently queue the tx for rebroadcast either. Otherwise we'd
+// retry forever pre-Genesis and earn instant bans on the post-Genesis
+// network for `bad-txns-vout-p2sh` outputs — see the canRelayTx doc
+// comment.
+func TestAnnounceNewTransactions_DoesNotEnqueueWhenFSMNotRunning(t *testing.T) {
+	s, _ := newTestServerForRelay(t, blockchain.FSMStateCATCHINGBLOCKS, nil)
+	s.AnnounceNewTransactions([]*netsync.TxHashAndFee{{TxHash: chainhash.Hash{0x42}, Fee: 1, Size: 100}})
+	require.Empty(t, drainModifyRebroadcastInv(t, s.modifyRebroadcastInv, 1, 50*time.Millisecond),
+		"must not enqueue for rebroadcast when relay is gated by FSM")
+}
+
+// TestAnnounceNewTransactions_RelaysRegardlessOfListenMode locks in the
+// decision (review feedback on PR #955) that the legacy P2P announce
+// path is NOT gated by the modern-P2P `listen_mode` setting. listen_only
+// is documented for DataHub URL advertisement on the modern p2p service;
+// the legacy INV→GETDATA path is opt-in via enabling the legacy service
+// itself, and should propagate to explicitly-configured legacy peers
+// regardless of how the modern-P2P listen mode is set.
+//
+// A regression here would silently break legacy tx propagation for any
+// node running with listen_mode=listen_only — exactly the foot-gun this
+// PR set out to fix.
+func TestAnnounceNewTransactions_RelaysRegardlessOfListenMode(t *testing.T) {
+	for _, mode := range []string{settings.ListenModeListenOnly, settings.ListenModeSilent, settings.ListenModeFull} {
+		t.Run(mode, func(t *testing.T) {
+			s, _ := newTestServerForRelay(t, blockchain.FSMStateRUNNING, nil)
+			s.settings.P2P.ListenMode = mode
+
+			hash := chainhash.Hash{0x55}
+			s.AnnounceNewTransactions([]*netsync.TxHashAndFee{{TxHash: hash, Fee: 1, Size: 100}})
+
+			// Immediate relay path
+			require.Len(t, drain(s.relayInv, 100*time.Millisecond), 1,
+				"tx INV must be relayed regardless of listen_mode=%s", mode)
+
+			// Rebroadcast retry path
+			rebroadcast := drainModifyRebroadcastInv(t, s.modifyRebroadcastInv, 1, 100*time.Millisecond)
+			require.Len(t, rebroadcast, 1,
+				"tx must be enqueued for rebroadcast regardless of listen_mode=%s", mode)
+		})
+	}
+}
+
+// TestRelayInventory_RelaysTxRegardlessOfListenMode is the direct-path
+// equivalent for RelayInventory: RPC-driven rebroadcastHandler ticks
+// flow through here as well as the post-AnnounceNewTransactions path.
+// Same justification as TestAnnounceNewTransactions_RelaysRegardlessOfListenMode.
+func TestRelayInventory_RelaysTxRegardlessOfListenMode(t *testing.T) {
+	for _, mode := range []string{settings.ListenModeListenOnly, settings.ListenModeSilent, settings.ListenModeFull} {
+		t.Run(mode, func(t *testing.T) {
+			s, _ := newTestServerForRelay(t, blockchain.FSMStateRUNNING, nil)
+			s.settings.P2P.ListenMode = mode
+
+			hash := chainhash.Hash{0x66}
+			iv := wire.NewInvVect(wire.InvTypeTx, &hash)
+			s.RelayInventory(iv, &netsync.TxHashAndFee{TxHash: hash, Fee: 1, Size: 100})
+
+			got := drain(s.relayInv, 100*time.Millisecond)
+			require.Len(t, got, 1, "tx inv must be relayed regardless of listen_mode=%s", mode)
+			require.Equal(t, iv, got[0].invVect)
+		})
+	}
+}
+
+// TestBroadcastMessage_BroadcastsRegardlessOfListenMode covers the third
+// previously-gated call site. BroadcastMessage handles legacy wire-level
+// broadcasts (addr / ping / etc.) which are part of being a Bitcoin P2P
+// peer at all. There is no scenario in which the modern-P2P listen_mode
+// should suppress them on the legacy side.
+func TestBroadcastMessage_BroadcastsRegardlessOfListenMode(t *testing.T) {
+	for _, mode := range []string{settings.ListenModeListenOnly, settings.ListenModeSilent, settings.ListenModeFull} {
+		t.Run(mode, func(t *testing.T) {
+			s, _ := newTestServerForRelay(t, blockchain.FSMStateRUNNING, nil)
+			s.settings.P2P.ListenMode = mode
+			// newTestServerForRelay doesn't allocate broadcast; do it here.
+			s.broadcast = make(chan broadcastMsg, 4)
+
+			ping := wire.NewMsgPing(0)
+			s.BroadcastMessage(ping)
+
+			deadline := time.After(100 * time.Millisecond)
+			select {
+			case bm := <-s.broadcast:
+				require.Equal(t, ping, bm.message)
+			case <-deadline:
+				t.Fatalf("BroadcastMessage must dispatch regardless of listen_mode=%s", mode)
+			}
+		})
+	}
+}
+
+// TestAddRebroadcastInventory_BumpsDropCounterOnFullChannel asserts the
+// observability contract: when modifyRebroadcastInv is saturated, the
+// non-blocking send drops AND increments droppedRebroadcastAdds. Silent
+// drops would hide queue saturation from operators in a high-tx-rate
+// deployment.
+func TestAddRebroadcastInventory_BumpsDropCounterOnFullChannel(t *testing.T) {
+	s, _ := newTestServerForRelay(t, blockchain.FSMStateRUNNING, nil)
+
+	// Replace the channel with a single-slot one we never drain.
+	s.modifyRebroadcastInv = make(chan interface{}, 1)
+
+	iv := wire.NewInvVect(wire.InvTypeTx, &chainhash.Hash{0x10})
+
+	// First call fills the buffer, no drop.
+	s.AddRebroadcastInventory(iv, nil)
+	require.Equal(t, uint64(0), s.droppedRebroadcastAdds.Load(),
+		"first add fills buffer, must not drop")
+
+	// Subsequent calls must drop and bump the counter.
+	const overflow = 5
+	for i := 0; i < overflow; i++ {
+		s.AddRebroadcastInventory(iv, nil)
+	}
+	require.Equal(t, uint64(overflow), s.droppedRebroadcastAdds.Load(),
+		"every add against a full buffer must bump the drop counter")
 }
 
 // TestAnnounceNewTransactions_SuppressedWhenNotRunning verifies that the
@@ -622,12 +1121,131 @@ func TestServerPeerAddBanScoreExists(t *testing.T) {
 	assert.NotNil(t, sp.addBanScore)
 }
 
-// TestServerOutboundGroupCountExists tests the OutboundGroupCount method exists
-func TestServerOutboundGroupCountExists(t *testing.T) {
+// TestServerPeerAddBanScoreRespectsDisableBanning verifies that addBanScore
+// honours cfg.DisableBanning by leaving the ban score untouched when banning is
+// disabled, and that it still accumulates normally when banning is enabled.
+// cfg.DisableBanning is set from the `legacy_config_DisableBanning` setting via
+// setConfigValuesFromSettings; the `nobanning` struct tag is inert because the
+// legacy command line parser is commented out.
+func TestServerPeerAddBanScoreRespectsDisableBanning(t *testing.T) {
+	// cfg is a package-level variable read by addBanScore; save/restore it so
+	// this test doesn't leak state into other tests in the package.
+	origCfg := cfg
+	defer func() { cfg = origCfg }()
+
+	tests := []struct {
+		name            string
+		disableBanning  bool
+		expectIncreased bool
+	}{
+		{
+			name:            "banning enabled: score accumulates",
+			disableBanning:  false,
+			expectIncreased: true,
+		},
+		{
+			name:            "banning disabled: score does not accumulate",
+			disableBanning:  true,
+			expectIncreased: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg = &config{
+				DisableBanning: tt.disableBanning,
+				BanThreshold:   100,
+			}
+
+			sp := &serverPeer{}
+
+			sp.addBanScore(1, 0, "test")
+
+			if tt.expectIncreased {
+				require.NotZero(t, sp.banScore.Int())
+			} else {
+				require.Zero(t, sp.banScore.Int())
+			}
+		})
+	}
+}
+
+// TestServerPeerOnVersionRespectsDisableBanning verifies that the non-BSV user
+// agent check in OnVersion honours cfg.DisableBanning: the peer is rejected
+// either way, but it is only added to the ban list when banning is enabled.
+func TestServerPeerOnVersionRespectsDisableBanning(t *testing.T) {
+	// cfg is a package-level variable read by OnVersion; save/restore it so
+	// this test doesn't leak state into other tests in the package.
+	origCfg := cfg
+	defer func() { cfg = origCfg }()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	tests := []struct {
+		name           string
+		disableBanning bool
+		expectBanned   bool
+	}{
+		{
+			name:           "banning enabled: peer is banned",
+			disableBanning: false,
+			expectBanned:   true,
+		},
+		{
+			name:           "banning disabled: peer is rejected but not banned",
+			disableBanning: true,
+			expectBanned:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg = &config{
+				DisableBanning: tt.disableBanning,
+				BanThreshold:   100,
+			}
+
+			// banPeers is buffered so BanPeer does not block without the
+			// peer handler running.
+			s := &server{
+				logger:   ulogger.TestLogger{},
+				settings: tSettings,
+				banPeers: make(chan *serverPeer, 1),
+			}
+
+			sp := &serverPeer{
+				ctx:    context.Background(),
+				server: s,
+				Peer:   peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{}),
+			}
+
+			msg := &wire.MsgVersion{
+				ProtocolVersion: int32(wire.ProtocolVersion),
+				UserAgent:       "/Bitcoin Cash Node:27.0.0/",
+			}
+
+			reject := sp.OnVersion(sp.Peer, msg)
+
+			// The peer is rejected regardless: disabling banning only
+			// suppresses the ban, not the fork-client rejection.
+			require.NotNil(t, reject)
+			require.Equal(t, wire.RejectNonstandard, reject.Code)
+
+			if tt.expectBanned {
+				require.Len(t, s.banPeers, 1)
+			} else {
+				require.Empty(t, s.banPeers)
+			}
+		})
+	}
+}
+
+// TestServerOutboundGroupsExists tests the OutboundGroups method exists
+func TestServerOutboundGroupsExists(t *testing.T) {
 	// This method requires complex channel setup and peer state management
 	// We'll just verify the method exists on server
 	s := &server{}
-	assert.NotNil(t, s.OutboundGroupCount)
+	assert.NotNil(t, s.OutboundGroups)
 }
 
 // TestServerPeerPushAddrMsgExists tests the pushAddrMsg method exists
@@ -687,14 +1305,6 @@ func TestServerTransactionConfirmed(t *testing.T) {
 
 	// The method primarily removes from rebroadcast inventory
 	// Since we don't have full setup, we just test it doesn't panic
-}
-
-// TestServerGetTxFromStoreExists tests the getTxFromStore method exists
-func TestServerGetTxFromStoreExists(t *testing.T) {
-	// This method requires complex setup with stores and blockchain state
-	// We'll just verify the method exists on server
-	s := &server{}
-	assert.NotNil(t, s.getTxFromStore)
 }
 
 // TestServerUpdatePeerHeights tests the UpdatePeerHeights method
@@ -807,25 +1417,6 @@ func TestHasServices(t *testing.T) {
 	}
 }
 
-// TestRandomUint16Number tests the randomUint16Number function
-func TestRandomUint16Number(t *testing.T) {
-	tests := []struct {
-		name string
-		max  uint16
-	}{
-		{"small max", 10},
-		{"medium max", 1000},
-		{"large max", 65535},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := randomUint16Number(tt.max)
-			assert.True(t, result < tt.max, "Random number should be less than max")
-		})
-	}
-}
-
 // TestDirectionStringFunc tests the directionString utility
 func TestDirectionStringFunc(t *testing.T) {
 	tests := []struct {
@@ -886,4 +1477,538 @@ func TestMergeCheckpointsFunc(t *testing.T) {
 	assert.Equal(t, int32(200), merged[1].Height)
 	assert.Equal(t, int32(300), merged[2].Height)
 	assert.Equal(t, int32(400), merged[3].Height)
+}
+
+// TestShouldDisconnectOnBlockErr verifies the block-processing error policy that
+// both the synchronous and the async-prefetch ingestion paths in OnBlock share:
+// validation failures rotate the sync peer, local infrastructure errors do not.
+func TestShouldDisconnectOnBlockErr(t *testing.T) {
+	// No error: nothing to disconnect for.
+	require.False(t, shouldDisconnectOnBlockErr(nil))
+
+	// Local infrastructure problems must NOT churn the sync peer.
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewServiceError("grpc down")))
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewStorageError("db unavailable")))
+
+	// #1187: the per-block backoff skip returns ErrServiceUnavailable on every
+	// in-window re-delivery, and ErrStorageUnavailable is "no aerospike nodes
+	// available" — both are our local fault, not the peer's, so they must NOT
+	// disconnect the delivering peer (this is the regression that churned peers).
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewServiceUnavailableError("in backoff")))
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewStorageUnavailableError("no aerospike nodes available")))
+
+	// Wrapped transient-local errors are still suppressed (chain is walked).
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewProcessingError("wrap", errors.NewStorageError("inner"))))
+
+	// A genuine block validation failure rotates the peer.
+	require.True(t, shouldDisconnectOnBlockErr(errors.NewBlockInvalidError("bad merkle root")))
+}
+
+// TestCheckBannedBounded verifies the bounded ban-check round-trip extracted from
+// OnBlock's pre-admission phase. Under prefetch the per-message watchdog is
+// disarmed for block messages and the netsync stall detector only watches the
+// sync peer, so a wedged query goroutine must NOT be allowed to park the
+// read-loop: the round-trip returns ok=false (drop the block) when the query send
+// or its reply cannot complete within the context, and (banned, true) when the
+// query goroutine answers.
+func TestCheckBannedBounded(t *testing.T) {
+	t.Run("send times out when nobody services the query", func(t *testing.T) {
+		// Unbuffered query with no reader: the send can never complete, so an
+		// already-cancelled context must make the round-trip bail with ok=false.
+		sp := &serverPeer{server: &server{query: make(chan interface{})}}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		banned, ok := sp.checkBannedBounded(ctx, "127.0.0.1")
+		require.False(t, ok, "a never-serviced query send must return ok=false")
+		require.False(t, banned)
+	})
+
+	t.Run("reply times out when the query is read but never answered", func(t *testing.T) {
+		s := &server{query: make(chan interface{})}
+		sp := &serverPeer{server: s}
+
+		// Drain the send but never reply, forcing the second select to wait out
+		// the context — the wedged-query-goroutine case this bound exists for.
+		go func() { <-s.query }()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+
+		banned, ok := sp.checkBannedBounded(ctx, "127.0.0.1")
+		require.False(t, ok, "a missing reply must return ok=false")
+		require.False(t, banned)
+	})
+
+	t.Run("returns the ban verdict when the query goroutine answers", func(t *testing.T) {
+		for _, want := range []bool{true, false} {
+			s := &server{query: make(chan interface{})}
+			sp := &serverPeer{server: s}
+
+			go func() {
+				msg := (<-s.query).(*isPeerBannedMsg)
+				msg.reply <- want
+			}()
+
+			banned, ok := sp.checkBannedBounded(context.Background(), "127.0.0.1")
+			require.True(t, ok, "a serviced round-trip must return ok=true")
+			require.Equal(t, want, banned)
+		}
+	})
+}
+
+// TestPreAdmitTimedOut verifies the deadline-vs-cancel policy OnBlock uses to
+// decide whether a failed pre-admission call (ban-check ok=false, or a
+// GetBlockHeader that erred under preAdmitCtx) should rotate the sync peer.
+// Only a genuine deadline (the wedged-local-round-trip case that strands a
+// requested block) returns true; a parent or direct cancel — daemon shutdown /
+// peer teardown — returns false so the block is dropped without a disconnect
+// storm across every peer that happens to be inside OnBlock.
+func TestPreAdmitTimedOut(t *testing.T) {
+	t.Run("deadline exceeded → rotate", func(t *testing.T) {
+		// Already-past deadline: Err() latches context.DeadlineExceeded.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+		defer cancel()
+
+		<-ctx.Done()
+		require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+		require.True(t, preAdmitTimedOut(ctx))
+	})
+
+	t.Run("parent cancelled → drop, no rotate", func(t *testing.T) {
+		// The daemon-shutdown shape: sp.ctx (parent) is cancelled, so the
+		// derived preAdmitCtx reports Canceled, not DeadlineExceeded.
+		parent, cancelParent := context.WithCancel(context.Background())
+		child, cancelChild := context.WithTimeout(parent, time.Hour)
+		defer cancelChild()
+
+		cancelParent()
+
+		<-child.Done()
+		require.ErrorIs(t, child.Err(), context.Canceled)
+		require.False(t, preAdmitTimedOut(child))
+	})
+
+	t.Run("direct cancel → drop, no rotate", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		require.False(t, preAdmitTimedOut(ctx))
+	})
+
+	t.Run("live context → no rotate (defensive; callers gate on failure)", func(t *testing.T) {
+		require.False(t, preAdmitTimedOut(context.Background()))
+	})
+}
+
+// TestBlockAdmissionWeight verifies the prefetch-budget weight selection used by
+// OnBlock: the wire-measured payload size is preferred, then the raw buffer
+// length, and only as a last resort the O(all-tx) SerializeSize() walk.
+func TestBlockAdmissionWeight(t *testing.T) {
+	msg := wire.NewMsgBlock(wire.NewBlockHeader(1, &chainhash.Hash{}, &chainhash.Hash{}, 1, 1))
+	fallback := int64(msg.SerializeSize())
+	require.Positive(t, fallback, "empty block must still serialize to a positive size")
+
+	// Wire measurement present: used even when buf is also non-nil.
+	require.Equal(t, int64(1000), blockAdmissionWeight(1000, make([]byte, 200), msg))
+
+	// No wire measurement, but the raw buffer is available: use its length.
+	require.Equal(t, int64(200), blockAdmissionWeight(0, make([]byte, 200), msg))
+
+	// Neither available: fall back to SerializeSize().
+	require.Equal(t, fallback, blockAdmissionWeight(0, nil, msg))
+
+	// A non-positive wire measurement must not be trusted; fall through.
+	require.Equal(t, fallback, blockAdmissionWeight(-1, nil, msg))
+}
+
+// TestMisbehaviorDisconnectTarget verifies the unrequested-block eviction
+// resolves a stream sub-peer to its association primary (so the whole
+// association is torn down), while a peer with no association disconnects
+// itself. This mirrors handleBlockMsg's stream-peer → primary resolution.
+func TestMisbehaviorDisconnectTarget(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	newPeer := func() *peer.Peer {
+		return peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{})
+	}
+
+	// A peer with no association is its own disconnect target.
+	lone := newPeer()
+	require.Same(t, lone, misbehaviorDisconnectTarget(lone))
+
+	// A stream sub-peer resolves to the association primary.
+	primary := newPeer()
+	assoc := peer.NewAssociation([]byte{0x01, 0x02, 0x03}, primary)
+	primary.SetAssociation(assoc)
+
+	dataStream := newPeer()
+	require.True(t, assoc.AddStream(wire.StreamTypeData1, dataStream))
+	dataStream.SetAssociation(assoc)
+
+	require.Same(t, primary, misbehaviorDisconnectTarget(dataStream))
+
+	// The primary itself resolves to itself.
+	require.Same(t, primary, misbehaviorDisconnectTarget(primary))
+}
+
+// TestDisconnectMisbehaving verifies the shared misbehaviour-eviction helper used
+// at all three disconnect sites: for a stream sub-peer it disconnects BOTH the
+// association primary (whose disconnect drives handleDonePeerMsg's
+// associationMgr.Remove, rotating the sync peer) AND the stream's own connection;
+// for a lone peer it disconnects only that peer, exactly once (idempotent guard).
+// DisconnectWithWarning closes the peer's quit channel, so WaitForDisconnect
+// returning is the observable disconnect signal.
+func TestDisconnectMisbehaving(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	newPeer := func() *peer.Peer {
+		return peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{})
+	}
+
+	// disconnected reports whether p was disconnected within a short window
+	// (DisconnectWithWarning closes p.quit, which WaitForDisconnect awaits).
+	disconnected := func(p *peer.Peer) bool {
+		done := make(chan struct{})
+		go func() {
+			p.WaitForDisconnect()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			return true
+		case <-time.After(100 * time.Millisecond):
+			return false
+		}
+	}
+
+	t.Run("stream sub-peer evicts both the primary and the stream", func(t *testing.T) {
+		primary := newPeer()
+		assoc := peer.NewAssociation([]byte{0x01, 0x02, 0x03}, primary)
+		primary.SetAssociation(assoc)
+
+		dataStream := newPeer()
+		require.True(t, assoc.AddStream(wire.StreamTypeData1, dataStream))
+		dataStream.SetAssociation(assoc)
+
+		disconnectMisbehaving(&serverPeer{Peer: dataStream}, "bad block")
+
+		require.True(t, disconnected(primary), "the association primary must be disconnected to rotate the sync peer")
+		require.True(t, disconnected(dataStream), "the stream sub-peer's own connection must be disconnected too")
+	})
+
+	t.Run("lone peer disconnects only itself", func(t *testing.T) {
+		lone := newPeer()
+
+		require.NotPanics(t, func() { disconnectMisbehaving(&serverPeer{Peer: lone}, "bad block") })
+		require.True(t, disconnected(lone))
+	})
+}
+
+// TestTearDownAssociationStreams verifies the primary-disconnect teardown that
+// handleDonePeerMsg now performs: when an association's primary goes away, every
+// sub-peer stream connection is closed (fixing the DATA1 stream leak and the
+// budget-parked sub-peer read-loop), while the primary itself — passed as
+// except, since it is already disconnecting — is left untouched.
+// DisconnectWithInfo closes the peer's quit channel, so WaitForDisconnect
+// returning is the observable disconnect signal.
+func TestTearDownAssociationStreams(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	newPeer := func() *peer.Peer {
+		return peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{})
+	}
+
+	disconnected := func(p *peer.Peer) bool {
+		done := make(chan struct{})
+		go func() {
+			p.WaitForDisconnect()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			return true
+		case <-time.After(100 * time.Millisecond):
+			return false
+		}
+	}
+
+	buildAssoc := func() (*peer.Association, *peer.Peer, *peer.Peer, *peer.Peer) {
+		primary := newPeer()
+		assoc := peer.NewAssociation([]byte{0x01, 0x02, 0x03}, primary)
+		primary.SetAssociation(assoc)
+
+		data1 := newPeer()
+		require.True(t, assoc.AddStream(wire.StreamTypeData1, data1))
+		data1.SetAssociation(assoc)
+		data1.SetStreamType(wire.StreamTypeData1)
+
+		data2 := newPeer()
+		require.True(t, assoc.AddStream(wire.StreamTypeData2, data2))
+		data2.SetAssociation(assoc)
+		data2.SetStreamType(wire.StreamTypeData2)
+
+		return assoc, primary, data1, data2
+	}
+
+	t.Run("closes every sub-peer stream, leaves the primary", func(t *testing.T) {
+		assoc, primary, data1, data2 := buildAssoc()
+
+		tearDownAssociationStreams(assoc, primary)
+
+		require.False(t, disconnected(primary), "the primary is passed as except and must not be disconnected here")
+		require.True(t, disconnected(data1), "the DATA1 sub-peer connection must be closed")
+		require.True(t, disconnected(data2), "the DATA2 sub-peer connection must be closed")
+	})
+
+	t.Run("nil association is a no-op", func(t *testing.T) {
+		require.NotPanics(t, func() { tearDownAssociationStreams(nil, newPeer()) })
+	})
+
+	t.Run("idempotent when a sub-peer is already tearing down", func(t *testing.T) {
+		assoc, primary, data1, data2 := buildAssoc()
+
+		// Pre-disconnect one sub-peer: the helper must not panic (atomic guard)
+		// and must still close the remaining sub-peer.
+		data1.DisconnectWithWarning("already gone")
+
+		require.NotPanics(t, func() { tearDownAssociationStreams(assoc, primary) })
+		require.True(t, disconnected(data1))
+		require.True(t, disconnected(data2))
+		require.False(t, disconnected(primary))
+	})
+}
+
+// TestAwaitBlockResult_StrikesCorruptBlockBody covers the DEFAULT async
+// prefetch-ingestion completion path (UseBlockPrefetchIngestion is true off regtest):
+// a corrupt block body arriving on `done` must strike THIS serving peer's ban score and
+// must NOT disconnect it. This is the regression for the async gap that a
+// synchronous-only strike left open — on the default configuration the corrupt result
+// flows here, not through the synchronous OnBlock handler.
+func TestAwaitBlockResult_StrikesCorruptBlockBody(t *testing.T) {
+	prevCfg := cfg
+	cfg = &config{BanThreshold: 100}
+	defer func() { cfg = prevCfg }()
+
+	sp := &serverPeer{
+		server: &server{syncManager: &netsync.SyncManager{}, logger: ulogger.TestLogger{}},
+		ctx:    context.Background(),
+		quit:   make(chan struct{}),
+	}
+	require.Equal(t, uint32(0), sp.banScore.Int(), "fresh peer starts unstruck")
+
+	// A corrupt body wrapped exactly as the ProcessBlock path delivers it
+	// (ProcessingError around the corrupt cause). shouldDisconnectOnBlockErr returns false
+	// for corrupt, so the disconnect path — which would panic on the nil embedded
+	// *peer.Peer — is never taken; the clean return proves no disconnect.
+	done := make(chan error, 1)
+	done <- errors.NewProcessingError("failed to process block", errors.NewBlockCorruptError("merkle root does not match"))
+
+	finished := make(chan struct{})
+	go func() {
+		sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+		close(finished)
+	}()
+
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("awaitBlockResult did not return after the corrupt reply arrived")
+	}
+
+	// Read after <-finished: the goroutine's addBanScore happens-before the channel close.
+	struck := sp.banScore.Int()
+	require.Greater(t, struck, uint32(0), "async prefetch corrupt completion must penalise the serving peer")
+	require.Less(t, struck, cfg.BanThreshold, "a single corrupt body must not cross the ban/disconnect threshold")
+}
+
+// TestAwaitBlockResult_ReleasesAndExitsOnTeardown covers the prefetch teardown
+// path: awaitBlockResult must hold the reserved budget until the block actually
+// finishes processing — even after the peer is torn down (sp.quit) — because the
+// block's memory is still live in the netsync pipeline. It releases (via defer)
+// only when done arrives, or, as a shutdown-race backstop, when sp.ctx (the
+// ServiceManager errgroup Init context, cancelled on daemon shutdown) fires. A
+// nil prefetch budget makes ReleaseBlockPrefetch a no-op, so this exercises the
+// control flow without standing up a full SyncManager.
+func TestAwaitBlockResult_ReleasesAndExitsOnTeardown(t *testing.T) {
+	newPeer := func(ctx context.Context) *serverPeer {
+		return &serverPeer{
+			server: &server{syncManager: &netsync.SyncManager{}, logger: ulogger.TestLogger{}},
+			ctx:    ctx,
+			quit:   make(chan struct{}),
+		}
+	}
+
+	t.Run("holds after sp.quit until the block completes", func(t *testing.T) {
+		sp := newPeer(context.Background())
+		done := make(chan error, 1)
+
+		finished := make(chan struct{})
+		go func() {
+			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+			close(finished)
+		}()
+
+		// Peer torn down, but the block is still queued: must NOT return yet
+		// (that would release the budget while the block's memory is still live).
+		close(sp.quit)
+		select {
+		case <-finished:
+			t.Fatal("awaitBlockResult released on sp.quit instead of holding until the block completed")
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		// Block finishes processing: now it releases and exits.
+		done <- nil
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("awaitBlockResult did not exit after the block completed")
+		}
+	})
+
+	t.Run("sp.ctx is the shutdown-race backstop after sp.quit", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		sp := newPeer(ctx)
+		done := make(chan error, 1) // reply never arrives (shutdown drain race)
+
+		finished := make(chan struct{})
+		go func() {
+			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+			close(finished)
+		}()
+
+		close(sp.quit)
+		select {
+		case <-finished:
+			t.Fatal("awaitBlockResult returned before the block completed or ctx cancelled")
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		cancel() // daemon shutdown cancels the errgroup ctx
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("awaitBlockResult did not exit on sp.ctx cancellation")
+		}
+	})
+
+	t.Run("completes when the reply arrives", func(t *testing.T) {
+		sp := newPeer(context.Background())
+		done := make(chan error, 1)
+		done <- nil // successful processing, no disconnect
+
+		finished := make(chan struct{})
+		go func() {
+			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+			close(finished)
+		}()
+
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("awaitBlockResult did not return after the reply arrived")
+		}
+	})
+
+	t.Run("validation failure after sp.quit does not disconnect", func(t *testing.T) {
+		sp := newPeer(context.Background())
+		done := make(chan error, 1)
+
+		// Recover in the goroutine and assert on the test goroutine: a
+		// disconnect-worthy validation error arriving after teardown must be
+		// logged but NOT disconnect the already-gone peer. The embedded
+		// *peer.Peer is nil, so reaching DisconnectWithWarning would panic —
+		// a nil recovered value therefore proves the disconnect path is skipped.
+		panicked := make(chan any, 1)
+		finished := make(chan struct{})
+		go func() {
+			defer func() {
+				panicked <- recover()
+				close(finished)
+			}()
+			sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+		}()
+
+		// Tear down with done still empty so the goroutine must take the sp.quit
+		// branch and park in its inner wait (rather than racing the outer <-done).
+		close(sp.quit)
+		select {
+		case <-finished:
+			t.Fatal("awaitBlockResult returned before the late reply arrived")
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		// The late validation failure now arrives: logged, but must not disconnect.
+		done <- errors.NewBlockInvalidError("bad block after teardown")
+
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("awaitBlockResult did not return after the late reply")
+		}
+
+		require.Nil(t, <-panicked, "awaitBlockResult must not disconnect (panic) a torn-down peer")
+	})
+}
+
+// TestAnnounceNewTransactionsReachesPeerInBatchOrder checks that a first
+// announce reaches a real peer in batch order, which netsync sorts parents
+// first. It used to go out through a goroutine per inv, in no set order.
+func TestAnnounceNewTransactionsReachesPeerInBatchOrder(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		seen []chainhash.Hash
+	)
+
+	s, state, _ := newRelayTestServerPeer(t, func(_ *peer.Peer, msg *wire.MsgInv) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		for _, iv := range msg.InvList {
+			seen = append(seen, iv.Hash)
+		}
+	})
+	s.modifyRebroadcastInv = make(chan interface{}, modifyRebroadcastInvBuffer)
+
+	// Play the peerHandler's part until the test ends.
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+
+	go func() {
+		for {
+			select {
+			case msg := <-s.relayInv:
+				s.handleRelayInvMsg(state, msg)
+			case <-stop:
+				return
+			}
+		}
+	}()
+
+	const n = 200
+
+	txns := make([]*netsync.TxHashAndFee, n)
+	want := make([]chainhash.Hash, n)
+
+	for i := range txns {
+		// Hash order differs from batch order.
+		want[i] = chainhash.Hash{byte(n - i), byte(i * 7), 0xab}
+		txns[i] = &netsync.TxHashAndFee{TxHash: want[i], Fee: 1, Size: 100}
+	}
+
+	s.AnnounceNewTransactions(txns[:n/2])
+	s.AnnounceNewTransactions(txns[n/2:])
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+
+		return len(seen) == n
+	}, 10*time.Second, 10*time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Equal(t, want, seen)
 }

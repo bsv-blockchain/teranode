@@ -16,6 +16,7 @@
         - [4.1.3. Processing New Blocks](#413-processing-new-blocks)
     - [4.2. Teranode to BSV Communication](#42-teranode-to-bsv-communication)
         - [4.2.1. Processing New Subtrees from Teranode](#421-processing-new-subtrees-from-teranode)
+        - [4.2.2. Transaction rebroadcast retry](#422-transaction-rebroadcast-retry)
 5. [Technology](#5-technology)
 6. [How to run](#6-how-to-run)
 7. [Configuration options (settings flags)](#7-configuration-options-settings-flags)
@@ -278,7 +279,7 @@ The Legacy Service converts standard BSV blocks (which don't have subtrees) into
     - **Subtree Metadata:** Parent transaction references are stored to maintain the transaction dependency structure
 
 4. **Validation:**
-    - For blocks at or below the highest hard-coded checkpoint, a quick validation path is used: subtree re-validation through the Subtree Validation service is skipped and per-UTXO `SetMinedMulti` is bypassed via a pre-assigned block ID. This is safe regardless of FSM state (LEGACYSYNCING or CATCHINGBLOCKS) because PoW plus checkpoint-anchored chain linkage make the block canonical.
+    - For blocks at or below the highest hard-coded checkpoint, a quick validation path is used: subtree re-validation through the Subtree Validation service is skipped and per-UTXO `SetMinedMulti` is bypassed via a pre-assigned block ID. This is safe regardless of FSM state (CATCHINGBLOCKS) because PoW plus checkpoint-anchored chain linkage make the block canonical.
     - For blocks above the highest checkpoint, more thorough validation is performed via the Teranode validation services.
 
 5. **Storage:**
@@ -346,6 +347,73 @@ The Legacy Service converts Teranode subtree container abstractions back to "fla
     - Transactions are served to the BSV network in their standard format, with no reference to the subtree structure
 
 This process effectively bridges the gap between Teranode's subtree-based architecture and the BSV network's traditional transaction model, ensuring that data originating in Teranode can be properly propagated to the BSV network.
+
+#### 4.2.2. Transaction rebroadcast retry
+
+New txs reach the Legacy Service on the txmeta Kafka topic. That topic is
+spread over partitions, so a child tx can be read before its parent. SV Node
+only accepts a child once it has the parent, so each announce batch is sorted
+parents first, using the parent hashes the txmeta message carries, and sent
+to peers as one ordered batch. A child whose parent arrives in a later batch
+is not held back; the peer's orphan pool and the rebroadcast retry below
+cover it.
+
+The immediate INV dispatch for a newly-announced tx is best-effort: a peer
+that has not finished its version handshake at the instant of relay, or
+that is briefly disconnected, will silently drop the inv, and an SV Node
+peer may reject the tx for a temporary reason (for example a conflicting
+spend it later discards). To recover from these misses, the Legacy Service
+keeps a bounded retry queue.
+
+- Every tx that passes the FSM `RUNNING` gate is also enqueued on the
+  rebroadcast queue at announce time. (The legacy announce path is NOT
+  gated by the modern-P2P `listen_mode` setting — see
+  `peer_server.AnnounceNewTransactions` for the rationale.)
+- Retries follow blocks, not a timer. SV Node clears its recent-rejects
+  filter when its tip changes, so a retry before the next block is likely
+  rejected again. A retry goes out `rebroadcastTipDelay` (30 seconds)
+  after the latest valid block on the `blocks_final` Kafka topic: a block
+  arriving during the delay restarts it, and one arriving while the
+  pre-retry UTXO lookup runs schedules another retry once it is done.
+- Before each retry, the queue is checked against the UTXO store. Txs that
+  are mined, marked conflicting, or no longer stored are removed, and the
+  parent tx hashes of the rest are read in a second lookup, so a failed
+  parents read never hides that a tx is mined. The lookup runs off the
+  queue's handler goroutine, so adds keep being taken while it runs.
+- The remaining entries are re-offered to every connected peer with parents
+  before their children. Queue order alone is not enough: txs are read from
+  the txmeta Kafka topic across partitions, so a child can be queued before
+  its parent. SV Node parks a child that arrives first in its orphan pool,
+  which is bounded and expires entries, so sending the parent first avoids
+  relying on that pool. Retries
+  bypass each peer's known-inventory filter, so a peer that already saw the
+  first announce is offered the tx again.
+- Each entry has a budget of `maxRebroadcastTips` (6) retries, about an
+  hour on mainnet. After that it is aged out.
+- The queue is capped at `maxRebroadcastInventory` (4096) entries. Every
+  announced tx waits in the queue until the next block's prune, so above
+  about 7 tx/s fresh txs alone fill it between blocks. At the cap, a new
+  add evicts the oldest entry that has not been retried yet; entries that
+  survived a block unmined, the likely stuck ones, keep their place. A new
+  add is only dropped when every entry has already been retried.
+- The channel between callers and the handler is bounded at
+  `modifyRebroadcastInvBuffer` (1024). Non-blocking sends keep the relay
+  hot path uncontended; if the handler is backlogged past the buffer,
+  the add is dropped.
+
+The queue is exported as Prometheus metrics:
+
+| Metric | Meaning |
+|---|---|
+| `teranode_legacy_rebroadcast_pending` | Txs currently queued |
+| `teranode_legacy_rebroadcast_add_dropped_total` | Adds dropped because the handler's channel was full |
+| `teranode_legacy_rebroadcast_cap_hits_total` | Adds dropped because the queue was full of already-retried entries |
+| `teranode_legacy_rebroadcast_retries_total` | Tx invs re-offered to peers |
+| `teranode_legacy_rebroadcast_removed_total{reason}` | Entries removed, by `mined`, `conflicting`, `not_found`, `aged_out` or `evicted` (a never-retried entry displaced at the cap) |
+
+Dropped adds still got their immediate INV dispatch; only the retry safety
+net is lost for them. Sustained drops mean the queue cannot keep up with the
+announce rate at the configured caps.
 
 ## 5. Technology
 

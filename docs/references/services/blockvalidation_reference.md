@@ -100,44 +100,35 @@ type BlockValidation struct {
     // validatorClient handles transaction validation operations
     validatorClient validator.Interface
 
-    // recentBlocksBloomFilters maintains bloom filters for recent blocks
-    recentBlocksBloomFilters *txmap.SyncedMap[chainhash.Hash, *model.BlockBloomFilter]
-
-    // bloomFilterRetentionSize defines the number of blocks to keep the bloom filter for
-    bloomFilterRetentionSize uint32
-
     // subtreeValidationClient manages subtree validation processes
     subtreeValidationClient subtreevalidation.Interface
-
-    // subtreeDeDuplicator prevents duplicate processing of subtrees
-    subtreeDeDuplicator *DeDuplicator
 
     // lastValidatedBlocks caches recently validated blocks for 2 minutes
     lastValidatedBlocks *expiringmap.ExpiringMap[chainhash.Hash, *model.Block]
 
-    // blockExists tracks validated block hashes for 2 hours
-    blockExists *expiringmap.ExpiringMap[chainhash.Hash, bool]
+    // blockExistsCache tracks validated block hashes for 2 hours
+    blockExistsCache *expiringmap.ExpiringMap[chainhash.Hash, bool]
 
-    // subtreeExists tracks validated subtree hashes for 10 minutes
-    subtreeExists *expiringmap.ExpiringMap[chainhash.Hash, bool]
+    // subtreeExistsCache tracks validated subtree hashes for 10 minutes
+    subtreeExistsCache *expiringmap.ExpiringMap[chainhash.Hash, bool]
 
     // subtreeCount tracks the number of subtrees being processed
     subtreeCount atomic.Int32
 
-    // blockHashesCurrentlyValidated tracks blocks in validation process
+    // blockHashesCurrentlyValidated tracks blocks in validation process (for setTxMined)
     blockHashesCurrentlyValidated *txmap.SwissMap
+
+    // setMinedMu protects the check-and-claim operation for blockHashesCurrentlyValidated
+    setMinedMu sync.Mutex
 
     // blocksCurrentlyValidating tracks blocks being validated to prevent concurrent validation
     blocksCurrentlyValidating *txmap.SyncedMap[chainhash.Hash, *validationResult]
 
-    // blockBloomFiltersBeingCreated tracks bloom filters being generated
-    blockBloomFiltersBeingCreated *txmap.SwissMap
-
-    // bloomFilterStats collects statistics about bloom filter operations
-    bloomFilterStats *model.BloomStats
-
     // setMinedChan receives block hashes that need to be marked as mined
     setMinedChan chan *chainhash.Hash
+
+    // setMinedRetries tracks consecutive setTxMined failures per block hash for backoff
+    setMinedRetries sync.Map
 
     // revalidateBlockChan receives blocks that need revalidation
     revalidateBlockChan chan revalidateBlockData
@@ -150,10 +141,13 @@ type BlockValidation struct {
 
     // backgroundTasks tracks background goroutines to ensure proper shutdown
     backgroundTasks sync.WaitGroup
+
+    // mmapDir, when non-empty, enables mmap-backed subtree loading
+    mmapDir string
 }
 ```
 
-The `BlockValidation` type handles the core validation logic for blocks in Teranode. It manages block validation, subtree processing, and bloom filter creation.
+The `BlockValidation` type handles the core validation logic for blocks in Teranode. It manages block validation and subtree processing.
 
 ## Functions
 
@@ -343,7 +337,7 @@ Processes a block based on its assigned priority, handling both normal processin
 #### ValidateBlock
 
 ```go
-func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseURL string, bloomStats *model.BloomStats, disableOptimisticMining ...bool) error
+func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseURL string, disableOptimisticMining ...bool) error
 ```
 
 Performs comprehensive block validation:
@@ -375,11 +369,9 @@ Optimistic Mining is a performance optimization technique that allows faster blo
 
 The system accepts new blocks before completing full validation, provisionally adding them to the chain. While the block is being added, validation continues in the background without blocking the main processing pipeline. This behavior can be configured through settings, allowing operators to balance between performance and validation thoroughness based on their requirements.
 
-### Bloom Filters
+### Already-Mined / Chain-Membership Check
 
-The Block Validation Service maintains bloom filters for recent blocks to optimize validation. This mechanism provides a probabilistic way to quickly determine if a transaction has been seen in a previous block without needing to perform extensive searches.
-
-Creates filters dynamically as new blocks are validated, maintaining them in memory for rapid access. The service uses a configurable retention size parameter (default set in settings) to determine how many recent blocks should maintain bloom filters. The service uses a thread-safe SyncedMap to ensure concurrent access to filters is handled properly.
+Two exact (non-probabilistic) checks cover parent availability and re-presented transactions. During `Block.Valid()`, `validOrderAndBlessed` verifies that each transaction's parents already exist on the current chain using **exact block-ID set membership**: validation builds a bounded window of recent current-chain block-header IDs, and parents that fall outside this prefetched set are confirmed via the authoritative `CheckBlockIsInCurrentChain` RPC (see `checkOldBlockIDs` and `validOrderAndBlessed`). The rejection of transactions that have *themselves* already been mined on the current chain happens in `model.UpdateTxMinedStatus` during the set-mined phase — a fast path against a map of current-chain block IDs, with a `CheckBlockIsAncestorOfBlock` RPC slow path for older block IDs. Because membership is exact in both paths there are no false positives or false negatives.
 
 ## Service Configuration
 

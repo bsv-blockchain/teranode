@@ -289,21 +289,39 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 			return ctx.Err()
 
 		case <-ch:
-			if err := s.trigger(ctx, "blockchain"); err != nil {
-				return err
-			}
+			s.handleTriggerError(ctx, s.trigger(ctx, "blockchain"), "blockchain")
 
 		case source := <-s.triggerCh:
-			if err := s.trigger(ctx, source); err != nil {
-				return err
-			}
+			s.handleTriggerError(ctx, s.trigger(ctx, source), source)
 
 		case <-time.After(duration):
-			if err := s.trigger(ctx, "timer"); err != nil {
-				return err
-			}
+			s.handleTriggerError(ctx, s.trigger(ctx, "timer"), "timer")
 		}
 	}
+}
+
+// handleTriggerError swallows transient errors from a trigger so the
+// long-running Start loop is not torn down by a single bad iteration.
+// Returning a non-nil error here would propagate into ServiceManager's
+// errgroup and cause it to gracefully stop every other service in the
+// process - so a transient storage error (e.g. blob-store read semaphore
+// timed out under load) would shut down the entire core sidecar daemon
+// rather than be retried on the next iteration.
+//
+// The trigger already converts the expected "no work to do" signal
+// (errors.ErrNotFound) into a nil return, so anything reaching here is
+// either ctx.Err (already handled by the main select on ctx.Done) or an
+// operational error. Both are recoverable by simply waiting for the next
+// blockchain notification, timer tick, or triggerCh push. The next
+// iteration will retry whatever failed.
+func (s *Server) handleTriggerError(ctx context.Context, err error, source string) {
+	if err == nil {
+		return
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	s.logger.Errorf("[UTXOPersister] trigger from %s failed, will retry on next iteration: %v", source, err)
 }
 
 // Stop stops the server's processing operations.
@@ -320,6 +338,10 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // Currently, no specific cleanup operations are performed, but the method signature
 // maintains compatibility with other service interfaces.
 func (s *Server) Stop(_ context.Context) error {
+	// DC14: intentional no-op. This server owns only context-bound resources
+	// (its goroutines exit on the service-manager ctx cancel); it holds no
+	// flushing store, Kafka producer, or batcher that would need draining here.
+	// If one is ever added, drain it in this method (see DC11/DC15).
 	return nil
 }
 
@@ -475,16 +497,29 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	s.logger.Infof("Rolling up data from block height %d to %d", s.lastHeight+1, maxHeight)
 
 	if err := c.ConsolidateBlockRange(ctx, s.lastHeight+1, maxHeight); err != nil {
-		if !errors.Is(err, errors.ErrNotFound) {
-			return 0, nil
+		if errors.Is(err, errors.ErrNotFound) {
+			// BlockPersister hasn't yet written the per-block UTXO files
+			// for this range. Wait for the next trigger; caller treats
+			// ErrNotFound as "no new block to process".
+			return 0, err
 		}
+		return 0, err
+	}
+
+	if c.lastBlockHash == nil {
+		// ConsolidateBlockRange returned successfully but didn't advance
+		// past genesis (range was empty, or contained only the genesis
+		// block which the loop skips). Nothing new to persist; signal
+		// "no new block" so the caller waits for the next trigger
+		// rather than spinning on an empty iteration.
+		return 0, errors.ErrNotFound
 	}
 
 	// At the end of this, we have a rollup of deletions and additions.  Add these to the last UTXOSet
 	if s.blockStore == nil {
 		return 0, errors.NewStorageError("[UTXOPersister] Block store is not initialized")
 	}
-	us, err := GetUTXOSet(ctx, s.logger, s.settings, s.blockStore, lastWrittenUTXOSetHash)
+	us, err := GetUTXOSet(ctx, s.logger, s.settings, s.blockStore, lastWrittenUTXOSetHash, metas[0].Height)
 	if err != nil {
 		return 0, errors.NewProcessingError("[UTXOPersister] Error getting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, metas[0].Height, err)
 	}
@@ -501,6 +536,21 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 
 	if err := us.CreateUTXOSet(ctx, c); err != nil {
 		return 0, err
+	}
+
+	// Persist the set-hash sidecar. This is deliberately non-fatal: the utxo-set
+	// blob is already committed above, and CreateUTXOSet is not idempotent — a
+	// retry re-enters it and NewFileStorer fails with ErrBlobAlreadyExists on the
+	// existing blob. Returning an error here would therefore wedge the persister
+	// on this block permanently after a single transient sidecar-write failure.
+	// The sidecar is auxiliary (it only feeds the optional signed-checkpoint seed
+	// feature and can be backfilled), so a failure is logged and the pipeline
+	// advances, mirroring the headers-file write below.
+	setHash := c.acc.Digest()
+	if err := persistSetHash(ctx, s.blockStore, c.lastBlockHash, setHash); err != nil {
+		s.logger.Warnf("[UTXOPersister] failed to write utxo-set-hash for block %s at height %d; checkpoint unavailable for this block until backfilled: %v", c.lastBlockHash.String(), c.lastBlockHeight, err)
+	} else {
+		s.logger.Infof("[UTXOPersister] wrote utxo-set-hash %x for block %s at height %d", setHash, c.lastBlockHash.String(), c.lastBlockHeight)
 	}
 
 	s.lastHeight = c.lastBlockHeight
@@ -520,20 +570,178 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
 		}
 
-		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSet+".sha256"); err != nil {
-			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
+		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSetHash); err != nil {
+			s.logger.Warnf("[UTXOPersister] failed to delete previous utxo-set-hash for %s: %v", lastWrittenUTXOSetHash.String(), err)
 		}
 
+		// No separate delete for the ".sha256" sidecars: the Del calls above already remove the
+		// checksum file alongside the blob it describes.
 		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoHeaders); err != nil {
 			s.logger.Warnf("[UTXOPersister] Error deleting UTXOHeaders for block %s height %d: %v", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
-		}
-
-		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoHeaders+".sha256"); err != nil {
-			s.logger.Warnf("[UTXOPersister] Error deleting UTXOHeaders sha256 for block %s height %d: %v", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
 		}
 	}
 
 	return 0, s.writeLastHeight(ctx, s.lastHeight)
+}
+
+// BuildUTXOSetToHeight performs a one-shot consolidation of the per-block
+// utxo-additions/utxo-deletions delta files into a single cumulative utxo-set,
+// from startHeight (0 = genesis) up to endHeight, then returns. Unlike the
+// continuous service loop (processNextBlock) it ignores the confirmation
+// window, builds the exact requested height, and never deletes an existing
+// set. It writes lastProcessed.dat only when updateLastProcessed is true.
+func (s *Server) BuildUTXOSetToHeight(ctx context.Context, startHeight, endHeight uint32, updateLastProcessed bool) error {
+	if endHeight < 1 {
+		return errors.NewProcessingError("[UTXOPersister] end height must be >= 1, got %d", endHeight)
+	}
+
+	if startHeight >= endHeight {
+		return errors.NewProcessingError("[UTXOPersister] start height %d must be less than end height %d", startHeight, endHeight)
+	}
+
+	if s.blockStore == nil {
+		return errors.NewStorageError("[UTXOPersister] block store is not initialized")
+	}
+
+	// When asked to advance the resume marker, refuse to rewind it below the
+	// height the service has already reached. Rewinding would make the service
+	// re-consolidate already-built sets on restart and error-loop on the
+	// existing set files. Check up front, before doing any build work.
+	if updateLastProcessed {
+		existing, err := s.readLastHeight(ctx)
+		if err != nil {
+			return errors.NewStorageError("[UTXOPersister] error reading existing lastProcessed height", err)
+		}
+
+		if endHeight < existing {
+			return errors.NewProcessingError("[UTXOPersister] refusing to rewind lastProcessed from %d to %d; delete lastProcessed.dat to override", existing, endHeight)
+		}
+	}
+
+	// Select a header source (store preferred, client fallback), mirroring the
+	// consolidator's own store-or-client selection.
+	var hdrs headerIfc
+
+	switch {
+	case s.blockchainStore != nil:
+		hdrs = s.blockchainStore
+	case s.blockchainClient != nil:
+		hdrs = s.blockchainClient
+	default:
+		return errors.NewProcessingError("[UTXOPersister] no blockchain source available to resolve block headers")
+	}
+
+	// Resolve headers for [from .. endHeight]; from = startHeight when building
+	// on top of an existing set (so we also learn the base block hash), else 1.
+	from := uint32(1)
+	if startHeight > 0 {
+		from = startHeight
+	}
+
+	headers, metas, err := hdrs.GetBlockHeadersByHeight(ctx, from, endHeight)
+	if err != nil {
+		return errors.NewProcessingError("[UTXOPersister] error getting block headers for range %d..%d", from, endHeight, err)
+	}
+
+	hashByHeight := make(map[uint32]*chainhash.Hash, len(headers))
+	for i, h := range headers {
+		hashByHeight[metas[i].Height] = h.Hash()
+	}
+
+	if _, ok := hashByHeight[endHeight]; !ok {
+		var maxAvailable uint32
+		for h := range hashByHeight {
+			if h > maxAvailable {
+				maxAvailable = h
+			}
+		}
+
+		return errors.NewProcessingError("[UTXOPersister] requested end-height %d but active chain only reaches height %d", endHeight, maxAvailable)
+	}
+
+	var seedHash *chainhash.Hash
+
+	if startHeight == 0 {
+		seedHash = s.settings.ChainCfgParams.GenesisHash
+	} else {
+		seedHash = hashByHeight[startHeight]
+		if seedHash == nil {
+			return errors.NewProcessingError("[UTXOPersister] could not resolve block hash at start-height %d", startHeight)
+		}
+
+		exists, err := s.blockStore.Exists(ctx, seedHash[:], fileformat.FileTypeUtxoSet)
+		if err != nil {
+			return errors.NewStorageError("[UTXOPersister] error checking base utxo-set at start-height %d (%s)", startHeight, seedHash.String(), err)
+		}
+
+		if !exists {
+			return errors.NewProcessingError("[UTXOPersister] no utxo-set found at start-height %d (%s) - build it first", startHeight, seedHash.String())
+		}
+	}
+
+	// Pre-flight: require BOTH delta files for every block in
+	// [startHeight+1 .. endHeight]. Fail before writing anything on any gap.
+	for height := startHeight + 1; height <= endHeight; height++ {
+		hash := hashByHeight[height]
+		if hash == nil {
+			return errors.NewProcessingError("[UTXOPersister] could not resolve block hash at height %d", height)
+		}
+
+		for _, ft := range []fileformat.FileType{fileformat.FileTypeUtxoAdditions, fileformat.FileTypeUtxoDeletions} {
+			exists, err := s.blockStore.Exists(ctx, hash[:], ft)
+			if err != nil {
+				return errors.NewStorageError("[UTXOPersister] error checking %s for block %d (%s)", ft, height, hash.String(), err)
+			}
+
+			if !exists {
+				return errors.NewProcessingError("[UTXOPersister] requested end-height %d but block %d (%s) is missing its %s file", endHeight, height, hash.String(), ft)
+			}
+		}
+	}
+
+	// Consolidate the range on top of the seed and write the new set.
+	c := NewConsolidator(s.logger, s.settings, s.blockchainStore, s.blockchainClient, s.blockStore, seedHash)
+
+	if err := c.ConsolidateBlockRange(ctx, startHeight+1, endHeight); err != nil {
+		return errors.NewProcessingError("[UTXOPersister] error consolidating block range %d..%d", startHeight+1, endHeight, err)
+	}
+
+	us, err := GetUTXOSet(ctx, s.logger, s.settings, s.blockStore, seedHash, startHeight)
+	if err != nil {
+		return errors.NewProcessingError("[UTXOPersister] error getting UTXOSet handle for seed %s", seedHash.String(), err)
+	}
+
+	if err := us.CreateUTXOSet(ctx, c); err != nil {
+		return errors.NewProcessingError("[UTXOPersister] error creating utxo-set for height %d", endHeight, err)
+	}
+
+	targetHash := hashByHeight[endHeight]
+
+	// Write the utxo-headers file. In direct mode (always the case for the
+	// one-shot builder, which RunUtxoPersisterToHeight gates on a configured
+	// blockchain_store) the headers file is a required half of the seed
+	// deliverable that cmd/seeder consumes. Unlike processNextBlock — which runs
+	// in a loop and retries on the next tick — this one-shot has no retry, so a
+	// header-write failure is fatal: returning an error stops the CLI exiting 0
+	// with a utxo-set but no utxo-headers (an incomplete, unseedable snapshot),
+	// and also prevents the lastProcessed marker below from advancing past it.
+	if s.blockchainStore != nil {
+		if err := WriteHeadersToStore(ctx, s.logger, s.settings, s.blockStore, s.blockchainStore, targetHash, endHeight); err != nil {
+			return errors.NewStorageError("[UTXOPersister] failed to write utxo-headers for height %d (%s) - the utxo-set was written but the seed is incomplete; delete the utxo-set to rebuild", endHeight, targetHash.String(), err)
+		}
+	} else {
+		s.logger.Warnf("[UTXOPersister] no blockchain store available; skipping utxo-headers write for height %d", endHeight)
+	}
+
+	if updateLastProcessed {
+		if err := s.writeLastHeight(ctx, endHeight); err != nil {
+			return errors.NewStorageError("[UTXOPersister] error writing lastProcessed height %d", endHeight, err)
+		}
+	}
+
+	s.logger.Infof("[UTXOPersister] Built utxo-set for height %d (%s) from start-height %d, updateLastProcessed=%t", endHeight, targetHash.String(), startHeight, updateLastProcessed)
+
+	return nil
 }
 
 // readLastHeight reads the last processed block height from storage.
@@ -615,26 +823,17 @@ func (s *Server) writeLastHeight(ctx context.Context, height uint32) error {
 	)
 }
 
-// verifyLastSet verifies the integrity of the last UTXO set.
-// It checks if the UTXO set for the given hash exists and has valid header and footer.
-// This verification ensures that the UTXO set was completely written and is not corrupted.
-// Returns an error if verification fails.
+// verifyLastSet verifies that a UTXO set file exists and is openable for
+// the given block hash. A successful open via the blob store layer is
+// sufficient evidence that the file is present and (in the file store)
+// has the right fileformat magic + FileType — those checks live in
+// stores/blob/file/file.go validateFileHeader. The memory store advances
+// past the header by size without validating the magic, which is fine
+// because that path is test-only.
 //
-// Parameters:
-// - ctx: Context for controlling the verification operation
-// - hash: Pointer to the block hash for which to verify the UTXO set
-//
-// Returns:
-// - error: Any error encountered during verification, or nil if verification succeeds
-//
-// This method performs several integrity checks on the UTXO set:
-// 1. Verifies that a UTXO set file exists for the given block hash
-// 2. Checks that the header record is valid and matches the expected block hash
-// 3. Ensures that the footer exists and is correctly formatted
-//
-// These checks confirm that the UTXO set for the block was completely written
-// and can be used for subsequent operations. This is crucial for maintaining
-// blockchain state consistency, especially after system restarts.
+// (The previous docstring also promised a footer integrity check that
+// this function never implemented; scope is the existence/openability
+// check only.)
 func (s *Server) verifyLastSet(ctx context.Context, hash *chainhash.Hash) error {
 	us := &UTXOSet{
 		ctx:       ctx,
@@ -643,15 +842,17 @@ func (s *Server) verifyLastSet(ctx context.Context, hash *chainhash.Hash) error 
 		store:     s.blockStore,
 	}
 
+	// Do NOT call fileformat.ReadHeader on the returned reader: the store
+	// layer has already advanced past the 8-byte magic. Reading it again
+	// would consume the first 8 bytes of the body, which per the layout
+	// written by CreateUTXOSet are the current block hash field — random
+	// bytes that reliably fail as "unknown magic: [...]" and bring the
+	// whole core sidecar down via ServiceManager.
 	r, err := us.GetUTXOSetReader(hash)
 	if err != nil {
 		return err
 	}
 	defer r.Close()
-
-	if _, err := fileformat.ReadHeader(r); err != nil {
-		return err
-	}
 
 	return nil
 }

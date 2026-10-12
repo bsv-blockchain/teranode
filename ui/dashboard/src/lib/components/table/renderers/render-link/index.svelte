@@ -1,31 +1,29 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { getLinkPrefix } from '../../../../utils/url'
 
-  export let href = ''
-  export let text = null
-  export let className = ''
-  export let external = true
+  let {
+    href = '',
+    text = null,
+    className = '',
+    external = true,
+  }: { href?: string; text?: any; className?: string; external?: boolean } = $props()
 
-  let props: any = {}
-  let hrefWithPrefix = ''
-  let value = ''
-
-  $: {
-    props = external ? { target: '_blank', rel: 'noopener noreferrer' } : {}
-
+  const linkProps = $derived.by(() => {
+    const p: any = external ? { target: '_blank', rel: 'noopener noreferrer' } : {}
     if (className) {
-      props.class = className
+      p.class = className
     }
+    return p
+  })
 
-    const prefix = getLinkPrefix(href, external)
-    hrefWithPrefix = prefix + href
-
-    value = text || href
-  }
+  const hrefWithPrefix = $derived(getLinkPrefix(href, external) + href)
+  const value = $derived(text || href)
 </script>
 
 {#if value}
-  <a href={hrefWithPrefix} {...props}>{value}</a>
+  <a href={hrefWithPrefix} {...linkProps}>{value}</a>
 {:else}
   ''
 {/if}

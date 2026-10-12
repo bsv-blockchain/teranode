@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 )
 
@@ -33,6 +34,7 @@ import (
 func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Block, peerID, baseURL string) (*catchup.Result, *model.BlockHeader, error) {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "catchupGetBlockHeaders",
 		tracing.WithParentStat(u.stats),
+		tracing.WithStartTime(), // startTime is read back from ctx below
 		tracing.WithLogMessage(u.logger, "[catchup][%s] fetching headers up to %s from peer %s", blockUpTo.Hash().String(), baseURL, peerID),
 		tracing.WithContextTimeout(time.Duration(u.settings.BlockValidation.CatchupOperationTimeout)*time.Second),
 	)
@@ -52,6 +54,12 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "No baseURL provided"), nil, errors.NewInvalidArgumentError("baseURL is required for fetching headers")
 	}
 
+	// The request URL is joined structurally below; reject a base that cannot be (a query,
+	// fragment or credentials in it) before any work is done for this peer.
+	if err := util.ValidatePeerBaseURL(baseURL); err != nil {
+		return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "Invalid baseURL"), nil, err
+	}
+
 	// Use baseURL as fallback if peerID is not provided (for backward compatibility)
 	identifier := peerID
 	if identifier == "" {
@@ -67,9 +75,17 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		}
 	}
 
-	// Check peer reputation via P2P service
+	// Check peer reputation via P2P service. A peer the P2P service has already
+	// flagged as malicious must not be used for catchup at all — abort before
+	// fetching or processing any headers from it.
 	if u.isPeerMalicious(ctx, identifier) {
-		u.logger.Warnf("[catchup][%s] peer %s is marked as malicious by P2P service", blockUpTo.Hash().String(), identifier)
+		u.logger.Warnf("[catchup][%s] aborting catchup: peer %s is marked as malicious by P2P service", blockUpTo.Hash().String(), identifier)
+
+		if circuitBreaker != nil {
+			circuitBreaker.RecordFailure()
+		}
+
+		return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "Peer marked malicious by P2P service"), nil, errors.NewNetworkPeerMaliciousError("peer %s is marked as malicious by P2P service", identifier)
 	}
 
 	// Check if target block already exists
@@ -117,10 +133,24 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 	// catchup that validated some blocks before erroring out, the blockchain store can
 	// be many blocks ahead of the UTXO store.
 	//
-	// This matters because findCommonAncestor rejects any block whose height exceeds the
-	// UTXO height (those blocks exist in the blockchain store but aren't fully processed).
-	// If the locator starts from blockchain height, the peer returns headers from that
-	// height onwards, and findCommonAncestor rejects them all — "no common ancestor found".
+	// The cap existed because findCommonAncestor used to reject any block above that same
+	// UTXO height, so a locator built from the chain tip yielded headers it rejected all of
+	// — "no common ancestor found". That is no longer the case: the ancestor ceiling is now
+	// the blockchain tip, and a locator built from the tip would resolve normally.
+	//
+	// What the cap does now is start the peer's header stream lower than necessary, so the
+	// ancestor walk climbs back through headers we already hold. That costs one GetBlockHeader
+	// lookup per block of lag, where the old ceiling stopped the walk after roughly two (any
+	// header above the UTXO height was rejected outright). The outcome is unchanged only while
+	// the lag stays below CatchupMaxAccumulatedHeaders: the fetch truncates there (see the
+	// maxAccumulatedHeaders check below), so a larger lag ends the served stream *below* our
+	// tip, the walk takes its ancestor at that point, and the depth is overstated by
+	// (lag - CatchupMaxAccumulatedHeaders) — the same over-measurement this ceiling change
+	// exists to remove, reached by a different route. That needs a lag of 100k blocks by
+	// default, so the cap is kept for now rather than removed alongside the ceiling fix, but
+	// it is a correctness trade and not the free conservatism it looks like. Note it also sets
+	// startHash/startHeight, which are reported on the catchup Result and not used in any
+	// decision.
 	if u.utxoStore != nil {
 		utxoHeight := u.utxoStore.GetBlockHeight()
 		if bestBlockMeta.Height > utxoHeight {
@@ -158,20 +188,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		maxRetries = 3
 	}
 
-	// Get the peer's actual chain tip from P2P registry
-	// This is the peer's BestBlockHash from their node_status messages,
-	// not just a block they announced (which could be invalid or relayed)
-	chainTipHash := blockUpTo.Hash() // Default to announced block
-	if peerID != "" {
-		peerChainTip, err := u.getPeerChainTip(ctx, peerID)
-		if err != nil {
-			// Log but don't fail - fall back to using blockUpTo
-			u.logger.Warnf("[catchup][%s] Could not get peer chain tip from P2P registry for peer %s: %v, falling back to announced block", blockUpTo.Hash().String(), peerID, err)
-		} else if peerChainTip != nil {
-			u.logger.Infof("[catchup][%s] Using peer %s's actual chain tip %s instead of announced block %s", blockUpTo.Hash().String(), peerID, peerChainTip.String(), blockUpTo.Hash().String())
-			chainTipHash = peerChainTip
-		}
-	}
+	chainTipHash := u.catchupTargetHash(ctx, blockUpTo, peerID)
 
 	// Collect all headers through iteration
 	allCatchupHeaders := make([]*model.BlockHeader, 0, maxBlockHeadersPerRequest)
@@ -192,9 +209,18 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 			u.logger.Warnf("[catchup][%s] No peerID provided for peer at %s", blockUpTo.Hash().String(), baseURL)
 			return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "No peerID provided"), nil, errors.NewProcessingError("[catchup][%s] peerID is required but not provided for peer %s", blockUpTo.Hash().String(), baseURL)
 		}
-		// Check if peer is marked as malicious by P2P service
+		// Check if peer is marked as malicious by P2P service. The peer can be
+		// flagged mid-catchup (e.g. based on behaviour reported during earlier
+		// iterations), so abort as soon as we see the flag rather than fetching
+		// the next header batch.
 		if u.isPeerMalicious(ctx, identifier) {
-			u.logger.Warnf("[catchup][%s] peer %s is marked as malicious by P2P service, should skip catchup", chainTipHash.String(), baseURL)
+			u.logger.Warnf("[catchup][%s] aborting catchup: peer %s is marked as malicious by P2P service", chainTipHash.String(), identifier)
+
+			if circuitBreaker != nil {
+				circuitBreaker.RecordFailure()
+			}
+
+			return catchup.CreateCatchupResult(allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL, iteration, failedIterations, false, "Peer marked malicious by P2P service"), nil, errors.NewNetworkPeerMaliciousError("peer %s is marked as malicious by P2P service", identifier)
 		}
 
 		// Create context with iteration timeout to prevent slow-loris attacks
@@ -206,17 +232,28 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 
 		// Build request URL with current block locator
 		blockLocatorStr := catchup.BuildBlockLocatorString(currentLocatorHashes)
-		requestURL := fmt.Sprintf("%s/headers_from_common_ancestor/%s?block_locator_hashes=%s&n=%d",
-			baseURL,
-			chainTipHash.String(),
+		headersURL, err := util.JoinPeerURL(baseURL, "headers_from_common_ancestor", chainTipHash.String())
+		if err != nil {
+			iterCancel()
+			return catchup.CreateCatchupResult(allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL, iteration, failedIterations, false, "Invalid baseURL"), nil, err
+		}
+
+		requestURL := fmt.Sprintf("%s?block_locator_hashes=%s&n=%d",
+			headersURL,
 			blockLocatorStr,
 			maxBlockHeadersPerRequest,
 		)
 
 		u.logger.Debugf("[catchup][%s] iteration %d: requesting headers with locator starting at %s (timeout: %v)", chainTipHash.String(), iteration, currentLocatorHashes[0].String(), iterationTimeout)
 
-		// Fetch with retry using iteration context with timeout
-		blockHeadersBytes, err := catchup.FetchHeadersWithRetry(iterCtx, u.logger, requestURL, maxRetries)
+		// Fetch with retry using iteration context with timeout. The request always asks for
+		// maxBlockHeadersPerRequest headers of a fixed BlockHeaderSize each, but the peer's
+		// response legitimately includes one more: the starting (common-ancestor) header is
+		// itself echoed back, duplicating the previous iteration's last header (see the
+		// dedup at "GetBlockHeadersFromOldest includes the starting block" below). +1 accounts
+		// for that extra header so a well-behaved peer's response is never rejected.
+		maxHeaderBytes := int64(maxBlockHeadersPerRequest+1) * int64(model.BlockHeaderSize)
+		blockHeadersBytes, err := catchup.FetchHeadersWithRetry(iterCtx, u.logger, requestURL, maxRetries, maxHeaderBytes)
 		iterCancel() // Clean up the iteration context
 		if err != nil {
 			// Check if it's specifically a context deadline exceeded from the iteration timeout
@@ -244,11 +281,13 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 				}
 				failedIterations = append(failedIterations, iterErr)
 
-				// Return a timeout error - this is just a slow peer, not necessarily malicious
+				// Return a timeout error - this is just a slow peer, not necessarily malicious.
+				// Marked as already-reported so the top-level catchup handler does not
+				// record a second failure for the same attempt.
 				return catchup.CreateCatchupResult(
 					allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,
 					iteration, failedIterations, false, "Peer response timeout",
-				), nil, errors.NewNetworkTimeoutError("peer %s timed out after %v during iteration %d", baseURL, elapsed, iteration)
+				), nil, markCatchupFailureReported(errors.NewNetworkTimeoutError("peer %s timed out after %v during iteration %d", baseURL, elapsed, iteration))
 			}
 
 			// Handle other non-timeout errors
@@ -269,18 +308,21 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 			// Report failed request to P2P service
 			u.reportCatchupFailure(ctx, identifier)
 
-			// Check if this is a malicious response
+			// Check if this is a malicious response. Both returns below are marked
+			// as already-reported (the failure was recorded just above) so the
+			// top-level catchup handler does not record a second failure for the
+			// same attempt; the malicious classification itself is unaffected.
 			if errors.IsMaliciousResponseError(err) {
 				return catchup.CreateCatchupResult(
 					allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,
 					iteration, failedIterations, false, "Malicious peer detected",
-				), nil, errors.NewNetworkPeerMaliciousError("peer returned malicious response: %w", err)
+				), nil, markCatchupFailureReported(errors.NewNetworkPeerMaliciousError("peer returned malicious response", err))
 			}
 
 			return catchup.CreateCatchupResult(
 				allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,
 				iteration, failedIterations, false, "Failed to fetch headers",
-			), nil, err
+			), nil, markCatchupFailureReported(err)
 		}
 
 		// Validate header bytes
@@ -304,12 +346,12 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 				// Report malicious behavior to P2P service
 				u.reportCatchupMalicious(ctx, identifier, "malicious response during header parsing")
 
-				u.logger.Errorf("[catchup][%s] SECURITY: Peer %s sent malicious headers - should be banned (banning not yet implemented)", chainTipHash.String(), baseURL)
+				u.logger.Errorf("[catchup][%s] SECURITY: Peer %s sent malicious headers - reported as malicious for ban scoring", chainTipHash.String(), baseURL)
 
 				return catchup.CreateCatchupResult(
 					allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,
 					iteration, failedIterations, false, "Malicious headers detected",
-				), nil, errors.NewNetworkPeerMaliciousError("peer sent invalid headers: %w", parseErr)
+				), nil, errors.NewNetworkPeerMaliciousError("peer sent invalid headers", parseErr)
 			}
 
 			// For non-malicious parse errors, still fail but with different error type
@@ -320,7 +362,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 			return catchup.CreateCatchupResult(
 				allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,
 				iteration, failedIterations, false, "Header parse failed",
-			), nil, errors.NewNetworkInvalidResponseError("failed to parse headers: %w", parseErr)
+			), nil, errors.NewNetworkInvalidResponseError("failed to parse headers", parseErr)
 		}
 
 		// Check if we got any headers
@@ -430,10 +472,12 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		u.logger.Warnf("[catchup][%s] stopped after %d iterations without reaching target", chainTipHash.String(), iteration)
 	}
 
-	// Report successful catchup to P2P service (if we got any headers)
+	// Credit the peer for serving headers. This is a generic interaction success
+	// (reputation), deliberately NOT a catchup success: the whole catchup records
+	// exactly one attempt (doCatchup) and one outcome, so counting this stage as a
+	// catchup success would let CatchupSuccesses exceed CatchupAttempts.
 	if totalHeadersFetched > 0 {
-		responseTime := time.Since(startTime)
-		u.reportCatchupSuccess(ctx, identifier, responseTime)
+		u.reportValidBlockHeaders(ctx, identifier, time.Since(startTime))
 	}
 
 	// Set default stop reason if none was set
@@ -477,7 +521,7 @@ func (u *Server) getPeerChainTip(ctx context.Context, peerID string) (*chainhash
 	// Get peer info from P2P registry
 	peerInfo, err := u.p2pClient.GetPeer(ctx, peerID)
 	if err != nil {
-		return nil, errors.NewServiceError("failed to get peer info from P2P service: %w", err)
+		return nil, errors.NewServiceError("failed to get peer info from P2P service", err)
 	}
 
 	// Check if peer was found
@@ -494,4 +538,57 @@ func (u *Server) getPeerChainTip(ctx context.Context, peerID string) (*chainhash
 	chainTipHash := peerInfo.BlockHash
 
 	return chainTipHash, nil
+}
+
+// catchupTargetHash picks the block to request headers up to.
+//
+// The default is the block the peer announced. The P2P registry's BestBlockHash is preferred
+// where it is genuinely more advanced, because it lets one catchup fetch the peer's whole chain
+// rather than stopping at a block that may itself be relayed or stale.
+//
+// The registry entry is only refreshed from the peer's node_status every 10 seconds and nothing
+// upstream discards a stale one — sanitizeAdvertisedTip caps tips that are too high but passes
+// anything too low straight through — so it can name a block well behind the one the peer just
+// announced. That matters because the served header stream ends at whatever we ask for: a stale
+// tip truncates it below our own tip, every header in it is one we already hold, and the
+// common-ancestor walk takes its ancestor at the end of a list in which nothing diverged. The
+// resulting fork depth describes no fork, and validateForkDepth records a coinbase-maturity
+// violation against a peer sitting on our own chain.
+//
+// Already holding the block is exactly the tell that the entry is stale: it can teach us nothing
+// we do not have. blockUpTo cannot be stale in the same way — catchupGetBlockHeaders returns
+// early if it already exists, so by this point it is a block we lack.
+//
+// Returns the announced block's hash on any doubt: a registry lookup failure, an existence check
+// we could not complete, or an entry naming a block we hold.
+func (u *Server) catchupTargetHash(ctx context.Context, blockUpTo *model.Block, peerID string) *chainhash.Hash {
+	announced := blockUpTo.Hash()
+
+	if peerID == "" {
+		return announced
+	}
+
+	peerChainTip, err := u.getPeerChainTip(ctx, peerID)
+	if err != nil {
+		u.logger.Warnf("[catchup][%s] Could not get peer chain tip from P2P registry for peer %s: %v, falling back to announced block", announced.String(), peerID, err)
+		return announced
+	}
+
+	if peerChainTip == nil {
+		return announced
+	}
+
+	alreadyHave, existsErr := u.blockchainClient.GetBlockExists(ctx, peerChainTip)
+
+	switch {
+	case existsErr != nil:
+		u.logger.Warnf("[catchup][%s] could not check whether peer %s's registry tip %s is already held: %v, falling back to announced block", announced.String(), peerID, peerChainTip.String(), existsErr)
+		return announced
+	case alreadyHave:
+		u.logger.Infof("[catchup][%s] ignoring peer %s's registry tip %s: we already hold it, so the entry is stale - using announced block", announced.String(), peerID, peerChainTip.String())
+		return announced
+	default:
+		u.logger.Infof("[catchup][%s] Using peer %s's actual chain tip %s instead of announced block %s", announced.String(), peerID, peerChainTip.String(), announced.String())
+		return peerChainTip
+	}
 }

@@ -5,8 +5,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/aerospike/aerospike-client-go/v8"
-	"github.com/aerospike/aerospike-client-go/v8/types"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -107,12 +107,13 @@ func (s *Store) parseSpendState(bins aerospike.BinMap) (SpendState, error) {
 	return state, nil
 }
 
-// buildSpendFilterExpression creates a filter expression that validates spend preconditions.
-// Returns nil if the spend should be rejected, allowing the operation to proceed if all checks pass.
+// buildSpendFilterExpression builds the filter expression that gates a spend write.
+// The returned expression evaluates true only when every precondition holds; when it
+// is false the record is FILTERED_OUT and re-evaluated through the Lua UDF. It always
+// returns a non-nil expression.
 func (s *Store) buildSpendFilterExpression(
 	offset uint32,
 	utxoHash []byte,
-	spendingData []byte,
 	ignoreConflicting bool,
 	ignoreLocked bool,
 	currentBlockHeight uint32,
@@ -167,12 +168,17 @@ func (s *Store) buildSpendFilterExpression(
 		),
 	)
 
-	// Check spendableIn for this specific offset
-	// Note: Aerospike expressions have limited map access capabilities.
-	// We check if the spendableIn bin exists but cannot easily check specific map values.
-	// The actual spendableIn validation will be done at the Lua level or by reading the map.
-	// For the expression-based approach, we accept that this check is less strict than Lua.
-	// Alternative: Skip the operation if spendableIn exists (conservative approach)
+	// Conservative guard: filter out any record that has UtxoSpendableIn set.
+	//
+	// Aerospike filter expressions cannot inspect specific map values, so we cannot
+	// compare currentBlockHeight against spendableIn[offset] here — only check
+	// whether the map exists at all. This is strictly stricter than the SQL store
+	// and the Lua UDF, both of which compare per-offset.
+	//
+	// The guard stays in place as defense-in-depth: a record that needs the
+	// per-offset comparison must never reach ListSetOp through the expression
+	// path. Filter-outs caused by this guard are retried through the Lua UDF in
+	// processSpendBatchResultsExpressions, which evaluates the boundary correctly.
 	filterConditions = append(filterConditions,
 		aerospike.ExpNot(aerospike.ExpBinExists(fields.UtxoSpendableIn.String())),
 	)
@@ -185,11 +191,35 @@ func (s *Store) buildSpendFilterExpression(
 		),
 	)
 
-	// Note: We cannot check the exact UTXO hash in expressions due to limitations:
-	// - No byte-by-byte comparison support
-	// - No ExpBlobSize function
-	// - List element byte operations are not supported
-	// The ListSetOp will fail if the UTXO doesn't match during the operation.
+	// First-seen guard: the element at offset must be exactly the unspent
+	// 32-byte UTXO hash. An unspent element is the bare 32-byte hash; once
+	// spent it becomes 68 bytes (hash + 36-byte spendingData), so this
+	// equality is false the moment the UTXO has been spent — including by a
+	// different spender in an earlier batch. Without this clause ListSetOp
+	// would overwrite an already-spent element unconditionally, letting a
+	// second (double-spend) spender pass the filter and silently replace the
+	// first-seen spender at the store level.
+	//
+	// Comparing against the expected hash also confirms the element at this
+	// offset is the UTXO we mean to spend, guarding against a wrong-slot
+	// ListSetOp on a hash mismatch.
+	//
+	// A failed match returns FILTERED_OUT, which processSpendBatchResultsExpressions
+	// retries through the Lua UDF — the UDF inspects the element bytes and
+	// returns the correctly classified rejection (ErrSpent for a real
+	// double-spend, or an idempotent success for a re-spend by the same
+	// spender, which crucially does NOT re-increment spentUtxos).
+	filterConditions = append(filterConditions,
+		aerospike.ExpEq(
+			aerospike.ExpListGetByIndex(
+				aerospike.ListReturnTypeValue,
+				aerospike.ExpTypeBLOB,
+				aerospike.ExpIntVal(int64(offset)),
+				utxosBin,
+			),
+			aerospike.ExpBlobVal(utxoHash),
+		),
+	)
 
 	// Combine all conditions with AND
 	if len(filterConditions) == 1 {
@@ -236,7 +266,7 @@ func (s *Store) buildSpendOperations(
 
 	// Add deleteAtHeight expression if retention is enabled
 	if blockHeightRetention > 0 {
-		dahExp := s.buildDeleteAtHeightExpression(currentBlockHeight, blockHeightRetention, false)
+		dahExp := s.buildDeleteAtHeightExpression(currentBlockHeight, blockHeightRetention, false, false)
 		ops = append(ops, aerospike.ExpWriteOp(
 			fields.DeleteAtHeight.String(),
 			dahExp,
@@ -280,12 +310,12 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 	for _, bItem := range batch {
 		key, err := s.getOrCreateAerospikeKey(bItem, s.utxoBatchSize, aeroKeyMap)
 		if err != nil {
-			bItem.errCh <- err
+			bItem.complete(err)
 			continue
 		}
 
 		if err := s.validateSpendItem(bItem); err != nil {
-			bItem.errCh <- err
+			bItem.complete(err)
 			continue
 		}
 
@@ -296,7 +326,6 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 		filterExp := s.buildSpendFilterExpression(
 			offset,
 			bItem.spend.UTXOHash[:],
-			bItem.spend.SpendingData.Bytes(),
 			bItem.ignoreConflicting,
 			bItem.ignoreLocked,
 			bItem.blockHeight,
@@ -329,9 +358,12 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 	}
 
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
-	if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
+	if err := s.batchOperate(batchPolicy, batchRecords); err != nil {
+		// complete is CAS-guarded: items already completed above (key-creation/
+		// validation failures) are no-ops here, so this safely covers every
+		// remaining item without racing or double-signalling.
 		for _, bItem := range batch {
-			bItem.errCh <- errors.NewStorageError("[SPEND_BATCH_EXP] failed to batch spend: %w", err)
+			bItem.complete(errors.NewStorageError("[SPEND_BATCH_EXP] failed to batch spend", err))
 		}
 		return
 	}
@@ -341,6 +373,14 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 }
 
 // processSpendBatchResultsExpressions processes the results from expression-based spend operations.
+//
+// FILTERED_OUT records are not failed in place. The expression filter contains a
+// conservative guard that rejects every record with UtxoSpendableIn set, regardless
+// of the per-offset spendable-height value. SQL and the Lua UDF compare per-offset
+// (the freeze window is closed at start, open at stop), so the expression path is
+// strictly stricter and would otherwise reject valid spends. To restore parity we
+// collect FILTERED_OUT records and re-issue them through the Lua UDF, which can
+// inspect the map value and apply the correct boundary check.
 func (s *Store) processSpendBatchResultsExpressions(
 	ctx context.Context,
 	batchRecords []aerospike.BatchRecordIfc,
@@ -350,9 +390,15 @@ func (s *Store) processSpendBatchResultsExpressions(
 ) {
 	okCount := 0
 	errCount := 0
+	// infraErrCount tracks only true infrastructure errors so the circuit
+	// breaker does not trip on data-state results like KEY_NOT_FOUND_ERROR
+	// (missing parent during catch-up) or FILTERED_OUT — issue #953.
+	infraErrCount := 0
 
-	// Collect follow-up actions
-	extraRecords := make([]*chainhash.Hash, 0)
+	// Collect follow-up actions. Extra-record increments are grouped by the spend's
+	// block height so each tx's delete-at-height is stamped from its own spend
+	// height (a single batch may aggregate spends from different blocks).
+	extraRecordsByHeight := make(map[uint32][]*chainhash.Hash)
 	dahSetItems := make([]struct {
 		TxID           *chainhash.Hash
 		ChildCount     int
@@ -362,6 +408,10 @@ func (s *Store) processSpendBatchResultsExpressions(
 		TxID *chainhash.Hash
 		DAH  uint32
 	}, 0)
+
+	// Records filtered out by the expression — retried through Lua before
+	// completing them, so each item is still completed exactly once.
+	var retryThroughLua []*batchSpend
 
 	for idx, batchRecord := range batchRecords {
 		bItem, ok := spendIndex[idx]
@@ -376,35 +426,41 @@ func (s *Store) processSpendBatchResultsExpressions(
 			var aErr *aerospike.AerospikeError
 			if errors.As(batchRec.Err, &aErr) {
 				if aErr.ResultCode == types.KEY_NOT_FOUND_ERROR {
-					bItem.errCh <- errors.NewTxNotFoundError("transaction not found: %s", bItem.spend.TxID.String())
+					bItem.complete(errors.NewTxNotFoundError("transaction not found: %s", bItem.spend.TxID.String()))
 					errCount++
 					continue
 				}
 
 				if aErr.ResultCode == types.FILTERED_OUT {
-					// Spend was filtered out - could be already spent, conflicting, locked, etc.
-					// Return a generic error since we can't distinguish the exact reason
-					bItem.errCh <- errors.NewUtxoError("spend validation failed for %s:%d", bItem.spend.TxID.String(), bItem.spend.Vout)
-					errCount++
+					// The expression can't disambiguate which filter clause rejected
+					// the record. Retry every FILTERED_OUT through Lua so spends
+					// blocked solely by the conservative UtxoSpendableIn guard get
+					// a correct decision, while genuine rejections (already-spent,
+					// conflicting, locked, frozen-until-X) still surface the right
+					// classified error from the Lua UDF.
+					retryThroughLua = append(retryThroughLua, bItem)
 					continue
 				}
 			}
 
-			bItem.errCh <- errors.NewStorageError("spend error for %s:%d: %w", bItem.spend.TxID.String(), bItem.spend.Vout, batchRec.Err)
+			bItem.complete(errors.NewStorageError("spend error for %s:%d", bItem.spend.TxID.String(), bItem.spend.Vout, batchRec.Err))
 			errCount++
+			if isInfrastructureFailure(batchRec.Err) {
+				infraErrCount++
+			}
 			continue
 		}
 
 		// Parse successful result
 		if batchRec.Record == nil || batchRec.Record.Bins == nil {
-			bItem.errCh <- nil
+			bItem.complete(nil)
 			okCount++
 			continue
 		}
 
 		state, err := s.parseSpendState(batchRec.Record.Bins)
 		if err != nil {
-			bItem.errCh <- errors.NewProcessingError("failed to parse spend state: %w", err)
+			bItem.complete(errors.NewProcessingError("failed to parse spend state", err))
 			errCount++
 			continue
 		}
@@ -413,7 +469,7 @@ func (s *Store) processSpendBatchResultsExpressions(
 		if state.TotalExtraRecs == nil {
 			// Pagination record - check if all spent
 			if state.RecordUtxos > 0 && state.SpentUtxos == state.RecordUtxos {
-				extraRecords = append(extraRecords, bItem.spend.TxID)
+				extraRecordsByHeight[bItem.blockHeight] = append(extraRecordsByHeight[bItem.blockHeight], bItem.spend.TxID)
 			}
 		} else if state.TotalExtraRecs != nil {
 			// Master record - check DAH changes for external transactions
@@ -449,16 +505,19 @@ func (s *Store) processSpendBatchResultsExpressions(
 			}
 		}
 
-		bItem.errCh <- nil
+		bItem.complete(nil)
 		okCount++
 	}
 
-	// Record successes for circuit breaker
+	// Record circuit-breaker outcome. Only count true infrastructure errors;
+	// data-state errors (KEY_NOT_FOUND_ERROR, FILTERED_OUT) take their own
+	// per-record branches above and are deliberately excluded from
+	// infraErrCount — issue #953.
 	if s.spendCircuitBreaker != nil {
 		if okCount > 0 {
 			s.spendCircuitBreaker.RecordSuccess()
 		}
-		if errCount > 0 {
+		if infraErrCount > 0 {
 			s.spendCircuitBreaker.RecordFailure()
 		}
 	}
@@ -471,8 +530,8 @@ func (s *Store) processSpendBatchResultsExpressions(
 	// Execute follow-up actions
 	var postErr error
 
-	if len(extraRecords) > 0 {
-		if err := s.IncrementSpentRecordsMulti(extraRecords, 1); err != nil {
+	for bh, txids := range extraRecordsByHeight {
+		if err := s.IncrementSpentRecordsMulti(txids, 1, bh); err != nil {
 			postErr = errors.Join(postErr, err)
 		}
 	}
@@ -488,7 +547,22 @@ func (s *Store) processSpendBatchResultsExpressions(
 	}
 
 	if s.settings.UtxoStore.VerboseDebug {
-		s.logger.Debugf("[SPEND_BATCH_EXP] batch %d of %d spends completed in %v (ok=%d, err=%d)",
-			batchID, len(spendIndex), time.Since(start), okCount, errCount)
+		s.logger.Debugf("[SPEND_BATCH_EXP] batch %d of %d spends (ok=%d, err=%d, lua_retry=%d) completed in %v",
+			batchID, len(spendIndex), okCount, errCount, len(retryThroughLua), time.Since(start))
+	}
+
+	// Dispatch FILTERED_OUT records to the Lua UDF for a correct decision. The Lua
+	// path checks UtxoSpendableIn per-offset and returns the precise rejection
+	// reason for records that genuinely cannot be spent. Each item is still
+	// uncompleted at this point — Lua's dispatch completes it exactly once.
+	//
+	// This is a single additional batched Lua call per expression batch — its
+	// cost is independent of how many records were filtered out, but it is only
+	// paid when at least one record needed re-evaluation.
+	if len(retryThroughLua) > 0 {
+		prometheusUtxoSpendExpressionLuaRetry.Inc()
+		prometheusUtxoSpendExpressionLuaRetryN.Add(float64(len(retryThroughLua)))
+
+		s.executeLuaSpendBatch(retryThroughLua)
 	}
 }

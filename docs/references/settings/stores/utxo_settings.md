@@ -14,12 +14,12 @@
 | OutpointBatcherDurationMillis | int | 10 | utxostore_outpointBatcherDurationMillis | Outpoint batch duration |
 | SpendBatcherDurationMillis | int | 100 | utxostore_spendBatcherDurationMillis | Spend batch duration |
 | SpendBatcherSize | int | 100 | utxostore_spendBatcherSize | Spend operation batch size |
-| SpendBatcherConcurrency | int | 32 | utxostore_spendBatcherConcurrency | Spend batch concurrency |
+| SpendBatcherConcurrency | int | 32 | utxostore_spendBatcherConcurrency | SQL per-transaction input-spend cap (`SpendBatcherSize` × this); also caps quick-validation concurrent transactions (`SpendBatcherSize` × this × 2) |
 | SpendWaitTimeout | time.Duration | 30s | utxostore_spendWaitTimeout | Spend operation wait timeout |
-| SpendCircuitBreakerFailureCount | int | 10 | utxostore_spendCircuitBreakerFailureCount | Circuit breaker failure threshold |
+| SpendCircuitBreakerFailureCount | int | 10 | utxostore_spendCircuitBreakerFailureCount | Circuit breaker failure threshold (infrastructure-level errors only — see "Spend Circuit Breaker Trigger Set" below) |
 | SpendCircuitBreakerCooldown | time.Duration | 30s | utxostore_spendCircuitBreakerCooldown | Circuit breaker cooldown period |
 | SpendCircuitBreakerHalfOpenMax | int | 4 | utxostore_spendCircuitBreakerHalfOpenMax | Circuit breaker half-open max |
-| StoreBatcherDurationMillis | int | 100 | utxostore_storeBatcherDurationMillis | Store batch duration |
+| StoreBatcherDurationMillis | int | 10 | utxostore_storeBatcherDurationMillis | Store batch duration (SQL and Aerospike) |
 | StoreBatcherSize | int | 100 | utxostore_storeBatcherSize | Store operation batch size |
 | UtxoBatchSize | int | 128 | utxostore_utxoBatchSize | UTXO operation batch size |
 | IncrementBatcherSize | int | 256 | utxostore_incrementBatcherSize | Increment operation batch size |
@@ -32,8 +32,11 @@
 | LongestChainBatcherDurationMillis | int | 5 | utxostore_longestChainBatcherDurationMillis | Longest chain batch duration |
 | GetBatcherSize | int | 1 | utxostore_getBatcherSize | Get operation batch size |
 | GetBatcherDurationMillis | int | 10 | utxostore_getBatcherDurationMillis | Get batch duration |
+| BatcherMaxConcurrent | int | 64 | utxostore_batcherMaxConcurrent | Max concurrent in-flight batch callbacks per batcher (shared cap; 0 = unlimited) |
+| OutpointBatcherMaxConcurrent | int | 0 | utxostore_outpointBatcherMaxConcurrent | Per-batcher outpoint/decorate concurrency override, the #1187 read fan-out throttle (0 = inherit utxostore_batcherMaxConcurrent) |
 | DBTimeout | time.Duration | 5s | utxostore_dbTimeoutDuration | **CRITICAL** - Database operation timeout |
 | UseExternalTxCache | bool | true | utxostore_useExternalTxCache | External transaction cache usage |
+| ExternalTxCacheMaxItems | int | 1024 | utxostore_externalTxCacheMaxItems | Max entries in each external transaction cache (0 = unbounded) |
 | ExternalizeAllTransactions | bool | false | utxostore_externalizeAllTransactions | Transaction externalization control |
 | ExternalStoreConcurrency | int | 16 | utxostore_externalStoreConcurrency | Maximum concurrent external storage operations |
 | VerboseDebug | bool | false | utxostore_verbose_debug | Verbose debug logging |
@@ -54,6 +57,19 @@
 | Parameter | Type | Default | Usage | Impact |
 |-----------|------|---------|-------|--------|
 | logging | bool | false | `storeURL.Query().Get("logging") == "true"` | **CRITICAL** - Enables operation logging wrapper |
+
+## Spend Circuit Breaker Trigger Set
+
+The spend circuit breaker counts only **infrastructure-level** aerospike errors toward `SpendCircuitBreakerFailureCount`. Data-state errors (e.g. `KEY_NOT_FOUND_ERROR` for a missing parent during catch-up sync, `FILTERED_OUT` for a Lua business-rule rejection) are handled by per-record error paths in the calling code — missing parents flow into subtree validation's sequential revalidation pass, and Lua business-rule rejections surface to the caller — and never increment the failure counter.
+
+Counted as infrastructure failure:
+
+- `TIMEOUT`, `NETWORK_ERROR`, `NO_RESPONSE`, `MAX_RETRIES_EXCEEDED`, `MAX_ERROR_RATE`
+- `NO_AVAILABLE_CONNECTIONS_TO_NODE`, `SERVER_NOT_AVAILABLE`, `INVALID_NODE_ERROR`, `PARTITION_UNAVAILABLE`
+- `SERVER_MEM_ERROR`, `SERVER_ERROR`, `DEVICE_OVERLOAD`, `BATCH_FAILED`, `GRPC_ERROR`
+- stdlib `context.DeadlineExceeded`; `net.Error` with `Timeout() == true`
+
+Anything else — including unknown / non-aerospike errors — is treated as non-infrastructure. The bias is intentional: a false trip during IBD stalls sync (issue #953), while a missed infrastructure signal is recoverable by the higher-level `SpendWaitTimeout` and health checks.
 
 ## Configuration Dependencies
 

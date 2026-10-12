@@ -33,8 +33,10 @@ func (m *Mock) GetTxMeta(_ context.Context, hash *chainhash.Hash) (*meta.Data, e
 	return args.Get(0).(*meta.Data), args.Error(1)
 }
 
-func (m *Mock) GetLegacyBlockReader(_ context.Context, hash *chainhash.Hash, _ ...bool) (*io.PipeReader, error) {
-	args := m.Called(hash)
+func (m *Mock) GetLegacyBlockReader(ctx context.Context, hash *chainhash.Hash, _ ...bool) (*io.PipeReader, error) {
+	// ctx is passed through (not discarded) so tests can observe whether the
+	// caller marked it with repository.WithLegacyBlockReaderPeerPool.
+	args := m.Called(ctx, hash)
 
 	if args.Error(1) != nil {
 		return nil, args.Error(1)
@@ -222,6 +224,26 @@ func (m *Mock) GetSubtreeTxIDsReader(_ context.Context, hash *chainhash.Hash) (i
 	return args.Get(0).(io.ReadCloser), args.Error(1)
 }
 
+func (m *Mock) GetSubtreeNodeHashesReader(_ context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
+	args := m.Called(hash)
+
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).(io.ReadCloser), args.Error(1)
+}
+
+func (m *Mock) GetSubtreeNodesPage(_ context.Context, hash *chainhash.Hash, offset, limit int) ([]subtree.Node, int, error) {
+	args := m.Called(hash, offset, limit)
+
+	if args.Error(2) != nil {
+		return nil, 0, args.Error(2)
+	}
+
+	return args.Get(0).([]subtree.Node), args.Int(1), args.Error(2)
+}
+
 func (m *Mock) GetSubtreeDataReaderFromBlockPersister(_ context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
 	args := m.Called(hash)
 
@@ -252,6 +274,16 @@ func (m *Mock) GetSubtree(_ context.Context, hash *chainhash.Hash) (*subtree.Sub
 	return args.Get(0).(*subtree.Subtree), args.Error(1)
 }
 
+func (m *Mock) GetSubtreePage(_ context.Context, hash *chainhash.Hash, offset, limit int) (*subtree.Subtree, int, int, error) {
+	args := m.Called(hash, offset, limit)
+
+	if args.Error(3) != nil {
+		return nil, 0, 0, args.Error(3)
+	}
+
+	return args.Get(0).(*subtree.Subtree), args.Int(1), args.Int(2), args.Error(3)
+}
+
 func (m *Mock) GetSubtreeData(ctx context.Context, hash *chainhash.Hash) (*subtree.Data, error) {
 	args := m.Called(ctx, hash)
 
@@ -262,15 +294,28 @@ func (m *Mock) GetSubtreeData(ctx context.Context, hash *chainhash.Hash) (*subtr
 	return args.Get(0).(*subtree.Data), args.Error(1)
 }
 
-func (m *Mock) GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, error) {
+func (m *Mock) GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, func(), error) {
 	args := m.Called(ctx, hash)
 
-	if args.Error(1) != nil {
-		return nil, args.Error(1)
+	// Callers may supply their own release func as the second return value in order
+	// to observe when the permit is dropped; the two-value form stays supported.
+	release := func() {}
+	errIndex := 1
+
+	if len(args) > 2 {
+		errIndex = 2
+
+		if supplied, ok := args.Get(1).(func()); ok && supplied != nil {
+			release = supplied
+		}
+	}
+
+	if args.Error(errIndex) != nil {
+		return nil, release, args.Error(errIndex)
 	}
 
 	// return the mocked response
-	return args.Get(0).(map[chainhash.Hash]*bt.Tx), args.Error(1)
+	return args.Get(0).(map[chainhash.Hash]*bt.Tx), release, args.Error(errIndex)
 }
 
 func (m *Mock) GetSubtreeExists(_ context.Context, hash *chainhash.Hash) (bool, error) {
@@ -370,4 +415,17 @@ func (m *Mock) GetBlockvalidationClient() blockvalidation.Interface {
 func (m *Mock) GetP2PClient() p2p.ClientI {
 	args := m.Called()
 	return args.Get(0).(p2p.ClientI)
+}
+
+// GetPeerRegistryClient returns the peer registry client interface used by the repository.
+//
+// Returns:
+//   - blockchain.PeerRegistryClientI: peer registry client interface
+func (m *Mock) GetPeerRegistryClient() blockchain.PeerRegistryClientI {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil
+	}
+
+	return args.Get(0).(blockchain.PeerRegistryClientI)
 }

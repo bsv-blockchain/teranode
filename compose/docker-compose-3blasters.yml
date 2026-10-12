@@ -9,6 +9,7 @@ x-teranode-base: &teranode-base
     - ../data/test/${TEST_ID:-chainintegrity}:/app/data
 
 x-teranode-coinbase-base: &teranode-coinbase-base
+  # coinbase.run/blaster.run/blaster-tui.run come from this externally-built image; the source is not in this repository.
   image: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-coinbase:latest
   # image: teranode-coinbase:local
   networks:
@@ -18,7 +19,7 @@ x-teranode-coinbase-base: &teranode-coinbase-base
     - kafka-shared
 
 x-aerospike-base: &aerospike-base
-  image: aerospike/aerospike-server:8.0
+  image: aerospike/aerospike-server:8.1
   networks:
     - teranode-network
   command: --config-file /etc/aerospike.conf
@@ -149,6 +150,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode1.test"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       JAEGER_SERVICE_NAME: teranode1
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
@@ -220,6 +222,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode2.test"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       JAEGER_SERVICE_NAME: teranode2
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
@@ -291,6 +294,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode3.test"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       JAEGER_SERVICE_NAME: teranode3
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
@@ -367,6 +371,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode1.test.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       profilerAddr: "localhost:17092"
       coinbase_rpc_url: "http://teranode1:9292"
       COINBASE_RPC_USER: "bitcoin"
@@ -389,6 +394,8 @@ services:
       - ../data/coinbase1:/app/data
 
   block-generator-2:
+    profiles:
+      - with-coinbase
     image: curlimages/curl:latest
     container_name: block-generator-2
     depends_on:
@@ -425,6 +432,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode2.test.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       profilerAddr: "localhost:27092"
       COINBASE_RPC_URL: "http://teranode2:9292"
       COINBASE_RPC_USER: "bitcoin"
@@ -442,6 +450,8 @@ services:
       - ../data/coinbase2:/app/data
 
   block-generator-3:
+    profiles:
+      - with-coinbase
     image: curlimages/curl:latest
     container_name: block-generator-3
     depends_on:
@@ -478,6 +488,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode3.test.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       profilerAddr: "localhost:37092"
       COINBASE_RPC_URL: "http://teranode3:9292"
       COINBASE_RPC_USER: "bitcoin"
@@ -504,6 +515,7 @@ services:
       - teranode1
     environment:
       SETTINGS_CONTEXT: "docker.teranode1.test.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       COINBASE_RPC_URL: "http://teranode1:9292"
       startCoinbase: "false"
       startFaucet: "false"
@@ -526,6 +538,8 @@ services:
       # - ../data/txblaster.log:/app/data/txblaster.log
 
   blaster-tui-1:
+    # profiles:
+    #   - with-coinbase
     <<: *teranode-coinbase-base
     container_name: blaster-tui-1
     depends_on:
@@ -545,6 +559,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode1.test.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       LOG_LEVEL: "debug"
       COINBASE_WALLET_PRIVATE_KEY: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q"
     volumes:
@@ -574,6 +589,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode2.test.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       LOG_LEVEL: "debug"
       COINBASE_WALLET_PRIVATE_KEY: "KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k"
     volumes:
@@ -603,6 +619,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode3.test.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       LOG_LEVEL: "debug"
       COINBASE_WALLET_PRIVATE_KEY: "L3NVjmwg3nC7ZPrwMVF6FXiG1a1RZ89nhizmJVctGztRKLYrhtFL"
     volumes:
@@ -619,6 +636,7 @@ services:
       - teranode2
     environment:
       SETTINGS_CONTEXT: "docker.teranode2.test.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       startCoinbase: "false"
       startFaucet: "false"
       LOG_LEVEL: "debug"
@@ -647,6 +665,7 @@ services:
       - teranode3
     environment:
       SETTINGS_CONTEXT: "docker.teranode3.test.coinbase"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       startCoinbase: "false"
       startFaucet: "false"
       LOG_LEVEL: "debug"
@@ -678,6 +697,7 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
     volumes:
       - ./prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
+      - ../deploy/docker/base/blockassembly.rules.yml:/etc/prometheus/blockassembly.rules.yml
 
   prometheus-2:
     container_name: prometheus-2
@@ -692,6 +712,7 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
     volumes:
       - ./prometheus/prometheus-2.yml:/etc/prometheus/prometheus.yml
+      - ../deploy/docker/base/blockassembly.rules.yml:/etc/prometheus/blockassembly.rules.yml
 
   prometheus-3:
     container_name: prometheus-3
@@ -706,6 +727,7 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
     volumes:
       - ./prometheus/prometheus-3.yml:/etc/prometheus/prometheus.yml
+      - ../deploy/docker/base/blockassembly.rules.yml:/etc/prometheus/blockassembly.rules.yml
 
   grafana:
     container_name: grafana

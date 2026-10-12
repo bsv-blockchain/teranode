@@ -46,7 +46,7 @@ func (h *HTTP) GetSubtreeData() func(c echo.Context) error {
 
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetSubtreeData_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetSubtreeData for %s: %s", c.Request().RemoteAddr, hashStr),
+			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetSubtreeData for %s: %s", c.RealIP(), hashStr),
 		)
 
 		defer deferFn()
@@ -62,18 +62,39 @@ func (h *HTTP) GetSubtreeData() func(c echo.Context) error {
 
 		r, err := h.repository.GetSubtreeDataReader(ctx, hash)
 		if err != nil {
-			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+			switch {
+			case errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found"):
 				prometheusAssetHTTPGetSubtreeData.WithLabelValues("ERROR", http.StatusText(http.StatusNotFound)).Inc()
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
-			} else {
+			case errors.Is(err, errors.ErrServiceUnavailable):
+				// Create-path admission control rejected this request — tell the client to retry.
+				prometheusAssetHTTPGetSubtreeData.WithLabelValues("ERROR", http.StatusText(http.StatusServiceUnavailable)).Inc()
+				c.Response().Header().Set("Retry-After", "1")
+				return echo.NewHTTPError(http.StatusServiceUnavailable, err.Error())
+			default:
 				prometheusAssetHTTPGetSubtreeData.WithLabelValues("ERROR", http.StatusText(http.StatusInternalServerError)).Inc()
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}
 		}
 		defer r.Close()
 
+		// Count the outcome AFTER streaming, not before. Incrementing OK/200 up front
+		// filed every empty-source 500 in the success bucket, leaving no signal for
+		// "this node is serving 500s for subtree_data" — the first thing an operator
+		// would look at when validating the issue 1368 fix in production.
+		//
+		// Still not exact: streamOrAbort also returns nil on the mid-stream hijack path
+		// and on the client-gone-before-first-byte path, so those are counted as OK.
+		// Labelling them needs the helper to report which path it took, which is a
+		// bigger change than this metric fix warrants.
+		if err := streamOrAbort(c, http.StatusOK, echo.MIMEOctetStream, r); err != nil {
+			prometheusAssetHTTPGetSubtreeData.WithLabelValues("ERROR", http.StatusText(http.StatusInternalServerError)).Inc()
+
+			return err
+		}
+
 		prometheusAssetHTTPGetSubtreeData.WithLabelValues("OK", "200").Inc()
 
-		return c.Stream(http.StatusOK, echo.MIMEOctetStream, r)
+		return nil
 	}
 }

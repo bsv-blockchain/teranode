@@ -1,16 +1,29 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { tippy } from '$lib/stores/media'
   import { copyTextToClipboardVanilla } from '$lib/utils/clipboard'
   import ActionStatusIcon from '$internal/components/action-status-icon/index.svelte'
-  
-  export let hash = ''
-  export let hashUrl = ''
-  export let shortHash = ''
-  export let miner = ''
-  export let className = ''
-  export let tooltip = ''
-  export let showCopyButton = false
-  export let copyTooltip = 'Copy hash'
+
+  let {
+    hash = '',
+    hashUrl = '',
+    shortHash = '',
+    miner = '',
+    className = '',
+    tooltip = '',
+    showCopyButton = false,
+    copyTooltip = 'Copy hash',
+  }: {
+    hash?: string
+    hashUrl?: string
+    shortHash?: string
+    miner?: string
+    className?: string
+    tooltip?: string
+    showCopyButton?: boolean
+    copyTooltip?: string
+  } = $props()
 </script>
 
 <div class="hash-miner-container {className}">

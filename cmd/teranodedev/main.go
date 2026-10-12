@@ -285,6 +285,10 @@ func doctorCmd() *cli.Command {
 			// Check settings_local.conf
 			if devsettings.HasEntries(projectRoot, cfg.DevName) {
 				fmt.Println("\nsettings_local.conf: OK (has entries for dev." + cfg.DevName + ")")
+
+				if !devsettings.HasRPCCredentials(projectRoot, cfg.DevName) {
+					fmt.Println("  MISSING rpc_user/rpc_pass for dev." + cfg.DevName + ": rpc and generate will get 401 - re-run 'teranode-dev init'")
+				}
 			} else {
 				fmt.Println("\nsettings_local.conf: MISSING entries for dev." + cfg.DevName)
 			}

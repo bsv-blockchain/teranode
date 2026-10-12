@@ -3,8 +3,11 @@ package blockvalidation
 
 import (
 	"context"
+	"encoding/binary"
+	"math/big"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -13,12 +16,14 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
-	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/util/blockassemblyutil"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -28,24 +33,72 @@ const (
 	// maxCatchupIterations was the old iteration limit, kept for reference but no longer used
 	// since we now make a single request for headers
 	maxCatchupIterations = 1000
+
+	// catchupReputationReportTimeout bounds the best-effort peer-reputation gRPC calls
+	// made when releasing the catchup lock, so a slow or hung P2P service cannot stall
+	// catchup teardown or detach the calls from shutdown.
+	catchupReputationReportTimeout = 5 * time.Second
+
+	// Bound recovery from transient FSM persistence or transport failures at the
+	// catchup completion boundary. Do not leave an untracked retry goroutine.
+	catchupPromotionAttempts   = 3
+	catchupPromotionRetryDelay = time.Second
 )
 
 // CatchupContext holds all the state needed during a catchup operation
 type CatchupContext struct {
-	blockUpTo               *model.Block
-	baseURL                 string
-	peerID                  string
-	startTime               time.Time
-	commonAncestorHash      *chainhash.Hash
-	commonAncestorMeta      *model.BlockHeaderMeta
-	commonAncestorIndex     int // Index of common ancestor in peer headers
-	forkDepth               uint32
-	currentHeight           uint32
+	blockUpTo           *model.Block
+	baseURL             string
+	peerID              string
+	startTime           time.Time
+	commonAncestorHash  *chainhash.Hash
+	commonAncestorMeta  *model.BlockHeaderMeta
+	commonAncestorIndex int // Index of common ancestor in peer headers
+	forkDepth           uint32
+	currentHeight       uint32
+	// bestBlockMeta is the accepted chain tip read once by findCommonAncestor and reused by
+	// every later step, so they all reason about the same tip. Reading it a second time would
+	// let the tip move in between: the ancestor is chosen against this height, so a tip that
+	// decreased would make the ancestor exceed it and trip the height check
+	// checkSecretMiningFromCommonAncestor makes, throwing away a sound catchup over our own
+	// local reorg. That check reports the trip as a service error, so the peer is not charged
+	// for it, but the catchup is lost all the same.
+	bestBlockMeta           *model.BlockHeaderMeta
 	blockHeaders            []*model.BlockHeader
 	headersFetchResult      *catchup.Result
 	useQuickValidation      bool   // Whether to use quick validation for checkpointed blocks
-	highestCheckpointHeight uint32 // Highest checkpoint height for validation checks
+	highestCheckpointHeight uint32 // Highest checkpoint height hash-verified in THIS catchup run (not the highest configured checkpoint)
 	catchupError            error  // Any error encountered during catchup
+	incompleteBlockHash     string // Block hash reported when a peer serves an incomplete block
+	corruptBlockHash        string // Block hash reported when a peer serves a corrupt block body
+
+	// failedPeers records the peers that actually failed to serve data during this
+	// catchup cycle, deduplicated by peer ID (last error message wins). Written from
+	// concurrent per-subtree fetch goroutines via recordCatchupPeerFailure and drained
+	// by releaseCatchupLock, which charges each of them once. Deduplication keeps
+	// CatchupFailures from exceeding CatchupAttempts when several concurrent subtree
+	// fetches fail against the same peer.
+	failedPeersMu sync.Mutex
+	failedPeers   map[string]string
+
+	// committedSubtrees holds the subtree hashes that a block which has already COMMITTED in
+	// this catchup run depends on, and which therefore no later attempt in the run may delete,
+	// whichever attempt wrote them (bitcoin-sv/teranode#4692). Registered at the single success
+	// tail of validateBlocksOnChannel and consulted inside removeCatchupSubtreeFiles. RUN-scoped
+	// on purpose: per-attempt freshness cannot see that a hash it wrote fresh is now a committed
+	// block's dependency, because the fetch pool runs several blocks concurrently and quick
+	// validation's own FileTypeSubtree write is asynchronous, so two attempts in one run can both
+	// record the same hash as freshly written.
+	//
+	// Created lazily by markSubtreesCommitted rather than by the constructor, so it is the same
+	// whether the context came from catchup() or was built directly, and there is only one place
+	// that owns its initialisation. All access today is from the single sequential consumer
+	// goroutine — registration at that success tail, reads from removeCatchupSubtreeFiles' three
+	// call sites, all on that loop — so the mutex is not load-bearing yet; it is here so that a
+	// future concurrent reader (the fetch pool already shares this context for other fields)
+	// cannot be introduced unsafely, and so the lazy creation is itself race-free.
+	committedSubtreesMu sync.Mutex
+	committedSubtrees   map[chainhash.Hash]struct{}
 
 	// Performance monitoring and dynamic peer switching
 	performanceMonitor   *CatchupPerformanceMonitor
@@ -54,6 +107,50 @@ type CatchupContext struct {
 
 	// Checkpoints to use for this catchup (isolated copy, not shared with settings)
 	checkpoints []chaincfg.Checkpoint
+}
+
+// markSubtreesCommitted records every subtree hash the block just committed in this run depends
+// on, so no later attempt's corrupt cleanup can delete a blob the chain now needs
+// (bitcoin-sv/teranode#4692). This is the sole owner of the map's initialisation: a nil map is
+// created here on the first registration, so a context built directly rather than by catchup()
+// protects its committed hashes exactly like a constructed one — the fail-safe direction, since a
+// caller that silently protected nothing would disable the guard without any signal. A nil
+// RECEIVER is the one case that records nothing, because there is no run to record against.
+func (c *CatchupContext) markSubtreesCommitted(block *model.Block) {
+	if c == nil || block == nil {
+		return
+	}
+
+	c.committedSubtreesMu.Lock()
+	defer c.committedSubtreesMu.Unlock()
+
+	if c.committedSubtrees == nil {
+		c.committedSubtrees = make(map[chainhash.Hash]struct{}, len(block.Subtrees))
+	}
+
+	for _, subtreeHash := range block.Subtrees {
+		if subtreeHash == nil {
+			continue
+		}
+
+		c.committedSubtrees[*subtreeHash] = struct{}{}
+	}
+}
+
+// subtreeCommitted reports whether a block already committed in this run depends on this subtree
+// hash. A nil receiver and a not-yet-created map both read as "nothing committed yet", which is
+// what they mean: no registration has happened, so no hash is protected.
+func (c *CatchupContext) subtreeCommitted(hash chainhash.Hash) bool {
+	if c == nil {
+		return false
+	}
+
+	c.committedSubtreesMu.Lock()
+	defer c.committedSubtreesMu.Unlock()
+
+	_, ok := c.committedSubtrees[hash]
+
+	return ok
 }
 
 // catchup orchestrates the complete blockchain synchronization process.
@@ -177,7 +274,20 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 		return err
 	}
 
-	// Step 3.5: If fork detected, reset mined_set on old blocks for transaction state consistency
+	// Step 4: Validate fork depth against coinbase maturity
+	if err = u.validateForkDepth(catchupCtx); err != nil {
+		return err
+	}
+
+	// Step 5: Check for secret mining attempts
+	if err = u.checkSecretMining(ctx, catchupCtx); err != nil {
+		return err
+	}
+
+	// Step 5.5: If fork detected, reset mined_set on old blocks for transaction state consistency.
+	// This must run only AFTER the fork-depth and secret-mining safety checks pass; otherwise a peer
+	// merely announcing a deep or secretly-mined fork would un-stamp this node's own still-canonical
+	// txs for a fork that is then rejected, churning honest tx-mined state for no reorg (issue #1145).
 	if catchupCtx.forkDepth > 0 {
 		u.logger.Infof("[catchup][%s] Fork detected (depth %d), clearing mined_set on old blocks",
 			catchupCtx.blockUpTo.Hash().String(), catchupCtx.forkDepth)
@@ -214,16 +324,6 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 		}
 	}
 
-	// Step 4: Validate fork depth against coinbase maturity
-	if err = u.validateForkDepth(catchupCtx); err != nil {
-		return err
-	}
-
-	// Step 5: Check for secret mining attempts
-	if err = u.checkSecretMining(ctx, catchupCtx); err != nil {
-		return err
-	}
-
 	// Step 6: Filter headers to only those we need to catchup
 	if err = u.filterHeaders(ctx, catchupCtx); err != nil {
 		return err
@@ -248,6 +348,16 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 	// This step ensures we're on the correct chain by validating checkpoint hashes
 	if err = u.verifyCheckpointsInHeaderChain(catchupCtx); err != nil {
 		u.logger.Errorf("[catchup][%s] Checkpoint verification failed: %v", blockUpTo.Hash().String(), err)
+		return err
+	}
+
+	u.reportValidatedHeaderProgress(catchupCtx)
+
+	// Step 9.5: Validate header-chain difficulty (DAA) before fetching full blocks.
+	// Header-fetch validation only checks each header's PoW against its own nBits; this
+	// recomputes the DAA-required nBits from the header chain and rejects a peer that
+	// supplied a self-consistent low-difficulty chain.
+	if err = u.validateCatchupHeaderDifficulty(ctx, catchupCtx); err != nil {
 		return err
 	}
 
@@ -333,20 +443,201 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 		prometheusCatchupActive.Set(0)
 	}
 
+	// Reputation reporting decisions captured under the lock, executed after release.
+	// We must NOT make gRPC calls while holding activeCatchupCtxMu: a slow or hung P2P
+	// service would block the lock indefinitely, which in turn blocks GetCatchupStatus
+	// (it RLocks the same mutex) and prevents the active catchup context from clearing.
+	var (
+		reportMalicious       bool
+		reportPeerErr         bool
+		reportIncompleteBlock bool
+		reportCorruptBlock    bool
+		peerID                string
+		errorMsg              string
+		incompleteBlockHash   string
+		corruptBlockHash      string
+		failedPeers           map[string]string
+	)
+
 	// Capture failure details for dashboard before clearing context
 	u.activeCatchupCtxMu.Lock()
 	if *err != nil && ctx != nil {
 		// Determine error type based on error characteristics
 		errorType := "unknown_error"
-		errorMsg := (*err).Error()
+		errorMsg = (*err).Error()
+		peerID = ctx.peerID
 		isPeerError := true // Track if this is a peer-related error
 
 		// TODO: all of these should be using error types, and not checking the strings (!)
 		switch {
-		case errors.Is(*err, errors.ErrBlockInvalid) || errors.Is(*err, errors.ErrTxInvalid):
+		case errors.Is(*err, errors.ErrStorageError):
+			// A failed read or write of our own store — a torn, stale or mis-keyed
+			// external transaction blob (issue 1439), a full disk — is this node's
+			// fault, never the peer's. recordCatchupPeerFailure already exempts
+			// storage errors, so this makes the terminal-error path agree with the
+			// per-fetch one.
+			//
+			// This case must come FIRST, and specifically ahead of the consensus
+			// case below, because an error chain can carry both codes and errors.Is
+			// walks the whole chain. The aerospike UTXO store wraps its own bins'
+			// read failures — including a live client.Get on a paginated record —
+			// and those inner StorageErrors used to be re-wrapped in TxInvalid. Any
+			// such chain reaching here would be scored a validation_failure with
+			// reportMalicious set, blaming an honest peer for our own store. It also
+			// has to precede the IsNetworkError case, for the reason documented on
+			// the ErrExternal case: IsNetworkError falls back to substring matching
+			// and a truncated blob surfaces as "unexpected EOF", which would
+			// otherwise be mislabelled a network error against the primary.
+			//
+			// Server.go's processCatchupChItem tests storage before it tests
+			// isUnvalidatablePeerError, and validateBlocksOnChannel's malicious
+			// report carries the same exemption, so this ordering is what keeps all
+			// three classifiers from reaching opposite verdicts on the same error.
+			errorType = "local_storage_fault"
+			isPeerError = false
+		case errors.Is(*err, errors.ErrServiceUnavailable):
+			// A local service we depend on was unreachable — ours, not the peer's.
+			// Moved above the consensus and IsNetworkError cases: it was previously
+			// below both, so although it set isPeerError = false, any chain also
+			// carrying a consensus code, or whose text tripped the network substring
+			// match, never reached it and was charged to the peer anyway. The
+			// aerospike batch-read timeout is the common producer.
+			errorType = "local_service_unavailable"
+			isPeerError = false
+		case errors.Is(*err, errors.ErrContextCanceled):
+			// Our own cancellation — a shutdown, or the catchup context being torn
+			// down. Never the peer's doing. There was no case for this at all, so it
+			// fell past every branch to "unknown_error" with isPeerError left true,
+			// charging an honest primary for our own shutdown.
+			//
+			// Matched by CODE, not by errors.IsContextError, even though that helper
+			// is what processCatchupChItem uses. IsContextError falls back to a
+			// substring match over the rendered chain (errors.go Is, error_utils.go
+			// IsContextError), so at this position it also swallowed every error
+			// whose text merely CONTAINED "context canceled" or "context deadline
+			// exceeded". fetchSubtreeFromPeer wraps a failed peer fetch as a
+			// ServiceError naming the peer URL, so an HTTP deadline against a peer,
+			// rolled up into the all-peers-failed ErrExternal, was scored
+			// local_context_cancelled instead of peer_data_unavailable — the label
+			// issue 1368 exists to make visible. The text-matched form still runs,
+			// below ErrExternal where it can no longer take those labels.
+			errorType = "local_context_cancelled"
+			isPeerError = false
+		case errors.Is(*err, errors.ErrBlockHeaderContext):
+			// The parent-header run our own store returned was not anchored at the block's
+			// parent, was not linked, or was too short for the median-time-past window (issue
+			// #1467). Purely local: the serving peer had no part in producing it, so charging it
+			// would demote an honest peer and tear down the session over our own state. Same
+			// reasoning as the 1368 and 1031 fixes below.
+			//
+			// Must precede IsNetworkError and the strings.Contains cases, which match on message
+			// text: IsNetworkError counts a message merely containing "http" or "eof" as a network
+			// error, so an outer wrapper carrying a peer baseURL would reclassify this as a peer
+			// error — exactly what this case exists to prevent.
+			//
+			// It must also precede the consensus case below, for the reason set out on the
+			// storage case at the top of this switch: errors.Is walks the whole chain, so a
+			// wrapper carrying both codes would otherwise be scored a validation_failure with
+			// reportMalicious set. It sat below the consensus case until this change.
+			//
+			// Deliberately NOT a blanket ErrProcessing case: this switch's own
+			// TestReleaseCatchupLock_DrainChargesPrimaryEvenOnMixedCycle uses a bare
+			// NewProcessingError as its example of a generic PEER error, so suppressing all
+			// processing errors here would stop charging peers that deserve it.
+			errorType = "local_header_context_error"
+			isPeerError = false
+		case errors.Is(*err, errors.ErrStateError):
+			// An authoritative FSM refusal (including operator IDLE) is local,
+			// not an error to store against the peer. Earlier data-serving failures
+			// remain attributable through the failedPeers drain below.
+			errorType = "local_fsm_refusal"
+			isPeerError = false
+		case isUnboundTxInvalidVerdict(*err):
+			// An invalid transaction in an unbound subtree list (bitcoin-sv/teranode#4844): corrupt
+			// on the direct peer path, but on catch-up a consensus rejection, scored exactly like
+			// the validation_failure case below. Must precede the corrupt case, which would
+			// otherwise classify it corrupt_block_body and suppress the malicious report.
 			errorType = "validation_failure"
-			// Mark peer as malicious for validation failure
-			u.reportCatchupMalicious(context.Background(), ctx.peerID, "validation_failure")
+			reportMalicious = true
+		case errors.IsBlockCorrupt(*err):
+			// Corrupt block body (bitcoin-sv/teranode#4692): classify for the dashboard but do NOT flag
+			// the peer malicious and do NOT open a generic peer-error window here. The serving
+			// peer was already struck via AddBanScore at the corrupt site, and the block is
+			// re-downloaded; double-charging here would penalize a possibly-sole-source peer
+			// twice. Must precede the ErrBlockInvalid case (corrupt uses a dedicated sentinel,
+			// so it would not match it anyway).
+			//
+			// What the peer does carry from here is one generic catch-up failure charge below,
+			// which feeds the reputation counters (services/blockchain/peer_registry.go's
+			// RecordCatchupFailure path) — the only selection input this route takes — plus a
+			// display-only diagnostic in LastCatchupError. No penalty window is opened, and that
+			// is deliberate: the selection gates key on FullStoragePenaltyUntil, which belongs to
+			// the block-incomplete fault and also demotes a "full" storage claim, so reusing it
+			// for a peer that did deliver a body would record a storage contradiction that never
+			// happened. Excluding a possibly-sole-source peer for a body an honest relay could
+			// have corrupted also risks the self-isolation this work exists to prevent; the DoS
+			// bound is the decaying +10 corrupt-body ban score already applied at the corrupt
+			// site (bitcoin-sv/teranode#4692).
+			errorType = "corrupt_block_body"
+			isPeerError = false
+			reportCorruptBlock = true
+			corruptBlockHash = ctx.corruptBlockHash
+		case !isLocalCatchupFault(*err) && (errors.Is(*err, errors.ErrBlockInvalid) || errors.Is(*err, errors.ErrTxInvalid)):
+			// Gated on the same predicate validateBlocksOnChannel and
+			// processCatchupChItem use, rather than on the case ordering above it.
+			// The ordering already exempts storage and service-unavailable chains by
+			// placing them first, but that only works for codes this switch happens
+			// to have a case for, and it breaks the moment a case moves. Since this
+			// branch sets reportMalicious, an error that any sibling classifier calls
+			// local must not reach it. Making the exemption explicit is also what
+			// lets the text-matched context case sit safely below here.
+			errorType = "validation_failure"
+			// Mark peer as malicious for validation failure (reported after unlock)
+			reportMalicious = true
+		case errors.Is(*err, errors.ErrBlockPolicyDeclined):
+			// This node declined the block under its own local policy (excessiveblocksize). Entirely
+			// our decision: the serving peer delivered the honest chain, so do not charge it — it may
+			// be the sole source ahead (bitcoin-sv/teranode#4692). Its own code, so it is separable
+			// from the retryable wait timeout in the case below, which processCatchupChItem must keep
+			// retrying while it ends the cycle on this one. Must precede the ErrBlockError case: were
+			// the decline ever to be re-wrapped in an ERR_BLOCK_ERROR chain, errors.Is walks the whole
+			// chain and the wait-timeout label would otherwise shadow this one.
+			errorType = "local_block_policy_decline"
+			isPeerError = false
+		case errors.Is(*err, errors.ErrBlockError):
+			// A bare ERR_BLOCK_ERROR on the catchup path is now exactly one thing: the "given up
+			// waiting on previous blocks" ordering timeout (BlockValidation.go's wait loop). It is a
+			// LOCAL timing decision, not the serving peer's fault. The excessiveblocksize decline that
+			// used to share this code moved to ERR_BLOCK_POLICY_DECLINED and is handled in the case
+			// above; peer-attributable failures use dedicated sentinels (corrupt / invalid /
+			// incomplete) handled further above. Do not charge the peer — it may be the sole source
+			// ahead (bitcoin-sv/teranode#4692). Must follow the corrupt and invalid cases so it never
+			// shadows a peer-attributable verdict.
+			errorType = "local_block_wait_timeout"
+			isPeerError = false
+		case errors.Is(*err, errors.ErrExternal):
+			// Every peer attempt failed to fetch subtree data. The individual failures
+			// were already attributed to the peers that produced them
+			// (recordCatchupPeerFailure), so charging the catchup primary here as well
+			// would penalize a healthy peer for another peer's failure — the 0%-success
+			// symptom in issue 1368. Must precede the IsNetworkError case: one peer's
+			// connection error inside the chain would otherwise classify the whole
+			// all-peers-failed error as a network error against the primary.
+			errorType = "peer_data_unavailable"
+			isPeerError = false
+		case errors.IsContextError(*err):
+			// The text-matched half of the context check, deliberately down here.
+			// A context deadline that reaches us without a teranode error code —
+			// context.DeadlineExceeded wrapped by a constructor that does not set
+			// one — is still our own timeout and must not be charged to the primary,
+			// which is what this case was added for. But it matches on rendered
+			// text, so it belongs below every case that matches on a code: storage,
+			// service-unavailable, header-context, consensus and ErrExternal all get
+			// their own label first, and only an otherwise-unclassified context
+			// error lands here. It stays above IsNetworkError, which matches "http"
+			// and "eof" as substrings and would take it.
+			errorType = "local_context_cancelled"
+			isPeerError = false
 		case errors.IsNetworkError(*err):
 			errorType = "network_error"
 		case strings.Contains(errorMsg, "secret mining") || strings.Contains(errorMsg, "secretly mined"):
@@ -361,15 +652,31 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			// Block assembly being behind is a local system error, not a peer error
 			errorType = "local_system_not_ready"
 			isPeerError = false
-		case errors.Is(*err, errors.ErrServiceUnavailable):
-			// Service unavailable errors are local system issues, not peer errors
-			errorType = "local_service_unavailable"
+		case errors.IsTransientBlockIncomplete(*err):
+			// Transient LOCAL catchup-ordering gap (unabsorbed parent, issue 1031). Shares the
+			// ErrBlockIncomplete code, so this case must precede the generic one below. Abort
+			// and retry another peer, but do NOT report a peer failure or open a full-storage
+			// penalty window: the serving peer is honest and possibly the sole source ahead.
+			errorType = "block_incomplete_transient"
 			isPeerError = false
 		case errors.Is(*err, errors.ErrBlockIncomplete):
-			// Incomplete blocks (e.g. seeded peers without full block data) are not peer errors
+			// Peer-attributable incomplete block: the peer served header work it could not back
+			// with a full block body (e.g. seeded peer without full block data). Penalize so a
+			// header-only non-deliverer stops holding top-tier sync eligibility.
 			errorType = "block_incomplete"
 			isPeerError = false
+			reportIncompleteBlock = true
+			incompleteBlockHash = ctx.incompleteBlockHash
 		}
+
+		ctx.failedPeersMu.Lock()
+		if len(ctx.failedPeers) > 0 {
+			failedPeers = make(map[string]string, len(ctx.failedPeers))
+			for id, msg := range ctx.failedPeers {
+				failedPeers[id] = msg
+			}
+		}
+		ctx.failedPeersMu.Unlock()
 
 		u.previousCatchupAttempt = &PreviousAttempt{
 			PeerID:            ctx.peerID,
@@ -383,18 +690,116 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			BlocksValidated:   u.blocksValidated.Load(),
 		}
 
-		// Only store the error in the peer registry if it's a peer-related error
-		// Local system errors (like block assembly being behind) should not affect peer reputation
+		// Only store generic peer errors in the peer registry. Local system errors
+		// and non-malicious incomplete-block reports use their own handling.
 		if isPeerError {
-			u.reportCatchupError(context.Background(), ctx.peerID, errorMsg)
+			reportPeerErr = true
 		} else {
-			u.logger.Infof("[catchup][%s] Skipping peer error report for local system error: %s", ctx.blockUpTo.Hash().String(), errorType)
+			u.logger.Infof("[catchup][%s] Skipping generic peer error report for catchup error type: %s", ctx.blockUpTo.Hash().String(), errorType)
 		}
 	}
 
 	// Clear the active catchup context
 	u.activeCatchupCtx = nil
 	u.activeCatchupCtxMu.Unlock()
+
+	// Make the fire-and-forget reputation gRPC calls outside the lock with a bounded
+	// context, so a stalled P2P service can neither hold activeCatchupCtxMu nor outlive
+	// shutdown. These are best-effort; failures are logged inside the helpers.
+	if reportMalicious || reportPeerErr || reportIncompleteBlock || reportCorruptBlock || len(failedPeers) > 0 {
+		rpcCtx, cancel := context.WithTimeout(context.Background(), catchupReputationReportTimeout)
+		defer cancel()
+
+		// Charge each peer that actually failed to serve data, once, with its own
+		// error text (issue 1368: a healthy peer used to carry another peer's 404).
+		//
+		// Accounting note: this charges a CatchupFailure without a paired
+		// CatchupAttempt for the failing peer (only the primary gets a
+		// reportCatchupAttempt call, at the start of catchup — see catchup.go's
+		// call site). That is new to this change, and there is no precedent for it
+		// in this package: the other sites that charge non-primary peers reach them
+		// through catchup()/catchupFunc(), which calls reportCatchupAttempt
+		// unconditionally, so those charges do have a paired attempt. Accepted
+		// regardless, because CatchupAttempts/CatchupFailures are display/telemetry
+		// counters, not reputation inputs (reputation is computed from the separate
+		// Interaction* counters, which RecordCatchupFailureWithKind keeps internally
+		// consistent). The tradeoff: the displayed attempts/failures ratio for a
+		// fallback-only peer is not a rate.
+		//
+		// This loop is authoritative for every peer in failedPeers, including the
+		// primary — deliberately, even though that means a peer which both failed
+		// a subtree fetch mid-cycle AND caused the cycle's terminal error gets
+		// charged twice for one attempt. An earlier version tried to skip the
+		// primary here whenever the terminal error was a generic peer error, on
+		// the assumption that Server.go's processCatchupChItem would charge it
+		// once instead, using the terminal error. That assumption does not hold
+		// for every terminal error shape: a genuinely local failure produced by
+		// fetchAndStoreSubtreeAndSubtreeData (e.g. its "Local error fetching
+		// subtree ... not retrying with other peers" wrap) is coded
+		// ErrServiceError, which this switch has no specific case for (it falls
+		// to the unknown_error default with isPeerError left true, unless it
+		// happens to wrap a storage error, which the case above now catches), and
+		// Server.go's ErrServiceError branch returns early WITHOUT ever calling
+		// reportCatchupFailureForError. Skipping the primary here in that case
+		// charged it zero times for a real subtree failure it caused — an
+		// under-charge that hides a genuine failure entirely, which is worse
+		// than an over-charge that is at least directionally accurate. Both
+		// increments feed InteractionAttempts/InteractionFailures consistently
+		// (see the peer registry), so the occasional double-charge is a
+		// telemetry precision cost, not a reputation-math break. The two
+		// exceptions are reportIncompleteBlock and reportCorruptBlock, guarded
+		// below, where both charges live in this same function and the skip
+		// carries no such cross-file risk.
+		for failedPeerID, failedMsg := range failedPeers {
+			if (reportIncompleteBlock || reportCorruptBlock) && failedPeerID == peerID {
+				// The terminal verdict already charges the primary below: the
+				// incomplete case via reportCatchupFailureWithKind with the more
+				// specific catchupFailureKindBlockIncomplete (which drives a
+				// documented incomplete-block penalty window a generic charge would
+				// not), and the corrupt case via the single generic charge that
+				// replaces the kinded one. Both calls are local to this function,
+				// so — unlike the cross-file assumption described above — the skip
+				// is safe. Still store the subtree-level error text so it isn't
+				// lost; only the generic failure counter is skipped. On a corrupt
+				// cycle the terminal corrupt message is written after this loop, so
+				// it is the later write and wins in LastCatchupError — correct, the
+				// terminal verdict is the more informative one.
+				u.reportCatchupError(rpcCtx, failedPeerID, failedMsg)
+				continue
+			}
+
+			u.reportCatchupFailure(rpcCtx, failedPeerID)
+			u.reportCatchupError(rpcCtx, failedPeerID, failedMsg)
+		}
+
+		if reportMalicious {
+			u.reportCatchupMalicious(rpcCtx, peerID, "validation_failure")
+		}
+
+		if reportPeerErr {
+			u.reportCatchupError(rpcCtx, peerID, errorMsg)
+		}
+
+		if reportIncompleteBlock {
+			u.reportCatchupFailureWithKind(rpcCtx, peerID, catchupFailureKindBlockIncomplete, incompleteBlockHash)
+		}
+
+		if reportCorruptBlock {
+			// Exactly one reputation charge, of the same magnitude a kinded report would have
+			// carried (the p2p side resolves every kind other than block_incomplete to a plain
+			// RecordCatchupFailure), plus the peer-visible diagnostic written to LastCatchupError
+			// and surfaced by the dashboard. No penalty window — see the corrupt case in the
+			// classification switch above for why (bitcoin-sv/teranode#4692).
+			u.reportCatchupFailure(rpcCtx, peerID)
+
+			corruptMsg := "corrupt block body during catchup"
+			if corruptBlockHash != "" {
+				corruptMsg = "corrupt block body during catchup: " + corruptBlockHash
+			}
+
+			u.reportCatchupError(rpcCtx, peerID, corruptMsg)
+		}
+	}
 
 	// Update catchup tracking for health checks
 	u.catchupStatsMu.Lock()
@@ -415,6 +820,70 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 	}
 }
 
+// recordCatchupPeerFailure attributes a data-serving failure to the peer that caused
+// it, charging it against whichever catchup cycle is active when the call is made.
+// Best-effort: with no cycle active the call is a no-op.
+//
+// errors.IsLocalError is checked here — not at each call site — so every caller
+// gets the guard for free: a context cancellation (catchup abort / peer switch /
+// shutdown landing mid-retry) or a local storage failure (subtreeStore.Set) is ours,
+// not the peer's, and must never land an innocent peer in failedPeers.
+//
+// Attribution reads the server-wide u.activeCatchupCtx rather than taking a cycle
+// from the caller. Two properties define the limits of that read, and both are worth
+// re-checking before changing anything on this path.
+//
+// A catchup cycle outlives every fetch it starts. fetchAndStoreSubtreeData detaches
+// its context (context.WithoutCancel) so an aborted fetch still finishes writing,
+// but the goroutine stays inside the errgroup fetchSubtreeDataForBlock waits on,
+// which blockWorker waits on, which catchup waits on before releaseCatchupLock
+// clears the context. A slow peer can therefore delay the end of its cycle but can
+// never outlive it. That delay is not a single subtree_data fetch timeout: the
+// deadline is installed per call with no shared budget, and one subtree makes up to
+// two calls per peer (a cache-bypass retry) across each alternative peer, so the
+// drain ceiling is a multiple of that timeout — see fetchAndStoreSubtreeAndSubtreeData.
+// The bound is larger in magnitude but still finite, so a failure raised by a
+// catchup's own fetch is never charged to a later cycle nor dropped into a cleared
+// context. Making any fetch on that path fire-and-forget breaks this and requires the
+// cycle to be threaded from the caller instead — as would an injected
+// fetchSubtreeDataForBlockFn that does not preserve that join.
+// In adaptive-fetch optimistic mode the per-subtree fetch is skipped entirely, so on
+// that branch there is nothing to join and the guarantee holds vacuously rather than
+// by the join above.
+//
+// Not every caller is a catchup. RevalidateBlock reaches this path through
+// fetchSubtreeDataForBlock on its own gRPC goroutine with no interlock against a
+// running catchup, so its per-subtree failures land in whatever catchup cycle is
+// active. releaseCatchupLock drains failedPeers only inside its *err != nil branch,
+// so those failures are charged only if that concurrent cycle itself ends in error;
+// a cycle that succeeds discards the map untouched and the RevalidateBlock failure is
+// then charged to no one. When a failure is charged, it lands on the peer that
+// returned it for that fetch, not on some other peer; that does not prove the peer
+// deserves a reputational charge, because a peer that 404s subtree data the pruner
+// removed did nothing wrong.
+func (u *Server) recordCatchupPeerFailure(peerID string, err error) {
+	if peerID == "" || err == nil || errors.IsLocalError(err) {
+		return
+	}
+
+	u.activeCatchupCtxMu.RLock()
+	catchupCtx := u.activeCatchupCtx
+	u.activeCatchupCtxMu.RUnlock()
+
+	if catchupCtx == nil {
+		return
+	}
+
+	catchupCtx.failedPeersMu.Lock()
+	defer catchupCtx.failedPeersMu.Unlock()
+
+	if catchupCtx.failedPeers == nil {
+		catchupCtx.failedPeers = make(map[string]string)
+	}
+
+	catchupCtx.failedPeers[peerID] = err.Error()
+}
+
 // fetchHeaders retrieves block headers from the peer using block locator pattern.
 // Uses the headers_from_common_ancestor endpoint for efficient fetching.
 // IMPORTANT: Headers should extend to at least a checkpoint when possible to ensure
@@ -431,7 +900,7 @@ func (u *Server) fetchHeaders(ctx context.Context, catchupCtx *CatchupContext) e
 
 	result, _, err := u.catchupGetBlockHeaders(ctx, catchupCtx.blockUpTo, catchupCtx.peerID, catchupCtx.baseURL)
 	if err != nil {
-		return errors.NewProcessingError("[catchup][%s] failed to get block headers: %w", catchupCtx.blockUpTo.Hash().String(), err)
+		return errors.NewProcessingError("[catchup][%s] failed to get block headers", catchupCtx.blockUpTo.Hash().String(), err)
 	}
 
 	catchupCtx.headersFetchResult = result
@@ -459,54 +928,77 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 		return errors.NewProcessingError("[catchup][%s] no headers received from peer", catchupCtx.blockUpTo.Hash().String())
 	}
 
-	currentHeight := u.utxoStore.GetBlockHeight()
+	// Where the two chains diverge is a property of the accepted chain, so the baseline is
+	// the blockchain store's tip — the same tip checkSecretMiningFromCommonAncestor weighs
+	// against. It used to be the UTXO store's height, which is a counter refreshed
+	// asynchronously on each block notification and can trail the accepted chain by an
+	// unbounded amount while that subscription is starved or during bulk sync. Mixing the two
+	// sources made the fork depth wrong in both directions: understated here (the ancestor was
+	// pinned at the lagging height, and the depth measured from that same height), so a
+	// genuinely too-deep fork could slip under the coinbase-maturity gate; and overstated in
+	// the secret-mining check, which measures from the real tip, so an honest peer offering a
+	// shallow fork could be accused of withholding a chain. Nothing here needs the ancestor's
+	// UTXOs to be present — catchup validates forward and never unspends or rewinds.
+	//
+	// This is the only place the ancestor search, the fork-depth baseline and the work
+	// comparison take their tip from: it is stashed on the context and handed to the later
+	// steps rather than re-read, so all three measure against one fixed tip.
+	// catchupGetBlockHeaders reads the tip too, earlier in this same catchup, but only to seed
+	// the block locator and the startHash/startHeight it reports — neither feeds a decision
+	// here, so a tip that moves between the two reads costs at most a locator that starts
+	// lower than it needed to.
+	_, bestMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		// Our own RPC failed. ServiceError so the caller retries without charging the peer for
+		// a local fault (see processCatchupChItem's ErrServiceError branch).
+		return errors.NewServiceError("[catchup][%s] failed to read best block header for the common-ancestor search", catchupCtx.blockUpTo.Hash().String(), err)
+	}
+
+	currentHeight := bestMeta.Height
 	catchupCtx.currentHeight = currentHeight
+	catchupCtx.bestBlockMeta = bestMeta
 
 	// Walk through peer's headers (oldest to newest) to find the highest common ancestor
 	commonAncestorIndex := -1
-	u.logger.Debugf("[catchup][%s] Checking %d peer headers for common ancestor (current UTXO height: %d)", catchupCtx.blockUpTo.Hash().String(), len(peerHeaders), currentHeight)
+	var commonAncestorMeta *model.BlockHeaderMeta
+	u.logger.Debugf("[catchup][%s] Checking %d peer headers for common ancestor (current height: %d)", catchupCtx.blockUpTo.Hash().String(), len(peerHeaders), currentHeight)
 
 	for i, header := range peerHeaders {
-		exists, err := u.blockchainClient.GetBlockExists(ctx, header.Hash())
+		// GetBlockHeader conveys both existence and height in a single RPC: a
+		// not-found error means the block is absent from our chain (stop the search),
+		// while any other error is a genuine failure.
+		_, meta, err := u.blockchainClient.GetBlockHeader(ctx, header.Hash())
 		if err != nil {
-			return errors.NewProcessingError("[catchup][%s] failed to check if block %s exists: %v", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
-		}
-
-		if exists {
-			// Get the block's height to ensure it's not ahead of our UTXO store
-			_, meta, err := u.blockchainClient.GetBlockHeader(ctx, header.Hash())
-			if err != nil {
-				return errors.NewProcessingError("[catchup][%s] failed to get metadata for block %s: %v", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
+			if errors.Is(err, errors.ErrBlockNotFound) {
+				u.logger.Debugf("[catchup][%s] Block %s not in our chain - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String())
+				break // Once we find a header we don't have, stop
 			}
 
-			// Only consider blocks at or below our current UTXO height as potential common ancestors
-			// Blocks ahead of our UTXO height exist in blockchain store but aren't fully processed yet
-			if meta.Height > currentHeight {
-				u.logger.Debugf("[catchup][%s] Block %s at height %d is ahead of current UTXO height %d - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, currentHeight)
-				break
-			}
-
-			commonAncestorIndex = i // Keep updating to find the LAST match
-			u.logger.Debugf("[catchup][%s] Block %s exists in our chain at height %d (index %d)", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, i)
-		} else {
-			u.logger.Debugf("[catchup][%s] Block %s not in our chain - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String())
-			break // Once we find a header we don't have, stop
+			return errors.NewProcessingError("[catchup][%s] failed to get header for block %s: %v", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
 		}
+
+		// A candidate ancestor must be at or below our accepted tip. GetBlockHeader reports
+		// any block held in the store, including one on a side chain we did not adopt, which
+		// can sit above our tip — so without this the walk could pick an ancestor higher than
+		// the chain we are measuring divergence from, tripping the invariant
+		// checkSecretMiningFromCommonAncestor asserts. This is the same ceiling as before;
+		// what changed is only where the height comes from.
+		if meta.Height > currentHeight {
+			u.logger.Debugf("[catchup][%s] Block %s at height %d is ahead of our tip %d - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, currentHeight)
+			break
+		}
+
+		commonAncestorIndex = i // Keep updating to find the LAST match
+		commonAncestorMeta = meta
+		u.logger.Debugf("[catchup][%s] Block %s exists in our chain at height %d (index %d)", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, i)
 	}
 
 	if commonAncestorIndex == -1 {
 		return errors.NewProcessingError("[catchup][%s] no common ancestor found in peer headers", catchupCtx.blockUpTo.Hash().String())
 	}
 
-	// Get the common ancestor header and its metadata
-	commonAncestorHeader := peerHeaders[commonAncestorIndex]
-	commonAncestorHash := commonAncestorHeader.Hash()
-
-	// Get metadata for the common ancestor
-	_, commonAncestorMeta, err := u.blockchainClient.GetBlockHeader(ctx, commonAncestorHash)
-	if err != nil {
-		return errors.NewProcessingError("[catchup][%s] failed to get metadata for common ancestor %s: %v", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), err)
-	}
+	// The common ancestor's metadata was already fetched during the walk above.
+	commonAncestorHash := peerHeaders[commonAncestorIndex].Hash()
 
 	if commonAncestorMeta.Invalid {
 		return errors.NewBlockInvalidError("[catchup][%s] common ancestor %s at height %d is marked invalid, not catching up", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height)
@@ -539,6 +1031,12 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 func (u *Server) validateForkDepth(catchupCtx *CatchupContext) error {
 	u.logger.Debugf("[catchup][%s] Step 3: Validating fork depth against coinbase maturity", catchupCtx.blockUpTo.Hash().String())
 
+	// Reject only when fork depth strictly exceeds CoinbaseMaturity. A reorg of depth d
+	// invalidates a coinbase at height G iff G >= H - d + 1; for that coinbase to have
+	// been spent in the old chain we need G + CoinbaseMaturity <= H, which has a solution
+	// only when d > CoinbaseMaturity. So d == CoinbaseMaturity is safe (no matured
+	// coinbase in the reorged range can yet have been spent), and `>` is the correct
+	// operator here, not `>=`. See issue #4592.
 	if catchupCtx.forkDepth > uint32(u.settings.ChainCfgParams.CoinbaseMaturity) {
 		u.logger.Errorf("[catchup][%s] fork depth (%d blocks) exceeds coinbase maturity (%d blocks)", catchupCtx.blockUpTo.Hash().String(), catchupCtx.forkDepth, u.settings.ChainCfgParams.CoinbaseMaturity)
 
@@ -570,7 +1068,18 @@ func (u *Server) validateForkDepth(catchupCtx *CatchupContext) error {
 func (u *Server) checkSecretMining(ctx context.Context, catchupCtx *CatchupContext) error {
 	u.logger.Debugf("[catchup][%s] Step 4: Checking for secret mining", catchupCtx.blockUpTo.Hash().String())
 
-	return u.checkSecretMiningFromCommonAncestor(ctx, catchupCtx.blockUpTo, catchupCtx.peerID, catchupCtx.baseURL, catchupCtx.commonAncestorHash, catchupCtx.commonAncestorMeta)
+	// The headers the peer offers beyond the common ancestor form the candidate chain
+	// whose cumulative work we weigh against our local chain. Not yet filtered at this
+	// point, so slice directly after the common ancestor index.
+	var offeredHeaders []*model.BlockHeader
+	if catchupCtx.headersFetchResult != nil {
+		peerHeaders := catchupCtx.headersFetchResult.Headers
+		if catchupCtx.commonAncestorIndex >= 0 && catchupCtx.commonAncestorIndex+1 < len(peerHeaders) {
+			offeredHeaders = peerHeaders[catchupCtx.commonAncestorIndex+1:]
+		}
+	}
+
+	return u.checkSecretMiningFromCommonAncestor(ctx, catchupCtx.blockUpTo, catchupCtx.peerID, catchupCtx.baseURL, catchupCtx.commonAncestorHash, catchupCtx.commonAncestorMeta, catchupCtx.bestBlockMeta, offeredHeaders)
 }
 
 // filterHeaders filters headers to only those after the common ancestor that we don't have.
@@ -701,9 +1210,12 @@ func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) erro
 //   - int: Number of checkpoints successfully verified
 //   - error: If checkpoint verification fails (hash mismatch)
 func (u *Server) verifyCheckpointsAgainstHeaders(catchupCtx *CatchupContext) (int, error) {
-	// Get the highest checkpoint height for reference
-	highestCheckpointHeight := blockchain.HighestCheckpointHeight(catchupCtx.checkpoints)
-	catchupCtx.highestCheckpointHeight = highestCheckpointHeight
+	// Track the highest checkpoint height actually verified (hash-matched) in this run.
+	// Quick validation eligibility must be bound to what was genuinely proven this run,
+	// not to the highest checkpoint in the globally configured list - a checkpoint that
+	// is merely configured but falls outside the current catchup range (or is never
+	// reached by the loop below) provides no cryptographic guarantee for this session.
+	var highestVerifiedCheckpointHeight uint32
 
 	firstBlockHeight := catchupCtx.commonAncestorMeta.Height + 1
 	lastBlockHeight := catchupCtx.commonAncestorMeta.Height + uint32(len(catchupCtx.blockHeaders))
@@ -736,8 +1248,14 @@ func (u *Server) verifyCheckpointsAgainstHeaders(catchupCtx *CatchupContext) (in
 
 			u.logger.Infof("[catchup][%s] Verified checkpoint at height %d with hash %s", catchupCtx.blockUpTo.Hash().String(), checkpointHeight, checkpoint.Hash.String())
 			checkpointsChecked++
+
+			if checkpointHeight > highestVerifiedCheckpointHeight {
+				highestVerifiedCheckpointHeight = checkpointHeight
+			}
 		}
 	}
+
+	catchupCtx.highestCheckpointHeight = highestVerifiedCheckpointHeight
 
 	return checkpointsChecked, nil
 }
@@ -805,7 +1323,7 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 	var writeJobsChan chan *SubtreeWriteJob
 
 	// Transition FSM to CATCHINGBLOCKS for all catchup (chain-extending and fork blocks).
-	// If the FSM rejects the transition (e.g. node is LEGACYSYNCING), the error propagates
+	// If the FSM rejects the transition, the error propagates
 	// up to the catchupCh handler which handles it gracefully without penalizing the peer.
 	if err := u.setFSMCatchingBlocks(ctx, catchupCtx, &size); err != nil {
 		return err
@@ -846,11 +1364,43 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 
 	// Wait for both operations to complete
 	err := errorGroup.Wait()
+
+	// Release any wait barrier still blocked on a job no worker will ever receive
+	// (bitcoin-sv/teranode#4692). A job is only ever Done()'d by a worker that actually receives it,
+	// so when the pool tears down on a cancelled context — an external shutdown, or any
+	// subtreeWriteWorker's own Serialize/Set failure cancelling gCtx for the whole group — the jobs
+	// left in the buffer are never counted down. tryQuickValidation's select on ctx.Done() stops the
+	// CALLER hanging; it does not release the helper goroutine it spawned, which stays blocked in
+	// wg.Wait() for the life of the process holding the WaitGroup and the closure. Draining here
+	// counts every stranded job down exactly once, which is what lets that goroutine finish.
+	//
+	// This terminates: close(writeJobsChan) is deferred inside the goroutine the errgroup waits on
+	// above, so the channel is always already closed by the time Wait returns.
+	drainWriteJobs(writeJobsChan)
+
 	if err != nil {
 		catchupCtx.catchupError = err
 	}
 
 	return err
+}
+
+// drainWriteJobs receives every subtree write job left in ch and counts it down, so a caller blocked
+// in wg.Wait() for a job no worker will ever receive is released (bitcoin-sv/teranode#4692).
+//
+// Only safe to call once the producing errgroup has settled, because it relies on the channel being
+// closed to terminate. Nil-safe on both axes: ch is nil when quick validation is disabled (no worker
+// pool, no channel), and job.Done is nil for a job constructed without a barrier.
+func drainWriteJobs(ch <-chan *SubtreeWriteJob) {
+	if ch == nil {
+		return
+	}
+
+	for job := range ch {
+		if job != nil && job.Done != nil {
+			job.Done.Done()
+		}
+	}
 }
 
 // cleanup cleans up resources after catchup.
@@ -939,6 +1489,73 @@ func (u *Server) filterExistingBlocks(ctx context.Context, headers []*model.Bloc
 	return newHeaders, nil
 }
 
+// reportValidatedHeaderProgress records locally verified header work for the
+// peer that served the header chain. The report is advisory and best-effort.
+//
+// This runs after the per-header proof-of-work checks but before Step 10's full
+// block validation, so the credited value is per-header-PoW work, not yet
+// difficulty-adjustment-validated work. That is safe against upward forgery: a
+// higher credited value requires correspondingly harder bits backed by real PoW,
+// so a peer cannot inflate its rank. A valid-PoW but wrong-difficulty chain can
+// still be credited here; it is rejected later by full block validation.
+func (u *Server) reportValidatedHeaderProgress(catchupCtx *CatchupContext) {
+	height, blockHash, workBytes, ok := u.computeValidatedHeaderProgress(catchupCtx)
+	if !ok {
+		return
+	}
+
+	// Advisory best-effort report made while the global catchup single-flight lock is
+	// held: bound it with the same timeout releaseCatchupLock uses for its reputation
+	// gRPC calls so a wedged p2p service whose transport still answers keepalives cannot
+	// stall all node catchup on the unbounded service context.
+	rpcCtx, cancel := context.WithTimeout(context.Background(), catchupReputationReportTimeout)
+	defer cancel()
+
+	u.reportValidatedChainProgress(rpcCtx, catchupCtx.peerID, height, blockHash.String(), workBytes)
+}
+
+func (u *Server) computeValidatedHeaderProgress(catchupCtx *CatchupContext) (uint32, *chainhash.Hash, []byte, bool) {
+	if catchupCtx == nil || catchupCtx.commonAncestorMeta == nil {
+		return 0, nil, nil, false
+	}
+
+	if len(catchupCtx.blockHeaders) == 0 {
+		return 0, nil, nil, false
+	}
+
+	if len(catchupCtx.commonAncestorMeta.ChainWork) == 0 {
+		u.logger.Warnf("[catchup][%s] Skipping validated progress report: common ancestor chainwork is empty", catchupCtx.blockUpTo.Hash().String())
+		return 0, nil, nil, false
+	}
+
+	totalWork := new(big.Int).SetBytes(catchupCtx.commonAncestorMeta.ChainWork)
+	if totalWork.Sign() <= 0 {
+		u.logger.Warnf("[catchup][%s] Skipping validated progress report: common ancestor chainwork is malformed", catchupCtx.blockUpTo.Hash().String())
+		return 0, nil, nil, false
+	}
+
+	height := catchupCtx.commonAncestorMeta.Height
+	var lastHash *chainhash.Hash
+
+	for _, header := range catchupCtx.blockHeaders {
+		if header == nil {
+			u.logger.Warnf("[catchup][%s] Skipping validated progress report: nil header in validated range", catchupCtx.blockUpTo.Hash().String())
+			return 0, nil, nil, false
+		}
+
+		bits := binary.LittleEndian.Uint32(header.Bits.CloneBytes())
+		totalWork.Add(totalWork, work.CalcBlockWork(bits))
+		height++
+		lastHash = header.Hash()
+	}
+
+	if lastHash == nil {
+		return 0, nil, nil, false
+	}
+
+	return height, lastHash, totalWork.Bytes(), true
+}
+
 // recordMaliciousAttempt records a malicious attempt from a peer.
 // Updates peer metrics and logs security warnings.
 //
@@ -978,25 +1595,68 @@ func (u *Server) setFSMCatchingBlocks(ctx context.Context, catchupCtx *CatchupCo
 }
 
 // restoreFSMState restores the FSM state after catchup.
-// Returns the node to RUN state if it was in CATCHINGBLOCKS state.
+// Requests RUN from the blockchain authority, which serializes promotion with
+// operator STOP and refuses automatic promotion from IDLE. Transient failures
+// receive bounded retries because a caught-up node may not run catchup again.
 //
 // Parameters:
 //   - ctx: Context for cancellation
 //   - catchupCtx: Catchup context for logging
 func (u *Server) restoreFSMState(ctx context.Context, catchupCtx *CatchupContext) {
-	state, err := u.blockchainClient.GetFSMCurrentState(ctx)
-	if err != nil {
-		u.logger.Errorf("[catchup] failed to get FSM current state: %v", err)
-		return
+	if ctx.Err() != nil {
+		return // Normal shutdown has no promotion to attempt.
 	}
-
-	if state != nil && *state == blockchain.FSMStateCATCHINGBLOCKS {
-		u.logger.Infof("[catchup][%s] Restoring FSM to RUN state", catchupCtx.blockUpTo.Hash().String())
-
-		if err = u.blockchainClient.Run(ctx, "blockvalidation/Server"); err != nil {
-			u.logger.Errorf("[catchup][%s] failed to send RUN event: %v", catchupCtx.blockUpTo.Hash().String(), err)
+	var err error
+	attempts := 0
+	for attempts < catchupPromotionAttempts {
+		if err = ctx.Err(); err != nil {
+			break
+		}
+		attempts++
+		// Never use a cached state read as admission. Only the authority can
+		// decide atomically whether RUN is still permitted after operator STOP.
+		err = u.blockchainClient.Run(ctx, "blockvalidation/Server")
+		if err == nil {
+			return
+		}
+		if ctx.Err() != nil || !retryableFSMPromotionError(err) || attempts == catchupPromotionAttempts {
+			break
+		}
+		u.logger.Warnf("[catchup][%s] RUN promotion attempt %d failed; retrying in %s: %v", catchupCtx.blockUpTo.Hash().String(), attempts, catchupPromotionRetryDelay, err)
+		timer := time.NewTimer(catchupPromotionRetryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			err = ctx.Err()
+		case <-timer.C:
+		}
+		if ctx.Err() != nil {
+			break
 		}
 	}
+	if ctx.Err() != nil {
+		return // Cancellation during backoff is also normal shutdown.
+	}
+	// This message match only selects log severity. State admission and retry
+	// classification remain controlled by the authority and typed errors.
+	if errors.Is(err, errors.ErrStateError) && strings.Contains(err.Error(), "automatic RUN refused from IDLE") {
+		u.logger.Infof("[catchup][%s] Automatic RUN declined while operator IDLE after %d attempts; explicit operator action is required: %v", catchupCtx.blockUpTo.Hash().String(), attempts, err)
+		return
+	}
+	u.logger.Warnf("[catchup][%s] RUNNING not durably confirmed after %d attempts; inspect FSM state, mining readiness and store health before retrying RUN: %v", catchupCtx.blockUpTo.Hash().String(), attempts, err)
+}
+
+func retryableFSMPromotionError(err error) bool {
+	if errors.Is(err, context.Canceled) || status.Code(err) == codes.Canceled {
+		return false
+	}
+	// A failed checkpoint read is a StateError wrapping a deadline or storage
+	// cause. Retry those causes; plain below-checkpoint/IDLE refusals have none.
+	if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
+		return true
+	}
+	return errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrStorageUnavailable) ||
+		errors.Is(err, errors.ErrServiceUnavailable) || status.Code(err) == codes.Unavailable
 }
 
 // validateBlocksOnChannel processes and validates blocks received from the channel.
@@ -1044,7 +1704,7 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 			cachedHeaders, _ := u.headerChainCache.GetValidationHeaders(block.Hash())
 
 			// Try quick validation if applicable
-			tryNormalValidation, err := u.tryQuickValidation(gCtx, block, catchupCtx, peerID, baseURL, writeJobsChan)
+			tryNormalValidation, err := u.tryQuickValidation(gCtx, block, catchupCtx, peerID, baseURL, writeJobsChan, item.freshlyWritten)
 			if err != nil {
 				return err
 			}
@@ -1053,10 +1713,26 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 				// Standard validation path for blocks not verified by checkpoints
 				// Create validation options with cached headers
 				opts := &ValidateBlockOptions{
-					CachedHeaders:           cachedHeaders,
-					IsCatchupMode:           true,
+					CachedHeaders: cachedHeaders,
+					IsCatchupMode: true,
+					// UNCONDITIONAL, and deliberately not derived from the peer-path opt-in helper
+					// that processBlockFound uses. This caller supplies CachedHeaders, whose run holds
+					// only the block's in-batch predecessors, so the optimistic branch's synchronous
+					// CheckHeaderContextual would evaluate the median-time-past window against a run of
+					// 1..10 headers that does not reach genesis, reject the first ten blocks of every
+					// batch with a header-context error, abort the cycle and charge the honest primary a
+					// catch-up failure. This is the precondition recorded on the cached-header read in
+					// ValidateBlockWithOptions; lifting it needs the header cache to top up short windows
+					// from the store first (issue 1499). The optimistic-mining peer opt-in therefore
+					// governs only the peer-served new-block path (bitcoin-sv/teranode#4692).
 					DisableOptimisticMining: true,
-					PeerID:                  peerID,
+					// The catch-up primary, which is the right party for any corrupt verdict that
+					// reaches ValidateBlockWithOptions from here: per-subtree bytes were hash-verified
+					// against the requested hash at fetch time and any mismatch was already struck
+					// against the serving peer there (fetchAndStoreSubtree), so a surviving whole-body
+					// merkle mismatch is a property of the primary's own subtree list, not of whichever
+					// peer parallel fetch happened to assign a subtree to (bitcoin-sv/teranode#4692).
+					PeerID: peerID,
 				}
 
 				// Validate the block using standard validation
@@ -1066,23 +1742,87 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 
 					// Incomplete block (e.g. no coinbase from seeded peer) — abort catchup on this peer
 					// Block was NOT stored as invalid, so another peer can provide the full version
-					// Failure reporting is handled by the caller (Server.go / peer_selection.go)
+					// Failure reporting is centralized in releaseCatchupLock.
 					if errors.Is(err, errors.ErrBlockIncomplete) {
+						catchupCtx.incompleteBlockHash = block.Hash().String()
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s is incomplete, aborting catchup", blockUpTo.Hash().String(), block.Hash().String(), peerID)
-					} else if errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid) {
-						// ValidateBlockWithOptions already stored the block as invalid if it's a consensus violation
-						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s violates consensus rules (already stored as invalid by ValidateBlockWithOptions)", blockUpTo.Hash().String(), block.Hash().String())
+					} else if isUnboundTxInvalidVerdict(err) {
+						// An invalid transaction in the primary's subtree list (bitcoin-sv/teranode#4844).
+						// Corrupt on the direct path, but a consensus rejection here, so it is tested
+						// ahead of the corrupt branch below. No corruptBlockHash and no blob deletion:
+						// each blob was verified against its name at fetch time, so a retry reads the
+						// right bytes, and an honest different subtree list uses different keys.
+						// This abort does not end the cycle: processCatchupChItem still walks the
+						// alternative peers for this verdict, because the list is unbound. If the primary
+						// named its own subtrees, another peer serves a different, valid list. If the fault
+						// is in the miner's real body, every alternative fails the same way, bounded by
+						// CatchupMaxAttemptsPerBlock. The primary is responsible under the attribution
+						// rule on the options above.
+						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s carries an invalid transaction, rejected as a consensus failure", blockUpTo.Hash().String(), block.Hash().String(), peerID)
+						u.reportCatchupMalicious(gCtx, peerID, "invalid_block_validation")
+					} else if errors.IsBlockCorrupt(err) {
+						// Corrupt block body (bitcoin-sv/teranode#4692): the serving peer was already struck via
+						// AddBanScore inside ValidateBlockWithOptions and the block was NOT stored
+						// invalid. Do NOT report the peer malicious — an honest relay can forward a
+						// corrupted body. Abort so the shared dispatch re-downloads a fresh body from
+						// another peer (releaseCatchupLock classifies it as corrupt_block_body).
+						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s from peer %s has a corrupt body, aborting for re-download", blockUpTo.Hash().String(), block.Hash().String(), peerID)
+
+						// Capture the hash so releaseCatchupLock can name it in the peer-visible
+						// catch-up diagnostic (LastCatchupError) and in the dashboard's
+						// PreviousAttempt (bitcoin-sv/teranode#4692).
+						catchupCtx.corruptBlockHash = block.Hash().String()
+
+						// Delete the peer-supplied .subtree blobs this attempt wrote for the body that
+						// just failed. Each of them DOES hash to the subtree the primary named — that is
+						// verified at the fetch site before the write — but the roots of the named set do
+						// not combine to the header merkle root, so the assembled body is the thing that
+						// failed (see this function's twin argument on tryQuickValidation, the ATTRIBUTION
+						// INVARIANT block). findLocalSubtreeFile consults the SubtreeToCheck marker first,
+						// so leaving these on disk lets the same failing body be re-read on retry. The
+						// fresh re-download re-writes them, so removal is safe. On a delete failure,
+						// preserve the corrupt classification (see the quick path) — never downgrade it.
+						if delErr := u.removeCatchupSubtreeFiles(gCtx, catchupCtx, item.freshlyWritten); delErr != nil {
+							u.logger.Errorf("[catchup:validateBlocksOnChannel][%s] block %s: failed to remove corrupt .subtree files: %v", blockUpTo.Hash().String(), block.Hash().String(), delErr)
+						}
+					} else if shouldReportConsensusMalicious(err) {
+						// The block violated a consensus rule and was rejected. Whether
+						// ValidateBlockWithOptions ALSO persisted a record depends on whether the
+						// verdict was bound to the header: the header-only verdicts (proof-of-work
+						// limit, declared target, checkpoint conflict, expected difficulty bits,
+						// contextual header rules) deliberately persist nothing, because they are
+						// final and the header behind them is cheap to fabricate
+						// (bitcoin-sv/teranode#4844). Do not assume a stored invalid row exists here.
+						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s violates consensus rules, rejected (a record is persisted only for a header-bound verdict)", blockUpTo.Hash().String(), block.Hash().String())
 						u.reportCatchupMalicious(gCtx, peerID, "invalid_block_validation")
 					}
 
-					// Record metric for validation failure
-					if prometheusCatchupErrors != nil {
+					// Record metric for validation failure. A local fault is not the
+					// peer's doing, so it is charged neither to reputation (the
+					// consensus branch above carries the same exemption, via the same
+					// predicate) nor to telemetry, which would otherwise leave the
+					// dashboards blaming an honest peer for this node's disk, its
+					// aerospike timeout or its own shutdown.
+					//
+					// Gated on isLocalCatchupFault rather than ErrStorageError alone so
+					// this agrees with releaseCatchupLock and processCatchupChItem on
+					// every code, not just one. errors.Is walks the whole chain, so any
+					// wrap carrying both a consensus code and a local one would
+					// otherwise be scored local there and charged here.
+					if prometheusCatchupErrors != nil && !isLocalCatchupFault(err) {
 						prometheusCatchupErrors.WithLabelValues(peerID, "validation_failure").Inc()
 					}
 
 					return err
 				}
 			}
+
+			// The one point both the quick-validation success (tryQuickValidation returning
+			// false, nil) and the normal-validation success converge, so it is where this run
+			// learns that the chain now depends on this block's subtrees. Registering here — and
+			// the fact that this consumer loop is sequential — guarantees the hashes are protected
+			// before any LATER block's corrupt cleanup runs (bitcoin-sv/teranode#4692).
+			catchupCtx.markSubtreesCommitted(block)
 
 			// Block validated successfully — credit reputation to all peers that contributed data
 			u.reportValidBlockForPeers(gCtx, peerID, block.Hash().String(), item.contributingPeers)
@@ -1103,9 +1843,23 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 	return nil
 }
 
-// tryQuickValidation attempts quick validation for checkpointed blocks
+// tryQuickValidation attempts quick validation for checkpointed blocks.
+// fetchFreshlyWritten is the fetch phase's own freshness set for this block (get_blocks.go,
+// carried on blockForValidation.freshlyWritten) — the (hash, fileType) pairs the earlier
+// fetchSubtreeDataForBlock call itself wrote for FileTypeSubtreeToCheck/FileTypeSubtreeData,
+// before this block ever reached quick validation. It is merged into the corrupt-cleanup set
+// below but never mutated here (bitcoin-sv/teranode#4692).
+//
+// ATTRIBUTION INVARIANT relied on by the corrupt strike below. Both peer-supplied blobs for a
+// subtree are bound to the hash the catch-up primary named in its block message: fetchAndStoreSubtree
+// verifies the node bytes hash to the requested subtree before storing FileTypeSubtreeToCheck, and
+// fetchAndStoreSubtreeData validates the data against that subtree's own nodes
+// (subtreepkg.NewSubtreeDataFromReader plus model.MissingSubtreeDataTxs). A per-subtree fault is
+// therefore struck at the fetch site, against the peer that served the bytes. What can still reach
+// here is a WHOLE-BODY merkle mismatch, and that is a property of the primary's own subtree list —
+// so catchupCtx.peerID / peerID is the correct party by argument, not by default.
 // Returns true if normal validation should be tried, false if quick validation succeeded
-func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, catchupCtx *CatchupContext, peerID, baseURL string, writeJobsChan chan<- *SubtreeWriteJob) (bool, error) {
+func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, catchupCtx *CatchupContext, peerID, baseURL string, writeJobsChan chan<- *SubtreeWriteJob, fetchFreshlyWritten map[chainhash.Hash]map[fileformat.FileType]struct{}) (bool, error) {
 	// Determine if this specific block can use quick validation
 	// A block can use quick validation if it's at or below the highest verified checkpoint height
 	canUseQuickValidation := catchupCtx.useQuickValidation && block.Height <= catchupCtx.highestCheckpointHeight
@@ -1131,18 +1885,162 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 		return true, nil // Fall back to normal validation
 	}
 
-	// Quick validation: create UTXOs for the block and validate transactions in parallel
-	if err := u.blockValidation.quickValidateBlockAsync(ctx, block, peerID, baseURL, writeJobsChan); err != nil {
-		if prometheusCatchupErrors != nil {
+	// Quick validation: create UTXOs for the block and validate transactions in parallel.
+	// wg tracks every write job THIS block queued to the shared async subtree writer;
+	// freshlyWritten records exactly which (hash, FileTypeSubtree) pairs quick validation's own
+	// build phase wrote. Both are populated even on a failure return, since subtree processing
+	// runs to completion (or to its own failure point) before quickValidateBlockAsync ever
+	// returns (bitcoin-sv/teranode#4692).
+	wg, freshlyWritten, err := u.blockValidation.quickValidateBlockAsync(ctx, block, peerID, baseURL, writeJobsChan)
+	if err != nil {
+		// As in validateBlocksOnChannel: do not charge a local fault to the peer,
+		// even in telemetry, and use the same predicate the other two sites use.
+		if prometheusCatchupErrors != nil && !isLocalCatchupFault(err) {
 			prometheusCatchupErrors.WithLabelValues(peerID, "validation_failure").Inc()
 		}
 
 		// Block is incomplete (e.g. seeded peer without full block data) — abort catchup for this peer
 		// Keep subtree files — they contain valid data that the next peer's validation can reuse
-		// Failure reporting is handled by the caller (Server.go / peer_selection.go)
+		// Failure reporting is centralized in releaseCatchupLock.
 		if errors.Is(err, errors.ErrBlockIncomplete) {
+			catchupCtx.incompleteBlockHash = block.Hash().String()
 			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s from peer %s is incomplete (no coinbase), aborting catchup",
 				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), peerID)
+
+			return false, err
+		}
+
+		// wg.Wait() must never be a bare wait, or this can hang: once a job has been Add(1)'d and
+		// handed to the channel, it is only ever Done()'d by a worker actually receiving and
+		// processing it. If the SHARED catch-up context (ctx here IS gCtx, the errgroup context
+		// created around the write-worker pool) is cancelled before that happens — an external
+		// shutdown, or any SIBLING subtreeWriteWorker returning its own Serialize/Set error, which
+		// cancels gCtx for the whole pool — every worker can exit via ctx.Done() without ever
+		// draining this block's remaining jobs, stranding them un-counted-down forever. So wait on
+		// wg and ctx together, never on wg alone (bitcoin-sv/teranode#4692).
+		waitDone := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(waitDone)
+		}()
+
+		if errors.IsBlockCorrupt(err) {
+			// Corrupt body on the quick path (bitcoin-sv/teranode#4692). This path bypasses
+			// ValidateBlockWithOptions, so strike the serving peer here, then abort for a
+			// FRESH re-download from another peer — do NOT re-run normal validation on the SAME
+			// corrupt body (it would just re-fail).
+			//
+			// peerID is the catch-up primary, and under parallel fetch it may not be the peer that
+			// served every subtree. That is correct here rather than approximate: per-subtree bytes
+			// are hash-verified at fetch and struck there (see this function's ATTRIBUTION INVARIANT),
+			// so what survives to a whole-body merkle mismatch is the primary's own subtree list.
+			u.blockValidation.penalizeCorruptBlockPeer(ctx, peerID, block, "quick validation: corrupt block body")
+			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s from peer %s has a corrupt body, aborting for re-download",
+				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), peerID)
+
+			// Capture the hash so releaseCatchupLock can name it in the peer-visible catch-up
+			// diagnostic (LastCatchupError) and in the dashboard's PreviousAttempt
+			// (bitcoin-sv/teranode#4692).
+			catchupCtx.corruptBlockHash = block.Hash().String()
+
+			select {
+			case <-waitDone:
+				// Every write job this block queued has been fully handled (written or
+				// skipped) by a worker. Safe to clean up: delete the (hash, fileType) pairs
+				// THIS attempt itself freshly wrote across BOTH producers, merged into a new
+				// map (bitcoin-sv/teranode#4692) — quick validation's own FileTypeSubtree writes
+				// (freshlyWritten) AND the earlier fetch phase's FileTypeSubtreeToCheck /
+				// FileTypeSubtreeData writes (fetchFreshlyWritten, carried on
+				// blockForValidation.freshlyWritten). A corrupt verdict taints the WHOLE body
+				// this attempt assembled, not just the part quick validation itself built, so
+				// leaving the fetched blobs behind would let findLocalSubtreeFile reuse them on
+				// retry — the same reuse bug this cleanup exists to close, just for the fetched
+				// types instead of the built one. Merging never mutates fetchFreshlyWritten:
+				// validateBlocksOnChannel's item still owns it for the rest of this loop
+				// iteration. The fresh re-download re-writes everything deleted here, so removal
+				// is safe.
+				merged := mergeFreshlyWritten(freshlyWritten, fetchFreshlyWritten)
+				if delErr := u.removeCatchupSubtreeFiles(ctx, catchupCtx, merged); delErr != nil {
+					// A failed cleanup must not downgrade the corrupt classification to a local
+					// ProcessingError: returning delErr here would make the caller retry the SAME
+					// corrupt body as a transient local failure instead of re-downloading a fresh one.
+					// Log the cleanup failure and preserve the corrupt error.
+					u.logger.Errorf("[catchup:tryQuickValidation][%s] block %s: failed to remove corrupt .subtree files: %v",
+						catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), delErr)
+				}
+			case <-ctx.Done():
+				// The shared catch-up context was cancelled — either a genuine external
+				// shutdown/abort, or a sibling write-worker's own failure elsewhere in the
+				// pool cancelling gCtx via the errgroup. Either way this catch-up run is
+				// already tearing down: some of this block's own queued jobs may now never
+				// be received by any worker (they all exited on ctx.Done() too), so
+				// continuing to wait on wg could hang forever. Skip cleanup — do NOT call
+				// removeCatchupSubtreeFiles — and fall through. This is safe: skipping cleanup
+				// can only fail to delete something, never delete the wrong thing, so it never
+				// destroys another block's promoted data; every blob left behind was written
+				// with a finite DAH, so it self-expires; and a stale leftover re-fails the same
+				// merkle/shape check on retry rather than being trusted blindly, bounded on this
+				// catchup path by CatchupMaxAttemptsPerBlock per cycle (recorded via
+				// recordCatchupAttemptUnlessProgress) — not the corrupt-attempt cap, which gates
+				// only the processBlockFound and legacy-manager paths, not catchup.
+				// The corrupt classification below is unaffected either way.
+				u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s: catch-up context cancelled while waiting for subtree writes to settle, skipping cleanup",
+					catchupCtx.blockUpTo.Hash().String(), block.Hash().String())
+			}
+
+			return false, err
+		}
+
+		// A locally stored subtree blob whose nodes do not hash to its key, which
+		// quick validation could NOT confirm removed (bitcoin-sv/teranode#4838).
+		// Falling through is worse than useless here: normal validation's loader
+		// checks only the .subtree header's claimed root against its key, so it would
+		// be handed the one blob this route has just proved is forged, by the one
+		// route that cannot detect it. Abort the catch-up run instead — loudly, since
+		// this is local storage corruption, and with no ban score, since no peer can
+		// have caused it.
+		if isUnquarantinedLocalSubtree(err) {
+			u.logger.Errorf("[catchup:tryQuickValidation][%s] block %s: a local subtree blob does not hash to its key and could not be removed, aborting rather than falling through to normal validation: %v",
+				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), err)
+
+			// This branch used to return immediately, doing neither of the two things its
+			// sibling branches above and below both do: join the write waiter, and sweep
+			// this attempt's own freshly written .subtree output.
+			//
+			// Sweeping does NOT soften the fail-closed abort, and the two sets are
+			// different objects. What could not be removed is the blob that FAILED its
+			// key check; what is deleted here is this attempt's own promoted build
+			// product, which is stale either way. And this is the only opportunity: the
+			// branch returns false, so no normal-validation pass follows to clean up
+			// after it, and validateBlocksOnChannel aborts the run — leave the blobs and
+			// they survive to the next attempt, where findLocalSubtreeFile may reuse
+			// them, which is precisely the reuse bug the cleanup exists to close. If the
+			// un-deletable blob happens to be in this set too, deletion simply fails
+			// again and re-confirms the abort.
+			//
+			// freshlyWritten ONLY — deliberately not merged with fetchFreshlyWritten, for
+			// the same reason the local-fault branch below gives: the fault is local
+			// storage corruption, so the peer-supplied FileTypeSubtreeToCheck /
+			// FileTypeSubtreeData are not implicated and a retry should reuse them. Only
+			// the corrupt branch merges, because a corrupt verdict taints the whole
+			// assembled body.
+			select {
+			case <-waitDone:
+				if delErr := u.removeCatchupSubtreeFiles(ctx, catchupCtx, freshlyWritten); delErr != nil {
+					// LOGGED, never returned — the corrupt branch's discipline, not the
+					// local-fault branch's. Returning delErr would replace the error carrying
+					// the isUnquarantinedLocalSubtree marker with a plain storage error, and
+					// that marker is the entire signal this branch exists to surface. The
+					// abort verdict does not depend on whether the cleanup succeeded.
+					u.logger.Errorf("[catchup:tryQuickValidation][%s] block %s: failed to remove this attempt's .subtree files after a fail-closed abort: %v",
+						catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), delErr)
+				}
+			case <-ctx.Done():
+				// See the corrupt-branch comment above: skip cleanup rather than risk
+				// hanging on jobs no worker will ever receive.
+				u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s: catch-up context cancelled while waiting for subtree writes to settle, skipping cleanup",
+					catchupCtx.blockUpTo.Hash().String(), block.Hash().String())
+			}
 
 			return false, err
 		}
@@ -1150,15 +2048,26 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 		u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] quick validation failed for block %s, removing .subtree files: %v",
 			catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), err)
 
-		// since the quick validation failed, we will have to remove the .subtree files, which will trigger
-		// the normal validation to re-create the UTXOs and validate the transactions
-		for _, subtreeHash := range block.Subtrees {
-			if err = u.subtreeStore.Del(ctx, subtreeHash[:], fileformat.FileTypeSubtree); err != nil {
-				if !errors.Is(err, errors.ErrNotFound) {
-					return false, errors.NewProcessingError("[catchup:validateBlocksOnChannel][%s] failed to remove subtree file %s",
-						catchupCtx.blockUpTo.Hash().String(), subtreeHash.String(), err)
-				}
+		// Since the quick validation failed for a LOCAL reason (not corrupt, not incomplete —
+		// e.g. a UTXO-store hiccup or block-ID assignment failure), the peer-supplied body
+		// itself is not implicated: only quick validation's own build output is stale.
+		// Deliberately do NOT merge in fetchFreshlyWritten here (bitcoin-sv/teranode#4692):
+		// normal validation, which this falls through to, is meant to REUSE the already-fetched
+		// FileTypeSubtreeToCheck/FileTypeSubtreeData rather than re-fetch them from a peer —
+		// that reuse is the whole point of catch-up's prefetch phase. Deleting them on a purely
+		// local failure would force a needless re-fetch for a body nothing has accused of being
+		// bad. Clearing quick validation's own FileTypeSubtree is still correct: normal
+		// validation rebuilds it fresh via its own path regardless.
+		select {
+		case <-waitDone:
+			if delErr := u.removeCatchupSubtreeFiles(ctx, catchupCtx, freshlyWritten); delErr != nil {
+				return false, delErr
 			}
+		case <-ctx.Done():
+			// See the corrupt-branch comment above: skip cleanup rather than risk hanging.
+			// Normal validation re-creates whatever this attempt left behind.
+			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s: catch-up context cancelled while waiting for subtree writes to settle, skipping cleanup",
+				catchupCtx.blockUpTo.Hash().String(), block.Hash().String())
 		}
 		// Quick validation failed, try normal validation
 		return true, nil
@@ -1166,6 +2075,164 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 
 	// Quick validation succeeded, skip normal validation
 	return false, nil
+}
+
+// subtreeFreshness tracks, for a single block's single fetch/validation attempt, exactly which
+// (hash, fileType) pairs THIS attempt itself freshly wrote — as opposed to found already present
+// locally. Only these pairs are ever safe for removeCatchupSubtreeFiles to delete on a corrupt
+// verdict: provenance is genuinely per-(hash, fileType), not per-hash (bitcoin-sv/teranode#4692) — a
+// peer can name an already-persisted, permanently-promoted hash in a doctored body, and a per-hash
+// design would delete every type for it, including siblings this attempt never touched. Scoped to
+// one attempt (constructed fresh, discarded once that attempt's outcome is known): a hash fetched
+// fresh for one block can be promoted by the time a later block or run names the same hash, so a
+// longer-lived map would accumulate entries that are no longer safe to act on. Mutex-protected
+// because the subtrees making up one block are fetched/built concurrently.
+type subtreeFreshness struct {
+	mu   sync.Mutex
+	data map[chainhash.Hash]map[fileformat.FileType]struct{}
+}
+
+func newSubtreeFreshness() *subtreeFreshness {
+	return &subtreeFreshness{data: make(map[chainhash.Hash]map[fileformat.FileType]struct{})}
+}
+
+// markFresh records that this attempt itself just wrote (hash, fileType). Nil-safe: a nil tracker
+// (e.g. the optimistic catch-up path, which skips fetching entirely) records nothing — which is
+// exactly correct, since nothing was proven fresh.
+func (f *subtreeFreshness) markFresh(hash chainhash.Hash, fileType fileformat.FileType) {
+	if f == nil {
+		return
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.data[hash] == nil {
+		f.data[hash] = make(map[fileformat.FileType]struct{})
+	}
+
+	f.data[hash][fileType] = struct{}{}
+}
+
+// snapshot returns the tracked set for removeCatchupSubtreeFiles. Only called once every producer
+// for this attempt has already finished (this package always calls it after the producing
+// errgroup's Wait()), so no further concurrent markFresh calls race with the read.
+func (f *subtreeFreshness) snapshot() map[chainhash.Hash]map[fileformat.FileType]struct{} {
+	if f == nil {
+		return nil
+	}
+
+	return f.data
+}
+
+// mergeFreshlyWritten combines every (hash, fileType) pair from sets into one new map, without
+// mutating any of them (bitcoin-sv/teranode#4692). This block's catch-up producers run in two
+// separate phases — the fetch phase (get_blocks.go, carried on blockForValidation.freshlyWritten)
+// and quick validation's own build phase (quickValidateBlockAsync) — each with its own
+// attempt-scoped subtreeFreshness, so a corrupt verdict that must purge everything THIS attempt
+// touched needs both. Building a fresh map (rather than writing into one of the inputs) matters
+// because the fetch-phase set is still owned by validateBlocksOnChannel's item for the rest of
+// this loop iteration, including the tryNormalValidation fall-through, which must see it
+// unmodified.
+func mergeFreshlyWritten(sets ...map[chainhash.Hash]map[fileformat.FileType]struct{}) map[chainhash.Hash]map[fileformat.FileType]struct{} {
+	merged := make(map[chainhash.Hash]map[fileformat.FileType]struct{})
+
+	for _, set := range sets {
+		for hash, types := range set {
+			dst := merged[hash]
+			if dst == nil {
+				dst = make(map[fileformat.FileType]struct{}, len(types))
+				merged[hash] = dst
+			}
+
+			for fileType := range types {
+				dst[fileType] = struct{}{}
+			}
+		}
+	}
+
+	return merged
+}
+
+// removeCatchupSubtreeFiles deletes exactly the peer-supplied subtree blobs THIS attempt itself
+// wrote, type by type, for the block (bitcoin-sv/teranode#4692). Used on BOTH the plain
+// quick-validation failure (before falling back to normal validation, which re-creates the files)
+// and the corrupt-body path (which aborts for a fresh re-download from another peer) — on both the
+// full-validation and quick-validation branches, not just a failed quick validation.
+//
+// freshlyWritten restricts deletion to the (hash, fileType) pairs this attempt is known to have
+// freshly written; a hash absent from the map, or present with only some of its types marked
+// fresh, is handled correctly by this per-type check with no special-casing needed. A doctored
+// body naming a hash that was ALREADY on disk when this attempt started therefore can never
+// trigger deletion of any of that hash's promoted blobs, even when a sibling type for the same
+// hash happens to be freshly written for an unrelated reason: every producer marks a pair fresh
+// only on the branch that ran BECAUSE the blob was not present, so an already-present (possibly
+// promoted) blob is never marked. The two fetch producers mark after their own Set succeeds
+// (fetchAndStoreSubtree / fetchAndStoreSubtreeData in get_blocks.go); quick validation's
+// FileTypeSubtree producer marks at enqueue time instead, from the already-present full subtrees
+// carried synchronously off the prefetch read, because its write is handed to an asynchronous worker
+// (quick_validate.go). Marking before the write lands is harmless here: a pair whose write never
+// lands is simply not on disk, and Del tolerates ErrNotFound.
+//
+// Per-attempt freshness is not sufficient on its own, so a RUN-scoped guard sits on top of it.
+// The catch-up fetch pool runs blockvalidation_fetch_num_workers blocks concurrently and quick
+// validation's own FileTypeSubtree write is handed to an asynchronous worker, so two attempts in
+// one run can both pass the not-present check for the same subtree hash and both record it as
+// freshly written. catchupCtx.committedSubtrees closes the case that matters: any hash a block
+// which has already COMMITTED in this run depends on is skipped here, whichever attempt wrote it.
+// Registration happens at validateBlocksOnChannel's single success tail, and that consumer loop is
+// sequential, so it always precedes a later block's cleanup.
+//
+// RESIDUAL: an in-flight sibling that has NOT yet committed can still lose a blob this attempt
+// also wrote, and re-fetches it. That is a transient cost — never a poisoned hash and never a peer
+// strike — and it is the same residual the ctx.Done() cleanup skip already accepts by design.
+// Do not "fix" any of this by widening or narrowing the type list instead: narrowing to
+// SubtreeToCheck alone would leave quick validation's own FileTypeSubtree — built from the corrupt
+// body — on disk for findLocalSubtreeFile to reuse on retry, which is the on-disk poison this
+// tracker exists to remove safely.
+//
+// FileTypeSubtreeMeta is deliberately excluded from the type list entirely — this is a behaviour
+// change from the wide, unconditional delete this helper used to perform. No producer in this
+// package ever proves FileTypeSubtreeMeta fresh (quick validation explicitly skips writing it for
+// performance; the full-validation fetch path never writes it either — it is only written by
+// downstream full subtree validation), so this helper can never safely conclude it was written by
+// this attempt. Leaving an untouched, non-fresh SubtreeMeta blob behind is bounded by its own
+// existing retention/DAH policy, exactly like any other non-fresh blob under this design.
+func (u *Server) removeCatchupSubtreeFiles(ctx context.Context, catchupCtx *CatchupContext, freshlyWritten map[chainhash.Hash]map[fileformat.FileType]struct{}) error {
+	for subtreeHash, freshTypes := range freshlyWritten {
+		if catchupCtx.subtreeCommitted(subtreeHash) {
+			// A block already committed in this run depends on this hash — see the run-scoped
+			// guard documented above. Applying the filter here covers all three call sites.
+			//
+			// Named by the run it belongs to, like every other log on this path, so interleaved
+			// catch-up runs stay attributable. Derived on the skip path only, and guarded: this
+			// helper tolerates a nil catchupCtx (and a context built without a target block).
+			runHash := "unknown"
+			if catchupCtx != nil && catchupCtx.blockUpTo != nil {
+				runHash = catchupCtx.blockUpTo.Hash().String()
+			}
+
+			u.logger.Debugf("[catchup:removeCatchupSubtreeFiles][%s] keeping subtree %s: a committed block in this run depends on it", runHash, subtreeHash.String())
+
+			continue
+		}
+
+		for fileType := range freshTypes {
+			if fileType == fileformat.FileTypeSubtreeMeta {
+				// No producer ever marks this fresh, but guard explicitly in case that
+				// ever changes: SubtreeMeta is never eligible for deletion here.
+				continue
+			}
+
+			if err := u.subtreeStore.Del(ctx, subtreeHash[:], fileType); err != nil {
+				if !errors.Is(err, errors.ErrNotFound) {
+					return errors.NewProcessingError("[catchup] failed to remove %s file %s", fileType, subtreeHash.String(), err)
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 // getLowestCheckpointHeight returns the height of the lowest checkpoint
@@ -1184,7 +2251,14 @@ func getLowestCheckpointHeight(checkpoints []chaincfg.Checkpoint) uint32 {
 }
 
 // checkSecretMiningFromCommonAncestor detects if a peer withheld blocks (secret mining).
-// Checks if common ancestor is too far behind, indicating potential attack.
+//
+// A common ancestor more than SecretMiningThreshold blocks back is a necessary but not
+// sufficient signal: a legitimate reorg carrying more accumulated proof-of-work can fork
+// just as deeply. The malicious verdict is therefore gated on WORK, not depth — a deep
+// fork is only treated as secret mining when the chain the peer offers fails to exceed
+// our local validated chainwork. This keeps the reputation penalty ("peer is malicious")
+// separate from the policy decision of whether to auto-apply a deep reorg, which is
+// enforced independently by validateForkDepth against coinbase maturity.
 //
 // Parameters:
 //   - ctx: Context for cancellation
@@ -1192,18 +2266,34 @@ func getLowestCheckpointHeight(checkpoints []chaincfg.Checkpoint) uint32 {
 //   - baseURL: Peer URL for metrics
 //   - commonAncestorHash: Hash of the common ancestor
 //   - commonAncestorMeta: Metadata of the common ancestor
+//   - bestMeta: The accepted chain tip findCommonAncestor measured the ancestor against,
+//     supplying both the height for the depth trigger and the chainwork for the work gate
+//   - offeredHeaders: Peer's headers after the common ancestor (the candidate chain)
 //
 // Returns:
-//   - error: If secret mining is detected
-func (u *Server) checkSecretMiningFromCommonAncestor(ctx context.Context, blockUpTo *model.Block, peerID, baseURL string, commonAncestorHash *chainhash.Hash, commonAncestorMeta *model.BlockHeaderMeta) error {
-	// Check whether the common ancestor is more than X blocks behind our current chain.
-	// This indicates potential secret mining.
-	currentHeight := u.utxoStore.GetBlockHeight()
+//   - error: If secret mining is detected, or the deep fork cannot be safely followed
+func (u *Server) checkSecretMiningFromCommonAncestor(ctx context.Context, blockUpTo *model.Block, peerID, baseURL string, commonAncestorHash *chainhash.Hash, commonAncestorMeta *model.BlockHeaderMeta, bestMeta *model.BlockHeaderMeta, offeredHeaders []*model.BlockHeader) error {
+	// The tip arrives from findCommonAncestor rather than being read again here, so the depth
+	// trigger, the work gate and the ancestor selection all reason about one fixed tip. Re-reading
+	// let them disagree: the ancestor is selected against a tip that may since have moved, and a
+	// decrease would make the ancestor exceed it and trip the height check below, throwing away
+	// a sound catchup over our own local reorg. That trip is reported as a service error, so the
+	// peer is not charged for it, but the catchup is lost all the same. A missing tip means the
+	// caller skipped that step, which is our fault, not the peer's: abort without penalising it.
+	if bestMeta == nil {
+		u.logger.Warnf("[catchup][%s] no best block header for secret-mining check from peer %s - aborting without flagging malicious", blockUpTo.Hash().String(), baseURL)
+		return errors.NewServiceError("[catchup][%s] no best block header available for secret-mining check", blockUpTo.Hash().String())
+	}
 
-	// Common ancestor should always be at or below current height due to findCommonAncestor validation
-	// If not, this indicates a bug in the ancestor finding logic
+	currentHeight := bestMeta.Height
+
+	// findCommonAncestor rejects any candidate above this same tip, so this cannot trip while
+	// both steps share one read — it is kept as a guard on that arrangement, and on the uint32
+	// subtraction below. Both heights come from our own blockchain store, so a trip means our
+	// state is inconsistent with itself, never that the peer misbehaved: ServiceError, so the
+	// caller retries locally rather than charging the peer.
 	if commonAncestorMeta.Height > currentHeight {
-		return errors.NewProcessingError("[catchup][%s] common ancestor height %d is ahead of current height %d - this should not happen", blockUpTo.Hash().String(), commonAncestorMeta.Height, currentHeight)
+		return errors.NewServiceError("[catchup][%s] common ancestor height %d is ahead of current height %d - this should not happen", blockUpTo.Hash().String(), commonAncestorMeta.Height, currentHeight)
 	}
 
 	blocksBehind := currentHeight - commonAncestorMeta.Height
@@ -1213,7 +2303,22 @@ func (u *Server) checkSecretMiningFromCommonAncestor(ctx context.Context, blockU
 		return nil
 	}
 
-	// The chain is potentially a secretly mined chain
+	// The fork is deep. Without any offered headers we cannot weigh the candidate chain, so we
+	// can prove neither that it is heavier nor that it is a withheld shorter chain. Treat this
+	// like any other uncertainty: abort without penalising the peer.
+	if len(offeredHeaders) == 0 {
+		u.logger.Warnf("[catchup][%s] deep fork from peer %s (%d blocks behind) but no offered headers to weigh - aborting without flagging malicious", blockUpTo.Hash().String(), baseURL, blocksBehind)
+		return errors.NewProcessingError("[catchup][%s] deep fork with no offered headers to compare chainwork from common ancestor at height %d", blockUpTo.Hash().String(), commonAncestorMeta.Height)
+	}
+
+	// Weigh the offered chain's cumulative work against our own before penalising.
+	if offeredChainHasMoreWork(bestMeta.ChainWork, commonAncestorMeta, offeredHeaders) {
+		// A legitimate heavier chain that happens to fork deep. Follow it; do not penalise the peer.
+		u.logger.Infof("[catchup][%s] deep reorg (%d blocks) from peer %s carries more validated work than local chain - following heavier chain, not flagging secret mining", blockUpTo.Hash().String(), blocksBehind, baseURL)
+		return nil
+	}
+
+	// A deep fork that offers no additional work: potential secret mining (withheld shorter chain).
 	u.logger.Errorf("[catchup][%s] is potentially a secretly mined chain from common ancestor %s at height %d, ignoring", blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height)
 
 	// Record error metric for secret mining
@@ -1229,10 +2334,44 @@ func (u *Server) checkSecretMiningFromCommonAncestor(ctx context.Context, blockU
 	// Record the malicious attempt for this peer
 	u.reportCatchupMalicious(ctx, peerID, "secret_mining")
 
-	// Log ban request - actual banning should be handled by the P2P service
-	u.logger.Errorf("[catchup][%s] SECURITY: Peer %s attempted secret mining - should be banned (banning not yet implemented)", blockUpTo.Hash().String(), baseURL)
+	// Banning is handled by the P2P service: the malicious report above raises
+	// the peer's ban score, and repeated offenses cross the ban threshold.
+	u.logger.Errorf("[catchup][%s] SECURITY: Peer %s attempted secret mining - reported as malicious for ban scoring", blockUpTo.Hash().String(), baseURL)
 
 	return errors.NewServiceError("[catchup][%s] is potentially a secretly mined chain from common ancestor at height %d, ignoring", blockUpTo.Hash().String(), commonAncestorMeta.Height)
+}
+
+// offeredChainHasMoreWork reports whether the chain offered by the peer — the common
+// ancestor extended by offeredHeaders — carries strictly more cumulative proof-of-work
+// than our local validated best chain (localChainWork, the best block header's cumulative
+// work). It distinguishes a legitimate heavier deep reorg from a withheld shorter-work
+// chain ("secret mining").
+//
+// Parameters:
+//   - localChainWork: Cumulative work of the local best chain tip (big-endian bytes)
+//   - commonAncestorMeta: Metadata of the common ancestor (supplies its cumulative work)
+//   - offeredHeaders: Peer's headers after the common ancestor
+//
+// Returns:
+//   - bool: True if the offered chain has strictly more cumulative work than the local chain
+func offeredChainHasMoreWork(localChainWork []byte, commonAncestorMeta *model.BlockHeaderMeta, offeredHeaders []*model.BlockHeader) bool {
+	// ChainWork is stored big-endian (see stores/blockchain/sql calculateAndPrepareChainWork),
+	// so SetBytes reconstructs the cumulative work value directly.
+	localWork := new(big.Int).SetBytes(localChainWork)
+
+	// Start from the common ancestor's cumulative work and add each offered block's work,
+	// mirroring work.CalculateWork (work = 2^256 / (target+1)).
+	offeredWork := new(big.Int).SetBytes(commonAncestorMeta.ChainWork)
+	for _, header := range offeredHeaders {
+		if header == nil {
+			continue
+		}
+
+		bits := binary.LittleEndian.Uint32(header.Bits.CloneBytes())
+		offeredWork.Add(offeredWork, work.CalcBlockWork(bits))
+	}
+
+	return offeredWork.Cmp(localWork) > 0
 }
 
 // validateBatchHeaders validates a batch of block headers.

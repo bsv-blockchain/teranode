@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/pprof"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/servicemanager"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -156,51 +158,37 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 // startProfilerAndMetrics initializes and starts the profiler if the address is set in the app settings.
 func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settings) {
 	profilerAddr := appSettings.ProfilerAddr
-	if profilerAddr != "" && !pprofRegistered.Load() {
-		pprofRegistered.Store(true)
+	if profilerAddr != "" && pprofRegistered.CompareAndSwap(false, true) {
+
+		// Enable block / mutex profiling when configured. Both are disabled by
+		// default (rate/fraction == 0) and incur negligible overhead at the
+		// recommended on-cluster sampling values. Required to capture
+		// wait-time data that CPU profiles cannot expose.
+		if rate := appSettings.BlockProfileRate; rate > 0 {
+			runtime.SetBlockProfileRate(rate)
+			logger.Infof("runtime.SetBlockProfileRate(%d) enabled — /debug/pprof/block now collecting", rate)
+		}
+
+		if frac := appSettings.MutexProfileFraction; frac > 0 {
+			runtime.SetMutexProfileFraction(frac)
+			logger.Infof("runtime.SetMutexProfileFraction(%d) enabled — /debug/pprof/mutex now collecting", frac)
+		}
+
+		// Claim the Prometheus endpoint before the goroutine so the mux builder
+		// stays free of package-level state.
+		prometheusEndpoint := appSettings.PrometheusEndpoint
+		if prometheusEndpoint != "" && !metricsRegistered.CompareAndSwap(false, true) {
+			prometheusEndpoint = ""
+		}
 
 		go func() {
-			logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)
-
-			prefix := appSettings.StatsPrefix
-			logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, prefix)
-
 			server := &http.Server{
 				Addr:         profilerAddr,
-				Handler:      nil,
+				Handler:      newProfilerMux(logger, appSettings, prometheusEndpoint),
 				ReadTimeout:  60 * time.Second,
 				WriteTimeout: 60 * time.Second,
 				IdleTimeout:  120 * time.Second,
 			}
-
-			// register pprof handlers
-			mux := http.NewServeMux()
-			mux.HandleFunc("/debug/pprof/", pprof.Index)
-			mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-			mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-			mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-			mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-
-			// fgprof support
-			mux.Handle("/debug/fgprof", fgprof.Handler())
-
-			// memory analyzer support (includes mmap, non-heap memory)
-			logger.Infof("Memory analyzer available on http://%s/debug/memory", profilerAddr)
-			mux.HandleFunc("/debug/memory", profiling.MemoryProfileHandler)
-
-			if appSettings.StatsPrefix != "" {
-				gocore.RegisterStatsHandlers(mux)
-			}
-
-			prometheusEndpoint := appSettings.PrometheusEndpoint
-			if prometheusEndpoint != "" && !metricsRegistered.Load() {
-				metricsRegistered.Store(true)
-				logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
-				mux.Handle(prometheusEndpoint, promhttp.Handler())
-			}
-
-			// add mux to the server
-			server.Handler = mux
 
 			logger.Fatalf("%v", server.ListenAndServe())
 		}()
@@ -211,12 +199,72 @@ func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settin
 
 		// start prometheus metrics endpoint if enabled
 		prometheusEndpoint := appSettings.PrometheusEndpoint
-		if prometheusEndpoint != "" && !metricsRegistered.Load() {
-			metricsRegistered.Store(true)
+		if prometheusEndpoint != "" && metricsRegistered.CompareAndSwap(false, true) {
 			logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
 			http.Handle(prometheusEndpoint, promhttp.Handler())
 		}
 	}
+}
+
+// newProfilerMux builds the handler set served on the profiler listener: pprof,
+// fgprof, the gocore stats pages, the Prometheus endpoint (when
+// prometheusEndpoint is non-empty; the caller decides that so this function
+// touches no package-level state) and, when the listener cannot be reached
+// from the network, the memory analyzer.
+//
+// The memory analyzer (/debug/memory) prints the exact virtual-address range,
+// permissions and RSS of every large mapping in the process, taken from
+// /proc/self/smaps, as plain text. That is a complete, directly readable
+// ASLR-defeating map, so it is only registered when profilerAddr is
+// loopback-bound. A wildcard or interface-bound profiler (the default outside
+// the dev context, so Prometheus can scrape /metrics) answers 404 on the
+// route. The gate is on the bind address, not the request's remote address,
+// because the remote read path this closes (a peer-triggered fetch made by
+// this process or a sibling in the same pod) arrives from loopback.
+//
+// The pprof routes stay on the listener regardless of bind. Note that Go's
+// pprof proto profiles embed the /proc/self/maps mapping table too, so this
+// gate narrows the disclosure rather than eliminating it; moving pprof off
+// network-reachable listeners is tracked separately.
+//
+// To use the analyzer against a deployed node, run cmd/memanalyzer inside the
+// container, or bind profilerAddr to loopback and port-forward (which also
+// moves /metrics and pprof to loopback for that process).
+func newProfilerMux(logger ulogger.Logger, appSettings *settings.Settings, prometheusEndpoint string) *http.ServeMux {
+	profilerAddr := appSettings.ProfilerAddr
+
+	logger.Infof("Profiler listening on http://%s/debug/pprof", profilerAddr)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	// fgprof support
+	mux.Handle("/debug/fgprof", fgprof.Handler())
+
+	// memory analyzer support (includes mmap, non-heap memory) - loopback only,
+	// see the function comment.
+	if util.IsLoopbackListenAddress(profilerAddr) {
+		logger.Infof("Memory analyzer available on http://%s/debug/memory", profilerAddr)
+		mux.HandleFunc("/debug/memory", profiling.MemoryProfileHandler)
+	} else {
+		logger.Infof("Memory analyzer (/debug/memory) disabled: profilerAddr %q is not loopback-bound and the analyzer exposes process address mappings", profilerAddr)
+	}
+
+	if appSettings.StatsPrefix != "" {
+		logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, appSettings.StatsPrefix)
+		gocore.RegisterStatsHandlers(mux)
+	}
+
+	if prometheusEndpoint != "" {
+		logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
+		mux.Handle(prometheusEndpoint, promhttp.Handler())
+	}
+
+	return mux
 }
 
 // startBlockchainService initializes and starts the Blockchain service.
@@ -277,10 +325,18 @@ func (d *Daemon) startP2PService(ctx context.Context, appSettings *settings.Sett
 	if err != nil {
 		return err
 	}
+	peerRegistryClient, err := d.daemonStores.GetPeerRegistryClient(
+		ctx, createLogger(loggerBlockchainClient), appSettings, serviceNameP2P,
+	)
+	if err != nil {
+		return err
+	}
 	blockAssemblyClient, err := blockassembly.NewClient(ctx, createLogger(loggerBlockAssembly), appSettings)
 	if err != nil {
 		return err
 	}
+
+	d.daemonStores.retainClient(blockAssemblyClient)
 
 	// Create a Kafka consumer group for rejected transactions
 	var rejectedTxKafkaConsumerClient *kafka.KafkaConsumerGroup
@@ -292,15 +348,21 @@ func (d *Daemon) startP2PService(ctx context.Context, appSettings *settings.Sett
 		return err
 	}
 
-	invalidBlocksKafkaConsumerClient, err := getKafkaInvalidBlocksConsumerGroup(createLogger("kpib"), appSettings, serviceNameP2P+"."+appSettings.ClientName)
+	// These consumers are optional (nil when unconfigured): map typed nils to
+	// true nils so the server's nil checks behave correctly.
+	invalidBlocksKafkaConsumerGroup, err := getKafkaInvalidBlocksConsumerGroup(createLogger("kpib"), appSettings, serviceNameP2P+"."+appSettings.ClientName)
 	if err != nil {
 		return err
 	}
 
-	invalidSubtreeKafkaConsumerClient, err := getKafkaInvalidSubtreeConsumerGroup(createLogger("kpis"), appSettings, serviceNameP2P+"."+appSettings.ClientName)
+	invalidBlocksKafkaConsumerClient := nonNilConsumerGroup(invalidBlocksKafkaConsumerGroup)
+
+	invalidSubtreeKafkaConsumerGroup, err := getKafkaInvalidSubtreeConsumerGroup(createLogger("kpis"), appSettings, serviceNameP2P+"."+appSettings.ClientName)
 	if err != nil {
 		return err
 	}
+
+	invalidSubtreeKafkaConsumerClient := nonNilConsumerGroup(invalidSubtreeKafkaConsumerGroup)
 
 	// Create Kafka producers for subtrees and blocks
 	var subtreeKafkaProducerClient *kafka.KafkaAsyncProducer
@@ -329,7 +391,7 @@ func (d *Daemon) startP2PService(ctx context.Context, appSettings *settings.Sett
 	var p2pService *p2p.Server
 
 	p2pService, err = p2p.NewServer(
-		ctx, p2pLogger, appSettings, blockchainClient,
+		ctx, p2pLogger, appSettings, blockchainClient, peerRegistryClient,
 		blockAssemblyClient,
 		rejectedTxKafkaConsumerClient,
 		invalidBlocksKafkaConsumerClient,
@@ -422,6 +484,14 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 		blockAssemblyClient = nil
 	}
 
+	assetPeerRegistryClient, err := d.daemonStores.GetPeerRegistryClient(ctx, createLogger(serviceAsset), appSettings, "")
+	if err != nil {
+		// Non-fatal: /api/v1/peers returns 503 until the registry is reachable.
+		createLogger(serviceAsset).Warnf("[Asset] peer registry client unavailable: %v", err)
+
+		assetPeerRegistryClient = nil
+	}
+
 	// Initialize the Asset service with the necessary parts
 	return d.ServiceManager.AddService(serviceAssetFormal, asset.NewServer(
 		createLogger(serviceAsset),
@@ -434,6 +504,7 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 		blockvalidationClient,
 		p2pClient,
 		banList,
+		assetPeerRegistryClient,
 		blockAssemblyClient,
 	))
 }
@@ -466,6 +537,8 @@ func (d *Daemon) startRPCService(ctx context.Context, appSettings *settings.Sett
 	if err != nil {
 		return err
 	}
+
+	d.daemonStores.retainClient(legacyPeerClient)
 
 	p2pClient, err := d.daemonStores.GetP2PClient(ctx, createLogger("rpc"), appSettings)
 	if err != nil {
@@ -548,6 +621,8 @@ func (d *Daemon) startAlertService(ctx context.Context, appSettings *settings.Se
 	if err != nil {
 		return err
 	}
+
+	d.daemonStores.retainClient(peerClient)
 
 	// Create the P2P client for the Alert service
 	p2pClient, err = d.daemonStores.GetP2PClient(ctx, createLogger(loggerAlert), appSettings)
@@ -786,6 +861,17 @@ func (d *Daemon) startValidationService(
 			return err
 		}
 
+		var policyRejectedTxConsumerClient *kafka.KafkaConsumerGroup
+
+		policyRejectedTxConsumerClient, err = getKafkaTxPolicyRejectedConsumerGroup(
+			createLogger("kafka-consumer-policy-rejected-tx"),
+			appSettings,
+			serviceSubtreeValidation+"."+appSettings.ClientName,
+		)
+		if err != nil {
+			return err
+		}
+
 		// Create the P2P client for the SubtreeValidation service
 		var p2pClient p2p.ClientI
 
@@ -808,6 +894,7 @@ func (d *Daemon) startValidationService(
 			blockchainClient,
 			subtreeConsumerClient,
 			txMetaConsumerClient,
+			policyRejectedTxConsumerClient,
 			p2pClient,
 		)
 		if err != nil {
@@ -842,6 +929,8 @@ func (d *Daemon) startValidationService(
 		if err != nil {
 			return err
 		}
+
+		d.daemonStores.retainClient(blockAssemblyClient)
 
 		// Create the P2P client for the BlockValidation service
 		var p2pClient p2p.ClientI
@@ -934,6 +1023,15 @@ func (d *Daemon) startValidatorService(
 		return err
 	}
 
+	var policyRejectedTxKafkaProducerClient *kafka.KafkaAsyncProducer
+
+	policyRejectedTxKafkaProducerClient, err = getKafkaTxPolicyRejectedAsyncProducer(
+		ctx, createLogger("kafka-producer-policy-rejected-tx"), appSettings,
+	)
+	if err != nil {
+		return err
+	}
+
 	// Create the BlockAssembly client for the Validator service
 	var blockAssemblyClient *blockassembly.Client
 
@@ -944,6 +1042,8 @@ func (d *Daemon) startValidatorService(
 		return err
 	}
 
+	d.daemonStores.retainClient(blockAssemblyClient)
+
 	// Add the Validator service to the ServiceManager
 	return d.ServiceManager.AddService(serviceValidatorFormal, validator.NewServer(
 		createLogger(serviceValidator),
@@ -953,6 +1053,7 @@ func (d *Daemon) startValidatorService(
 		consumerClient,
 		txMetaKafkaProducerClient,
 		rejectedTxKafkaProducerClient,
+		policyRejectedTxKafkaProducerClient,
 		blockAssemblyClient,
 	))
 }
@@ -1097,18 +1198,31 @@ func (d *Daemon) startLegacyService(
 		return err
 	}
 
+	d.daemonStores.retainClient(blockassemblyClient)
+
+	peerRegistryClient, err := d.daemonStores.GetPeerRegistryClient(ctx, createLogger(serviceLegacy), appSettings, "")
+	if err != nil {
+		// Non-fatal: the legacy service runs without dashboard peer visibility.
+		createLogger(serviceLegacy).Warnf("[Legacy] peer registry client unavailable: %v", err)
+
+		peerRegistryClient = nil
+	}
+
 	// Add the Legacy service to the ServiceManager
 	return d.ServiceManager.AddService(serviceLegacyFormal, legacy.New(
 		createLogger(serviceLegacy),
 		appSettings,
-		blockchainClient,
-		validatorClient,
-		subtreeStore,
-		tempStore,
-		utxoStore,
-		subtreeValidationClient,
-		blockValidationClient,
-		blockassemblyClient,
+		legacy.Dependencies{
+			BlockchainClient:    blockchainClient,
+			ValidationClient:    validatorClient,
+			SubtreeStore:        subtreeStore,
+			TempStore:           tempStore,
+			UtxoStore:           utxoStore,
+			SubtreeValidation:   subtreeValidationClient,
+			BlockValidation:     blockValidationClient,
+			BlockAssemblyClient: blockassemblyClient,
+			PeerRegistry:        peerRegistryClient,
+		},
 	))
 }
 

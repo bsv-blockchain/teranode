@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { onMount } from 'svelte'
   import { page } from '$app/stores'
@@ -11,22 +13,22 @@
   import { miningNodes, sock, currentNodePeerID } from '$internal/stores/p2pStore'
   import i18n from '$internal/i18n'
 
-  $: t = $i18n.t
+  const t = $derived($i18n.t)
 
-  $: connected = $sock !== null
+  const connected = $derived($sock !== null)
 
   let nodes: any[] = []
-  let allNodes: any[] = [] // Full dataset
-  let paginatedNodes: any[] = [] // Sliced data for current page
-  
+  let allNodes: any[] = $state([]) // Full dataset
+  let paginatedNodes: any[] = $state([]) // Sliced data for current page
+
   // Persistent pagination state that survives data updates
-  let currentPage = 1
-  let currentPageSize = 10
-  
+  let currentPage = $state(1)
+  let currentPageSize = $state(10)
+
   // Persistent sort state
-  let sortColumn = ''
-  let sortOrder = ''
-  
+  let sortColumn = $state('')
+  let sortOrder = $state('')
+
   // Load sort from localStorage on mount
   if (browser) {
     const savedSort = loadSortFromStorage()
@@ -35,15 +37,17 @@
       sortOrder = savedSort.sortOrder
     }
   }
-  
+
   // Cache for chainwork calculations to avoid recalculation
-  let chainworkCache = new Map<string, Map<string, number>>()
-  
+  const chainworkCache = new Map<string, Map<string, number>>()
+
   // Force update of paginatedNodes when tick changes to update relative time displays
-  $: if (tickCounter >= 0 && allNodes.length > 0) {
-    updatePaginatedNodes()
-  }
-  
+  $effect(() => {
+    if (tickCounter >= 0 && allNodes.length > 0) {
+      updatePaginatedNodes()
+    }
+  })
+
   // Local storage keys for persistence
   const NETWORK_PAGE_SIZE_KEY = 'teranode-network-pagesize'
   const NETWORK_SORT_KEY = 'teranode-network-sort'
@@ -104,7 +108,7 @@
   }
 
   // Get pagination from URL and localStorage with priority: URL > localStorage > Default
-  $: {
+  $effect(() => {
     // First, try to get pageSize from URL (highest priority)
     const urlPageSize = $page.url.searchParams.get('pageSize')
     if (urlPageSize) {
@@ -116,7 +120,7 @@
       // If no URL parameter, use localStorage default
       currentPageSize = loadPageSizeFromStorage()
     }
-    
+
     // Get page from URL
     const urlPage = $page.url.searchParams.get('page')
     if (urlPage) {
@@ -127,10 +131,10 @@
     } else {
       currentPage = 1 // Always reset to page 1 if not in URL
     }
-    
+
     // Update paginated data when URL changes
     updatePaginatedNodes()
-  }
+  })
 
   // Update URL when pagination changes
   function updateURL(newPage: number, newPageSize: number) {
@@ -146,7 +150,7 @@
   }
 
   function onPageChange(e) {
-    const data = e.detail
+    const data = e
     const newPage = data.value.page
     const newPageSize = data.value.pageSize
     
@@ -162,7 +166,7 @@
   }
   
   function onSort(e) {
-    const { colId, value } = e.detail
+    const { colId, value } = e
     sortColumn = colId
     sortOrder = value
 
@@ -234,7 +238,9 @@
       // Keep cache size manageable (only last 10 states)
       if (chainworkCache.size > 10) {
         const firstKey = chainworkCache.keys().next().value
-        chainworkCache.delete(firstKey)
+        if (firstKey !== undefined) {
+          chainworkCache.delete(firstKey)
+        }
       }
     }
     
@@ -299,18 +305,22 @@
   }
 
   // Subscribe to miningNodes changes from WebSocket
-  $: if ($miningNodes) {
-    updateData()
-  }
-  
+  $effect(() => {
+    if ($miningNodes) {
+      updateData()
+    }
+  })
+
   // Also subscribe to currentNodePeerID changes to update isCurrentNode flags
-  $: if ($currentNodePeerID) {
-    updateData()
-  }
-  
+  $effect(() => {
+    if ($currentNodePeerID) {
+      updateData()
+    }
+  })
+
   // Add a ticker ONLY for re-rendering the relative time display
   // This doesn't recalculate data, just forces component updates
-  let tickCounter = 0
+  let tickCounter = $state(0)
   onMount(() => {
     const ticker = setInterval(() => {
       tickCounter++
@@ -320,16 +330,16 @@
   })
 </script>
 
-<PageWithMenu>
-  <ConnectedNodesCard 
+<PageWithMenu testId="page-root">
+  <ConnectedNodesCard
     data={paginatedNodes}
     allData={allNodes}
-    {connected} 
+    {connected}
     page={currentPage}
     pageSize={currentPageSize}
     {sortColumn}
     {sortOrder}
-    on:pagechange={onPageChange}
-    on:sort={onSort}
+    onpagechange={onPageChange}
+    onsort={onSort}
   />
 </PageWithMenu>

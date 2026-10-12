@@ -53,6 +53,20 @@ end
 HTTPServer --> Client : Response (List of UTXOs)
 deactivate HTTPServer
 
+' Bulk UTXO spend-status lookup
+Client -> HTTPServer : POST /utxos | /utxos/hex | /utxos/json\n(body: N x 36-byte (txid || vout) records)
+activate HTTPServer
+
+loop For each (txid, vout) record (fan-out, bounded concurrency)
+    HTTPServer -> Utxo : GetSpend(ctx, &utxo.Spend{TxID, Vout, UTXOHash: nil})
+    activate Utxo
+    Utxo --> HTTPServer : SpendResponse
+    deactivate Utxo
+end
+
+HTTPServer --> Client : Response in selected mode\n(binary 48-byte records | hex-encoded | JSON array)
+deactivate HTTPServer
+
 left footer Last Modified On: %date("dd-MMM-yyyy")
 
 @enduml

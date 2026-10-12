@@ -36,8 +36,7 @@ type CsvDataRecord struct {
 	Tx              *bt.Tx
 }
 
-// Benchmark run script verification with different verifier without
-// caring about the error
+// Benchmark run transaction validation with GoBDK without caring about the error.
 //
 //	go test -bench=ScriptVerification -tags test_validator -timeout 120m ./test/services/validator/...
 func BenchmarkScriptVerification(b *testing.B) {
@@ -51,43 +50,35 @@ func BenchmarkScriptVerification(b *testing.B) {
 
 	tLogger := &ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(b)
-	scriptInterpreterTypes := []string{"GoBDK", "GoSDK", "GoBT"}
-	for _, siType := range scriptInterpreterTypes {
-		createTxScriptInterpreter, ok := validator.TxScriptInterpreterFactory[validator.TxInterpreter(siType)]
-		if !ok {
-			panic(errors.NewUnknownError("unable to find script interpreter " + fmt.Sprint(siType)))
+	tSettings.ChainCfgParams, err = chaincfg.GetChainParams("mainnet")
+	require.NoError(b, err)
+
+	txValidator := validator.NewTxValidator(tLogger, tSettings)
+
+	b.ResetTimer()
+	b.Run("TransactionValidation Multi Routine GoBDK", func(b *testing.B) {
+		defer func() {
+			if r := recover(); r != nil {
+				b.Fatalf("recovered from panic: %v", r)
+			}
+		}()
+
+		for i := 0; i < b.N; i++ {
+			benchVerificationMultiRoutines(b, txValidator, txsData)
 		}
+	})
 
-		scriptInterpreter := createTxScriptInterpreter(tLogger, tSettings.Policy, &chaincfg.MainNetParams)
-
-		testNameSequential := fmt.Sprintf("ScriptVerification Sequential %v", siType)
-		testNameMultiRoutine := fmt.Sprintf("ScriptVerification Multi Routine %v", siType)
-
-		b.ResetTimer()
-		b.Run(testNameMultiRoutine, func(b *testing.B) {
-			defer func() {
-				if r := recover(); r != nil {
-					err = errors.NewUnknownError("recovered from panic: " + fmt.Sprint(r))
-				}
-			}()
-
-			for i := 0; i < b.N; i++ {
-				benchVerificationMultiRoutines(b, scriptInterpreter, txsData)
+	b.Run("TransactionValidation Sequential GoBDK", func(b *testing.B) {
+		defer func() {
+			if r := recover(); r != nil {
+				b.Fatalf("recovered from panic: %v", r)
 			}
-		})
+		}()
 
-		b.Run(testNameSequential, func(b *testing.B) {
-			defer func() {
-				if r := recover(); r != nil {
-					err = errors.NewUnknownError("recovered from panic: " + fmt.Sprint(r))
-				}
-			}()
-
-			for i := 0; i < b.N; i++ {
-				benchVerificationSequential(b, scriptInterpreter, txsData)
-			}
-		})
-	}
+		for i := 0; i < b.N; i++ {
+			benchVerificationSequential(b, txValidator, txsData)
+		}
+	})
 
 }
 
@@ -108,16 +99,11 @@ func Test_ScriptVerificationBDKLargeTx(t *testing.T) {
 			tSettings.ChainCfgParams, err = chaincfg.GetChainParams("mainnet")
 			require.NoError(t, err)
 
-			createTxScriptInterpreter, ok := validator.TxScriptInterpreterFactory[validator.TxInterpreter("GoBDK")]
-			if !ok {
-				panic(errors.NewUnknownError("unable to find script interpreter GoBDK"))
-			}
-
-			bdkScriptInterpreter := createTxScriptInterpreter(tLogger, tSettings.Policy, &chaincfg.MainNetParams)
+			txValidator := validator.NewTxValidator(tLogger, tSettings)
 
 			for _, txData := range txsData {
 				// fmt.Printf("Verify for %v  %v\n", txData.BlockHeight, txData.Tx.TxID())
-				err := bdkScriptInterpreter.VerifyScript(txData.Tx, txData.BlockHeight, true, txData.DataUTXOHeights)
+				err := txValidator.ValidateTransaction(txData.Tx, txData.BlockHeight, txData.DataUTXOHeights, &validator.Options{SkipPolicyChecks: true})
 				require.NoError(t, err)
 			}
 		})
@@ -141,29 +127,28 @@ func Test_ScriptVerificationBDKTestNetData(t *testing.T) {
 			tSettings.ChainCfgParams, err = chaincfg.GetChainParams("testnet")
 			require.NoError(t, err)
 
-			createTxScriptInterpreter, ok := validator.TxScriptInterpreterFactory[validator.TxInterpreter("GoBDK")]
-			if !ok {
-				panic(errors.NewUnknownError("unable to find script interpreter GoBDK"))
-			}
-
-			bdkScriptInterpreter := createTxScriptInterpreter(tLogger, tSettings.Policy, &chaincfg.TestNetParams)
+			txValidator := validator.NewTxValidator(tLogger, tSettings)
 
 			for _, txData := range txsData {
 				// fmt.Printf("Verify for %v  %v\n", txData.BlockHeight, txData.Tx.TxID())
-				err := bdkScriptInterpreter.VerifyScript(txData.Tx, txData.BlockHeight, true, txData.DataUTXOHeights)
+				err := txValidator.ValidateTransaction(txData.Tx, txData.BlockHeight, txData.DataUTXOHeights, &validator.Options{SkipPolicyChecks: true})
 				require.NoError(t, err)
 			}
 		})
 	}
 }
 
-func benchVerificationMultiRoutines(b *testing.B, verifier validator.TxScriptInterpreter, txsData []CsvDataRecord) {
+type transactionValidator interface {
+	ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *validator.Options) error
+}
+
+func benchVerificationMultiRoutines(b *testing.B, verifier transactionValidator, txsData []CsvDataRecord) {
 	g := errgroup.Group{}
 
 	// verify the scripts of all the transactions in parallel
 	for _, txData := range txsData {
 		g.Go(func() error {
-			return verifier.VerifyScript(txData.Tx, txData.BlockHeight, true, txData.DataUTXOHeights)
+			return verifier.ValidateTransaction(txData.Tx, txData.BlockHeight, txData.DataUTXOHeights, &validator.Options{SkipPolicyChecks: true})
 		})
 	}
 
@@ -173,10 +158,10 @@ func benchVerificationMultiRoutines(b *testing.B, verifier validator.TxScriptInt
 	}
 }
 
-func benchVerificationSequential(b *testing.B, verifier validator.TxScriptInterpreter, txsData []CsvDataRecord) {
+func benchVerificationSequential(b *testing.B, verifier transactionValidator, txsData []CsvDataRecord) {
 	nbError := 0
 	for _, txData := range txsData {
-		err := verifier.VerifyScript(txData.Tx, txData.BlockHeight, true, txData.DataUTXOHeights)
+		err := verifier.ValidateTransaction(txData.Tx, txData.BlockHeight, txData.DataUTXOHeights, &validator.Options{SkipPolicyChecks: true})
 		if err != nil {
 			nbError += 1
 		}

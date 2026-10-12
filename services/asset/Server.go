@@ -61,6 +61,7 @@ type Server struct {
 	blockvalidationClient blockvalidation.Interface
 	blockAssemblyClient   blockassembly.ClientI
 	p2pClient             p2p.ClientI
+	peerRegistryClient    blockchain.PeerRegistryClientI
 	banList               banlist.Interface
 }
 
@@ -86,6 +87,7 @@ type Server struct {
 func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store,
 	subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI,
 	blockvalidationClient blockvalidation.Interface, p2pClient p2p.ClientI, banList banlist.Interface,
+	peerRegistryClient blockchain.PeerRegistryClientI,
 	blockAssemblyClient ...blockassembly.ClientI) *Server {
 	s := &Server{
 		logger:                logger,
@@ -97,6 +99,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 		blockchainClient:      blockchainClient,
 		blockvalidationClient: blockvalidationClient,
 		p2pClient:             p2pClient,
+		peerRegistryClient:    peerRegistryClient,
 		banList:               banList,
 	}
 
@@ -200,7 +203,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 	}
 
 	repo, err := repository.NewRepository(v.logger, v.settings, v.utxoStore, v.txStore, v.blockchainClient,
-		v.blockvalidationClient, v.subtreeStore, v.blockPersisterStore, v.p2pClient)
+		v.blockvalidationClient, v.subtreeStore, v.blockPersisterStore, v.p2pClient, v.peerRegistryClient)
 	if err != nil {
 		return errors.NewServiceError("error creating repository", err)
 	}
@@ -324,6 +327,17 @@ func (v *Server) Stop(ctx context.Context) error {
 
 		if err := v.httpServer.Stop(ctx); err != nil {
 			v.logger.Errorf("[Asset] error stopping http server: %v", err)
+		}
+	}
+
+	// DC14: also stop the Centrifuge server so the shutdown contract holds if it
+	// ever gains teardown logic. It is a no-op today (its goroutines are
+	// ctx-bound), but relying on that silently is the trap DC6/DC11 warn about.
+	if v.centrifugeServer != nil {
+		v.logger.Infof("[Asset] Stopping centrifuge server")
+
+		if err := v.centrifugeServer.Stop(ctx); err != nil {
+			v.logger.Errorf("[Asset] error stopping centrifuge server: %v", err)
 		}
 	}
 

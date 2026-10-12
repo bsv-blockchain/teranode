@@ -31,7 +31,7 @@ jobs:
           python-version: '3.x'
 
       - name: Install MkDocs
-        run: pip install mkdocs-material
+        run: "pip install --only-binary :all: mkdocs-material==9.7.6"
 
       - name: Configure Git for deployment
         run: |

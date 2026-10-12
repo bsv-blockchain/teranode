@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/validator/validator_api"
@@ -260,12 +261,14 @@ func TestValidateWithOptions_HTTPFallback(t *testing.T) {
 	client, server := setupTestClient(t, mockClient)
 	defer server.Close()
 
-	// Create test transaction and options
+	// Create test transaction and options. Height 0 is what every production
+	// caller that can reach the fallback actually passes; a non-zero height is
+	// now refused before transmission (see nonDefaultValidationOptions).
 	tx := createTestTransaction(t)
 	opts := NewDefaultOptions()
 
 	// Call the method under test
-	result, err := client.ValidateWithOptions(context.Background(), tx, 100, opts)
+	result, err := client.ValidateWithOptions(context.Background(), tx, 0, opts)
 
 	// Assert results
 	assert.NoError(t, err) // HTTP fallback should succeed
@@ -298,8 +301,9 @@ func TestHandleValidationError_HTTPFallbackSuccess(t *testing.T) {
 	tx := createTestTransaction(t)
 	opts := NewDefaultOptions()
 
-	// Call the method under test
-	resultErr := client.handleValidationError(context.Background(), tx, 100, opts, originalErr)
+	// Call the method under test. Height 0: a caller-asserted height cannot be
+	// sent over the HTTP fallback any more.
+	resultErr := client.handleValidationError(context.Background(), tx, 0, opts, originalErr)
 
 	// The HTTP fallback should succeed and return nil error
 	assert.NoError(t, resultErr)
@@ -316,11 +320,50 @@ func TestHandleValidationError_HTTPServerFail(t *testing.T) {
 	tx := createTestTransaction(t)
 	opts := NewDefaultOptions()
 
-	// Call the method under test
-	resultErr := client.handleValidationError(context.Background(), tx, 100, opts, originalErr)
+	// Call the method under test. Height 0 so the error under test is the HTTP
+	// failure, not the client-side option refusal.
+	resultErr := client.handleValidationError(context.Background(), tx, 0, opts, originalErr)
 
 	// The method should return an error due to HTTP failure
 	assert.Error(t, resultErr)
+}
+
+func TestHandleValidationError_HTTPFallbackSurfacesVerdict(t *testing.T) {
+	// A verdict as the validator produces it: the client-safe reason buried
+	// under a wrapper that names node-internal state.
+	verdict := errors.NewProcessingError("[Validate][deadbeef] /home/build/services/validator/Validator.go:812 failed",
+		errors.NewTxPolicyError("insufficient-fee"))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		errors.AttachHTTPError(w.Header(), verdict)
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("[handleSingleTx] Failed to process transaction: " + verdict.Error()))
+	}))
+	t.Cleanup(server.Close)
+
+	validatorHTTPAddr, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	running := atomic.Bool{}
+	running.Store(true)
+
+	client := &Client{
+		client:            &MockValidatorAPIClient{},
+		logger:            &testLogger{t: t},
+		running:           &running,
+		validatorHTTPAddr: validatorHTTPAddr,
+	}
+
+	resultErr := client.handleValidationError(context.Background(), createTestTransaction(t), 0, NewDefaultOptions(),
+		status.Error(codes.ResourceExhausted, "message too large"))
+
+	require.Error(t, resultErr)
+	require.True(t, errors.Is(resultErr, errors.ErrTxPolicy), "got %v", resultErr)
+	require.Contains(t, resultErr.Error(), "insufficient-fee")
+	require.NotContains(t, resultErr.Error(), "message too large",
+		"the original gRPC size error must not replace the reconstructed verdict")
+	require.NotContains(t, errors.UserMessage(resultErr), "Validator.go:812",
+		"the validator's internal chain must not reach the caller")
 }
 
 func TestBatchValidation(t *testing.T) {
@@ -358,7 +401,8 @@ func TestBatchValidation(t *testing.T) {
 	tx := createTestTransaction(t)
 	txBytes := tx.Bytes()
 
-	// Create test batch with valid transaction data
+	// Create test batch with valid transaction data sharing one completion group.
+	group := completion.NewGroup(2)
 	batch := []*batchItem{
 		{
 			req: &validator_api.ValidateTransactionRequest{
@@ -369,7 +413,7 @@ func TestBatchValidation(t *testing.T) {
 				SkipPolicyChecks:     boolPtr(false),
 				CreateConflicting:    boolPtr(false),
 			},
-			done: make(chan validateBatchResponse),
+			group: group,
 		},
 		{
 			req: &validator_api.ValidateTransactionRequest{
@@ -380,16 +424,18 @@ func TestBatchValidation(t *testing.T) {
 				SkipPolicyChecks:     boolPtr(false),
 				CreateConflicting:    boolPtr(false),
 			},
-			done: make(chan validateBatchResponse),
+			group: group,
 		},
 	}
 
-	// Call the method under test in a goroutine
-	go client.sendBatchToValidator(context.Background(), batch)
+	// Call the method under test.
+	client.sendBatchToValidator(context.Background(), batch)
 
-	// Get the results from the channels
-	response1 := <-batch[0].done
-	response2 := <-batch[1].done
+	// Every item was completed exactly once (a double-Done would have panicked
+	// in the dispatcher); read the result slots after the group completes.
+	require.NoError(t, group.Wait(context.Background(), 0))
+	response1 := batch[0].result
+	response2 := batch[1].result
 
 	// Verify results
 	assert.NoError(t, response1.err)
@@ -400,9 +446,18 @@ func TestBatchValidation(t *testing.T) {
 }
 
 func TestBatchValidation_ResourceExhausted(t *testing.T) {
-	// Create mock client that returns ResourceExhausted error
+	// Create mock client that returns ResourceExhausted error.
+	//
+	// The unary stub reports the same oversize, which is what keeps this test on
+	// the HTTP arm: an oversized batch is now retried item by item over gRPC
+	// first, and only an item that is ALSO too large on its own reaches the HTTP
+	// fallback. The gRPC arm is covered by
+	// TestBatchOversized_NonDefaultOptionsRetriedOverGRPC.
 	mockClient := &MockValidatorAPIClient{
 		validateBatchFunc: func(ctx context.Context, in *validator_api.ValidateTransactionBatchRequest) (*validator_api.ValidateTransactionBatchResponse, error) {
+			return nil, status.Error(codes.ResourceExhausted, "message too large")
+		},
+		validateTxFunc: func(ctx context.Context, in *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
 			return nil, status.Error(codes.ResourceExhausted, "message too large")
 		},
 	}
@@ -416,7 +471,58 @@ func TestBatchValidation_ResourceExhausted(t *testing.T) {
 	tx := createTestTransaction(t)
 	txBytes := tx.Bytes()
 
-	// Create test batch with valid transaction data
+	// Create test batch with valid transaction data sharing one completion group.
+	// Height 0 and default options: the batch fallback funnels through the same
+	// validateTransactionViaHTTP as the unary one, which refuses a caller-asserted
+	// height before sending. The refusal itself is pinned by
+	// TestValidateTransactionViaHTTP_RefusesNonDefaultOptions; this test's subject
+	// is the batch plumbing succeeding, which is coverage nothing else provides.
+	group := completion.NewGroup(1)
+	batch := []*batchItem{
+		{
+			req: &validator_api.ValidateTransactionRequest{
+				TransactionData:      txBytes,
+				BlockHeight:          0,
+				SkipUtxoCreation:     boolPtr(false),
+				AddTxToBlockAssembly: boolPtr(true),
+				SkipPolicyChecks:     boolPtr(false),
+				CreateConflicting:    boolPtr(false),
+			},
+			group: group,
+		},
+	}
+
+	// Call the method under test.
+	client.sendBatchToValidator(context.Background(), batch)
+
+	// Read the result slot after the group completes.
+	require.NoError(t, group.Wait(context.Background(), 0))
+	response := batch[0].result
+
+	// Verify results - HTTP fallback should work
+	assert.NoError(t, response.err)
+	assert.Nil(t, response.metaData)
+}
+
+func TestBatchValidation_DispatcherPanic(t *testing.T) {
+	// Create mock client whose ValidateTransactionBatch panics mid-dispatch.
+	mockClient := &MockValidatorAPIClient{
+		validateBatchFunc: func(ctx context.Context, in *validator_api.ValidateTransactionBatchRequest) (*validator_api.ValidateTransactionBatchResponse, error) {
+			panic("boom")
+		},
+	}
+
+	// Setup test client with batching enabled
+	client, server := setupTestClient(t, mockClient)
+	client.batchSize = 2 // Enable batch mode
+	defer server.Close()
+
+	// Create test transaction to get valid transaction data
+	tx := createTestTransaction(t)
+	txBytes := tx.Bytes()
+
+	// Create test batch with valid transaction data sharing one completion group.
+	group := completion.NewGroup(2)
 	batch := []*batchItem{
 		{
 			req: &validator_api.ValidateTransactionRequest{
@@ -427,19 +533,33 @@ func TestBatchValidation_ResourceExhausted(t *testing.T) {
 				SkipPolicyChecks:     boolPtr(false),
 				CreateConflicting:    boolPtr(false),
 			},
-			done: make(chan validateBatchResponse),
+			group: group,
+		},
+		{
+			req: &validator_api.ValidateTransactionRequest{
+				TransactionData:      txBytes,
+				BlockHeight:          100,
+				SkipUtxoCreation:     boolPtr(false),
+				AddTxToBlockAssembly: boolPtr(true),
+				SkipPolicyChecks:     boolPtr(false),
+				CreateConflicting:    boolPtr(false),
+			},
+			group: group,
 		},
 	}
 
-	// Call the method under test in a goroutine
-	go client.sendBatchToValidator(context.Background(), batch)
+	// The whole-batch panic sweep must recover and complete every item so no
+	// producer is stranded on group.Wait.
+	require.NotPanics(t, func() { client.sendBatchToValidator(context.Background(), batch) })
 
-	// Get the results from the channel
-	response := <-batch[0].done
+	require.NoError(t, group.Wait(context.Background(), 0))
 
-	// Verify results - HTTP fallback should work
-	assert.NoError(t, response.err)
-	assert.Nil(t, response.metaData)
+	// The sweep is shared (util.SignalBatchPanic); the error text it builds must
+	// stay "panic in <fnName>: <recovered>", as the hand-rolled sweep produced.
+	for i, item := range batch {
+		require.Error(t, item.result.err, "batch item %d must be completed, not stranded", i)
+		require.Contains(t, item.result.err.Error(), "panic in sendBatchToValidator")
+	}
 }
 
 // Helper for creating bool pointers

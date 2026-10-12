@@ -6,8 +6,8 @@
 //
 // The implementation uses a combination of Aerospike Key-Value store and Lua scripts
 // for atomic operations. Transactions are stored with the following structure:
-//   - Main Record: Contains transaction metadata and up to 20,000 UTXOs
-//   - Pagination Records: Additional records for transactions with >20,000 outputs
+//   - Main Record: Contains transaction metadata and up to utxostore_utxoBatchSize UTXOs (default 128)
+//   - Pagination Records: Additional records for transactions with more outputs than utxostore_utxoBatchSize (default 128)
 //   - External Storage: Optional blob storage for large transactions
 //
 // # Features
@@ -44,7 +44,7 @@
 // Large Transaction with External Storage:
 //   - Same as normal but with external=true
 //   - Transaction data stored in blob storage
-//   - Multiple records for >20k outputs
+//   - Multiple records when outputs exceed utxostore_utxoBatchSize
 //
 // # Thread Safety
 //
@@ -69,10 +69,16 @@ var (
 	prometheusUtxoMapDelete prometheus.Counter
 	prometheusUtxoMapErrors *prometheus.CounterVec
 
-	prometheusUtxoCreateBatch     prometheus.Histogram
-	prometheusUtxoCreateBatchSize prometheus.Histogram
-	prometheusUtxoSpendBatch      prometheus.Histogram
-	prometheusUtxoSpendBatchSize  prometheus.Histogram
+	prometheusUtxoPartialSpendRollbacks *prometheus.CounterVec
+	prometheusUtxoSpendRollbackFailed   prometheus.Counter
+	prometheusUtxoSpendAbortInFlight    prometheus.Counter
+
+	prometheusUtxoCreateBatch              prometheus.Histogram
+	prometheusUtxoCreateBatchSize          prometheus.Histogram
+	prometheusUtxoSpendBatch               prometheus.Histogram
+	prometheusUtxoSpendBatchSize           prometheus.Histogram
+	prometheusUtxoSpendExpressionLuaRetry  prometheus.Counter
+	prometheusUtxoSpendExpressionLuaRetryN prometheus.Counter
 
 	prometheusTxMetaAerospikeMapGet                   prometheus.Counter
 	prometheusUtxostoreCreate                         prometheus.Counter
@@ -259,6 +265,41 @@ func _initPrometheusMetrics() {
 		},
 	)
 
+	// Rollback of partial spends is a corruption-prevention invariant (#1214), so
+	// its outcome has to be observable: "fired" means the spends were reverted,
+	// "spender_exists" means the ref was not dangling and the slots were left
+	// alone, "indeterminate" means the existence probe failed and a ref may have
+	// been left behind.
+	prometheusUtxoPartialSpendRollbacks = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_partial_spend_rollbacks",
+			Help:      "Outcome of rolling back the successful spends of a failed spend batch (fired|spender_exists|indeterminate|transient_lock|transient_creating)",
+		},
+		[]string{
+			"outcome", // utxo.RollbackOutcomes: fired | spender_exists | indeterminate | transient_lock | transient_creating
+		},
+	)
+
+	prometheusUtxoSpendRollbackFailed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_spend_rollback_failed",
+			Help:      "Spends that could not be reverted by a partial-spend rollback, i.e. potential dangling spender refs left behind (a count of spends, not of calls)",
+		},
+	)
+
+	prometheusUtxoSpendAbortInFlight = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_spend_abort_in_flight",
+			Help:      "Spend items still in flight when the batch aborted, excluded from the rollback set and applied by the dispatcher afterwards (residual dangling-ref window, see #1291)",
+		},
+	)
+
 	prometheusUtxoCreateBatch = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
@@ -296,6 +337,24 @@ func _initPrometheusMetrics() {
 			Name:      "utxo_spend_batch_size",
 			Help:      "Size of utxo spend batch",
 			Buckets:   util.MetricsBucketsSizeSmall,
+		},
+	)
+
+	prometheusUtxoSpendExpressionLuaRetry = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_spend_expression_lua_retry",
+			Help:      "Number of expression spend batches that triggered a retry through Lua because at least one record was filtered out (typically by the conservative utxoSpendableIn guard).",
+		},
+	)
+
+	prometheusUtxoSpendExpressionLuaRetryN = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_spend_expression_lua_retry_records",
+			Help:      "Number of individual records re-dispatched through Lua after being FILTERED_OUT by the expression path.",
 		},
 	)
 

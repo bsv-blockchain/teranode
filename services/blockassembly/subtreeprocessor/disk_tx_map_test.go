@@ -4,6 +4,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/stretchr/testify/require"
@@ -12,9 +13,8 @@ import (
 func newTestDiskTxMap(t *testing.T) *DiskTxMap {
 	t.Helper()
 	m, err := NewDiskTxMap(DiskTxMapOptions{
-		BasePath:       t.TempDir(),
-		Prefix:         "test",
-		FilterCapacity: 10_000,
+		BasePath: t.TempDir(),
+		Prefix:   "test",
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { m.Close() })
@@ -99,6 +99,31 @@ func TestDiskTxMap_Clear(t *testing.T) {
 	require.Equal(t, 0, m.Length())
 }
 
+// TestDiskTxMap_ClearEmptiesEveryShard pins that Clear empties all 4096
+// index shards, with at least one entry in each.
+func TestDiskTxMap_ClearEmptiesEveryShard(t *testing.T) {
+	m := newTestDiskTxMap(t)
+
+	filled := make(map[uint16]bool, numIndexShards)
+
+	for i := 0; len(filled) < numIndexShards; i++ {
+		hash := chainhash.HashH([]byte{byte(i), byte(i >> 8), byte(i >> 16)})
+		if filled[shardOf(hash)] {
+			continue
+		}
+
+		filled[shardOf(hash)] = true
+		m.SetIfNotExists(hash, makeInpoints(-1))
+	}
+
+	require.Equal(t, numIndexShards, m.Length())
+
+	m.Clear()
+
+	require.NoError(t, m.TakeErr())
+	require.Zero(t, m.Length())
+}
+
 func TestDiskTxMap_Set(t *testing.T) {
 	m := newTestDiskTxMap(t)
 
@@ -158,14 +183,34 @@ func TestDiskTxMap_ConcurrentSetIfNotExists(t *testing.T) {
 }
 
 func TestDiskTxMap_SerializationRoundtrip(t *testing.T) {
-	ip := makeInpoints(42)
-	ip.ParentTxHashes = append(ip.ParentTxHashes, chainhash.HashH([]byte("parent1")))
-	ip.Idxs = append(ip.Idxs, []uint32{0, 1})
+	parent := chainhash.HashH([]byte("parent1"))
 
-	serialized := serializeTxMapValue(ip)
-	deserialized := deserializeTxMapValue(serialized)
+	in0 := &bt.Input{PreviousTxOutIndex: 0}
+	require.NoError(t, in0.PreviousTxIDAdd(&parent))
+	in1 := &bt.Input{PreviousTxOutIndex: 1}
+	require.NoError(t, in1.PreviousTxIDAdd(&parent))
 
-	require.NotNil(t, deserialized)
-	require.Equal(t, int16(42), deserialized.SubtreeIndex)
-	require.Equal(t, len(ip.ParentTxHashes), len(deserialized.ParentTxHashes))
+	built, err := subtreepkg.NewTxInpointsFromInputs([]*bt.Input{in0, in1})
+	require.NoError(t, err)
+
+	built.SubtreeIndex = 42
+	ip := &built
+
+	m := newTestDiskTxMap(t)
+	hash := chainhash.HashH([]byte("child"))
+	m.Set(hash, ip)
+
+	for _, flush := range []bool{false, true} {
+		if flush {
+			require.NoError(t, m.Flush())
+		}
+
+		deserialized, ok := m.Get(hash)
+		require.True(t, ok)
+		require.Equal(t, int16(42), deserialized.SubtreeIndex)
+		require.Equal(t, ip.GetParentTxHashes(), deserialized.GetParentTxHashes())
+		require.Equal(t, ip.GetTxInpoints(), deserialized.GetTxInpoints())
+	}
+
+	require.NoError(t, m.TakeErr())
 }

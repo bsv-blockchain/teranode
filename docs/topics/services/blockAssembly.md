@@ -35,6 +35,8 @@ The Block Assembly Service is responsible for assembling new blocks and adding t
 
 **No Mempool Design**: Unlike traditional Bitcoin nodes that maintain a mempool (memory pool) to store unconfirmed transactions, Teranode's Block Assembly service processes transactions directly through a validation and subtree assembly pipeline. Transactions are immediately validated and organized into subtrees for efficient block creation, rather than being held in an intermediate memory pool. This design enables higher throughput and more efficient resource utilization for large-scale transaction processing.
 
+**Deployment Model**: Block Assembly does not scale horizontally. It runs as a single stateful instance per Teranode node, with no leader election or standby — every replica that starts is fully active and will serve mining traffic. Its in-memory mining-candidate and subtree-assembler state, and the outstanding mining jobs handed to miners, live in that one process: a mining job exists only where its candidate was issued, so a solution routed anywhere else is rejected with "job not found". A second replica would also write the same persisted `BlockAssembler` checkpoint, overwriting the first's view of the chain tip. See the [Teranode Microservices Overview](../architecture/teranode-microservices-overview.md#26-block-assembly-service) for how this fits the rest of the architecture, and the [Kubernetes miners installation guide](../../howto/miners/kubernetes/minersHowToInstallation.md#scaling-the-propagation-service) for why every example Cluster CR pins its replica count to 1, the Validator excepted.
+
 The block assembly process involves the following steps:
 
 1. **Receiving Transactions from the TX Validator Service**:
@@ -518,6 +520,15 @@ The Block Assembly service implements robust error handling across multiple laye
 - **Transaction Recovery**: Non-conflicting transactions are automatically re-added to new subtrees
 - **Deep Reorg Protection**: Reorganizations affecting more than the coinbase maturity threshold (typically 100 blocks) trigger a full service reset for safety
 
+#### Clock Skew Stopping Block Production
+
+Every block's timestamp must be strictly greater than the median timestamp of the previous 11 blocks, and no more than two hours ahead of local time. Block assembly floors each mining candidate at median-time-past+1 so it never hands miners work the network would refuse. When the local clock falls far enough behind the parent chain, that floor rises above the two-hour ceiling and **no** timestamp satisfies both rules.
+
+- **Symptom**: `GetMiningCandidate` starts failing for every miner, and block production stops. The counter `teranode_blockassembly_block_assembler_candidate_time_clock_skew` becomes non-zero and keeps climbing; a single log line names the parent block and the size of the gap.
+- **Cause**: either this node's clock is behind the network, or the parent chain carries headers stamped into the future by an upstream miner. The node cannot tell which from its own view — the log line names both.
+- **Remedy**: check NTP on the node first, since a local clock is the common case and the one you control. If the clock is correct, inspect the tip's recent header timestamps for a future-stamped run from upstream; the condition clears by itself once wall-clock time passes the floor.
+- **Why it fails rather than degrades**: emitting an unfloored candidate would make every solution fail the local submit path, which treats an invalid block as a subtree-processor fault and resets block assembly. Refusing the poll is the smaller failure. On chains where the median rule is advisory (regtest), the wall-clock candidate is still valid and is served instead.
+
 #### UTXO Store Unavailability
 
 - **Connection Monitoring**: The service monitors UTXO store connectivity and handles temporary unavailability
@@ -539,6 +550,7 @@ The service integrates comprehensive Prometheus metrics for operational monitori
 
 - `teranode_blockassembly_get_mining_candidate`: Mining candidate requests
 - `teranode_blockassembly_submit_mining_solution`: Mining solution submissions
+- `teranode_blockassembly_block_assembler_candidate_time_clock_skew`: Mining candidates refused because no timestamp satisfies both consensus rules. Alert on any non-zero rate — block production has stopped (see [Clock Skew Stopping Block Production](#clock-skew-stopping-block-production))
 - Duration histograms for critical operations with microsecond precision
 
 #### State Monitoring

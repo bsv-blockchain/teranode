@@ -1,6 +1,6 @@
 # How to Update Teranode with Kubernetes Helm
 
-Last modified: 6-March-2025
+Last modified: 11-August-2026
 
 ## Introduction
 
@@ -71,6 +71,10 @@ For production deployments:
 - Test updates in a staging environment first
 - Monitor system during and after update
 - Have a rollback plan prepared
+- Changes to the PostgreSQL `init.sql` ConfigMap do not apply to an existing
+  persistent volume. If you provisioned the cluster before Teranode dropped
+  superuser from the `teranode` PostgreSQL role, apply the one-off `ALTER ROLE`
+  in [PostgreSQL Role Privileges](minersSecurityBestPractices.md#postgresql-role-privileges)
 
 ## Other Resources
 

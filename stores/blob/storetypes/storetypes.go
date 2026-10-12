@@ -13,6 +13,7 @@ const (
 	BLOCKSTORE          BlobStoreType = 2
 	TEMPSTORE           BlobStoreType = 3
 	BLOCKPERSISTERSTORE BlobStoreType = 4
+	PEERREGISTRYSTORE   BlobStoreType = 5
 )
 
 // String returns the string representation of the store type.
@@ -28,6 +29,8 @@ func (t BlobStoreType) String() string {
 		return "TEMPSTORE"
 	case BLOCKPERSISTERSTORE:
 		return "BLOCKPERSISTERSTORE"
+	case PEERREGISTRYSTORE:
+		return "PEERREGISTRYSTORE"
 	default:
 		return "UNKNOWN"
 	}

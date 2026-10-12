@@ -599,7 +599,7 @@ func (tb *TestBuilder) DoTest() error {
 			tb.utxoHeights[i] = 0 // Default to height 0
 		}
 	}
-	result := validator.ValidateScript(ValidatorGoBDK, tb.spendTx, blockHeight, tb.utxoHeights)
+	result := validator.ValidateTransaction(ValidatorGoBDK, tb.spendTx, blockHeight, tb.utxoHeights)
 
 	// Check result
 	if tb.scriptError == SCRIPT_ERR_OK {

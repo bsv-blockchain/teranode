@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -16,6 +17,8 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	ukafka "github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -820,10 +823,18 @@ func RunContainer(ctx context.Context) (*TestContainerWrapper, error) {
 
 	// const containerPort = 9092 // The internal port Redpanda uses
 
+	hostPortStr := fmt.Sprintf("%d/tcp", hostPort)
 	req := testcontainers.ContainerRequest{
 		Image: fmt.Sprintf("%s:%s", RedpandaImage, RedpandaVersion),
 		ExposedPorts: []string{
-			fmt.Sprintf("%d:%d/tcp", hostPort, hostPort),
+			hostPortStr,
+		},
+		HostConfigModifier: func(hc *container.HostConfig) {
+			hc.PortBindings = network.PortMap{
+				network.MustParsePort(hostPortStr): []network.PortBinding{
+					{HostIP: netip.IPv4Unspecified(), HostPort: fmt.Sprintf("%d", hostPort)},
+				},
+			}
 		},
 		Cmd: []string{
 			"redpanda", "start",

@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -59,10 +60,19 @@ func generateTestHashes(count int) []chainhash.Hash {
 
 func populateCache(t testing.TB, cache *txmetacache.TxMetaCache, hashes []chainhash.Hash) {
 	t.Helper()
+	// Seed complete entries: a non-coinbase tx always has at least one parent, so
+	// a real cache entry carries a non-empty ParentTxHashes. (An empty one is a
+	// partial entry that the cache read-path now correctly treats as a miss.)
+	parent := chainhash.HashH([]byte("test-parent"))
+	in := &bt.Input{PreviousTxOutIndex: 0}
+	require.NoError(t, in.PreviousTxIDAdd(&parent))
+	ti, err := subtree.NewTxInpointsFromInputs([]*bt.Input{in})
+	require.NoError(t, err)
+
 	testMeta := &meta.Data{
 		Fee:         100,
 		SizeInBytes: 250,
-		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+		TxInpoints:  ti,
 		BlockIDs:    []uint32{},
 	}
 
@@ -70,6 +80,59 @@ func populateCache(t testing.TB, cache *txmetacache.TxMetaCache, hashes []chainh
 		err := cache.SetCache(&hashes[i], testMeta)
 		require.NoError(t, err)
 	}
+}
+
+func TestProcessTxMetaUsingCache_PartialEntryTreatedAsMiss(t *testing.T) {
+	cache := setupTestCache(t)
+	server := setupCacheTestServer(t, cache, 1024, 4, 1000)
+	ctx := context.Background()
+
+	// Simulate a poisoned cache entry: a non-coinbase tx cached with empty
+	// ParentTxHashes (as a reduced-field BatchDecorate path would write). This
+	// is the entry that wedges block validation when trusted verbatim.
+	hash := chainhash.HashH([]byte("partial-cache-entry"))
+	partial := &meta.Data{
+		Fee:         100,
+		SizeInBytes: 250,
+		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+		BlockIDs:    []uint32{},
+	}
+	require.NoError(t, cache.SetCache(&hash, partial))
+
+	txHashes := []chainhash.Hash{hash}
+	txMetaSlice := make([]metaSliceItem, 1)
+
+	missed, err := server.processTxMetaUsingCache(ctx, txHashes, txMetaSlice, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, missed, "partial entry (non-coinbase, empty ParentTxHashes) must be treated as a miss so the store fallback can self-heal it")
+	require.False(t, txMetaSlice[0].isSet, "partial entry must not be marked as set")
+}
+
+func TestProcessTxMetaUsingCache_CoinbaseEntryWithNoParentsIsHit(t *testing.T) {
+	cache := setupTestCache(t)
+	server := setupCacheTestServer(t, cache, 1024, 4, 1000)
+	ctx := context.Background()
+
+	// A coinbase tx legitimately has no parents; an empty-ParentTxHashes entry
+	// flagged IsCoinbase is complete and must still be served from the cache.
+	hash := chainhash.HashH([]byte("coinbase-cache-entry"))
+	coinbaseMeta := &meta.Data{
+		Fee:         0,
+		SizeInBytes: 100,
+		IsCoinbase:  true,
+		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+		BlockIDs:    []uint32{},
+	}
+	require.NoError(t, cache.SetCache(&hash, coinbaseMeta))
+
+	txHashes := []chainhash.Hash{hash}
+	txMetaSlice := make([]metaSliceItem, 1)
+
+	missed, err := server.processTxMetaUsingCache(ctx, txHashes, txMetaSlice, false)
+	require.NoError(t, err)
+	require.Equal(t, 0, missed, "a coinbase entry with no parents is complete and must be a hit")
+	require.True(t, txMetaSlice[0].isSet)
+	require.True(t, txMetaSlice[0].coinbase)
 }
 
 func TestProcessTxMetaUsingCache_MismatchedSliceLengths(t *testing.T) {

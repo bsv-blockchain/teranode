@@ -35,9 +35,12 @@ func init() {
 	logger = ulogger.New("appHandler", ulogger.WithLevel(logLevelStr))
 }
 
-// InitDashboard initializes the dashboard with settings
-func InitDashboard(settings *settings.Settings) {
+// InitDashboard initializes the dashboard with settings. trustedOrigins are the
+// browser origins, besides the node's own, allowed to send cookie-authenticated
+// state-changing requests (see AuthHandler.SetTrustedOrigins).
+func InitDashboard(settings *settings.Settings, trustedOrigins []string) {
 	authHandler = NewAuthHandler(logger, settings)
+	authHandler.SetTrustedOrigins(trustedOrigins)
 }
 
 func AppHandler(c echo.Context) error {

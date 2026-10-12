@@ -8,6 +8,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -29,6 +30,10 @@ import (
 //	mockStore.AssertExpectations(t)
 type MockUtxostore struct {
 	mock.Mock
+
+	// SupportsOutpointOnlySpendResult is what SupportsOutpointOnlySpend returns.
+	// Defaults to false; set true in tests that exercise the below-checkpoint fast path.
+	SupportsOutpointOnlySpendResult bool
 }
 
 // Health mocks the health check functionality of the UTXO store.
@@ -37,6 +42,17 @@ func (m *MockUtxostore) Health(ctx context.Context, checkLiveness bool) (int, st
 	args := m.Called(ctx, checkLiveness)
 	return args.Int(0), args.String(1), args.Error(2)
 }
+
+// Close mocks store shutdown. Returns the configured mock error or nil.
+func (m *MockUtxostore) Close(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+// SupportsOutpointOnlySpend returns the configurable SupportsOutpointOnlySpendResult
+// (default false). Reading a field rather than m.Called() keeps the mock usable in
+// tests that have not set an expectation for this capability query.
+func (m *MockUtxostore) SupportsOutpointOnlySpend() bool { return m.SupportsOutpointOnlySpendResult }
 
 // Create mocks the creation of transaction metadata in the UTXO store.
 // Returns the configured mock response for transaction creation operations.
@@ -47,17 +63,82 @@ func (m *MockUtxostore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint3
 
 // Get mocks the retrieval of transaction metadata from the UTXO store.
 // Returns the configured mock response for transaction lookup operations.
-func (m *MockUtxostore) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
-	args := m.Called(ctx, hash, fields)
+func (m *MockUtxostore) Get(ctx context.Context, hash *chainhash.Hash, fieldNames ...fields.FieldName) (*meta.Data, error) {
+	args := m.Called(ctx, hash, fieldNames)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*meta.Data), args.Error(1)
+
+	data := args.Get(0).(*meta.Data)
+
+	return withDerivedTxInpoints(data, fieldNames), args.Error(1)
+}
+
+// withDerivedTxInpoints makes the mock honour the part of the store contract that
+// matters to callers asking for outpoints: every real store populates
+// meta.Data.TxInpoints when fields.TxInpoints is requested. The SQL store builds
+// it with subtree.NewTxInpointsFromInputs after reading the inputs table; the
+// aerospike store builds it from the inputs bin, or streams it out of the
+// external record without materialising scripts.
+//
+// Test fixtures overwhelmingly supply only Tx, because until recently every
+// caller that wanted parent outpoints asked for fields.Tx and walked Tx.Inputs.
+// Deriving here keeps those fixtures meaningful rather than forcing each one to
+// restate what the store would have computed.
+//
+// The derivation is deliberately gated on the field actually being requested, so
+// a caller that forgets to ask for fields.TxInpoints still sees an empty value
+// and its test still fails. A fixture that sets TxInpoints explicitly wins.
+//
+// The derived value goes on a shallow copy, never on the fixture itself. Writing
+// through the fixture pointer would make the gate hold only for the first call,
+// and concurrent Gets on one hash would race on the shared struct. Only
+// TxInpoints is protected by the copy: slice fields such as BlockIDs,
+// SpendingDatas and ConflictingChildren still share their backing arrays with
+// the fixture, so a caller must not write through them.
+func withDerivedTxInpoints(data *meta.Data, fieldNames []fields.FieldName) *meta.Data {
+	if data == nil || data.Tx == nil || len(data.Tx.Inputs) == 0 {
+		return data
+	}
+
+	if len(data.TxInpoints.ParentTxHashes) > 0 {
+		return data
+	}
+
+	requested := false
+
+	for _, f := range fieldNames {
+		if f == fields.TxInpoints {
+			requested = true
+			break
+		}
+	}
+
+	if !requested {
+		return data
+	}
+
+	txInpoints, err := subtree.NewTxInpointsFromInputs(data.Tx.Inputs)
+	if err != nil {
+		return data
+	}
+
+	derived := *data
+	derived.TxInpoints = txInpoints
+
+	return &derived
 }
 
 // Delete mocks the deletion of transaction metadata from the UTXO store.
 // Returns the configured mock response for transaction deletion operations.
 func (m *MockUtxostore) Delete(ctx context.Context, hash *chainhash.Hash) error {
+	args := m.Called(ctx, hash)
+	return args.Error(0)
+}
+
+// DeleteComplete mocks the complete deletion of a transaction (master record,
+// pagination children and external blob(s)) from the UTXO store.
+func (m *MockUtxostore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
 	args := m.Called(ctx, hash)
 	return args.Error(0)
 }
@@ -92,6 +173,24 @@ func (m *MockUtxostore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32
 	return args.Get(0).([]*Spend), args.Error(1)
 }
 
+// SpendAndCreate mocks the combined spend+create operation in the UTXO store.
+// Returns the configured mock responses for metadata, spends and error.
+func (m *MockUtxostore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, []*Spend, error) {
+	args := m.Called(ctx, tx, blockHeight, opts)
+
+	var md *meta.Data
+	if args.Get(0) != nil {
+		md = args.Get(0).(*meta.Data)
+	}
+
+	var spends []*Spend
+	if args.Get(1) != nil {
+		spends = args.Get(1).([]*Spend)
+	}
+
+	return md, spends, args.Error(2)
+}
+
 // Unspend mocks the reversal of transaction output spending in the UTXO store.
 // Returns the configured mock response for transaction unspending operations.
 func (m *MockUtxostore) Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error {
@@ -100,10 +199,14 @@ func (m *MockUtxostore) Unspend(ctx context.Context, spends []*Spend, flagAsLock
 }
 
 // SetMinedMulti mocks the batch setting of mined status for multiple transactions.
-// Returns the configured mock response for batch mined status operations.
+// Accepts either a static map or a func that computes one from the call args (useful
+// for tests that need a realistic blockIDsMap matching the submitted hashes).
 func (m *MockUtxostore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
 	args := m.Called(ctx, hashes, minedBlockInfo)
 
+	if fn, ok := args.Get(0).(func(context.Context, []*chainhash.Hash, MinedBlockInfo) map[chainhash.Hash][]uint32); ok {
+		return fn(ctx, hashes, minedBlockInfo), args.Error(1)
+	}
 	return args.Get(0).(map[chainhash.Hash][]uint32), args.Error(1)
 }
 
@@ -129,6 +232,27 @@ func (m *MockUtxostore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (
 	return args.Get(0).(UnminedTxIterator), args.Error(1)
 }
 
+// GetConflictingTxIterator mocks the iterator over conflicting transactions.
+func (m *MockUtxostore) GetConflictingTxIterator() (UnminedTxIterator, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(UnminedTxIterator), args.Error(1)
+}
+
+// RemoveFromConflictingChildren mocks batched removal of conflicting-child entries.
+func (m *MockUtxostore) RemoveFromConflictingChildren(ctx context.Context, removals []ConflictingChildRemoval) error {
+	args := m.Called(ctx, removals)
+	return args.Error(0)
+}
+
+// RemoveBlockIDs mocks batched trimming of block IDs across many transactions.
+func (m *MockUtxostore) RemoveBlockIDs(ctx context.Context, removals []BlockIDsRemoval) error {
+	args := m.Called(ctx, removals)
+	return args.Error(0)
+}
+
 // BatchDecorate mocks the batch decoration of unresolved metadata with field data.
 // Returns the configured mock response for batch metadata decoration operations.
 func (m *MockUtxostore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...fields.FieldName) error {
@@ -141,6 +265,28 @@ func (m *MockUtxostore) BatchDecorate(ctx context.Context, unresolvedMetaDataSli
 func (m *MockUtxostore) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 	args := m.Called(ctx, tx)
 	return args.Error(0)
+}
+
+// SpendAndCreateMulti mocks the list form of SpendAndCreate.
+func (m *MockUtxostore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...CreateOption) ([]SpendAndCreateMultiResult, error) {
+	args := m.Called(ctx, txs, blockHeight, opts)
+
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]SpendAndCreateMultiResult), args.Error(1)
+}
+
+// ParentOutputsForValidation mocks the read of parent outputs for validation.
+func (m *MockUtxostore) ParentOutputsForValidation(ctx context.Context, outpoints []Outpoint, opts ...ParentOutputOption) ([]ParentOutput, error) {
+	args := m.Called(ctx, outpoints)
+
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]ParentOutput), args.Error(1)
 }
 
 // BatchPreviousOutputsDecorate mocks batch decoration of transaction inputs with previous output data.
@@ -198,6 +344,24 @@ func (m *MockUtxostore) SetLocked(ctx context.Context, txHashes []chainhash.Hash
 	return args.Error(0)
 }
 
+// BeginConflictIntent is a safe no-op on the mock: the conflict-resolution WAL
+// is exercised against a real store in dedicated tests, so the many mock-based
+// ProcessConflicting/ReverseProcessConflicting tests need not set expectations
+// for it. (Does not call m.Called, so unset expectations do not panic.)
+func (m *MockUtxostore) BeginConflictIntent(ctx context.Context, intent ConflictIntent) error {
+	return nil
+}
+
+// CompleteConflictIntent is a safe no-op on the mock (see BeginConflictIntent).
+func (m *MockUtxostore) CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error {
+	return nil
+}
+
+// PendingConflictIntents is a safe no-op on the mock (see BeginConflictIntent).
+func (m *MockUtxostore) PendingConflictIntents(ctx context.Context) ([]ConflictIntent, error) {
+	return nil, nil
+}
+
 // MarkTransactionsOnLongestChain mocks the marking of transactions as being on the longest chain.
 // Returns the configured mock response for longest chain marking operations.
 func (m *MockUtxostore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
@@ -231,6 +395,13 @@ func (m *MockUtxostore) SetMedianBlockTime(height uint32) error {
 func (m *MockUtxostore) GetMedianBlockTime() uint32 {
 	args := m.Called()
 	return args.Get(0).(uint32)
+}
+
+// SetBlockState mocks publishing block height and median block time as one snapshot.
+// Returns the configured mock response for block state update operations.
+func (m *MockUtxostore) SetBlockState(height, medianTime uint32) error {
+	args := m.Called(height, medianTime)
+	return args.Error(0)
 }
 
 // GetBlockState mocks the retrieval of an atomic snapshot of both block height and median block time.

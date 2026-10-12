@@ -202,8 +202,11 @@ func TestCatchup_MemoryExhaustionAttack(t *testing.T) {
 			Return([]*chainhash.Hash{bestBlockHeader.Hash()}, nil)
 
 		// Mock GetBlockHeader for common ancestor lookup
+		// Peer headers are absent from our chain: not-found stops the
+		// common-ancestor walk at the divergence point.
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1000}, nil).Maybe()
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
@@ -550,8 +553,11 @@ func TestCatchup_SlowLorisAttack(t *testing.T) {
 			Return([]*chainhash.Hash{bestBlockHeader.Hash()}, nil)
 
 		// Mock GetBlockHeader for validation
+		// Peer headers are absent from our chain: not-found stops the
+		// common-ancestor walk at the divergence point.
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1000}, nil).Maybe()
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
@@ -683,8 +689,11 @@ func TestCatchup_MemoryMonitoring(t *testing.T) {
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*chainhash.Hash{bestBlockHeader.Hash()}, nil)
 
+		// Peer headers are absent from our chain: not-found stops the
+		// common-ancestor walk at the divergence point.
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
-			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1000}, nil).Maybe()
+			Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+				errors.NewBlockNotFoundError("block not found")).Maybe()
 
 		// Mock GetBlockExists for best block header (it already exists)
 		mockBlockchainClient.On("GetBlockExists", mock.Anything, bestBlockHeader.Hash()).

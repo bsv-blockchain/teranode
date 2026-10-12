@@ -22,6 +22,7 @@ func CheckBlockAssembly(logger ulogger.Logger, settings *settings.Settings) erro
 	if err != nil {
 		return errors.NewConfigurationError("failed to create block assembly client", err)
 	}
+	defer func() { _ = ba.Close() }()
 
 	if err = ba.CheckBlockAssemblyValidateInputs(ctx); err != nil {
 		return errors.NewProcessingError("block assembly validation failed", err)

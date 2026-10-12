@@ -35,8 +35,10 @@ type errOnCreateUtxoStore struct {
 	err error
 }
 
-func (e *errOnCreateUtxoStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxostore.CreateOption) (*meta.Data, error) {
-	return nil, e.err
+func (e *errOnCreateUtxoStore) SupportsOutpointOnlySpend() bool { return false }
+
+func (e *errOnCreateUtxoStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxostore.CreateOption) (*meta.Data, []*utxostore.Spend, error) {
+	return nil, nil, e.err
 }
 
 // TestMoveForwardBlockDrainLoss_BatchesLostOnPostDrainError demonstrates
@@ -65,10 +67,12 @@ func (e *errOnCreateUtxoStore) Create(ctx context.Context, tx *bt.Tx, blockHeigh
 //     - the drained batch's tx hash is in neither the queue nor any
 //     subtree -> the batch is lost.
 //
-// This test PINS the current buggy behaviour. When the underlying fix
-// in #852 lands (e.g. reorder side effects, queue snapshot/restore, or
-// two-phase dequeue), the post-rollback queue length assertion below
-// will need to flip to require.Equal(t, preLen, postLen).
+// This test PINS the current buggy behaviour of the inline drain, which
+// reorgBlocks and the catch-up loop still use. The dispatcher path (a single
+// new block) drains after the commit instead and no longer loses batches:
+// see TestHandleMoveForwardRequest_FailedBlockLeavesQueueUntouched. When the
+// inline drain gets the same fix, the post-rollback queue length assertion
+// below will need to flip to require.Equal(t, preLen, postLen).
 func TestMoveForwardBlockDrainLoss_BatchesLostOnPostDrainError(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
@@ -121,11 +125,13 @@ func TestMoveForwardBlockDrainLoss_BatchesLostOnPostDrainError(t *testing.T) {
 	// returns before reaching the drain.
 	stp.currentBlockHeader.Store(model.GenesisBlockHeader)
 
-	// Pin both clocks to the same instant. With DoubleSpendWindow=0 every
-	// enqueued batch admits at drain time.
-	fixed := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
-	stp.clock = fixedClock{t: fixed}
-	stp.queue.clock = fixedClock{t: fixed}
+	// Drain clock 1ms ahead of the enqueue clock so the per-drain cutoff
+	// (validFromMillis = drainClock at window=0) admits the enqueued
+	// batch. Same construction as TestDequeueDuringBlockMovement_*.
+	enqueueAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	drainAt := enqueueAt.Add(1 * time.Millisecond)
+	stp.queue.clock = fixedClock{t: enqueueAt}
+	stp.clock = fixedClock{t: drainAt}
 
 	// Enqueue a batch directly into the queue. Using a tx hash that is
 	// NOT in the block we are about to move forward, so the dequeue path
@@ -159,7 +165,7 @@ func TestMoveForwardBlockDrainLoss_BatchesLostOnPostDrainError(t *testing.T) {
 	// go through moveForwardBlockChan and the event-loop goroutine, which
 	// would race against our enqueue. Calling the unexported method here
 	// keeps the test deterministic.
-	processedConflictingHashesMap := make(map[chainhash.Hash]bool)
+	processedConflictingHashesMap := make(map[chainhash.Hash]struct{})
 	_, _, mfbErr := stp.moveForwardBlock(ctx, block, false, processedConflictingHashesMap, false, true)
 	require.Error(t, mfbErr, "moveForwardBlock must surface the Create failure injected by the wrapper")
 	require.ErrorIs(t, mfbErr, sentinelErr, "the error chain must mention the sentinel from errOnCreateUtxoStore")

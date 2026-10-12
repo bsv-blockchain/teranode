@@ -345,3 +345,31 @@ func BenchmarkCalculateWork(b *testing.B) {
 		_, _ = CalculateWork(&prevWork, *nBit)
 	}
 }
+
+func TestCompareChainWork(t *testing.T) {
+	tests := []struct {
+		name string
+		a    []byte
+		b    []byte
+		want int
+	}{
+		{name: "greater", a: []byte{0x02}, b: []byte{0x01}, want: 1},
+		{name: "less", a: []byte{0x01}, b: []byte{0x02}, want: -1},
+		{name: "equal", a: []byte{0x05}, b: []byte{0x05}, want: 0},
+		{name: "nonempty vs empty is greater", a: []byte{0x01}, b: []byte{}, want: 1},
+		{name: "empty vs empty is equal", a: []byte{}, b: []byte{}, want: 0},
+		{name: "empty vs nonempty is less", a: []byte{}, b: []byte{0x01}, want: -1},
+		{name: "nil vs nil is equal", a: nil, b: nil, want: 0},
+		{name: "nil vs nonempty is less", a: nil, b: []byte{0x01}, want: -1},
+		{name: "nonempty vs nil is greater", a: []byte{0x01}, b: nil, want: 1},
+		{name: "empty equals all-zero bytes", a: []byte{}, b: []byte{0x00, 0x00}, want: 0},
+		{name: "leading zeros are insignificant", a: []byte{0x00, 0x00, 0x01}, b: []byte{0x01}, want: 0},
+		{name: "length mismatch compares by value", a: []byte{0x01, 0x00}, b: []byte{0xff}, want: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, CompareChainWork(tt.a, tt.b))
+		})
+	}
+}

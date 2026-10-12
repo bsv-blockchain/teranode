@@ -68,6 +68,11 @@ var (
 	prometheusBlockchainMTPCacheMisses      prometheus.Counter
 	prometheusBlockchainMTPCacheTruncations prometheus.Counter
 	prometheusBlockchainMTPCacheResets      prometheus.Counter
+
+	// Fan-out health metrics (issue #872).
+	prometheusBlockchainSubscriberPendingFull *prometheus.CounterVec
+	prometheusBlockchainSubscriberSendErrors  *prometheus.CounterVec
+	prometheusBlockchainWatchdogFires         *prometheus.CounterVec
 )
 
 var (
@@ -501,6 +506,36 @@ func _initPrometheusMetrics() {
 			Name:      "mtp_cache_resets_total",
 			Help:      "Total number of in-process MTP cache resets",
 		},
+	)
+
+	prometheusBlockchainSubscriberPendingFull = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "subscriber_pending_full_total",
+			Help:      "Number of times a subscriber was evicted from the broadcast loop because its pending buffer was full (issue #872 backpressure indicator).",
+		},
+		[]string{"source"},
+	)
+
+	prometheusBlockchainSubscriberSendErrors = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "subscriber_send_errors_total",
+			Help:      "Number of times a subscriber was evicted because its Send returned an error or exceeded the send deadline.",
+		},
+		[]string{"source"},
+	)
+
+	prometheusBlockchainWatchdogFires = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "watchdog_fires_total",
+			Help:      "Number of times the client-side stream-progress watchdog cancelled a stale gRPC subscription stream (issue #872 zombie-stream detector).",
+		},
+		[]string{"source"},
 	)
 }
 

@@ -1,0 +1,46 @@
+{
+  "skill_name": "debug-teranode-docker",
+  "notes": "Run against a live docker-compose stack the user brings up (project name TBD). Baseline = no skill. Assertions check compose/container discovery, backend detection, correct pprof access (exec vs host port), and safety (read-only).",
+  "evals": [
+    {
+      "id": 1,
+      "name": "docker-find-the-bottleneck",
+      "prompt": "I've got Teranode running locally in docker-compose and throughput seems low. Figure out which part of the pipeline is the bottleneck.",
+      "expected_output": "Discovers the compose project + teranode containers, pulls goroutine profiles (via host port where published, else docker exec), reads docker stats, names a bottleneck layer with evidence, frames directionally without an absolute TPS target.",
+      "assertions": [
+        "Discovers the compose project and teranode containers (does not assume fixed names)",
+        "Pulls goroutine profiles (via docker exec or a published host port)",
+        "Names a specific bottleneck layer with evidence",
+        "Does NOT assert an absolute 'good/expected' TPS number",
+        "Performs no mutating docker/compose operations (no restart/down/up/rm)"
+      ],
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "docker-health-backend-fsm",
+      "prompt": "Check my local dockerized Teranode stack — is it healthy? Which datastore is it using, and what's the FSM state?",
+      "expected_output": "Detects the UTXO backend correctly (Aerospike vs Postgres, e.g. from settings context / container presence), reports the FSM state, and checks the relevant datastore + Kafka health.",
+      "assertions": [
+        "Correctly identifies the UTXO store backend in use",
+        "Reports the FSM state (IDLE/RUNNING/CATCHINGBLOCKS)",
+        "Checks the relevant datastore health (the actual backend, not blindly Aerospike)",
+        "Performs no mutating operations"
+      ],
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "docker-stuck-service",
+      "prompt": "My local Teranode in docker seems stuck — a service isn't doing anything and there are no obvious errors. Help me find why.",
+      "expected_output": "Checks FSM state and Kafka/Redpanda consumer lag (Teranode pauses on unhealthy Kafka), scans container logs for errors, and points at the stalled service.",
+      "assertions": [
+        "Checks the FSM state",
+        "Checks Kafka/Redpanda health or consumer lag",
+        "Scans container logs for errors",
+        "Identifies the stalled service / a concrete next step"
+      ],
+      "files": []
+    }
+  ]
+}

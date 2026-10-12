@@ -86,14 +86,22 @@ func TestProcessConflictingTransactions(t *testing.T) {
 	mockUtxoStore.On("GetCounterConflicting", mock.Anything, mock.Anything).Return([]chainhash.Hash{conflictingTx1, conflictingTx2}, nil)
 	mockUtxoStore.On("SetConflicting", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, []chainhash.Hash{}, nil)
 	mockUtxoStore.On("Unspend", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	mockUtxoStore.On("Spend", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil)
+	mockUtxoStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, nil)
 	mockUtxoStore.On("SetLocked", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	// Conflict resolution is now chain-authorised: before demoting a losing
+	// transaction it reads that transaction's block IDs and asks whether any of
+	// them is on the applying block's own ancestry. Leaving Data unset means
+	// "cannot resolve", which deliberately fails open, so the demotions below
+	// proceed exactly as before.
+	mockUtxoStore.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockBlockchainClient.On("CheckBlockIsAncestorOfBlock", mock.Anything, mock.Anything, mock.Anything).Return(false, nil)
 
 	// Mock the markConflictingTxsInSubtrees method
 	// This is a complex method that would require extensive mocking, so we'll test it separately
 
 	// Call the method under test
-	result, _, err := stp.processConflictingTransactions(context.Background(), block, conflictingNodes, map[chainhash.Hash]bool{})
+	result, _, err := stp.processConflictingTransactions(context.Background(), block, conflictingNodes, map[chainhash.Hash]struct{}{})
 
 	// Verify results
 	require.NoError(t, err)

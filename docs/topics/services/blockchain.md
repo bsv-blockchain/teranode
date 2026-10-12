@@ -112,11 +112,11 @@ Explanation of the sequences:
 
 ### 2.3. Sending new block notifications to the Block Persister
 
-The Blockchain service, after adding a new block, emits a Kafka notification which is received by the Block Persister service. The Block Persister service is responsible for post-processing the block and storing it in a file format, in a persistent data store (such as S3).
+The Blockchain service, after adding a new block, emits a `blocks-final` Kafka notification. The Block Persister service does **not** consume this topic — the only Kafka consumer of `blocks-final` is the Legacy P2P service (`netsync.SyncManager`), which uses it to announce new blocks to legacy (pre-libp2p) peers. The Block Persister instead polls the Blockchain service over gRPC (`GetBlocksNotPersisted`), waking every `blockpersister_persistSleep` (default 10s), and post-processes each returned block into a file format in a persistent data store (such as S3).
 
 ![blockchain_send_to_block_persister.svg](img/plantuml/blockchain/blockchain_send_to_block_persister.svg)
 
-The Blockchain service, based on standard practices, will retry sending the message until Kafka receives it. In case of Kafka downtime, the service will keep retrying for as long as the message is not sent.
+The Blockchain service, based on standard practices, will retry sending the `blocks-final` message until Kafka receives it. In case of Kafka downtime, the service will keep retrying for as long as the message is not sent.
 
 ### 2.4. Getting a block from the blockchain
 
@@ -483,9 +483,8 @@ In addition to the core methods described in the Functionality section, the Bloc
 
 - **SendFSMEvent**: Sends an event to the blockchain FSM to trigger state transitions.
 - **GetFSMCurrentState**: Retrieves the current state of the FSM.
-- **WaitFSMToTransitionToGivenState**: Waits for FSM to reach a specific state.
 - **WaitUntilFSMTransitionFromIdleState**: Waits for FSM to transition from IDLE state.
-- **Run, CatchUpBlocks, LegacySync, Idle**: Transitions the service to specific operational modes.
+- **Run, CatchUpBlocks, Idle**: Transitions the service to specific operational modes.
 
 #### State Management
 
@@ -512,7 +511,7 @@ The Blockchain Service uses a Finite State Machine (FSM) to manage its operation
 
 For a comprehensive understanding of the Blockchain Service's FSM implementation, please refer to the dedicated [State Management in Teranode](../architecture/stateManagement.md) documentation, which covers:
 
-- FSM states (Idle, Running, CatchingBlocks, LegacySyncing)
+- FSM states (Idle, Running, CatchingBlocks)
 - State transitions and events
 - Allowed operations in each state
 - FSM initialization and access methods
@@ -521,9 +520,8 @@ For a comprehensive understanding of the Blockchain Service's FSM implementation
 The FSM implementation in the Blockchain Service exposes several gRPC methods for state management:
 
 - **GetFSMCurrentState**: Returns the current state of the FSM
-- **WaitFSMToTransitionToGivenState**: Waits for the FSM to reach a specific state
 - **SendFSMEvent**: Sends events to trigger state transitions
-- **Run, CatchUpBlocks, LegacySync, Idle**: Convenience methods that delegate to SendFSMEvent
+- **Run, CatchUpBlocks, Idle**: Convenience methods that delegate to SendFSMEvent
 
 The FSM ensures that the service only performs operations appropriate for its current state, providing isolation and predictable behavior.
 
@@ -544,7 +542,7 @@ Block notifications are serialized using Protocol Buffers and contain:
 
 #### Topics
 
-- **Blocks-Final**: Used for finalized block notifications, consumed by the Block Persister service.
+- **Blocks-Final**: Used for finalized block notifications, consumed by the Legacy P2P service (`netsync.SyncManager`) — not the Block Persister, which has no Kafka consumer and instead polls the Blockchain service over gRPC.
 
 #### Error Handling
 
@@ -574,7 +572,7 @@ The Blockchain Service implements sophisticated chain reorganization handling wi
 
 - Detects chain splits and reorganizations automatically through block header validation
 - Uses rollback and catch-up operations to handle chain reorganizations
-- Limits reorganization depth for security (configurable via `blockchain_maxReorgDepth`)
+- Selects the active tip purely by cumulative chainwork (most-work-wins); tip selection itself is **not** depth-capped. Deep-reorg / secret-mining protection is enforced in the Block Validation catchup path rather than by a blockchain-level reorg-depth limit (see *Configuration Options* below).
 
 ##### Optimized Longest Chain Selection
 
@@ -606,9 +604,9 @@ The service employs an optimized algorithm for tracking and selecting the longes
 
 **Configuration Options:**
 
-- `blockchain_maxReorgDepth`: Maximum allowed reorganization depth (default: 6 blocks)
-- `blockchain_chainTipCacheSize`: Number of competing tips to track (default: 10)
-- `blockchain_forkPointCacheSize`: Size of fork point cache (default: 100)
+There is no blockchain-level reorganization-depth cap. The active tip is always the chain with the most cumulative chainwork. Protection against deep/secret reorgs is enforced by the Block Validation service during catchup:
+
+- `blockvalidation_secret_mining_threshold`: A candidate chain whose common ancestor is more than this many blocks behind the current tip is rejected as potential secret mining (default: coinbase maturity − 1). Coinbase-maturity fork depth provides the additional bound. See [Block Validation](blockValidation.md).
 
 #### Storage Errors
 

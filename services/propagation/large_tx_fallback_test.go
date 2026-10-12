@@ -33,6 +33,11 @@ func (m *MockKafkaProducer) Publish(msg *kafka.Message) {
 	m.PublishedMessages = append(m.PublishedMessages, msg)
 }
 
+func (m *MockKafkaProducer) TryPublish(msg *kafka.Message) bool {
+	m.PublishedMessages = append(m.PublishedMessages, msg)
+	return true
+}
+
 // TestLargeTransactionFallback tests server-side HTTP fallback when transactions exceed gRPC size limits.
 // This test sets up a mock validator HTTP server and validates that the propagation service
 // correctly routes large transactions through HTTP endpoints instead of gRPC.

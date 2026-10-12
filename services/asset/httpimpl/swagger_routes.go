@@ -374,6 +374,41 @@ package httpimpl
 //   400: errorResponse
 //   404: errorResponse
 
+// swagger:route POST /api/v1/utxos utxo getUTXOsBulk
+// Bulk UTXO spend-status lookup (binary response).
+// Request body: concatenated 36-byte records, each [32 bytes txid][4 bytes vout little-endian].
+// Response body: concatenated fixed-length 48-byte records in input order, each
+// [8 bytes status LE][4 bytes lockTime LE][4 bytes spendingVin LE][32 bytes spendingTxID].
+// Unspent UTXOs have the trailing 36 bytes zero-filled; not-found records report
+// status utxo.Status_NOT_FOUND and the remaining bytes are zero. Body size is
+// capped by the global asset_httpBodyLimit setting (default 100MB).
+// responses:
+//   200: binaryResponse
+//   400: errorResponse
+//   413: errorResponse
+//   500: errorResponse
+
+// swagger:route POST /api/v1/utxos/hex utxo getUTXOsBulkHex
+// Bulk UTXO spend-status lookup (hex-encoded response).
+// Request body is identical to POST /api/v1/utxos (concatenated 36-byte records).
+// Response body is the same binary blob, lowercase-hex-encoded.
+// responses:
+//   200: hexResponse
+//   400: errorResponse
+//   413: errorResponse
+//   500: errorResponse
+
+// swagger:route POST /api/v1/utxos/json utxo getUTXOsBulkJSON
+// Bulk UTXO spend-status lookup (JSON response).
+// Request body is identical to POST /api/v1/utxos (concatenated 36-byte records).
+// Response body is a JSON array of utxo.SpendResponse objects in input order, e.g.
+// [{"status":1,"spendingData":{"txId":"...","vin":0},"lockTime":1234567}, ...].
+// responses:
+//   200:
+//   400: errorResponse
+//   413: errorResponse
+//   500: errorResponse
+
 // ========== Merkle Proofs ==========
 
 // swagger:route GET /api/v1/merkle_proof/{hash} proof getMerkleProof

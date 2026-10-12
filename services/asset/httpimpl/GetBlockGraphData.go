@@ -2,14 +2,131 @@
 package httpimpl
 
 import (
+	"math"
 	"net/http"
+	"sort"
 	"time"
 
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/labstack/echo/v4"
 )
+
+const (
+	bucket1h  = int64(3600)
+	bucket6h  = int64(21600)
+	bucket1d  = int64(86400)
+	bucket1w  = int64(604800)
+	bucket30d = int64(2592000)
+)
+
+// pickBucketSeconds returns the bucket size in seconds for a given time range.
+// Returns 0 (no bucketing) for ranges ≤ 24h.
+func pickBucketSeconds(rangeSeconds int64) int64 {
+	switch {
+	case rangeSeconds <= 86400: // ≤ 24h: per-block resolution
+		return 0
+	case rangeSeconds <= 604800: // ≤ 1w: 1h buckets (~168)
+		return bucket1h
+	case rangeSeconds <= 7776000: // ≤ 3m (90d): 6h buckets (~360)
+		return bucket6h
+	case rangeSeconds <= 31536000: // ≤ 1y: 1d buckets (~365)
+		return bucket1d
+	case rangeSeconds <= 157680000: // ≤ 5y: 1w buckets (~260)
+		return bucket1w
+	default: // > 5y: 30d buckets
+		return bucket30d
+	}
+}
+
+// aggregateDataPoints groups data points into fixed-size time buckets, summing TxCount per bucket.
+// Returns the input unchanged if bucketSeconds is 0 or the input is empty.
+// Output is always sorted by timestamp ASC regardless of input order.
+// The input is not modified.
+func aggregateDataPoints(in *model.BlockDataPoints, bucketSeconds int64) *model.BlockDataPoints {
+	if bucketSeconds == 0 || len(in.DataPoints) == 0 {
+		return in
+	}
+	// Copy the slice before sorting so the caller's order is not disturbed.
+	sorted := make([]*model.DataPoint, len(in.DataPoints))
+	copy(sorted, in.DataPoints)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Timestamp < sorted[j].Timestamp
+	})
+	bs := uint64(bucketSeconds)
+	buckets := make(map[uint32]uint64)
+	order := make([]uint32, 0)
+	for _, dp := range sorted {
+		// uint64 arithmetic avoids overflow on uint32 timestamps near year 2106.
+		b := uint32((uint64(dp.Timestamp) / bs) * bs)
+		if _, ok := buckets[b]; !ok {
+			order = append(order, b)
+		}
+		buckets[b] += dp.TxCount
+	}
+	out := &model.BlockDataPoints{
+		DataPoints:    make([]*model.DataPoint, 0, len(order)),
+		BucketSeconds: bucketSeconds,
+	}
+	for _, b := range order {
+		out.DataPoints = append(out.DataPoints, &model.DataPoint{
+			Timestamp: b,
+			TxCount:   buckets[b],
+		})
+	}
+	return out
+}
+
+// capDataPoints coarsens a series until it holds at most maxPoints points.
+// Bucket boundaries are absolute multiples of the bucket size, so a single
+// pass can still leave one point more than requested; the bucket size is then
+// doubled until the series fits. Every transaction count is carried into a
+// bucket, so no data is dropped - only resolution.
+func capDataPoints(in *model.BlockDataPoints, maxPoints int) *model.BlockDataPoints {
+	if maxPoints <= 0 || len(in.DataPoints) <= maxPoints {
+		return in
+	}
+
+	var minTS uint32 = math.MaxUint32
+
+	var maxTS uint32
+
+	for _, dp := range in.DataPoints {
+		if dp.Timestamp < minTS {
+			minTS = dp.Timestamp
+		}
+
+		if dp.Timestamp > maxTS {
+			maxTS = dp.Timestamp
+		}
+	}
+
+	// Bucket wide enough that the whole range collapses into maxPoints slots.
+	bucketSeconds := (int64(maxTS-minTS) + int64(maxPoints)) / int64(maxPoints)
+	if bucketSeconds < 1 {
+		bucketSeconds = 1
+	}
+
+	// A series the store already bucketed must be coarsened by a multiple of its
+	// bucket size, so every store bucket lands whole in one coarser bucket.
+	// Any other size re-grids aligned buckets onto misaligned ones.
+	if in.BucketSeconds > 0 && bucketSeconds%in.BucketSeconds != 0 {
+		bucketSeconds = (bucketSeconds/in.BucketSeconds + 1) * in.BucketSeconds
+	}
+
+	out := aggregateDataPoints(in, bucketSeconds)
+
+	// Halving the bucket count each time, this terminates well inside the
+	// iteration guard for any uint32 timestamp range.
+	for i := 0; i < 64 && len(out.DataPoints) > maxPoints; i++ {
+		bucketSeconds *= 2
+		out = aggregateDataPoints(in, bucketSeconds)
+	}
+
+	return out
+}
 
 // GetBlockGraphData retrieves time-series data points showing transaction count
 // over time. It supports various time periods for data aggregation.
@@ -26,6 +143,7 @@ import (
 //   - "1w"  - Last week
 //   - "1m"  - Last month (30 days)
 //   - "3m"  - Last 3 months (90 days)
+//   - "all" - All available data
 //
 // Returns:
 //   - error: Any error encountered during processing
@@ -91,6 +209,8 @@ func (h *HTTP) GetBlockGraphData(c echo.Context) error {
 		periodMillis = time.Now().Add(-30*24*time.Hour).UnixNano() / int64(time.Millisecond)
 	case "3m":
 		periodMillis = time.Now().Add(-90*24*time.Hour).UnixNano() / int64(time.Millisecond)
+	case "all":
+		periodMillis = 0
 	default:
 		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("a valid period is required").Error())
 	}
@@ -104,6 +224,29 @@ func (h *HTTP) GetBlockGraphData(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
+
+	// BucketSeconds is set whenever the store already aggregated the series.
+	// Re-deriving a rung from the bucketed endpoints is not always idempotent
+	// (30d buckets are not a multiple of 1w buckets), so a bucketed series is
+	// passed straight through instead of being re-aggregated here.
+	if dataPoints.BucketSeconds == 0 && len(dataPoints.DataPoints) > 1 {
+		var minTS uint32 = math.MaxUint32
+		var maxTS uint32
+		for _, dp := range dataPoints.DataPoints {
+			if dp.Timestamp < minTS {
+				minTS = dp.Timestamp
+			}
+			if dp.Timestamp > maxTS {
+				maxTS = dp.Timestamp
+			}
+		}
+		rangeSeconds := int64(maxTS - minTS)
+		dataPoints = aggregateDataPoints(dataPoints, pickBucketSeconds(rangeSeconds))
+	}
+
+	// asset_maxBlockGraphPoints bounds the returned series. 0 (the default)
+	// leaves the response exactly as it is today.
+	dataPoints = capDataPoints(dataPoints, h.settings.Asset.MaxBlockGraphPoints)
 
 	return c.JSONPretty(200, dataPoints, "  ")
 }

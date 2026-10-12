@@ -2,7 +2,9 @@ package utxo
 
 import (
 	"testing"
+	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/stretchr/testify/assert"
@@ -17,10 +19,13 @@ func TestSerializeDeserialize_Roundtrip(t *testing.T) {
 	parentHash, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000002")
 	require.NoError(t, err)
 
-	txInpoints := &subtree.TxInpoints{
-		ParentTxHashes: []chainhash.Hash{*parentHash},
-		Idxs:           [][]uint32{{0}}, // Must match ParentTxHashes length
-	}
+	parentInput := &bt.Input{PreviousTxOutIndex: 0}
+	require.NoError(t, parentInput.PreviousTxIDAdd(parentHash))
+
+	txInpointsVal, err := subtree.NewTxInpointsFromInputs([]*bt.Input{parentInput})
+	require.NoError(t, err)
+
+	txInpoints := &txInpointsVal
 
 	original := &UnminedTransaction{
 		Node: &subtree.Node{
@@ -58,6 +63,35 @@ func TestSerializeDeserialize_Roundtrip(t *testing.T) {
 	assert.NotNil(t, result.TxInpoints)
 	assert.Equal(t, len(original.TxInpoints.ParentTxHashes), len(result.TxInpoints.ParentTxHashes))
 	assert.Equal(t, original.TxInpoints.ParentTxHashes[0], result.TxInpoints.ParentTxHashes[0])
+}
+
+func TestSerializeDeserialize_CreatedAtUnixMilli(t *testing.T) {
+	hash, err := chainhash.NewHashFromStr("000000000000000000000000000000000000000000000000000000000000000a")
+	require.NoError(t, err)
+
+	// CreatedAt is set from time.Now().UnixMilli() (~1.78e12), far larger than
+	// uint32 max (~4.29e9). Round-tripping must preserve it exactly.
+	createdAt := int(time.Now().UnixMilli())
+	require.Greater(t, createdAt, int(^uint32(0)), "test value must exceed uint32 max")
+
+	original := &UnminedTransaction{
+		Node: &subtree.Node{
+			Hash:        *hash,
+			Fee:         100,
+			SizeInBytes: 200,
+		},
+		CreatedAt:    createdAt,
+		UnminedSince: 1000,
+		BlockIDs:     []uint32{},
+	}
+
+	data, err := SerializeUnminedTransaction(original)
+	require.NoError(t, err)
+
+	result, err := DeserializeUnminedTransaction(data)
+	require.NoError(t, err)
+
+	assert.Equal(t, createdAt, result.CreatedAt)
 }
 
 func TestSerializeDeserialize_EmptyBlockIDs(t *testing.T) {
@@ -179,10 +213,20 @@ func TestSerializeDeserialize_MultipleParents(t *testing.T) {
 	parent3, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000009")
 	require.NoError(t, err)
 
-	txInpoints := &subtree.TxInpoints{
-		ParentTxHashes: []chainhash.Hash{*parent1, *parent2, *parent3},
-		Idxs:           [][]uint32{{0}, {1}, {2}}, // Must match ParentTxHashes length
+	mkInput := func(parent *chainhash.Hash, vout uint32) *bt.Input {
+		in := &bt.Input{PreviousTxOutIndex: vout}
+		require.NoError(t, in.PreviousTxIDAdd(parent))
+		return in
 	}
+
+	txInpointsVal2, err := subtree.NewTxInpointsFromInputs([]*bt.Input{
+		mkInput(parent1, 0),
+		mkInput(parent2, 1),
+		mkInput(parent3, 2),
+	})
+	require.NoError(t, err)
+
+	txInpoints := &txInpointsVal2
 
 	original := &UnminedTransaction{
 		Node: &subtree.Node{

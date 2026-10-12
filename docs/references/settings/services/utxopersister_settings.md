@@ -6,15 +6,20 @@
 
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
-| UTXOPersisterBufferSize | string | "4KB" | utxoPersister_buffer_size | **CRITICAL** - Buffer size for UTXO file I/O operations |
+| UTXOPersisterBufferSize | string | "256KB" | utxoPersister_buffer_size | **CRITICAL** - Buffer size for UTXO file I/O operations |
 | UTXOPersisterDirect | bool | true | direct | Direct I/O operations control |
 
 ## Configuration Dependencies
 
 ### Buffer Management
 - `UTXOPersisterBufferSize` is parsed using bytesize.Parse()
-- Falls back to 4KB (4096 bytes) if parsing fails
 - Used for buffered I/O operations when reading/writing UTXO files
+- The default of `256KB` applies to every consumer
+- The values below are the fallbacks used only when the configured value fails to parse, and they differ by consumer rather than by direction:
+
+    - The file storer's write buffer falls back to 128KB
+    - The block persister's subtree-data read buffer falls back to 128KB
+    - The utxo-additions, utxo-deletions and previous-utxo-set read buffers fall back to 4096 bytes
 
 ### I/O Operations
 - `UTXOPersisterDirect` controls direct I/O behavior
@@ -39,14 +44,14 @@
 ### Basic Configuration
 
 ```text
-utxoPersister_buffer_size = "4KB"
+utxoPersister_buffer_size = "256KB"
 direct = true
 ```
 
 ### Performance Tuning
 
 ```text
-utxoPersister_buffer_size = "64KB"
+utxoPersister_buffer_size = "1MB"
 direct = true
 ```
 

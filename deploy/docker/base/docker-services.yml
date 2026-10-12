@@ -19,7 +19,7 @@ services:
       cat > /docker-entrypoint-initdb.d/init.sql <<'EOF'
       CREATE ROLE teranode LOGIN
         PASSWORD 'teranode'
-        SUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
+        NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
       GRANT teranode TO postgres;
       CREATE DATABASE teranode
         WITH OWNER = teranode
@@ -190,6 +190,10 @@ services:
     entrypoint: ["asd", "--foreground", "--config-file", "/etc/aerospike.conf"]
     privileged: true  # Allow the container to access raw devices
     hostname: aerospike
+    ulimits:
+      nofile:
+        soft: 15000
+        hard: 15000
 
   aerospike-exporter:
     image: aerospike/aerospike-prometheus-exporter:latest
@@ -212,7 +216,21 @@ services:
     user: "0:0"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./blockassembly.rules.yml:/etc/prometheus/blockassembly.rules.yml
       - ${DATA_PATH}/prometheus:/prometheus
+
+  alertmanager:
+    container_name: alertmanager
+    image: prom/alertmanager:v0.26.0
+    ports:
+      # 9093 on the host is already taken by kafka's pandaproxy in this stack.
+      - "127.0.0.1:9094:9093"
+    networks:
+      - teranode-network
+    user: "0:0"
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml
+      - ${DATA_PATH}/alertmanager:/alertmanager
 
   grafana:
     container_name: grafana

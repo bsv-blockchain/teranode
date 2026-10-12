@@ -1,6 +1,7 @@
 package httpimpl
 
 import (
+	"math"
 	"net/http"
 	"strconv"
 
@@ -51,6 +52,10 @@ func (h *HTTP) GetNearestForkHeights(c echo.Context) error {
 	if rangeStr != "" {
 		r, err := strconv.Atoi(rangeStr)
 		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid range parameter").Error())
+		}
+
+		if r < 0 || r > math.MaxUint32 {
 			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid range parameter").Error())
 		}
 

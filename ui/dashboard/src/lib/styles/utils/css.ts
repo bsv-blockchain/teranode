@@ -17,7 +17,15 @@ export const setCSSVariablesFromObj = (paths: string[] = [], obj, themeNs) => {
   }
 }
 
+export const clearAllCSSVariables = () => {
+  if (!browser) return
+  const style = document.documentElement.style
+  const varNames = Array.from(style).filter((name) => name.startsWith('--'))
+  varNames.forEach((name) => style.removeProperty(name))
+}
+
 export const setCSSVariables = (theme, themeNs) => {
+  clearAllCSSVariables()
   setCSSVariablesFromObj([], theme, themeNs)
 }
 

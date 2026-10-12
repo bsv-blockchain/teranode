@@ -46,7 +46,10 @@ func TestIsTransactionFinal(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "Test IsTransactionFinal - lock time is equal to block height",
+			// Strict inequality (bitcoin-sv IsFinalTx): equality with a non-final
+			// sequence rejects. A separate case below covers the final-sequence path,
+			// which bypasses the locktime check entirely.
+			name: "Test IsTransactionFinal - lock time is equal to block height, non final sequence",
 			args: args{
 				tx: &bt.Tx{
 					Inputs: []*bt.Input{{
@@ -58,7 +61,7 @@ func TestIsTransactionFinal(t *testing.T) {
 				blockHeight:     123,
 				medianBlockTime: uint32(time.Now().Unix()),
 			},
-			want: true,
+			want: false,
 		},
 		{
 			name: "Test IsTransactionFinal - lock time is equal to block height, and final sequence number",
@@ -75,6 +78,8 @@ func TestIsTransactionFinal(t *testing.T) {
 			want: true,
 		},
 		{
+			// Mixed sequences: any non-final input fails the all-final shortcut, so
+			// equality at lockTime == blockHeight is rejected under strict inequality.
 			name: "Test IsTransactionFinal - lock time is equal to block height, but non final sequence number",
 			args: args{
 				tx: &bt.Tx{
@@ -88,7 +93,7 @@ func TestIsTransactionFinal(t *testing.T) {
 				blockHeight:     123,
 				medianBlockTime: uint32(time.Now().Unix()),
 			},
-			want: true,
+			want: false,
 		},
 		{
 			name: "Test IsTransactionFinal - lock time is time in the past",
@@ -211,9 +216,10 @@ func TestIsTransactionFinalFromRequirements(t *testing.T) {
 	// Locktime >= 500M, Time lower			TRUE	FALSE
 	assert.NoError(t, IsTransactionFinal(txFinal, 123, 500000004))
 	assert.True(t, errors.Is(IsTransactionFinal(txNonFinal, 123, 500000004), errors.ErrTxLockTime))
-	// Locktime >= 500M, Time equal			TRUE	TRUE
+	// Locktime >= 500M, Time equal			TRUE	FALSE
+	// Strict inequality (bitcoin-sv IsFinalTx): only all-final-sequence inputs accept at equality.
 	assert.NoError(t, IsTransactionFinal(txFinal, 123, 500000005))
-	assert.NoError(t, IsTransactionFinal(txNonFinal, 123, 500000005))
+	assert.True(t, errors.Is(IsTransactionFinal(txNonFinal, 123, 500000005), errors.ErrTxLockTime))
 	// Locktime >= 500M, Time higher		TRUE	TRUE
 	assert.NoError(t, IsTransactionFinal(txFinal, 123, 500000006))
 	assert.NoError(t, IsTransactionFinal(txNonFinal, 123, 500000006))
@@ -224,9 +230,10 @@ func TestIsTransactionFinalFromRequirements(t *testing.T) {
 	// Locktime < 500M, Block Height lower	TRUE	FALSE
 	assert.NoError(t, IsTransactionFinal(txFinal, 122, 500000004))
 	assert.True(t, errors.Is(IsTransactionFinal(txNonFinal, 122, 500000004), errors.ErrTxLockTime))
-	// Locktime < 500M, Block Height equal	TRUE	TRUE
+	// Locktime < 500M, Block Height equal	TRUE	FALSE
+	// Strict inequality (bitcoin-sv IsFinalTx): only all-final-sequence inputs accept at equality.
 	assert.NoError(t, IsTransactionFinal(txFinal, 123, 500000005))
-	assert.NoError(t, IsTransactionFinal(txNonFinal, 123, 500000005))
+	assert.True(t, errors.Is(IsTransactionFinal(txNonFinal, 123, 500000005), errors.ErrTxLockTime))
 	// Locktime < 500M, Block Height higher	TRUE	TRUE
 	assert.NoError(t, IsTransactionFinal(txFinal, 124, 500000006))
 	assert.NoError(t, IsTransactionFinal(txNonFinal, 124, 500000006))

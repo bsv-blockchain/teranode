@@ -8,7 +8,7 @@ accepted into the mempool and blocks.
 
 Key features of the validator package include:
 - Comprehensive transaction validation against Bitcoin consensus rules
-- Multiple script execution engines (GoBDK, GoSDK, GoBT) for script verification
+- Script verification through GoBDK (bitcoin-sv's script interpreter)
 - Integration with UTXO store for input/output tracking and double-spend prevention
 - Batch processing capability for efficient validation of transaction groups
 - Support for both synchronous (RPC) and asynchronous (Kafka) validation paths
@@ -27,7 +27,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -122,6 +121,10 @@ type Server struct {
 	// is used to send rejected transaction data to Kafka topics for monitoring and analysis.
 	rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
 
+	// policyRejectedTxKafkaProducerClient publishes consensus-valid but policy-rejected
+	// transactions to Kafka. Subtree validation pods consume these to cache raw tx bytes.
+	policyRejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
+
 	// blockAssemblyClient connects to the block assembly service for mining integration,
 	// enabling the validator service to participate in block template generation and
 	// transaction inclusion in mining operations. This client is used to interact with
@@ -132,6 +135,68 @@ type Server struct {
 	// synchronous validation path for clients. This server is used to process HTTP
 	// requests and return validation results.
 	httpServer *echo.Echo
+
+	// consumerMu guards consumerCtx and consumerCancel. Start writes them and Stop
+	// reads them; the service manager sequences the two today, but relying on that is
+	// an unsynchronised cross-goroutine access that -race is right to flag, and the
+	// mutex costs nothing on a per-service-lifecycle path.
+	consumerMu sync.Mutex
+
+	// consumerCtx is a cancellable child of the Start context that the Kafka
+	// message handler passes into ValidateWithOptions. Cancelling it aborts an
+	// in-place block-assembly handoff retry (WaitForBlockAssembly) promptly at
+	// shutdown, regardless of caller ordering, so a wedged block assembly can
+	// never keep a consumer goroutine spinning past Stop. Guarded by consumerMu.
+	consumerCtx context.Context
+
+	// consumerCancel cancels consumerCtx; called first in Stop, before the
+	// consumer is closed, and also on any early Start failure so the context is
+	// never left live after Start gives up. Guarded by consumerMu.
+	//
+	// It is the ONLY handle on consumerCtx, which is why setConsumerContext
+	// cancels the pair it replaces rather than overwriting both fields.
+	consumerCancel context.CancelFunc
+}
+
+// setConsumerContext installs the consumer context and its cancel function,
+// cancelling the pair it replaces.
+func (v *Server) setConsumerContext(ctx context.Context, cancel context.CancelFunc) {
+	v.consumerMu.Lock()
+	previous := v.consumerCancel
+	v.consumerCtx = ctx
+	v.consumerCancel = cancel
+	v.consumerMu.Unlock()
+
+	// Installing a second context must not orphan the first: its cancel function is
+	// the only handle on it, so overwriting the field would leave whatever is bound
+	// to it — the Kafka handler, the backpressure controller goroutine — running with
+	// nothing able to stop it short of the parent context dying. Called outside the
+	// lock because cancelConsumer takes the same mutex.
+	if previous != nil {
+		previous()
+	}
+}
+
+// consumerContext returns the consumer context, or nil before Start has installed one.
+func (v *Server) consumerContext() context.Context {
+	v.consumerMu.Lock()
+	defer v.consumerMu.Unlock()
+
+	return v.consumerCtx
+}
+
+// cancelConsumer cancels the consumer context if one is installed. Idempotent: the
+// cancel function is cleared under the lock, so a double Stop — or a Stop after an
+// early Start failure already cancelled it — is a no-op rather than a second call.
+func (v *Server) cancelConsumer() {
+	v.consumerMu.Lock()
+	cancel := v.consumerCancel
+	v.consumerCancel = nil
+	v.consumerMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // NewServer creates and initializes a new validator server instance with the specified components.
@@ -154,19 +219,21 @@ type Server struct {
 func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store,
 	blockchainClient blockchain.ClientI, consumerClient kafka.KafkaConsumerGroupI,
 	txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI,
+	policyRejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI,
 	blockAssemblyClient blockassembly.ClientI) *Server {
 	initPrometheusMetrics()
 
 	return &Server{
-		logger:                        logger,
-		settings:                      tSettings,
-		utxoStore:                     utxoStore,
-		stats:                         gocore.NewStat("validator"),
-		blockchainClient:              blockchainClient,
-		consumerClient:                consumerClient,
-		txMetaKafkaProducerClient:     txMetaKafkaProducerClient,
-		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
-		blockAssemblyClient:           blockAssemblyClient,
+		logger:                              logger,
+		settings:                            tSettings,
+		utxoStore:                           utxoStore,
+		stats:                               gocore.NewStat("validator"),
+		blockchainClient:                    blockchainClient,
+		consumerClient:                      consumerClient,
+		txMetaKafkaProducerClient:           txMetaKafkaProducerClient,
+		rejectedTxKafkaProducerClient:       rejectedTxKafkaProducerClient,
+		policyRejectedTxKafkaProducerClient: policyRejectedTxKafkaProducerClient,
+		blockAssemblyClient:                 blockAssemblyClient,
 	}
 }
 
@@ -294,7 +361,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return errors.NewServiceError("[Init] blockassembly client is nil while enabled in the validator", nil)
 	}
 
-	v.validator, err = New(ctx, v.logger, v.settings, v.utxoStore, v.txMetaKafkaProducerClient, v.rejectedTxKafkaProducerClient, v.blockAssemblyClient, v.blockchainClient)
+	v.validator, err = New(ctx, v.logger, v.settings, v.utxoStore, v.txMetaKafkaProducerClient, v.rejectedTxKafkaProducerClient, v.policyRejectedTxKafkaProducerClient, v.blockAssemblyClient, v.blockchainClient)
 	if err != nil {
 		return errors.NewServiceError("[Init] could not create validator", err)
 	}
@@ -318,7 +385,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 // Returns:
 //   - error: Any startup errors, including FSM transition failures, Kafka setup issues,
 //     or HTTP server initialization problems
-func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
+func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) (retErr error) {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
 
@@ -333,45 +400,43 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		return err
 	}
 
+	// Derive a cancellable context the Kafka handler observes, so the in-place
+	// block-assembly handoff retry (WaitForBlockAssembly) aborts promptly at
+	// shutdown even if Stop is called without cancelling the Start context.
+	consumerCtx, consumerCancel := context.WithCancel(ctx)
+	v.setConsumerContext(consumerCtx, consumerCancel)
+
+	// Any failure below returns without Stop necessarily being called, so cancel here
+	// rather than leaking the context and whatever it is keeping alive.
+	defer func() {
+		if retErr != nil {
+			v.cancelConsumer()
+		}
+	}()
+
 	kafkaMessageHandler := func(msg *kafka.KafkaMessage) error {
-		var kafkaMsg kafkamessage.KafkaTxValidationTopicMessage
-		if err := proto.Unmarshal(msg.Value, &kafkaMsg); err != nil {
-			v.logger.Errorf("Failed to unmarshal kafka message: %v", err)
-
-			return err
-		}
-
-		tx, err := bt.NewTxFromBytes(kafkaMsg.Tx)
-		if err != nil {
-			prometheusInvalidTransactions.Inc()
-			v.logger.Errorf("[Validator] failed to parse transaction from bytes: %v", err)
-
-			return err
-		}
-
-		height := kafkaMsg.Height
-
-		options := &Options{
-			SkipUtxoCreation:     kafkaMsg.Options.SkipUtxoCreation,
-			AddTXToBlockAssembly: kafkaMsg.Options.AddTXToBlockAssembly,
-			SkipPolicyChecks:     kafkaMsg.Options.SkipPolicyChecks,
-			CreateConflicting:    kafkaMsg.Options.CreateConflicting,
-		}
-
-		// should not pass in a height when validating from Kafka, should just be current utxo store height
-		if _, err = v.validator.ValidateWithOptions(ctx, tx, height, options); err != nil {
-			prometheusInvalidTransactions.Inc()
-			v.logger.Errorf("[Validator] Invalid tx: %s", err)
-
-			return err
-		}
-
-		return nil
+		return v.handleKafkaTxMessage(consumerCtx, msg)
 	}
 
 	if v.consumerClient != nil {
-		v.consumerClient.Start(ctx, kafkaMessageHandler, kafka.WithLogErrorAndMoveOn())
+		v.consumerClient.Start(consumerCtx, kafkaMessageHandler, kafka.WithLogErrorAndMoveOn())
 	}
+
+	// Arm the queue-age-driven Kafka backpressure controller (disabled by default;
+	// safe no-op when disabled or when a client is nil). It binds itself to the
+	// consumer context, so it shares by construction the lifetime of the consumer it
+	// controls: Stop's consumerCancel is what ends the controller goroutine and runs
+	// its resume-on-exit, and a Start/Stop cycle therefore leaks no goroutine.
+	//
+	// Stop cancels before closing the consumer so the resume-on-exit has a chance to
+	// reach a live client, but nothing joins the controller goroutine, so that is an
+	// ordering preference and not a guarantee. It does not need to be one: pause state
+	// is client-local and dies with the client — franz-go's on the kgo.Client that
+	// closeClient closes, the in-memory arm's on the consumer group object built per
+	// consumer — so a resume that lands after Close changes nothing a later Start could
+	// observe. What makes the late call SAFE rather than merely pointless is the closed
+	// guard in KafkaConsumerGroup.setFetchPaused.
+	v.startKafkaBackpressure(ctx)
 
 	if err = v.startHTTPServer(ctx, v.settings.Validator.HTTPListenAddress); err != nil {
 		return err
@@ -388,6 +453,100 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	return nil
 }
 
+// handleKafkaTxMessage validates one transaction taken from the validator Kafka topic.
+func (v *Server) handleKafkaTxMessage(consumerCtx context.Context, msg *kafka.KafkaMessage) error {
+	var kafkaMsg kafkamessage.KafkaTxValidationTopicMessage
+	if err := proto.Unmarshal(msg.Value, &kafkaMsg); err != nil {
+		v.logger.Errorf("Failed to unmarshal kafka message: %v", err)
+
+		return err
+	}
+
+	tx, err := bt.NewTxFromBytes(kafkaMsg.Tx)
+	if err != nil {
+		prometheusInvalidTransactions.Inc()
+		v.logger.Errorf("[Validator] failed to parse transaction from bytes: %v", err)
+
+		return err
+	}
+
+	height := kafkaMsg.Height
+
+	options := kafkaValidationOptions(kafkaMsg.Options)
+
+	// should not pass in a height when validating from Kafka, should just be current utxo store height
+	if _, err = v.validator.ValidateWithOptions(consumerCtx, tx, height, options); err != nil {
+		// The tx was accepted, spent and created; only the unlock failed. It is already
+		// logged and counted in the validator, and the lock heals when the tx is mined.
+		if errors.Is(err, errors.ErrTxUnlockFailed) {
+			return nil
+		}
+
+		// ErrTxMissingParent here means the tx merely arrived before its
+		// parent on this Kafka topic's 32 concurrent partitions - it is not
+		// evidence of an attack or a malformed tx, so count it separately
+		// from prometheusInvalidTransactions to keep that counter usable as
+		// a signal for genuinely invalid/attack traffic.
+		if errors.Is(err, errors.ErrTxMissingParent) {
+			prometheusMissingParentTransactions.Inc()
+		} else {
+			prometheusInvalidTransactions.Inc()
+		}
+
+		v.logger.Errorf("[Validator] Invalid tx: %s", err)
+
+		return err
+	}
+
+	return nil
+}
+
+// optionsFromKafkaMessage converts the wire-level KafkaTxValidationOptions into
+// the validator's internal Options, treating a nil options message the same as
+// one whose fields are all absent/false.
+//
+// KafkaTxValidationOptions is an optional-presence proto3 message field
+// (kafka_messages.proto), so a producer that omits it entirely - including a
+// foreign or crafted producer on the validatortxs topic, which is not
+// authenticated - unmarshals with kafkaMsg.Options == nil. The in-tree
+// producer (propagation's validateTransactionViaKafka) always populates
+// Options from validator.NewDefaultOptions(), so falling back to those same
+// defaults here means an omitted Options field can never be more permissive
+// than what the trusted producer already sends.
+func optionsFromKafkaMessage(opts *kafkamessage.KafkaTxValidationOptions) *Options {
+	if opts == nil {
+		return NewDefaultOptions()
+	}
+
+	return &Options{
+		SkipUtxoCreation:     opts.SkipUtxoCreation,
+		AddTXToBlockAssembly: opts.AddTXToBlockAssembly,
+		SkipPolicyChecks:     opts.SkipPolicyChecks,
+		CreateConflicting:    opts.CreateConflicting,
+	}
+}
+
+// kafkaValidationOptions builds the Options passed to ValidateWithOptions for a
+// message received on the validatortxs Kafka topic. It starts from
+// optionsFromKafkaMessage's nil-safe extraction of the wire-level fields, then
+// always sets WaitForBlockAssembly.
+//
+// WaitForBlockAssembly is NOT carried on the wire (KafkaTxValidationOptions has
+// no such field) - it is a property of this ingest path, not of the message
+// content: a queue-full shed on the block-assembly handoff must not advance the
+// Kafka offset past an un-handed-off tx, so the handoff is retried in place,
+// bounded by validator_blockAssemblyShedRetryTimeout and then unwound and
+// dropped (propagation has already returned success to its caller), rather than
+// retried forever. Applying it here, after optionsFromKafkaMessage, means it is
+// set unconditionally for every Kafka-sourced tx regardless of whether Options
+// was present on the wire.
+func kafkaValidationOptions(opts *kafkamessage.KafkaTxValidationOptions) *Options {
+	options := optionsFromKafkaMessage(opts)
+	options.WaitForBlockAssembly = true
+
+	return options
+}
+
 // Stop gracefully shuts down the validator server and all associated components.
 // This method performs an orderly shutdown of all server resources, including Kafka
 // producers/consumers and any background tasks. It sends termination signals to Kafka
@@ -398,15 +557,22 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // shutdown orchestration.
 //
 // Parameters:
-//   - ctx: Context for shutdown operation (currently unused but maintained for interface consistency)
+//   - ctx: Context bounding the shutdown; producer stops are raced against it so a wedged broker can't stall shutdown
 //
 // Returns:
 //   - error: Any shutdown errors encountered during the cleanup process
 //     Returns nil if shutdown is successful or if no cleanup was necessary
-func (v *Server) Stop(_ context.Context) error {
+func (v *Server) Stop(ctx context.Context) error {
 	if v.kafkaSignal != nil {
 		v.kafkaSignal <- syscall.SIGTERM
 	}
+
+	// Cancel the consumer context first so any in-flight ingest handoff retry aborts,
+	// and so the backpressure controller's resume-on-exit runs while the client is
+	// still open. Nothing joins that goroutine, so the ordering is a preference rather
+	// than a guarantee; the closed guard in the consumer is what makes a late
+	// pause/resume safe. See the note in Start.
+	v.cancelConsumer()
 
 	if v.consumerClient != nil {
 		// close the kafka consumer gracefully
@@ -414,6 +580,24 @@ func (v *Server) Stop(_ context.Context) error {
 			v.logger.Errorf("[BlockValidation] failed to close kafka consumer gracefully: %v", err)
 		}
 	}
+
+	// DC15: drain the tx-meta batcher BEFORE stopping the txmeta producer below,
+	// so queued tx-meta is flushed INTO the producer first; then the producer
+	// flushes to Kafka. The batcher lives on the concrete *Validator (same
+	// package); type-assert so non-*Validator Interface impls (test doubles) are
+	// skipped. Bounded drain (go-batcher v2.0.4 Close blocks + is idempotent).
+	if val, ok := v.validator.(*Validator); ok && val.txmetaKafkaBatcher != nil {
+		util.DrainBatcher(v.logger, "validator_txmeta_batcher", util.DefaultBatcherDrainTimeout, val.txmetaKafkaBatcher.Close)
+	}
+
+	// DC11: stop the async producers so their final flush runs during shutdown
+	// instead of racing process exit. Each Stop() is raced against ctx so a wedged
+	// broker flush can't block past the bounded Stop() window — the outstanding
+	// Stop() finishes the flush later if it can. Each is nil-guarded and
+	// non-fatal; failures are logged and shutdown continues.
+	kafka.StopProducerCtx(ctx, v.logger, "validator txmeta", v.txMetaKafkaProducerClient)
+	kafka.StopProducerCtx(ctx, v.logger, "validator rejectedTx", v.rejectedTxKafkaProducerClient)
+	kafka.StopProducerCtx(ctx, v.logger, "validator policy-rejected tx", v.policyRejectedTxKafkaProducerClient)
 
 	return nil
 }
@@ -433,6 +617,82 @@ func (v *Server) Stop(_ context.Context) error {
 func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
 	response, err := v.validateTransaction(ctx, req)
 	return response, errors.WrapGRPC(err)
+}
+
+// optionsFromValidateRequest projects a gRPC ValidateTransactionRequest's
+// optional flag fields into the in-process Options struct. Defined as a
+// package-level helper so the projection logic is independently testable —
+// pins the round-trip from the validator client's request build through to
+// the server-side option mapping, preventing the field-by-field mapping from
+// silently drifting between sides.
+//
+// The (*Options, error) signature is retained for caller stability even though
+// every field is now a scalar optional that cannot fail to project; the error
+// is always nil.
+func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) (*Options, error) {
+	opts := NewDefaultOptions()
+
+	if req.SkipUtxoCreation != nil {
+		opts.SkipUtxoCreation = *req.SkipUtxoCreation
+	}
+
+	if req.AddTxToBlockAssembly != nil {
+		opts.AddTXToBlockAssembly = *req.AddTxToBlockAssembly
+	}
+
+	if req.SkipPolicyChecks != nil {
+		opts.SkipPolicyChecks = *req.SkipPolicyChecks
+	}
+
+	if req.CreateConflicting != nil {
+		opts.CreateConflicting = *req.CreateConflicting
+	}
+
+	if req.SkipTxmetaPublishing != nil {
+		opts.SkipTxMetaPublishing = *req.SkipTxmetaPublishing
+	}
+
+	if req.InBlock != nil {
+		opts.InBlock = *req.InBlock
+	}
+
+	if req.CandidateBlockTime != nil {
+		opts.CandidateBlockTime = *req.CandidateBlockTime
+	}
+
+	if req.CandidateParentMedianTime != nil {
+		opts.CandidateParentMedianTime = *req.CandidateParentMedianTime
+	}
+
+	if req.UnconfirmedParentsAtCandidateHeight != nil {
+		opts.UnconfirmedParentsAtCandidateHeight = *req.UnconfirmedParentsAtCandidateHeight
+	}
+
+	if req.SkipScriptValidation != nil {
+		opts.SkipScriptValidation = *req.SkipScriptValidation
+	}
+
+	if req.OutpointOnlySpend != nil {
+		opts.OutpointOnlySpend = *req.OutpointOnlySpend
+	}
+
+	return opts, nil
+}
+
+// isProtobufContentType reports whether the request's Content-Type indicates
+// a protobuf body. Tolerant of charset/quality parameters (e.g.
+// "application/x-protobuf; charset=binary"); a strict prefix match would be
+// brittle against well-behaved HTTP intermediaries that may append params.
+func isProtobufContentType(contentType string) bool {
+	ct := strings.TrimSpace(strings.ToLower(contentType))
+	if ct == "" {
+		return false
+	}
+	// Strip params after the media-type token.
+	if idx := strings.Index(ct, ";"); idx >= 0 {
+		ct = strings.TrimSpace(ct[:idx])
+	}
+	return ct == "application/x-protobuf" || ct == "application/protobuf"
 }
 
 // validateTransaction performs the internal validation logic for a single transaction.
@@ -469,25 +729,10 @@ func (v *Server) validateTransaction(ctx context.Context, req *validator_api.Val
 	// set the tx hash, so it doesn't have to be recalculated
 	tx.SetTxHash(tx.TxIDChainHash())
 
-	validationOptions := NewDefaultOptions()
-	if req.SkipUtxoCreation != nil {
-		validationOptions.SkipUtxoCreation = *req.SkipUtxoCreation
-	}
-
-	if req.AddTxToBlockAssembly != nil {
-		validationOptions.AddTXToBlockAssembly = *req.AddTxToBlockAssembly
-	}
-
-	if req.SkipPolicyChecks != nil {
-		validationOptions.SkipPolicyChecks = *req.SkipPolicyChecks
-	}
-
-	if req.CreateConflicting != nil {
-		validationOptions.CreateConflicting = *req.CreateConflicting
-	}
-
-	if req.SkipTxmetaPublishing != nil {
-		validationOptions.SkipTxMetaPublishing = *req.SkipTxmetaPublishing
+	validationOptions, err := optionsFromValidateRequest(req)
+	if err != nil {
+		prometheusInvalidTransactions.Inc()
+		return &validator_api.ValidateTransactionResponse{Valid: false}, err
 	}
 
 	// Pre-warm the MTP store for BIP68 validation before running transaction validation.
@@ -498,7 +743,10 @@ func (v *Server) validateTransaction(ctx context.Context, req *validator_api.Val
 
 	txMetaData, err := v.validator.ValidateWithOptions(ctx, tx, req.BlockHeight, validationOptions)
 	if err != nil {
-		prometheusInvalidTransactions.Inc()
+		// an accepted tx whose unlock failed is not an invalid tx
+		if !errors.Is(err, errors.ErrTxUnlockFailed) {
+			prometheusInvalidTransactions.Inc()
+		}
 
 		return &validator_api.ValidateTransactionResponse{
 			Valid: false,
@@ -571,7 +819,10 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 
 		g.Go(func() error {
 			validatorResponse, err := v.validateTransaction(gCtx, reqItem)
-			metaData[idx] = validatorResponse.Metadata
+			// A failing item returns (nil, err) — e.g. an MTP load failure — so read
+			// metadata through the nil-safe generated accessor: no response means
+			// empty metadata at this index, with the error recorded alongside it.
+			metaData[idx] = validatorResponse.GetMetadata()
 			errReasons[idx] = errors.Wrap(err)
 
 			// Never return an error because we don't want to cancel the context for other transactions in the batch.
@@ -659,73 +910,33 @@ func (v *Server) GetMedianBlockTime(ctx context.Context, _ *validator_api.EmptyM
 	}, nil
 }
 
-// extractValidationParams extracts validation parameters from HTTP query string parameters.
-// This utility function parses and converts various query parameters into validation options
-// for transaction processing. It handles both numeric parameters (like blockHeight) and
-// boolean flags (like skipUtxoCreation, addTxToBlockAssembly) that control validation behavior.
-//
-// The function recognizes boolean values as either 'true' or '1' strings in the query parameters.
-// If parameters are not provided or cannot be parsed, default values are used.
-//
-// Parameters:
-//   - c: Echo context containing the HTTP request and query parameters
-//
-// Returns:
-//   - uint32: Block height to use for validation context (0 if not specified or invalid)
-//   - *Options: Configured validation options with all extracted parameters applied
-func extractValidationParams(c echo.Context) (uint32, *Options) {
-	const trueString = "true"
-
-	var (
-		blockHeight uint32
-	)
-
-	options := NewDefaultOptions()
-
-	// Extract block height
-	if blockHeightStr := c.QueryParam("blockHeight"); blockHeightStr != "" {
-		height, err := strconv.ParseUint(blockHeightStr, 10, 32)
-		if err == nil {
-			blockHeight = uint32(height)
-		}
+// httpStatusForTxError maps a transaction-processing error to an HTTP status.
+// A block-assembly overload shed surfaces as ErrThresholdExceeded and is a
+// retryable 503 Service Unavailable, not a 500: the transaction is durably
+// stored and a resubmit re-drives the handoff once block assembly has room.
+// Every other error stays a 500.
+func httpStatusForTxError(err error) int {
+	if errors.Is(err, errors.ErrThresholdExceeded) {
+		return http.StatusServiceUnavailable
 	}
 
-	// Extract boolean parameters
-	if skipUtxoCreationStr := c.QueryParam("skipUtxoCreation"); skipUtxoCreationStr != "" {
-		boolVal := skipUtxoCreationStr == trueString || skipUtxoCreationStr == "1"
-		options.SkipUtxoCreation = boolVal
-	}
-
-	if addTxToBlockAssemblyStr := c.QueryParam("addTxToBlockAssembly"); addTxToBlockAssemblyStr != "" {
-		boolVal := addTxToBlockAssemblyStr == trueString || addTxToBlockAssemblyStr == "1"
-		options.AddTXToBlockAssembly = boolVal
-	}
-
-	if skipPolicyChecksStr := c.QueryParam("skipPolicyChecks"); skipPolicyChecksStr != "" {
-		boolVal := skipPolicyChecksStr == trueString || skipPolicyChecksStr == "1"
-		options.SkipPolicyChecks = boolVal
-	}
-
-	if createConflictingStr := c.QueryParam("createConflicting"); createConflictingStr != "" {
-		boolVal := createConflictingStr == trueString || createConflictingStr == "1"
-		options.CreateConflicting = boolVal
-	}
-
-	return blockHeight, options
+	return http.StatusInternalServerError
 }
 
 // handleSingleTx handles a single transaction request on the /tx endpoint.
 // This method implements an HTTP handler for validating a single Bitcoin transaction
-// submitted via POST request. It reads the raw transaction bytes from the request body,
-// extracts validation parameters from the query string, and delegates to the core
-// validation logic via validateTransaction.
+// submitted via POST request. It reads the raw transaction bytes from the request body
+// and delegates to the core validation logic via validateTransaction.
 //
-// The handler supports several validation options through query parameters:
-// - blockHeight: The blockchain height to validate against
-// - skipUtxoCreation: Whether to skip UTXO creation (useful for testing/dry-runs)
-// - addTxToBlockAssembly: Whether to include the transaction in block templates
-// - skipPolicyChecks: Whether to skip non-consensus policy validation checks
-// - createConflicting: Whether to allow creating conflicting UTXOs
+// The endpoint carries transaction bytes only. It accepts NO validation options:
+// the query string is not read at all, and a protobuf body that asks for anything
+// other than plain mempool-submission semantics is rejected with 400. The gRPC API
+// is the only transport that can express these options; this endpoint is
+// unauthenticated, so a caller assertion here is not a trust basis for a
+// consensus-affecting flag. The gRPC listener is not itself authenticated on the
+// shipped profile either (security_level_grpc defaults to 0 and no auth
+// interceptor is installed), so this removes the HTTP route rather than removing
+// the capability from unauthenticated callers. Issue 4840, finding B-022.
 //
 // Parameters:
 //   - ctx: Context for the handler operation, passed through to validation
@@ -734,7 +945,8 @@ func extractValidationParams(c echo.Context) (uint32, *Options) {
 //   - echo.HandlerFunc: HTTP handler function that processes transaction validation requests
 //     and returns appropriate status codes and responses:
 //   - 200 OK: Transaction is valid
-//   - 400 Bad Request: Invalid request body
+//   - 400 Bad Request: Invalid request body, or a request asking for non-default
+//     validation options
 //   - 500 Internal Server Error: Validation failed with specific reason
 func (v *Server) handleSingleTx(ctx context.Context) echo.HandlerFunc {
 	return func(c echo.Context) error {
@@ -743,23 +955,62 @@ func (v *Server) handleSingleTx(ctx context.Context) echo.HandlerFunc {
 			return c.String(http.StatusBadRequest, "[handleSingleTx] Invalid request body")
 		}
 
-		// Extract validation parameters from query string
-		blockHeight, options := extractValidationParams(c)
+		// The /tx endpoint supports two body shapes, discriminated by Content-Type:
+		//   - application/x-protobuf: body is a serialised ValidateTransactionRequest.
+		//     Only the transaction bytes are honoured; any non-default validation
+		//     option in the body is a 400 (see nonDefaultValidationOptions).
+		//   - any other Content-Type (legacy, including application/octet-stream):
+		//     body is the raw tx bytes. Kept for backward compatibility with
+		//     non-protobuf callers; the request is projected to height 0 and
+		//     default options, so the server derives the height itself. The two
+		//     shapes differ deliberately in what they do with an option they cannot
+		//     express: a protobuf body carrying a non-default one is REJECTED with a
+		//     400 naming the field, while this shape DROPS any query parameter,
+		//     because it predates the protobuf body and exists for callers that
+		//     cannot send one. Whether it should reject instead is a behaviour
+		//     change, and is not made here.
+		var req *validator_api.ValidateTransactionRequest
+		if isProtobufContentType(c.Request().Header.Get("Content-Type")) {
+			req = &validator_api.ValidateTransactionRequest{}
+			if err := proto.Unmarshal(body, req); err != nil {
+				return c.String(http.StatusBadRequest, "[handleSingleTx] failed to unmarshal protobuf body: "+err.Error())
+			}
 
-		// Create the request with transaction data and parameters
-		req := &validator_api.ValidateTransactionRequest{
-			TransactionData:      body,
-			BlockHeight:          blockHeight,
-			SkipUtxoCreation:     &options.SkipUtxoCreation,
-			AddTxToBlockAssembly: &options.AddTXToBlockAssembly,
-			SkipPolicyChecks:     &options.SkipPolicyChecks,
-			CreateConflicting:    &options.CreateConflicting,
+			// Reject, never strip. A stripped request would be validated under
+			// default semantics — SkipPolicyChecks, InBlock and the candidate
+			// times silently gone — which is a consensus divergence, strictly
+			// worse than a hard failure. 400 rather than 403 because nothing is
+			// authenticated: the request is simply not expressible here.
+			if reason := nonDefaultValidationOptions(req); reason != "" {
+				return c.String(http.StatusBadRequest,
+					"[handleSingleTx] the HTTP endpoint accepts transaction bytes only; "+
+						reason+" must be sent over the validator gRPC API")
+			}
+		} else {
+			// Use the shared request builder so the legacy /tx path produces the
+			// same wire shape as every other producer. Height 0 makes the
+			// validator derive the height from its own chain state rather than
+			// honouring a caller assertion.
+			req = buildValidateTxRequest(body, 0, NewDefaultOptions())
 		}
 
-		// Process the transaction and return appropriate response
+		// Process the transaction and return appropriate response.
+		//
+		// The verdict also goes out as a machine-readable header. The body below
+		// is a rendered error string: a caller can print it but cannot classify
+		// it, so propagation's large-transaction fallback used to wrap whatever
+		// came back as SERVICE_ERROR and report a permanently invalid transaction
+		// to its own client as a retryable 500. errors.AttachHTTPError carries the
+		// public code and message across instead, and leaves the status and body
+		// untouched for callers that predate it.
 		response, err := v.validateTransaction(ctx, req)
+		if errors.Is(err, errors.ErrTxUnlockFailed) {
+			return c.String(http.StatusOK, "OK")
+		}
+
 		if err != nil {
-			return c.String(http.StatusInternalServerError, "[handleSingleTx] Failed to process transaction: "+err.Error())
+			errors.AttachHTTPError(c.Response().Header(), err)
+			return c.String(httpStatusForTxError(err), "[handleSingleTx] Failed to process transaction: "+err.Error())
 		}
 
 		if !response.Valid {
@@ -778,8 +1029,9 @@ func (v *Server) handleSingleTx(ctx context.Context) echo.HandlerFunc {
 //
 // The handler supports proper transaction ordering by processing transactions in sequence,
 // which is important when later transactions depend on outputs from earlier ones in the
-// same batch. It uses the same validation options as handleSingleTx, supporting the
-// same query parameters.
+// same batch. Like handleSingleTx it carries transaction bytes only: the query string is
+// not read, every transaction is validated at height 0 with default options, and there is
+// no body shape through which a caller could ask for anything else.
 //
 // Unlike the gRPC batch validation endpoint, this HTTP handler processes transactions
 // sequentially and will stop at the first validation failure, returning an error response.
@@ -796,8 +1048,10 @@ func (v *Server) handleSingleTx(ctx context.Context) echo.HandlerFunc {
 //   - 500 Internal Server Error: Validation failed with specific reason
 func (v *Server) handleMultipleTx(ctx context.Context) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		// Extract validation parameters from query string
-		blockHeight, options := extractValidationParams(c)
+		// Plain mempool-submission semantics for every transaction in the stream.
+		// Hoisted out of the loop: it is the same value for every request, and no
+		// caller input contributes to it. Issue 4840, finding B-022.
+		opts := NewDefaultOptions()
 
 		// Read transactions with the bt reader in a loop
 		for {
@@ -814,19 +1068,16 @@ func (v *Server) handleMultipleTx(ctx context.Context) echo.HandlerFunc {
 				return c.String(http.StatusBadRequest, "[handleMultipleTx] Invalid request body: "+err.Error())
 			}
 
-			// Process the transaction
-			req := &validator_api.ValidateTransactionRequest{
-				TransactionData:      tx.SerializeBytes(),
-				BlockHeight:          blockHeight,
-				SkipUtxoCreation:     &options.SkipUtxoCreation,
-				AddTxToBlockAssembly: &options.AddTXToBlockAssembly,
-				SkipPolicyChecks:     &options.SkipPolicyChecks,
-				CreateConflicting:    &options.CreateConflicting,
-			}
+			// Use the shared request builder — same rationale as handleSingleTx.
+			req := buildValidateTxRequest(tx.SerializeBytes(), 0, opts)
 
 			response, err := v.validateTransaction(ctx, req)
+			if errors.Is(err, errors.ErrTxUnlockFailed) {
+				continue
+			}
+
 			if err != nil {
-				return c.String(http.StatusInternalServerError, "[handleMultipleTx] Failed to process transaction: "+err.Error())
+				return c.String(httpStatusForTxError(err), "[handleMultipleTx] Failed to process transaction: "+err.Error())
 			}
 
 			if !response.Valid {

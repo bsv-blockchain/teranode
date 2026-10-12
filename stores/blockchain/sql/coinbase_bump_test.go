@@ -20,7 +20,7 @@ func TestStoreBlock_CoinbaseBUMP_RoundTrip(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Create a block with CoinbaseBUMP set
 	testBUMP := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0xAA, 0xBB, 0xCC}
@@ -48,7 +48,7 @@ func TestStoreBlock_CoinbaseBUMP_NilBackwardCompat(t *testing.T) {
 
 	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
-	defer s.Close()
+	defer s.Close(context.Background())
 
 	// Store a block WITHOUT CoinbaseBUMP
 	blockID, _, err := s.StoreBlock(context.Background(), block1, "test-peer")

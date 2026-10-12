@@ -37,17 +37,22 @@ var (
 
 	// Additional metrics for block assembler operations
 	prometheusBlockAssemblerGetMiningCandidate          prometheus.Counter
+	prometheusBlockAssemblerCandidateTimeClockSkew      prometheus.Counter
 	prometheusBlockAssemblerSubtreeCreated              prometheus.Counter
 	prometheusBlockAssemblerTransactions                prometheus.Gauge
 	prometheusBlockAssemblerQueuedTransactions          prometheus.Gauge
 	prometheusBlockAssemblerSubtrees                    prometheus.Gauge
 	prometheusBlockAssemblerTxMetaGetDuration           prometheus.Histogram
 	prometheusBlockAssemblerReorg                       prometheus.Counter
+	prometheusBlockAssemblerCatchUp                     prometheus.Counter
 	prometheusBlockAssemblerReorgDuration               prometheus.Histogram
 	prometheusBlockAssemblerGetReorgBlocksDuration      prometheus.Histogram
 	prometheusBlockAssemblerUpdateBestBlock             prometheus.Histogram
 	prometheusBlockAssemblyBestBlockHeight              prometheus.Gauge
 	prometheusBlockAssemblyCurrentBlockHeight           prometheus.Gauge
+	prometheusBlockAssemblyTipLagBlocks                 prometheus.Gauge
+	prometheusBlockAssemblyProcessingStuck              *prometheus.CounterVec
+	prometheusBlockAssemblyCoinbaseDivergence           *prometheus.CounterVec
 	prometheusBlockAssemblerCurrentState                prometheus.Gauge
 	prometheusBlockAssemblerStateTransitions            *prometheus.CounterVec
 	prometheusBlockAssemblerStateDuration               *prometheus.HistogramVec
@@ -67,6 +72,28 @@ var (
 	prometheusBlockAssemblerAddDirectlyTotal            prometheus.Counter
 	prometheusBlockAssemblerAddDirectlyBatchTime        prometheus.Histogram
 	prometheusBlockAssemblerSubtreeStoredHist           prometheus.Histogram
+	prometheusBlockAssemblerConflictIntentsPending      prometheus.Gauge
+	prometheusBlockAssemblerConflictIntentReplay        *prometheus.CounterVec
+	prometheusBlockAssemblerDequeueStalenessSeconds     prometheus.Gauge
+
+	// prometheusBlockAssemblyQueueShed counts transactions shed because the ingest queue was full past the bounded wait
+	prometheusBlockAssemblyQueueShed prometheus.Counter
+
+	// prometheusBlockAssemblyQueueWait measures how long an ingest handler waited for queue room before succeeding or shedding
+	prometheusBlockAssemblyQueueWait prometheus.Histogram
+
+	// prometheusBlockAssemblyQueueHeadAge tracks how long the oldest queued batch has been waiting
+	prometheusBlockAssemblyQueueHeadAge prometheus.Gauge
+
+	// prometheusBlockAssemblyDiskTxMapDegraded is 1 while block assembly is
+	// degraded because a reset for a disk tx map storage error hit a storage
+	// error again (a disk fault a fresh rotation can't cure), and 0 otherwise.
+	// Storage-triggered resets are suspended while it is 1; any reset that
+	// completes without a storage error clears it.
+	prometheusBlockAssemblyDiskTxMapDegraded prometheus.Gauge
+
+	// prometheusBlockAssemblerLivenessHeartbeatAge tracks how long since the main select loop last beat
+	prometheusBlockAssemblerLivenessHeartbeatAge prometheus.Gauge
 )
 
 var (
@@ -159,6 +186,15 @@ func _initPrometheusMetrics() {
 		},
 	)
 
+	prometheusBlockAssemblerCandidateTimeClockSkew = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "block_assembler_candidate_time_clock_skew",
+			Help:      "Mining-candidate polls refused because the parent's median-time-past floor is above the two-hour future bound, so no valid block timestamp exists; a non-zero rate means the local clock is far behind the network and block production has stopped",
+		},
+	)
+
 	prometheusBlockAssemblerSubtreeStoredHist = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
@@ -167,6 +203,25 @@ func _initPrometheusMetrics() {
 			Help:      "Histogram of subtree stored duration in block assembler",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
+	)
+
+	prometheusBlockAssemblerConflictIntentsPending = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "conflict_intents_pending",
+			Help:      "Number of pending conflict-resolution WAL intents found at startup (interrupted ProcessConflicting/ReverseProcessConflicting operations awaiting replay)",
+		},
+	)
+
+	prometheusBlockAssemblerConflictIntentReplay = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "conflict_intent_replay_total",
+			Help:      "Total conflict-resolution WAL intent replays at startup, by result",
+		},
+		[]string{"result"},
 	)
 
 	prometheusBlockAssemblerTransactions = promauto.NewGauge(
@@ -196,6 +251,15 @@ func _initPrometheusMetrics() {
 		},
 	)
 
+	prometheusBlockAssemblerDequeueStalenessSeconds = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "dequeue_staleness_seconds",
+			Help:      "Seconds since the subtree processor's consumer goroutine last passed through its dequeue branch. A value growing alongside a non-zero queued_transactions means intake is queuing unboundedly because the consumer is stuck elsewhere (reorg/move-forward-block/reset/etc), not that ingest has merely slowed (issue #1429).",
+		},
+	)
+
 	prometheusBlockAssemblerTxMetaGetDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
@@ -212,6 +276,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockassembly",
 			Name:      "reorg",
 			Help:      "Number of reorgs in block assembler",
+		},
+	)
+
+	prometheusBlockAssemblerCatchUp = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "catchup",
+			Help:      "Number of forward-only catch-ups (moveBack=0) handled in block assembler",
 		},
 	)
 
@@ -261,6 +334,35 @@ func _initPrometheusMetrics() {
 			Name:      "current_block_height",
 			Help:      "Current block height in block assembly",
 		},
+	)
+
+	prometheusBlockAssemblyTipLagBlocks = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "tip_lag_blocks",
+			Help:      "Number of blocks block assembly is behind the blockchain tip (0 when caught up). Sustained non-zero values indicate block assembly is stuck (issue #980).",
+		},
+	)
+
+	prometheusBlockAssemblyProcessingStuck = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "processing_stuck_total",
+			Help:      "Count of block assembly catch-up/reorg/move-forward failures that left the assembler behind the tip, labelled by reason (issue #980).",
+		},
+		[]string{"reason"},
+	)
+
+	prometheusBlockAssemblyCoinbaseDivergence = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "coinbase_divergence_total",
+			Help:      "Coinbase-divergence events by outcome. Every detection records exactly one follow-up outcome, so detected == repaired + no_gap + escalated + aborted.",
+		},
+		[]string{"outcome"},
 	)
 
 	prometheusBlockAssemblerCurrentState = promauto.NewGauge(
@@ -441,6 +543,52 @@ func _initPrometheusMetrics() {
 			Name:      "add_directly_batch_seconds",
 			Help:      "Time taken to add all unmined transactions to subtree processor",
 			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockAssemblyQueueShed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "queue_shed_total",
+			Help:      "Total transactions shed because the ingest queue was full past the bounded wait. Any non-zero value should be alerted on alongside processing_stuck_total and tip_lag_blocks; a shed on a healthy node means the cap is too tight.",
+		},
+	)
+
+	prometheusBlockAssemblyQueueWait = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "queue_wait_seconds",
+			Help:      "Time an ingest handler waited for ingest-queue room before succeeding or shedding",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockAssemblyQueueHeadAge = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "queue_head_age_seconds",
+			Help:      "Age in seconds of the oldest batch still in the ingest queue (0 when empty). A rising value indicates the dispatcher has stopped draining.",
+		},
+	)
+
+	prometheusBlockAssemblyDiskTxMapDegraded = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "disk_tx_map_degraded",
+			Help:      "1 while auto-reset on a disk tx map storage error is suspended because a storage-triggered reset hit a storage error again (a disk fault a rotation can't cure), 0 otherwise. Any reset that completes without a storage error clears it.",
+		},
+	)
+
+	prometheusBlockAssemblerLivenessHeartbeatAge = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "liveness_heartbeat_age_seconds",
+			Help:      "Seconds since the block assembler main select loop last beat its liveness heartbeat (0 before the loop starts and after it stops). This is the number blockassembly_livenessStallTimeout is compared against, so alert on it and learn its worst case before arming a restart on it (issue 1447).",
 		},
 	)
 }

@@ -1,4 +1,6 @@
-<script lang="ts" context="module">
+<svelte:options runes={true} />
+
+<script lang="ts" module>
   import * as echarts from 'echarts/core'
 
   export type EChartsOptions = any //echarts.EChartsOption
@@ -51,12 +53,20 @@
 </script>
 
 <script lang="ts">
-  export let options: EChartsOptions //echarts.EChartsOption
-  export let { theme, renderer } = DEFAULT_OPTIONS
-  export let renderKey = ''
+  let {
+    options,
+    theme = DEFAULT_OPTIONS.theme,
+    renderer = DEFAULT_OPTIONS.renderer,
+    renderKey = '',
+  }: {
+    options: EChartsOptions //echarts.EChartsOption
+    theme?: EChartsTheme
+    renderer?: EChartsRenderer
+    renderKey?: string
+  } = $props()
 </script>
 
-<div class="chart" use:chartable={{ renderer, theme, options, renderKey }} />
+<div class="chart" use:chartable={{ renderer, theme, options, renderKey }}></div>
 
 <style>
   .chart {

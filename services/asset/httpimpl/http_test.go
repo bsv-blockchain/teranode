@@ -4,11 +4,14 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -23,6 +26,85 @@ import (
 // MockRepository is a mock implementation of repository.Interface
 type MockRepository struct {
 	mock.Mock
+}
+
+func TestShouldSkipGzipForLargeBinaryAssetResponse(t *testing.T) {
+	const hash = "0000000000000000000000000000000000000000000000000000000000000001"
+
+	tests := []struct {
+		name   string
+		method string
+		target string
+		route  string
+		want   bool
+	}{
+		{
+			name:   "raw subtree binary",
+			method: http.MethodGet,
+			target: "/api/v1/subtree/" + hash,
+			route:  "/api/v1/subtree/:hash",
+			want:   true,
+		},
+		{
+			name:   "subtree hex remains compressible",
+			method: http.MethodGet,
+			target: "/api/v1/subtree/" + hash + "/hex",
+			route:  "/api/v1/subtree/:hash/hex",
+			want:   false,
+		},
+		{
+			name:   "subtree json remains compressible",
+			method: http.MethodGet,
+			target: "/api/v1/subtree/" + hash + "/json",
+			route:  "/api/v1/subtree/:hash/json",
+			want:   false,
+		},
+		{
+			name:   "subtree data binary",
+			method: http.MethodGet,
+			target: "/api/v1/subtree_data/" + hash,
+			route:  "/api/v1/subtree_data/:hash",
+			want:   true,
+		},
+		{
+			name:   "subtree transactions binary",
+			method: http.MethodPost,
+			target: "/api/v1/subtree/" + hash + "/txs",
+			route:  "/api/v1/subtree/:hash/txs",
+			want:   true,
+		},
+		{
+			name:   "subtree transactions json remains compressible",
+			method: http.MethodGet,
+			target: "/api/v1/subtree/" + hash + "/txs/json",
+			route:  "/api/v1/subtree/:hash/txs/json",
+			want:   false,
+		},
+		{
+			name:   "block subtrees json remains compressible",
+			method: http.MethodGet,
+			target: "/api/v1/block/" + hash + "/subtrees/json",
+			route:  "/api/v1/block/:hash/subtrees/json",
+			want:   false,
+		},
+		{
+			name:   "falls back to request path before route is set",
+			method: http.MethodGet,
+			target: "/api/v1/subtree/" + hash,
+			want:   true,
+		},
+	}
+
+	e := echo.New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.target, nil)
+			c := e.NewContext(req, httptest.NewRecorder())
+			c.SetPath(tt.route)
+
+			require.Equal(t, tt.want, shouldSkipGzipForLargeBinaryAssetResponse(c))
+		})
+	}
 }
 
 // Health mocks the Health method
@@ -128,10 +210,14 @@ func TestNew(t *testing.T) {
 
 		e.ServeHTTP(optionsRec, optionsReq)
 
-		// Test CORS headers
+		// Test CORS headers. With no asset_corsAllowOrigins configured the
+		// origin is still reflected, but credentials are refused: reflecting an
+		// arbitrary origin and allowing credentials is what exposed the admin
+		// routes on this listener to a hostile same-site origin. See
+		// TestAssetCORSConfig_ExplicitAllowlistIsStrict for the credentialed case.
 		corsHeaders := optionsRec.Header()
 		assert.Equal(t, "http://localhost:8090", corsHeaders.Get("Access-Control-Allow-Origin"))
-		assert.Equal(t, "true", corsHeaders.Get("Access-Control-Allow-Credentials"))
+		assert.Empty(t, corsHeaders.Get("Access-Control-Allow-Credentials"))
 		assert.Contains(t, corsHeaders.Get("Access-Control-Allow-Methods"), "GET")
 		assert.Contains(t, corsHeaders.Get("Access-Control-Allow-Headers"), "Authorization")
 
@@ -141,6 +227,103 @@ func TestNew(t *testing.T) {
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusUnauthorized, rec.Code) // Should return 401 when not authenticated
 	})
+}
+
+// TestGetBlockByHeightRouteRegistered verifies that http.go actually wires the
+// GetBlockByHeight handler up to routes under the API prefix (binary, hex, and
+// json variants), mirroring the by-hash triplet. GetBlockByHeight itself already
+// has thorough handler-level tests in GetBlock_test.go; this test exists to catch
+// the case where the handler exists but is never registered on the router.
+func TestGetBlockByHeightRouteRegistered(t *testing.T) {
+	logger := ulogger.TestLogger{}
+
+	testSettings := &settings.Settings{
+		Asset: settings.AssetSettings{
+			APIPrefix: "/api/v1",
+		},
+		Dashboard: settings.DashboardSettings{
+			Enabled: false,
+		},
+		SecurityLevelHTTP: 0, // HTTP mode
+	}
+
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("GetBlockByHeight", mock.Anything, uint32(0)).Return(testBlock, nil)
+	// GetBlockByHeight(JSON) also looks up height+1 for the "nextblock" field.
+	mockBlockchainClient.On("GetBlockByHeight", mock.Anything, uint32(1)).Return(nil, errors.ErrNotFound)
+
+	repo, err := repository.NewRepository(logger, testSettings, nil, nil, mockBlockchainClient, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	httpServer, err := New(logger, testSettings, repo, nil)
+	require.NoError(t, err)
+	require.NotNil(t, httpServer)
+
+	e := httpServer.e
+
+	t.Run("binary", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/block/height/0", nil)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "application/octet-stream", rec.Header().Get("Content-Type"))
+		assert.Equal(t, testBlockBytes, rec.Body.Bytes())
+	})
+
+	t.Run("hex", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/block/height/0/hex", nil)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, hex.EncodeToString(testBlockBytes), rec.Body.String())
+	})
+
+	t.Run("json", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/block/height/0/json", nil)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+	})
+}
+
+// TestNew_PeerAuthBodyCapTracksBatchSize — http.go must wire the peer-auth
+// verifier's signed-body cap to subtreevalidation_missingTransactionsBatchSize
+// via resolveMaxSignedBodyBytes, not construct it with the package default.
+// Reverting that wiring back to a plain newPeerAuthVerifier(...) call leaves
+// every other test in this package green, since none of them raise the batch
+// size, so this exercises the actual New()/peerAuth construction path.
+func TestNew_PeerAuthBodyCapTracksBatchSize(t *testing.T) {
+	logger := ulogger.TestLogger{}
+
+	const batchSize = 65536 // 65536*32 = 2MiB, above the 1MiB default floor
+
+	testSettings := &settings.Settings{
+		Asset: settings.AssetSettings{
+			APIPrefix: "/api/v1",
+		},
+		SubtreeValidation: settings.SubtreeValidationSettings{
+			MissingTransactionsBatchSize: batchSize,
+		},
+		Dashboard:         settings.DashboardSettings{Enabled: false},
+		SecurityLevelHTTP: 0,
+	}
+
+	repo, err := repository.NewRepository(logger, testSettings, nil, nil, nil, nil, nil, nil, &registryStubP2PClient{}, nil)
+	require.NoError(t, err)
+
+	httpServer, err := New(logger, testSettings, repo, nil)
+	require.NoError(t, err)
+	require.NotNil(t, httpServer)
+
+	require.NotNil(t, httpServer.peerAuth, "a non-nil P2P client must produce a peer-auth verifier")
+	require.Equal(t, resolveMaxSignedBodyBytes(batchSize), httpServer.peerAuth.maxSignedBodyBytes,
+		"New() must resolve the signed-body cap from subtreevalidation_missingTransactionsBatchSize, not the package default")
+	require.Greater(t, httpServer.peerAuth.maxSignedBodyBytes, int64(defaultMaxSignedBodyBytes),
+		"a raised batch size must actually grow the cap past the default floor")
 }
 
 // TestNewWithSigningEnabled tests the New function with response signing enabled
@@ -260,30 +443,114 @@ func TestSign(t *testing.T) {
 	assert.True(t, ed25519.Verify(pubKey, testData, signatureBytes))
 }
 
-// TestCustomLoggerMiddleware tests the customLoggerMiddleware function
-func TestCustomLoggerMiddleware(t *testing.T) {
-	// Create a test logger
+// TestAccessLogMiddleware tests the accessLogMiddleware function
+// TestNew_TrustedProxyCIDRsFailsClosed — the M2 fail-closed semantics: when
+// asset_trustedProxyCIDRs is non-empty but no valid CIDRs are parsed, New()
+// must return an error rather than silently falling back to "trust loopback +
+// RFC1918". Mixed valid/invalid input also fails because partial application
+// almost always indicates a typo.
+func TestNew_TrustedProxyCIDRsFailsClosed(t *testing.T) {
+	mkSettings := func(cidrs string) *settings.Settings {
+		return &settings.Settings{
+			Asset: settings.AssetSettings{
+				APIPrefix:         "/api/v1",
+				TrustedProxyCIDRs: cidrs,
+			},
+			Dashboard:         settings.DashboardSettings{Enabled: false},
+			SecurityLevelHTTP: 0,
+		}
+	}
+
+	mkRepo := func() *repository.Repository {
+		repo := new(MockRepository)
+		repo.On("BlockchainClient").Return(&blockchain.Mock{})
+		repo.On("Health", mock.Anything, false).Return(http.StatusOK, "OK", nil)
+		return &repository.Repository{}
+	}
+
+	t.Run("all entries invalid → error", func(t *testing.T) {
+		_, err := New(ulogger.TestLogger{}, mkSettings("not-a-cidr|also-not-a-cidr"), mkRepo(), nil)
+		require.Error(t, err, "all-invalid CIDR list must fail New()")
+		require.Contains(t, err.Error(), "asset_trustedProxyCIDRs",
+			"error must name the offending setting so operators know what to fix")
+	})
+
+	t.Run("mixed valid + invalid → error", func(t *testing.T) {
+		_, err := New(ulogger.TestLogger{}, mkSettings("10.0.0.0/8|not-a-cidr"), mkRepo(), nil)
+		require.Error(t, err, "mixed valid/invalid CIDR list must fail New() rather than silently applying only the valid subset")
+	})
+
+	t.Run("all entries valid → no error", func(t *testing.T) {
+		srv, err := New(ulogger.TestLogger{}, mkSettings("10.0.0.0/8|192.168.0.0/16"), mkRepo(), nil)
+		require.NoError(t, err)
+		require.NotNil(t, srv)
+	})
+
+	t.Run("empty setting → no error (uses Echo defaults)", func(t *testing.T) {
+		srv, err := New(ulogger.TestLogger{}, mkSettings(""), mkRepo(), nil)
+		require.NoError(t, err)
+		require.NotNil(t, srv)
+	})
+}
+
+// captureLogger records Errorf calls so tests can assert on what was logged.
+// Other methods are no-ops. Only used by the customHTTPErrorHandler test.
+type captureLogger struct {
+	ulogger.TestLogger
+	mu     sync.Mutex
+	errors []string
+}
+
+func (l *captureLogger) Errorf(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.errors = append(l.errors, fmt.Sprintf(format, args...))
+}
+
+// TestCustomHTTPErrorHandler_DoesNotLogQueryString — H5 fix in the access log
+// also has to apply to the error path; query strings on 4xx/5xx are precisely
+// the values you don't want in logs (auth tokens in URLs, search terms, etc.).
+func TestCustomHTTPErrorHandler_DoesNotLogQueryString(t *testing.T) {
+	logger := &captureLogger{}
+	handler := customHTTPErrorHandler(logger)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=SECRET_QUERY_STRING&token=DEADBEEF", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPath("/api/v1/search")
+
+	handler(echo.NewHTTPError(http.StatusBadRequest, "boom"), c)
+
+	require.Len(t, logger.errors, 1)
+	logged := logger.errors[0]
+	require.NotContains(t, logged, "SECRET_QUERY_STRING",
+		"query-string value must not appear in error logs")
+	require.NotContains(t, logged, "DEADBEEF",
+		"query-string token must not appear in error logs")
+	require.NotContains(t, logged, "?",
+		"raw RequestURI (path?query) must not be logged; use the route pattern instead")
+	require.Contains(t, logged, "/api/v1/search",
+		"route pattern (without query) should still be logged for diagnostics")
+}
+
+func TestAccessLogMiddleware(t *testing.T) {
 	logger := ulogger.TestLogger{}
 
-	// Create the middleware
-	middleware := customLoggerMiddleware(logger)
+	mw := accessLogMiddleware(logger)
 
-	// Create a test Echo instance
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	// Create a test handler
 	testHandler := func(c echo.Context) error {
 		return c.String(http.StatusOK, "Test response")
 	}
 
-	// Call the middleware with the test handler
-	handler := middleware(testHandler)
+	handler := mw(testHandler)
 	err := handler(c)
 
-	// Assert that the handler was called and returned the expected response
 	assert.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "Test response", rec.Body.String())

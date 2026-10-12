@@ -10,8 +10,7 @@
     - [2.4. Validating the Subtrees](#24-validating-the-subtrees)
     - [2.5. Subtree Locking Mechanism](#25-subtree-locking-mechanism)
     - [2.6. Distributed Pause Mechanism](#26-distributed-pause-mechanism)
-    - [2.7. Orphanage Management](#27-orphanage-management)
-    - [2.8. Level Calculation for Merkle Trees](#28-level-calculation-for-merkle-trees)
+    - [2.7. Level Calculation for Merkle Trees](#27-level-calculation-for-merkle-trees)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 5. [Technology](#5-technology)
@@ -196,36 +195,7 @@ The distributed pause mechanism uses existing subtree validation settings:
 - `subtree_quorum_path`: Path to shared storage for lock files
 - `subtree_quorum_absolute_timeout`: Timeout for lock staleness (default: 30 seconds)
 
-### 2.7. Orphanage Management
-
-The Subtree Validation service implements an orphanage mechanism to handle transactions that arrive before their parent transactions are available. This is essential for maintaining processing continuity when transactions arrive out of order.
-
-**What are Orphaned Transactions?**
-
-A transaction becomes "orphaned" when:
-
-- It references inputs from parent transactions that are not yet in the UTXO store
-- The parent transactions are expected to arrive shortly (e.g., in the same subtree or recent subtrees)
-
-**Orphanage Workflow:**
-
-1. **Detection** — During subtree validation, if a transaction's inputs cannot be found, it's placed in the orphanage
-2. **Tracking** — The orphanage tracks which parent transaction IDs are needed
-3. **Resolution** — When parent transactions are processed, orphaned children are automatically resolved
-4. **Timeout** — Orphaned transactions that remain unresolved after the timeout period are cleaned up
-
-**Configuration:**
-
-- `subtreevalidation_orphanageTimeout`: Duration before orphaned transactions are cleaned up (default: 30 seconds)
-
-**Benefits:**
-
-- Handles out-of-order transaction arrival gracefully
-- Prevents transaction validation failures due to timing issues
-- Maintains high throughput during burst traffic
-- Automatically recovers when parent transactions arrive
-
-### 2.8. Level Calculation for Merkle Trees
+### 2.7. Level Calculation for Merkle Trees
 
 The Subtree Validation service performs level calculation to optimize merkle tree processing. This feature improves performance by pre-calculating the hierarchical structure of subtrees.
 

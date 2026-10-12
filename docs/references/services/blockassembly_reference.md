@@ -613,7 +613,7 @@ Handles blockchain reorganization by processing moved blocks. This method manage
 #### Reset
 
 ```go
-func (stp *SubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, isLegacySync bool) ResetResponse
+func (stp *SubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, useFastForwardReset bool, postProcess func() error) ResetResponse
 ```
 
 Resets the processor to a clean state, removing all subtrees and transactions.

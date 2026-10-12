@@ -44,7 +44,7 @@ If you know your public IP or domain:
 
 ```conf
 # In settings_local.conf
-p2p_advertise_addresses = ["/ip4/203.0.113.1/tcp/9905"]
+p2p_advertise_addresses = /ip4/203.0.113.1/tcp/9905
 ```
 
 This is ideal for:
@@ -76,14 +76,12 @@ p2p_enable_relay = true
 
 ### Option 5: Share Private Addresses (Development Only)
 
-For local development or private networks:
-
 ```conf
 # In settings_local.conf
 p2p_share_private_addresses = true
 ```
 
-⚠️ **Warning**: Only use this in controlled environments where peers can actually reach private IPs.
+ℹ️ With the current go-p2p-message-bus this setting has no effect on what is announced: when `p2p_advertise_addresses` is empty, libp2p advertises every bound interface address, private ones included, regardless of this value. What local dev on a private network does need is `p2p_allow_private_ips = true`: with the shipped default `false`, libp2p's connection gater refuses RFC1918, loopback and link-local addresses in both directions, so private peers can neither dial this node nor be dialled by it. To publish only a public address, set `p2p_advertise_addresses` explicitly.
 
 ## How the Observed Address Mechanism Works
 
@@ -119,7 +117,7 @@ To debug NAT traversal issues:
 ## Best Practices
 
 1. **For Production**: Always set explicit `p2p_advertise_addresses` with your public IP
-2. **For Cloud/Kubernetes**: Use the load balancer or ingress IP in `p2p_advertise_addresses`
+2. **For Cloud/Kubernetes**: Use the load balancer or ingress IP in `p2p_advertise_addresses`. On AWS this requires an NLB with `externalTrafficPolicy: Local` — see [How to Expose the P2P Service Publicly (Kubernetes)](howto/miners/kubernetes/minersHowToExposeP2P.md)
 3. **For Development**: Enable `p2p_enable_nat_service` for automatic address detection
 4. **For Home Networks**: Enable `p2p_enable_nat_port_map` if your router supports it
 

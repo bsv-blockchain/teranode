@@ -75,7 +75,7 @@ func TestGetAndLockChildren(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create the transaction in store
-		_, err = store.Create(ctx, tx, 1)
+		_, _, err = store.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		txHash := *tx.TxIDChainHash()
@@ -113,14 +113,14 @@ func TestGetAndLockChildren(t *testing.T) {
 		childTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
 
 		// Create both transactions in store
-		_, err = store.Create(ctx, parentTx, 1)
+		_, _, err = store.SpendAndCreate(ctx, parentTx, 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		_, err = store.Create(ctx, childTx, 1)
+		_, _, err = store.SpendAndCreate(ctx, childTx, 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		// Spend the parent's output with child transaction
-		_, err = store.Spend(ctx, childTx, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
+		_, _, err = store.SpendAndCreate(ctx, childTx, store.GetBlockHeight()+1, utxo.WithSpendOnly())
 		require.NoError(t, err)
 
 		parentHash := *parentTx.TxIDChainHash()
@@ -180,21 +180,21 @@ func TestGetAndLockChildren(t *testing.T) {
 		grandchildTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
 
 		// Create all transactions in store
-		_, err = store.Create(ctx, parentTx, 1)
+		_, _, err = store.SpendAndCreate(ctx, parentTx, 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
-		_, err = store.Create(ctx, child1Tx, 1)
+		_, _, err = store.SpendAndCreate(ctx, child1Tx, 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
-		_, err = store.Create(ctx, child2Tx, 1)
+		_, _, err = store.SpendAndCreate(ctx, child2Tx, 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
-		_, err = store.Create(ctx, grandchildTx, 1)
+		_, _, err = store.SpendAndCreate(ctx, grandchildTx, 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		// Spend outputs to establish parent-child relationships
-		_, err = store.Spend(ctx, child1Tx, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
+		_, _, err = store.SpendAndCreate(ctx, child1Tx, store.GetBlockHeight()+1, utxo.WithSpendOnly())
 		require.NoError(t, err)
-		_, err = store.Spend(ctx, child2Tx, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
+		_, _, err = store.SpendAndCreate(ctx, child2Tx, store.GetBlockHeight()+1, utxo.WithSpendOnly())
 		require.NoError(t, err)
-		_, err = store.Spend(ctx, grandchildTx, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
+		_, _, err = store.SpendAndCreate(ctx, grandchildTx, store.GetBlockHeight()+1, utxo.WithSpendOnly())
 		require.NoError(t, err)
 
 		parentHash := *parentTx.TxIDChainHash()
@@ -244,7 +244,7 @@ func TestGetAndLockChildren(t *testing.T) {
 			"2f6b52de3d7c88ac00000000")
 		require.NoError(t, err)
 
-		_, err = store.Create(ctx, tx, 1)
+		_, _, err = store.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		txHash := *tx.TxIDChainHash()
@@ -271,7 +271,7 @@ func TestGetAndLockChildren(t *testing.T) {
 			"2f6b52de3d7c88ac00000000")
 		require.NoError(t, err)
 
-		_, err = store.Create(ctx, tx, 1)
+		_, _, err = store.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
 		txHash := *tx.TxIDChainHash()

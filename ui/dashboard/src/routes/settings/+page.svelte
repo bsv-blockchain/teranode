@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { onMount } from 'svelte'
   import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
@@ -7,21 +9,21 @@
   import Markdown from 'svelte-exmarkdown'
   import { gfmPlugin } from 'svelte-exmarkdown/gfm'
 
-  let settings: SettingMetadata[] = []
-  let categories: string[] = []
-  let loading = true
-  let error: string | null = null
-  let version = ''
-  let commit = ''
-  let total = 0
-  let filtered = 0
+  let settings = $state<SettingMetadata[]>([])
+  let categories = $state<string[]>([])
+  let loading = $state(true)
+  let error = $state<string | null>(null)
+  let version = $state('')
+  let commit = $state('')
+  let total = $state(0)
+  let filtered = $state(0)
 
   // Filter state
-  let selectedCategory = ''
-  let searchQuery = ''
+  let selectedCategory = $state('')
+  let searchQuery = $state('')
   let searchTimeout: ReturnType<typeof setTimeout> | null = null
   // Use an object for reactivity instead of Set
-  let expandedKeys: Record<string, boolean> = {}
+  let expandedKeys = $state<Record<string, boolean>>({})
 
   // Column resizing state
   const COLUMN_WIDTHS_STORAGE_KEY = 'settings-table-column-widths'
@@ -33,7 +35,7 @@
     description: 46
   }
 
-  let columnWidths = { ...defaultColumnWidths }
+  let columnWidths = $state({ ...defaultColumnWidths })
   let resizingColumn: string | null = null
   let resizeStartX = 0
   let resizeStartWidth = 0
@@ -141,7 +143,6 @@
 
   function toggleExpanded(key: string) {
     expandedKeys[key] = !expandedKeys[key]
-    expandedKeys = expandedKeys // Trigger reactivity
   }
 
   function formatValue(value: string, type: string): string {
@@ -227,7 +228,7 @@
   })
 </script>
 
-<PageWithMenu>
+<PageWithMenu testId="page-root">
   <div class="settings-container">
     <header class="settings-header">
       <div class="header-left">
@@ -256,18 +257,18 @@
           <input
             type="text"
             placeholder={t('page.settings.search-placeholder', 'Search settings...')}
-            on:input={handleSearchInput}
+            oninput={handleSearchInput}
             bind:value={searchQuery}
             class="search-input"
           />
           {#if searchQuery}
-            <button class="clear-search" on:click={() => { searchQuery = ''; fetchSettings(); }}>
+            <button class="clear-search" onclick={() => { searchQuery = ''; fetchSettings(); }}>
               <Icon name="icon-close-line" size={16} />
             </button>
           {/if}
         </div>
 
-        <button class="reset-columns-btn" on:click={resetColumnWidths} title="Reset column widths to default">
+        <button class="reset-columns-btn" onclick={resetColumnWidths} title="Reset column widths to default">
           <Icon name="icon-layout-column-line" size={16} />
           <span>Reset Columns</span>
         </button>
@@ -277,7 +278,7 @@
         <button
           class="category-btn"
           class:active={selectedCategory === ''}
-          on:click={() => handleCategoryChange('')}
+          onclick={() => handleCategoryChange('')}
         >
           {t('page.settings.all-categories', 'All Categories')}
         </button>
@@ -285,7 +286,7 @@
           <button
             class="category-btn"
             class:active={selectedCategory === category}
-            on:click={() => handleCategoryChange(category)}
+            onclick={() => handleCategoryChange(category)}
           >
             {category}
           </button>
@@ -302,7 +303,7 @@
       <div class="error-container">
         <Icon name="icon-warning-line" size={48} />
         <p class="error-message">{error}</p>
-        <button class="retry-btn" on:click={fetchSettings}>
+        <button class="retry-btn" onclick={fetchSettings}>
           <Icon name="icon-refresh-line" size={18} />
           <span>Retry</span>
         </button>
@@ -311,7 +312,7 @@
       <div class="empty-container">
         <Icon name="icon-search-line" size={48} />
         <p>No settings found matching your criteria</p>
-        <button class="clear-btn" on:click={clearFilters}>
+        <button class="clear-btn" onclick={clearFilters}>
           Clear filters
         </button>
       </div>
@@ -323,25 +324,25 @@
               <th class="col-key" style="width: {columnWidths.key}%">
                 <div class="th-content">
                   {t('page.settings.col-key', 'Config Key')}
-                  <div class="resize-handle" on:mousedown={(e) => startResize('key', e)}></div>
+                  <div class="resize-handle" onmousedown={(e) => startResize('key', e)}></div>
                 </div>
               </th>
               <th class="col-type" style="width: {columnWidths.type}%">
                 <div class="th-content">
                   Type
-                  <div class="resize-handle" on:mousedown={(e) => startResize('type', e)}></div>
+                  <div class="resize-handle" onmousedown={(e) => startResize('type', e)}></div>
                 </div>
               </th>
               <th class="col-default" style="width: {columnWidths.default}%">
                 <div class="th-content">
                   {t('page.settings.col-default', 'Default')}
-                  <div class="resize-handle" on:mousedown={(e) => startResize('default', e)}></div>
+                  <div class="resize-handle" onmousedown={(e) => startResize('default', e)}></div>
                 </div>
               </th>
               <th class="col-current" style="width: {columnWidths.current}%">
                 <div class="th-content">
                   {t('page.settings.col-current', 'Current')}
-                  <div class="resize-handle" on:mousedown={(e) => startResize('current', e)}></div>
+                  <div class="resize-handle" onmousedown={(e) => startResize('current', e)}></div>
                 </div>
               </th>
               <th class="col-description" style="width: {columnWidths.description}%">
@@ -363,7 +364,7 @@
                     {#if setting.longDescription}
                       <button
                         class="expand-btn"
-                        on:click={() => toggleExpanded(uniqueKey)}
+                        onclick={() => toggleExpanded(uniqueKey)}
                         aria-expanded={expandedKeys[uniqueKey] || false}
                       >
                         <Icon name={expandedKeys[uniqueKey] ? 'icon-arrow-up-s-line' : 'icon-arrow-down-s-line'} size={16} />
@@ -419,7 +420,7 @@
     padding: 2rem;
     max-width: 1600px;
     margin: 0 auto;
-    color: #e9ecef;
+    color: var(--app-color);
   }
 
   .settings-header {
@@ -428,7 +429,7 @@
     align-items: center;
     margin-bottom: 2rem;
     padding-bottom: 1.5rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid var(--app-border-color);
   }
 
   .header-left {
@@ -440,14 +441,14 @@
   .settings-header h1 {
     font-size: 2rem;
     font-weight: 700;
-    color: #f8f9fa;
+    color: var(--app-color);
     margin: 0;
     letter-spacing: 0.01em;
   }
 
   .version-info {
     font-size: 0.875rem;
-    color: #6b7280;
+    color: var(--comp-label-color);
     font-family: monospace;
   }
 
@@ -470,7 +471,7 @@
 
   .stat-label {
     font-size: 0.875rem;
-    color: #6b7280;
+    color: var(--comp-label-color);
   }
 
   .settings-controls {
@@ -491,8 +492,8 @@
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    background-color: rgba(30, 30, 30, 0.6);
-    border: 1px solid #4b5563;
+    background-color: var(--comp-bg-color);
+    border: 1px solid var(--app-border-color);
     border-radius: 0.5rem;
     padding: 0.75rem 1rem;
     flex: 1;
@@ -509,19 +510,19 @@
     flex: 1;
     background: transparent;
     border: none;
-    color: #e9ecef;
+    color: var(--app-color);
     font-size: 1rem;
     outline: none;
   }
 
   .search-input::placeholder {
-    color: #6b7280;
+    color: var(--comp-label-color);
   }
 
   .clear-search {
     background: transparent;
     border: none;
-    color: #6b7280;
+    color: var(--comp-label-color);
     cursor: pointer;
     padding: 0.25rem;
     display: flex;
@@ -532,8 +533,8 @@
   }
 
   .clear-search:hover {
-    color: #e9ecef;
-    background-color: rgba(255, 255, 255, 0.1);
+    color: var(--app-color);
+    background-color: var(--app-overlay-color);
   }
 
   .reset-columns-btn {
@@ -541,10 +542,10 @@
     align-items: center;
     gap: 0.5rem;
     padding: 0.75rem 1rem;
-    background-color: rgba(30, 30, 30, 0.6);
-    border: 1px solid #4b5563;
+    background-color: var(--comp-bg-color);
+    border: 1px solid var(--app-border-color);
     border-radius: 0.5rem;
-    color: #9ca3af;
+    color: var(--comp-label-color);
     font-size: 0.875rem;
     font-weight: 500;
     cursor: pointer;
@@ -553,9 +554,9 @@
   }
 
   .reset-columns-btn:hover {
-    border-color: #6b7280;
-    color: #e9ecef;
-    background-color: rgba(30, 30, 30, 0.8);
+    border-color: var(--comp-label-color);
+    color: var(--app-color);
+    background-color: var(--comp-bg-color);
   }
 
   .reset-columns-btn:active {
@@ -570,10 +571,10 @@
 
   .category-btn {
     padding: 0.5rem 1rem;
-    background-color: rgba(30, 30, 30, 0.6);
-    border: 1px solid #4b5563;
+    background-color: var(--comp-bg-color);
+    border: 1px solid var(--app-border-color);
     border-radius: 0.375rem;
-    color: #9ca3af;
+    color: var(--comp-label-color);
     font-size: 0.875rem;
     font-weight: 500;
     cursor: pointer;
@@ -582,7 +583,7 @@
 
   .category-btn:hover {
     border-color: #3b82f6;
-    color: #e9ecef;
+    color: var(--app-color);
   }
 
   .category-btn.active {
@@ -600,12 +601,12 @@
     justify-content: center;
     padding: 4rem 2rem;
     text-align: center;
-    background-color: rgba(33, 37, 41, 0.6);
+    background-color: var(--comp-bg-color);
     border-radius: 0.75rem;
   }
 
   .spinner {
-    border: 4px solid rgba(255, 255, 255, 0.1);
+    border: 4px solid var(--app-border-color);
     width: 48px;
     height: 48px;
     border-radius: 50%;
@@ -622,7 +623,7 @@
   .error-container p,
   .empty-container p {
     margin-top: 1rem;
-    color: #9ca3af;
+    color: var(--comp-label-color);
   }
 
   .error-message {
@@ -651,7 +652,7 @@
   }
 
   .settings-table-wrapper {
-    background-color: rgba(33, 37, 41, 0.6);
+    background-color: var(--comp-bg-color);
     border-radius: 0.75rem;
     overflow-x: auto;
     overflow-y: auto;
@@ -669,7 +670,7 @@
   }
 
   .settings-table thead {
-    background-color: rgba(33, 37, 41, 0.95);
+    background-color: var(--comp-bg-color);
     backdrop-filter: blur(8px);
     position: sticky;
     top: 0;
@@ -681,7 +682,7 @@
     text-align: left;
     padding: 1rem 1.25rem;
     font-weight: 600;
-    color: #9ca3af;
+    color: var(--comp-label-color);
     border-bottom: 2px solid rgba(59, 130, 246, 0.3);
     font-size: 0.8rem;
     text-transform: uppercase;
@@ -733,7 +734,7 @@
 
   .settings-table td {
     padding: 1rem 1.25rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid var(--app-border-color);
     vertical-align: top;
   }
 
@@ -763,13 +764,13 @@
   .setting-key {
     font-family: monospace;
     font-weight: 600;
-    color: #e9ecef;
+    color: var(--app-color);
     font-size: 0.875rem;
   }
 
   .setting-name {
     font-size: 0.8rem;
-    color: #6b7280;
+    color: var(--comp-label-color);
   }
 
   .modified-badge {
@@ -797,7 +798,7 @@
   .value-code {
     font-family: monospace;
     font-size: 0.8rem;
-    color: #9ca3af;
+    color: var(--comp-label-color);
     background-color: rgba(0, 0, 0, 0.2);
     padding: 0.25rem 0.5rem;
     border-radius: 0.25rem;
@@ -818,7 +819,7 @@
   }
 
   .description-text {
-    color: #d1d5db;
+    color: var(--app-color);
     line-height: 1.5;
     margin: 0;
   }
@@ -827,7 +828,7 @@
     display: flex;
     align-items: flex-start;
     gap: 0.5rem;
-    color: #6b7280;
+    color: var(--comp-label-color);
     font-size: 0.8rem;
     font-style: italic;
     margin: 0;
@@ -842,9 +843,9 @@
     gap: 0.375rem;
     padding: 0.375rem 0.75rem;
     background-color: transparent;
-    border: 1px solid #4b5563;
+    border: 1px solid var(--app-border-color);
     border-radius: 0.375rem;
-    color: #9ca3af;
+    color: var(--comp-label-color);
     font-size: 0.75rem;
     font-weight: 500;
     cursor: pointer;
@@ -854,16 +855,16 @@
 
   .expand-btn:hover {
     border-color: #3b82f6;
-    color: #e9ecef;
+    color: var(--app-color);
     background-color: rgba(59, 130, 246, 0.1);
   }
 
   .long-description-row {
-    background-color: rgba(30, 30, 30, 0.8);
+    background-color: var(--comp-bg-color);
   }
 
   .long-description-row:hover {
-    background-color: rgba(30, 30, 30, 0.8);
+    background-color: var(--comp-bg-color);
   }
 
   .settings-table tr.modified + .long-description-row {
@@ -872,18 +873,18 @@
 
   .long-description-cell {
     padding: 0 !important;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid var(--app-border-color);
   }
 
   .long-description {
     padding: 1.5rem 1.25rem;
     border-left: 3px solid #3b82f6;
-    background-color: rgba(30, 30, 30, 0.6);
+    background-color: var(--comp-bg-color);
   }
 
   .long-description :global(p) {
     margin: 0 0 1rem 0;
-    color: #d1d5db;
+    color: var(--app-color);
     font-size: 0.85rem;
     line-height: 1.7;
   }
@@ -918,7 +919,7 @@
   .long-description :global(ol) {
     margin: 0.5rem 0;
     padding-left: 1.5rem;
-    color: #d1d5db;
+    color: var(--app-color);
   }
 
   .long-description :global(li) {
@@ -927,7 +928,7 @@
   }
 
   .long-description :global(strong) {
-    color: #e9ecef;
+    color: var(--app-color);
     font-weight: 600;
   }
 
@@ -950,7 +951,7 @@
   .long-description :global(h4),
   .long-description :global(h5),
   .long-description :global(h6) {
-    color: #f8f9fa;
+    color: var(--app-color);
     margin: 1rem 0 0.5rem 0;
     font-weight: 600;
   }
@@ -965,10 +966,10 @@
   }
 
   .long-description :global(blockquote) {
-    border-left: 3px solid #4b5563;
+    border-left: 3px solid var(--app-border-color);
     padding-left: 1rem;
     margin: 0.5rem 0;
-    color: #9ca3af;
+    color: var(--comp-label-color);
     font-style: italic;
   }
 
@@ -990,14 +991,14 @@
     padding: 0.5rem 0.75rem;
     text-align: left;
     font-weight: 600;
-    color: #f8f9fa;
+    color: var(--app-color);
     border-bottom: 2px solid rgba(59, 130, 246, 0.3);
   }
 
   .long-description :global(td) {
     padding: 0.5rem 0.75rem;
-    color: #d1d5db;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    color: var(--app-color);
+    border-bottom: 1px solid var(--app-border-color);
   }
 
   .long-description :global(tbody tr:last-child td) {

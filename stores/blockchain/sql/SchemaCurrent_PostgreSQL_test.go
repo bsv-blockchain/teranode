@@ -37,7 +37,7 @@ func newSchemaTestDB(t *testing.T) (*url.URL, *usql.DB) {
 				WithStartupTimeout(5*time.Minute),
 		),
 	)
-	require.NoError(t, err)
+	test.SkipIfContainerUnavailable(t, err)
 	t.Cleanup(func() { _ = pgContainer.Terminate(context.Background()) })
 
 	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
@@ -77,7 +77,7 @@ func TestIsBlockchainSchemaCurrent_AfterCreate(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 
 	current, err := isBlockchainSchemaCurrent(db, true)
 	require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestIsBlockchainSchemaCurrent_MissingColumn(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 
 	// Drop one of the expected columns to simulate an out-of-date schema. The
 	// probe must then report not-current so the DDL path runs.
@@ -104,6 +104,29 @@ func TestIsBlockchainSchemaCurrent_MissingColumn(t *testing.T) {
 	current, err := isBlockchainSchemaCurrent(db, true)
 	require.NoError(t, err)
 	assert.False(t, current, "schema should not be current after column drop")
+}
+
+func TestIsBlockchainSchemaCurrent_MissingReservationsTable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	// Drop block_id_reservations to simulate a deployment that predates the
+	// durable-reservation table. The probe must report not-current so the DDL
+	// fast-path is skipped and createPostgresSchemaUnlocked re-creates it.
+	_, err = db.Exec(`DROP TABLE block_id_reservations`)
+	require.NoError(t, err)
+
+	current, err := isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err, "missing table must not be reported as a transport error")
+	assert.False(t, current, "schema must not be current when block_id_reservations is missing")
 }
 
 func TestIsBlockchainSchemaCurrent_MissingIndex(t *testing.T) {
@@ -116,7 +139,7 @@ func TestIsBlockchainSchemaCurrent_MissingIndex(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 
 	_, err = db.Exec(`DROP INDEX IF EXISTS idx_on_main_chain_height`)
 	require.NoError(t, err)
@@ -136,7 +159,7 @@ func TestIsBlockchainSchemaCurrent_WrongPeerIDType(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 
 	// Flip peer_id back to an older type so the probe must return false.
 	// TEXT -> VARCHAR(64) — the ALTER COLUMN peer_id TYPE TEXT in
@@ -159,7 +182,7 @@ func TestIsBlockchainSchemaCurrent_MissingPeerIDColumn(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 
 	// Drop the peer_id column entirely. Per the function contract, a missing
 	// column must surface as (false, nil), not (false, sql.ErrNoRows). Without
@@ -183,7 +206,7 @@ func TestCreatePostgresSchema_FastPathOnSecondCall(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	s1, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = s1.Close() })
+	t.Cleanup(func() { _ = s1.Close(context.Background()) })
 
 	// The second call must detect the schema as current and return without
 	// running DDL. The cheapest proof that no DDL ran is that the call is

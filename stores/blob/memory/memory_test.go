@@ -10,6 +10,8 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 )
 
 func TestCleanExpiredFiles(t *testing.T) {
@@ -299,4 +301,23 @@ func TestMemory_Close(t *testing.T) {
 	if store.Counters["close"] != 1 {
 		t.Errorf("expected close counter to be 1, got %d", store.Counters["close"])
 	}
+}
+
+func TestMemory_CloseStopsTTLCleaner(t *testing.T) {
+	// IgnoreCurrent snapshots the goroutines the rest of this package has already
+	// left running, so this asserts only what this test itself creates. Without it
+	// the sibling tests, which build stores and never close them, would decide the
+	// result.
+	ignoreExisting := goleak.IgnoreCurrent()
+
+	store := New()
+	require.NoError(t, store.Close(context.Background()))
+
+	// The end state, not the call: the cleaner goroutine is gone. A store whose
+	// cleaner outlives Close leaks one goroutine per store for the life of the
+	// process.
+	goleak.VerifyNone(t, ignoreExisting)
+
+	// Closing twice must not panic on the already-cancelled context.
+	require.NoError(t, store.Close(context.Background()))
 }

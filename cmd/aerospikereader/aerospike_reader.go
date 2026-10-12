@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	aero "github.com/aerospike/aerospike-client-go/v8"
+	aero "github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"

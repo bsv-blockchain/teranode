@@ -5,8 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"math/big"
+	"os"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -48,7 +48,7 @@ func TestBlock910479Difficulty(t *testing.T) {
 	}
 
 	for _, height := range heights {
-		data, err := ioutil.ReadFile(fmt.Sprintf("../../block_%d_info.json", height))
+		data, err := os.ReadFile(fmt.Sprintf("../../block_%d_info.json", height))
 		if err != nil {
 			t.Skipf("Skipping test - block data files not found. Run the curl commands to download them first.")
 			return

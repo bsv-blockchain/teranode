@@ -248,7 +248,7 @@ The admin page (`/admin`) provides administrative operations. **This page requir
 
 **Current State Display:**
 
-- Shows blockchain state: IDLE, RUNNING, CATCHING BLOCKS, LEGACY SYNCING, DISCONNECTED
+- Shows blockchain state: IDLE, RUNNING, CATCHING BLOCKS, DISCONNECTED
 
 **State Transitions:**
 
@@ -257,7 +257,6 @@ The admin page (`/admin`) provides administrative operations. **This page requir
 | RUN | Start blockchain processing |
 | STOP | Stop blockchain (transition to IDLE) |
 | CATCHUPBLOCKS | Enter block catchup mode |
-| LEGACYSYNC | Enter legacy sync mode |
 
 - Dynamic button UI showing available events for current state
 - Custom event submission
@@ -352,6 +351,20 @@ npm run dev --prefix ./ui/dashboard
 
 The dashboard will be available at `http://localhost:5173` by default.
 
+The dev server sends credentialed cross-origin requests to the Asset listener on
+`:8090`. Set `asset_corsAllowOrigins = http://localhost:5173` (or the Vite port
+you use) on the node it points at, or those requests fail CORS, and its logged-in
+POSTs (FSM changes, block invalidation, peer actions) get 401: a cookie-authenticated
+state-changing request is accepted only from the node's own host or a listed origin.
+
+Behind a reverse proxy the node compares the browser's origin with `Host` and with
+`X-Forwarded-Host`. nginx rewrites `Host` by default and sends no
+`X-Forwarded-Host`, so the dashboard's logged-in POSTs get 401 until you add
+`proxy_set_header Host $host;` or `proxy_set_header X-Forwarded-Host $host;`.
+Apache's `mod_proxy` adds `X-Forwarded-Host` by default. When the proxy terminates
+TLS, also forward `X-Forwarded-Proto`: the node then refuses a plain-http page
+driving it.
+
 ### Production Build
 
 ```bash
@@ -400,7 +413,6 @@ The dashboard connects to these Asset Server endpoints:
 - `POST /fsm/run`: Start blockchain
 - `POST /fsm/idle`: Stop blockchain
 - `POST /fsm/catchup`: Enter catchup mode
-- `POST /fsm/legacysync`: Enter legacy sync mode
 
 **Block Operations:**
 

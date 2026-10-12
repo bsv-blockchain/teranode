@@ -152,7 +152,7 @@ func (ctx *TxTestContext) Validate() TxTestResult {
 
 // ValidateWithValidator runs validation with a specific validator
 func (ctx *TxTestContext) ValidateWithValidator(validatorType ValidatorType) TxTestResult {
-	result := ctx.Validator.ValidateScript(validatorType, ctx.Tx, 0, make([]uint32, len(ctx.Tx.Inputs)))
+	result := ctx.Validator.ValidateTransaction(validatorType, ctx.Tx, 0, make([]uint32, len(ctx.Tx.Inputs)))
 
 	return TxTestResult{
 		Valid:   result.Success,

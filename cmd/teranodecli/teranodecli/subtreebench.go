@@ -170,7 +170,7 @@ func runBenchmarkCore(subtreeSize, producers, iterations, duration int, cpuProfi
 	// Create subtree processor
 	stp, err := subtreeprocessor.NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, tSettings, nil, nil, nil, newSubtreeChan)
 	if err != nil {
-		return benchmarkResult{}, errors.NewProcessingError("failed to create subtree processor: %w", err)
+		return benchmarkResult{}, errors.NewProcessingError("failed to create subtree processor", err)
 	}
 	defer stp.Stop(ctx)
 
@@ -225,12 +225,12 @@ func runBenchmarkCore(subtreeSize, producers, iterations, duration int, cpuProfi
 	// Start CPU profiling AFTER all setup is complete
 	cpuFile, err := os.Create(cpuProfile)
 	if err != nil {
-		return benchmarkResult{}, errors.NewProcessingError("failed to create CPU profile: %w", err)
+		return benchmarkResult{}, errors.NewProcessingError("failed to create CPU profile", err)
 	}
 
 	if err := pprof.StartCPUProfile(cpuFile); err != nil {
 		cpuFile.Close()
-		return benchmarkResult{}, errors.NewProcessingError("failed to start CPU profile: %w", err)
+		return benchmarkResult{}, errors.NewProcessingError("failed to start CPU profile", err)
 	}
 
 	// Measure metrics
@@ -350,13 +350,13 @@ func runBenchmarkCore(subtreeSize, producers, iterations, duration int, cpuProfi
 	// Stop CPU profiling AFTER processing completes (including drain)
 	pprof.StopCPUProfile()
 	if err := cpuFile.Close(); err != nil {
-		return benchmarkResult{}, errors.NewProcessingError("failed to close CPU profile: %w", err)
+		return benchmarkResult{}, errors.NewProcessingError("failed to close CPU profile", err)
 	}
 
 	// Write memory profile immediately after processing
 	memFile, err := os.Create(memProfile)
 	if err != nil {
-		return benchmarkResult{}, errors.NewProcessingError("failed to create memory profile: %w", err)
+		return benchmarkResult{}, errors.NewProcessingError("failed to create memory profile", err)
 	}
 	defer func() {
 		if err := memFile.Close(); err != nil {
@@ -366,7 +366,7 @@ func runBenchmarkCore(subtreeSize, producers, iterations, duration int, cpuProfi
 
 	runtime.GC() // Force GC before memory profile
 	if err := pprof.WriteHeapProfile(memFile); err != nil {
-		return benchmarkResult{}, errors.NewStorageError("failed to write memory profile: %w", err)
+		return benchmarkResult{}, errors.NewStorageError("failed to write memory profile", err)
 	}
 
 	totalCompleted := int(opsCompleted.Load())

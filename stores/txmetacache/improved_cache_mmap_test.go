@@ -14,12 +14,19 @@ import (
 
 func TestTxMetaCache_Unallocated_Memory_1_2_3_GiB(t *testing.T) {
 	// Heavy test: allocates up to 3GiB off-heap (via unix.Mmap) and writes pprof files.
+	// This is a manual memory-profiling test, not part of standard correctness coverage —
+	// it touches ~7GiB RSS under -race and is the second-largest contributor to the
+	// txmetacache.test peak (#1051). Gated behind an env var so it no longer runs in CI;
+	// run it explicitly with the command below.
 	//
 	// Run:
-	//   go test ./stores/txmetacache -run '^TestTxMetaCache_Unallocated_Memory_1_2_3_GiB$' -count=1 -v -timeout=30m
+	//   TERANODE_TXMETACACHE_MEMTEST=1 go test ./stores/txmetacache -run '^TestTxMetaCache_Unallocated_Memory_1_2_3_GiB$' -count=1 -v -timeout=30m
 	//
 	// Artifacts:
 	//   stores/txmetacache/testdata/pprof/*
+	if os.Getenv("TERANODE_TXMETACACHE_MEMTEST") != "1" {
+		t.Skip("manual memory-profiling test; set TERANODE_TXMETACACHE_MEMTEST=1 to run (allocates up to 3GiB)")
+	}
 
 	const giB = uint64(1024 * 1024 * 1024)
 

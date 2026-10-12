@@ -1,0 +1,294 @@
+package settings
+
+import (
+	"testing"
+	"time"
+
+	"github.com/ordishs/gocore"
+	"github.com/stretchr/testify/require"
+)
+
+// TestP2PPeerMapSettings_LoaderReadsAllKeys guards the exact bug these three
+// keys were shipped to fix. All three carried `key:` and `default:` struct tags
+// and appeared in the reference docs, but settings are populated by explicit
+// getInt/getDuration calls rather than by reflection over those tags, and no
+// call existed — so every value stayed at Go zero, the p2p service always fell
+// back to its own constants, and setting the key in settings.conf did nothing.
+//
+// A default-value assertion cannot catch a relapse on its own: the p2p service
+// falls back to the same numbers the loader defaults to, deliberately, so the
+// node behaves identically whether the loader reads the key or not. Only an
+// override proves the key is read.
+func TestP2PPeerMapSettings_LoaderReadsAllKeys(t *testing.T) {
+	cases := []struct {
+		key      string
+		override string
+		check    func(t *testing.T, s *Settings)
+	}{
+		{
+			key:      "p2p_peer_map_max_size",
+			override: "4242",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 4242, s.P2P.PeerMapMaxSize,
+					"loader must read p2p_peer_map_max_size; otherwise the attribution cap is unconfigurable")
+			},
+		},
+		{
+			key:      "p2p_peer_map_ttl",
+			override: "7m",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 7*time.Minute, s.P2P.PeerMapTTL,
+					"loader must read p2p_peer_map_ttl; otherwise the attribution TTL is unconfigurable")
+			},
+		},
+		{
+			key:      "p2p_peer_map_cleanup_interval",
+			override: "23s",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 23*time.Second, s.P2P.PeerMapCleanupInterval,
+					"loader must read p2p_peer_map_cleanup_interval; otherwise the sweep interval is unconfigurable")
+			},
+		},
+		{
+			key:      "p2p_seen_hash_max_size",
+			override: "1717",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 1717, s.P2P.SeenHashMaxSize,
+					"loader must read p2p_seen_hash_max_size; otherwise the dedup cache cap is unconfigurable")
+			},
+		},
+		{
+			key:      "p2p_seen_hash_ttl",
+			override: "5m",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 5*time.Minute, s.P2P.SeenHashTTL,
+					"loader must read p2p_seen_hash_ttl; otherwise the dedup accounting window is unconfigurable")
+			},
+		},
+		{
+			key:      "p2p_seen_hash_max_publishers",
+			override: "7",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 7, s.P2P.SeenHashMaxPublishers,
+					"loader must read p2p_seen_hash_max_publishers; otherwise the publisher budget is unconfigurable")
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			gocore.Config().Set(tc.key, tc.override)
+			t.Cleanup(func() { gocore.Config().Set(tc.key, "") })
+
+			tc.check(t, NewSettings())
+		})
+	}
+}
+
+// TestP2PPeerMapSettings_DefaultsMatchTheServiceConstants pins the other half of
+// wiring keys that were previously inert: the defaults have to equal what the
+// node ran while they were dead, or turning them on is itself a behaviour
+// change for every deployment that never set them.
+//
+// The numbers are duplicated rather than imported because services/p2p depends
+// on settings, so the constants cannot be referenced from here without a cycle.
+// They must stay equal to defaultPeerMapMaxSize, defaultPeerMapTTL and
+// defaultPeerMapCleanupInterval in services/p2p/Server.go.
+func TestP2PPeerMapSettings_DefaultsMatchTheServiceConstants(t *testing.T) {
+	for _, key := range []string{"p2p_peer_map_max_size", "p2p_peer_map_ttl", "p2p_peer_map_cleanup_interval"} {
+		gocore.Config().Set(key, "")
+	}
+
+	s := NewSettings()
+
+	require.Equal(t, 10000, s.P2P.PeerMapMaxSize)
+	require.Equal(t, 10*time.Minute, s.P2P.PeerMapTTL)
+	require.Equal(t, time.Minute, s.P2P.PeerMapCleanupInterval)
+}
+
+// TestP2PPeerRegistrySettings_LoaderReadsAllKeys guards the same class of bug
+// TestP2PPeerMapSettings_LoaderReadsAllKeys documents for the peer map: all
+// three PeerRegistry* fields carry `key:` and `default:` struct tags, but
+// settings are populated by explicit getInt/getDuration calls rather than by
+// reflection over those tags, and no call existed for them — so the
+// centralized peer registry's cleanup interval was always Go-zero, and
+// services/blockchain/peer_registry.go:934-937 returns immediately when
+// interval <= 0, meaning the TTL+LRU eviction loop never started regardless
+// of what an operator put in settings.conf.
+//
+// A default-value assertion cannot catch a relapse on its own here either:
+// the defaults below are exactly what the code fell back to while the loader
+// never read the keys. Only an override proves the key is read.
+func TestP2PPeerRegistrySettings_LoaderReadsAllKeys(t *testing.T) {
+	cases := []struct {
+		key      string
+		override string
+		check    func(t *testing.T, s *Settings)
+	}{
+		{
+			key:      "p2p_peer_registry_max_size",
+			override: "4242",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 4242, s.P2P.PeerRegistryMaxSize,
+					"loader must read p2p_peer_registry_max_size; otherwise the LRU cap is unconfigurable")
+			},
+		},
+		{
+			key:      "p2p_peer_registry_ttl",
+			override: "7m",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 7*time.Minute, s.P2P.PeerRegistryTTL,
+					"loader must read p2p_peer_registry_ttl; otherwise the idle TTL is unconfigurable")
+			},
+		},
+		{
+			key:      "p2p_peer_registry_cleanup_interval",
+			override: "23s",
+			check: func(t *testing.T, s *Settings) {
+				require.Equal(t, 23*time.Second, s.P2P.PeerRegistryCleanupInterval,
+					"loader must read p2p_peer_registry_cleanup_interval; otherwise the cleanup loop never starts")
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			gocore.Config().Set(tc.key, tc.override)
+			t.Cleanup(func() { gocore.Config().Set(tc.key, "") })
+
+			tc.check(t, NewSettings())
+		})
+	}
+}
+
+// TestP2PPeerRegistrySettings_DefaultsMatchTheStructTags pins the other half
+// of wiring these keys: the defaults populated by NewSettings() have to equal
+// the struct tag defaults in P2PSettings (settings/p2p_settings.go), which in
+// turn match services/blockchain/Server.go's own fallback for TTL, so turning
+// the loader on is not itself a behaviour change for a deployment that never
+// set these keys.
+func TestP2PPeerRegistrySettings_DefaultsMatchTheStructTags(t *testing.T) {
+	for _, key := range []string{"p2p_peer_registry_max_size", "p2p_peer_registry_ttl", "p2p_peer_registry_cleanup_interval"} {
+		gocore.Config().Set(key, "")
+	}
+
+	s := NewSettings()
+
+	require.Equal(t, 10000, s.P2P.PeerRegistryMaxSize)
+	require.Equal(t, 24*time.Hour, s.P2P.PeerRegistryTTL)
+	require.Equal(t, time.Hour, s.P2P.PeerRegistryCleanupInterval)
+}
+
+// TestP2PGossipSubMeshProtectionSettings guards the GossipSub Sybil-defence
+// wiring: peer scoring and peer exchange must default to enabled (scoring off
+// with PX on is the spec-violating state that lets Sybil peers capture the
+// mesh), and both keys must actually be read by the loader so operators can
+// override them.
+//
+// gocore resolves key.<context> first, so overrides are set at the precedence
+// that wins under the ambient context (same pattern as the batcher tests) and
+// the default assertion only runs under contexts with no .conf override.
+func TestP2PGossipSubMeshProtectionSettings(t *testing.T) {
+	keys := []string{"p2p_enable_peer_scoring", "p2p_enable_peer_exchange"}
+	ctx := gocore.Config().GetContext()
+	winKey := func(key string) string {
+		if ctx != "" {
+			return key + "." + ctx
+		}
+		return key
+	}
+
+	t.Run("defaults are secure", func(t *testing.T) {
+		for _, key := range keys {
+			gocore.Config().Set(winKey(key), "")
+		}
+
+		s := NewSettings()
+
+		require.True(t, s.P2P.EnablePeerScoring, "peer scoring must default to enabled (Sybil mesh protection)")
+		require.True(t, s.P2P.EnablePeerExchange, "peer exchange must default to enabled (safe with scoring on)")
+	})
+
+	t.Run("loader reads overrides", func(t *testing.T) {
+		for _, key := range keys {
+			gocore.Config().Set(winKey(key), "false")
+		}
+		t.Cleanup(func() {
+			for _, key := range keys {
+				gocore.Config().Set(winKey(key), "")
+			}
+		})
+
+		s := NewSettings()
+
+		require.False(t, s.P2P.EnablePeerScoring, "loader must read p2p_enable_peer_scoring under context %q", ctx)
+		require.False(t, s.P2P.EnablePeerExchange, "loader must read p2p_enable_peer_exchange under context %q", ctx)
+	})
+}
+
+// TestP2PPeerScoreIPColocationThreshold_LoaderReadsKey guards the colocation
+// threshold override: set at the winning precedence for the ambient context,
+// it must be read back (field-exists-but-loader-never-reads-it bug).
+func TestP2PPeerScoreIPColocationThreshold_LoaderReadsKey(t *testing.T) {
+	const key = "p2p_peer_score_ip_colocation_threshold"
+	ctx := gocore.Config().GetContext()
+	winKey := key
+	if ctx != "" {
+		winKey = key + "." + ctx
+	}
+
+	require.Equal(t, 10, NewSettings().P2P.PeerScoreIPColocationThreshold, "default must match the library default of 10")
+
+	gocore.Config().Set(winKey, "3")
+	t.Cleanup(func() { gocore.Config().Set(winKey, "") })
+
+	require.Equal(t, 3, NewSettings().P2P.PeerScoreIPColocationThreshold, "loader must read %s under context %q", key, ctx)
+}
+
+// TestP2PAllowedPublisherIDs_LoaderReadsKey guards the pubsub authorship
+// allowlist wiring: p2p_allowed_publisher_ids must round-trip into
+// P2P.AllowedPublisherIDs, including the pipe-separated multi-value case, and
+// the default must be empty so no existing deployment's behaviour changes
+// until it opts in.
+func TestP2PAllowedPublisherIDs_LoaderReadsKey(t *testing.T) {
+	const settingName = "p2p_allowed_publisher_ids"
+	ctx := gocore.Config().GetContext()
+	winName := settingName
+	if ctx != "" {
+		winName = settingName + "." + ctx
+	}
+
+	t.Run("default is empty", func(t *testing.T) {
+		gocore.Config().Set(winName, "")
+
+		require.Empty(t, NewSettings().P2P.AllowedPublisherIDs, "empty allowlist must be the default so existing deployments see no behaviour change")
+	})
+
+	t.Run("loader reads a single value", func(t *testing.T) {
+		gocore.Config().Set(winName, "12D3KooWA1b2C3")
+		t.Cleanup(func() { gocore.Config().Set(winName, "") })
+
+		require.Equal(t, []string{"12D3KooWA1b2C3"}, NewSettings().P2P.AllowedPublisherIDs, "loader must read %s under context %q", settingName, ctx)
+	})
+
+	t.Run("loader reads pipe-separated multiple values", func(t *testing.T) {
+		gocore.Config().Set(winName, "12D3KooWA1b2C3|12D3KooWD4e5F6")
+		t.Cleanup(func() { gocore.Config().Set(winName, "") })
+
+		require.Equal(t, []string{"12D3KooWA1b2C3", "12D3KooWD4e5F6"}, NewSettings().P2P.AllowedPublisherIDs, "loader must split %s on '|' under context %q", settingName, ctx)
+	})
+
+	t.Run("trailing separator does not produce an empty entry", func(t *testing.T) {
+		gocore.Config().Set(winName, "12D3KooWA1b2C3|")
+		t.Cleanup(func() { gocore.Config().Set(winName, "") })
+
+		require.Equal(t, []string{"12D3KooWA1b2C3"}, NewSettings().P2P.AllowedPublisherIDs, "a trailing '|' must not leave an empty entry, or the allowlist fails client construction over a typo")
+	})
+
+	t.Run("doubled separator does not produce an empty entry", func(t *testing.T) {
+		gocore.Config().Set(winName, "12D3KooWA1b2C3||12D3KooWD4e5F6")
+		t.Cleanup(func() { gocore.Config().Set(winName, "") })
+
+		require.Equal(t, []string{"12D3KooWA1b2C3", "12D3KooWD4e5F6"}, NewSettings().P2P.AllowedPublisherIDs, "a doubled '|' must not leave an empty entry, or the allowlist fails client construction over a typo")
+	})
+}

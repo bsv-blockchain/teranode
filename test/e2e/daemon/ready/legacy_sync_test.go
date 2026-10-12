@@ -423,6 +423,7 @@ func TestBidirectionalSync(t *testing.T) {
 	const teranodeBlocks = 5
 	var teranodeMinedBlocks []*model.Block
 	for i := 0; i < teranodeBlocks; i++ {
+		// intentional pacing: svnode rejects blocks whose timestamps are too close together
 		time.Sleep(500 * time.Millisecond)
 		block := td.MineAndWait(t, 1)
 		teranodeMinedBlocks = append(teranodeMinedBlocks, block)
@@ -665,6 +666,7 @@ func TestMultistreamSVNodeSyncFromTeranode(t *testing.T) {
 
 	var minedBlocks []*model.Block
 	for i := 0; i < teranodeBlocks; i++ {
+		// intentional pacing: svnode rejects blocks whose timestamps are too close together
 		time.Sleep(500 * time.Millisecond)
 		block := td.MineAndWait(t, 1)
 		minedBlocks = append(minedBlocks, block)
@@ -726,24 +728,34 @@ func TestMultistreamSVNodeSyncFromTeranode(t *testing.T) {
 		verifyTeranodeServedHeaders(t, sv, targetHeight)
 	} else {
 		t.Logf("Multistream SVNode synced to height %d from teranode - blocks validated by legacy consensus", targetHeight)
-	}
 
-	// Verify per-stream byte counts show DATA1 sent data
-	resp, err := td.CallRPC(ctx, "getpeerinfo", []any{})
-	require.NoError(t, err)
+		// Verify per-stream byte counts show DATA1 sent data. Only meaningful
+		// when sync actually succeeded above - if it didn't, teranode may
+		// never have been asked for block data at all.
+		resp, err := td.CallRPC(ctx, "getpeerinfo", []any{})
+		require.NoError(t, err)
 
-	var p2pResp helper.P2PRPCResponse
-	err = json.Unmarshal([]byte(resp), &p2pResp)
-	require.NoError(t, err)
+		var p2pResp helper.P2PRPCResponse
+		err = json.Unmarshal([]byte(resp), &p2pResp)
+		require.NoError(t, err)
 
-	for _, peer := range p2pResp.Result {
-		if len(peer.Streams) == 0 {
-			continue
-		}
-		for _, s := range peer.Streams {
-			if s.StreamType == streamTypeData1 {
-				require.Greater(t, s.BytesSent, 0, "DATA1 stream should have sent block data to svnode")
-				t.Logf("Verified DATA1 stream bytessent=%d for peer %s", s.BytesSent, peer.Addr)
+		// Teranode's connection manager also targets automatic outbound
+		// peers of its own and can dial back to svnode once it learns its
+		// address, creating a second, teranode-initiated association. That
+		// association's DATA1 stream legitimately carries zero bytes: it is
+		// not the connection svnode used to sync. Restrict the assertion to
+		// the peer svnode itself connected to teranode (Inbound == true),
+		// which is the one and only association through which teranode
+		// served block data to svnode.
+		for _, peer := range p2pResp.Result {
+			if !peer.Inbound {
+				continue
+			}
+			for _, s := range peer.Streams {
+				if s.StreamType == streamTypeData1 {
+					require.Greater(t, s.BytesSent, 0, "DATA1 stream should have sent block data to svnode")
+					t.Logf("Verified DATA1 stream bytessent=%d for peer %s", s.BytesSent, peer.Addr)
+				}
 			}
 		}
 	}
@@ -1758,6 +1770,12 @@ func TestFloatingBlock_SubmitToTeranodeFirst(t *testing.T) {
 	require.NoError(t, err, "Should create model block from wire.MsgBlock")
 
 	expectedHeight := fundingBlockHeight + 1
+
+	// model.NewBlockFromMsgBlock records the subtree root on the block but not the
+	// transaction bodies, so persist the subtree (coinbase placeholder + the spending
+	// tx) to the subtree store for validation to reach the transaction.
+	td.StoreSubtreeForBlock(t, []*bt.Tx{tx}, expectedHeight+1000)
+
 	err = td.BlockValidationClient.ProcessBlock(ctx, modelBlock, expectedHeight, "test", "", 0)
 	require.NoError(t, err, "Teranode should accept the floating block")
 	t.Logf("Submitted floating block to Teranode at height %d", expectedHeight)

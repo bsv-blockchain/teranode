@@ -24,47 +24,41 @@ skinparam participant {
 
 start
 :Create clientChannels map;
-:Create newClientCh channel;
-:Create deadClientCh channel;
-:Start pingTimer;
+:Start notification processor;
 
 fork
-    :Listen for events;
+    :Listen for notifications;
     repeat
-        fork
-            :New client connects;
-            ->Add client to clientChannels;
-        fork again
-            :Client disconnects;
-            ->Remove client from clientChannels;
-        fork again
-            :Ping timer ticks;
-            if (Are there connected clients?) then (yes)
-                :Marshal ping message;
-                ->Send ping to all clients;
+        :Notification received;
+        if (Are there connected clients?) then (yes)
+            :Marshal notification;
+            :Send to all client channels;
+            if (Client channel full past timeout?) then (yes)
+                :Evict client and cancel\nits connection;
             else (no)
             endif
-        fork again
-            :Notification received;
-            if (Are there connected clients?) then (yes)
-                :Marshal notification;
-                ->Send notification to all clients;
-            else (no)
-            endif
-        end fork
+        else (no)
+        endif
     repeat while (Server is running)
 end fork
 
 :Handle WebSocket request;
-->Upgrade HTTP to WebSocket;
-:Send data over WebSocket;
-if (Error sending data) then (yes)
-    ->Add channel to deadClientCh;
+if (Origin allowed and connection\ncaps not reached?) then (yes)
+    :Upgrade HTTP to WebSocket;
+    :Register client channel\nin clientChannels;
+    fork
+        :Read pump: enforce read deadline,\nrefresh on pong, budget inbound frames;
+    fork again
+        :Write pump: send notifications and\nkeepalive pings, each with a write deadline;
+    end fork
+    :On pump exit, eviction, or shutdown:
+    remove client channel, close socket,
+    join pumps, release connection slot;
     stop
 else (no)
+    :Reject with 403 (origin)\nor 503 (cap);
+    stop
 endif
-
-stop
 
 left footer Last Modified On: %date("dd-MMM-yyyy")
 

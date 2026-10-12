@@ -1,40 +1,56 @@
 package util
 
 import (
+	"sync/atomic"
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
 
 func TestSafeSetLimit(t *testing.T) {
+	// runAll launches n trivial goroutines on g and asserts they all run to
+	// completion. If SafeSetLimit had left a zero-capacity limit, Go would block
+	// forever and the test would hang (caught by the go test timeout).
+	runAll := func(t *testing.T, g *errgroup.Group, n int) {
+		t.Helper()
+
+		var counter atomic.Int32
+
+		for i := 0; i < n; i++ {
+			g.Go(func() error {
+				counter.Add(1)
+				return nil
+			})
+		}
+
+		require.NoError(t, g.Wait())
+		require.Equal(t, int32(n), counter.Load())
+	}
+
+	logger := ulogger.TestLogger{}
+
 	t.Run("valid positive limit", func(t *testing.T) {
 		g := &errgroup.Group{}
 
-		// Should not panic
-		SafeSetLimit(g, 1)
-		SafeSetLimit(g, 10)
-		SafeSetLimit(g, 100)
+		SafeSetLimit(logger, g, 2)
+		runAll(t, g, 5)
 	})
 
-	t.Run("zero limit panics", func(t *testing.T) {
+	t.Run("zero limit falls back to a usable default", func(t *testing.T) {
 		g := &errgroup.Group{}
 
-		defer func() {
-			if r := recover(); r == nil {
-				t.Errorf("SafeSetLimit(g, 0) did not panic")
-			} else if r != "limit cannot be 0" {
-				t.Errorf("SafeSetLimit(g, 0) panicked with wrong message: %v", r)
-			}
-		}()
-
-		SafeSetLimit(g, 0)
+		// Must not panic and must not deadlock — a raw SetLimit(0) would make
+		// every Go call block forever.
+		SafeSetLimit(logger, g, 0)
+		runAll(t, g, 5)
 	})
 
-	t.Run("negative limit", func(t *testing.T) {
+	t.Run("negative limit falls back to a usable default", func(t *testing.T) {
 		g := &errgroup.Group{}
 
-		// Should not panic from SafeSetLimit, but errgroup.SetLimit might
-		// We'll let errgroup handle negative values as per its own behavior
-		SafeSetLimit(g, -1)
+		SafeSetLimit(logger, g, -1)
+		runAll(t, g, 5)
 	})
 }

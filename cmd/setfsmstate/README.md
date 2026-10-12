@@ -7,7 +7,7 @@ The `setfsmstate` package provides utilities for managing and updating the Finit
 This package is typically used as a command-line tool to set the FSM state of the blockchain client to a desired state.
 
 ## Features
-- Update FSM state to pre-defined states (e.g., "idle", "running", "catchingblocks", "legacysyncing").
+- Update FSM state to pre-defined states (e.g., "idle", "running", "catchingblocks").
 
 ## Development
 

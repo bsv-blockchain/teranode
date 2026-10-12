@@ -8,7 +8,6 @@ package legacy
 
 import (
 	"fmt"
-	"math"
 	"net"
 	"net/url"
 	"os"
@@ -28,17 +27,32 @@ import (
 )
 
 const (
-	defaultDataDir                 = "data"
-	defaultMaxPeers                = 125
-	defaultMaxPeersPerIP           = 5
-	defaultBanDuration             = time.Hour * 24
-	defaultBanThreshold            = 100
-	defaultConnectTimeout          = time.Second * 30
-	defaultFreeTxRelayLimit        = 15.0
-	defaultTrickleInterval         = peer.DefaultTrickleInterval
-	defaultExcessiveBlockSize      = math.MaxUint64
-	defaultBlockMinSize            = 0
-	defaultBlockMaxSize            = defaultExcessiveBlockSize - 1000
+	defaultDataDir          = "data"
+	defaultMaxPeers         = 125
+	defaultMaxPeersPerIP    = 5
+	defaultBanDuration      = time.Hour * 24
+	defaultBanThreshold     = 100
+	defaultConnectTimeout   = time.Second * 30
+	defaultFreeTxRelayLimit = 15.0
+	defaultTrickleInterval  = peer.DefaultTrickleInterval
+	// maxWireBlockPayload is the excessive block size handed to wire.SetLimits
+	// in Server.go's Init. go-wire keeps it as its `ebs` and returns it from
+	// MaxBlockPayload(), which is the per-message cap it enforces on `block`
+	// and `tx` messages on both read and write - so it is the largest block
+	// this node will accept over the legacy wire. It is not the overall
+	// message payload cap: go-wire derives that as ((ebs/1e6)*1MiB)*2, i.e.
+	// roughly 8.39 GB for this value (go-wire v1.2.10 message.go:38-42).
+	maxWireBlockPayload = 4_000_000_000
+	// defaultExcessiveBlockSize is only a placeholder. loadConfig always
+	// replaces it with the limit block validation actually enforces, see
+	// advertisedExcessiveBlockSize.
+	defaultExcessiveBlockSize = maxWireBlockPayload
+	defaultBlockMinSize       = 0
+	// defaultBlockMaxSize is derived from maxWireBlockPayload: there is no
+	// point mining a block larger than the legacy wire path can carry. When
+	// the enforced excessive block size is smaller, loadConfig caps this down
+	// further.
+	defaultBlockMaxSize            = maxWireBlockPayload - 1000
 	blockMaxSizeMin                = 1000
 	defaultGenerate                = false
 	defaultSigCacheMaxSize         = 100000
@@ -50,6 +64,11 @@ const (
 	defaultTargetOutboundPeers     = uint32(8)
 	minPruneDepth                  = 288
 	defaultMinRelayTxFee           = bsvutil.Amount(1)
+)
+
+const (
+	// unableToParsePrefix is the shared prefix for checkpoint parse errors.
+	unableToParsePrefix = "unable to parse "
 )
 
 // Config provides a unified interface for accessing configuration values from various sources.
@@ -114,24 +133,21 @@ func minUint64(a, b uint64) uint64 {
 	return b
 }
 
-// maxUint32 is a helper function to return the maximum of two uint32s.
-// This avoids a math import and the need to cast to floats.
-func maxUint32(a, b uint32) uint32 {
-	if a > b {
-		return a
+// advertisedExcessiveBlockSize returns the excessive block size to advertise in
+// the EB user agent comment. It derives from policyExcessiveBlockSize - the
+// limit block validation enforces in ValidateBlock, i.e.
+// settings.Policy.ExcessiveBlockSize - capped at maxWireBlockPayload, the
+// largest block this node can receive over the legacy wire. The advertised
+// value is therefore never larger than the block size this node honours.
+//
+// A non-positive policy value means the policy limit is disabled (see
+// ValidateBlock), leaving the wire cap as the only effective limit.
+func advertisedExcessiveBlockSize(policyExcessiveBlockSize int) uint64 {
+	if policyExcessiveBlockSize <= 0 {
+		return maxWireBlockPayload
 	}
 
-	return b
-}
-
-// maxUint64 is a helper function to return the maximum of two uint64s.
-// This avoids a math import and the need to cast to floats.
-func maxUint64(a, b uint64) uint64 {
-	if a > b {
-		return a
-	}
-
-	return b
+	return minUint64(uint64(policyExcessiveBlockSize), maxWireBlockPayload)
 }
 
 // config defines the configuration options for the legacy BSV Blockchain protocol server.
@@ -166,7 +182,7 @@ type config struct {
 	CPUProfile              string        `long:"cpuprofile" description:"Write CPU profile to the specified file"`
 	DebugLevel              string        `short:"d" long:"debuglevel" description:"Logging level for all subsystems {trace, debug, info, warn, error, critical} -- You may also specify <subsystem>=<level>,<subsystem2>=<level>,... to set the log level for individual subsystems -- Use show to list available subsystems"`
 	Upnp                    bool          `long:"upnp" description:"Use UPnP to map our listening port outside of NAT"`
-	ExcessiveBlockSize      uint64        `long:"excessiveblocksize" description:"The maximum size block (in bytes) this node will accept. Cannot be less than 32000000."`
+	ExcessiveBlockSize      uint64        `long:"excessiveblocksize" description:"The maximum size block (in bytes) this node will accept. Derived from the excessiveblocksize policy setting, capped at what the legacy wire path can carry."`
 	MinRelayTxFee           float64       `long:"minrelaytxfee" description:"The minimum transaction fee in BSV/kB to be considered a non-zero fee."`
 	FreeTxRelayLimit        float64       `long:"limitfreerelay" description:"Limit relay of transactions with no transaction fee to the given amount in thousands of bytes per minute"`
 	NoRelayPriority         bool          `long:"norelaypriority" description:"Do not require free or low-fee transactions to have high priority for relaying"`
@@ -275,25 +291,25 @@ func normalizeAddresses(addrs []string, defaultPort string) []string {
 func newCheckpointFromStr(checkpoint string) (chaincfg.Checkpoint, error) {
 	parts := strings.Split(checkpoint, ":")
 	if len(parts) != 2 {
-		return chaincfg.Checkpoint{}, fmt.Errorf("unable to parse "+
+		return chaincfg.Checkpoint{}, fmt.Errorf(unableToParsePrefix+
 			"checkpoint %q -- use the syntax <height>:<hash>",
 			checkpoint)
 	}
 
 	height, err := strconv.ParseInt(parts[0], 10, 32)
 	if err != nil {
-		return chaincfg.Checkpoint{}, fmt.Errorf("unable to parse "+
+		return chaincfg.Checkpoint{}, fmt.Errorf(unableToParsePrefix+
 			"checkpoint %q due to malformed height", checkpoint)
 	}
 
 	if len(parts[1]) == 0 {
-		return chaincfg.Checkpoint{}, fmt.Errorf("unable to parse "+
+		return chaincfg.Checkpoint{}, fmt.Errorf(unableToParsePrefix+
 			"checkpoint %q due to missing hash", checkpoint)
 	}
 
 	hash, err := chainhash.NewHashFromStr(parts[1])
 	if err != nil {
-		return chaincfg.Checkpoint{}, fmt.Errorf("unable to parse "+
+		return chaincfg.Checkpoint{}, fmt.Errorf(unableToParsePrefix+
 			"checkpoint %q due to malformed hash", checkpoint)
 	}
 
@@ -345,7 +361,11 @@ func parseCheckpoints(checkpointStrings []string) ([]chaincfg.Checkpoint, error)
 // The above results in bsvd functioning properly without any config settings
 // while still allowing the user to override settings with config files and
 // command line options.  Command line options always take precedence.
-func loadConfig(logger ulogger.Logger) (*config, []string, error) {
+//
+// policyExcessiveBlockSize is settings.Policy.ExcessiveBlockSize, the block
+// size limit block validation enforces. The advertised EB user agent comment is
+// derived from it so this node cannot advertise a block size it would reject.
+func loadConfig(logger ulogger.Logger, policyExcessiveBlockSize int) (*config, []string, error) {
 	// Default config.
 	cfg := config{
 		MaxPeers:                defaultMaxPeers,
@@ -606,20 +626,37 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 		return nil, nil, err
 	}
 
-	// Excessive blocksize cannot be set less than the default, but it can be higher.
-	cfg.ExcessiveBlockSize = maxUint64(cfg.ExcessiveBlockSize, defaultExcessiveBlockSize)
+	// The excessive blocksize we advertise is the one block validation
+	// enforces, capped at what the legacy wire path can carry, so it is never
+	// larger than the block size this node honours.
+	cfg.ExcessiveBlockSize = advertisedExcessiveBlockSize(policyExcessiveBlockSize)
 
 	// Limit the max block size to a sane value.
-	blockMaxSizeMax := cfg.ExcessiveBlockSize - 1000
-	if cfg.BlockMaxSize < blockMaxSizeMin || cfg.BlockMaxSize > blockMaxSizeMax {
-		str := "%s: The blockmaxsize option must be in between %d and %d -- parsed [%d]"
-		err = fmt.Errorf(str, funcName, blockMaxSizeMin,
-			blockMaxSizeMax, cfg.BlockMaxSize)
+	if cfg.BlockMaxSize < blockMaxSizeMin {
+		str := "%s: The blockmaxsize option may not be less than %d -- parsed [%d]"
+		err = fmt.Errorf(str, funcName, blockMaxSizeMin, cfg.BlockMaxSize)
 		logger.Errorf("%v", err)
 		logger.Errorf("%s", usageMessage)
 
 		return nil, nil, err
 	}
+
+	// Never mine a block bigger than the excessive blocksize we accept. This is
+	// capped rather than rejected because the excessive blocksize follows the
+	// enforced policy setting, which an operator can legitimately set below the
+	// default max block size.
+	blockMaxSizeMax := uint64(blockMaxSizeMin)
+	if cfg.ExcessiveBlockSize > blockMaxSizeMin+1000 {
+		blockMaxSizeMax = cfg.ExcessiveBlockSize - 1000
+	}
+
+	// The floor above must never push the cap above the excessive blocksize
+	// itself -- a policy excessiveblocksize at or below blockMaxSizeMin would
+	// otherwise let BlockMaxSize exceed ExcessiveBlockSize.
+	blockMaxSizeMax = minUint64(cfg.ExcessiveBlockSize, blockMaxSizeMax)
+
+	cfg.BlockMaxSize = minUint64(cfg.BlockMaxSize, blockMaxSizeMax)
+
 	// Limit the minimum block sizes to max block size.
 	cfg.BlockMinSize = minUint64(cfg.BlockMinSize, cfg.BlockMaxSize)
 
@@ -761,90 +798,126 @@ func bsvdLookup(host string) ([]net.IP, error) {
 	return cfg.lookup(host)
 }
 
-// setConfigValuesFromSettings applies configuration values from the settings map to the config struct
-// using reflection. It processes keys with the "legacy_config_" prefix, removing the prefix and
-// mapping the remaining key to the corresponding config struct field. Supports various data types
-// including bool, int, uint32, uint64, int64 (as time.Duration), float64, uint, string, and slices.
-func setConfigValuesFromSettings(logger ulogger.Logger, settings map[string]string, cfg *config) {
-	for k, v := range settings {
-		// check whether the key is of the form "legacy_config_" + configKey
-		if strings.HasPrefix(k, "legacy_config_") {
-			// remove the prefix
-			configKey := k[len("legacy_config_"):]
-			// set the value to the configKey of the map cfg, using reflection
-			// this is done to avoid having to add a new if statement for each new config key
-			field := reflect.ValueOf(cfg).Elem().FieldByName(configKey)
-			if field.IsValid() {
-				// set the value of this field to the correct type
-				switch field.Kind() {
-				case reflect.Bool:
-					field.SetBool(v == "true")
-				case reflect.Int:
-					intVal, err := strconv.Atoi(v)
-					if err != nil {
-						logger.Warnf("Could not convert %s to int: %v", v, err)
-					} else {
-						field.SetInt(int64(intVal))
-					}
-				case reflect.Uint32:
-					uintVal, err := strconv.ParseUint(v, 10, 32)
-					if err != nil {
-						logger.Warnf("Could not convert %s to uint32: %v", v, err)
-					} else {
-						field.SetUint(uintVal)
-					}
-				case reflect.Uint64:
-					uintVal, err := strconv.ParseUint(v, 10, 64)
-					if err != nil {
-						logger.Warnf("Could not convert %s to uint64: %v", v, err)
-					} else {
-						field.SetUint(uintVal)
-					}
-				case reflect.Int64:
-					// this is actually a time duration
-					duration, err := time.ParseDuration(v)
-					if err != nil {
-						logger.Warnf("Could not convert %s to time.Duration: %v", v, err)
-					} else {
-						field.SetInt(duration.Nanoseconds())
-					}
-				case reflect.Float64:
-					floatVal, err := strconv.ParseFloat(v, 64)
-					if err != nil {
-						logger.Warnf("Could not convert %s to float64: %v", v, err)
-					} else {
-						field.SetFloat(floatVal)
-					}
-				case reflect.Uint:
-					uintVal, err := strconv.ParseUint(v, 10, 64)
-					if err != nil {
-						logger.Warnf("Could not convert %s to uint: %v", v, err)
-					} else {
-						field.SetUint(uintVal)
-					}
-				case reflect.String:
-					field.SetString(v)
-				case reflect.Slice:
-					// only if the string is not empty
-					if v == "" {
-						continue
-					}
+// setConfigValuesFromSettings applies configuration values from settings to the config struct
+// using reflection. It looks for keys of the form "legacy_config_" + configKey, removing the
+// prefix and mapping the remaining key to the corresponding config struct field. Supports various
+// data types including bool, int, uint32, uint64, int64 (as time.Duration), float64, uint, string,
+// and slices.
+//
+// settingsConfig.GetAll() is only used to enumerate which "legacy_config_" keys exist (across all
+// contexts) so unknown keys can be flagged; the values themselves are always re-read through
+// settingsConfig.Get, because GetAll returns the raw conf map with no context-suffix resolution
+// (e.g. "legacy_config_Upnp.dev") and no "${VAR}" interpolation. Reading raw map values here would
+// silently ignore any context-suffixed or interpolated setting.
+func setConfigValuesFromSettings(logger ulogger.Logger, settingsConfig Config, cfg *config) {
+	processed := make(map[string]bool)
 
-					// split the string by the pipe character
-					slice := strings.Split(v, "|")
-					// create a new slice of the correct type
-					newSlice := reflect.MakeSlice(field.Type(), len(slice), len(slice))
-					// iterate over the slice and set the values
-					for i, val := range slice {
-						newSlice.Index(i).SetString(val)
-					}
-					// set the field to the new slice
-					field.Set(newSlice)
-				default:
-					// time.Duration
-					logger.Warnf("Unsupported type for config key %s: %v", configKey, field.Kind())
-				}
+	for k := range settingsConfig.GetAll() {
+		// check whether the key is of the form "legacy_config_" + configKey
+		if !strings.HasPrefix(k, "legacy_config_") {
+			continue
+		}
+
+		// remove the prefix; the remainder may itself carry a context/app
+		// suffix (e.g. "Upnp.dev", "DataDir.operator"), which is not part
+		// of the struct field name, so only the segment before the first
+		// "." can match a field.
+		remainder := k[len("legacy_config_"):]
+
+		configKey := remainder
+		if idx := strings.Index(remainder, "."); idx != -1 {
+			configKey = remainder[:idx]
+		}
+
+		if processed[configKey] {
+			continue
+		}
+
+		processed[configKey] = true
+
+		// set the value to the configKey of the map cfg, using reflection
+		// this is done to avoid having to add a new if statement for each new config key
+		field := reflect.ValueOf(cfg).Elem().FieldByName(configKey)
+		if !field.IsValid() {
+			logger.Warnf("legacy_config_%s does not match any known legacy config field, ignoring", configKey)
+			continue
+		}
+
+		// resolve through the context-aware accessor (handles context
+		// suffixes and "${VAR}" interpolation), not the raw GetAll() map.
+		v, ok := settingsConfig.Get("legacy_config_" + configKey)
+		if !ok {
+			continue
+		}
+
+		// set the value of this field to the correct type
+		switch field.Kind() {
+		case reflect.Bool:
+			field.SetBool(v == "true")
+		case reflect.Int:
+			intVal, err := strconv.Atoi(v)
+			if err != nil {
+				logger.Warnf("Could not convert %s to int: %v", v, err)
+			} else {
+				field.SetInt(int64(intVal))
 			}
+		case reflect.Uint32:
+			uintVal, err := strconv.ParseUint(v, 10, 32)
+			if err != nil {
+				logger.Warnf("Could not convert %s to uint32: %v", v, err)
+			} else {
+				field.SetUint(uintVal)
+			}
+		case reflect.Uint64:
+			uintVal, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				logger.Warnf("Could not convert %s to uint64: %v", v, err)
+			} else {
+				field.SetUint(uintVal)
+			}
+		case reflect.Int64:
+			// this is actually a time duration
+			duration, err := time.ParseDuration(v)
+			if err != nil {
+				logger.Warnf("Could not convert %s to time.Duration: %v", v, err)
+			} else {
+				field.SetInt(duration.Nanoseconds())
+			}
+		case reflect.Float64:
+			floatVal, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				logger.Warnf("Could not convert %s to float64: %v", v, err)
+			} else {
+				field.SetFloat(floatVal)
+			}
+		case reflect.Uint:
+			uintVal, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				logger.Warnf("Could not convert %s to uint: %v", v, err)
+			} else {
+				field.SetUint(uintVal)
+			}
+		case reflect.String:
+			field.SetString(v)
+		case reflect.Slice:
+			// only if the string is not empty
+			if v == "" {
+				continue
+			}
+
+			// split the string by the pipe character
+			slice := strings.Split(v, "|")
+			// create a new slice of the correct type
+			newSlice := reflect.MakeSlice(field.Type(), len(slice), len(slice))
+			// iterate over the slice and set the values
+			for i, val := range slice {
+				newSlice.Index(i).SetString(val)
+			}
+			// set the field to the new slice
+			field.Set(newSlice)
+		default:
+			// time.Duration
+			logger.Warnf("Unsupported type for config key %s: %v", configKey, field.Kind())
 		}
 	}
 }

@@ -59,14 +59,22 @@ If header processing is not skipped:
 If UTXO processing is not skipped:
 
 1. The service initializes a connection to the UTXO store.
-2. It sets up a channel for UTXO processing and spawns multiple worker goroutines.
-3. The UTXO file is opened and its header is verified.
-4. UTXOs are read from the file and sent to the processing channel.
-5. Worker goroutines process UTXOs in parallel:
+2. The UTXO file is opened and its header is verified.
+3. The file is imported in two concurrent passes, each with its own reader,
+   channel and worker goroutines: one creates the transactions that fit a
+   single UTXO store record, the other those spanning multiple records
+   (highest unspent output index at or above `utxostore_utxoBatchSize`),
+   which take a much slower create path. The first error in either pass
+   stops both.
+4. Each pass's reader cuts the file into raw records and sends only the
+   records of its kind to its workers; an output index no valid transaction
+   can have fails the import.
+5. Worker goroutines decode records in parallel:
 
-    - Each UTXO is converted to a Bitcoin transaction format.
+    - Each record is converted to a Bitcoin transaction format.
     - The transaction is stored in the UTXO store.
-6. The service tracks the number of transactions and UTXOs processed.
+6. Each pass counts every transaction and UTXO in the file and checks the
+   totals against the file's footer, so a truncated file fails the import.
 
 ## 3. Data Model
 
@@ -137,7 +145,7 @@ The service reads these structures from input files and converts them to the for
 To run the Seeder command, use the following command:
 
 ```shell
-teranode-cli seeder -inputDir <folder> -hash <hash> [-skipHeaders] [-skipUTXOs]
+teranode-cli seeder -inputDir <folder> -hash <hash> [-skipHeaders] [-skipUTXOs] [-force] [-skipChecksum]
 ```
 
 Options:
@@ -146,6 +154,43 @@ Options:
 - `-hash`: Hash of the UTXO set / headers to process.
 - `-skipHeaders`: (Optional) Skip processing of headers.
 - `-skipUTXOs`: (Optional) Skip processing of UTXOs.
+- `-force`: (Optional) Process even if `lastProcessed.dat` or BlockAssembler state already exists.
+- `-skipChecksum`: (Optional) Skip checksum verification (see below). Only for callers that have already verified the files against their sidecars.
+
+### Checksum verification
+
+Before reading the headers file and/or the UTXO-set file, the seeder checks
+for a `<file>.sha256` checksum sidecar next to it — the same format the UTXO
+Persister's blob file store, and `bitcointoutxoset`, write alongside every
+snapshot: a hex-encoded SHA-256 digest, optionally followed by the snapshot's
+filename.
+
+- If a sidecar is present and matches, the import proceeds.
+- If a sidecar is present and does **not** match (wrong checksum, or a
+  filename field naming a different snapshot), the seeder refuses to import
+  and returns an error — a corrupted-but-otherwise-well-formed snapshot must
+  never be silently seeded.
+- If no sidecar is present, the import proceeds with only a warning logged;
+  mandating a sidecar for every possible snapshot source isn't realistic, so
+  this is not a fatal condition.
+
+This applies to the headers file even when `-skipHeaders` is set: the UTXO
+pass still reads the headers file back to recover coinbase inputs, so it is
+verified whenever it will be consumed, not only when the header-import pass
+itself runs.
+
+Verification reads each file in full (7m38s for a 569 GB mainnet UTXO set).
+A caller that has already verified the same files, such as a fetch script
+that checks the sidecars after download, can pass `-skipChecksum` to avoid
+reading them twice; the seeder logs a warning when it does. Checking during
+the import instead is not offered: a mismatch found partway through would
+leave corrupt records in the UTXO store that a re-run keeps as already
+present.
+
+This check is a defense against transfer/storage corruption, not tampering:
+the sidecar itself is unauthenticated, so it cannot detect a snapshot and its
+sidecar being modified together. There is no flag to make the sidecar
+mandatory; a missing sidecar always falls back to a warning.
 
 ## 7. Configuration Options
 
@@ -153,9 +198,20 @@ The Seeder uses various configuration options, which can be set through a config
 
 - `blockchain_store`: URL for the blockchain store.
 - `utxostore`: URL for the UTXO store.
-- `channelSize`: Size of the channel for UTXO processing (default: 1000).
-- `workerCount`: Number of worker goroutines for UTXO processing (default: 500).
+- `channelSize`: Buffer between each pass's reader and its workers (default: 1000).
+- `workerCount`: Worker goroutines in the single-record pass (default: 16384, range 1 to 1,048,576). Each
+  blocks until its create is written, so this is the number of transactions in
+  flight; it must comfortably exceed `utxostore_storeBatcherSize`.
+- `multiRecordWorkerCount`: Worker goroutines in the multi-record pass (range 1 to 1,048,576; default:
+  `seeder_externalStoreConcurrency`, or 1024 when that is 0 or less).
+- `seeder_externalStoreConcurrency`: Replaces `utxostore_externalStoreConcurrency`
+  for the seeder run (default: 256; 0 or less means unlimited).
+- `seeder_externalStoreFsyncMode`: fsync mode for a `file://` external store whose
+  URL does not set `fsyncMode` (default: `data`). See `cmd/seeder/README.md` for
+  the durability trade-off of `none`.
 - `skipStore`: Boolean flag to skip storing UTXOs (for testing purposes).
+
+`cmd/seeder/README.md` has the same settings with more detail.
 
 ## 8. Known Limitations
 

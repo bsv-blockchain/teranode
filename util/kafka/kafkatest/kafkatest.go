@@ -16,12 +16,16 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"net/netip"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -38,8 +42,10 @@ type Env struct {
 	mu         sync.Mutex
 }
 
-// MustStartEnv starts a single-node Redpanda container. It calls t.Fatal on
-// error and registers a cleanup function so callers don't need to defer Close.
+// MustStartEnv starts a single-node Redpanda container. It skips the test if
+// the container runtime itself is unavailable, calls t.Fatal on any other
+// startup error, and registers a cleanup function so callers don't need to
+// defer Close.
 func MustStartEnv(t testing.TB, ctx context.Context) *Env {
 	t.Helper()
 
@@ -48,9 +54,17 @@ func MustStartEnv(t testing.TB, ctx context.Context) *Env {
 		t.Fatalf("kafkatest: free port: %v", err)
 	}
 
+	portStr := fmt.Sprintf("%d/tcp", port)
 	req := testcontainers.ContainerRequest{
 		Image:        fmt.Sprintf("%s:%s", redpandaImage, redpandaVersion),
-		ExposedPorts: []string{fmt.Sprintf("%d:%d/tcp", port, port)},
+		ExposedPorts: []string{portStr},
+		HostConfigModifier: func(hc *container.HostConfig) {
+			hc.PortBindings = network.PortMap{
+				network.MustParsePort(portStr): []network.PortBinding{
+					{HostIP: netip.IPv4Unspecified(), HostPort: fmt.Sprintf("%d", port)},
+				},
+			}
+		},
 		Cmd: []string{
 			"redpanda", "start",
 			"--overprovisioned",
@@ -65,9 +79,7 @@ func MustStartEnv(t testing.TB, ctx context.Context) *Env {
 		ContainerRequest: req,
 		Started:          true,
 	})
-	if err != nil {
-		t.Fatalf("kafkatest: start redpanda: %v", err)
-	}
+	test.SkipIfContainerUnavailable(t, err)
 
 	env := &Env{
 		Container:  container,

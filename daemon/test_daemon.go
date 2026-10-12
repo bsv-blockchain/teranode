@@ -37,6 +37,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/propagation"
@@ -109,8 +110,8 @@ type TestOptions struct {
 	SkipRemoveDataDir       bool
 	StartDaemonDependencies bool
 	FSMState                blockchain.FSMStateType
-	// UTXOStoreType specifies which UTXO store backend to use ("aerospike", "postgres")
-	// If empty, defaults to "aerospike"
+	// UTXOStoreType specifies which UTXO store backend to use ("aerospike", "postgres", "sqlite")
+	// If empty, keeps the configured store (SQLite with SystemTestSettings).
 	UTXOStoreType string
 	// ContainerManager allows reusing an existing container manager from a previous TestDaemon.
 	// When set, the daemon will use the existing container instead of creating a new one.
@@ -130,6 +131,10 @@ type TestOptions struct {
 	// Log format: [TestName:serviceName] LEVEL: message
 	// This provides consistent formatting and ensures all logs are captured by go test.
 	UseUnifiedLogger bool
+	// WaitForHealthReadiness waits for the readiness endpoint after daemon startup.
+	// By default tests only wait for liveness because some narrow daemon configurations
+	// intentionally start without every readiness dependency.
+	WaitForHealthReadiness bool
 }
 
 // JSONError represents a JSON error response from the RPC server.
@@ -146,8 +151,41 @@ func (je *JSONError) Error() string {
 // testDaemonCounter is used to generate unique context names for each TestDaemon
 var testDaemonCounter uint64
 
+// setTestDaemonRunning expresses explicit test setup. Automatic Run alone
+// intentionally refuses IDLE and cannot perform this operator action.
+func setTestDaemonRunning(ctx context.Context, client blockchain.ClientI) error {
+	err := client.SendFSMEvent(ctx, blockchain_api.FSMEventType_RUN)
+	if !errors.Is(err, errors.ErrStateError) {
+		return err
+	}
+	// Explicit RUN is invalid if another promotion already reached RUNNING.
+	// Confirm through the authority rather than a cached state read; this also
+	// reconciles uncertain persistence and still refuses a concurrent STOP.
+	return client.Run(ctx, "test/setup-confirm-running")
+}
+
+// setTestDaemonCatchingBlocks expresses explicit catchup setup, including from
+// IDLE. Automatic CatchUpBlocks alone intentionally preserves operator IDLE.
+func setTestDaemonCatchingBlocks(ctx context.Context, client blockchain.ClientI) error {
+	err := client.SendFSMEvent(ctx, blockchain_api.FSMEventType_CATCHUPBLOCKS)
+	if !errors.Is(err, errors.ErrStateError) && !errors.Is(err, errors.ErrInvalidArgument) {
+		return err
+	}
+	// Repeating the fixed CATCHUPBLOCKS event in CATCHINGBLOCKS is rejected by
+	// the server's manual-transition restriction as InvalidArgument. Confirm
+	// through the authority; it reconciles no-ops and still refuses a later STOP.
+	return client.CatchUpBlocks(ctx)
+}
+
 // NewTestDaemon creates a new TestDaemon instance with the provided options.
 func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
+	// Test daemons run multiple nodes in-process on the same host, so peers advertise
+	// and fetch from each other over localhost (e.g. http://localhost:<assetPort>). The
+	// production SSRF dial guard blocks loopback, which would make catchup block/subtree
+	// fetches fail. These nodes are trusted, so disable SSRF protection for the test
+	// process. Production (cmd/teranode) never calls this and keeps protection enabled.
+	util.SetSSRFProtection(false)
+
 	ctx, cancel := context.WithCancel(t.Context())
 
 	var (
@@ -156,6 +194,14 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	)
 
 	appSettings = settings.NewSettings() // This reads gocore.Config and applies sensible defaults
+
+	// The test daemon drives its own RPC endpoint over Basic auth, and the RPC server
+	// fails closed when either credential is unset. Production no longer ships a default
+	// pair, so supply a throwaway one for the in-process node instead of depending on it.
+	if appSettings.RPC.RPCUser == "" || appSettings.RPC.RPCPass == "" {
+		appSettings.RPC.RPCUser = "testdaemon"
+		appSettings.RPC.RPCPass = "testdaemon"
+	}
 
 	// Generate a unique context for this TestDaemon to ensure util.GetListener
 	// creates unique listeners instead of returning cached ones from another TestDaemon.
@@ -249,6 +295,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	p2pPort, err := getFreePort()
 	require.NoError(t, err)
 	appSettings.P2P.StaticPeers = nil
+	appSettings.P2P.BootstrapPeers = nil
 	appSettings.P2P.ListenAddresses = []string{"0.0.0.0"}
 	appSettings.P2P.Port = p2pPort
 
@@ -355,6 +402,15 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	chainParams.CoinbaseMaturity = 1
 	appSettings.ChainCfgParams = &chainParams
 
+	// Disable the RPC absurd-fee user-protection ceiling for e2e tests. Test
+	// transactions typically spend full-coinbase value (~5 BSV) with tiny
+	// outputs, producing fees far above the production default
+	// (0.1 BSV / 10M sats) that this guard enforces. Tests don't model
+	// realistic fee economics, so the ceiling would otherwise reject every
+	// sendrawtransaction call with `absurdly-high-fee`. Same pattern as
+	// MinMiningTxFee = 0 in the validator-package unit tests.
+	appSettings.Policy.MaxRawTxFee = 0
+
 	// Override DataFolder BEFORE creating any directories
 	// This ensures all store paths (blockstore, quorum, etc.) use the test-specific path
 	// Always set DataFolder and QuorumPath to test-specific directory
@@ -383,6 +439,12 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	appSettings.ProfilerAddr = ""
 	appSettings.RPC.CacheEnabled = false
 	appSettings.UsePrometheusGRPCMetrics = false
+
+	// Give Blockchain/P2P/Legacy servers and their clients a shared test credential.
+	// Blockchain requires it for startup, reads, writes and subscriptions.
+	// settings.conf deliberately ships no production default.
+	// Tests that need a specific key still override it below via SettingsOverrideFunc.
+	appSettings.GRPCAdminAPIKey = "teranode-testdaemon-admin-key"
 
 	// Override with test settings...
 	if opts.SettingsOverrideFunc != nil {
@@ -507,7 +569,11 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	}
 
 	ports := []int{getPortFromString(appSettings.HealthCheckHTTPListenAddress)}
-	require.NoError(t, WaitForHealthLiveness(ports, 10*time.Second))
+	if opts.WaitForHealthReadiness {
+		require.NoError(t, WaitForHealthReadiness(ports, 10*time.Second))
+	} else {
+		require.NoError(t, WaitForHealthLiveness(ports, 10*time.Second))
+	}
 
 	// If using Aerospike, add a brief delay to allow it to stabilize after daemon services connect
 	// Aerospike may accept connections but still reject operations immediately after multiple
@@ -568,13 +634,10 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	if opts.FSMState.String() != "" {
 		switch opts.FSMState {
 		case blockchain.FSMStateRUNNING:
-			err = blockchainClient.Run(ctx, "test")
+			err = setTestDaemonRunning(ctx, blockchainClient)
 			require.NoError(t, err)
 		case blockchain.FSMStateCATCHINGBLOCKS:
-			err = blockchainClient.CatchUpBlocks(ctx)
-			require.NoError(t, err)
-		case blockchain.FSMStateLEGACYSYNCING:
-			err = blockchainClient.LegacySync(ctx)
+			err = setTestDaemonCatchingBlocks(ctx, blockchainClient)
 			require.NoError(t, err)
 		}
 	}
@@ -589,6 +652,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		utxoStore,
 		validatorClient,
 		subtreeValidationClient,
+		p2pClient,
 	)
 
 	assert.NotNil(t, blockchainClient)
@@ -748,7 +812,6 @@ func WaitForPortsFree(t *testing.T, ctx context.Context, settings *settings.Sett
 // GetPorts returns a slice of ports from the provided settings.
 func GetPorts(appSettings *settings.Settings) []int {
 	ports := []int{
-		getPortFromString(appSettings.Asset.CentrifugeListenAddress),
 		getPortFromString(appSettings.Asset.HTTPListenAddress),
 		getPortFromString(appSettings.BlockPersister.HTTPListenAddress),
 		getPortFromString(appSettings.BlockAssembly.GRPCListenAddress),
@@ -787,6 +850,11 @@ func removeZeros(ports []int) []int {
 	}
 
 	return result
+}
+
+// GetFreePort asks the kernel for a free open port that is ready to use.
+func GetFreePort() (int, error) {
+	return getFreePort()
 }
 
 // getFreePort asks the kernel for a free open port that is ready to use.
@@ -1105,17 +1173,35 @@ func (td *TestDaemon) WaitForTransactionInBlockAssembly(tx *bt.Tx, timeout time.
 	}
 }
 
-func (td *TestDaemon) WaitForPruner(t *testing.T, timeout time.Duration) {
+// WaitForPruner waits for the pruner to report a completed cycle.
+//
+// By default (no minHeight given) it returns whatever completion is next in the
+// queue, including one that was already buffered from an earlier, unconsumed
+// prune cycle — this preserves the historical behaviour for existing callers.
+//
+// Passing minHeight makes the wait height-aware: buffered completions for a
+// height below minHeight are discarded, and the call only returns once it has
+// observed a completion for minHeight or higher (or times out). Callers that
+// perform several prune-triggering operations before checking the resulting
+// UTXO-store state should pass the height they need the pruner to have reached,
+// otherwise a stale, already-queued completion for an earlier height can satisfy
+// the wait before the relevant pruning has actually happened.
+func (td *TestDaemon) WaitForPruner(t *testing.T, timeout time.Duration, minHeight ...uint32) {
 	if td.prunerObserver == nil {
 		return
+	}
+
+	var target uint32
+	if len(minHeight) > 0 {
+		target = minHeight[0]
 	}
 
 	t.Log("Phase 4: Waiting for pruner to remove spent parent transactions...")
 	// The pruner runs periodically. We need to wait for it to prune the old transactions.
 	// With GlobalBlockHeightRetention=1, transactions older than 1 block should be pruned.
 	// Current height is 10, so we wait for the pruner to complete its cycle.
-	t.Logf("Waiting for pruner to complete pruning cycle...")
-	prunedHeight, recordsProcessed, err := td.prunerObserver.waitForPrune(timeout)
+	t.Logf("Waiting for pruner to complete pruning cycle (minHeight=%d)...", target)
+	prunedHeight, recordsProcessed, err := td.prunerObserver.waitForPrune(timeout, target)
 	require.NoError(t, err, "Timeout waiting for pruner to complete")
 	t.Logf("✓ Pruner completed pruning up to height %d, processed %d records", prunedHeight, recordsProcessed)
 }
@@ -1302,7 +1388,7 @@ func (td *TestDaemon) generateBlocks(t *testing.T, numBlocks uint32) error {
 	// Get current height before generating
 	_, meta, err := td.BlockchainClient.GetBestBlockHeader(td.Ctx)
 	if err != nil {
-		return errors.NewUnknownError("failed to get best block header: %w", err)
+		return errors.NewUnknownError("failed to get best block header", err)
 	}
 	startHeight := meta.Height
 
@@ -1313,13 +1399,13 @@ func (td *TestDaemon) generateBlocks(t *testing.T, numBlocks uint32) error {
 
 		err := td.BlockAssemblyClient.GenerateBlocks(td.Ctx, &blockassembly_api.GenerateBlocksRequest{Count: int32(remaining)})
 		if err != nil {
-			return errors.NewUnknownError("failed to generate %d blocks (batch %d/%d): %w", remaining, generated, numBlocks, err)
+			return errors.NewUnknownError("failed to generate %d blocks (batch %d/%d)", remaining, generated, numBlocks, err)
 		}
 
 		// Wait for this batch of blocks to be available before generating the next batch
 		intermediateTarget := startHeight + generated + remaining
 		if err = td.waitForBlockHeight(t, intermediateTarget, remaining); err != nil {
-			return errors.NewUnknownError("failed waiting for batch %d blocks at height %d: %w", remaining, intermediateTarget, err)
+			return errors.NewUnknownError("failed waiting for batch %d blocks at height %d", remaining, intermediateTarget, err)
 		}
 
 		generated += remaining
@@ -1686,7 +1772,7 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 		}
 	}
 
-	if err = storeSubtreeFiles(ctx, subtreeStore, subtree, subtreeData, subtreeMeta); err != nil {
+	if err = storeSubtreeFiles(ctx, subtreeStore, subtree, subtreeData, subtreeMeta, 100); err != nil {
 		return nil, err
 	}
 
@@ -1694,7 +1780,7 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 }
 
 // storeSubtreeFiles serializes and stores the subtree, subtree data, and subtree meta in the provided subtree store.
-func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.Data, subtreeMeta *subtreepkg.Meta) error {
+func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.Data, subtreeMeta *subtreepkg.Meta, deleteAtHeight uint32) error {
 	subtreeBytes, err := subtree.Serialize()
 	if err != nil {
 		return err
@@ -1705,7 +1791,7 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *su
 		subtree.RootHash()[:],
 		fileformat.FileTypeSubtreeToCheck, // this needs to be FileTypeSubtreeToCheck for tx processing to occur
 		subtreeBytes,
-		options.WithDeleteAt(100),
+		options.WithDeleteAt(deleteAtHeight),
 		options.WithAllowOverwrite(true),
 	)
 	if err != nil {
@@ -1722,7 +1808,7 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *su
 		subtreeData.RootHash()[:],
 		fileformat.FileTypeSubtreeData,
 		subtreeDataBytes,
-		options.WithDeleteAt(100),
+		options.WithDeleteAt(deleteAtHeight),
 		options.WithAllowOverwrite(true),
 	)
 	if err != nil {
@@ -1739,7 +1825,7 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *su
 		subtree.RootHash()[:],
 		fileformat.FileTypeSubtreeMeta,
 		subtreeMetaBytes,
-		options.WithDeleteAt(100),
+		options.WithDeleteAt(deleteAtHeight),
 		options.WithAllowOverwrite(true),
 	)
 	if err != nil {
@@ -1747,6 +1833,49 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *su
 	}
 
 	return nil
+}
+
+// StoreSubtreeForBlock builds the single subtree for a block whose only
+// non-coinbase transactions are those given (a coinbase placeholder followed by
+// the supplied transactions, in order), then persists the subtree, its data and
+// its meta to the subtree store. This makes the transactions locally available
+// to the block-validation subtree pass, which fetches the subtree data and
+// consensus-validates every non-coinbase transaction.
+//
+// It is the test-side complement to model.NewBlockFromMsgBlock: that constructor
+// records the subtree root on the block, but the transaction bodies (carried only
+// in the original wire block) are not part of the serialised block and must be
+// supplied to the store separately for validation to reach them.
+//
+// deleteAtHeight controls blob retention and must be above the height of the
+// block being validated so the subtree is not pruned before validation runs.
+// The returned root hash matches block.Subtrees[0] for a block built from the
+// same coinbase-plus-transactions set.
+func (td *TestDaemon) StoreSubtreeForBlock(t *testing.T, txs []*bt.Tx, deleteAtHeight uint32) *chainhash.Hash {
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(len(txs) + 1)
+	require.NoError(t, err)
+
+	subtreeData := subtreepkg.NewSubtreeData(subtree)
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
+
+	require.NoError(t, subtree.AddCoinbaseNode())
+
+	for i, tx := range txs {
+		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 0, uint64(tx.Size()))) //nolint:gosec
+		// node index is i+1 because index 0 is the coinbase placeholder
+		require.NoError(t, subtreeData.AddTx(tx, i+1))
+		require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx))
+	}
+
+	rootHash := subtree.RootHash()
+
+	// Delegate the persist path to storeSubtreeFiles. subtreeData.RootHash() equals
+	// subtree.RootHash() for a NewSubtreeData(subtree), so the stored keys are unchanged.
+	// FileTypeSubtreeToCheck (set by storeSubtreeFiles) is required so the
+	// subtree-validation pass treats the transactions as pending and validates them.
+	require.NoError(t, storeSubtreeFiles(td.Ctx, td.SubtreeStore, subtree, subtreeData, subtreeMeta, deleteAtHeight))
+
+	return rootHash
 }
 
 // ResetServiceManagerContext resets the ServiceManager context to allow for a fresh start.
@@ -1773,14 +1902,24 @@ func (td *TestDaemon) GetTxStore() (blob.Store, error) {
 	return td.d.daemonStores.GetTxStore(td.Ctx, td.Logger, td.Settings)
 }
 
-// WaitForHealthLiveness waits for the health readiness endpoint of the given ports to respond within the specified timeout.
+// WaitForHealthLiveness waits for the health liveness endpoint of the given ports to respond within the specified timeout.
 func WaitForHealthLiveness(ports []int, timeout time.Duration) error {
+	return waitForHealthEndpoint(ports, timeout, "/health/liveness")
+}
+
+// WaitForHealthReadiness waits for the health readiness endpoint of the given ports to respond within the specified timeout.
+func WaitForHealthReadiness(ports []int, timeout time.Duration) error {
+	return waitForHealthEndpoint(ports, timeout, "/health/readiness")
+}
+
+func waitForHealthEndpoint(ports []int, timeout time.Duration, path string) error {
 	timeoutElapsed := time.After(timeout)
+	localHealthClient := &http.Client{Timeout: time.Second}
 
 	var err error
 
 	for _, port := range ports {
-		healthReadinessEndpoint := fmt.Sprintf("http://localhost:%d/health/readiness", port)
+		healthEndpoint := fmt.Sprintf("http://localhost:%d%s", port, path)
 
 	out:
 		for {
@@ -1788,8 +1927,18 @@ func WaitForHealthLiveness(ports []int, timeout time.Duration) error {
 			case <-timeoutElapsed:
 				return errors.NewError("health check failed for port %d after timeout: %v", port, timeout, err)
 			default:
-				_, err = util.DoHTTPRequest(context.Background(), healthReadinessEndpoint, nil)
-				if err != nil {
+				resp, requestErr := localHealthClient.Get(healthEndpoint)
+				if resp != nil && resp.Body != nil {
+					_ = resp.Body.Close()
+				}
+				if requestErr != nil {
+					err = requestErr
+					time.Sleep(100 * time.Millisecond)
+
+					continue
+				}
+				if resp.StatusCode != http.StatusOK {
+					err = errors.NewError("health check returned status code %d", resp.StatusCode)
 					time.Sleep(100 * time.Millisecond)
 
 					continue
@@ -2242,33 +2391,69 @@ type pruneEvent struct {
 	recordsProcessed int64
 }
 
+// testPrunerObserver buffers every OnPruneComplete callback so waitForPrune can
+// later scan for one covering a specific height. The queue is an unbounded slice
+// rather than a fixed-capacity channel: a channel with a small capacity can fill
+// up and silently drop events (the observer would otherwise need to block the
+// pruner itself, which is worse), and the whole point of a height-aware wait is
+// that it must be able to see every completion, however many pile up before
+// something asks for one.
 type testPrunerObserver struct {
-	t              *testing.T
-	pruneCompleted chan pruneEvent
+	t      *testing.T
+	mu     sync.Mutex
+	events []pruneEvent
+	notify chan struct{} // capacity 1, coalesced wake-up signal
 }
 
 func newTestPrunerObserver(t *testing.T) *testPrunerObserver {
 	return &testPrunerObserver{
-		t:              t,
-		pruneCompleted: make(chan pruneEvent, 10),
+		t:      t,
+		notify: make(chan struct{}, 1),
 	}
 }
 
 func (o *testPrunerObserver) OnPruneComplete(height uint32, recordsProcessed int64) {
 	o.t.Logf("✓ Pruner callback invoked for height %d with %d records processed", height, recordsProcessed)
+
+	o.mu.Lock()
+	o.events = append(o.events, pruneEvent{height: height, recordsProcessed: recordsProcessed})
+	o.mu.Unlock()
+
 	select {
-	case o.pruneCompleted <- pruneEvent{height: height, recordsProcessed: recordsProcessed}:
+	case o.notify <- struct{}{}:
 	default:
-		o.t.Logf("Warning: pruneCompleted channel is full, dropping event for height %d", height)
 	}
 }
 
-func (o *testPrunerObserver) waitForPrune(timeout time.Duration) (uint32, int64, error) {
-	select {
-	case event := <-o.pruneCompleted:
-		return event.height, event.recordsProcessed, nil
-	case <-time.After(timeout):
-		return 0, 0, errors.NewProcessingError("timeout waiting for prune completion")
+// waitForPrune returns the first buffered completion event whose height is >=
+// minHeight, discarding any stale completions below it along the way. With
+// minHeight == 0 this is equivalent to "return whatever is next", matching the
+// pre-existing behaviour.
+func (o *testPrunerObserver) waitForPrune(timeout time.Duration, minHeight uint32) (uint32, int64, error) {
+	deadline := time.After(timeout)
+
+	for {
+		o.mu.Lock()
+		for len(o.events) > 0 {
+			event := o.events[0]
+			o.events = o.events[1:]
+
+			if event.height < minHeight {
+				o.t.Logf("Discarding stale prune completion for height %d (< requested minHeight %d)", event.height, minHeight)
+				continue
+			}
+
+			o.mu.Unlock()
+			return event.height, event.recordsProcessed, nil
+		}
+		o.mu.Unlock()
+
+		select {
+		case <-o.notify:
+			continue
+		case <-deadline:
+			return 0, 0, errors.NewProcessingError("timeout waiting for prune completion at height >= %d", minHeight)
+		}
 	}
 }
 

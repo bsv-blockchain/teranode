@@ -283,8 +283,6 @@ func TestDeleteAtHeightHappyPath(t *testing.T) {
 	_, err = td.CallRPC(td.Ctx, "generate", []any{blocksToGenerate + 1})
 	require.NoError(t, err)
 
-	time.Sleep(10 * time.Second)
-
 	// Verify transaction still exists
 	meta, err := td.UtxoStore.Get(td.Ctx, parentTx.TxIDChainHash())
 

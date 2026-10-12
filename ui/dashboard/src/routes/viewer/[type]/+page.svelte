@@ -1,5 +1,6 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { beforeUpdate } from 'svelte'
   import { page } from '$app/stores'
 
   import BlockDetails from '$internal/components/page/viewer/block/index.svelte'
@@ -9,16 +10,11 @@
   import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
   import { DetailType } from '$internal/utils/urls'
 
-  let ready = false
-  beforeUpdate(() => {
-    ready = true
-  })
-
-  $: type = $page.params.type
-  $: hash = ready ? $page.url.searchParams.get('hash') ?? '' : ''
+  const type = $derived($page.params.type)
+  const hash = $derived($page.url.searchParams.get('hash') ?? '')
 </script>
 
-<PageWithMenu>
+<PageWithMenu testId="page-root">
   {#if type === DetailType.block}
     <BlockDetails {hash} />
   {:else if type === DetailType.subtree}

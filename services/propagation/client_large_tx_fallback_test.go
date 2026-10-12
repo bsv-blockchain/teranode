@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/propagation/propagation_api"
@@ -193,8 +194,9 @@ func TestClientLargeTransactionFallback(t *testing.T) {
 		mockGRPCClient.ProcessedTransactionBatchSize = 0
 		validatorHTTPCalls = 0
 
-		// Create a batch of small transactions
+		// Create a batch of small transactions sharing one completion group.
 		batch := make([]*batchItem, 3)
+		group := completion.NewGroup(int32(len(batch)))
 
 		for i := 0; i < 3; i++ {
 			smallTx := bt.NewTx()
@@ -202,19 +204,17 @@ func TestClientLargeTransactionFallback(t *testing.T) {
 			require.NoError(t, err)
 
 			batch[i] = &batchItem{
-				tx:   smallTx,
-				done: make(chan error, 1),
+				tx:    smallTx,
+				group: group,
 			}
-
-			// Start a goroutine to receive the result for each transaction
-			go func(i int) {
-				<-batch[i].done
-			}(i)
 		}
 
 		// Process the batch
 		err := batchClient.ProcessTransactionBatch(context.Background(), batch)
 		require.NoError(t, err)
+
+		// Every item must have been completed exactly once.
+		require.NoError(t, group.Wait(context.Background(), 0))
 
 		// Verify gRPC was used and HTTP fallback was not
 		assert.Equal(t, 3, mockGRPCClient.ProcessedTransactionBatchSize, "gRPC client should be used for batch")
@@ -227,8 +227,9 @@ func TestClientLargeTransactionFallback(t *testing.T) {
 		validatorHTTPCalls = 0
 		validatorTxsBatchCalls = 0
 
-		// Create a batch with one large transaction
+		// Create a batch with one large transaction sharing one completion group.
 		batch := make([]*batchItem, 2)
+		group := completion.NewGroup(int32(len(batch)))
 
 		// First transaction is small
 		smallTx := bt.NewTx()
@@ -236,8 +237,8 @@ func TestClientLargeTransactionFallback(t *testing.T) {
 		require.NoError(t, err)
 
 		batch[0] = &batchItem{
-			tx:   smallTx,
-			done: make(chan error, 1),
+			tx:    smallTx,
+			group: group,
 		}
 
 		// Second transaction is large
@@ -255,20 +256,16 @@ func TestClientLargeTransactionFallback(t *testing.T) {
 		require.NoError(t, err)
 
 		batch[1] = &batchItem{
-			tx:   largeTx,
-			done: make(chan error, 1),
-		}
-
-		// Start goroutines to receive results
-		for i := 0; i < 2; i++ {
-			go func(i int) {
-				<-batch[i].done
-			}(i)
+			tx:    largeTx,
+			group: group,
 		}
 
 		// Process the batch - should trigger fallback
 		err = batchClient.ProcessTransactionBatch(context.Background(), batch)
 		require.NoError(t, err)
+
+		// Every item must have been completed exactly once.
+		require.NoError(t, group.Wait(context.Background(), 0))
 
 		// Verify gRPC was attempted first, then HTTP fallback was used
 		assert.Equal(t, 2, mockGRPCClient.ProcessedTransactionBatchSize, "gRPC client should be attempted for both transactions")

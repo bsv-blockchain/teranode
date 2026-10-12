@@ -3,9 +3,11 @@ package propagation
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -31,7 +33,7 @@ func init() {
 
 // MockValidatorForTxTest is a mock validator implementation for transaction tests
 type MockValidatorForTxTest struct {
-	validator.MockValidatorClient
+	validator.MockValidator
 	validateCalled atomic.Bool
 	validateErr    error
 }
@@ -63,17 +65,22 @@ func (m *MockValidatorForTxTest) WasValidateCalled() bool {
 	return m.validateCalled.Load()
 }
 
-// MockTxStore is a simple mock transaction store for testing
+// MockTxStore is a simple mock transaction store for testing.
+// Real blob stores are concurrency-safe; the mock must be too because the
+// batch HTTP/gRPC handlers fan out parallel writes.
 type MockTxStore struct {
 	storeCalled atomic.Bool
 	storeErr    error
+	mu          sync.Mutex
 	txIDs       [][]byte
 }
 
 // Store implements a mock Store method
 func (s *MockTxStore) Store(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
 	s.storeCalled.Store(true)
+	s.mu.Lock()
 	s.txIDs = append(s.txIDs, key)
+	s.mu.Unlock()
 
 	return s.storeErr
 }
@@ -85,6 +92,9 @@ func (s *MockTxStore) Get(ctx context.Context, key []byte, fileType fileformat.F
 
 // Exists implements a mock Exists method matching blob.Store interface
 func (s *MockTxStore) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	for _, id := range s.txIDs {
 		if bytes.Equal(id, key) {
 			return true, nil
@@ -138,6 +148,9 @@ func (s *MockTxStore) Del(ctx context.Context, key []byte, fileType fileformat.F
 
 // Size implements a mock Size method
 func (s *MockTxStore) Size() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	return uint64(len(s.txIDs))
 }
 
@@ -279,6 +292,28 @@ func TestHandleSingleTx(t *testing.T) {
 			mockValidationError: errors.NewTxConflictingError("test conflicting"),
 		},
 		{
+			// Parent still finishing its own two-phase commit (normal path,
+			// ~70ms tolerance in the validator's retry loop). Pinned here so
+			// the whole TX_LOCKED/TX_CREATING/frozen classification is
+			// covered in one table, not just the newly-added part.
+			name:                "TX_LOCKED (parent still committing)",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusConflict,
+			expectedResponse:    "Failed to process transaction",
+			mockValidationError: errors.NewTxLockedError("test tx locked"),
+		},
+		{
+			// Large, multi-record parent still being written (Aerospike
+			// LuaErrorCodeCreating). Before the fix this fell through to the
+			// default case and returned 500; it must be 409 like TX_LOCKED,
+			// since both are the parent's own commit still in flight.
+			name:                "TX_CREATING (large parent still being written)",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusConflict,
+			expectedResponse:    "Failed to process transaction",
+			mockValidationError: errors.NewTxCreatingError("test tx creating"),
+		},
+		{
 			name:                "Frozen utxo",
 			requestBody:         txBytes,
 			expectedStatusCode:  http.StatusForbidden,
@@ -291,6 +326,27 @@ func TestHandleSingleTx(t *testing.T) {
 			expectedStatusCode:  http.StatusBadRequest,
 			expectedResponse:    "Failed to process transaction",
 			mockValidationError: errors.NewProcessingError("validator wrap", errors.NewTxInvalidError("inner reason")),
+		},
+		{
+			name:                "Missing parent tx",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusUnprocessableEntity,
+			expectedResponse:    "Failed to process transaction",
+			mockValidationError: errors.NewTxMissingParentError("parent not in utxo store"),
+		},
+		{
+			name:                "Wrapped missing parent through processing error",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusUnprocessableEntity,
+			expectedResponse:    "Failed to process transaction",
+			mockValidationError: errors.NewProcessingError("validator wrap", errors.NewTxMissingParentError("inner missing parent")),
+		},
+		{
+			name:                "Tx already exists",
+			requestBody:         txBytes,
+			expectedStatusCode:  http.StatusOK,
+			expectedResponse:    "OK",
+			mockValidationError: errors.NewTxExistsError("duplicate submission"),
 		},
 		{
 			name:               "Store error",
@@ -384,7 +440,9 @@ func TestHandleMultipleTx(t *testing.T) {
 				buf.Write(tx1.ExtendedBytes())
 				return &buf
 			},
-			expectedStatusCode:  http.StatusInternalServerError,
+			// A tx-level validation rejection (ERR_TX_INVALID) now yields the
+			// derived client-error status, not the old hardcoded 500.
+			expectedStatusCode:  http.StatusBadRequest,
 			expectedResponse:    "Failed to process transaction",
 			mockValidationError: errors.NewTxInvalidError("test validation error"),
 		},
@@ -426,6 +484,18 @@ func TestHandleMultipleTx(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tc.expectedStatusCode, rec.Code)
 			assert.Contains(t, rec.Body.String(), tc.expectedResponse)
+
+			// The batch must surface the per-tx public reason, not collapse to a
+			// generic PROCESSING message — and must name the transaction the
+			// reason belongs to, since the allowlisted cause shadows the
+			// "[ProcessTransaction][<txid>]" wrapper that would carry it. In a
+			// batch that id is the difference between an actionable verdict and
+			// "one of these failed".
+			if tc.name == "Transaction validation error" {
+				require.Contains(t, rec.Body.String(),
+					fmt.Sprintf("%s (%d): [ProcessTransaction][%s] %s",
+						errors.ERR_TX_INVALID.String(), errors.ERR_TX_INVALID, tx1.TxID(), "test validation error"))
+			}
 
 			// Verify validation and storage behaviors for non-error cases
 			if tc.name == "Multiple valid transactions" {

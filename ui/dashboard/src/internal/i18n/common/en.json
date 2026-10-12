@@ -54,6 +54,10 @@
       "3m": {
         "label": "3M",
         "tooltip": "90 Days"
+      },
+      "all": {
+        "label": "All",
+        "tooltip": "All available data"
       }
     },
     "msgbox": {
@@ -264,7 +268,8 @@
     },
     "viewer-subtree": {
       "details": {
-        "title": "Subtree Details #{{ height }}",
+        "title": "Subtree Details #{{ index }}",
+        "title_generic": "Subtree Details",
         "tab": {
           "overview": "Overview",
           "json": "JSON",
@@ -286,7 +291,8 @@
         }
       },
       "txs": {
-        "title": "Transactions for Subtree #{{ height }}",
+        "title": "Transactions for Subtree #{{ index }}",
+        "title_generic": "Transactions for Subtree",
         "subtitle": "{{ count }} transactions found",
         "subtitle_singular": "{{ count }} transaction found",
         "col-defs-label": {
@@ -326,11 +332,15 @@
       "txs": {
         "input": {
           "title": "Input ({{ count }} Tx)",
-          "total": "Total Input: {{ amount }} BSV"
+          "title-unknown": "Input",
+          "total": "Total Input: {{ amount }} BSV",
+          "missing": "Input data is not available for this transaction."
         },
         "output": {
           "title": "Output ({{ count }} Tx)",
-          "total": "Total Output: {{ amount }} BSV"
+          "title-unknown": "Output",
+          "total": "Total Output: {{ amount }} BSV",
+          "missing": "Output data is not available for this transaction."
         },
         "load-more": "Load 10 More"
       }

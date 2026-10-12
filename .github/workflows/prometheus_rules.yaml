@@ -1,0 +1,74 @@
+name: Prometheus Rules
+
+# Validates the Prometheus alert rules and configs that ship with the docker
+# stacks. Without this, a rule can reference a metric that no longer exists, or
+# an expression that never fires, and nothing catches it until an incident is
+# missed. `promtool test rules` runs the unit tests in
+# deploy/docker/base/blockassembly.rules_test.yml.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/prometheus_rules.yaml'
+      - 'compose/prometheus/**'
+      - 'deploy/docker/base/*.rules.yml'
+      - 'deploy/docker/base/*.rules_test.yml'
+      - 'deploy/docker/base/prometheus.yml'
+      - 'deploy/docker/monitoring/prometheus.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  promtool:
+    name: promtool
+    # arm64-safe: downloads the upstream prometheus tarball for linux-arm64.
+    runs-on: teranode-runner-4-core-arm
+    env:
+      # Keep in step with the prom/prometheus image tag used by the compose files.
+      PROMETHEUS_VERSION: "2.44.0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Install promtool
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl -sSfL --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-arm64.tar.gz" \
+            | tar -xz -C "${RUNNER_TEMP}/bin" --strip-components=1 \
+              "prometheus-${PROMETHEUS_VERSION}.linux-arm64/promtool"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/bin/promtool" --version
+
+      - name: Check alert rules
+        run: |
+          set -euo pipefail
+          promtool check rules deploy/docker/base/blockassembly.rules.yml
+
+      - name: Run alert rule unit tests
+        run: |
+          set -euo pipefail
+          cd deploy/docker/base
+          promtool test rules blockassembly.rules_test.yml
+
+      - name: Check prometheus configs
+        # `rule_files` entries are resolved relative to the config file, which at
+        # runtime is /etc/prometheus with the rules bind-mounted alongside. Stage
+        # that same layout in a temp dir so promtool resolves the references the
+        # way the containers do, and so a config that declares a rule file the
+        # compose file never mounts fails here.
+        run: |
+          set -euo pipefail
+          rules=deploy/docker/base/blockassembly.rules.yml
+          configs=$(git ls-files 'compose/prometheus/prometheus*.yml' \
+            'deploy/docker/*/prometheus.yml')
+          for config in ${configs}; do
+            staged="${RUNNER_TEMP}/promcfg/$(dirname "${config}")"
+            mkdir -p "${staged}"
+            cp "${config}" "${staged}/"
+            cp "${rules}" "${staged}/"
+            echo "--- ${config}"
+            promtool check config "${staged}/$(basename "${config}")"
+          done

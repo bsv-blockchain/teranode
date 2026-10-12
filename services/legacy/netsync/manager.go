@@ -38,15 +38,18 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/batchermetrics"
 	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/tracing"
+	"golang.org/x/sync/semaphore"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -57,6 +60,33 @@ const (
 	// based on observed block sizes to avoid memory issues with large blocks.
 	defaultMaxInFlightBlocks = 20
 
+	// minInFlightBlockWeight is the minimum prefetch-budget weight charged for an
+	// admitted block, regardless of how small it serializes. Each in-flight block
+	// costs a fixed overhead beyond its bytes — an awaitBlockResult goroutine
+	// (stack), a reply channel, and the decoded block wrapper. Charging only the
+	// serialized size would let a flood of minimal (e.g. ~81-byte, zero-tx) blocks
+	// admit a huge number of concurrent goroutines within the byte budget; the
+	// floor bounds the in-flight block count (≈ budget/minInFlightBlockWeight) and
+	// therefore the goroutine count. It is well below any real small-block size,
+	// so it never reduces prefetch depth for legitimate traffic.
+	minInFlightBlockWeight = 64 * 1024
+
+	// maxBlockQueueSlots caps the block-queue channel capacity so a misconfigured
+	// (e.g. multi-TB) prefetch budget cannot size an enormous channel backing
+	// array. 65536 slots covers budgets up to 4 GiB at the weight floor before the
+	// clamp binds; the channel holds pointers, so this is ~512 KiB.
+	maxBlockQueueSlots = 65536
+
+	// defaultBlockProcessingStallTimeout bounds how long localReadBackpressured
+	// keeps suppressing the sync-peer stall check while the block backlog is
+	// non-empty but not advancing (see lastBacklogProgress). It is only the
+	// fallback for settings.Legacy.PeerProcessingTimeout — the pre-prefetch
+	// per-message watchdog whose coverage this progress-aware rule restores —
+	// used when a SyncManager has no settings wired (unit tests) or the setting
+	// is unset. Kept equal to that setting's own default so behaviour matches
+	// production when it is configured.
+	defaultBlockProcessingStallTimeout = 3 * time.Minute
+
 	// maxNetworkViolations is the max number of network violations a
 	// sync peer can have before a new sync peer is found.
 	maxNetworkViolations = 3
@@ -64,6 +94,23 @@ const (
 	// maxRejectedTxns is the maximum number of rejected transactions
 	// hashes to store in memory.
 	maxRejectedTxns = 10_000
+
+	// blockFailureBackoffMaxTracked bounds the per-block transient-failure
+	// backoff map (#1187). Legacy sync only has a handful of failing block
+	// hashes in flight, but capping the map guarantees a pathological stream of
+	// distinct failing hashes can never grow it without bound (mirrors the
+	// WithMaxSize bound on orphanTxs).
+	blockFailureBackoffMaxTracked = 1024
+
+	// recentlyFailedBlocksTTL is how long a block hash that failed to
+	// store/validate is remembered so its descendants can be short-circuited
+	// instead of each re-running HandleBlockDirect and logging a misleading
+	// "previous block NOT_FOUND" ERROR (#1333). Entries self-evict after this
+	// window and are deleted on a successful (re)process, so a transiently
+	// failed parent that later stores unblocks its descendants automatically.
+	// Independent of the #1187 backoff knobs so the cascade suppression works
+	// even when that backoff is disabled.
+	recentlyFailedBlocksTTL = 10 * time.Minute
 
 	// maxRequestedBlocks is the maximum number of requested block
 	// hashes to store in memory.
@@ -85,10 +132,31 @@ const (
 	// syncPeerTickerInterval is how often we check the current
 	// syncPeer. Set to 30 seconds.
 	syncPeerTickerInterval = 30 * time.Second
+
+	// failedToGetBestBlockHeaderMsg is logged when the best block header
+	// cannot be retrieved from the blockchain client.
+	failedToGetBestBlockHeaderMsg = "Failed to get best block header: %v"
+
+	// failedToConvertBlockHeightInt32Msg is logged when a block height cannot
+	// be safely converted to an int32.
+	failedToConvertBlockHeightInt32Msg = "failed to convert block height to int32: %v"
+
+	// unexpectedFailureAddingInventoryMsg is logged when adding an inventory
+	// vector to a getdata message fails unexpectedly.
+	unexpectedFailureAddingInventoryMsg = "Unexpected failure when adding inventory to getdata message: %v"
 )
 
 // zeroHash is the zero-value hash (all zeros).  It is defined as a convenience.
 var zeroHash chainhash.Hash
+
+// ErrDuplicateBlockInFlight is the benign sentinel AcquireBlockPrefetch returns
+// when the requested block hash is already admitted (or parked waiting for
+// budget): a duplicate is dropped at admission rather than reserving a second
+// slice of budget. The single production caller (OnBlock) matches it with
+// errors.Is and drops the duplicate without disconnecting — it is the only
+// ServiceError AcquireBlockPrefetch ever returns, so the code-based match is
+// unambiguous there.
+var ErrDuplicateBlockInFlight = errors.NewServiceError("duplicate block already in flight")
 
 // newPeerMsg signifies a newly connected peer to the block handler.
 type newPeerMsg struct {
@@ -125,12 +193,6 @@ type txMsg struct {
 	reply chan struct{}
 }
 
-// getSyncPeerMsg is a message type to be sent across the message channel for
-// retrieving the current sync peer.
-type getSyncPeerMsg struct {
-	reply chan int32
-}
-
 // isCurrentMsg is a message type to be sent across the message channel for
 // requesting whether or not the sync manager believes it is synced with the
 // currently connected peers.
@@ -153,13 +215,29 @@ type headerNode struct {
 	hash   *chainhash.Hash
 }
 
+// blockRequestOrigin records HOW a block came to be requested. It is the proof
+// that backs every below-checkpoint fast path: the hardcoded checkpoints certify
+// one chain, not a height range, so "this block sits below the highest
+// checkpoint" says nothing about whether it belongs to that chain.
+//
+// The zero value is deliberately untrusted, so a request recorded by a call site
+// that has not thought about provenance fails closed.
+type blockRequestOrigin struct {
+	// headerProven is true when the request came from fetchHeaderBlocks, i.e. from
+	// a header run handleHeadersMsg verified links back to a block we already
+	// trust AND forward to a pinned checkpoint hash. That run is the ancestry
+	// proof. Blocks requested because a peer advertised them (handleInvMsg) carry
+	// no such proof and are never header-proven.
+	headerProven bool
+}
+
 // peerSyncState stores additional information that the SyncManager tracks
 // about a peer.
 type peerSyncState struct {
 	syncCandidate   bool
 	requestQueue    *txmap.SyncedSlice[wire.InvVect]
 	requestedTxns   *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
-	requestedBlocks *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
+	requestedBlocks *expiringmap.ExpiringMap[chainhash.Hash, blockRequestOrigin]
 }
 
 // syncPeerState stores additional info about the sync peer.
@@ -167,9 +245,16 @@ type syncPeerState struct {
 	mu                sync.RWMutex // Protects all fields
 	recvBytes         uint64
 	recvBytesLastTick uint64
-	lastBlockTime     time.Time
-	violations        int
-	ticks             uint64
+	// assocReadBytes tracks byte-granular read progress across the sync peer's
+	// whole association (GENERAL + DATA1). Unlike recvBytes (the GENERAL peer's
+	// message-granular total) it advances while a large block is still
+	// streaming in on DATA1, so it can tell an active fat-block download apart
+	// from a stalled peer.
+	assocReadBytes         uint64
+	assocReadBytesLastTick uint64
+	lastBlockTime          time.Time
+	violations             int
+	ticks                  uint64
 }
 
 // validNetworkSpeed checks if the peer is slow and
@@ -214,6 +299,43 @@ func (sps *syncPeerState) updateNetwork(syncPeer *peerpkg.Peer) {
 	sps.ticks++
 	sps.recvBytesLastTick = sps.recvBytes
 	sps.recvBytes = syncPeer.BytesReceived()
+
+	sps.assocReadBytesLastTick = sps.assocReadBytes
+	sps.assocReadBytes = syncPeer.AssociationReadBytes()
+}
+
+// hasHealthyDownloadThroughput reports whether the sync peer's association
+// pulled in data over the last tick at or above minSyncPeerNetworkSpeed. It is
+// used to keep a sync peer that is actively downloading a large block — which
+// streams in on DATA1 and so completes no block within maxLastBlockTime — from
+// being rotated as if it were stalled. It does not mutate violation state.
+func (sps *syncPeerState) hasHealthyDownloadThroughput(minSyncPeerNetworkSpeed uint64) bool {
+	sps.mu.RLock()
+	defer sps.mu.RUnlock()
+
+	// Need at least one prior sample to compute a delta.
+	if sps.ticks == 0 {
+		return false
+	}
+
+	// Association.ReadBytes sums over the streams present at sample time. If a
+	// stream (e.g. DATA1) was removed between samples the sum drops, so guard
+	// the unsigned subtraction: a decrease means a stream just died, which is
+	// the opposite of healthy progress — treat it as no throughput.
+	if sps.assocReadBytes < sps.assocReadBytesLastTick {
+		return false
+	}
+
+	recvDiff := sps.assocReadBytes - sps.assocReadBytesLastTick
+
+	// Require actual bytes to have moved: a peer that delivered nothing is not
+	// "downloading", regardless of how the speed threshold is configured (it may
+	// be 0, which would otherwise make any rate pass).
+	if recvDiff == 0 {
+		return false
+	}
+
+	return recvDiff/uint64(syncPeerTickerInterval.Seconds()) >= minSyncPeerNetworkSpeed
 }
 
 // updateLastBlockTime updates the last block time
@@ -323,6 +445,33 @@ func (bst *blockSizeTracker) calculateMaxInFlightBlocks() int {
 	}
 }
 
+// blockFailureState tracks per-block transient-failure backoff. attempts is the
+// consecutive failure count for a block hash; nextRetry is the earliest time the
+// block may be re-processed. See SyncManager.blockFailureBackoff (#1187).
+type blockFailureState struct {
+	attempts  int
+	nextRetry time.Time
+}
+
+// corruptAttemptState is the per-(hash, peerID) corrupt re-download counter and its fixed cooldown
+// window (bitcoin-sv/teranode#4692). windowExpiry is set once from the first corrupt delivery and
+// preserved across subsequent deliveries so the window is not extended by re-delivery; once it
+// lapses the counter resets and an honest body is admitted again.
+type corruptAttemptState struct {
+	count        int
+	windowExpiry time.Time
+}
+
+// legacyCorruptAttemptKey keys the legacy corrupt re-download cap on (block hash, serving peer
+// address) (bitcoin-sv/teranode#4692). Keying on the pair — not the hash alone — stops one peer's
+// corruption consuming the budget for a hash an honest peer can still serve: each serving identity
+// is capped independently, so an honest sync-peer rotation is never wedged. A peer with no address
+// degrades to a single shared (hash, "") bucket — the hard per-hash bound for that deployment.
+type legacyCorruptAttemptKey struct {
+	hash   chainhash.Hash
+	peerID string
+}
+
 // SyncManager is used to communicate block related messages with peers. The
 // SyncManager is started as by executing Start() in a goroutine. Once started,
 // it selects peers to sync from and starts the initial block download. Once the
@@ -350,24 +499,131 @@ type SyncManager struct {
 	blockValidation   blockvalidation.Interface
 	blockAssembly     blockassembly.ClientI
 	legacyKafkaInvCh  chan *kafka.Message
-	txAnnounceBatcher *batcher.BatcherWithDedup[TxHashAndFee]
+	// legacyKafkaInvProducer is retained (DC11) so SyncManager.Stop() can stop it
+	// synchronously; without a field there is no handle to flush it on shutdown.
+	legacyKafkaInvProducer kafka.KafkaAsyncProducerI
+	txAnnounceBatcher      *batcher.BatcherWithDedup[TxHashAndFee]
+	// txAnnounceMu / txAnnounceClosed guard txAnnounceBatcher.Put against the
+	// batcher's Close in Stop(). go-batcher v2.0.4 PANICS on Put-after-Close, and
+	// the txmeta Kafka listener (which Puts into the batcher) is a fire-and-forget
+	// goroutine not joined by Stop(). The RLock/RWLock pairing guarantees no Put
+	// runs concurrently with or after the drain: Stop takes the write lock (which
+	// waits for any in-flight Put holding the read lock), sets closed, then drains;
+	// subsequent Puts see closed and become no-ops. (DC15 / review C1.)
+	txAnnounceMu     sync.RWMutex
+	txAnnounceClosed bool
+
+	// announceParents holds the parent tx hashes of txs waiting in
+	// txAnnounceBatcher, which cannot carry them itself: its items must be
+	// comparable for deduplication. orderAnnounceBatch consumes the entries.
+	// Bounded; an entry lost to eviction, or left behind by a deduplicated
+	// Put, only costs that tx its place in the ordering.
+	announceParents *txmap.SyncedMap[chainhash.Hash, []chainhash.Hash]
 
 	// These fields should only be accessed from the blockHandler thread
 	// (except syncPeer/syncPeerState which are protected by syncPeerMu).
 	rejectedTxns    *txmap.SyncedMap[chainhash.Hash, struct{}]
 	requestedTxns   *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
-	requestedBlocks *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
-	syncPeerMu      sync.RWMutex // protects syncPeer and syncPeerState
-	syncPeer        *peerpkg.Peer
-	syncPeerState   *syncPeerState
-	peerStates      *txmap.SyncedMap[*peerpkg.Peer, *peerSyncState]
+	requestedBlocks *expiringmap.ExpiringMap[chainhash.Hash, blockRequestOrigin]
+	// blockFailureBackoff throttles re-processing of a block that just failed
+	// with a transient storage/service error, so a re-delivered block does not
+	// immediately re-run the full multi-million-record decorate at full
+	// concurrency against an already-struggling UTXO store (#1187). Keyed by
+	// block hash; entries self-evict after Legacy.BlockFailureBackoffMaxDuration.
+	blockFailureBackoff *expiringmap.ExpiringMap[chainhash.Hash, *blockFailureState]
+	// recentlyFailedBlocks tracks block hashes that just failed to store/validate
+	// so their already-queued descendants are skipped before any RPC instead of
+	// each failing their parent lookup and logging a misleading "previous block
+	// NOT_FOUND" ERROR (#1333). Keyed by block hash; TTL-bounded and size-capped,
+	// deleted on successful (re)process. A skipped descendant records its own hash
+	// too, so the whole descendant chain is suppressed transitively.
+	recentlyFailedBlocks *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
+	// blockCorruptAttempts bounds corrupt-body (bitcoin-sv/teranode#4692) re-downloads per
+	// (block hash, serving peer address), independently of the ban score. Once a (hash, peerID)
+	// reaches MaxCorruptAttemptsPerBlock corrupt deliveries within a fixed cooldown window, that
+	// peer's next delivery of the hash is dropped BEFORE the expensive HandleBlockDirect/decorate —
+	// without rejecting-to-peer, without poisoning (invalid is never set), and without setting
+	// recentlyFailedBlocks (so the recentlyFailedBlocks no-NOT_FOUND-cascade property is preserved).
+	// Keying on (hash, peerID) means an honest sync-peer keeps a fresh budget for the same hash, so
+	// a bad peer can never wedge the honest tip; the residual aggregate per-hash work is bounded by
+	// the number of distinct serving peers (MaxPeers) times the cap per window. Unlike
+	// blockFailureBackoff (serviceError-gated, disjoint from corrupt) this is keyed only on corrupt
+	// failures. The window is fixed from the first corrupt delivery (stored in the value, not the map
+	// TTL), so re-delivery cannot extend it and once it lapses an honest body is admitted again
+	// (self-healing). Cleared on successful store.
+	blockCorruptAttempts *expiringmap.ExpiringMap[legacyCorruptAttemptKey, *corruptAttemptState]
+	syncPeerMu           sync.RWMutex // protects syncPeer and syncPeerState
+	syncPeer             *peerpkg.Peer
+	syncPeerState        *syncPeerState
+	peerStates           *txmap.SyncedMap[*peerpkg.Peer, *peerSyncState]
+
+	// blockBacklog counts blocks sitting in the local processing pipeline:
+	// queued in blockHandler's blockQueue plus the one inside handleBlockMsg.
+	// While it is non-zero the node is backpressuring its own network reads
+	// (OnBlock blocks until the previous block is processed), so the stall
+	// detector must not hold the resulting zero throughput against the sync
+	// peer. Written by the blockHandler goroutines, read by handleCheckSyncPeer.
+	blockBacklog atomic.Int64
+
+	// lastBacklogProgress is the UnixNano time the block backlog last advanced:
+	// the 0->1 enqueue that opened the current backpressure window, or the most
+	// recent block completion. localReadBackpressured suppresses the sync-peer
+	// stall check only while this stays fresh — a backlog that stops advancing
+	// for longer than blockProcessingStallTimeout is a genuine processing hang
+	// (store/validator deadlock, Aerospike overload), not slow-but-progressing
+	// validation, and must be allowed to rotate the peer. This restores the
+	// liveness coverage lost when the per-message watchdog was disarmed for
+	// prefetched blocks, without the false rotation of a merely-slow block.
+	// Written by the blockHandler goroutines (the 0->1 enqueue and every
+	// completion, via noteBacklogProgress), read by handleCheckSyncPeer.
+	lastBacklogProgress atomic.Int64
+
+	// blockPrefetchBudget bounds, by total serialized bytes, the blocks that
+	// have been received from peers but not yet finished processing. It lets
+	// OnBlock admit a block and return (so the read-loop downloads the next
+	// block while this one validates) instead of blocking on per-block
+	// completion, while capping the memory pinned by buffered blocks across ALL
+	// peers and streams. nil when prefetch is disabled (budget <= 0), in which
+	// case OnBlock keeps its original synchronous, one-block-in-flight behaviour.
+	// A block larger than the whole budget is admitted alone (weight clamped to
+	// the budget), preserving full backpressure for huge blocks.
+	blockPrefetchBudget      *semaphore.Weighted
+	blockPrefetchBudgetBytes int64
+
+	// inFlightBlocks is the dedup half of the same block-admission gate whose
+	// byte half is blockPrefetchBudget. It holds the hash of every block that is
+	// currently admitted (has reserved budget) OR parked waiting for budget, so
+	// at most one copy of any given block hash is ever in flight at a time.
+	// AcquireBlockPrefetch inserts the hash BEFORE the (possibly blocking) budget
+	// Acquire and ReleaseBlockPrefetch deletes it alongside the budget release, so
+	// the two halves share exactly one lifetime and can never drift. Without it,
+	// N duplicates of a single requested, near-budget-sized block would each
+	// reserve budget, fill the whole budget, and park every legacy peer's
+	// read-loop in Acquire — the very "a malicious peer cannot outrun the budget"
+	// property this gate exists to guarantee. nil (alongside a nil
+	// blockPrefetchBudget) when prefetch is disabled, so the synchronous/regtest
+	// path skips dedup entirely. inFlightBlocksMu guards the map.
+	inFlightBlocks   map[chainhash.Hash]struct{}
+	inFlightBlocksMu sync.Mutex
+
+	// blockPrefetchWaiters counts read-loops currently blocked acquiring
+	// prefetch budget (i.e. local processing cannot keep up). While > 0 the node
+	// is backpressuring its own network reads, so the stall detector must not
+	// hold the resulting zero throughput against the sync peer — the prefetch
+	// analogue of the blockBacklog guard. Read by handleCheckSyncPeer.
+	blockPrefetchWaiters atomic.Int64
 
 	// The following fields are used for headers-first mode.
 	headersFirstMode atomic.Bool // accessed from multiple goroutines, must be atomic
-	headerList       *list.List
-	startHeader      *list.Element
-	nextCheckpoint   *chaincfg.Checkpoint
-	blockSizeTracker *blockSizeTracker // tracks block sizes for dynamic in-flight adjustment
+
+	// headerMu protects the header list, cursor, pending checkpoint and verified
+	// boundary as one state. Never hold it during full block validation.
+	headerMu                 sync.Mutex
+	headerList               *list.List
+	startHeader              *list.Element
+	nextCheckpoint           *chaincfg.Checkpoint
+	verifiedCheckpointHeight int32             // highest checkpoint hash matched by handleHeadersMsg
+	blockSizeTracker         *blockSizeTracker // tracks block sizes for dynamic in-flight adjustment
 
 	// An optional fee estimator.
 	// feeEstimator *mempool.FeeEstimator
@@ -392,6 +648,28 @@ func (sm *SyncManager) loadSyncPeerAndState() (*peerpkg.Peer, *syncPeerState) {
 	return sm.syncPeer, sm.syncPeerState
 }
 
+// syncPeerStateFor returns the sync peer's state if p is the current sync peer
+// or another stream of its association, and whether it matched. Under the
+// BlockPriority policy a block is delivered on the DATA1 stream — a different
+// Peer from the GENERAL sync peer — so a plain `p == syncPeer` check misses it
+// and the sync peer's lastBlockTime is never refreshed during multistream sync.
+func (sm *SyncManager) syncPeerStateFor(p *peerpkg.Peer) (*syncPeerState, bool) {
+	sp, sps := sm.loadSyncPeerAndState()
+	if sp == nil || sps == nil || p == nil {
+		return nil, false
+	}
+
+	if p == sp {
+		return sps, true
+	}
+
+	if a := p.AssociationRef(); a != nil && a == sp.AssociationRef() {
+		return sps, true
+	}
+
+	return nil, false
+}
+
 // storeSyncPeer sets the sync peer and its state, safe for concurrent access.
 func (sm *SyncManager) storeSyncPeer(peer *peerpkg.Peer, state *syncPeerState) {
 	sm.syncPeerMu.Lock()
@@ -403,9 +681,17 @@ func (sm *SyncManager) storeSyncPeer(peer *peerpkg.Peer, state *syncPeerState) {
 // resetHeaderState sets the headers-first mode state to values appropriate for
 // syncing from a new peer.
 func (sm *SyncManager) resetHeaderState(newestHash *chainhash.Hash, newestHeight int32) {
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
+	sm.resetHeaderStateLocked(newestHash, newestHeight)
+}
+
+// resetHeaderStateLocked requires headerMu.
+func (sm *SyncManager) resetHeaderStateLocked(newestHash *chainhash.Hash, newestHeight int32) {
 	sm.headersFirstMode.Store(false)
 	sm.headerList.Init()
 	sm.startHeader = nil
+	sm.verifiedCheckpointHeight = 0
 
 	// When there is a next checkpoint, add an entry for the latest known
 	// block into the header pool.  This allows the next downloaded header
@@ -461,7 +747,7 @@ func (sm *SyncManager) startSync() {
 
 	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 	if err != nil {
-		sm.logger.Errorf("Failed to get best block header: %v", err)
+		sm.logger.Errorf(failedToGetBestBlockHeaderMsg, err)
 		return
 	}
 
@@ -474,6 +760,17 @@ func (sm *SyncManager) startSync() {
 	for peer, state := range sm.peerStates.Range() {
 		if !state.syncCandidate {
 			sm.logger.Debugf("[startSync] peer %v is not a sync candidate", peer.String())
+
+			continue
+		}
+
+		// Defence-in-depth: never elect a peer whose socket has already been
+		// torn down. If one slips into peerStates (e.g. a future regression in
+		// the new-peer registration path), picking it here would push
+		// getheaders into a closed connection and stall sync for the duration
+		// of maxLastBlockTime before rotating.
+		if !peer.Connected() {
+			sm.logger.Debugf("[startSync] peer %v is not connected, skipping", peer.String())
 
 			continue
 		}
@@ -543,7 +840,7 @@ func (sm *SyncManager) startSync() {
 	if bestPeer.LastBlock() == bestBlockHeightInt32 {
 		sm.logger.Debugf("[startSync] peer %v is at the same height %d as us, sending RUNNING", bestPeer.String(), bestPeer.LastBlock())
 
-		if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/startSync"); err != nil {
+		if err = sm.runIfCatchingBlocks("legacy/netsync/manager/startSync"); err != nil {
 			sm.logger.Errorf("[startSync] failed to set blockchain state to running: %v", err)
 		}
 
@@ -591,6 +888,8 @@ func (sm *SyncManager) startSync() {
 	// and fully validate them.  Finally, regression test mode does
 	// not support the headers-first approach so do normal block
 	// downloads when in regression test mode.
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
 	if sm.nextCheckpoint != nil &&
 		bestBlockHeightInt32 < sm.nextCheckpoint.Height &&
 		sm.chainParams != &chaincfg.RegressionNetParams {
@@ -617,6 +916,22 @@ func (sm *SyncManager) startSync() {
 		recvBytes:         bestPeer.BytesReceived(),
 		recvBytesLastTick: uint64(0),
 	})
+}
+
+// runIfCatchingBlocks uses the cached observation only to avoid redundant
+// automatic RUN requests from recurring legacy events. It is not admission:
+// the server still checks authoritative state under its transition lock. A
+// temporary synthetic IDLE is rechecked on later events, without latching a
+// pause or changing message/queue ownership.
+func (sm *SyncManager) runIfCatchingBlocks(source string) error {
+	state, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
+	if err != nil {
+		return err
+	}
+	if state == nil || *state != teranodeblockchain.FSMStateCATCHINGBLOCKS {
+		return nil
+	}
+	return sm.blockchainClient.Run(sm.ctx, source)
 }
 
 func (sm *SyncManager) resetFeeFilterToDefault() {
@@ -653,6 +968,25 @@ func (sm *SyncManager) SyncHeight() uint64 {
 // can cause significant delays (18s+ per batch) due to database query contention.
 func (sm *SyncManager) IsHeadersFirstMode() bool {
 	return sm.headersFirstMode.Load()
+}
+
+// isRegtest reports whether the active chain params are regression net by
+// network magic rather than pointer identity with chaincfg.RegressionNetParams,
+// so a copied Params value (as some tests construct) is still recognized, and a
+// nil chainParams is safely not-regtest. It exists to give BlockRequested the
+// SAME value semantics as peerpkg.UseBlockPrefetchIngestion (.Net != RegTestNet)
+// so those two prefetch-path siblings cannot drift on a copied-params manager.
+//
+// It deliberately does NOT replace the pointer-equality regtest checks
+// elsewhere in this file (startSync's headers-first gate, isSyncCandidate,
+// handleBlockMsg's unrequested-block disconnect). Those run on the synchronous
+// (non-prefetch) path that regtest always takes, and the E2E harness builds
+// chainParams as a *copy* of RegressionNetParams — so switching them to value
+// semantics flips real behavior (e.g. isSyncCandidate would apply the regtest
+// localhost restriction, and startSync would drop headers-first) and breaks
+// legacy-sync/smoketest. Pointer equality there is load-bearing; leave it.
+func (sm *SyncManager) isRegtest() bool {
+	return sm.chainParams != nil && sm.chainParams.Net == wire.RegTestNet
 }
 
 // isSyncCandidate returns whether or not the peer is a candidate to consider
@@ -703,30 +1037,39 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 		return
 	}
 
+	// If the peer's socket was already torn down by the time this newPeerMsg
+	// drained from msgChan, don't insert it into peerStates at all. Pairs
+	// with the Connected() guard in startSync to close the window during
+	// which a dead pointer can sit in the map waiting for a donePeerMsg.
+	if !peer.Connected() {
+		sm.logger.Debugf("[handleNewPeerMsg] peer %s already disconnected before registration, skipping", peer.String())
+		return
+	}
+
 	sm.logger.Infof("New valid peer %s (%s)", peer, peer.UserAgent())
 
 	// Initialize the peer state
 	isSyncCandidate := sm.isSyncCandidate(peer)
 
-	state, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
-	if err != nil {
-		sm.logger.Debugf("Error getting FSM current state: %v", err)
-	}
-
-	if *state == teranodeblockchain.FSMStateLEGACYSYNCING && sm.currentFeeFilter.Load() != bsvutil.SatoshiPerBitcoin {
-		// Set fee filter to inform peers that we don't want to be notified of transactions while we're syncing
+	// While catching up, ask every newly-connected peer to hold back
+	// transaction announcements to reduce load during sync. The raise is queued
+	// per-peer; the global currentFeeFilter is only the marker the reset path
+	// (resetFeeFilterToDefault) checks, so it must NOT gate the per-peer queue —
+	// otherwise only the first peer to connect during catch-up would be told.
+	// The filter is restored to the policy default once we reach RUNNING.
+	if state, ferr := sm.blockchainClient.GetFSMCurrentState(sm.ctx); ferr != nil {
+		sm.logger.Errorf("[handleNewPeerMsg] failed to get current FSM state: %v", ferr)
+	} else if state != nil && *state == teranodeblockchain.FSMStateCATCHINGBLOCKS {
 		feeFilter := wire.NewMsgFeeFilter(bsvutil.SatoshiPerBitcoin)
-
 		peer.QueueMessage(feeFilter, nil)
-
 		sm.currentFeeFilter.Store(bsvutil.SatoshiPerBitcoin)
 	}
 
 	sm.peerStates.Set(peer, &peerSyncState{
 		syncCandidate:   isSyncCandidate,
 		requestQueue:    txmap.NewSyncedSlice[wire.InvVect](maxRequestedBlocks),
-		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second), // allow the node 10 seconds to respond to the tx request
-		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](60 * time.Minute), // allow the node 1 hour to respond to the requested blocks, needed for legacy sync/checkpoints
+		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),           // allow the node 10 seconds to respond to the tx request
+		requestedBlocks: expiringmap.New[chainhash.Hash, blockRequestOrigin](60 * time.Minute), // allow the node 1 hour to respond to the requested blocks, needed for legacy sync/checkpoints
 	})
 
 	// Start syncing by choosing the best candidate if needed.
@@ -753,6 +1096,23 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 	// Update network stats at the end of this tick.
 	defer sps.updateNetwork(sp)
 
+	// While the node is throttling its own network reads because local block
+	// processing cannot keep up, zero throughput and a stale last-block-time
+	// measure our own validation speed, not the peer's health. Skip stall checks
+	// until that self-backpressure clears — a genuinely stalled peer keeps
+	// failing them afterwards. The deferred updateNetwork still runs, keeping
+	// throughput samples fresh for the next tick.
+	//
+	// Any queued/mid-validation backlog suppresses the check (see
+	// localReadBackpressured): a stale last-block-time then measures our
+	// validation speed, not the peer. A genuinely stalled peer stops feeding the
+	// queue, the backlog drains, and the check resumes — so this delays, but does
+	// not prevent, rotation of a truly stalled peer.
+	if sm.localReadBackpressured() {
+		sm.logger.Debugf("[CheckSyncPeer] sync peer %s check skipped: read-loop backpressured by local block processing", sp.String())
+		return
+	}
+
 	headersFirst := sm.headersFirstMode.Load()
 	lastBlockSince := time.Since(sps.getLastBlockTime())
 
@@ -768,6 +1128,25 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 		sm.logger.Debugf("[CheckSyncPeer] sync peer %s check (headers-first mode, speed check skipped), time since last block: %v (limit %v)", sp.String(), lastBlockSince, maxLastBlockTime)
 	}
 	isLastBlockTimeViolation := lastBlockSince > maxLastBlockTime
+
+	// A multi-GB block can take longer than maxLastBlockTime to arrive. Under
+	// the BlockPriority stream policy it streams in on the DATA1 stream, so no
+	// block "completes" (lastBlockTime stays put) even though bytes are
+	// actively flowing across the association. Don't rotate a sync peer that is
+	// still pulling data at a healthy rate — it is making progress on a large
+	// block, not stalled. A genuinely stalled peer delivers no throughput and
+	// is still rotated.
+	//
+	// This suppression is itself capped at peer.MaxBlockDownloadTime: past that
+	// wall-clock window the peer is rotated regardless of throughput, so a
+	// malicious peer cannot dribble bytes just above the threshold forever to
+	// hold the single sync-peer slot and stall IBD.
+	if isLastBlockTimeViolation &&
+		lastBlockSince < peerpkg.MaxBlockDownloadTime &&
+		sps.hasHealthyDownloadThroughput(sm.minSyncPeerNetworkSpeed) {
+		sm.logger.Debugf("[CheckSyncPeer] sync peer %s exceeded last-block-time but association still downloading at a healthy rate (%.0fs in, cap %s); not rotating", sp.String(), lastBlockSince.Seconds(), peerpkg.MaxBlockDownloadTime)
+		isLastBlockTimeViolation = false
+	}
 
 	// If no violations detected, the sync peer is healthy — nothing to do.
 	if !isNetworkSpeedViolation && !isLastBlockTimeViolation {
@@ -856,11 +1235,14 @@ func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
 
 	// Only disconnect if we have a valid sync peer
 	if sp != nil {
+		sm.headerMu.Lock()
 		// Log current sync state before disconnecting
 		if sm.headersFirstMode.Load() {
 			sm.logger.Debugf("Current header sync state - headerList length: %d, startHeader exists: %v",
 				sm.headerList.Len(), sm.startHeader != nil)
 		}
+
+		sm.headerMu.Unlock()
 
 		sp.SetSyncPeer(false)
 		sp.DisconnectWithInfo("updateSyncPeer - disconnect old sync peer")
@@ -872,13 +1254,13 @@ func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
 	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 	if err != nil {
 		// TODO we should return an error here to the caller
-		sm.logger.Errorf("Failed to get best block header: %v", err)
+		sm.logger.Errorf(failedToGetBestBlockHeaderMsg, err)
 		return
 	}
 
 	bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)
 	if err != nil {
-		sm.logger.Errorf("failed to convert block height to int32: %v", err)
+		sm.logger.Errorf(failedToConvertBlockHeightInt32Msg, err)
 		return // add return to prevent continuing with invalid height
 	}
 
@@ -929,6 +1311,9 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	buf := bytes.NewBuffer(make([]byte, 0, tmsg.tx.MsgTx().SerializeSize()))
 	_ = tmsg.tx.MsgTx().Serialize(buf)
 
+	// Single inbound tx per call, passed downstream to the validator. Stays
+	// on the standard heap path — no arena amortisation possible for a
+	// one-shot decode where the tx must outlive this function frame.
 	btTx, err := bt.NewTxFromBytes(buf.Bytes())
 	if err != nil {
 		sm.logger.Errorf("Failed to create transaction from bytes: %v", err)
@@ -940,6 +1325,7 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	timeStart := time.Now()
 	// passing in block height 0, which will default to utxo store block height in validator
 	txMeta, err = sm.validationClient.Validate(ctx, btTx, 0)
+	txMeta, err = sm.acceptedMetaOnUnlockFailure(ctx, btTx, txMeta, err)
 
 	prometheusLegacyNetsyncHandleTxMsgValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
@@ -951,7 +1337,10 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	sm.requestedTxns.Delete(*txHash)
 
 	if err != nil {
-		if errors.Is(err, errors.ErrTxMissingParent) || errors.Is(err, errors.ErrTxLocked) {
+		// ErrTxCreating is the same situation as ErrTxLocked — the parent this tx spends
+		// from is still completing its own commit, just via the multi-record write path —
+		// so it parks for the same reason.
+		if errors.Is(err, errors.ErrTxMissingParent) || errors.Is(err, errors.ErrTxLocked) || errors.Is(err, errors.ErrTxCreating) {
 			// this is an orphan transaction, we will accept it when the parent comes in
 			// first check if the transaction already exists in the orphan pool, otherwise add it
 			if _, orphanTxExists := sm.orphanTxs.Get(*txHash); !orphanTxExists {
@@ -1005,6 +1394,31 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	}
 }
 
+// acceptedMetaOnUnlockFailure turns the validator's ErrTxUnlockFailed into a success. The transaction was
+// accepted, spent and created, and only its unlock failed, so it must not be rejected or dropped. The
+// response metadata does not survive a gRPC error, so it is read back from the UTXO store. If that read
+// fails the transaction is still accepted: it is returned with empty metadata, whose zero size passes
+// every peer fee filter, so it is announced rather than rejected or dropped. Any other result is
+// returned unchanged.
+func (sm *SyncManager) acceptedMetaOnUnlockFailure(ctx context.Context, tx *bt.Tx, txMeta *meta.Data, err error) (*meta.Data, error) {
+	if err == nil || !errors.Is(err, errors.ErrTxUnlockFailed) {
+		return txMeta, err
+	}
+
+	if txMeta != nil {
+		return txMeta, nil
+	}
+
+	stored := &meta.Data{}
+	if getErr := sm.utxoStore.GetMeta(ctx, tx.TxIDChainHash(), stored); getErr != nil {
+		sm.logger.Warnf("[acceptedMetaOnUnlockFailure][%s] accepted transaction, failed to read its meta, announcing without fee: %v", tx.TxID(), getErr)
+
+		return &meta.Data{}, nil
+	}
+
+	return stored, nil
+}
+
 // processOrphanTransactions recursively processes orphan transactions that were waiting for a transaction to be accepted
 func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *chainhash.Hash, acceptedTxs *[]*TxHashAndFee) {
 	// check whether any transaction in the orphan pool has this transaction as a parent
@@ -1028,8 +1442,9 @@ func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *ch
 		// validate the orphan transaction
 		// passing in block height 0, which will default to utxo store block height in validator
 		txMeta, err := sm.validationClient.Validate(ctx, orphanTx.tx, 0)
+		txMeta, err = sm.acceptedMetaOnUnlockFailure(ctx, orphanTx.tx, txMeta, err)
 		if err != nil {
-			if errors.Is(err, errors.ErrTxMissingParent) || errors.Is(err, errors.ErrTxLocked) {
+			if errors.Is(err, errors.ErrTxMissingParent) || errors.Is(err, errors.ErrTxLocked) || errors.Is(err, errors.ErrTxCreating) {
 				// silently exit, we will accept this transaction when the other parent(s) comes in
 				// or when the transaction is spendable again
 				continue
@@ -1070,7 +1485,7 @@ func (sm *SyncManager) isCurrent(bestBlockHeaderMeta *model.BlockHeaderMeta) boo
 	if len(sm.chainParams.Checkpoints) > 0 {
 		bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)
 		if err != nil {
-			sm.logger.Errorf("failed to convert block height to int32: %v", err)
+			sm.logger.Errorf(failedToConvertBlockHeightInt32Msg, err)
 		}
 
 		checkpoint := &sm.chainParams.Checkpoints[len(sm.chainParams.Checkpoints)-1]
@@ -1111,7 +1526,7 @@ func (sm *SyncManager) current() bool {
 
 	bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)
 	if err != nil {
-		sm.logger.Errorf("failed to convert block height to int32: %v", err)
+		sm.logger.Errorf(failedToConvertBlockHeightInt32Msg, err)
 	}
 
 	// No matter what the chain thinks, if we are below the block we are syncing to we are not current.
@@ -1122,33 +1537,279 @@ func (sm *SyncManager) current() bool {
 	return true
 }
 
+// newBlockFailureBackoffMap builds the per-block transient-failure backoff map
+// (#1187), or returns nil when the backoff is disabled (either knob <= 0). A nil
+// map is a clean no-op via the nil-guards in handleBlockMsg; returning nil when
+// disabled also avoids constructing an expiringmap with a zero TTL, which spawns
+// no cleanup goroutine and would leak entries. WithMaxSize bounds the map.
+//
+// The map TTL is deliberately DECOUPLED from the backoff cap (window): it is
+// window + maxAttempt, not window. window caps the retry SPACING and must stay
+// below the 180s sync-peer stall window; but the failure COUNT that drives the
+// linear ramp only survives while the entry is live, and the gap between two
+// consecutive recordBlockFailureBackoff calls is (retry spacing ≤ window) + (one
+// full failing HandleBlockDirect attempt). On the exact #1187 overload path that
+// attempt rides the Aerospike overload-retry budget and can reach ~2.5min — well
+// over window alone — so a TTL of just window would expire the entry mid-attempt
+// and reset the count to 1 every time, pinning the backoff at its base and
+// defeating the ramp. Adding maxAttempt (the per-attempt processing bound) keeps
+// the entry alive across one slow attempt so the count ramps as intended.
+func newBlockFailureBackoffMap(base, window, maxAttempt time.Duration) *expiringmap.ExpiringMap[chainhash.Hash, *blockFailureState] {
+	if base <= 0 || window <= 0 {
+		return nil
+	}
+
+	retention := window
+	if maxAttempt > 0 {
+		retention += maxAttempt
+	}
+
+	return expiringmap.New[chainhash.Hash, *blockFailureState](retention).WithMaxSize(blockFailureBackoffMaxTracked)
+}
+
+// recordBlockFailureBackoff records or extends the transient-failure backoff for
+// a block hash (#1187). The failure count increases by one per consecutive
+// failure (resetting once the map TTL forgets the hash) and the next-retry window
+// grows linearly (count * base), capped at Legacy.BlockFailureBackoffMaxDuration.
+// Callers must ensure sm.blockFailureBackoff is non-nil.
+func (sm *SyncManager) recordBlockFailureBackoff(blockHash chainhash.Hash) {
+	attempts := 1
+	if fs, ok := sm.blockFailureBackoff.Get(blockHash); ok {
+		attempts = fs.attempts + 1
+	}
+
+	backoff := time.Duration(attempts) * sm.settings.Legacy.BlockFailureBackoffBase
+	if maxBackoff := sm.settings.Legacy.BlockFailureBackoffMaxDuration; backoff > maxBackoff {
+		backoff = maxBackoff
+	}
+
+	sm.blockFailureBackoff.Set(blockHash, &blockFailureState{
+		attempts:  attempts,
+		nextRetry: time.Now().Add(backoff),
+	})
+}
+
+// legacyCorruptAttemptCooldown returns the fixed cooldown window for the per-block corrupt
+// re-download cap (bitcoin-sv/teranode#4692), falling back to settings.DefaultCorruptAttemptCooldown
+// when settings are nil or the setting is unset or non-positive. Mirrors corruptAttemptCooldown in
+// services/blockvalidation; both share the one fallback constant so the two caches can never drift
+// apart.
+func legacyCorruptAttemptCooldown(s *settings.Settings) time.Duration {
+	if s != nil {
+		if d := s.BlockValidation.CorruptAttemptCooldown; d > 0 {
+			return d
+		}
+	}
+
+	return settings.DefaultCorruptAttemptCooldown
+}
+
+// recordCorruptBlockAttempt increments and returns the per-(hash, peerID) corrupt-body failure count
+// within a fixed cooldown window (bitcoin-sv/teranode#4692). The window is set once from the first
+// corrupt delivery and preserved across subsequent deliveries (not extended), so once it lapses the
+// counter resets and an honest body is admitted again. Called ONLY on an actual corrupt failure.
+// Nil-safe (SyncManager struct-literal test fixtures that bypass New()): a nil map or nil settings
+// is a no-op returning 0, so the cap simply does not accrue rather than panicking.
+func (sm *SyncManager) recordCorruptBlockAttempt(blockHash chainhash.Hash, peerID string) int {
+	if sm.blockCorruptAttempts == nil || sm.settings == nil {
+		return 0
+	}
+
+	key := legacyCorruptAttemptKey{hash: blockHash, peerID: peerID}
+
+	now := time.Now()
+	if st, ok := sm.blockCorruptAttempts.Get(key); ok && now.Before(st.windowExpiry) {
+		// Preserve the LOGICAL window (windowExpiry) so re-delivery cannot extend the cooldown;
+		// the Set re-extends only the map's retention TTL. A new struct avoids mutating shared state.
+		next := &corruptAttemptState{count: st.count + 1, windowExpiry: st.windowExpiry}
+		sm.blockCorruptAttempts.Set(key, next)
+
+		return next.count
+	}
+
+	sm.blockCorruptAttempts.Set(key, &corruptAttemptState{count: 1, windowExpiry: now.Add(legacyCorruptAttemptCooldown(sm.settings))})
+
+	return 1
+}
+
+// corruptBlockAttemptsExhausted reports whether a (hash, peerID) has reached the corrupt
+// re-download cap and is within its cooldown window (bitcoin-sv/teranode#4692). A cap of <= 0
+// disables the bound (re-opens the corrupt-body bandwidth DoS). Nil-safe: a nil settings or nil map
+// (SyncManager struct-literal test fixtures that bypass New()) behaves as CAP DISABLED — it returns
+// false (never "exhausted"), so a missing config can never silently drop honest blocks.
+func (sm *SyncManager) corruptBlockAttemptsExhausted(blockHash chainhash.Hash, peerID string) bool {
+	if sm.settings == nil || sm.blockCorruptAttempts == nil {
+		return false
+	}
+
+	maxAttempts := sm.settings.BlockValidation.MaxCorruptAttemptsPerBlock
+	if maxAttempts <= 0 {
+		return false
+	}
+
+	st, ok := sm.blockCorruptAttempts.Get(legacyCorruptAttemptKey{hash: blockHash, peerID: peerID})
+
+	return ok && st.count >= maxAttempts && time.Now().Before(st.windowExpiry)
+}
+
+// clearCorruptBlockAttempts drops a (hash, peerID)'s corrupt counter on successful store so an
+// honest body after the window never inherits a stale count (bitcoin-sv/teranode#4692). Nil-safe.
+func (sm *SyncManager) clearCorruptBlockAttempts(blockHash chainhash.Hash, peerID string) {
+	if sm.blockCorruptAttempts != nil {
+		sm.blockCorruptAttempts.Delete(legacyCorruptAttemptKey{hash: blockHash, peerID: peerID})
+	}
+}
+
+// peerStateResolvingPrimary returns the sync state for peer, resolving a stream
+// sub-peer (e.g. a BlockPriority DATA1 stream, not itself registered in
+// peerStates) to its association's primary peer. It returns the resolved peer
+// (the primary when a stream peer resolved, otherwise the input peer) and
+// whether a state was found. Centralizes the stream→primary walk previously
+// inlined in handleBlockMsg/handleHeadersMsg/handleInvMsg/BlockRequested; call
+// sites that log the resolution or reassign to the primary compare the returned
+// peer against their input (resolved != input means a stream peer resolved).
+func (sm *SyncManager) peerStateResolvingPrimary(peer *peerpkg.Peer) (*peerSyncState, *peerpkg.Peer, bool) {
+	if state, exists := sm.peerStates.Get(peer); exists {
+		return state, peer, true
+	}
+
+	if assoc := peer.AssociationRef(); assoc != nil {
+		if primary := assoc.PrimaryPeer(); primary != nil {
+			if state, exists := sm.peerStates.Get(primary); exists {
+				return state, primary, true
+			}
+		}
+	}
+
+	return nil, peer, false
+}
+
 // handleBlockMsg handles block messages from all peers.
+// requestMissingBlocks answers a missing-parent condition by sending a getblocks
+// message from our best block, so block validation can proceed in order. In the
+// legacy sync protocol the orphan tip also doubles as the batch-continuation
+// signal, so this must fire even when the missing parent is a known-failed block
+// (#1333) — otherwise sync stalls until the stall detector rotates the peer.
+// PushGetBlocksMsg filters duplicate requests and the peer only invs blocks past
+// the locator fork point, so a redundant request costs one inv message at most.
+// Errors are logged and swallowed; the request is best-effort.
+func (sm *SyncManager) requestMissingBlocks(peer *peerpkg.Peer, blockHash chainhash.Hash) {
+	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
+	if err != nil {
+		sm.logger.Errorf(failedToGetBestBlockHeaderMsg, err)
+		return
+	}
+
+	// Create a block locator starting from our best block.
+	locator, err := sm.blockchainClient.GetBlockLocator(sm.ctx, bestBlockHeader.Hash(), bestBlockHeaderMeta.Height)
+	if err != nil {
+		sm.logger.Errorf("Failed to get block locator for the block hash %s: %v", blockHash, err)
+		return
+	}
+
+	zeroHash := chainhash.Hash{}
+	if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
+		sm.logger.Errorf("Failed to send getblocks message: %v", err)
+	}
+}
+
+// requestBlockDirect re-requests a single block by hash with a getdata sent straight to the peer,
+// bypassing inv handling entirely (bitcoin-sv/teranode#4692).
+//
+// requestMissingBlocks cannot recover a block during headers-first sync: it sends a getblocks, the
+// peer answers with an inv, and processInvMsg returns while headersFirstMode is set — before the
+// hash reaches state.requestQueue, which is the only queue the getdata loop in handleInvMsg drains.
+// The header-block pipeline does not cover it either: fetchHeaderBlocks walks forward from
+// sm.startHeader, and a dropped block's header node has already been removed from headerList with
+// startHeader ahead of the front, so that walk can never reach it.
+//
+// Both request maps are re-armed before the message goes out. handleBlockMsg disconnects a peer
+// that delivers a block it has no record of requesting, and BlockRequested gates the prefetch
+// ingestion on the same per-peer map; the corrupt branch has already deleted this hash from both.
+// The inv route repopulates them as a side effect of its own getdata loop — a direct getdata has to
+// do it itself. Both maps are expiring, so an entry for a block that never arrives self-evicts.
+//
+// Setting sm.requestedBlocks also de-duplicates against the inv route: that loop skips a hash
+// already present there, so a getblocks issued alongside this call cannot request the same block a
+// second time.
+//
+// Both entries are re-armed with the UNTRUSTED zero origin, never with the proof the dropped
+// delivery carried. headerProven means the request came from fetchHeaderBlocks; this is a direct
+// getdata, so by that definition it is not proven, and blockOrigin's own contract records losing a
+// proof on a re-request as the safe outcome — "an inv re-request can replace a proof with the
+// untrusted zero value, which safely restores full validation". The cost is that the recovered copy
+// takes full validation instead of the below-checkpoint fast path; the alternative would invent a
+// route by which a fast-path proof survives a transport the header-provenance design never
+// sanctioned, on a body we have just judged corrupt. Re-arming is only about admission — the
+// unrequested-block guard and the prefetch gate read these maps — not about provenance.
+func (sm *SyncManager) requestBlockDirect(peer *peerpkg.Peer, state *peerSyncState, blockHash chainhash.Hash) {
+	getDataMessage := wire.NewMsgGetDataSizeHint(1)
+	if err := getDataMessage.AddInvVect(wire.NewInvVect(wire.InvTypeBlock, &blockHash)); err != nil {
+		sm.logger.Warnf(unexpectedFailureAddingInventoryMsg, err)
+		return
+	}
+
+	sm.requestedBlocks.Set(blockHash, blockRequestOrigin{})
+	state.requestedBlocks.Set(blockHash, blockRequestOrigin{})
+
+	sm.logger.Debugf("[requestBlockDirect][%s] re-requesting dropped block from %s", blockHash, peer)
+
+	peer.QueueMessage(getDataMessage, nil)
+}
+
 func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	sm.logger.Debugf("[handleBlockMsg][%s] received block height %d from %s", bmsg.blockHash, bmsg.blockHeight, bmsg.peer)
 	peer := bmsg.peer
 
-	state, exists := sm.peerStates.Get(peer)
+	state, resolved, exists := sm.peerStateResolvingPrimary(peer)
 	if !exists {
+		sm.logger.Errorf("[handleBlockMsg][%s] Received block message from unknown peer %s", bmsg.blockHash, peer)
+		return errors.NewServiceError("[handleBlockMsg] Received block message from unknown peer %s", peer)
+	}
+	if resolved != peer {
 		// Stream peers (e.g. BlockPriority) are not registered in peerStates
-		// directly - look up via their association's primary peer instead.
-		if assoc := peer.AssociationRef(); assoc != nil {
-			primary := assoc.PrimaryPeer()
-			if primary != nil {
-				state, exists = sm.peerStates.Get(primary)
-				if exists {
-					sm.logger.Debugf("[handleBlockMsg][%s] resolved stream peer %s to primary peer %s", bmsg.blockHash, peer, primary)
-					peer = primary
-				}
-			}
-		}
-		if !exists {
-			sm.logger.Errorf("[handleBlockMsg][%s] Received block message from unknown peer %s", bmsg.blockHash, peer)
-			return errors.NewServiceError("[handleBlockMsg] Received block message from unknown peer %s", peer)
-		}
+		// directly - resolved via their association's primary peer instead.
+		sm.logger.Debugf("[handleBlockMsg][%s] resolved stream peer %s to primary peer %s", bmsg.blockHash, peer, resolved)
+		peer = resolved
 	}
 
-	legacySyncMode := false
-	catchingBlocks := false
+	// Under async prefetch, awaitBlockResult disconnects the source peer on its
+	// first validation failure, but blocks it already admitted keep draining the
+	// queue FIFO until handleDonePeerMsg evicts peerStates — a racy window in
+	// which we would validate the whole tail of a peer that has already proven it
+	// serves bad blocks. Peer.Disconnect* flips the connected flag synchronously
+	// (atomic), so skipping here once that flag drops stops the rest of the tail.
+	//
+	// This is a BEST-EFFORT tail-stop, NOT a barrier (#1280). awaitBlockResult
+	// runs in its own goroutine and only disconnects after it receives block N's
+	// failure reply, so in the window between N failing and that flag flipping,
+	// this FIFO consumer can dequeue and fully validate N+1, N+2, … . The guard
+	// bounds the wasted work to the handful of blocks dequeued inside that
+	// async-disconnect window — not strictly one — and that is an accepted,
+	// self-limiting cost: the peer is being dropped regardless, the window is
+	// short, and total in-flight bytes are already capped by the prefetch budget.
+	// A true barrier (mark the peer un-processable synchronously on failure, in
+	// this single FIFO consumer, and skip its whole queued tail) was considered
+	// and deliberately not taken — not worth the hot-path state and teardown
+	// lifecycle for a bounded, low-severity cost inherent to decoupling download
+	// from processing.
+	//
+	// We test bmsg.peer — the exact peer OnBlock queued and awaitBlockResult
+	// tears down (sp.Peer) — NOT the resolved primary. On a bad block
+	// awaitBlockResult calls disconnectMisbehaving, which drops the WHOLE
+	// association (the primary first, then the stream sub-peer), so either flag
+	// would flip for the misbehaviour case; but bmsg.peer is the peer that queued
+	// this tail, and it also drops on sub-peer-scoped teardowns (TCP loss,
+	// RemoveStream) that a primary check would not reflect — so it is the tighter
+	// guard. The ServiceError is benign to shouldDisconnectOnBlockErr, so it only
+	// makes awaitBlockResult release budget and log — no second disconnect. Gated
+	// on UsePrefetchIngestion so the regtest/synchronous path, where
+	// block-acceptance tooling feeds blocks in ways this must not disturb, is
+	// completely untouched.
+	if sm.UsePrefetchIngestion() && !bmsg.peer.Connected() {
+		sm.logger.Debugf("[handleBlockMsg][%s] skipping block from disconnected peer %s", bmsg.blockHash, bmsg.peer)
+		return errors.NewServiceError("[handleBlockMsg] skipping block %s from disconnected peer %s", bmsg.blockHash, bmsg.peer)
+	}
 
 	sm.logger.Debugf("[handleBlockMsg][%s] checking current FSM state", bmsg.blockHash)
 
@@ -1157,14 +1818,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		return errors.NewProcessingError("[handleBlockMsg] failed to get current FSM state", err)
 	}
 
-	if fsmState != nil {
-		switch *fsmState {
-		case teranodeblockchain.FSMStateLEGACYSYNCING:
-			legacySyncMode = true
-		case teranodeblockchain.FSMStateCATCHINGBLOCKS:
-			catchingBlocks = true
-		}
-	}
+	catchingBlocks := suppressBlockRejects(fsmState)
 
 	// If we didn't ask for this block then the peer is misbehaving.
 	if _, exists = state.requestedBlocks.Get(bmsg.blockHash); !exists {
@@ -1190,7 +1844,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// properly.
 	isCheckpointBlock := false
 
-	if sm.headersFirstMode.Load() {
+	sm.headerMu.Lock()
+	if sm.headersFirstMode.Load() && sm.nextCheckpoint != nil {
 		sm.logger.Debugf("[handleBlockMsg][%s] headers-first mode, checking block", bmsg.blockHash)
 
 		firstNodeEl := sm.headerList.Front()
@@ -1207,17 +1862,148 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		}
 	}
 
+	sm.headerMu.Unlock()
+
+	// Read the request provenance BEFORE the delete below removes it, and pass it
+	// explicitly to HandleBlockDirect. It is the proof that backs the
+	// below-checkpoint fast paths (see blockRequestOrigin), so it has to outlive
+	// the request bookkeeping.
+	blockOrigin := sm.blockOrigin(state, bmsg.blockHash)
+
 	// Remove block from request maps. Either chain will know about it, and
 	// so we shouldn't have any more instances of trying to fetch it, or we
 	// will fail the insert, and thus we'll retry next time we get an inv.
 	state.requestedBlocks.Delete(bmsg.blockHash)
 	sm.requestedBlocks.Delete(bmsg.blockHash)
 
+	// Per-block transient-failure backoff (#1187): if this block recently failed
+	// with a storage/service error, skip the expensive HandleBlockDirect path
+	// until the backoff window elapses instead of re-running the full decorate at
+	// full concurrency. Returning a retryable error (not sleeping) keeps the
+	// single block-processing goroutine free. The block was already removed from
+	// requestedBlocks above, so re-delivery is driven by the existing recovery
+	// plumbing — a later block arrives as an orphan of this un-stored one and
+	// triggers a getblocks that re-requests it — not by a proactive re-request
+	// here. Two things keep this from stalling sync (#1187, review): the backoff
+	// cap defaults below the stall-detector window (maxLastBlockTime) so the
+	// window reliably outlasts a transient backoff, and the delivering sync
+	// peer's last-block-time is refreshed on skip (below) so that peer is not
+	// rotated for a fault that is local, not the peer's — rotating it in would
+	// only re-deliver the same still-backed-off block and thrash peers with zero
+	// forward progress. Placed before the block-size sampling below so a block
+	// re-delivered repeatedly while backed off does not keep re-sampling its size
+	// into the moving average and biasing calculateMaxInFlightBlocks() (only
+	// actually-processed blocks should feed the tracker). Nil-guarded: tests build
+	// SyncManager as a struct literal that bypasses New().
+	if sm.blockFailureBackoff != nil {
+		if fs, ok := sm.blockFailureBackoff.Get(bmsg.blockHash); ok && time.Now().Before(fs.nextRetry) {
+			sm.logger.Warnf("[handleBlockMsg][%s] in backoff after %d transient failure(s), skipping until %s", bmsg.blockHash, fs.attempts, fs.nextRetry)
+			// The peer just delivered this block — the fault is our local store,
+			// not the peer — so keep its stall timer fresh. No-op unless peer is
+			// the current sync peer.
+			if sps, ok := sm.syncPeerStateFor(peer); ok {
+				sps.updateLastBlockTime()
+			}
+			return errors.NewServiceUnavailableError("[handleBlockMsg][%s] block in backoff after %d transient failure(s)", bmsg.blockHash, fs.attempts)
+		}
+	}
+
+	// Per-(hash, peerID) corrupt re-download cap (bitcoin-sv/teranode#4692): if THIS serving peer has
+	// already failed with a corrupt body for this hash MaxCorruptAttemptsPerBlock times within the
+	// cooldown window, drop this delivery BEFORE the expensive HandleBlockDirect/decorate. This is the
+	// ban-score-independent bound on corrupt re-download amplification PER SERVING IDENTITY (keyed on
+	// (hash, peerID), not the hash alone, so a bad peer never wedges the honest tip — an honest peer
+	// keeps a fresh budget for the same hash; the residual aggregate per-hash work scales with the
+	// number of distinct serving peers). Drop quietly: do NOT reject the block to the peer, do NOT
+	// mark it failed (recentlyFailedBlocks) — preserving the recentlyFailedBlocks no-NOT_FOUND-cascade
+	// property — and do NOT poison. The peer's stall timer is deliberately NOT refreshed, so if a peer
+	// keeps serving the same corrupt hash the stall detector can rotate to one with an honest body.
+	//
+	// Recovery, precisely. In headers-first mode this hash is NOT re-requested on this path, by
+	// design: the headerList entry and both request-map slots were consumed above this gate, and
+	// refillHeaderBlockPipeline only walks forward from sm.startHeader (fetchHeaderBlocks), so it
+	// cannot re-add the dropped hash. requestBlockDirect is deliberately not called either — it
+	// would getdata the same capped peer, whose delivery this gate drops again after the full
+	// block body has crossed the wire but before HandleBlockDirect, i.e. one full block download
+	// per iteration for the whole cooldown window (blockvalidation_corrupt_attempt_cooldown,
+	// default 10m). Recovery is sync-peer rotation instead.
+	//
+	// The pipeline is deliberately NOT refilled here either, unlike the corrupt branch below.
+	// In headers-first mode the header list is a linear chain, so every block a refill would
+	// request descends from the hash just dropped: each of those bodies crosses the wire in full,
+	// refreshes the sync peer's stall timer at RECEIPT inside HandleBlockDirect, and then fails its
+	// parent lookup — and because this gate deliberately does not mark the hash failed, the
+	// descendant short-circuit does not stop them either. Refilling from here would therefore
+	// download and discard bodies that cannot be accepted while postponing the only recovery this
+	// path has.
+	//
+	// It narrows the waste rather than eliminating it, and the comment should not claim more: any
+	// block still in flight at a LOWER height that arrives and validates runs the acceptance
+	// footer, which refills unconditionally in headers-first mode, advances sm.startHeader and so
+	// requests descendants of the dropped hash anyway. What this gate no longer does is CONTRIBUTE
+	// to that; the residual is bounded by the in-flight window, which then drains.
+	//
+	// When rotation begins, precisely: this delivery does not refresh the stall timer, but bodies
+	// already in flight still do at receipt, so the clock starts once the in-flight window (bounded
+	// by calculateMaxInFlightBlocks) has drained. maxLastBlockTime (180 s) then elapses with no
+	// delivery, CheckSyncPeer rotates via updateSyncPeer, which calls resetHeaderState and
+	// startSync, and the dropped hash is re-requested from the new sync peer. So the cost of a
+	// capped hash here is bounded latency, not a lost block.
+	//
+	// The fixed window still self-heals directly in the two cases that do not depend on rotation:
+	// a peer below the cap is never dropped here at all, and outside headers-first mode a later
+	// block arriving as an orphan of this un-stored one triggers a getblocks that re-requests it.
+	// Once the window lapses the counter resets and the same peer's honest body is admitted.
+	if sm.corruptBlockAttemptsExhausted(bmsg.blockHash, bmsg.peer.Addr()) {
+		sm.logger.Warnf("[handleBlockMsg][%s] corrupt re-download cap reached for peer %s; dropping delivery until the cooldown window expires (not rejected, not stored invalid)", bmsg.blockHash, bmsg.peer)
+
+		return nil
+	}
+
+	// Hand sole ownership of the decoded block to HandleBlockDirect. The
+	// blockHandler goroutine keeps *bmsg alive until the reply is sent, so
+	// leaving the field set would pin the multi-GB wire block (and its decode
+	// arena) for the whole minutes-long processing of a big block. Copy the
+	// parent hash first — the missing-parent error path below needs it.
+	msgBlock := bmsg.block
+	if msgBlock == nil {
+		return errors.NewProcessingError("[handleBlockMsg][%s] block message carries no block", bmsg.blockHash)
+	}
+
+	prevBlockHash := msgBlock.Header.PrevBlock
+	bmsg.block = nil
+
+	// #1333: if this block's parent recently failed to store/validate, skip the
+	// descendant before the block-lookup RPCs. Each descendant would otherwise
+	// fail its parent lookup and log a misleading "previous block NOT_FOUND"
+	// ERROR, burying the one root failure that matters. Mark this block failed too
+	// so the whole descendant chain is suppressed transitively; refresh the
+	// delivering peer's stall timer (the fault is a rejected ancestor, not the
+	// peer); and still answer with a getblocks so sync recovers once the root
+	// block is resolved. Placed before the block-size sampling below (like the
+	// #1187 backoff skip above) so a skipped, re-delivered descendant does not
+	// keep re-sampling its size into the moving average and biasing
+	// calculateMaxInFlightBlocks().
+	if sm.recentlyFailedBlocks != nil {
+		if _, failed := sm.recentlyFailedBlocks.Get(prevBlockHash); failed {
+			sm.recentlyFailedBlocks.Set(bmsg.blockHash, struct{}{})
+			sm.logger.Debugf("[handleBlockMsg][%s] parent %s recently failed to store/validate; skipping descendant (root failure already logged)", bmsg.blockHash, prevBlockHash)
+
+			if sps, ok := sm.syncPeerStateFor(peer); ok {
+				sps.updateLastBlockTime()
+			}
+
+			sm.requestMissingBlocks(peer, bmsg.blockHash)
+
+			return nil
+		}
+	}
+
 	// Track block size for dynamic in-flight adjustment during headers-first mode.
 	// This allows us to start aggressive (20 blocks) and automatically reduce
 	// to 1 block when encountering large (>2GB) blocks on mainnet.
-	if sm.headersFirstMode.Load() && bmsg.block != nil {
-		blockSize := int64(bmsg.block.SerializeSize())
+	if sm.headersFirstMode.Load() {
+		blockSize := int64(msgBlock.SerializeSize())
 		sm.blockSizeTracker.addBlockSize(blockSize)
 
 		dynamicMax := sm.blockSizeTracker.calculateMaxInFlightBlocks()
@@ -1228,39 +2014,26 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 
 	sm.logger.Debugf("[handleBlockMsg][%s] calling HandleBlockDirect", bmsg.blockHash)
 
-	// if not in Legacy Sync mode, we need to potentially download the block,
-	// promote block to the block validation via kafka (p2p -> blockvalidation message),
-	// without calling HandleBlockDirect. Such that it doesn't interfere with the operation of block validation.
-	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.blockHash, bmsg.block); err != nil {
-		if (legacySyncMode || catchingBlocks) && errors.Is(err, errors.ErrBlockNotFound) {
-			// previous block not found? Probably a new block message from our syncPeer while we are still syncing
-			sm.logger.Errorf("Failed to process new block in legacy mode %v: %v", bmsg.blockHash, err)
-			return nil
-		} else if errors.Is(err, errors.ErrBlockNotFound) {
-			// We don't have the parent of this block/header, so we'll request it.
+	// Process the block directly. A missing-parent error (ErrBlockNotFound)
+	// always triggers a getblocks request from our best block so block
+	// validation can proceed in order — see the orphan-continuation note below.
+	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.blockHash, msgBlock, blockOrigin); err != nil {
+		if errors.Is(err, errors.ErrBlockNotFound) {
+			// We don't have the parent of this block. While catching blocks
+			// this is typically the peer announcing its tip while we are
+			// still behind — and in the legacy sync protocol that orphan tip
+			// doubles as the batch-continuation signal: the peer pushes its
+			// tip inv after delivering a getblocks batch and waits for the
+			// next getblocks before sending more. Swallowing the orphan here
+			// stalls the sync until the stall detector rotates the peer, so
+			// always answer with a getblocks from our best block.
+			// PushGetBlocksMsg filters duplicate requests and the peer only
+			// invs blocks past the locator fork point, so a redundant
+			// request costs one inv message at most.
 			sm.logger.Infof("Block %v has missing parent %v, requesting missing blocks",
-				bmsg.blockHash, bmsg.block.Header.PrevBlock)
+				bmsg.blockHash, prevBlockHash)
 
-			bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
-			if err != nil {
-				sm.logger.Errorf("Failed to get best block header: %v", err)
-				return nil
-			}
-			// Create a block locator starting from the parent hash
-			locator, err := sm.blockchainClient.GetBlockLocator(sm.ctx, bestBlockHeader.Hash(), bestBlockHeaderMeta.Height)
-			if err != nil {
-				sm.logger.Errorf("Failed to get block locator for the block hash %s: %v",
-					bmsg.blockHash, err)
-				return nil
-			}
-
-			// Send a getblocks message to request missing blocks
-			zeroHash := chainhash.Hash{}
-			if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
-				sm.logger.Errorf("Failed to send getblocks message: %v", err)
-
-				return nil
-			}
+			sm.requestMissingBlocks(peer, bmsg.blockHash)
 
 			return nil
 		} else {
@@ -1268,9 +2041,105 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 				return nil
 			}
 
-			serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
-			if !legacySyncMode && !catchingBlocks && !serviceError {
+			// Corrupt block body (bitcoin-sv/teranode#4692): a body-derived failure (merkle mismatch, CVE
+			// duplicate) that is not bound to the header, so it cannot condemn the hash and is not
+			// a clear peer fault (a body can be corrupted in transit). Drop it WITHOUT rejecting the
+			// block to the peer, WITHOUT marking it failed (which would suppress its descendants),
+			// and WITHOUT disconnecting (see shouldDisconnectOnBlockErr) — re-request is left free so
+			// an honest copy can arrive on the next delivery / sync-peer rotation. Never poison.
+			if errors.IsBlockCorrupt(err) {
+				// Count this corrupt failure toward the per-(hash, peerID) cap (bitcoin-sv/teranode#4692).
+				// Once this serving peer's count for the hash reaches MaxCorruptAttemptsPerBlock the gate
+				// above drops that peer's further deliveries until the fixed window lapses. Recorded ONLY
+				// on an actual corrupt failure, so a below-cap corrupt is still re-downloaded as today.
+				attempts := sm.recordCorruptBlockAttempt(bmsg.blockHash, bmsg.peer.Addr())
+				sm.logger.Warnf("[handleBlockMsg][%s] corrupt block body from peer %s (attempt %d), dropping for re-download (not rejected, not stored invalid): %v", bmsg.blockHash, bmsg.peer, attempts, err)
+
+				// Headers-first: refill the download pipeline before returning so a corrupt drop does
+				// not stall headers-first sync for ~180s (bitcoin-sv/teranode#4692). Pipeline maintenance
+				// ONLY — the corrupt branch must NOT run any accepted-block bookkeeping (rejected-tx
+				// clear, peer-height update, FSM RUN, fee-filter reset), so it calls the extracted refill
+				// rather than falling through the acceptance footer.
+				if sm.headersFirstMode.Load() {
+					if refillErr := sm.refillHeaderBlockPipeline(peer, state); refillErr != nil {
+						sm.logger.Warnf("[handleBlockMsg][%s] header-block pipeline refill after corrupt body failed: %v", bmsg.blockHash, refillErr)
+					}
+				}
+
+				// Unlike the orphan-continuation branch above, this is a headers-first pull sync with
+				// no other mechanism to recover a dropped block: actively re-request the same hash
+				// instead of only waiting for a spontaneous re-announcement (bitcoin-sv/teranode#4692).
+				//
+				// The re-request is a DIRECT getdata, not a getblocks. A getblocks is answered with an
+				// inv, and processInvMsg discards invs while headersFirstMode is set, so it would never
+				// become a getdata and the dropped block would be lost for the rest of the session —
+				// descendants failing their parent lookup until the stall detector rotates the sync
+				// peer. requestBlockDirect also puts the hash back into both request maps, which this
+				// branch cleared above and which handleBlockMsg's unrequested-block guard reads.
+				//
+				// SKIPPED once this peer has reached the cap for this hash (bitcoin-sv/teranode#4692).
+				// The gate above would drop that peer's next delivery of this hash anyway, but only
+				// AFTER the full block body had crossed the wire — the exact waste that gate's own
+				// comment says it avoids by not re-requesting. Gated on corruptBlockAttemptsExhausted
+				// rather than on a re-derived "attempts < MaxCorruptAttemptsPerBlock", so this decision
+				// and that gate agree BY CONSTRUCTION: the predicate reads the counter
+				// recordCorruptBlockAttempt just wrote, and it already handles the cases the arithmetic
+				// gets wrong — a cap of <= 0 means DISABLED, where "attempts < 0" would wrongly suppress
+				// the re-request on every corrupt body, and a nil map/settings fixture. Both fall
+				// through to "re-request", which is the pre-existing behaviour.
+				//
+				// Below the cap, re-requesting from the SAME peer is deliberate — a body can be
+				// corrupted in transit by an honest relay — and the de-duplication argument holds:
+				// outside headers-first this getdata is redundant with the getblocks below but
+				// harmless, because the inv route's getdata loop skips a hash already present in
+				// sm.requestedBlocks, which requestBlockDirect has just set.
+				//
+				// AT the cap that argument no longer applies, and the residual is stated rather than
+				// glossed: the hash is NOT in sm.requestedBlocks, so outside headers-first mode the inv
+				// route will not skip it and may still pull one body, which the gate above then drops.
+				// In headers-first mode the waste is eliminated, because processInvMsg discards invs
+				// while headersFirstMode is set so the getblocks can never become a getdata. Recovery
+				// at the cap is the cooldown window lapsing or sync-peer rotation.
+				if !sm.corruptBlockAttemptsExhausted(bmsg.blockHash, bmsg.peer.Addr()) {
+					sm.requestBlockDirect(peer, state, bmsg.blockHash)
+				}
+
+				// Keep the getblocks as well: in the legacy sync protocol it doubles as the
+				// batch-continuation signal (see requestMissingBlocks), which a getdata does not carry.
+				sm.requestMissingBlocks(peer, bmsg.blockHash)
+
+				return err
+			}
+
+			// Remember this block failed to store/validate so its already-queued
+			// descendants are short-circuited above rather than each failing their
+			// parent lookup and logging a misleading "previous block NOT_FOUND"
+			// ERROR (#1333). Covers both transient and permanent failures — from a
+			// descendant's view the parent is missing either way; the TTL and the
+			// delete-on-success below heal the transient case.
+			if sm.recentlyFailedBlocks != nil {
+				sm.recentlyFailedBlocks.Set(bmsg.blockHash, struct{}{})
+			}
+
+			// Transient local-infrastructure failures (not peer faults): service
+			// errors, storage errors, ErrServiceUnavailable — which the UTXO store
+			// returns when a batch (notably the outpoint/decorate batch, the #1187
+			// wedge) does not complete in time (stores/utxo/aerospike/get.go) — and
+			// ErrStorageUnavailable ("no aerospike nodes available"). These must
+			// neither reject the block to the peer nor (below) skip the backoff.
+			// errors.IsTransientLocalError is the shared classifier, kept in
+			// lock-step with shouldDisconnectOnBlockError in peer_server.go.
+			serviceError := errors.IsTransientLocalError(err)
+			if !catchingBlocks && !serviceError {
 				peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", &bmsg.blockHash, false)
+			}
+
+			// Record a transient-failure backoff so the next re-delivery of this
+			// block is throttled rather than immediately re-running the full
+			// decorate (#1187). Linear growth capped at the configured max; the
+			// failure count persists across re-deliveries within the map TTL.
+			if serviceError && sm.blockFailureBackoff != nil {
+				sm.recordBlockFailureBackoff(bmsg.blockHash)
 			}
 
 			sm.logger.Errorf("Failed to process new block in service blockQueueMsg %v: %v", bmsg.blockHash, err)
@@ -1278,6 +2147,22 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			// Never panic in sync processing goroutines; bubble error to caller.
 			return err
 		}
+	}
+
+	// Block processed successfully — clear any transient-failure backoff so a
+	// future failure starts a fresh count rather than inheriting a stale one (#1187).
+	if sm.blockFailureBackoff != nil {
+		sm.blockFailureBackoff.Delete(bmsg.blockHash)
+	}
+
+	// Also clear the per-(hash, peerID) corrupt counter (bitcoin-sv/teranode#4692) so an honest body
+	// after the window never inherits a stale corrupt count.
+	sm.clearCorruptBlockAttempts(bmsg.blockHash, bmsg.peer.Addr())
+
+	// Also clear any cascade-suppression marker (#1333): this hash now stores, so
+	// its descendants must no longer be short-circuited as children of a failure.
+	if sm.recentlyFailedBlocks != nil {
+		sm.recentlyFailedBlocks.Delete(bmsg.blockHash)
 	}
 
 	// Meta-data about the new block this peer is reporting. We use this
@@ -1294,7 +2179,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		blkHashUpdate *chainhash.Hash
 	)
 
-	if sp, sps := sm.loadSyncPeerAndState(); peer == sp && sps != nil {
+	if sps, ok := sm.syncPeerStateFor(peer); ok {
 		sps.updateLastBlockTime()
 	}
 
@@ -1317,7 +2202,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		} else {
 			blockHeightInt32, err := safeconversion.Uint32ToInt32(blockHeaderMeta.Height)
 			if err != nil {
-				sm.logger.Errorf("failed to convert block height to int32: %v", err)
+				sm.logger.Errorf(failedToConvertBlockHeightInt32Msg, err)
 			}
 
 			heightUpdate = blockHeightInt32
@@ -1342,7 +2227,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 
 			// Since we are current, we can tell FSM to transition to RUN
 			// Blockchain client will check if miner is registered, if so it will send Mine event, and FSM will transition to Mine
-			if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/handleBlockMsg"); err != nil {
+			if err = sm.runIfCatchingBlocks("legacy/netsync/manager/handleBlockMsg"); err != nil {
 				sm.logger.Errorf("[Sync Manager] failed to send FSM RUN event %v", err)
 			}
 
@@ -1350,25 +2235,19 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		}
 	}
 
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
+	// A peer reset may have changed header state while the block was validated.
+	isCheckpointBlock = isCheckpointBlock && sm.headersFirstMode.Load() &&
+		sm.nextCheckpoint != nil && bmsg.blockHash.IsEqual(sm.nextCheckpoint.Hash)
+
 	// This is headers-first mode, so if the block is not a checkpoint
 	// request more blocks using the header list to maintain the pipeline
 	// at the dynamic max limit (adjusts based on block size).
 	if !isCheckpointBlock {
-		dynamicMax := sm.blockSizeTracker.calculateMaxInFlightBlocks()
-		if sm.startHeader != nil && state.requestedBlocks.Len() < dynamicMax {
-			sm.fetchHeaderBlocks()
-		} else if !sm.current() && state.requestedBlocks.Len() == 0 {
-			sm.logger.Debugf("Not current, and no headers to sync to, fetching more headers")
-
-			latestBlockHeader, _, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
-			if err != nil {
-				return errors.NewServiceError("Failed to get best block header", err)
-			}
-
-			locator := blockchain.BlockLocator([]*chainhash.Hash{latestBlockHeader.Hash()})
-			if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
-				return errors.NewServiceError("Failed to send getblocks message to peer %s", peer.String(), err)
-			}
+		// headerMu is already held by the caller above, so take the Locked variant.
+		if err = sm.refillHeaderBlockPipelineLocked(peer, state); err != nil {
+			return err
 		}
 
 		return nil
@@ -1407,6 +2286,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// from the block after this one up to the end of the chain (zero hash).
 	sm.headersFirstMode.Store(false)
 	sm.headerList.Init()
+	sm.startHeader = nil
+	sm.verifiedCheckpointHeight = 0
 	sm.logger.Infof("Reached the final checkpoint -- switching to normal mode")
 
 	locator := blockchain.BlockLocator([]*chainhash.Hash{&bmsg.blockHash})
@@ -1417,9 +2298,109 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	return nil
 }
 
+// headerNodeProven reports whether this list entry is committed by a checkpoint
+// hash actually matched by handleHeadersMsg. Linkage alone is not proof.
+//
+// nextCheckpoint is the pending download target: it advances on checkpoint BLOCK
+// delivery, before the next header run is verified. Only verifiedCheckpointHeight
+// bounds the proven prefix, including while an unverified tail is being appended.
+// Resetting header state discards this proof along with the list it certifies.
+func (sm *SyncManager) headerNodeProven(node *headerNode) bool {
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
+	return sm.headerNodeProvenLocked(node)
+}
+
+// headerNodeProvenLocked requires headerMu.
+func (sm *SyncManager) headerNodeProvenLocked(node *headerNode) bool {
+	if node == nil || sm.nextCheckpoint == nil {
+		return false
+	}
+
+	return node.height > 0 && node.height <= sm.verifiedCheckpointHeight
+}
+
+// blockOrigin returns the request provenance for a delivered block.
+//
+// It reads the PER-PEER record, not sm.requestedBlocks: New() builds the global
+// map with a 60-second expiry (it exists for handleInvMsg dedupe) while the
+// per-peer map gets 60 minutes precisely because legacy sync and checkpoints need
+// it, and expiringmap.Get neither refreshes nor tolerates expiry. Reading the
+// global map made any block slower than a minute — the common case on mainnet,
+// with multi-GB blocks queued behind up to dynamicMaxInFlight earlier requests —
+// silently lose its header proof and fall back to full validation.
+//
+// This is also the record the unsolicited-block check consults, so provenance and
+// admission consult the same per-peer map. An inv re-request can replace a proof
+// with the untrusted zero value, which safely restores full validation. An absent
+// entry, map or peer state also yields the untrusted zero value.
+func (sm *SyncManager) blockOrigin(state *peerSyncState, blockHash chainhash.Hash) blockRequestOrigin {
+	if state == nil || state.requestedBlocks == nil {
+		return blockRequestOrigin{}
+	}
+
+	origin, _ := state.requestedBlocks.Get(blockHash)
+
+	return origin
+}
+
+// refillHeaderBlockPipeline tops up the headers-first download pipeline so it stays at the dynamic
+// in-flight limit, requesting the next batch of block downloads (bitcoin-sv/teranode#4692). It does
+// ONLY pipeline maintenance — no accepted-block bookkeeping (no rejected-tx clear, no peer-height
+// update, no FSM RUN, no fee-filter reset) — so it is safe to call on a FAILED delivery too.
+//
+// Safe to call is not the same as correct to call, and the two corrupt-body sites differ. On the
+// corrupt branch a refill is right, because that branch re-arms the failing hash itself in the same
+// breath (requestBlockDirect plus requestMissingBlocks), so the descendants it requests have a
+// parent on the way. On the per-(hash, peer) corrupt-cap gate it is wrong and is deliberately not
+// called: that gate re-arms nothing, so in headers-first mode every block a refill would request
+// descends from a hash that will never arrive, and each such body resets the stall timer at receipt
+// before failing its parent lookup — deferring the rotation that is that gate's only recovery.
+// Returns an error only if the getblocks fallback fails.
+//
+// This is the locking entry point, for the corrupt-body drop, which returns long before
+// handleBlockMsg's acceptance footer takes headerMu. The footer itself already holds the mutex and
+// calls refillHeaderBlockPipelineLocked directly.
+func (sm *SyncManager) refillHeaderBlockPipeline(peer *peerpkg.Peer, state *peerSyncState) error {
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
+
+	return sm.refillHeaderBlockPipelineLocked(peer, state)
+}
+
+// refillHeaderBlockPipelineLocked requires headerMu. It reads sm.startHeader and calls
+// fetchHeaderBlocksLocked, both of which are headerMu-guarded.
+func (sm *SyncManager) refillHeaderBlockPipelineLocked(peer *peerpkg.Peer, state *peerSyncState) error {
+	dynamicMax := sm.blockSizeTracker.calculateMaxInFlightBlocks()
+	if sm.startHeader != nil && state.requestedBlocks.Len() < dynamicMax {
+		sm.fetchHeaderBlocksLocked()
+	} else if !sm.current() && state.requestedBlocks.Len() == 0 {
+		sm.logger.Debugf("Not current, and no headers to sync to, fetching more headers")
+
+		latestBlockHeader, _, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
+		if err != nil {
+			return errors.NewServiceError("Failed to get best block header", err)
+		}
+
+		locator := blockchain.BlockLocator([]*chainhash.Hash{latestBlockHeader.Hash()})
+		if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
+			return errors.NewServiceError("Failed to send getblocks message to peer %s", peer.String(), err)
+		}
+	}
+
+	return nil
+}
+
 // fetchHeaderBlocks creates and sends a request to the syncPeer for the next
 // list of blocks to be downloaded based on the current list of headers.
 func (sm *SyncManager) fetchHeaderBlocks() {
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
+	sm.fetchHeaderBlocksLocked()
+}
+
+// fetchHeaderBlocksLocked requires headerMu.
+func (sm *SyncManager) fetchHeaderBlocksLocked() {
 	// Nothing to do if there is no sync peer.
 	sp := sm.loadSyncPeer()
 	if sp == nil {
@@ -1455,9 +2436,11 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 		headerListLen, currentInFlight, dynamicMaxInFlight, avgBlockSize, maxBlocks)
 
 	// Build up a getdata request for the list of blocks the headers
-	// describe.  The size hint will be limited to wire.MaxInvPerMsg by
-	// the function, so no need to double check it here.
-	getDataMessage := wire.NewMsgGetDataSizeHint(uint(sm.headerList.Len())) // nolint:gosec
+	// describe. Size the InvList to maxBlocks rather than headerList.Len()
+	// because the loop below breaks at maxBlocks — sizing to headerList.Len()
+	// (often 2000) caused large repeated allocations (~16 KB) when only a
+	// handful of slots ever get used (maxBlocks shrinks to 1 for >2 GB blocks).
+	getDataMessage := wire.NewMsgGetDataSizeHint(uint(maxBlocks)) // nolint:gosec
 	numRequested := 0
 
 	for e := sm.startHeader; e != nil; e = e.Next() {
@@ -1478,13 +2461,27 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 
 		if !haveInv {
 			if err = getDataMessage.AddInvVect(iv); err != nil {
-				sm.logger.Warnf("Unexpected failure when adding inventory to getdata message: %v", err)
+				sm.logger.Warnf(unexpectedFailureAddingInventoryMsg, err)
 				break
 			}
 
-			sm.requestedBlocks.Set(*node.hash, struct{}{})
-			peerState, _ := sm.peerStates.Get(sp)
-			peerState.requestedBlocks.Set(*node.hash, struct{}{})
+			// This is the ONLY place that records header provenance. The proof does
+			// not extend to the whole list — see headerNodeProven.
+			origin := blockRequestOrigin{headerProven: sm.headerNodeProvenLocked(node)}
+
+			sm.requestedBlocks.Set(*node.hash, origin)
+
+			// peerState is the one fetched and existence-checked above, deliberately not
+			// looked up again here. sp does not change across the loop, so a second lookup
+			// returned the same value on every iteration, and it discarded the existence
+			// flag. A peer that went away between the check above and this line therefore
+			// left a nil pointer that was written to immediately, which segfaulted the node
+			// on mainnet on 2026-09-02 with an invalid memory address at offset 0x18.
+			//
+			// Reusing the checked pointer is also correct when the peer HAS gone: the map it
+			// writes into is that peer's own, so a stale entry is read by nobody and the
+			// disconnect path discards the whole state.
+			peerState.requestedBlocks.Set(*node.hash, origin)
 
 			numRequested++
 		}
@@ -1505,34 +2502,29 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 // handleHeadersMsg handles block header messages from all peers.  Headers are
 // requested when performing a headers-first sync.
 func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
+
 	sm.logger.Debugf("[handleHeadersMsg] received headers message with %d headers from %s", len(hmsg.headers.Headers), hmsg.peer)
 	peer := hmsg.peer
 
-	_, exists := sm.peerStates.Get(peer)
+	_, resolved, exists := sm.peerStateResolvingPrimary(peer)
 	if !exists {
+		sm.logger.Warnf("Received headers message from unknown peer %s", peer)
+		return
+	}
+	if resolved != peer {
 		// Stream peers (e.g. BlockPriority DATA1) are not registered in
-		// peerStates directly - resolve via their association's primary peer.
-		if assoc := peer.AssociationRef(); assoc != nil {
-			primary := assoc.PrimaryPeer()
-			if primary != nil {
-				_, exists = sm.peerStates.Get(primary)
-				if exists {
-					sm.logger.Debugf("[handleHeadersMsg] resolved stream peer %s to primary peer %s", peer, primary)
-					peer = primary
-				}
-			}
-		}
-		if !exists {
-			sm.logger.Warnf("Received headers message from unknown peer %s", peer)
-			return
-		}
+		// peerStates directly - resolved via their association's primary peer.
+		sm.logger.Debugf("[handleHeadersMsg] resolved stream peer %s to primary peer %s", peer, resolved)
+		peer = resolved
 	}
 
 	// The remote peer is misbehaving if we didn't request headers.
 	msg := hmsg.headers
 	numHeaders := len(msg.Headers)
 
-	if !sm.headersFirstMode.Load() {
+	if !sm.headersFirstMode.Load() || sm.nextCheckpoint == nil {
 		reason := fmt.Sprintf("Got %d unrequested headers from %s", numHeaders, peer.String())
 		peer.DisconnectWithWarning(reason)
 
@@ -1551,7 +2543,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 
 		bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 		if err != nil {
-			peer.DisconnectWithWarning(fmt.Sprintf("Failed to get best block header: %v", err))
+			peer.DisconnectWithWarning(fmt.Sprintf(failedToGetBestBlockHeaderMsg, err))
 			return
 		}
 
@@ -1561,7 +2553,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 			return
 		}
 
-		sm.resetHeaderState(bestBlockHeader.Hash(), bestBlockHeightInt32)
+		sm.resetHeaderStateLocked(bestBlockHeader.Hash(), bestBlockHeightInt32)
 
 		prevNodeEl = sm.headerList.Back()
 		if prevNodeEl == nil {
@@ -1609,6 +2601,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 		// Verify the header at the next checkpoint height matches.
 		if node.height == sm.nextCheckpoint.Height {
 			if node.hash.IsEqual(sm.nextCheckpoint.Hash) {
+				sm.verifiedCheckpointHeight = node.height
 				receivedCheckpoint = true
 
 				sm.logger.Infof("Verified downloaded block "+
@@ -1637,7 +2630,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 		// fetching the blocks.
 		sm.headerList.Remove(sm.headerList.Front())
 		sm.logger.Infof("Received %v block headers: Fetching blocks", sm.headerList.Len())
-		sm.fetchHeaderBlocks()
+		sm.fetchHeaderBlocksLocked()
 
 		return
 	}
@@ -1696,24 +2689,16 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	sm.logger.Debugf("[handleInvMsg] received inv message with %d inv vectors from %s", len(imsg.inv.InvList), imsg.peer)
 	peer := imsg.peer
 
-	state, exists := sm.peerStates.Get(peer)
+	state, resolved, exists := sm.peerStateResolvingPrimary(peer)
 	if !exists {
+		sm.logger.Warnf("[handleInvMsg] Received inv message from unknown peer %s", peer)
+		return
+	}
+	if resolved != peer {
 		// Stream peers (e.g. BlockPriority DATA1) are not registered in
-		// peerStates directly - resolve via their association's primary peer.
-		if assoc := peer.AssociationRef(); assoc != nil {
-			primary := assoc.PrimaryPeer()
-			if primary != nil {
-				state, exists = sm.peerStates.Get(primary)
-				if exists {
-					sm.logger.Debugf("[handleInvMsg] resolved stream peer %s to primary peer %s", peer, primary)
-					peer = primary
-				}
-			}
-		}
-		if !exists {
-			sm.logger.Warnf("[handleInvMsg] Received inv message from unknown peer %s", peer)
-			return
-		}
+		// peerStates directly - resolved via their association's primary peer.
+		sm.logger.Debugf("[handleInvMsg] resolved stream peer %s to primary peer %s", peer, resolved)
+		peer = resolved
 	}
 
 	// Attempt to find the final block in the inventory list.  There may
@@ -1751,7 +2736,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 		if err == nil {
 			blockHeightInt32, err := safeconversion.Uint32ToInt32(blockHeaderMeta.Height)
 			if err != nil {
-				sm.logger.Errorf("failed to convert block height to int32: %v", err)
+				sm.logger.Errorf(failedToConvertBlockHeightInt32Msg, err)
 			}
 
 			peer.UpdateLastBlockHeight(blockHeightInt32)
@@ -1814,12 +2799,16 @@ outside:
 			// Request the block if there is not already a pending request.
 			if _, exists = sm.requestedBlocks.Get(iv.Hash); !exists {
 				if err = gdmsg.AddInvVect(iv); err != nil {
-					sm.logger.Warnf("Unexpected failure when adding inventory to getdata message: %v", err)
+					sm.logger.Warnf(unexpectedFailureAddingInventoryMsg, err)
 					break outside
 				}
 
-				sm.requestedBlocks.Set(iv.Hash, struct{}{})
-				state.requestedBlocks.Set(iv.Hash, struct{}{})
+				// Peer-advertised: we are requesting this only because a peer said it
+				// exists. That is no proof of checkpoint ancestry, so the origin stays
+				// at its untrusted zero value and quickValidationAllowed will deny the
+				// below-checkpoint fast path for it.
+				sm.requestedBlocks.Set(iv.Hash, blockRequestOrigin{})
+				state.requestedBlocks.Set(iv.Hash, blockRequestOrigin{})
 
 				numRequested++
 			}
@@ -1828,7 +2817,7 @@ outside:
 			// Request the transaction if there is not already a pending request.
 			if _, exists = sm.requestedTxns.Get(iv.Hash); !exists {
 				if err = gdmsg.AddInvVect(iv); err != nil {
-					sm.logger.Warnf("Unexpected failure when adding inventory to getdata message: %v", err)
+					sm.logger.Warnf(unexpectedFailureAddingInventoryMsg, err)
 					break outside
 				}
 
@@ -1930,8 +2919,30 @@ func (sm *SyncManager) blockHandler() {
 	ticker := time.NewTicker(syncPeerTickerInterval)
 	defer ticker.Stop()
 
-	// TODO make this configurable
-	maxBlockQueue := 10_000
+	// This buffer holds one *blockQueueMsg (a *wire.MsgBlock pointer) per slot.
+	// With prefetch disabled a small fixed depth suffices: OnBlock keeps at most
+	// one block per peer in flight, so the queue barely fills.
+	//
+	// With prefetch enabled the depth must be at least the byte-budget admission
+	// ceiling (budget / minInFlightBlockWeight). Otherwise a full pipeline would
+	// block blockHandler on `blockQueue <-`, and since that goroutine is the sole
+	// consumer of msgChan, disconnects, sync-peer rotation, inv, headers and tx
+	// dispatch would stall for EVERY peer — cross-peer head-of-line blocking. The
+	// deeper queue does not raise the memory ceiling: the blocks it references are
+	// still bounded in total bytes by the prefetch budget (AcquireBlockPrefetch),
+	// so at most ~budget bytes of MsgBlocks are pinned regardless of slot count.
+	// The slot count is clamped so a misconfigured multi-TB budget can't size a
+	// huge channel backing array; beyond the clamp the budget still bounds memory
+	// and the sm.quit-guarded enqueue still can't deadlock, only backpressure.
+	maxBlockQueue := 100
+	if sm.blockPrefetchBudget != nil {
+		if ceiling := int(sm.blockPrefetchBudgetBytes / minInFlightBlockWeight); ceiling > maxBlockQueue {
+			maxBlockQueue = ceiling
+		}
+		if maxBlockQueue > maxBlockQueueSlots {
+			maxBlockQueue = maxBlockQueueSlots
+		}
+	}
 
 	// create a block queue to handle block messages in a separate goroutine, in order
 	blockQueue := make(chan *blockQueueMsg, maxBlockQueue)
@@ -1941,11 +2952,45 @@ func (sm *SyncManager) blockHandler() {
 		for {
 			select {
 			case <-sm.quit:
-				return
+				// Best-effort drain of already-queued blocks with an error reply
+				// before exiting. Under prefetch each queued block has an
+				// awaitBlockResult goroutine holding budget and waiting on its
+				// reply; replying here lets them exit promptly on shutdown instead
+				// of waiting for the peer's quit/ctx to fire. The feeder (the outer
+				// loop) races the same sm.quit close, so a block it enqueues after
+				// this drain returns is not caught here — that block's
+				// awaitBlockResult still exits via sp.quit/sp.ctx.Done() (the
+				// backstop), and the feeder's enqueue is itself sm.quit-guarded so
+				// it can never deadlock. This drain only makes the common case
+				// prompt; it is not relied on for correctness.
+				for {
+					select {
+					case msg := <-blockQueue:
+						// Keep the backlog decrement and its progress stamp paired
+						// on every completion path (here the shutdown drain) so the
+						// liveness invariant holds uniformly; rotation is moot during
+						// shutdown, but the uniform pairing is easier to reason about.
+						sm.blockBacklog.Add(-1)
+						sm.noteBacklogProgress()
+
+						if msg.reply != nil {
+							msg.reply <- errors.NewServiceError("sync manager shutting down")
+						}
+					default:
+						return
+					}
+				}
 			case msg := <-blockQueue:
 				sm.logger.Debugf("[blockHandler][%s] processing block queue message into handleBlockMsg", msg.blockHash)
 
 				err := sm.handleBlockMsg(msg)
+
+				// A completion advances the backlog: stamp it so the stall check
+				// treats the pipeline as live for another window (see
+				// noteBacklogProgress / localReadBackpressured).
+				sm.blockBacklog.Add(-1)
+				sm.noteBacklogProgress()
+
 				if msg.reply != nil {
 					msg.reply <- err
 				}
@@ -1966,11 +3011,12 @@ out:
 				sm.logger.Errorf("[SyncManager] failed to get fsm current state")
 			}
 
-			// we reached current in legacy, and current FSM state is not Running, send RUN event
-			if currentState != nil && *currentState != teranodeblockchain.FSMStateRUNNING {
+			// Only observed catchup needs automatic promotion. This cached
+			// prefilter also avoids the expensive current() check while parked.
+			if err == nil && currentState != nil && *currentState == teranodeblockchain.FSMStateCATCHINGBLOCKS {
 				if sm.current() { // only call this when we are not in the running state, it's an expensive call
 					sm.logger.Infof("[SyncManager] Legacy reached current, sending RUN event to FSM")
-					if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/blockHandler"); err != nil {
+					if err = sm.runIfCatchingBlocks("legacy/netsync/manager/blockHandler"); err != nil {
 						sm.logger.Infof("[Sync Manager] failed to send FSM RUN event %v", err)
 					}
 
@@ -1997,12 +3043,40 @@ out:
 			case *blockMsg:
 				sm.logger.Debugf("[blockHandler][%s] queueing block for validation", msg.block.Hash())
 
-				blockQueue <- &blockQueueMsg{
+				// A 0->1 transition opens a fresh backpressure window: stamp its
+				// start so localReadBackpressured can tell slow-but-progressing
+				// validation from a genuine processing hang. Enqueues into an
+				// already-non-empty backlog deliberately do NOT stamp — only
+				// completions advance processing, so letting a peer refresh the
+				// liveness signal merely by feeding more blocks into a hung
+				// pipeline would mask the hang.
+				if sm.blockBacklog.Add(1) == 1 {
+					sm.noteBacklogProgress()
+				}
+
+				// Guard the enqueue with sm.quit. This is the sole feeder of
+				// blockQueue; without the guard, a full queue whose consumer has
+				// already exited on shutdown would block here forever, so the loop
+				// would never reach the sm.quit case, close(handlerDone) would never
+				// run, and Stop() (which waits on handlerDone) would hang.
+				select {
+				case blockQueue <- &blockQueueMsg{
 					block:       msg.block.MsgBlock(),
 					blockHash:   *msg.block.Hash(),
 					blockHeight: msg.block.Height(),
 					peer:        msg.peer,
 					reply:       msg.reply,
+				}:
+				case <-sm.quit:
+					// Enqueue aborted on shutdown: undo the Add(1) above and keep
+					// the decrement paired with its progress stamp, matching every
+					// other completion path (uniform invariant; harmless here).
+					sm.blockBacklog.Add(-1)
+					sm.noteBacklogProgress()
+
+					if msg.reply != nil {
+						msg.reply <- errors.NewServiceError("sync manager shutting down")
+					}
 				}
 
 			case *invMsg:
@@ -2016,14 +3090,6 @@ out:
 				if msg.reply != nil {
 					msg.reply <- struct{}{}
 				}
-
-			case getSyncPeerMsg:
-				var peerID int32
-
-				if sp := sm.loadSyncPeer(); sp != nil {
-					peerID = sp.ID()
-				}
-				msg.reply <- peerID
 
 			case isCurrentMsg:
 				sm.logger.Warnf("isCurrentMsg is deprecated, use current() instead")
@@ -2050,7 +3116,9 @@ out:
 func (sm *SyncManager) NewPeer(peer *peerpkg.Peer, done chan struct{}) {
 	// Ignore if we are shutting down.
 	if atomic.LoadInt32(&sm.shutdown) != 0 {
-		done <- struct{}{}
+		if done != nil {
+			done <- struct{}{}
+		}
 		return
 	}
 	sm.msgChan <- &newPeerMsg{peer: peer, reply: done}
@@ -2062,7 +3130,9 @@ func (sm *SyncManager) NewPeer(peer *peerpkg.Peer, done chan struct{}) {
 func (sm *SyncManager) QueueTx(tx *bsvutil.Tx, peer *peerpkg.Peer, done chan struct{}) {
 	// Don't accept more transactions if we're shutting down.
 	if atomic.LoadInt32(&sm.shutdown) != 0 {
-		done <- struct{}{}
+		if done != nil {
+			done <- struct{}{}
+		}
 		return
 	}
 
@@ -2080,6 +3150,280 @@ func (sm *SyncManager) QueueBlock(block *bsvutil.Block, peer *peerpkg.Peer, done
 	}
 
 	sm.msgChan <- &blockMsg{block: block, peer: peer, reply: done}
+}
+
+// UsePrefetchIngestion reports whether OnBlock should take the bounded async
+// prefetch path. It requires a configured budget AND that we are not on
+// regression net: the block-acceptance tooling depends on submit-then-query
+// ordering, which only the synchronous path (OnBlock returns after the block is
+// fully processed) guarantees. So regtest keeps synchronous ingestion — paired
+// with, and for the same reason as, the regtest exception in BlockRequested. It
+// shares the peerpkg.UseBlockPrefetchIngestion predicate with the read-loop's
+// shouldArmProcessingTimer so both agree on when prefetch is active (a positive
+// budget matches a non-nil budget semaphore, since it is created iff the byte
+// budget is positive). A nil chainParams fails closed to the synchronous path.
+func (sm *SyncManager) UsePrefetchIngestion() bool {
+	if sm.chainParams == nil {
+		// Fail closed to the synchronous path: without params we cannot rule out
+		// regtest, and sync ingestion is the conservative default. Guarding here
+		// matters because sm.chainParams.Net is evaluated as a call argument,
+		// before UseBlockPrefetchIngestion's budget short-circuit could guard it.
+		return false
+	}
+
+	return peerpkg.UseBlockPrefetchIngestion(sm.blockPrefetchBudgetBytes, sm.chainParams.Net)
+}
+
+// BlockRequested reports whether blockHash is one we have an outstanding
+// getdata request for from the given peer (resolving stream peers to their
+// association primary, as handleBlockMsg does). It lets the read-loop reject
+// unrequested blocks BEFORE they consume prefetch budget, mirroring the
+// unrequested-block check in handleBlockMsg. Under async prefetch this is what
+// preserves the original backpressure: without it a misbehaving peer could
+// admit a flood of unrequested blocks against the shared budget — starving the
+// real sync peer and inflating buffered-block memory — before the downstream
+// per-block disconnect fires. On regtest it always returns true; the regression
+// harness intentionally feeds unrequested/duplicate blocks.
+func (sm *SyncManager) BlockRequested(peer *peerpkg.Peer, blockHash *chainhash.Hash) bool {
+	if sm.isRegtest() {
+		return true
+	}
+
+	// Resolve stream sub-peers to their association primary, as handleBlockMsg
+	// does; BlockRequested only reads the resolved state, so the primary itself
+	// is not needed here.
+	state, _, exists := sm.peerStateResolvingPrimary(peer)
+	if !exists {
+		return false
+	}
+
+	_, requested := state.requestedBlocks.Get(*blockHash)
+
+	return requested
+}
+
+// AcquireBlockPrefetch reserves prefetch budget for a block of the given
+// serialized size and returns the amount actually reserved, which the caller
+// MUST later hand back to ReleaseBlockPrefetch exactly once. The weight is
+// clamped to the total budget so a block larger than the whole budget is
+// admitted alone (it waits until every other in-flight block has drained),
+// which preserves the original one-block-at-a-time backpressure for huge
+// blocks and guarantees Acquire can never deadlock on an oversized block.
+//
+// It returns an error only if ctx is cancelled while waiting (shutdown), in
+// which case nothing was reserved, OR the benign ErrDuplicateBlockInFlight
+// sentinel when blockHash is already in flight (dedup — again nothing reserved).
+// When prefetch is disabled it is a no-op returning (0, nil), which also skips
+// dedup (the synchronous path already keeps one block in flight per peer). While
+// blocked waiting for budget it increments blockPrefetchWaiters so the stall
+// detector can tell self-backpressure apart from a genuinely stalled peer.
+//
+// The caller MUST hand blockHash back to ReleaseBlockPrefetch with the returned
+// weight on success: the hash lives in the in-flight set for exactly the same
+// lifetime as the reserved budget (inserted here, deleted on release), so the
+// dedup half and the byte half of this admission gate never drift.
+func (sm *SyncManager) AcquireBlockPrefetch(ctx context.Context, quit <-chan struct{}, blockHash chainhash.Hash, size int64) (int64, error) {
+	if sm.blockPrefetchBudget == nil {
+		return 0, nil
+	}
+
+	// Floor the weight so a flood of tiny blocks can't admit an unbounded number
+	// of in-flight goroutines within the byte budget, then clamp to the budget so
+	// an oversized block is admitted alone (and budgets smaller than the floor
+	// still process one block at a time rather than deadlocking).
+	weight := size
+	if weight < minInFlightBlockWeight {
+		weight = minInFlightBlockWeight
+	}
+	if weight > sm.blockPrefetchBudgetBytes {
+		weight = sm.blockPrefetchBudgetBytes
+	}
+
+	// Dedup: reserve the hash BEFORE reserving budget. Inserting ahead of the
+	// (possibly blocking) Acquire is deliberate — it bounds duplicates even while
+	// a copy is parked waiting for budget, so N copies of one requested,
+	// near-budget-sized block cannot each grab budget and fill it. A hash already
+	// present is a duplicate: drop it (nothing reserved, nothing inserted).
+	sm.inFlightBlocksMu.Lock()
+	if _, dup := sm.inFlightBlocks[blockHash]; dup {
+		sm.inFlightBlocksMu.Unlock()
+		return 0, ErrDuplicateBlockInFlight
+	}
+	sm.inFlightBlocks[blockHash] = struct{}{}
+	sm.inFlightBlocksMu.Unlock()
+
+	// removeInFlight undoes the reservation above. It runs only when the budget
+	// Acquire fails (ctx/quit cancel): nothing was reserved, so the hash must not
+	// linger. On success the hash stays until ReleaseBlockPrefetch deletes it.
+	removeInFlight := func() {
+		sm.inFlightBlocksMu.Lock()
+		delete(sm.inFlightBlocks, blockHash)
+		sm.inFlightBlocksMu.Unlock()
+	}
+
+	// Fast path: budget available right now, no waiter accounting needed.
+	if sm.blockPrefetchBudget.TryAcquire(weight) {
+		return weight, nil
+	}
+
+	// Slow path: we must wait for in-flight blocks to drain. Flag that this
+	// read-loop is backpressured by our own processing so the stall detector
+	// does not mistake the resulting read stall for a slow peer.
+	sm.blockPrefetchWaiters.Add(1)
+	defer sm.blockPrefetchWaiters.Add(-1)
+
+	// Abort the wait on peer teardown too, not just whole-process ctx cancellation:
+	// the caller's ctx (the ServiceManager errgroup Init context) is cancelled on
+	// daemon shutdown but not by legacy.Server.Stop() alone, while quit (the peer's
+	// quit channel) closes on both individual disconnect and shutdown. This mirrors
+	// awaitBlockResult so a budget-parked read-loop never outlives its peer. The
+	// linking goroutine only exists while we are blocked (the rare backpressure
+	// case) and exits as soon as the acquire resolves.
+	if quit != nil {
+		var cancel context.CancelFunc
+
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+
+		go func() {
+			select {
+			case <-quit:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
+
+	if err := sm.blockPrefetchBudget.Acquire(ctx, weight); err != nil {
+		// Nothing reserved: drop the hash we inserted before parking so a torn-down
+		// or cancelled acquire never leaks a slot in the dedup set.
+		removeInFlight()
+		return 0, err
+	}
+
+	return weight, nil
+}
+
+// ReleaseBlockPrefetch returns budget reserved by AcquireBlockPrefetch and drops
+// the block's hash from the in-flight dedup set. The two are released together
+// (same lifetime as the reservation) so the dedup and byte halves of the
+// admission gate never drift. A zero weight (nothing reserved) still deletes the
+// hash but skips the budget Release; a nil budget (prefetch disabled) is a no-op.
+// Only ever called for hashes that AcquireBlockPrefetch successfully admitted —
+// the dup/early-return paths never reach here (OnBlock does not spawn
+// awaitBlockResult for them), so no hash is deleted that was not first inserted.
+func (sm *SyncManager) ReleaseBlockPrefetch(blockHash chainhash.Hash, weight int64) {
+	if sm.blockPrefetchBudget == nil {
+		return
+	}
+
+	sm.inFlightBlocksMu.Lock()
+	delete(sm.inFlightBlocks, blockHash)
+	sm.inFlightBlocksMu.Unlock()
+
+	if weight <= 0 {
+		return
+	}
+	sm.blockPrefetchBudget.Release(weight)
+}
+
+// noteBacklogProgress records that the block backlog just advanced — a block was
+// enqueued to open a fresh backpressure window, or one finished processing. It
+// must run on every backlog transition that constitutes progress: the 0->1
+// enqueue and every completion decrement. localReadBackpressured treats a stamp
+// older than blockProcessingStallTimeout as a hung pipeline rather than
+// slow-but-progressing validation, so keeping this current is what lets the
+// stall detector distinguish the two. Enqueues into an already-non-empty backlog
+// deliberately do NOT call this (only completions advance processing).
+func (sm *SyncManager) noteBacklogProgress() {
+	sm.lastBacklogProgress.Store(time.Now().UnixNano())
+}
+
+// blockProcessingStallTimeout is how long a non-empty block backlog may go
+// without advancing before localReadBackpressured stops suppressing the
+// sync-peer stall check. It tracks settings.Legacy.PeerProcessingTimeout — the
+// per-message watchdog that this progress-aware rule replaces for prefetched
+// blocks — and falls back to defaultBlockProcessingStallTimeout when settings
+// are absent (unit-test SyncManagers) or the value is unset.
+func (sm *SyncManager) blockProcessingStallTimeout() time.Duration {
+	if sm.settings != nil && sm.settings.Legacy.PeerProcessingTimeout > 0 {
+		return sm.settings.Legacy.PeerProcessingTimeout
+	}
+
+	return defaultBlockProcessingStallTimeout
+}
+
+// localReadBackpressured reports whether the node is currently throttling its
+// own network reads because local block processing cannot keep up. The stall
+// detector skips its checks while this holds, since zero throughput then
+// reflects our validation speed, not the sync peer's health. With prefetch
+// enabled that is when read-loops are blocked acquiring budget; with prefetch
+// disabled it is the original condition of any block queued or mid-validation.
+// On the kill-switch path (prefetch disabled, budget nil) suppression stays
+// UNCONDITIONAL, exactly as pre-prefetch: the per-message watchdog is still
+// armed for blocks there and owns processing-stall liveness, so timeout-gating
+// would rotate a healthy sync peer on a legitimately slow block. The
+// progress-aware timeout applies only under prefetch, where that watchdog is
+// disarmed for blocks and this is the compensating liveness signal.
+func (sm *SyncManager) localReadBackpressured() bool {
+	// A non-empty local backlog means blocks are queued or mid-validation, so a
+	// stale last-block-time and zero throughput normally reflect our own
+	// validation speed, not the sync peer's health. Suppress the stall check —
+	// but only while the backlog is still ADVANCING. Disarming the per-message
+	// watchdog for prefetched blocks removed the only timeout over the processing
+	// phase; if we suppressed on any non-zero backlog, a genuine hang
+	// (store/validator deadlock, Aerospike overload) would leave the backlog
+	// pinned >=1 forever and the node would silently stop syncing with no
+	// rotation. So a backlog that has not advanced for longer than
+	// blockProcessingStallTimeout is treated as a stalled pipeline, not
+	// slow-but-progressing validation: stop suppressing so handleCheckSyncPeer
+	// logs and rotates — restoring the pre-prefetch liveness signal without the
+	// false rotation of a merely-slow block that motivated disarming the
+	// watchdog. Deliberately do NOT fall through to the waiter check when the
+	// backlog is stale: a hung pipeline with a full budget accumulates waiters,
+	// and we WANT rotation then.
+	if sm.blockBacklog.Load() > 0 {
+		// Kill switch (prefetch disabled, budget nil): the per-message processing
+		// watchdog is still armed for blocks and owns processing-stall liveness,
+		// exactly as pre-prefetch. Keep the original UNCONDITIONAL suppression here —
+		// timeout-gating would rotate a healthy sync peer on a legitimately slow
+		// block, churn the "proven synchronous" path never had. The progress-aware
+		// timeout below applies only under prefetch, where the watchdog is disarmed
+		// for blocks and this is the compensating liveness signal.
+		if sm.blockPrefetchBudget == nil {
+			return true
+		}
+
+		return time.Since(time.Unix(0, sm.lastBacklogProgress.Load())) < sm.blockProcessingStallTimeout()
+	}
+
+	// Under prefetch also suppress while a read-loop is parked in
+	// AcquireBlockPrefetch waiting for budget. In the running system that implies
+	// a backlog too, but the explicit waiter signal keeps the accounting clear
+	// (and unit-testable in isolation).
+	return sm.blockPrefetchBudget != nil && sm.blockPrefetchWaiters.Load() > 0
+}
+
+// sendDuringShutdown delivers v on ch, recovering from the "send on closed
+// channel" panic that races teardown. Inv delivery runs on peer read-loop
+// goroutines (OnInv -> QueueInv), but the channels they target are torn down by
+// a different goroutine during shutdown: the kafka async producer closes
+// legacyKafkaInvCh in its Stop(), and the block handler stops draining msgChan.
+// The shutdown flag check in QueueInv narrows but cannot close that window — a
+// flag check and a channel send are not atomic against a concurrent close — so
+// a late inv would otherwise crash the whole process. Dropping an inv during
+// shutdown is safe: inv is an advisory announcement, re-sent by the peer (or a
+// later session) on the next connection. Returns false if the channel was closed.
+func sendDuringShutdown[T any](ch chan T, v T) (sent bool) {
+	defer func() {
+		if recover() != nil {
+			sent = false
+		}
+	}()
+
+	ch <- v
+
+	return true
 }
 
 // QueueInv adds the passed inv message and peer to the block handling queue.
@@ -2113,7 +3457,7 @@ func (sm *SyncManager) QueueInv(inv *wire.MsgInv, peer *peerpkg.Peer) {
 
 		if len(invBlockMsg.InvList) > 0 {
 			netsyncInvMsg := invMsg{inv: invBlockMsg, peer: peer}
-			sm.msgChan <- &netsyncInvMsg
+			sendDuringShutdown[interface{}](sm.msgChan, &netsyncInvMsg)
 		}
 
 		if len(invTxMsg.InvList) > 0 {
@@ -2127,13 +3471,13 @@ func (sm *SyncManager) QueueInv(inv *wire.MsgInv, peer *peerpkg.Peer) {
 
 			// write to Kafka
 			sm.logger.Debugf("writing INV message to Kafka from peer %s, length: %d", peer.String(), len(value))
-			sm.legacyKafkaInvCh <- &kafka.Message{
+			sendDuringShutdown(sm.legacyKafkaInvCh, &kafka.Message{
 				Value: value,
-			}
+			})
 		}
 	} else {
 		netsyncInvMsg := invMsg{inv: inv, peer: peer}
-		sm.msgChan <- &netsyncInvMsg
+		sendDuringShutdown[interface{}](sm.msgChan, &netsyncInvMsg)
 	}
 }
 
@@ -2153,7 +3497,9 @@ func (sm *SyncManager) QueueHeaders(headers *wire.MsgHeaders, peer *peerpkg.Peer
 func (sm *SyncManager) DonePeer(peer *peerpkg.Peer, done chan struct{}) {
 	// Ignore if we are shutting down.
 	if atomic.LoadInt32(&sm.shutdown) != 0 {
-		done <- struct{}{}
+		if done != nil {
+			done <- struct{}{}
+		}
 		return
 	}
 
@@ -2190,15 +3536,140 @@ func (sm *SyncManager) Stop() error {
 	sm.requestedTxns.Stop()
 	sm.requestedBlocks.Stop()
 
+	if sm.blockFailureBackoff != nil {
+		sm.blockFailureBackoff.Stop()
+	}
+
+	if sm.recentlyFailedBlocks != nil {
+		sm.recentlyFailedBlocks.Stop()
+	}
+
+	if sm.blockCorruptAttempts != nil {
+		sm.blockCorruptAttempts.Stop()
+	}
+
+	// DC15 / review C1: quiesce Put then drain the tx-announce batcher before
+	// tearing down transports.
+	sm.closeTxAnnounceBatcher()
+
+	// DC11: stop the legacy INV async producer so its final flush runs during
+	// shutdown. Safe here — handlerDone above guarantees no more sends to
+	// legacyKafkaInvCh, which producer.Stop() closes. Stop() has no caller ctx to
+	// honour (Stop() takes none), so it is raced against an internal timeout: a
+	// wedged broker flush can't block shutdown, and the outstanding Stop() finishes
+	// the flush later if it can.
+	if sm.legacyKafkaInvProducer != nil {
+		stopCtx, cancel := context.WithTimeout(context.Background(), util.DefaultBatcherDrainTimeout)
+		kafka.StopProducerCtx(stopCtx, sm.logger, "legacy INV", sm.legacyKafkaInvProducer)
+		cancel()
+	}
+
 	return nil
 }
 
-// SyncPeerID returns the ID of the current sync peer, or 0 if there is none.
-func (sm *SyncManager) SyncPeerID() int32 {
-	reply := make(chan int32)
-	sm.msgChan <- getSyncPeerMsg{reply: reply}
+// announceTx queues a transaction for peer announcement via the tx-announce
+// batcher, unless the batcher has been closed by closeTxAnnounceBatcher during
+// shutdown. go-batcher v2.0.4 panics on Put-after-Close, and this is called from
+// the txmeta Kafka listener goroutine (not joined by Stop), so the read lock
+// pairs with the write lock in closeTxAnnounceBatcher to make a post-close Put a
+// safe no-op.
+func (sm *SyncManager) announceTx(item *TxHashAndFee, parents ...chainhash.Hash) {
+	sm.txAnnounceMu.RLock()
+	defer sm.txAnnounceMu.RUnlock()
 
-	return <-reply
+	if !sm.txAnnounceClosed && sm.txAnnounceBatcher != nil {
+		if len(parents) > 0 && sm.announceParents != nil {
+			sm.announceParents.Set(item.TxHash, parents)
+		}
+
+		sm.txAnnounceBatcher.Put(item)
+	}
+}
+
+// newTxAnnounceBatcher builds the batcher that announces new txs to peers,
+// parents first within each batch.
+//
+// It runs with background=false, so the batcher's worker flushes one batch
+// at a time, in order. With background=true go-batcher starts a goroutine
+// per flush, so a child in one batch could reach peers before its parent in
+// the previous one. The callback does not block: AnnounceNewTransactions
+// hands each batch to an ordered sender and returns.
+func (sm *SyncManager) newTxAnnounceBatcher(size int, timeout time.Duration) *batcher.BatcherWithDedup[TxHashAndFee] {
+	return batcher.NewWithDeduplicationAndPool[TxHashAndFee](size, timeout, func(batch []*TxHashAndFee) {
+		sm.logger.Debugf("announcing %d transactions to peers", len(batch))
+
+		// process the batch, parents first
+		sm.peerNotifier.AnnounceNewTransactions(sm.orderAnnounceBatch(batch))
+	}, false,
+		batcher.WithName("netsync_tx_announce"),
+		batcher.WithLogger(sm.logger),
+		batcher.WithMetrics(batchermetrics.Provider()),
+		batcher.WithTracer(tracing.Tracer("SyncManager").OTelTracer()),
+	)
+}
+
+// orderAnnounceBatch reorders a batch from txAnnounceBatcher so every tx
+// comes after any of its parents in the same batch. The txmeta topic is
+// spread over partitions, so a child can be read, and batched, before its
+// parent; SV Node only accepts a child once it has the parent. A child whose
+// parent is in a later batch is not held back: the peer's orphan pool and the
+// rebroadcast queue cover that. Returns a new slice, since the batcher reuses
+// the one it passes in.
+func (sm *SyncManager) orderAnnounceBatch(batch []*TxHashAndFee) []*TxHashAndFee {
+	hashes := make([]chainhash.Hash, len(batch))
+	parents := make([][]chainhash.Hash, len(batch))
+
+	for i, item := range batch {
+		hashes[i] = item.TxHash
+
+		if sm.announceParents != nil {
+			if p, ok := sm.announceParents.Get(item.TxHash); ok {
+				parents[i] = p
+				sm.announceParents.Delete(item.TxHash)
+			}
+		}
+	}
+
+	ordered := make([]*TxHashAndFee, 0, len(batch))
+	for _, i := range ParentsFirst(hashes, func(i int) []chainhash.Hash { return parents[i] }) {
+		ordered = append(ordered, batch[i])
+	}
+
+	return ordered
+}
+
+// closeTxAnnounceBatcher marks the tx-announce batcher closed (so further
+// announceTx calls become no-ops) and then drains it under a bounded timeout.
+// Taking the write lock first waits for any in-flight announceTx (holding the
+// read lock) to finish, so no Put can race the drain. Idempotent.
+func (sm *SyncManager) closeTxAnnounceBatcher() {
+	sm.txAnnounceMu.Lock()
+	alreadyClosed := sm.txAnnounceClosed
+	sm.txAnnounceClosed = true
+	sm.txAnnounceMu.Unlock()
+
+	if alreadyClosed || sm.txAnnounceBatcher == nil {
+		return
+	}
+
+	util.DrainBatcher(sm.logger, "netsync_tx_announce", util.DefaultBatcherDrainTimeout, sm.txAnnounceBatcher.Close)
+}
+
+// SyncPeerID returns the ID of the current sync peer, or 0 if there is none.
+//
+// It reads syncPeer under its mutex rather than round-tripping through
+// msgChan. The old message path could block for ever: reply was unbuffered and
+// blockHandler is its only responder, so a call racing SyncManager.Stop had
+// nothing left to answer it. The value is identical either way — storeSyncPeer
+// is the only writer and takes the same lock — and this keeps a caller off
+// blockHandler, which is the sync manager's single serialization point for
+// disconnects, sync-peer rotation, inv, headers and tx dispatch.
+func (sm *SyncManager) SyncPeerID() int32 {
+	if sp := sm.loadSyncPeer(); sp != nil {
+		return sp.ID()
+	}
+
+	return 0
 }
 
 // IsCurrent returns whether the sync manager believes it is synced with
@@ -2231,11 +3702,11 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		settings:     tSettings,
 		peerNotifier: config.PeerNotifier,
 		// txMemPool:     config.TxMemPool,
-		orphanTxs:       expiringmap.New[chainhash.Hash, *orphanTxAndParents](tSettings.Legacy.OrphanEvictionDuration),
+		orphanTxs:       expiringmap.New[chainhash.Hash, *orphanTxAndParents](tSettings.Legacy.OrphanEvictionDuration).WithMaxSize(tSettings.Legacy.MaxOrphanTxs),
 		chainParams:     config.ChainParams,
-		rejectedTxns:    txmap.NewSyncedMap[chainhash.Hash, struct{}](maxRejectedTxns), // limit map size to maxRejectedTxns
-		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),   // give peers 10 seconds to respond
-		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](60 * time.Second),   // give peers 60 seconds to respond
+		rejectedTxns:    txmap.NewSyncedMap[chainhash.Hash, struct{}](maxRejectedTxns),         // limit map size to maxRejectedTxns
+		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),           // give peers 10 seconds to respond
+		requestedBlocks: expiringmap.New[chainhash.Hash, blockRequestOrigin](60 * time.Second), // give peers 60 seconds to respond
 		peerStates:      txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
 		// progressLogger:  newBlockProgressLogger("Processed", log),
 		msgChan:          make(chan interface{}, maxMsgQueueSize),
@@ -2256,18 +3727,30 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		blockAssembly:     blockAssembly,
 	}
 
-	// create the transaction announcement batcher
-	sm.txAnnounceBatcher = batcher.NewWithDeduplicationAndPool[TxHashAndFee](maxRequestedTxns, 1*time.Second, func(batch []*TxHashAndFee) {
-		sm.logger.Debugf("announcing %d transactions to peers", len(batch))
+	// Bounded async block prefetch: with a positive budget OnBlock admits a
+	// block against this global byte-weighted semaphore and returns, so the
+	// read-loop downloads the next block while the current one is validated.
+	// The budget caps the total serialized bytes of in-flight blocks; a budget
+	// of 0 disables prefetch entirely (synchronous, one-block-in-flight).
+	if budget := tSettings.Legacy.BlockPrefetchBufferBytes; budget > 0 {
+		sm.blockPrefetchBudgetBytes = budget
+		sm.blockPrefetchBudget = semaphore.NewWeighted(budget)
+		// Dedup half of the same admission gate as the budget semaphore, created
+		// in lockstep with it: paired 1:1 with each budget reservation so at most
+		// one copy of a block hash is ever admitted/queued at a time.
+		sm.inFlightBlocks = make(map[chainhash.Hash]struct{})
+	}
 
-		// process the batch
-		sm.peerNotifier.AnnounceNewTransactions(batch)
-	}, true,
-		batcher.WithName("netsync_tx_announce"),
-		batcher.WithLogger(logger),
-		batcher.WithMetrics(batchermetrics.Provider()),
-		batcher.WithTracer(tracing.Tracer("SyncManager").OTelTracer()),
-	)
+	// The fail-closed inline lever is a no-op unless the outpoint-only below-checkpoint
+	// path is also enabled (legacyFailClosed depends on legacyOutpointOnly). Warn so an
+	// operator A/B-testing the new flag alone is not silently getting nothing.
+	if tSettings.BlockValidation.LegacyBelowCheckpointFailClosed && !tSettings.BlockValidation.OutpointOnlyBelowCheckpoint {
+		logger.Warnf("[netsync] blockvalidation_legacy_below_checkpoint_fail_closed is set but has no effect without blockvalidation_outpoint_only_below_checkpoint")
+	}
+
+	// create the transaction announcement batcher
+	sm.announceParents = txmap.NewSyncedMap[chainhash.Hash, []chainhash.Hash](2 * maxRequestedTxns)
+	sm.txAnnounceBatcher = sm.newTxAnnounceBatcher(maxRequestedTxns, 1*time.Second)
 
 	// set an eviction function for orphan transactions
 	// this will be called when an orphan transaction is evicted from the map
@@ -2275,7 +3758,35 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		// try to process one last time
 		// passing in block height 0, which will default to utxo store block height in validator
 		if _, err := sm.validationClient.Validate(sm.ctx, orphanTx.tx, 0); err != nil {
-			sm.logger.Debugf("failed to validate orphan transaction when evicting %v: %v", txHash, err)
+			// ErrTxUnlockFailed means the orphan was ACCEPTED - spent, created and delivered to
+			// block assembly - and only an unlock is outstanding, so it is not a validation
+			// failure. Every other Validate call site branches on this code; leaving it out here
+			// costs a misleading "failed to validate" line for a transaction the node took.
+			if errors.Is(err, errors.ErrTxUnlockFailed) {
+				sm.logger.Debugf("evicted orphan transaction %v, it was accepted with its unlock pending", txHash)
+			} else {
+				// The tx is now dropped for good: it never validated and nothing will
+				// retry it. This is the event that hid the #1214 ghost-spender incident
+				// for ~40 hours, so every abandonment is counted — the metric is the
+				// dashboard signal.
+				//
+				// Only ErrTxMissingParent is demoted to Debugf: the orphan outlived its
+				// wait for a parent that never arrived, which is the normal outcome for a
+				// chunk of orphans during initial sync and carries no operator signal.
+				// ErrTxLocked stays at WARN even though the parking path treats it as an
+				// orphan class alongside ErrTxMissingParent — it means the parent's record
+				// is still two-phase-commit locked pending block-assembly ack, a window
+				// measured in milliseconds, so a lock that outlived the whole orphan TTL
+				// is anomalous rather than routine. Everything else (policy rejection,
+				// storage failure) stays at WARN for the obvious reason.
+				prometheusLegacyNetsyncOrphansAbandoned.Inc()
+
+				if errors.Is(err, errors.ErrTxMissingParent) {
+					sm.logger.Debugf("orphan transaction %v abandoned after eviction, never validated: %v", txHash, err)
+				} else {
+					sm.logger.Warnf("orphan transaction %v abandoned after eviction, never validated: %v", txHash, err)
+				}
+			}
 		} else {
 			sm.logger.Debugf("evicted orphan transaction %v", txHash)
 		}
@@ -2286,6 +3797,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// add the number of orphan transactions to the prometheus metric
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
 
 		for {
 			select {
@@ -2305,10 +3817,30 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		return nil, err
 	}
 
+	// Build the per-block backoff map only after the last fallible step above.
+	// newBlockFailureBackoffMap starts a background eviction goroutine that is
+	// only stopped via SyncManager.Stop(); constructing it before an early
+	// error return would leak that goroutine, since the caller receives a nil
+	// SyncManager and can never call Stop() (#1187, review).
+	sm.blockFailureBackoff = newBlockFailureBackoffMap(tSettings.Legacy.BlockFailureBackoffBase, tSettings.Legacy.BlockFailureBackoffMaxDuration, tSettings.Legacy.PeerProcessingTimeout)
+
+	// Tracks recently-failed block hashes so descendants of an unstored/rejected
+	// block are short-circuited rather than triggering a NOT_FOUND ERROR cascade
+	// (#1333). Like blockFailureBackoff this starts a background eviction goroutine
+	// stopped only via Stop(), so build it after the last fallible step above.
+	sm.recentlyFailedBlocks = expiringmap.New[chainhash.Hash, struct{}](recentlyFailedBlocksTTL).WithMaxSize(blockFailureBackoffMaxTracked)
+
+	// Per-(hash, peerID) corrupt re-download cap (bitcoin-sv/teranode#4692), keyed on the serving peer
+	// so a bad peer never wedges an honest tip. The map's retention equals the cooldown window so an
+	// entry survives its own window even with no further deliveries; the LOGICAL fixed window lives in
+	// corruptAttemptState.windowExpiry (Set re-extends map retention but never the logical window).
+	// Like the maps above, started here after the last fallible step.
+	sm.blockCorruptAttempts = expiringmap.New[legacyCorruptAttemptKey, *corruptAttemptState](legacyCorruptAttemptCooldown(tSettings)).WithMaxSize(blockFailureBackoffMaxTracked)
+
 	if !config.DisableCheckpoints {
 		bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)
 		if err != nil {
-			sm.logger.Errorf("failed to convert block height to int32: %v", err)
+			sm.logger.Errorf(failedToConvertBlockHeightInt32Msg, err)
 		}
 
 		// Initialize the next checkpoint based on the current height.
@@ -2330,7 +3862,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 	txControlChan := make(chan bool, 1)    // control channel for transaction-related listeners (buffered to prevent blocking)
 
 	// start a go routine to control the kafka listeners based on FSM state
-	// Block-related listeners (INV, blocks final): enabled when NOT in LEGACYSYNCING state
+	// Block-related listeners (INV, blocks final): always enabled
 	// Transaction-related listeners (txmeta): enabled only when in RUNNING state
 	go func() {
 		for {
@@ -2338,9 +3870,11 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 			case <-ctx.Done():
 				return
 			case <-time.After(1 * time.Second):
-				// Block-related listeners: enable when NOT in LEGACYSYNCING
-				isLegacySyncing, _ := sm.blockchainClient.IsFSMCurrentState(sm.ctx, teranodeblockchain.FSMStateLEGACYSYNCING)
-				blockEnabled := !isLegacySyncing
+				// Block-related listeners are always enabled. The only FSM state
+				// that previously disabled them (legacy sync mode) was removed; no
+				// automated path ever entered it — an operator could only reach it
+				// manually via the setfsmstate CLI / FSM admin endpoint.
+				blockEnabled := true
 
 				// Non-blocking send to avoid deadlock if no one is reading
 				select {
@@ -2374,13 +3908,15 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 			return
 		}
 
+		// Retain the producer (DC11) so SyncManager.Stop() can flush it synchronously.
+		sm.legacyKafkaInvProducer = producer
+
 		// start a go routine to start the kafka producer
 		go func() {
 			producer.Start(sm.ctx, sm.legacyKafkaInvCh)
 		}()
 
 		// INV listener receives inventory messages from other nodes
-		// Disabled during LEGACYSYNCING to reduce processing load during catch-up
 		controlCh := make(chan bool)
 		blockListenersCh = append(blockListenersCh, controlCh)
 
@@ -2471,42 +4007,49 @@ func (sm *SyncManager) kafkaINVListener(ctx context.Context, kafkaURL *url.URL, 
 }
 
 func (sm *SyncManager) kafkaBlocksFinalListener(ctx context.Context, kafkaURL *url.URL, groupID string) {
-	kafka.StartKafkaListener(ctx, sm.logger, kafkaURL, groupID, true, func(msg *kafka.KafkaMessage) error {
-		if msg.Key == nil {
-			sm.logger.Errorf("[kafkaBlocksFinalListener] no Kafka message key specified, skipping message")
-			// not going to retry, if we don't have a key/hash
-			return nil
-		}
+	kafka.StartKafkaListener(ctx, sm.logger, kafkaURL, groupID, true, sm.processBlocksFinalMessage, &sm.settings.Kafka)
+}
 
-		hash, err := chainhash.NewHashFromStr(string(msg.Key))
-		if err != nil {
-			sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to create hash from Kafka message key: %v", hash, err)
-			// not going to retry, if we cannot parse the message
-			return nil
-		}
-
-		var blockMsg kafkamessage.KafkaBlocksFinalTopicMessage
-		if err := proto.Unmarshal(msg.Value, &blockMsg); err != nil {
-			sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to unmarshal kafka block topic message: %v", hash, err)
-			// not going to retry, if we cannot parse the message
-			return nil
-		}
-
-		header, err := model.NewBlockHeaderFromBytes(blockMsg.Header)
-		if err != nil {
-			sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to create block header from Kafka message: %v", hash, err)
-			// not going to retry, if we cannot parse the message
-			return nil
-		}
-
-		// create wireBlockHeader
-		wireBlockHeader := header.ToWireBlockHeader()
-
-		sm.logger.Infof("[kafkaBlocksFinalListener] received block final message from Kafka: %s, %s", hash, header.String())
-		sm.peerNotifier.RelayInventory(wire.NewInvVect(wire.InvTypeBlock, hash), wireBlockHeader)
-
+// processBlocksFinalMessage announces a block from the blocks_final topic to
+// peers and signals the rebroadcast queue that a new block has been added.
+// Malformed messages are logged and skipped; it never returns an error, so
+// the listener does not retry them.
+func (sm *SyncManager) processBlocksFinalMessage(msg *kafka.KafkaMessage) error {
+	if msg.Key == nil {
+		sm.logger.Errorf("[kafkaBlocksFinalListener] no Kafka message key specified, skipping message")
+		// not going to retry, if we don't have a key/hash
 		return nil
-	}, &sm.settings.Kafka)
+	}
+
+	hash, err := chainhash.NewHashFromStr(string(msg.Key))
+	if err != nil {
+		sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to create hash from Kafka message key: %v", hash, err)
+		// not going to retry, if we cannot parse the message
+		return nil
+	}
+
+	var blockMsg kafkamessage.KafkaBlocksFinalTopicMessage
+	if err := proto.Unmarshal(msg.Value, &blockMsg); err != nil {
+		sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to unmarshal kafka block topic message: %v", hash, err)
+		// not going to retry, if we cannot parse the message
+		return nil
+	}
+
+	header, err := model.NewBlockHeaderFromBytes(blockMsg.Header)
+	if err != nil {
+		sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to create block header from Kafka message: %v", hash, err)
+		// not going to retry, if we cannot parse the message
+		return nil
+	}
+
+	// create wireBlockHeader
+	wireBlockHeader := header.ToWireBlockHeader()
+
+	sm.logger.Infof("[kafkaBlocksFinalListener] received block final message from Kafka: %s, %s", hash, header.String())
+	sm.peerNotifier.RelayInventory(wire.NewInvVect(wire.InvTypeBlock, hash), wireBlockHeader)
+	sm.peerNotifier.BlockConnected()
+
+	return nil
 }
 
 // kafkaTXmetaListener processes TxMeta Kafka messages in binary batch format.
@@ -2524,32 +4067,81 @@ func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.UR
 	}, &sm.settings.Kafka)
 }
 
-const (
-	txmetaActionADD    = byte(0)
-	txmetaActionDELETE = byte(1)
-)
-
 // processTXmetaBatchMessage processes a binary batch message from the txmeta Kafka topic.
 // It parses the batch format, deserializes metadata for ADD entries, and announces
 // non-coinbase transactions to peers via the txAnnounceBatcher.
 // Coinbase transactions are intentionally skipped to avoid peer bans.
+//
+// Two wire formats are accepted, distinguished by a multi-byte signature at
+// the start of the message (mirrors services/subtreevalidation/txmetaHandler.go):
+//
+//	v1 (legacy)
+//	  [4 bytes] entry count (uint32 LE)
+//	  per entry: [32 hash][1 action][4 contentLen][N content]
+//
+//	v2 (partition-aware)
+//	  [1 byte magic=0xFF][1 byte version=0x02][2 reserved=0][4 entry count LE]
+//	  per entry: [8 xxhash][32 hash][1 action][4 contentLen][N content]
+//
+// v2 detection requires the full 4-byte header signature AND a plausible
+// entry count for the buffer length, otherwise the message is parsed as v1.
+// This avoids misclassifying v1 messages whose entry count happens to begin
+// with 0xFF (counts 255, 511, 767, ...).
+//
+// The xxhash prefix in v2 is read and discarded — netsync only needs the
+// 32-byte tx hash to announce; partition-aligned cache writes are a
+// subtreevalidation concern.
 func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 	if len(data) < 4 {
 		return nil
 	}
 
-	offset := 0
+	var (
+		offset     int
+		entryCount uint32
+		isV2       bool
+	)
 
-	// Read entry count
-	entryCount := binary.LittleEndian.Uint32(data[offset:])
-	offset += 4
+	// Speculative v2 detection: require the full header signature
+	// (magic + version + reserved bytes) and an entry count that fits in the
+	// remaining buffer at the minimum v2 entry size. Any failure falls
+	// through to v1 — never silently drops a valid v1 message.
+	if len(data) >= txmetacache.WireV2HeaderLen &&
+		data[0] == txmetacache.WireV2Magic &&
+		data[1] == txmetacache.WireV2Version &&
+		data[2] == 0 && data[3] == 0 {
+		candidateCount := binary.LittleEndian.Uint32(data[4:])
+		remaining := uint64(len(data) - txmetacache.WireV2HeaderLen)
+		if uint64(candidateCount)*uint64(txmetacache.WireV2MinEntrySize) <= remaining {
+			entryCount = candidateCount
+			offset = txmetacache.WireV2HeaderLen
+			isV2 = true
+		}
+	}
+
+	if !isV2 {
+		entryCount = binary.LittleEndian.Uint32(data[:4])
+		offset = 4
+	}
+
+	// Per-entry header size (excluding content). The shared constants in
+	// stores/txmetacache encode the same numbers; using them here keeps
+	// the producer and the receiver pinned to one source of truth.
+	entryHeaderSize := txmetacache.WireV1MinEntrySize
+	if isV2 {
+		entryHeaderSize = txmetacache.WireV2MinEntrySize
+	}
 
 	// Process each entry
 	for i := uint32(0); i < entryCount; i++ {
-		// Check minimum bytes for hash + action + length
-		if offset+32+1+4 > len(data) {
+		if offset+entryHeaderSize > len(data) {
 			sm.logger.Errorf("[kafkaTXmetaListener] truncated message at entry %d", i)
 			return nil
+		}
+
+		// v2: skip the 8-byte xxhash prefix; netsync doesn't use it.
+		if isV2 {
+			offset += 8
 		}
 
 		// Read hash (32 bytes)
@@ -2565,7 +4157,7 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 		contentLen := binary.LittleEndian.Uint32(data[offset:])
 		offset += 4
 
-		if action == txmetaActionADD {
+		if action == txmetacache.WireActionADD {
 			// Handle ADD
 			if offset+int(contentLen) > len(data) {
 				sm.logger.Errorf("[kafkaTXmetaListener] truncated content at entry %d", i)
@@ -2587,11 +4179,21 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 				continue
 			}
 
-			sm.txAnnounceBatcher.Put(&TxHashAndFee{
+			// Never announce transactions that arrived as part of a block or
+			// announced subtree. The txmeta topic also carries those (block
+			// validation, subtree validation, legacy sync pre-warm) to populate
+			// the subtree-validation cache; relaying them as fresh mempool txs
+			// floods peers with getdata for transactions that are long mined —
+			// and often already pruned.
+			if txMeta.InBlock {
+				continue
+			}
+
+			sm.announceTx(&TxHashAndFee{
 				TxHash: hash,
 				Fee:    txMeta.Fee,
 				Size:   txMeta.SizeInBytes,
-			})
+			}, txMeta.TxInpoints.ParentTxHashes...)
 		} else {
 			offset += int(contentLen)
 			continue
@@ -2599,4 +4201,11 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 	}
 
 	return nil
+}
+
+// suppressBlockRejects reports whether invalid blocks must not be rejected to the
+// serving peer. Only RUNNING proves the node is caught up; IDLE is included
+// because an operator STOP can land while blocks are still syncing.
+func suppressBlockRejects(state *teranodeblockchain.FSMStateType) bool {
+	return state == nil || *state != teranodeblockchain.FSMStateRUNNING
 }

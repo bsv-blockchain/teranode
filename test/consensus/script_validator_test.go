@@ -136,7 +136,7 @@ func TestScriptValidationWithValidators(t *testing.T) {
 // createTestTransaction creates a transaction for script validation testing
 func createTestTransaction(sigScript, pubKeyScript []byte) *bt.Tx {
 	// Create a dummy previous transaction hash
-	prevTxHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000000")
+	prevTxHash, _ := chainhash.NewHashFromStr(testPrevTxID)
 
 	// Create transaction
 	tx := bt.NewTx()
@@ -181,7 +181,8 @@ func TestValidatorAvailability(t *testing.T) {
 		PreviousTxSatoshis: 100000000,
 		PreviousTxScript:   &bscript.Script{},
 	}
-	_ = input.PreviousTxIDAdd(&chainhash.Hash{})
+	prevTxHash, _ := chainhash.NewHashFromStr(testPrevTxID)
+	_ = input.PreviousTxIDAdd(prevTxHash)
 	tx.Inputs = append(tx.Inputs, input)
 
 	tx.Outputs = append(tx.Outputs, &bt.Output{
@@ -195,7 +196,7 @@ func TestValidatorAvailability(t *testing.T) {
 
 	for _, v := range validators {
 		t.Run(string(v), func(t *testing.T) {
-			result := validator.ValidateScript(v, tx, 0, []uint32{0})
+			result := validator.ValidateTransaction(v, tx, 0, []uint32{0})
 			if result.Error != nil && result.Error.Error() == fmt.Sprintf("%s validator not registered", v) {
 				t.Skipf("%s validator not available", v)
 			} else {

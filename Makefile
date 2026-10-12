@@ -68,7 +68,7 @@ dev-dashboard:
 	npm install --prefix ./ui/dashboard && npm run dev --prefix ./ui/dashboard
 
 .PHONY: build
-# build-blockchainstatus build-tx-blaster build-propagation-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster build-s3-blaster build-chainintegrity
+# build-propagation-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster build-s3-blaster build-chainintegrity
 build: update_config build-teranode-with-dashboard build-teranode-cli clean_backup
 
 .PHONY: update_config
@@ -117,10 +117,6 @@ build-teranode-ci: set_debug_flags set_txmetacache_flag
 build-chainintegrity: set_debug_flags
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -o chainintegrity.run ./compose/cmd/chainintegrity/
 
-.PHONY: build-tx-blaster
-build-tx-blaster: set_debug_flags
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o blaster.run ./cmd/txblaster/
-
 .PHONY: build-teranode-cli
 build-teranode-cli:
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -o teranode-cli ./cmd/teranodecli
@@ -144,10 +140,6 @@ build-teranode-dev:
 # .PHONY: build-blockassembly-blaster
 # build-blockassembly-blaster: set_debug_flags
 # 	go build --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o blockassemblyblaster.run ./cmd/blockassembly_blaster/main.go
-
-.PHONY: build-blockchainstatus
-build-blockchainstatus:
-	go build -o blockchainstatus.run ./cmd/blockchainstatus/
 
 # .PHONY: build-aerospiketest
 # build-aerospiketest:
@@ -185,13 +177,25 @@ install-tools:
 .PHONY: test
 test:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
-	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
+	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
 
-# run tests in the test/longtest directory
+# run tagged service regressions and tests in the test/longtest directory
 .PHONY: longtest
 longtest:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache longtest" -count=1 -timeout=10m -run '^TestLegacyHistoricalTestnetSync$$' ./services/legacy/netsync
 	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"
+
+# run the soak test: the in-process daemon under steady tx load for SOAK_DURATION, failing if heap or goroutine
+# counts trend upward. No -race: the detector skews memory and throughput, which is what this test measures.
+# SOAK_TIMEOUT must exceed SOAK_DURATION by at least 10m. Other knobs (SOAK_WARMUP, SOAK_SAMPLE_INTERVAL,
+# SOAK_TXS_PER_CYCLE, SOAK_UTXO_STORE, SOAK_OUTPUT_DIR, SOAK_INJECT_LEAK) are read from the environment.
+# Example: make soaktest SOAK_DURATION=2h SOAK_TIMEOUT=150m
+SOAK_DURATION ?= 30m
+SOAK_TIMEOUT ?= 60m
+.PHONY: soaktest
+soaktest:
+	SETTINGS_CONTEXT=test SOAK_DURATION=$(SOAK_DURATION) go test -v -count=1 -tags "soak testtxmetacache" -timeout=$(SOAK_TIMEOUT) -run '^TestSoakSteadyLoad$$' ./test/soak/...
 
 # run tests in the test/sequentialtest directory in order, one by one
 # Environment variables:
@@ -219,8 +223,55 @@ sequentialtest-aerospike:
 	@mkdir -p /tmp/teranode-test-results
 	TEST_RETRY_COUNT=$(TEST_RETRY_COUNT) TEST_RETRY_DELAY=$(TEST_RETRY_DELAY) logLevel=INFO test/scripts/run_tests_sequentially.sh --db aerospike 2>&1 | tee /tmp/teranode-test-results/sequentialtest-aerospike-results.txt
 
+.PHONY: sequentialtest-shard
+sequentialtest-shard:
+	@mkdir -p /tmp/teranode-test-results
+	TEST_RETRY_COUNT=$(TEST_RETRY_COUNT) TEST_RETRY_DELAY=$(TEST_RETRY_DELAY) logLevel=INFO \
+		test/scripts/run_tests_sequentially.sh --shard $(SHARD) --total $(TOTAL) 2>&1 \
+		| tee /tmp/teranode-test-results/sequentialtest-shard-$(SHARD)-results.txt
+
 .PHONY: testall
 testall: test longtest sequentialtest
+
+# Fuzz targets as "package:FuzzTarget" pairs. Keep in sync with the matrix in
+# .github/workflows/fuzz.yaml, which fuzzes the same list nightly with a larger
+# budget.
+#
+# A Go fuzz target only mutates inputs when invoked with -fuzz. Under `make
+# test` these same functions merely replay their committed seed corpus as
+# ordinary table tests, so they can never find a new crashing input - running
+# them here is the only way to actually fuzz them locally.
+FUZZ_TARGETS = \
+	model:FuzzNewBlockFromBytes \
+	model:FuzzReadBlockFromReader \
+	model:FuzzDiskParentSpendsMap_Parity \
+	pkg/fileformat:FuzzHeaderParsersAgree \
+	pkg/fileformat:FuzzReadHeaderFromBytes \
+	services/utxopersister:FuzzUTXOWrapperFromBytes \
+	services/legacy/peer:FuzzReadWireMessage \
+	services/legacy/peer:FuzzStreamingBlockFraming \
+	services/rpc/bsvjson:FuzzParseRPCRequest \
+	services/rpc/bsvjson:FuzzUnmarshalCmd
+
+# Per-target budget. The nightly workflow uses 5m; the default here is kept
+# short so `make fuzz` is usable as a pre-push check.
+FUZZTIME ?= 30s
+# Minimization is unbounded by default, which can outlast the budget and hide
+# the crasher. Cap it so a hit is always written out.
+FUZZMINIMIZETIME ?= 60s
+
+# Fuzz every target in FUZZ_TARGETS, stopping at the first crasher.
+# A discovered input is written to <package>/testdata/fuzz/<Target>/<hash>
+# along with a `go test -run=<Target>/<hash>` reproducer.
+# Example: make fuzz FUZZTIME=5m
+.PHONY: fuzz
+fuzz:
+	@for t in $(FUZZ_TARGETS); do \
+		pkg=$${t%%:*}; target=$${t##*:}; \
+		echo "==> $$target ($$pkg), $(FUZZTIME)"; \
+		go test -run='^$$' -fuzz="^$$target$$" -fuzztime=$(FUZZTIME) \
+			-fuzzminimizetime=$(FUZZMINIMIZETIME) ./$$pkg/ || exit 1; \
+	done
 
 # run tests in the test/e2e/daemon directory
 # Tests run in parallel by default - each test gets unique ports and data directories
@@ -233,12 +284,16 @@ testall: test longtest sequentialtest
 smoketest:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	@mkdir -p /tmp/teranode-test-results
-	@if [ "$(TEST_RETRY_COUNT)" != "1" ]; then \
+	@RUN_ARG='.'; \
+	if [ -n "$(TOTAL)" ]; then \
+		RUN_ARG="$$(test/scripts/list_test_shard.sh test/e2e/daemon/ready $(SHARD) $(TOTAL) 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestMultistreamLongestChainSelection|TestBlobDeletion|TestPruner|TestShouldAllowSubmitMiningSolutionUsingMiningCandidateFromRPC|TestShouldRejectOversizedTx|TestLegacyTxBroadcast942_TeranodeRPCToSVMempool')"; \
+	fi; \
+	if [ "$(TEST_RETRY_COUNT)" != "1" ]; then \
 		echo "Running smoketest with retry support (TEST_RETRY_COUNT=$(TEST_RETRY_COUNT))"; \
-		cd test/e2e/daemon/ready && TEST_RETRY_COUNT=$(TEST_RETRY_COUNT) TEST_RETRY_DELAY=$(TEST_RETRY_DELAY) ../../../../test/scripts/gotestsum_with_retry.sh --format pkgname -- -v -count=1 -race -timeout=20m -parallel 1 -skip 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestMultistreamLongestChainSelection|TestBlobDeletion|TestPruner|TestShouldAllowSubmitMiningSolutionUsingMiningCandidateFromRPC|TestShouldRejectOversizedTx' -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt; \
+		cd test/e2e/daemon/ready && TEST_RETRY_COUNT=$(TEST_RETRY_COUNT) TEST_RETRY_DELAY=$(TEST_RETRY_DELAY) ../../../../test/scripts/gotestsum_with_retry.sh --format pkgname -- -v -count=1 -race -timeout=20m -parallel 1 -skip 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestMultistreamLongestChainSelection|TestBlobDeletion|TestPruner|TestShouldAllowSubmitMiningSolutionUsingMiningCandidateFromRPC|TestShouldRejectOversizedTx|TestLegacyTxBroadcast942_TeranodeRPCToSVMempool' -run "$$RUN_ARG" 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt; \
 	else \
 		echo "Running smoketest without retry (TEST_RETRY_COUNT=1)"; \
-		cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=10m -parallel 1 -skip 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestMultistreamLongestChainSelection|TestBlobDeletion|TestPruner|TestShouldAllowSubmitMiningSolutionUsingMiningCandidateFromRPC|TestShouldRejectOversizedTx' -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt; \
+		cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=10m -parallel 1 -skip 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestMultistreamLongestChainSelection|TestBlobDeletion|TestPruner|TestShouldAllowSubmitMiningSolutionUsingMiningCandidateFromRPC|TestShouldRejectOversizedTx|TestLegacyTxBroadcast942_TeranodeRPCToSVMempool' -run "$$RUN_ARG" 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt; \
 	fi
 
 # run pruner e2e tests - heavyweight tests that mine blocks and verify pruning behavior
@@ -254,7 +309,7 @@ prunertest:
 legacy-sync:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	@mkdir -p /tmp/teranode-test-results
-	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=15m -run 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestBIP68' 2>&1 | tee /tmp/teranode-test-results/legacy-sync-results.txt
+	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=15m -run 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestBIP68|TestLegacyTxBroadcast942_TeranodeRPCToSVMempool' 2>&1 | tee /tmp/teranode-test-results/legacy-sync-results.txt
 
 # run chain integrity tests - multi-node tests with deep chain verification
 # This test mines blocks across multiple nodes and verifies chain consistency
@@ -270,6 +325,17 @@ network-chaos-test:
 	@docker image inspect teranode:latest >/dev/null 2>&1 || { echo "teranode:latest image not found. Run 'make build' (or 'compose/multinode.sh up N --build') first."; exit 1; }
 	@mkdir -p /tmp/teranode-test-results
 	cd test/multinode && gotestsum --format pkgname -- -v -count=1 -tags network_chaos -timeout=30m -parallel=1 -run . 2>&1 | tee /tmp/teranode-test-results/network-chaos-results.txt
+
+# Split-per-service variant of the network-chaos suite. Brings up its own
+# -allinone=0 stack (~32 containers) so per-service chaos verbs are available.
+# Kept separate from network-chaos-test because the two stacks cannot coexist
+# and the split topology takes materially longer to start.
+.PHONY: network-chaos-test-split
+network-chaos-test-split:
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	@docker image inspect teranode:latest >/dev/null 2>&1 || { echo "teranode:latest image not found. Run 'make build' (or 'compose/multinode.sh up N --build') first."; exit 1; }
+	@mkdir -p /tmp/teranode-test-results
+	cd test/multinode_split && gotestsum --format pkgname -- -v -count=1 -tags network_chaos -timeout=40m -parallel=1 -run . 2>&1 | tee /tmp/teranode-test-results/network-chaos-split-results.txt
 
 .PHONY: nightly-tests
 nightly-tests:
@@ -476,8 +542,6 @@ clean_gen:
 .PHONY: clean
 clean:
 	rm -f ./teranode_*.tar.gz
-	rm -f blaster.run
-	rm -f blockchainstatus.run
 	rm -rf build/
 	rm -f coverage.out
 
@@ -490,9 +554,44 @@ install-lint:
 # lint will check the changed files in the current branch compared to main, including commits and unstaged/untracked changes
 # It will show new linting errors/warnings, by updating local copy of origin/main with the latest state of the remote main branch.
 .PHONY: lint
-lint:
+lint: lint-tracing-info
 	git fetch origin main
 	golangci-lint run ./... --new-from-rev origin/main --disable gosec --disable prealloc # TODO: re-enable gosec once gosec >v2.23.0 is released (fixes float constant panic)
+
+# tracing.WithLogMessage logs at INFO on span start AND again on span end, so each
+# call site costs two INFO lines per operation. Sites on per-transaction,
+# per-subtree or per-request paths belong on tracing.WithDebugLogMessage instead.
+# This gate pins that count exactly, so it ratchets both ways: adding a site
+# fails, and so does removing one without lowering the number here. Otherwise a
+# demotion would free a slot that a later INFO site could take unnoticed.
+# Change TRACING_INFO_SITES in the same commit as the site, and say why.
+# Only production code counts: test files are excluded so that deleting a test
+# cannot silently free a slot for a new production INFO site.
+TRACING_INFO_SITES := 61
+
+.PHONY: lint-tracing-info
+lint-tracing-info:
+	@count=$$(git grep -oh "tracing\.WithLogMessage(" -- '*.go' ':!*_test.go' ':!test/**' | wc -l | tr -d ' '); \
+	if [ "$$count" -lt 1 ]; then \
+		echo "lint-tracing-info: counted $$count sites, which cannot be right."; \
+		echo "Either the count command failed (not a git checkout, or git grep"; \
+		echo "unavailable) or tracing.WithLogMessage was renamed and this gate needs"; \
+		echo "updating. Failing rather than passing silently."; \
+		exit 1; \
+	fi; \
+	if [ "$$count" -gt "$(TRACING_INFO_SITES)" ]; then \
+		echo "tracing.WithLogMessage sites: $$count (expected $(TRACING_INFO_SITES))"; \
+		echo "Each is two INFO lines per operation. Use tracing.WithDebugLogMessage on"; \
+		echo "per-tx/per-subtree/per-request paths, or raise TRACING_INFO_SITES deliberately."; \
+		exit 1; \
+	elif [ "$$count" -lt "$(TRACING_INFO_SITES)" ]; then \
+		echo "tracing.WithLogMessage sites: $$count (expected $(TRACING_INFO_SITES))"; \
+		echo "A site was removed or demoted. Lower TRACING_INFO_SITES to $$count in the"; \
+		echo "same change, so the freed slot cannot be reused by a new INFO site."; \
+		exit 1; \
+	else \
+		echo "tracing.WithLogMessage sites: $$count (expected $(TRACING_INFO_SITES)) OK"; \
+	fi
 
 # lint-new will only check only your unstaged/untracked changes (not committed changes), or fallback to check last commit if no changes in checkout
 # It is useful for quickly checking that your current, uncommitted work doesn't introduce new lint errors.

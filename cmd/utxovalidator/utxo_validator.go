@@ -11,10 +11,10 @@ import (
 	"io"
 	"os"
 	"strconv"
-	"strings"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
@@ -68,20 +68,18 @@ func ValidateUTXOFile(ctx context.Context, path string, logger ulogger.Logger, s
 }
 
 // validateUTXOSet reads a UTXO set from the reader and validates the total satoshi amount.
+//
+// The reader is expected to be positioned past the 8-byte fileformat magic.
+// Both supported sources satisfy that contract: getLocalFileReader consumes
+// and validates the magic before returning, and blockStore.GetIoReader does
+// so internally via the store layer (stores/blob/file/file.go's
+// validateFileHeader). Calling fileformat.ReadHeader here would re-consume
+// 8 bytes of the body — the first bytes of the block hash field — and fail
+// with "unknown magic: [<random hash bytes>]".
 func validateUTXOSet(ctx context.Context, r io.Reader, verbose bool) (*UTXOValidationResult, error) {
 	result := &UTXOValidationResult{}
 
 	br := bufio.NewReaderSize(r, 64*1024) // 64KB buffer - sufficient for CLI tool validation
-
-	// Read file header to verify this is a UTXO set file
-	header, err := fileformat.ReadHeader(br)
-	if err != nil {
-		return nil, errors.NewProcessingError("error reading file header", err)
-	}
-
-	if header.FileType() != fileformat.FileTypeUtxoSet {
-		return nil, errors.NewProcessingError("file is not a UTXO set file, got: %s", header.FileType())
-	}
 
 	// Read current block hash (32 bytes) - this matches what filereader calls "previous block hash"
 	// but it's actually the current block hash based on the filereader output
@@ -121,17 +119,45 @@ func validateUTXOSet(ctx context.Context, r io.Reader, verbose bool) (*UTXOValid
 
 	for {
 		if err = utxoWrapper.FromReader(ctx, br, false); err != nil {
-			if err == io.EOF {
-				break // End of file reached
-			}
-			// Handle unexpected EOF more gracefully - this can happen at the end of large files
-			errStr := err.Error()
-			if strings.Contains(errStr, "failed to read txid") || strings.Contains(errStr, "unexpected EOF") {
-				fmt.Printf("Reached end of file after processing %d transactions\n", processedWrappers)
-				break
+			// utxopersister writers unconditionally append a 16-byte footer
+			// (txCount||utxoCount) after the final record, with no marker
+			// byte in front of it. The only way this loop can legitimately
+			// be done is if the next read lands exactly on those footer
+			// bytes (reported via ErrRecordBoundary) and the footer's
+			// counts agree with what was actually read here. Anything else
+			// - a bare io.EOF (only possible if the footer itself is
+			// missing), a short read at any other offset, or an
+			// ErrRecordBoundary whose footer bytes don't match - is a
+			// genuine truncation and must fail loudly rather than being
+			// reported as a successful, complete validation.
+			var boundary *utxopersister.ErrRecordBoundary
+			if !errors.As(err, &boundary) {
+				return nil, errors.NewProcessingError("error reading UTXO wrapper", err)
 			}
 
-			return nil, errors.NewProcessingError("error reading UTXO wrapper", err)
+			expectedTxCount, expectedUTXOCount, decErr := utxopersister.DecodeFooter(boundary.FooterBytes[:])
+			if decErr != nil {
+				return nil, errors.NewProcessingError("error decoding utxo-set footer", decErr)
+			}
+
+			processedTxCount, tcErr := safeconversion.IntToUint64(processedWrappers)
+			if tcErr != nil {
+				return nil, errors.NewProcessingError("error converting processed transaction count", tcErr)
+			}
+
+			processedUTXOCount, ucErr := safeconversion.IntToUint64(result.UTXOCount)
+			if ucErr != nil {
+				return nil, errors.NewProcessingError("error converting processed UTXO count", ucErr)
+			}
+
+			if expectedTxCount != processedTxCount || expectedUTXOCount != processedUTXOCount {
+				return nil, errors.NewProcessingError("utxo-set file truncated: footer expects %d transactions/%d utxos, only %d/%d were read",
+					expectedTxCount, expectedUTXOCount, processedTxCount, processedUTXOCount)
+			}
+
+			fmt.Printf("Reached end of file after processing %d transactions\n", processedWrappers)
+
+			break
 		}
 
 		result.ActualSatoshis += utxoWrapper.UTXOTotalValue
@@ -179,11 +205,26 @@ func getUTXOFileReader(path string, logger ulogger.Logger, settings *settings.Se
 	return getLocalFileReader(path)
 }
 
-// getLocalFileReader returns a reader for a local file.
+// getLocalFileReader opens a local file, consumes and validates the
+// fileformat magic, and returns a reader positioned at the start of
+// the UTXO set body. This mirrors the contract of
+// blockStore.GetIoReader so validateUTXOSet can stay agnostic about
+// which source it's reading from.
 func getLocalFileReader(path string) (io.ReadCloser, error) {
 	fileReader, err := os.Open(path)
 	if err != nil {
 		return nil, errors.NewProcessingError("error opening file", err)
+	}
+
+	header, err := fileformat.ReadHeader(fileReader)
+	if err != nil {
+		_ = fileReader.Close()
+		return nil, errors.NewProcessingError("error reading file header", err)
+	}
+
+	if header.FileType() != fileformat.FileTypeUtxoSet {
+		_ = fileReader.Close()
+		return nil, errors.NewProcessingError("file is not a UTXO set file, got: %s", header.FileType())
 	}
 
 	return fileReader, nil

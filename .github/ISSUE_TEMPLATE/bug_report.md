@@ -7,6 +7,18 @@ assignees: ''
 
 ---
 
+> **Security vulnerabilities** (exploitable consensus bugs, funds at risk, remote crashes):
+> do not open a public issue — report privately via
+> <https://github.com/bsv-blockchain/teranode/security/advisories/new>
+
+## Severity
+
+Project policy is to tick exactly one (see the [severity criteria](https://github.com/bsv-blockchain/teranode/blob/main/docs/howto/bugReporting.md#severity)):
+
+- [ ] severity:critical — consensus failure, data loss or corruption, funds at risk, or a node that cannot sync or stay up. Impact alone decides this level; an available workaround does not downgrade it
+- [ ] severity:major — a core function is broken or badly degraded (sustained throughput loss, a service needing manual restarts), but a workaround exists
+- [ ] severity:minor — cosmetic, documentation, or low-impact issues with an easy workaround
+
 ## Describe the bug
 
 A clear and concise description of what the bug is.
@@ -32,7 +44,7 @@ If applicable, add screenshots to help explain your problem.
 
 When did the bug first occur, or when did you first notice it?
 
-## Desktop (please complete the following information):
+## Desktop (please complete the following information)
 
 - OS: [e.g. iOS]
 - Browser [e.g. chrome, safari]

@@ -22,6 +22,15 @@ func NewKafkaAsyncProducerMock() *KafkaAsyncProducerMock {
 	return client
 }
 
+// NewKafkaAsyncProducerMockWithBuffer creates a mock async producer whose
+// publish channel holds n messages, for tests that must exercise TryPublish
+// against the same buffer depth production configures.
+func NewKafkaAsyncProducerMockWithBuffer(n int) *KafkaAsyncProducerMock {
+	return &KafkaAsyncProducerMock{
+		publishChannel: make(chan *Message, n),
+	}
+}
+
 // Start implements the KafkaAsyncProducerI interface for the mock producer.
 func (c *KafkaAsyncProducerMock) Start(ctx context.Context, ch chan *Message) {
 	// mock implementation
@@ -45,4 +54,15 @@ func (c *KafkaAsyncProducerMock) PublishChannel() chan *Message {
 // Publish sends a message to the mock's publish channel.
 func (c *KafkaAsyncProducerMock) Publish(msg *Message) {
 	c.publishChannel <- msg
+}
+
+// TryPublish performs a non-blocking send to the mock's publish channel, returning
+// false if the buffer is full.
+func (c *KafkaAsyncProducerMock) TryPublish(msg *Message) bool {
+	select {
+	case c.publishChannel <- msg:
+		return true
+	default:
+		return false
+	}
 }

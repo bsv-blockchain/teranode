@@ -192,6 +192,7 @@ func setupJSONBenchmark(t *testing.T, subtreeSize int) *benchmarkSetup {
 	// Note: Mock's GetSubtree ignores context, only uses the hash parameter
 	mockRepo := &repository.Mock{}
 	mockRepo.On("GetSubtree", rootHash).Return(subtree, nil)
+	mockRepo.On("GetSubtreePage", rootHash, 0, 20).Return(subtree, 0, subtree.Length(), nil)
 	mockRepo.On("GetSubtreeTxIDsReader", rootHash).Return(
 		io.NopCloser(bytes.NewReader(subtreeBytes)), nil)
 

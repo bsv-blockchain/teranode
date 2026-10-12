@@ -242,10 +242,10 @@ Provides a reader interface for accessing subtree data from the block persister 
 #### GetSubtreeTransactions
 
 ```go
-func (repo *Repository) GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, error)
+func (repo *Repository) GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, func(), error)
 ```
 
-Retrieves all transactions contained in a subtree, returned as a map keyed by transaction hash.
+Retrieves all transactions contained in a subtree, returned as a map keyed by transaction hash. The returned release function must be called once the caller is done with the map: the `asset_concurrency_get_subtree_transactions` permit budgets the map, so it is held until release rather than until the call returns.
 
 #### GetSubtreeExists
 
@@ -440,7 +440,8 @@ The Asset Service uses the following configuration values from the settings syst
 ### Centrifuge Configuration (Real-time Updates)
 
 - `asset_centrifuge_disable`: Whether to disable Centrifuge server (default: false)
-- `asset_centrifugeListenAddress`: Centrifuge listen address (default: ":8000")
+- `asset_centrifugeListenAddress`: Non-empty enables Centrifuge (default: ":8892"). Not bound; the WebSocket is served on Asset HTTP at `/connection/websocket`
+- `asset_centrifugeAllowOrigins`: Pipe-separated extra browser origins allowed to open the WebSocket (default: "", same-host only)
 
 ### Security
 
@@ -778,6 +779,17 @@ Error responses include a JSON object with an error message:
     - Parameters: `hash` - Transaction hash
     - Returns: UTXO data array (JSON)
 
+- **POST `/api/v1/utxos`** (and `/api/v1/utxos/hex`, `/api/v1/utxos/json`)
+    - Purpose: Bulk UTXO spend-status lookup. Avoids per-record HTTP overhead and the redundant transaction fetch that would otherwise be paid per `GET /api/v1/utxo/:hash` request.
+    - Request body (identical for all three routes): concatenated 36-byte records, each `[32 bytes txid][4 bytes vout LE]`. Body length must be a multiple of 36.
+    - Response formats:
+        - **`POST /api/v1/utxos`** — Binary. Concatenated fixed-length 48-byte records in input order, each `[8 bytes status LE][4 bytes lockTime LE][4 bytes spendingVin LE][32 bytes spendingTxID]`. Unspent UTXOs have the trailing 36 bytes zero-filled; not-found records report status `utxo.Status_NOT_FOUND`. Clients can index by `i*48`.
+        - **`POST /api/v1/utxos/hex`** — Lowercase hex-encoding of the binary response. Same record layout once decoded.
+        - **`POST /api/v1/utxos/json`** — JSON array of `utxo.SpendResponse` objects in input order, e.g. `[{"status":1,"spendingData":{"txId":"...","vin":0},"lockTime":1234567}, ...]`. Use this when client tooling prefers JSON; for highest throughput, prefer the binary route.
+    - Limits: body size capped by the global `asset_httpBodyLimit` setting (default 100MB, ≈2.9M records per request). The endpoint is also gated by the heavy-route tiered rate limiter (`asset_rateLimit_heavy_*`), shared with `POST /api/v1/subtree/:hash/txs` and other fan-out endpoints.
+    - Error responses: `400` (body length not a multiple of 36), `413` (body exceeds the cap), `429` (rate-limited), `500` (transport, store failure, or recovered per-record panic).
+    - Known gap: the `lockTime` field in the response carries different semantics by backend (SQL: coinbase maturity height; Aerospike: the transaction's `nLockTime`). Pre-existing in `GET /api/v1/utxo`; surfaced more visibly here. Treat `lockTime == 0` as "not coinbase / unlocked" until the divergence is reconciled in a follow-up.
+
 ### Subtree Endpoints
 
 - **GET `/api/v1/subtree/:hash`**
@@ -806,6 +818,12 @@ Error responses include a JSON object with an error message:
     - Returns: Subtree data array (JSON) with pagination metadata
 
 ### Merkle Proof Endpoints
+
+These endpoints accept transaction IDs only. A hash with no mined transaction
+(including a subtree root) returns HTTP 404 with
+`mined transaction not found; BUMP proofs require a mined transaction ID`.
+Transactions found only in orphan blocks return HTTP 404 with
+`transaction not in main chain`.
 
 - **GET `/api/v1/merkle_proof/:hash`**
     - Purpose: Get merkle proof for a transaction (binary)
@@ -876,7 +894,9 @@ These endpoints require authentication.
 
 ### Authentication
 
-The service supports response signing. When enabled, responses include an `X-Signature` header containing an Ed25519 signature of the response data.
+The service supports resource-identifier signing. When enabled, responses include an `X-Signature` header containing an Ed25519 signature and an `X-Signature-Scope` header stating what that signature covers.
+
+The only scope currently emitted is `resource-identifier`: the signature covers the requested transaction, subtree, block or proof identifier and nothing else. It does **not** cover the HTTP status, the content type, pagination metadata or the serialized response body, and the same signature accompanies the JSON, hex and binary representations of one resource. Clients must not treat `X-Signature` as response-body integrity; for the content-addressed routes, recompute the object hash instead. Transport integrity is TLS's job.
 
 ### Common Headers
 
@@ -888,7 +908,8 @@ The service supports response signing. When enabled, responses include an `X-Sig
 #### Response Headers
 
 - `Content-Type`: Indicates the format of response data
-- `X-Signature`: Ed25519 signature (when response signing is enabled)
+- `X-Signature`: Ed25519 signature over the requested resource identifier (when response signing is enabled)
+- `X-Signature-Scope`: what `X-Signature` covers; always `resource-identifier`
 
 ### Pagination
 

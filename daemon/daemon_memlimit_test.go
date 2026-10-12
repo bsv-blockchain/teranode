@@ -36,7 +36,7 @@ func TestParseCgroupMemoryValue(t *testing.T) {
 
 func TestFormatBytes(t *testing.T) {
 	tests := []struct {
-		input int64
+		input uint64
 		want  string
 	}{
 		{input: 1073741824, want: "1.0GiB"},

@@ -13,6 +13,27 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
+// BackdatedUnminedSince returns the unminedSince value to stamp on a transaction that goes
+// from mined to unmined (a reorg or reset moved its block off the longest chain) and has no
+// earlier unminedSince to keep.
+//
+// PreserveParentsOfOldUnminedTransactions only considers children with
+// unminedSince <= blockHeight - unminedTxRetention, while the parent's deleteAtHeight was
+// stamped when the child spent it and keeps counting through the reorg. Stamping the current
+// height would start the child's protection clock unminedTxRetention blocks late, and a child
+// that spent its parent long before it was mined would see the parent pruned before the scan
+// ever looks at it (issue 1768). Backdating by unminedTxRetention makes the child eligible on
+// the next pruner cycle, so its parents are preserved before their delete clock fires.
+//
+// The result is never below 1: 0/absent means "mined on the longest chain" to every reader.
+func BackdatedUnminedSince(currentBlockHeight, unminedTxRetention uint32) uint32 {
+	if currentBlockHeight <= unminedTxRetention {
+		return 1
+	}
+
+	return currentBlockHeight - unminedTxRetention
+}
+
 // PreserveParentsOfOldUnminedTransactions protects parent transactions of old unmined transactions from deletion.
 // This is a store-agnostic implementation that works with any Store implementation.
 // It follows the same pattern as ProcessConflicting, using the Store interface methods.
@@ -42,6 +63,15 @@ func PreserveParentsOfOldUnminedTransactions(ctx context.Context, s Store, block
 
 	if blockHeight <= settings.UtxoStore.UnminedTxRetention {
 		// Not enough blocks have passed to start cleanup
+		return 0, nil
+	}
+
+	if settings.UtxoStore.ParentPreservationBlocks == 0 {
+		// Preserve-until would be set to the current height (blockHeight + 0) and then expire in the
+		// same pruner cycle (Phase 1b clears preserve_until <= currentHeight), so preservation would
+		// protect nothing. Skip rather than do the work. This is a misconfiguration — the default is
+		// 1440; use pruner_skipPreserveParents to disable preservation deliberately.
+		logger.Warnf("[pruner][%s:%d] phase 1: skipped — utxostore_parentPreservationBlocks=0 gives no protection window", blockHashStr, blockHeight)
 		return 0, nil
 	}
 

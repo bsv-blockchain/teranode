@@ -21,9 +21,13 @@
 //   - Batch processing for high-volume transaction scenarios
 //
 // Integration:
-// This package integrates with other Teranode services including the mempool, validator,
-// and P2P services to ensure transactions are properly validated and distributed across
-// the network according to Bitcoin protocol specifications.
+// This package integrates with other Teranode services including the validator
+// (which validates transactions and forwards them to block assembly for inclusion
+// in subtrees) and the P2P service, ensuring transactions are properly validated and
+// distributed across the network according to Bitcoin protocol specifications.
+// Teranode has no separate mempool service: validated-but-unmined transactions are
+// assembled into subtrees by the block assembly service, with their unmined state
+// tracked in the UTXO store.
 package propagation
 
 import (
@@ -32,9 +36,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-batcher/v2"
+	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -47,24 +53,67 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-// batchItem represents a single transaction in a batch along with its completion channel.
+// batchHandoffTimeout backstops the batch hand-off wait so a dispatcher that never signals
+// (panic, missed code path, wedged transport) releases the submitter instead of parking it for
+// the life of the process. It must OUTLAST the deepest downstream wait this client fronts, or
+// it aborts work the lower layers would still have completed — see the settings.conf note on
+// aerospike_batchPolicy.docker.m for that exact bug happening one layer down.
+//
+// Sized against the committed default configuration:
+//
+//   - the utxo store's own submitter guard, which the downstream service waits on:
+//     batch TotalTimeout (settings.conf: 5m) plus aerospike_overload_retry_max_elapsed (2m)
+//     plus 30s grace, i.e. 7m30s
+//   - the store's spend wait, a separate sequential stage: utxostore_spendWaitTimeout (30s)
+//
+// 8m floor, rounded to 10m. Client-side queueing is deliberately NOT modelled: the flush
+// interval (propagation_sendBatchTimeout) is a batching trigger, not an end-to-end bound, and
+// worker saturation or the batcher's max-concurrency limiter can hold an item longer than it.
+// A var, not a const, purely so tests can shorten it; production never reassigns it.
+var batchHandoffTimeout = 10 * time.Minute
+
+// batchItem represents a single transaction in a batch along with its completion state.
 // This type serves as the fundamental unit in the transaction batch processing system:
 //
 // - tx: Contains the parsed Bitcoin transaction (bt.Tx) ready for submission
-// - done: Channel used for asynchronous completion notification and error reporting
+// - group: Shared completion.Group the submitting caller waits on
+// - result: Terminal error for this transaction (nil on success)
 //
 // When a transaction is submitted through the batching system, it's wrapped in a batchItem
 // and placed in the batch queue. Once the transaction is processed (either successfully
-// or with an error), the result is sent through the done channel, allowing the original
-// caller to continue execution with proper error handling.
+// or with an error), the dispatcher writes result and calls Done on the shared group,
+// allowing the original caller to continue execution with proper error handling.
 type batchItem struct {
-	ctx  context.Context
-	tx   *bt.Tx     // Bitcoin transaction to process
-	done chan error // Channel to signal completion and return any error
+	ctx context.Context
+	tx  *bt.Tx // Bitcoin transaction to process
+
+	// group is the shared completion group the submitter waits on; the
+	// dispatcher calls Done exactly once per item via complete.
+	group *completion.Group
+
+	// completed guards exactly-once completion (CAS).
+	completed atomic.Bool
+
+	// result holds the terminal error for this item (nil on success). Written
+	// by the CAS winner, after the CAS and before group.Done(); safe to read
+	// only once group.Wait returns nil.
+	result error
+}
+
+// complete writes err into the item's result slot and marks the shared group's
+// completion counter. Idempotent: only the first call has any effect, so a
+// panic-recovery sweep over an already-completed item never double-signals or
+// races a second write into result.
+func (it *batchItem) complete(err error) {
+	if it.completed.CompareAndSwap(false, true) {
+		it.result = err
+		if it.group != nil {
+			it.group.Done()
+		}
+	}
 }
 
 // Client implements a batching transaction client for the BSV propagation service.
@@ -100,9 +149,10 @@ type batchItem struct {
 type Client struct {
 	client              propagation_api.PropagationAPIClient
 	conn                *grpc.ClientConn
+	ownsConn            bool
 	batchSize           int
 	batchCh             chan []*batchItem
-	batcher             batcher.Batcher[batchItem]
+	batcher             *batcher.Batcher[batchItem]
 	logger              ulogger.Logger
 	settings            *settings.Settings
 	propagationHTTPAddr *url.URL
@@ -124,6 +174,12 @@ type Client struct {
 //   - error: Error if client creation fails
 func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, conn ...*grpc.ClientConn) (*Client, error) {
 	var useConn *grpc.ClientConn
+
+	// ownsConn is true only when this client dialed the connection itself; when
+	// a conn is injected by the caller the caller retains ownership and Close()
+	// must not close it.
+	var ownsConn bool
+
 	if len(conn) > 0 {
 		useConn = conn[0]
 	} else {
@@ -133,6 +189,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		}
 
 		useConn = localConn
+		ownsConn = true
 	}
 
 	client := propagation_api.NewPropagationAPIClient(useConn)
@@ -162,6 +219,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	c := &Client{
 		client:              client,
 		conn:                useConn,
+		ownsConn:            ownsConn,
 		batchSize:           batchSize,
 		batchCh:             make(chan []*batchItem),
 		logger:              logger,
@@ -174,7 +232,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 			logger.Errorf("Error sending batch: %s", err)
 		}
 	}
-	c.batcher = *batcher.NewWithPool(batchSize, duration, sendBatch, true,
+	c.batcher = batcher.NewWithPool(batchSize, duration, sendBatch, true,
 		batcher.WithName("propagation_client"),
 		batcher.WithLogger(logger),
 		batcher.WithMetrics(batchermetrics.Provider()),
@@ -184,7 +242,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	return c, nil
 }
 
-// Stop gracefully shuts down the client and closes the gRPC connection.
+// Close gracefully shuts down the client and closes the gRPC connection.
 // This method performs proper cleanup of resources used by the propagation client:
 //
 // 1. Verifies that both client and connection are initialized before attempting cleanup
@@ -195,13 +253,22 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 // resource leaks, particularly long-lived gRPC connections. It's commonly used
 // during service shutdown or when switching connection configurations.
 //
-// Important: After Stop is called, the client instance should not be reused.
+// Important: After Close is called, the client instance should not be reused.
 // A new client instance should be created if needed.
 
-func (c *Client) Stop() {
-	if c.client != nil && c.conn != nil {
+func (c *Client) Close() error {
+	// Drain the batcher first so queued transactions are flushed while the
+	// connection is still live. Bounded; the batcher is owned by this client
+	// regardless of who owns the conn, so drain it even for injected conns.
+	if c.batcher != nil {
+		util.DrainBatcher(c.logger, "propagation_client", util.DefaultBatcherDrainTimeout, c.batcher.Close)
+	}
+
+	if c.ownsConn && c.client != nil && c.conn != nil {
 		_ = c.conn.Close()
 	}
+
+	return nil
 }
 
 // ProcessTransaction submits a single BSV transaction for processing.
@@ -225,17 +292,48 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 	}
 
 	if c.batchSize > 0 {
-		done := make(chan error)
+		// Single-item submissions allocate a completion.Group (a struct plus one
+		// internal channel) where the pre-group code allocated a single bare
+		// channel — a net +1 small heap allocation per call. This is an accepted
+		// trade-off: it keeps one uniform completion mechanism across the single-
+		// and multi-item (PutBatch) paths. The group's real win — eliminating the
+		// per-item collector goroutine and timer — applies to the multi-item store
+		// batchers; here it is purely the wait primitive.
+		group := completion.NewGroup(1)
+		item := &batchItem{
+			ctx:   ctx,
+			tx:    tx,
+			group: group,
+		}
 
-		c.batcher.PutCtx(ctx, &batchItem{
-			ctx:  ctx,
-			tx:   tx,
-			done: done,
-		})
+		c.batcher.PutCtx(ctx, item)
 
-		err := <-done
+		// Bounded by the CALLER's context AND a finite backstop. No production
+		// caller of ProcessTransaction was found outside this package; the same
+		// contract is applied here for consistency, because this is a published
+		// client type, and no production exposure is claimed for it. The backstop
+		// is what makes the wait finite regardless: a ctx arm is only as good as
+		// the deadline the caller happens to carry, and a wedged dispatcher must
+		// not be able to park a submitter for the life of the process.
+		//
+		// An early return is ABANDONMENT, not cancellation: the item is already on
+		// the batcher and the dispatcher may still send it, so the transaction may
+		// yet reach propagation. Two consequences, both load-bearing:
+		//
+		//   - item.result MUST NOT be read on this path. The dispatcher writes it
+		//     later from its own goroutine; not reading it is what keeps that write
+		//     race-free (no concurrent reader), and it is why the read below is
+		//     reachable only after Wait returned nil.
+		//   - the error MUST NOT be mistakable for a queue-full shed. A shed is
+		//     unwound by the caller (record deleted, inputs unspent); doing that to
+		//     a transaction still in flight could delete a record already absorbed
+		//     downstream. A ServiceError keeps it out of the ErrThresholdExceeded
+		//     branch and inside the caller's "ambiguous hand-off failure" branch.
+		if err := group.Wait(ctx, batchHandoffTimeout); err != nil {
+			return errors.NewServiceError("propagation batch handoff abandoned before dispatch completed", err)
+		}
 
-		return err
+		return item.result
 	}
 
 	// Try gRPC first
@@ -248,14 +346,22 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 		return nil
 	}
 
-	// Check if the error is related to message size (ResourceExhausted)
-	st, ok := status.FromError(err)
-	if ok && st.Code() == codes.ResourceExhausted {
-		// Log the fallback
+	// Only an oversized gRPC message is fixable by re-sending over HTTP. A
+	// block-assembly queue-full shed reuses the same ResourceExhausted code (via
+	// ERR_THRESHOLD_EXCEEDED), and re-sending it would drive a second full
+	// validation against a node that has just reported itself saturated. This
+	// server currently collapses a shed to codes.Internal before it reaches here,
+	// so the gate is defensive — it pins the client behaviour for when that changes.
+	if errors.IsGRPCMessageTooLarge(err) {
+		// Log the fallback. The gate guarantees this really is a size problem.
 		c.logger.Warnf("[ProcessTransaction][%s] Transaction exceeds gRPC message limit, falling back to validator /tx endpoint: %s",
-			tx.TxID(), st.Message())
+			tx.TxID(), status.Convert(err).Message())
 
 		return c.sendTransactionViaHTTP(ctx, txBytes, *tx.TxIDChainHash())
+	}
+
+	if errors.Is(errors.UnwrapGRPC(err), errors.ErrThresholdExceeded) {
+		c.logger.Warnf("[ProcessTransaction][%s] block assembly shed the transaction (queue full); not retrying over HTTP", tx.TxID())
 	}
 
 	// For any other types of errors, return the unwrapped gRPC error
@@ -332,15 +438,15 @@ func (c *Client) TriggerBatcher() {
 // This method provides uniform error handling for batch processing failures:
 //
 //  1. Logs the error with the provided format string and additional context
-//  2. Distributes the error to all transaction items in the batch through their
-//     individual completion channels
+//  2. Distributes the error to all transaction items in the batch by completing
+//     each on the shared completion group
 //  3. Ensures all goroutines waiting on transaction completion are unblocked
 //
 // This centralized error handling ensures consistent behavior across different
 // batch processing failure scenarios.
 //
 // Parameters:
-//   - batch: Slice of transaction items with completion channels
+//   - batch: Slice of transaction items sharing a completion group
 //   - err: Error to propagate to all transactions
 //   - format: Log message format string
 //   - args: Additional arguments for the format string
@@ -352,7 +458,7 @@ func (c *Client) handleBatchError(batch []*batchItem, err error, format string, 
 	c.logger.Errorf("%s", wrappedErr.Error())
 
 	for _, tx := range batch {
-		tx.done <- wrappedErr
+		tx.complete(wrappedErr)
 	}
 
 	return wrappedErr
@@ -363,21 +469,36 @@ func (c *Client) handleBatchError(batch []*batchItem, err error, format string, 
 //
 // 1. Iterating through each transaction in the batch
 // 2. Mapping response errors to the corresponding transactions
-// 3. Sending appropriate errors or success notifications via completion channels
+// 3. Completing each transaction on the shared completion group with its error or success
 // 4. Ensuring all waiting goroutines are unblocked with the correct status
 //
 // The method ensures that even within a successful batch, individual transaction
 // errors are properly captured and reported.
 //
 // Parameters:
-//   - batch: Slice of transaction items with completion channels
+//   - batch: Slice of transaction items sharing a completion group
 //   - response: gRPC response containing per-transaction error status
 func (c *Client) handleBatchResponse(batch []*batchItem, response *propagation_api.ProcessTransactionBatchResponse) {
+	// The server must return exactly one result per batch item. If it returns
+	// fewer (a contract violation), ranging over response.Errors would leave the
+	// tail items un-completed and their callers blocked on group.Wait until the
+	// caller context or batchHandoffTimeout released them. Guard the length and
+	// fail every item with a clear error rather than leaving them to that wait or
+	// index-panicking into the sweep.
+	if len(response.Errors) != len(batch) {
+		err := errors.NewProcessingError("[handleBatchResponse] propagation returned %d results for a batch of %d", len(response.Errors), len(batch))
+		for _, item := range batch {
+			item.complete(err)
+		}
+
+		return
+	}
+
 	for i, err := range response.Errors {
 		if !err.IsNil() { // don't do err != nil, proto can't return nil TError
-			batch[i].done <- err
+			batch[i].complete(err)
 		} else {
-			batch[i].done <- nil
+			batch[i].complete(nil)
 		}
 	}
 }
@@ -396,7 +517,7 @@ func (c *Client) handleBatchResponse(batch []*batchItem, response *propagation_a
 //
 // Parameters:
 //   - ctx: Context for HTTP request processing
-//   - batch: Slice of transaction items with completion channels
+//   - batch: Slice of transaction items sharing a completion group
 //   - txs: Raw transaction bytes for each transaction in the batch
 //
 // Returns:
@@ -443,7 +564,7 @@ func (c *Client) processBatchViaHTTP(ctx context.Context, batch []*batchItem, it
 	c.logger.Debugf("[processBatchViaHTTP] Successfully processed %d transactions via HTTP fallback", len(batch))
 
 	for _, tx := range batch {
-		tx.done <- nil
+		tx.complete(nil)
 	}
 
 	return nil
@@ -466,15 +587,26 @@ func (c *Client) processBatchViaHTTP(ctx context.Context, batch []*batchItem, it
 // 4. For other types of errors, properly unwraps and propagates them
 //
 // The method ensures all transactions in the batch receive appropriate error
-// feedback through their individual completion channels.
+// feedback by completing each on the shared completion group.
 //
 // Parameters:
 //   - ctx: Context for batch processing with timeout/cancellation
-//   - batch: Slice of transaction items with completion channels
+//   - batch: Slice of transaction items sharing a completion group
 //
 // Returns:
 //   - error: Error if batch processing fails at the transport level
 func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem) error {
+	// go-batcher recovers panics raised in this dispatch fn; without a sweep a
+	// panic part-way through would leave every submitter blocked on group.Wait
+	// until its caller context or batchHandoffTimeout released it. complete is
+	// CAS-guarded, so re-completing an item an earlier stage already completed is
+	// a no-op.
+	defer func() {
+		util.SignalBatchPanic(recover(), batch, "ProcessTransactionBatch", c.logger, func(it *batchItem, err error) {
+			it.complete(err)
+		})
+	}()
+
 	// Create a slice of raw transaction bytes for the gRPC request
 	items := make([]*propagation_api.BatchTransactionItem, len(batch))
 
@@ -506,12 +638,16 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 		return nil
 	}
 
-	// Check if the error is related to message size (ResourceExhausted)
-	st, ok := status.FromError(err)
-	if ok && st.Code() == codes.ResourceExhausted {
-		// Log the fallback
+	// Only an oversized batch is fixable by re-sending over HTTP. A block-assembly
+	// queue-full shed reuses the same ResourceExhausted code (via
+	// ERR_THRESHOLD_EXCEEDED), and re-sending would drive a full HTTP validation for
+	// every transaction in the batch against a node that has just reported itself
+	// saturated — a shed batch amplified into N validations. Same gate as the
+	// single-transaction path above, so the two cannot drift.
+	if errors.IsGRPCMessageTooLarge(err) {
+		// Log the fallback. The gate guarantees this really is a size problem.
 		c.logger.Warnf("[ProcessTransactionBatch] Batch exceeds gRPC message limit, falling back to validator /txs endpoint: %s",
-			st.Message())
+			status.Convert(err).Message())
 
 		return c.processBatchViaHTTP(ctx, batch, items)
 	}
@@ -519,6 +655,10 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 	// Any other gRPC error - unwrap it according to our error handling rule
 	// and propagate to all transactions in batch
 	unwrappedErr := errors.UnwrapGRPC(err)
+
+	if errors.Is(unwrappedErr, errors.ErrThresholdExceeded) {
+		c.logger.Warnf("[ProcessTransactionBatch] block assembly shed the batch (queue full); not retrying over HTTP")
+	}
 
 	return c.handleBatchError(batch, unwrappedErr, "[ProcessTransactionBatch] Failed to process transaction batch")
 }

@@ -2,1619 +2,2197 @@ package p2p
 
 import (
 	"context"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
-	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-func TestSyncCoordinator_NewSyncCoordinator(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
+func newTestSyncCoordinator(t *testing.T) (*SyncCoordinator, *blockchain.CentralizedPeerRegistry) {
+	t.Helper()
 
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	assert.NotNil(t, sc)
-	assert.Equal(t, logger, sc.logger)
-	assert.Equal(t, settings, sc.settings)
-	assert.Equal(t, registry, sc.registry)
-	assert.Equal(t, selector, sc.selector)
-	assert.Equal(t, banManager, sc.banManager)
-	assert.Equal(t, blockchainSetup.Client, sc.blockchainClient)
-	assert.NotNil(t, sc.stopCh)
-}
-
-func TestSyncCoordinator_SetGetLocalHeightCallback(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	// Set callback
-	getLocalHeight := func() uint32 {
-		return 100
+	tSettings := &settings.Settings{
+		P2P: settings.P2PSettings{
+			AllowPrunedNodeFallback:                   true,
+			MaxUnvalidatedAdvertisedHeightLead:        10_000,
+			MaxUnprovenSyncProbesPerBackoffWindow:     3,
+			FullDeliveryFreshnessWindow:               24 * time.Hour,
+			SyncCoordinatorPeriodicEvaluationInterval: 30 * time.Second,
+		},
 	}
-
-	sc.SetGetLocalHeightCallback(getLocalHeight)
-
-	// Verify callback is set
-	assert.NotNil(t, sc.getLocalHeight)
-
-	// Test callback works
-	height := sc.getLocalHeight()
-	assert.Equal(t, uint32(100), height)
+	return newTestSyncCoordinatorWithSettings(t, tSettings)
 }
 
-func TestSyncCoordinator_StartAndStop(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
+func newTestSyncCoordinatorWithSettings(t *testing.T, tSettings *settings.Settings) (*SyncCoordinator, *blockchain.CentralizedPeerRegistry) {
+	t.Helper()
+
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	client := blockchain.NewLocalPeerRegistryClient(reg)
 
 	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
+		context.Background(),
+		ulogger.TestLogger{},
+		tSettings,
+		client,
+		NewPeerSelector(ulogger.TestLogger{}, tSettings),
+		nil, // blockchainClient — only the FSM monitor needs it; not exercised here
+		nil, // kafka producer — only TriggerSync's send-to-kafka path uses it
 	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	// Start the coordinator
-	sc.Start(ctx)
-
-	// Let it run briefly
-	time.Sleep(100 * time.Millisecond)
-
-	// Stop it
-	sc.Stop()
-
-	// Should stop cleanly
-	assert.True(t, true, "Coordinator stopped cleanly")
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 0 })
+	return sc, reg
 }
 
-func TestSyncCoordinator_GetCurrentSyncPeer(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
+func syncCoordinatorTestHash(t *testing.T) *chainhash.Hash {
+	t.Helper()
 
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
+	hash, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
+	require.NoError(t, err)
+	return hash
+}
+
+func setSyncCoordinatorLocalTip(t *testing.T, sc *SyncCoordinator, height uint32, chainWork []byte) *blockchain.Mock {
+	t.Helper()
+
+	client := &blockchain.Mock{}
+	client.On("GetBestBlockHeader", mock.Anything).Return(
+		&model.BlockHeader{},
+		&model.BlockHeaderMeta{Height: height, ChainWork: chainWork},
+		nil,
 	)
+	sc.blockchainClient = client
+	return client
+}
 
-	// Initially no sync peer
-	peerID := sc.GetCurrentSyncPeer()
-	assert.Equal(t, peer.ID(""), peerID)
+func setSyncCoordinatorLocalTipError(t *testing.T, sc *SyncCoordinator, err error) *blockchain.Mock {
+	t.Helper()
 
-	// Set a sync peer
-	testPeer := peer.ID("test-peer")
+	client := &blockchain.Mock{}
+	client.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, err)
+	sc.blockchainClient = client
+	return client
+}
+
+func setSyncCoordinatorProbeBudget(sc *SyncCoordinator, budget int) {
 	sc.mu.Lock()
-	sc.currentSyncPeer = testPeer
-	sc.mu.Unlock()
+	defer sc.mu.Unlock()
+	sc.unprovenProbeBudgetRemaining = budget
+}
 
-	// Get current sync peer
-	peerID = sc.GetCurrentSyncPeer()
-	assert.Equal(t, testPeer, peerID)
+// filterEligiblePeersForTest resolves the local tip work and delegates to
+// filterEligiblePeersWithTip, mirroring the compact call form previously offered by the
+// (now-removed) production filterEligiblePeers helper, which had no non-test callers.
+func filterEligiblePeersForTest(sc *SyncCoordinator, peers []*blockchain.PeerInfo, oldPeer string, localHeight uint32) []*blockchain.PeerInfo {
+	tipHeight, localChainWork, localWorkOK := sc.getLocalTipWorkSafe()
+	if localWorkOK {
+		localHeight = tipHeight
+	}
+	return sc.filterEligiblePeersWithTip(peers, oldPeer, localHeight, localChainWork, localWorkOK)
+}
+
+func syncCoordinatorProbeBudget(sc *SyncCoordinator) int {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	return sc.unprovenProbeBudgetRemaining
+}
+
+func TestSyncCoordinator_IsViableSyncCandidate(t *testing.T) {
+	good := &blockchain.PeerInfo{DataHubURL: "http://x", ReputationScore: 50}
+	require.True(t, isViableSyncCandidate(good))
+
+	cases := []struct {
+		name string
+		p    *blockchain.PeerInfo
+	}{
+		{"banned", &blockchain.PeerInfo{IsBanned: true, DataHubURL: "x", Height: 1, ReputationScore: 50}},
+		{"no url", &blockchain.PeerInfo{Height: 1, ReputationScore: 50}},
+		{"low rep", &blockchain.PeerInfo{DataHubURL: "x", Height: 1, ReputationScore: 5}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			require.False(t, isViableSyncCandidate(c.p))
+		})
+	}
+}
+
+func TestSyncCoordinator_ListAllPeers(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	require.Empty(t, sc.listAllPeers())
+
+	reg.Register(&blockchain.PeerInfo{ID: "a"})
+	reg.Register(&blockchain.PeerInfo{ID: "b"})
+
+	require.Len(t, sc.listAllPeers(), 2)
+}
+
+func TestSyncCoordinator_GetCurrentSyncPeer_DefaultsEmpty(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	require.Empty(t, sc.GetCurrentSyncPeer())
 }
 
 func TestSyncCoordinator_ClearSyncPeer(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
+	sc, _ := newTestSyncCoordinator(t)
 
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	// Set a sync peer
-	testPeer := peer.ID("test-peer")
 	sc.mu.Lock()
-	sc.currentSyncPeer = testPeer
+	sc.currentSyncPeer = "preset-peer"
 	sc.mu.Unlock()
 
-	// Clear sync peer
 	sc.ClearSyncPeer()
-
-	// Verify cleared
-	peerID := sc.GetCurrentSyncPeer()
-	assert.Equal(t, peer.ID(""), peerID)
+	require.Empty(t, sc.GetCurrentSyncPeer())
 }
 
-func TestSyncCoordinator_TriggerSync(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
+func TestSyncCoordinator_IsCaughtUp_NoPeers(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	require.True(t, sc.isCaughtUp(), "no peers means we are caught up")
+}
 
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
+func TestSyncCoordinator_IsCaughtUp_AheadPeerMakesUsBehind(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
 
-	// Set callback
-	sc.SetGetLocalHeightCallback(func() uint32 {
-		return 100
+	reg.Register(&blockchain.PeerInfo{
+		ID:               "ahead",
+		DataHubURL:       "http://ahead",
+		Height:           100,
+		BlockHash:        syncCoordinatorTestHash(t),
+		TransportType:    0,
+		TransportTypeSet: false,
 	})
-
-	// Add a peer that is ahead
-	peerID := peer.ID("test-peer")
-	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(peerID, "", 110, peerHash, "http://test.com")
-
-	// Trigger sync
-	err := sc.TriggerSync()
-	assert.NoError(t, err)
-
-	// Verify sync peer was selected
-	currentPeer := sc.GetCurrentSyncPeer()
-	assert.Equal(t, peerID, currentPeer)
-}
-
-func TestSyncCoordinator_TriggerSync_NoPeersAvailable(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	sc.SetGetLocalHeightCallback(func() uint32 {
-		return 100
-	})
-
-	// No peers available - should not error
-	err := sc.TriggerSync()
-	assert.NoError(t, err)
-
-	// No sync peer should be selected
-	currentPeer := sc.GetCurrentSyncPeer()
-	assert.Equal(t, peer.ID(""), currentPeer)
-}
-
-func TestSyncCoordinator_HandlePeerDisconnected(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	// Add a peer and set as sync peer
-	peerID := peer.ID("test-peer")
-	registry.Put(peerID, "", 0, nil, "")
-
-	sc.mu.Lock()
-	sc.currentSyncPeer = peerID
-	sc.mu.Unlock()
-
-	// Handle disconnection of sync peer
-	sc.HandlePeerDisconnected(peerID)
-
-	// Give goroutine time to run
-	time.Sleep(100 * time.Millisecond)
-
-	// Verify peer was removed from registry
-	_, exists := registry.Get(peerID)
-	assert.False(t, exists)
-
-	// Sync peer should be cleared
-	currentPeer := sc.GetCurrentSyncPeer()
-	assert.Equal(t, peer.ID(""), currentPeer)
-}
-
-func TestSyncCoordinator_HandlePeerDisconnected_NotSyncPeer(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	// Add two peers
-	syncPeer := peer.ID("sync-peer")
-	otherPeer := peer.ID("other-peer")
-	registry.Put(syncPeer, "", 0, nil, "")
-	registry.Put(otherPeer, "", 0, nil, "")
-
-	// Set sync peer
-	sc.mu.Lock()
-	sc.currentSyncPeer = syncPeer
-	sc.mu.Unlock()
-
-	// Disconnect non-sync peer
-	sc.HandlePeerDisconnected(otherPeer)
-
-	// Verify peer was removed
-	_, exists := registry.Get(otherPeer)
-	assert.False(t, exists)
-
-	// Sync peer should remain
-	currentPeer := sc.GetCurrentSyncPeer()
-	assert.Equal(t, syncPeer, currentPeer)
-}
-
-func TestSyncCoordinator_HandleCatchupFailure(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	// Set initial sync peer
-	initialPeer := peer.ID("initial-peer")
-	sc.mu.Lock()
-	sc.currentSyncPeer = initialPeer
-	sc.mu.Unlock()
-
-	// Add new peer for recovery
-	newPeer := peer.ID("new-peer")
-	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(newPeer, "", 110, peerHash, "http://test.com")
-
-	sc.SetGetLocalHeightCallback(func() uint32 {
-		return 100
-	})
-
-	// Handle catchup failure
-	sc.HandleCatchupFailure("test failure reason")
-
-	// Sync peer should be cleared and new one selected
-	currentPeer := sc.GetCurrentSyncPeer()
-	assert.Equal(t, newPeer, currentPeer)
-}
-
-func TestSyncCoordinator_selectNewSyncPeer(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	sc.SetGetLocalHeightCallback(func() uint32 {
-		return 100
-	})
-
-	// Add eligible peers
-	peer1 := peer.ID("peer1")
-	peer2 := peer.ID("peer2")
-
-	peerHash1, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(peer1, "", 105, peerHash1, "http://peer1.com")
-
-	peerHash2, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(peer2, "", 110, peerHash2, "http://peer2.com")
-	// Give peer2 better reputation to ensure it's selected
-	registry.UpdateReputation(peer2, 80.0)
-
-	// Select new sync peer
-	selected := sc.selectNewSyncPeer()
-
-	// Should select peer2 (higher reputation and higher height)
-	assert.Equal(t, peer2, selected)
-}
-
-func TestSyncCoordinator_selectNewSyncPeer_ForcedPeer(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	settings.P2P.ForceSyncPeer = "forced-peer"
-
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	sc.SetGetLocalHeightCallback(func() uint32 {
-		return 100
-	})
-
-	// Add forced peer
-	forcedPeer := peer.ID("forced-peer")
-	settings.P2P.ForceSyncPeer = string(forcedPeer) // Set the forced peer in settings
-	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(forcedPeer, "", 110, peerHash, "http://forced.com")
-
-	// Add another better peer
-	betterPeer := peer.ID("better-peer")
-	betterHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(betterPeer, "", 120, betterHash, "http://better.com")
-
-	// Should select forced peer
-	selected := sc.selectNewSyncPeer()
-	assert.Equal(t, forcedPeer, selected)
-}
-
-func TestSyncCoordinator_UpdateBanStatus(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	// Add peer and ban it
-	peerID := peer.ID("test-peer")
-	registry.Put(peerID, "", 0, nil, "")
-
-	// Add ban score - use raw string conversion to match UpdateBanStatus
-	banManager.AddScore(string(peerID), ReasonSpam)
-	banManager.AddScore(string(peerID), ReasonSpam) // Should trigger ban
-
-	// Update ban status
-	sc.UpdateBanStatus(peerID)
-
-	// Verify ban status was updated
-	info, exists := registry.Get(peerID)
-	require.True(t, exists)
-	assert.True(t, info.IsBanned)
-	assert.Equal(t, 100, info.BanScore)
-}
-
-func TestSyncCoordinator_checkFSMState(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	// Set callback
-	sc.SetGetLocalHeightCallback(func() uint32 {
-		return 100
-	})
-
-	// Add peer
-	peerID := peer.ID("test-peer")
-	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(peerID, "", 110, peerHash, "http://test.com")
-
-	// Check FSM state (LocalClient returns RUNNING by default)
-	sc.checkFSMState(blockchainSetup.Ctx)
-
-	// May trigger sync if peer is ahead of us while in RUNNING state
-	// (local height is 100, peer is at 110)
-	currentPeer := sc.GetCurrentSyncPeer()
-	assert.True(t, currentPeer == "" || currentPeer == peerID, "Should either have no sync peer or have selected the test peer")
-
-	// Now checking should see transition from IDLE to RUNNING
-	sc.checkFSMState(blockchainSetup.Ctx)
-
-	// Should have potentially updated sync peer
-	finalPeer := sc.GetCurrentSyncPeer()
-	assert.True(t, finalPeer == "" || finalPeer == peerID, "Should either have no sync peer or have selected the test peer")
-}
-
-func TestSyncCoordinator_evaluateSyncPeer(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	// Set up callbacks - local height is caught up to sync peer
-	sc.SetGetLocalHeightCallback(func() uint32 {
-		return 105 // Same as sync peer height - we've caught up
-	})
-
-	// Add current sync peer
-	syncPeer := peer.ID("sync-peer")
-	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(syncPeer, "", 105, peerHash, "")
-
-	// Add better peer
-	betterPeer := peer.ID("better-peer")
-	betterHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(betterPeer, "", 120, betterHash, "http://better.com")
-
-	// Set current sync peer
-	sc.mu.Lock()
-	sc.currentSyncPeer = syncPeer
-	sc.mu.Unlock()
-
-	// Evaluate sync peer
-	sc.evaluateSyncPeer()
-
-	// Should NOT have switched yet (TriggerSync was called but test doesn't have kafka)
-	// The actual switching happens in TriggerSync which we can't fully test here
-	currentPeer := sc.GetCurrentSyncPeer()
-	// For now, just verify it didn't crash and peer remains
-	assert.NotEmpty(t, currentPeer)
-}
-
-func TestSyncCoordinator_evaluateSyncPeer_StuckAtHeight(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-
-	// Setup test blockchain
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	// Set callback
-	sc.SetGetLocalHeightCallback(func() uint32 {
-		return 100 // Stuck at same height
-	})
-
-	// Add sync peer
-	syncPeer := peer.ID("sync-peer")
-	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(syncPeer, "", 110, peerHash, "http://test.com")
-
-	// Set sync peer and simulate being stuck for too long
-	sc.mu.Lock()
-	sc.currentSyncPeer = syncPeer
-	sc.lastLocalHeight = 100
-	sc.syncStartTime = time.Now().Add(-6 * time.Minute) // Been syncing for 6 minutes
-	sc.mu.Unlock()
-
-	// Set peer's last message time to be old (> 2 minutes)
-	registry.UpdateNetworkStats(syncPeer, 1000)
-	registry.mu.Lock()
-	if info, exists := registry.peers[syncPeer]; exists {
-		info.LastMessageTime = time.Now().Add(-3 * time.Minute) // Last message 3 minutes ago
-	}
-	registry.mu.Unlock()
-
-	// Add alternative peer
-	altPeer := peer.ID("alt-peer")
-	altHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(altPeer, "", 115, altHash, "http://alt.com")
-
-	// Evaluate - should clear peer due to long sync without progress and select new one
-	sc.evaluateSyncPeer()
-
-	// Should have cleared the sync peer and selected alternative peer
-	currentPeer := sc.GetCurrentSyncPeer()
-	assert.Equal(t, altPeer, currentPeer, "Should switch to alternative peer after detecting inactive sync peer")
-}
-
-func TestSyncCoordinator_LogPeerList(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	// Test with empty list
-	sc.logPeerList([]*PeerInfo{})
-
-	// Test with peers
-	peers := []*PeerInfo{
-		{
-			ID:         peer.ID("peer1"),
-			DataHubURL: "http://example1.com",
-			Height:     100,
-			BanScore:   5,
-			Storage:    "full",
-		},
-		{
-			ID:         peer.ID("peer2"),
-			DataHubURL: "http://example2.com",
-			Height:     200,
-			BanScore:   10,
-			Storage:    "full",
-		},
+	// Boost reputation past 20 so the peer is viable.
+	for i := 0; i < 5; i++ {
+		reg.UpdateMetrics("ahead", 0, 0, 0, true, false, false, 100)
 	}
 
-	// This just logs, so we're mainly testing it doesn't panic
-	sc.logPeerList(peers)
+	require.False(t, sc.isCaughtUp())
 }
 
-func TestSyncCoordinator_LogCandidateList(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
+func TestSyncCoordinator_IsCaughtUp_OnlyLowRepPeerIsCaughtUp(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
 
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
+	// Peer is ahead in height but reputation < 20 → not viable, so we are caught up.
+	reg.Register(&blockchain.PeerInfo{ID: "low-rep", DataHubURL: "http://low-rep", Height: 100})
+	// Register sets reputation to 50; drive it below 20 with a malicious event.
+	reg.UpdateMetrics("low-rep", 0, 0, 0, false, false, true, 0)
 
-	// Test with empty list
-	sc.logCandidateList([]*PeerInfo{})
+	require.True(t, sc.isCaughtUp())
+}
 
-	// Test with candidates
-	candidates := []*PeerInfo{
-		{
-			ID:         peer.ID("candidate1"),
-			DataHubURL: "http://candidate1.com",
-			Height:     150,
-			BanScore:   3,
-			Storage:    "full",
-		},
-		{
-			ID:         peer.ID("candidate2"),
-			DataHubURL: "http://candidate2.com",
-			Height:     250,
-			BanScore:   7,
-			Storage:    "full",
-		},
+// TestSyncCoordinator_IsCaughtUp_BlacklistedPeerIsCaughtUp: the caught-up
+// determination must agree with selection about the operator blacklist. A
+// blacklisted-but-ahead peer can never be selected by SelectSyncPeer, so if it
+// still counted as a viable sync candidate here the node would report
+// not-caught-up forever while every selection attempt fails.
+func TestSyncCoordinator_IsCaughtUp_BlacklistedPeerIsCaughtUp(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "ahead",
+		DataHubURL: "http://evil.example",
+		Height:     100,
+		BlockHash:  syncCoordinatorTestHash(t),
+	})
+	// Boost reputation past 20 so the peer is viable apart from the blacklist.
+	for i := 0; i < 5; i++ {
+		reg.UpdateMetrics("ahead", 0, 0, 0, true, false, false, 100)
 	}
 
-	// This just logs, so we're mainly testing it doesn't panic
-	sc.logCandidateList(candidates)
+	// Control: the ahead peer keeps us not caught up while its host is allowed.
+	require.False(t, sc.isCaughtUp(), "precondition: ahead non-blacklisted peer means not caught up")
+
+	// Operator blacklists the host after the URL was stored in the registry.
+	sc.settings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{"http://evil.example": {}}
+
+	require.True(t, sc.isCaughtUp(), "blacklisted peer must not keep the node in a not-caught-up state")
 }
 
-func TestSyncCoordinator_IsCaughtUp(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
+func TestSyncCoordinator_HandlePeerDisconnected_RemovesPeer(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	pid := mustNewPeerID(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
 
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil,
-	)
+	sc.HandlePeerDisconnected(pid)
 
-	// Set local height
-	sc.SetGetLocalHeightCallback(func() uint32 {
-		return 100
-	})
-
-	// Test with no peers - should be caught up
-	assert.True(t, sc.isCaughtUp(), "Should be caught up with no peers")
-
-	// Add viable peer at same height - should be caught up.
-	// Give the peer a DataHubURL (and the default reputation of 50) so that
-	// isViableSyncCandidate passes for it; otherwise the assertion would be
-	// trivially satisfied by the viability filter rather than by the
-	// caught-up comparison itself.
-	peer1 := peer.ID("peer1")
-	peerHash1, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(peer1, "", 100, peerHash1, "http://peer1:8080")
-	assert.True(t, sc.isCaughtUp(), "Should be caught up when a viable peer is at the same height")
-
-	// Add viable peer behind us - should still be caught up.
-	peer2 := peer.ID("peer2")
-	peerHash2, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(peer2, "", 90, peerHash2, "http://peer2:8080")
-	assert.True(t, sc.isCaughtUp(), "Should be caught up when viable peers are behind")
-
-	// Add peer one block ahead - should NOT be caught up
-	peer3 := peer.ID("peer3")
-	peerHash3, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(peer3, "", 101, peerHash3, "http://peer3:8080")
-	assert.False(t, sc.isCaughtUp(), "Should NOT be caught up when a viable peer is ahead by even one block")
-
-	// Add peer further ahead - still not caught up
-	peer4 := peer.ID("peer4")
-	peerHash4, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(peer4, "", 150, peerHash4, "http://peer4:8080")
-	assert.False(t, sc.isCaughtUp(), "Should NOT be caught up when a viable peer is far ahead")
+	_, ok := reg.Get(pid.String())
+	require.False(t, ok)
 }
 
-func TestSyncCoordinator_IsCaughtUp_IgnoresNonViablePeers(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil,
-	)
-
-	sc.SetGetLocalHeightCallback(func() uint32 { return 100 })
-
-	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-
-	// Peer ahead but no DataHub URL -> should be ignored
-	noURL := peer.ID("peer-no-url")
-	registry.Put(noURL, "", 200, peerHash, "")
-
-	// Peer ahead but banned -> should be ignored
-	banned := peer.ID("peer-banned")
-	registry.Put(banned, "", 200, peerHash, "http://banned:8080")
-	registry.UpdateBanStatus(banned, 100, true)
-
-	// Peer ahead but low reputation -> should be ignored
-	lowRep := peer.ID("peer-low-rep")
-	registry.Put(lowRep, "", 200, peerHash, "http://lowrep:8080")
-	registry.UpdateReputation(lowRep, 10)
-
-	assert.True(t, sc.isCaughtUp(), "Should be caught up when only non-viable peers are ahead")
-
-	// Now add a viable peer ahead -> should not be caught up
-	viable := peer.ID("peer-viable")
-	registry.Put(viable, "", 101, peerHash, "http://viable:8080")
-	registry.UpdateReputation(viable, 80)
-	assert.False(t, sc.isCaughtUp(), "Should NOT be caught up when a viable peer is ahead")
+func TestSyncCoordinator_HandleCatchupFailure_NoSyncPeer(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	require.NotPanics(t, func() { sc.HandleCatchupFailure("test") })
 }
 
-func TestSyncCoordinator_BackoffClearsSyncAttemptsAndExpires(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
+func TestSyncCoordinator_GetPeer_ByLibp2pID(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	pid := mustNewPeerID(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String(), Height: 42})
 
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil,
-	)
+	got, found := sc.getPeer(pid)
+	require.True(t, found)
+	require.Equal(t, uint32(42), got.Height)
+}
 
-	// Add a peer and record a sync attempt so LastSyncAttempt is non-zero
-	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	p := peer.ID("peer1")
-	registry.Put(p, "", 120, peerHash, "http://peer1:8080")
-	registry.RecordSyncAttempt(p)
+func TestSyncCoordinator_BackoffLifecycle(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
 
-	infoBefore, ok := registry.Get(p)
-	require.True(t, ok)
-	require.False(t, infoBefore.LastSyncAttempt.IsZero(), "LastSyncAttempt should be set before backoff")
+	// Not in backoff initially.
+	require.False(t, sc.checkAndClearExpiredBackoff())
 
-	// Enter backoff and verify sync attempts were cleared
+	// Enter backoff.
 	sc.enterBackoffMode()
-	infoAfter, ok := registry.Get(p)
-	require.True(t, ok)
-	assert.True(t, infoAfter.LastSyncAttempt.IsZero(), "LastSyncAttempt should be cleared when entering backoff")
-
-	// Immediately after entering backoff, we should still be in backoff
-	assert.True(t, sc.checkAndClearExpiredBackoff(), "Should be in backoff immediately after entering")
-
-	// Force backoff to expire by moving the last attempt time into the past
-	sc.mu.Lock()
-	sc.lastAllPeersAttemptTime = time.Now().Add(-3 * time.Second)
-	sc.mu.Unlock()
-
-	assert.False(t, sc.checkAndClearExpiredBackoff(), "Backoff should be expired")
-
 	sc.mu.RLock()
-	defer sc.mu.RUnlock()
-	assert.False(t, sc.allPeersAttempted, "Backoff state should be cleared after expiration")
-	assert.Equal(t, 2, sc.backoffMultiplier, "Backoff multiplier should increase after expiration")
+	require.True(t, sc.allPeersAttempted)
+	sc.mu.RUnlock()
+
+	// resetBackoff clears state.
+	sc.resetBackoff()
+	sc.mu.RLock()
+	require.False(t, sc.allPeersAttempted)
+	require.Equal(t, 1, sc.backoffMultiplier)
+	sc.mu.RUnlock()
 }
 
-func TestSyncCoordinator_SendSyncTriggerToKafka(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
+func TestSyncCoordinator_ConsiderReputationRecovery_NoCandidatesIsNoOp(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
 
-	// Create mock Kafka producer
-	mockProducer := kafka.NewKafkaAsyncProducerMock()
+	// Register a healthy peer; ReconsiderBadPeers won't touch it.
+	reg.Register(&blockchain.PeerInfo{ID: "healthy", DataHubURL: "http://h"})
+	for i := 0; i < 5; i++ {
+		reg.UpdateMetrics("healthy", 0, 0, 0, true, false, false, 100)
+	}
 
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		mockProducer,
-	)
+	require.NotPanics(t, func() { sc.considerReputationRecovery() })
+	got, _ := reg.Get("healthy")
+	require.GreaterOrEqual(t, got.ReputationScore, 50.0, "healthy peer reputation untouched")
+}
 
-	// Add peer with DataHub URL
-	peerID := peer.ID("test-peer")
-	registry.Put(peerID, "", 0, nil, "http://datahub.example.com")
+// Exercises concurrent backoff writers against considerReputationRecovery's read of
+// backoffMultiplier; fails under -race if the read is not synchronized.
+func TestSyncCoordinator_ConsiderReputationRecovery_ConcurrentWithBackoffWriters(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
 
-	// Start monitoring the publish channel
-	publishCount := int32(0)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
 	go func() {
-		for range mockProducer.PublishChannel() {
-			atomic.AddInt32(&publishCount, 1)
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			sc.enterBackoffMode()
+			sc.mu.Lock()
+			sc.lastAllPeersAttemptTime = time.Now().Add(-time.Hour) // force backoff expiry
+			sc.mu.Unlock()
+			sc.checkAndClearExpiredBackoff() // doubles backoffMultiplier
+			sc.enterBackoffMode()
+			sc.resetBackoff()
 		}
 	}()
 
-	// Test successful send
-	sc.sendSyncTriggerToKafka(peerID, "blockhash123")
-	time.Sleep(10 * time.Millisecond) // Give goroutine time to process
-	assert.Equal(t, int32(1), atomic.LoadInt32(&publishCount), "Should publish one message")
-
-	// Test with nil producer
-	sc.blocksKafkaProducerClient = nil
-	sc.sendSyncTriggerToKafka(peerID, "blockhash456")
-	// Should not panic, just return
-
-	// Test with empty block hash
-	sc.blocksKafkaProducerClient = mockProducer
-	sc.sendSyncTriggerToKafka(peerID, "")
-	time.Sleep(10 * time.Millisecond)
-	assert.Equal(t, int32(1), atomic.LoadInt32(&publishCount), "Should not publish with empty hash")
-}
-
-func TestSyncCoordinator_SendSyncMessage(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	mockProducer := kafka.NewKafkaAsyncProducerMock()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		mockProducer,
-	)
-
-	// Test with peer not in registry
-	unknownPeer := peer.ID("unknown-peer")
-	err := sc.sendSyncMessage(unknownPeer)
-	assert.Error(t, err, "Should error when peer not found")
-	assert.Contains(t, err.Error(), "not found in registry")
-
-	// Add peer without block hash
-	peerNoHash := peer.ID("peer-no-hash")
-	registry.Put(peerNoHash, "", 0, nil, "")
-	err = sc.sendSyncMessage(peerNoHash)
-	assert.Error(t, err, "Should error when peer has no block hash")
-	assert.Contains(t, err.Error(), "no block hash available")
-
-	// Add peer with block hash
-	peerWithHash := peer.ID("peer-with-hash")
-	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(peerWithHash, "", 100, peerHash, "http://datahub.example.com")
-
-	// Start monitoring the publish channel
-	done := make(chan bool)
 	go func() {
-		<-mockProducer.PublishChannel()
-		done <- true
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			sc.considerReputationRecovery()
+		}
 	}()
 
-	err = sc.sendSyncMessage(peerWithHash)
-	assert.NoError(t, err, "Should successfully send sync message")
+	wg.Wait()
+}
 
-	select {
-	case <-done:
-		// Message was published
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("Message was not published")
+func TestSyncCoordinator_UpdatePeerInfo_RegistersPeer(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	pid := mustNewPeerID(t)
+
+	sc.UpdatePeerInfo(pid, 200, nil, "http://updated")
+
+	got, ok := reg.Get(pid.String())
+	require.True(t, ok)
+	require.Equal(t, uint32(200), got.Height)
+	require.Equal(t, "http://updated", got.DataHubURL)
+}
+
+func TestSyncCoordinator_UpdateBanStatus_OnUnknownPeerNoPanic(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	pid := mustNewPeerID(t)
+	require.NotPanics(t, func() { sc.UpdateBanStatus(pid) })
+}
+
+func TestSyncCoordinator_TriggerSync_NoEligiblePeersEntersBackoff(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+
+	// No peers registered → selectNewSyncPeer returns "" → checkAllPeersAttempted runs.
+	require.NoError(t, sc.TriggerSync())
+
+	// Backoff should NOT be entered yet because there were 0 eligible candidates,
+	// not because all candidates were recently attempted.
+	sc.mu.RLock()
+	require.False(t, sc.allPeersAttempted)
+	sc.mu.RUnlock()
+}
+
+func TestSyncCoordinator_SelectNewSyncPeer_PrefersFullNode(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 50 })
+
+	reg.Register(&blockchain.PeerInfo{ID: "pruned", DataHubURL: "http://p", Height: 100, BlockHash: syncCoordinatorTestHash(t), Storage: "pruned"})
+	reg.Register(&blockchain.PeerInfo{ID: "full", DataHubURL: "http://f", Height: 100, BlockHash: syncCoordinatorTestHash(t), Storage: "full"})
+	for _, id := range []string{"pruned", "full"} {
+		for i := 0; i < 5; i++ {
+			reg.UpdateMetrics(id, 0, 0, 0, true, false, false, 100)
+		}
+	}
+
+	require.Equal(t, "full", sc.selectNewSyncPeer())
+}
+
+func TestSyncCoordinator_SelectNewSyncPeer_MeritTiedSybilCannotCapture(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 10, []byte{0x02})
+
+	// One attacker ID that sorts lexicographically first among four peers tied
+	// on every merit criterion. Through the real coordinator selection path it
+	// must not win every round; the removed peer-ID tiebreak gave it 100%
+	// capture. P(some tied peer never wins in 100 rounds) <= 4 * 0.75^100,
+	// so this cannot flake.
+	ids := []string{"000000-attacker", "honest-a", "honest-b", "honest-c"}
+	for _, id := range ids {
+		reg.Register(&blockchain.PeerInfo{
+			ID:                 id,
+			DataHubURL:         "http://" + id,
+			Height:             100,
+			BlockHash:          syncCoordinatorTestHash(t),
+			Storage:            "full",
+			ValidatedHeight:    100,
+			ValidatedBlockHash: syncCoordinatorTestHash(t),
+			ValidatedChainWork: []byte{0x03},
+		})
+		for i := 0; i < 5; i++ {
+			reg.UpdateMetrics(id, 0, 0, 0, true, false, false, 100)
+		}
+	}
+
+	wins := map[string]int{}
+	for range 100 {
+		got := sc.selectNewSyncPeer()
+		require.Contains(t, ids, got)
+		wins[got]++
+	}
+	for _, id := range ids {
+		require.Positive(t, wins[id], "every merit-tied peer must win at least once, got %v", wins)
 	}
 }
 
-func TestSyncCoordinator_MonitorFSM(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
+func TestSyncCoordinator_FilterEligiblePeers_DropsLowAndOldPeer(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
 
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil,
-	)
-
-	sc.SetGetLocalHeightCallback(func() uint32 {
-		return 100
-	})
-
-	// Test context cancellation
-	ctx, cancel := context.WithCancel(context.Background())
-	sc.wg.Add(1)
-	go sc.monitorFSM(ctx)
-
-	// Let it run briefly
-	time.Sleep(100 * time.Millisecond)
-
-	// Cancel context
-	cancel()
-
-	// Wait for goroutine to finish
-	done := make(chan bool)
-	go func() {
-		sc.wg.Wait()
-		done <- true
-	}()
-
-	select {
-	case <-done:
-		// Success
-	case <-time.After(2 * time.Second):
-		t.Fatal("monitorFSM did not stop on context cancellation")
+	peers := []*blockchain.PeerInfo{
+		{ID: "old", DataHubURL: "x", Height: 100, BlockHash: syncCoordinatorTestHash(t), ReputationScore: 80},
+		{ID: "low", DataHubURL: "x", Height: 10, BlockHash: syncCoordinatorTestHash(t), ReputationScore: 80},
+		{ID: "good", DataHubURL: "x", Height: 100, BlockHash: syncCoordinatorTestHash(t), ReputationScore: 80},
 	}
 
-	// Test stop channel
-	sc2 := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil,
-	)
+	got := filterEligiblePeersForTest(sc, peers, "old", 50)
 
-	sc2.SetGetLocalHeightCallback(func() uint32 {
-		return 100
+	require.Len(t, got, 1)
+	require.Equal(t, "good", got[0].ID)
+}
+
+func TestSyncCoordinator_LogPeerList_NoPanicOnEmptyAndPopulated(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	require.NotPanics(t, func() { sc.logPeerList(nil) })
+	require.NotPanics(t, func() {
+		sc.logPeerList([]*blockchain.PeerInfo{{ID: "p", DataHubURL: "x", Height: 1}})
+	})
+}
+
+func TestSyncCoordinator_LogCandidateList_NoPanic(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	require.NotPanics(t, func() {
+		sc.logCandidateList([]*blockchain.PeerInfo{
+			{ID: "fresh", DataHubURL: "x", Height: 1},
+			{ID: "tried", DataHubURL: "x", Height: 1, LastSyncAttempt: time.Now().Add(-1 * time.Minute)},
+		})
+	})
+}
+
+func TestSyncCoordinator_SendSyncMessage_PeerNotFoundErrors(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	err := sc.sendSyncMessage("not-in-registry")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not found")
+}
+
+func TestSyncCoordinator_SendSyncMessage_NoBlockHashErrors(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	reg.Register(&blockchain.PeerInfo{ID: "p", DataHubURL: "x", Height: 100})
+
+	err := sc.sendSyncMessage("p")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no block hash")
+}
+
+func TestSyncCoordinator_EvaluateSyncPeer_NoSyncPeerReturns(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	require.NotPanics(t, func() { sc.evaluateSyncPeer() })
+}
+
+func TestSyncCoordinator_EvaluateSyncPeer_LowRepClearsSyncPeer(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	reg.Register(&blockchain.PeerInfo{ID: "p", DataHubURL: "http://p"})
+	// Drive reputation below 20 via malicious mark.
+	reg.UpdateMetrics("p", 0, 0, 0, false, false, true, 0)
+
+	sc.mu.Lock()
+	sc.currentSyncPeer = "p"
+	sc.syncStartTime = time.Now()
+	sc.mu.Unlock()
+
+	sc.evaluateSyncPeer()
+
+	require.Empty(t, sc.GetCurrentSyncPeer(), "low-rep sync peer must be cleared")
+}
+
+func TestSyncCoordinator_EvaluateSyncPeer_MissingPeerClears(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+
+	sc.mu.Lock()
+	sc.currentSyncPeer = "phantom"
+	sc.syncStartTime = time.Now()
+	sc.mu.Unlock()
+
+	sc.evaluateSyncPeer()
+	require.Empty(t, sc.GetCurrentSyncPeer())
+}
+
+func TestSyncCoordinator_SelectAndActivateNewPeer_NoEligibleEntersBackoff(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+
+	require.NoError(t, sc.selectAndActivateNewPeer(50, ""))
+
+	sc.mu.RLock()
+	require.True(t, sc.allPeersAttempted, "no peers above local height should enter backoff")
+	sc.mu.RUnlock()
+}
+
+func TestSyncCoordinator_SelectAndActivateNewPeer_ActivatesEligible(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+
+	reg.Register(&blockchain.PeerInfo{ID: "good", DataHubURL: "http://g", Height: 100, BlockHash: syncCoordinatorTestHash(t), Storage: "full"})
+	for i := 0; i < 5; i++ {
+		reg.UpdateMetrics("good", 0, 0, 0, true, false, false, 100)
+	}
+
+	// selectAndActivateNewPeer fires sendSyncMessage; the coordinator records the peer
+	// as the current sync target even without a Kafka producer in this test.
+	require.NoError(t, sc.selectAndActivateNewPeer(50, ""))
+
+	require.Equal(t, "good", sc.GetCurrentSyncPeer())
+}
+
+func TestSyncCoordinator_SelectAndActivateNewPeer_StoresIDEvenIfSendFails(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 10, []byte{0x02})
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "doomed-peer",
+		DataHubURL:         "http://doomed",
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x03},
 	})
 
-	ctx2 := context.Background()
-	sc2.wg.Add(1)
-	go sc2.monitorFSM(ctx2)
+	err := sc.selectAndActivateNewPeer(10, "")
 
-	// Let it run briefly
-	time.Sleep(100 * time.Millisecond)
+	require.Error(t, err)
+	require.Equal(t, "doomed-peer", sc.GetCurrentSyncPeer())
+	sc.mu.RLock()
+	require.False(t, sc.syncStartTime.IsZero())
+	sc.mu.RUnlock()
+}
 
-	// Close stop channel
-	close(sc2.stopCh)
+func TestSyncCoordinator_ColdStart_FarBehind_WithAdvertisedOnlyPeers_InitiatesSync(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 0 })
+	setSyncCoordinatorLocalTip(t, sc, 0, []byte{0x01})
 
-	// Wait for goroutine to finish
-	done2 := make(chan bool)
-	go func() {
-		sc2.wg.Wait()
-		done2 <- true
-	}()
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "advertised",
+		DataHubURL: "http://advertised",
+		Height:     10_000,
+		BlockHash:  syncCoordinatorTestHash(t),
+		Storage:    "full",
+	})
 
-	select {
-	case <-done2:
-		// Success
-	case <-time.After(2 * time.Second):
-		t.Fatal("monitorFSM did not stop on stop channel close")
+	require.False(t, sc.isCaughtUp())
+
+	err := sc.selectAndActivateNewPeer(0, "")
+	require.NoError(t, err)
+	require.Equal(t, "advertised", sc.GetCurrentSyncPeer())
+}
+
+func TestSyncCoordinator_ColdStart_RealDefaultSettings_AdvertisedOnlyPeerIsNotCaughtUp(t *testing.T) {
+	tSettings := settings.NewSettings()
+	sc, reg := newTestSyncCoordinatorWithSettings(t, tSettings)
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 0 })
+	setSyncCoordinatorLocalTip(t, sc, 0, []byte{0x01})
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "advertised",
+		DataHubURL: "http://advertised",
+		Height:     10_000,
+		BlockHash:  syncCoordinatorTestHash(t),
+		Storage:    "full",
+	})
+
+	require.Equal(t, 3, syncCoordinatorProbeBudget(sc))
+	require.False(t, sc.isCaughtUp())
+}
+
+func TestSyncCoordinator_StartupLocalChainWorkUnavailable_UsesBoundedAdvertisedProbe(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 0 })
+	client := setSyncCoordinatorLocalTipError(t, sc, errors.NewProcessingError("chainwork unavailable"))
+	state := blockchain_api.FSMStateType_RUNNING
+	client.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "advertised",
+		DataHubURL: "http://advertised",
+		Height:     100,
+		BlockHash:  syncCoordinatorTestHash(t),
+		Storage:    "full",
+	})
+
+	sc.checkFSMState()
+
+	require.Equal(t, "advertised", sc.GetCurrentSyncPeer())
+}
+
+func TestSyncCoordinator_InflatedAdvertisedOnlyPeer_ConsumesProbeBudgetAndBacksOff(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 0 })
+	sc.settings.P2P.MaxUnprovenSyncProbesPerBackoffWindow = 1
+	setSyncCoordinatorProbeBudget(sc, 1)
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "inflated",
+		DataHubURL: "http://inflated",
+		Height:     10_000,
+		BlockHash:  syncCoordinatorTestHash(t),
+		Storage:    "full",
+	})
+
+	require.NoError(t, sc.selectAndActivateNewPeer(0, ""))
+	require.Equal(t, "inflated", sc.GetCurrentSyncPeer())
+	require.Equal(t, 0, syncCoordinatorProbeBudget(sc))
+
+	sc.ClearSyncPeer()
+	require.NoError(t, sc.selectAndActivateNewPeer(0, ""))
+
+	sc.mu.RLock()
+	require.True(t, sc.allPeersAttempted)
+	sc.mu.RUnlock()
+}
+
+func TestSyncCoordinator_ConcurrentActivation_ClaimsOnceAndConsumesOneProbe(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 0 })
+	sc.settings.P2P.MaxUnprovenSyncProbesPerBackoffWindow = 2
+	setSyncCoordinatorProbeBudget(sc, 2)
+	producer := kafka.NewKafkaAsyncProducerMock()
+	sc.blocksKafkaProducerClient = producer
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "racy",
+		DataHubURL: "http://racy",
+		Height:     100,
+		BlockHash:  syncCoordinatorTestHash(t),
+		Storage:    "full",
+	})
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = sc.selectAndActivateNewPeer(0, "")
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	require.Equal(t, "racy", sc.GetCurrentSyncPeer())
+	require.Equal(t, 1, syncCoordinatorProbeBudget(sc))
+	require.Len(t, producer.PublishChannel(), 1)
+}
+
+func TestSyncCoordinator_ProbeBudgetResetsAfterValidatedProgress(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+
+	sc.mu.Lock()
+	sc.lastLocalChainWork = []byte{0x02}
+	sc.unprovenProbeBudgetRemaining = 0
+	sc.mu.Unlock()
+
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x03})
+
+	sc.refreshProbeBudgetFromLocalTip()
+	require.Equal(t, sc.settings.P2P.MaxUnprovenSyncProbesPerBackoffWindow, syncCoordinatorProbeBudget(sc))
+}
+
+func TestSyncCoordinator_UnprovenProbeBudget_NotConsumedByEligibilityChecks(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorProbeBudget(sc, 2)
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "advertised",
+		DataHubURL: "http://advertised",
+		Height:     100,
+		BlockHash:  syncCoordinatorTestHash(t),
+		Storage:    "full",
+	})
+
+	require.False(t, sc.isCaughtUp())
+	require.Len(t, filterEligiblePeersForTest(sc, sc.listAllPeers(), "", 0), 1)
+	sc.checkAllPeersAttempted()
+
+	require.Equal(t, 2, syncCoordinatorProbeBudget(sc))
+}
+
+func TestSyncCoordinator_SlowInitialCatchup_DoesNotBecomeCaughtUpWhenProbeBudgetExhausted(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorProbeBudget(sc, 0)
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "active",
+		DataHubURL: "http://active",
+		Height:     100,
+		BlockHash:  syncCoordinatorTestHash(t),
+	})
+
+	sc.mu.Lock()
+	sc.currentSyncPeer = "active"
+	sc.syncStartTime = time.Now()
+	sc.mu.Unlock()
+
+	require.False(t, sc.isCaughtUp())
+}
+
+func TestSyncCoordinator_IsCaughtUp_UsesValidatedChainWork(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "validated",
+		DataHubURL:         "http://validated",
+		Height:             0,
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x03},
+	})
+
+	require.False(t, sc.isCaughtUp())
+}
+
+// P1-b: an advertised-ahead peer keeps us NOT caught up regardless of the
+// unproven-probe budget (fallback path, local tip unavailable). Treating an
+// exhausted budget as caught-up wedges monitorFSM at slowMonitorInterval and
+// makes the budget refill unreachable. Probe *activation* stays budget-gated
+// elsewhere (filterEligiblePeersWithTip / claimSelectedSyncPeer).
+func TestSyncCoordinator_IsCaughtUp_AdvertisedAheadPeerNotCaughtUpRegardlessOfBudget(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "advertised",
+		DataHubURL: "http://advertised",
+		Height:     100,
+		BlockHash:  syncCoordinatorTestHash(t),
+	})
+
+	setSyncCoordinatorProbeBudget(sc, 1)
+	require.False(t, sc.isCaughtUp())
+
+	setSyncCoordinatorProbeBudget(sc, 0)
+	require.False(t, sc.isCaughtUp())
+}
+
+func TestSyncCoordinator_FilterEligiblePeers_UsesValidatedWorkBeforeAdvertisedProbe(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	validatedHash := syncCoordinatorTestHash(t)
+
+	peers := []*blockchain.PeerInfo{
+		{
+			ID:                 "validated",
+			DataHubURL:         "http://validated",
+			Height:             1,
+			ReputationScore:    80,
+			ValidatedBlockHash: validatedHash,
+			ValidatedChainWork: []byte{0x03},
+		},
+		{
+			ID:              "advertised",
+			DataHubURL:      "http://advertised",
+			Height:          150,
+			BlockHash:       syncCoordinatorTestHash(t),
+			ReputationScore: 80,
+		},
+	}
+
+	got := filterEligiblePeersForTest(sc, peers, "", 100)
+
+	require.Len(t, got, 1)
+	require.Equal(t, "validated", got[0].ID)
+	require.Greater(t, got[0].Height, uint32(100))
+}
+
+func TestSyncCoordinator_CheckAllPeersAttempted_UsesValidatedWorkAndProbeEligibility(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "validated",
+		DataHubURL:         "http://validated",
+		Height:             0,
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x03},
+		LastSyncAttempt:    time.Now(),
+	})
+
+	sc.checkAllPeersAttempted()
+
+	sc.mu.RLock()
+	require.True(t, sc.allPeersAttempted)
+	sc.mu.RUnlock()
+}
+
+func TestSyncCoordinator_EvaluateSyncPeer_ValidatedWorkCaughtUp(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x04})
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "current",
+		DataHubURL:         "http://current",
+		Height:             1_000,
+		BlockHash:          syncCoordinatorTestHash(t),
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x03},
+		LastMessageTime:    time.Now(),
+	})
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "better",
+		DataHubURL:         "http://better",
+		Height:             1_001,
+		BlockHash:          syncCoordinatorTestHash(t),
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x05},
+		LastMessageTime:    time.Now(),
+	})
+
+	sc.mu.Lock()
+	sc.currentSyncPeer = "current"
+	sc.syncStartTime = time.Now()
+	sc.mu.Unlock()
+
+	sc.evaluateSyncPeer()
+
+	require.Equal(t, "better", sc.GetCurrentSyncPeer())
+}
+
+func TestSyncCoordinator_HandleFSMTransition_DoesNotUseAdvertisedHeightAsFailureProof(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "advertised",
+		DataHubURL: "http://advertised",
+		Height:     1_000,
+		BlockHash:  syncCoordinatorTestHash(t),
+	})
+
+	sc.mu.Lock()
+	sc.currentSyncPeer = "advertised"
+	sc.syncStartTime = time.Now()
+	sc.mu.Unlock()
+
+	state := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&state))
+	require.Equal(t, "advertised", sc.GetCurrentSyncPeer())
+}
+
+func TestSyncCoordinator_HandleFSMTransition_ChattyNoProgressPeerTimesOutAndSelectsBetterPeer(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "current",
+		DataHubURL: "http://current",
+		Height:     200,
+		BlockHash:  syncCoordinatorTestHash(t),
+		Storage:    "full",
+	})
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "better",
+		DataHubURL:         "http://better",
+		Height:             201,
+		BlockHash:          syncCoordinatorTestHash(t),
+		Storage:            "full",
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x03},
+	})
+	reg.UpdateLastMessageTime("current")
+
+	stalledAt := time.Now().Add(-defaultSyncPeerNoProgressLimit - time.Second)
+	sc.mu.Lock()
+	sc.currentSyncPeer = "current"
+	sc.syncStartTime = stalledAt
+	sc.lastSyncProgressTime = stalledAt
+	sc.lastLocalChainWork = []byte{0x02}
+	sc.mu.Unlock()
+
+	state := blockchain_api.FSMStateType_RUNNING
+	require.True(t, sc.handleFSMTransition(&state))
+
+	require.Equal(t, "better", sc.GetCurrentSyncPeer())
+	current, ok := reg.Get("current")
+	require.True(t, ok)
+	require.False(t, current.LastSyncAttempt.IsZero())
+	require.Equal(t, 50.0, current.ReputationScore)
+	require.WithinDuration(t, time.Now(), current.LastMessageTime, time.Minute)
+}
+
+// newPreemptionTestCoordinator wires an incumbent sync peer ("current") that is
+// still ahead of local by validated work and a candidate ("better"), with the
+// incumbent's last validated progress placed progressAge in the past. It reuses
+// the standard harness; noProgressTimeout=0 exercises the 5m fallback.
+func newPreemptionTestCoordinator(t *testing.T, noProgressTimeout time.Duration, incumbentWork, candidateWork []byte, progressAge time.Duration) (*SyncCoordinator, *blockchain.CentralizedPeerRegistry) {
+	t.Helper()
+
+	tSettings := &settings.Settings{
+		P2P: settings.P2PSettings{
+			AllowPrunedNodeFallback:                   true,
+			MaxUnvalidatedAdvertisedHeightLead:        10_000,
+			MaxUnprovenSyncProbesPerBackoffWindow:     3,
+			FullDeliveryFreshnessWindow:               24 * time.Hour,
+			SyncCoordinatorPeriodicEvaluationInterval: 30 * time.Second,
+			SyncPeerNoProgressTimeout:                 noProgressTimeout,
+		},
+	}
+	sc, reg := newTestSyncCoordinatorWithSettings(t, tSettings)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "current",
+		DataHubURL:         "http://current",
+		Height:             200,
+		BlockHash:          syncCoordinatorTestHash(t),
+		Storage:            "full",
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: incumbentWork,
+	})
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "better",
+		DataHubURL:         "http://better",
+		Height:             201,
+		BlockHash:          syncCoordinatorTestHash(t),
+		Storage:            "full",
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: candidateWork,
+	})
+
+	progressAt := time.Now().Add(-progressAge)
+	sc.mu.Lock()
+	sc.currentSyncPeer = "current"
+	sc.syncStartTime = progressAt
+	sc.lastSyncProgressTime = progressAt
+	sc.lastSyncPeerBlocksReceived = 0
+	sc.lastLocalChainWork = []byte{0x02}
+	sc.mu.Unlock()
+
+	return sc, reg
+}
+
+// P2-1(a): a materially-higher-work candidate preempts an incumbent that is still
+// ahead of local by validated work once it has stalled past the guard window.
+func TestSyncCoordinator_EvaluateSyncPeer_PreemptsForHigherWorkPeer(t *testing.T) {
+	// Default 5m timeout → 2.5m guard; progressAge 3m is past the guard but short
+	// of the hard no-progress eviction, and the candidate outranks the incumbent.
+	sc, _ := newPreemptionTestCoordinator(t, 0, []byte{0x03}, []byte{0x05}, 3*time.Minute)
+
+	sc.evaluateSyncPeer()
+
+	require.Equal(t, "better", sc.GetCurrentSyncPeer(), "higher-work candidate must preempt a stalled incumbent")
+}
+
+// P2-1(b): strict comparison — a candidate whose validated work is not strictly
+// greater than the incumbent's (equal OR lower) must never preempt, even when the
+// incumbent has stalled well past the guard window.
+func TestSyncCoordinator_EvaluateSyncPeer_DoesNotPreemptForNonHigherWorkPeer(t *testing.T) {
+	cases := []struct {
+		name          string
+		candidateWork []byte
+	}{
+		{"equal work", []byte{0x03}},
+		{"strictly lower work", []byte{0x01}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Incumbent work 0x03; stalled 3m (past the 2.5m guard at the 5m default).
+			sc, _ := newPreemptionTestCoordinator(t, 0, []byte{0x03}, tc.candidateWork, 3*time.Minute)
+
+			sc.evaluateSyncPeer()
+
+			require.Equal(t, "current", sc.GetCurrentSyncPeer(), "non-higher-work candidate must not preempt")
+		})
 	}
 }
 
-func TestSyncCoordinator_MonitorFSM_AdaptiveIntervals(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
+// P2-1(c): a higher-work candidate exists, but the incumbent made validated
+// progress within the guard window, so it must not be preempted mid-delivery.
+func TestSyncCoordinator_EvaluateSyncPeer_DoesNotPreemptRecentlyProgressingPeer(t *testing.T) {
+	// Default 5m timeout → 2.5m guard; progressAge 1m is below the guard.
+	sc, _ := newPreemptionTestCoordinator(t, 0, []byte{0x03}, []byte{0x05}, 1*time.Minute)
 
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil,
-	)
+	sc.evaluateSyncPeer()
 
-	// Test when caught up - should use slow interval
-	sc.SetGetLocalHeightCallback(func() uint32 {
-		return 100
+	require.Equal(t, "current", sc.GetCurrentSyncPeer(), "recently-progressing peer must not be preempted")
+}
+
+// P2-1(d): the preemption guard tracks the configurable no-progress timeout, not
+// the periodic-evaluation interval. The SAME progressAge preempts under a small
+// timeout but not under a large one.
+func TestSyncCoordinator_EvaluateSyncPeer_PreemptionTimingScalesWithConfig(t *testing.T) {
+	const progressAge = 90 * time.Second
+
+	// Small timeout (2m → 1m guard): 90s is past the guard → preempt.
+	scSmall, _ := newPreemptionTestCoordinator(t, 2*time.Minute, []byte{0x03}, []byte{0x05}, progressAge)
+	scSmall.evaluateSyncPeer()
+	require.Equal(t, "better", scSmall.GetCurrentSyncPeer(), "small timeout: same progressAge preempts")
+
+	// Large timeout (30m → 15m guard): the SAME 90s is below the guard → no preempt.
+	scLarge, _ := newPreemptionTestCoordinator(t, 30*time.Minute, []byte{0x03}, []byte{0x05}, progressAge)
+	scLarge.evaluateSyncPeer()
+	require.Equal(t, "current", scLarge.GetCurrentSyncPeer(), "large timeout: same progressAge does not preempt")
+}
+
+func TestSyncCoordinator_EvaluateSyncPeer_BlockDeliveryKeepsNoProgressDeadlineFresh(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "current",
+		DataHubURL: "http://current",
+		Height:     200,
+		BlockHash:  syncCoordinatorTestHash(t),
+		Storage:    "full",
+	})
+	// A fully-validated block delivered by the sync peer bumps BlocksReceived; this
+	// is the only signal that should refresh the no-progress deadline.
+	reg.RecordBlockReceived("current", 0)
+
+	stalledAt := time.Now().Add(-defaultSyncPeerNoProgressLimit - time.Second)
+	sc.mu.Lock()
+	sc.currentSyncPeer = "current"
+	sc.syncStartTime = stalledAt
+	sc.lastSyncProgressTime = stalledAt
+	sc.lastSyncPeerBlocksReceived = 0
+	sc.lastLocalChainWork = []byte{0x02}
+	sc.mu.Unlock()
+
+	sc.evaluateSyncPeer()
+
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+	_, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(time.Now())
+	require.False(t, timedOut)
+	require.Less(t, progressAge, defaultSyncPeerNoProgressLimit)
+}
+
+// P2-a: validated header work is credited before any block body is delivered, so
+// it must not refresh the no-progress stall deadline. Only peer-attributable block
+// delivery (BlocksReceived) does.
+func TestSyncCoordinator_RecordSyncPeerBlockProgress_HeaderCreditDoesNotRefreshDeadline(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+
+	stalledAt := time.Now().Add(-defaultSyncPeerNoProgressLimit - time.Second)
+	sc.mu.Lock()
+	sc.currentSyncPeer = "current"
+	sc.syncStartTime = stalledAt
+	sc.lastSyncProgressTime = stalledAt
+	sc.lastSyncPeerBlocksReceived = 0
+	sc.mu.Unlock()
+
+	// No new block delivered (BlocksReceived unchanged) — the deadline stays stale.
+	sc.recordSyncPeerBlockProgress("current", 0, time.Now())
+	stalledPeer, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(time.Now())
+	require.True(t, timedOut, "header credit alone must not keep the deadline fresh")
+	require.Equal(t, "current", stalledPeer)
+	require.Greater(t, progressAge, defaultSyncPeerNoProgressLimit)
+
+	// A delivered block DOES refresh it.
+	sc.recordSyncPeerBlockProgress("current", 1, time.Now())
+	_, _, timedOut = sc.syncPeerNoProgressTimedOut(time.Now())
+	require.False(t, timedOut)
+}
+
+// P1-a: local best-tip chainwork advances from ordinary block gossip delivered by
+// any peer. Such an advance must refill the probe budget but must NOT refresh a
+// stalled sync peer's no-progress deadline, otherwise the peer pins the slot for
+// as long as the network produces blocks.
+func TestSyncCoordinator_LocalTipAdvanceDoesNotRefreshStallDeadline(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	setSyncCoordinatorProbeBudget(sc, 0)
+
+	stalledAt := time.Now().Add(-defaultSyncPeerNoProgressLimit - time.Second)
+	sc.mu.Lock()
+	sc.currentSyncPeer = "stalled"
+	sc.syncStartTime = stalledAt
+	sc.lastSyncProgressTime = stalledAt
+	sc.lastSyncPeerBlocksReceived = 0
+	sc.lastLocalChainWork = []byte{0x02}
+	sc.mu.Unlock()
+
+	sc.resetProbeBudgetIfLocalChainWorkAdvanced([]byte{0x05})
+
+	require.Equal(t, maxUnprovenProbeBudget(sc.settings), syncCoordinatorProbeBudget(sc),
+		"local-tip advance should refill the probe budget")
+
+	stalledPeer, progressAge, timedOut := sc.syncPeerNoProgressTimedOut(time.Now())
+	require.True(t, timedOut, "stalled sync peer must still time out despite local-tip advance")
+	require.Equal(t, "stalled", stalledPeer)
+	require.Greater(t, progressAge, defaultSyncPeerNoProgressLimit)
+}
+
+// P1-b: when an advertised-ahead peer exists but the unproven-probe budget is
+// spent and no peer is pinned, isCaughtUp must still report NOT caught up so
+// monitorFSM keeps ticking fast and the budget refill stays reachable.
+func TestSyncCoordinator_IsCaughtUp_AdvertisedAheadPeerNotCaughtUpWhenBudgetSpent(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "advertised",
+		DataHubURL: "http://advertised",
+		Height:     200,
+		BlockHash:  syncCoordinatorTestHash(t),
 	})
 
-	// No peers means we're caught up
+	setSyncCoordinatorProbeBudget(sc, 0)
+
+	require.Empty(t, sc.GetCurrentSyncPeer())
+	require.False(t, sc.isCaughtUp(),
+		"an advertised-ahead peer means not caught up even with the probe budget spent")
+}
+
+// P2-b: a peer inside an active block-incomplete / full-storage penalty window
+// loses its top-tier "ahead by validated work" eligibility, and regains it once
+// the window expires.
+func TestSyncCoordinator_PeerAheadByValidatedWork_PenaltyWindowSuppressesEligibility(t *testing.T) {
+	local := []byte{0x02}
+	ahead := &blockchain.PeerInfo{
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x05},
+	}
+	require.True(t, peerAheadByValidatedWork(ahead, local))
+
+	ahead.FullStoragePenaltyUntil = time.Now().Add(time.Hour)
+	require.False(t, peerAheadByValidatedWork(ahead, local),
+		"active penalty window must withhold validated-work eligibility")
+
+	ahead.FullStoragePenaltyUntil = time.Now().Add(-time.Hour)
+	require.True(t, peerAheadByValidatedWork(ahead, local),
+		"expired penalty window must restore validated-work eligibility")
+}
+
+func TestSyncCoordinator_MaxUnvalidatedAdvertisedHeightLead_AllowsProbeAtTenThousand(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 100 })
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "bounded",
+		DataHubURL: "http://bounded",
+		Height:     10_100,
+		BlockHash:  syncCoordinatorTestHash(t),
+	})
+
+	require.False(t, sc.isCaughtUp())
+	require.Equal(t, "bounded", sc.selectNewSyncPeer())
+}
+
+func TestSyncCoordinator_SendSyncTriggerToKafka_NilProducerNoOp(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	require.NotPanics(t, func() { sc.sendSyncTriggerToKafka("p", "abc") })
+}
+
+func TestSyncCoordinator_SendSyncTriggerToKafka_EmptyHashNoOp(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	require.NotPanics(t, func() { sc.sendSyncTriggerToKafka("p", "") })
+}
+
+func TestSyncCoordinator_StartStop_ExitsCleanly(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sc.wg.Add(1)
-	go sc.monitorFSM(ctx)
+	sc.Start(ctx)
 
-	// Let it run for a bit - should be using slow interval
-	time.Sleep(200 * time.Millisecond)
+	// Allow the goroutines to spin up briefly so they reach their select.
+	time.Sleep(20 * time.Millisecond)
 
-	// Add a peer ahead of us - should switch to fast monitoring
-	peerID := peer.ID("test-peer")
-	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(peerID, "", 110, peerHash, "")
-
-	// Let it detect we're not caught up and switch to fast interval
-	time.Sleep(3 * time.Second) // Wait for timer to fire with fast interval
-
-	// Now remove the peer so we're caught up again
-	registry.Remove(peerID)
-
-	// Let it detect we're caught up and switch back to slow interval
-	time.Sleep(3 * time.Second)
-
-	cancel()
-
-	// Wait for goroutine to finish
-	done := make(chan bool)
+	doneCh := make(chan struct{})
 	go func() {
-		sc.wg.Wait()
-		done <- true
+		sc.Stop(context.Background())
+		close(doneCh)
 	}()
 
 	select {
-	case <-done:
-		// Success - test covered the adaptive interval logic
+	case <-doneCh:
 	case <-time.After(2 * time.Second):
-		t.Fatal("monitorFSM did not stop properly")
+		t.Fatal("Stop did not return — coordinator goroutines leaked")
 	}
 }
 
-func TestSyncCoordinator_HandleFSMTransition_Simplified(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
+func TestSyncCoordinator_CheckAndClearExpiredBackoff_NotInBackoff(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	require.False(t, sc.checkAndClearExpiredBackoff())
+}
 
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
+func TestSyncCoordinator_CheckAndClearExpiredBackoff_StillInWindow(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	sc.enterBackoffMode()
+	require.True(t, sc.checkAndClearExpiredBackoff(),
+		"freshly entered backoff must still be in its window")
+}
+
+func newTestSyncCoordinatorWithFSM(t *testing.T, state blockchain_api.FSMStateType) (*SyncCoordinator, *blockchain.CentralizedPeerRegistry, *blockchain.Mock) {
+	t.Helper()
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	client := blockchain.NewLocalPeerRegistryClient(reg)
+	tSettings := &settings.Settings{P2P: settings.P2PSettings{
+		AllowPrunedNodeFallback:                   true,
+		SyncCoordinatorPeriodicEvaluationInterval: 30 * time.Second,
+		HealthCheckEnabled:                        false, // test DataHubURL is unreachable; skip HTTP health check
+		// Production defaults for the unproven-peer probe hardening (upstream
+		// #1201); a zero probe budget would make unproven peers unselectable.
+		MaxUnvalidatedAdvertisedHeightLead:    10_000,
+		MaxUnprovenSyncProbesPerBackoffWindow: 3,
+		FullDeliveryFreshnessWindow:           24 * time.Hour,
+	}}
+	bcMock := &blockchain.Mock{}
+	st := state
+	bcMock.On("GetFSMCurrentState", mock.Anything).Return(&st, nil)
+	// checkFSMState refreshes the unproven-probe budget from the local tip
+	// (upstream #1201), which reads the best block header from the client.
+	bcMock.On("GetBestBlockHeader", mock.Anything).Return(
+		&model.BlockHeader{},
+		&model.BlockHeaderMeta{Height: 0, ChainWork: []byte{0x01}},
 		nil,
 	)
 
-	sc.SetGetLocalHeightCallback(func() uint32 {
-		return 100
-	})
-
-	runningState := blockchain_api.FSMStateType_RUNNING
-	catchingState := blockchain_api.FSMStateType_CATCHINGBLOCKS
-
-	t.Run("RUNNING state with sync peer behind triggers transition", func(t *testing.T) {
-		// Test RUNNING state with current sync peer where local height < peer height
-		// This simulates a catchup failure scenario
-		syncPeer := peer.ID("sync-peer-1")
-		peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-		registry.Put(syncPeer, "", 110, peerHash, "") // Set peer height higher than local (110 > 100)
-
-		sc.mu.Lock()
-		sc.currentSyncPeer = syncPeer
-		sc.mu.Unlock()
-
-		transitioned := sc.handleFSMTransition(&runningState)
-		assert.True(t, transitioned, "Should return true for RUNNING state with sync peer behind")
-	})
-
-	t.Run("RUNNING state without sync peer returns false", func(t *testing.T) {
-		// Clear all state first
-		sc.mu.Lock()
-		sc.currentSyncPeer = ""
-		sc.mu.Unlock()
-
-		transitioned := sc.handleFSMTransition(&runningState)
-		assert.False(t, transitioned, "Should return false for RUNNING state without sync peer")
-	})
-
-	t.Run("non-RUNNING state returns false", func(t *testing.T) {
-		// Even with a sync peer set, non-RUNNING state should return false
-		somePeer := peer.ID("some-peer")
-		peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-		registry.Put(somePeer, "", 110, peerHash, "")
-
-		sc.mu.Lock()
-		sc.currentSyncPeer = somePeer
-		sc.mu.Unlock()
-
-		transitioned := sc.handleFSMTransition(&catchingState)
-		assert.False(t, transitioned, "Should return false for non-RUNNING state")
-	})
-
-	t.Run("successful sync triggers transition", func(t *testing.T) {
-		// Test successful sync scenario (local height >= peer height)
-		successPeer := peer.ID("success-peer")
-		successHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-		registry.Put(successPeer, "", 90, successHash, "") // Set peer height lower than local (90 < 100)
-
-		sc.mu.Lock()
-		sc.currentSyncPeer = successPeer
-		sc.mu.Unlock()
-
-		transitioned := sc.handleFSMTransition(&runningState)
-		assert.True(t, transitioned, "Should return true for RUNNING state with successful sync")
-	})
-
-	t.Run("peer not in registry triggers transition", func(t *testing.T) {
-		// Test scenario where sync peer is no longer in registry (disconnected)
-		missingPeer := peer.ID("missing-peer")
-		// Don't add to registry
-
-		sc.mu.Lock()
-		sc.currentSyncPeer = missingPeer
-		sc.mu.Unlock()
-
-		transitioned := sc.handleFSMTransition(&runningState)
-		assert.True(t, transitioned, "Should return true when sync peer not in registry")
-	})
+	sc := NewSyncCoordinator(context.Background(), ulogger.TestLogger{}, tSettings, client,
+		NewPeerSelector(ulogger.TestLogger{}, tSettings), bcMock, nil)
+	sc.SetGetLocalHeightCallback(func(context.Context) uint32 { return 0 })
+	return sc, reg, bcMock
 }
 
-func TestSyncCoordinator_FilterEligiblePeers(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
+func TestSyncCoordinator_ProactiveInCatchingBlocks(t *testing.T) {
+	sc, reg, _ := newTestSyncCoordinatorWithFSM(t, blockchain_api.FSMStateType_CATCHINGBLOCKS)
 
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil,
-	)
-
-	oldPeer := peer.ID("old-peer")
-	localHeight := uint32(100)
-
-	peers := []*PeerInfo{
-		{ID: oldPeer, Height: 110, Storage: "full"},          // Old peer, should be skipped
-		{ID: peer.ID("peer1"), Height: 90, Storage: "full"},  // Below local height, should be skipped
-		{ID: peer.ID("peer2"), Height: 100, Storage: "full"}, // At local height, should be skipped
-		{ID: peer.ID("peer3"), Height: 120, Storage: "full"}, // Above local height, should be included
-		{ID: peer.ID("peer4"), Height: 115, Storage: "full"}, // Above local height, should be included
+	// Register a viable peer well ahead of local height 0 (mirror the idiom
+	// from TestSyncCoordinator_IsCaughtUp_AheadPeerMakesUsBehind):
+	reg.Register(&blockchain.PeerInfo{ID: "ahead", DataHubURL: "http://ahead", Height: 100,
+		BlockHash: syncCoordinatorTestHash(t)})
+	for i := 0; i < 5; i++ {
+		reg.UpdateMetrics("ahead", 0, 0, 0, true, false, false, 100)
 	}
 
-	eligible := sc.filterEligiblePeers(peers, oldPeer, localHeight)
+	sc.checkFSMState()
 
-	assert.Len(t, eligible, 2, "Should have 2 eligible peers")
-	assert.Equal(t, peer.ID("peer3"), eligible[0].ID)
-	assert.Equal(t, peer.ID("peer4"), eligible[1].ID)
+	require.Equal(t, "ahead", sc.GetCurrentSyncPeer(),
+		"coordinator should proactively select a sync peer while in CATCHINGBLOCKS")
 }
 
-func TestSyncCoordinator_FilterEligiblePeers_OldPeerLogging(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil,
-	)
-
-	oldPeer := peer.ID("old-peer-to-skip")
-	localHeight := uint32(100)
-
-	// Test case 1: Old peer is ahead of local height (should log that it's being skipped)
-	peers1 := []*PeerInfo{
-		{ID: oldPeer, Height: 110, Storage: "full"},          // Old peer ahead - should be skipped with logging
-		{ID: peer.ID("peer1"), Height: 120, Storage: "full"}, // New peer ahead - should be included
+// A stalled, still-ahead PROVEN incumbent must be preempted by an unproven candidate with
+// strictly higher validated work. This is the profile the shipped preemption tests miss (they
+// all use an unproven incumbent): before the atomic-swap fix, clear-then-reselect re-pinned the
+// proven incumbent via the proven-first sort and reset its progress clock, defeating eviction.
+func TestSyncCoordinator_EvaluateSyncPeer_PreemptsProvenIncumbentForHigherWorkCandidate(t *testing.T) {
+	tSettings := &settings.Settings{
+		P2P: settings.P2PSettings{
+			AllowPrunedNodeFallback:                   true,
+			MaxUnvalidatedAdvertisedHeightLead:        10_000,
+			MaxUnprovenSyncProbesPerBackoffWindow:     3,
+			FullDeliveryFreshnessWindow:               24 * time.Hour,
+			SyncCoordinatorPeriodicEvaluationInterval: 30 * time.Second,
+			SyncPeerNoProgressTimeout:                 0, // 5m default → 2.5m guard
+		},
 	}
+	sc, reg := newTestSyncCoordinatorWithSettings(t, tSettings)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
 
-	eligible1 := sc.filterEligiblePeers(peers1, oldPeer, localHeight)
-	assert.Len(t, eligible1, 1, "Should have 1 eligible peer (not the old peer)")
-	assert.Equal(t, peer.ID("peer1"), eligible1[0].ID)
-
-	// Test case 2: Peer at same height as local (not old peer) - should be skipped but not logged
-	peers2 := []*PeerInfo{
-		{ID: peer.ID("peer2"), Height: 100, Storage: "full"}, // At local height, not old peer - skipped without special logging
-		{ID: peer.ID("peer3"), Height: 110, Storage: "full"}, // Above local height - included
-	}
-
-	eligible2 := sc.filterEligiblePeers(peers2, oldPeer, localHeight)
-	assert.Len(t, eligible2, 1, "Should have 1 eligible peer")
-	assert.Equal(t, peer.ID("peer3"), eligible2[0].ID)
-
-	// Test case 3: Old peer behind local height - should be skipped
-	peers3 := []*PeerInfo{
-		{ID: oldPeer, Height: 90, Storage: "full"},           // Old peer behind - should be skipped
-		{ID: peer.ID("peer4"), Height: 105, Storage: "full"}, // New peer ahead - should be included
-	}
-
-	eligible3 := sc.filterEligiblePeers(peers3, oldPeer, localHeight)
-	assert.Len(t, eligible3, 1, "Should have 1 eligible peer")
-	assert.Equal(t, peer.ID("peer4"), eligible3[0].ID)
-
-	// Test case 4: Mix of peers to test all branches
-	peers4 := []*PeerInfo{
-		{ID: oldPeer, Height: 110, Storage: "full"},          // Old peer ahead - skipped with logging
-		{ID: peer.ID("peer5"), Height: 95, Storage: "full"},  // Below local - skipped
-		{ID: peer.ID("peer6"), Height: 100, Storage: "full"}, // At local - skipped
-		{ID: peer.ID("peer7"), Height: 115, Storage: "full"}, // Above local - included
-		{ID: peer.ID("peer8"), Height: 120, Storage: "full"}, // Above local - included
-	}
-
-	eligible4 := sc.filterEligiblePeers(peers4, oldPeer, localHeight)
-	assert.Len(t, eligible4, 2, "Should have 2 eligible peers")
-	assert.Equal(t, peer.ID("peer7"), eligible4[0].ID)
-	assert.Equal(t, peer.ID("peer8"), eligible4[1].ID)
-}
-
-func TestSyncCoordinator_SelectAndActivateNewPeer(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	mockProducer := kafka.NewKafkaAsyncProducerMock()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		mockProducer,
-	)
-
-	localHeight := uint32(100)
-	oldPeer := peer.ID("old-peer")
-
-	// Test with no eligible peers
-	sc.selectAndActivateNewPeer(localHeight, oldPeer)
-	assert.Equal(t, peer.ID(""), sc.GetCurrentSyncPeer(), "Should have no sync peer when no eligible peers")
-
-	// Add eligible peer
-	newPeer := peer.ID("new-peer")
-	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(newPeer, "", 110, peerHash, "http://datahub.example.com")
-
-	// Start monitoring the publish channel
-	done := make(chan bool)
-	go func() {
-		select {
-		case <-mockProducer.PublishChannel():
-			done <- true
-		case <-time.After(100 * time.Millisecond):
-			done <- false
-		}
-	}()
-
-	// Test with eligible peer
-	sc.selectAndActivateNewPeer(localHeight, oldPeer)
-	assert.Equal(t, newPeer, sc.GetCurrentSyncPeer(), "Should select new eligible peer")
-
-	if <-done {
-		// Message was published - success
-	} else {
-		t.Fatal("Sync message was not published")
-	}
-}
-
-func TestSyncCoordinator_UpdateBanStatus_SyncPeerBanned(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	mockProducer := kafka.NewKafkaAsyncProducerMock()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		mockProducer,
-	)
-
-	sc.SetGetLocalHeightCallback(func() uint32 {
-		return 100
+	// Proven incumbent: recorded full-block delivery inside the freshness window.
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "current",
+		DataHubURL:         "http://current",
+		Height:             200,
+		Storage:            "full",
+		BlockHash:          syncCoordinatorTestHash(t),
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x03},
+		BlocksReceived:     5,
+		LastBlockTime:      time.Now().Add(-time.Minute),
+	})
+	// Unproven candidate with strictly higher validated work.
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "better",
+		DataHubURL:         "http://better",
+		Height:             201,
+		Storage:            "full",
+		BlockHash:          syncCoordinatorTestHash(t),
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x05},
 	})
 
-	// Add and set sync peer
-	syncPeer := peer.ID("sync-peer")
-	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(syncPeer, "", 110, peerHash, "")
-
+	progressAt := time.Now().Add(-3 * time.Minute) // past 2.5m guard, before 5m hard eviction
 	sc.mu.Lock()
-	sc.currentSyncPeer = syncPeer
+	sc.currentSyncPeer = "current"
+	sc.syncStartTime = progressAt
+	sc.lastSyncProgressTime = progressAt
+	sc.lastSyncPeerBlocksReceived = 5
+	sc.lastLocalChainWork = []byte{0x02}
 	sc.mu.Unlock()
 
-	// Add alternative peer
-	altPeer := peer.ID("alt-peer")
-	altHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(altPeer, "", 115, altHash, "http://alt.example.com")
+	sc.evaluateSyncPeer()
 
-	// Start monitoring the publish channel
-	done := make(chan bool)
-	go func() {
+	require.Equal(t, "better", sc.GetCurrentSyncPeer(),
+		"unproven higher-work candidate must preempt a stalled proven incumbent")
+
+	// The benched incumbent must be placed on the sync-attempt cooldown so it is not
+	// immediately reselected if the candidate later clears.
+	incumbent, ok := reg.Get("current")
+	require.True(t, ok)
+	require.False(t, incumbent.LastSyncAttempt.IsZero(),
+		"benched incumbent must have a recorded sync attempt (cooldown)")
+	require.WithinDuration(t, time.Now(), incumbent.LastSyncAttempt, 5*time.Second,
+		"benched incumbent's sync-attempt timestamp must be fresh")
+}
+
+// A peer that is ahead by locally-validated work must be activated through the full
+// TriggerSync path even when the unproven-probe budget is exhausted: the filter stage admits
+// validated-ahead peers unconditionally, so the claim stage must not re-gate them.
+func TestSyncCoordinator_TriggerSync_ActivatesValidatedAheadPeerDespiteExhaustedBudget(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "ahead",
+		DataHubURL:         "http://ahead",
+		Height:             200,
+		Storage:            "full",
+		BlockHash:          syncCoordinatorTestHash(t),
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x05}, // strictly greater than local 0x02
+	})
+
+	sc.mu.Lock()
+	sc.unprovenProbeBudgetRemaining = 0 // exhausted
+	sc.lastLocalChainWork = []byte{0x02}
+	sc.mu.Unlock()
+
+	require.NoError(t, sc.TriggerSync())
+	require.Equal(t, "ahead", sc.GetCurrentSyncPeer(),
+		"validated-ahead peer must activate despite an exhausted unproven-probe budget")
+}
+
+// A forced peer (operator override) must be activated through TriggerSync even when it is
+// unproven and the probe budget is exhausted; the "bypasses all safety checks" contract must
+// hold at the claim stage too.
+func TestSyncCoordinator_TriggerSync_ActivatesForcedPeerDespiteExhaustedBudget(t *testing.T) {
+	tSettings := &settings.Settings{
+		P2P: settings.P2PSettings{
+			AllowPrunedNodeFallback:                   true,
+			MaxUnvalidatedAdvertisedHeightLead:        10_000,
+			MaxUnprovenSyncProbesPerBackoffWindow:     3,
+			FullDeliveryFreshnessWindow:               24 * time.Hour,
+			SyncCoordinatorPeriodicEvaluationInterval: 30 * time.Second,
+			ForceSyncPeer:                             "forced",
+		},
+	}
+	sc, reg := newTestSyncCoordinatorWithSettings(t, tSettings)
+
+	// Unproven peer: no validated work, no recorded full-block delivery.
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "forced",
+		DataHubURL: "http://forced",
+		Height:     200,
+		BlockHash:  syncCoordinatorTestHash(t),
+	})
+
+	sc.mu.Lock()
+	sc.unprovenProbeBudgetRemaining = 0 // exhausted
+	sc.mu.Unlock()
+
+	require.NoError(t, sc.TriggerSync())
+	require.Equal(t, "forced", sc.GetCurrentSyncPeer(),
+		"forced peer must activate despite an exhausted unproven-probe budget")
+}
+
+func TestSyncCoordinator_MaxUnprovenProbeBudget_Clamp(t *testing.T) {
+	cases := []struct {
+		name       string
+		configured int
+		want       int
+	}{
+		{"negative clamps to zero", -5, 0},
+		{"zero stays zero", 0, 0},
+		{"positive is passed through", 3, 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &settings.Settings{P2P: settings.P2PSettings{MaxUnprovenSyncProbesPerBackoffWindow: tc.configured}}
+			require.Equal(t, tc.want, maxUnprovenProbeBudget(s))
+		})
+	}
+
+	require.Equal(t, 0, maxUnprovenProbeBudget(nil), "nil settings must yield a zero budget")
+}
+
+// HandleCatchupFailure must not clear the sync peer while another sync decision is
+// in flight: pre-serialisation, its unconditional clear could evict a peer that a
+// concurrent decision path was still working with, producing duplicate/conflicting
+// activations. The blocked GetBestBlockHeader holds evaluateSyncPeer mid-decision
+// (under decisionMu); HandleCatchupFailure must wait for it rather than clearing.
+func TestSyncCoordinator_HandleCatchupFailure_WaitsForInFlightDecision(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+
+	reg.Register(&blockchain.PeerInfo{
+		ID:                 "peer-a",
+		DataHubURL:         "http://peer-a",
+		Height:             200,
+		ReputationScore:    50,
+		BlockHash:          syncCoordinatorTestHash(t),
+		ValidatedBlockHash: syncCoordinatorTestHash(t),
+		ValidatedChainWork: []byte{0x05},
+	})
+
+	sc.mu.Lock()
+	sc.currentSyncPeer = "peer-a"
+	sc.mu.Unlock()
+
+	gate := make(chan struct{})
+	entered := make(chan struct{}, 16)
+	client := &blockchain.Mock{}
+	client.On("GetBestBlockHeader", mock.Anything).Run(func(mock.Arguments) {
 		select {
-		case <-mockProducer.PublishChannel():
-			done <- true
-		case <-time.After(100 * time.Millisecond):
-			done <- false
+		case entered <- struct{}{}:
+		default:
 		}
+		<-gate
+	}).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100, ChainWork: []byte{0x02}}, nil)
+	sc.blockchainClient = client
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		sc.evaluateSyncPeer() // blocks in GetBestBlockHeader while holding decisionMu
 	}()
 
-	// Ban the sync peer
-	banManager.AddScore(string(syncPeer), ReasonSpam)
-	banManager.AddScore(string(syncPeer), ReasonSpam) // Should trigger ban
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("evaluateSyncPeer never reached GetBestBlockHeader")
+	}
 
-	// Update ban status
-	sc.UpdateBanStatus(syncPeer)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		sc.HandleCatchupFailure("test failure")
+	}()
 
-	// Verify sync peer was cleared and new one selected
-	assert.Equal(t, altPeer, sc.GetCurrentSyncPeer(), "Should switch to alternative peer when sync peer is banned")
+	// Give HandleCatchupFailure ample time to (wrongly) run its clear if it is not
+	// serialised behind the in-flight decision.
+	time.Sleep(100 * time.Millisecond)
+	require.Equal(t, "peer-a", sc.GetCurrentSyncPeer(),
+		"HandleCatchupFailure must not clear the sync peer while another decision is in flight")
 
-	if <-done {
-		// Message was published - success
-	} else {
-		t.Fatal("Sync message was not published")
+	close(gate)
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("sync decisions deadlocked")
 	}
 }
 
-func TestSyncCoordinator_TriggerSync_SendMessageError(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
+// Hammers every decision entry point concurrently under -race to guard the
+// decisionMu lock ordering: a regression that acquires decisionMu while holding
+// mu (or re-enters it) hangs this test.
+func TestSyncCoordinator_ConcurrentSyncDecisions_NoDeadlock(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
 
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil, // No Kafka producer
-	)
+	pid := mustNewPeerID(t)
+	for _, id := range []string{"peer-a", "peer-b", pid.String()} {
+		reg.Register(&blockchain.PeerInfo{
+			ID:                 id,
+			DataHubURL:         "http://" + id,
+			Height:             200,
+			ReputationScore:    50,
+			BlockHash:          syncCoordinatorTestHash(t),
+			ValidatedBlockHash: syncCoordinatorTestHash(t),
+			ValidatedChainWork: []byte{0x05},
+		})
+	}
 
-	sc.SetGetLocalHeightCallback(func() uint32 {
-		return 100
-	})
+	var wg sync.WaitGroup
+	for w := 0; w < 6; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 25; i++ {
+				_ = sc.TriggerSync()
+				sc.evaluateSyncPeer()
+				sc.HandleCatchupFailure("stress")
+				sc.UpdateBanStatus(pid)
+				sc.ClearSyncPeer()
+			}
+		}()
+	}
 
-	// Add peer without block hash (will cause sendSyncMessage to fail)
-	peerID := peer.ID("test-peer")
-	registry.Put(peerID, "", 110, nil, "http://test.com")
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(60 * time.Second):
+		t.Fatal("concurrent sync decisions deadlocked")
+	}
 
-	// Trigger sync - should fail to send message but not panic
-	err := sc.TriggerSync()
-	assert.Error(t, err, "Should return error when sendSyncMessage fails")
+	current := sc.GetCurrentSyncPeer()
+	if current != "" {
+		_, found := reg.Get(current)
+		require.True(t, found, "current sync peer %s must be a registered peer", current)
+	}
 }
 
-func TestSyncCoordinator_HandleCatchupFailure_NoNewPeer(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
+// TestSyncCoordinator_SendSyncTriggerToKafka_RefusesBlacklistedURL: the sync
+// trigger reads the peer's DataHub URL straight from the registry, bypassing
+// selection eligibility. A URL stored before its host was blacklisted (or
+// belonging to a forced sync peer) must not be handed to block validation -
+// the trigger is dropped instead.
+func TestSyncCoordinator_SendSyncTriggerToKafka_RefusesBlacklistedURL(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
 
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil,
-	)
+	producer := kafka.NewKafkaAsyncProducerMock()
+	sc.blocksKafkaProducerClient = producer
 
-	sc.SetGetLocalHeightCallback(func() uint32 {
-		return 100
+	reg.Register(&blockchain.PeerInfo{
+		ID:         "peer",
+		DataHubURL: "http://evil.example",
+		BlockHash:  syncCoordinatorTestHash(t),
 	})
 
-	// Set initial sync peer
-	initialPeer := peer.ID("initial-peer")
-	sc.mu.Lock()
-	sc.currentSyncPeer = initialPeer
-	sc.mu.Unlock()
+	// Control: without a blacklist entry the trigger is published.
+	sc.sendSyncTriggerToKafka("peer", syncCoordinatorTestHash(t).String())
+	select {
+	case <-producer.PublishChannel():
+	default:
+		t.Fatal("precondition: sync trigger must be published when the URL is not blacklisted")
+	}
 
-	// Handle catchup failure with no new peers available
-	sc.HandleCatchupFailure("test failure reason")
+	// Operator blacklists the host after the URL was stored.
+	sc.settings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{"http://evil.example": {}}
 
-	// Sync peer should be cleared
-	assert.Equal(t, peer.ID(""), sc.GetCurrentSyncPeer(), "Should clear sync peer even with no alternatives")
+	sc.sendSyncTriggerToKafka("peer", syncCoordinatorTestHash(t).String())
+	select {
+	case published := <-producer.PublishChannel():
+		t.Fatalf("sync trigger with blacklisted DataHubURL must not be published: %+v", published)
+	default:
+	}
 }
 
-func TestSyncCoordinator_PeriodicEvaluation(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger, nil)
-	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
+// blockingRegistry wraps a real registry client but blocks ListPeers until the
+// per-call context is done, recording whether that context carried a deadline.
+// It exercises the boundedRPCContext used by every registry wrapper.
+type blockingRegistry struct {
+	blockchain.PeerRegistryClientI
+	mu          sync.Mutex
+	hadDeadline bool
+}
 
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil,
-	)
+func (b *blockingRegistry) ListPeers(ctx context.Context, _ *blockchain_api.TransportType, _ float64, _ uint32, _, _ bool) ([]*blockchain.PeerInfo, error) {
+	_, ok := ctx.Deadline()
+	b.mu.Lock()
+	b.hadDeadline = ok
+	b.mu.Unlock()
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
 
-	// Test context cancellation
+func (b *blockingRegistry) listPeersHadDeadline() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.hadDeadline
+}
+
+func TestSyncCoordinator_RegistryCallsAreTimeBounded(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	br := &blockingRegistry{PeerRegistryClientI: sc.registry}
+	sc.registry = br
+	sc.rpcTimeout = 50 * time.Millisecond
+
+	result := make(chan []*blockchain.PeerInfo, 1)
+	go func() {
+		result <- sc.listAllPeers()
+	}()
+
+	select {
+	case peers := <-result:
+		require.Nil(t, peers, "a timed-out registry call must degrade to no peers")
+	case <-time.After(5 * time.Second):
+		t.Fatal("listAllPeers did not return; registry RPC context is unbounded")
+	}
+	require.True(t, br.listPeersHadDeadline(), "registry RPC context must carry a deadline")
+}
+
+// TestSyncCoordinator_StopUnblocksInFlightRPC parks a monitor goroutine inside a
+// blockchain-client RPC that only returns on context cancellation, then verifies
+// Stop() aborts the in-flight call and drains the goroutines without depending
+// on the caller's context being cancelled or on the RPC timeout elapsing.
+func TestSyncCoordinator_StopUnblocksInFlightRPC(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	sc.rpcTimeout = time.Minute // prove Stop's cancel does the unblocking, not the timeout
+
+	inRPC := make(chan struct{})
+	var once sync.Once
+	client := &blockchain.Mock{}
+	client.On("GetBestBlockHeader", mock.Anything).Run(func(args mock.Arguments) {
+		once.Do(func() { close(inRPC) })
+		<-args.Get(0).(context.Context).Done()
+	}).Return(nil, nil, errors.NewServiceError("cancelled"))
+	sc.blockchainClient = client
+
 	ctx, cancel := context.WithCancel(context.Background())
-	sc.wg.Add(1)
-	go sc.periodicEvaluation(ctx)
+	defer cancel()
+	sc.Start(ctx)
 
-	// Let it run briefly
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-inRPC: // monitorFSM's first tick is parked inside GetBestBlockHeader
+	case <-time.After(10 * time.Second):
+		t.Fatal("monitor goroutine never reached the blockchain RPC")
+	}
 
-	// Cancel context
-	cancel()
-
-	// Wait for goroutine to finish
-	done := make(chan bool)
+	done := make(chan struct{})
 	go func() {
-		sc.wg.Wait()
-		done <- true
+		sc.Stop(context.Background())
+		close(done)
 	}()
 
 	select {
 	case <-done:
-		// Success
-	case <-time.After(2 * time.Second):
-		t.Fatal("periodicEvaluation did not stop on context cancellation")
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not abort the in-flight RPC and drain the goroutines")
 	}
+}
 
-	// Test stop channel
-	sc2 := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		banManager,
-		blockchainSetup.Client,
-		nil,
-	)
+func TestSyncCoordinator_StopDrainsGoroutinesAndIsIdempotent(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
 
-	ctx2 := context.Background()
-	sc2.wg.Add(1)
-	go sc2.periodicEvaluation(ctx2)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sc.Start(ctx)
 
-	// Let it run briefly
-	time.Sleep(100 * time.Millisecond)
-
-	// Close stop channel
-	close(sc2.stopCh)
-
-	// Wait for goroutine to finish
-	done2 := make(chan bool)
+	done := make(chan struct{})
 	go func() {
-		sc2.wg.Wait()
-		done2 <- true
+		sc.Stop(context.Background())
+		close(done)
 	}()
 
 	select {
-	case <-done2:
-		// Success
-	case <-time.After(2 * time.Second):
-		t.Fatal("periodicEvaluation did not stop on stop channel close")
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not drain the coordinator goroutines")
 	}
+
+	require.NotPanics(t, func() { sc.Stop(context.Background()) }, "Stop must be idempotent")
+}
+
+func TestSyncCoordinator_StopBeforeStartReturns(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	require.NotPanics(t, func() { sc.Stop(context.Background()) })
+}
+
+// TestSyncCoordinator_StopHonorsContextDeadlineWhenGoroutineStuck simulates a
+// coordinator goroutine parked in a non-context-aware blocking call (e.g. a
+// wedged Kafka producer Publish, which neither stopCh nor context cancellation
+// can release) and verifies Stop returns when its context expires instead of
+// hanging the whole server shutdown on wg.Wait.
+func TestSyncCoordinator_StopHonorsContextDeadlineWhenGoroutineStuck(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+
+	gate := make(chan struct{})
+	sc.wg.Add(1)
+	go func() {
+		defer sc.wg.Done()
+		<-gate // stands in for a blocking, non-context-aware call
+	}()
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		sc.Stop(stopCtx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop ignored its context deadline while a goroutine was stuck")
+	}
+
+	// A repeated Stop while still stuck must also time out (sharing the single
+	// wg watcher rather than leaking one per call) instead of blocking.
+	stopCtx2, cancel2 := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel2()
+	require.NotPanics(t, func() { sc.Stop(stopCtx2) })
+
+	// Release the stuck goroutine; a further Stop must now drain fully.
+	close(gate)
+	require.NotPanics(t, func() { sc.Stop(context.Background()) })
+}
+
+// TestSyncCoordinator_LocalHeightCallbackIsTimeBounded parks the local-height
+// callback against a hung RPC (blocking until its context is done, exactly as
+// Server.getLocalHeight behaves against a hung blockchain service) and asserts
+// a monitor-loop path through getLocalHeightSafe still returns, with the
+// callback context carrying a deadline. Guards the ChiR2 wedge: this callback
+// used to run an unbounded GetBestBlockHeader on the server-lifetime context.
+func TestSyncCoordinator_LocalHeightCallbackIsTimeBounded(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	sc.rpcTimeout = 50 * time.Millisecond
+
+	var mu sync.Mutex
+	hadDeadline := false
+	sc.SetGetLocalHeightCallback(func(ctx context.Context) uint32 {
+		_, ok := ctx.Deadline()
+		mu.Lock()
+		hadDeadline = ok
+		mu.Unlock()
+		<-ctx.Done()
+		return 0
+	})
+
+	result := make(chan bool, 1)
+	go func() {
+		result <- sc.isCaughtUp() // monitor-loop path; reaches the callback via getLocalHeightSafe
+	}()
+
+	select {
+	case <-result:
+	case <-time.After(5 * time.Second):
+		t.Fatal("isCaughtUp did not return; the local-height callback context is unbounded")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.True(t, hadDeadline, "local-height callback context must carry a deadline")
+}
+
+// levelCapturingLogger counts Warnf/Debugf calls so tests can assert the level
+// a message was logged at; everything else falls through to TestLogger.
+type levelCapturingLogger struct {
+	ulogger.TestLogger
+	mu     sync.Mutex
+	warns  int
+	debugs int
+}
+
+func (l *levelCapturingLogger) Warnf(string, ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.warns++
+}
+
+func (l *levelCapturingLogger) Debugf(string, ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.debugs++
+}
+
+func (l *levelCapturingLogger) counts() (warns, debugs int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.warns, l.debugs
+}
+
+func TestSyncCoordinator_WarnfUnlessStopping_DowngradesToDebugAfterStop(t *testing.T) {
+	logger := &levelCapturingLogger{}
+	tSettings := &settings.Settings{}
+	reg := blockchain.NewCentralizedPeerRegistry(blockchain.DefaultBanConfig())
+	sc := NewSyncCoordinator(
+		context.Background(),
+		logger,
+		tSettings,
+		blockchain.NewLocalPeerRegistryClient(reg),
+		NewPeerSelector(ulogger.TestLogger{}, tSettings),
+		nil,
+		nil,
+	)
+
+	sc.warnfUnlessStopping("running")
+	warns, debugs := logger.counts()
+	require.Equal(t, 1, warns, "before Stop the message must log at warn level")
+	require.Zero(t, debugs)
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	sc.Stop(stopCtx)
+
+	sc.warnfUnlessStopping("stopping")
+	warns, debugs = logger.counts()
+	require.Equal(t, 1, warns, "after Stop no new warn-level messages may be emitted")
+	require.Equal(t, 1, debugs, "after Stop the message must downgrade to debug level")
+}
+
+// registerSyncTestPeer registers a viable sync candidate for the FSM-latch tests.
+func registerSyncTestPeer(t *testing.T, reg *blockchain.CentralizedPeerRegistry, id string, height uint32, validatedWork []byte) {
+	t.Helper()
+
+	info := &blockchain.PeerInfo{
+		ID:         id,
+		DataHubURL: "http://" + id,
+		Height:     height,
+		BlockHash:  syncCoordinatorTestHash(t),
+		Storage:    "full",
+	}
+	if len(validatedWork) > 0 {
+		info.ValidatedBlockHash = syncCoordinatorTestHash(t)
+		info.ValidatedChainWork = validatedWork
+	}
+	reg.Register(info)
+}
+
+// claimSyncTestPeer installs peerID as the current sync peer as claimSelectedSyncPeer
+// would, with the claim placed claimAge in the past.
+func claimSyncTestPeer(sc *SyncCoordinator, peerID string, claimAge time.Duration, localWork []byte) {
+	claimedAt := time.Now().Add(-claimAge)
+	sc.mu.Lock()
+	sc.currentSyncPeer = peerID
+	sc.syncStartTime = claimedAt
+	sc.lastSyncProgressTime = claimedAt
+	sc.lastLocalChainWork = localWork
+	sc.mu.Unlock()
+}
+
+// Regression for the missing FSM-state latch: a steady RUNNING tick (no
+// CATCHINGBLOCKS -> RUNNING completion edge) must not judge the in-flight sync,
+// even when the slot holder is credited with higher validated work from a
+// previous run. The old code declared it failed and recycled the slot every 2s.
+func TestSyncCoordinator_HandleFSMTransition_SteadyRunningTickDoesNotRecycleSlot(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", 0, []byte{0x02})
+
+	running := blockchain_api.FSMStateType_RUNNING
+	for i := range 3 {
+		require.False(t, sc.handleFSMTransition(&running), "steady RUNNING tick %d must not settle the sync", i)
+		require.Equal(t, "current", sc.GetCurrentSyncPeer(), "slot must not be recycled on tick %d", i)
+	}
+}
+
+// A CATCHINGBLOCKS -> RUNNING completion edge never issues a verdict: it cannot
+// say whose catchup finished (the header phase runs in RUNNING, and the slot may
+// have changed hands during another peer's header phase — the claim here
+// predates the excursion, exactly the handover shape that used to be judged by
+// the other peer's outcome). Verdicts come only from HandleCatchupSuccess.
+func TestSyncCoordinator_HandleFSMTransition_CompletionEdgeDoesNotJudgeSlot(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x02})
+
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	require.False(t, sc.handleFSMTransition(&catching))
+	running := blockchain_api.FSMStateType_RUNNING
+	for i := range 2 {
+		require.False(t, sc.handleFSMTransition(&running), "tick %d: the edge must not judge the slot holder", i)
+		require.Equal(t, "current", sc.GetCurrentSyncPeer(), "tick %d: slot must survive the completion edge", i)
+	}
+}
+
+// An armed completion edge holds the fallback release off while the
+// authoritative report is in flight, bounded by pendingCompletionExpiry; once
+// the window expires the fallback becomes eligible again and releases a quiet
+// level holder.
+func TestSyncCoordinator_HandleFSMTransition_ArmedEdgeHoldsFallbackUntilExpiry(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 200, []byte{0x03})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	// Level and quiet past the guard: the fallback would release on this tick.
+	claimSyncTestPeer(sc, "current", 3*time.Minute, []byte{0x03})
+
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	require.False(t, sc.handleFSMTransition(&catching))
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&running), "armed edge must hold the fallback release off")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+
+	sc.pendingCompletionSince = time.Now().Add(-pendingCompletionExpiry - time.Second)
+	require.False(t, sc.handleFSMTransition(&running), "the expiring tick disarms without releasing")
+	require.Empty(t, sc.pendingCompletionPeer, "window must be disarmed after expiry")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+
+	require.True(t, sc.handleFSMTransition(&running), "after expiry the fallback must release the quiet level holder")
+	require.Empty(t, sc.GetCurrentSyncPeer())
+}
+
+// A slot claimed while another peer's catchup is in its block phase must not be
+// judged by that catchup's completion; since edges never issue verdicts, the
+// fresh holder survives the excursion end untouched.
+func TestSyncCoordinator_HandleFSMTransition_SlotClaimedDuringCatchupNotJudgedByItsCompletion(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "fresh", 200, []byte{0x03})
+
+	// Observe CATCHINGBLOCKS with the slot empty (the running catchup belongs to
+	// an earlier, since-cleared peer), then claim a fresh peer mid-catchup.
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	require.False(t, sc.handleFSMTransition(&catching))
+	claimSyncTestPeer(sc, "fresh", 0, []byte{0x02})
+
+	running := blockchain_api.FSMStateType_RUNNING
+	for i := range 2 {
+		require.False(t, sc.handleFSMTransition(&running), "tick %d must not judge the freshly claimed slot", i)
+		require.Equal(t, "fresh", sc.GetCurrentSyncPeer(), "tick %d must keep the freshly claimed slot", i)
+	}
+}
+
+// HandleCatchupSuccess settles a completed sync from the authoritative block
+// validation signal, covering catchups that never leave RUNNING and are therefore
+// invisible to the FSM completion edge.
+func TestSyncCoordinator_HandleCatchupSuccess_LevelPeerSettlesWithoutFSMEdge(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 200, []byte{0x03})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x03})
+	sc.mu.Lock()
+	sc.backoffMultiplier = 8
+	sc.mu.Unlock()
+
+	sc.HandleCatchupSuccess("current", time.Minute)
+
+	require.Empty(t, sc.GetCurrentSyncPeer(), "reported catchup success for a level peer must settle the sync")
+	sc.mu.RLock()
+	require.Equal(t, 1, sc.backoffMultiplier)
+	sc.mu.RUnlock()
+}
+
+func TestSyncCoordinator_HandleCatchupSuccess_IgnoresNonSyncPeer(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	registerSyncTestPeer(t, reg, "other", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x02})
+
+	sc.HandleCatchupSuccess("other", time.Minute)
+
+	require.Equal(t, "current", sc.GetCurrentSyncPeer(), "success for a different peer must not touch the slot")
+}
+
+// If HandleCatchupSuccess settles a completion and the retrigger claims a new
+// peer, the FSM completion edge observed afterwards must not evict that peer:
+// the edge arms the fallback-suppression window for the fresh holder but never
+// issues a verdict. (The window consumption inside HandleCatchupSuccess itself
+// is pinned separately by
+// TestSyncCoordinator_HandleCatchupSuccess_ConsumesDeferredEdge.)
+func TestSyncCoordinator_HandleCatchupSuccess_TrailingEdgeDoesNotEvictFreshSlot(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "done", 200, []byte{0x04})
+	registerSyncTestPeer(t, reg, "next", 200, []byte{0x03})
+	reg.RecordSyncAttempt("done")
+	claimSyncTestPeer(sc, "done", 2*time.Minute, []byte{0x02})
+
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	require.False(t, sc.handleFSMTransition(&catching))
+
+	// The success report arrives first: "done" is still ahead, so it is cleared
+	// and the retrigger claims "next" (the only unbenched candidate).
+	sc.HandleCatchupSuccess("done", time.Minute)
+	require.Equal(t, "next", sc.GetCurrentSyncPeer())
+
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&running), "the trailing completion edge must not judge the fresh slot")
+	require.Equal(t, "next", sc.GetCurrentSyncPeer(), "fresh slot must survive the trailing FSM edge")
+}
+
+// Regression for the backoff ratchet: expiry cycles double the multiplier and
+// clear allPeersAttempted, so the old flag-gated reset never fired in production
+// ordering. resetBackoff must reset the multiplier unconditionally.
+func TestSyncCoordinator_ResetBackoff_ResetsRatchetedMultiplierAfterExpiredWindows(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+
+	for range 3 {
+		sc.enterBackoffMode()
+		sc.mu.Lock()
+		sc.lastAllPeersAttemptTime = time.Now().Add(-time.Hour) // force window expiry
+		sc.mu.Unlock()
+		require.False(t, sc.checkAndClearExpiredBackoff())
+	}
+	sc.mu.RLock()
+	require.Equal(t, 8, sc.backoffMultiplier)
+	require.False(t, sc.allPeersAttempted, "expiry leaves the flag cleared — the production state at reset time")
+	sc.mu.RUnlock()
+
+	sc.resetBackoff()
+
+	sc.mu.RLock()
+	require.Equal(t, 1, sc.backoffMultiplier, "resetBackoff must de-escalate a ratcheted multiplier")
+	sc.mu.RUnlock()
+}
+
+// A local chainwork advance refreshes the probe budget but deliberately does NOT
+// de-escalate the backoff multiplier: gossip-driven advances are not attributable
+// to the sync slot, and resetting on every advance would let each ~2s
+// selection-failure cycle re-enter backoff (whose entry clears all sync-attempt
+// cooldowns) during IBD.
+func TestSyncCoordinator_LocalChainWorkAdvanceDoesNotResetBackoffMultiplier(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+	sc.mu.Lock()
+	sc.backoffMultiplier = 32
+	sc.lastLocalChainWork = []byte{0x02}
+	sc.unprovenProbeBudgetRemaining = 0
+	sc.mu.Unlock()
+
+	sc.resetProbeBudgetIfLocalChainWorkAdvanced([]byte{0x03})
+
+	sc.mu.RLock()
+	require.Equal(t, 32, sc.backoffMultiplier, "gossip-driven chainwork advance must not de-escalate the multiplier")
+	require.Positive(t, sc.unprovenProbeBudgetRemaining, "chainwork advance must still refresh the probe budget")
+	sc.mu.RUnlock()
+}
+
+// A level slot holder in steady RUNNING (no completion edge, no success signal —
+// e.g. its trigger was rejected by block validation's single-flight guard) is
+// quietly released by the fallback once it has gone the grace period without
+// delivering a validated block, instead of pinning the slot until the
+// no-progress deadline. The release is an inferred completion: it must not
+// fabricate a success verdict, so backoff and the probe budget stay untouched
+// and no sync attempt is recorded against the peer.
+func TestSyncCoordinator_HandleFSMTransition_LevelQuietPeerFallbackReleasesAfterGrace(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 200, []byte{0x03})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	sc.mu.Lock()
+	sc.backoffMultiplier = 16
+	sc.unprovenProbeBudgetRemaining = 0
+	sc.mu.Unlock()
+
+	running := blockchain_api.FSMStateType_RUNNING
+
+	// Inside the grace (default 5m no-progress -> 2.5m guard): no release.
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x03})
+	require.False(t, sc.handleFSMTransition(&running), "level peer inside the grace must not be released")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+
+	// Past the grace but short of the 5m no-progress deadline: released quietly.
+	claimSyncTestPeer(sc, "current", 3*time.Minute, []byte{0x03})
+	require.True(t, sc.handleFSMTransition(&running), "quiet level peer past the grace must be released")
+	require.Empty(t, sc.GetCurrentSyncPeer())
+
+	sc.mu.RLock()
+	require.Equal(t, 16, sc.backoffMultiplier, "an inferred completion must not reset backoff")
+	require.Zero(t, sc.unprovenProbeBudgetRemaining, "an inferred completion must not refill the probe budget")
+	sc.mu.RUnlock()
+	got, ok := reg.Get("current")
+	require.True(t, ok)
+	require.True(t, got.LastSyncAttempt.IsZero(), "release must not record a sync attempt against the peer")
+}
+
+// The fallback keys on progress age, not claim age: a level peer that is
+// actively delivering validated blocks keeps the slot no matter how long it has
+// held it, matching evaluateSyncPeer's keep-while-caught-up policy.
+func TestSyncCoordinator_HandleFSMTransition_FallbackKeepsActivelyDeliveringLevelPeer(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 200, []byte{0x03})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+
+	// Claimed 5 minutes ago, but validated progress is as fresh as it can be.
+	claimSyncTestPeer(sc, "current", 5*time.Minute, []byte{0x03})
+	sc.mu.Lock()
+	sc.lastSyncProgressTime = time.Now()
+	sc.mu.Unlock()
+
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&running), "actively delivering level peer must not be released")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+}
+
+// The fallback never settles a slot holder that is still ahead by validated
+// work — that would reintroduce the churn the latch removes.
+func TestSyncCoordinator_HandleFSMTransition_FallbackDoesNotSettleAheadPeer(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", 3*time.Minute, []byte{0x02})
+
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&running))
+	require.Equal(t, "current", sc.GetCurrentSyncPeer(), "ahead peer must be left to the completion edge or the no-progress deadline")
+}
+
+// A success report whose catchup started before the current claim (the peer was
+// evicted and re-claimed while its old catchup kept running) must not judge the
+// fresh claim.
+func TestSyncCoordinator_HandleCatchupSuccess_StaleReportDoesNotJudgeFreshClaim(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", 0, []byte{0x02})
+
+	// The reported catchup ran 10 minutes, so it started well before the claim.
+	sc.HandleCatchupSuccess("current", 10*time.Minute)
+
+	require.Equal(t, "current", sc.GetCurrentSyncPeer(), "stale success must not touch the fresh claim")
+}
+
+// The latch fields are documented as decisionMu-guarded; exercise the FSM path
+// and the success signal concurrently so -race can observe a violation.
+func TestSyncCoordinator_LatchFields_ConcurrentFSMAndSuccessSignal(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 200, []byte{0x03})
+	registerSyncTestPeer(t, reg, "current", 200, []byte{0x03})
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x03})
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+		running := blockchain_api.FSMStateType_RUNNING
+		for range 100 {
+			sc.decisionMu.Lock()
+			sc.handleFSMTransition(&catching)
+			sc.handleFSMTransition(&running)
+			sc.decisionMu.Unlock()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 100 {
+			sc.HandleCatchupSuccess("current", time.Minute)
+		}
+	}()
+	wg.Wait()
+}
+
+// The monitor tick calls reputation recovery through a 30s throttle so the
+// FSM latch (which stopped short-circuiting steady RUNNING ticks) does not
+// turn it into a per-2s ReconsiderBadPeers RPC.
+func TestSyncCoordinator_ConsiderReputationRecoveryThrottled_SamplesAtInterval(t *testing.T) {
+	sc, _ := newTestSyncCoordinator(t)
+
+	sc.decisionMu.Lock()
+	defer sc.decisionMu.Unlock()
+
+	sc.considerReputationRecoveryThrottled()
+	first := sc.lastReputationRecovery
+	require.False(t, first.IsZero())
+
+	sc.considerReputationRecoveryThrottled()
+	require.Equal(t, first, sc.lastReputationRecovery, "second call inside the interval must be skipped")
+
+	sc.lastReputationRecovery = time.Now().Add(-reputationRecoveryMinInterval - time.Second)
+	stale := sc.lastReputationRecovery
+	sc.considerReputationRecoveryThrottled()
+	require.NotEqual(t, stale, sc.lastReputationRecovery, "call past the interval must run")
+}
+
+// HandleCatchupSuccess disarms an armed completion window even when its own
+// verdict defers for missing validated work: the report owns that completion,
+// so the window must stop suppressing the fallback release, and nothing may
+// settle the slot holder afterwards on the edge's behalf.
+func TestSyncCoordinator_HandleCatchupSuccess_ConsumesDeferredEdge(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 1_000, nil) // no validated work yet
+	claimSyncTestPeer(sc, "current", 2*time.Minute, []byte{0x02})
+
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&catching))
+	require.False(t, sc.handleFSMTransition(&running), "the edge arms a window, never a verdict")
+	require.Equal(t, "current", sc.pendingCompletionPeer, "edge window must be armed")
+
+	// The success report's own verdict defers (still no validated work) but it
+	// disarms the window on the way.
+	sc.HandleCatchupSuccess("current", time.Minute)
+	require.Empty(t, sc.pendingCompletionPeer, "success signal must disarm the edge window")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+
+	// Validated work arriving later must not produce an edge-derived verdict.
+	require.NoError(t, reg.RecordValidatedPeerProgress("current", 1_000, syncCoordinatorTestHash(t), []byte{0x04}))
+	require.False(t, sc.handleFSMTransition(&running), "disarmed window must not settle after the fact")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+}
+
+// An armed completion window expires after pendingCompletionExpiry whether or
+// not validated work ever arrives; the expiry disarms without touching the
+// slot, and a credit landing later produces no edge-derived verdict.
+func TestSyncCoordinator_HandleFSMTransition_ArmedEdgeWindowExpires(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	registerSyncTestPeer(t, reg, "current", 1_000, nil) // no validated work yet
+	claimSyncTestPeer(sc, "current", time.Minute, []byte{0x02})
+
+	catching := blockchain_api.FSMStateType_CATCHINGBLOCKS
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&catching))
+	require.False(t, sc.handleFSMTransition(&running))
+	require.Equal(t, "current", sc.pendingCompletionPeer, "window must stay armed inside the expiry")
+
+	sc.pendingCompletionSince = time.Now().Add(-pendingCompletionExpiry - time.Second)
+	require.False(t, sc.handleFSMTransition(&running), "the expiring tick disarms without a verdict")
+	require.Empty(t, sc.pendingCompletionPeer, "expired window must be disarmed")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer(), "expiry must leave the slot alone")
+
+	require.NoError(t, reg.RecordValidatedPeerProgress("current", 1_000, syncCoordinatorTestHash(t), []byte{0x04}))
+	require.False(t, sc.handleFSMTransition(&running), "late credit must not produce an edge-derived verdict")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
+}
+
+// A peer that is ahead by raw chainwork but demoted by an active full-storage
+// penalty (it served header work it failed to back with a block body) reads as
+// "not ahead" through peerAheadByValidatedWork; the fallback must not release it
+// as a finished sync — it is left to the no-progress deadline, which benches it.
+func TestSyncCoordinator_HandleFSMTransition_FallbackDoesNotReleasePenalizedAheadPeer(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	setSyncCoordinatorLocalTip(t, sc, 100, []byte{0x02})
+	hash := syncCoordinatorTestHash(t)
+	reg.Register(&blockchain.PeerInfo{
+		ID:                      "current",
+		DataHubURL:              "http://current",
+		Height:                  200,
+		BlockHash:               hash,
+		ValidatedBlockHash:      hash,
+		ValidatedChainWork:      []byte{0x03}, // ahead by raw chainwork
+		FullStoragePenaltyUntil: time.Now().Add(time.Hour),
+	})
+	claimSyncTestPeer(sc, "current", 3*time.Minute, []byte{0x02})
+
+	running := blockchain_api.FSMStateType_RUNNING
+	require.False(t, sc.handleFSMTransition(&running), "penalized ahead peer must not be released as level")
+	require.Equal(t, "current", sc.GetCurrentSyncPeer())
 }

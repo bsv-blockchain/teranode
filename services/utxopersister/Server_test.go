@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	terrors "github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
@@ -314,6 +315,44 @@ func TestVerifyLastSet_NoUTXOSetExists(t *testing.T) {
 	err := server.verifyLastSet(ctx, &testHash)
 
 	assert.Error(t, err)
+}
+
+// TestVerifyLastSet_ExistingValidSet pins that verifyLastSet does NOT
+// double-read the fileformat magic. The store layer (validateFileHeader
+// inside file.go and the equivalent in memory.go) already validates the
+// 8-byte magic on GetIoReader; consuming another 8 bytes here would
+// read the first bytes of the block hash field that follows the header
+// in the UTXO set file layout, fail with "unknown magic: [<random
+// bytes from hash>]", and bring the whole core sidecar down via
+// ServiceManager.
+//
+// The body bytes used here are intentionally not a valid magic: they
+// match the actual UTXO set layout (32-byte block hash followed by
+// 4-byte height), so without the fix the test fails with exactly the
+// production failure mode.
+func TestVerifyLastSet_ExistingValidSet(t *testing.T) {
+	ctx := context.Background()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	blockStore := memory.New()
+	server := New(ctx, ulogger.TestLogger{}, tSettings, blockStore, nil)
+
+	testHash := createTestHash("test-block")
+
+	// Write a minimal UTXO set body. memory.Set prepends the fileformat
+	// magic for us, so we only supply the post-header bytes.
+	body := make([]byte, 0, 36)
+	body = append(body, testHash[:]...)         // 32 bytes block hash
+	body = append(body, 0x01, 0x00, 0x00, 0x00) // 4 bytes height
+	require.NoError(t, blockStore.Set(ctx, testHash[:], fileformat.FileTypeUtxoSet, body))
+
+	err := server.verifyLastSet(ctx, &testHash)
+	require.NoError(t, err, "verifyLastSet must succeed when a valid UTXO set file exists; double-read of the fileformat magic would surface here as \"unknown magic: [...]\"")
+	// Explicit regression intent: future divergent failures should not be
+	// confused with the original double-read bug.
+	if err != nil {
+		require.NotContains(t, err.Error(), "unknown magic", "regression: double-read of fileformat magic must not return")
+	}
 }
 
 // Test trigger - processNextBlock returns not found error

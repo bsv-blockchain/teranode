@@ -15,6 +15,7 @@ func TestConvertToBUMP_CoinbaseProof(t *testing.T) {
 		sibling, _ := chainhash.NewHashFromStr("aaaa111122223333444455556666777788889999aaaabbbbccccddddeeeeffff")
 
 		proof := &merkleproof.MerkleProof{
+			TxID:             chainhash.DoubleHashH([]byte("coinbase transaction")),
 			BlockHeight:      100,
 			SubtreeIndex:     0,
 			TxIndexInSubtree: 0,
@@ -25,6 +26,9 @@ func TestConvertToBUMP_CoinbaseProof(t *testing.T) {
 		bump, err := ConvertToBUMP(proof)
 		require.NoError(t, err)
 		require.NotNil(t, bump)
+		require.Len(t, bump.Path[0], 2)
+		require.True(t, bump.Path[0][0].TxID)
+		require.Equal(t, proof.TxID.String(), bump.Path[0][0].Hash)
 
 		assert.Equal(t, uint32(100), bump.BlockHeight)
 		assert.Len(t, bump.Path, 1) // one level from the subtree proof
@@ -44,6 +48,7 @@ func TestConvertToBUMP_CoinbaseProof(t *testing.T) {
 		blockSibling, _ := chainhash.NewHashFromStr("aaaa111122223333444455556666777788889999aaaabbbbccccddddeeeeffff")
 
 		proof := &merkleproof.MerkleProof{
+			TxID:             chainhash.DoubleHashH([]byte("coinbase transaction")),
 			BlockHeight:      200,
 			SubtreeIndex:     0,
 			TxIndexInSubtree: 0,
@@ -54,6 +59,9 @@ func TestConvertToBUMP_CoinbaseProof(t *testing.T) {
 		bump, err := ConvertToBUMP(proof)
 		require.NoError(t, err)
 		require.NotNil(t, bump)
+		require.Len(t, bump.Path[0], 2)
+		require.True(t, bump.Path[0][0].TxID)
+		require.Equal(t, proof.TxID.String(), bump.Path[0][0].Hash)
 
 		assert.Equal(t, uint32(200), bump.BlockHeight)
 		assert.Len(t, bump.Path, 2) // one level from subtree + one from block
@@ -78,6 +86,7 @@ func TestConvertToBUMP_CoinbaseProof(t *testing.T) {
 		b1, _ := chainhash.NewHashFromStr("4444444444444444444444444444444444444444444444444444444444444444")
 
 		proof := &merkleproof.MerkleProof{
+			TxID:             chainhash.DoubleHashH([]byte("coinbase transaction")),
 			BlockHeight:      500,
 			SubtreeIndex:     0,
 			TxIndexInSubtree: 0,
@@ -88,6 +97,9 @@ func TestConvertToBUMP_CoinbaseProof(t *testing.T) {
 		bump, err := ConvertToBUMP(proof)
 		require.NoError(t, err)
 		require.NotNil(t, bump)
+		require.Len(t, bump.Path[0], 2)
+		require.True(t, bump.Path[0][0].TxID)
+		require.Equal(t, proof.TxID.String(), bump.Path[0][0].Hash)
 
 		assert.Equal(t, uint32(500), bump.BlockHeight)
 		assert.Len(t, bump.Path, 4) // 3 subtree levels + 1 block level

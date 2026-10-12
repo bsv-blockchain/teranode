@@ -1,45 +1,32 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { onMount } from 'svelte'
   import { humanTime } from '$internal/utils/format'
   import { getMessageFields } from './utils'
+  import { formatJSON } from './json-highlight'
   import { MessageType } from './types'
   import type { Message, P2PMessage, StatusMessage, MessageSource, MsgDisplayField } from './types'
   import i18n from '../../i18n'
 
-  export let source: MessageSource = 'p2p'
-  export let message: Message
-  export let collapse = false
-  export let titleMinW = '120px'
-  export let hidePeer = false
-  export let rawMode = false
+  let {
+    source = 'p2p',
+    message,
+    collapse = false,
+    titleMinW = '120px',
+    hidePeer = false,
+    rawMode = false,
+  }: {
+    source?: MessageSource
+    message: Message
+    collapse?: boolean
+    titleMinW?: string
+    hidePeer?: boolean
+    rawMode?: boolean
+  } = $props()
 
-  let age = ''
+  let age = $state('')
   let fields: MsgDisplayField[] = []
-  let title = ''
-  
-  // Format JSON with syntax highlighting
-  function formatJSON(obj: any): string {
-    try {
-      let json = JSON.stringify(obj, null, 2)
-      
-      // Basic syntax highlighting
-      json = json
-        // Strings (but not property names)
-        .replace(/: "([^"]*)"/g, ': <span class="json-string">"$1"</span>')
-        // Numbers
-        .replace(/: (\d+)/g, ': <span class="json-number">$1</span>')
-        // Booleans
-        .replace(/: (true|false)/g, ': <span class="json-boolean">$1</span>')
-        // Null
-        .replace(/: (null)/g, ': <span class="json-null">$1</span>')
-        // Property names
-        .replace(/"([^"]+)":/g, '<span class="json-key">"$1"</span>:')
-        
-      return json
-    } catch (e) {
-      return '{}'
-    }
-  }
 
   function getMsgDateMillis(source: MessageSource, msg: Message) {
     if (source === 'p2p') {
@@ -67,10 +54,10 @@
     return () => clearInterval(interval)
   })
 
-  $: updatedFields = getMessageFields(source, message, `${age} ago`, hidePeer)
-  $: baseKey = `comp.msgbox.${message.type.toLowerCase()}`
+  const updatedFields = $derived(getMessageFields(source, message, `${age} ago`, hidePeer))
+  const baseKey = $derived(`comp.msgbox.${message.type.toLowerCase()}`)
 
-  $: {
+  const title = $derived.by(() => {
     const translationKey =
       source === 'status' && (message as StatusMessage).source === 'status'
         ? `comp.msgbox.status.type.${message.type.toLowerCase()}.title`
@@ -78,11 +65,10 @@
 
     // Check if translation exists, if not provide a fallback
     const translation = $i18n.t(translationKey)
-    title =
-      translation === translationKey
-        ? `${message.type.charAt(0).toUpperCase()}${message.type.slice(1).toLowerCase().replace(/_/g, ' ')}`
-        : translation
-  }
+    return translation === translationKey
+      ? `${message.type.charAt(0).toUpperCase()}${message.type.slice(1).toLowerCase().replace(/_/g, ' ')}`
+      : translation
+  })
 </script>
 
 <div
@@ -208,7 +194,7 @@
     font-family: 'JetBrains Mono', 'Courier New', monospace;
     font-size: 12px;
     line-height: 1.5;
-    color: #b4b4b4;
+    color: var(--json-display-color, #b4b4b4);
     white-space: pre-wrap;
     word-wrap: break-word;
     overflow-wrap: break-word;
@@ -216,22 +202,22 @@
   }
   
   :global(.json-display .json-key) {
-    color: #a8c0ff;
+    color: var(--json-display-key-color, #a8c0ff);
   }
   
   :global(.json-display .json-string) {
-    color: #98c379;
+    color: var(--json-display-string-color, #98c379);
   }
   
   :global(.json-display .json-number) {
-    color: #d19a66;
+    color: var(--json-display-number-color, #d19a66);
   }
   
   :global(.json-display .json-boolean) {
-    color: #56b6c2;
+    color: var(--json-display-boolean-color, #56b6c2);
   }
   
   :global(.json-display .json-null) {
-    color: #abb2bf;
+    color: var(--json-display-null-color, #abb2bf);
   }
 </style>

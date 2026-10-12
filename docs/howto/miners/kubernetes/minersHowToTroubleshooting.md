@@ -51,20 +51,22 @@ spec:
         ...
         readinessProbe:
           httpGet:
-            path: /health
-            port: 8087
+            path: /health/readiness
+            port: 8000
           periodSeconds: 30
           timeoutSeconds: 10
           failureThreshold: 3
         livenessProbe:
           httpGet:
-            path: /health
-            port: 8087
+            path: /health/liveness
+            port: 8000
           periodSeconds: 30
           timeoutSeconds: 10
           failureThreshold: 3
           initialDelaySeconds: 40
 ```
+
+Both probes are served on `health_check_httpListenAddress` (port 8000 by default). Point the liveness probe at `/health/liveness`, not `/health`: `/health` is the readiness handler, and it fails when a dependency is down, which would restart the pod for a fault a restart cannot fix.
 
 ### Viewing Health Check Logs
 

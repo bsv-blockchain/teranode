@@ -46,7 +46,7 @@ import (
 func (u *Server) CreateSubtreeDataFileStreaming(ctx context.Context, subtreeHash chainhash.Hash, block *model.Block, n int) error {
 	ctx, _, deferFn := tracing.Tracer("blockpersister").Start(ctx, "CreateSubtreeDataFileStreaming",
 		tracing.WithHistogram(prometheusBlockPersisterSubtrees),
-		tracing.WithLogMessage(u.logger, "[CreateSubtreeDataFileStreaming][%s] creating subtreeData %d / %d for [%s]", block.String(), n, len(block.Subtrees), subtreeHash.String()),
+		tracing.WithDebugLogMessage(u.logger, "[CreateSubtreeDataFileStreaming][%s] creating subtreeData %d / %d for [%s]", block.String(), n, len(block.Subtrees), subtreeHash.String()),
 	)
 	defer deferFn()
 
@@ -123,7 +123,7 @@ func (u *Server) CreateSubtreeDataFileStreaming(ctx context.Context, subtreeHash
 	concurrency := subtreepkg.Max(4, runtime.NumCPU()/2)
 
 	g, gCtx := errgroup.WithContext(ctx)
-	util.SafeSetLimit(g, concurrency)
+	util.SafeSetLimit(u.logger, g, concurrency)
 
 	subtreeLen := subtree.Length()
 
@@ -187,6 +187,19 @@ func (u *Server) CreateSubtreeDataFileStreaming(ctx context.Context, subtreeHash
 
 					if data.Data.Tx == nil {
 						return errors.NewProcessingError("[CreateSubtreeDataFileStreaming] transaction is nil for hash %s at index %d", data.Hash, j)
+					}
+
+					// A transaction stored from a UTXO-set snapshot comes back as its
+					// live outputs only. Bytes() below panics on a nil output hole —
+					// and there is no recover on this path, so it takes the process
+					// down — or serializes cleanly into a short, 0-input transaction
+					// that does not hash to the node's own hash, which would land in
+					// the data file as if it were the real one. Same gate as the asset
+					// boundary (services/asset/repository.isRequestedTransaction); the
+					// predicate must come first, because TxIDChainHash() dereferences
+					// the same nil *bt.Output.
+					if !data.Data.TxIsSerializable() || !data.Data.Tx.TxIDChainHash().IsEqual(&data.Hash) {
+						return errors.NewProcessingError("[CreateSubtreeDataFileStreaming] transaction is not retained in full for hash %s at index %d", data.Hash, j)
 					}
 
 					txData = data.Data.Tx.Bytes()
@@ -262,7 +275,10 @@ func (u *Server) ProcessSubtreeUTXOStreaming(ctx context.Context, subtreeHash ch
 		bufferSize = 1024 * 128 // default to 128KB
 	}
 
-	bufferedReader := bufio.NewReaderSize(subtreeDataReader, bufferSize.Int())
+	// The buffer is frame-local: never stored, never returned, read by this goroutine only
+	// and dead before the return below, so a deferred release is the whole ownership story.
+	bufferedReader := filestorer.AcquireReader(subtreeDataReader, bufferSize.Int())
+	defer filestorer.ReleaseReader(bufferedReader)
 
 	// 2. Read the subtree structure (needed to know how many transactions)
 	subtree, err := u.readSubtree(ctx, subtreeHash)
@@ -273,11 +289,21 @@ func (u *Server) ProcessSubtreeUTXOStreaming(ctx context.Context, subtreeHash ch
 	// 3. Stream through transactions and process UTXO changes
 	subtreeLen := subtree.Length()
 
+	// Arena-backed tx decode is safe here because utxoDiff is
+	// *utxopersister.UTXOSet (NOT services/blockpersister/utxoset/model.UTXODiff,
+	// which retains script slices in an in-memory map). UTXOSet.ProcessTx
+	// serialises via UTXOWrapper.Bytes -> UTXO.Bytes, which does
+	// `append(b, u.Script...)` — a heap copy — and then writes through a
+	// bufio.Writer (which copies into its internal buffer). No arena-backed
+	// slice survives this function frame.
+	arena := getBlockpersisterArena()
+	defer putBlockpersisterArena(arena)
+	var hashScratch []byte
+
 	for i := 0; i < subtreeLen; i++ {
 		tx := &bt.Tx{}
 
-		// Read transaction from buffered reader
-		if _, err = tx.ReadFrom(bufferedReader); err != nil {
+		if _, err = tx.ReadFromWithArena(bufferedReader, arena); err != nil {
 			return errors.NewProcessingError("[BlockPersister] error reading transaction at index %d from subtree %s", i, subtreeHash.String(), err)
 		}
 
@@ -295,7 +321,8 @@ func (u *Server) ProcessSubtreeUTXOStreaming(ctx context.Context, subtreeHash ch
 
 		// check the tx hash matches the expected hash (from subtree), except for coinbase
 		if !tx.IsCoinbase() {
-			txHash := tx.TxIDChainHash()
+			var txHash chainhash.Hash
+			txHash, hashScratch = tx.HashTxIDInto(hashScratch)
 			if !txHash.Equal(subtree.Nodes[i].Hash) {
 				return errors.NewProcessingError("[BlockPersister] transaction hash mismatch at index %d: expected %s, got %s", i, subtree.Nodes[i].Hash.String(), txHash.String())
 			}

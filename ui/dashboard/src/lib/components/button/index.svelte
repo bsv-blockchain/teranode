@@ -1,5 +1,7 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte'
+  import type { Snippet } from 'svelte'
   import { FocusRect, Icon } from '$lib/components'
   import { tippy } from '$lib/stores/media'
   import {
@@ -8,61 +10,78 @@
     ComponentVariant,
     type ComponentVariantType,
     FlexDirection,
-    type FlexDirectionType,
     getStyleSizeFromComponentSize,
   } from '$lib/styles/types'
 
-  const dispatch = createEventDispatcher()
+  let {
+    testId = null,
+    class: clazz = null,
+    style = '',
+    variant = ComponentVariant.primary,
+    icon = null,
+    iconColor = 'currentColor',
+    iconAfter = null,
+    tabindex = -99,
+    hasFocusRect = true,
+    emulateHover = false,
+    tooltip = '',
+    disabled = false,
+    selected = false,
+    toggle = false,
+    width = -1,
+    round = false,
+    ico = false,
+    stretch = false,
+    uppercase = false,
+    size = ComponentSize.medium,
+    onclick,
+    onfocus,
+    onblur,
+    onkeydown,
+    children,
+  }: {
+    testId?: string | null
+    class?: string | null
+    style?: string
+    variant?: ComponentVariantType
+    icon?: string | null
+    iconColor?: string
+    iconAfter?: string | null
+    tabindex?: number
+    hasFocusRect?: boolean
+    emulateHover?: boolean
+    tooltip?: string
+    disabled?: boolean
+    selected?: boolean
+    toggle?: boolean
+    width?: number
+    round?: boolean
+    ico?: boolean
+    stretch?: boolean
+    uppercase?: boolean
+    size?: ComponentSizeType
+    onclick?: (e: MouseEvent) => void
+    onfocus?: () => void
+    onblur?: () => void
+    onkeydown?: (e: KeyboardEvent) => void
+    children?: Snippet
+  } = $props()
 
-  export let testId: string | undefined | null = null
+  const hasIcon = $derived(Boolean(icon) || Boolean(iconAfter))
+  const direction = $derived(
+    hasIcon ? (icon ? FlexDirection.row : FlexDirection.rowReverse) : FlexDirection.row,
+  )
 
-  let clazz: string | undefined | null = null
-  export { clazz as class }
+  const styleSize = $derived(getStyleSizeFromComponentSize(size))
 
-  export let style = ''
+  const compVarStr = $derived(`--comp-${variant}`)
+  const buttonVarStr = $derived(`--button-${variant}`)
+  const compSizeStr = $derived(`--comp-size-${styleSize}`)
+  const buttonSizeStr = $derived(`--button-size-${styleSize}`)
 
-  export let variant: ComponentVariantType = ComponentVariant.primary
-  export let icon: string | undefined | null = null
-  export let iconColor = 'currentColor'
-  export let iconAfter: string | undefined | null = null
-  // export let iconAfterColor = 'currentColor'
-  export let tabindex = -99
-  export let hasFocusRect = true
-  export let emulateHover = false
-  export let tooltip = ''
-
-  let hasIcon = false
-  let direction: FlexDirectionType = FlexDirection.row
-
-  $: {
-    hasIcon = Boolean(icon) || Boolean(iconAfter)
-
-    if (hasIcon) {
-      direction = icon ? FlexDirection.row : FlexDirection.rowReverse
-    }
-  }
-
-  export let disabled = false
-  export let selected = false
-  export let toggle = false
-  export let width = -1
-  export let round = false
-  export let ico = false
-  export let stretch = false
-  export let uppercase = false
-
-  export let size: ComponentSizeType = ComponentSize.medium
-  $: styleSize = getStyleSizeFromComponentSize(size)
-
-  $: compVarStr = `--comp-${variant}`
-  $: buttonVarStr = `--button-${variant}`
-  $: compSizeStr = `--comp-size-${styleSize}`
-  $: buttonSizeStr = `--button-size-${styleSize}`
-
-  let cssVars: string[] = []
-  $: {
-    let states = ['enabled', 'hover', 'active', 'focus', 'disabled']
-    cssVars = [
+  const cssVars = $derived.by(() => {
+    const states = ['enabled', 'hover', 'active', 'focus', 'disabled']
+    return [
       ...states.reduce(
         (acc, state) => [
           ...acc,
@@ -91,11 +110,11 @@
       `--border-width:var(--button-border-width, var(--comp-border-width))`,
       `--gap:var(--button-icon-gap, 6px)`,
     ]
-  }
+  })
 
   let focused = false
 
-  function onFocusAction(eventName) {
+  function onFocusAction(eventName: 'focus' | 'blur') {
     switch (eventName) {
       case 'blur':
         focused = false
@@ -104,17 +123,18 @@
         focused = true
         break
     }
-    dispatch(eventName)
+    if (eventName === 'focus') onfocus?.()
+    else if (eventName === 'blur') onblur?.()
   }
 
-  function onKeyDown(e) {
-    if (!e) e = window.event
+  function onKeyDown(e: KeyboardEvent) {
+    if (!e) e = window.event as KeyboardEvent
     const keyCode = e.code || e.key
     if (keyCode === 'Enter') {
-      dispatch('click', e)
+      onclick?.(e as unknown as MouseEvent)
       return false
     }
-    dispatch('keydown', e)
+    onkeydown?.(e)
   }
 </script>
 
@@ -126,8 +146,8 @@
     : `var(${buttonSizeStr}-border-radius, var(${compSizeStr}-border-radius))`}
   {stretch}
 >
-  <!-- svelte-ignore a11y-click-events-have-key-events -->
-  <!-- svelte-ignore a11y-no-noninteractive-tabindex -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div
     role="button"
     data-test-id={testId}
@@ -142,10 +162,10 @@
     style:--direction={direction}
     style:--width={width === -1 ? 'auto' : `${width}px`}
     tabindex={tabindex === -99 ? 0 : tabindex}
-    on:click
-    on:focus={() => onFocusAction('focus')}
-    on:blur={() => onFocusAction('blur')}
-    on:keydown={onKeyDown}
+    onclick={onclick}
+    onfocus={() => onFocusAction('focus')}
+    onblur={() => onFocusAction('blur')}
+    onkeydown={onKeyDown}
     use:$tippy={{ content: tooltip }}
   >
     {#if hasIcon}
@@ -157,8 +177,8 @@
         />
       </div>
     {/if}
-    {#if $$slots.default && $$slots.default != ''}
-      <div class="label"><slot /></div>
+    {#if children}
+      <div class="label">{@render children()}</div>
     {/if}
   </div>
 </FocusRect>

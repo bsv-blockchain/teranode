@@ -107,7 +107,7 @@ func (h *HTTP) GetBlockLocator(c echo.Context) error {
 	}
 
 	h.logger.Debugf("[Asset_http] GetBlockLocator for %s with hash = %x, height = %d",
-		c.Request().RemoteAddr, blockHash, blockHeight)
+		c.RealIP(), blockHash, blockHeight)
 
 	// Convert byte array to chainhash.Hash for the repository call
 	var blockHeaderHash *chainhash.Hash

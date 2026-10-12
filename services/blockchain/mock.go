@@ -101,6 +101,15 @@ func (m *Mock) GetNextBlockID(ctx context.Context) (uint64, error) {
 	return args.Get(0).(uint64), args.Error(1)
 }
 
+// AssignBlockID mocks the AssignBlockID method
+func (m *Mock) AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error) {
+	args := m.Called(ctx, blockHash)
+	if args.Error(1) != nil {
+		return 0, args.Error(1)
+	}
+	return args.Get(0).(uint64), nil
+}
+
 // GetBlockStats mocks the GetBlockStats method
 func (m *Mock) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	args := m.Called(ctx)
@@ -525,12 +534,6 @@ func (m *Mock) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, peer
 	return args.Error(0)
 }
 
-// LegacySync mocks the LegacySync method
-func (m *Mock) LegacySync(ctx context.Context) error {
-	args := m.Called(ctx)
-	return args.Error(0)
-}
-
 // Idle mocks the Idle method
 func (m *Mock) Idle(ctx context.Context) error {
 	args := m.Called(ctx)
@@ -639,6 +642,11 @@ type errorStore struct {
 
 func (e *errorStore) GetNextBlockID(ctx context.Context) (uint64, error) {
 	args := e.Called(ctx)
+	return 0, args.Error(1)
+}
+
+func (e *errorStore) AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error) {
+	args := e.Called(ctx, blockHash)
 	return 0, args.Error(1)
 }
 
@@ -861,6 +869,11 @@ func (m *mockHealthClient) HealthGRPC(ctx context.Context, in *emptypb.Empty, op
 	return m.resp, m.err
 }
 
+// GetFSMCurrentState accepts the readiness key probe, as a server does for a matching key.
+func (m *mockHealthClient) GetFSMCurrentState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*blockchain_api.GetFSMStateResponse, error) {
+	return &blockchain_api.GetFSMStateResponse{State: blockchain_api.FSMStateType_RUNNING}, nil
+}
+
 type mockBlockClient struct {
 	blockchain_api.BlockchainAPIClient
 	responseGetBlock                             *blockchain_api.GetBlockResponse
@@ -928,6 +941,7 @@ type mockBlockClient struct {
 	lastSetBlockSubtreesSetReq                   *blockchain_api.SetBlockSubtreesSetRequest
 	responseGetBlocksSubtreesNotSet              *blockchain_api.GetBlocksSubtreesNotSetResponse
 	responseGetFSMCurrentState                   *blockchain_api.GetFSMStateResponse
+	fnGetFSMCurrentState                         func() (*blockchain_api.GetFSMStateResponse, error)
 	responseSendFSMEvent                         *blockchain_api.GetFSMStateResponse
 	lastSendFSMEventReq                          *blockchain_api.SendFSMEventRequest
 	responseGetBlockLocator                      *blockchain_api.GetBlockLocatorResponse
@@ -978,6 +992,15 @@ func (m *mockBlockClient) GetNextBlockID(ctx context.Context, req *emptypb.Empty
 		return nil, m.err
 	}
 	return m.responseGetNextBlockID, nil
+}
+
+func (m *mockBlockClient) AssignBlockID(ctx context.Context, req *blockchain_api.AssignBlockIDRequest, opts ...grpc.CallOption) (*blockchain_api.AssignBlockIDResponse, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	// Mirror the configured GetNextBlockID id so callers that wire up an id get a
+	// consistent, non-zero value here too (getter is nil-safe → 0 when unset).
+	return &blockchain_api.AssignBlockIDResponse{BlockId: m.responseGetNextBlockID.GetNextBlockId()}, nil
 }
 
 func (m *mockBlockClient) GetBlockStats(
@@ -1268,6 +1291,10 @@ func (m *mockBlockClient) GetFSMCurrentState(
 	in *emptypb.Empty,
 	opts ...grpc.CallOption,
 ) (*blockchain_api.GetFSMStateResponse, error) {
+	if m.fnGetFSMCurrentState != nil {
+		return m.fnGetFSMCurrentState()
+	}
+
 	return m.responseGetFSMCurrentState, m.err
 }
 
@@ -1286,10 +1313,6 @@ func (m *mockBlockClient) Run(ctx context.Context, req *emptypb.Empty, opts ...g
 }
 
 func (m *mockBlockClient) CatchUpBlocks(ctx context.Context, req *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
-	return &emptypb.Empty{}, m.err
-}
-
-func (m *mockBlockClient) LegacySync(ctx context.Context, req *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	return &emptypb.Empty{}, m.err
 }
 
@@ -1357,8 +1380,8 @@ func (m *Mock) CompleteBlobDeletions(ctx context.Context, completedIDs, failedID
 }
 
 // AcquireBlobDeletionBatch mocks the AcquireBlobDeletionBatch method
-func (m *Mock) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, timeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
-	args := m.Called(ctx, height, limit, timeoutSeconds)
+func (m *Mock) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, timeoutSeconds int, excludeStoreTypes []storetypes.BlobStoreType) (string, []*blockchain_api.ScheduledDeletion, error) {
+	args := m.Called(ctx, height, limit, timeoutSeconds, excludeStoreTypes)
 	if args.Error(2) != nil {
 		return "", nil, args.Error(2)
 	}

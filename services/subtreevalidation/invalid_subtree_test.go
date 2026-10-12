@@ -11,12 +11,16 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -55,6 +59,11 @@ func (m *mockKafkaProducer) Publish(msg *kafka.Message) {
 	m.messages = append(m.messages, msg)
 }
 
+func (m *mockKafkaProducer) TryPublish(msg *kafka.Message) bool {
+	m.messages = append(m.messages, msg)
+	return true
+}
+
 // TestInvalidSubtreeReporting_MalformedTransactionData tests that invalid subtree messages ARE sent
 // when malformed transaction data is received from a peer
 func TestInvalidSubtreeReporting_MalformedTransactionData(t *testing.T) {
@@ -90,7 +99,7 @@ func TestInvalidSubtreeReporting_MalformedTransactionData(t *testing.T) {
 		{Hash: chainhash.HashH([]byte("tx1")), Idx: 0},
 	}
 
-	_, err := server.getMissingTransactionsBatch(ctx, subtreeHash, missingTxHashes, baseURL)
+	_, err := server.getMissingTransactionsBatch(ctx, subtreeHash, missingTxHashes, baseURL, "")
 
 	// verify error is returned
 	assert.Error(t, err)
@@ -109,6 +118,252 @@ func TestInvalidSubtreeReporting_MalformedTransactionData(t *testing.T) {
 	assert.Equal(t, baseURL, msg.PeerUrl)
 	assert.Equal(t, "malformed_transaction_data", msg.Reason)
 }
+
+// TestGetMissingTransactionsBatch_OverallDeadlineBoundsRetries pins the bound on the
+// getMissingTransactionsBatch fetch. The caller's ctx (the announcement path) has no
+// deadline of its own, so without one set here the retry helper's ctx.Done() abort can
+// never fire, and the retry loop always runs to its attempt limit - a peer that stalls
+// and then answers 429/503 could hold a single batch for attempts x streaming-timeout.
+//
+// The bound is asserted through the attempt count rather than wall-clock alone: a
+// timing-only assertion would still pass if the loop happened to run to completion
+// quickly.
+func TestGetMissingTransactionsBatch_OverallDeadlineBoundsRetries(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	// Short enough that the retry backoff (250ms, then doubling) crosses it well before
+	// the default 6-attempt ladder completes, instead of waiting on the production
+	// default of 5m.
+	tSettings.SubtreeValidation.MissingTransactionsFetchTimeout = 300 * time.Millisecond
+
+	subtreeHash := chainhash.HashH([]byte("test-subtree"))
+	baseURL := testPeerURL
+
+	server := &Server{
+		logger:                       ulogger.TestLogger{},
+		settings:                     tSettings,
+		subtreeStore:                 memory.New(),
+		invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
+		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
+	}
+	defer server.invalidSubtreeDeDuplicateMap.Stop()
+
+	// 503 (like 429) is retried by the retry loop, so this is the shape that reaches
+	// all six attempts if left unbounded.
+	url := fmt.Sprintf("%s/subtree/%s/txs", baseURL, subtreeHash.String())
+	httpmock.RegisterResponder("POST", url, httpmock.NewStringResponder(503, "unavailable"))
+
+	missingTxHashes := []utxo.UnresolvedMetaData{
+		{Hash: chainhash.HashH([]byte("tx1")), Idx: 0},
+	}
+
+	start := time.Now()
+	_, err := server.getMissingTransactionsBatch(context.Background(), subtreeHash, missingTxHashes, baseURL, "")
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+
+	calls := httpmock.GetCallCountInfo()["POST "+url]
+	require.GreaterOrEqual(t, calls, 1, "the fetch should have been attempted at least once")
+	require.Less(t, calls, 6, "the retry loop must abort on the deadline rather than running every attempt")
+
+	// The full backoff chain is 250ms+500ms+1s+2s+4s = 7.75s of sleeping alone, so an
+	// unbounded run cannot finish anywhere near this.
+	require.Less(t, elapsed, 5*time.Second, "the whole fetch must be bounded by one deadline, not one per attempt")
+}
+
+// TestGetMissingTransactionsBatch_CancelledCtxDoesNotPublishInvalidSubtree pins that an
+// HTTP failure caused by OUR OWN cancelled context - a sibling batch failing in the same
+// errgroup, or service shutdown - must not be reported as the peer's fault.
+//
+// Before this fix, that suppression depended entirely on publishInvalidSubtree's
+// GetFSMCurrentState(ctx) call happening to fail on the same cancelled ctx and returning
+// early. That is fragile: a nil blockchainClient (GetFSMCurrentState is skipped
+// entirely, see publishInvalidSubtree) or a blockchain client that tolerates a cancelled
+// ctx would fall through and publish anyway. The check must be explicit and not
+// depend on an unrelated downstream RPC failing the same way.
+func TestGetMissingTransactionsBatch_CancelledCtxDoesNotPublishInvalidSubtree(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	subtreeHash := chainhash.HashH([]byte("test-subtree"))
+	baseURL := testPeerURL
+
+	server := &Server{
+		logger:                       ulogger.TestLogger{},
+		settings:                     tSettings,
+		subtreeStore:                 memory.New(),
+		invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
+		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
+	}
+	defer server.invalidSubtreeDeDuplicateMap.Stop()
+
+	// Never actually reached: a cancelled ctx must short-circuit before the HTTP call.
+	url := fmt.Sprintf("%s/subtree/%s/txs", baseURL, subtreeHash.String())
+	httpmock.RegisterResponder("POST", url, httpmock.NewStringResponder(200, ""))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	missingTxHashes := []utxo.UnresolvedMetaData{
+		{Hash: chainhash.HashH([]byte("tx1")), Idx: 0},
+	}
+
+	_, err := server.getMissingTransactionsBatch(ctx, subtreeHash, missingTxHashes, baseURL, "")
+	require.Error(t, err)
+
+	kafkaProducer := server.invalidSubtreeKafkaProducer.(*mockKafkaProducer)
+	require.Empty(t, kafkaProducer.messages, "a peer must not be penalised for this node's own cancellation")
+	require.Zero(t, httpmock.GetTotalCallCount(), "an already-cancelled ctx must not reach the peer at all")
+}
+
+// cancelOnReadBody cancels a context on the first Read, simulating this node's own
+// cancellation arriving while a peer's response body is being consumed.
+type cancelOnReadBody struct {
+	cancel context.CancelFunc
+	r      io.Reader
+	once   sync.Once
+}
+
+func (b *cancelOnReadBody) Read(p []byte) (int, error) {
+	b.once.Do(b.cancel)
+	return b.r.Read(p)
+}
+
+func (b *cancelOnReadBody) Close() error { return nil }
+
+// TestGetMissingTransactionsBatch_CtxCancelledMidFlightDoesNotPublish covers the two
+// cancellation windows after the pre-fetch check: our ctx cancelled while the request is
+// in flight (the fetch itself fails), and cancelled while the response body is being
+// read (the body read fails). Neither is the peer's fault, so neither may reach
+// publishInvalidSubtree - blockchain.Client.GetFSMCurrentState returns a cached state
+// without looking at ctx, so nothing downstream suppresses the report.
+func TestGetMissingTransactionsBatch_CtxCancelledMidFlightDoesNotPublish(t *testing.T) {
+	tests := []struct {
+		name      string
+		responder func(cancel context.CancelFunc) httpmock.Responder
+	}{
+		{
+			name: "cancelled during the fetch",
+			responder: func(cancel context.CancelFunc) httpmock.Responder {
+				return func(req *http.Request) (*http.Response, error) {
+					cancel()
+					return nil, context.Canceled
+				}
+			},
+		},
+		{
+			name: "cancelled while the body is read",
+			responder: func(cancel context.CancelFunc) httpmock.Responder {
+				return func(req *http.Request) (*http.Response, error) {
+					// The response arrives intact; our ctx is cancelled on the first
+					// body read, after the fetch has returned. The bytes are not a
+					// parseable transaction, so the read fails - which must not be
+					// blamed on the peer.
+					body := &cancelOnReadBody{cancel: cancel, r: bytes.NewReader([]byte{0xff, 0xff, 0xff})}
+					return &http.Response{StatusCode: http.StatusOK, Body: body, Header: http.Header{}}, nil
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			httpmock.ActivateNonDefault(util.HTTPClient())
+			defer httpmock.DeactivateAndReset()
+
+			tSettings := test.CreateBaseTestSettings(t)
+			subtreeHash := chainhash.HashH([]byte("test-subtree"))
+			baseURL := testPeerURL
+
+			server := &Server{
+				logger:                       ulogger.TestLogger{},
+				settings:                     tSettings,
+				subtreeStore:                 memory.New(),
+				invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
+				invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
+			}
+			defer server.invalidSubtreeDeDuplicateMap.Stop()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			url := fmt.Sprintf("%s/subtree/%s/txs", baseURL, subtreeHash.String())
+			httpmock.RegisterResponder("POST", url, tt.responder(cancel))
+
+			missingTxHashes := []utxo.UnresolvedMetaData{
+				{Hash: chainhash.HashH([]byte("tx1")), Idx: 0},
+			}
+
+			_, err := server.getMissingTransactionsBatch(ctx, subtreeHash, missingTxHashes, baseURL, "")
+			require.Error(t, err)
+
+			kafkaProducer := server.invalidSubtreeKafkaProducer.(*mockKafkaProducer)
+			require.Empty(t, kafkaProducer.messages, "a peer must not be penalised for this node's own cancellation")
+		})
+	}
+}
+
+// TestGetMissingTransactionsBatch_FetchDeadlineMidBodyIsNotMalformedData pins that
+// when this node's own overall fetch deadline expires while the peer's body is
+// still being read (the caller's ctx still live), the peer is reported as unable
+// to provide the transactions, not as having served malformed data.
+func TestGetMissingTransactionsBatch_FetchDeadlineMidBodyIsNotMalformedData(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.SubtreeValidation.MissingTransactionsFetchTimeout = 50 * time.Millisecond
+
+	subtreeHash := chainhash.HashH([]byte("test-subtree"))
+	baseURL := testPeerURL
+
+	server := &Server{
+		logger:                       ulogger.TestLogger{},
+		settings:                     tSettings,
+		subtreeStore:                 memory.New(),
+		invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
+		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
+	}
+	defer server.invalidSubtreeDeDuplicateMap.Stop()
+
+	url := fmt.Sprintf("%s/subtree/%s/txs", baseURL, subtreeHash.String())
+	httpmock.RegisterResponder("POST", url, func(req *http.Request) (*http.Response, error) {
+		// The body stalls until the request's own (fetch-deadline) ctx expires, then
+		// fails with that ctx's error.
+		body := &ctxBoundBody{ctx: req.Context()}
+		return &http.Response{StatusCode: http.StatusOK, Body: body, Header: http.Header{}}, nil
+	})
+
+	missingTxHashes := []utxo.UnresolvedMetaData{
+		{Hash: chainhash.HashH([]byte("tx1")), Idx: 0},
+	}
+
+	_, err := server.getMissingTransactionsBatch(context.Background(), subtreeHash, missingTxHashes, baseURL, "")
+	require.Error(t, err)
+
+	kafkaProducer := server.invalidSubtreeKafkaProducer.(*mockKafkaProducer)
+	require.Len(t, kafkaProducer.messages, 1)
+
+	var msg kafkamessage.KafkaInvalidSubtreeTopicMessage
+	require.NoError(t, proto.Unmarshal(kafkaProducer.messages[0].Value, &msg))
+	require.Equal(t, "peer_cannot_provide_transactions", msg.Reason)
+}
+
+// ctxBoundBody blocks each Read until ctx is done, then returns ctx's error.
+type ctxBoundBody struct {
+	ctx context.Context
+}
+
+func (b *ctxBoundBody) Read(_ []byte) (int, error) {
+	<-b.ctx.Done()
+	return 0, b.ctx.Err()
+}
+
+func (b *ctxBoundBody) Close() error { return nil }
 
 // TestInvalidSubtreeReporting_TransactionCountMismatch tests that invalid subtree messages ARE sent
 // when the peer returns a different number of transactions than requested
@@ -153,7 +408,7 @@ func TestInvalidSubtreeReporting_TransactionCountMismatch(t *testing.T) {
 		{Hash: chainhash.HashH([]byte("tx2")), Idx: 1},
 	}
 
-	_, err2 := server.getMissingTransactionsBatch(ctx, subtreeHash, missingTxHashes, baseURL)
+	_, err2 := server.getMissingTransactionsBatch(ctx, subtreeHash, missingTxHashes, baseURL, "")
 
 	// verify error is returned
 	assert.Error(t, err2)
@@ -204,7 +459,7 @@ func TestInvalidSubtreeReporting_PeerCannotProvideData(t *testing.T) {
 		{Hash: chainhash.HashH([]byte("tx1")), Idx: 0},
 	}
 
-	_, err := server.getMissingTransactionsBatch(ctx, subtreeHash, missingTxHashes, baseURL)
+	_, err := server.getMissingTransactionsBatch(ctx, subtreeHash, missingTxHashes, baseURL, "")
 
 	// verify error is returned
 	assert.Error(t, err)
@@ -232,7 +487,7 @@ func TestInvalidSubtreeReporting_PeerCannotProvideData(t *testing.T) {
 		httpmock.NewBytesResponder(http.StatusNotFound, []byte(errors.New(errors.ERR_NOT_FOUND, "not found").Error())))
 
 	stat := gocore.NewStat("test")
-	_, err = server.getSubtreeTxHashes(ctx, stat, &subtreeHash, baseURL)
+	_, err = server.getSubtreeTxHashes(ctx, stat, &subtreeHash, baseURL, "")
 
 	// verify error is returned
 	assert.Error(t, err)
@@ -269,7 +524,7 @@ func TestInvalidSubtreeReporting_NilKafkaProducer(t *testing.T) {
 	// call publishInvalidSubtree directly
 	// should not panic even with nil producer
 	assert.NotPanics(t, func() {
-		server.publishInvalidSubtree(context.Background(), subtreeHash.String(), baseURL, "test_reason")
+		server.publishInvalidSubtree(context.Background(), subtreeHash.String(), baseURL, "", "test_reason")
 	})
 }
 
@@ -303,7 +558,7 @@ func TestInvalidSubtreeReporting_HTTPErrorResponse(t *testing.T) {
 		{Hash: chainhash.HashH([]byte("tx1")), Idx: 0},
 	}
 
-	_, err := server.getMissingTransactionsBatch(ctx, subtreeHash, missingTxHashes, baseURL)
+	_, err := server.getMissingTransactionsBatch(ctx, subtreeHash, missingTxHashes, baseURL, "")
 
 	// verify error is returned
 	assert.Error(t, err)
@@ -339,6 +594,200 @@ func TestInvalidSubtreeReporting_ReadTxFromReaderPanic(t *testing.T) {
 	assert.Nil(t, tx)
 }
 
+// TestGetSubtreeTxHashes_OversizedBody verifies that getSubtreeTxHashes refuses to allocate
+// a peer-supplied response body larger than SubtreeValidation.MaxIncomingSubtreeBytes.
+// Pre-fix this would have allocated unbounded memory; post-fix it returns ErrExternal.
+func TestGetSubtreeTxHashes_OversizedBody(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	// Lower the cap so the test response is cheap to produce.
+	tSettings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 // tiny cap
+
+	subtreeHash := chainhash.HashH([]byte("test-oversized-subtree"))
+	baseURL := testPeerURL
+
+	server := &Server{
+		logger:                       ulogger.TestLogger{},
+		settings:                     tSettings,
+		subtreeStore:                 memory.New(),
+		invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
+		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
+	}
+	defer server.invalidSubtreeDeDuplicateMap.Stop()
+
+	// Register a peer that returns a body larger than the cap.
+	subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+	oversized := bytes.Repeat([]byte{0xab}, 4*1024) // 4 KB — far over the 128-byte cap
+	httpmock.RegisterResponder("GET", subtreeURL,
+		httpmock.NewBytesResponder(http.StatusOK, oversized))
+
+	stat := gocore.NewStat("test")
+	_, err := server.getSubtreeTxHashes(context.Background(), stat, &subtreeHash, baseURL, "")
+
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrExternal), "expected ErrExternal, got %v", err)
+}
+
+// TestGetSubtreeTxHashes_LocalAssemblyPolicyIgnored is a regression test for issue #905.
+// The receive-side cap must be governed by SubtreeValidation.MaxIncomingSubtreeBytes only,
+// not by local BlockAssembly.MaximumMerkleItemsPerSubtree. Otherwise nodes with a smaller
+// local assembly cap than the network norm (docker quickstart on teratestnet) reject every
+// legitimate peer response and stall catchup.
+func TestGetSubtreeTxHashes_LocalAssemblyPolicyIgnored(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	// Docker quickstart profile: small local assembly cap, generous receive cap.
+	tSettings.BlockAssembly.MaximumMerkleItemsPerSubtree = 32768 // 1 MiB worth of node hashes
+	tSettings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 * 1024 * 1024
+
+	subtreeHash := chainhash.HashH([]byte("test-large-subtree-from-peer"))
+	baseURL := testPeerURL
+
+	server := &Server{
+		logger:                       ulogger.TestLogger{},
+		settings:                     tSettings,
+		subtreeStore:                 memory.New(),
+		invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
+		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
+	}
+	defer server.invalidSubtreeDeDuplicateMap.Stop()
+
+	// Build a valid node-hash payload larger than the local assembly cap but well under the
+	// receive cap: 65,536 32-byte hashes = 2 MiB.
+	const leafCount = 65536
+	payload := make([]byte, leafCount*chainhash.HashSize)
+	for i := range payload {
+		payload[i] = byte(i % 256)
+	}
+
+	subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+	httpmock.RegisterResponder("GET", subtreeURL,
+		httpmock.NewBytesResponder(http.StatusOK, payload))
+
+	stat := gocore.NewStat("test")
+	hashes, err := server.getSubtreeTxHashes(context.Background(), stat, &subtreeHash, baseURL, "")
+
+	require.NoError(t, err)
+	require.Len(t, hashes, leafCount)
+}
+
+// TestGetSubtreeTxHashes_RetriesOn429 — a peer that rate-limits the GET /subtree fetch on the
+// announcement path is retried, not dropped. Before the retry, one 429 lost the subtree and
+// every descendant subtree then failed on missing parents.
+func TestGetSubtreeTxHashes_RetriesOn429(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	subtreeHash := chainhash.HashH([]byte("test-subtree-get-429"))
+	baseURL := testPeerURL
+
+	server := &Server{
+		logger:                       ulogger.TestLogger{},
+		settings:                     tSettings,
+		subtreeStore:                 memory.New(),
+		invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
+		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
+	}
+	defer server.invalidSubtreeDeDuplicateMap.Stop()
+
+	payload := make([]byte, 2*chainhash.HashSize)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+
+	var attempts int32
+
+	subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+	httpmock.RegisterResponder("GET", subtreeURL,
+		func(req *http.Request) (*http.Response, error) {
+			if atomic.AddInt32(&attempts, 1) == 1 {
+				return httpmock.NewStringResponse(http.StatusTooManyRequests, "rate limit exceeded"), nil
+			}
+
+			return httpmock.NewBytesResponse(http.StatusOK, payload), nil
+		})
+
+	hashes, err := server.getSubtreeTxHashes(context.Background(), gocore.NewStat("test"), &subtreeHash, baseURL, "")
+	require.NoError(t, err)
+	require.Len(t, hashes, 2)
+	require.Equal(t, int32(2), atomic.LoadInt32(&attempts), "the 429 must have been retried")
+
+	kafkaProducer := server.invalidSubtreeKafkaProducer.(*mockKafkaProducer)
+	require.Empty(t, kafkaProducer.messages, "a rate-limited peer must not be reported as invalid")
+}
+
+// TestGetSubtreeTxHashes_LocalFile is a regression guard for the dual file-type
+// lookup. If the subtree is already on disk under FileTypeSubtree (the
+// "already validated" marker — written by quickValidationMode, block assembly,
+// or block persister), getSubtreeTxHashes must use it instead of falling back
+// to an HTTP fetch. This is important for legacy catch-up where baseURL has
+// no scheme and the HTTP request would fail outright.
+func TestGetSubtreeTxHashes_LocalFile(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+
+	cases := []struct {
+		name     string
+		fileType fileformat.FileType
+	}{
+		{"FileTypeSubtreeToCheck", fileformat.FileTypeSubtreeToCheck},
+		{"FileTypeSubtree", fileformat.FileTypeSubtree},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
+			require.NoError(t, err)
+
+			h1 := chainhash.HashH([]byte("local-tx-1"))
+			h2 := chainhash.HashH([]byte("local-tx-2"))
+			h3 := chainhash.HashH([]byte("local-tx-3"))
+			h4 := chainhash.HashH([]byte("local-tx-4"))
+			require.NoError(t, subtree.AddNode(h1, 1, 100))
+			require.NoError(t, subtree.AddNode(h2, 1, 100))
+			require.NoError(t, subtree.AddNode(h3, 1, 100))
+			require.NoError(t, subtree.AddNode(h4, 1, 100))
+
+			subtreeBytes, err := subtree.Serialize()
+			require.NoError(t, err)
+			subtreeHash := chainhash.DoubleHashH(subtreeBytes)
+
+			server := &Server{
+				logger:                       ulogger.TestLogger{},
+				settings:                     tSettings,
+				subtreeStore:                 memory.New(),
+				invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
+				invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
+			}
+			defer server.invalidSubtreeDeDuplicateMap.Stop()
+
+			require.NoError(t, server.subtreeStore.Set(context.Background(), subtreeHash[:], tc.fileType, subtreeBytes))
+
+			// Activate httpmock with no responders so any unintended HTTP fallback
+			// fails fast and deterministically instead of attempting a real network
+			// call (which would hang for up to the default 60s client timeout).
+			httpmock.ActivateNonDefault(util.HTTPClient())
+			defer httpmock.DeactivateAndReset()
+
+			// Bound the test with a short context timeout as a second line of
+			// defence — if the implementation regresses past httpmock somehow,
+			// this fails fast rather than blocking the suite.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			stat := gocore.NewStat("test")
+			hashes, err := server.getSubtreeTxHashes(ctx, stat, &subtreeHash, testPeerURL, "")
+
+			require.NoError(t, err)
+			require.Equal(t, []chainhash.Hash{h1, h2, h3, h4}, hashes)
+		})
+	}
+}
+
 // TestPublishInvalidSubtree_DirectCall tests the publishInvalidSubtree method directly
 func TestPublishInvalidSubtree_DirectCall(t *testing.T) {
 	// setup
@@ -360,7 +809,7 @@ func TestPublishInvalidSubtree_DirectCall(t *testing.T) {
 	defer server.invalidSubtreeDeDuplicateMap.Stop()
 
 	// call publishInvalidSubtree directly
-	server.publishInvalidSubtree(context.Background(), subtreeHash, peerURL, reason)
+	server.publishInvalidSubtree(context.Background(), subtreeHash, peerURL, "", reason)
 
 	// verify invalid subtree message was published
 	require.Len(t, kafkaProducer.messages, 1)
@@ -423,7 +872,7 @@ func TestPublishInvalidSubtree_EndToEndMemoryKafka(t *testing.T) {
 	}
 	defer server.invalidSubtreeDeDuplicateMap.Stop()
 
-	server.publishInvalidSubtree(ctx, "subtree-hash-e2e", testPeerURL, "e2e_reason")
+	server.publishInvalidSubtree(ctx, "subtree-hash-e2e", testPeerURL, "", "e2e_reason")
 
 	select {
 	case msg := <-delivered:
@@ -433,4 +882,60 @@ func TestPublishInvalidSubtree_EndToEndMemoryKafka(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for invalid subtree kafka message")
 	}
+}
+
+// TestGetMissingTransactionsBatch_RetriesOn429 — a peer that rate-limits us is
+// behaving correctly, so the 429 must be retried rather than treated as the peer
+// failing to provide the data. No invalid-subtree report may be published.
+func TestGetMissingTransactionsBatch_RetriesOn429(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	subtreeHash := chainhash.HashH([]byte("test-subtree-429"))
+	baseURL := testPeerURL
+
+	server := &Server{
+		logger:                       ulogger.TestLogger{},
+		settings:                     tSettings,
+		subtreeStore:                 memory.New(),
+		invalidSubtreeKafkaProducer:  &mockKafkaProducer{},
+		invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute * 1),
+	}
+	defer server.invalidSubtreeDeDuplicateMap.Stop()
+
+	tx, err := bt.NewTxFromString("010000000000000000ef0152a9231baa4e4b05dc30c8fbb7787bab5f460d4d33b039c39dd8cc006f3363e4020000006b483045022100ce3605307dd1633d3c14de4a0cf0df1439f392994e561b648897c4e540baa9ad02207af74878a7575a95c9599e9cdc7e6d73308608ee59abcd90af3ea1a5c0cca41541210275f8390df62d1e951920b623b8ef9c2a67c4d2574d408e422fb334dd1f3ee5b6ffffffff706b9600000000001976a914a32f7eaae3afd5f73a2d6009b93f91aa11d16eef88ac05404b4c00000000001976a914aabb8c2f08567e2d29e3a64f1f833eee85aaf74d88ac80841e00000000001976a914a4aff400bef2fa074169453e703c611c6b9df51588ac204e0000000000001976a9144669d92d46393c38594b2f07587f01b3e5289f6088ac204e0000000000001976a914a461497034343a91683e86b568c8945fb73aca0288ac99fe2a00000000001976a914de7850e419719258077abd37d4fcccdb0a659b9388ac00000000")
+	require.NoError(t, err)
+
+	var attempts int32
+
+	url := fmt.Sprintf("%s/subtree/%s/txs", baseURL, subtreeHash.String())
+	httpmock.RegisterResponder("POST", url,
+		func(req *http.Request) (*http.Response, error) {
+			// The body must arrive intact on every attempt, including the retries.
+			sent, readErr := io.ReadAll(req.Body)
+			require.NoError(t, readErr)
+			require.Len(t, sent, 32)
+
+			if atomic.AddInt32(&attempts, 1) == 1 {
+				resp := httpmock.NewStringResponse(http.StatusTooManyRequests, "rate limit exceeded")
+				resp.Header.Set("Retry-After", "1")
+
+				return resp, nil
+			}
+
+			return httpmock.NewBytesResponse(http.StatusOK, tx.ExtendedBytes()), nil
+		})
+
+	missingTxHashes := []utxo.UnresolvedMetaData{
+		{Hash: *tx.TxIDChainHash(), Idx: 0},
+	}
+
+	txs, err := server.getMissingTransactionsBatch(context.Background(), subtreeHash, missingTxHashes, baseURL, "")
+	require.NoError(t, err)
+	require.Len(t, txs, 1)
+	require.Equal(t, int32(2), atomic.LoadInt32(&attempts), "the 429 must have been retried")
+
+	kafkaProducer := server.invalidSubtreeKafkaProducer.(*mockKafkaProducer)
+	require.Empty(t, kafkaProducer.messages, "a rate-limited peer must not be reported as invalid")
 }

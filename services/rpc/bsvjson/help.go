@@ -12,15 +12,23 @@ import (
 	"text/tabwriter"
 )
 
+// Help description map keys reused across help generation.
+const (
+	helpArgumentsKey     = "help-arguments"
+	helpResultKey        = "help-result"
+	helpResultNothingKey = "help-result-nothing"
+	jsonTypeObjectKey    = "json-type-object"
+)
+
 // baseHelpDescs house the various help labels, types, and example values used
 // when generating help.  The per-command synopsis, field descriptions,
 // conditions, and result descriptions are to be provided by the caller.
 var baseHelpDescs = map[string]string{
 	// Misc help labels and output.
-	"help-arguments":      "Arguments",
+	helpArgumentsKey:      "Arguments",
 	"help-arguments-none": "None",
-	"help-result":         "Result",
-	"help-result-nothing": "Nothing",
+	helpResultKey:         "Result",
+	helpResultNothingKey:  "Nothing",
 	"help-default":        "default",
 	"help-optional":       "optional",
 	"help-required":       "required",
@@ -30,7 +38,7 @@ var baseHelpDescs = map[string]string{
 	"json-type-string":  "string",
 	"json-type-bool":    "boolean",
 	"json-type-array":   "array of ",
-	"json-type-object":  "object",
+	jsonTypeObjectKey:   "object",
 	"json-type-value":   "value",
 
 	// JSON examples.
@@ -64,10 +72,10 @@ func reflectTypeToJSONType(xT descLookupFunc, rt reflect.Type) string {
 			rt.Elem())
 
 	case reflect.Struct:
-		return xT("json-type-object")
+		return xT(jsonTypeObjectKey)
 
 	case reflect.Map:
-		return xT("json-type-object")
+		return xT(jsonTypeObjectKey)
 	}
 
 	return xT("json-type-value")
@@ -101,7 +109,7 @@ func resultStructHelp(xT descLookupFunc, rt reflect.Type, indentLevel int) []str
 
 		// Deference pointer if needed.
 		rtfType := rtf.Type
-		if rtfType.Kind() == reflect.Ptr {
+		if rtfType.Kind() == reflect.Pointer {
 			rtfType = rtf.Type.Elem()
 		}
 
@@ -149,7 +157,7 @@ func resultStructHelp(xT descLookupFunc, rt reflect.Type, indentLevel int) []str
 // differently.
 func reflectTypeToJSONExample(xT descLookupFunc, rt reflect.Type, indentLevel int, fieldDescKey string, embeddedStruct bool) ([]string, bool) {
 	// Indirect pointer if needed.
-	if rt.Kind() == reflect.Ptr {
+	if rt.Kind() == reflect.Pointer {
 		rt = rt.Elem()
 	}
 
@@ -315,7 +323,7 @@ func argTypeHelp(xT descLookupFunc, structField reflect.StructField, defaultVal 
 
 	var isOptional bool
 
-	if fieldType.Kind() == reflect.Ptr {
+	if fieldType.Kind() == reflect.Pointer {
 		fieldType = fieldType.Elem()
 		isOptional = true
 	}
@@ -388,19 +396,14 @@ func argHelp(xT descLookupFunc, rtp reflect.Type, defaults map[int]reflect.Value
 		// For types which require a JSON object, or an array of JSON
 		// objects, generate the full syntax for the argument.
 		fieldType := rtf.Type
-		if fieldType.Kind() == reflect.Ptr {
+		if fieldType.Kind() == reflect.Pointer {
 			fieldType = fieldType.Elem()
 		}
 
 		kind := fieldType.Kind()
 
 		switch kind {
-		case reflect.Struct:
-			fieldDescKey := fmt.Sprintf("%s-%s", method, fieldName)
-			resultText := resultTypeHelp(xT, fieldType, fieldDescKey)
-			args = append(args, resultText)
-
-		case reflect.Map:
+		case reflect.Struct, reflect.Map:
 			fieldDescKey := fmt.Sprintf("%s-%s", method, fieldName)
 			resultText := resultTypeHelp(xT, fieldType, fieldDescKey)
 			args = append(args, resultText)
@@ -441,10 +444,10 @@ func methodHelp(xT descLookupFunc, rtp reflect.Type, defaults map[int]reflect.Va
 
 	// Generate the help for each argument in the command.
 	if argText := argHelp(xT, rtp, defaults, method); argText != "" {
-		help += fmt.Sprintf("\n%s:\n%s", xT("help-arguments"),
+		help += fmt.Sprintf("\n%s:\n%s", xT(helpArgumentsKey),
 			argText)
 	} else {
-		help += fmt.Sprintf("\n%s:\n%s\n", xT("help-arguments"),
+		help += fmt.Sprintf("\n%s:\n%s\n", xT(helpArgumentsKey),
 			xT("help-arguments-none"))
 	}
 
@@ -456,7 +459,7 @@ func methodHelp(xT descLookupFunc, rtp reflect.Type, defaults map[int]reflect.Va
 		fieldDescKey := fmt.Sprintf("%s--result%d", method, i)
 
 		if resultTypes[i] == nil {
-			resultText := xT("help-result-nothing")
+			resultText := xT(helpResultNothingKey)
 			resultTexts = append(resultTexts, resultText)
 
 			continue
@@ -470,14 +473,14 @@ func methodHelp(xT descLookupFunc, rtp reflect.Type, defaults map[int]reflect.Va
 	// result type, also add the condition which triggers it.
 	switch len(resultTexts) {
 	case 0:
-		help += fmt.Sprintf("\n%s:\n%s\n", xT("help-result"), xT("help-result-nothing"))
+		help += fmt.Sprintf("\n%s:\n%s\n", xT(helpResultKey), xT(helpResultNothingKey))
 	case 1:
-		help += fmt.Sprintf("\n%s:\n%s\n", xT("help-result"), resultTexts[0])
+		help += fmt.Sprintf("\n%s:\n%s\n", xT(helpResultKey), resultTexts[0])
 	default:
 		for i, resultText := range resultTexts {
 			condKey := fmt.Sprintf("%s--condition%d", method, i)
 			help += fmt.Sprintf("\n%s (%s):\n%s\n",
-				xT("help-result"), xT(condKey), resultText)
+				xT(helpResultKey), xT(condKey), resultText)
 		}
 	}
 
@@ -567,7 +570,7 @@ func GenerateHelp(method string, descs map[string]string, resultTypes ...interfa
 		}
 
 		rtp := reflect.TypeOf(resultType)
-		if rtp.Kind() != reflect.Ptr {
+		if rtp.Kind() != reflect.Pointer {
 			str := fmt.Sprintf("result #%d (%v) is not a pointer",
 				i, rtp.Kind())
 			return "", makeError(ErrInvalidType, str)

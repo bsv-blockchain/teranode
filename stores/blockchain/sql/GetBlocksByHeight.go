@@ -67,7 +67,7 @@ func (s *SQL) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint
 	// Use operation-prefixed key to be consistent with other operations
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlocksByHeight-%d-%d", startHeight, endHeight)))
 
-	cacheOp := s.responseCache.Begin(cacheID)
+	cacheOp := s.responseCache.NewOp(cacheID)
 	cached := cacheOp.Get()
 	if cached != nil {
 		if blocks, ok := cached.Value().([]*model.Block); ok {
@@ -78,7 +78,12 @@ func (s *SQL) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	capacity := max(1, endHeight-startHeight+1)
+	// Calculate capacity safely, avoiding uint32 underflow when startHeight > endHeight
+	var capacity uint32 = 1
+	if endHeight >= startHeight {
+		capacity = max(1, endHeight-startHeight+1)
+	}
+
 	blocks := make([]*model.Block, 0, capacity)
 
 	var q string

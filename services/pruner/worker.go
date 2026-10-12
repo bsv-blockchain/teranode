@@ -123,7 +123,8 @@ func (s *Server) waitForBlockMinedStatus(ctx context.Context, blockHash *chainha
 //
 // CATCHUP SKIP MODE:
 // When SkipDuringCatchup is enabled (default: false), the pruner skips all operations
-// during FSMStateCATCHINGBLOCKS state. This prevents race conditions where block
+// in any state other than FSMStateRUNNING (CATCHINGBLOCKS, or IDLE after an operator
+// STOP mid-catchup). This prevents race conditions where block
 // validation marks transactions as mined faster than the pruner can preserve their parents.
 // Once the node transitions to FSMStateRUNNING, the pruner resumes normal operation.
 //
@@ -158,15 +159,19 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 				continue
 			}
 
-			// Check FSM state - skip during CATCHINGBLOCKS if configured
-			if s.settings.Pruner.SkipDuringCatchup {
+			// Check FSM state - skip during CATCHINGBLOCKS if configured.
+			// Guard against a nil blockchainClient (e.g. in tests) the same
+			// way the blockAssemblyClient check below does.
+			if s.settings.Pruner.SkipDuringCatchup && s.blockchainClient != nil {
 				fsmState, err := s.blockchainClient.GetFSMCurrentState(ctx)
 				if err != nil {
 					s.logger.Warnf("Failed to get FSM state, skipping pruner: %v", err)
 					prunerSkipped.WithLabelValues("fsm_error").Inc()
 					continue
 				}
-				if fsmState != nil && *fsmState == blockchain.FSMStateCATCHINGBLOCKS {
+				// Only RUNNING proves no catchup is in flight: an operator STOP
+				// parks a catching-up node in IDLE while its batch still runs.
+				if fsmState == nil || *fsmState != blockchain.FSMStateRUNNING {
 					s.logger.Debugf("[pruner][%s:%d] skipping during catchup", blockHashStr, blockHeight)
 					prunerSkipped.WithLabelValues("catchup_mode").Inc()
 					continue
@@ -211,7 +216,7 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 					ctx, s.utxoStore, blockHeight, blockHashStr, s.settings, s.logger,
 				); err != nil {
 					s.logger.Warnf("[pruner][%s:%d] phase 1: failed to preserve parents: %v", blockHashStr, blockHeight, err)
-					prunerErrors.WithLabelValues("parent_preservation").Inc()
+					prunerErrors.WithLabelValues("preserve_parents").Inc()
 				} else {
 					prunerDuration.WithLabelValues("preserve_parents").Observe(time.Since(startTime).Seconds())
 					if recordsProcessed > 0 {
@@ -220,6 +225,26 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 				}
 			} else if s.settings.Pruner.SkipPreserveParents {
 				s.logger.Infof("[pruner][%s:%d] phase 1: skipped (pruner_skipPreserveParents=true)", blockHashStr, blockHeight)
+			}
+
+			// Phase 1b: Expire old parent preservations
+			// Clears PreserveUntil on preserved parents that have reached their expiry height and
+			// re-stamps DeleteAtHeight ONLY when the parent is genuinely safe to prune (the eligibility
+			// check lives in the store). Without this, preserved parents keep PreserveUntil set and
+			// DeleteAtHeight cleared forever and are never pruned. Runs before Phase 2; any DAH it
+			// re-stamps is in the future (currentHeight+retention), so nothing it touches is deleted
+			// this cycle.
+			if s.utxoStore != nil && !s.settings.Pruner.SkipProcessExpiredPreservations {
+				s.logger.Debugf("[pruner][%s:%d] phase 1b: expiring old preservations", blockHashStr, blockHeight)
+				startTime := time.Now()
+				if err := s.utxoStore.ProcessExpiredPreservations(ctx, blockHeight); err != nil {
+					s.logger.Warnf("[pruner][%s:%d] phase 1b: failed to expire preservations: %v", blockHashStr, blockHeight, err)
+					prunerErrors.WithLabelValues("expire_preservations").Inc()
+				} else {
+					prunerDuration.WithLabelValues("expire_preservations").Observe(time.Since(startTime).Seconds())
+				}
+			} else if s.settings.Pruner.SkipProcessExpiredPreservations {
+				s.logger.Infof("[pruner][%s:%d] phase 1b: skipped (pruner_skipProcessExpiredPreservations=true)", blockHashStr, blockHeight)
 			}
 
 			// Phase 2: DAH pruning (deletion)

@@ -14,29 +14,6 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-// mockIterator is a configurable mock iterator for testing
-type mockIterator struct {
-	mock.Mock
-}
-
-func (m *mockIterator) Next(ctx context.Context) ([]*UnminedTransaction, error) {
-	args := m.Called(ctx)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]*UnminedTransaction), args.Error(1)
-}
-
-func (m *mockIterator) Err() error {
-	args := m.Called()
-	return args.Error(0)
-}
-
-func (m *mockIterator) Close() error {
-	args := m.Called()
-	return args.Error(0)
-}
-
 // Simple tests focused on achieving code coverage
 
 func TestPreserveParentsOfOldUnminedTransactions_Coverage(t *testing.T) {
@@ -77,7 +54,7 @@ func TestPreserveParentsOfOldUnminedTransactions_Coverage(t *testing.T) {
 		txInpoints, _ := subtree.NewTxInpointsFromTx(tx)
 
 		// Create mock iterator
-		mockIter := new(mockIterator)
+		mockIter := new(MockUnminedTxIterator)
 		mockIter.On("Next", mock.Anything).Return([]*UnminedTransaction{
 			{
 				Node:         &subtree.Node{Hash: hash1},
@@ -189,4 +166,24 @@ func TestPreserveSingleUnminedTransactionParents_Coverage_Removed(t *testing.T) 
 			mockStore.AssertNotCalled(t, "PreserveTransactions")
 		})
 	*/
+}
+
+// BackdatedUnminedSince must hand a mined->unmined transaction straight to the phase-1
+// preservation scan: the value has to satisfy the scan's server-side range filter
+// [1, blockHeight - unminedTxRetention] at the very next pruner cycle.
+func TestBackdatedUnminedSince(t *testing.T) {
+	const retention = uint32(144)
+
+	assert.Equal(t, uint32(856), BackdatedUnminedSince(1000, retention))
+	assert.Equal(t, uint32(1), BackdatedUnminedSince(145, retention), "exactly one block past retention lands on the floor")
+	assert.Equal(t, uint32(1), BackdatedUnminedSince(144, retention), "height equal to retention floors at 1, never 0")
+	assert.Equal(t, uint32(1), BackdatedUnminedSince(10, retention), "height below retention floors at 1")
+	assert.Equal(t, uint32(1000), BackdatedUnminedSince(1000, 0), "zero retention stamps the current height")
+
+	// The stamped value must be <= the cutoff PreserveParentsOfOldUnminedTransactions uses at
+	// the same height, so the transaction is picked up on the next cycle.
+	for _, h := range []uint32{145, 200, 1000, 967060} {
+		cutoff := h - retention
+		assert.LessOrEqual(t, BackdatedUnminedSince(h, retention), cutoff, "height %d", h)
+	}
 }

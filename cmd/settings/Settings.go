@@ -56,7 +56,7 @@ func sortValue(v interface{}) interface{} {
 
 	// Additional check: if the pointer type implements json.Marshaler, create a pointer
 	// This matches Go's JSON marshaling behavior which automatically takes addresses when needed
-	ptrType := reflect.PtrTo(typ)
+	ptrType := reflect.PointerTo(typ)
 	if ptrType.Implements(reflect.TypeOf((*json.Marshaler)(nil)).Elem()) {
 		// Create a new pointer to this value to enable custom marshaling
 		newVal := reflect.New(typ)
@@ -71,7 +71,7 @@ func sortValue(v interface{}) interface{} {
 	}
 
 	// Handle pointers
-	if val.Kind() == reflect.Ptr {
+	if val.Kind() == reflect.Pointer {
 		if val.IsNil() {
 			return nil
 		}
@@ -165,11 +165,17 @@ func sortValue(v interface{}) interface{} {
 // Side effects:
 //   - Prints the settings, version, and commit information to stdout.
 //   - Logs errors if the settings cannot be marshaled to JSON.
-func PrintSettings(logger ulogger.Logger, settings *settings.Settings, version, commit string) {
-	stats := gocore.Config().Stats()
+func PrintSettings(logger ulogger.Logger, s *settings.Settings, version, commit string) {
+	stats := settings.RedactConfigStats(gocore.Config().Stats())
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
-	settingsJSON, err := marshalSortedJSON(settings, "  ")
+	redacted, err := settings.Redact(s)
+	if err != nil {
+		logger.Errorf("Failed to redact settings before logging: %v", err)
+		return
+	}
+
+	settingsJSON, err := marshalSortedJSON(redacted, "  ")
 	if err != nil {
 		logger.Errorf("Failed to marshal settings: %v", err)
 	} else {

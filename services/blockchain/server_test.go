@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,6 +23,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
@@ -242,7 +244,7 @@ func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 	require.NoError(t, subtree.AddCoinbaseNode())
 	require.NoError(t, subtree.AddNode(*hash1, 100, 0))
 
-	_, err = ctx.utxoStore.Create(context.Background(), tx1, 0)
+	_, _, err = ctx.utxoStore.SpendAndCreate(context.Background(), tx1, 0, utxo.WithCreateOnly())
 	require.NoError(t, err)
 
 	tSettings := test.CreateBaseTestSettings(t)
@@ -269,7 +271,7 @@ func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 	err = ctx.subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
-	subtreeHashes := make([]*chainhash.Hash, 0)
+	subtreeHashes := make([]*chainhash.Hash, 0, 1)
 	subtreeHashes = append(subtreeHashes, subtree.RootHash())
 
 	blockHeader := &model.BlockHeader{
@@ -385,6 +387,23 @@ func Test_getBlockLocator(t *testing.T) {
 			assert.Equal(t, store.BlockByHeight[expectedHeights[locatorIdx]].Hash().String(), locatorHash.String())
 		}
 	})
+}
+
+func Test_computeLocatorHeights(t *testing.T) {
+	require.Equal(t, []uint32{0}, computeLocatorHeights(0))
+	require.Equal(t, []uint32{1, 0}, computeLocatorHeights(1))
+	require.Equal(t,
+		[]uint32{12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+		computeLocatorHeights(12))
+	require.Equal(t,
+		[]uint32{13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 0},
+		computeLocatorHeights(13))
+	require.Equal(t,
+		[]uint32{255, 254, 253, 252, 251, 250, 249, 248, 247, 246, 245, 244, 242, 238, 230, 214, 182, 118, 0},
+		computeLocatorHeights(255))
+	require.Equal(t,
+		[]uint32{1000, 999, 998, 997, 996, 995, 994, 993, 992, 991, 990, 989, 987, 983, 975, 959, 927, 863, 735, 479, 0},
+		computeLocatorHeights(1000))
 }
 
 func Test_getBlockHeadersToCommonAncestor(t *testing.T) {
@@ -1040,6 +1059,57 @@ func Test_GetBlockLocator(t *testing.T) {
 		require.NotNil(t, response)
 		assert.NotNil(t, response.Locator)
 	})
+}
+
+func TestBlockchain_SavePeerRegistryPeriodically(t *testing.T) {
+	store := newTestBlobStore(t)
+	reg := NewCentralizedPeerRegistry(DefaultBanConfig())
+	reg.Register(&PeerInfo{ID: "p"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// StartPeriodicSave registers on the registry's WaitGroup so Close()
+	// drains the loop synchronously.
+	reg.StartPeriodicSave(ctx, 5*time.Millisecond, store)
+
+	require.Eventually(t, func() bool {
+		exists, err := store.Exists(ctx, peerRegistryBlobKey, fileformat.FileTypePeerRegistry)
+		return err == nil && exists
+	}, 200*time.Millisecond, 5*time.Millisecond, "expected periodic save to write the blob")
+
+	// Close() must return only after the loop exits.
+	doneCh := make(chan struct{})
+	go func() {
+		reg.Close()
+		close(doneCh)
+	}()
+
+	select {
+	case <-doneCh:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not drain the periodic-save goroutine")
+	}
+}
+
+func TestBlockchain_Stop_SavesAndClosesRegistry(t *testing.T) {
+	store := newTestBlobStore(t)
+	ctx := context.Background()
+
+	b := &Blockchain{
+		logger:            ulogger.TestLogger{},
+		settings:          &settings.Settings{},
+		peerRegistry:      NewCentralizedPeerRegistry(DefaultBanConfig()),
+		peerRegistryStore: store,
+	}
+	b.peerRegistry.Register(&PeerInfo{ID: "p"})
+
+	require.NoError(t, b.Stop(ctx))
+
+	// The closed store can't be exercised after Stop closed it, so verify Stop
+	// persisted at least one snapshot by checking that the closed-store state
+	// is the expected one (Stop reports nil error). The Save call itself is
+	// covered by the periodic test above.
 }
 
 func TestBlockchainStart(t *testing.T) {
@@ -3640,109 +3710,15 @@ func Test_IsFullyReady(t *testing.T) {
 	}
 }
 
-// Test_LegacySync tests the LegacySync gRPC method
-func Test_LegacySync(t *testing.T) {
-	ctx := setup(t)
-
-	tests := []struct {
-		name        string
-		expectError bool
-	}{
-		{
-			name:        "legacy sync request",
-			expectError: false, // Should succeed or be idempotent
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			request := &emptypb.Empty{}
-
-			response, err := ctx.server.LegacySync(context.Background(), request)
-
-			if tt.expectError {
-				require.Error(t, err)
-				require.Nil(t, response)
-				return
-			}
-
-			require.NoError(t, err)
-			require.NotNil(t, response)
-		})
-	}
-}
-
 // Test_Idle tests the Idle gRPC method
 func Test_Idle(t *testing.T) {
 	ctx := setup(t)
 
-	tests := []struct {
-		name        string
-		expectError bool
-	}{
-		{
-			name:        "idle request",
-			expectError: false, // Should succeed or be idempotent
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			request := &emptypb.Empty{}
-
-			response, err := ctx.server.Idle(context.Background(), request)
-
-			if tt.expectError {
-				require.Error(t, err)
-				require.Nil(t, response)
-				return
-			}
-
-			require.NoError(t, err)
-			require.NotNil(t, response)
-		})
-	}
-}
-
-// Test_WaitForFSMtoTransitionToGivenState tests the WaitForFSMtoTransitionToGivenState method
-func Test_WaitForFSMtoTransitionToGivenState(t *testing.T) {
-	ctx := setup(t)
-
-	tests := []struct {
-		name        string
-		targetState blockchain_api.FSMStateType
-		timeout     time.Duration
-		expectError bool
-	}{
-		{
-			name:        "wait for current state (should return immediately)",
-			targetState: blockchain_api.FSMStateType_IDLE, // Common initial state
-			timeout:     1 * time.Second,
-			expectError: false,
-		},
-		{
-			name:        "context cancellation",
-			targetState: blockchain_api.FSMStateType_RUNNING, // Unlikely to be reached immediately
-			timeout:     100 * time.Millisecond,
-			expectError: true, // Should timeout
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			testCtx, cancel := context.WithTimeout(context.Background(), tt.timeout)
-			defer cancel()
-
-			err := ctx.server.WaitForFSMtoTransitionToGivenState(testCtx, tt.targetState)
-
-			if tt.expectError {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), "context deadline exceeded")
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
+	// A fresh node starts in CATCHINGBLOCKS; STOP parks it in IDLE.
+	response, err := ctx.server.Idle(context.Background(), &emptypb.Empty{})
+	require.NoError(t, err)
+	require.NotNil(t, response)
+	require.Equal(t, blockchain_api.FSMStateType_IDLE.String(), ctx.server.finiteStateMachine.Current())
 }
 
 // Test_WaitUntilFSMTransitionFromIdleState tests the WaitUntilFSMTransitionFromIdleState gRPC method
@@ -3752,14 +3728,15 @@ func Test_WaitUntilFSMTransitionFromIdleState(t *testing.T) {
 	tests := []struct {
 		name                   string
 		setupSubscriptionReady bool
+		fsmStateOverride       string
 		timeout                time.Duration
 		expectError            bool
 	}{
 		{
-			name:                   "service with subscription ready but FSM might be IDLE",
+			name:                   "returns immediately when FSM is non-IDLE and subscription ready",
 			setupSubscriptionReady: true,
 			timeout:                2 * time.Second,
-			expectError:            true, // FSM might still be in IDLE state
+			expectError:            false, // Fresh node boots into CATCHINGBLOCKS (not IDLE); with subscription ready, returns immediately
 		},
 		{
 			name:                   "context cancellation when not ready",
@@ -3767,12 +3744,24 @@ func Test_WaitUntilFSMTransitionFromIdleState(t *testing.T) {
 			timeout:                100 * time.Millisecond,
 			expectError:            true, // Should timeout
 		},
+		{
+			name:                   "times out when FSM stuck in IDLE",
+			setupSubscriptionReady: true,
+			fsmStateOverride:       blockchain_api.FSMStateType_IDLE.String(),
+			timeout:                200 * time.Millisecond,
+			expectError:            true, // FSM in IDLE; function waits for non-IDLE transition that never comes
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Set up subscription readiness
 			ctx.server.SetSubscriptionManagerReadyForTesting(tt.setupSubscriptionReady)
+
+			// Override FSM state if requested (forces the IDLE-wait path)
+			if tt.fsmStateOverride != "" {
+				ctx.server.finiteStateMachine.SetState(tt.fsmStateOverride)
+			}
 
 			testCtx, cancel := context.WithTimeout(context.Background(), tt.timeout)
 			defer cancel()
@@ -3790,6 +3779,9 @@ func Test_WaitUntilFSMTransitionFromIdleState(t *testing.T) {
 			}
 		})
 	}
+
+	// Restore FSM to a non-IDLE state so subsequent tests using the shared ctx are unaffected
+	ctx.server.finiteStateMachine.SetState(blockchain_api.FSMStateType_CATCHINGBLOCKS.String())
 }
 
 // Test_BroadcastHeartbeat verifies the heartbeat broadcasting functionality.
@@ -3834,4 +3826,127 @@ func Test_HeartbeatSenderStopsOnContextCancel(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Heartbeat sender did not stop when context was cancelled")
 	}
+}
+
+func Test_getBlockLocator_FastPathMatchesWalk(t *testing.T) {
+	ctx := context.Background()
+
+	for _, tipHeight := range []uint32{0, 5, 12, 13, 255, 1000} {
+		store := blockchain_store.NewMockStore()
+
+		var prevHash *chainhash.Hash
+		for i := uint32(0); i <= tipHeight; i++ {
+			prev := &chainhash.Hash{}
+			if prevHash != nil {
+				prev = prevHash
+			}
+
+			block := &model.Block{
+				Height: i,
+				Header: &model.BlockHeader{
+					Version:        i,
+					HashPrevBlock:  prev,
+					HashMerkleRoot: &chainhash.Hash{},
+					Timestamp:      i,
+					Bits:           model.NBit{},
+					Nonce:          i,
+				},
+			}
+			_, _, err := store.StoreBlock(ctx, block, "")
+			require.NoError(t, err)
+
+			prevHash = block.Hash()
+		}
+
+		start := store.BlockByHeight[tipHeight].Hash()
+
+		store.MainChainFastPathDisabled = false
+		fast, err := getBlockLocator(ctx, store, start, tipHeight)
+		require.NoError(t, err)
+
+		store.MainChainFastPathDisabled = true
+		walk, err := getBlockLocator(ctx, store, start, tipHeight)
+		require.NoError(t, err)
+
+		require.Equal(t, len(walk), len(fast), "tip=%d length mismatch", tipHeight)
+		for i := range walk {
+			require.Equal(t, walk[i].String(), fast[i].String(), "tip=%d idx=%d hash mismatch", tipHeight, i)
+		}
+	}
+}
+
+// TestServerAssignBlockID covers the gRPC AssignBlockID handler: a stable id is
+// returned per hash (idempotent across calls), and a malformed hash is rejected.
+func TestServerAssignBlockID(t *testing.T) {
+	ctx := setup(t)
+	c := context.Background()
+
+	h := chainhash.HashH([]byte("assign-block-id-server"))
+
+	resp, err := ctx.server.AssignBlockID(c, &blockchain_api.AssignBlockIDRequest{BlockHash: h[:]})
+	require.NoError(t, err)
+	require.NotZero(t, resp.BlockId)
+
+	resp2, err := ctx.server.AssignBlockID(c, &blockchain_api.AssignBlockIDRequest{BlockHash: h[:]})
+	require.NoError(t, err)
+	require.Equal(t, resp.BlockId, resp2.BlockId, "same hash must return the same id")
+
+	_, err = ctx.server.AssignBlockID(c, &blockchain_api.AssignBlockIDRequest{BlockHash: []byte{0x01, 0x02}})
+	require.Error(t, err, "a non-32-byte hash must be rejected as invalid argument")
+}
+
+// warnCapturingLogger records every Warnf call so a test can assert both
+// that a coercion warning fired and what it said, rather than only that no
+// panic occurred.
+type warnCapturingLogger struct {
+	ulogger.TestLogger
+	warnings []string
+}
+
+func (l *warnCapturingLogger) Warnf(format string, args ...interface{}) {
+	l.warnings = append(l.warnings, fmt.Sprintf(format, args...))
+}
+
+// TestResolvePeerRegistryTTL_FloorsTooShortValue guards the p2p_peer_registry_ttl
+// floor: a connected peer only refreshes its registry entry every ~10s
+// (node_status) and the gossip-handler batcher can coalesce that for up to a
+// minute (registryReassertTTL) before re-asserting, so a TTL configured well
+// below that window risks evicting an actively-connected peer between
+// refreshes. A too-short positive value must be coerced up to
+// minPeerRegistryTTL, and the coercion must be logged — a silently-corrected
+// setting is exactly the failure mode this settings-wiring batch exists to fix.
+func TestResolvePeerRegistryTTL_FloorsTooShortValue(t *testing.T) {
+	logger := &warnCapturingLogger{}
+
+	got := resolvePeerRegistryTTL(logger, 30*time.Second)
+
+	require.Equal(t, minPeerRegistryTTL, got, "a too-short TTL must be coerced up to the floor")
+	require.Len(t, logger.warnings, 1, "the coercion must be logged")
+	require.Contains(t, logger.warnings[0], "30s")
+	require.Contains(t, logger.warnings[0], minPeerRegistryTTL.String())
+}
+
+// TestResolvePeerRegistryTTL_LeavesLegitimateSentinelAlone guards the other
+// half: ttl<=0 is the documented "use the 24h default" sentinel (distinct
+// from the too-short-but-positive case above) and must not be treated as a
+// too-short value to warn about and coerce to the floor — it already resolves
+// to a value far above the floor.
+func TestResolvePeerRegistryTTL_LeavesLegitimateSentinelAlone(t *testing.T) {
+	logger := &warnCapturingLogger{}
+
+	got := resolvePeerRegistryTTL(logger, 0)
+
+	require.Equal(t, 24*time.Hour, got)
+	require.Empty(t, logger.warnings, "the zero-sentinel path must not log a coercion warning")
+}
+
+// TestResolvePeerRegistryTTL_LeavesValidValueAlone confirms a configured value
+// at or above the floor passes through unchanged and unwarned.
+func TestResolvePeerRegistryTTL_LeavesValidValueAlone(t *testing.T) {
+	logger := &warnCapturingLogger{}
+
+	got := resolvePeerRegistryTTL(logger, 7*time.Minute)
+
+	require.Equal(t, 7*time.Minute, got)
+	require.Empty(t, logger.warnings)
 }

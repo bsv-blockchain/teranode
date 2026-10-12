@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -104,12 +107,24 @@ func RunTestContainer(ctx context.Context) (*GenericTestContainerWrapper, error)
 		listener.Close()
 	}
 
+	kafkaPortStr := fmt.Sprintf("%d/tcp", kafkaPort)
+	kafkaProxyPortStr := fmt.Sprintf("%d/tcp", kafkaProxyPort)
 	req := testcontainers.ContainerRequest{
 		Name:  randomName,
 		Image: fmt.Sprintf("%s:%s", TestContainerRedpandaImage, TestContainerRedpandaVersion),
 		ExposedPorts: []string{
-			fmt.Sprintf("%d:%d/tcp", kafkaPort, kafkaPort),
-			fmt.Sprintf("%d:%d/tcp", kafkaProxyPort, kafkaProxyPort),
+			kafkaPortStr,
+			kafkaProxyPortStr,
+		},
+		HostConfigModifier: func(hc *container.HostConfig) {
+			hc.PortBindings = network.PortMap{
+				network.MustParsePort(kafkaPortStr): []network.PortBinding{
+					{HostIP: netip.IPv4Unspecified(), HostPort: fmt.Sprintf("%d", kafkaPort)},
+				},
+				network.MustParsePort(kafkaProxyPortStr): []network.PortBinding{
+					{HostIP: netip.IPv4Unspecified(), HostPort: fmt.Sprintf("%d", kafkaProxyPort)},
+				},
+			}
 		},
 		Cmd: []string{
 			"redpanda", "start",
@@ -169,12 +184,24 @@ func RunTestContainerTLS(ctx context.Context) (*GenericTestContainerWrapper, err
 		listener.Close()
 	}
 
+	kafkaPortStr := fmt.Sprintf("%d/tcp", kafkaPort)
+	kafkaProxyPortStr := fmt.Sprintf("%d/tcp", kafkaProxyPort)
 	req := testcontainers.ContainerRequest{
 		Name:  randomName,
 		Image: fmt.Sprintf("%s:%s", TestContainerRedpandaImage, TestContainerRedpandaVersion),
 		ExposedPorts: []string{
-			fmt.Sprintf("%d:%d/tcp", kafkaPort, kafkaPort),
-			fmt.Sprintf("%d:%d/tcp", kafkaProxyPort, kafkaProxyPort),
+			kafkaPortStr,
+			kafkaProxyPortStr,
+		},
+		HostConfigModifier: func(hc *container.HostConfig) {
+			hc.PortBindings = network.PortMap{
+				network.MustParsePort(kafkaPortStr): []network.PortBinding{
+					{HostIP: netip.IPv4Unspecified(), HostPort: fmt.Sprintf("%d", kafkaPort)},
+				},
+				network.MustParsePort(kafkaProxyPortStr): []network.PortBinding{
+					{HostIP: netip.IPv4Unspecified(), HostPort: fmt.Sprintf("%d", kafkaProxyPort)},
+				},
+			}
 		},
 		Cmd: []string{
 			"redpanda", "start",

@@ -2,6 +2,9 @@
 
 **Alert Service**: A system that provides network alert functionality, allowing for UTXO freezing/unfreezing, UTXO reassignment, peer management, and block invalidation for network security and compliance purposes.
 
+Ownership-changing reassignment currently strands the output for both owners;
+see the [Alert Service limitation](../topics/services/alert.md#24-utxo-reassignment).
+
 **Aerospike**: A high-performance, distributed NoSQL database used in Teranode as the primary storage backend for the UTXO Store, providing low-latency access to unspent transaction outputs.
 
 **Asset Service**: Provides HTTP and WebSocket APIs for blockchain data access, serving transactions, subtrees, blocks, block headers, and UTXOs.
@@ -38,7 +41,7 @@
 
 **Extended Transaction Format (BIP-239)**: A transaction format that includes additional metadata (previous output satoshis and locking scripts) in each input to facilitate faster validation. Teranode accepts transactions in both standard Bitcoin format and Extended Format. When standard format transactions are received, Teranode automatically extends them during validation by retrieving input data from the UTXO store. All transactions are stored in non-extended format for storage efficiency, with extension performed in-memory on-demand during validation. This dual-format support ensures backward compatibility with existing Bitcoin wallets while enabling optimized validation when extended format is provided.
 
-**FSM (Finite State Machine)**: A model that manages the Blockchain Service states and transitions. The FSM controls node behavior through states (Idle, LegacySyncing, Running, CatchingBlocks) and events (LegacySync, Run, CatchupBlocks, Stop), determining which operations are permitted at each stage.
+**FSM (Finite State Machine)**: A model that manages the Blockchain Service states and transitions. The FSM controls node behavior through states (Idle, Running, CatchingBlocks) and events (Run, CatchupBlocks, Stop), determining which operations are permitted at each stage.
 
 **gRPC**: A high-performance, open-source universal RPC framework.
 
@@ -52,7 +55,7 @@
 
 **Legacy Service**: Bridges the gap between traditional BSV nodes and advanced Teranode-BSV nodes, ensuring seamless communication and data translation.
 
-**libp2p**: A modular peer-to-peer networking framework used by Teranode's P2P Bootstrap Service for peer discovery and network communication, providing features like NAT traversal and multiple transport protocols.
+**libp2p**: A modular peer-to-peer networking framework used by Teranode's P2P Service for peer discovery and network communication, providing features like NAT traversal and multiple transport protocols.
 
 **Lustre Fs**: A parallel distributed file system used for high-performance, large-scale data storage and workloads in Teranode.
 
@@ -66,7 +69,7 @@
 
 **Orphan Block**: A valid block that is not part of the main blockchain because its parent block is unknown or not yet received. Orphan blocks are temporarily stored until their parent arrives or they are discarded if they don't connect to the main chain.
 
-**P2P Bootstrap Service**: Helps new nodes discover peers and join the network, using libp2p and Kademlia.
+**Bootstrap peers**: Initial DHT/relay entry points, configured via `p2p_bootstrap_peers` and dialled by the P2P Service at startup (libp2p/Kademlia).
 
 **P2P Service**: Allows peers to subscribe and receive blockchain notifications about new blocks and subtrees in the network.
 

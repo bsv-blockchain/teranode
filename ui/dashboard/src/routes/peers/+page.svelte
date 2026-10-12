@@ -1,5 +1,7 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount, onDestroy, untrack } from 'svelte'
   import { page } from '$app/stores'
   import { goto } from '$app/navigation'
   import { browser } from '$app/environment'
@@ -14,8 +16,10 @@
   import RenderSpan from '$lib/components/table/renderers/render-span/index.svelte'
   import RenderSpanWithTooltip from '$lib/components/table/renderers/render-span-with-tooltip/index.svelte'
   import RenderLink from '$lib/components/table/renderers/render-link/index.svelte'
+  import RenderClickableSpan from '$lib/components/table/renderers/render-clickable-span/index.svelte'
+  import LegacyPeersCard from './LegacyPeersCard.svelte'
 
-  $: t = $i18n.t
+  const t = $derived($i18n.t)
 
   const pageKey = 'page.peers'
 
@@ -32,6 +36,19 @@
     bytes_received: number
     last_block_time: number
     last_message_time: number
+    transport?: string
+    network_address?: string
+    bytes_sent?: number
+    legacy?: {
+      inbound: boolean
+      protocol_version: number
+      service_flags: number
+      ping_micros: number
+      time_offset_secs: number
+      starting_height: number
+      is_sync_peer: boolean
+      time_connected: number
+    }
     url_responsive: boolean
     last_url_check: number
     // Catchup metrics
@@ -78,28 +95,34 @@
     previous_attempt?: PreviousAttemptData
   }
 
-  let allData: PeerData[] = []  // Full dataset
-  let data: PeerData[] = []      // Paginated data for display
-  let catchupStatus: CatchupStatusData | null = null
-  let isLoading = false
-  let error: string | null = null
+  let allData: PeerData[] = $state([]) // Full dataset
+  let data: PeerData[] = $state([]) // Paginated data for display
+  let legacyData: PeerData[] = $state([]) // Wire-protocol peers, shown in their own card
+
+  // How long a disconnected legacy peer stays listed. Five ping intervals of
+  // history, which is enough to see a peer that just dropped without letting a
+  // flapping inbound peer pile up rows.
+  const legacyRetentionSeconds = 10 * 60
+  let catchupStatus: CatchupStatusData | null = $state(null)
+  let isLoading = $state(false)
+  let error: string | null = $state(null)
   let refreshInterval: number | null = null
   let catchupRefreshInterval: number | null = null
 
   // Modal state
-  let showCatchupModal = false
-  let selectedPeer: PeerData | null = null
+  let showCatchupModal = $state(false)
+  let selectedPeer: PeerData | null = $state(null)
 
   // Persistent pagination state
-  let currentPage = 1
-  let currentPageSize = 25
+  let currentPage = $state(1)
+  let currentPageSize = $state(25)
 
   // Persistent sort state
-  let sortColumn = ''
-  let sortOrder = ''
+  let sortColumn = $state('')
+  let sortOrder = $state('')
 
   // Memoized sorted data
-  let sortedData: PeerData[] = []
+  let sortedData: PeerData[] = $state([])
 
   // Local storage keys for persistence
   const PEERS_PAGE_SIZE_KEY = 'teranode-peers-pagesize'
@@ -165,7 +188,14 @@
     const savedSort = loadSortFromStorage()
     if (savedSort) {
       // Validate that the saved sort column still exists
-      const validColumns = ['id', 'is_connected', 'height', 'catchup_reputation_score', 'bytes_received', 'data_hub_url']
+      const validColumns = [
+        'id',
+        'is_connected',
+        'height',
+        'catchup_reputation_score',
+        'bytes_received',
+        'data_hub_url',
+      ]
       if (validColumns.includes(savedSort.sortColumn)) {
         sortColumn = savedSort.sortColumn
         sortOrder = savedSort.sortOrder
@@ -178,34 +208,40 @@
     }
   }
 
-  // Get pagination from URL and localStorage
-  $: {
-    // First, try to get pageSize from URL (highest priority)
-    const urlPageSize = $page.url.searchParams.get('pageSize')
-    if (urlPageSize) {
-      const parsed = parseInt(urlPageSize, 10)
-      if (parsed > 0 && parsed <= 100) {
-        currentPageSize = parsed
+  // Get pagination from URL and localStorage.
+  // Tracks the page store (URL changes); the body both reads and writes
+  // currentPage/currentPageSize via updatePaginatedData, so it runs untracked
+  // to avoid a runes update loop.
+  $effect(() => {
+    const url = $page.url
+    untrack(() => {
+      // First, try to get pageSize from URL (highest priority)
+      const urlPageSize = url.searchParams.get('pageSize')
+      if (urlPageSize) {
+        const parsed = parseInt(urlPageSize, 10)
+        if (parsed > 0 && parsed <= 100) {
+          currentPageSize = parsed
+        }
+      } else {
+        // If no URL parameter, use localStorage default
+        currentPageSize = loadPageSizeFromStorage()
       }
-    } else {
-      // If no URL parameter, use localStorage default
-      currentPageSize = loadPageSizeFromStorage()
-    }
 
-    // Get page from URL
-    const urlPage = $page.url.searchParams.get('page')
-    if (urlPage) {
-      const parsed = parseInt(urlPage, 10)
-      if (parsed > 0) {
-        currentPage = parsed
+      // Get page from URL
+      const urlPage = url.searchParams.get('page')
+      if (urlPage) {
+        const parsed = parseInt(urlPage, 10)
+        if (parsed > 0) {
+          currentPage = parsed
+        }
+      } else {
+        currentPage = 1 // Always reset to page 1 if not in URL
       }
-    } else {
-      currentPage = 1 // Always reset to page 1 if not in URL
-    }
 
-    // Update paginated data when URL changes
-    updatePaginatedData()
-  }
+      // Update paginated data when URL changes
+      updatePaginatedData()
+    })
+  })
 
   // Update URL when pagination changes
   function updateURL(newPage: number, newPageSize: number) {
@@ -289,13 +325,34 @@
       // Filter out peers whose last message was over 1 minute ago
       const now = Math.floor(Date.now() / 1000)
       const oneMinuteAgo = now - 60
-      allData = (result.peers || []).filter(peer => peer.last_message_time > oneMinuteAgo)
+      const fetched = result.peers || []
+
+      // The Teranode table keeps its established one-minute freshness filter.
+      //
+      // Legacy peers get a wider window, not the same one: a legacy peer pings
+      // every two minutes, so a one-minute last-message bound would hide a
+      // healthy peer between pings. A connected peer is always shown; a
+      // disconnected one is kept only while it is recent, because an inbound
+      // legacy peer is keyed on its ephemeral source port and so produces a
+      // fresh row on every reconnect. Without the bound a flapping peer would
+      // accumulate rows until the registry TTL expired them.
+      const legacyStaleBefore = now - legacyRetentionSeconds
+
+      allData = fetched.filter(
+        (peer) => peer.transport !== 'legacy' && peer.last_message_time > oneMinuteAgo,
+      )
+      legacyData = fetched.filter(
+        (peer) =>
+          peer.transport === 'legacy' &&
+          (peer.is_connected || peer.last_message_time > legacyStaleBefore),
+      )
       updatePaginatedData()
     } catch (err) {
       console.error('Failed to fetch peers:', err)
       error = err instanceof Error ? err.message : 'Unknown error'
       allData = []
       data = []
+      legacyData = []
     } finally {
       isLoading = false
     }
@@ -338,7 +395,7 @@
     const k = 1024
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
     const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
+    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i]
   }
 
   // Format duration in milliseconds
@@ -352,7 +409,7 @@
 
   // Handle pagination changes
   function onPageChange(e) {
-    const data = e.detail
+    const data = e
     const newPage = data.value.page
     const newPageSize = data.value.pageSize
 
@@ -369,7 +426,7 @@
 
   // Handle sort changes
   function onSort(e) {
-    const { colId, value } = e.detail
+    const { colId, value } = e
     sortColumn = colId || ''
     sortOrder = value || ''
 
@@ -393,38 +450,38 @@
 
   // Clear sort
   function clearSort() {
-    onSort({ detail: { colId: '', value: '' } })
+    onSort({ colId: '', value: '' })
   }
 
   // Handle table actions
   function handleAction(event) {
     // Handle any table actions if needed
-    console.log('Table action:', event.detail)
+    console.log('Table action:', event)
   }
 
-  $: hasSorting = sortColumn && sortOrder
+  const hasSorting = $derived(sortColumn && sortOrder)
 
-  let totalPages = 0
-  const onTotal = (e) => {
-    totalPages = e.detail.total
-  }
+  // The internal Pager does not emit a "total" event, so totalPages is never
+  // updated from it and stays at its initial value (behaviour unchanged from
+  // the previous dead on:total listener).
+  const totalPages: number = 0
 
-  $: showPagerNav = totalPages > 1
-  $: showPagerSize = showPagerNav || (totalPages === 1 && allData.length > 5)
-  $: showTableFooter = showPagerSize
+  const showPagerNav = $derived(totalPages > 1)
+  const showPagerSize = $derived(showPagerNav || (totalPages === 1 && allData.length > 5))
+  const showTableFooter = $derived(showPagerSize)
 
-  $: i18nLocal = { t, baseKey: 'comp.pager' }
+  const i18nLocal = $derived({ t, baseKey: 'comp.pager' })
 
   // Format error type to human-readable string
   function formatErrorType(errorType: string): string {
     const errorTypeMap: Record<string, string> = {
-      'validation_failure': 'Validation Failed',
-      'network_error': 'Network Error',
-      'secret_mining': 'Secret Mining Detected',
-      'coinbase_maturity_violation': 'Coinbase Maturity Violation',
-      'checkpoint_verification_failed': 'Checkpoint Verification Failed',
-      'connection_error': 'Connection Error',
-      'unknown_error': 'Unknown Error',
+      validation_failure: 'Validation Failed',
+      network_error: 'Network Error',
+      secret_mining: 'Secret Mining Detected',
+      coinbase_maturity_violation: 'Coinbase Maturity Violation',
+      checkpoint_verification_failed: 'Checkpoint Verification Failed',
+      connection_error: 'Connection Error',
+      unknown_error: 'Unknown Error',
     }
     return errorTypeMap[errorType] || errorType
   }
@@ -460,7 +517,7 @@
         id: 'catchup',
         name: 'Metrics',
         type: 'string',
-        sortable: false,  // Disable sorting for the catchup column
+        sortable: false, // Disable sorting for the catchup column
         props: {
           width: '8%',
         },
@@ -484,7 +541,7 @@
     ]
   }
 
-  $: colDefs = getColDefs()
+  const colDefs = $derived(getColDefs())
 
   // Custom render functions
   const renderCells = {
@@ -590,10 +647,15 @@
     },
     catchup: (idField, item, colId) => {
       return {
-        component: RenderSpan,
+        component: RenderClickableSpan,
         props: {
-          value: 'View',
+          text: 'View',
           className: 'catchup-view-link',
+          // Capture the row's peer directly — order-independent, no DOM-index lookup.
+          onClick: () => {
+            selectedPeer = item
+            showCatchupModal = true
+          },
         },
         value: '',
       }
@@ -603,7 +665,14 @@
   // Auto-refresh every 10 seconds for peers, every 3 seconds for catchup status
   onMount(() => {
     // Validate sort column exists in current columns
-    const validColumns = ['id', 'is_connected', 'height', 'catchup_reputation_score', 'bytes_received', 'data_hub_url']
+    const validColumns = [
+      'id',
+      'is_connected',
+      'height',
+      'catchup_reputation_score',
+      'bytes_received',
+      'data_hub_url',
+    ]
     if (sortColumn && !validColumns.includes(sortColumn)) {
       // Clear invalid sort
       sortColumn = ''
@@ -616,30 +685,7 @@
     refreshInterval = window.setInterval(fetchPeers, 10000)
     // Check catchup status more frequently to provide real-time updates
     catchupRefreshInterval = window.setInterval(fetchCatchupStatus, 3000)
-
-    // Add event listener for catchup view buttons
-    document.addEventListener('click', handleCatchupButtonClick)
   })
-
-  // Handle clicks on catchup view buttons
-  function handleCatchupButtonClick(event: MouseEvent) {
-    const target = event.target as HTMLElement
-    if (target.classList.contains('catchup-view-link')) {
-      // Find the row element
-      let row = target.closest('tr')
-      if (row) {
-        // Get the row index
-        const tbody = row.parentElement
-        const rowIndex = Array.from(tbody?.children || []).indexOf(row)
-        // Get the peer from the displayed data
-        const peer = data[rowIndex]
-        if (peer) {
-          selectedPeer = peer
-          showCatchupModal = true
-        }
-      }
-    }
-  }
 
   onDestroy(() => {
     if (refreshInterval) {
@@ -648,124 +694,152 @@
     if (catchupRefreshInterval) {
       clearInterval(catchupRefreshInterval)
     }
-    // Remove event listener
-    document.removeEventListener('click', handleCatchupButtonClick)
   })
 </script>
 
-<PageWithMenu>
+<PageWithMenu testId="page-root">
   {#if catchupStatus && catchupStatus.is_catching_up}
     <div class="catchup-status-wrapper">
       <Card contentPadding="16px">
         <div class="catchup-header">
-        <div class="catchup-title">
-          <div class="spinner"></div>
-          <Typo variant="title" size="h5" value="Block Catchup in Progress" />
-        </div>
-        <div class="catchup-duration">
-          {formatDuration(catchupStatus.duration_ms)}
-        </div>
-      </div>
-      <div class="catchup-details">
-        <div class="catchup-detail-item">
-          <span class="catchup-label">Syncing From</span>
-          <span class="catchup-value peer-name-value">{catchupStatus.peer_id || 'Unknown'}</span>
-        </div>
-        <div class="catchup-detail-item">
-          <span class="catchup-label">Peer URL</span>
-          <span class="catchup-value url-value">{catchupStatus.peer_url || '-'}</span>
-        </div>
-        <div class="catchup-detail-item">
-          <span class="catchup-label">Target Block</span>
-          <span class="catchup-value">
-            <span class="hash-value">{catchupStatus.target_block_hash?.slice(0, 8)}...{catchupStatus.target_block_hash?.slice(-8)}</span>
-            <span class="height-badge">#{catchupStatus.target_block_height?.toLocaleString()}</span>
-          </span>
-        </div>
-        <div class="catchup-detail-item">
-          <span class="catchup-label">Starting Height</span>
-          <span class="catchup-value">#{catchupStatus.current_height?.toLocaleString()}</span>
-        </div>
-        <div class="catchup-detail-item">
-          <span class="catchup-label">Progress</span>
-          <span class="catchup-value progress-value">
-            {catchupStatus.blocks_validated || 0} / {catchupStatus.total_blocks || 0} blocks
-            {#if catchupStatus.total_blocks > 0}
-              <span class="progress-percentage">
-                ({((catchupStatus.blocks_validated / catchupStatus.total_blocks) * 100).toFixed(1)}%)
-              </span>
-            {/if}
-          </span>
-        </div>
-        {#if catchupStatus.fork_depth > 0}
-          <div class="catchup-detail-item">
-            <span class="catchup-label">Fork Depth</span>
-            <span class="catchup-value fork-depth">{catchupStatus.fork_depth} blocks</span>
+          <div class="catchup-title">
+            <div class="spinner"></div>
+            <Typo variant="title" size="h5" value="Block Catchup in Progress" />
           </div>
-        {/if}
-        {#if catchupStatus.common_ancestor_hash}
+          <div class="catchup-duration">
+            {formatDuration(catchupStatus.duration_ms)}
+          </div>
+        </div>
+        <div class="catchup-details">
           <div class="catchup-detail-item">
-            <span class="catchup-label">Common Ancestor</span>
+            <span class="catchup-label">Syncing From</span>
+            <span class="catchup-value peer-name-value">{catchupStatus.peer_id || 'Unknown'}</span>
+          </div>
+          <div class="catchup-detail-item">
+            <span class="catchup-label">Peer URL</span>
+            <span class="catchup-value url-value">{catchupStatus.peer_url || '-'}</span>
+          </div>
+          <div class="catchup-detail-item">
+            <span class="catchup-label">Target Block</span>
             <span class="catchup-value">
-              <span class="hash-value">{catchupStatus.common_ancestor_hash?.slice(0, 8)}...{catchupStatus.common_ancestor_hash?.slice(-8)}</span>
-              {#if catchupStatus.common_ancestor_height}
-                <span class="height-badge-small">#{catchupStatus.common_ancestor_height?.toLocaleString()}</span>
+              <span class="hash-value"
+                >{catchupStatus.target_block_hash?.slice(
+                  0,
+                  8,
+                )}...{catchupStatus.target_block_hash?.slice(-8)}</span
+              >
+              <span class="height-badge"
+                >#{catchupStatus.target_block_height?.toLocaleString()}</span
+              >
+            </span>
+          </div>
+          <div class="catchup-detail-item">
+            <span class="catchup-label">Starting Height</span>
+            <span class="catchup-value">#{catchupStatus.current_height?.toLocaleString()}</span>
+          </div>
+          <div class="catchup-detail-item">
+            <span class="catchup-label">Progress</span>
+            <span class="catchup-value progress-value">
+              {catchupStatus.blocks_validated || 0} / {catchupStatus.total_blocks || 0} blocks
+              {#if catchupStatus.total_blocks > 0}
+                <span class="progress-percentage">
+                  ({((catchupStatus.blocks_validated / catchupStatus.total_blocks) * 100).toFixed(
+                    1,
+                  )}%)
+                </span>
               {/if}
             </span>
           </div>
-        {/if}
-      </div>
-      <div class="progress-bar">
-        <div
-          class="progress-bar-fill"
-          style="width: {catchupStatus.total_blocks > 0 ? (catchupStatus.blocks_validated / catchupStatus.total_blocks) * 100 : 0}%"
-        ></div>
-      </div>
-      {#if catchupStatus.previous_attempt}
-        <div class="previous-attempt">
-          <div class="previous-attempt-header">
-            <Icon name="icon-status-light-glow-solid" size={14} color="#ffa500" />
-            <span class="previous-attempt-title">Previous Attempt Failed</span>
-          </div>
-          <div class="previous-attempt-grid">
-            <div class="previous-attempt-item">
-              <span class="attempt-label">Peer:</span>
-              <span class="attempt-value peer-name-value">{catchupStatus.previous_attempt.peer_id}</span>
+          {#if catchupStatus.fork_depth > 0}
+            <div class="catchup-detail-item">
+              <span class="catchup-label">Fork Depth</span>
+              <span class="catchup-value fork-depth">{catchupStatus.fork_depth} blocks</span>
             </div>
-            <div class="previous-attempt-item">
-              <span class="attempt-label">Error Type:</span>
-              <span class="attempt-value error-value">
-                {formatErrorType(catchupStatus.previous_attempt.error_type)}
+          {/if}
+          {#if catchupStatus.common_ancestor_hash}
+            <div class="catchup-detail-item">
+              <span class="catchup-label">Common Ancestor</span>
+              <span class="catchup-value">
+                <span class="hash-value"
+                  >{catchupStatus.common_ancestor_hash?.slice(
+                    0,
+                    8,
+                  )}...{catchupStatus.common_ancestor_hash?.slice(-8)}</span
+                >
+                {#if catchupStatus.common_ancestor_height}
+                  <span class="height-badge-small"
+                    >#{catchupStatus.common_ancestor_height?.toLocaleString()}</span
+                  >
+                {/if}
               </span>
             </div>
-            <div class="previous-attempt-item">
-              <span class="attempt-label">Duration:</span>
-              <span class="attempt-value">{formatDuration(catchupStatus.previous_attempt.duration_ms)}</span>
-            </div>
-            {#if catchupStatus.previous_attempt.blocks_validated > 0}
-              <div class="previous-attempt-item">
-                <span class="attempt-label">Blocks Validated:</span>
-                <span class="attempt-value">{catchupStatus.previous_attempt.blocks_validated.toLocaleString()}</span>
-              </div>
-            {/if}
-          </div>
-          <div class="error-message-container">
-            <div class="error-message-label">Error Message:</div>
-            <div class="error-message-box" title={catchupStatus.previous_attempt.error_message}>
-              {catchupStatus.previous_attempt.error_message}
-            </div>
-          </div>
+          {/if}
         </div>
-      {/if}
+        <div class="progress-bar">
+          <div
+            class="progress-bar-fill"
+            style="width: {catchupStatus.total_blocks > 0
+              ? (catchupStatus.blocks_validated / catchupStatus.total_blocks) * 100
+              : 0}%"
+          ></div>
+        </div>
+        {#if catchupStatus.previous_attempt}
+          <div class="previous-attempt">
+            <div class="previous-attempt-header">
+              <Icon name="icon-status-light-glow-solid" size={14} color="#ffa500" />
+              <span class="previous-attempt-title">Previous Attempt Failed</span>
+            </div>
+            <div class="previous-attempt-grid">
+              <div class="previous-attempt-item">
+                <span class="attempt-label">Peer:</span>
+                <span class="attempt-value peer-name-value"
+                  >{catchupStatus.previous_attempt.peer_id}</span
+                >
+              </div>
+              <div class="previous-attempt-item">
+                <span class="attempt-label">Error Type:</span>
+                <span class="attempt-value error-value">
+                  {formatErrorType(catchupStatus.previous_attempt.error_type)}
+                </span>
+              </div>
+              <div class="previous-attempt-item">
+                <span class="attempt-label">Duration:</span>
+                <span class="attempt-value"
+                  >{formatDuration(catchupStatus.previous_attempt.duration_ms)}</span
+                >
+              </div>
+              {#if catchupStatus.previous_attempt.blocks_validated > 0}
+                <div class="previous-attempt-item">
+                  <span class="attempt-label">Blocks Validated:</span>
+                  <span class="attempt-value"
+                    >{catchupStatus.previous_attempt.blocks_validated.toLocaleString()}</span
+                  >
+                </div>
+              {/if}
+            </div>
+            <div class="error-message-container">
+              <div class="error-message-label">Error Message:</div>
+              <div class="error-message-box" title={catchupStatus.previous_attempt.error_message}>
+                {catchupStatus.previous_attempt.error_message}
+              </div>
+            </div>
+          </div>
+        {/if}
       </Card>
     </div>
   {/if}
 
   <Card contentPadding="0" showFooter={showTableFooter}>
-    <div class="title" slot="title">
-      <Typo variant="title" size="h4" value={t(`${pageKey}.title`, { defaultValue: 'Peer Registry' })} />
-    </div>
-    <svelte:fragment slot="header-tools">
+    {#snippet title()}
+      <div class="title">
+        <Typo
+          variant="title"
+          size="h4"
+          value={t(`${pageKey}.title`, { defaultValue: 'Peer Registry' })}
+        />
+      </div>
+    {/snippet}
+    {#snippet headerTools()}
       <div class="stats">
         <span class="stat-item">
           <span class="stat-label">Total:</span>
@@ -780,7 +854,9 @@
         <span class="stat-item">
           <span class="stat-label">Good Reputation:</span>
           <span class="stat-value"
-            >{allData.filter((p) => p.catchup_reputation_score >= 50 && p.is_connected && !p.is_banned).length}</span
+            >{allData.filter(
+              (p) => p.catchup_reputation_score >= 50 && p.is_connected && !p.is_banned,
+            ).length}</span
           >
         </span>
       </div>
@@ -796,16 +872,15 @@
           pageSize: currentPageSize,
         }}
         hasBoundaryRight={true}
-        on:change={onPageChange}
-        on:total={onTotal}
+        onchange={onPageChange}
       />
       {#if allData.length > 0}
-        <Button size="small" on:click={fetchPeers} disabled={isLoading}>
+        <Button size="small" onclick={fetchPeers} disabled={isLoading}>
           {isLoading ? 'Refreshing...' : 'Refresh'}
         </Button>
       {/if}
       {#if hasSorting}
-        <button class="clear-sort-btn" on:click={clearSort} title="Clear sorting">
+        <button class="clear-sort-btn" onclick={clearSort} title="Clear sorting">
           <Icon name="icon-close-line" size={16} />
         </button>
       {/if}
@@ -815,24 +890,22 @@
         </div>
         <div class="live-label">{t(`page.network.live`)}</div>
       </div>
-    </svelte:fragment>
+    {/snippet}
     {#if error}
       <div class="no-data">
         <Icon name="icon-status-light-glow-solid" size={48} color="#ff6b6b" />
         <p>Failed to load peer data</p>
         <p class="sub">{error}</p>
-        <Button size="small" on:click={fetchPeers} disabled={isLoading}>
-          Retry
-        </Button>
+        <Button size="small" onclick={fetchPeers} disabled={isLoading}>Retry</Button>
       </div>
     {:else if isLoading && data.length === 0}
       <div class="no-data">
-        <Icon name="icon-status-light-glow-solid" size={48} color="rgba(255, 255, 255, 0.2)" />
+        <Icon name="icon-status-light-glow-solid" size={48} color="var(--comp-label-color)" />
         <p>Loading peer data...</p>
       </div>
     {:else if data.length === 0}
       <div class="no-data">
-        <Icon name="icon-status-light-glow-solid" size={48} color="rgba(255, 255, 255, 0.2)" />
+        <Icon name="icon-status-light-glow-solid" size={48} color="var(--comp-label-color)" />
         <p>No peers available</p>
         <p class="sub">Waiting for peer connections...</p>
       </div>
@@ -848,7 +921,7 @@
           sortOrder,
         }}
         sortEnabled={true}
-        serverSort={true}
+        useServerSort={true}
         pagination={{
           page: 1,
           pageSize: -1,
@@ -860,165 +933,194 @@
         {renderCells}
         getRenderProps={null}
         getRowIconActions={null}
-        on:sort={onSort}
-        on:action={handleAction}
+        onsort={onSort}
+        onaction={handleAction}
       />
     {/if}
-    <div slot="footer">
-      <Pager
-        i18n={i18nLocal}
-        expandUp={true}
-        totalItems={allData?.length}
-        showPageSize={showPagerSize}
-        showQuickNav={showPagerNav}
-        showNav={showPagerNav}
-        value={{
-          page: currentPage,
-          pageSize: currentPageSize,
-        }}
-        hasBoundaryRight={true}
-        on:change={onPageChange}
-      />
-    </div>
+    {#snippet footer()}
+      <div>
+        <Pager
+          i18n={i18nLocal}
+          expandUp={true}
+          totalItems={allData?.length}
+          showPageSize={showPagerSize}
+          showQuickNav={showPagerNav}
+          showNav={showPagerNav}
+          value={{
+            page: currentPage,
+            pageSize: currentPageSize,
+          }}
+          hasBoundaryRight={true}
+          onchange={onPageChange}
+        />
+      </div>
+    {/snippet}
   </Card>
+
+  <LegacyPeersCard peers={legacyData} />
 </PageWithMenu>
 
 {#if showCatchupModal && selectedPeer}
-  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="modal-overlay"
     role="presentation"
-    on:click={() => {
+    onclick={() => {
       showCatchupModal = false
       selectedPeer = null
     }}
-    on:keydown={(e) => {
+    onkeydown={(e) => {
       if (e.key === 'Escape') {
         showCatchupModal = false
         selectedPeer = null
       }
     }}
   >
-    <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div
       class="modal-content"
       role="dialog"
       aria-modal="true"
       aria-labelledby="modal-title"
-      on:click|stopPropagation
-      on:keydown|stopPropagation
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
     >
       <div class="modal-header">
-        <h2 id="modal-title" class="modal-title">Catchup Details - {selectedPeer.client_name || selectedPeer.id}</h2>
-        <button class="modal-close" on:click={() => {
-          showCatchupModal = false
-          selectedPeer = null
-        }}>×</button>
+        <h2 id="modal-title" class="modal-title">
+          Catchup Details - {selectedPeer.client_name || selectedPeer.id}
+        </h2>
+        <button
+          class="modal-close"
+          onclick={() => {
+            showCatchupModal = false
+            selectedPeer = null
+          }}>×</button
+        >
       </div>
       <div class="modal-body">
         <div class="modal-section">
           <h3 class="section-title">Performance Metrics</h3>
-        <div class="metrics-grid">
-          <div class="metric-item">
-            <span class="metric-label">Reputation Score</span>
-            <span class="metric-value reputation-score" data-score="{selectedPeer.catchup_reputation_score}">
-              {selectedPeer.catchup_reputation_score ? selectedPeer.catchup_reputation_score.toFixed(1) : '0.0'}
-            </span>
-          </div>
-          <div class="metric-item">
-            <span class="metric-label">Success Rate</span>
-            <span class="metric-value">
-              {#if selectedPeer.catchup_attempts > 0}
-                {((selectedPeer.catchup_successes / (selectedPeer.catchup_successes + selectedPeer.catchup_failures)) * 100).toFixed(1)}%
-              {:else}
-                -
-              {/if}
-            </span>
-          </div>
-          <div class="metric-item">
-            <span class="metric-label">Total Attempts</span>
-            <span class="metric-value">{selectedPeer.catchup_attempts || 0}</span>
-          </div>
-          <div class="metric-item">
-            <span class="metric-label">Successes</span>
-            <span class="metric-value success">{selectedPeer.catchup_successes || 0}</span>
-          </div>
-          <div class="metric-item">
-            <span class="metric-label">Failures</span>
-            <span class="metric-value failure">{selectedPeer.catchup_failures || 0}</span>
-          </div>
-          <div class="metric-item">
-            <span class="metric-label">Malicious Count</span>
-            <span class="metric-value malicious">{selectedPeer.catchup_malicious_count || 0}</span>
-          </div>
-          <div class="metric-item">
-            <span class="metric-label">Avg Response Time</span>
-            <span class="metric-value">
-              {selectedPeer.catchup_avg_response_ms ? formatDuration(selectedPeer.catchup_avg_response_ms) : '-'}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <div class="modal-section">
-        <h3 class="section-title">Last Activity</h3>
-        <div class="metrics-grid">
-          <div class="metric-item">
-            <span class="metric-label">Last Attempt</span>
-            <span class="metric-value">
-              {selectedPeer.catchup_last_attempt ? new Date(selectedPeer.catchup_last_attempt * 1000).toLocaleString() : 'Never'}
-            </span>
-          </div>
-          <div class="metric-item">
-            <span class="metric-label">Last Success</span>
-            <span class="metric-value">
-              {selectedPeer.catchup_last_success ? new Date(selectedPeer.catchup_last_success * 1000).toLocaleString() : 'Never'}
-            </span>
-          </div>
-          <div class="metric-item">
-            <span class="metric-label">Last Failure</span>
-            <span class="metric-value">
-              {selectedPeer.catchup_last_failure ? new Date(selectedPeer.catchup_last_failure * 1000).toLocaleString() : 'Never'}
-            </span>
+          <div class="metrics-grid">
+            <div class="metric-item">
+              <span class="metric-label">Reputation Score</span>
+              <span
+                class="metric-value reputation-score"
+                data-score={selectedPeer.catchup_reputation_score}
+              >
+                {selectedPeer.catchup_reputation_score
+                  ? selectedPeer.catchup_reputation_score.toFixed(1)
+                  : '0.0'}
+              </span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Success Rate</span>
+              <span class="metric-value">
+                {#if selectedPeer.catchup_attempts > 0}
+                  {(
+                    (selectedPeer.catchup_successes /
+                      (selectedPeer.catchup_successes + selectedPeer.catchup_failures)) *
+                    100
+                  ).toFixed(1)}%
+                {:else}
+                  -
+                {/if}
+              </span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Total Attempts</span>
+              <span class="metric-value">{selectedPeer.catchup_attempts || 0}</span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Successes</span>
+              <span class="metric-value success">{selectedPeer.catchup_successes || 0}</span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Failures</span>
+              <span class="metric-value failure">{selectedPeer.catchup_failures || 0}</span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Malicious Count</span>
+              <span class="metric-value malicious">{selectedPeer.catchup_malicious_count || 0}</span
+              >
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Avg Response Time</span>
+              <span class="metric-value">
+                {selectedPeer.catchup_avg_response_ms
+                  ? formatDuration(selectedPeer.catchup_avg_response_ms)
+                  : '-'}
+              </span>
+            </div>
           </div>
         </div>
-      </div>
 
-      {#if selectedPeer.last_catchup_error}
         <div class="modal-section">
-          <h3 class="section-title error-title">Last Catchup Error</h3>
-          <div class="error-details">
-            <div class="error-time">
-              {selectedPeer.last_catchup_error_time ? new Date(selectedPeer.last_catchup_error_time * 1000).toLocaleString() : 'Unknown time'}
+          <h3 class="section-title">Last Activity</h3>
+          <div class="metrics-grid">
+            <div class="metric-item">
+              <span class="metric-label">Last Attempt</span>
+              <span class="metric-value">
+                {selectedPeer.catchup_last_attempt
+                  ? new Date(selectedPeer.catchup_last_attempt * 1000).toLocaleString()
+                  : 'Never'}
+              </span>
             </div>
-            <div class="error-message">
-              {selectedPeer.last_catchup_error}
+            <div class="metric-item">
+              <span class="metric-label">Last Success</span>
+              <span class="metric-value">
+                {selectedPeer.catchup_last_success
+                  ? new Date(selectedPeer.catchup_last_success * 1000).toLocaleString()
+                  : 'Never'}
+              </span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Last Failure</span>
+              <span class="metric-value">
+                {selectedPeer.catchup_last_failure
+                  ? new Date(selectedPeer.catchup_last_failure * 1000).toLocaleString()
+                  : 'Never'}
+              </span>
             </div>
           </div>
         </div>
-      {/if}
 
-      <div class="modal-section">
-        <h3 class="section-title">Peer Information</h3>
-        <div class="metrics-grid">
-          <div class="metric-item">
-            <span class="metric-label">Peer ID</span>
-            <span class="metric-value peer-id">{selectedPeer.id}</span>
+        {#if selectedPeer.last_catchup_error}
+          <div class="modal-section">
+            <h3 class="section-title error-title">Last Catchup Error</h3>
+            <div class="error-details">
+              <div class="error-time">
+                {selectedPeer.last_catchup_error_time
+                  ? new Date(selectedPeer.last_catchup_error_time * 1000).toLocaleString()
+                  : 'Unknown time'}
+              </div>
+              <div class="error-message">
+                {selectedPeer.last_catchup_error}
+              </div>
+            </div>
           </div>
-          <div class="metric-item">
-            <span class="metric-label">Client Name</span>
-            <span class="metric-value">{selectedPeer.client_name || '-'}</span>
-          </div>
-          <div class="metric-item">
-            <span class="metric-label">Height</span>
-            <span class="metric-value">#{selectedPeer.height?.toLocaleString() || '0'}</span>
-          </div>
-          <div class="metric-item">
-            <span class="metric-label">DataHub URL</span>
-            <span class="metric-value url">{selectedPeer.data_hub_url || '-'}</span>
+        {/if}
+
+        <div class="modal-section">
+          <h3 class="section-title">Peer Information</h3>
+          <div class="metrics-grid">
+            <div class="metric-item">
+              <span class="metric-label">Peer ID</span>
+              <span class="metric-value peer-id">{selectedPeer.id}</span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Client Name</span>
+              <span class="metric-value">{selectedPeer.client_name || '-'}</span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Height</span>
+              <span class="metric-value">#{selectedPeer.height?.toLocaleString() || '0'}</span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">DataHub URL</span>
+              <span class="metric-value url">{selectedPeer.data_hub_url || '-'}</span>
+            </div>
           </div>
         </div>
-      </div>
       </div>
     </div>
   </div>
@@ -1043,7 +1145,7 @@
   }
 
   .stat-label {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     font-size: 13px;
   }
 
@@ -1058,7 +1160,7 @@
     align-items: center;
     gap: 4px;
 
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
 
     font-family: Satoshi;
     font-size: 13px;
@@ -1079,7 +1181,7 @@
   }
 
   .live-label {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
   }
 
   .no-data {
@@ -1093,32 +1195,38 @@
 
   .no-data p {
     margin: 0;
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     font-size: 16px;
   }
 
   .no-data p.sub {
-    color: rgba(255, 255, 255, 0.44);
+    color: var(--comp-label-color);
     font-size: 14px;
   }
 
   /* Custom styles for table cells */
   :global(.peer-name) {
-    font-family: 'Satoshi', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+    font-family:
+      'Satoshi',
+      -apple-system,
+      BlinkMacSystemFont,
+      'Segoe UI',
+      'Roboto',
+      sans-serif;
     font-size: 13px;
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
     font-weight: 500;
   }
 
   :global(.hash) {
     font-family: 'JetBrains Mono', monospace;
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
   }
 
   :global(.url) {
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     word-break: break-all;
   }
 
@@ -1131,7 +1239,7 @@
 
   :global(.time) {
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
   }
 
   /* Status indicators */
@@ -1264,7 +1372,11 @@
   }
 
   .catchup-status-wrapper :global(.card) {
-    background: linear-gradient(135deg, rgba(255, 152, 0, 0.1) 0%, rgba(255, 193, 7, 0.05) 100%) !important;
+    background: linear-gradient(
+      135deg,
+      rgba(255, 152, 0, 0.1) 0%,
+      rgba(255, 193, 7, 0.05) 100%
+    ) !important;
     border-left: 4px solid #ff9800 !important;
   }
 
@@ -1321,7 +1433,7 @@
 
   .catchup-label {
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--comp-label-color);
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -1329,14 +1441,20 @@
 
   .catchup-value {
     font-size: 14px;
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
     font-weight: 500;
     word-wrap: break-word;
     overflow-wrap: break-word;
   }
 
   .peer-name-value {
-    font-family: 'Satoshi', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+    font-family:
+      'Satoshi',
+      -apple-system,
+      BlinkMacSystemFont,
+      'Segoe UI',
+      'Roboto',
+      sans-serif;
     font-size: 13px;
     color: #1878ff;
     font-weight: 600;
@@ -1344,7 +1462,7 @@
 
   .url-value {
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     word-break: break-all;
     line-height: 1.4;
   }
@@ -1352,7 +1470,7 @@
   .hash-value {
     font-family: 'JetBrains Mono', monospace;
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.75);
+    color: var(--app-color);
   }
 
   .height-badge {
@@ -1447,7 +1565,7 @@
 
   .attempt-label {
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--comp-label-color);
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -1455,7 +1573,7 @@
 
   .attempt-value {
     font-size: 13px;
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
     font-weight: 500;
     word-wrap: break-word;
     overflow-wrap: break-word;
@@ -1478,7 +1596,7 @@
 
   .error-message-label {
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--comp-label-color);
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -1491,7 +1609,7 @@
     padding: 10px 12px;
     border-radius: 4px;
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.8);
+    color: var(--app-color);
     line-height: 1.5;
     font-family: 'JetBrains Mono', monospace;
     word-wrap: break-word;
@@ -1534,19 +1652,19 @@
     padding: 0;
     background: transparent;
     border: none;
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     cursor: pointer;
     transition: all 0.2s ease;
     border-radius: 4px;
   }
 
   .clear-sort-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.9);
+    background: var(--app-overlay-color);
+    color: var(--app-color);
   }
 
   .clear-sort-btn:active {
-    background: rgba(255, 255, 255, 0.15);
+    background: var(--app-overlay-strong-color);
   }
 
   /* Modal styles */
@@ -1574,7 +1692,7 @@
   }
 
   .modal-content {
-    background: #1a1b23;
+    background: var(--app-bg-color);
     border-radius: 8px;
     padding: 0;
     max-height: 80vh;
@@ -1592,21 +1710,21 @@
     justify-content: space-between;
     align-items: center;
     padding: 20px 24px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    background: #15161d;
+    border-bottom: 1px solid var(--app-border-color);
+    background: var(--app-subtle-bg-color);
   }
 
   .modal-title {
     margin: 0;
     font-size: 18px;
     font-weight: 600;
-    color: rgba(255, 255, 255, 0.9);
+    color: var(--app-color);
   }
 
   .modal-close {
     background: transparent;
     border: none;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--comp-label-color);
     font-size: 28px;
     cursor: pointer;
     padding: 0;
@@ -1620,8 +1738,8 @@
   }
 
   .modal-close:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.8);
+    background: var(--app-overlay-color);
+    color: var(--app-color);
   }
 
   .modal-body {
@@ -1641,7 +1759,7 @@
   .section-title {
     font-size: 14px;
     font-weight: 600;
-    color: rgba(255, 255, 255, 0.9);
+    color: var(--app-color);
     margin: 0 0 16px 0;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -1665,7 +1783,7 @@
 
   .metric-label {
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--comp-label-color);
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -1673,7 +1791,7 @@
 
   .metric-value {
     font-size: 14px;
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
     font-weight: 500;
     word-wrap: break-word;
     overflow-wrap: break-word;
@@ -1683,19 +1801,24 @@
     font-weight: 600;
   }
 
-  .metric-value.reputation-score[data-score]:where([data-score^="9"], [data-score^="8"]) {
+  .metric-value.reputation-score[data-score]:where([data-score^='9'], [data-score^='8']) {
     color: #15b241;
   }
 
-  .metric-value.reputation-score[data-score]:where([data-score^="7"], [data-score^="6"]) {
+  .metric-value.reputation-score[data-score]:where([data-score^='7'], [data-score^='6']) {
     color: #ff9800;
   }
 
-  .metric-value.reputation-score[data-score]:where([data-score^="5"], [data-score^="4"]) {
+  .metric-value.reputation-score[data-score]:where([data-score^='5'], [data-score^='4']) {
     color: #ffa500;
   }
 
-  .metric-value.reputation-score[data-score]:where([data-score^="3"], [data-score^="2"], [data-score^="1"], [data-score^="0"]) {
+  .metric-value.reputation-score[data-score]:where(
+      [data-score^='3'],
+      [data-score^='2'],
+      [data-score^='1'],
+      [data-score^='0']
+    ) {
     color: #ff6b6b;
   }
 
@@ -1732,14 +1855,14 @@
 
   .error-time {
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--comp-label-color);
     margin-bottom: 8px;
   }
 
   .error-message {
     font-family: 'JetBrains Mono', monospace;
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.8);
+    color: var(--app-color);
     line-height: 1.5;
     word-wrap: break-word;
     overflow-wrap: break-word;

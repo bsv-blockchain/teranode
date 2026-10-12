@@ -2,14 +2,12 @@
 Package validator implements BSV Blockchain transaction validation functionality.
 
 This package provides comprehensive transaction validation for BSV Blockchain nodes,
-including script verification, UTXO management, and policy enforcement. It supports
-multiple script interpreters (GoBT, GoSDK, GoBDK) and implements the full Bitcoin
-transaction validation ruleset.
+including BDK transaction validation, UTXO management, and policy enforcement.
 
 Key features:
   - Transaction validation against Bitcoin consensus rules
   - UTXO spending and creation
-  - Script verification using multiple interpreters
+  - BDK transaction validation
   - Policy enforcement
   - Block assembly integration
   - Kafka integration for transaction metadata
@@ -39,15 +37,19 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/validator/validator_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
@@ -59,6 +61,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
+	"github.com/cespare/xxhash/v2"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -85,7 +88,7 @@ func BenchmarkValidator(b *testing.B) {
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(b, err)
 
-	v, err := New(ctx, logger, tSettings, utxoStore, nil, nil, blockAssemblyClient, nil)
+	v, err := New(ctx, logger, tSettings, utxoStore, nil, nil, nil, blockAssemblyClient, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -124,13 +127,16 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 	blockAssemblyClient, err := blockassembly.NewClient(context.Background(), ulogger.TestLogger{}, tSettings)
 	require.NoError(t, err)
 
-	v, err := New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil, blockAssemblyClient, nil)
+	v, err := New(context.Background(), ulogger.TestLogger{}, tSettings, utxoStore, nil, nil, nil, blockAssemblyClient, nil)
 	if err != nil {
 		panic(err)
 	}
 
-	height, err := util.ExtractCoinbaseHeight(coinbase)
-	require.NoError(t, err)
+	// model.CoinbaseHex encodes height 1019 with a legacy non-minimal 3-byte push, which the strict
+	// (SV Node parity) extractor now rejects. This test only needs a block-height context to exercise
+	// that Validate refuses a coinbase transaction, so use the height literally rather than extracting
+	// it. Height-extraction parity is covered in util/coinbase_test.go and model/*_test.go.
+	const height = uint32(1019)
 
 	_, err = v.Validate(context.Background(), coinbase, height, WithSkipPolicyChecks(true))
 	require.Error(t, err)
@@ -162,10 +168,15 @@ func TestValidate_ValidTransaction(t *testing.T) {
 
 		assert.Len(t, txMeta.BlockIDs, 0)
 
+		err = utxoStore.SetBlockHeight(123)
+		require.NoError(t, err)
+		err = utxoStore.SetMedianBlockTime(1700000000)
+		require.NoError(t, err)
+
 		blockAssemblyClient, err := blockassembly.NewClient(context.Background(), ulogger.TestLogger{}, tSettings)
 		require.NoError(t, err)
 
-		v, err := New(ctx, logger, tSettings, utxoStore, nil, nil, blockAssemblyClient, nil)
+		v, err := New(ctx, logger, tSettings, utxoStore, nil, nil, nil, blockAssemblyClient, nil)
 		require.NoError(t, err)
 
 		// validate the transaction and make sure we are not getting blockIDs
@@ -308,6 +319,110 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 func TestValidate_InValidDoubleSpendTx(t *testing.T) {
 }
 
+func TestValidateTransactionBatch_DuplicateOutpointCreatesConflicting(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockAssembly.Disabled = true
+	tSettings.BatcherDrainMode = false
+	tSettings.UtxoStore.SpendBatcherSize = 2
+	tSettings.UtxoStore.SpendBatcherDurationMillis = 5_000
+	tSettings.UtxoStore.SpendWaitTimeout = 10 * time.Second
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///validator_duplicate_outpoint_batch")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+	// sqlitememory has no busy_timeout and an unbounded connection pool
+	// (util/sql.go), so the two concurrent validations in this batch can race on
+	// the shared in-memory DB and surface a transient "database is locked"
+	// StorageError. The validator collapses any non-UTXO spend error into
+	// ERR_PROCESSING (Validator.go:723) instead of ERR_TX_CONFLICTING, which is
+	// the CI flake. Pin the dev-mode pool to a single connection so all SQL
+	// serialises — the concurrent batch path is still exercised; only DB access
+	// is serialised. Production uses Aerospike, so this is test hygiene.
+	utxoStore.RawDB().SetMaxOpenConns(1)
+	require.NoError(t, utxoStore.SetBlockHeight(100))
+	require.NoError(t, utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))) //nolint:gosec
+
+	privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("DUPLICATE_SPEND_BATCH_TEST_KEY!!"))
+	parentTx := transactions.Create(t,
+		transactions.WithCoinbaseData(1, "/duplicate spend batch test/"),
+		transactions.WithP2PKHOutputs(1, 100_000, publicKey),
+	)
+	// Attach mined-block info so the parent appears as a confirmed tx with
+	// recorded BlockHeights; without this, the validator's consensus-mode
+	// rejection (bad-txns-unconfirmed-input-in-block) would fire before
+	// reaching the conflicting-spend code path this test exercises.
+	_, err = utxoStore.Create(ctx, parentTx, 1, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 1, BlockHeight: 1, SubtreeIdx: 0}))
+	require.NoError(t, err)
+
+	txA := transactions.Create(t,
+		transactions.WithPrivateKey(privateKey),
+		transactions.WithInput(parentTx, 0, privateKey),
+		transactions.WithP2PKHOutputs(1, 90_000, publicKey),
+	)
+	txB := transactions.Create(t,
+		transactions.WithPrivateKey(privateKey),
+		transactions.WithInput(parentTx, 0, privateKey),
+		transactions.WithP2PKHOutputs(1, 80_000, publicKey),
+	)
+	require.NotEqual(t, txA.TxID(), txB.TxID())
+
+	server := NewServer(logger, tSettings, utxoStore, nil, nil, nil, nil, nil, nil)
+	require.NoError(t, server.Init(ctx))
+
+	createConflicting := true
+	skipPolicyChecks := true
+	skipTxMetaPublishing := true
+	addTxToBlockAssembly := false
+	resp, err := server.ValidateTransactionBatch(ctx, &validator_api.ValidateTransactionBatchRequest{
+		Transactions: []*validator_api.ValidateTransactionRequest{
+			{
+				TransactionData:      txA.Bytes(),
+				BlockHeight:          100,
+				CreateConflicting:    &createConflicting,
+				SkipPolicyChecks:     &skipPolicyChecks,
+				SkipTxmetaPublishing: &skipTxMetaPublishing,
+				AddTxToBlockAssembly: &addTxToBlockAssembly,
+			},
+			{
+				TransactionData:      txB.Bytes(),
+				BlockHeight:          100,
+				CreateConflicting:    &createConflicting,
+				SkipPolicyChecks:     &skipPolicyChecks,
+				SkipTxmetaPublishing: &skipTxMetaPublishing,
+				AddTxToBlockAssembly: &addTxToBlockAssembly,
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Len(t, resp.Errors, 2)
+
+	var successCount, conflictingCount int
+	for _, errReason := range resp.Errors {
+		if errReason == nil {
+			successCount++
+			continue
+		}
+		require.Equal(t, errors.ERR_TX_CONFLICTING, errReason.GetCode())
+		conflictingCount++
+	}
+	require.Equal(t, 1, successCount)
+	require.Equal(t, 1, conflictingCount)
+
+	var txAData, txBData meta.Data
+	errA := utxoStore.GetMeta(ctx, txA.TxIDChainHash(), &txAData)
+	errB := utxoStore.GetMeta(ctx, txB.TxIDChainHash(), &txBData)
+	require.NoError(t, errA)
+	require.NoError(t, errB)
+	require.ElementsMatch(t, []bool{false, true}, []bool{txAData.Conflicting, txBData.Conflicting})
+}
+
 func TestValidate_TxMetaStoreError(t *testing.T) {
 }
 
@@ -339,7 +454,11 @@ func TestValidate_BlockAssemblyError(t *testing.T) {
 	//nolint:gosec
 	_ = utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
 
-	_, err = utxoStore.Create(context.Background(), parentTx, 257726)
+	// Attach mined-block info so the parent appears as a confirmed tx with
+	// recorded BlockHeights; without this, the validator's consensus-mode
+	// rejection (bad-txns-unconfirmed-input-in-block) would fire before the
+	// block-assembly error path this test wants to exercise.
+	_, err = utxoStore.Create(context.Background(), parentTx, 257726, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 1, BlockHeight: 257726, SubtreeIdx: 0}))
 	require.NoError(t, err)
 
 	initPrometheusMetrics()
@@ -365,7 +484,12 @@ func TestValidate_BlockAssemblyError(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, txMetaData)
 
-	// the tx should be stored in the utxo store as locked
+	// The tx is durably persisted with its inputs spent, but sendToBlockAssembler
+	// failed, so it is NOT in block assembly. It must stay Locked: unlocking an
+	// undelivered tx would let a child spending it enter this node's mining
+	// template without its parent. The block assembler's unmined-transaction
+	// loader heals this in the safe order - add to the subtree processor first,
+	// clear Locked second.
 	txMeta, err := utxoStore.Get(t.Context(), tx.TxIDChainHash())
 	require.NoError(t, err)
 	assert.Equal(t, true, txMeta.Locked)
@@ -373,6 +497,235 @@ func TestValidate_BlockAssemblyError(t *testing.T) {
 	// check the kafka channels, nothing should have been sent, since the tx never was sent correctly to the block assembly
 	require.Equal(t, 0, len(txmetaKafkaProducerClient.PublishChannel()), "txMetaKafkaChan should be empty")
 	require.Equal(t, 0, len(rejectedTxKafkaProducerClient.PublishChannel()), "rejectedTxKafkaChan should have 1 message")
+}
+
+// TestValidate_PanicDuringBlockAssemblyDeliveryKeepsLock covers the specific
+// failure mode unlockLockedTxOnExit's `delivered` flag exists to close: a panic
+// unwinding from inside the addToBlockAssembly window (after the tx is durably
+// persisted and Locked, before sendToBlockAssembler returns), rather than an
+// ordinary error return. On main, before the deferred-unlock refactor, a panic
+// there simply skipped the tail-of-function unlock statement, so the tx stayed
+// Locked. If the deferred helper used `err == nil` as its proxy for "delivered",
+// this would incorrectly unlock the tx, since err is nil for the entire window
+// regardless of whether a panic occurs. Gating on an explicit `delivered` flag
+// that is only set true after sendToBlockAssembler actually returns keeps this
+// panic-safe.
+func TestValidate_PanicDuringBlockAssemblyDeliveryKeepsLock(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	txHex := "010000000000000000ef01febe0cbd7d87d44cbd4b5adac0a5bfcdbd2b672c9113f5d74a6459a2b85569db010000008b48304502207ec38d0a4ef79c3a4286ba3e5a5b6ede1fa678af9242465140d78a901af9e4e0022100c26c377d44b761469cf0bdcdbf4931418f2c5a02ce6b72bbb7af52facd7228c1014104bc9eb4fe4cb53e35df7e7734c4c3cd91c6af7840be80f4a1fff283e2cd6ae8f7713cb263a4590263240e3c01ec36bc603c32281ac08773484dc69b8152e48cecffffffff60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac0230424700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac1027000000000000166a148ac9bdc626352d16e18c26f431e834f9aae30e2800000000"
+	tx, err := bt.NewTxFromString(txHex)
+	require.NoError(t, err)
+
+	parenTxHex := "010000000000000000ef01154d5d31268f7ea94c80a7bf6de54e47812712feec25c17b8feceb570dfd9daf000000008b4830450220612b3ec065ec2b2a1757d97b7f57fba3c363645355cf6e1a5a1834411e6ab425022100bd071b90d391eb75dc9e2eea8b6774f36bf9c55439a971f0d1f4470b6448aef601410426e4e0654f72721b97a03c8170417c9ddabadcef97fe8ea626176ea62665b55ca2ff485f84df12ddec171e01ee8f9c7472c6c8467b0cf74ae8b3b614ed16cbdbffffffff008a6600000000001976a91429be45311cc66a5a6cc4a42516dbb7c9b126a3c188ac0280841e00000000001976a914996ed5e55d68aef653c85339f83873fac1321f0788ac60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac00000000"
+
+	parentTx, err := bt.NewTxFromString(parenTxHex)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test_panic_during_block_assembly")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	_ = utxoStore.SetBlockHeight(257727)
+	//nolint:gosec
+	_ = utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
+
+	_, err = utxoStore.Create(context.Background(), parentTx, 257726, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 1, BlockHeight: 257726, SubtreeIdx: 0}))
+	require.NoError(t, err)
+
+	initPrometheusMetrics()
+
+	blockAssembler := &MockBlockAssemblyStore{panicOnStore: true}
+
+	v := &Validator{
+		logger:                        logger,
+		settings:                      tSettings,
+		txValidator:                   NewTxValidator(logger, tSettings),
+		utxoStore:                     utxoStore,
+		blockAssembler:                blockAssembler,
+		stats:                         gocore.NewStat("validator"),
+		txmetaKafkaProducerClient:     kafka.NewKafkaAsyncProducerMock(),
+		rejectedTxKafkaProducerClient: kafka.NewKafkaAsyncProducerMock(),
+	}
+
+	func() {
+		defer func() {
+			r := recover()
+			require.NotNil(t, r, "the mock must actually panic for this test to exercise anything")
+		}()
+
+		_, _ = v.Validate(t.Context(), tx, 257727, WithSkipPolicyChecks(true))
+	}()
+
+	// The tx was durably persisted, spent, and Locked before the panic. It was
+	// never delivered to block assembly (the panic unwound from inside
+	// sendToBlockAssembler), so it must stay Locked - exactly as it would on the
+	// ordinary sendToBlockAssembler-returns-an-error path.
+	txMeta, err := utxoStore.Get(t.Context(), tx.TxIDChainHash())
+	require.NoError(t, err)
+	require.True(t, txMeta.Locked, "a tx must stay locked when a panic unwinds before it was actually delivered to block assembly")
+}
+
+// TestValidate_ConsensusRejectsUnconfirmedParent: a tx whose parent exists in
+// the UTXO store but has no recorded BlockHeights (i.e. parent UTXO is not yet
+// confirmed) must be rejected in consensus mode with
+// bad-txns-unconfirmed-input-in-block. Exercises the full path:
+// getUtxoBlockHeightAndExtendForParentTx → unconfirmedParentHeight sentinel →
+// ScriptVerifierGoBDK.substituteUnconfirmedHeights → BDK MEMPOOL_HEIGHT →
+// DoSError(UnconfirmedInputInBlock).
+func TestValidate_ConsensusRejectsUnconfirmedParent(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	txHex := "010000000000000000ef01febe0cbd7d87d44cbd4b5adac0a5bfcdbd2b672c9113f5d74a6459a2b85569db010000008b48304502207ec38d0a4ef79c3a4286ba3e5a5b6ede1fa678af9242465140d78a901af9e4e0022100c26c377d44b761469cf0bdcdbf4931418f2c5a02ce6b72bbb7af52facd7228c1014104bc9eb4fe4cb53e35df7e7734c4c3cd91c6af7840be80f4a1fff283e2cd6ae8f7713cb263a4590263240e3c01ec36bc603c32281ac08773484dc69b8152e48cecffffffff60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac0230424700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac1027000000000000166a148ac9bdc626352d16e18c26f431e834f9aae30e2800000000"
+	tx, err := bt.NewTxFromString(txHex)
+	require.NoError(t, err)
+
+	parentTxHex := "010000000000000000ef01154d5d31268f7ea94c80a7bf6de54e47812712feec25c17b8feceb570dfd9daf000000008b4830450220612b3ec065ec2b2a1757d97b7f57fba3c363645355cf6e1a5a1834411e6ab425022100bd071b90d391eb75dc9e2eea8b6774f36bf9c55439a971f0d1f4470b6448aef601410426e4e0654f72721b97a03c8170417c9ddabadcef97fe8ea626176ea62665b55ca2ff485f84df12ddec171e01ee8f9c7472c6c8467b0cf74ae8b3b614ed16cbdbffffffff008a6600000000001976a91429be45311cc66a5a6cc4a42516dbb7c9b126a3c188ac0280841e00000000001976a914996ed5e55d68aef653c85339f83873fac1321f0788ac60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac00000000"
+	parentTx, err := bt.NewTxFromString(parentTxHex)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test_t13_consensus_reject")
+	require.NoError(t, err)
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	_ = utxoStore.SetBlockHeight(257727)
+	_ = utxoStore.SetMedianBlockTime(uint32(time.Now().Unix())) //nolint:gosec
+
+	// Create the parent WITHOUT WithMinedBlockInfo so its BlockHeights stays
+	// empty — this is the "parent UTXO not yet confirmed" case under test.
+	_, err = utxoStore.Create(ctx, parentTx, 257726)
+	require.NoError(t, err)
+
+	initPrometheusMetrics()
+
+	v := &Validator{
+		logger:                        logger,
+		settings:                      tSettings,
+		txValidator:                   NewTxValidator(logger, tSettings),
+		utxoStore:                     utxoStore,
+		blockAssembler:                &MockBlockAssemblyStore{},
+		stats:                         gocore.NewStat("validator"),
+		txmetaKafkaProducerClient:     kafka.NewKafkaAsyncProducerMock(),
+		rejectedTxKafkaProducerClient: kafka.NewKafkaAsyncProducerMock(),
+	}
+
+	txMetaData, err := v.Validate(t.Context(), tx, 257727, WithSkipPolicyChecks(true))
+	require.Error(t, err)
+	require.Nil(t, txMetaData)
+	require.Contains(t, err.Error(), "bad-txns-unconfirmed-input-in-block",
+		"consensus-mode validation must surface the BDK UnconfirmedInputInBlock rejection for unconfirmed parents")
+}
+
+// TestValidate_ConsensusAcceptsUnconfirmedParentAtCandidateHeight is the
+// accept-counterpart of TestValidate_ConsensusRejectsUnconfirmedParent and
+// the validator-level regression for the legacy-sync wedge at testnet
+// 1730003: same fixtures, same unconfirmed parent (BlockHeights empty in the
+// UTXO store), but WithUnconfirmedParentsAtCandidateHeight(true) — the option
+// the legacy CheckSubtreeFromBlock branch sets — resolves the sentinel to the
+// candidate height. Runs the real TxValidator + GoBDK end to end: proves BDK
+// accepts the child once the parent resolves at the candidate height instead
+// of translating the sentinel to MEMPOOL_HEIGHT.
+func TestValidate_ConsensusAcceptsUnconfirmedParentAtCandidateHeight(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	txHex := "010000000000000000ef01febe0cbd7d87d44cbd4b5adac0a5bfcdbd2b672c9113f5d74a6459a2b85569db010000008b48304502207ec38d0a4ef79c3a4286ba3e5a5b6ede1fa678af9242465140d78a901af9e4e0022100c26c377d44b761469cf0bdcdbf4931418f2c5a02ce6b72bbb7af52facd7228c1014104bc9eb4fe4cb53e35df7e7734c4c3cd91c6af7840be80f4a1fff283e2cd6ae8f7713cb263a4590263240e3c01ec36bc603c32281ac08773484dc69b8152e48cecffffffff60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac0230424700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac1027000000000000166a148ac9bdc626352d16e18c26f431e834f9aae30e2800000000"
+	tx, err := bt.NewTxFromString(txHex)
+	require.NoError(t, err)
+
+	parentTxHex := "010000000000000000ef01154d5d31268f7ea94c80a7bf6de54e47812712feec25c17b8feceb570dfd9daf000000008b4830450220612b3ec065ec2b2a1757d97b7f57fba3c363645355cf6e1a5a1834411e6ab425022100bd071b90d391eb75dc9e2eea8b6774f36bf9c55439a971f0d1f4470b6448aef601410426e4e0654f72721b97a03c8170417c9ddabadcef97fe8ea626176ea62665b55ca2ff485f84df12ddec171e01ee8f9c7472c6c8467b0cf74ae8b3b614ed16cbdbffffffff008a6600000000001976a91429be45311cc66a5a6cc4a42516dbb7c9b126a3c188ac0280841e00000000001976a914996ed5e55d68aef653c85339f83873fac1321f0788ac60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac00000000"
+	parentTx, err := bt.NewTxFromString(parentTxHex)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test_t13_consensus_accept_hinted")
+	require.NoError(t, err)
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	_ = utxoStore.SetBlockHeight(257727)
+	_ = utxoStore.SetMedianBlockTime(uint32(time.Now().Unix())) //nolint:gosec
+
+	// Parent created WITHOUT WithMinedBlockInfo — BlockHeights stays empty,
+	// identical to the reject test. Only the option below differs.
+	_, err = utxoStore.Create(ctx, parentTx, 257726)
+	require.NoError(t, err)
+
+	initPrometheusMetrics()
+
+	v := &Validator{
+		logger:                        logger,
+		settings:                      tSettings,
+		txValidator:                   NewTxValidator(logger, tSettings),
+		utxoStore:                     utxoStore,
+		blockAssembler:                &MockBlockAssemblyStore{},
+		stats:                         gocore.NewStat("validator"),
+		txmetaKafkaProducerClient:     kafka.NewKafkaAsyncProducerMock(),
+		rejectedTxKafkaProducerClient: kafka.NewKafkaAsyncProducerMock(),
+	}
+
+	// The flag is compatible with block assembly enabled (the legacy branch
+	// sets it in every FSM state, including RUNNING where assembly stays on);
+	// assembly is disabled here only because the test scenario mirrors the
+	// catch-up (CATCHINGBLOCKS) deployment state.
+	txMetaData, err := v.Validate(t.Context(), tx, 257727,
+		WithSkipPolicyChecks(true),
+		WithUnconfirmedParentsAtCandidateHeight(true),
+		WithAddTXToBlockAssembly(false),
+	)
+	require.NoError(t, err,
+		"with UnconfirmedParentsAtCandidateHeight, consensus-mode validation must accept a child of an unconfirmed same-block parent")
+	require.NotNil(t, txMetaData)
+
+	// Side-effect contract (deliberate, pinned here so it stays documented):
+	// tx-level blessing mutates the store BEFORE any block-level membership
+	// verdict. From the validator's perspective this scenario is identical to
+	// an external floater (a parent that is unconfirmed and NOT in the block)
+	// — membership is only decided later by block validation's
+	// checkParentsExistOnChain, which returns BlockIncompleteError for an
+	// unmined parent (pinned in model/Block_test.go "parent has no block ID")
+	// so the block is never accepted while the floater stays unmined. The
+	// store state left behind is exactly what a policy-mode mempool-chain
+	// admission of the same txs would produce, and is handled by the same
+	// unmined-tx cleanup machinery:
+	//   - the child's meta exists, unmined (no BlockIDs / BlockHeights yet)
+	//   - the parent's spent output records the child as its spender
+	childMeta, err := utxoStore.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs, fields.BlockHeights)
+	require.NoError(t, err)
+	require.Empty(t, childMeta.BlockIDs, "blessed child must be unmined until block acceptance")
+	require.Empty(t, childMeta.BlockHeights, "blessed child must be unmined until block acceptance")
+
+	spentVout := tx.Inputs[0].PreviousTxOutIndex
+	parentUtxoHash, err := util.UTXOHashFromOutput(parentTx.TxIDChainHash(), parentTx.Outputs[spentVout], spentVout)
+	require.NoError(t, err)
+
+	spendStatus, err := utxoStore.GetSpend(ctx, &utxostore.Spend{
+		TxID:     parentTx.TxIDChainHash(),
+		Vout:     spentVout,
+		UTXOHash: parentUtxoHash,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, spendStatus.SpendingData, "parent output must be marked spent by the blessed child")
+	require.Equal(t, *tx.TxIDChainHash(), *spendStatus.SpendingData.TxID)
 }
 
 func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3b80(t *testing.T) {
@@ -402,10 +755,7 @@ func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3
 	ctx, _, endSpan := tracing.Tracer("validator").Start(ctx, "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
-	require.NoError(t, err)
-
-	err = v.validateTransactionScripts(ctx, tx, height, utxos, &Options{SkipPolicyChecks: true})
+	err = v.validateTransaction(ctx, tx, height, utxos, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -433,10 +783,7 @@ func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840c
 	ctx, _, endSpan := tracing.Tracer("validator").Start(ctx, "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
-	require.NoError(t, err)
-
-	err = v.validateTransactionScripts(ctx, tx, height, utxos, &Options{SkipPolicyChecks: true})
+	err = v.validateTransaction(ctx, tx, height, utxos, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -464,10 +811,7 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 	ctx, _, endSpan := tracing.Tracer("validator").Start(ctx, "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
-	require.NoError(t, err)
-
-	err = v.validateTransactionScripts(ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
+	err = v.validateTransaction(ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -492,40 +836,8 @@ func TestValidateTx7f4244335dec8d941e3fc1847ac3d020fac9347a0c0335294bf56ede8aa58
 	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
+	err = v.validateTransaction(ctx, tx, height, []uint32{1553030, 1550102}, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
-
-	err = v.validateTransactionScripts(ctx, tx, height, []uint32{1553030, 1550102}, &Options{SkipPolicyChecks: true})
-	require.NoError(t, err)
-}
-
-func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d604_high_fee(t *testing.T) {
-	initPrometheusMetrics()
-
-	// height 229369] tx 956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d604 failed validation: arc error 462: transaction input total satoshis cannot be zero
-	txid := "956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d604"
-	tx, err := bt.NewTxFromString("010000000000000000ef015400c3490d91f3f742e73e81bc37dfca4f24f9a73a17c90ccab3012ddbc795bb000000008a473044022006a960f73ea637af867f69ed69edd291bee1d6daec241649caf909fb864dcd3b022011c82189c4a3379aba85fdb907d341db8067e426d7660fbba05c12fa370fa8aa0141048e69627b4807fe4ab00002a01c4a26a50d558cce969708e75dc5bfb345bbe92f06082757c85cbcac4ff0bbb91e221c59d3f9e675125da07e8110fd7d9b0ab6eeffffffff00000000000000001976a9146f9e896bb7cd9d27ca5b18c3ec9587ff0be7895188ac0100000000000000001976a9144477154cba7f0474a578fe734e00bd60513fbab588ac00000000")
-	require.NoError(t, err)
-	assert.Equal(t, txid, tx.TxID())
-
-	var height uint32 = 229369
-
-	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
-	tSettings.Policy.MinMiningTxFee = 1000 // high fee
-
-	v := &Validator{
-		txValidator: NewTxValidator(ulogger.TestLogger{}, tSettings),
-	}
-
-	ctx := context.Background()
-
-	ctx, _, endSpan := tracing.Tracer("validator").Start(ctx, "Test")
-	defer endSpan()
-
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "transaction fee is too low")
 }
 
 // func TestValidateTxdad5ecab132387e8e9b4e0330910c71930e637d840a5818eb92928668e52bbe5(t *testing.T) {
@@ -584,10 +896,7 @@ func TestValidateTransactions(t *testing.T) {
 		ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
 		defer endSpan()
 
-		err = v.validateTransaction(ctx, tx, testData.BlockHeight, testData.UTXOHeights, &Options{})
-		require.NoError(t, err)
-
-		err = v.validateTransactionScripts(ctx, tx, testData.BlockHeight, testData.UTXOHeights, &Options{SkipPolicyChecks: true})
+		err = v.validateTransaction(ctx, tx, testData.BlockHeight, testData.UTXOHeights, &Options{SkipPolicyChecks: true})
 		require.NoError(t, err, fmt.Sprintf("Failed with TxID %v", testData.TxID))
 	}
 }
@@ -613,10 +922,7 @@ func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538b
 	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
-	require.NoError(t, err)
-
-	err = v.validateTransactionScripts(ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
+	err = v.validateTransaction(ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -641,10 +947,7 @@ func TestValidateTx944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a36
 	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
-	require.NoError(t, err)
-
-	err = v.validateTransactionScripts(ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
+	err = v.validateTransaction(ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -679,12 +982,19 @@ type txFeeSize struct {
 
 // MockBlockAssemblyStore provides a test double for block assembly storage operations.
 type MockBlockAssemblyStore struct {
-	returnError error
-	storedTxs   []txFeeSize
-	removedTxs  []chainhash.Hash
+	returnError  error
+	panicOnStore bool
+	storedTxs    []txFeeSize
+	removedTxs   []chainhash.Hash
 }
 
 func (s *MockBlockAssemblyStore) Store(_ context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints) (bool, error) {
+	if s.panicOnStore {
+		// Simulates a nil/misconfigured block-assembly client panicking mid-delivery,
+		// e.g. inside the real gRPC client's Store() call.
+		panic("simulated panic: block assembler Store()")
+	}
+
 	if s.returnError != nil {
 		return false, s.returnError
 	}
@@ -736,10 +1046,7 @@ func Benchmark_validateInternal(b *testing.B) {
 	}
 
 	for i := 0; i < b.N; i++ {
-		err = v.validateTransaction(context.Background(), tx, 740975, nil, &Options{})
-		require.NoError(b, err)
-
-		err = v.validateTransactionScripts(context.Background(), tx, 740975, utxoHeights, &Options{SkipPolicyChecks: true})
+		err = v.validateTransaction(context.Background(), tx, 740975, utxoHeights, &Options{SkipPolicyChecks: true})
 		require.NoError(b, err)
 	}
 }
@@ -765,7 +1072,7 @@ func TestExtendedTxa1f6a4ffcfd7bb4775790932aff1f82ac6a9b3b3e76c8faf8b11328e948af
 	ctx := context.Background()
 
 	container, err := aeroTest.RunContainer(ctx)
-	require.NoError(t, err)
+	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
 		err = container.Terminate(ctx)
@@ -826,14 +1133,21 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 
 		mockUtxoStore.On("GetBlockState").Return(utxostore.BlockState{Height: 1000, MedianTime: 1000000000})
 
-		mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{
-			BlockHeights: make([]uint32, 0),
-		}, nil)
+		// Extended transactions are re-extended from the store too
+		// (GHSA-v76m-6vc7-g7c7), so the parent read must carry outputs.
+		mockUtxoStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return([]utxostore.ParentOutput{
+			{Status: utxostore.ParentOutputNotMined, Satoshis: 1000000, LockingScript: bscript.NewFromBytes([]byte{0x51})},
+			{Status: utxostore.ParentOutputNotMined, Satoshis: 1000000, LockingScript: bscript.NewFromBytes([]byte{0x51})},
+			{Status: utxostore.ParentOutputNotMined, Satoshis: 1000000, LockingScript: bscript.NewFromBytes([]byte{0x51})},
+		}, nil).Once()
 
-		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), NewDefaultOptions())
+		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), nil)
 		require.NoError(t, err)
 
-		expected := []uint32{1001, 1001, 1001}
+		// Fallback writes the unconfirmedParentHeight sentinel instead of
+		// blockState.Height+1; the BDK adapter translates it at the call boundary
+		// (MEMPOOL_HEIGHT in consensus, candidate height in policy).
+		expected := []uint32{unconfirmedParentHeight, unconfirmedParentHeight, unconfirmedParentHeight}
 
 		if !reflect.DeepEqual(utxoHashes, expected) {
 			t.Errorf("getUtxoBlockHeightsAndExtendTx() got = %v, want %v", utxoHashes, expected)
@@ -850,28 +1164,20 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 
 		mockUtxoStore.On("GetBlockState").Return(utxostore.BlockState{Height: 1000, MedianTime: 1000000000})
 
-		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
-			return hash.String() == "10031ea0997a461d4e09157c6f9d15ff09e61f73aebd9e7f821e4c77c8251afe"
-		}), mock.Anything).Return(&meta.Data{
-			BlockHeights: []uint32{125, 126},
+		// One call for all three inputs, in input order. The parent recorded in
+		// blocks 125 and 126 resolves to its lowest height, which is 125.
+		mockUtxoStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return([]utxostore.ParentOutput{
+			{Status: utxostore.ParentOutputMined, Height: 125, Satoshis: 1000000, LockingScript: bscript.NewFromBytes([]byte{0x51})},
+			{Status: utxostore.ParentOutputNotMined, Satoshis: 2000000, LockingScript: bscript.NewFromBytes([]byte{0x51})},
+			{Status: utxostore.ParentOutputMined, Height: 768, Satoshis: 3000000, LockingScript: bscript.NewFromBytes([]byte{0x51})},
 		}, nil).Once()
 
-		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
-			return hash.String() == "9c1599ff3e2ba140c9df526fdb239db236227840093916e90244835d0780a053"
-		}), mock.Anything).Return(&meta.Data{
-			BlockHeights: []uint32{},
-		}, nil).Once()
-
-		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
-			return hash.String() == "928ed84cd4c48beb0d3494ccc17cc1e06b1473f9dc118db9bb56972395ede461"
-		}), mock.Anything).Return(&meta.Data{
-			BlockHeights: []uint32{768, 769},
-		}, nil).Once()
-
-		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), NewDefaultOptions())
+		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), nil)
 		require.NoError(t, err)
 
-		expected := []uint32{125, 1001, 768}
+		// Middle slot is the unconfirmed-parent fallback: writes the sentinel
+		// rather than blockState.Height+1.
+		expected := []uint32{125, unconfirmedParentHeight, 768}
 
 		if !reflect.DeepEqual(utxoHashes, expected) {
 			t.Errorf("getUtxoBlockHeightsAndExtendTx() got = %v, want %v", utxoHashes, expected)
@@ -908,37 +1214,30 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 
 		mockUtxoStore.On("GetBlockState").Return(utxostore.BlockState{Height: 1000, MedianTime: 1000000000})
 
-		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
-			return hash.String() == "10031ea0997a461d4e09157c6f9d15ff09e61f73aebd9e7f821e4c77c8251afe"
-		}), mock.Anything).Return(&meta.Data{
-			BlockHeights: []uint32{125, 126},
-			Tx: &bt.Tx{
-				Outputs: expectedOutputs["10031ea0997a461d4e09157c6f9d15ff09e61f73aebd9e7f821e4c77c8251afe"],
-			},
-		}, nil).Once()
+		hashes := []string{
+			"10031ea0997a461d4e09157c6f9d15ff09e61f73aebd9e7f821e4c77c8251afe",
+			"9c1599ff3e2ba140c9df526fdb239db236227840093916e90244835d0780a053",
+			"928ed84cd4c48beb0d3494ccc17cc1e06b1473f9dc118db9bb56972395ede461",
+		}
+		heights := []uint32{125, 0, 768}
+		answers := make([]utxostore.ParentOutput, len(hashes))
+		for i, h := range hashes {
+			answers[i] = utxostore.ParentOutput{
+				Status:        utxostore.ParentOutputMined,
+				Height:        heights[i],
+				Satoshis:      expectedOutputs[h][0].Satoshis,
+				LockingScript: expectedOutputs[h][0].LockingScript,
+			}
+		}
+		answers[1].Status = utxostore.ParentOutputNotMined
+		mockUtxoStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(answers, nil).Once()
 
-		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
-			return hash.String() == "9c1599ff3e2ba140c9df526fdb239db236227840093916e90244835d0780a053"
-		}), mock.Anything).Return(&meta.Data{
-			BlockHeights: []uint32{},
-			Tx: &bt.Tx{
-				Outputs: expectedOutputs["9c1599ff3e2ba140c9df526fdb239db236227840093916e90244835d0780a053"],
-			},
-		}, nil).Once()
-
-		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
-			return hash.String() == "928ed84cd4c48beb0d3494ccc17cc1e06b1473f9dc118db9bb56972395ede461"
-		}), mock.Anything).Return(&meta.Data{
-			BlockHeights: []uint32{768, 769},
-			Tx: &bt.Tx{
-				Outputs: expectedOutputs["928ed84cd4c48beb0d3494ccc17cc1e06b1473f9dc118db9bb56972395ede461"],
-			},
-		}, nil).Once()
-
-		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, txNonExtended, txNonExtended.TxID(), NewDefaultOptions())
+		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, txNonExtended, txNonExtended.TxID(), nil)
 		require.NoError(t, err)
 
-		expected := []uint32{125, 1001, 768}
+		// Middle slot is the unconfirmed-parent fallback: writes the sentinel
+		// rather than blockState.Height+1.
+		expected := []uint32{125, unconfirmedParentHeight, 768}
 
 		if !reflect.DeepEqual(utxoHashes, expected) {
 			t.Errorf("getUtxoBlockHeightsAndExtendTx() got = %v, want %v", utxoHashes, expected)
@@ -974,7 +1273,7 @@ func TestFalseOrEmptyTopStackElementScriptError(t *testing.T) {
 	ctx, _, endSpan := tracing.Tracer("validator").Start(ctx, "Test")
 	defer endSpan()
 
-	err := v.validateTransactionScripts(ctx, tx, height, []uint32{}, &Options{SkipPolicyChecks: true})
+	err := v.validateTransaction(ctx, tx, height, []uint32{}, &Options{SkipPolicyChecks: true})
 	require.Error(t, err)
 }
 
@@ -1070,6 +1369,196 @@ func TestValidator_TwoPhaseCommitTransaction_AlreadySpendable(t *testing.T) {
 	assert.False(t, metaData.Locked, "TX should remain spendable after 2-phase commit")
 }
 
+// TestValidator_UnlockLockedTxOnExit_KeepsLockOnError is the direct, white-box
+// test for the mechanism validateInternal defers immediately after a tx is
+// durably persisted+spent+Locked (see the two error returns in the
+// addToBlockAssembly block: building tx inpoints via subtree.NewTxInpointsFromTx,
+// and sendToBlockAssembler). On both paths the tx never reaches block assembly,
+// so the 2PC lock must NOT be released: an unlocked-but-undelivered parent lets a
+// child enter the mining template without it. Staying locked is the documented
+// safe failure mode, and the block assembler's unmined-transaction loader heals
+// it in the correct order (add to subtree processor, then unlock).
+//
+// subtree.NewTxInpointsFromTx cannot currently be made to return an error (its
+// implementation is infallible in the pinned go-subtree version), so that
+// specific call site cannot be forced end-to-end without changing production
+// code paths outside validateInternal's control. This test instead calls the
+// shared cleanup function directly with an already-set error, which is exactly
+// the state validateInternal is in on both of those return paths: it proves the
+// record stays locked and the original, more informative error is preserved.
+func TestValidator_UnlockLockedTxOnExit_KeepsLockOnError(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	tx, err := bt.NewTxFromString("010000000000000000ef01b136c673a9b815af2bfdeccc9479deec3273ee98a188c26d3c14b5e6bfcbca0b010000006b48304502200241ac9536c536f21e522dec152e69674094b371b14c26edf706e1db0e6487190221008ee66bdafc7d39ee041e1425a7b2df780702e9b066c3a1e9715b03b23fbd99be41210373c9cb2feaa59dd208ad90dc4c8f32dac7a30a65e590fa16e2a421637927ae63feffffff4004fb0b000000001976a91471902a65346b0d951358ec9a1b306ecd36d284ae88ac0280969800000000001976a914dd37ee4ce93278fbc398abcda001d1d855841e0788ac3cd35d0b000000001976a914d04ad25d93764cf83aca0ca0c7cbb7ba8850f75888ac00000000")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test_unlock_on_exit_clears_lock")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	// Mirrors what spendAndCreateInUtxoStore leaves behind on the addToBlockAssembly
+	// path: the tx durably persisted, spent, and Locked.
+	txMetaData, err := utxoStore.Create(ctx, tx, 100, utxostore.WithLocked(true))
+	require.NoError(t, err)
+	require.True(t, txMetaData.Locked)
+
+	v := &Validator{
+		logger:      ulogger.TestLogger{},
+		utxoStore:   utxoStore,
+		settings:    tSettings,
+		txValidator: NewTxValidator(ulogger.TestLogger{}, tSettings),
+		stats:       gocore.NewStat("validator"),
+	}
+
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	// Simulate validateInternal already holding an error (e.g. the tx-inpoints or
+	// sendToBlockAssembler failure) when the deferred cleanup runs.
+	originalErr := errors.NewProcessingError("[Validate][%s] error getting tx inpoints", tx.TxID())
+	deferredErr := error(originalErr)
+	delivered := false
+
+	v.unlockLockedTxOnExit(ctx, tx, tx.TxID(), txMetaData, &deferredErr, &delivered)
+
+	require.True(t, txMetaData.Locked, "an undelivered tx must stay locked, or a child can be mined without its parent")
+	require.Same(t, originalErr, deferredErr, "the original, more informative error must be preserved")
+
+	storedMeta := &meta.Data{}
+	err = utxoStore.GetMeta(ctx, tx.TxIDChainHash(), storedMeta)
+	require.NoError(t, err)
+	require.True(t, storedMeta.Locked, "the store record must stay locked until the unmined-transaction loader delivers it to block assembly")
+}
+
+// TestValidator_UnlockLockedTxOnExit_ClearsLockOnSuccess is the counterpart: when
+// validateInternal is returning success the tx has reached block assembly, so the
+// 2PC lock is released - in memory and in the store.
+func TestValidator_UnlockLockedTxOnExit_ClearsLockOnSuccess(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	tx, err := bt.NewTxFromString("010000000000000000ef01b136c673a9b815af2bfdeccc9479deec3273ee98a188c26d3c14b5e6bfcbca0b010000006b48304502200241ac9536c536f21e522dec152e69674094b371b14c26edf706e1db0e6487190221008ee66bdafc7d39ee041e1425a7b2df780702e9b066c3a1e9715b03b23fbd99be41210373c9cb2feaa59dd208ad90dc4c8f32dac7a30a65e590fa16e2a421637927ae63feffffff4004fb0b000000001976a91471902a65346b0d951358ec9a1b306ecd36d284ae88ac0280969800000000001976a914dd37ee4ce93278fbc398abcda001d1d855841e0788ac3cd35d0b000000001976a914d04ad25d93764cf83aca0ca0c7cbb7ba8850f75888ac00000000")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test_unlock_on_exit_clears_lock_on_success")
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	txMetaData, err := utxoStore.Create(ctx, tx, 100, utxostore.WithLocked(true))
+	require.NoError(t, err)
+	require.True(t, txMetaData.Locked)
+
+	v := &Validator{
+		logger:      ulogger.TestLogger{},
+		utxoStore:   utxoStore,
+		settings:    tSettings,
+		txValidator: NewTxValidator(ulogger.TestLogger{}, tSettings),
+		stats:       gocore.NewStat("validator"),
+	}
+
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	var deferredErr error
+
+	delivered := true
+
+	v.unlockLockedTxOnExit(ctx, tx, tx.TxID(), txMetaData, &deferredErr, &delivered)
+
+	require.NoError(t, deferredErr)
+	require.False(t, txMetaData.Locked, "a delivered tx must be unlocked on the success path")
+
+	storedMeta := &meta.Data{}
+	err = utxoStore.GetMeta(ctx, tx.TxIDChainHash(), storedMeta)
+	require.NoError(t, err)
+	require.False(t, storedMeta.Locked, "the store record must be unlocked on the success path")
+}
+
+// TestValidator_UnlockLockedTxOnExit_NoopWhenNotLocked covers the case where the
+// tx was never Locked to begin with: unlockLockedTxOnExit must be a no-op
+// (SetLocked must not be called at all). This is the SkipUtxoCreation /
+// not-added-to-block-assembly case.
+func TestValidator_UnlockLockedTxOnExit_NoopWhenNotLocked(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	tx, err := bt.NewTxFromString("010000000000000000ef01b136c673a9b815af2bfdeccc9479deec3273ee98a188c26d3c14b5e6bfcbca0b010000006b48304502200241ac9536c536f21e522dec152e69674094b371b14c26edf706e1db0e6487190221008ee66bdafc7d39ee041e1425a7b2df780702e9b066c3a1e9715b03b23fbd99be41210373c9cb2feaa59dd208ad90dc4c8f32dac7a30a65e590fa16e2a421637927ae63feffffff4004fb0b000000001976a91471902a65346b0d951358ec9a1b306ecd36d284ae88ac0280969800000000001976a914dd37ee4ce93278fbc398abcda001d1d855841e0788ac3cd35d0b000000001976a914d04ad25d93764cf83aca0ca0c7cbb7ba8850f75888ac00000000")
+	require.NoError(t, err)
+
+	utxoStore := NewFailingUtxoStore(t) // any SetLocked call would error here, proving it was never called
+
+	v := &Validator{
+		logger:      ulogger.TestLogger{},
+		utxoStore:   utxoStore,
+		settings:    test.CreateBaseTestSettings(t),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings(t)),
+		stats:       gocore.NewStat("validator"),
+	}
+
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	txMetaData := &meta.Data{Locked: false}
+	var deferredErr error
+
+	delivered := true
+
+	v.unlockLockedTxOnExit(ctx, tx, tx.TxID(), txMetaData, &deferredErr, &delivered)
+
+	require.NoError(t, deferredErr)
+}
+
+// TestValidator_UnlockLockedTxOnExit_SetsErrOnUnlockFailure covers the
+// success-path-so-far case: the tx was Locked and delivered to block assembly
+// (incoming deferred error is nil), but the unlock (SetLocked(false) via the
+// two-phase commit) itself fails. unlockLockedTxOnExit must surface that
+// failure by setting the deferred error to the unlock error, and must leave
+// the in-memory Locked flag untouched (it stays true) since the store record
+// was never actually unlocked.
+func TestValidator_UnlockLockedTxOnExit_SetsErrOnUnlockFailure(t *testing.T) {
+	initPrometheusMetrics()
+	tracing.SetupMockTracer()
+
+	tx, err := bt.NewTxFromString("010000000000000000ef01b136c673a9b815af2bfdeccc9479deec3273ee98a188c26d3c14b5e6bfcbca0b010000006b48304502200241ac9536c536f21e522dec152e69674094b371b14c26edf706e1db0e6487190221008ee66bdafc7d39ee041e1425a7b2df780702e9b066c3a1e9715b03b23fbd99be41210373c9cb2feaa59dd208ad90dc4c8f32dac7a30a65e590fa16e2a421637927ae63feffffff4004fb0b000000001976a91471902a65346b0d951358ec9a1b306ecd36d284ae88ac0280969800000000001976a914dd37ee4ce93278fbc398abcda001d1d855841e0788ac3cd35d0b000000001976a914d04ad25d93764cf83aca0ca0c7cbb7ba8850f75888ac00000000")
+	require.NoError(t, err)
+
+	utxoStore := NewFailingUtxoStore(t) // SetLocked always errors here
+	_, err = utxoStore.Create(context.Background(), tx, 100, utxostore.WithLocked(true))
+	require.NoError(t, err)
+
+	v := &Validator{
+		logger:      ulogger.TestLogger{},
+		utxoStore:   utxoStore,
+		settings:    test.CreateBaseTestSettings(t),
+		txValidator: NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings(t)),
+		stats:       gocore.NewStat("validator"),
+	}
+
+	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
+	defer endSpan()
+
+	txMetaData := &meta.Data{Locked: true}
+	var deferredErr error
+
+	delivered := true
+
+	v.unlockLockedTxOnExit(ctx, tx, tx.TxID(), txMetaData, &deferredErr, &delivered)
+
+	require.Error(t, deferredErr, "the unlock failure must be surfaced via the deferred error")
+	require.ErrorIs(t, deferredErr, errors.ErrTxUnlockFailed)
+	require.True(t, txMetaData.Locked, "the in-memory Locked flag must not be cleared when the unlock itself fails")
+}
+
 // FailingUtxoStore provides a test double that simulates UTXO store failures.
 type FailingUtxoStore struct {
 	*sql.Store
@@ -1101,6 +1590,7 @@ func NewFailingUtxoStore(t *testing.T) *FailingUtxoStore {
 }
 
 func TestValidator_TwoPhaseCommitTransaction_SetLockedFails(t *testing.T) {
+	initPrometheusMetrics()
 	tracing.SetupMockTracer()
 
 	ctx := t.Context()
@@ -1174,6 +1664,8 @@ func TestValidator_LockedFlagChangedIfBlockAssemblyStoreSucceeds(t *testing.T) {
 
 	err = utxoStore.SetBlockHeight(2)
 	require.NoError(t, err)
+	err = utxoStore.SetMedianBlockTime(1700000000)
+	require.NoError(t, err)
 
 	opts := &Options{AddTXToBlockAssembly: true}
 
@@ -1184,6 +1676,65 @@ func TestValidator_LockedFlagChangedIfBlockAssemblyStoreSucceeds(t *testing.T) {
 	err = utxoStore.GetMeta(ctx, txs[1].TxIDChainHash(), metaData)
 	require.NoError(t, err)
 	assert.False(t, metaData.Locked, "Flag should be unset after successful block assembly")
+}
+
+// TestValidator_ValidateWithOptions_ReturnsUnlockFailureError drives the real
+// ValidateWithOptions entry point end-to-end with a store whose SetLocked fails,
+// and asserts the RETURNED error reflects the unlock failure - rather than
+// invoking unlockLockedTxOnExit directly, as the other unlock tests do. This
+// exercises the named-return/defer mechanism itself (err is a named return at
+// validateInternal's signature, and the deferred call writes to it through the
+// *error argument): a test that only calls the helper directly would still pass
+// even if that plumbing were broken (e.g. the signature changed to unnamed
+// returns), which would silently swallow unlock failures on the success path.
+func TestValidator_ValidateWithOptions_ReturnsUnlockFailureError(t *testing.T) {
+	initPrometheusMetrics()
+	tracing.SetupMockTracer()
+
+	ctx := context.Background()
+
+	utxoStore := NewFailingUtxoStore(t) // SetLocked always errors here
+
+	txs := transactions.CreateTestTransactionChainWithCount(t, 3)
+
+	_, err := utxoStore.Create(
+		ctx,
+		txs[0],
+		1,
+		utxostore.WithLocked(false),
+	)
+	require.NoError(t, err)
+
+	blockAsmMock := blockassembly.NewMock()
+
+	settings := test.CreateBaseTestSettings(t)
+	settings.BlockAssembly.Disabled = false
+
+	v := &Validator{
+		logger:         ulogger.TestLogger{},
+		utxoStore:      utxoStore,
+		blockAssembler: blockAsmMock,
+		settings:       settings,
+		txValidator:    NewTxValidator(ulogger.TestLogger{}, test.CreateBaseTestSettings(t)),
+		stats:          gocore.NewStat("validator"),
+	}
+
+	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(true, nil).Times(1)
+
+	require.NoError(t, utxoStore.SetBlockHeight(2))
+	require.NoError(t, utxoStore.SetMedianBlockTime(1700000000))
+
+	opts := &Options{AddTXToBlockAssembly: true}
+
+	_, err = v.ValidateWithOptions(ctx, txs[1], 2, opts)
+	require.Error(t, err, "the unlock failure must be surfaced through the real named-return/defer path, not swallowed")
+	require.ErrorIs(t, err, errors.ErrTxUnlockFailed, "the unlock failure must be typed so callers can tell accepted-but-locked from a real failure")
+
+	metaData := &meta.Data{}
+	err = utxoStore.GetMeta(ctx, txs[1].TxIDChainHash(), metaData)
+	require.NoError(t, err)
+	require.True(t, metaData.Locked, "the tx was delivered to block assembly but the unlock itself failed, so it must stay locked in the store")
 }
 
 func TestValidator_LockedFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T) {
@@ -1228,21 +1779,29 @@ func TestValidator_LockedFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T
 		stats:          gocore.NewStat("validator"),
 	}
 
-	blockAsmMock.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(false, errors.New(errors.ERR_PROCESSING, "tx rejected")).Once()
-
 	opts := &Options{AddTXToBlockAssembly: true}
 
 	err = utxoStore.SetBlockHeight(2) // We need to set this for the SQL implementation
 	require.NoError(t, err)
-
-	_, err = v.ValidateWithOptions(ctx, txs[1], 2, opts)
+	err = utxoStore.SetMedianBlockTime(1700000000)
 	require.NoError(t, err)
+
+	// Idempotent-resubmit contract: a resubmit of an already-existing (Locked,
+	// unmined, non-conflicting) transaction returns success without re-driving
+	// the block-assembly handoff or mutating lock state. Propagation maps
+	// ErrTxExists to HTTP 200, so a resubmit must not surface as a failure for a
+	// transaction that is already durably accepted; a first-submission shed
+	// self-recovers via the in-place Kafka-ingest retry, not on resubmit. The
+	// titular invariant still holds: the tx stays Locked (its 2PC never re-ran).
+	_, err = v.ValidateWithOptions(ctx, txs[1], 2, opts)
+	require.NoError(t, err, "an idempotent resubmit of an existing tx returns success")
+
+	blockAsmMock.AssertNotCalled(t, "Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	metaData := &meta.Data{}
 	err = utxoStore.GetMeta(ctx, txs[1].TxIDChainHash(), metaData)
 	require.NoError(t, err)
-	assert.True(t, metaData.Locked, "Flag should be set if block assembly did not store tx")
+	assert.True(t, metaData.Locked, "Flag should remain set if block assembly did not store tx")
 }
 
 func Test_serializeTxMetaBatch(t *testing.T) {
@@ -1282,7 +1841,7 @@ func Test_serializeTxMetaBatch(t *testing.T) {
 				assert.Equal(t, byte(32), hash[31])
 
 				action := data[36]
-				assert.Equal(t, txmetaActionADD, action)
+				assert.Equal(t, txmetacache.WireActionADD, action)
 
 				contentLen := binary.LittleEndian.Uint32(data[37:41])
 				assert.Equal(t, uint32(12), contentLen)
@@ -1307,7 +1866,7 @@ func Test_serializeTxMetaBatch(t *testing.T) {
 				assert.Equal(t, uint32(1), count)
 
 				action := data[36]
-				assert.Equal(t, txmetaActionDELETE, action)
+				assert.Equal(t, txmetacache.WireActionDELETE, action)
 
 				contentLen := binary.LittleEndian.Uint32(data[37:41])
 				assert.Equal(t, uint32(0), contentLen)
@@ -1339,7 +1898,7 @@ func Test_serializeTxMetaBatch(t *testing.T) {
 				// offset 4: hash (32), then action (1), then length (4), then content (3)
 				offset := 4
 				assert.Equal(t, byte(1), data[offset], "first entry hash[0]")
-				assert.Equal(t, txmetaActionADD, data[offset+32], "first entry action")
+				assert.Equal(t, txmetacache.WireActionADD, data[offset+32], "first entry action")
 				len1 := binary.LittleEndian.Uint32(data[offset+33 : offset+37])
 				assert.Equal(t, uint32(3), len1, "first entry content length")
 				assert.Equal(t, "one", string(data[offset+37:offset+40]), "first entry content")
@@ -1347,14 +1906,14 @@ func Test_serializeTxMetaBatch(t *testing.T) {
 				// Second entry: DELETE (starts at offset 4 + 32 + 1 + 4 + 3 = 44)
 				offset = 44
 				assert.Equal(t, byte(2), data[offset], "second entry hash[0]")
-				assert.Equal(t, txmetaActionDELETE, data[offset+32], "second entry action")
+				assert.Equal(t, txmetacache.WireActionDELETE, data[offset+32], "second entry action")
 				len2 := binary.LittleEndian.Uint32(data[offset+33 : offset+37])
 				assert.Equal(t, uint32(0), len2, "second entry content length")
 
 				// Third entry: ADD with "three" (starts at offset 44 + 32 + 1 + 4 + 0 = 81)
 				offset = 81
 				assert.Equal(t, byte(3), data[offset], "third entry hash[0]")
-				assert.Equal(t, txmetaActionADD, data[offset+32], "third entry action")
+				assert.Equal(t, txmetacache.WireActionADD, data[offset+32], "third entry action")
 				len3 := binary.LittleEndian.Uint32(data[offset+33 : offset+37])
 				assert.Equal(t, uint32(5), len3, "third entry content length")
 				assert.Equal(t, "three", string(data[offset+37:offset+42]), "third entry content")
@@ -1414,16 +1973,157 @@ func Test_serializeTxMetaBatch_RoundTrip(t *testing.T) {
 		// Verify against original batch
 		assert.Equal(t, batch[i].hash[:], parsedHash[:], "hash mismatch at entry %d", i)
 		if batch[i].isDelete {
-			assert.Equal(t, txmetaActionDELETE, action, "action mismatch at entry %d", i)
+			assert.Equal(t, txmetacache.WireActionDELETE, action, "action mismatch at entry %d", i)
 			assert.Equal(t, uint32(0), contentLen, "delete should have 0 content length")
 		} else {
-			assert.Equal(t, txmetaActionADD, action, "action mismatch at entry %d", i)
+			assert.Equal(t, txmetacache.WireActionADD, action, "action mismatch at entry %d", i)
 			assert.Equal(t, batch[i].metaBytes, content, "content mismatch at entry %d", i)
 		}
 	}
 }
 
-func TestGetUtxoBlockHeightAndExtendForParentTx_NilValidationOptions(t *testing.T) {
+// Test_serializeTxMetaBatchV2 verifies the byte layout of the v2 wire format
+// against the spec documented on serializeTxMetaBatchV2 and the symmetric
+// parser in services/subtreevalidation/txmetaHandler.go.
+func Test_serializeTxMetaBatchV2(t *testing.T) {
+	h1 := chainhash.Hash{}
+	copy(h1[:], bytes.Repeat([]byte{0xAA}, 32))
+	h2 := chainhash.Hash{}
+	copy(h2[:], bytes.Repeat([]byte{0xBB}, 32))
+
+	items := []txmetaItemWithHash{
+		{item: &txmetaBatchItem{hash: &h1, metaBytes: []byte("meta-1"), isDelete: false}, h: 0xDEADBEEFCAFEBABE},
+		{item: &txmetaBatchItem{hash: &h2, isDelete: true}, h: 0x0102030405060708},
+	}
+
+	data := serializeTxMetaBatchV2(items)
+
+	assert.Equal(t, byte(0xFF), data[0], "magic byte")
+	assert.Equal(t, byte(0x02), data[1], "version byte")
+	assert.Equal(t, byte(0x00), data[2], "reserved")
+	assert.Equal(t, byte(0x00), data[3], "reserved")
+	assert.Equal(t, uint32(2), binary.LittleEndian.Uint32(data[4:]), "entry count")
+
+	// Entry 1 (ADD).
+	off := 8
+	assert.Equal(t, uint64(0xDEADBEEFCAFEBABE), binary.LittleEndian.Uint64(data[off:]), "entry 1 xxhash")
+	off += 8
+	assert.Equal(t, h1[:], data[off:off+32], "entry 1 hash")
+	off += 32
+	assert.Equal(t, txmetacache.WireActionADD, data[off], "entry 1 action")
+	off++
+	assert.Equal(t, uint32(6), binary.LittleEndian.Uint32(data[off:]), "entry 1 content length")
+	off += 4
+	assert.Equal(t, []byte("meta-1"), data[off:off+6], "entry 1 content")
+	off += 6
+
+	// Entry 2 (DELETE).
+	assert.Equal(t, uint64(0x0102030405060708), binary.LittleEndian.Uint64(data[off:]), "entry 2 xxhash")
+	off += 8
+	assert.Equal(t, h2[:], data[off:off+32], "entry 2 hash")
+	off += 32
+	assert.Equal(t, txmetacache.WireActionDELETE, data[off], "entry 2 action")
+	off++
+	assert.Equal(t, uint32(0), binary.LittleEndian.Uint32(data[off:]), "entry 2 content length (DELETE => 0)")
+	off += 4
+
+	assert.Equal(t, len(data), off, "no trailing bytes")
+}
+
+// Test_sendTxMetaBatchV2_PartitionRouting verifies items are placed on the
+// partition derived from xxhash(hash) according to the documented rule:
+//
+//	partition = (xxhash(hash) % BucketsCount) / (BucketsCount / NumPartitions)
+//
+// Items whose hashes land in the same partition's bucket range must share a
+// single Kafka record; items in different ranges must be split.
+func Test_sendTxMetaBatchV2_PartitionRouting(t *testing.T) {
+	// Pick a numPartitions that divides BucketsCount under every build tag.
+	// Production builds run BucketsCount=8192 so 32 partitions is realistic;
+	// the testtxmetacache build tag uses BucketsCount=8 so we cap at that to
+	// keep bucketsPerPartition >= 1 and avoid divide-by-zero in the routing
+	// math. Cap value is 2 (the minimum needed to verify two-record output).
+	numPartitions := 32
+	if numPartitions > txmetacache.BucketsCount {
+		numPartitions = txmetacache.BucketsCount
+	}
+	if numPartitions < 2 {
+		t.Skipf("BucketsCount=%d too small to verify partition routing", txmetacache.BucketsCount)
+	}
+	bucketsPerPartition := txmetacache.BucketsCount / numPartitions
+
+	// Find two hashes whose xxhash lands in different partitions.
+	var h1, h2 chainhash.Hash
+	var p1, p2 = -1, -1
+	for seed := uint64(0); ; seed++ {
+		var h chainhash.Hash
+		binary.LittleEndian.PutUint64(h[:], seed)
+		bucket := int(xxhash.Sum64(h[:]) % uint64(txmetacache.BucketsCount))
+		p := bucket / bucketsPerPartition
+		if p1 < 0 {
+			h1 = h
+			p1 = p
+			continue
+		}
+		if p != p1 {
+			h2 = h
+			p2 = p
+			break
+		}
+	}
+
+	captured := make(map[int32]*kafka.Message)
+	publish := func(m *kafka.Message) {
+		captured[m.Partition] = m
+	}
+
+	v := &Validator{
+		settings: &settings.Settings{
+			Validator: settings.ValidatorSettings{
+				TxMetaWireFormat:    "v2",
+				TxMetaNumPartitions: numPartitions,
+			},
+		},
+		txmetaKafkaProducerClient: &fakeAsyncProducer{publish: publish},
+	}
+
+	batch := []*txmetaBatchItem{
+		{hash: &h1, metaBytes: []byte("a"), isDelete: false},
+		{hash: &h2, metaBytes: []byte("b"), isDelete: false},
+	}
+	v.sendTxMetaBatchV2(batch)
+
+	require.Len(t, captured, 2, "expected one Kafka record per non-empty partition")
+	assert.Contains(t, captured, int32(p1))                                            //nolint:gosec // p1<NumPartitions
+	assert.Contains(t, captured, int32(p2))                                            //nolint:gosec // p2<NumPartitions
+	assert.Equal(t, byte(0xFF), captured[int32(p1)].Value[0], "v2 magic byte present") //nolint:gosec
+	assert.Equal(t, byte(0xFF), captured[int32(p2)].Value[0], "v2 magic byte present") //nolint:gosec
+}
+
+// fakeAsyncProducer is a no-op KafkaAsyncProducerI used by the partition
+// routing test to capture published messages without spinning up a real
+// producer or broker. Only Publish is exercised.
+type fakeAsyncProducer struct {
+	kafka.KafkaAsyncProducerI
+	publish func(*kafka.Message)
+}
+
+func (f *fakeAsyncProducer) Publish(m *kafka.Message) { f.publish(m) }
+
+func (f *fakeAsyncProducer) TryPublish(m *kafka.Message) bool { f.publish(m); return true }
+
+// parentLockingScript is the P2PKH script the height-lookup fixtures below fund
+// their input from.
+var parentLockingScript = func() []byte {
+	b, err := hex.DecodeString("76a914000000000000000000000000000000000000000088ac")
+	if err != nil {
+		panic(err)
+	}
+
+	return b
+}()
+
+func TestGetUtxoBlockHeightAndExtendForParentTx_RecordedHeightFromStore(t *testing.T) {
 	ctx := context.Background()
 
 	// Create test transaction
@@ -1436,63 +2136,65 @@ func TestGetUtxoBlockHeightAndExtendForParentTx_NilValidationOptions(t *testing.
 	// Create mock UTXO store
 	mockUtxoStore := utxostore.MockUtxostore{}
 	mockUtxoStore.On("GetBlockState").Return(utxostore.BlockState{Height: 1000, MedianTime: 1000000000})
-	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{
-		BlockHeights: []uint32{999},
-	}, nil)
+	mockUtxoStore.On("ParentOutputsForValidation", mock.Anything, []utxostore.Outpoint{{TxID: parentTxHash, Vout: 0}}).Return([]utxostore.ParentOutput{{
+		Status: utxostore.ParentOutputMined,
+		Height: 999,
+		// The parent read carries outputs because re-extension is unconditional
+		// (GHSA-v76m-6vc7-g7c7); this mirrors the fixture's own input.
+		Satoshis:      1000,
+		LockingScript: bscript.NewFromBytes(parentLockingScript),
+	}}, nil)
 
 	v := &Validator{
 		utxoStore: &mockUtxoStore,
 	}
 
-	utxoHeights := make([]uint32, 1)
+	// A parent with recorded BlockHeights resolves to its real stored height.
+	utxoHeights, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), nil)
 
-	// Test with nil validationOptions - should not panic
-	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, false, nil)
-
-	// Should complete successfully without panic
 	require.NoError(t, err)
 	assert.Equal(t, uint32(999), utxoHeights[0])
 }
 
-func TestGetUtxoBlockHeightAndExtendForParentTx_WithParentMetadata(t *testing.T) {
+// The fallback path writes the unconfirmedParentHeight sentinel when the
+// parent transaction is found in the UTXO store but has no block heights
+// recorded — i.e. the parent UTXO is not yet confirmed. The BDK adapter
+// (ScriptVerifierGoBDK.go) translates this sentinel outward —
+// MEMPOOL_HEIGHT in consensus mode (BDK rejects with
+// bad-txns-unconfirmed-input-in-block), or the candidate height in policy
+// mode (matching svnode's GetInputScriptBlockHeight).
+func TestGetUtxoBlockHeightAndExtendForParentTx_FallbackWritesUnconfirmedSentinel(t *testing.T) {
 	ctx := context.Background()
 
-	// Create test transaction
 	tx := bt.NewTx()
 	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000000", 0, "76a914000000000000000000000000000000000000000088ac", 1000))
 	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 900))
 
 	parentTxHash := *tx.Inputs[0].PreviousTxIDChainHash()
 
-	// Create mock UTXO store (should NOT be called when metadata is provided)
+	// UTXO store returns a metadata record with empty BlockHeights — the
+	// "parent exists but not yet confirmed" case that triggers the fallback.
 	mockUtxoStore := utxostore.MockUtxostore{}
+	mockUtxoStore.On("ParentOutputsForValidation", mock.Anything, []utxostore.Outpoint{{TxID: parentTxHash, Vout: 0}}).Return([]utxostore.ParentOutput{{
+		Status: utxostore.ParentOutputNotMined,
+		// The parent read carries outputs because re-extension is unconditional
+		// (GHSA-v76m-6vc7-g7c7); this mirrors the fixture's own input.
+		Satoshis:      1000,
+		LockingScript: bscript.NewFromBytes(parentLockingScript),
+	}}, nil)
 
 	v := &Validator{
 		utxoStore: &mockUtxoStore,
 	}
 
-	utxoHeights := make([]uint32, 1)
-
-	// Create parent metadata
-	parentMetadata := map[chainhash.Hash]*ParentTxMetadata{
-		parentTxHash: {
-			BlockHeight: 12345,
-		},
-	}
-
-	validationOptions := &Options{
-		ParentMetadata: parentMetadata,
-	}
-
-	// Test with parent metadata - should use metadata instead of UTXO store
-	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, false, validationOptions)
-
-	// Should complete successfully and use metadata block height
+	utxoHeights, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), nil)
 	require.NoError(t, err)
-	assert.Equal(t, uint32(12345), utxoHeights[0])
+	require.Equal(t, unconfirmedParentHeight, utxoHeights[0],
+		"fallback must write the teranode-internal sentinel, not blockState.Height+1")
 
-	// Verify UTXO store was not called
-	mockUtxoStore.AssertNotCalled(t, "Get")
+	// Regression pin: with the sentinel approach, GetBlockState is no longer
+	// consulted on the fallback path — the adapter substitutes from blockHeight.
+	mockUtxoStore.AssertNotCalled(t, "GetBlockState")
 }
 
 // CorruptMetaUtxoStore wraps a real UTXO store but corrupts the meta.Data returned
@@ -1502,21 +2204,37 @@ type CorruptMetaUtxoStore struct {
 	*sql.Store
 }
 
+func (c *CorruptMetaUtxoStore) SupportsOutpointOnlySpend() bool { return false }
+
 func (c *CorruptMetaUtxoStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxostore.CreateOption) (*meta.Data, error) {
 	metaData, err := c.Store.Create(ctx, tx, blockHeight, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	// Corrupt TxInpoints: add an extra parent hash without a corresponding Idxs entry.
-	// This causes TxInpoints.Serialize() to return ErrParentTxHashesMismatch,
-	// which makes MetaBytes() fail inside sendTxMetaToKafka.
-	metaData.TxInpoints.ParentTxHashes = append(metaData.TxInpoints.ParentTxHashes, chainhash.Hash{0xDE, 0xAD})
+	// Corrupt TxInpoints: append extra parent hashes so that ParentTxHashes is
+	// strictly longer than the internal packed vout layout (one count + per-parent
+	// vouts). go-subtree v1.4.1's Serialize fails fast with ErrParentTxHashesMismatch
+	// when len(voutIdxs) < len(ParentTxHashes); v1.3.x checked an exact equality,
+	// so a single appended hash used to suffice. Adding three keeps the test
+	// portable across both checks.
+	metaData.TxInpoints.ParentTxHashes = append(
+		metaData.TxInpoints.ParentTxHashes,
+		chainhash.Hash{0xDE, 0xAD},
+		chainhash.Hash{0xBE, 0xEF},
+		chainhash.Hash{0xCA, 0xFE},
+	)
+
 	return metaData, nil
 }
 
 func TestValidator_TwoPhaseCommitCompletesAfterTxMetaSerializationFailure(t *testing.T) {
 	tracing.SetupMockTracer()
+	// sendTxMetaToKafka records to prometheusValidatorSendToBlockValidationKafka,
+	// which is registered lazily via sync.Once in initPrometheusMetrics. Without
+	// this call the histogram is nil and .Observe panics when the test is the
+	// first (or only) Validator test in the run.
+	initPrometheusMetrics()
 
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
@@ -1558,6 +2276,8 @@ func TestValidator_TwoPhaseCommitCompletesAfterTxMetaSerializationFailure(t *tes
 		Return(true, nil).Times(1)
 
 	err = realStore.SetBlockHeight(2)
+	require.NoError(t, err)
+	err = realStore.SetMedianBlockTime(1700000000)
 	require.NoError(t, err)
 
 	opts := &Options{AddTXToBlockAssembly: true}
@@ -1823,6 +2543,7 @@ func TestValidateTransaction_BIP68PathReadsMTPStore(t *testing.T) {
 		stats:            gocore.NewStat("validator_test"),
 		mtpStore:         mtpStore,
 	}
+	v.txValidator.(*TxValidator).bdk = noopBDKValidator{}
 
 	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
 	defer endSpan()
@@ -1856,6 +2577,7 @@ func TestValidateTransaction_BIP68GuardFiresOnUnpopulatedStore(t *testing.T) {
 		stats:            gocore.NewStat("validator_test"),
 		// mtpStore intentionally empty
 	}
+	v.txValidator.(*TxValidator).bdk = noopBDKValidator{}
 
 	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
 	defer endSpan()

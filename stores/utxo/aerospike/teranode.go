@@ -6,8 +6,8 @@
 //
 // The implementation uses a combination of Aerospike Key-Value store and Lua scripts
 // for atomic operations. Transactions are stored with the following structure:
-//   - Main Record: Contains transaction metadata and up to 20,000 UTXOs
-//   - Pagination Records: Additional records for transactions with >20,000 outputs
+//   - Main Record: Contains transaction metadata and up to utxostore_utxoBatchSize UTXOs (default 128)
+//   - Pagination Records: Additional records for transactions with more outputs than utxostore_utxoBatchSize (default 128)
 //   - External Storage: Optional blob storage for large transactions
 //
 // # Features
@@ -45,7 +45,7 @@
 // Large Transaction with External Storage:
 //   - Same as normal but with external=true
 //   - Transaction data stored in blob storage
-//   - Multiple records for >20k outputs
+//   - Multiple records when outputs exceed utxostore_utxoBatchSize
 //
 // # Thread Safety
 //
@@ -57,10 +57,13 @@ package aerospike
 
 import (
 	_ "embed"
+	"math"
+	"reflect"
+	"sync"
 	"time"
 
-	"github.com/aerospike/aerospike-client-go/v8"
-	"github.com/aerospike/aerospike-client-go/v8/types"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -71,7 +74,7 @@ import (
 var teranodeLUA []byte
 
 var (
-	LuaPackage      = "teranode_v57" // N.B. Do not have any "." in this string
+	LuaPackage      = "teranode_v61" // N.B. Do not have any "." in this string
 	LuaPackageMined = LuaPackage + "_mined"
 )
 
@@ -275,22 +278,87 @@ type LuaMapResponse struct {
 	// Debug      string               `json:"debug,omitempty"`
 }
 
+// Reset clears all fields of LuaMapResponse so it can be reused via a sync.Pool.
+//
+// BlockIDs MUST be nil-ed (not truncated to [:0]) because the public contract
+// observed by processBatchResultsForSetMined is "BlockIDs != nil iff the Lua
+// response actually contained a blockIDs field". parseLuaMapResponseInto only
+// writes BlockIDs when the response includes that key — error responses (e.g.
+// TX_NOT_FOUND) leave BlockIDs untouched. Truncating to [:0] across pool
+// iterations would carry forward a non-nil empty slice from a successful
+// previous record and cause the caller to insert the failed record's hash
+// into the returned map with an empty value. (See test
+// TestAerospike/aerospike_setmined_multi_partial_failure.)
+//
+// The Errors map is cleared (entries deleted) rather than nil-ed so its backing
+// buckets can be reused. parseLuaMapResponseInto explicitly checks the
+// respMap["errors"] key existence before writing, so the same nil/empty
+// contract concern does not apply — the loop body checks res.Signal and other
+// scalar fields rather than relying on r.Errors == nil semantics.
+func (r *LuaMapResponse) Reset() {
+	r.Status = ""
+	r.ErrorCode = ""
+	r.Message = ""
+	r.Signal = ""
+	r.BlockIDs = nil
+	if r.Errors != nil {
+		for k := range r.Errors {
+			delete(r.Errors, k)
+		}
+	}
+	r.ChildCount = 0
+}
+
+// luaMapResponsePool reuses LuaMapResponse structs across set_mined batch records,
+// where each record allocates one response. The pool is scoped to internal hot-loop
+// callers (parseLuaMapResponseInto); the public ParseLuaMapResponse still allocates
+// fresh structs for the 12+ other callers that don't release back to the pool.
+var luaMapResponsePool = sync.Pool{
+	New: func() interface{} { return &LuaMapResponse{} },
+}
+
+// getLuaMapResponse returns a zeroed LuaMapResponse from the pool.
+func getLuaMapResponse() *LuaMapResponse {
+	return luaMapResponsePool.Get().(*LuaMapResponse)
+}
+
+// putLuaMapResponse returns a LuaMapResponse to the pool after resetting it.
+// Callers must not retain references to r or any of its fields after this call.
+func putLuaMapResponse(r *LuaMapResponse) {
+	if r == nil {
+		return
+	}
+	r.Reset()
+	luaMapResponsePool.Put(r)
+}
+
 // ParseLuaMapResponse parses the map response from Lua scripts.
 // This handles the new structured response format where Lua returns a map.
+// The returned struct is freshly allocated; callers that wish to participate
+// in pooling should use parseLuaMapResponseInto with a pool-owned destination.
 func (s *Store) ParseLuaMapResponse(response interface{}) (*LuaMapResponse, error) {
-	// Handle the expected map response
-	respMap, ok := response.(map[interface{}]interface{})
-	if !ok {
-		return nil, errors.NewProcessingError("expected map response but got %T", response)
-	}
-
 	result := &LuaMapResponse{}
+	if err := s.parseLuaMapResponseInto(response, result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// parseLuaMapResponseInto parses the Lua map response into the caller-provided
+// destination. The destination must be zeroed (e.g. via Reset) before the call.
+// This permits sync.Pool-backed reuse of LuaMapResponse across hot batch loops.
+func (s *Store) parseLuaMapResponseInto(response interface{}, result *LuaMapResponse) error {
+	// Handle the expected map response
+	respMap, ok := luaResponseMap(response)
+	if !ok {
+		return errors.NewProcessingError("expected map response but got %T", response)
+	}
 
 	// Parse status
 	if status, ok := respMap["status"].(string); ok {
 		result.Status = LuaStatus(status)
 	} else {
-		return nil, errors.NewProcessingError("missing or invalid status in response")
+		return errors.NewProcessingError("missing or invalid status in response")
 	}
 
 	// Add debug field if it exists
@@ -312,50 +380,49 @@ func (s *Store) ParseLuaMapResponse(response interface{}) (*LuaMapResponse, erro
 		result.Signal = LuaSignal(signal)
 	}
 
-	// Parse blockIDs (can be list or []interface{})
+	// Parse blockIDs from the Lua/native response slice. luaResponseIntSlice
+	// handles both the UDF path's []interface{} and the native dispatcher's
+	// typed integer slices (e.g. []int64), preserving compatibility across
+	// both transports. The presence of the blockIDs key — even an empty list
+	// — yields a non-nil result.BlockIDs (the helper returns make([]int, 0)
+	// for an empty input), matching the existing observable contract.
 	if blockIDs, ok := respMap["blockIDs"]; ok {
-		switch v := blockIDs.(type) {
-		case []interface{}:
-			result.BlockIDs = make([]int, len(v))
-			for i, id := range v {
-				if idInt, ok := id.(int); ok {
-					result.BlockIDs[i] = idInt
-				} else {
-					return nil, errors.NewProcessingError("invalid blockID at index %d", i)
-				}
-			}
-		default:
-			return nil, errors.NewProcessingError("invalid blockIDs type: %T", blockIDs)
+		ids, err := luaResponseIntSlice(blockIDs)
+		if err != nil {
+			return err
 		}
+		result.BlockIDs = ids
 	}
 
 	// Parse errors map for spendMulti
 	if errorsField, ok := respMap["errors"]; ok {
-		errMap, ok := errorsField.(map[interface{}]interface{})
+		errMap, ok := luaResponseMap(errorsField)
 		if !ok {
-			return nil, errors.NewProcessingError("invalid errors type: %T", errorsField)
+			return errors.NewProcessingError("invalid errors type: %T", errorsField)
 		}
 
-		result.Errors = make(map[int]LuaErrorInfo)
+		if result.Errors == nil {
+			result.Errors = make(map[int]LuaErrorInfo, len(errMap))
+		}
 		for k, v := range errMap {
-			offset, ok := k.(int)
+			offset, ok := luaResponseInt(k)
 			if !ok {
-				return nil, errors.NewProcessingError("invalid error offset type: %T", k)
+				return errors.NewProcessingError("invalid error offset type: %T", k)
 			}
 
-			errorObj, ok := v.(map[interface{}]interface{})
+			errorObj, ok := luaResponseMap(v)
 			if !ok {
-				return nil, errors.NewProcessingError("invalid error object type: %T", v)
+				return errors.NewProcessingError("invalid error object type: %T", v)
 			}
 
 			errorCode, ok := errorObj["errorCode"].(string)
 			if !ok {
-				return nil, errors.NewProcessingError("invalid errorCode type in error object")
+				return errors.NewProcessingError("invalid errorCode type in error object")
 			}
 
 			errorMessage, ok := errorObj["message"].(string)
 			if !ok {
-				return nil, errors.NewProcessingError("invalid message type in error object")
+				return errors.NewProcessingError("invalid message type in error object")
 			}
 
 			errorInfo := LuaErrorInfo{
@@ -374,10 +441,98 @@ func (s *Store) ParseLuaMapResponse(response interface{}) (*LuaMapResponse, erro
 
 	// Parse childCount
 	if childCount, ok := respMap["childCount"]; ok {
-		if count, ok := childCount.(int); ok {
+		if count, ok := luaResponseInt(childCount); ok {
 			result.ChildCount = count
 		}
 	}
 
+	return nil
+}
+
+func luaResponseMap(v interface{}) (map[interface{}]interface{}, bool) {
+	switch m := v.(type) {
+	case map[interface{}]interface{}:
+		return m, true
+	case map[string]interface{}:
+		result := make(map[interface{}]interface{}, len(m))
+		for k, v := range m {
+			result[k] = v
+		}
+		return result, true
+	default:
+		rv := reflect.ValueOf(v)
+		if !rv.IsValid() || rv.Kind() != reflect.Map {
+			return nil, false
+		}
+
+		result := make(map[interface{}]interface{}, rv.Len())
+		for _, key := range rv.MapKeys() {
+			result[key.Interface()] = rv.MapIndex(key).Interface()
+		}
+		return result, true
+	}
+}
+
+func luaResponseIntSlice(v interface{}) ([]int, error) {
+	// Reject byte slices explicitly: a msgpack `bin`-encoded blockIDs would
+	// otherwise decode byte-by-byte into garbage block IDs and return success.
+	// blockIDs must arrive as a list of integers on both transports.
+	if _, isBytes := v.([]byte); isBytes {
+		return nil, errors.NewProcessingError("invalid blockIDs type: %T", v)
+	}
+
+	rv := reflect.ValueOf(v)
+	if !rv.IsValid() || (rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array) {
+		return nil, errors.NewProcessingError("invalid blockIDs type: %T", v)
+	}
+
+	result := make([]int, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		idInt, ok := luaResponseInt(rv.Index(i).Interface())
+		if !ok {
+			return nil, errors.NewProcessingError("invalid blockID at index %d", i)
+		}
+		result[i] = idInt
+	}
+
 	return result, nil
+}
+
+func luaResponseInt(v interface{}) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int8:
+		return int(n), true
+	case int16:
+		return int(n), true
+	case int32:
+		return int(n), true
+	case int64:
+		if n < math.MinInt || n > math.MaxInt {
+			return 0, false
+		}
+		return int(n), true
+	case uint:
+		if uint64(n) > uint64(math.MaxInt) {
+			return 0, false
+		}
+		return int(n), true
+	case uint8:
+		return int(n), true
+	case uint16:
+		return int(n), true
+	case uint32:
+		if uint64(n) > uint64(math.MaxInt) {
+			return 0, false
+		}
+		return int(n), true
+	case uint64:
+		if n > uint64(math.MaxInt) {
+			return 0, false
+		}
+		return int(n), true
+	default:
+		return 0, false
+	}
 }

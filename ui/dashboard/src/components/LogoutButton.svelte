@@ -1,12 +1,16 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { goto } from '$app/navigation'
   import { logout } from '$internal/stores/authStore'
 
-  export let buttonText = 'Logout'
-  export let redirectTo = '/login'
-  export let buttonClass = ''
+  let {
+    buttonText = 'Logout',
+    redirectTo = '/login',
+    buttonClass = '',
+  }: { buttonText?: string; redirectTo?: string; buttonClass?: string } = $props()
 
-  let loading = false
+  let loading = $state(false)
 
   async function handleLogout() {
     loading = true
@@ -26,7 +30,7 @@
 
 <button
   class="logout-button {buttonClass}"
-  on:click={handleLogout}
+  onclick={handleLogout}
   disabled={loading}
   aria-label="Logout"
 >

@@ -29,6 +29,11 @@ func (m *MockUTXOStore) Health(ctx context.Context, checkLiveness bool) (int, st
 	return args.Int(0), args.String(1), args.Error(2)
 }
 
+func (m *MockUTXOStore) Close(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
 func (m *MockUTXOStore) SetBlockHeight(height uint32) error {
 	args := m.Called(height)
 	return args.Error(0)
@@ -36,6 +41,11 @@ func (m *MockUTXOStore) SetBlockHeight(height uint32) error {
 
 func (m *MockUTXOStore) SetMedianBlockTime(time uint32) error {
 	args := m.Called(time)
+	return args.Error(0)
+}
+
+func (m *MockUTXOStore) SetBlockState(height, medianTime uint32) error {
+	args := m.Called(height, medianTime)
 	return args.Error(0)
 }
 
@@ -57,6 +67,8 @@ func (m *MockUTXOStore) GetBlockState() utxo.BlockState {
 }
 
 // Implement remaining interface methods as no-ops for testing
+func (m *MockUTXOStore) SupportsOutpointOnlySpend() bool { return false }
+
 func (m *MockUTXOStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	return nil, nil
 }
@@ -66,6 +78,10 @@ func (m *MockUTXOStore) Get(ctx context.Context, hash *chainhash.Hash, fields ..
 }
 
 func (m *MockUTXOStore) Delete(ctx context.Context, hash *chainhash.Hash) error {
+	return nil
+}
+
+func (m *MockUTXOStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
@@ -79,6 +95,10 @@ func (m *MockUTXOStore) GetMeta(ctx context.Context, hash *chainhash.Hash, data 
 
 func (m *MockUTXOStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	return nil, nil
+}
+
+func (m *MockUTXOStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
+	return nil, nil, nil
 }
 
 func (m *MockUTXOStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
@@ -101,6 +121,18 @@ func (m *MockUTXOStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (
 	return nil, nil
 }
 
+func (m *MockUTXOStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
+	return nil, nil
+}
+
+func (m *MockUTXOStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
+	return nil
+}
+
+func (m *MockUTXOStore) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockIDsRemoval) error {
+	return nil
+}
+
 func (m *MockUTXOStore) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
 	return nil, nil
 }
@@ -119,6 +151,14 @@ func (m *MockUTXOStore) BatchDecorate(ctx context.Context, unresolvedMetaDataSli
 
 func (m *MockUTXOStore) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 	return nil
+}
+
+func (m *MockUTXOStore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	return nil, nil
+}
+
+func (m *MockUTXOStore) ParentOutputsForValidation(ctx context.Context, outpoints []utxo.Outpoint, opts ...utxo.ParentOutputOption) ([]utxo.ParentOutput, error) {
+	return nil, nil
 }
 
 func (m *MockUTXOStore) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
@@ -151,6 +191,18 @@ func (m *MockUTXOStore) SetConflicting(ctx context.Context, txHashes []chainhash
 
 func (m *MockUTXOStore) SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error {
 	return nil
+}
+
+func (m *MockUTXOStore) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
+	return nil
+}
+
+func (m *MockUTXOStore) CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error {
+	return nil
+}
+
+func (m *MockUTXOStore) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
+	return nil, nil
 }
 
 func (m *MockUTXOStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
@@ -310,10 +362,10 @@ func TestNewStore_BlockchainClientError(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
 
-	// Register mock database initializer
+	// Register mock database initializer. No SetBlockState expectation: this
+	// test makes blockchain-client creation fail, so NewStore returns before it
+	// subscribes and the listener never runs.
 	mockStore := &MockUTXOStore{}
-	mockStore.On("SetBlockHeight", mock.Anything).Return(nil).Maybe()
-	mockStore.On("SetMedianBlockTime", mock.Anything).Return(nil).Maybe()
 
 	availableDatabases["memory"] = func(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, url *url.URL) (utxo.Store, error) {
 		return mockStore, nil

@@ -1,5 +1,6 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte'
   import { tippy } from '$lib/stores/media'
   import { mediaSize, MediaSize } from '$lib/stores/media'
   import { copyTextToClipboardVanilla } from '$lib/utils/clipboard'
@@ -18,36 +19,45 @@
   import * as api from '$internal/api'
   import { failure } from '$lib/utils/notifications'
 
-  const dispatch = createEventDispatcher()
-
   const baseKey = 'page.viewer-subtree.details'
   const fieldKey = `${baseKey}.fields`
 
-  $: t = $i18n.t
-  $: i18nLocal = { t, baseKey: 'comp.pager' }
+  const t = $derived($i18n.t)
+  const i18nLocal = $derived({ t, baseKey: 'comp.pager' })
 
-  $: collapse = $mediaSize < MediaSize.sm
+  const collapse = $derived($mediaSize < MediaSize.sm)
 
-  export let data: any = {}
-  export let display: DetailTab = DetailTab.overview
-  export let blockHash = ''
+  let {
+    data = {},
+    display = DetailTab.overview,
+    blockHash = '',
+    index,
+    ondisplay,
+  }: {
+    data?: any
+    display?: DetailTab
+    blockHash?: string
+    index?: number
+    ondisplay?: (detail: { value: string }) => void
+  } = $props()
 
-  $: expandedData = data?.expandedData
-  $: isOverview = display === DetailTab.overview
-  $: isJson = display === DetailTab.json
-  $: isMerkleProof = display === DetailTab.merkleproof
+  const expandedData = $derived(data?.expandedData)
+  const isOverview = $derived(display === DetailTab.overview)
+  const isJson = $derived(display === DetailTab.json)
 
-  let paginatedData: any = null
-  let page = 1
-  let pageSize = 20
-  let totalItems = 0
+  let paginatedData: any = $state(null)
+  let page = $state(1)
+  let pageSize = $state(20)
+  let totalItems = $state(0)
 
-  $: totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
-  $: showPagerNav = totalPages > 1
-  $: showPagerSize = showPagerNav || (totalPages === 1 && paginatedData?.Nodes?.length > 5)
+  const totalPages = $derived(Math.max(1, Math.ceil(totalItems / pageSize)))
+  const showPagerNav = $derived(totalPages > 1)
+  const showPagerSize = $derived(
+    showPagerNav || (totalPages === 1 && paginatedData?.Nodes?.length > 5),
+  )
 
   function onDisplay(value) {
-    dispatch('display', { value })
+    ondisplay?.({ value })
   }
 
   function onReverseHash(hash) {
@@ -55,7 +65,7 @@
   }
 
   function onPage(e) {
-    const pageData = e.detail
+    const pageData = e
     page = pageData.value.page
     pageSize = pageData.value.pageSize
   }
@@ -77,39 +87,45 @@
     }
   }
 
-  $: if (isJson && expandedData?.hash) {
-    fetchPaginatedData(expandedData.hash, page, pageSize)
-  }
+  $effect(() => {
+    if (isJson && expandedData?.hash) {
+      fetchPaginatedData(expandedData.hash, page, pageSize)
+    }
+  })
 </script>
 
-<Card title={t(`${baseKey}.title`, { height: expandedData.height })}>
-  <div class="copy-link" slot="subtitle">
-    <div class="hash">{expandedData.hash}</div>
-    <div class="icon" use:$tippy={{ content: t('tooltip.copy-hash-to-clipboard') }}>
-      <ActionStatusIcon
-        icon="icon-duplicate-line"
-        action={copyTextToClipboardVanilla}
-        actionData={expandedData.hash}
-        size={15}
-      />
+<Card
+  title={index === undefined ? t(`${baseKey}.title_generic`) : t(`${baseKey}.title`, { index })}
+>
+  {#snippet subtitle()}
+    <div class="copy-link">
+      <div class="hash">{expandedData.hash}</div>
+      <div class="icon" use:$tippy={{ content: t('tooltip.copy-hash-to-clipboard') }}>
+        <ActionStatusIcon
+          icon="icon-duplicate-line"
+          action={copyTextToClipboardVanilla}
+          actionData={expandedData.hash}
+          size={15}
+        />
+      </div>
+      <div class="icon" use:$tippy={{ content: t('tooltip.copy-url-to-clipboard') }}>
+        <ActionStatusIcon
+          icon="icon-bracket-line"
+          action={copyTextToClipboardVanilla}
+          actionData={getItemApiUrl(ItemType.subtree, expandedData.hash)}
+          size={15}
+        />
+      </div>
+      <button
+        class="icon"
+        onclick={() => onReverseHash(expandedData.hash)}
+        use:$tippy={{ content: t('tooltip.reverse-hash') }}
+        type="button"
+      >
+        <Icon name="icon-reeverse-line" size={15} />
+      </button>
     </div>
-    <div class="icon" use:$tippy={{ content: t('tooltip.copy-url-to-clipboard') }}>
-      <ActionStatusIcon
-        icon="icon-bracket-line"
-        action={copyTextToClipboardVanilla}
-        actionData={getItemApiUrl(ItemType.subtree, expandedData.hash)}
-        size={15}
-      />
-    </div>
-    <button
-      class="icon"
-      on:click={() => onReverseHash(expandedData.hash)}
-      use:$tippy={{ content: t('tooltip.reverse-hash') }}
-      type="button"
-    >
-      <Icon name="icon-reeverse-line" size={15} />
-    </button>
-  </div>
+  {/snippet}
   <div class="content">
     <div class="tabs">
       <Button
@@ -117,21 +133,14 @@
         hasFocusRect={false}
         selected={isOverview}
         variant={isOverview ? 'tertiary' : 'primary'}
-        on:click={() => onDisplay('overview')}>{t(`${baseKey}.tab.overview`)}</Button
+        onclick={() => onDisplay('overview')}>{t(`${baseKey}.tab.overview`)}</Button
       >
       <Button
         size="medium"
         hasFocusRect={false}
         selected={isJson}
         variant={isJson ? 'tertiary' : 'primary'}
-        on:click={() => onDisplay('json')}>{t(`${baseKey}.tab.json`)}</Button
-      >
-      <Button
-        size="medium"
-        hasFocusRect={false}
-        selected={isMerkleProof}
-        variant={isMerkleProof ? 'tertiary' : 'primary'}
-        on:click={() => onDisplay('merkleproof')}>{t(`${baseKey}.tab.merkleproof`)}</Button
+        onclick={() => onDisplay('json')}>{t(`${baseKey}.tab.json`)}</Button
       >
     </div>
     {#if isOverview}
@@ -209,7 +218,7 @@
             pageSize,
           }}
           hasBoundaryRight={true}
-          on:change={onPage}
+          onchange={onPage}
         />
       </div>
       <div class="json">
@@ -233,13 +242,10 @@
               pageSize,
             }}
             hasBoundaryRight={true}
-            on:change={onPage}
+            onchange={onPage}
           />
         </div>
       {/if}
-    {:else if isMerkleProof}
-      <div class="merkle-proof">
-      </div>
     {/if}
   </div>
 </Card>
@@ -257,7 +263,7 @@
     width: 100%;
 
     padding-bottom: 32px;
-    border-bottom: 1px solid #0a1018;
+    border-bottom: 1px solid var(--app-bg-color);
   }
 
   .json-header {
@@ -289,17 +295,10 @@
   }
 
   .loading {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     text-align: center;
     padding: 40px;
   }
-
-  .merkle-proof {
-    box-sizing: var(--box-sizing);
-    margin-top: 32px;
-    width: 100%;
-  }
-
 
   .fields {
     box-sizing: var(--box-sizing);
@@ -330,7 +329,7 @@
   }
 
   .label {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
     font-family: Satoshi;
     font-size: 15px;
     font-style: normal;
@@ -342,7 +341,7 @@
   .value {
     word-break: break-all;
 
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
     font-family: Satoshi;
     font-size: 15px;
     font-style: normal;

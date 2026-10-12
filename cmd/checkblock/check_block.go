@@ -49,11 +49,16 @@ func CheckBlock(logger ulogger.Logger, settings *settings.Settings, blockStr str
 	if err != nil {
 		return nil, err
 	}
+	// ClientI does not declare Close; the concrete client gained it in DC7.
+	if c, ok := blockchainClient.(interface{ Close() error }); ok {
+		defer func() { _ = c.Close() }()
+	}
 
 	blockValidationClient, err := blockvalidation.NewClient(ctx, logger, settings, "ValidateBlockTemplate Command")
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = blockValidationClient.Close() }()
 
 	block, err := blockchainClient.GetBlock(ctx, blockHash)
 	if err != nil {

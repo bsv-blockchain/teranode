@@ -35,3 +35,21 @@ func TestStart_FSMContextCancellation(t *testing.T) {
 	require.True(t, errors.IsContextError(err), "expected context error, got %v", err)
 	mockBlockchainClient.AssertExpectations(t)
 }
+
+// TestStop_NilInnerServer covers the issue #1032 crash path: when newServer
+// fails (e.g. "no valid listen address"), Server.Init leaves the inner
+// s.server nil. The daemon error path then calls Server.Stop, which must not
+// dereference the nil inner server. Without the guard this panics with a
+// SIGSEGV in a daemon goroutine and takes the whole test binary down.
+func TestStop_NilInnerServer(t *testing.T) {
+	s := &Server{
+		logger:   ulogger.TestLogger{},
+		settings: &settings.Settings{},
+		// server intentionally left nil — mirrors the post-Init-failure state.
+	}
+
+	require.NotPanics(t, func() {
+		err := s.Stop(context.Background())
+		require.NoError(t, err)
+	})
+}

@@ -12,10 +12,15 @@ import (
 
 // MockMerkleProofConstructor is a mock implementation of MerkleProofConstructor for testing
 type MockMerkleProofConstructor struct {
-	txMeta      *TxMetaData
-	block       *model.Block
-	blockHeader *model.BlockHeader
-	subtrees    map[string]*subtree.Subtree
+	txMeta            *TxMetaData
+	block             *model.Block
+	blockHeader       *model.BlockHeader
+	subtrees          map[string]*subtree.Subtree
+	mainChainBlockIDs map[uint32]bool
+
+	// subtreeLoads counts complete-subtree deserializations, the cost the
+	// block-roots cache exists to cut.
+	subtreeLoads int
 }
 
 func (m *MockMerkleProofConstructor) GetTxMeta(txHash *chainhash.Hash) (*TxMetaData, error) {
@@ -31,6 +36,8 @@ func (m *MockMerkleProofConstructor) GetBlockHeader(blockHash *chainhash.Hash) (
 }
 
 func (m *MockMerkleProofConstructor) GetSubtree(subtreeHash *chainhash.Hash) (*subtree.Subtree, error) {
+	m.subtreeLoads++
+
 	if st, ok := m.subtrees[subtreeHash.String()]; ok {
 		return st, nil
 	}
@@ -40,6 +47,15 @@ func (m *MockMerkleProofConstructor) GetSubtree(subtreeHash *chainhash.Hash) (*s
 func (m *MockMerkleProofConstructor) FindBlocksContainingSubtree(subtreeHash *chainhash.Hash) ([]uint32, []uint32, []int, error) {
 	// Return mock data for testing
 	return []uint32{1}, []uint32{100}, []int{0}, nil
+}
+
+func (m *MockMerkleProofConstructor) IsBlockOnMainChain(blockID, _ uint32) (bool, error) {
+	if m.mainChainBlockIDs == nil {
+		// Default: all block IDs are on main chain. Preserves behaviour for existing tests
+		// that don't care about main-chain filtering.
+		return true, nil
+	}
+	return m.mainChainBlockIDs[blockID], nil
 }
 
 func TestConstructMerkleProof(t *testing.T) {
@@ -470,6 +486,108 @@ func TestGenerateBlockMerkleProof(t *testing.T) {
 		// First proof should be itself (duplicated for odd node)
 		assert.Equal(t, *subtreeHash3, *proof[0])
 		assert.Equal(t, 1, flags[0])
+	})
+}
+
+func TestConstructMerkleProof_MainChainFilter(t *testing.T) {
+	coinbaseHash, _ := chainhash.NewHashFromStr("abc1234567890123456789012345678901234567890123456789012345678901")
+	txHash, _ := chainhash.NewHashFromStr("1111111111111111111111111111111111111111111111111111111111111111")
+
+	st, err := subtree.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	st.Nodes = []subtree.Node{
+		{Hash: *coinbaseHash},
+		{Hash: *txHash},
+	}
+	subtreeRoot := st.RootHash()
+
+	block := &model.Block{
+		Subtrees: []*chainhash.Hash{subtreeRoot},
+	}
+	blockHeader := &model.BlockHeader{
+		HashMerkleRoot: subtreeRoot,
+	}
+
+	t.Run("tx in fork+main returns main-chain proof", func(t *testing.T) {
+		// BlockIDs[0]=42 is the fork (orphan); BlockIDs[1]=99 is the main-chain winner.
+		mock := &MockMerkleProofConstructor{
+			txMeta: &TxMetaData{
+				BlockIDs:     []uint32{42, 99},
+				BlockHeights: []uint32{100, 101},
+				SubtreeIdxs:  []int{0, 0},
+			},
+			block:       block,
+			blockHeader: blockHeader,
+			subtrees:    map[string]*subtree.Subtree{subtreeRoot.String(): st},
+			mainChainBlockIDs: map[uint32]bool{
+				42: false,
+				99: true,
+			},
+		}
+
+		proof, err := ConstructMerkleProof(txHash, mock)
+		require.NoError(t, err)
+		require.NotNil(t, proof)
+		assert.Equal(t, uint32(101), proof.BlockHeight, "must pick the main-chain entry, not BlockIDs[0]")
+	})
+
+	t.Run("tx only in orphan returns not-found", func(t *testing.T) {
+		mock := &MockMerkleProofConstructor{
+			txMeta: &TxMetaData{
+				BlockIDs:     []uint32{42},
+				BlockHeights: []uint32{100},
+				SubtreeIdxs:  []int{0},
+			},
+			block:       block,
+			blockHeader: blockHeader,
+			subtrees:    map[string]*subtree.Subtree{subtreeRoot.String(): st},
+			mainChainBlockIDs: map[uint32]bool{
+				42: false,
+			},
+		}
+
+		proof, err := ConstructMerkleProof(txHash, mock)
+		assert.Nil(t, proof)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not in main chain")
+	})
+
+	t.Run("malformed parallel arrays returns processing error", func(t *testing.T) {
+		mock := &MockMerkleProofConstructor{
+			txMeta: &TxMetaData{
+				BlockIDs:     []uint32{42, 99},
+				BlockHeights: []uint32{100}, // length mismatch
+				SubtreeIdxs:  []int{0, 0},
+			},
+		}
+
+		proof, err := ConstructMerkleProof(txHash, mock)
+		assert.Nil(t, proof)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "parallel arrays")
+	})
+
+	t.Run("tx in main-only block returns proof via explicit mock", func(t *testing.T) {
+		// Regression: exercise the new main-chain loop with an explicitly-on-chain
+		// mock entry, not relying on the nil-default = true behaviour.
+		mock := &MockMerkleProofConstructor{
+			txMeta: &TxMetaData{
+				BlockIDs:     []uint32{99},
+				BlockHeights: []uint32{101},
+				SubtreeIdxs:  []int{0},
+			},
+			block:       block,
+			blockHeader: blockHeader,
+			subtrees:    map[string]*subtree.Subtree{subtreeRoot.String(): st},
+			mainChainBlockIDs: map[uint32]bool{
+				99: true,
+			},
+		}
+
+		proof, err := ConstructMerkleProof(txHash, mock)
+		require.NoError(t, err)
+		require.NotNil(t, proof)
+		assert.Equal(t, uint32(101), proof.BlockHeight)
 	})
 }
 

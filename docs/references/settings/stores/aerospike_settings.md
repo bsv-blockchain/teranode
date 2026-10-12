@@ -29,8 +29,9 @@ Aerospike is a high-performance NoSQL database used as a backend for Teranode's 
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
 | WarmUp | bool | true | aerospike_warmUp | **CRITICAL** - Enable connection pool warm-up |
-| StoreBatcherDuration | time.Duration | 10ms | aerospike_storeBatcherDuration | Store batcher flush duration |
+| StoreBatcherDuration | time.Duration | 0 (unset) | aerospike_storeBatcherDuration | DEPRECATED: overrides `utxostore_storeBatcherDurationMillis` when set |
 | StatsRefreshDuration | time.Duration | 5s | aerospike_statsRefresh | Statistics refresh interval |
+| EnableClientMetrics | bool | true | aerospike_enable_client_metrics | Gate the `client.Stats()` polling goroutine |
 | Debug | bool | false | aerospike_debug | Enable Aerospike debug logging |
 
 ## Configuration Dependencies
@@ -111,11 +112,13 @@ aerospike:///?MaxRetries=5&SleepBetweenRetries=500ms&TotalTimeout=1s&SocketTimeo
 
 ### Batcher Configuration
 
-- `StoreBatcherDuration` controls flush frequency:
+- The store (Create) batcher timeout is `utxostore_storeBatcherDurationMillis`, the same key family as the get, spend and locked batchers:
 
     - Lower values (1-10ms): Lower latency, more frequent writes
     - Higher values (50-100ms): Better batching, higher throughput
     - Trade-off between latency and throughput
+
+- `aerospike_storeBatcherDuration` is deprecated. When set it still overrides `utxostore_storeBatcherDurationMillis` and logs a warning at startup.
 
 - Works in conjunction with UTXO store batcher settings
 
@@ -129,26 +132,26 @@ utxostore = aerospike://${aerospike_host}:${aerospike_port}/namespace?set=utxo&p
 
 **UTXO Store URL Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| set | string | "utxo" | Aerospike set name |
-| WarmUp | int | 0 | Warm-up connection count |
-| ConnectionQueueSize | int | 256 | Connection queue size |
-| LimitConnectionsToQueueSize | bool | false | Limit connections to queue size |
-| MinConnectionsPerNode | int | 0 | Minimum connections per node |
-| externalStore | string | "" | External transaction cache store URL |
+| Parameter                   | Type   | Default | Description                          |
+|-----------------------------|--------|---------|--------------------------------------|
+| set                         | string | "utxo"  | Aerospike set name                   |
+| WarmUp                      | int    | 0       | Warm-up connection count             |
+| ConnectionQueueSize         | int    | 128     | Connection queue size                |
+| LimitConnectionsToQueueSize | bool   | false   | Limit connections to queue size      |
+| MinConnectionsPerNode       | int    | 0       | Minimum connections per node         |
+| externalStore               | string | ""      | External transaction cache store URL |
 
 ## Validation Rules
 
-| Setting | Validation | Impact | When Checked |
-|---------|------------|--------|-------------|
-| Host | Must be valid hostname/IP | Connection failure if invalid | During store initialization |
-| Port | Must be valid port number (1-65535) | Connection failure if invalid | During store initialization |
-| BatchPolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure | During policy configuration |
-| ReadPolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure | During policy configuration |
-| WritePolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure | During policy configuration |
-| QueryPolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure | During policy configuration |
-| StatsRefreshDuration | Must be positive duration | Statistics update frequency | During store initialization |
+| Setting              | Validation                                 | Impact                        | When Checked                |
+|----------------------|--------------------------------------------|-------------------------------|-----------------------------|
+| Host                 | Must be valid hostname/IP                  | Connection failure if invalid | During store initialization |
+| Port                 | Must be valid port number (1-65535)        | Connection failure if invalid | During store initialization |
+| BatchPolicyURL       | Must be valid URL with aerospike:// scheme | Policy parsing failure        | During policy configuration |
+| ReadPolicyURL        | Must be valid URL with aerospike:// scheme | Policy parsing failure        | During policy configuration |
+| WritePolicyURL       | Must be valid URL with aerospike:// scheme | Policy parsing failure        | During policy configuration |
+| QueryPolicyURL       | Must be valid URL with aerospike:// scheme | Policy parsing failure        | During policy configuration |
+| StatsRefreshDuration | Must be positive duration                  | Statistics update frequency   | During store initialization |
 
 ## Configuration Examples
 
@@ -172,7 +175,6 @@ aerospike_useDefaultPolicies = false
 aerospike_batchPolicy = aerospike:///?MaxRetries=5&SleepBetweenRetries=500ms&TotalTimeout=64s&SocketTimeout=10s&ConcurrentNodes=4
 aerospike_readPolicy = aerospike:///?MaxRetries=3&SleepBetweenRetries=250ms&TotalTimeout=2s&SocketTimeout=1s
 aerospike_writePolicy = aerospike:///?MaxRetries=3&SleepBetweenRetries=250ms&TotalTimeout=2s&SocketTimeout=1s
-aerospike_storeBatcherDuration = 10ms
 aerospike_statsRefresh = 5s
 ```
 
@@ -180,7 +182,7 @@ aerospike_statsRefresh = 5s
 
 ```text
 aerospike_warmUp = true
-aerospike_storeBatcherDuration = 5ms
+utxostore_storeBatcherDurationMillis = 5
 aerospike_batchPolicy = aerospike:///?MaxRetries=5&TotalTimeout=30s&SocketTimeout=5s&ConcurrentNodes=8
 aerospike_statsRefresh = 10s
 ```
@@ -211,7 +213,7 @@ aerospike_port.docker.teranode3 = 3300
 ### Complete UTXO Store with Aerospike
 
 ```text
-utxostore = aerospike://${aerospike_host}:${aerospike_port}/utxo-store?set=utxo&WarmUp=32&ConnectionQueueSize=256&MinConnectionsPerNode=8&externalStore=file://${DATADIR}/${clientName}/external
+utxostore = aerospike://${aerospike_host}:${aerospike_port}/utxo-store?set=utxo&WarmUp=32&ConnectionQueueSize=128&MinConnectionsPerNode=8&externalStore=file://${DATADIR}/${clientName}/external
 
 aerospike_host = aerospike-cluster
 aerospike_port = 3000
@@ -227,14 +229,14 @@ aerospike_queryPolicy = aerospike:///?MaxRetries=3&TotalTimeout=2s&SocketTimeout
 
 ### Latency-Optimized Configuration
 
-- Lower `StoreBatcherDuration` (5-10ms)
+- Lower `utxostore_storeBatcherDurationMillis` (5-10)
 - Lower policy timeouts (1-2s total)
 - Higher `MinConnectionsPerNode` (8-16)
 - Enable `WarmUp`
 
 ### Throughput-Optimized Configuration
 
-- Higher `StoreBatcherDuration` (50-100ms)
+- Higher `utxostore_storeBatcherDurationMillis` (50-100)
 - Higher policy timeouts (5-10s total)
 - Higher `ConnectionQueueSize` (512-1024)
 - Higher `ConcurrentNodes` in batch policy (8-16)
@@ -243,13 +245,19 @@ aerospike_queryPolicy = aerospike:///?MaxRetries=3&TotalTimeout=2s&SocketTimeout
 
 - Lower `ConnectionQueueSize` (64-128)
 - Lower `MinConnectionsPerNode` (2-4)
-- Higher `StoreBatcherDuration` (reduce write frequency)
+- Higher `utxostore_storeBatcherDurationMillis` (reduce write frequency)
 - Lower `ConcurrentNodes` (1-2)
 
 ## Monitoring and Debugging
 
 - Set `Debug = true` for detailed Aerospike client logging
 - Monitor `StatsRefreshDuration` for performance statistics updates
+- Set `EnableClientMetrics = false` to stop the `client.Stats()` polling loop
+  entirely on deployments that do not consume those cluster-stats metrics. This
+  gates only that goroutine — the client's own per-result-code and latency
+  histograms are not collected either way, because `client.EnableMetrics` stays
+  disabled pending [#1001](https://github.com/bsv-blockchain/teranode/issues/1001),
+  so the flag cannot be used to relieve that contention
 - Check Aerospike server logs for connection and operation errors
 - Use Aerospike Management Console (AMC) for cluster monitoring
 

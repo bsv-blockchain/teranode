@@ -19,6 +19,15 @@ import (
 	"golang.org/x/crypto/ripemd160" //nolint:gosec // this is a known safe use of ripemd160
 )
 
+const (
+	// dataPushEncodedPrefix is the shared prefix for minimal-data push errors.
+	dataPushEncodedPrefix = "data push of %d bytes encoded "
+
+	// byteArraysNotSameLengthMsg is the error message for equal-length byte
+	// array comparisons that receive mismatched inputs.
+	byteArraysNotSameLengthMsg = "byte arrays are not the same length"
+)
+
 // An opcode defines the information related to a txscript opcode.  opfunc, if
 // present, is the function to call to perform the opcode on the script.  The
 // current script is passed in as a slice with the first member being the opcode
@@ -695,7 +704,7 @@ func (pop *parsedOpcode) checkMinimalDataPush() error {
 	} else if dataLen <= 75 {
 		if int(opcode) != dataLen {
 			// Should have used a direct push
-			str := fmt.Sprintf("data push of %d bytes encoded "+
+			str := fmt.Sprintf(dataPushEncodedPrefix+
 				"with opcode %s instead of OP_DATA_%d", dataLen,
 				pop.opcode.name, dataLen)
 
@@ -703,7 +712,7 @@ func (pop *parsedOpcode) checkMinimalDataPush() error {
 		}
 	} else if dataLen <= 255 {
 		if opcode != OP_PUSHDATA1 {
-			str := fmt.Sprintf("data push of %d bytes encoded "+
+			str := fmt.Sprintf(dataPushEncodedPrefix+
 				"with opcode %s instead of OP_PUSHDATA1",
 				dataLen, pop.opcode.name)
 
@@ -711,7 +720,7 @@ func (pop *parsedOpcode) checkMinimalDataPush() error {
 		}
 	} else if dataLen <= 65535 {
 		if opcode != OP_PUSHDATA2 {
-			str := fmt.Sprintf("data push of %d bytes encoded "+
+			str := fmt.Sprintf(dataPushEncodedPrefix+
 				"with opcode %s instead of OP_PUSHDATA2",
 				dataLen, pop.opcode.name)
 
@@ -1500,7 +1509,7 @@ func opcodeNum2bin(op *parsedOpcode, vm *Engine) error {
 
 	if size > MaxScriptElementSize {
 		return scriptError(ErrNumberTooBig,
-			fmt.Sprintf("n is larger than the max of %d", defaultScriptNumLen))
+			fmt.Sprintf("n is larger than the max of %d", MaxScriptElementSize))
 	}
 
 	// encode a as a script num so that we we take the bytes it
@@ -1583,14 +1592,17 @@ func opcodeSize(op *parsedOpcode, vm *Engine) error {
 //
 // Stack transformation: a -> ~a
 func opcodeInvert(op *parsedOpcode, vm *Engine) error {
-	ba, err := vm.dstack.PeekByteArray(0)
+	ba, err := vm.dstack.PopByteArray()
 	if err != nil {
 		return err
 	}
 
+	out := make([]byte, len(ba))
 	for i := range ba {
-		ba[i] = ba[i] ^ 0xFF
+		out[i] = ba[i] ^ 0xFF
 	}
+
+	vm.dstack.PushByteArray(out)
 
 	return nil
 }
@@ -1610,7 +1622,7 @@ func opcodeAnd(op *parsedOpcode, vm *Engine) error {
 	}
 
 	if len(a) != len(b) {
-		return scriptError(ErrInvalidInputLength, "byte arrays are not the same length")
+		return scriptError(ErrInvalidInputLength, byteArraysNotSameLengthMsg)
 	}
 
 	c := make([]byte, len(a))
@@ -1638,7 +1650,7 @@ func opcodeOr(op *parsedOpcode, vm *Engine) error {
 	}
 
 	if len(a) != len(b) {
-		return scriptError(ErrInvalidInputLength, "byte arrays are not the same length")
+		return scriptError(ErrInvalidInputLength, byteArraysNotSameLengthMsg)
 	}
 
 	c := make([]byte, len(a))
@@ -1666,7 +1678,7 @@ func opcodeXor(op *parsedOpcode, vm *Engine) error {
 	}
 
 	if len(a) != len(b) {
-		return scriptError(ErrInvalidInputLength, "byte arrays are not the same length")
+		return scriptError(ErrInvalidInputLength, byteArraysNotSameLengthMsg)
 	}
 
 	c := make([]byte, len(a))
@@ -2374,6 +2386,25 @@ func opcodeCodeSeparator(op *parsedOpcode, vm *Engine) error {
 	return nil
 }
 
+// cleanupScriptCode returns the script code with every push of the passed
+// signature removed, unless the ScriptVerifyBip143SigHash flag is set and the
+// signature's own hash type carries SIGHASH_FORKID, in which case the script
+// code is returned unchanged.  This is the rule of CleanupScriptCode in
+// bitcoin-sv src/script/interpreter.cpp.  An empty signature has hash type 0,
+// so it always takes the removal path.
+func (vm *Engine) cleanupScriptCode(script []parsedOpcode, sig []byte) []parsedOpcode {
+	var hashType SigHashType
+	if len(sig) > 0 {
+		hashType = SigHashType(sig[len(sig)-1])
+	}
+
+	if vm.hasFlag(ScriptVerifyBip143SigHash) && hashType&SigHashForkID != 0 {
+		return script
+	}
+
+	return removeOpcodeByData(script, sig)
+}
+
 // opcodeCheckSig treats the top 2 items on the stack as a public key and a
 // signature and replaces them with a bool which indicates if the signature was
 // successfully verified.
@@ -2440,9 +2471,9 @@ func opcodeCheckSig(op *parsedOpcode, vm *Engine) error {
 	// Generate the signature hash based on the signature hash type.
 	var hash []byte
 
-	// Remove the signature since there is no way for a signature
-	// to sign itself.
-	subScript = removeOpcodeByData(subScript, fullSigBytes)
+	// Remove the signature from the script code unless the fork id flag is
+	// set and the signature carries SIGHASH_FORKID (see cleanupScriptCode).
+	subScript = vm.cleanupScriptCode(subScript, fullSigBytes)
 
 	sigHashes := NewTxSigHashes(&vm.tx)
 
@@ -2630,7 +2661,7 @@ func opcodeCheckMultiSig(op *parsedOpcode, vm *Engine) error {
 	script := vm.subScript()
 
 	for _, sigInfo := range signatures {
-		script = removeOpcodeByData(script, sigInfo.signature)
+		script = vm.cleanupScriptCode(script, sigInfo.signature)
 	}
 
 	success := true

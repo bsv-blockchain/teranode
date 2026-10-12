@@ -16,7 +16,6 @@
 package blockchain
 
 import (
-	"container/ring"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -34,6 +33,9 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
+	blobstoreoptions "github.com/bsv-blockchain/teranode/stores/blob/options"
+	blobstoretypes "github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	blockchain_sql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
@@ -53,6 +55,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+const errStoreNoBlobDeletion = "blockchain store does not support blob deletion"
+
 // subscriber represents a subscription to blockchain notifications.
 //
 // subscriber encapsulates the connection to a client interested in blockchain events,
@@ -62,10 +66,21 @@ import (
 //
 // This struct enables the publish-subscribe pattern where multiple services can
 // receive real-time updates about blockchain state changes without polling.
+// subscriberBufferSize is the cap of each subscriber's pending-notification
+// channel. When this fills, the subscriber is too slow to keep up and is
+// evicted via deadSubscriptions to prevent backpressure on the broadcast loop.
+//
+// At normal block cadence (~1 notification per block) plus ~6 heartbeats/min,
+// 64 messages is roughly 9 minutes of buffer before eviction — short enough
+// that operators see the disconnect promptly, long enough to tolerate brief
+// consumer lag during reorgs.
+const subscriberBufferSize = 64
+
 type subscriber struct {
 	subscription blockchain_api.BlockchainAPI_SubscribeServer // The gRPC subscription server
 	source       string                                       // Source identifier of the subscription
 	done         chan struct{}                                // Channel to signal when subscription is done
+	pending      chan *blockchain_api.Notification            // Per-subscriber delivery buffer (issue #872)
 }
 
 // Blockchain represents the main blockchain service structure.
@@ -85,8 +100,10 @@ type subscriber struct {
 // enabling safe parallel processing of blockchain operations while maintaining data integrity.
 type Blockchain struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
+	blockchain_api.UnimplementedPeerRegistryServiceServer
 	addBlockChan                  chan *blockchain_api.AddBlockRequest // Channel for adding blocks
 	store                         blockchain_store.Store               // Storage interface for blockchain data
+	peerRegistryStore             blob.Store                           // Blob store for peer-registry persistence (nil = disabled)
 	logger                        ulogger.Logger                       // Logger instance
 	settings                      *settings.Settings                   // Configuration settings
 	newSubscriptions              chan subscriber                      // Channel for new subscriptions
@@ -100,10 +117,15 @@ type Blockchain struct {
 	kafkaChan                     chan *kafka.Message                  // Channel for Kafka messages
 	stats                         *gocore.Stat                         // Statistics tracking
 	finiteStateMachine            *fsm.FSM                             // FSM for blockchain state
+	fsmMu                         sync.Mutex                           // Serialises SendFSMEvent transitions (FSM read-modify-write + stateChangeTimestamp)
+	fsmPersistenceUncertain       bool                                 // Guarded by fsmMu; last write may have committed despite returning an error
 	stateChangeTimestamp          time.Time                            // Timestamp of last state change
 	AppCtx                        context.Context                      // Application context
 	localTestStartState           string                               // Initial state for testing
 	subscriptionManagerReady      atomic.Bool                          // Flag indicating subscription manager is ready
+
+	// Peer registry for tracking peers across all transport types
+	peerRegistry *CentralizedPeerRegistry
 
 	// Blob deletion batch token management
 	batchTokens   map[string]*blobDeletionBatchToken // Active batch tokens
@@ -156,12 +178,16 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	b := &Blockchain{
-		store:                         store,
-		logger:                        logger,
-		settings:                      tSettings,
-		addBlockChan:                  make(chan *blockchain_api.AddBlockRequest, 10),
-		newSubscriptions:              make(chan subscriber, 10),
-		deadSubscriptions:             make(chan subscriber, 10),
+		store:            store,
+		logger:           logger,
+		settings:         tSettings,
+		addBlockChan:     make(chan *blockchain_api.AddBlockRequest, 10),
+		newSubscriptions: make(chan subscriber, 10),
+		// deadSubscriptions buffered large enough to absorb a connection-pool
+		// burst where many subscribers fail Send simultaneously. The original
+		// cap (10) made the dead-push from drain goroutines a potential
+		// bottleneck during the kind of 18-EOF burst observed in issue #872.
+		deadSubscriptions:             make(chan subscriber, 1000),
 		subscribers:                   make(map[subscriber]bool),
 		notifications:                 make(chan *blockchain_api.Notification, 100),
 		newBlock:                      make(chan struct{}, 10),
@@ -169,9 +195,24 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		stats:                         gocore.NewStat("blockchain"),
 		AppCtx:                        ctx,
 		blocksFinalKafkaAsyncProducer: blocksFinalKafkaAsyncProducer,
-		batchTokens:                   make(map[string]*blobDeletionBatchToken),
-		mtpCache:                      newMTPCache(),
+		peerRegistry: NewCentralizedPeerRegistry(BanConfig{
+			Threshold: int32(tSettings.P2P.BanThreshold),
+			Duration:  tSettings.P2P.BanDuration,
+			// DecayInterval and DecayAmount intentionally use the defaults (1min / 1pt)
+			// rather than operator settings. The old BanManager used the same fixed
+			// values and no deployment has needed to tune them; exposing them as
+			// settings is deferred until there is an operator use-case.
+			DecayInterval: DefaultBanConfig().DecayInterval,
+			DecayAmount:   DefaultBanConfig().DecayAmount,
+			ReasonPoints:  DefaultBanConfig().ReasonPoints,
+		}),
+		batchTokens: make(map[string]*blobDeletionBatchToken),
+		mtpCache:    newMTPCache(),
 	}
+
+	// Wire the registry's diagnostic logger so corruption events surface via
+	// structured logs instead of stderr.
+	b.peerRegistry.SetLogger(logger)
 
 	// Initialize subscription manager as not ready
 	b.subscriptionManagerReady.Store(false)
@@ -337,9 +378,13 @@ func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockch
 // This method sets up the finite state machine (FSM) that governs the service's
 // operational states. It handles three initialization scenarios:
 //
-// 1. Test mode: Uses a predefined state for testing, bypassing normal state persistence
-// 2. New deployment: Initializes a default state when no previous state exists in storage
+// 1. Test mode: Uses a predefined state, bypassing configured and persisted state selection
+// 2. New deployment: Uses the configured boot state, defaulting to CATCHINGBLOCKS
 // 3. Normal operation: Restores the previously persisted state from storage
+//
+// Starting in RUNNING is checkpoint-gated. An unsafe configured RUNNING state aborts
+// initialization, while persisted RUNNING with a known below-checkpoint tip resumes
+// in CATCHINGBLOCKS. An unreadable tip aborts without rewriting persisted state.
 //
 // The method ensures that the service state is persisted to survive service restarts
 // and updates metrics to reflect the current operational state. The FSM provides a
@@ -358,9 +403,8 @@ func (b *Blockchain) Init(ctx context.Context) error {
 	if b.localTestStartState != "" {
 		b.finiteStateMachine.SetState(b.localTestStartState)
 
-		err := b.store.SetFSMState(ctx, b.finiteStateMachine.Current())
-		if err != nil {
-			b.logger.Errorf("[Blockchain][Init] Error setting FSM state in blockchain store: %v", err)
+		if err := b.store.SetFSMState(ctx, b.finiteStateMachine.Current()); err != nil {
+			return errors.NewStorageError("[Blockchain][Init] failed to persist local test FSM state", err)
 		}
 
 		return nil
@@ -369,18 +413,60 @@ func (b *Blockchain) Init(ctx context.Context) error {
 	// Set the FSM to the latest persisted state
 	stateStr, err := b.store.GetFSMState(ctx)
 	if err != nil {
-		b.logger.Errorf("[Blockchain][Init] Error getting FSM state: %v", err)
+		return errors.NewStorageError("[Blockchain][Init] failed to get persisted FSM state", err)
 	}
 
-	if stateStr == "" { // if no state is stored, set the default state
-		b.logger.Infof("[Blockchain][Init] Blockchain db doesn't have previous FSM state, storing FSM's default state: %v", b.finiteStateMachine.Current())
-
-		err = b.store.SetFSMState(ctx, b.finiteStateMachine.Current())
+	if stateStr == "" { // no persisted state: this is a fresh node
+		bootState, err := b.fsmBootState()
 		if err != nil {
-			// TODO: just logging now, consider adding retry
-			b.logger.Errorf("[Blockchain][Init] Error setting FSM state in blockchain store if the state is empty: %v", err)
+			return err
+		}
+
+		if bootState == blockchain_api.FSMStateType_RUNNING.String() {
+			if err = b.guardRunBelowHighestCheckpoint(ctx); err != nil {
+				return err
+			}
+		}
+
+		b.finiteStateMachine.SetState(bootState)
+		b.logger.Infof("[Blockchain][Init] fresh node, booting FSM into %v", bootState)
+
+		if err = b.store.SetFSMState(ctx, bootState); err != nil {
+			return errors.NewStorageError("[Blockchain][Init] failed to persist initial %s state", bootState, err)
 		}
 	} else { // if there is a state stored, set the FSM to that state
+		// Migration: the LEGACYSYNCING state was removed. A node persisted in it
+		// would otherwise restore into an orphan state with no outgoing transitions
+		// and be unable to RUN. Map it to CATCHINGBLOCKS (same RUN->RUNNING exit) and
+		// re-persist so the migration is durable.
+		if stateStr == "LEGACYSYNCING" {
+			b.logger.Infof("[Blockchain][Init] migrating persisted FSM state LEGACYSYNCING -> CATCHINGBLOCKS")
+			stateStr = blockchain_api.FSMStateType_CATCHINGBLOCKS.String()
+
+			if setErr := b.store.SetFSMState(ctx, stateStr); setErr != nil {
+				return errors.NewStorageError("[Blockchain][Init] failed to persist migrated FSM state", setErr)
+			}
+		}
+
+		if _, valid := blockchain_api.FSMStateType_value[stateStr]; !valid {
+			return errors.NewStateError("unrecognized persisted FSM state %q; repair stored state before restarting", stateStr)
+		}
+
+		if stateStr == blockchain_api.FSMStateType_RUNNING.String() {
+			if belowCheckpoint, gateErr := b.evaluateRunCheckpoint(ctx); gateErr != nil {
+				if !belowCheckpoint {
+					return gateErr
+				}
+
+				b.logger.Warnf("[Blockchain][Init] persisted RUNNING state is unsafe: %v; resuming in CATCHINGBLOCKS", gateErr)
+				stateStr = blockchain_api.FSMStateType_CATCHINGBLOCKS.String()
+
+				if setErr := b.store.SetFSMState(ctx, stateStr); setErr != nil {
+					return errors.NewStorageError("[Blockchain][Init] failed to persist safe FSM state after RUNNING gate rejection", setErr)
+				}
+			}
+		}
+
 		b.logger.Infof("[Blockchain][Init] Blockchain db has previous FSM state: %v, setting FSM's current state to it.", stateStr)
 		b.finiteStateMachine.SetState(stateStr)
 	}
@@ -388,6 +474,29 @@ func (b *Blockchain) Init(ctx context.Context) error {
 	prometheusBlockchainFSMCurrentState.Set(float64(blockchain_api.FSMStateType_value[b.finiteStateMachine.Current()]))
 
 	return nil
+}
+
+func (b *Blockchain) fsmBootState() (string, error) {
+	configured := ""
+	if b.settings != nil {
+		configured = strings.TrimSpace(b.settings.BlockChain.InitializeNodeInState)
+	}
+
+	if configured == "" {
+		return blockchain_api.FSMStateType_CATCHINGBLOCKS.String(), nil
+	}
+
+	switch configured {
+	case blockchain_api.FSMStateType_IDLE.String(),
+		blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
+		blockchain_api.FSMStateType_RUNNING.String():
+		return configured, nil
+	default:
+		return "", errors.NewConfigurationError(
+			"invalid blockchain_initializeNodeInState %q: expected IDLE, CATCHINGBLOCKS, or RUNNING",
+			configured,
+		)
+	}
 }
 
 // Start begins the blockchain service operations.
@@ -412,7 +521,53 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
 
+	if err := util.ValidateRequiredAdminAPIKey(b.settings.GRPCAdminAPIKey); err != nil {
+		return err
+	}
+	util.ValidateAdminAPIKey(b.logger, "Blockchain", b.settings.GRPCAdminAPIKey, b.settings.BlockChain.GRPCListenAddress, b.settings.SecurityLevelGRPC)
+
 	b.startKafka()
+
+	// Settings here still live under tSettings.P2P.* — the centralized
+	// registry inherits the existing operator-facing knobs unchanged. Moving
+	// them under tSettings.BlockChain.* is a follow-up rename.
+	registryTTL := resolvePeerRegistryTTL(b.logger, b.settings.P2P.PeerRegistryTTL)
+	cleanupInterval := b.settings.P2P.PeerRegistryCleanupInterval
+	maxSize := b.settings.P2P.PeerRegistryMaxSize
+
+	if storeURL := b.settings.BlockChain.PeerRegistryStore; storeURL != nil {
+		store, err := blob.NewStore(b.logger, storeURL,
+			blobstoreoptions.WithStoreType(blobstoretypes.PEERREGISTRYSTORE),
+			blobstoreoptions.WithHTTPAuthToken(b.settings.BlobHTTPAuthToken))
+		if err != nil {
+			b.logger.Warnf("[Blockchain] failed to construct peer registry blob store %s: %v", storeURL.Redacted(), err)
+		} else {
+			b.peerRegistryStore = store
+			// Use the configured TTL on Load so persisted reputation history
+			// survives exactly as long as operators have asked for, instead of
+			// a hardcoded value that ignored their config.
+			if err := b.peerRegistry.Load(ctx, store, registryTTL); err != nil {
+				b.logger.Warnf("[Blockchain] failed to load peer registry from %s: %v", storeURL.Redacted(), err)
+			} else {
+				b.logger.Infof("[Blockchain] loaded %d peers from %s", b.peerRegistry.Count(), storeURL.Redacted())
+			}
+			if interval := b.settings.BlockChain.PeerRegistrySaveInterval; interval > 0 {
+				// Tracked on the registry's WaitGroup so Close() drains it on Stop()
+				// alongside ban-decay and TTL cleanup.
+				b.peerRegistry.StartPeriodicSave(ctx, interval, store)
+			} else {
+				b.logger.Warnf("[Blockchain] PeerRegistrySaveInterval not configured, periodic saves disabled")
+			}
+		}
+	}
+
+	// Start ban score decay goroutine for the centralized peer registry.
+	b.peerRegistry.StartBanDecay(ctx)
+
+	// Start TTL+LRU cleanup so the registry can't grow unboundedly under
+	// peer churn. The driver loop is owned by the registry; we just feed it
+	// the operator-configured cadence and bounds. A zero interval disables.
+	b.peerRegistry.StartCleanup(ctx, cleanupInterval, registryTTL, maxSize)
 
 	go b.startSubscriptions()
 
@@ -429,8 +584,9 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// this will block
 	if err := util.StartGRPCServer(ctx, b.logger, b.settings, "blockchain", b.settings.BlockChain.GRPCListenAddress, func(server *grpc.Server) {
 		blockchain_api.RegisterBlockchainAPIServer(server, b)
+		blockchain_api.RegisterPeerRegistryServiceServer(server, b)
 		closeOnce.Do(func() { close(readyCh) })
-	}, nil); err != nil {
+	}, b.grpcAuthOptions()); err != nil {
 		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Blockchain][Start] can't start GRPC server", err))
 	}
 
@@ -485,8 +641,8 @@ func (b *Blockchain) startHTTP(ctx context.Context) error {
 		return c.String(http.StatusOK, "OK")
 	})
 
-	e.GET("/invalidate/:hash", b.invalidateHandler)
-	e.GET("/revalidate/:hash", b.revalidateHandler)
+	e.POST("/invalidate/:hash", b.invalidateHandler, b.requireAdminAPIKey)
+	e.POST("/revalidate/:hash", b.revalidateHandler, b.requireAdminAPIKey)
 
 	go func() {
 		<-ctx.Done()
@@ -681,15 +837,17 @@ func (b *Blockchain) startSubscriptions() {
 				b.logger.Debugf("[Blockchain Server] Sending notification: %s", notification)
 
 				b.subscribersMu.RLock()
-				// Collect dead subscribers to remove after releasing the read lock
+				// Non-blocking fan-out: push to each subscriber's pending buffer.
+				// One slow subscriber can no longer block delivery to the others
+				// (issue #872). Subscribers whose buffers are full are evicted as
+				// dead — that bounds how long a stuck consumer applies backpressure.
 				var dead []subscriber
 				for sub := range b.subscribers {
-					b.logger.Debugf("[Blockchain][startSubscriptions] Sending notification to %s: %s", sub.source, notification.Stringify())
-
-					// Send synchronously — NOT in a goroutine. Concurrent Send() calls
-					// on the same gRPC ServerStream corrupt the stream, causing the
-					// subscriber to be silently dropped and never receive notifications.
-					if err := sub.subscription.Send(notification); err != nil {
+					select {
+					case sub.pending <- notification:
+					default:
+						b.logger.Warnf("[Blockchain][startSubscriptions] Subscriber %s pending buffer full (cap=%d), marking dead", sub.source, subscriberBufferSize)
+						prometheusBlockchainSubscriberPendingFull.WithLabelValues(sub.source).Inc()
 						dead = append(dead, sub)
 					}
 				}
@@ -697,33 +855,168 @@ func (b *Blockchain) startSubscriptions() {
 
 				// Queue dead subscribers for removal
 				for _, s := range dead {
-					b.deadSubscriptions <- s
+					select {
+					case b.deadSubscriptions <- s:
+					case <-b.AppCtx.Done():
+						return
+					}
 				}
 			}()
 			b.stats.NewStat("channel-subscription.Send", true).AddTime(start)
 
 		case s := <-b.newSubscriptions:
-			// Send initial notification BEFORE adding to the subscribers map.
-			// This prevents concurrent Send() between sendInitialNotification
-			// and the notification delivery loop above.
-			b.sendInitialNotification(s)
-
+			// Add to map and start drain goroutine first so the subscriber is
+			// ready to receive before we enqueue the initial notification. This
+			// keeps the newSubscriptions case non-blocking: sendInitialNotification
+			// now enqueues into s.pending (non-blocking) rather than calling
+			// sub.subscription.Send directly, so a slow stream cannot stall here.
 			b.subscribersMu.Lock()
 			b.subscribers[s] = true
 			b.subscribersMu.Unlock()
 
+			// One drain goroutine per subscriber owns Send on that stream.
+			// Concurrent Send() on a single gRPC ServerStream is unsafe; the
+			// per-subscriber goroutine preserves the no-concurrent-Send invariant
+			// while letting a slow Send block only its own stream.
+			go b.runSubscriberDrain(s)
+
+			// Enqueue the initial chain-tip notification so it arrives ahead of
+			// any subsequent broadcast. Goes through pending so the broadcast loop
+			// is never blocked on initial delivery.
+			b.sendInitialNotification(s)
+
 		case s := <-b.deadSubscriptions:
 			b.subscribersMu.Lock()
-			delete(b.subscribers, s)
+			_, existed := b.subscribers[s]
+			if existed {
+				delete(b.subscribers, s)
+			}
 			remaining := len(b.subscribers)
 			b.subscribersMu.Unlock()
+			if existed && s.pending != nil {
+				// Close pending only on the first dead notice for this subscriber.
+				// A second dead push (e.g. the drain goroutine reporting a Send
+				// error after the broadcast loop has already marked the sub dead
+				// via buffer-full) would panic on a double-close. The map check
+				// above guards that.
+				close(s.pending)
+			}
 			safeClose(s.done)
 			b.logger.Infof("[Blockchain][startSubscriptions] Subscription removed (Total=%d).", remaining)
 		}
 	}
 }
 
-// sendInitialNotification sends the current chain tip (or genesis) to a new subscriber.
+// sendDeadline is the maximum time a single Send call is allowed before the
+// subscriber is evicted. gRPC ServerStream.Send has no context parameter, so
+// the deadline is enforced by racing the Send against a timer in a helper
+// goroutine. When the deadline fires, the drain goroutine exits immediately;
+// the helper goroutine continues until Send eventually returns, then discards
+// the result — this residual goroutine is bounded to one per stuck stream.
+const sendDeadline = 5 * time.Second
+
+// minPeerRegistryTTL is the floor applied to an operator-configured
+// p2p_peer_registry_ttl. A connected peer republishes node_status every
+// nodeStatusPublishInterval (10s, see services/p2p/Server.go), which refreshes
+// LastSeen via Register (services/blockchain/peer_registry.go), and the
+// gossip-handler batcher coalesces those refreshes for up to one minute
+// (registryReassertTTL, services/p2p/peer_registry_batcher.go) before
+// re-asserting. A TTL below this floor risks the cleanup loop expiring an
+// actively-connected peer between its own batched refreshes — the peer then
+// fails IsPeerUnhealthy (services/p2p/handle_catchup_metrics.go), which gates
+// it out of catchup, and drops any not-yet-flushed validated-header progress
+// (RecordValidatedPeerProgress, services/blockchain/peer_registry.go). Five
+// minutes is 5x the batcher's reassert window and 30x the publish interval,
+// comfortably covering a missed beat or two of either.
+const minPeerRegistryTTL = 5 * time.Minute
+
+// resolvePeerRegistryTTL applies the same coercion Server.go has always
+// applied for ttl<=0 (select the 24h default) and adds a floor for a
+// configured-but-too-short positive value. Unlike maxSize<=0 and
+// cleanupInterval<=0 (both documented, permanent opt-outs — see StartCleanup
+// and Cleanup's doc comments), there is no legitimate reason to run the
+// registry with a TTL below minPeerRegistryTTL, so that range is coerced
+// rather than honoured. The coercion is logged because a silently-corrected
+// setting is exactly the failure mode this settings-wiring batch exists to
+// fix.
+func resolvePeerRegistryTTL(logger ulogger.Logger, configured time.Duration) time.Duration {
+	if configured <= 0 {
+		return 24 * time.Hour
+	}
+	if configured < minPeerRegistryTTL {
+		logger.Warnf("[Blockchain] p2p_peer_registry_ttl %s is below the minimum %s; using %s instead", configured, minPeerRegistryTTL, minPeerRegistryTTL)
+		return minPeerRegistryTTL
+	}
+	return configured
+}
+
+// runSubscriberDrain pulls notifications from the subscriber's pending buffer
+// and calls Send on its gRPC stream. One goroutine per subscriber preserves
+// the gRPC no-concurrent-Send invariant on each stream while isolating slow
+// consumers — Send blocking here parks only this goroutine, not the broadcast
+// loop in startSubscriptions.
+//
+// Exits when:
+//   - pending is closed (cleanup path in startSubscriptions)
+//   - Send returns an error (stream broken or context cancelled)
+//   - Send exceeds sendDeadline (subscriber evicted to bound goroutine lifetime)
+//   - AppCtx is cancelled (service shutdown)
+//
+// On Send error or deadline the goroutine pushes itself onto deadSubscriptions
+// so cleanup is triggered. A second dead-push for the same subscriber (when
+// the broadcast loop already evicted it via buffer-full) is benign — the
+// cleanup path's map check makes the second handler a no-op.
+func (b *Blockchain) runSubscriberDrain(s subscriber) {
+	for {
+		select {
+		case <-b.AppCtx.Done():
+			return
+		case <-s.done:
+			return
+		case n, ok := <-s.pending:
+			if !ok {
+				return
+			}
+			// Race Send against a deadline. gRPC ServerStream.Send does not
+			// accept a context, so we use a helper goroutine. If the deadline
+			// fires first, we evict the subscriber and return. The helper
+			// goroutine is a residual leak bounded to one per stuck stream; it
+			// exits once Send eventually returns (error or success).
+			sendErr := make(chan error, 1)
+			go func() { sendErr <- s.subscription.Send(n) }()
+
+			select {
+			case err := <-sendErr:
+				if err != nil {
+					b.logger.Warnf("[Blockchain][runSubscriberDrain] Send to %s failed: %v", s.source, err)
+					prometheusBlockchainSubscriberSendErrors.WithLabelValues(s.source).Inc()
+					select {
+					case b.deadSubscriptions <- s:
+					case <-b.AppCtx.Done():
+					}
+					return
+				}
+			case <-time.After(sendDeadline):
+				b.logger.Warnf("[Blockchain][runSubscriberDrain] Send to %s exceeded %s deadline, evicting", s.source, sendDeadline)
+				prometheusBlockchainSubscriberSendErrors.WithLabelValues(s.source).Inc()
+				select {
+				case b.deadSubscriptions <- s:
+				case <-b.AppCtx.Done():
+				}
+				return
+			case <-b.AppCtx.Done():
+				return
+			case <-s.done:
+				return
+			}
+		}
+	}
+}
+
+// sendInitialNotification enqueues the current chain tip (or genesis) into the
+// subscriber's pending buffer. The drain goroutine delivers it via Send.
+// Non-blocking: if the buffer is full the subscriber is already overloaded and
+// will be evicted shortly; dropping the initial notification is acceptable.
 func (b *Blockchain) sendInitialNotification(sub subscriber) {
 	chainTip, _, err := b.store.GetBestBlockHeader(context.Background())
 	var initialNotification *blockchain_api.Notification
@@ -741,9 +1034,10 @@ func (b *Blockchain) sendInitialNotification(sub subscriber) {
 	}
 
 	b.logger.Infof("[Blockchain][startSubscriptions] Sending initial notification to %s", sub.source)
-	if err := sub.subscription.Send(initialNotification); err != nil {
-		b.logger.Errorf("[Blockchain][startSubscriptions] Failed to send initial notification to %s: %v", sub.source, err)
-		b.deadSubscriptions <- sub
+	select {
+	case sub.pending <- initialNotification:
+	default:
+		b.logger.Warnf("[Blockchain][startSubscriptions] Pending buffer full on initial notification for %s, dropping", sub.source)
 	}
 }
 
@@ -760,11 +1054,35 @@ func (b *Blockchain) sendInitialNotification(sub subscriber) {
 // - Releasing acquired resources
 //
 // Parameters:
-// - _: Context for the shutdown operation (currently unused)
+// - ctx: Context bounding the shutdown; the final-blocks producer stop is raced against it so a wedged broker can't stall shutdown
 //
 // Returns:
 // - Error if shutdown encounters issues, nil on successful shutdown
-func (b *Blockchain) Stop(_ context.Context) error {
+func (b *Blockchain) Stop(ctx context.Context) error {
+	// DC11: stop the async final-blocks producer first — before the peer-registry
+	// save below, which can early-return on failure. The Stop() is raced against
+	// ctx so a wedged broker flush can't block past the bounded Stop() window; the
+	// outstanding Stop() finishes the flush later if it can. Guarded and non-fatal.
+	kafka.StopProducerCtx(ctx, b.logger, "blockchain final-blocks", b.blocksFinalKafkaAsyncProducer)
+
+	// Drain background goroutines (ban decay loop, cleanup loop) before saving
+	// so we can't race a write against the final Save snapshot. Close is
+	// idempotent and safe to call even if StartBanDecay never ran.
+	b.peerRegistry.Close()
+
+	if b.peerRegistryStore != nil {
+		if err := b.peerRegistry.Save(ctx, b.peerRegistryStore); err != nil {
+			// A failed save on shutdown means peer state since the last
+			// periodic write is gone — banned peers may reconnect after
+			// restart. Log at error level and surface to the caller so the
+			// service-manager exit code reflects the partial shutdown.
+			b.logger.Errorf("[Blockchain] failed to save peer registry on shutdown: %v", err)
+			return errors.NewProcessingError("[Blockchain][Stop] save peer registry", err)
+		}
+		if err := b.peerRegistryStore.Close(ctx); err != nil {
+			b.logger.Warnf("[Blockchain] failed to close peer registry blob store: %v", err)
+		}
+	}
 	return nil
 }
 
@@ -986,7 +1304,7 @@ func (b *Blockchain) GetBlocks(ctx context.Context, req *blockchain_api.GetBlock
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlocks",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlockHeaders),
-		tracing.WithLogMessage(b.logger, "[GetBlocks] called for %s", util.ReverseAndHexEncodeSlice(req.Hash)),
+		tracing.WithDebugLogMessage(b.logger, "[GetBlocks] called for %s", util.ReverseAndHexEncodeSlice(req.Hash)),
 	)
 	defer deferFn()
 
@@ -1021,7 +1339,7 @@ func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_a
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockByHeight",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlock),
-		tracing.WithLogMessage(b.logger, "[GetBlockByHeight] called for %d", request.Height),
+		tracing.WithDebugLogMessage(b.logger, "[GetBlockByHeight] called for %d", request.Height),
 	)
 	defer deferFn()
 
@@ -1054,10 +1372,10 @@ func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_a
 
 // GetBlockByID retrieves a block by its ID.
 func (b *Blockchain) GetBlockByID(ctx context.Context, request *blockchain_api.GetBlockByIDRequest) (*blockchain_api.GetBlockResponse, error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockByHeight",
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockByID",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlock),
-		tracing.WithLogMessage(b.logger, "[GetBlockByID] called for %d", request.Id),
+		tracing.WithDebugLogMessage(b.logger, "[GetBlockByID] called for %d", request.Id),
 	)
 	defer deferFn()
 
@@ -1104,6 +1422,27 @@ func (b *Blockchain) GetNextBlockID(ctx context.Context, _ *emptypb.Empty) (*blo
 	return &blockchain_api.GetNextBlockIDResponse{
 		NextBlockId: nextID,
 	}, nil
+}
+
+// AssignBlockID returns a stable block ID for the given block hash (idempotent per hash).
+func (b *Blockchain) AssignBlockID(ctx context.Context, req *blockchain_api.AssignBlockIDRequest) (*blockchain_api.AssignBlockIDResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "AssignBlockID",
+		tracing.WithParentStat(b.stats),
+		tracing.WithLogMessage(b.logger, "[AssignBlockID] called"),
+	)
+	defer deferFn()
+
+	hash, err := chainhash.NewHash(req.BlockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[AssignBlockID] invalid block hash", err))
+	}
+
+	id, err := b.store.AssignBlockID(ctx, hash)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.AssignBlockIDResponse{BlockId: id}, nil
 }
 
 // GetBlockStats retrieves statistical information about the blockchain.
@@ -1789,14 +2128,15 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 	defer deferFn()
 
 	// Keep this subscription alive without endless loop - use a channel that blocks forever.
-	ch := make(chan struct{})
+	s := subscriber{
+		subscription: sub,
+		done:         make(chan struct{}),
+		source:       req.Source,
+		pending:      make(chan *blockchain_api.Notification, subscriberBufferSize),
+	}
 
 	b.logger.Infof("[Blockchain] Sending new subscription to handler for source: %s", req.Source)
-	b.newSubscriptions <- subscriber{
-		subscription: sub,
-		done:         ch,
-		source:       req.Source,
-	}
+	b.newSubscriptions <- s
 
 	b.subscribersMu.RLock()
 	noOfSubscribers := len(b.subscribers)
@@ -1806,20 +2146,18 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 	for {
 		select {
 		case <-ctx.Done():
-			// Client disconnected - clean up subscriber from map
+			// Client disconnected - clean up subscriber from map.
+			// Must pass the same subscriber value (including pending) so the map
+			// key matches the entry added in the newSubscriptions case.
 			b.logger.Infof("[Blockchain] GRPC client disconnected: %s", req.Source)
 			select {
-			case b.deadSubscriptions <- subscriber{
-				subscription: sub,
-				done:         ch,
-				source:       req.Source,
-			}:
+			case b.deadSubscriptions <- s:
 			case <-b.AppCtx.Done():
 				// Server is shutting down, startSubscriptions already cleaned up
 			}
 			return nil
-		case <-ch:
-			// Subscription ended.
+		case <-s.done:
+			// Subscription ended (drained and cleaned up by startSubscriptions).
 			return nil
 		}
 	}
@@ -2058,6 +2396,13 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[Blockchain][InvalidateBlock] request's hash is not valid", err))
 	}
 
+	// Refuse to invalidate the genesis block. The store's recursive CTE would flip the
+	// whole chain invalid in one statement and it could not be undone via reconsiderblock.
+	// Guarded in the store too (defense in depth); reject early here with a clear error.
+	if b.settings != nil && b.settings.ChainCfgParams != nil && blockHash.IsEqual(b.settings.ChainCfgParams.GenesisHash) {
+		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[Blockchain][InvalidateBlock] cannot invalidate the genesis block"))
+	}
+
 	// invalidate block will also invalidate all child blocks
 	invalidatedHashes, err := b.store.InvalidateBlock(ctx, blockHash)
 	if err != nil {
@@ -2244,10 +2589,10 @@ func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_ap
 //   - *emptypb.Empty: Empty response indicating successful notification queuing
 //   - error: Any error encountered during notification processing
 func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.Notification) (*emptypb.Empty, error) {
-	_, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "RevalidateBlock",
+	_, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "SendNotification",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainSendNotification),
-		tracing.WithLogMessage(b.logger, "[SendNotification] called for %s notification type %s", util.ReverseAndHexEncodeSlice(req.Hash), req.Type.String()),
+		tracing.WithDebugLogMessage(b.logger, "[SendNotification] called for %s notification type %s", util.ReverseAndHexEncodeSlice(req.Hash), req.Type.String()),
 	)
 	defer deferFn()
 
@@ -2445,7 +2790,6 @@ func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Emp
 // - RUNNING: Service is actively processing blocks and transactions
 // - SYNCING: Service is synchronizing with the network
 // - CATCHING_BLOCKS: Service is catching up on missing blocks
-// - LEGACY_SYNCING: Service is using legacy synchronization protocols
 // - STOPPING: Service is gracefully shutting down
 // - ERROR: Service has encountered an error condition
 //
@@ -2509,22 +2853,6 @@ func (b *Blockchain) GetFSMCurrentState(_ context.Context, _ *emptypb.Empty) (*b
 	}, nil
 }
 
-// WaitForFSMtoTransitionToGivenState waits for the FSM to reach a specific state.
-func (b *Blockchain) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetState blockchain_api.FSMStateType) error {
-	for b.finiteStateMachine.Current() != targetState.String() {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		b.logger.Debugf("Waiting 1 second for FSM to transition to %v state, currently at: %v", targetState.String(), b.finiteStateMachine.Current())
-		time.Sleep(1 * time.Second) // Wait and check again in 1 second
-	}
-
-	return nil
-}
-
 // WaitUntilFSMTransitionFromIdleState waits for the FSM to transition from the IDLE state.
 func (b *Blockchain) WaitUntilFSMTransitionFromIdleState(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	// Wait until:
@@ -2573,67 +2901,90 @@ func (b *Blockchain) IsFullyReady(ctx context.Context) (bool, error) {
 	return isReady, nil
 }
 
-// SendFSMEvent sends an event to the finite state machine.
+// SendFSMEvent sends an event to the finite state machine and returns the state
+// reached by an accepted, persisted transition. On a persistence error, memory
+// remains in its prior state and no success notification is sent. The database
+// may nevertheless have committed before returning an error. Retry the failed
+// event or use a convenience RPC to reconcile its target before relying on
+// state across a restart.
 func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.SendFSMEventRequest) (*blockchain_api.GetFSMStateResponse, error) {
+	// Serialise FSM transitions. SendFSMEvent performs a read-modify-write across
+	// the FSM (prior-state checks -> Event -> stateChangeTimestamp update) that
+	// must be atomic; concurrent callers (e.g. Run and CatchUpBlocks arriving as
+	// separate gRPC requests) would otherwise race on stateChangeTimestamp and
+	// interleave transitions. The callbacks persist and notify without re-entering
+	// SendFSMEvent, so holding this lock does not cause recursive locking.
+	b.fsmMu.Lock()
+	defer b.fsmMu.Unlock()
+	return b.sendFSMEventLocked(ctx, eventReq)
+}
+
+// sendFSMEventLocked requires fsmMu to be held.
+func (b *Blockchain) sendFSMEventLocked(ctx context.Context, eventReq *blockchain_api.SendFSMEventRequest) (*blockchain_api.GetFSMStateResponse, error) {
 	b.logger.Infof("[Blockchain Server] Received FSM event req: %v, will send event to the FSM", eventReq)
 
 	priorState := b.finiteStateMachine.Current()
 
-	// Prevent manual transitions from CATCHINGBLOCKS state
-	// The state should only exit CATCHINGBLOCKS programmatically when catchup completes
-	if priorState == blockchain_api.FSMStateType_CATCHINGBLOCKS.String() {
-		// Only allow RUN event (catchup completion) to exit CATCHINGBLOCKS
-		if eventReq.Event != blockchain_api.FSMEventType_RUN {
-			errMsg := "cannot manually transition from CATCHINGBLOCKS state - catchup must complete first"
-			b.logger.Warnf("[Blockchain Server] %s (attempted event: %v)", errMsg, eventReq.Event)
-			return nil, errors.NewInvalidArgumentError(errMsg)
-		}
-	}
-
-	// Refuse to transition to RUNNING while the local chain tip is still below
+	// Refuse a valid transition to RUNNING while the local chain tip is still below
 	// the network's highest hard-coded checkpoint. Pre-checkpoint heights are
-	// guaranteed to be deep history (mainnet's highest is block 938000), so a
+	// guaranteed to be deep history, so a
 	// node sitting below them is mid-IBD even if a catchup worker thinks it
 	// has finished its current chunk. Going to RUNNING in that state lets the
 	// mempool/validator operate under pre-Genesis output rules and the legacy
 	// service relay tx invs that post-Genesis peers ban on sight
 	// (`bad-txns-vout-p2sh BAN THRESHOLD EXCEEDED`).
 	//
-	// The gate only applies when the prior state already implies a "caught
-	// up" claim (LEGACYSYNCING or CATCHINGBLOCKS → RUNNING). IDLE → RUNNING
-	// is the boot path: a fresh node has no tip yet, must reach RUNNING for
-	// downstream services (legacy, p2p) to start syncing, and tx relay is
-	// suppressed while FSM != RUNNING so allowing the transition is safe.
+	// The rule applies to every RUN, whatever the source state. It used to exempt
+	// IDLE -> RUNNING as an operator override, on the reasoning that a fresh node
+	// boots into CATCHINGBLOCKS (see Init) and so could never take the exempt
+	// path. That reasoning makes a safety property depend on a boot default, and
+	// the default has already changed once. It is also not exhaustive: a store
+	// persisted in IDLE before the default changed, or a node stopped from
+	// RUNNING to IDLE and then overtaken by a checkpoint bump in go-chaincfg,
+	// both reach the exempt path with a tip below the checkpoint. The property
+	// belongs in this gate rather than in the choice of boot state.
+	//
+	// Rejecting from IDLE preserves the operator's choice to remain parked or to
+	// enter CATCHINGBLOCKS explicitly. It also keeps the RUN API truthful: a nil
+	// error means the FSM reached RUNNING.
+	//
+	// Check Can before consulting the store. Direct SendFSMEvent callers can send
+	// RUN from RUNNING even though the convenience Run RPC short-circuits it; an
+	// invalid transition should return the FSM error without an unrelated store
+	// read or checkpoint error.
 	if eventReq.Event == blockchain_api.FSMEventType_RUN &&
-		priorState != blockchain_api.FSMStateType_IDLE.String() {
+		b.finiteStateMachine.Can(eventReq.Event.String()) {
 		if err := b.guardRunBelowHighestCheckpoint(ctx); err != nil {
-			b.logger.Warnf("[Blockchain Server] RUN rejected: %s", err.Error())
+			b.logger.Warnf("[Blockchain Server] RUN refused: %s", err.Error())
 			return nil, errors.WrapGRPC(err)
 		}
 	}
 
-	err := b.finiteStateMachine.Event(ctx, eventReq.Event.String())
+	// Once admitted, complete the local transition even if the RPC is cancelled.
+	// looplab/fsm v1.0.2 leaves a pending transition behind when its context is
+	// cancelled during Event, rejecting every subsequent event until restart.
+	transitionCtx := context.WithoutCancel(ctx)
+	err := b.finiteStateMachine.Event(transitionCtx, eventReq.Event.String())
 	if err != nil {
-		b.logger.Debugf("[Blockchain Server] Error sending event to FSM, state has not changed.")
-		switch err.(type) {
+		b.logger.Debugf("[Blockchain Server] Error sending event to FSM; in-memory state has not changed; a failed store write may have committed.")
+		switch eventErr := err.(type) {
+		case fsm.InTransitionError:
+			return nil, errors.WrapGRPC(errors.NewStateError("[Blockchain Server] FSM event %s rejected: pending transition has not retired; restart required", eventReq.Event.String(), err))
 		case fsm.InvalidEventError, fsm.NoTransitionError:
 			return nil, errors.WrapGRPC(errors.NewStateError("[Blockchain Server] FSM event %s rejected in state %s", eventReq.Event.String(), priorState, err))
+		case fsm.CanceledError:
+			// looplab's cancellation wrapper does not unwrap its cause. Preserve
+			// the storage error and its gRPC details for the caller.
+			if eventErr.Err != nil {
+				err = eventErr.Err
+			}
+			return nil, errors.WrapGRPC(err)
 		default:
 			return nil, errors.WrapGRPC(err)
 		}
 	}
 
 	state := b.finiteStateMachine.Current()
-
-	// set the state in persistent storage
-	err = b.store.SetFSMState(ctx, state)
-	// check if there was an error setting the state
-	if err != nil {
-		b.logger.Errorf("[Blockchain Server] Error setting the state in blockchain db: %v", err)
-	}
-
-	// Log the state immediately after storing it
-	// b.logger.Infof("[Blockchain Server] state immediately after storing: %v", state)
 
 	resp := &blockchain_api.GetFSMStateResponse{
 		State: blockchain_api.FSMStateType(blockchain_api.FSMStateType_value[state]),
@@ -2654,95 +3005,119 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 	return resp, nil
 }
 
+// fsmStoreContext bounds store operations performed while fsmMu is held.
+// Non-positive configuration falls back to the default database timeout.
+func (b *Blockchain) fsmStoreContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := time.Duration(b.settings.BlockChain.StoreDBTimeoutMillis) * time.Millisecond
+	if timeout <= 0 {
+		timeout = time.Duration(settings.DefaultBlockchainStoreDBTimeoutMillis) * time.Millisecond
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
 // guardRunBelowHighestCheckpoint blocks the RUN transition when the local
 // chain tip has not yet reached the highest hard-coded checkpoint for the
-// active network. Returns nil when the chain has reached the checkpoint, the
-// network defines no checkpoints (regtest, brand-new networks), or the store
-// has no chain tip yet (returns a state error so the caller retries later).
+// active network.
+//
+// Returns nil when the chain has reached the checkpoint or the network defines
+// no checkpoints. Store failures, missing tip metadata, and a tip below the
+// checkpoint all fail closed.
 func (b *Blockchain) guardRunBelowHighestCheckpoint(ctx context.Context) error {
+	_, err := b.evaluateRunCheckpoint(ctx)
+	return err
+}
+
+// evaluateRunCheckpoint returns the RUN gate error and whether it reflects a
+// successfully observed below-checkpoint tip. Read failures and missing metadata
+// return false with an error: callers must not treat uncertainty as a low tip.
+func (b *Blockchain) evaluateRunCheckpoint(ctx context.Context) (belowCheckpoint bool, gateErr error) {
 	if b.settings == nil || b.settings.ChainCfgParams == nil {
-		return nil
+		return false, nil
 	}
 
 	highest := HighestCheckpointHeight(b.settings.ChainCfgParams.Checkpoints)
 	if highest == 0 {
-		return nil
+		return false, nil
 	}
 
-	_, meta, err := b.store.GetBestBlockHeader(ctx)
+	storeCtx, cancel := b.fsmStoreContext(ctx)
+	defer cancel()
+	_, meta, err := b.store.GetBestBlockHeader(storeCtx)
 	if err != nil {
-		return errors.NewStateError("cannot read best block header to evaluate RUN gate", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			return false, errors.NewStateError("RUN gate best-header read timed out at the store or caller deadline; check blockchain_store_dbTimeoutMillis and caller timeout", err)
+		}
+		return false, errors.NewStateError("cannot read best block header to evaluate RUN gate", err)
 	}
 	if meta == nil {
-		return errors.NewStateError("best block header meta unavailable; refusing RUN")
+		return false, errors.NewStateError("best block header meta unavailable, cannot evaluate RUN gate")
 	}
 
 	if meta.Height < highest {
-		return errors.NewStateError(
-			"refusing RUN: chain tip height %d is below highest checkpoint %d for %s",
+		return true, errors.NewStateError(
+			"refusing RUN: chain tip height %d is below highest checkpoint %d for %s; use setfsmstate --fsmstate catchingblocks to start synchronization",
 			meta.Height, highest, b.settings.ChainCfgParams.Name,
 		)
 	}
 
-	return nil
+	return false, nil
 }
 
 // HighestCheckpointHeight returns the largest Height in the supplied
-// checkpoint list, or 0 if the list is empty. Exported so callers in
-// other packages (e.g. blockvalidation) can share the same definition
-// rather than maintaining a parallel copy.
+// checkpoint list, or 0 if the list is empty. Retained for the many callers
+// in this and other packages; delegates to model.HighestCheckpointHeight so
+// there is a single definition (invariant I3) rather than a parallel copy.
 func HighestCheckpointHeight(checkpoints []chaincfg.Checkpoint) uint32 {
-	var highest uint32
-	for _, cp := range checkpoints {
-		if cp.Height < 0 {
-			continue
-		}
-		h := uint32(cp.Height)
-		if h > highest {
-			highest = h
-		}
-	}
-	return highest
+	return model.HighestCheckpointHeight(checkpoints)
 }
 
-// Run transitions the blockchain service to the running state.
+// sendFSMConvenienceEvent checks authoritative state and reconciles ambiguous
+// persistence while holding the same lock as event admission. Clean no-ops do
+// not write or notify; uncertain no-ops succeed only after an acknowledged write.
+func (b *Blockchain) sendFSMConvenienceEvent(ctx context.Context, event blockchain_api.FSMEventType, target blockchain_api.FSMStateType) (*emptypb.Empty, error) {
+	b.fsmMu.Lock()
+	defer b.fsmMu.Unlock()
+
+	current := b.finiteStateMachine.Current()
+	if current == target.String() {
+		if b.fsmPersistenceUncertain {
+			if target == blockchain_api.FSMStateType_RUNNING {
+				if err := b.guardRunBelowHighestCheckpoint(ctx); err != nil {
+					return nil, errors.WrapGRPC(err)
+				}
+			}
+			storeCtx, cancel := b.fsmStoreContext(context.WithoutCancel(ctx))
+			defer cancel()
+			if err := b.store.SetFSMState(storeCtx, current); err != nil {
+				b.logger.Errorf("[Blockchain Server] Failed to reconcile FSM state %s; in-memory state unchanged; database write may have committed: %v", current, err)
+				return nil, errors.WrapGRPC(errors.NewStorageError("failed to reconcile FSM state %s", current, err))
+			}
+			b.fsmPersistenceUncertain = false
+		}
+		return &emptypb.Empty{}, nil
+	}
+	// Neither automatic entry into catchup nor promotion may undo an operator
+	// STOP. Explicit operator requests use SendFSMEvent to resume from IDLE.
+	if current == blockchain_api.FSMStateType_IDLE.String() &&
+		(event == blockchain_api.FSMEventType_RUN || event == blockchain_api.FSMEventType_CATCHUPBLOCKS) {
+		return nil, errors.WrapGRPC(errors.NewStateError("automatic %s refused from IDLE; use SendFSMEvent for an explicit operator %s", event.String(), event.String()))
+	}
+	if _, err := b.sendFSMEventLocked(ctx, &blockchain_api.SendFSMEventRequest{Event: event}); err != nil {
+		return nil, err
+	}
+	return &emptypb.Empty{}, nil
+}
+
+// Run automatically promotes a caught-up node to RUNNING. It preserves operator
+// IDLE; explicit operator RUN uses SendFSMEvent and the same checkpoint gate.
 func (b *Blockchain) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	// check whether the FSM is already in the RUNNING state
-	if b.finiteStateMachine.Is(blockchain_api.FSMStateType_RUNNING.String()) {
-		return &emptypb.Empty{}, nil
-	}
-
-	req := &blockchain_api.SendFSMEventRequest{
-		Event: blockchain_api.FSMEventType_RUN,
-	}
-
-	_, err := b.SendFSMEvent(ctx, req)
-	if err != nil {
-		// unable to send the event, no need to update the state.
-		return nil, err
-	}
-
-	return nil, nil
+	return b.sendFSMConvenienceEvent(ctx, blockchain_api.FSMEventType_RUN, blockchain_api.FSMStateType_RUNNING)
 }
 
-// CatchUpBlocks transitions the service to catch up missing blocks.
+// CatchUpBlocks automatically starts catchup from RUNNING and preserves operator
+// IDLE. Explicit operator catchup from IDLE uses SendFSMEvent(CATCHUPBLOCKS).
 func (b *Blockchain) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	// check whether the FSM is already in the CATCHINGBLOCKS state
-	if b.finiteStateMachine.Is(blockchain_api.FSMStateType_CATCHINGBLOCKS.String()) {
-		return &emptypb.Empty{}, nil
-	}
-
-	req := &blockchain_api.SendFSMEventRequest{
-		Event: blockchain_api.FSMEventType_CATCHUPBLOCKS,
-	}
-
-	_, err := b.SendFSMEvent(ctx, req)
-	if err != nil {
-		// unable to send the event, no need to update the state.
-		return nil, err
-	}
-
-	return nil, nil
+	return b.sendFSMConvenienceEvent(ctx, blockchain_api.FSMEventType_CATCHUPBLOCKS, blockchain_api.FSMStateType_CATCHINGBLOCKS)
 }
 
 // ReportPeerFailure handles reports of peer download failures and broadcasts to subscribers.
@@ -2770,43 +3145,8 @@ func (b *Blockchain) ReportPeerFailure(ctx context.Context, req *blockchain_api.
 	return &emptypb.Empty{}, nil
 }
 
-// LegacySync transitions the service to legacy sync mode.
-func (b *Blockchain) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	// check whether the FSM is already in the LEGACYSYNC state
-	if b.finiteStateMachine.Is(blockchain_api.FSMStateType_LEGACYSYNCING.String()) {
-		return &emptypb.Empty{}, nil
-	}
-
-	req := &blockchain_api.SendFSMEventRequest{
-		Event: blockchain_api.FSMEventType_LEGACYSYNC,
-	}
-
-	_, err := b.SendFSMEvent(ctx, req)
-	if err != nil {
-		// unable to send the event, no need to update the state.
-		return nil, err
-	}
-
-	return &emptypb.Empty{}, nil
-}
-
 func (b *Blockchain) Idle(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	// check whether the FSM is already in the Idle state
-	if b.finiteStateMachine.Is(blockchain_api.FSMStateType_IDLE.String()) {
-		return &emptypb.Empty{}, nil
-	}
-
-	req := &blockchain_api.SendFSMEventRequest{
-		Event: blockchain_api.FSMEventType_STOP,
-	}
-
-	_, err := b.SendFSMEvent(ctx, req)
-	if err != nil {
-		// unable to send the event, no need to update the state.
-		return nil, err
-	}
-
-	return &emptypb.Empty{}, nil
+	return b.sendFSMConvenienceEvent(ctx, blockchain_api.FSMEventType_STOP, blockchain_api.FSMStateType_IDLE)
 }
 
 // Legacy endpoints
@@ -2928,39 +3268,53 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 		return []*chainhash.Hash{genesisBlock.Header.Hash()}, nil
 	}
 
-	// From https://github.com/bitcoinsv/bsvd/blob/20910511e9006a12e90cddc9f292af8b82950f81/blockchain/chainview.go#L351
-	// Calculate the max number of entries that will ultimately be in the
-	// block locator. See the description of the algorithm for how these
-	// numbers are derived.
-	var maxEntries uint8
+	heights := computeLocatorHeights(blockHeaderHeight)
 
-	if blockHeaderHeight <= 12 {
-		blockHeaderHeightUint8, err := safeconversion.Uint32ToUint8(blockHeaderHeight)
-		if err != nil {
-			return nil, errors.WrapGRPC(err)
-		}
-
-		maxEntries = blockHeaderHeightUint8 + 1
-	} else {
-		// Requested hash itself + previous 10 entries + genesis block.
-		// Then floor(log2(height-10)) entries for the skip portion.
-		adjustedHeight := blockHeaderHeight - 10
-		maxEntries = 12 + fastLog2Floor(adjustedHeight)
+	// Fast path: when blockHeaderHash is on the main chain, fetch every locator
+	// height in a single indexed query instead of one recursive-CTE walk per
+	// entry. ok=false means the store could not safely satisfy the fast path
+	// (fork tip, mid-rebuild, or a missing height) — fall back to the walk.
+	hashesByHeight, ok, err := store.MainChainBlockHashesByHeights(ctx, blockHeaderHash, heights)
+	if err != nil {
+		return nil, err
 	}
 
-	locator := make([]*chainhash.Hash, 0, maxEntries)
-	step := uint32(1)
-	height := blockHeaderHeight
-	hash := blockHeaderHash
-
-	for {
-		block, _, err := store.GetBlockInChainByHeightHash(ctx, height, hash)
-		if err != nil {
-			return nil, err
+	if ok {
+		locator := make([]*chainhash.Hash, 0, len(heights))
+		for _, h := range heights {
+			// The store guarantees a complete result set when ok is true.
+			locator = append(locator, hashesByHeight[h])
 		}
 
-		hash = block.Header.Hash()
-		locator = append(locator, hash)
+		return locator, nil
+	}
+
+	return getBlockLocatorByWalk(ctx, store, blockHeaderHash, heights)
+}
+
+// computeLocatorHeights returns the descending list of heights that make up a
+// block locator anchored at blockHeaderHeight: the height itself, the previous
+// 10, then heights at exponentially doubling gaps, ending at genesis (0). The
+// progression is pure arithmetic and does not depend on any stored block, so
+// the full set is known before any database access.
+func computeLocatorHeights(blockHeaderHeight uint32) []uint32 {
+	// Pre-allocate: at most 1 (the height itself) + 10 + floor(log2(height-10))
+	// for the doubling-skip portion + 1 (genesis) entries.
+	var maxEntries uint8
+	if blockHeaderHeight <= 12 {
+		maxEntries = uint8(blockHeaderHeight) + 1
+	} else {
+		// Requested height + previous 10 + genesis, then floor(log2(height-10))
+		// entries for the doubling-skip portion.
+		maxEntries = 12 + fastLog2Floor(blockHeaderHeight-10)
+	}
+
+	heights := make([]uint32, 0, maxEntries)
+	step := uint32(1)
+	height := blockHeaderHeight
+
+	for {
+		heights = append(heights, height)
 
 		if height == 0 {
 			break
@@ -2972,70 +3326,143 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 
 		height -= step
 
-		if len(locator) > 10 {
+		if len(heights) > 10 {
 			step *= 2
 		}
+	}
+
+	return heights
+}
+
+// getBlockLocatorByWalk builds a locator by walking the chain identified by
+// startHash, fetching the block at each height with a recursive-CTE lookup.
+// Each call uses the hash returned by the previous call as its new start, so
+// the walk hops forward through the height schedule. This is the original
+// behavior, retained as the fallback for fork tips.
+func getBlockLocatorByWalk(ctx context.Context, store blockchain_store.Store, startHash *chainhash.Hash, heights []uint32) ([]*chainhash.Hash, error) {
+	locator := make([]*chainhash.Hash, 0, len(heights))
+	hash := startHash
+
+	for _, h := range heights {
+		block, _, err := store.GetBlockInChainByHeightHash(ctx, h, hash)
+		if err != nil {
+			return nil, err
+		}
+
+		hash = block.Header.Hash()
+		locator = append(locator, hash)
 	}
 
 	return locator, nil
 }
 
+// maxHeadersToCommonAncestor caps the response, and so the single header read that
+// serves it, for every entry point: the gRPC handler, LocalClient and the asset
+// service's route all reach getBlockHeadersToCommonAncestor, and only the HTTP handler
+// caps its own n. It matches that handler's cap, so no in-tree request changes shape; a
+// direct gRPC caller asking for more is capped by design. A var so tests can lower it.
+var maxHeadersToCommonAncestor uint32 = 10_000
+
+// getBlockHeadersToCommonAncestor returns up to maxHeaders headers on hashTarget's
+// chain ending at the newest block the locator and that chain share, ordered from the
+// highest height down to that common ancestor.
+//
+// It resolves the ancestor through GetLatestBlockHeaderFromBlockLocator rather than
+// walking. The previous implementation read the chain backwards in 1,000-header pages
+// until a locator hash turned up, so a locator matching nothing, which any
+// unauthenticated caller of the asset service's /headers_to_common_ancestor route can
+// send, cost work proportional to chain height: around 900 store reads and 900k headers
+// materialised at present mainnet height, for a response of at most maxHeaders.
+//
+// GetLatestBlockHeaderFromBlockLocator picks the highest-height locator entry on
+// hashTarget's chain, which is the same block the backward walk stopped at, since the
+// walk stopped at the first locator hash it met coming down from the target. The
+// sibling getBlockHeadersFromCommonAncestor already resolves its ancestor this way.
+//
+// Cost: for a target on the main chain this is at most four store reads whatever the
+// distance to the locator. For a fork or stale target, or while the main chain is being
+// rebuilt, the store answers the ancestor lookup with a recursive walk over the target's
+// whole ancestry instead, which is still proportional to its height. That walk is inside
+// the store and shared with the sibling function, so bounding it belongs there.
 func getBlockHeadersToCommonAncestor(ctx context.Context, store blockchain_store.Store, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	const (
-		numberOfHeaders = 1_000
-		searchLimit     = 10_000
-	)
-
-	var (
-		commonAncestorMeta *model.BlockHeaderMeta
-	)
-
-	blockLocatorMap := make(map[chainhash.Hash]struct{}, len(blockLocatorHashes))
-	for _, hash := range blockLocatorHashes {
-		blockLocatorMap[*hash] = struct{}{}
+	if maxHeaders == 0 || len(blockLocatorHashes) == 0 {
+		return nil, nil, errors.NewNotFoundError("common ancestor hash not found")
 	}
 
-	max := int(maxHeaders)
+	// Without this, a caller asking for more headers than the chain is long turns the
+	// single read below into a read of the whole span: the asset handler casts a
+	// negative n straight to uint32, so maxHeaders of 4,294,967,295 is reachable from
+	// one query parameter.
+	if maxHeaders > maxHeadersToCommonAncestor {
+		maxHeaders = maxHeadersToCommonAncestor
+	}
+
+	locator := make([]chainhash.Hash, len(blockLocatorHashes))
+	for i, hash := range blockLocatorHashes {
+		locator[i] = *hash
+	}
+
+	// A locator entry that is not on this chain, or no entry at all, is a not-found
+	// answer rather than a storage fault: it is what an unrelated or absent locator
+	// looks like, and the walk this replaces reported it the same way.
+	_, ancestorMeta, err := store.GetLatestBlockHeaderFromBlockLocator(ctx, hashTarget, locator)
+	if err != nil {
+		if errors.Is(err, errors.ErrNotFound) || errors.Is(err, errors.ErrBlockNotFound) {
+			return nil, nil, errors.NewNotFoundError("common ancestor hash not found")
+		}
+
+		return nil, nil, errors.NewStorageError("failed to get common ancestor from block locator", err)
+	}
+
+	_, targetMeta, err := store.GetBlockHeader(ctx, hashTarget)
+	if err != nil {
+		if errors.Is(err, errors.ErrNotFound) || errors.Is(err, errors.ErrBlockNotFound) {
+			return nil, nil, errors.NewNotFoundError("common ancestor hash not found")
+		}
+
+		return nil, nil, errors.NewStorageError("failed to get target block header", err)
+	}
+
+	if targetMeta.Height < ancestorMeta.Height {
+		// The ancestor must sit at or below the target on the same chain, so this means
+		// the two disagree about the chain. Report it as not found rather than serving
+		// headers from somewhere else.
+		return nil, nil, errors.NewNotFoundError("common ancestor hash not found")
+	}
+
+	// Inclusive of both ends: the walk pushed the target and the ancestor into its ring.
+	distance := uint64(targetMeta.Height-ancestorMeta.Height) + 1
+
+	// Not the min builtin: a test file in this package declares its own int-typed min,
+	// which shadows it for the test build.
+	numHeaders := distance
+	if uint64(maxHeaders) < numHeaders {
+		numHeaders = uint64(maxHeaders)
+	}
+
+	// When the span is longer than the response, the walk's ring kept the headers
+	// closest to the ancestor and dropped the rest, so start from the block numHeaders-1
+	// above the ancestor instead of from the target.
 	hashStart := hashTarget
-	lastNHeaders := ring.New(max)
-	lastNMetas := ring.New(max)
 
-out:
-	for searchCount := 0; searchCount < searchLimit; searchCount++ {
-		headers, headerMetas, err := store.GetBlockHeaders(ctx, hashStart, numberOfHeaders)
+	if numHeaders < distance {
+		// nolint:gosec // numHeaders <= maxHeaders, a uint32, so the conversion is exact.
+		startHeight := ancestorMeta.Height + uint32(numHeaders) - 1
+
+		block, _, err := store.GetBlockInChainByHeightHash(ctx, startHeight, hashTarget)
 		if err != nil {
-			return nil, nil, errors.NewStorageError("failed to get block headers", err)
+			return nil, nil, errors.NewStorageError("failed to get block at height %d on the target chain", startHeight, err)
 		}
 
-		if len(headers) <= 1 {
-			break
-		}
-
-		for idx, header := range headers {
-			lastNHeaders.Value = header
-			lastNHeaders = lastNHeaders.Next()
-			lastNMetas.Value = headerMetas[idx]
-			lastNMetas = lastNMetas.Next()
-
-			if _, ok := blockLocatorMap[*header.Hash()]; ok {
-				commonAncestorMeta = headerMetas[idx]
-				break out
-			}
-		}
-
-		// start over with the next 100 block headers
-		// to find the common ancestor
-		hashStart = headers[len(headers)-1].HashPrevBlock
+		hashStart = block.Header.Hash()
 	}
 
-	if commonAncestorMeta == nil {
-		return nil, nil, errors.NewNotFoundError("common ancestor hash not found after scanning last %d headers", searchLimit*numberOfHeaders)
+	headers, headerMetas, err := store.GetBlockHeaders(ctx, hashStart, numHeaders)
+	if err != nil {
+		return nil, nil, errors.NewStorageError("failed to get block headers", err)
 	}
 
-	headerHistory := sliceFromRing[*model.BlockHeader](lastNHeaders)
-	headerMetaHistory := sliceFromRing[*model.BlockHeaderMeta](lastNMetas)
-
-	return headerHistory, headerMetaHistory, nil
+	return headers, headerMetas, nil
 }
 
 // GetBlockHeadersFromCommonAncestor retrieves block headers from a common ancestor.
@@ -3085,18 +3512,6 @@ func getBlockHeadersFromCommonAncestor(ctx context.Context, store blockchain_sto
 
 	// now get the headers from the common ancestor to the target hash
 	return store.GetBlockHeadersFromOldest(ctx, chainTipHash, commonBlockHeader.Hash(), uint64(maxHeaders)) // golint:nolint
-}
-
-func sliceFromRing[T any](ring *ring.Ring) []T {
-	slice := make([]T, 0, ring.Len())
-
-	ring.Do(func(value interface{}) {
-		if value != nil {
-			slice = append(slice, value.(T))
-		}
-	})
-
-	return slice
 }
 
 // SetBlockProcessedAt sets or clears the processed_at timestamp for a block.
@@ -3152,7 +3567,7 @@ func (b *Blockchain) ScheduleBlobDeletion(ctx context.Context, req *blockchain_a
 		ScheduleBlobDeletion(ctx context.Context, req *blockchain_sql.ScheduleRequest) (int64, error)
 	})
 	if !ok {
-		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+		return nil, errors.NewStorageError(errStoreNoBlobDeletion)
 	}
 
 	schedReq := &blockchain_sql.ScheduleRequest{
@@ -3188,7 +3603,7 @@ func (b *Blockchain) CancelBlobDeletion(ctx context.Context, req *blockchain_api
 		CancelBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType int32) error
 	})
 	if !ok {
-		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+		return nil, errors.NewStorageError(errStoreNoBlobDeletion)
 	}
 
 	err := storeWithBlobDeletion.CancelBlobDeletion(ctx, req.BlobKey, req.FileType, int32(req.StoreType))
@@ -3219,7 +3634,7 @@ func (b *Blockchain) ListScheduledDeletions(ctx context.Context, req *blockchain
 		ListScheduledBlobDeletions(ctx context.Context, filters *blockchain_sql.ListFilters) ([]*blockchain_sql.ScheduledDeletion, int, error)
 	})
 	if !ok {
-		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+		return nil, errors.NewStorageError(errStoreNoBlobDeletion)
 	}
 
 	filters := &blockchain_sql.ListFilters{
@@ -3265,7 +3680,7 @@ func (b *Blockchain) GetPendingBlobDeletions(ctx context.Context, req *blockchai
 		GetPendingBlobDeletions(ctx context.Context, height uint32, limit int) ([]*blockchain_sql.ScheduledDeletion, error)
 	})
 	if !ok {
-		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+		return nil, errors.NewStorageError(errStoreNoBlobDeletion)
 	}
 
 	deletions, err := storeWithBlobDeletion.GetPendingBlobDeletions(ctx, req.Height, limit)
@@ -3296,7 +3711,7 @@ func (b *Blockchain) RemoveBlobDeletion(ctx context.Context, req *blockchain_api
 		RemoveBlobDeletion(ctx context.Context, id int64) error
 	})
 	if !ok {
-		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+		return nil, errors.NewStorageError(errStoreNoBlobDeletion)
 	}
 
 	err := storeWithBlobDeletion.RemoveBlobDeletion(ctx, req.DeletionId)
@@ -3313,7 +3728,7 @@ func (b *Blockchain) IncrementBlobDeletionRetry(ctx context.Context, req *blockc
 		IncrementBlobDeletionRetry(ctx context.Context, id int64, maxRetries int) (shouldRemove bool, newRetryCount int, err error)
 	})
 	if !ok {
-		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+		return nil, errors.NewStorageError(errStoreNoBlobDeletion)
 	}
 
 	shouldRemove, newRetryCount, err := storeWithBlobDeletion.IncrementBlobDeletionRetry(ctx, req.DeletionId, int(req.MaxRetries))
@@ -3352,7 +3767,7 @@ func (b *Blockchain) CompleteBlobDeletions(ctx context.Context, req *blockchain_
 // AcquireBlobDeletionBatch acquires a batch of deletions with locking.
 func (b *Blockchain) AcquireBlobDeletionBatch(ctx context.Context, req *blockchain_api.AcquireBlobDeletionBatchRequest) (*blockchain_api.AcquireBlobDeletionBatchResponse, error) {
 	storeWithBatchAcquisition, ok := b.store.(interface {
-		AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) ([]*blockchain_sql.ScheduledDeletion, error)
+		AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int, excludeStoreTypes []int32) ([]*blockchain_sql.ScheduledDeletion, error)
 	})
 	if !ok {
 		return nil, errors.NewStorageError("blockchain store does not support batch acquisition")
@@ -3363,7 +3778,7 @@ func (b *Blockchain) AcquireBlobDeletionBatch(ctx context.Context, req *blockcha
 		lockTimeout = 300 // Default: 5 minutes
 	}
 
-	deletions, err := storeWithBatchAcquisition.AcquireBlobDeletionBatch(ctx, req.Height, int(req.Limit), lockTimeout)
+	deletions, err := storeWithBatchAcquisition.AcquireBlobDeletionBatch(ctx, req.Height, int(req.Limit), lockTimeout, req.ExcludeStoreTypes)
 	if err != nil {
 		return nil, err
 	}
@@ -3407,7 +3822,7 @@ func (b *Blockchain) AcquireBlobDeletionBatch(ctx context.Context, req *blockcha
 		}
 	}
 
-	b.logger.Infof("Acquired blob deletion batch: token=%s, count=%d, height=%d", token, len(deletions), req.Height)
+	b.logger.Infof("Acquired blob deletion batch: token=%s, count=%d, height=%d, excluded=%v", token, len(deletions), req.Height, req.ExcludeStoreTypes)
 
 	return &blockchain_api.AcquireBlobDeletionBatchResponse{
 		BatchToken: token,

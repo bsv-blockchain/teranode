@@ -1,0 +1,59 @@
+{
+  "data": [
+    {
+      "height": 800004,
+      "hash": "0000000000000000000004aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "previousblockhash": "0000000000000000000003bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "timestamp": "2026-05-28T11:00:00Z",
+      "transactionCount": 2480,
+      "coinbaseValue": 312500000,
+      "size": 1480123,
+      "miner": "smoke-miner"
+    },
+    {
+      "height": 800003,
+      "hash": "0000000000000000000003bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "previousblockhash": "0000000000000000000002cccccccccccccccccccccccccccccccccccccccccc",
+      "timestamp": "2026-05-28T10:50:00Z",
+      "transactionCount": 1920,
+      "coinbaseValue": 312500000,
+      "size": 1124891,
+      "miner": "smoke-miner"
+    },
+    {
+      "height": 800002,
+      "hash": "0000000000000000000002cccccccccccccccccccccccccccccccccccccccccc",
+      "previousblockhash": "0000000000000000000001dddddddddddddddddddddddddddddddddddddddddd",
+      "timestamp": "2026-05-28T10:40:00Z",
+      "transactionCount": 3014,
+      "coinbaseValue": 312500000,
+      "size": 1820774,
+      "miner": "smoke-miner"
+    },
+    {
+      "height": 800001,
+      "hash": "0000000000000000000001dddddddddddddddddddddddddddddddddddddddddd",
+      "previousblockhash": "0000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "timestamp": "2026-05-28T10:30:00Z",
+      "transactionCount": 870,
+      "coinbaseValue": 312500000,
+      "size": 612443,
+      "miner": "smoke-miner"
+    },
+    {
+      "height": 800000,
+      "hash": "0000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "previousblockhash": "0000000000000000000000ffffffffffffffffffffffffffffffffffffffffff",
+      "timestamp": "2026-05-28T10:20:00Z",
+      "transactionCount": 1502,
+      "coinbaseValue": 312500000,
+      "size": 998011,
+      "miner": "smoke-miner"
+    }
+  ],
+  "pagination": {
+    "limit": 20,
+    "offset": 0,
+    "totalRecords": 5
+  }
+}

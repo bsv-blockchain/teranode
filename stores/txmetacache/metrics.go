@@ -35,8 +35,6 @@ var (
 	prometheusBlockValidationTxMetaCacheMapSize prometheus.Gauge
 	// Cumulative count of all elements ever added to the cache; tracks total throughput
 	prometheusBlockValidationTxMetaCacheTotalElementsAdded prometheus.Gauge
-	// Count of hits for transactions that were deemed too old to use; monitors expiration policy
-	prometheusBlockValidationTxMetaCacheHitOldTx prometheus.Gauge
 	// Number of valid (readable) entries; equals current_gen_entries + previous_gen_entries
 	prometheusBlockValidationTxMetaCacheValidEntriesCount prometheus.Gauge
 	// Count of entries written in the current ring generation
@@ -128,7 +126,6 @@ func updateTxMetaCachePrometheusMetrics() {
 		misses             uint64
 		evictions          uint64
 		getOrigin          uint64
-		hitOldTx           uint64
 		trimCount          uint64
 		totalMapSize       uint64
 		totalElementsAdded uint64
@@ -143,7 +140,6 @@ func updateTxMetaCachePrometheusMetrics() {
 		misses += cache.metrics.misses.Load()
 		evictions += cache.metrics.evictions.Load()
 		getOrigin += cache.metrics.getOrigin.Load()
-		hitOldTx += cache.metrics.hitOldTx.Load()
 
 		cacheStats := cache.GetCacheStats()
 		trimCount += cacheStats.TrimCount
@@ -162,7 +158,6 @@ func updateTxMetaCachePrometheusMetrics() {
 	prometheusBlockValidationTxMetaCacheTrims.Set(float64(trimCount))
 	prometheusBlockValidationTxMetaCacheMapSize.Set(float64(totalMapSize))
 	prometheusBlockValidationTxMetaCacheTotalElementsAdded.Set(float64(totalElementsAdded))
-	prometheusBlockValidationTxMetaCacheHitOldTx.Set(float64(hitOldTx))
 	prometheusBlockValidationTxMetaCacheValidEntriesCount.Set(float64(validEntriesCount))
 	prometheusBlockValidationTxMetaCacheCurrentGenEntries.Set(float64(currentGenEntries))
 	prometheusBlockValidationTxMetaCachePreviousGenEntries.Set(float64(previousGenEntries))
@@ -188,7 +183,6 @@ func initPrometheusMetrics() {
 // 2. Performance metrics:
 //   - hits: Number of successful retrievals from the cache
 //   - misses: Number of failed retrievals that had to fall back to the underlying store
-//   - hit_old_tx: Count of cache hits for transactions deemed too old to use
 //
 // 3. Throughput metrics:
 //   - insertions: Total number of entries added to the cache since startup
@@ -303,17 +297,6 @@ func _initPrometheusMetrics() {
 			Subsystem: "tx_meta_cache",
 			Name:      "total_elements_added",
 			Help:      "Number of total number of elements added to the txmetacache",
-		},
-	)
-
-	// HitOldTx metric tracks cache hits for transactions that were found but considered too old to use
-	// This helps monitor the effectiveness of the cache expiration policy
-	prometheusBlockValidationTxMetaCacheHitOldTx = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "teranode",
-			Subsystem: "tx_meta_cache",
-			Name:      "hit_old_tx",
-			Help:      "Number of hits on old txs in the tx meta cache",
 		},
 	)
 

@@ -3,6 +3,8 @@ package centrifuge_impl
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,10 +14,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/asset/httpimpl"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/centrifugal/centrifuge"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
@@ -209,14 +213,6 @@ func TestMessageType(t *testing.T) {
 	})
 }
 
-func TestConstants(t *testing.T) {
-	t.Run("Access control constants", func(t *testing.T) {
-		assert.Equal(t, "Access-Control-Allow-Origin", AccessControlAllowOrigin)
-		assert.Equal(t, "Access-Control-Allow-Headers", AccessControlAllowHeaders)
-		assert.Equal(t, "Access-Control-Allow-Credentials", AccessControlAllowCredentials)
-	})
-}
-
 func TestCentrifuge_ValidationLogic(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	mockRepo := &repository.Repository{}
@@ -402,85 +398,386 @@ func TestNewWebsocketHandler(t *testing.T) {
 	})
 }
 
-func TestCheckSameHost(t *testing.T) {
+// TestWebsocketHandler_SubprotocolNegotiation verifies the handler advertises
+// the centrifuge-protobuf subprotocol so a protobuf client negotiates it (rather
+// than being silently served JSON and disconnected with "bad request"), while a
+// client that requests no subprotocol still gets JSON (empty negotiated value).
+func TestWebsocketHandler_SubprotocolNegotiation(t *testing.T) {
+	node, err := centrifuge.New(centrifuge.Config{})
+	require.NoError(t, err)
+
+	node.OnConnecting(func(_ context.Context, _ centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+		return centrifuge.ConnectReply{}, nil
+	})
+
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	// Permissive origin check: this test exercises subprotocol negotiation, not
+	// the same-host origin guard (which would otherwise reject the test dialer).
+	srv := httptest.NewServer(NewWebsocketHandler(node, WebsocketConfig{
+		CheckOrigin: func(*http.Request) bool { return true },
+	}))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	t.Run("protobuf requested is negotiated", func(t *testing.T) {
+		d := websocket.Dialer{Subprotocols: []string{"centrifuge-protobuf"}}
+		conn, _, derr := d.Dial(wsURL, nil)
+		require.NoError(t, derr)
+		defer conn.Close()
+		require.Equal(t, "centrifuge-protobuf", conn.Subprotocol())
+	})
+
+	t.Run("no subprotocol stays JSON", func(t *testing.T) {
+		conn, _, derr := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, derr)
+		defer conn.Close()
+		require.Equal(t, "", conn.Subprotocol())
+	})
+}
+
+func TestCheckOrigin(t *testing.T) {
 	tests := []struct {
-		name      string
-		origin    string
-		host      string
-		wantError bool
+		name    string
+		origin  string
+		host    string
+		allowed []string
+		wantOK  bool
 	}{
-		{
-			name:      "same host",
-			origin:    "http://example.com",
-			host:      "example.com",
-			wantError: false, // checkSameHost is disabled, always returns nil
-		},
-		{
-			name:      "https origin for http request",
-			origin:    "https://example.com",
-			host:      "example.com",
-			wantError: false, // checkSameHost is disabled, always returns nil
-		},
-		{
-			name:      "different host",
-			origin:    "http://evil.com",
-			host:      "example.com",
-			wantError: false, // checkSameHost is disabled, always returns nil
-		},
-		{
-			name:      "missing origin",
-			origin:    "",
-			host:      "example.com",
-			wantError: false, // checkSameHost is disabled, always returns nil
-		},
-		{
-			name:      "same host with port",
-			origin:    "http://localhost:8080",
-			host:      "localhost:8080",
-			wantError: false, // checkSameHost is disabled, always returns nil
-		},
-		{
-			name:      "different port",
-			origin:    "http://localhost:9090",
-			host:      "localhost:8080",
-			wantError: false, // checkSameHost is disabled, always returns nil
-		},
+		{name: "missing origin (non-browser client)", origin: "", host: "node.example.com:8090", wantOK: true},
+		{name: "same host and port", origin: "http://localhost:8090", host: "localhost:8090", wantOK: true},
+		{name: "same host, different port (vite dev server)", origin: "http://localhost:5173", host: "localhost:8090", wantOK: true},
+		{name: "same host, https page behind proxy", origin: "https://node.example.com", host: "node.example.com:8090", wantOK: true},
+		{name: "hostname compare is case-insensitive", origin: "https://Node.Example.com", host: "node.example.com", wantOK: true},
+		{name: "ipv6 same host", origin: "http://[::1]:5173", host: "[::1]:8090", wantOK: true},
+		{name: "cross-site origin", origin: "https://evil.example", host: "node.example.com:8090", wantOK: false},
+		{name: "suffix of host is not same host", origin: "https://example.com", host: "node.example.com:8090", wantOK: false},
+		{name: "host as prefix of attacker domain", origin: "https://node.example.com.evil.example", host: "node.example.com:8090", wantOK: false},
+		{name: "opaque null origin", origin: "null", host: "node.example.com:8090", wantOK: false},
+		{name: "allowlisted origin", origin: "https://dash.example.com", host: "internal-asset:8090", allowed: []string{"https://dash.example.com"}, wantOK: true},
+		{name: "allowlist match ignores case", origin: "https://Dash.example.com", host: "internal-asset:8090", allowed: []string{"https://dash.example.com"}, wantOK: true},
+		{name: "loopback ip page, localhost socket (vite dev server)", origin: "http://127.0.0.1:5173", host: "localhost:8090", wantOK: true},
+		{name: "localhost page, ipv6 loopback socket", origin: "http://localhost:5173", host: "[::1]:8090", wantOK: true},
+		{name: "any 127/8 address is loopback", origin: "http://127.0.0.2:5173", host: "127.0.0.1:8090", wantOK: true},
+		{name: "loopback origin against non-loopback host", origin: "http://localhost:5173", host: "node.example.com:8090", wantOK: false},
+		{name: "loopback-looking hostname is not loopback", origin: "http://127.0.0.1.evil.example", host: "localhost:8090", wantOK: false},
+		{name: "allowlist requires exact scheme and port", origin: "http://dash.example.com:8080", host: "internal-asset:8090", allowed: []string{"https://dash.example.com"}, wantOK: false},
+		{name: "wildcard allows any origin", origin: "https://evil.example", host: "node.example.com:8090", allowed: []string{"*"}, wantOK: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "http://"+tt.host+"/ws", nil)
+			req := httptest.NewRequest("GET", "http://"+tt.host+"/connection/websocket", nil)
 			req.Host = tt.host
+
 			if tt.origin != "" {
 				req.Header.Set("Origin", tt.origin)
 			}
 
-			err := checkSameHost(req)
-			// checkSameHost is currently disabled and always returns nil
-			assert.NoError(t, err)
+			err := checkOrigin(req, tt.allowed)
+			if tt.wantOK {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+
+			require.Equal(t, tt.wantOK, originCheck(tt.allowed)(req))
 		})
 	}
 }
 
-func TestSameHostOriginCheck(t *testing.T) {
-	check := sameHostOriginCheck()
+func TestParseAllowedOrigins(t *testing.T) {
+	logger := ulogger.TestLogger{}
 
-	t.Run("allows same host", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "http://example.com/ws", nil)
-		req.Host = "example.com"
-		req.Header.Set("Origin", "http://example.com")
-
-		// Since checkSameHost always returns nil, sameHostOriginCheck returns err != nil, which is false
-		assert.False(t, check(req))
+	t.Run("empty value allows nothing extra", func(t *testing.T) {
+		require.Nil(t, parseAllowedOrigins(logger, ""))
 	})
 
-	t.Run("rejects different host", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "http://example.com/ws", nil)
-		req.Host = "example.com"
-		req.Header.Set("Origin", "http://evil.com")
+	t.Run("entries are trimmed and trailing slashes removed", func(t *testing.T) {
+		require.Equal(t,
+			[]string{"https://a.example", "http://b.example:5173", "*"},
+			parseAllowedOrigins(logger, " https://a.example/ || http://b.example:5173 | * "))
+	})
 
-		// Since checkSameHost always returns nil, sameHostOriginCheck returns err != nil, which is false
-		assert.False(t, check(req))
+	// Each of these can never equal a browser Origin header, so keeping it would fail
+	// closed without a trace. They are dropped (with a WARN) and valid neighbours kept.
+	invalid := map[string]string{
+		"no scheme":               "dash.example.com",
+		"path":                    "https://dash.example.com/live",
+		"query":                   "https://dash.example.com?x=1",
+		"fragment":                "https://dash.example.com#x",
+		"userinfo":                "https://user@dash.example.com",
+		"wildcard subdomain":      "https://*.example.com",
+		"comma-separated list":    "https://a.example,https://b.example",
+		"scheme only":             "https://",
+		"opaque scheme:host":      "localhost:5173",
+		"unparseable percent":     "https://%zz",
+		"bare wildcard with path": "*/x",
+	}
+
+	for name, entry := range invalid {
+		t.Run("drops "+name, func(t *testing.T) {
+			require.Equal(t, []string{"https://ok.example"}, parseAllowedOrigins(logger, entry+"|https://ok.example"))
+		})
+	}
+}
+
+// recordingRegistrar captures what registerHTTPHandlers mounts, standing in for the
+// Asset HTTP server whose router is not exposed.
+type recordingRegistrar struct {
+	handlers map[string]http.Handler
+}
+
+func (r *recordingRegistrar) AddHTTPHandler(pattern string, handler http.Handler) error {
+	if r.handlers == nil {
+		r.handlers = map[string]http.Handler{}
+	}
+
+	r.handlers[pattern] = handler
+
+	return nil
+}
+
+func TestCentrifuge_RegisterHTTPHandlersMountsOnlyWebsocket(t *testing.T) {
+	c, err := New(ulogger.TestLogger{}, &settings.Settings{Asset: settings.AssetSettings{HTTPAddress: "http://localhost:8080"}}, nil, nil)
+	require.NoError(t, err)
+
+	reg := &recordingRegistrar{}
+	c.registerHTTPHandlers(reg)
+
+	// Only the websocket: the /client/ demo file server must not come back on public Asset HTTP.
+	require.Len(t, reg.handlers, 1)
+	require.Contains(t, reg.handlers, "/connection/websocket")
+}
+
+func TestCentrifuge_OriginRejectWarnIsRateLimited(t *testing.T) {
+	c, err := New(ulogger.TestLogger{}, &settings.Settings{Asset: settings.AssetSettings{HTTPAddress: "http://localhost:8080"}}, nil, nil)
+	require.NoError(t, err)
+
+	crossSite := func() *http.Request {
+		req := httptest.NewRequest("GET", "http://node.example.com/connection/websocket", nil)
+		req.Header.Set("Origin", "https://evil.example")
+
+		return req
+	}
+
+	require.False(t, c.checkWebsocketOrigin(crossSite()))
+
+	first := c.originRejectWarnedAt.Load()
+	require.NotZero(t, first, "a rejection must be surfaced at WARN")
+
+	require.False(t, c.checkWebsocketOrigin(crossSite()))
+	require.Equal(t, first, c.originRejectWarnedAt.Load(), "a repeat within the interval must not WARN again")
+
+	// Once the interval has passed, the next rejection warns again: an attacker cannot
+	// use up the warning for the life of the process.
+	stale := time.Now().Add(-originRejectWarnInterval - time.Second).UnixNano()
+	c.originRejectWarnedAt.Store(stale)
+
+	require.False(t, c.checkWebsocketOrigin(crossSite()))
+	require.Greater(t, c.originRejectWarnedAt.Load(), stale)
+}
+
+// TestCentrifuge_WebsocketOriginEnforced drives real upgrades through the handler Start
+// mounts (registerHTTPHandlers) and proves a cross-site browser
+// page can no longer open the socket, while the same-host dashboard, non-browser
+// clients and operator-allowlisted origins still can (bitcoin-sv/teranode issue 4848).
+func TestCentrifuge_WebsocketOriginEnforced(t *testing.T) {
+	logger := ulogger.TestLogger{}
+	tSettings := &settings.Settings{
+		Asset: settings.AssetSettings{
+			HTTPAddress:            "http://localhost:8080",
+			CentrifugeAllowOrigins: "https://dash.example.com",
+		},
+	}
+	mockHTTP, err := createTestHTTP(logger, &repository.Repository{})
+	require.NoError(t, err)
+
+	c, err := New(logger, tSettings, nil, mockHTTP)
+	require.NoError(t, err)
+	require.NoError(t, c.Init(context.Background()))
+
+	defer func() { _ = c.centrifugeNode.Shutdown(context.Background()) }()
+
+	c.statusMutex.Lock()
+	c.cachedCurrentNodeStatus = &notificationMsg{Type: "node_status", PeerID: "test"}
+	c.currentNodePeerID = "test"
+	c.statusMutex.Unlock()
+
+	reg := &recordingRegistrar{}
+	c.registerHTTPHandlers(reg)
+	require.Contains(t, reg.handlers, "/connection/websocket")
+
+	server := httptest.NewServer(reg.handlers["/connection/websocket"])
+
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	serverHost := strings.TrimPrefix(server.URL, "http://")
+	serverHostname, _, err := net.SplitHostPort(serverHost)
+	require.NoError(t, err)
+
+	dial := func(origin string) (*websocket.Conn, *http.Response, error) {
+		header := http.Header{}
+		if origin != "" {
+			header.Set("Origin", origin)
+		}
+
+		return websocket.DefaultDialer.Dial(wsURL, header)
+	}
+
+	t.Run("cross-site origin is refused with 403", func(t *testing.T) {
+		conn, resp, err := dial("https://evil.example")
+		if conn != nil {
+			_ = conn.Close()
+		}
+
+		require.Error(t, err)
+		require.NotNil(t, resp)
+		require.Equal(t, http.StatusForbidden, resp.StatusCode)
+		require.NotZero(t, c.originRejectWarnedAt.Load(), "a rejection must be surfaced at WARN")
+	})
+
+	accepted := map[string]string{
+		"same host, other port": "http://" + serverHostname + ":5173",
+		"no origin header":      "",
+		"allowlisted origin":    "https://dash.example.com",
+	}
+
+	for name, origin := range accepted {
+		t.Run(name+" is accepted", func(t *testing.T) {
+			conn, _, err := dial(origin)
+			require.NoError(t, err)
+
+			_ = conn.Close()
+		})
+	}
+}
+
+// TestCentrifuge_WebsocketPerIPCapUsesHTTPServerClientIP drives real upgrades
+// through the handler Start mounts (registerHTTPHandlers) and proves
+// websocketHTTPHandler wires WebsocketConfig.ClientIP to the real
+// httpimpl.HTTP.ClientIP (via c.httpServer.ClientIP), which is echo's RealIP:
+// XFF-aware behind a trusted proxy, and not just the raw RemoteAddr. If the
+// wiring regressed to a RemoteAddr-only fallback (or to no ClientIP func at
+// all), every client in this test shares the same loopback RemoteAddr and
+// would collapse onto one per-IP key.
+func TestCentrifuge_WebsocketPerIPCapUsesHTTPServerClientIP(t *testing.T) {
+	newServer := func(t *testing.T, trustedProxyCIDRs string) *httptest.Server {
+		t.Helper()
+
+		logger := ulogger.TestLogger{}
+		tSettings := &settings.Settings{
+			Asset: settings.AssetSettings{
+				HTTPAddress:                  "http://localhost:8080",
+				TrustedProxyCIDRs:            trustedProxyCIDRs,
+				MaxWebsocketConnectionsPerIP: 1,
+			},
+		}
+
+		mockHTTP, err := httpimpl.New(logger, tSettings, &repository.Repository{}, nil)
+		require.NoError(t, err)
+
+		c, err := New(logger, tSettings, nil, mockHTTP)
+		require.NoError(t, err)
+		require.NoError(t, c.Init(context.Background()))
+		t.Cleanup(func() { _ = c.centrifugeNode.Shutdown(context.Background()) })
+
+		c.statusMutex.Lock()
+		c.cachedCurrentNodeStatus = &notificationMsg{Type: "node_status", PeerID: "test"}
+		c.currentNodePeerID = "test"
+		c.statusMutex.Unlock()
+
+		reg := &recordingRegistrar{}
+		c.registerHTTPHandlers(reg)
+		require.Contains(t, reg.handlers, "/connection/websocket")
+
+		server := httptest.NewServer(reg.handlers["/connection/websocket"])
+		t.Cleanup(server.Close)
+
+		return server
+	}
+
+	dial := func(server *httptest.Server, xForwardedFor string) (*websocket.Conn, *http.Response, error) {
+		header := http.Header{}
+		if xForwardedFor != "" {
+			header.Set("X-Forwarded-For", xForwardedFor)
+		}
+
+		return websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), header)
+	}
+
+	t.Run("a trusted proxy's X-Forwarded-For separates two clients into their own per-IP slot", func(t *testing.T) {
+		// Default (empty) asset_trustedProxyCIDRs still trusts loopback, which is
+		// where httptest.Server's RemoteAddr always is - matching echo's own
+		// documented RealIP default.
+		server := newServer(t, "")
+
+		first, _, err := dial(server, "203.0.113.1")
+		require.NoError(t, err)
+		defer func() { _ = first.Close() }()
+
+		second, _, err := dial(server, "203.0.113.2")
+		require.NoError(t, err, "a different X-Forwarded-For client IP must get its own per-IP slot, not share the RemoteAddr-based one")
+		defer func() { _ = second.Close() }()
+	})
+
+	t.Run("the same client IP twice still hits its own per-IP cap", func(t *testing.T) {
+		server := newServer(t, "")
+
+		first, _, err := dial(server, "203.0.113.1")
+		require.NoError(t, err)
+		defer func() { _ = first.Close() }()
+
+		refused, resp, err := dial(server, "203.0.113.1")
+		if refused != nil {
+			_ = refused.Close()
+		}
+
+		require.Error(t, err)
+		require.NotNil(t, resp)
+		require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	})
+
+	// The next two subtests use a two-hop X-Forwarded-For chain
+	// "<client>, <proxy>", where both hops are public (non-private, non-loopback)
+	// addresses. Without asset_trustedProxyCIDRs, echo's default extractor has no
+	// reason to trust the proxy hop and stops there, returning the proxy's own IP
+	// - so two different clients behind the same untrusted proxy collapse onto
+	// one per-IP key. Configuring asset_trustedProxyCIDRs to cover the proxy hop
+	// makes the extractor skip past it to the real client IP, exactly as it does
+	// for every other Asset HTTP route via c.RealIP().
+	const untrustedProxyHop = "203.0.113.9"
+
+	t.Run("without asset_trustedProxyCIDRs, an untrusted proxy hop is not skipped, collapsing two different clients", func(t *testing.T) {
+		server := newServer(t, "")
+
+		first, _, err := dial(server, "198.51.100.7, "+untrustedProxyHop)
+		require.NoError(t, err)
+		defer func() { _ = first.Close() }()
+
+		refused, resp, err := dial(server, "198.51.100.8, "+untrustedProxyHop)
+		if refused != nil {
+			_ = refused.Close()
+		}
+
+		require.Error(t, err, "with the proxy hop untrusted, both requests must resolve to the proxy's own IP and share one per-IP slot")
+		require.NotNil(t, resp)
+		require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	})
+
+	t.Run("asset_trustedProxyCIDRs covering the proxy hop reaches the real per-client IP", func(t *testing.T) {
+		server := newServer(t, untrustedProxyHop+"/32")
+
+		first, _, err := dial(server, "198.51.100.7, "+untrustedProxyHop)
+		require.NoError(t, err)
+		defer func() { _ = first.Close() }()
+
+		second, _, err := dial(server, "198.51.100.8, "+untrustedProxyHop)
+		require.NoError(t, err, "with the proxy hop trusted, each distinct client IP behind it must get its own per-IP slot")
+		defer func() { _ = second.Close() }()
 	})
 }
 
@@ -514,7 +811,7 @@ func TestWebsocketTransport_Methods(t *testing.T) {
 		assert.Equal(t, "websocket", transport.Name())
 		assert.Equal(t, centrifuge.ProtocolTypeJSON, transport.Protocol())
 		assert.Equal(t, centrifuge.ProtocolVersion2, transport.ProtocolVersion())
-		assert.True(t, transport.Unidirectional()) // Unidirectional returns true
+		assert.False(t, transport.Unidirectional()) // WebSocket is bidirectional
 		assert.False(t, transport.Emulation())
 	})
 }
@@ -931,7 +1228,7 @@ func TestCentrifuge_Start(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	mockRepo := &repository.Repository{}
 
-	t.Run("Start fails with missing P2P address", func(t *testing.T) {
+	t.Run("Start skips p2p listener when address missing", func(t *testing.T) {
 		mockHTTP, err := createTestHTTP(logger, mockRepo)
 		require.NoError(t, err)
 
@@ -940,7 +1237,7 @@ func TestCentrifuge_Start(t *testing.T) {
 				HTTPAddress: "http://localhost:8080",
 			},
 			P2P: settings.P2PSettings{
-				HTTPAddress: "", // Missing P2P address
+				HTTPAddress: "", // No p2p address -> listener skipped, service still runs
 			},
 		}
 
@@ -959,10 +1256,10 @@ func TestCentrifuge_Start(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
 
-		// Start should fail due to missing P2P address
+		// With no p2p address the listener is skipped (WARN) and Start runs until
+		// the context is cancelled, returning nil rather than erroring (#1334).
 		err = c.Start(ctx, "localhost:9999")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "p2p_httpAddress not found in config")
+		require.NoError(t, err)
 	})
 
 	t.Run("Start with valid P2P address and mock server", func(t *testing.T) {
@@ -1120,6 +1417,203 @@ func TestCentrifuge_connect(t *testing.T) {
 		// Connection should not be established
 		assert.False(t, clientConnected.Load())
 		assert.Nil(t, client.Load())
+	})
+}
+
+// TestCentrifuge_connectBackoff covers the #1334 fix: a failing p2p dial backs off
+// exponentially (capped) and logs at WARN once then DEBUG, instead of an ERROR
+// every second; the backoff resets after a successful connect; and a context
+// cancellation during backoff returns promptly.
+// capturingLogger records the formatted log message per level so tests can assert
+// on message content, which mocklogger.MockLogger (call-counts only) cannot — e.g.
+// to confirm the DNS-hint WARN branch actually ran, not just that some WARN fired
+// (#1337 review). It embeds MockLogger for the rest of the ulogger.Logger surface.
+type capturingLogger struct {
+	*mocklogger.MockLogger
+
+	mu   sync.Mutex
+	msgs map[string][]string
+}
+
+func newCapturingLogger() *capturingLogger {
+	return &capturingLogger{MockLogger: mocklogger.NewTestLogger(), msgs: make(map[string][]string)}
+}
+
+func (l *capturingLogger) capture(level, format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.msgs[level] = append(l.msgs[level], fmt.Sprintf(format, args...))
+}
+
+func (l *capturingLogger) Warnf(format string, args ...interface{}) {
+	l.MockLogger.Warnf(format, args...)
+	l.capture("Warnf", format, args...)
+}
+
+func (l *capturingLogger) Infof(format string, args ...interface{}) {
+	l.MockLogger.Infof(format, args...)
+	l.capture("Infof", format, args...)
+}
+
+func (l *capturingLogger) Debugf(format string, args ...interface{}) {
+	l.MockLogger.Debugf(format, args...)
+	l.capture("Debugf", format, args...)
+}
+
+func (l *capturingLogger) Errorf(format string, args ...interface{}) {
+	l.MockLogger.Errorf(format, args...)
+	l.capture("Errorf", format, args...)
+}
+
+func (l *capturingLogger) messages(level string) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return append([]string(nil), l.msgs[level]...)
+}
+
+func TestCentrifuge_connectBackoff(t *testing.T) {
+	mockRepo := &repository.Repository{}
+
+	newCentrifuge := func(t *testing.T, logger ulogger.Logger) *Centrifuge {
+		t.Helper()
+
+		mockHTTP, err := createTestHTTP(ulogger.TestLogger{}, mockRepo)
+		require.NoError(t, err)
+
+		tSettings := &settings.Settings{
+			Asset: settings.AssetSettings{HTTPAddress: "http://localhost:8080"},
+			P2P:   settings.P2PSettings{HTTPAddress: "peer:9906"},
+		}
+
+		c, err := New(logger, tSettings, mockRepo, mockHTTP)
+		require.NoError(t, err)
+
+		return c
+	}
+
+	dialURL := url.URL{Scheme: "ws", Host: "peer:9906", Path: "/p2p-ws"}
+
+	t.Run("backoff grows and caps; WARN at start and at the cap, DEBUG between, never ERROR", func(t *testing.T) {
+		ml := newCapturingLogger()
+		c := newCentrifuge(t, ml)
+
+		c.dialWebsocket = func(string) (*websocket.Conn, *http.Response, error) {
+			return nil, nil, errors.NewProcessingError("connection refused")
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+
+		var waits []time.Duration
+		c.sleepWithContext = func(_ context.Context, d time.Duration) {
+			waits = append(waits, d)
+			if len(waits) >= 8 {
+				cancel()
+			}
+		}
+
+		c.connect(ctx, dialURL, &atomic.Pointer[websocket.Conn]{}, &atomic.Bool{})
+
+		require.Equal(t, []time.Duration{
+			1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second,
+			16 * time.Second, 32 * time.Second, 60 * time.Second, 60 * time.Second,
+		}, waits, "backoff must grow 2x and cap at 60s")
+
+		require.Empty(t, ml.messages("Errorf"), "must never log at ERROR")
+
+		// Two WARNs per streak: the first failure, then a single "still failing"
+		// breadcrumb once the backoff saturates at the cap.
+		warns := ml.messages("Warnf")
+		require.Len(t, warns, 2)
+		require.Contains(t, warns[0], "retrying with backoff")
+		require.Contains(t, warns[1], "still cannot reach")
+
+		// The DEBUG lines between must carry the attempt/backoff detail.
+		hasDetail := false
+		for _, d := range ml.messages("Debugf") {
+			if strings.Contains(d, "attempt") && strings.Contains(d, "next retry") {
+				hasDetail = true
+				break
+			}
+		}
+		require.True(t, hasDetail, "steady-state DEBUG lines should carry attempt/backoff detail")
+	})
+
+	t.Run("unresolvable host logs a WARN carrying the config hint, never ERROR", func(t *testing.T) {
+		ml := newCapturingLogger()
+		c := newCentrifuge(t, ml)
+
+		c.dialWebsocket = func(string) (*websocket.Conn, *http.Response, error) {
+			return nil, nil, &net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "server misbehaving", Name: "peer"}}
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		c.sleepWithContext = func(_ context.Context, _ time.Duration) { cancel() }
+
+		c.connect(ctx, dialURL, &atomic.Pointer[websocket.Conn]{}, &atomic.Bool{})
+
+		require.Empty(t, ml.messages("Errorf"))
+
+		// Assert the specific DNS-hint branch ran, not just that some WARN fired:
+		// the message must name the unresolvable host and carry the config hint.
+		warns := ml.messages("Warnf")
+		require.Len(t, warns, 1)
+		require.Contains(t, warns[0], "cannot resolve p2p server host")
+		require.Contains(t, warns[0], "asset_centrifuge_disable")
+	})
+
+	t.Run("backoff resets after a successful connect", func(t *testing.T) {
+		ml := mocklogger.NewTestLogger()
+		c := newCentrifuge(t, ml)
+
+		attempts := 0
+		c.dialWebsocket = func(string) (*websocket.Conn, *http.Response, error) {
+			attempts++
+			if attempts == 1 {
+				return &websocket.Conn{}, nil, nil // first dial succeeds
+			}
+
+			return nil, nil, errors.NewProcessingError("connection refused") // subsequent dials fail
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		clientConnected := &atomic.Bool{}
+
+		var waits []time.Duration
+		c.sleepWithContext = func(_ context.Context, d time.Duration) {
+			waits = append(waits, d)
+			// Drop the connection after the successful dial so the loop re-dials and
+			// starts a fresh failure streak; its backoff must restart at 1s.
+			clientConnected.Store(false)
+			if len(waits) >= 4 {
+				cancel()
+			}
+		}
+
+		c.connect(ctx, dialURL, &atomic.Pointer[websocket.Conn]{}, clientConnected)
+
+		require.Equal(t, []time.Duration{
+			1 * time.Second, // poll after the successful connect
+			1 * time.Second, // fresh streak resets to the initial backoff
+			2 * time.Second,
+			4 * time.Second,
+		}, waits)
+		ml.AssertNumberOfCalls(t, "Warnf", 1) // one WARN for the post-reconnect streak
+	})
+
+	t.Run("returns promptly when context is cancelled during backoff", func(t *testing.T) {
+		c := newCentrifuge(t, ulogger.TestLogger{}) // real sleepWithContext (default)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		c.dialWebsocket = func(string) (*websocket.Conn, *http.Response, error) {
+			cancel() // cancel the context on the first dial, mid-loop
+			return nil, nil, errors.NewProcessingError("connection refused")
+		}
+
+		start := time.Now()
+		c.connect(ctx, dialURL, &atomic.Pointer[websocket.Conn]{}, &atomic.Bool{})
+		require.Less(t, time.Since(start), 500*time.Millisecond,
+			"context-aware sleep must interrupt the backoff wait on cancellation")
 	})
 }
 
@@ -1422,6 +1916,123 @@ func TestWebsocketHandler_ServeHTTP(t *testing.T) {
 	})
 }
 
+// TestWebsocketHandler_BidirectionalConnect exercises the full bidirectional
+// centrifuge handshake against the real handler. This is the path that issue
+// #938 reported broken: under the previous Unidirectional()=true the server
+// emitted the connect reply as a Push envelope (no id) and bidirectional
+// clients could not parse it. Under a naive "just flip the boolean" fix the
+// path through Client.Connect → unidirectionalConnect → connectCmd would
+// panic at writeEncodedCommandReply because cmd is nil.
+//
+// The handler must accept a real Command envelope ({id, connect}) and return
+// a command-reply envelope ({id, connect:{client,subs,…}}) — id-matched.
+func TestWebsocketHandler_BidirectionalConnect(t *testing.T) {
+	node, err := centrifuge.New(centrifuge.Config{LogLevel: centrifuge.LogLevelError})
+	require.NoError(t, err)
+
+	// Mirror centrifuge.go: auto-subscribe to a known channel so we can also
+	// confirm OnConnecting subscriptions land in the reply. Production wires
+	// Credentials via readinessMiddleware; for the unit test we return them from
+	// OnConnecting directly.
+	node.OnConnecting(func(_ context.Context, _ centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+		return centrifuge.ConnectReply{
+			Credentials: &centrifuge.Credentials{UserID: "test-user"},
+			Subscriptions: map[string]centrifuge.SubscribeOptions{
+				"node_status": {},
+			},
+		}, nil
+	})
+
+	require.NoError(t, node.Run())
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	handler := NewWebsocketHandler(node, WebsocketConfig{
+		CheckOrigin: func(_ *http.Request) bool { return true },
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"id":1,"connect":{}}`)))
+
+	_, data, err := conn.ReadMessage()
+	require.NoError(t, err, "expected a centrifuge connect reply")
+
+	var reply map[string]any
+	require.NoError(t, json.Unmarshal(data, &reply), "raw reply: %s", string(data))
+
+	require.EqualValues(t, 1, reply["id"], "reply must echo the command id; got %s", string(data))
+	connectResult, ok := reply["connect"].(map[string]any)
+	require.True(t, ok, "reply must carry a connect result; got %s", string(data))
+	require.NotEmpty(t, connectResult["client"], "connect result must include a non-empty client id")
+
+	subs, _ := connectResult["subs"].(map[string]any)
+	require.NotNil(t, subs["node_status"], "OnConnecting subscriptions must appear in the connect reply; got %s", string(data))
+}
+
+// TestWebsocketHandler_BidirectionalConnectThroughReadinessMiddleware exercises the
+// full handshake through the production `readinessMiddleware`, which is the exact
+// path that depends on `context.WithoutCancel(r.Context())` in the handler.
+//
+// `readinessMiddleware` calls `centrifuge.SetCredentials(ctx, …)` on the request
+// context and then returns from `ServeHTTP` once the upgrade goroutine has
+// launched — at which point `net/http` cancels the request context. If the
+// handler ever stops detaching cancellation, centrifuge's `HandleCommand`
+// observes `<-c.ctx.Done()` on every subsequent frame and silently aborts
+// the connect (no reply ever reaches the client). This test catches that
+// regression.
+func TestWebsocketHandler_BidirectionalConnectThroughReadinessMiddleware(t *testing.T) {
+	logger := ulogger.TestLogger{}
+	tSettings := &settings.Settings{
+		Asset: settings.AssetSettings{HTTPAddress: "http://localhost:8080"},
+	}
+	mockHTTP, err := createTestHTTP(logger, &repository.Repository{})
+	require.NoError(t, err)
+
+	c, err := New(logger, tSettings, nil, mockHTTP)
+	require.NoError(t, err)
+	require.NoError(t, c.Init(context.Background()))
+	defer func() { _ = c.centrifugeNode.Shutdown(context.Background()) }()
+
+	// readinessMiddleware short-circuits with 503 until current node status is
+	// cached; populate it so the handshake can proceed.
+	c.statusMutex.Lock()
+	c.cachedCurrentNodeStatus = &notificationMsg{Type: "node_status", PeerID: "test"}
+	c.currentNodePeerID = "test"
+	c.statusMutex.Unlock()
+
+	wsHandler := NewWebsocketHandler(c.centrifugeNode, WebsocketConfig{
+		CheckOrigin: func(_ *http.Request) bool { return true },
+	})
+	server := httptest.NewServer(c.readinessMiddleware(wsHandler))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"id":1,"connect":{}}`)))
+
+	_, data, err := conn.ReadMessage()
+	require.NoError(t, err, "expected a centrifuge connect reply via readinessMiddleware")
+
+	var reply map[string]any
+	require.NoError(t, json.Unmarshal(data, &reply), "raw reply: %s", string(data))
+
+	require.EqualValues(t, 1, reply["id"], "reply must echo the command id; got %s", string(data))
+	connectResult, ok := reply["connect"].(map[string]any)
+	require.True(t, ok, "reply must carry a connect result; got %s", string(data))
+	require.NotEmpty(t, connectResult["client"], "connect result must include a non-empty client id")
+}
+
 // TestCentrifuge_Init_comprehensive_callbacks tests Init function's callback functionality
 func TestCentrifuge_Init_comprehensive_callbacks(t *testing.T) {
 	logger := ulogger.TestLogger{}
@@ -1609,12 +2220,11 @@ func TestCentrifuge_StartP2PListener(t *testing.T) {
 		c, err := New(logger, tSettings, mockRepo, mockHTTP)
 		require.NoError(t, err)
 
-		// Skip the Start() call that requires HTTP server setup
-		// We can test startP2PListener logic by checking settings validation
-		if c.settings.P2P.HTTPAddress == "" {
-			// This would fail in startP2PListener
-			assert.Empty(t, c.settings.P2P.HTTPAddress)
-		}
+		// An unset p2p address is skipped gracefully (WARN + nil) rather than
+		// erroring, so the asset service keeps running without a p2p server (#1334).
+		// Returns immediately without spawning the connect/readMessages goroutines.
+		err = c.startP2PListener(context.Background())
+		require.NoError(t, err)
 	})
 }
 
@@ -1642,13 +2252,13 @@ func TestCentrifuge_Stop(t *testing.T) {
 	})
 }
 
-// Test authMiddleware function
-func TestCentrifuge_AuthMiddleware(t *testing.T) {
+// Test readinessMiddleware function
+func TestCentrifuge_ReadinessMiddleware(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	mockRepo := &repository.Repository{}
 	mockHTTP := &httpimpl.HTTP{}
 
-	t.Run("authMiddleware rejects when service not ready", func(t *testing.T) {
+	t.Run("readinessMiddleware rejects when service not ready", func(t *testing.T) {
 		tSettings := &settings.Settings{
 			Asset: settings.AssetSettings{
 				HTTPAddress: "http://localhost:8080",
@@ -1663,8 +2273,8 @@ func TestCentrifuge_AuthMiddleware(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		})
 
-		// Wrap with auth middleware
-		wrapped := c.authMiddleware(testHandler)
+		// Wrap with readiness middleware
+		wrapped := c.readinessMiddleware(testHandler)
 
 		// Create test request
 		req := httptest.NewRequest("GET", "/test", nil)
@@ -1677,7 +2287,7 @@ func TestCentrifuge_AuthMiddleware(t *testing.T) {
 		assert.Contains(t, rec.Body.String(), "Asset service not ready")
 	})
 
-	t.Run("authMiddleware allows when service ready", func(t *testing.T) {
+	t.Run("readinessMiddleware allows when service ready", func(t *testing.T) {
 		tSettings := &settings.Settings{
 			Asset: settings.AssetSettings{
 				HTTPAddress: "http://localhost:8080",
@@ -1701,7 +2311,7 @@ func TestCentrifuge_AuthMiddleware(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		})
 
-		wrapped := c.authMiddleware(testHandler)
+		wrapped := c.readinessMiddleware(testHandler)
 
 		req := httptest.NewRequest("GET", "/test", nil)
 		rec := httptest.NewRecorder()
@@ -1711,10 +2321,11 @@ func TestCentrifuge_AuthMiddleware(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.True(t, handlerCalled)
 
-		// Check CORS headers
-		assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
-		assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Headers"))
-		assert.Equal(t, "true", rec.Header().Get("Access-Control-Allow-Credentials"))
+		// No wildcard CORS headers: they are meaningless on a websocket upgrade and
+		// advertised any-origin access with credentials (bitcoin-sv/teranode issue 4848).
+		require.Empty(t, rec.Header().Get("Access-Control-Allow-Origin"))
+		require.Empty(t, rec.Header().Get("Access-Control-Allow-Headers"))
+		require.Empty(t, rec.Header().Get("Access-Control-Allow-Credentials"))
 	})
 }
 
@@ -2058,4 +2669,549 @@ func TestWebsocketTransport_WriteError(t *testing.T) {
 		// Error is ok, just shouldn't panic
 		_ = err
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Websocket admission budget, p2p frame validation and listen-address honesty.
+// ---------------------------------------------------------------------------
+
+// newReadyCentrifuge builds an initialised Centrifuge whose readiness gate is already
+// open, plus an httptest server running exactly the handler production mounts.
+func newReadyCentrifuge(t *testing.T, tSettings *settings.Settings) (*Centrifuge, *httptest.Server) {
+	t.Helper()
+
+	logger := ulogger.TestLogger{}
+
+	mockHTTP, err := createTestHTTP(logger, &repository.Repository{})
+	require.NoError(t, err)
+
+	c, err := New(logger, tSettings, nil, mockHTTP)
+	require.NoError(t, err)
+	require.NoError(t, c.Init(context.Background()))
+
+	t.Cleanup(func() { _ = c.centrifugeNode.Shutdown(context.Background()) })
+
+	c.statusMutex.Lock()
+	c.cachedCurrentNodeStatus = &notificationMsg{Type: "node_status", PeerID: "test-peer"}
+	c.currentNodePeerID = "test-peer"
+	c.statusMutex.Unlock()
+
+	reg := &recordingRegistrar{}
+	c.registerHTTPHandlers(reg)
+
+	server := httptest.NewServer(reg.handlers[websocketPath])
+	t.Cleanup(server.Close)
+
+	return c, server
+}
+
+// nodeStatusCounter counts node_status publications arriving on one client socket.
+// A gorilla connection is unusable for reads after a read deadline elapses, so the
+// count is accumulated by a dedicated reader goroutine rather than by polling.
+type nodeStatusCounter struct {
+	n atomic.Int64
+}
+
+// connectCentrifugeClient dials the websocket, completes the centrifuge connect
+// handshake and starts counting the node_status publications the server pushes.
+func connectCentrifugeClient(t *testing.T, server *httptest.Server, id int) *nodeStatusCounter {
+	t.Helper()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = conn.Close() })
+
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"id":%d,"connect":{}}`, id))))
+
+	counter := &nodeStatusCounter{}
+
+	go func() {
+		for {
+			_, data, readErr := conn.ReadMessage()
+			if readErr != nil {
+				return
+			}
+
+			for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+				var reply struct {
+					Push *struct {
+						Channel string `json:"channel"`
+					} `json:"push"`
+				}
+
+				if json.Unmarshal([]byte(line), &reply) != nil || reply.Push == nil {
+					continue
+				}
+
+				if reply.Push.Channel == "node_status" {
+					counter.n.Add(1)
+				}
+			}
+		}
+	}()
+
+	return counter
+}
+
+// TestCentrifuge_CachedStatusIsUnicastToConnectingClient pins the fix for the
+// connect-time fan-out: the cached node status belongs to the client that just
+// connected, so it must be written to that client alone. Publishing it on the
+// channel made the kth connect cost k deliveries and handed every already-connected
+// dashboard a duplicate status message it never asked for.
+func TestCentrifuge_CachedStatusIsUnicastToConnectingClient(t *testing.T) {
+	_, server := newReadyCentrifuge(t, &settings.Settings{
+		Asset: settings.AssetSettings{HTTPAddress: "http://localhost:8080"},
+	})
+
+	clients := make([]*nodeStatusCounter, 0, 3)
+
+	for i := 1; i <= 3; i++ {
+		client := connectCentrifugeClient(t, server, i)
+		clients = append(clients, client)
+
+		require.Eventually(t, func() bool { return client.n.Load() >= 1 }, 5*time.Second, 20*time.Millisecond,
+			"a connecting client must receive the cached node status")
+	}
+
+	// Give any channel-wide fan-out from the last two connects time to land.
+	time.Sleep(500 * time.Millisecond)
+
+	for i, client := range clients {
+		require.EqualValues(t, 1, client.n.Load(),
+			"client %d must receive the cached status exactly once, not once per later connect", i+1)
+	}
+}
+
+// TestWebsocketHandler_MaxConnections covers the admission budget: zero keeps today's
+// unlimited behaviour, a positive cap refuses the upgrade outright rather than
+// accepting and closing it, and a slot is returned when a connection ends.
+func TestWebsocketHandler_MaxConnections(t *testing.T) {
+	newHandlerServer := func(t *testing.T, maxConns int) *httptest.Server {
+		t.Helper()
+
+		node, err := centrifuge.New(centrifuge.Config{LogLevel: centrifuge.LogLevelError})
+		require.NoError(t, err)
+		require.NoError(t, node.Run())
+
+		t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+		server := httptest.NewServer(NewWebsocketHandler(node, WebsocketConfig{
+			MaxConnections: maxConns,
+			CheckOrigin:    func(_ *http.Request) bool { return true },
+		}))
+		t.Cleanup(server.Close)
+
+		return server
+	}
+
+	dial := func(server *httptest.Server) (*websocket.Conn, *http.Response, error) {
+		return websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	}
+
+	t.Run("zero means unlimited", func(t *testing.T) {
+		server := newHandlerServer(t, 0)
+
+		for i := 0; i < 4; i++ {
+			conn, _, err := dial(server)
+			require.NoError(t, err)
+
+			defer func() { _ = conn.Close() }()
+		}
+	})
+
+	t.Run("upgrade beyond the cap is refused", func(t *testing.T) {
+		server := newHandlerServer(t, 1)
+
+		conn, _, err := dial(server)
+		require.NoError(t, err)
+
+		defer func() { _ = conn.Close() }()
+
+		refused, resp, err := dial(server)
+		if refused != nil {
+			_ = refused.Close()
+		}
+
+		require.Error(t, err)
+		require.NotNil(t, resp)
+		require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	})
+
+	t.Run("a closed connection returns its slot", func(t *testing.T) {
+		server := newHandlerServer(t, 1)
+
+		conn, _, err := dial(server)
+		require.NoError(t, err)
+		require.NoError(t, conn.Close())
+
+		require.Eventually(t, func() bool {
+			next, _, dialErr := dial(server)
+			if dialErr != nil {
+				return false
+			}
+
+			_ = next.Close()
+
+			return true
+		}, 5*time.Second, 50*time.Millisecond, "the slot held by a closed connection must be released")
+	})
+}
+
+// TestWebsocketHandler_MaxConnectionsPerIP covers the per-IP share of the admission
+// budget: zero keeps today's unlimited behaviour, a positive cap refuses the N+1th
+// connection from one IP while another IP is unaffected, and a slot is released on
+// close so the same IP can reconnect.
+func TestWebsocketHandler_MaxConnectionsPerIP(t *testing.T) {
+	const testIPHeader = "X-Test-Client-IP"
+
+	newHandlerServer := func(t *testing.T, maxPerIP int) *httptest.Server {
+		t.Helper()
+
+		node, err := centrifuge.New(centrifuge.Config{LogLevel: centrifuge.LogLevelError})
+		require.NoError(t, err)
+		require.NoError(t, node.Run())
+
+		t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+		server := httptest.NewServer(NewWebsocketHandler(node, WebsocketConfig{
+			MaxConnectionsPerIP: maxPerIP,
+			ClientIP:            func(r *http.Request) string { return r.Header.Get(testIPHeader) },
+			CheckOrigin:         func(_ *http.Request) bool { return true },
+		}))
+		t.Cleanup(server.Close)
+
+		return server
+	}
+
+	dial := func(server *httptest.Server, ip string) (*websocket.Conn, *http.Response, error) {
+		header := http.Header{}
+		header.Set(testIPHeader, ip)
+
+		return websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), header)
+	}
+
+	t.Run("zero means unlimited", func(t *testing.T) {
+		server := newHandlerServer(t, 0)
+
+		for i := 0; i < 4; i++ {
+			conn, _, err := dial(server, "10.0.0.1")
+			require.NoError(t, err)
+
+			defer func() { _ = conn.Close() }()
+		}
+	})
+
+	t.Run("the N+1th connection from one IP is refused while another IP still connects", func(t *testing.T) {
+		server := newHandlerServer(t, 2)
+
+		conn1, _, err := dial(server, "10.0.0.1")
+		require.NoError(t, err)
+		defer func() { _ = conn1.Close() }()
+
+		conn2, _, err := dial(server, "10.0.0.1")
+		require.NoError(t, err)
+		defer func() { _ = conn2.Close() }()
+
+		refused, resp, err := dial(server, "10.0.0.1")
+		if refused != nil {
+			_ = refused.Close()
+		}
+
+		require.Error(t, err)
+		require.NotNil(t, resp)
+		require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+
+		otherIP, _, err := dial(server, "10.0.0.2")
+		require.NoError(t, err)
+		_ = otherIP.Close()
+	})
+
+	t.Run("a closed connection releases its per-IP slot", func(t *testing.T) {
+		server := newHandlerServer(t, 1)
+
+		conn, _, err := dial(server, "10.0.0.3")
+		require.NoError(t, err)
+		require.NoError(t, conn.Close())
+
+		require.Eventually(t, func() bool {
+			next, _, dialErr := dial(server, "10.0.0.3")
+			if dialErr != nil {
+				return false
+			}
+
+			_ = next.Close()
+
+			return true
+		}, 5*time.Second, 50*time.Millisecond, "the per-IP slot held by a closed connection must be released")
+	})
+}
+
+// TestCentrifuge_HandleP2PFrame covers frame validation on the inbound p2p relay:
+// only the types the relay actually serves are republished, and a node_status that
+// does not identify its peer must not flip the readiness gate.
+func TestCentrifuge_HandleP2PFrame(t *testing.T) {
+	newRelay := func(t *testing.T) *Centrifuge {
+		t.Helper()
+
+		c, err := New(ulogger.TestLogger{}, &settings.Settings{
+			Asset: settings.AssetSettings{HTTPAddress: "http://localhost:8080"},
+		}, nil, nil)
+		require.NoError(t, err)
+		require.NoError(t, c.Init(context.Background()))
+
+		t.Cleanup(func() { _ = c.centrifugeNode.Shutdown(context.Background()) })
+
+		return c
+	}
+
+	t.Run("an unknown frame type is dropped and counted", func(t *testing.T) {
+		c := newRelay(t)
+
+		c.handleP2PFrame([]byte(`{"type":"getminingcandidate","hash":"deadbeef"}`))
+		c.handleP2PFrame([]byte(`{"type":"../../admin","hash":"deadbeef"}`))
+
+		require.EqualValues(t, 2, c.droppedFrames.Load())
+	})
+
+	t.Run("a relayable frame type is not dropped", func(t *testing.T) {
+		c := newRelay(t)
+
+		for _, frame := range []string{
+			`{"type":"block","hash":"abc"}`,
+			`{"type":"subtree","hash":"def"}`,
+			`{"type":"ping"}`,
+			`{"type":"mining_on","hash":"abc"}`,
+			`{"type":"NODE_STATUS","peer_id":"peer-1"}`,
+		} {
+			c.handleP2PFrame([]byte(frame))
+		}
+
+		require.Zero(t, c.droppedFrames.Load())
+	})
+
+	t.Run("a node_status without a peer id does not open the readiness gate", func(t *testing.T) {
+		c := newRelay(t)
+
+		c.handleP2PFrame([]byte(`{"type":"node_status","best_height":5}`))
+
+		c.statusMutex.RLock()
+		cached := c.cachedCurrentNodeStatus
+		c.statusMutex.RUnlock()
+
+		require.Nil(t, cached, "an unidentified node_status must not mark the asset service ready")
+		require.EqualValues(t, 1, c.droppedFrames.Load())
+	})
+
+	t.Run("a node_status with a peer id opens the readiness gate", func(t *testing.T) {
+		c := newRelay(t)
+
+		c.handleP2PFrame([]byte(`{"type":"node_status","peer_id":"peer-1","best_height":5}`))
+
+		c.statusMutex.RLock()
+		cached := c.cachedCurrentNodeStatus
+		c.statusMutex.RUnlock()
+
+		require.NotNil(t, cached)
+		require.Equal(t, "peer-1", cached.PeerID)
+	})
+}
+
+// TestCentrifuge_P2PWebsocketReadLimit covers asset_websocketReadLimit on the outbound
+// p2p client: unset keeps today's unbounded read, a positive value bounds a single
+// inbound frame so a peer cannot force an arbitrary allocation on this process.
+func TestCentrifuge_P2PWebsocketReadLimit(t *testing.T) {
+	oversized, err := json.Marshal(notificationMsg{
+		Type:       "node_status",
+		PeerID:     "peer-1",
+		ClientName: strings.Repeat("A", 8192),
+	})
+	require.NoError(t, err)
+	require.Greater(t, len(oversized), 4096)
+
+	run := func(t *testing.T, readLimit int64) *Centrifuge {
+		t.Helper()
+
+		p2p := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			upgrader := websocket.Upgrader{CheckOrigin: func(_ *http.Request) bool { return true }}
+
+			conn, upErr := upgrader.Upgrade(w, r, nil)
+			if upErr != nil {
+				return
+			}
+
+			defer func() { _ = conn.Close() }()
+
+			for i := 0; i < 5; i++ {
+				if writeErr := conn.WriteMessage(websocket.TextMessage, oversized); writeErr != nil {
+					return
+				}
+
+				time.Sleep(20 * time.Millisecond)
+			}
+
+			time.Sleep(500 * time.Millisecond)
+		}))
+		t.Cleanup(p2p.Close)
+
+		tSettings := &settings.Settings{
+			Asset: settings.AssetSettings{
+				HTTPAddress:        "http://localhost:8080",
+				WebsocketReadLimit: readLimit,
+			},
+		}
+		tSettings.P2P.HTTPAddress = strings.TrimPrefix(p2p.URL, "http://")
+
+		c, newErr := New(ulogger.TestLogger{}, tSettings, nil, nil)
+		require.NoError(t, newErr)
+		require.NoError(t, c.Init(context.Background()))
+
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		t.Cleanup(func() { _ = c.centrifugeNode.Shutdown(context.Background()) })
+
+		require.NoError(t, c.startP2PListener(ctx))
+
+		return c
+	}
+
+	t.Run("unset preserves today's unbounded read", func(t *testing.T) {
+		c := run(t, 0)
+
+		require.Eventually(t, func() bool {
+			c.statusMutex.RLock()
+			defer c.statusMutex.RUnlock()
+
+			return c.cachedCurrentNodeStatus != nil
+		}, 5*time.Second, 50*time.Millisecond, "with no read limit the oversized frame is still accepted")
+	})
+
+	t.Run("a positive limit rejects an oversized frame", func(t *testing.T) {
+		c := run(t, 1024)
+
+		require.Never(t, func() bool {
+			c.statusMutex.RLock()
+			defer c.statusMutex.RUnlock()
+
+			return c.cachedCurrentNodeStatus != nil
+		}, 2*time.Second, 50*time.Millisecond, "a frame past the read limit must never reach the cache")
+	})
+}
+
+// TestCentrifuge_LogWebsocketMount pins how asset_centrifugeListenAddress is reported.
+// It is an enable flag, not a bind address, so an operator who narrowed it to a
+// specific interface has been given a network boundary that does not exist: say so at
+// WARN. Leaving it at a wildcard address matches where the socket really listens, so
+// that stays at INFO.
+func TestCentrifuge_LogWebsocketMount(t *testing.T) {
+	newCentrifuge := func(t *testing.T, logger ulogger.Logger, httpListen string) *Centrifuge {
+		t.Helper()
+
+		c, err := New(logger, &settings.Settings{
+			Asset: settings.AssetSettings{
+				HTTPAddress:       "http://localhost:8080",
+				HTTPListenAddress: httpListen,
+			},
+		}, nil, nil)
+		require.NoError(t, err)
+
+		return c
+	}
+
+	t.Run("a narrowed interface warns", func(t *testing.T) {
+		logger := newCapturingLogger()
+		newCentrifuge(t, logger, ":8090").logWebsocketMount("127.0.0.1:8892")
+
+		require.Len(t, logger.messages("Warnf"), 1)
+		require.Contains(t, logger.messages("Warnf")[0], "127.0.0.1:8892")
+		require.Empty(t, logger.messages("Infof"))
+	})
+
+	t.Run("the default wildcard address does not warn", func(t *testing.T) {
+		logger := newCapturingLogger()
+		newCentrifuge(t, logger, ":8090").logWebsocketMount(":8892")
+
+		require.Empty(t, logger.messages("Warnf"))
+		require.Len(t, logger.messages("Infof"), 1)
+	})
+}
+
+// TestWebsocketHandler_RefusalLogNamesTheCapThatFired pins that a refusal caused
+// by the per-IP cap is logged against asset_maxWebsocketConnectionsPerIP and its
+// limit, not against the global cap, which may be unset or still have room.
+func TestWebsocketHandler_RefusalLogNamesTheCapThatFired(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		messages []string
+		limits   []any
+	)
+
+	node, err := centrifuge.New(centrifuge.Config{
+		LogLevel: centrifuge.LogLevelDebug,
+		LogHandler: func(e centrifuge.LogEntry) {
+			if !strings.Contains(e.Message, "websocket upgrade refused") {
+				return
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			messages = append(messages, e.Message)
+			limits = append(limits, e.Fields["limit"])
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, node.Run())
+
+	t.Cleanup(func() { _ = node.Shutdown(context.Background()) })
+
+	handler := NewWebsocketHandler(node, WebsocketConfig{
+		MaxConnectionsPerIP: 1,
+		ClientIP:            func(_ *http.Request) string { return "203.0.113.7" },
+		CheckOrigin:         func(_ *http.Request) bool { return true },
+	})
+
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	first, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = first.Close() })
+
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.Error(t, err)
+	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Len(t, messages, 1)
+	require.Contains(t, messages[0], "asset_maxWebsocketConnectionsPerIP")
+	require.Equal(t, 1, limits[0])
+}
+
+// TestNamesNarrowerInterface pins that every spelling of the wildcard address
+// (empty host, 0.0.0.0, ::) counts as the wildcard, so it is not reported as
+// narrowing the interface, while a specific host that differs from what the
+// socket serves on is.
+func TestNamesNarrowerInterface(t *testing.T) {
+	tests := []struct {
+		addr, servedOn string
+		want           bool
+	}{
+		{":8892", ":8090", false},
+		{"0.0.0.0:8892", ":8090", false},
+		{"[::]:8892", ":8090", false},
+		{"0.0.0.0:8892", "127.0.0.1:8090", false},
+		{"127.0.0.1:8892", "127.0.0.1:8090", false},
+		{"localhost:8892", ":8090", true},
+		{"127.0.0.1:8892", "0.0.0.0:8090", true},
+	}
+
+	for _, tt := range tests {
+		require.Equal(t, tt.want, namesNarrowerInterface(tt.addr, tt.servedOn), "%s served on %s", tt.addr, tt.servedOn)
+	}
 }

@@ -28,8 +28,11 @@ import (
 // All methods succeed immediately without performing any actual storage operations.
 // This is useful for testing scenarios or when UTXO tracking needs to be disabled.
 type NullStore struct {
-	blockHeight     uint32
-	medianBlockTime uint32
+	// utxo.BlockStateFields gives the null store the same block-state
+	// behaviour as the real ones — including the rejection of height zero — so
+	// it satisfies the interface contract rather than being a laxer special
+	// case that the shared test suite would let through.
+	utxo.BlockStateFields
 }
 
 // BatchDecorate implements utxo.Store.
@@ -43,38 +46,66 @@ func NewNullStore() (*NullStore, error) {
 	return &NullStore{}, nil
 }
 
-func (m *NullStore) SetBlockHeight(height uint32) error {
-	m.blockHeight = height
-	return nil
-}
-
-func (m *NullStore) GetBlockHeight() uint32 {
-	return m.blockHeight
-}
-
-func (m *NullStore) SetMedianBlockTime(medianTime uint32) error {
-	m.medianBlockTime = medianTime
-	return nil
-}
-
-func (m *NullStore) GetMedianBlockTime() uint32 {
-	return m.medianBlockTime
-}
-
-func (m *NullStore) GetBlockState() utxo.BlockState {
-	return utxo.BlockState{
-		Height:     m.blockHeight,
-		MedianTime: m.medianBlockTime,
-	}
-}
+// SupportsOutpointOnlySpend reports false: the null store performs no real UTXO work.
+func (m *NullStore) SupportsOutpointOnlySpend() bool { return false }
 
 func (m *NullStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return http.StatusOK, "NullStore Store available", nil
 }
 
-func (m *NullStore) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
-	return &meta.Data{}, nil
+// Close is a no-op for the null store: it owns no batchers or connections.
+func (m *NullStore) Close(_ context.Context) error {
+	return nil
 }
+
+func (m *NullStore) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
+	// BlockHeights is non-empty so callers reading it (notably the validator's
+	// parent-tx height lookup) treat the parent as confirmed at a real height
+	// rather than triggering the unconfirmedParentHeight fallback. NullStore's
+	// purpose is "everything succeeds with default data"; an empty BlockHeights
+	// would force the consensus-mode rejection (bad-txns-unconfirmed-input-in-block)
+	// on any test that uses NullStore as a parent-tx source.
+	//
+	// Tx carries outputs for the same reason: the validator re-extends every
+	// transaction from the store instead of trusting the submitter's
+	// previous-output fields (GHSA-v76m-6vc7-g7c7), so a parent with no outputs
+	// now fails extension outright. The slice is built once and shared; nothing
+	// on the extend path mutates it.
+	return &meta.Data{BlockHeights: []uint32{1}, Tx: &bt.Tx{Outputs: nullStoreOutputs}}, nil
+}
+
+const (
+	// nullStoreOutputCount sizes the default output vector. NullStore has no way
+	// to know a caller's real output count, so it is large enough that fixtures
+	// referencing a non-zero vout resolve.
+	nullStoreOutputCount = 256
+
+	// nullStoreOutputSatoshis is 1000 BSV per output — high enough that a
+	// fixture's outputs never exceed its inputs and trip a value check. It
+	// matches the value PreviousOutputsDecorate reports for the same reason.
+	nullStoreOutputSatoshis = 100_000_000_000
+)
+
+// nullStoreOutputs is the default output vector every NullStore parent reports.
+//
+// Shared, not copied per call: NullStore's documented purpose includes
+// performance testing, and Get is called once per parent, so allocating 256
+// outputs per call would show up in exactly the measurements it exists to serve.
+// The consumers are the extension paths, which copy the satoshi value and the
+// script pointer onto transaction inputs and never mutate either. A future
+// caller that mutates an output or a script in place would corrupt it for every
+// other caller in the process; treat these as immutable.
+var nullStoreOutputs = func() []*bt.Output {
+	outputs := make([]*bt.Output, nullStoreOutputCount)
+	for i := range outputs {
+		outputs[i] = &bt.Output{
+			Satoshis:      nullStoreOutputSatoshis,
+			LockingScript: bscript.NewFromBytes([]byte{0x51}),
+		}
+	}
+
+	return outputs
+}()
 
 func (m *NullStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	return nil, nil
@@ -108,6 +139,40 @@ func (m *NullStore) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error 
 	}
 
 	return nil
+}
+
+// ParentOutputsForValidation answers every outpoint as mined at height 1 with
+// the null store's default outputs, matching Get, so validation against the null
+// store succeeds. An index past the default outputs is NoSuchIndex. A cancelled
+// context fails the whole call, as it does on the other stores.
+func (m *NullStore) ParentOutputsForValidation(ctx context.Context, outpoints []utxo.Outpoint, _ ...utxo.ParentOutputOption) ([]utxo.ParentOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	answers := make([]utxo.ParentOutput, len(outpoints))
+
+	for i, op := range outpoints {
+		if int(op.Vout) >= len(nullStoreOutputs) {
+			answers[i] = utxo.ParentOutput{Status: utxo.ParentOutputNoSuchIndex}
+			continue
+		}
+
+		out := nullStoreOutputs[op.Vout]
+		answers[i] = utxo.ParentOutput{
+			Status:        utxo.ParentOutputMined,
+			Satoshis:      out.Satoshis,
+			LockingScript: out.LockingScript,
+			Height:        1,
+		}
+	}
+
+	return answers, nil
+}
+
+// SpendAndCreateMulti writes the list through DefaultSpendAndCreateMulti.
+func (m *NullStore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	return utxo.DefaultSpendAndCreateMulti(ctx, m, 1, txs, blockHeight, opts...)
 }
 
 func (m *NullStore) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
@@ -153,6 +218,34 @@ func (m *NullStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ig
 	return nil, nil
 }
 
+// SpendAndCreate implements utxo.Store as a no-op combination of Spend and Create.
+func (m *NullStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
+	options, err := utxo.ParseCreateOptions(opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var spends []*utxo.Spend
+
+	if !options.CreateOnly {
+		spends, err = m.Spend(ctx, tx, blockHeight, options.IgnoreFlags)
+		if err != nil {
+			return nil, spends, err
+		}
+
+		if options.SpendOnly {
+			return nil, spends, nil
+		}
+	}
+
+	md, err := m.Create(ctx, tx, blockHeight, opts...)
+	if err != nil {
+		return nil, spends, err
+	}
+
+	return md, spends, nil
+}
+
 func (m *NullStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
 	return nil
 }
@@ -173,7 +266,23 @@ func (m *NullStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo
 	return nil, nil
 }
 
+func (m *NullStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
+	return nil, nil
+}
+
+func (m *NullStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
+	return nil
+}
+
+func (m *NullStore) RemoveBlockIDs(ctx context.Context, removals []utxo.BlockIDsRemoval) error {
+	return nil
+}
+
 func (m *NullStore) Delete(ctx context.Context, hash *chainhash.Hash) error {
+	return nil
+}
+
+func (m *NullStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
@@ -203,6 +312,18 @@ func (m *NullStore) SetConflicting(ctx context.Context, txHashes []chainhash.Has
 
 func (m *NullStore) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
 	return nil
+}
+
+func (m *NullStore) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
+	return nil
+}
+
+func (m *NullStore) CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error {
+	return nil
+}
+
+func (m *NullStore) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
+	return nil, nil
 }
 
 func (m *NullStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {

@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aerospike/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -223,6 +224,31 @@ func TestAerospike(t *testing.T) {
 		assert.Equal(t, int(utxo.Status_SPENT), resp.Status)
 		require.NotNil(t, resp.SpendingData)
 		assert.Equal(t, spendTxClone.TxIDChainHash().String(), resp.SpendingData.TxID.String())
+	})
+
+	// Regression guard for the remotely-triggerable panic identified on PR #950:
+	// the bulk POST /api/v1/utxos endpoint and the simplified GET /api/v1/utxo
+	// both forward client-controlled vouts straight to GetSpend without
+	// pre-validating against the tx's output count. An out-of-range vout (e.g.
+	// vout=99 against a tx with 2 outputs) used to index past len(utxos) and
+	// panic with index-out-of-range inside an errgroup goroutine that
+	// echo.middleware.Recover does not cover — crashing the asset process.
+	// Contract: out-of-range vout returns Status_NOT_FOUND, not an error and
+	// not a panic.
+	t.Run("aerospike_get_spend_out_of_range_vout", func(t *testing.T) {
+		cleanDB(t, client)
+
+		_, err := store.Create(ctx, tx, 0)
+		require.NoError(t, err)
+
+		// tx fixture has a small number of outputs (well under utxoBatchSize=128).
+		resp, err := store.GetSpend(ctx, &utxo.Spend{
+			TxID:     tx.TxIDChainHash(),
+			Vout:     99,
+			UTXOHash: nil,
+		})
+		require.NoError(t, err)
+		require.Equal(t, int(utxo.Status_NOT_FOUND), resp.Status)
 	})
 
 	t.Run("aerospike_get inputs", func(t *testing.T) {
@@ -574,7 +600,10 @@ func TestAerospike(t *testing.T) {
 		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey)
 		require.NoError(t, err)
 
-		assert.Equal(t, 11, value.Bins[fields.DeleteAtHeight.String()])
+		// setMined stamps the DAH relative to the height of the block the tx is mined
+		// into (BlockHeight=123), plus the retention window — not the store's cached
+		// chain tip.
+		assert.Equal(t, int(123+tSettings.GetUtxoStoreBlockHeightRetention()), value.Bins[fields.DeleteAtHeight.String()])
 
 		// try to spend with different txid
 		spends, err = store.Spend(ctx, spendTx3, 1)
@@ -652,12 +681,12 @@ func TestAerospike(t *testing.T) {
 		// utxoSpendTxID := utxos[spends[0].Vout]
 		// require.Equal(t, spendingTxID1.String(), utxoSpendTxID)
 
-		// try to reset the utxo
+		// try to reset the utxo — must pass the SpendingData GetSpends populated during Spend(spendTx).
 		err = store.Unspend(ctx, []*utxo.Spend{{
 			TxID:         tx2.TxIDChainHash(),
 			Vout:         0,
 			UTXOHash:     utxoHash0,
-			SpendingData: spendpkg.NewSpendingData(spendingTxID2, 2),
+			SpendingData: spendpkg.NewSpendingData(spendTx.TxIDChainHash(), 0),
 		}})
 		require.NoError(t, err)
 
@@ -707,7 +736,14 @@ func TestAerospike(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, 1, spendUtxos)
 
-		err = store.Unspend(ctx, spends)
+		// Match the SpendingData populated by GetSpends inside Spend(spendTx) above.
+		luaUnspends := []*utxo.Spend{{
+			TxID:         tx.TxIDChainHash(),
+			Vout:         0,
+			UTXOHash:     utxoHash0,
+			SpendingData: spendpkg.NewSpendingData(spendTx.TxIDChainHash(), 0),
+		}}
+		err = store.Unspend(ctx, luaUnspends)
 		require.NoError(t, err)
 
 		resp, err = client.Get(nil, txKey, "utxos", "spentUtxos")
@@ -970,7 +1006,7 @@ func TestAerospike(t *testing.T) {
 		assert.Nil(t, rec.Bins["creating"])
 
 		// Increment via multi API
-		require.NoError(t, store.IncrementSpentRecordsMulti([]*chainhash.Hash{bigTx.TxIDChainHash()}, 1))
+		require.NoError(t, store.IncrementSpentRecordsMulti([]*chainhash.Hash{bigTx.TxIDChainHash()}, 1, 0))
 
 		rec2, err := client.Get(util.GetAerospikeReadPolicy(tSettings), bigTxKey)
 		require.NoError(t, err)
@@ -1029,7 +1065,7 @@ func TestAerospike(t *testing.T) {
 		var invalid chainhash.Hash // zero hash, not present
 		ids := []*chainhash.Hash{valid, &invalid}
 
-		aggErr := store.IncrementSpentRecordsMulti(ids, 1)
+		aggErr := store.IncrementSpentRecordsMulti(ids, 1, 0)
 		require.Error(t, aggErr)
 		t.Logf("Error: %v", aggErr)
 
@@ -1283,7 +1319,7 @@ func TestIncrementSpentRecords(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 0, totalExtraRecs)
 
-	res, err := store.IncrementSpentRecords(tx.TxIDChainHash(), 1)
+	res, err := store.IncrementSpentRecords(tx.TxIDChainHash(), 1, 0)
 	require.NoError(t, err)
 
 	// Lua now clamps spentExtraRecs to [0, totalExtraRecs] instead of erroring.
@@ -1417,6 +1453,75 @@ func TestStoreDecorate(t *testing.T) {
 		assert.Len(t, *childTx.Inputs[4].PreviousTxScript, 25)
 		assert.Equal(t, uint64(2_000_000), childTx.Inputs[4].PreviousTxSatoshis)
 	})
+
+	t.Run("aerospike_BatchPreviousOutputsDecorate", func(t *testing.T) {
+		// Covers the per-tx fan-out inside BatchPreviousOutputsDecorate: multiple
+		// child txs decorate concurrently, every input across every child must end
+		// up populated, and the shared outpoint batcher must dedupe the parent
+		// fetch even though three goroutines race to request it.
+		cleanDB(t, client)
+
+		_, createErr := store.Create(ctx, tx, 0)
+		require.NoError(t, createErr)
+
+		// Each child references two different outputs of the same parent. Three
+		// children -> six inputs across the batch, exercising the errgroup fan-out
+		// and the batcher's dedup of the shared parent.
+		newChild := func(vout1, vout2 uint32) *bt.Tx {
+			child := &bt.Tx{}
+
+			in1 := &bt.Input{PreviousTxOutIndex: vout1}
+			_ = in1.PreviousTxIDAdd(tx.TxIDChainHash())
+			child.Inputs = append(child.Inputs, in1)
+
+			in2 := &bt.Input{PreviousTxOutIndex: vout2}
+			_ = in2.PreviousTxIDAdd(tx.TxIDChainHash())
+			child.Inputs = append(child.Inputs, in2)
+
+			return child
+		}
+
+		child1 := newChild(0, 4)
+		child2 := newChild(1, 2)
+		child3 := newChild(3, 0) // vout 0 also referenced by child1 -> dedup path
+
+		batchErr := store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{child1, child2, child3})
+		require.NoError(t, batchErr)
+
+		// Expected satoshis taken from the same parent fixture used by the
+		// aerospike_PreviousOutputsDecorate subtest above.
+		expected := map[uint32]uint64{
+			0: 5_000_000,
+			1: 2_000_000,
+			2: 20_000,
+			3: 20_000,
+			4: 2_817_689,
+		}
+		for _, child := range []*bt.Tx{child1, child2, child3} {
+			for i, input := range child.Inputs {
+				require.NotNil(t, input.PreviousTxScript, "input %d not decorated", i)
+				assert.Len(t, *input.PreviousTxScript, 25)
+				assert.Equal(t, expected[input.PreviousTxOutIndex], input.PreviousTxSatoshis,
+					"wrong satoshis for vout %d", input.PreviousTxOutIndex)
+			}
+		}
+
+		// Empty + nil-tolerance: empty slice is a no-op; an already-decorated
+		// input must not be touched (PreviousOutputsDecorate skips on
+		// PreviousTxScript != nil, which the batch path relies on).
+		require.NoError(t, store.BatchPreviousOutputsDecorate(ctx, nil))
+		require.NoError(t, store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{}))
+
+		preserved := newChild(0, 1)
+		sentinel := bscript.NewFromBytes([]byte{0xde, 0xad, 0xbe, 0xef})
+		preserved.Inputs[0].PreviousTxScript = sentinel
+		preserved.Inputs[0].PreviousTxSatoshis = 999
+		require.NoError(t, store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{preserved}))
+		assert.Same(t, sentinel, preserved.Inputs[0].PreviousTxScript, "already-decorated input was overwritten")
+		assert.Equal(t, uint64(999), preserved.Inputs[0].PreviousTxSatoshis)
+		// the other input should still have been decorated from the store
+		assert.Equal(t, expected[1], preserved.Inputs[1].PreviousTxSatoshis)
+	})
 }
 
 // func TestLargeUTXO(t *testing.T) {
@@ -1547,6 +1652,98 @@ func TestSmokeTests(t *testing.T) {
 		tests.Conflicting(t, store)
 	})
 
+	t.Run("aerospike_conflict_WAL", func(t *testing.T) {
+		tests.ConflictWAL(t, store)
+	})
+
+	t.Run("aerospike_unspend_idempotent", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.UnspendIdempotent(t, store)
+	})
+
+	t.Run("aerospike_spend_and_create", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreate(t, store)
+	})
+
+	t.Run("aerospike_spend_and_create_create_only", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateCreateOnly(t, store)
+	})
+
+	t.Run("aerospike_spend_and_create_spend_only", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateSpendOnly(t, store)
+	})
+
+	t.Run("aerospike_spend_and_create_tx_exists_keeps_spends", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateTxExistsKeepsSpends(t, store)
+	})
+
+	t.Run("aerospike_spend_and_create_spend_error_surfaces_per_input", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateSpendErrorSurfacesPerInput(t, store)
+	})
+
+	t.Run("aerospike_spend_and_create_invalid_options", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.SpendAndCreateInvalidOptions(t, store)
+	})
+
+	t.Run("aerospike_delete_then_unspend_restores_parent", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.DeleteThenUnspendRestoresParent(t, store)
+	})
+
+	t.Run("aerospike_delete_then_unspend_restores_parent_paginated", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.DeleteThenUnspendRestoresParentPaginated(t, store, tSettings.UtxoStore.UtxoBatchSize)
+	})
+
+	t.Run("aerospike_conflict_WAL_crash_recovery", func(t *testing.T) {
+		tests.ConflictWALCrashRecovery(t, store)
+	})
+
+	t.Run("aerospike_partial_spend_rollback", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.PartialSpendRollback(t, store)
+	})
+
+	t.Run("aerospike_quick_path_create_spend_mined_semantics", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.QuickPathCreateSpendMinedSemantics(t, store)
+	})
+
+	t.Run("aerospike_absent_record_observables", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.AbsentRecordObservables(t, store)
+	})
+
 	t.Run("aerospike_mined_then_spend_all_prunes", func(t *testing.T) {
 		// Pruner service is a process-wide singleton. Reset at both ends so
 		// this subtest doesn't leak a started service into later aerospike
@@ -1577,6 +1774,16 @@ func TestSmokeTests(t *testing.T) {
 		}
 
 		tests.MinedThenSpendAllPrunes(t, store, prunerSvc)
+	})
+
+	// Last: these cases move the shared store's block height, and cannot restore
+	// it if the store started at zero.
+	t.Run("aerospike_set_block_state", func(t *testing.T) {
+		tests.SetBlockStateContract(t, store)
+	})
+
+	t.Run("aerospike_set_block_state_concurrent", func(t *testing.T) {
+		tests.SetBlockStateSnapshotUnderConcurrency(t, store)
 	})
 }
 
@@ -1658,6 +1865,83 @@ func TestCreateZeroSat(t *testing.T) {
 	assert.Equal(t, 2, response.Bins["totalUtxos"])
 	assert.Equal(t, 2, response.Bins["spentUtxos"])
 	assert.Equal(t, 11, response.Bins[fields.DeleteAtHeight.String()])
+}
+
+// TestAerospikeOutpointBatcherDrainMode is a happy-path smoke test for the
+// utxostore_outpointBatcherDrainMode toggle: with drain mode enabled at store
+// construction, the single-tx PreviousOutputsDecorate and the concurrent
+// BatchPreviousOutputsDecorate paths must still populate every input
+// correctly. The toggle has no observable getter from outside the package; if
+// it were silently dropped from the constructor (e.g. a missing branch in
+// aerospike.go) the decorate paths would still pass, so this test exists to
+// catch the wiring being deleted or misnamed, not to prove a perf claim.
+func TestAerospikeOutpointBatcherDrainMode(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.OutpointBatcherDrainMode = true
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+
+	t.Cleanup(func() {
+		deferFn()
+	})
+
+	cleanDB(t, client)
+
+	_, createErr := store.Create(ctx, tx, 0)
+	require.NoError(t, createErr)
+
+	// Per-tx path: PreviousOutputsDecorate. Drain mode means the single push
+	// into the outpoint batcher dispatches immediately instead of waiting on
+	// the timer; the populated inputs must still match the parent fixture.
+	singleChild := &bt.Tx{}
+	addInput := func(child *bt.Tx, vout uint32) {
+		in := &bt.Input{PreviousTxOutIndex: vout}
+		_ = in.PreviousTxIDAdd(tx.TxIDChainHash())
+		child.Inputs = append(child.Inputs, in)
+	}
+	addInput(singleChild, 0)
+	addInput(singleChild, 4)
+	require.NoError(t, store.PreviousOutputsDecorate(ctx, singleChild))
+
+	expected := map[uint32]uint64{
+		0: 5_000_000,
+		1: 2_000_000,
+		2: 20_000,
+		3: 20_000,
+		4: 2_817_689,
+	}
+	for i, in := range singleChild.Inputs {
+		require.NotNil(t, in.PreviousTxScript, "input %d not decorated", i)
+		require.Len(t, *in.PreviousTxScript, 25)
+		require.Equal(t, expected[in.PreviousTxOutIndex], in.PreviousTxSatoshis)
+	}
+
+	// Concurrent path: BatchPreviousOutputsDecorate fans per-tx calls out via
+	// errgroup, so drain mode here causes many small dispatches instead of one
+	// wide one. Functionally the result must still be identical.
+	newChild := func(vout1, vout2 uint32) *bt.Tx {
+		child := &bt.Tx{}
+		addInput(child, vout1)
+		addInput(child, vout2)
+		return child
+	}
+
+	child1 := newChild(0, 4)
+	child2 := newChild(1, 2)
+	child3 := newChild(3, 0)
+
+	require.NoError(t, store.BatchPreviousOutputsDecorate(ctx, []*bt.Tx{child1, child2, child3}))
+
+	for _, child := range []*bt.Tx{child1, child2, child3} {
+		for i, in := range child.Inputs {
+			require.NotNil(t, in.PreviousTxScript, "input %d not decorated", i)
+			require.Len(t, *in.PreviousTxScript, 25)
+			require.Equal(t, expected[in.PreviousTxOutIndex], in.PreviousTxSatoshis,
+				"wrong satoshis for vout %d", in.PreviousTxOutIndex)
+		}
+	}
 }
 
 func TestAerospikeWithBatchSize(t *testing.T) {
@@ -1754,7 +2038,7 @@ func TestAerospikeWithBatchSize(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, 2, totalExtraRecs)
 
-		_, err = store.IncrementSpentRecords(tx.TxIDChainHash(), 1)
+		_, err = store.IncrementSpentRecords(tx.TxIDChainHash(), 1, 0)
 		require.NoError(t, err)
 
 		resp, err = client.Get(nil, txKey)
@@ -1768,7 +2052,7 @@ func TestAerospikeWithBatchSize(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, 1, spentExtraRecs)
 
-		_, err = store.IncrementSpentRecords(tx.TxIDChainHash(), -1)
+		_, err = store.IncrementSpentRecords(tx.TxIDChainHash(), -1, 0)
 		require.NoError(t, err)
 
 		resp, err = client.Get(nil, txKey)
@@ -2073,6 +2357,7 @@ func TestStore_AerospikeSplitTx(t *testing.T) {
 func TestRespendSameUTXO(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.SpendBatcherSize = 1
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 

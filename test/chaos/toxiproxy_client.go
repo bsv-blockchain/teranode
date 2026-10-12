@@ -106,13 +106,13 @@ func (c *ToxiproxyClient) AddSlicer(proxyName string, avgSize, sizeVariation, de
 func (c *ToxiproxyClient) addToxic(proxyName string, toxic Toxic) error {
 	data, err := json.Marshal(toxic)
 	if err != nil {
-		return errors.NewProcessingError("failed to marshal toxic: %w", err)
+		return errors.NewProcessingError("failed to marshal toxic", err)
 	}
 
 	url := fmt.Sprintf("%s/proxies/%s/toxics", c.BaseURL, proxyName)
 	resp, err := c.client.Post(url, "application/json", bytes.NewReader(data))
 	if err != nil {
-		return errors.NewProcessingError("failed to add toxic: %w", err)
+		return errors.NewProcessingError("failed to add toxic", err)
 	}
 	defer resp.Body.Close()
 
@@ -129,12 +129,12 @@ func (c *ToxiproxyClient) RemoveToxic(proxyName, toxicName string) error {
 	url := fmt.Sprintf("%s/proxies/%s/toxics/%s", c.BaseURL, proxyName, toxicName)
 	req, err := http.NewRequest(http.MethodDelete, url, nil)
 	if err != nil {
-		return errors.NewProcessingError("failed to create delete request: %w", err)
+		return errors.NewProcessingError("failed to create delete request", err)
 	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return errors.NewProcessingError("failed to remove toxic: %w", err)
+		return errors.NewProcessingError("failed to remove toxic", err)
 	}
 	defer resp.Body.Close()
 
@@ -150,12 +150,12 @@ func (c *ToxiproxyClient) RemoveToxic(proxyName, toxicName string) error {
 func (c *ToxiproxyClient) RemoveAllToxics(proxyName string) error {
 	toxics, err := c.ListToxics(proxyName)
 	if err != nil {
-		return errors.NewProcessingError("failed to list toxics: %w", err)
+		return errors.NewProcessingError("failed to list toxics", err)
 	}
 
 	for _, toxic := range toxics {
 		if err := c.RemoveToxic(proxyName, toxic.Name); err != nil {
-			return errors.NewProcessingError("failed to remove toxic %s: %w", toxic.Name, err)
+			return errors.NewProcessingError("failed to remove toxic %s", toxic.Name, err)
 		}
 	}
 
@@ -167,7 +167,7 @@ func (c *ToxiproxyClient) ListToxics(proxyName string) ([]Toxic, error) {
 	url := fmt.Sprintf("%s/proxies/%s/toxics", c.BaseURL, proxyName)
 	resp, err := c.client.Get(url)
 	if err != nil {
-		return nil, errors.NewProcessingError("failed to list toxics: %w", err)
+		return nil, errors.NewProcessingError("failed to list toxics", err)
 	}
 	defer resp.Body.Close()
 
@@ -178,7 +178,7 @@ func (c *ToxiproxyClient) ListToxics(proxyName string) ([]Toxic, error) {
 
 	var toxics []Toxic
 	if err := json.NewDecoder(resp.Body).Decode(&toxics); err != nil {
-		return nil, errors.NewProcessingError("failed to decode toxics: %w", err)
+		return nil, errors.NewProcessingError("failed to decode toxics", err)
 	}
 
 	return toxics, nil
@@ -198,19 +198,19 @@ func (c *ToxiproxyClient) DisableProxy(proxyName string) error {
 func (c *ToxiproxyClient) setProxyEnabled(proxyName string, enabled bool) error {
 	data, err := json.Marshal(map[string]bool{"enabled": enabled})
 	if err != nil {
-		return errors.NewProcessingError("failed to marshal proxy state: %w", err)
+		return errors.NewProcessingError("failed to marshal proxy state", err)
 	}
 
 	url := fmt.Sprintf("%s/proxies/%s", c.BaseURL, proxyName)
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
-		return errors.NewProcessingError("failed to create request: %w", err)
+		return errors.NewProcessingError("failed to create request", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return errors.NewProcessingError("failed to set proxy state: %w", err)
+		return errors.NewProcessingError("failed to set proxy state", err)
 	}
 	defer resp.Body.Close()
 
@@ -227,7 +227,7 @@ func (c *ToxiproxyClient) GetProxy(proxyName string) (*Proxy, error) {
 	url := fmt.Sprintf("%s/proxies/%s", c.BaseURL, proxyName)
 	resp, err := c.client.Get(url)
 	if err != nil {
-		return nil, errors.NewProcessingError("failed to get proxy: %w", err)
+		return nil, errors.NewProcessingError("failed to get proxy", err)
 	}
 	defer resp.Body.Close()
 
@@ -238,7 +238,7 @@ func (c *ToxiproxyClient) GetProxy(proxyName string) (*Proxy, error) {
 
 	var proxy Proxy
 	if err := json.NewDecoder(resp.Body).Decode(&proxy); err != nil {
-		return nil, errors.NewProcessingError("failed to decode proxy: %w", err)
+		return nil, errors.NewProcessingError("failed to decode proxy", err)
 	}
 
 	return &proxy, nil
@@ -247,11 +247,11 @@ func (c *ToxiproxyClient) GetProxy(proxyName string) (*Proxy, error) {
 // ResetProxy removes all toxics and re-enables the proxy
 func (c *ToxiproxyClient) ResetProxy(proxyName string) error {
 	if err := c.RemoveAllToxics(proxyName); err != nil {
-		return errors.NewProcessingError("failed to remove toxics: %w", err)
+		return errors.NewProcessingError("failed to remove toxics", err)
 	}
 
 	if err := c.EnableProxy(proxyName); err != nil {
-		return errors.NewProcessingError("failed to enable proxy: %w", err)
+		return errors.NewProcessingError("failed to enable proxy", err)
 	}
 
 	return nil

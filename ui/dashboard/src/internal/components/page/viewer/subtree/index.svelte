@@ -1,54 +1,62 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { beforeUpdate } from 'svelte'
   import { page } from '$app/stores'
   import SubtreeDetailsCard from './subtree-details-card/index.svelte'
   import SubtreeTxsCard from './subtree-txs-card/index.svelte'
-  import SubtreeMerkleVisualizer from './subtree-merkle-visualizer/index.svelte'
 
   import NoData from '../no-data-card/index.svelte'
   import { spinCount } from '$internal/stores/nav'
   import { assetHTTPAddress } from '$internal/stores/nodeStore'
-  import { DetailTab, DetailType, setQueryParam } from '$internal/utils/urls'
+  import { DetailTab, DetailType, getSubtreeIndex, setQueryParam } from '$internal/utils/urls'
   import { failure } from '$lib/utils/notifications'
   import * as api from '$internal/api'
 
-  let ready = false
-  beforeUpdate(() => {
+  let ready = $state(false)
+  $effect(() => {
     ready = true
   })
 
   const type = DetailType.subtree
 
-  export let hash = ''
+  let { hash = '' }: { hash?: string } = $props()
 
-  $: blockHash = ready ? $page.url.searchParams.get('blockHash') ?? '' : ''
+  const blockHash = $derived(ready ? ($page.url.searchParams.get('blockHash') ?? '') : '')
 
-  let display: DetailTab
+  // Position of this subtree within the block, as presentation context from the
+  // URL. Derived beside blockHash rather than from fetched data, so an
+  // index-only navigation renumbers the headings even when the fetch guard
+  // below decides not to refetch.
+  const index = $derived(ready ? getSubtreeIndex($page.url.searchParams) : undefined)
 
-  $: tab = ready ? $page.url.searchParams.get('tab') ?? '' : ''
-  $: display = tab === DetailTab.json ? DetailTab.json :
-              tab === DetailTab.merkleproof ? DetailTab.merkleproof :
-              DetailTab.overview
+  let display: DetailTab = $state(DetailTab.overview)
 
-  let result: any = null
+  const tab = $derived(ready ? ($page.url.searchParams.get('tab') ?? '') : '')
+  $effect(() => {
+    display = tab === DetailTab.json ? DetailTab.json : DetailTab.overview
+  })
+
+  let result: any = $state(null)
 
   // Track previous values to prevent unnecessary fetches
   let lastFetchParams = { assetHTTPAddress: '', hash: '', blockHash: '' }
 
-  $: if ($assetHTTPAddress && type && hash && hash.length === 64) {
-    // Only fetch if parameters actually changed
-    if (
-      lastFetchParams.assetHTTPAddress !== $assetHTTPAddress ||
-      lastFetchParams.hash !== hash ||
-      lastFetchParams.blockHash !== blockHash
-    ) {
-      lastFetchParams = { assetHTTPAddress: $assetHTTPAddress, hash, blockHash }
-      fetchData()
+  $effect(() => {
+    if ($assetHTTPAddress && type && hash && hash.length === 64) {
+      // Only fetch if parameters actually changed
+      if (
+        lastFetchParams.assetHTTPAddress !== $assetHTTPAddress ||
+        lastFetchParams.hash !== hash ||
+        lastFetchParams.blockHash !== blockHash
+      ) {
+        lastFetchParams = { assetHTTPAddress: $assetHTTPAddress, hash, blockHash }
+        fetchData()
+      }
     }
-  }
+  })
 
   function onDisplay(e) {
-    display = e.detail.value
+    display = e.value
     setQueryParam('tab', display)
   }
 
@@ -109,13 +117,10 @@
 </script>
 
 {#if result}
-  <SubtreeDetailsCard data={result} {display} {blockHash} on:display={onDisplay} />
+  <SubtreeDetailsCard data={result} {display} {blockHash} {index} ondisplay={onDisplay} />
   {#if display === DetailTab.overview}
-    <div style="height: 20px" />
-    <SubtreeTxsCard subtree={result} {blockHash} />
-  {:else if display === DetailTab.merkleproof}
-    <div style="height: 20px" />
-    <SubtreeMerkleVisualizer subtreeHash={hash} {blockHash} />
+    <div style="height: 20px"></div>
+    <SubtreeTxsCard subtree={result} {blockHash} {index} />
   {/if}
 {:else if $spinCount === 0}
   <div class="no-data">

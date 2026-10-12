@@ -8,7 +8,7 @@ fi
 
 # Check if SETTINGS_CONTEXT is set
 if [ -z "$SETTINGS_CONTEXT" ]; then
-    echo "Error: SETTINGS_CONTEXT environment variable is not set"
+    echo "Error: SETTINGS_CONTEXT environment variable is not set" >&2
     exit 1
 fi
 

@@ -78,6 +78,7 @@ nav:
           - Configuration:
               - Docker: howto/miners/docker/minersHowToConfigureTheNode.md
               - Kubernetes: howto/miners/kubernetes/minersHowToConfigureTheNode.md
+              - P2P Public Exposure (Kubernetes): howto/miners/kubernetes/minersHowToExposeP2P.md
               - Aerospike Tuning: howto/miners/minersHowToAerospikeTuning.md
               - Asset Server Interaction: howto/miners/minersHowToInteractWithAssetServer.md
               - FSM Interaction: howto/miners/minersHowToInteractWithFSM.md
@@ -100,6 +101,7 @@ nav:
           - Sync the Node:
               - Docker: howto/miners/docker/minersHowToSyncTheNode.md
               - Kubernetes: howto/miners/kubernetes/minersHowToSyncTheNode.md
+          - Monitoring: howto/miners/minersHowToMonitoring.md
           - Additional:
               - Backup Teranode: howto/miners/minersHowToBackup.md
               - CPU Mining Setup: howto/miners/minersHowToCPUMiner.md
@@ -161,6 +163,7 @@ nav:
           - Glossary: references/glossary.md
           - Coding Conventions: references/codingConventions.md
           - Kafka Message Format: references/kafkaMessageFormat.md
+          - Proto Versioning Policy: references/protoVersioning.md
           - Network Consensus Rules: references/networkConsensusRules.md
           - Protobuf API:
               - Alert Proto: references/protobuf_docs/alertProto.md

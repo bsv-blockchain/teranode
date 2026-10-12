@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"google.golang.org/grpc"
 )
 
 // Client provides a gRPC client interface for the subtree validation service.
@@ -38,6 +39,8 @@ import (
 // The underlying gRPC connection handles concurrent requests efficiently.
 type Client struct {
 	apiClient subtreevalidation_api.SubtreeValidationAPIClient
+	// conn is the gRPC connection owned by this client; closed by Close()
+	conn *grpc.ClientConn
 	// logger provides structured logging capabilities for client operations
 	logger ulogger.Logger
 	// settings contains the configuration parameters for the client and service connections
@@ -94,11 +97,21 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 
 	client := &Client{
 		apiClient: subtreevalidation_api.NewSubtreeValidationAPIClient(baConn),
+		conn:      baConn,
 		logger:    logger,
 		settings:  tSettings,
 	}
 
 	return client, nil
+}
+
+// Close releases the gRPC connection owned by this client.
+func (s *Client) Close() error {
+	if s.conn != nil {
+		return s.conn.Close()
+	}
+
+	return nil
 }
 
 func (s *Client) Health(ctx context.Context, checkLiveness bool) (int, string, error) {

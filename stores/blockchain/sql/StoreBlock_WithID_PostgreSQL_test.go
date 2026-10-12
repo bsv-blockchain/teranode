@@ -32,7 +32,7 @@ func TestStoreBlockWithID_Postgres(t *testing.T) {
 					WithStartupTimeout(5*time.Minute),
 			),
 		)
-		require.NoError(t, err)
+		test.SkipIfContainerUnavailable(t, err)
 		defer func() {
 			assert.NoError(t, pgContainer.Terminate(ctx))
 		}()
@@ -47,9 +47,11 @@ func TestStoreBlockWithID_Postgres(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
-		customID := uint64(42)
+		// A caller-supplied id must be the one reserved for the hash.
+		customID, err := s.AssignBlockID(ctx, block1.Hash())
+		require.NoError(t, err)
 
 		// Store block1 with custom ID
 		id1, height1, err := s.StoreBlock(ctx, block1, "", options.WithID(customID))
@@ -77,7 +79,7 @@ func TestStoreBlockWithID_Postgres(t *testing.T) {
 					WithStartupTimeout(5*time.Minute),
 			),
 		)
-		require.NoError(t, err)
+		test.SkipIfContainerUnavailable(t, err)
 		defer func() {
 			assert.NoError(t, pgContainer.Terminate(ctx))
 		}()
@@ -92,10 +94,11 @@ func TestStoreBlockWithID_Postgres(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Store first block with custom ID 100
-		customID1 := uint64(100)
+		customID1, err := s.AssignBlockID(ctx, block1.Hash())
+		require.NoError(t, err)
 		id1, _, err := s.StoreBlock(ctx, block1, "", options.WithID(customID1))
 		require.NoError(t, err)
 		assert.Equal(t, customID1, id1)
@@ -107,7 +110,8 @@ func TestStoreBlockWithID_Postgres(t *testing.T) {
 		assert.Greater(t, id2, uint64(0))
 
 		// Store third block with another custom ID
-		customID3 := uint64(500)
+		customID3, err := s.AssignBlockID(ctx, block3.Hash())
+		require.NoError(t, err)
 		id3, _, err := s.StoreBlock(ctx, block3, "", options.WithID(customID3))
 		require.NoError(t, err)
 		assert.Equal(t, customID3, id3)
@@ -139,7 +143,7 @@ func TestStoreBlockWithID_Postgres(t *testing.T) {
 					WithStartupTimeout(5*time.Minute),
 			),
 		)
-		require.NoError(t, err)
+		test.SkipIfContainerUnavailable(t, err)
 		defer func() {
 			assert.NoError(t, pgContainer.Terminate(ctx))
 		}()
@@ -154,7 +158,7 @@ func TestStoreBlockWithID_Postgres(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 		s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 		require.NoError(t, err)
-		defer s.Close()
+		defer s.Close(context.Background())
 
 		// Since the genesis block is automatically inserted when the table is created,
 		// we need to retrieve it from the database to get the exact same block
@@ -169,4 +173,67 @@ func TestStoreBlockWithID_Postgres(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "genesis block cannot have custom ID")
 	})
+}
+
+// TestStoreBlock_CallerSuppliedIDMustMatchReservation_Postgres runs the refusal
+// rules against Postgres, where the highest issued id comes from
+// pg_sequence_last_value rather than sqlite_sequence.
+func TestStoreBlock_CallerSuppliedIDMustMatchReservation_Postgres(t *testing.T) {
+	ctx := context.Background()
+
+	pgContainer, err := postgres.Run(ctx,
+		"postgres:13",
+		postgres.WithDatabase("testdb"),
+		postgres.WithUsername("testuser"),
+		postgres.WithPassword("testpass"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(5*time.Minute),
+		),
+	)
+	test.SkipIfContainerUnavailable(t, err)
+	defer func() {
+		assert.NoError(t, pgContainer.Terminate(ctx))
+	}()
+
+	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
+	require.NoError(t, err)
+
+	dbURL, err := url.Parse(connStr)
+	require.NoError(t, err)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	defer s.Close(context.Background())
+
+	reserved1, err := s.AssignBlockID(ctx, block1.Hash())
+	require.NoError(t, err)
+
+	reserved2, err := s.AssignBlockID(ctx, block2.Hash())
+	require.NoError(t, err)
+
+	highest, err := highestIssuedForTest(ctx, s)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, highest, reserved2, "the sequence must report the ids it issued")
+
+	// Another block's id, and an id the sequence never issued, are both refused.
+	_, _, err = s.StoreBlock(ctx, block1, "", options.WithID(reserved2))
+	require.Error(t, err)
+
+	_, _, err = s.StoreBlock(ctx, block1, "", options.WithID(highest+1000))
+	require.Error(t, err)
+
+	_, ok, err := s.blockIDByHash(ctx, block1.Hash())
+	require.NoError(t, err)
+	require.False(t, ok, "a refused id must not leave a blocks row behind")
+
+	// A swept reservation still stores under the id the sequence issued.
+	_, err = s.db.ExecContext(ctx, `DELETE FROM block_id_reservations WHERE hash = $1`, block1.Hash()[:])
+	require.NoError(t, err)
+
+	storedID, _, err := s.StoreBlock(ctx, block1, "", options.WithID(reserved1))
+	require.NoError(t, err)
+	require.Equal(t, reserved1, storedID)
 }

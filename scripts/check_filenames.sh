@@ -52,8 +52,8 @@ find $SEARCH_DIR -type f -name "*.go" | while read -r file; do
         "message": "Filename does not follow snake_case.go convention",
         "filePath": "$normalized_file"
     },
-    "severity":"MAJOR",
-    "type":"BUG",
+    "severity":"MINOR",
+    "type":"CODE_SMELL",
     "textRange": {
       "startLine": 1
     }

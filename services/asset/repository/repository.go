@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -54,11 +55,14 @@ type Interface interface {
 	GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.Block, error)
 	GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error)
 	GetSubtreeTxIDsReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
+	GetSubtreeNodeHashesReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
+	GetSubtreeNodesPage(ctx context.Context, hash *chainhash.Hash, offset, limit int) ([]subtree.Node, int, error)
 	GetSubtreeDataReaderFromBlockPersister(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
 	GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.Hash) (io.ReadCloser, error)
 	GetSubtree(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, error)
+	GetSubtreePage(ctx context.Context, hash *chainhash.Hash, offset, limit int) (*subtree.Subtree, int, int, error)
 	GetSubtreeData(ctx context.Context, hash *chainhash.Hash) (*subtree.Data, error)
-	GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, error)
+	GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, func(), error)
 	GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error)
 	GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, int, error)
 	FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash) ([]uint32, []uint32, []int, error)
@@ -71,6 +75,7 @@ type Interface interface {
 	GetBlockchainClient() blockchain.ClientI
 	GetBlockvalidationClient() blockvalidation.Interface
 	GetP2PClient() p2p.ClientI
+	GetPeerRegistryClient() blockchain.PeerRegistryClientI
 }
 
 // Repository implements blockchain data access across multiple storage backends.
@@ -88,17 +93,28 @@ type Repository struct {
 	BlockchainClient      blockchain.ClientI
 	BlockvalidationClient blockvalidation.Interface
 	P2PClient             p2p.ClientI
+	PeerRegistryClient    blockchain.PeerRegistryClientI
 
 	// Per-method concurrency semaphores (nil = unlimited)
 	semGetTransaction         *semaphore.Weighted
 	semGetTransactionMeta     *semaphore.Weighted
 	semGetSubtreeData         *semaphore.Weighted
 	semGetSubtreeDataReader   *semaphore.Weighted
+	semSubtreeDataCreate      *semaphore.Weighted
 	semGetSubtreeTransactions *semaphore.Weighted
 	semGetSubtreeExists       *semaphore.Weighted
 	semGetSubtreeHead         *semaphore.Weighted
 	semGetUtxo                *semaphore.Weighted
 	semGetLegacyBlockReader   *semaphore.Weighted
+	// semGetLegacyBlockReaderPeer bounds legacy-block streams requested internally by
+	// this node's own legacy peer server (services/legacy/peer_server.go's pushBlockMsg,
+	// which serves SV peers), separately from semGetLegacyBlockReader's anonymous-HTTP
+	// budget. Both consumers reach GetLegacyBlockReader through the same HTTP route
+	// (/block_legacy/:hash); pushBlockMsg is the only caller that requests the wire
+	// format (?wire=1), so a shared pool cannot let slow anonymous clients starve SV
+	// peer block serving.
+	semGetLegacyBlockReaderPeer *semaphore.Weighted
+	semSubtreeStream            *semaphore.Weighted
 }
 
 // NewRepository creates a new Repository instance with the provided dependencies.
@@ -118,7 +134,8 @@ type Repository struct {
 //   - error: Any error encountered during creation
 func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store,
 	blockchainClient blockchain.ClientI, blockvalidationClient blockvalidation.Interface, subtreeStore blob.Store,
-	blockPersisterStore blob.Store, p2pClient p2p.ClientI) (*Repository, error) {
+	blockPersisterStore blob.Store, p2pClient p2p.ClientI,
+	peerRegistryClient blockchain.PeerRegistryClientI) (*Repository, error) {
 
 	repo := &Repository{
 		logger:                logger,
@@ -130,6 +147,7 @@ func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStor
 		SubtreeStore:          subtreeStore,
 		BlockPersisterStore:   blockPersisterStore,
 		P2PClient:             p2pClient,
+		PeerRegistryClient:    peerRegistryClient,
 	}
 
 	// Initialize per-method semaphores
@@ -152,11 +170,14 @@ func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStor
 	repo.semGetTransactionMeta = initSemaphore(tSettings.Asset.ConcurrencyGetTransactionMeta, "GetTransactionMeta")
 	repo.semGetSubtreeData = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeData, "GetSubtreeData")
 	repo.semGetSubtreeDataReader = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeDataReader, "GetSubtreeDataReader")
+	repo.semSubtreeDataCreate = initSemaphore(tSettings.Asset.ConcurrencySubtreeDataCreate, "SubtreeDataCreate")
 	repo.semGetSubtreeTransactions = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeTransactions, "GetSubtreeTransactions")
 	repo.semGetSubtreeExists = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeExists, "GetSubtreeExists")
 	repo.semGetSubtreeHead = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeHead, "GetSubtreeHead")
 	repo.semGetUtxo = initSemaphore(tSettings.Asset.ConcurrencyGetUtxo, "GetUtxo")
 	repo.semGetLegacyBlockReader = initSemaphore(tSettings.Asset.ConcurrencyGetLegacyBlockReader, "GetLegacyBlockReader")
+	repo.semGetLegacyBlockReaderPeer = initSemaphore(tSettings.Asset.ConcurrencyGetLegacyBlockReaderPeer, "GetLegacyBlockReaderPeer")
+	repo.semSubtreeStream = initSemaphore(tSettings.Asset.SubtreeStreamConcurrency, "SubtreeStream")
 
 	return repo, nil
 }
@@ -197,6 +218,17 @@ func releaseSemaphorePermit(sem *semaphore.Weighted) {
 	if sem != nil {
 		sem.Release(1)
 	}
+}
+
+// tryAcquireSemaphorePermit acquires a permit without blocking.
+// If sem is nil (unlimited concurrency), returns true.
+// Returns false if the semaphore is at capacity — callers should treat this as a
+// "service unavailable" condition and surface it to clients (HTTP 503), not retry locally.
+func tryAcquireSemaphorePermit(sem *semaphore.Weighted) bool {
+	if sem == nil {
+		return true
+	}
+	return sem.TryAcquire(1)
 }
 
 // Health performs health checks on the repository and its dependencies.
@@ -272,7 +304,15 @@ func (repo *Repository) Health(ctx context.Context, checkLiveness bool) (int, st
 //   - *meta.Data: Transaction metadata containing block height, confirmation details, and other information
 //   - error: Any error encountered during metadata retrieval, including transaction not found errors
 func (repo *Repository) GetTxMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	return repo.UtxoStore.Get(ctx, hash)
+	txMeta, err := repo.UtxoStore.Get(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	// Drop a transaction that is not the complete requested one, so it cannot
+	// reach a JSON marshaller — see withoutUnserializableTx. The metadata itself
+	// is still returned.
+	return withoutUnserializableTx(txMeta, hash), nil
 }
 
 // GetTransaction retrieves transaction data by its hash.
@@ -294,11 +334,23 @@ func (repo *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash
 	repo.logger.Debugf("[Repository] GetTransaction: %s", hash.String())
 
 	txMeta, err := repo.UtxoStore.Get(ctx, hash)
-	if err == nil && txMeta != nil {
+	if err == nil && txMeta != nil && isRequestedTransaction(txMeta, hash) {
 		return txMeta.Tx.ExtendedBytes(), nil
 	}
 
-	repo.logger.Warnf("[Repository] GetTransaction: %s not found in txmeta store: %v", hash.String(), err)
+	if err != nil {
+		repo.logger.Warnf("[Repository] GetTransaction: %s not found in txmeta store: %v", hash.String(), err)
+	} else {
+		// The record exists but does not carry the transaction we were asked for
+		// — a nil Tx, or a reconstruction from a UTXO-set snapshot, which retains
+		// no inputs, version or locktime and so cannot reproduce the txid.
+		//
+		// Debug, not Warn: on a snapshot-seeded node this is permanent and true of
+		// every pre-snapshot transaction, and POST /subtree/:hash/txs calls this
+		// once per txid in the request body under a 1024-way fan-out. At Warn a
+		// single request buries the genuinely exceptional err != nil line above.
+		repo.logger.Debugf("[Repository] GetTransaction: %s found in txmeta store but the full transaction is not retained", hash.String())
+	}
 
 	tx, err := repo.TxStore.Get(ctx, hash.CloneBytes(), fileformat.FileTypeTx)
 	if err != nil {
@@ -306,6 +358,35 @@ func (repo *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash
 	}
 
 	return tx, nil
+}
+
+// isRequestedTransaction reports whether txMeta carries the complete transaction
+// identified by hash, and so may be serialized and handed to a caller.
+//
+// A node bootstrapped from a UTXO-set snapshot (cmd/seeder) stores transactions
+// with no inputs and nil outputs at every index that was not a live UTXO at
+// snapshot time, and the UTXO store returns that shape for a reader that asked
+// for fields.Tx. That is correct for the callers which only read a specific live
+// output index to extend a spend — services/validator and the aerospike outpoint
+// decoration both rely on it — but it must never leave this boundary: the
+// snapshot blob retains no inputs, version or locktime, so the reconstruction
+// does not hash to the requested txid even when every output survived.
+//
+// Both checks are required, in this order:
+//
+//   - TxIsSerializable is what rejects every *incomplete* snapshot reconstruction,
+//     including the one with no nil hole at all — a seeded coinbase whose trailing
+//     output was spent, which is simply short. All of them are input-less, and that
+//     is the check that catches them. It has to come first regardless, because
+//     TxIDChainHash() dereferences the same nil *bt.Output the predicate rejects.
+//   - The txid comparison is a key-vs-value guard, not a second snapshot filter. It
+//     adds no rejection power over a snapshot shape: exactly one carries inputs, a
+//     coinbase restored by cmd/seeder's restoreCoinbaseInput, and the seeder installs
+//     that input only after checking the txid itself — so it is the genuine article
+//     and this comparison correctly passes it. What the comparison does catch is a
+//     complete transaction filed under the wrong key, which nothing else here would.
+func isRequestedTransaction(txMeta *meta.Data, hash *chainhash.Hash) bool {
+	return txMeta.TxIsSerializable() && txMeta.Tx.TxIDChainHash().IsEqual(hash)
 }
 
 // GetBlockStats retrieves statistical information about the blockchain blocks.
@@ -357,7 +438,34 @@ func (repo *Repository) GetTransactionMeta(ctx context.Context, hash *chainhash.
 		return nil, err
 	}
 
-	return txMeta, nil
+	return withoutUnserializableTx(txMeta, hash), nil
+}
+
+// withoutUnserializableTx clears Tx when it is not the complete requested
+// transaction, leaving the rest of the metadata intact.
+//
+// Unlike GetTransaction, the metadata endpoints have plenty to return when only
+// the transaction body is missing — fee, size, block IDs, block heights, subtree
+// indexes, the coinbase flag. Failing the whole response would discard all of it
+// to avoid a problem in one field. But Tx cannot be passed through either: the
+// JSON handlers marshal it, and MarshalJSON reaches the same nil dereference
+// that ExtendedBytes does.
+func withoutUnserializableTx(txMeta *meta.Data, hash *chainhash.Hash) *meta.Data {
+	if txMeta == nil || txMeta.Tx == nil {
+		return txMeta
+	}
+
+	if isRequestedTransaction(txMeta, hash) {
+		return txMeta
+	}
+
+	// Copy before clearing: the store may hand out a shared/cached *meta.Data,
+	// and the transaction is still valid for the readers that only index live
+	// output positions.
+	shallow := *txMeta
+	shallow.Tx = nil
+
+	return &shallow
 }
 
 // GetBlockByHash retrieves a block by its hash.
@@ -603,6 +711,35 @@ func (repo *Repository) GetBlocksByHeight(ctx context.Context, startHeight, endH
 	return blocks, nil
 }
 
+// openValidatedSubtree opens a subtree file for reading, and only the validated one.
+//
+// FileTypeSubtreeToCheck is deliberately NOT a fallback here. That file type is the
+// pre-validation copy written when this node fetches a subtree from a peer during
+// catch-up; Asset is the public HTTP surface, so serving it would publish, under a hash a
+// peer chose, bytes this node has not finished checking (bitcoin-sv/teranode#4842). The
+// catch-up fetch now verifies that the peer's bytes hash to the requested subtree root
+// before it writes them, so the file is no longer arbitrary attacker-supplied content, but
+// a route that promises a validated subtree still must not answer with an unvalidated one.
+//
+// The cost: between fetching a subtree and validating it, this node answers 404 for that
+// subtree. That window is not confined to catch-up. A fully synced node receiving a tip
+// block writes FileTypeSubtreeToCheck for every subtree of that block it does not already
+// hold (services/subtreevalidation/check_block_subtrees.go), and only promotes it to
+// FileTypeSubtree once ValidateSubtreeInternal finishes, so for the seconds to minutes a
+// large tip block takes to validate, this node 404s on those subtrees. Every path that
+// accepts a block writes FileTypeSubtree first -- quick validation in
+// services/blockvalidation/quick_validate.go, full validation in
+// services/subtreevalidation/SubtreeValidation.go -- so once a block is accepted its
+// subtrees are served exactly as before; the 404 only covers blocks this node has fetched
+// and not yet accepted.
+//
+// Every read of a subtree file in this package goes through here, so the rule lives in one
+// place rather than being restated at each call site, which is how the fallback came to be
+// duplicated five times in the first place.
+func (repo *Repository) openValidatedSubtree(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
+	return repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
+}
+
 // GetSubtreeBytes retrieves the raw bytes of a subtree.
 //
 // Parameters:
@@ -613,12 +750,9 @@ func (repo *Repository) GetBlocksByHeight(ctx context.Context, startHeight, endH
 //   - []byte: Subtree data
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
-	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
+	subtreeReader, err := repo.openValidatedSubtree(ctx, hash)
 	if err != nil {
-		subtreeReader, err = repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeToCheck)
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 
 	defer func() {
@@ -645,12 +779,9 @@ func (repo *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Has
 //   - io.ReadCloser: Reader for subtree data
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtreeTxIDsReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
-	reader, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
+	reader, err := repo.openValidatedSubtree(ctx, hash)
 	if err != nil {
-		reader, err = repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeToCheck)
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 
 	return reader, nil
@@ -680,15 +811,12 @@ func (repo *Repository) GetSubtreeDataReaderFromBlockPersister(ctx context.Conte
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, error) {
 	ctx, _, _ = tracing.Tracer("repository").Start(ctx, "GetSubtree",
-		tracing.WithLogMessage(repo.logger, "[Repository] GetSubtree: %s", hash.String()),
+		tracing.WithDebugLogMessage(repo.logger, "[Repository] GetSubtree: %s", hash.String()),
 	)
 
-	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
+	subtreeReader, err := repo.openValidatedSubtree(ctx, hash)
 	if err != nil {
-		subtreeReader, err = repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeToCheck)
-		if err != nil {
-			return nil, errors.NewServiceError("error in GetSubtree Get method", err)
-		}
+		return nil, errors.NewServiceError("error in GetSubtree Get method", err)
 	}
 
 	defer func() {
@@ -725,7 +853,7 @@ func (repo *Repository) GetSubtreeData(ctx context.Context, hash *chainhash.Hash
 // This is used internally to avoid nested semaphore acquisition.
 func (repo *Repository) getSubtreeDataInternal(ctx context.Context, hash *chainhash.Hash) (*subtree.Data, error) {
 	ctx, _, _ = tracing.Tracer("repository").Start(ctx, "GetSubtreeData",
-		tracing.WithLogMessage(repo.logger, "[Repository] GetSubtreeData: %s", hash.String()),
+		tracing.WithDebugLogMessage(repo.logger, "[Repository] GetSubtreeData: %s", hash.String()),
 	)
 
 	st, err := repo.GetSubtree(ctx, hash)
@@ -733,6 +861,8 @@ func (repo *Repository) getSubtreeDataInternal(ctx context.Context, hash *chainh
 		return nil, err
 	}
 
+	// The GetSubtree call above goes through openValidatedSubtree, so a subtree that has not been
+	// validated is refused before its FileTypeSubtreeData is read.
 	r, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeData)
 	if err != nil {
 		return nil, errors.NewServiceError("[GetSubtreeData][%s] error in GetSubtreeData Get method", hash.String(), err)
@@ -753,26 +883,47 @@ func (repo *Repository) getSubtreeDataInternal(ctx context.Context, hash *chainh
 	return subtreeData, nil
 }
 
-func (repo *Repository) GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, error) {
+// GetSubtreeTransactions returns every transaction in the subtree, keyed by txid,
+// together with a release function the caller MUST call once it is done with the
+// map (the returned function is never nil, including on the error paths).
+//
+// The concurrency permit from asset_concurrency_get_subtree_transactions is held
+// until release is called rather than until this function returns. What the
+// permit budgets is the map — a subtree can hold millions of transactions and the
+// caller keeps it alive for the whole request — not the few milliseconds spent
+// building it. Releasing on return let an unbounded number of complete maps
+// coexist.
+func (repo *Repository) GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, func(), error) {
 	if err := acquireSemaphorePermit(ctx, repo.semGetSubtreeTransactions, "GetSubtreeTransactions"); err != nil {
-		return nil, err
+		return nil, func() {}, err
 	}
-	defer releaseSemaphorePermit(repo.semGetSubtreeTransactions)
+
+	var releaseOnce sync.Once
+
+	release := func() {
+		releaseOnce.Do(func() {
+			releaseSemaphorePermit(repo.semGetSubtreeTransactions)
+		})
+	}
 
 	ctx, _, _ = tracing.Tracer("repository").Start(ctx, "GetSubtreeTransactions",
-		tracing.WithLogMessage(repo.logger, "[Repository] GetSubtreeTransactions: %s", hash.String()),
+		tracing.WithDebugLogMessage(repo.logger, "[Repository] GetSubtreeTransactions: %s", hash.String()),
 	)
 
 	// Call internal method to avoid nested semaphore acquisition
 	subtreeData, err := repo.getSubtreeDataInternal(ctx, hash)
 	if err != nil {
 		// always return an empty map if no transactions are found
-		return make(map[chainhash.Hash]*bt.Tx), err
+		release()
+
+		return make(map[chainhash.Hash]*bt.Tx), func() {}, err
 	}
 
 	if subtreeData == nil || len(subtreeData.Txs) == 0 {
 		// always return an empty map if no transactions are found
-		return make(map[chainhash.Hash]*bt.Tx), errors.ErrNotFound
+		release()
+
+		return make(map[chainhash.Hash]*bt.Tx), func() {}, errors.ErrNotFound
 	}
 
 	transactionMap := make(map[chainhash.Hash]*bt.Tx, len(subtreeData.Txs))
@@ -785,7 +936,7 @@ func (repo *Repository) GetSubtreeTransactions(ctx context.Context, hash *chainh
 		transactionMap[*tx.TxIDChainHash()] = tx
 	}
 
-	return transactionMap, nil
+	return transactionMap, release, nil
 }
 
 // GetSubtreeExists checks whether a subtree exists in the subtree store.
@@ -809,11 +960,14 @@ func (repo *Repository) GetSubtreeExists(ctx context.Context, hash *chainhash.Ha
 	}
 	defer releaseSemaphorePermit(repo.semGetSubtreeExists)
 
-	if exists, err := repo.SubtreeStore.Exists(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree); err == nil {
-		return exists, nil
-	}
-
-	return repo.SubtreeStore.Exists(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeToCheck)
+	// Validated subtrees only, for the reason given on openValidatedSubtree: this gates
+	// public routes, so a pending peer-fetched subtree must read as absent.
+	//
+	// The removed fallback here was reached on a store ERROR, not on a miss -- the old code
+	// returned (false, nil) straight away when the validated check simply found nothing. So
+	// the only behaviour that changes for a caller is that a failing subtree store now
+	// surfaces its error instead of being silently re-asked about the pending file type.
+	return repo.SubtreeStore.Exists(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
 }
 
 // GetSubtreeHead retrieves only the head portion of a subtree, containing fees and size information.
@@ -834,12 +988,9 @@ func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash
 
 	repo.logger.Debugf("[Repository] GetSubtree: %s", hash.String())
 
-	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
+	subtreeReader, err := repo.openValidatedSubtree(ctx, hash)
 	if err != nil {
-		subtreeReader, err = repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtreeToCheck)
-		if err != nil {
-			return nil, 0, errors.NewServiceError("error in GetSubtree GetHead method", err)
-		}
+		return nil, 0, errors.NewServiceError("error in GetSubtree GetHead method", err)
 	}
 
 	defer func() {
@@ -898,7 +1049,10 @@ func (repo *Repository) GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.S
 	}
 	defer releaseSemaphorePermit(repo.semGetUtxo)
 
-	repo.logger.Debugf("[Repository] GetUtxo: %s", spend.UTXOHash.String())
+	// spend.UTXOHash may be nil — callers that locate the record by primary
+	// key (txid, vout) intentionally skip recomputing the hash. Log identifiers
+	// that are always present instead of dereferencing UTXOHash.
+	repo.logger.Debugf("[Repository] GetUtxo: %s:%d", spend.TxID, spend.Vout)
 
 	resp, err := repo.UtxoStore.GetSpend(ctx, spend)
 	if err != nil {
@@ -972,4 +1126,10 @@ func (repo *Repository) GetBlockvalidationClient() blockvalidation.Interface {
 //   - p2p.ClientI: P2P client interface
 func (repo *Repository) GetP2PClient() p2p.ClientI {
 	return repo.P2PClient
+}
+
+// GetPeerRegistryClient returns the centralized peer registry client used by
+// the repository. It may be nil when the registry is unavailable.
+func (repo *Repository) GetPeerRegistryClient() blockchain.PeerRegistryClientI {
+	return repo.PeerRegistryClient
 }

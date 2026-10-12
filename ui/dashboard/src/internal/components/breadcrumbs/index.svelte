@@ -1,21 +1,20 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
-  import { beforeUpdate } from 'svelte'
   import { page } from '$app/stores'
   import { getDetailsUrl } from '$internal/utils/urls'
   import i18n from '../../i18n'
 
-  export let showOnRoot = false
+  let { showOnRoot = false }: { showOnRoot?: boolean } = $props()
 
   const baseKey = 'comp.breadcrumbs.page'
 
-  let ready = false
-  beforeUpdate(() => {
+  let ready = $state(false)
+  $effect.pre(() => {
     ready = true
   })
 
-  let data: any[] = []
-
-  $: {
+  const data = $derived.by(() => {
     const tmp: any[] = []
     const pathname = ready ? $page.url.pathname : ''
 
@@ -49,8 +48,8 @@
       }
     }
 
-    data = [...tmp]
-  }
+    return [...tmp]
+  })
 </script>
 
 {#if showOnRoot || data.length > 1}
@@ -78,11 +77,11 @@
   }
 
   .tui-breadcrumbs .crumb {
-    color: rgba(255, 255, 255, 0.66);
+    color: var(--comp-label-color);
   }
   .tui-breadcrumbs .crumb:hover,
   .tui-breadcrumbs .crumb.selected {
-    color: rgba(255, 255, 255, 0.88);
+    color: var(--app-color);
     font-weight: 700;
   }
 </style>

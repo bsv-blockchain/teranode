@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/util"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 )
@@ -32,6 +33,21 @@ func resetQuorumForTests() {
 	defer assetQuorumMu.Unlock()
 	assetQuorumOnce = sync.Once{}
 	assetQuorum = nil
+}
+
+// countingWriter counts the bytes that pass through it. Used by
+// dualStreamWithFileCreation to tell "generated nothing" apart from "generated
+// something", which the writer chain itself cannot report.
+type countingWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+
+	return n, err
 }
 
 // semaphoreReadCloser wraps an io.ReadCloser and releases a semaphore permit when closed.
@@ -61,13 +77,36 @@ func (sr *semaphoreReadCloser) Close() error {
 // - *io.PipeReader: A PipeReader that can be used to read the subtree data.
 // - error: An error if the retrieval fails, or nil if successful.
 func (repo *Repository) GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.Hash) (io.ReadCloser, error) {
-	if err := acquireSemaphorePermit(ctx, repo.semGetSubtreeDataReader, "GetSubtreeDataReader"); err != nil {
+	// The existence checks come before the reader permit. The permit is held for
+	// the whole client-paced response, so taking it first let requests for hashes
+	// this node does not have queue behind live streams — up to the 30s acquire
+	// deadline — and then 404 anyway. Nothing below this point is expensive, and a
+	// request that cannot be served must not consume streaming budget.
+	subtreeDataExists, err := repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
+	if err != nil {
+		// Surface storage errors instead of falling through to the NotFound /
+		// on-demand path — otherwise an IO failure here would be silently
+		// reclassified as 404 or trigger an unnecessary regeneration attempt.
 		return nil, err
 	}
-	// Note: semaphore will be released when the returned reader is closed
+	// An existing FileTypeSubtreeData is served without asking whether the subtree has been
+	// validated, unlike the subtree routes, which refuse the pending FileTypeSubtreeToCheck copy
+	// (see openValidatedSubtree). Two writers store this file before the block is validated:
+	// catch-up (fetchAndStoreSubtreeData in services/blockvalidation/get_blocks.go) and
+	// CheckBlockSubtrees (processSubtreeDataStream in
+	// services/subtreevalidation/check_block_subtrees.go). Both parse the peer's stream against
+	// a subtree whose root they have already checked, and reject any transaction whose txid
+	// differs from the leaf at its index, so the file can only hold the transactions the subtree
+	// commits to. What it may hold early is transactions this node has not script-validated yet.
+	// Whether this route should also wait for FileTypeSubtree is tracked separately; gating it
+	// naively would 404 data served today, because the two files carry different delete-at
+	// heights and the data file can outlive the subtree file.
+	if subtreeDataExists {
+		if err = acquireSemaphorePermit(ctx, repo.semGetSubtreeDataReader, "GetSubtreeDataReader"); err != nil {
+			return nil, err
+		}
+		// Note: semaphore will be released when the returned reader is closed
 
-	subtreeDataExists, err := repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
-	if err == nil && subtreeDataExists {
 		reader, err := repo.SubtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 		if err != nil {
 			releaseSemaphorePermit(repo.semGetSubtreeDataReader)
@@ -80,7 +119,48 @@ func (repo *Repository) GetSubtreeDataReader(ctx context.Context, subtreeHash *c
 		}, nil
 	}
 
-	// File doesn't exist - create it on-demand while streaming to HTTP response
+	// SubtreeData doesn't exist. The on-demand fallback (dualStreamWithFileCreation)
+	// regenerates the data from the underlying subtree file in a goroutine *after* the
+	// HTTP handler has committed to 200 OK. If the subtree file is not present we cannot
+	// regenerate, and the handler would otherwise emit "200 OK + empty body", which peers
+	// report as ErrSubtreeLengthMismatch. Surface a NotFound instead so the handler
+	// returns 404 and callers can attempt another peer.
+	//
+	// Only FileTypeSubtree counts, never FileTypeSubtreeToCheck, because regeneration can
+	// only read FileTypeSubtree: it goes through writeTransactionsViaSubtreeStoreStreaming
+	// to GetSubtreeTxIDsReader, which reads through openValidatedSubtree. Checking for the
+	// pending file here would commit the handler to 200 OK for a regeneration that is then
+	// certain to fail, which is the "200 OK + empty body" this check exists to prevent. If
+	// someone re-adds a FileTypeSubtreeToCheck fallback here, it must be re-added on
+	// openValidatedSubtree too, and that would reopen bitcoin-sv/teranode#4842.
+	subtreeExists, existsErr := repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
+	if existsErr != nil {
+		return nil, existsErr
+	}
+	if !subtreeExists {
+		return nil, errors.NewNotFoundError("subtree %s not found", subtreeHash.String())
+	}
+
+	// Only now, with a regeneration actually on the cards, take the reader permit.
+	// It is released by dualStreamWithFileCreation's producer goroutine, or here on
+	// the failure paths below.
+	if err = acquireSemaphorePermit(ctx, repo.semGetSubtreeDataReader, "GetSubtreeDataReader"); err != nil {
+		return nil, err
+	}
+
+	// File doesn't exist — on-demand creation path. Apply non-blocking admission
+	// control before doing any allocation-heavy work: each in-flight creation
+	// holds chunk-sized tx metadata in memory plus pipe buffers, so a runaway
+	// queue here is the difference between graceful 503 and OOM. The peer-side
+	// retry helper (DoHTTPRequestBodyReaderWithRetry) handles the resulting
+	// ErrServiceUnavailable with backoff.
+	if !tryAcquireSemaphorePermit(repo.semSubtreeDataCreate) {
+		releaseSemaphorePermit(repo.semGetSubtreeDataReader)
+		return nil, errors.NewServiceUnavailableError(
+			"[GetSubtreeDataReader] on-demand subtree-data creation at capacity for %s; retry later",
+			subtreeHash.String())
+	}
+
 	return repo.dualStreamWithFileCreation(ctx, subtreeHash)
 }
 
@@ -132,7 +212,10 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 			repo.logger.Warnf("[GetSubtreeDataReader] Quorum lock error for %s: %v, continuing without lock", subtreeHash.String(), err)
 			prometheusAssetSubtreeDataCreated.WithLabelValues("error", "quorum_lock_failed").Inc()
 		} else if exists {
-			// File was created by another instance while we waited - just read it
+			// File was created by another instance while we waited - just read it.
+			// The create permit is released because we are not going to run the
+			// on-demand pipeline.
+			releaseSemaphorePermit(repo.semSubtreeDataCreate)
 			repo.logger.Debugf("[GetSubtreeDataReader] SubtreeData file for %s created by another instance, reading from file", subtreeHash.String())
 			prometheusAssetSubtreeDataCreated.WithLabelValues("success", "waited_for_other").Inc()
 
@@ -165,7 +248,9 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 			release() // Release quorum lock on error
 		}
 		if errors.Is(err, errors.NewBlobAlreadyExistsError("")) {
-			// File appeared between check and creation - read from it
+			// File appeared between check and creation - read from it.
+			// We never ran the on-demand pipeline so the create permit is freed.
+			releaseSemaphorePermit(repo.semSubtreeDataCreate)
 			repo.logger.Debugf("[GetSubtreeDataReader] SubtreeData file for %s already exists, reading from file", subtreeHash.String())
 			prometheusAssetSubtreeDataCreated.WithLabelValues("success", "file_existed").Inc()
 
@@ -179,7 +264,8 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 				sem:        repo.semGetSubtreeDataReader,
 			}, nil
 		}
-		// Other error
+		// Other error — pipeline never started, free both permits.
+		releaseSemaphorePermit(repo.semSubtreeDataCreate)
 		releaseSemaphorePermit(repo.semGetSubtreeDataReader)
 		prometheusAssetSubtreeDataCreated.WithLabelValues("error", "creation_failed").Inc()
 		return nil, err
@@ -188,23 +274,62 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 	// Create pipe for HTTP response
 	httpReader, httpWriter := io.Pipe()
 
-	// Use MultiWriter to write to both file storage and HTTP pipe simultaneously
-	multiWriter := io.MultiWriter(storer, httpWriter)
+	// Use MultiWriter to write to both file storage and HTTP pipe simultaneously.
+	// Counted so an empty generation can be rejected before the blob is finalised.
+	counted := &countingWriter{w: io.MultiWriter(storer, httpWriter)}
 
 	// Background goroutine: generate data and write to both destinations
 	g, gCtx := errgroup.WithContext(ctx)
-	g.Go(func() error {
+	g.Go(func() (retErr error) {
 		defer releaseSemaphorePermit(repo.semGetSubtreeDataReader)
+		defer releaseSemaphorePermit(repo.semSubtreeDataCreate)
 		if release != nil {
 			defer release() // Release quorum lock when done
 		}
 
+		// This goroutine outlives the request — the caller reads the pipe after
+		// GetSubtreeDataReader has returned — so no HTTP-layer recover can reach a
+		// panic in here. On panic do what the error paths below do: discard the temp
+		// blob rather than finalise a partial subtreeData (see #1377), fail the pipe
+		// so the consumer stops waiting, and count it as a server-side failure.
+		defer util.RecoverToError(repo.logger, &retErr, func(panicErr error) {
+			storer.Abort(panicErr)
+			_ = httpWriter.CloseWithError(panicErr)
+			prometheusAssetSubtreeDataCreated.WithLabelValues("error", "write_failed").Inc()
+		}, "GetSubtreeDataReader %s", subtreeHash.String())()
+
 		// Write all transactions to both destinations
-		err := repo.writeTransactionsViaSubtreeStoreStreaming(gCtx, multiWriter, nil, subtreeHash)
+		err := repo.writeTransactionsViaSubtreeStoreStreaming(gCtx, counted, nil, subtreeHash)
+
+		// A successful pass that wrote nothing must not be committed. It happens when the
+		// subtree stream header reports numLeaves == 0 — a corrupt or truncated subtree
+		// file — where writeTransactionsViaSubtreeStoreStreaming short-circuits with nil,
+		// and FileStorer.Close then finalises a zero-byte blob. Exists would return true
+		// for that hash from then on, so every later request would take the stored-file
+		// branch and never retry generation: a transient generation fault would become a
+		// hard 500 for this hash until DAH pruning (~288 blocks). No endpoint can serve
+		// an empty subtreeData, so fail here instead and leave nothing behind — the
+		// handler's 500 then stays retryable.
+		if err == nil && counted.n == 0 {
+			err = errors.NewProcessingError("[GetSubtreeDataReader] generated subtreeData for %s is empty", subtreeHash.String())
+		}
+
 		if err != nil {
-			repo.logger.Warnf("[GetSubtreeDataReader] Error writing subtreeData for %s: %v", subtreeHash.String(), err)
+			// Abort discards the temp file rather than finalising it.
 			storer.Abort(err)
 			_ = httpWriter.CloseWithError(err)
+			// "Client gone" — the HTTP client (or proxy) disconnected mid-stream, which
+			// surfaces as either io.ErrClosedPipe on the next pipe write or context
+			// cancellation observed by writeChunkToWriter. This is not a server fault
+			// and dominates under catchup load (one cancelled batch can cascade tens of
+			// in-flight streams). Log at debug and segregate the metric so the operational
+			// signal stays clean.
+			if errors.IsContextError(err) || errors.Is(err, io.ErrClosedPipe) {
+				repo.logger.Debugf("[GetSubtreeDataReader] Client gone while writing subtreeData for %s: %v", subtreeHash.String(), err)
+				prometheusAssetSubtreeDataCreated.WithLabelValues("error", "client_gone").Inc()
+				return err
+			}
+			repo.logger.Warnf("[GetSubtreeDataReader] Error writing subtreeData for %s: %v", subtreeHash.String(), err)
 			prometheusAssetSubtreeDataCreated.WithLabelValues("error", "write_failed").Inc()
 			return err
 		}
@@ -222,7 +347,7 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 		if release != nil {
 			metricLabel = "on_demand_created_locked"
 		}
-		repo.logger.Infof("[GetSubtreeDataReader] Successfully created subtreeData file on-demand for %s", subtreeHash.String())
+		repo.logger.Debugf("[GetSubtreeDataReader] Successfully created subtreeData file on-demand for %s", subtreeHash.String())
 		_ = httpWriter.Close()
 		prometheusAssetSubtreeDataCreated.WithLabelValues("success", metricLabel).Inc()
 		return nil

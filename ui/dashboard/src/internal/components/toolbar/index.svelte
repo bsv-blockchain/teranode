@@ -1,7 +1,10 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { goto } from '$app/navigation'
-  import { mediaSize, MediaSize } from '$lib/stores/media'
+  import { mediaSize, MediaSize, theme } from '$lib/stores/media'
   import TextInput from '$lib/components/textinput/index.svelte'
+  import Icon from '$lib/components/icon/index.svelte'
   import BreadCrumbs from '$internal/components/breadcrumbs/index.svelte'
   import { failure } from '$lib/utils/notifications'
   import { getDetailsUrl } from '$internal/utils/urls'
@@ -9,17 +12,20 @@
   import i18n from '$internal/i18n'
   import * as api from '$internal/api'
 
-  $: t = $i18n.t
+  let {
+    style = '',
+    showTools = true,
+  }: {
+    style?: string
+    showTools?: boolean
+  } = $props()
 
-  export let style = ''
-  export let showTools = true
-
-  let searchValue = ''
-  let lastSearchCalled = ''
+  let searchValue = $state('')
+  let lastSearchCalled = $state('')
 
   async function onSearchKeyDown(e) {
     if (!e) e = window.event
-    const keyCode = e.detail.code || e.detail.key
+    const keyCode = e.code || e.key
 
     if (keyCode === 'Enter') {
       lastSearchCalled = searchValue
@@ -38,9 +44,13 @@
     }
   }
 
-  let w
+  let w = $state(0)
 
-  $: focusWidth = $mediaSize <= MediaSize.xs ? w - 60 : 570
+  const focusWidth = $derived($mediaSize <= MediaSize.xs ? w - 60 : 570)
+
+  function toggleTheme() {
+    $theme = $theme === 'dark' ? 'light' : 'dark'
+  }
 </script>
 
 <svelte:window bind:innerWidth={w} />
@@ -51,6 +61,16 @@
       <BreadCrumbs />
     </div>
     <div class="right">
+      <button
+        class="theme-toggle"
+        onclick={toggleTheme}
+        type="button"
+        title={$theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        aria-label={$theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+        aria-pressed={$theme === 'light'}
+      >
+        <Icon name={$theme === 'dark' ? 'icon-sun-line' : 'icon-moon-line'} size={18} />
+      </button>
       <TextInput
         name="one"
         size="medium"
@@ -63,7 +83,7 @@
           ? 'icon-search-line'
           : 'icon-search-solid'}
         placeholder={$i18n.t('comp.toolbar.placeholder')}
-        on:keydown={onSearchKeyDown}
+        onkeydown={onSearchKeyDown}
       />
     </div>
   </div>
@@ -90,5 +110,24 @@
     display: flex;
     justify-content: flex-end;
     gap: 4px;
+    align-items: center;
+  }
+
+  .theme-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    padding: 6px;
+    cursor: pointer;
+    color: var(--comp-label-color);
+    border-radius: 6px;
+    opacity: 0.7;
+    transition: opacity 0.15s ease;
+  }
+
+  .theme-toggle:hover {
+    opacity: 1;
   }
 </style>

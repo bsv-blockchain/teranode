@@ -1,21 +1,29 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { onMount } from 'svelte'
   import * as d3 from 'd3'
   import type { MerkleProofData } from '$internal/api'
 
-  export let merkleProof: MerkleProofData | null = null
-  export let loading: boolean = false
-  export let error: string | null = null
+  let {
+    merkleProof = null,
+    loading = false,
+    error = null,
+  }: {
+    merkleProof?: MerkleProofData | null
+    loading?: boolean
+    error?: string | null
+  } = $props()
 
-  let container: HTMLDivElement
+  let container: HTMLDivElement | undefined = $state()
   let svg: d3.Selection<SVGSVGElement, unknown, null, undefined>
   let svgGroup: d3.Selection<SVGGElement, unknown, null, undefined>
   let zoomBehavior: d3.ZoomBehavior<SVGSVGElement, unknown>
-  let mounted = false
-  
+  let mounted = $state(false)
+
   // Navigation state
   let currentTransform = d3.zoomIdentity
-  let showNavigationHelp = false
+  let showNavigationHelp = $state(false)
 
   // Tree visualization constants
   const NODE_WIDTH = 160
@@ -85,7 +93,7 @@
   }
 
   // SHA256 double hash function for computing intermediate hashes
-  async function sha256Double(bytes: Uint8Array): Promise<string> {
+  async function sha256Double(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
     // Validate input
     if (!(bytes instanceof Uint8Array)) {
       throw new Error('sha256Double requires a Uint8Array input')
@@ -144,13 +152,15 @@
     }
   })
 
-  $: if (mounted && merkleProof && container) {
-    // Wait for container to be properly sized
-    setTimeout(async () => {
-      await buildTree()
-      renderVisualization()
-    }, 50)
-  }
+  $effect(() => {
+    if (mounted && merkleProof && container) {
+      // Wait for container to be properly sized
+      setTimeout(async () => {
+        await buildTree()
+        renderVisualization()
+      }, 50)
+    }
+  })
 
   // Helper function to extract visualization data from BUMP format
   function extractVisualizationData(bumpData: MerkleProofData) {
@@ -782,7 +792,7 @@
   }
 
   function zoomToFit() {
-    if (!svg || !svgGroup || !zoomBehavior || nodes.length === 0) return
+    if (!svg || !svgGroup || !zoomBehavior || nodes.length === 0 || !container) return
 
     const bounds = svgGroup.node()?.getBBox()
     if (!bounds) return
@@ -808,7 +818,7 @@
   }
 
   function focusOnTransaction() {
-    if (!svg || !zoomBehavior || !merkleProof) return
+    if (!svg || !zoomBehavior || !merkleProof || !container) return
 
     const txNode = nodes.find(n => n.type === 'transaction')
     if (!txNode) return
@@ -835,7 +845,7 @@
   }
 </script>
 
-<svelte:window on:resize={handleResize} />
+<svelte:window onresize={handleResize} />
 
 <div class="merkle-visualizer">
   {#if loading}
@@ -885,10 +895,10 @@
       </div>
       
       <div class="navigation-controls">
-        <button class="nav-button" on:click={focusOnTransaction} title="Focus on Transaction">🎯</button>
-        <button class="nav-button" on:click={zoomToFit} title="Zoom to Fit">🔍</button>
-        <button class="nav-button" on:click={resetZoom} title="Reset Zoom">🏠</button>
-        <button class="nav-button help-button" on:click={() => showNavigationHelp = !showNavigationHelp} title="Navigation Help">❓</button>
+        <button class="nav-button" onclick={focusOnTransaction} title="Focus on Transaction">🎯</button>
+        <button class="nav-button" onclick={zoomToFit} title="Zoom to Fit">🔍</button>
+        <button class="nav-button" onclick={resetZoom} title="Reset Zoom">🏠</button>
+        <button class="nav-button help-button" onclick={() => showNavigationHelp = !showNavigationHelp} title="Navigation Help">❓</button>
       </div>
     </div>
 

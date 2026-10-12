@@ -6,24 +6,27 @@ import (
 )
 
 // ValidLockTime checks whether a lock time is valid in the context of a block height and median block time
-// the block height and median block time are the values of the block in which the transaction is mined
+// the block height and median block time are the values of the block in which the transaction is mined.
+// Strict inequality matches bitcoin-sv's IsFinalTx (src/validation.cpp): a transaction is final only when
+// lockTime is strictly less than the comparison height/time. Equality with a non-final input sequence is
+// rejected; equality with all-final sequences (0xffffffff) bypasses this check entirely upstream.
 func ValidLockTime(lockTime uint32, blockHeight uint32, blockTime uint32) error {
 	if lockTime < 500000000 {
-		if blockHeight >= lockTime {
+		if blockHeight > lockTime {
 			return nil
 		}
 
-		return errors.NewTxLockTimeError("lock time (%d) as block height is greater than block height (%d)", lockTime, blockHeight)
+		return errors.NewTxLockTimeError("lock time (%d) as block height is not less than block height (%d)", lockTime, blockHeight)
 	}
 
 	// Note that since the adoption of BIP 113, the time-based nLockTime is compared to the 11-block median time
 	// past (the median timestamp of the 11 blocks preceding the block in which the transaction is mined), and not the
 	// block time itself.
-	if blockTime >= lockTime {
+	if blockTime > lockTime {
 		return nil
 	}
 
-	return errors.NewTxLockTimeError("lock time (%d) as timestamp is greater than median block time (%d)", lockTime, blockTime)
+	return errors.NewTxLockTimeError("lock time (%d) as timestamp is not less than median block time (%d)", lockTime, blockTime)
 }
 
 // IsTransactionFinal checks whether a transaction is final

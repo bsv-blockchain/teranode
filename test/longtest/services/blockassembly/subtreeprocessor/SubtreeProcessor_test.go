@@ -70,7 +70,9 @@ func Test_DeserializeHashesFromReaderIntoBuckets(t *testing.T) {
 
 	conflictingNodes := make([]chainhash.Hash, 0)
 
-	err := subtreeprocessor.DeserializeHashesFromReaderIntoBuckets(r, 16, &buckets, &conflictingNodes)
+	// 128 MiB matches the default subtreevalidation_max_incoming_subtree_bytes.
+	const maxLeafDataBytes int64 = 128 * 1024 * 1024
+	err := subtreeprocessor.DeserializeHashesFromReaderIntoBuckets(r, 16, maxLeafDataBytes, &buckets, &conflictingNodes)
 	require.NoError(t, err)
 
 	f, _ = os.Create("mem.prof")
@@ -279,7 +281,19 @@ func initMoveBlock(t *testing.T) (*subtreeprocessor.SubtreeProcessor, *memory.Me
 			SizeInBytes: 1,
 		}
 
-		stp.AddBatch([]subtreepkg.Node{node}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{hash1, hash2}, Idxs: [][]uint32{{0, 1}, {2, 3}}}})
+		mkIn := func(parent *chainhash.Hash, vout uint32) *bt.Input {
+			in := &bt.Input{PreviousTxOutIndex: vout}
+			require.NoError(t, in.PreviousTxIDAdd(parent))
+			return in
+		}
+
+		ti, err := subtreepkg.NewTxInpointsFromInputs([]*bt.Input{
+			mkIn(&hash1, 0), mkIn(&hash1, 1),
+			mkIn(&hash2, 2), mkIn(&hash2, 3),
+		})
+		require.NoError(t, err)
+
+		stp.AddBatch([]subtreepkg.Node{node}, []*subtreepkg.TxInpoints{&ti})
 	}
 
 	waitForSubtreeProcessorQueueToEmpty(t, stp)

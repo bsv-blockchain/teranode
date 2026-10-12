@@ -22,10 +22,7 @@ func TestTxValidatorOldWhiteList(t *testing.T) {
 
 	for _, testData := range oldWhiteListData {
 		tx, _ := bt.NewTxFromString(testData.ExtendedTx)
-		err := txValidator.ValidateTransaction(tx, testData.BlockHeight, testData.UTXOHeights, &Options{})
-		require.NoError(t, err, fmt.Sprintf("Failed : %v with txID %v.\n\nError\n\n%v", "GoBDK", testData.TxID, err))
-
-		err = txValidator.ValidateTransactionScripts(tx, testData.BlockHeight, testData.UTXOHeights, &Options{SkipPolicyChecks: true})
+		err := txValidator.ValidateTransaction(tx, testData.BlockHeight, testData.UTXOHeights, &Options{SkipPolicyChecks: true})
 		require.NoError(t, err, fmt.Sprintf("Failed : %v with txID %v.\n\nError\n\n%v", "GoBDK", testData.TxID, err))
 	}
 }

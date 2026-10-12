@@ -1,6 +1,6 @@
 # Docker Security Best Practices
 
-Last modified: 28-April-2026
+Last modified: 11-August-2026
 
 The quickstart deployment is designed to keep most services local by default.
 Do not expose internal ports unless you have a specific operational reason and
@@ -61,6 +61,43 @@ Quickstart generates RPC credentials in `.env` and binds RPC to
 
 If remote RPC is required, use a dedicated authenticated tunnel or reverse proxy
 with TLS, access logging, rate limits, and source restrictions.
+
+## PostgreSQL Role Privileges
+
+Teranode's PostgreSQL role (`teranode`) owns the `teranode` database and needs no
+superuser rights. Deployments provisioned from this repository's Compose and
+Kubernetes manifests create it as `NOSUPERUSER`. The `teranode-quickstart` stack
+still creates it as `SUPERUSER`; until that is updated, apply the remediation
+below regardless of when your node was provisioned.
+
+Existing deployments are not fixed by an update. The role is created by the
+`init.sql` that the `postgres` image runs only when its data directory is empty,
+and the Compose stack bind-mounts that directory from the host
+(`${DATA_PATH}/postgres`). Pulling a newer Teranode and restarting leaves the
+role exactly as it was first created, so a node provisioned before this change
+still runs with a superuser `teranode` role.
+
+Remediate once, as the `postgres` superuser:
+
+```bash
+docker exec -i postgres psql -U postgres -c 'ALTER ROLE teranode NOSUPERUSER;'
+```
+
+Verify:
+
+```bash
+docker exec -i postgres psql -U postgres -tAc \
+  "SELECT rolname, rolsuper FROM pg_roles WHERE rolname = 'teranode';"
+```
+
+Expect `teranode|f`. Object ownership is unaffected — `teranode` still owns its
+database and tables, so no regrant is needed and Teranode can be left running.
+
+The development and test Compose stacks under `compose/` and `test/` create
+`miner1`, `miner2`, `miner3`, and the `coinbase*` roles the same way. If those
+stacks were brought up before this change and the `postgres-data` volume was kept
+(`docker compose down` without `-v`), run `ALTER ROLE <role> NOSUPERUSER;` for
+each of those roles, or recreate the volume.
 
 ## Secrets
 

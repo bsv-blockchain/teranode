@@ -425,40 +425,40 @@ UTXO records are stored using different strategies based on transaction size and
 ```text
 Transaction Size Check
          │
-         ├──> Small (<1MB, ≤20K outputs)
+         ├──> Small (≤32KB, ≤ utxoBatchSize outputs)
          │    └──> Single Aerospike Record
          │         ├─ Transaction data (inputs/outputs)
          │         ├─ UTXO array (32 or 68 bytes each)
          │         └─ Metadata (fee, blockIDs, etc.)
          │
-         ├──> Medium (≤1MB, >20K outputs)
+         ├──> Medium (≤32KB, > utxoBatchSize outputs)
          │    └──> Multiple Aerospike Records (Pagination)
          │         ├─ Master Record (index 0)
-         │         │  ├─ Full transaction data
-         │         │  ├─ First 20K UTXOs
+         │         │  ├─ external=true flag (no inline tx data)
+         │         │  ├─ First utxoBatchSize UTXOs
          │         │  └─ Metadata + totalExtraRecs
          │         └─ Child Records (index 1, 2, 3...)
-         │            ├─ Next 20K UTXOs per record
+         │            ├─ Next utxoBatchSize UTXOs per record
          │            └─ Subset of metadata
          │
-         └──> Large (>1MB or force external)
+         └──> Large (>32KB or force external)
               └──> External Blob Storage + Aerospike
                    ├─ Blob Storage
                    │  ├─ FileTypeTx (.tx) - Full transaction
                    │  └─ FileTypeOutputs (.outputs) - Outputs only
                    └─ Aerospike Records
                       ├─ external=true flag
-                      ├─ UTXO arrays (paginated if >20K)
+                      ├─ UTXO arrays (paginated if > utxoBatchSize)
                       └─ Metadata only (no tx data)
 ```
 
-### Record Pagination (>20,000 Outputs)
+### Record Pagination (More Outputs Than `utxoBatchSize`)
 
-Transactions with more than 20,000 outputs are automatically split across multiple Aerospike records to stay within database size constraints.
+Transactions with more outputs than `utxostore_utxoBatchSize` (default 128) are automatically split into records of `utxoBatchSize` UTXOs each, so a record never grows unbounded with the output count. Actual record-size overflow is handled separately by the 32KB externalisation threshold (see [External Blob Storage](#external-blob-storage)) and by the `RECORD_TOO_BIG` retry.
 
 #### Pagination Strategy
 
-- **Batch Size**: 20,000 UTXOs per record (configurable via `utxoBatchSize` setting)
+- **Batch Size**: `utxostore_utxoBatchSize` UTXOs per record (default 128; never change it after a node has been initialised, the key calculation depends on it)
 - **Master Record** (index 0): Contains first batch of UTXOs plus complete metadata
 - **Child Records** (index 1+): Contain subsequent UTXO batches with limited metadata
 
@@ -479,12 +479,12 @@ Contains complete transaction metadata and first UTXO batch:
 | Field | Description | Presence |
 |-------|-------------|----------|
 | `tx` or `external` | Full transaction data OR external=true flag | Always |
-| `utxos` | First 20,000 UTXO entries | Always |
+| `utxos` | First `utxoBatchSize` UTXO entries | Always |
 | `totalUtxos` | Total count of ALL UTXOs across all records | Always |
-| `totalExtraRecs` | Number of child records (pagination records) | If >20K outputs |
+| `totalExtraRecs` | Number of child records (pagination records) | If outputs > `utxoBatchSize` |
 | `recordUtxos` | Number of non-nil UTXOs in THIS record | Always |
 | `spentUtxos` | Number of spent UTXOs in THIS record | Always |
-| `spentExtraRecs` | Number of child records fully spent | If >20K outputs |
+| `spentExtraRecs` | Number of child records fully spent | If outputs > `utxoBatchSize` |
 | `blockIDs`, `blockHeights`, `subtreeIdxs` | Block references | Always |
 | `fee`, `sizeInBytes`, `isCoinbase`, etc. | Transaction metadata | Always |
 
@@ -494,7 +494,7 @@ Contain UTXO batches with minimal metadata:
 
 | Field | Description | Presence |
 |-------|-------------|----------|
-| `utxos` | Next 20,000 UTXO entries | Always |
+| `utxos` | Next `utxoBatchSize` UTXO entries | Always |
 | `recordUtxos` | Number of non-nil UTXOs in THIS child record | Always |
 | `spentUtxos` | Number of spent UTXOs in THIS child record | Always |
 | `deleteAtHeight` | Cleanup trigger for this record | When set |
@@ -508,31 +508,31 @@ Contain UTXO batches with minimal metadata:
 
 #### Pagination Example
 
-Transaction with 45,000 outputs splits into 3 records:
+With the default `utxoBatchSize` of 128, a transaction with 300 outputs splits into 3 records:
 
 ```text
 Master Record (key = hash(txID), index 0):
 
-  - utxos[0:20000]        // First 20K UTXOs
-  - totalUtxos = 45000
+  - utxos[0:128]          // First batch of UTXOs
+  - totalUtxos = 300
   - totalExtraRecs = 2
-  - recordUtxos = 20000   // Non-nil in this record
+  - recordUtxos = 128     // Non-nil in this record
   - spentUtxos = 0
   - spentExtraRecs = 0
-  - Full tx data or external=true
+  - external=true (tx data in blob storage)
   - All metadata fields
 
 Child Record 1 (key = hash(txID+1), index 1):
 
-  - utxos[20000:40000]    // Second 20K UTXOs
-  - recordUtxos = 20000
+  - utxos[128:256]        // Second batch of UTXOs
+  - recordUtxos = 128
   - spentUtxos = 0
   - Common metadata only
 
 Child Record 2 (key = hash(txID+2), index 2):
 
-  - utxos[40000:45000]    // Final 5K UTXOs
-  - recordUtxos = 5000
+  - utxos[256:300]        // Final 44 UTXOs
+  - recordUtxos = 44
   - spentUtxos = 0
   - Common metadata only
 ```
@@ -553,8 +553,8 @@ Large transactions exceeding Aerospike size limits are stored in external blob s
 
 External storage used when:
 
-- Transaction size > `MaxTxSizeInStoreInBytes` (typically 1MB)
-- Transaction has >20,000 outputs (automatic with pagination)
+- Transaction extended size > `MaxTxSizeInStoreInBytes` (32KB)
+- Transaction has more outputs than `utxostore_utxoBatchSize` (default 128), so it paginates across multiple records
 - Configuration forces externalization: `ExternalizeAllTransactions=true`
 
 #### File Types
@@ -588,15 +588,21 @@ type UTXO struct {
 **Normal Transactions** (from `stores/utxo/aerospike/create.go:sendStoreBatch()`):
 
 1. Calculate transaction extended size
-2. If size ≤ 1MB and ≤20K outputs:
+2. If size ≤ 32KB and outputs ≤ `utxoBatchSize`:
 
     - Store transaction data in Aerospike `inputs` and `outputs` bins
     - Store UTXOs in `utxos` bin
     - Set `external=false`
-3. If size > 1MB:
+3. If size > 32KB:
 
     - Write transaction to blob storage as `.tx` file
     - Store only metadata and UTXOs in Aerospike
+    - Set `external=true` flag
+4. If outputs > `utxoBatchSize` (regardless of size):
+
+    - Write transaction to blob storage (the multi-record write goes through the
+      same two-phase-commit path as external storage)
+    - Split UTXOs across a master record plus child records
     - Set `external=true` flag
 
 **Partial Transactions** (outputs only):
@@ -739,21 +745,21 @@ key = aerospike.NewKey(namespace, setName, keySource)
 
 | Limit | Value | Enforcement |
 |-------|-------|-------------|
-| Max transaction size in Aerospike | 1MB | `MaxTxSizeInStoreInBytes` |
-| UTXOs per Aerospike record | 20,000 | `utxoBatchSize` setting |
+| Max transaction size stored inline in Aerospike | 32KB | `MaxTxSizeInStoreInBytes` |
+| UTXOs per Aerospike record | 128 (default) | `utxostore_utxoBatchSize` setting |
 | Aerospike record size limit | ~1MB | Database constraint |
 | External blob size | Unlimited | Blob storage dependent |
 
 **Automatic Handling**:
 
 - Transactions exceeding limits automatically use external storage
-- Pagination automatically triggered at 20K output threshold
+- Pagination automatically triggered above the `utxostore_utxoBatchSize` output threshold (default 128)
 - `RECORD_TOO_BIG` error triggers retry with external storage
 - No application-level size restrictions on individual transactions
 
 **Multi-Record Transaction Consistency**:
 
-When transactions require multiple Aerospike records (>20K outputs), the system uses a lock record pattern to ensure atomic creation:
+When transactions require multiple Aerospike records (more outputs than `utxostore_utxoBatchSize`, default 128), the system uses a lock record pattern to ensure atomic creation:
 
 1. **Lock Record**: A temporary record prevents concurrent creation attempts for the same transaction
 2. **Creating Flag**: Each record has a `creating` flag that prevents UTXO spending until all records exist
@@ -763,18 +769,18 @@ When transactions require multiple Aerospike records (>20K outputs), the system 
 **Record Layout for Large Transactions**:
 
 ```text
-Transaction with N batches (>20K outputs):
+Transaction with N batches (more outputs than utxoBatchSize):
 
 Master Record (index 0):
 
   - Transaction metadata (TxID, version, fees, etc.)
-  - First 20,000 UTXOs
+  - First utxoBatchSize UTXOs (default 128)
   - TotalExtraRecs field indicating additional records
   - Creating flag (cleared when complete)
 
 Child Records (indices 1 to N-1):
 
-  - Additional UTXOs in batches of 20,000
+  - Additional UTXOs in batches of utxoBatchSize
   - Common metadata fields
   - Creating flag (cleared when complete)
 

@@ -1,3 +1,5 @@
+<svelte:options runes={true} />
+
 <script lang="ts">
   import { tippy } from '$lib/stores/media'
   import { copyTextToClipboardVanilla } from '$lib/utils/clipboard'
@@ -13,9 +15,9 @@
 
   const baseKey = 'page.viewer-utxo.details'
 
-  $: t = $i18n.t
+  const t = $derived($i18n.t)
 
-  export let data: any = {}
+  let { data = {} }: { data?: any } = $props()
 
   function onReverseHash(hash) {
     reverseHashParam(hash)
@@ -23,7 +25,8 @@
 </script>
 
 <Card title={t(`${baseKey}.title`)}>
-  <div class="copy-link" slot="subtitle">
+  {#snippet subtitle()}
+  <div class="copy-link">
     <div class="hash">{data?.hash}</div>
     <div class="icon" use:$tippy={{ content: t('tooltip.copy-hash-to-clipboard') }}>
       <ActionStatusIcon
@@ -43,13 +46,14 @@
     </div>
     <button
       class="icon"
-      on:click={() => onReverseHash(data?.hash)}
+      onclick={() => onReverseHash(data?.hash)}
       use:$tippy={{ content: t('tooltip.reverse-hash') }}
       type="button"
     >
       <Icon name="icon-reeverse-line" size={15} />
     </button>
   </div>
+  {/snippet}
 
   <div class="json">
     <div><JSONTree {data} /></div>

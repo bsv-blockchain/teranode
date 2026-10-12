@@ -2,6 +2,7 @@ package settings
 
 import (
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/stretchr/testify/require"
@@ -35,7 +36,7 @@ func TestGenesisActivationHeight(t *testing.T) {
 		params *chaincfg.Params
 		expect uint32
 	}{
-		{"RegressionNet", &chaincfg.RegressionNetParams, 10000},
+		{"RegressionNet", &chaincfg.RegressionNetParams, 100},
 		{"TestNet", &chaincfg.TestNetParams, 1344302},
 		{"MainNet", &chaincfg.MainNetParams, 620538},
 	}
@@ -117,4 +118,108 @@ func TestBlockHeightRetentionAdjustments(t *testing.T) {
 		require.Equal(t, uint32(100), tSettings.GetUtxoStoreBlockHeightRetention())
 		require.Equal(t, uint32(0), tSettings.GetSubtreeValidationBlockHeightRetention())
 	})
+}
+
+// Pin the runtime default for the absurd-fee user-protection ceiling
+// (sendrawtransaction). Without this NewSettings wiring the field would
+// stay at zero, silently disabling the check in production. Default
+// matches bitcoin-sv's DEFAULT_TRANSACTION_MAXFEE = COIN/10 = 10_000_000
+// satoshis (0.1 BSV).
+func TestMaxRawTxFee_DefaultIsNonZero(t *testing.T) {
+	tSettings := NewSettings()
+	require.NotNil(t, tSettings.Policy)
+	require.Equal(t, uint64(10_000_000), tSettings.Policy.MaxRawTxFee,
+		"runtime default must be 10M sats so the RPC absurd-fee guard fires by default")
+}
+
+// Pin that operators can override the ceiling via the maxrawtxfee env key,
+// and that the override path produces the literal value (not a clamped one).
+func TestMaxRawTxFee_EnvOverride(t *testing.T) {
+	t.Setenv("maxrawtxfee", "25000000")
+	tSettings := NewSettings()
+	require.Equal(t, uint64(25_000_000), tSettings.Policy.MaxRawTxFee)
+}
+
+// Operator opt-out: maxrawtxfee=0 disables the RPC check entirely. The
+// handler shortcuts when MaxRawTxFee == 0, so this also pins that path.
+func TestMaxRawTxFee_EnvZeroDisables(t *testing.T) {
+	t.Setenv("maxrawtxfee", "0")
+	tSettings := NewSettings()
+	require.Equal(t, uint64(0), tSettings.Policy.MaxRawTxFee)
+}
+
+// Pin the script-size policy default. This is the ceiling on an individual
+// locking or unlocking script and is pushed into the BDK script engine at
+// validator startup; it matches maxtxsizepolicy (100MB) so the script limit is
+// not the binding constraint on an otherwise-acceptable transaction.
+func TestMaxScriptSizePolicy_Default(t *testing.T) {
+	tSettings := NewSettings()
+	require.NotNil(t, tSettings.Policy)
+	require.Equal(t, 100_000_000, tSettings.Policy.MaxScriptSizePolicy)
+}
+
+// Operators can still tighten (or loosen) the ceiling via the
+// maxscriptsizepolicy key.
+func TestMaxScriptSizePolicy_EnvOverride(t *testing.T) {
+	t.Setenv("maxscriptsizepolicy", "500000")
+	tSettings := NewSettings()
+	require.Equal(t, 500_000, tSettings.Policy.MaxScriptSizePolicy)
+}
+
+func TestP2PSyncHardeningDefaultsAreLoaded(t *testing.T) {
+	tSettings := NewSettings()
+	require.NotNil(t, tSettings)
+
+	require.Equal(t, uint32(10_000), tSettings.P2P.MaxUnvalidatedAdvertisedHeightLead)
+	require.Equal(t, 3, tSettings.P2P.MaxUnprovenSyncProbesPerBackoffWindow)
+	require.Equal(t, time.Hour, tSettings.P2P.FullStoragePenaltyDuration)
+	require.Equal(t, 24*time.Hour, tSettings.P2P.FullDeliveryFreshnessWindow)
+	require.Equal(t, 5*time.Minute, tSettings.P2P.SyncPeerNoProgressTimeout)
+}
+
+func TestP2PFullStoragePenaltyDuration_EnvOverride(t *testing.T) {
+	t.Setenv("p2p_full_storage_penalty_duration", "2h")
+	tSettings := NewSettings()
+	require.NotNil(t, tSettings)
+	require.Equal(t, 2*time.Hour, tSettings.P2P.FullStoragePenaltyDuration)
+}
+
+func TestP2PSyncPeerNoProgressTimeout_EnvOverride(t *testing.T) {
+	t.Setenv("p2p_sync_peer_no_progress_timeout", "12m")
+	tSettings := NewSettings()
+	require.NotNil(t, tSettings)
+	require.Equal(t, 12*time.Minute, tSettings.P2P.SyncPeerNoProgressTimeout)
+}
+
+// Pin the Postgres circuit breaker defaults. CircuitBreakerEnabled must stay
+// false so the breaker remains an opt-in feature - a default-only assertion
+// can't tell "wired to false" from "never read", so the accompanying env
+// override tests below are what actually prove the five keys reach
+// NewSettings().
+func TestPostgresCircuitBreakerDefaults(t *testing.T) {
+	tSettings := NewSettings()
+	require.NotNil(t, tSettings.Postgres.CircuitBreakerEnabled, "global setting must always be a concrete value, never nil")
+	require.False(t, *tSettings.Postgres.CircuitBreakerEnabled)
+	require.Equal(t, 5, tSettings.Postgres.CircuitBreakerFailureThreshold)
+	require.Equal(t, 3, tSettings.Postgres.CircuitBreakerHalfOpenMax)
+	require.Equal(t, 30*time.Second, tSettings.Postgres.CircuitBreakerCooldown)
+	require.Equal(t, 10*time.Second, tSettings.Postgres.CircuitBreakerFailureWindow)
+}
+
+// Each of the five keys must independently reach its NewSettings() field.
+func TestPostgresCircuitBreaker_EnvOverride(t *testing.T) {
+	t.Setenv("postgres_circuitBreakerEnabled", "true")
+	t.Setenv("postgres_circuitBreakerFailureThreshold", "7")
+	t.Setenv("postgres_circuitBreakerHalfOpenMax", "4")
+	t.Setenv("postgres_circuitBreakerCooldown", "45s")
+	t.Setenv("postgres_circuitBreakerFailureWindow", "20s")
+
+	tSettings := NewSettings()
+
+	require.NotNil(t, tSettings.Postgres.CircuitBreakerEnabled)
+	require.True(t, *tSettings.Postgres.CircuitBreakerEnabled)
+	require.Equal(t, 7, tSettings.Postgres.CircuitBreakerFailureThreshold)
+	require.Equal(t, 4, tSettings.Postgres.CircuitBreakerHalfOpenMax)
+	require.Equal(t, 45*time.Second, tSettings.Postgres.CircuitBreakerCooldown)
+	require.Equal(t, 20*time.Second, tSettings.Postgres.CircuitBreakerFailureWindow)
 }

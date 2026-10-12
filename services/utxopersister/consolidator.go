@@ -19,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/muhash"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -73,6 +74,10 @@ type consolidator struct {
 	// firstBlockHeight stores the height of the first block in range - The first block height in the range (startHeight)
 	firstBlockHeight uint32
 
+	// firstBlockHeightKnown records that firstBlockHeight was set. Zero is a real height,
+	// so it cannot stand for "unknown".
+	firstBlockHeightKnown bool
+
 	// firstPreviousBlockHash stores the hash of the block before the first block
 	// This is the hash of the previous block of the first block in the range (will be used to copy the last UTXOSet)
 	firstPreviousBlockHash *chainhash.Hash
@@ -85,6 +90,9 @@ type consolidator struct {
 
 	// previousBlockHash stores the hash of the previous block
 	previousBlockHash *chainhash.Hash
+
+	// acc accumulates the MuHash set commitment over the full materialized set.
+	acc *muhash.MuHash3072
 }
 
 // Addition represents a UTXO addition.
@@ -147,6 +155,7 @@ func NewConsolidator(logger ulogger.Logger, tSettings *settings.Settings, blockc
 		deletions:              make(map[UTXODeletion]struct{}),
 		additions:              make(map[UTXODeletion]*Addition),
 		firstPreviousBlockHash: previousBlockHash,
+		acc:                    muhash.New(),
 	}
 }
 
@@ -191,6 +200,7 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 	}
 
 	c.firstBlockHeight = startBlock
+	c.firstBlockHeightKnown = true
 
 	for i := 0; i < len(headers); i++ {
 		header := headers[i]
@@ -207,26 +217,22 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 		}
 
 		// Get the last 2 block headers from this last processed height
-		us, _, err := GetUTXOSetWithExistCheck(ctx, c.logger, c.settings, c.blockStore, hash)
+		us, _, err := GetUTXOSetWithExistCheck(ctx, c.logger, c.settings, c.blockStore, hash, height)
 		if err != nil {
 			return err
 		}
 
-		r, err := us.GetUTXODeletionsReader(ctx)
-		if err != nil && !errors.Is(err, errors.ErrBlobNotFound) {
+		// GetUTXO{Deletions,Additions}Reader return a semaphoreReadCloser
+		// that holds a file-store read permit until Close is called. Close
+		// each one before continuing the loop - leaking permits here would
+		// exhaust the read semaphore (default 768) within a few hundred
+		// blocks, after which acquireReadPermit times out at 25s and any
+		// subsequent Exists/GetIoReader fails with SERVICE_UNAVAILABLE.
+		if err := c.consumeDeletions(ctx, us); err != nil {
 			return err
 		}
 
-		if err := c.processDeletionsFromReader(ctx, r); err != nil {
-			return err
-		}
-
-		r, err = us.GetUTXOAdditionsReader(ctx)
-		if err != nil {
-			return err
-		}
-
-		if err := c.processAdditionsFromReader(ctx, r); err != nil {
+		if err := c.consumeAdditions(ctx, us); err != nil {
 			return err
 		}
 
@@ -238,6 +244,33 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 	c.logger.Infof("Finished processing headers at height %d", c.lastBlockHeight)
 
 	return nil
+}
+
+// consumeDeletions fetches the per-block deletions reader, processes it, and
+// releases the read permit. ErrBlobNotFound is tolerated (matching the prior
+// behaviour) and means "no deletions for this block".
+func (c *consolidator) consumeDeletions(ctx context.Context, us *UTXOSet) error {
+	r, err := us.GetUTXODeletionsReader(ctx)
+	if err != nil {
+		if errors.Is(err, errors.ErrBlobNotFound) {
+			return nil
+		}
+		return err
+	}
+	defer r.Close()
+	return c.processDeletionsFromReader(ctx, r)
+}
+
+// consumeAdditions fetches the per-block additions reader, processes it, and
+// releases the read permit. Unlike deletions, a missing additions file is a
+// real error - every block written via NewUTXOSet creates one.
+func (c *consolidator) consumeAdditions(ctx context.Context, us *UTXOSet) error {
+	r, err := us.GetUTXOAdditionsReader(ctx)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	return c.processAdditionsFromReader(ctx, r)
 }
 
 // processDeletionsFromReader processes UTXO deletions from a reader.

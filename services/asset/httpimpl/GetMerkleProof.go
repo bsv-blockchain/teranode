@@ -3,7 +3,6 @@ package httpimpl
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -52,9 +51,7 @@ type LegacyMerkleProofResponse struct {
 //   - func(c echo.Context) error: Echo handler function that processes the HTTP request
 //
 // URL Parameters:
-//   - hash: Transaction hash or subtree hash (64-character hex string)
-//     The API will attempt to find the hash as a transaction first,
-//     then as a subtree if not found as a transaction
+//   - hash: Transaction ID (64-character hex string). Subtree-root queries are unsupported.
 //
 // HTTP Response Formats:
 //
@@ -90,8 +87,11 @@ type LegacyMerkleProofResponse struct {
 //     Example: {"message": "invalid hash string"}
 //
 //   - 404 Not Found:
-//     Returned when the hash doesn't exist as a transaction or subtree
-//     Example: {"message": "hash not found as transaction or subtree"}
+//     Returned when no mined transaction exists for the hash, including subtree-root queries
+//     Example: {"message": "mined transaction not found; BUMP proofs require a mined transaction ID"}
+//
+//     Returned when the hash is a known transaction but exists only in orphan blocks
+//     Example: {"message": "transaction not in main chain"}
 //
 //   - 500 Internal Server Error:
 //     Returned for various internal errors:
@@ -139,7 +139,8 @@ type LegacyMerkleProofResponse struct {
 //   - Follows BRC-74 specification for BSV ecosystem compatibility
 //   - Binary format uses Bitcoin VarInt encoding for block height
 //   - Flag values: 0x00=hash data, 0x01=duplicate, 0x02=client txid
-//   - If a transaction appears in multiple blocks, the proof for the first block is returned
+//   - Only proofs anchored in the current best chain are returned. If the
+//     transaction exists only in orphan blocks, the endpoint returns 404.
 //   - Optimized for size and validation speed while maintaining SPV compatibility
 func (h *HTTP) GetMerkleProof(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
@@ -147,7 +148,7 @@ func (h *HTTP) GetMerkleProof(mode ReadMode) func(c echo.Context) error {
 
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetMerkleProof_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithLogMessage(h.logger, "[Asset_http] GetMerkleProof in %s for %s: %s", mode, c.Request().RemoteAddr, hashStr),
+			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetMerkleProof in %s for %s: %s", mode, c.RealIP(), hashStr),
 		)
 
 		defer deferFn()
@@ -164,32 +165,21 @@ func (h *HTTP) GetMerkleProof(mode ReadMode) func(c echo.Context) error {
 		}
 
 		// Create adapter to use merkleproof helper functions
-		adapter := newMerkleProofAdapter(ctx, h.repository)
+		adapter := newMerkleProofAdapter(ctx, h.repository, h.mainChainCache)
 
-		// Try to construct merkle proof - first as transaction, then as subtree
-		var proof *merkleproof.MerkleProof
-
-		// First, try as transaction hash
-		proof, err = merkleproof.ConstructMerkleProof(txHash, adapter)
+		// BRC-74 proofs start at transaction leaves, never at interior subtree roots.
+		proof, err := merkleproof.ConstructMerkleProof(txHash, adapter)
 		if err != nil {
-			// If transaction not found, try as subtree hash
-			if strings.Contains(err.Error(), "not in any block") || strings.Contains(err.Error(), "not found") {
-				proof, err = merkleproof.ConstructSubtreeMerkleProof(txHash, adapter)
-				if err != nil {
-					// Neither transaction nor subtree found
-					errStr := err.Error()
-					if strings.Contains(errStr, "not found") {
-						prometheusAssetHTTPGetMerkleProof.WithLabelValues("NotFound", "404").Inc()
-						return echo.NewHTTPError(http.StatusNotFound, "hash not found as transaction or subtree")
-					}
-					prometheusAssetHTTPGetMerkleProof.WithLabelValues("InternalError", "500").Inc()
-					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-				}
-			} else {
-				// Some other error occurred
-				prometheusAssetHTTPGetMerkleProof.WithLabelValues("InternalError", "500").Inc()
-				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			if errors.Is(err, errors.ErrTxNotFound) {
+				prometheusAssetHTTPGetMerkleProof.WithLabelValues("NotFound", "404").Inc()
+				return echo.NewHTTPError(http.StatusNotFound, "transaction not in main chain")
 			}
+			if errors.Is(err, errors.ErrNotFound) {
+				prometheusAssetHTTPGetMerkleProof.WithLabelValues("NotFound", "404").Inc()
+				return echo.NewHTTPError(http.StatusNotFound, "mined transaction not found; BUMP proofs require a mined transaction ID")
+			}
+			prometheusAssetHTTPGetMerkleProof.WithLabelValues("InternalError", "500").Inc()
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 
 		// Convert to BUMP format

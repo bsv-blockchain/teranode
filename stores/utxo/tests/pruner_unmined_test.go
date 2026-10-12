@@ -109,7 +109,7 @@ func TestStoreAgnosticPreserveParentsOfOldUnminedTransactions(t *testing.T) {
 				height := storedHeights[i]
 
 				// Create unmined transaction by not specifying block info
-				_, err := store.Create(ctx, tx, height) // unmined_since will be set to the block height parameter
+				_, _, err := store.SpendAndCreate(ctx, tx, height, utxo.WithCreateOnly()) // unmined_since will be set to the block height parameter
 				require.NoError(t, err, "Failed to create transaction %d at height %d", i, height)
 			}
 
@@ -203,7 +203,7 @@ func TestStoreAgnosticPreserveParentsOfOldUnminedTransactions_EdgeCases(t *testi
 				// Store at heights 8, 9, 10 (current height 10, cutoff would be 5)
 				for i, tx := range testTxs {
 					height := uint32(8 + i) //nolint:gosec // i is limited to 0-2 by testTxs slice
-					_, err := store.Create(ctx, tx, height)
+					_, _, err := store.SpendAndCreate(ctx, tx, height, utxo.WithCreateOnly())
 					require.NoError(t, err)
 				}
 
@@ -237,7 +237,7 @@ func TestStoreAgnosticQueryOldUnminedTransactions(t *testing.T) {
 
 			// Store transactions with different heights
 			for i, tx := range testTxs {
-				_, err := store.Create(ctx, tx, storedHeights[i])
+				_, _, err := store.SpendAndCreate(ctx, tx, storedHeights[i], utxo.WithCreateOnly())
 				require.NoError(t, err)
 			}
 
@@ -285,19 +285,19 @@ func TestCleanupWithMixedTransactionTypes(t *testing.T) {
 
 			// Create transactions with different states:
 			// 1. Old unmined transaction (should be deleted)
-			_, err := store.Create(ctx, testTxs[0], 2) // unmined, stored at height 2
+			_, _, err := store.SpendAndCreate(ctx, testTxs[0], 2, utxo.WithCreateOnly()) // unmined, stored at height 2
 			require.NoError(t, err)
 
 			// 2. Recent unmined transaction (should remain)
-			_, err = store.Create(ctx, testTxs[1], 8) // unmined, stored at height 8
+			_, _, err = store.SpendAndCreate(ctx, testTxs[1], 8, utxo.WithCreateOnly()) // unmined, stored at height 8
 			require.NoError(t, err)
 
 			// 3. Old mined transaction (should remain - mined transactions are not cleaned)
-			_, err = store.Create(ctx, testTxs[2], 2, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 2}))
+			_, _, err = store.SpendAndCreate(ctx, testTxs[2], 2, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 2}), utxo.WithCreateOnly())
 			require.NoError(t, err)
 
 			// 4. Recent mined transaction (should remain)
-			_, err = store.Create(ctx, testTxs[3], 8, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 2, BlockHeight: 8}))
+			_, _, err = store.SpendAndCreate(ctx, testTxs[3], 8, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 2, BlockHeight: 8}), utxo.WithCreateOnly())
 			require.NoError(t, err)
 
 			// Verify initial state

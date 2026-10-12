@@ -53,7 +53,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -z "$HOST" ]; then
-  echo "Error: --host is a required argument."
+  echo "Error: --host is a required argument." >&2
   echo "Usage: $0 --host <host> [--port <port>] [--stopHeight <height>] [--generate] [--initialBlocks <count>]"
   exit 1
 fi

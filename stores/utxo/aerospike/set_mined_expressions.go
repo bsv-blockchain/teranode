@@ -4,8 +4,8 @@ package aerospike
 import (
 	"context"
 
-	"github.com/aerospike/aerospike-client-go/v8"
-	"github.com/aerospike/aerospike-client-go/v8/types"
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -147,7 +147,7 @@ func (s *Store) parseBlockIDsFromSlice(v []interface{}) []uint32 {
 //   - ExpUnknown: When no change is needed (with ExpWriteFlagEvalNoFail this is a no-op)
 //
 // Logic implemented:
-//  1. If preserveUntil is set → no change
+//  1. If preserveUntil is set → no change (unless ignorePreserveUntil is true)
 //  2. If conflicting AND no existing DAH → set DAH
 //  3. If master record (totalExtraRecs not nil) AND allSpent AND hasBlocks AND isOnLongestChain → set DAH
 //  4. If master record AND NOT (allSpent AND hasBlocks AND isOnLongestChain) AND has existing DAH → clear DAH
@@ -155,7 +155,14 @@ func (s *Store) parseBlockIDsFromSlice(v []interface{}) []uint32 {
 //
 // Note: Pagination records (totalExtraRecs is nil) only update lastSpentState, not DAH.
 // The lastSpentState logic is handled separately via ExpWriteOp for that bin.
-func (s *Store) buildDeleteAtHeightExpression(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool) *aerospike.Expression {
+//
+// ignorePreserveUntil drops the preserveUntil guard (step 1). It is set only by the
+// expired-preservation path (ProcessExpiredPreservations), which clears preserveUntil in the
+// same operate call — but expressions read the pre-operate record, so the guard would otherwise
+// still see the (about-to-be-cleared) bin and short-circuit. Dropping the guard there lets the
+// eligibility check (steps 2-4) decide the DAH, restoring the "DAH set ⟹ safe to delete"
+// invariant for expiring preservations.
+func (s *Store) buildDeleteAtHeightExpression(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool, ignorePreserveUntil bool) *aerospike.Expression {
 	newDeleteHeight := int64(currentBlockHeight + blockHeightRetention)
 
 	// Helper expressions for readability
@@ -166,8 +173,12 @@ func (s *Store) buildDeleteAtHeightExpression(currentBlockHeight uint32, blockHe
 	recordUtxosBin := aerospike.ExpIntBin(fields.RecordUtxos.String())
 	blockIDsBin := aerospike.ExpListBin(fields.BlockIDs.String())
 
-	// Condition: preserveUntil is NOT set (bin doesn't exist)
+	// Condition: preserveUntil is NOT set (bin doesn't exist). When ignorePreserveUntil is
+	// true we treat preservation as already gone so the guard branch below never triggers.
 	preserveUntilNotSet := aerospike.ExpNot(aerospike.ExpBinExists(fields.PreserveUntil.String()))
+	if ignorePreserveUntil {
+		preserveUntilNotSet = aerospike.ExpBoolVal(true)
+	}
 
 	// Condition: conflicting is true
 	isConflicting := aerospike.ExpEq(conflictingBin, aerospike.ExpBoolVal(true))
@@ -240,7 +251,7 @@ func (s *Store) SetMinedMultiWithExpressions(ctx context.Context, hashes []*chai
 		return nil, nil
 	}
 
-	thisBlockHeight := s.blockHeight.Load() + 1
+	thisBlockHeight := s.GetBlockHeight() + 1
 
 	// Build filter expression: only proceed if blockID doesn't exist in blockIDs list
 	blockIDNotExists := aerospike.ExpEq(
@@ -286,10 +297,15 @@ func (s *Store) SetMinedMultiWithExpressions(ctx context.Context, hashes []*chai
 	// Set deleteAtHeight to nil initially (will be updated by expression if needed)
 	ops = append(ops, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), nil)))
 
-	// Add deleteAtHeight expression if retention is enabled
+	// Add deleteAtHeight expression if retention is enabled.
+	// Stamp the DAH relative to the height of the block the tx is mined into
+	// (minedBlockInfo.BlockHeight), NOT the store's cached chain tip (thisBlockHeight).
+	// The cached tip lags behind the block being validated during catchup/sync; using
+	// it stamped the DAH too low and let the pruner delete the record before the
+	// retention window elapsed.
 	blockHeightRetention := s.settings.GetUtxoStoreBlockHeightRetention()
 	if blockHeightRetention > 0 {
-		dahExp := s.buildDeleteAtHeightExpression(thisBlockHeight, blockHeightRetention, minedBlockInfo.OnLongestChain)
+		dahExp := s.buildDeleteAtHeightExpression(minedBlockInfo.BlockHeight, blockHeightRetention, minedBlockInfo.OnLongestChain, false)
 		ops = append(ops, aerospike.ExpWriteOp(
 			fields.DeleteAtHeight.String(),
 			dahExp,
@@ -322,17 +338,29 @@ func (s *Store) SetMinedMultiWithExpressions(ctx context.Context, hashes []*chai
 	prometheusTxMetaAerospikeMapSetMinedBatch.Inc()
 
 	// Process results
-	return s.processBatchResultsForSetMinedExpressions(ctx, batchRecords, hashes, thisBlockHeight, minedBlockInfo)
+	blockIDs, work, err := s.processBatchResultsForSetMinedExpressions(ctx, batchRecords, hashes, thisBlockHeight, minedBlockInfo)
+
+	// #1037: clear the lock on pagination records, and fully unlock (master + all
+	// pagination records) any tx whose write was FILTERED_OUT — the blockID filter
+	// otherwise skips the Locked=false op. Done here, outside the result processor,
+	// so the processor performs no follow-up I/O and stays unit-testable.
+	if clearErr := s.applyLockClearWork(ctx, work); clearErr != nil {
+		err = errors.Join(err, clearErr)
+	}
+
+	return blockIDs, err
 }
 
-// processBatchResultsForSetMinedExpressions processes the batch results and handles follow-up actions.
+// processBatchResultsForSetMinedExpressions processes the batch results and
+// returns the per-tx blockID map plus the lock-clearing follow-up work (#1037);
+// the lock-clearing I/O is performed by the caller.
 func (s *Store) processBatchResultsForSetMinedExpressions(
 	ctx context.Context,
 	batchRecords []aerospike.BatchRecordIfc,
 	hashes []*chainhash.Hash,
 	thisBlockHeight uint32,
 	minedBlockInfo utxo.MinedBlockInfo,
-) (map[chainhash.Hash][]uint32, error) {
+) (map[chainhash.Hash][]uint32, lockClearWork, error) {
 	blockIDs := make(map[chainhash.Hash][]uint32, len(hashes))
 	var errs error
 	okUpdates := 0
@@ -348,6 +376,11 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 		TxID *chainhash.Hash
 		DAH  uint32
 	}, 0)
+	// #1037: lock-clearing follow-up. Non-filtered records: pagination records via
+	// work.items (the master is unlocked by the main batch write's Locked=false op).
+	// FILTERED_OUT records: work.fullUnlock, since the filtered write returns no
+	// child count and may have skipped the master's Locked=false too.
+	var work lockClearWork
 
 	// Process each batch record result
 	for i, batchRecord := range batchRecords {
@@ -365,8 +398,21 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 				}
 
 				if aErr.ResultCode == types.FILTERED_OUT {
-					// BlockID already exists in the list - this transaction was already
-					// marked as mined in this block, nothing to do
+					// Filter condition: count(blockID in blockIDs) == 0 -> operation runs.
+					// FILTERED_OUT therefore proves the current blockID is already present
+					// in the durable list. Synthesize the map entry so the postcondition
+					// check at the end of this function sees this hash as covered.
+					blockIDs[*hash] = []uint32{minedBlockInfo.BlockID}
+					okUpdates++
+
+					// #1037 (filter-gating): when the write is FILTERED_OUT the whole
+					// batch write — including the Locked=false op — is skipped, and the
+					// reads (totalExtraRecs etc.) return nothing, so we know neither the
+					// master's lock state nor the child count. The tx is mined (its
+					// blockID is present) and therefore must be spendable: fully unlock
+					// it (master + all pagination records) via SetLocked, which reads the
+					// child count from the master itself.
+					work.fullUnlock = append(work.fullUnlock, *hash)
 					continue
 				}
 			}
@@ -431,16 +477,61 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 			}
 		}
 
+		// #1037: this batch write cleared `locked` on the master only. Clear it on
+		// the pagination/extra records too, so a child spending a high-index output
+		// (vout >= utxoBatchSize) of a freshly-mined paginated tx is not rejected
+		// with TX_LOCKED. Keyed on the presence of extra records (not the external
+		// flag) so it holds for any paginated tx. UnsetMined never uses this path
+		// (SetMinedMulti routes it to the UDF), so collecting here is always safe.
+		if state.TotalExtraRecs != nil && *state.TotalExtraRecs > 0 {
+			work.items = append(work.items, lockClearItem{txID: hash, childCount: *state.TotalExtraRecs})
+		}
+
 		okUpdates++
+	}
+
+	// Postcondition (see stores/utxo/Interface.go SetMinedMulti docstring): when
+	// !UnsetMined every submitted hash MUST appear in blockIDs and the returned
+	// slice MUST contain minedBlockInfo.BlockID. Paths that left a hash unmapped
+	// (nil record/bins, empty BlockIDs bin) are promoted to errors here so all
+	// backends fail closed identically — mirrors the SQL store's tx-not-found
+	// enforcement in stores/utxo/sql/sql.go.
+	if !minedBlockInfo.UnsetMined {
+		for _, h := range hashes {
+			bIDs, ok := blockIDs[*h]
+			if !ok {
+				errs = errors.Join(errs, errors.NewTxNotFoundError("setMinedMulti coverage gap: tx absent from store result", h.String()))
+				nrErrors++
+
+				continue
+			}
+
+			found := false
+			for _, bID := range bIDs {
+				if bID == minedBlockInfo.BlockID {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				errs = errors.Join(errs, errors.NewProcessingError("setMinedMulti coverage gap: tx present but missing current blockID", h.String()))
+				nrErrors++
+			}
+		}
 	}
 
 	prometheusTxMetaAerospikeMapSetMinedBatchN.Add(float64(okUpdates))
 
-	if nrErrors > 0 {
+	// Mirror the Lua path's single guard (set_mined.go) instead of the nested
+	// `if nrErrors > 0 { if errs != nil }`: every nrErrors++ is paired with an
+	// errs join, so the two conditions move together — keeping them as one
+	// expression removes the implicit coupling. work is still returned so the
+	// caller unlocks successfully-mined (and FILTERED_OUT) records despite a
+	// sibling failure in this batch.
+	if errs != nil || nrErrors > 0 {
 		prometheusTxMetaAerospikeMapSetMinedBatchErrN.Add(float64(nrErrors))
-		if errs != nil {
-			return blockIDs, errors.NewError("aerospike batch record errors", errs)
-		}
+		return blockIDs, work, errors.NewError("aerospike batch record errors", errs)
 	}
 
 	// Execute follow-up actions for external transactions (child record and blob storage DAH)
@@ -453,8 +544,8 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 	}
 
 	if postErr != nil {
-		return blockIDs, errors.NewError("aerospike setMined follow-up batch errors", postErr)
+		return blockIDs, work, errors.NewError("aerospike setMined follow-up batch errors", postErr)
 	}
 
-	return blockIDs, nil
+	return blockIDs, work, nil
 }

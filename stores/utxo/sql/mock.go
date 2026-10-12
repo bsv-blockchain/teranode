@@ -269,6 +269,11 @@ func SetupCreatePostgresSchemaSuccessMocks(mockDB *MockDB) {
 	mockDB.On("Exec", mock.MatchedBy(func(query string) bool {
 		return strings.Contains(query, "CREATE INDEX IF NOT EXISTS px_outputs_unspent_by_parent")
 	}), mock.Anything).Return(sqlmock.NewResult(0, 0), nil)
+
+	// Step 15: CREATE TABLE IF NOT EXISTS conflict_intents
+	mockDB.On("Exec", mock.MatchedBy(func(query string) bool {
+		return strings.Contains(query, "CREATE TABLE IF NOT EXISTS conflict_intents")
+	}), mock.Anything).Return(sqlmock.NewResult(0, 0), nil)
 }
 
 // SetupCreatePostgresSchemaErrorMocks configures mock expectations for schema creation error at specific step
@@ -304,6 +309,7 @@ func SetupCreatePostgresSchemaErrorMocks(mockDB *MockDB, errorAtStep int) {
 		func(q string) bool {
 			return strings.Contains(q, "CREATE INDEX IF NOT EXISTS px_outputs_unspent_by_parent")
 		},
+		func(q string) bool { return strings.Contains(q, "CREATE TABLE IF NOT EXISTS conflict_intents") },
 	}
 
 	// Setup successful mocks for steps before the error
