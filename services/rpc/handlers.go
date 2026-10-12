@@ -570,7 +570,27 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 		return nil, errors.NewConfigurationError("asset_httpURL is not set")
 	}
 
-	fullURL := s.assetHTTPURL.ResolveReference(&url.URL{Path: fmt.Sprintf("/api/v1/tx/%s/hex", c.Txid)})
+	// Parse the txid before it goes anywhere, as svnode's ParseHashV does. It is
+	// interpolated into the asset service URL, where an unchecked value addresses
+	// other routes ("../block/<hash>"), and a malformed one came back as the asset
+	// service's 400, answered as an internal error for the caller's own typo.
+	// Hex first and then length, in svnode's order, so its texts match.
+	if _, err := hex.DecodeString(c.Txid); err != nil {
+		return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInvalidParameter,
+			fmt.Sprintf("parameter 1 must be hexadecimal string (not '%s')", c.Txid))
+	}
+
+	if len(c.Txid) != chainhash.MaxHashStringSize {
+		return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInvalidParameter,
+			fmt.Sprintf("parameter 1 must be of length %d (not %d)", chainhash.MaxHashStringSize, len(c.Txid)))
+	}
+
+	txHash, err := chainhash.NewHashFromStr(c.Txid)
+	if err != nil {
+		return nil, rpcDecodeHexError(c.Txid)
+	}
+
+	fullURL := s.assetHTTPURL.ResolveReference(&url.URL{Path: fmt.Sprintf("/api/v1/tx/%s/hex", txHash.String())})
 
 	// Set up HTTP client with timeouts
 	client := &http.Client{
@@ -600,20 +620,11 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 		// Nil-guarded like logAndBuild's: this package's tests build an RPCServer
 		// without one, and a diagnostic line must not be the thing that panics.
 		if s.logger != nil {
-			// The txid is not logged raw: it is caller-supplied and unvalidated on
-			// this path, so a newline in it would break the single-line log rule
-			// and let a caller write the following lines. fullURL percent-encodes
-			// control characters, so it carries the same txid safely.
 			s.logger.Warnf("[handleGetRawTransaction] asset service reported 404 at %s", fullURL.String())
 		}
 
-		// %q, not %s: the caller-facing reply is the fixed txNotFoundMessage, but
-		// this message is rendered into a log line by logAndBuild, and c.Txid is
-		// unvalidated on this path. Escaping it here is what actually closes the
-		// injection the Warnf above was changed for - fixing only that line left
-		// the same value reaching the log by another route four lines later.
 		return nil, s.rpcTxLookupError(
-			errors.NewTxNotFoundError("tx %q not found in asset service", c.Txid),
+			errors.NewTxNotFoundError("tx %s not found in asset service", txHash.String()),
 			bsvjson.ErrRPCInvalidAddressOrKey, "")
 	}
 

@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -562,6 +565,52 @@ func TestHandleGetBlockByHeight_AnswersAsSvnode(t *testing.T) {
 			} else {
 				require.Empty(t, logger.errorf, "a height above the tip is the caller's mistake")
 			}
+		})
+	}
+}
+
+// TestHandleGetRawTransaction_MalformedTxidIsRefusedBeforeAnyRequest pins that the
+// txid is parsed before it goes anywhere, as svnode's ParseHashV does (-8). It is
+// interpolated into the asset service URL, where an unchecked value addressed
+// other routes ("../block/<hash>" resolves to /api/v1/block/<hash>/hex), and a
+// malformed one came back as the asset service's 400: -32603 "internal error",
+// logged at Error, for the caller's own typo.
+func TestHandleGetRawTransaction_MalformedTxidIsRefusedBeforeAnyRequest(t *testing.T) {
+	var requests atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	assetURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	for name, tc := range map[string]struct {
+		txid    string
+		message string
+	}{
+		"not hex":        {strings.Repeat("zz", 32), "parameter 1 must be hexadecimal string (not '" + strings.Repeat("zz", 32) + "')"},
+		"too short":      {"abcd", "parameter 1 must be of length 64 (not 4)"},
+		"another route":  {"../block/" + strings.Repeat("00", 32), "parameter 1 must be hexadecimal string (not '../block/" + strings.Repeat("00", 32) + "')"},
+		"a forged line":  {"deadbeef\nFORGED ERROR LINE", "parameter 1 must be hexadecimal string (not 'deadbeef\nFORGED ERROR LINE')"},
+		"odd length hex": {strings.Repeat("a", 63), "parameter 1 must be hexadecimal string (not '" + strings.Repeat("a", 63) + "')"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			logger := newCapturingLogger()
+			s := &RPCServer{logger: logger, assetHTTPURL: assetURL}
+			before := requests.Load()
+			verbose := 0
+
+			_, err := handleGetRawTransaction(context.Background(), s,
+				&bsvjson.GetRawTransactionCmd{Txid: tc.txid, Verbose: &verbose}, nil)
+
+			rpcErr := requireRPCError(t, err)
+			require.Equal(t, bsvjson.ErrRPCInvalidParameter, rpcErr.Code)
+			require.Equal(t, tc.message, rpcErr.Message)
+			require.Equal(t, before, requests.Load(), "nothing is sent to the asset service")
+			require.Empty(t, logger.all(), "and nothing caller-supplied reaches a log line")
 		})
 	}
 }
