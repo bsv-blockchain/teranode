@@ -43,7 +43,7 @@ services:
       blockchain:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD-SHELL", "netstat -ltn | grep -c 8091" ]
+      test: [ "CMD-SHELL", "netstat -ltn | grep -c 8090" ]
       interval: 5s
       timeout: 30s
       retries: 10
