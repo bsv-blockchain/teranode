@@ -1139,3 +1139,28 @@ func TestWriteRecord_PanicsWhenInpointsChangedAfterSizing(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, rec[txInpointsRecordHeader:])
 }
+
+// A rechain over a tx the in-memory map no longer holds fails instead of adding
+// a node with no inpoints; addNode's own check is what catches it.
+func TestReChainSubtrees_InMemoryTxMissingFromMap(t *testing.T) {
+	stp, _, newSubtreeChan := newDeferredDrainProcessor(t, nil)
+
+	go func() {
+		for req := range newSubtreeChan {
+			if req.ErrChan != nil {
+				req.ErrChan <- nil
+			}
+		}
+	}()
+
+	for i := uint64(0); i < 20; i++ {
+		require.NoError(t, stp.addNode(subtreepkg.Node{Hash: arenaHash(i), Fee: 1, SizeInBytes: 250}, buildInpoints(shapeThreeParents, i), true))
+	}
+
+	split := stp.currentTxMap.(*SplitTxInpointsMap)
+	require.True(t, split.Delete(arenaHash(5)))
+
+	err := stp.reChainSubtrees(0)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), arenaHash(5).String())
+}

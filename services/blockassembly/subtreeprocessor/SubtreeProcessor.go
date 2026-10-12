@@ -3730,10 +3730,7 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 			}
 
 			if inMemory {
-				if !stp.currentTxMap.Exists(node.Hash) {
-					return errors.NewProcessingError("error getting txInpoints from currentTxMap for %s", node.Hash.String())
-				}
-
+				// addNode fails if the map does not hold the tx
 				if err = stp.addNode(node, nil, true); err != nil {
 					return errors.NewProcessingError(errAddingNodeToSubtree, err)
 				}
