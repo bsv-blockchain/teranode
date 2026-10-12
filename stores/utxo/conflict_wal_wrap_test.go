@@ -53,7 +53,7 @@ func TestProcessConflicting_WALBeginFailureAborts(t *testing.T) {
 	// proving the function aborted before touching the store.
 	spy := &walSpyStore{MockUtxostore: &MockUtxostore{}, beginErr: errors.NewStorageError("wal unavailable")}
 
-	_, _, err := ProcessConflicting(ctx, spy, 100, chainhash.Hash{}, []chainhash.Hash{createTestHash("winner")}, nil)
+	_, _, err := ProcessConflicting(ctx, spy, 100, chainhash.Hash{}, []chainhash.Hash{createTestHash("winner")}, nil, NoAncestryGuard)
 
 	require.Error(t, err)
 	require.ErrorIs(t, err, errors.ErrStorageError)

@@ -142,7 +142,14 @@ func (s *Server) canSendToNetwork(ctx context.Context, kind topicKind) bool {
 // drives peer switching during catchup rather than outbound gossip.
 func (s *Server) shouldSkipNotification(ctx context.Context, notificationType model.NotificationType) bool {
 	switch notificationType {
-	case model.NotificationType_Block:
+	case model.NotificationType_Block, model.NotificationType_BlockSubtreesSet:
+		// Both notification types can trigger a block-topic publish
+		// (announceBlock), gated the same way: BlockSubtreesSet is what
+		// announces a block whose Block notification arrived before
+		// blockvalidation's background block.Valid check finished — for an
+		// optimistically-mined peer block — or before the normal validation
+		// path finished (both defer AddBlock's SubtreesSet option to after
+		// validation completes).
 		return !s.canSendToNetwork(ctx, topicKindBlock)
 	case model.NotificationType_Subtree:
 		return !s.canSendToNetwork(ctx, topicKindSubtree)
@@ -168,7 +175,13 @@ func (s *Server) shouldSkipNotification(ctx context.Context, notificationType mo
 // mode or in the current FSM state (or whose topic is unknown - fail
 // closed), logging the drop and counting it in prometheus so a leaking code
 // path is visible instead of silent.
-func (s *Server) publishToNetwork(ctx context.Context, topicName string, msgBytes []byte) error {
+//
+// The sent return distinguishes a message actually handed to the network from
+// one this gate dropped: callers that record "already announced" state (the
+// sender-side duplicate guards) must not do so for a dropped publish — the FSM
+// gate drops block publishes precisely in the degraded states where the later
+// re-announcement matters most.
+func (s *Server) publishToNetwork(ctx context.Context, topicName string, msgBytes []byte) (sent bool, err error) {
 	initPrometheusMetrics()
 
 	kind, ok := s.topicKindForName(topicName)
@@ -176,14 +189,14 @@ func (s *Server) publishToNetwork(ctx context.Context, topicName string, msgByte
 		s.logger.Errorf("[publishToNetwork] dropping publish to unknown topic %s: not in the outbound allow-list", topicName)
 		prometheusP2PPublishBlocked.WithLabelValues("unknown", "unknown", "chokepoint").Inc()
 
-		return nil
+		return false, nil
 	}
 
 	// Enforce the topic's ingress size cap on the way out, and loudly: an
 	// oversized publish is not a policy drop but a local bug/misconfiguration
 	// that every receiver would otherwise reject in silence.
 	if capBytes, ok := topicKindCaps[kind]; ok && len(msgBytes) > capBytes {
-		return errors.NewError("%s publish of %d bytes exceeds topic cap %d, not publishing", kind, len(msgBytes), capBytes)
+		return false, errors.NewError("%s publish of %d bytes exceeds topic cap %d, not publishing", kind, len(msgBytes), capBytes)
 	}
 
 	// Listen-mode policy, enforced centrally in addition to the handlers:
@@ -192,7 +205,7 @@ func (s *Server) publishToNetwork(ctx context.Context, topicName string, msgByte
 	mode := s.settings.P2P.ListenMode
 	if mode == settings.ListenModeSilent || (mode == settings.ListenModeListenOnly && kind != topicKindNodeStatus) {
 		s.logger.Debugf("[publishToNetwork] dropping %s publish in listen mode %s", kind, mode)
-		return nil
+		return false, nil
 	}
 
 	// This fail-open branch covers only a direct RPC error; the common
@@ -202,15 +215,19 @@ func (s *Server) publishToNetwork(ctx context.Context, topicName string, msgByte
 	state, err := s.currentFSMState(ctx)
 	if err != nil {
 		s.logger.Warnf("[publishToNetwork] allowing %s publish, error getting blockchain FSM state: %v", kind, err)
-		return s.P2PClient.Publish(ctx, topicName, msgBytes)
+		err = s.P2PClient.Publish(ctx, topicName, msgBytes)
+
+		return err == nil, err
 	}
 
 	if !allowedTopicsForState(state)[kind] {
 		s.logger.Errorf("[publishToNetwork] dropping %s publish: not allowed in FSM state %s", kind, state.String())
 		prometheusP2PPublishBlocked.WithLabelValues(string(kind), state.String(), "chokepoint").Inc()
 
-		return nil
+		return false, nil
 	}
 
-	return s.P2PClient.Publish(ctx, topicName, msgBytes)
+	err = s.P2PClient.Publish(ctx, topicName, msgBytes)
+
+	return err == nil, err
 }

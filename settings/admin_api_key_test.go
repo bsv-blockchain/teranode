@@ -7,7 +7,8 @@ import (
 )
 
 // TestNewSettingsTrimsAdminAPIKey guards the trim-at-load contract: the servers
-// treat GRPCAdminAPIKey == "" as "generate a random key", so a whitespace-only
+// treat an empty key as missing (Blockchain refuses startup; P2P/Legacy use
+// random keys). A whitespace-only
 // or padded value read from the environment (gocore does not trim env values)
 // must be trimmed once at load rather than becoming a live secret in some
 // readers and empty in others.

@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -159,4 +160,132 @@ func (s *SQL) blockIDByHash(ctx context.Context, blockHash *chainhash.Hash) (uin
 		return 0, false, errors.NewStorageError("failed to look up block id by hash", err)
 	}
 	return id, true, nil
+}
+
+// checkCallerSuppliedBlockID decides whether StoreBlock may write a blocks row
+// under an id the caller chose (options.WithID) rather than one the INSERT
+// allocates. Quick validation reserves an id with AssignBlockID, stamps the
+// block's transactions with it in the UTXO store, and only then asks for the
+// blocks row. The UTXO store is a separate database, so nothing but this check
+// stops a row landing under an id that another block's transactions already
+// carry, or under an id the sequence will hand out later.
+//
+// The rules, in order:
+//   - The hash already has a blocks row: pass, so the INSERT fails with the
+//     same "block already exists" error it returned before this check existed.
+//     Callers that retry an AddBlock whose first attempt landed rely on that.
+//   - Another hash already has a blocks row under the id: refuse.
+//   - The hash has a reservation: the id must equal it.
+//   - The hash has no reservation: the id must not be reserved by another hash,
+//     and the sequence must already have issued it.
+//
+// The last rule exists because sweepStaleReservations deletes reservations older
+// than staleReservationSweepAge. A block retried after a long outage reads its id
+// back from its own transactions in the UTXO store and arrives with no
+// reservation row. Refusing it would leave that block unable to commit at all.
+//
+// The check runs under slowPathMu but outside the INSERT's transaction. That is
+// enough to keep an accepted id free: ids come from a sequence and a reservation
+// never names an id the sequence already issued, so no other block can come to
+// hold the id between the check and the INSERT, and the INSERT's own unique
+// constraints still apply. It does not stop AssignBlockID re-reserving this hash
+// under a new id after the sweep while the check runs; that caller then gets an
+// id the committed row does not carry. That window needs a sweep and a concurrent
+// re-reservation of the same hash, and it existed before this check.
+func (s *SQL) checkCallerSuppliedBlockID(ctx context.Context, blockHash *chainhash.Hash, id uint64) error {
+	facts, err := s.callerSuppliedBlockIDFacts(ctx, blockHash, id)
+	if err != nil {
+		return errors.NewStorageError("[StoreBlock][%s] failed to look up what holds caller-supplied block id %d", blockHash.String(), id, err)
+	}
+
+	if facts.committed {
+		return nil
+	}
+
+	// Another block already committed under this id. The INSERT would fail on
+	// the primary key, but parseSQLError reports any unique violation as "block
+	// already exists", which legacy sync treats as success, so the block would be
+	// dropped with no row. Refuse it here with an error that says what happened.
+	if facts.owner != nil {
+		return errors.NewStorageError("[StoreBlock][%s] refusing caller-supplied block id %d: block %s is already stored under it", blockHash.String(), id, hashString(facts.owner))
+	}
+
+	if facts.reserved.Valid {
+		if uint64(facts.reserved.Int64) != id {
+			return errors.NewStorageError("[StoreBlock][%s] refusing caller-supplied block id %d: the id reserved for this block is %d", blockHash.String(), id, facts.reserved.Int64)
+		}
+
+		return nil
+	}
+
+	if facts.holder != nil {
+		return errors.NewStorageError("[StoreBlock][%s] refusing caller-supplied block id %d: it is reserved for block %s", blockHash.String(), id, hashString(facts.holder))
+	}
+
+	if id > facts.highestIssued {
+		return errors.NewStorageError("[StoreBlock][%s] refusing caller-supplied block id %d: the id sequence has only issued up to %d and this block has no reservation", blockHash.String(), id, facts.highestIssued)
+	}
+
+	return nil
+}
+
+// callerSuppliedBlockIDFacts is everything checkCallerSuppliedBlockID decides on.
+type callerSuppliedBlockIDFacts struct {
+	committed     bool          // the hash already has a blocks row
+	owner         []byte        // hash of the block stored under the id, nil if none
+	reserved      sql.NullInt64 // the id reserved for the hash, if any
+	holder        []byte        // hash holding a reservation for the id, nil if none
+	highestIssued uint64        // largest id the sequence has handed out, 0 if none
+}
+
+// callerSuppliedBlockIDFacts reads the facts in one statement, so the check costs
+// one round trip rather than one per rule. It runs under slowPathMu, which every
+// block insert waits on, and quick validation supplies an id for every block it
+// commits, so during catch-up each extra round trip is paid once per block.
+//
+// highestIssued comes from the id sequence without advancing it. Every id handed
+// out through GetNextBlockID, AssignBlockID or an auto-increment INSERT came from
+// that sequence, so an id above it was never issued. On Postgres
+// pg_sequence_last_value is NULL until the first nextval; on SQLite, AUTOINCREMENT
+// keeps sqlite_sequence.seq at the largest rowid ever used and
+// getNextBlockIdFromSQLite advances it directly. A missing, NULL or negative value
+// reads as 0, which refuses every unreserved id: the safe direction.
+func (s *SQL) callerSuppliedBlockIDFacts(ctx context.Context, blockHash *chainhash.Hash, id uint64) (callerSuppliedBlockIDFacts, error) {
+	highestIssued := `(SELECT seq FROM sqlite_sequence WHERE name = 'blocks')`
+	if s.engine == util.Postgres {
+		highestIssued = `pg_sequence_last_value(pg_get_serial_sequence('blocks', 'id')::regclass)`
+	}
+
+	q := `SELECT
+		EXISTS (SELECT 1 FROM blocks WHERE hash = $1),
+		(SELECT hash FROM blocks WHERE id = $2),
+		(SELECT block_id FROM block_id_reservations WHERE hash = $1),
+		(SELECT hash FROM block_id_reservations WHERE block_id = $2 LIMIT 1),
+		` + highestIssued
+
+	var (
+		f       callerSuppliedBlockIDFacts
+		highest sql.NullInt64
+	)
+
+	if err := s.db.QueryRowContext(ctx, q, blockHash[:], id).Scan(&f.committed, &f.owner, &f.reserved, &f.holder, &highest); err != nil {
+		return callerSuppliedBlockIDFacts{}, err
+	}
+
+	if highest.Valid && highest.Int64 > 0 {
+		f.highestIssued = uint64(highest.Int64)
+	}
+
+	return f, nil
+}
+
+// hashString renders a hash column for an error message, falling back to hex
+// when the bytes are not a 32-byte hash.
+func hashString(b []byte) string {
+	h, err := chainhash.NewHash(b)
+	if err != nil {
+		return fmt.Sprintf("%x", b)
+	}
+
+	return h.String()
 }

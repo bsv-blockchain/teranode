@@ -2,7 +2,9 @@ package settings
 
 import (
 	"encoding/json"
+	"net/url"
 	"reflect"
+	"strings"
 )
 
 // redactedValue is defined in export.go; both export and the log-safe
@@ -10,8 +12,10 @@ import (
 // consistent marker.
 
 // Redact returns a deep clone of s with every field tagged `redact:"true"`
-// replaced by a placeholder. The clone is safe to marshal to JSON for logging.
-// A nil input returns nil with no error.
+// replaced by a placeholder, and the credentials inside every URL-typed field
+// and every string (or string-slice element) that holds a URL removed by the
+// same structural redaction the settings portal uses. The clone is safe to
+// marshal to JSON for logging. A nil input returns nil with no error.
 //
 // Implementation note: the deep clone uses a JSON round-trip, so any fields
 // that do not survive json.Marshal/Unmarshal — function pointers, channels,
@@ -40,6 +44,65 @@ func Redact(s *Settings) (*Settings, error) {
 	return &clone, nil
 }
 
+// RedactConfigStats masks the value of every sensitive key in the text produced by
+// gocore.Config().Stats(). That dump lists every settings-file key, one per line as
+// "key=value" or "key[context]=value", and masks only encrypted values on its own, so a
+// secret set in a settings file would otherwise reach the log in clear. The value of every
+// other line is passed through the same structural URL redaction the settings portal uses,
+// so credentials inside a URL-valued setting are masked too; a line with nothing to redact
+// is returned unchanged.
+func RedactConfigStats(stats string) string {
+	sensitive := extractSensitiveKeys()
+
+	lines := strings.Split(stats, "\n")
+	for i, line := range lines {
+		eq := strings.Index(line, "=")
+		if eq < 0 {
+			continue
+		}
+
+		key := line[:eq]
+		if bracket := strings.Index(key, "["); bracket >= 0 {
+			key = key[:bracket]
+		}
+
+		if sensitive[key] {
+			lines[i] = line[:eq+1] + redactedValue
+			continue
+		}
+
+		// A store URL carries its credentials where no key name can flag them
+		// (postgres://user:pass@host/db, aerospike userinfo, a credential query parameter).
+		lines[i] = line[:eq+1] + redactURLString(line[eq+1:])
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// RedactConfigMap returns a copy of m, as produced by gocore.Config().GetAll(), with the
+// value of every sensitive key masked. Map keys carry the settings context after the first
+// dot ("rpc_pass.docker"), so the part before it is what is matched. Every other value is
+// passed through the same structural URL redaction the settings portal uses, so credentials
+// inside a URL-valued setting are masked too; a value with nothing to redact is copied
+// unchanged. The input is not modified.
+func RedactConfigMap(m map[string]string) map[string]string {
+	sensitive := extractSensitiveKeys()
+
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		base, _, _ := strings.Cut(k, ".")
+		if sensitive[base] {
+			v = redactedValue
+		} else {
+			v = redactURLString(v)
+		}
+
+		out[k] = v
+	}
+
+	return out
+}
+
 func redactValue(v reflect.Value) {
 	if !v.IsValid() {
 		return
@@ -47,6 +110,34 @@ func redactValue(v reflect.Value) {
 
 	switch v.Kind() {
 	case reflect.Struct:
+		// A url.URL keeps its credentials in two places, and the JSON round-trip above handles
+		// neither well (bitcoin-sv/teranode#4844). The userinfo PASSWORD vanishes by accident,
+		// because url.Userinfo's fields are all unexported - but what comes back is a non-nil
+		// EMPTY Userinfo, which URL.String() renders as a stray "//@host". RawQuery, by contrast,
+		// is an exported string, so a credential carried as a query parameter survives the
+		// round-trip intact. Apply the same structural redaction the settings portal uses, drop
+		// the empty userinfo, and do not descend into the struct's own fields.
+		if v.Type() == reflect.TypeOf(url.URL{}) {
+			if v.CanSet() {
+				original, ok := v.Interface().(url.URL)
+				if !ok {
+					return
+				}
+
+				redacted := redactURL(&original)
+				if redacted.User != nil {
+					password, _ := redacted.User.Password()
+					if redacted.User.Username() == "" && password == "" {
+						redacted.User = nil
+					}
+				}
+
+				v.Set(reflect.ValueOf(*redacted))
+			}
+
+			return
+		}
+
 		t := v.Type()
 		for i := 0; i < v.NumField(); i++ {
 			f := t.Field(i)
@@ -60,6 +151,14 @@ func redactValue(v reflect.Value) {
 			}
 
 			redactValue(v.Field(i))
+		}
+	case reflect.String:
+		// A connection string held as a plain string (Coinbase.DB) carries its credentials in the
+		// same positions a url.URL does (bitcoin-sv/teranode#4844). Tagged fields never reach here:
+		// the struct case above sends them to zeroSecret first. Slice elements reach this case
+		// through the slice loop below.
+		if v.CanSet() {
+			v.SetString(redactURLString(v.String()))
 		}
 	case reflect.Pointer, reflect.Interface:
 		if !v.IsNil() {

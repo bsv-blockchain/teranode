@@ -61,8 +61,8 @@ func TestBlockRequested(t *testing.T) {
 	t.Run("requested block is admitted", func(t *testing.T) {
 		sm := newSM(&chaincfg.MainNetParams)
 		p := &peerpkg.Peer{}
-		reqd := expiringmap.New[chainhash.Hash, struct{}](time.Minute)
-		reqd.Set(hash, struct{}{})
+		reqd := expiringmap.New[chainhash.Hash, blockRequestOrigin](time.Minute)
+		reqd.Set(hash, blockRequestOrigin{headerProven: true})
 		sm.peerStates.Set(p, &peerSyncState{requestedBlocks: reqd})
 
 		require.True(t, sm.BlockRequested(p, &hash))
@@ -72,7 +72,7 @@ func TestBlockRequested(t *testing.T) {
 		sm := newSM(&chaincfg.MainNetParams)
 		p := &peerpkg.Peer{}
 		sm.peerStates.Set(p, &peerSyncState{
-			requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](time.Minute),
+			requestedBlocks: expiringmap.New[chainhash.Hash, blockRequestOrigin](time.Minute),
 		})
 
 		require.False(t, sm.BlockRequested(p, &hash))
@@ -615,7 +615,7 @@ func TestHandleBlockMsg_SkipsDisconnectedPeer(t *testing.T) {
 	p := &peerpkg.Peer{}
 	require.False(t, p.Connected())
 	sm.peerStates.Set(p, &peerSyncState{
-		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](time.Minute),
+		requestedBlocks: expiringmap.New[chainhash.Hash, blockRequestOrigin](time.Minute),
 	})
 
 	err := sm.handleBlockMsg(&blockQueueMsg{

@@ -94,7 +94,7 @@ Block validation receives new blocks through two distinct paths:
 
 ##### Optimistic Mining Mode
 
-The `optimisticMining` setting provides a validation strategy that prioritizes block propagation speed over immediate validation completion. It is **enabled by default** (`blockvalidation_optimistic_mining` defaults to `true`) and reverses the normal validate-then-add sequence.
+The `optimisticMining` setting provides a validation strategy that prioritizes block propagation speed over immediate validation completion, reversing the normal validate-then-add sequence. On every validation path it is **off unless the operator opts in** by setting BOTH `blockvalidation_optimistic_mining` (default `true`) AND `blockvalidation_optimistic_mining_peer_blocks` (default `false`); the requirement is applied where each validation chooses its mode, not only at the peer entry gate (bitcoin-sv/teranode#4844), and the global flag being false always wins, so the peer-blocks flag can never bypass it (bitcoin-sv/teranode#4692). The shipped default `(true, false)` therefore keeps every validation path non-optimistic. The catch-up path is **always** non-optimistic regardless of both flags: it validates against a cached header run holding only the block's in-batch predecessors, which cannot carry the median-time-past window the optimistic branch checks synchronously (issue 1499). Revalidation of an already-stored block is always non-optimistic regardless of these flags.
 
 **Normal Mode (validate-then-add):**
 
@@ -105,7 +105,7 @@ The `optimisticMining` setting provides a validation strategy that prioritizes b
 4. Notify other services
 ```
 
-**Optimistic Mining Mode (Default):**
+**Optimistic Mining Mode (opt-in):**
 
 ```text
 1. Add block to blockchain immediately (before full validation)
@@ -130,9 +130,24 @@ The optimistic path is implemented in `ValidateBlock()` (services/blockvalidatio
 
 **Configuration:**
 
-- **Setting**: `blockvalidation_optimistic_mining` (default: `true`)
+- **Settings**: `blockvalidation_optimistic_mining` (default: `true`) AND
+  `blockvalidation_optimistic_mining_peer_blocks` (default: `false`) — BOTH must be set for
+  optimistic mining to engage on any validation path (bitcoin-sv/teranode#4692,
+  bitcoin-sv/teranode#4844)
+- **Catch-up**: never optimistic, whatever the two settings are — the cached header run it
+  validates against cannot carry the median-time-past window (issue 1499)
 - **Runtime Override**: Can be disabled per-block via `ValidateBlockOptions.DisableOptimisticMining`
-- **Automatic Disable**: Always disabled during catchup mode for better reliability
+- **Revalidation**: Revalidation of an already-stored block is always non-optimistic regardless of
+  the settings above
+- **Opt-in corrupt-body tradeoff**: with both flags set, a corrupt body on the optimistic-background
+  path is already added before background validation runs, so it takes the *invalidate route*
+  (invalidated/poisoned rather than re-downloaded) until the `block.Valid` integrity-floor split
+  lands and removes that path
+- **Known exposure under the opt-in**: a received body that carries subtrees is still added before
+  it is bound to its header, and when it is invalidated its coinbase is persisted with the invalid
+  record (bitcoin-sv/teranode#4844). A body carrying no subtrees is bound by the coinbase-only rule
+  and rejected before the add. Keep `blockvalidation_optimistic_mining_peer_blocks` off until the
+  `block.Valid` split lands
 
 **Performance Benefits:**
 
@@ -166,13 +181,17 @@ The optimistic path is implemented in `ValidateBlock()` (services/blockvalidatio
     - Revalidation retries up to 3 times
     - After retries exhausted, block marked permanently invalid
 
-**Disabling Optimistic Mining:**
+**Enabling / disabling Optimistic Mining:**
 
-Optimistic mining is on by default. Where the risk tradeoffs above are unacceptable, it can be turned off:
+Optimistic mining is off by default on every validation path and must be opted into. Where the risk tradeoffs above are acceptable and low peer-block latency is required:
 
-- **Globally**: set `blockvalidation_optimistic_mining` to `false`
+- **Enable**: set BOTH `blockvalidation_optimistic_mining` (default `true`)
+  and `blockvalidation_optimistic_mining_peer_blocks` (default `false`) to `true`. This does not
+  enable it during catch-up, which is always non-optimistic
+- **Disable globally**: set `blockvalidation_optimistic_mining` to `false` (the global opt-out
+  always wins over the peer-blocks flag)
 - **Per-block**: via `ValidateBlockOptions.DisableOptimisticMining`
-- **Automatically**: it is always disabled during catchup mode for better reliability
+- **Revalidation** of an already-stored block is always non-optimistic
 
 **Future Improvements:**
 
@@ -336,15 +355,13 @@ Blocks are NOT marked invalid for:
 - Network timeouts or temporary storage failures
 - Processing errors that may succeed on retry
 
-**Peer Banning (Logged, Not Implemented):**
+**Peer Banning:**
 
-When malicious behavior is detected, the system logs:
+When malicious behavior is detected, the system logs it and reports the peer to the P2P service, which records a malicious flag (making the peer immediately ineligible for catchup) and raises its ban score toward an automatic ban:
 
 ```text
-SECURITY: Peer <peerID> attempted secret mining - should be banned (banning not yet implemented)
+SECURITY: Peer <peerID> attempted secret mining - reported as malicious for ban scoring
 ```
-
-This provides an audit trail for operators and prepares for future automatic banning.
 
 ##### Concurrent Fetch + Sequential Validation
 
@@ -425,6 +442,23 @@ For blocks that are below known checkpoints in the blockchain, the Block Validat
 
 The quick validation system operates in two distinct phases implemented in `quickValidateBlock()` in `services/blockvalidation/quick_validate.go`:
 
+**Body Binding (precondition):**
+
+Before either phase, the peer-supplied body is bound to the checkpoint-certified header. No block ID is assigned and no UTXO is created or spent until this succeeds:
+
+1. **Subtree-Carrying Body**: Bound by `bindSubtreeBodyToHeader()` in `services/blockvalidation/quick_validate_bind.go`
+    - Reads every subtree structure, one `SubtreeBatchSize` chunk at a time
+    - Recomputes each subtree's root from its own nodes and checks it against the subtree's key, instead of trusting the root the file claims
+    - Checks the subtree shape and scans the whole block for duplicate transactions (CVE-2012-2459)
+    - Composes the subtree roots and compares the result with the header's merkle root
+    - Reads structures only, never transaction data
+2. **Coinbase-Only Body**: Bound by `block.CheckCoinbaseOnlyBodyBound()`
+3. **Failure Classes**: Each failure keeps its own class
+    - A body whose subtrees do not compose to the header's merkle root, or that breaks the subtree shape or duplicate rules, is classified `ERR_BLOCK_CORRUPT`
+    - A local subtree blob that does not hash to its own key is a local fault instead, not a verdict on the peer's body: the blob is quarantined (deleted and the deletion confirmed), and if the deletion cannot be confirmed the attempt fails closed
+    - Storage and other infrastructure errors keep their own class
+    - A body that binds but whose coinbase is not a consensus coinbase is `ERR_BLOCK_INVALID`
+
 **Phase 1: UTXO Creation (`createAllUTXOs()`)**
 
 All UTXOs for the block's transactions are created in parallel before validation:
@@ -478,7 +512,7 @@ Quick validation provides substantial performance improvements:
 
 ##### Subtree and Transaction Processing
 
-During quick validation, the system reconstructs subtree files and extends transactions on-demand (implemented in `getBlockTransactions()`):
+During quick validation, the system reconstructs subtree files and extends transactions on-demand (implemented in `readSubtree()` and `processSubtreeBatch()`):
 
 **Subtree File Generation:**
 
@@ -486,11 +520,14 @@ For each subtree in the block, the system:
 
 1. **Reads `.subtreeToCheck`**: Fetches subtree structure with transaction IDs
 2. **Reads `.subtreeData`**: Fetches raw transaction data
-3. **Validates Coinbase**: Ensures first transaction in first subtree is coinbase
-4. **Reconstructs `.subtree`**: If missing, creates full subtree with fee and size information
+3. **Checks Every Transaction Against Its Node**: Each transaction in `.subtreeData`, other than the coinbase at block position `[0][0]`, must hash to the node it occupies
+    - A structure or body that does not match its key is treated as a damaged local blob
+    - Before the attempt returns, the blob is quarantined: it is deleted and the deletion confirmed. If the deletion cannot be confirmed, the attempt fails closed and catch-up aborts without falling back to normal validation
+4. **Validates Coinbase**: Ensures first transaction in first subtree is coinbase
+5. **Reconstructs `.subtree`**: If missing, creates full subtree with fee and size information
     - Adds each transaction node with metadata from transaction
     - Stores complete subtree for future use
-5. **Generates `.subtreeMeta`**: If missing, creates metadata file with transaction inpoints
+6. **Generates `.subtreeMeta`**: If missing, creates metadata file with transaction inpoints
     - Stores input relationships for efficient lookups
     - Used by subtree validation service
 
@@ -510,25 +547,28 @@ Transactions in standard Bitcoin format are extended in-memory for validation:
 
 **Merkle Root Verification:**
 
-After processing all transactions, the system verifies:
+The merkle root is checked twice, and the first check is the one that gates mutation:
 
-```go
-if err := block.CheckMerkleRoot(ctx); err != nil {
-    return errors.NewProcessingError("merkle root mismatch")
-}
-```
+1. **Before Any Mutation**: The body binding described above
+2. **After Processing**: `validateSubtrees()` re-runs the same rules through `checkSubtreeBodyBinding()` on the subtrees rebuilt from the transactions actually read
+    - Subtree sizes, `block.CheckMerkleRoot(ctx)`, the coinbase placeholder at `[0][0]`, the duplicate-transaction scan and the coinbase shape
 
-This ensures the transactions match the block header before proceeding.
+A merkle-root mismatch is `ERR_BLOCK_CORRUPT`, not an invalid block: a body that does not bind to the header says nothing about the header's hash. The subtree-shape, coinbase-placeholder and duplicate-transaction failures are `ERR_BLOCK_CORRUPT` for the same reason. The coinbase-shape check is the exception: it runs only once the body binds, so a failure there is `ERR_BLOCK_INVALID`. See the failure classes under Body Binding.
 
 **Error Handling:**
 
-If quick validation encounters any errors:
+During catch-up, `tryQuickValidation()` in `services/blockvalidation/catchup.go` routes a failure by its class:
 
-- Removes `.subtree` files to force reprocessing
-- Falls back to normal validation automatically
-- Normal validation re-creates UTXOs and validates with full script execution
+- **Incomplete Block** (`ERR_BLOCK_INCOMPLETE`, e.g. no coinbase): Catch-up from this peer aborts. Fetched subtree files are kept for reuse
+- **Corrupt Body** (`ERR_BLOCK_CORRUPT`): The catch-up peer is penalised, every subtree file this attempt wrote (fetched and built) is removed, and catch-up aborts so the block is re-downloaded. Normal validation is not run on the same body
+- **Local Blob That Does Not Match Its Key and Could Not Be Deleted**: Catch-up aborts without falling back to normal validation and without a ban score. This attempt's own `.subtree` files are removed
+- **Any Other Failure**, including a mismatching local blob that was deleted: This attempt's own `.subtree` files are removed, and the block falls back to normal validation, which reuses the fetched `.subtreeToCheck` and `.subtreeData`
 
-For implementation details, see `quick_validate.go` in `services/blockvalidation/`.
+The removal is attempted only once this block's queued subtree writes have settled, and it is skipped if the catch-up context is cancelled first. In the corrupt and could-not-be-deleted cases a failed removal is logged and the verdict stands. In the last case a failed removal is returned instead, so catch-up aborts rather than falling back to normal validation.
+
+Nothing is rolled back. A failure after the pipeline has started leaves the UTXOs it created in the store, locked unless `blockvalidation_quick_validate_skip_utxo_lock` applies. Recovery is by retry convergence: on retry, creation returns `ErrTxExists` and the mined info is updated to the correct block ID.
+
+For implementation details, see `quick_validate.go` and `quick_validate_bind.go` in `services/blockvalidation/`.
 
 #### 2.2.4. Validating the Subtrees
 
@@ -577,7 +617,17 @@ To decide whether a transaction's parents already exist on the current chain (th
 
 - **Current-chain ID set**: validation builds a map of the current chain's block-header IDs (`currentBlockHeaderIDsMap`). The IDs come from `GetBlockHeaderIDs` on the optimistic-mining path and from `GetBlockHeaders` metadata on the normal and revalidation paths; in every case the set is a bounded window of recent headers (100 by default), not the whole chain. Membership is exact, so a hit is a sound positive.
 - **Old-parent resolution**: parents that resolve to blocks outside the prefetched set are collected per transaction (`oldBlockIDsMap`) and confirmed by the Block Validation service in `checkOldBlockIDs`, which prefetches a window of up to 10,000 recent current-chain block-header IDs via `GetBlockHeaderIDs`. Because that window is truncated, any block ID not found in it falls back to the authoritative `CheckBlockIsInCurrentChain` RPC — the bounded window is the reason the fallback exists.
-- **In-memory chain-check route**: when `blockchain_use_in_memory_chain_check` is enabled, Block Validation holds no local prefetched ID set and defers every distinct parent-block-ID set to the authoritative `CheckBlockIsInCurrentChain`. The store applies `maxBlockID` as an in-memory upper-bound reject for uncommitted / too-new IDs, then confirms the remaining committed candidates in SQL — an `on_main_chain` flag query, with the recursive `parent_id` CTE as the fallback on the about-to-reject path and while the store's main-chain state (the `on_main_chain` flags and off-chain block-ID set) is rebuilding.
+- **Forked-set route**: when `blockchain_use_in_memory_chain_check` is enabled, Block Validation holds no local prefetched ID set and defers every distinct parent-block-ID set to `CheckBlockIsInCurrentChain`. The store answers from two in-memory structures and normally issues no SQL at all. An ID above `maxBlockID` is rejected outright: it has been assigned but not yet committed. An ID at or below `maxBlockID` that is absent from the off-chain (forked) set is accepted as on-chain. The toggle picks how the verdict is reached, not what it is, on every ID that belongs to a committed block AND is classified in the forked set at the time of the call. Those two qualifiers are the whole of the difference, and there are two inputs where they do not hold. A gap ID, an ID at or below `maxBlockID` with no committed `blocks` row, is rejected by SQL and accepted by the forked-set route. And a block that has just moved on or off the main chain is inside the ID range before the forked set has caught up, which the `mainChainRebuilding` guard is there to cover. See below for how much each one costs.
+
+    Two cases still fall through to SQL. An ID that *is* in the forked set is confirmed against the authoritative `on_main_chain` query, with the recursive `parent_id` CTE behind it, before anything is rejected — the forked set is rebuilt from the `on_main_chain` flags, so a transiently-false flag would otherwise turn into a permanent block invalidation. And while the store's main-chain state is rebuilding, or before `maxBlockID` has been initialised, the whole route defers to SQL because neither structure is trustworthy yet.
+
+    Accepting on absence from the forked set relies on every ID at or below `maxBlockID` belonging to a committed block. That does not hold, and it is worth knowing exactly how it fails before enabling the toggle. Measured on the Hetzner boxes on 2026-09-01, mainnet held 184 IDs below `MAX(id)` with no `blocks` row, testnet and teratestnet none. They arrive in runs, one run per node restart, each as long as the number of blocks in flight at the time. Block heights are unbroken across every run, so no block is missing; only IDs were burned.
+
+    What makes the accept safe is that nothing references those IDs. Decoding the packed block membership stored against each transaction, across all 12 runs and all 8 partitions, gave 381,599 stamps and zero pointing at an ID with no block. The failure that burns an ID lands before any transaction is stamped with it, so the wrong answer exists and nothing can ask for it.
+
+    Two paths could change that, and neither has fired: `storeInvalidBlock` re-commits a pre-assigned block under a fresh ID and abandons the one already stamped on its transactions, and the gRPC `AddBlock` handler accepts a caller-supplied ID with no bound. Re-check with `SELECT (SELECT MAX(id) FROM blocks) + 1 - (SELECT COUNT(*) FROM blocks);` rather than by re-arguing block-ID assignment, which is not where the risk is. While `blockchain_chain_check_shadow_compare` is enabled, every forked-set accept and 1 in 1024 `maxBlockID` rejects are also computed the authoritative way and any disagreement is logged and counted, which is how that assumption is measured rather than assumed. The comparison never changes the answer and never turns a failed query into an error; turning it off is what makes this route fast.
+
+    Two things to know before enabling the toggle. First, with the shadow comparison on, which is its default, every accept still runs the authoritative query, so a node that enables the route and leaves the comparison on saves no round trip on accepts. Second, on a forked-set node `StoreBlock` holds `mainChainRebuilding` for its whole length, so while a block is being stored this route and the other `on_main_chain` readers take their SQL or flag-free walks instead. With no concurrent ingest the route is far faster than SQL; under sustained high `StoreBlock` rates it is slower, and the crossover shrinks as the chain gets deeper. The `StoreBlock` duty cycle of a real catch-up, the number that decides which side a node sits on, has not been measured, so do not enable the toggle during initial sync or catch-up until it has.
 
 ##### The validOrderAndBlessed Mechanism
 
@@ -807,15 +857,15 @@ When a peer's quality score falls below threshold:
 4. **Circuit Half-Open**: After delay, allows limited test requests
 5. **Circuit Closes**: If peer recovers, full access restored
 
-##### Peer Banning (Future Feature)
+##### Peer Banning
 
-The system logs when peers should be banned but doesn't yet implement automatic banning:
+When catchup detects malicious behavior it reports the peer to the P2P service. The report records a malicious flag in the centralized peer registry (which makes the peer immediately ineligible for catchup via `IsPeerMalicious`) and raises the peer's ban score, so repeated offenses cross the ban threshold and trigger an automatic ban:
 
 ```text
-SECURITY: Peer <ID> attempted secret mining - should be banned (banning not yet implemented)
+SECURITY: Peer <ID> attempted secret mining - reported as malicious for ban scoring
 ```
 
-This provides an audit trail for operators to manually ban malicious peers and prepares for future automatic banning implementation.
+The log lines remain an audit trail for operators, who can also ban peers manually.
 
 For implementation details, see `malicious_peer_handling_test.go` and peer tracking code in `catchup.go`.
 

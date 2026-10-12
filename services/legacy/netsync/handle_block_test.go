@@ -104,7 +104,7 @@ func TestSyncManager_HandleBlockDirect(t *testing.T) {
 	err = msgBlock.Deserialize(bytes.NewReader(blockBytes))
 	require.NoError(t, err)
 
-	err = sm.HandleBlockDirect(t.Context(), &peer.Peer{}, *blockHash, msgBlock)
+	err = sm.HandleBlockDirect(t.Context(), &peer.Peer{}, *blockHash, msgBlock, blockRequestOrigin{headerProven: true})
 	require.NoError(t, err)
 }
 
@@ -551,6 +551,7 @@ func TestSyncManager_prepareSubtrees(t *testing.T) {
 		Transactions: []*wire.MsgTx{coinbaseMsgTx, regularMsgTx},
 	}
 
+	setBodyMerkleRoot(msgBlock)
 	block := bsvutil.NewBlock(msgBlock)
 	block.SetHeight(100)
 
@@ -573,7 +574,7 @@ func TestSyncManager_prepareSubtrees(t *testing.T) {
 		ctx:               context.Background(),
 	}
 
-	subtrees, subtreeSlices, blockID, err := sm.prepareSubtrees(context.Background(), block)
+	subtrees, subtreeSlices, blockID, err := sm.prepareSubtrees(context.Background(), block, headerProven, bodyCommitment(t, block))
 	require.NoError(t, err)
 	assert.Len(t, subtrees, 1, "2 txs fit in a single subtree")
 	assert.Equal(t, uint32(0), blockID, "non-quick-validation path never assigns a block ID")
@@ -1467,7 +1468,7 @@ func TestSyncManager_quickValidationAllowed(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sm := &SyncManager{chainParams: tt.chainParams}
-			require.Equal(t, tt.want, sm.quickValidationAllowed(tt.height))
+			require.Equal(t, tt.want, sm.quickValidationAllowed(headerProven, tt.height))
 		})
 	}
 }

@@ -80,6 +80,11 @@ func (m *mockCache) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return args.Error(0)
 }
 
+func (m *mockCache) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
+	args := m.Called(ctx, hash)
+	return args.Error(0)
+}
+
 func (m *mockCache) SetCacheFromBytes(key, txMetaBytes []byte) error {
 	args := m.Called(key, txMetaBytes)
 	return args.Error(0)

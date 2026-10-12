@@ -46,7 +46,7 @@ import (
 func (u *Server) CreateSubtreeDataFileStreaming(ctx context.Context, subtreeHash chainhash.Hash, block *model.Block, n int) error {
 	ctx, _, deferFn := tracing.Tracer("blockpersister").Start(ctx, "CreateSubtreeDataFileStreaming",
 		tracing.WithHistogram(prometheusBlockPersisterSubtrees),
-		tracing.WithLogMessage(u.logger, "[CreateSubtreeDataFileStreaming][%s] creating subtreeData %d / %d for [%s]", block.String(), n, len(block.Subtrees), subtreeHash.String()),
+		tracing.WithDebugLogMessage(u.logger, "[CreateSubtreeDataFileStreaming][%s] creating subtreeData %d / %d for [%s]", block.String(), n, len(block.Subtrees), subtreeHash.String()),
 	)
 	defer deferFn()
 
@@ -275,7 +275,10 @@ func (u *Server) ProcessSubtreeUTXOStreaming(ctx context.Context, subtreeHash ch
 		bufferSize = 1024 * 128 // default to 128KB
 	}
 
-	bufferedReader := bufio.NewReaderSize(subtreeDataReader, bufferSize.Int())
+	// The buffer is frame-local: never stored, never returned, read by this goroutine only
+	// and dead before the return below, so a deferred release is the whole ownership story.
+	bufferedReader := filestorer.AcquireReader(subtreeDataReader, bufferSize.Int())
+	defer filestorer.ReleaseReader(bufferedReader)
 
 	// 2. Read the subtree structure (needed to know how many transactions)
 	subtree, err := u.readSubtree(ctx, subtreeHash)

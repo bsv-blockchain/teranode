@@ -336,7 +336,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	// Create external store with DAH explicitly disabled
 	// External file lifecycle is managed by the Aerospike pruner service, not by DAH files
-	externalStore, err := blob.NewStore(logger, externalStoreURL, options.WithDisableDAH(true))
+	externalStore, err := blob.NewStore(logger, externalStoreURL, options.WithDisableDAH(true),
+		options.WithHTTPAuthToken(tSettings.BlobHTTPAuthToken))
 	if err != nil {
 		return nil, err
 	}
@@ -458,7 +459,11 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	storeBatchSize := tSettings.UtxoStore.StoreBatcherSize
-	storeBatchDuration := tSettings.Aerospike.StoreBatcherDuration
+	storeBatchDuration, deprecatedDuration := storeBatcherDuration(tSettings)
+	if deprecatedDuration {
+		logger.Warnf("[Aerospike] aerospike_storeBatcherDuration is deprecated, use utxostore_storeBatcherDurationMillis; using %s", storeBatchDuration)
+	}
+
 	batcherMaxConcurrent := tSettings.UtxoStore.BatcherMaxConcurrent
 	batcherBackground := tSettings.BatcherBackground
 
@@ -1419,4 +1424,16 @@ func (s *Store) processBatchExpiredPreservations(ctx context.Context, batch []ae
 	}
 
 	return nil
+}
+
+// storeBatcherDuration returns the store (Create) batcher timeout. It reads
+// utxostore_storeBatcherDurationMillis like every other UTXO batcher, unless the
+// deprecated aerospike_storeBatcherDuration is set, in which case that wins and
+// the second return value is true.
+func storeBatcherDuration(tSettings *settings.Settings) (time.Duration, bool) {
+	if d := tSettings.Aerospike.StoreBatcherDuration; d > 0 {
+		return d, true
+	}
+
+	return time.Duration(tSettings.UtxoStore.StoreBatcherDurationMillis) * time.Millisecond, false
 }

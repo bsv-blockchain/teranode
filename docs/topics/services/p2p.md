@@ -38,7 +38,7 @@ The p2p package implements a peer-to-peer (P2P) server using `libp2p` (`github.c
 
 The p2p service allows peers to subscribe and receive blockchain notifications, effectively allowing nodes to receive notifications about new blocks and subtrees in the network.
 
-The p2p peers can form a private network. Network bootstrapping is a configuration option, not a separate service: the P2P service reads the `p2p_bootstrap_peers` setting at startup to obtain initial DHT and relay entry points for peer discovery. Blanking it does not isolate the node — the client then falls back to the default public IPFS bootstrap peers — so a private network should point it at its own bootstrap servers, alongside `p2p_static_peers` and `p2p_dht_mode = off`.
+The p2p peers can form a private network. Network bootstrapping is a configuration option, not a separate service: the P2P service reads the `p2p_bootstrap_peers` setting at startup to obtain initial DHT and relay entry points for peer discovery. Blanking it does not isolate the node — the client then falls back to the default public IPFS bootstrap peers — so a private network should point it at its own bootstrap servers, alongside `p2p_static_peers` and `p2p_dht_mode = off`. Regtest is the exception: it never falls back to the IPFS peers, and it drops the BSVA-managed `*.bootstrap.teranode.bsvb.tech` entries (BSVA runs no public regtest network), keeping any other bootstrap peers.
 
 1. **Initialization and Configuration**:
 
@@ -136,7 +136,7 @@ The startup process of the node involves the `main.go` file calling the `p2p.New
 
 3. **P2P Node Initialization**:
 
-    - Initializes a libp2p node (host) using the specified IP, port, and private key, which manages node communications and connections.
+    - Initializes a libp2p node (host) bound to all interfaces on `p2p_port` with the configured private key, which manages node communications and connections.
 
 ### 2.1.2. Initializing the P2P Server
 

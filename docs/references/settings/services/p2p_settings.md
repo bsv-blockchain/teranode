@@ -6,16 +6,17 @@
 
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
+| AllowedPublisherIDs | []string | [] | p2p_allowed_publisher_ids | Opt-in allowlist of peer IDs whose pubsub messages this node acts on; empty (default) accepts all. Bare peer IDs, not multiaddrs. Applies to every subscribed topic, so filtered peers also stop refreshing the peer registry and the monitoring feed |
 | BootstrapPeers | []string | [] (settings.conf ships with `/dnsaddr/${network}.bootstrap.teranode.bsvb.tech`) | p2p_bootstrap_peers | Peer discovery entry points (required for dht_mode "off" and "client") |
 | GRPCAddress | string | "" | p2p_grpcAddress | gRPC client connections |
 | GRPCListenAddress | string | "localhost:9906" (Go default; overridden to `localhost:9904` by `settings.conf` via `P2P_GRPC_PORT`, and widened to `:9904` in the `docker.m`, `docker.ss` and `operator` contexts, plus the generated split-mode compose contexts) | p2p_grpcListenAddress | **CRITICAL** - gRPC server binding; loopback by default |
 | HTTPAddress | string | "localhost:9906" | p2p_httpAddress | HTTP client connections |
 | HTTPListenAddress | string | "" | p2p_httpListenAddress | HTTP server binding |
-| ListenAddresses | []string | [] | p2p_listen_addresses | P2P network interfaces |
+| ListenAddresses | []string | [] | p2p_listen_addresses | **REQUIRED** - Must describe the wildcard bind the bus performs (`0.0.0.0`, `::`, or `/ip4/0.0.0.0/tcp/<p2p_port>`); narrower values fail startup |
 | AdvertiseAddresses | []string | [] | p2p_advertise_addresses | Address advertisement to peers |
-| ListenMode | string | "full" | listen_mode | Node operation mode ("full" or "listen_only") |
+| ListenMode | string | "full" | listen_mode | Node operation mode ("full", "listen_only" or "silent"; silent still binds p2p_port) |
 | PeerID | string | "" | p2p_peer_id | Peer network identifier |
-| Port | int | 9905 | p2p_port | Default P2P communication port (multiaddrs in ListenAddresses/AdvertiseAddresses are the source of truth) |
+| Port | int | 9905 | p2p_port | TCP port libp2p binds on 0.0.0.0 and :: (always, independent of AdvertiseAddresses) |
 | PrivateKey | string | "" | p2p_private_key | **CRITICAL** - Cryptographic peer identity |
 | BlockTopic | string | "" | p2p_block_topic | Block propagation topic |
 | NodeStatusTopic | string | "" | p2p_node_status_topic | Node status communication topic |
@@ -26,7 +27,7 @@
 | BanThreshold | int | 100 | p2p_ban_threshold | Peer banning threshold |
 | BanDuration | time.Duration | 24h | p2p_ban_duration | Ban duration |
 | ForceSyncPeer | string | "" | p2p_force_sync_peer | **CRITICAL** - Forced sync peer override |
-| SharePrivateAddresses | bool | true | p2p_share_private_addresses | Private address advertisement |
+| SharePrivateAddresses | bool | true | p2p_share_private_addresses | Currently no effect: libp2p advertises bound interface addresses (private included) whenever AdvertiseAddresses is empty |
 | AllowPrunedNodeFallback | bool | true | p2p_allow_pruned_node_fallback | **CRITICAL** - Pruned node fallback behavior |
 | DHTMode | string | "server" (Code default; settings.conf ships with "off") | p2p_dht_mode | DHT operation mode ("server", "client", or "off") |
 | DHTCleanupInterval | time.Duration | 24h | p2p_dht_cleanup_interval | DHT provider record cleanup interval |
@@ -41,12 +42,16 @@
 | PeerMapMaxSize | int | 10000 | p2p_peer_map_max_size | Maximum entries in peer maps |
 | PeerMapTTL | time.Duration | 10m | p2p_peer_map_ttl | Peer map entry time-to-live |
 | PeerMapCleanupInterval | time.Duration | 1m | p2p_peer_map_cleanup_interval | Peer map cleanup frequency |
+| SeenHashMaxSize | int | 10000 | p2p_seen_hash_max_size | Maximum entries in each per-topic seen-hash announcement dedup cache |
+| SeenHashTTL | time.Duration | 2m | p2p_seen_hash_ttl | Accounting window for the seen-hash announcement dedup |
+| SeenHashMaxPublishers | int | 3 | p2p_seen_hash_max_publishers | Distinct announcers of one hash forwarded to Kafka per publish window |
 | PeerRegistryBatchInterval | time.Duration | 1s | p2p_peer_registry_batch_interval | Flush interval for batched peer-registry updates from gossip handlers |
 | GossipHandlerConcurrency | int | 4 | p2p_gossip_handler_concurrency | Concurrent gossip handler workers per pubsub topic |
 | WebSocketMaxConnections | int | 1000 | p2p_websocket_max_connections | Maximum concurrent /p2p-ws websocket connections (0 disables the cap) |
 | WebSocketMaxConnectionsPerSource | int | 0 | p2p_websocket_max_connections_per_source | Per-source /p2p-ws cap: 0 = auto (max(4, cap/20)), -1 disables (needed behind a proxy/NAT) |
 | WebSocketAllowedOrigins | []string | (empty) | p2p_websocket_allowed_origins | Allowed browser origins for /p2p-ws upgrades and HTTP CORS (empty allows all) |
 | WebSocketTrustedSourceCIDRs | []string | 127.0.0.1/32\|::1/128 | p2p_websocket_trusted_source_cidrs | Source CIDRs exempt from the /p2p-ws connection caps; loopback only by design - broader trust would void the caps behind an L7 ingress or NAT (see longdesc). Sentinel `none` disables the bypass (empty falls back to the default) |
+| HTTPRateLimit | int | 100 | p2p_httpRateLimit | Per-source req/s cap on the P2P HTTP server (/health, /p2p-ws); 0 or negative disables it |
 
 ## Configuration Dependencies
 
@@ -57,9 +62,10 @@
 
 ### Network Address Management
 
-- `ListenAddresses` and `AdvertiseAddresses` control network presence
-- `Port` used as fallback when addresses don't specify port
-- `SharePrivateAddresses` controls address advertisement behavior
+- `Port` is the libp2p listen port; it is always bound on all interfaces
+- `ListenAddresses` can only confirm that wildcard bind (the message bus has no listen-address option); anything narrower is rejected at startup
+- `AdvertiseAddresses` overrides what libp2p announces to peers; when empty libp2p announces its bound interface addresses and the public address observed via Identify
+- `SharePrivateAddresses` no longer feeds `ListenAddresses` into the announce set (a wildcard is not dialable); announcement is left to libp2p either way
 
 ### Peer Connection Management
 
@@ -104,7 +110,7 @@
 
 | Setting | Validation | Impact | When Checked |
 |---------|------------|--------|-------------|
-| ListenMode | Must be "full" or "listen_only" | Service fails to start if invalid | During server initialization |
+| ListenMode | Must be "full", "listen_only" or "silent" | Service fails to start if invalid | During server initialization |
 | GRPCListenAddress | Used for gRPC server binding | Service communication | During server start |
 | ForceSyncPeer | Overrides automatic peer selection | Sync behavior | During sync coordinator initialization |
 | EnableNAT | Triggers network scanning on shared hosting | Security alerts | During libp2p host initialization |
@@ -187,16 +193,36 @@ p2p_allow_private_ips=false  # RFC1918 private networks
 ```
 
 `p2p_allow_private_ips` also governs the static SSRF check on peer-supplied DataHub URLs:
-with `true` that check is skipped entirely, so an announced URL naming a private, loopback or
-link-local address is accepted into the peer registry.
+with `true` the address checks are skipped, so an announced URL naming a private, loopback or
+link-local address is accepted into the peer registry. The URL must still be a clean base URL
+(http or https, no credentials, query or fragment) either way, because fetch paths are joined
+onto it.
 
-It does **not** affect the connection-time guard. Every outbound request to a peer-supplied
-URL - availability probes and block/subtree fetches alike - refuses loopback (127.0.0.0/8,
-::1), link-local (169.254.0.0/16, fe80::/10) and unspecified addresses regardless of this
-setting, including when a peer hostname only resolves to one. Accepting such a URL therefore
-does not make it reachable. Private ranges are permitted at connection time on both paths,
-since peer fetches legitimately traverse private networks; the probe deliberately applies the
-same policy as the fetch path, so it never rejects a peer that catchup could have used.
+At connection time, every outbound request to a peer-supplied URL - availability probes and
+block/subtree fetches alike - resolves the hostname and checks each address:
+
+- Loopback (127.0.0.0/8, ::1), link-local (169.254.0.0/16, fe80::/10) and unspecified
+  addresses are refused regardless of this setting. Accepting such a URL therefore does not
+  make it reachable.
+- Private-network addresses (RFC1918, IPv6 ULA fc00::/7 and shared address space
+  100.64.0.0/10) are refused unless this setting is `true`. With the default `false`, a
+  hostname that resolves to a private address is treated exactly like a private IP literal.
+  Nodes that peer over a private network, such as Kubernetes clusters using
+  `svc.cluster.local` DataHub URLs or multi-node compose stacks, must set it to `true`.
+- With the setting `true`, a hostname that resolved to a public address within the last ten
+  minutes may not resolve to a private one, and an answer mixing public and private addresses
+  is refused. This stops a peer's DNS rebinding a public name onto an internal service
+  between two requests.
+
+A node started with the default `false` logs one warning naming this setting, because a
+deployment whose peers are reachable only over a private network will find no sync peer:
+every availability probe is refused, those peers are dropped from selection, and the node
+stops catching up. Each refused probe is logged at warning level as well, so the cause is
+visible in the log rather than only in a stalled height.
+
+Redirects from a peer may not leave the origin of the requested URL (an http to https upgrade
+on the same host is allowed), and a POST is never redirected. The probe applies the same
+policy as the fetch path, so it never rejects a peer that catchup could have used.
 
 One caveat: if `HTTP_PROXY`/`HTTPS_PROXY` is set, outbound requests are dialled to the proxy
 and the proxy fetches the peer-supplied target on the node's behalf, which the address check

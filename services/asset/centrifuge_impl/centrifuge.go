@@ -25,12 +25,29 @@ import (
 )
 
 const (
-	AccessControlAllowOrigin      = "Access-Control-Allow-Origin"
-	AccessControlAllowHeaders     = "Access-Control-Allow-Headers"
-	AccessControlAllowCredentials = "Access-Control-Allow-Credentials"
-
 	centrifugeLogFormat = "[Centrifuge] %s: %s"
+
+	// nodeStatusChannel carries the node telemetry frame that also gates readiness.
+	nodeStatusChannel = "node_status"
 )
+
+// relayChannels is both the set of channels every client is subscribed to on connect
+// and the allowlist of p2p frame types the relay republishes. There is no OnSubscribe
+// handler, so a client cannot subscribe to anything else: a frame of any other type
+// would be published to a channel with no possible recipient, which is work done for
+// nobody on input this process does not control. Such frames are dropped and counted.
+var relayChannels = []string{"ping", "block", "subtree", "mining_on", nodeStatusChannel}
+
+// isRelayChannel reports whether channel is one the relay serves.
+func isRelayChannel(channel string) bool {
+	for _, allowed := range relayChannels {
+		if channel == allowed {
+			return true
+		}
+	}
+
+	return false
+}
 
 const (
 	// p2p dial retry backoff (#1334): on a stack with no reachable p2p server the
@@ -71,6 +88,9 @@ type Centrifuge struct {
 	cachedCurrentNodeStatus *notificationMsg // Cached current node status for new clients
 	currentNodePeerID       string           // Track the current node's peer ID
 	statusMutex             sync.RWMutex     // Protects cachedCurrentNodeStatus and currentNodePeerID
+	allowedOrigins          []string         // asset_centrifugeAllowOrigins, validated and normalised
+	originRejectWarnedAt    atomic.Int64     // UnixNano of the last rejected-Origin WARN, 0 = never
+	droppedFrames           atomic.Int64     // p2p frames dropped by handleP2PFrame
 
 	// Test seams for the p2p dial loop (#1334), defaulted in New. Overridden in
 	// tests to drive dial outcomes and backoff timing without real DNS or sleeps.
@@ -138,11 +158,12 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	}
 
 	c := &Centrifuge{
-		logger:     logger,
-		settings:   tSettings,
-		repository: repo,
-		baseURL:    assetHTTPAddress,
-		httpServer: httpServer,
+		logger:         logger,
+		settings:       tSettings,
+		repository:     repo,
+		baseURL:        assetHTTPAddress,
+		allowedOrigins: parseAllowedOrigins(logger, tSettings.Asset.CentrifugeAllowOrigins),
+		httpServer:     httpServer,
 		dialWebsocket: func(urlStr string) (*websocket.Conn, *http.Response, error) {
 			return websocket.DefaultDialer.Dial(urlStr, nil)
 		},
@@ -155,6 +176,44 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	}
 
 	return c, nil
+}
+
+// parseAllowedOrigins splits the pipe-separated asset_centrifugeAllowOrigins value into
+// normalised entries (trimmed, trailing slash removed) that checkOrigin compares as-is.
+//
+// An entry that is not "*" or a bare scheme://host[:port] origin can never equal a browser
+// Origin header, so it is dropped with a WARN instead of silently matching nothing: this
+// setting is the recovery path when the dashboard is refused, and a typo must be visible.
+func parseAllowedOrigins(logger ulogger.Logger, raw string) []string {
+	var origins []string
+
+	for _, origin := range strings.Split(raw, "|") {
+		origin = strings.TrimSuffix(strings.TrimSpace(origin), "/")
+		if origin == "" {
+			continue
+		}
+
+		if origin != "*" && !isBareOrigin(origin) {
+			logger.Warnf("[Centrifuge] ignoring asset_centrifugeAllowOrigins entry %q: expected scheme://host[:port] or *", origin)
+			continue
+		}
+
+		origins = append(origins, origin)
+	}
+
+	return origins
+}
+
+// isBareOrigin reports whether s has the shape of a browser Origin: scheme and host, an
+// optional port, and nothing else (no path, query, fragment, userinfo or wildcard).
+func isBareOrigin(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil {
+		return false
+	}
+
+	return u.Scheme != "" && u.Hostname() != "" && u.Path == "" && u.RawQuery == "" &&
+		u.Fragment == "" && u.User == nil && u.Opaque == "" && !strings.Contains(u.Host, "*")
 }
 
 // Init initializes the Centrifuge server and sets up event handlers for
@@ -198,15 +257,12 @@ func (c *Centrifuge) Init(_ context.Context) (err error) {
 	}
 
 	c.centrifugeNode.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
-		return centrifuge.ConnectReply{
-			Subscriptions: map[string]centrifuge.SubscribeOptions{
-				"ping":        {},
-				"block":       {},
-				"subtree":     {},
-				"mining_on":   {},
-				"node_status": {},
-			},
-		}, nil
+		subscriptions := make(map[string]centrifuge.SubscribeOptions, len(relayChannels))
+		for _, channel := range relayChannels {
+			subscriptions[channel] = centrifuge.SubscribeOptions{}
+		}
+
+		return centrifuge.ConnectReply{Subscriptions: subscriptions}, nil
 	})
 
 	c.centrifugeNode.OnConnect(func(client *centrifuge.Client) {
@@ -227,17 +283,23 @@ func (c *Centrifuge) Init(_ context.Context) (err error) {
 
 		if cachedStatus != nil {
 			// Convert cached status back to JSON message
-			if statusData, err := json.Marshal(cachedStatus); err == nil {
-				// Publish to node_status channel immediately for this new client
-				_, err = c.centrifugeNode.Publish("node_status", statusData)
-				if err != nil {
-					c.logger.Errorf("[Centrifuge] Failed to publish cached node status: %v", err)
-				} else {
-					c.logger.Debugf("[Centrifuge] Sent cached current node status to new client %s (peer: %s)",
-						client.UserID(), cachedStatus.PeerID)
-				}
-			} else {
+			statusData, err := json.Marshal(cachedStatus)
+			if err != nil {
 				c.logger.Errorf("[Centrifuge] Failed to marshal cached node status: %v", err)
+				return
+			}
+
+			// Write the cached status to this client alone. Publishing it on the
+			// node_status channel delivered it to every client already connected, so
+			// the kth connect cost k deliveries and every existing dashboard received
+			// a duplicate status it had not asked for. WritePublication puts the same
+			// channel publication on this one connection, so clients see no difference.
+			err = client.WritePublication(nodeStatusChannel, &centrifuge.Publication{Data: statusData}, centrifuge.StreamPosition{})
+			if err != nil {
+				c.logger.Errorf("[Centrifuge] Failed to send cached node status to client %s: %v", client.UserID(), err)
+			} else {
+				c.logger.Debugf("[Centrifuge] Sent cached current node status to new client %s (peer: %s)",
+					client.UserID(), cachedStatus.PeerID)
 			}
 		}
 	})
@@ -248,29 +310,25 @@ func (c *Centrifuge) Init(_ context.Context) (err error) {
 // Start begins the Centrifuge server operation, setting up WebSocket handlers
 // and starting the P2P listener. It handles client connections and message routing.
 //
+// The websocket is served on the Asset HTTP server at /connection/websocket, not on a
+// listener of its own, so it is reachable wherever Asset HTTP is.
+//
 // Parameters:
 //   - ctx: Context for server operation
-//   - addr: Address to listen on for WebSocket connections
+//   - addr: asset_centrifugeListenAddress. It is not bound; it is only logged so an
+//     operator relying on it as a network boundary can see where the socket really is.
 //
 // Returns:
 //   - error: Any error encountered during server operation
 func (c *Centrifuge) Start(ctx context.Context, addr string) error {
-	c.logger.Infof("[AssetService] Centrifuge service starting")
+	c.logWebsocketMount(addr)
 
 	err := c.startP2PListener(ctx)
 	if err != nil {
 		return err
 	}
 
-	websocketHandler := NewWebsocketHandler(c.centrifugeNode, WebsocketConfig{
-		ReadBufferSize:     1024,
-		UseWriteBufferPool: true,
-		CheckOrigin: func(r *http.Request) bool {
-			return true
-		},
-	})
-	_ = c.httpServer.AddHTTPHandler("/connection/websocket", c.authMiddleware(websocketHandler))
-	_ = c.httpServer.AddHTTPHandler("/client/", http.FileServer(http.Dir("./client")))
+	c.registerHTTPHandlers(c.httpServer)
 
 	<-ctx.Done()
 
@@ -310,6 +368,15 @@ func (c *Centrifuge) startP2PListener(ctx context.Context) error {
 
 	u := url.URL{Scheme: "ws", Host: p2pServerAddress, Path: "/p2p-ws"}
 	c.logger.Infof("[Centrifuge] connecting to p2p server on %s", u.String())
+
+	// This hop is plaintext and carries no credentials in either direction. Everything
+	// this relay publishes, and the readiness gate itself, come from whatever answers on
+	// that address. wss and mutual TLS for this hop are not implemented yet.
+	c.logger.Warnf("[Centrifuge] p2p websocket %s is plaintext and unauthenticated: anything able to answer on p2p_httpAddress sets this node's cached status and drives the dashboard feed - keep this hop on a trusted network", u.String())
+
+	if c.settings.Asset.WebsocketReadLimit <= 0 {
+		c.logger.Warnf("[Centrifuge] asset_websocketReadLimit is unset: a single p2p frame may be of any size; set it to bound the per-frame allocation")
+	}
 
 	var client atomic.Pointer[websocket.Conn]
 
@@ -402,6 +469,12 @@ func (c *Centrifuge) connect(ctx context.Context, u url.URL, client *atomic.Poin
 						c.logger.Warnf("[Centrifuge] still cannot reach p2p server %s after %d attempts; continuing to retry every %s (set asset_centrifuge_disable=true if this deployment has no p2p service)", u.String(), failures, p2pDialMaxBackoff)
 					}
 				} else {
+					// Bound one inbound frame. Zero keeps the gorilla default of no
+					// limit, which is today's behaviour.
+					if readLimit := c.settings.Asset.WebsocketReadLimit; readLimit > 0 {
+						websocketClient.SetReadLimit(readLimit)
+					}
+
 					if failures > 0 {
 						c.logger.Infof("[Centrifuge] connected to p2p server on: %s (after %d failed attempt(s))", u.String(), failures)
 					} else {
@@ -457,48 +530,132 @@ func (c *Centrifuge) readMessages(ctx context.Context, client *atomic.Pointer[we
 					continue
 				}
 
-				// Unmarshal the message into a messageType struct
-				var mType messageType
-
-				err = json.Unmarshal(message, &mType)
-				if err != nil {
-					c.logger.Errorf("[Centrifuge] error unmarshalling message: %s", err)
-					continue
-				}
-
-				// Handle node_status messages - cache first one and update if from same peer
-				if mType.Type == "node_status" {
-					var nodeStatus notificationMsg
-					if err := json.Unmarshal(message, &nodeStatus); err == nil {
-						c.statusMutex.Lock()
-
-						// First node_status: cache it and remember the peer ID
-						if c.cachedCurrentNodeStatus == nil {
-							c.cachedCurrentNodeStatus = &nodeStatus
-							c.currentNodePeerID = nodeStatus.PeerID
-							c.logger.Infof("[Centrifuge] Asset service ready - cached current node status from peer: %s", nodeStatus.PeerID)
-						} else if c.currentNodePeerID == nodeStatus.PeerID {
-							// Update cache if this is from the same current node (keeps data fresh)
-							c.cachedCurrentNodeStatus = &nodeStatus
-							c.logger.Debugf("[Centrifuge] Updated cached node status for current node: %s (height: %d, uptime: %.0fs)",
-								nodeStatus.PeerID, nodeStatus.BestHeight, nodeStatus.Uptime)
-						}
-
-						c.statusMutex.Unlock()
-					}
-				}
-
-				// send the message on to the centrifuge node
-				_, err = c.centrifugeNode.Publish(strings.ToLower(mType.Type), message)
-				if err != nil {
-					c.logger.Errorf("[Centrifuge] error publishing to %s channel: %s", mType.Type, err)
-				}
+				c.handleP2PFrame(message)
 			} else {
 				c.logger.Debugf("[Centrifuge] p2p client not connected, waiting...")
 				time.Sleep(1 * time.Second)
 			}
 		}
 	}
+}
+
+// handleP2PFrame processes one frame read from the p2p websocket: it identifies the
+// frame type, drops anything outside relayChannels, refreshes the cached node status
+// and republishes the frame on the channel named by its type.
+func (c *Centrifuge) handleP2PFrame(message []byte) {
+	var mType messageType
+
+	if err := json.Unmarshal(message, &mType); err != nil {
+		c.logger.Errorf("[Centrifuge] error unmarshalling message: %s", err)
+		return
+	}
+
+	channel := strings.ToLower(mType.Type)
+
+	if !isRelayChannel(channel) {
+		c.logger.Debugf("[Centrifuge] dropped p2p frame of unrelayable type %q (%d dropped)", mType.Type, c.droppedFrames.Add(1))
+		return
+	}
+
+	if channel == nodeStatusChannel && !c.cacheNodeStatus(message) {
+		return
+	}
+
+	if _, err := c.centrifugeNode.Publish(channel, message); err != nil {
+		c.logger.Errorf("[Centrifuge] error publishing to %s channel: %s", channel, err)
+	}
+}
+
+// cacheNodeStatus refreshes the cached current node status from a node_status frame
+// and reports whether the frame is usable and should be relayed on.
+//
+// The cache being non-nil is the readiness gate in readinessMiddleware, so a frame that
+// does not identify its peer must not open it: the peer ID is also what pins later
+// updates to the same node. This rejects malformed and empty frames only. The hop to
+// the p2p server is plaintext and unauthenticated, so anything able to answer on
+// p2p_httpAddress can still send a well-formed frame that this relay cannot tell from
+// a genuine one; an authenticated transport for that hop is the actual fix.
+func (c *Centrifuge) cacheNodeStatus(message []byte) bool {
+	var nodeStatus notificationMsg
+
+	if err := json.Unmarshal(message, &nodeStatus); err != nil {
+		c.logger.Debugf("[Centrifuge] dropped unparseable node_status frame (%d dropped): %v", c.droppedFrames.Add(1), err)
+		return false
+	}
+
+	if nodeStatus.PeerID == "" {
+		c.logger.Debugf("[Centrifuge] dropped node_status frame with no peer id (%d dropped)", c.droppedFrames.Add(1))
+		return false
+	}
+
+	c.statusMutex.Lock()
+	defer c.statusMutex.Unlock()
+
+	// First node_status: cache it and remember the peer ID
+	if c.cachedCurrentNodeStatus == nil {
+		c.cachedCurrentNodeStatus = &nodeStatus
+		c.currentNodePeerID = nodeStatus.PeerID
+		c.logger.Infof("[Centrifuge] Asset service ready - cached current node status from peer: %s", nodeStatus.PeerID)
+
+		return true
+	}
+
+	// Update cache if this is from the same current node (keeps data fresh)
+	if c.currentNodePeerID == nodeStatus.PeerID {
+		c.cachedCurrentNodeStatus = &nodeStatus
+		c.logger.Debugf("[Centrifuge] Updated cached node status for current node: %s (height: %d, uptime: %.0fs)",
+			nodeStatus.PeerID, nodeStatus.BestHeight, nodeStatus.Uptime)
+	}
+
+	return true
+}
+
+// logWebsocketMount reports where the Centrifuge websocket is actually served.
+//
+// asset_centrifugeListenAddress is an enable flag, not a bind address: a non-empty
+// value turns the websocket on and it is then mounted on the Asset HTTP listener. An
+// operator who narrowed it to a specific interface was relying on a network boundary
+// that does not exist, so that case is a WARN; a wildcard value names the same
+// interfaces the socket really listens on, so it stays at INFO.
+func (c *Centrifuge) logWebsocketMount(addr string) {
+	const format = "[AssetService] Centrifuge websocket served on Asset HTTP (%s) at %s; asset_centrifugeListenAddress %q enables the websocket but is not bound as a separate listener"
+
+	httpListenAddress := c.settings.Asset.HTTPListenAddress
+
+	if namesNarrowerInterface(addr, httpListenAddress) {
+		c.logger.Warnf(format+" - it is not a network boundary and restricting it does not restrict access to the websocket", httpListenAddress, websocketPath, addr)
+		return
+	}
+
+	c.logger.Infof(format, httpListenAddress, websocketPath, addr)
+}
+
+// namesNarrowerInterface reports whether addr pins a host that the address the socket
+// is actually served on does not, which is exactly the misleading case.
+func namesNarrowerInterface(addr, servedOn string) bool {
+	addrHost, _, err := net.SplitHostPort(addr)
+	if err != nil || isWildcardHost(addrHost) {
+		return false
+	}
+
+	servedHost, _, err := net.SplitHostPort(servedOn)
+	if err != nil || isWildcardHost(servedHost) {
+		servedHost = ""
+	}
+
+	return !strings.EqualFold(addrHost, servedHost)
+}
+
+// isWildcardHost reports whether host is any spelling of the all-interfaces
+// address: empty, 0.0.0.0 or ::.
+func isWildcardHost(host string) bool {
+	if host == "" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+
+	return ip != nil && ip.IsUnspecified()
 }
 
 // Stop gracefully shuts down the Centrifuge server.
@@ -514,16 +671,73 @@ func (c *Centrifuge) Stop(_ context.Context) error {
 	return nil
 }
 
-// authMiddleware provides authentication middleware for WebSocket connections.
-// It sets up CORS headers and user credentials for connecting clients.
-// It also checks if the asset service is ready (has cached current node status).
+// websocketPath is where the Centrifuge websocket is mounted on the Asset HTTP server.
+const websocketPath = "/connection/websocket"
+
+// originRejectWarnInterval bounds how often a rejected websocket Origin is logged at WARN.
+const originRejectWarnInterval = 5 * time.Minute
+
+// httpHandlerRegistrar is the part of the Asset HTTP server Start mounts handlers on.
+type httpHandlerRegistrar interface {
+	AddHTTPHandler(pattern string, handler http.Handler) error
+}
+
+// registerHTTPHandlers mounts everything Centrifuge serves on the Asset HTTP server. Start
+// and the tests share it, so the tests guard exactly what production exposes.
+func (c *Centrifuge) registerHTTPHandlers(srv httpHandlerRegistrar) {
+	_ = srv.AddHTTPHandler(websocketPath, c.websocketHTTPHandler())
+}
+
+// websocketHTTPHandler builds the handler mounted at /connection/websocket: the readiness
+// gate plus the asset_centrifugeAllowOrigins origin check.
+func (c *Centrifuge) websocketHTTPHandler() http.Handler {
+	var clientIP func(*http.Request) string
+	if c.httpServer != nil {
+		clientIP = c.httpServer.ClientIP
+	}
+
+	return c.readinessMiddleware(NewWebsocketHandler(c.centrifugeNode, WebsocketConfig{
+		ReadBufferSize:      1024,
+		UseWriteBufferPool:  true,
+		MaxConnections:      c.settings.Asset.MaxWebsocketConnections,
+		MaxConnectionsPerIP: c.settings.Asset.MaxWebsocketConnectionsPerIP,
+		ClientIP:            clientIP,
+		CheckOrigin:         c.checkWebsocketOrigin,
+	}))
+}
+
+// checkWebsocketOrigin applies checkOrigin with asset_centrifugeAllowOrigins. A rejection
+// is logged at WARN at most once per originRejectWarnInterval, so an operator whose reverse
+// proxy rewrites Host can always find the setting in the log, while a hostile page can
+// neither flood the log nor use up the warning for good. Other rejections go to DEBUG.
+func (c *Centrifuge) checkWebsocketOrigin(r *http.Request) bool {
+	err := checkOrigin(r, c.allowedOrigins)
+	if err == nil {
+		return true
+	}
+
+	last, now := c.originRejectWarnedAt.Load(), time.Now().UnixNano()
+	if now-last >= int64(originRejectWarnInterval) && c.originRejectWarnedAt.CompareAndSwap(last, now) {
+		c.logger.Warnf("[Centrifuge] websocket upgrade rejected: %v; if this is a legitimate dashboard behind a proxy that rewrites Host, add its origin to asset_centrifugeAllowOrigins (repeat rejections within %s logged at DEBUG)", err, originRejectWarnInterval)
+	} else {
+		c.logger.Debugf("[Centrifuge] websocket upgrade rejected: %v", err)
+	}
+
+	return false
+}
+
+// readinessMiddleware gates websocket upgrades on the asset service being ready (a current
+// node status is cached) and assigns each connection a random centrifuge user ID so sessions
+// are not confused. It does NOT authenticate the client: the socket carries the same public,
+// read-only chain and node telemetry that the p2p service gossips and the dashboard's GET
+// APIs serve.
 //
 // Parameters:
-//   - h: The HTTP handler to wrap with authentication
+//   - h: The websocket HTTP handler to wrap
 //
 // Returns:
 //   - http.Handler: Middleware-wrapped HTTP handler
-func (c *Centrifuge) authMiddleware(h http.Handler) http.Handler {
+func (c *Centrifuge) readinessMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Check if asset service is ready (has cached current node status)
 		c.statusMutex.RLock()
@@ -544,11 +758,6 @@ func (c *Centrifuge) authMiddleware(h http.Handler) http.Handler {
 			UserID: userID,
 		})
 		r = r.WithContext(newCtx)
-
-		header := w.Header()
-		header.Set(AccessControlAllowOrigin, "*")
-		header.Add(AccessControlAllowHeaders, "*")
-		header.Set(AccessControlAllowCredentials, "true")
 
 		h.ServeHTTP(w, r)
 	})

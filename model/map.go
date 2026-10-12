@@ -4,7 +4,6 @@ import (
 	"sync"
 
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
-	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/dolthub/swiss"
 )
 
@@ -29,25 +28,41 @@ type SplitSyncedParentMap struct {
 }
 
 func NewSplitSyncedParentMap(nrOfBuckets uint16, expectedInpoints ...uint64) *SplitSyncedParentMap {
-	perBucket := uint32(0)
-	if len(expectedInpoints) > 0 && expectedInpoints[0] > 0 {
-		// 20% headroom per bucket absorbs natural Binomial(N, 1/B) hash variance
-		// and prevents the underlying dolthub/swiss map from rehashing mid-block.
-		perBucket = uint32((expectedInpoints[0] + expectedInpoints[0]/5) / uint64(nrOfBuckets))
+	var expected uint64
+	if len(expectedInpoints) > 0 {
+		expected = expectedInpoints[0]
 	}
+
+	// Each bucket's share plus the headroom hash variance needs (bucketCapacity),
+	// so a bucket rarely fills; one that does grows alone, see SetIfNotExists.
 	s := &SplitSyncedParentMap{
 		buckets:     make([]swissInpointBucket, nrOfBuckets),
 		nrOfBuckets: nrOfBuckets,
 	}
-	for i := uint16(0); i < nrOfBuckets; i++ {
-		s.buckets[i].m = swiss.NewMap[subtreepkg.Inpoint, struct{}](perBucket)
-	}
+	buildParentSpendsBuckets(s, bucketCapacity(expected, nrOfBuckets))
+
 	return s
 }
 
+// inpointBucketMix is an odd multiplier that folds the output index into the
+// bucket choice.
+const inpointBucketMix = 0x9e3779b1
+
+// inpointBucket picks the bucket for an inpoint from its parent hash and output
+// index. Keyed by the hash alone, every spent output of one parent lands in one
+// bucket, which the per-bucket headroom (sized for independent keys) does not
+// cover: a block spending 200K outputs of a fan-out parent would fill that
+// bucket many times over while every other bucket sat at its mean.
+func inpointBucket(inpoint subtreepkg.Inpoint, nrOfBuckets uint16) uint16 {
+	h := uint32(inpoint.Hash[0])<<8 | uint32(inpoint.Hash[1])
+	h ^= inpoint.Index * inpointBucketMix
+	h ^= h >> 16
+
+	return uint16(h % uint32(nrOfBuckets)) //nolint:gosec // < nrOfBuckets
+}
+
 func (s *SplitSyncedParentMap) SetIfNotExists(inpoint subtreepkg.Inpoint) (bool, error) {
-	idx := txmap.Bytes2Uint16Buckets(inpoint.Hash, s.nrOfBuckets)
-	b := &s.buckets[idx]
+	b := &s.buckets[inpointBucket(inpoint, s.nrOfBuckets)]
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -56,15 +71,33 @@ func (s *SplitSyncedParentMap) SetIfNotExists(inpoint subtreepkg.Inpoint) (bool,
 		return false, nil
 	}
 
+	if b.m.Capacity() <= 0 {
+		b.grow()
+	}
+
 	b.m.Put(inpoint, struct{}{})
 
 	return true, nil
 }
 
+// grow rebuilds a full bucket with an eighth more room. Left to itself the swiss
+// map doubles on the next Put, so a parent-spends map sized from an estimate
+// that came out a few percent short would end up at up to twice its need.
+// Callers hold b.mu.
+func (b *swissInpointBucket) grow() {
+	count := b.m.Count()
+	grown := swiss.NewMap[subtreepkg.Inpoint, struct{}](uint32(count + count/8 + 16)) //nolint:gosec // a bucket holds far below 2^32
+
+	b.m.Iter(func(k subtreepkg.Inpoint, _ struct{}) bool {
+		grown.Put(k, struct{}{})
+		return false
+	})
+
+	b.m = grown
+}
+
 // Clear empties every bucket without releasing the per-bucket dolthub/swiss
-// group/ctrl backing storage. Intended for sync.Pool reuse: a multi-GB
-// SplitSyncedParentMap can be reset in milliseconds and handed back to the
-// pool without re-allocating any of its bucket maps.
+// group/ctrl backing storage.
 //
 // Each bucket's mutex is taken in turn; callers must ensure no other
 // goroutine is using the map.
@@ -77,8 +110,22 @@ func (s *SplitSyncedParentMap) Clear() {
 	}
 }
 
+// Length returns the number of inpoints recorded. Callers must ensure no other
+// goroutine is inserting, or the count is only a snapshot.
+func (s *SplitSyncedParentMap) Length() uint64 {
+	var n uint64
+
+	for i := range s.buckets {
+		b := &s.buckets[i]
+		b.mu.Lock()
+		n += uint64(b.m.Count()) //nolint:gosec // a count is never negative
+		b.mu.Unlock()
+	}
+
+	return n
+}
+
 // NrOfBuckets returns the number of buckets the map was constructed with.
-// Useful for pool size-class keying.
 func (s *SplitSyncedParentMap) NrOfBuckets() uint16 {
 	return s.nrOfBuckets
 }

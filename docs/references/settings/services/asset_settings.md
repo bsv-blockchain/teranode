@@ -7,7 +7,8 @@
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
 | APIPrefix | string | "/api/v1" | asset_apiPrefix | URL prefix for API endpoints |
-| CentrifugeListenAddress | string | ":8892" | asset_centrifugeListenAddress | WebSocket server binding address |
+| CentrifugeListenAddress | string | ":8892" | asset_centrifugeListenAddress | Non-empty enables the WebSocket; not bound (served on Asset HTTP) |
+| CentrifugeAllowOrigins | string | "" | asset_centrifugeAllowOrigins | Pipe-separated extra browser origins allowed to open the WebSocket |
 | CentrifugeDisable | bool | false | asset_centrifuge_disable | Disables WebSocket server |
 | HTTPAddress | string | "`http://localhost:8090/api/v1`" | asset_httpAddress | **Required when Centrifuge enabled** - Must be non-empty and valid URL format |
 | HTTPListenAddress | string | ":8090" | asset_httpListenAddress | **CRITICAL** - HTTP server binding (fails during Init() if empty) |
@@ -29,7 +30,9 @@
 | ConcurrencyGetSubtreeExists | int | 0 | asset_concurrency_get_subtree_exists | Rate limit for GetSubtreeExists |
 | ConcurrencyGetSubtreeHead | int | 0 | asset_concurrency_get_subtree_head | Rate limit for GetSubtreeHead |
 | ConcurrencyGetUtxo | int | 0 | asset_concurrency_get_utxo | Rate limit for GetUtxo |
-| ConcurrencyGetLegacyBlockReader | int | -1 | asset_concurrency_get_legacy_block_reader | Rate limit for GetLegacyBlockReader (default: NumCPU) |
+| ConcurrencyGetLegacyBlockReader | int | 0 | asset_concurrency_get_legacy_block_reader | Concurrent legacy block streams for anonymous callers (default: unlimited; the cap is opt-in because the permit is held for the whole stream) |
+| ConcurrencyGetLegacyBlockReaderPeer | int | 0 | asset_concurrency_get_legacy_block_reader_peer | Concurrent legacy block streams for this node's own legacy peer server (pushBlockMsg); only used when asset_legacyPeerPoolToken is set (default: unlimited) |
+| LegacyPeerPoolToken | string | "" | asset_legacyPeerPoolToken | Shared secret the legacy service sends in X-Teranode-Internal-Token to use the peer pool; set the same value on legacy and Asset. Empty disables the peer pool. Redacted in settings output |
 | SubtreeDataStreamingChunkSize | int | 10000 | asset_subtreeDataStreamingChunkSize | Records per subtree data streaming chunk |
 | SubtreeDataStreamingConcurrency | int | 2 | asset_subtreeDataStreamingConcurrency | Parallel workers for subtree data streaming |
 
@@ -44,7 +47,7 @@
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
 | HTTPRateLimit | int | 1024 | asset_httpRateLimit | Per-IP req/s for unverified clients (0 disables) |
-| HTTPHeavyRateLimit | int | 10 | asset_httpHeavyRateLimit | Per-IP req/s on heavy endpoints (blocks, subtrees, batch txs) |
+| HTTPHeavyRateLimit | int | 10 | asset_httpHeavyRateLimit | Per-IP req/s on heavy endpoints (blocks, subtrees, batch txs, headers_to_common_ancestor) |
 | HTTPPeerRateMultiplier | int | 5 | asset_httpPeerRateMultiplier | Authenticated peers get base × this rate |
 | HTTPMinerRateLimit | int | 0 | asset_httpMinerRateLimit | Per-peer req/s cap for miner tier; 0 = fully exempt |
 | HTTPBodyLimit | string | "100MB" | asset_httpBodyLimit | Max request body size (Echo BodyLimit, returns 413) |
@@ -135,8 +138,11 @@ asset_httpListenAddress=:8090
 
 ```bash
 asset_centrifuge_disable=false
+# Enables the websocket; not bound, the socket is served on Asset HTTP at /connection/websocket
 asset_centrifugeListenAddress=:8892
 asset_httpAddress=http://localhost:8090/api/v1
+# Only needed when a reverse proxy rewrites the Host header the Asset service sees
+asset_centrifugeAllowOrigins=https://dashboard.example.com
 ```
 
 ### HTTP Response Signing

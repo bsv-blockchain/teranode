@@ -123,7 +123,8 @@ func (s *Server) waitForBlockMinedStatus(ctx context.Context, blockHash *chainha
 //
 // CATCHUP SKIP MODE:
 // When SkipDuringCatchup is enabled (default: false), the pruner skips all operations
-// during FSMStateCATCHINGBLOCKS state. This prevents race conditions where block
+// in any state other than FSMStateRUNNING (CATCHINGBLOCKS, or IDLE after an operator
+// STOP mid-catchup). This prevents race conditions where block
 // validation marks transactions as mined faster than the pruner can preserve their parents.
 // Once the node transitions to FSMStateRUNNING, the pruner resumes normal operation.
 //
@@ -158,15 +159,19 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 				continue
 			}
 
-			// Check FSM state - skip during CATCHINGBLOCKS if configured
-			if s.settings.Pruner.SkipDuringCatchup {
+			// Check FSM state - skip during CATCHINGBLOCKS if configured.
+			// Guard against a nil blockchainClient (e.g. in tests) the same
+			// way the blockAssemblyClient check below does.
+			if s.settings.Pruner.SkipDuringCatchup && s.blockchainClient != nil {
 				fsmState, err := s.blockchainClient.GetFSMCurrentState(ctx)
 				if err != nil {
 					s.logger.Warnf("Failed to get FSM state, skipping pruner: %v", err)
 					prunerSkipped.WithLabelValues("fsm_error").Inc()
 					continue
 				}
-				if fsmState != nil && *fsmState == blockchain.FSMStateCATCHINGBLOCKS {
+				// Only RUNNING proves no catchup is in flight: an operator STOP
+				// parks a catching-up node in IDLE while its batch still runs.
+				if fsmState == nil || *fsmState != blockchain.FSMStateRUNNING {
 					s.logger.Debugf("[pruner][%s:%d] skipping during catchup", blockHashStr, blockHeight)
 					prunerSkipped.WithLabelValues("catchup_mode").Inc()
 					continue
@@ -211,7 +216,7 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 					ctx, s.utxoStore, blockHeight, blockHashStr, s.settings, s.logger,
 				); err != nil {
 					s.logger.Warnf("[pruner][%s:%d] phase 1: failed to preserve parents: %v", blockHashStr, blockHeight, err)
-					prunerErrors.WithLabelValues("parent_preservation").Inc()
+					prunerErrors.WithLabelValues("preserve_parents").Inc()
 				} else {
 					prunerDuration.WithLabelValues("preserve_parents").Observe(time.Since(startTime).Seconds())
 					if recordsProcessed > 0 {

@@ -80,6 +80,7 @@ spec:
     spec: {}
   configMapName: teranode-operator-config
   # Secret holding sensitive settings (blockchain_store, utxostore, grpc_admin_api_key).
+  # REQUIRED: include grpc_admin_api_key for Blockchain startup and all service clients.
   # Create it before applying this CR — see the installation docs.
   envFrom:
     - secretRef:

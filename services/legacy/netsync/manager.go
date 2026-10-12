@@ -215,13 +215,29 @@ type headerNode struct {
 	hash   *chainhash.Hash
 }
 
+// blockRequestOrigin records HOW a block came to be requested. It is the proof
+// that backs every below-checkpoint fast path: the hardcoded checkpoints certify
+// one chain, not a height range, so "this block sits below the highest
+// checkpoint" says nothing about whether it belongs to that chain.
+//
+// The zero value is deliberately untrusted, so a request recorded by a call site
+// that has not thought about provenance fails closed.
+type blockRequestOrigin struct {
+	// headerProven is true when the request came from fetchHeaderBlocks, i.e. from
+	// a header run handleHeadersMsg verified links back to a block we already
+	// trust AND forward to a pinned checkpoint hash. That run is the ancestry
+	// proof. Blocks requested because a peer advertised them (handleInvMsg) carry
+	// no such proof and are never header-proven.
+	headerProven bool
+}
+
 // peerSyncState stores additional information that the SyncManager tracks
 // about a peer.
 type peerSyncState struct {
 	syncCandidate   bool
 	requestQueue    *txmap.SyncedSlice[wire.InvVect]
 	requestedTxns   *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
-	requestedBlocks *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
+	requestedBlocks *expiringmap.ExpiringMap[chainhash.Hash, blockRequestOrigin]
 }
 
 // syncPeerState stores additional info about the sync peer.
@@ -437,6 +453,25 @@ type blockFailureState struct {
 	nextRetry time.Time
 }
 
+// corruptAttemptState is the per-(hash, peerID) corrupt re-download counter and its fixed cooldown
+// window (bitcoin-sv/teranode#4692). windowExpiry is set once from the first corrupt delivery and
+// preserved across subsequent deliveries so the window is not extended by re-delivery; once it
+// lapses the counter resets and an honest body is admitted again.
+type corruptAttemptState struct {
+	count        int
+	windowExpiry time.Time
+}
+
+// legacyCorruptAttemptKey keys the legacy corrupt re-download cap on (block hash, serving peer
+// address) (bitcoin-sv/teranode#4692). Keying on the pair — not the hash alone — stops one peer's
+// corruption consuming the budget for a hash an honest peer can still serve: each serving identity
+// is capped independently, so an honest sync-peer rotation is never wedged. A peer with no address
+// degrades to a single shared (hash, "") bucket — the hard per-hash bound for that deployment.
+type legacyCorruptAttemptKey struct {
+	hash   chainhash.Hash
+	peerID string
+}
+
 // SyncManager is used to communicate block related messages with peers. The
 // SyncManager is started as by executing Start() in a goroutine. Once started,
 // it selects peers to sync from and starts the initial block download. Once the
@@ -478,11 +513,18 @@ type SyncManager struct {
 	txAnnounceMu     sync.RWMutex
 	txAnnounceClosed bool
 
+	// announceParents holds the parent tx hashes of txs waiting in
+	// txAnnounceBatcher, which cannot carry them itself: its items must be
+	// comparable for deduplication. orderAnnounceBatch consumes the entries.
+	// Bounded; an entry lost to eviction, or left behind by a deduplicated
+	// Put, only costs that tx its place in the ordering.
+	announceParents *txmap.SyncedMap[chainhash.Hash, []chainhash.Hash]
+
 	// These fields should only be accessed from the blockHandler thread
 	// (except syncPeer/syncPeerState which are protected by syncPeerMu).
 	rejectedTxns    *txmap.SyncedMap[chainhash.Hash, struct{}]
 	requestedTxns   *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
-	requestedBlocks *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
+	requestedBlocks *expiringmap.ExpiringMap[chainhash.Hash, blockRequestOrigin]
 	// blockFailureBackoff throttles re-processing of a block that just failed
 	// with a transient storage/service error, so a re-delivered block does not
 	// immediately re-run the full multi-million-record decorate at full
@@ -496,6 +538,20 @@ type SyncManager struct {
 	// deleted on successful (re)process. A skipped descendant records its own hash
 	// too, so the whole descendant chain is suppressed transitively.
 	recentlyFailedBlocks *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
+	// blockCorruptAttempts bounds corrupt-body (bitcoin-sv/teranode#4692) re-downloads per
+	// (block hash, serving peer address), independently of the ban score. Once a (hash, peerID)
+	// reaches MaxCorruptAttemptsPerBlock corrupt deliveries within a fixed cooldown window, that
+	// peer's next delivery of the hash is dropped BEFORE the expensive HandleBlockDirect/decorate —
+	// without rejecting-to-peer, without poisoning (invalid is never set), and without setting
+	// recentlyFailedBlocks (so the recentlyFailedBlocks no-NOT_FOUND-cascade property is preserved).
+	// Keying on (hash, peerID) means an honest sync-peer keeps a fresh budget for the same hash, so
+	// a bad peer can never wedge the honest tip; the residual aggregate per-hash work is bounded by
+	// the number of distinct serving peers (MaxPeers) times the cap per window. Unlike
+	// blockFailureBackoff (serviceError-gated, disjoint from corrupt) this is keyed only on corrupt
+	// failures. The window is fixed from the first corrupt delivery (stored in the value, not the map
+	// TTL), so re-delivery cannot extend it and once it lapses an honest body is admitted again
+	// (self-healing). Cleared on successful store.
+	blockCorruptAttempts *expiringmap.ExpiringMap[legacyCorruptAttemptKey, *corruptAttemptState]
 	syncPeerMu           sync.RWMutex // protects syncPeer and syncPeerState
 	syncPeer             *peerpkg.Peer
 	syncPeerState        *syncPeerState
@@ -559,10 +615,15 @@ type SyncManager struct {
 
 	// The following fields are used for headers-first mode.
 	headersFirstMode atomic.Bool // accessed from multiple goroutines, must be atomic
-	headerList       *list.List
-	startHeader      *list.Element
-	nextCheckpoint   *chaincfg.Checkpoint
-	blockSizeTracker *blockSizeTracker // tracks block sizes for dynamic in-flight adjustment
+
+	// headerMu protects the header list, cursor, pending checkpoint and verified
+	// boundary as one state. Never hold it during full block validation.
+	headerMu                 sync.Mutex
+	headerList               *list.List
+	startHeader              *list.Element
+	nextCheckpoint           *chaincfg.Checkpoint
+	verifiedCheckpointHeight int32             // highest checkpoint hash matched by handleHeadersMsg
+	blockSizeTracker         *blockSizeTracker // tracks block sizes for dynamic in-flight adjustment
 
 	// An optional fee estimator.
 	// feeEstimator *mempool.FeeEstimator
@@ -620,9 +681,17 @@ func (sm *SyncManager) storeSyncPeer(peer *peerpkg.Peer, state *syncPeerState) {
 // resetHeaderState sets the headers-first mode state to values appropriate for
 // syncing from a new peer.
 func (sm *SyncManager) resetHeaderState(newestHash *chainhash.Hash, newestHeight int32) {
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
+	sm.resetHeaderStateLocked(newestHash, newestHeight)
+}
+
+// resetHeaderStateLocked requires headerMu.
+func (sm *SyncManager) resetHeaderStateLocked(newestHash *chainhash.Hash, newestHeight int32) {
 	sm.headersFirstMode.Store(false)
 	sm.headerList.Init()
 	sm.startHeader = nil
+	sm.verifiedCheckpointHeight = 0
 
 	// When there is a next checkpoint, add an entry for the latest known
 	// block into the header pool.  This allows the next downloaded header
@@ -771,7 +840,7 @@ func (sm *SyncManager) startSync() {
 	if bestPeer.LastBlock() == bestBlockHeightInt32 {
 		sm.logger.Debugf("[startSync] peer %v is at the same height %d as us, sending RUNNING", bestPeer.String(), bestPeer.LastBlock())
 
-		if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/startSync"); err != nil {
+		if err = sm.runIfCatchingBlocks("legacy/netsync/manager/startSync"); err != nil {
 			sm.logger.Errorf("[startSync] failed to set blockchain state to running: %v", err)
 		}
 
@@ -819,6 +888,8 @@ func (sm *SyncManager) startSync() {
 	// and fully validate them.  Finally, regression test mode does
 	// not support the headers-first approach so do normal block
 	// downloads when in regression test mode.
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
 	if sm.nextCheckpoint != nil &&
 		bestBlockHeightInt32 < sm.nextCheckpoint.Height &&
 		sm.chainParams != &chaincfg.RegressionNetParams {
@@ -845,6 +916,22 @@ func (sm *SyncManager) startSync() {
 		recvBytes:         bestPeer.BytesReceived(),
 		recvBytesLastTick: uint64(0),
 	})
+}
+
+// runIfCatchingBlocks uses the cached observation only to avoid redundant
+// automatic RUN requests from recurring legacy events. It is not admission:
+// the server still checks authoritative state under its transition lock. A
+// temporary synthetic IDLE is rechecked on later events, without latching a
+// pause or changing message/queue ownership.
+func (sm *SyncManager) runIfCatchingBlocks(source string) error {
+	state, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
+	if err != nil {
+		return err
+	}
+	if state == nil || *state != teranodeblockchain.FSMStateCATCHINGBLOCKS {
+		return nil
+	}
+	return sm.blockchainClient.Run(sm.ctx, source)
 }
 
 func (sm *SyncManager) resetFeeFilterToDefault() {
@@ -981,8 +1068,8 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 	sm.peerStates.Set(peer, &peerSyncState{
 		syncCandidate:   isSyncCandidate,
 		requestQueue:    txmap.NewSyncedSlice[wire.InvVect](maxRequestedBlocks),
-		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second), // allow the node 10 seconds to respond to the tx request
-		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](60 * time.Minute), // allow the node 1 hour to respond to the requested blocks, needed for legacy sync/checkpoints
+		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),           // allow the node 10 seconds to respond to the tx request
+		requestedBlocks: expiringmap.New[chainhash.Hash, blockRequestOrigin](60 * time.Minute), // allow the node 1 hour to respond to the requested blocks, needed for legacy sync/checkpoints
 	})
 
 	// Start syncing by choosing the best candidate if needed.
@@ -1148,11 +1235,14 @@ func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
 
 	// Only disconnect if we have a valid sync peer
 	if sp != nil {
+		sm.headerMu.Lock()
 		// Log current sync state before disconnecting
 		if sm.headersFirstMode.Load() {
 			sm.logger.Debugf("Current header sync state - headerList length: %d, startHeader exists: %v",
 				sm.headerList.Len(), sm.startHeader != nil)
 		}
+
+		sm.headerMu.Unlock()
 
 		sp.SetSyncPeer(false)
 		sp.DisconnectWithInfo("updateSyncPeer - disconnect old sync peer")
@@ -1235,6 +1325,7 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	timeStart := time.Now()
 	// passing in block height 0, which will default to utxo store block height in validator
 	txMeta, err = sm.validationClient.Validate(ctx, btTx, 0)
+	txMeta, err = sm.acceptedMetaOnUnlockFailure(ctx, btTx, txMeta, err)
 
 	prometheusLegacyNetsyncHandleTxMsgValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
@@ -1303,6 +1394,31 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	}
 }
 
+// acceptedMetaOnUnlockFailure turns the validator's ErrTxUnlockFailed into a success. The transaction was
+// accepted, spent and created, and only its unlock failed, so it must not be rejected or dropped. The
+// response metadata does not survive a gRPC error, so it is read back from the UTXO store. If that read
+// fails the transaction is still accepted: it is returned with empty metadata, whose zero size passes
+// every peer fee filter, so it is announced rather than rejected or dropped. Any other result is
+// returned unchanged.
+func (sm *SyncManager) acceptedMetaOnUnlockFailure(ctx context.Context, tx *bt.Tx, txMeta *meta.Data, err error) (*meta.Data, error) {
+	if err == nil || !errors.Is(err, errors.ErrTxUnlockFailed) {
+		return txMeta, err
+	}
+
+	if txMeta != nil {
+		return txMeta, nil
+	}
+
+	stored := &meta.Data{}
+	if getErr := sm.utxoStore.GetMeta(ctx, tx.TxIDChainHash(), stored); getErr != nil {
+		sm.logger.Warnf("[acceptedMetaOnUnlockFailure][%s] accepted transaction, failed to read its meta, announcing without fee: %v", tx.TxID(), getErr)
+
+		return &meta.Data{}, nil
+	}
+
+	return stored, nil
+}
+
 // processOrphanTransactions recursively processes orphan transactions that were waiting for a transaction to be accepted
 func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *chainhash.Hash, acceptedTxs *[]*TxHashAndFee) {
 	// check whether any transaction in the orphan pool has this transaction as a parent
@@ -1326,6 +1442,7 @@ func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *ch
 		// validate the orphan transaction
 		// passing in block height 0, which will default to utxo store block height in validator
 		txMeta, err := sm.validationClient.Validate(ctx, orphanTx.tx, 0)
+		txMeta, err = sm.acceptedMetaOnUnlockFailure(ctx, orphanTx.tx, txMeta, err)
 		if err != nil {
 			if errors.Is(err, errors.ErrTxMissingParent) || errors.Is(err, errors.ErrTxLocked) || errors.Is(err, errors.ErrTxCreating) {
 				// silently exit, we will accept this transaction when the other parent(s) comes in
@@ -1472,6 +1589,77 @@ func (sm *SyncManager) recordBlockFailureBackoff(blockHash chainhash.Hash) {
 	})
 }
 
+// legacyCorruptAttemptCooldown returns the fixed cooldown window for the per-block corrupt
+// re-download cap (bitcoin-sv/teranode#4692), falling back to settings.DefaultCorruptAttemptCooldown
+// when settings are nil or the setting is unset or non-positive. Mirrors corruptAttemptCooldown in
+// services/blockvalidation; both share the one fallback constant so the two caches can never drift
+// apart.
+func legacyCorruptAttemptCooldown(s *settings.Settings) time.Duration {
+	if s != nil {
+		if d := s.BlockValidation.CorruptAttemptCooldown; d > 0 {
+			return d
+		}
+	}
+
+	return settings.DefaultCorruptAttemptCooldown
+}
+
+// recordCorruptBlockAttempt increments and returns the per-(hash, peerID) corrupt-body failure count
+// within a fixed cooldown window (bitcoin-sv/teranode#4692). The window is set once from the first
+// corrupt delivery and preserved across subsequent deliveries (not extended), so once it lapses the
+// counter resets and an honest body is admitted again. Called ONLY on an actual corrupt failure.
+// Nil-safe (SyncManager struct-literal test fixtures that bypass New()): a nil map or nil settings
+// is a no-op returning 0, so the cap simply does not accrue rather than panicking.
+func (sm *SyncManager) recordCorruptBlockAttempt(blockHash chainhash.Hash, peerID string) int {
+	if sm.blockCorruptAttempts == nil || sm.settings == nil {
+		return 0
+	}
+
+	key := legacyCorruptAttemptKey{hash: blockHash, peerID: peerID}
+
+	now := time.Now()
+	if st, ok := sm.blockCorruptAttempts.Get(key); ok && now.Before(st.windowExpiry) {
+		// Preserve the LOGICAL window (windowExpiry) so re-delivery cannot extend the cooldown;
+		// the Set re-extends only the map's retention TTL. A new struct avoids mutating shared state.
+		next := &corruptAttemptState{count: st.count + 1, windowExpiry: st.windowExpiry}
+		sm.blockCorruptAttempts.Set(key, next)
+
+		return next.count
+	}
+
+	sm.blockCorruptAttempts.Set(key, &corruptAttemptState{count: 1, windowExpiry: now.Add(legacyCorruptAttemptCooldown(sm.settings))})
+
+	return 1
+}
+
+// corruptBlockAttemptsExhausted reports whether a (hash, peerID) has reached the corrupt
+// re-download cap and is within its cooldown window (bitcoin-sv/teranode#4692). A cap of <= 0
+// disables the bound (re-opens the corrupt-body bandwidth DoS). Nil-safe: a nil settings or nil map
+// (SyncManager struct-literal test fixtures that bypass New()) behaves as CAP DISABLED — it returns
+// false (never "exhausted"), so a missing config can never silently drop honest blocks.
+func (sm *SyncManager) corruptBlockAttemptsExhausted(blockHash chainhash.Hash, peerID string) bool {
+	if sm.settings == nil || sm.blockCorruptAttempts == nil {
+		return false
+	}
+
+	maxAttempts := sm.settings.BlockValidation.MaxCorruptAttemptsPerBlock
+	if maxAttempts <= 0 {
+		return false
+	}
+
+	st, ok := sm.blockCorruptAttempts.Get(legacyCorruptAttemptKey{hash: blockHash, peerID: peerID})
+
+	return ok && st.count >= maxAttempts && time.Now().Before(st.windowExpiry)
+}
+
+// clearCorruptBlockAttempts drops a (hash, peerID)'s corrupt counter on successful store so an
+// honest body after the window never inherits a stale count (bitcoin-sv/teranode#4692). Nil-safe.
+func (sm *SyncManager) clearCorruptBlockAttempts(blockHash chainhash.Hash, peerID string) {
+	if sm.blockCorruptAttempts != nil {
+		sm.blockCorruptAttempts.Delete(legacyCorruptAttemptKey{hash: blockHash, peerID: peerID})
+	}
+}
+
 // peerStateResolvingPrimary returns the sync state for peer, resolving a stream
 // sub-peer (e.g. a BlockPriority DATA1 stream, not itself registered in
 // peerStates) to its association's primary peer. It returns the resolved peer
@@ -1523,6 +1711,50 @@ func (sm *SyncManager) requestMissingBlocks(peer *peerpkg.Peer, blockHash chainh
 	if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
 		sm.logger.Errorf("Failed to send getblocks message: %v", err)
 	}
+}
+
+// requestBlockDirect re-requests a single block by hash with a getdata sent straight to the peer,
+// bypassing inv handling entirely (bitcoin-sv/teranode#4692).
+//
+// requestMissingBlocks cannot recover a block during headers-first sync: it sends a getblocks, the
+// peer answers with an inv, and processInvMsg returns while headersFirstMode is set — before the
+// hash reaches state.requestQueue, which is the only queue the getdata loop in handleInvMsg drains.
+// The header-block pipeline does not cover it either: fetchHeaderBlocks walks forward from
+// sm.startHeader, and a dropped block's header node has already been removed from headerList with
+// startHeader ahead of the front, so that walk can never reach it.
+//
+// Both request maps are re-armed before the message goes out. handleBlockMsg disconnects a peer
+// that delivers a block it has no record of requesting, and BlockRequested gates the prefetch
+// ingestion on the same per-peer map; the corrupt branch has already deleted this hash from both.
+// The inv route repopulates them as a side effect of its own getdata loop — a direct getdata has to
+// do it itself. Both maps are expiring, so an entry for a block that never arrives self-evicts.
+//
+// Setting sm.requestedBlocks also de-duplicates against the inv route: that loop skips a hash
+// already present there, so a getblocks issued alongside this call cannot request the same block a
+// second time.
+//
+// Both entries are re-armed with the UNTRUSTED zero origin, never with the proof the dropped
+// delivery carried. headerProven means the request came from fetchHeaderBlocks; this is a direct
+// getdata, so by that definition it is not proven, and blockOrigin's own contract records losing a
+// proof on a re-request as the safe outcome — "an inv re-request can replace a proof with the
+// untrusted zero value, which safely restores full validation". The cost is that the recovered copy
+// takes full validation instead of the below-checkpoint fast path; the alternative would invent a
+// route by which a fast-path proof survives a transport the header-provenance design never
+// sanctioned, on a body we have just judged corrupt. Re-arming is only about admission — the
+// unrequested-block guard and the prefetch gate read these maps — not about provenance.
+func (sm *SyncManager) requestBlockDirect(peer *peerpkg.Peer, state *peerSyncState, blockHash chainhash.Hash) {
+	getDataMessage := wire.NewMsgGetDataSizeHint(1)
+	if err := getDataMessage.AddInvVect(wire.NewInvVect(wire.InvTypeBlock, &blockHash)); err != nil {
+		sm.logger.Warnf(unexpectedFailureAddingInventoryMsg, err)
+		return
+	}
+
+	sm.requestedBlocks.Set(blockHash, blockRequestOrigin{})
+	state.requestedBlocks.Set(blockHash, blockRequestOrigin{})
+
+	sm.logger.Debugf("[requestBlockDirect][%s] re-requesting dropped block from %s", blockHash, peer)
+
+	peer.QueueMessage(getDataMessage, nil)
 }
 
 func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
@@ -1579,8 +1811,6 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		return errors.NewServiceError("[handleBlockMsg] skipping block %s from disconnected peer %s", bmsg.blockHash, bmsg.peer)
 	}
 
-	catchingBlocks := false
-
 	sm.logger.Debugf("[handleBlockMsg][%s] checking current FSM state", bmsg.blockHash)
 
 	fsmState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
@@ -1588,9 +1818,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		return errors.NewProcessingError("[handleBlockMsg] failed to get current FSM state", err)
 	}
 
-	if fsmState != nil && *fsmState == teranodeblockchain.FSMStateCATCHINGBLOCKS {
-		catchingBlocks = true
-	}
+	catchingBlocks := suppressBlockRejects(fsmState)
 
 	// If we didn't ask for this block then the peer is misbehaving.
 	if _, exists = state.requestedBlocks.Get(bmsg.blockHash); !exists {
@@ -1616,7 +1844,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// properly.
 	isCheckpointBlock := false
 
-	if sm.headersFirstMode.Load() {
+	sm.headerMu.Lock()
+	if sm.headersFirstMode.Load() && sm.nextCheckpoint != nil {
 		sm.logger.Debugf("[handleBlockMsg][%s] headers-first mode, checking block", bmsg.blockHash)
 
 		firstNodeEl := sm.headerList.Front()
@@ -1632,6 +1861,14 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			}
 		}
 	}
+
+	sm.headerMu.Unlock()
+
+	// Read the request provenance BEFORE the delete below removes it, and pass it
+	// explicitly to HandleBlockDirect. It is the proof that backs the
+	// below-checkpoint fast paths (see blockRequestOrigin), so it has to outlive
+	// the request bookkeeping.
+	blockOrigin := sm.blockOrigin(state, bmsg.blockHash)
 
 	// Remove block from request maps. Either chain will know about it, and
 	// so we shouldn't have any more instances of trying to fetch it, or we
@@ -1669,6 +1906,58 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			}
 			return errors.NewServiceUnavailableError("[handleBlockMsg][%s] block in backoff after %d transient failure(s)", bmsg.blockHash, fs.attempts)
 		}
+	}
+
+	// Per-(hash, peerID) corrupt re-download cap (bitcoin-sv/teranode#4692): if THIS serving peer has
+	// already failed with a corrupt body for this hash MaxCorruptAttemptsPerBlock times within the
+	// cooldown window, drop this delivery BEFORE the expensive HandleBlockDirect/decorate. This is the
+	// ban-score-independent bound on corrupt re-download amplification PER SERVING IDENTITY (keyed on
+	// (hash, peerID), not the hash alone, so a bad peer never wedges the honest tip — an honest peer
+	// keeps a fresh budget for the same hash; the residual aggregate per-hash work scales with the
+	// number of distinct serving peers). Drop quietly: do NOT reject the block to the peer, do NOT
+	// mark it failed (recentlyFailedBlocks) — preserving the recentlyFailedBlocks no-NOT_FOUND-cascade
+	// property — and do NOT poison. The peer's stall timer is deliberately NOT refreshed, so if a peer
+	// keeps serving the same corrupt hash the stall detector can rotate to one with an honest body.
+	//
+	// Recovery, precisely. In headers-first mode this hash is NOT re-requested on this path, by
+	// design: the headerList entry and both request-map slots were consumed above this gate, and
+	// refillHeaderBlockPipeline only walks forward from sm.startHeader (fetchHeaderBlocks), so it
+	// cannot re-add the dropped hash. requestBlockDirect is deliberately not called either — it
+	// would getdata the same capped peer, whose delivery this gate drops again after the full
+	// block body has crossed the wire but before HandleBlockDirect, i.e. one full block download
+	// per iteration for the whole cooldown window (blockvalidation_corrupt_attempt_cooldown,
+	// default 10m). Recovery is sync-peer rotation instead.
+	//
+	// The pipeline is deliberately NOT refilled here either, unlike the corrupt branch below.
+	// In headers-first mode the header list is a linear chain, so every block a refill would
+	// request descends from the hash just dropped: each of those bodies crosses the wire in full,
+	// refreshes the sync peer's stall timer at RECEIPT inside HandleBlockDirect, and then fails its
+	// parent lookup — and because this gate deliberately does not mark the hash failed, the
+	// descendant short-circuit does not stop them either. Refilling from here would therefore
+	// download and discard bodies that cannot be accepted while postponing the only recovery this
+	// path has.
+	//
+	// It narrows the waste rather than eliminating it, and the comment should not claim more: any
+	// block still in flight at a LOWER height that arrives and validates runs the acceptance
+	// footer, which refills unconditionally in headers-first mode, advances sm.startHeader and so
+	// requests descendants of the dropped hash anyway. What this gate no longer does is CONTRIBUTE
+	// to that; the residual is bounded by the in-flight window, which then drains.
+	//
+	// When rotation begins, precisely: this delivery does not refresh the stall timer, but bodies
+	// already in flight still do at receipt, so the clock starts once the in-flight window (bounded
+	// by calculateMaxInFlightBlocks) has drained. maxLastBlockTime (180 s) then elapses with no
+	// delivery, CheckSyncPeer rotates via updateSyncPeer, which calls resetHeaderState and
+	// startSync, and the dropped hash is re-requested from the new sync peer. So the cost of a
+	// capped hash here is bounded latency, not a lost block.
+	//
+	// The fixed window still self-heals directly in the two cases that do not depend on rotation:
+	// a peer below the cap is never dropped here at all, and outside headers-first mode a later
+	// block arriving as an orphan of this un-stored one triggers a getblocks that re-requests it.
+	// Once the window lapses the counter resets and the same peer's honest body is admitted.
+	if sm.corruptBlockAttemptsExhausted(bmsg.blockHash, bmsg.peer.Addr()) {
+		sm.logger.Warnf("[handleBlockMsg][%s] corrupt re-download cap reached for peer %s; dropping delivery until the cooldown window expires (not rejected, not stored invalid)", bmsg.blockHash, bmsg.peer)
+
+		return nil
 	}
 
 	// Hand sole ownership of the decoded block to HandleBlockDirect. The
@@ -1728,7 +2017,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// Process the block directly. A missing-parent error (ErrBlockNotFound)
 	// always triggers a getblocks request from our best block so block
 	// validation can proceed in order — see the orphan-continuation note below.
-	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.blockHash, msgBlock); err != nil {
+	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.blockHash, msgBlock, blockOrigin); err != nil {
 		if errors.Is(err, errors.ErrBlockNotFound) {
 			// We don't have the parent of this block. While catching blocks
 			// this is typically the peer announcing its tip while we are
@@ -1750,6 +2039,76 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		} else {
 			if errors.Is(err, context.Canceled) || errors.IsContextError(err) {
 				return nil
+			}
+
+			// Corrupt block body (bitcoin-sv/teranode#4692): a body-derived failure (merkle mismatch, CVE
+			// duplicate) that is not bound to the header, so it cannot condemn the hash and is not
+			// a clear peer fault (a body can be corrupted in transit). Drop it WITHOUT rejecting the
+			// block to the peer, WITHOUT marking it failed (which would suppress its descendants),
+			// and WITHOUT disconnecting (see shouldDisconnectOnBlockErr) — re-request is left free so
+			// an honest copy can arrive on the next delivery / sync-peer rotation. Never poison.
+			if errors.IsBlockCorrupt(err) {
+				// Count this corrupt failure toward the per-(hash, peerID) cap (bitcoin-sv/teranode#4692).
+				// Once this serving peer's count for the hash reaches MaxCorruptAttemptsPerBlock the gate
+				// above drops that peer's further deliveries until the fixed window lapses. Recorded ONLY
+				// on an actual corrupt failure, so a below-cap corrupt is still re-downloaded as today.
+				attempts := sm.recordCorruptBlockAttempt(bmsg.blockHash, bmsg.peer.Addr())
+				sm.logger.Warnf("[handleBlockMsg][%s] corrupt block body from peer %s (attempt %d), dropping for re-download (not rejected, not stored invalid): %v", bmsg.blockHash, bmsg.peer, attempts, err)
+
+				// Headers-first: refill the download pipeline before returning so a corrupt drop does
+				// not stall headers-first sync for ~180s (bitcoin-sv/teranode#4692). Pipeline maintenance
+				// ONLY — the corrupt branch must NOT run any accepted-block bookkeeping (rejected-tx
+				// clear, peer-height update, FSM RUN, fee-filter reset), so it calls the extracted refill
+				// rather than falling through the acceptance footer.
+				if sm.headersFirstMode.Load() {
+					if refillErr := sm.refillHeaderBlockPipeline(peer, state); refillErr != nil {
+						sm.logger.Warnf("[handleBlockMsg][%s] header-block pipeline refill after corrupt body failed: %v", bmsg.blockHash, refillErr)
+					}
+				}
+
+				// Unlike the orphan-continuation branch above, this is a headers-first pull sync with
+				// no other mechanism to recover a dropped block: actively re-request the same hash
+				// instead of only waiting for a spontaneous re-announcement (bitcoin-sv/teranode#4692).
+				//
+				// The re-request is a DIRECT getdata, not a getblocks. A getblocks is answered with an
+				// inv, and processInvMsg discards invs while headersFirstMode is set, so it would never
+				// become a getdata and the dropped block would be lost for the rest of the session —
+				// descendants failing their parent lookup until the stall detector rotates the sync
+				// peer. requestBlockDirect also puts the hash back into both request maps, which this
+				// branch cleared above and which handleBlockMsg's unrequested-block guard reads.
+				//
+				// SKIPPED once this peer has reached the cap for this hash (bitcoin-sv/teranode#4692).
+				// The gate above would drop that peer's next delivery of this hash anyway, but only
+				// AFTER the full block body had crossed the wire — the exact waste that gate's own
+				// comment says it avoids by not re-requesting. Gated on corruptBlockAttemptsExhausted
+				// rather than on a re-derived "attempts < MaxCorruptAttemptsPerBlock", so this decision
+				// and that gate agree BY CONSTRUCTION: the predicate reads the counter
+				// recordCorruptBlockAttempt just wrote, and it already handles the cases the arithmetic
+				// gets wrong — a cap of <= 0 means DISABLED, where "attempts < 0" would wrongly suppress
+				// the re-request on every corrupt body, and a nil map/settings fixture. Both fall
+				// through to "re-request", which is the pre-existing behaviour.
+				//
+				// Below the cap, re-requesting from the SAME peer is deliberate — a body can be
+				// corrupted in transit by an honest relay — and the de-duplication argument holds:
+				// outside headers-first this getdata is redundant with the getblocks below but
+				// harmless, because the inv route's getdata loop skips a hash already present in
+				// sm.requestedBlocks, which requestBlockDirect has just set.
+				//
+				// AT the cap that argument no longer applies, and the residual is stated rather than
+				// glossed: the hash is NOT in sm.requestedBlocks, so outside headers-first mode the inv
+				// route will not skip it and may still pull one body, which the gate above then drops.
+				// In headers-first mode the waste is eliminated, because processInvMsg discards invs
+				// while headersFirstMode is set so the getblocks can never become a getdata. Recovery
+				// at the cap is the cooldown window lapsing or sync-peer rotation.
+				if !sm.corruptBlockAttemptsExhausted(bmsg.blockHash, bmsg.peer.Addr()) {
+					sm.requestBlockDirect(peer, state, bmsg.blockHash)
+				}
+
+				// Keep the getblocks as well: in the legacy sync protocol it doubles as the
+				// batch-continuation signal (see requestMissingBlocks), which a getdata does not carry.
+				sm.requestMissingBlocks(peer, bmsg.blockHash)
+
+				return err
 			}
 
 			// Remember this block failed to store/validate so its already-queued
@@ -1795,6 +2154,10 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	if sm.blockFailureBackoff != nil {
 		sm.blockFailureBackoff.Delete(bmsg.blockHash)
 	}
+
+	// Also clear the per-(hash, peerID) corrupt counter (bitcoin-sv/teranode#4692) so an honest body
+	// after the window never inherits a stale corrupt count.
+	sm.clearCorruptBlockAttempts(bmsg.blockHash, bmsg.peer.Addr())
 
 	// Also clear any cascade-suppression marker (#1333): this hash now stores, so
 	// its descendants must no longer be short-circuited as children of a failure.
@@ -1864,7 +2227,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 
 			// Since we are current, we can tell FSM to transition to RUN
 			// Blockchain client will check if miner is registered, if so it will send Mine event, and FSM will transition to Mine
-			if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/handleBlockMsg"); err != nil {
+			if err = sm.runIfCatchingBlocks("legacy/netsync/manager/handleBlockMsg"); err != nil {
 				sm.logger.Errorf("[Sync Manager] failed to send FSM RUN event %v", err)
 			}
 
@@ -1872,25 +2235,19 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		}
 	}
 
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
+	// A peer reset may have changed header state while the block was validated.
+	isCheckpointBlock = isCheckpointBlock && sm.headersFirstMode.Load() &&
+		sm.nextCheckpoint != nil && bmsg.blockHash.IsEqual(sm.nextCheckpoint.Hash)
+
 	// This is headers-first mode, so if the block is not a checkpoint
 	// request more blocks using the header list to maintain the pipeline
 	// at the dynamic max limit (adjusts based on block size).
 	if !isCheckpointBlock {
-		dynamicMax := sm.blockSizeTracker.calculateMaxInFlightBlocks()
-		if sm.startHeader != nil && state.requestedBlocks.Len() < dynamicMax {
-			sm.fetchHeaderBlocks()
-		} else if !sm.current() && state.requestedBlocks.Len() == 0 {
-			sm.logger.Debugf("Not current, and no headers to sync to, fetching more headers")
-
-			latestBlockHeader, _, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
-			if err != nil {
-				return errors.NewServiceError("Failed to get best block header", err)
-			}
-
-			locator := blockchain.BlockLocator([]*chainhash.Hash{latestBlockHeader.Hash()})
-			if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
-				return errors.NewServiceError("Failed to send getblocks message to peer %s", peer.String(), err)
-			}
+		// headerMu is already held by the caller above, so take the Locked variant.
+		if err = sm.refillHeaderBlockPipelineLocked(peer, state); err != nil {
+			return err
 		}
 
 		return nil
@@ -1929,6 +2286,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// from the block after this one up to the end of the chain (zero hash).
 	sm.headersFirstMode.Store(false)
 	sm.headerList.Init()
+	sm.startHeader = nil
+	sm.verifiedCheckpointHeight = 0
 	sm.logger.Infof("Reached the final checkpoint -- switching to normal mode")
 
 	locator := blockchain.BlockLocator([]*chainhash.Hash{&bmsg.blockHash})
@@ -1939,9 +2298,109 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	return nil
 }
 
+// headerNodeProven reports whether this list entry is committed by a checkpoint
+// hash actually matched by handleHeadersMsg. Linkage alone is not proof.
+//
+// nextCheckpoint is the pending download target: it advances on checkpoint BLOCK
+// delivery, before the next header run is verified. Only verifiedCheckpointHeight
+// bounds the proven prefix, including while an unverified tail is being appended.
+// Resetting header state discards this proof along with the list it certifies.
+func (sm *SyncManager) headerNodeProven(node *headerNode) bool {
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
+	return sm.headerNodeProvenLocked(node)
+}
+
+// headerNodeProvenLocked requires headerMu.
+func (sm *SyncManager) headerNodeProvenLocked(node *headerNode) bool {
+	if node == nil || sm.nextCheckpoint == nil {
+		return false
+	}
+
+	return node.height > 0 && node.height <= sm.verifiedCheckpointHeight
+}
+
+// blockOrigin returns the request provenance for a delivered block.
+//
+// It reads the PER-PEER record, not sm.requestedBlocks: New() builds the global
+// map with a 60-second expiry (it exists for handleInvMsg dedupe) while the
+// per-peer map gets 60 minutes precisely because legacy sync and checkpoints need
+// it, and expiringmap.Get neither refreshes nor tolerates expiry. Reading the
+// global map made any block slower than a minute — the common case on mainnet,
+// with multi-GB blocks queued behind up to dynamicMaxInFlight earlier requests —
+// silently lose its header proof and fall back to full validation.
+//
+// This is also the record the unsolicited-block check consults, so provenance and
+// admission consult the same per-peer map. An inv re-request can replace a proof
+// with the untrusted zero value, which safely restores full validation. An absent
+// entry, map or peer state also yields the untrusted zero value.
+func (sm *SyncManager) blockOrigin(state *peerSyncState, blockHash chainhash.Hash) blockRequestOrigin {
+	if state == nil || state.requestedBlocks == nil {
+		return blockRequestOrigin{}
+	}
+
+	origin, _ := state.requestedBlocks.Get(blockHash)
+
+	return origin
+}
+
+// refillHeaderBlockPipeline tops up the headers-first download pipeline so it stays at the dynamic
+// in-flight limit, requesting the next batch of block downloads (bitcoin-sv/teranode#4692). It does
+// ONLY pipeline maintenance — no accepted-block bookkeeping (no rejected-tx clear, no peer-height
+// update, no FSM RUN, no fee-filter reset) — so it is safe to call on a FAILED delivery too.
+//
+// Safe to call is not the same as correct to call, and the two corrupt-body sites differ. On the
+// corrupt branch a refill is right, because that branch re-arms the failing hash itself in the same
+// breath (requestBlockDirect plus requestMissingBlocks), so the descendants it requests have a
+// parent on the way. On the per-(hash, peer) corrupt-cap gate it is wrong and is deliberately not
+// called: that gate re-arms nothing, so in headers-first mode every block a refill would request
+// descends from a hash that will never arrive, and each such body resets the stall timer at receipt
+// before failing its parent lookup — deferring the rotation that is that gate's only recovery.
+// Returns an error only if the getblocks fallback fails.
+//
+// This is the locking entry point, for the corrupt-body drop, which returns long before
+// handleBlockMsg's acceptance footer takes headerMu. The footer itself already holds the mutex and
+// calls refillHeaderBlockPipelineLocked directly.
+func (sm *SyncManager) refillHeaderBlockPipeline(peer *peerpkg.Peer, state *peerSyncState) error {
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
+
+	return sm.refillHeaderBlockPipelineLocked(peer, state)
+}
+
+// refillHeaderBlockPipelineLocked requires headerMu. It reads sm.startHeader and calls
+// fetchHeaderBlocksLocked, both of which are headerMu-guarded.
+func (sm *SyncManager) refillHeaderBlockPipelineLocked(peer *peerpkg.Peer, state *peerSyncState) error {
+	dynamicMax := sm.blockSizeTracker.calculateMaxInFlightBlocks()
+	if sm.startHeader != nil && state.requestedBlocks.Len() < dynamicMax {
+		sm.fetchHeaderBlocksLocked()
+	} else if !sm.current() && state.requestedBlocks.Len() == 0 {
+		sm.logger.Debugf("Not current, and no headers to sync to, fetching more headers")
+
+		latestBlockHeader, _, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
+		if err != nil {
+			return errors.NewServiceError("Failed to get best block header", err)
+		}
+
+		locator := blockchain.BlockLocator([]*chainhash.Hash{latestBlockHeader.Hash()})
+		if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
+			return errors.NewServiceError("Failed to send getblocks message to peer %s", peer.String(), err)
+		}
+	}
+
+	return nil
+}
+
 // fetchHeaderBlocks creates and sends a request to the syncPeer for the next
 // list of blocks to be downloaded based on the current list of headers.
 func (sm *SyncManager) fetchHeaderBlocks() {
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
+	sm.fetchHeaderBlocksLocked()
+}
+
+// fetchHeaderBlocksLocked requires headerMu.
+func (sm *SyncManager) fetchHeaderBlocksLocked() {
 	// Nothing to do if there is no sync peer.
 	sp := sm.loadSyncPeer()
 	if sp == nil {
@@ -2006,9 +2465,23 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 				break
 			}
 
-			sm.requestedBlocks.Set(*node.hash, struct{}{})
-			peerState, _ := sm.peerStates.Get(sp)
-			peerState.requestedBlocks.Set(*node.hash, struct{}{})
+			// This is the ONLY place that records header provenance. The proof does
+			// not extend to the whole list — see headerNodeProven.
+			origin := blockRequestOrigin{headerProven: sm.headerNodeProvenLocked(node)}
+
+			sm.requestedBlocks.Set(*node.hash, origin)
+
+			// peerState is the one fetched and existence-checked above, deliberately not
+			// looked up again here. sp does not change across the loop, so a second lookup
+			// returned the same value on every iteration, and it discarded the existence
+			// flag. A peer that went away between the check above and this line therefore
+			// left a nil pointer that was written to immediately, which segfaulted the node
+			// on mainnet on 2026-09-02 with an invalid memory address at offset 0x18.
+			//
+			// Reusing the checked pointer is also correct when the peer HAS gone: the map it
+			// writes into is that peer's own, so a stale entry is read by nobody and the
+			// disconnect path discards the whole state.
+			peerState.requestedBlocks.Set(*node.hash, origin)
 
 			numRequested++
 		}
@@ -2029,6 +2502,9 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 // handleHeadersMsg handles block header messages from all peers.  Headers are
 // requested when performing a headers-first sync.
 func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
+	sm.headerMu.Lock()
+	defer sm.headerMu.Unlock()
+
 	sm.logger.Debugf("[handleHeadersMsg] received headers message with %d headers from %s", len(hmsg.headers.Headers), hmsg.peer)
 	peer := hmsg.peer
 
@@ -2048,7 +2524,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 	msg := hmsg.headers
 	numHeaders := len(msg.Headers)
 
-	if !sm.headersFirstMode.Load() {
+	if !sm.headersFirstMode.Load() || sm.nextCheckpoint == nil {
 		reason := fmt.Sprintf("Got %d unrequested headers from %s", numHeaders, peer.String())
 		peer.DisconnectWithWarning(reason)
 
@@ -2077,7 +2553,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 			return
 		}
 
-		sm.resetHeaderState(bestBlockHeader.Hash(), bestBlockHeightInt32)
+		sm.resetHeaderStateLocked(bestBlockHeader.Hash(), bestBlockHeightInt32)
 
 		prevNodeEl = sm.headerList.Back()
 		if prevNodeEl == nil {
@@ -2125,6 +2601,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 		// Verify the header at the next checkpoint height matches.
 		if node.height == sm.nextCheckpoint.Height {
 			if node.hash.IsEqual(sm.nextCheckpoint.Hash) {
+				sm.verifiedCheckpointHeight = node.height
 				receivedCheckpoint = true
 
 				sm.logger.Infof("Verified downloaded block "+
@@ -2153,7 +2630,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 		// fetching the blocks.
 		sm.headerList.Remove(sm.headerList.Front())
 		sm.logger.Infof("Received %v block headers: Fetching blocks", sm.headerList.Len())
-		sm.fetchHeaderBlocks()
+		sm.fetchHeaderBlocksLocked()
 
 		return
 	}
@@ -2326,8 +2803,12 @@ outside:
 					break outside
 				}
 
-				sm.requestedBlocks.Set(iv.Hash, struct{}{})
-				state.requestedBlocks.Set(iv.Hash, struct{}{})
+				// Peer-advertised: we are requesting this only because a peer said it
+				// exists. That is no proof of checkpoint ancestry, so the origin stays
+				// at its untrusted zero value and quickValidationAllowed will deny the
+				// below-checkpoint fast path for it.
+				sm.requestedBlocks.Set(iv.Hash, blockRequestOrigin{})
+				state.requestedBlocks.Set(iv.Hash, blockRequestOrigin{})
 
 				numRequested++
 			}
@@ -2530,11 +3011,12 @@ out:
 				sm.logger.Errorf("[SyncManager] failed to get fsm current state")
 			}
 
-			// we reached current in legacy, and current FSM state is not Running, send RUN event
-			if currentState != nil && *currentState != teranodeblockchain.FSMStateRUNNING {
+			// Only observed catchup needs automatic promotion. This cached
+			// prefilter also avoids the expensive current() check while parked.
+			if err == nil && currentState != nil && *currentState == teranodeblockchain.FSMStateCATCHINGBLOCKS {
 				if sm.current() { // only call this when we are not in the running state, it's an expensive call
 					sm.logger.Infof("[SyncManager] Legacy reached current, sending RUN event to FSM")
-					if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/blockHandler"); err != nil {
+					if err = sm.runIfCatchingBlocks("legacy/netsync/manager/blockHandler"); err != nil {
 						sm.logger.Infof("[Sync Manager] failed to send FSM RUN event %v", err)
 					}
 
@@ -3062,6 +3544,10 @@ func (sm *SyncManager) Stop() error {
 		sm.recentlyFailedBlocks.Stop()
 	}
 
+	if sm.blockCorruptAttempts != nil {
+		sm.blockCorruptAttempts.Stop()
+	}
+
 	// DC15 / review C1: quiesce Put then drain the tx-announce batcher before
 	// tearing down transports.
 	sm.closeTxAnnounceBatcher()
@@ -3087,13 +3573,69 @@ func (sm *SyncManager) Stop() error {
 // the txmeta Kafka listener goroutine (not joined by Stop), so the read lock
 // pairs with the write lock in closeTxAnnounceBatcher to make a post-close Put a
 // safe no-op.
-func (sm *SyncManager) announceTx(item *TxHashAndFee) {
+func (sm *SyncManager) announceTx(item *TxHashAndFee, parents ...chainhash.Hash) {
 	sm.txAnnounceMu.RLock()
 	defer sm.txAnnounceMu.RUnlock()
 
 	if !sm.txAnnounceClosed && sm.txAnnounceBatcher != nil {
+		if len(parents) > 0 && sm.announceParents != nil {
+			sm.announceParents.Set(item.TxHash, parents)
+		}
+
 		sm.txAnnounceBatcher.Put(item)
 	}
+}
+
+// newTxAnnounceBatcher builds the batcher that announces new txs to peers,
+// parents first within each batch.
+//
+// It runs with background=false, so the batcher's worker flushes one batch
+// at a time, in order. With background=true go-batcher starts a goroutine
+// per flush, so a child in one batch could reach peers before its parent in
+// the previous one. The callback does not block: AnnounceNewTransactions
+// hands each batch to an ordered sender and returns.
+func (sm *SyncManager) newTxAnnounceBatcher(size int, timeout time.Duration) *batcher.BatcherWithDedup[TxHashAndFee] {
+	return batcher.NewWithDeduplicationAndPool[TxHashAndFee](size, timeout, func(batch []*TxHashAndFee) {
+		sm.logger.Debugf("announcing %d transactions to peers", len(batch))
+
+		// process the batch, parents first
+		sm.peerNotifier.AnnounceNewTransactions(sm.orderAnnounceBatch(batch))
+	}, false,
+		batcher.WithName("netsync_tx_announce"),
+		batcher.WithLogger(sm.logger),
+		batcher.WithMetrics(batchermetrics.Provider()),
+		batcher.WithTracer(tracing.Tracer("SyncManager").OTelTracer()),
+	)
+}
+
+// orderAnnounceBatch reorders a batch from txAnnounceBatcher so every tx
+// comes after any of its parents in the same batch. The txmeta topic is
+// spread over partitions, so a child can be read, and batched, before its
+// parent; SV Node only accepts a child once it has the parent. A child whose
+// parent is in a later batch is not held back: the peer's orphan pool and the
+// rebroadcast queue cover that. Returns a new slice, since the batcher reuses
+// the one it passes in.
+func (sm *SyncManager) orderAnnounceBatch(batch []*TxHashAndFee) []*TxHashAndFee {
+	hashes := make([]chainhash.Hash, len(batch))
+	parents := make([][]chainhash.Hash, len(batch))
+
+	for i, item := range batch {
+		hashes[i] = item.TxHash
+
+		if sm.announceParents != nil {
+			if p, ok := sm.announceParents.Get(item.TxHash); ok {
+				parents[i] = p
+				sm.announceParents.Delete(item.TxHash)
+			}
+		}
+	}
+
+	ordered := make([]*TxHashAndFee, 0, len(batch))
+	for _, i := range ParentsFirst(hashes, func(i int) []chainhash.Hash { return parents[i] }) {
+		ordered = append(ordered, batch[i])
+	}
+
+	return ordered
 }
 
 // closeTxAnnounceBatcher marks the tx-announce batcher closed (so further
@@ -3162,9 +3704,9 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		// txMemPool:     config.TxMemPool,
 		orphanTxs:       expiringmap.New[chainhash.Hash, *orphanTxAndParents](tSettings.Legacy.OrphanEvictionDuration).WithMaxSize(tSettings.Legacy.MaxOrphanTxs),
 		chainParams:     config.ChainParams,
-		rejectedTxns:    txmap.NewSyncedMap[chainhash.Hash, struct{}](maxRejectedTxns), // limit map size to maxRejectedTxns
-		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),   // give peers 10 seconds to respond
-		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](60 * time.Second),   // give peers 60 seconds to respond
+		rejectedTxns:    txmap.NewSyncedMap[chainhash.Hash, struct{}](maxRejectedTxns),         // limit map size to maxRejectedTxns
+		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),           // give peers 10 seconds to respond
+		requestedBlocks: expiringmap.New[chainhash.Hash, blockRequestOrigin](60 * time.Second), // give peers 60 seconds to respond
 		peerStates:      txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
 		// progressLogger:  newBlockProgressLogger("Processed", log),
 		msgChan:          make(chan interface{}, maxMsgQueueSize),
@@ -3207,17 +3749,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	}
 
 	// create the transaction announcement batcher
-	sm.txAnnounceBatcher = batcher.NewWithDeduplicationAndPool[TxHashAndFee](maxRequestedTxns, 1*time.Second, func(batch []*TxHashAndFee) {
-		sm.logger.Debugf("announcing %d transactions to peers", len(batch))
-
-		// process the batch
-		sm.peerNotifier.AnnounceNewTransactions(batch)
-	}, true,
-		batcher.WithName("netsync_tx_announce"),
-		batcher.WithLogger(logger),
-		batcher.WithMetrics(batchermetrics.Provider()),
-		batcher.WithTracer(tracing.Tracer("SyncManager").OTelTracer()),
-	)
+	sm.announceParents = txmap.NewSyncedMap[chainhash.Hash, []chainhash.Hash](2 * maxRequestedTxns)
+	sm.txAnnounceBatcher = sm.newTxAnnounceBatcher(maxRequestedTxns, 1*time.Second)
 
 	// set an eviction function for orphan transactions
 	// this will be called when an orphan transaction is evicted from the map
@@ -3225,7 +3758,35 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		// try to process one last time
 		// passing in block height 0, which will default to utxo store block height in validator
 		if _, err := sm.validationClient.Validate(sm.ctx, orphanTx.tx, 0); err != nil {
-			sm.logger.Debugf("failed to validate orphan transaction when evicting %v: %v", txHash, err)
+			// ErrTxUnlockFailed means the orphan was ACCEPTED - spent, created and delivered to
+			// block assembly - and only an unlock is outstanding, so it is not a validation
+			// failure. Every other Validate call site branches on this code; leaving it out here
+			// costs a misleading "failed to validate" line for a transaction the node took.
+			if errors.Is(err, errors.ErrTxUnlockFailed) {
+				sm.logger.Debugf("evicted orphan transaction %v, it was accepted with its unlock pending", txHash)
+			} else {
+				// The tx is now dropped for good: it never validated and nothing will
+				// retry it. This is the event that hid the #1214 ghost-spender incident
+				// for ~40 hours, so every abandonment is counted — the metric is the
+				// dashboard signal.
+				//
+				// Only ErrTxMissingParent is demoted to Debugf: the orphan outlived its
+				// wait for a parent that never arrived, which is the normal outcome for a
+				// chunk of orphans during initial sync and carries no operator signal.
+				// ErrTxLocked stays at WARN even though the parking path treats it as an
+				// orphan class alongside ErrTxMissingParent — it means the parent's record
+				// is still two-phase-commit locked pending block-assembly ack, a window
+				// measured in milliseconds, so a lock that outlived the whole orphan TTL
+				// is anomalous rather than routine. Everything else (policy rejection,
+				// storage failure) stays at WARN for the obvious reason.
+				prometheusLegacyNetsyncOrphansAbandoned.Inc()
+
+				if errors.Is(err, errors.ErrTxMissingParent) {
+					sm.logger.Debugf("orphan transaction %v abandoned after eviction, never validated: %v", txHash, err)
+				} else {
+					sm.logger.Warnf("orphan transaction %v abandoned after eviction, never validated: %v", txHash, err)
+				}
+			}
 		} else {
 			sm.logger.Debugf("evicted orphan transaction %v", txHash)
 		}
@@ -3268,6 +3829,13 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// (#1333). Like blockFailureBackoff this starts a background eviction goroutine
 	// stopped only via Stop(), so build it after the last fallible step above.
 	sm.recentlyFailedBlocks = expiringmap.New[chainhash.Hash, struct{}](recentlyFailedBlocksTTL).WithMaxSize(blockFailureBackoffMaxTracked)
+
+	// Per-(hash, peerID) corrupt re-download cap (bitcoin-sv/teranode#4692), keyed on the serving peer
+	// so a bad peer never wedges an honest tip. The map's retention equals the cooldown window so an
+	// entry survives its own window even with no further deliveries; the LOGICAL fixed window lives in
+	// corruptAttemptState.windowExpiry (Set re-extends map retention but never the logical window).
+	// Like the maps above, started here after the last fallible step.
+	sm.blockCorruptAttempts = expiringmap.New[legacyCorruptAttemptKey, *corruptAttemptState](legacyCorruptAttemptCooldown(tSettings)).WithMaxSize(blockFailureBackoffMaxTracked)
 
 	if !config.DisableCheckpoints {
 		bestBlockHeightInt32, err := safeconversion.Uint32ToInt32(bestBlockHeaderMeta.Height)
@@ -3439,42 +4007,49 @@ func (sm *SyncManager) kafkaINVListener(ctx context.Context, kafkaURL *url.URL, 
 }
 
 func (sm *SyncManager) kafkaBlocksFinalListener(ctx context.Context, kafkaURL *url.URL, groupID string) {
-	kafka.StartKafkaListener(ctx, sm.logger, kafkaURL, groupID, true, func(msg *kafka.KafkaMessage) error {
-		if msg.Key == nil {
-			sm.logger.Errorf("[kafkaBlocksFinalListener] no Kafka message key specified, skipping message")
-			// not going to retry, if we don't have a key/hash
-			return nil
-		}
+	kafka.StartKafkaListener(ctx, sm.logger, kafkaURL, groupID, true, sm.processBlocksFinalMessage, &sm.settings.Kafka)
+}
 
-		hash, err := chainhash.NewHashFromStr(string(msg.Key))
-		if err != nil {
-			sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to create hash from Kafka message key: %v", hash, err)
-			// not going to retry, if we cannot parse the message
-			return nil
-		}
-
-		var blockMsg kafkamessage.KafkaBlocksFinalTopicMessage
-		if err := proto.Unmarshal(msg.Value, &blockMsg); err != nil {
-			sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to unmarshal kafka block topic message: %v", hash, err)
-			// not going to retry, if we cannot parse the message
-			return nil
-		}
-
-		header, err := model.NewBlockHeaderFromBytes(blockMsg.Header)
-		if err != nil {
-			sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to create block header from Kafka message: %v", hash, err)
-			// not going to retry, if we cannot parse the message
-			return nil
-		}
-
-		// create wireBlockHeader
-		wireBlockHeader := header.ToWireBlockHeader()
-
-		sm.logger.Infof("[kafkaBlocksFinalListener] received block final message from Kafka: %s, %s", hash, header.String())
-		sm.peerNotifier.RelayInventory(wire.NewInvVect(wire.InvTypeBlock, hash), wireBlockHeader)
-
+// processBlocksFinalMessage announces a block from the blocks_final topic to
+// peers and signals the rebroadcast queue that a new block has been added.
+// Malformed messages are logged and skipped; it never returns an error, so
+// the listener does not retry them.
+func (sm *SyncManager) processBlocksFinalMessage(msg *kafka.KafkaMessage) error {
+	if msg.Key == nil {
+		sm.logger.Errorf("[kafkaBlocksFinalListener] no Kafka message key specified, skipping message")
+		// not going to retry, if we don't have a key/hash
 		return nil
-	}, &sm.settings.Kafka)
+	}
+
+	hash, err := chainhash.NewHashFromStr(string(msg.Key))
+	if err != nil {
+		sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to create hash from Kafka message key: %v", hash, err)
+		// not going to retry, if we cannot parse the message
+		return nil
+	}
+
+	var blockMsg kafkamessage.KafkaBlocksFinalTopicMessage
+	if err := proto.Unmarshal(msg.Value, &blockMsg); err != nil {
+		sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to unmarshal kafka block topic message: %v", hash, err)
+		// not going to retry, if we cannot parse the message
+		return nil
+	}
+
+	header, err := model.NewBlockHeaderFromBytes(blockMsg.Header)
+	if err != nil {
+		sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to create block header from Kafka message: %v", hash, err)
+		// not going to retry, if we cannot parse the message
+		return nil
+	}
+
+	// create wireBlockHeader
+	wireBlockHeader := header.ToWireBlockHeader()
+
+	sm.logger.Infof("[kafkaBlocksFinalListener] received block final message from Kafka: %s, %s", hash, header.String())
+	sm.peerNotifier.RelayInventory(wire.NewInvVect(wire.InvTypeBlock, hash), wireBlockHeader)
+	sm.peerNotifier.BlockConnected()
+
+	return nil
 }
 
 // kafkaTXmetaListener processes TxMeta Kafka messages in binary batch format.
@@ -3618,7 +4193,7 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 				TxHash: hash,
 				Fee:    txMeta.Fee,
 				Size:   txMeta.SizeInBytes,
-			})
+			}, txMeta.TxInpoints.ParentTxHashes...)
 		} else {
 			offset += int(contentLen)
 			continue
@@ -3626,4 +4201,11 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 	}
 
 	return nil
+}
+
+// suppressBlockRejects reports whether invalid blocks must not be rejected to the
+// serving peer. Only RUNNING proves the node is caught up; IDLE is included
+// because an operator STOP can land while blocks are still syncing.
+func suppressBlockRejects(state *teranodeblockchain.FSMStateType) bool {
+	return state == nil || *state != teranodeblockchain.FSMStateRUNNING
 }

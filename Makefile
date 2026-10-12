@@ -179,11 +179,23 @@ test:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
 
-# run tests in the test/longtest directory
+# run tagged service regressions and tests in the test/longtest directory
 .PHONY: longtest
 longtest:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache longtest" -count=1 -timeout=10m -run '^TestLegacyHistoricalTestnetSync$$' ./services/legacy/netsync
 	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"
+
+# run the soak test: the in-process daemon under steady tx load for SOAK_DURATION, failing if heap or goroutine
+# counts trend upward. No -race: the detector skews memory and throughput, which is what this test measures.
+# SOAK_TIMEOUT must exceed SOAK_DURATION by at least 10m. Other knobs (SOAK_WARMUP, SOAK_SAMPLE_INTERVAL,
+# SOAK_TXS_PER_CYCLE, SOAK_UTXO_STORE, SOAK_OUTPUT_DIR, SOAK_INJECT_LEAK) are read from the environment.
+# Example: make soaktest SOAK_DURATION=2h SOAK_TIMEOUT=150m
+SOAK_DURATION ?= 30m
+SOAK_TIMEOUT ?= 60m
+.PHONY: soaktest
+soaktest:
+	SETTINGS_CONTEXT=test SOAK_DURATION=$(SOAK_DURATION) go test -v -count=1 -tags "soak testtxmetacache" -timeout=$(SOAK_TIMEOUT) -run '^TestSoakSteadyLoad$$' ./test/soak/...
 
 # run tests in the test/sequentialtest directory in order, one by one
 # Environment variables:
@@ -220,6 +232,46 @@ sequentialtest-shard:
 
 .PHONY: testall
 testall: test longtest sequentialtest
+
+# Fuzz targets as "package:FuzzTarget" pairs. Keep in sync with the matrix in
+# .github/workflows/fuzz.yaml, which fuzzes the same list nightly with a larger
+# budget.
+#
+# A Go fuzz target only mutates inputs when invoked with -fuzz. Under `make
+# test` these same functions merely replay their committed seed corpus as
+# ordinary table tests, so they can never find a new crashing input - running
+# them here is the only way to actually fuzz them locally.
+FUZZ_TARGETS = \
+	model:FuzzNewBlockFromBytes \
+	model:FuzzReadBlockFromReader \
+	model:FuzzDiskParentSpendsMap_Parity \
+	pkg/fileformat:FuzzHeaderParsersAgree \
+	pkg/fileformat:FuzzReadHeaderFromBytes \
+	services/utxopersister:FuzzUTXOWrapperFromBytes \
+	services/legacy/peer:FuzzReadWireMessage \
+	services/legacy/peer:FuzzStreamingBlockFraming \
+	services/rpc/bsvjson:FuzzParseRPCRequest \
+	services/rpc/bsvjson:FuzzUnmarshalCmd
+
+# Per-target budget. The nightly workflow uses 5m; the default here is kept
+# short so `make fuzz` is usable as a pre-push check.
+FUZZTIME ?= 30s
+# Minimization is unbounded by default, which can outlast the budget and hide
+# the crasher. Cap it so a hit is always written out.
+FUZZMINIMIZETIME ?= 60s
+
+# Fuzz every target in FUZZ_TARGETS, stopping at the first crasher.
+# A discovered input is written to <package>/testdata/fuzz/<Target>/<hash>
+# along with a `go test -run=<Target>/<hash>` reproducer.
+# Example: make fuzz FUZZTIME=5m
+.PHONY: fuzz
+fuzz:
+	@for t in $(FUZZ_TARGETS); do \
+		pkg=$${t%%:*}; target=$${t##*:}; \
+		echo "==> $$target ($$pkg), $(FUZZTIME)"; \
+		go test -run='^$$' -fuzz="^$$target$$" -fuzztime=$(FUZZTIME) \
+			-fuzzminimizetime=$(FUZZMINIMIZETIME) ./$$pkg/ || exit 1; \
+	done
 
 # run tests in the test/e2e/daemon directory
 # Tests run in parallel by default - each test gets unique ports and data directories
@@ -502,9 +554,44 @@ install-lint:
 # lint will check the changed files in the current branch compared to main, including commits and unstaged/untracked changes
 # It will show new linting errors/warnings, by updating local copy of origin/main with the latest state of the remote main branch.
 .PHONY: lint
-lint:
+lint: lint-tracing-info
 	git fetch origin main
 	golangci-lint run ./... --new-from-rev origin/main --disable gosec --disable prealloc # TODO: re-enable gosec once gosec >v2.23.0 is released (fixes float constant panic)
+
+# tracing.WithLogMessage logs at INFO on span start AND again on span end, so each
+# call site costs two INFO lines per operation. Sites on per-transaction,
+# per-subtree or per-request paths belong on tracing.WithDebugLogMessage instead.
+# This gate pins that count exactly, so it ratchets both ways: adding a site
+# fails, and so does removing one without lowering the number here. Otherwise a
+# demotion would free a slot that a later INFO site could take unnoticed.
+# Change TRACING_INFO_SITES in the same commit as the site, and say why.
+# Only production code counts: test files are excluded so that deleting a test
+# cannot silently free a slot for a new production INFO site.
+TRACING_INFO_SITES := 61
+
+.PHONY: lint-tracing-info
+lint-tracing-info:
+	@count=$$(git grep -oh "tracing\.WithLogMessage(" -- '*.go' ':!*_test.go' ':!test/**' | wc -l | tr -d ' '); \
+	if [ "$$count" -lt 1 ]; then \
+		echo "lint-tracing-info: counted $$count sites, which cannot be right."; \
+		echo "Either the count command failed (not a git checkout, or git grep"; \
+		echo "unavailable) or tracing.WithLogMessage was renamed and this gate needs"; \
+		echo "updating. Failing rather than passing silently."; \
+		exit 1; \
+	fi; \
+	if [ "$$count" -gt "$(TRACING_INFO_SITES)" ]; then \
+		echo "tracing.WithLogMessage sites: $$count (expected $(TRACING_INFO_SITES))"; \
+		echo "Each is two INFO lines per operation. Use tracing.WithDebugLogMessage on"; \
+		echo "per-tx/per-subtree/per-request paths, or raise TRACING_INFO_SITES deliberately."; \
+		exit 1; \
+	elif [ "$$count" -lt "$(TRACING_INFO_SITES)" ]; then \
+		echo "tracing.WithLogMessage sites: $$count (expected $(TRACING_INFO_SITES))"; \
+		echo "A site was removed or demoted. Lower TRACING_INFO_SITES to $$count in the"; \
+		echo "same change, so the freed slot cannot be reused by a new INFO site."; \
+		exit 1; \
+	else \
+		echo "tracing.WithLogMessage sites: $$count (expected $(TRACING_INFO_SITES)) OK"; \
+	fi
 
 # lint-new will only check only your unstaged/untracked changes (not committed changes), or fallback to check last commit if no changes in checkout
 # It is useful for quickly checking that your current, uncommitted work doesn't introduce new lint errors.

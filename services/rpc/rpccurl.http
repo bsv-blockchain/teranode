@@ -7,12 +7,15 @@
 #    ```
 #    rm -rf data
 #    SETTINGS_CONTEXT=dev.system.test go run .
-#    grpcurl -plaintext localhost:8087 blockchain_api.BlockchainAPI.Run
+#    grpcurl -plaintext -H "x-api-key: $grpc_admin_api_key" -import-path . \
+#      -proto services/blockchain/blockchain_api/blockchain_api.proto \
+#      localhost:8087 blockchain_api.BlockchainAPI.Run
 #    ```
 ###############################################################################
 
 @hostname = localhost
 @port = 9292
+# Set these to the rpc_user/rpc_pass configured for the node you are hitting.
 @credentials = bitcoin:bitcoin
 
 ### Get Best Block Hash

@@ -798,90 +798,126 @@ func bsvdLookup(host string) ([]net.IP, error) {
 	return cfg.lookup(host)
 }
 
-// setConfigValuesFromSettings applies configuration values from the settings map to the config struct
-// using reflection. It processes keys with the "legacy_config_" prefix, removing the prefix and
-// mapping the remaining key to the corresponding config struct field. Supports various data types
-// including bool, int, uint32, uint64, int64 (as time.Duration), float64, uint, string, and slices.
-func setConfigValuesFromSettings(logger ulogger.Logger, settings map[string]string, cfg *config) {
-	for k, v := range settings {
-		// check whether the key is of the form "legacy_config_" + configKey
-		if strings.HasPrefix(k, "legacy_config_") {
-			// remove the prefix
-			configKey := k[len("legacy_config_"):]
-			// set the value to the configKey of the map cfg, using reflection
-			// this is done to avoid having to add a new if statement for each new config key
-			field := reflect.ValueOf(cfg).Elem().FieldByName(configKey)
-			if field.IsValid() {
-				// set the value of this field to the correct type
-				switch field.Kind() {
-				case reflect.Bool:
-					field.SetBool(v == "true")
-				case reflect.Int:
-					intVal, err := strconv.Atoi(v)
-					if err != nil {
-						logger.Warnf("Could not convert %s to int: %v", v, err)
-					} else {
-						field.SetInt(int64(intVal))
-					}
-				case reflect.Uint32:
-					uintVal, err := strconv.ParseUint(v, 10, 32)
-					if err != nil {
-						logger.Warnf("Could not convert %s to uint32: %v", v, err)
-					} else {
-						field.SetUint(uintVal)
-					}
-				case reflect.Uint64:
-					uintVal, err := strconv.ParseUint(v, 10, 64)
-					if err != nil {
-						logger.Warnf("Could not convert %s to uint64: %v", v, err)
-					} else {
-						field.SetUint(uintVal)
-					}
-				case reflect.Int64:
-					// this is actually a time duration
-					duration, err := time.ParseDuration(v)
-					if err != nil {
-						logger.Warnf("Could not convert %s to time.Duration: %v", v, err)
-					} else {
-						field.SetInt(duration.Nanoseconds())
-					}
-				case reflect.Float64:
-					floatVal, err := strconv.ParseFloat(v, 64)
-					if err != nil {
-						logger.Warnf("Could not convert %s to float64: %v", v, err)
-					} else {
-						field.SetFloat(floatVal)
-					}
-				case reflect.Uint:
-					uintVal, err := strconv.ParseUint(v, 10, 64)
-					if err != nil {
-						logger.Warnf("Could not convert %s to uint: %v", v, err)
-					} else {
-						field.SetUint(uintVal)
-					}
-				case reflect.String:
-					field.SetString(v)
-				case reflect.Slice:
-					// only if the string is not empty
-					if v == "" {
-						continue
-					}
+// setConfigValuesFromSettings applies configuration values from settings to the config struct
+// using reflection. It looks for keys of the form "legacy_config_" + configKey, removing the
+// prefix and mapping the remaining key to the corresponding config struct field. Supports various
+// data types including bool, int, uint32, uint64, int64 (as time.Duration), float64, uint, string,
+// and slices.
+//
+// settingsConfig.GetAll() is only used to enumerate which "legacy_config_" keys exist (across all
+// contexts) so unknown keys can be flagged; the values themselves are always re-read through
+// settingsConfig.Get, because GetAll returns the raw conf map with no context-suffix resolution
+// (e.g. "legacy_config_Upnp.dev") and no "${VAR}" interpolation. Reading raw map values here would
+// silently ignore any context-suffixed or interpolated setting.
+func setConfigValuesFromSettings(logger ulogger.Logger, settingsConfig Config, cfg *config) {
+	processed := make(map[string]bool)
 
-					// split the string by the pipe character
-					slice := strings.Split(v, "|")
-					// create a new slice of the correct type
-					newSlice := reflect.MakeSlice(field.Type(), len(slice), len(slice))
-					// iterate over the slice and set the values
-					for i, val := range slice {
-						newSlice.Index(i).SetString(val)
-					}
-					// set the field to the new slice
-					field.Set(newSlice)
-				default:
-					// time.Duration
-					logger.Warnf("Unsupported type for config key %s: %v", configKey, field.Kind())
-				}
+	for k := range settingsConfig.GetAll() {
+		// check whether the key is of the form "legacy_config_" + configKey
+		if !strings.HasPrefix(k, "legacy_config_") {
+			continue
+		}
+
+		// remove the prefix; the remainder may itself carry a context/app
+		// suffix (e.g. "Upnp.dev", "DataDir.operator"), which is not part
+		// of the struct field name, so only the segment before the first
+		// "." can match a field.
+		remainder := k[len("legacy_config_"):]
+
+		configKey := remainder
+		if idx := strings.Index(remainder, "."); idx != -1 {
+			configKey = remainder[:idx]
+		}
+
+		if processed[configKey] {
+			continue
+		}
+
+		processed[configKey] = true
+
+		// set the value to the configKey of the map cfg, using reflection
+		// this is done to avoid having to add a new if statement for each new config key
+		field := reflect.ValueOf(cfg).Elem().FieldByName(configKey)
+		if !field.IsValid() {
+			logger.Warnf("legacy_config_%s does not match any known legacy config field, ignoring", configKey)
+			continue
+		}
+
+		// resolve through the context-aware accessor (handles context
+		// suffixes and "${VAR}" interpolation), not the raw GetAll() map.
+		v, ok := settingsConfig.Get("legacy_config_" + configKey)
+		if !ok {
+			continue
+		}
+
+		// set the value of this field to the correct type
+		switch field.Kind() {
+		case reflect.Bool:
+			field.SetBool(v == "true")
+		case reflect.Int:
+			intVal, err := strconv.Atoi(v)
+			if err != nil {
+				logger.Warnf("Could not convert %s to int: %v", v, err)
+			} else {
+				field.SetInt(int64(intVal))
 			}
+		case reflect.Uint32:
+			uintVal, err := strconv.ParseUint(v, 10, 32)
+			if err != nil {
+				logger.Warnf("Could not convert %s to uint32: %v", v, err)
+			} else {
+				field.SetUint(uintVal)
+			}
+		case reflect.Uint64:
+			uintVal, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				logger.Warnf("Could not convert %s to uint64: %v", v, err)
+			} else {
+				field.SetUint(uintVal)
+			}
+		case reflect.Int64:
+			// this is actually a time duration
+			duration, err := time.ParseDuration(v)
+			if err != nil {
+				logger.Warnf("Could not convert %s to time.Duration: %v", v, err)
+			} else {
+				field.SetInt(duration.Nanoseconds())
+			}
+		case reflect.Float64:
+			floatVal, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				logger.Warnf("Could not convert %s to float64: %v", v, err)
+			} else {
+				field.SetFloat(floatVal)
+			}
+		case reflect.Uint:
+			uintVal, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				logger.Warnf("Could not convert %s to uint: %v", v, err)
+			} else {
+				field.SetUint(uintVal)
+			}
+		case reflect.String:
+			field.SetString(v)
+		case reflect.Slice:
+			// only if the string is not empty
+			if v == "" {
+				continue
+			}
+
+			// split the string by the pipe character
+			slice := strings.Split(v, "|")
+			// create a new slice of the correct type
+			newSlice := reflect.MakeSlice(field.Type(), len(slice), len(slice))
+			// iterate over the slice and set the values
+			for i, val := range slice {
+				newSlice.Index(i).SetString(val)
+			}
+			// set the field to the new slice
+			field.Set(newSlice)
+		default:
+			// time.Duration
+			logger.Warnf("Unsupported type for config key %s: %v", configKey, field.Kind())
 		}
 	}
 }

@@ -2,6 +2,17 @@ global:
   scrape_interval: 30s
   evaluation_interval: 30s
 
+rule_files:
+  - 'blockassembly.rules.yml'
+
+# Without this, alert rules are evaluated but firing alerts go nowhere except
+# the Prometheus UI. The local Alertmanager has no notifier configured (see
+# alertmanager.yml) — it just makes the routing path exist.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
 scrape_configs:
   - job_name: 'prometheus'
     static_configs:

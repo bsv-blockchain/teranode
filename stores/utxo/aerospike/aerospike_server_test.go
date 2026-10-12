@@ -1705,8 +1705,43 @@ func TestSmokeTests(t *testing.T) {
 		tests.SpendAndCreateInvalidOptions(t, store)
 	})
 
+	t.Run("aerospike_delete_then_unspend_restores_parent", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.DeleteThenUnspendRestoresParent(t, store)
+	})
+
+	t.Run("aerospike_delete_then_unspend_restores_parent_paginated", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.DeleteThenUnspendRestoresParentPaginated(t, store, tSettings.UtxoStore.UtxoBatchSize)
+	})
+
 	t.Run("aerospike_conflict_WAL_crash_recovery", func(t *testing.T) {
 		tests.ConflictWALCrashRecovery(t, store)
+	})
+
+	t.Run("aerospike_partial_spend_rollback", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.PartialSpendRollback(t, store)
+	})
+
+	t.Run("aerospike_quick_path_create_spend_mined_semantics", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.QuickPathCreateSpendMinedSemantics(t, store)
+	})
+
+	t.Run("aerospike_absent_record_observables", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.AbsentRecordObservables(t, store)
 	})
 
 	t.Run("aerospike_mined_then_spend_all_prunes", func(t *testing.T) {

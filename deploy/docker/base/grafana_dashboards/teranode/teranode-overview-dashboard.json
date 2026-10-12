@@ -18,8 +18,21 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
-  "id": 36,
-  "links": [],
+  "id": null,
+  "links": [
+    {
+      "asDropdown": true,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [
+        "teranode"
+      ],
+      "targetBlank": false,
+      "title": "Teranode Dashboards",
+      "type": "dashboards"
+    }
+  ],
   "panels": [
     {
       "collapsed": false,
@@ -644,7 +657,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "sum(go_goroutines) by (namespace,container)",
+          "expr": "sum(go_goroutines{namespace=~\"$namespace\"}) by (namespace,container)",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 2,
@@ -1663,30 +1676,6 @@
                 "value": "Duration"
               }
             ]
-          },
-          {
-            "__systemRef": "hideSeriesFrom",
-            "matcher": {
-              "id": "byNames",
-              "options": {
-                "mode": "exclude",
-                "names": [
-                  "Duration: subtree-validator"
-                ],
-                "prefix": "All except:",
-                "readOnly": true
-              }
-            },
-            "properties": [
-              {
-                "id": "custom.hideFrom",
-                "value": {
-                  "legend": false,
-                  "tooltip": true,
-                  "viz": true
-                }
-              }
-            ]
           }
         ]
       },
@@ -1723,10 +1712,10 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(teranode_subtreevalidation_validate_subtree_count{service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (container) >0",
+          "expr": "sum(increase(teranode_subtreevalidation_validate_subtree_count{service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (namespace,container) >0",
           "hide": false,
           "interval": "$grouping_interval",
-          "legendFormat": "Count: {{container}}",
+          "legendFormat": "Count: {{namespace}}-{{container}}",
           "range": true,
           "refId": "A"
         },
@@ -1736,10 +1725,10 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(teranode_subtreevalidation_validate_subtree_duration_sum{service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (container) >0",
+          "expr": "sum(increase(teranode_subtreevalidation_validate_subtree_duration_sum{service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (namespace,container) >0",
           "hide": false,
           "interval": "$grouping_interval",
-          "legendFormat": "Duration: {{container}}",
+          "legendFormat": "Duration: {{namespace}}-{{container}}",
           "range": true,
           "refId": "C"
         }
@@ -1752,47 +1741,11 @@
         "type": "prometheus",
         "uid": "${prometheus}"
       },
+      "description": "Total blocks added to the blockchain over the **currently selected time range** (uses `$__range`). The value is NOT a fixed rate or per-minute count — it scales with the dashboard time picker: widen the range and the number grows, narrow it and the number shrinks. Change the time range to compare different windows.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "bars",
-            "fillOpacity": 100,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineStyle": {
-              "fill": "solid"
-            },
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "showValues": false,
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
           },
           "mappings": [],
           "min": 0,
@@ -1820,22 +1773,21 @@
       },
       "id": 9,
       "options": {
-        "legend": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
           "calcs": [
-            "lastNotNull",
-            "mean"
+            "lastNotNull"
           ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true,
-          "sortBy": "Mean",
-          "sortDesc": true
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "multi",
-          "sort": "none"
-        }
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
       },
       "pluginVersion": "12.3.1",
       "targets": [
@@ -1845,16 +1797,16 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(teranode_blockchain_add_block_count{service=~\"$srvc\",namespace=~\"$namespace\"}[1m])) by (container) >0",
+          "expr": "sum(increase(teranode_blockchain_add_block_count{service=~\"$srvc\",namespace=~\"$namespace\",container=\"blockchain\"}[$__range])) by (namespace,container)",
           "hide": false,
           "interval": "$grouping_interval",
-          "legendFormat": "{{container}}",
+          "legendFormat": "{{namespace}}-{{container}}",
           "range": true,
           "refId": "B"
         }
       ],
       "title": "Block Chain Mined Block",
-      "type": "timeseries"
+      "type": "stat"
     },
     {
       "datasource": {
@@ -3242,7 +3194,7 @@
           "refId": "B"
         }
       ],
-      "title": "Queued Blocks in Block Validation",
+      "title": "Block Validation Queue per Node",
       "type": "timeseries"
     },
     {
@@ -3342,7 +3294,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(rate(teranode_tx_blaster_internal_server_errors{service=~\"$service\",namespace=~\"$namespace\"}[$grouping_interval])) by (namespace,)",
+          "expr": "sum(rate(teranode_tx_blaster_internal_server_errors{service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (namespace,)",
           "hide": false,
           "instant": false,
           "interval": "$grouping_interval",
@@ -3357,7 +3309,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(rate(teranode_tx_blaster_invalid_transactions{service=~\"$service\",namespace=~\"$namespace\"}[$grouping_interval])) by (namespace,)",
+          "expr": "sum(rate(teranode_tx_blaster_invalid_transactions{service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (namespace,)",
           "hide": false,
           "instant": false,
           "interval": "$grouping_interval",
@@ -3372,7 +3324,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(rate(teranode_tx_blaster_tx_locked_retries_total{service=~\"$service\",namespace=~\"$namespace\"}[$grouping_interval])) by (namespace,)",
+          "expr": "sum(rate(teranode_tx_blaster_tx_locked_retries_total{service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (namespace,)",
           "hide": false,
           "instant": false,
           "interval": "$grouping_interval",
@@ -3383,471 +3335,14 @@
       ],
       "title": "TX Blaster Errors",
       "type": "timeseries"
-    },
-    {
-      "collapsed": true,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 187
-      },
-      "id": 48,
-      "panels": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus}"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "hideFrom": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": false
-                },
-                "scaleDistribution": {
-                  "type": "linear"
-                }
-              }
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 9,
-            "w": 24,
-            "x": 0,
-            "y": 373
-          },
-          "id": 14,
-          "options": {
-            "calculate": false,
-            "calculation": {},
-            "cellGap": 2,
-            "cellValues": {
-              "decimals": 3
-            },
-            "color": {
-              "exponent": 0.5,
-              "fill": "#5794F2",
-              "mode": "scheme",
-              "reverse": false,
-              "scale": "exponential",
-              "scheme": "Spectral",
-              "steps": 128
-            },
-            "exemplars": {
-              "color": "rgba(255,0,255,0.7)"
-            },
-            "filterValues": {
-              "le": 1e-9
-            },
-            "legend": {
-              "show": true
-            },
-            "rowsFrame": {
-              "layout": "auto"
-            },
-            "showValue": "never",
-            "tooltip": {
-              "mode": "single",
-              "showColorScale": false,
-              "yHistogram": true
-            },
-            "yAxis": {
-              "axisPlacement": "left",
-              "reverse": false,
-              "unit": "short"
-            }
-          },
-          "pluginVersion": "12.3.1",
-          "targets": [
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "${prometheus}"
-              },
-              "editorMode": "code",
-              "exemplar": true,
-              "expr": "sum by (le) (rate(teranode_validator_transactions_2phase_commit_bucket[$grouping_interval]))",
-              "format": "heatmap",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ le }}${latencytimeunit}",
-              "refId": "C"
-            }
-          ],
-          "title": "Validator TX 2Phase Commit Latency",
-          "type": "heatmap"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus}"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "hideFrom": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": false
-                },
-                "scaleDistribution": {
-                  "type": "linear"
-                }
-              }
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 9,
-            "w": 24,
-            "x": 0,
-            "y": 382
-          },
-          "id": 46,
-          "options": {
-            "calculate": false,
-            "calculation": {},
-            "cellGap": 2,
-            "cellValues": {
-              "decimals": 3
-            },
-            "color": {
-              "exponent": 0.5,
-              "fill": "#5794F2",
-              "mode": "scheme",
-              "reverse": false,
-              "scale": "exponential",
-              "scheme": "Spectral",
-              "steps": 128
-            },
-            "exemplars": {
-              "color": "rgba(255,0,255,0.7)"
-            },
-            "filterValues": {
-              "le": 1e-9
-            },
-            "legend": {
-              "show": true
-            },
-            "rowsFrame": {
-              "layout": "auto"
-            },
-            "showValue": "never",
-            "tooltip": {
-              "mode": "single",
-              "showColorScale": false,
-              "yHistogram": true
-            },
-            "yAxis": {
-              "axisPlacement": "left",
-              "reverse": false,
-              "unit": "short"
-            }
-          },
-          "pluginVersion": "12.3.1",
-          "targets": [
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "${prometheus}"
-              },
-              "editorMode": "code",
-              "exemplar": true,
-              "expr": "sum by (le) (rate(teranode_validator_set_tx_meta_bucket[$grouping_interval]))",
-              "format": "heatmap",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ le }}${latencytimeunit}",
-              "refId": "C"
-            }
-          ],
-          "title": "Validator TX Create Latency",
-          "type": "heatmap"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus}"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "hideFrom": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": false
-                },
-                "scaleDistribution": {
-                  "type": "linear"
-                }
-              }
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 9,
-            "w": 24,
-            "x": 0,
-            "y": 391
-          },
-          "id": 45,
-          "options": {
-            "calculate": false,
-            "calculation": {},
-            "cellGap": 2,
-            "cellValues": {
-              "decimals": 3
-            },
-            "color": {
-              "exponent": 0.5,
-              "fill": "#5794F2",
-              "mode": "scheme",
-              "reverse": false,
-              "scale": "exponential",
-              "scheme": "Spectral",
-              "steps": 128
-            },
-            "exemplars": {
-              "color": "rgba(255,0,255,0.7)"
-            },
-            "filterValues": {
-              "le": 1e-9
-            },
-            "legend": {
-              "show": true
-            },
-            "rowsFrame": {
-              "layout": "auto"
-            },
-            "showValue": "never",
-            "tooltip": {
-              "mode": "single",
-              "showColorScale": false,
-              "yHistogram": true
-            },
-            "yAxis": {
-              "axisPlacement": "left",
-              "reverse": false,
-              "unit": "short"
-            }
-          },
-          "pluginVersion": "12.3.1",
-          "targets": [
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "${prometheus}"
-              },
-              "editorMode": "code",
-              "exemplar": true,
-              "expr": "sum by (le) (rate(teranode_validator_transactions_spend_utxos_bucket[$grouping_interval]))",
-              "format": "heatmap",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ le }}${latencytimeunit}",
-              "refId": "C"
-            }
-          ],
-          "title": "Validator TX Spend Latency",
-          "type": "heatmap"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus}"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "hideFrom": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": false
-                },
-                "scaleDistribution": {
-                  "type": "linear"
-                }
-              }
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 9,
-            "w": 24,
-            "x": 0,
-            "y": 400
-          },
-          "id": 44,
-          "options": {
-            "calculate": false,
-            "calculation": {},
-            "cellGap": 2,
-            "cellValues": {
-              "decimals": 3
-            },
-            "color": {
-              "exponent": 0.5,
-              "fill": "#5794F2",
-              "mode": "scheme",
-              "reverse": false,
-              "scale": "exponential",
-              "scheme": "Spectral",
-              "steps": 128
-            },
-            "exemplars": {
-              "color": "rgba(255,0,255,0.7)"
-            },
-            "filterValues": {
-              "le": 1e-9
-            },
-            "legend": {
-              "show": true
-            },
-            "rowsFrame": {
-              "layout": "auto"
-            },
-            "showValue": "never",
-            "tooltip": {
-              "mode": "single",
-              "showColorScale": false,
-              "yHistogram": true
-            },
-            "yAxis": {
-              "axisPlacement": "left",
-              "reverse": false,
-              "unit": "short"
-            }
-          },
-          "pluginVersion": "12.3.1",
-          "targets": [
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "${prometheus}"
-              },
-              "editorMode": "code",
-              "exemplar": true,
-              "expr": "sum by (le) (rate(teranode_validator_send_to_block_assembly_bucket[$grouping_interval]))",
-              "format": "heatmap",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ le }}${latencytimeunit}",
-              "refId": "C"
-            }
-          ],
-          "title": "Validator Send to BlockAss Latency",
-          "type": "heatmap"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${prometheus}"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "hideFrom": {
-                  "legend": false,
-                  "tooltip": false,
-                  "viz": false
-                },
-                "scaleDistribution": {
-                  "type": "linear"
-                }
-              }
-            },
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 9,
-            "w": 24,
-            "x": 0,
-            "y": 409
-          },
-          "id": 43,
-          "options": {
-            "calculate": false,
-            "calculation": {},
-            "cellGap": 2,
-            "cellValues": {
-              "decimals": 3
-            },
-            "color": {
-              "exponent": 0.5,
-              "fill": "#5794F2",
-              "mode": "scheme",
-              "reverse": false,
-              "scale": "exponential",
-              "scheme": "Spectral",
-              "steps": 128
-            },
-            "exemplars": {
-              "color": "rgba(255,0,255,0.7)"
-            },
-            "filterValues": {
-              "le": 1e-9
-            },
-            "legend": {
-              "show": true
-            },
-            "rowsFrame": {
-              "layout": "auto"
-            },
-            "showValue": "never",
-            "tooltip": {
-              "mode": "single",
-              "showColorScale": false,
-              "yHistogram": true
-            },
-            "yAxis": {
-              "axisPlacement": "left",
-              "reverse": false,
-              "unit": "short"
-            }
-          },
-          "pluginVersion": "12.3.1",
-          "targets": [
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "${prometheus}"
-              },
-              "editorMode": "code",
-              "exemplar": true,
-              "expr": "sum by (le) (rate(teranode_propagation_transactions_batch_bucket[$grouping_interval]))",
-              "format": "heatmap",
-              "hide": false,
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{ le }}${latencytimeunit}",
-              "refId": "C"
-            }
-          ],
-          "title": "Propagation Processing Batch TX Latency ",
-          "type": "heatmap"
-        }
-      ],
-      "title": "Teranode Latency",
-      "type": "row"
     }
   ],
   "preload": false,
-  "refresh": "",
+  "refresh": "30s",
   "schemaVersion": 42,
-  "tags": [],
+  "tags": [
+    "teranode"
+  ],
   "templating": {
     "list": [
       {
@@ -3931,14 +3426,14 @@
           "type": "prometheus",
           "uid": "${prometheus}"
         },
-        "definition": "label_values(propagation_transactions_size_sum,instance)",
+        "definition": "label_values(teranode_propagation_transactions_count,instance)",
         "includeAll": true,
         "label": "Instance",
         "multi": true,
         "name": "instance",
         "options": [],
         "query": {
-          "query": "label_values(propagation_transactions_size_sum,instance)",
+          "query": "label_values(teranode_propagation_transactions_count,instance)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 2,

@@ -78,7 +78,12 @@ func (s *SQL) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	capacity := max(1, endHeight-startHeight+1)
+	// Calculate capacity safely, avoiding uint32 underflow when startHeight > endHeight
+	var capacity uint32 = 1
+	if endHeight >= startHeight {
+		capacity = max(1, endHeight-startHeight+1)
+	}
+
 	blocks := make([]*model.Block, 0, capacity)
 
 	var q string

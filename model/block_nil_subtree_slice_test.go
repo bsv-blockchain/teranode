@@ -117,8 +117,11 @@ func TestCheckBlockRewardAndFees_NilSubtreeEntryIsTransient(t *testing.T) {
 	b := newTestBlockWithSubtreeSlices(t, []*subtreepkg.Subtree{newCompleteTestSubtree(t), nil})
 	b.Height = 100
 
+	// merkleRootChecked is true so the surrounding classification is the strict one:
+	// even with the body bound to the header, a subtree released mid-validation must
+	// stay transient rather than becoming a consensus verdict.
 	require.NotPanics(t, func() {
-		requireTransientError(t, b.checkBlockRewardAndFees(nil, false, false))
+		requireTransientError(t, b.checkBlockRewardAndFees(nil, false, false, true))
 	})
 }
 

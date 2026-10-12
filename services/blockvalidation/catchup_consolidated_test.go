@@ -364,72 +364,20 @@ func TestCatchup_PartialStateRecovery(t *testing.T) {
 	})
 }
 
-// TestCatchup_FSMStateManagement tests FSM state transitions during catchup
+// TestCatchup_FSMStateManagement exercises real persisted state at both boundaries.
 func TestCatchup_FSMStateManagement(t *testing.T) {
-	t.Run("FSMStateTransitions", func(t *testing.T) {
-		ctx := context.Background()
-		server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
-		defer cleanup()
+	ctx := context.Background()
+	server, client, store, catchupCtx := newPromotionAuthority(t)
+	require.NoError(t, client.Run(ctx, "test setup"))
+	requirePromotionState(t, client, store, blockchain.FSMStateRUNNING)
 
-		testHeaders := testhelpers.CreateTestHeaders(t, 5)
-		catchupCtx := &CatchupContext{
-			blockUpTo: &model.Block{
-				Header: testHeaders[4],
-				Height: 1005,
-			},
-			blockHeaders: testHeaders[1:],
-		}
+	var size atomic.Int64
+	size.Store(4)
+	require.NoError(t, server.setFSMCatchingBlocks(ctx, catchupCtx, &size))
+	requirePromotionState(t, client, store, blockchain.FSMStateCATCHINGBLOCKS)
 
-		// Clear permissive defaults so .Once() expectations are matched
-		mockBlockchainClient.ExpectedCalls = filterMockCalls(mockBlockchainClient.ExpectedCalls, "CatchUpBlocks")
-		mockBlockchainClient.ExpectedCalls = filterMockCalls(mockBlockchainClient.ExpectedCalls, "Run")
-
-		// Mock FSM state changes
-		mockBlockchainClient.On("CatchUpBlocks", mock.Anything).
-			Return(nil).Once()
-
-		catchingState := blockchain.FSMStateCATCHINGBLOCKS
-		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).
-			Return(&catchingState, nil).Once()
-
-		mockBlockchainClient.On("Run", mock.Anything, "blockvalidation/Server").
-			Return(nil).Once()
-
-		// Test setting CATCHINGBLOCKS state
-		size := atomic.Int64{}
-		size.Store(4)
-		err := server.setFSMCatchingBlocks(ctx, catchupCtx, &size)
-		assert.NoError(t, err, "Should set FSM to CATCHINGBLOCKS")
-
-		// Test restoring RUN state
-		server.restoreFSMState(ctx, catchupCtx)
-
-		mockBlockchainClient.AssertExpectations(t)
-	})
-
-	t.Run("HandleFSMStateQueryError", func(t *testing.T) {
-		ctx := context.Background()
-		server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
-		defer cleanup()
-
-		header := testhelpers.CreateTestHeaders(t, 1)[0]
-		catchupCtx := &CatchupContext{
-			blockUpTo: &model.Block{
-				Header: header,
-				Height: 1000,
-			},
-		}
-
-		// Mock FSM state query failure
-		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).
-			Return(nil, assert.AnError).Once()
-
-		// Should handle error gracefully
-		server.restoreFSMState(ctx, catchupCtx)
-
-		// Should not attempt to change state if query fails
-		mockBlockchainClient.AssertNotCalled(t, "Run", mock.Anything, mock.Anything)
-	})
+	server.restoreFSMState(ctx, catchupCtx)
+	requirePromotionState(t, client, store, blockchain.FSMStateRUNNING)
 }
 
 // TestCatchup_MetricsAndTracking tests metrics recording during crash recovery

@@ -26,6 +26,8 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -123,6 +125,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 			MaxRetries:   tSettings.GRPCMaxRetries,
 			RetryBackoff: tSettings.GRPCRetryBackoff,
 			CallerName:   "blockchain",
+			APIKey:       tSettings.GRPCAdminAPIKey,
 		}, tSettings)
 		if err != nil {
 			return nil, errors.NewServiceError("failed to init blockchain service connection for '%s'", source, err)
@@ -151,6 +154,13 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 		}
 
 		break
+	}
+
+	// HealthGRPC is public, so it cannot tell a wrong key from a right one.
+	if err = checkAdminAPIKeyAccepted(ctx, baClient); err != nil {
+		_ = baConn.Close()
+
+		return nil, errors.NewConfigurationError("blockchain service at '%s' rejected grpc_admin_api_key for '%s'", address, source, err)
 	}
 
 	running := atomic.Bool{}
@@ -311,7 +321,22 @@ func (c *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		return http.StatusFailedDependency, resp.GetDetails(), nil
 	}
 
+	if err = checkAdminAPIKeyAccepted(ctx, c.client); err != nil {
+		return http.StatusFailedDependency, "blockchain rejected grpc_admin_api_key", err
+	}
+
 	return http.StatusOK, resp.GetDetails(), nil
+}
+
+// checkAdminAPIKeyAccepted makes one cheap protected call and fails only on
+// Unauthenticated, so an uninitialised FSM or an older server without the
+// auth interceptor is not treated as a key mismatch.
+func checkAdminAPIKeyAccepted(ctx context.Context, client blockchain_api.BlockchainAPIClient) error {
+	if _, err := client.GetFSMCurrentState(ctx, &emptypb.Empty{}); status.Code(err) == codes.Unauthenticated {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
 }
 
 // AddBlock sends a request to add a new block to the blockchain.
@@ -2002,29 +2027,22 @@ func (c *Client) SendFSMEvent(ctx context.Context, event blockchain_api.FSMEvent
 
 // Run sends a run FSM event to the blockchain service.
 func (c *Client) Run(ctx context.Context, source string) error {
-	currentState := ""
-
-	state, _ := c.GetFSMCurrentState(ctx)
-	if state != nil {
-		// check whether the current state is the same as the target state
-		if *state == FSMStateRUNNING {
-			return nil
-		}
-
-		currentState = state.String()
-	}
-
-	c.logger.Infof("[Blockchain Client] Sending Run event %s (%s => Run)", source, currentState)
+	c.logger.Infof("[Blockchain Client] Sending Run event %s", source)
 
 	_, err := c.client.Run(ctx, &emptypb.Empty{})
 	if err != nil {
+		// Keep transport status available to bounded catchup promotion retries.
+		if code := status.Code(err); code == codes.Unavailable || code == codes.DeadlineExceeded {
+			return err
+		}
 		return errors.UnwrapGRPC(err)
 	}
 
 	return nil
 }
 
-// CatchUpBlocks sends a catchup blocks FSM event to the blockchain service.
+// CatchUpBlocks requests automatic catchup from the blockchain authority.
+// Operator IDLE is refused; explicit operator resume uses SendFSMEvent(CATCHUPBLOCKS).
 // This method initiates a blockchain synchronization process by transitioning the
 // blockchain service's finite state machine to the CATCHING_BLOCKS state, which
 // triggers the service to synchronize with the network and catch up on any
@@ -2037,14 +2055,12 @@ func (c *Client) Run(ctx context.Context, source string) error {
 // - Maintaining consensus with the BSV Blockchain network
 // - Coordinating synchronization across distributed Teranode components
 //
-// The method first checks if the FSM is already in the CATCHING_BLOCKS state
-// to avoid unnecessary state transitions. If not already catching up, it sends
-// the appropriate FSM event to trigger the synchronization process.
+// The server checks authoritative state and reconciles uncertain persistence
+// before acknowledging an already-current target state.
 //
 // This operation is typically used during:
 // - Service startup when the local chain may be behind
 // - Recovery from network partitions or connectivity issues
-// - Manual synchronization requests from operators
 // - Automated catch-up processes in distributed deployments
 //
 // The method communicates with the blockchain service via gRPC to send the
@@ -2056,14 +2072,6 @@ func (c *Client) Run(ctx context.Context, source string) error {
 // Returns:
 //   - error: Any error encountered during the FSM event transmission
 func (c *Client) CatchUpBlocks(ctx context.Context) error {
-	currentState := c.fmsState.Load()
-	if currentState != nil {
-		// check whether the current state is the same as the target state
-		if *currentState == FSMStateCATCHINGBLOCKS {
-			return nil
-		}
-	}
-
 	c.logger.Infof("[Blockchain Client] Sending Catchup Transactions event")
 
 	_, err := c.client.CatchUpBlocks(ctx, &emptypb.Empty{})
@@ -2096,9 +2104,8 @@ func (c *Client) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, pe
 // causing it to transition to the IDLE state where it stops active processing
 // and waits for further commands.
 //
-// The method first checks if the FSM is already in the IDLE state to avoid
-// unnecessary transitions. If the current state is already IDLE, it returns
-// immediately without sending the event.
+// The server checks authoritative state and reconciles uncertain persistence
+// before acknowledging an already-current target state.
 //
 // The IDLE state is used for:
 // - Graceful shutdown preparation
@@ -2116,14 +2123,6 @@ func (c *Client) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, pe
 // Returns:
 //   - error: Any error encountered during the FSM event transmission
 func (c *Client) Idle(ctx context.Context) error {
-	currentState := c.fmsState.Load()
-	if currentState != nil {
-		// check whether the current state is the same as the target state
-		if *currentState == FSMStateIDLE {
-			return nil
-		}
-	}
-
 	c.logger.Infof("[Blockchain Client] Sending IDLE event")
 
 	_, err := c.client.Idle(ctx, &emptypb.Empty{})
@@ -2496,11 +2495,20 @@ func (c *Client) CompleteBlobDeletions(ctx context.Context, completedIDs []int64
 }
 
 // AcquireBlobDeletionBatch acquires a batch of deletions with locking.
-func (c *Client) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
+func (c *Client) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int, excludeStoreTypes []storetypes.BlobStoreType) (string, []*blockchain_api.ScheduledDeletion, error) {
+	var excluded []int32
+	if len(excludeStoreTypes) > 0 {
+		excluded = make([]int32, len(excludeStoreTypes))
+		for i, storeType := range excludeStoreTypes {
+			excluded[i] = int32(storeType)
+		}
+	}
+
 	resp, err := c.client.AcquireBlobDeletionBatch(ctx, &blockchain_api.AcquireBlobDeletionBatchRequest{
 		Height:             height,
 		Limit:              int32(limit),
 		LockTimeoutSeconds: int32(lockTimeoutSeconds),
+		ExcludeStoreTypes:  excluded,
 	})
 	if err != nil {
 		return "", nil, errors.UnwrapGRPC(err)

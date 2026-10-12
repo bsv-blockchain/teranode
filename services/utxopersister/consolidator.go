@@ -74,6 +74,10 @@ type consolidator struct {
 	// firstBlockHeight stores the height of the first block in range - The first block height in the range (startHeight)
 	firstBlockHeight uint32
 
+	// firstBlockHeightKnown records that firstBlockHeight was set. Zero is a real height,
+	// so it cannot stand for "unknown".
+	firstBlockHeightKnown bool
+
 	// firstPreviousBlockHash stores the hash of the block before the first block
 	// This is the hash of the previous block of the first block in the range (will be used to copy the last UTXOSet)
 	firstPreviousBlockHash *chainhash.Hash
@@ -196,6 +200,7 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 	}
 
 	c.firstBlockHeight = startBlock
+	c.firstBlockHeightKnown = true
 
 	for i := 0; i < len(headers); i++ {
 		header := headers[i]
@@ -212,7 +217,7 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 		}
 
 		// Get the last 2 block headers from this last processed height
-		us, _, err := GetUTXOSetWithExistCheck(ctx, c.logger, c.settings, c.blockStore, hash)
+		us, _, err := GetUTXOSetWithExistCheck(ctx, c.logger, c.settings, c.blockStore, hash, height)
 		if err != nil {
 			return err
 		}

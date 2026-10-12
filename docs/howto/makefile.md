@@ -112,6 +112,7 @@ This Makefile facilitates a variety of development and build tasks for the Teran
 - **sequentialtest-postgres**: Runs sequential tests using the PostgreSQL database backend only.
 - **sequentialtest-aerospike**: Runs sequential tests using the Aerospike database backend only.
 - **longtest**: Executes long-running tests in the `test/longtest/` directory with 10-minute timeout.
+- **soaktest**: Runs the `soak`-tagged endurance test in `test/soak/`: the in-process daemon under steady tx load for `SOAK_DURATION` (default 30m), failing if heap or goroutine counts trend upward. See [Running Tests](runningTests.md#soak-test).
 - **testall**: Runs all test suites: `test`, `longtest`, and `sequentialtest`.
 - **nightly-tests**: Runs comprehensive tests typically scheduled for nightly builds. Builds Docker images and uses CTRF JSON reporter for results.
 - **smoketest**: Runs smoke tests in the `test/e2e/daemon/ready/` directory focused on basic functionality.

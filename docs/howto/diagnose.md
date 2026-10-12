@@ -71,7 +71,7 @@ Checks connectivity to each gRPC service by creating a client and calling its `H
 
 If a service address is empty, the check is skipped. If the service is disabled in settings (e.g. `startValidator=false` for the current context), the skip message says so explicitly:
 
-```
+```text
 Validator gRPC  -  SKIP  -  disabled (startValidator=false)
 ```
 
@@ -87,6 +87,8 @@ Checks HTTP endpoints by sending GET requests:
 | RPC | `rpc_listener_url` | `/` |
 | Health Endpoint | `health_check_httpListenAddress` | `/health` |
 | Profiler (pprof) | `profilerAddr` | `/debug/pprof/` |
+
+The Block Persister listener binds to loopback (`127.0.0.1:8083`) by default, so its check must run on the node's own host or container unless the address is set to a published interface.
 
 Auth-protected endpoints (HTTP 401/403) are reported as OK with a note, since a 401 means the service is running and responding.
 
@@ -123,7 +125,7 @@ These catch subtle problems where services silently fall out of sync:
 
 ### Example Output
 
-```
+```text
 Service Health Checks
 =====================
 SERVICE                  ADDRESS                STATUS  LATENCY  MESSAGE
@@ -169,13 +171,13 @@ Scans all 16+ listen addresses across services and detects conflicts. The check 
 - `:8080` and `0.0.0.0:8080` both bind all interfaces, so they conflict
 - `127.0.0.1:8080` and `10.0.0.1:8080` bind different interfaces, no conflict
 
-Listen addresses checked: Blockchain gRPC/HTTP, Block Assembly gRPC, Block Validation gRPC, Subtree Validation gRPC, Validator gRPC/HTTP, P2P gRPC/HTTP, Propagation gRPC/HTTP, Asset HTTP, Asset Centrifuge, Block Persister HTTP, Faucet HTTP, Health Check HTTP, RPC.
+Listen addresses checked: Blockchain gRPC/HTTP, Block Assembly gRPC, Block Validation gRPC, Subtree Validation gRPC, Validator gRPC/HTTP, P2P gRPC/HTTP, Propagation gRPC/HTTP, Asset HTTP, Block Persister HTTP, Faucet HTTP, Health Check HTTP, RPC.
 
 ### Security
 
 | Check | Condition | Severity |
 |-------|-----------|----------|
-| gRPC TLS | `securityLevelGRPC = 0` | WARN in prod, INFO in dev |
+| gRPC TLS | `security_level_grpc = 0` | WARN in prod, INFO in dev |
 | HTTP TLS | `securityLevelHTTP = 0` | WARN in prod, INFO in dev |
 | TLS cert files | TLS enabled but `server_certFile` or `server_keyFile` empty | ERROR |
 | gRPC admin API key | Empty or < 16 chars | WARN in prod |
@@ -232,14 +234,14 @@ Checks that the data folder exists, is a directory, and is writable. Catches per
 
 ### Example Output
 
-```
+```text
 Configuration Checks
 ====================
 SEVERITY  CHECK                       VALUE                                       RECOMMENDED
 INFO      Configuration context       dev
 INFO      Network                     mainnet
 OK        Port conflicts              none (16 listen addresses checked)
-INFO      gRPC TLS                    disabled (level 0)                          Set securityLevelGRPC >= 1 for production
+INFO      gRPC TLS                    disabled (level 0)                          Set security_level_grpc >= 1 for production
 INFO      HTTP TLS                    disabled (level 0)                          Set securityLevelHTTP >= 1 for production
 OK        gRPC admin API key          32 chars
 OK        Kafka hosts                 localhost:9092

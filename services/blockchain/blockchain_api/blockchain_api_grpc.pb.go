@@ -5,6 +5,13 @@
 // source: services/blockchain/blockchain_api/blockchain_api.proto
 
 // Package blockchain_api defines the gRPC service interface for blockchain operations.
+//
+// Version: v1 (implicit). No version suffix; the unsuffixed name IS v1. This
+// package has already had a breaking change handled via `reserved` enum
+// values without a version bump (see FSMEventType / FSMStateType below) --
+// reserving prevents wire corruption but is not the same as version
+// coexistence. A version bump (v2) is for changes reserved values can't
+// express -- see docs/references/protoVersioning.md.
 
 package blockchain_api
 

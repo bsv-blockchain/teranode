@@ -3,12 +3,15 @@ package util
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -91,6 +94,15 @@ func NewSSRFSafeDialContext(policy SSRFDialPolicy) func(ctx context.Context, net
 			return nil, errors.NewServiceError("SSRF dial check: no usable addresses resolved for host %q", host)
 		}
 
+		// The policy judges this one answer. The guard compares it with earlier answers for
+		// the same hostname, which is what stops a peer's DNS flipping a name from a public
+		// address to a private one between two requests (issue 4843).
+		if net.ParseIP(host) == nil {
+			if reason := ssrfRebind.check(host, validated, time.Now()); reason != "" {
+				return nil, errors.NewInvalidArgumentError("SSRF dial check: %s", reason)
+			}
+		}
+
 		// Dial the validated IPs directly (no re-resolution), trying each to preserve
 		// multi-A-record failover. Dialing by IP loses net.Dialer's dual-stack fast
 		// fallback, so each attempt gets a slice of the remaining budget: without that, a
@@ -157,18 +169,20 @@ func dialAttemptContext(ctx context.Context, remainingCandidates int) (context.C
 // shared client, returning the reason an address is unsafe or "" when it is safe. Services
 // fetching peer-supplied URLs should reuse it so every such path enforces the same rules.
 //
-// It blocks only:
-//   - link-local (169.254.0.0/16, fe80::/10) — the real SSRF target, since the cloud
-//     metadata endpoint 169.254.169.254 lives here;
-//   - loopback (127.0.0.0/8, ::1) — a peer should never make us dial our own localhost
-//     admin/RPC services, and no legitimate peer advertises a loopback fetch source;
+// It always blocks:
+//   - link-local (169.254.0.0/16, fe80::/10), since the cloud metadata endpoint
+//     169.254.169.254 lives here;
+//   - loopback (127.0.0.0/8, ::1), since a peer should never make us dial our own
+//     localhost admin/RPC services, and no legitimate peer advertises a loopback source;
 //   - unspecified (0.0.0.0, ::).
 //
-// RFC1918 ranges (10/8, 172.16/12, 192.168/16) and IPv6 ULA (fc00::/7) are intentionally
-// NOT blocked: teranode peers, k8s pods, and privately-routed miner interconnects all
-// communicate over private networks in real deployments. Blocking them here would reject
-// legitimate peer traffic and contradicts isBlockedIP, which allows the same ranges for
-// the static ValidateURL check.
+// Private-network ranges (RFC1918, IPv6 ULA fc00::/7 and shared address space
+// 100.64.0.0/10) are blocked unless SetSSRFAllowPrivateNetworks(true), which the daemon
+// sets from p2p_allow_private_ips. That matches the static check on announced DataHub
+// URLs, so a hostname resolving to a private address is treated like a private IP literal.
+// Before issue 4843 private ranges were always allowed here, and a peer-controlled hostname
+// could steer a request carrying a chosen body into an internal service such as a Kafka
+// admin API.
 func DefaultSSRFDialPolicy(ip net.IP) string {
 	switch {
 	case ip.IsLoopback():
@@ -178,7 +192,140 @@ func DefaultSSRFDialPolicy(ip net.IP) string {
 	case ip.IsUnspecified():
 		return "unspecified address"
 	default:
+		return privateNetworkDialPolicy(ip)
+	}
+}
+
+// privateNetworkDialPolicy is the part of DefaultSSRFDialPolicy that follows
+// SetSSRFAllowPrivateNetworks.
+func privateNetworkDialPolicy(ip net.IP) string {
+	if !ssrfAllowPrivateNetworks.Load() && ssrfIsPrivateNetwork(ip) {
+		return "private-network address (set p2p_allow_private_ips to allow)"
+	}
+
+	return ""
+}
+
+// ssrfAllowPrivateNetworks holds whether peer-supplied URLs may resolve to private-network
+// addresses. The zero value refuses them, so a process that never configures it fails closed.
+var ssrfAllowPrivateNetworks atomic.Bool
+
+// SetSSRFAllowPrivateNetworks sets whether connections for peer-supplied URLs may go to
+// private-network addresses (RFC1918, fc00::/7, 100.64.0.0/10). The daemon calls it at
+// startup with p2p_allow_private_ips.
+func SetSSRFAllowPrivateNetworks(allowed bool) {
+	ssrfAllowPrivateNetworks.Store(allowed)
+}
+
+// SSRFAllowPrivateNetworks reports the value last set by SetSSRFAllowPrivateNetworks.
+func SSRFAllowPrivateNetworks() bool {
+	return ssrfAllowPrivateNetworks.Load()
+}
+
+// sharedAddressSpace is RFC 6598's 100.64.0.0/10. Carrier NAT and some Kubernetes pod
+// networks (EKS custom networking among them) use it for internal addresses, which
+// net.IP.IsPrivate does not cover.
+var sharedAddressSpace = &net.IPNet{IP: net.IPv4(100, 64, 0, 0).To4(), Mask: net.CIDRMask(10, 32)}
+
+func isPrivateNetworkIP(ip net.IP) bool {
+	return ip.IsPrivate() || sharedAddressSpace.Contains(ip)
+}
+
+// ssrfIsPrivateNetwork classifies an address as private-network. It is a package var so
+// tests can have a loopback address stand in for a private one.
+var ssrfIsPrivateNetwork = isPrivateNetworkIP
+
+const (
+	// ssrfRebindWindow is how long a hostname that resolved to a public address is barred
+	// from resolving to a private-network one. The attack needs the two answers seconds
+	// apart; a legitimate move from public to private hosting is rare and can wait.
+	ssrfRebindWindow = 10 * time.Minute
+
+	// ssrfRebindMaxHosts bounds the guard's memory.
+	ssrfRebindMaxHosts = 10_000
+)
+
+// ssrfRebind is the process-wide rebinding guard consulted by every SSRF-safe dialer.
+var ssrfRebind = newRebindGuard(ssrfRebindWindow, ssrfRebindMaxHosts)
+
+// rebindGuard catches a hostname whose DNS answer moves from public to private-network
+// between connections. Each dial resolves and validates on its own, and when private
+// networks are allowed a peer's DNS could answer with its public server for a GET and an
+// internal service for the POST that follows (issue 4843). Pinning per fetch would not
+// help: subtree validation can reuse a stored subtree and send the POST with no GET first.
+//
+// It deliberately does not pin a hostname to exact addresses, since legitimate peers move
+// between public addresses (failover, CDNs). It also cannot catch a hostname whose first
+// answer is already private; only refusing private networks does that.
+type rebindGuard struct {
+	mu          sync.Mutex
+	window      time.Duration
+	maxHosts    int
+	publicUntil map[string]time.Time
+}
+
+func newRebindGuard(window time.Duration, maxHosts int) *rebindGuard {
+	return &rebindGuard{
+		window:      window,
+		maxHosts:    maxHosts,
+		publicUntil: make(map[string]time.Time),
+	}
+}
+
+// check records host's validated answer and returns why it must be refused, or "".
+func (g *rebindGuard) check(host string, ips []net.IP, now time.Time) string {
+	var public, private bool
+
+	for _, ip := range ips {
+		if ssrfIsPrivateNetwork(ip) {
+			private = true
+		} else {
+			public = true
+		}
+	}
+
+	// A mixed answer lets the dialer's per-address failover reach the private address
+	// once the public one refuses the connection.
+	if public && private {
+		return fmt.Sprintf("host %q resolved to both public and private-network addresses", host)
+	}
+
+	key := strings.ToLower(strings.TrimRight(host, "."))
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if private {
+		if until, ok := g.publicUntil[key]; ok && now.Before(until) {
+			return fmt.Sprintf("host %q resolved to a public address within the last %s and now to private-network address %s", host, g.window, ips[0])
+		}
+
 		return ""
+	}
+
+	if _, ok := g.publicUntil[key]; !ok && len(g.publicUntil) >= g.maxHosts {
+		g.evictLocked(now)
+	}
+
+	g.publicUntil[key] = now.Add(g.window)
+
+	return ""
+}
+
+// evictLocked frees room for one entry: expired entries go first, then an arbitrary one.
+func (g *rebindGuard) evictLocked(now time.Time) {
+	for host, until := range g.publicUntil {
+		if !now.Before(until) {
+			delete(g.publicUntil, host)
+		}
+	}
+
+	for host := range g.publicUntil {
+		if len(g.publicUntil) < g.maxHosts {
+			return
+		}
+
+		delete(g.publicUntil, host)
 	}
 }
 
@@ -189,10 +336,11 @@ var ssrfDialContext = NewSSRFSafeDialContext(DefaultSSRFDialPolicy)
 // maxSSRFRedirects bounds redirect chains followed while fetching peer-supplied URLs.
 const maxSSRFRedirects = 10
 
-// ssrfCheckRedirect builds the CheckRedirect used for peer-supplied URLs: it bounds the hop
-// count, then rejects a redirect target that leaves http/https, carries credentials, or names
-// a blocked IP literal. Targets naming a hostname are caught by the dialer instead, so this
-// is a cheap pre-check that avoids attempting the connection at all.
+// ssrfCheckRedirect builds the CheckRedirect used for peer-supplied URLs: it refuses any
+// redirect of a POST unconditionally, then - when SSRF protection is enabled - bounds the hop
+// count and rejects a redirect target that leaves the origin, leaves http/https, carries
+// credentials, or names a blocked IP literal. Targets naming a hostname are caught by the
+// dialer instead, so this is a cheap pre-check that avoids attempting the connection at all.
 //
 // Both the shared httpClient and every client from NewSSRFSafeHTTPClient use this, so there is
 // one redirect rule for the threat rather than two that can drift apart.
@@ -202,8 +350,24 @@ func ssrfCheckRedirect(policy SSRFDialPolicy) func(req *http.Request, via []*htt
 			return errors.NewInvalidArgumentError("stopped after %d redirects", maxSSRFRedirects)
 		}
 
+		// A POST body is built from peer-supplied data, so a redirect of a POST is always a peer
+		// choosing a destination for bytes we assembled. A 301, 302 or 303 turns it into a GET
+		// wherever the peer points; a 307 or 308 replays method and body verbatim. Neither is ever
+		// wanted, so this refusal is not conditional on the SSRF toggle below - test topologies
+		// disable that toggle to reach loopback, and must not thereby re-open this. Only POST
+		// reaches here today; any other method that is not a plain read (PUT, PATCH, DELETE, ...)
+		// is refused on the same grounds, so a future caller does not re-open it. An empty method
+		// means GET to net/http.
+		if len(via) > 0 && via[0] != nil && !isReadMethod(via[0].Method) {
+			return errors.NewInvalidArgumentError("SSRF redirect check: refusing to follow a redirect of a %s", via[0].Method)
+		}
+
 		if !ssrfProtectionEnabled.Load() {
 			return nil
+		}
+
+		if len(via) > 0 && via[0] != nil && via[0].URL != nil && !sameOriginOrUpgrade(via[0].URL, req.URL) {
+			return errors.NewInvalidArgumentError("SSRF redirect check: redirect leaves the origin of the requested URL")
 		}
 
 		scheme := strings.ToLower(req.URL.Scheme)
@@ -225,6 +389,47 @@ func ssrfCheckRedirect(policy SSRFDialPolicy) func(req *http.Request, via []*htt
 
 		return nil
 	}
+}
+
+// isReadMethod reports whether a request method only reads. net/http treats an empty method
+// as GET.
+func isReadMethod(method string) bool {
+	return method == "" || method == http.MethodGet || method == http.MethodHead
+}
+
+// sameOriginOrUpgrade reports whether a redirect from one URL to another keeps the same
+// origin (scheme, host and port), allowing only an http to https upgrade on the same host
+// between the default ports. Teranode's asset service never redirects, so a cross-origin hop
+// can only be a peer steering the request somewhere else.
+func sameOriginOrUpgrade(from, to *url.URL) bool {
+	canonicalHost := func(u *url.URL) string {
+		return strings.ToLower(strings.TrimRight(u.Hostname(), "."))
+	}
+
+	effectivePort := func(u *url.URL, scheme string) string {
+		if p := u.Port(); p != "" {
+			return p
+		}
+
+		if scheme == "https" {
+			return "443"
+		}
+
+		return "80"
+	}
+
+	if canonicalHost(from) != canonicalHost(to) {
+		return false
+	}
+
+	fromScheme, toScheme := strings.ToLower(from.Scheme), strings.ToLower(to.Scheme)
+	fromPort, toPort := effectivePort(from, fromScheme), effectivePort(to, toScheme)
+
+	if fromScheme == toScheme {
+		return fromPort == toPort
+	}
+
+	return fromScheme == "http" && toScheme == "https" && fromPort == "80" && toPort == "443"
 }
 
 // NewSSRFSafeHTTPClient returns an HTTP client for fetching peer-supplied URLs. Every
@@ -280,6 +485,66 @@ var (
 	}
 )
 
+// localServiceHTTPClient reaches this node's own services at operator-configured
+// addresses, which are routinely loopback (the default asset_httpAddress is localhost) or a
+// private container address. It has no SSRF dial guard, so it must never be given a
+// peer-supplied URL.
+var localServiceHTTPClient = &http.Client{
+	Transport: func() *http.Transport {
+		t := http.DefaultTransport.(*http.Transport).Clone()
+		t.MaxIdleConns = 100
+		t.MaxIdleConnsPerHost = 100
+		return t
+	}(),
+	// A redirect target is not necessarily loopback or TLS-protected, and this client's
+	// requests can carry the legacy peer pool's internal token header. Don't follow: return
+	// the redirect response as-is so the token never reaches whatever the target is.
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
+// DoLocalServiceHTTPRequestBodyReader streams a GET from one of this node's own services,
+// such as the legacy service reading blocks from the local asset service. The URL must come
+// from this node's settings, never from a peer: unlike DoHTTPRequestBodyReader it does not
+// refuse loopback or private addresses. The default timeout matches DoHTTPRequestBodyReader.
+//
+// headers is optional (existing callers pass none) and, when given, is set on the outgoing
+// request as-is - e.g. the legacy peer server's internal pool token header.
+func DoLocalServiceHTTPRequestBodyReader(ctx context.Context, url string, headers ...map[string]string) (io.ReadCloser, error) {
+	cancelFn := func() {
+		// noop
+	}
+
+	if _, ok := ctx.Deadline(); !ok {
+		ctx, cancelFn = context.WithTimeout(ctx, time.Duration(httpStreamingTimeout)*time.Millisecond)
+	}
+
+	// Merge every map passed; a later map wins on a duplicate key.
+	var reqHeaders map[string]string
+
+	for _, h := range headers {
+		for k, v := range h {
+			if reqHeaders == nil {
+				reqHeaders = make(map[string]string, len(h))
+			}
+
+			reqHeaders[k] = v
+		}
+	}
+
+	bodyReaderCloser, cancelFn, err := executeHTTPRequestWithClient(ctx, cancelFn, localServiceHTTPClient, url, reqHeaders)
+	if err != nil {
+		cancelFn()
+		return nil, err
+	}
+
+	return &readCloserWithCancel{
+		ReadCloser: bodyReaderCloser,
+		cancelFn:   cancelFn,
+	}, nil
+}
+
 // HTTPClient returns the shared HTTP client for use with httpmock.ActivateNonDefault() in tests.
 func HTTPClient() *http.Client {
 	return httpClient
@@ -288,6 +553,11 @@ func HTTPClient() *http.Client {
 // DoHTTPRequest performs an HTTP GET or POST request and returns the response body as bytes.
 // Uses GET by default, switches to POST if requestBody is provided.
 // Automatically handles timeouts and validates response status codes.
+//
+// Deprecated: this reads the whole body with io.ReadAll and applies no cap, so a peer-controlled
+// response of unbounded size is read into memory in full (bitcoin-sv/teranode#4742). It has no
+// production callers left. Use DoHTTPRequestBounded for a caller-known size, or
+// DoHTTPRequestBodyReader to stream and bound the parse itself.
 func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]byte, error) {
 	bodyReaderCloser, cancelFn, err := doHTTPRequest(ctx, url, requestBody...)
 	defer cancelFn()
@@ -347,7 +617,14 @@ func DoHTTPRequestBounded(ctx context.Context, url string, maxBytes int64, reque
 		}
 	}()
 
-	bounded := io.LimitReader(bodyReaderCloser, maxBytes+1)
+	return readBodyBounded(ctx, url, bodyReaderCloser, maxBytes)
+}
+
+// readBodyBounded reads at most maxBytes from body, failing with ErrExternal when the body is
+// longer. Shared by DoHTTPRequestBounded and DoHTTPRequestBoundedWithRetry so the two keep one
+// bound.
+func readBodyBounded(ctx context.Context, url string, body io.Reader, maxBytes int64) ([]byte, error) {
+	bounded := io.LimitReader(body, maxBytes+1)
 
 	done := make(chan struct{})
 	var blockBytes []byte
@@ -446,6 +723,14 @@ func SetSSRFProtection(enabled bool) {
 	ssrfProtectionEnabled.Store(enabled)
 }
 
+// SSRFProtectionEnabled reports whether SSRF URL validation is currently active.
+// Tests that disable it should restore this value rather than assuming the
+// default, so a nested or subsequent test cannot be silently left unprotected —
+// or protected when its caller had deliberately turned it off.
+func SSRFProtectionEnabled() bool {
+	return ssrfProtectionEnabled.Load()
+}
+
 // ValidateURL checks that the given URL is safe to request, rejecting non-HTTP schemes
 // and URLs containing link-local IP addresses to prevent SSRF attacks against cloud
 // metadata endpoints (e.g. AWS 169.254.169.254).
@@ -518,28 +803,58 @@ func isBlockedIP(ip net.IP) bool {
 	return false
 }
 
-// executeHTTPRequest performs the actual HTTP request with the given context.
+// executeHTTPRequest performs the actual HTTP request with the given context, through the
+// SSRF-guarded client used for peer-supplied URLs.
 func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL string, requestBody ...[]byte) (io.ReadCloser, context.CancelFunc, error) {
 	if err := ValidateURL(rawURL); err != nil {
 		return nil, cancelFn, err
 	}
 
+	return executeHTTPRequestWithClient(ctx, cancelFn, httpClient, rawURL, nil, requestBody...)
+}
+
+// buildOutboundRequest constructs the http.Request shared by every path that talks to a
+// peer over HTTP: a GET by default, or a POST with an octet-stream body when requestBody
+// is supplied, signed by the configured request signer. Content-Type is
+// application/octet-stream because every internal POST that goes through this helper
+// sends raw bytes (e.g. /api/v1/subtree/{hash}/txs streams packed 32-byte tx hashes).
+// Tagging it as application/json caused a WAF in front of asset (ModSecurity) to run the
+// JSON body parser, fail on the binary payload, and reject the request with HTTP 400 —
+// degrading peer catchup reputation across the network.
+//
+// Kept as one function so the retry path (doHTTPRequestWithRetryAfter) cannot
+// drift from the plain path (executeHTTPRequestWithClient) on content-type or signing, the
+// way it once did: the retry path used to build its own request and sent unsigned
+// application/json bodies, undoing both the WAF fix and peer-request signing on every
+// retried attempt.
+//
+// headers, when non-nil, are set after Content-Type (so a caller can override it) and
+// before signing (so a signer that covers headers sees them).
+func buildOutboundRequest(ctx context.Context, rawURL string, headers map[string]string, requestBody ...[]byte) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, cancelFn, errors.NewServiceError("failed to create http request", err)
+		return nil, errors.NewServiceError("failed to create http request", err)
 	}
 
-	// If there is a request body assume we want a POST and write request body.
-	// Content-Type is application/octet-stream because every internal POST that
-	// goes through this helper sends raw bytes (e.g. /api/v1/subtree/{hash}/txs
-	// streams packed 32-byte tx hashes). Tagging it as application/json caused a
-	// WAF in front of asset (ModSecurity) to run the JSON body parser, fail on
-	// the binary payload, and reject the request with HTTP 400 — degrading peer
-	// catchup reputation across the network.
 	if len(requestBody) > 0 && requestBody[0] != nil {
-		req.Body = io.NopCloser(bytes.NewReader(requestBody[0]))
+		body := requestBody[0]
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		// GetBody lets net/http resend the body on a fresh connection when an HTTP/2 stream is
+		// refused or its connection goes away, or when a reused HTTP/1.1 connection fails before
+		// anything was written - failures a caller would otherwise charge to the peer. It would
+		// equally let net/http replay the body across a 307 or 308, which ssrfCheckRedirect refuses
+		// for every request that is not a plain read, unconditionally; httpClient is the only client
+		// that reaches here with a body. It is set here, where the body is built, and not by the
+		// signer: signing must not change what the client does with the request.
+		req.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(body)), nil
+		}
 		req.Method = http.MethodPost
 		req.Header.Set("Content-Type", "application/octet-stream")
+	}
+
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 
 	// Sign the request if a signer is configured (silently skip on error)
@@ -547,8 +862,59 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 		_ = signer.SignRequest(req)
 	}
 
+	return req, nil
+}
+
+// waitOutRetrySecond blocks until the wall clock has moved past prevSecond, if it hasn't
+// already. Ed25519 signing is deterministic and the signed timestamp (X-Peer-Timestamp)
+// has one-second resolution, so retrying a signed request within the same Unix second it
+// was last signed in produces a byte-identical signature. The receiver's replay cache
+// rejects that as a replay and drops the peer to the unverified tier, on exactly the
+// retries meant to recover from a transient rejection. prevSecond < 0 (no previous
+// attempt yet) is a no-op. Only called for signed requests on the retry path; the plain
+// (non-retry) path and unsigned requests are unaffected.
+func waitOutRetrySecond(ctx context.Context, prevSecond int64) error {
+	// Wait while the clock is not past the previous attempt's second: the same
+	// second, or an earlier one after a small backwards step, could reproduce a
+	// signature the receiver has already seen.
+	if prevSecond < 0 || time.Now().Unix() > prevSecond {
+		return nil
+	}
+
+	untilNextSecond := time.Until(time.Unix(prevSecond+1, 0))
+	if untilNextSecond <= 0 {
+		return nil
+	}
+
+	// A large backwards step lands in a second not signed recently, so there is
+	// nothing to replay; don't sleep it out.
+	if untilNextSecond > maxRetrySecondWait {
+		return nil
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(untilNextSecond):
+		return nil
+	}
+}
+
+// maxRetrySecondWait bounds waitOutRetrySecond. A retry only needs to reach the
+// next second; anything longer means the clock stepped back far enough that the
+// signed timestamp can't collide with one sent in the replay window.
+const maxRetrySecondWait = 2 * time.Second
+
+// executeHTTPRequestWithClient performs the request through client, which decides what
+// addresses may be reached.
+func executeHTTPRequestWithClient(ctx context.Context, cancelFn context.CancelFunc, client *http.Client, rawURL string, headers map[string]string, requestBody ...[]byte) (io.ReadCloser, context.CancelFunc, error) {
+	req, err := buildOutboundRequest(ctx, rawURL, headers, requestBody...)
+	if err != nil {
+		return nil, cancelFn, err
+	}
+
 	var resp *http.Response
-	resp, err = httpClient.Do(req)
+	resp, err = client.Do(req)
 	if err != nil {
 		return nil, cancelFn, errors.NewServiceError("failed to do http request", err)
 	}
@@ -560,6 +926,12 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 	ct := strings.ToLower(resp.Header.Get("content-type"))
 	isHTML := strings.HasPrefix(ct, "text/html")
 	if isHTML {
+		// The body is never returned on this path, so it has to be closed here or the
+		// connection leaks outright — which defeats the point of draining error bodies
+		// a few lines up. A 2xx with an unexpected content type is worth draining for
+		// reuse rather than tearing down, so the same bounded helper applies.
+		drainAndCloseErrorBody(resp.Body)
+
 		return nil, cancelFn, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", rawURL)
 	}
 
@@ -577,18 +949,129 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL
 // not on the length of the resulting message.
 const maxHTTPErrorBodyBytes = 2 * 1024
 
+// maxHTTPErrorBodyDrainBytes bounds how much of the REMAINDER of an error body is
+// drained, after the snippet above has been read, purely so the connection can go
+// back into http.Transport's idle pool.
+//
+// The trade-off is deliberate. A body must be read to EOF for the connection to be
+// reusable, so capping the read at maxHTTPErrorBodyBytes and closing turned every
+// error larger than 2 KiB into a fresh TCP (+TLS) handshake — on the high-rate
+// failure path, which is exactly when handshakes hurt most. An unbounded
+// io.Copy(io.Discard, ...) would restore reuse but reopen the hole the snippet cap
+// was added to close: a hostile peer answering with an error status and streaming
+// forever. So the drain is itself bounded. A body whose remainder fits is drained
+// and its connection reused; anything larger is abandoned and Close tears the
+// connection down, which is the correct outcome for a peer that streams
+// unboundedly on an error status.
+//
+// The budget is measured from wherever the snippet read stopped, so bodies just
+// over the snippet cap — the common case for a verbose error page — are fully
+// drained.
+const maxHTTPErrorBodyDrainBytes = 64 * 1024
+
+// maxHTTPErrorBodyDrainWait bounds how long the CALLER waits for the remainder drain
+// before abandoning it to the background.
+//
+// It exists because the drain's two requirements pull in opposite directions:
+//
+//   - Connection reuse needs the body read to EOF and CLOSED *before the caller
+//     returns*. Every caller of buildHTTPError cancels its request context immediately
+//     afterwards — DoHTTPRequest defers cancelFn, doHTTPRequestWithRetryAfter
+//     calls it outright — and response-body reads honour that context. So a drain that
+//     has not finished by then is killed and the connection is discarded: a purely
+//     asynchronous drain delivers no reuse at all, which is the entire point of
+//     draining.
+//   - A peer that dribbles must not hold the caller. Body reads are otherwise bounded
+//     only by the request context, up to the 5-minute streaming timeout, compounded by
+//     up to six 503 retries.
+//
+// So the drain is synchronous up to this budget and abandoned past it. A peer whose
+// remainder is already buffered — the common case for a verbose error page — drains in
+// microseconds and its connection is reused; a dribbler costs the caller this much and
+// no more.
+//
+// Across a retry ladder that budget multiplies: DoHTTPRequestBodyReaderWithRetry makes
+// up to defaultRetryConfig.maxAttempts attempts, so its worst case is
+// maxAttempts x this budget — 6 x 250ms = 1.5s — reached only against a peer that
+// dribbles its error body on every one of the six attempts. Set that against the
+// ~7.75s or more of exponential backoff the same ladder already spends between those
+// attempts (250ms doubling, capped at 5s, jittered upwards), and the added share is bounded enough that the
+// budget is deliberately not shortened: cutting it would trade away the connection
+// reuse the synchronous drain exists to buy.
+const maxHTTPErrorBodyDrainWait = 250 * time.Millisecond
+
+// drainAndCloseErrorBody drains the remainder of an error body and closes it so the
+// connection can return to http.Transport's idle pool, while bounding what that costs
+// the caller.
+//
+// Bounded three ways: in BYTES by maxHTTPErrorBodyDrainBytes, against a peer that
+// streams forever; in the CALLER'S TIME by maxHTTPErrorBodyDrainWait; and, once
+// abandoned, by the request context its caller is about to cancel anyway.
+//
+// The goroutine takes sole ownership of the body and closes it exactly once, whether it
+// finished or was abandoned — callers must not touch the body afterwards.
+//
+// Note what this does NOT bound: a caller can still block on the snippet read in
+// buildHTTPError, which is synchronous and capped in bytes (2 KiB) but not in time.
+// That exposure is pre-existing and strictly smaller than the unbounded io.ReadAll it
+// replaced; bounding it in time needs a bounded-time reader and would trade away the
+// body of a legitimately slow error response.
+func drainAndCloseErrorBody(body io.ReadCloser) {
+	if body == nil {
+		return
+	}
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		drainErrorBody(body)
+	}()
+
+	timer := time.NewTimer(maxHTTPErrorBodyDrainWait)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		// Drained and closed before the caller returns, so the connection is reusable.
+	case <-timer.C:
+		// Abandoned. The goroutine keeps sole ownership and closes the body when it
+		// stops, at the byte cap or when the request context dies.
+	}
+}
+
+// drainErrorBody is the byte-bounded drain-then-close that drainAndCloseErrorBody waits
+// on. Split out so the byte bound and the close can be asserted directly, without a
+// test having to race a goroutine.
+func drainErrorBody(body io.ReadCloser) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, maxHTTPErrorBodyDrainBytes))
+	_ = body.Close()
+}
+
 // buildHTTPError constructs an appropriate error from a non-OK HTTP response.
 //
 // The error type is chosen to let callers branch with errors.Is:
 //   - 404 → ErrNotFound
+//   - 429 → ErrServiceRateLimited (retryable; see DoHTTPRequestBodyReaderWithRetry)
 //   - 503 → ErrServiceUnavailable (typically retryable; see DoHTTPRequestBodyReaderWithRetry)
 //   - other → generic ServiceError
 //
+// 429 gets its own code rather than sharing ErrServiceUnavailable: that sentinel is
+// in errors.IsTransientLocalError, which legacy block sync reads as "a fault in this
+// node's own stack, so keep the delivering peer". A remote rate limit is neither a
+// local fault nor a peer fault, and must not perturb those decisions.
+//
 // The body is read up to maxHTTPErrorBodyBytes; anything beyond that is discarded
-// rather than retained in the error string. The snippet is %q-escaped because this
-// message is logged verbatim and forwarded to the peer registry: raw peer bytes would
-// otherwise let a peer embed newlines to forge log lines, or terminal escapes, and
-// would break the single-line log convention.
+// rather than retained in the error string, and the message says so. The snippet is
+// %q-escaped because this message is logged verbatim and forwarded to the peer
+// registry: raw peer bytes would otherwise let a peer embed newlines to forge log
+// lines, or terminal escapes, and would break the single-line log convention.
+//
+// The remainder of the body is then drained and closed by drainAndCloseErrorBody,
+// bounded in bytes and in how long it may hold this function, so the connection can be
+// reused without a dribbling peer stalling the caller. The call is deferred so it also
+// covers the early return on a read error and any future early return added here.
 func buildHTTPError(resp *http.Response, rawURL string) error {
 	errFn := errors.NewServiceError
 	switch resp.StatusCode {
@@ -596,19 +1079,39 @@ func buildHTTPError(resp *http.Response, rawURL string) error {
 		errFn = errors.NewNotFoundError
 	case http.StatusServiceUnavailable:
 		errFn = errors.NewServiceUnavailableError
+	case http.StatusTooManyRequests:
+		errFn = errors.NewServiceRateLimitedError
 	}
 
 	if resp.Body != nil {
-		defer func() {
-			_ = resp.Body.Close()
-		}()
+		// Ownership of the body transfers to the drain once this returns; the snippet
+		// read below completes first, because the deferred call runs last.
+		defer drainAndCloseErrorBody(resp.Body)
 
-		b, readErr := io.ReadAll(io.LimitReader(resp.Body, maxHTTPErrorBodyBytes))
+		// Read one byte past the cap so truncation is detected by arrival of that
+		// byte, not by a length equality: io.LimitReader(body, max) returns exactly
+		// max bytes both for a body of exactly max and for a longer one, so
+		// len(b) == max would report complete peer errors as cut short — a false
+		// diagnostic in the very place an operator is trying to diagnose something.
+		// The extra byte is never rendered, so the %q-expansion bound documented on
+		// maxHTTPErrorBodyBytes is unchanged.
+		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxHTTPErrorBodyBytes+1))
 		if readErr != nil {
 			return errFn("http request [%s] returned status code [%d]", rawURL, resp.StatusCode, readErr)
 		}
 
+		b := raw
+		truncated := len(raw) > maxHTTPErrorBodyBytes
+
+		if truncated {
+			b = raw[:maxHTTPErrorBodyBytes]
+		}
+
 		if b != nil {
+			if truncated {
+				return errFn("http request [%s] returned status code [%d] with body %q (truncated)", rawURL, resp.StatusCode, string(b))
+			}
+
 			return errFn("http request [%s] returned status code [%d] with body %q", rawURL, resp.StatusCode, string(b))
 		}
 	}
@@ -649,37 +1152,111 @@ var defaultRetryConfig = retryConfig{
 }
 
 // DoHTTPRequestBodyReaderWithRetry behaves like DoHTTPRequestBodyReader but retries on
-// HTTP 503 (Service Unavailable) with exponential backoff. Used for endpoints where the
-// server signals admission-control rejection (e.g. asset /subtree_data) and the right
-// behavior is to back off and retry rather than fail the caller.
+// HTTP 503 (Service Unavailable) and HTTP 429 (Too Many Requests) with exponential
+// backoff. Used for endpoints where the server signals admission-control rejection
+// (e.g. asset /subtree_data, or the tiered rate limiter in front of the asset service)
+// and the right behavior is to back off and retry rather than fail the caller.
 //
 // Behavior:
-//   - Retries only on errors satisfying errors.Is(err, errors.ErrServiceUnavailable).
+//   - Retries only on errors satisfying errors.Is(err, errors.ErrServiceUnavailable) or
+//     errors.Is(err, errors.ErrServiceRateLimited).
 //   - Other errors (404, 500, network errors) are returned immediately — they are not
 //     transient admission rejections.
-//   - Backoff is exponential starting at 250ms, doubling, capped at 5s. Up to 6 attempts.
-//   - Honors the server's Retry-After header on each 503 (clamped to maxDelay).
-//   - ctx cancellation aborts the retry loop and returns the parent ctx error.
+//   - Backoff is exponential starting at 250ms, doubling, capped at 5s. Up to 6 attempts,
+//     so a server that never relents and never sends Retry-After costs ~7.75s of backoff,
+//     plus jitter, before the final error.
+//   - Honors the server's Retry-After header on each rejection, replacing that attempt's
+//     ladder delay outright when the header value is <= maxDelay; a larger value is
+//     ignored and the ladder delay is used instead. Retry-After is not a ceiling on top
+//     of the ladder — a compliant peer sending Retry-After: 5 on every rejection costs
+//     5 x 5s = 25s, well above the Retry-After-free worst case above.
+//   - Every wait is jittered upwards by up to half, so requests rejected together do not
+//     retry together. The worst cases above grow by up to that half.
+//   - With a ctx deadline, the ladder spends at most half of the time left when it starts,
+//     leaving the rest for the response that is finally served; past that it stops early
+//     with the last rejection.
+//   - ctx cancellation aborts the retry loop and returns the parent ctx error. A deadline
+//     that runs out after a rejection returns that rejection instead, so the failure stays
+//     a rejection rather than reading as a local context error.
+//   - The final error keeps the classification of the last rejection, so a caller can
+//     still tell a rate limit apart from an unavailable server after the ladder runs out.
 //
-// Each attempt is a fresh GET — for POST callers passing requestBody, the body is re-sent
-// each time. Make sure that's idempotent before using this helper for non-GET workloads.
+// Each attempt is a new request built the same way as the plain path: a GET, or a POST
+// with application/octet-stream when requestBody is passed, signed when a signer is
+// installed. A POST body is re-sent on every attempt, so only use this for requests
+// that are idempotent.
 func DoHTTPRequestBodyReaderWithRetry(ctx context.Context, url string, requestBody ...[]byte) (io.ReadCloser, error) {
 	return doHTTPRequestBodyReaderWithRetry(ctx, url, defaultRetryConfig, requestBody...)
 }
 
 func doHTTPRequestBodyReaderWithRetry(ctx context.Context, url string, cfg retryConfig, requestBody ...[]byte) (io.ReadCloser, error) {
+	return doHTTPRequestWithRetry(ctx, url, cfg, httpStreamingTimeout, requestBody...)
+}
+
+// DoHTTPRequestBoundedWithRetry behaves like DoHTTPRequestBounded but retries HTTP 503 and
+// HTTP 429 exactly as DoHTTPRequestBodyReaderWithRetry does: same backoff, same Retry-After
+// handling, same request construction, and the final error keeps the class of the last
+// rejection. Each attempt without a caller deadline gets the plain request timeout, as
+// DoHTTPRequestBounded does. The body of the response that is finally served is capped at
+// maxBytes; an over-cap body fails with ErrExternal and is not retried.
+func DoHTTPRequestBoundedWithRetry(ctx context.Context, url string, maxBytes int64, requestBody ...[]byte) ([]byte, error) {
+	return doHTTPRequestBoundedWithRetry(ctx, url, maxBytes, defaultRetryConfig, requestBody...)
+}
+
+func doHTTPRequestBoundedWithRetry(ctx context.Context, url string, maxBytes int64, cfg retryConfig, requestBody ...[]byte) ([]byte, error) {
+	body, err := doHTTPRequestWithRetry(ctx, url, cfg, httpRequestTimeout, requestBody...)
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() {
+		_ = body.Close()
+	}()
+
+	return readBodyBounded(ctx, url, body, maxBytes)
+}
+
+// doHTTPRequestWithRetry is the retry loop behind both retrying helpers. timeoutMs is the
+// per-attempt timeout applied when ctx carries no deadline.
+func doHTTPRequestWithRetry(ctx context.Context, url string, cfg retryConfig, timeoutMs int, requestBody ...[]byte) (io.ReadCloser, error) {
 	delay := cfg.initialDelay
 	var lastErr error
+	lastAttemptSecond := int64(-1)
+
+	// With a caller deadline, the ladder may spend at most half of what is left of it, so
+	// a request that is finally served still has the other half to stream its body. Past
+	// that point the loop stops and reports the last rejection rather than sleeping on.
+	var budgetEnd time.Time
+	if deadline, ok := ctx.Deadline(); ok {
+		budgetEnd = time.Now().Add(time.Until(deadline) / 2)
+	}
+
+	// rejections counts the 429/503 responses actually received, which is what the final
+	// error reports; an attempt cut short by the deadline is not one of them.
+	rejections := 0
 
 	for attempt := 1; attempt <= cfg.maxAttempts; attempt++ {
-		body, retryAfter, err := doHTTPRequestForStreamingWithRetryAfter(ctx, url, requestBody...)
+		if attempt > 1 && signerSignsRequests(loadHTTPRequestSigner()) {
+			if err := waitOutRetrySecond(ctx, lastAttemptSecond); err != nil {
+				return nil, rejectionOrContextError(ctx, url, rejections, lastErr, 0, err)
+			}
+		}
+
+		body, retryAfter, status, err := doHTTPRequestWithRetryAfter(ctx, timeoutMs, url, requestBody...)
+		// Read the clock after the attempt, not before it: the signer takes its
+		// timestamp while building the request, so a second that rolls over
+		// between a pre-attempt read and the signature would record S while the
+		// request was signed with S+1, and the next retry could land in S+1 and
+		// replay it. A post-attempt read is never earlier than the signed second.
+		lastAttemptSecond = time.Now().Unix()
 		if err == nil {
 			return body, nil
 		}
-		if !errors.Is(err, errors.ErrServiceUnavailable) {
-			return nil, err
+		if !errors.Is(err, errors.ErrServiceUnavailable) && !errors.Is(err, errors.ErrServiceRateLimited) {
+			return nil, rejectionOrContextError(ctx, url, rejections, lastErr, status, err)
 		}
 		lastErr = err
+		rejections++
 
 		if attempt == cfg.maxAttempts {
 			break
@@ -690,9 +1267,17 @@ func doHTTPRequestBodyReaderWithRetry(ctx context.Context, url string, cfg retry
 			sleepFor = retryAfter
 		}
 
+		// Jitter upwards only, so a Retry-After is never undercut, and so a fan-out of
+		// requests rejected together does not come back together and trip the limiter again.
+		sleepFor += rand.N(sleepFor/2 + 1)
+
+		if !budgetEnd.IsZero() && time.Now().Add(sleepFor).After(budgetEnd) {
+			break
+		}
+
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, rejectionOrContextError(ctx, url, rejections, lastErr, 0, ctx.Err())
 		case <-time.After(sleepFor):
 		}
 
@@ -702,51 +1287,86 @@ func doHTTPRequestBodyReaderWithRetry(ctx context.Context, url string, cfg retry
 		}
 	}
 
-	return nil, errors.NewServiceUnavailableError("http request [%s] still 503 after %d attempts: %v", url, cfg.maxAttempts, lastErr)
+	return nil, rejectedError(url, rejections, lastErr)
 }
 
-// doHTTPRequestForStreamingWithRetryAfter is doHTTPRequestForStreaming + extracts
-// the Retry-After header on non-OK responses. On success returns (body, 0, nil).
-func doHTTPRequestForStreamingWithRetryAfter(ctx context.Context, rawURL string, requestBody ...[]byte) (io.ReadCloser, time.Duration, error) {
+// rejectedError is the error for a server that was still rejecting us when the ladder gave up,
+// after attempts rejections.
+// It preserves the classification of the last rejection: collapsing a 429 into
+// ErrServiceUnavailable here would reintroduce exactly the local-vs-remote confusion the
+// separate code exists to avoid.
+func rejectedError(url string, attempts int, lastErr error) error {
+	errFn := errors.NewServiceUnavailableError
+	if errors.Is(lastErr, errors.ErrServiceRateLimited) {
+		errFn = errors.NewServiceRateLimitedError
+	}
+
+	return errFn("http request [%s] still rejected after %d attempts", url, attempts, lastErr)
+}
+
+// rejectionOrContextError returns err, unless the caller's deadline ran out after the server
+// had already rejected us and before it answered again. Then the server's rejection is what
+// used up the time, so that is what is reported: a bare deadline reads as a local fault to
+// catch-up, which would neither fail over nor attribute it. A cancellation is ours and is
+// returned as is, and so is any error carrying a status the server did send (status != 0):
+// a 404 or 500 must not be relabelled as a rate limit because the deadline also passed.
+func rejectionOrContextError(ctx context.Context, url string, rejections int, lastErr error, status int, err error) error {
+	if lastErr != nil && status == 0 && ctx.Err() == context.DeadlineExceeded {
+		return rejectedError(url, rejections, lastErr)
+	}
+
+	return err
+}
+
+// doHTTPRequestWithRetryAfter performs one attempt of the retry loop, applying timeoutMs
+// when ctx carries no deadline, and extracts the Retry-After header on non-OK responses.
+// The extraction is status-agnostic, so it covers 429 as well as 503. It also returns the
+// response status, or 0 when no response was received. On success returns
+// (body, 0, status, nil).
+func doHTTPRequestWithRetryAfter(ctx context.Context, timeoutMs int, rawURL string, requestBody ...[]byte) (io.ReadCloser, time.Duration, int, error) {
 	cancelFn := func() {}
 	if _, ok := ctx.Deadline(); !ok {
-		ctx, cancelFn = context.WithTimeout(ctx, time.Duration(httpStreamingTimeout)*time.Millisecond)
+		ctx, cancelFn = context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
 	}
 
 	if err := ValidateURL(rawURL); err != nil {
 		cancelFn()
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	req, err := buildOutboundRequest(ctx, rawURL, nil, requestBody...)
 	if err != nil {
 		cancelFn()
-		return nil, 0, errors.NewServiceError("failed to create http request", err)
-	}
-	if len(requestBody) > 0 && requestBody[0] != nil {
-		req.Body = io.NopCloser(bytes.NewReader(requestBody[0]))
-		req.Method = http.MethodPost
-		req.Header.Set("Content-Type", "application/json")
+		return nil, 0, 0, err
 	}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		cancelFn()
-		return nil, 0, errors.NewServiceError("failed to do http request", err)
+		return nil, 0, 0, errors.NewServiceError("failed to do http request", err)
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
 		err := buildHTTPError(resp, rawURL)
 		cancelFn()
-		return nil, retryAfter, err
+		return nil, retryAfter, resp.StatusCode, err
 	}
 
 	ct := strings.ToLower(resp.Header.Get("content-type"))
 	if strings.HasPrefix(ct, "text/html") {
+		// The body is not handed to the caller on this path, so it must be closed here
+		// or the connection leaks outright. Closed rather than drained: cancelFn below
+		// cancels the request context, which makes the connection unusable anyway, so a
+		// drain for reuse would be spending a goroutine on nothing.
+		if resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+
 		cancelFn()
-		return nil, 0, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", rawURL)
+
+		return nil, 0, resp.StatusCode, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", rawURL)
 	}
 
-	return &readCloserWithCancel{ReadCloser: resp.Body, cancelFn: cancelFn}, 0, nil
+	return &readCloserWithCancel{ReadCloser: resp.Body, cancelFn: cancelFn}, 0, resp.StatusCode, nil
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 // cacheBypassRetryableKey marks an error whose cause is a peer response that a
@@ -86,13 +87,20 @@ func isCacheBypassRetryable(err error) bool {
 // the same handler but misses the cache, forcing a fresh on-demand generation. This
 // needs no change on the peer, which is the only lever available against a fleet we
 // cannot update.
-func (u *Server) peerResourceURL(baseURL, resource string, hash *chainhash.Hash, bypassCache bool) string {
-	url := fmt.Sprintf("%s/%s/%s", baseURL, resource, hash.String())
-	if !bypassCache {
-		return url
+//
+// The path is joined structurally (util.JoinPeerURL), so a base URL carrying its own
+// query, fragment or credentials is an error rather than a way to change the path.
+func (u *Server) peerResourceURL(baseURL, resource string, hash *chainhash.Hash, bypassCache bool) (string, error) {
+	url, err := util.JoinPeerURL(baseURL, resource, hash.String())
+	if err != nil {
+		return "", err
 	}
 
-	return fmt.Sprintf("%s?cachebust=%d", url, u.cacheBustCounter.Add(1))
+	if !bypassCache {
+		return url, nil
+	}
+
+	return fmt.Sprintf("%s?cachebust=%d", url, u.cacheBustCounter.Add(1)), nil
 }
 
 // newPoisonedSubtreeDataError builds the error returned when a peer answers a
@@ -109,6 +117,27 @@ func newPoisonedSubtreeDataError(peerID, baseURL string, subtreeHash *chainhash.
 	} else {
 		e = errors.NewExternalError("[catchup:fetchAndStoreSubtreeData] peer %s (%s) served incomplete subtree_data for %s (%d bytes, %d of %d txs missing)", peerID, baseURL, subtreeHash.String(), bytesRead, missing, expected)
 	}
+
+	e.SetData(cacheBypassRetryableKey, true)
+
+	return e
+}
+
+// newMismatchedSubtreeDataError builds the error returned when a peer answers a
+// subtree_data request with a complete body that nonetheless carries a transaction the
+// subtree does not name at that index.
+//
+// A sibling of newPoisonedSubtreeDataError in classification as well as in shape, and
+// deliberately so. The body is complete, so nothing about its length gives it away, but
+// it is no more usable than an empty one and it is attributable to exactly the same
+// party: the peer whose bytes these are. ErrExternal keeps errors.IsLocalError false so
+// the caller still fails over to an alternative peer, and the cache-bypass marker earns
+// the one cache-busted retry against this peer first — a caching layer in front of it can
+// replay a bad body just as readily as a short one, and without the marker a mismatch
+// would be a dead end rather than a retry (bitcoin-sv/teranode#4838).
+func newMismatchedSubtreeDataError(peerID, baseURL string, subtreeHash *chainhash.Hash, idx int, expected, got *chainhash.Hash) error {
+	e := errors.NewExternalError("[catchup:fetchAndStoreSubtreeData] peer %s (%s) served subtree_data for %s whose transaction at index %d is not the one the subtree names (node %s, transaction %s)",
+		peerID, baseURL, subtreeHash.String(), idx, expected.String(), got.String())
 
 	e.SetData(cacheBypassRetryableKey, true)
 

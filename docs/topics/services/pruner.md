@@ -241,8 +241,8 @@ When a transaction remains unmined for a long time, its parent transactions (UTX
     - Delete UTXO record from database
 
 6. Pruner updates metrics
-    - `pruner_duration_seconds{operation="dah_pruner"}`
-    - `pruner_processed_total`
+    - `teranode_pruner_duration_seconds{operation="dah_pruner"}`
+    - `teranode_pruner_deleting_children_total`
     - `utxo_cleanup_batch_duration_seconds`
 
 **Chunk Processing Configuration:**
@@ -435,7 +435,7 @@ For large transactions stored externally:
 
 ## 4. Technology
 
-- **Language**: Go 1.26+
+- **Language**: Go 1.27+
 - **Communication**: gRPC (port 8096), Protocol Buffers
 - **Storage**: Store-agnostic (Aerospike or SQL via interface)
 - **Metrics**: Prometheus

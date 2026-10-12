@@ -21,9 +21,11 @@
   let {
     subtree,
     blockHash = '',
+    index,
   }: {
     subtree: any
     blockHash?: string
+    index?: number
   } = $props()
 
   let data: any[] = $state([])
@@ -115,7 +117,7 @@
 </script>
 
 <Card
-  title={t(`${baseKey}.title`, { height: subtree?.expandedData?.height })}
+  title={index === undefined ? t(`${baseKey}.title_generic`) : t(`${baseKey}.title`, { index })}
   contentPadding="0"
   showFooter={showTableFooter}
 >

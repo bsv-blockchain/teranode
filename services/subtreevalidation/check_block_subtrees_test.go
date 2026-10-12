@@ -112,7 +112,7 @@ func TestCheckBlockSubtrees(t *testing.T) {
 		require.NoError(t, err)
 
 		// Mark the subtree as already validated to avoid calling ValidateSubtreeInternal
-		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, []byte("validated"))
+		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
 		require.NoError(t, err)
 
 		// Create a block with subtrees using proper model construction
@@ -757,6 +757,68 @@ func TestCheckBlockSubtrees_OversizedBody(t *testing.T) {
 	assert.True(t, errors.Is(err, errors.ErrExternal), "expected ErrExternal in chain, got %v", err)
 }
 
+// TestCheckBlockSubtrees_RetriesSubtreeFetchOn429 — a peer that rate-limits the GET /subtree
+// fetch on the block-validation path is retried instead of failing the block. The retried
+// response is the oversized body from TestCheckBlockSubtrees_OversizedBody, so reaching
+// ErrExternal on the second attempt proves the retry happened and the size bound still holds.
+func TestCheckBlockSubtrees_RetriesSubtreeFetchOn429(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	server.settings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 // tiny cap
+
+	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
+		mock.Anything, mock.Anything, mock.Anything).
+		Return([]uint32{1, 2, 3}, nil)
+
+	// Hash that doesn't exist in subtreeStore — forces the peer HTTP-fetch fallback.
+	subtreeHash := chainhash.HashH([]byte("test-429-checkblock-subtree"))
+
+	var attempts atomic.Int32
+
+	baseURL := testPeerURL
+	subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+	oversized := bytes.Repeat([]byte{0xab}, 4*1024)
+	httpmock.RegisterResponder("GET", subtreeURL,
+		func(req *http.Request) (*http.Response, error) {
+			if attempts.Add(1) == 1 {
+				return httpmock.NewStringResponse(http.StatusTooManyRequests, "rate limit exceeded"), nil
+			}
+
+			return httpmock.NewBytesResponse(http.StatusOK, oversized), nil
+		})
+
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           model.NBit{},
+		Nonce:          0,
+	}
+
+	coinbaseTx := &bt.Tx{Version: 1}
+	block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 1, 400, 0, 0)
+	require.NoError(t, err)
+
+	blockBytes, err := block.Bytes()
+	require.NoError(t, err)
+
+	request := &subtreevalidation_api.CheckBlockSubtreesRequest{
+		Block:   blockBytes,
+		BaseUrl: baseURL,
+	}
+
+	_, err = server.CheckBlockSubtrees(context.Background(), request)
+	require.Error(t, err)
+	require.Equal(t, int32(2), attempts.Load(), "the 429 must have been retried")
+	require.True(t, errors.Is(err, errors.ErrExternal), "expected the retried over-cap body to fail as ErrExternal, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrServiceRateLimited), "the 429 must not have been the final answer")
+}
+
 // TestCheckBlockSubtrees_LocalAssemblyPolicyIgnored is a regression test for issue #905.
 // The peer-fetch fallback in CheckBlockSubtrees gates the response twice: first by the
 // HTTP body size, then by the derived leaf count. Pre-fix both gates used the local
@@ -845,7 +907,7 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 		subtreeHash := chainhash.Hash{}
 		copy(subtreeHash[:], []byte("quorum_test_subtree_exists__"))
 
-		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, []byte("validated"))
+		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
 		require.NoError(t, err)
 
 		header := &model.BlockHeader{
@@ -1094,7 +1156,7 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 		// and release the lock file. TryLockIfNotExistsWithTimeout will retry and see exists=true.
 		go func() {
 			time.Sleep(50 * time.Millisecond)
-			_ = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, []byte("validated"))
+			_ = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
 			os.Remove(lockFilePath)
 		}()
 
@@ -2126,7 +2188,7 @@ func TestCheckBlockSubtrees_ConcurrentProcessing(t *testing.T) {
 		require.NoError(t, err)
 
 		// Mark as validated to avoid HTTP calls
-		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, []byte("validated"))
+		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
 		require.NoError(t, err)
 	}
 
@@ -2325,6 +2387,28 @@ func (m *MockBlobStore) Close(ctx context.Context) error {
 }
 
 // Helper function to setup test server
+// blessedSubtreeBytes returns a serialized subtree carrying no conflicting
+// transactions.
+//
+// Tests that only need the "already validated" marker to be present must still
+// write a parseable subtree. CheckBlockSubtrees reads each cached subtree's
+// conflicting-node trailer and re-checks it against the candidate chain, and it
+// fails closed on bytes it cannot read — a placeholder payload is
+// indistinguishable from a corrupt or truncated file, and treating it as "no
+// conflicts" would be exactly the bypass that check exists to prevent.
+func blessedSubtreeBytes(t *testing.T) []byte {
+	t.Helper()
+
+	st, err := subtreepkg.NewIncompleteTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, st.AddCoinbaseNode())
+
+	b, err := st.Serialize()
+	require.NoError(t, err)
+
+	return b
+}
+
 func setupTestServer(t *testing.T) (*Server, func()) {
 	logger := &ulogger.TestLogger{}
 
@@ -2707,7 +2791,7 @@ func TestCheckBlockSubtrees_LargeBlock_MemoryConsumption(t *testing.T) {
 			require.NoError(t, err)
 
 			// Mark the subtree as already validated to avoid HTTP fetching
-			err = server.subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, []byte("validated"))
+			err = server.subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
 			require.NoError(t, err)
 		}
 
@@ -2858,7 +2942,13 @@ func TestValidateSubtreeLeafCount(t *testing.T) {
 	})
 
 	t.Run("ZeroLeaves", func(t *testing.T) {
-		require.NoError(t, validateSubtreeLeafCount(subtreeHash, 0, 4))
+		// A subtree always carries at least one node; a zero leaf count is now rejected explicitly
+		// (bitcoin-sv/teranode#4692) rather than left to the downstream constructor's incidental error.
+		err := validateSubtreeLeafCount(subtreeHash, 0, 4)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrProcessing))
+		require.Contains(t, err.Error(), subtreeHash.String())
+		require.Contains(t, err.Error(), "subtree has zero nodes")
 	})
 
 	t.Run("LargeOverflow", func(t *testing.T) {

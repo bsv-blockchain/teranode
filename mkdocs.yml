@@ -163,6 +163,7 @@ nav:
           - Glossary: references/glossary.md
           - Coding Conventions: references/codingConventions.md
           - Kafka Message Format: references/kafkaMessageFormat.md
+          - Proto Versioning Policy: references/protoVersioning.md
           - Network Consensus Rules: references/networkConsensusRules.md
           - Protobuf API:
               - Alert Proto: references/protobuf_docs/alertProto.md

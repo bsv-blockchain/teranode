@@ -3,11 +3,13 @@ package blockassembly
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/util/testutil"
 	"github.com/stretchr/testify/require"
@@ -168,6 +170,35 @@ func TestWaitForAssemblerTip(t *testing.T) {
 		require.Greater(t, flaky.callCount(), 3, "the wait must have retried past the failures")
 	})
 
+	t.Run("waits while the subtree processor drains after a block, then proceeds", func(t *testing.T) {
+		// MoveForwardBlock answers before the queue that built up during the
+		// block is drained, so block assembly is back in Running on the new
+		// tip while the drain still runs. A candidate taken then has none of
+		// those txs (generate would mine a coinbase-only block), so the wait
+		// must hold until the drain is done.
+		server := newTipWaitServer(t)
+
+		tip, meta, err := server.blockchainClient.GetBestBlockHeader(context.Background())
+		require.NoError(t, err)
+
+		server.blockAssembler.setBestBlockHeader(tip, meta.Height)
+		server.blockAssembler.setCurrentRunningState(StateRunning)
+
+		stp := &drainingSubtreeProcessor{Interface: server.blockAssembler.subtreeProcessor}
+		stp.draining.Store(true)
+		server.blockAssembler.subtreeProcessor = stp
+
+		go func() {
+			time.Sleep(80 * time.Millisecond)
+			stp.draining.Store(false)
+		}()
+
+		start := time.Now()
+		require.NoError(t, server.waitForAssemblerTip(context.Background()))
+		require.GreaterOrEqual(t, time.Since(start), 50*time.Millisecond,
+			"an assembler whose subtree processor is still draining must not be treated as ready")
+	})
+
 	t.Run("waits while the assembler is behind the chain, then proceeds", func(t *testing.T) {
 		// The issue 764 shape, and the one the running-state check alone cannot
 		// see. The subscription loop enters StateBlockchainSubscription only once
@@ -245,3 +276,12 @@ func staleHeader(t *testing.T, tip *model.BlockHeader) *model.BlockHeader {
 
 	return &stale
 }
+
+// drainingSubtreeProcessor reports a deferred drain in progress until
+// draining is cleared.
+type drainingSubtreeProcessor struct {
+	subtreeprocessor.Interface
+	draining atomic.Bool
+}
+
+func (d *drainingSubtreeProcessor) DrainingAfterBlock() bool { return d.draining.Load() }

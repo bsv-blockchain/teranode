@@ -915,10 +915,10 @@ func TestMiningCandidateMainPathTimeFloored(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		txHash := chainhash.HashH([]byte{byte(i), 0xBB})
-		ba.AddTxBatch(
+		require.True(t, ba.AddTxBatchIfRoom(
 			[]subtreepkg.Node{{Hash: txHash, Fee: uint64(100), SizeInBytes: 250}},
 			[]*subtreepkg.TxInpoints{{}},
-		)
+		))
 	}
 
 	medianTimePast := baseTime + 5

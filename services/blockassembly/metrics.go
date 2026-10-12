@@ -75,6 +75,25 @@ var (
 	prometheusBlockAssemblerConflictIntentsPending      prometheus.Gauge
 	prometheusBlockAssemblerConflictIntentReplay        *prometheus.CounterVec
 	prometheusBlockAssemblerDequeueStalenessSeconds     prometheus.Gauge
+
+	// prometheusBlockAssemblyQueueShed counts transactions shed because the ingest queue was full past the bounded wait
+	prometheusBlockAssemblyQueueShed prometheus.Counter
+
+	// prometheusBlockAssemblyQueueWait measures how long an ingest handler waited for queue room before succeeding or shedding
+	prometheusBlockAssemblyQueueWait prometheus.Histogram
+
+	// prometheusBlockAssemblyQueueHeadAge tracks how long the oldest queued batch has been waiting
+	prometheusBlockAssemblyQueueHeadAge prometheus.Gauge
+
+	// prometheusBlockAssemblyDiskTxMapDegraded is 1 while block assembly is
+	// degraded because a reset for a disk tx map storage error hit a storage
+	// error again (a disk fault a fresh rotation can't cure), and 0 otherwise.
+	// Storage-triggered resets are suspended while it is 1; any reset that
+	// completes without a storage error clears it.
+	prometheusBlockAssemblyDiskTxMapDegraded prometheus.Gauge
+
+	// prometheusBlockAssemblerLivenessHeartbeatAge tracks how long since the main select loop last beat
+	prometheusBlockAssemblerLivenessHeartbeatAge prometheus.Gauge
 )
 
 var (
@@ -524,6 +543,52 @@ func _initPrometheusMetrics() {
 			Name:      "add_directly_batch_seconds",
 			Help:      "Time taken to add all unmined transactions to subtree processor",
 			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockAssemblyQueueShed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "queue_shed_total",
+			Help:      "Total transactions shed because the ingest queue was full past the bounded wait. Any non-zero value should be alerted on alongside processing_stuck_total and tip_lag_blocks; a shed on a healthy node means the cap is too tight.",
+		},
+	)
+
+	prometheusBlockAssemblyQueueWait = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "queue_wait_seconds",
+			Help:      "Time an ingest handler waited for ingest-queue room before succeeding or shedding",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockAssemblyQueueHeadAge = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "queue_head_age_seconds",
+			Help:      "Age in seconds of the oldest batch still in the ingest queue (0 when empty). A rising value indicates the dispatcher has stopped draining.",
+		},
+	)
+
+	prometheusBlockAssemblyDiskTxMapDegraded = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "disk_tx_map_degraded",
+			Help:      "1 while auto-reset on a disk tx map storage error is suspended because a storage-triggered reset hit a storage error again (a disk fault a rotation can't cure), 0 otherwise. Any reset that completes without a storage error clears it.",
+		},
+	)
+
+	prometheusBlockAssemblerLivenessHeartbeatAge = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "liveness_heartbeat_age_seconds",
+			Help:      "Seconds since the block assembler main select loop last beat its liveness heartbeat (0 before the loop starts and after it stops). This is the number blockassembly_livenessStallTimeout is compared against, so alert on it and learn its worst case before arming a restart on it (issue 1447).",
 		},
 	)
 }

@@ -2,14 +2,18 @@ package p2p
 
 import (
 	"context"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	p2pconstants "github.com/bsv-blockchain/teranode/interfaces/p2p"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -46,6 +50,9 @@ func TestServer_PeerInfoToP2PProto_RoundTripFields(t *testing.T) {
 		CatchupAttempts:        7,
 		CatchupSuccesses:       5,
 		CatchupFailures:        2,
+		BlocksReceived:         11,
+		SubtreesReceived:       12,
+		TransactionsReceived:   13,
 	}
 
 	out := peerInfoToP2PProto(bp)
@@ -64,6 +71,91 @@ func TestServer_PeerInfoToP2PProto_RoundTripFields(t *testing.T) {
 	require.Equal(t, bp.CatchupAttempts, out.CatchupAttempts)
 	require.Equal(t, bp.CatchupSuccesses, out.CatchupSuccesses)
 	require.Equal(t, bp.CatchupFailures, out.CatchupFailures)
+	require.Equal(t, bp.BlocksReceived, out.BlocksReceived)
+	require.Equal(t, bp.SubtreesReceived, out.SubtreesReceived)
+	require.Equal(t, bp.TransactionsReceived, out.TransactionsReceived)
+}
+
+// TestServer_GetPeerRegistry_ReceivedCountersSurviveWire drives the path a
+// gRPC consumer (the asset service's miner-tier cache) takes: the blockchain
+// registry records received blocks/subtrees/txs, GetPeerRegistry builds the
+// proto, the message is marshalled and unmarshalled as gRPC would, and the
+// client-side converter maps it back. The asset service's tierMiner predicate
+// requires BlocksReceived > 0, so a zero here silently demotes every miner to
+// the ordinary per-peer rate limit.
+func TestServer_GetPeerRegistry_ReceivedCountersSurviveWire(t *testing.T) {
+	s, reg := newServerWithLocalRegistry(t)
+	pid := mustNewPeerID(t)
+	s.addConnectedPeer(pid, "miner/1.0", 10, nil, "")
+
+	reg.RecordBlockReceived(pid.String(), 5)
+	reg.RecordBlockReceived(pid.String(), 5)
+	reg.RecordSubtreeReceived(pid.String(), 5)
+	reg.RecordTransactionReceived(pid.String())
+
+	resp, err := s.GetPeerRegistry(context.Background(), &emptypb.Empty{})
+	require.NoError(t, err)
+	require.Len(t, resp.Peers, 1)
+
+	wire, err := proto.Marshal(resp.Peers[0])
+	require.NoError(t, err)
+	decoded := &p2p_api.PeerRegistryInfo{}
+	require.NoError(t, proto.Unmarshal(wire, decoded))
+
+	got, err := convertFromAPIPeerInfo(decoded)
+	require.NoError(t, err)
+	require.Equal(t, pid, got.ID)
+	require.Equal(t, int64(2), got.BlocksReceived)
+	require.Equal(t, int64(1), got.SubtreesReceived)
+	require.Equal(t, int64(1), got.TransactionsReceived)
+}
+
+// TestServer_PeerRegistryInfo_CarriesEveryPeerInfoField is the guard against the
+// class of bug fixed above: a field added to the public p2p.PeerInfo contract but
+// never given a wire field, so gRPC consumers silently read a zero. Every
+// exported p2p.PeerInfo field must have a counterpart in p2p_api.PeerRegistryInfo
+// unless it is explicitly listed as intentionally in-process only.
+func TestServer_PeerRegistryInfo_CarriesEveryPeerInfoField(t *testing.T) {
+	// Fields deliberately not carried over gRPC. Adding a name here is a
+	// contract decision: document the reason.
+	notOnWire := map[string]string{
+		"CatchupBlocks":        "no writer exists yet; add a wire field when one does",
+		"LastSyncAttempt":      "sync backoff state is local to the p2p process",
+		"SyncAttemptCount":     "sync backoff state is local to the p2p process",
+		"LastReputationReset":  "sync backoff state is local to the p2p process",
+		"ReputationResetCount": "sync backoff state is local to the p2p process",
+	}
+	// Domain fields whose wire name differs beyond letter case.
+	renamed := map[string]string{
+		"AvgResponseTime": "AvgResponseTimeMs",
+	}
+
+	wireFields := map[string]bool{}
+	wt := reflect.TypeOf(p2p_api.PeerRegistryInfo{})
+	for i := 0; i < wt.NumField(); i++ {
+		wireFields[strings.ToLower(wt.Field(i).Name)] = true
+	}
+
+	dt := reflect.TypeOf(PeerInfo{})
+	for i := 0; i < dt.NumField(); i++ {
+		name := dt.Field(i).Name
+		if !dt.Field(i).IsExported() {
+			continue
+		}
+		if _, ok := notOnWire[name]; ok {
+			continue
+		}
+		if alias, ok := renamed[name]; ok {
+			name = alias
+		}
+		require.True(t, wireFields[strings.ToLower(name)],
+			"p2p.PeerInfo.%s has no p2p_api.PeerRegistryInfo field; add one (and map it in peerInfoToP2PProto/convertFromAPIPeerInfo) or list it in notOnWire", dt.Field(i).Name)
+	}
+
+	for name := range notOnWire {
+		_, ok := dt.FieldByName(name)
+		require.True(t, ok, "notOnWire lists %s, which is no longer a p2p.PeerInfo field", name)
+	}
 }
 
 func TestServer_PeerInfoToP2PProto_NilHashAndZeroTimes(t *testing.T) {
@@ -100,6 +192,38 @@ func TestServer_AddBanScore_CrossesThresholdBans(t *testing.T) {
 	bResp, err := s.IsBanned(context.Background(), &p2p_api.IsBannedRequest{IpOrSubnet: pid.String()})
 	require.NoError(t, err)
 	require.True(t, bResp.IsBanned)
+}
+
+// TestServer_AddBanScore_CorruptBlockBodyBoundToSharedConstant pins the corrupt-block-body reason
+// key to the one shared definition (bitcoin-sv/teranode#4692). The services/p2p constant is derived
+// from interfaces/p2p rather than re-typed, so the equality below is a compile-time truth this test
+// makes a test-time failure instead: a rename on either side must fail here rather than leave the
+// AddBanScore switch matching a string nothing else uses, where the strike would silently score the
+// caller's default (0) instead of the configured penalty.
+func TestServer_AddBanScore_CorruptBlockBodyBoundToSharedConstant(t *testing.T) {
+	require.Equal(t, p2pconstants.ReasonCorruptBlockBody.String(), ReasonCorruptBlockBody,
+		"the services/p2p reason key must stay identical to the shared interfaces/p2p constant the penalty table and every other caller use")
+
+	s, reg, pid := freshTestServer(t)
+	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+
+	resp, err := s.AddBanScore(context.Background(), &p2p_api.AddBanScoreRequest{
+		PeerId: pid.String(),
+		Reason: ReasonCorruptBlockBody,
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+
+	// Read the expected weight from the penalty table itself rather than restating the number:
+	// this test is about the reason KEY resolving, and retuning the weight must not redden it.
+	wantPoints, keyed := blockchain.DefaultBanConfig().ReasonPoints[ReasonCorruptBlockBody]
+	require.True(t, keyed, "the penalty table must have a row under this exact reason key")
+	require.NotZero(t, wantPoints, "a keyed row with zero points would make the assertion below vacuous")
+
+	info, ok := reg.Get(pid.String())
+	require.True(t, ok)
+	require.Equal(t, wantPoints, info.BanScore,
+		"the reason must resolve in the penalty table, not fall through to the caller-supplied 0 points")
 }
 
 func TestServer_AddBanScore_UnknownReasonStillRecorded(t *testing.T) {

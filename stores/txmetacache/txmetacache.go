@@ -32,7 +32,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
-	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -201,8 +200,8 @@ func NewTxMetaCache(
 
 	initPrometheusMetrics()
 
-	// base size (MB) from config
-	maxMB, _ := gocore.Config().GetInt("txMetaCacheMaxMB", 256)
+	// base size (MB) from the tagged setting
+	maxMB := tSettings.SubtreeValidation.TxMetaCacheMaxMB
 	// override if caller passed one
 	if len(maxMBOverride) > 0 && maxMBOverride[0] > 0 {
 		maxMB = maxMBOverride[0]
@@ -218,7 +217,7 @@ func NewTxMetaCache(
 
 		cache = pc
 	} else {
-		c, err := New(maxMB*1024*1024, bucketType)
+		c, err := New(maxMB*1024*1024, bucketType, tSettings.SubtreeValidation.TxMetaCacheTrimRatio)
 		if err != nil {
 			return nil, errors.NewProcessingError("error creating cache", err)
 		}
@@ -521,6 +520,22 @@ func putMetaBytesBuf(bp *[]byte) {
 	metaBytesBufPool.Put(bp)
 }
 
+// UnderlyingStore returns the store this cache wraps, so a caller that knows its
+// reads cannot benefit from caching can go straight to the origin.
+//
+// The block-validation path is the case this exists for: it reads a whole
+// block's transactions exactly once, and setMined evicts them immediately
+// afterwards, so routing it through the cache only serializes and inserts
+// entries that are never read back — and evicts the ingest path's hot working
+// set to make room. Measured on the scaling cluster while revalidating a single
+// block: 0 cache hits against ~755k insertions/s.
+//
+// Callers must not use this to bypass the cache for writes or for reads that
+// could be served from it; it is a read-through escape hatch only.
+func (t *TxMetaCache) UnderlyingStore() utxo.Store {
+	return t.utxoStore
+}
+
 // BatchDecorate retrieves metadata for multiple transactions in a single batch operation.
 // This is more efficient than calling Get for each transaction individually.
 //
@@ -792,6 +807,38 @@ func (t *TxMetaCache) Delete(_ context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
+// DeleteComplete removes the transaction from the durable store completely
+// (master record, pagination children and external blob(s)) via the wrapped
+// store, then drops the cache entry. Unlike Delete — which is cache-only — this
+// reaches the underlying store, so a caller that needs the whole record gone
+// gets it.
+//
+// The eviction is UNCONDITIONAL: it happens whether the durable delete succeeded
+// or failed, so this method carries no precondition on which store it may wrap.
+// A caller that reads this cache for presence — the validator's shed unwind reads
+// the record back after the delete to decide whether it may unspend the inputs —
+// therefore cannot be answered "still present" for a transaction whose master is
+// already gone, which is the answer that would send the unwind down the
+// record-still-present arm and leave the inputs spent.
+//
+// The separate, larger gap is Delete, which is cache-only and reaches no record
+// at all; that is a different method with its own callers and is documented by
+// TestTxMetaCache_DeleteIsCacheOnly_KnownContractGap.
+func (t *TxMetaCache) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
+	// Evict BEFORE inspecting the error. The backing cascade removes the master
+	// record first, so a failure can mean the record is already gone — and a
+	// surviving cache entry would then answer "present" for a transaction that is
+	// not. A miss is never less correct than a stale hit: GetMeta falls through to
+	// the underlying store on a miss, so the worst cost of evicting early is one
+	// read-through.
+	err := t.utxoStore.DeleteComplete(ctx, hash)
+
+	t.cache.Del(hash[:])
+	t.metrics.evictions.Add(1)
+
+	return err
+}
+
 // appendHeightToValue appends the current block height to the end of the
 // txMetaBytes. Kept for compatibility with the existing ImprovedCache plumbing
 // (the v2 receiver in #912 uses the same pattern). PointerCache's bridge
@@ -905,6 +952,41 @@ func (t *TxMetaCache) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight
 	return txMeta, spends, nil
 }
 
+// SpendAndCreateMulti forwards the list to the underlying store, never to
+// utxo.DefaultSpendAndCreateMulti over this wrapper, so a store's own
+// implementation is always the one that runs. It then caches the metadata of
+// each MultiTxCreated transaction under the same rule SpendAndCreate uses.
+func (t *TxMetaCache) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	results, err := t.utxoStore.SpendAndCreateMulti(ctx, txs, blockHeight, opts...)
+	if len(results) != len(txs) {
+		return results, err
+	}
+
+	options := &utxo.CreateOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	for i, r := range results {
+		if r.Status != utxo.MultiTxCreated || r.Meta == nil {
+			continue
+		}
+
+		var txHash *chainhash.Hash
+		if len(options.TxIDs) == len(txs) {
+			txHash = &options.TxIDs[i]
+		} else {
+			txHash = txs[i].TxIDChainHash()
+		}
+
+		if len(r.Meta.BlockIDs) == 0 && !r.Meta.Conflicting {
+			_ = t.SetCache(txHash, r.Meta)
+		}
+	}
+
+	return results, err
+}
+
 // Unspend marks previously spent UTXOs as unspent.
 // This method delegates directly to the underlying UTXO store without caching.
 //
@@ -930,6 +1012,12 @@ func (t *TxMetaCache) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsL
 // - Error if the decoration operation fails
 func (t *TxMetaCache) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 	return t.utxoStore.PreviousOutputsDecorate(ctx, tx)
+}
+
+// ParentOutputsForValidation delegates to the underlying store. Parent outputs
+// are not cached here: the txmeta cache holds no outputs.
+func (t *TxMetaCache) ParentOutputsForValidation(ctx context.Context, outpoints []utxo.Outpoint, opts ...utxo.ParentOutputOption) ([]utxo.ParentOutput, error) {
+	return t.utxoStore.ParentOutputsForValidation(ctx, outpoints, opts...)
 }
 
 // BatchPreviousOutputsDecorate fetches previous output information for inputs across

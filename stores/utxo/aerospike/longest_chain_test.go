@@ -85,14 +85,16 @@ func TestMarkTransactionsOnLongestChain(t *testing.T) {
 		err = store.MarkTransactionsOnLongestChain(ctx, txHashes, false)
 		require.NoError(t, err)
 
-		// Verify unminedSince field is set to current block height
+		// Verify unminedSince was stamped (backdated so the pruner scan sees it at once)
+		expected := utxo.BackdatedUnminedSince(newBlockHeight, tSettings.UtxoStore.UnminedTxRetention)
+
 		meta1, err := store.Get(ctx, tx1Hash, fields.UnminedSince)
 		require.NoError(t, err)
-		assert.Equal(t, newBlockHeight, meta1.UnminedSince)
+		assert.Equal(t, expected, meta1.UnminedSince)
 
 		meta2, err := store.Get(ctx, tx2Hash, fields.UnminedSince)
 		require.NoError(t, err)
-		assert.Equal(t, newBlockHeight, meta2.UnminedSince)
+		assert.Equal(t, expected, meta2.UnminedSince)
 	})
 
 	t.Run("MarkTransactionsOnLongestChain - switch back to longest chain", func(t *testing.T) {
@@ -132,7 +134,7 @@ func TestMarkTransactionsOnLongestChain(t *testing.T) {
 		// Verify only tx1 has updated unminedSince
 		meta1, err := store.Get(ctx, tx1Hash, fields.UnminedSince)
 		require.NoError(t, err)
-		assert.Equal(t, testBlockHeight, meta1.UnminedSince)
+		assert.Equal(t, utxo.BackdatedUnminedSince(testBlockHeight, tSettings.UtxoStore.UnminedTxRetention), meta1.UnminedSince)
 
 		// tx2 should still have unminedSince = 0 from previous test
 		meta2, err := store.Get(ctx, tx2Hash, fields.UnminedSince)
@@ -276,10 +278,10 @@ func TestMarkTransactionsOnLongestChain_Integration(t *testing.T) {
 		err = store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*minedTxHash}, false)
 		require.NoError(t, err)
 
-		// Verify it's now unmined (unminedSince = current block height)
+		// Verify it's now unmined (unminedSince backdated from the reorg height)
 		meta, err = store.Get(ctx, minedTxHash, fields.UnminedSince)
 		require.NoError(t, err)
-		assert.Equal(t, reorgBlockHeight, meta.UnminedSince)
+		assert.Equal(t, utxo.BackdatedUnminedSince(reorgBlockHeight, tSettings.UtxoStore.UnminedTxRetention), meta.UnminedSince)
 
 		// Step 3: Simulate resolution - transaction gets mined again in new chain
 		err = store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*minedTxHash}, true)
@@ -385,4 +387,181 @@ func TestDeleteAtHeight_ForkTransactionNotOnLongestChain(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotEqual(t, uint32(0), meta.UnminedSince, "unminedSince should be set (transaction on fork)")
 	})
+}
+
+// TestMarkTransactionsOnLongestChain_KeepsEarlierUnminedSince locks the fix for issue
+// 1768: marking a transaction NOT on the longest chain must not push an existing
+// unminedSince forward. The pruner's parent-preservation scan only considers children
+// with unminedSince <= height - unminedTxRetention, while the parent's deleteAtHeight
+// was stamped when the child spent it. Re-stamping unminedSince to the current height
+// re-arms the child's protection clock while the parent's delete clock keeps counting,
+// and a late enough re-stamp lets the parent be deleted before anything protects it.
+func TestMarkTransactionsOnLongestChain_KeepsEarlierUnminedSince(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	defer deferFn()
+
+	cleanDB(t, client)
+
+	const createdAt = uint32(100)
+	const muchLater = uint32(1305)
+
+	require.Greater(t, muchLater, tSettings.UtxoStore.UnminedTxRetention+createdAt, "test needs headroom above the retention window")
+	require.NoError(t, store.SetBlockHeight(createdAt))
+
+	tx, err := bt.NewTxFromString("010000000000000000ef0152a9231baa4e4b05dc30c8fbb7787bab5f460d4d33b039c39dd8cc006f3363e4020000006b483045022100ce3605307dd1633d3c14de4a0cf0df1439f392994e561b648897c4e540baa9ad02207af74878a7575a95c9599e9cdc7e6d73308608ee59abcd90af3ea1a5c0cca41541210275f8390df62d1e951920b623b8ef9c2a67c4d2574d408e422fb334dd1f3ee5b6ffffffff706b9600000000001976a914a32f7eaae3afd5f73a2d6009b93f91aa11d16eef88ac05404b4c00000000001976a914aabb8c2f08567e2d29e3a64f1f833eee85aaf74d88ac80841e00000000001976a914a4aff400bef2fa074169453e703c611c6b9df51588ac204e0000000000001976a9144669d92d46393c38594b2f07587f01b3e5289f6088ac204e0000000000001976a914a461497034343a91683e86b568c8945fb73aca0288ac99fe2a00000000001976a914de7850e419719258077abd37d4fcccdb0a659b9388ac00000000")
+	require.NoError(t, err)
+
+	txHash := tx.TxIDChainHash()
+
+	_, err = store.Create(ctx, tx, createdAt)
+	require.NoError(t, err)
+
+	meta, err := store.Get(ctx, txHash, fields.UnminedSince)
+	require.NoError(t, err)
+	require.Equal(t, createdAt, meta.UnminedSince, "unmined tx starts with unminedSince = creation height")
+
+	require.NoError(t, store.SetBlockHeight(muchLater))
+
+	// A never-mined transaction swept up in a reset/reorg moveBack must keep its
+	// original unminedSince.
+	require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*txHash}, false))
+
+	meta, err = store.Get(ctx, txHash, fields.UnminedSince)
+	require.NoError(t, err)
+	assert.Equal(t, createdAt, meta.UnminedSince, "existing unminedSince must not be pushed forward")
+
+	// A transaction that genuinely goes mined -> unmined has no earlier value to keep. It is
+	// stamped backdated by unminedTxRetention so the pruner's parent-preservation scan
+	// (unminedSince <= height - unminedTxRetention) considers it on the next cycle.
+	require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*txHash}, true))
+
+	meta, err = store.Get(ctx, txHash, fields.UnminedSince)
+	require.NoError(t, err)
+	require.Zero(t, meta.UnminedSince)
+
+	require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*txHash}, false))
+
+	meta, err = store.Get(ctx, txHash, fields.UnminedSince)
+	require.NoError(t, err)
+	assert.Equal(t, muchLater-tSettings.UtxoStore.UnminedTxRetention, meta.UnminedSince, "cleared unminedSince is stamped backdated by unminedTxRetention")
+	assert.LessOrEqual(t, meta.UnminedSince, muchLater-tSettings.UtxoStore.UnminedTxRetention, "must satisfy the phase-1 cutoff at this height")
+}
+
+// TestIssue1768_ParentPreservedDespiteLateUnminedSince replays the mainnet instance from
+// issue 1768 against a real store and the real phase-1 pruner scan.
+//
+// Two clocks race. The parent's deleteAtHeight is stamped when an unmined child spends its
+// last output (spendHeight + blockHeightRetention). The phase-1 scan only protects parents of
+// children with unminedSince <= height - unminedTxRetention. A re-stamp of unminedSince to a
+// later height pushes the child out of the scan's window while the parent's clock keeps
+// counting, and once the re-stamp is later than blockHeightRetention - unminedTxRetention the
+// parent is deleted before anything protects it.
+//
+// Both sources of a late unminedSince are exercised:
+//  1. a never-mined child swept into a reset/reorg moveBack (MarkTransactionsOnLongestChain
+//     must keep the original value), and
+//  2. a mined child rolled back by a reorg (there is no earlier value; the stamp must be
+//     backdated so the very next scan sees it).
+//
+// In both cases the scan at the last block before the parent's deleteAtHeight must preserve
+// the parent.
+func TestIssue1768_ParentPreservedDespiteLateUnminedSince(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UnminedTxRetention = 4
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	defer deferFn()
+
+	cleanDB(t, client)
+
+	const unminedSinceIndexName = "unminedSinceIndex"
+	require.NoError(t, store.CreateIndexIfNotExists(ctx, unminedSinceIndexName, fields.UnminedSince.String(), aerospike.NUMERIC))
+	require.NoError(t, store.WaitForIndexReady(ctx, unminedSinceIndexName))
+
+	retention := tSettings.GetUtxoStoreBlockHeightRetention()
+	unminedRetention := tSettings.UtxoStore.UnminedTxRetention
+	require.Greater(t, retention, unminedRetention, "the race needs a positive margin to outrun")
+
+	const spendHeight = uint32(1000)
+	deleteAt := spendHeight + retention
+	lastSafeHeight := deleteAt - 1
+
+	// The re-stamp lands inside the margin the issue describes: later than
+	// blockHeightRetention - unminedTxRetention blocks after the spend.
+	require.Greater(t, lastSafeHeight-spendHeight, retention-unminedRetention)
+
+	require.NoError(t, store.SetBlockHeight(spendHeight))
+
+	makeParentAndChild := func(seed string) (*bt.Tx, *bt.Tx) {
+		parent := bt.NewTx()
+		require.NoError(t, parent.From(chainhash.HashH([]byte(seed)).String(), 0, "51", 10000))
+		require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+
+		_, err := store.Create(ctx, parent, spendHeight, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
+			BlockID: 999, BlockHeight: spendHeight - 1, OnLongestChain: true,
+		}))
+		require.NoError(t, err)
+
+		child := bt.NewTx()
+		require.NoError(t, child.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+		require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3000))
+
+		_, _, err = store.SpendAndCreate(ctx, child, spendHeight)
+		require.NoError(t, err)
+
+		return parent, child
+	}
+
+	readBins := func(tx *bt.Tx) aerospike.BinMap {
+		key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
+		require.NoError(t, err)
+
+		rec, err := client.Get(nil, key, fields.DeleteAtHeight.String(), fields.PreserveUntil.String(), fields.UnminedSince.String())
+		require.NoError(t, err)
+
+		return rec.Bins
+	}
+
+	// Case 1: never-mined child, re-stamped by a moveBack.
+	parent1, child1 := makeParentAndChild("issue-1768-parent-1")
+	// Case 2: child mined, then rolled back by a reorg.
+	parent2, child2 := makeParentAndChild("issue-1768-parent-2")
+
+	for _, parent := range []*bt.Tx{parent1, parent2} {
+		bins := readBins(parent)
+		require.Equal(t, int(deleteAt), bins[fields.DeleteAtHeight.String()], "fully spent mined parent is stamped for deletion at the spend")
+		require.Nil(t, bins[fields.PreserveUntil.String()])
+	}
+
+	require.Equal(t, int(spendHeight), readBins(child1)[fields.UnminedSince.String()])
+
+	require.NoError(t, store.SetBlockHeight(spendHeight+1))
+	_, err := store.SetMinedMulti(ctx, []*chainhash.Hash{child2.TxIDChainHash()}, utxo.MinedBlockInfo{
+		BlockID: 1001, BlockHeight: spendHeight + 1, OnLongestChain: true,
+	})
+	require.NoError(t, err)
+	require.Nil(t, readBins(child2)[fields.UnminedSince.String()], "mined child has no unminedSince")
+
+	// The late re-stamp, one block before the parents would be deleted.
+	require.NoError(t, store.SetBlockHeight(lastSafeHeight))
+	require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*child1.TxIDChainHash(), *child2.TxIDChainHash()}, false))
+
+	cutoff := lastSafeHeight - unminedRetention
+	require.Equal(t, int(spendHeight), readBins(child1)[fields.UnminedSince.String()], "never-mined child keeps its original unminedSince")
+	require.Equal(t, int(cutoff), readBins(child2)[fields.UnminedSince.String()], "rolled-back child is backdated to the scan cutoff")
+
+	// The real phase-1 scan at this height must find both children and preserve both parents.
+	processed, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, lastSafeHeight, "issue-1768", tSettings, logger)
+	require.NoError(t, err)
+	require.Equal(t, 2, processed, "both children must be inside the scan window")
+
+	for i, parent := range []*bt.Tx{parent1, parent2} {
+		bins := readBins(parent)
+		assert.Equal(t, int(lastSafeHeight+tSettings.UtxoStore.ParentPreservationBlocks), bins[fields.PreserveUntil.String()], "parent %d must be preserved", i+1)
+		assert.Nil(t, bins[fields.DeleteAtHeight.String()], "parent %d deleteAtHeight must be cleared", i+1)
+	}
 }

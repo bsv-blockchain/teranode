@@ -429,7 +429,11 @@ func XTestValidator_ValidateInternal_SpendUtxosError_WithConflicting(t *testing.
 	}
 
 	// Mock the Get calls that happen during transaction extension
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
+	// The store knows the real parent: the validator re-extends from the
+	// parent's own outputs rather than trusting the supplied ones
+	// (GHSA-v76m-6vc7-g7c7), so a synthetic parent would fail script or value
+	// checks against a genuinely signed child.
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
 
 	// Mock spendUtxos to return UTXO error with spends containing errors
 	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, spends, errors.NewUtxoError("utxo error", errors.ErrUtxoError))
@@ -475,7 +479,11 @@ func TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExists(t *testing
 		{TxID: testHash, Vout: 0, Err: errors.ErrSpent},
 	}
 
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
+	// The store knows the real parent: the validator re-extends from the
+	// parent's own outputs rather than trusting the supplied ones
+	// (GHSA-v76m-6vc7-g7c7), so a synthetic parent would fail script or value
+	// checks against a genuinely signed child.
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
 	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
 	// The main spend-and-create fails with a spend-phase utxo error (Once so the
 	// conflicting-fallback create below matches the second expectation).
@@ -527,7 +535,11 @@ func XTestValidator_ValidateInternal_SpendUtxosError_TxNotFound(t *testing.T) {
 	)
 
 	// Mock the Get calls that happen during transaction extension
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
+	// The store knows the real parent: the validator re-extends from the
+	// parent's own outputs rather than trusting the supplied ones
+	// (GHSA-v76m-6vc7-g7c7), so a synthetic parent would fail script or value
+	// checks against a genuinely signed child.
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
 
 	// Mock spendUtxos to return TxNotFound error (parent DAH'd)
 	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, errors.ErrTxNotFound)
@@ -572,7 +584,11 @@ func XTestValidator_ValidateInternal_SpendUtxosError_TxNotFound_NotInStore(t *te
 	)
 
 	// Mock the Get calls that happen during transaction extension
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
+	// The store knows the real parent: the validator re-extends from the
+	// parent's own outputs rather than trusting the supplied ones
+	// (GHSA-v76m-6vc7-g7c7), so a synthetic parent would fail script or value
+	// checks against a genuinely signed child.
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
 
 	// Mock spendUtxos to return TxNotFound error
 	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, errors.ErrTxNotFound)
@@ -616,7 +632,11 @@ func XTestValidator_ValidateInternal_SpendUtxosError_GeneralError(t *testing.T) 
 	)
 
 	// Mock the Get calls that happen during transaction extension
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
+	// The store knows the real parent: the validator re-extends from the
+	// parent's own outputs rather than trusting the supplied ones
+	// (GHSA-v76m-6vc7-g7c7), so a synthetic parent would fail script or value
+	// checks against a genuinely signed child.
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
 	mockStore.On("GetBlockHeight").Return(uint32(100))
 
 	// Mock spendUtxos to return a general error (not UTXO or TxNotFound)
@@ -657,8 +677,7 @@ func TestValidator_ValidateInternal_UTXOError_ConflictingTxCreation(t *testing.T
 	)
 
 	// Mock parent tx extension
-	parentTxMeta := &meta.Data{Tx: coinbaseTx, BlockHeights: []uint32{}}
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(parentTxMeta, nil)
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
 	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
 
 	// Mock the spend phase to return UTXO error with conflicting spend (Once so
@@ -702,8 +721,7 @@ func TestValidator_ValidateInternal_TxNotFoundError_ExistingTx(t *testing.T) {
 	)
 
 	// Mock parent tx extension
-	parentTxMeta := &meta.Data{Tx: coinbaseTx, BlockHeights: []uint32{}}
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(parentTxMeta, nil)
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
 	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
 
 	// Mock spendUtxos to return TxNotFound error
@@ -758,8 +776,7 @@ func TestValidate_TxNotFoundShortcut(t *testing.T) {
 		require.NoError(t, err)
 		v := validator.(*Validator)
 
-		parentTxMeta := &meta.Data{Tx: coinbaseTx, BlockHeights: []uint32{}}
-		mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(parentTxMeta, nil)
+		mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
 		mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
 		mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, errors.NewTxNotFoundError("tx not found"))
 		if getMetaErr != nil {
@@ -869,8 +886,7 @@ func TestValidator_ValidateInternal_GeneralSpendError(t *testing.T) {
 	)
 
 	// Mock parent tx extension
-	parentTxMeta := &meta.Data{Tx: coinbaseTx, BlockHeights: []uint32{}}
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(parentTxMeta, nil)
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
 	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
 
 	// Mock spendUtxos to return a general error
@@ -950,3 +966,13 @@ func TestValidator_Health_BlockHeight_Valid_Default_Coverage(t *testing.T) {
 // 1. GetBlockHeight() returns uint32, which can't be negative
 // 2. The blockHeight == 0 case (lines 198-200) comes first in the switch
 // This is dead code that should be removed, but we've covered the reachable cases above.
+
+// parentOutputsOf answers a single-input ParentOutputsForValidation call with
+// the given parent's output 0, in the given status.
+func parentOutputsOf(parent *bt.Tx, status utxo.ParentOutputStatus) []utxo.ParentOutput {
+	return []utxo.ParentOutput{{
+		Status:        status,
+		Satoshis:      parent.Outputs[0].Satoshis,
+		LockingScript: parent.Outputs[0].LockingScript,
+	}}
+}

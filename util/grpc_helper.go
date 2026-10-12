@@ -2,6 +2,7 @@ package util
 
 import (
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"os"
@@ -559,7 +560,7 @@ func CreateAuthInterceptor(apiKey string, protectedMethods map[string]bool) grpc
 		}
 
 		// Validate API key
-		if keys[0] != apiKey {
+		if subtle.ConstantTimeCompare([]byte(keys[0]), []byte(apiKey)) != 1 {
 			return nil, status.Error(codes.Unauthenticated, "invalid API key")
 		}
 

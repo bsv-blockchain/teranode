@@ -73,6 +73,55 @@ var commandHelp = map[string]string{
 
 var dangerousCommands = map[string]bool{}
 
+// positionalArgs is how many positional (non-flag) arguments a command
+// accepts. Commands not listed accept none.
+//
+// Go's flag package stops parsing at the first non-flag argument and leaves
+// the rest in Args(), so a stray positional silently discards every flag
+// after it and the command runs with defaults nobody asked for. Start rejects
+// unexpected positionals centrally, so a new command cannot reintroduce this.
+var positionalArgs = map[string]struct{ min, max int }{
+	"filereader":        {0, 1}, // optional file path
+	"aerospikereader":   {1, 1}, // txid
+	"checkblock":        {1, 1}, // block hash
+	"reconsiderblock":   {1, 1}, // block hash
+	"validate-utxo-set": {1, 1}, // UTXO set file path
+}
+
+// parseCommandArgs parses args into cmd's flags and rejects positional
+// arguments the command does not take. --help skips the positional check so
+// usage is still shown.
+func parseCommandArgs(cmd *Command, args []string) error {
+	if err := cmd.FlagSet.Parse(args); err != nil {
+		return err
+	}
+
+	if help := cmd.FlagSet.Lookup("help"); help != nil && help.Value.String() == "true" {
+		return nil
+	}
+
+	return checkPositionalArgs(cmd.Name, cmd.FlagSet.Args())
+}
+
+// checkPositionalArgs returns an error if args is not a valid number of
+// positional arguments for command.
+func checkPositionalArgs(command string, args []string) error {
+	want := positionalArgs[command]
+	if len(args) >= want.min && len(args) <= want.max {
+		return nil
+	}
+
+	if want.max == 0 {
+		return errors.NewProcessingError("%s takes no positional arguments (got %q); every flag after the first positional argument would be ignored", command, args)
+	}
+
+	if want.min == want.max {
+		return errors.NewProcessingError("%s takes exactly %d positional argument(s), got %d: %q", command, want.min, len(args), args)
+	}
+
+	return errors.NewProcessingError("%s takes %d to %d positional arguments, got %d: %q", command, want.min, want.max, len(args), args)
+}
+
 // Command represents a CLI command configuration
 type Command struct {
 	Name        string
@@ -242,6 +291,7 @@ func Start(args []string, version, commit string) {
 		skipHeaders := cmd.FlagSet.Bool("skipHeaders", false, "Skip processing headers.")
 		skipUTXOs := cmd.FlagSet.Bool("skipUTXOs", false, "Skip processing UTXOs.")
 		force := cmd.FlagSet.Bool("force", false, "Force processing even if lastProcessed.dat or BlockAssembler state already exists.")
+		skipChecksum := cmd.FlagSet.Bool("skipChecksum", false, "Skip verifying the snapshot files against their .sha256 sidecars (only when the caller already verified them).")
 		cmd.Execute = func(args []string) error {
 			if *inputDir == "" {
 				return errors.NewProcessingError("Please provide an inputDir")
@@ -251,7 +301,7 @@ func Start(args []string, version, commit string) {
 				return errors.NewProcessingError("Please provide a hash")
 			}
 
-			return seeder.Seeder(logger, tSettings, *inputDir, *hash, *skipHeaders, *skipUTXOs, *force)
+			return seeder.Seeder(logger, tSettings, *inputDir, *hash, *skipHeaders, *skipUTXOs, *force, *skipChecksum)
 		}
 	case "bitcointoutxoset":
 		blockchainDir := cmd.FlagSet.String("bitcoinDir", "", "Location of bitcoin data")
@@ -391,6 +441,10 @@ func Start(args []string, version, commit string) {
 		}
 	case "checkblock":
 		cmd.Execute = func(args []string) error {
+			if len(args) != 1 {
+				return errors.NewProcessingError("checkblock requires exactly one block hash")
+			}
+
 			blockTemplate, err := checkblock.CheckBlock(logger, tSettings, args[0])
 			if err != nil {
 				return errors.NewProcessingError("Failed to check block", err)
@@ -536,8 +590,9 @@ func Start(args []string, version, commit string) {
 	}
 
 	// Parse flags
-	if err := cmd.FlagSet.Parse(args[1:]); err != nil {
-		fmt.Printf("Error parsing arguments: %v\n", err)
+	if err := parseCommandArgs(cmd, args[1:]); err != nil {
+		fmt.Printf("Error parsing arguments: %v\n\nUsage of %s:\n", err, cmd.Name)
+		cmd.FlagSet.PrintDefaults()
 		os.Exit(1)
 	}
 

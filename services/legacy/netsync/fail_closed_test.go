@@ -146,7 +146,7 @@ func TestLegacyFailClosed_SameBlockParentChain_NoConflictingNodes(t *testing.T) 
 	txMap := makeSameBlockParentChainTxMap(t, 5)
 
 	// failClosed is true on this path.
-	require.True(t, sm.legacyFailClosed(500))
+	require.True(t, sm.legacyFailClosed(headerProven, 500))
 
 	err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 500, 0, 0, true, true)
 	require.NoError(t, err, "same-block parent chain must validate under fail-closed with no spurious ErrTxNotFound")
@@ -172,7 +172,7 @@ func TestLegacyFailClosed_GenuineConflict_HardFails(t *testing.T) {
 
 	txMap := makeTxMap(t, 3)
 
-	require.True(t, sm.legacyFailClosed(500))
+	require.True(t, sm.legacyFailClosed(headerProven, 500))
 
 	err := sm.PreValidateTransactions(context.Background(), txMap, chainhash.Hash{}, 500, 0, 0, true, true)
 	require.Error(t, err, "genuine conflict must hard-fail under fail-closed")
@@ -198,7 +198,7 @@ func TestLegacyFailClosed_FlagOff_ByteIdentical(t *testing.T) {
 
 	txMap := makeTxMap(t, 3)
 
-	require.False(t, sm.legacyFailClosed(500), "flag off must keep fail-closed OFF")
+	require.False(t, sm.legacyFailClosed(headerProven, 500), "flag off must keep fail-closed OFF")
 
 	// failClosed=false is what ValidateTransactionsLegacyMode threads through when
 	// legacyFailClosed is false.
@@ -246,7 +246,7 @@ func TestSyncManager_legacyFailClosed(t *testing.T) {
 				utxoStore:   &outpointOnlySpyStore{NullStore: &nullstore.NullStore{}},
 			}
 
-			require.Equal(t, tt.want, sm.legacyFailClosed(tt.height),
+			require.Equal(t, tt.want, sm.legacyFailClosed(headerProven, tt.height),
 				"legacyFailClosed(%d) failClosed=%v outpoint=%v unified=%v", tt.height, tt.failClosed, tt.outpoint, tt.unified)
 		})
 	}

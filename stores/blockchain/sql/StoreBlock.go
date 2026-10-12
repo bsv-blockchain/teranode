@@ -12,6 +12,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"reflect"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -134,8 +135,9 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	//      (avoids a post-insert UPDATE for the common extend-chain case)
 	// getBestBlockID is cached, so this is essentially free. The reorg-case
 	// reconciliation does not depend on the caller's pre-best snapshot —
-	// reconcileOnMainChain re-reads the actual best inside its own transaction
-	// to avoid races against concurrent fast-path inserts.
+	// reconcileOnMainChain re-reads the actual best in the fork transaction,
+	// in the same statement that applies the diff, so it cannot race a
+	// concurrent fast-path insert.
 	var preBestHash *chainhash.Hash
 	{
 		var preBestErr error
@@ -154,18 +156,118 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		block.Header.HashPrevBlock != nil &&
 		*block.Header.HashPrevBlock == *preBestHash
 
-	// mainChainRebuilding only needs to cover the window where on_main_chain
-	// is in flux — i.e. when the INSERT writes false but the row may turn out
-	// to be the new best (reorg / fork). The common extend (onMainChain=true)
-	// is written atomically with on_main_chain=true and needs no guard.
-	if !onMainChain {
+	// Raise the guard before the INSERT and hold it for the whole call: always on a node
+	// running the forked-set route, and only for a non-extend on every other node.
+	//
+	// On a forked-set node a common extend needs it too. The INSERT writes on_main_chain =
+	// true atomically, which is true of the row and false of the classification: the INSERT
+	// can write true for a block that the chain_work tiebreak below then places on a fork,
+	// and a concurrent StoreBlock can advance maxBlockID past this id while that is being
+	// decided. In that window the row exists, says true, sits at or below maxBlockID, and
+	// is absent from the forked set, so the in-memory route answers "on the main chain" for
+	// a fork block with no query. Absence from the forked set is positive proof on that
+	// route, so a gap in the guard is a false positive rather than a wasted query.
+	//
+	// On every other node the guard stays where it was. mainChainRebuilding is not read
+	// only by the forked-set route: checkBlockIsInCurrentChainSQL and the other
+	// on_main_chain readers use it to choose between their indexed flag lookup and a
+	// flag-free walk, which for CheckBlockIsInCurrentChain is a parent_id CTE from the tip
+	// down to the queried id. Raising it on every extend would move those readers onto the
+	// walk for the length of every StoreBlock, on nodes that gain nothing from it, because
+	// the window it closes is only unsafe on the forked-set route. An SQL-route reader in
+	// that window reads the same true flag it has always read, and slowPathMu is what keeps
+	// that case from arising, per Case 1 below.
+	//
+	// The forked-set node does pay that cost on those other readers. That is the trade the
+	// route asks for, and it is scoped to the nodes that opted into the route.
+	guardWholeCall := s.useInMemoryChainCheck || !onMainChain
+	if guardWholeCall {
 		s.mainChainRebuilding.Add(1)
 		defer s.mainChainRebuilding.Add(-1)
 	}
 
-	newBlockID, height, _, _, err := s.storeBlock(ctx, block, peerID, storeBlockOptions, onMainChain)
-	if err != nil {
-		return 0, height, err
+	// The fork path writes the row and repairs on_main_chain in ONE transaction, so a
+	// failure between them cannot leave a committed block carrying a flag nothing will
+	// revisit. The reconciliation is a single statement bounded to the recent lineage,
+	// so the transaction stays small however large the blocks are: it touches block
+	// rows only, never transactions or coins.
+	//
+	// The common extend keeps its single auto-committed INSERT, which already writes
+	// the correct flag and needs no repair.
+	var (
+		newBlockID    uint64
+		height        uint32
+		storedInvalid bool
+		reconcileErr  error
+		err           error
+	)
+
+	if onMainChain {
+		newBlockID, height, _, storedInvalid, err = s.storeBlock(ctx, s.db, block, peerID, storeBlockOptions, onMainChain)
+		if err != nil {
+			return 0, height, s.typedStoreBlockError(err, block)
+		}
+	} else {
+		// RetryTx keeps the pool's retry and circuit-breaker behaviour, but retries
+		// the whole transaction rather than one statement: a statement that fails
+		// inside a PostgreSQL transaction aborts it, so only a fresh BEGIN can retry.
+		//
+		// The closure returns driver errors unwrapped. RetryTx classifies them by
+		// concrete type (SQLSTATE, SQLite result code), and a teranode error keeps
+		// only the message, so wrapping first would hide SQLITE_LOCKED or a 40001
+		// from it. The errors are typed after RetryTx returns.
+		err = s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
+			var storeErr error
+
+			reconcileErr = nil
+
+			newBlockID, height, _, storedInvalid, storeErr = s.storeBlock(ctx, tx, block, peerID, storeBlockOptions, onMainChain)
+			if storeErr != nil {
+				return storeErr
+			}
+
+			// An invalid row is written with on_main_chain=false and best_block only
+			// selects valid rows, so the reconciliation can neither fix nor be fixed
+			// by it. Skipping it keeps the invalid record from depending on a
+			// statement that could only fail it.
+			if storedInvalid {
+				return nil
+			}
+
+			reconcile := func() error { return s.reconcileOnMainChain(ctx, tx) }
+			if s.reconcileHook != nil {
+				reconcile = s.reconcileHook
+			}
+
+			reconcileErr = reconcile()
+
+			return reconcileErr
+		})
+		if err != nil {
+			// Label the error as the reconciliation's only when it is the very value the
+			// reconciliation returned. RetryTx hands back the closure's error unchanged, but
+			// it can also fail after a failed reconciliation attempt and before the next one
+			// runs: the next BEGIN can fail, or the context can be cancelled during the
+			// backoff. A flag set before the reconciliation would still be set then, and
+			// would send whoever chases a connection failure to the reconciliation query.
+			if reconcileErr != nil && sameError(err, reconcileErr) {
+				var typedErr *errors.Error
+				if errors.As(err, &typedErr) {
+					return 0, height, err
+				}
+
+				return 0, height, errors.NewStorageError("StoreBlock: reconcileOnMainChain", err)
+			}
+
+			return 0, height, s.typedStoreBlockError(err, block)
+		}
+	}
+
+	// Cache the timestamp only once the row is committed. Doing it inside storeBlock
+	// let a rolled-back fork attempt leave an entry with no row behind it, which the
+	// next block's median-time-past would then read.
+	if !storedInvalid {
+		s.blockTimestampCache.Add(height, block.Header.Timestamp)
 	}
 
 	// Reset response cache to invalidate cached best block ID and headers
@@ -223,6 +325,46 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	postBestID, _, bestErr := s.getBestBlockID(postBestCtx)
 	if bestErr != nil {
 		s.logger.Errorf("StoreBlock: failed to get best block ID: %v", bestErr)
+
+		// The row is committed whatever this query did. Falling off the end of the chain
+		// here left maxBlockID below the id just written, and CheckBlockIsInCurrentChain
+		// drops an id above that bound as allocated-but-uncommitted. That is a FALSE
+		// NEGATIVE on a committed block, and checkOldBlockIDs escalates a negative into a
+		// PERMANENT ValidateBlock invalidation; nothing undoes it until the two-minute
+		// background refresh happens to run.
+		//
+		// Advancing the bound alone would trade that for the opposite defect. Without
+		// postBestID we cannot tell which of Cases 1-3 applies, so the committed block may
+		// be a fork block, and the installed forked set was read before this INSERT and
+		// cannot contain it. An id at or below maxBlockID and absent from that set is read
+		// as positive proof of main-chain membership, so the bound on its own would make a
+		// fork block answer true with no query at all. The after-write rebuild is what
+		// makes advancing it safe: it bumps chainStateEpoch before this call's deferred
+		// guard release, so a reader either gets a set that observed this INSERT or, if the
+		// rebuild cannot be made to observe it, a de-trusted set and the SQL route.
+		//
+		// The defensive on_main_chain clear Case 1 would have done is deliberately not
+		// attempted. Which flag to write depends on the classification we could not read,
+		// and the rebuild does not need the flag: mainChainRebuilding is still held for the
+		// whole call, so rebuildOffChainSet takes its flag-free parent_id CTE branch. A
+		// fork-path insert already reconciled the column inside its own transaction, so
+		// only a raced extend can leave a stale flag here, and that self-heals on the next
+		// reconcile, invalidation or startup rebuild.
+		s.updateMaxBlockID(newBlockID)
+
+		if s.useInMemoryChainCheck {
+			s.blockTimestampCache.Clear()
+			s.resetChainWalkCache()
+
+			rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
+			defer rebuildCancel()
+
+			if rebuildErr := s.triggerRebuildOffChainSetAfterWrite(rebuildCtx); rebuildErr != nil {
+				s.logger.Errorf("StoreBlock: %v", rebuildErr)
+			} else {
+				s.lastSuccessfulRebuild.Store(time.Now().Unix())
+			}
+		}
 	} else if uint64(postBestID) != newBlockID {
 		// Case 1: fork — new block is not the best. The INSERT wrote
 		// on_main_chain=false when onMainChain was false at compute time, so
@@ -232,20 +374,32 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		// current code, but which the previous Case 1 comment glossed over),
 		// the row is now flagged true on a fork. Clear it defensively, with
 		// mainChainRebuilding bracketing so concurrent readers fall back to
-		// the CTE for the brief inconsistency window.
+		// the CTE for the brief inconsistency window. A fork-path insert
+		// (onMainChain false) was already reconciled inside its transaction.
+		//
+		// On a forked-set node the guard is already held for the whole call, which is what
+		// this clear and the rebuild below both need. On any other node it was not raised
+		// for an extend and there is no rebuild to cover, so bracket just the UPDATE, as
+		// this branch always did there.
 		if onMainChain {
-			s.mainChainRebuilding.Add(1)
+			if !guardWholeCall {
+				s.mainChainRebuilding.Add(1)
+			}
+
 			if _, clearErr := s.db.ExecContext(postBestCtx, `UPDATE blocks SET on_main_chain = false WHERE id = $1`, newBlockID); clearErr != nil {
 				s.logger.Errorf("StoreBlock: clear sibling-fork on_main_chain: %v", clearErr)
 			}
-			s.mainChainRebuilding.Add(-1)
+
+			if !guardWholeCall {
+				s.mainChainRebuilding.Add(-1)
+			}
 		}
 		if s.useInMemoryChainCheck {
 			s.blockTimestampCache.Clear()
 			s.updateMaxBlockID(newBlockID)
 			rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
 			defer rebuildCancel()
-			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+			if rebuildErr := s.triggerRebuildOffChainSetAfterWrite(rebuildCtx); rebuildErr != nil {
 				s.logger.Errorf("StoreBlock: %v", rebuildErr)
 			} else {
 				s.lastSuccessfulRebuild.Store(time.Now().Unix())
@@ -263,15 +417,12 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 			s.updateMaxBlockID(newBlockID)
 			s.resetChainWalkCache()
 		}
-		// Reconcile against the actual chain_work-best block read inside the
-		// helper transaction. We pass no caller-side tip IDs because they are
-		// inherently racy (a concurrent fast-path StoreBlock can extend the
-		// best between our INSERT and the helper's transaction).
-		if reconcileErr := s.reconcileOnMainChain(rebuildCtx); reconcileErr != nil {
-			s.logger.Errorf("StoreBlock: reconcileOnMainChain: %v", reconcileErr)
-		}
+		// on_main_chain needs no repair here. Case 2 is only reachable when
+		// onMainChain was false, and that path ran reconcileOnMainChain in
+		// the same transaction as the INSERT, against the chain_work best read
+		// inside that transaction.
 		if s.useInMemoryChainCheck {
-			if rebuildErr := s.triggerRebuildOffChainSet(rebuildCtx); rebuildErr != nil {
+			if rebuildErr := s.triggerRebuildOffChainSetAfterWrite(rebuildCtx); rebuildErr != nil {
 				s.logger.Errorf("StoreBlock: %v", rebuildErr)
 			} else {
 				s.lastSuccessfulRebuild.Store(time.Now().Unix())
@@ -329,6 +480,15 @@ func (s *SQL) getPreviousBlockInfo(ctx context.Context, prevBlockHash chainhash.
 	return id, chainWork, height, invalid, nil
 }
 
+// execQuerier is the subset of database calls storeBlock needs. Both *usql.DB and
+// *sql.Tx satisfy it, so the INSERT can run on the pool (fast path) or inside a
+// transaction that also carries the on_main_chain reconciliation (fork path).
+type execQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
+	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+}
+
 // storeBlock is the internal implementation that performs the actual database operations
 // to persist a block. It handles both genesis and regular blocks differently, with special
 // processing for the initial block in the chain.
@@ -378,8 +538,10 @@ func (s *SQL) getPreviousBlockInfo(ctx context.Context, prevBlockHash chainhash.
 //   - uint64: The unique database ID assigned to the stored block
 //   - uint32: The height of the block in the blockchain
 //   - []byte: The calculated cumulative chain work for this block as a byte array
-//   - error: Any error encountered during the operation, including validation failures
-func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string, storeBlockOptions options.StoreBlockOptions, onMainChain bool) (uint64, uint32, []byte, bool, error) {
+//   - bool: Whether the row was written invalid, by request or inherited from an invalid parent
+//   - error: Any error encountered during the operation, including validation failures. A
+//     failed INSERT returns the driver's error unwrapped; StoreBlock types it
+func (s *SQL) storeBlock(ctx context.Context, exec execQuerier, block *model.Block, peerID string, storeBlockOptions options.StoreBlockOptions, onMainChain bool) (uint64, uint32, []byte, bool, error) {
 	var (
 		coinbaseTxID string
 		q            string
@@ -397,6 +559,24 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string,
 
 	storeAsInvalid := previousBlockInvalid || storeBlockOptions.Invalid
 
+	// BIP34 coinbase-height guard. Deliberately NOT applied when the block is being stored as
+	// invalid: storing invalid=true IS the record that the block failed a consensus rule, so
+	// re-deriving that same rule as a precondition on the write makes the failure unrecordable.
+	// BIP34 is the case where the two collide exactly — the validator's bad-cb-height verdict and
+	// this guard test the identical condition — and without this gate the invalid write fails, the
+	// error is swallowed by the caller, and the block is re-validated at full cost on every
+	// re-announcement instead of being remembered (bitcoin-sv/teranode#4692). The same reasoning
+	// covers a block stored invalid because its parent is invalid. Any future consensus-shaped
+	// guard added to this insert path belongs on this side of the gate.
+	//
+	// validateCoinbaseHeight returns nil for height 0, so hoisting the call out of the non-genesis
+	// branch of getPreviousBlockData does not start enforcing anything on genesis.
+	if !storeAsInvalid {
+		if err := s.validateCoinbaseHeight(block, height); err != nil {
+			return 0, 0, nil, false, err
+		}
+	}
+
 	// Genesis is always on the main chain (it IS the chain). Override the caller's
 	// value, which may be false when the DB was empty and getBestBlockID returned nothing.
 	if genesis {
@@ -410,6 +590,15 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string,
 	// Genesis blocks cannot have custom IDs (except during initialization with ID=0)
 	if genesis && storeBlockOptions.ID > 0 {
 		return 0, 0, nil, false, errors.NewInvalidArgumentError("genesis block cannot have custom ID")
+	}
+
+	// A caller-chosen id must be the one reserved for this hash, because the
+	// block's transactions may already carry it in the UTXO store. See
+	// checkCallerSuppliedBlockID for the rules and the swept-reservation case.
+	if useCustomID && !genesis {
+		if err := s.checkCallerSuppliedBlockID(ctx, block.Hash(), storeBlockOptions.ID); err != nil {
+			return 0, 0, nil, false, err
+		}
 	}
 
 	if genesis {
@@ -587,7 +776,7 @@ RETURNING id
 
 	if useCustomID {
 		// When using custom ID, the ID is the first parameter
-		rows, err = s.db.QueryContext(ctx, q,
+		rows, err = exec.QueryContext(ctx, q,
 			storeBlockOptions.ID,
 			previousBlockID,
 			block.Header.Version,
@@ -615,7 +804,7 @@ RETURNING id
 		)
 	} else {
 		// When using auto-increment, no ID parameter is needed
-		rows, err = s.db.QueryContext(ctx, q,
+		rows, err = exec.QueryContext(ctx, q,
 			previousBlockID,
 			block.Header.Version,
 			block.Hash().CloneBytes(),
@@ -643,7 +832,10 @@ RETURNING id
 	}
 
 	if err != nil {
-		return 0, 0, nil, false, s.parseSQLError(err, block)
+		// Returned raw: the fork path runs this inside RetryTx, which classifies a
+		// driver error by its concrete type. StoreBlock types it afterwards through
+		// typedStoreBlockError.
+		return 0, 0, nil, false, err
 	}
 
 	defer rows.Close()
@@ -658,13 +850,24 @@ RETURNING id
 		return 0, 0, nil, false, errors.NewStorageError("failed to scan new block id", err)
 	}
 
-	// Update MTP cache with this block's timestamp for future MTP calculations.
-	// Only cache valid blocks — invalid blocks are excluded from MTP queries.
-	if !storeAsInvalid {
-		s.blockTimestampCache.Add(height, block.Header.Timestamp)
-	}
+	// The MTP timestamp cache is updated by StoreBlock once the row has committed,
+	// never here: on the fork path this runs inside a transaction that may still
+	// roll back.
 
 	return newBlockID, height, cumulativeChainWorkBytes, storeAsInvalid, nil
+}
+
+// typedStoreBlockError turns an error from storeBlock, or from the BEGIN and COMMIT
+// around it, into the typed error StoreBlock returns. Errors storeBlock already typed
+// (block exists, invalid argument, storage) pass through; a raw driver error goes
+// through parseSQLError, so a unique violation still surfaces as BlockExists.
+func (s *SQL) typedStoreBlockError(err error, block *model.Block) error {
+	var typedErr *errors.Error
+	if errors.As(err, &typedErr) {
+		return err
+	}
+
+	return s.parseSQLError(err, block)
 }
 
 // parseSQLError unwraps and translates SQL-specific errors into domain-specific errors.
@@ -792,11 +995,6 @@ func (s *SQL) getPreviousBlockData(
 		}
 
 		height = previousHeight + 1
-
-		// BIP34 Coinbase Height Validation using the helper function
-		if err := s.validateCoinbaseHeight(block, height); err != nil {
-			return false, 0, 0, nil, false, err
-		}
 	}
 
 	return genesis, height, previousBlockID, previousChainWork, previousBlockInvalid, nil
@@ -1101,4 +1299,17 @@ func getCumulativeChainWork(chainWork *chainhash.Hash, block *model.Block) (*cha
 	}
 
 	return newWork, nil
+}
+
+// sameError reports whether a and b are the same error value. It is an identity check,
+// not errors.Is: a teranode error matches every other error sharing its code, which
+// would make any storage error look like the reconciliation's. The dynamic types are
+// compared first because == on two values of one uncomparable type panics.
+func sameError(a, b error) bool {
+	ta := reflect.TypeOf(a)
+	if ta != reflect.TypeOf(b) || !ta.Comparable() {
+		return false
+	}
+
+	return a == b
 }

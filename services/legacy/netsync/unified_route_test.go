@@ -47,7 +47,7 @@ func TestSyncManager_legacyUnified(t *testing.T) {
 				sm.utxoStore = &nullstore.NullStore{}
 			}
 
-			require.Equal(t, tt.want, sm.legacyUnified(tt.height))
+			require.Equal(t, tt.want, sm.legacyUnified(headerProven, tt.height))
 		})
 	}
 }
@@ -80,18 +80,18 @@ func TestSyncManager_prepareSubtrees_UnifiedSkipsUTXOOps(t *testing.T) {
 		ctx:              context.Background(),
 	}
 
-	require.True(t, sm.legacyUnified(uint32(blockHeight)), "gate must be ON for this case")
+	require.True(t, sm.legacyUnified(headerProven, uint32(blockHeight)), "gate must be ON for this case")
 
 	block, _, _ := buildExtendedSubtreeBlock(t, blockHeight, 5)
 
-	subtrees, subtreeSlices, blockID, err := sm.prepareSubtrees(context.Background(), block)
+	subtrees, subtreeSlices, blockID, err := sm.prepareSubtrees(context.Background(), block, headerProven, bodyCommitment(t, block))
 	require.NoError(t, err)
 
 	// (a) blockID must be 0 — server-side assignment deferred
 	require.Equal(t, uint32(0), blockID, "unified route must return blockID 0")
 
-	// (b) subtreeSlices returned (non-nil and non-empty) for the merkle check
-	require.NotNil(t, subtreeSlices, "subtreeSlices must be returned for merkle check")
+	// (b) the verified subtree slices remain available to preparation callers
+	require.NotNil(t, subtreeSlices, "verified subtreeSlices must be returned")
 	require.NotEmpty(t, subtreeSlices, "subtreeSlices must not be empty")
 
 	// (c) subtree files must still be written to the subtree store

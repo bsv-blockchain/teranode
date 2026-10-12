@@ -187,8 +187,11 @@ teranode-cli checkblock 000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b6
 ### File Reader
 
 ```bash
-teranode-cli filereader [path] [options]
+teranode-cli filereader [options] [path]
 ```
+
+Flags must come before the path: anything after the first positional argument is not parsed as a flag, so
+`teranode-cli` rejects it.
 
 Options:
 
@@ -346,10 +349,9 @@ not fully enforce — the node stopped, the FSM state in the blockchain DB readi
 reports the tip, target, and block count without mutating anything, but it
 returns before the subtree store is touched, so it cannot confirm that last one.
 
-Note that `IDLE` is only reachable from `RUNNING`: the FSM has no
-`CATCHINGBLOCKS` → `IDLE` transition, so on a node stuck catching blocks
-`setfsmstate --fsmstate=idle` fails and the state has to be moved via `running`
-first.
+`setfsmstate --fsmstate=idle` reaches `IDLE` from both `RUNNING` and
+`CATCHINGBLOCKS`. From `CATCHINGBLOCKS` it does not cancel a catchup already in
+progress, so stop the services before rewinding.
 
 A step-by-step operator runbook is not published yet. Until it is, do not run
 this against a production node without working through those preconditions

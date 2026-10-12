@@ -877,7 +877,7 @@ func (m *MockBlockchainClient) CompleteBlobDeletions(ctx context.Context, comple
 	return 0, 0, nil
 }
 
-func (m *MockBlockchainClient) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
+func (m *MockBlockchainClient) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int, excludeStoreTypes []storetypes.BlobStoreType) (string, []*blockchain_api.ScheduledDeletion, error) {
 	return "", nil, nil
 }
 
@@ -980,7 +980,8 @@ func (m *MockUTXOStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint3
 func (m *MockUTXOStore) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
 	return nil, nil
 }
-func (m *MockUTXOStore) Delete(ctx context.Context, hash *chainhash.Hash) error { return nil }
+func (m *MockUTXOStore) Delete(ctx context.Context, hash *chainhash.Hash) error         { return nil }
+func (m *MockUTXOStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error { return nil }
 func (m *MockUTXOStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	return nil, nil
 }
@@ -1028,6 +1029,13 @@ func (m *MockUTXOStore) BatchDecorate(ctx context.Context, unresolvedMetaDataSli
 	return nil
 }
 func (m *MockUTXOStore) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error { return nil }
+func (m *MockUTXOStore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	return nil, nil
+}
+
+func (m *MockUTXOStore) ParentOutputsForValidation(ctx context.Context, outpoints []utxo.Outpoint, opts ...utxo.ParentOutputOption) ([]utxo.ParentOutput, error) {
+	return nil, nil
+}
 func (m *MockUTXOStore) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
 	return nil
 }

@@ -204,15 +204,22 @@ type ClientI interface {
 	ReportValidatedChainProgress(ctx context.Context, peerID string, height uint32, blockHash string, chainWork []byte) error
 
 	// IsPeerMalicious checks if a peer is considered malicious based on their behavior.
-	// A peer is considered malicious if they are banned or have a very low reputation score.
+	// A peer is considered malicious if it is banned or has malicious behavior recorded
+	// against it (e.g. via RecordCatchupMalicious).
 	IsPeerMalicious(ctx context.Context, peerID string) (bool, string, error)
 
 	// IsPeerUnhealthy checks if a peer is considered unhealthy based on their performance.
 	// A peer is considered unhealthy if they have poor performance metrics or low reputation.
-	IsPeerUnhealthy(ctx context.Context, peerID string) (bool, string, float32, error)
+	// The unknown return value is true when the peer is absent from the registry: this is an
+	// absence of information, not a verdict, and callers must not treat it the same as a
+	// positive unhealthy finding.
+	IsPeerUnhealthy(ctx context.Context, peerID string) (isUnhealthy bool, reason string, reputationScore float32, unknown bool, err error)
 
 	// GetPeerRegistry retrieves the comprehensive peer registry data.
-	// Returns all peers in the registry with their complete information.
+	// Returns all peers in the registry with the subset of PeerInfo carried by
+	// p2p_api.PeerRegistryInfo (see convertFromAPIPeerInfo); in-process sync
+	// backoff state (LastSyncAttempt, SyncAttemptCount, LastReputationReset,
+	// ReputationResetCount) and CatchupBlocks are not transmitted.
 	GetPeerRegistry(ctx context.Context) ([]*PeerInfo, error)
 
 	// RecordBytesDownloaded records the number of bytes downloaded via HTTP from a peer.

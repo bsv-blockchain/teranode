@@ -297,7 +297,10 @@ func TestValidateSubtreeInternal_DuplicateTxid(t *testing.T) {
 
 	_, err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight, nil)
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "expected ErrBlockInvalid, got %v", err)
+	// bitcoin-sv/teranode#4692: a duplicate tx in the received subtree is body-derived corruption →
+	// corrupt (re-download + strike peer), not invalid (poison).
+	require.True(t, errors.IsBlockCorrupt(err), "expected ErrBlockCorrupt, got %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "duplicate")
 	require.Contains(t, err.Error(), hash1.String())
 }

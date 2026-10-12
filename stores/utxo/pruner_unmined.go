@@ -13,6 +13,27 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
+// BackdatedUnminedSince returns the unminedSince value to stamp on a transaction that goes
+// from mined to unmined (a reorg or reset moved its block off the longest chain) and has no
+// earlier unminedSince to keep.
+//
+// PreserveParentsOfOldUnminedTransactions only considers children with
+// unminedSince <= blockHeight - unminedTxRetention, while the parent's deleteAtHeight was
+// stamped when the child spent it and keeps counting through the reorg. Stamping the current
+// height would start the child's protection clock unminedTxRetention blocks late, and a child
+// that spent its parent long before it was mined would see the parent pruned before the scan
+// ever looks at it (issue 1768). Backdating by unminedTxRetention makes the child eligible on
+// the next pruner cycle, so its parents are preserved before their delete clock fires.
+//
+// The result is never below 1: 0/absent means "mined on the longest chain" to every reader.
+func BackdatedUnminedSince(currentBlockHeight, unminedTxRetention uint32) uint32 {
+	if currentBlockHeight <= unminedTxRetention {
+		return 1
+	}
+
+	return currentBlockHeight - unminedTxRetention
+}
+
 // PreserveParentsOfOldUnminedTransactions protects parent transactions of old unmined transactions from deletion.
 // This is a store-agnostic implementation that works with any Store implementation.
 // It follows the same pattern as ProcessConflicting, using the Store interface methods.

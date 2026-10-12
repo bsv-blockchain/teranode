@@ -14,9 +14,8 @@ import (
 
 func BenchmarkDiskTxMap_SetIfNotExists(b *testing.B) {
 	m, err := NewDiskTxMap(DiskTxMapOptions{
-		BasePath:       b.TempDir(),
-		Prefix:         "bench",
-		FilterCapacity: uint(b.N + 1000),
+		BasePath: b.TempDir(),
+		Prefix:   "bench",
 	})
 	if err != nil {
 		b.Fatal(err)
@@ -39,9 +38,8 @@ func BenchmarkDiskTxMap_SetIfNotExists(b *testing.B) {
 
 func BenchmarkDiskTxMap_SetIfNotExists_Parallel(b *testing.B) {
 	m, err := NewDiskTxMap(DiskTxMapOptions{
-		BasePath:       b.TempDir(),
-		Prefix:         "bench-par",
-		FilterCapacity: uint(b.N + 10000),
+		BasePath: b.TempDir(),
+		Prefix:   "bench-par",
 	})
 	if err != nil {
 		b.Fatal(err)
@@ -66,13 +64,12 @@ func BenchmarkDiskTxMap_SetIfNotExists_Parallel(b *testing.B) {
 	})
 }
 
-// BenchmarkDiskTxMap_ExistenceOnly measures pure shard lock + filter + map without serialization.
+// BenchmarkDiskTxMap_ExistenceOnly measures pure shard lock + index map insert without serialization.
 // This is the theoretical maximum throughput of the existence check layer.
 func BenchmarkDiskTxMap_ExistenceOnly(b *testing.B) {
 	m, err := NewDiskTxMap(DiskTxMapOptions{
-		BasePath:       b.TempDir(),
-		Prefix:         "bench-exist",
-		FilterCapacity: uint(b.N + 1000),
+		BasePath: b.TempDir(),
+		Prefix:   "bench-exist",
 	})
 	if err != nil {
 		b.Fatal(err)
@@ -94,8 +91,7 @@ func BenchmarkDiskTxMap_ExistenceOnly(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		s := &m.shards[shardOf(hashes[i])]
 		s.mu.Lock()
-		s.filter.Insert(hashes[i][:])
-		s.recent[hashes[i]] = struct{}{}
+		s.index[hashes[i]] = 0
 		s.mu.Unlock()
 	}
 }
@@ -110,9 +106,8 @@ func TestDiskTxMap_ThroughputTarget(t *testing.T) {
 	)
 
 	m, err := NewDiskTxMap(DiskTxMapOptions{
-		BasePath:       t.TempDir(),
-		Prefix:         "throughput",
-		FilterCapacity: uint(totalOps * 2),
+		BasePath: t.TempDir(),
+		Prefix:   "throughput",
 	})
 	require.NoError(t, err)
 	defer m.Close()
@@ -158,7 +153,7 @@ func TestDiskTxMap_ThroughputTarget(t *testing.T) {
 	// If the existence layer (filter + map) is fast enough but serialization
 	// is the bottleneck, the note below explains why that's acceptable.
 	if opsPerSec < 1_000_000 {
-		t.Logf("NOTE: Below 1M target. The bottleneck is TxInpoints serialization + channel send.")
+		t.Logf("NOTE: Below 1M target. The bottleneck is TxInpoints serialization + log append.")
 		t.Logf("In production, the subtreeprocessor batches 64 batches per iteration,")
 		t.Logf("so the effective contention is lower than this worst-case test.")
 	}
@@ -180,9 +175,8 @@ func TestDiskTxMap_MultiDiskThroughput(t *testing.T) {
 	}
 
 	m, err := NewDiskTxMap(DiskTxMapOptions{
-		BasePaths:      paths,
-		Prefix:         "multidisk",
-		FilterCapacity: uint(totalOps * 2),
+		BasePaths: paths,
+		Prefix:    "multidisk",
 	})
 	require.NoError(t, err)
 	defer m.Close()
@@ -243,9 +237,8 @@ func TestDiskTxMap_ExistenceLayerThroughput(t *testing.T) {
 	)
 
 	m, err := NewDiskTxMap(DiskTxMapOptions{
-		BasePath:       t.TempDir(),
-		Prefix:         "exist-throughput",
-		FilterCapacity: uint(totalOps * 2),
+		BasePath: t.TempDir(),
+		Prefix:   "exist-throughput",
 	})
 	require.NoError(t, err)
 	defer m.Close()
@@ -271,8 +264,7 @@ func TestDiskTxMap_ExistenceLayerThroughput(t *testing.T) {
 			for i := 0; i < opsPerWorker; i++ {
 				s := &m.shards[shardOf(hashes[i])]
 				s.mu.Lock()
-				s.filter.Insert(hashes[i][:])
-				s.recent[hashes[i]] = struct{}{}
+				s.index[hashes[i]] = 0
 				s.mu.Unlock()
 			}
 		}(g)
@@ -282,7 +274,7 @@ func TestDiskTxMap_ExistenceLayerThroughput(t *testing.T) {
 	elapsed := time.Since(start)
 
 	opsPerSec := float64(totalOps) / elapsed.Seconds()
-	t.Logf("=== Existence Layer Throughput (no serialization, no Badger) ===")
+	t.Logf("=== Existence Layer Throughput (no serialization, no disk) ===")
 	t.Logf("Total ops:     %d", totalOps)
 	t.Logf("Goroutines:    %d", numGoroutines)
 	t.Logf("Elapsed:       %v", elapsed)

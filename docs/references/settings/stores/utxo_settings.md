@@ -14,12 +14,12 @@
 | OutpointBatcherDurationMillis | int | 10 | utxostore_outpointBatcherDurationMillis | Outpoint batch duration |
 | SpendBatcherDurationMillis | int | 100 | utxostore_spendBatcherDurationMillis | Spend batch duration |
 | SpendBatcherSize | int | 100 | utxostore_spendBatcherSize | Spend operation batch size |
-| SpendBatcherConcurrency | int | 32 | utxostore_spendBatcherConcurrency | Spend batch concurrency |
+| SpendBatcherConcurrency | int | 32 | utxostore_spendBatcherConcurrency | SQL per-transaction input-spend cap (`SpendBatcherSize` × this); also caps quick-validation concurrent transactions (`SpendBatcherSize` × this × 2) |
 | SpendWaitTimeout | time.Duration | 30s | utxostore_spendWaitTimeout | Spend operation wait timeout |
 | SpendCircuitBreakerFailureCount | int | 10 | utxostore_spendCircuitBreakerFailureCount | Circuit breaker failure threshold (infrastructure-level errors only — see "Spend Circuit Breaker Trigger Set" below) |
 | SpendCircuitBreakerCooldown | time.Duration | 30s | utxostore_spendCircuitBreakerCooldown | Circuit breaker cooldown period |
 | SpendCircuitBreakerHalfOpenMax | int | 4 | utxostore_spendCircuitBreakerHalfOpenMax | Circuit breaker half-open max |
-| StoreBatcherDurationMillis | int | 100 | utxostore_storeBatcherDurationMillis | Store batch duration |
+| StoreBatcherDurationMillis | int | 10 | utxostore_storeBatcherDurationMillis | Store batch duration (SQL and Aerospike) |
 | StoreBatcherSize | int | 100 | utxostore_storeBatcherSize | Store operation batch size |
 | UtxoBatchSize | int | 128 | utxostore_utxoBatchSize | UTXO operation batch size |
 | IncrementBatcherSize | int | 256 | utxostore_incrementBatcherSize | Increment operation batch size |

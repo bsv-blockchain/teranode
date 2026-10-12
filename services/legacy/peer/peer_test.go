@@ -1556,3 +1556,94 @@ func NewTestServer(t *testing.T) (*legacy.Server, error) {
 		UtxoStore:        utxoStore,
 	}), nil
 }
+
+// TestPeerRequeueInventory covers issue 1825: once an inv has been announced
+// to a peer it sits in that peer's knownInventory, so QueueInventory drops any
+// later attempt to re-announce it. RequeueInventory must bypass that filter,
+// including the second check when the trickle queue drains. The immediate-send
+// branch in queueHandler is not covered: newPeerBase raises a zero
+// TrickleInterval to DefaultTrickleInterval, so a peer always trickles.
+func TestPeerRequeueInventory(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	verack := make(chan struct{}, 2)
+	invs := make(chan *wire.MsgInv, 10)
+
+	inCfg := &peer.Config{
+		Listeners: peer.MessageListeners{
+			OnVerAck: func(p *peer.Peer, msg *wire.MsgVerAck) { verack <- struct{}{} },
+			OnInv:    func(p *peer.Peer, msg *wire.MsgInv) { invs <- msg },
+		},
+		UserAgentName:          "peer",
+		UserAgentVersion:       "1.0",
+		ChainParams:            &chaincfg.MainNetParams,
+		Services:               0,
+		TrickleInterval:        10 * time.Millisecond,
+		TstAllowSelfConnection: true,
+	}
+	outCfg := *inCfg
+	outCfg.Listeners = peer.MessageListeners{
+		OnVerAck: func(p *peer.Peer, msg *wire.MsgVerAck) { verack <- struct{}{} },
+	}
+
+	inConn, outConn := pipe(
+		&conn{raddr: "10.0.0.1:8333"},
+		&conn{raddr: "10.0.0.2:8333"},
+	)
+
+	inPeer := peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, inCfg)
+	inPeer.AssociateConnection(inConn)
+
+	outPeer, err := peer.NewOutboundPeer(ulogger.TestLogger{}, tSettings, &outCfg, "10.0.0.1:8333")
+	require.NoError(t, err)
+	outPeer.AssociateConnection(outConn)
+
+	t.Cleanup(func() {
+		outPeer.DisconnectWithInfo("test done")
+		inPeer.DisconnectWithInfo("test done")
+		outPeer.WaitForDisconnect()
+		inPeer.WaitForDisconnect()
+	})
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-verack:
+		case <-time.After(time.Second):
+			t.Fatal("verack timeout")
+		}
+	}
+
+	iv := wire.NewInvVect(wire.InvTypeTx, &chainhash.Hash{0x01})
+
+	expectInv := func(msg string) {
+		t.Helper()
+		select {
+		case got := <-invs:
+			require.Len(t, got.InvList, 1, msg)
+			require.Equal(t, *iv, *got.InvList[0], msg)
+		case <-time.After(time.Second):
+			t.Fatal(msg)
+		}
+	}
+
+	expectNoInv := func(msg string) {
+		t.Helper()
+		select {
+		case got := <-invs:
+			t.Fatalf("%s: unexpected inv %v", msg, got.InvList)
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+
+	outPeer.QueueInventory(iv)
+	expectInv("first announce not received")
+
+	// Sanity check of the filter the fix has to bypass.
+	outPeer.QueueInventory(iv)
+	expectNoInv("QueueInventory re-sent a known inv")
+
+	outPeer.RequeueInventory(iv)
+	expectInv("RequeueInventory did not re-send the known inv")
+
+	outPeer.RequeueInventory(iv)
+	expectInv("second RequeueInventory did not re-send the known inv")
+}

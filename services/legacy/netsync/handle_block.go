@@ -19,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
@@ -35,12 +36,31 @@ import (
 )
 
 const (
-	// txNotFoundInTxMapMsg is the error message used when a transaction hash
-	// cannot be located in the block's txMap.
-	txNotFoundInTxMapMsg = "transaction %s not found in txMap"
+	// txNotFoundInTxMapExtendMsg is the error message used when a transaction hash
+	// cannot be located in the block's txMap while extending transactions.
+	// errors.Error.Error() does not print the captured file/line, so the phase
+	// name is baked into the message itself to let an operator tell this apart
+	// from the createUtxos and PreValidateTransactions variants below.
+	txNotFoundInTxMapExtendMsg = "transaction %s not found in txMap during extend"
+
+	// txNotFoundInTxMapCreateUtxosMsg is the error message used when a transaction
+	// hash cannot be located in the block's txMap while creating utxos.
+	txNotFoundInTxMapCreateUtxosMsg = "transaction %s not found in txMap during createUtxos"
+
+	// txNotFoundInTxMapPreValidateMsg is the error message used when a transaction
+	// hash cannot be located in the block's txMap during PreValidateTransactions.
+	txNotFoundInTxMapPreValidateMsg = "transaction %s not found in txMap during PreValidateTransactions"
 )
 
-func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, blockHash chainhash.Hash, msgBlock *wire.MsgBlock) (err error) {
+// HandleBlockDirect ingests a full block delivered by a legacy peer.
+//
+// origin carries HOW this block came to be requested. It is the ancestry proof
+// behind every below-checkpoint fast path (see blockRequestOrigin): the
+// hardcoded checkpoints certify one chain, not a height range, so a block's
+// height alone can never justify skipping script validation. Callers that
+// cannot establish provenance must pass the zero value, which denies the fast
+// path.
+func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, blockHash chainhash.Hash, msgBlock *wire.MsgBlock, origin blockRequestOrigin) (err error) {
 	sm.logger.Debugf("[HandleBlockDirect][%s] starting handling block", blockHash.String())
 
 	// Make sure we have the correct height for this block before continuing
@@ -119,6 +139,13 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	}
 
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "HandleBlockDirect",
+		// This span's INFO level is load-bearing. HandleBlockDirect has a named
+		// (err error) return and passes it to deferFn, and an INFO span with a
+		// non-nil error logs at ERROR (util/tracing/tracing.go, logTraceMessage).
+		// Several per-phase spans below it are at DEBUG, where that escalation
+		// only happens if the logger is already at DEBUG, so at production
+		// logLevel=INFO their failures surface only here. Phases that kept INFO
+		// (PreValidateTransactions, createSubtrees) escalate on their own.
 		tracing.WithLogMessage(
 			sm.logger,
 			"[HandleBlockDirect][%s %d] %d txs, peer %s",
@@ -138,6 +165,42 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		deferFn(err)
 	}()
 
+	// Proof of work is demanded FIRST — ahead of the two waits below and of
+	// prepareSubtrees, which creates and spends this block's UTXOs in the shared
+	// store. The check used to run after prepareSubtrees, so the whole UTXO effect
+	// of a fabricated block landed before any work was demanded, and nothing
+	// rewinds those spends (GHSA-gggq-8f59-4jm9). Placing it here also means an
+	// unproven block from any peer cannot buy the block-assembly readiness wait or
+	// a GetBlockIsMined retry loop. Header linkage was checked on receipt; the
+	// height is settled against the parent above.
+	//
+	// Both halves are required and neither substitutes for the other:
+	// HasMetPowLimit bounds the target the header DECLARES, and
+	// HasMetTargetDifficulty checks the hash against it. Without the floor a peer
+	// declares nBits=0x207fffff and satisfies its own target in about two hashes,
+	// so an unbounded check placed this early would buy nothing. Legacy ingestion
+	// never runs the expected-nBits (DAA) rule — that lives in block validation —
+	// so this bound is the only thing standing between a wire block and the UTXO
+	// store on this path.
+	var headerBytes bytes.Buffer
+	if err = block.MsgBlock().Header.Serialize(&headerBytes); err != nil {
+		return errors.NewProcessingError("failed to serialize header", err)
+	}
+
+	// Reused below to build the teranode block; the header is the same object.
+	header, err := model.NewBlockHeaderFromBytes(headerBytes.Bytes())
+	if err != nil {
+		return errors.NewProcessingError("failed to create block header from bytes", err)
+	}
+
+	if err = header.HasMetPowLimit(sm.chainParams); err != nil {
+		return errors.NewBlockInvalidError("[HandleBlockDirect][%s %d] block declares a target easier than the network limit", blockHash.String(), blockHeight, err)
+	}
+
+	if headerValid, _, powErr := header.HasMetTargetDifficulty(); !headerValid {
+		return errors.NewBlockInvalidError("[HandleBlockDirect][%s %d] block does not meet target difficulty", blockHash.String(), blockHeight, powErr)
+	}
+
 	// Wait for block assembly to be ready
 	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, sm.logger, sm.blockAssembly, blockHeight, sm.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
 		// block-assembly is still behind, so we cannot process this block
@@ -149,24 +212,13 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	// correctly look up parent transaction BlockHeights in the UTXO store.
 	// Skipped on the below-checkpoint outpoint-only fast path — see
 	// needsParentMinedWait for the redundancy argument.
-	if sm.needsParentMinedWait(blockHeight) {
+	if sm.needsParentMinedWait(origin, blockHeight) {
 		if err = sm.waitForPreviousBlockMined(ctx, &block.MsgBlock().Header.PrevBlock, blockHeight); err != nil {
 			return err
 		}
 	}
 
 	// 3. Create a block message with (block hash, coinbase tx and slice if 1 subtree)
-	var headerBytes bytes.Buffer
-	if err = block.MsgBlock().Header.Serialize(&headerBytes); err != nil {
-		return errors.NewProcessingError("failed to serialize header", err)
-	}
-
-	// create the Teranode compatible block header
-	header, err := model.NewBlockHeaderFromBytes(headerBytes.Bytes())
-	if err != nil {
-		return errors.NewProcessingError("failed to create block header from bytes", err)
-	}
-
 	var coinbase bytes.Buffer
 	if err = block.Transactions()[0].MsgTx().Serialize(&coinbase); err != nil {
 		return errors.NewProcessingError("failed to serialize coinbase", err)
@@ -212,7 +264,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	// NOTE: last use of `block` — from here down only scalars and tx hash
 	// copies are referenced, so the decode arena is collectable as soon as
 	// createTxMap inside prepareSubtrees returns.
-	subtrees, preparedSubtreeSlices, blockID, err := sm.prepareSubtrees(ctx, block)
+	subtrees, _, blockID, err := sm.prepareSubtrees(ctx, block, origin, &model.Block{Header: header, CoinbaseTx: coinbaseTx})
 	if err != nil {
 		return err
 	}
@@ -222,40 +274,26 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		return errors.NewProcessingError("failed to create model.NewBlock", err)
 	}
 
-	// pre-check that there is enough proof of work on the block, before we do any other processing
-	headerValid, _, err := teranodeBlock.Header.HasMetTargetDifficulty()
-	if !headerValid {
-		return errors.NewBlockInvalidError("invalid block header: %s", teranodeBlock.Header.Hash().String(), err)
-	}
-
-	// Unified route integrity floor: block.Valid (and its CheckMerkleRoot) no
-	// longer runs server-side on this route, and unlike catchup — whose subtree
-	// lists arrive bound to checkpoint-verified headers — legacy builds these
-	// subtrees itself from the wire block. Verify the merkle root here so a
-	// corrupt or tampered wire block can never reach the UTXO store. PoW was
-	// checked above; header linkage was checked on receipt.
-	//
-	// CheckMerkleRoot alone is NOT sufficient: a CVE-2012-2459 duplicate-tx
-	// mutation preserves the merkle root via the duplicate-last-when-odd rule,
-	// so it passes the merkle check while still containing a repeated hash.
-	// The CVE-2012-2459 dedup floor now runs unconditionally inside prepareSubtrees
-	// (on the locally-built slices, for every route), so it is already enforced
-	// before we get here — the second call below is a defensive belt-and-braces on
-	// the unified route's returned slices and is kept in sync with unified_dedup_test.go.
-	// It must run while SubtreeSlices is still populated, before the nil-out below.
-	if preparedSubtreeSlices != nil {
-		teranodeBlock.SubtreeSlices = preparedSubtreeSlices
-		if err = teranodeBlock.CheckMerkleRoot(ctx); err != nil {
-			return errors.NewBlockInvalidError("[HandleBlockDirect][%s %d] merkle root mismatch on unified route", blockHashStr, blockHeight, err)
-		}
-		if err = model.CheckSubtreeSlicesForDuplicateTxs(preparedSubtreeSlices); err != nil {
-			return errors.NewBlockInvalidError("[HandleBlockDirect][%s %d] duplicate transaction on unified route", blockHashStr, blockHeight, err)
-		}
-		teranodeBlock.SubtreeSlices = nil
+	// Derive the serving peer identity for the block-validation corrupt cap. The two caps'
+	// keys intentionally differ only by the LegacyPeerIDPrefix namespace below: netsync's own
+	// cap (recordCorruptBlockAttempt) keys on the bare peer.Addr(), while this value threaded
+	// into blockValidation.ProcessBlock carries the prefix — both are still derived from the
+	// identical peer.Addr() call, so they still bound the same serving connection. The
+	// divergence exists solely so nothing downstream of blockvalidation can mistake this value
+	// for a libp2p peer ID: isLegacyPeerID (services/blockvalidation/peer_metrics_helpers.go)
+	// makes isPeerMalicious, penalizeCorruptBlockPeer and the invalid-block Kafka producer treat any
+	// LegacyPeerIDPrefix-prefixed value the same as an empty peerID, so it never reaches
+	// p2pClient.AddBanScore/IsPeerMalicious. See isLegacyPeerID's doc for why that gate exists
+	// (bitcoin-sv/teranode#4692).
+	// Peer.Addr() dereferences the peer with no nil-receiver guard, so guard here: a nil peer
+	// degrades to the empty-peerID no-cap defence rather than panicking.
+	peerID := ""
+	if peer != nil {
+		peerID = blockvalidation.LegacyPeerIDPrefix + peer.Addr()
 	}
 
 	// call the process block wrapper, which will add tracing and logging
-	err = sm.ProcessBlock(ctx, teranodeBlock)
+	err = sm.ProcessBlock(ctx, teranodeBlock, peerID)
 	if err != nil {
 		return err
 	}
@@ -306,9 +344,9 @@ func (sm *SyncManager) waitForPreviousBlockMined(ctx context.Context, prevBlockH
 	return err
 }
 
-func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Block) (err error) {
+func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Block, peerID string) (err error) {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "SyncManager:processBlock",
-		tracing.WithLogMessage(
+		tracing.WithDebugLogMessage(
 			sm.logger,
 			"[SyncManager:processBlock][%s %d] processing block",
 			teranodeBlock.Hash().String(),
@@ -325,7 +363,7 @@ func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Bl
 	// teranodeBlock.ID was set by model.NewBlock from the pre-assigned ID returned by prepareSubtrees.
 	// Read it from the struct here — avoids duplicating it as a parameter. It still has to travel as
 	// a separate proto field in the gRPC request because block.Bytes() does not serialize ID.
-	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height, "", "legacy", teranodeBlock.ID); err != nil {
+	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height, peerID, "legacy", teranodeBlock.ID); err != nil {
 		if errors.Is(err, errors.ErrBlockExists) {
 			sm.logger.Infof("[SyncManager:processBlock][%s %d] block already exists", teranodeBlock.Hash().String(), teranodeBlock.Height)
 			return nil
@@ -356,11 +394,19 @@ type blockIdent struct {
 	prevBlock chainhash.Hash
 	height    uint32
 	timestamp time.Time
+
+	// origin is this block's request provenance, threaded down from
+	// HandleBlockDirect so every below-checkpoint gate reads one value computed
+	// once and cannot disagree with its siblings.
+	origin blockRequestOrigin
 }
 
-func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block) (subtrees []*chainhash.Hash, subtreeSlices []*subtreepkg.Subtree, blockID uint32, err error) {
+// prepareSubtrees binds the received body to commitment before storage writes.
+// commitment carries the already-decoded header and coinbase, without retaining
+// the wire block; its subtree fields are populated here for the Merkle check.
+func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block, origin blockRequestOrigin, commitment *model.Block) (subtrees []*chainhash.Hash, subtreeSlices []*subtreepkg.Subtree, blockID uint32, err error) {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "prepareSubtrees",
-		tracing.WithLogMessage(
+		tracing.WithDebugLogMessage(
 			sm.logger,
 			"[prepareSubtrees][%s] processing subtree for block height %d, tx count %d",
 			block.Hash().String(),
@@ -381,6 +427,21 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 
 	txCount := len(block.Transactions())
 	if txCount <= 1 {
+		if err = commitment.CheckMerkleRoot(ctx); err != nil {
+			// CheckMerkleRoot returns BOTH body-derived corrupt verdicts AND local storage/processing
+			// errors (bitcoin-sv/teranode#4692). Only a genuinely corrupt (body-derived) result may be
+			// classified corrupt — then the coinbase-only body does not hash to the header's merkle
+			// root, so the wire body is not bound to the header and cannot condemn the hash; the caller
+			// drops it and allows a re-request, never invalid=true. A local storage/processing error is
+			// OUR failure, not the peer's: return it UNWRAPPED so it keeps its own classification and
+			// the caller neither strikes the serving peer nor skips the transient-failure backoff.
+			// Mirrors the sibling gate in quick_validate.go's validateSubtrees.
+			if errors.IsBlockCorrupt(err) {
+				return nil, nil, 0, errors.NewBlockCorruptError("[prepareSubtrees] merkle root mismatch", err)
+			}
+
+			return nil, nil, 0, err
+		}
 		return subtrees, nil, blockID, nil
 	}
 
@@ -437,6 +498,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		prevBlock: block.MsgBlock().Header.PrevBlock,
 		height:    blockHeight32,
 		timestamp: block.MsgBlock().Header.Timestamp,
+		origin:    origin,
 	}
 
 	txMap := txmap.NewSyncedMap[chainhash.Hash, *TxMapWrapper](txCount)
@@ -459,7 +521,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 
 	// Compute the below-checkpoint fast-path mode ONCE for this block and thread it into
 	// the phases (extend, create-subtrees) so decorate-skip and fee=0 cannot disagree.
-	outpointOnly := sm.legacyOutpointOnly(bi.height)
+	outpointOnly := sm.legacyOutpointOnly(bi.origin, bi.height)
 
 	if err = sm.extendTransactions(ctx, bi, txOrder, txMap, outpointOnly); err != nil {
 		return nil, nil, 0, err
@@ -469,31 +531,53 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		return nil, nil, 0, err
 	}
 
-	// CVE-2012-2459 dedup floor for EVERY route (inline, unified, non-quick).
-	// createTxMap uses txMap.Set, which silently overwrites a duplicated txid, so
-	// the map cannot catch it; but createSubtrees replays the block-order txOrder
-	// (which retains both copies) and AddNodes the duplicate into `slices` twice.
-	// Run the explicit dedup scan here, on the locally-built slices, before any
-	// UTXO create/spend or subtree write — regardless of which slices are later
-	// returned to the caller. The gated call in HandleBlockDirect fires only when
-	// preparedSubtreeSlices != nil (the unified route), so the inline route never
-	// ran the check; this single call closes that gap for all paths. A
-	// CVE-2012-2459 duplicate-tx mutation preserves the merkle root via the
-	// duplicate-last-when-odd rule, so CheckMerkleRoot alone would pass — this is
-	// the only thing that catches it.
+	// Retain the independent CVE-2012-2459 guard on the prepared slices before
+	// any UTXO or subtree write. Merkle padding can hide duplicated leaves even
+	// when the root matches, so the commitment check cannot replace this guard.
 	if err = model.CheckSubtreeSlicesForDuplicateTxs(slices); err != nil {
-		return nil, nil, 0, errors.NewBlockInvalidError("[prepareSubtrees][%s %d] duplicate transaction in block (CVE-2012-2459)", bi.hash.String(), bi.height, err)
+		// Body-derived (CVE-2012-2459 duplicate in the received tx set): classify corrupt so
+		// the caller drops it and allows a re-request, never invalid=true (bitcoin-sv/teranode#4692).
+		return nil, nil, 0, errors.NewBlockCorruptError("[prepareSubtrees][%s %d] duplicate transaction in block (CVE-2012-2459)", bi.hash.String(), bi.height, err)
 	}
 
-	// Quick validation is safe whenever the block sits at/below the highest hard-coded
-	// checkpoint for the active network. POW (verified upstream by HasMetTargetDifficulty)
-	// plus checkpoint-anchored chain linkage make the block canonical regardless of which
-	// FSM state drove the catch-up. The checkpoint list is owned by go-chaincfg — see PR
-	// #844 for the matching FSM-RUN gate that relies on the same invariant.
-	quickValidationMode := sm.quickValidationAllowed(bi.height)
+	// Header provenance authenticates only the header. Bind every transaction,
+	// including the coinbase, to that header before any route creates/spends
+	// UTXOs or writes subtrees. Reuse the locally built slices so this does not
+	// require another full-block transaction-hash pass. The separate duplicate
+	// guard above remains necessary because duplicate-last Merkle padding can
+	// hide repeated transactions.
+	for _, slice := range slices {
+		subtrees = append(subtrees, slice.RootHash())
+	}
+	commitment.Subtrees = subtrees
+	commitment.SubtreeSlices = slices
+	if err = commitment.CheckMerkleRoot(ctx); err != nil {
+		// CheckMerkleRoot returns BOTH body-derived corrupt verdicts AND local storage/processing
+		// errors (bitcoin-sv/teranode#4692). Only a genuinely corrupt (body-derived) result may be
+		// classified corrupt — then the locally-built subtrees do not hash to the header's merkle
+		// root, so the wire body is not bound to the header and cannot condemn the hash; the caller
+		// drops it and allows a re-request, never invalid=true. A local storage/processing error is
+		// OUR failure, not the peer's: return it UNWRAPPED so it keeps its own classification and
+		// the caller neither strikes the serving peer nor skips the transient-failure backoff.
+		// Mirrors the sibling gate in quick_validate.go's validateSubtrees.
+		if errors.IsBlockCorrupt(err) {
+			return nil, nil, 0, errors.NewBlockCorruptError("[prepareSubtrees][%s %d] merkle root mismatch", bi.hash.String(), bi.height, err)
+		}
+
+		return nil, nil, 0, err
+	}
+	commitment.SubtreeSlices = nil
+
+	// Quick validation requires PROOF that this block belongs to the
+	// checkpoint-certified chain — not merely that its height falls inside the
+	// certified range, which is what this gate used to ask and what made the
+	// prefix forgeable. bi.origin carries that proof; see quickValidationAllowed.
+	// Proof-of-work and the declared-target floor were both verified upstream in
+	// HandleBlockDirect, before this function mutates any UTXO state.
+	quickValidationMode := sm.quickValidationAllowed(bi.origin, bi.height)
 
 	if quickValidationMode {
-		if sm.legacyUnified(bi.height) {
+		if sm.legacyUnified(bi.origin, bi.height) {
 			// Unified route: block ID assignment and UTXO create+spend happen
 			// server-side in quickValidateBlock (blockID 0 = "assign server-side",
 			// Server.ProcessBlock skips pre-assignment when the wire field is 0).
@@ -539,7 +623,15 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 
 	// In quickValidationMode the transactions and subtree files have already been
 	// produced locally, so we can skip the round-trip through subtreeValidation.
-	if !quickValidationMode {
+	//
+	// While the node is catching up, full validation is left to block validation:
+	// its CheckBlockSubtrees finds these subtrees still unchecked and validates the
+	// whole block through the batch path (checks on all cores, then
+	// SpendAndCreateMulti), the same path peer-to-peer catch-up takes, followed by
+	// the per-subtree validation this loop would have run. Checking each subtree
+	// here first would validate every transaction one level at a time and leave
+	// CheckBlockSubtrees nothing to do.
+	if !quickValidationMode && !sm.blockValidationChecksSubtrees(ctx) {
 		for i := 0; i < numSubtrees; i++ {
 			if err = sm.checkSubtreeFromBlock(ctx, bi, slices[i]); err != nil {
 				return nil, nil, 0, err
@@ -547,32 +639,70 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		}
 	}
 
-	for i := 0; i < numSubtrees; i++ {
-		subtrees = append(subtrees, slices[i].RootHash())
-	}
-
-	// Unified route: return the in-memory slices for the merkle check in HandleBlockDirect.
-	// The caller sets them on the model.Block, verifies CheckMerkleRoot, then nils the field
-	// so the block heads to gRPC without pinning the slices.
-	if sm.legacyUnified(bi.height) {
+	// Expose prepared slices to callers inspecting the unified route. Production
+	// delivery releases them here; the Merkle commitment was checked above.
+	if sm.legacyUnified(bi.origin, bi.height) {
 		subtreeSlices = slices
 	}
 
 	return subtrees, subtreeSlices, blockID, nil
 }
 
-// quickValidationAllowed reports whether the given block height is covered by a
-// hard-coded checkpoint for the active network. Checkpoint-anchored chain linkage
-// combined with the upstream PoW check makes the block canonical, so we can skip
-// subtree re-validation and the per-UTXO setTxMined cross-check.
+// blockValidationChecksSubtrees reports whether a fully validated block's
+// subtrees are left for block validation's CheckBlockSubtrees rather than
+// checked here one at a time. Only while the node is catching up: outside
+// CATCHINGBLOCKS the per-subtree check stays, including in IDLE, which the
+// cached FSM state also reports when it simply does not know the state, and when
+// the state cannot be read at all.
+func (sm *SyncManager) blockValidationChecksSubtrees(ctx context.Context) bool {
+	if sm.blockchainClient == nil {
+		return false
+	}
+
+	state, err := sm.blockchainClient.GetFSMCurrentState(ctx)
+	if err != nil || state == nil {
+		return false
+	}
+
+	return *state == blockchain.FSMStateCATCHINGBLOCKS
+}
+
+// quickValidationAllowed reports whether this block may skip script validation,
+// subtree re-validation and the per-UTXO setTxMined cross-check because it
+// belongs to the checkpoint-certified prefix of the chain.
 //
-// Returns false when the network defines no checkpoints (regtest) or when the
-// block height is above the highest checkpoint — those blocks must follow the
-// regular validation path.
+// It requires TWO things, and height is the weaker of them:
 //
-// Boundary and eligibility live in model.BelowCheckpoint / model.OutpointOnlyEligible — one definition for every path.
-func (sm *SyncManager) quickValidationAllowed(blockHeight uint32) bool {
+//  1. the height is inside the certified prefix (model.BelowCheckpoint), and
+//  2. the block was requested from a header run proven to terminate at a pinned
+//     checkpoint hash (origin.headerProven).
+//
+// Conjunct 2 is the fix for GHSA-gggq-8f59-4jm9. The hardcoded checkpoints
+// certify ONE CHAIN, not a height range, so height alone cannot establish that a
+// block belongs to it: before this, a peer could advertise a fabricated block
+// claiming any height in 1..945000, have it requested (the only
+// unsolicited-block check on the path), and be granted checkpoint trust — script
+// validation skipped, its transactions spending real UTXOs in the shared store.
+//
+// The proof is provenance rather than a chain query on purpose. handleHeadersMsg
+// already verifies each header run links back to a block we trust and forward to
+// a pinned checkpoint hash. fetchHeaderBlocks grants provenance only through the
+// last matched checkpoint height; an appended, unverified tail carries no proof,
+// even after the pending checkpoint advances. Consulting this proof needs no
+// store lookup. Asking the blockchain store "is this block's parent on the main
+// chain" cannot establish this proof: the block is not stored
+// yet, and GetBlockHeadersFromHeight is deliberately fork-inclusive with no
+// tie-break among equal heights, so it cannot answer the question being asked.
+//
+// Fail-closed: no chain params (nothing certified) or no provenance denies the
+// fast path. A false negative costs slower but fully correct validation; a false
+// positive lets an unauthenticated peer write forged spends.
+func (sm *SyncManager) quickValidationAllowed(origin blockRequestOrigin, blockHeight uint32) bool {
 	if sm.chainParams == nil {
+		return false
+	}
+
+	if !origin.headerProven {
 		return false
 	}
 
@@ -588,8 +718,17 @@ func (sm *SyncManager) quickValidationAllowed(blockHeight uint32) bool {
 // the legacy path behaves exactly as before (byte-identical, invariant I2).
 //
 // Boundary and eligibility live in model.BelowCheckpoint / model.OutpointOnlyEligible — one definition for every path.
-func (sm *SyncManager) legacyOutpointOnly(height uint32) bool {
+func (sm *SyncManager) legacyOutpointOnly(origin blockRequestOrigin, height uint32) bool {
 	if sm.settings == nil {
+		return false
+	}
+
+	// Same requirement as quickValidationAllowed: this path skips the decorate,
+	// stamps fees as 0 and spends by outpoint alone, all of which are only sound
+	// for a block proven to be in the certified prefix. model.OutpointOnlyEligible
+	// supplies the settings/store/height conjuncts; provenance is the one it
+	// cannot know about.
+	if !origin.headerProven {
 		return false
 	}
 
@@ -605,10 +744,10 @@ func (sm *SyncManager) legacyOutpointOnly(height uint32) bool {
 // ID assignment move server-side into quickValidateBlock (the same machinery
 // native catchup uses). Default off; with the flag off the inline pipeline is
 // byte-identical.
-func (sm *SyncManager) legacyUnified(height uint32) bool {
+func (sm *SyncManager) legacyUnified(origin blockRequestOrigin, height uint32) bool {
 	return sm.settings != nil &&
 		sm.settings.BlockValidation.LegacyUnifiedBelowCheckpoint &&
-		sm.legacyOutpointOnly(height)
+		sm.legacyOutpointOnly(origin, height)
 }
 
 // legacyFailClosed reports whether this block takes the fail-closed variant of the
@@ -620,11 +759,11 @@ func (sm *SyncManager) legacyUnified(height uint32) bool {
 // conflict hard-fails the block (no conflicting subtree node is written) instead of
 // being written-and-reconciled later. Default off; with the flag off the inline
 // pipeline is byte-identical to today.
-func (sm *SyncManager) legacyFailClosed(height uint32) bool {
+func (sm *SyncManager) legacyFailClosed(origin blockRequestOrigin, height uint32) bool {
 	return sm.settings != nil &&
 		sm.settings.BlockValidation.LegacyBelowCheckpointFailClosed &&
-		sm.legacyOutpointOnly(height) &&
-		!sm.legacyUnified(height)
+		sm.legacyOutpointOnly(origin, height) &&
+		!sm.legacyUnified(origin, height)
 }
 
 // needsParentMinedWait reports whether HandleBlockDirect must block on the
@@ -638,13 +777,13 @@ func (sm *SyncManager) legacyFailClosed(height uint32) bool {
 // (see buildAddBlockOpts in services/blockvalidation/BlockValidation.go), so
 // GetBlockIsMined is always instantly true and only costs a gRPC round-trip
 // per block.
-func (sm *SyncManager) needsParentMinedWait(height uint32) bool {
-	return height > 1 && !sm.legacyOutpointOnly(height)
+func (sm *SyncManager) needsParentMinedWait(origin blockRequestOrigin, height uint32) bool {
+	return height > 1 && !sm.legacyOutpointOnly(origin, height)
 }
 
 func (sm *SyncManager) checkSubtreeFromBlock(ctx context.Context, bi blockIdent, subtree *subtreepkg.Subtree) error {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "checkSubtreeFromBlock",
-		tracing.WithLogMessage(sm.logger, "[checkSubtreeFromBlock][%s] checking subtree for block %s height %d", subtree.RootHash().String(), bi.hash.String(), bi.height),
+		tracing.WithDebugLogMessage(sm.logger, "[checkSubtreeFromBlock][%s] checking subtree for block %s height %d", subtree.RootHash().String(), bi.hash.String(), bi.height),
 	)
 
 	defer deferFn()
@@ -659,7 +798,7 @@ func (sm *SyncManager) checkSubtreeFromBlock(ctx context.Context, bi blockIdent,
 func (sm *SyncManager) writeSubtree(ctx context.Context, bi blockIdent, subtree *subtreepkg.Subtree,
 	subtreeData *subtreepkg.Data, subtreeMetaData *subtreepkg.Meta, quickValidationMode bool) error {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "writeSubtree",
-		tracing.WithLogMessage(sm.logger, "[writeSubtree][%s] writing subtree for block %s height %d", subtree.RootHash().String(), bi.hash.String(), bi.height),
+		tracing.WithDebugLogMessage(sm.logger, "[writeSubtree][%s] writing subtree for block %s height %d", subtree.RootHash().String(), bi.hash.String(), bi.height),
 	)
 
 	subtreeFileExtension := fileformat.FileTypeSubtreeToCheck
@@ -839,7 +978,7 @@ func (sm *SyncManager) ValidateTransactionsLegacyMode(ctx context.Context, txMap
 	bi blockIdent, blockID uint32) (err error) {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "validateTransactionsLegacyMode",
 		tracing.WithHistogram(prometheusLegacyNetsyncValidateTransactionsLegacyMode),
-		tracing.WithLogMessage(sm.logger, "[validateTransactionsLegacyMode] called for block %s, height %d", bi.hash, bi.height),
+		tracing.WithDebugLogMessage(sm.logger, "[validateTransactionsLegacyMode] called for block %s, height %d", bi.hash, bi.height),
 	)
 
 	defer func() {
@@ -848,12 +987,12 @@ func (sm *SyncManager) ValidateTransactionsLegacyMode(ctx context.Context, txMap
 
 	// Compute the below-checkpoint fast-path mode ONCE for this block and thread it into
 	// the phases (minimal create, outpoint-only pre-validate) so they cannot disagree.
-	outpointOnly := sm.legacyOutpointOnly(bi.height)
+	outpointOnly := sm.legacyOutpointOnly(bi.origin, bi.height)
 
 	// failClosed is the requested A/B lever: when engaged, the inline spend drops
 	// WithCreateConflicting so a genuine conflict hard-fails rather than writing a
 	// conflicting subtree node. Computed once and threaded in for the same reason.
-	failClosed := sm.legacyFailClosed(bi.height)
+	failClosed := sm.legacyFailClosed(bi.origin, bi.height)
 
 	if err = sm.createUtxos(ctx, txMap, bi, blockID, outpointOnly); err != nil {
 		return err
@@ -1124,7 +1263,7 @@ func candidateParentMedianTimeFromHeaders(parentHash *chainhash.Hash, headers []
 // block is valid.
 func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper], bi blockIdent, blockID uint32, outpointOnly bool) (err error) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "createUtxos",
-		tracing.WithLogMessage(sm.logger, "[createUtxos] called for block %s / height %d", bi.hash, bi.height),
+		tracing.WithDebugLogMessage(sm.logger, "[createUtxos] called for block %s / height %d", bi.hash, bi.height),
 		tracing.WithHistogram(prometheusLegacyNetsyncCreateUtxos),
 	)
 
@@ -1173,7 +1312,7 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap *txmap.SyncedMap[c
 		g.Go(func() error {
 			txWrapper, ok := txMap.Get(txHash)
 			if !ok {
-				return errors.NewProcessingError(txNotFoundInTxMapMsg, txHash.String())
+				return errors.NewProcessingError(txNotFoundInTxMapCreateUtxosMsg, txHash.String())
 			}
 
 			createOpts := append(baseOpts[:len(baseOpts):len(baseOpts)],
@@ -1348,7 +1487,7 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 				if !ok {
 					// Not found in txMap — non-recoverable, fail immediately
 					mu.Lock()
-					hardFail = errors.NewProcessingError(txNotFoundInTxMapMsg, txHash.String())
+					hardFail = errors.NewProcessingError(txNotFoundInTxMapPreValidateMsg, txHash.String())
 					mu.Unlock()
 					return nil
 				}
@@ -1361,9 +1500,9 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 					validator.WithSkipTxMetaPublishing(true),
 					// PreValidateTransactions is only reached via the quickValidationMode
 					// path (see prepareSubtrees → ValidateTransactionsLegacyMode), which
-					// runs only when the block height is at or below the highest
-					// hard-coded checkpoint. PoW + checkpoint linkage establish the chain
-					// as canonical, so re-running BDK scripts is pure overhead.
+					// requires a checkpoint-proven header and a matching transaction
+					// Merkle root before UTXO writes. Header provenance alone cannot
+					// authorize this script bypass for a substituted block body.
 					validator.WithSkipScriptValidation(true),
 					validator.WithCandidateBlockTime(candidateBlockTime),
 					validator.WithCandidateParentMedianTime(candidateParentMedianTime),
@@ -1400,6 +1539,11 @@ func (sm *SyncManager) PreValidateTransactions(ctx context.Context, txMap *txmap
 					// the flag is off AND so a future refactor that re-introduces a conflict
 					// path cannot silently swallow a genuine below-checkpoint conflict.
 					if !failClosed && errors.Is(validateErr, errors.ErrTxConflicting) {
+						return nil
+					}
+
+					// the tx was accepted and only its unlock failed; the lock heals when it is mined
+					if errors.Is(validateErr, errors.ErrTxUnlockFailed) {
 						return nil
 					}
 
@@ -1460,6 +1604,9 @@ func classifyAndCountPrewarmError(logger ulogger.Logger, err error) {
 	case errors.Is(err, errors.ErrServiceError):
 		prometheusLegacyNetsyncPrewarmErrors.WithLabelValues("service").Inc()
 		logger.Warnf("[validateTransactions][prewarm] service error (transient): %v", err)
+	case errors.Is(err, errors.ErrTxUnlockFailed):
+		prometheusLegacyNetsyncPrewarmErrors.WithLabelValues("unlock_failed").Inc()
+		logger.Debugf("[validateTransactions][prewarm] accepted, unlock failed: %v", err)
 	case errors.Is(err, errors.ErrTxConflicting), errors.Is(err, errors.ErrTxExists):
 		prometheusLegacyNetsyncPrewarmErrors.WithLabelValues("policy").Inc()
 		logger.Debugf("[validateTransactions][prewarm] expected: %v", err)
@@ -1477,7 +1624,7 @@ func classifyAndCountPrewarmError(logger ulogger.Logger, err error) {
 // The levels indicate the number of parents in the block.
 func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32, blockTxsPerLevel map[uint32][]*bt.Tx, bi blockIdent) (err error) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "validateTransactions",
-		tracing.WithLogMessage(sm.logger, "[validateTransactions] called for block %s / height %d", bi.hash, bi.height),
+		tracing.WithDebugLogMessage(sm.logger, "[validateTransactions] called for block %s / height %d", bi.hash, bi.height),
 		tracing.WithHistogram(prometheusLegacyNetsyncValidateTransactions),
 	)
 
@@ -1558,7 +1705,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 
 func (sm *SyncManager) extendTransactions(ctx context.Context, bi blockIdent, txOrder []chainhash.Hash, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper], outpointOnly bool) (err error) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "extendTransactions",
-		tracing.WithLogMessage(sm.logger, "[extendTransactions] called for block %s / height %d", bi.hash, bi.height),
+		tracing.WithDebugLogMessage(sm.logger, "[extendTransactions] called for block %s / height %d", bi.hash, bi.height),
 		tracing.WithHistogram(prometheusLegacyNetsyncExtendTransactions),
 	)
 
@@ -1598,7 +1745,7 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, bi blockIdent, tx
 		// the coinbase transaction is not part of the txMap
 		txWrapper, found := txMap.Get(txHash)
 		if !found {
-			return errors.NewTxError(txNotFoundInTxMapMsg, txHash.String())
+			return errors.NewTxError(txNotFoundInTxMapExtendMsg, txHash.String())
 		}
 
 		tx := txWrapper.Tx
@@ -1910,7 +2057,16 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block, tx
 		// don't add the coinbase to the txMap, we cannot process it anyway
 		if !tx.IsCoinbase() {
 			tx.SetTxHash(&hashCopy)
-			txMap.Set(hashCopy, &TxMapWrapper{Tx: tx})
+			// Reject before parallel extension can process the same wrapper twice.
+			//
+			// Body-derived (CVE-2012-2459 duplicate in the received tx set): classify corrupt so the
+			// caller drops it and allows a re-request, never invalid=true (bitcoin-sv/teranode#4692).
+			// This guard fires before the CheckSubtreeSlicesForDuplicateTxs floor in prepareSubtrees,
+			// so it is the verdict a duplicate actually reaches on the legacy route; the two must
+			// agree or the floor below is unreachable dead classification.
+			if _, added := txMap.SetIfNotExists(hashCopy, &TxMapWrapper{Tx: tx}); !added {
+				return nil, errors.NewBlockCorruptError("[createTxMap] duplicate transaction %s in block (CVE-2012-2459)", hashCopy.String())
+			}
 		}
 	}
 

@@ -11,13 +11,20 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"golang.org/x/sys/unix"
 )
 
 const (
-	minSegSlots       = 64    // smallest segment so linear probing has room
+	minSegSlots = 64 // smallest segment so linear probing has room
+	// minSeg is the fewest independently-locked segments a table gets. Below
+	// minSeg*segTarget entries the table would otherwise have fewer segments
+	// than a validation node has cores, and a block of up to ~130k txs a single
+	// segment, serialising every worker on one lock. A fixed constant rather
+	// than a core count, so the layout does not depend on the host.
+	minSeg            = 256
 	maxSeg            = 4096  // max independently-locked segments
 	segTarget         = 65536 // ~entries per segment used to pick segment count
 	defaultLoadFactor = 0.5
@@ -66,7 +73,7 @@ func computeLayout(expected uint64, loadFactor float64) layout {
 	if !(loadFactor > 0 && loadFactor <= 1) {
 		loadFactor = defaultLoadFactor
 	}
-	numSeg := clampU64(nextPow2(expected/segTarget), 1, maxSeg)
+	numSeg := clampU64(nextPow2(expected/segTarget), minSeg, maxSeg)
 	// slots needed across all segments to hold expected at loadFactor
 	needed := uint64(float64(expected)/loadFactor) + 1
 	perSeg := nextPow2((needed + numSeg - 1) / numSeg)
@@ -86,9 +93,18 @@ type Options struct {
 	LoadFactor float64 // 0 => defaultLoadFactor
 }
 
+// seg is one independently-locked segment. count is its entry count, written
+// under mu and read by Len without it. Each seg is padded to segSize bytes so
+// no two segments' locks share a cache line, including the 128-byte line pairs
+// that adjacent-line prefetch on x86 and the 128-byte lines on Apple silicon
+// move together.
 type seg struct {
-	mu sync.RWMutex
+	mu    sync.RWMutex
+	count atomic.Int64
+	_     [segSize - unsafe.Sizeof(sync.RWMutex{}) - unsafe.Sizeof(atomic.Int64{})]byte
 }
+
+const segSize = 128
 
 // maxTotalSlots is an arithmetic sanity guard on a grown table, NOT the real
 // capacity ceiling. A grow doubles slotsPerSeg; if the new total would exceed
@@ -101,14 +117,15 @@ const maxTotalSlots = 1 << 45
 
 // Table is a concurrent, off-heap, open-addressing hash table.
 //
-// growMu coordinates transparent growth (issue #1080): Upsert/Lookup hold it as
-// readers (so many run concurrently across independently-locked segments), and
-// grow holds it exclusively, draining all readers before swapping t.data and
-// t.slotsPerSeg. The segment count (segMask, len(segs)) never changes on grow —
-// only per-segment capacity doubles — so an entry never moves between segments
-// and the per-segment locks are stable.
+// Upsert and Lookup lock only the segment their key belongs to, and read
+// t.data and t.slotsPerSeg under that lock. Transparent growth (issue #1080)
+// takes every segment lock, so it drains all readers and writers before
+// swapping t.data and t.slotsPerSeg. There is deliberately no table-wide lock
+// on the per-key path: with one table per disk, every core would contend on
+// it. The segment count (segMask, len(segs)) never changes on grow — only
+// per-segment capacity doubles — so an entry never moves between segments and
+// the per-segment locks are stable.
 type Table struct {
-	growMu      sync.RWMutex
 	data        []byte
 	slotSize    int
 	keySize     int
@@ -116,7 +133,6 @@ type Table struct {
 	slotsPerSeg uint64
 	segMask     uint64
 	segs        []seg
-	count       atomic.Int64
 	gen         atomic.Uint64 // bumped on each grow; lets Upsert skip redundant grows
 	dir         string        // backing-file directory, retained for grow
 	prefix      string        // backing-file prefix, retained for grow
@@ -237,19 +253,30 @@ func (t *Table) Close() error {
 }
 
 // Len returns the number of entries inserted.
-func (t *Table) Len() int64 { return t.count.Load() }
+func (t *Table) Len() int64 {
+	var n int64
+	for i := range t.segs {
+		n += t.segs[i].count.Load()
+	}
+	return n
+}
 
-// locate derives the segment index and the in-segment start bucket from the
-// key. Keys are uniformly-random hash output, so raw bytes are used as the
-// hash. The bucket uses key[0:8] and the segment uses key[8:16]; the
-// disk-backed map wrappers route across disks using a further-disjoint window
-// (key[16:18]) so disk selection does not correlate with intra-table placement.
-func (t *Table) locate(key []byte) (segIdx, bucket uint64) {
-	segHash := binary.LittleEndian.Uint64(key[8:16])
-	bucketHash := binary.LittleEndian.Uint64(key[0:8])
-	segIdx = segHash & t.segMask
-	bucket = bucketHash & (t.slotsPerSeg - 1)
-	return segIdx, bucket
+// segOf returns the key's segment index. segMask never changes, so no lock is
+// needed.
+//
+// Keys are uniformly-random hash output, so raw bytes are used as the hash.
+// The segment uses key[8:16] and the in-segment start bucket key[0:8] (see
+// bucketOf); the disk-backed map wrappers route across disks using a
+// further-disjoint window (key[16:18]) so disk selection does not correlate
+// with intra-table placement.
+func (t *Table) segOf(key []byte) uint64 {
+	return binary.LittleEndian.Uint64(key[8:16]) & t.segMask
+}
+
+// bucketOf returns the key's start bucket within its segment. It reads
+// t.slotsPerSeg, so the caller must hold the key's segment lock.
+func (t *Table) bucketOf(key []byte) uint64 {
+	return binary.LittleEndian.Uint64(key[0:8]) & (t.slotsPerSeg - 1)
 }
 
 // probe scans segment segIdx starting at the start bucket. It returns the byte
@@ -297,30 +324,28 @@ func (t *Table) Upsert(key []byte, value uint64) (uint64, bool, error) {
 	if len(key) != t.keySize {
 		return 0, false, errors.NewProcessingError("mmaphash: key length %d != table key size %d", len(key), t.keySize)
 	}
+	segIdx := t.segOf(key)
+	s := &t.segs[segIdx]
 	for {
-		t.growMu.RLock()
-		segIdx, start := t.locate(key)
-		s := &t.segs[segIdx]
 		s.mu.Lock()
 
-		off, found, full := t.probe(segIdx, start, key)
+		off, found, full := t.probe(segIdx, t.bucketOf(key), key)
 		if !found && !full {
 			t.writeSlot(off, key, value)
-			t.count.Add(1)
+			s.count.Add(1)
 			s.mu.Unlock()
-			t.growMu.RUnlock()
 			return value, true, nil
 		}
 		if found {
 			v := t.readValue(off)
 			s.mu.Unlock()
-			t.growMu.RUnlock()
 			return v, false, nil
 		}
-		// segment full: grow (under the exclusive lock) and retry.
-		s.mu.Unlock()
+		// segment full: grow (under every segment lock) and retry. gen is read
+		// while this segment is still locked, so no grow can slip in between
+		// the full probe and the read.
 		gen := t.gen.Load()
-		t.growMu.RUnlock()
+		s.mu.Unlock()
 
 		if err := t.grow(gen); err != nil {
 			return 0, false, err
@@ -333,17 +358,14 @@ func (t *Table) Lookup(key []byte) (uint64, bool, error) {
 	if len(key) != t.keySize {
 		return 0, false, errors.NewProcessingError("mmaphash: key length %d != table key size %d", len(key), t.keySize)
 	}
-	t.growMu.RLock()
-	defer t.growMu.RUnlock()
-
-	segIdx, start := t.locate(key)
+	segIdx := t.segOf(key)
 	s := &t.segs[segIdx]
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	// full is irrelevant for Lookup: if the segment is full but the key isn't
 	// present, the key genuinely isn't in the table. ErrTableFull is write-only.
-	off, found, _ := t.probe(segIdx, start, key)
+	off, found, _ := t.probe(segIdx, t.bucketOf(key), key)
 	if !found {
 		return 0, false, nil
 	}
@@ -351,18 +373,33 @@ func (t *Table) Lookup(key []byte) (uint64, bool, error) {
 }
 
 // grow doubles the per-segment slot capacity, rehashing every live entry into a
-// fresh mmap, then swaps it in. It holds growMu exclusively, so all concurrent
-// Upsert/Lookup readers are drained before t.data/t.slotsPerSeg change — no torn
-// reads. The segment count is unchanged, so an entry keeps its segment and only
-// its in-segment bucket is recomputed.
+// fresh mmap, then swaps it in. It holds every segment lock, so all concurrent
+// Upsert/Lookup calls are drained before t.data/t.slotsPerSeg change — no torn
+// reads. The locks are taken in index order and Upsert releases its own segment
+// lock before calling grow, so concurrent grows cannot deadlock. The segment
+// count is unchanged, so an entry keeps its segment and only its in-segment
+// bucket is recomputed.
 //
-// observedGen is the gen value the caller saw before releasing its read lock; if
+// observedGen is the gen value the caller saw before releasing its segment lock; if
 // another goroutine already grew in the meantime, this grow is a no-op and the
 // caller simply retries into the larger table (avoids redundant doublings under
 // a thundering herd).
 func (t *Table) grow(observedGen uint64) error {
-	t.growMu.Lock()
-	defer t.growMu.Unlock()
+	// Cheap early out for a caller that queued behind another grow, so it does
+	// not sweep every segment lock just to find the table already grown. The
+	// check under the locks below is the one that counts.
+	if t.gen.Load() != observedGen {
+		return nil
+	}
+
+	for i := range t.segs {
+		t.segs[i].mu.Lock()
+	}
+	defer func() {
+		for i := range t.segs {
+			t.segs[i].mu.Unlock()
+		}
+	}()
 
 	if t.gen.Load() != observedGen {
 		return nil // someone else already grew; retry will find room

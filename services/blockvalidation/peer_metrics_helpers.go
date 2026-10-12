@@ -2,15 +2,67 @@ package blockvalidation
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/jellydator/ttlcache/v3"
 )
 
 const (
 	catchupFailureKindGeneric         = "generic"
 	catchupFailureKindBlockIncomplete = "block_incomplete"
+
+	// LegacyPeerIDPrefix marks a peerID as originating from the legacy netsync path, rather than a
+	// libp2p peer ID. The prefix guarantees the value can never collide with or be mistaken for a
+	// real libp2p peer ID anywhere downstream (logs, caches, metrics), and it is what the
+	// isLegacyPeerID gates below match on to keep such a value out of this service's ban-scoring
+	// and malicious-check paths (bitcoin-sv/teranode#4692).
+	//
+	// Note the prefix does NOT mean "absent from the centralized peer registry": a legacy peer has a
+	// real registry entry, created and reaped under a byte-identical prefix by
+	// services/legacy/peer_registry_sync.go. See isLegacyPeerID for the reason the gates exist
+	// anyway.
+	//
+	// Exported deliberately: the value that has to match it is BUILT in another package
+	// (services/legacy/netsync/handle_block.go), so a second literal there could drift from this one
+	// silently and put legacy TCP addresses straight back into the centralized registry. The
+	// producer imports this const, so the two sides cannot be separated. services/legacy/netsync
+	// already imports this package; nothing here imports services/legacy, so there is no cycle.
+	LegacyPeerIDPrefix = "legacy:"
+
+	// peerMaliciousCacheTTL bounds how stale a cached IsPeerMalicious verdict
+	// may be served. Long enough to shed the per-message RPC fan-out under an
+	// announcement flood, short enough that a freshly banned peer is refused
+	// within seconds.
+	peerMaliciousCacheTTL = 5 * time.Second
 )
+
+// isLegacyPeerID reports whether peerID was namespaced by the legacy netsync path rather than
+// being a real p2p identity.
+//
+// THE POLICY, stated once here because three sites implement it: a legacy:-prefixed peerID never
+// enters a blockvalidation path that ban-scores or malicious-checks through the p2p service; legacy
+// fault attribution belongs to the legacy service, because only it can enforce
+// (bitcoin-sv/teranode#4692).
+//
+// The reason is enforceability, NOT invisibility. A legacy peer does have a centralized-registry
+// entry: services/legacy/peer_registry_sync.go registers it under a byte-identical "legacy:" prefix
+// on its reconcile tick and clears it on disconnect, so the entry is real and dashboard-visible.
+// What cannot be done with it is a ban. p2p.Server.onPeerBanned decodes the peerID with
+// peer.Decode, which cannot parse "legacy:1.2.3.4:8333"; it logs and returns before touching the
+// ban list or disconnecting anything, so a ban recorded against such an id is unenforceable. Worse,
+// the invalid-block consumer's hash-keyed reportedInvalidBlocks dedupe would then suppress scoring
+// the real p2p announcer of the same hash. It would also add a gRPC round-trip and double-charge
+// the peer for one corrupt body.
+//
+// Legacy misbehaviour is attributed where it IS enforceable: strikeIfCorruptBlockBody's transient
+// ban score on the serving connection (services/legacy/peer_server.go) and sync-peer rotation via
+// shouldDisconnectOnBlockErr. The three sites implementing the policy are penalizeCorruptBlockPeer,
+// isPeerMalicious and kafkaNotifyBlockInvalid's peerID clearing.
+func isLegacyPeerID(peerID string) bool {
+	return strings.HasPrefix(peerID, LegacyPeerIDPrefix)
+}
 
 // reportCatchupAttempt reports a catchup attempt to the P2P service.
 // Falls back to local metrics if P2P client is unavailable.
@@ -94,9 +146,39 @@ func (u *Server) reportCatchupFailure(ctx context.Context, peerID string) {
 }
 
 func (u *Server) reportCatchupFailureForError(ctx context.Context, peerID string, err error) {
+	// An unbound invalid-transaction verdict is corrupt by class but a consensus rejection on
+	// catch-up (see isUnboundTxInvalidVerdict), so it is charged like a consensus-invalid block
+	// rather than exempted as a corrupt body (bitcoin-sv/teranode#4844).
+	if errors.IsBlockCorrupt(err) && !isUnboundTxInvalidVerdict(err) {
+		// releaseCatchupLock already charged this cycle for the corrupt body, once, at the site
+		// that classified it. A corrupt verdict is deliberately not "unvalidatable" and is not
+		// wrapped as ErrExternal, so it reaches processCatchupChItem's generic tail and would be
+		// charged a second time here — re-creating the CatchupFailures > CatchupAttempts skew the
+		// other exemptions in this helper exist to prevent (bitcoin-sv/teranode#4692).
+		//
+		// Only the reputation charge is suppressed. The ReportPeerFailure call that follows in
+		// processCatchupChItem is NOT gated: it is the sync-peer rotation signal, not a reputation
+		// call, and rotating away from a peer that served a corrupt body is the desired response.
+		return
+	}
+
 	if errors.Is(err, errors.ErrBlockIncomplete) {
 		return
 	}
+
+	if errors.Is(err, errors.ErrBlockPolicyDeclined) {
+		// A local policy decline (excessiveblocksize) is OUR configuration, so no peer may be charged
+		// for it (bitcoin-sv/teranode#4692). Exempting HERE rather than only at the terminal branch in
+		// processCatchupChItem is what makes that invariant hold on the ALTERNATIVE paths too: the
+		// per-(hash, peerID) decline pre-empt and the bad/malicious branch both offer the hash to the
+		// best peers via tryAlternativePeersForCatchup, and the generic tail walks the cached
+		// alternatives — and on a genuinely over-limit block every one of those candidates declines
+		// identically, because the limit is ours and not theirs. Charging each of them would push
+		// honest peers toward the reputation floor that GetPeersAtMaxHeight/SelectAlternativePeer
+		// filter on, which is the self-isolation this work exists to remove.
+		return
+	}
+
 	if catchupFailureAlreadyReported(err) {
 		// The layer where the failure occurred (e.g. the header-fetch stage)
 		// already recorded it; reporting again would let CatchupFailures exceed
@@ -236,11 +318,28 @@ func shouldReportConsensusMalicious(err error) bool {
 	return errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid)
 }
 
+// isUnboundTxInvalidVerdict reports whether a failed block validation is the corrupt verdict
+// ValidateBlockWithOptions returns for an invalid transaction in a subtree list that nothing has
+// bound to the header yet (its subtree invalid-transaction branch, the single producer). The
+// verdict is corrupt so the direct peer path re-downloads under the corrupt-attempt cap, but on
+// catch-up it must be handled as a consensus rejection (bitcoin-sv/teranode#4844): the subtree
+// blobs were verified against their names, every peer serves the same bytes for a fault in the
+// miner's real body, so deleting them and re-downloading would loop with no record, and the
+// malicious report would never fire.
+//
+// No other corrupt producer on the catch-up route matches: the subtree-validation corrupt
+// verdicts (SubtreeValidation.go), the quick_validate.go corrupt sites and model's bindErr wrap no
+// ErrTxInvalid. A local fault is excluded exactly as in shouldReportConsensusMalicious.
+func isUnboundTxInvalidVerdict(err error) bool {
+	return !isLocalCatchupFault(err) && errors.IsBlockCorrupt(err) && errors.Is(err, errors.ErrTxInvalid)
+}
+
 // isLocalCatchupFault reports whether a catchup failure is this node's own doing
 // rather than anything the serving peer did, so no reputation charge is warranted.
 //
-// The predicate is the union of two errors-package helpers because neither covers
-// this on its own, and they are disjoint on exactly the cases that matter here.
+// The predicate is the union of two errors-package helpers and one error code. The
+// two helpers are both needed because neither covers this on its own, and they are
+// disjoint on exactly the cases that matter here; the code is explained below.
 // IsLocalError - what recordCatchupPeerFailure uses - is context errors plus
 // ErrStorageError, and misses the *Unavailable codes. IsTransientLocalError is
 // {ServiceError, StorageError, ServiceUnavailable, StorageUnavailable}, and misses
@@ -257,8 +356,16 @@ func shouldReportConsensusMalicious(err error) bool {
 // wrapped case whatever the wrapper says. That chain is the one this predicate
 // exists for, since shouldReportConsensusMalicious is only ever asked about errors
 // that already carry a consensus code on the outside.
+//
+// ErrServiceRateLimited (an HTTP 429 from the serving peer) is local here too. The
+// peer's per-IP bucket is shared with this node's own subtree fan-out, so a 429 on
+// /blocks is our collision, not the peer's fault; before the dedicated code existed
+// a 429 was ErrServiceError and already landed in this set. It is deliberately NOT
+// added to IsTransientLocalError, which legacy netsync uses to decide whether to keep
+// a delivering peer.
 func isLocalCatchupFault(err error) bool {
 	return errors.IsTransientLocalError(err) ||
+		errors.Is(err, errors.ErrServiceRateLimited) ||
 		errors.IsContextError(err) ||
 		errors.Is(err, errors.ErrContextCanceled)
 }
@@ -276,6 +383,14 @@ func (u *Server) reportCatchupMalicious(ctx context.Context, peerID string, reas
 	}
 
 	u.logger.Warnf("[peer_metrics] Recording malicious attempt from peer %s: %s", peerID, reason)
+
+	// Drop the cached verdict up front, whether or not the report RPC below
+	// succeeds: this node has evidence against the peer NOW, and a stale
+	// not-malicious entry must not be served for up to the cache TTL
+	// mid-catchup while the report is retried or lost.
+	if u.peerMaliciousCache != nil {
+		u.peerMaliciousCache.Delete(peerID)
+	}
 
 	// Report to P2P service if client is available
 	if u.p2pClient != nil {
@@ -300,25 +415,44 @@ func (u *Server) reportCatchupMalicious(ctx context.Context, peerID string, reas
 // Returns:
 //   - bool: True if peer is malicious
 func (u *Server) isPeerMalicious(ctx context.Context, peerID string) bool {
-	if peerID == "" {
+	if peerID == "" || isLegacyPeerID(peerID) || u.p2pClient == nil {
 		return false
 	}
 
-	// Query P2P service for peer status
-	if u.p2pClient != nil {
-		isMalicious, reason, err := u.p2pClient.IsPeerMalicious(ctx, peerID)
-		if err != nil {
-			u.logger.Warnf("[isPeerMalicious] Failed to check if peer %s is malicious: %v", peerID, err)
-			// On error, assume peer is not malicious to avoid false positives
-			return false
+	// Serve from the short-lived cache when possible: every gossip-driven
+	// Kafka message costs two of these checks (consumer gate + worker gate)
+	// and each is a p2p gRPC that fans into a blockchain RPC, so an
+	// announcement flood would otherwise become an RPC storm. A nil cache
+	// (Server literals in tests) degrades to uncached lookups.
+	if u.peerMaliciousCache != nil {
+		if item := u.peerMaliciousCache.Get(peerID); item != nil {
+			return item.Value()
 		}
-		if isMalicious {
-			u.logger.Debugf("[isPeerMalicious] Peer %s is malicious: %s", peerID, reason)
-		}
-		return isMalicious
 	}
 
-	return false
+	// Query P2P service for peer status
+	isMalicious, reason, err := u.p2pClient.IsPeerMalicious(ctx, peerID)
+	if err != nil {
+		u.logger.Warnf("[isPeerMalicious] Failed to check if peer %s is malicious: %v", peerID, err)
+		// On error, assume peer is not malicious to avoid false positives.
+		// Cache the fallback verdict too, so a degraded p2p service is asked
+		// (and logged) once per TTL per peer instead of once per message.
+		if u.peerMaliciousCache != nil {
+			u.peerMaliciousCache.Set(peerID, false, ttlcache.DefaultTTL)
+		}
+
+		return false
+	}
+
+	if isMalicious {
+		u.logger.Debugf("[isPeerMalicious] Peer %s is malicious: %s", peerID, reason)
+	}
+
+	if u.peerMaliciousCache != nil {
+		u.peerMaliciousCache.Set(peerID, isMalicious, ttlcache.DefaultTTL)
+	}
+
+	return isMalicious
 }
 
 // isPeerBad checks if a peer has a bad reputation.
@@ -329,27 +463,58 @@ func (u *Server) isPeerMalicious(ctx context.Context, peerID string) bool {
 //
 // Returns:
 //   - bool: True if peer has bad reputation
-func (u *Server) isPeerBad(peerID string) bool {
+//   - string: The reason the peer was judged bad, empty when it was not
+func (u *Server) isPeerBad(peerID string) (bool, string) {
 	if peerID == "" {
-		return false
+		return false, ""
 	}
 
 	// Query P2P service for peer health status
 	if u.p2pClient != nil {
 		// Use context.Background() since the old method didn't require context
-		isUnhealthy, reason, reputationScore, err := u.p2pClient.IsPeerUnhealthy(context.Background(), peerID)
+		isUnhealthy, reason, reputationScore, unknown, err := u.p2pClient.IsPeerUnhealthy(context.Background(), peerID)
 		if err != nil {
 			u.logger.Warnf("[isPeerBad] Failed to check if peer %s is unhealthy: %v", peerID, err)
 			// On error, assume peer is not bad to avoid false positives
-			return false
+			return false, ""
+		}
+		if unknown {
+			// Absence of information, not a verdict: a peer absent from the registry (e.g. its
+			// first announcement, raced against the peer-registry batcher flush) must not be
+			// refused as a catchup source. Fail open, matching the empty-ID and error branches
+			// above. Warn (not Debug) because this should be transient and worth noticing if
+			// it isn't; the counter makes a sustained rate visible without grepping logs.
+			u.logger.Warnf("[isPeerBad] Peer %s is unknown to the registry; treating as healthy", peerID)
+			prometheusCatchupPeerHealthGate.WithLabelValues("unknown").Inc()
+			return false, ""
 		}
 		if isUnhealthy {
 			u.logger.Debugf("[isPeerBad] Peer %s is unhealthy (reputation: %.2f): %s", peerID, reputationScore, reason)
 		}
-		return isUnhealthy
+		return isUnhealthy, reason
 	}
 
-	return false
+	return false, ""
+}
+
+// classifyPeerRefusalReason maps a catchup-source refusal to one of a fixed set of metric label
+// values. The label set is closed deliberately: reason comes from badReason (a message built from
+// interpolated numeric scores, e.g. "low reputation score: 12.34") or from the malicious flag,
+// neither of which is safe to use as a Prometheus label directly (unbounded cardinality from a
+// value that is effectively caller-influenced, since it moves with the peer's own behaviour).
+func classifyPeerRefusalReason(badReason string, malicious bool) string {
+	if malicious {
+		return "malicious"
+	}
+
+	switch {
+	case strings.HasPrefix(badReason, "low reputation score"):
+		return "low_reputation"
+	case strings.HasPrefix(badReason, "low success rate"):
+		return "low_success_rate"
+	default:
+		return "other"
+	}
 }
 
 // reportValidBlockForPeers reports a successfully validated block to the P2P service

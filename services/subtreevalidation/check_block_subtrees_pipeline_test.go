@@ -179,3 +179,50 @@ func TestCheckBlockSubtrees_MultiBatch_ProcessErrorBalancesArenas(t *testing.T) 
 	require.Equal(t, getsDelta, putsDelta,
 		"arenas must balance even when a batch fails mid-pipeline: gets=%d puts=%d", getsDelta, putsDelta)
 }
+
+// TestCheckBlockSubtrees_OnlyRunningFeedsBlockAssembly pins the block-assembly
+// gate on the catchup-heavy path. IDLE must not feed assembly: an operator STOP
+// can park a node while its catchup batch is still validating historical blocks.
+func TestCheckBlockSubtrees_OnlyRunningFeedsBlockAssembly(t *testing.T) {
+	for _, state := range []blockchain.FSMStateType{blockchain.FSMStateRUNNING, blockchain.FSMStateCATCHINGBLOCKS, blockchain.FSMStateIDLE} {
+		t.Run(state.String(), func(t *testing.T) {
+			server, cleanup := setupTestServer(t)
+			defer cleanup()
+
+			// setupTestServer registers RUNNING first and testify serves the first
+			// match, so override that expectation in place.
+			fsmState := state
+			bc := server.blockchainClient.(*blockchain.Mock)
+			for _, call := range bc.ExpectedCalls {
+				if call.Method == "GetFSMCurrentState" {
+					call.ReturnArguments = mock.Arguments{&fsmState, nil}
+				}
+			}
+			wireMultiBatchMocks(server)
+
+			mockValidator := server.validatorClient.(*validator.MockValidator)
+			mockValidator.UtxoStore = server.utxoStore
+			recording := newRecordingValidatorClient(mockValidator)
+			server.validatorClient = recording
+
+			block := buildMultiBatchBlock(t, server, 2)
+			blockBytes, err := block.Bytes()
+			require.NoError(t, err)
+
+			_, err = server.CheckBlockSubtrees(context.Background(), &subtreevalidation_api.CheckBlockSubtreesRequest{
+				Block:   blockBytes,
+				BaseUrl: "http://test.com",
+			})
+			require.NoError(t, err)
+
+			recording.mu.Lock()
+			defer recording.mu.Unlock()
+			require.NotEmpty(t, recording.callsByTx, "no transaction was validated")
+			for _, calls := range recording.callsByTx {
+				for _, opts := range calls {
+					require.Equal(t, state == blockchain.FSMStateRUNNING, opts.AddTXToBlockAssembly)
+				}
+			}
+		})
+	}
+}

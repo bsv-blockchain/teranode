@@ -153,6 +153,10 @@ func (cb *CircuitBreaker) Allow() bool {
 			cb.transitionTo(CircuitHalfOpen, "cooldown elapsed, testing recovery")
 			cb.halfOpenAttempts = 1
 			cb.consecutiveSuccess = 0
+			// Re-arm the deadline so a half-open round that never gets a
+			// conclusive result (see below) doesn't wedge the breaker open
+			// forever.
+			cb.nextAttempt = now.Add(cb.config.Cooldown)
 			return true
 		}
 		// Still in cooldown, reject
@@ -162,7 +166,26 @@ func (cb *CircuitBreaker) Allow() bool {
 	case CircuitHalfOpen:
 		// Allow limited probes
 		if cb.halfOpenAttempts >= cb.config.HalfOpenMax {
-			// Already reached max probes, reject until we get results
+			// Probe budget exhausted. Only RecordSuccess/RecordFailure change
+			// state from here - but a probe can complete with an error that
+			// is neither (e.g. a non-retriable business error such as a
+			// unique-constraint violation, or a caller context that was
+			// cancelled before/after reaching the database): the circuit
+			// breaker deliberately ignores those as not being infrastructure
+			// signal, so they never call RecordSuccess or RecordFailure. If
+			// every probe in a round ends that way, nothing would ever
+			// re-arm nextAttempt or leave half-open, and the breaker would
+			// reject ErrCircuitOpen forever even though the database is
+			// healthy. Once this round's deadline has passed, start a fresh
+			// probe round instead of rejecting indefinitely.
+			if now.After(cb.nextAttempt) {
+				cb.halfOpenAttempts = 1
+				cb.consecutiveSuccess = 0
+				cb.nextAttempt = now.Add(cb.config.Cooldown)
+				return true
+			}
+			// Still within this round's window, reject until we get results
+			// or the round's deadline passes.
 			prometheusCircuitBreakerFastFailed.Inc()
 			return false
 		}

@@ -164,6 +164,26 @@ func TestCheckSubtreeFromBlockLegacyUnconfirmedParents(t *testing.T) {
 		}
 	})
 
+	t.Run("IDLE state: assembly disabled", func(t *testing.T) {
+		InitPrometheusMetrics()
+
+		// An operator STOP can park a node in IDLE while its catchup batch is
+		// still validating historical blocks. Only RUNNING may feed assembly.
+		childSubtree := singleNodeSubtree(t, childHash)
+		server, recordingClient := newServerWithFSMState(t, blockchain.FSMStateIDLE, subtreeFixture{childSubtree, childTx.ExtendedBytes()})
+
+		response, err := server.CheckSubtreeFromBlock(context.Background(), legacyRequest(childSubtree))
+		require.NoError(t, err)
+		require.True(t, response.Blessed)
+
+		recorded := recordingClient.recordedOptions(*childHash)
+		require.NotEmpty(t, recorded, "child transaction was not validated")
+
+		for _, opts := range recorded {
+			require.False(t, opts.AddTXToBlockAssembly, "IDLE must not feed block assembly")
+		}
+	})
+
 	t.Run("cross-subtree parent: two sequential calls both validate", func(t *testing.T) {
 		InitPrometheusMetrics()
 

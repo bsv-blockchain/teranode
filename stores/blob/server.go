@@ -16,14 +16,15 @@
 // provides a RESTful API that follows standard HTTP conventions:
 //   - GET /blob/{key}.{fileType} - Retrieve a blob
 //   - HEAD /blob/{key}.{fileType} - Check if a blob exists
-//   - POST /blob/{key}.{fileType} - Store a new blob
-//   - PATCH /blob/{key}.{fileType} - Update blob's Delete-At-Height value
-//   - DELETE /blob/{key}.{fileType} - Delete a blob
+//   - POST /blob/{key}.{fileType} - Store a blob (requires Authorization: Bearer; replaces an existing one only when the request sets allowOverwrite=true)
+//   - PATCH /blob/{key}.{fileType} - Update blob's Delete-At-Height value (requires Authorization: Bearer)
+//   - DELETE /blob/{key}.{fileType} - Delete a blob (requires Authorization: Bearer)
 //   - GET /health - Health check endpoint
 package blob
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -61,26 +62,32 @@ type HTTPBlobServer struct {
 	store Store
 	// logger provides structured logging for server operations
 	logger ulogger.Logger
+	// authToken is the shared secret a caller must present to mutate the store. Empty
+	// means this server is read-only: POST, PATCH and DELETE are refused outright.
+	authToken string
 }
 
 // NewHTTPBlobServer creates a new HTTP blob server instance.
 // Parameters:
 //   - logger: Logger instance for server operations
 //   - storeURL: URL containing the store configuration
+//   - authToken: Shared secret callers must present to POST, PATCH or DELETE a blob.
+//     Empty makes the server read-only.
 //   - opts: Optional store configuration options
 //
 // Returns:
 //   - *HTTPBlobServer: The configured server instance
 //   - error: Any error that occurred during creation
-func NewHTTPBlobServer(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (*HTTPBlobServer, error) {
+func NewHTTPBlobServer(logger ulogger.Logger, storeURL *url.URL, authToken string, opts ...options.StoreOption) (*HTTPBlobServer, error) {
 	store, err := NewStore(logger, storeURL, opts...)
 	if err != nil {
 		return nil, err
 	}
 
 	return &HTTPBlobServer{
-		store:  store,
-		logger: logger,
+		store:     store,
+		logger:    logger,
+		authToken: authToken,
 	}, nil
 }
 
@@ -124,9 +131,11 @@ func (s *HTTPBlobServer) Start(ctx context.Context, addr string) error {
 // - GET /health: Health check endpoint
 // - GET /blob/{key}.{fileType}: Retrieve a blob
 // - HEAD /blob/{key}.{fileType}: Check if a blob exists
-// - POST /blob/{key}.{fileType}: Store a new blob
+// - POST /blob/{key}.{fileType}: Store a blob; replaces an existing one only for an authenticated request that sets allowOverwrite=true
 // - PATCH /blob/{key}.{fileType}: Update blob's Delete-At-Height value
 // - DELETE /blob/{key}.{fileType}: Delete a blob
+//
+// POST, PATCH and DELETE change the store, so they require an authenticated caller.
 //
 // Parameters:
 //   - w: HTTP response writer for sending the response
@@ -135,6 +144,17 @@ func (s *HTTPBlobServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/health" {
 		s.handleHealth(w, r)
 		return
+	}
+
+	switch r.Method {
+	case http.MethodPost, http.MethodPatch, http.MethodDelete:
+		if !s.authorizeMutation(r) {
+			// The path is quoted: it is percent-decoded and caller-controlled, so it can carry a newline.
+			s.logger.Warnf("[HTTPBlobServer] refused unauthenticated %s %q from %s", r.Method, r.URL.Path, r.RemoteAddr)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+
+			return
+		}
 	}
 
 	opts := options.QueryToFileOptions(r.URL.Query())
@@ -153,6 +173,32 @@ func (s *HTTPBlobServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// authorizeMutation reports whether a request may change the store. With no token
+// configured the server is read-only - a blob server reachable on the network with no
+// shared secret must not accept writes at all. Comparison is constant-time.
+//
+// The token is presented in the clear: this endpoint is plain HTTP. It stops a caller
+// that cannot see our traffic, which is the case this guards against; it is not a
+// defence against anything on the path. Keep the listener on loopback or a trusted segment.
+func (s *HTTPBlobServer) authorizeMutation(r *http.Request) bool {
+	if s.authToken == "" {
+		return false
+	}
+
+	const prefix = "Bearer "
+
+	// The auth-scheme is case-insensitive (RFC 7235); the token itself is not.
+	header := r.Header.Get("Authorization")
+	if len(header) < len(prefix) || !strings.EqualFold(header[:len(prefix)], prefix) {
+		return false
+	}
+
+	presented := []byte(header[len(prefix):])
+	expected := []byte(s.authToken)
+
+	return len(presented) == len(expected) && subtle.ConstantTimeCompare(presented, expected) == 1
 }
 
 // setCurrentBlockHeight removed - DAH cleanup now handled by pruner service
@@ -266,21 +312,29 @@ func (s *HTTPBlobServer) handleGet(w http.ResponseWriter, r *http.Request, opts 
 }
 
 // handleRangeRequest processes partial content requests using HTTP Range headers.
-// It implements the HTTP/1.1 Range request specification to return only a portion of a blob.
-// This is particularly useful for large blobs where the client only needs a specific section,
-// such as resumable downloads or media streaming.
+// It serves a single byte range of a blob with 206 Partial Content.
 //
 // The function follows these steps:
-// 1. Parse the Range header to determine the requested byte range
-// 2. Retrieve the full blob from the store
-// 3. Validate the requested range against the actual blob size
-// 4. Set appropriate Content-Range and Content-Length headers
-// 5. Return the requested portion with 206 Partial Content status
+// 1. Parse the Range header strictly (parseByteRange)
+// 2. Open the blob and, when the reader is seekable, determine its payload size
+// 3. Resolve the range against that size before reading anything
+// 4. Set Content-Range and Content-Length
+// 5. Stream exactly the resolved span to the client
 //
-// The function handles various edge cases including:
-// - Invalid range formats
-// - Ranges that exceed the blob size
-// - Missing or malformed Range headers
+// A reader that cannot seek has no size, so the handler cannot promise which bytes it
+// will send. It ignores the Range header, as RFC 9110 section 14.2 allows, and streams
+// the whole blob with 200 like a plain GET.
+//
+// The response body is streamed with io.CopyN, so memory use does not depend on the
+// requested span. Allocating a buffer sized from the header let a tiny request make the
+// server allocate gigabytes for a one-byte blob (bitcoin-sv/teranode issue 4853).
+//
+// Status codes:
+//   - 400 Bad Request for a malformed Range header
+//   - 416 Range Not Satisfiable for multiple ranges, a reversed range, a zero-length
+//     suffix, or a first byte at or past the end of the blob (with "bytes */size" when
+//     the size is known)
+//   - 200 with the whole blob when the store cannot seek
 //
 // Parameters:
 //   - w: HTTP response writer for sending the partial content response
@@ -289,10 +343,13 @@ func (s *HTTPBlobServer) handleGet(w http.ResponseWriter, r *http.Request, opts 
 //   - fileType: The type of the blob
 //   - opts: Optional file options derived from the query parameters
 func (s *HTTPBlobServer) handleRangeRequest(w http.ResponseWriter, r *http.Request, key []byte, fileType fileformat.FileType, opts ...options.FileOption) {
-	rangeHeader := r.Header.Get("Range")
-
-	start, end, err := parseRange(rangeHeader)
-	if err != nil {
+	br, status := parseByteRange(r.Header.Get("Range"))
+	switch status {
+	case http.StatusOK:
+	case http.StatusRequestedRangeNotSatisfiable:
+		http.Error(w, "Range Not Satisfiable", http.StatusRequestedRangeNotSatisfiable)
+		return
+	default:
 		http.Error(w, "Invalid Range header", http.StatusBadRequest)
 		return
 	}
@@ -319,97 +376,182 @@ func (s *HTTPBlobServer) handleRangeRequest(w http.ResponseWriter, r *http.Reque
 	// header from the reader, so the current position is the start of the
 	// payload (offset 8 for header-bearing files, 0 otherwise). We anchor
 	// all subsequent Seeks against this post-header position, otherwise:
-	//   - Seek(int64(start), SeekStart) for start=2 would seek to byte 2
-	//     of the raw file, which is INSIDE the magic header, and Read
-	//     would return header bytes instead of payload.
+	//   - Seek(first, SeekStart) for first=2 would seek to byte 2 of the
+	//     raw file, which is INSIDE the magic header, and Read would return
+	//     header bytes instead of payload.
 	//   - SeekEnd would report the raw file length (payload + header)
 	//     rather than the payload total the client cares about.
-	// The "*" total per RFC 7233 §4.2 is the documented fallback when the
-	// reader is not seekable; this also surfaces the "Store does not
-	// support seeking" error for the start>0 case that's no longer
-	// satisfiable.
-	totalStr := "*"
 	seeker, isSeeker := dataReader.(io.Seeker)
-	if isSeeker {
-		payloadStart, err := seeker.Seek(0, io.SeekCurrent)
-		if err != nil {
-			http.Error(w, "Failed to read blob position", http.StatusInternalServerError)
-			return
+	if !isSeeker {
+		// Without a size, a 206 would have to advertise a Content-Range before knowing
+		// whether the blob holds those bytes. Ignore the range and serve the whole blob.
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+
+		if n, err := io.Copy(w, dataReader); err != nil {
+			s.logger.Errorf("[BlobServer] range request fallback read failed after %d bytes for key %x: %v", n, key, err)
 		}
-		rawEnd, err := seeker.Seek(0, io.SeekEnd)
-		if err != nil {
-			http.Error(w, "Failed to determine blob size", http.StatusInternalServerError)
-			return
-		}
-		totalStr = strconv.FormatInt(rawEnd-payloadStart, 10)
-		if _, err = seeker.Seek(payloadStart+int64(start), io.SeekStart); err != nil {
-			http.Error(w, "Failed to seek in blob", http.StatusInternalServerError)
-			return
-		}
-	} else if start > 0 {
-		http.Error(w, "Store does not support seeking", http.StatusInternalServerError)
+
 		return
 	}
 
-	// read the requested range
-	data := make([]byte, end-start)
-
-	_, err = io.ReadFull(dataReader, data)
-	if err != nil && err != io.EOF {
-		http.Error(w, "Failed to read blob data", http.StatusInternalServerError)
+	payloadStart, err := seeker.Seek(0, io.SeekCurrent)
+	if err != nil {
+		http.Error(w, "Failed to read blob position", http.StatusInternalServerError)
 		return
 	}
+
+	rawEnd, err := seeker.Seek(0, io.SeekEnd)
+	if err != nil {
+		http.Error(w, "Failed to determine blob size", http.StatusInternalServerError)
+		return
+	}
+
+	size := rawEnd - payloadStart
+
+	first, last, ok := br.resolve(size)
+	if !ok {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", size))
+		http.Error(w, "Range Not Satisfiable", http.StatusRequestedRangeNotSatisfiable)
+
+		return
+	}
+
+	if _, err = seeker.Seek(payloadStart+first, io.SeekStart); err != nil {
+		http.Error(w, "Failed to seek in blob", http.StatusInternalServerError)
+		return
+	}
+
+	span := last - first + 1
 
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%s", start, end-1, totalStr))
+	w.Header().Set("Content-Length", strconv.FormatInt(span, 10))
+	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", first, last, size))
 	w.WriteHeader(http.StatusPartialContent)
-	_, _ = w.Write(data)
+
+	// The headers are already sent, so a short copy cannot change the status. The client
+	// detects it against Content-Length; log it so the operator sees the store fault too.
+	if n, err := io.CopyN(w, dataReader, span); err != nil {
+		s.logger.Errorf("[BlobServer] range read failed after %d/%d bytes for key %x: %v", n, span, key, err)
+	}
 }
 
-// parseRange parses the Range header from HTTP requests according to RFC 7233.
-// It extracts the start and end byte positions from a Range header value in the format
-// "bytes=start-end". This function is used to support partial content requests for large blobs.
+// byteRange is one parsed "bytes=" range spec, not yet resolved against a blob size.
+type byteRange struct {
+	first     int64 // first byte position; unused for a suffix range
+	last      int64 // last byte position, inclusive; unused when openEnded or suffix
+	suffixLen int64 // number of trailing bytes for a suffix range ("bytes=-N")
+	openEnded bool  // "bytes=N-"
+	suffix    bool  // "bytes=-N"
+}
+
+// resolve converts the range into absolute, inclusive [first, last] positions within a
+// payload of size bytes, clamping an over-long last position to the end. ok is false when
+// the range cannot be satisfied: the first position is at or past the end, or a suffix
+// range asks for zero bytes. Every comparison happens before any addition, so no
+// attacker-chosen value can overflow.
+func (br byteRange) resolve(size int64) (first, last int64, ok bool) {
+	if size <= 0 {
+		return 0, 0, false
+	}
+
+	switch {
+	case br.suffix:
+		if br.suffixLen == 0 {
+			return 0, 0, false
+		}
+
+		first = 0
+		if br.suffixLen < size {
+			first = size - br.suffixLen
+		}
+
+		return first, size - 1, true
+	case br.first >= size:
+		return 0, 0, false
+	case br.openEnded || br.last >= size:
+		return br.first, size - 1, true
+	default:
+		return br.first, br.last, true
+	}
+}
+
+// parseByteRange parses a Range header value holding a single RFC 7233 byte range:
+//   - "bytes=0-499"  - bytes 0 through 499
+//   - "bytes=500-"   - byte 500 to the end
+//   - "bytes=-500"   - the last 500 bytes
 //
-// The function handles various range formats:
-// - "bytes=0-499" - First 500 bytes
-// - "bytes=500-999" - Second 500 bytes
-// - "bytes=-500" - Last 500 bytes (converted to absolute positions internally)
-// - "bytes=500-" - All bytes from position 500 to the end
+// Positions must be plain decimal digits that fit in an int64; signs, whitespace and
+// overflowing values are malformed.
 //
 // Parameters:
 //   - rangeHeader: The Range header value from the HTTP request
 //
 // Returns:
-//   - start: Starting byte position (inclusive)
-//   - end: Ending byte position (inclusive)
-//   - error: Any error that occurred during parsing, such as invalid format
-func parseRange(rangeHeader string) (int, int, error) {
-	if !strings.HasPrefix(rangeHeader, "bytes=") {
-		return 0, 0, errors.NewInvalidArgumentError("invalid range header format")
+//   - byteRange: the parsed range, to be resolved against the blob size
+//   - int: http.StatusOK when parsed, http.StatusRequestedRangeNotSatisfiable for
+//     multiple ranges or a reversed range (last < first), http.StatusBadRequest for a
+//     malformed header
+func parseByteRange(rangeHeader string) (byteRange, int) {
+	spec, found := strings.CutPrefix(rangeHeader, "bytes=")
+	if !found {
+		return byteRange{}, http.StatusBadRequest
 	}
 
-	rangeStr := strings.TrimPrefix(rangeHeader, "bytes=")
-
-	rangeParts := strings.Split(rangeStr, "-")
-	if len(rangeParts) != 2 {
-		return 0, 0, errors.NewInvalidArgumentError("invalid range header format")
+	if strings.Contains(spec, ",") {
+		return byteRange{}, http.StatusRequestedRangeNotSatisfiable
 	}
 
-	start, err := strconv.Atoi(rangeParts[0])
-	if err != nil {
-		return 0, 0, errors.NewInvalidArgumentError("invalid start range")
+	firstStr, lastStr, found := strings.Cut(spec, "-")
+	if !found {
+		return byteRange{}, http.StatusBadRequest
 	}
 
-	var end int
-	if rangeParts[1] != "" {
-		end, err = strconv.Atoi(rangeParts[1])
-		if err != nil {
-			return 0, 0, errors.NewInvalidArgumentError("invalid end range")
+	if firstStr == "" {
+		n, ok := parseRangePosition(lastStr)
+		if !ok {
+			return byteRange{}, http.StatusBadRequest
+		}
+
+		return byteRange{suffix: true, suffixLen: n}, http.StatusOK
+	}
+
+	first, ok := parseRangePosition(firstStr)
+	if !ok {
+		return byteRange{}, http.StatusBadRequest
+	}
+
+	if lastStr == "" {
+		return byteRange{first: first, openEnded: true}, http.StatusOK
+	}
+
+	last, ok := parseRangePosition(lastStr)
+	if !ok {
+		return byteRange{}, http.StatusBadRequest
+	}
+
+	if last < first {
+		return byteRange{}, http.StatusRequestedRangeNotSatisfiable
+	}
+
+	return byteRange{first: first, last: last}, http.StatusOK
+}
+
+// parseRangePosition parses one byte position: decimal digits only, fitting in an int64.
+func parseRangePosition(s string) (int64, bool) {
+	if s == "" {
+		return 0, false
+	}
+
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, false
 		}
 	}
 
-	return start, end + 1, nil
+	n, err := strconv.ParseInt(s, 10, 64)
+
+	return n, err == nil
 }
 
 // handleSet processes blob storage requests (HTTP POST).
@@ -425,7 +567,10 @@ func parseRange(rangeHeader string) (int, int, error) {
 // The function handles errors by returning appropriate HTTP status codes:
 // - 201 Created for successful storage operations
 // - 400 Bad Request if the key cannot be extracted from the path
+// - 409 Conflict if the blob exists and no authenticated overwrite was requested
 // - 500 Internal Server Error for storage failures
+//
+// A 401 Unauthorized is answered by ServeHTTP before this handler runs.
 //
 // Parameters:
 //   - w: HTTP response writer for sending the storage operation response
@@ -436,6 +581,14 @@ func (s *HTTPBlobServer) handleSet(w http.ResponseWriter, r *http.Request, opts 
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	// Overwrite is the one option read here rather than in QueryToFileOptions, because it is
+	// honoured only for a caller holding the shared secret. That grants nothing the secret does
+	// not already grant - the same caller may DELETE the blob and POST it again. The token is
+	// checked again so this does not depend on the gate in ServeHTTP staying in front of it.
+	if r.URL.Query().Get(options.AllowOverwriteQueryParam) == "true" && s.authorizeMutation(r) {
+		opts = append(opts, options.WithAllowOverwrite(true))
 	}
 
 	// The opts from QueryToFileOptions intentionally do not include DAH from the sender.
@@ -559,9 +712,12 @@ func (s *HTTPBlobServer) handleDelete(w http.ResponseWriter, r *http.Request, op
 //   - error: Any error that occurred during extraction, such as invalid path format,
 //     invalid base64 encoding, or unrecognized file type
 func getKeyFromPath(path string) ([]byte, fileformat.FileType, error) {
-	// Assuming the path is in the format "/blob/{key}.{fileType}"
+	const blobPathPrefix = "/blob/"
+
+	// The path is caller-controlled: a dot before the end of the prefix (e.g. "/.tx") would
+	// otherwise slice out of range and panic the handler.
 	pos := strings.LastIndex(path, ".")
-	if pos == -1 {
+	if !strings.HasPrefix(path, blobPathPrefix) || pos < len(blobPathPrefix) {
 		return nil, "", errors.NewInvalidArgumentError("invalid path format")
 	}
 
@@ -572,7 +728,7 @@ func getKeyFromPath(path string) ([]byte, fileformat.FileType, error) {
 		return nil, "", errors.NewInvalidArgumentError("invalid file type", err)
 	}
 
-	encodedKey := path[6:pos]
+	encodedKey := path[len(blobPathPrefix):pos]
 
 	key, err := base64.URLEncoding.DecodeString(encodedKey)
 	if err != nil {

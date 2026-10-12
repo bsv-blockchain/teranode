@@ -2,7 +2,9 @@ package legacy
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -193,6 +195,10 @@ func (m *mockServerPeer) QueueInventory(invVect *wire.InvVect) {
 	m.Called(invVect)
 }
 
+func (m *mockServerPeer) RequeueInventory(invVect *wire.InvVect) {
+	m.Called(invVect)
+}
+
 // TestHandleRelayBlockInvMsg verifies that a newly-relayed block is announced
 // via a plain inventory message to peers that have NOT negotiated sendheaders.
 // handleRelayInvMsg only special-cases InvTypeBlock when sp.WantsHeaders() is
@@ -236,21 +242,51 @@ func (c *tcpAddrConn) RemoteAddr() net.Addr { return c.remote }
 // fallback branch, a non-sendheaders peer gets no announcement for the block at
 // all and no inv is ever written.
 func TestHandleRelayInvMsgBlockToNonSendHeadersPeer(t *testing.T) {
+	invReceived := make(chan *wire.MsgInv, 1)
+
+	s, state, sp := newRelayTestServerPeer(t, func(_ *peer.Peer, msg *wire.MsgInv) {
+		select {
+		case invReceived <- msg:
+		default:
+		}
+	})
+
+	// Precondition for the fallback: this peer did not negotiate sendheaders.
+	require.False(t, sp.WantsHeaders())
+	require.True(t, sp.Connected())
+
+	blockHash := chainhash.Hash{0x0a, 0x0b, 0x0c}
+	invVect := wire.NewInvVect(wire.InvTypeBlock, &blockHash)
+
+	// No msg.data: a non-sendheaders peer must be announced the block by
+	// inventory, which needs nothing but the inv vector. If the dispatch ever
+	// routes this peer to handleRelayBlockMsg instead, that path bails out on the
+	// missing block header and nothing is sent.
+	s.handleRelayInvMsg(state, relayMsg{invVect: invVect})
+
+	select {
+	case msg := <-invReceived:
+		require.Len(t, msg.InvList, 1)
+		require.Equal(t, wire.InvTypeBlock, msg.InvList[0].Type)
+		require.Equal(t, blockHash, msg.InvList[0].Hash)
+	case <-time.After(10 * time.Second):
+		t.Fatal("no inv message relayed to the non-sendheaders peer")
+	}
+}
+
+// newRelayTestServerPeer connects a serverPeer to a real remote peer over a
+// pipe, waits for the version handshake, and registers it in a peerState.
+// onInv receives every inv message the remote end is sent. Neither side sends
+// "sendheaders", so WantsHeaders() stays false on both peers.
+func newRelayTestServerPeer(t *testing.T, onInv func(*peer.Peer, *wire.MsgInv)) (*server, *peerState, *serverPeer) {
+	t.Helper()
+
 	tSettings := test.CreateBaseTestSettings(t)
 	logger := ulogger.TestLogger{}
 
-	invReceived := make(chan *wire.MsgInv, 1)
-
-	// The remote end records the inv messages it receives. Neither side sends
-	// "sendheaders", so WantsHeaders() stays false on both peers.
 	remoteCfg := &peer.Config{
 		Listeners: peer.MessageListeners{
-			OnInv: func(_ *peer.Peer, msg *wire.MsgInv) {
-				select {
-				case invReceived <- msg:
-				default:
-				}
-			},
+			OnInv: onInv,
 		},
 		UserAgentName:          "remote",
 		UserAgentVersion:       "1.0",
@@ -285,6 +321,8 @@ func TestHandleRelayInvMsgBlockToNonSendHeadersPeer(t *testing.T) {
 	t.Cleanup(func() {
 		localPeer.DisconnectWithInfo("test cleanup")
 		remotePeer.DisconnectWithInfo("test cleanup")
+		localPeer.WaitForDisconnect()
+		remotePeer.WaitForDisconnect()
 	})
 
 	// The inv is dropped by the peer's queue handler until the version handshake
@@ -294,17 +332,13 @@ func TestHandleRelayInvMsgBlockToNonSendHeadersPeer(t *testing.T) {
 			remotePeer.VersionKnown() && remotePeer.VerAckReceived()
 	}, 10*time.Second, 10*time.Millisecond, "peers did not complete the version handshake")
 
-	s := &server{logger: logger}
+	s := &server{logger: logger, relayInv: make(chan relayMsg, 16)}
 
 	sp := &serverPeer{
 		Peer:   localPeer,
 		server: s,
 		quit:   make(chan struct{}),
 	}
-
-	// Precondition for the fallback: this peer did not negotiate sendheaders.
-	require.False(t, sp.WantsHeaders())
-	require.True(t, sp.Connected())
 
 	state := &peerState{
 		inboundPeers:    txmap.NewSyncedMap[int32, *serverPeer](),
@@ -314,23 +348,108 @@ func TestHandleRelayInvMsgBlockToNonSendHeadersPeer(t *testing.T) {
 	}
 	state.inboundPeers.Set(1, sp)
 
-	blockHash := chainhash.Hash{0x0a, 0x0b, 0x0c}
-	invVect := wire.NewInvVect(wire.InvTypeBlock, &blockHash)
+	return s, state, sp
+}
 
-	// No msg.data: a non-sendheaders peer must be announced the block by
-	// inventory, which needs nothing but the inv vector. If the dispatch ever
-	// routes this peer to handleRelayBlockMsg instead, that path bails out on the
-	// missing block header and nothing is sent.
-	s.handleRelayInvMsg(state, relayMsg{invVect: invVect})
+// TestRebroadcastTickReachesPeerThatAlreadySawInv covers issue 1825. The first
+// announce adds the inv to the peer's known inventory, and a plain
+// QueueInventory drops any later attempt, so a rebroadcast used to reach only
+// peers that connected after the first announce. Drives the real announce and
+// rebroadcast paths (RelayInventory, rebroadcastQueue.retry with
+// relayTxBatch, handleRelayInvMsg) over a real connected peer.
+func TestRebroadcastTickReachesPeerThatAlreadySawInv(t *testing.T) {
+	invReceived := make(chan *wire.MsgInv, 10)
 
-	select {
-	case msg := <-invReceived:
-		require.Len(t, msg.InvList, 1)
-		require.Equal(t, wire.InvTypeBlock, msg.InvList[0].Type)
-		require.Equal(t, blockHash, msg.InvList[0].Hash)
-	case <-time.After(10 * time.Second):
-		t.Fatal("no inv message relayed to the non-sendheaders peer")
+	s, state, _ := newRelayTestServerPeer(t, func(_ *peer.Peer, msg *wire.MsgInv) {
+		invReceived <- msg
+	})
+
+	txHash := chainhash.Hash{0xde, 0xad}
+	iv := wire.NewInvVect(wire.InvTypeTx, &txHash)
+	data := &netsync.TxHashAndFee{TxHash: txHash, Fee: 1, Size: 100}
+
+	// deliver plays the peerHandler's part: take what the relay entry points
+	// queued on relayInv and dispatch it to the connected peers.
+	deliver := func() {
+		t.Helper()
+		select {
+		case msg := <-s.relayInv:
+			s.handleRelayInvMsg(state, msg)
+		case <-time.After(time.Second):
+			t.Fatal("nothing queued on relayInv")
+		}
 	}
+
+	expectInv := func(msg string) {
+		t.Helper()
+		select {
+		case got := <-invReceived:
+			require.Len(t, got.InvList, 1, msg)
+			require.Equal(t, *iv, *got.InvList[0], msg)
+		case <-time.After(5 * time.Second):
+			t.Fatal(msg)
+		}
+	}
+
+	expectNoInv := func(msg string) {
+		t.Helper()
+		select {
+		case got := <-invReceived:
+			t.Fatalf("%s: unexpected inv %v", msg, got.InvList)
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+
+	s.RelayInventory(iv, data)
+	deliver()
+	expectInv("first announce not received")
+
+	// A second plain relay is filtered by the peer's known inventory.
+	s.RelayInventory(iv, data)
+	deliver()
+	expectNoInv("plain relay re-sent a known inv")
+
+	queue := newRebroadcastQueue(maxRebroadcastInventory)
+	mustAdd(t, queue, *iv, data)
+
+	for retry := 1; retry <= 2; retry++ {
+		relayed, _ := queue.retry(maxRebroadcastTips, s.relayTxBatch)
+		require.Equal(t, 1, relayed)
+		deliver()
+		expectInv(fmt.Sprintf("rebroadcast retry %d did not reach the peer", retry))
+	}
+}
+
+// TestHandleRelayTxMsgRequeue checks that a rebroadcast relay bypasses the
+// peer's known-inventory filter but still honours its fee filter.
+func TestHandleRelayTxMsgRequeue(t *testing.T) {
+	txHash := chainhash.Hash{0x01, 0x02, 0x03}
+	invVect := wire.NewInvVect(wire.InvTypeTx, &txHash)
+	s := &server{}
+
+	t.Run("requeues", func(t *testing.T) {
+		sp := &mockServerPeer{}
+		sp.Mock.On("RequeueInventory", invVect).Return()
+
+		s.handleRelayTxMsg(sp, relayMsg{invVect: invVect, requeue: true}, 0)
+
+		sp.AssertCalled(t, "RequeueInventory", invVect)
+		sp.AssertNotCalled(t, "QueueInventory", invVect)
+	})
+
+	t.Run("fee filter still applies", func(t *testing.T) {
+		sp := &mockServerPeer{}
+
+		msg := relayMsg{
+			invVect: invVect,
+			data:    &netsync.TxHashAndFee{Fee: 1000, Size: 1000},
+			requeue: true,
+		}
+		s.handleRelayTxMsg(sp, msg, 2000)
+
+		sp.AssertNotCalled(t, "RequeueInventory", invVect)
+		sp.AssertNotCalled(t, "QueueInventory", invVect)
+	})
 }
 
 // TestHandleRelayTxMsg tests the handleRelayTxMsg function's behavior with various fee filter scenarios
@@ -546,6 +665,72 @@ func TestServerNetTotals(t *testing.T) {
 }
 
 // TestEnforceNodeBloomFlagBasic tests the enforceNodeBloomFlag method exists
+// TestShouldDisconnectOnBlockErr_CorruptDoesNotDisconnect pins the legacy-sync
+// behaviour for a corrupt block body (bitcoin-sv/teranode#4692): the serving peer must NOT be
+// disconnected (a body can be corrupted in transit by an honest relay), so the block
+// is dropped and re-requested without churning an otherwise-healthy sync peer.
+// Genuine consensus failures still disconnect; transient local infra errors, and a
+// local-policy decline, do not.
+func TestShouldDisconnectOnBlockErr_CorruptDoesNotDisconnect(t *testing.T) {
+	// Corrupt body — must NOT disconnect.
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewBlockCorruptError("corrupt body")))
+	// Even wrapped, the corrupt cause must be detected and not disconnect.
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewProcessingError("outer", errors.NewBlockCorruptError("corrupt body"))))
+
+	// Local policy decline (excessiveblocksize) — must NOT disconnect
+	// (bitcoin-sv/teranode#4692). It is our own configuration, not the peer's conduct: every peer
+	// serves the same block, so rotating only churns the fleet while the replacement is declined
+	// identically. It is not transient-local either, so it needs its own exemption rather than
+	// falling under IsTransientLocalError.
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewBlockPolicyDeclinedError("block size 5 exceeds excessiveblocksize 4 (local policy)")))
+	// And behind a generic wrapper, since errors.Is walks the chain (the gRPC round trip itself is
+	// pinned by errors/block_policy_declined_test.go's WrapGRPC/UnwrapGRPC coverage).
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewProcessingError("outer", errors.NewBlockPolicyDeclinedError("declined"))))
+
+	// Genuine consensus failure — must disconnect (rotate the peer).
+	require.True(t, shouldDisconnectOnBlockErr(errors.NewBlockInvalidError("invalid")))
+	// The two shapes a catch-up block gets back from block validation's batch path,
+	// each wrapped twice as block validation and netsync's ProcessBlock wrap them:
+	// a consensus failure over an invalid transaction disconnects, a parent read
+	// that failed on the store does not.
+	require.True(t, shouldDisconnectOnBlockErr(errors.NewProcessingError("failed to process block",
+		errors.NewBlockInvalidError("block invalid", errors.NewTxInvalidError("spends output 7 of a parent that has 1")))))
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewProcessingError("failed to process block",
+		errors.NewProcessingError("failed to read parent output", errors.NewStorageError("aerospike timeout")))))
+	// Transient local infra — must NOT disconnect (existing behaviour, guarded here too).
+	require.False(t, shouldDisconnectOnBlockErr(errors.NewServiceError("service down")))
+	require.False(t, shouldDisconnectOnBlockErr(nil))
+}
+
+// TestServerPeer_StrikeCorruptBlockBody is the targeted regression for the peer
+// attribution of a corrupt block body (bitcoin-sv/teranode#4692). It would FAIL if the strike were
+// wired to an out-of-band (empty) peer identity that no-ops — the previous bug — because
+// here the penalty lands on THIS concrete serving peer and its ban score must increase.
+func TestServerPeer_StrikeCorruptBlockBody(t *testing.T) {
+	prevCfg := cfg
+	cfg = &config{BanThreshold: 100}
+	defer func() { cfg = prevCfg }()
+
+	sp := &serverPeer{server: &server{logger: ulogger.TestLogger{}}}
+	require.Equal(t, uint32(0), sp.banScore.Int(), "fresh peer starts unstruck")
+
+	// A corrupt block body strikes THIS serving peer: non-zero, non-empty attribution.
+	require.True(t, sp.strikeIfCorruptBlockBody(errors.NewBlockCorruptError("merkle root does not match")))
+	struck := sp.banScore.Int()
+	require.Greater(t, struck, uint32(0), "the serving peer must actually be penalised for a corrupt body")
+	require.Less(t, struck, cfg.BanThreshold, "a single corrupt body must not cross the ban/disconnect threshold")
+
+	// A corrupt cause wrapped across the ProcessBlock boundary is still attributed here.
+	require.True(t, sp.strikeIfCorruptBlockBody(errors.NewProcessingError("failed to process block", errors.NewBlockCorruptError("corrupt"))))
+	require.Greater(t, sp.banScore.Int(), struck, "wrapped corrupt must accumulate further")
+
+	// A genuine consensus failure is NOT a corrupt-body strike (it is handled by the
+	// disconnect path instead), so it must not add the corrupt score.
+	before := sp.banScore.Int()
+	require.False(t, sp.strikeIfCorruptBlockBody(errors.NewBlockInvalidError("invalid")))
+	require.Equal(t, before, sp.banScore.Int(), "non-corrupt error must not apply the corrupt strike")
+}
+
 func TestEnforceNodeBloomFlagBasic(t *testing.T) {
 	// This function requires a fully initialized peer, which is complex to set up
 	// We'll just test that the method exists on serverPeer
@@ -850,102 +1035,6 @@ func TestBroadcastMessage_BroadcastsRegardlessOfListenMode(t *testing.T) {
 	}
 }
 
-// TestTryAddRebroadcast_PreservesAttemptsOnReadd locks in the invariant that
-// re-adding an iv already present in pendingInvs does NOT reset its retry
-// counter — otherwise a Kafka replay (or any duplicate hit) could refresh
-// the retry budget of a tx that should have aged out, defeating the
-// maxRebroadcastAttempts ceiling.
-func TestTryAddRebroadcast_PreservesAttemptsOnReadd(t *testing.T) {
-	pending := map[wire.InvVect]*rebroadcastEntry{}
-	iv := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0x01}}
-
-	require.True(t, tryAddRebroadcast(pending, 10, iv, "first"))
-	pending[iv].attempts = 3 // simulate three retry ticks
-
-	require.True(t, tryAddRebroadcast(pending, 10, iv, "second"),
-		"re-add of an existing iv must be accepted (returns true)")
-	require.Equal(t, 3, pending[iv].attempts,
-		"re-add must preserve the existing attempts counter")
-	require.Equal(t, "second", pending[iv].data,
-		"re-add must refresh the data payload")
-	require.Len(t, pending, 1)
-}
-
-// TestTryAddRebroadcast_DropsAtCap covers the bounded-memory contract for the
-// rebroadcast queue: once pendingInvs has `capacity` entries, new (non-update)
-// adds must be rejected. Older entries keep their retry budget rather than
-// being evicted by churn from fresh adds that haven't yet failed.
-func TestTryAddRebroadcast_DropsAtCap(t *testing.T) {
-	const capacity = 4
-	pending := map[wire.InvVect]*rebroadcastEntry{}
-
-	// Fill to capacity.
-	for i := 0; i < capacity; i++ {
-		iv := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{byte(i + 1)}}
-		require.True(t, tryAddRebroadcast(pending, capacity, iv, i),
-			"add #%d below cap must be accepted", i)
-	}
-	require.Len(t, pending, capacity)
-
-	// One more — must be rejected.
-	overflow := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0xff}}
-	require.False(t, tryAddRebroadcast(pending, capacity, overflow, "overflow"),
-		"add beyond cap must be rejected")
-	require.Len(t, pending, capacity, "rejected add must not mutate the map")
-	_, present := pending[overflow]
-	require.False(t, present, "overflow entry must not be inserted")
-
-	// Update of an existing key must still succeed at cap.
-	existing := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0x01}}
-	require.True(t, tryAddRebroadcast(pending, capacity, existing, "updated"),
-		"update of existing key must succeed even at cap")
-	require.Equal(t, "updated", pending[existing].data)
-}
-
-// TestProcessRebroadcastTick_AgesOutAfterMaxAttempts asserts the per-entry
-// retry budget: after `maxAttempts` ticks, the entry is removed even if
-// nothing called RemoveRebroadcastInventory. This is the only mechanism
-// bounding the queue from below, because TransactionConfirmed is dead code
-// in this codebase.
-func TestProcessRebroadcastTick_AgesOutAfterMaxAttempts(t *testing.T) {
-	const maxAttempts = 3
-	pending := map[wire.InvVect]*rebroadcastEntry{}
-	iv := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0x77}}
-	require.True(t, tryAddRebroadcast(pending, 10, iv, "data"))
-
-	var relayed int
-	relay := func(*wire.InvVect, interface{}) { relayed++ }
-
-	for i := 1; i < maxAttempts; i++ {
-		processRebroadcastTick(pending, maxAttempts, relay)
-		require.Len(t, pending, 1, "entry must remain at tick %d", i)
-		require.Equal(t, i, pending[iv].attempts)
-	}
-
-	// Final tick — entry retries one more time, then ages out.
-	processRebroadcastTick(pending, maxAttempts, relay)
-	require.Empty(t, pending, "entry must be deleted after maxAttempts ticks")
-	require.Equal(t, maxAttempts, relayed, "relay must fire exactly maxAttempts times")
-}
-
-// TestProcessRebroadcastTick_KeepsEntriesUnderBudget guards against an
-// off-by-one in the aging logic: an entry must survive ticks until its
-// attempt count actually *reaches* maxAttempts.
-func TestProcessRebroadcastTick_KeepsEntriesUnderBudget(t *testing.T) {
-	const maxAttempts = 6
-	pending := map[wire.InvVect]*rebroadcastEntry{}
-	iv := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0x88}}
-	require.True(t, tryAddRebroadcast(pending, 10, iv, "data"))
-
-	noop := func(*wire.InvVect, interface{}) {}
-	for i := 0; i < maxAttempts-1; i++ {
-		processRebroadcastTick(pending, maxAttempts, noop)
-	}
-
-	require.Len(t, pending, 1, "entry must still be present below budget")
-	require.Equal(t, maxAttempts-1, pending[iv].attempts)
-}
-
 // TestAddRebroadcastInventory_BumpsDropCounterOnFullChannel asserts the
 // observability contract: when modifyRebroadcastInv is saturated, the
 // non-blocking send drops AND increments droppedRebroadcastAdds. Silent
@@ -1218,14 +1307,6 @@ func TestServerTransactionConfirmed(t *testing.T) {
 	// Since we don't have full setup, we just test it doesn't panic
 }
 
-// TestServerGetTxFromStoreExists tests the getTxFromStore method exists
-func TestServerGetTxFromStoreExists(t *testing.T) {
-	// This method requires complex setup with stores and blockchain state
-	// We'll just verify the method exists on server
-	s := &server{}
-	assert.NotNil(t, s.getTxFromStore)
-}
-
 // TestServerUpdatePeerHeights tests the UpdatePeerHeights method
 func TestServerUpdatePeerHeights(t *testing.T) {
 	s := &server{
@@ -1332,25 +1413,6 @@ func TestHasServices(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := hasServices(tt.advertised, tt.desired)
 			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-// TestRandomUint16Number tests the randomUint16Number function
-func TestRandomUint16Number(t *testing.T) {
-	tests := []struct {
-		name string
-		max  uint16
-	}{
-		{"small max", 10},
-		{"medium max", 1000},
-		{"large max", 65535},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := randomUint16Number(tt.max)
-			assert.True(t, result < tt.max, "Random number should be less than max")
 		})
 	}
 }
@@ -1717,6 +1779,49 @@ func TestTearDownAssociationStreams(t *testing.T) {
 	})
 }
 
+// TestAwaitBlockResult_StrikesCorruptBlockBody covers the DEFAULT async
+// prefetch-ingestion completion path (UseBlockPrefetchIngestion is true off regtest):
+// a corrupt block body arriving on `done` must strike THIS serving peer's ban score and
+// must NOT disconnect it. This is the regression for the async gap that a
+// synchronous-only strike left open — on the default configuration the corrupt result
+// flows here, not through the synchronous OnBlock handler.
+func TestAwaitBlockResult_StrikesCorruptBlockBody(t *testing.T) {
+	prevCfg := cfg
+	cfg = &config{BanThreshold: 100}
+	defer func() { cfg = prevCfg }()
+
+	sp := &serverPeer{
+		server: &server{syncManager: &netsync.SyncManager{}, logger: ulogger.TestLogger{}},
+		ctx:    context.Background(),
+		quit:   make(chan struct{}),
+	}
+	require.Equal(t, uint32(0), sp.banScore.Int(), "fresh peer starts unstruck")
+
+	// A corrupt body wrapped exactly as the ProcessBlock path delivers it
+	// (ProcessingError around the corrupt cause). shouldDisconnectOnBlockErr returns false
+	// for corrupt, so the disconnect path — which would panic on the nil embedded
+	// *peer.Peer — is never taken; the clean return proves no disconnect.
+	done := make(chan error, 1)
+	done <- errors.NewProcessingError("failed to process block", errors.NewBlockCorruptError("merkle root does not match"))
+
+	finished := make(chan struct{})
+	go func() {
+		sp.awaitBlockResult(done, 0, &chainhash.Hash{})
+		close(finished)
+	}()
+
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("awaitBlockResult did not return after the corrupt reply arrived")
+	}
+
+	// Read after <-finished: the goroutine's addBanScore happens-before the channel close.
+	struck := sp.banScore.Int()
+	require.Greater(t, struck, uint32(0), "async prefetch corrupt completion must penalise the serving peer")
+	require.Less(t, struck, cfg.BanThreshold, "a single corrupt body must not cross the ban/disconnect threshold")
+}
+
 // TestAwaitBlockResult_ReleasesAndExitsOnTeardown covers the prefetch teardown
 // path: awaitBlockResult must hold the reserved budget until the block actually
 // finishes processing — even after the peer is torn down (sp.quit) — because the
@@ -1845,4 +1950,65 @@ func TestAwaitBlockResult_ReleasesAndExitsOnTeardown(t *testing.T) {
 
 		require.Nil(t, <-panicked, "awaitBlockResult must not disconnect (panic) a torn-down peer")
 	})
+}
+
+// TestAnnounceNewTransactionsReachesPeerInBatchOrder checks that a first
+// announce reaches a real peer in batch order, which netsync sorts parents
+// first. It used to go out through a goroutine per inv, in no set order.
+func TestAnnounceNewTransactionsReachesPeerInBatchOrder(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		seen []chainhash.Hash
+	)
+
+	s, state, _ := newRelayTestServerPeer(t, func(_ *peer.Peer, msg *wire.MsgInv) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		for _, iv := range msg.InvList {
+			seen = append(seen, iv.Hash)
+		}
+	})
+	s.modifyRebroadcastInv = make(chan interface{}, modifyRebroadcastInvBuffer)
+
+	// Play the peerHandler's part until the test ends.
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+
+	go func() {
+		for {
+			select {
+			case msg := <-s.relayInv:
+				s.handleRelayInvMsg(state, msg)
+			case <-stop:
+				return
+			}
+		}
+	}()
+
+	const n = 200
+
+	txns := make([]*netsync.TxHashAndFee, n)
+	want := make([]chainhash.Hash, n)
+
+	for i := range txns {
+		// Hash order differs from batch order.
+		want[i] = chainhash.Hash{byte(n - i), byte(i * 7), 0xab}
+		txns[i] = &netsync.TxHashAndFee{TxHash: want[i], Fee: 1, Size: 100}
+	}
+
+	s.AnnounceNewTransactions(txns[:n/2])
+	s.AnnounceNewTransactions(txns[n/2:])
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+
+		return len(seen) == n
+	}, 10*time.Second, 10*time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Equal(t, want, seen)
 }

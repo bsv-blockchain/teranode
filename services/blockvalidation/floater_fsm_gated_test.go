@@ -162,6 +162,7 @@ func TestBlockValidation_OptimisticFloaterInvalidatedWhenCaughtUp(t *testing.T) 
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.OptimisticMining = true // exercise the optimistic background path
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)
@@ -228,6 +229,7 @@ func TestBlockValidation_OptimisticFloaterRetriedDuringCatchup(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.OptimisticMining = true
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
 	require.NoError(t, err)

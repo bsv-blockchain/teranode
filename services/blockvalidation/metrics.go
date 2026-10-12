@@ -46,6 +46,14 @@ var (
 	prometheusCatchupHeadersFetched *prometheus.CounterVec
 	prometheusCatchupErrors         *prometheus.CounterVec
 	prometheusCatchupActive         prometheus.Gauge
+	prometheusCatchupPeerHealthGate *prometheus.CounterVec
+
+	// catch-up subtree-data prefetch budget metrics. Aggregate counters with no block-hash
+	// label, for the cardinality reason recorded below; the block hash is in the log line
+	// each of these accompanies.
+	prometheusCatchupPrefetchBudgetParked         prometheus.Counter
+	prometheusCatchupPrefetchOversizedBlocks      prometheus.Counter
+	prometheusCatchupPrefetchUndeclaredSizeBlocks prometheus.Counter
 
 	// priority queue metrics
 	prometheusBlockPriorityQueueSize      *prometheus.GaugeVec
@@ -309,6 +317,43 @@ func _initPrometheusMetrics() {
 			Name:      "catchup_active",
 			Help:      "Number of active catchup operations (0 or 1)",
 		},
+	)
+
+	prometheusCatchupPrefetchBudgetParked = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "catchup_prefetch_budget_parked_total",
+			Help:      "Total number of times a catchup prewarm worker parked waiting for catchup prefetch budget. A sustained rise means catchup throughput is being limited by blockvalidation_catchup_prefetch_budget_bytes rather than by peers or storage; the parked block hash is recorded in the logs.",
+		},
+	)
+
+	prometheusCatchupPrefetchOversizedBlocks = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "catchup_prefetch_oversized_blocks_total",
+			Help:      "Total number of blocks whose declared size exceeded blockvalidation_catchup_prefetch_budget_bytes (including a declared size too large to represent as an int64) and which therefore parsed their subtrees one at a time. A rising rate means the budget is routinely smaller than the blocks being synced, which slows catchup; the block hash is recorded in the logs.",
+		},
+	)
+
+	prometheusCatchupPrefetchUndeclaredSizeBlocks = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "catchup_prefetch_undeclared_size_blocks_total",
+			Help:      "Total number of blocks that declared no size (SizeInBytes 0) and were therefore not trusted with the configured subtree fetch concurrency. Blocks served by a healthy peer carry a declared size, so a sustained rise points at a peer supplying undeclared sizes; the block hash is recorded in the logs.",
+		},
+	)
+
+	prometheusCatchupPeerHealthGate = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "catchup_peer_health_gate_total",
+			Help:      "Total number of times the pre-catchup peer health gate produced a signal, by reason. malicious/low_reputation/low_success_rate/other refuse the peer as a catchup source; unknown means the peer is absent from the registry and is NOT refused (fail open) — a rising unknown rate points at registry-population lag (e.g. after a blockchain-service restart), not at bad peers.",
+		},
+		[]string{"reason"},
 	)
 
 	// Initialize priority queue metrics

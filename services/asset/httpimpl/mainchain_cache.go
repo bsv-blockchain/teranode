@@ -4,11 +4,14 @@ import (
 	"context"
 	"strconv"
 	"sync"
+	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -24,6 +27,12 @@ const (
 	// it without bound. When full, overflow lookups go straight to RPC every
 	// time — a rare path (old blocks) so the cost is acceptable.
 	maxOldCacheEntries = 10_000
+
+	// mainChainLookupTimeout bounds a single shared below-window fill. The fill
+	// runs on the service context rather than any caller's, so without a timeout
+	// a hung blockchain RPC would pin the singleflight key for the process's
+	// lifetime. Generous: it is a backstop, not a latency target.
+	mainChainLookupTimeout = 30 * time.Second
 )
 
 // mainChainCache answers "is this block ID on the current main chain?" for
@@ -98,6 +107,20 @@ type mainChainCache struct {
 	// sf deduplicates concurrent below-window RPCs per block ID.
 	sf singleflight.Group
 
+	// sfCtx is the service-owned context a deduplicated below-window fill runs
+	// under. A fill is shared by unrelated requests, so it must not inherit any
+	// one caller's request context — otherwise that caller disconnecting aborts
+	// every concurrent waiter's lookup. Cancelled when the consume goroutine
+	// exits, i.e. on service shutdown.
+	sfCtx    context.Context
+	sfCancel context.CancelFunc
+
+	// blockRoots memoizes the per-block merkle-proof roots derived from a
+	// block's first and final subtrees. It is colocated here because it shares
+	// this cache's lifetime and the same two endpoints; entries never need
+	// invalidating (see blockRootsCache).
+	blockRoots *blockRootsCache
+
 	// consumeDone is closed when the notification consumer goroutine exits.
 	// Test observability only.
 	consumeDone chan struct{}
@@ -114,12 +137,17 @@ func newMainChainCache(client blockchain.ClientI, logger ulogger.Logger, windowS
 	if windowSize == 0 {
 		windowSize = defaultMainChainWindowSize
 	}
+	sfCtx, sfCancel := context.WithCancel(context.Background())
+
 	return &mainChainCache{
 		client:      client,
 		logger:      logger,
 		windowSize:  windowSize,
 		oldCache:    make(map[uint32]bool),
+		blockRoots:  newBlockRootsCache(),
 		consumeDone: make(chan struct{}),
+		sfCtx:       sfCtx,
+		sfCancel:    sfCancel,
 	}
 }
 
@@ -134,6 +162,8 @@ func (c *mainChainCache) Start(ctx context.Context) error {
 		return err
 	}
 	go func() {
+		// Shared fills outlive individual requests but never the service.
+		defer c.sfCancel()
 		defer close(c.consumeDone)
 		c.rebuild(ctx) // immediate initial populate; failure leaves the window unhealthy
 		c.consume(ctx, sub)
@@ -263,6 +293,33 @@ func (c *mainChainCache) invalidate() {
 	c.mu.Unlock()
 }
 
+// cacheOldEntry writes onChain into oldCache under the generation guard, using a
+// deferred unlock so a panic during the write — the fill closure recovers panics and
+// turns them into an error rather than crashing the process — cannot leave mu locked
+// forever and deadlock every subsequent lookup.
+func (c *mainChainCache) cacheOldEntry(blockID uint32, gen uint64, onChain bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Generation guard: only cache if no invalidation/rebuild happened while the RPC
+	// was in flight; the result may describe the pre-reorg chain. Size cap: skip
+	// caching when full rather than evicting — overflow IDs just pay the RPC each
+	// time.
+	if c.generation == gen && c.windowHealthy && len(c.oldCache) < maxOldCacheEntries {
+		c.oldCache[blockID] = onChain
+	}
+}
+
+// blockRootsCache returns the per-block merkle-proof root cache, tolerating a
+// nil receiver so callers need no wiring check.
+func (c *mainChainCache) blockRootsCache() *blockRootsCache {
+	if c == nil {
+		return nil
+	}
+
+	return c.blockRoots
+}
+
 // IsOnMainChain reports whether the block with the given internal ID, claimed
 // to be at the given height, is part of the current best chain.
 //
@@ -298,7 +355,14 @@ func (c *mainChainCache) IsOnMainChain(ctx context.Context, blockID, blockHeight
 	}
 	c.mu.RUnlock()
 
-	v, err, _ := c.sf.Do(strconv.FormatUint(uint64(blockID), 10), func() (interface{}, error) {
+	ch := c.sf.DoChan(strconv.FormatUint(uint64(blockID), 10), func() (val interface{}, err error) {
+		// DoChan always runs the fill in its own goroutine, and a panic there
+		// re-panics past this goroutine unconditionally (singleflight cannot
+		// tell "one waiter" from "many", so it never recovers) — bypassing
+		// echo's Recover middleware and taking the process down. Recover here
+		// and surface it as an error to every waiter instead.
+		defer util.RecoverToError(c.logger, &err, nil, "mainchain below-window fill for block %d", blockID)()
+
 		// Re-check under the singleflight: a caller that lost the oldCache race
 		// to a just-completed leader becomes the new leader here and must not
 		// re-issue the RPC.
@@ -310,24 +374,35 @@ func (c *mainChainCache) IsOnMainChain(ctx context.Context, blockID, blockHeight
 		gen := c.generation
 		c.mu.RUnlock()
 
-		onChain, err := c.client.CheckBlockIsInCurrentChain(ctx, []uint32{blockID})
+		// Service-owned context, never the leader's: the fill is shared by
+		// unrelated requests. Bounded by mainChainLookupTimeout so a fill every
+		// waiter has abandoned cannot hold the singleflight key indefinitely.
+		fillCtx, cancelFill := context.WithTimeout(c.sfCtx, mainChainLookupTimeout)
+		defer cancelFill()
+
+		onChain, err := c.client.CheckBlockIsInCurrentChain(fillCtx, []uint32{blockID})
 		if err != nil {
 			return false, err
 		}
 
-		c.mu.Lock()
-		// Generation guard: only cache if no invalidation/rebuild happened while
-		// the RPC was in flight; the result may describe the pre-reorg chain.
-		// Size cap: skip caching when full rather than evicting — overflow IDs
-		// just pay the RPC each time.
-		if c.generation == gen && c.windowHealthy && len(c.oldCache) < maxOldCacheEntries {
-			c.oldCache[blockID] = onChain
-		}
-		c.mu.Unlock()
+		c.cacheOldEntry(blockID, gen, onChain)
 		return onChain, nil
 	})
-	if err != nil {
-		return false, err
+
+	// Each caller waits on its own context. Walking away cancels only this
+	// caller's wait: the shared fill keeps running and still populates oldCache
+	// for everyone else. DoChan's channel is buffered, so abandoning it leaks
+	// nothing.
+	select {
+	case res := <-ch:
+		if res.Err != nil {
+			return false, res.Err
+		}
+
+		onChain, _ := res.Val.(bool)
+
+		return onChain, nil
+	case <-ctx.Done():
+		return false, errors.NewContextCanceledError("main chain lookup for block %d abandoned", blockID, ctx.Err())
 	}
-	return v.(bool), nil
 }

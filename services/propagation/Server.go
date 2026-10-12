@@ -773,6 +773,11 @@ func httpStatusForTxError(err error) int {
 		return http.StatusConflict
 	case errors.Is(err, errors.ErrTxMissingParent):
 		return http.StatusUnprocessableEntity
+	case errors.Is(err, errors.ErrThresholdExceeded):
+		// Block assembly shed the tx because its ingest queue is full. The tx is
+		// durably stored but not yet in a template; a resubmit re-drives the
+		// handoff, so this is a retryable overload, not a permanent failure.
+		return http.StatusServiceUnavailable
 	case errors.Is(err, errors.ErrInvalidArgument),
 		errors.Is(err, errors.ErrTxInvalid),
 		errors.Is(err, errors.ErrTxLockTime),
@@ -1421,7 +1426,8 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 
 		// All transactions entering Teranode can be assumed to be after Genesis activation height
 		// but we pass in no block height, and just use the block height set in the utxo store
-		if _, err = ps.validator.Validate(ctx, btTx, 0); err != nil {
+		// ErrTxUnlockFailed means the tx was accepted and only its unlock failed, so it is not a rejection
+		if _, err = ps.validator.Validate(ctx, btTx, 0); err != nil && !errors.Is(err, errors.ErrTxUnlockFailed) {
 			return errors.NewProcessingError("[ProcessTransaction][%s] failed to validate transaction", btTx.TxID(), err)
 		}
 	}

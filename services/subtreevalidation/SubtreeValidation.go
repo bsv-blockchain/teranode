@@ -39,7 +39,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -52,6 +51,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/validator"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -67,6 +67,14 @@ import (
 // keeps growing for as long as the node cannot advance past the block that would
 // demote it (#1391), so its size is the leading indicator of that condition.
 const conflictingConeWarnThreshold = 1000
+
+// defaultUnlockTimeout bounds the level unlock when validator_twoPhaseCommitTimeout is unset.
+// Aliased to the validator's own default rather than restating a literal: the unlock's real
+// budget IS validator.DefaultTwoPhaseCommitTimeout (configured as validator_twoPhaseCommitTimeout,
+// which the fallback above reads), and subtreevalidation has no setting of its own for this.
+// A second literal here would silently disagree with the validator the moment the setting is
+// raised above it - which is the documented remedy for these unlock timeouts.
+const defaultUnlockTimeout = validator.DefaultTwoPhaseCommitTimeout
 
 // missingTx represents a transaction that needs to be retrieved and its position in the subtree.
 //
@@ -255,6 +263,18 @@ func (u *Server) DelTxMetaCacheMulti(ctx context.Context, hash *chainhash.Hash) 
 	return nil
 }
 
+// missingTransactionsFetchTimeout resolves the bound on one getMissingTransactionsBatch
+// call. A non-positive configured value (unset, or explicitly zero/negative) falls back
+// to the default rather than being treated as unbounded, and a nil settings object is
+// tolerated the same way.
+func missingTransactionsFetchTimeout(tSettings *settings.Settings) time.Duration {
+	if tSettings == nil || tSettings.SubtreeValidation.MissingTransactionsFetchTimeout <= 0 {
+		return settings.DefaultMissingTransactionsFetchTimeout
+	}
+
+	return tSettings.SubtreeValidation.MissingTransactionsFetchTimeout
+}
+
 // getMissingTransactionsBatch retrieves a batch of transactions from the network.
 // Note: The returned transactions may not be in the same order as the input hashes.
 //
@@ -269,12 +289,15 @@ func (u *Server) DelTxMetaCacheMulti(ctx context.Context, hash *chainhash.Hash) 
 //   - []*bt.Tx: Slice of retrieved transactions
 //   - error: Any error encountered during retrieval
 func (u *Server) getMissingTransactionsBatch(ctx context.Context, subtreeHash chainhash.Hash, txHashes []utxo.UnresolvedMetaData, baseURL, peerID string) ([]*bt.Tx, error) {
-	// Validate that baseURL is a proper HTTP/HTTPS URL and not a peer ID
-	parsedURL, err := url.Parse(baseURL)
-	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
-		u.logger.Errorf("[getMissingTransactionsBatch][%s] Invalid baseURL '%s' - must be valid http/https URL, not peer ID",
-			subtreeHash.String(), baseURL)
-		return nil, errors.NewExternalError("[getMissingTransactionsBatch][%s] invalid baseURL - not a valid http/https URL", subtreeHash.String())
+	// Build the POST URL from parsed parts. baseURL must be a proper HTTP/HTTPS URL, not a
+	// peer ID, and it must not carry a query or fragment: with string concatenation a base
+	// ending in "?x=" sent this POST, whose body is peer-chosen hashes, to whatever path the
+	// peer named (issue 4843).
+	txsURL, err := util.JoinPeerURL(baseURL, "subtree", subtreeHash.String(), "txs")
+	if err != nil {
+		u.logger.Errorf("[getMissingTransactionsBatch][%s] Invalid baseURL - must be a valid http/https base URL, not peer ID: %v",
+			subtreeHash.String(), err)
+		return nil, errors.NewExternalError("[getMissingTransactionsBatch][%s] invalid baseURL - not a valid http/https base URL", subtreeHash.String(), err)
 	}
 
 	log := false
@@ -296,11 +319,41 @@ func (u *Server) getMissingTransactionsBatch(ctx context.Context, subtreeHash ch
 	}
 
 	// do a POST http request to baseUrl + subtree hash + txs endpoint
-	url := fmt.Sprintf("%s/subtree/%s/txs", baseURL, subtreeHash.String())
-	u.logger.Debugf("[getMissingTransactionsBatch][%s] getting %d txs from peer %s", subtreeHash.String(), len(txHashes), url)
+	u.logger.Debugf("[getMissingTransactionsBatch][%s] getting %d txs from peer %s", subtreeHash.String(), len(txHashes), txsURL)
 
-	body, err := util.DoHTTPRequestBodyReader(ctx, url, txIDBytes)
+	// Retrying helper, not the plain one: the peer's asset service rate-limits
+	// (429) and sheds load (503), and both are recoverable. Without the ladder a
+	// single rejection lands in publishInvalidSubtree below and degrades the
+	// reputation of a peer that was behaving correctly. Re-sending the body on each
+	// attempt is safe here — the request is a list of txids and the endpoint is a
+	// pure read, so every attempt asks for exactly the same transactions.
+	//
+	// One deadline is set around the whole call rather than left to the caller's ctx:
+	// without it, the retry helper's ctx.Done() abort can never fire (this ctx has no
+	// deadline of its own), so the retry loop always runs to its attempt limit, and
+	// each attempt sees no deadline and installs a fresh HTTP streaming timeout of its
+	// own — a peer that stalls and then answers 429/503 can hold a single batch for
+	// attempts x streaming-timeout instead of one bounded window.
+	fetchCtx, cancel := context.WithTimeout(ctx, missingTransactionsFetchTimeout(u.settings))
+	defer cancel()
+
+	// A failure caused by OUR OWN cancellation - a sibling batch failing in the same
+	// errgroup, or service shutdown - is not the peer's fault and must not be reported
+	// as one. Checked explicitly against the caller's ctx, both before the fetch (an
+	// already-cancelled ctx must not even reach the peer) and after a failed one
+	// (cancellation mid-flight), and again on a failed body read below. Nothing
+	// downstream suppresses the report: blockchain.Client.GetFSMCurrentState returns a
+	// cached state without looking at ctx.
+	if ctx.Err() != nil {
+		return nil, errors.NewContextCanceledError("[getMissingTransactionsBatch][%s] aborted", subtreeHash.String(), ctx.Err())
+	}
+
+	body, err := util.DoHTTPRequestBodyReaderWithRetry(fetchCtx, txsURL, txIDBytes)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, errors.NewContextCanceledError("[getMissingTransactionsBatch][%s] aborted", subtreeHash.String(), ctx.Err())
+		}
+
 		// Peer cannot provide requested transactions - report as invalid subtree
 		u.publishInvalidSubtree(ctx, subtreeHash.String(), baseURL, peerID, "peer_cannot_provide_transactions")
 		return nil, errors.NewExternalError("[getMissingTransactionsBatch][%s] failed to do http request", subtreeHash.String(), err)
@@ -319,6 +372,20 @@ func (u *Server) getMissingTransactionsBatch(ctx context.Context, subtreeHash ch
 			if errors.Is(err, io.EOF) {
 				break
 			}
+
+			// Our own cancellation can also surface here, mid-body-read; that is not
+			// the peer serving bad data.
+			if ctx.Err() != nil {
+				return nil, errors.NewContextCanceledError("[getMissingTransactionsBatch][%s] aborted", subtreeHash.String(), ctx.Err())
+			}
+
+			// Our own fetch deadline expiring mid-body means the peer was too slow to
+			// serve the batch, not that it served bad data.
+			if fetchCtx.Err() != nil {
+				u.publishInvalidSubtree(ctx, subtreeHash.String(), baseURL, peerID, "peer_cannot_provide_transactions")
+				return nil, errors.NewExternalError("[getMissingTransactionsBatch][%s] fetch deadline exceeded reading the response", subtreeHash.String(), err)
+			}
+
 			// Malformed transaction data from peer - report as invalid subtree
 			u.publishInvalidSubtree(ctx, subtreeHash.String(), baseURL, peerID, "malformed_transaction_data")
 			// Not recoverable, returning processing error
@@ -412,7 +479,16 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 //   - *meta.Data: Transaction metadata structure if validation succeeds, nil otherwise
 //   - error: Detailed error information if validation fails for any reason
 func (u *Server) blessMissingTransaction(ctx context.Context, blockHash chainhash.Hash, subtreeHash chainhash.Hash, tx *bt.Tx, blockHeight uint32,
-	blockIds map[uint32]bool, validationOptions *validator.Options) (txMeta *meta.Data, err error) {
+	blockIds map[uint32]bool, validationOptions *validator.Options) (*meta.Data, error) {
+	txMeta, _, err := u.blessMissing(ctx, blockHash, subtreeHash, tx, blockHeight, blockIds, validationOptions)
+
+	return txMeta, err
+}
+
+// blessMissing implements blessMissingTransaction. unlockFailed is true when the validator accepted
+// the transaction but its two-phase-commit unlock failed, so the record is still locked.
+func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, subtreeHash chainhash.Hash, tx *bt.Tx, blockHeight uint32,
+	blockIds map[uint32]bool, validationOptions *validator.Options) (txMeta *meta.Data, unlockFailed bool, err error) {
 	start := time.Now()
 
 	defer func() {
@@ -420,18 +496,46 @@ func (u *Server) blessMissingTransaction(ctx context.Context, blockHash chainhas
 	}()
 
 	if tx == nil {
-		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s/%s] tx is nil", blockHash.String(), subtreeHash.String())
+		return nil, false, errors.NewTxInvalidError("[blessMissingTransaction][%s/%s] tx is nil", blockHash.String(), subtreeHash.String())
 	}
 
 	if tx.IsCoinbase() {
-		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s/%s][%s] transaction is coinbase", blockHash.String(), subtreeHash.String(), tx.TxID())
+		return nil, false, errors.NewTxInvalidError("[blessMissingTransaction][%s/%s][%s] transaction is coinbase", blockHash.String(), subtreeHash.String(), tx.TxID())
 	}
 
 	// validate the transaction in the validation service
 	// this should spend utxos, create the tx meta and create new utxos
 	txMeta, err = u.validatorClient.ValidateWithOptions(ctx, tx, blockHeight, validationOptions)
+	if err != nil && errors.Is(err, errors.ErrTxUnlockFailed) {
+		unlockFailed = true
+
+		prometheusSubtreeValidationBlessUnlockFailed.Inc()
+		u.logger.Warnf("[blessMissingTransaction][%s/%s][%s] transaction accepted but unlock failed, it stays locked until mined: %v", blockHash.String(), subtreeHash.String(), tx.TxID(), err)
+
+		if txMeta == nil {
+			// the response metadata does not survive a gRPC error, so read the accepted record back
+			stored := &meta.Data{}
+			if getErr := u.utxoStore.GetMeta(ctx, tx.TxIDChainHash(), stored); getErr != nil {
+				// Report the accept anyway. The transaction was spent, created and delivered to
+				// block assembly; only the proof metadata could not be read, and the one thing the
+				// caller still has to do for it is retry the unlock. Returning unlockFailed=false
+				// here discarded that, so a store read of proof data turned an accepted parent into
+				// a plain bless failure with no retry, stranding its child as TX_LOCKED until the
+				// parent is mined. The metadata itself is still not faked: txMeta stays nil.
+				u.logger.Warnf("[blessMissingTransaction][%s/%s][%s] failed to read meta of accepted transaction, it stays queued for unlock: %v",
+					blockHash.String(), subtreeHash.String(), tx.TxID(), getErr)
+
+				return nil, true, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] failed to read meta of accepted transaction", blockHash.String(), subtreeHash.String(), tx.TxID(), getErr)
+			}
+
+			txMeta = stored
+		}
+
+		err = nil
+	}
+
 	if err != nil && !errors.Is(err, errors.ErrTxConflicting) {
-		return nil, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] failed to validate transaction", blockHash.String(), subtreeHash.String(), tx.TxID(), err)
+		return nil, false, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] failed to validate transaction", blockHash.String(), subtreeHash.String(), tx.TxID(), err)
 	}
 	if err != nil {
 		u.logger.Warnf("[blessMissingTransaction][%s/%s][%s] transaction is conflicting", blockHash.String(), subtreeHash.String(), tx.TxID())
@@ -439,25 +543,28 @@ func (u *Server) blessMissingTransaction(ctx context.Context, blockHash chainhas
 
 	// Not recoverable, returning processing error
 	if txMeta == nil {
-		return nil, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] tx meta is nil", blockHash.String(), subtreeHash.String(), tx.TxID())
+		return nil, false, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] tx meta is nil", blockHash.String(), subtreeHash.String(), tx.TxID())
 	}
 
 	// check whether this transaction was already mined on our chain by comparing the block ids
 	if len(txMeta.BlockIDs) > 0 && len(blockIds) > 0 {
 		for _, blockID := range txMeta.BlockIDs {
 			if blockIds[blockID] {
-				return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s/%s][%s] transaction is already mined on our chain, in block %d", blockHash.String(), subtreeHash.String(), tx.TxID(), blockID)
+				// unlockFailed is carried through, not reset: these checks run after acceptance,
+				// so the record is spent, created and delivered even though the bless is rejected
+				// here, and the caller still has to retry its unlock.
+				return nil, unlockFailed, errors.NewTxInvalidError("[blessMissingTransaction][%s/%s][%s] transaction is already mined on our chain, in block %d", blockHash.String(), subtreeHash.String(), tx.TxID(), blockID)
 			}
 		}
 	}
 
 	if txMeta.Conflicting {
 		if err = u.checkCounterConflictingOnCurrentChain(ctx, *tx.TxIDChainHash(), blockIds); err != nil {
-			return nil, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] failed to check counter conflicting tx on current chain", blockHash.String(), subtreeHash.String(), tx.TxID(), err)
+			return nil, unlockFailed, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] failed to check counter conflicting tx on current chain", blockHash.String(), subtreeHash.String(), tx.TxID(), err)
 		}
 	}
 
-	return txMeta, nil
+	return txMeta, unlockFailed, nil
 }
 
 // checkCounterConflictingOnCurrentChain checks if the counter-conflicting transactions of a given transaction have
@@ -741,7 +848,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			batched := u.settings.SubtreeValidation.BatchMissingTransactions
 
 			// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
-			missed, err = u.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, blockIds, batched, failFast)
+			missed, err = u.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, blockIds, batched, failFast, false)
 			if err != nil {
 				// Don't wrap the error again, processTxMetaUsingStore returns the correctly formatted error.
 				return nil, err
@@ -810,7 +917,10 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		}
 
 		if _, dup := seen[txHash]; dup {
-			return nil, errors.NewBlockInvalidError("[ValidateSubtreeInternal][%s] duplicate transaction in subtree at index %d: %s", v.SubtreeHash.String(), idx, txHash.String())
+			// Body-derived (CVE-2012-2459 duplicate in the received tx set) and detected before
+			// the body is bound to the header: classify corrupt so the block is re-downloaded and
+			// the serving peer struck, never persisted invalid=true (bitcoin-sv/teranode#4692).
+			return nil, errors.NewBlockCorruptError("[ValidateSubtreeInternal][%s] duplicate transaction in subtree at index %d: %s", v.SubtreeHash.String(), idx, txHash.String())
 		}
 
 		seen[txHash] = struct{}{}
@@ -1014,7 +1124,10 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 	}
 
 	// do http request to baseUrl + subtreeHash.String()
-	url := fmt.Sprintf("%s/subtree/%s", baseURL, subtreeHash.String())
+	url, err := util.JoinPeerURL(baseURL, "subtree", subtreeHash.String())
+	if err != nil {
+		return nil, errors.NewExternalError("[getSubtreeTxHashes][%s] invalid peer base URL", subtreeHash.String(), err)
+	}
 	u.logger.Debugf("[getSubtreeTxHashes][%s] getting subtree from %s", subtreeHash.String(), url)
 
 	// Bound the body at the receive-side policy cap (MaxIncomingSubtreeBytes). A peer that
@@ -1025,7 +1138,9 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 
 	// TODO add the metric for how long this takes
 	// body, err := util.DoHTTPRequestBodyReader(spanCtx, url)
-	subtreeBytes, err := util.DoHTTPRequestBounded(spanCtx, url, maxSubtreeBytes)
+	// Retry a 429/503: a rate-limited GET here would otherwise drop the subtree, and every
+	// descendant subtree would then fail on missing parents. The GET is idempotent.
+	subtreeBytes, err := util.DoHTTPRequestBoundedWithRetry(spanCtx, url, maxSubtreeBytes)
 	if err != nil {
 		// check whether this is a 404 error
 		if errors.Is(err, errors.ErrNotFound) {
@@ -1149,6 +1264,14 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 		return err
 	}
 
+	return u.blessMissingTransactions(ctx, subtreeHash, missingTxs, baseURL, peerID, txMetaSlice, blockHeight, blockIds, validationOptions...)
+}
+
+// blessMissingTransactions validates the retrieved transactions of a subtree level by level and
+// records their metadata in txMetaSlice. Parents are always validated in an earlier level than
+// their children. It returns an error when any transaction fails to bless.
+func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chainhash.Hash, missingTxs []missingTx, baseURL, peerID string,
+	txMetaSlice []metaSliceItem, blockHeight uint32, blockIds map[uint32]bool, validationOptions ...validator.Option) (err error) {
 	u.logger.Debugf("[validateSubtree][%s] blessing %d missing txs", subtreeHash.String(), len(missingTxs))
 
 	var (
@@ -1186,6 +1309,11 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 		g, gCtx := errgroup.WithContext(ctx)
 		util.SafeSetLimit(u.logger, g, u.settings.SubtreeValidation.SpendBatcherSize*2)
 
+		var (
+			lockedHashes []chainhash.Hash
+			lockedMu     sync.Mutex
+		)
+
 		u.logger.Debugf("[processMissingTransactions][%s] processing level %d/%d with %d transactions", subtreeHash.String(), level+1, maxLevel+1, len(txsPerLevel[level]))
 
 		for _, mTx = range txsPerLevel[level] {
@@ -1198,7 +1326,21 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 
 			// process each transaction in the background, since the transactions are all batched into the utxo store
 			g.Go(func() error {
-				txMeta, err := u.blessMissingTransaction(gCtx, chainhash.Hash{}, subtreeHash, tx, blockHeight, blockIds, processedValidatorOptions)
+				txMeta, unlockFailed, err := u.blessMissing(gCtx, chainhash.Hash{}, subtreeHash, tx, blockHeight, blockIds, processedValidatorOptions)
+
+				// Queue an accepted-but-locked parent for this level's unlock retry BEFORE
+				// handling err. blessMissing only ever sets unlockFailed on the accepted path,
+				// and the checks it runs after acceptance (already mined, counter-conflicting,
+				// the accepted-meta read-back) can still reject the bless. The record is spent,
+				// created and delivered either way, so a child in the next level still needs it
+				// spendable; leaving this in the success arm strands the child as TX_LOCKED while
+				// errorsFound counts the same parent as a bless failure.
+				if unlockFailed {
+					lockedMu.Lock()
+					lockedHashes = append(lockedHashes, *tx.TxIDChainHash())
+					lockedMu.Unlock()
+				}
+
 				if err != nil {
 					// Log the error, but do not return it, since we want to process all transactions in the subtree
 					u.logger.Debugf("[validateSubtree][%s] failed to bless missing transaction: %s: %v", subtreeHash.String(), tx.TxIDChainHash().String(), err)
@@ -1262,8 +1404,17 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 		}
 
 		// wait for each level to process separately
-		if err = g.Wait(); err != nil {
-			return err
+		// Unlock before acting on the wait error. The only arm that returns one is a truly
+		// invalid transaction, and a sibling's failure must not skip the retry for parents
+		// this level already ACCEPTED: those are spent, created and delivered to block
+		// assembly, so skipping the unlock strands their children as TX_LOCKED until the
+		// parent is mined - the outcome this retry exists to avoid. ctx, not the errgroup's
+		// gCtx (which that failure cancels), is still live here, so the retry gets its window.
+		waitErr := g.Wait()
+		u.unlockAcceptedTransactions(ctx, subtreeHash, lockedHashes)
+
+		if waitErr != nil {
+			return waitErr
 		}
 	}
 
@@ -1281,6 +1432,39 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 	}
 
 	return nil
+}
+
+// unlockAcceptedTransactions retries the two-phase-commit unlock, in one store call, for transactions the
+// validator accepted but could not unlock. Children in the next level spend their outputs, and a locked
+// parent answers them TX_LOCKED. The transactions were already delivered to block assembly, so unlocking
+// them is the step the validator would have taken. A failure is logged and counted only: the record stays
+// locked until it is mined, as it would have before this retry.
+func (u *Server) unlockAcceptedTransactions(ctx context.Context, subtreeHash chainhash.Hash, hashes []chainhash.Hash) {
+	if len(hashes) == 0 {
+		return
+	}
+
+	timeout := u.settings.Validator.TwoPhaseCommitTimeout
+	if timeout <= 0 {
+		timeout = defaultUnlockTimeout
+	}
+
+	unlockCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// bless_unlock_failed counts these transactions when they are identified; without these two the
+	// retry's own outcome is invisible, so a node whose retry never succeeds looks identical to one
+	// where it always does. A failed call is counted once, not per hash: the store's SetLocked
+	// returns the first error without per-record results, so a partial failure cannot be split.
+	if err := u.utxoStore.SetLocked(unlockCtx, hashes, false); err != nil {
+		prometheusSubtreeValidationBlessUnlockRetryFailedBatches.Inc()
+		u.logger.Warnf("[validateSubtree][%s] failed to unlock %d accepted transactions, they stay locked until mined: %v", subtreeHash.String(), len(hashes), err)
+
+		return
+	}
+
+	prometheusSubtreeValidationBlessUnlockRecovered.Add(float64(len(hashes)))
+	u.logger.Debugf("[validateSubtree][%s] unlocked %d accepted transactions", subtreeHash.String(), len(hashes))
 }
 
 // getSubtreeMissingTxs retrieves transactions that are referenced in a subtree but not available locally.
@@ -1328,15 +1512,27 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 
 		if percentageMissing > u.settings.SubtreeValidation.PercentageMissingGetFullData {
 			// get the whole subtree from the other peer
-			url := fmt.Sprintf("%s/subtree_data/%s", baseURL, subtreeHash.String())
+			url, subtreeDataErr := util.JoinPeerURL(baseURL, "subtree_data", subtreeHash.String())
 
 			// Retry on 503 — peer's asset service may be admission-rejecting under load
 			// (asset_concurrency_subtree_data_create cap). Other errors fail through immediately.
-			body, subtreeDataErr := util.DoHTTPRequestBodyReaderWithRetry(ctx, url)
+			var body io.ReadCloser
+			if subtreeDataErr == nil {
+				body, subtreeDataErr = util.DoHTTPRequestBodyReaderWithRetry(ctx, url)
+			}
 			if subtreeDataErr != nil {
 				// Peer cannot provide subtree data - report as invalid subtree
 				u.publishInvalidSubtree(ctx, subtreeHash.String(), baseURL, peerID, "peer_cannot_provide_subtree_data")
-				u.logger.Errorf("[validateSubtree][%s] failed to get subtree data from %s: %v", subtreeHash.String(), url, subtreeDataErr)
+
+				if url == "" {
+					// The join failed, so there is no target to name. Saying "from " with
+					// nothing after it reads like a formatting bug rather than a peer whose
+					// announced base URL is unusable. The base is not echoed: it may carry
+					// credentials, which is one of the shapes JoinPeerURL refuses.
+					u.logger.Errorf("[validateSubtree][%s] invalid peer base URL for subtree data: %v", subtreeHash.String(), subtreeDataErr)
+				} else {
+					u.logger.Errorf("[validateSubtree][%s] failed to get subtree data from %s: %v", subtreeHash.String(), url, subtreeDataErr)
+				}
 			} else {
 				// Build subtree structure from allTxs for deserialization
 				// We cannot use the empty 'subtree' parameter as it has no nodes yet

@@ -392,6 +392,51 @@ func TestSubtreesHandler_NilSubtree(t *testing.T) {
 // TestSubtreeMessageHandler_BlocksOnly_CatchingBlocksStillSkips verifies that when FSM is in
 // CATCHINGBLOCKS state, processing is skipped regardless of BlocksOnly setting.
 func TestSubtreeMessageHandler_BlocksOnly_CatchingBlocksStillSkips(t *testing.T) {
+	testSubtreeMessageHandlerSkipsInState(t, blockchain.FSMStateCATCHINGBLOCKS)
+}
+
+// TestSubtreeMessageHandler_OnlyRunningParsesPeerSubtrees pins the FSM gate by
+// whether the handler reaches message parsing: a bad hash is counted only when
+// the gate lets the message through. IDLE must skip, because an operator STOP can
+// park a node mid-catchup with a UTXO set far behind the tip.
+func TestSubtreeMessageHandler_OnlyRunningParsesPeerSubtrees(t *testing.T) {
+	InitPrometheusMetrics()
+
+	badHashBytes, err := proto.Marshal(&kafkamessage.KafkaSubtreeTopicMessage{
+		Hash:   "not-a-hex-hash",
+		URL:    "http://localhost:8000",
+		PeerId: "peer1",
+	})
+	require.NoError(t, err)
+
+	for _, tt := range []struct {
+		state  blockchain.FSMStateType
+		parsed bool
+	}{
+		{blockchain.FSMStateRUNNING, true},
+		{blockchain.FSMStateCATCHINGBLOCKS, false},
+		{blockchain.FSMStateIDLE, false},
+	} {
+		t.Run(tt.state.String(), func(t *testing.T) {
+			server := newMalformedTestServer(t)
+			state := tt.state
+			server.blockchainClient = &blockchain.Mock{}
+			server.blockchainClient.(*blockchain.Mock).On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+
+			counter := prometheusSubtreeKafkaMalformed.WithLabelValues("bad_hash")
+			before := testutil.ToFloat64(counter)
+			require.NoError(t, server.subtreeMessageHandler(context.Background())(&kafka.KafkaMessage{Value: badHashBytes}))
+
+			if tt.parsed {
+				require.Equal(t, before+1, testutil.ToFloat64(counter), "RUNNING must reach message parsing")
+			} else {
+				require.Equal(t, before, testutil.ToFloat64(counter), "%s must skip peer subtrees before parsing", tt.state)
+			}
+		})
+	}
+}
+
+func testSubtreeMessageHandlerSkipsInState(t *testing.T, state blockchain.FSMStateType) {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.SubtreeValidation.BlocksOnly = false // Not blocks-only, but CATCHINGBLOCKS should still skip
 
@@ -406,8 +451,7 @@ func TestSubtreeMessageHandler_BlocksOnly_CatchingBlocksStillSkips(t *testing.T)
 
 	validateSubtreeCalled := atomic.Bool{}
 	blockchainClient := &blockchain.Mock{}
-	catchingBlocksState := blockchain.FSMStateCATCHINGBLOCKS
-	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&catchingBlocksState, nil)
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
 
 	server := &testServer{
 		Server: Server{
@@ -430,7 +474,7 @@ func TestSubtreeMessageHandler_BlocksOnly_CatchingBlocksStillSkips(t *testing.T)
 	require.NoError(t, err)
 
 	time.Sleep(100 * time.Millisecond)
-	assert.False(t, validateSubtreeCalled.Load(), "ValidateSubtreeInternal should not be called when FSM is CATCHINGBLOCKS")
+	assert.False(t, validateSubtreeCalled.Load(), "ValidateSubtreeInternal should not be called when FSM is %s", state)
 }
 
 // newMalformedTestServer builds a minimal Server suitable for exercising the malformed-message
@@ -546,4 +590,64 @@ func TestSubtreeMessageHandler_MalformedMetric(t *testing.T) {
 			require.Equal(t, before+1, after, "counter for reason %q should increment by 1", tt.reason)
 		})
 	}
+}
+
+// TestSubtreeMessageHandler_AlreadyExistsMetric checks that a subtree message for a subtree
+// already in the store increments prometheusSubtreeAlreadyExistsSkipped. The per-message log
+// line for this case is at DEBUG, so the counter is the only signal of a rate spike at
+// production log levels.
+func TestSubtreeMessageHandler_AlreadyExistsMetric(t *testing.T) {
+	InitPrometheusMetrics()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.SubtreeValidation.QuorumPath = t.TempDir()
+	tSettings.SubtreeValidation.BlocksOnly = false
+
+	subtreeHash, err := chainhash.NewHashFromStr("d580e67e847f65c73496a9f1adafacc5f73b4ca9d44fbd0749d6d926914bdcaf")
+	require.NoError(t, err)
+
+	msgBytes, err := proto.Marshal(&kafkamessage.KafkaSubtreeTopicMessage{
+		Hash:   subtreeHash.String(),
+		URL:    "http://localhost:8000",
+		PeerId: "peer1",
+	})
+	require.NoError(t, err)
+
+	blockchainClient := &blockchain.Mock{}
+	runningState := blockchain.FSMStateRUNNING
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
+
+	subtreeStore := memory.New()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// The subtree file already exists, so the quorum lock is refused and subtreesHandler
+	// returns ErrSubtreeExists.
+	require.NoError(t, subtreeStore.Set(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtree, []byte("existing")))
+
+	blockIDsMap := make(map[uint32]bool)
+	server := &testServer{
+		Server: Server{
+			logger:              ulogger.TestLogger{},
+			settings:            tSettings,
+			blockchainClient:    blockchainClient,
+			subtreeStore:        subtreeStore,
+			currentBlockIDsMap:  atomic.Pointer[map[uint32]bool]{},
+			bestBlockHeaderMeta: atomic.Pointer[model.BlockHeaderMeta]{},
+		},
+	}
+	server.Server.currentBlockIDsMap.Store(&blockIDsMap)
+	server.Server.bestBlockHeaderMeta.Store(&model.BlockHeaderMeta{Height: 100})
+	server.Server.quorum, err = NewQuorum(ulogger.TestLogger{}, subtreeStore, tSettings.SubtreeValidation.QuorumPath)
+	require.NoError(t, err)
+
+	before := testutil.ToFloat64(prometheusSubtreeAlreadyExistsSkipped)
+
+	handler := server.subtreeMessageHandler(ctx)
+	require.NoError(t, handler(&kafka.KafkaMessage{Value: msgBytes}), "an existing subtree must be skipped, not errored")
+
+	// subtreesHandler runs in the handler's errgroup, so the increment is asynchronous.
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(prometheusSubtreeAlreadyExistsSkipped) == before+1
+	}, 5*time.Second, 10*time.Millisecond, "already-exists counter should increment by 1")
 }

@@ -16,6 +16,7 @@ package blockassembly
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	bt "github.com/bsv-blockchain/go-bt/v2"
@@ -359,4 +360,76 @@ func TestBlockAssembly_ValidateUnminedTxInputs_CaseB_CounterConflictingOnChain(t
 
 	mockStore.AssertExpectations(t)
 	mockStp.AssertExpectations(t)
+}
+
+// warnCapturingLogger records every Warnf message so a test can assert on its content.
+type warnCapturingLogger struct {
+	ulogger.TestLogger
+	warns []string
+}
+
+func (l *warnCapturingLogger) Warnf(format string, args ...interface{}) {
+	l.warns = append(l.warns, fmt.Sprintf(format, args...))
+}
+
+// Issue 1768 diagnostics gap: when the parent lookup fails, validateUnminedTxInputs
+// used to return false silently, so CheckBlockAssemblyValidateInputs could only report
+// "found N unmined transactions with invalid inputs" with no indication of which ones
+// or why. The offending transaction and parent must be logged at WARN.
+func TestBlockAssembly_ValidateUnminedTxInputs_MissingParentIsLogged(t *testing.T) {
+	ctx := context.Background()
+
+	parentHash := chainhash.HashH([]byte("missing-parent"))
+	txHash := chainhash.HashH([]byte("orphaned-child"))
+
+	t.Run("store error", func(t *testing.T) {
+		mockStore := new(utxostore.MockUtxostore)
+		mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
+			Return(&meta.Data{Tx: txSpending(parentHash), Conflicting: false}, nil)
+		mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), mock.Anything).
+			Return(nil, errors.NewTxNotFoundError("%s not found", parentHash.String()))
+
+		logger := &warnCapturingLogger{}
+
+		ba := &BlockAssembler{
+			logger:    logger,
+			settings:  createTestSettings(t),
+			utxoStore: mockStore,
+		}
+
+		ok := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{0: true}, true)
+		assert.False(t, ok, "tx whose parent cannot be loaded must be invalid")
+
+		require.Len(t, logger.warns, 1, "missing parent must be logged exactly once")
+		assert.Contains(t, logger.warns[0], txHash.String())
+		assert.Contains(t, logger.warns[0], parentHash.String())
+		assert.Contains(t, logger.warns[0], "not found")
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("nil parent without error", func(t *testing.T) {
+		mockStore := new(utxostore.MockUtxostore)
+		mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
+			Return(&meta.Data{Tx: txSpending(parentHash), Conflicting: false}, nil)
+		mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), mock.Anything).
+			Return(nil, nil)
+
+		logger := &warnCapturingLogger{}
+
+		ba := &BlockAssembler{
+			logger:    logger,
+			settings:  createTestSettings(t),
+			utxoStore: mockStore,
+		}
+
+		ok := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{0: true}, true)
+		assert.False(t, ok)
+
+		require.Len(t, logger.warns, 1)
+		assert.Contains(t, logger.warns[0], txHash.String())
+		assert.Contains(t, logger.warns[0], parentHash.String())
+
+		mockStore.AssertExpectations(t)
+	})
 }

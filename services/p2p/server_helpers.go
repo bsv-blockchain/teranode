@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -156,6 +157,27 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 	// their subtrees directly over HTTP (not via the gossip subtree handler), so
 	// the reputation filter retained in handleSubtreeTopic does not affect catchup.
 
+	// Suppress replayed announcements before the Kafka publish (issue: gossip
+	// ingest amplification). GossipSub only dedups on message ID (sender +
+	// seqno), so byte-identical announcements with fresh seqnos arrive as new
+	// messages, and each publish below is amplified downstream into gRPC
+	// round-trips, a store lookup and a peer-controlled HTTP fetch. Only the
+	// first few DISTINCT announcers per hash are published per window, keeping
+	// block validation's alternative-source failover fed; the peer bookkeeping
+	// above still ran, so registry state and ban attribution stay fresh for
+	// suppressed announcements. A peer that keeps re-announcing the same hash
+	// is surfaced to the operator once per threshold-multiple of repeats —
+	// deliberately not auto-scored, see seenHashRepeatWarnThreshold.
+	publish, peerRepeats := s.blockSeenHashes.Check(hash.String(), fromID, now)
+	if peerRepeats > 0 && peerRepeats%seenHashRepeatWarnThreshold == 0 {
+		s.logger.Warnf("[handleBlockTopic] peer %s re-announced block %s %d times within the seen-hash TTL", fromID, hash.String(), peerRepeats)
+	}
+
+	if !publish {
+		s.logger.Debugf("[handleBlockTopic] suppressing duplicate announcement of block %s from peer %s", hash.String(), fromID)
+		return
+	}
+
 	// Always send block to kafka - let block validation service decide what to do based on sync state
 	// send block to kafka, if configured
 	if s.blocksKafkaProducerClient != nil {
@@ -169,14 +191,26 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, fromID string) 
 
 		value, err := proto.Marshal(msg)
 		if err != nil {
+			s.blockSeenHashes.PublishFailed(hash.String(), fromID)
 			s.logger.Errorf("[handleBlockTopic] error marshaling KafkaBlockTopicMessage: %v", err)
 			return
 		}
 
-		s.blocksKafkaProducerClient.Publish(&kafka.Message{
+		// Non-blocking publish: a blocking send here would let broker
+		// backpressure stall the whole gossip worker pool. On a drop, return
+		// the publish grant so a later announcement of the hash can retry.
+		if !s.blocksKafkaProducerClient.TryPublish(&kafka.Message{
 			Key:   []byte(hash.String()),
 			Value: value,
-		})
+		}) {
+			s.blockSeenHashes.PublishFailed(hash.String(), fromID)
+			gossipPublishDropped("block")
+			s.logger.Debugf("[handleBlockTopic] kafka blocks producer backlogged, dropped announcement of block %s from peer %s", hash.String(), fromID)
+		}
+	} else {
+		// No producer configured: nothing was published, so return the grant
+		// to keep the accounting honest.
+		s.blockSeenHashes.PublishFailed(hash.String(), fromID)
 	}
 }
 
@@ -286,6 +320,20 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 	s.storePeerMapEntry(&s.subtreePeerMap, hash.String(), fromID, now)
 	s.logger.Debugf("[handleSubtreeTopic] storing peer %s for subtree %s", fromID, subtreeMessage.Hash)
 
+	// Suppress replayed announcements before the Kafka publish, mirroring
+	// handleBlockTopic. The check sits AFTER the unhealthy-peer gate above so
+	// an announcement that gate drops does not mark the hash seen and thereby
+	// suppress a later, healthy announcement of the same subtree.
+	publish, peerRepeats := s.subtreeSeenHashes.Check(hash.String(), fromID, now)
+	if peerRepeats > 0 && peerRepeats%seenHashRepeatWarnThreshold == 0 {
+		s.logger.Warnf("[handleSubtreeTopic] peer %s re-announced subtree %s %d times within the seen-hash TTL", fromID, hash.String(), peerRepeats)
+	}
+
+	if !publish {
+		s.logger.Debugf("[handleSubtreeTopic] suppressing duplicate announcement of subtree %s from peer %s", hash.String(), fromID)
+		return
+	}
+
 	if s.subtreeKafkaProducerClient != nil { // tests may not set this
 		msg := &kafkamessage.KafkaSubtreeTopicMessage{
 			Hash:   hash.String(),
@@ -295,20 +343,31 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 
 		value, err := proto.Marshal(msg)
 		if err != nil {
+			s.subtreeSeenHashes.PublishFailed(hash.String(), fromID)
 			s.logger.Errorf("[handleSubtreeTopic] error marshaling KafkaSubtreeTopicMessage: %v", err)
 			return
 		}
 
-		s.subtreeKafkaProducerClient.Publish(&kafka.Message{
+		// Non-blocking publish, as in handleBlockTopic: drop under producer
+		// backpressure and return the grant so a later announcement can retry.
+		if !s.subtreeKafkaProducerClient.TryPublish(&kafka.Message{
 			Key:   []byte(hash.String()),
 			Value: value,
-		})
+		}) {
+			s.subtreeSeenHashes.PublishFailed(hash.String(), fromID)
+			gossipPublishDropped("subtree")
+			s.logger.Debugf("[handleSubtreeTopic] kafka subtrees producer backlogged, dropped announcement of subtree %s from peer %s", hash.String(), fromID)
+		}
+	} else {
+		// No producer configured (tests): return the grant to keep the
+		// accounting honest.
+		s.subtreeSeenHashes.PublishFailed(hash.String(), fromID)
 	}
 }
 
 // addProtocolViolation records a protocol violation against a peer.
 func (s *Server) addProtocolViolation(peerID string) {
-	s.applyBanScore(peerID, ReasonProtocolViolation)
+	_ = s.applyBanScore(peerID, ReasonProtocolViolation)
 }
 
 // isBlacklistedBaseURL checks the given baseURL against the operator-configured
@@ -441,6 +500,13 @@ func (s *Server) validateDataHubURL(urlStr string) error {
 	hostname := strings.ToLower(strings.TrimRight(parsed.Hostname(), "."))
 	if hostname == "" {
 		return errors.NewInvalidArgumentError("DataHubURL has no hostname")
+	}
+
+	// Every fetch joins protocol paths onto this URL, so it must be a clean base: a query
+	// would turn those paths into query data aimed at a path the peer chose (issue 4843).
+	// This is about shape, not address, so it applies even when private IPs are allowed.
+	if err := util.ValidatePeerBaseURL(urlStr); err != nil {
+		return errors.NewInvalidArgumentError("DataHubURL is not a usable base URL", err)
 	}
 
 	// Skip SSRF checks when private/localhost IPs are allowed (e.g. local dev with host networking)
@@ -926,8 +992,8 @@ func (s *Server) isBlockchainSyncingOrCatchingUp(ctx context.Context) (bool, err
 		}
 	}
 
-	if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS {
-		// ignore notifications while syncing or catching up
+	if *state != blockchain_api.FSMStateType_RUNNING {
+		// ignore notifications unless caught up (IDLE can follow a STOP mid-catchup)
 		return true, nil
 	}
 
@@ -953,6 +1019,15 @@ func (s *Server) cleanupPeerMaps() {
 	blockExpired := s.blockPeerMap.DeleteExpired(ttlCutoff)
 	subtreeExpired := s.subtreePeerMap.DeleteExpired(ttlCutoff)
 	s.reportedInvalidBlocks.DeleteExpired(ttlCutoff)
+
+	// Sweep the seen-hash caches too. They self-bound at insert and expire
+	// lazily on Check, so this only reclaims memory for hashes that stopped
+	// being announced.
+	seenBlockExpired := s.blockSeenHashes.DeleteExpired(now)
+	seenSubtreeExpired := s.subtreeSeenHashes.DeleteExpired(now)
+	if seenBlockExpired > 0 || seenSubtreeExpired > 0 {
+		s.logger.Infof("[cleanupPeerMaps] removed %d expired seen-block-hash entries, %d expired seen-subtree-hash entries", seenBlockExpired, seenSubtreeExpired)
+	}
 
 	// Evict expired reputationCache entries. shouldSkipUnhealthyPeer only ever
 	// inserts; without this sweep the map would grow once per unique peer ID
@@ -1037,8 +1112,8 @@ func (s *Server) cleanupPeerMaps() {
 	}
 
 	// Log current sizes
-	s.logger.Infof("[cleanupPeerMaps] current map sizes - blocks: %d, subtrees: %d",
-		s.blockPeerMap.Len(), s.subtreePeerMap.Len())
+	s.logger.Infof("[cleanupPeerMaps] current map sizes - blocks: %d, subtrees: %d, seen block hashes: %d, seen subtree hashes: %d",
+		s.blockPeerMap.Len(), s.subtreePeerMap.Len(), s.blockSeenHashes.Len(), s.subtreeSeenHashes.Len())
 }
 
 // startPeerMapCleanup starts the periodic cleanup goroutine

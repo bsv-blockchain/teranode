@@ -9,6 +9,7 @@ x-teranode-base:
     - ./settings_local.conf:/app/settings_local.conf
     - ${DATA_PATH}/teranode:/app/data
   environment:
+    grpc_admin_api_key: ${grpc_admin_api_key:?Set a shared random grpc_admin_api_key for all Teranode services}
     SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.m}
     USE_LOCAL_AEROSPIKE: true
     USE_LOCAL_POSTGRES: true

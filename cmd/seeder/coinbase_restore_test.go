@@ -68,7 +68,7 @@ func TestProcessUTXO_RestoresCoinbaseInputWhenFullyUnspent(t *testing.T) {
 	w := wrapperFromCoinbase(cb, txid, 5, []int{0, 1, 2})
 	coinbaseTxs := map[chainhash.Hash]*bt.Tx{*txid: cb}
 
-	require.NoError(t, processUTXO(ctx, store, w, coinbaseTxs))
+	require.NoError(t, processUTXO(ctx, store, w, coinbaseTxs, false))
 
 	got, err := store.Get(ctx, txid)
 	require.NoError(t, err)
@@ -97,7 +97,7 @@ func TestProcessUTXO_CoinbaseFallbackWhenPartiallySpent(t *testing.T) {
 	w := wrapperFromCoinbase(cb, txid, 5, []int{0, 1})
 	coinbaseTxs := map[chainhash.Hash]*bt.Tx{*txid: cb}
 
-	require.NoError(t, processUTXO(ctx, store, w, coinbaseTxs))
+	require.NoError(t, processUTXO(ctx, store, w, coinbaseTxs, false))
 
 	got, err := store.Get(ctx, txid)
 	require.NoError(t, err)

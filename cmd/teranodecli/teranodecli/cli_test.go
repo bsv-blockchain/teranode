@@ -172,3 +172,75 @@ func TestRewindblockchainRegistration(t *testing.T) {
 		require.Empty(t, fs.Args(), "a well-formed invocation leaves no positionals for the guard to reject")
 	})
 }
+
+// A stray positional must be rejected, not allowed to swallow the flags after
+// it (#1354). These drive parseCommandArgs, the path Start uses, so deleting
+// the check fails them; asserting only flag's own behaviour would not.
+func TestParseCommandArgsRejectsStrayPositionals(t *testing.T) {
+	t.Run("utxopersister: a stray positional would otherwise drop --end-height", func(t *testing.T) {
+		cmd := setupCommand("utxopersister")
+		endHeight := uint32Flag(cmd.FlagSet, "end-height", 0, "")
+
+		err := parseCommandArgs(cmd, []string{"stray", "--end-height", "300"})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "takes no positional arguments")
+		// The flag after the positional was never parsed: the reason to refuse.
+		require.Equal(t, uint32(0), *endHeight)
+	})
+
+	t.Run("flags alone still parse", func(t *testing.T) {
+		cmd := setupCommand("utxopersister")
+		endHeight := uint32Flag(cmd.FlagSet, "end-height", 0, "")
+
+		require.NoError(t, parseCommandArgs(cmd, []string{"--end-height", "300"}))
+		require.Equal(t, uint32(300), *endHeight)
+	})
+
+	t.Run("checkblock requires its block hash", func(t *testing.T) {
+		require.Error(t, parseCommandArgs(setupCommand("checkblock"), nil))
+		require.NoError(t, parseCommandArgs(setupCommand("checkblock"), []string{"000000abc"}))
+		require.Error(t, parseCommandArgs(setupCommand("checkblock"), []string{"000000abc", "--verbose"}))
+	})
+
+	t.Run("--help skips the check so usage is shown", func(t *testing.T) {
+		require.NoError(t, parseCommandArgs(setupCommand("checkblock"), []string{"--help"}))
+	})
+}
+
+// The expected counts are written out here, not read from positionalArgs, so a
+// wrong entry in the table fails the test instead of being checked against
+// itself. These are the documented invocations (docs/howto/*TeranodeCLI.md).
+func TestPositionalArgsMatchDocumentedUsage(t *testing.T) {
+	type counts struct{ min, max int }
+
+	expected := map[string]counts{
+		"filereader":        {0, 1}, // teranode-cli filereader [options] [path]
+		"aerospikereader":   {1, 1}, // teranode-cli aerospikereader <txid>
+		"checkblock":        {1, 1}, // teranode-cli checkblock <blockhash>
+		"reconsiderblock":   {1, 1}, // teranode-cli reconsiderblock <blockhash>
+		"validate-utxo-set": {1, 1}, // teranode-cli validate-utxo-set [--verbose] <utxo-set-file-path>
+	}
+
+	for name := range commandHelp {
+		want := expected[name] // every other command takes none
+
+		for n := 0; n <= 2; n++ {
+			args := make([]string, n)
+			for i := range args {
+				args[i] = "arg"
+			}
+
+			err := parseCommandArgs(setupCommand(name), args)
+			if n >= want.min && n <= want.max {
+				require.NoError(t, err, "%s with %d positional(s) must be accepted", name, n)
+			} else {
+				require.Error(t, err, "%s with %d positional(s) must be refused", name, n)
+			}
+		}
+	}
+
+	for name := range positionalArgs {
+		_, ok := commandHelp[name]
+		require.True(t, ok, "positionalArgs has %q, which is not a command", name)
+	}
+}

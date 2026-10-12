@@ -2,6 +2,7 @@ package settings
 
 import (
 	"encoding/json"
+	"net/url"
 	"reflect"
 	"regexp"
 	"strings"
@@ -147,20 +148,137 @@ func walkSensitiveCheck(t reflect.Type, missing *[]string) {
 // guard against accidentally removing the tag from a sensitive field.
 func TestSensitiveKeysDerivedMatchesExpected(t *testing.T) {
 	expected := map[string]bool{
-		"rpc_pass":                    true,
-		"rpc_limit_pass":              true,
-		"p2p_private_key":             true,
-		"coinbase_p2p_private_key":    true,
-		"alert_p2p_private_key":       true,
-		"coinbase_wallet_private_key": true,
-		"miner_wallet_private_keys":   true,
-		"coinbaseDBUserPwd":           true,
-		"slack_token":                 true,
-		"grpc_admin_api_key":          true,
+		"rpc_pass":                     true,
+		"rpc_limit_pass":               true,
+		"p2p_private_key":              true,
+		"coinbase_p2p_private_key":     true,
+		"alert_p2p_private_key":        true,
+		"coinbase_wallet_private_key":  true,
+		"miner_wallet_private_keys":    true,
+		"coinbaseDB":                   true,
+		"coinbaseDBUserPwd":            true,
+		"slack_token":                  true,
+		"grpc_admin_api_key":           true,
+		"blockpersister_httpAuthToken": true,
+		"blob_httpAuthToken":           true,
+		"asset_legacyPeerPoolToken":    true,
 	}
 
 	got := extractSensitiveKeys()
 	require.Equal(t, expected, got)
+}
+
+// TestRedactConfigStatsMasksSecrets pins the startup STATS dump: gocore masks only encrypted
+// values, so a redact-tagged key set in a settings file must be masked here.
+func TestRedactConfigStatsMasksSecrets(t *testing.T) {
+	in := strings.Join([]string{
+		"SETTINGS",
+		"--------",
+		"rpc_pass=rpc-secret",
+		"blockpersister_httpAuthToken[.docker]=server-secret",
+		"blob_httpAuthToken=client-secret",
+		"blockstore=file://./data/blockstore?a=b",
+		"",
+	}, "\n")
+
+	want := strings.Join([]string{
+		"SETTINGS",
+		"--------",
+		"rpc_pass=" + redactedValue,
+		"blockpersister_httpAuthToken[.docker]=" + redactedValue,
+		"blob_httpAuthToken=" + redactedValue,
+		"blockstore=file://./data/blockstore?a=b",
+		"",
+	}, "\n")
+
+	require.Equal(t, want, RedactConfigStats(in))
+}
+
+// TestRedactConfigMapMasksSecrets pins the CONFIG diagnostics payload: only sensitive keys are
+// masked, whatever their context suffix, and the caller's map is left alone.
+func TestRedactConfigMapMasksSecrets(t *testing.T) {
+	in := map[string]string{
+		"rpc_pass.docker":              "rpc-secret",
+		"blockpersister_httpAuthToken": "server-secret",
+		"_SETTINGS_CONTEXT":            "docker",
+		"blockstore":                   "file://./data/blockstore",
+	}
+
+	out := RedactConfigMap(in)
+
+	require.Equal(t, map[string]string{
+		"rpc_pass.docker":              redactedValue,
+		"blockpersister_httpAuthToken": redactedValue,
+		"_SETTINGS_CONTEXT":            "docker",
+		"blockstore":                   "file://./data/blockstore",
+	}, out)
+
+	require.Equal(t, "rpc-secret", in["rpc_pass.docker"], "the input map must not be mutated")
+	require.Equal(t, "server-secret", in["blockpersister_httpAuthToken"], "the input map must not be mutated")
+}
+
+// TestRedactConfigStatsMasksURLCredentials pins the STATS dump for credentials no key name can
+// flag: userinfo and credential query parameters inside a store URL are masked, the backend stays
+// identifiable, and a line with nothing to redact comes back byte for byte.
+func TestRedactConfigStatsMasksURLCredentials(t *testing.T) {
+	const (
+		plainLine  = "subtreestore=file://./data/subtreestore"
+		headerLine = "SETTINGS"
+	)
+
+	in := strings.Join([]string{
+		headerLine,
+		"blockchain_store=postgres://teranode:stats-db-secret@db.internal:5432/chain",
+		"utxostore[.docker]=aerospike://aero-user:stats-aero-secret@aerospike:3000/test?set=txmeta",
+		"kafka_url=kafka://broker:9092/topic?password=stats-kafka-secret&partitions=4",
+		plainLine,
+	}, "\n")
+
+	out := RedactConfigStats(in)
+
+	for _, secret := range []string{"stats-db-secret", "stats-aero-secret", "stats-kafka-secret"} {
+		require.NotContainsf(t, out, secret, "URL credential %q leaked into the STATS dump", secret)
+	}
+
+	for _, backend := range []string{"db.internal:5432", "aerospike:3000", "partitions=4"} {
+		require.Containsf(t, out, backend, "the backend must stay identifiable: %q", backend)
+	}
+
+	lines := strings.Split(out, "\n")
+	require.Len(t, lines, 5)
+	require.Equal(t, headerLine, lines[0])
+	require.Equal(t, "blockchain_store=postgres://teranode:REDACTED@db.internal:5432/chain", lines[1])
+	require.Equal(t, plainLine, lines[4])
+}
+
+// TestRedactConfigMapMasksURLCredentials pins the CONFIG diagnostics payload for URL credentials:
+// they are masked in the copy, a URL with nothing to redact is copied unchanged, and the caller's
+// map still holds the original values.
+func TestRedactConfigMapMasksURLCredentials(t *testing.T) {
+	const (
+		postgresURL  = "postgres://teranode:map-db-secret@db.internal:5432/chain"
+		aerospikeURL = "aerospike://aero-user:map-aero-secret@aerospike:3000/test?set=txmeta"
+		blockstore   = "file://./data/blockstore"
+	)
+
+	in := map[string]string{
+		"blockchain_store.docker": postgresURL,
+		"utxostore":               aerospikeURL,
+		"blockstore":              blockstore,
+	}
+
+	out := RedactConfigMap(in)
+
+	for k, v := range out {
+		for _, secret := range []string{"map-db-secret", "map-aero-secret"} {
+			require.NotContainsf(t, v, secret, "URL credential %q leaked into CONFIG key %q", secret, k)
+		}
+	}
+
+	require.Equal(t, blockstore, out["blockstore"])
+
+	require.Equal(t, postgresURL, in["blockchain_store.docker"], "the input map must not be mutated")
+	require.Equal(t, aerospikeURL, in["utxostore"], "the input map must not be mutated")
 }
 
 func TestRedactPreservesNonSecretFields(t *testing.T) {
@@ -200,4 +318,90 @@ func TestRedactPreservesNonSecretFields(t *testing.T) {
 
 	// Secret value does not survive.
 	require.NotContains(t, js, sentinelSecret, "secret UserPwd value leaked through redaction")
+}
+
+// TestRedact_URLCredentialsDoNotSurviveJSONRoundTrip covers the settings JSON dump in the startup
+// log (bitcoin-sv/teranode#4844), which takes a different route to the same data than the settings
+// portal does: a JSON clone, then the tag-driven walker. The STATS block that PrintSettings logs
+// first comes from gocore and is covered separately, by RedactConfigStats.
+//
+// The two credential positions in a URL behaved differently before the fix. The userinfo PASSWORD
+// vanished by accident, because url.Userinfo's fields are all unexported and json.Marshal emits
+// `{}` for it - leaving behind a non-nil empty Userinfo that URL.String() renders as a stray
+// "//@host". RawQuery, by contrast, is an exported string, so a credential carried as a query
+// parameter survived the round-trip intact and was logged. Both are now handled structurally.
+func TestRedact_URLCredentialsDoNotSurviveJSONRoundTrip(t *testing.T) {
+	const marker = "audit-secret-marker"
+
+	storeURL, err := url.Parse("postgres://audit-user:" + marker + "@db.internal:5432/chain?password=" + marker + "&partitions=4")
+	require.NoError(t, err)
+
+	in := &Settings{}
+	in.BlockChain.StoreURL = storeURL
+
+	out, err := Redact(in)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	data, err := json.Marshal(out)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), marker, "a URL credential leaked into the settings dump")
+
+	require.NotNil(t, out.BlockChain.StoreURL)
+
+	rendered := out.BlockChain.StoreURL.String()
+	require.NotContains(t, rendered, marker)
+	require.Contains(t, rendered, "db.internal:5432", "the backend must stay identifiable")
+	require.NotContains(t, rendered, "//@", "the empty userinfo the JSON round-trip leaves behind must be dropped")
+
+	// The caller's settings are untouched: these are live values the store constructors use.
+	require.Contains(t, in.BlockChain.StoreURL.String(), marker,
+		"Redact works on a clone and must never mutate the input")
+
+	// URL.Opaque is an exported string too, so a credential in the undecomposable
+	// `scheme:opaque` form survives the JSON round-trip just as RawQuery does. It is the same
+	// fail-safe here as in the settings portal.
+	opaque, err := url.Parse("postgres:audit-user:" + marker + "@db.internal:5432/chain")
+	require.NoError(t, err)
+	require.NotEmpty(t, opaque.Opaque, "fixture precondition: the URL is opaque")
+
+	opaqueIn := &Settings{}
+	opaqueIn.BlockChain.StoreURL = opaque
+
+	opaqueOut, err := Redact(opaqueIn)
+	require.NoError(t, err)
+
+	opaqueData, err := json.Marshal(opaqueOut)
+	require.NoError(t, err)
+	require.NotContains(t, string(opaqueData), marker, "an opaque URL credential leaked into the settings dump")
+}
+
+// TestRedact_CoinbaseDBPasswordRedacted is a regression for bitcoin-sv/teranode#4844: the settings
+// JSON in the startup log printed Coinbase.DB, a connection string held as a plain string, with its
+// password.
+func TestRedact_CoinbaseDBPasswordRedacted(t *testing.T) {
+	in := &Settings{}
+	in.Coinbase.DB = "postgres://user:supersecret@host:5432/coinbase"
+
+	out, err := Redact(in)
+	require.NoError(t, err)
+
+	data, err := json.Marshal(out)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "supersecret")
+}
+
+// TestRedact_StringURLFieldRedacted is a regression for bitcoin-sv/teranode#4844: an UNTAGGED
+// string setting holding a URL with credentials is redacted structurally, so the rule does not
+// depend on the field's Go type or on someone remembering the tag.
+func TestRedact_StringURLFieldRedacted(t *testing.T) {
+	in := &Settings{}
+	in.Advertising.URL = "https://u:secret@x"
+
+	out, err := Redact(in)
+	require.NoError(t, err)
+
+	data, err := json.Marshal(out)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "secret")
 }

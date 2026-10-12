@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/daemon"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/test"
@@ -200,8 +201,10 @@ func TestPrunerParentNotDeletedBeforeChildren(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("Current height: %d (child1 DAH ~%d)", meta.Height, grandchildMinedHeight+blockHeightRetention)
 
-	// Wait for the pruner to complete a cycle before asserting what survived.
-	node.WaitForPruner(t, 15*time.Second)
+	// Wait for the pruner to complete a cycle covering at least the current height,
+	// so a stale completion queued from an earlier (already-superseded) prune cycle
+	// can't satisfy the wait before the relevant pruning has actually happened.
+	node.WaitForPruner(t, 15*time.Second, meta.Height)
 
 	// ========== Verify: Parent must NOT be deleted ==========
 	// The parent still has output 4 unspent, and child2 is not fully spent.
@@ -384,13 +387,16 @@ func TestPrunerParentFullySpentNotDeletedBeforeChildren(t *testing.T) {
 	PrintRawTx(t, "Raw parentTx", rawParentTx.(map[string]interface{}))
 
 	triggerBlock := node.MineAndWait(t, 1)
-	node.MineAndWait(t, 2)
+	lastBlock := node.MineAndWait(t, 2)
 
 	err = node.WaitForBlockPersisted(triggerBlock.Hash(), 10*time.Second)
 	require.NoError(t, err)
 
-	node.WaitForPruner(t, 10*time.Second)
+	// Wait for the pruner to complete a cycle covering at least the current height,
+	// so a stale completion queued from an earlier (already-superseded) prune cycle
+	// can't satisfy the wait before the parent's deletion has actually happened.
+	node.WaitForPruner(t, 10*time.Second, lastBlock.Height)
 
 	_, err = node.UtxoStore.Get(node.Ctx, parentHash)
-	require.Error(t, err)
+	require.ErrorIs(t, err, errors.ErrTxNotFound)
 }

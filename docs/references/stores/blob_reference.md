@@ -18,16 +18,19 @@ type HTTPBlobServer struct {
     store Store
     // logger provides structured logging for server operations
     logger ulogger.Logger
+    // authToken is the shared secret a caller must present to mutate the store
+    authToken string
 }
 ```
 
 #### Constructor
 
 ```go
-func NewHTTPBlobServer(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (*HTTPBlobServer, error)
+func NewHTTPBlobServer(logger ulogger.Logger, storeURL *url.URL, authToken string, opts ...options.StoreOption) (*HTTPBlobServer, error)
 ```
 
-Creates a new `HTTPBlobServer` instance with the provided logger and store URL.
+Creates a new `HTTPBlobServer` instance with the provided logger, store URL and shared secret.
+An empty `authToken` leaves the server read-only: every mutating request is refused with 401.
 
 #### Methods
 
@@ -147,11 +150,26 @@ The service exposes the following HTTP endpoints:
 - `GET /health`: Check the health status of the service.
 - `HEAD /blob/{key}.{fileType}`: Check if a blob exists.
 - `GET /blob/{key}.{fileType}`: Retrieve a blob (supports Range headers for partial content).
-- `POST /blob/{key}.{fileType}`: Store a new blob.
+- `POST /blob/{key}.{fileType}`: Store a blob; replaces an existing one only for an authenticated request that sets `allowOverwrite=true`.
 - `PATCH /blob/{key}.{fileType}`: Set the delete-at-height (DAH) value for a blob via `dah` query parameter.
 - `DELETE /blob/{key}.{fileType}`: Delete a blob.
 
 Note: `{key}` is a base64-encoded blob identifier and `{fileType}` is the file extension corresponding to the blob type.
+
+`POST`, `PATCH` and `DELETE` change the store, so they require an `Authorization: Bearer <token>`
+header matching the server's configured shared secret. With no secret configured the server is
+read-only and refuses all three with 401. `GET`, `HEAD` and `/health` need no credential.
+
+The HTTP blob client (`stores/blob/http`) supplies that token from `options.WithHTTPAuthToken`,
+or, when the option is not given, from the `blob_httpAuthToken` setting. It sends it only on
+`POST`, `PATCH` and `DELETE`, and refuses to follow any redirect, so the token never leaves for
+a destination the caller did not choose. Never put the token in the store URL: a URL carrying an
+`authToken` query parameter is rejected.
+
+`POST` replaces an existing blob only when the request sets `allowOverwrite=true` **and** carries
+the matching token. The HTTP client sends it for `options.WithAllowOverwrite(true)`. Otherwise an
+existing blob is answered 409, which the client returns as `ErrBlobAlreadyExists`. A 401 is
+returned as a configuration error.
 
 ## Key Features
 
@@ -171,9 +189,10 @@ The service uses HTTP status codes to indicate the result of operations:
 - 204 No Content: Blob successfully deleted
 - 206 Partial Content: Range request successfully processed
 - 400 Bad Request: Invalid input
+- 401 Unauthorized: POST, PATCH or DELETE without the matching token
 - 404 Not Found: Blob not found
 - 405 Method Not Allowed: Unsupported HTTP method
-- 409 Conflict: Blob already exists
+- 409 Conflict: Blob already exists and no authenticated overwrite was requested
 - 500 Internal Server Error: Server-side error
 
 ## Key Functions
@@ -182,7 +201,7 @@ The service uses HTTP status codes to indicate the result of operations:
 - `handleExists`: Checks if a blob exists.
 - `handleGet`: Retrieves a blob, including support for range requests.
 - `handleRangeRequest`: Processes partial content requests using the Range header.
-- `handleSet`: Stores a new blob.
+- `handleSet`: Stores a blob; replaces an existing one only for an authenticated request that sets `allowOverwrite=true`.
 - `handleSetDAH`: Sets the delete-at-height value for a blob.
 - `handleDelete`: Deletes a blob.
 

@@ -70,6 +70,34 @@ func TestGetBlocksSubtreesNotSet(t *testing.T) {
 		assert.Equal(t, block2.Hash().String(), blocks[0].Hash().String())
 	})
 
+	t.Run("excludes invalid blocks with subtrees_set=false", func(t *testing.T) {
+		// storeInvalidBlock (blockvalidation) persists a rejected block this way: subtrees_set
+		// stays false (default) and invalid is set true. Its subtree files are usually never
+		// written, so without this exclusion the block would never leave this result set and
+		// blockvalidation's periodic sweep would re-fetch and re-warn about it forever.
+		logger := ulogger.TestLogger{}
+		dbURL, err := url.Parse("sqlitememory:///")
+		require.NoError(t, err)
+
+		subStore, err := New(logger, dbURL, settings.NewSettings())
+		require.NoError(t, err)
+		defer subStore.Close(context.Background())
+
+		// A valid block with subtrees_set=false, so the exclusion under test is provably the
+		// "invalid" filter and not an empty result set.
+		_, _, err = subStore.StoreBlock(context.Background(), block1, "test", options.WithSubtreesSet(false))
+		require.NoError(t, err)
+
+		// An invalid block with subtrees_set=false - the case this test protects.
+		_, _, err = subStore.StoreBlock(context.Background(), block2, "test", options.WithInvalid(true))
+		require.NoError(t, err)
+
+		blocks, err := subStore.GetBlocksSubtreesNotSet(context.Background())
+		require.NoError(t, err)
+		require.Len(t, blocks, 1)
+		require.Equal(t, block1.Hash().String(), blocks[0].Hash().String())
+	})
+
 	t.Run("returns blocks ordered by height ascending", func(t *testing.T) {
 		logger := ulogger.TestLogger{}
 		dbURL, err := url.Parse("sqlitememory:///")

@@ -94,3 +94,192 @@ func TestAssetSettings_LoaderReadsAllRateLimitKeys(t *testing.T) {
 		})
 	}
 }
+
+// TestAssetSettings_BatchAndResponseBudgets is the P0 prep PR guard: every new
+// admission-budget key added ahead of the follow-up security PRs must (a) parse
+// into the struct via NewSettings(), the same class of bug as above, and (b)
+// default to today's behaviour (unlimited/fail-open/verbose) so this PR is a
+// pure no-op at runtime.
+func TestAssetSettings_BatchAndResponseBudgets(t *testing.T) {
+	t.Run("defaults preserve current behaviour", func(t *testing.T) {
+		s := NewSettings()
+
+		// asset_maxBatchRecords is the one exception in this group: it now
+		// defaults to a non-zero, enforced value (see its longdesc).
+		require.Equal(t, 16384, s.Asset.MaxBatchRecords)
+		require.Equal(t, int64(0), s.Asset.MaxBatchResponseBytes)
+		require.Equal(t, 0, s.Asset.MaxUTXOsPerTx)
+		require.Equal(t, 0, s.Asset.MaxBlockHeaders)
+		require.Equal(t, 0, s.Asset.MaxLastNBlocks)
+		require.Equal(t, 0, s.Asset.MaxNBlocks)
+		// Deliberately NOT behaviour-preserving, unlike every other key here. No
+		// default credential pair ships any more, so failing open would leave the
+		// admin routes anonymous on a stock config - strictly worse than before.
+		require.True(t, s.Asset.RequireAuthCredentials)
+
+		require.False(t, s.Asset.SecureCookies)
+		require.Equal(t, "", s.Asset.CORSAllowOrigins)
+		require.False(t, s.Asset.EnforcePostAuth)
+		require.Equal(t, 0, s.Asset.MaxWebsocketConnections)
+		require.Equal(t, 0, s.Asset.MaxWebsocketConnectionsPerIP)
+		require.Equal(t, int64(0), s.Asset.WebsocketReadLimit)
+		require.Equal(t, 0, s.Asset.SubtreeStreamConcurrency)
+		require.True(t, s.Asset.PublicErrorDetail)
+		require.True(t, s.Asset.PublicHealthDetail)
+		require.False(t, s.Asset.HealthStrictStatus)
+		require.True(t, s.Asset.PublicPeersDetail)
+		require.True(t, s.Asset.TxMetaRawEnabled)
+		require.Equal(t, 0, s.Asset.MaxBlockGraphPoints)
+	})
+
+	type kv struct {
+		key      string
+		override string
+		check    func(t *testing.T, s *Settings)
+	}
+
+	cases := []kv{
+		{"asset_maxBatchRecords", "5000", func(t *testing.T, s *Settings) {
+			require.Equal(t, 5000, s.Asset.MaxBatchRecords)
+		}},
+		{"asset_maxBatchResponseBytes", "104857600", func(t *testing.T, s *Settings) {
+			require.Equal(t, int64(104857600), s.Asset.MaxBatchResponseBytes)
+		}},
+		{"asset_maxUTXOsPerTx", "1000", func(t *testing.T, s *Settings) {
+			require.Equal(t, 1000, s.Asset.MaxUTXOsPerTx)
+		}},
+		{"asset_maxBlockHeaders", "2000", func(t *testing.T, s *Settings) {
+			require.Equal(t, 2000, s.Asset.MaxBlockHeaders)
+		}},
+		{"asset_maxLastNBlocks", "500", func(t *testing.T, s *Settings) {
+			require.Equal(t, 500, s.Asset.MaxLastNBlocks)
+		}},
+		{"asset_maxNBlocks", "500", func(t *testing.T, s *Settings) {
+			require.Equal(t, 500, s.Asset.MaxNBlocks)
+		}},
+		{"asset_requireAuthCredentials", "false", func(t *testing.T, s *Settings) {
+			require.False(t, s.Asset.RequireAuthCredentials)
+		}},
+		{"asset_secureCookies", "true", func(t *testing.T, s *Settings) {
+			require.True(t, s.Asset.SecureCookies)
+		}},
+		{"asset_corsAllowOrigins", "https://dashboard.example.com", func(t *testing.T, s *Settings) {
+			require.Equal(t, "https://dashboard.example.com", s.Asset.CORSAllowOrigins)
+		}},
+		{"asset_enforcePostAuth", "true", func(t *testing.T, s *Settings) {
+			require.True(t, s.Asset.EnforcePostAuth)
+		}},
+		{"asset_maxWebsocketConnections", "250", func(t *testing.T, s *Settings) {
+			require.Equal(t, 250, s.Asset.MaxWebsocketConnections)
+		}},
+		{"asset_maxWebsocketConnectionsPerIP", "4", func(t *testing.T, s *Settings) {
+			require.Equal(t, 4, s.Asset.MaxWebsocketConnectionsPerIP)
+		}},
+		{"asset_websocketReadLimit", "1048576", func(t *testing.T, s *Settings) {
+			require.Equal(t, int64(1048576), s.Asset.WebsocketReadLimit)
+		}},
+		{"asset_subtreeStreamConcurrency", "8", func(t *testing.T, s *Settings) {
+			require.Equal(t, 8, s.Asset.SubtreeStreamConcurrency)
+		}},
+		{"asset_publicErrorDetail", "false", func(t *testing.T, s *Settings) {
+			require.False(t, s.Asset.PublicErrorDetail)
+		}},
+		{"asset_publicHealthDetail", "false", func(t *testing.T, s *Settings) {
+			require.False(t, s.Asset.PublicHealthDetail)
+		}},
+		{"asset_healthStrictStatus", "true", func(t *testing.T, s *Settings) {
+			require.True(t, s.Asset.HealthStrictStatus)
+		}},
+		{"asset_publicPeersDetail", "false", func(t *testing.T, s *Settings) {
+			require.False(t, s.Asset.PublicPeersDetail)
+		}},
+		{"asset_txMetaRawEnabled", "false", func(t *testing.T, s *Settings) {
+			require.False(t, s.Asset.TxMetaRawEnabled)
+		}},
+		{"asset_maxBlockGraphPoints", "3000", func(t *testing.T, s *Settings) {
+			require.Equal(t, 3000, s.Asset.MaxBlockGraphPoints)
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			gocore.Config().Set(tc.key, tc.override)
+			t.Cleanup(func() { gocore.Config().Set(tc.key, "") })
+
+			s := NewSettings()
+			tc.check(t, s)
+		})
+	}
+}
+
+// TestAssetSettings_ConcurrencyGetLegacyBlockReaderPeer covers the peer-pool
+// counterpart to asset_concurrency_get_legacy_block_reader: same default and
+// independently settable, so the anonymous and internal legacy-peer pools can be
+// sized separately. Both default to 0 (unlimited): the permit is held for the
+// whole stream, so a NumCPU default would make a stock node serving IBD to more
+// SV peers than it has cores fail block requests, which the pre-hardening code
+// never did. The cap is opt-in.
+func TestAssetSettings_ConcurrencyGetLegacyBlockReaderPeer(t *testing.T) {
+	t.Run("defaults to 0 (unlimited, opt-in cap) for both pools", func(t *testing.T) {
+		s := NewSettings()
+
+		require.Equal(t, 0, s.Asset.ConcurrencyGetLegacyBlockReader)
+		require.Equal(t, 0, s.Asset.ConcurrencyGetLegacyBlockReaderPeer)
+	})
+
+	t.Run("is settable independently of the anonymous pool", func(t *testing.T) {
+		gocore.Config().Set("asset_concurrency_get_legacy_block_reader_peer", "8")
+		t.Cleanup(func() { gocore.Config().Set("asset_concurrency_get_legacy_block_reader_peer", "") })
+
+		s := NewSettings()
+
+		require.Equal(t, 8, s.Asset.ConcurrencyGetLegacyBlockReaderPeer)
+		require.Equal(t, 0, s.Asset.ConcurrencyGetLegacyBlockReader)
+	})
+}
+
+// TestAssetSettings_LegacyPeerPoolToken covers the shared secret gating
+// asset_concurrency_get_legacy_block_reader_peer: empty by default (today's
+// single-pool behaviour), and settable.
+func TestAssetSettings_LegacyPeerPoolToken(t *testing.T) {
+	t.Run("defaults to empty", func(t *testing.T) {
+		s := NewSettings()
+
+		require.Equal(t, "", s.Asset.LegacyPeerPoolToken)
+	})
+
+	t.Run("is settable", func(t *testing.T) {
+		gocore.Config().Set("asset_legacyPeerPoolToken", "a-shared-secret")
+		t.Cleanup(func() { gocore.Config().Set("asset_legacyPeerPoolToken", "") })
+
+		s := NewSettings()
+
+		require.Equal(t, "a-shared-secret", s.Asset.LegacyPeerPoolToken)
+	})
+}
+
+// TestAssetMaxNBlocksFloor pins the floor on asset_maxNBlocks: the peer catchup
+// client (services/blockvalidation/get_blocks.go) fetches blocks in batches of
+// blockvalidation_fetch_large_batch_size (default 100) and treats a shorter batch
+// as a hard error ("expected %d blocks, got %d"), not a short read. A configured
+// cap below that batch size breaks every batch of catchup from this node, so a
+// value below 100 is raised to it rather than honoured.
+func TestAssetMaxNBlocksFloor(t *testing.T) {
+	t.Run("default of 0 means uncapped and is left alone", func(t *testing.T) {
+		require.Equal(t, 0, NewSettings().Asset.MaxNBlocks)
+	})
+
+	t.Run("a configured value below the floor is raised to it", func(t *testing.T) {
+		gocore.Config().Set("asset_maxNBlocks", "10")
+		defer gocore.Config().Unset("asset_maxNBlocks")
+
+		require.Equal(t, 100, NewSettings().Asset.MaxNBlocks)
+	})
+
+	t.Run("a configured value at or above the floor is honoured", func(t *testing.T) {
+		gocore.Config().Set("asset_maxNBlocks", "250")
+		defer gocore.Config().Unset("asset_maxNBlocks")
+
+		require.Equal(t, 250, NewSettings().Asset.MaxNBlocks)
+	})
+}

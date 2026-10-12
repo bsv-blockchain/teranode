@@ -88,12 +88,7 @@ func TestSubtreeStreamingHeadOfLineBackpressure(t *testing.T) {
 	txs[0] = coinbase
 
 	for i := 1; i <= numTxs; i++ {
-		txs[i] = &bt.Tx{
-			Version:  uint32(i), //nolint:gosec
-			LockTime: uint32(i), //nolint:gosec
-			Inputs:   []*bt.Input{},
-			Outputs:  []*bt.Output{},
-		}
+		txs[i] = uniqueStreamTestTx(t, i)
 	}
 
 	testParams := blockInfo{

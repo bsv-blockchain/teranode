@@ -190,9 +190,8 @@ func (h *txmetaE2EHarness) close() {
 	_ = h.producer.Stop()
 	_ = h.consumer.Close()
 	h.cancel()
-	// Release the broker-side retained-messages buffer; otherwise the
-	// shared singleton pins everything we produced for the lifetime of
-	// the test process.
+	// Remove the topic and its consumer channels from the shared singleton
+	// broker so later tests in this process do not see them.
 	inmemkafka.GetSharedBroker().DropTopic(h.topic)
 }
 

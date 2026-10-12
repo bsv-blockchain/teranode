@@ -2,6 +2,11 @@ global:
   scrape_interval: 30s
   evaluation_interval: 30s
 
+# Alert rules are mounted into /etc/prometheus by the compose file for this
+# stack; the canonical copy lives in deploy/docker/base/blockassembly.rules.yml.
+rule_files:
+  - 'blockassembly.rules.yml'
+
 scrape_configs:
   # - job_name: "prometheus"
   #   static_configs:

@@ -591,6 +591,38 @@ func TestPublishInvalidSubtree(t *testing.T) {
 		require.True(t, publishCalled) // With nil blockchain client, message should be published
 	})
 
+	t.Run("publishes only in RUNNING", func(t *testing.T) {
+		// IDLE is suppressed: an operator STOP can land while catchup is running.
+		for _, tt := range []struct {
+			state     blockchain.FSMStateType
+			published bool
+		}{
+			{blockchain.FSMStateRUNNING, true},
+			{blockchain.FSMStateCATCHINGBLOCKS, false},
+			{blockchain.FSMStateIDLE, false},
+		} {
+			t.Run(tt.state.String(), func(t *testing.T) {
+				state := tt.state
+				blockchainClient := &blockchain.Mock{}
+				blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+
+				publishCalled := false
+				server := &Server{
+					logger:           ulogger.TestLogger{},
+					blockchainClient: blockchainClient,
+					invalidSubtreeKafkaProducer: &mockKafkaAsyncProducer{
+						publishFunc: func(msg *kafka.Message) { publishCalled = true },
+					},
+					invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute),
+				}
+				defer server.invalidSubtreeDeDuplicateMap.Stop()
+
+				server.publishInvalidSubtree(context.Background(), "hash", "peer", "", "reason")
+				require.Equal(t, tt.published, publishCalled)
+			})
+		}
+	})
+
 	t.Run("successful publish", func(t *testing.T) {
 		var publishedMsg *kafka.Message
 		server := &Server{

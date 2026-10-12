@@ -6,6 +6,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestIsRetryableError(t *testing.T) {
@@ -37,6 +40,13 @@ func TestIsRetryableError(t *testing.T) {
 		{
 			name:     "connection refused",
 			err:      NewNetworkConnectionRefusedError("connection refused"),
+			expected: true,
+		},
+		{
+			// A 429 is the definitional retryable failure: the request was well
+			// formed and the server asked us to come back later.
+			name:     "service rate limited",
+			err:      NewServiceRateLimitedError("429 from peer"),
 			expected: true,
 		},
 		{
@@ -105,6 +115,11 @@ func TestIsTransientLocalError(t *testing.T) {
 		{name: "malicious peer - not local", err: NewNetworkPeerMaliciousError("bad header"), expected: false},
 		{name: "network timeout - not local", err: NewNetworkTimeoutError("timed out"), expected: false},
 		{name: "plain processing error - not local", err: NewProcessingError("invalid block"), expected: false},
+		// A remote peer rate-limiting us is a peer-side admission decision, not a
+		// fault in this node's stack. Including it here would let a 429 from a
+		// peer's asset service change netsync's peer-retention decisions.
+		{name: "service rate limited - remote, not local", err: NewServiceRateLimitedError("429 from peer"), expected: false},
+		{name: "wrapped service rate limited - remote, not local", err: NewProcessingError("outer", NewServiceRateLimitedError("429 from peer")), expected: false},
 	}
 
 	for _, tt := range tests {
@@ -360,6 +375,33 @@ func TestGetErrorCategory(t *testing.T) {
 			expected: "block",
 		},
 		{
+			// ERR_BLOCK_CORRUPT is inside the block range, but its rendered code name contains
+			// "corrupt", which the substring fallback in IsMaliciousResponseError matches — so
+			// without the dedicated early-out it would be attributed to "malicious" telemetry.
+			name:     "corrupt block body is categorised as block, not malicious",
+			err:      NewBlockCorruptError("corrupt body"),
+			expected: "block",
+		},
+		{
+			// The early-out must not over-reach: a genuinely malicious error still categorises
+			// as malicious.
+			name:     "network peer malicious error stays malicious",
+			err:      NewNetworkPeerMaliciousError("peer served junk"),
+			expected: "malicious",
+		},
+		{
+			// ERR_BLOCK_POLICY_DECLINED is 121, in the second block decade. This is what proves
+			// errorCodeCategory's 120-129 arm really covers 121 rather than the code merely being
+			// reasoned to be inside it. It ALSO pins the IsMaliciousResponseError substring check:
+			// "BLOCK_POLICY_DECLINED" contains none of that list's words, so unlike
+			// ERR_BLOCK_CORRUPT the decline needs no dedicated early-out to avoid being attributed
+			// to "malicious" — a category of "block" here is exactly that assertion, since
+			// IsMaliciousResponseError runs before the code-range lookup.
+			name:     "local policy decline is categorised as block, not malicious",
+			err:      NewBlockPolicyDeclinedError("block size exceeds excessiveblocksize"),
+			expected: "block",
+		},
+		{
 			name:     "transaction error",
 			err:      NewTxNotFoundError("tx missing"),
 			expected: "transaction",
@@ -379,7 +421,61 @@ func TestGetErrorCategory(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := GetErrorCategory(tt.err)
-			assert.Equal(t, tt.expected, result)
+			require.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestIsGRPCMessageTooLarge pins the predicate that separates a transport-level
+// oversized-message ResourceExhausted from a block-assembly queue-full shed, which
+// reuses the same gRPC code. Only the former is fixable by re-sending over HTTP, so
+// the two must not be conflated at any client site.
+func TestIsGRPCMessageTooLarge(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "non-status error",
+			err:      NewProcessingError("connection reset by peer"),
+			expected: false,
+		},
+		{
+			name:     "status error with a different code",
+			err:      status.Error(codes.Unavailable, "service unavailable"),
+			expected: false,
+		},
+		{
+			name:     "bare ResourceExhausted is an oversized message",
+			err:      status.Error(codes.ResourceExhausted, "grpc: received message larger than max"),
+			expected: true,
+		},
+		{
+			name:     "WrapGRPC of a threshold-exceeded shed",
+			err:      WrapGRPC(NewThresholdExceededError("block assembly queue full")),
+			expected: false,
+		},
+		{
+			name:     "WrapGRPCPublic of a threshold-exceeded shed",
+			err:      WrapGRPCPublic(NewThresholdExceededError("block assembly queue full")),
+			expected: false,
+		},
+		{
+			name:     "WrapGRPC of an unrelated error is not a size problem",
+			err:      WrapGRPC(NewProcessingError("something else went wrong")),
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, IsGRPCMessageTooLarge(tt.err))
 		})
 	}
 }

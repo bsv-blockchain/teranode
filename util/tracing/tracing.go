@@ -632,9 +632,19 @@ func (span *USpan) Stat() *gocore.Stat {
 
 // DecoupleTracingSpan creates a new context with the current span for decoupled tracing
 func DecoupleTracingSpan(ctx context.Context, name string, spanName string) (context.Context, trace.Span, func(...error)) {
-	// Fast path: if tracing is disabled, return immediately
+	// Fast path: if tracing is disabled, return immediately - still detached
+	// from the caller's cancellation, as the enabled path is (it builds on
+	// context.Background()). Callers decouple precisely so the work outlives
+	// a caller that gives up; that must not depend on a tracing setting. A
+	// context that can never be cancelled is returned as is, so a caller
+	// that already detached pays nothing more.
 	if !IsTracingEnabled() {
 		noopSpan := trace.SpanFromContext(ctx)
+
+		if ctx.Done() != nil {
+			ctx = context.WithoutCancel(ctx)
+		}
+
 		return ctx, noopSpan, func(...error) {
 			// no-op cleanup: tracing is disabled
 		}

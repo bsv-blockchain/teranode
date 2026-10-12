@@ -869,6 +869,11 @@ func (m *mockHealthClient) HealthGRPC(ctx context.Context, in *emptypb.Empty, op
 	return m.resp, m.err
 }
 
+// GetFSMCurrentState accepts the readiness key probe, as a server does for a matching key.
+func (m *mockHealthClient) GetFSMCurrentState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*blockchain_api.GetFSMStateResponse, error) {
+	return &blockchain_api.GetFSMStateResponse{State: blockchain_api.FSMStateType_RUNNING}, nil
+}
+
 type mockBlockClient struct {
 	blockchain_api.BlockchainAPIClient
 	responseGetBlock                             *blockchain_api.GetBlockResponse
@@ -1375,8 +1380,8 @@ func (m *Mock) CompleteBlobDeletions(ctx context.Context, completedIDs, failedID
 }
 
 // AcquireBlobDeletionBatch mocks the AcquireBlobDeletionBatch method
-func (m *Mock) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, timeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
-	args := m.Called(ctx, height, limit, timeoutSeconds)
+func (m *Mock) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, timeoutSeconds int, excludeStoreTypes []storetypes.BlobStoreType) (string, []*blockchain_api.ScheduledDeletion, error) {
+	args := m.Called(ctx, height, limit, timeoutSeconds, excludeStoreTypes)
 	if args.Error(2) != nil {
 		return "", nil, args.Error(2)
 	}
