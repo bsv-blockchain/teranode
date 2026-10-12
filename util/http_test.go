@@ -1482,6 +1482,11 @@ func TestDoHTTPRequestBodyReaderWithRetry_JittersRetryAfter(t *testing.T) {
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Record only our GETs: anything else probing the loopback port must not skew the gaps.
+		if r.Method != http.MethodGet {
+			return
+		}
+
 		mu.Lock()
 		times = append(times, time.Now())
 		n := len(times)
@@ -1539,6 +1544,10 @@ func TestDoHTTPRequestBodyReaderWithRetry_LadderSpendsAtMostHalfTheDeadline(t *t
 func TestDoHTTPRequestBodyReaderWithRetry_DeadlineAfterRejectionKeepsRejectionClass(t *testing.T) {
 	var attempts int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Count only our GETs: anything else probing the loopback port must not skew the count.
+		if r.Method != http.MethodGet {
+			return
+		}
 		if atomic.AddInt32(&attempts, 1) == 1 {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
@@ -1559,6 +1568,7 @@ func TestDoHTTPRequestBodyReaderWithRetry_DeadlineAfterRejectionKeepsRejectionCl
 	require.Equal(t, int32(2), atomic.LoadInt32(&attempts))
 	require.True(t, errors.Is(err, errors.ErrServiceRateLimited), "got %T: %v", err, err)
 	require.False(t, errors.IsContextError(err), "got %T: %v", err, err)
+	require.Contains(t, err.Error(), "still rejected after 1 attempts", "the attempt the deadline cut short got no answer and is not counted")
 }
 
 // A deadline with no rejection before it is an ordinary timeout and stays one.
@@ -1573,8 +1583,44 @@ func TestDoHTTPRequestBodyReaderWithRetry_DeadlineWithoutRejectionStaysContextEr
 
 	_, err := doHTTPRequestBodyReaderWithRetry(ctx, server.URL, testRetryConfig)
 	require.Error(t, err)
+	require.True(t, errors.IsContextError(err), "got %T: %v", err, err)
 	require.False(t, errors.Is(err, errors.ErrServiceRateLimited), "got %T: %v", err, err)
 	require.False(t, errors.Is(err, errors.ErrServiceUnavailable), "got %T: %v", err, err)
+}
+
+// A status the server did send is never relabelled: a 404 that follows a 429 stays a 404 even
+// when the deadline has also passed by the time it is returned.
+func TestDoHTTPRequestBodyReaderWithRetry_StatusAfterRejectionIsNotRelabelled(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Count only our GETs: anything else probing the loopback port must not skew the count.
+		if r.Method != http.MethodGet {
+			return
+		}
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		w.(http.Flusher).Flush()
+		// Hold the error body open past the caller's deadline, so the deadline has expired
+		// by the time the 404 is returned.
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	cfg := retryConfig{maxAttempts: 4, initialDelay: 10 * time.Millisecond, maxDelay: 50 * time.Millisecond}
+
+	// Long enough to outlast a signer's wait for the next second, if another test left one
+	// installed, so the 404 attempt is reached.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	_, err := doHTTPRequestBodyReaderWithRetry(ctx, server.URL, cfg)
+	require.Error(t, err)
+	require.Equal(t, int32(2), atomic.LoadInt32(&attempts))
+	require.True(t, errors.Is(err, errors.ErrNotFound), "got %T: %v", err, err)
+	require.False(t, errors.Is(err, errors.ErrServiceRateLimited), "got %T: %v", err, err)
 }
 
 func TestParseRetryAfter(t *testing.T) {

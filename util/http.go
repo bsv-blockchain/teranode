@@ -965,8 +965,8 @@ const maxHTTPErrorBodyDrainBytes = 64 * 1024
 // up to defaultRetryConfig.maxAttempts attempts, so its worst case is
 // maxAttempts x this budget — 6 x 250ms = 1.5s — reached only against a peer that
 // dribbles its error body on every one of the six attempts. Set that against the
-// ~7.75s of exponential backoff the same ladder already spends between those attempts
-// (250ms doubling, capped at 5s), and the added share is bounded enough that the
+// ~7.75s or more of exponential backoff the same ladder already spends between those
+// attempts (250ms doubling, capped at 5s, jittered upwards), and the added share is bounded enough that the
 // budget is deliberately not shortened: cutting it would trade away the connection
 // reuse the synchronous drain exists to buy.
 const maxHTTPErrorBodyDrainWait = 250 * time.Millisecond
@@ -1134,8 +1134,8 @@ var defaultRetryConfig = retryConfig{
 //   - Other errors (404, 500, network errors) are returned immediately — they are not
 //     transient admission rejections.
 //   - Backoff is exponential starting at 250ms, doubling, capped at 5s. Up to 6 attempts,
-//     so a server that never relents and never sends Retry-After costs ~7.75s of backoff
-//     before the final error.
+//     so a server that never relents and never sends Retry-After costs ~7.75s of backoff,
+//     plus jitter, before the final error.
 //   - Honors the server's Retry-After header on each rejection, replacing that attempt's
 //     ladder delay outright when the header value is <= maxDelay; a larger value is
 //     ignored and the ladder delay is used instead. Retry-After is not a ceiling on top
@@ -1202,18 +1202,18 @@ func doHTTPRequestWithRetry(ctx context.Context, url string, cfg retryConfig, ti
 		budgetEnd = time.Now().Add(time.Until(deadline) / 2)
 	}
 
-	attempts := 0
+	// rejections counts the 429/503 responses actually received, which is what the final
+	// error reports; an attempt cut short by the deadline is not one of them.
+	rejections := 0
 
 	for attempt := 1; attempt <= cfg.maxAttempts; attempt++ {
 		if attempt > 1 && signerSignsRequests(loadHTTPRequestSigner()) {
 			if err := waitOutRetrySecond(ctx, lastAttemptSecond); err != nil {
-				return nil, rejectionOrContextError(ctx, url, attempts, lastErr, err)
+				return nil, rejectionOrContextError(ctx, url, rejections, lastErr, 0, err)
 			}
 		}
 
-		attempts = attempt
-
-		body, retryAfter, err := doHTTPRequestWithRetryAfter(ctx, timeoutMs, url, requestBody...)
+		body, retryAfter, status, err := doHTTPRequestWithRetryAfter(ctx, timeoutMs, url, requestBody...)
 		// Read the clock after the attempt, not before it: the signer takes its
 		// timestamp while building the request, so a second that rolls over
 		// between a pre-attempt read and the signature would record S while the
@@ -1224,9 +1224,10 @@ func doHTTPRequestWithRetry(ctx context.Context, url string, cfg retryConfig, ti
 			return body, nil
 		}
 		if !errors.Is(err, errors.ErrServiceUnavailable) && !errors.Is(err, errors.ErrServiceRateLimited) {
-			return nil, rejectionOrContextError(ctx, url, attempts, lastErr, err)
+			return nil, rejectionOrContextError(ctx, url, rejections, lastErr, status, err)
 		}
 		lastErr = err
+		rejections++
 
 		if attempt == cfg.maxAttempts {
 			break
@@ -1247,7 +1248,7 @@ func doHTTPRequestWithRetry(ctx context.Context, url string, cfg retryConfig, ti
 
 		select {
 		case <-ctx.Done():
-			return nil, rejectionOrContextError(ctx, url, attempts, lastErr, ctx.Err())
+			return nil, rejectionOrContextError(ctx, url, rejections, lastErr, 0, ctx.Err())
 		case <-time.After(sleepFor):
 		}
 
@@ -1257,10 +1258,11 @@ func doHTTPRequestWithRetry(ctx context.Context, url string, cfg retryConfig, ti
 		}
 	}
 
-	return nil, rejectedError(url, attempts, lastErr)
+	return nil, rejectedError(url, rejections, lastErr)
 }
 
-// rejectedError is the error for a server that was still rejecting us when the ladder gave up.
+// rejectedError is the error for a server that was still rejecting us when the ladder gave up,
+// after attempts rejections.
 // It preserves the classification of the last rejection: collapsing a 429 into
 // ErrServiceUnavailable here would reintroduce exactly the local-vs-remote confusion the
 // separate code exists to avoid.
@@ -1274,12 +1276,14 @@ func rejectedError(url string, attempts int, lastErr error) error {
 }
 
 // rejectionOrContextError returns err, unless the caller's deadline ran out after the server
-// had already rejected us. Then the server's rejection is what used up the time, so that is
-// what is reported: a bare deadline reads as a local fault to catch-up, which would neither
-// fail over nor attribute it. A cancellation is ours and is returned as is.
-func rejectionOrContextError(ctx context.Context, url string, attempts int, lastErr, err error) error {
-	if lastErr != nil && ctx.Err() == context.DeadlineExceeded {
-		return rejectedError(url, attempts, lastErr)
+// had already rejected us and before it answered again. Then the server's rejection is what
+// used up the time, so that is what is reported: a bare deadline reads as a local fault to
+// catch-up, which would neither fail over nor attribute it. A cancellation is ours and is
+// returned as is, and so is any error carrying a status the server did send (status != 0):
+// a 404 or 500 must not be relabelled as a rate limit because the deadline also passed.
+func rejectionOrContextError(ctx context.Context, url string, rejections int, lastErr error, status int, err error) error {
+	if lastErr != nil && status == 0 && ctx.Err() == context.DeadlineExceeded {
+		return rejectedError(url, rejections, lastErr)
 	}
 
 	return err
@@ -1287,9 +1291,10 @@ func rejectionOrContextError(ctx context.Context, url string, attempts int, last
 
 // doHTTPRequestWithRetryAfter performs one attempt of the retry loop, applying timeoutMs
 // when ctx carries no deadline, and extracts the Retry-After header on non-OK responses.
-// The extraction is status-agnostic, so it covers 429 as well as 503. On success returns
-// (body, 0, nil).
-func doHTTPRequestWithRetryAfter(ctx context.Context, timeoutMs int, rawURL string, requestBody ...[]byte) (io.ReadCloser, time.Duration, error) {
+// The extraction is status-agnostic, so it covers 429 as well as 503. It also returns the
+// response status, or 0 when no response was received. On success returns
+// (body, 0, status, nil).
+func doHTTPRequestWithRetryAfter(ctx context.Context, timeoutMs int, rawURL string, requestBody ...[]byte) (io.ReadCloser, time.Duration, int, error) {
 	cancelFn := func() {}
 	if _, ok := ctx.Deadline(); !ok {
 		ctx, cancelFn = context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
@@ -1297,26 +1302,26 @@ func doHTTPRequestWithRetryAfter(ctx context.Context, timeoutMs int, rawURL stri
 
 	if err := ValidateURL(rawURL); err != nil {
 		cancelFn()
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
 	req, err := buildOutboundRequest(ctx, rawURL, requestBody...)
 	if err != nil {
 		cancelFn()
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		cancelFn()
-		return nil, 0, errors.NewServiceError("failed to do http request", err)
+		return nil, 0, 0, errors.NewServiceError("failed to do http request", err)
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
 		err := buildHTTPError(resp, rawURL)
 		cancelFn()
-		return nil, retryAfter, err
+		return nil, retryAfter, resp.StatusCode, err
 	}
 
 	ct := strings.ToLower(resp.Header.Get("content-type"))
@@ -1331,8 +1336,8 @@ func doHTTPRequestWithRetryAfter(ctx context.Context, timeoutMs int, rawURL stri
 
 		cancelFn()
 
-		return nil, 0, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", rawURL)
+		return nil, 0, resp.StatusCode, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", rawURL)
 	}
 
-	return &readCloserWithCancel{ReadCloser: resp.Body, cancelFn: cancelFn}, 0, nil
+	return &readCloserWithCancel{ReadCloser: resp.Body, cancelFn: cancelFn}, 0, resp.StatusCode, nil
 }

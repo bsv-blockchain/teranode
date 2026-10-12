@@ -1430,7 +1430,7 @@ func (u *Server) fetchBlocksBatch(ctx context.Context, hash *chainhash.Hash, n u
 
 	// Stream and parse incrementally rather than io.ReadAll-ing the whole response: a block
 	// carries no consensus-defined maximum size, so there is no byte cap to apply to the HTTP
-	// body as a whole (unlike fetchSubtreeFromPeer's DoHTTPRequestBounded). Streaming the parse
+	// body as a whole (unlike fetchSubtreeFromPeer's DoHTTPRequestBoundedWithRetry). Streaming the parse
 	// only halves peak memory versus io.ReadAll, though - it does not by itself bound anything,
 	// since the subtree hash list length is an unvalidated wire varint (model/Block.go) that the
 	// parse loop honours with no ceiling. Each block message is additionally capped below via
