@@ -4446,7 +4446,11 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 			s.logger.Warnf("[PreviousOutputsDecorate] missing parent output: child=%x input[%d] parent=%x vout=%d parentTxExists=%v",
 				tx.TxIDChainHash()[:], idx, parentHash[:], input.PreviousTxOutIndex, txExists)
 		}
-		return errors.NewProcessingError("failed to decorate previous outputs for tx %s", tx.TxIDChainHash())
+		// TX_NOT_FOUND, as the aerospike store reports the same miss. Callers key
+		// on it: sendrawtransaction answers it as "Missing inputs", and legacy
+		// sync's per-transaction fallback takes the same branch for it as it did
+		// for the PROCESSING this used to be.
+		return errors.NewTxNotFoundError("failed to decorate previous outputs for tx %s: parent output not found", tx.TxIDChainHash())
 	}
 
 	return nil

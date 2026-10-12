@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -20,7 +21,9 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -953,6 +956,31 @@ func TestHandleSendRawTransaction_MissingInputsIsNotALookupMiss(t *testing.T) {
 		"bitcoind and svnode both answer -25 for a submission with missing inputs")
 	require.NotEqual(t, bsvjson.ErrRPCInvalidAddressOrKey, rpcErr.Code,
 		"-5 tells a wallet the transaction does not exist and must not be retried")
+	require.Equal(t, "TX rejected: Missing inputs", rpcErr.Message)
+}
+
+// TestHandleSendRawTransaction_MissingInputsOnTheSQLStore is the same contract on
+// a real SQL-backed store rather than a stub. Aerospike reported the missing
+// parent as TX_NOT_FOUND and the SQL store as PROCESSING, so the same submission
+// answered "Missing inputs" on one backend and "internal error" on the other.
+func TestHandleSendRawTransaction_MissingInputsOnTheSQLStore(t *testing.T) {
+	ctx := context.Background()
+
+	storeURL, err := url.Parse("sqlitememory:///rpc_missing_inputs")
+	require.NoError(t, err)
+
+	store, err := utxosql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), storeURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close(ctx)) })
+
+	// buildSendRawTxCmd spends an outpoint this store has never seen.
+	s := newRPCServerForAbsurdFeeTest(t, 10_000_000, 100_000_000, acceptingValidator{})
+	s.utxoStore = store
+
+	_, err = handleSendRawTransaction(ctx, s, buildSendRawTxCmd(t, 99_999_000, nil), nil)
+
+	rpcErr := requireRPCError(t, err)
+	require.Equal(t, bsvjson.ErrRPCVerify, rpcErr.Code)
 	require.Equal(t, "TX rejected: Missing inputs", rpcErr.Message)
 }
 
