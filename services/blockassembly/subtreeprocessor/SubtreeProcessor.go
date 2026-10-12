@@ -7655,8 +7655,9 @@ func releaseLeafBuf(b []byte) {
 // slice or one whose existing contents they are willing to lose. When the
 // trailer count exceeds the slice's capacity, the function reallocates
 // the backing array (length is reset to 0 before appending), which
-// silently drops any prior contents. Both current callers (CreateTransactionMap
-// and the long-test) pass freshly-created empty slices.
+// silently drops any prior contents. Its callers are tests (this package's and
+// the long-test), which pass freshly-created empty slices; CreateTransactionMap
+// uses deserializeHashesIntoBuckets.
 func DeserializeHashesFromReaderIntoBuckets(
 	reader io.Reader,
 	nBuckets uint16,

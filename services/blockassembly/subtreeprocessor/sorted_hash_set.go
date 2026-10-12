@@ -36,12 +36,14 @@ const sortedHashSetChunkSize = 1024
 // the block" for every tx of the processor's own subtrees.
 //
 // While building, hashes are partitioned by their top bits and appended in fixed size
-// chunks, one lock per partition. Freeze lays all hashes out sorted in one contiguous
-// array, frees the chunks and builds a directory with one uint32 offset (relative to its partition) per ~4 hashes,
-// indexed by the top bits of the hash. Exists reads one directory entry and one or two
-// cache lines of hashes. Hashes sharing their top bits make a slot long, which falls
-// back to binary search: slower, never wrong. The frozen set costs about 33 bytes per
-// hash, against ~54 for the swiss maps it replaces.
+// chunks, one lock per partition. Freeze lays each partition out sorted in an array of
+// its own, which replaces that partition's chunks, and builds a directory with one
+// uint32 offset (relative to its partition) per ~4 hashes, indexed by the top bits of
+// the hash. Exists reads one directory entry and one or two cache lines of hashes.
+// Hashes sharing their top bits make a slot long, which falls back to binary search:
+// slower, never wrong. The frozen set costs about 33 bytes per hash, against ~54 for
+// the swiss maps it replaces. Freeze never holds every hash twice: at its peak the
+// heap holds the set plus the partitions being laid out (~2 MB each).
 //
 // All answers are exact and independent of layout: partition count, directory size,
 // worker count and insertion order change performance only. Duplicate hashes are kept
@@ -52,18 +54,19 @@ type SortedHashSet struct {
 	frozen atomic.Bool
 
 	// frozen layout, written by Freeze and read-only afterwards
-	gbits uint             // directory index bits, >= pbits
-	keys  []chainhash.Hash // all hashes, sorted
-	bases []uint64         // partition p owns keys[bases[p]:bases[p+1]]
-	dir   []uint32         // slot g of partition p is keys[bases[p]+dir[g+p] : bases[p]+dir[g+p+1]]
-	dups  atomic.Int64     // duplicate hashes in keys
+	gbits uint         // directory index bits, >= pbits
+	total int          // hashes in all partitions, duplicates included
+	dir   []uint32     // slot g of partition p is parts[p].keys[dir[g+p] : dir[g+p+1]]
+	dups  atomic.Int64 // duplicate hashes in the partitions' keys
 }
 
+// sortedHashPart is 64 bytes, which keeps neighbouring partition locks off the same
+// cache line (TestSortedHashPartSize).
 type sortedHashPart struct {
 	mu     sync.Mutex
 	chunks [][]chainhash.Hash
 	n      int
-	_      [24]byte // keep neighbouring partition locks off the same cache line
+	keys   []chainhash.Hash // the partition's hashes, sorted; set by Freeze
 }
 
 // NewSortedHashSet returns a set sized for about capacity hashes. The capacity only
@@ -145,6 +148,14 @@ func (s *SortedHashSet) PutMultiBucket(partition int, hashes []chainhash.Hash) e
 		return errors.NewProcessingError("SortedHashSet partition %d out of range [0, %d)", partition, len(s.parts))
 	}
 
+	// Freeze indexes a partition's slots by the hashes' top bits, so a hash in the
+	// wrong partition must not get in
+	for i := range hashes {
+		if hashTopBits(&hashes[i], s.pbits) != partition {
+			return errors.NewProcessingError("SortedHashSet hash %s does not belong to partition %d", hashes[i].String(), partition)
+		}
+	}
+
 	p := &s.parts[partition]
 	p.mu.Lock()
 	p.appendLocked(hashes...)
@@ -153,24 +164,18 @@ func (s *SortedHashSet) PutMultiBucket(partition int, hashes []chainhash.Hash) e
 	return nil
 }
 
-// partitionBases returns where each partition starts in the sorted array (plus the
-// end at index len(parts)) and the total. Only a single partition is limited to
-// 2^32-1 hashes.
-func partitionBases(parts []sortedHashPart) (bases []uint64, total uint64, err error) {
-	bases = make([]uint64, len(parts)+1)
-
+// partitionTotal returns the number of hashes in all partitions. Only a single
+// partition is limited to 2^32-1 hashes.
+func partitionTotal(parts []sortedHashPart) (total uint64, err error) {
 	for i := range parts {
 		if uint64(parts[i].n) > maxSortedHashPartitionSize {
-			return nil, 0, errors.NewProcessingError("SortedHashSet partition %d holds %d hashes, at most %d fit", i, parts[i].n, uint64(maxSortedHashPartitionSize))
+			return 0, errors.NewProcessingError("SortedHashSet partition %d holds %d hashes, at most %d fit", i, parts[i].n, uint64(maxSortedHashPartitionSize))
 		}
 
-		bases[i] = total
 		total += uint64(parts[i].n)
 	}
 
-	bases[len(parts)] = total
-
-	return bases, total, nil
+	return total, nil
 }
 
 // Freeze lays every partition out on up to workers goroutines and makes the set
@@ -183,7 +188,7 @@ func (s *SortedHashSet) Freeze(workers int) error {
 		return errors.NewProcessingError("SortedHashSet is already frozen")
 	}
 
-	bases, total, err := partitionBases(s.parts)
+	total, err := partitionTotal(s.parts)
 	if err != nil {
 		return err
 	}
@@ -196,8 +201,7 @@ func (s *SortedHashSet) Freeze(workers int) error {
 
 	slotsPerPart := 1 << (s.gbits - s.pbits)
 
-	s.bases = bases
-	s.keys = make([]chainhash.Hash, total)
+	s.total = int(total) //nolint:gosec // it is the length of slices that exist
 	// every partition has slotsPerPart+1 entries: its slot starts and its end
 	s.dir = make([]uint32, len(s.parts)*(slotsPerPart+1))
 
@@ -248,13 +252,14 @@ func parallelFor(n, workers int, fn func(i int)) {
 	wg.Wait()
 }
 
-// layoutPartition scatters the given partition's hashes into its directory slots, sorts each
-// small slot and fills the partition's directory entries with offsets relative to the
-// partition. Linear for uniformly spread hashes; an overloaded slot falls back to a
-// comparison sort.
+// layoutPartition scatters the given partition's hashes into an array of its own,
+// one directory slot after another, sorts each small slot, fills the partition's
+// directory entries with offsets into that array and lets the chunks go. Linear for
+// uniformly spread hashes; an overloaded slot falls back to a comparison sort.
 func (s *SortedHashSet) layoutPartition(p *sortedHashPart, part, slots int) {
 	firstSlot := part * slots
-	keys := s.keys[s.bases[part]:s.bases[part+1]]
+	keys := make([]chainhash.Hash, p.n)
+	p.keys = keys
 	dir := s.dir[part*(slots+1) : (part+1)*(slots+1)]
 	counts := make([]uint32, slots)
 
@@ -317,14 +322,13 @@ func (s *SortedHashSet) Exists(hash chainhash.Hash) bool {
 		panic(errNotFrozen)
 	}
 
-	if len(s.keys) == 0 {
+	if s.total == 0 {
 		return false
 	}
 
 	g := hashTopBits(&hash, s.gbits)
 	part := g >> (s.gbits - s.pbits)
-	base := s.bases[part]
-	keys := s.keys[base+uint64(s.dir[g+part]) : base+uint64(s.dir[g+part+1])]
+	keys := s.parts[part].keys[s.dir[g+part]:s.dir[g+part+1]]
 
 	if len(keys) <= 16 {
 		w := hashWord0(&hash)
@@ -349,23 +353,29 @@ func (s *SortedHashSet) Length() int {
 		panic(errNotFrozen)
 	}
 
-	return len(s.keys) - int(s.dups.Load())
+	return s.total - int(s.dups.Load())
 }
 
 // Iter calls f with every distinct hash in ascending order until f returns true (stop),
-// like swiss.Map.Iter. It panics if the set is not frozen.
+// like swiss.Map.Iter. It panics if the set is not frozen. Partitions are the top
+// bits of the hash, so walking them in order keeps the whole walk sorted, and equal
+// hashes are always in the same partition.
 func (s *SortedHashSet) Iter(f func(hash chainhash.Hash) bool) {
 	if !s.frozen.Load() {
 		panic(errNotFrozen)
 	}
 
-	for i := range s.keys {
-		if i > 0 && s.keys[i] == s.keys[i-1] {
-			continue
-		}
+	for p := range s.parts {
+		keys := s.parts[p].keys
 
-		if f(s.keys[i]) {
-			return
+		for i := range keys {
+			if i > 0 && keys[i] == keys[i-1] {
+				continue
+			}
+
+			if f(keys[i]) {
+				return
+			}
 		}
 	}
 }

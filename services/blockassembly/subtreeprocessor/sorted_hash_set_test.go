@@ -329,22 +329,19 @@ func TestSortedHashSet_NoGlobalCap(t *testing.T) {
 		parts[i].n = 1 << 20 // 2^36 hashes in total
 	}
 
-	bases, total, err := partitionBases(parts)
+	total, err := partitionTotal(parts)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1)<<36, total)
-	require.Equal(t, uint64(0), bases[0])
-	require.Equal(t, uint64(1)<<20, bases[1])
-	require.Equal(t, uint64(65535)<<20, bases[65535])
 }
 
 func TestSortedHashSet_PartitionLimit(t *testing.T) {
 	parts := make([]sortedHashPart, 2)
 	parts[1].n = math.MaxUint32
-	_, _, err := partitionBases(parts)
+	_, err := partitionTotal(parts)
 	require.NoError(t, err)
 
 	parts[1].n = math.MaxUint32 + 1
-	_, _, err = partitionBases(parts)
+	_, err = partitionTotal(parts)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "partition 1")
 	require.Contains(t, err.Error(), "4294967295")
@@ -356,7 +353,7 @@ func TestSortedHashSet_PartitionLimit(t *testing.T) {
 	require.False(t, s.frozen.Load())
 }
 
-// partitions laid out at non-zero bases must still answer exactly: many partitions with
+// partitions laid out in arrays of their own must still answer exactly: many partitions with
 // uneven fill, including empty ones.
 func TestSortedHashSet_ManyPartitionsUneven(t *testing.T) {
 	hashes := randHashes(300000, 21)
