@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -331,11 +332,43 @@ func TestHandleFreeze_StoreErrorTextStaysOffTheWire(t *testing.T) {
 func TestCallerInputSites_KeepTheirReasonWhenTheDefaultFailsClosed(t *testing.T) {
 	badHash := strings.Repeat("zz", 32)
 
+	// generate and generatetoaddress refuse before parsing anything on a network
+	// where CPU mining is unsupported, so their rows run on mainnet's params with
+	// generation enabled. A copy: the package global is shared by every test.
+	generating := chaincfg.MainNetParams
+	generating.GenerateSupported = true
+
 	for name, tc := range map[string]struct {
-		call func(*RPCServer) (interface{}, error)
-		code bsvjson.RPCErrorCode
-		text string
+		call   func(*RPCServer) (interface{}, error)
+		params *chaincfg.Params // nil means mainnet
+		code   bsvjson.RPCErrorCode
+		text   string
 	}{
+		"createrawtransaction, malformed address": {
+			call: func(s *RPCServer) (interface{}, error) {
+				return handleCreateRawTransaction(context.Background(), s,
+					&bsvjson.CreateRawTransactionCmd{Amounts: map[string]float64{"notanaddress": 1}}, nil)
+			},
+			code: bsvjson.ErrRPCInvalidAddressOrKey,
+			text: "invalid length address",
+		},
+		"generatetoaddress, malformed address": {
+			call: func(s *RPCServer) (interface{}, error) {
+				return handleGenerateToAddress(context.Background(), s,
+					&bsvjson.GenerateToAddressCmd{NumBlocks: 1, Address: "notanaddress"}, nil)
+			},
+			params: &generating,
+			code:   bsvjson.ErrRPCInvalidAddressOrKey,
+			text:   "invalid length address",
+		},
+		"generate, block count beyond int32": {
+			call: func(s *RPCServer) (interface{}, error) {
+				return handleGenerate(context.Background(), s, &bsvjson.GenerateCmd{NumBlocks: math.MaxInt32 + 1}, nil)
+			},
+			params: &generating,
+			code:   bsvjson.ErrRPCInvalidParameter,
+			text:   "out of range",
+		},
 		"sendrawtransaction, valid hex that is not a transaction": {
 			call: func(s *RPCServer) (interface{}, error) {
 				return handleSendRawTransaction(context.Background(), s, &bsvjson.SendRawTransactionCmd{HexTx: "00"}, nil)
@@ -373,15 +406,22 @@ func TestCallerInputSites_KeepTheirReasonWhenTheDefaultFailsClosed(t *testing.T)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			params := tc.params
+			if params == nil {
+				params = &chaincfg.MainNetParams
+			}
+
 			logger := newCapturingLogger()
-			s := &RPCServer{logger: logger, settings: &settings.Settings{ChainCfgParams: &chaincfg.MainNetParams}}
+			s := &RPCServer{logger: logger, settings: &settings.Settings{ChainCfgParams: params}}
 
 			_, err := tc.call(s)
 
 			rpcErr := requireRPCError(t, err)
 			require.Equal(t, tc.code, rpcErr.Code)
 			require.Contains(t, rpcErr.Message, tc.text)
-			require.NotEqual(t, genericErrorMessage, rpcErr.Message)
+			// Contains, not Equal: a site with a prefix still carries the generic
+			// text after it when the reason is lost.
+			require.NotContains(t, rpcErr.Message, genericErrorMessage)
 			require.Empty(t, logger.errorf, "a malformed argument is not a node fault")
 		})
 	}
@@ -534,19 +574,29 @@ func TestHandleGetBlockByHeight_AnswersAsSvnode(t *testing.T) {
 	verbosity := uint32(1)
 
 	for name, tc := range map[string]struct {
-		err      error
+		err      error // as the blockchain client returns it
 		code     bsvjson.RPCErrorCode
 		message  string
 		errorLog bool
 	}{
 		"no block at that height": {
-			err: errors.NewBlockNotFoundError("[Blockchain] block not found at height",
-				errors.NewBlockNotFoundError("failed to get block by height for height %d", 1_000_000)),
+			err: overGRPC(t, errors.NewBlockNotFoundError("[Blockchain] block not found at height",
+				errors.NewBlockNotFoundError("failed to get block by height for height %d", 1_000_000))),
 			code:    bsvjson.ErrRPCInvalidParameter,
 			message: "Block height out of range",
 		},
 		"store failing": {
-			err:      errors.NewStorageError("failed to get block by height", fmt.Errorf("dial tcp 10.0.3.4:5432: connect: connection refused")),
+			err:      overGRPC(t, errors.NewStorageError("failed to get block by height", fmt.Errorf("dial tcp 10.0.3.4:5432: connect: connection refused"))),
+			code:     bsvjson.ErrRPCInternal.Code,
+			message:  genericErrorMessage,
+			errorLog: true,
+		},
+		// A status with no details, which is what the client sees when the service
+		// cannot be reached at all: UnwrapGRPC classes it ERROR, not one of the node
+		// fault classes, so this is the case that reaches the scope's own log rule.
+		"blockchain service unreachable": {
+			err: errors.UnwrapGRPC(status.Error(codes.Unavailable,
+				`connection error: desc = "transport: Error while dialing dial tcp 10.4.2.17:8085: connect: connection refused"`)),
 			code:     bsvjson.ErrRPCInternal.Code,
 			message:  genericErrorMessage,
 			errorLog: true,
@@ -554,7 +604,7 @@ func TestHandleGetBlockByHeight_AnswersAsSvnode(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			mockClient := &blockchain.Mock{}
-			mockClient.On("GetBlockByHeight", mock.Anything, mock.Anything).Return(nil, overGRPC(t, tc.err))
+			mockClient.On("GetBlockByHeight", mock.Anything, mock.Anything).Return(nil, tc.err)
 
 			logger := newCapturingLogger()
 			s := &RPCServer{logger: logger, blockchainClient: mockClient}
@@ -571,6 +621,23 @@ func TestHandleGetBlockByHeight_AnswersAsSvnode(t *testing.T) {
 			} else {
 				require.Empty(t, logger.errorf, "a height above the tip is the caller's mistake")
 			}
+		})
+	}
+}
+
+// TestLookupScopes_AnUnreachableServiceIsNotACallerFault pins each lookup scope's
+// own log rule with the fault shape that reaches it: a gRPC status with no
+// details, which is not one of the node fault classes. Only a genuine miss is the
+// caller's. getrawtransaction's site passes only its own not-found today, so
+// nothing at the handler level reaches the transaction scope's rule.
+func TestLookupScopes_AnUnreachableServiceIsNotACallerFault(t *testing.T) {
+	for name, scope := range map[string]rpcRequestScope{
+		"block":       scopeBlockLookup,
+		"height":      scopeHeightLookup,
+		"transaction": scopeTxLookup,
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.False(t, isCallerFault(detaillessGRPCChain(), scope))
 		})
 	}
 }
@@ -829,7 +896,7 @@ func TestMiningSubmission_FailsClosedOnWhatItCannotRead(t *testing.T) {
 		// Only a PROCESSING top message crosses. An unclassified link is a
 		// library's text, which fails closed everywhere else; the scope allows one
 		// only beneath blockassembly's own wrapper, where it is not shown.
-		"unclassified error on top": errors.New(errors.ERR_UNKNOWN, "dial tcp 10.4.2.17:8085: connect: connection refused"),
+		"unclassified error on top":  errors.New(errors.ERR_UNKNOWN, "dial tcp 10.4.2.17:8085: connect: connection refused"),
 		"chain deeper than the walk": deep,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1042,6 +1109,33 @@ func TestHandleReconsiderBlock_UnknownBlockMatchesBitcoind(t *testing.T) {
 	require.Equal(t, bsvjson.RPCErrorCode(-5), rpcErr.Code)
 	require.Equal(t, "Block not found", rpcErr.Message)
 	require.False(t, revalidated, "an unknown block is answered before anything tries to revalidate it")
+}
+
+// TestHandleReconsiderBlock_StoreFaultIsNotAnUnknownBlock is the lookup's other
+// outcome: the store could not answer. That is not "Block not found" about a block
+// that may well exist, and it is not a revalidation failure either, because
+// nothing was revalidated.
+func TestHandleReconsiderBlock_StoreFaultIsNotAnUnknownBlock(t *testing.T) {
+	revalidated := false
+	logger := newCapturingLogger()
+
+	_, err := reconsiderFixture{
+		logger: logger,
+		// stores/blockchain/sql/GetBlockHeader.go; the driver's error is a plain
+		// one, which New keeps as an unclassified link.
+		headerErr: overGRPC(t, errors.NewStorageError("error in GetBlockHeader",
+			errors.New(errors.ERR_UNKNOWN, "dial tcp 10.4.2.17:5432: connect: connection refused"))),
+		revalidate: func(chainhash.Hash) error {
+			revalidated = true
+			return nil
+		},
+	}.run(t)
+
+	rpcErr := requireRPCError(t, err)
+	require.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+	require.Equal(t, genericErrorMessage, rpcErr.Message)
+	require.NotEmpty(t, logger.errorf, "a store fault is the node's and is logged as one")
+	require.False(t, revalidated, "the block could not be resolved, so nothing is revalidated")
 }
 
 // TestHandleReconsiderBlock_MissingAncestorIsNotAnUnknownBlock pins that a
