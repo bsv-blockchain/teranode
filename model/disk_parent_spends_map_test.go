@@ -257,7 +257,7 @@ func inpointSeed(i uint64) subtreepkg.Inpoint {
 }
 
 // TestDiskParentSpendsMap_ParityWithInMemory drives the same op sequence
-// through the in-memory SplitSyncedParentMap and the disk-backed map and
+// through a plain Go map reference (newTestParentSpendsMap) and the disk-backed map and
 // asserts identical SetIfNotExists return sequences.
 func TestDiskParentSpendsMap_ParityWithInMemory(t *testing.T) {
 	mem := newTestParentSpendsMap(256, 20000)

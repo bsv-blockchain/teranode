@@ -5925,7 +5925,7 @@ func buildBlockForValidOrderBench(tb testing.TB, leaves, parentsPerTx int) (*Blo
 }
 
 // BenchmarkBlock_ValidOrderAndBlessed_DiskVsMemory compares the per-block cost
-// of validOrderAndBlessed between the in-memory SplitSyncedParentMap and the
+// of validOrderAndBlessed between the in-memory sort-based duplicate input check and the
 // disk-backed DiskParentSpendsMap (single-disk and multi-disk). The disk
 // variants include the full mmap-backed map (mmaphash) open + writer-loop
 // spin-up + close cost per block, which is the realistic per-block-validation
