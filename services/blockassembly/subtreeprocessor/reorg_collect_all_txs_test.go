@@ -42,11 +42,10 @@ func (s *markRecordingStore) MarkTransactionsOnLongestChain(_ context.Context, h
 }
 
 // reorgBlocks collects the winning txs of every moveForward block by iterating
-// the block's SplitSwissMap. Every tx in the block must be marked on the longest
-// chain, not only the first one in each of the map's buckets.
+// the block's tx set. Every tx in the block must be marked on the longest chain:
+// a callback that returns true stops the iteration, and only the first tx is
+// marked.
 func TestReorgBlocks_MarksEveryWinningTxOnLongestChain(t *testing.T) {
-	// 1024 buckets in the pooled tx map, so 8000 txs put several in most
-	// buckets; a "first entry per bucket" bug caps the result near 1024.
 	const txCount = 8000
 
 	ctx := context.Background()
