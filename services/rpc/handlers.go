@@ -1834,7 +1834,10 @@ func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface
 		// Handle "job not found" as an expected condition - miners often submit stale solutions
 		if terr, ok := err.(*errors.Error); ok && terr.Code() == errors.ERR_NOT_FOUND {
 			s.logger.Infof("Mining solution rejected: %s (job expired or block already found)", err.Error())
-			return nil, bsvjson.NewRPCError(bsvjson.ErrRPCMisc, err.Error())
+
+			// A fixed text: the error renders its code and blockassembly's own
+			// breadcrumb, and this is a limited-tier path miners hit routinely.
+			return nil, bsvjson.NewRPCError(bsvjson.ErrRPCMisc, "job not found")
 		}
 		return nil, err
 	}
@@ -3008,10 +3011,7 @@ func (s *RPCServer) generateBlocksAndReturnHashes(ctx context.Context, count int
 	// Get the current best block hash before generation
 	_, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInternal.Code,
-			Message: errors.NewServiceError("RPC blockchain client", err).Error(),
-		}
+		return nil, s.rpcError(errors.NewServiceError("RPC blockchain client", err), bsvjson.ErrRPCInternal.Code, "")
 	}
 	startHeight := bestBlockMeta.Height
 
@@ -3022,10 +3022,7 @@ func (s *RPCServer) generateBlocksAndReturnHashes(ctx context.Context, count int
 		MaxTries: maxTries,
 	})
 	if err != nil {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInternal.Code,
-			Message: errors.NewServiceError("RPC blockassembly client", err).Error(),
-		}
+		return nil, s.rpcError(errors.NewServiceError("RPC blockassembly client", err), bsvjson.ErrRPCInternal.Code, "")
 	}
 
 	// Collect the block hashes of the generated blocks
@@ -3037,10 +3034,7 @@ func (s *RPCServer) generateBlocksAndReturnHashes(ctx context.Context, count int
 		// Get the block at the target height
 		block, err := s.blockchainClient.GetBlockByHeight(ctx, targetHeight)
 		if err != nil {
-			return nil, &bsvjson.RPCError{
-				Code:    bsvjson.ErrRPCInternal.Code,
-				Message: errors.NewServiceError("RPC blockchain client", err).Error(),
-			}
+			return nil, s.rpcError(errors.NewServiceError("RPC blockchain client", err), bsvjson.ErrRPCInternal.Code, "")
 		}
 
 		blockHashes = append(blockHashes, block.Header.Hash().String())

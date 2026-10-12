@@ -6724,7 +6724,9 @@ func TestHandleGenerateToAddressComprehensive(t *testing.T) {
 		rpcErr, ok := err.(*bsvjson.RPCError)
 		require.True(t, ok)
 		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
-		assert.Contains(t, rpcErr.Message, "block assembly generation failed")
+		// A node fault: its text goes to the log, not the wire.
+		assert.Equal(t, genericErrorMessage, rpcErr.Message)
+		assert.NotContains(t, rpcErr.Message, "block assembly generation failed")
 	})
 
 	t.Run("nil block assembly client", func(t *testing.T) {

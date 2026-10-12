@@ -18,6 +18,7 @@ import (
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
 	"github.com/bsv-blockchain/teranode/services/validator"
@@ -664,6 +665,66 @@ func TestHandleGetRawTransaction_OnlyAMarkedNotFoundIsAnUnknownTx(t *testing.T) 
 				require.NotEmpty(t, logger.errorf, "an unmarked 404 is a node fault")
 				require.Contains(t, logger.all(), "404")
 			}
+		})
+	}
+}
+
+// TestHandleSubmitMiningSolution_StaleJobKeepsInternalsOffTheWire covers the stale
+// job branch, a limited-tier path miners hit routinely. It put the whole rendered
+// chain on the wire: "NOT_FOUND (3): [BlockAssembly][<jobid>] job not found".
+func TestHandleSubmitMiningSolution_StaleJobKeepsInternalsOffTheWire(t *testing.T) {
+	baMock := &blockassembly.Mock{}
+	baMock.On("SubmitMiningSolution", mock.Anything, mock.Anything).Return(overGRPC(t,
+		errors.NewNotFoundError("[BlockAssembly][%s] job not found", "cafe")))
+
+	s := &RPCServer{logger: newCapturingLogger(), blockAssemblyClient: baMock}
+
+	_, err := handleSubmitMiningSolution(context.Background(), s, &bsvjson.SubmitMiningSolutionCmd{
+		MiningSolution: bsvjson.MiningSolution{ID: "cafe", Coinbase: "00"},
+	}, nil)
+
+	rpcErr := requireRPCError(t, err)
+	require.Equal(t, bsvjson.ErrRPCMisc, rpcErr.Code)
+	require.Equal(t, "job not found", rpcErr.Message)
+}
+
+// TestGenerateBlocks_FailuresKeepInternalsOffTheWire covers the three failure
+// sites in generate and generatetoaddress. Each rendered its own wrapper's whole
+// chain into the message, so a status without details put the service's dial
+// target on the wire.
+func TestGenerateBlocks_FailuresKeepInternalsOffTheWire(t *testing.T) {
+	dialFailure := func() error {
+		return errors.UnwrapGRPC(status.Error(codes.Unavailable,
+			`connection error: desc = "transport: Error while dialing dial tcp 10.4.2.17:8085: connect: connection refused"`))
+	}
+
+	for name, configure := range map[string]func(*blockchain.Mock, *blockassembly.Mock){
+		"best header": func(bc *blockchain.Mock, _ *blockassembly.Mock) {
+			bc.On("GetBestBlockHeader", mock.Anything).Return(nil, nil, dialFailure())
+		},
+		"generate": func(bc *blockchain.Mock, ba *blockassembly.Mock) {
+			bc.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1}, nil)
+			ba.On("GenerateBlocks", mock.Anything, mock.Anything).Return(dialFailure())
+		},
+		"generated block": func(bc *blockchain.Mock, ba *blockassembly.Mock) {
+			bc.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1}, nil)
+			ba.On("GenerateBlocks", mock.Anything, mock.Anything).Return(nil)
+			bc.On("GetBlockByHeight", mock.Anything, mock.Anything).Return(nil, dialFailure())
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bc, ba := &blockchain.Mock{}, &blockassembly.Mock{}
+			configure(bc, ba)
+
+			logger := newCapturingLogger()
+			s := &RPCServer{logger: logger, blockchainClient: bc, blockAssemblyClient: ba}
+
+			_, err := s.generateBlocksAndReturnHashes(context.Background(), 1, nil, nil)
+
+			rpcErr := requireRPCError(t, err)
+			require.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+			require.Equal(t, genericErrorMessage, rpcErr.Message)
+			require.Contains(t, logger.all(), "10.4.2.17:8085", "the dial target goes to the log instead")
 		})
 	}
 }
