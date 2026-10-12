@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
@@ -1163,4 +1164,53 @@ func TestReChainSubtrees_InMemoryTxMissingFromMap(t *testing.T) {
 	err := stp.reChainSubtrees(0)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), arenaHash(5).String())
+}
+
+// A record whose inpoints change while it is stored panics, and block assembly
+// recovers panics: the bucket lock must be released on the way out, or the
+// rollback's Clear waits on it forever.
+func TestSplitTxInpointsMap_PanicWhileStoringReleasesTheBucket(t *testing.T) {
+	grow := func(p *subtreepkg.TxInpoints) {
+		grown := subtreepkg.NewTxInpointsFromPacked(append(p.ParentTxHashes, arenaHash(1<<40)), []uint32{1, 0, 1, 0})
+		*p = grown
+	}
+
+	inserts := map[string]func(m *SplitTxInpointsMap, h chainhash.Hash, p *subtreepkg.TxInpoints){
+		"Set": func(m *SplitTxInpointsMap, h chainhash.Hash, p *subtreepkg.TxInpoints) { m.Set(h, p) },
+		"SetIfNotExists": func(m *SplitTxInpointsMap, h chainhash.Hash, p *subtreepkg.TxInpoints) {
+			m.SetIfNotExists(h, p)
+		},
+		"PutMultiBucketTxInpoints": func(m *SplitTxInpointsMap, h chainhash.Hash, p *subtreepkg.TxInpoints) {
+			m.PutMultiBucketTxInpoints(m.BucketFor(h), []chainhash.Hash{h}, []*subtreepkg.TxInpoints{p})
+		},
+	}
+
+	for name, insert := range inserts {
+		t.Run(name, func(t *testing.T) {
+			testHookAfterSizing = grow
+			t.Cleanup(func() { testHookAfterSizing = nil })
+
+			m := NewSplitTxInpointsMap(4)
+			p := subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{arenaHash(7)}, []uint32{1, 0})
+
+			require.Panics(t, func() { insert(m, arenaHash(1), &p) })
+
+			testHookAfterSizing = nil
+
+			cleared := make(chan struct{})
+
+			go func() {
+				m.Clear()
+				close(cleared)
+			}()
+
+			select {
+			case <-cleared:
+			case <-time.After(5 * time.Second):
+				t.Fatal("Clear is stuck on the bucket the panic left locked")
+			}
+
+			require.False(t, m.Exists(arenaHash(1)), "the record that panicked was not stored")
+		})
+	}
 }

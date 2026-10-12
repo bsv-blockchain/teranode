@@ -184,6 +184,10 @@ func (b *txInpointsBucket) putRecord(hash chainhash.Hash, rec []byte) {
 func (b *txInpointsBucket) put(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints) {
 	payload, flags := payloadOf(inpoints)
 
+	if testHookAfterSizing != nil {
+		testHookAfterSizing(inpoints)
+	}
+
 	h, rec := b.alloc(txInpointsRecordHeader + payload)
 	writeRecord(rec, inpoints, flags)
 	b.index().Put(hash, h)
@@ -196,6 +200,10 @@ func (b *txInpointsBucket) index() *swiss.Map[chainhash.Hash, uint64] {
 
 	return b.m
 }
+
+// testHookAfterSizing, when set by a test, runs between sizing a record and
+// writing it, to change the inpoints the way a racing caller would.
+var testHookAfterSizing func(*subtreepkg.TxInpoints)
 
 // payloadOf returns the payload length and the flags of inpoints.
 //
@@ -398,29 +406,35 @@ func (s *SplitTxInpointsMap) Set(hash chainhash.Hash, inpoints *subtreepkg.TxInp
 	b := s.bucket(hash)
 
 	b.mu.Lock()
+	defer b.mu.Unlock() // put can panic (writeRecord), and block assembly recovers
+
 	b.put(hash, inpoints)
-	b.mu.Unlock()
 }
 
 func (s *SplitTxInpointsMap) SetIfNotExists(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints) (*subtreepkg.TxInpoints, bool) {
 	b := s.bucket(hash)
 
-	b.mu.Lock()
+	var scratch [txInpointsScratch]byte
 
-	if h, ok := b.handle(hash); ok {
-		var scratch [txInpointsScratch]byte
+	rec, inserted := func() ([]byte, bool) {
+		b.mu.Lock()
+		defer b.mu.Unlock() // put can panic (writeRecord), and block assembly recovers
 
-		rec := append(scratch[:0], b.record(h)...)
+		if h, ok := b.handle(hash); ok {
+			return append(scratch[:0], b.record(h)...), false
+		}
 
-		b.mu.Unlock()
+		b.put(hash, inpoints)
 
-		return decodeRecord(rec), false
+		return nil, true
+	}()
+
+	if inserted {
+		return inpoints, true
 	}
 
-	b.put(hash, inpoints)
-	b.mu.Unlock()
-
-	return inpoints, true
+	// decoded outside the lock
+	return decodeRecord(rec), false
 }
 
 // MoveTo copies the record of hash into dst, as it is and without decoding it,
@@ -620,6 +634,7 @@ func (s *SplitTxInpointsMap) ParallelBulkSetIfNotExists(
 		}
 		b := &s.buckets[bIdx]
 		b.mu.Lock()
+		defer b.mu.Unlock()
 		for _, idx := range indices {
 			if !b.has(hashes[idx]) {
 				b.put(hashes[idx], inpoints[idx])
@@ -631,7 +646,6 @@ func (s *SplitTxInpointsMap) ParallelBulkSetIfNotExists(
 				wasSet[idx] = false
 			}
 		}
-		b.mu.Unlock()
 	}
 
 	if numWorkers == 1 {
@@ -685,12 +699,12 @@ func (s *SplitTxInpointsMap) PutMultiBucketTxInpoints(bucket uint16, keys []chai
 	}
 	b := &s.buckets[bucket]
 	b.mu.Lock()
+	defer b.mu.Unlock() // put can panic (writeRecord), and block assembly recovers
 	for i := 0; i < n; i++ {
 		if !b.has(keys[i]) {
 			b.put(keys[i], values[i])
 			wasInserted[i] = true
 		}
 	}
-	b.mu.Unlock()
 	return wasInserted
 }
