@@ -641,9 +641,10 @@ func (b *BlockAssembler) triggerReconcile() {
 // reset performs a full reset of the block assembler state by clearing all subtrees and reloading from blockchain.
 //
 // This is the "nuclear option" for handling blockchain reorganizations and is used when:
-// 1. Large reorgs (>= CoinbaseMaturity blocks AND height > 1000) where incremental reorg is too expensive
-// 2. Failed reorgs where subtreeProcessor.Reorg() encountered errors
-// 3. Reorgs involving invalid blocks that require clean state
+//  1. Large reorgs (>= CoinbaseMaturity blocks AND height > 1000, or >= the UTXO retention at any height)
+//     where incremental reorg is too expensive or the moveForward txs may already be pruned
+//  2. Failed reorgs where subtreeProcessor.Reorg() encountered errors
+//  3. Reorgs involving invalid blocks that require clean state
 //
 // The reset process:
 // 1. Waits for BlockValidation background jobs to complete (WaitForPendingBlocks)
@@ -2242,6 +2243,25 @@ func (b *BlockAssembler) generateEmptyBlockCandidate(ctx context.Context, bestBl
 	return miningCandidate, []*subtree.Subtree{}, nil
 }
 
+// reorgNeedsReset decides whether a reorg must go through a full reset instead of
+// subtreeProcessor.Reorg.
+//
+// A reorg whose deeper side reaches the effective UTXO retention can bring forward
+// blocks whose transactions the pruner has already deleted (delete-at-height is
+// height + retention), which reorgBlocks cannot handle after its commit point, so
+// those reorgs reset at any height. Reorgs of at least CoinbaseMaturity blocks reset
+// above height 1000; below that the incremental reorg is kept. A retention of 0
+// means pruning is disabled, so only the maturity rule applies.
+func reorgNeedsReset(moveBack, moveForward int, currentHeight, coinbaseMaturity, utxoRetention uint32) bool {
+	depth := max(moveBack, moveForward)
+
+	if utxoRetention > 0 && depth >= int(utxoRetention) {
+		return true
+	}
+
+	return depth >= int(coinbaseMaturity) && currentHeight > 1000
+}
+
 // handleReorg handles blockchain reorganization.
 //
 // Parameters:
@@ -2265,7 +2285,7 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 
 	_, currentHeight := b.CurrentBlock()
 
-	if (len(moveBackBlocksWithMeta) >= int(b.settings.ChainCfgParams.CoinbaseMaturity) || len(moveForwardBlocksWithMeta) >= int(b.settings.ChainCfgParams.CoinbaseMaturity)) && currentHeight > 1000 {
+	if reorgNeedsReset(len(moveBackBlocksWithMeta), len(moveForwardBlocksWithMeta), currentHeight, uint32(b.settings.ChainCfgParams.CoinbaseMaturity), b.settings.GetUtxoStoreBlockHeightRetention()) {
 		// large reorg, log it and Reset the block assembler
 		b.logger.Warnf("[BlockAssembler] large reorg detected, resetting block assembly, moveBackBlocks: %d, moveForwardBlocks: %d", len(moveBackBlocksWithMeta), len(moveForwardBlocksWithMeta))
 

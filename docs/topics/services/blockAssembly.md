@@ -386,6 +386,7 @@ The Block Assembly service implements real-time fork detection through the follo
     - Monitors the size of potential chain reorganizations
     - If a reorganization would require moving more than the coinbase maturity threshold (typically 100 blocks, configured via `Settings.ChainCfgParams.CoinbaseMaturity`) either backwards or forwards
     - AND the current chain height is greater than 1000 blocks
+    - Or, at any height, if either side reaches the effective UTXO store block height retention (the transactions of the blocks being moved forward may already have been pruned)
     - Triggers a full reset of the block assembler as a safety measure against deep reorganizations
 
 The `BlockAssembler` keeps the node synchronized with the network by identifying and switching to the strongest chain (the one with the most accumulated proof of work), ensuring all nodes in the network converge on the same transaction history.

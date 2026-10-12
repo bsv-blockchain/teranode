@@ -528,7 +528,7 @@ stateDiagram-v2
     LoadingUnmined --> Running: all unmined transactions re-added
     LoadingUnmined --> Idle: Blockchain unreachable<br/>during startup
     Running --> Resetting: reset operation invoked
-    Running --> Resetting: deep reorg detected<br/>— depth > maturity AND height > 1000
+    Running --> Resetting: deep reorg detected<br/>— (depth >= maturity AND height > 1000) OR depth >= UTXO retention
     Running --> Reorging: competing chain detected
     Running --> MovingUp: linear extension detected
     Resetting --> Running: state realigned
@@ -747,7 +747,7 @@ flowchart TD
     C -- yes --> MF[Move forward]
     C -- no --> D{Stronger competing chain?}
     D -- no --> WAIT[Out-of-order or weaker:<br/>defer until stronger signal]
-    D -- yes --> E{Depth > coinbase maturity<br/>AND height > 1000?}
+    D -- yes --> E{(Depth >= coinbase maturity<br/>AND height > 1000)<br/>OR depth >= UTXO retention?}
     E -- yes --> RESET[Full reset]
     E -- no --> REORG[Reorg in place]
     MF --> RUN[Resume assembly]
