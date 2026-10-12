@@ -128,6 +128,9 @@ func (s *Service) Prune(ctx context.Context, blockHeight uint32, blockHashStr st
 
 // deleteTombstoned removes transactions that have passed their expiration time.
 // Only deletes parent transactions if their last spending child is mined and stable.
+// Records that are currently unmined (unmined_since set) are never deleted unless they are
+// conflicting, even if they still carry a delete_at_height: MarkTransactionsOnLongestChain(false)
+// does not clear it.
 func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (int64, error) {
 	// Use configured safety window from settings
 	safetyWindow := s.safetyWindow
@@ -144,6 +147,7 @@ func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (int
 			DELETE FROM transactions
 			WHERE delete_at_height IS NOT NULL
 			  AND delete_at_height <= $1
+			  AND (unmined_since IS NULL OR conflicting)
 		`
 		result, err = s.db.ExecContext(ctx, deleteQuery, blockHeight)
 	} else {
@@ -156,6 +160,7 @@ func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (int
 				FROM transactions t
 				WHERE t.delete_at_height IS NOT NULL
 				  AND t.delete_at_height <= $1
+				  AND (t.unmined_since IS NULL OR t.conflicting)
 				  AND NOT EXISTS (
 				    -- Find ANY unstable child - if found, parent cannot be deleted
 				    -- This ensures ALL children must be stable before parent deletion
