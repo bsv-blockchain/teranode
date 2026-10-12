@@ -718,6 +718,10 @@ func TestHandleGetRawTransaction_OnlyAMarkedNotFoundIsAnUnknownTx(t *testing.T) 
 			assetURL, err := url.Parse(server.URL)
 			require.NoError(t, err)
 
+			// The configured address may carry credentials, and the unmarked branch
+			// logs the URL.
+			assetURL.User = url.UserPassword("rpc", "s3cret")
+
 			logger := newCapturingLogger()
 			s := &RPCServer{logger: logger, assetHTTPURL: assetURL}
 			verbose := 0
@@ -735,6 +739,7 @@ func TestHandleGetRawTransaction_OnlyAMarkedNotFoundIsAnUnknownTx(t *testing.T) 
 			} else {
 				require.NotEmpty(t, logger.errorf, "an unmarked 404 is a node fault")
 				require.Contains(t, logger.all(), "404")
+				require.NotContains(t, logger.all(), "s3cret", "the address is logged, its password is not")
 			}
 		})
 	}

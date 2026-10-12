@@ -37,6 +37,10 @@ import (
 //	                 its inputs, which is a rejection and not a lookup miss.
 //	rpcRevalidationError - the request REVALIDATES a block already resolved;
 //	                 no mapping, and a corrupt body is a verdict on that block.
+//	rpcInputError  - the site parsed the caller's own argument; a plain
+//	                 error's text is the reason.
+//	rpcMiningSubmissionError - the request SUBMITS a mining solution;
+//	                 blockassembly's own words for refusing it are shown.
 //
 // # The message is a disclosure
 //
@@ -138,9 +142,10 @@ var (
 // opposed to a fault in the node. Chain-wide: a verdict wrapped in a service
 // breadcrumb is still a verdict.
 //
-// One walk, not one per class. The obvious spelling is errors.Is once per entry
-// in rejectionClasses, but each of those walks the whole chain, so an eleven-entry
-// list costs eleven traversals - and this is called twice per error, from
+// One walk, not one per class. The obvious spelling is errors.Is once per code on
+// the shared allowlist and the site's verdict set, but each of those walks the
+// whole chain, so a list of n codes costs n traversals - and this is called twice
+// per error, from
 // publicErrorMessage and from isCallerFault. Walking once and testing each link
 // against a code set is the same answer for a fraction of the work.
 func isRejection(err error, local verdictCodes) bool {
@@ -670,10 +675,9 @@ func isCallerFault(err error, scope rpcRequestScope) bool {
 
 	switch scope {
 	case scopeBlockLookup:
-		// Only a genuine missing block. Anything else failing an admin-invoked
-		// reconsiderblock or invalidateblock is worth an operator's attention, and
-		// treating the whole scope as a caller fault left two of the four realistic
-		// revalidation failures with no error-level trace at all.
+		// Only a genuine missing block. Anything else failing to resolve the block
+		// a caller named - a store or a service that could not answer - is worth an
+		// operator's attention.
 		return errors.Is(err, errors.ErrBlockNotFound)
 
 	case scopeHeightLookup:

@@ -622,7 +622,7 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, s.rpcError(
-			errors.NewServiceError("unexpected status code %d from asset service at %s", resp.StatusCode, fullURL.String()),
+			errors.NewServiceError("unexpected status code %d from asset service at %s", resp.StatusCode, fullURL.Redacted()),
 			bsvjson.ErrRPCInternal.Code, "")
 	}
 
