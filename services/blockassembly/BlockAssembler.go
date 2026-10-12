@@ -383,6 +383,15 @@ func (b *BlockAssembler) QueueMaxItems() int64 {
 	return b.subtreeProcessor.QueueMaxItems()
 }
 
+// MaxTransactionsInMemory returns the enforced limit on transactions held in
+// memory, or a value <= 0 when there is no limit.
+//
+// Returns:
+//   - int64: The enforced limit (<= 0 when unlimited)
+func (b *BlockAssembler) MaxTransactionsInMemory() int64 {
+	return b.subtreeProcessor.MaxTransactionsInMemory()
+}
+
 // QueueHeadAge returns how long the oldest queued batch has been waiting.
 // It is a diagnostic gauge for dispatcher-stall visibility and returns 0 when
 // the queue is empty.
