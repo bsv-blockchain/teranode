@@ -3802,18 +3802,21 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 		}
 
 		if retention > 0 {
-			// Mirrors aerospike Lua setDeleteAtHeight for a tx that is not (newly) on the longest chain:
+			// Follows the order of checks of aerospike Lua setDeleteAtHeight for a tx that is not
+			// (newly) on the longest chain (SQL has no pagination records or DAH signals):
 			// 1. If preserve_until is set -> don't touch DAH
-			// 2. If unmined_since is NULL (mined on the main chain) and all UTXOs are spent ->
+			// 2. If conflicting -> set the DAH when absent, otherwise leave it unchanged
+			// 3. If unmined_since is NULL (mined on the main chain) and all UTXOs are spent ->
 			//    set the DAH, or bump it forward if it is lower than the new value
-			// 3. Otherwise -> clear DAH
+			// 4. Otherwise -> clear DAH
 			// The tx has at least one block here, except after UnsetMined removed its last one;
-			// that case has just been given an unmined_since above, so it falls into 3.
+			// that case has just been given an unmined_since above, so it falls into 4.
 			inClause3c, inArgs3c := buildINClause(existingHashBytes, 2)
 			qDAH := fmt.Sprintf(`
 				UPDATE transactions
 				SET delete_at_height = CASE
 				        WHEN preserve_until IS NOT NULL THEN delete_at_height
+				        WHEN conflicting THEN COALESCE(delete_at_height, $1)
 				        WHEN unmined_since IS NULL
 				             AND NOT EXISTS (
 				                 SELECT 1 FROM outputs o

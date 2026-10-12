@@ -129,3 +129,165 @@ func TestSetMinedNotOnLongestChainReevaluatesDAH(t *testing.T) {
 		}
 	}
 }
+
+// TestSetMinedNotOnLongestChainDAHMatrixLua checks the Lua setDeleteAtHeight order of checks on a
+// fork block (onLongestChain=false), mirroring the SQL matrix test of the same name: unspent
+// outputs and a non-nil unmined_since clear the DAH, preserveUntil and retention 0 leave it
+// untouched, conflicting sets it when absent and otherwise leaves it unchanged.
+func TestSetMinedNotOnLongestChainDAHMatrixLua(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	const mainHeight uint32 = 1000
+	const forkHeight uint32 = 1010
+
+	tests := []struct {
+		name      string
+		spendAll  bool
+		retention *uint32
+		bins      []*aerospike.Bin
+		wantDAH   func(retention uint32) interface{}
+	}{
+		{
+			name: "unspent outputs clear the DAH", spendAll: false,
+			bins:    []*aerospike.Bin{aerospike.NewBin(fields.DeleteAtHeight.String(), 5000)},
+			wantDAH: func(uint32) interface{} { return nil },
+		},
+		{
+			name: "non-nil unmined_since clears the DAH", spendAll: true,
+			bins:    []*aerospike.Bin{aerospike.NewBin(fields.UnminedSince.String(), 7)},
+			wantDAH: func(uint32) interface{} { return nil },
+		},
+		{
+			name: "preserveUntil leaves the DAH untouched", spendAll: true,
+			bins:    []*aerospike.Bin{aerospike.NewBin(fields.PreserveUntil.String(), 99999)},
+			wantDAH: func(r uint32) interface{} { return int(mainHeight + r) },
+		},
+		{
+			name: "retention 0 leaves the DAH untouched", spendAll: true, retention: new(uint32),
+			bins:    []*aerospike.Bin{aerospike.NewBin(fields.DeleteAtHeight.String(), 5000)},
+			wantDAH: func(uint32) interface{} { return 5000 },
+		},
+		{
+			name: "conflicting without a DAH sets it", spendAll: false,
+			bins: []*aerospike.Bin{
+				aerospike.NewBin(fields.Conflicting.String(), true),
+				aerospike.NewBin(fields.DeleteAtHeight.String(), nil),
+			},
+			wantDAH: func(r uint32) interface{} { return int(forkHeight + r) },
+		},
+		{
+			name: "conflicting with a DAH leaves it unchanged", spendAll: true,
+			bins: []*aerospike.Bin{
+				aerospike.NewBin(fields.Conflicting.String(), true),
+				aerospike.NewBin(fields.DeleteAtHeight.String(), 5),
+			},
+			wantDAH: func(uint32) interface{} { return 5 },
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+
+			if tc.retention != nil {
+				tSettings.GlobalBlockHeightRetention = *tc.retention
+				tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
+			}
+
+			retention := tSettings.GetUtxoStoreBlockHeightRetention()
+
+			client, store, _, cleanup := initAerospike(t, tSettings, logger)
+			defer cleanup()
+			cleanDB(t, client)
+
+			require.NoError(t, store.SetBlockHeight(mainHeight))
+
+			parent := newParent(t)
+			parentHash := parent.TxIDChainHash()
+			_, err := store.Create(ctx, parent, mainHeight)
+			require.NoError(t, err)
+
+			if tc.spendAll {
+				for i, out := range parent.Outputs {
+					child := bt.NewTx()
+					require.NoError(t, child.From(parentHash.String(), uint32(i), out.LockingScript.String(), out.Satoshis))
+					require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 500))
+					_, err = store.Spend(ctx, child, mainHeight)
+					require.NoError(t, err)
+				}
+			}
+
+			_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{parentHash}, utxo.MinedBlockInfo{
+				BlockID: 100, BlockHeight: mainHeight, OnLongestChain: true,
+			})
+			require.NoError(t, err)
+
+			key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(parentHash, 0))
+			require.NoError(t, err)
+			require.NoError(t, client.PutBins(nil, key, tc.bins...))
+
+			_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{parentHash}, utxo.MinedBlockInfo{
+				BlockID: 200, BlockHeight: forkHeight, OnLongestChain: false,
+			})
+			require.NoError(t, err)
+
+			dah, _ := readMasterBins(t, client, store.GetNamespace(), store.GetName(), parentHash)
+			require.Equal(t, tc.wantDAH(retention), dah)
+		})
+	}
+}
+
+// TestUnsetMinedLastBlockOfMainChainTx: invalidating the only block of a fully spent main-chain
+// tx stamps a backdated unmined_since and clears the DAH.
+func TestUnsetMinedLastBlockOfMainChainTx(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	const mainHeight uint32 = 50
+	const tip uint32 = 5000
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, _, cleanup := initAerospike(t, tSettings, logger)
+	defer cleanup()
+	cleanDB(t, client)
+
+	parent := newParent(t)
+	parentHash := parent.TxIDChainHash()
+	_, err := store.Create(ctx, parent, mainHeight)
+	require.NoError(t, err)
+
+	for i, out := range parent.Outputs {
+		child := bt.NewTx()
+		require.NoError(t, child.From(parentHash.String(), uint32(i), out.LockingScript.String(), out.Satoshis))
+		require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 500))
+		_, err = store.Spend(ctx, child, mainHeight)
+		require.NoError(t, err)
+	}
+
+	_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{parentHash}, utxo.MinedBlockInfo{
+		BlockID: 100, BlockHeight: mainHeight, OnLongestChain: true,
+	})
+	require.NoError(t, err)
+
+	dah, _ := readMasterBins(t, client, store.GetNamespace(), store.GetName(), parentHash)
+	require.NotNil(t, dah)
+
+	require.NoError(t, store.SetBlockHeight(tip))
+
+	_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{parentHash}, utxo.MinedBlockInfo{
+		BlockID: 100, BlockHeight: mainHeight, UnsetMined: true,
+	})
+	require.NoError(t, err)
+
+	dah, unminedSince := readMasterBins(t, client, store.GetNamespace(), store.GetName(), parentHash)
+	require.Nil(t, dah)
+	require.Equal(t, int(utxo.BackdatedUnminedSince(tip, tSettings.UtxoStore.UnminedTxRetention)), unminedSince)
+}
