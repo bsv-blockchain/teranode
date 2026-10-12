@@ -3,6 +3,7 @@ package subtreeprocessor
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"testing"
 
@@ -274,5 +275,49 @@ func TestDeserializeHashesFromReaderIntoBuckets_NonPositiveCapRejected(t *testin
 		)
 		require.Error(t, err, "cap=%d must be rejected", cap)
 		require.Contains(t, err.Error(), "must be positive")
+	}
+}
+
+func TestDeserializeHashesFromReaderIntoBuckets_ConflictingCountVsLeaves(t *testing.T) {
+	run := func(numLeaves, numConflicting int) ([]chainhash.Hash, error) {
+		leaves := make([]chainhash.Hash, numLeaves)
+		for i := range leaves {
+			leaves[i] = chainhash.HashH([]byte{byte(i)})
+		}
+
+		// conflicting nodes are leaves of the subtree; past the leaves, fresh hashes
+		conflicting := make([]chainhash.Hash, numConflicting)
+		for i := range conflicting {
+			if i < numLeaves {
+				conflicting[i] = leaves[i]
+			} else {
+				conflicting[i] = chainhash.HashH([]byte{0xff, byte(i)})
+			}
+		}
+
+		buckets := make(map[uint16][]chainhash.Hash, 8)
+		conflictingOut := make([]chainhash.Hash, 0)
+
+		err := DeserializeHashesFromReaderIntoBuckets(
+			bytes.NewReader(buildSubtreeBytes(leaves, conflicting)),
+			8, 128*1024*1024, &buckets, &conflictingOut,
+		)
+
+		return conflictingOut, err
+	}
+
+	t.Run("count equal to leaves is accepted", func(t *testing.T) {
+		out, err := run(3, 3)
+		require.NoError(t, err)
+		require.Len(t, out, 3)
+	})
+
+	for _, tc := range []struct{ leaves, conflicting int }{{3, 4}, {0, 1}} {
+		t.Run(fmt.Sprintf("%d conflicting for %d leaves is rejected", tc.conflicting, tc.leaves), func(t *testing.T) {
+			out, err := run(tc.leaves, tc.conflicting)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "exceeds leaf count")
+			require.Empty(t, out, "nothing is read from a rejected trailer")
+		})
 	}
 }

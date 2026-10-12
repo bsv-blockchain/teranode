@@ -7790,6 +7790,16 @@ func DeserializeHashesFromReaderIntoBuckets(
 		)
 	}
 
+	// AddConflictingNode only takes a leaf of the subtree and deduplicates it, so a
+	// subtree written by it never lists more conflicting nodes than leaves. The
+	// same bound as go-subtree's ErrConflictingCountExceedsLeaves (v1.6.1+).
+	if numConflicting > numLeaves {
+		return errors.NewProcessingError(
+			"subtree trailer claims %d conflicting txs, exceeds leaf count %d",
+			numConflicting, numLeaves,
+		)
+	}
+
 	if numConflicting > 0 {
 		if cap(*conflictingNodes) < int(numConflicting) {
 			*conflictingNodes = make([]chainhash.Hash, 0, numConflicting)
