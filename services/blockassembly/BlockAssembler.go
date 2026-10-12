@@ -2252,14 +2252,27 @@ func (b *BlockAssembler) generateEmptyBlockCandidate(ctx context.Context, bestBl
 // those reorgs reset at any height. Reorgs of at least CoinbaseMaturity blocks reset
 // above height 1000; below that the incremental reorg is kept. A retention of 0
 // means pruning is disabled, so only the maturity rule applies.
-func reorgNeedsReset(moveBack, moveForward int, currentHeight, coinbaseMaturity, utxoRetention uint32) bool {
-	depth := max(moveBack, moveForward)
+//
+// moveBack is what bounds the risk: the pruner runs at most up to block assembly's
+// tip (checkBlockAssemblySafeForPruner), so a side-chain record stamped after the
+// fork is deletable only once the main chain is retention blocks past it. Taking
+// the deeper of the two sides is deliberately conservative, and >= resets one block
+// before the earliest deletable height. Catch-up without a moveBack does not come
+// through here.
+//
+// It returns which rule fired, for the log, or "" when the reorg can go in place.
+func reorgNeedsReset(moveBack, moveForward int, currentHeight, coinbaseMaturity, utxoRetention uint32) string {
+	depth := uint64(max(moveBack, moveForward)) //nolint:gosec // block counts, never negative
 
-	if utxoRetention > 0 && depth >= int(utxoRetention) {
-		return true
+	if utxoRetention > 0 && depth >= uint64(utxoRetention) {
+		return "depth reaches UTXO retention"
 	}
 
-	return depth >= int(coinbaseMaturity) && currentHeight > 1000
+	if depth >= uint64(coinbaseMaturity) && currentHeight > 1000 {
+		return "depth reaches coinbase maturity above height 1000"
+	}
+
+	return ""
 }
 
 // handleReorg handles blockchain reorganization.
@@ -2285,9 +2298,9 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 
 	_, currentHeight := b.CurrentBlock()
 
-	if reorgNeedsReset(len(moveBackBlocksWithMeta), len(moveForwardBlocksWithMeta), currentHeight, uint32(b.settings.ChainCfgParams.CoinbaseMaturity), b.settings.GetUtxoStoreBlockHeightRetention()) {
+	if why := reorgNeedsReset(len(moveBackBlocksWithMeta), len(moveForwardBlocksWithMeta), currentHeight, uint32(b.settings.ChainCfgParams.CoinbaseMaturity), b.settings.GetUtxoStoreBlockHeightRetention()); why != "" {
 		// large reorg, log it and Reset the block assembler
-		b.logger.Warnf("[BlockAssembler] large reorg detected, resetting block assembly, moveBackBlocks: %d, moveForwardBlocks: %d", len(moveBackBlocksWithMeta), len(moveForwardBlocksWithMeta))
+		b.logger.Warnf("[BlockAssembler] large reorg detected (%s), resetting block assembly, moveBackBlocks: %d, moveForwardBlocks: %d", why, len(moveBackBlocksWithMeta), len(moveForwardBlocksWithMeta))
 
 		// make sure we wait for the reset to complete
 		// validateInputs=true: getConflictingNodes() may miss conflicts not stored in subtree

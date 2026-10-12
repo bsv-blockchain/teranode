@@ -383,11 +383,10 @@ The Block Assembly service implements real-time fork detection through the follo
 
 3. **Reorganization Size Protection**:
 
-    - Monitors the size of potential chain reorganizations
-    - If a reorganization would require moving more than the coinbase maturity threshold (typically 100 blocks, configured via `Settings.ChainCfgParams.CoinbaseMaturity`) either backwards or forwards
-    - AND the current chain height is greater than 1000 blocks
-    - Or, at any height, if either side reaches the effective UTXO store block height retention (the transactions of the blocks being moved forward may already have been pruned)
-    - Triggers a full reset of the block assembler as a safety measure against deep reorganizations
+    - Monitors the size of potential chain reorganizations, by the deeper of the two sides (blocks moved back and blocks moved forward)
+    - Triggers a full reset of the block assembler instead of an in-place reorganization when either rule holds:
+        - the depth is at least the effective UTXO store block height retention (`GetUtxoStoreBlockHeightRetention()`: global retention plus the UTXO store adjustment), at any height. Spent transactions of a side chain are deleted at their height plus that retention, so the blocks being moved forward may already have lost them. A retention of 0 (pruning disabled) turns this rule off.
+        - the depth is at least the coinbase maturity threshold (typically 100 blocks, `Settings.ChainCfgParams.CoinbaseMaturity`) and the current chain height is greater than 1000 blocks
 
 The `BlockAssembler` keeps the node synchronized with the network by identifying and switching to the strongest chain (the one with the most accumulated proof of work), ensuring all nodes in the network converge on the same transaction history.
 
@@ -411,9 +410,7 @@ The service automatically manages chain selection through:
     - Accepts the chain with the most accumulated proof of work
     - Performs a safety check on reorganization depth:
 
-        - If the reorganization involves more than the coinbase maturity threshold (typically 100 blocks, configured via `Settings.ChainCfgParams.CoinbaseMaturity`) in either direction
-        - And the current chain height is greater than 1000
-        - The block assembler will reset rather than attempt the reorganization
+        - The block assembler resets rather than attempt the reorganization when the deeper side reaches the effective UTXO store block height retention at any height, or reaches the coinbase maturity threshold above height 1000 (see Reorganization Size Protection above)
 
     - Block validation and transaction verification are handled by other services, not the Block Assembly
 

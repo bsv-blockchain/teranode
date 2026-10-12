@@ -26,6 +26,9 @@ func TestReorgNeedsReset(t *testing.T) {
 		{"height 1001, depth at maturity", 100, 0, 1001, maturity, 288, true},
 		{"low height, depth above maturity but below retention", 200, 0, 500, maturity, 288, false},
 		{"low height, shallow reorg", 1, 1, 10, maturity, 288, false},
+		{"high height, both sides just below both thresholds", 99, 99, 5000, maturity, 288, false},
+		{"retention equal to maturity, low height, at it", 100, 0, 500, maturity, 100, true},
+		{"retention equal to maturity, low height, below it", 99, 0, 500, maturity, 100, false},
 
 		// retention: reorgBlocks is unsafe once the deeper side reaches retention, at any height
 		{"low height, moveBack just below retention", 287, 0, 500, maturity, 288, false},
@@ -62,7 +65,7 @@ func TestReorgNeedsReset(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := reorgNeedsReset(tt.moveBack, tt.moveForward, tt.height, tt.maturity, tt.retention)
+			got := reorgNeedsReset(tt.moveBack, tt.moveForward, tt.height, tt.maturity, tt.retention) != ""
 			assert.Equal(t, tt.want, got)
 		})
 	}
