@@ -5022,13 +5022,17 @@ func (s *Store) setUnlockedBulk(ctx context.Context, txHashes []chainhash.Hash) 
 //   - Collects up to 10 errors for logging/debugging (prevents log spam)
 //   - Logs summary: attempted, succeeded, failed counts
 //   - Returns aggregated errors after attempting all transactions
-//   - Missing transactions trigger FATAL error (data corruption)
+//   - onLongestChain=true: transactions the store does not hold are logged and skipped
+//   - onLongestChain=false: a transaction the store does not hold is FATAL
 //
 // Why resilient processing is critical:
 //   - Large reorgs can affect millions of transactions
 //   - Transient network errors shouldn't prevent updating other transactions
 //   - Maximizes data integrity by updating as many as possible
-//   - Missing transaction = unrecoverable (FATAL to prevent corrupt state)
+//
+// Missing transactions, see the Aerospike implementation: a winning tx of a reorg
+// can be pruned legitimately and has nothing to clear; a tx moved off the longest
+// chain without a record would go back into block assembly.
 //
 // Timing guarantee:
 // This function is called synchronously from reset/reorg operations. By the time cleanup
@@ -5047,7 +5051,31 @@ func (s *Store) setUnlockedBulk(ctx context.Context, txHashes []chainhash.Hash) 
 //
 // Returns:
 //   - error: Aggregated errors (up to 10) if any failures occurred
-//   - Note: Function calls logger.Fatalf for missing transactions before returning
+//
+// existingHashes runs the existence query of MarkTransactionsOnLongestChain and
+// returns the hashes it found.
+func (s *Store) existingHashes(ctx context.Context, q string, args []interface{}) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	defer rows.Close()
+
+	found := make(map[string]bool)
+
+	for rows.Next() {
+		var hb []byte
+		if err = rows.Scan(&hb); err != nil {
+			return nil, err
+		}
+
+		found[string(hb)] = true
+	}
+
+	return found, rows.Err()
+}
+
 func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
 	if len(txHashes) == 0 {
 		return nil
@@ -5057,6 +5085,9 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 	totalUpdated := 0
 	allErrors := make([]error, 0, 10)
 	errorCount := 0
+	missingCount := 0
+
+	var firstMissing []chainhash.Hash
 
 	// Convert all hashes to byte arrays up front
 	allHashBytes := make([][]byte, len(txHashes))
@@ -5113,39 +5144,29 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 		rowsAffected, _ := result.RowsAffected()
 		totalUpdated += int(rowsAffected)
 
-		// If fewer rows updated than expected, find which ones are missing
+		// If fewer rows updated than expected, find which ones are missing (a
+		// hash given twice also updates one row)
 		if int(rowsAffected) < len(chunk) {
-			missingCount := len(chunk) - int(rowsAffected)
-			errorCount += missingCount
-
 			// Query to find which hashes actually exist to identify the missing ones
 			qCheck := fmt.Sprintf(`SELECT hash FROM transactions WHERE hash IN %s`, func() string {
 				cl, _ := buildINClause(chunk, 1)
 				return cl
 			}())
 			_, checkArgs := buildINClause(chunk, 1)
-			rows, qErr := s.db.QueryContext(ctx, qCheck, checkArgs...)
+			foundHashes, qErr := s.existingHashes(ctx, qCheck, checkArgs)
 			if qErr != nil {
+				// the shortfall cannot be told apart: count it as failed
+				errorCount += len(chunk) - int(rowsAffected)
 				s.logger.Errorf("[MarkTransactionsOnLongestChain] could not identify missing txs in chunk %d-%d: %v", i, end-1, qErr)
 			} else {
-				foundHashes := make(map[string]bool)
-				for rows.Next() {
-					var hb []byte
-					if scanErr := rows.Scan(&hb); scanErr == nil {
-						foundHashes[string(hb)] = true
-					}
-				}
-				rows.Close()
-
-				missingLogged := 0
 				for _, hb := range chunk {
 					if !foundHashes[string(hb)] {
-						var h chainhash.Hash
-						copy(h[:], hb)
-						s.logger.Fatalf("CRITICAL: MISSING transaction %s during MarkTransactionsOnLongestChain - data integrity compromised", h)
-						missingLogged++
-						if missingLogged >= 10 {
-							break
+						missingCount++
+
+						if len(firstMissing) < 10 {
+							var h chainhash.Hash
+							copy(h[:], hb)
+							firstMissing = append(firstMissing, h)
 						}
 					}
 				}
@@ -5154,8 +5175,18 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 	}
 
 	// Log summary
-	s.logger.Infof("[MarkTransactionsOnLongestChain] completed: attempted=%d, updated=%d, failed=%d, onLongestChain=%t",
-		attempted, totalUpdated, errorCount, onLongestChain)
+	s.logger.Infof("[MarkTransactionsOnLongestChain] completed: attempted=%d, updated=%d, failed=%d, missing=%d, onLongestChain=%t",
+		attempted, totalUpdated, errorCount, missingCount, onLongestChain)
+
+	if missingCount > 0 {
+		if !onLongestChain {
+			s.logger.Fatalf("CRITICAL: %d MISSING transactions during MarkTransactionsOnLongestChain(false) - data integrity compromised, first: %v",
+				missingCount, firstMissing)
+		} else {
+			s.logger.Errorf("[MarkTransactionsOnLongestChain] skipped %d transactions the store does not hold, first: %v",
+				missingCount, firstMissing)
+		}
+	}
 
 	if len(allErrors) > 0 {
 		if errorCount > 10 {
