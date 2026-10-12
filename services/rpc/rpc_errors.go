@@ -421,10 +421,16 @@ func publicErrorMessageFor(err error, scope rpcRequestScope) string {
 
 	var tErr *errors.Error
 	if !errors.As(err, &tErr) {
-		// Not a Teranode error: no chain to strip and no breadcrumb
-		// convention to apply. bsvutil.DecodeAddress and bt.NewTxFromBytes
-		// both land here, and their text is the reason.
-		return err.Error()
+		// Not a Teranode error, so nothing here can say whose words these are.
+		// A parser reporting what is wrong with the caller's argument and a SQL
+		// driver reporting a missing row or a refused connection look the same
+		// from this side. Only the site knows which it called, so the text
+		// crosses only where the site says it parsed the caller's input.
+		if scope == scopeCallerInput {
+			return err.Error()
+		}
+
+		return genericErrorMessage
 	}
 
 	verdicts := scope.verdicts()
@@ -476,6 +482,11 @@ const (
 
 	// scopeSubmit is a request that submits a transaction for acceptance.
 	scopeSubmit
+
+	// scopeCallerInput is a site that parses the caller's own argument and hands
+	// back the parser's error. A plain error's text is the reason here, and only
+	// here; see rpcInputError.
+	scopeCallerInput
 
 	// scopeBlockRevalidation is a revalidation of a block already known to exist:
 	// reconsiderblock's named block and its descendants.
@@ -550,7 +561,7 @@ func buildRPCError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string, 
 			return &bsvjson.RPCError{Code: fallbackCode, Message: prefix + missingInputsMessage}
 		}
 
-	case scopeOpaque, scopeBlockRevalidation:
+	case scopeOpaque, scopeCallerInput, scopeBlockRevalidation:
 	}
 
 	return &bsvjson.RPCError{Code: fallbackCode, Message: prefix + publicErrorMessageFor(err, scope)}
@@ -576,6 +587,18 @@ func isCallerFault(err error, scope rpcRequestScope) bool {
 		return false
 	}
 
+	// A node fault anywhere in the chain is a node fault, even beneath a verdict.
+	// The verdict's own text still crosses, but the fault's never does, so if this
+	// logged at debug the storage or network detail would reach neither the
+	// caller nor a default-level log. The set is the classes that name an
+	// infrastructure failure; the breadcrumb wrappers (SERVICE_ERROR, PROCESSING)
+	// wrap verdicts routinely and are not on it.
+	for _, fault := range nodeFaultClasses {
+		if errors.Is(err, fault) {
+			return false
+		}
+	}
+
 	if isRejection(err, scope.verdicts()) || errors.Is(err, errors.ErrInvalidArgument) {
 		return true
 	}
@@ -592,10 +615,22 @@ func isCallerFault(err error, scope rpcRequestScope) bool {
 		return errors.Is(err, errors.ErrTxNotFound)
 	case scopeSubmit:
 		return errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrTxMissingParent)
+	case scopeCallerInput:
+		// The site parsed the caller's argument and nothing else.
+		return true
 	case scopeOpaque, scopeBlockRevalidation:
 	}
 
 	return false
+}
+
+// nodeFaultClasses name an infrastructure failure wherever they appear in a chain;
+// see isCallerFault.
+var nodeFaultClasses = []*errors.Error{
+	errors.ErrStorageError,
+	errors.ErrNetworkError,
+	errors.ErrNetworkTimeout,
+	errors.ErrServiceUnavailable,
 }
 
 // logAndBuild records the full chain and returns the trimmed, classified form.
@@ -666,4 +701,16 @@ func (s *RPCServer) rpcTxLookupError(err error, fallbackCode bsvjson.RPCErrorCod
 // as bitcoind reports it: the site's rejection code with "Missing inputs".
 func (s *RPCServer) rpcSubmitError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string) *bsvjson.RPCError {
 	return s.logAndBuild(err, fallbackCode, prefix, scopeSubmit)
+}
+
+// rpcInputError is rpcError for a site that parses the caller's own argument with
+// a library that reports failure as a plain error - an address decoder, a
+// transaction parser, a range check on a numeric parameter. That text is the
+// reason and describes only what the caller sent, so it crosses verbatim, and the
+// failure is the request's, so it is logged at debug.
+//
+// Use it only around such a parse. Everywhere else a plain error is a library or
+// driver speaking for the node, and fails closed.
+func (s *RPCServer) rpcInputError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string) *bsvjson.RPCError {
+	return s.logAndBuild(err, fallbackCode, prefix, scopeCallerInput)
 }

@@ -246,10 +246,160 @@ func TestPublicErrorMessage_DoesNotLeakTheGRPCDialTarget(t *testing.T) {
 	require.NotContains(t, msg, "rpc error: code =", "a rendered gRPC status is not a caller-facing message")
 }
 
-func TestPublicErrorMessage_NonTeranodeErrorKeepsItsText(t *testing.T) {
-	// bsvutil.DecodeAddress and bt.NewTxFromBytes return plain errors whose
-	// text is the reason and which have no chain to strip.
-	require.Equal(t, "plain failure", publicErrorMessage(fmt.Errorf("plain failure")))
+// TestPublicErrorMessage_NonTeranodeErrorFailsClosed pins the default for an
+// error this boundary cannot classify. It used to pass a plain error's text
+// through on the grounds that the address and transaction parsers return the
+// reason that way - but so does a SQL driver. freeze on an unknown txid put the
+// store's "sql: no rows in result set" on the wire, and a database outage would
+// have put its dial target there. A site that parses the caller's own input opts
+// in to the text instead (scopeCallerInput).
+func TestPublicErrorMessage_NonTeranodeErrorFailsClosed(t *testing.T) {
+	require.Equal(t, genericErrorMessage, publicErrorMessage(fmt.Errorf("sql: no rows in result set")))
+	require.Equal(t, genericErrorMessage,
+		publicErrorMessage(fmt.Errorf("dial tcp 10.0.3.4:5432: connect: connection refused")))
+}
+
+func TestCallerInputError_KeepsTheParserReasonAndLogsQuietly(t *testing.T) {
+	// The parser's text is the reason, and the request is what was wrong, so the
+	// text crosses and the log stays at debug - which is what these sites logged
+	// before the boundary existed (nothing).
+	logger := newCapturingLogger()
+	s := &RPCServer{logger: logger}
+
+	rpcErr := s.rpcInputError(fmt.Errorf("decoded address is of unknown format"),
+		bsvjson.ErrRPCInvalidAddressOrKey, "Invalid address or key: ")
+
+	require.Equal(t, bsvjson.ErrRPCInvalidAddressOrKey, rpcErr.Code)
+	require.Equal(t, "Invalid address or key: decoded address is of unknown format", rpcErr.Message)
+	require.Empty(t, logger.errorf, "a malformed argument is not a node fault")
+	require.NotEmpty(t, logger.debugf)
+}
+
+// plainErrorUtxoStore fails freeze with a SQL driver's own error, which is how the
+// SQL utxo store answers an unknown txid (stores/utxo/sql/alert_system.go).
+type plainErrorUtxoStore struct {
+	utxo.Store
+	err error
+}
+
+func (p *plainErrorUtxoStore) FreezeUTXOs(context.Context, []*utxo.Spend, *settings.Settings) error {
+	return p.err
+}
+
+// TestHandleFreeze_StoreErrorTextStaysOffTheWire is the review's reproduction of
+// the fail-open default: a limited user freezing an unknown txid on a SQL-backed
+// node was told "sql: no rows in result set".
+func TestHandleFreeze_StoreErrorTextStaysOffTheWire(t *testing.T) {
+	logger := newCapturingLogger()
+	s := &RPCServer{
+		logger:    logger,
+		settings:  &settings.Settings{ChainCfgParams: &chaincfg.MainNetParams},
+		utxoStore: &plainErrorUtxoStore{err: fmt.Errorf("sql: no rows in result set")},
+	}
+
+	_, handlerErr := handleFreeze(context.Background(), s,
+		&bsvjson.FreezeCmd{TxID: strings.Repeat("ab", 32), Vout: 0}, nil)
+	require.Error(t, handlerErr)
+
+	reply, err := s.createMarshalledReply(1, nil, handlerErr)
+	require.NoError(t, err)
+
+	var parsed bsvjson.Response
+	require.NoError(t, json.Unmarshal(reply, &parsed))
+	require.NotNil(t, parsed.Error)
+	require.Equal(t, genericErrorMessage, parsed.Error.Message)
+	require.NotEmpty(t, logger.errorf, "the driver's text goes to the log instead")
+	require.Contains(t, logger.all(), "sql: no rows in result set")
+}
+
+// TestCallerInputSites_KeepTheirReasonWhenTheDefaultFailsClosed covers every
+// handler that hands back a parser's error about the caller's own argument.
+// Each used to rely on the fail-open default to show its reason; failing closed
+// would have answered "internal error" to a malformed request.
+func TestCallerInputSites_KeepTheirReasonWhenTheDefaultFailsClosed(t *testing.T) {
+	badHash := strings.Repeat("zz", 32)
+
+	for name, tc := range map[string]struct {
+		call func(*RPCServer) (interface{}, error)
+		code bsvjson.RPCErrorCode
+		text string
+	}{
+		"sendrawtransaction, valid hex that is not a transaction": {
+			call: func(s *RPCServer) (interface{}, error) {
+				return handleSendRawTransaction(context.Background(), s, &bsvjson.SendRawTransactionCmd{HexTx: "00"}, nil)
+			},
+			code: bsvjson.ErrRPCDeserialization,
+			text: txRejectedPrefix,
+		},
+		"getblockhash, negative height": {
+			call: func(s *RPCServer) (interface{}, error) {
+				return handleGetBlockHash(context.Background(), s, &bsvjson.GetBlockHashCmd{Index: -1}, nil)
+			},
+			code: bsvjson.ErrRPCInvalidParameter,
+			text: "negative",
+		},
+		"freeze, malformed txid": {
+			call: func(s *RPCServer) (interface{}, error) {
+				return handleFreeze(context.Background(), s, &bsvjson.FreezeCmd{TxID: badHash}, nil)
+			},
+			code: bsvjson.ErrRPCDecodeHexString,
+			text: badHash,
+		},
+		"unfreeze, malformed txid": {
+			call: func(s *RPCServer) (interface{}, error) {
+				return handleUnfreeze(context.Background(), s, &bsvjson.UnfreezeCmd{TxID: badHash}, nil)
+			},
+			code: bsvjson.ErrRPCDecodeHexString,
+			text: badHash,
+		},
+		"reassign, malformed txid": {
+			call: func(s *RPCServer) (interface{}, error) {
+				return handleReassign(context.Background(), s, &bsvjson.ReassignCmd{OldTxID: badHash}, nil)
+			},
+			code: bsvjson.ErrRPCDecodeHexString,
+			text: badHash,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			logger := newCapturingLogger()
+			s := &RPCServer{logger: logger, settings: &settings.Settings{ChainCfgParams: &chaincfg.MainNetParams}}
+
+			_, err := tc.call(s)
+
+			rpcErr := requireRPCError(t, err)
+			require.Equal(t, tc.code, rpcErr.Code)
+			require.Contains(t, rpcErr.Message, tc.text)
+			require.NotEqual(t, genericErrorMessage, rpcErr.Message)
+			require.Empty(t, logger.errorf, "a malformed argument is not a node fault")
+		})
+	}
+}
+
+// TestLogAndBuild_AVerdictOverANodeFaultIsLoggedAsAFault pins the log half of
+// "a verdict does not launder the node fault beneath it". The wire half was
+// already right - the storage text stays off it - but the chain was classed as a
+// caller fault and logged at debug, so the storage detail reached neither the
+// caller nor a default-level log.
+func TestLogAndBuild_AVerdictOverANodeFaultIsLoggedAsAFault(t *testing.T) {
+	for name, err := range map[string]error{
+		"storage": errors.NewTxInvalidError("bad-txns",
+			errors.NewStorageError("s3 403 AccessDenied bucket=teranode-prod-subtrees")),
+		"network": errors.NewTxInvalidError("could not read tx from stream",
+			errors.NewNetworkError("read tcp 10.0.1.5:34512->10.0.2.9:9000: connection reset by peer")),
+		"network timeout": errors.NewTxInvalidError("bad-txns",
+			errors.NewNetworkTimeoutError("utxo batch read timed out")),
+		"service unavailable": errors.NewTxInvalidError("bad-txns",
+			errors.NewServiceUnavailableError("aerospike outpoint batch did not complete within 5s")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			logger := newCapturingLogger()
+			s := &RPCServer{logger: logger}
+
+			_ = s.rpcSubmitError(err, bsvjson.ErrRPCVerify, txRejectedPrefix)
+
+			require.NotEmpty(t, logger.errorf, "a node fault under a verdict is still a node fault")
+		})
+	}
 }
 
 func TestPublicErrorMessage_InvalidArgumentKeepsItsOwnMessage(t *testing.T) {

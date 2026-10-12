@@ -227,7 +227,7 @@ func handleGetBlockHash(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 
 	indexUint32, err := safeconversion.Int64ToUint32(c.Index)
 	if err != nil {
-		return nil, err
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
 	}
 
 	// Load the raw block bytes from the database.
@@ -764,7 +764,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 		// Decode the provided address.
 		addr, err := bsvutil.DecodeAddress(encodedAddr, s.settings.ChainCfgParams)
 		if err != nil {
-			return nil, s.rpcError(err, bsvjson.ErrRPCInvalidAddressOrKey, "Invalid address or key: ")
+			return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidAddressOrKey, "Invalid address or key: ")
 		}
 
 		// Ensure the address is one of the supported types and that
@@ -811,7 +811,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 	if c.LockTime != nil {
 		lockTimeUint32, err := safeconversion.Int64ToUint32(*c.LockTime)
 		if err != nil {
-			return nil, err
+			return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
 		}
 
 		mtx.LockTime = lockTimeUint32
@@ -882,7 +882,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	// Use 0 for the tag to represent local node.
 	tx, err := bt.NewTxFromBytes(serializedTx)
 	if err != nil {
-		return nil, s.rpcError(err, bsvjson.ErrRPCDeserialization, txRejectedPrefix)
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCDeserialization, txRejectedPrefix)
 	}
 
 	s.logger.Debugf("tx to send: %v", tx)
@@ -1012,7 +1012,7 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 	numblocksInt32, err := safeconversion.Uint32ToInt32(c.NumBlocks)
 	if err != nil {
-		return nil, err
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidParameter, "")
 	}
 
 	// Generate blocks and return their hashes
@@ -1079,7 +1079,7 @@ func handleGenerateToAddress(ctx context.Context, s *RPCServer, cmd interface{},
 	// check address
 	_, err := bsvutil.DecodeAddress(c.Address, s.settings.ChainCfgParams)
 	if err != nil {
-		return nil, s.rpcError(err, bsvjson.ErrRPCInvalidAddressOrKey, "")
+		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidAddressOrKey, "")
 	}
 
 	// Generate blocks and return their hashes
@@ -2740,7 +2740,7 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 
 	h, err := chainhash.NewHashFromStr(c.TxID)
 	if err != nil {
-		return nil, err
+		return nil, rpcDecodeHexError(c.TxID)
 	}
 
 	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
@@ -2789,7 +2789,7 @@ func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 	h, err := chainhash.NewHashFromStr(c.TxID)
 	if err != nil {
-		return nil, err
+		return nil, rpcDecodeHexError(c.TxID)
 	}
 
 	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
@@ -2839,17 +2839,17 @@ func handleReassign(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 	oldTXIDHash, err := chainhash.NewHashFromStr(c.OldTxID)
 	if err != nil {
-		return nil, err
+		return nil, rpcDecodeHexError(c.OldTxID)
 	}
 
 	oldUTXOHash, err := chainhash.NewHashFromStr(c.OldUTXOHash)
 	if err != nil {
-		return nil, err
+		return nil, rpcDecodeHexError(c.OldUTXOHash)
 	}
 
 	newUTXOHash, err := chainhash.NewHashFromStr(c.NewUTXOHash)
 	if err != nil {
-		return nil, err
+		return nil, rpcDecodeHexError(c.NewUTXOHash)
 	}
 
 	if err = s.utxoStore.ReAssignUTXO(ctx,

@@ -2845,7 +2845,10 @@ func TestHandleInvalidateBlockComprehensive(t *testing.T) {
 		rpcErr, ok := err.(*bsvjson.RPCError)
 		require.True(t, ok)
 		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
-		assert.Equal(t, context.Canceled.Error(), rpcErr.Message)
+		// A plain error fails closed: the boundary cannot tell a context error
+		// from a driver's. The real blockchain client never returns one bare - it
+		// unwraps every gRPC status into a Teranode error first.
+		assert.Equal(t, genericErrorMessage, rpcErr.Message)
 	})
 
 	t.Run("zero block hash", func(t *testing.T) {
@@ -5183,7 +5186,12 @@ func TestHandleFreezeComprehensive(t *testing.T) {
 
 		_, err := handleFreeze(context.Background(), s, cmd, nil)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid byte")
+		// The parser's own text is not the contract; the code and the caller's
+		// input are. A malformed hash answers as getblock does.
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCDecodeHexString, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "invalid-")
 	})
 
 	t.Run("requires utxo store", func(t *testing.T) {
@@ -5222,7 +5230,12 @@ func TestHandleUnfreezeComprehensive(t *testing.T) {
 
 		_, err := handleUnfreeze(context.Background(), s, cmd, nil)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid byte")
+		// The parser's own text is not the contract; the code and the caller's
+		// input are. A malformed hash answers as getblock does.
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCDecodeHexString, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "invalid-")
 	})
 
 	t.Run("requires utxo store", func(t *testing.T) {
@@ -5263,7 +5276,12 @@ func TestHandleReassignComprehensive(t *testing.T) {
 
 		_, err := handleReassign(context.Background(), s, cmd, nil)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid byte")
+		// The parser's own text is not the contract; the code and the caller's
+		// input are. A malformed hash answers as getblock does.
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCDecodeHexString, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "invalid-")
 	})
 
 	t.Run("requires valid old UTXO hash", func(t *testing.T) {
@@ -5281,7 +5299,12 @@ func TestHandleReassignComprehensive(t *testing.T) {
 
 		_, err := handleReassign(context.Background(), s, cmd, nil)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid byte")
+		// The parser's own text is not the contract; the code and the caller's
+		// input are. A malformed hash answers as getblock does.
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCDecodeHexString, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "invalid-")
 	})
 
 	t.Run("requires valid new UTXO hash", func(t *testing.T) {
@@ -5299,7 +5322,12 @@ func TestHandleReassignComprehensive(t *testing.T) {
 
 		_, err := handleReassign(context.Background(), s, cmd, nil)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid byte")
+		// The parser's own text is not the contract; the code and the caller's
+		// input are. A malformed hash answers as getblock does.
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCDecodeHexString, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "invalid-")
 	})
 
 	t.Run("requires utxo store", func(t *testing.T) {
