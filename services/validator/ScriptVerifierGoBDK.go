@@ -433,9 +433,14 @@ func (v *scriptVerifierGoBDK) mapBDKValidationError(errVerify error, consensus b
 	return errors.NewTxInvalidError(errMsgInvalidTx, bdkCause(errors.ERR_TX_INVALID, errVerify))
 }
 
+// bdkPolicyRelatedScriptError lists the script errors that policy mode reports as
+// TxPolicy. SCRIPT_ERR_SCRIPTNUM_OVERFLOW is not one of them: since bitcoin-sv
+// 1.2.3 it is also the consensus error for a script number that overflows int64,
+// and a policy label would publish such a transaction to KAFKA_TX_POLICY_REJECTED,
+// which carries consensus-valid transactions only. A big number that is only over
+// the policy length limit is reported as TxInvalid as a result.
 func bdkPolicyRelatedScriptError(errCode bdkscript.ScriptErrorCode) bool {
 	return errCode == bdkscript.SCRIPT_ERR_OP_COUNT ||
-		errCode == bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW ||
 		errCode == bdkscript.SCRIPT_ERR_SCRIPTNUM_MINENCODE ||
 		errCode == bdkscript.SCRIPT_ERR_SCRIPT_SIZE ||
 		errCode == bdkscript.SCRIPT_ERR_PUBKEY_COUNT ||

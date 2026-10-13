@@ -25,8 +25,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -378,7 +380,7 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 				// Process the block
 				if err = u.persistBlock(ctx, block.Hash(), blockBytes); err != nil {
-					if errors.Is(err, errors.NewBlobAlreadyExistsError("")) {
+					if u.blockAlreadyPersisted(ctx, block.Hash(), err) {
 						// We log the error but continue processing
 						u.logger.Infof("[BlockPersister] Block %s already exists, skipping...", block.String())
 					} else {
@@ -467,4 +469,23 @@ func isLoopbackListener(listener net.Listener) bool {
 	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
 
 	return ok && tcpAddr.IP.IsLoopback()
+}
+
+// blockAlreadyPersisted reports whether err, returned by persistBlock, means an earlier attempt
+// already persisted the block. BLOB_EXISTS alone is not enough, because it can come from any file
+// an attempt writes. persistBlock writes the block file last, so only that file's presence says
+// the block was persisted.
+func (u *Server) blockAlreadyPersisted(ctx context.Context, hash *chainhash.Hash, err error) bool {
+	if !errors.Is(err, errors.ErrBlobAlreadyExists) {
+		return false
+	}
+
+	exists, existsErr := u.blockStore.Exists(ctx, hash[:], fileformat.FileTypeBlock)
+	if existsErr != nil {
+		u.logger.Warnf("[BlockPersister] error checking for the block file of %s: %v", hash.String(), existsErr)
+
+		return false
+	}
+
+	return exists
 }

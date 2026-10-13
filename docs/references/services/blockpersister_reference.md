@@ -193,11 +193,14 @@ This is a core function of the blockpersister service that handles the complete 
     The function implements a multi-stage persistence process:
 
     1. **Convert raw block bytes** into a structured block model
-    2. **Create a new UTXO difference set** for tracking changes
-    3. **Process the coinbase transaction** if no subtrees are present
-    4. **For blocks with subtrees**, process each subtree concurrently according to configured limits
-    5. **Close and finalize** the UTXO difference set once all transactions are processed
-    6. **Write the complete block** to persistent storage
+    2. **Check for the block file**, which is written last: if it exists, the block is already persisted and `BLOB_EXISTS` is returned before any work. UTXO files without a block file are left from an attempt that stopped early, and are removed
+    3. **Create a new UTXO difference set** for tracking changes
+    4. **Process the coinbase transaction** if no subtrees are present
+    5. **For blocks with subtrees**, process each subtree concurrently according to configured limits
+    6. **Close and finalize** the UTXO difference set once all transactions are processed, before the block file is written
+    7. **Write the complete block** to persistent storage and finalize it
+
+    A failure before the UTXO files are finalized aborts them, and a failure while writing the block file aborts it, so a failed attempt never leaves a block file behind. A failure after the UTXO files are finalized leaves them in place without a block file, and the retry removes them in step 2. An error finalizing either fails the block. The Server treats `BLOB_EXISTS` as "already persisted" only when the block file exists.
 
 **Parameters:**
 
@@ -307,7 +310,7 @@ func (u *Server) CreateSubtreeDataFileStreaming(ctx context.Context, subtreeHash
 Creates subtree data files using streaming writes. This phase runs **in parallel** across all subtrees with configurable concurrency.
 
 !!! note "Processing Steps"
-    1. **Check if subtree data already exists** - if it does, just set DAH and skip processing
+    1. **Check if subtree data already exists** - if it does, validate it by streaming one transaction at a time: one per node, in node order, each hashing to its node, and ending exactly between transactions. A valid file gets DAH=0 and is reused. On a store read error or a cancelled context the file is kept and an error returned. Any other failure deletes the file and rebuilds it
     2. **Retrieve the subtree** from the subtree store using its hash
     3. **Load transaction metadata** from the UTXO store (batched or individual)
     4. **Stream write** the subtree data file using `SubtreeDataWriter`
@@ -317,15 +320,16 @@ Creates subtree data files using streaming writes. This phase runs **in parallel
 #### Phase 2: ProcessSubtreeUTXOStreaming
 
 ```go
-func (u *Server) ProcessSubtreeUTXOStreaming(ctx context.Context, subtreeHash chainhash.Hash, utxoDiff *utxopersister.UTXOSet) error
+func (u *Server) ProcessSubtreeUTXOStreaming(ctx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx, utxoDiff *utxopersister.UTXOSet) error
 ```
 
 Processes UTXO changes by reading from the subtree data files. This phase runs **sequentially** to maintain UTXO ordering.
 
 !!! note "Processing Steps"
     1. **Open subtree data file** for streaming read
-    2. **Process each transaction** through the UTXO diff tracker
-    3. **Record additions and deletions** to the UTXO set
+    2. **Process the block's coinbase** (`coinbaseTx`) when node 0 is the coinbase placeholder. A coinbase opening the file is read and dropped, because the file is keyed by subtree hash and competing blocks can share their first subtree. A block without a coinbase, started from a seed, falls back to the file's coinbase when the subtree has a node after the placeholder
+    3. **Check each transaction against its node**, then process it through the UTXO diff tracker, so a wrong transaction writes nothing
+    4. **Record additions and deletions** to the UTXO set
 
 #### SubtreeDataWriter
 

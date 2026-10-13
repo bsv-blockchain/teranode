@@ -57,6 +57,33 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 
 	u.logger.Infof("[persistBlock][%s] Processing block (%d subtrees)...", block.String(), len(block.Subtrees))
 
+	// The block file is written last, after the utxo files are finalised, so it alone marks the
+	// block as persisted. Utxo files without it were left by an attempt that stopped before the end,
+	// and are replaced rather than trusted.
+	blockExists, err := u.blockStore.Exists(ctx, hash[:], fileformat.FileTypeBlock)
+	if err != nil {
+		return errors.NewStorageError("[persistBlock][%s] error checking for the block file", block.String(), err)
+	}
+
+	if blockExists {
+		return errors.NewBlobAlreadyExistsError("[persistBlock][%s] block file already exists", block.String())
+	}
+
+	for _, fileType := range []fileformat.FileType{fileformat.FileTypeUtxoAdditions, fileformat.FileTypeUtxoDeletions} {
+		exists, err := u.blockStore.Exists(ctx, block.Header.Hash()[:], fileType)
+		if err != nil {
+			return errors.NewStorageError("[persistBlock][%s] error checking for %s", block.String(), fileType, err)
+		}
+
+		if exists {
+			u.logger.Warnf("[persistBlock][%s] removing %s left by an attempt that did not write the block file", block.String(), fileType)
+
+			if err = u.blockStore.Del(ctx, block.Header.Hash()[:], fileType); err != nil {
+				return errors.NewStorageError("[persistBlock][%s] error removing %s", block.String(), fileType, err)
+			}
+		}
+	}
+
 	concurrency := u.settings.BlockPersister.Concurrency
 
 	// In all-in-one mode, reduce concurrency to avoid resource starvation across multiple services
@@ -71,18 +98,23 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	u.logger.Infof("[persistBlock][%s] Processing subtrees with concurrency %d", block.String(), concurrency)
 
 	// Only process UTXO files if enabled
-	var utxoDiff *utxopersister.UTXOSet
+	var (
+		utxoDiff       *utxopersister.UTXOSet
+		utxoDiffClosed bool
+	)
+
 	if u.settings.BlockPersister.ProcessUTXOFiles {
 		// Create a new UTXO diff
-		var err error
 		utxoDiff, err = utxopersister.NewUTXOSet(ctx, u.logger, u.settings, u.blockStore, block.Header.Hash(), block.Height)
 		if err != nil {
 			return errors.NewProcessingError("error creating utxo diff", err)
 		}
 
+		// A failed attempt must not finalise the utxo files it has written so far: a retry would
+		// find them and stop on BLOB_EXISTS. They are finalised below, once the diff is complete.
 		defer func() {
-			if closeErr := utxoDiff.Close(); closeErr != nil {
-				u.logger.Warnf("[persistBlock][%s] error closing utxoDiff during error cleanup: %v", block.String(), closeErr)
+			if !utxoDiffClosed {
+				utxoDiff.Abort(errors.NewProcessingError("[persistBlock][%s] persisting the block failed", block.String()))
 			}
 		}()
 	} else {
@@ -126,13 +158,23 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 			for i, subtreeHash := range block.Subtrees {
 				u.logger.Debugf("[persistBlock][%s] processing UTXO for subtree %d / %d [%s]", block.String(), i+1, len(block.Subtrees), subtreeHash.String())
 
-				if err := u.ProcessSubtreeUTXOStreaming(ctx, *subtreeHash, utxoDiff); err != nil {
+				if err := u.ProcessSubtreeUTXOStreaming(ctx, *subtreeHash, block.CoinbaseTx, utxoDiff); err != nil {
 					return err
 				}
 			}
 
 			u.logger.Infof("[persistBlock][%s] Phase 2 complete: UTXO diff processed", block.String())
 		}
+	}
+
+	// Finalise the utxo files before writing the block file, so the block file exists only for a
+	// block whose utxo files are complete.
+	if utxoDiff != nil {
+		if err = utxoDiff.Close(); err != nil {
+			return errors.NewStorageError("[persistBlock][%s] error finalising the utxo files", block.String(), err)
+		}
+
+		utxoDiffClosed = true
 	}
 
 	// Now, write the block file
@@ -143,15 +185,10 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		return errors.NewStorageError("[persistBlock][%s] error creating block file", block.String(), err)
 	}
 
-	// Track whether write succeeded to determine whether to close or abort
-	var writeSucceeded bool
+	// Abort unless the block file is finalised, so an incomplete one is never left behind
+	var blockFileClosed bool
 	defer func() {
-		if writeSucceeded {
-			if closeErr := storer.Close(ctx); closeErr != nil {
-				u.logger.Warnf("[persistBlock][%s] error closing storer: %v", block.String(), closeErr)
-			}
-		} else {
-			// Abort to prevent incomplete file from being finalized
+		if !blockFileClosed {
 			storer.Abort(errors.NewProcessingError("[persistBlock][%s] block write failed", block.String()))
 		}
 	}()
@@ -160,7 +197,13 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		return errors.NewStorageError("[persistBlock][%s] error writing block to disk", block.String(), err)
 	}
 
-	writeSucceeded = true
+	// A block file that fails to finalise fails the block: the Server marks it persisted only on
+	// a nil return.
+	if err = storer.Close(ctx); err != nil {
+		return errors.NewStorageError("[persistBlock][%s] error finalising the block file", block.String(), err)
+	}
+
+	blockFileClosed = true
 
 	return nil
 }
