@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -388,7 +389,7 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 		assert.Contains(t, err.Error(), "block contains a transaction already on our chain")
 		// The conflicting block's store id is logged; the verdict names the transaction.
 		assert.NotContains(t, err.Error(), "1000")
-		assert.Contains(t, warnLogger.warned(), "1000")
+		assert.Contains(t, fmt.Sprint(warnLogger.warned()), "1000")
 
 		mockStore.AssertExpectations(t)
 	})
@@ -959,7 +960,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		assert.Contains(t, err.Error(), "block contains a transaction already on our chain")
 		// The conflicting block's store id is logged; the verdict names the transaction.
 		assert.NotContains(t, err.Error(), "blockID")
-		assert.Contains(t, warnLogger.warned(), "block ID 5")
+		assert.Contains(t, fmt.Sprint(warnLogger.warned()), "block ID 5")
 
 		mockStore.AssertExpectations(t)
 	})
@@ -1456,11 +1457,14 @@ func (l *warnCaptureLogger) Warnf(format string, args ...interface{}) {
 	l.Logger.Warnf(format, args...)
 }
 
-func (l *warnCaptureLogger) warned() string {
+func (l *warnCaptureLogger) warned() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	return fmt.Sprint(l.warnings)
+	out := make([]string, len(l.warnings))
+	copy(out, l.warnings)
+
+	return out
 }
 
 // TestUpdateTxMinedStatus_BlockIDsStayOutOfTheVerdict: block ids are this node's
@@ -1493,7 +1497,49 @@ func TestUpdateTxMinedStatus_BlockIDsStayOutOfTheVerdict(t *testing.T) {
 		require.Contains(t, err.Error(), "block contains a transaction already on our chain")
 		require.NotContains(t, err.Error(), "77123")
 
-		require.Contains(t, logger.warned(), "77123", "the id is still recorded")
+		require.Contains(t, fmt.Sprint(logger.warned()), "77123", "the id is still recorded")
+	})
+
+	t.Run("fast path, two transactions already on our chain", func(t *testing.T) {
+		// The verdict is stored as the block's invalid reason, so the transaction it
+		// names must be the one whose block id was logged: otherwise that
+		// transaction's id is recorded nowhere.
+		logger := &warnCaptureLogger{Logger: ulogger.TestLogger{}}
+		txA, txB := newTx(100), newTx(200)
+		blockIDOf := map[string]string{txA.TxID(): "block ID 77123", txB.TxID(): "block ID 77124"}
+
+		block := minedBlock(txA)
+		block.SubtreeSlices[0].Nodes = append(block.SubtreeSlices[0].Nodes, subtree.Node{Hash: *txB.TxIDChainHash()})
+
+		mockStore := &utxo.MockUtxostore{}
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(map[chainhash.Hash][]uint32{
+				*txA.TxIDChainHash(): {77123, 15},
+				*txB.TxIDChainHash(): {77124, 15},
+			}, nil).Once()
+
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, map[uint32]bool{77123: true, 77124: true}, true, nil, false)
+		require.ErrorIs(t, err, errors.ErrBlockInvalid)
+
+		var logged []string
+		for _, line := range logger.warned() {
+			if strings.Contains(line, "is already on our chain in block ID") {
+				logged = append(logged, line)
+			}
+		}
+
+		require.Len(t, logged, 1, "once per block")
+
+		named := 0
+		for txID, blockID := range blockIDOf {
+			if strings.Contains(err.Error(), txID) {
+				named++
+				require.Contains(t, logged[0], txID, "the logged transaction is the one the verdict names")
+				require.Contains(t, logged[0], blockID)
+			}
+		}
+
+		require.Equal(t, 1, named, "the verdict names exactly one transaction")
 	})
 
 	t.Run("slow path", func(t *testing.T) {
@@ -1510,7 +1556,7 @@ func TestUpdateTxMinedStatus_BlockIDsStayOutOfTheVerdict(t *testing.T) {
 		require.Contains(t, err.Error(), "slow path")
 		require.NotContains(t, err.Error(), "block IDs", "neither the ids nor how many of them the store holds")
 
-		require.Contains(t, logger.warned(), "1 unique old block IDs", "the count is still recorded")
+		require.Contains(t, fmt.Sprint(logger.warned()), "1 unique old block IDs", "the count is still recorded")
 	})
 }
 

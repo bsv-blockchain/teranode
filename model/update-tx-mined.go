@@ -279,12 +279,14 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 						if _, exists := chainBlockIDsMap[bID]; exists {
 							blockInvalidErrorMu.Lock()
 							// The block id is the store's key, not a public identifier, so it
-							// is logged rather than put in the verdict. Once per block: a block
-							// can carry this for every transaction it holds.
+							// is logged rather than put in the verdict. Once per block, and the
+							// first hit sets both: a block can carry this for every transaction
+							// it holds, and the verdict must name the transaction whose id was
+							// logged.
 							if blockInvalidError == nil {
 								logger.Warnf("[UpdateTxMinedStatus][%s] transaction %s is already on our chain in block ID %d (fast path)", block.Hash().String(), hash.String(), bID)
+								blockInvalidError = errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain: %s (fast path)", block.Hash().String(), hash.String())
 							}
-							blockInvalidError = errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain: %s (fast path)", block.Hash().String(), hash.String())
 							blockInvalidErrorMu.Unlock()
 							continue
 						}
