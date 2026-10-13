@@ -1303,6 +1303,7 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 	batchSize := 100
 	batch := make([]aerospike.BatchRecordIfc, 0, batchSize)
 	txIDs := make([]chainhash.Hash, 0, batchSize)
+	preserveUntils := make([]int, 0, batchSize) // the queried preserveUntil, to restore on failure
 
 	processedCount := 0
 	var readErrors, keyErrors, batchErrors int
@@ -1381,9 +1382,12 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 
 		txIDs = append(txIDs, txHash)
 
+		preserveUntil, _ := record.Bins[fields.PreserveUntil.String()].(int)
+		preserveUntils = append(preserveUntils, preserveUntil)
+
 		// Process batch when full
 		if len(batch) >= batchSize {
-			if err := s.processBatchExpiredPreservations(ctx, batch, txIDs); err != nil {
+			if err := s.processBatchExpiredPreservations(ctx, batch, txIDs, preserveUntils); err != nil {
 				batchErrors++
 			} else {
 				processedCount += len(batch)
@@ -1391,12 +1395,13 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 
 			batch = batch[:0]
 			txIDs = txIDs[:0]
+			preserveUntils = preserveUntils[:0]
 		}
 	}
 
 	// Process remaining records
 	if len(batch) > 0 {
-		if err := s.processBatchExpiredPreservations(ctx, batch, txIDs); err != nil {
+		if err := s.processBatchExpiredPreservations(ctx, batch, txIDs, preserveUntils); err != nil {
 			batchErrors++
 		} else {
 			processedCount += len(batch)
@@ -1415,7 +1420,7 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 }
 
 // processBatchExpiredPreservations is a helper function to process a batch of expired preservations
-func (s *Store) processBatchExpiredPreservations(ctx context.Context, batch []aerospike.BatchRecordIfc, txIDs []chainhash.Hash) error {
+func (s *Store) processBatchExpiredPreservations(ctx context.Context, batch []aerospike.BatchRecordIfc, txIDs []chainhash.Hash, preserveUntils []int) error {
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
 	err := s.client.BatchOperate(batchPolicy, batch)
@@ -1425,9 +1430,10 @@ func (s *Store) processBatchExpiredPreservations(ctx context.Context, batch []ae
 
 	// Log any failures, and collect the pagination-record DAH follow-ups for external masters
 	// whose DAH was set, raised or cleared by the expressions (the Lua DAHSET/DAHUNSET signals).
-	// Not retry-safe: preserveUntil is already cleared, so if a follow-up fails the children keep
-	// their old DAH until something else touches the master.
-	var setItems, unsetItems []childDAHItem
+	var childDAH childDAHFollowUps
+
+	oldDAH := make(map[chainhash.Hash]*uint32)
+	preserved := make(map[chainhash.Hash]int)
 
 	for i, record := range batch {
 		br := record.BatchRec()
@@ -1443,28 +1449,54 @@ func (s *Store) processBatchExpiredPreservations(ctx context.Context, batch []ae
 		}
 
 		if state, parseErr := s.parseSetMinedState(br.Record.Bins); parseErr == nil {
-			collectChildDAHFollowUp(&txIDs[i], state, &setItems, &unsetItems)
+			childDAH.collect(&txIDs[i], state)
+			oldDAH[txIDs[i]] = state.OldDeleteAtHeight
+			preserved[txIDs[i]] = preserveUntils[i]
 		}
 	}
 
-	var followUpErr error
+	// Unsets run before sets and are retried once (applyChildDAHFollowUps). A failed child UNSET is
+	// the data-deleting direction: preserveUntil was cleared by the same write, so the record no
+	// longer matches the expiry query and the children would keep a stale DAH under a master that
+	// has none, which the pruner can delete. To keep the work from being lost, restore the master
+	// (preserveUntil and the old DAH) so the next run redoes the whole transition. A failed child
+	// SET only leaks (children pinned longer), so it is reported but not rolled back.
+	unsetErr, setErr := s.applyChildDAHFollowUps(&childDAH)
 
-	for _, items := range [][]childDAHItem{setItems, unsetItems} {
-		if len(items) == 0 {
-			continue
-		}
-
-		if err := s.SetDAHForChildRecordsMulti(items); err != nil {
-			followUpErr = errors.Join(followUpErr, err)
+	if unsetErr != nil {
+		for _, item := range childDAH.unsets() {
+			if restoreErr := s.restoreExpiredPreservation(item.TxID, preserved[*item.TxID], oldDAH[*item.TxID]); restoreErr != nil {
+				s.logger.Errorf("[ProcessExpiredPreservations] child DAH unset failed and master %s could not be restored: %v", item.TxID, restoreErr)
+				unsetErr = errors.JoinCapped(10, unsetErr, restoreErr)
+			}
 		}
 	}
 
-	if followUpErr != nil {
+	if followUpErr := errors.JoinCapped(10, unsetErr, setErr); followUpErr != nil {
 		s.logger.Warnf("[ProcessExpiredPreservations] child DAH follow-up failed: %v", followUpErr)
 		return followUpErr
 	}
 
 	return nil
+}
+
+// restoreExpiredPreservation puts a master back into its pre-expiry state (preserveUntil and the
+// previous deleteAtHeight) so the expiry query picks it up again.
+func (s *Store) restoreExpiredPreservation(txID *chainhash.Hash, preserveUntil int, oldDAH *uint32) error {
+	key, err := aerospike.NewKey(s.namespace, s.setName, txID[:])
+	if err != nil {
+		return err
+	}
+
+	dahBin := aerospike.NewBin(fields.DeleteAtHeight.String(), nil)
+	if oldDAH != nil {
+		dahBin = aerospike.NewBin(fields.DeleteAtHeight.String(), int(*oldDAH))
+	}
+
+	policy := util.GetAerospikeWritePolicy(s.settings, 0)
+	policy.RecordExistsAction = aerospike.UPDATE_ONLY
+
+	return s.client.PutBins(policy, key, aerospike.NewBin(fields.PreserveUntil.String(), preserveUntil), dahBin)
 }
 
 // storeBatcherDuration returns the store (Create) batcher timeout. It reads

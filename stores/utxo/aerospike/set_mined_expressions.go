@@ -21,21 +21,88 @@ type childDAHItem = struct {
 	DeleteAtHeight uint32
 }
 
-// collectChildDAHFollowUp compares the master's DAH before and after the write and, for an
-// external master with pagination records, queues the matching child-record update: a set or
-// raised DAH is copied to the children, a cleared DAH clears them (the Lua DAHSET/DAHUNSET
-// signals). It is a no-op for non-external records and when the DAH did not change.
-func collectChildDAHFollowUp(hash *chainhash.Hash, state SetMinedState, setItems, unsetItems *[]childDAHItem) {
+// childDAHFollowUps accumulates, per txid, the pagination-record DAH follow-up a batch needs.
+// The LAST state recorded for a txid wins, so a set and an unset queued for the same txid in one
+// batch can never be applied in the wrong order (an unset applied after a set would leave a live
+// master's children without a DAH; a set after an unset would leave a prunable master's children
+// pinned). The zero value is ready to use.
+type childDAHFollowUps struct {
+	order []chainhash.Hash
+	items map[chainhash.Hash]childDAHItem
+}
+
+func (f *childDAHFollowUps) put(item childDAHItem) {
+	if f.items == nil {
+		f.items = make(map[chainhash.Hash]childDAHItem)
+	}
+
+	if _, seen := f.items[*item.TxID]; !seen {
+		f.order = append(f.order, *item.TxID)
+	}
+
+	f.items[*item.TxID] = item
+}
+
+// addSet queues "children get this DAH" (the Lua DAHSET signal).
+func (f *childDAHFollowUps) addSet(hash *chainhash.Hash, childCount int, dah uint32) {
+	f.put(childDAHItem{TxID: hash, ChildCount: childCount, DeleteAtHeight: dah})
+}
+
+// addUnset queues "children lose their DAH" (the Lua DAHUNSET signal).
+func (f *childDAHFollowUps) addUnset(hash *chainhash.Hash, childCount int) {
+	f.put(childDAHItem{TxID: hash, ChildCount: childCount})
+}
+
+// collect compares the master's DAH before and after the write and, for an external master with
+// pagination records, queues the matching follow-up: a set or raised DAH is copied to the
+// children, a cleared DAH clears them. It queues nothing for non-external records and when the
+// DAH did not change.
+func (f *childDAHFollowUps) collect(hash *chainhash.Hash, state SetMinedState) {
 	if !state.External || state.TotalExtraRecs == nil {
 		return
 	}
 
 	switch {
 	case state.NewDeleteAtHeight != nil && (state.OldDeleteAtHeight == nil || *state.OldDeleteAtHeight != *state.NewDeleteAtHeight):
-		*setItems = append(*setItems, childDAHItem{TxID: hash, ChildCount: *state.TotalExtraRecs, DeleteAtHeight: *state.NewDeleteAtHeight})
+		f.addSet(hash, *state.TotalExtraRecs, *state.NewDeleteAtHeight)
 	case state.NewDeleteAtHeight == nil && state.OldDeleteAtHeight != nil:
-		*unsetItems = append(*unsetItems, childDAHItem{TxID: hash, ChildCount: *state.TotalExtraRecs, DeleteAtHeight: 0})
+		f.addUnset(hash, *state.TotalExtraRecs)
 	}
+}
+
+// sets returns the queued set items in first-seen order (nil if none).
+func (f *childDAHFollowUps) sets() []childDAHItem { return f.filter(true) }
+
+// unsets returns the queued unset items in first-seen order (nil if none).
+func (f *childDAHFollowUps) unsets() []childDAHItem { return f.filter(false) }
+
+func (f *childDAHFollowUps) filter(set bool) []childDAHItem {
+	var out []childDAHItem
+
+	for _, h := range f.order {
+		if item := f.items[h]; (item.DeleteAtHeight > 0) == set {
+			out = append(out, item)
+		}
+	}
+
+	return out
+}
+
+// apply writes the queued follow-ups: unsets first, then sets. Clearing is the data-deleting
+// direction (a child left with a stale DAH can be pruned under a live master), so it goes first,
+// is retried once, and its error is returned separately.
+func (s *Store) applyChildDAHFollowUps(f *childDAHFollowUps) (unsetErr, setErr error) {
+	if items := f.unsets(); len(items) > 0 {
+		if unsetErr = s.SetDAHForChildRecordsMulti(items); unsetErr != nil {
+			unsetErr = s.SetDAHForChildRecordsMulti(items)
+		}
+	}
+
+	if items := f.sets(); len(items) > 0 {
+		setErr = s.SetDAHForChildRecordsMulti(items)
+	}
+
+	return unsetErr, setErr
 }
 
 // SetMinedState contains the state returned from setMined operations.
@@ -99,6 +166,7 @@ func (s *Store) parseSetMinedState(bins aerospike.BinMap) (SetMinedState, error)
 			s.parseDAHFromSlice(v, &state)
 		case int:
 			// Single value - treat as both old and new (shouldn't happen with our ops structure)
+			s.debugBareDAH()
 			dah := uint32(v)
 			state.OldDeleteAtHeight = &dah
 			state.NewDeleteAtHeight = &dah
@@ -455,20 +523,8 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 	nrErrors := 0
 
 	// Collect follow-up actions for external transactions (child record DAH updates)
-	dahSetItems := make([]struct {
-		TxID           *chainhash.Hash
-		ChildCount     int
-		DeleteAtHeight uint32
-	}, 0)
-	dahUnsetItems := make([]struct {
-		TxID           *chainhash.Hash
-		ChildCount     int
-		DeleteAtHeight uint32
-	}, 0)
-	externalDAH := make([]struct {
-		TxID *chainhash.Hash
-		DAH  uint32
-	}, 0)
+	// Child (pagination) record DAH follow-ups, last state per txid wins.
+	var childDAH childDAHFollowUps
 	// #1037: lock-clearing follow-up. Non-filtered records: pagination records via
 	// work.items (the master is unlocked by the main batch write's Locked=false op).
 	// FILTERED_OUT records: work.fullUnlock, since the filtered write returns no
@@ -535,48 +591,8 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 			blockIDs[*hash] = blockIDsUint32
 		}
 
-		// For external transactions, check if DAH changed and collect follow-up actions
-		if state.External && state.TotalExtraRecs != nil {
-			// Check if deleteAtHeight actually changed
-			dahChanged := false
-			if state.OldDeleteAtHeight == nil && state.NewDeleteAtHeight != nil {
-				dahChanged = true // DAH was set
-			} else if state.OldDeleteAtHeight != nil && state.NewDeleteAtHeight == nil {
-				dahChanged = true // DAH was cleared
-			} else if state.OldDeleteAtHeight != nil && state.NewDeleteAtHeight != nil {
-				dahChanged = *state.OldDeleteAtHeight != *state.NewDeleteAtHeight // DAH value changed
-			}
-
-			if dahChanged {
-				// Update child records DAH if deleteAtHeight is set (not cleared)
-				if state.NewDeleteAtHeight != nil {
-					dahSetItems = append(dahSetItems, struct {
-						TxID           *chainhash.Hash
-						ChildCount     int
-						DeleteAtHeight uint32
-					}{TxID: hash, ChildCount: *state.TotalExtraRecs, DeleteAtHeight: *state.NewDeleteAtHeight})
-				} else {
-					// DAH was cleared on the master: clear it on the child records too
-					// (the Lua path does this on the DAHUNSET signal).
-					dahUnsetItems = append(dahUnsetItems, struct {
-						TxID           *chainhash.Hash
-						ChildCount     int
-						DeleteAtHeight uint32
-					}{TxID: hash, ChildCount: *state.TotalExtraRecs, DeleteAtHeight: 0})
-				}
-
-				// Update blob storage DAH (handles both set and clear cases)
-				externalDAH = append(externalDAH, struct {
-					TxID *chainhash.Hash
-					DAH  uint32
-				}{TxID: hash, DAH: func() uint32 {
-					if state.NewDeleteAtHeight != nil {
-						return *state.NewDeleteAtHeight
-					}
-					return 0 // 0 signals to clear DAH in blob storage
-				}()})
-			}
-		}
+		// For external transactions, queue the child-record DAH follow-up if the master DAH changed
+		childDAH.collect(hash, state)
 
 		// #1037: this batch write cleared `locked` on the master only. Clear it on
 		// the pagination/extra records too, so a child spending a high-index output
@@ -629,17 +645,8 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 	// mined, and a retry would hit FILTERED_OUT and never reconcile their child-record DAH.
 	var postErr error
 
-	if len(dahSetItems) > 0 {
-		if err := s.SetDAHForChildRecordsMulti(dahSetItems); err != nil {
-			postErr = errors.Join(postErr, err)
-		}
-	}
-
-	if len(dahUnsetItems) > 0 {
-		if err := s.SetDAHForChildRecordsMulti(dahUnsetItems); err != nil {
-			postErr = errors.Join(postErr, err)
-		}
-	}
+	unsetErr, setErr := s.applyChildDAHFollowUps(&childDAH)
+	postErr = errors.JoinCapped(10, unsetErr, setErr)
 
 	// Mirror the Lua path's single guard (set_mined.go) instead of the nested
 	// `if nrErrors > 0 { if errs != nil }`: every nrErrors++ is paired with an
@@ -661,4 +668,13 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 	}
 
 	return blockIDs, work, nil
+}
+
+// debugBareDAH logs when the DAH bin comes back as a bare value on a path that always issues two
+// reads (before and after). A bare value means the "before" read produced no entry, so old == new
+// is assumed and a DAH set would not trigger the child-record follow-up.
+func (s *Store) debugBareDAH() {
+	if s.logger != nil {
+		s.logger.Debugf("[aerospike] deleteAtHeight returned as a bare value on a two-read path; treating old == new")
+	}
 }

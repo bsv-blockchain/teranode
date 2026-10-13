@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,10 +25,12 @@ func TestSpendDAHParity(t *testing.T) {
 	}
 
 	type spendCase struct {
-		name    string
-		mined   bool // record already has a block ID and no unminedSince
-		dah     *int
-		wantDAH func(retention int) *int
+		name  string
+		mined bool // record already has a block ID and no unminedSince
+		// noBlockIDs deletes the blockIDs bin outright (Lua: nil, i.e. no blocks, so not eligible)
+		noBlockIDs bool
+		dah        *int
+		wantDAH    func(retention int) *int
 	}
 
 	cases := []spendCase{
@@ -35,6 +38,8 @@ func TestSpendDAHParity(t *testing.T) {
 			wantDAH: func(int) *int { return dahParityInt(dahParityHighDAH) }},
 		{name: "mined, fully spent by this spend, no DAH -> set", mined: true,
 			wantDAH: func(r int) *int { return dahParityInt(dahParitySpendHeight + r) }},
+		{name: "blockIDs bin missing, fully spent, stale DAH -> cleared", mined: true, noBlockIDs: true, dah: dahParityInt(5),
+			wantDAH: func(int) *int { return nil }},
 		{name: "unmined, fully spent, stale DAH -> cleared", mined: false, dah: dahParityInt(5),
 			wantDAH: func(int) *int { return nil }},
 	}
@@ -84,7 +89,11 @@ func TestSpendDAHParity(t *testing.T) {
 						)
 					}
 
-					require.NoError(t, client.PutBins(nil, key, bins...))
+					if c.noBlockIDs {
+						bins = append(bins, aerospike.NewBin(fields.BlockIDs.String(), nil))
+					}
+
+					require.NoError(t, client.PutBins(nil, key, dahParityDedupeBins(bins)...))
 
 					child := bt.NewTx()
 					require.NoError(t, child.From(parentHash.String(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
@@ -214,10 +223,18 @@ func TestExpiredPreservationChildDAH(t *testing.T) {
 		))
 		require.NoError(t, client.PutBins(nil, k1, dahParityOptionalBin(fields.DeleteAtHeight, dah)))
 
+		// Eventually only absorbs the secondary-index build lag: the child follow-up is
+		// synchronous inside ProcessExpiredPreservations, so once preserveUntil is cleared the
+		// children have been written. assert, not require: the closure runs on its own goroutine.
 		require.Eventually(t, func() bool {
-			require.NoError(t, store.ProcessExpiredPreservations(ctx, currentHeight))
+			if !assert.NoError(t, store.ProcessExpiredPreservations(ctx, currentHeight)) {
+				return false
+			}
+
 			rec, getErr := client.Get(nil, k0)
-			require.NoError(t, getErr)
+			if !assert.NoError(t, getErr) {
+				return false
+			}
 
 			return rec.Bins[fields.PreserveUntil.String()] == nil
 		}, 15*time.Second, 250*time.Millisecond)
@@ -324,4 +341,124 @@ func TestSpendChildDAH(t *testing.T) {
 			})
 		})
 	}
+}
+
+// TestExpiredPreservationChildUnsetFailure injects failing child-record writes into the expiry
+// path for an external master whose DAH gets cleared (no longer eligible, children carry a stale
+// DAH). preserveUntil is cleared by the same write, so the record would never come back from the
+// index query and the children would keep a stale DAH under a master without one, which the
+// pruner can delete. The path must retry the unset once, and if it still fails restore the
+// master (preserveUntil and DAH) so the next run redoes the whole transition.
+func TestExpiredPreservationChildUnsetFailure(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.GlobalBlockHeightRetention = 100
+	tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
+	tSettings.UtxoStore.UtxoBatchSize = 4
+
+	client, store, ctx, cleanup := initAerospike(t, tSettings, logger)
+	defer cleanup()
+
+	const currentHeight = uint32(200)
+
+	setup := func(t *testing.T, idx int) (k0, k1 *aerospike.Key) {
+		cleanDB(t, client)
+
+		hash := dahParityCreatePaginatedTx(ctx, t, store, idx)
+		var err error
+		k0, err = aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(hash, 0))
+		require.NoError(t, err)
+		k1, err = aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(hash, 1))
+		require.NoError(t, err)
+
+		// not eligible (not all spent) with a stale DAH on the master and its child
+		require.NoError(t, client.PutBins(nil, k0,
+			aerospike.NewBin(fields.External.String(), true),
+			aerospike.NewBin(fields.PreserveUntil.String(), int(currentHeight-10)),
+			aerospike.NewBin(fields.SpentUtxos.String(), 1),
+			aerospike.NewBin(fields.SpentExtraRecs.String(), 0),
+			aerospike.NewBin(fields.BlockIDs.String(), []int{7}),
+			aerospike.NewBin(fields.UnminedSince.String(), nil),
+			aerospike.NewBin(fields.DeleteAtHeight.String(), 5),
+		))
+		require.NoError(t, client.PutBins(nil, k1, aerospike.NewBin(fields.DeleteAtHeight.String(), 5)))
+
+		return k0, k1
+	}
+
+	failing := func(failures *int, failFirstN int) func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error {
+		return func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			*failures++
+			if failFirstN < 0 || *failures <= failFirstN {
+				return aerospike.ErrNetwork
+			}
+
+			return client.BatchOperate(policy, records)
+		}
+	}
+
+	runUntilExpiredProcessed := func(t *testing.T, k0 *aerospike.Key) error {
+		var lastErr error
+
+		require.Eventually(t, func() bool {
+			lastErr = store.ProcessExpiredPreservations(ctx, currentHeight)
+			rec, getErr := client.Get(nil, k0)
+			if !assert.NoError(t, getErr) {
+				return false
+			}
+
+			// processed = preserveUntil cleared, or the call reported the failure we injected
+			return rec.Bins[fields.PreserveUntil.String()] == nil || lastErr != nil
+		}, 15*time.Second, 250*time.Millisecond)
+
+		return lastErr
+	}
+
+	t.Run("one transient failure is retried", func(t *testing.T) {
+		k0, k1 := setup(t, 0)
+
+		calls := 0
+		store.SetBatchOperateFn(failing(&calls, 1))
+		defer store.SetBatchOperateFn(nil)
+
+		require.NoError(t, runUntilExpiredProcessed(t, k0))
+		require.GreaterOrEqual(t, calls, 2, "the unset must be retried once")
+
+		rec0, err := client.Get(nil, k0)
+		require.NoError(t, err)
+		rec1, err := client.Get(nil, k1)
+		require.NoError(t, err)
+		require.Nil(t, rec0.Bins[fields.DeleteAtHeight.String()])
+		require.Nil(t, rec1.Bins[fields.DeleteAtHeight.String()], "child DAH must be cleared by the retry")
+	})
+
+	t.Run("persistent failure restores the master so the next run redoes the transition", func(t *testing.T) {
+		k0, k1 := setup(t, 1)
+
+		calls := 0
+		store.SetBatchOperateFn(failing(&calls, -1))
+
+		require.Error(t, runUntilExpiredProcessed(t, k0), "a failed child unset must be reported")
+
+		rec0, err := client.Get(nil, k0)
+		require.NoError(t, err)
+		require.NotNil(t, rec0.Bins[fields.PreserveUntil.String()], "preserveUntil must be restored so the record stays queued")
+		require.Equal(t, 5, rec0.Bins[fields.DeleteAtHeight.String()], "master DAH must be restored to the pre-state")
+
+		// next run, child writes healthy again: the whole transition is redone
+		store.SetBatchOperateFn(nil)
+		require.NoError(t, runUntilExpiredProcessed(t, k0))
+
+		rec0, err = client.Get(nil, k0)
+		require.NoError(t, err)
+		rec1, err := client.Get(nil, k1)
+		require.NoError(t, err)
+		require.Nil(t, rec0.Bins[fields.PreserveUntil.String()])
+		require.Nil(t, rec0.Bins[fields.DeleteAtHeight.String()])
+		require.Nil(t, rec1.Bins[fields.DeleteAtHeight.String()], "child DAH must follow the cleared master")
+	})
 }
