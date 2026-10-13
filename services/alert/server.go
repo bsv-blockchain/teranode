@@ -246,6 +246,14 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) (err error)
 		return errors.NewConfigurationError("error creating genesis alert", err)
 	}
 
+	// Ensure alerts are verified against the configured genesis keys
+	activeKeys, err := s.syncGenesisKeys(ctx)
+	if err != nil {
+		return errors.NewConfigurationError("error syncing alert genesis keys", err)
+	}
+
+	s.logger.Infof("[Alert] verifying alerts against %d active keys from the alert store", activeKeys)
+
 	// Ensure that RPC connection is valid
 	if !s.appConfig.DisableRPCVerification {
 		if _, err = s.appConfig.Services.Node.BestBlockHash(ctx); err != nil {
@@ -345,7 +353,7 @@ func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting
 		s.logger.Warnf("[Alert] no public alert network for network %q, using mainnet values for unset %s", network, strings.Join(mainnetFallback, ", "))
 	}
 
-	s.logger.Infof("[Alert] alert network %q: protocol %s, topic %s, %d genesis keys", network, alertNetwork.ProtocolID, alertNetwork.TopicName, len(alertNetwork.GenesisKeys))
+	s.logger.Infof("[Alert] alert network %q: protocol %s, topic %s", network, alertNetwork.ProtocolID, alertNetwork.TopicName)
 
 	// create the app config
 	s.appConfig = &config.Config{
