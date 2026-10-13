@@ -5133,34 +5133,29 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				// height lags the block being validated, and the block heights are what setMined would
 				// have stamped from, so the DAH is the setMined value or later.
 				//
-				// Same rules as the longest-chain branch of setMined, with one precondition added: the
-				// first DAH is only set when the tx is in a block, since no block row is inserted here.
-				// A preserved tx is left alone, an existing DAH is only raised, never lowered. (The
-				// conflicting case is not special-cased here, unlike the Lua/Aerospike path.)
+				// Same rules as Lua setDeleteAtHeight and the Aerospike path: a preserved tx is left
+				// alone; a conflicting tx gets a DAH if it has none and keeps an existing one; any other
+				// tx gets the DAH (set if none, raised if lower, never lowered) when it is in a block and
+				// has no unspent output, and a stale DAH is cleared when it is not.
 				// Current height is $1, retention $2, hashes start at $3.
 				inClause, inArgs := buildINClause(chunk, 3)
 				newDAH := `(CASE WHEN COALESCE((SELECT MAX(b.block_height) FROM block_ids b WHERE b.transaction_id = transactions.id), 0) > CAST($1 AS BIGINT)
 				                 THEN (SELECT MAX(b.block_height) FROM block_ids b WHERE b.transaction_id = transactions.id)
 				                 ELSE CAST($1 AS BIGINT) END + CAST($2 AS BIGINT))`
+				eligible := `(EXISTS (SELECT 1 FROM block_ids b WHERE b.transaction_id = transactions.id)
+				              AND NOT EXISTS (SELECT 1 FROM outputs o WHERE o.transaction_id = transactions.id AND o.spending_data IS NULL))`
 				q = fmt.Sprintf(`
 					UPDATE transactions
 					SET unmined_since = NULL
 					   ,delete_at_height = CASE
 					        WHEN preserve_until IS NOT NULL THEN delete_at_height
-					        WHEN delete_at_height IS NOT NULL AND delete_at_height < %[1]s THEN %[1]s
-					        WHEN delete_at_height IS NULL
-					             AND EXISTS (
-					                 SELECT 1 FROM block_ids b WHERE b.transaction_id = transactions.id
-					             )
-					             AND NOT EXISTS (
-					                 SELECT 1 FROM outputs o
-					                 WHERE o.transaction_id = transactions.id AND o.spending_data IS NULL
-					             )
-					             THEN %[1]s
-					        ELSE delete_at_height
+					        WHEN conflicting THEN COALESCE(delete_at_height, %[1]s)
+					        WHEN %[3]s THEN
+					            CASE WHEN delete_at_height IS NULL OR delete_at_height < %[1]s THEN %[1]s ELSE delete_at_height END
+					        ELSE NULL
 					    END
 					WHERE hash IN %[2]s
-				`, newDAH, inClause)
+				`, newDAH, inClause, eligible)
 				args = append([]interface{}{int64(currentBlockHeight), int64(retention)}, inArgs...)
 			} else {
 				// hashes start at $1

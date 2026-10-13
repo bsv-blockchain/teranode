@@ -350,11 +350,14 @@ func (s *Store) buildDeleteAtHeightOps(currentBlockHeight uint32, blockHeightRet
 func (s *Store) buildDeleteAtHeightOpsFromRecordHeight(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool) []*aerospike.Operation {
 	heights := aerospike.ExpListBin(fields.BlockHeights.String())
 
+	// nested conditions: the list is only read once it is known to exist and to be non-empty, without
+	// relying on ExpAnd short-circuiting
 	highestMined := aerospike.ExpCond(
-		aerospike.ExpAnd(
-			aerospike.ExpBinExists(fields.BlockHeights.String()),
+		aerospike.ExpBinExists(fields.BlockHeights.String()), aerospike.ExpCond(
 			aerospike.ExpGreater(aerospike.ExpListSize(heights), aerospike.ExpIntVal(0)),
-		), aerospike.ExpListGetByRank(aerospike.ListReturnTypeValue, aerospike.ExpTypeINT, aerospike.ExpIntVal(-1), heights),
+			aerospike.ExpListGetByRank(aerospike.ListReturnTypeValue, aerospike.ExpTypeINT, aerospike.ExpIntVal(-1), heights),
+			aerospike.ExpIntVal(0),
+		),
 		aerospike.ExpIntVal(0),
 	)
 
@@ -375,14 +378,9 @@ func (s *Store) buildDeleteAtHeightOpsFor(newDAH *aerospike.Expression, onLonges
 	}
 }
 
-// buildDeleteAtHeightExpressions builds the set/raise expression and the clear expression
-// from the same branch conditions so the two can never disagree.
-func (s *Store) buildDeleteAtHeightExpressions(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool) (*aerospike.Expression, *aerospike.Expression) {
-	return s.buildDeleteAtHeightExpressionsFor(aerospike.ExpIntVal(int64(currentBlockHeight+blockHeightRetention)), onLongestChain)
-}
-
-// buildDeleteAtHeightExpressionsFor is buildDeleteAtHeightExpressions with the new DAH given as an
-// expression, so it can be computed from the record.
+// buildDeleteAtHeightExpressionsFor builds the set/raise expression and the clear expression from
+// the same branch conditions so the two can never disagree. The new DAH is given as an expression,
+// so it can be computed from the record.
 func (s *Store) buildDeleteAtHeightExpressionsFor(newDAH *aerospike.Expression, onLongestChain bool) (*aerospike.Expression, *aerospike.Expression) {
 
 	// Helper expressions for readability

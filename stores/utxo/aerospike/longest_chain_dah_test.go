@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/require"
 )
 
@@ -325,6 +326,225 @@ func TestSetDAHForChildRecordsMulti_MissingPage(t *testing.T) {
 		ChildCount     int
 		DeleteAtHeight uint32
 	}{{TxID: &txID, ChildCount: 1, DeleteAtHeight: 1234}}))
+
+	exists, err := client.Exists(nil, pageKey)
+	require.NoError(t, err)
+	require.False(t, exists, "a missing page must not be created")
+}
+
+// TestMarkTransactionsOnLongestChain_BlockHeightsFallback: a missing or empty blockHeights bin while
+// blockIDs is present falls back to the store height.
+func TestMarkTransactionsOnLongestChain_BlockHeightsFallback(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	s := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, cleanup := initAerospike(t, s, logger)
+	t.Cleanup(cleanup)
+
+	require.NoError(t, store.SetBlockHeight(1000))
+
+	retention := int(s.GetUtxoStoreBlockHeightRetention())
+	dahBin := fields.DeleteAtHeight.String()
+
+	for name, heights := range map[string]interface{}{"missing": nil, "empty": []interface{}{}} {
+		t.Run(name, func(t *testing.T) {
+			txID := chainhash.HashH([]byte("heights-" + name))
+
+			key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), txID[:])
+			require.NoError(t, err)
+
+			bins := aerospike.BinMap{
+				fields.TxID.String():           txID.CloneBytes(),
+				fields.Conflicting.String():    false,
+				fields.TotalExtraRecs.String(): 0,
+				fields.SpentUtxos.String():     1,
+				fields.RecordUtxos.String():    1,
+				fields.BlockIDs.String():       []interface{}{1},
+				fields.UnminedSince.String():   50,
+			}
+			if heights != nil {
+				bins[fields.BlockHeights.String()] = heights
+			}
+
+			require.NoError(t, client.Put(nil, key, bins))
+			require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txID}, true))
+
+			rec, err := client.Get(nil, key)
+			require.NoError(t, err)
+			require.Equal(t, 1000+retention, rec.Bins[dahBin])
+		})
+	}
+}
+
+// childDAHHarness seeds external masters with one page each and records the order and outcome of the
+// child-record writes MarkTransactionsOnLongestChain issues.
+type childDAHHarness struct {
+	t      *testing.T
+	client *uaerospike.Client
+	store  *astore.Store
+	dahBin string
+}
+
+func (h *childDAHHarness) seed(name string, masterDAH int, spent int) (chainhash.Hash, *aerospike.Key, *aerospike.Key) {
+	txID := chainhash.HashH([]byte(name))
+
+	masterKey, err := aerospike.NewKey(h.store.GetNamespace(), h.store.GetName(), txID[:])
+	require.NoError(h.t, err)
+
+	pageKey, err := aerospike.NewKey(h.store.GetNamespace(), h.store.GetName(), append(txID.CloneBytes(), 1, 0, 0, 0))
+	require.NoError(h.t, err)
+
+	bins := aerospike.BinMap{
+		fields.TxID.String():           txID.CloneBytes(),
+		fields.External.String():       true,
+		fields.Conflicting.String():    false,
+		fields.TotalExtraRecs.String(): 1,
+		fields.SpentExtraRecs.String(): 1,
+		fields.SpentUtxos.String():     spent,
+		fields.RecordUtxos.String():    1,
+		fields.BlockIDs.String():       []interface{}{1},
+		fields.BlockHeights.String():   []interface{}{900},
+		fields.UnminedSince.String():   50,
+	}
+	if masterDAH > 0 {
+		bins[h.dahBin] = masterDAH
+	}
+
+	require.NoError(h.t, h.client.Put(nil, masterKey, bins))
+	require.NoError(h.t, h.client.Put(nil, pageKey, aerospike.BinMap{fields.TxID.String(): txID.CloneBytes(), h.dahBin: masterDAH}))
+
+	return txID, masterKey, pageKey
+}
+
+func (h *childDAHHarness) dah(key *aerospike.Key) interface{} {
+	rec, err := h.client.Get(nil, key)
+	require.NoError(h.t, err)
+
+	return rec.Bins[h.dahBin]
+}
+
+// TestMarkTransactionsOnLongestChain_ChildDAHOrder: unsets are applied before sets on this path.
+func TestMarkTransactionsOnLongestChain_ChildDAHOrder(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	s := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, cleanup := initAerospike(t, s, logger)
+	t.Cleanup(cleanup)
+
+	require.NoError(t, store.SetBlockHeight(1000))
+
+	h := &childDAHHarness{t: t, client: client, store: store, dahBin: fields.DeleteAtHeight.String()}
+
+	// the set (eligible, no DAH yet) is listed first so an unordered apply would write it first
+	setTx, _, setPage := h.seed("order-set", 0, 1)
+	unsetTx, _, unsetPage := h.seed("order-unset", 1002, 0) // unspent with stale DAH: cleared
+
+	var order []string
+
+	store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		for _, r := range records {
+			switch string(r.BatchRec().Key.Digest()) {
+			case string(setPage.Digest()):
+				order = append(order, "set")
+			case string(unsetPage.Digest()):
+				order = append(order, "unset")
+			}
+		}
+
+		return client.BatchOperate(policy, records)
+	})
+	t.Cleanup(func() { store.SetBatchOperateFn(nil) })
+
+	require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{setTx, unsetTx}, true))
+	require.Equal(t, []string{"unset", "set"}, order)
+}
+
+// TestMarkTransactionsOnLongestChain_FailedUnsetRestoresMaster: when the page unset still fails after
+// the retry, the master gets its previous DAH back so a retry of the call redoes the transition
+// instead of leaving stale-DAH pages under a master with no DAH.
+func TestMarkTransactionsOnLongestChain_FailedUnsetRestoresMaster(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	s := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, cleanup := initAerospike(t, s, logger)
+	t.Cleanup(cleanup)
+
+	require.NoError(t, store.SetBlockHeight(1000))
+
+	h := &childDAHHarness{t: t, client: client, store: store, dahBin: fields.DeleteAtHeight.String()}
+
+	txID, masterKey, pageKey := h.seed("failed-unset", 1002, 0) // unspent with stale DAH: cleared
+
+	store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		for _, r := range records {
+			if string(r.BatchRec().Key.Digest()) == string(pageKey.Digest()) {
+				return aerospike.ErrNetwork
+			}
+		}
+
+		return client.BatchOperate(policy, records)
+	})
+
+	require.Error(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txID}, true))
+	require.Equal(t, 1002, h.dah(masterKey), "master DAH restored")
+	require.Equal(t, 1002, h.dah(pageKey))
+
+	// the retry, with the fault gone, completes the transition
+	store.SetBatchOperateFn(nil)
+	require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txID}, true))
+	require.Nil(t, h.dah(masterKey))
+	require.Nil(t, h.dah(pageKey))
+}
+
+// TestSetDAHForChildRecordsMulti_MixedPages: a present page is updated and a missing one is skipped,
+// without error and without creating it.
+func TestSetDAHForChildRecordsMulti_MixedPages(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	s := test.CreateBaseTestSettings(t)
+
+	client, store, _, cleanup := initAerospike(t, s, logger)
+	t.Cleanup(cleanup)
+
+	txID := chainhash.HashH([]byte("mixed-pages"))
+
+	page1, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), append(txID.CloneBytes(), 1, 0, 0, 0))
+	require.NoError(t, err)
+
+	page2, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), append(txID.CloneBytes(), 2, 0, 0, 0))
+	require.NoError(t, err)
+
+	require.NoError(t, client.Put(nil, page1, aerospike.BinMap{fields.TxID.String(): txID.CloneBytes()}))
+
+	require.NoError(t, store.SetDAHForChildRecordsMulti([]struct {
+		TxID           *chainhash.Hash
+		ChildCount     int
+		DeleteAtHeight uint32
+	}{{TxID: &txID, ChildCount: 2, DeleteAtHeight: 1234}}))
+
+	rec, err := client.Get(nil, page1)
+	require.NoError(t, err)
+	require.Equal(t, 1234, rec.Bins[fields.DeleteAtHeight.String()])
+
+	exists, err := client.Exists(nil, page2)
+	require.NoError(t, err)
+	require.False(t, exists)
+}
+
+// TestSetDAHForChildRecords_MissingPage: the singular batcher path also skips a missing page and does
+// not create it.
+func TestSetDAHForChildRecords_MissingPage(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	s := test.CreateBaseTestSettings(t)
+
+	client, store, _, cleanup := initAerospike(t, s, logger)
+	t.Cleanup(cleanup)
+
+	txID := chainhash.HashH([]byte("singular-missing-page"))
+
+	pageKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), append(txID.CloneBytes(), 1, 0, 0, 0))
+	require.NoError(t, err)
+
+	require.NoError(t, store.SetDAHForChildRecords(&txID, 1, 1234))
 
 	exists, err := client.Exists(nil, pageKey)
 	require.NoError(t, err)

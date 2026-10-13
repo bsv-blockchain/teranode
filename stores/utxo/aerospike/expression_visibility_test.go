@@ -56,7 +56,7 @@ func TestExpressionSeesInFlightOperateChanges(t *testing.T) {
 
 // TestExpressionMissingBinSemantics records, against a real server, what an ExpWriteOp with
 // ExpWriteFlagEvalNoFail does when the expression reads a bin that does not exist, and whether
-// ExpAnd short-circuits past a failing read (it does). It documents why buildDeleteAtHeightExpressions
+// ExpAnd short-circuits past a failing read (it does). It documents why buildDeleteAtHeightExpressionsFor
 // guards every counter/list read (Lua treats a nil bin as false/0/empty, an unguarded read
 // makes the whole expression unknown, which is a silent no-op under EvalNoFail).
 func TestExpressionMissingBinSemantics(t *testing.T) {

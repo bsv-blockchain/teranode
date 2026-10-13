@@ -1545,23 +1545,11 @@ func (s *Store) restoreExpiredPreservation(txID *chainhash.Hash, preserveUntil i
 		return err
 	}
 
-	dahBin := fields.DeleteAtHeight.String()
-
-	var dahUnchanged *aerospike.Expression
-	if newDAH == nil {
-		dahUnchanged = aerospike.ExpNot(aerospike.ExpBinExists(dahBin))
-	} else {
-		dahUnchanged = aerospike.ExpCond(
-			aerospike.ExpBinExists(dahBin), aerospike.ExpEq(aerospike.ExpIntBin(dahBin), aerospike.ExpIntVal(int64(*newDAH))),
-			aerospike.ExpBoolVal(false),
-		)
-	}
-
 	policy := util.GetAerospikeBatchWritePolicy(s.settings)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
 	policy.FilterExpression = aerospike.ExpAnd(
 		aerospike.ExpNot(aerospike.ExpBinExists(fields.PreserveUntil.String())),
-		dahUnchanged,
+		dahUnchangedExpression(newDAH),
 	)
 
 	ops := make([]*aerospike.Operation, 0, 2)

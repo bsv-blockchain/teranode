@@ -158,6 +158,7 @@ func TestMarkTransactionsOnLongestChain_DAHRules(t *testing.T) {
 		minedHeight int  // height of the block row, 0: no block_ids row
 		unspent     bool // an unspent output
 		preserve    bool
+		conflicting bool
 		existingDAH *int64
 		want        *int64
 	}{
@@ -168,6 +169,11 @@ func TestMarkTransactionsOnLongestChain_DAHRules(t *testing.T) {
 		{name: "unspent output gets no DAH", minedHeight: 900, unspent: true},
 		{name: "preserved gets no DAH", minedHeight: 900, preserve: true},
 		{name: "no block_ids gets no DAH"},
+		{name: "unspent output loses a stale DAH", minedHeight: 900, unspent: true, existingDAH: ptr(1002)},
+		{name: "no block_ids loses a stale DAH", existingDAH: ptr(1002)},
+		{name: "preserved keeps its DAH", minedHeight: 900, preserve: true, existingDAH: ptr(1002), want: ptr(1002)},
+		{name: "conflicting without a DAH is stamped", conflicting: true, want: ptr(1000 + retention)},
+		{name: "conflicting keeps an existing DAH", conflicting: true, existingDAH: ptr(1002), want: ptr(1002)},
 	}
 
 	for i, tt := range tests {
@@ -176,7 +182,7 @@ func TestMarkTransactionsOnLongestChain_DAHRules(t *testing.T) {
 
 			_, err := store.db.ExecContext(ctx, `
 				INSERT INTO transactions (hash, version, lock_time, fee, size_in_bytes, conflicting, unmined_since, delete_at_height)
-				VALUES ($1, 1, 0, 0, 100, false, 50, $2)`, hash[:], tt.existingDAH)
+				VALUES ($1, 1, 0, 0, 100, $3, 50, $2)`, hash[:], tt.existingDAH, tt.conflicting)
 			require.NoError(t, err)
 
 			if tt.minedHeight > 0 {
