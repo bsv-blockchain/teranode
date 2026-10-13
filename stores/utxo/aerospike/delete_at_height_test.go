@@ -9,7 +9,7 @@ import (
 
 // TestDeleteAtHeightFor pins the single source of truth for the Go DAH formula and
 // the retention guard shared by the create, spend and setMined paths. The
-// filter-expression path (buildDeleteAtHeightExpression) and the Lua
+// filter-expression path (buildDeleteAtHeightOps) and the Lua
 // setDeleteAtHeight UDF must compute the same value.
 func TestDeleteAtHeightFor(t *testing.T) {
 	t.Run("retention enabled returns blockHeight + retention", func(t *testing.T) {

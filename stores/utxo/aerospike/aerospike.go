@@ -687,7 +687,7 @@ func (s *Store) effectiveBlockHeight(blockHeight uint32) uint32 {
 //
 // This is the single source of truth for the Go DAH formula and the retention
 // guard, shared by the create, spend and setMined paths so they cannot drift. The
-// Aerospike filter-expression path (buildDeleteAtHeightExpression) and the Lua
+// Aerospike filter-expression path (buildDeleteAtHeightOps) and the Lua
 // setDeleteAtHeight UDF compute the same blockHeight + retention and MUST be kept
 // in sync with this function.
 func (s *Store) deleteAtHeightFor(blockHeight uint32) (uint32, bool) {
@@ -1349,24 +1349,18 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 		// as the previous implementation did — would stamp a transaction that still
 		// has live outputs (e.g. a parent whose now-resolved mempool child spent only
 		// some of its outputs), and the DAH pruner deletes purely on that stamp, so a
-		// live UTXO would be lost. The expression leaves the bin NULL for ineligible
-		// transactions; the store's normal DAH mechanism re-stamps them if and when
-		// they actually become eligible. This restores "DAH set ⟹ safe to delete".
+		// live UTXO would be lost. The expressions clear the bin for ineligible
+		// transactions and never lower an existing DAH for eligible ones; the store's
+		// normal DAH mechanism re-stamps them if and when they actually become
+		// eligible. This restores "DAH set ⟹ safe to delete".
 		ops := []*aerospike.Operation{
 			aerospike.PutOp(aerospike.NewBin(fields.PreserveUntil.String(), nil)),
-			// Reset to NULL first; the expression below sets it only when eligible.
-			aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), nil)),
 		}
 
 		if blockHeightRetention := s.settings.GetUtxoStoreBlockHeightRetention(); blockHeightRetention > 0 {
-			// ignorePreserveUntil=true: preserveUntil is cleared in this same operate, but the
-			// expression reads the pre-operate record, so the guard must be bypassed here.
-			dahExp := s.buildDeleteAtHeightExpression(currentHeight, blockHeightRetention, false, true)
-			ops = append(ops, aerospike.ExpWriteOp(
-				fields.DeleteAtHeight.String(),
-				dahExp,
-				aerospike.ExpWriteFlagAllowDelete|aerospike.ExpWriteFlagEvalNoFail,
-			))
+			// ignorePreserveUntil=true: preserveUntil is cleared by the op above in this same
+			// operate; the expressions see that in-flight write, so this is belt-and-braces.
+			ops = append(ops, s.buildDeleteAtHeightOps(currentHeight, blockHeightRetention, false, true)...)
 		}
 
 		batch = append(batch, aerospike.NewBatchWrite(batchWritePolicy, key, ops...))

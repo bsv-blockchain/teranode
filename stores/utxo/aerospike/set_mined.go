@@ -425,12 +425,9 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 	// work (pagination records of successfully-mined external txs) is returned to
 	// the caller for clearing, so a tx that was mined successfully is fully
 	// unlocked even if a sibling record in the same batch errored below.
-	if errs != nil || nrErrors > 0 {
-		prometheusTxMetaAerospikeMapSetMinedBatchErrN.Add(float64(nrErrors))
-		return blockIDs, work, errors.NewError("aerospike batchRecord errors", errs)
-	}
-
-	// Execute aggregated follow-ups in batches
+	// Execute aggregated follow-ups in batches. These run BEFORE the sibling-error return
+	// below: the records that did succeed have already been mined, and a retry would hit the
+	// "block already present" no-op and never reconcile their child-record DAH.
 	var postErr error
 
 	if len(extraRecords) > 0 {
@@ -453,6 +450,15 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 
 	// External store DAH is disabled - lifecycle managed by pruner service
 	// setDAHExternalTransactionMulti removed as it would no-op
+
+	if errs != nil || nrErrors > 0 {
+		if postErr != nil {
+			errs = errors.Join(errs, postErr)
+		}
+
+		prometheusTxMetaAerospikeMapSetMinedBatchErrN.Add(float64(nrErrors))
+		return blockIDs, work, errors.NewError("aerospike batchRecord errors", errs)
+	}
 
 	if postErr != nil {
 		return blockIDs, work, errors.NewError("aerospike setMined follow-up batch errors", postErr)

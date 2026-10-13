@@ -261,17 +261,11 @@ func (s *Store) buildSpendOperations(
 		aerospike.AddOp(aerospike.NewBin(fields.SpentUtxos.String(), 1)),
 	)
 
-	// Set deleteAtHeight to nil initially
-	ops = append(ops, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), nil)))
-
-	// Add deleteAtHeight expression if retention is enabled
+	// Add deleteAtHeight ops if retention is enabled. The bin is not nulled first: the
+	// expressions read the existing DAH (raise, never lower; clear when ineligible; leave
+	// pagination records alone), matching the Lua setDeleteAtHeight.
 	if blockHeightRetention > 0 {
-		dahExp := s.buildDeleteAtHeightExpression(currentBlockHeight, blockHeightRetention, false, false)
-		ops = append(ops, aerospike.ExpWriteOp(
-			fields.DeleteAtHeight.String(),
-			dahExp,
-			aerospike.ExpWriteFlagAllowDelete|aerospike.ExpWriteFlagEvalNoFail,
-		))
+		ops = append(ops, s.buildDeleteAtHeightOps(currentBlockHeight, blockHeightRetention, false, false)...)
 	}
 
 	// Read final values after modifications
