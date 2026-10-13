@@ -6,9 +6,8 @@ import (
 
 	"github.com/bsv-blockchain/go-alert-system/app/models"
 	"github.com/bsv-blockchain/go-alert-system/app/models/model"
-	"github.com/mrz1836/go-datastore"
-
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/mrz1836/go-datastore"
 )
 
 // syncGenesisKeys makes the store's active public keys match the configured genesis
