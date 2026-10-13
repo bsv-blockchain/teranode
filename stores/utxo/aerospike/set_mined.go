@@ -419,7 +419,7 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 		}
 	}
 
-	applied := s.applyChildDAHFollowUps(&childDAH)
+	applied := s.applyChildDAHFollowUps(ctx, &childDAH)
 	postErr = errors.JoinCapped(10, postErr, applied.unsetErr, applied.setErr)
 
 	// External store DAH is disabled - lifecycle managed by pruner service

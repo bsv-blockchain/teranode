@@ -503,12 +503,14 @@ func (s *Store) processSpendBatchResultsExpressions(
 		}
 	}
 
-	applied := s.applyChildDAHFollowUps(&childDAH)
+	applied := s.applyChildDAHFollowUps(ctx, &childDAH)
 	postErr = errors.JoinCapped(10, postErr, applied.unsetErr, applied.setErr)
 
 	if postErr != nil {
 		// The spends were already completed, so the caller cannot see this; count it.
-		prometheusUtxoMapErrors.WithLabelValues("SpendExpressions", "ChildDAHFollowUp").Inc()
+		if prometheusUtxoMapErrors != nil {
+			prometheusUtxoMapErrors.WithLabelValues("SpendExpressions", "ChildDAHFollowUp").Inc()
+		}
 		s.logger.Errorf("[SPEND_BATCH_EXP] follow-up errors: %v", postErr)
 	}
 
