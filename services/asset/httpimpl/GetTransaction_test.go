@@ -263,10 +263,18 @@ func TestGetTransaction_MarksItsOwnNotFound(t *testing.T) {
 
 	for name, tc := range map[string]struct {
 		err    error
+		status int
 		marked bool
 	}{
-		"the transaction is not held": {errors.NewNotFoundError("transaction not found"), true},
-		"the repository failed":       {errors.NewProcessingError("error getting transaction"), false},
+		"the transaction is not held": {errors.NewNotFoundError("transaction not found"), http.StatusNotFound, true},
+		"the repository failed":       {errors.NewProcessingError("error getting transaction"), http.StatusInternalServerError, false},
+		// A store fault can say "not found" without being a miss: a misconfigured
+		// aerospike namespace does. The text still earns a 404 for callers that read
+		// the status alone, but only the class marks it as a verdict, so
+		// getrawtransaction does not answer -5 for a transaction it may hold.
+		"a store fault whose text says not found": {
+			errors.NewServiceError("aerospike get failed: Namespace not found"), http.StatusNotFound, false,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
@@ -276,12 +284,15 @@ func TestGetTransaction_MarksItsOwnNotFound(t *testing.T) {
 			echoContext.SetParamNames("hash")
 			echoContext.SetParamValues("9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995")
 
-			require.Error(t, httpServer.GetTransaction(HEX)(echoContext))
+			err := httpServer.GetTransaction(HEX)(echoContext)
+			echoErr := &echo.HTTPError{}
+			require.True(t, errors.As(err, &echoErr))
+			require.Equal(t, tc.status, echoErr.Code)
 
 			if tc.marked {
-				assert.Equal(t, util.AssetNotFoundTx, responseRecorder.Header().Get(util.AssetNotFoundHeader))
+				require.Equal(t, util.AssetNotFoundTx, responseRecorder.Header().Get(util.AssetNotFoundHeader))
 			} else {
-				assert.Empty(t, responseRecorder.Header().Get(util.AssetNotFoundHeader),
+				require.Empty(t, responseRecorder.Header().Get(util.AssetNotFoundHeader),
 					"only a verdict that the transaction is absent is marked")
 			}
 		})
