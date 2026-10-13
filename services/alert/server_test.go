@@ -132,7 +132,7 @@ func TestServer_loadConfig_networkDefaults(t *testing.T) {
 
 		require.NoError(t, server.loadConfig(context.Background(), nil, true))
 
-		testnet := alertNetworkDefaults["testnet"]
+		testnet := upstreamNetwork(t, "testnet")
 		require.Equal(t, testnet.GenesisKeys, server.appConfig.GenesisKeys)
 		require.Equal(t, "/bitcoin-testnet/alert-system/0.0.1", server.appConfig.P2P.AlertSystemProtocolID)
 		require.Equal(t, "bitcoin_alert_system_testnet", server.appConfig.P2P.TopicName)
@@ -143,7 +143,7 @@ func TestServer_loadConfig_networkDefaults(t *testing.T) {
 
 		require.NoError(t, server.loadConfig(context.Background(), nil, true))
 
-		mainnet := alertNetworkDefaults["mainnet"]
+		mainnet := upstreamNetwork(t, "mainnet")
 		require.Equal(t, mainnet.GenesisKeys, server.appConfig.GenesisKeys)
 		require.Equal(t, "/bitcoin/alert-system/1.0.0", server.appConfig.P2P.AlertSystemProtocolID)
 		require.Equal(t, "bitcoin_alert_system", server.appConfig.P2P.TopicName)

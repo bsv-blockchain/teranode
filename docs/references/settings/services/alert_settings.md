@@ -23,8 +23,8 @@
 
 `GenesisKeys`, `ProtocolID` and `TopicName` are empty in `settings.conf`. Each empty setting is
 filled from the configured `network` when the service starts; a non-empty value is an explicit
-override and is used as-is. The defaults mirror go-alert-system's `app/config/envs/*.json` and
-live in `services/alert/network_defaults.go`.
+override and is used as-is. The defaults come from go-alert-system's embedded network configs
+(`config.NetworkDefaults`), resolved in `services/alert/network_defaults.go`.
 
 | Network | ProtocolID | TopicName | GenesisKeys |
 |---------|------------|-----------|-------------|
@@ -48,11 +48,10 @@ Example: `PORT_PREFIX=1` with `ALERT_P2P_PORT=9908` results in port 19908.
 
 - Triggers only if `P2PPrivateKey` is empty
 - Creates directory: `$HOME/.bitcoin/` (permissions: 0750)
-- Writes the generated key to `$HOME/.bitcoin/alert_system_private_key`
-- Sets internal `PrivateKeyPath` (does not modify Teranode settings)
-- Loading the key back from that file is currently broken upstream
-  ([go-alert-system#185](https://github.com/bsv-blockchain/go-alert-system/issues/185)), so a new
-  peer identity is generated on every start. Set `alert_p2p_private_key` for a stable identity.
+- Sets internal `PrivateKeyPath` to `$HOME/.bitcoin/alert_system_private_key` (does not modify Teranode settings)
+- Generates a key into that file (permissions: 0600) only if the file is missing or empty; otherwise
+  loads it, so the peer identity is stable across restarts. An unreadable or invalid file fails startup
+  rather than being overwritten
 
 ## Database Configuration
 
@@ -122,6 +121,5 @@ alert_store=sqlite:///alert
 ```bash
 # Leave empty to auto-generate
 alert_p2p_private_key=
-# Written to $HOME/.bitcoin/alert_system_private_key, but regenerated on every
-# start until go-alert-system#185 is fixed
+# Generated once into $HOME/.bitcoin/alert_system_private_key and reused on restart
 ```
