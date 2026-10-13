@@ -404,3 +404,60 @@ type closingReader struct {
 }
 
 func (c *closingReader) Close() error { return nil }
+
+// TestGetUTXOsBatchBudgets covers the admission budgets on the bulk UTXO route.
+// Both settings default to 0 (unlimited), which is today's behaviour.
+func TestGetUTXOsBatchBudgets(t *testing.T) {
+	initPrometheusMetrics()
+
+	records := make([]struct {
+		TxID chainhash.Hash
+		Vout uint32
+	}, 8)
+
+	for i := range records {
+		records[i].TxID[0] = byte(i)
+	}
+
+	body := buildUTXOsRequest(records)
+
+	t.Run("unset budgets accept the batch", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, rec := GetMockHTTP(t, bytes.NewReader(body))
+		echoContext.Request().Method = http.MethodPost
+
+		mockRepo.On("GetUtxo", mock.Anything).Return(&utxo.SpendResponse{Status: int(utxo.Status_OK)}, nil)
+
+		require.NoError(t, httpServer.GetUTXOs(BINARY_STREAM)(echoContext))
+		require.Equal(t, http.StatusOK, rec.Code)
+	})
+
+	t.Run("record budget rejects an over-budget batch", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, bytes.NewReader(body))
+		echoContext.Request().Method = http.MethodPost
+		httpServer.settings.Asset.MaxBatchRecords = 4
+
+		mockRepo.On("GetUtxo", mock.Anything).Return(&utxo.SpendResponse{Status: int(utxo.Status_OK)}, nil)
+
+		err := httpServer.GetUTXOs(BINARY_STREAM)(echoContext)
+		echoErr := &echo.HTTPError{}
+		require.True(t, errors.As(err, &echoErr))
+		require.Equal(t, http.StatusRequestEntityTooLarge, echoErr.Code)
+
+		mockRepo.AssertNotCalled(t, "GetUtxo", mock.Anything)
+	})
+
+	t.Run("response byte budget rejects before any lookup", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, bytes.NewReader(body))
+		echoContext.Request().Method = http.MethodPost
+		httpServer.settings.Asset.MaxBatchResponseBytes = utxosResponseRecordSize
+
+		mockRepo.On("GetUtxo", mock.Anything).Return(&utxo.SpendResponse{Status: int(utxo.Status_OK)}, nil)
+
+		err := httpServer.GetUTXOs(BINARY_STREAM)(echoContext)
+		echoErr := &echo.HTTPError{}
+		require.True(t, errors.As(err, &echoErr))
+		require.Equal(t, http.StatusRequestEntityTooLarge, echoErr.Code)
+
+		mockRepo.AssertNotCalled(t, "GetUtxo", mock.Anything)
+	})
+}
