@@ -80,6 +80,23 @@ func getUint64AtLeast(key string, defaultValue, floor uint64, alternativeContext
 	return floor
 }
 
+// getIntFloorUnlessZero reads an int setting and raises it to floor when it is configured
+// to a positive value below the floor. Zero is left alone: for settings where it means
+// "uncapped" rather than "unset", flooring it would silently turn an operator's intent to
+// disable the cap into the floor value instead. The override is reported on stderr rather
+// than applied silently, naming both this key and relatedKey, the setting that defines why
+// the floor exists.
+func getIntFloorUnlessZero(key string, defaultValue, floor int, relatedKey string, alternativeContext ...string) int {
+	value := getInt(key, defaultValue, alternativeContext...)
+	if value <= 0 || value >= floor {
+		return value
+	}
+
+	fmt.Fprintf(os.Stderr, "WARN: setting %s is %d, below the floor of %d set by %s — using %d\n", key, value, floor, relatedKey, floor)
+
+	return floor
+}
+
 func getURL(key string, defaultValue string, alternativeContext ...string) *url.URL {
 	str, _ := gocore.Config(alternativeContext...).Get(key, defaultValue)
 	if str == "" {

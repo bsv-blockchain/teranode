@@ -36,13 +36,17 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Only ever cancel a superseded PR smoke run. The schedule and
+  # workflow_dispatch both run on refs/heads/main and so share this group: with
+  # an unconditional cancel, the 04:00 nightly would kill a manual deep run
+  # (and vice versa), discarding hours of fuzzing with no result reported.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 env:
-  GO_VERSION: '1.26.0'
+  GO_VERSION: '1.27.0'
   # 20s on a pull_request smoke run, the dispatch input when given, else the
   # nightly default.
   FUZZTIME: ${{ github.event_name == 'pull_request' && '20s' || github.event.inputs.fuzztime || '5m' }}
@@ -83,6 +87,55 @@ jobs:
           - pkg: services/rpc/bsvjson
             target: FuzzUnmarshalCmd
     steps:
+      # Nothing otherwise relates timeout_minutes to fuzztime, and a job killed
+      # by timeout-minutes is cancelled mid-fuzz - so a deep run with a too-small
+      # timeout burns the whole budget and reports nothing. Catch it in seconds.
+      - name: Check the timeout can accommodate the fuzz budget
+        shell: bash
+        env:
+          TIMEOUT_MINUTES: ${{ github.event.inputs.timeout_minutes || '45' }}
+        run: |
+          # -fuzztime also accepts an execution count (e.g. 10000x), which has no
+          # wall-clock meaning, so there is nothing to check in that case.
+          if [[ "$FUZZTIME" =~ ^[0-9]+x$ ]]; then
+            echo "fuzztime=$FUZZTIME is an execution count; skipping the time check."
+            exit 0
+          fi
+
+          # Parse a Go duration (5m, 90s, 2h, 1h30m) into seconds. Alternatives
+          # are longest-first so that 'ms' is not matched as 'm'.
+          rest="$FUZZTIME"
+          secs=0
+          while [[ -n "$rest" ]]; do
+            if [[ "$rest" =~ ^([0-9]+(\.[0-9]+)?)(ms|us|ns|h|m|s)(.*)$ ]]; then
+              n="${BASH_REMATCH[1]}"
+              u="${BASH_REMATCH[3]}"
+              rest="${BASH_REMATCH[4]}"
+              case "$u" in
+                h) secs=$(awk "BEGIN{print $secs + $n*3600}") ;;
+                m) secs=$(awk "BEGIN{print $secs + $n*60}") ;;
+                s) secs=$(awk "BEGIN{print $secs + $n}") ;;
+                *) ;; # sub-second units are noise at this scale
+              esac
+            else
+              echo "::error::could not parse fuzztime '$FUZZTIME' as a Go duration"
+              exit 1
+            fi
+          done
+
+          # Headroom for checkout, toolchain setup, compilation, and up to
+          # FUZZMINIMIZETIME of crash minimization after a hit.
+          headroom=600
+          need=$(awk "BEGIN{printf \"%d\", $secs + $headroom}")
+          have=$(( TIMEOUT_MINUTES * 60 ))
+
+          if (( have < need )); then
+            echo "::error::timeout_minutes=$TIMEOUT_MINUTES (${have}s) is too small for fuzztime=$FUZZTIME ($(awk "BEGIN{printf \"%d\", $secs}")s) plus ${headroom}s of build and minimization headroom. Re-run with timeout_minutes >= $(( (need + 59) / 60 ))."
+            exit 1
+          fi
+
+          echo "fuzztime=$FUZZTIME fits within timeout_minutes=$TIMEOUT_MINUTES (need ${need}s, have ${have}s)."
+
       - name: Checkout code
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
@@ -106,6 +159,11 @@ jobs:
           mkdir -p "$corpus"
           echo "FUZZ_CORPUS=$corpus" >> "$GITHUB_ENV"
 
+          # Key the cache on package AND target. Target names are unique across
+          # packages today, but nothing enforces that, and two packages that
+          # each grew a FuzzParse... would silently share one corpus.
+          echo "FUZZ_CACHE_ID=$(echo '${{ matrix.pkg }}-${{ matrix.target }}' | tr '/' '-')" >> "$GITHUB_ENV"
+
       # Go writes the inputs it discovers to GOCACHE, not to the repo. Without
       # restoring that between runs every night restarts from the committed
       # seeds and re-explores the same shallow frontier forever — the workflow
@@ -121,9 +179,9 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ env.FUZZ_CORPUS }}
-          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          key: fuzz-corpus-${{ env.FUZZ_CACHE_ID }}-${{ github.run_id }}
           restore-keys: |
-            fuzz-corpus-${{ matrix.target }}-
+            fuzz-corpus-${{ env.FUZZ_CACHE_ID }}-
 
       - name: Fuzz ${{ matrix.target }}
         shell: bash
@@ -140,7 +198,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ env.FUZZ_CORPUS }}
-          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          key: fuzz-corpus-${{ env.FUZZ_CACHE_ID }}-${{ github.run_id }}
 
       # On a crash `go test` writes the failing input to
       # <pkg>/testdata/fuzz/<Target>/<hash> and prints a `go test -run=...`
@@ -148,8 +206,13 @@ jobs:
       # nightly actionable: download it, drop it into the package, and the
       # crash reproduces deterministically. testdata/fuzz/ is not gitignored,
       # so promoting a crasher to a permanent regression seed is a `git add`.
+      # failure() alone is not enough: a job killed by timeout-minutes is
+      # CANCELLED, not failed, and failure() does not evaluate true on a
+      # cancellation. Without cancelled() here, a long deep-fuzz run that
+      # overran its timeout would discard the crasher it had just found -
+      # losing the evidence in exactly the case that produced it.
       - name: Upload crashers and log
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: fuzz-crashers-${{ matrix.target }}
