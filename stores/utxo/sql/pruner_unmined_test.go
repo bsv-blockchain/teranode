@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/stretchr/testify/require"
 )
@@ -78,4 +79,64 @@ func TestPrunerSkipsUnminedRecords(t *testing.T) {
 			require.Zero(t, matching)
 		})
 	}
+}
+
+// TestPrunerClearedDAHIsRestampedOnLongestChain covers the repair path: a mined tx is marked unmined
+// (DAH kept), the pruner clears the DAH, and marking it on the longest chain again must stamp a new
+// DAH so the tx is still pruned eventually.
+func TestPrunerClearedDAHIsRestampedOnLongestChain(t *testing.T) {
+	ResetPrunerServiceForTests()
+	t.Cleanup(ResetPrunerServiceForTests)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store, _ := setup(ctx, t)
+	store.settings.Pruner.UTXODefensiveEnabled = false
+
+	provider, ok := any(store).(pruner.PrunerServiceProvider)
+	require.True(t, ok)
+
+	prunerSvc, err := provider.GetPrunerService()
+	require.NoError(t, err)
+
+	retention := store.settings.GetUtxoStoreBlockHeightRetention()
+	require.NoError(t, store.SetBlockHeight(1000))
+
+	// a mined tx, no unspent outputs, DAH due at 1010
+	hash := chainhash.HashH([]byte("repair"))
+	_, err = store.db.ExecContext(ctx, `
+		INSERT INTO transactions (hash, version, lock_time, fee, size_in_bytes, conflicting, delete_at_height)
+		VALUES ($1, 1, 0, 0, 100, false, 1010)`, hash[:])
+	require.NoError(t, err)
+
+	_, err = store.db.ExecContext(ctx, `
+		INSERT INTO block_ids (transaction_id, block_id, block_height, subtree_idx)
+		SELECT id, 1, 900, 0 FROM transactions WHERE hash = $1`, hash[:])
+	require.NoError(t, err)
+
+	dah := func() sql.NullInt64 {
+		var v sql.NullInt64
+
+		require.NoError(t, store.db.QueryRowContext(ctx, `SELECT delete_at_height FROM transactions WHERE hash = $1`, hash[:]).Scan(&v))
+
+		return v
+	}
+
+	require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{hash}, false))
+	require.True(t, dah().Valid, "marking unmined keeps the DAH")
+
+	_, err = prunerSvc.Prune(ctx, 1010, "test")
+	require.NoError(t, err)
+	require.False(t, dah().Valid, "the pruner clears the DAH of the unmined tx")
+
+	require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{hash}, true))
+
+	got := dah()
+	require.True(t, got.Valid, "marking on the longest chain must re-stamp the DAH")
+	require.Equal(t, int64(1000)+int64(retention), got.Int64)
+
+	deleted, err := prunerSvc.Prune(ctx, uint32(got.Int64), "test")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), deleted)
 }

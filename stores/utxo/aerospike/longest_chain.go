@@ -81,8 +81,39 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 	// The aerospike *Operation struct is immutable after creation and only read during serialization,
 	// so sharing one instance across all batch writes is safe and eliminates 2 allocs per tx.
 	var op *aerospike.Operation
+
+	// ops is what each batch write runs. With a DAH retention, marking on the longest chain also
+	// re-evaluates the DAH (see below); otherwise it is just op.
+	var ops []*aerospike.Operation
+
+	retention := s.settings.GetUtxoStoreBlockHeightRetention()
+	restampDAH := onLongestChain && retention > 0
+
 	if onLongestChain {
 		op = aerospike.PutOp(aerospike.NewBin(fields.UnminedSince.String(), nil))
+		ops = []*aerospike.Operation{op}
+
+		if restampDAH {
+			// The pruner clears the DAH of unmined records, so a tx brought back onto the longest
+			// chain here (repair path) must get its DAH again, as setMined would stamp it. There is
+			// no block height here: the store's current height is used, which is never earlier than
+			// the height of the block the tx was mined in, so the tx is pruned no sooner than setMined
+			// would have allowed. buildDeleteAtHeightExpression keeps setMined's rules (preserved: no
+			// change; DAH only for a fully spent tx that is in a block); the old and new DAH are read
+			// so pagination records can follow the master.
+			ops = []*aerospike.Operation{
+				aerospike.GetBinOp(fields.DeleteAtHeight.String()),
+				aerospike.GetBinOp(fields.External.String()),
+				aerospike.GetBinOp(fields.TotalExtraRecs.String()),
+				op,
+				aerospike.ExpWriteOp(
+					fields.DeleteAtHeight.String(),
+					s.buildDeleteAtHeightExpression(currentBlockHeight, retention, true, false),
+					aerospike.ExpWriteFlagAllowDelete|aerospike.ExpWriteFlagEvalNoFail,
+				),
+				aerospike.GetBinOp(fields.DeleteAtHeight.String()),
+			}
+		}
 	} else {
 		// Only stamp unminedSince when the bin is absent. ExpUnknown with EvalNoFail makes the
 		// existing-value branch a no-op, so an earlier unminedSince is never overwritten.
@@ -96,6 +127,14 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 			),
 			aerospike.ExpWriteFlagEvalNoFail,
 		)
+		ops = []*aerospike.Operation{op}
+	}
+
+	// pages of external txs whose master got a new DAH, applied after the batches
+	var dahSetItems []struct {
+		TxID           *chainhash.Hash
+		ChildCount     int
+		DeleteAtHeight uint32
 	}
 
 	// Divide work evenly across workers (fewer goroutines, sequential batches within each)
@@ -141,7 +180,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 					batchRecords = append(batchRecords, aerospike.NewBatchWrite(
 						batchWritePolicy,
 						key,
-						op,
+						ops...,
 					))
 					batchHashes = append(batchHashes, txHash)
 				}
@@ -165,6 +204,22 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				for j, batchRecord := range batchRecords {
 					recErr := batchRecord.BatchRec().Err
 					if recErr == nil {
+						if restampDAH && batchRecord.BatchRec().Record != nil {
+							if state, perr := s.parseSetMinedState(batchRecord.BatchRec().Record.Bins); perr == nil &&
+								state.External && state.TotalExtraRecs != nil && state.NewDeleteAtHeight != nil &&
+								(state.OldDeleteAtHeight == nil || *state.OldDeleteAtHeight != *state.NewDeleteAtHeight) {
+								h := batchHashes[j]
+
+								mu.Lock()
+								dahSetItems = append(dahSetItems, struct {
+									TxID           *chainhash.Hash
+									ChildCount     int
+									DeleteAtHeight uint32
+								}{TxID: &h, ChildCount: *state.TotalExtraRecs, DeleteAtHeight: *state.NewDeleteAtHeight})
+								mu.Unlock()
+							}
+						}
+
 						continue
 					}
 
@@ -196,6 +251,12 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 
 	if err := g.Wait(); err != nil {
 		return err
+	}
+
+	if len(dahSetItems) > 0 {
+		if err := s.SetDAHForChildRecordsMulti(dahSetItems); err != nil {
+			allErrors = append(allErrors, errors.NewProcessingError("could not set DAH on pagination records", err))
+		}
 	}
 
 	attempted := len(txHashes)

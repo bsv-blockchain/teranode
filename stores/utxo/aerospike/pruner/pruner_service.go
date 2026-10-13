@@ -247,6 +247,9 @@ type Service struct {
 	fieldDeleteAtHeight, fieldTotalExtraRecs, fieldUnminedSince, fieldBlockHeights string
 	fieldConflicting                                                               string
 
+	// batchOperateFn overrides the batch calls of the unmined guard; tests only.
+	batchOperateFn func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error
+
 	// readMastersFn overrides readMasters; tests only.
 	readMastersFn func(keys []*aerospike.Key) ([]masterRead, error)
 
@@ -988,7 +991,7 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 	// Do not delete a record that is currently unmined, unless it is conflicting. Counted separately
 	// from the defensive skip count.
 	chunk, _, clears := s.dropUnminedRecords(chunk)
-	s.clearUnminedDAH(clears)
+	s.clearUnminedDAH(ctx, clears)
 
 	if len(chunk) == 0 {
 		return 0, 0, nil
@@ -1268,7 +1271,7 @@ func (s *Service) readMasters(keys []*aerospike.Key) ([]masterRead, error) {
 		batchRecords[i] = aerospike.NewBatchRead(readPolicy, key, []string{s.fieldUnminedSince, s.fieldConflicting})
 	}
 
-	if err := s.client.BatchOperate(s.batchPolicy, batchRecords); err != nil {
+	if err := s.batchOperate(batchRecords); err != nil {
 		return nil, err
 	}
 
@@ -1340,7 +1343,20 @@ func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Re
 			clearsByMaster[string(masterKey.Digest())] = c
 		}
 
-		c.pageKeys = append(c.pageKeys, pageKeys...)
+		for _, pk := range pageKeys {
+			dup := false
+
+			for _, have := range c.pageKeys {
+				if bytes.Equal(have.Digest(), pk.Digest()) {
+					dup = true
+					break
+				}
+			}
+
+			if !dup {
+				c.pageKeys = append(c.pageKeys, pk)
+			}
+		}
 	}
 
 	for i, rec := range chunk {
@@ -1480,21 +1496,60 @@ func bytesBin(v interface{}) []byte {
 	return b
 }
 
+// batchOperate runs a batch; batchOperateFn overrides it in tests.
+func (s *Service) batchOperate(records []aerospike.BatchRecordIfc) error {
+	if s.batchOperateFn != nil {
+		return s.batchOperateFn(s.batchPolicy, records)
+	}
+
+	return s.client.BatchOperate(s.batchPolicy, records)
+}
+
+// hadDAH reports whether a clear write found a deleteAtHeight to clear. The write reads the bin
+// before clearing it, so the result is the old value, either bare or as the first operation result.
+func (s *Service) hadDAH(br *aerospike.BatchRecord) bool {
+	if br.Record == nil || br.Record.Bins == nil {
+		return false
+	}
+
+	switch v := br.Record.Bins[s.fieldDeleteAtHeight].(type) {
+	case int:
+		return true
+	case aerospike.OpResults:
+		return len(v) > 0 && v[0] != nil
+	case []interface{}:
+		return len(v) > 0 && v[0] != nil
+	}
+
+	return false
+}
+
 // clearUnminedDAH clears deleteAtHeight on protected unmined masters and then on their pagination
-// records, one batch each, and returns how many records were cleared. The master write only applies
-// while the record is still unmined, not conflicting and not preserved, so a concurrent re-mine is not
-// undone; when it is filtered out the pages are left alone too. The pages are written only after their
-// master succeeded. A pagination record whose DAH is cleared right as the master is re-mined can lose
-// its DAH, which leaves it behind rather than deleting it.
+// records, one batch each, and returns how many records actually had a DAH cleared. The master write
+// only applies while the record is still unmined, not conflicting and not preserved, so a concurrent
+// re-mine is not undone; when it is filtered out the pages are left alone too. The pages are written
+// only after their master succeeded.
+//
+// A master that has no DAH itself (it was reached through a page, or an earlier cycle cleared it)
+// is not counted, but its pages are still cleared: otherwise a page that kept its DAH would be returned
+// by the DAH query every cycle.
+//
+// If the master is re-mined between the master clear and the page clear, a page can end up without a
+// DAH while the master has one. That does not leak: the pages are deleted by computed key together
+// with their master when the master is pruned.
 //
 // A failure is only logged: nothing is deleted on its account and the records are returned by the DAH
-// query again next cycle. Nothing is written when deletions are skipped (dry run).
-func (s *Service) clearUnminedDAH(clears []*dahClear) int {
-	if len(clears) == 0 || s.settings.Pruner.SkipDeletions {
+// query again next cycle. Nothing is written when deletions are skipped (dry run) or ctx is done.
+func (s *Service) clearUnminedDAH(ctx context.Context, clears []*dahClear) int {
+	if len(clears) == 0 || s.settings.Pruner.SkipDeletions || ctx.Err() != nil {
 		return 0
 	}
 
-	dahBin := aerospike.NewBin(s.fieldDeleteAtHeight, nil)
+	// read the old DAH first so only records that had one are counted
+	clearOps := []*aerospike.Operation{
+		aerospike.GetBinOp(s.fieldDeleteAtHeight),
+		aerospike.PutOp(aerospike.NewBin(s.fieldDeleteAtHeight, nil)),
+	}
 
 	masterPolicy := aerospike.NewBatchWritePolicy()
 	masterPolicy.RecordExistsAction = aerospike.UPDATE_ONLY
@@ -1509,10 +1564,10 @@ func (s *Service) clearUnminedDAH(clears []*dahClear) int {
 
 	masterBatch := make([]aerospike.BatchRecordIfc, len(clears))
 	for i, c := range clears {
-		masterBatch[i] = aerospike.NewBatchWrite(masterPolicy, c.masterKey, aerospike.PutOp(dahBin))
+		masterBatch[i] = aerospike.NewBatchWrite(masterPolicy, c.masterKey, clearOps...)
 	}
 
-	if err := s.client.BatchOperate(s.batchPolicy, masterBatch); err != nil {
+	if err := s.batchOperate(masterBatch); err != nil {
 		s.logger.Errorf("[pruner] failed to clear deleteAtHeight of %d unmined records, retrying next cycle: %v", len(clears), err)
 		return 0
 	}
@@ -1522,7 +1577,7 @@ func (s *Service) clearUnminedDAH(clears []*dahClear) int {
 
 	var pageBatch []aerospike.BatchRecordIfc
 
-	cleared, failed := 0, 0
+	masters, pages, failed := 0, 0, 0
 
 	for i, c := range clears {
 		br := masterBatch[i].BatchRec()
@@ -1537,22 +1592,27 @@ func (s *Service) clearUnminedDAH(clears []*dahClear) int {
 			continue
 		}
 
-		cleared++
+		if s.hadDAH(br) {
+			masters++
+		}
 
 		for _, pk := range c.pageKeys {
-			pageBatch = append(pageBatch, aerospike.NewBatchWrite(pagePolicy, pk, aerospike.PutOp(dahBin)))
+			pageBatch = append(pageBatch, aerospike.NewBatchWrite(pagePolicy, pk, clearOps...))
 		}
 	}
 
-	if len(pageBatch) > 0 {
-		if err := s.client.BatchOperate(s.batchPolicy, pageBatch); err != nil {
+	if len(pageBatch) > 0 && ctx.Err() == nil {
+		if err := s.batchOperate(pageBatch); err != nil {
 			s.logger.Errorf("[pruner] failed to clear deleteAtHeight of %d pagination records, retrying next cycle: %v", len(pageBatch), err)
 		} else {
 			for _, r := range pageBatch {
-				if r.BatchRec().Err == nil {
-					cleared++
-				} else {
+				br := r.BatchRec()
+
+				switch {
+				case br.Err != nil:
 					failed++
+				case s.hadDAH(br):
+					pages++
 				}
 			}
 		}
@@ -1562,12 +1622,12 @@ func (s *Service) clearUnminedDAH(clears []*dahClear) int {
 		s.logger.Errorf("[pruner] failed to clear deleteAtHeight of %d unmined records, retrying next cycle", failed)
 	}
 
-	if cleared > 0 {
+	if cleared := masters + pages; cleared > 0 {
 		prometheusUtxoDAHClearedUnmined.Add(float64(cleared))
-		s.logger.Infof("[pruner] cleared deleteAtHeight of %d unmined records", cleared)
+		s.logger.Infof("[pruner] cleared deleteAtHeight of %d unmined records (%d masters, %d pagination records)", cleared, masters, pages)
 	}
 
-	return cleared
+	return masters + pages
 }
 
 // batchVerifyChildrenSafety checks multiple child transactions at once to determine if their parents

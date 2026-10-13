@@ -168,9 +168,23 @@ func TestPrunerSkipsUnminedRecords(t *testing.T) {
 			_, err = client.Operate(writePolicy, reminedKey, aerospike.PutOp(aerospike.NewBin(unmined, nil)))
 			require.NoError(t, err)
 
-			require.Zero(t, service.clearUnminedDAH([]*dahClear{{masterKey: reminedKey, pageKeys: []*aerospike.Key{reminedPage}}}))
+			require.Zero(t, service.clearUnminedDAH(ctx, []*dahClear{{masterKey: reminedKey, pageKeys: []*aerospike.Key{reminedPage}}}))
 			require.True(t, hasDAH(reminedKey), "re-mined master must keep its DAH")
 			require.True(t, hasDAH(reminedPage), "page of a re-mined master must keep its DAH")
+
+			// the conflicting arm of the filter: a conflicting master (reached through the race) is not touched
+			conflictingRaceKey := put("conflicting-race", 0, aerospike.BinMap{unmined: 3, conflicting: true, totalExtra: 0})
+			require.Zero(t, service.clearUnminedDAH(ctx, []*dahClear{{masterKey: conflictingRaceKey}}))
+			require.True(t, hasDAH(conflictingRaceKey), "conflicting master must keep its DAH")
+
+			// an unmined master without a DAH is not counted, but its page still loses its DAH
+			noDAHKey := put("no-dah", 0, aerospike.BinMap{unmined: 3, totalExtra: 1})
+			noDAHPage := put("no-dah", 1, aerospike.BinMap{})
+			_, err = client.Operate(writePolicy, noDAHKey, aerospike.PutOp(aerospike.NewBin(dahBin, nil)))
+			require.NoError(t, err)
+
+			require.Equal(t, 1, service.clearUnminedDAH(ctx, []*dahClear{{masterKey: noDAHKey, pageKeys: []*aerospike.Key{noDAHPage}}}))
+			require.False(t, hasDAH(noDAHPage), "page of an unmined master must lose its DAH even if the master had none")
 		})
 	}
 }

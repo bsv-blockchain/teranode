@@ -5003,6 +5003,7 @@ func (s *Store) setUnlockedBulk(ctx context.Context, txHashes []chainhash.Hash) 
 }
 
 // MarkTransactionsOnLongestChain updates unmined_since for transactions based on their chain status.
+// Marking on the longest chain also re-evaluates the delete_at_height (see the query below).
 //
 // This function is critical for maintaining data integrity during blockchain reorganizations.
 // It ensures transactions have the correct unmined_since value based on whether they are on
@@ -5116,9 +5117,47 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 
 		if onLongestChain {
 			// hashes start at $1
-			inClause, inArgs := buildINClause(chunk, 1)
-			q = fmt.Sprintf(`UPDATE transactions SET unmined_since = NULL WHERE hash IN %s`, inClause)
-			args = inArgs
+			var retention uint32
+			if s.settings != nil {
+				retention = s.settings.GetUtxoStoreBlockHeightRetention()
+			}
+
+			if retention > 0 {
+				// The pruner clears the DAH of unmined records, so a tx brought back onto the longest
+				// chain here (repair path) must get its DAH again, as setMined would stamp it.
+				// There is no block height here: the store's current height is used, which is never
+				// earlier than the height of the block the tx was mined in, so the tx is pruned no
+				// sooner than setMined would have allowed. Same rules as setMined: a preserved tx is
+				// left alone, an existing DAH is only bumped forward, and a DAH is set only when the tx
+				// is in a block and has no unspent output.
+				// DAH is $1, hashes start at $2
+				inClause, inArgs := buildINClause(chunk, 2)
+				q = fmt.Sprintf(`
+					UPDATE transactions
+					SET unmined_since = NULL
+					   ,delete_at_height = CASE
+					        WHEN preserve_until IS NOT NULL THEN delete_at_height
+					        WHEN delete_at_height IS NOT NULL AND delete_at_height < $1 THEN $1
+					        WHEN delete_at_height IS NULL
+					             AND EXISTS (
+					                 SELECT 1 FROM block_ids b WHERE b.transaction_id = transactions.id
+					             )
+					             AND NOT EXISTS (
+					                 SELECT 1 FROM outputs o
+					                 WHERE o.transaction_id = transactions.id AND o.spending_data IS NULL
+					             )
+					             THEN $1
+					        ELSE delete_at_height
+					    END
+					WHERE hash IN %s
+				`, inClause)
+				args = append([]interface{}{int64(currentBlockHeight) + int64(retention)}, inArgs...)
+			} else {
+				// hashes start at $1
+				inClause, inArgs := buildINClause(chunk, 1)
+				q = fmt.Sprintf(`UPDATE transactions SET unmined_since = NULL WHERE hash IN %s`, inClause)
+				args = inArgs
+			}
 		} else {
 			// unminedSince is $1, hashes start at $2. COALESCE keeps an existing unmined_since;
 			// only a NULL value (mined -> unmined) is stamped, and it is backdated so the
