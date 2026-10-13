@@ -77,17 +77,16 @@ func (sr *semaphoreReadCloser) Close() error {
 // - *io.PipeReader: A PipeReader that can be used to read the subtree data.
 // - error: An error if the retrieval fails, or nil if successful.
 func (repo *Repository) GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.Hash) (io.ReadCloser, error) {
-	if err := acquireSemaphorePermit(ctx, repo.semGetSubtreeDataReader, "GetSubtreeDataReader"); err != nil {
-		return nil, err
-	}
-	// Note: semaphore will be released when the returned reader is closed
-
+	// The existence checks come before the reader permit. The permit is held for
+	// the whole client-paced response, so taking it first let requests for hashes
+	// this node does not have queue behind live streams — up to the 30s acquire
+	// deadline — and then 404 anyway. Nothing below this point is expensive, and a
+	// request that cannot be served must not consume streaming budget.
 	subtreeDataExists, err := repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 	if err != nil {
 		// Surface storage errors instead of falling through to the NotFound /
 		// on-demand path — otherwise an IO failure here would be silently
 		// reclassified as 404 or trigger an unnecessary regeneration attempt.
-		releaseSemaphorePermit(repo.semGetSubtreeDataReader)
 		return nil, err
 	}
 	// An existing FileTypeSubtreeData is served without asking whether the subtree has been
@@ -103,6 +102,11 @@ func (repo *Repository) GetSubtreeDataReader(ctx context.Context, subtreeHash *c
 	// naively would 404 data served today, because the two files carry different delete-at
 	// heights and the data file can outlive the subtree file.
 	if subtreeDataExists {
+		if err = acquireSemaphorePermit(ctx, repo.semGetSubtreeDataReader, "GetSubtreeDataReader"); err != nil {
+			return nil, err
+		}
+		// Note: semaphore will be released when the returned reader is closed
+
 		reader, err := repo.SubtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 		if err != nil {
 			releaseSemaphorePermit(repo.semGetSubtreeDataReader)
@@ -131,12 +135,17 @@ func (repo *Repository) GetSubtreeDataReader(ctx context.Context, subtreeHash *c
 	// openValidatedSubtree too, and that would reopen bitcoin-sv/teranode#4842.
 	subtreeExists, existsErr := repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 	if existsErr != nil {
-		releaseSemaphorePermit(repo.semGetSubtreeDataReader)
 		return nil, existsErr
 	}
 	if !subtreeExists {
-		releaseSemaphorePermit(repo.semGetSubtreeDataReader)
 		return nil, errors.NewNotFoundError("subtree %s not found", subtreeHash.String())
+	}
+
+	// Only now, with a regeneration actually on the cards, take the reader permit.
+	// It is released by dualStreamWithFileCreation's producer goroutine, or here on
+	// the failure paths below.
+	if err = acquireSemaphorePermit(ctx, repo.semGetSubtreeDataReader, "GetSubtreeDataReader"); err != nil {
+		return nil, err
 	}
 
 	// File doesn't exist — on-demand creation path. Apply non-blocking admission

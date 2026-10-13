@@ -132,6 +132,12 @@ var step5RetryDelays = []time.Duration{0, 50 * time.Millisecond, 200 * time.Mill
 //     (notably block assembly) need this superset to populate a conflictingMap
 //     so the queue→subtree dequeue path can reject children of conflicting
 //     parents that arrive after the cascade has run.
+// compensationTimeout bounds the deferred unwind of a failed ProcessConflicting.
+// It runs on its own context rather than the caller's (see the rollback call site),
+// so it needs a budget of its own: long enough to re-spend and unflag a whole
+// cascade, short enough not to pin a goroutine on a wedged store.
+const compensationTimeout = 2 * time.Minute
+
 func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockHash chainhash.Hash, conflictingTxHashes []chainhash.Hash,
 	processedConflictingHashesMap map[chainhash.Hash]struct{}, guard AncestryGuard, opts ...ProcessConflictingOption) (losingTxHashesMap txmap.TxMap, allMarkedConflicting []chainhash.Hash, err error) {
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "ProcessConflicting")
@@ -205,7 +211,17 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 			return
 		}
 
-		rollbackErr := rollbackProcessConflicting(ctx, s, conflictingTxHashes,
+		// Detached, bounded context — NOT the caller's. The step-2 Unspend stops
+		// early only on ctx.Done, so a cancelled or expired caller ctx is exactly the
+		// failure that leaves the most mixed state. Handing that dead ctx to the
+		// compensation makes every re-spend fail at its first Get, so the undo does
+		// nothing precisely when it is needed most. The work here is cleanup of
+		// writes already made, so it has to outlive the request that triggered it;
+		// the timeout keeps that bounded.
+		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), compensationTimeout)
+		defer rollbackCancel()
+
+		rollbackErr := rollbackProcessConflicting(rollbackCtx, s, conflictingTxHashes,
 			allMarkedHashes, markedAsNotSpendable, step3SuccessfulSpends, blockHeight,
 			step2Committed, step4Committed)
 		if rollbackErr != nil {
@@ -353,13 +369,27 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 	step1Committed = true
 
 	// - 2: un-spend txa, marking the input txs as not spendable (txp & txq)
-	if err = s.Unspend(ctx, affectedParentSpends, true); err != nil {
-		return nil, nil, errors.NewProcessingError("error unspending affected parent spends", err)
-	}
-
+	//
+	// step2Committed is set BEFORE the error check on purpose. Unspend is
+	// best-effort-over-all: it attempts every spend and returns an aggregate, so a
+	// failure means "some, possibly nearly all, spends were reverted" — not "none
+	// were". Gating the compensating re-spend below on full success would skip the
+	// undo in exactly the case that leaves the most uncompensated state, while the
+	// step-4 undo runs unconditionally. Treat a failed step 2 as partially
+	// committed instead: the compensating re-spend is idempotent for the caller
+	// that owns these spends (the Lua same-spender path is a no-op), so running it
+	// after a partial or even total failure is safe, whereas skipping it is not.
 	step2Committed = true
 
-	// get the unique hashes of the transactions that were marked as not spendable
+	// Build the unlock set BEFORE the Unspend, not after. Unspend takes
+	// flagAsLocked=true, so a partial failure can leave some parents locked — but
+	// built after the error return, markedAsNotSpendable was always empty by the
+	// time the compensation checked `step2Committed && len(markedAsNotSpendable) > 0`,
+	// so that arm could never fire after a failed step 2. The set is derived purely
+	// from affectedParentSpends, which is already known here, so computing it first
+	// costs nothing and makes the undo reachable. Latent today only because
+	// aerospike drops flagAsLocked (#1291) and sql Unspend is one transaction; it
+	// goes live the day #1291 makes flagAsLocked real.
 	markedAsNotSpendableHashesUnique := make(map[chainhash.Hash]struct{})
 	for _, spend := range affectedParentSpends {
 		markedAsNotSpendableHashesUnique[*spend.TxID] = struct{}{}
@@ -368,6 +398,10 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 	markedAsNotSpendable = make([]chainhash.Hash, 0, len(markedAsNotSpendableHashesUnique))
 	for hash := range markedAsNotSpendableHashesUnique {
 		markedAsNotSpendable = append(markedAsNotSpendable, hash)
+	}
+
+	if err = s.Unspend(ctx, affectedParentSpends, true); err != nil {
+		return nil, nil, errors.NewProcessingError("error unspending affected parent spends", err)
 	}
 
 	// - 3: spend tx_double_spend as normal (ignoring the not spendable flag)

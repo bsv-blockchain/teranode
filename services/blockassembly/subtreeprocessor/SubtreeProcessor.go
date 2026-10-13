@@ -4637,15 +4637,14 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 					}
 				}
 
-				return true
+				// The swiss Iter callback returns "stop", not "continue":
+				// returning true here would visit one tx per bucket.
+				return false
 			})
 		}
 
 		if losingTxHashesMap != nil && losingTxHashesMap.Length() > 0 {
-			losingTxHashesMap.Iter(func(hash chainhash.Hash, _ uint64) bool {
-				rawLosingTxHashes = append(rawLosingTxHashes, hash)
-				return true
-			})
+			rawLosingTxHashes = appendAllTxHashes(rawLosingTxHashes, losingTxHashesMap)
 		}
 
 		stp.currentBlockHeader.Store(block.Header)
@@ -4821,6 +4820,18 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	stp.drainAndLogDiskTxMapErr("reorgBlocks_commit")
 
 	return nil
+}
+
+// appendAllTxHashes appends every hash in m to dst. The swiss-backed Iter
+// callback returns "stop", not "continue", so it must return false to visit
+// every entry; returning true would stop each bucket after its first entry.
+func appendAllTxHashes(dst []chainhash.Hash, m txmap.TxMap) []chainhash.Hash {
+	m.Iter(func(hash chainhash.Hash, _ uint64) bool {
+		dst = append(dst, hash)
+		return false
+	})
+
+	return dst
 }
 
 // partitionLongestChainMarks splits transactions into the two disjoint sets used by the
