@@ -312,12 +312,12 @@ func TestDrainQueueAfterBlock_MatchesSequentialDrain(t *testing.T) {
 		}
 	}
 
-	transactionMap := NewSplitSwissMap(4, len(inBlock))
+	transactionMap := NewSortedHashSet(len(inBlock))
 	for _, h := range inBlock {
 		require.NoError(t, transactionMap.Put(h))
 	}
 
-	transactionMap.Freeze()
+	require.NoError(t, transactionMap.Freeze(1))
 
 	losingMap := txmap.NewSplitSwissMap(4)
 	require.NoError(t, losingMap.Put(losing, 0))
@@ -411,9 +411,9 @@ func enqueueDrainTest(stp *SubtreeProcessor, parent chainhash.Hash, hashes ...ch
 	time.Sleep(10 * time.Millisecond)
 }
 
-func emptyBlockTxMap() *SplitSwissMap {
-	m := NewSplitSwissMap(4, 1)
-	m.Freeze()
+func emptyBlockTxMap() *SortedHashSet {
+	m := NewSortedHashSet(1)
+	_ = m.Freeze(1)
 
 	return m
 }

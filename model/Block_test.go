@@ -209,7 +209,7 @@ func TestZeroCoverageFunctions(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Try to call it (will likely error but might hit some lines)
@@ -3794,7 +3794,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 
 		// Create validation context with empty parent spends map
 		validationCtx := &validationContext{
-			parentSpendsMap: NewSplitSyncedParentMap(4),
+			parentSpendsMap: newTestParentSpendsMap(4),
 		}
 
 		// Create subtree hash and node
@@ -3828,7 +3828,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 
 		// Create validation context with pre-populated parent spends map
 		validationCtx := &validationContext{
-			parentSpendsMap: NewSplitSyncedParentMap(4),
+			parentSpendsMap: newTestParentSpendsMap(4),
 		}
 
 		// Add an inpoint to simulate existing spend
@@ -3872,7 +3872,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 
 		// Create validation context
 		validationCtx := &validationContext{
-			parentSpendsMap: NewSplitSyncedParentMap(4),
+			parentSpendsMap: newTestParentSpendsMap(4),
 		}
 
 		// Create empty subtree meta slice (will likely cause GetTxInpoints to error)
@@ -3910,7 +3910,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 
 		// Create validation context
 		validationCtx := &validationContext{
-			parentSpendsMap: NewSplitSyncedParentMap(4),
+			parentSpendsMap: newTestParentSpendsMap(4),
 		}
 
 		// Test with various edge case values
@@ -4134,7 +4134,7 @@ func TestBlock_ValidateSubtree_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Create subtree with a node
@@ -4203,7 +4203,7 @@ func TestBlock_ValidateSubtree_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// The only node is the coinbase placeholder, which validateSubtree skips, so
@@ -4258,7 +4258,7 @@ func TestBlock_ValidateSubtree_MissingParents(t *testing.T) {
 	validationCtx := &validationContext{
 		currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 		currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}},
-		parentSpendsMap:             NewSplitSyncedParentMap(4),
+		parentSpendsMap:             newTestParentSpendsMap(4),
 	}
 
 	t.Run("missing parent not found in store", func(t *testing.T) {
@@ -4288,7 +4288,7 @@ func TestBlock_ValidateSubtree_MissingParents(t *testing.T) {
 		subtestCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}},
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// The dummy parent is deliberately not seeded, so it is absent from the store.
@@ -4411,7 +4411,7 @@ func TestBlock_ValidateSubtree_MissingParents(t *testing.T) {
 		subtestCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}},
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		err = block.validateSubtree(ctx, ulogger.TestLogger{}, seededDeps, subtestCtx, subtree, 0)
@@ -4445,7 +4445,7 @@ func TestBlock_ValidateSubtree_MissingParents(t *testing.T) {
 		subtestCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}},
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Both nodes carry distinct inpoints, so they clear checkDuplicateInputs and
@@ -4542,7 +4542,7 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// All 4 nodes must validate. A shared inpoint across nodes would stop this at
@@ -4601,7 +4601,7 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}},
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Exercises the parallel parent checking logic:
@@ -4651,7 +4651,7 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// The single node's parent resolves, so validation completes cleanly.
@@ -4692,7 +4692,7 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}, 3: {}},
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Neither parent is in txMap or the store, so both become missingParentTx entries
@@ -4749,7 +4749,7 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    map[uint32]struct{}{10: {}, 11: {}},
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// The parent is mined into block 5, which is outside the cached {10, 11} set, so
@@ -4810,7 +4810,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Create subtree and subtree meta
@@ -4852,7 +4852,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Create subtree and subtree meta
@@ -4894,7 +4894,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Create subtree and subtree meta
@@ -4938,7 +4938,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Create subtree and subtree meta
@@ -4981,7 +4981,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Add a duplicate input to trigger validation
@@ -5029,7 +5029,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Populate the current block header IDs map
@@ -5577,7 +5577,7 @@ func TestValidateSubtreeBenchmark(t *testing.T) {
 	validationCtx := &validationContext{
 		currentBlockHeaderHashesMap: map[chainhash.Hash]struct{}{*blockHeader.Hash(): {}},
 		currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}},
-		parentSpendsMap:             NewSplitSyncedParentMap(256), // THE CONTENDED RESOURCE
+		parentSpendsMap:             newTestParentSpendsMap(256), // THE CONTENDED RESOURCE
 	}
 
 	ctx := context.Background()
@@ -5925,7 +5925,7 @@ func buildBlockForValidOrderBench(tb testing.TB, leaves, parentsPerTx int) (*Blo
 }
 
 // BenchmarkBlock_ValidOrderAndBlessed_DiskVsMemory compares the per-block cost
-// of validOrderAndBlessed between the in-memory SplitSyncedParentMap and the
+// of validOrderAndBlessed between the in-memory sort-based duplicate input check and the
 // disk-backed DiskParentSpendsMap (single-disk and multi-disk). The disk
 // variants include the full mmap-backed map (mmaphash) open + writer-loop
 // spin-up + close cost per block, which is the realistic per-block-validation
@@ -5935,7 +5935,7 @@ func buildBlockForValidOrderBench(tb testing.TB, leaves, parentsPerTx int) (*Blo
 //
 //	go test -tags testtxmetacache -run='^$' -bench=BenchmarkBlock_ValidOrderAndBlessed_DiskVsMemory -benchmem ./model/
 func BenchmarkBlock_ValidOrderAndBlessed_DiskVsMemory(b *testing.B) {
-	sizes := []int{1024, 16384}
+	sizes := []int{1024, 16384, 131072}
 	impls := []struct {
 		name string
 		dirs func(b *testing.B) []string
