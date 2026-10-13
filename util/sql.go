@@ -72,8 +72,8 @@ func postgresConnConfig(storeURL *url.URL) (*pgx.ConnConfig, error) {
 	// value would swallow the next keyword ("password= dbname=x" sets the
 	// password to "dbname=x" and leaves dbname unset).
 	dbInfo := fmt.Sprintf("user=%s password=%s dbname=%s sslmode=%s host=%s port=%d",
-		quotePostgresConnValue(dbUser), quotePostgresConnValue(dbPassword), quotePostgresConnValue(dbName),
-		quotePostgresConnValue(sslMode), quotePostgresConnValue(dbHost), dbPort)
+		QuotePostgresConnValue(dbUser), QuotePostgresConnValue(dbPassword), QuotePostgresConnValue(dbName),
+		QuotePostgresConnValue(sslMode), QuotePostgresConnValue(dbHost), dbPort)
 
 	// Use pgx/stdlib with QueryExecModeExec to skip prepared statement overhead.
 	// QueryExecModeExec skips the Prepare step (no Parse/Describe round-trip),
@@ -89,9 +89,9 @@ func postgresConnConfig(storeURL *url.URL) (*pgx.ConnConfig, error) {
 	return connConfig, nil
 }
 
-// quotePostgresConnValue quotes a value for a keyword/value connection string,
+// QuotePostgresConnValue quotes a value for a keyword/value connection string,
 // escaping backslashes and single quotes as libpq and pgx expect.
-func quotePostgresConnValue(value string) string {
+func QuotePostgresConnValue(value string) string {
 	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(value) + "'"
 }
 

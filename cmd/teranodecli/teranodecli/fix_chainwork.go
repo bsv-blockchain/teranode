@@ -15,6 +15,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
+	"github.com/bsv-blockchain/teranode/util"
 	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
 )
@@ -37,8 +38,10 @@ type errorRecord struct {
 	Difference       *big.Int
 }
 
-// buildPostgresConnString builds a PostgreSQL connection string from a URL
-// This matches the logic in util/sql.go InitPostgresDB
+// buildPostgresConnString builds a PostgreSQL connection string from a URL.
+// Values are quoted with util.QuotePostgresConnValue, the same helper
+// util/sql.go uses, so a value containing a space, quote, backslash or '='
+// cannot truncate the string or inject another keyword (#1877).
 func buildPostgresConnString(storeURL *url.URL) string {
 	dbHost := storeURL.Hostname()
 	port := storeURL.Port()
@@ -46,7 +49,9 @@ func buildPostgresConnString(storeURL *url.URL) string {
 	if port != "" {
 		dbPort, _ = strconv.Atoi(port)
 	}
-	dbName := storeURL.Path[1:]
+	// TrimPrefix, not Path[1:], so a URL with no path ("postgres://host:5432")
+	// yields an empty dbname instead of panicking on the empty string.
+	dbName := strings.TrimPrefix(storeURL.Path, "/")
 	dbUser := ""
 	dbPassword := ""
 
@@ -64,18 +69,19 @@ func buildPostgresConnString(storeURL *url.URL) string {
 		sslMode = val[0] // Use the first value if multiple are provided
 	}
 
-	// Build connection string, only include password if it's not empty
+	// Build connection string, only include password if it's not empty. Every
+	// value is quoted; port is an int and needs none.
 	connStr := fmt.Sprintf("host=%s port=%d dbname=%s sslmode=%s",
-		dbHost, dbPort, dbName, sslMode)
+		util.QuotePostgresConnValue(dbHost), dbPort, util.QuotePostgresConnValue(dbName), util.QuotePostgresConnValue(sslMode))
 
 	// Only add user if it's not empty
 	if dbUser != "" {
-		connStr = fmt.Sprintf("%s user=%s", connStr, dbUser)
+		connStr = fmt.Sprintf("%s user=%s", connStr, util.QuotePostgresConnValue(dbUser))
 	}
 
 	// Only add password if it's not empty
 	if dbPassword != "" {
-		connStr = fmt.Sprintf("%s password=%s", connStr, dbPassword)
+		connStr = fmt.Sprintf("%s password=%s", connStr, util.QuotePostgresConnValue(dbPassword))
 	}
 
 	return connStr
