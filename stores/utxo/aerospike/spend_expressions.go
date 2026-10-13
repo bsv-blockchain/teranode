@@ -101,6 +101,7 @@ func (s *Store) parseSpendState(bins aerospike.BinMap) (SpendState, error) {
 			state.OldDeleteAtHeight = tempState.OldDeleteAtHeight
 			state.NewDeleteAtHeight = tempState.NewDeleteAtHeight
 		case int:
+			s.debugBareDAH()
 			dah := uint32(v)
 			state.OldDeleteAtHeight = &dah
 			state.NewDeleteAtHeight = &dah
@@ -396,16 +397,8 @@ func (s *Store) processSpendBatchResultsExpressions(
 	// block height so each tx's delete-at-height is stamped from its own spend
 	// height (a single batch may aggregate spends from different blocks).
 	extraRecordsByHeight := make(map[uint32][]*chainhash.Hash)
-	dahSetItems := make([]struct {
-		TxID           *chainhash.Hash
-		ChildCount     int
-		DeleteAtHeight uint32
-	}, 0)
-	dahUnsetItems := make([]childDAHItem, 0)
-	externalDAH := make([]struct {
-		TxID *chainhash.Hash
-		DAH  uint32
-	}, 0)
+	// Child (pagination) record DAH follow-ups, last state per txid wins.
+	var childDAH childDAHFollowUps
 
 	// Records filtered out by the expression — retried through Lua before
 	// completing them, so each item is still completed exactly once.
@@ -469,41 +462,14 @@ func (s *Store) processSpendBatchResultsExpressions(
 			if state.RecordUtxos > 0 && state.SpentUtxos == state.RecordUtxos {
 				extraRecordsByHeight[bItem.blockHeight] = append(extraRecordsByHeight[bItem.blockHeight], bItem.spend.TxID)
 			}
-		} else if state.TotalExtraRecs != nil {
-			// Master record - check DAH changes for external transactions
-			if state.External {
-				dahChanged := false
-				if state.OldDeleteAtHeight == nil && state.NewDeleteAtHeight != nil {
-					dahChanged = true
-				} else if state.OldDeleteAtHeight != nil && state.NewDeleteAtHeight == nil {
-					dahChanged = true
-				} else if state.OldDeleteAtHeight != nil && state.NewDeleteAtHeight != nil {
-					dahChanged = *state.OldDeleteAtHeight != *state.NewDeleteAtHeight
-				}
-
-				if dahChanged {
-					if state.NewDeleteAtHeight != nil {
-						dahSetItems = append(dahSetItems, struct {
-							TxID           *chainhash.Hash
-							ChildCount     int
-							DeleteAtHeight uint32
-						}{TxID: bItem.spend.TxID, ChildCount: *state.TotalExtraRecs, DeleteAtHeight: *state.NewDeleteAtHeight})
-					} else {
-						// DAH cleared on the master: clear the child records too (Lua DAHUNSET).
-						dahUnsetItems = append(dahUnsetItems, childDAHItem{TxID: bItem.spend.TxID, ChildCount: *state.TotalExtraRecs})
-					}
-
-					externalDAH = append(externalDAH, struct {
-						TxID *chainhash.Hash
-						DAH  uint32
-					}{TxID: bItem.spend.TxID, DAH: func() uint32 {
-						if state.NewDeleteAtHeight != nil {
-							return *state.NewDeleteAtHeight
-						}
-						return 0
-					}()})
-				}
-			}
+		} else {
+			// Master record: queue the child-record DAH follow-up if the master DAH changed
+			childDAH.collect(bItem.spend.TxID, SetMinedState{
+				External:          state.External,
+				TotalExtraRecs:    state.TotalExtraRecs,
+				OldDeleteAtHeight: state.OldDeleteAtHeight,
+				NewDeleteAtHeight: state.NewDeleteAtHeight,
+			})
 		}
 
 		bItem.complete(nil)
@@ -537,17 +503,8 @@ func (s *Store) processSpendBatchResultsExpressions(
 		}
 	}
 
-	if len(dahSetItems) > 0 {
-		if err := s.SetDAHForChildRecordsMulti(dahSetItems); err != nil {
-			postErr = errors.Join(postErr, err)
-		}
-	}
-
-	if len(dahUnsetItems) > 0 {
-		if err := s.SetDAHForChildRecordsMulti(dahUnsetItems); err != nil {
-			postErr = errors.Join(postErr, err)
-		}
-	}
+	unsetErr, setErr := s.applyChildDAHFollowUps(&childDAH)
+	postErr = errors.JoinCapped(10, postErr, unsetErr, setErr)
 
 	if postErr != nil {
 		s.logger.Errorf("[SPEND_BATCH_EXP] follow-up errors: %v", postErr)

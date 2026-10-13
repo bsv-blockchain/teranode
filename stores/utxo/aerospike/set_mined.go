@@ -319,16 +319,8 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 
 	// Collect follow-up actions to execute in batches after the loop
 	extraRecords := make([]*chainhash.Hash, 0, len(hashes))
-	dahSetItems := make([]struct {
-		TxID           *chainhash.Hash
-		ChildCount     int
-		DeleteAtHeight uint32
-	}, 0)
-	dahUnsetItems := make([]struct {
-		TxID           *chainhash.Hash
-		ChildCount     int
-		DeleteAtHeight uint32
-	}, 0)
+	// Child (pagination) record DAH follow-ups, last state per txid wins.
+	var childDAH childDAHFollowUps
 	// #1037: pagination/extra records of successfully-mined external txs whose
 	// `locked` flag must be cleared (the master-keyed setMined only clears the
 	// master). Populated from the setMined response's childCount (= totalExtraRecs).
@@ -366,7 +358,7 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 			// pagination records. Clear them (the master's lock is cleared by the
 			// UDF itself). childCount == totalExtraRecs is surfaced by setMined on a
 			// mine; UnsetMined never reaches here as a clear (childCount only on mine).
-			if res != nil && !minedBlockInfo.UnsetMined && res.ChildCount > 0 {
+			if res != nil && hashes[idx] != nil && !minedBlockInfo.UnsetMined && res.ChildCount > 0 {
 				work.items = append(work.items, lockClearItem{txID: hashes[idx], childCount: res.ChildCount})
 			}
 		}
@@ -404,19 +396,11 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 			case LuaSignalDAHSet:
 				// Only set DAH if retention is configured
 				if dahEnabled {
-					dahSetItems = append(dahSetItems, struct {
-						TxID           *chainhash.Hash
-						ChildCount     int
-						DeleteAtHeight uint32
-					}{TxID: hashes[idx], ChildCount: res.ChildCount, DeleteAtHeight: dahHeight})
+					childDAH.addSet(hashes[idx], res.ChildCount, dahHeight)
 					// External store DAH is disabled - lifecycle managed by pruner service
 				}
 			case LuaSignalDAHUnset:
-				dahUnsetItems = append(dahUnsetItems, struct {
-					TxID           *chainhash.Hash
-					ChildCount     int
-					DeleteAtHeight uint32
-				}{TxID: hashes[idx], ChildCount: res.ChildCount, DeleteAtHeight: 0})
+				childDAH.addUnset(hashes[idx], res.ChildCount)
 				// External store DAH is disabled - lifecycle managed by pruner service
 			}
 		}
@@ -435,17 +419,8 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 		}
 	}
 
-	if len(dahSetItems) > 0 {
-		if err := s.SetDAHForChildRecordsMulti(dahSetItems); err != nil {
-			postErr = errors.Join(postErr, err)
-		}
-	}
-
-	if len(dahUnsetItems) > 0 {
-		if err := s.SetDAHForChildRecordsMulti(dahUnsetItems); err != nil {
-			postErr = errors.Join(postErr, err)
-		}
-	}
+	unsetErr, setErr := s.applyChildDAHFollowUps(&childDAH)
+	postErr = errors.JoinCapped(10, postErr, unsetErr, setErr)
 
 	// External store DAH is disabled - lifecycle managed by pruner service
 	// setDAHExternalTransactionMulti removed as it would no-op

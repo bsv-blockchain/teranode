@@ -188,7 +188,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				// bounded chunks, so one worker never holds sum(totalExtraRecs) writes at once and the
 				// follow-up still runs if another worker fails. A page missing its DAH is harmless: pages
 				// are deleted by computed key together with their master when the master is pruned.
-				var dahSetItems, dahUnsetItems []childDAHItem
+				var followUps childDAHFollowUps
 
 				// Check individual record results
 				for j, batchRecord := range batchRecords {
@@ -197,7 +197,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 						if restampDAH && batchRecord.BatchRec().Record != nil {
 							if state, perr := s.parseSetMinedState(batchRecord.BatchRec().Record.Bins); perr == nil {
 								h := batchHashes[j]
-								collectChildDAHFollowUp(&h, state, &dahSetItems, &dahUnsetItems)
+								followUps.collect(&h, state)
 							}
 						}
 
@@ -225,7 +225,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 					mu.Unlock()
 				}
 
-				if err := s.applyChildDAH(dahSetItems, dahUnsetItems); err != nil {
+				if err := s.applyChildDAH(followUps.unsets(), followUps.sets()); err != nil {
 					atomic.AddInt64(&errorCount, 1)
 					mu.Lock()
 					if len(allErrors) < 10 {
@@ -274,13 +274,14 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 // childDAHChunk bounds the number of pagination records written by one batch.
 const childDAHChunk = 4096
 
-// applyChildDAH sets (and clears) the DAH of pagination records in bounded chunks of about
-// childDAHChunk records per batch. A page that no longer exists is not an error
-// (SetDAHForChildRecordsMulti skips key-not-found).
-func (s *Store) applyChildDAH(setItems, unsetItems []childDAHItem) error {
+// applyChildDAH clears and then sets the DAH of pagination records in bounded chunks of about
+// childDAHChunk records per batch. Clearing goes first: it is the data-deleting direction (a page
+// left with a stale DAH can be pruned under a live master). A page that no longer exists is not an
+// error (SetDAHForChildRecordsMulti skips key-not-found).
+func (s *Store) applyChildDAH(unsetItems, setItems []childDAHItem) error {
 	var errs error
 
-	for _, items := range [][]childDAHItem{setItems, unsetItems} {
+	for _, items := range [][]childDAHItem{unsetItems, setItems} {
 		var chunk []childDAHItem
 
 		pages := 0

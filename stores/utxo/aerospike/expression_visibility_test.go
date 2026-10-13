@@ -78,6 +78,14 @@ func TestExpressionMissingBinSemantics(t *testing.T) {
 	flags := aerospike.ExpWriteFlagCreateOnly | aerospike.ExpWriteFlagEvalNoFail
 	missing := aerospike.ExpIntBin("missing")
 
+	// the observed semantics are server behaviour, so every failure names the server build
+	build := "unknown"
+	if nodes := client.GetNodes(); len(nodes) > 0 {
+		if info, infoErr := nodes[0].RequestInfo(aerospike.NewInfoPolicy(), "build"); infoErr == nil {
+			build = info["build"]
+		}
+	}
+
 	_, err = client.Operate(nil, key,
 		// unguarded comparison on a missing bin
 		aerospike.ExpWriteOp("unguardedEq", aerospike.ExpCond(
@@ -112,10 +120,10 @@ func TestExpressionMissingBinSemantics(t *testing.T) {
 	t.Logf("unguardedEq written=%v andGuarded written=%v condGuarded written=%v listSizeMissing written=%v",
 		unguarded, andGuarded, condGuarded, listSizeMissing)
 
-	require.False(t, unguarded, "an unguarded read of a missing bin is a silent no-op under EvalNoFail")
-	require.True(t, andGuarded, "ExpAnd short-circuits, so ExpAnd(ExpBinExists, read) is a valid guard")
-	require.True(t, condGuarded, "ExpCond branch guard works")
-	require.False(t, listSizeMissing, "ExpListSize of a missing list bin makes the expression unknown")
+	require.False(t, unguarded, "an unguarded read of a missing bin is a silent no-op under EvalNoFail (server build %s)", build)
+	require.True(t, andGuarded, "ExpAnd short-circuits, so ExpAnd(ExpBinExists, read) is a valid guard (server build %s)", build)
+	require.True(t, condGuarded, "ExpCond branch guard works (server build %s)", build)
+	require.False(t, listSizeMissing, "ExpListSize of a missing list bin makes the expression unknown (server build %s)", build)
 }
 
 // TestExpressionSeesInFlightOperateChangesBatch is the BatchOperate variant of
