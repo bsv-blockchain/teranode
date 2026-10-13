@@ -357,15 +357,19 @@ func TestCallerInputSites_KeepTheirReasonWhenTheDefaultFailsClosed(t *testing.T)
 		call   func(*RPCServer) (interface{}, error)
 		params *chaincfg.Params // nil means mainnet
 		code   bsvjson.RPCErrorCode
-		text   string
+		// text is the whole message, unless prefixed: then the site puts its own
+		// prefix ahead of a parser's text, and text is what must survive in it.
+		text     string
+		prefixed bool
 	}{
 		"createrawtransaction, malformed address": {
 			call: func(s *RPCServer) (interface{}, error) {
 				return handleCreateRawTransaction(context.Background(), s,
 					&bsvjson.CreateRawTransactionCmd{Amounts: map[string]float64{"notanaddress": 1}}, nil)
 			},
-			code: bsvjson.ErrRPCInvalidAddressOrKey,
-			text: "invalid length address",
+			code:     bsvjson.ErrRPCInvalidAddressOrKey,
+			text:     "invalid length address",
+			prefixed: true,
 		},
 		"generatetoaddress, malformed address": {
 			call: func(s *RPCServer) (interface{}, error) {
@@ -400,42 +404,43 @@ func TestCallerInputSites_KeepTheirReasonWhenTheDefaultFailsClosed(t *testing.T)
 			},
 			params: &generating,
 			code:   bsvjson.ErrRPCInvalidParameter,
-			text:   "out of range",
+			text:   "value out of range (int32): 2147483648",
 		},
 		"sendrawtransaction, valid hex that is not a transaction": {
 			call: func(s *RPCServer) (interface{}, error) {
 				return handleSendRawTransaction(context.Background(), s, &bsvjson.SendRawTransactionCmd{HexTx: "00"}, nil)
 			},
-			code: bsvjson.ErrRPCDeserialization,
-			text: txRejectedPrefix,
+			code:     bsvjson.ErrRPCDeserialization,
+			text:     txRejectedPrefix,
+			prefixed: true,
 		},
 		"getblockhash, negative height": {
 			call: func(s *RPCServer) (interface{}, error) {
 				return handleGetBlockHash(context.Background(), s, &bsvjson.GetBlockHashCmd{Index: -1}, nil)
 			},
 			code: bsvjson.ErrRPCInvalidParameter,
-			text: "negative",
+			text: "negative value cannot be converted to unsigned integer to uint32: -1",
 		},
 		"freeze, malformed txid": {
 			call: func(s *RPCServer) (interface{}, error) {
 				return handleFreeze(context.Background(), s, &bsvjson.FreezeCmd{TxID: badHash}, nil)
 			},
 			code: bsvjson.ErrRPCDecodeHexString,
-			text: badHash,
+			text: fmt.Sprintf("Argument must be hexadecimal string (not %q)", badHash),
 		},
 		"unfreeze, malformed txid": {
 			call: func(s *RPCServer) (interface{}, error) {
 				return handleUnfreeze(context.Background(), s, &bsvjson.UnfreezeCmd{TxID: badHash}, nil)
 			},
 			code: bsvjson.ErrRPCDecodeHexString,
-			text: badHash,
+			text: fmt.Sprintf("Argument must be hexadecimal string (not %q)", badHash),
 		},
 		"reassign, malformed txid": {
 			call: func(s *RPCServer) (interface{}, error) {
 				return handleReassign(context.Background(), s, &bsvjson.ReassignCmd{OldTxID: badHash}, nil)
 			},
 			code: bsvjson.ErrRPCDecodeHexString,
-			text: badHash,
+			text: fmt.Sprintf("Argument must be hexadecimal string (not %q)", badHash),
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -444,9 +449,9 @@ func TestCallerInputSites_KeepTheirReasonWhenTheDefaultFailsClosed(t *testing.T)
 				params = &chaincfg.MainNetParams
 			}
 
-			// What an argument that got past its handler's check would meet: block
-			// assembly refusing a payout address it cannot encode, under generate's
-			// own wrapper.
+			// For the generate and generatetoaddress rows: what an argument that got
+			// past its handler's check would meet, block assembly refusing a payout
+			// address it cannot encode under generate's own wrapper.
 			bc, ba := &blockchain.Mock{}, &blockassembly.Mock{}
 			bc.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1}, nil)
 			ba.On("GenerateBlocks", mock.Anything, mock.Anything).Return(overGRPC(t,
@@ -458,15 +463,21 @@ func TestCallerInputSites_KeepTheirReasonWhenTheDefaultFailsClosed(t *testing.T)
 				blockchainClient: bc, blockAssemblyClient: ba}
 
 			_, err := tc.call(s)
+			require.Empty(t, ba.Calls, "the argument is refused before block assembly is asked")
 
 			rpcErr := requireRPCError(t, err)
 			require.Equal(t, tc.code, rpcErr.Code)
-			require.Contains(t, rpcErr.Message, tc.text)
-			// Contains, not Equal: a site with a prefix still carries the generic
-			// text after it when the reason is lost.
-			require.NotContains(t, rpcErr.Message, genericErrorMessage)
+
+			if tc.prefixed {
+				// A site with a prefix still carries the generic text after it when
+				// the reason is lost, so the reason is checked inside the message.
+				require.Contains(t, rpcErr.Message, tc.text)
+				require.NotContains(t, rpcErr.Message, genericErrorMessage)
+			} else {
+				require.Equal(t, tc.text, rpcErr.Message)
+			}
+
 			require.Empty(t, logger.errorf, "a malformed argument is not a node fault")
-			require.Empty(t, ba.Calls, "the argument is refused before block assembly is asked")
 		})
 	}
 }
@@ -968,8 +979,22 @@ func TestAssemblyRefusal_CrossesOnlyWhereAMinerSubmitted(t *testing.T) {
 	submitted := buildRPCError(topTree, bsvjson.ErrRPCInternal.Code, "", scopeMiningSubmission)
 	require.Equal(t, "error creating top tree", submitted.Message)
 
-	candidate := buildRPCError(topTree, bsvjson.ErrRPCInternal.Code, "", scopeOpaque)
-	require.Equal(t, genericErrorMessage, candidate.Message)
+	// Every other scope, so that widening the case to a range of scopes or to "any
+	// but opaque" fails here too.
+	for name, scope := range map[string]rpcRequestScope{
+		"opaque":             scopeOpaque,
+		"block lookup":       scopeBlockLookup,
+		"height lookup":      scopeHeightLookup,
+		"tx lookup":          scopeTxLookup,
+		"submit":             scopeSubmit,
+		"caller input":       scopeCallerInput,
+		"block revalidation": scopeBlockRevalidation,
+	} {
+		t.Run(name, func(t *testing.T) {
+			rpcErr := buildRPCError(topTree, bsvjson.ErrRPCInternal.Code, "", scope)
+			require.Equal(t, genericErrorMessage, rpcErr.Message)
+		})
+	}
 }
 
 // TestHandleSubmitMiningSolution_JobIDMustBeAHash: blockassembly keys jobs by a
