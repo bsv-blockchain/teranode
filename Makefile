@@ -179,11 +179,18 @@ test:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
 
+# run the tests too slow for `make test` under -race and coverage (TERANODE_HEAVY_TESTS), without -race.
+# The PR test job runs it after `make test`.
+.PHONY: test-heavy
+test-heavy:
+	SETTINGS_CONTEXT=test TERANODE_HEAVY_TESTS=1 go test -tags "testtxmetacache" -count=1 -timeout=10m -run '^TestSortedHashSet_' ./services/blockassembly/subtreeprocessor
+
 # run tagged service regressions and tests in the test/longtest directory
 .PHONY: longtest
 longtest:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache longtest" -count=1 -timeout=10m -run '^TestLegacyHistoricalTestnetSync$$' ./services/legacy/netsync
+	$(MAKE) test-heavy
 	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"
 
 # run the soak test: the in-process daemon under steady tx load for SOAK_DURATION, failing if heap or goroutine

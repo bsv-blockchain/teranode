@@ -22,9 +22,7 @@ const peakChildEnv = "SORTED_HASH_SET_PEAK_CHILD"
 // child process: the heap is process-wide, and goroutines other tests leave behind
 // would add to it.
 func TestSortedHashSet_FreezePeakLiveHeap(t *testing.T) {
-	if testing.Short() {
-		t.Skip("allocates ~200 MB")
-	}
+	skipUnlessHeavyTests(t) // allocates ~200 MB
 
 	if os.Getenv(peakChildEnv) == "" {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestSortedHashSet_FreezePeakLiveHeap$", "-test.count=1", "-test.v")

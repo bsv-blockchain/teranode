@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"math"
 	"math/rand"
+	"os"
 	"sort"
 	"sync"
 	"testing"
@@ -11,6 +12,24 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 )
+
+// heavyTestsEnv enables the SortedHashSet cases that take minutes under -race and
+// coverage. `make test` leaves it unset to stay inside its 10m timeout; `make
+// test-heavy` sets it and runs them without -race, in the PR test job. A new test
+// gated on it must also match the `test-heavy` -run pattern, or it runs nowhere.
+const heavyTestsEnv = "TERANODE_HEAVY_TESTS"
+
+func heavyTests() bool {
+	return os.Getenv(heavyTestsEnv) != ""
+}
+
+func skipUnlessHeavyTests(t *testing.T) {
+	t.Helper()
+
+	if !heavyTests() {
+		t.Skipf("set %s=1 to run", heavyTestsEnv)
+	}
+}
 
 // randHashes returns n pseudo-random hashes, deterministic for a seed.
 func randHashes(n int, seed int64) []chainhash.Hash {
@@ -108,7 +127,10 @@ func assertMatchesReference(t *testing.T, s *SortedHashSet, hashes []chainhash.H
 
 func TestSortedHashSet_ExactVsMap(t *testing.T) {
 	// sizes around the slot (4/16/32) and partition (65536 per partition) thresholds
-	sizes := []int{0, 1, 2, 3, 4, 5, 15, 16, 17, 31, 32, 33, 100, 1023, 1024, 1025, 4096, 65535, 65536, 65537, 131073, 270000}
+	sizes := []int{0, 1, 2, 3, 4, 5, 15, 16, 17, 31, 32, 33, 100, 1023, 1024, 1025, 4096, 65535, 65536, 65537}
+	if heavyTests() {
+		sizes = append(sizes, 131073, 270000)
+	}
 
 	for _, n := range sizes {
 		hashes := randHashes(n, int64(n)+1)
@@ -354,10 +376,12 @@ func TestSortedHashSet_PartitionLimit(t *testing.T) {
 }
 
 // partitions laid out in arrays of their own must still answer exactly: many partitions with
-// uneven fill, including empty ones.
+// uneven fill, including empty slots.
 func TestSortedHashSet_ManyPartitionsUneven(t *testing.T) {
-	hashes := randHashes(300000, 21)
-	for i := 0; i < 100000; i++ { // pile a third into one partition
+	// The partition count comes from the capacity hint alone, so 30000 hashes still
+	// spread over 64 partitions and the test stays cheap enough for the default run.
+	hashes := randHashes(30000, 21)
+	for i := 0; i < 10000; i++ { // pile a third into one partition
 		hashes[i][0], hashes[i][1] = 0x12, 0x34
 	}
 
