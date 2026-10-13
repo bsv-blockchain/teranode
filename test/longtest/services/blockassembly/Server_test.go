@@ -63,6 +63,9 @@ func TestServer_Performance_1_million_txs_1_by_1(t *testing.T) {
 			txInpointsBytes, _ := txInpoints.Serialize()
 
 			txid := make([]byte, 32)
+			// never all-zero: the zero hash is the subtree processor's rejected-node marker,
+			// so the n=0,i=0 tx would be silently dropped and TxCount would never catch up
+			txid[31] = 1
 			bytesI := make([]byte, 8)
 
 			for i := uint64(0); i < 1_024; i++ {
@@ -130,6 +133,9 @@ func TestServer_Performance_1_million_txs_1_by_1_with_sync_pool(t *testing.T) {
 			txInpointsBytes, _ := txInpoints.Serialize()
 
 			txid := make([]byte, 32)
+			// never all-zero: the zero hash is the subtree processor's rejected-node marker,
+			// so the n=0,i=0 tx would be silently dropped and TxCount would never catch up
+			txid[31] = 1
 			bytesI := make([]byte, 8)
 
 			for i := uint64(0); i < 1_024; i++ {

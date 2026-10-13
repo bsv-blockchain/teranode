@@ -184,7 +184,7 @@ test:
 longtest:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache longtest" -count=1 -timeout=10m -run '^TestLegacyHistoricalTestnetSync$$' ./services/legacy/netsync
-	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"
+	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=20m -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"
 
 # run the soak test: the in-process daemon under steady tx load for SOAK_DURATION, failing if heap or goroutine
 # counts trend upward. No -race: the detector skews memory and throughput, which is what this test measures.

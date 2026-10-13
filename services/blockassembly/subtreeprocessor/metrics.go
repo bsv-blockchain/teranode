@@ -29,12 +29,17 @@ var (
 	prometheusSubtreeProcessorRemoveTx                     prometheus.Histogram
 	prometheusSubtreeProcessorReset                        prometheus.Histogram
 	prometheusSubtreeProcessorDynamicSubtreeSize           prometheus.Gauge
-	prometheusSubtreeProcessorCurrentState                 prometheus.Gauge
-	prometheusBlockAssemblySubtreeCompleteHist             prometheus.Histogram
-	prometheusSubtreeProcessorDequeuedTxs                  prometheus.Counter
-	prometheusSubtreeProcessorDiskMapEntries               prometheus.Gauge
-	prometheusSubtreeProcessorDiskMapFilterRAM             prometheus.Gauge
-	prometheusSubtreeProcessorDiskMapDiskWritten           prometheus.Gauge
+
+	// prometheusSubtreeProcessorBlockMaxSizeResizes counts re-chunks of the queue because
+	// the first subtree exceeded blockmaxsize. A resize lasts for one block, so a steadily
+	// rising count means it repeats every block, each time rebuilding and storing the queue.
+	prometheusSubtreeProcessorBlockMaxSizeResizes prometheus.Counter
+	prometheusSubtreeProcessorCurrentState        prometheus.Gauge
+	prometheusBlockAssemblySubtreeCompleteHist    prometheus.Histogram
+	prometheusSubtreeProcessorDequeuedTxs         prometheus.Counter
+	prometheusSubtreeProcessorDiskMapEntries      prometheus.Gauge
+	prometheusSubtreeProcessorDiskMapFilterRAM    prometheus.Gauge
+	prometheusSubtreeProcessorDiskMapDiskWritten  prometheus.Gauge
 
 	// prometheusSubtreeProcessorOversizeBatchAdmitted counts batches larger than the
 	// whole item cap admitted alone onto an otherwise empty ingest queue. Such a batch
@@ -199,6 +204,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "subtreeprocessor",
 			Name:      "dynamic_subtree_size",
 			Help:      "Dynamic subtree size in number of transactions",
+		},
+	)
+
+	prometheusSubtreeProcessorBlockMaxSizeResizes = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "blockmaxsize_resizes",
+			Help:      "Number of times the queued subtrees were re-chunked because the first one exceeded blockmaxsize",
 		},
 	)
 

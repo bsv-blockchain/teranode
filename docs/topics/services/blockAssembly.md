@@ -543,6 +543,7 @@ The service integrates comprehensive Prometheus metrics for operational monitori
 
 - `teranode_subtreeprocessor_add_tx`: Counter for transaction additions
 - `teranode_subtreeprocessor_dynamic_subtree_size`: Current dynamic subtree size
+- `teranode_subtreeprocessor_blockmaxsize_resizes`: Re-chunks of the queued subtrees because the first one exceeded `blockmaxsize`; rising every block means the resize repeats under sustained load
 - `teranode_subtreeprocessor_move_forward_block`: Block processing operations
 - `teranode_subtreeprocessor_move_back_block`: Block rollback operations
 
