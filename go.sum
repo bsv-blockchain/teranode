@@ -470,6 +470,8 @@ github.com/huin/goupnp v1.3.0/go.mod h1:gnGPsThkYa7bFi/KWmEysQRf48l2dvR5bxr2OFck
 github.com/iancoleman/strcase v0.3.0 h1:nTXanmYxhfFAMjZL34Ov6gkzEsSJZ5DbhxWjvSASxEI=
 github.com/iancoleman/strcase v0.3.0/go.mod h1:iwCmte+B7n89clKwxIoIXy/HfoL7AsD47ZCWhYzw7ho=
 github.com/ianlancetaylor/demangle v0.0.0-20230524184225-eabc099b10ab/go.mod h1:gx7rwoVhcfuVKG5uya9Hs3Sxj7EIvldVofAWIUtGouw=
+github.com/icellan/teraslab/client/go v0.9.1 h1:SbhVophfBK31MWwDegk0TH/MljtukQCvowlJBlvbPgE=
+github.com/icellan/teraslab/client/go v0.9.1/go.mod h1:E0V3Poy1UBHfRclA5fOJ8+cZKLGoSJKxsXb3gXT81w4=
 github.com/in-toto/attestation v1.1.2 h1:MBFn6lsMq6dptQZJBhalXTcWMb/aJy3V+GX3VYj/V1E=
 github.com/in-toto/attestation v1.1.2/go.mod h1:gYFddHMZj3DiQ0b62ltNi1Vj5rC879bTmBbrv9CRHpM=
 github.com/in-toto/in-toto-golang v0.9.0 h1:tHny7ac4KgtsfrG6ybU8gVOZux2H8jN05AXJ9EBM1XU=
