@@ -87,10 +87,13 @@ func (s *Store) parseSpendState(bins aerospike.BinMap) (SpendState, error) {
 	if deleteAtHeightResults, ok := bins[fields.DeleteAtHeight.String()]; ok && deleteAtHeightResults != nil {
 		switch v := deleteAtHeightResults.(type) {
 		case aerospike.OpResults:
-			s.parseDAHFromSlice([]interface{}(v), &SetMinedState{
-				OldDeleteAtHeight: state.OldDeleteAtHeight,
-				NewDeleteAtHeight: state.NewDeleteAtHeight,
-			})
+			// Batch operations return the two DAH reads (before, after) as OpResults. The result
+			// used to be parsed into a throwaway struct and dropped, so the old/new DAH stayed nil
+			// and the child-record DAH follow-up never ran on this path.
+			tempState := &SetMinedState{}
+			s.parseDAHFromSlice([]interface{}(v), tempState)
+			state.OldDeleteAtHeight = tempState.OldDeleteAtHeight
+			state.NewDeleteAtHeight = tempState.NewDeleteAtHeight
 		case []interface{}:
 			// Create temporary SetMinedState to reuse parsing logic
 			tempState := &SetMinedState{}
@@ -261,17 +264,11 @@ func (s *Store) buildSpendOperations(
 		aerospike.AddOp(aerospike.NewBin(fields.SpentUtxos.String(), 1)),
 	)
 
-	// Set deleteAtHeight to nil initially
-	ops = append(ops, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), nil)))
-
-	// Add deleteAtHeight expression if retention is enabled
+	// Add deleteAtHeight ops if retention is enabled. The bin is not nulled first: the
+	// expressions read the existing DAH (raise, never lower; clear when ineligible; leave
+	// pagination records alone), matching the Lua setDeleteAtHeight.
 	if blockHeightRetention > 0 {
-		dahExp := s.buildDeleteAtHeightExpression(currentBlockHeight, blockHeightRetention, false, false)
-		ops = append(ops, aerospike.ExpWriteOp(
-			fields.DeleteAtHeight.String(),
-			dahExp,
-			aerospike.ExpWriteFlagAllowDelete|aerospike.ExpWriteFlagEvalNoFail,
-		))
+		ops = append(ops, s.buildDeleteAtHeightOps(currentBlockHeight, blockHeightRetention, false)...)
 	}
 
 	// Read final values after modifications
@@ -404,6 +401,7 @@ func (s *Store) processSpendBatchResultsExpressions(
 		ChildCount     int
 		DeleteAtHeight uint32
 	}, 0)
+	dahUnsetItems := make([]childDAHItem, 0)
 	externalDAH := make([]struct {
 		TxID *chainhash.Hash
 		DAH  uint32
@@ -490,6 +488,9 @@ func (s *Store) processSpendBatchResultsExpressions(
 							ChildCount     int
 							DeleteAtHeight uint32
 						}{TxID: bItem.spend.TxID, ChildCount: *state.TotalExtraRecs, DeleteAtHeight: *state.NewDeleteAtHeight})
+					} else {
+						// DAH cleared on the master: clear the child records too (Lua DAHUNSET).
+						dahUnsetItems = append(dahUnsetItems, childDAHItem{TxID: bItem.spend.TxID, ChildCount: *state.TotalExtraRecs})
 					}
 
 					externalDAH = append(externalDAH, struct {
@@ -538,6 +539,12 @@ func (s *Store) processSpendBatchResultsExpressions(
 
 	if len(dahSetItems) > 0 {
 		if err := s.SetDAHForChildRecordsMulti(dahSetItems); err != nil {
+			postErr = errors.Join(postErr, err)
+		}
+	}
+
+	if len(dahUnsetItems) > 0 {
+		if err := s.SetDAHForChildRecordsMulti(dahUnsetItems); err != nil {
 			postErr = errors.Join(postErr, err)
 		}
 	}
