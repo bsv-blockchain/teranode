@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -17,11 +18,13 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -338,6 +341,18 @@ func TestCallerInputSites_KeepTheirReasonWhenTheDefaultFailsClosed(t *testing.T)
 	generating := chaincfg.MainNetParams
 	generating.GenerateSupported = true
 
+	// generatetoaddress parses with DecodeAddress, which also takes a CashAddr or a
+	// bare public key, but block assembly pays only to a base58 address. A
+	// CashAddr's checksum covers its network's prefix, so it is built for the
+	// params its row runs on.
+	cashAddr, err := bsvutil.NewAddressPubKeyHash(make([]byte, 20), &generating)
+	require.NoError(t, err)
+
+	// A real curve point, so DecodeAddress accepts it and only block assembly's
+	// encoder is left to refuse it.
+	_, key := bec.PrivateKeyFromBytes(chainhash.HashB([]byte("generatetoaddress public-key row")))
+	pubKey := hex.EncodeToString(key.Compressed())
+
 	for name, tc := range map[string]struct {
 		call   func(*RPCServer) (interface{}, error)
 		params *chaincfg.Params // nil means mainnet
@@ -360,6 +375,24 @@ func TestCallerInputSites_KeepTheirReasonWhenTheDefaultFailsClosed(t *testing.T)
 			params: &generating,
 			code:   bsvjson.ErrRPCInvalidAddressOrKey,
 			text:   "invalid length address",
+		},
+		"generatetoaddress, a CashAddr block assembly cannot pay": {
+			call: func(s *RPCServer) (interface{}, error) {
+				return handleGenerateToAddress(context.Background(), s,
+					&bsvjson.GenerateToAddressCmd{NumBlocks: 1, Address: cashAddr.EncodeAddress()}, nil)
+			},
+			params: &generating,
+			code:   bsvjson.ErrRPCInvalidAddressOrKey,
+			text:   "Error: Invalid address",
+		},
+		"generatetoaddress, a public key block assembly cannot pay": {
+			call: func(s *RPCServer) (interface{}, error) {
+				return handleGenerateToAddress(context.Background(), s,
+					&bsvjson.GenerateToAddressCmd{NumBlocks: 1, Address: pubKey}, nil)
+			},
+			params: &generating,
+			code:   bsvjson.ErrRPCInvalidAddressOrKey,
+			text:   "Error: Invalid address",
 		},
 		"generate, block count beyond int32": {
 			call: func(s *RPCServer) (interface{}, error) {
@@ -411,8 +444,18 @@ func TestCallerInputSites_KeepTheirReasonWhenTheDefaultFailsClosed(t *testing.T)
 				params = &chaincfg.MainNetParams
 			}
 
+			// What an argument that got past its handler's check would meet: block
+			// assembly refusing a payout address it cannot encode, under generate's
+			// own wrapper.
+			bc, ba := &blockchain.Mock{}, &blockassembly.Mock{}
+			bc.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1}, nil)
+			ba.On("GenerateBlocks", mock.Anything, mock.Anything).Return(overGRPC(t,
+				errors.NewProcessingError("error generating block %d of %d", 1, 1,
+					errors.New(errors.ERR_UNKNOWN, "bad character in encoding"))))
+
 			logger := newCapturingLogger()
-			s := &RPCServer{logger: logger, settings: &settings.Settings{ChainCfgParams: params}}
+			s := &RPCServer{logger: logger, settings: &settings.Settings{ChainCfgParams: params},
+				blockchainClient: bc, blockAssemblyClient: ba}
 
 			_, err := tc.call(s)
 
@@ -423,6 +466,7 @@ func TestCallerInputSites_KeepTheirReasonWhenTheDefaultFailsClosed(t *testing.T)
 			// text after it when the reason is lost.
 			require.NotContains(t, rpcErr.Message, genericErrorMessage)
 			require.Empty(t, logger.errorf, "a malformed argument is not a node fault")
+			require.Empty(t, ba.Calls, "the argument is refused before block assembly is asked")
 		})
 	}
 }
@@ -963,10 +1007,12 @@ func TestHandleSubmitMiningSolution_JobIDMustBeAHash(t *testing.T) {
 }
 
 // TestGenerate_P2SHPayoutKeepsItsReason covers generatetoaddress to a P2SH
-// address, which blockassembly's mining guard refuses under GenerateBlocks' own
-// PROCESSING wrappers (blockassembly/Server.go, generateBlock and GenerateBlocks).
-// Main rendered the chain and so carried the reason; failing closed dropped it.
-// The guard's class is a per-link verdict, so it crosses at any depth.
+// address. It passes the handler's address checks, since block assembly can
+// encode one, and is then refused by blockassembly's mining guard under
+// GenerateBlocks' own PROCESSING wrappers (blockassembly/Server.go, generateBlock
+// and GenerateBlocks). Main rendered the chain and so carried the reason; failing
+// closed dropped it. The guard's class is a per-link verdict, so it crosses at
+// any depth.
 func TestGenerate_P2SHPayoutKeepsItsReason(t *testing.T) {
 	bc, ba := &blockchain.Mock{}, &blockassembly.Mock{}
 	bc.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1}, nil)
@@ -975,10 +1021,11 @@ func TestGenerate_P2SHPayoutKeepsItsReason(t *testing.T) {
 			errors.NewProcessingError("error submitting block",
 				errors.NewBlockPolicyDeclinedError("[BlockAssembly][%s] bad-txns-vout-p2sh: coinbase pays to a P2SH output", miningJobID)))))
 
-	s := &RPCServer{logger: newCapturingLogger(), blockchainClient: bc, blockAssemblyClient: ba}
+	s := &RPCServer{logger: newCapturingLogger(), settings: &settings.Settings{ChainCfgParams: &chaincfg.RegressionNetParams},
+		blockchainClient: bc, blockAssemblyClient: ba}
 
-	address := "2N2JD6wb56AfK4tfmM6PwdVmoYk2dCKf4Br"
-	_, err := s.generateBlocksAndReturnHashes(context.Background(), 1, &address, nil)
+	_, err := handleGenerateToAddress(context.Background(), s,
+		&bsvjson.GenerateToAddressCmd{NumBlocks: 1, Address: "2N2JD6wb56AfK4tfmM6PwdVmoYk2dCKf4Br"}, nil)
 
 	rpcErr := requireRPCError(t, err)
 	require.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)

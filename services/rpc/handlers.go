@@ -1085,6 +1085,14 @@ func handleGenerateToAddress(ctx context.Context, s *RPCServer, cmd interface{},
 		return nil, s.rpcInputError(err, bsvjson.ErrRPCInvalidAddressOrKey, "")
 	}
 
+	// DecodeAddress also takes a CashAddr or a bare public key, but block
+	// assembly builds the coinbase with AddressToScript, which reads base58 only,
+	// and its refusal would come back as a node fault. Refused here instead, with
+	// svnode's answer to an address it cannot pay.
+	if _, err = model.AddressToScript(c.Address); err != nil {
+		return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInvalidAddressOrKey, "Error: Invalid address")
+	}
+
 	// Generate blocks and return their hashes
 	return s.generateBlocksAndReturnHashes(ctx, c.NumBlocks, &c.Address, c.MaxTries)
 }
