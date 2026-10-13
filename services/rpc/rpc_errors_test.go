@@ -1543,10 +1543,10 @@ func (f failingValidator) Validate(_ context.Context, _ *bt.Tx, _ uint32, _ ...v
 
 // TestHandleSendRawTransaction_ImmatureCoinbaseKeepsItsReason covers a spend of a
 // coinbase before it matures. Both utxo stores report it as TX_COINBASE_IMMATURE,
-// which the shared allowlist leaves off because the stores' messages carry node
-// state: the current height, and on aerospike the spend-batch counter. With
-// nothing it could show, the boundary answered "TX rejected: internal error" and
-// logged a node fault, and the wallet lost the one thing that says to wait.
+// which the shared allowlist leaves off because aerospike's message carries the
+// store's spend-batch counter. With nothing it could show, the boundary answered
+// "TX rejected: internal error" and logged a node fault, and the wallet lost the
+// one thing that says to wait.
 func TestHandleSendRawTransaction_ImmatureCoinbaseKeepsItsReason(t *testing.T) {
 	const (
 		maturityHeight = 742301
@@ -1573,7 +1573,8 @@ func TestHandleSendRawTransaction_ImmatureCoinbaseKeepsItsReason(t *testing.T) {
 			coinbase, currentHeight, batchID, "COINBASE_IMMATURE")
 	}
 
-	// What must never cross: the heights the store formats in and the batch counter.
+	// None of the store's own text crosses: not the heights it formats in, and not
+	// aerospike's batch counter, which is why the class has a fixed text at all.
 	hidden := []string{fmt.Sprint(maturityHeight), fmt.Sprint(currentHeight), fmt.Sprint(batchID)}
 
 	for name, tc := range map[string]struct {
@@ -1633,10 +1634,22 @@ func TestHandleSendRawTransaction_ImmatureCoinbaseKeepsItsReason(t *testing.T) {
 		})
 	}
 
-	t.Run("only where a transaction was submitted", func(t *testing.T) {
-		rpcErr := buildRPCError(overGRPC(t, spending("sql", sqlImmature())), bsvjson.ErrRPCInternal.Code, "", scopeOpaque)
-		require.Equal(t, genericErrorMessage, rpcErr.Message)
-	})
+	// Every other scope, so that widening the class to a range of scopes or to "any
+	// but opaque" fails here too.
+	for name, scope := range map[string]rpcRequestScope{
+		"opaque":             scopeOpaque,
+		"block lookup":       scopeBlockLookup,
+		"height lookup":      scopeHeightLookup,
+		"tx lookup":          scopeTxLookup,
+		"caller input":       scopeCallerInput,
+		"block revalidation": scopeBlockRevalidation,
+		"mining submission":  scopeMiningSubmission,
+	} {
+		t.Run("only where a transaction was submitted, not "+name, func(t *testing.T) {
+			rpcErr := buildRPCError(overGRPC(t, spending("sql", sqlImmature())), bsvjson.ErrRPCInternal.Code, "", scope)
+			require.Equal(t, genericErrorMessage, rpcErr.Message)
+		})
+	}
 }
 
 // TestHandleSendRawTransaction_MissingInputsIsNotALookupMiss covers the site at
@@ -1860,7 +1873,9 @@ func TestRejectionMembershipFollowsTheSharedAllowlist(t *testing.T) {
 
 		msg := publicErrorMessage(err)
 
-		require.Contains(t, msg, "transaction is frozen", "the allowlisted verdict is still surfaced")
+		// Equal, not Contains: where the class is not a verdict, the immature link
+		// adds nothing, not even its fixed text.
+		require.Equal(t, "transaction is frozen, blockHeight 12 - FROZEN", msg, "the allowlisted verdict is still surfaced")
 		require.NotContains(t, msg, "4711", "the internal batch id must not cross the boundary")
 		require.NotContains(t, msg, "COINBASE_IMMATURE",
 			"a code the shared allowlist excludes must not ride along below one it allows")

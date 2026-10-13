@@ -554,7 +554,8 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 				// so the record is spent, created and delivered even though the bless is rejected
 				// here, and the caller still has to retry its unlock.
 				// The block id is the store's key, not a public identifier, and this
-				// verdict crosses every public boundary: it is logged, not returned.
+				// verdict's class is on the shared allowlist, so any boundary that
+				// sees it shows its message: the id is logged, not returned.
 				u.logger.Warnf("[blessMissingTransaction][%s/%s][%s] transaction is already mined on our chain, in block ID %d", blockHash.String(), subtreeHash.String(), tx.TxID(), blockID)
 
 				return nil, unlockFailed, errors.NewTxInvalidError("[blessMissingTransaction][%s/%s][%s] transaction is already mined on our chain", blockHash.String(), subtreeHash.String(), tx.TxID())

@@ -1090,7 +1090,7 @@ func handleGenerateToAddress(ctx context.Context, s *RPCServer, cmd interface{},
 	// and its refusal would come back as a node fault. Refused here instead, with
 	// svnode's answer to an address it cannot pay.
 	if _, err = model.AddressToScript(c.Address); err != nil {
-		s.logger.Debugf("[handleGenerateToAddress] %s: %v", c.Address, err)
+		s.logger.Debugf("[handleGenerateToAddress] %q: %v", c.Address, err)
 
 		return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInvalidAddressOrKey, "Error: Invalid address")
 	}

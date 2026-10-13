@@ -120,15 +120,15 @@ var revalidationRejectionClasses = []*errors.Error{
 //
 //   - ErrTxCoinbaseImmature: the submitted transaction spends a coinbase that has
 //     not matured, and waiting is what fixes it. The shared allowlist leaves it
-//     off because both utxo stores format node state into the message (the
-//     current height, and on aerospike the spend-batch counter), so it crosses
-//     only as the fixed text in fixedVerdictText, never as its own words.
+//     off because aerospike formats the store's spend-batch counter into the
+//     message, so it crosses only as the fixed text in fixedVerdictText, never as
+//     its own words. That text is svnode's, which neither store's matches.
 var submitRejectionClasses = []*errors.Error{
 	errors.ErrTxCoinbaseImmature,
 }
 
-// fixedVerdictText is the public text for a verdict class whose producers put
-// node state in its message. rejectionReason uses it in place of the message.
+// fixedVerdictText is the public text for a verdict class whose message cannot
+// cross as written. rejectionReason uses it in place of the message.
 // The text is svnode's reject reason for the same check (validation.cpp,
 // CheckTxInputs), which callers already match on.
 var fixedVerdictText = map[errors.ERR]string{

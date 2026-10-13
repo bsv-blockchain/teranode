@@ -388,8 +388,8 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "block contains a transaction already on our chain")
 		// The conflicting block's store id is logged; the verdict names the transaction.
-		assert.NotContains(t, err.Error(), "1000")
-		assert.Contains(t, fmt.Sprint(warnLogger.warned()), "1000")
+		require.NotContains(t, err.Error(), "blockID")
+		require.Contains(t, fmt.Sprint(warnLogger.warned()), "block ID 1000")
 
 		mockStore.AssertExpectations(t)
 	})
@@ -959,8 +959,8 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "block contains a transaction already on our chain")
 		// The conflicting block's store id is logged; the verdict names the transaction.
-		assert.NotContains(t, err.Error(), "blockID")
-		assert.Contains(t, fmt.Sprint(warnLogger.warned()), "block ID 5")
+		require.NotContains(t, err.Error(), "blockID")
+		require.Contains(t, fmt.Sprint(warnLogger.warned()), "block ID 5")
 
 		mockStore.AssertExpectations(t)
 	})
@@ -1470,7 +1470,8 @@ func (l *warnCaptureLogger) warned() []string {
 // TestUpdateTxMinedStatus_BlockIDsStayOutOfTheVerdict: block ids are this node's
 // store keys, not block hashes or heights, and the verdict crosses to RPC and is
 // stored as the invalid block's reason. The id, and on the slow path the number
-// of ids checked, go to the log; the verdict names the transaction.
+// of ids checked, go to the log. The fast-path verdict names the transaction; the
+// slow-path verdict names none, as before.
 func TestUpdateTxMinedStatus_BlockIDsStayOutOfTheVerdict(t *testing.T) {
 	ctx := context.Background()
 	tSettings := test.CreateBaseTestSettings(t)

@@ -1798,11 +1798,14 @@ func (l *warnCaptureLogger) Warnf(format string, args ...interface{}) {
 	l.Logger.Warnf(format, args...)
 }
 
-func (l *warnCaptureLogger) warned() string {
+func (l *warnCaptureLogger) warned() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	return fmt.Sprint(l.warnings)
+	out := make([]string, len(l.warnings))
+	copy(out, l.warnings)
+
+	return out
 }
 
 // minedValidator accepts every transaction and reports it mined in blockIDs.
@@ -1816,8 +1819,9 @@ func (v minedValidator) ValidateWithOptions(context.Context, *bt.Tx, uint32, *va
 }
 
 // TestBlessMissing_AlreadyMinedNamesNoStoreID: a transaction already mined on this
-// chain is a TX_INVALID verdict, and that class crosses every public boundary
-// (RPC, propagation, the asset HTTP API). The block it was mined in is named by
+// chain is a TX_INVALID verdict, a class on the shared allowlist, so any boundary
+// that sees it shows its message (reconsiderblock's revalidation reaches RPC with
+// it). The block it was mined in is named by
 // this node's store id, which is no block's public identifier, so it goes to the
 // log and the verdict names the transaction.
 func TestBlessMissing_AlreadyMinedNamesNoStoreID(t *testing.T) {
@@ -1833,5 +1837,5 @@ func TestBlessMissing_AlreadyMinedNamesNoStoreID(t *testing.T) {
 	require.Contains(t, err.Error(), "transaction is already mined on our chain")
 	require.NotContains(t, err.Error(), "77123")
 
-	require.Contains(t, logger.warned(), "77123", "the id is still recorded")
+	require.Contains(t, fmt.Sprint(logger.warned()), "77123", "the id is still recorded")
 }
