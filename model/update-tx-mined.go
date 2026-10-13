@@ -278,7 +278,13 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 						// Phase 1: Fast path - check in-memory recent block IDs
 						if _, exists := chainBlockIDsMap[bID]; exists {
 							blockInvalidErrorMu.Lock()
-							blockInvalidError = errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain: %s, blockID %d (fast path)", block.Hash().String(), hash.String(), bID)
+							// The block id is the store's key, not a public identifier, so it
+							// is logged rather than put in the verdict. Once per block: a block
+							// can carry this for every transaction it holds.
+							if blockInvalidError == nil {
+								logger.Warnf("[UpdateTxMinedStatus][%s] transaction %s is already on our chain in block ID %d (fast path)", block.Hash().String(), hash.String(), bID)
+							}
+							blockInvalidError = errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain: %s (fast path)", block.Hash().String(), hash.String())
 							blockInvalidErrorMu.Unlock()
 							continue
 						}
@@ -399,7 +405,9 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 		}
 
 		if isAncestor {
-			return errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain (slow path detected, checked %d unique old block IDs)", block.Hash().String(), len(oldBlockIDsSlice))
+			logger.Warnf("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain, found among %d unique old block IDs (slow path)", block.Hash().String(), len(oldBlockIDsSlice))
+
+			return errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain (slow path)", block.Hash().String())
 		}
 
 		logger.Debugf("[UpdateTxMinedStatus][%s] slow path check passed - %d old block IDs not ancestors of this block", block.Hash().String(), len(oldBlockIDsSlice))

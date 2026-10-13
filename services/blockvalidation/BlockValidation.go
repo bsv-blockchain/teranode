@@ -3827,6 +3827,17 @@ func (u *BlockValidation) iterateOldBlockIDsWithCachedLookup(
 	cache := make(map[string]bool, cacheHint)
 	var builder strings.Builder
 
+	// The parent block ids are this node's store keys, not block hashes or heights.
+	// They go to the log; the verdict, which crosses to RPC and is stored as the
+	// block's invalid reason, names the transaction.
+	notOnCurrentChain := func(txID chainhash.Hash, blockIDs []uint32, how string) error {
+		if u.logger != nil {
+			u.logger.Warnf("[Block Validation][checkOldBlockIDs][%s] transaction %s has parents in blocks %v, which are not on the current chain%s", block.String(), txID, blockIDs, how)
+		}
+
+		return errors.NewBlockInvalidError("[Block Validation][checkOldBlockIDs][%s] block is not valid. Transaction's (%v) parent blocks are not from current chain%s", block.String(), txID, how)
+	}
+
 	oldBlockIDsMap.Iterate(func(txID chainhash.Hash, blockIDs []uint32) bool {
 		if len(blockIDs) == 0 {
 			iterationError = errors.NewProcessingError("[Block Validation][checkOldBlockIDs][%s] blockIDs is empty for txID: %v", block.String(), txID)
@@ -3851,7 +3862,7 @@ func (u *BlockValidation) iterateOldBlockIDsWithCachedLookup(
 		if blocksPartOfCurrentChain, ok := cache[blockIDsString]; ok {
 			cacheHitCount++
 			if !blocksPartOfCurrentChain {
-				iterationError = errors.NewBlockInvalidError("[Block Validation][checkOldBlockIDs][%s] block is not valid. Transaction's (%v) parent blocks (%v) are not from current chain using cache", block.String(), txID, blockIDs)
+				iterationError = notOnCurrentChain(txID, blockIDs, " using cache")
 				return false
 			}
 			return true
@@ -3867,7 +3878,7 @@ func (u *BlockValidation) iterateOldBlockIDsWithCachedLookup(
 		cache[blockIDsString] = blocksPartOfCurrentChain
 
 		if !blocksPartOfCurrentChain {
-			iterationError = errors.NewBlockInvalidError("[Block Validation][checkOldBlockIDs][%s] block is not valid. Transaction's (%v) parent blocks (%v) are not from current chain", block.String(), txID, blockIDs)
+			iterationError = notOnCurrentChain(txID, blockIDs, "")
 			return false
 		}
 
