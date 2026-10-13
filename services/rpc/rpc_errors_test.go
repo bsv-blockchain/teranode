@@ -1049,6 +1049,58 @@ func TestGenerate_P2SHPayoutKeepsItsReason(t *testing.T) {
 	require.Equal(t, "bad-txns-vout-p2sh: coinbase pays to a P2SH output", rpcErr.Message)
 }
 
+// TestScopedNotFound_ANodeFaultIsNotAMiss: a not-found beneath a storage or
+// network fault is the store failing while it looked, not an answer about the
+// object. The scoped mappings answered it as a miss (-5, -8, Missing inputs)
+// while the log called it a node fault; both now say the same thing.
+func TestScopedNotFound_ANodeFaultIsNotAMiss(t *testing.T) {
+	for name, tc := range map[string]struct {
+		scope    rpcRequestScope
+		notFound error
+		prefix   string
+		code     bsvjson.RPCErrorCode
+		miss     string // what a plain miss answers
+	}{
+		"block lookup, -5": {
+			scope: scopeBlockLookup, notFound: errors.NewBlockNotFoundError("block 0abc not found"),
+			code: bsvjson.ErrRPCVerify, miss: blockNotFoundMessage,
+		},
+		"height lookup, -8": {
+			scope: scopeHeightLookup, notFound: errors.NewBlockNotFoundError("failed to get block by height for height 99"),
+			code: bsvjson.ErrRPCInternal.Code, miss: heightOutOfRange,
+		},
+		"tx lookup, -5": {
+			scope: scopeTxLookup, notFound: errors.NewTxNotFoundError("transaction cafe not found"),
+			code: bsvjson.ErrRPCInternal.Code, miss: txNotFoundMessage,
+		},
+		"submit, Missing inputs": {
+			scope: scopeSubmit, notFound: errors.NewTxNotFoundError("parent cafe not found"),
+			prefix: txRejectedPrefix, code: bsvjson.ErrRPCVerify, miss: txRejectedPrefix + missingInputsMessage,
+		},
+	} {
+		for fault, wrap := range map[string]func(error) error{
+			"storage": func(err error) error { return errors.NewStorageError("postgres read at 10.4.2.17:5432 failed", err) },
+			"network": func(err error) error { return errors.NewNetworkError("read tcp 10.0.1.5:34512: connection reset", err) },
+		} {
+			t.Run(name+", under a "+fault+" fault", func(t *testing.T) {
+				logger := newCapturingLogger()
+				s := &RPCServer{logger: logger}
+
+				rpcErr := s.logAndBuild(overGRPC(t, wrap(tc.notFound)), tc.code, tc.prefix, tc.scope)
+
+				require.Equal(t, tc.code, rpcErr.Code)
+				require.Equal(t, tc.prefix+genericErrorMessage, rpcErr.Message)
+				require.NotEmpty(t, logger.errorf, "logged as the node fault it is")
+			})
+		}
+
+		t.Run(name+", a plain miss still maps", func(t *testing.T) {
+			rpcErr := buildRPCError(overGRPC(t, tc.notFound), tc.code, tc.prefix, tc.scope)
+			require.Equal(t, tc.miss, rpcErr.Message)
+		})
+	}
+}
+
 // TestBlockAssemblyNotReady_AnswersInWarmup: block assembly refuses work while it
 // reloads unmined transactions. That clears on its own and is no fault, and svnode
 // answers its own warm-up with RPC_IN_WARMUP, so a caller that retries on -28 does

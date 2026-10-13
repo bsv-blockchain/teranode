@@ -635,6 +635,15 @@ func asTeranodeError(err error) error {
 func buildRPCError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string, scope rpcRequestScope) *bsvjson.RPCError {
 	err = asTeranodeError(err)
 
+	// A node fault anywhere in the chain decides first, as it does for the log in
+	// isCallerFault. A not-found beneath one is the store failing while it looked,
+	// not an answer about the object, so none of the mappings below may claim a
+	// miss. Verdicts still cross through publicErrorMessageFor; the fault's own
+	// text never does.
+	if hasNodeFault(err) {
+		return &bsvjson.RPCError{Code: fallbackCode, Message: prefix + publicErrorMessageFor(err, scope)}
+	}
+
 	// A service that is up but still loading refuses work it will accept shortly.
 	// svnode answers its own warm-up with RPC_IN_WARMUP, and callers retry on it.
 	if errors.Is(err, errors.ErrServiceNotReady) {
@@ -706,13 +715,10 @@ func isCallerFault(err error, scope rpcRequestScope) bool {
 	// A node fault anywhere in the chain is a node fault, even beneath a verdict.
 	// The verdict's own text still crosses, but the fault's never does, so if this
 	// logged at debug the storage or network detail would reach neither the
-	// caller nor a default-level log. The set is the classes that name an
-	// infrastructure failure; the breadcrumb wrappers (SERVICE_ERROR, PROCESSING)
-	// wrap verdicts routinely and are not on it.
-	for _, fault := range nodeFaultClasses {
-		if errors.Is(err, fault) {
-			return false
-		}
+	// caller nor a default-level log. buildRPCError reads the chain in the same
+	// order.
+	if hasNodeFault(err) {
+		return false
 	}
 
 	// Not the caller's fault, and no fault at all: a service still loading. The
@@ -751,13 +757,26 @@ func isCallerFault(err error, scope rpcRequestScope) bool {
 	return false
 }
 
-// nodeFaultClasses name an infrastructure failure wherever they appear in a chain;
-// see isCallerFault.
+// nodeFaultClasses name an infrastructure failure wherever they appear in a chain.
+// The breadcrumb wrappers (SERVICE_ERROR, PROCESSING) wrap verdicts routinely and
+// are not on it.
 var nodeFaultClasses = []*errors.Error{
 	errors.ErrStorageError,
 	errors.ErrNetworkError,
 	errors.ErrNetworkTimeout,
 	errors.ErrServiceUnavailable,
+}
+
+// hasNodeFault reports whether any link of err is a node fault. buildRPCError and
+// isCallerFault both decide on it first, so the wire and the log agree.
+func hasNodeFault(err error) bool {
+	for _, fault := range nodeFaultClasses {
+		if errors.Is(err, fault) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // logAndBuild records the full chain and returns the trimmed, classified form.
