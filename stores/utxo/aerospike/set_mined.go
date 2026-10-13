@@ -389,9 +389,11 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 			if hashes[idx] == nil {
 				errs = errors.Join(errs, errors.NewProcessingError("aerospike SetMinedMulti returned blockIDs for nil hash at index %d", idx))
 				nrErrors++
-			} else {
-				blockIDs[*hashes[idx]] = blockIDsUint32
+
+				continue
 			}
+
+			blockIDs[*hashes[idx]] = blockIDsUint32
 		}
 
 		// Aggregate signals for batched follow-up work
@@ -422,9 +424,6 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 
 	prometheusTxMetaAerospikeMapSetMinedBatchN.Add(float64(okUpdates))
 
-	// work (pagination records of successfully-mined external txs) is returned to
-	// the caller for clearing, so a tx that was mined successfully is fully
-	// unlocked even if a sibling record in the same batch errored below.
 	// Execute aggregated follow-ups in batches. These run BEFORE the sibling-error return
 	// below: the records that did succeed have already been mined, and a retry would hit the
 	// "block already present" no-op and never reconcile their child-record DAH.

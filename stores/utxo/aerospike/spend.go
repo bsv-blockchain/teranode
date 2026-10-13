@@ -1259,7 +1259,9 @@ func (s *Store) handleSpendSignal(ctx context.Context, signal LuaSignal, txID *c
 		}
 
 	case LuaSignalDAHUnset:
-		if err := s.SetDAHForChildRecords(txID, childCount, aerospike.TTLDontExpire); err != nil {
+		// 0 clears the child DAH bin. This used to pass aerospike.TTLDontExpire (MaxUint32), which
+		// the DAH batcher wrote as a literal deleteAtHeight of 4294967295 instead of clearing it.
+		if err := s.SetDAHForChildRecords(txID, childCount, 0); err != nil {
 			s.logger.Errorf("Failed to unset DAH for child records: %v", err)
 		}
 		// External store DAH is disabled - lifecycle managed by pruner service

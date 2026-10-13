@@ -13,6 +13,31 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 )
 
+// childDAHItem is one master record whose pagination records need their deleteAtHeight set
+// (DeleteAtHeight > 0) or cleared (DeleteAtHeight == 0) by SetDAHForChildRecordsMulti.
+type childDAHItem = struct {
+	TxID           *chainhash.Hash
+	ChildCount     int
+	DeleteAtHeight uint32
+}
+
+// collectChildDAHFollowUp compares the master's DAH before and after the write and, for an
+// external master with pagination records, queues the matching child-record update: a set or
+// raised DAH is copied to the children, a cleared DAH clears them (the Lua DAHSET/DAHUNSET
+// signals). It is a no-op for non-external records and when the DAH did not change.
+func collectChildDAHFollowUp(hash *chainhash.Hash, state SetMinedState, setItems, unsetItems *[]childDAHItem) {
+	if !state.External || state.TotalExtraRecs == nil {
+		return
+	}
+
+	switch {
+	case state.NewDeleteAtHeight != nil && (state.OldDeleteAtHeight == nil || *state.OldDeleteAtHeight != *state.NewDeleteAtHeight):
+		*setItems = append(*setItems, childDAHItem{TxID: hash, ChildCount: *state.TotalExtraRecs, DeleteAtHeight: *state.NewDeleteAtHeight})
+	case state.NewDeleteAtHeight == nil && state.OldDeleteAtHeight != nil:
+		*unsetItems = append(*unsetItems, childDAHItem{TxID: hash, ChildCount: *state.TotalExtraRecs, DeleteAtHeight: 0})
+	}
+}
+
 // SetMinedState contains the state returned from setMined operations.
 // Only fields needed for external transaction follow-up (child record and blob storage DAH updates) are included.
 type SetMinedState struct {
@@ -154,7 +179,7 @@ func (s *Store) parseBlockIDsFromSlice(v []interface{}) []uint32 {
 // returns ExpNilValue (deleting the bin with ExpWriteFlagAllowDelete) or ExpUnknown.
 //
 // Logic implemented (same order as Lua):
-//  1. If preserveUntil is set -> no change (unless ignorePreserveUntil is true)
+//  1. If preserveUntil is set -> no change
 //  2. If conflicting -> set DAH if there is none, otherwise no change
 //  3. If pagination record (totalExtraRecs not set) -> no change (Lua only signals here)
 //  4. If allSpent AND hasBlocks AND isOnLongestChain -> set DAH if none, raise it if lower;
@@ -167,13 +192,19 @@ func (s *Store) parseBlockIDsFromSlice(v []interface{}) []uint32 {
 //
 // The lastSpentState logic for pagination records is handled separately via ExpWriteOp for that bin.
 //
-// ignorePreserveUntil drops the preserveUntil guard (step 1). It is set by the
-// expired-preservation path (ProcessExpiredPreservations), which clears preserveUntil in the
-// same operate call before these ops. Because earlier writes are visible the guard would see
-// the cleared bin anyway, so this is belt-and-braces rather than required; it also keeps the
-// path correct if the preserveUntil clear were ever reordered after the expression.
-func (s *Store) buildDeleteAtHeightOps(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool, ignorePreserveUntil bool) []*aerospike.Operation {
-	setExp, clearExp := s.buildDeleteAtHeightExpressions(currentBlockHeight, blockHeightRetention, onLongestChain, ignorePreserveUntil)
+// The expired-preservation caller clears preserveUntil with an earlier op in the same operate;
+// the guard in step 1 sees that in-flight clear, so no bypass is needed there.
+//
+// Accepted divergence from Lua: SetMinedMultiWithExpressions skips a record whose blockID is
+// already present (FILTERED_OUT), so none of this runs on a re-mine of the same block, whereas
+// Lua re-evaluates setDeleteAtHeight and unminedSince every time. Not fixed.
+//
+// Not retry-safe: the child-record DAH follow-ups run after the batch write. If one fails, the
+// master already carries the new DAH and a retry is a no-op (FILTERED_OUT / old == new), so the
+// child keeps the old value until something else touches the master. The Lua path has the same
+// property.
+func (s *Store) buildDeleteAtHeightOps(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool) []*aerospike.Operation {
+	setExp, clearExp := s.buildDeleteAtHeightExpressions(currentBlockHeight, blockHeightRetention, onLongestChain)
 	flags := aerospike.ExpWriteFlagAllowDelete | aerospike.ExpWriteFlagEvalNoFail
 
 	return []*aerospike.Operation{
@@ -185,7 +216,7 @@ func (s *Store) buildDeleteAtHeightOps(currentBlockHeight uint32, blockHeightRet
 
 // buildDeleteAtHeightExpressions builds the set/raise expression and the clear expression
 // from the same branch conditions so the two can never disagree.
-func (s *Store) buildDeleteAtHeightExpressions(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool, ignorePreserveUntil bool) (*aerospike.Expression, *aerospike.Expression) {
+func (s *Store) buildDeleteAtHeightExpressions(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool) (*aerospike.Expression, *aerospike.Expression) {
 	newDeleteHeight := int64(currentBlockHeight + blockHeightRetention)
 
 	// Helper expressions for readability
@@ -196,12 +227,8 @@ func (s *Store) buildDeleteAtHeightExpressions(currentBlockHeight uint32, blockH
 	recordUtxosBin := aerospike.ExpIntBin(fields.RecordUtxos.String())
 	blockIDsBin := aerospike.ExpListBin(fields.BlockIDs.String())
 
-	// Condition: preserveUntil is NOT set (bin doesn't exist). When ignorePreserveUntil is
-	// true we treat preservation as already gone so the guard branch below never triggers.
+	// Condition: preserveUntil is NOT set (bin doesn't exist)
 	preserveUntilNotSet := aerospike.ExpNot(aerospike.ExpBinExists(fields.PreserveUntil.String()))
-	if ignorePreserveUntil {
-		preserveUntilNotSet = aerospike.ExpBoolVal(true)
-	}
 
 	// Condition: conflicting is true. Lua treats a missing bin as false, so guard the read.
 	isConflicting := aerospike.ExpCond(
@@ -223,15 +250,28 @@ func (s *Store) buildDeleteAtHeightExpressions(currentBlockHeight uint32, blockH
 		aerospike.ExpBinExists(fields.SpentExtraRecs.String()), spentExtraRecsBin,
 		aerospike.ExpIntVal(0),
 	)
+	// spentUtxos == recordUtxos with Lua nil semantics: both missing is equal, one missing is not.
+	// An unguarded read of a missing bin makes the whole expression unknown, which is a silent
+	// no-op under EvalNoFail (see TestExpressionMissingBinSemantics), so each read is guarded.
+	spentExists := aerospike.ExpBinExists(fields.SpentUtxos.String())
+	recordExists := aerospike.ExpBinExists(fields.RecordUtxos.String())
+	utxoCountsEqual := aerospike.ExpCond(
+		aerospike.ExpAnd(spentExists, recordExists), aerospike.ExpEq(spentUtxosBin, recordUtxosBin),
+		aerospike.ExpAnd(aerospike.ExpNot(spentExists), aerospike.ExpNot(recordExists)), aerospike.ExpBoolVal(true),
+		aerospike.ExpBoolVal(false),
+	)
 	allSpent := aerospike.ExpAnd(
 		aerospike.ExpEq(totalExtraRecsBin, spentExtraRecsOrZero),
-		aerospike.ExpEq(spentUtxosBin, recordUtxosBin),
+		utxoCountsEqual,
 	)
 
-	// Condition: has blocks (blockIDs list size > 0)
-	hasBlocks := aerospike.ExpGreater(
-		aerospike.ExpListSize(blockIDsBin),
-		aerospike.ExpIntVal(0),
+	// Condition: has blocks (blockIDs list size > 0); a missing list is empty (Lua: nil)
+	hasBlocks := aerospike.ExpCond(
+		aerospike.ExpBinExists(fields.BlockIDs.String()), aerospike.ExpGreater(
+			aerospike.ExpListSize(blockIDsBin),
+			aerospike.ExpIntVal(0),
+		),
+		aerospike.ExpBoolVal(false),
 	)
 
 	// Condition: is on longest chain - we know this from the input parameter
@@ -358,7 +398,7 @@ func (s *Store) SetMinedMultiWithExpressions(ctx context.Context, hashes []*chai
 	// retention window elapsed.
 	blockHeightRetention := s.settings.GetUtxoStoreBlockHeightRetention()
 	if blockHeightRetention > 0 {
-		ops = append(ops, s.buildDeleteAtHeightOps(minedBlockInfo.BlockHeight, blockHeightRetention, minedBlockInfo.OnLongestChain, false)...)
+		ops = append(ops, s.buildDeleteAtHeightOps(minedBlockInfo.BlockHeight, blockHeightRetention, minedBlockInfo.OnLongestChain)...)
 	}
 
 	// Read final values after modifications (blockIDs and DAH)

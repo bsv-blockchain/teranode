@@ -18,11 +18,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func intPtr(v int) *int { return &v }
+func dahParityInt(v int) *int { return &v }
 
-const spendHeight = 300
+const dahParitySpendHeight = 300
 
-func optionalBin(name fields.FieldName, v *int) *aerospike.Bin {
+func dahParityOptionalBin(name fields.FieldName, v *int) *aerospike.Bin {
 	if v == nil {
 		return aerospike.NewBin(name.String(), nil)
 	}
@@ -30,7 +30,7 @@ func optionalBin(name fields.FieldName, v *int) *aerospike.Bin {
 	return aerospike.NewBin(name.String(), *v)
 }
 
-func showInt(p *int) string {
+func dahParityShow(p *int) string {
 	if p == nil {
 		return "<absent>"
 	}
@@ -38,7 +38,7 @@ func showInt(p *int) string {
 	return fmt.Sprint(*p)
 }
 
-func binInt(rec *aerospike.Record, name fields.FieldName) *int {
+func dahParityBinInt(rec *aerospike.Record, name fields.FieldName) *int {
 	v, ok := rec.Bins[name.String()]
 	if !ok || v == nil {
 		return nil
@@ -53,9 +53,9 @@ func binInt(rec *aerospike.Record, name fields.FieldName) *int {
 // minedHeight+retention (nil result = bin absent).
 type dahValue func(retentionDAH int) *int
 
-func absent(int) *int      { return nil }
-func fresh(r int) *int     { return intPtr(r) }
-func fixed(v int) dahValue { return func(int) *int { return intPtr(v) } }
+func dahParityAbsent(int) *int      { return nil }
+func dahParityFresh(r int) *int     { return dahParityInt(r) }
+func dahParityFixed(v int) dahValue { return func(int) *int { return dahParityInt(v) } }
 
 // dahParityCase describes a master record pre-state, the setMined call, and the
 // deleteAtHeight the Lua UDF (setDeleteAtHeight) produces on the master and on the
@@ -74,6 +74,8 @@ type dahParityCase struct {
 	noPriorBlocks    bool // blockIDs empty before the op (first mine)
 	notExternal      bool // external bin absent: Lua emits no DAHSET/DAHUNSET signal
 	noTotalExtraRecs bool // totalExtraRecs bin absent: Lua treats the record as a pagination record
+	noSpentUtxos     bool // spentUtxos bin absent (Lua: nil)
+	noRecordUtxos    bool // recordUtxos bin absent (Lua: nil)
 
 	onLongestChain bool
 
@@ -81,76 +83,84 @@ type dahParityCase struct {
 	wantChildDAH dahValue
 }
 
-// highDAH is far above any block height + retention used in these tests, so an existing DAH of
+// dahParityHighDAH is far above any block height + retention used in these tests, so an existing DAH of
 // this value is always >= the freshly computed one.
-const highDAH = 1_000_000
+const dahParityHighDAH = 1_000_000
 
 func dahParityCases() []dahParityCase {
 	return []dahParityCase{
 		{name: "all spent, no DAH -> set", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true,
-			wantDAH: fresh, wantChildDAH: fresh},
-		{name: "all spent, higher DAH -> never lowered", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, dah: fixed(highDAH),
-			wantDAH: fixed(highDAH), wantChildDAH: fixed(highDAH)},
-		{name: "all spent, lower DAH -> bumped", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, dah: fixed(5),
-			wantDAH: fresh, wantChildDAH: fresh},
-		{name: "all spent, equal DAH -> unchanged", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, dah: fresh,
-			wantDAH: fresh, wantChildDAH: fresh},
-		{name: "master not all spent, stale DAH -> cleared", spentUtxos: 3, spentExtraRecs: 1, onLongestChain: true, dah: fixed(5),
-			wantDAH: absent, wantChildDAH: absent},
-		{name: "extra record not spent, stale DAH -> cleared", spentUtxos: 4, spentExtraRecs: 0, onLongestChain: true, dah: fixed(5),
-			wantDAH: absent, wantChildDAH: absent},
+			wantDAH: dahParityFresh, wantChildDAH: dahParityFresh},
+		{name: "all spent, higher DAH -> never lowered", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, dah: dahParityFixed(dahParityHighDAH),
+			wantDAH: dahParityFixed(dahParityHighDAH), wantChildDAH: dahParityFixed(dahParityHighDAH)},
+		{name: "all spent, lower DAH -> bumped", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, dah: dahParityFixed(5),
+			wantDAH: dahParityFresh, wantChildDAH: dahParityFresh},
+		{name: "all spent, equal DAH -> unchanged", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, dah: dahParityFresh,
+			wantDAH: dahParityFresh, wantChildDAH: dahParityFresh},
+		{name: "master not all spent, stale DAH -> cleared", spentUtxos: 3, spentExtraRecs: 1, onLongestChain: true, dah: dahParityFixed(5),
+			wantDAH: dahParityAbsent, wantChildDAH: dahParityAbsent},
+		{name: "extra record not spent, stale DAH -> cleared", spentUtxos: 4, spentExtraRecs: 0, onLongestChain: true, dah: dahParityFixed(5),
+			wantDAH: dahParityAbsent, wantChildDAH: dahParityAbsent},
 		{name: "not all spent, no DAH -> stays absent", spentUtxos: 3, spentExtraRecs: 0, onLongestChain: true,
-			wantDAH: absent, wantChildDAH: absent},
-		{name: "all spent but not on longest chain, stale DAH -> cleared", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: false, unminedSince: intPtr(900), dah: fixed(5),
-			wantDAH: absent, wantChildDAH: absent},
-		{name: "all spent but not on longest chain, no DAH -> stays absent", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: false, unminedSince: intPtr(900),
-			wantDAH: absent, wantChildDAH: absent},
+			wantDAH: dahParityAbsent, wantChildDAH: dahParityAbsent},
+		{name: "all spent but not on longest chain, stale DAH -> cleared", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: false, unminedSince: dahParityInt(900), dah: dahParityFixed(5),
+			wantDAH: dahParityAbsent, wantChildDAH: dahParityAbsent},
+		{name: "all spent but not on longest chain, no DAH -> stays absent", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: false, unminedSince: dahParityInt(900),
+			wantDAH: dahParityAbsent, wantChildDAH: dahParityAbsent},
 		// unminedSince is cleared by an earlier op in the same operate; the expression must see
 		// the in-flight clear, not the pre-operate bin (only matters when onLongestChain is not
 		// a constant in the expression, i.e. a non-mined caller; here it pins the end state).
-		{name: "unminedSince set, mined on longest chain, all spent -> set", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, unminedSince: intPtr(900),
-			wantDAH: fresh, wantChildDAH: fresh},
+		{name: "unminedSince set, mined on longest chain, all spent -> set", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, unminedSince: dahParityInt(900),
+			wantDAH: dahParityFresh, wantChildDAH: dahParityFresh},
 		// First mine: blockIDs is empty before the op, so hasBlocks is only true if the
 		// expression sees the ListAppend made earlier in the same operate.
-		{name: "first mine (empty blockIDs), all spent, no DAH -> set", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, noPriorBlocks: true, unminedSince: intPtr(900),
-			wantDAH: fresh, wantChildDAH: fresh},
-		{name: "first mine (empty blockIDs), not all spent, stale DAH -> cleared", spentUtxos: 2, spentExtraRecs: 0, onLongestChain: true, noPriorBlocks: true, dah: fixed(5),
-			wantDAH: absent, wantChildDAH: absent},
-		{name: "first mine off the longest chain, all spent, no DAH -> stays absent", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: false, noPriorBlocks: true, unminedSince: intPtr(900),
-			wantDAH: absent, wantChildDAH: absent},
-		{name: "preserveUntil, stale DAH -> untouched", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, preserveUntil: intPtr(99999), dah: fixed(5),
-			wantDAH: fixed(5), wantChildDAH: fixed(5)},
-		{name: "preserveUntil, no DAH -> stays absent", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, preserveUntil: intPtr(99999),
-			wantDAH: absent, wantChildDAH: absent},
-		{name: "preserveUntil, not all spent, stale DAH -> untouched", spentUtxos: 1, spentExtraRecs: 0, onLongestChain: true, preserveUntil: intPtr(99999), dah: fixed(5),
-			wantDAH: fixed(5), wantChildDAH: fixed(5)},
+		{name: "first mine (empty blockIDs), all spent, no DAH -> set", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, noPriorBlocks: true, unminedSince: dahParityInt(900),
+			wantDAH: dahParityFresh, wantChildDAH: dahParityFresh},
+		{name: "first mine (empty blockIDs), not all spent, stale DAH -> cleared", spentUtxos: 2, spentExtraRecs: 0, onLongestChain: true, noPriorBlocks: true, dah: dahParityFixed(5),
+			wantDAH: dahParityAbsent, wantChildDAH: dahParityAbsent},
+		{name: "first mine off the longest chain, all spent, no DAH -> stays absent", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: false, noPriorBlocks: true, unminedSince: dahParityInt(900),
+			wantDAH: dahParityAbsent, wantChildDAH: dahParityAbsent},
+		{name: "preserveUntil, stale DAH -> untouched", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, preserveUntil: dahParityInt(99999), dah: dahParityFixed(5),
+			wantDAH: dahParityFixed(5), wantChildDAH: dahParityFixed(5)},
+		{name: "preserveUntil, no DAH -> stays absent", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, preserveUntil: dahParityInt(99999),
+			wantDAH: dahParityAbsent, wantChildDAH: dahParityAbsent},
+		{name: "preserveUntil, not all spent, stale DAH -> untouched", spentUtxos: 1, spentExtraRecs: 0, onLongestChain: true, preserveUntil: dahParityInt(99999), dah: dahParityFixed(5),
+			wantDAH: dahParityFixed(5), wantChildDAH: dahParityFixed(5)},
 		{name: "conflicting, no DAH -> set even if unspent", spentUtxos: 0, spentExtraRecs: 0, onLongestChain: true, conflicting: true,
-			wantDAH: fresh, wantChildDAH: fresh},
-		{name: "conflicting, existing lower DAH -> unchanged (no bump)", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, conflicting: true, dah: fixed(5),
-			wantDAH: fixed(5), wantChildDAH: fixed(5)},
-		{name: "conflicting, existing higher DAH -> unchanged", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, conflicting: true, dah: fixed(highDAH),
-			wantDAH: fixed(highDAH), wantChildDAH: fixed(highDAH)},
-		{name: "conflicting, not on longest chain, no DAH -> set", spentUtxos: 0, spentExtraRecs: 0, onLongestChain: false, unminedSince: intPtr(900), conflicting: true,
-			wantDAH: fresh, wantChildDAH: fresh},
+			wantDAH: dahParityFresh, wantChildDAH: dahParityFresh},
+		{name: "conflicting, existing lower DAH -> unchanged (no bump)", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, conflicting: true, dah: dahParityFixed(5),
+			wantDAH: dahParityFixed(5), wantChildDAH: dahParityFixed(5)},
+		{name: "conflicting, existing higher DAH -> unchanged", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, conflicting: true, dah: dahParityFixed(dahParityHighDAH),
+			wantDAH: dahParityFixed(dahParityHighDAH), wantChildDAH: dahParityFixed(dahParityHighDAH)},
+		{name: "conflicting, not on longest chain, no DAH -> set", spentUtxos: 0, spentExtraRecs: 0, onLongestChain: false, unminedSince: dahParityInt(900), conflicting: true,
+			wantDAH: dahParityFresh, wantChildDAH: dahParityFresh},
 		// conflicting + would-clear: a conflicting record is never cleared, even when not eligible.
-		{name: "conflicting, not all spent, existing DAH -> never cleared", spentUtxos: 1, spentExtraRecs: 0, onLongestChain: true, conflicting: true, dah: fixed(5),
-			wantDAH: fixed(5), wantChildDAH: fixed(5)},
-		{name: "conflicting, off longest chain, existing DAH -> never cleared", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: false, unminedSince: intPtr(900), conflicting: true, dah: fixed(5),
-			wantDAH: fixed(5), wantChildDAH: fixed(5)},
+		{name: "conflicting, not all spent, existing DAH -> never cleared", spentUtxos: 1, spentExtraRecs: 0, onLongestChain: true, conflicting: true, dah: dahParityFixed(5),
+			wantDAH: dahParityFixed(5), wantChildDAH: dahParityFixed(5)},
+		{name: "conflicting, off longest chain, existing DAH -> never cleared", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: false, unminedSince: dahParityInt(900), conflicting: true, dah: dahParityFixed(5),
+			wantDAH: dahParityFixed(5), wantChildDAH: dahParityFixed(5)},
 		// Non-external master: Lua sets/clears the master DAH but emits no signal, so the child is untouched.
 		{name: "non-external, all spent, no DAH -> master set, child untouched", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, notExternal: true,
-			wantDAH: fresh, wantChildDAH: absent},
-		{name: "non-external, not all spent, stale DAH -> master cleared, child untouched", spentUtxos: 1, spentExtraRecs: 0, onLongestChain: true, notExternal: true, dah: fixed(5),
-			wantDAH: absent, wantChildDAH: fixed(5)},
+			wantDAH: dahParityFresh, wantChildDAH: dahParityAbsent},
+		{name: "non-external, not all spent, stale DAH -> master cleared, child untouched", spentUtxos: 1, spentExtraRecs: 0, onLongestChain: true, notExternal: true, dah: dahParityFixed(5),
+			wantDAH: dahParityAbsent, wantChildDAH: dahParityFixed(5)},
 		// A master without totalExtraRecs is handled by Lua as a pagination record: DAH never changes
 		// (conflicting is evaluated first, so it still sets there). The all-spent variant is not
 		// tested: Lua then signals ALLSPENT and the client's follow-up fails on the missing bin.
 		{name: "no totalExtraRecs, not all spent, no DAH -> stays absent", spentUtxos: 1, spentExtraRecs: 0, onLongestChain: true, noTotalExtraRecs: true,
-			wantDAH: absent, wantChildDAH: absent},
-		{name: "no totalExtraRecs, not all spent, stale DAH -> untouched", spentUtxos: 1, spentExtraRecs: 0, onLongestChain: true, noTotalExtraRecs: true, dah: fixed(5),
-			wantDAH: fixed(5), wantChildDAH: fixed(5)},
+			wantDAH: dahParityAbsent, wantChildDAH: dahParityAbsent},
+		{name: "no totalExtraRecs, not all spent, stale DAH -> untouched", spentUtxos: 1, spentExtraRecs: 0, onLongestChain: true, noTotalExtraRecs: true, dah: dahParityFixed(5),
+			wantDAH: dahParityFixed(5), wantChildDAH: dahParityFixed(5)},
 		{name: "no totalExtraRecs, conflicting, no DAH -> set", spentUtxos: 0, spentExtraRecs: 0, onLongestChain: true, noTotalExtraRecs: true, conflicting: true,
-			wantDAH: fresh, wantChildDAH: absent},
+			wantDAH: dahParityFresh, wantChildDAH: dahParityAbsent},
+		// Missing counter bins: Lua compares nil values (nil == nil is true, nil == 4 is false); an
+		// unguarded expression read of a missing bin is a silent no-op, so it must be guarded.
+		{name: "spentUtxos bin missing, recordUtxos present, stale DAH -> cleared", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, noSpentUtxos: true, dah: dahParityFixed(5),
+			wantDAH: dahParityAbsent, wantChildDAH: dahParityAbsent},
+		{name: "recordUtxos bin missing, spentUtxos present, stale DAH -> cleared", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, noRecordUtxos: true, dah: dahParityFixed(5),
+			wantDAH: dahParityAbsent, wantChildDAH: dahParityAbsent},
+		{name: "both counter bins missing (nil == nil), all extra spent -> set", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, noSpentUtxos: true, noRecordUtxos: true,
+			wantDAH: dahParityFresh, wantChildDAH: dahParityFresh},
 	}
 }
 
@@ -229,7 +239,7 @@ func TestSetMinedDAHParity(t *testing.T) {
 	}
 }
 
-func resolve(d dahValue, retentionDAH int) *int {
+func dahParityResolve(d dahValue, retentionDAH int) *int {
 	if d == nil {
 		return nil
 	}
@@ -243,7 +253,7 @@ func runDAHParityCase(ctx context.Context, t *testing.T, client *uaerospike.Clie
 	var result dahResult
 
 	t.Run(c.name, func(t *testing.T) {
-		hash := createPaginatedTx(ctx, t, store, idx)
+		hash := dahParityCreatePaginatedTx(ctx, t, store, idx)
 		key := func(recordIdx uint32) *aerospike.Key {
 			k, kErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(hash, recordIdx))
 			require.NoError(t, kErr)
@@ -251,7 +261,7 @@ func runDAHParityCase(ctx context.Context, t *testing.T, client *uaerospike.Clie
 			return k
 		}
 
-		dah := resolve(c.dah, retentionDAH)
+		dah := dahParityResolve(c.dah, retentionDAH)
 		priorBlocks, priorHeights, priorSubtrees := []int{7}, []int{500}, []int{0}
 
 		if c.noPriorBlocks {
@@ -267,20 +277,28 @@ func runDAHParityCase(ctx context.Context, t *testing.T, client *uaerospike.Clie
 			aerospike.NewBin(fields.BlockIDs.String(), priorBlocks),
 			aerospike.NewBin(fields.BlockHeights.String(), priorHeights),
 			aerospike.NewBin(fields.SubtreeIdxs.String(), priorSubtrees),
-			optionalBin(fields.DeleteAtHeight, dah),
-			optionalBin(fields.PreserveUntil, c.preserveUntil),
-			optionalBin(fields.UnminedSince, c.unminedSince),
+			dahParityOptionalBin(fields.DeleteAtHeight, dah),
+			dahParityOptionalBin(fields.PreserveUntil, c.preserveUntil),
+			dahParityOptionalBin(fields.UnminedSince, c.unminedSince),
 		}
 		if c.notExternal {
 			masterBins = append(masterBins, aerospike.NewBin(fields.External.String(), nil))
+		}
+
+		if c.noSpentUtxos {
+			masterBins = append(masterBins, aerospike.NewBin(fields.SpentUtxos.String(), nil))
+		}
+
+		if c.noRecordUtxos {
+			masterBins = append(masterBins, aerospike.NewBin(fields.RecordUtxos.String(), nil))
 		}
 
 		if c.noTotalExtraRecs {
 			masterBins = append(masterBins, aerospike.NewBin(fields.TotalExtraRecs.String(), nil))
 		}
 
-		require.NoError(t, client.PutBins(nil, key(0), dedupeBins(masterBins)...))
-		require.NoError(t, client.PutBins(nil, key(1), optionalBin(fields.DeleteAtHeight, dah)))
+		require.NoError(t, client.PutBins(nil, key(0), dahParityDedupeBins(masterBins)...))
+		require.NoError(t, client.PutBins(nil, key(1), dahParityOptionalBin(fields.DeleteAtHeight, dah)))
 
 		_, err := store.SetMinedMulti(ctx, []*chainhash.Hash{hash}, utxo.MinedBlockInfo{
 			BlockID:        100,
@@ -294,20 +312,20 @@ func runDAHParityCase(ctx context.Context, t *testing.T, client *uaerospike.Clie
 			require.NoError(t, gErr)
 			require.NotNil(t, rec)
 
-			return binInt(rec, fields.DeleteAtHeight)
+			return dahParityBinInt(rec, fields.DeleteAtHeight)
 		}
 
-		result = dahResult{master: showInt(read(0)), child: showInt(read(1))}
+		result = dahResult{master: dahParityShow(read(0)), child: dahParityShow(read(1))}
 
-		require.Equal(t, showInt(resolve(c.wantDAH, retentionDAH)), result.master, "master deleteAtHeight")
-		require.Equal(t, showInt(resolve(c.wantChildDAH, retentionDAH)), result.child, "pagination record deleteAtHeight")
+		require.Equal(t, dahParityShow(dahParityResolve(c.wantDAH, retentionDAH)), result.master, "master deleteAtHeight")
+		require.Equal(t, dahParityShow(dahParityResolve(c.wantChildDAH, retentionDAH)), result.child, "pagination record deleteAtHeight")
 	})
 
 	return result
 }
 
-// dedupeBins keeps the last bin per name, so a later "bin = nil" override wins.
-func dedupeBins(bins []*aerospike.Bin) []*aerospike.Bin {
+// dahParityDedupeBins keeps the last bin per name, so a later "bin = nil" override wins.
+func dahParityDedupeBins(bins []*aerospike.Bin) []*aerospike.Bin {
 	last := map[string]int{}
 	for i, b := range bins {
 		last[b.Name] = i
@@ -324,9 +342,9 @@ func dedupeBins(bins []*aerospike.Bin) []*aerospike.Bin {
 	return out
 }
 
-// createPaginatedTx stores a unique tx with 6 outputs; with utxoBatchSize 4 that is a master
+// dahParityCreatePaginatedTx stores a unique tx with 6 outputs; with utxoBatchSize 4 that is a master
 // record (4 outputs) plus one pagination record.
-func createPaginatedTx(ctx context.Context, t *testing.T, store *teranode_aerospike.Store, idx int) *chainhash.Hash {
+func dahParityCreatePaginatedTx(ctx context.Context, t *testing.T, store *teranode_aerospike.Store, idx int) *chainhash.Hash {
 	t.Helper()
 
 	tx := bt.NewTx()
@@ -378,8 +396,8 @@ func TestSetMinedDAHChildFollowUpsSurviveSiblingError(t *testing.T) {
 
 			const minedHeight = 1000
 
-			setHash := createPaginatedTx(ctx, t, store, 0)
-			clearHash := createPaginatedTx(ctx, t, store, 1)
+			setHash := dahParityCreatePaginatedTx(ctx, t, store, 0)
+			clearHash := dahParityCreatePaginatedTx(ctx, t, store, 1)
 			missing := chainhash.HashH([]byte("missing"))
 
 			force := func(hash *chainhash.Hash, spent, spentExtra int) {
@@ -412,11 +430,11 @@ func TestSetMinedDAHChildFollowUpsSurviveSiblingError(t *testing.T) {
 				rec, gErr := client.Get(nil, k)
 				require.NoError(t, gErr)
 
-				return binInt(rec, fields.DeleteAtHeight)
+				return dahParityBinInt(rec, fields.DeleteAtHeight)
 			}
 
-			require.Equal(t, showInt(intPtr(minedHeight+retention)), showInt(childDAH(setHash)), "child DAH of the bumped master")
-			require.Equal(t, showInt(nil), showInt(childDAH(clearHash)), "child DAH of the cleared master")
+			require.Equal(t, dahParityShow(dahParityInt(minedHeight+retention)), dahParityShow(childDAH(setHash)), "child DAH of the bumped master")
+			require.Equal(t, dahParityShow(nil), dahParityShow(childDAH(clearHash)), "child DAH of the cleared master")
 		})
 	}
 }

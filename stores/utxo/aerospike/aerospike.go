@@ -1353,14 +1353,28 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 		// transactions and never lower an existing DAH for eligible ones; the store's
 		// normal DAH mechanism re-stamps them if and when they actually become
 		// eligible. This restores "DAH set ⟹ safe to delete".
-		ops := []*aerospike.Operation{
-			aerospike.PutOp(aerospike.NewBin(fields.PreserveUntil.String(), nil)),
+		//
+		// The preserveUntil clear is an earlier op of the same operate; the expressions' preserve
+		// guard sees that in-flight write (TestExpressionSeesInFlightOperateChanges).
+		//
+		// The DAH is read before and after so the pagination records of an external master can
+		// follow the master (see processBatchExpiredPreservations).
+		ops := []*aerospike.Operation{}
+
+		blockHeightRetention := s.settings.GetUtxoStoreBlockHeightRetention()
+		if blockHeightRetention > 0 {
+			ops = append(ops,
+				aerospike.GetBinOp(fields.DeleteAtHeight.String()),
+				aerospike.GetBinOp(fields.External.String()),
+				aerospike.GetBinOp(fields.TotalExtraRecs.String()),
+			)
 		}
 
-		if blockHeightRetention := s.settings.GetUtxoStoreBlockHeightRetention(); blockHeightRetention > 0 {
-			// ignorePreserveUntil=true: preserveUntil is cleared by the op above in this same
-			// operate; the expressions see that in-flight write, so this is belt-and-braces.
-			ops = append(ops, s.buildDeleteAtHeightOps(currentHeight, blockHeightRetention, false, true)...)
+		ops = append(ops, aerospike.PutOp(aerospike.NewBin(fields.PreserveUntil.String(), nil)))
+
+		if blockHeightRetention > 0 {
+			ops = append(ops, s.buildDeleteAtHeightOps(currentHeight, blockHeightRetention, false)...)
+			ops = append(ops, aerospike.GetBinOp(fields.DeleteAtHeight.String()))
 		}
 
 		batch = append(batch, aerospike.NewBatchWrite(batchWritePolicy, key, ops...))
@@ -1409,12 +1423,45 @@ func (s *Store) processBatchExpiredPreservations(ctx context.Context, batch []ae
 		return err
 	}
 
-	// Log any failures
+	// Log any failures, and collect the pagination-record DAH follow-ups for external masters
+	// whose DAH was set, raised or cleared by the expressions (the Lua DAHSET/DAHUNSET signals).
+	// Not retry-safe: preserveUntil is already cleared, so if a follow-up fails the children keep
+	// their old DAH until something else touches the master.
+	var setItems, unsetItems []childDAHItem
+
 	for i, record := range batch {
-		if record.BatchRec().Err != nil {
+		br := record.BatchRec()
+		if br.Err != nil {
 			s.logger.Warnf("[ProcessExpiredPreservations] Failed to update tx %s: %v",
-				txIDs[i].String(), record.BatchRec().Err)
+				txIDs[i].String(), br.Err)
+
+			continue
 		}
+
+		if br.Record == nil || br.Record.Bins == nil {
+			continue
+		}
+
+		if state, parseErr := s.parseSetMinedState(br.Record.Bins); parseErr == nil {
+			collectChildDAHFollowUp(&txIDs[i], state, &setItems, &unsetItems)
+		}
+	}
+
+	var followUpErr error
+
+	for _, items := range [][]childDAHItem{setItems, unsetItems} {
+		if len(items) == 0 {
+			continue
+		}
+
+		if err := s.SetDAHForChildRecordsMulti(items); err != nil {
+			followUpErr = errors.Join(followUpErr, err)
+		}
+	}
+
+	if followUpErr != nil {
+		s.logger.Warnf("[ProcessExpiredPreservations] child DAH follow-up failed: %v", followUpErr)
+		return followUpErr
 	}
 
 	return nil
