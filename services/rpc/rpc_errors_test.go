@@ -1049,6 +1049,49 @@ func TestGenerate_P2SHPayoutKeepsItsReason(t *testing.T) {
 	require.Equal(t, "bad-txns-vout-p2sh: coinbase pays to a P2SH output", rpcErr.Message)
 }
 
+// TestBlockAssemblyNotReady_AnswersInWarmup: block assembly refuses work while it
+// reloads unmined transactions. That clears on its own and is no fault, and svnode
+// answers its own warm-up with RPC_IN_WARMUP, so a caller that retries on -28 does
+// here too. Main showed the service's text; failing closed answered -32603.
+func TestBlockAssemblyNotReady_AnswersInWarmup(t *testing.T) {
+	notReady := func(t *testing.T) error {
+		return overGRPC(t, errors.NewServiceNotReadyError("service not ready - unmined transactions are still being loaded"))
+	}
+
+	generating := func(t *testing.T, logger ulogger.Logger) *RPCServer {
+		bc, ba := &blockchain.Mock{}, &blockassembly.Mock{}
+		bc.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1}, nil)
+		ba.On("GenerateBlocks", mock.Anything, mock.Anything).Return(notReady(t))
+
+		return &RPCServer{logger: logger, settings: &settings.Settings{ChainCfgParams: &chaincfg.RegressionNetParams},
+			blockchainClient: bc, blockAssemblyClient: ba}
+	}
+
+	for name, call := range map[string]func(*testing.T, ulogger.Logger) error{
+		"submitminingsolution": func(t *testing.T, logger ulogger.Logger) error {
+			return submitSolution(t, logger, notReady(t))
+		},
+		"generate": func(t *testing.T, logger ulogger.Logger) error {
+			_, err := handleGenerate(context.Background(), generating(t, logger), &bsvjson.GenerateCmd{NumBlocks: 1}, nil)
+			return err
+		},
+		"generatetoaddress": func(t *testing.T, logger ulogger.Logger) error {
+			_, err := handleGenerateToAddress(context.Background(), generating(t, logger),
+				&bsvjson.GenerateToAddressCmd{NumBlocks: 1, Address: "2N2JD6wb56AfK4tfmM6PwdVmoYk2dCKf4Br"}, nil)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			logger := newCapturingLogger()
+
+			rpcErr := requireRPCError(t, call(t, logger))
+			require.Equal(t, bsvjson.ErrRPCInWarmup, rpcErr.Code)
+			require.Equal(t, inWarmupMessage, rpcErr.Message)
+			require.Empty(t, logger.errorf, "a state that clears is no node fault; block assembly already warns")
+		})
+	}
+}
+
 // TestGenerateBlocks_FailuresKeepInternalsOffTheWire covers the three failure
 // sites in generate and generatetoaddress. Each rendered its own wrapper's whole
 // chain into the message, so a status without details put the service's dial

@@ -69,16 +69,19 @@ func IsRetryableError(err error) bool {
 // per-block backoff / suppress rejecting the block to the peer (netsync) and
 // whether to keep the delivering peer instead of disconnecting it (peer_server).
 //
-// The set is {ErrServiceError, ErrStorageError, ErrServiceUnavailable,
-// ErrStorageUnavailable} and the check walks the wrapped chain. It intentionally
-// differs from IsRetryableError, which omits ErrServiceError (and adds network
-// codes) — these two predicates are not interchangeable.
+// The set is {ErrServiceError, ErrServiceNotReady, ErrStorageError,
+// ErrServiceUnavailable, ErrStorageUnavailable} and the check walks the wrapped
+// chain. ErrServiceNotReady is here because its producers reported the same state
+// as ErrServiceError before it had a class of its own. It intentionally differs
+// from IsRetryableError, which omits both (and adds network codes) — these two
+// predicates are not interchangeable.
 func IsTransientLocalError(err error) bool {
 	if err == nil {
 		return false
 	}
 
 	return errors.Is(err, ErrServiceError) ||
+		errors.Is(err, ErrServiceNotReady) ||
 		errors.Is(err, ErrStorageError) ||
 		errors.Is(err, ErrServiceUnavailable) ||
 		errors.Is(err, ErrStorageUnavailable)

@@ -72,6 +72,11 @@ const (
 	txNotFoundMessage    = "No such mempool or blockchain transaction"
 	missingInputsMessage = "Missing inputs"
 
+	// inWarmupMessage answers a service that is up but still loading. svnode
+	// answers its own warm-up with RPC_IN_WARMUP and a progress text; this one is
+	// fixed, because the class says only that the state clears, not what is loading.
+	inWarmupMessage = "Still loading, try again shortly"
+
 	// genericErrorMessage is what a caller gets when the failure is the
 	// node's own and nothing in the chain is safe to show. The code carries
 	// the classification; the chain goes to the log.
@@ -630,6 +635,12 @@ func asTeranodeError(err error) error {
 func buildRPCError(err error, fallbackCode bsvjson.RPCErrorCode, prefix string, scope rpcRequestScope) *bsvjson.RPCError {
 	err = asTeranodeError(err)
 
+	// A service that is up but still loading refuses work it will accept shortly.
+	// svnode answers its own warm-up with RPC_IN_WARMUP, and callers retry on it.
+	if errors.Is(err, errors.ErrServiceNotReady) {
+		return &bsvjson.RPCError{Code: bsvjson.ErrRPCInWarmup, Message: inWarmupMessage}
+	}
+
 	switch scope {
 	case scopeBlockLookup:
 		// The request named an object, so a not-found is about that object.
@@ -702,6 +713,12 @@ func isCallerFault(err error, scope rpcRequestScope) bool {
 		if errors.Is(err, fault) {
 			return false
 		}
+	}
+
+	// Not the caller's fault, and no fault at all: a service still loading. The
+	// service that refused has already logged it at Warn.
+	if errors.Is(err, errors.ErrServiceNotReady) {
+		return true
 	}
 
 	if isRejection(err, scope.verdicts()) || errors.Is(err, errors.ErrInvalidArgument) {

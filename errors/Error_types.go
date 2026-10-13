@@ -38,6 +38,7 @@ var (
 	ErrServiceNotStarted          = New(ERR_SERVICE_NOT_STARTED, "service not started")
 	ErrServiceUnavailable         = New(ERR_SERVICE_UNAVAILABLE, "service unavailable")
 	ErrServiceRateLimited         = New(ERR_SERVICE_RATE_LIMITED, "service rate limited")
+	ErrServiceNotReady            = New(ERR_SERVICE_NOT_READY, "service not ready")
 	ErrFrozen                     = New(ERR_UTXO_FROZEN, "tx is frozen")
 	ErrNonFinal                   = New(ERR_UTXO_NON_FINAL, "tx is non-final")
 	ErrSpent                      = New(ERR_UTXO_SPENT, "utxo already spent")
@@ -405,6 +406,17 @@ func NewServiceUnavailableError(message string, params ...interface{}) *Error {
 // not the peer's fault; retry with backoff.
 func NewServiceRateLimitedError(message string, params ...interface{}) *Error {
 	return New(ERR_SERVICE_RATE_LIMITED, message, params...)
+}
+
+// NewServiceNotReadyError creates a new error with the service not ready error code.
+//
+// The service is up but still loading state it needs, and refuses work it will
+// accept shortly; nothing is broken. It is distinct from ERR_SERVICE_NOT_STARTED,
+// whose producers report a service that failed to start, and from
+// ERR_SERVICE_UNAVAILABLE, which callers treat as a fault. It carries no gRPC
+// status of its own (codes.Internal), so it does not wake the client retry gate.
+func NewServiceNotReadyError(message string, params ...interface{}) *Error {
+	return New(ERR_SERVICE_NOT_READY, message, params...)
 }
 
 // NewServiceNotStartedError creates a new error with the service not started error code.
