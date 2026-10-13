@@ -33,6 +33,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -401,7 +402,6 @@ func TestScriptVerifierGoBDKMapScriptErrors(t *testing.T) {
 
 	policyCodes := []bdkscript.ScriptErrorCode{
 		bdkscript.SCRIPT_ERR_OP_COUNT,
-		bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW,
 		bdkscript.SCRIPT_ERR_SCRIPTNUM_MINENCODE,
 		bdkscript.SCRIPT_ERR_SCRIPT_SIZE,
 		bdkscript.SCRIPT_ERR_PUBKEY_COUNT,
@@ -425,6 +425,13 @@ func TestScriptVerifierGoBDKMapScriptErrors(t *testing.T) {
 	for _, consensus := range []bool{false, true} {
 		t.Run(fmt.Sprintf("non_policy_script_error_consensus_%t", consensus), func(t *testing.T) {
 			got := verifier.mapBDKValidationError(bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_EVAL_FALSE), consensus)
+			assert.ErrorIs(t, got, errors.ErrTxInvalid)
+			assert.False(t, errors.Is(got, errors.ErrTxPolicy))
+		})
+
+		// Also the consensus error for an int64 overflow since bitcoin-sv 1.2.3
+		t.Run(fmt.Sprintf("scriptnum_overflow_consensus_%t", consensus), func(t *testing.T) {
+			got := verifier.mapBDKValidationError(bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW), consensus)
 			assert.ErrorIs(t, got, errors.ErrTxInvalid)
 			assert.False(t, errors.Is(got, errors.ErrTxPolicy))
 		})
@@ -553,6 +560,104 @@ func Test_ScriptVerificationGoBDK_invalid(t *testing.T) {
 
 		err := verifier.ValidateTransaction(tx, test.BlockHeight, true, test.UTXOHeights)
 		require.Error(t, err, fmt.Sprintf("Failed tx with TXID %v", test.TxID))
+	}
+}
+
+// newPostChronicleSpendTx builds a transaction that spends one output with the
+// given locking script, created after Chronicle so the Chronicle opcodes are
+// active, and returns it with the block and UTXO heights to validate it at.
+func newPostChronicleSpendTx(t *testing.T, lockingScript, unlockingScript []byte) (*bt.Tx, uint32, []uint32) {
+	t.Helper()
+
+	chronicle := chaincfg.MainNetParams.ChronicleActivationHeight
+
+	tx := bt.NewTx()
+	in := &bt.Input{
+		PreviousTxOutIndex: 0,
+		SequenceNumber:     bt.DefaultSequenceNumber,
+		PreviousTxSatoshis: 1000,
+		PreviousTxScript:   bscript.NewFromBytes(lockingScript),
+		UnlockingScript:    bscript.NewFromBytes(unlockingScript),
+	}
+	require.NoError(t, in.PreviousTxIDAddStr(testTxs[0].TxID))
+
+	tx.Inputs = append(tx.Inputs, in)
+	tx.Outputs = append(tx.Outputs, &bt.Output{
+		Satoshis:      500,
+		LockingScript: bscript.NewFromBytes([]byte{0x76, 0xa9, 0x88, 0xac}),
+	})
+
+	return tx, chronicle + 10, []uint32{chronicle + 1}
+}
+
+// TestScriptVerifierGoBDKRejectsInt64ScriptNumOverflow pins a consensus rule from
+// bitcoin-sv 1.2.3: a script number that does not fit in int64 is rejected with
+// SCRIPT_ERR_SCRIPTNUM_OVERFLOW. OP_LEFT reads its length operand as a non-big-int
+// script number, and GoBDK builds against earlier bitcoin-sv versions truncated a
+// 9-byte operand instead, so a later GoBDK pin cannot quietly undo the rule. Policy
+// mode must report it as TxInvalid too, or the transaction would be published as
+// consensus-valid on KAFKA_TX_POLICY_REJECTED.
+func TestScriptVerifierGoBDKRejectsInt64ScriptNumOverflow(t *testing.T) {
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, test.CreateBaseTestSettings(t).Policy, &chaincfg.MainNetParams)
+
+	// Each unlocking script pushes "abc" and an OP_LEFT length; the locking script
+	// is OP_LEFT OP_DROP OP_1.
+	lockingScript := []byte{0xb4, 0x75, 0x51}
+
+	for _, consensus := range []bool{true, false} {
+		t.Run(fmt.Sprintf("consensus_%t", consensus), func(t *testing.T) {
+			t.Run("length that fits int64", func(t *testing.T) {
+				tx, blockHeight, utxoHeights := newPostChronicleSpendTx(t, lockingScript, []byte{0x03, 'a', 'b', 'c', 0x51})
+
+				require.NoError(t, verifier.ValidateTransaction(tx, blockHeight, consensus, utxoHeights))
+			})
+
+			t.Run("9-byte length", func(t *testing.T) {
+				// 2^64 + 1, minimally encoded
+				tx, blockHeight, utxoHeights := newPostChronicleSpendTx(t, lockingScript,
+					[]byte{0x03, 'a', 'b', 'c', 0x09, 0x01, 0, 0, 0, 0, 0, 0, 0, 0x01})
+
+				err := verifier.ValidateTransaction(tx, blockHeight, consensus, utxoHeights)
+				require.ErrorIs(t, err, errors.ErrTxInvalid)
+				require.False(t, errors.Is(err, errors.ErrTxPolicy), "an int64 overflow is a consensus failure: %v", err)
+				require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW).Error())
+			})
+		})
+	}
+}
+
+// TestScriptVerifierGoBDKRejectsSplitPastInt32Max covers OP_SPLIT with a position
+// above INT32_MAX. bitcoin-sv 1.2.3 bounds the position by INT32_MAX as well as by
+// the element size, which only changes the outcome for elements longer than
+// INT32_MAX bytes; bitcoin-sv's op_split_int32_max covers that with a 2 GiB stack
+// element. On an ordinary element both bounds reject the position, so this test
+// passes against earlier GoBDK pins too.
+func TestScriptVerifierGoBDKRejectsSplitPastInt32Max(t *testing.T) {
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, test.CreateBaseTestSettings(t).Policy, &chaincfg.MainNetParams)
+
+	// Each unlocking script pushes "abc" and a split position; the locking script
+	// is OP_SPLIT OP_2DROP OP_1.
+	lockingScript := []byte{0x7f, 0x6d, 0x51}
+
+	for _, consensus := range []bool{true, false} {
+		t.Run(fmt.Sprintf("consensus_%t", consensus), func(t *testing.T) {
+			t.Run("position inside the element", func(t *testing.T) {
+				tx, blockHeight, utxoHeights := newPostChronicleSpendTx(t, lockingScript, []byte{0x03, 'a', 'b', 'c', 0x51})
+
+				require.NoError(t, verifier.ValidateTransaction(tx, blockHeight, consensus, utxoHeights))
+			})
+
+			t.Run("position 2^31", func(t *testing.T) {
+				// INT32_MAX + 1, minimally encoded; the trailing 0x00 keeps it positive
+				tx, blockHeight, utxoHeights := newPostChronicleSpendTx(t, lockingScript,
+					[]byte{0x03, 'a', 'b', 'c', 0x05, 0, 0, 0, 0x80, 0})
+
+				err := verifier.ValidateTransaction(tx, blockHeight, consensus, utxoHeights)
+				require.ErrorIs(t, err, errors.ErrTxInvalid)
+				require.False(t, errors.Is(err, errors.ErrTxPolicy))
+				require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_INVALID_SPLIT_RANGE).Error())
+			})
+		})
 	}
 }
 
