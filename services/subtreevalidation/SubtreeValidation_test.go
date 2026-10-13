@@ -1821,9 +1821,9 @@ func (v minedValidator) ValidateWithOptions(context.Context, *bt.Tx, uint32, *va
 // TestBlessMissing_AlreadyMinedNamesNoStoreID: a transaction already mined on this
 // chain is a TX_INVALID verdict, a class on the shared allowlist, so any boundary
 // that sees it shows its message (reconsiderblock's revalidation reaches RPC with
-// it). The block it was mined in is named by
-// this node's store id, which is no block's public identifier, so it goes to the
-// log and the verdict names the transaction.
+// it). The block it was mined in is named by this node's store id, which is no
+// block's public identifier, so it goes to the log and the verdict names the
+// transaction.
 func TestBlessMissing_AlreadyMinedNamesNoStoreID(t *testing.T) {
 	logger := &warnCaptureLogger{Logger: ulogger.TestLogger{}}
 

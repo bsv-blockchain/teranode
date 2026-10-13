@@ -50,7 +50,7 @@ import (
 // reason on top would let every assertion here pass while production put the
 // breadcrumb on the wire and dropped the reason.
 
-// blockNotFoundChain is the shape reported in bitcoin-sv/teranode issue 4778:
+// blockNotFoundChain is the shape a missing block takes on reconsiderblock:
 // a BLOCK_NOT_FOUND raised by the store, wrapped by the blockchain client,
 // wrapped again by the block validation service. The storage layer's own text
 // sits at the bottom.
@@ -980,17 +980,9 @@ func TestAssemblyRefusal_CrossesOnlyWhereAMinerSubmitted(t *testing.T) {
 	require.Equal(t, "error creating top tree", submitted.Message)
 
 	// Every other scope, so that widening the case to a range of scopes or to "any
-	// but opaque" fails here too.
-	for name, scope := range map[string]rpcRequestScope{
-		"opaque":             scopeOpaque,
-		"block lookup":       scopeBlockLookup,
-		"height lookup":      scopeHeightLookup,
-		"tx lookup":          scopeTxLookup,
-		"submit":             scopeSubmit,
-		"caller input":       scopeCallerInput,
-		"block revalidation": scopeBlockRevalidation,
-	} {
-		t.Run(name, func(t *testing.T) {
+	// but opaque" fails here too. scopeMiningSubmission is the last declared scope.
+	for scope := scopeOpaque; scope < scopeMiningSubmission; scope++ {
+		t.Run(fmt.Sprintf("scope %d", scope), func(t *testing.T) {
 			rpcErr := buildRPCError(topTree, bsvjson.ErrRPCInternal.Code, "", scope)
 			require.Equal(t, genericErrorMessage, rpcErr.Message)
 		})
@@ -1635,17 +1627,13 @@ func TestHandleSendRawTransaction_ImmatureCoinbaseKeepsItsReason(t *testing.T) {
 	}
 
 	// Every other scope, so that widening the class to a range of scopes or to "any
-	// but opaque" fails here too.
-	for name, scope := range map[string]rpcRequestScope{
-		"opaque":             scopeOpaque,
-		"block lookup":       scopeBlockLookup,
-		"height lookup":      scopeHeightLookup,
-		"tx lookup":          scopeTxLookup,
-		"caller input":       scopeCallerInput,
-		"block revalidation": scopeBlockRevalidation,
-		"mining submission":  scopeMiningSubmission,
-	} {
-		t.Run("only where a transaction was submitted, not "+name, func(t *testing.T) {
+	// but opaque" fails here too. scopeMiningSubmission is the last declared scope.
+	for scope := scopeOpaque; scope <= scopeMiningSubmission; scope++ {
+		if scope == scopeSubmit {
+			continue
+		}
+
+		t.Run(fmt.Sprintf("only where a transaction was submitted, not scope %d", scope), func(t *testing.T) {
 			rpcErr := buildRPCError(overGRPC(t, spending("sql", sqlImmature())), bsvjson.ErrRPCInternal.Code, "", scope)
 			require.Equal(t, genericErrorMessage, rpcErr.Message)
 		})
@@ -1855,9 +1843,9 @@ func TestStripBreadcrumb_DoesNotEatABracketedReason(t *testing.T) {
 // errors.publicCauseCodes in both directions at once.
 func TestRejectionMembershipFollowsTheSharedAllowlist(t *testing.T) {
 	t.Run("an immature coinbase does not surface the aerospike batch id", func(t *testing.T) {
-		// errors.go excludes ERR_TX_COINBASE_IMMATURE because this producer embeds
-		// the node's height and the store's process-lifetime spend-batch counter,
-		// which two submissions diffed turn into a throughput oracle.
+		// The shared allowlist excludes ERR_TX_COINBASE_IMMATURE because this producer
+		// embeds the store's process-lifetime spend-batch counter, which two
+		// submissions diffed turn into a throughput oracle.
 		//
 		// The shape matters and an earlier version of this subtest got it wrong: it
 		// put the immature link under a bare PROCESSING wrapper, where there is no

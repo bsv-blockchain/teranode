@@ -389,6 +389,7 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 		assert.Contains(t, err.Error(), "block contains a transaction already on our chain")
 		// The conflicting block's store id is logged; the verdict names the transaction.
 		require.NotContains(t, err.Error(), "blockID")
+		require.NotContains(t, err.Error(), "block ID 1000")
 		require.Contains(t, fmt.Sprint(warnLogger.warned()), "block ID 1000")
 
 		mockStore.AssertExpectations(t)
@@ -960,6 +961,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		assert.Contains(t, err.Error(), "block contains a transaction already on our chain")
 		// The conflicting block's store id is logged; the verdict names the transaction.
 		require.NotContains(t, err.Error(), "blockID")
+		require.NotContains(t, err.Error(), "block ID 5")
 		require.Contains(t, fmt.Sprint(warnLogger.warned()), "block ID 5")
 
 		mockStore.AssertExpectations(t)

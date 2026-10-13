@@ -18,8 +18,7 @@ import (
 // Callers branch on it, so "no such block" and "that block is bad" must not
 // share one. Handlers used to return ErrRPCVerify (-25, "rejected on its
 // merits") for every failure including a missing block, which bitcoind
-// reports as ErrRPCInvalidAddressOrKey (-5). See bitcoin-sv/teranode issue
-// 4778.
+// reports as ErrRPCInvalidAddressOrKey (-5).
 //
 // Reclassification is a property of the CALL SITE, never of this helper.
 // (*errors.Error).Is matches by code anywhere in the chain, so a not-found
