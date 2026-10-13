@@ -980,8 +980,12 @@ func TestAssemblyRefusal_CrossesOnlyWhereAMinerSubmitted(t *testing.T) {
 	require.Equal(t, "error creating top tree", submitted.Message)
 
 	// Every other scope, so that widening the case to a range of scopes or to "any
-	// but opaque" fails here too. scopeMiningSubmission is the last declared scope.
-	for scope := scopeOpaque; scope < scopeMiningSubmission; scope++ {
+	// but opaque" fails here too.
+	for scope := scopeOpaque; scope < numScopes; scope++ {
+		if scope == scopeMiningSubmission {
+			continue
+		}
+
 		t.Run(fmt.Sprintf("scope %d", scope), func(t *testing.T) {
 			rpcErr := buildRPCError(topTree, bsvjson.ErrRPCInternal.Code, "", scope)
 			require.Equal(t, genericErrorMessage, rpcErr.Message)
@@ -1081,6 +1085,12 @@ func TestScopedNotFound_ANodeFaultIsNotAMiss(t *testing.T) {
 		for fault, wrap := range map[string]func(error) error{
 			"storage": func(err error) error { return errors.NewStorageError("postgres read at 10.4.2.17:5432 failed", err) },
 			"network": func(err error) error { return errors.NewNetworkError("read tcp 10.0.1.5:34512: connection reset", err) },
+			"network timeout": func(err error) error {
+				return errors.NewNetworkTimeoutError("blockchain read timed out after 5s", err)
+			},
+			"service unavailable": func(err error) error {
+				return errors.NewServiceUnavailableError("blockchain service unavailable", err)
+			},
 		} {
 			t.Run(name+", under a "+fault+" fault", func(t *testing.T) {
 				logger := newCapturingLogger()
@@ -1137,11 +1147,23 @@ func TestBlockAssemblyNotReady_AnswersInWarmup(t *testing.T) {
 			logger := newCapturingLogger()
 
 			rpcErr := requireRPCError(t, call(t, logger))
-			require.Equal(t, bsvjson.ErrRPCInWarmup, rpcErr.Code)
+			// The literal, not the constant: matching svnode's RPC_IN_WARMUP is the point.
+			require.Equal(t, bsvjson.RPCErrorCode(-28), rpcErr.Code)
 			require.Equal(t, inWarmupMessage, rpcErr.Message)
 			require.Empty(t, logger.errorf, "a state that clears is no node fault; block assembly already warns")
 		})
 	}
+
+	t.Run("a node fault around it is still a node fault", func(t *testing.T) {
+		// No producer nests the two today; the fault decides first all the same, so
+		// a store failure never reads as a service that is merely warming up.
+		rpcErr := buildRPCError(overGRPC(t, errors.NewStorageError("utxo store read failed",
+			errors.NewServiceNotReadyError("service not ready - unmined transactions are still being loaded"))),
+			bsvjson.ErrRPCInternal.Code, "", scopeOpaque)
+
+		require.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		require.Equal(t, genericErrorMessage, rpcErr.Message)
+	})
 }
 
 // TestGenerateBlocks_FailuresKeepInternalsOffTheWire covers the three failure
@@ -1722,8 +1744,8 @@ func TestHandleSendRawTransaction_ImmatureCoinbaseKeepsItsReason(t *testing.T) {
 	}
 
 	// Every other scope, so that widening the class to a range of scopes or to "any
-	// but opaque" fails here too. scopeMiningSubmission is the last declared scope.
-	for scope := scopeOpaque; scope <= scopeMiningSubmission; scope++ {
+	// but opaque" fails here too.
+	for scope := scopeOpaque; scope < numScopes; scope++ {
 		if scope == scopeSubmit {
 			continue
 		}

@@ -560,6 +560,10 @@ const (
 	// node's fault. Here, and only while nothing beneath says otherwise, the top
 	// message is shown; see isAssemblyRefusal.
 	scopeMiningSubmission
+
+	// numScopes is not a scope: it counts them, so a test can range over every
+	// scope, one added later included. Keep it last.
+	numScopes
 )
 
 // verdicts is the set of codes this scope surfaces as verdicts on top of the

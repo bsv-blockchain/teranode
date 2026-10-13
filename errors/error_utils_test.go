@@ -488,3 +488,11 @@ func TestIsGRPCMessageTooLarge(t *testing.T) {
 		})
 	}
 }
+
+// TestServiceNotReadyGRPCCodeDefault pins what NewServiceNotReadyError's doc relies
+// on: the class has no row in ErrorCodeToGRPCCode and falls to codes.Internal, so
+// the client retry gate, which keys on Unavailable and DeadlineExceeded, does not
+// retry a warm-up refusal before RPC can answer it.
+func TestServiceNotReadyGRPCCodeDefault(t *testing.T) {
+	require.Equal(t, codes.Internal, ErrorCodeToGRPCCode(ERR_SERVICE_NOT_READY))
+}
