@@ -9,17 +9,18 @@ import (
 	txmap "github.com/bsv-blockchain/go-tx-map"
 )
 
-// Block validation builds a SplitSwissMapUint64 txMap of every transaction
-// (used by checkDuplicateTransactions). At 600M-tx scale it is tens of GB.
+// Block validation builds a txMap of every transaction (used by
+// checkDuplicateTransactions). It is a nodeIndex over the block's own subtree node
+// arrays (block_node_index.go, 6 bytes a tx); the 64-bit SplitSwissMapUint64 below
+// is only built for a block whose tx indexes exceed 32 bits.
 //
-// It is allocated per block, sized to what the block needs bucket by
-// bucket: each of the 8192 buckets gets its share of the entries plus the
-// headroom hash variance needs (bucketCapacity), about 2% at that scale. It is
-// not kept between blocks: an idle node holds none, and no block is handed a map
-// sized for another. Duplicate inputs are found without a map, see
-// inpoint_dedup.go.
+// It is allocated per block, sized to what the block needs bucket by bucket: each
+// of the 8192 buckets gets its share of the entries plus the headroom hash
+// variance needs (bucketCapacity), about 2% at that scale. It is not kept between
+// blocks: an idle node holds none, and no block is handed a map sized for another.
+// Duplicate inputs are found without a map, see inpoint_dedup.go.
 
-// txMapBuckets is the bucket count of every block txMap.
+// txMapBuckets is the bucket count of the 64-bit block txMap.
 const txMapBuckets uint16 = 8192
 
 // maxTxMapPrealloc caps how many entries the txMap is preallocated for. A map
@@ -76,7 +77,7 @@ func buildBuckets(n int, build func(i int)) {
 	wg.Wait()
 }
 
-// newBlockTxMap returns a SplitSwissMapUint64 sized for n entries (capped at
+// newBlockTxMap returns the 64-bit SplitSwissMapUint64 sized for n entries (capped at
 // maxTxMapPrealloc). The buckets are built here rather than through the
 // constructor's hint, which adds a flat 20% per bucket.
 func newBlockTxMap(n uint64) *txmap.SplitSwissMapUint64 {

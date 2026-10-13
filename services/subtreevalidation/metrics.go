@@ -82,6 +82,21 @@ var (
 	// which is an important aspect of subtree validation.
 	prometheusSubtreeValidationBlessMissingTransaction prometheus.Histogram
 
+	// prometheusSubtreeValidationBlessUnlockFailed counts transactions that were accepted
+	// but whose two-phase-commit unlock failed, and were blessed anyway.
+	prometheusSubtreeValidationBlessUnlockFailed prometheus.Counter
+
+	// prometheusSubtreeValidationBlessUnlockRecovered counts transactions in that set that
+	// the per-level retry in unlockAcceptedTransactions did manage to unlock.
+	prometheusSubtreeValidationBlessUnlockRecovered prometheus.Counter
+
+	// prometheusSubtreeValidationBlessUnlockRetryFailedBatches counts unlock retry calls that
+	// returned an error. SetLocked reports the first error without per-record results, so the
+	// unit is one call, not one transaction: on a failed call some or all of its hashes stay
+	// locked until they are mined. The same goes for a retry left unrun because the unlock
+	// context was already done.
+	prometheusSubtreeValidationBlessUnlockRetryFailedBatches prometheus.Counter
+
 	// prometheusSubtreeValidationSetTXMetaCacheKafkaBatch tracks the duration of processing one
 	// SetCacheMulti batch from a Kafka message. One observation per Kafka message that contained
 	// at least one ADD entry, regardless of how many entries the batch held.
@@ -235,6 +250,33 @@ func _initPrometheusMetrics() {
 			Name:      "bless_missing_transaction",
 			Help:      "Duration of bless missing transaction",
 			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusSubtreeValidationBlessUnlockFailed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "bless_unlock_failed",
+			Help:      "Accepted transactions blessed although their two-phase-commit unlock failed",
+		},
+	)
+
+	prometheusSubtreeValidationBlessUnlockRecovered = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "bless_unlock_recovered",
+			Help:      "Accepted transactions the per-level unlock retry unlocked, subset of bless_unlock_failed",
+		},
+	)
+
+	prometheusSubtreeValidationBlessUnlockRetryFailedBatches = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "bless_unlock_retry_failed_batches",
+			Help:      "Unlock retry calls that returned an error, per call not per transaction, the unlocked set of such a call is unknown",
 		},
 	)
 

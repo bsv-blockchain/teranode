@@ -1723,6 +1723,13 @@ func TestSmokeTests(t *testing.T) {
 		tests.ConflictWALCrashRecovery(t, store)
 	})
 
+	t.Run("aerospike_partial_spend_rollback", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.PartialSpendRollback(t, store)
+	})
+
 	t.Run("aerospike_quick_path_create_spend_mined_semantics", func(t *testing.T) {
 		err := store.Delete(ctx, tests.TXHash)
 		require.NoError(t, err)

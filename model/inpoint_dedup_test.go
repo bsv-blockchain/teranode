@@ -138,9 +138,9 @@ func requireMatchesReference(t testing.TB, txs [][]subtreepkg.Inpoint, c dedupCa
 	}
 }
 
-// constHash puts every inpoint in one hash group, so every pair of inputs is a
+// constInpointHash puts every inpoint in one hash group, so every pair of inputs is a
 // fingerprint collision that only the real-inpoint check can settle.
-func constHash(subtreepkg.Inpoint) uint64 { return 42 }
+func constInpointHash(subtreepkg.Inpoint) uint64 { return 42 }
 
 // fewBitsHash leaves only 2 bits of hash, so groups mix real duplicates and
 // colliding distinct inpoints.
@@ -214,7 +214,7 @@ func TestInpointDedup_SmallShapes(t *testing.T) {
 	}
 
 	hashes := map[string]func(subtreepkg.Inpoint) uint64{
-		"seeded": nil, "const": constHash, "fewbits": fewBitsHash, "topbits": topBitsHash,
+		"seeded": nil, "const": constInpointHash, "fewbits": fewBitsHash, "topbits": topBitsHash,
 	}
 
 	for _, tc := range tests {
@@ -232,7 +232,7 @@ func TestInpointDedup_RandomVsReference(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
 
 	hashes := map[string]func(subtreepkg.Inpoint) uint64{
-		"seeded": nil, "const": constHash, "fewbits": fewBitsHash, "topbits": topBitsHash,
+		"seeded": nil, "const": constInpointHash, "fewbits": fewBitsHash, "topbits": topBitsHash,
 	}
 
 	for iter := 0; iter < 300; iter++ {
@@ -404,7 +404,7 @@ func TestInpointDedup_ManyDuplicatesBounded(t *testing.T) {
 	// the same under total hash collision with distinct inpoints that are not
 	// duplicates: one resolve per tx, linear
 	distinct := uniqueTxs(2000, 1)
-	tx, found, calls = runDedup(t, distinct, dedupCase{hash: constHash, runs: 3, workers: 1})
+	tx, found, calls = runDedup(t, distinct, dedupCase{hash: constInpointHash, runs: 3, workers: 1})
 	require.False(t, found, "tx %d", tx)
 	require.EqualValues(t, 2000, calls)
 }
@@ -484,7 +484,7 @@ func FuzzInpointDedup(f *testing.F) {
 	f.Add([]byte{1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4}, uint8(3), uint8(5), uint8(2))
 	f.Add([]byte{9, 9, 9, 9, 9, 9, 9, 9, 9, 9}, uint8(1), uint8(1), uint8(3))
 
-	hashes := []func(subtreepkg.Inpoint) uint64{nil, constHash, fewBitsHash, topBitsHash}
+	hashes := []func(subtreepkg.Inpoint) uint64{nil, constInpointHash, fewBitsHash, topBitsHash}
 
 	f.Fuzz(func(t *testing.T, data []byte, runs, workers, hashSel uint8) {
 		// bytes are consumed as (parent, index, endOfTx) triples

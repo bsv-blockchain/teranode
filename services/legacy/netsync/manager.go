@@ -1325,6 +1325,7 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	timeStart := time.Now()
 	// passing in block height 0, which will default to utxo store block height in validator
 	txMeta, err = sm.validationClient.Validate(ctx, btTx, 0)
+	txMeta, err = sm.acceptedMetaOnUnlockFailure(ctx, btTx, txMeta, err)
 
 	prometheusLegacyNetsyncHandleTxMsgValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
@@ -1393,6 +1394,31 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	}
 }
 
+// acceptedMetaOnUnlockFailure turns the validator's ErrTxUnlockFailed into a success. The transaction was
+// accepted, spent and created, and only its unlock failed, so it must not be rejected or dropped. The
+// response metadata does not survive a gRPC error, so it is read back from the UTXO store. If that read
+// fails the transaction is still accepted: it is returned with empty metadata, whose zero size passes
+// every peer fee filter, so it is announced rather than rejected or dropped. Any other result is
+// returned unchanged.
+func (sm *SyncManager) acceptedMetaOnUnlockFailure(ctx context.Context, tx *bt.Tx, txMeta *meta.Data, err error) (*meta.Data, error) {
+	if err == nil || !errors.Is(err, errors.ErrTxUnlockFailed) {
+		return txMeta, err
+	}
+
+	if txMeta != nil {
+		return txMeta, nil
+	}
+
+	stored := &meta.Data{}
+	if getErr := sm.utxoStore.GetMeta(ctx, tx.TxIDChainHash(), stored); getErr != nil {
+		sm.logger.Warnf("[acceptedMetaOnUnlockFailure][%s] accepted transaction, failed to read its meta, announcing without fee: %v", tx.TxID(), getErr)
+
+		return &meta.Data{}, nil
+	}
+
+	return stored, nil
+}
+
 // processOrphanTransactions recursively processes orphan transactions that were waiting for a transaction to be accepted
 func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *chainhash.Hash, acceptedTxs *[]*TxHashAndFee) {
 	// check whether any transaction in the orphan pool has this transaction as a parent
@@ -1416,6 +1442,7 @@ func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *ch
 		// validate the orphan transaction
 		// passing in block height 0, which will default to utxo store block height in validator
 		txMeta, err := sm.validationClient.Validate(ctx, orphanTx.tx, 0)
+		txMeta, err = sm.acceptedMetaOnUnlockFailure(ctx, orphanTx.tx, txMeta, err)
 		if err != nil {
 			if errors.Is(err, errors.ErrTxMissingParent) || errors.Is(err, errors.ErrTxLocked) || errors.Is(err, errors.ErrTxCreating) {
 				// silently exit, we will accept this transaction when the other parent(s) comes in
@@ -3731,7 +3758,35 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		// try to process one last time
 		// passing in block height 0, which will default to utxo store block height in validator
 		if _, err := sm.validationClient.Validate(sm.ctx, orphanTx.tx, 0); err != nil {
-			sm.logger.Debugf("failed to validate orphan transaction when evicting %v: %v", txHash, err)
+			// ErrTxUnlockFailed means the orphan was ACCEPTED - spent, created and delivered to
+			// block assembly - and only an unlock is outstanding, so it is not a validation
+			// failure. Every other Validate call site branches on this code; leaving it out here
+			// costs a misleading "failed to validate" line for a transaction the node took.
+			if errors.Is(err, errors.ErrTxUnlockFailed) {
+				sm.logger.Debugf("evicted orphan transaction %v, it was accepted with its unlock pending", txHash)
+			} else {
+				// The tx is now dropped for good: it never validated and nothing will
+				// retry it. This is the event that hid the #1214 ghost-spender incident
+				// for ~40 hours, so every abandonment is counted — the metric is the
+				// dashboard signal.
+				//
+				// Only ErrTxMissingParent is demoted to Debugf: the orphan outlived its
+				// wait for a parent that never arrived, which is the normal outcome for a
+				// chunk of orphans during initial sync and carries no operator signal.
+				// ErrTxLocked stays at WARN even though the parking path treats it as an
+				// orphan class alongside ErrTxMissingParent — it means the parent's record
+				// is still two-phase-commit locked pending block-assembly ack, a window
+				// measured in milliseconds, so a lock that outlived the whole orphan TTL
+				// is anomalous rather than routine. Everything else (policy rejection,
+				// storage failure) stays at WARN for the obvious reason.
+				prometheusLegacyNetsyncOrphansAbandoned.Inc()
+
+				if errors.Is(err, errors.ErrTxMissingParent) {
+					sm.logger.Debugf("orphan transaction %v abandoned after eviction, never validated: %v", txHash, err)
+				} else {
+					sm.logger.Warnf("orphan transaction %v abandoned after eviction, never validated: %v", txHash, err)
+				}
+			}
 		} else {
 			sm.logger.Debugf("evicted orphan transaction %v", txHash)
 		}

@@ -164,6 +164,13 @@ func (h *HTTP) getUTXOsByTxID(c echo.Context, mode ReadMode) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
+	// One store lookup and one retained item per output, so a transaction with an
+	// extreme output count makes a single request disproportionately expensive.
+	// asset_maxUTXOsPerTx defaults to 0 (unlimited), which is today's behaviour.
+	if maxOutputs := h.settings.Asset.MaxUTXOsPerTx; maxOutputs > 0 && len(tx.Outputs) > maxOutputs {
+		return echo.NewHTTPError(http.StatusRequestEntityTooLarge, errors.NewInvalidArgumentError("transaction %s has %d outputs, exceeding asset_maxUTXOsPerTx (%d)", hash.String(), len(tx.Outputs), maxOutputs).Error())
+	}
+
 	// Go through all the outputs and get the UTXOHash for each one
 	// and then look up the UTXO by that hash.  This is done in parallel
 	// to help speed things up.

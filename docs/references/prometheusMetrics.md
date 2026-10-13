@@ -330,6 +330,9 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_subtreevalidation_validate_subtree_handler`       | Histogram | Duration of subtree handler                       |
 | `teranode_subtreevalidation_validate_subtree_duration`      | Histogram | Duration of validate subtree                      |
 | `teranode_subtreevalidation_bless_missing_transaction`      | Histogram | Duration of bless missing transaction             |
+| `teranode_subtreevalidation_bless_unlock_failed`            | Counter   | Accepted transactions blessed although their two-phase-commit unlock failed |
+| `teranode_subtreevalidation_bless_unlock_recovered`         | Counter   | Subset of `bless_unlock_failed` that the per-level unlock retry made spendable |
+| `teranode_subtreevalidation_bless_unlock_retry_failed_batches` | Counter | Unlock retry calls that returned an error; counted per call, not per transaction, because the store reports no per-record result |
 | `teranode_subtreevalidation_set_tx_meta_cache_kafka_batch`  | Histogram | Duration of one SetCacheMulti batch from a Kafka txmeta message (per Kafka message, not per entry) |
 | `teranode_subtreevalidation_set_tx_meta_cache_kafka_count`  | Counter   | Number of ADD entries processed from Kafka (per-entry; mirrors the pre-batching histogram count)   |
 | `teranode_subtreevalidation_del_tx_meta_cache_kafka`        | Histogram | Duration of deleting tx meta cache from kafka     |
@@ -359,6 +362,7 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_validator_set_tx_meta`                   | Histogram | Histogram of validator set tx meta                            |
 | `teranode_validator_parent_commit_retries`         | Counter   | Retries spent waiting for a parent transaction to finish committing, by `condition` (`TX_LOCKED`, `TX_CREATING`) |
 | `teranode_validator_parent_commit_exhausted`       | Counter   | Transactions rejected because the parent-commit retry budget ran out, by `condition` (`TX_LOCKED`, `TX_CREATING`) |
+| `teranode_validator_unlock_failed`                 | Counter   | Accepted transactions whose two-phase-commit unlock failed or timed out; they stay locked until mined, so their descendants are answered `TX_LOCKED` until then. Subtree validation retries them (`teranode_subtreevalidation_bless_unlock_*`) |
 | `teranode_validator_shed_unwind_total`             | Counter   | Number of times a queue-full shed's store work was unwound (record deleted, then inputs unspent) |
 | `teranode_validator_shed_unwind_failures_total`    | Counter   | Number of shed unwinds whose delete or unspend returned an error; pair with `shed_unwind_residue_total`, `shed_unwind_aborted_total` and `shed_unwind_unverified_total` to see what the failure left behind |
 | `teranode_validator_shed_unwind_aborted_total`     | Counter   | Number of shed unwinds abandoned because the record was still readable after a delete the store reported as successful (a store-contract violation; fix the wiring) |

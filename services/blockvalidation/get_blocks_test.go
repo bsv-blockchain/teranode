@@ -1355,6 +1355,39 @@ func TestFetchAndStoreSubtreeData_DetachedFetchIsBounded(t *testing.T) {
 	// in exactly the case the bound exists to contain.
 	require.False(t, errors.IsLocalError(err), "a peer that exhausts the bound must stay attributable, not read as a local failure")
 	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	// The retry loop stops on its own budget (half the bound) or reports the deadline as
+	// the peer's rejection, so the error names the rejection rather than a context error
+	// for the caller to rewrite.
+	require.Contains(t, err.Error(), "still rejected after")
+}
+
+// A peer that stalls without ever rejecting us gives the retry loop no rejection to report,
+// so the fetch fails with a context error at the bound. The deferred fallback in
+// fetchAndStoreSubtreeData must still turn that into an attributable error, or the stalling
+// peer reads as a local failure and stays in rotation.
+func TestFetchAndStoreSubtreeData_StallWithoutRejectionStaysAttributable(t *testing.T) {
+	suite := NewCatchupTestSuite(t)
+	defer suite.Cleanup()
+
+	suite.Server.settings.BlockValidation.SubtreeDataFetchTimeout = 300 * time.Millisecond
+
+	blocks := testhelpers.CreateTestBlockChain(t, 1)
+	subtreeHash := &chainhash.Hash{0xab, 0xce}
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	url := fmt.Sprintf("http://test-peer/subtree_data/%s", subtreeHash.String())
+	httpmock.RegisterResponder("GET", url, func(req *http.Request) (*http.Response, error) {
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	})
+
+	err := suite.Server.fetchAndStoreSubtreeData(suite.Ctx, blocks[0], subtreeHash, nil, "test-peer-id", "http://test-peer", false, nil)
+
+	require.Error(t, err)
+	require.False(t, errors.IsLocalError(err), "a stalling peer must stay attributable: %v", err)
+	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
 	require.Contains(t, err.Error(), "exceeded the")
 }
 
