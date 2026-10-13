@@ -307,12 +307,12 @@ func (s *Server) Stop(ctx context.Context) error {
 
 // loadConfig loads the server configuration and initializes required services.
 // This method performs the core configuration loading and service initialization for the alert server.
-// It reads configuration from Teranode settings, sets up network-specific topic names, validates
+// It reads configuration from Teranode settings, resolves the network-specific alert identity, validates
 // P2P configuration, creates necessary directories, and initializes the datastore connection.
 //
 // The configuration process includes:
 // - Reading alert system configuration from Teranode settings
-// - Adjusting topic names for non-mainnet networks (prefixed with network name)
+// - Resolving the per-network genesis keys, protocol ID and topic for empty settings
 // - Validating P2P configuration requirements
 // - Creating private key directories if needed
 // - Initializing and connecting to the configured datastore
@@ -330,11 +330,18 @@ func (s *Server) Stop(ctx context.Context) error {
 func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting bool) (err error) {
 	// read configuration from Teranode settings file
 	network := s.settings.ChainCfgParams.Name
-	topicName := s.settings.Alert.TopicName
 
-	if network != "mainnet" {
-		topicName = "bitcoin_alert_system_" + network
+	alertNetwork, known := resolveAlertNetworkConfig(network, alertNetworkConfig{
+		GenesisKeys: s.settings.Alert.GenesisKeys,
+		ProtocolID:  s.settings.Alert.ProtocolID,
+		TopicName:   s.settings.Alert.TopicName,
+	})
+
+	if !known {
+		s.logger.Warnf("[Alert] no public alert network defaults for network %q, falling back to mainnet genesis keys and protocol", network)
 	}
+
+	s.logger.Infof("[Alert] alert network %q: protocol %s, topic %s, %d genesis keys", network, alertNetwork.ProtocolID, alertNetwork.TopicName, len(alertNetwork.GenesisKeys))
 
 	// create the app config
 	s.appConfig = &config.Config{
@@ -350,8 +357,8 @@ func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting
 			IP:                    "0.0.0.0",
 			Port:                  strconv.Itoa(s.settings.Alert.P2PPort),
 			DHTMode:               s.settings.Alert.P2PDHTMode,
-			AlertSystemProtocolID: s.settings.Alert.ProtocolID,
-			TopicName:             topicName,
+			AlertSystemProtocolID: alertNetwork.ProtocolID,
+			TopicName:             alertNetwork.TopicName,
 			PrivateKey:            s.settings.Alert.P2PPrivateKey,
 			BootstrapPeer:         s.settings.Alert.P2PBootstrapPeer,
 			AllowPrivateIPs:       s.settings.Alert.P2PAllowPrivateIPs,
@@ -362,7 +369,7 @@ func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting
 			HTTPClient: http.DefaultClient,
 		},
 		RPCConnections: []config.RPCConfig{},
-		GenesisKeys:    s.settings.Alert.GenesisKeys,
+		GenesisKeys:    alertNetwork.GenesisKeys,
 	}
 
 	// Require list of genesis keys
