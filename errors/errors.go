@@ -1095,6 +1095,19 @@ func ErrorCodeToGRPCCode(code ERR) codes.Code {
 	case ERR_TX_INVALID_DOUBLE_SPEND, ERR_TX_CONFLICTING, ERR_UTXO_SPENT, ERR_TX_LOCKED, ERR_TX_CREATING,
 		ERR_UTXO_FROZEN, ERR_TX_MISSING_PARENT:
 		return codes.FailedPrecondition
+	// ERR_TX_UNLOCK_FAILED is not in the family above: the transaction WAS accepted
+	// (spent, created, delivered to block assembly) and only the post-acceptance
+	// unlock failed, so FailedPrecondition would be the wrong claim — that family
+	// means "not accepted yet, come back later", while a resubmit of this one is an
+	// already-exists success. Aborted says "the operation took effect, its final step
+	// did not", which is the truth, and matches what the validator's own HTTP /tx
+	// handler answers for the same outcome (200 OK, see handleSingleTx). It is not on
+	// publicCauseCodes, so the message stays private inside the status. Safe to move
+	// off codes.Internal: the retry gate keys on Unavailable/DeadlineExceeded only and
+	// the oversized-message HTTP fallback keys on ResourceExhausted, so neither fires
+	// on Aborted, and callers key control flow on the reconstructed ERR code.
+	case ERR_TX_UNLOCK_FAILED:
+		return codes.Aborted
 	default:
 		return codes.Internal
 	}

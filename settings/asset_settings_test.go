@@ -104,7 +104,9 @@ func TestAssetSettings_BatchAndResponseBudgets(t *testing.T) {
 	t.Run("defaults preserve current behaviour", func(t *testing.T) {
 		s := NewSettings()
 
-		require.Equal(t, 0, s.Asset.MaxBatchRecords)
+		// asset_maxBatchRecords is the one exception in this group: it now
+		// defaults to a non-zero, enforced value (see its longdesc).
+		require.Equal(t, 16384, s.Asset.MaxBatchRecords)
 		require.Equal(t, int64(0), s.Asset.MaxBatchResponseBytes)
 		require.Equal(t, 0, s.Asset.MaxUTXOsPerTx)
 		require.Equal(t, 0, s.Asset.MaxBlockHeaders)
@@ -208,4 +210,76 @@ func TestAssetSettings_BatchAndResponseBudgets(t *testing.T) {
 			tc.check(t, s)
 		})
 	}
+}
+
+// TestAssetSettings_ConcurrencyGetLegacyBlockReaderPeer covers the peer-pool
+// counterpart to asset_concurrency_get_legacy_block_reader: same default and
+// independently settable, so the anonymous and internal legacy-peer pools can be
+// sized separately. Both default to 0 (unlimited): the permit is held for the
+// whole stream, so a NumCPU default would make a stock node serving IBD to more
+// SV peers than it has cores fail block requests, which the pre-hardening code
+// never did. The cap is opt-in.
+func TestAssetSettings_ConcurrencyGetLegacyBlockReaderPeer(t *testing.T) {
+	t.Run("defaults to 0 (unlimited, opt-in cap) for both pools", func(t *testing.T) {
+		s := NewSettings()
+
+		require.Equal(t, 0, s.Asset.ConcurrencyGetLegacyBlockReader)
+		require.Equal(t, 0, s.Asset.ConcurrencyGetLegacyBlockReaderPeer)
+	})
+
+	t.Run("is settable independently of the anonymous pool", func(t *testing.T) {
+		gocore.Config().Set("asset_concurrency_get_legacy_block_reader_peer", "8")
+		t.Cleanup(func() { gocore.Config().Set("asset_concurrency_get_legacy_block_reader_peer", "") })
+
+		s := NewSettings()
+
+		require.Equal(t, 8, s.Asset.ConcurrencyGetLegacyBlockReaderPeer)
+		require.Equal(t, 0, s.Asset.ConcurrencyGetLegacyBlockReader)
+	})
+}
+
+// TestAssetSettings_LegacyPeerPoolToken covers the shared secret gating
+// asset_concurrency_get_legacy_block_reader_peer: empty by default (today's
+// single-pool behaviour), and settable.
+func TestAssetSettings_LegacyPeerPoolToken(t *testing.T) {
+	t.Run("defaults to empty", func(t *testing.T) {
+		s := NewSettings()
+
+		require.Equal(t, "", s.Asset.LegacyPeerPoolToken)
+	})
+
+	t.Run("is settable", func(t *testing.T) {
+		gocore.Config().Set("asset_legacyPeerPoolToken", "a-shared-secret")
+		t.Cleanup(func() { gocore.Config().Set("asset_legacyPeerPoolToken", "") })
+
+		s := NewSettings()
+
+		require.Equal(t, "a-shared-secret", s.Asset.LegacyPeerPoolToken)
+	})
+}
+
+// TestAssetMaxNBlocksFloor pins the floor on asset_maxNBlocks: the peer catchup
+// client (services/blockvalidation/get_blocks.go) fetches blocks in batches of
+// blockvalidation_fetch_large_batch_size (default 100) and treats a shorter batch
+// as a hard error ("expected %d blocks, got %d"), not a short read. A configured
+// cap below that batch size breaks every batch of catchup from this node, so a
+// value below 100 is raised to it rather than honoured.
+func TestAssetMaxNBlocksFloor(t *testing.T) {
+	t.Run("default of 0 means uncapped and is left alone", func(t *testing.T) {
+		require.Equal(t, 0, NewSettings().Asset.MaxNBlocks)
+	})
+
+	t.Run("a configured value below the floor is raised to it", func(t *testing.T) {
+		gocore.Config().Set("asset_maxNBlocks", "10")
+		defer gocore.Config().Unset("asset_maxNBlocks")
+
+		require.Equal(t, 100, NewSettings().Asset.MaxNBlocks)
+	})
+
+	t.Run("a configured value at or above the floor is honoured", func(t *testing.T) {
+		gocore.Config().Set("asset_maxNBlocks", "250")
+		defer gocore.Config().Unset("asset_maxNBlocks")
+
+		require.Equal(t, 250, NewSettings().Asset.MaxNBlocks)
+	})
 }

@@ -235,30 +235,39 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PeerMinerReputationThreshold: getFloat64("asset_peerMinerReputationThreshold", 50.0, alternativeContext...),
 
 			// Concurrency limits for repository methods (0 = unlimited, -1 = NumCPU(), anything else is the specific limit)
-			ConcurrencyGetTransaction:         getInt("asset_concurrency_get_transaction", 0, alternativeContext...),
-			ConcurrencyGetTransactionMeta:     getInt("asset_concurrency_get_transaction_meta", 0, alternativeContext...),
-			ConcurrencyGetSubtreeData:         getInt("asset_concurrency_get_subtree_data", 2, alternativeContext...),
-			ConcurrencyGetSubtreeDataReader:   getInt("asset_concurrency_get_subtree_data_reader", 4, alternativeContext...),
-			ConcurrencySubtreeDataCreate:      getInt("asset_concurrency_subtree_data_create", 4, alternativeContext...),
-			ConcurrencyGetSubtreeTransactions: getInt("asset_concurrency_get_subtree_transactions", 2, alternativeContext...),
-			ConcurrencyGetSubtreeExists:       getInt("asset_concurrency_get_subtree_exists", 0, alternativeContext...),
-			ConcurrencyGetSubtreeHead:         getInt("asset_concurrency_get_subtree_head", 0, alternativeContext...),
-			ConcurrencyGetUtxo:                getInt("asset_concurrency_get_utxo", 0, alternativeContext...),
-			ConcurrencyGetLegacyBlockReader:   getInt("asset_concurrency_get_legacy_block_reader", -1, alternativeContext...), // -1 = NumCPU()
+			ConcurrencyGetTransaction:           getInt("asset_concurrency_get_transaction", 0, alternativeContext...),
+			ConcurrencyGetTransactionMeta:       getInt("asset_concurrency_get_transaction_meta", 0, alternativeContext...),
+			ConcurrencyGetSubtreeData:           getInt("asset_concurrency_get_subtree_data", 2, alternativeContext...),
+			ConcurrencyGetSubtreeDataReader:     getInt("asset_concurrency_get_subtree_data_reader", 4, alternativeContext...),
+			ConcurrencySubtreeDataCreate:        getInt("asset_concurrency_subtree_data_create", 4, alternativeContext...),
+			ConcurrencyGetSubtreeTransactions:   getInt("asset_concurrency_get_subtree_transactions", 2, alternativeContext...),
+			ConcurrencyGetSubtreeExists:         getInt("asset_concurrency_get_subtree_exists", 0, alternativeContext...),
+			ConcurrencyGetSubtreeHead:           getInt("asset_concurrency_get_subtree_head", 0, alternativeContext...),
+			ConcurrencyGetUtxo:                  getInt("asset_concurrency_get_utxo", 0, alternativeContext...),
+			ConcurrencyGetLegacyBlockReader:     getInt("asset_concurrency_get_legacy_block_reader", 0, alternativeContext...),      // 0 = unlimited (opt-in cap)
+			ConcurrencyGetLegacyBlockReaderPeer: getInt("asset_concurrency_get_legacy_block_reader_peer", 0, alternativeContext...), // 0 = unlimited (opt-in cap)
 
 			// Streaming configuration
+			LegacyPeerPoolToken:             getString("asset_legacyPeerPoolToken", "", alternativeContext...),
 			SubtreeDataStreamingChunkSize:   getInt("asset_subtreeDataStreamingChunkSize", 10000, alternativeContext...),
 			SubtreeDataStreamingConcurrency: getInt("asset_subtreeDataStreamingConcurrency", 2, alternativeContext...),
 
-			// Batch and response admission budgets. Each defaults to 0/false/empty, preserving today's
-			// behaviour; several keys are already wired (enforced for any non-default value) while
-			// others remain warn-only prep - see each key's own longdesc for its current status.
-			MaxBatchRecords:              getInt("asset_maxBatchRecords", 0, alternativeContext...),
-			MaxBatchResponseBytes:        getInt64("asset_maxBatchResponseBytes", 0, alternativeContext...),
-			MaxUTXOsPerTx:                getInt("asset_maxUTXOsPerTx", 0, alternativeContext...),
-			MaxBlockHeaders:              getInt("asset_maxBlockHeaders", 0, alternativeContext...),
-			MaxLastNBlocks:               getInt("asset_maxLastNBlocks", 0, alternativeContext...),
-			MaxNBlocks:                   getInt("asset_maxNBlocks", 0, alternativeContext...),
+			// Batch and response admission budgets and detail switches. Each default preserves today's
+			// behaviour (0, false, empty, or true for the public*Detail/txMetaRawEnabled switches),
+			// except asset_maxBatchRecords, which defaults to 16384. Several keys are already wired
+			// (enforced for any non-default value) while others remain warn-only prep - see each key's
+			// own longdesc for its current status.
+			MaxBatchRecords:       getInt("asset_maxBatchRecords", 16384, alternativeContext...),
+			MaxBatchResponseBytes: getInt64("asset_maxBatchResponseBytes", 0, alternativeContext...),
+			MaxUTXOsPerTx:         getInt("asset_maxUTXOsPerTx", 0, alternativeContext...),
+
+			// Numeric bounds, enforced by their handlers now (see asset_settings.go)
+			MaxBlockHeaders: getInt("asset_maxBlockHeaders", 0, alternativeContext...),
+			MaxLastNBlocks:  getInt("asset_maxLastNBlocks", 0, alternativeContext...),
+			// Floored at 100, the default blockvalidation_fetch_large_batch_size: the
+			// catchup client rejects any batch shorter than it asked for, so a lower cap
+			// breaks every batch of peer catchup from this node.
+			MaxNBlocks:                   getIntFloorUnlessZero("asset_maxNBlocks", 0, 100, "blockvalidation_fetch_large_batch_size", alternativeContext...),
 			RequireAuthCredentials:       getBool("asset_requireAuthCredentials", true, alternativeContext...),
 			SecureCookies:                getBool("asset_secureCookies", false, alternativeContext...),
 			CORSAllowOrigins:             getString("asset_corsAllowOrigins", "", alternativeContext...),
