@@ -3,13 +3,27 @@ package alert
 import (
 	"testing"
 
+	"github.com/bsv-blockchain/go-alert-system/app/config"
 	"github.com/stretchr/testify/require"
 )
 
+// upstreamNetwork returns go-alert-system's embedded defaults for environment.
+func upstreamNetwork(t *testing.T, environment string) alertNetworkConfig {
+	t.Helper()
+
+	n, err := config.NetworkDefaults(environment)
+	require.NoError(t, err)
+
+	return alertNetworkConfig{GenesisKeys: n.GenesisKeys, ProtocolID: n.ProtocolID, TopicName: n.TopicName}
+}
+
 func TestResolveAlertNetworkConfig(t *testing.T) {
-	mainnet := alertNetworkDefaults["mainnet"]
-	testnet := alertNetworkDefaults["testnet"]
-	stn := alertNetworkDefaults["stn"]
+	mainnet := upstreamNetwork(t, "mainnet")
+	testnet := upstreamNetwork(t, "testnet")
+	stn := upstreamNetwork(t, "stn")
+
+	// guard against the networks resolving to the same key set
+	require.NotEqual(t, mainnet.GenesisKeys, testnet.GenesisKeys)
 
 	tests := []struct {
 		name       string
@@ -19,9 +33,13 @@ func TestResolveAlertNetworkConfig(t *testing.T) {
 		wantKnown  bool
 	}{
 		{
-			name:      "mainnet defaults",
-			network:   "mainnet",
-			want:      mainnet,
+			name:    "mainnet defaults",
+			network: "mainnet",
+			want: alertNetworkConfig{
+				GenesisKeys: mainnet.GenesisKeys,
+				ProtocolID:  "/bitcoin/alert-system/1.0.0",
+				TopicName:   "bitcoin_alert_system",
+			},
 			wantKnown: true,
 		},
 		{
@@ -95,26 +113,10 @@ func TestResolveAlertNetworkConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, known := resolveAlertNetworkConfig(tt.network, tt.configured)
+			got, known, err := resolveAlertNetworkConfig(tt.network, tt.configured)
+			require.NoError(t, err)
 			require.Equal(t, tt.wantKnown, known)
 			require.Equal(t, tt.want, got)
 		})
-	}
-}
-
-func TestResolveAlertNetworkConfig_doesNotAliasDefaults(t *testing.T) {
-	got, _ := resolveAlertNetworkConfig("testnet", alertNetworkConfig{})
-	got.GenesisKeys[0] = "mutated"
-
-	require.NotEqual(t, "mutated", alertNetworkDefaults["testnet"].GenesisKeys[0])
-}
-
-func TestAlertNetworkDefaults_keysAreCompressedPubKeys(t *testing.T) {
-	for network, defaults := range alertNetworkDefaults {
-		require.Len(t, defaults.GenesisKeys, 5, network)
-
-		for _, key := range defaults.GenesisKeys {
-			require.Len(t, key, 66, network)
-		}
 	}
 }

@@ -331,11 +331,14 @@ func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting
 	// read configuration from Teranode settings file
 	network := s.settings.ChainCfgParams.Name
 
-	alertNetwork, known := resolveAlertNetworkConfig(network, alertNetworkConfig{
+	alertNetwork, known, err := resolveAlertNetworkConfig(network, alertNetworkConfig{
 		GenesisKeys: s.settings.Alert.GenesisKeys,
 		ProtocolID:  s.settings.Alert.ProtocolID,
 		TopicName:   s.settings.Alert.TopicName,
 	})
+	if err != nil {
+		return errors.NewConfigurationError("failed to resolve alert network defaults for network %s", network, err)
+	}
 
 	if !known {
 		s.logger.Warnf("[Alert] no public alert network defaults for network %q, falling back to mainnet genesis keys and protocol", network)
