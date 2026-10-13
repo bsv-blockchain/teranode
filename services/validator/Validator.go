@@ -143,6 +143,14 @@ const (
 	txLockedMaxSafeRetries = 10
 )
 
+// DefaultTwoPhaseCommitTimeout is the fallback behind validator_twoPhaseCommitTimeout, the
+// budget that bounds a two-phase-commit unlock. Exported so a caller that performs the unlock
+// on the validator's behalf uses the SAME budget rather than a copy that can drift: subtree
+// validation retries the unlock for transactions the validator accepted but could not unlock
+// (see services/subtreevalidation unlockAcceptedTransactions) and has no setting of its own
+// for it. Read validator_twoPhaseCommitTimeout in preference to this when you have settings.
+const DefaultTwoPhaseCommitTimeout = defaultTwoPhaseCommitTimeout
+
 // childLockBudget returns how long a child spending a still-committing parent keeps
 // retrying before it is lost: the sum of the loop's exponential backoffs, which for
 // maxRetries retries of txLockedBaseBackoff doubling each time is
@@ -1523,11 +1531,17 @@ func (v *Validator) precheckTransaction(tx *bt.Tx, txID string, blockHeight uint
 // and its spends must stand.
 //
 // On the success path, if the unlock itself fails, err is set to the unlock error.
-// No caller currently acts on that signal specifically - the real recovery path is
-// the same self-healing loadUnminedTransactions route described above (see
-// docs/topics/features/two_phase_commit.md), not caller-side handling of this
-// error. Setting err is mainly for observability of the failure at the point it
-// happened.
+// That error is the typed errors.ErrTxUnlockFailed, and it means ACCEPTED, STILL
+// LOCKED - the spend, the record and the delivery to block assembly all succeeded.
+// Callers do act on it, by code rather than by trusting a nil error: propagation,
+// the RPC submit path, this package's own Kafka intake, legacy sync and subtree
+// validation all branch on it (see ErrTxUnlockFailed in errors/Error_types.go), and
+// subtree validation retries the unlock (unlockAcceptedTransactions in
+// services/subtreevalidation/SubtreeValidation.go). A caller must therefore not
+// reduce a non-nil error here to "rejected" without checking the code first. If
+// every retry fails, the recovery path is the self-healing loadUnminedTransactions
+// route described above (see docs/topics/features/two_phase_commit.md); the signal
+// to watch is the teranode_validator_unlock_failed counter.
 //
 // The unlock decision is gated on delivered, not on *err being nil. delivered only
 // becomes true once sendToBlockAssembler has actually returned successfully, so it
@@ -1611,7 +1625,9 @@ func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, tx
 	// so we can now mark it as spendable again
 	if err := v.utxoStore.SetLocked(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, false); err != nil {
 		// this is not a fatal error, since the transaction will we marked as spendable on the next block it's mined into
-		err = errors.NewProcessingError("[Validate][%s] error marking tx as spendable", txID, err)
+		prometheusValidatorUnlockFailed.Inc()
+
+		err = errors.NewTxUnlockFailedError("[Validate][%s] error marking tx as spendable", txID, err)
 		span.RecordError(err)
 
 		return err

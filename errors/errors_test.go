@@ -1507,6 +1507,17 @@ func TestErrorCodeToGRPCCode(t *testing.T) {
 			expected: codes.FailedPrecondition,
 		},
 		{
+			// ERR_TX_UNLOCK_FAILED means the transaction was accepted and only its
+			// post-acceptance unlock failed, so it must not join the
+			// FailedPrecondition family (that family means "not accepted yet"), and it
+			// must not answer codes.Internal ("this node broke") for a submission that
+			// took effect. The validator's HTTP /tx handler answers 200 OK for this
+			// same outcome; this row is the gRPC side of that decision.
+			name:     "maps ERR_TX_UNLOCK_FAILED to codes.Aborted, not FailedPrecondition or Internal",
+			errCode:  ERR_TX_UNLOCK_FAILED,
+			expected: codes.Aborted,
+		},
+		{
 			name:     "unmapped code BLOCK_NOT_FOUND defaults to codes.Internal",
 			errCode:  ERR_BLOCK_NOT_FOUND,
 			expected: codes.Internal,

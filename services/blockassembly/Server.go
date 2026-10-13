@@ -861,6 +861,81 @@ func (ba *BlockAssembly) sendSubtreeNotification(ctx context.Context, subtreeHas
 	}
 }
 
+// buildSubtreeMeta returns the serialized subtree meta of the subtree in the
+// request, or false, after logging why, when it cannot be built.
+func (ba *BlockAssembly) buildSubtreeMeta(subtreeRequest subtreeprocessor.NewSubtreeRequest) ([]byte, bool) {
+	subtree := subtreeRequest.Subtree
+
+	// An in-memory tx map keeps the inpoints serialized, so the meta is put
+	// together from those bytes without decoding and encoding every tx's inpoints.
+	if serialized, ok := subtreeRequest.ParentTxMap.(serializedInpointsMap); ok {
+		subtreeMetaBytes, err := buildSubtreeMetaBytes(subtree, serialized, subtreeRequest.DeletedTxs)
+		if err != nil {
+			ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to build subtree meta: %s", subtree.RootHash().String(), err)
+			return nil, false
+		}
+
+		return subtreeMetaBytes, true
+	}
+
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtreeRequest.Subtree)
+
+	// DiskTxMap satisfies this so a read error here is returned to us
+	// instead of being recorded on the map, where it would be
+	// misattributed to whichever subtree processor operation happens to
+	// check the map's pending error next (this runs in a background
+	// goroutine, concurrently with the processor).
+	parentTxMapWithErr, parentTxMapSupportsErr := subtreeRequest.ParentTxMap.(interface {
+		GetWithErr(hash chainhash.Hash) (*subtreepkg.TxInpoints, bool, error)
+	})
+
+	for idx, node := range subtreeRequest.Subtree.Nodes {
+		if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			var (
+				txInpoints *subtreepkg.TxInpoints
+				found      bool
+			)
+
+			if parentTxMapSupportsErr {
+				var getErr error
+
+				txInpoints, found, getErr = parentTxMapWithErr.GetWithErr(node.Hash)
+				if getErr != nil {
+					ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] error reading parent tx hashes for node %s: %s", subtreeRequest.Subtree.RootHash().String(), node.Hash.String(), getErr)
+				}
+			} else {
+				txInpoints, found = subtreeRequest.ParentTxMap.Get(node.Hash)
+			}
+
+			if !found && subtreeRequest.DeletedTxs != nil {
+				// Fallback: check if transaction was deleted during async storage
+				var deletedTxInpoints subtreepkg.TxInpoints
+				deletedTxInpoints, found = subtreeRequest.DeletedTxs.Get(node.Hash)
+				if found {
+					txInpoints = &deletedTxInpoints
+				}
+			}
+			if !found {
+				ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to find parent tx hashes for node %s: parent transaction not found in ParentTxMap or DeletedTxs", subtreeRequest.Subtree.RootHash().String(), node.Hash.String())
+				return nil, false
+			}
+
+			if err := subtreeMeta.SetTxInpoints(idx, *txInpoints); err != nil {
+				ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to set parent tx hashes: %s", node.Hash.String(), err)
+				return nil, false
+			}
+		}
+	}
+
+	subtreeMetaBytes, err := subtreeMeta.Serialize()
+	if err != nil {
+		ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to serialize subtree meta: %s", subtree.RootHash().String(), err)
+		return nil, false
+	}
+
+	return subtreeMetaBytes, true
+}
+
 // storeSubtreeData stores the subtree data and metadata to the blob store.
 // It returns two channels:
 //   - subtreeDone: signals when subtree storage is complete (bool = success)
@@ -915,58 +990,9 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 	if subtreeRequest.ParentTxMap != nil && ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
 		go func() {
 			defer close(metaDoneCh)
-			subtreeMeta := subtreepkg.NewSubtreeMeta(subtreeRequest.Subtree)
 
-			// DiskTxMap satisfies this so a read error here is returned to us
-			// instead of being recorded on the map, where it would be
-			// misattributed to whichever subtree processor operation happens to
-			// check the map's pending error next (this runs in a background
-			// goroutine, concurrently with the processor).
-			parentTxMapWithErr, parentTxMapSupportsErr := subtreeRequest.ParentTxMap.(interface {
-				GetWithErr(hash chainhash.Hash) (*subtreepkg.TxInpoints, bool, error)
-			})
-
-			for idx, node := range subtreeRequest.Subtree.Nodes {
-				if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-					var (
-						txInpoints *subtreepkg.TxInpoints
-						found      bool
-					)
-
-					if parentTxMapSupportsErr {
-						var getErr error
-
-						txInpoints, found, getErr = parentTxMapWithErr.GetWithErr(node.Hash)
-						if getErr != nil {
-							ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] error reading parent tx hashes for node %s: %s", subtreeRequest.Subtree.RootHash().String(), node.Hash.String(), getErr)
-						}
-					} else {
-						txInpoints, found = subtreeRequest.ParentTxMap.Get(node.Hash)
-					}
-
-					if !found && subtreeRequest.DeletedTxs != nil {
-						// Fallback: check if transaction was deleted during async storage
-						var deletedTxInpoints subtreepkg.TxInpoints
-						deletedTxInpoints, found = subtreeRequest.DeletedTxs.Get(node.Hash)
-						if found {
-							txInpoints = &deletedTxInpoints
-						}
-					}
-					if !found {
-						ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to find parent tx hashes for node %s: parent transaction not found in ParentTxMap or DeletedTxs", subtreeRequest.Subtree.RootHash().String(), node.Hash.String())
-						return
-					}
-
-					if err := subtreeMeta.SetTxInpoints(idx, *txInpoints); err != nil {
-						ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to set parent tx hashes: %s", node.Hash.String(), err)
-						return
-					}
-				}
-			}
-
-			subtreeMetaBytes, err := subtreeMeta.Serialize()
-			if err != nil {
-				ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to serialize subtree meta: %s", subtree.RootHash().String(), err)
+			subtreeMetaBytes, ok := ba.buildSubtreeMeta(subtreeRequest)
+			if !ok {
 				return
 			}
 
