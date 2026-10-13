@@ -663,10 +663,12 @@ func BenchmarkProcessRemainderTxHashes(b *testing.B) {
 			}
 
 			// Create block transaction map (subset of allTxHashes)
-			transactionMap := NewSplitSwissMap(1024, blockTxCount)
+			transactionMap := NewSortedHashSet(blockTxCount)
 			for i := 0; i < blockTxCount && i < len(allTxHashes); i++ {
 				_ = transactionMap.Put(allTxHashes[i])
 			}
+
+			require.NoError(b, transactionMap.Freeze(runtime.GOMAXPROCS(0)))
 
 			// Create currentTxMap with all transactions
 			currentTxMap := NewSplitTxInpointsMap(splitMapBuckets)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -107,13 +108,20 @@ type Block struct {
 	hash            atomic.Pointer[chainhash.Hash]
 	subtreeLength   uint64
 	subtreeSlicesMu sync.RWMutex
-	txMap           txmap.TxMap
+	txMap           blockTxMap
 	// txMapCount is the entry count txMap was sized from. Never the
 	// peer-supplied TransactionCount: the separate pass derives it from the
 	// loaded body by txMapEntryCount, and the in-memory load path from
 	// len(Subtrees) x subtree 0 once the subtree list is bound to the header
 	// (getAndValidateSubtreesWithDedup).
 	txMapCount uint64
+	// nodeIndexPins counts the live in-memory node indexes over this block's
+	// node arrays (pinNodeIndex). While it is above zero a release of the
+	// subtrees neither pools a node array nor unmaps one: the index reads its
+	// hashes from them. The subtrees released meanwhile wait in deferredCloses,
+	// guarded by subtreeSlicesMu, until releaseTxMap lets the index go.
+	nodeIndexPins  atomic.Int32
+	deferredCloses []*subtreepkg.Subtree
 	// firstRootMemo caches subtree 0's coinbase-substituted root from the early
 	// binding check, so CheckMerkleRoot does not recompute it for the same
 	// subtree (a full merkle store over up to 1M leaves).
@@ -1216,7 +1224,9 @@ func (b *Block) CheckCoinbaseOnlyBodyBound() error {
 }
 
 // releaseTxMap closes the disk-backed map if that is what b.txMap is, then nils
-// b.txMap so the in-memory map can be collected. Idempotent and nil-safe: safe
+// b.txMap so the in-memory map can be collected. Closing the in-memory node
+// index unpins the block's node arrays, and the subtrees released while it was
+// pinned are closed here. Idempotent and nil-safe: safe
 // to call multiple times or before b.txMap is ever assigned. Invoked via defer
 // from Block.Valid so the map is let go on every exit path, including
 // errors during the subtree load, checkDuplicateTransactions or
@@ -1231,10 +1241,58 @@ func (b *Block) releaseTxMap() {
 		_ = diskMap.Close()
 		ClearTxMapStats()
 	} else if closer, ok := b.txMap.(io.Closer); ok {
-		_ = closer.Close()
+		_ = closer.Close() // a blockNodeIndex unpins the node arrays here
 	}
 
 	b.txMap = nil
+
+	// Close what a release deferred while the index was live. Like the disk map's
+	// Close above, a failure here has no logger to go to.
+	b.subtreeSlicesMu.Lock()
+	_ = b.closeDeferredLocked()
+	b.subtreeSlicesMu.Unlock()
+}
+
+// pinNodeIndex pins the block's node arrays for m if it is the in-memory node
+// index, which reads its hashes from them, and returns m to be stored in b.txMap.
+// The index's Close (releaseTxMap) unpins them. A node index m replaces is
+// closed here, so its pin cannot outlive it. The caller must hold
+// b.subtreeSlicesMu for writing, so that a release sees the pin.
+func (b *Block) pinNodeIndex(m blockTxMap) blockTxMap {
+	if old, ok := b.txMap.(*blockNodeIndex); ok {
+		_ = old.Close()
+	}
+
+	if idx, ok := m.(*blockNodeIndex); ok {
+		b.nodeIndexPins.Add(1)
+		idx.unpin = func() { b.nodeIndexPins.Add(-1) }
+	}
+
+	return m
+}
+
+// closeDeferredLocked closes the subtrees released while a node index was live,
+// once none is. The caller must hold b.subtreeSlicesMu for writing.
+func (b *Block) closeDeferredLocked() error {
+	if b.nodeIndexPins.Load() > 0 || len(b.deferredCloses) == 0 {
+		return nil
+	}
+
+	var closeErrs []error
+
+	for _, st := range b.deferredCloses {
+		// detach before unmapping, as the release paths do; the array is dropped,
+		// not pooled: the index that read it has only just gone
+		_ = st.ReleaseNodes()
+
+		if err := st.Close(); err != nil {
+			closeErrs = append(closeErrs, err)
+		}
+	}
+
+	b.deferredCloses = nil
+
+	return errors.Join(closeErrs...)
 }
 
 // skipOrderAndBlessedBelowCheckpoint reports whether validOrderAndBlessed may be
@@ -1459,10 +1517,20 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 		}
 		b.txMap = diskMap
 	} else {
-		// Sized to b.txMapCount bucket by bucket and allocated for this block
-		// only. Counts beyond maxTxMapPrealloc get a capped preallocation and
-		// grow on insert rather than failing the block (issue 1428).
-		b.txMap = newBlockTxMap(b.txMapCount)
+		// An index over the block's own node arrays (6 bytes a tx), allocated for
+		// this block only. Counts beyond maxTxMapPrealloc get a capped
+		// preallocation and grow on insert rather than failing the block (issue
+		// 1428); indexes beyond 32 bits get the 64-bit map.
+		//
+		// Pinned under the subtree mutex, so a release that holds it either ran
+		// before (the entries it nil-ed are reported below as released) or sees
+		// the pin; one already running would otherwise pool arrays the index is
+		// about to register.
+		m := newInMemoryBlockTxMap(b.txMapCount, len(b.SubtreeSlices), subtreeSize, maxTxIndex(b.SubtreeSlices, subtreeSize))
+
+		b.subtreeSlicesMu.Lock()
+		b.txMap = b.pinNodeIndex(m)
+		b.subtreeSlicesMu.Unlock()
 	}
 	for subIdx := 0; subIdx < len(b.SubtreeSlices); subIdx++ {
 		subIdx := subIdx
@@ -1546,6 +1614,22 @@ func (b *Block) putSubtreeInTxMap(blockLabel string, subtree *subtreepkg.Subtree
 		return errors.NewProcessingError("[checkDuplicateTransactionsInSubtree][%s] subtree %d reached the duplicate check with no txMap", blockLabel, subIdx)
 	}
 
+	// An in-memory index reads the hashes it holds from the subtrees' own node
+	// arrays, so register this one before its first Put. One snapshot of Nodes
+	// serves both, whatever a concurrent release does to the field.
+	nodes := subtree.Nodes
+
+	nodeIdx, _ := b.txMap.(*blockNodeIndex)
+	overflowing := false
+
+	if nodeIdx != nil {
+		if err = nodeIdx.register(subIdx, nodes); err != nil {
+			return errors.NewProcessingError("[BLOCK][%s] cannot index subtree %d", blockLabel, subIdx, err)
+		}
+
+		overflowing = nodeIdx.overflows(subIdx)
+	}
+
 	var idx64 uint64
 
 	// All subtrees before subIdx are full-size (the per-block invariant enforced by
@@ -1556,12 +1640,12 @@ func (b *Block) putSubtreeInTxMap(blockLabel string, subtree *subtreepkg.Subtree
 	// pins every worker on atomic ops instead of doing useful dedup work.
 	baseIdx := subIdx * subtreeSize
 
-	for txIdx := 0; txIdx < len(subtree.Nodes); txIdx++ {
-		if subIdx == 0 && txIdx == 0 && subtree.Nodes[txIdx].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+	for txIdx := 0; txIdx < len(nodes); txIdx++ {
+		if subIdx == 0 && txIdx == 0 && nodes[txIdx].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 			continue
 		}
 
-		subtreeNode := subtree.Nodes[txIdx]
+		subtreeNode := nodes[txIdx]
 
 		idx64, err = safeconversion.IntToUint64(baseIdx + txIdx)
 		if err != nil {
@@ -1569,7 +1653,13 @@ func (b *Block) putSubtreeInTxMap(blockLabel string, subtree *subtreepkg.Subtree
 		}
 
 		// in a tx map, Put is mutually exclusive, can only be called once per key
-		if err = b.txMap.Put(subtreeNode.Hash, idx64); err != nil {
+		if overflowing {
+			err = nodeIdx.putOverflow(subtreeNode.Hash, idx64)
+		} else {
+			err = b.txMap.Put(subtreeNode.Hash, idx64)
+		}
+
+		if err != nil {
 			if errors.Is(err, errors.ErrTxExists) || strings.Contains(err.Error(), "hash already exists in map") {
 				return errors.NewBlockCorruptError("[BLOCK][%s] block contains duplicate transaction %s", blockLabel, subtreeNode.Hash.String())
 			}
@@ -1627,18 +1717,11 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 		return errors.NewStorageError("[validOrderAndBlessed][%s] txMap is nil, cannot check transaction order", b.String())
 	}
 
-	// Size the disk-backed parent-spends map at transaction count * multiplier
-	// (assumed average inputs/tx, block_parentSpendsCapacityMultiplier). It
-	// grows when a block exceeds that, but a grow stalls every insert while the
-	// table rehashes. The in-memory map is sized from the inputs per tx recent
-	// blocks measured, with the multiplier as its ceiling, and grows by an eighth
-	// per full bucket (inMemoryParentSpendsCapacity). 0 is treated as 1.
-	//
 	// The transaction count comes from the loaded block body, not from the
 	// peer-supplied b.TransactionCount — see txMapEntryCount for why (issue
-	// 1501). That alone bounds this product: the node count is limited by the
-	// subtrees actually held in memory, so a claimed count can no longer drive
-	// it. The remaining overflow route is the multiplier itself, which is
+	// 1501). That alone bounds the product below: the node count is limited by
+	// the subtrees actually held in memory, so a claimed count can no longer
+	// drive it. The remaining overflow route is the multiplier itself, which is
 	// operator-supplied (block_parentSpendsCapacityMultiplier) and unvalidated.
 	//
 	// Recomputed here rather than read from b.txMapCount, deliberately: that
@@ -1651,10 +1734,30 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	entryCount := b.txMapEntryCount()
 	expectedInpoints := parentSpendsCapacity(entryCount, parentSpendsCapacityMultiplier)
 
+	// Duplicate inputs (two transactions spending one outpoint) are found one of
+	// two ways. With block_diskMapDirs set, every input goes through a disk-backed
+	// map as the transactions are validated; it is sized at transaction count x
+	// multiplier and grows when a block exceeds that, stalling every insert while
+	// the table rehashes. Otherwise the inputs are only collected as 12 byte
+	// entries while the subtrees are validated and checked together once all
+	// subtrees passed (see inpoint_dedup.go); the multiplier is then only a hint
+	// for how many partitions to cut the entries into. 0 is treated as 1.
+	subtrees := slices.Clone(b.SubtreeSlices)
+
 	var (
-		psMap    ParentSpendsMap
-		inMemory *SplitSyncedParentMap
+		psMap ParentSpendsMap
+		dedup inpointDedupper
 	)
+
+	// subtreeBase[s] is the block index of subtree s's first transaction.
+	subtreeBase := make([]uint64, len(subtrees)+1)
+	for i, st := range subtrees {
+		subtreeBase[i+1] = subtreeBase[i]
+		if st != nil {
+			subtreeBase[i+1] += uint64(len(st.Nodes))
+		}
+	}
+
 	if len(diskMapDirs) > 0 {
 		diskMap, diskErr := NewDiskParentSpendsMap(DiskParentSpendsMapOptions{
 			BasePaths:      diskMapDirs,
@@ -1671,24 +1774,25 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 			ClearParentSpendsMapStats()
 		}()
 	} else {
-		// Sized from the inputs per tx recent blocks measured; allocated for this
-		// block only and dropped when it returns.
-		inMemory = newBlockParentSpendsMap(b.inMemoryParentSpendsCapacity(parentSpendsCapacityMultiplier))
-		psMap = inMemory
+		dedup = newInpointDedup(len(subtrees), expectedInpoints, subtreeBase[len(subtrees)], inpointDedupHash)
 	}
 
 	validationCtx := &validationContext{
 		currentBlockHeaderHashesMap: b.buildBlockHeaderHashesMap(deps.currentChain),
 		currentBlockHeaderIDsMap:    b.buildBlockHeaderIDsMap(deps.currentBlockHeaderIDs),
 		parentSpendsMap:             psMap,
+		dedup:                       dedup,
+		subtreeBase:                 subtreeBase,
 	}
 
 	concurrency := b.getValidationConcurrency(validOrderAndBlessedConcurrency)
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(logger, g, concurrency)
 
-	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
-		subtree := b.SubtreeSlices[sIdx]
+	// the snapshot, not b.SubtreeSlices: subtreeBase and the dedup runs were sized
+	// from it, and a concurrent replacement must not shift the tx indexes
+	for sIdx := 0; sIdx < len(subtrees); sIdx++ {
+		subtree := subtrees[sIdx]
 		sIdx := sIdx
 
 		g.Go(func() error {
@@ -1701,10 +1805,8 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 		return err
 	}
 
-	// Every input of every transaction went through the map, so its length is
-	// the block's input count.
-	if inMemory != nil {
-		recordInpointsPerTx(inMemory.Length(), entryCount)
+	if dedup != nil {
+		return b.detectDuplicateInputs(ctx, logger, deps, validationCtx, subtrees, concurrency)
 	}
 
 	return nil
@@ -1740,12 +1842,194 @@ func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps
 	defer deferFn()
 
 	var (
-		subtreeMetaSlice    *subtreepkg.Meta
 		checkParentTxHashes = make([]missingParentTx, 0, len(subtree.Nodes)/16)
-		err                 error
+		run                 inpointRunBuilder
 	)
 
-	subtreeMetaSlice, err = b.getSubtreeMetaSlice(ctx, deps.subtreeStore, *subtreeHash, subtree)
+	subtreeMetaSlice, err := b.loadSubtreeMeta(ctx, logger, deps, subtree, subtreeHash, sIdx)
+	if err != nil {
+		return err
+	}
+
+	if validationCtx.dedup != nil {
+		run = validationCtx.dedup.newRun(sIdx, len(subtree.Nodes))
+	}
+
+	for snIdx := 0; snIdx < len(subtree.Nodes); snIdx++ {
+		// ignore the very first transaction, is coinbase
+		if sIdx == 0 && snIdx == 0 && subtree.Nodes[snIdx].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			continue
+		}
+
+		subtreeNode := subtree.Nodes[snIdx]
+
+		params := &transactionValidationParams{
+			subtreeMetaSlice: subtreeMetaSlice,
+			subtreeHash:      subtreeHash,
+			sIdx:             sIdx,
+			snIdx:            snIdx,
+			subtreeNode:      subtreeNode,
+			run:              run,
+		}
+
+		missingParents, err := b.validateTransaction(ctx, deps, validationCtx, params)
+		if err != nil {
+			if run != nil {
+				// The checks used to run in tx order with the duplicate input
+				// check among them, so a duplicate at an earlier tx of this subtree
+				// (or at this one, when its own checks got that far) came first.
+				limit := snIdx - 1
+				if params.inputsChecked {
+					limit = snIdx
+				}
+
+				if dupErr := b.earlierDuplicateInSubtree(subtree, subtreeMetaSlice, subtreeHash, sIdx, limit); dupErr != nil {
+					return dupErr
+				}
+			}
+
+			return err
+		}
+
+		checkParentTxHashes = append(checkParentTxHashes, missingParents...)
+	}
+
+	if run != nil {
+		run.finish()
+	}
+
+	if len(checkParentTxHashes) > 0 {
+		err = b.checkParentsExistOnChain(ctx, logger, deps, validationCtx, checkParentTxHashes)
+		if err != nil && run != nil {
+			// same precedence as above: the subtree's own duplicates used to be
+			// found before its parents were looked up on chain
+			if dupErr := b.earlierDuplicateInSubtree(subtree, subtreeMetaSlice, subtreeHash, sIdx, len(subtree.Nodes)-1); dupErr != nil {
+				return dupErr
+			}
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+// earlierDuplicateInSubtree returns the duplicate inputs error of the first
+// transaction up to snIdx limit of the subtree that spends an inpoint already
+// spent by an earlier transaction (or input) of the same subtree, or nil. It is
+// only used when the subtree is about to fail with another error: the
+// duplicate check across the block is batched after all subtrees passed, and
+// this keeps a duplicate inside the failing subtree ahead of the error that
+// follows it in transaction order, as when the check ran per transaction.
+func (b *Block) earlierDuplicateInSubtree(subtree *subtreepkg.Subtree, meta *subtreepkg.Meta, subtreeHash *chainhash.Hash, sIdx, limit int) error {
+	seen := make(map[subtreepkg.Inpoint]struct{})
+
+	for snIdx := 0; snIdx <= limit && snIdx < len(subtree.Nodes); snIdx++ {
+		if sIdx == 0 && snIdx == 0 && subtree.Nodes[snIdx].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			continue
+		}
+
+		inpoints, err := meta.GetTxInpoints(snIdx)
+		if err != nil {
+			return nil // the error the caller already has stands
+		}
+
+		for _, in := range inpoints {
+			if _, dup := seen[in]; dup {
+				return b.duplicateInputsError(subtreeHash, sIdx, snIdx, subtree.Nodes[snIdx])
+			}
+
+			seen[in] = struct{}{}
+		}
+	}
+
+	return nil
+}
+
+func (b *Block) duplicateInputsError(subtreeHash *chainhash.Hash, sIdx, snIdx int, subtreeNode subtreepkg.Node) error {
+	return errors.NewBlockInvalidError("[validOrderAndBlessed][%s][%s:%d]:%d transaction %s has duplicate inputs",
+		b.String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())
+}
+
+// detectDuplicateInputs checks the inputs collected from every subtree for an
+// outpoint spent twice, once all subtrees passed their own checks. It reports
+// the earliest transaction of the block that spends an outpoint an earlier
+// transaction (or input) already spent. Real inpoints are only read back, from
+// the subtree meta, for transactions whose input hashes collide.
+func (b *Block) detectDuplicateInputs(ctx context.Context, logger ulogger.Logger, deps *validationDependencies,
+	validationCtx *validationContext, subtrees []*subtreepkg.Subtree, concurrency int) error {
+	base := validationCtx.subtreeBase
+
+	// subtreeOf returns the subtree holding block index tx
+	subtreeOf := func(tx uint64) int {
+		return sort.Search(len(subtrees), func(i int) bool { return base[i+1] > tx })
+	}
+
+	newResolver := func() func(tx uint64) ([]subtreepkg.Inpoint, error) {
+		var (
+			cachedIdx  = -1
+			cachedMeta *subtreepkg.Meta
+		)
+
+		return func(tx uint64) ([]subtreepkg.Inpoint, error) {
+			sIdx := subtreeOf(tx)
+			if sIdx != cachedIdx {
+				subtree := subtrees[sIdx]
+
+				hash := subtree.RootHash()
+				if hash == nil {
+					return nil, errors.NewProcessingError("[validOrderAndBlessed][%s] subtree %d has no root hash", b.String(), sIdx)
+				}
+
+				meta, err := b.loadSubtreeMeta(ctx, logger, deps, subtree, hash, sIdx)
+				if err != nil {
+					return nil, err
+				}
+
+				cachedIdx, cachedMeta = sIdx, meta
+			}
+
+			return cachedMeta.GetTxInpoints(int(tx - base[sIdx])) //nolint:gosec // within a subtree
+		}
+	}
+
+	// block_validOrderAndBlessedConcurrency bounds this phase too; the result does
+	// not depend on the worker count
+	tx, found, err := validationCtx.dedup.detect(ctx, concurrency, newResolver)
+	if err != nil {
+		return errors.NewProcessingError("[validOrderAndBlessed][%s] duplicate input check failed", b.String(), err)
+	}
+
+	if !found {
+		return nil
+	}
+
+	sIdx := subtreeOf(tx)
+	snIdx := int(tx - base[sIdx]) //nolint:gosec // within a subtree
+
+	// the nodes of a loaded subtree can be released while the check runs
+	// (read once: a release between a check and the index would still panic)
+	var (
+		rootHash *chainhash.Hash
+		nodes    []subtreepkg.Node
+	)
+
+	if subtree := subtrees[sIdx]; subtree != nil {
+		rootHash, nodes = subtree.RootHash(), subtree.Nodes
+	}
+
+	if rootHash == nil || snIdx >= len(nodes) {
+		return errors.NewProcessingError("[validOrderAndBlessed][%s] subtree %d was released during the duplicate input check", b.String(), sIdx)
+	}
+
+	return b.duplicateInputsError(rootHash, sIdx, snIdx, nodes[snIdx])
+}
+
+// loadSubtreeMeta reads the subtree's meta from the store, regenerating it when it
+// is missing or unusable and a regenerator is available.
+func (b *Block) loadSubtreeMeta(ctx context.Context, logger ulogger.Logger, deps *validationDependencies,
+	subtree *subtreepkg.Subtree, subtreeHash *chainhash.Hash, sIdx int) (*subtreepkg.Meta, error) {
+	subtreeMetaSlice, err := b.getSubtreeMetaSlice(ctx, deps.subtreeStore, *subtreeHash, subtree)
 
 	// Attempt regeneration if the meta is missing or invalid and a regenerator is
 	// available. The read error is included in the log line: it carries the
@@ -1778,36 +2062,10 @@ func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps
 	if err != nil {
 		// No %v for err: errors.New consumes a trailing error param and wraps it, so an
 		// explicit verb here prints %!v(MISSING) in front of the real cause.
-		return errors.NewProcessingError("[validOrderAndBlessed][%s][%s:%d] error getting subtree meta slice", b.String(), subtreeHash.String(), sIdx, err)
+		return nil, errors.NewProcessingError("[validOrderAndBlessed][%s][%s:%d] error getting subtree meta slice", b.String(), subtreeHash.String(), sIdx, err)
 	}
 
-	for snIdx := 0; snIdx < len(subtree.Nodes); snIdx++ {
-		// ignore the very first transaction, is coinbase
-		if sIdx == 0 && snIdx == 0 && subtree.Nodes[snIdx].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-			continue
-		}
-
-		subtreeNode := subtree.Nodes[snIdx]
-
-		missingParents, err := b.validateTransaction(ctx, deps, validationCtx, &transactionValidationParams{
-			subtreeMetaSlice: subtreeMetaSlice,
-			subtreeHash:      subtreeHash,
-			sIdx:             sIdx,
-			snIdx:            snIdx,
-			subtreeNode:      subtreeNode,
-		})
-		if err != nil {
-			return err
-		}
-
-		checkParentTxHashes = append(checkParentTxHashes, missingParents...)
-	}
-
-	if len(checkParentTxHashes) > 0 {
-		return b.checkParentsExistOnChain(ctx, logger, deps, validationCtx, checkParentTxHashes)
-	}
-
-	return nil
+	return subtreeMetaSlice, nil
 }
 
 func (b *Block) checkParentsExistOnChain(ctx context.Context, logger ulogger.Logger, deps *validationDependencies,
@@ -1844,7 +2102,13 @@ func (b *Block) checkParentsExistOnChain(ctx context.Context, logger ulogger.Log
 type validationContext struct {
 	currentBlockHeaderHashesMap map[chainhash.Hash]struct{}
 	currentBlockHeaderIDsMap    map[uint32]struct{}
-	parentSpendsMap             ParentSpendsMap
+	// parentSpendsMap, when set, records every input as the transactions are
+	// validated (disk-backed map). Otherwise dedup collects them and
+	// detectDuplicateInputs checks them after all subtrees passed.
+	parentSpendsMap ParentSpendsMap
+	dedup           inpointDedupper
+	// subtreeBase[s] is the block index of the first transaction of subtree s
+	subtreeBase []uint64
 }
 
 func (b *Block) buildBlockHeaderHashesMap(currentChain []*BlockHeader) map[chainhash.Hash]struct{} {
@@ -1943,6 +2207,12 @@ type transactionValidationParams struct {
 	subtreeHash      *chainhash.Hash
 	sIdx, snIdx      int
 	subtreeNode      subtreepkg.Node
+
+	// run collects the subtree's inputs for the batched duplicate check; nil when
+	// the duplicate check is done per input through the parent-spends map
+	run inpointRunBuilder
+	// inputsChecked is set once the transaction's duplicate input check passed
+	inputsChecked bool
 }
 
 func (b *Block) validateTransaction(ctx context.Context, deps *validationDependencies, validationCtx *validationContext,
@@ -1965,10 +2235,19 @@ func (b *Block) validateTransaction(ctx context.Context, deps *validationDepende
 	}
 
 	// Check for duplicate inputs
-	err = b.checkDuplicateInputs(params.subtreeMetaSlice, validationCtx, params.subtreeHash, params.sIdx, params.snIdx, params.subtreeNode)
-	if err != nil {
+	if params.run != nil {
+		txInpoints, inpErr := params.subtreeMetaSlice.GetTxInpoints(params.snIdx)
+		if inpErr != nil {
+			return nil, errors.NewStorageError("[validOrderAndBlessed][%s][%s:%d]:%d error getting tx inpoints from subtree meta slice",
+				b.String(), params.subtreeHash.String(), params.sIdx, params.snIdx, inpErr)
+		}
+
+		params.run.addTx(validationCtx.subtreeBase[params.sIdx]+uint64(params.snIdx), txInpoints) //nolint:gosec // non-negative
+	} else if err = b.checkDuplicateInputs(params.subtreeMetaSlice, validationCtx, params.subtreeHash, params.sIdx, params.snIdx, params.subtreeNode); err != nil {
 		return nil, err
 	}
+
+	params.inputsChecked = true
 
 	// Check if transaction has been mined in recent blocks
 	//
@@ -2000,8 +2279,7 @@ func (b *Block) checkDuplicateInputs(subtreeMetaSlice *subtreepkg.Meta, validati
 				b.String(), subtreeHash.String(), sIdx, snIdx, err)
 		}
 		if !valueSet {
-			return errors.NewBlockInvalidError("[validOrderAndBlessed][%s][%s:%d]:%d transaction %s has duplicate inputs",
-				b.String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())
+			return b.duplicateInputsError(subtreeHash, sIdx, snIdx, subtreeNode)
 		}
 	}
 
@@ -2191,8 +2469,14 @@ func (b *Block) getAndValidateSubtreesWithDedup(ctx context.Context, logger ulog
 		}
 
 		b.txMapCount = uint64(len(b.Subtrees)) * uint64(first.Length()) // nolint: gosec
-		b.txMap = newBlockTxMap(b.txMapCount)
 		subtreeSize = first.Size()
+
+		// The highest index is that of the last subtree's last node. A subtree in
+		// between that is too long for its slot is indexed apart (putOverflow) and
+		// reported by the length check after the load.
+		limit := txIndexEnd(len(b.Subtrees)-1, subtreeSize, last.Length())
+
+		b.txMap = b.pinNodeIndex(newInMemoryBlockTxMap(b.txMapCount, len(b.Subtrees), subtreeSize, limit))
 		deduped = true
 
 		return nil
@@ -2568,12 +2852,28 @@ func (b *Block) TryReleaseSubtreeNodes(put func([]subtreepkg.Node)) (bool, error
 func (b *Block) releaseSubtreeNodesLocked(put func([]subtreepkg.Node)) error {
 	var closeErrs []error
 
+	// A live node index reads its hashes from these arrays: a pooled one would be
+	// overwritten by the next subtree load and an unmapped one would fault. Detach
+	// the subtrees from the block all the same, but leave their Nodes attached (a
+	// dedup goroutine that captured one still reads them) and leave the release,
+	// which drops the heap arrays instead of pooling them, and the closes to
+	// releaseTxMap.
+	pinned := b.nodeIndexPins.Load() > 0
+
 	for i, st := range b.SubtreeSlices {
 		if st == nil {
 			continue
 		}
 
+		if pinned {
+			b.deferredCloses = append(b.deferredCloses, st)
+			b.SubtreeSlices[i] = nil
+
+			continue
+		}
+
 		nodes := st.ReleaseNodes()
+
 		if nodes != nil && put != nil && !st.IsMmapBacked() {
 			put(nodes)
 		}
@@ -2632,6 +2932,12 @@ func (b *Block) closeMmapSubtreesLocked() error {
 
 	for i, st := range b.SubtreeSlices {
 		if st == nil || !st.IsMmapBacked() {
+			continue
+		}
+
+		// a live node index still reads the region: releaseTxMap detaches and unmaps it
+		if b.nodeIndexPins.Load() > 0 {
+			b.deferredCloses = append(b.deferredCloses, st)
 			continue
 		}
 
