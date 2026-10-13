@@ -1344,18 +1344,17 @@ func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Re
 		}
 
 		for _, pk := range pageKeys {
-			dup := false
-
-			for _, have := range c.pageKeys {
-				if bytes.Equal(have.Digest(), pk.Digest()) {
-					dup = true
-					break
-				}
+			d := string(pk.Digest())
+			if _, dup := c.seen[d]; dup {
+				continue
 			}
 
-			if !dup {
-				c.pageKeys = append(c.pageKeys, pk)
+			if c.seen == nil {
+				c.seen = make(map[string]struct{}, len(pageKeys))
 			}
+
+			c.seen[d] = struct{}{}
+			c.pageKeys = append(c.pageKeys, pk)
 		}
 	}
 
@@ -1489,6 +1488,7 @@ func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Re
 type dahClear struct {
 	masterKey *aerospike.Key
 	pageKeys  []*aerospike.Key
+	seen      map[string]struct{} // digests of pageKeys, to dedupe in O(1)
 }
 
 func bytesBin(v interface{}) []byte {

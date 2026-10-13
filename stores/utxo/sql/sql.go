@@ -5123,21 +5123,31 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 			}
 
 			if retention > 0 {
-				// The pruner clears the DAH of unmined records, so a tx brought back onto the longest
-				// chain here (repair path) must get its DAH again, as setMined would stamp it.
-				// There is no block height here: the store's current height is used, which is never
-				// earlier than the height of the block the tx was mined in, so the tx is pruned no
-				// sooner than setMined would have allowed. Same rules as setMined: a preserved tx is
-				// left alone, an existing DAH is only bumped forward, and a DAH is set only when the tx
-				// is in a block and has no unspent output.
-				// DAH is $1, hashes start at $2
-				inClause, inArgs := buildINClause(chunk, 2)
+				// The pruner clears the DAH of unmined records, and txs validated while their block was
+				// on a fork get none from setMined, so a tx brought onto the longest chain here must get
+				// its DAH again. This is the common case in reorgBlocks (the txs of the blocks moved
+				// forward), not only the BlockAssembler repair path.
+				//
+				// There is no mined block in this call, so the DAH is stamped from
+				// max(the store's current height, the tx's highest block height) + retention. The store
+				// height lags the block being validated, and the block heights are what setMined would
+				// have stamped from, so the DAH is the setMined value or later.
+				//
+				// Same rules as the longest-chain branch of setMined, with one precondition added: the
+				// first DAH is only set when the tx is in a block, since no block row is inserted here.
+				// A preserved tx is left alone, an existing DAH is only raised, never lowered. (The
+				// conflicting case is not special-cased here, unlike the Lua/Aerospike path.)
+				// Current height is $1, retention $2, hashes start at $3.
+				inClause, inArgs := buildINClause(chunk, 3)
+				newDAH := `(CASE WHEN COALESCE((SELECT MAX(b.block_height) FROM block_ids b WHERE b.transaction_id = transactions.id), 0) > CAST($1 AS BIGINT)
+				                 THEN (SELECT MAX(b.block_height) FROM block_ids b WHERE b.transaction_id = transactions.id)
+				                 ELSE CAST($1 AS BIGINT) END + CAST($2 AS BIGINT))`
 				q = fmt.Sprintf(`
 					UPDATE transactions
 					SET unmined_since = NULL
 					   ,delete_at_height = CASE
 					        WHEN preserve_until IS NOT NULL THEN delete_at_height
-					        WHEN delete_at_height IS NOT NULL AND delete_at_height < $1 THEN $1
+					        WHEN delete_at_height IS NOT NULL AND delete_at_height < %[1]s THEN %[1]s
 					        WHEN delete_at_height IS NULL
 					             AND EXISTS (
 					                 SELECT 1 FROM block_ids b WHERE b.transaction_id = transactions.id
@@ -5146,12 +5156,12 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 					                 SELECT 1 FROM outputs o
 					                 WHERE o.transaction_id = transactions.id AND o.spending_data IS NULL
 					             )
-					             THEN $1
+					             THEN %[1]s
 					        ELSE delete_at_height
 					    END
-					WHERE hash IN %s
-				`, inClause)
-				args = append([]interface{}{int64(currentBlockHeight) + int64(retention)}, inArgs...)
+					WHERE hash IN %[2]s
+				`, newDAH, inClause)
+				args = append([]interface{}{int64(currentBlockHeight), int64(retention)}, inArgs...)
 			} else {
 				// hashes start at $1
 				inClause, inArgs := buildINClause(chunk, 1)

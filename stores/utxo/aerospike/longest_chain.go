@@ -77,64 +77,48 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 	numChunks := (len(txHashes) + batchSize - 1) / batchSize
 	numWorkers := min(s.settings.UtxoStore.MaxMinedRoutines, numChunks)
 
-	// Pre-create the shared operation — identical for every transaction (same bin name, same value).
-	// The aerospike *Operation struct is immutable after creation and only read during serialization,
-	// so sharing one instance across all batch writes is safe and eliminates 2 allocs per tx.
-	var op *aerospike.Operation
-
-	// ops is what each batch write runs. With a DAH retention, marking on the longest chain also
-	// re-evaluates the DAH (see below); otherwise it is just op.
-	var ops []*aerospike.Operation
-
+	// Pre-create the shared operations: identical for every transaction (same bin names, same
+	// values). The aerospike *Operation struct is immutable after creation and only read during
+	// serialization, so sharing one slice across all batch writes is safe.
 	retention := s.settings.GetUtxoStoreBlockHeightRetention()
 	restampDAH := onLongestChain && retention > 0
 
+	var ops []*aerospike.Operation
+
 	if onLongestChain {
-		op = aerospike.PutOp(aerospike.NewBin(fields.UnminedSince.String(), nil))
-		ops = []*aerospike.Operation{op}
+		unminedOp := aerospike.PutOp(aerospike.NewBin(fields.UnminedSince.String(), nil))
 
 		if restampDAH {
-			// The pruner clears the DAH of unmined records, so a tx brought back onto the longest
-			// chain here (repair path) must get its DAH again, as setMined would stamp it. There is
-			// no block height here: the store's current height is used, which is never earlier than
-			// the height of the block the tx was mined in, so the tx is pruned no sooner than setMined
-			// would have allowed. buildDeleteAtHeightExpression keeps setMined's rules (preserved: no
-			// change; DAH only for a fully spent tx that is in a block); the old and new DAH are read
-			// so pagination records can follow the master.
-			ops = []*aerospike.Operation{
+			// The pruner clears the DAH of unmined records, and txs validated while their block was on
+			// a fork get none from setMined, so a tx brought onto the longest chain here must get its
+			// DAH again. This is the common case in reorgBlocks (the txs of the blocks moved forward),
+			// not only the BlockAssembler repair path.
+			//
+			// The old and new DAH are read around the write so pagination records can follow the master.
+			ops = append(ops,
 				aerospike.GetBinOp(fields.DeleteAtHeight.String()),
 				aerospike.GetBinOp(fields.External.String()),
 				aerospike.GetBinOp(fields.TotalExtraRecs.String()),
-				op,
-				aerospike.ExpWriteOp(
-					fields.DeleteAtHeight.String(),
-					s.buildDeleteAtHeightExpression(currentBlockHeight, retention, true, false),
-					aerospike.ExpWriteFlagAllowDelete|aerospike.ExpWriteFlagEvalNoFail,
-				),
-				aerospike.GetBinOp(fields.DeleteAtHeight.String()),
-			}
+				unminedOp,
+			)
+			ops = append(ops, s.buildDeleteAtHeightOpsFromRecordHeight(currentBlockHeight, retention, true)...)
+			ops = append(ops, aerospike.GetBinOp(fields.DeleteAtHeight.String()))
+		} else {
+			ops = []*aerospike.Operation{unminedOp}
 		}
 	} else {
 		// Only stamp unminedSince when the bin is absent. ExpUnknown with EvalNoFail makes the
 		// existing-value branch a no-op, so an earlier unminedSince is never overwritten.
 		unminedSince := utxo.BackdatedUnminedSince(currentBlockHeight, s.settings.UtxoStore.UnminedTxRetention)
 
-		op = aerospike.ExpWriteOp(
+		ops = []*aerospike.Operation{aerospike.ExpWriteOp(
 			fields.UnminedSince.String(),
 			aerospike.ExpCond(
 				aerospike.ExpBinExists(fields.UnminedSince.String()), aerospike.ExpUnknown(),
 				aerospike.ExpIntVal(int64(unminedSince)),
 			),
 			aerospike.ExpWriteFlagEvalNoFail,
-		)
-		ops = []*aerospike.Operation{op}
-	}
-
-	// pages of external txs whose master got a new DAH, applied after the batches
-	var dahSetItems []struct {
-		TxID           *chainhash.Hash
-		ChildCount     int
-		DeleteAtHeight uint32
+		)}
 	}
 
 	// Divide work evenly across workers (fewer goroutines, sequential batches within each)
@@ -200,23 +184,20 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 					continue // Don't fail fast — continue processing other batches
 				}
 
+				// Pagination records of external txs whose master DAH changed. Applied per batch, in
+				// bounded chunks, so one worker never holds sum(totalExtraRecs) writes at once and the
+				// follow-up still runs if another worker fails. A page missing its DAH is harmless: pages
+				// are deleted by computed key together with their master when the master is pruned.
+				var dahSetItems, dahUnsetItems []childDAHItem
+
 				// Check individual record results
 				for j, batchRecord := range batchRecords {
 					recErr := batchRecord.BatchRec().Err
 					if recErr == nil {
 						if restampDAH && batchRecord.BatchRec().Record != nil {
-							if state, perr := s.parseSetMinedState(batchRecord.BatchRec().Record.Bins); perr == nil &&
-								state.External && state.TotalExtraRecs != nil && state.NewDeleteAtHeight != nil &&
-								(state.OldDeleteAtHeight == nil || *state.OldDeleteAtHeight != *state.NewDeleteAtHeight) {
+							if state, perr := s.parseSetMinedState(batchRecord.BatchRec().Record.Bins); perr == nil {
 								h := batchHashes[j]
-
-								mu.Lock()
-								dahSetItems = append(dahSetItems, struct {
-									TxID           *chainhash.Hash
-									ChildCount     int
-									DeleteAtHeight uint32
-								}{TxID: &h, ChildCount: *state.TotalExtraRecs, DeleteAtHeight: *state.NewDeleteAtHeight})
-								mu.Unlock()
+								collectChildDAHFollowUp(&h, state, &dahSetItems, &dahUnsetItems)
 							}
 						}
 
@@ -243,6 +224,15 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 					}
 					mu.Unlock()
 				}
+
+				if err := s.applyChildDAH(dahSetItems, dahUnsetItems); err != nil {
+					atomic.AddInt64(&errorCount, 1)
+					mu.Lock()
+					if len(allErrors) < 10 {
+						allErrors = append(allErrors, errors.NewProcessingError("could not update DAH of pagination records", err))
+					}
+					mu.Unlock()
+				}
 			}
 
 			return nil
@@ -251,12 +241,6 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 
 	if err := g.Wait(); err != nil {
 		return err
-	}
-
-	if len(dahSetItems) > 0 {
-		if err := s.SetDAHForChildRecordsMulti(dahSetItems); err != nil {
-			allErrors = append(allErrors, errors.NewProcessingError("could not set DAH on pagination records", err))
-		}
 	}
 
 	attempted := len(txHashes)
@@ -285,4 +269,45 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 	}
 
 	return nil
+}
+
+// childDAHChunk bounds the number of pagination records written by one batch.
+const childDAHChunk = 4096
+
+// applyChildDAH sets (and clears) the DAH of pagination records in bounded chunks of about
+// childDAHChunk records per batch. A page that no longer exists is not an error
+// (SetDAHForChildRecordsMulti skips key-not-found).
+func (s *Store) applyChildDAH(setItems, unsetItems []childDAHItem) error {
+	var errs error
+
+	for _, items := range [][]childDAHItem{setItems, unsetItems} {
+		var chunk []childDAHItem
+
+		pages := 0
+
+		flush := func() {
+			if len(chunk) == 0 {
+				return
+			}
+
+			if err := s.SetDAHForChildRecordsMulti(chunk); err != nil {
+				errs = errors.Join(errs, err)
+			}
+
+			chunk, pages = nil, 0
+		}
+
+		for _, it := range items {
+			chunk = append(chunk, it)
+
+			pages += it.ChildCount
+			if pages >= childDAHChunk {
+				flush()
+			}
+		}
+
+		flush()
+	}
+
+	return errs
 }

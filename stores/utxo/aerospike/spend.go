@@ -230,6 +230,8 @@ func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, total)
 	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
+	// a page that does not exist must not be created as an empty record holding only a DAH
+	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 	dahBinName := fields.DeleteAtHeight.String()
 	// Pre-create the "unset" operation since it's identical for all unset cases
 	unsetOp := aerospike.PutOp(aerospike.NewBin(dahBinName, nil))
@@ -257,6 +259,10 @@ func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 	var aggErr error
 	for _, br := range batchRecords {
 		if recErr := br.BatchRec().Err; recErr != nil {
+			if errors.Is(recErr, aerospike.ErrKeyNotFound) {
+				continue // a page that is gone needs no DAH
+			}
+
 			if aggErr == nil {
 				aggErr = recErr
 			} else {

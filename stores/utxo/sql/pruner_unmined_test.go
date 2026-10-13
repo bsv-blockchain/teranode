@@ -140,3 +140,78 @@ func TestPrunerClearedDAHIsRestampedOnLongestChain(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(1), deleted)
 }
+
+// TestMarkTransactionsOnLongestChain_DAHRules pins the DAH that marking on the longest chain stamps,
+// including the cases where it must stamp none.
+func TestMarkTransactionsOnLongestChain_DAHRules(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store, _ := setup(ctx, t)
+
+	retention := int64(store.settings.GetUtxoStoreBlockHeightRetention())
+	require.NotZero(t, retention)
+	require.NoError(t, store.SetBlockHeight(1000))
+
+	tests := []struct {
+		name        string
+		minedHeight int  // height of the block row, 0: no block_ids row
+		unspent     bool // an unspent output
+		preserve    bool
+		existingDAH *int64
+		want        *int64
+	}{
+		{name: "mined above the store height uses the mined height", minedHeight: 1100, want: ptr(1100 + retention)},
+		{name: "mined below the store height uses the store height", minedHeight: 900, want: ptr(1000 + retention)},
+		{name: "existing higher DAH is never lowered", minedHeight: 900, existingDAH: ptr(5000), want: ptr(5000)},
+		{name: "existing lower DAH is raised", minedHeight: 900, existingDAH: ptr(1002), want: ptr(1000 + retention)},
+		{name: "unspent output gets no DAH", minedHeight: 900, unspent: true},
+		{name: "preserved gets no DAH", minedHeight: 900, preserve: true},
+		{name: "no block_ids gets no DAH"},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hash := chainhash.HashH([]byte(fmt.Sprintf("dah-rules-%d", i)))
+
+			_, err := store.db.ExecContext(ctx, `
+				INSERT INTO transactions (hash, version, lock_time, fee, size_in_bytes, conflicting, unmined_since, delete_at_height)
+				VALUES ($1, 1, 0, 0, 100, false, 50, $2)`, hash[:], tt.existingDAH)
+			require.NoError(t, err)
+
+			if tt.minedHeight > 0 {
+				_, err = store.db.ExecContext(ctx, `
+					INSERT INTO block_ids (transaction_id, block_id, block_height, subtree_idx)
+					SELECT id, 1, $2, 0 FROM transactions WHERE hash = $1`, hash[:], tt.minedHeight)
+				require.NoError(t, err)
+			}
+
+			if tt.unspent {
+				_, err = store.db.ExecContext(ctx, `
+					INSERT INTO outputs (transaction_id, idx, locking_script, satoshis, coinbase_spending_height, utxo_hash)
+					SELECT id, 0, $2, 1, 0, $2 FROM transactions WHERE hash = $1`, hash[:], []byte{1})
+				require.NoError(t, err)
+			}
+
+			if tt.preserve {
+				_, err = store.db.ExecContext(ctx, `UPDATE transactions SET preserve_until = 5000 WHERE hash = $1`, hash[:])
+				require.NoError(t, err)
+			}
+
+			require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{hash}, true))
+
+			var got sql.NullInt64
+
+			require.NoError(t, store.db.QueryRowContext(ctx, `SELECT delete_at_height FROM transactions WHERE hash = $1`, hash[:]).Scan(&got))
+
+			if tt.want == nil {
+				require.False(t, got.Valid, "no DAH expected, got %d", got.Int64)
+			} else {
+				require.True(t, got.Valid)
+				require.Equal(t, *tt.want, got.Int64)
+			}
+		})
+	}
+}
+
+func ptr(v int64) *int64 { return &v }
