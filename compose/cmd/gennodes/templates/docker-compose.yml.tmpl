@@ -118,6 +118,7 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode{{ .Index }}.test"
+      grpc_admin_api_key: docker-e2e-test-admin-key
       JAEGER_SERVICE_NAME: teranode{{ .Index }}
       JAEGER_AGENT_HOST: jaeger
       JAEGER_AGENT_PORT: 6831
