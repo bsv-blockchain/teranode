@@ -3,6 +3,7 @@ package aerospike
 
 import (
 	"context"
+	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
@@ -26,6 +27,11 @@ type childDAHItem = struct {
 // batch can never be applied in the wrong order (an unset applied after a set would leave a live
 // master's children without a DAH; a set after an unset would leave a prunable master's children
 // pinned). The zero value is ready to use.
+//
+// Assumption: for one key within one batch, the order of the results equals the order the server
+// executed the writes in, and a later result's "old" DAH is the earlier result's "new" DAH. That
+// holds for a single BatchOperate on one node; it is not verified for a key repeated across
+// nodes or batches, which is why callers collapse per batch rather than across batches.
 type childDAHFollowUps struct {
 	order []chainhash.Hash
 	items map[chainhash.Hash]childDAHItem
@@ -88,21 +94,82 @@ func (f *childDAHFollowUps) filter(set bool) []childDAHItem {
 	return out
 }
 
-// apply writes the queued follow-ups: unsets first, then sets. Clearing is the data-deleting
-// direction (a child left with a stale DAH can be pruned under a live master), so it goes first,
-// is retried once, and its error is returned separately.
-func (s *Store) applyChildDAHFollowUps(f *childDAHFollowUps) (unsetErr, setErr error) {
-	if items := f.unsets(); len(items) > 0 {
-		if unsetErr = s.SetDAHForChildRecordsMulti(items); unsetErr != nil {
-			unsetErr = s.SetDAHForChildRecordsMulti(items)
+// maxChildDAHPagesPerBatch bounds how many pagination records one child-DAH BatchOperate
+// touches, so a batch of large external txs cannot build an unbounded request.
+const maxChildDAHPagesPerBatch = 4096
+
+// childDAHRetryBackoff is the pause before a retry of a failed child-DAH (or restore) write.
+// A var so tests can shorten it.
+var childDAHRetryBackoff = 50 * time.Millisecond
+
+// chunkChildDAHItems groups items so a chunk holds about maxPages pagination records. An item is
+// never split (SetDAHForChildRecordsMulti expands all of its pages), so an item larger than the
+// cap travels alone. Order is preserved.
+func chunkChildDAHItems(items []childDAHItem, maxPages int) [][]childDAHItem {
+	var (
+		chunks [][]childDAHItem
+		pages  int
+	)
+
+	cur := make([]childDAHItem, 0, len(items))
+
+	for _, item := range items {
+		if len(cur) > 0 && pages+item.ChildCount > maxPages {
+			chunks = append(chunks, cur)
+			cur, pages = make([]childDAHItem, 0, len(items)), 0
+		}
+
+		cur = append(cur, item)
+		pages += item.ChildCount
+	}
+
+	if len(cur) > 0 {
+		chunks = append(chunks, cur)
+	}
+
+	return chunks
+}
+
+// childDAHApplyResult reports what applyChildDAHFollowUps could not write.
+type childDAHApplyResult struct {
+	unsetErr, setErr         error
+	failedUnsets, failedSets []childDAHItem
+}
+
+// writeChildDAHChunk writes one chunk, retrying once after a short backoff.
+func (s *Store) writeChildDAHChunk(chunk []childDAHItem) error {
+	err := s.SetDAHForChildRecordsMulti(chunk)
+	if err != nil {
+		time.Sleep(childDAHRetryBackoff)
+		err = s.SetDAHForChildRecordsMulti(chunk)
+	}
+
+	return err
+}
+
+// applyChildDAHFollowUps writes the queued follow-ups in bounded chunks: unsets first, then sets,
+// each chunk retried once after a backoff. Clearing is the data-deleting direction (a child left
+// with a stale DAH can be pruned under a live master), so it goes first. A failed SET is not
+// harmless either: for a raise (X -> Y) the children stay at the lower X and can be pruned before
+// the master. Failures are logged at Error and returned (with the items that failed) so callers
+// can count them and, where the master write is not retry-safe, restore the master.
+func (s *Store) applyChildDAHFollowUps(f *childDAHFollowUps) childDAHApplyResult {
+	var res childDAHApplyResult
+
+	run := func(items []childDAHItem, kind string, failed *[]childDAHItem, errOut *error) {
+		for _, chunk := range chunkChildDAHItems(items, maxChildDAHPagesPerBatch) {
+			if err := s.writeChildDAHChunk(chunk); err != nil {
+				s.logger.Errorf("[childDAHFollowUps] failed to %s child DAH for %d txs: %v", kind, len(chunk), err)
+				*failed = append(*failed, chunk...)
+				*errOut = errors.JoinCapped(10, *errOut, err)
+			}
 		}
 	}
 
-	if items := f.sets(); len(items) > 0 {
-		setErr = s.SetDAHForChildRecordsMulti(items)
-	}
+	run(f.unsets(), "unset", &res.failedUnsets, &res.unsetErr)
+	run(f.sets(), "set", &res.failedSets, &res.setErr)
 
-	return unsetErr, setErr
+	return res
 }
 
 // SetMinedState contains the state returned from setMined operations.
@@ -674,8 +741,8 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 	// mined, and a retry would hit FILTERED_OUT and never reconcile their child-record DAH.
 	var postErr error
 
-	unsetErr, setErr := s.applyChildDAHFollowUps(&childDAH)
-	postErr = errors.JoinCapped(10, unsetErr, setErr)
+	applied := s.applyChildDAHFollowUps(&childDAH)
+	postErr = errors.JoinCapped(10, applied.unsetErr, applied.setErr)
 
 	// Mirror the Lua path's single guard (set_mined.go) instead of the nested
 	// `if nrErrors > 0 { if errs != nil }`: every nrErrors++ is paired with an
