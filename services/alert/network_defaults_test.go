@@ -26,11 +26,11 @@ func TestResolveAlertNetworkConfig(t *testing.T) {
 	require.NotEqual(t, mainnet.GenesisKeys, testnet.GenesisKeys)
 
 	tests := []struct {
-		name       string
-		network    string
-		configured alertNetworkConfig
-		want       alertNetworkConfig
-		wantKnown  bool
+		name         string
+		network      string
+		configured   alertNetworkConfig
+		want         alertNetworkConfig
+		wantFallback []string
 	}{
 		{
 			name:    "mainnet defaults",
@@ -40,7 +40,6 @@ func TestResolveAlertNetworkConfig(t *testing.T) {
 				ProtocolID:  "/bitcoin/alert-system/1.0.0",
 				TopicName:   "bitcoin_alert_system",
 			},
-			wantKnown: true,
 		},
 		{
 			name:    "testnet defaults",
@@ -50,7 +49,6 @@ func TestResolveAlertNetworkConfig(t *testing.T) {
 				ProtocolID:  "/bitcoin-testnet/alert-system/0.0.1",
 				TopicName:   "bitcoin_alert_system_testnet",
 			},
-			wantKnown: true,
 		},
 		{
 			name:    "stn defaults",
@@ -60,7 +58,6 @@ func TestResolveAlertNetworkConfig(t *testing.T) {
 				ProtocolID:  "/bitcoin-stn/alert-system/0.0.1",
 				TopicName:   "bitcoin_alert_system_stn",
 			},
-			wantKnown: true,
 		},
 		{
 			name:    "unknown network falls back to mainnet keys and protocol with suffixed topic",
@@ -70,7 +67,34 @@ func TestResolveAlertNetworkConfig(t *testing.T) {
 				ProtocolID:  mainnet.ProtocolID,
 				TopicName:   "bitcoin_alert_system_regtest",
 			},
-			wantKnown: false,
+			wantFallback: []string{"alert_genesis_keys", "alert_protocol_id"},
+		},
+		{
+			name:    "unknown network with only the topic set still falls back for keys and protocol",
+			network: "regtest",
+			configured: alertNetworkConfig{
+				TopicName: "private_topic",
+			},
+			want: alertNetworkConfig{
+				GenesisKeys: mainnet.GenesisKeys,
+				ProtocolID:  mainnet.ProtocolID,
+				TopicName:   "private_topic",
+			},
+			wantFallback: []string{"alert_genesis_keys", "alert_protocol_id"},
+		},
+		{
+			name:    "private network with every field set uses no mainnet fallback",
+			network: "regtest",
+			configured: alertNetworkConfig{
+				GenesisKeys: []string{"private_key"},
+				ProtocolID:  "/private/alert-system/0.0.1",
+				TopicName:   "private_topic",
+			},
+			want: alertNetworkConfig{
+				GenesisKeys: []string{"private_key"},
+				ProtocolID:  "/private/alert-system/0.0.1",
+				TopicName:   "private_topic",
+			},
 		},
 		{
 			name:    "explicit settings override network defaults",
@@ -85,7 +109,6 @@ func TestResolveAlertNetworkConfig(t *testing.T) {
 				ProtocolID:  "/custom/alert-system/1.0.0",
 				TopicName:   "custom_topic",
 			},
-			wantKnown: true,
 		},
 		{
 			name:    "explicit override of a single field keeps the other defaults",
@@ -98,7 +121,6 @@ func TestResolveAlertNetworkConfig(t *testing.T) {
 				ProtocolID:  "/custom/alert-system/1.0.0",
 				TopicName:   testnet.TopicName,
 			},
-			wantKnown: true,
 		},
 		{
 			name:    "blank genesis keys are treated as unset",
@@ -106,16 +128,15 @@ func TestResolveAlertNetworkConfig(t *testing.T) {
 			configured: alertNetworkConfig{
 				GenesisKeys: []string{"", "  "},
 			},
-			want:      testnet,
-			wantKnown: true,
+			want: testnet,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, known, err := resolveAlertNetworkConfig(tt.network, tt.configured)
+			got, fallback, err := resolveAlertNetworkConfig(tt.network, tt.configured)
 			require.NoError(t, err)
-			require.Equal(t, tt.wantKnown, known)
+			require.Equal(t, tt.wantFallback, fallback)
 			require.Equal(t, tt.want, got)
 		})
 	}

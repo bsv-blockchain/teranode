@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -331,7 +332,7 @@ func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting
 	// read configuration from Teranode settings file
 	network := s.settings.ChainCfgParams.Name
 
-	alertNetwork, known, err := resolveAlertNetworkConfig(network, alertNetworkConfig{
+	alertNetwork, mainnetFallback, err := resolveAlertNetworkConfig(network, alertNetworkConfig{
 		GenesisKeys: s.settings.Alert.GenesisKeys,
 		ProtocolID:  s.settings.Alert.ProtocolID,
 		TopicName:   s.settings.Alert.TopicName,
@@ -340,8 +341,8 @@ func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting
 		return errors.NewConfigurationError("failed to resolve alert network defaults for network %s", network, err)
 	}
 
-	if !known {
-		s.logger.Warnf("[Alert] no public alert network defaults for network %q, falling back to mainnet genesis keys and protocol", network)
+	if len(mainnetFallback) > 0 {
+		s.logger.Warnf("[Alert] no public alert network for network %q, using mainnet values for unset %s", network, strings.Join(mainnetFallback, ", "))
 	}
 
 	s.logger.Infof("[Alert] alert network %q: protocol %s, topic %s, %d genesis keys", network, alertNetwork.ProtocolID, alertNetwork.TopicName, len(alertNetwork.GenesisKeys))
@@ -464,7 +465,7 @@ func (s *Server) requireP2P() error {
 // P2P private key files. It creates the directory in the user's home directory if it
 // doesn't already exist, using appropriate permissions for security.
 //
-// The directory is created at $HOME/.alert-system/ with permissions 0750 (owner: rwx, group: r-x, other: none)
+// The directory is created at $HOME/.bitcoin/ (config.LocalPrivateKeyDirectory) with permissions 0750 (owner: rwx, group: r-x, other: none)
 // to ensure that private key files stored within are protected from unauthorized access.
 // If the directory already exists, no error is returned.
 //
