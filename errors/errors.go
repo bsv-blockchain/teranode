@@ -814,7 +814,9 @@ var publicCauseCodes = map[ERR]struct{}{
 //
 //   - ERR_TX_COINBASE_IMMATURE: the message is built by the utxo store and
 //     embeds the node's block height and an internal batch id. It would qualify
-//     once it carries only the outpoint and the maturity height.
+//     once it carries only the outpoint and the maturity height. RPC's
+//     sendrawtransaction shows it as a fixed text instead (services/rpc,
+//     fixedVerdictText), which needs no change here.
 //   - ERR_STORAGE_ERROR, ERR_SERVICE_ERROR, ERR_PROCESSING: faults in this
 //     node, not verdicts. Collapsing them is correct — a caller that cannot
 //     tell them apart from a rejection would terminalize on an outage.

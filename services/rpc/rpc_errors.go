@@ -115,6 +115,26 @@ var revalidationRejectionClasses = []*errors.Error{
 	errors.ErrBlockCorrupt,
 }
 
+// submitRejectionClasses are verdicts only the transaction-submission scope
+// surfaces.
+//
+//   - ErrTxCoinbaseImmature: the submitted transaction spends a coinbase that has
+//     not matured, and waiting is what fixes it. The shared allowlist leaves it
+//     off because both utxo stores format node state into the message (the
+//     current height, and on aerospike the spend-batch counter), so it crosses
+//     only as the fixed text in fixedVerdictText, never as its own words.
+var submitRejectionClasses = []*errors.Error{
+	errors.ErrTxCoinbaseImmature,
+}
+
+// fixedVerdictText is the public text for a verdict class whose producers put
+// node state in its message. rejectionReason uses it in place of the message.
+// The text is svnode's reject reason for the same check (validation.cpp,
+// CheckTxInputs), which callers already match on.
+var fixedVerdictText = map[errors.ERR]string{
+	errors.ERR_TX_COINBASE_IMMATURE: "bad-txns-premature-spend-of-coinbase",
+}
+
 // verdictCodes is a set of codes a site treats as verdicts on top of the shared
 // allowlist. Which set applies is a property of the call site; see
 // rpcRequestScope.verdicts.
@@ -136,6 +156,10 @@ var (
 	// revalidationRejectionCodes is what the block-revalidation scope surfaces.
 	revalidationRejectionCodes = newVerdictCodes(append(append([]*errors.Error{},
 		localRejectionClasses...), revalidationRejectionClasses...)...)
+
+	// submitRejectionCodes is what the transaction-submission scope surfaces.
+	submitRejectionCodes = newVerdictCodes(append(append([]*errors.Error{},
+		localRejectionClasses...), submitRejectionClasses...)...)
 )
 
 // isRejection reports whether err is a refusal of what the caller submitted, as
@@ -283,8 +307,17 @@ func rejectionReason(e *errors.Error, local verdictCodes) string {
 		// immature-coinbase one surfaced the coinbase message and with it the
 		// store's internal batch id, and a verdict wrapping a StorageError or a
 		// NetworkError put an S3 bucket name or an internal host:port on the wire.
-		if linkIsRejection(cur, local) && !add(cur.Message()) {
-			break
+		// Where a scope does surface the immature class, it crosses as its fixed
+		// text, never as that message.
+		if linkIsRejection(cur, local) {
+			msg := cur.Message()
+			if fixed, ok := fixedVerdictText[cur.Code()]; ok {
+				msg = fixed
+			}
+
+			if !add(msg) {
+				break
+			}
 		}
 
 		wrapped := cur.WrappedErr()
@@ -528,8 +561,11 @@ const (
 // verdicts is the set of codes this scope surfaces as verdicts on top of the
 // shared allowlist.
 func (s rpcRequestScope) verdicts() verdictCodes {
-	if s == scopeBlockRevalidation {
+	switch s {
+	case scopeBlockRevalidation:
 		return revalidationRejectionCodes
+	case scopeSubmit:
+		return submitRejectionCodes
 	}
 
 	return localRejectionCodes

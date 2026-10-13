@@ -1541,6 +1541,104 @@ func (f failingValidator) Validate(_ context.Context, _ *bt.Tx, _ uint32, _ ...v
 	return nil, f.err
 }
 
+// TestHandleSendRawTransaction_ImmatureCoinbaseKeepsItsReason covers a spend of a
+// coinbase before it matures. Both utxo stores report it as TX_COINBASE_IMMATURE,
+// which the shared allowlist leaves off because the stores' messages carry node
+// state: the current height, and on aerospike the spend-batch counter. With
+// nothing it could show, the boundary answered "TX rejected: internal error" and
+// logged a node fault, and the wallet lost the one thing that says to wait.
+func TestHandleSendRawTransaction_ImmatureCoinbaseKeepsItsReason(t *testing.T) {
+	const (
+		maturityHeight = 742301
+		currentHeight  = 742290
+		batchID        = 918273
+	)
+
+	coinbase := chainhash.HashH([]byte("immature coinbase")).String()
+
+	// The validator's wrapper over each store's aggregate (Validator.go, Spend;
+	// sql.go and aerospike/spend.go, the batched-mode returns).
+	spending := func(store string, verdicts ...error) error {
+		return errors.NewProcessingError("[Validate][%s] error spending utxos", "abcd",
+			errors.NewUtxoError("error in %s spend (batched mode) - errors", store, errors.JoinCapped(4, verdicts...)))
+	}
+
+	// Built fresh for each row: Join chains the errors it is given in place.
+	sqlImmature := func() error {
+		return errors.NewTxCoinbaseImmatureError("[Spend] coinbase utxo not ready to spend for %s:%d, requires height %d, current %d",
+			coinbase, 0, maturityHeight, currentHeight)
+	}
+	aerospikeImmature := func() error {
+		return errors.NewTxCoinbaseImmatureError("[SPEND_BATCH_LUA][%s] coinbase is locked, blockHeight %d: %d - %s",
+			coinbase, currentHeight, batchID, "COINBASE_IMMATURE")
+	}
+
+	// What must never cross: the heights the store formats in and the batch counter.
+	hidden := []string{fmt.Sprint(maturityHeight), fmt.Sprint(currentHeight), fmt.Sprint(batchID)}
+
+	for name, tc := range map[string]struct {
+		err       error
+		want      string
+		nodeFault bool
+	}{
+		"sql": {
+			err:  spending("sql", sqlImmature()),
+			want: "TX rejected: bad-txns-premature-spend-of-coinbase",
+		},
+		"aerospike": {
+			err:  spending("aerospike", aerospikeImmature()),
+			want: "TX rejected: bad-txns-premature-spend-of-coinbase",
+		},
+		"aerospike, behind a frozen input": {
+			// aerospike joins its per-input verdicts in order, so an allowlisted one
+			// ahead of the immature input still leads.
+			err: spending("aerospike",
+				errors.NewUtxoFrozenError("[SPEND_BATCH_LUA][%s] UTXO is frozen, vout %d: %s", coinbase, 1, "FROZEN"),
+				aerospikeImmature()),
+			want: "TX rejected: UTXO is frozen, vout 1: FROZEN: bad-txns-premature-spend-of-coinbase",
+		},
+		"two immature inputs": {
+			err:  spending("aerospike", aerospikeImmature(), aerospikeImmature()),
+			want: "TX rejected: bad-txns-premature-spend-of-coinbase",
+		},
+		"over a node fault": {
+			err: spending("aerospike", aerospikeImmature(),
+				errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in LUA spend batch record, blockHeight %d: %d - %s",
+					coinbase, currentHeight, batchID, "TIMEOUT")),
+			want:      "TX rejected: bad-txns-premature-spend-of-coinbase",
+			nodeFault: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			logger := newCapturingLogger()
+			s := newRPCServerForAbsurdFeeTest(t, 10_000_000, 100_000_000, failingValidator{err: overGRPC(t, tc.err)})
+			s.logger = logger
+
+			_, err := handleSendRawTransaction(context.Background(), s, buildSendRawTxCmd(t, 99_999_000, nil), nil)
+
+			rpcErr := requireRPCError(t, err)
+			require.Equal(t, bsvjson.ErrRPCVerify, rpcErr.Code)
+			require.Equal(t, tc.want, rpcErr.Message)
+
+			for _, h := range hidden {
+				require.NotContains(t, rpcErr.Message, h)
+			}
+
+			if tc.nodeFault {
+				require.NotEmpty(t, logger.errorf, "a node fault beside the verdict is still a node fault")
+			} else {
+				require.Empty(t, logger.errorf, "waiting for maturity is the caller's to do")
+				require.NotEmpty(t, logger.debugf)
+			}
+		})
+	}
+
+	t.Run("only where a transaction was submitted", func(t *testing.T) {
+		rpcErr := buildRPCError(overGRPC(t, spending("sql", sqlImmature())), bsvjson.ErrRPCInternal.Code, "", scopeOpaque)
+		require.Equal(t, genericErrorMessage, rpcErr.Message)
+	})
+}
+
 // TestHandleSendRawTransaction_MissingInputsIsNotALookupMiss covers the site at
 // the PreviousOutputsDecorate call. A blanket not-found mapping answered -5
 // "No such mempool or blockchain transaction" here, about a transaction the
