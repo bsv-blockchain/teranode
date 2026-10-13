@@ -129,8 +129,20 @@ func moveRemainder(b *testing.B, nodes [][]subtreepkg.Node, from, to TxInpointsM
 				return
 			}
 
+			fromSplit, toSplit := splitMapsOf(from, to)
+
 			for _, batch := range part {
 				for k := range batch {
+					if fromSplit != nil {
+						// what the processor does between two in-memory maps: copy the stored record
+						if _, found := fromSplit.MoveTo(toSplit, batch[k].Hash); !found {
+							b.Error("remainder tx not found")
+							return
+						}
+
+						continue
+					}
+
 					parents, found := from.Get(batch[k].Hash)
 					if !found {
 						b.Error("remainder tx not found")
@@ -144,4 +156,16 @@ func moveRemainder(b *testing.B, nodes [][]subtreepkg.Node, from, to TxInpointsM
 	}
 
 	wg.Wait()
+}
+
+// splitMapsOf returns both maps as SplitTxInpointsMaps, or nils if either is not one.
+func splitMapsOf(from, to TxInpointsMap) (*SplitTxInpointsMap, *SplitTxInpointsMap) {
+	f, fok := from.(*SplitTxInpointsMap)
+	t, tok := to.(*SplitTxInpointsMap)
+
+	if !fok || !tok {
+		return nil, nil
+	}
+
+	return f, t
 }

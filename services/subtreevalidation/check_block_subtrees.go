@@ -1350,6 +1350,22 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		firstErr            error
 	)
 
+	// Transactions accepted whose two-phase-commit unlock failed. This path validates with
+	// WithIgnoreLocked(true), so a locked parent never answers a child in the next level
+	// TX_LOCKED and the unlock need not happen between levels. It runs once on return, covering
+	// the error returns too, so a level wait does not carry up to the unlock timeout per level.
+	var (
+		lockedHashes []chainhash.Hash
+		lockedMu     sync.Mutex
+	)
+
+	defer func() {
+		lockedMu.Lock()
+		defer lockedMu.Unlock()
+
+		u.unlockAcceptedTransactions(ctx, subtreeHash, lockedHashes)
+	}()
+
 	// Process each level in series, but all transactions within a level in parallel
 	for level := uint32(0); level <= maxLevel; level++ {
 		levelTxs := txsPerLevel[level]
@@ -1422,8 +1438,21 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 			}
 
 			g.Go(func() error {
-				// Use existing blessMissingTransaction logic for validation
-				txMeta, err := u.blessMissingTransaction(gCtx, blockHash, subtreeHash, tx, blockHeight, blockIds, &levelValidatorOptions)
+				// Use existing blessMissing logic for validation. The wrapper drops the
+				// accepted-but-unlock-failed signal this path needs, so call blessMissing direct.
+				txMeta, unlockFailed, err := u.blessMissing(gCtx, blockHash, subtreeHash, tx, blockHeight, blockIds, &levelValidatorOptions)
+
+				// Queue an accepted-but-locked parent for this level's unlock retry before handling
+				// err: the record is spent, created and delivered either way, and children in the next
+				// level spend its outputs. This path counted these transactions in bless_unlock_failed
+				// and, calling the blessMissingTransaction wrapper, had no unlockFailed to act on, so
+				// they stayed locked until mined.
+				if unlockFailed {
+					lockedMu.Lock()
+					lockedHashes = append(lockedHashes, *tx.TxIDChainHash())
+					lockedMu.Unlock()
+				}
+
 				if err != nil {
 					u.logger.Debugf("[processTransactionsInLevels] Failed to validate transaction %s: %v", tx.TxIDChainHash().String(), err)
 

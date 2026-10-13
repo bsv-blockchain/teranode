@@ -292,16 +292,17 @@ func RunProcessRemainderBenchmark(numChainedSubtrees, txsPerSubtree int, cpuProf
 	fmt.Printf("[%s] Created %d transaction hashes.\n", time.Since(benchStartTime), len(allTxHashes))
 
 	// Create transaction map with all transactions (simulating external block)
-	transactionMap := NewSplitSwissMap(1024, len(allTxHashes))
+	transactionMap := NewSortedHashSet(len(allTxHashes))
 	for _, hash := range allTxHashes {
 		if err := transactionMap.Put(hash); err != nil {
 			return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to put hash in transaction map", err)
 		}
 	}
 
-	// Production freezes the map after CreateTransactionMap; match it so the
-	// benchmark exercises the lock-free Exists path.
-	transactionMap.Freeze()
+	// Production freezes the set after CreateTransactionMap; Exists requires it.
+	if err := transactionMap.Freeze(runtime.GOMAXPROCS(0)); err != nil {
+		return ProcessRemainderBenchmarkResult{}, errors.NewProcessingError("failed to freeze transaction map", err)
+	}
 	fmt.Printf("[%s] Transaction map created with %d entries.\n", time.Since(benchStartTime), transactionMap.Length())
 
 	// Create current tx map for parent lookups

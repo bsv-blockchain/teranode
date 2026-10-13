@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
@@ -204,7 +205,17 @@ func TestLivenessResetBeatsPerBlock(t *testing.T) {
 	ba.subtreeStore = &probeSubtreeStore{Store: items.blobStore, onRead: reads.observe}
 	ba.utxoStore = &probeUtxoStore{Store: items.utxoStore, onMarkUnmined: marks.observe}
 
-	txMovedBack := chainhash.HashH([]byte("moved back only"))
+	// reset only marks moved-back transactions that still have a UTXO record
+	movedBackTx := bt.NewTx()
+	movedBackInput := &bt.Input{PreviousTxOutIndex: 0, PreviousTxSatoshis: 5000000000, SequenceNumber: 0xffffffff, UnlockingScript: bscript.NewFromBytes([]byte{})}
+	require.NoError(t, movedBackInput.PreviousTxIDAdd(&chainhash.Hash{}))
+	movedBackTx.Inputs = []*bt.Input{movedBackInput}
+	movedBackTx.Outputs = []*bt.Output{{Satoshis: 1000, LockingScript: bscript.NewFromBytes([]byte{0x76, 0xa9, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x88, 0xac})}}
+
+	_, _, err := items.utxoStore.SpendAndCreate(ctx, movedBackTx, 0, utxo.WithCreateOnly())
+	require.NoError(t, err)
+
+	txMovedBack := *movedBackTx.TxIDChainHash()
 	subtreeB := seedSubtree(t, items, txMovedBack)
 	subtreeA2 := seedSubtree(t, items, chainhash.HashH([]byte("main h2A")))
 	subtreeA3 := seedSubtree(t, items, chainhash.HashH([]byte("main h3A")))
@@ -230,7 +241,7 @@ func TestLivenessResetBeatsPerBlock(t *testing.T) {
 
 	ba.setBestBlockHeader(h3B, 3)
 
-	_, err := items.blockchainClient.InvalidateBlock(ctx, h3B.Hash())
+	_, err = items.blockchainClient.InvalidateBlock(ctx, h3B.Hash())
 	require.NoError(t, err)
 
 	reads.backdate()
