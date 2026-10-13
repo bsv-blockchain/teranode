@@ -10,6 +10,8 @@ import (
 
 	"github.com/bsv-blockchain/go-alert-system/app/config"
 	"github.com/bsv-blockchain/go-alert-system/app/models"
+	"github.com/bsv-blockchain/go-chaincfg"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
@@ -102,6 +104,64 @@ func TestServer_Init_basic(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, server.appConfig)
 	require.NotNil(t, server.appConfig.Services.Datastore)
+}
+
+// TestServer_loadConfig_networkDefaults verifies that the alert network identity
+// (genesis keys, protocol ID, topic) follows the configured chain when the
+// settings are left empty, and that explicit settings still win.
+func TestServer_loadConfig_networkDefaults(t *testing.T) {
+	newServer := func(t *testing.T, chainParams *chaincfg.Params, alert settings.AlertSettings) *Server {
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.ChainCfgParams = chainParams
+
+		alert.P2PPort = 8080
+		alert.P2PPrivateKey = "test_private_key"
+		alert.P2PDHTMode = tSettings.Alert.P2PDHTMode
+
+		storeURL, err := url.Parse("sqlitememory:///test_alert_" + chainParams.Name)
+		require.NoError(t, err)
+
+		alert.StoreURL = storeURL
+		tSettings.Alert = alert
+
+		return New(ulogger.TestLogger{}, tSettings, nil, nil, nil, nil, nil)
+	}
+
+	t.Run("testnet uses testnet defaults", func(t *testing.T) {
+		server := newServer(t, &chaincfg.TestNetParams, settings.AlertSettings{})
+
+		require.NoError(t, server.loadConfig(context.Background(), nil, true))
+
+		testnet := alertNetworkDefaults["testnet"]
+		require.Equal(t, testnet.GenesisKeys, server.appConfig.GenesisKeys)
+		require.Equal(t, "/bitcoin-testnet/alert-system/0.0.1", server.appConfig.P2P.AlertSystemProtocolID)
+		require.Equal(t, "bitcoin_alert_system_testnet", server.appConfig.P2P.TopicName)
+	})
+
+	t.Run("mainnet uses mainnet defaults", func(t *testing.T) {
+		server := newServer(t, &chaincfg.MainNetParams, settings.AlertSettings{})
+
+		require.NoError(t, server.loadConfig(context.Background(), nil, true))
+
+		mainnet := alertNetworkDefaults["mainnet"]
+		require.Equal(t, mainnet.GenesisKeys, server.appConfig.GenesisKeys)
+		require.Equal(t, "/bitcoin/alert-system/1.0.0", server.appConfig.P2P.AlertSystemProtocolID)
+		require.Equal(t, "bitcoin_alert_system", server.appConfig.P2P.TopicName)
+	})
+
+	t.Run("explicit settings override testnet defaults", func(t *testing.T) {
+		server := newServer(t, &chaincfg.TestNetParams, settings.AlertSettings{
+			GenesisKeys: []string{"custom_key"},
+			ProtocolID:  "/custom/alert-system/1.0.0",
+			TopicName:   "custom_topic",
+		})
+
+		require.NoError(t, server.loadConfig(context.Background(), nil, true))
+
+		require.Equal(t, []string{"custom_key"}, server.appConfig.GenesisKeys)
+		require.Equal(t, "/custom/alert-system/1.0.0", server.appConfig.P2P.AlertSystemProtocolID)
+		require.Equal(t, "custom_topic", server.appConfig.P2P.TopicName)
+	})
 }
 
 // TestServer_requireP2P validates P2P configuration processing and default value assignment,

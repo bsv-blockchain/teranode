@@ -6,11 +6,11 @@
 
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
-| GenesisKeys | []string | [] | alert_genesis_keys | **CRITICAL** - Service fails during Init() if empty (pipe-delimited) |
-| P2PPrivateKey | string | "" | alert_p2p_private_key | PEM-format private key. Auto-generates if empty |
-| ProtocolID | string | "/bitcoin/alert-system/1.0.0" | alert_protocol_id | libp2p protocol identifier |
+| GenesisKeys | []string | per network (see below) | alert_genesis_keys | Public keys allowed to sign alerts (pipe-delimited). Empty uses the network default |
+| P2PPrivateKey | string | "" | alert_p2p_private_key | Hex-encoded Ed25519 private key (64-byte seed‖pubkey). Auto-generates if empty |
+| ProtocolID | string | per network (see below) | alert_protocol_id | libp2p protocol identifier. Empty uses the network default |
 | StoreURL | *url.URL | "sqlite:///alert" | alert_store | Database connection URL |
-| TopicName | string | "bitcoin_alert_system" | alert_topic_name | P2P pubsub topic (auto-suffixed for testnet/regtest) |
+| TopicName | string | per network (see below) | alert_topic_name | P2P pubsub topic. Empty uses the network default |
 | P2PPort | int | 9908 | ALERT_P2P_PORT | P2P listening port (string length >= 2 after PORT_PREFIX applied) |
 | P2PBootstrapPeer | string | "" | alert_p2p_bootstrap_peer | Extra libp2p bootstrap multiaddr for private alert networks (public IPFS peers are still tried) |
 | P2PAllowPrivateIPs | bool | false | alert_p2p_allow_private_ips | Allow dialing/accepting/advertising RFC1918 addresses on the alert network |
@@ -19,13 +19,22 @@
 
 ## Network-Specific Behavior
 
-**Topic Name Suffixing:**
+**Alert Network Defaults:**
 
-- Mainnet: Uses configured `TopicName` as-is
-- Testnet: Auto-suffixed as `{TopicName}_testnet`
-- Regtest: Auto-suffixed as `{TopicName}_regtest`
+`GenesisKeys`, `ProtocolID` and `TopicName` are empty in `settings.conf`. Each empty setting is
+filled from the configured `network` when the service starts; a non-empty value is an explicit
+override and is used as-is. The defaults mirror go-alert-system's `app/config/envs/*.json` and
+live in `services/alert/network_defaults.go`.
 
-This behavior cannot be overridden.
+| Network | ProtocolID | TopicName | GenesisKeys |
+|---------|------------|-----------|-------------|
+| mainnet | `/bitcoin/alert-system/1.0.0` | `bitcoin_alert_system` | mainnet key set |
+| testnet | `/bitcoin-testnet/alert-system/0.0.1` | `bitcoin_alert_system_testnet` | testnet key set |
+| stn | `/bitcoin-stn/alert-system/0.0.1` | `bitcoin_alert_system_stn` | testnet key set |
+| others (regtest, teratestnet, tstn) | `/bitcoin/alert-system/1.0.0` | `bitcoin_alert_system_{network}` | mainnet key set |
+
+Networks without a public alert network fall back to the mainnet keys and protocol on a
+network-suffixed topic, and the service logs a warning. Set all three for a private alert network.
 
 **PORT_PREFIX Support:**
 
@@ -38,9 +47,12 @@ Example: `PORT_PREFIX=1` with `ALERT_P2P_PORT=9908` results in port 19908.
 **P2P Private Key:**
 
 - Triggers only if `P2PPrivateKey` is empty
-- Creates directory: `$HOME/.alert-system/` (permissions: 0750)
-- Creates file: `private_key.pem`
+- Creates directory: `$HOME/.bitcoin/` (permissions: 0750)
+- Writes the generated key to `$HOME/.bitcoin/alert_system_private_key`
 - Sets internal `PrivateKeyPath` (does not modify Teranode settings)
+- Loading the key back from that file is currently broken upstream
+  ([go-alert-system#185](https://github.com/bsv-blockchain/go-alert-system/issues/185)), so a new
+  peer identity is generated on every start. Set `alert_p2p_private_key` for a stable identity.
 
 ## Database Configuration
 
@@ -76,7 +88,7 @@ Example: `PORT_PREFIX=1` with `ALERT_P2P_PORT=9908` results in port 19908.
 
 | Setting | Validation | Error | When Checked |
 |---------|------------|-------|-------------|
-| GenesisKeys | Must not be empty | `config.ErrNoGenesisKeys` | During `Init()` |
+| GenesisKeys | Must not be empty after network defaults are applied | `config.ErrNoGenesisKeys` | During `Init()` |
 | P2P.IP | Length >= 5 characters | `config.ErrNoP2PIP` | During `Init()` |
 | P2P.Port | String length >= 2 characters | `config.ErrNoP2PPort` | During `Init()` |
 | StoreURL | Supported scheme (sqlite/sqlitememory/postgres/mysql) | `ErrDatastoreUnsupported` | During `Init()` |
@@ -87,17 +99,22 @@ Example: `PORT_PREFIX=1` with `ALERT_P2P_PORT=9908` results in port 19908.
 
 ```bash
 alert_store=postgres://user:pass@host:5432/alert_db?sslmode=require
-alert_genesis_keys=key1|key2|key3
 ALERT_P2P_PORT=4001
-alert_protocol_id=/bitcoin/alert-system/1.0.0
-alert_topic_name=bitcoin_alert_system
+# genesis keys, protocol ID and topic follow `network`; no need to set them
+```
+
+### Private Alert Network
+
+```bash
+alert_genesis_keys=key1|key2|key3
+alert_protocol_id=/my-net/alert-system/0.0.1
+alert_topic_name=my_net_alert_system
 ```
 
 ### Development Configuration
 
 ```bash
 alert_store=sqlite:///alert
-alert_genesis_keys=devkey1
 ```
 
 ### Auto-Generated Private Key
@@ -105,5 +122,6 @@ alert_genesis_keys=devkey1
 ```bash
 # Leave empty to auto-generate
 alert_p2p_private_key=
-# File will be created at: $HOME/.alert-system/private_key.pem
+# Written to $HOME/.bitcoin/alert_system_private_key, but regenerated on every
+# start until go-alert-system#185 is fixed
 ```
