@@ -8071,10 +8071,12 @@
 <li>
 <p><strong>Reorganization Size Protection</strong>:</p>
 <ul>
-<li>Monitors the size of potential chain reorganizations</li>
-<li>If a reorganization would require moving more than the coinbase maturity threshold (typically 100 blocks, configured via <code>Settings.ChainCfgParams.CoinbaseMaturity</code>) either backwards or forwards</li>
-<li>AND the current chain height is greater than 1000 blocks</li>
-<li>Triggers a full reset of the block assembler as a safety measure against deep reorganizations</li>
+<li>Monitors the size of potential chain reorganizations, by the deeper of the two sides (blocks moved back and blocks moved forward)</li>
+<li>Triggers a full reset of the block assembler instead of an in-place reorganization when either rule holds:<ul>
+<li>the depth is at least the effective UTXO store block height retention (<code>GetUtxoStoreBlockHeightRetention()</code>: global retention plus the UTXO store adjustment), at any height. Spent transactions of a side chain are deleted at their height plus that retention, so the blocks being moved forward may already have lost them. A retention of 0 (pruning disabled) turns this rule off.</li>
+<li>the depth is at least the coinbase maturity threshold (typically 100 blocks, <code>Settings.ChainCfgParams.CoinbaseMaturity</code>) and the current chain height is greater than 1000 blocks</li>
+</ul>
+</li>
 </ul>
 </li>
 </ol>
@@ -8102,9 +8104,7 @@
 <li>
 <p>Performs a safety check on reorganization depth:</p>
 <ul>
-<li>If the reorganization involves more than the coinbase maturity threshold (typically 100 blocks, configured via <code>Settings.ChainCfgParams.CoinbaseMaturity</code>) in either direction</li>
-<li>And the current chain height is greater than 1000</li>
-<li>The block assembler will reset rather than attempt the reorganization</li>
+<li>The block assembler resets rather than attempt the reorganization when the deeper side reaches the effective UTXO store block height retention at any height, or reaches the coinbase maturity threshold above height 1000 (see Reorganization Size Protection above)</li>
 </ul>
 </li>
 <li>
