@@ -1,11 +1,13 @@
 package httpimpl
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/services/asset/repository"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -253,5 +255,88 @@ func TestGetRestLegacyBlock(t *testing.T) {
 		// Check response status code
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 		assert.Equal(t, "PROCESSING (4): error getting block -> PROCESSING (4): error getting block", echoErr.Message)
+	})
+}
+
+// TestGetLegacyBlockUsesLegacyPeerPool pins the security-critical decision that
+// gates the internal legacy-peer-server pool
+// (asset_concurrency_get_legacy_block_reader_peer): it must key off the shared
+// secret asset_legacyPeerPoolToken, presented in the X-Teranode-Internal-Token
+// header, never off network origin or the wire=1 query parameter alone. A mock
+// repository observes the ctx GetLegacyBlock passes to GetLegacyBlockReader and
+// reports whether it was marked with repository.WithLegacyBlockReaderPeerPool.
+func TestGetLegacyBlockUsesLegacyPeerPool(t *testing.T) {
+	const validHash = "9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995"
+
+	setup := func(t *testing.T, configuredToken string) (*HTTP, *repository.Mock, echo.Context, *bool) {
+		t.Helper()
+
+		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
+		httpServer.settings.Asset.LegacyPeerPoolToken = configuredToken
+
+		reader, writer := io.Pipe()
+		go func() {
+			defer writer.Close()
+			_, _ = writer.Write([]byte("test"))
+		}()
+
+		usedPeerPool := false
+
+		mockRepo.On("GetLegacyBlockReader", mock.Anything, mock.Anything, mock.Anything).
+			Run(func(args mock.Arguments) {
+				ctx, ok := args.Get(0).(context.Context)
+				require.True(t, ok, "GetLegacyBlockReader must be called with a context.Context as its first argument")
+				usedPeerPool = repository.LegacyBlockReaderUsesPeerPool(ctx)
+			}).
+			Return(reader, nil)
+
+		echoContext.SetPath("/block_legacy/:hash")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues(validHash)
+
+		return httpServer, mockRepo, echoContext, &usedPeerPool
+	}
+
+	t.Run("wire=1 with the correct token uses the peer pool", func(t *testing.T) {
+		httpServer, _, echoContext, usedPeerPool := setup(t, "correct-token")
+		echoContext.Request().URL.RawQuery = "wire=1"
+		echoContext.Request().Header.Set(legacyInternalTokenHeader, "correct-token")
+
+		require.NoError(t, httpServer.GetLegacyBlock()(echoContext))
+		require.True(t, *usedPeerPool, "wire=1 with the correct token must use the peer pool")
+	})
+
+	t.Run("wire=1 with the wrong token uses the anonymous pool", func(t *testing.T) {
+		httpServer, _, echoContext, usedPeerPool := setup(t, "correct-token")
+		echoContext.Request().URL.RawQuery = "wire=1"
+		echoContext.Request().Header.Set(legacyInternalTokenHeader, "wrong-token")
+
+		require.NoError(t, httpServer.GetLegacyBlock()(echoContext))
+		require.False(t, *usedPeerPool, "wire=1 with the wrong token must not use the peer pool")
+	})
+
+	t.Run("wire=1 with no token header uses the anonymous pool", func(t *testing.T) {
+		httpServer, _, echoContext, usedPeerPool := setup(t, "correct-token")
+		echoContext.Request().URL.RawQuery = "wire=1"
+
+		require.NoError(t, httpServer.GetLegacyBlock()(echoContext))
+		require.False(t, *usedPeerPool, "wire=1 with no token header must not use the peer pool")
+	})
+
+	t.Run("the correct token without wire=1 uses the anonymous pool", func(t *testing.T) {
+		httpServer, _, echoContext, usedPeerPool := setup(t, "correct-token")
+		echoContext.Request().Header.Set(legacyInternalTokenHeader, "correct-token")
+
+		require.NoError(t, httpServer.GetLegacyBlock()(echoContext))
+		require.False(t, *usedPeerPool, "a correct token without wire=1 must not use the peer pool")
+	})
+
+	t.Run("an empty configured token makes the peer pool unreachable regardless of any header", func(t *testing.T) {
+		httpServer, _, echoContext, usedPeerPool := setup(t, "")
+		echoContext.Request().URL.RawQuery = "wire=1"
+		echoContext.Request().Header.Set(legacyInternalTokenHeader, "anything-at-all")
+
+		require.NoError(t, httpServer.GetLegacyBlock()(echoContext))
+		require.False(t, *usedPeerPool, "an empty configured token must make the peer pool unreachable")
 	})
 }

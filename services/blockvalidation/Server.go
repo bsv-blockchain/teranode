@@ -2810,7 +2810,10 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 
 		// Report peer failure to P2P service for reputation tracking
 		// This ensures peers with misconfigured asset servers (e.g., 401 errors) have their reputation degraded
-		if blockFound.peerID != "" {
+		// A 429 is not charged: /block/:hash shares the peer's per-IP rate-limit bucket with the catch-up
+		// routes our own fan-out drains, so it is our collision, not the announcer's fault. Same reasoning as
+		// isLocalCatchupFault, which is too broad here: it also treats a 401 or 500 (ErrServiceError) as local.
+		if blockFound.peerID != "" && !errors.Is(err, errors.ErrServiceRateLimited) {
 			u.reportCatchupFailure(ctx, blockFound.peerID)
 			u.reportCatchupError(ctx, blockFound.peerID, err.Error())
 		}

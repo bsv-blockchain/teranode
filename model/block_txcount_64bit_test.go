@@ -7,7 +7,6 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
-	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 )
@@ -77,7 +76,7 @@ func TestCheckDuplicateTransactionsUsesFullCount(t *testing.T) {
 	// The map is sized from the loaded body, not the claimed count.
 	require.Equal(t, uint64(4), block.txMapCount)
 
-	inMemory, ok := block.txMap.(*txmap.SplitSwissMapUint64)
+	inMemory, ok := block.txMap.(*blockNodeIndex)
 	require.True(t, ok)
 	require.Equal(t, 3, inMemory.Length())
 
@@ -124,7 +123,7 @@ func TestCheckDuplicateTransactionsAboveUint32(t *testing.T) {
 	// Sized from the four loaded nodes, not from the claimed 2^32+1.
 	require.Equal(t, uint64(4), block.txMapCount)
 
-	inMemory, ok := block.txMap.(*txmap.SplitSwissMapUint64)
+	inMemory, ok := block.txMap.(*blockNodeIndex)
 	require.True(t, ok)
 	require.Equal(t, 3, inMemory.Length())
 
