@@ -911,6 +911,23 @@ func TestMiningSubmission_FailsClosedOnWhatItCannotRead(t *testing.T) {
 	}
 }
 
+// TestAssemblyRefusal_CrossesOnlyWhereAMinerSubmitted: a PROCESSING chain from
+// blockassembly is the caller's fault only at submitminingsolution, where the
+// caller sent what was refused. getminingcandidate's failure to build a candidate
+// (blockassembly/BlockAssembler.go) has the same shape and is the node's own.
+func TestAssemblyRefusal_CrossesOnlyWhereAMinerSubmitted(t *testing.T) {
+	topTree := overGRPC(t, errors.NewProcessingError("error creating top tree",
+		errors.New(errors.ERR_UNKNOWN, "invalid number of leaves")))
+
+	// The control: this is a shape the mining scope reads, so what keeps it off
+	// the wire below is the scope and nothing else.
+	submitted := buildRPCError(topTree, bsvjson.ErrRPCInternal.Code, "", scopeMiningSubmission)
+	require.Equal(t, "error creating top tree", submitted.Message)
+
+	candidate := buildRPCError(topTree, bsvjson.ErrRPCInternal.Code, "", scopeOpaque)
+	require.Equal(t, genericErrorMessage, candidate.Message)
+}
+
 // TestHandleSubmitMiningSolution_JobIDMustBeAHash: blockassembly keys jobs by a
 // 32-byte hash, so an id of any other length names no job. The handler checks it
 // before the hop, as getrawtransaction checks its txid, and answers as svnode's
