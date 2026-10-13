@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 
@@ -40,9 +41,14 @@ func TestPrunerSkipsUnminedRecords(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			insert(1, false, 50)  // unmined, not conflicting: must survive
+			insert(1, false, 50)  // unmined, not conflicting: must survive, DAH cleared
 			insert(2, true, 50)   // unmined, conflicting: deleted
 			insert(3, false, nil) // mined: deleted
+
+			// unmined and preserved: survives and keeps its DAH, as the Aerospike Lua does
+			insert(4, false, 50)
+			_, err = store.db.ExecContext(ctx, `UPDATE transactions SET preserve_until = 500 WHERE hash = $1`, []byte{4})
+			require.NoError(t, err)
 
 			deleted, err := prunerSvc.Prune(ctx, pruneHeight, "test")
 			require.NoError(t, err)
@@ -53,6 +59,23 @@ func TestPrunerSkipsUnminedRecords(t *testing.T) {
 			require.NoError(t, store.db.QueryRowContext(ctx, `SELECT hash FROM transactions WHERE hash IN ($1,$2,$3)`,
 				[]byte{1}, []byte{2}, []byte{3}).Scan(&remaining))
 			require.Equal(t, []byte{1}, remaining)
+
+			dah := func(hash byte) sql.NullInt64 {
+				var v sql.NullInt64
+
+				require.NoError(t, store.db.QueryRowContext(ctx, `SELECT delete_at_height FROM transactions WHERE hash = $1`, []byte{hash}).Scan(&v))
+
+				return v
+			}
+
+			require.False(t, dah(1).Valid, "skipped unmined record must have its DAH cleared")
+			require.True(t, dah(4).Valid, "preserved unmined record must keep its DAH")
+
+			// a second cycle no longer matches the cleared record
+			var matching int
+
+			require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM transactions WHERE delete_at_height <= $1 AND hash = $2`, pruneHeight, []byte{1}).Scan(&matching))
+			require.Zero(t, matching)
 		})
 	}
 }

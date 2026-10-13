@@ -89,6 +89,13 @@ var prometheusUtxoRecordsSkippedUnmined = promauto.NewCounter(prometheus.Counter
 	Help: "Total number of records kept by the pruner because they are currently unmined and not conflicting",
 })
 
+// prometheusUtxoDAHClearedUnmined counts records whose deleteAtHeight the pruner cleared because they
+// are unmined. Package-level for the same reason as prometheusUtxoRecordsSkippedUnmined.
+var prometheusUtxoDAHClearedUnmined = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "utxo_pruner_dah_cleared_unmined_total",
+	Help: "Total number of records whose deleteAtHeight was cleared because they are unmined",
+})
+
 var (
 	prometheusMetricsInitOnce                 sync.Once
 	prometheusUtxoCleanupBatch                prometheus.Histogram
@@ -980,7 +987,9 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 
 	// Do not delete a record that is currently unmined, unless it is conflicting. Counted separately
 	// from the defensive skip count.
-	chunk, _ = s.dropUnminedRecords(chunk)
+	chunk, _, clears := s.dropUnminedRecords(chunk)
+	s.clearUnminedDAH(clears)
+
 	if len(chunk) == 0 {
 		return 0, 0, nil
 	}
@@ -1282,8 +1291,11 @@ func (s *Service) readMasters(keys []*aerospike.Key) ([]masterRead, error) {
 // unconditional, so a transaction that becomes unmined between the query and the delete can still be
 // deleted. TTL-based deletion (utxoSetTTL) is likewise not covered once a record has been touched.
 //
-// A protected record keeps its DAH, so it is returned again by every prune cycle until it is mined
-// again or its DAH is cleared.
+// A record protected on positive evidence (not on an uncertain read) is returned in clears so that
+// its deleteAtHeight, and that of its pagination records, can be cleared with clearUnminedDAH. That
+// matches the store invariant (Lua setDeleteAtHeight clears the DAH of an unmined record) and takes
+// the record out of the DAH index. Records kept because a read failed keep their DAH and are retried
+// next cycle.
 //
 // Masters are identified by the totalExtraRecs bin. A master written without that bin is also handled:
 // it is the record stored under the bare txid, found by comparing key digests.
@@ -1293,7 +1305,7 @@ func (s *Service) readMasters(keys []*aerospike.Key) ([]masterRead, error) {
 // records would be deleted from under a protected master. The page is kept whenever the answer is
 // uncertain (batch failure, per-record error other than key-not-found, empty result, key build error);
 // the next prune cycle retries it. A page whose master does not exist (orphan) is deleted.
-func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Result, int) {
+func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Result, int, []*dahClear) {
 	isProtected := func(bins aerospike.BinMap) bool {
 		if v, ok := bins[s.fieldUnminedSince]; !ok || v == nil {
 			return false
@@ -1319,6 +1331,18 @@ func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Re
 		dropped++
 	}
 
+	clearsByMaster := make(map[string]*dahClear)
+
+	addClear := func(masterKey *aerospike.Key, pageKeys ...*aerospike.Key) {
+		c, ok := clearsByMaster[string(masterKey.Digest())]
+		if !ok {
+			c = &dahClear{masterKey: masterKey}
+			clearsByMaster[string(masterKey.Digest())] = c
+		}
+
+		c.pageKeys = append(c.pageKeys, pageKeys...)
+	}
+
 	for i, rec := range chunk {
 		if rec.Err != nil || rec.Record == nil || rec.Record.Bins == nil {
 			continue
@@ -1326,9 +1350,23 @@ func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Re
 
 		bins := rec.Record.Bins
 
-		if _, isMaster := bins[s.fieldTotalExtraRecs]; isMaster {
+		if extraRecs, isMaster := bins[s.fieldTotalExtraRecs]; isMaster {
 			if isProtected(bins) {
 				protect(i)
+
+				var pageKeys []*aerospike.Key
+
+				if n, _ := extraRecs.(int); n > 0 {
+					if h, herr := chainhash.NewHash(bytesBin(bins[s.fieldTxID])); herr == nil {
+						for num := 1; num <= n; num++ {
+							if k, kerr := aerospike.NewKey(s.namespace, s.set, uaerospike.CalculateKeySourceInternal(h, uint32(num))); kerr == nil { //nolint:gosec
+								pageKeys = append(pageKeys, k)
+							}
+						}
+					}
+				}
+
+				addClear(rec.Record.Key, pageKeys...)
 			}
 
 			continue
@@ -1341,12 +1379,6 @@ func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Re
 			continue
 		}
 
-		if isProtected(bins) {
-			protect(i)
-
-			continue
-		}
-
 		txHash, err := chainhash.NewHash(txIDBytes)
 		if err != nil {
 			continue
@@ -1356,6 +1388,16 @@ func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Re
 		if err != nil {
 			// cannot tell whether this is the master or a page, so keep it
 			protect(i)
+
+			continue
+		}
+
+		if isProtected(bins) {
+			protect(i)
+
+			if bytes.Equal(masterKey.Digest(), rec.Record.Key.Digest()) {
+				addClear(rec.Record.Key) // legacy master
+			}
 
 			continue
 		}
@@ -1392,6 +1434,10 @@ func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Re
 					keep = true // neither an error nor a record: ambiguous
 				default:
 					keep = isProtected(r.record.Bins)
+					if keep {
+						// positively unmined: the master and this page lose their DAH
+						addClear(p.masterKey, chunk[p.idx].Record.Key)
+					}
 				}
 			}
 
@@ -1402,7 +1448,7 @@ func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Re
 	}
 
 	if dropped == 0 {
-		return chunk, 0
+		return chunk, 0, nil
 	}
 
 	prometheusUtxoRecordsSkippedUnmined.Add(float64(dropped))
@@ -1414,7 +1460,114 @@ func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Re
 		}
 	}
 
-	return kept, dropped
+	clears := make([]*dahClear, 0, len(clearsByMaster))
+	for _, c := range clearsByMaster {
+		clears = append(clears, c)
+	}
+
+	return kept, dropped, clears
+}
+
+// dahClear names a protected master whose deleteAtHeight, and that of the listed pagination
+// records, is to be cleared.
+type dahClear struct {
+	masterKey *aerospike.Key
+	pageKeys  []*aerospike.Key
+}
+
+func bytesBin(v interface{}) []byte {
+	b, _ := v.([]byte)
+	return b
+}
+
+// clearUnminedDAH clears deleteAtHeight on protected unmined masters and then on their pagination
+// records, one batch each, and returns how many records were cleared. The master write only applies
+// while the record is still unmined, not conflicting and not preserved, so a concurrent re-mine is not
+// undone; when it is filtered out the pages are left alone too. The pages are written only after their
+// master succeeded. A pagination record whose DAH is cleared right as the master is re-mined can lose
+// its DAH, which leaves it behind rather than deleting it.
+//
+// A failure is only logged: nothing is deleted on its account and the records are returned by the DAH
+// query again next cycle. Nothing is written when deletions are skipped (dry run).
+func (s *Service) clearUnminedDAH(clears []*dahClear) int {
+	if len(clears) == 0 || s.settings.Pruner.SkipDeletions {
+		return 0
+	}
+
+	dahBin := aerospike.NewBin(s.fieldDeleteAtHeight, nil)
+
+	masterPolicy := aerospike.NewBatchWritePolicy()
+	masterPolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+	masterPolicy.FilterExpression = aerospike.ExpAnd(
+		aerospike.ExpBinExists(s.fieldUnminedSince),
+		aerospike.ExpNot(aerospike.ExpBinExists(fields.PreserveUntil.String())),
+		aerospike.ExpOr(
+			aerospike.ExpNot(aerospike.ExpBinExists(s.fieldConflicting)),
+			aerospike.ExpNot(aerospike.ExpBoolBin(s.fieldConflicting)),
+		),
+	)
+
+	masterBatch := make([]aerospike.BatchRecordIfc, len(clears))
+	for i, c := range clears {
+		masterBatch[i] = aerospike.NewBatchWrite(masterPolicy, c.masterKey, aerospike.PutOp(dahBin))
+	}
+
+	if err := s.client.BatchOperate(s.batchPolicy, masterBatch); err != nil {
+		s.logger.Errorf("[pruner] failed to clear deleteAtHeight of %d unmined records, retrying next cycle: %v", len(clears), err)
+		return 0
+	}
+
+	pagePolicy := aerospike.NewBatchWritePolicy()
+	pagePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+
+	var pageBatch []aerospike.BatchRecordIfc
+
+	cleared, failed := 0, 0
+
+	for i, c := range clears {
+		br := masterBatch[i].BatchRec()
+		if br.Err != nil {
+			var asErr aerospike.Error
+			if errors.As(br.Err, &asErr) && asErr.Matches(types.FILTERED_OUT, types.KEY_NOT_FOUND_ERROR) {
+				continue // re-mined, conflicting, preserved or gone: leave it alone
+			}
+
+			failed++
+
+			continue
+		}
+
+		cleared++
+
+		for _, pk := range c.pageKeys {
+			pageBatch = append(pageBatch, aerospike.NewBatchWrite(pagePolicy, pk, aerospike.PutOp(dahBin)))
+		}
+	}
+
+	if len(pageBatch) > 0 {
+		if err := s.client.BatchOperate(s.batchPolicy, pageBatch); err != nil {
+			s.logger.Errorf("[pruner] failed to clear deleteAtHeight of %d pagination records, retrying next cycle: %v", len(pageBatch), err)
+		} else {
+			for _, r := range pageBatch {
+				if r.BatchRec().Err == nil {
+					cleared++
+				} else {
+					failed++
+				}
+			}
+		}
+	}
+
+	if failed > 0 {
+		s.logger.Errorf("[pruner] failed to clear deleteAtHeight of %d unmined records, retrying next cycle", failed)
+	}
+
+	if cleared > 0 {
+		prometheusUtxoDAHClearedUnmined.Add(float64(cleared))
+		s.logger.Infof("[pruner] cleared deleteAtHeight of %d unmined records", cleared)
+	}
+
+	return cleared
 }
 
 // batchVerifyChildrenSafety checks multiple child transactions at once to determine if their parents

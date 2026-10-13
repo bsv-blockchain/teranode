@@ -72,7 +72,7 @@ func TestDropUnminedRecords(t *testing.T) {
 
 			before := testutil.ToFloat64(prometheusUtxoRecordsSkippedUnmined)
 
-			kept, dropped := svc.dropUnminedRecords([]*aerospike.Result{tt.rec})
+			kept, dropped, _ := svc.dropUnminedRecords([]*aerospike.Result{tt.rec})
 
 			require.Equal(t, tt.wantReads, called)
 
@@ -87,4 +87,60 @@ func TestDropUnminedRecords(t *testing.T) {
 			require.Equal(t, float64(dropped), testutil.ToFloat64(prometheusUtxoRecordsSkippedUnmined)-before)
 		})
 	}
+}
+
+// TestDropUnminedRecords_Clears verifies which records are handed back for DAH clearing: only those
+// protected on positive evidence, with the pagination keys of a master, never uncertain keeps.
+func TestDropUnminedRecords_Clears(t *testing.T) {
+	svc := newTestService(t)
+	svc.fieldConflicting = "conflicting"
+
+	txID := chainhash.HashH([]byte("tx"))
+
+	record := func(num uint32, bins aerospike.BinMap) *aerospike.Result {
+		key, err := aerospike.NewKey(svc.namespace, svc.set, uaerospike.CalculateKeySourceInternal(&txID, num))
+		require.NoError(t, err)
+
+		bins[svc.fieldTxID] = txID.CloneBytes()
+
+		return &aerospike.Result{Record: &aerospike.Record{Key: key, Bins: bins}}
+	}
+
+	t.Run("unmined master with 2 pages", func(t *testing.T) {
+		_, dropped, clears := svc.dropUnminedRecords([]*aerospike.Result{
+			record(0, aerospike.BinMap{svc.fieldUnminedSince: 7, svc.fieldTotalExtraRecs: 2}),
+		})
+		require.Equal(t, 1, dropped)
+		require.Len(t, clears, 1)
+		require.Len(t, clears[0].pageKeys, 2)
+	})
+
+	t.Run("page of unmined master is merged under its master", func(t *testing.T) {
+		svc.readMastersFn = func(keys []*aerospike.Key) ([]masterRead, error) {
+			return []masterRead{{record: &aerospike.Record{Bins: aerospike.BinMap{svc.fieldUnminedSince: 7}}}}, nil
+		}
+		defer func() { svc.readMastersFn = nil }()
+
+		_, dropped, clears := svc.dropUnminedRecords([]*aerospike.Result{record(1, aerospike.BinMap{})})
+		require.Equal(t, 1, dropped)
+		require.Len(t, clears, 1)
+		require.Len(t, clears[0].pageKeys, 1)
+	})
+
+	t.Run("uncertain keep is not cleared", func(t *testing.T) {
+		svc.readMastersFn = func(keys []*aerospike.Key) ([]masterRead, error) {
+			return nil, &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+		}
+		defer func() { svc.readMastersFn = nil }()
+
+		_, dropped, clears := svc.dropUnminedRecords([]*aerospike.Result{record(1, aerospike.BinMap{})})
+		require.Equal(t, 1, dropped)
+		require.Empty(t, clears)
+	})
+
+	t.Run("mined master is not cleared", func(t *testing.T) {
+		_, dropped, clears := svc.dropUnminedRecords([]*aerospike.Result{record(0, aerospike.BinMap{svc.fieldTotalExtraRecs: 1})})
+		require.Zero(t, dropped)
+		require.Empty(t, clears)
+	})
 }
