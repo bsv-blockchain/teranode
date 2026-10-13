@@ -4,10 +4,8 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
-	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -68,6 +66,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 	allErrors := make([]error, 0, 10)
 	firstMissing := make([]chainhash.Hash, 0, 10)
 	var errorCount, missingCount, childDAHFailed int64
+	var droppedErrors int // child errors beyond the allErrors cap, guarded by mu
 	var mu sync.Mutex
 
 	currentBlockHeight := s.GetBlockHeight()
@@ -101,6 +100,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				aerospike.GetBinOp(fields.DeleteAtHeight.String()),
 				aerospike.GetBinOp(fields.External.String()),
 				aerospike.GetBinOp(fields.TotalExtraRecs.String()),
+				aerospike.GetBinOp(fields.UnminedSince.String()), // old value, for a restore
 				unminedOp,
 			)
 			ops = append(ops, s.buildDeleteAtHeightOpsFromRecordHeight(currentBlockHeight, retention, true)...)
@@ -192,8 +192,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				// are deleted by computed key together with their master when the master is pruned.
 				var followUps childDAHFollowUps
 
-				oldDAH := make(map[chainhash.Hash]*uint32)
-				newDAH := make(map[chainhash.Hash]*uint32)
+				states := make(map[chainhash.Hash]masterState)
 
 				// Check individual record results
 				for j, batchRecord := range batchRecords {
@@ -203,7 +202,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 							if state, perr := s.parseSetMinedState(batchRecord.BatchRec().Record.Bins); perr == nil {
 								h := batchHashes[j]
 								followUps.collect(&h, state)
-								oldDAH[h], newDAH[h] = state.OldDeleteAtHeight, state.NewDeleteAtHeight
+								states[h] = masterState{oldDAH: state.OldDeleteAtHeight, newDAH: state.NewDeleteAtHeight, oldUnminedSince: oldUnminedSinceFrom(batchRecord.BatchRec().Record.Bins)}
 							}
 						}
 
@@ -231,10 +230,12 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 					mu.Unlock()
 				}
 
-				if err := s.applyLongestChainChildDAH(&followUps, oldDAH, newDAH, &childDAHFailed); err != nil {
+				if err := s.applyLongestChainChildDAH(gCtx, &followUps, states, &childDAHFailed); err != nil {
 					mu.Lock()
 					if len(allErrors) < 10 {
 						allErrors = append(allErrors, err)
+					} else {
+						droppedErrors++ // the cap must not hide a child failure
 					}
 					mu.Unlock()
 				}
@@ -270,6 +271,14 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 		if finalErrorCount > 10 {
 			s.logger.Errorf("[MarkTransactionsOnLongestChain] only returned first 10 of %d errors", finalErrorCount)
 		}
+		mu.Lock()
+		dropped := droppedErrors
+		mu.Unlock()
+
+		if dropped > 0 {
+			s.logger.Errorf("[MarkTransactionsOnLongestChain] %d further pagination-record DAH errors were not returned", dropped)
+		}
+
 		return errors.Join(allErrors...)
 	}
 
@@ -279,38 +288,73 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 // applyLongestChainChildDAH applies the pagination-record follow-ups of one batch through the shared
 // applyChildDAHFollowUps (unsets first, chunked, each chunk retried once).
 //
-// The master DAH was already written, and a retry of MarkTransactionsOnLongestChain would see
-// old == new and queue nothing, so a child write that still fails must not be left behind:
+// The master write already happened (DAH stamped or cleared, unmined_since cleared), and a retry of
+// MarkTransactionsOnLongestChain would see old == new and queue nothing, so a child write that still
+// fails must not be left behind:
 //   - failed UNSET: the pages keep a stale DAH under a master that has none, so the DAH pruner could
 //     delete them while the master is live;
 //   - failed RAISE (X -> Y): the pages stay at the lower X while the master is at Y, so they could be
 //     pruned before the master.
 //
-// Both restore the master to its previous DAH (conditional on it still being what this call wrote), so
-// a retry redoes the whole transition. A failed first-time SET (nil -> X) only leaks: the master
-// carries the DAH and the pages cannot be pruned early; it is reported, not rolled back. A page that
-// is merely missing its DAH is harmless in any case: pages are deleted with their master by computed key.
+// Both restore the master with the shared restoreDAHBatch, in one write per master that puts back the
+// previous DAH AND the previous unmined_since (the same write cleared it; a record with a stale DAH and
+// no unmined_since would be invisible to the repair scan). The restore only applies while the record is
+// still in the state this call left it in: DAH unchanged, unmined_since absent, not preserved. A failed
+// first-time SET (nil -> X) only leaks: the master carries the DAH and the pages cannot be pruned
+// early; it is reported, not rolled back. A page merely missing its DAH is harmless: pages are deleted
+// with their master by computed key.
 //
-// Child failures are counted in childDAHFailed, not in the per-transaction error count.
-func (s *Store) applyLongestChainChildDAH(f *childDAHFollowUps, oldDAH, newDAH map[chainhash.Hash]*uint32, childDAHFailed *int64) error {
-	applied := s.applyChildDAHFollowUps(f)
+// Child failures are counted in childDAHFailed, not in the per-transaction error count. The returned
+// error is never dropped by the caller's error cap (see its use).
+func (s *Store) applyLongestChainChildDAH(ctx context.Context, f *childDAHFollowUps, st map[chainhash.Hash]masterState, childDAHFailed *int64) error {
+	applied := s.applyChildDAHFollowUps(ctx, f)
 
 	atomic.AddInt64(childDAHFailed, int64(len(applied.failedUnsets)+len(applied.failedSets)))
 
-	restore := applied.failedUnsets
+	failed := applied.failedUnsets
 	for _, item := range applied.failedSets {
-		if oldDAH[*item.TxID] != nil {
-			restore = append(restore, item)
+		if st[*item.TxID].oldDAH != nil {
+			failed = append(failed, item)
 		}
 	}
 
-	var restoreErr error
+	restores := make([]dahRestore, 0, len(failed))
 
-	for _, item := range restore {
+	for _, item := range failed {
 		id := *item.TxID
-		if err := s.restoreMasterDAHWithRetry(&id, oldDAH[id], newDAH[id]); err != nil {
-			restoreErr = errors.JoinCapped(10, restoreErr, err)
+
+		key, err := aerospike.NewKey(s.namespace, s.setName, id[:])
+		if err != nil {
+			continue
 		}
+
+		m := st[id]
+
+		dahBin := aerospike.NewBin(fields.DeleteAtHeight.String(), nil)
+		if m.oldDAH != nil {
+			dahBin = aerospike.NewBin(fields.DeleteAtHeight.String(), int(*m.oldDAH))
+		}
+
+		unminedBin := aerospike.NewBin(fields.UnminedSince.String(), nil)
+		if m.oldUnminedSince != nil {
+			unminedBin = aerospike.NewBin(fields.UnminedSince.String(), *m.oldUnminedSince)
+		}
+
+		restores = append(restores, dahRestore{
+			ID:   id.String(),
+			Key:  key,
+			Bins: []*aerospike.Bin{dahBin, unminedBin},
+			Filter: aerospike.ExpAnd(
+				dahUnchangedExpression(m.newDAH),
+				aerospike.ExpNot(aerospike.ExpBinExists(fields.UnminedSince.String())),
+				aerospike.ExpNot(aerospike.ExpBinExists(fields.PreserveUntil.String())),
+			),
+		})
+	}
+
+	var restoreErr error
+	if len(restores) > 0 {
+		restoreErr = s.restoreDAHBatch(ctx, restores)
 	}
 
 	if err := errors.JoinCapped(10, applied.unsetErr, applied.setErr, restoreErr); err != nil {
@@ -320,69 +364,31 @@ func (s *Store) applyLongestChainChildDAH(f *childDAHFollowUps, oldDAH, newDAH m
 	return nil
 }
 
-// restoreMasterDAHWithRetry restores a master's previous DAH, retrying once after a backoff.
-func (s *Store) restoreMasterDAHWithRetry(txID *chainhash.Hash, oldDAH, newDAH *uint32) error {
-	err := s.restoreMasterDAH(txID, oldDAH, newDAH)
-	if err != nil {
-		time.Sleep(childDAHRetryBackoff)
-		err = s.restoreMasterDAH(txID, oldDAH, newDAH)
-	}
-
-	if err != nil {
-		s.logger.Errorf("[MarkTransactionsOnLongestChain] restore failed for tx %s: master DAH is %v and its pages may carry a different one: %v", txID, newDAH, err)
-
-		return errors.NewStorageError("[MarkTransactionsOnLongestChain] restore failed for tx %s", txID.String(), err)
-	}
-
-	return nil
+// masterState is a master's state before and after the longest-chain write, as read by that write.
+type masterState struct {
+	oldDAH, newDAH  *uint32
+	oldUnminedSince *int
 }
 
-// restoreMasterDAH puts the master's DAH back to oldDAH (a nil bin deletes it), but only while the
-// DAH is still what this call wrote (newDAH, or absent). If another writer changed it meanwhile the
-// record is theirs and is left alone. Routed through s.batchOperate so tests can inject failures.
-func (s *Store) restoreMasterDAH(txID *chainhash.Hash, oldDAH, newDAH *uint32) error {
-	key, err := aerospike.NewKey(s.namespace, s.setName, txID[:])
-	if err != nil {
-		return err
-	}
-
-	policy := util.GetAerospikeBatchWritePolicy(s.settings)
-	policy.RecordExistsAction = aerospike.UPDATE_ONLY
-	policy.FilterExpression = dahUnchangedExpression(newDAH)
-
-	bin := aerospike.NewBin(fields.DeleteAtHeight.String(), nil)
-	if oldDAH != nil {
-		bin = aerospike.NewBin(fields.DeleteAtHeight.String(), int(*oldDAH))
-	}
-
-	br := aerospike.NewBatchWrite(policy, key, aerospike.PutOp(bin))
-
-	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), []aerospike.BatchRecordIfc{br}); err != nil {
-		return err
-	}
-
-	if recErr := br.BatchRec().Err; recErr != nil {
-		var aErr *aerospike.AerospikeError
-		if errors.As(recErr, &aErr) && (aErr.ResultCode == types.FILTERED_OUT || aErr.ResultCode == types.KEY_NOT_FOUND_ERROR) {
-			return nil // another writer owns the record, or it is gone: nothing to restore
+// oldUnminedSinceFrom extracts the unmined_since value read before the write (bare or as the first
+// operation result); nil if the bin was absent.
+func oldUnminedSinceFrom(bins aerospike.BinMap) *int {
+	switch v := bins[fields.UnminedSince.String()].(type) {
+	case int:
+		return &v
+	case aerospike.OpResults:
+		if len(v) > 0 {
+			if n, ok := v[0].(int); ok {
+				return &n
+			}
 		}
-
-		return recErr
+	case []interface{}:
+		if len(v) > 0 {
+			if n, ok := v[0].(int); ok {
+				return &n
+			}
+		}
 	}
 
 	return nil
-}
-
-// dahUnchangedExpression matches a record whose DAH is still newDAH (or absent when newDAH is nil).
-func dahUnchangedExpression(newDAH *uint32) *aerospike.Expression {
-	dahBin := fields.DeleteAtHeight.String()
-
-	if newDAH == nil {
-		return aerospike.ExpNot(aerospike.ExpBinExists(dahBin))
-	}
-
-	return aerospike.ExpCond(
-		aerospike.ExpBinExists(dahBin), aerospike.ExpEq(aerospike.ExpIntBin(dahBin), aerospike.ExpIntVal(int64(*newDAH))),
-		aerospike.ExpBoolVal(false),
-	)
 }

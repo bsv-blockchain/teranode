@@ -111,12 +111,12 @@ func chunkChildDAHItems(items []childDAHItem, maxPages int) [][]childDAHItem {
 		pages  int
 	)
 
-	cur := make([]childDAHItem, 0, len(items))
+	var cur []childDAHItem //nolint:prealloc // sized by the page cap, not len(items)
 
 	for _, item := range items {
 		if len(cur) > 0 && pages+item.ChildCount > maxPages {
 			chunks = append(chunks, cur)
-			cur, pages = make([]childDAHItem, 0, len(items)), 0
+			cur, pages = nil, 0
 		}
 
 		cur = append(cur, item)
@@ -136,11 +136,27 @@ type childDAHApplyResult struct {
 	failedUnsets, failedSets []childDAHItem
 }
 
-// writeChildDAHChunk writes one chunk, retrying once after a short backoff.
-func (s *Store) writeChildDAHChunk(chunk []childDAHItem) error {
+// sleepCtx waits d, or returns ctx.Err() as soon as ctx is done.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// writeChildDAHChunk writes one chunk, retrying once after a short backoff that honours ctx.
+func (s *Store) writeChildDAHChunk(ctx context.Context, chunk []childDAHItem) error {
 	err := s.SetDAHForChildRecordsMulti(chunk)
 	if err != nil {
-		time.Sleep(childDAHRetryBackoff)
+		if sleepErr := sleepCtx(ctx, childDAHRetryBackoff); sleepErr != nil {
+			return errors.JoinCapped(10, err, sleepErr)
+		}
+
 		err = s.SetDAHForChildRecordsMulti(chunk)
 	}
 
@@ -153,12 +169,12 @@ func (s *Store) writeChildDAHChunk(chunk []childDAHItem) error {
 // harmless either: for a raise (X -> Y) the children stay at the lower X and can be pruned before
 // the master. Failures are logged at Error and returned (with the items that failed) so callers
 // can count them and, where the master write is not retry-safe, restore the master.
-func (s *Store) applyChildDAHFollowUps(f *childDAHFollowUps) childDAHApplyResult {
+func (s *Store) applyChildDAHFollowUps(ctx context.Context, f *childDAHFollowUps) childDAHApplyResult {
 	var res childDAHApplyResult
 
 	run := func(items []childDAHItem, kind string, failed *[]childDAHItem, errOut *error) {
 		for _, chunk := range chunkChildDAHItems(items, maxChildDAHPagesPerBatch) {
-			if err := s.writeChildDAHChunk(chunk); err != nil {
+			if err := s.writeChildDAHChunk(ctx, chunk); err != nil {
 				s.logger.Errorf("[childDAHFollowUps] failed to %s child DAH for %d txs: %v", kind, len(chunk), err)
 				*failed = append(*failed, chunk...)
 				*errOut = errors.JoinCapped(10, *errOut, err)
@@ -170,6 +186,113 @@ func (s *Store) applyChildDAHFollowUps(f *childDAHFollowUps) childDAHApplyResult
 	run(f.sets(), "set", &res.failedSets, &res.setErr)
 
 	return res
+}
+
+// dahRestore is one master record to put back into a known earlier state after a failed
+// child-record DAH follow-up.
+type dahRestore struct {
+	// ID identifies the record in logs (usually the txid).
+	ID string
+	// Key is the master record.
+	Key *aerospike.Key
+	// Bins are the bin values to write back.
+	Bins []*aerospike.Bin
+	// Filter gates the write on the known post-write state (see dahUnchangedExpression plus the
+	// caller's own conditions); a filtered write means another writer owns the record.
+	Filter *aerospike.Expression
+}
+
+// dahUnchangedExpression is true when the record's DAH is still exactly what the write being
+// undone left: absent when newDAH is nil, else present and equal to *newDAH. Nested ExpCond, so
+// it does not rely on ExpAnd short-circuiting.
+func dahUnchangedExpression(newDAH *uint32) *aerospike.Expression {
+	dahBin := fields.DeleteAtHeight.String()
+	if newDAH == nil {
+		return aerospike.ExpNot(aerospike.ExpBinExists(dahBin))
+	}
+
+	return aerospike.ExpCond(
+		aerospike.ExpBinExists(dahBin), aerospike.ExpEq(aerospike.ExpIntBin(dahBin), aerospike.ExpIntVal(int64(*newDAH))),
+		aerospike.ExpBoolVal(false),
+	)
+}
+
+// restoreDAHBatch restores masters after a failed child DAH follow-up, as one BatchOperate per
+// attempt (not one per record), retrying once for only the records that failed, after a backoff
+// that honours ctx. Each record is independently filtered: FILTERED_OUT or KEY_NOT_FOUND means
+// another writer owns it (or it is gone) and is logged and skipped. Records that still fail are
+// counted in the restore-failed metric and returned in a distinct "restore failed" error: such a
+// master is left in its post-write state and nothing revisits it.
+//
+// Shared by every caller whose master write is not retry-safe (expired preservation here; the
+// longest-chain path on the pruner branch).
+func (s *Store) restoreDAHBatch(ctx context.Context, items []dahRestore) error {
+	pending := items
+
+	for attempt := 0; attempt < 2 && len(pending) > 0; attempt++ {
+		if attempt > 0 {
+			if err := sleepCtx(ctx, childDAHRetryBackoff); err != nil {
+				break
+			}
+		}
+
+		records := make([]aerospike.BatchRecordIfc, len(pending))
+
+		for i, it := range pending {
+			policy := util.GetAerospikeBatchWritePolicy(s.settings)
+			policy.RecordExistsAction = aerospike.UPDATE_ONLY
+			policy.FilterExpression = it.Filter
+
+			ops := make([]*aerospike.Operation, 0, len(it.Bins))
+			for _, b := range it.Bins {
+				ops = append(ops, aerospike.PutOp(b))
+			}
+
+			records[i] = aerospike.NewBatchWrite(policy, it.Key, ops...)
+		}
+
+		batchErr := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), records)
+
+		var failed []dahRestore
+
+		for i, rec := range records {
+			recErr := rec.BatchRec().Err
+			if batchErr != nil {
+				recErr = batchErr
+			}
+
+			if recErr == nil {
+				continue
+			}
+
+			var aErr *aerospike.AerospikeError
+			if batchErr == nil && errors.As(recErr, &aErr) && (aErr.ResultCode == types.FILTERED_OUT || aErr.ResultCode == types.KEY_NOT_FOUND_ERROR) {
+				s.logger.Infof("[restoreDAH] not restoring %s: record changed concurrently or deleted (%v)", pending[i].ID, aErr.ResultCode)
+				continue
+			}
+
+			failed = append(failed, pending[i])
+		}
+
+		pending = failed
+	}
+
+	if len(pending) == 0 {
+		return nil
+	}
+
+	if prometheusTxMetaAerospikeExpiredPreservationRestoreFailed != nil {
+		prometheusTxMetaAerospikeExpiredPreservationRestoreFailed.Add(float64(len(pending)))
+	}
+
+	ids := make([]string, len(pending))
+	for i, it := range pending {
+		ids[i] = it.ID
+	}
+
+	s.logger.Errorf("[restoreDAH] restore failed for %d masters, they keep their post-write state and nothing will revisit them: %v", len(pending), ids)
+
+	return errors.NewStorageError("[restoreDAH] restore failed for %d masters: %v", len(pending), ids)
 }
 
 // SetMinedState contains the state returned from setMined operations.
@@ -324,6 +447,20 @@ func (s *Store) parseBlockIDsFromSlice(v []interface{}) []uint32 {
 // The retention == 0 guard is the caller's: the ops are only added when retention > 0.
 // The Lua DAHSET/DAHUNSET signals cannot be emitted from an expression; callers detect a DAH
 // change by reading the bin before and after (see processBatchResultsForSetMinedExpressions).
+//
+// Child-record (pagination) follow-up and what happens when it fails. After the master write the
+// children are updated by applyChildDAHFollowUps (unsets first, chunked, each retried once). The
+// master write is not retry-safe: a retry sees old == new (or FILTERED_OUT) and queues nothing.
+// Callers differ in what they do when a child write still fails:
+//   - expired preservation (ProcessExpiredPreservations): RESTORES the master through
+//     restoreDAHBatch, so the next run redoes the transition. The longest-chain path on the
+//     pruner branch does the same with the same helper.
+//   - setMined (Lua and expressions) and spend (expressions): only LOG at Error, COUNT and RETURN
+//     the error (setMined returns it, spend increments prometheusUtxoMapErrors as its spends are
+//     already completed). They do NOT restore, so a failed unset or raise leaves the pages stale
+//     (or lower) under a master that no longer has that DAH and nothing revisits them. Known
+//     follow-up, deliberately unchanged here: "pre-state" for a spend or an unmined-block
+//     transition is not a single bin snapshot and needs its own design.
 //
 // The lastSpentState logic for pagination records is handled separately via ExpWriteOp for that bin.
 //
@@ -739,7 +876,7 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 	// mined, and a retry would hit FILTERED_OUT and never reconcile their child-record DAH.
 	var postErr error
 
-	applied := s.applyChildDAHFollowUps(&childDAH)
+	applied := s.applyChildDAHFollowUps(ctx, &childDAH)
 	postErr = errors.JoinCapped(10, applied.unsetErr, applied.setErr)
 
 	// Mirror the Lua path's single guard (set_mined.go) instead of the nested

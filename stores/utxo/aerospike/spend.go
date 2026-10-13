@@ -210,6 +210,11 @@ func (s *Store) IncrementSpentRecordsMulti(txids []*chainhash.Hash, increment in
 	return aggErr
 }
 
+var (
+	missingPagesSkipped atomic.Int64
+	lastMissingPageWarn atomic.Int64
+)
+
 // SetDAHForChildRecordsMulti expands childCount per tx and performs a single BatchOperate
 // to set/unset DeleteAtHeight across all child pagination records.
 func (s *Store) SetDAHForChildRecordsMulti(items []struct {
@@ -278,7 +283,13 @@ func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 
 	if skippedMissing > 0 {
 		// a master that claims more pages than exist is odd (pages are pruned with their master)
-		s.logger.Warnf("[SetDAHForChildRecordsMulti] skipped %d of %d pagination records that no longer exist", skippedMissing, len(batchRecords))
+		// at most one Warn per minute; the rest are counted into the next line
+		total := missingPagesSkipped.Add(int64(skippedMissing))
+		now := time.Now().UnixNano()
+
+		if last := lastMissingPageWarn.Load(); now-last > int64(time.Minute) && lastMissingPageWarn.CompareAndSwap(last, now) {
+			s.logger.Warnf("[SetDAHForChildRecordsMulti] skipped pagination records that no longer exist: %d in this call, %d in total since start", skippedMissing, total)
+		}
 	}
 
 	return aggErr

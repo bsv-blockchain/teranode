@@ -489,6 +489,12 @@ func TestMarkTransactionsOnLongestChain_FailedUnsetRestoresMaster(t *testing.T) 
 	require.Equal(t, 1002, h.dah(masterKey), "master DAH restored")
 	require.Equal(t, 1002, h.dah(pageKey))
 
+	// the write also cleared unmined_since; the restore must put it back, or the record would be
+	// invisible to the unmined repair scan while holding a stale DAH
+	rec, err := client.Get(nil, masterKey)
+	require.NoError(t, err)
+	require.Equal(t, 50, rec.Bins[fields.UnminedSince.String()], "unmined_since restored")
+
 	// the retry, with the fault gone, completes the transition
 	store.SetBatchOperateFn(nil)
 	require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txID}, true))
@@ -549,4 +555,41 @@ func TestSetDAHForChildRecords_MissingPage(t *testing.T) {
 	exists, err := client.Exists(nil, pageKey)
 	require.NoError(t, err)
 	require.False(t, exists, "a missing page must not be created")
+}
+
+// TestMarkTransactionsOnLongestChain_RestoreSkippedWhenPreserved: a preservation that lands between the
+// master write and the restore is not overwritten.
+func TestMarkTransactionsOnLongestChain_RestoreSkippedWhenPreserved(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	s := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, cleanup := initAerospike(t, s, logger)
+	t.Cleanup(cleanup)
+
+	require.NoError(t, store.SetBlockHeight(1000))
+
+	h := &childDAHHarness{t: t, client: client, store: store, dahBin: fields.DeleteAtHeight.String()}
+
+	txID, masterKey, pageKey := h.seed("restore-preserved", 1002, 0)
+
+	store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		for _, r := range records {
+			if string(r.BatchRec().Key.Digest()) == string(pageKey.Digest()) {
+				// a concurrent preserve lands, then the child write fails
+				_ = client.PutBins(nil, masterKey, aerospike.NewBin(fields.PreserveUntil.String(), 5000))
+
+				return aerospike.ErrNetwork
+			}
+		}
+
+		return client.BatchOperate(policy, records)
+	})
+	t.Cleanup(func() { store.SetBatchOperateFn(nil) })
+
+	require.Error(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txID}, true))
+
+	rec, err := client.Get(nil, masterKey)
+	require.NoError(t, err)
+	require.Equal(t, 5000, rec.Bins[fields.PreserveUntil.String()])
+	require.Nil(t, rec.Bins[fields.DeleteAtHeight.String()], "the restore must not overwrite a concurrent preserve")
 }
