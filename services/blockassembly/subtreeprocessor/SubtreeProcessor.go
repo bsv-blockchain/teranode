@@ -2553,7 +2553,15 @@ func (stp *SubtreeProcessor) InitCurrentBlockHeader(blockHeader *model.BlockHead
 func (stp *SubtreeProcessor) addNode(node subtreepkg.Node, parents *subtreepkg.TxInpoints, skipNotification bool) (err error) {
 	// parents can only be set to nil, when they are already in the map
 	if parents == nil {
-		if _, ok := stp.currentTxMap.Get(node.Hash); !ok {
+		var held bool
+
+		if split, ok := stp.currentTxMap.(*SplitTxInpointsMap); ok {
+			held = split.Exists(node.Hash) // no need to decode the inpoints to know
+		} else {
+			_, held = stp.currentTxMap.Get(node.Hash)
+		}
+
+		if !held {
 			return errors.NewProcessingError("error adding node to subtree: txInpoints not found in currentTxMap for %s", node.Hash.String())
 		}
 	} else {
@@ -3691,12 +3699,28 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 		found   bool
 	)
 
+	// The in-memory map appends a record for every insert and only reclaims them at
+	// Clear, so a rechain that removed and re-added every tx would copy the whole
+	// tail of the map each time. The txs are all in the map already: addNode is
+	// given no inpoints, which it takes to mean "already in the map", and nothing
+	// is removed, so there is no window for the deletedTxs backup to cover either.
+	_, inMemory := stp.currentTxMap.(*SplitTxInpointsMap)
+
 	// Process nodes directly from original subtrees without intermediate storage
-	// We temporarily remove from currentTxMap and immediately re-add to avoid
-	// addNode's duplicate detection while minimizing memory overhead
+	// The disk map path temporarily removes each tx from currentTxMap and
+	// immediately re-adds it, to avoid addNode's duplicate detection
 	for _, subtree := range originalSubtrees {
 		for _, node := range subtree.Nodes {
 			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+				continue
+			}
+
+			if inMemory {
+				// addNode fails if the map does not hold the tx
+				if err = stp.addNode(node, nil, true); err != nil {
+					return errors.NewProcessingError(errAddingNodeToSubtree, err)
+				}
+
 				continue
 			}
 
@@ -7115,6 +7139,26 @@ func (stp *SubtreeProcessor) bucketShardedGetAndSetIfNotExists(
 		bucketIdx := b
 
 		g.Go(func() error {
+			// Between two in-memory maps the stored records are copied as they
+			// are, instead of decoded by Get and encoded again by the insert.
+			if srcSplit, ok := currentTxMap.(*SplitTxInpointsMap); ok {
+				hashes := make([]chainhash.Hash, len(indices))
+				for j, origIdx := range indices {
+					hashes[j] = nodes[origIdx].Hash
+				}
+
+				moved := make([]bool, len(indices))
+				if missing := splitMap.MoveBucketFrom(srcSplit, bucketIdx, hashes, moved); missing >= 0 {
+					return errors.NewProcessingError("node %s not found in currentTxMap", hashes[missing].String())
+				}
+
+				for j, origIdx := range indices {
+					wasInserted[origIdx] = moved[j]
+				}
+
+				return nil
+			}
+
 			keys := make([]chainhash.Hash, len(indices))
 			vals := make([]*subtreepkg.TxInpoints, len(indices))
 
@@ -7778,6 +7822,16 @@ func deserializeHashesIntoBuckets(
 		return errors.NewProcessingError(
 			"subtree trailer claims %d conflicting txs (%d bytes), exceeds remaining body budget %d bytes",
 			numConflicting, numConflicting*subtreeHashBytes, remainingForConflicting,
+		)
+	}
+
+	// AddConflictingNode only takes a leaf of the subtree and deduplicates it, so a
+	// subtree written by it never lists more conflicting nodes than leaves. The
+	// same bound, and the same sentinel, as go-subtree's readers.
+	if numConflicting > numLeaves {
+		return errors.NewProcessingError(
+			"subtree trailer claims %d conflicting txs, exceeds leaf count %d",
+			numConflicting, numLeaves, subtreepkg.ErrConflictingCountExceedsLeaves,
 		)
 	}
 
