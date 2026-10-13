@@ -912,21 +912,37 @@ func TestMiningSubmission_FailsClosedOnWhatItCannotRead(t *testing.T) {
 }
 
 // TestHandleSubmitMiningSolution_JobIDMustBeAHash: blockassembly keys jobs by a
-// 32-byte hash and refused any other length with chainhash's bare error, which
-// fails closed. The handler checks it before the hop, as getrawtransaction checks
-// its txid.
+// 32-byte hash, so an id of any other length names no job. The handler checks it
+// before the hop, as getrawtransaction checks its txid, and answers as svnode's
+// hash parameters do. Both sides, since a check that only caught one would let
+// the other through to blockassembly.
 func TestHandleSubmitMiningSolution_JobIDMustBeAHash(t *testing.T) {
-	baMock := &blockassembly.Mock{}
-	s := &RPCServer{logger: newCapturingLogger(), blockAssemblyClient: baMock}
+	for name, tc := range map[string]struct {
+		id   string
+		text string
+	}{
+		"too short": {id: "cafe", text: "id must be of length 64 (not 4)"},
+		"too long":  {id: miningJobID + "ab", text: "id must be of length 64 (not 66)"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			// Past the check, the miner would get blockassembly's length error,
+			// which crosses unclassified and answers "internal error".
+			baMock := &blockassembly.Mock{}
+			baMock.On("SubmitMiningSolution", mock.Anything, mock.Anything).Return(
+				overGRPC(t, fmt.Errorf("invalid hash length of %d, want %d", len(tc.id)/2, chainhash.HashSize)))
 
-	_, err := handleSubmitMiningSolution(context.Background(), s, &bsvjson.SubmitMiningSolutionCmd{
-		MiningSolution: bsvjson.MiningSolution{ID: "cafe", Coinbase: "00"},
-	}, nil)
+			s := &RPCServer{logger: newCapturingLogger(), blockAssemblyClient: baMock}
 
-	rpcErr := requireRPCError(t, err)
-	require.Equal(t, bsvjson.ErrRPCInvalidParameter, rpcErr.Code)
-	require.Equal(t, "id must be of length 64 (not 4)", rpcErr.Message)
-	baMock.AssertNotCalled(t, "SubmitMiningSolution", mock.Anything, mock.Anything)
+			_, err := handleSubmitMiningSolution(context.Background(), s, &bsvjson.SubmitMiningSolutionCmd{
+				MiningSolution: bsvjson.MiningSolution{ID: tc.id, Coinbase: "00"},
+			}, nil)
+
+			rpcErr := requireRPCError(t, err)
+			require.Equal(t, bsvjson.ErrRPCInvalidParameter, rpcErr.Code)
+			require.Equal(t, tc.text, rpcErr.Message)
+			baMock.AssertNotCalled(t, "SubmitMiningSolution", mock.Anything, mock.Anything)
+		})
+	}
 }
 
 // TestGenerate_P2SHPayoutKeepsItsReason covers generatetoaddress to a P2SH
