@@ -10,6 +10,7 @@ import (
 
 	"github.com/bsv-blockchain/go-alert-system/app/config"
 	"github.com/bsv-blockchain/go-alert-system/app/models"
+	"github.com/bsv-blockchain/go-alert-system/app/models/model"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -298,4 +299,102 @@ func TestServer_basic_functionality(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, status)
 	require.Contains(t, message, "200")
+}
+
+// TestServer_syncGenesisKeys verifies that a store which has accepted no alert past
+// the genesis alert has its active keys reset to the configured genesis keys, so a
+// node whose store was seeded with another network's keys can verify alerts again.
+func TestServer_syncGenesisKeys(t *testing.T) {
+	mainnet := upstreamNetwork(t, "mainnet")
+	testnet := upstreamNetwork(t, "testnet")
+
+	// startServer loads the config for chainParams against the sqlite store in
+	// dataFolder and ensures the genesis alert exists, as Start does
+	startServer := func(t *testing.T, dataFolder string, chainParams *chaincfg.Params) *Server {
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.ChainCfgParams = chainParams
+		tSettings.DataFolder = dataFolder
+		tSettings.Alert.GenesisKeys = nil
+		tSettings.Alert.ProtocolID = ""
+		tSettings.Alert.TopicName = ""
+		tSettings.Alert.P2PPort = 8080
+		tSettings.Alert.P2PPrivateKey = "test_private_key"
+
+		storeURL, err := url.Parse("sqlite:///alert")
+		require.NoError(t, err)
+
+		tSettings.Alert.StoreURL = storeURL
+
+		server := New(ulogger.TestLogger{}, tSettings, nil, nil, nil, nil, nil)
+		require.NoError(t, server.loadConfig(context.Background(), models.BaseModels, true))
+		t.Cleanup(func() { server.appConfig.CloseAll(context.Background()) })
+
+		require.NoError(t, models.CreateGenesisAlert(context.Background(), model.WithAllDependencies(server.appConfig)))
+
+		return server
+	}
+
+	activeKeys := func(t *testing.T, server *Server) []string {
+		keys, err := models.GetActivePublicKey(context.Background(), nil, model.WithAllDependencies(server.appConfig))
+		require.NoError(t, err)
+
+		active := make([]string, 0, len(keys))
+		for _, k := range keys {
+			active = append(active, k.Key)
+		}
+
+		return active
+	}
+
+	t.Run("store seeded with other genesis keys is reset", func(t *testing.T) {
+		dataFolder := t.TempDir()
+
+		first := startServer(t, dataFolder, &chaincfg.MainNetParams)
+		require.ElementsMatch(t, mainnet.GenesisKeys, activeKeys(t, first))
+		first.appConfig.CloseAll(context.Background())
+
+		server := startServer(t, dataFolder, &chaincfg.TestNetParams)
+		require.ElementsMatch(t, mainnet.GenesisKeys, activeKeys(t, server), "precondition: genesis alert keeps the first keys")
+
+		active, err := server.syncGenesisKeys(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, len(testnet.GenesisKeys), active)
+		require.ElementsMatch(t, testnet.GenesisKeys, activeKeys(t, server))
+
+		// a second start is a no-op
+		active, err = server.syncGenesisKeys(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, len(testnet.GenesisKeys), active)
+		require.ElementsMatch(t, testnet.GenesisKeys, activeKeys(t, server))
+	})
+
+	t.Run("matching store is left alone", func(t *testing.T) {
+		server := startServer(t, t.TempDir(), &chaincfg.TestNetParams)
+
+		active, err := server.syncGenesisKeys(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, len(testnet.GenesisKeys), active)
+		require.ElementsMatch(t, testnet.GenesisKeys, activeKeys(t, server))
+	})
+
+	t.Run("store past the genesis alert is left alone", func(t *testing.T) {
+		dataFolder := t.TempDir()
+
+		first := startServer(t, dataFolder, &chaincfg.MainNetParams)
+
+		// a later alert means the active keys may have been rotated by SetKeys
+		alert := models.NewAlertMessage(model.WithAllDependencies(first.appConfig), model.New())
+		alert.SequenceNumber = 1
+		alert.Hash = "0000000000000000000000000000000000000000000000000000000000000001"
+		alert.Processed = true
+		require.NoError(t, alert.Save(context.Background()))
+		first.appConfig.CloseAll(context.Background())
+
+		server := startServer(t, dataFolder, &chaincfg.TestNetParams)
+
+		active, err := server.syncGenesisKeys(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, len(mainnet.GenesisKeys), active)
+		require.ElementsMatch(t, mainnet.GenesisKeys, activeKeys(t, server))
+	})
 }
