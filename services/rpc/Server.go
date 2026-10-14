@@ -662,7 +662,10 @@ type RPCServer struct {
 	// logger provides structured logging capabilities for operational and debugging messages
 	logger ulogger.Logger
 
-	// rpcMaxClients is the maximum number of concurrent RPC clients allowed
+	// rpcMaxClients is the maximum number of concurrent in-flight RPC requests.
+	// Counted per request, not per socket: every reply closes the connection,
+	// so each request holds a slot for its whole duration (see limitConnections).
+	// The name predates that reading and stays for setting-key compatibility.
 	// This setting helps prevent resource exhaustion from too many simultaneous connections
 	rpcMaxClients int
 
@@ -850,10 +853,16 @@ func (s *RPCServer) RequestedProcessShutdown() <-chan struct{} {
 //
 // This function is safe for concurrent access through the use of atomic operations.
 func (s *RPCServer) limitConnections(w http.ResponseWriter, remoteAddr string) bool {
-	if int(atomic.LoadInt32(&s.numClients)+1) > s.rpcMaxClients {
-		s.logger.Infof("Max RPC clients exceeded [%d] - "+
-			"disconnecting client %s", s.rpcMaxClients,
+	if inFlight := int(atomic.LoadInt32(&s.numClients)); inFlight+1 > s.rpcMaxClients {
+		s.logger.Infof("Max concurrent RPC requests exceeded [%d of %d allowed, %d in flight] - "+
+			"refusing client %s", inFlight+1, s.rpcMaxClients, inFlight,
 			remoteAddr)
+		// The door sheds rather than queues - deliberately, so a crowd of
+		// callers cannot pile work behind an already-busy Validator - so a
+		// refused request is worth retrying as soon as a slot frees. A machine
+		// caller needs a number for that, not prose; 1s is a politeness floor
+		// for the log and the client, and a slot routinely frees sooner.
+		w.Header().Set("Retry-After", "1")
 		http.Error(w, "503 Too busy.  Try again later.",
 			http.StatusServiceUnavailable)
 

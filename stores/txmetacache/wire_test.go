@@ -17,7 +17,7 @@ func decodeDeleteBatchLikeConsumer(t *testing.T, data []byte) []chainhash.Hash {
 	// The consumer only treats a message as v2 when the full header signature
 	// matches AND the count fits the buffer at the v2 entry size. A v1 DELETE
 	// batch must never satisfy that.
-	if len(data) >= WireV2HeaderLen && data[0] == WireV2Magic && data[1] == WireV2Version && data[2] == 0 && data[3] == 0 {
+	if len(data) >= WireV2HeaderLen && data[0] == WireV2Magic && data[1] == WireV2Version && plausibleBuckets(binary.LittleEndian.Uint16(data[WireV2BucketsOffset:])) {
 		candidate := binary.LittleEndian.Uint32(data[4:])
 		require.Greater(t, uint64(candidate)*uint64(WireV2MinEntrySize), uint64(len(data)-WireV2HeaderLen),
 			"v1 delete batch must not be detectable as v2")
@@ -71,4 +71,8 @@ func TestEncodeDeleteBatch(t *testing.T) {
 
 		require.Equal(t, hashes, decodeDeleteBatchLikeConsumer(t, EncodeDeleteBatch(hashes)))
 	})
+}
+
+func plausibleBuckets(buckets uint16) bool {
+	return buckets == 0 || buckets&(buckets-1) == 0
 }

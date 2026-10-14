@@ -2441,8 +2441,8 @@ type txmetaItemWithHash struct {
 // Putting the pre-computed xxhash on the wire lets the receiver skip its own
 // xxhash on every entry — a small per-entry saving that compounds at the
 // production rates this is designed for.
-func serializeTxMetaBatchV2(items []txmetaItemWithHash) []byte {
-	size := 8 // header: magic + version + 2 reserved + count
+func serializeTxMetaBatchV2(items []txmetaItemWithHash, bucketsCount int) []byte {
+	size := 8 // header: magic + version + uint16 BucketsCount + count
 	for _, it := range items {
 		size += 8 + 32 + 1 + 4
 		if !it.item.isDelete {
@@ -2453,6 +2453,11 @@ func serializeTxMetaBatchV2(items []txmetaItemWithHash) []byte {
 	buf := make([]byte, size)
 	buf[0] = txmetacache.WireV2Magic
 	buf[1] = txmetacache.WireV2Version
+	// Build-tag-selected cache geometry, on the wire: receivers compare it
+	// against their own and can name the disagreement instead of silently
+	// sharing buckets across partitions. uint16 bounds it to <= 65535; the
+	// production count (8192) and every test count fit far inside.
+	binary.LittleEndian.PutUint16(buf[txmetacache.WireV2BucketsOffset:], uint16(min(bucketsCount, int(^uint16(0)))))
 	binary.LittleEndian.PutUint32(buf[4:], uint32(len(items)))
 	off := 8
 
@@ -2559,7 +2564,7 @@ func (v *Validator) sendTxMetaBatchV2(batch []*txmetaBatchItem) {
 		}
 		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
 			Partition: int32(p), //nolint:gosec // p < numPartitions, bounded by setting
-			Value:     serializeTxMetaBatchV2(items),
+			Value:     serializeTxMetaBatchV2(items, txmetacache.BucketsCount),
 		})
 	}
 }

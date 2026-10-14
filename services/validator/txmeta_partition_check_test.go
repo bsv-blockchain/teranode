@@ -108,8 +108,12 @@ func TestCheckTxMetaPartitionAgreementMetadataWins(t *testing.T) {
 
 func TestCheckTxMetaPartitionAgreementAgreementIsQuiet(t *testing.T) {
 	cap := &partCheckCapture{}
-	v := partCheckValidator(t, cap, "kafka://localhost:9092/txmeta?partitions=32", 32,
-		&partCheckProducer{count: int32(32)})
+	// Derived, not hardcoded: BucketsCount is build-tag selected (8 under
+	// testtxmetacache, 8192 by default), and numPartitions must divide it to
+	// be a legitimate agreement case under every tag.
+	np := txmetacache.BucketsCount
+	v := partCheckValidator(t, cap, fmt.Sprintf("kafka://localhost:9092/txmeta?partitions=%d", np), np,
+		&partCheckProducer{count: int32(np)})
 
 	v.checkTxMetaPartitionAgreement(context.Background())
 

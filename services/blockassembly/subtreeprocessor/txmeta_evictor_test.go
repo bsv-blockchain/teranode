@@ -50,8 +50,7 @@ func (c *txMetaTopicCollector) handle(msg *kafka.KafkaMessage) error {
 		isV2    bool
 	)
 
-	if len(data) >= txmetacache.WireV2HeaderLen && data[0] == txmetacache.WireV2Magic &&
-		data[1] == txmetacache.WireV2Version && data[2] == 0 && data[3] == 0 {
+	if hasV2HeaderSignature(data) {
 		candidate := binary.LittleEndian.Uint32(data[4:])
 		if uint64(candidate)*uint64(txmetacache.WireV2MinEntrySize) <= uint64(len(data)-txmetacache.WireV2HeaderLen) {
 			entries, offset, isV2 = candidate, txmetacache.WireV2HeaderLen, true
@@ -449,11 +448,23 @@ func TestTxMetaEvictor_NeverEmitsAV2LookalikeCount(t *testing.T) {
 	for len(producer.PublishChannel()) > 0 {
 		value := (<-producer.PublishChannel()).Value
 
-		require.False(t, value[0] == txmetacache.WireV2Magic && value[1] == txmetacache.WireV2Version && value[2] == 0 && value[3] == 0,
+		require.False(t, hasV2HeaderSignature(value),
 			"a DELETE message must never start with the v2 header signature")
 
 		total += int(binary.LittleEndian.Uint32(value[:4]))
 	}
 
 	require.Equal(t, len(hashes), total, "every hash must still be sent")
+}
+
+// hasV2HeaderSignature mirrors the receivers' header test: magic, version and a
+// zero or power-of-two BucketsCount in bytes 2:4.
+func hasV2HeaderSignature(value []byte) bool {
+	if len(value) < txmetacache.WireV2HeaderLen || value[0] != txmetacache.WireV2Magic || value[1] != txmetacache.WireV2Version {
+		return false
+	}
+
+	buckets := binary.LittleEndian.Uint16(value[txmetacache.WireV2BucketsOffset:])
+
+	return buckets == 0 || buckets&(buckets-1) == 0
 }

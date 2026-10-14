@@ -1201,7 +1201,7 @@ func TestSendTxMetaDeletesToKafka_BoundsAndSplitsCascades(t *testing.T) {
 					keys[string(msg.Key)] = true
 					require.LessOrEqual(t, len(value), maxRecord, "a record must fit Kafka's default message size")
 
-					isV2 := value[0] == txmetacache.WireV2Magic && value[1] == txmetacache.WireV2Version && value[2] == 0 && value[3] == 0
+					isV2 := hasV2HeaderSignature(value)
 					require.Equal(t, format == "v2", isV2, "a v1 record must never start with the v2 header signature")
 
 					count, offset := int(binary.LittleEndian.Uint32(value[:4])), 4
@@ -1258,7 +1258,7 @@ func TestSendTxMetaBatch_NeverSendsAV2LookalikeV1Record(t *testing.T) {
 
 	for len(producer.PublishChannel()) > 0 {
 		value := (<-producer.PublishChannel()).Value
-		require.False(t, value[0] == txmetacache.WireV2Magic && value[1] == txmetacache.WireV2Version && value[2] == 0 && value[3] == 0,
+		require.False(t, hasV2HeaderSignature(value),
 			"a v1 record must never start with the v2 header signature")
 
 		total += int(binary.LittleEndian.Uint32(value[:4]))
@@ -1328,7 +1328,7 @@ func TestSendTxMetaDeletesToKafka_BatchedRecordsStayBounded(t *testing.T) {
 				require.LessOrEqual(t, len(value), maxRecord, "a record must fit Kafka's default message size")
 
 				if format == "v1" {
-					require.False(t, value[0] == txmetacache.WireV2Magic && value[1] == txmetacache.WireV2Version && value[2] == 0 && value[3] == 0)
+					require.False(t, hasV2HeaderSignature(value))
 				}
 			}
 		})
@@ -1392,4 +1392,16 @@ func TestSplitTxMetaBatch(t *testing.T) {
 // double spend and nothing else.
 func spentParentIsNotACoinbase(mockStore *utxo.MockUtxostore) {
 	mockStore.On("Get", mock.Anything, mock.Anything, []fields.FieldName{fields.IsCoinbase, fields.BlockHeights}).Return(&meta.Data{BlockHeights: []uint32{1}}, nil)
+}
+
+// hasV2HeaderSignature mirrors the receivers' header test: magic, version and a
+// zero or power-of-two BucketsCount in bytes 2:4.
+func hasV2HeaderSignature(value []byte) bool {
+	if len(value) < txmetacache.WireV2HeaderLen || value[0] != txmetacache.WireV2Magic || value[1] != txmetacache.WireV2Version {
+		return false
+	}
+
+	buckets := binary.LittleEndian.Uint16(value[txmetacache.WireV2BucketsOffset:])
+
+	return buckets == 0 || buckets&(buckets-1) == 0
 }
