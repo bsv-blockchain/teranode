@@ -295,8 +295,9 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       notes. Which door the project intends is prose-and-deployment history; the answer decides
       whether examples gain Propagation or the docs stop implying it is the front door
 - [ ] Is the unbounded ingest queue an accepted risk now the drain is bounded (§17–19, Q12)
-      — CURRENT, awaiting decision (audited this pass): the drain bound (E2's double-bounded fix)
-      and its test stand on this branch, so the failure mode is now OOM-by-producer-rate rather
+      — CURRENT, awaiting decision (audited this pass): the double-bounded drain fix (one
+      clock reading, item count, dequeue-as-it-goes) stands in the tree with its
+      tests, so the failure mode is now OOM-by-producer-rate rather
       than OOM-by-wedged-drain. Whether that residual is an accepted risk is an operator-facing
       capacity call, not code
 - [ ] Correct the howto's false "no transition from CATCHINGBLOCKS back to IDLE" — needs
