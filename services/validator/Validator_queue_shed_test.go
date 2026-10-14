@@ -428,6 +428,21 @@ func (f *recoveryBAStore) Store(ctx context.Context, _ *chainhash.Hash, _, _ uin
 	return true, nil
 }
 
+
+// StoreBatch satisfies the batched hand-off half of blockassembly.Store. The shed
+// recovery tests drive the single-tx path, so this simply routes each item through
+// Store: the fake's call counting, shedding and blocking behaviour then apply to a
+// batch hand-off exactly as they do to a single one.
+func (f *recoveryBAStore) StoreBatch(ctx context.Context, items []blockassembly.BatchItem) error {
+	for _, it := range items {
+		if _, err := f.Store(ctx, it.Hash, it.Fee, it.SizeBytes, it.TxInpoints); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (f *recoveryBAStore) RemoveTx(_ context.Context, _ *chainhash.Hash) error { return nil }
 
 // recoverySetup builds a validator backed by a real sqlitememory store (wrapped
