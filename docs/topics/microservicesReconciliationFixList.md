@@ -33,7 +33,7 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       CRs consume), not the Docker anchors: no Docker stack runs the validator, so the pair
       cannot be carried together there — a lone queue cap would be exactly the half-enabled
       state the notes warn about
-- [ ] Set `peer_registry` persistence in the single-node stacks, or drop the setting
+- [x] Set `peer_registry` persistence in the single-node stacks, or drop the setting
       description's promise that an on-disk store is the single-node default — bans are
       forgotten on every restart (§31, Q16)
 - [ ] Add a commented `kind: Secret` placeholder (or a sentence) for
