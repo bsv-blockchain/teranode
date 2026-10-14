@@ -52,6 +52,11 @@ spec:
           requests:
             cpu: 1
             memory: 4Gi
+  # The blob Pruner has no entry in this topology, and the operator examples carry no
+  # pruner service: delete-at-height queues that Blockchain grows for the blockstore
+  # and subtreestore are never drained, so shared storage grows with the chain rather
+  # than being bounded by the retention settings their names suggest. The Docker
+  # examples are where pruning actually runs today (see deploy/docker/mainnet).
   blockPersister:
     enabled: false
     spec:

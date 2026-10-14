@@ -51,7 +51,7 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
 - [x] Add `ulimits` blocks (or an install-guide line) for blob-touching services —
       file-store budget of 768 reads / 256 writes assumes a raised `ulimit -n` that no
       container sets (§69, Q47)
-- [ ] Kubernetes examples: deploy the pruner or comment that pruning is off in cluster
+- [x] Kubernetes examples: deploy the pruner or comment that pruning is off in cluster
       topology — the two shapes fail in opposite directions vs Docker (§55, §56, Q34)
 
 ## B. Cheap observability / logging additions (small code changes)
