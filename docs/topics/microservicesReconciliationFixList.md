@@ -46,7 +46,7 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       mounting an empty directory (§67, Q45)
 - [x] Comment the dev fixture with the services it switches off (Validator et al.) so devs
       don't believe they exercised the transaction path (§45, Q25)
-- [ ] Comment the Docker compose files that the Teranode alert service is not deployed —
+- [x] Comment the Docker compose files that the Teranode alert service is not deployed —
       the unrelated `alertmanager` decoy answers the question wrongly (§66, Q44)
 - [ ] Add `ulimits` blocks (or an install-guide line) for blob-touching services —
       file-store budget of 768 reads / 256 writes assumes a raised `ulimit -n` that no
