@@ -28,7 +28,7 @@
 | InitialMerkleItemsPerSubtree         | int           | 1048576          | initial_merkle_items_per_subtree                   | Initial subtree size                                                                 |
 | MinimumMerkleItemsPerSubtree         | int           | 1024             | minimum_merkle_items_per_subtree                   | Minimum subtree size                                                                 |
 | MaximumMerkleItemsPerSubtree         | int           | 1048576          | maximum_merkle_items_per_subtree                   | Maximum subtree size                                                                 |
-| DoubleSpendWindow                    | time.Duration | 0                | double_spend_window_millis | Double-spend detection window; 0 disables it                                         |
+| DoubleSpendWindow                    | time.Duration | 0                | blockassembly_doubleSpendWindowMillis | Double-spend detection window; 0 disables it                                         |
 | MaxGetReorgHashes                    | int           | 10000            | blockassembly_maxGetReorgHashes                    | **CRITICAL** - Reorganization hash limit                                             |
 | MinerWalletPrivateKeys               | []string      | []               | miner_wallet_private_keys                          | Mining wallet keys                                                                   |
 | EmergencyDifficultyDelay             | time.Duration | 0s               | blockassembly_emergencyDifficultyDelay             | Extra wait before a minimum-difficulty candidate; staggers miners (testnets only)    |

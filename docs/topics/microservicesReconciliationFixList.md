@@ -155,8 +155,11 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       — the Aerospike engine now keeps one record in a dedicated `utxo_layout` set of the
       namespace: recorded CREATE_ONLY on first open (race loser re-reads the winner),
       every later open refuses with both numbers named on disagreement
-- [ ] Name the un-prefixed `double_spend_window_millis` key consistently (it drives two
+- [x] Name the un-prefixed `double_spend_window_millis` key consistently (it drives two
       unrelated behaviours) or document where operators look (§19, Q11)
+      — `blockassembly_doubleSpendWindowMillis` is canonical (key tag, settings.conf,
+      longdesc now naming both the mining hold-back and the drain bound plus the
+      incident); the unprefixed key loads on as a deprecated alias, prefixed wins
 
 ## E. Tests to add
 
