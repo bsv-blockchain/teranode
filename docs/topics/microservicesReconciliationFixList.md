@@ -149,9 +149,12 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       reserved zeros); subtreevalidation warns (throttled) and counts a prometheus
       metric, legacy netsync warns, on any mismatch; zero stays parseable as the
       pre-buckets producer format so retained topic messages survive a rolling upgrade
-- [ ] Write a four-byte marker of `utxostore_utxoBatchSize` into the UTXO data directory
+- [x] Write a four-byte marker of `utxostore_utxoBatchSize` into the UTXO data directory
       and check at open — it is part of a coin's address and must never change post-run,
       yet nothing records what a directory was written with (§70, Q48)
+      — the Aerospike engine now keeps one record in a dedicated `utxo_layout` set of the
+      namespace: recorded CREATE_ONLY on first open (race loser re-reads the winner),
+      every later open refuses with both numbers named on disagreement
 - [ ] Name the un-prefixed `double_spend_window_millis` key consistently (it drives two
       unrelated behaviours) or document where operators look (§19, Q11)
 
