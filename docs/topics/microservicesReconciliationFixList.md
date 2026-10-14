@@ -62,7 +62,7 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       response body itself still lists only failures because
       `AddToConsensusBlacklistResponse` lives in the external `go-bn` module — adding a
       `processed` field there is a separate upstream change
-- [ ] Distinguish a missing deletions ledger from being caught-up — three situations share
+- [x] Distinguish a missing deletions ledger from being caught-up — three situations share
       one log line, and the tolerance for one is keyed to an error the shipped file store
       never emits (§42, Q23)
 - [ ] Log the coin archive's fixed 100-block lag at start-up (or make it a setting) so the
