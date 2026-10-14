@@ -99,8 +99,14 @@ func (s *Server) waitForBlockMinedStatus(ctx context.Context, blockHash *chainha
 	)
 
 	if err != nil {
-		// Timeout or persistent error - log and skip
-		s.logger.Debugf("Block %s mined_set wait timeout or error: %v", blockHash, err)
+		// Timeout or persistent error - skip this block. This skip is the ordinary
+		// case (a notified block can legitimately never reach mined_set here, e.g.
+		// a losing fork branch), but silently is how a persistent skip - a pruner
+		// permanently outrunning validation - hides. Warn and count it the way the
+		// block-assembly wait already does, so both waits are visible on the same
+		// dashboard instead of only the rarer one.
+		s.logger.Warnf("Skipping pruning for block %s: mined_set wait timeout or error: %v", blockHash, err)
+		prunerSkipped.WithLabelValues("mined_set_timeout").Inc()
 		return false
 	}
 
