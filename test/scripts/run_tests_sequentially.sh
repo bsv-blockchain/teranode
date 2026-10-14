@@ -9,6 +9,10 @@ RETRY_DELAY=${TEST_RETRY_DELAY:-2}
 SHARD=""
 TOTAL=""
 LIST_ONLY=false
+# Space-separated list of package dirs to restrict the run to (e.g.
+# "test/sequentialtest/double_spend test/sequentialtest/longest_chain"). Empty =
+# all sequential packages. Used by CI scoping to run only affected packages.
+PACKAGES="${SEQ_PKGS:-}"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -30,9 +34,11 @@ while [[ $# -gt 0 ]]; do
             TOTAL="$2"; shift 2 ;;
         --list-only)
             LIST_ONLY=true; shift ;;
+        --packages)
+            PACKAGES="$2"; shift 2 ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--db sqlite|postgres|aerospike] [--retry COUNT] [--retry-delay SECONDS] [--shard N] [--total M] [--list-only]"
+            echo "Usage: $0 [--db sqlite|postgres|aerospike] [--retry COUNT] [--retry-delay SECONDS] [--shard N] [--total M] [--list-only] [--packages \"dir1 dir2\"]"
             exit 1
             ;;
     esac
@@ -71,8 +77,36 @@ ORIGINAL_DIR=$(pwd)
 # Find all test files that have "test_sequentially" in their first line
 test_files=$(find ./test/sequentialtest -name "*_test.go" -type f -print)
 
+# Restrict to the requested packages (CI scoping). A package dir like
+# "test/sequentialtest/double_spend" keeps only test files directly under it.
+if [ -n "$PACKAGES" ]; then
+    filtered=""
+    for f in $test_files; do
+        rel="${f#./}"          # strip leading ./
+        fdir="${rel%/*}"       # dir of the test file
+        for p in $PACKAGES; do
+            if [ "$fdir" = "${p#./}" ]; then
+                filtered+="$f"$'\n'
+                break
+            fi
+        done
+    done
+    test_files="${filtered%$'\n'}"
+    echo "Scoped sequential run to packages: $PACKAGES"
+
+    # An empty result here is a legitimate outcome, not a failure: CI scoping can
+    # surface a package under test/sequentialtest/ that carries no *_test.go of
+    # its own (a shared helper package, say). Failing would turn a correctly
+    # scoped change red, so treat it as a clean skip. The UNSCOPED empty case
+    # below is still an error — it means the suite itself has gone missing.
+    if [ -z "$test_files" ]; then
+        echo "No sequential test files under the scoped packages - nothing to run"
+        exit 0
+    fi
+fi
+
 if [ -z "$test_files" ]; then
-    echo "No test files found with 'test_sequentially' in their first line"
+    echo "No matching sequential test files found"
     exit 1
 fi
 
