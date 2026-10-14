@@ -8070,19 +8070,19 @@
 </ol>
 </div>
 <h4 id="subtreedatawriter">SubtreeDataWriter<a class="headerlink" href="#subtreedatawriter" title="Permanent link">&para;</a></h4>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">SubtreeDataWriter</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">    </span><span class="nx">storer</span><span class="w">      </span><span class="o">*</span><span class="nx">filestorer</span><span class="p">.</span><span class="nx">FileStorer</span>
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">    </span><span class="nx">nextBatchID</span><span class="w"> </span><span class="kt">int</span>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">    </span><span class="c1">// ... additional fields</span>
-</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="p">}</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kd">func</span><span class="w"> </span><span class="nx">NewSubtreeDataWriter</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">storer</span><span class="w"> </span><span class="o">*</span><span class="nx">filestorer</span><span class="p">.</span><span class="nx">FileStorer</span><span class="p">,</span><span class="w"> </span><span class="nx">window</span><span class="w"> </span><span class="kt">int</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">SubtreeDataWriter</span>
 </span></code></pre></div>
 <p>The <code>SubtreeDataWriter</code> provides <strong>ordered batch writes</strong> for subtree data. It ensures batches are written in the correct order even when produced concurrently.</p>
 <p><strong>Key Methods:</strong></p>
 <ul>
-<li><code>WriteBatch(batchID int, txData [][]byte) error</code>: Writes a batch of transaction data at the specified position</li>
-<li><code>Close() error</code>: Finalizes the file (aborts if batches are pending)</li>
+<li><code>WriteBatch(batchIndex int, txBytes [][]byte) error</code>: Writes a batch of transaction data at the specified position</li>
+<li><code>Close(ctx context.Context) error</code>: Finalizes the file (aborts if batches are pending)</li>
 <li><code>Abort(err error)</code>: Aborts the write operation without finalizing</li>
 </ul>
+<div class="admonition note">
+<p class="admonition-title">Bounded Window</p>
+<p>A batch that arrives before the batches ahead of it is held in memory until they are written. <code>WriteBatch</code> admits at most <code>window</code> batches counting from the next one to write, and a batch further ahead waits, so one slow batch cannot make the writer hold the whole subtree. <code>CreateSubtreeDataFileStreaming</code> passes its batch fetch concurrency, <code>max(4, NumCPU/2)</code>, as the window. The window bounds the parked batches only: batches waiting on the window and batches still fetching hold their own bytes, so the serialized bytes held at once come to about <code>2 × window − 1</code> batches. When <code>ctx</code> is cancelled, as the batch errgroup's context is when a batch fails, waiting batches return an error instead of waiting for a batch that will never arrive.</p>
+</div>
 <div class="admonition tip">
 <p class="admonition-title">Error Safety</p>
 <p>If <code>Close()</code> is called while batches are still pending (gaps in batch sequence), the writer automatically aborts instead of finalizing an incomplete file.</p>
