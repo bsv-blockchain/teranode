@@ -8565,17 +8565,17 @@
 </ul>
 </li>
 <li>
-<p><strong>GET /health</strong>: Readiness probe endpoint</p>
+<p><strong>GET /health</strong>: Dependency status endpoint</p>
 <ul>
-<li>Checks readiness of all service dependencies</li>
-<li>Verifies HTTP server, UTXO store, transaction store, block persister store, and blockchain client</li>
-<li>Returns 200 OK when all dependencies are ready</li>
-<li>Returns 503 Service Unavailable if any dependency is not ready</li>
-<li>Response includes details about dependency status</li>
+<li>Checks HTTP server, UTXO store, transaction store, block persister store, and blockchain client</li>
+<li><strong>By default it always returns 200 OK</strong>, with each dependency's status in the body; a failing dependency does not change the status code</li>
+<li>Returns 503 Service Unavailable when a dependency is not ready <strong>only if <code>asset_healthStrictStatus = true</code></strong></li>
+<li>The body is the dependency JSON by default; with <code>asset_publicHealthDetail = false</code> it is the plain string <code>OK</code> or <code>UNAVAILABLE</code></li>
 </ul>
 </li>
 </ul>
 <p><strong>Kubernetes Integration Example:</strong></p>
+<p>Operator-managed deployments probe the service health port instead (<code>/health/readiness</code> and <code>/health/liveness</code> on port 8000), which already returns 503 when a dependency is unhealthy. The example below probes the Asset HTTP port directly. With the default <code>asset_healthStrictStatus = false</code>, the readiness probe on <code>/health</code> never fails. Setting it to <code>true</code> makes the probe fail whenever a dependency is unhealthy: a UTXO-store outage such as Aerospike <code>stop_writes</code> then removes every Asset pod from its Service, and peers catching up from this node lose their block and subtree source until the dependency recovers.</p>
 <div class="language-yaml highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">livenessProbe</span><span class="p">:</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">httpGet</span><span class="p">:</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/alive</span>
