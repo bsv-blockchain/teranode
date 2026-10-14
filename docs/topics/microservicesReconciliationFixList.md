@@ -264,9 +264,14 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       as "blockchain", and the fail-the-write-not-drop-the-promise asymmetry is named
       for the next tracer; rename stays the open alternative (Q30), comment is the
       fix-list branch
-- [ ] Ledger store multi-instance machinery (reservation table, advisory lock, catalog
+- [x] Ledger store multi-instance machinery (reservation table, advisory lock, catalog
       probe): say the topology is coming (with a footnote) or retire three maintained
       mechanisms (§83, Q59)
+      — the package doc now names all three mechanisms and the topology they serve, and
+      is honest about both halves: the cross-process layers buy readiness for a second
+      instance no repository deployment runs, while their in-process work (two ingestion
+      paths racing one block during IBD, promised ids surviving a restart) pays their way
+      today. Retirement stays the deliberate option if Q59 answers "no second instance"
 - [ ] `ReasonInvalidSubtree`: add an intent comment so nobody "tidies" it into
       `AddBanScore` and starts banning peers for network jitter — gated on H1 (§2, Q1)
 
