@@ -188,6 +188,13 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
 - [ ] Six unauthenticated gRPC doors (Validator, Block Assembly, Block Validation,
       Subtree Validation, Pruner, Propagation) with `security_level_grpc = 0`: either wire
       auth or state "the private network is the perimeter" in `settings.conf` (§78, Q55)
+      — PARKED (maintainer posture): the facts are verified (only Blockchain, Legacy and P2P
+      install the `grpc_admin_api_key` interceptor; the other six start with nothing to check
+      and nothing encrypts them). Which way to state it is the decision: wiring the key into
+      six services is a deployment-coupling change (every interior caller needs the key),
+      while the prose option blesses the current topology. Needs one answer:
+      is any gRPC port of a production deployment reachable by anything that is not
+      a trusted service?
 - [ ] Empty `rpc_user`/`rpc_pass`: choose fail-closed vs auth-disabled; fix the losing
       sentence (see A3, E3) (§60, Q37)
 - [ ] `maxrawtxfee`: add to `settings.conf`, or move the policy into the Validator so it
