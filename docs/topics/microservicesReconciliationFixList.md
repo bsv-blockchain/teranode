@@ -76,7 +76,7 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       predates a renumbering)
 - [x] Asset Server: one start-up line naming the active tier mode and allowlist size —
       elevation is unreachable today and an operator sees no change (§46, Q26)
-- [ ] Pruner: announce its trigger mode at start-up (or a pruning-passes counter) so
+- [x] Pruner: announce its trigger mode at start-up (or a pruning-passes counter) so
       "never triggered" isn't discovered via disk growth (§38, Q21)
 - [ ] File store: log once at start-up when no default retention is in force (§43, Q35)
 - [ ] Metadata cache: restore the `tx_meta_cache_size` gauge — commented out while the
