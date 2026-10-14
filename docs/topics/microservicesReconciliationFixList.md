@@ -256,9 +256,14 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       unauthenticated accept-everything, `en0` default is macOS and Linux must set the
       interface. Sender re-verified absent (the only UDP write in the tree is UPnP SSDP);
       building it remains the open alternative (Q58)
-- [ ] Comment the deletion-scheduler interface in `stores/blob/options/pruner_client.go` —
+- [x] Comment the deletion-scheduler interface in `stores/blob/options/pruner_client.go` —
       the queue is owned by Blockchain, and the filename points the next reader at the
       pruner (§52, Q30)
+      — the comment now says outright: Blockchain's queue implements and runs this, the
+      pruner neither implements the interface nor owns the queue, the filename is read
+      as "blockchain", and the fail-the-write-not-drop-the-promise asymmetry is named
+      for the next tracer; rename stays the open alternative (Q30), comment is the
+      fix-list branch
 - [ ] Ledger store multi-instance machinery (reservation table, advisory lock, catalog
       probe): say the topology is coming (with a footnote) or retire three maintained
       mechanisms (§83, Q59)
