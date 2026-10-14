@@ -297,6 +297,11 @@ func (s *Server) runPrunePhases(ctx context.Context, blockHeight uint32, blockHa
 				prunerUpdatingParents.Add(float64(recordsProcessed))
 			}
 		}
+	} else if s.utxoStore == nil {
+		// Louder than the skip-flag line on purpose: an operator who set
+		// pruner_skipPreserveParents made a choice; a missing coin store is
+		// a wiring failure while deletion keeps running unprotected.
+		s.logger.Warnf("[pruner][%s:%d] phase 1: no coin store wired - parents of unmined transactions are NOT protected from deletion", blockHashStr, blockHeight)
 	} else if s.settings.Pruner.SkipPreserveParents {
 		prunerPreserveParentsFailing.Set(0)
 		s.logger.Infof("[pruner][%s:%d] phase 1: skipped (pruner_skipPreserveParents=true)", blockHashStr, blockHeight)
@@ -320,6 +325,8 @@ func (s *Server) runPrunePhases(ctx context.Context, blockHeight uint32, blockHa
 		} else {
 			prunerDuration.WithLabelValues("expire_preservations").Observe(time.Since(startTime).Seconds())
 		}
+	} else if s.utxoStore == nil {
+		s.logger.Warnf("[pruner][%s:%d] phase 1b: no coin store wired - expired preservations cannot be processed", blockHashStr, blockHeight)
 	} else if s.settings.Pruner.SkipProcessExpiredPreservations {
 		s.logger.Infof("[pruner][%s:%d] phase 1b: skipped (pruner_skipProcessExpiredPreservations=true)", blockHashStr, blockHeight)
 	}
