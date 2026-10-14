@@ -12,7 +12,7 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
 
 ## A. One-line config / example fixes (files the examples already own)
 
-- [ ] Set `pruner_block_trigger = OnBlockMined` in Docker mainnet/testnet stacks — with
+- [x] Set `pruner_block_trigger = OnBlockMined` in Docker mainnet/testnet stacks — with
       the persister commented out, the default `OnBlockPersisted` waits on a notification
       that never arrives; deletion never starts, retention stops bounding anything (§38, Q20)
 - [ ] Fix `imagePullPolicy: Never` on `alertSystem` in the mainnet example — copy-paste
