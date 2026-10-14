@@ -142,9 +142,13 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       — validator now reconciles at start-up (broker metadata via optional
       `kafka.TopicPartitionCounter`, URL `partitions=` fallback, bucket divisibility),
       errors naming both numbers; v1 default still unaffected
-- [ ] Txmetacache bucket count: carry in the v2 wire header or log on both sides —
+- [x] Txmetacache bucket count: carry in the v2 wire header or log on both sides —
       build-tag-selected, Kafka partitions by it, no check that both binaries were
       compiled alike (§73, Q51)
+      — v2 header bytes 2:4 now carry the producer's BucketsCount (uint16 LE, was
+      reserved zeros); subtreevalidation warns (throttled) and counts a prometheus
+      metric, legacy netsync warns, on any mismatch; zero stays parseable as the
+      pre-buckets producer format so retained topic messages survive a rolling upgrade
 - [ ] Write a four-byte marker of `utxostore_utxoBatchSize` into the UTXO data directory
       and check at open — it is part of a coin's address and must never change post-run,
       yet nothing records what a directory was written with (§70, Q48)
