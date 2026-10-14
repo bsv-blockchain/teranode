@@ -9667,14 +9667,15 @@ outpoint and both hash values with those of an actual frozen output.</p>
 <p>Standard error codes include:</p>
 <ul>
 <li>-1: General error during command handling</li>
-<li>-3: Wallet error (wallet functionality not implemented)</li>
-<li>-5: Invalid address or key</li>
-<li>-8: Out of memory or other resource exhaustion</li>
+<li>-3: Unexpected type passed as a parameter</li>
+<li>-5: Invalid address or key, or the named block or transaction does not exist</li>
+<li>-8: Invalid, missing or out-of-range parameter</li>
 <li>-20: Database inconsistency or corruption</li>
 <li>-22: Error parsing or validating a block or transaction</li>
 <li>-25: Transaction or block validation error</li>
 <li>-26: Transaction rejected by policy rules</li>
 <li>-27: Transaction already in chain</li>
+<li>-28: Node still warming up - retry shortly</li>
 <li>-30: RPC timeout - request exceeded configured timeout limit</li>
 <li>-32600: Invalid JSON-RPC request</li>
 <li>-32601: Method not found</li>
@@ -9725,6 +9726,21 @@ outpoint and both hash values with those of an actual frozen output.</p>
 <td>Invalid, missing or duplicate parameter</td>
 </tr>
 <tr>
+<td>-22</td>
+<td>RPC_DESERIALIZATION_ERROR</td>
+<td>Error parsing a block or transaction</td>
+</tr>
+<tr>
+<td>-25</td>
+<td>RPC_VERIFY_ERROR</td>
+<td>Transaction or block failed validation</td>
+</tr>
+<tr>
+<td>-28</td>
+<td>RPC_IN_WARMUP</td>
+<td>Node is still warming up; retry shortly</td>
+</tr>
+<tr>
 <td>-32600</td>
 <td>RPC_INVALID_REQUEST</td>
 <td>JSON request format error</td>
@@ -9751,6 +9767,51 @@ outpoint and both hash values with those of an actual frozen output.</p>
 </tr>
 </tbody>
 </table>
+<p>Conditions that return a bitcoind-compatible code and message:</p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Message</th>
+<th>Returned by</th>
+<th>When</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>-5</td>
+<td><code>Block not found</code></td>
+<td><code>getblock</code>, <code>getblockheader</code>, <code>invalidateblock</code>, <code>reconsiderblock</code></td>
+<td>The named block does not exist</td>
+</tr>
+<tr>
+<td>-5</td>
+<td><code>No such mempool or blockchain transaction</code></td>
+<td><code>getrawtransaction</code></td>
+<td>The asset service reports it does not hold the transaction</td>
+</tr>
+<tr>
+<td>-8</td>
+<td><code>Block height out of range</code></td>
+<td><code>getblockbyheight</code></td>
+<td>No block exists at the requested height</td>
+</tr>
+<tr>
+<td>-25</td>
+<td><code>TX rejected: Missing inputs</code></td>
+<td><code>sendrawtransaction</code></td>
+<td>A parent of the submitted transaction is not known yet</td>
+</tr>
+<tr>
+<td>-28</td>
+<td><code>Still loading, try again shortly</code></td>
+<td><code>submitminingsolution</code>, <code>generate</code>, <code>generatetoaddress</code></td>
+<td>Block assembly is (re)loading unmined transactions: on startup, after a reset, during a reconcile</td>
+</tr>
+</tbody>
+</table>
+<p>-28 is transient and clears on its own: retry the same request after a short delay rather than treating it as a failure. On these commands a store or service fault never returns -5, -8 or -28; it returns the command's fallback code (usually -32603) with a generic message, and the detail goes to the node's log.</p>
+<p><code>getblockhash</code> does not follow this table yet: it answers a height with no block with -5 <code>Block not found</code>, where bitcoind and <code>getblockbyheight</code> answer -8 <code>Block height out of range</code>.</p>
 <h2 id="connection-limiting">Connection Limiting<a class="headerlink" href="#connection-limiting" title="Permanent link">&para;</a></h2>
 <p>The RPC interface implements connection limiting to prevent resource exhaustion. Default limits:</p>
 <ul>
