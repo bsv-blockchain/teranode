@@ -26,9 +26,13 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       and the `settings.conf` line now all agree at this branch's base
 - [x] Fix `rpc_user`/`rpc_pass` `longdesc`: says empty creds disable auth, code and
       `services/rpc/README.md` fail closed — fix whichever loses the decision (F2) (§60, Q37)
-- [ ] Enable ingest backpressure **and** a bounded block-assembly queue together in
+- [x] Enable ingest backpressure **and** a bounded block-assembly queue together in
       examples — one cannot work without the other; shipped trade is an unbounded queue
-      plus two invisible failure modes (§17, §18, Q9)
+      plus two invisible failure modes (§17, §18, Q9) — applied in
+      `deploy/kubernetes/teranode/teranode-configmap.yaml` (the env-based config the Cluster
+      CRs consume), not the Docker anchors: no Docker stack runs the validator, so the pair
+      cannot be carried together there — a lone queue cap would be exactly the half-enabled
+      state the notes warn about
 - [ ] Set `peer_registry` persistence in the single-node stacks, or drop the setting
       description's promise that an on-disk store is the single-node default — bans are
       forgotten on every restart (§31, Q16)
