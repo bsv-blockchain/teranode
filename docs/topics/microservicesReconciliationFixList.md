@@ -205,8 +205,12 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       without credentials means (anything listening could be driven) and would rewrite
       E3's assertions instead of the prose. Needs one answer: should a node with no
       credentials accept unauthenticated RPC at all?
-- [ ] `maxrawtxfee`: add to `settings.conf`, or move the policy into the Validator so it
+- [x] `maxrawtxfee`: add to `settings.conf`, or move the policy into the Validator so it
       applies to every door, not just RPC (§57, Q36)
+      — added to `settings.conf` beside the RPC credentials with its units, bypass,
+      default provenance (bitcoin-sv DEFAULT_TRANSACTION_MAXFEE) and the honest note that
+      the validator and P2P paths accept the same transaction unchecked; moving the rule
+      into the Validator remains the open half, recorded in the comment itself
 - [ ] Heavy-route anonymous ceiling: decide whether the two-bucket split doubling 10 → 20
       sustained is intended; if not, halve the default (§47, Q27)
 - [ ] Limited-tier allowlist: prune the 19 of 44 unimplemented methods, or label the list
