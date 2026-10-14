@@ -97,6 +97,10 @@ clean_backup:
 	@rm -f settings_local.conf.bak
 
 
+# Note: the aerospike tag below no longer gates the Aerospike store (it has been
+# always-compiled since; see docs/topics/microservicesReconciliationNotes.md
+# section 72). It is passed through so tag-gated test code still compiles in
+# tagged contexts; removing it from build targets changes nothing in the binary.
 .PHONY: build-teranode-with-dashboard
 build-teranode-with-dashboard: set_debug_flags set_txmetacache_flag build-dashboard
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION} -X main.StartFromState=${START_FROM_STATE}"  -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .

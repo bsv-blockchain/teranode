@@ -240,8 +240,14 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       invisible — so the remaining wire-it-or-delete call (Q57) stays open, now stated
       at the site instead of contradicted by it; misleading `[VALIDATOR]` prefixes gone
       from a shared helper's logs
-- [ ] `aerospike` build tag: no longer gates the store, but four Makefile targets and
+- [x] `aerospike` build tag: no longer gates the store, but four Makefile targets and
       `AGENTS.md` say it does — remove the tag or restore the gating (§72, Q50)
+      — alignment in the honest direction (the tree's actual state): the four files whose
+      `// //go:build aerospike` double-slash made prose-not-constraint are cleaned up and
+      their "requires the build tag" prose corrected, `AGENTS.md` now says the tag gates
+      one integration test and the store is always compiled, and the Makefile gains a
+      note at the build targets. Restoring real gating would need build-gated factory
+      wiring — a change of a different size, left as the open alternative in the notes
 - [ ] UDP multicast fast lane: document as receive-only (no sender exists; default
       interface is macOS `en0`), or build the sender (§82, Q58)
 - [ ] Comment the deletion-scheduler interface in `stores/blob/options/pruner_client.go` —
