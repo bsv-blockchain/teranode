@@ -8213,9 +8213,9 @@
 <p>The file-based blob store implements automatic cleanup of stale temporary files:</p>
 <ul>
 <li>Temporary files use <code>.tmp</code> extension during writes</li>
-<li>On successful write, temp files are atomically renamed to final names</li>
+<li>On successful write, temp files are atomically renamed to final names; a subtreeData another writer published first, refused by the store's existence check, is kept and promoted rather than failing the block</li>
 <li>On error/abort, temp files are immediately deleted</li>
-<li>During store initialization, stale <code>.tmp</code> files older than 10 minutes are automatically cleaned up</li>
+<li>A <code>.tmp</code> file left by a crash is not swept by the file store; removing it is an operator task</li>
 </ul>
 <h2 id="metrics">Metrics<a class="headerlink" href="#metrics" title="Permanent link">&para;</a></h2>
 <p>The service provides Prometheus metrics for monitoring:</p>

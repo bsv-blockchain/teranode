@@ -7223,6 +7223,17 @@
 <h1 id="block-validation-service-settings">Block Validation Service Settings<a class="headerlink" href="#block-validation-service-settings" title="Permanent link">&para;</a></h1>
 <p><strong>Related Topic</strong>: <a href="../../../../topics/services/blockValidation/">Block Validation Service</a></p>
 <h2 id="configuration-settings">Configuration Settings<a class="headerlink" href="#configuration-settings" title="Permanent link">&para;</a></h2>
+<p>The Default column is the loader fallback in <code>settings/settings.go</code>. A node uses
+it only when no configuration file sets the key. A node that runs on the
+repository configuration uses the base value in the committed <code>settings.conf</code>
+when that file sets the key, unless <code>settings_local.conf</code> or a context-specific
+key (<code>key.&lt;context&gt;</code>) sets another. <code>settings.conf</code> sets
+<code>blockvalidation_quick_validate_create_concurrency</code>,
+<code>blockvalidation_outpoint_only_below_checkpoint</code> and
+<code>blockvalidation_legacy_unified_below_checkpoint</code> to the same values as the
+loader (0, false and false), so for these keys the two agree. The
+<code>blockvalidation_isParentMined_retry_*</code> keys and
+<code>blockvalidation_catchup_prefetch_budget_bytes</code> have no line in <code>settings.conf</code>.</p>
 <table>
 <thead>
 <tr>
@@ -7421,7 +7432,7 @@
 <td>int</td>
 <td>4</td>
 <td>blockvalidation_isParentMined_retry_backoff_multiplier</td>
-<td>Parent mining retry backoff multiplier</td>
+<td>Slope of the linear backoff between parent-mined retries: the wait before retry i, counting from 0, is (multiplier x i + 1) x base</td>
 </tr>
 <tr>
 <td>IsParentMinedRetryBackoffDuration</td>
@@ -7709,6 +7720,27 @@
 <td>3</td>
 <td>blockvalidation_catchup_parallel_fetch_workers</td>
 <td>Number of parallel fetch workers</td>
+</tr>
+<tr>
+<td>QuickValidateCreateConcurrency</td>
+<td>int</td>
+<td>0</td>
+<td>blockvalidation_quick_validate_create_concurrency</td>
+<td>Callers allowed in flight at once in each of quick validation's two creating waves (the one-wave apply and the chained create wave), so a batch can put up to twice this many on the store. 0 derives it as max(min(utxostore_storeBatcherSize x utxostore_batcherMaxConcurrent, 16384), utxostore_storeBatcherSize x 8); an explicit value is not capped</td>
+</tr>
+<tr>
+<td>OutpointOnlyBelowCheckpoint</td>
+<td>bool</td>
+<td>false</td>
+<td>blockvalidation_outpoint_only_below_checkpoint</td>
+<td>Below the hardcoded checkpoint, quick validation spends by outpoint and skips parent reads, fees and the UTXO-hash checksum. Only on stores that support outpoint-only spends (SQL); Aerospike keeps reading parent outputs</td>
+</tr>
+<tr>
+<td>LegacyUnifiedBelowCheckpoint</td>
+<td>bool</td>
+<td>false</td>
+<td>blockvalidation_legacy_unified_below_checkpoint</td>
+<td>Legacy below-checkpoint blocks are quick-validated through the native catchup path's machinery instead of fully validated. Requires the setting above, a store that supports outpoint-only spends and a header run proven to end at a pinned checkpoint; legacy and block validation must agree on both settings. Off, every legacy block is fully validated</td>
 </tr>
 </tbody>
 </table>

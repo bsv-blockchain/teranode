@@ -6061,17 +6061,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#batch-processing-performance" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Batch Processing Performance
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#peer-timeout-management" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6105,10 +6094,32 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#block-download" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Block Download
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#block-prefetch" class="md-nav__link">
     <span class="md-ellipsis">
       
         Block Prefetch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#out-of-order-block-park" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Out-of-Order Block Park
       
     </span>
   </a>
@@ -6123,6 +6134,34 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Peer Registry Mirror">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Requirements
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recommendations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommendations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -6188,10 +6227,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#performance-tuning" class="md-nav__link">
+  <a href="#bounding-read-ahead" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Performance Tuning
+        Bounding Read-Ahead
       
     </span>
   </a>
@@ -6930,17 +6969,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#batch-processing-performance" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Batch Processing Performance
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#peer-timeout-management" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6974,10 +7002,32 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#block-download" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Block Download
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#block-prefetch" class="md-nav__link">
     <span class="md-ellipsis">
       
         Block Prefetch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#out-of-order-block-park" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Out-of-Order Block Park
       
     </span>
   </a>
@@ -6992,6 +7042,34 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Peer Registry Mirror">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Requirements
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recommendations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommendations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -7057,10 +7135,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#performance-tuning" class="md-nav__link">
+  <a href="#bounding-read-ahead" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Performance Tuning
+        Bounding Read-Ahead
       
     </span>
   </a>
@@ -7178,13 +7256,31 @@
 
 <h1 id="legacy-service-settings">Legacy Service Settings<a class="headerlink" href="#legacy-service-settings" title="Permanent link">&para;</a></h1>
 <p><strong>Related Topic</strong>: <a href="../../../../topics/services/legacy/">Legacy Service</a></p>
+<p>Every key below is loaded in the <code>Legacy: LegacySettings{</code> block of
+<code>settings/settings.go</code>. That block is the only thing that makes a setting
+configurable. A struct tag in <code>settings/legacy_settings.go</code> is documentation,
+not wiring: a field with a tag and no loader line arrives as its zero value
+whatever an operator writes.</p>
+<p>Two values are shown for each key:</p>
+<ul>
+<li><strong>Loader fallback</strong> is the default <code>settings/settings.go</code> passes. A node uses
+  it only when no configuration file sets the key.</li>
+<li><strong>settings.conf</strong> is the base value in the committed <code>settings.conf</code>. A node
+  that runs on the repository configuration uses this value, unless
+  <code>settings_local.conf</code> or a context-specific key (<code>key.&lt;context&gt;</code>) sets
+  another. "not set" means the file has no base line for the key, so the loader
+  fallback applies.</li>
+</ul>
+<p><code>${DATADIR}</code> is <code>./data</code> in <code>settings.conf</code> (<code>/data</code> in the <code>operator</code>
+context), and <code>${LEGACY_GRPC_PORT}</code> is <code>8099</code>.</p>
 <h2 id="configuration-settings">Configuration Settings<a class="headerlink" href="#configuration-settings" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
 <th>Setting</th>
 <th>Type</th>
-<th>Default</th>
+<th>Loader fallback</th>
+<th>settings.conf</th>
 <th>Environment Variable</th>
 <th>Usage</th>
 </tr>
@@ -7194,208 +7290,245 @@
 <td>WorkingDir</td>
 <td>string</td>
 <td>"../../data"</td>
+<td><code>${DATADIR}/legacy</code></td>
 <td>legacy_workingDir</td>
-<td>Data storage directory</td>
+<td>Directory for legacy peer data, resolved to an absolute path and created at startup. Holds the address book when SavePeers is true. Read from the config directly, not through the settings struct</td>
 </tr>
 <tr>
 <td>ListenAddresses</td>
 <td>[]string</td>
 <td>[]</td>
+<td>not set</td>
 <td>legacy_listen_addresses</td>
-<td><strong>CRITICAL</strong> - Network interfaces for peer connections</td>
+<td>Pipe-separated addresses to accept wire-protocol peers on. Empty falls back to the node's outbound interface IP and the network's default port</td>
 </tr>
 <tr>
 <td>ConnectPeers</td>
 <td>[]string</td>
 <td>[]</td>
+<td>not set</td>
 <td>legacy_connect_peers</td>
-<td>Forced peer connections</td>
+<td>Pipe-separated peers to dial. A non-empty list puts the node in connect-only mode</td>
 </tr>
 <tr>
 <td>OrphanEvictionDuration</td>
 <td>time.Duration</td>
 <td>10m</td>
+<td>not set</td>
 <td>legacy_orphanEvictionDuration</td>
-<td>Orphan transaction retention</td>
+<td>How long an orphan transaction is held. On eviction it gets one last validation attempt</td>
 </tr>
 <tr>
-<td>StoreBatcherSize</td>
+<td>MaxOrphanTxs</td>
 <td>int</td>
-<td>1024</td>
-<td>legacy_storeBatcherSize</td>
-<td><strong>CRITICAL</strong> - Store operation batch size</td>
-</tr>
-<tr>
-<td>StoreBatcherConcurrency</td>
-<td>int</td>
-<td>32</td>
-<td>legacy_storeBatcherConcurrency</td>
-<td><strong>CRITICAL</strong> - Store operation parallelism</td>
-</tr>
-<tr>
-<td>SpendBatcherSize</td>
-<td>int</td>
-<td>1024</td>
-<td>legacy_spendBatcherSize</td>
-<td><strong>CRITICAL</strong> - Spend operation batch size</td>
-</tr>
-<tr>
-<td>SpendBatcherConcurrency</td>
-<td>int</td>
-<td>32</td>
-<td>legacy_spendBatcherConcurrency</td>
-<td><strong>CRITICAL</strong> - Spend operation parallelism</td>
-</tr>
-<tr>
-<td>OutpointBatcherSize</td>
-<td>int</td>
-<td>1024</td>
-<td>legacy_outpointBatcherSize</td>
-<td><strong>CRITICAL</strong> - Outpoint operation batch size</td>
-</tr>
-<tr>
-<td>OutpointBatcherConcurrency</td>
-<td>int</td>
-<td>32</td>
-<td>legacy_outpointBatcherConcurrency</td>
-<td>Outpoint operation parallelism</td>
+<td>100</td>
+<td>not set</td>
+<td>legacy_maxOrphanTxs</td>
+<td>Cap on orphan transactions held in memory. Inserting past the cap evicts the oldest by insertion time. 0 leaves the pool unbounded</td>
 </tr>
 <tr>
 <td>PrintInvMessages</td>
 <td>bool</td>
 <td>false</td>
+<td>false</td>
 <td>legacy_printInvMessages</td>
-<td>Debug logging for inventory messages</td>
+<td>Log every inventory message sent and received</td>
 </tr>
 <tr>
 <td>GRPCAddress</td>
 <td>string</td>
 <td>""</td>
+<td><code>localhost:${LEGACY_GRPC_PORT}</code></td>
 <td>legacy_grpcAddress</td>
-<td><strong>CRITICAL</strong> - gRPC client connections (required for client, returns error if empty)</td>
+<td>Address other services dial to reach the legacy service. Client creation fails when empty</td>
 </tr>
 <tr>
 <td>AllowBlockPriority</td>
 <td>bool</td>
-<td>false</td>
+<td>true</td>
+<td>true</td>
 <td>legacy_allowBlockPriority</td>
-<td>Block priority handling</td>
+<td>Negotiate the BSV multistream BlockPriority policy, which carries block traffic on its own TCP stream. False also refuses an inbound createstream</td>
 </tr>
 <tr>
 <td>GRPCListenAddress</td>
 <td>string</td>
 <td>""</td>
+<td><code>:${LEGACY_GRPC_PORT}</code></td>
 <td>legacy_grpcListenAddress</td>
-<td>gRPC server binding</td>
+<td>Bind address for the legacy gRPC server</td>
 </tr>
 <tr>
 <td>SavePeers</td>
 <td>bool</td>
 <td>false</td>
+<td>not set</td>
 <td>legacy_savePeers</td>
-<td>Peer information persistence</td>
+<td>Persist the address book. When false the address manager is given no directory and keeps nothing across a restart</td>
 </tr>
 <tr>
 <td>AllowSyncCandidateFromLocalPeers</td>
 <td>bool</td>
 <td>false</td>
+<td>not set</td>
 <td>legacy_allowSyncCandidateFromLocalPeers</td>
-<td><strong>CRITICAL</strong> - Local peer sync candidate selection</td>
+<td>Regtest only. False admits only 127.0.0.1 and localhost peers as sync candidates. On every other network the setting is not read</td>
 </tr>
 <tr>
 <td>TempStore</td>
 <td>*url.URL</td>
 <td>"file://./data/tempstore"</td>
+<td><code>file://${DATADIR}/tempstore?checksum=false</code></td>
 <td>temp_store</td>
-<td><strong>CRITICAL</strong> - Temporary storage location</td>
+<td>Blob store for temporary data. The out-of-order block park writes here and needs a file:// URL</td>
 </tr>
 <tr>
 <td>PeerIdleTimeout</td>
 <td>time.Duration</td>
 <td>125s</td>
+<td>not set</td>
 <td>legacy_peerIdleTimeout</td>
-<td><strong>CRITICAL</strong> - Peer inactivity timeout</td>
+<td>Disconnect a peer after this long with no message. A multistream association with recent traffic on another stream resets the timer. Half this value bounds the streaming pipeline's admission wait</td>
 </tr>
 <tr>
-<td>PeerProcessingTimeout</td>
+<td>MaxAddnodePeers</td>
+<td>int</td>
+<td>8</td>
+<td>not set</td>
+<td>legacy_maxAddnodePeers</td>
+<td>Ceiling on addnode peers, budgeted separately from MaxPeers and enforced on both the startup list and the runtime RPC</td>
+</tr>
+<tr>
+<td>ReplenishInterval</td>
 <td>time.Duration</td>
-<td>3m</td>
-<td>legacy_peerProcessingTimeout</td>
-<td><strong>CRITICAL</strong> - Message processing timeout</td>
-</tr>
-<tr>
-<td>BlockFailureBackoffBase</td>
-<td>time.Duration</td>
-<td>5s</td>
-<td>legacy_blockFailureBackoffBase</td>
-<td>Base per-block backoff after a transient storage/service failure (0 disables)</td>
-</tr>
-<tr>
-<td>BlockFailureBackoffMaxDuration</td>
-<td>time.Duration</td>
-<td>150s</td>
-<td>legacy_blockFailureBackoffMaxDuration</td>
-<td>Cap on the per-block backoff window and the failure-tracking map TTL, kept below the 180s sync-peer stall window (0 disables)</td>
-</tr>
-<tr>
-<td>BlockPrefetchBufferBytes</td>
-<td>int64</td>
-<td>268435456</td>
-<td>legacy_blockPrefetchBufferBytes</td>
-<td>Byte budget for blocks downloaded ahead of processing during sync (0 disables prefetch)</td>
-</tr>
-<tr>
-<td>Upnp</td>
-<td>bool</td>
-<td>false</td>
-<td>legacy_upnp</td>
-<td>Enable UPnP for automatic port mapping</td>
+<td>2s</td>
+<td>not set</td>
+<td>legacy_replenishInterval</td>
+<td>How often the connection manager dials to close its outbound deficit. 0 restores the one-minute ticker and disables the event-driven wake</td>
 </tr>
 <tr>
 <td>MaxFeelerPeers</td>
 <td>int</td>
 <td>1</td>
+<td>not set</td>
 <td>legacy_maxFeelerPeers</td>
-<td>Peer slots reserved for short-lived feeler probes (0 disables feelers and the reservation together)</td>
+<td>Peer slots reserved for short-lived feeler probes, and the cap on probes at once. 0 disables feelers and the reservation together</td>
 </tr>
 <tr>
 <td>FeelerInterval</td>
 <td>time.Duration</td>
 <td>120s</td>
+<td>not set</td>
 <td>legacy_feelerInterval</td>
-<td>Mean of the randomised gap between feeler probes (not a disable lever; a non-positive value falls back to the default)</td>
+<td>Mean of the randomised gap between feeler probes. Not a disable lever: a non-positive value falls back to 120s with a warning</td>
 </tr>
 <tr>
 <td>FeelerHandshakeTimeout</td>
 <td>time.Duration</td>
 <td>25s</td>
+<td>not set</td>
 <td>legacy_feelerHandshakeTimeout</td>
-<td>How long a feeler waits for a version message; must stay under the 30s peer negotiate timeout</td>
+<td>How long a feeler waits for a version message. Must stay under the 30s peer negotiate timeout</td>
+</tr>
+<tr>
+<td>PeerProcessingTimeout</td>
+<td>time.Duration</td>
+<td>3m</td>
+<td>10m</td>
+<td>legacy_peerProcessingTimeout</td>
+<td>Per-message processing watchdog. Not armed for block messages while prefetch ingestion is active. Also the pre-admission deadline on an inbound peer, and part of the block-failure map TTL</td>
+</tr>
+<tr>
+<td>BlockDownloadTimeoutBasePercent</td>
+<td>int64</td>
+<td>100</td>
+<td>not set</td>
+<td>legacy_blockDownloadTimeoutBasePercent</td>
+<td>Ceiling on one block download at the chain tip, as a percentage of the target block interval. Floored at 30 minutes, so values at or below 300 change nothing on a 10-minute chain</td>
+</tr>
+<tr>
+<td>BlockDownloadTimeoutBaseIBDPercent</td>
+<td>int64</td>
+<td>600</td>
+<td>not set</td>
+<td>legacy_blockDownloadTimeoutBaseIBDPercent</td>
+<td>The same ceiling while catching up. Also floored at 30 minutes, which the 600 default clears on a 10-minute chain</td>
+</tr>
+<tr>
+<td>BlockDownloadTimeoutPerPeerPercent</td>
+<td>int64</td>
+<td>50</td>
+<td>not set</td>
+<td>legacy_blockDownloadTimeoutPerPeerPercent</td>
+<td>Extra ceiling per other peer with a block download outstanding. The total is floored at 30 minutes, so this only adds patience</td>
+</tr>
+<tr>
+<td>MultiPeerBlockDownload</td>
+<td>bool</td>
+<td>true</td>
+<td>not set</td>
+<td>legacy_multiPeerBlockDownload</td>
+<td>Spread block requests over every eligible peer. False assigns them all to the sync peer, disconnects a stalled sync peer instead of demoting it, and ignores notfound</td>
+</tr>
+<tr>
+<td>MaxBlocksInTransitPerPeer</td>
+<td>int</td>
+<td>16</td>
+<td>not set</td>
+<td>legacy_maxBlocksInTransitPerPeer</td>
+<td>Most block bodies one measured peer may owe at once with multi-peer download on; a peer whose speed is not measured holds 1. A measured peer holds this value scaled by its rate against the fastest peer's, rounded up, at least 1. Not reduced for large blocks: the 100 GiB park backstop (<code>parkBackstopBytes</code>) guards the disk instead. In every mode it also sizes the pipeline's admission budget, at four slots per peer, and the peer package's download-timeout budget</td>
+</tr>
+<tr>
+<td>BlockDownloadWindow</td>
+<td>int</td>
+<td>1024</td>
+<td>not set</td>
+<td>legacy_blockDownloadWindow</td>
+<td>Block bodies the whole node may have outstanding, counting every peer together, and the read-ahead depth: how far above the committed tip a block may be asked for at all. A count, not svnode's per-peer height range</td>
+</tr>
+<tr>
+<td>ParkStoreTimeout</td>
+<td>time.Duration</td>
+<td>10s</td>
+<td>not set</td>
+<td>legacy_parkStoreTimeout</td>
+<td>Deadline on each park blob store operation, bounding the wait for the file store's shared permits. Values below 1s are raised to 1s</td>
 </tr>
 <tr>
 <td>PeerRegistryEnabled</td>
 <td>bool</td>
 <td>true</td>
+<td>not set</td>
 <td>legacy_peerRegistryEnabled</td>
-<td>Mirror connected legacy peers into the centralized peer registry so the dashboard can show them (false is a kill switch)</td>
+<td>Mirror connected legacy peers into the centralized peer registry so the dashboard can show them</td>
 </tr>
 <tr>
 <td>PeerRegistrySyncInterval</td>
 <td>time.Duration</td>
 <td>10s</td>
+<td>not set</td>
 <td>legacy_peerRegistrySyncInterval</td>
-<td>How often the mirror reconciles connected legacy peers into the registry</td>
+<td>How often that mirror reconciles connected legacy peers into the registry</td>
 </tr>
 </tbody>
 </table>
 <h2 id="configuration-dependencies">Configuration Dependencies<a class="headerlink" href="#configuration-dependencies" title="Permanent link">&para;</a></h2>
 <h3 id="peer-connection-management">Peer Connection Management<a class="headerlink" href="#peer-connection-management" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>ListenAddresses</code> controls incoming connections (falls back to external IP:8333 if empty)</li>
-<li><code>ConnectPeers</code> forces outgoing connections to specific peers</li>
-<li>When <code>ConnectPeers</code> is set, <code>MaxPeers</code> automatically set to match count (exclusive mode)</li>
-<li><code>ConnectPeers</code> disables DNS seeding</li>
-<li><code>SavePeers</code> controls peer information persistence to disk</li>
+<li><code>ListenAddresses</code> controls incoming connections. Empty falls back to the IP of
+  the interface that reaches the internet, plus the active network's default
+  port, which is 8333 on mainnet.</li>
+<li><code>ConnectPeers</code> forces outgoing connections to specific peers.</li>
+<li>When <code>ConnectPeers</code> is set, <code>MaxPeers</code> is lowered to the length of the list and
+  the address-book dialler is not installed, so the configured list is the node's
+  entire connectivity.</li>
+<li><code>ConnectPeers</code> does not switch off DNS seeding. The flag that does is decided
+  before the settings list is read, so a node with <code>legacy_connect_peers</code> set
+  still seeds its address book from DNS.</li>
+<li><code>SavePeers</code> controls whether the address book is written to <code>WorkingDir</code>.</li>
+<li>There is no working <code>legacy_upnp</code> key. The struct field exists but nothing
+  loads it, so it is always false. UPnP is reached through <code>legacy_config_Upnp</code>,
+  which is copied onto the legacy config struct by field name.</li>
 </ul>
 <h3 id="feeler-probes">Feeler Probes<a class="headerlink" href="#feeler-probes" title="Permanent link">&para;</a></h3>
 <ul>
@@ -7424,33 +7557,105 @@
   emitted once, at startup, and the deadline the feeler settled on is on the
   <code>[Feeler] Starting</code> line.</li>
 </ul>
-<h3 id="batch-processing-performance">Batch Processing Performance<a class="headerlink" href="#batch-processing-performance" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Batch sizes and concurrency settings work together for memory and performance control</li>
-<li><code>StoreBatcherSize</code> * <code>StoreBatcherConcurrency</code> limits concurrent requests</li>
-</ul>
 <h3 id="peer-timeout-management">Peer Timeout Management<a class="headerlink" href="#peer-timeout-management" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>PeerIdleTimeout</code> set to 125s to accommodate 2-minute ping/pong intervals</li>
-<li><code>PeerProcessingTimeout</code> set to 3m for block processing (largest operations)</li>
+<li><code>PeerIdleTimeout</code> at 125s sits above the protocol's two-minute ping interval, so
+  a healthy quiet peer is not dropped.</li>
+<li><code>PeerProcessingTimeout</code> bounds one message's handling. While prefetch ingestion
+  is active it is not armed for block messages, because a block can legitimately
+  wait on the admission budget for longer than this; a stalled block download is
+  then caught by the sync-peer stall detector and the idle timer instead.</li>
 </ul>
 <h3 id="sync-candidate-selection">Sync Candidate Selection<a class="headerlink" href="#sync-candidate-selection" title="Permanent link">&para;</a></h3>
 <ul>
-<li>When <code>AllowSyncCandidateFromLocalPeers = false</code>, only non-localhost peers can be sync candidates</li>
-<li>Prevents local peers from being selected as blockchain sync source</li>
+<li><code>AllowSyncCandidateFromLocalPeers</code> is read on regtest and nowhere else.</li>
+<li>On regtest, false means a peer is a sync candidate only if its host is
+  <code>127.0.0.1</code> or <code>localhost</code>. True skips that test and admits any host.</li>
+<li>On every other network a peer is a sync candidate if it advertises the
+  <code>SFNodeNetwork</code> service flag, and this setting has no part in the decision.</li>
 </ul>
 <h3 id="block-priority">Block Priority<a class="headerlink" href="#block-priority" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>AllowBlockPriority = true</code>: Enables block priority messages via connection streaming</li>
-<li>Sent via Protoconf message during peer handshake</li>
+<li>With <code>AllowBlockPriority</code> true and a peer that sends an association ID in its
+  version message, the node registers a multistream association and defers
+  registering the peer with the sync manager until the protoconf exchange, so the
+  block stream exists before any getdata goes out.</li>
+<li>The stream policy itself is negotiated on protoconf, when the peer lists
+  BlockPriority among its stream policies. An outbound peer then opens its
+  required streams synchronously.</li>
+<li>With it false, the node registers no association and disconnects any peer that
+  sends a createstream.</li>
+</ul>
+<h3 id="block-download">Block Download<a class="headerlink" href="#block-download" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>BlockDownloadWindow</code> and <code>MaxBlocksInTransitPerPeer</code> bound how many block
+  bodies are outstanding, and <code>BlockDownloadWindow</code> doubles as the read-ahead
+  depth: how far above the committed tip a block may be asked for at all, which
+  is what decides how much disk the park needs.</li>
+<li>Blocks are chosen by a pass over that range: drop what is already on disk, in
+  the park, arriving, being converted, given up on or already owed, then hand the
+  rest to peers with budget. Below the last checkpoint each block goes to the
+  measured peer with the lowest (blocks owed + 1) / rate: a block size is not
+  known before the download, so the schedule uses none, and no block waits while
+  a peer has room. A peer holds the per-peer depth scaled by its rate against
+  the fastest peer's. A peer with no rate gets one block from the top of the
+  window. Measured rates of outbound peers are kept by address, with the time
+  each was measured, in <code>legacy-peer-rates.json</code> in the working directory. A
+  remembered rate loses half its weight per hour of age, an entry older than
+  24 hours is dropped, and the file keeps at most the 1,000 newest. Below the
+  last checkpoint the range comes from the header cache, which runs to the next
+  checkpoint; above it, blocks are asked for from invs and the pass re-asks from
+  the download ledger. There is no download cursor, so nothing carries a
+  position between passes.</li>
+<li>A block whose owners have sent nothing for the 60-second retry window is
+  offered to another peer on the next pass. An owner that has delivered a block
+  asked after this one has passed this one over, and its bytes do not count for
+  it. Above the last checkpoint this applies to every block, one block per quiet
+  owner. Below it, a block with one active owner that is still sending other
+  block bytes, and has not passed this one over, stays with it, and the watcher
+  judges it; the watcher also treats a passed-over block as one its owner will
+  not deliver.</li>
+<li>During headers-first sync, a block above the committed tip that has been
+  arriving for 30 seconds at under 100 KB/s, and will not finish before the
+  chain needs it, is asked of one other peer, and the slow peer is disconnected.
+  Every copy of the block must be that slow, a further copy waits 30 seconds
+  after the last one, and at most three peers send or are expected to send a
+  block at once. A peer let off a block that sends nothing is not counted. The
+  slow peer is kept connected when the peer asked is one that was let off the
+  block and asked again, or, at the three-copy limit, when such a peer is still
+  connected and sends nothing. These are SV Node's slow-fetch timeout, stalling
+  rate and parallel-fetch limit.</li>
+<li>During headers-first sync, the watcher examines up to 64 owed blocks from the
+  tip every 5 seconds. A block that will land 30 seconds or more after each block
+  below it is also asked of one other peer: for a block arriving, whose size its
+  first bytes declare, the peer that lands a full copy in half the owner's time;
+  for a queued block, the fastest peer with twice the owner's rate that lands
+  the block, at the recent mean size, in half the owner's time. A copy with more
+  than half its bytes gets no extra request unless it will take more than 5
+  minutes, and a block whose every copy arrives under 100 KB/s is left to the
+  race, with no block above it counted as late. A block is judged while it has
+  one live copy, and the watcher and the race together ask for at most two extra
+  copies of a block in 10 minutes. There is no setting for it; the metric is
+  <code>teranode_legacy_netsync_frontier_races_total</code>.</li>
+<li><code>MultiPeerBlockDownload</code> set to false keeps the pass but gives every block to
+  the sync peer, bounded by the block-size ladder alone.</li>
 </ul>
 <h3 id="block-prefetch">Block Prefetch<a class="headerlink" href="#block-prefetch" title="Permanent link">&para;</a></h3>
+<p>Asynchronous block admission is always on and never active on regtest. The
+block's bytes have already been streamed to files by the time admission runs,
+so each block charges one slot against a budget sized as
+<code>MaxBlocksInTransitPerPeer</code> times four. At the defaults that is 64 blocks.</p>
+<h3 id="out-of-order-block-park">Out-of-Order Block Park<a class="headerlink" href="#out-of-order-block-park" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>BlockPrefetchBufferBytes</code> bounds the bytes of received-but-not-yet-processed blocks so download overlaps validation during sync; <code>0</code> disables prefetch (synchronous ingestion).</li>
-<li>Big-block era: a block at least as large as the whole budget is admitted alone (weight clamped), giving zero overlap — identical to pre-prefetch behaviour. To get overlap on large blocks, set the budget to at least ~2× the typical block size.</li>
+<li>The park needs a temp store it can enumerate after a restart, so the node refuses
+  to start on any <code>temp_store</code> URL that is not a <code>file://</code> store, and on a node
+  with no temp store at all. Every downloaded block goes through the park.</li>
+<li><code>ParkStoreTimeout</code> bounds the wait for the file store's process-wide permits,
+  which are shared with subtree writes, transaction writes and both persisters. It
+  does not bound the work the store does once it holds a permit.</li>
 </ul>
 <h3 id="peer-registry-mirror">Peer Registry Mirror<a class="headerlink" href="#peer-registry-mirror" title="Permanent link">&para;</a></h3>
-<p><strong>PeerRegistryEnabled</strong> and <strong>PeerRegistrySyncInterval</strong> control the mirror that
+<p><code>PeerRegistryEnabled</code> and <code>PeerRegistrySyncInterval</code> control the mirror that
 makes legacy peers visible in the dashboard beside libp2p peers.</p>
 <p>The mirror is a read-only visibility path. It feeds no sync, catchup or
 peer-selection decision, and the legacy service's own sync engine
@@ -7466,15 +7671,15 @@ peer-selection decision, and the legacy service's own sync engine
 <li>Each registry call is bounded independently, so an unresponsive blockchain
   service delays a tick rather than stalling the mirror.</li>
 </ul>
-<p><strong>Requirements</strong></p>
+<h4 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h4>
 <ul>
 <li>The blockchain service must be reachable, since it hosts the registry. When
   the registry client is unavailable the mirror does not start and the legacy
   service runs normally without dashboard peer visibility.</li>
 </ul>
-<p><strong>Recommendations</strong></p>
+<h4 id="recommendations">Recommendations<a class="headerlink" href="#recommendations" title="Permanent link">&para;</a></h4>
 <ul>
-<li>Keep <strong>PeerRegistryEnabled</strong> at true for operator visibility. Set it to false
+<li>Keep <code>PeerRegistryEnabled</code> at true for operator visibility. Set it to false
   only if the extra registry traffic is unwelcome on a node carrying very many
   legacy connections.</li>
 <li>The default 10s interval sits well below the legacy two-minute ping interval.
@@ -7499,7 +7704,7 @@ peer-selection decision, and the legacy service's own sync engine
 <tr>
 <td>TempStore</td>
 <td>blob.Store</td>
-<td><strong>CRITICAL</strong> - Temporary data storage during processing</td>
+<td><strong>CRITICAL</strong> - Temporary data storage, including the out-of-order block park</td>
 </tr>
 <tr>
 <td>UTXOStore</td>
@@ -7518,17 +7723,17 @@ peer-selection decision, and the legacy service's own sync engine
 </tr>
 <tr>
 <td>SubtreeValidationClient</td>
-<td>subtreevalidation.ClientI</td>
+<td>subtreevalidation.Interface</td>
 <td><strong>CRITICAL</strong> - Subtree validation</td>
 </tr>
 <tr>
 <td>BlockValidationClient</td>
-<td>blockvalidation.ClientI</td>
+<td>blockvalidation.Interface</td>
 <td><strong>CRITICAL</strong> - Block validation</td>
 </tr>
 <tr>
 <td>BlockAssemblyClient</td>
-<td>blockassembly.ClientI</td>
+<td>*blockassembly.Client</td>
 <td><strong>CRITICAL</strong> - Block assembly operations</td>
 </tr>
 </tbody>
@@ -7547,26 +7752,50 @@ peer-selection decision, and the legacy service's own sync engine
 <tr>
 <td>GRPCAddress</td>
 <td>Must not be empty</td>
-<td>Client creation fails</td>
+<td>Client creation returns a configuration error</td>
 <td>During client initialization</td>
 </tr>
 <tr>
+<td>TempStore</td>
+<td>Must be set</td>
+<td>Daemon returns "temp_store config not found"</td>
+<td>During store construction</td>
+</tr>
+<tr>
 <td>ListenAddresses</td>
-<td>Falls back to external IP:8333 if empty</td>
+<td>Falls back to the outbound interface IP and the network's default port if empty</td>
 <td>Network connectivity</td>
 <td>During server start</td>
 </tr>
 <tr>
-<td>PeerIdleTimeout</td>
-<td>Must accommodate ping/pong intervals</td>
-<td>Peer stability</td>
-<td>During peer connection</td>
+<td>ParkStoreTimeout</td>
+<td>Raised to 1s if lower</td>
+<td>A zero deadline would fail every store operation instantly</td>
+<td>During sync manager construction</td>
 </tr>
 <tr>
-<td>PeerProcessingTimeout</td>
-<td>Must allow for block processing time</td>
-<td>Message handling</td>
-<td>During message processing</td>
+<td>MaxFeelerPeers</td>
+<td>Zeroed by connect-only mode, or by a peer cap too tight to hold the reservation</td>
+<td>Feelers and their slot reservation are both switched off, with the reason logged</td>
+<td>During server construction</td>
+</tr>
+<tr>
+<td>FeelerInterval</td>
+<td>Non-positive falls back to 120s with a warning</td>
+<td>Probe pacing</td>
+<td>When the feeler loop starts</td>
+</tr>
+<tr>
+<td>FeelerHandshakeTimeout</td>
+<td>Non-positive falls back to 25s; 30s or more is reduced to 29s, both with a warning</td>
+<td>A deadline at or above the peer negotiate timeout lets the peer package tear the connection down first</td>
+<td>When the feeler loop starts</td>
+</tr>
+<tr>
+<td>Block download timeout percents</td>
+<td>Result floored at 30 minutes and capped at the largest budget these settings can produce</td>
+<td>The scaling can only widen a block's deadline, never narrow it</td>
+<td>Per block download</td>
 </tr>
 </tbody>
 </table>
@@ -7577,14 +7806,15 @@ peer-selection decision, and the legacy service's own sync engine
 </span></code></pre></div>
 <h3 id="forced-peer-connections">Forced Peer Connections<a class="headerlink" href="#forced-peer-connections" title="Permanent link">&para;</a></h3>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>legacy_connect_peers = "peer1.example.com:8333|peer2.example.com:8333"
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>legacy_allowSyncCandidateFromLocalPeers = false
 </span></code></pre></div>
-<h3 id="performance-tuning">Performance Tuning<a class="headerlink" href="#performance-tuning" title="Permanent link">&para;</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>legacy_storeBatcherSize = 2048
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>legacy_storeBatcherConcurrency = 64
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>legacy_spendBatcherSize = 2048
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>legacy_spendBatcherConcurrency = 64
+<p>Connect-only mode lowers the peer cap to the length of the list and switches
+feeler probes off. It does not switch off DNS seeding.</p>
+<h3 id="bounding-read-ahead">Bounding Read-Ahead<a class="headerlink" href="#bounding-read-ahead" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>legacy_blockDownloadWindow = 32
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>legacy_maxBlocksInTransitPerPeer = 8
 </span></code></pre></div>
+<p>Lower values keep the park small and the node's memory footprint down, at the
+cost of a sync more exposed to one slow peer.</p>
 
 
 

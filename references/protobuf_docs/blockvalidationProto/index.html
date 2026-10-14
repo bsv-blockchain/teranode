@@ -7416,6 +7416,18 @@
 <td></td>
 <td>P2P peer identifier for peerMetrics tracking</td>
 </tr>
+<tr>
+<td>block_id</td>
+<td><a href="#uint32">uint32</a></td>
+<td></td>
+<td>Pre-assigned block ID from legacy netsync (0 = not pre-assigned, the blockchain service assigns one)</td>
+</tr>
+<tr>
+<td>header_proven</td>
+<td><a href="#bool">bool</a></td>
+<td></td>
+<td>True only when legacy netsync can show the block's hash sits at or below a pinned checkpoint hash matched in an internally linked header run. False denies the below-checkpoint quick route; the block takes full validation</td>
+</tr>
 </tbody>
 </table>
 <p><a name="RevalidateBlockRequest"></a></p>

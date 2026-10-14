@@ -8134,6 +8134,26 @@
 <td>Histogram</td>
 <td>Time blocks spend in queue before processing</td>
 </tr>
+<tr>
+<td><code>teranode_blockvalidation_outpoint_only_blocks_total</code></td>
+<td>Counter</td>
+<td>Blocks that entered the below-checkpoint outpoint-only fast path, counted once on entry; a block that later falls back to normal validation is still counted</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_quick_commit_add_block_seconds</code></td>
+<td>Histogram</td>
+<td>AddBlock duration in the quick-validation commit tail</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_quick_commit_unlock_seconds</code></td>
+<td>Histogram</td>
+<td>Unlock pass duration in the quick-validation commit tail</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_quick_commit_block_exists_seconds</code></td>
+<td>Histogram</td>
+<td>SetBlockExists duration in the quick-validation commit tail</td>
+</tr>
 </tbody>
 </table>
 <h2 id="p2p-service-metrics">P2P Service Metrics<a class="headerlink" href="#p2p-service-metrics" title="Permanent link">&para;</a></h2>
@@ -8235,9 +8255,9 @@
 <td>The time taken to handle OnTx</td>
 </tr>
 <tr>
-<td><code>teranode_legacy_peer_server_OnBlock</code></td>
+<td><code>teranode_legacy_peer_server_OnBlockOnDisk</code></td>
 <td>Histogram</td>
-<td>The time taken to handle OnBlock</td>
+<td>The time taken to hand a streamed block to the sync manager's queue</td>
 </tr>
 <tr>
 <td><code>teranode_legacy_peer_server_OnInv</code></td>
@@ -8312,6 +8332,7 @@
 </tbody>
 </table>
 <h2 id="legacy-netsync-service-metrics">Legacy NetSync Service Metrics<a class="headerlink" href="#legacy-netsync-service-metrics" title="Permanent link">&para;</a></h2>
+<p>The download gauges and the <code>download_*_total</code> counters are published from the 30-second download queue report, so they lag by up to 30 seconds and the counters move in steps.</p>
 <table>
 <thead>
 <tr>
@@ -8344,7 +8365,7 @@
 <tr>
 <td><code>teranode_legacy_netsync_handle_block_direct</code></td>
 <td>Histogram</td>
-<td>The time taken to handle a block directly</td>
+<td>The time taken to commit a converted block (HandleConvertedBlock); the name predates the converted-record route</td>
 </tr>
 <tr>
 <td><code>teranode_legacy_netsync_process_block</code></td>
@@ -8352,69 +8373,104 @@
 <td>The time taken to process a block</td>
 </tr>
 <tr>
-<td><code>teranode_legacy_netsync_prepare_subtrees</code></td>
-<td>Histogram</td>
-<td>The time taken to prepare the subtrees</td>
-</tr>
-<tr>
-<td><code>teranode_legacy_netsync_validate_transactions_legacy_mode</code></td>
-<td>Histogram</td>
-<td>The time taken to validate transactions in legacy mode</td>
-</tr>
-<tr>
-<td><code>teranode_legacy_netsync_pre_validate_transactions</code></td>
-<td>Histogram</td>
-<td>The time taken to pre-validate transactions</td>
-</tr>
-<tr>
-<td><code>teranode_legacy_netsync_validate_transactions</code></td>
-<td>Histogram</td>
-<td>The time taken to validate transactions</td>
-</tr>
-<tr>
-<td><code>teranode_legacy_netsync_extend_transactions</code></td>
-<td>Histogram</td>
-<td>The time taken to extend transactions</td>
-</tr>
-<tr>
-<td><code>teranode_legacy_netsync_create_utxos</code></td>
-<td>Histogram</td>
-<td>The time taken to create UTXOs</td>
-</tr>
-<tr>
-<td><code>teranode_legacy_netsync_block_tx_size</code></td>
-<td>Histogram</td>
-<td>The size of the transactions in the block being processed</td>
-</tr>
-<tr>
-<td><code>teranode_legacy_netsync_block_tx_nr_inputs</code></td>
-<td>Histogram</td>
-<td>The number of inputs in the block being processed</td>
-</tr>
-<tr>
-<td><code>teranode_legacy_netsync_block_tx_nr_outputs</code></td>
-<td>Histogram</td>
-<td>The number of outputs in the block being processed</td>
-</tr>
-<tr>
-<td><code>teranode_legacy_netsync_block_tx_extend</code></td>
-<td>Histogram</td>
-<td>The time taken to extend a transaction</td>
-</tr>
-<tr>
-<td><code>teranode_legacy_netsync_block_tx_validate</code></td>
-<td>Histogram</td>
-<td>The time taken to validate a transaction</td>
-</tr>
-<tr>
 <td><code>teranode_legacy_netsync_orphans</code></td>
 <td>Gauge</td>
 <td>The number of orphan transactions</td>
 </tr>
 <tr>
+<td><code>teranode_legacy_netsync_orphans_abandoned_total</code></td>
+<td>Counter</td>
+<td>Orphan transactions dropped for good: evicted from the orphan pool and still invalid on the final validation attempt</td>
+</tr>
+<tr>
 <td><code>teranode_legacy_netsync_orphan_time</code></td>
 <td>Histogram</td>
 <td>The time taken to process an orphan transaction</td>
+</tr>
+<tr>
+<td><code>teranode_legacy_netsync_parked_blocks</code></td>
+<td>Gauge</td>
+<td>The number of downloaded blocks held on disk waiting for their parent</td>
+</tr>
+<tr>
+<td><code>teranode_legacy_netsync_parked_bytes</code></td>
+<td>Gauge</td>
+<td>Bytes the park bills for the blocks it holds: a block parked off the wire at its wire size, a block recovered from disk after a restart at its converted record's size; <code>bytes_ahead</code> is what the backstop reads</td>
+</tr>
+<tr>
+<td><code>teranode_legacy_netsync_frontier_races_total</code></td>
+<td>Counter</td>
+<td>Blocks asked of a second peer because the chain was about to wait on them from a slow one</td>
+</tr>
+<tr>
+<td><code>teranode_legacy_netsync_blocks_owed</code></td>
+<td>Gauge</td>
+<td>Blocks asked of peers and not yet delivered, every peer together, including blocks arriving now</td>
+</tr>
+<tr>
+<td><code>teranode_legacy_netsync_header_cache_heights</code></td>
+<td>Gauge</td>
+<td>Heights the headers-first header cache names, the header run the download pass picks blocks from below the last checkpoint</td>
+</tr>
+<tr>
+<td><code>teranode_legacy_netsync_bytes_ahead</code></td>
+<td>Gauge</td>
+<td>Block bytes held ahead of the chain, parked plus arriving, which the download measures against <code>park_backstop_bytes</code></td>
+</tr>
+<tr>
+<td><code>teranode_legacy_netsync_park_backstop_bytes</code></td>
+<td>Gauge</td>
+<td>The <code>bytes_ahead</code> figure at which no block further ahead is asked for until the chain catches up; a constant (100 GiB)</td>
+</tr>
+<tr>
+<td><code>teranode_legacy_netsync_download_received_bytes_total</code></td>
+<td>Counter</td>
+<td>Block body bytes read off the wire</td>
+</tr>
+<tr>
+<td><code>teranode_legacy_netsync_download_duplicate_copies_drained_total</code></td>
+<td>Counter</td>
+<td>Block copies drained unwritten because another copy of the same block was converting</td>
+</tr>
+<tr>
+<td><code>teranode_legacy_netsync_download_duplicate_copies_converted_total</code></td>
+<td>Counter</td>
+<td>Block copies converted in full for a block already parked</td>
+</tr>
+<tr>
+<td><code>teranode_legacy_netsync_download_local_fault_copies_drained_total</code></td>
+<td>Counter</td>
+<td>Block copies drained because this node failed to store the block; the peer was kept and the block asked for again</td>
+</tr>
+<tr>
+<td><code>teranode_legacy_netsync_download_streams_cut_total</code></td>
+<td>Counter</td>
+<td>Block bodies cut part way through</td>
+</tr>
+<tr>
+<td><code>teranode_legacy_netsync_download_bytes_wasted_total</code></td>
+<td>Counter</td>
+<td>Bytes of block bodies cut part way through and of every copy drained unwritten, duplicate or local fault</td>
+</tr>
+<tr>
+<td><code>teranode_legacy_netsync_download_peers_dropped_owing_total</code></td>
+<td>Counter</td>
+<td>Peers that left while still owing blocks</td>
+</tr>
+<tr>
+<td><code>teranode_legacy_netsync_download_blocks_owed_at_drop_total</code></td>
+<td>Counter</td>
+<td>Blocks the peers counted by <code>download_peers_dropped_owing_total</code> still owed when they left</td>
+</tr>
+<tr>
+<td><code>teranode_legacy_netsync_download_blocks_reasked_total</code></td>
+<td>Counter</td>
+<td>Blocks made askable of another peer because the peers owing them sent no block bytes for the retry window</td>
+</tr>
+<tr>
+<td><code>teranode_legacy_netsync_park_dispositions_total</code></td>
+<td>CounterVec</td>
+<td>Every disposition applied to a parked block, by the park policy row's name (label <code>disposition</code>): a commit, a read or commit failure, a record whose files are gone, and a sweep or recovery eviction. One series per row exists from start-up at zero</td>
 </tr>
 </tbody>
 </table>
