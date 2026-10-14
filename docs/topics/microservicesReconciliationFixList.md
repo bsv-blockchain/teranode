@@ -41,7 +41,7 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       startup, defined nowhere under `deploy/` (§79, Q56)
 - [x] Set `asset_httpPublicAddress` in the examples, or reword the start-up warning to say
       "private node that happens to gossip" is a supported posture (§50, Q29)
-- [ ] Point the transaction blob store somewhere in `settings.conf`, or comment the line
+- [x] Point the transaction blob store somewhere in `settings.conf`, or comment the line
       with why the node doesn't remember transactions; reconcile the four test rigs
       mounting an empty directory (§67, Q45)
 - [ ] Comment the dev fixture with the services it switches off (Validator et al.) so devs
