@@ -49,6 +49,8 @@ func TestAlertActsOnUnspentOutputsWhoseBodyHasAgedOut(t *testing.T) {
 	require.NoError(t, err)
 
 	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Alert.ConfiscationAllowReassignWithoutScript = true
+	tSettings.Alert.ConfiscationAllowReassignWithoutScript = true
 
 	store, err := utxoset.New(ctx, ulogger.TestLogger{}, tSettings, storeURL)
 	require.NoError(t, err)

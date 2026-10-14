@@ -105,8 +105,11 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       the knob works on the dev store and is ignored on the production one (§64, Q43)
       — one shared resolver in the utxo store package, wired into both ReassignUTXO paths;
       setting docs and a commented settings.conf line say the same
-- [ ] Confiscation: persist the replacement locking script, or refuse with a clear message
+- [x] Confiscation: persist the replacement locking script, or refuse with a clear message
       — the output is currently stranded for both owners (§63, Q42)
+      — refused by default with a per-input message naming the opt-in setting
+      (`alert_confiscationAllowReassignWithoutScript`); persistence deferred to upstream
+      issue 1725, which is a storage-format change touching both stores' read paths
 - [ ] `getchaintips`: shorten the five-minute cache, invalidate on chain update, or
       document the staleness (§61, Q40)
 - [ ] RPC door: bound-and-queue instead of refuse + `Connection: close` if machine traffic
