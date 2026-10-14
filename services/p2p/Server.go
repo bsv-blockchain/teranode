@@ -2446,7 +2446,7 @@ func (s *Server) checkStaticGossipURLs() {
 		}
 
 		if s.assetURLErr != nil {
-			s.logger.Warnf("[checkStaticGossipURLs] DataHubURL %q will be scored as a protocol violation by peers (set asset_httpPublicAddress): %v", s.AssetHTTPAddressURL, s.assetURLErr)
+			s.logger.Warnf("[checkStaticGossipURLs] DataHubURL %q will be scored as a protocol violation by peers: %v - expected on a deliberately private node, which keeps gossiping with node_status BaseURL blanked and simply cannot be fetched from; set asset_httpPublicAddress when this node should be a reachable source", s.AssetHTTPAddressURL, s.assetURLErr)
 		}
 
 		if err := checkGossipString("propagation_url", s.PropagationURL, maxGossipURLLen); err != nil {
