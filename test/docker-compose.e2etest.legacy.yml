@@ -208,6 +208,7 @@ services:
     volumes:
       - ../settings.conf:/app/settings.conf:ro
       - ./wait.sh:/app/wait.sh:ro
+      # populated only when txstore is a file store; the default null:/// keeps nothing
       - ./data/test/${TEST_ID:-default}/teranode1/txstore:/app/data/txstore
       - ./data/test/${TEST_ID:-default}/teranode1/subtreestore:/app/data/subtreestore
       - ./data/test/${TEST_ID:-default}/teranode1/blockstore:/app/data/blockstore
@@ -236,6 +237,7 @@ services:
     volumes:
       - ../settings.conf:/app/settings.conf:ro
       - ./wait.sh:/app/wait.sh:ro
+      # populated only when txstore is a file store; the default null:/// keeps nothing
       - ./data/test/${TEST_ID:-default}/teranode2/txstore:/app/data/txstore
       - ./data/test/${TEST_ID:-default}/teranode2/subtreestore:/app/data/subtreestore
       - ./data/test/${TEST_ID:-default}/teranode2/blockstore:/app/data/blockstore
@@ -267,6 +269,7 @@ services:
     volumes:
       - ../settings.conf:/app/settings.conf:ro
       - ./wait.sh:/app/wait.sh:ro
+      # populated only when txstore is a file store; the default null:/// keeps nothing
       - ./data/test/${TEST_ID:-default}/teranode3/txstore:/app/data/txstore
       - ./data/test/${TEST_ID:-default}/teranode3/subtreestore:/app/data/subtreestore
       - ./data/test/${TEST_ID:-default}/teranode3/blockstore:/app/data/blockstore
