@@ -89,8 +89,10 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
 - [x] Pruner: announce its trigger mode at start-up (or a pruning-passes counter) so
       "never triggered" isn't discovered via disk growth (§38, Q21)
 - [x] File store: log once at start-up when no default retention is in force (§43, Q35)
-- [ ] Metadata cache: restore the `tx_meta_cache_size` gauge — commented out while the
+- [x] Metadata cache: restore the `tx_meta_cache_size` gauge — commented out while the
       same file's doc block still advertises it; `map_size` can't substitute (§75, Q53)
+      — restored, sourced from `ValidEntriesCount`; the raw map count (`EntriesCount`)
+      no longer exists in `CacheStats`
 
 ## C. Behaviour fixes
 
