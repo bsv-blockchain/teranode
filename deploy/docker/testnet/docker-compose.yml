@@ -121,6 +121,10 @@ services:
       file: ../base/docker-services.yml
       service: prometheus
 
+  # This is Prometheus's own alert sink, NOT the Teranode alertSystem micro-service:
+  # that service (rule-driven alerts and the coin-freeze brake) is not deployed in
+  # this topology at all - the kubernetes examples are where it runs. Do not read
+  # this entry as "alerting is covered" for Teranode-specific alarms.
   # Required: base/prometheus.yml points its `alerting` section at this host, so
   # without it Prometheus logs unresolvable-alertmanager errors on every reload.
   alertmanager:
