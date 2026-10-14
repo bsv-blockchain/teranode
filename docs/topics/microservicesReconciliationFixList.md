@@ -44,7 +44,7 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
 - [x] Point the transaction blob store somewhere in `settings.conf`, or comment the line
       with why the node doesn't remember transactions; reconcile the four test rigs
       mounting an empty directory (§67, Q45)
-- [ ] Comment the dev fixture with the services it switches off (Validator et al.) so devs
+- [x] Comment the dev fixture with the services it switches off (Validator et al.) so devs
       don't believe they exercised the transaction path (§45, Q25)
 - [ ] Comment the Docker compose files that the Teranode alert service is not deployed —
       the unrelated `alertmanager` decoy answers the question wrongly (§66, Q44)

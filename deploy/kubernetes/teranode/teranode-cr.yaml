@@ -1,3 +1,10 @@
+# Development fixture for kind (locally built images, pull policy Never).
+# Services switched off here on purpose: validator, legacy, propagation, coinbase,
+# blockPersister, utxoPersister, bootstrap. With the validator off, the transaction
+# path is NOT exercised even though blockAssembly, blockValidator and
+# subtreeValidator run - transactions have no source, and money is neither created
+# (coinbase) nor persisted. This fixture proves cluster shape, discovery and
+# ingress wiring; for the money path use the production-shaped teranode-cr-mainnet.yaml.
 apiVersion: teranode.bsvblockchain.org/v1alpha1
 kind: Cluster
 metadata:
