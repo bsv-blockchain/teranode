@@ -101,8 +101,10 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       — same-block failures (bytes/persist/mark) now escalate from `persistSleep` to a 5-minute
       cap and announce once as needing an operator; the tip query retries after one second;
       the idle branch keeps its flat sleep
-- [ ] Make SQLite and Aerospike agree on `utxostore_reassignedUtxoSpendableAfterBlocks` —
+- [x] Make SQLite and Aerospike agree on `utxostore_reassignedUtxoSpendableAfterBlocks` —
       the knob works on the dev store and is ignored on the production one (§64, Q43)
+      — one shared resolver in the utxo store package, wired into both ReassignUTXO paths;
+      setting docs and a commented settings.conf line say the same
 - [ ] Confiscation: persist the replacement locking script, or refuse with a clear message
       — the output is currently stranded for both owners (§63, Q42)
 - [ ] `getchaintips`: shorten the five-minute cache, invalidate on chain update, or
