@@ -96,8 +96,11 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
 
 ## C. Behaviour fixes
 
-- [ ] Filing retry loop: pause on the unresolvable branches (pruned source data retried
+- [x] Filing retry loop: pause on the unresolvable branches (pruned source data retried
       back-to-back forever), drop the pause on the two branches that don't need it (§39, Q22)
+      — same-block failures (bytes/persist/mark) now escalate from `persistSleep` to a 5-minute
+      cap and announce once as needing an operator; the tip query retries after one second;
+      the idle branch keeps its flat sleep
 - [ ] Make SQLite and Aerospike agree on `utxostore_reassignedUtxoSpendableAfterBlocks` —
       the knob works on the dev store and is ignored on the production one (§64, Q43)
 - [ ] Confiscation: persist the replacement locking script, or refuse with a clear message
