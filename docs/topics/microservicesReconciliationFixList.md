@@ -39,7 +39,7 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
 - [x] Add a commented `kind: Secret` placeholder (or a sentence) for
       `grpc_admin_api_key` in `deploy/kubernetes/teranode/teranode-cr.yaml` — REQUIRED for
       startup, defined nowhere under `deploy/` (§79, Q56)
-- [ ] Set `asset_httpPublicAddress` in the examples, or reword the start-up warning to say
+- [x] Set `asset_httpPublicAddress` in the examples, or reword the start-up warning to say
       "private node that happens to gossip" is a supported posture (§50, Q29)
 - [ ] Point the transaction blob store somewhere in `settings.conf`, or comment the line
       with why the node doesn't remember transactions; reconcile the four test rigs
