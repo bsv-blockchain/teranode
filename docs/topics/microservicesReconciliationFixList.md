@@ -213,6 +213,14 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       into the Validator remains the open half, recorded in the comment itself
 - [ ] Heavy-route anonymous ceiling: decide whether the two-bucket split doubling 10 → 20
       sustained is intended; if not, halve the default (§47, Q27)
+      — PARKED (maintainer intent): the split's purpose (a catching-up peer keeps its floor
+      while a bulk caller floods another heavy route) is documented and honest about the
+      cost; the start-up line even prints the doubled number. What is not recorded anywhere
+      is whether 20/s sustained per unverified IP across the heavy surface is an accepted
+      capacity figure or an oversight of the split. Halving `asset_httpHeavyRateLimit`
+      would restore the old total but also halve the floor catch-up was the point of
+      protecting. Needs one answer: is the doubled anonymous ceiling accepted, or should
+      the default move to 5?
 - [ ] Limited-tier allowlist: prune the 19 of 44 unimplemented methods, or label the list
       as granting permission not capability (§59, Q39)
 
