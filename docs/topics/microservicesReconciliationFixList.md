@@ -114,8 +114,12 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       document the staleness (§61, Q40) — invalidated on chain update by construction:
       the cache entry is keyed by the best block hash, so a new block, reorg, or
       invalidation retires it instantly; polling inside one tip still hits
-- [ ] RPC door: bound-and-queue instead of refuse + `Connection: close` if machine traffic
+- [x] RPC door: bound-and-queue instead of refuse + `Connection: close` if machine traffic
       is in scope, else rename "maximum clients" and say what it limits (§58, Q38)
+      — took the rename-and-say branch: key label, longdesc, field comment and settings.conf
+      now all say per-request/Connection-close/shed-with-503; refusals carry `Retry-After: 1`.
+      Queueing left unchosen deliberately — Q38's "is machine traffic in scope" is a per-deployment
+      question and silent queueing trades the door's shed-fast guarantee for latency nobody asked for
 - [ ] `pruner_skipDuringCatchup`: rename to reflect "requires an operator command", or
       test for actual catch-up (§55, Q33)
 
