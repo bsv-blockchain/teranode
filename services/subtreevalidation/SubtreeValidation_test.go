@@ -346,6 +346,50 @@ func TestValidateSubtreeInternal_RetryBackoffAndMetrics(t *testing.T) {
 	assert.GreaterOrEqual(t, elapsed, 2*retrySleep, "retry loop should wait retrySleepDuration between retry attempts")
 }
 
+// A store miss above blockvalidation_processTxMetaUsingStore_MissingTxThreshold under fail
+// fast must wait and retry like a cache miss, then fetch the missing txs on the final attempt.
+// It used to return THRESHOLD_EXCEEDED on the first attempt, which dropped every announced
+// subtree with 2+ txs this node had not seen yet and left it to block validation.
+func TestValidateSubtreeInternal_StoreMissesRetryThenFetch(t *testing.T) {
+	InitPrometheusMetrics()
+
+	utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup(t)
+	defer deferFunc()
+
+	retrySleep := 20 * time.Millisecond
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Block.FailFastValidation = true
+	tSettings.BlockValidation.ValidationWarmupCount = 0
+	tSettings.BlockValidation.ValidationMaxRetries = 2
+	tSettings.BlockValidation.RetrySleep = retrySleep
+	tSettings.BlockValidation.ValidationRetrySleep = retrySleep
+	tSettings.SubtreeValidation.ProcessTxMetaUsingCacheMissingTxThreshold = 1000
+	tSettings.BlockValidation.ProcessTxMetaUsingStoreMissingTxThreshold = 1
+
+	nilConsumer := &kafka.KafkaConsumerGroup{}
+	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
+	require.NoError(t, err)
+
+	retryCounterStart := testutil.ToFloat64(prometheusSubtreeValidationValidateSubtreeRetry)
+
+	v := ValidateSubtree{
+		SubtreeHash:   *hash1,
+		BaseURL:       "not-a-url",
+		TxHashes:      []chainhash.Hash{*hash1, *hash2},
+		AllowFailFast: true,
+	}
+
+	_, err = subtreeValidation.ValidateSubtreeInternal(context.Background(), v, chaincfg.GenesisActivationHeight, nil)
+
+	// Neither tx exists anywhere, so the final attempt's network fetch fails. What matters is
+	// that it got there: the store-miss threshold did not end validation early.
+	require.Error(t, err)
+	require.False(t, errors.Is(err, errors.ErrThresholdExceeded), "store misses must not abort the subtree: %v", err)
+
+	retryCounterDelta := testutil.ToFloat64(prometheusSubtreeValidationValidateSubtreeRetry) - retryCounterStart
+	assert.Equal(t, float64(2), retryCounterDelta, "store misses should be retried maxRetries times before the final attempt")
+}
+
 func TestServer_prepareTxsPerLevel(t *testing.T) {
 	t.Run("per block", func(t *testing.T) {
 		testCases := []struct {

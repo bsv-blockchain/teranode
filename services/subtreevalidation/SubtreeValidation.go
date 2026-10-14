@@ -855,6 +855,17 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
 			missed, err = u.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, blockIds, batched, failFast, false)
 			if err != nil {
+				// Only fail fast can exceed the threshold, and fail fast is off on the final attempt, so
+				// retrying here ends in the network fetch below instead of dropping the subtree.
+				if errors.Is(err, errors.ErrThresholdExceeded) {
+					u.logger.Warnf("[ValidateSubtreeInternal][%s] [attempt #%d] too many txs missing from the store (fail fast check only, will retry)", v.SubtreeHash.String(), attempt)
+					if waitErr := u.waitForRetryOrPriority(ctx, v.SubtreeHash.String(), retrySleepDuration); waitErr != nil {
+						return nil, waitErr
+					}
+
+					continue
+				}
+
 				// Don't wrap the error again, processTxMetaUsingStore returns the correctly formatted error.
 				return nil, err
 			}
