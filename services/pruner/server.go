@@ -72,6 +72,12 @@ type Server struct {
 	pruneNotify         chan pruneSignal
 	stats               *gocore.Stat
 
+	// Catchup-guard visibility: name of the last non-RUNNING FSM state the
+	// skipDuringCatchup guard saw and when it was last warned about. Read and
+	// written only by the processing loop.
+	lastGuardStateName string
+	lastGuardWarnedAt  time.Time
+
 	// Blob deletion
 	blobStores           map[storetypes.BlobStoreType]blob.Store
 	blobNotify           chan pruneSignal
