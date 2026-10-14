@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/services/p2p/peerregistry"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
@@ -27,8 +28,10 @@ const (
 	// assertion is considered fresh. Within this window a peer that keeps
 	// gossiping does not get re-registered or re-marked connected on every
 	// flush; only meaningful new registration data (client name, height,
-	// block hash, DataHub URL) forces a RegisterPeer earlier.
-	registryReassertTTL = time.Minute
+	// block hash, DataHub URL) forces a RegisterPeer earlier. It is the
+	// shared cadence constant the Blockchain registry's TTL floor is derived
+	// from (services/p2p/peerregistry), not a private batcher tuning value.
+	registryReassertTTL = peerregistry.RegistryReassertTTL
 
 	// registryAssertStatePruneAge is how long an idle peer's assert-state
 	// entry survives before the flush loop prunes it. Must exceed

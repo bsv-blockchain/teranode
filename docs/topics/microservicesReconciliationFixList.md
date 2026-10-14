@@ -133,8 +133,10 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       copy is the path taken in shipped config and the failure message blames the volume
       mount (§68, Q46) — one table in `storetypes.DefaultHashPrefix`, both sides call it;
       pinned-value and cross-side equality tests added
-- [ ] Peer-registry TTL floor: express the five minutes once (three constants, two
-      services, batcher is load-bearing) or guard with a test (§32, Q18)
+- [x] Peer-registry TTL floor: express the five minutes once (three constants, two
+      services, batcher is load-bearing) or guard with a test (§32, Q18) — one leaf package
+      (`services/p2p/peerregistry`) holding publish cadence, reassert window, multiplier and
+      the derived floor; both services reference it and a test guards the derivation
 - [ ] `validator_txmeta_numPartitions` (32) vs `KAFKA_PARTITIONS_HIGH` (8): reconcile at
       start-up with a metadata query — the async producer has no fallback (§74, Q52)
 - [ ] Txmetacache bucket count: carry in the v2 wire header or log on both sides —
