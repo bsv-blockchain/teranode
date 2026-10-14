@@ -57,16 +57,16 @@ type txmetaTestEntry struct {
 }
 
 // buildTXmetaBatchMessageV2 constructs a v2 wire-format batch message: an
-// 8-byte header (magic 0xFF, version 0x02, 2 reserved bytes, uint32 LE entry
-// count) followed by per-entry records prefixed with an 8-byte xxhash. The
-// xxhash is filled with zeros — the netsync consumer ignores it.
+// 8-byte header (magic 0xFF, version 0x02, uint16 LE BucketsCount, uint32
+// LE entry count) followed by per-entry records prefixed with an 8-byte
+// xxhash. The xxhash is filled with zeros — the netsync consumer ignores it.
 func buildTXmetaBatchMessageV2(t *testing.T, entries []txmetaTestEntry) []byte {
 	t.Helper()
 
 	buf := make([]byte, 8)
 	buf[0] = txmetacache.WireV2Magic
 	buf[1] = txmetacache.WireV2Version
-	// buf[2:4] reserved (zeros)
+	binary.LittleEndian.PutUint16(buf[2:4], uint16(txmetacache.BucketsCount))
 	binary.LittleEndian.PutUint32(buf[4:], uint32(len(entries)))
 
 	for _, entry := range entries {
