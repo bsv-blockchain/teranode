@@ -110,8 +110,10 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       — refused by default with a per-input message naming the opt-in setting
       (`alert_confiscationAllowReassignWithoutScript`); persistence deferred to upstream
       issue 1725, which is a storage-format change touching both stores' read paths
-- [ ] `getchaintips`: shorten the five-minute cache, invalidate on chain update, or
-      document the staleness (§61, Q40)
+- [x] `getchaintips`: shorten the five-minute cache, invalidate on chain update, or
+      document the staleness (§61, Q40) — invalidated on chain update by construction:
+      the cache entry is keyed by the best block hash, so a new block, reorg, or
+      invalidation retires it instantly; polling inside one tip still hits
 - [ ] RPC door: bound-and-queue instead of refuse + `Connection: close` if machine traffic
       is in scope, else rename "maximum clients" and say what it limits (§58, Q38)
 - [ ] `pruner_skipDuringCatchup`: rename to reflect "requires an operator command", or
