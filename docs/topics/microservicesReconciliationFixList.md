@@ -170,8 +170,11 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       wire field non-default (handling add_tx_to_block_assembly's inverted default),
       demands the guard name it, and pins the covered-field count so the walk cannot
       pass vacuously. Re-checked green on this branch; no work needed.
-- [ ] Coinbase maturity at the exact boundary (`d == CoinbaseMaturity` and `+1`) — makes
+- [x] Coinbase maturity at the exact boundary (`d == CoinbaseMaturity` and `+1`) — makes
       the `>=` → `>` fix executable (§24, Q14)
+      — `catchup_fork_depth_boundary_test.go` pins d = maturity-1/maturity/maturity+1
+      at validateForkDepth directly; verified mutation-sensitive (flipping the operator
+      back to `>=` fails exactly the boundary case and nothing else)
 - [ ] Assert the response to an unauthenticated RPC request when no credentials are
       configured — settles F2 permanently (§60, Q37)
 
