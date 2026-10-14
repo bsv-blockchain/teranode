@@ -197,6 +197,14 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       a trusted service?
 - [ ] Empty `rpc_user`/`rpc_pass`: choose fail-closed vs auth-disabled; fix the losing
       sentence (see A3, E3) (§60, Q37)
+      — PARKED (maintainer posture): today's behaviour is fail-closed and E3's tests
+      (`auth_empty_credentials_test.go`) now pin it, so the risk of drifting accidentally is
+      gone; what remains is a deliberate choice. Keeping fail-closed means rewriting the
+      "Leave empty to disable authentication" longdesc of `rpc_user`/`rpc_pass` to say
+      empty locks the door. Choosing auth-disabled changes what every development context
+      without credentials means (anything listening could be driven) and would rewrite
+      E3's assertions instead of the prose. Needs one answer: should a node with no
+      credentials accept unauthenticated RPC at all?
 - [ ] `maxrawtxfee`: add to `settings.conf`, or move the policy into the Validator so it
       applies to every door, not just RPC (§57, Q36)
 - [ ] Heavy-route anonymous ceiling: decide whether the two-bucket split doubling 10 → 20
