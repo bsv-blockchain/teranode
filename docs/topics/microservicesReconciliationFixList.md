@@ -36,7 +36,7 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
 - [x] Set `peer_registry` persistence in the single-node stacks, or drop the setting
       description's promise that an on-disk store is the single-node default — bans are
       forgotten on every restart (§31, Q16)
-- [ ] Add a commented `kind: Secret` placeholder (or a sentence) for
+- [x] Add a commented `kind: Secret` placeholder (or a sentence) for
       `grpc_admin_api_key` in `deploy/kubernetes/teranode/teranode-cr.yaml` — REQUIRED for
       startup, defined nowhere under `deploy/` (§79, Q56)
 - [ ] Set `asset_httpPublicAddress` in the examples, or reword the start-up warning to say
