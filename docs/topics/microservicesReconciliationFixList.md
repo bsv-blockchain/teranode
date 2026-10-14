@@ -17,8 +17,13 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       that never arrives; deletion never starts, retention stops bounding anything (§38, Q20)
 - [x] Fix `imagePullPolicy: Never` on `alertSystem` in the mainnet example — copy-paste
       residue from the dev fixture; alerting won't start on a clean node (§25, Q15)
-- [ ] Fix `asset_concurrency_get_legacy_block_reader` comment in `settings.conf`: says
-      `0 (unlimited)`, actual default is `-1` (one reader per CPU) (§48, Q28)
+- [x] ~~Fix `asset_concurrency_get_legacy_block_reader` comment in `settings.conf`: says
+      `0 (unlimited)`, actual default is `-1` (one reader per CPU) (§48, Q28)~~ —
+      **no change needed, disproven on re-check**: upstream commit `19baf6e32` flipped
+      the code default `-1` → `0` (unlimited) and updated both comment texts together;
+      verified `default:"0"` in `settings/asset_settings.go`, the `initSemaphore`
+      comment (`0 = unlimited, -1 = NumCPU`) in `services/asset/repository/repository.go`,
+      and the `settings.conf` line now all agree at this branch's base
 - [ ] Fix `rpc_user`/`rpc_pass` `longdesc`: says empty creds disable auth, code and
       `services/rpc/README.md` fail closed — fix whichever loses the decision (F2) (§60, Q37)
 - [ ] Enable ingest backpressure **and** a bounded block-assembly queue together in
