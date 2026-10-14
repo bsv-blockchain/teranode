@@ -248,8 +248,14 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       one integration test and the store is always compiled, and the Makefile gains a
       note at the build targets. Restoring real gating would need build-gated factory
       wiring — a change of a different size, left as the open alternative in the notes
-- [ ] UDP multicast fast lane: document as receive-only (no sender exists; default
+- [x] UDP multicast fast lane: document as receive-only (no sender exists; default
       interface is macOS `en0`), or build the sender (§82, Q58)
+      — documented as receive-only at all three places an operator meets it (the
+      `ipv6_addresses`/`ipv6_interface` longdescs, the settings.conf comment, and the
+      start-up log line itself): ingest path not propagation path, empty allowlist is
+      unauthenticated accept-everything, `en0` default is macOS and Linux must set the
+      interface. Sender re-verified absent (the only UDP write in the tree is UPnP SSDP);
+      building it remains the open alternative (Q58)
 - [ ] Comment the deletion-scheduler interface in `stores/blob/options/pruner_client.go` —
       the queue is owned by Blockchain, and the filename points the next reader at the
       pruner (§52, Q30)
