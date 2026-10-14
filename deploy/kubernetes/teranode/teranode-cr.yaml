@@ -161,3 +161,20 @@ spec:
   validator:
     enabled: false
     spec: {}
+
+# The Secret referenced by spec.envFrom above is intentionally not committed here.
+# The cluster will NOT come up until it exists: Blockchain refuses startup without
+# grpc_admin_api_key. Create it first - the canonical copy lives in
+# docs/howto/miners/kubernetes/minersHowToInstallation.md ("Create the Teranode
+# Secret"); shape of the manifest, with placeholders:
+#
+#   apiVersion: v1
+#   kind: Secret
+#   metadata:
+#     name: teranode-operator-secrets
+#     namespace: teranode-operator
+#   type: Opaque
+#   stringData:
+#     blockchain_store: "postgres://POSTGRES_EXAMPLE_URI_CHANGE_ME"
+#     utxostore: "aerospike://AEROSPIKE_EXAMPLE_URI_CHANGE_ME"
+#     grpc_admin_api_key: ""  # REQUIRED: openssl rand -hex 32, paste before applying
