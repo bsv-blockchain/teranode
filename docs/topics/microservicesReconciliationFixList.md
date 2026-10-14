@@ -221,8 +221,13 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       would restore the old total but also halve the floor catch-up was the point of
       protecting. Needs one answer: is the doubled anonymous ceiling accepted, or should
       the default move to 5?
-- [ ] Limited-tier allowlist: prune the 19 of 44 unimplemented methods, or label the list
+- [x] Limited-tier allowlist: prune the 19 of 44 unimplemented methods, or label the list
       as granting permission not capability (§59, Q39)
+      — labelled, not pruned: the allowlist comment and `rpc_limit_user`'s longdesc now
+      say permission set, not capability list, and `limited_tier_capability_test.go`
+      pins the exact 19-name intersection (handler code-pointer identity) so the label
+      cannot drift silently; pruning changes which error text integrations see and stays
+      a deliberate future call
 
 ## G. Dead code / naming cleanup
 

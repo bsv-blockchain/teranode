@@ -284,7 +284,15 @@ var rpcUnimplemented = map[string]struct{}{
 	"preciousblock": {},
 }
 
-// Commands that are available to a limited user
+// Commands that are available to a limited user.
+//
+// This is a PERMISSION set, not a capability list: a name here says a
+// limited credential may ask, not that a handler will answer. Nineteen
+// allowlisted names dispatch to handleUnimplemented (see
+// limited_tier_capability_test.go for the pinned enumeration and the drift
+// guard). Pruning them would change which error a caller sees, so the list
+// stands labelled; keep the label in rpc_limit_user's longdesc in step with
+// any change here.
 var rpcLimited = map[string]struct{}{
 	// Websockets commands
 	"loadtxfilter":          {},
