@@ -78,7 +78,7 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       elevation is unreachable today and an operator sees no change (§46, Q26)
 - [x] Pruner: announce its trigger mode at start-up (or a pruning-passes counter) so
       "never triggered" isn't discovered via disk growth (§38, Q21)
-- [ ] File store: log once at start-up when no default retention is in force (§43, Q35)
+- [x] File store: log once at start-up when no default retention is in force (§43, Q35)
 - [ ] Metadata cache: restore the `tx_meta_cache_size` gauge — commented out while the
       same file's doc block still advertises it; `map_size` can't substitute (§75, Q53)
 
