@@ -51,6 +51,16 @@ type KafkaAsyncProducerI interface {
 	TryPublish(msg *Message) bool
 }
 
+// TopicPartitionCounter is an optional capability of an async producer: it can
+// ask the broker how many partitions its topic actually has. Services that
+// partition by a configured count - the validator's v2 txmeta routing, for
+// one - reconcile their number against reality through this at start-up.
+// Optional so test doubles and in-memory implementations need not carry it;
+// callers must degrade to "cannot verify", never to "assumed agree".
+type TopicPartitionCounter interface {
+	TopicPartitionCount(ctx context.Context) (int32, error)
+}
+
 // defaultOuterBatcherLinger is the default time the outer async batcher
 // waits for stragglers to join the buffer before draining into franz-go.
 // It is intentionally short — the outer batcher exists only to amortise
@@ -843,6 +853,30 @@ func (c *KafkaAsyncProducer) TryPublish(msg *Message) bool {
 	}
 
 	return util.TrySend(c.publishChannel, msg)
+}
+
+// TopicPartitionCount asks the broker, via topic metadata, how many partitions
+// the producer's configured topic actually has. Satisfies TopicPartitionCounter.
+// This is a start-up reconciliation aid, not a hot path: it performs one
+// metadata request and returns any broker error rather than guessing.
+func (c *KafkaAsyncProducer) TopicPartitionCount(ctx context.Context) (int32, error) {
+	if c.client == nil {
+		return 0, errors.NewServiceError("kafka producer has no live client")
+	}
+
+	admin := kadm.NewClient(c.client)
+
+	meta, err := admin.Metadata(ctx, c.Config.Topic)
+	if err != nil {
+		return 0, errors.NewServiceError("topic metadata request failed for %s: %v", c.Config.Topic, err)
+	}
+
+	detail, ok := meta.Topics[c.Config.Topic]
+	if !ok {
+		return 0, errors.NewServiceError("topic %s not present in broker metadata", c.Config.Topic)
+	}
+
+	return int32(len(detail.Partitions)), nil
 }
 
 // createTopicWithFranz creates a new Kafka topic with the specified configuration.

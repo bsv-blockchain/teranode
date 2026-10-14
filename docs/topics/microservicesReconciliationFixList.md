@@ -137,8 +137,11 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       services, batcher is load-bearing) or guard with a test (§32, Q18) — one leaf package
       (`services/p2p/peerregistry`) holding publish cadence, reassert window, multiplier and
       the derived floor; both services reference it and a test guards the derivation
-- [ ] `validator_txmeta_numPartitions` (32) vs `KAFKA_PARTITIONS_HIGH` (8): reconcile at
+- [x] `validator_txmeta_numPartitions` (32) vs `KAFKA_PARTITIONS_HIGH` (8): reconcile at
       start-up with a metadata query — the async producer has no fallback (§74, Q52)
+      — validator now reconciles at start-up (broker metadata via optional
+      `kafka.TopicPartitionCounter`, URL `partitions=` fallback, bucket divisibility),
+      errors naming both numbers; v1 default still unaffected
 - [ ] Txmetacache bucket count: carry in the v2 wire header or log on both sides —
       build-tag-selected, Kafka partitions by it, no check that both binaries were
       compiled alike (§73, Q51)
