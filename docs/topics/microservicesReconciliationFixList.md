@@ -24,7 +24,7 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       verified `default:"0"` in `settings/asset_settings.go`, the `initSemaphore`
       comment (`0 = unlimited, -1 = NumCPU`) in `services/asset/repository/repository.go`,
       and the `settings.conf` line now all agree at this branch's base
-- [ ] Fix `rpc_user`/`rpc_pass` `longdesc`: says empty creds disable auth, code and
+- [x] Fix `rpc_user`/`rpc_pass` `longdesc`: says empty creds disable auth, code and
       `services/rpc/README.md` fail closed — fix whichever loses the decision (F2) (§60, Q37)
 - [ ] Enable ingest backpressure **and** a bounded block-assembly queue together in
       examples — one cannot work without the other; shipped trade is an unbounded queue
