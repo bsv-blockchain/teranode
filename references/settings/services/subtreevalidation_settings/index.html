@@ -7167,18 +7167,11 @@
 <td><strong>CRITICAL</strong> - gRPC server binding, health checks only run if not empty</td>
 </tr>
 <tr>
-<td>ProcessTxMetaUsingCacheBatchSize</td>
-<td>int</td>
-<td>1024</td>
-<td>subtreevalidation_processTxMetaUsingCache_BatchSize</td>
-<td><strong>CRITICAL</strong> - Cache processing batch size</td>
-</tr>
-<tr>
 <td>ProcessTxMetaUsingCacheConcurrency</td>
 <td>int</td>
 <td>32</td>
 <td>subtreevalidation_processTxMetaUsingCache_Concurrency</td>
-<td><strong>CRITICAL</strong> - Cache processing concurrency</td>
+<td><strong>CRITICAL</strong> - Cache-probe workers shared by all subtrees being validated (server-wide, not per subtree; peer subtrees and block validation each get a pool of this size)</td>
 </tr>
 <tr>
 <td>ProcessTxMetaUsingCacheMissingTxThreshold</td>
@@ -7304,8 +7297,8 @@
 <h2 id="configuration-dependencies">Configuration Dependencies<a class="headerlink" href="#configuration-dependencies" title="Permanent link">&para;</a></h2>
 <h3 id="cache-processing">Cache Processing<a class="headerlink" href="#cache-processing" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>ProcessTxMetaUsingCacheBatchSize</code>, <code>ProcessTxMetaUsingCacheConcurrency</code>, and <code>ProcessTxMetaUsingCacheMissingTxThreshold</code> work together</li>
-<li>Controls cache-based transaction metadata processing performance</li>
+<li><code>ProcessTxMetaUsingCacheConcurrency</code> (server-wide probe workers, one pool for peer subtrees and one for block validation) and <code>ProcessTxMetaUsingCacheMissingTxThreshold</code> work together</li>
+<li>A subtree's cache lookups are grouped by cache bucket range; each range is one batched read on one of the shared workers</li>
 </ul>
 <h3 id="missing-transaction-handling">Missing Transaction Handling<a class="headerlink" href="#missing-transaction-handling" title="Permanent link">&para;</a></h3>
 <ul>
@@ -7416,7 +7409,6 @@
 <h3 id="cache-configuration">Cache Configuration<a class="headerlink" href="#cache-configuration" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nv">subtreevalidation_txMetaCacheEnabled</span><span class="o">=</span><span class="nb">true</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nv">txMetaCacheMaxMB</span><span class="o">=</span><span class="m">512</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nv">subtreevalidation_processTxMetaUsingCache_BatchSize</span><span class="o">=</span><span class="m">2048</span>
 </span></code></pre></div>
 
 
