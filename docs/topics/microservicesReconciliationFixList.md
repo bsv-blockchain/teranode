@@ -6,7 +6,11 @@ reference next to the tick when one exists.
 
 Already-fixed findings are excluded (sections 16, 21, 22 shipped fixes with tests).
 Group H items are blocked on maintainer decisions per the notes' "Decisions taken"
-section — decide before patching. `§` references are sections in the notes file.
+section — decide before patching. `§` references are sections in the notes file;
+the notes are edited independently and renumber, so a citation points at the
+numbering at the time the row was written — verify against current text.
+If a checkbox and its commit ever disagree, the code is authoritative and the
+row gets re-verified, not the other way round.
 
 Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[x\]' $f); t=$((d + $(grep -c '^- \[ \]' $f))); echo "$d / $t done"; done`
 
@@ -68,6 +72,12 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
 - [x] Log the coin archive's fixed 100-block lag at start-up (or make it a setting) so the
       coupling is visible before downtime (§43, Q24) — start-up line in `Start()`; turning
       the constant into a setting stays open as the heavier option
+- [ ] Active mode should reject async timeout + sync persistence combination (§44, Q27) —
+      premise not verifiable on this branch: `persister_active_mode`, `persister_async_timeout`
+      and the persistence-mode knobs appear nowhere in this codebase's settings or service,
+      so there is no combination to reject here. An earlier checklist row for this item was
+      lost in an edit and the work attributed to it is not in the branch history. Re-check
+      the note against the branch it was written from before applying or dropping the item
 - [x] Log loudly when the coin store is *unwired*, matching the existing loud log for a
       *disabled* preservation phase (§52, Q31 — the checklist previously cited §53; the
       phases are in `services/pruner/worker.go`)
