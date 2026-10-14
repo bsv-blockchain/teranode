@@ -331,14 +331,24 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 			// unfreeze
 			if err = n.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{spend}, n.settings); err != nil {
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
+			} else {
+				n.logger.Infof("[AddToConsensusBlacklist] unfroze %s:%d", fund.TxOut.TxId, fund.TxOut.Vout)
 			}
 		} else {
 			// freeze
 			if err = n.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spend}, n.settings); err != nil {
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
+			} else {
+				n.logger.Infof("[AddToConsensusBlacklist] froze %s:%d", fund.TxOut.TxId, fund.TxOut.Vout)
 			}
 		}
 	}
+
+	// The response body only ever lists failures, so successes were invisible:
+	// "froze five coins" and "matched nothing" were the same reply. The per-fund
+	// lines above name each outcome; the summary states the split in one glance.
+	n.logger.Infof("[AddToConsensusBlacklist] processed %d funds: %d applied, %d not processed",
+		len(funds), len(funds)-len(response.NotProcessed), len(response.NotProcessed))
 
 	return response, nil
 }
