@@ -7039,7 +7039,7 @@
 
 
 <h1 id="how-to-expose-the-p2p-service-publicly-kubernetes">How to Expose the P2P Service Publicly (Kubernetes)<a class="headerlink" href="#how-to-expose-the-p2p-service-publicly-kubernetes" title="Permanent link">&para;</a></h1>
-<p>Last modified: 11-June-2026</p>
+<p>Last modified: 9-September-2026</p>
 <h2 id="why-this-matters">Why This Matters<a class="headerlink" href="#why-this-matters" title="Permanent link">&para;</a></h2>
 <p>Teranode's P2P layer (libp2p) needs inbound TCP connections on the P2P port (<code>9905</code> in the shipped configuration) to accept direct peer connections. libp2p binds <code>p2p_port</code> on all interfaces; the port peers actually dial is the one in your <code>p2p_advertise_addresses</code> multiaddr, so the load balancer listener port must match it. A node that can only dial out still works, but it contributes far less to network health: it cannot be dialed by other peers, cannot serve as a DHT server, and cannot join the BSV Association bootstrap pool (see <a href="#joining-the-dns-bootstrap-pool">Joining the DNS Bootstrap Pool</a>).</p>
 <p>Inside Kubernetes this is not automatic. Pod IPs are not routable from the internet, and the default Service behaviour (<code>externalTrafficPolicy: Cluster</code>) breaks libp2p in subtle ways described below. This guide shows a working pattern for AWS/EKS; the principles carry over to other cloud providers.</p>
