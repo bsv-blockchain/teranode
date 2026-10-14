@@ -284,12 +284,36 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
 ## H. Blocked on a maintainer decision (per "Decisions taken", deliberately untouched)
 
 - [ ] Is reputation-only for invalid subtrees policy? (gates G6) (§2, Q1)
+      — CURRENT, awaiting decision (audited this pass): `ReasonInvalidSubtree` still declared,
+      allowlisted, charged by no production path; every caller uses another reason. Either answer
+      is actionable at once — policy → add the intent comment (G6 unlocks); gap → wire it
+      with a named penalty
 - [ ] Which front door is *intended* vs which ships; should examples deploy Propagation
       (§13, §26, Q5–Q7)
+      — CURRENT, awaiting decision (audited this pass): still no Propagation service in the base
+      compose under deploy/docker/base/; ingest arrives via netsync and the UDP lane, matching the
+      notes. Which door the project intends is prose-and-deployment history; the answer decides
+      whether examples gain Propagation or the docs stop implying it is the front door
 - [ ] Is the unbounded ingest queue an accepted risk now the drain is bounded (§17–19, Q12)
+      — CURRENT, awaiting decision (audited this pass): the drain bound (E2's double-bounded fix)
+      and its test stand on this branch, so the failure mode is now OOM-by-producer-rate rather
+      than OOM-by-wedged-drain. Whether that residual is an accepted risk is an operator-facing
+      capacity call, not code
 - [ ] Correct the howto's false "no transition from CATCHINGBLOCKS back to IDLE" — needs
       an explicit exception to the no-editing-existing-files decision (§30, Q17)
+      — CURRENT, awaiting decision (audited this pass): the sentence is verbatim at
+      docs/howto/miners/docker/minersHowToSyncTheNode.md:230 and the transition remains wired and
+      exercised by the documented stop path. The only thing blocking the fix is the standing
+      decision not to edit existing howto files; the fix itself is two sentences
 - [ ] Resolve the three-way overloading of "level" — also blocked by that decision (§8, Q4)
+      — CURRENT, awaiting decision (audited this pass): `security_level_grpc` (0/1/2 transport
+      security), log level strings, and FSM-state "level" in dashboards all still read the same
+      word in `settings.conf` and the dashboard. The cleanup is naming; the block is the same
+      no-editing-existing-files decision, widened by how many files carry the word
 - [ ] Measure the in-memory chain-check flag's duty cycle (and
       `blockchain_use_in_memory_chain_check` vs the five-connection SQL pool) — measurement
       decides whether to flip or document (§33, §84, Q19/Q60)
+      — CURRENT, awaiting measurement (audited this pass): the flag still ships false and the
+      SQLite path still hard-caps its pool at five (the #1051 arena-oom guard in `util/sql.go`).
+      Nothing in the tree measures the flag's duty cycle; until someone runs it, flip-vs-document
+      is a guess, which is exactly why this item stays in H
