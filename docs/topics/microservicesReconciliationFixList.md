@@ -48,7 +48,7 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       don't believe they exercised the transaction path (§45, Q25)
 - [x] Comment the Docker compose files that the Teranode alert service is not deployed —
       the unrelated `alertmanager` decoy answers the question wrongly (§66, Q44)
-- [ ] Add `ulimits` blocks (or an install-guide line) for blob-touching services —
+- [x] Add `ulimits` blocks (or an install-guide line) for blob-touching services —
       file-store budget of 768 reads / 256 writes assumes a raised `ulimit -n` that no
       container sets (§69, Q47)
 - [ ] Kubernetes examples: deploy the pruner or comment that pruning is off in cluster
