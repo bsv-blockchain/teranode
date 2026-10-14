@@ -330,7 +330,8 @@ func (s *Server) getBlobStore(storeType storetypes.BlobStoreType) (blob.Store, e
 		return nil, errors.NewConfigurationError("blob store type %s has nil URL in settings", storeType.String())
 	}
 
-	// Default hash prefix per store type (must match daemon_stores.go)
+	// Default hash prefix per store type: resolved through the shared table in
+	// stores/blob/storetypes, same as the daemon store construction.
 	hashPrefix := defaultHashPrefix(storeType)
 	if storeURL.Query().Get("hashPrefix") != "" {
 		hashPrefix, err = strconv.Atoi(storeURL.Query().Get("hashPrefix"))
@@ -358,20 +359,11 @@ func (s *Server) getBlobStore(storeType storetypes.BlobStoreType) (blob.Store, e
 // defaultHashPrefix returns the default hash prefix for a given store type,
 // matching the defaults in daemon/daemon_stores.go.
 func defaultHashPrefix(storeType storetypes.BlobStoreType) int {
-	switch storeType {
-	case storetypes.TXSTORE:
-		return 2
-	case storetypes.SUBTREESTORE:
-		return 2
-	case storetypes.BLOCKSTORE:
-		return -2
-	case storetypes.TEMPSTORE:
-		return 0
-	case storetypes.BLOCKPERSISTERSTORE:
-		return 2
-	default:
-		return 2
-	}
+	// Single shared table (stores/blob/storetypes), now also used by the daemon
+	// side that writes these files - the copy behind this call used to be a
+	// hand-maintained duplicate of scattered literals, and a divergence makes
+	// the pruner delete nothing while blaming the volume mount.
+	return storetypes.DefaultHashPrefix(storeType)
 }
 
 func (s *Server) updateBlobDeletionMetrics() {

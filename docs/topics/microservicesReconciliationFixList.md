@@ -128,10 +128,11 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
 
 ## D. Single-source-of-truth / consistency
 
-- [ ] Hash-prefix table: one shared constant (or a test walking both tables) instead of
+- [x] Hash-prefix table: one shared constant (or a test walking both tables) instead of
       the Pruner's copy of `daemon_stores.go` defaults behind a "must match" comment; the
       copy is the path taken in shipped config and the failure message blames the volume
-      mount (§68, Q46)
+      mount (§68, Q46) — one table in `storetypes.DefaultHashPrefix`, both sides call it;
+      pinned-value and cross-side equality tests added
 - [ ] Peer-registry TTL floor: express the five minutes once (three constants, two
       services, batcher is load-bearing) or guard with a test (§32, Q18)
 - [ ] `validator_txmeta_numPartitions` (32) vs `KAFKA_PARTITIONS_HIGH` (8): reconcile at
