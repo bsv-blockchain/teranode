@@ -551,9 +551,18 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 
 // InitGRPCResolver configures the gRPC resolver based on the environment.
 // It supports different resolver configurations:
-//   - k8s: Kubernetes resolver using default scheme
-//   - kubernetes: In-cluster Kubernetes resolver
+//   - k8s: the in-repo pkg/k8sresolver, as default scheme
+//   - kubernetes: the upstream in-cluster resolver, registered under scheme k8s
 //   - default: Standard gRPC resolver
+//
+// The two Kubernetes cases run DIFFERENT implementations under the same
+// scheme name: the registry is a map keyed by scheme, so registering twice
+// (which this function used to do in the kubernetes case) silently keeps
+// only the last builder. Production contexts select kubernetes, so the
+// in-repo resolver runs today only where the k8s case is configured -
+// nothing in settings.conf or deploy/ does. Wiring the in-repo resolver
+// into production, or retiring the package, is open question 57; until
+// then this function must not pretend otherwise.
 //
 // Parameters:
 //   - logger: Logger for resolver configuration messages
@@ -561,15 +570,18 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 func InitGRPCResolver(logger ulogger.Logger, grpcResolver string) {
 	switch grpcResolver {
 	case "k8s":
-		logger.Infof("[VALIDATOR] Using k8s resolver for clients")
+		logger.Infof("Using in-repo k8s resolver for clients")
 		resolver.Register(k8sresolver.NewBuilder(logger))
 		resolver.SetDefaultScheme("k8s")
 	case "kubernetes":
-		logger.Infof("[VALIDATOR] Using kubernetes resolver for clients")
-		resolver.Register(k8sresolver.NewBuilder(logger))
+		logger.Infof("Using upstream kubernetes in-cluster resolver for clients")
+		// Registers builder(s) for scheme "k8s" itself. Registering the
+		// in-repo builder here first was a silent overwrite: same scheme
+		// key, map assignment, the in-repo resolver was constructed and
+		// discarded on every start.
 		kuberesolver.RegisterInClusterWithSchema("k8s")
 	default:
-		logger.Infof("[VALIDATOR] Using default resolver for clients")
+		logger.Infof("Using default resolver for clients")
 	}
 }
 

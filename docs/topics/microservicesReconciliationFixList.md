@@ -231,8 +231,15 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
 
 ## G. Dead code / naming cleanup
 
-- [ ] Kubernetes resolver: registered then silently overwritten in the same call — wire it
+- [x] Kubernetes resolver: registered then silently overwritten in the same call — wire it
       or delete the package (§80, Q57)
+      — the lie removed: the `kubernetes` case no longer registers the in-repo builder it
+      immediately overwrote (same scheme key, map assignment), and the comment now names
+      which case runs which implementation and that production selects the upstream one.
+      End state is behaviorally identical — that is exactly why the overwrite was
+      invisible — so the remaining wire-it-or-delete call (Q57) stays open, now stated
+      at the site instead of contradicted by it; misleading `[VALIDATOR]` prefixes gone
+      from a shared helper's logs
 - [ ] `aerospike` build tag: no longer gates the store, but four Makefile targets and
       `AGENTS.md` say it does — remove the tag or restore the gating (§72, Q50)
 - [ ] UDP multicast fast lane: document as receive-only (no sender exists; default
