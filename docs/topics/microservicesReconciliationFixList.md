@@ -74,7 +74,7 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
 - [x] Warn and count the mined-set wait the way the assembly wait already does — today the
       common skip is uncounted debug noise (§53 in the current notes — Q32's §54 citation
       predates a renumbering)
-- [ ] Asset Server: one start-up line naming the active tier mode and allowlist size —
+- [x] Asset Server: one start-up line naming the active tier mode and allowlist size —
       elevation is unreachable today and an operator sees no change (§46, Q26)
 - [ ] Pruner: announce its trigger mode at start-up (or a pruning-passes counter) so
       "never triggered" isn't discovered via disk growth (§38, Q21)
